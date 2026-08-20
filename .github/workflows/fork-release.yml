@@ -86,8 +86,11 @@ jobs:
         run: |
           bun scripts/apply-fork-patches.ts
           git diff --check
-          changed="$(git diff --name-only)"
-          expected=$'packages/coding-agent/src/prompts/tools/hub.md\npackages/coding-agent/src/tools/hub/index.ts'
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            packages/coding-agent/src/prompts/tools/hub.md \
+            packages/coding-agent/src/tools/hub/index.ts \
+            packages/coding-agent/src/tools/hub/jobs.ts | sort)"
           if [ "$changed" != "$expected" ]; then
             echo "::error::Fork patch changed an unexpected file set"
             printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$changed"
