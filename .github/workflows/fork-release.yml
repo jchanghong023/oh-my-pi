@@ -1,203 +1,214 @@
 name: Fork Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  native_addons:
-    name: Build native addons
+  package:
+    name: Package Linux and Windows x64
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/bun-install
-      - name: Install Bazelisk
-        run: npm install -g @bazel/bazelisk@1.28.1
-      - id: cache
-        uses: ./.github/actions/bazel-cache
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          scope: fork-release-linux
-      - name: Build native addons
+          fetch-depth: 0
+
+      - uses: ./.github/actions/bun-install
+
+      - name: Resolve and verify official release base
+        id: metadata
         shell: bash
-        env:
-          OMP_BAZEL_RC: ${{ steps.cache.outputs.rc }}
         run: |
           set -euo pipefail
-          if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-          for target in \
-            linux-arm64 \
-            linux-musl-arm64 \
-            linux-musl-x64-baseline \
-            linux-x64-baseline \
-            linux-x64-modern \
-            win32-x64-baseline; do
-            bun scripts/bazel-natives.ts "$target"
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Fork releases must be run from main, not $GITHUB_REF"
+            exit 1
+          fi
+
+          version="$(node -p "require('./packages/coding-agent/package.json').version")"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected coding-agent version: $version"
+            exit 1
+          fi
+          official_tag="v${version}"
+          release_tag="v${version}-fork.${GITHUB_RUN_NUMBER}"
+
+          git remote add official https://github.com/can1357/oh-my-pi.git
+          git fetch --no-tags official "refs/tags/${official_tag}:refs/tags/official-${official_tag}"
+          official_sha="$(git rev-list -n1 "refs/tags/official-${official_tag}")"
+          if ! git merge-base --is-ancestor "$official_sha" "$GITHUB_SHA"; then
+            echo "::error::Current main is not based on official release ${official_tag} (${official_sha})"
+            exit 1
+          fi
+
+          unexpected="$({
+            git diff --name-only "$official_sha" "$GITHUB_SHA" -- . \
+              ':(exclude).github/workflows/fork-release.yml' \
+              ':(exclude)scripts/apply-fork-patches.ts'
+          } || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Fork main contains changes outside the two maintained fork files:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+
+          for package in \
+            @oh-my-pi/pi-natives-linux-x64 \
+            @oh-my-pi/pi-natives-win32-x64; do
+            published="$(npm view "${package}@${version}" version)"
+            if [ "$published" != "$version" ]; then
+              echo "::error::Official native package ${package}@${version} is unavailable"
+              exit 1
+            fi
           done
-      - name: Save Bazel disk cache
-        if: steps.cache.outputs.save-needed == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+
+          {
+            echo "version=$version"
+            echo "official-tag=$official_tag"
+            echo "official-sha=$official_sha"
+            echo "release-tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Official source: ${official_tag} (${official_sha})"
+          echo "Fork release: ${release_tag} (${GITHUB_SHA})"
+
+      - name: Apply minimal downstream Hub patch
+        run: |
+          bun scripts/apply-fork-patches.ts
+          git diff --check
+          changed="$(git diff --name-only)"
+          expected=$'packages/coding-agent/src/prompts/tools/hub.md\npackages/coding-agent/src/tools/hub/index.ts'
+          if [ "$changed" != "$expected" ]; then
+            echo "::error::Fork patch changed an unexpected file set"
+            printf 'Expected:\n%s\nActual:\n%s\n' "$expected" "$changed"
+            exit 1
+          fi
+
+      - name: Run official TypeScript and release-script checks
+        run: |
+          bun run ci:check:full
+          bun run collab:web:build
+          bun run test:scripts
+
+      - name: Install official precompiled native artifacts
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_dir="packages/natives/native"
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          rm -f "$native_dir"/*.node
+
+          download_leaf() {
+            local package="$1"
+            local extract_dir="$temp_dir/extract"
+            local tarball
+            rm -rf "$extract_dir"
+            mkdir -p "$extract_dir"
+            tarball="$(npm view "${package}@${VERSION}" dist.tarball)"
+            curl -fsSL --retry 3 "$tarball" | tar -xz -C "$extract_dir"
+            cp "$extract_dir"/package/*.node "$native_dir"/
+          }
+
+          download_leaf @oh-my-pi/pi-natives-linux-x64
+          download_leaf @oh-my-pi/pi-natives-win32-x64
+
+          for file in \
+            pi_natives.linux-x64-baseline.node \
+            pi_natives.linux-x64-modern.node \
+            pi_natives.win32-x64-baseline.node; do
+            test -s "$native_dir/$file" || {
+              echo "::error::Missing official native artifact: $file"
+              exit 1
+            }
+          done
+          find "$native_dir" -maxdepth 1 -name '*.node' -printf '%f\n' | sort
+
+      - name: Build official Linux and Windows x64 binaries
+        env:
+          RELEASE_TARGETS: linux-x64,win32-x64
+        run: bun run ci:release:build-binaries
+
+      - name: Smoke-test Linux x64 binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$PWD/packages/coding-agent/binaries/omp-linux-x64"
+          runtime_dir="$(mktemp -d)"
+          trap 'rm -rf "$runtime_dir"' EXIT
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "$binary" --version
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "$binary" --smoke-test
+
+      - name: Stage release assets and verify checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp packages/coding-agent/binaries/omp-linux-x64 dist/
+          cp packages/coding-agent/binaries/omp-windows-x64.exe dist/
+          bun run ci:release:checksums \
+            dist/SHA256SUMS.txt \
+            dist/omp-linux-x64 \
+            dist/omp-windows-x64.exe
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          name: omp-${{ steps.metadata.outputs.version }}-fork-${{ github.run_number }}
           path: |
-            ~/.cache/omp-bazel-disk
-            ~/.cache/omp-bazel-repo
-          key: ${{ steps.cache.outputs.cache-key }}
-      - name: Upload native addon artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-addons
-          path: bazel-bin/natives-*/*.node
+            dist/omp-linux-x64
+            dist/omp-windows-x64.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
-  release_binary:
-    name: "Release binary: ${{ matrix.target_id }}"
-    needs: native_addons
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux
-            target_id: linux-x64
-            binary_path: packages/coding-agent/binaries/omp-linux-x64
-            native_targets: linux-x64-baseline linux-x64-modern
-          - os: ubuntu-22.04
-            platform: linux
-            libc: musl
-            target_id: linux-musl-x64
-            binary_path: packages/coding-agent/binaries/omp-linux-musl-x64
-            native_targets: linux-musl-x64-baseline
-          - os: ubuntu-24.04-arm
-            platform: linux
-            target_id: linux-arm64
-            binary_path: packages/coding-agent/binaries/omp-linux-arm64
-            native_targets: linux-arm64
-          - os: ubuntu-24.04-arm
-            platform: linux
-            libc: musl
-            target_id: linux-musl-arm64
-            binary_path: packages/coding-agent/binaries/omp-linux-musl-arm64
-            native_targets: linux-musl-arm64
-          - os: ubuntu-22.04
-            platform: win32
-            target_id: win32-x64
-            binary_path: packages/coding-agent/binaries/omp-windows-x64.exe
-            native_targets: win32-x64-baseline
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/bun-install
-      - name: Install native addons
-        uses: ./.github/actions/native-artifacts
-        with:
-          targets: ${{ matrix.native_targets }}
-      - name: Build release binary
+      - name: Create fork release tag
         env:
-          RELEASE_TARGETS: ${{ matrix.target_id }}
-        run: bun run ci:release:build-binaries
-      - name: Smoke release binary
-        if: matrix.platform != 'win32' && matrix.libc != 'musl'
+          RELEASE_TAG: ${{ steps.metadata.outputs.release-tag }}
+        shell: bash
         run: |
-          runtime_dir="$(mktemp -d)"
-          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
-          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
-      - name: Smoke musl release binary on Alpine
-        if: matrix.libc == 'musl'
-        run: |
-          binary="$(realpath "${{ matrix.binary_path }}")"
-          docker run --rm -v "$binary:/usr/local/bin/omp:ro" alpine:3.22 sh -ec '
-            apk add --no-cache libstdc++ libgcc >/dev/null
-            runtime_dir="$(mktemp -d)"
-            HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --version
-            HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --smoke-test
-          '
-      - name: Upload release binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: omp-binary-${{ matrix.target_id }}
-          path: ${{ matrix.binary_path }}
-          if-no-files-found: error
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            existing="$(git rev-list -n1 "refs/tags/${RELEASE_TAG}")"
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "::error::Existing tag ${RELEASE_TAG} points to ${existing}, not ${GITHUB_SHA}"
+              exit 1
+            fi
+            echo "Tag ${RELEASE_TAG} already exists at the expected commit."
+          else
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
 
-  release_binary_darwin:
-    name: "Release binary: ${{ matrix.target_id }}"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel
-            target_id: darwin-x64
-            binary_path: packages/coding-agent/binaries/omp-darwin-x64
-            native_targets: darwin-x64-baseline
-          - os: macos-14
-            target_id: darwin-arm64
-            binary_path: packages/coding-agent/binaries/omp-darwin-arm64
-            native_targets: darwin-arm64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/bun-install
-      - name: Install Bazelisk
-        run: npm install -g @bazel/bazelisk@1.28.1
-      - name: Build native addon
-        uses: ./.github/actions/bazel-natives
-        with:
-          targets: ${{ matrix.native_targets }}
-          cache-scope: fork-release-${{ matrix.target_id }}
-      - name: Build release binary
-        env:
-          RELEASE_TARGETS: ${{ matrix.target_id }}
-        run: bun run ci:release:build-binaries
-      - name: Smoke release binary
-        run: |
-          runtime_dir="$(mktemp -d)"
-          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
-          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
-      - name: Upload release binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: omp-binary-${{ matrix.target_id }}
-          path: ${{ matrix.binary_path }}
-          if-no-files-found: error
-
-  release_github:
-    name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release_binary, release_binary_darwin]
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.3.14"
-      - name: Download release binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: omp-binary-*
-          path: packages/coding-agent/binaries
-          merge-multiple: true
-      - name: Build browser relay artifact
-        run: bun run --cwd packages/browser-relay build
-      - name: Generate checksums
-        run: |
-          bun run ci:release:checksums SHA256SUMS.txt \
-            packages/coding-agent/binaries/omp-* \
-            packages/browser-relay/dist/omp-browser-relay-extension.zip
-      - name: Create GitHub Release
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.metadata.outputs.release-tag }}
+          name: OMP ${{ steps.metadata.outputs.version }} fork build ${{ github.run_number }}
+          body: |
+            Downstream fork package based on official `${{ steps.metadata.outputs.official-tag }}`.
+
+            Changes are limited to the fork release workflow and a build-time patch that removes Hub peer messaging while retaining task creation, background-job control, and supervised long-running processes.
+
+            Rust native addons are the official `${{ steps.metadata.outputs.version }}` precompiled npm artifacts; this workflow does not compile Rust.
           files: |
-            packages/coding-agent/binaries/omp-*
-            packages/browser-relay/dist/omp-browser-relay-extension.zip
-            SHA256SUMS.txt
-          generate_release_notes: true
+            dist/omp-linux-x64
+            dist/omp-windows-x64.exe
+            dist/SHA256SUMS.txt
+          generate_release_notes: false
+          make_latest: false
+          overwrite_files: true
