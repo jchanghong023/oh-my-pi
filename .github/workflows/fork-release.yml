@@ -1,0 +1,203 @@
+name: Fork Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+jobs:
+  native_addons:
+    name: Build native addons
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bun-install
+      - name: Install Bazelisk
+        run: npm install -g @bazel/bazelisk@1.28.1
+      - id: cache
+        uses: ./.github/actions/bazel-cache
+        with:
+          scope: fork-release-linux
+      - name: Build native addons
+        shell: bash
+        env:
+          OMP_BAZEL_RC: ${{ steps.cache.outputs.rc }}
+        run: |
+          set -euo pipefail
+          if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
+          for target in \
+            linux-arm64 \
+            linux-musl-arm64 \
+            linux-musl-x64-baseline \
+            linux-x64-baseline \
+            linux-x64-modern \
+            win32-x64-baseline; do
+            bun scripts/bazel-natives.ts "$target"
+          done
+      - name: Save Bazel disk cache
+        if: steps.cache.outputs.save-needed == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/omp-bazel-disk
+            ~/.cache/omp-bazel-repo
+          key: ${{ steps.cache.outputs.cache-key }}
+      - name: Upload native addon artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-addons
+          path: bazel-bin/natives-*/*.node
+          if-no-files-found: error
+          retention-days: 1
+
+  release_binary:
+    name: "Release binary: ${{ matrix.target_id }}"
+    needs: native_addons
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            target_id: linux-x64
+            binary_path: packages/coding-agent/binaries/omp-linux-x64
+            native_targets: linux-x64-baseline linux-x64-modern
+          - os: ubuntu-22.04
+            platform: linux
+            libc: musl
+            target_id: linux-musl-x64
+            binary_path: packages/coding-agent/binaries/omp-linux-musl-x64
+            native_targets: linux-musl-x64-baseline
+          - os: ubuntu-24.04-arm
+            platform: linux
+            target_id: linux-arm64
+            binary_path: packages/coding-agent/binaries/omp-linux-arm64
+            native_targets: linux-arm64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            libc: musl
+            target_id: linux-musl-arm64
+            binary_path: packages/coding-agent/binaries/omp-linux-musl-arm64
+            native_targets: linux-musl-arm64
+          - os: ubuntu-22.04
+            platform: win32
+            target_id: win32-x64
+            binary_path: packages/coding-agent/binaries/omp-windows-x64.exe
+            native_targets: win32-x64-baseline
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bun-install
+      - name: Install native addons
+        uses: ./.github/actions/native-artifacts
+        with:
+          targets: ${{ matrix.native_targets }}
+      - name: Build release binary
+        env:
+          RELEASE_TARGETS: ${{ matrix.target_id }}
+        run: bun run ci:release:build-binaries
+      - name: Smoke release binary
+        if: matrix.platform != 'win32' && matrix.libc != 'musl'
+        run: |
+          runtime_dir="$(mktemp -d)"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
+      - name: Smoke musl release binary on Alpine
+        if: matrix.libc == 'musl'
+        run: |
+          binary="$(realpath "${{ matrix.binary_path }}")"
+          docker run --rm -v "$binary:/usr/local/bin/omp:ro" alpine:3.22 sh -ec '
+            apk add --no-cache libstdc++ libgcc >/dev/null
+            runtime_dir="$(mktemp -d)"
+            HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --version
+            HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --smoke-test
+          '
+      - name: Upload release binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omp-binary-${{ matrix.target_id }}
+          path: ${{ matrix.binary_path }}
+          if-no-files-found: error
+
+  release_binary_darwin:
+    name: "Release binary: ${{ matrix.target_id }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target_id: darwin-x64
+            binary_path: packages/coding-agent/binaries/omp-darwin-x64
+            native_targets: darwin-x64-baseline
+          - os: macos-14
+            target_id: darwin-arm64
+            binary_path: packages/coding-agent/binaries/omp-darwin-arm64
+            native_targets: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/bun-install
+      - name: Install Bazelisk
+        run: npm install -g @bazel/bazelisk@1.28.1
+      - name: Build native addon
+        uses: ./.github/actions/bazel-natives
+        with:
+          targets: ${{ matrix.native_targets }}
+          cache-scope: fork-release-${{ matrix.target_id }}
+      - name: Build release binary
+        env:
+          RELEASE_TARGETS: ${{ matrix.target_id }}
+        run: bun run ci:release:build-binaries
+      - name: Smoke release binary
+        run: |
+          runtime_dir="$(mktemp -d)"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
+      - name: Upload release binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: omp-binary-${{ matrix.target_id }}
+          path: ${{ matrix.binary_path }}
+          if-no-files-found: error
+
+  release_github:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release_binary, release_binary_darwin]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - name: Download release binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: omp-binary-*
+          path: packages/coding-agent/binaries
+          merge-multiple: true
+      - name: Build browser relay artifact
+        run: bun run --cwd packages/browser-relay build
+      - name: Generate checksums
+        run: |
+          bun run ci:release:checksums SHA256SUMS.txt \
+            packages/coding-agent/binaries/omp-* \
+            packages/browser-relay/dist/omp-browser-relay-extension.zip
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            packages/coding-agent/binaries/omp-*
+            packages/browser-relay/dist/omp-browser-relay-extension.zip
+            SHA256SUMS.txt
+          generate_release_notes: true
