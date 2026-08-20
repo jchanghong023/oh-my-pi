@@ -3,6 +3,7 @@
 import * as path from "node:path";
 
 const repoRoot = path.join(import.meta.dir, "..");
+const docsPath = path.join(repoRoot, "docs/tools/hub.md");
 const hubPath = path.join(repoRoot, "packages/coding-agent/src/tools/hub/index.ts");
 const jobsPath = path.join(repoRoot, "packages/coding-agent/src/tools/hub/jobs.ts");
 const promptPath = path.join(repoRoot, "packages/coding-agent/src/prompts/tools/hub.md");
@@ -141,6 +142,38 @@ const minimalPrompt = [
 	"- **`stop`** performs graceful process-tree termination before hard kill. Never kill an unverified PID through bash.",
 ].join("\n");
 
+const minimalDocs = [
+	"# hub",
+	"",
+	"> Downstream Hub surface for background-job control and supervised long-running processes. Agent-to-agent messaging is intentionally disabled.",
+	"",
+	"Subagents are still created with the `task` tool. Hub retains only observation/control of asynchronous jobs and project-scoped processes.",
+	"",
+	"## Operations",
+	"",
+	"- Jobs: `wait`, `jobs`, `cancel`.",
+	"- Processes: `start`, `ps`, `logs`, `stop`, `restart`, `describe`.",
+	"- Process interaction: `send` with `name`; process lifecycle wait: `wait` with `name`.",
+	"",
+	"The peer operations `list` and `inbox`, plus peer fields such as `to`, `message`, `replyTo`, `await`, `from`, and `peek`, are not exposed by this build.",
+	"",
+	"## Background jobs",
+	"",
+	"A bare `wait` watches all running jobs owned by the caller. `ids` narrows the watched set. `jobs` returns a non-blocking snapshot. `cancel` requires `ids` and stops owned jobs or child-agent registrations.",
+	"",
+	"Completed jobs auto-deliver their result. A returned settled snapshot acknowledges that delivery. Job rows expire after retention; task transcripts remain available through `agent://<id>` and `history://<id>`.",
+	"",
+	"## Long-running processes",
+	"",
+	"`start` launches `application` and `args` under the project process broker. Use stable `name` values for later `ps`, `logs`, `wait`, `send`, `stop`, `restart`, or `describe` calls.",
+	"",
+	"Readiness can require a log regex, a TCP port, or both. `logs` supports tail/head, regex filtering, cursors, and follow mode. Process `send` supports stdin text, terminal keys, and process-tree signals. `stop` performs graceful termination before hard kill.",
+	"",
+	"## Availability and approval",
+	"",
+	"Job operations require asynchronous execution. Process operations require `launch.enabled`. Process mutation (`start`, `stop`, `restart`, and process `send`) is exec-tier; inspection and job control are read-tier.",
+].join("\n");
+
 let hub = await Bun.file(hubPath).text();
 if (!hub.includes("const minimalHubSchema = type({")) {
 	hub = replaceOnce(
@@ -207,12 +240,17 @@ if (minimalPrompt.includes("op: \"list\"") || minimalPrompt.includes("with `to`"
 if (jobs.includes(joblessAgentGuidance) || jobs.includes("message it via \\`hub\\` send")) {
 	throw new Error("Fork patch verification failed: job output still recommends peer messaging.");
 }
+if (minimalDocs.includes("`list` |") || minimalDocs.includes("send (peer)")) {
+	throw new Error("Fork patch verification failed: peer messaging leaked into the embedded docs.");
+}
 
+await Bun.write(docsPath, `${minimalDocs}\n`);
 await Bun.write(hubPath, hub);
 await Bun.write(jobsPath, jobs);
 await Bun.write(promptPath, `${minimalPrompt}\n`);
 
 console.log("Applied fork patches:");
+console.log(`- ${path.relative(repoRoot, docsPath)}: downstream Hub documentation`);
 console.log(`- ${path.relative(repoRoot, hubPath)}: minimal Hub schema and disabled peer messaging`);
 console.log(`- ${path.relative(repoRoot, jobsPath)}: removed peer-messaging guidance`);
 console.log(`- ${path.relative(repoRoot, promptPath)}: job/process-only Hub guidance`);
