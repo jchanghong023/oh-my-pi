@@ -4,9 +4,15 @@ import * as path from "node:path";
 
 const repoRoot = path.join(import.meta.dir, "..");
 const hubPath = path.join(repoRoot, "packages/coding-agent/src/tools/hub/index.ts");
+const jobsPath = path.join(repoRoot, "packages/coding-agent/src/tools/hub/jobs.ts");
 const promptPath = path.join(repoRoot, "packages/coding-agent/src/prompts/tools/hub.md");
 
-function replaceOnce(source: string, search: string, replacement: string, label: string): string {
+function replaceOnce(
+	source: string,
+	search: string,
+	replacement: string,
+	label: string,
+): string {
 	const first = source.indexOf(search);
 	if (first < 0) throw new Error(`Fork patch failed: ${label} anchor was not found.`);
 	if (source.indexOf(search, first + search.length) >= 0) {
@@ -30,9 +36,9 @@ function replaceRange(
 }
 
 const minimalSchema = String.raw`const minimalHubSchema = type({
-	op: type("'send' | 'wait' | 'jobs' | 'cancel' | 'start' | 'ps' | 'logs' | 'stop' | 'restart' | 'describe'").describe(
-		"hub operation",
-	),
+	op: type(
+		"'send' | 'wait' | 'jobs' | 'cancel' | 'start' | 'ps' | 'logs' | 'stop' | 'restart' | 'describe'",
+	).describe("hub operation"),
 	"ids?": type("string[]").describe("wait: job ids to watch (omit = all running jobs); cancel: job ids to kill"),
 	"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
 	"name?": type("string <= 48").describe("process ops: stable project-scoped launch name"),
@@ -171,6 +177,24 @@ if (!hub.includes("const minimalHubSchema = type({")) {
 	);
 }
 
+let jobs = await Bun.file(jobsPath).text();
+const joblessAgentGuidance =
+	"These agents have no job entry; message them via `hub` send, transcripts at `history://<id>`.";
+if (jobs.includes(joblessAgentGuidance)) {
+	jobs = replaceOnce(
+		jobs,
+		joblessAgentGuidance,
+		"These agents have no job entry; inspect transcripts at `history://<id>` or cancel an owned child with `hub` cancel.",
+		"jobless-agent guidance",
+	);
+	jobs = replaceOnce(
+		jobs,
+		"message it via \\`hub\\` send; transcript at history://${id}",
+		"inspect its transcript at history://${id}",
+		"no-matching-job guidance",
+	);
+}
+
 if (!hub.includes("readonly parameters = minimalHubSchema as unknown as typeof hubSchema;")) {
 	throw new Error("Fork patch verification failed: minimal Hub schema is not active.");
 }
@@ -180,10 +204,15 @@ if (!hub.includes("Downstream fork policy: peer communication is not part of the
 if (minimalPrompt.includes("op: \"list\"") || minimalPrompt.includes("with `to`")) {
 	throw new Error("Fork patch verification failed: peer messaging leaked into the minimal prompt.");
 }
+if (jobs.includes(joblessAgentGuidance) || jobs.includes("message it via \\`hub\\` send")) {
+	throw new Error("Fork patch verification failed: job output still recommends peer messaging.");
+}
 
 await Bun.write(hubPath, hub);
+await Bun.write(jobsPath, jobs);
 await Bun.write(promptPath, `${minimalPrompt}\n`);
 
 console.log("Applied fork patches:");
 console.log(`- ${path.relative(repoRoot, hubPath)}: minimal Hub schema and disabled peer messaging`);
+console.log(`- ${path.relative(repoRoot, jobsPath)}: removed peer-messaging guidance`);
 console.log(`- ${path.relative(repoRoot, promptPath)}: job/process-only Hub guidance`);
