@@ -10,8 +10,9 @@ function defaultForkTag(version: string): string {
 	return `v${version}-fork.${stamp}`;
 }
 
-function validTag(tag: string): boolean {
-	return /^v\d+\.\d+\.\d+-fork\.[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/.test(tag);
+function validTag(tag: string, version: string): boolean {
+	const prefix = `v${version}-fork.`;
+	return tag.startsWith(prefix) && /^v\d+\.\d+\.\d+-fork\.[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/.test(tag);
 }
 
 async function main(): Promise<void> {
@@ -29,7 +30,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log("Checking origin/main...");
-	await git(["fetch", "origin", "refs/heads/main:refs/remotes/origin/main", "--quiet"]);
+	await git(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main", "--quiet"]);
 	const head = (await git(["rev-parse", "HEAD"]).text()).trim();
 	const originMain = (await git(["rev-parse", "refs/remotes/origin/main"]).text()).trim();
 	if (head !== originMain) {
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
 
 	const requestedTag = process.argv[2];
 	const tag = requestedTag ?? defaultForkTag(version);
-	if (!validTag(tag)) {
+	if (!validTag(tag, version)) {
 		console.error(`Error: invalid fork release tag '${tag}'.`);
 		console.error(`Expected: v${version}-fork.<id>`);
 		process.exit(1);
