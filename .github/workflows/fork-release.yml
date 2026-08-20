@@ -51,11 +51,9 @@ jobs:
             exit 1
           fi
 
-          unexpected="$({
-            git diff --name-only "$official_sha" "$GITHUB_SHA" -- . \
-              ':(exclude).github/workflows/fork-release.yml' \
-              ':(exclude)scripts/apply-fork-patches.ts'
-          } || true)"
+          unexpected="$(git diff --name-only "$official_sha" "$GITHUB_SHA" -- . \
+            ':(exclude).github/workflows/fork-release.yml' \
+            ':(exclude)scripts/apply-fork-patches.ts')"
           if [ -n "$unexpected" ]; then
             echo "::error::Fork main contains changes outside the two maintained fork files:"
             printf '%s\n' "$unexpected"
@@ -65,7 +63,7 @@ jobs:
           for package in \
             @oh-my-pi/pi-natives-linux-x64 \
             @oh-my-pi/pi-natives-win32-x64; do
-            published="$(npm view "${package}@${version}" version)"
+            published="$(npm view "${package}@${version}" version 2>/dev/null || true)"
             if [ "$published" != "$version" ]; then
               echo "::error::Official native package ${package}@${version} is unavailable"
               exit 1
@@ -88,6 +86,7 @@ jobs:
           git diff --check
           changed="$(git diff --name-only | sort)"
           expected="$(printf '%s\n' \
+            docs/tools/hub.md \
             packages/coding-agent/src/prompts/tools/hub.md \
             packages/coding-agent/src/tools/hub/index.ts \
             packages/coding-agent/src/tools/hub/jobs.ts | sort)"
