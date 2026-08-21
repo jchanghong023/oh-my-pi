@@ -77,6 +77,30 @@ jobs:
           echo "Official source: ${official_tag} (${official_sha})"
           echo "Fork release: ${release_tag} (${GITHUB_SHA})"
 
+      - name: Install official Linux x64 native artifact for validation
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_dir="packages/natives/native"
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          rm -f "$native_dir"/*.node
+
+          tarball="$(npm view "@oh-my-pi/pi-natives-linux-x64@${VERSION}" dist.tarball)"
+          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$temp_dir"
+          cp "$temp_dir"/package/*.node "$native_dir"/
+
+          for file in \
+            pi_natives.linux-x64-baseline.node \
+            pi_natives.linux-x64-modern.node; do
+            test -s "$native_dir/$file" || {
+              echo "::error::Missing official native artifact for validation: $file"
+              exit 1
+            }
+          done
+
       - name: Run official checks and fork Hub regression
         run: |
           bun run ci:check:full
