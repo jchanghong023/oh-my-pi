@@ -96,7 +96,7 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 	// installs already excluded by realpath) — consume that order verbatim so the
 	// `task` agent surface dedups identically to the sibling skills/hooks/tools
 	// surface in `discovery/omp-plugins.ts`. Gate on `omp-plugins` so
-	// disabledProviders suppresses the whole extension-package surface.
+	// Capability-source toggles suppress the whole extension-package surface.
 	const extensionRoots = isProviderEnabled("omp-plugins")
 		? await listOmpExtensionRoots({ cwd: resolvedCwd, home, repoRoot: null })
 		: [];
@@ -104,7 +104,7 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
 	}
 
-	// Load agents from Claude Code marketplace plugins (respects disabledProviders)
+	// Load agents from Claude Code marketplace plugins (respects capability-source toggles)
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
 		? await listClaudePluginRoots(home, resolvedCwd)
 		: { roots: [] };

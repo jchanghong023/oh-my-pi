@@ -11,7 +11,7 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
 /**
- * Issue #1022: when path-scoped `enabledModels`/`disabledProviders` are
+ * Issue #1022: when path-scoped `enabledModels`/`enabledProviders` are
  * configured, the default-model fallback ignores the path-scoped allow-list and
  * picks any provider with stored credentials. In the user's report a Haiku
  * model (anthropic) is selected even though the path enables only
@@ -47,7 +47,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 			path.join(agentDir, "config.yml"),
 			YAML.stringify({
 				enabledModels: [{ path: privatePath, models: ["openai-codex"] }],
-				disabledProviders: [{ path: privatePath, providers: ["github-copilot"] }],
+				enabledProviders: [{ path: privatePath, providers: ["openai-codex"] }],
 				modelRoles: { default: "github-copilot/gpt-5.5" },
 			}),
 		);
@@ -55,7 +55,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 		const settings = await Settings.init({ cwd, agentDir });
 		// Sanity-check the path-scoped values resolved correctly for this cwd.
 		expect(settings.get("enabledModels")).toEqual(["openai-codex"]);
-		expect(settings.get("disabledProviders")).toEqual(["github-copilot"]);
+		expect(settings.get("enabledProviders")).toEqual(["openai-codex"]);
 
 		const authStorage = await AuthStorage.create(":memory:");
 		// Only anthropic has credentials. Per `enabledModels` the path allows

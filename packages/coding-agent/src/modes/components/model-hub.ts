@@ -30,6 +30,7 @@ import {
 import type { ModelRegistry } from "../../config/model-registry";
 import { type ModelRoleLookup, type ResolvedModelRoleValue, resolveModelRoleValue } from "../../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../../config/model-roles";
+import { isProviderEnabled } from "../../config/provider-policy";
 import type { Settings } from "../../config/settings";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
 import { theme } from "../theme/theme";
@@ -352,13 +353,6 @@ export class ModelHubComponent implements Component {
 
 	#buildSidebar(allModels: ReadonlyArray<Model>, availableModels: ReadonlyArray<Model>): void {
 		const scoped = this.#scopedModels.length > 0;
-		let disabledProviders: ReadonlySet<string>;
-		try {
-			disabledProviders = new Set(this.#settings.get("disabledProviders"));
-		} catch {
-			disabledProviders = new Set();
-		}
-
 		const availableCounts = new Map<string, number>();
 		for (const model of availableModels) {
 			availableCounts.set(model.provider, (availableCounts.get(model.provider) ?? 0) + 1);
@@ -373,12 +367,12 @@ export class ModelHubComponent implements Component {
 		if (!scoped) {
 			const authStorage = this.#registry.authStorage;
 			for (const provider of catalogCounts.keys()) {
-				if (!unlocked.has(provider) && !disabledProviders.has(provider)) {
+				if (!unlocked.has(provider) && isProviderEnabled(provider, this.#settings)) {
 					locked.add(provider);
 				}
 			}
 			for (const provider of this.#registry.getDiscoverableProviders()) {
-				if (unlocked.has(provider) || disabledProviders.has(provider)) continue;
+				if (unlocked.has(provider) || !isProviderEnabled(provider, this.#settings)) continue;
 				// Discoverable without stored auth: catalog-backed providers stay
 				// locked; keyless/custom endpoints (ollama, vllm, …) surface as
 				// selectable so discovery can populate them.

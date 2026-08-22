@@ -2,7 +2,7 @@
 
 Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
 
-A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
+A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Only explicitly enabled providers can contribute selectable models; use model settings to narrow individual models further.
 
 This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
 
@@ -17,10 +17,12 @@ At startup the model registry assembles its catalog from four sources, in order:
 
 The registry can hold a model even when it is not currently selectable. A model becomes **available** only when both conditions hold:
 
-1. its provider ID is **not** in the effective `disabledProviders` list; **and**
+1. its provider ID is present in the effective `enabledProviders` list; **and**
 2. the provider is either **keyless** (an implicit local provider, or a custom provider with `auth: none`) **or** has resolvable credentials.
 
-`disabledProviders` is checked _before_ credentials. If a provider ID is disabled, no stored key, OAuth session, environment variable, `.env` entry, or `models.yml` `apiKey` will make it selectable — the provider's models are dropped from availability regardless of credentials. Removing the ID from the effective list restores them.
+`enabledProviders` is checked _before_ credentials. If a provider ID is absent, no stored key, OAuth session, environment variable, `.env` entry, or `models.yml` `apiKey` will make it selectable. Adding the ID grants permission only; credentials or keyless availability are still required.
+
+`disabledProviders` is no longer accepted. Replace it with the explicit `enabledProviders` list you want OMP to permit.
 
 Keyless local engines are a special case: `ollama`, `llama.cpp`, and `lm-studio` are treated as keyless when no key is configured, so their discovered models are selectable as soon as the engine answers — no login required. See [Built-in local engines](#built-in-local-engines).
 
@@ -192,26 +194,26 @@ Three local engines are discovered automatically without needing a `models.yml` 
 These implicit engines are **skipped** when:
 
 - a provider with the same ID is already configured in `models.yml` (your explicit config wins); or
-- the provider ID appears in the effective `disabledProviders` list.
+- the provider ID is absent from the effective `enabledProviders` list.
 
 For installing and running these engines, see [Local models](./local-models.md).
 
-## Disabling model providers
+## Enabling model providers
 
-Use the `disabledProviders` setting to remove a provider's models from selection:
+Use the `enabledProviders` setting to permit provider models:
 
 ```yaml
 # ~/.omp/agent/config.yml or <project>/.omp/config.yml
-disabledProviders:
-  - anthropic
-  - openai
-  - google
-  - groq
+enabledProviders:
+  - opencode-go
+  - opencode-zen
+  - openai-codex
+  - deepseek
 ```
 
-Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API provider; the OAuth-backed Google providers `google-gemini-cli` and `google-antigravity` are separate IDs and must be disabled individually. Disable `ollama`, `llama.cpp`, or `lm-studio` to stop local discovery for that engine.
+Provider IDs are matched exactly. Add `google` to permit the Google Gemini API provider; the OAuth-backed Google providers `google-gemini-cli` and `google-antigravity` are separate IDs. Add `ollama`, `llama.cpp`, or `lm-studio` before their local discovery can run.
 
-`disabledProviders` applies uniformly to:
+`enabledProviders` applies uniformly to:
 
 - bundled catalog providers;
 - custom `models.yml` providers;
@@ -219,7 +221,7 @@ Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API
 - extension-registered providers;
 - implicit local engines.
 
-Disabling a provider does not delete its stored credentials — re-enable it by removing its ID from the effective list.
+Removing a provider from the list does not delete stored credentials; adding it back permits use once authentication succeeds.
 
 ## Project-specific provider control
 
@@ -227,22 +229,24 @@ Project settings live in `<project>/.omp/config.yml`. Use them when one reposito
 
 ```yaml
 # <project>/.omp/config.yml
-disabledProviders:
-  - openai
-  - openrouter
+enabledProviders:
+  - opencode-go
+  - opencode-zen
+  - openai-codex
+  - deepseek
 ```
 
-Settings arrays are **replaced** wholesale by the higher-precedence layer, not merged or appended. If the global file disables three providers and the project file disables one, the project sees only the project list:
+Settings arrays are **replaced** wholesale by the higher-precedence layer, not merged or appended. If the global file enables three providers and the project file enables one, the project sees only the project list:
 
 ```yaml
 # ~/.omp/agent/config.yml
-disabledProviders:
+enabledProviders:
   - anthropic
   - openai
   - google
 
 # <project>/.omp/config.yml
-disabledProviders:
+enabledProviders:
   - groq
 ```
 
@@ -252,14 +256,14 @@ Effective result inside the project:
 ["groq"]
 ```
 
-The project array re-enables `anthropic`, `openai`, and `google` for sessions launched from that project. If you want a project to _add_ to the global set, repeat the global IDs in the project file. See [Settings](./settings.md) for the full precedence chain, including `--config` overlays and runtime overrides.
+The project permits only `groq`; `anthropic`, `openai`, and `google` are closed there. If you want a project to _add_ to the global set, repeat the global IDs in the project file. See [Settings](./settings.md) for the full precedence chain, including `--config` overlays and runtime overrides.
 
-## Path-scoped `disabledProviders`
+## Path-scoped `enabledProviders`
 
-`disabledProviders` can mix plain string entries (apply everywhere) with path-scoped entries (apply only when the current working directory matches a configured path):
+`enabledProviders` can mix plain string entries (apply everywhere) with path-scoped entries (apply only when the current working directory matches a configured path):
 
 ```yaml
-disabledProviders:
+enabledProviders:
   - ollama
   - path: ~/projects/sensitive
     providers:
@@ -279,18 +283,18 @@ disabledProviders:
 
 For the example above:
 
-- `ollama` is disabled everywhere.
-- `anthropic` and `openai` are additionally disabled under `~/projects/sensitive`.
-- `openrouter` is additionally disabled under `~/work/client-a` and `~/work/client-b`.
+- `ollama` is enabled everywhere.
+- `anthropic` and `openai` are additionally enabled under `~/projects/sensitive`.
+- `openrouter` is additionally enabled under `~/work/client-a` and `~/work/client-b`.
 
-Path scopes are resolved **after** the settings merge. Because a higher-precedence layer replaces the whole array, a project-level `disabledProviders` array drops any scoped entries that only existed in the global array. `enabledModels` is the only other setting that supports the same path-scoped form. See [Settings](./settings.md) for details.
+Path scopes are resolved **after** the settings merge. Because a higher-precedence layer replaces the whole array, a project-level `enabledProviders` array replaces any global entries. `enabledModels` is the only other setting that supports the same path-scoped form. See [Settings](./settings.md) for details.
 
 ## Provider IDs vs discovery provider IDs
 
-`disabledProviders` uses a **single shared ID namespace** that gates two different subsystems:
+`enabledProviders` controls model providers only; capability discovery sources keep their own session controls.
 
-- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.yml` ID, …). Disabling one removes its models from selection.
-- **Discovery providers** — sources of context files, MCP servers, commands, skills, hooks, tools, prompts, and settings. Disabling one stops that source from contributing capability items.
+- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.yml` ID, …). Listing one permits its models once it has credentials or is keyless.
+- **Discovery providers** — sources of context files, MCP servers, commands, skills, hooks, tools, prompts, and settings. Their session controls are independent of the model allow-list.
 
 | Entry type            | Examples                                                                      | Effect                                                          |
 | --------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
@@ -301,7 +305,7 @@ Watch the related names. The Google Gemini **API** models use the model provider
 
 ## Custom providers in `models.yml`
 
-Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
+Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `enabledProviders` rules as built-in providers.
 
 Minimal OpenAI-compatible provider:
 
@@ -348,21 +352,21 @@ providers:
 
 For the full schema, all allowed `api` values, discovery `type`s, model overrides, and equivalence settings, see [Model and Provider Configuration](./models.md).
 
-To disable a custom provider, list its ID exactly:
+To enable a custom provider, list its ID exactly alongside the defaults:
 
 ```yaml
-disabledProviders:
+enabledProviders:
   - my-openai-compatible
   - team-proxy
 ```
 
 ## Troubleshooting
 
-**A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). Keyless local engines only appear once the engine is actually running and responding.
+**A provider's models are not selectable.** Confirm its ID is in the effective `enabledProviders` list and it has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`). The rule is enabled **and** (keyless **or** has credentials). Keyless local engines only appear once the engine is actually running and responding.
 
 **The wrong key is being used (a stale key from `.env`).** Resolution favors runtime `--api-key`, then a `models.yml` config key, stored OAuth, a key saved by `/login`, environment or `.env`, other stored API keys, and finally the `models.yml` fallback resolver. An already-set process environment variable also beats every `.env` file, and `<cwd>/.env` beats `~/.env`. If an unexpected key wins, check for an exported shell variable and the four `.env` files in precedence order, and clear the one that should not apply.
 
-**A provider still appears even though I disabled it.** `disabledProviders` arrays are replaced, not merged: a project `<project>/.omp/config.yml` array fully overrides the global one. Verify the _effective_ list for the directory you are in (path-scoped entries only apply at or under their configured path), and confirm the ID is spelled exactly. Use `omp config get disabledProviders` to inspect the merged value (see [Settings](./settings.md)).
+**A provider is not available.** `enabledProviders` arrays are replaced, not merged: verify the effective list for the directory and confirm the ID is spelled exactly. Use `omp config get enabledProviders` to inspect it (see [Settings](./settings.md)).
 
 **A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
 

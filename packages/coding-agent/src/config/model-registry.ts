@@ -110,6 +110,7 @@ export {
 
 import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
+import { getEnabledProviderIds, isProviderEnabled } from "./provider-policy";
 import { type Settings, settings } from "./settings";
 
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
@@ -133,14 +134,6 @@ interface CustomModelsResult {
  * the fully composed catalog and returns the list the host should serve.
  */
 type ModifyModelsHook = (models: Model<Api>[], credentials: OAuthCredentials) => Model<Api>[];
-
-function getDisabledProviderIdsFromSettings(settingsInstance?: Settings): Set<string> {
-	try {
-		return new Set((settingsInstance ?? settings).get("disabledProviders"));
-	} catch {
-		return new Set();
-	}
-}
 
 /**
  * Whether premium long-context windows are enabled. Defaults to true when no
@@ -185,6 +178,7 @@ export class ModelRegistry {
 	#configError: ConfigError | undefined = undefined;
 	#modelsConfigFile: ConfigFile<ModelsConfig>;
 	#lastStaticLoadMtime: number | null = null;
+	#lastEnabledProviderIds = "";
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -523,7 +517,12 @@ export class ModelRegistry {
 
 	#reloadStaticModels(): void {
 		const currentMtime = this.#modelsConfigFile.getMtimeMs();
-		if (currentMtime !== null && currentMtime === this.#lastStaticLoadMtime) {
+		const enabledProviderIds = [...getEnabledProviderIds(this.#settings)].sort().join("\u0000");
+		if (
+			currentMtime !== null &&
+			currentMtime === this.#lastStaticLoadMtime &&
+			enabledProviderIds === this.#lastEnabledProviderIds
+		) {
 			// Models config unchanged since last load; reloading would be redundant.
 			return;
 		}
@@ -594,6 +593,7 @@ export class ModelRegistry {
 			}
 		}
 		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
+		this.#lastEnabledProviderIds = [...getEnabledProviderIds(this.#settings)].sort().join("\u0000");
 	}
 
 	#resetStaticComposition(): void {
@@ -984,8 +984,7 @@ export class ModelRegistry {
 	}
 
 	#addImplicitDiscoverableProviders(configuredProviders: Set<string>): void {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
-		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
+		if (!configuredProviders.has("ollama") && isProviderEnabled("ollama", this.#settings)) {
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
@@ -995,7 +994,7 @@ export class ModelRegistry {
 			});
 			this.#keylessProviders.add("ollama");
 		}
-		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
+		if (!configuredProviders.has("llama.cpp") && isProviderEnabled("llama.cpp", this.#settings)) {
 			this.#discoverableProviders.push({
 				provider: "llama.cpp",
 				api: "openai-responses",
@@ -1008,7 +1007,7 @@ export class ModelRegistry {
 				this.#keylessProviders.add("llama.cpp");
 			}
 		}
-		if (!configuredProviders.has("lm-studio") && !disabledProviders.has("lm-studio")) {
+		if (!configuredProviders.has("lm-studio") && isProviderEnabled("lm-studio", this.#settings)) {
 			this.#discoverableProviders.push({
 				provider: "lm-studio",
 				api: "openai-completions",
@@ -1156,12 +1155,11 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const selectedDiscoverableProviders = (
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
 				: this.#discoverableProviders
-		).filter(provider => !disabledProviders.has(provider.provider));
+		).filter(provider => isProviderEnabled(provider.provider, this.#settings));
 		const configuredDiscoveriesPromise =
 			selectedDiscoverableProviders.length === 0
 				? Promise.resolve<Model<Api>[]>([])
@@ -1466,14 +1464,14 @@ export class ModelRegistry {
 					}),
 			},
 		];
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const enabledProviders = getEnabledProviderIds(this.#settings);
 		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(descriptor => {
-			if (disabledProviders.has(descriptor.providerId)) return false;
+			if (!enabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
 		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
-			if (disabledProviders.has(descriptor.providerId)) return false;
+			if (!enabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
@@ -1531,6 +1529,7 @@ export class ModelRegistry {
 		// Append runtime model managers registered by extensions via fetchDynamicModels.
 		for (const { options: managerOpts } of this.#runtimeModelManagers.values()) {
 			if (
+				enabledProviders.has(managerOpts.providerId) &&
 				!configuredDiscoveryProviders.has(managerOpts.providerId) &&
 				(!providerFilter || providerFilter.has(managerOpts.providerId))
 			) {
@@ -1782,13 +1781,13 @@ export class ModelRegistry {
 	 * full bundled catalog (thousands of models, ~50 providers).
 	 */
 	#createProviderAvailabilityCheck(): (provider: string) => boolean {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const enabledProviders = getEnabledProviderIds(this.#settings);
 		const byProvider = new Map<string, boolean>();
 		return provider => {
 			let available = byProvider.get(provider);
 			if (available === undefined) {
 				available =
-					!disabledProviders.has(provider) &&
+					enabledProviders.has(provider) &&
 					(this.#keylessProviders.has(provider) || this.authStorage.hasAuth(provider));
 				byProvider.set(provider, available);
 			}
@@ -1831,6 +1830,7 @@ export class ModelRegistry {
 	 * ignores that alias so SuperGrok is not auto-selected from a paid key.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
+		if (!isProviderEnabled(model.provider, this.#settings)) return false;
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
 			isCommandConfigValue(keyConfig) ||
@@ -1851,9 +1851,8 @@ export class ModelRegistry {
 	}
 
 	getDiscoverableProviders(): string[] {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		return this.#discoverableProviders
-			.filter(provider => !disabledProviders.has(provider.provider))
+			.filter(provider => isProviderEnabled(provider.provider, this.#settings))
 			.map(provider => provider.provider);
 	}
 
@@ -1867,9 +1866,9 @@ export class ModelRegistry {
 	 * the online refresh completes.
 	 */
 	hasProvider(providerId: string): boolean {
+		if (!isProviderEnabled(providerId, this.#settings)) return false;
 		const providerModels = this.#hasFullSnapshot ? this.#models : this.#composeStaticModels(new Set([providerId]));
 		if (providerModels.some(model => model.provider === providerId)) return true;
-		if (getDisabledProviderIdsFromSettings(this.#settings).has(providerId)) return false;
 		return (
 			this.#discoverableProviders.some(provider => provider.provider === providerId) ||
 			this.#runtimeModelManagers.has(providerId)

@@ -104,7 +104,7 @@ describe("OAuthSelectorComponent", () => {
 		expect(selected).toEqual(["opencode-go"]);
 	});
 
-	describe("disabledProviders", () => {
+	describe("enabledProviders", () => {
 		afterEach(() => {
 			resetSettingsForTest();
 		});
@@ -119,7 +119,7 @@ describe("OAuthSelectorComponent", () => {
 			if (!victim) return;
 
 			resetSettingsForTest();
-			await Settings.init({ inMemory: true, overrides: { disabledProviders: [victim.id] } });
+			await Settings.init({ inMemory: true, overrides: { enabledProviders: [] } });
 
 			const component = new OAuthSelectorComponent(
 				"login",
@@ -144,7 +144,7 @@ describe("OAuthSelectorComponent", () => {
 			expect(alias.id).not.toBe("openai-codex");
 
 			resetSettingsForTest();
-			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["openai-codex"] } });
+			await Settings.init({ inMemory: true, overrides: { enabledProviders: ["opencode-go"] } });
 
 			const component = new OAuthSelectorComponent(
 				"login",
@@ -164,7 +164,7 @@ describe("OAuthSelectorComponent", () => {
 
 		it("keeps disabled providers as logout targets", async () => {
 			resetSettingsForTest();
-			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["opencode-go"] } });
+			await Settings.init({ inMemory: true, overrides: { enabledProviders: [] } });
 
 			const selected: string[] = [];
 			const component = new OAuthSelectorComponent(

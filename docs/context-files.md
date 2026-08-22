@@ -11,7 +11,7 @@ Four similarly named things behave differently. Keep them straight:
 - **Context files** are read as plain Markdown and shown to the agent in generated project instructions (inside `<repo-rules>` with the default prompt template). They are session-opening instructions and background for repository work.
 - **Sticky rules** come from a top-level native `RULES.md`. They are converted into an always-apply rule that is re-attached near the current turn, so they keep their hold even after the visible conversation grows. See "Sticky rules vs normal context" below.
 - **Discovery providers** are the config-source adapters (`native`, `claude`, `codex`, `gemini`, `opencode`, `github`, `agents`, `agents-md`) that know where each tool keeps its files. The same provider that contributes context files may also contribute MCP servers, slash commands, skills, hooks, tools, prompts, and settings.
-- **Model providers** are inference backends such as `anthropic`, `openai`, `google`, `groq`, `ollama`, and `openrouter`. They have nothing to do with context files except that both kinds of id share the one `disabledProviders` list — see "Disabling discovery providers" below and [Providers](./providers.md).
+- **Model providers** are inference backends such as `anthropic`, `openai`, `google`, `groq`, `ollama`, and `openrouter`. They are governed separately by the model-provider allow-list; discovery sources have session controls in `/extensions`.
 
 Authoring **skills** and **rule** files (as opposed to the sticky `RULES.md`) is covered in [Skills](./skills.md). Customizing the system prompt with `SYSTEM.md` is covered in [System prompt customization](./system-prompt-customization.md).
 
@@ -177,43 +177,39 @@ Do not edit generated files.
 
 Keep `RULES.md` short. Long background belongs in `AGENTS.md`, where it costs context budget only once.
 
-## Disabling discovery providers
+## Controlling discovery sources
 
-Turn a provider off with the `disabledProviders` setting in `~/.omp/agent/config.yml`, a project's `.omp/config.yml`, or a `--config` overlay:
+Discovery sources can be turned off for the current session from `/extensions`.
 
 ```yaml
 # .omp/config.yml
-disabledProviders:
-  - claude
-  - github
+disabledExtensions:
+  - context-file:project:CLAUDE.md
 ```
 
-`disabledProviders` is a **whole-provider switch with one shared id namespace**, used by two unrelated subsystems:
+`enabledProviders` is not a discovery-source switch; it only controls model backends.
 
-| Id kind                | Examples                                                                           | Effect when listed                                                                                                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery provider ids | `native`, `claude`, `codex`, `gemini`, `opencode`, `github`, `agents`, `agents-md` | The entire config source is removed — not just its context files, but also any MCP servers, slash commands, skills, hooks, tools, prompts, and settings it would have contributed. |
-| Model provider ids     | `anthropic`, `openai`, `google`, `groq`, `ollama`, `openrouter`                    | The model backend is removed from selection even when its credentials are present. See [Providers](./providers.md).                                                                |
+`disabledExtensions` controls individual discovered items. Provider-level discovery-source controls are session-only and available from `/extensions`; `enabledProviders` does not control them.
 
-Ids are exact and the two namespaces do not collide by accident: `google` disables the Google model backend, while `gemini` disables the Gemini CLI discovery files. Disabling a discovery provider is heavier than it looks — disabling `claude`, for instance, also drops Claude-discovered MCP servers, commands, skills, hooks, tools, and settings, not only `CLAUDE.md`. To drop the context file alone and keep everything else the provider contributes, use [`disabledExtensions`](#disabling-a-single-context-file) instead.
+Ids are exact. `google` is a model backend, while `gemini` is a discovery source. To drop only one context file while retaining other source contributions, use [`disabledExtensions`](#disabling-a-single-context-file).
 
-Only `enabledModels` and `disabledProviders` support **path-scoped** entries, so you can vary provider availability per subtree:
+Only `enabledModels` and `enabledProviders` support **path-scoped** entries, so you can vary model-provider availability per subtree:
 
 ```yaml
-disabledProviders:
-  - github # disabled everywhere
+enabledProviders:
+  - opencode-go
   - path: ~/work/legacy-claude
     providers:
-      - claude # disabled only under this directory
+      - openai-codex
 ```
 
 A scoped entry applies when the cwd equals the configured path or sits beneath it; `~` expands to home. Bare string entries apply everywhere.
 
-Remember that higher-precedence settings layers **replace** array settings rather than appending to them. If your global config disables `claude` but a project config sets `disabledProviders: [github]`, then inside that project Claude discovery is re-enabled and only GitHub is disabled. See [Settings](./settings.md) for the full layer precedence, merge rules, and path-scoped array details.
+Remember that higher-precedence settings layers **replace** array settings rather than appending to them. See [Settings](./settings.md) for the full layer precedence, merge rules, and path-scoped array details.
 
 ## Disabling a single context file
 
-`disabledProviders` removes a whole config source. To drop one context file and keep the rest of what its provider contributes, list its extension id in `disabledExtensions`:
+To drop one context file while keeping the rest of what its provider contributes, list its extension id in `disabledExtensions`:
 
 ```yaml
 # ~/.omp/agent/config.yml, .omp/config.yml, or a --config overlay
@@ -229,7 +225,7 @@ Context-file ids have the form `context-file:<level>:<basename>`, where `<level>
 | `context-file:project:AGENTS.md`    | **Every** project-level `AGENTS.md`, at each directory depth the walk reaches — the id carries no depth. |
 | `context-file:user:AGENTS.md`       | Every user-level file named `AGENTS.md`, whichever provider supplied it.       |
 
-The match is on level and file name only, so one entry covers every provider that contributes a file of that name at that level, and a project entry cannot be narrowed to a single depth. When you need per-directory control, use a project `.omp/config.yml` in the subtree that should differ, or the path-scoped `disabledProviders` form above.
+The match is on level and file name only, so one entry covers every provider that contributes a file of that name at that level, and a project entry cannot be narrowed to a single depth. When you need per-directory control, use a project `.omp/config.yml` in the subtree that should differ.
 
 Disabling is not the same as shadowing, and the difference is visible: a disabled file is dropped before deduplication, so it does not claim its scope. **The file it used to shadow is loaded in its place.** In a project holding both `.claude/CLAUDE.md` and `AGENTS.md`, `CLAUDE.md` normally wins the depth-0 scope; disable `context-file:project:CLAUDE.md` and `AGENTS.md` becomes the project context rather than the scope falling empty. To leave the scope with no file at all, disable each candidate name.
 
@@ -238,7 +234,7 @@ Two everyday uses:
 - **Non-interactive runs.** A user-level context file written for your own interactive sessions is usually wrong for `-p` runs driven by another program, which arrive with their own instructions. Disabling it in a `--config` overlay keeps your interactive setup untouched.
 - **Delegated work.** When one agent drives another, the caller's own operating instructions travel into the callee's prompt as user-level context and can contradict the task it was actually given.
 
-`disabledExtensions` is not path-scoped: only `enabledModels` and `disabledProviders` accept the `path:` form. Like every array setting it is replaced, not merged, by a higher-precedence layer.
+`disabledExtensions` is not path-scoped: only `enabledModels` and `enabledProviders` accept the `path:` form. Like every array setting it is replaced, not merged, by a higher-precedence layer.
 
 Browse the ids interactively with `/extensions`, which lists every discovered context file with its level, source, and current state, and toggles the same setting.
 
@@ -251,7 +247,7 @@ Browse the ids interactively with `/extensions`, which lists every discovered co
 - `.claude/CLAUDE.md`, `.gemini/GEMINI.md`, and `.github/copilot-instructions.md` are read only from the current working directory's config directory — not from every ancestor.
 - `~/.codex/AGENTS.md` and `~/.config/opencode/AGENTS.md` are user-level only and have no project equivalent.
 - Empty files contribute nothing for the native and standalone providers.
-- A disabled discovery provider contributes nothing — check `disabledProviders` across your global, project, and `--config` layers.
+- A disabled discovery source contributes nothing — check its `/extensions` session state.
 - A single file can also be turned off on its own — check `disabledExtensions` for a matching `context-file:<level>:<basename>` entry, and remember that a project entry applies at every depth. `/extensions` shows the file as `disabled` when this is the cause.
 
 ### The wrong file wins

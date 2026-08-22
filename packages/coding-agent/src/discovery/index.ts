@@ -50,7 +50,6 @@ export {
 	// Introspection
 	getCapability,
 	getCapabilityInfo,
-	getDisabledProviders,
 	getProviderInfo,
 	// Initialization
 	initializeWithSettings,
@@ -61,7 +60,6 @@ export {
 	loadCapability,
 	// Cache management
 	reset,
-	setDisabledProviders,
 } from "../capability";
 export type { ContextFile } from "../capability/context-file";
 export type { Extension, ExtensionManifest } from "../capability/extension";
