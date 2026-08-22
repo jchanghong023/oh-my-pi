@@ -198,7 +198,7 @@ tools:
   approval:
     bash: prompt
     read: allow
-enabledProviders:
+disabledProviders:
   - anthropic
   - openai
   - google
@@ -207,7 +207,7 @@ enabledProviders:
 tools:
   approval:
     bash: allow
-enabledProviders:
+disabledProviders:
   - groq
 ```
 
@@ -219,11 +219,11 @@ tools:
   approval:
     bash: allow # overridden by project
     read: allow # kept from global
-enabledProviders:
+disabledProviders:
   - groq # project array REPLACES the global array
 ```
 
-Array replacement is the most common surprise: the project's `enabledProviders` does not extend the global list — it becomes the entire list for that project. The same applies to `enabledModels`, `cycleOrder`, `extensions`, and every other array-typed setting.
+Array replacement is the most common surprise: the project's `disabledProviders` does not extend the global list — it becomes the entire list for that project. The same applies to `enabledModels`, `cycleOrder`, `extensions`, and every other array-typed setting.
 
 ## Project-local config
 
@@ -268,7 +268,7 @@ Overlay paths are resolved relative to the process working directory (and `~` is
 
 ## Path-scoped arrays
 
-Two array settings — `enabledModels` and `enabledProviders` — accept path-scoped entries in addition to bare strings, so a single global config can behave differently per directory:
+Two array settings — `enabledModels` and `disabledProviders` — accept path-scoped entries in addition to bare strings, so a single global config can behave differently per directory:
 
 ```yaml
 enabledModels:
@@ -277,7 +277,7 @@ enabledModels:
     models:
       - anthropic/claude-opus-4-5
 
-enabledProviders:
+disabledProviders:
   - ollama # applies everywhere
   - paths:
       - ~/projects/sensitive
@@ -293,37 +293,36 @@ Accepted **path** keys (any of them, combined): `path`, `paths`, `pathPrefix`, `
 
 Accepted **value** keys:
 
-- `models` (for `enabledModels`) or `providers` (for `enabledProviders`)
+- `models` (for `enabledModels`) or `providers` (for `disabledProviders`)
 - `values` or `items` (for either setting)
 
 Only string values are kept; malformed scoped entries are ignored. Path scoping is resolved **after** the layer merge, so it reads the final effective array.
 
-## Provider allow-list
+## Provider and source disabling
 
-`enabledProviders` is the model-provider allow-list and is checked before any credential check:
+`disabledProviders` is a single shared id namespace that gates two different subsystems, before any credential check:
 
 | Entry kind        | Example ids                                                                        | Effect                                                                                                                                                         |
 | ----------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model providers   | `anthropic`, `openai`, `google`, `groq`, `ollama`, `openrouter`                    | Permits those backends once credentials are available; unlisted providers remain closed. See [Providers](./providers.md). |
+| Model providers   | `anthropic`, `openai`, `google`, `groq`, `ollama`, `openrouter`                    | Removes those backends from model selection, even when credentials are available. See [Providers](./providers.md).                                             |
+| Discovery sources | `native`, `claude`, `codex`, `gemini`, `github`, `opencode`, `cursor`, `agents-md` | Stops that source from contributing context files, MCP servers, commands, skills, hooks, tools, prompts, or settings. See [Context files](./context-files.md). |
 
-The allow-list applies only to model provider ids. Discovery-source session controls are separate.
+Most provider-control use cases list model provider ids. Disabling the `claude` discovery source is different from disabling the `anthropic` model provider — one stops Claude-format config discovery, the other stops the Anthropic model backend.
 
-Because arrays replace rather than append, a project that sets `enabledProviders` must list the complete desired set:
+Because arrays replace rather than append, a project that sets `disabledProviders` must list the complete desired set:
 
 ```yaml
 # ~/.omp/agent/config.yml
-enabledProviders:
+disabledProviders:
   - anthropic
   - openai
 
-# <repo>/.omp/config.yml — inside this repo ONLY groq is enabled
-enabledProviders:
+# <repo>/.omp/config.yml — inside this repo ONLY groq is disabled
+disabledProviders:
   - groq
 ```
 
-The default is `opencode-go`, `opencode-zen`, `openai-codex`, and `deepseek`; `[]` closes every provider. See [Providers](./providers.md).
-
-`disabledProviders` has been removed. OMP rejects configurations containing it; replace it with the complete `enabledProviders` list you intend to permit.
+The default is an empty array (nothing disabled). For the two subsystems' provider ids and ordering, see [Providers](./providers.md) and [Context files](./context-files.md).
 
 ## Settings catalog
 
@@ -363,7 +362,7 @@ enabledModels:
 | `modelProviderOrder`   | array   | `[]`                        | Preferred provider order when a model id is ambiguous.                                                                                                                                                                                                                                                                                                                                                           |
 | `cycleOrder`           | array   | `["smol","default","slow"]` | Roles cycled by the model switcher.                                                                                                                                                                                                                                                                                                                                                                              |
 | `enabledModels`        | array   | `[]`                        | Allow-list of models; supports [path-scoped entries](#path-scoped-arrays). Empty means all available models.                                                                                                                                                                                                                                                                                                     |
-| `enabledProviders`     | array   | `["opencode-go", "opencode-zen", "openai-codex", "deepseek"]` | Model-provider allow-list; empty means no providers. Supports path-scoped entries. See [above](#provider-allow-list). |
+| `disabledProviders`    | array   | `[]`                        | Disabled model/discovery providers; supports path-scoped entries. See [above](#provider-and-source-disabling).                                                                                                                                                                                                                                                                                                   |
 | `includeModelInPrompt` | boolean | `true`                      | Include the active model name in the system prompt.                                                                                                                                                                                                                                                                                                                                                              |
 
 See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
@@ -805,12 +804,12 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 
 ### A global array disappeared in a project
 
-Arrays replace; they do not append. If a project sets `enabledProviders`, `enabledModels`, `cycleOrder`, `extensions`, or any other array, include the **complete** desired value in the project layer — the global array is fully replaced.
+Arrays replace; they do not append. If a project sets `disabledProviders`, `enabledModels`, `cycleOrder`, `extensions`, or any other array, include the **complete** desired value in the project layer — the global array is fully replaced.
 
 ### A provider is still available after editing config
 
 - Check whether you disabled the model provider id (e.g. `anthropic`) or a discovery source id (e.g. `claude`) — they are different namespaces with different effects.
-- Check for a project (or overlay) `enabledProviders` array replacing your global one.
+- Check for a project (or overlay) `disabledProviders` array replacing your global one.
 - Credentials can still come from environment variables, `.env`, OAuth, stored auth, or `models.yml`; disabling a provider blocks selection regardless, but verify you edited the right layer. See [Providers](./providers.md).
 - Restart the session if the model list was already initialized.
 

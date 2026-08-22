@@ -1610,53 +1610,8 @@ describe("ModelRegistry", () => {
 		});
 	});
 
-	describe("enabled provider filtering", () => {
-		test("defaults to the four-provider allow-list and treats an empty list as closed", async () => {
-			await authStorage.set("anthropic", [{ type: "api_key", key: "anthropic-test-key" }]);
-			await Settings.init({ inMemory: true });
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			expect(registry.getAvailable().some(model => model.provider === "anthropic")).toBe(false);
-
-			settings.set("enabledProviders", []);
-			expect(registry.getAvailable()).toEqual([]);
-		});
-
-		test("custom and extension providers require explicit allow-list entries", async () => {
-			writeModelsJson({
-				"command-code": providerConfig(
-					"https://command.example.invalid/v1",
-					[{ id: "command-model" }],
-					"openai-completions",
-				),
-			});
-			await Settings.init({ inMemory: true });
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			registry.registerProvider("extension-code", {
-				baseUrl: "https://extension.example.invalid/v1",
-				apiKey: "EXTENSION_KEY",
-				api: "openai-completions",
-				models: [
-					{
-						id: "extension-model",
-						name: "Extension model",
-						reasoning: false,
-						input: ["text"],
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-						contextWindow: 32_768,
-						maxTokens: 4_096,
-					},
-				],
-			});
-
-			expect(registry.getAvailable().some(model => model.provider === "command-code")).toBe(false);
-			expect(registry.getAvailable().some(model => model.provider === "extension-code")).toBe(false);
-
-			settings.set("enabledProviders", ["command-code", "extension-code"]);
-			expect(registry.getAvailable().some(model => model.provider === "command-code")).toBe(true);
-			expect(registry.getAvailable().some(model => model.provider === "extension-code")).toBe(true);
-		});
-
-		test("getAvailable and getDiscoverableProviders require enabled providers", async () => {
+	describe("disabled provider filtering", () => {
+		test("getAvailable and getDiscoverableProviders exclude disabled providers from settings", async () => {
 			writeRawModelsJson({
 				ollama: {
 					baseUrl: "http://127.0.0.1:11434/v1",
@@ -1668,15 +1623,15 @@ describe("ModelRegistry", () => {
 			await authStorage.set("github-copilot", [
 				{
 					type: "oauth",
-					access: "ghu_test_token_for_allow_list",
-					refresh: "ghu_test_token_for_allow_list",
+					access: "ghu_test_token_for_disabled",
+					refresh: "ghu_test_token_for_disabled",
 					expires: Date.now() + 60_000,
 				},
 			]);
 			await Settings.init({
 				inMemory: true,
 				overrides: {
-					enabledProviders: ["opencode-go"],
+					disabledProviders: ["github-copilot", "ollama"],
 				},
 			});
 
@@ -1686,11 +1641,11 @@ describe("ModelRegistry", () => {
 			expect(registry.getDiscoverableProviders()).not.toContain("ollama");
 		});
 
-		test("refresh skips discovery probes for local providers outside the allow-list", async () => {
+		test("refresh skips discovery probes for disabled local providers", async () => {
 			await Settings.init({
 				inMemory: true,
 				overrides: {
-					enabledProviders: [],
+					disabledProviders: ["llama.cpp", "lm-studio", "ollama"],
 				},
 			});
 			const requestedUrls: string[] = [];
@@ -1702,10 +1657,10 @@ describe("ModelRegistry", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 			await registry.refresh("online");
 
-			const localProbeUrls = requestedUrls.filter(
+			const disabledProbeUrls = requestedUrls.filter(
 				url => url.includes("127.0.0.1:11434") || url.includes("127.0.0.1:8080") || url.includes("127.0.0.1:1234"),
 			);
-			expect(localProbeUrls).toEqual([]);
+			expect(disabledProbeUrls).toEqual([]);
 		});
 	});
 	describe("extended context", () => {

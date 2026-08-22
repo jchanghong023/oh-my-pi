@@ -36,10 +36,10 @@ const providerCapabilities = new Map<string, Set<string>>();
 /** Provider display metadata (shared across capabilities) */
 const providerMeta = new Map<string, { displayName: string; description: string }>();
 
-/** Disabled capability sources (by ID). This is session-only and is distinct from model-provider policy. */
-const disabledCapabilityProviders = new Set<string>();
+/** Disabled providers (by ID) */
+const disabledProviders = new Set<string>();
 
-/** Settings are retained for capability-local controls such as disabledExtensions. */
+/** Settings manager for persistence (if set) */
 let settings: Settings | null = null;
 
 // =============================================================================
@@ -236,7 +236,7 @@ async function loadImpl<T>(
  * Filter providers based on options and disabled state.
  */
 function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>): Provider<T>[] {
-	let providers = (capability.providers as Provider<T>[]).filter(p => !disabledCapabilityProviders.has(p.id));
+	let providers = (capability.providers as Provider<T>[]).filter(p => !disabledProviders.has(p.id));
 
 	if (options.providers) {
 		const allowed = new Set(options.providers);
@@ -281,30 +281,62 @@ export async function loadCapability<T>(
  */
 export function initializeWithSettings(activeSettings: Settings): void {
 	settings = activeSettings;
+	// Load disabled providers from settings
+	const disabled = settings.get("disabledProviders");
+	disabledProviders.clear();
+	for (const id of disabled) {
+		disabledProviders.add(id);
+	}
 }
 
 /**
  * Persist current disabled providers to settings.
  */
+function persistDisabledProviders(): void {
+	if (settings) {
+		settings.set("disabledProviders", Array.from(disabledProviders));
+	}
+}
+
 /**
  * Disable a provider globally (across all capabilities).
  */
 export function disableProvider(providerId: string): void {
-	disabledCapabilityProviders.add(providerId);
+	disabledProviders.add(providerId);
+	persistDisabledProviders();
 }
 
 /**
  * Enable a previously disabled provider.
  */
 export function enableProvider(providerId: string): void {
-	disabledCapabilityProviders.delete(providerId);
+	disabledProviders.delete(providerId);
+	persistDisabledProviders();
 }
 
 /**
  * Check if a provider is enabled.
  */
 export function isProviderEnabled(providerId: string): boolean {
-	return !disabledCapabilityProviders.has(providerId);
+	return !disabledProviders.has(providerId);
+}
+
+/**
+ * Get list of all disabled provider IDs.
+ */
+export function getDisabledProviders(): string[] {
+	return Array.from(disabledProviders);
+}
+
+/**
+ * Set disabled providers from a list (replaces current set).
+ */
+export function setDisabledProviders(providerIds: string[]): void {
+	disabledProviders.clear();
+	for (const id of providerIds) {
+		disabledProviders.add(id);
+	}
+	persistDisabledProviders();
 }
 
 // =============================================================================
@@ -341,7 +373,7 @@ export function getCapabilityInfo(capabilityId: string): CapabilityInfo | undefi
 			displayName: p.displayName,
 			description: p.description,
 			priority: p.priority,
-			enabled: !disabledCapabilityProviders.has(p.id),
+			enabled: !disabledProviders.has(p.id),
 		})),
 	};
 }
@@ -378,7 +410,7 @@ export function getProviderInfo(providerId: string): ProviderInfo | undefined {
 		description: meta.description,
 		priority,
 		capabilities: Array.from(caps),
-		enabled: !disabledCapabilityProviders.has(providerId),
+		enabled: !disabledProviders.has(providerId),
 	};
 }
 

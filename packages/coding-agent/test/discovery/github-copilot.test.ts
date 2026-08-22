@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { disableProvider, enableProvider, loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
+import { loadCapability, setDisabledProviders } from "@oh-my-pi/pi-coding-agent/capability";
 import type { ContextFile } from "@oh-my-pi/pi-coding-agent/capability/context-file";
 import { clearCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import type { Instruction } from "@oh-my-pi/pi-coding-agent/capability/instruction";
@@ -53,7 +53,7 @@ describe("github discovery — Copilot user-global surface", () => {
 	afterEach(() => {
 		clearCache();
 		resetActiveRulesForTests();
-		enableProvider("github");
+		setDisabledProviders([]);
 		for (const key of ENV_KEYS) {
 			if (savedEnv[key] === undefined) delete process.env[key];
 			else process.env[key] = savedEnv[key];
@@ -190,7 +190,7 @@ describe("github discovery — Copilot user-global surface", () => {
 			path.join(cwd, ".github", "instructions", "always.instructions.md"),
 			"---\napplyTo: '**'\n---\nAlways body\n",
 		);
-		disableProvider("github");
+		setDisabledProviders(["github"]);
 
 		const contextFiles = await loadCapability<ContextFile>("context-files", { cwd, providers: ["github"] });
 		const instructions = await loadCapability<Instruction>("instructions", { cwd, providers: ["github"] });

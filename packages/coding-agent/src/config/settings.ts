@@ -168,7 +168,7 @@ export function validateProviderMaxInFlightRequests(value: unknown): Record<stri
 	return normalized;
 }
 
-const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "enabledProviders"]);
+const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
 type PathScopedStringArrayEntry = {
 	path?: unknown;
 	paths?: unknown;
@@ -1145,9 +1145,11 @@ export class Settings {
 		this.#setRuntimeModelRoleOverrides(next);
 	}
 
-	/** Set the model-provider allow-list. */
-	setEnabledProviders(ids: string[]): void {
-		this.set("enabledProviders", ids);
+	/**
+	 * Set disabled providers (for compatibility with discovery system).
+	 */
+	setDisabledProviders(ids: string[]): void {
+		this.set("disabledProviders", ids);
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -1480,12 +1482,6 @@ export class Settings {
 
 	/** Apply schema migrations to raw settings */
 	#migrateRawSettings(raw: RawSettings, captureLegacyChangelogVersion = true): RawSettings {
-		if ("disabledProviders" in raw) {
-			throw new Error(
-				'The "disabledProviders" setting has been removed. Replace it with an explicit "enabledProviders" allow-list.',
-			);
-		}
-
 		// queueMode -> steeringMode
 		if ("queueMode" in raw && !("steeringMode" in raw)) {
 			raw.steeringMode = raw.queueMode;

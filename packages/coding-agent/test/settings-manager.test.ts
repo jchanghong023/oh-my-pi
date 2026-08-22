@@ -586,7 +586,7 @@ describe("Settings", () => {
 						{ path: projectDir, models: ["project-model"] },
 						{ path: otherDir, models: ["other-model"] },
 					],
-					enabledProviders: [
+					disabledProviders: [
 						"always-provider",
 						{ pathPrefix: projectDir, providers: ["project-provider"] },
 						{ pathPrefix: otherDir, providers: ["other-provider"] },
@@ -595,17 +595,12 @@ describe("Settings", () => {
 			});
 
 			expect(settings.get("enabledModels")).toEqual(["always-model", "project-model"]);
-			expect(settings.get("enabledProviders")).toEqual(["always-provider", "project-provider"]);
+			expect(settings.get("disabledProviders")).toEqual(["always-provider", "project-provider"]);
 
 			await settings.reloadForCwd(otherDir);
 
 			expect(settings.get("enabledModels")).toEqual(["always-model", "other-model"]);
-			expect(settings.get("enabledProviders")).toEqual(["always-provider", "other-provider"]);
-		});
-
-		it("rejects the removed provider blacklist setting", () => {
-			const legacy = { disabledProviders: ["anthropic"] } as Partial<Record<SettingPath, unknown>>;
-			expect(() => Settings.isolated(legacy)).toThrow('The "disabledProviders" setting has been removed');
+			expect(settings.get("disabledProviders")).toEqual(["always-provider", "other-provider"]);
 		});
 
 		it("migrates legacy snapcompact system prompt booleans to scoped modes", () => {
@@ -716,7 +711,7 @@ describe("Settings", () => {
 			expect(savedSettings.terminal).toEqual({ showProgress: true });
 		});
 
-		it("filters model and provider allow-lists by current path prefix", async () => {
+		it("filters model allow-list and disabled providers by current path prefix", async () => {
 			const workDir = path.join(projectDir, "work", "service");
 			const privateDir = path.join(projectDir, "private", "app");
 			fs.mkdirSync(workDir, { recursive: true });
@@ -728,7 +723,7 @@ describe("Settings", () => {
 					{ path: path.join(projectDir, "work"), values: ["anthropic/claude-opus-4-5"] },
 					{ path: path.join(projectDir, "private"), values: ["openai/gpt-5.2-codex"] },
 				],
-				enabledProviders: [
+				disabledProviders: [
 					"ollama",
 					{ path: path.join(projectDir, "work"), values: ["openai"] },
 					{ path: path.join(projectDir, "private"), values: ["anthropic"] },
@@ -737,12 +732,12 @@ describe("Settings", () => {
 
 			const workSettings = await Settings.init({ cwd: workDir, agentDir });
 			expect(workSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "anthropic/claude-opus-4-5"]);
-			expect(workSettings.get("enabledProviders")).toEqual(["ollama", "openai"]);
+			expect(workSettings.get("disabledProviders")).toEqual(["ollama", "openai"]);
 
 			resetSettingsForTest();
 			const privateSettings = await Settings.init({ cwd: privateDir, agentDir });
 			expect(privateSettings.get("enabledModels")).toEqual(["claude-sonnet-4-5", "openai/gpt-5.2-codex"]);
-			expect(privateSettings.get("enabledProviders")).toEqual(["ollama", "anthropic"]);
+			expect(privateSettings.get("disabledProviders")).toEqual(["ollama", "anthropic"]);
 		});
 
 		it("should preserve custom settings when changing theme", async () => {

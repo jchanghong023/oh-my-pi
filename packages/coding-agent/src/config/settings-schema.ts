@@ -53,7 +53,6 @@ import {
 	SEARCH_PROVIDER_CHOICES,
 	type SearchProviderId,
 } from "../web/search/types";
-import { DEFAULT_ENABLED_PROVIDER_IDS } from "./provider-policy";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,
@@ -601,16 +600,7 @@ export const SETTINGS_SCHEMA = {
 
 	enabledModels: { type: "array", default: EMPTY_STRING_ARRAY },
 
-	enabledProviders: {
-		type: "array",
-		default: DEFAULT_ENABLED_PROVIDER_IDS,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Enabled Providers",
-			description: "Only listed model providers may be used; an empty list disables every provider",
-		},
-	},
+	disabledProviders: { type: "array", default: EMPTY_STRING_ARRAY },
 
 	"providers.maxInFlightRequests": {
 		type: "record",

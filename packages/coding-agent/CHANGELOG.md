@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Changed
-
-- Provider access now uses the `enabledProviders` allow-list; only OpenCode Go, OpenCode Zen, OpenAI Codex, and DeepSeek are enabled by default. The removed `disabledProviders` setting now reports a configuration error.
-
 ### Added
 
 - Added runtime-selectable `hub.mode` settings: `compact` keeps async-job and process supervision visible without peer messaging, while `full` restores the official Hub surface.

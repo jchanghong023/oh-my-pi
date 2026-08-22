@@ -410,7 +410,7 @@ Related settings:
 `modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`
 accept exact selectors, globs, and fuzzy matches.
 
-Global `enabledModels` and `enabledProviders` entries may also be scoped to a path prefix:
+Global `enabledModels` and `disabledProviders` entries may also be scoped to a path prefix:
 
 ```yaml
 enabledModels:
@@ -418,14 +418,14 @@ enabledModels:
   - path: ~/work
     models:
       - anthropic/claude-opus-4-5
-enabledProviders:
+disabledProviders:
   - ollama
   - path: ~/private
     providers:
       - anthropic
 ```
 
-String entries apply everywhere. Scoped entries apply when the current working directory is the configured path or one of its subdirectories. Use `path`, `paths`, `pathPrefix`, or `pathPrefixes`; use `models` for `enabledModels`, `providers` for `enabledProviders`, or `values` for either.
+String entries apply everywhere. Scoped entries apply when the current working directory is the configured path or one of its subdirectories. Use `path`, `paths`, `pathPrefix`, or `pathPrefixes`; use `models` for `enabledModels`, `providers` for `disabledProviders`, or `values` for either.
 
 ## `/model` and `omp models`
 

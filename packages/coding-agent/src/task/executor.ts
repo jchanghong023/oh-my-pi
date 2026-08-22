@@ -23,7 +23,6 @@ import {
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
-import { isProviderEnabled } from "../config/provider-policy";
 import { buildServiceTierByFamily, resolveSubagentServiceTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -173,10 +172,11 @@ function resolveSubagentRetryFallbackCandidates(
 ): SubagentRetryFallbackCandidate[] {
 	const candidates: SubagentRetryFallbackCandidate[] = [];
 	const seen = new Set<string>();
+	const disabledProviders = new Set(settings.get("disabledProviders"));
 	for (const pattern of modelPatterns) {
 		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
 		if (!resolved.model) continue;
-		if (!isProviderEnabled(resolved.model.provider, settings)) continue;
+		if (disabledProviders.has(resolved.model.provider)) continue;
 		const selector = resolved.explicitThinkingLevel
 			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
 			: formatModelStringWithRouting(resolved.model);
@@ -219,9 +219,10 @@ function resolveSubagentInheritedRetryFallbackChain(
 	) {
 		return undefined;
 	}
+	const disabledProviders = new Set(settings.get("disabledProviders"));
 	return fallbackChain.filter(entry => {
 		const resolved = resolveModelOverride([entry], modelRegistry, settings);
-		return !resolved.model || isProviderEnabled(resolved.model.provider, settings);
+		return !resolved.model || !disabledProviders.has(resolved.model.provider);
 	});
 }
 
