@@ -54,14 +54,12 @@ function prepareFake(output: string, options: { exitCode?: number; restartOnce?:
 }
 
 async function waitForRestart(marker: string): Promise<void> {
-	if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").includes("restarted")) return;
-	const { promise, resolve } = Promise.withResolvers<void>();
-	const watcher = fs.watch(fakeBinDir, () => {
-		if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").includes("restarted")) resolve();
-	});
-	if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").includes("restarted")) resolve();
-	await promise;
-	watcher.close();
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		if (fs.existsSync(marker) && fs.readFileSync(marker, "utf8").includes("restarted")) return;
+		await Bun.sleep(10);
+	}
+	throw new Error(`Timed out waiting for tunnel restart marker: ${marker}`);
 }
 
 function recordedArgs(invocation: FakeInvocation): string[] {
