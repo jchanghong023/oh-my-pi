@@ -9,6 +9,7 @@ import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ResolvedRoleModel } from "../../session/agent-session";
+import { isProviderVisible } from "../fork-model-visibility";
 import { theme } from "../theme/theme";
 import {
 	buildBrowserItems,
@@ -155,8 +156,12 @@ export class ModelPickerComponent implements Component {
 				models = [];
 			}
 		}
+		models = models.filter(model => isProviderVisible(model.provider));
 
-		const allModels = this.#scopedModels.length > 0 ? models : this.#registry.getAll();
+		const allModels =
+			this.#scopedModels.length > 0
+				? models
+				: this.#registry.getAll().filter(model => isProviderVisible(model.provider));
 		const roles = resolveRoleAssignments(this.#settings, allModels, models);
 		const storage = this.#settings.getStorage();
 		const mruOrder = storage?.getModelUsageOrder() ?? [];

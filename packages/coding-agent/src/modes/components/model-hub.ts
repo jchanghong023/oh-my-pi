@@ -32,6 +32,7 @@ import { type ModelRoleLookup, type ResolvedModelRoleValue, resolveModelRoleValu
 import { getKnownRoleIds, getRoleInfo } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
+import { isProviderVisible } from "../fork-model-visibility";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
 import {
@@ -302,8 +303,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
-	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
-		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll();
+	#reloadRoles(allModels: ReadonlyArray<Model>, autoCandidates: ReadonlyArray<Model>): void {
 		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
@@ -326,8 +326,10 @@ export class ModelHubComponent implements Component {
 				availableModels = [];
 			}
 		}
+		allModels = allModels.filter(model => isProviderVisible(model.provider));
+		availableModels = availableModels.filter(model => isProviderVisible(model.provider));
 
-		this.#reloadRoles(availableModels);
+		this.#reloadRoles(allModels, availableModels);
 		this.#buildRolesRows();
 
 		const storage = this.#settings.getStorage();
@@ -378,10 +380,10 @@ export class ModelHubComponent implements Component {
 				}
 			}
 			for (const provider of this.#registry.getDiscoverableProviders()) {
-				if (unlocked.has(provider) || disabledProviders.has(provider)) continue;
+				if (!isProviderVisible(provider) || unlocked.has(provider) || disabledProviders.has(provider)) continue;
 				// Discoverable without stored auth: catalog-backed providers stay
-				// locked; keyless/custom endpoints (ollama, vllm, …) surface as
-				// selectable so discovery can populate them.
+				// locked; visible keyless/custom endpoints surface as selectable so
+				// discovery can populate them.
 				if (authStorage.hasAuth(provider) || !locked.has(provider)) {
 					locked.delete(provider);
 					unlocked.add(provider);

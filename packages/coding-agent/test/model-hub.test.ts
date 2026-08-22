@@ -154,8 +154,8 @@ describe("ModelHub", () => {
 
 	describe("role chips and roles view", () => {
 		test("tags the selected model's roles in the detail line, including custom roles", () => {
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
+			const model = getBundledModel("opencode-zen", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected bundled model opencode-zen/claude-sonnet-4-5");
 			const settings = Settings.isolated({
 				cycleOrder: ["smol", "custom-fast", "default"],
 				modelRoles: {
@@ -192,8 +192,8 @@ describe("ModelHub", () => {
 		});
 
 		test("roles view reflects auto thinking from defaultThinkingLevel and :auto suffixes", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = getBundledModel("openai-codex", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled model openai-codex/gpt-5.5");
 			const settings = Settings.isolated({
 				defaultThinkingLevel: AUTO_THINKING,
 				modelRoles: {
@@ -328,15 +328,15 @@ describe("ModelHub", () => {
 		});
 
 		test("typing while on a locked provider in scope focus switches to All models and focuses model list", () => {
-			const model = makeModel("anthropic", "claude-locked-test");
+			const model = makeModel("deepseek", "deepseek-locked-test");
 			const { hub } = createHub({
 				models: [model],
 				registry: { getAvailable: () => [] },
 			});
 			installTestTheme();
 
-			hub.handleInput(DOWN); // All models → locked anthropic
-			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
+			hub.handleInput(DOWN); // All models → locked deepseek
+			expect(normalize(hub.render(220))).toContain("deepseek has no credentials configured");
 			expect(footerLine(hub.render(220))).toContain("Enter log in");
 
 			// Typing a search character switches to All models and focuses list
@@ -415,8 +415,8 @@ describe("ModelHub", () => {
 
 	describe("assignment strips", () => {
 		test("Enter opens the role strip; assigning fires onAssign and opens the thinking strip", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = getBundledModel("openai-codex", "gpt-5.5");
+			if (!model) throw new Error("Expected bundled model openai-codex/gpt-5.5");
 			const { hub, onAssign } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
@@ -433,7 +433,7 @@ describe("ModelHub", () => {
 			expect(call?.[0]).toBe(model);
 			expect(call?.[1]).toBe("default");
 			expect(call?.[2]).toBe(ThinkingLevel.Inherit);
-			expect(call?.[3]).toBe("openai/gpt-5.5");
+			expect(call?.[3]).toBe("openai-codex/gpt-5.5");
 			expect(call?.[4]).toBe("global");
 
 			// The thinking strip follows immediately, scoped to the model's
@@ -557,8 +557,8 @@ describe("ModelHub", () => {
 		});
 
 		test("global assignments preserve thinking from the global role instead of the project override", () => {
-			const configuredModel = getBundledModel("openai", "gpt-5.5");
-			const targetModel = getBundledModel("openai", "gpt-5.6");
+			const configuredModel = getBundledModel("openai-codex", "gpt-5.5");
+			const targetModel = getBundledModel("openai-codex", "gpt-5.6-sol");
 			if (!configuredModel || !targetModel) {
 				throw new Error("Expected bundled OpenAI models for scoped thinking test");
 			}
@@ -583,8 +583,8 @@ describe("ModelHub", () => {
 			expect(onAssign.mock.calls[1]?.[4]).toBe("global");
 		});
 		test("project-scope alias falls back to the global role when the project role is absent", () => {
-			const configuredModel = getBundledModel("openai", "gpt-5.5");
-			const targetModel = getBundledModel("openai", "gpt-5.6");
+			const configuredModel = getBundledModel("openai-codex", "gpt-5.5");
+			const targetModel = getBundledModel("openai-codex", "gpt-5.6-sol");
 			if (!configuredModel || !targetModel) {
 				throw new Error("Expected bundled OpenAI models for project alias fallback test");
 			}
@@ -624,8 +624,8 @@ describe("ModelHub", () => {
 		});
 
 		test("renders max as a real final tier on max-capable models (gpt-5.6)", () => {
-			const model = getBundledModel("openai", "gpt-5.6");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.6");
+			const model = getBundledModel("openai-codex", "gpt-5.6-sol");
+			if (!model) throw new Error("Expected bundled model openai-codex/gpt-5.6-sol");
 			const { hub } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
@@ -988,15 +988,15 @@ describe("ModelHub", () => {
 
 	describe("provider scopes and search", () => {
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const secondProviderGlm = makeModel("second-provider", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
-			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			const { hub } = createHub({ models: [secondProviderGlm, customGlm] });
 			installTestTheme();
 
-			// Scope-hop: All models → custom-provider → openrouter.
+			// Scope-hop: All models → custom-provider → second-provider.
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
-			expect(normalize(hub.render(220))).toContain("openrouter ·");
+			expect(normalize(hub.render(220))).toContain("second-provider ·");
 
 			for (const ch of "glm-5.2") hub.handleInput(ch);
 			hub.handleInput("\n");
@@ -1007,25 +1007,25 @@ describe("ModelHub", () => {
 		});
 
 		test("search on All models spans every provider", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const secondProviderGlm = makeModel("second-provider", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
-			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			const { hub } = createHub({ models: [secondProviderGlm, customGlm] });
 			installTestTheme();
 
 			for (const ch of "glm") hub.handleInput(ch);
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("openrouter/z-ai/glm-5.2");
+			expect(rendered).toContain("second-provider/z-ai/glm-5.2");
 			expect(rendered).toContain("custom-provider/glm-5.2");
 		});
 
 		test("a provider scope that loses every match falls back to All models", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const secondProviderGlm = makeModel("second-provider", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
-			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			const { hub } = createHub({ models: [secondProviderGlm, customGlm] });
 			installTestTheme();
 
 			hub.handleInput(DOWN);
-			hub.handleInput(DOWN); // openrouter scope
+			hub.handleInput(DOWN); // second-provider scope
 			for (const ch of "does-not-exist") hub.handleInput(ch);
 
 			const rendered = normalize(hub.render(220));
@@ -1034,15 +1034,15 @@ describe("ModelHub", () => {
 		});
 
 		test("scope hop skips providers without matches while searching", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const secondProviderGlm = makeModel("second-provider", "z-ai/glm-5.2");
 			const customOther = makeModel("custom-provider", "different-model");
-			const { hub } = createHub({ models: [openrouterGlm, customOther] });
+			const { hub } = createHub({ models: [secondProviderGlm, customOther] });
 			installTestTheme();
 
 			for (const ch of "z-ai") hub.handleInput(ch);
 			hub.handleInput(LEFT); // switch focus to sidebar
-			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
-			expect(normalize(hub.render(220))).toContain("openrouter ·");
+			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on second-provider
+			expect(normalize(hub.render(220))).toContain("second-provider ·");
 		});
 		test("providers with matches float to the top of the sidebar while searching", () => {
 			const noMatch = makeModel("aaa-provider", "different-model");
@@ -1149,20 +1149,20 @@ describe("ModelHub", () => {
 
 	describe("locked providers", () => {
 		test("catalog providers without credentials appear locked and forward to login", () => {
-			const anthropicModel = makeModel("anthropic", "claude-locked-test");
+			const deepseekModel = makeModel("deepseek", "deepseek-locked-test");
 			const { hub, onLoginRequest } = createHub({
-				models: [anthropicModel],
+				models: [deepseekModel],
 				registry: { getAvailable: () => [] },
 			});
 			installTestTheme();
 
-			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
+			hub.handleInput(DOWN); // All models → locked deepseek (separator skipped)
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("anthropic has no credentials configured");
-			expect(rendered).toContain("claude-locked-test");
+			expect(rendered).toContain("deepseek has no credentials configured");
+			expect(rendered).toContain("deepseek-locked-test");
 
 			hub.handleInput("\n");
-			expect(onLoginRequest).toHaveBeenCalledWith("anthropic");
+			expect(onLoginRequest).toHaveBeenCalledWith("deepseek");
 		});
 	});
 });

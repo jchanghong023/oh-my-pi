@@ -13,6 +13,12 @@
 - 只有上游发布新的正式版本后，才同步对应 tag，并在该发布基线上重新应用和验证本 fork 的少量源码修改。
 - fork 与上游的差异应保持少量、明确且易于长期维护。
 
+### 1.1 模型选择界面的 Provider 可见性
+
+> 本 fork 只限制模型选择 UI 的可见 Provider；默认显示 OpenCode Go、OpenCode Zen、OpenAI Codex、DeepSeek，以及所有非 bundled 的自定义 Provider。此行为不改变底层 Provider 可用性。
+
+可见性规则仅应用于 Model Hub 和 Model Picker，并以 upstream 的 bundled model catalog 与 Provider descriptor 表判断内置 Provider；当前未出现在这两处的隐式内置 `llama.cpp` 作为单项例外处理。`models.yml` 中配置的自定义 Provider 与 extension 注册的非内置 Provider 自动显示；其他内置 Provider（包括以后 upstream 新增的内置 Provider）默认隐藏。认证、Provider discovery、SDK、ModelRegistry、Settings、capability 与 task/subagent 等底层逻辑保持 upstream 原样。
+
 ## 2. 上游同步流程
 
 每次同步上游正式版本时：
