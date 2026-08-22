@@ -146,8 +146,8 @@ describe("task.batch schema gating", () => {
 		const tool = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 
 		expect(tool.description).toContain("Same-file edits are not guaranteed to merge");
-		expect(tool.description).toContain("coordinate through `hub` before editing shared files");
 		expect(tool.description).toContain("Name one integration owner");
+		expect(tool.description).toContain("Decide cross-task contracts up front");
 		expect(tool.description).not.toContain("Concurrent edits to the same files auto-resolve");
 	});
 
