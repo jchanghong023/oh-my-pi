@@ -18,6 +18,10 @@
 
 - Fixed DeepSeek vision SKUs (`deepseek-v4-flash-vision-exp`, any `-vision-` id) losing image input after the text-only DeepSeek guard: genuinely multimodal ids now keep `image_url` parts while text-only DeepSeek endpoints still strip them.
 
+### Added
+
+- Added Command Code API-key login with authenticated Provider API model validation and mixed-wire request routing ([#9564](https://github.com/can1357/oh-my-pi/pull/9564) by [@himomohi](https://github.com/himomohi)).
+
 ## [18.0.4] - 2026-08-24
 
 ### Fixed

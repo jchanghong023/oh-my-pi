@@ -24,6 +24,8 @@ const ENV_KEYS = [
 	"OPENCODE_API_KEY",
 	"OPENCODE_GO_API_KEY",
 	"WANDB_API_KEY",
+	"COMMAND_CODE_API_KEY",
+	"COMMANDCODE_API_KEY",
 ] as const;
 const originalEnv = new Map(ENV_KEYS.map(key => [key, Bun.env[key]]));
 
@@ -62,6 +64,18 @@ describe("provider registry auth surface", () => {
 		expect(getEnvApiKey("coreweave")).toBe("wandb-env");
 		Bun.env.COREWEAVE_API_KEY = "coreweave-env";
 		expect(getEnvApiKey("coreweave")).toBe("coreweave-env");
+	});
+
+	test("Command Code env fallback honors documented key and legacy alias precedence", () => {
+		delete Bun.env.COMMAND_CODE_API_KEY;
+		Bun.env.COMMANDCODE_API_KEY = "legacy-command-code-key";
+		expect(getEnvApiKey("command-code")).toBe("legacy-command-code-key");
+
+		Bun.env.COMMAND_CODE_API_KEY = "documented-command-code-key";
+		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
+
+		delete Bun.env.COMMANDCODE_API_KEY;
+		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
 	});
 
 	test("separates OpenCode Go auth from anonymous Zen free models", () => {

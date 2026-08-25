@@ -2,7 +2,7 @@ import { getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { CATALOG_PROVIDERS } from "@oh-my-pi/pi-catalog/provider-models";
 import { isBunTestRuntime } from "@oh-my-pi/pi-utils";
 
-const VISIBLE_BUILT_IN_PROVIDERS = new Set(["opencode-go", "opencode-zen", "openai-codex", "deepseek"]);
+const VISIBLE_BUILT_IN_PROVIDERS = new Set(["opencode-go", "opencode-zen", "openai-codex", "deepseek", "command-code"]);
 const BUILT_IN_PROVIDERS = new Set<string>([
 	...getBundledProviders(),
 	...CATALOG_PROVIDERS.map(provider => provider.id),
