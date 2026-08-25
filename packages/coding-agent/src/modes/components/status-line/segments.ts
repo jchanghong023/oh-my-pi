@@ -121,6 +121,12 @@ const modelSegment: StatusLineSegment = {
 		if (modelName.startsWith("Claude ")) {
 			modelName = modelName.slice(7);
 		}
+		// Mobile truncation: allow `segmentOptions.model.maxLength` to clamp.
+		// Right-truncate (keep prefix) via `truncateToWidth`; path uses left-truncate
+		// `clampPathLength` to keep suffix, model should keep prefix.
+		if (typeof opts.maxLength === "number" && opts.maxLength > 0) {
+			modelName = truncateToWidth(modelName, opts.maxLength);
+		}
 
 		// Resolve the current thinking-level display ("◉ xhigh", "⟳ auto", …)
 		// when the model supports thinking and the segment isn't hiding it.

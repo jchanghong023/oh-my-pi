@@ -1985,6 +1985,39 @@ export class StatusLineComponent implements Component {
 					}
 				}
 			}
+			// Shrink model before dropping left segments — keep model visible on
+			// narrow mobile widths by truncating `Muse Spark 1.2 Contributor` etc.
+			const modelIdx = leftSegIds.indexOf("model");
+			if (modelIdx >= 0 && totalWidth() > topFillWidth) {
+				const overflow = totalWidth() - topFillWidth;
+				const currentModelVW = visibleWidth(left[modelIdx]);
+				const minModelVW = 6; // icon + a few chars
+				const shrinkable = currentModelVW - minModelVW;
+				if (shrinkable > 0) {
+					const shrinkBy = Math.min(shrinkable, overflow);
+					const currentMaxLen = ctx.options.model?.maxLength ?? 40;
+					let newMaxLen = Math.max(4, Math.min(currentMaxLen, currentModelVW) - shrinkBy);
+					const modelCtx = (maxLen: number): SegmentContext => ({
+						...ctx,
+						options: { ...ctx.options, model: { ...ctx.options.model, maxLength: maxLen } },
+					});
+					let reRendered = renderSegment("model", modelCtx(newMaxLen));
+					if (reRendered.visible && reRendered.content) {
+						for (let i = 0; i < 8; i++) {
+							const saved = currentModelVW - visibleWidth(reRendered.content);
+							if (saved >= shrinkBy) break;
+							const nextMaxLen = Math.max(4, newMaxLen - (shrinkBy - saved));
+							if (nextMaxLen >= newMaxLen) break;
+							newMaxLen = nextMaxLen;
+							const adjusted = renderSegment("model", modelCtx(newMaxLen));
+							if (!adjusted.visible || !adjusted.content) break;
+							reRendered = adjusted;
+						}
+						left[modelIdx] = reRendered.content;
+						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+					}
+				}
+			}
 			const leftOverflowDropIndex = (): number => {
 				// Preserve the current working directory as long as possible. The
 				// previous right-to-left pop could collapse a normal-width bar to
