@@ -255,17 +255,19 @@ For the bash tool specifically:
 
 ## Fastcheck — Changed TypeScript Check (`bun run fastcheck`)
 
-Quick local check to run **before commit/push**. It checks only changed TypeScript files and is not a CI replacement.
+Quick local check to run **before commit/push**. It checks changed TypeScript files and their affected workspaces, and is not a CI replacement.
 
 ```bash
 bun run fastcheck
 ```
 
-The script collects dirty and committed `*.ts`/`*.tsx` files relative to `origin/main` (with local default-branch fallbacks), excludes generated and vendored paths, and runs `biome check` only on those files. With no changed TypeScript files it exits successfully without invoking Biome.
+The script collects dirty and committed `*.ts`/`*.tsx` files relative to `origin/main` (with local default-branch fallbacks), excludes generated and vendored paths, and runs `biome check` only on those files. It then runs each affected package workspace's existing `check:types` script (or its `tsconfig.json` when the workspace has no script). Root tool files have no standalone project type-check contract and receive the Biome check only. With no changed TypeScript files it exits successfully without invoking either check.
 
-**Does NOT run:** TypeScript project-wide type checks, Rust formatting or compilation, native builds, unit tests, integration tests, smoke tests, multi-platform builds, publish, or release. Run the relevant focused checks separately when the change requires them; GitHub CI remains the full verification gate.
+**Run timing:** Do not run `fastcheck` during iterative editing. Finish all file changes for the task and any necessary focused checks first, then run `bun run fastcheck` once as the final local check before commit or push. If `fastcheck` reveals a problem that requires further edits, fix all resulting changes before running it again.
 
-**Standard flow:** develop → focused tests as needed → `bun run fastcheck` → commit/push → CI.
+**Does NOT run:** unaffected TypeScript workspaces, Rust formatting or compilation, native builds, unit tests, integration tests, smoke tests, multi-platform builds, publish, or release. Run the relevant focused checks separately when the change requires them; GitHub CI remains the full verification gate.
+
+**Standard flow:** complete all file edits → run focused checks as needed → `bun run fastcheck` once → commit/push → CI.
 
 ## Rust Build Profiles
 

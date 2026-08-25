@@ -5,6 +5,15 @@ import { $ } from "bun";
 
 const repoRoot = path.join(import.meta.dir, "..");
 
+interface PackageJson {
+	scripts?: Record<string, string>;
+}
+
+interface TypeCheckTarget {
+	command: string[];
+	label: string;
+}
+
 /** Use Biome's static musl binary on Linux hosts that may have an older glibc. */
 async function resolveBiomeEnv(): Promise<Record<string, string>> {
 	if (process.platform !== "linux") return {};
@@ -83,6 +92,50 @@ async function getChangedTsFiles(): Promise<string[]> {
 		.sort();
 }
 
+function workspaceForFile(file: string): string {
+	const normalized = file.replace(/\\/g, "/");
+	const packageMatch = normalized.match(/^packages\/[^/]+/);
+	if (packageMatch) return packageMatch[0];
+	if (normalized.startsWith("python/robomp/web/")) return "python/robomp/web";
+	return ".";
+}
+
+async function getTypeCheckTargets(files: string[]): Promise<TypeCheckTarget[]> {
+	const targets: TypeCheckTarget[] = [];
+	for (const workspace of [...new Set(files.map(workspaceForFile))].sort()) {
+		if (workspace === ".") continue;
+
+		const packageJson = (await Bun.file(path.join(repoRoot, workspace, "package.json")).json()) as PackageJson;
+		if (packageJson.scripts?.["check:types"]) {
+			targets.push({
+				command: [process.execPath, `--cwd=${workspace}`, "run", "check:types"],
+				label: workspace,
+			});
+			continue;
+		}
+
+		const tsconfig = path.join(workspace, "tsconfig.json");
+		if (await Bun.file(path.join(repoRoot, tsconfig)).exists()) {
+			targets.push({
+				command: [process.execPath, "x", "@typescript/native-preview", "-p", tsconfig, "--noEmit"],
+				label: workspace,
+			});
+		}
+	}
+	return targets;
+}
+
+async function run(command: string[]): Promise<number> {
+	const child = Bun.spawn(command, {
+		cwd: repoRoot,
+		env: { ...Bun.env, ...(await resolveBiomeEnv()) },
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	return child.exited;
+}
+
 async function main(): Promise<void> {
 	const files = await getChangedTsFiles();
 	if (files.length === 0) {
@@ -91,15 +144,21 @@ async function main(): Promise<void> {
 	}
 
 	console.log(`FASTCHECK: checking ${files.length} changed TypeScript file(s)`);
-	const child = Bun.spawn([process.execPath, "x", "@biomejs/biome", "check", "--no-errors-on-unmatched", ...files], {
-		cwd: repoRoot,
-		env: { ...Bun.env, ...(await resolveBiomeEnv()) },
-		stdin: "inherit",
-		stdout: "inherit",
-		stderr: "inherit",
-	});
-	const exitCode = await child.exited;
-	if (exitCode !== 0) process.exit(exitCode);
+	const biomeExitCode = await run([
+		process.execPath,
+		"x",
+		"@biomejs/biome",
+		"check",
+		"--no-errors-on-unmatched",
+		...files,
+	]);
+	if (biomeExitCode !== 0) process.exit(biomeExitCode);
+
+	for (const target of await getTypeCheckTargets(files)) {
+		console.log(`FASTCHECK: type-checking ${target.label}`);
+		const typeCheckExitCode = await run(target.command);
+		if (typeCheckExitCode !== 0) process.exit(typeCheckExitCode);
+	}
 	console.log("FASTCHECK PASSED");
 }
 
