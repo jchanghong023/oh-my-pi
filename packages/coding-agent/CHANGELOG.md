@@ -88,7 +88,7 @@
 - Browser handles from `tab.id()`/`tab.ref()`/`tab.waitFor()` now fail fast with a named per-op error (e.g. `handle.click() timed out after 8000ms`) instead of letting a stalled `(await tab.id(n)).click()` consume the whole browser cell ([#9535](https://github.com/can1357/oh-my-pi/issues/9535)).
 - Thinking-only length stops that overlap speculative handoff now resume compaction recovery instead of leaving the autonomous run idle.
 - Completed assistant replies remain represented in the live transcript when an older active block prevents scrollback retirement under viewport pressure ([#9508](https://github.com/can1357/oh-my-pi/issues/9508)).
-- Accelerated SHA-2 and SHA-3 checksum builtins on ARM64 CPUs that support the corresponding hardware instructions ([#9554](https://github.com/can1357/oh-my-pi/issues/9554)).
+- Accelerated SHA-3 checksum builtins on ARM64 CPUs that support the corresponding hardware instructions ([#9554](https://github.com/can1357/oh-my-pi/issues/9554)).
 
 ## [18.0.4] - 2026-08-24
 

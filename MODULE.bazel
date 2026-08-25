@@ -21,9 +21,9 @@ module(name = "oh-my-pi")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_rust", version = "0.71.3")
-bazel_dep(name = "hermetic_cc_toolchain", version = "4.3.0")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.2.0")
 
-# Concurrent `zig cc` compile steps can corrupt a shared cache (ziglang/zig#18763);
+# zig 0.14's cache corrupts under concurrent `zig cc` (ziglang/zig#18763);
 # the patch gives compile-only steps private throwaway caches while links
 # keep the shared cache. See the patch header for measurements.
 single_version_override(
