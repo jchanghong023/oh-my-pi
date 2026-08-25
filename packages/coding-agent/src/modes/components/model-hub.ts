@@ -168,6 +168,34 @@ export function resetProviderAutoRefreshGuard(): void {
 	autoRefreshedProviders.clear();
 }
 
+function priceInputForDisplay(item: ModelBrowserItem): number {
+	const value = item.model.cost?.input;
+	return typeof value === "number" && value > 0 ? value : 0;
+}
+
+function priceOutputForDisplay(item: ModelBrowserItem): number {
+	const value = item.model.cost?.output;
+	return typeof value === "number" && value > 0 ? value : 0;
+}
+
+/**
+ * UI-only price sort for the /model hub: ascending input, then output, stable.
+ * Returns a new array; never mutates `items` or model state.
+ * Normalization mirrors `formatCostPair` in model-browser.ts: missing cost or
+ * non-positive legs are treated as 0 (free first).
+ */
+function sortItemsByPriceForDisplay(items: ReadonlyArray<ModelBrowserItem>): ModelBrowserItem[] {
+	return [...items].sort((a, b) => {
+		const aIn = priceInputForDisplay(a);
+		const bIn = priceInputForDisplay(b);
+		if (aIn !== bIn) return aIn - bIn;
+		const aOut = priceOutputForDisplay(a);
+		const bOut = priceOutputForDisplay(b);
+		if (aOut !== bOut) return aOut - bOut;
+		return 0;
+	});
+}
+
 /**
  * The fullscreen model hub component. Hosted via `ui.showOverlay(..., { fullscreen: true })`;
  * the host must call {@link ModelHubComponent.dispose} when the overlay closes.
@@ -550,7 +578,8 @@ export class ModelHubComponent implements Component {
 				}
 				const providerId = entry.providerId;
 				this.#browser.setShowProvider(false);
-				this.#browser.setItems(this.#availableItems.filter(item => item.provider === providerId));
+				const filtered = this.#availableItems.filter(item => item.provider === providerId);
+				this.#browser.setItems(sortItemsByPriceForDisplay(filtered));
 				break;
 			}
 			case "roles":
@@ -558,7 +587,7 @@ export class ModelHubComponent implements Component {
 				break;
 			default:
 				this.#browser.setShowProvider(true);
-				this.#browser.setItems([...this.#availableItems]);
+				this.#browser.setItems(sortItemsByPriceForDisplay(this.#availableItems));
 				break;
 		}
 	}
