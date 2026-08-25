@@ -271,6 +271,7 @@ describe("terminal frame plans", () => {
 		).toEqual(["welcome", "editor"]);
 
 		renderScheduler.settle();
+		terminal.sendInput("\x1b[2;17R");
 		renderScheduler.settle();
 		expect(
 			terminal
@@ -303,7 +304,8 @@ describe("terminal frame plans", () => {
 
 		terminal.resize(20, 2); // a single large shrink can push live rows before the callback runs
 		renderScheduler.settle(); // restore the normal buffer, start the anchor probe
-		renderScheduler.settle(); // probe timeout → settled repaint
+		renderScheduler.settle(); // probe timeout → one bounded retry under a multiplexer
+		renderScheduler.settle(); // final timeout → settled repaint (no-op settle on direct)
 
 		const scrollback = plainBuffer(terminal).slice(0, terminal.getBufferPosition().baseY);
 		expect(scrollback.some(row => row.includes("dot-live"))).toBe(false);

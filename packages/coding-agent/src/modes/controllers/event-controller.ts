@@ -2,7 +2,7 @@ import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
-import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
@@ -251,6 +251,10 @@ export class EventController {
 			irc_message: e => this.#handleIrcMessage(e),
 			notice: e => this.#handleNotice(e),
 			model_changed: async () => {
+				this.ctx.statusLine.invalidate();
+				this.ctx.ui.requestRender();
+			},
+			advisor_cost_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender();
 			},
@@ -1251,28 +1255,27 @@ export class EventController {
 			let errorMessage: string | undefined;
 			const aborted = this.ctx.streamingMessage.stopReason === "aborted";
 			const silentlyAborted = aborted && isSilentAbort(this.ctx.streamingMessage);
-			const ttsrSilenced = aborted && this.ctx.viewSession.isTtsrAbortPending;
-			if (aborted && !silentlyAborted && !ttsrSilenced) {
+			if (aborted && !silentlyAborted) {
 				// Resolve the operator-facing label: a user-interrupt (Esc) abort
 				// carries USER_INTERRUPT_LABEL on errorMessage (threaded through the
 				// AbortController), which is preserved verbatim; any other abort with
 				// no threaded reason falls back to the retry-aware generic label.
-				// AgentSession.#handleAgentEvent already stamped SILENT_ABORT_MARKER for
-				// the plan-compact transition before this controller ran, so reaching
-				// this branch implies the abort was NOT a silent internal transition.
+				// AgentSession.#handleAgentEvent already stamped the SilentAbort flag
+				// for expected internal transitions (plan-compact, TTSR rule
+				// interruption) before this controller ran, so reaching this branch
+				// implies the abort was NOT a silent internal transition.
 				errorMessage = resolveAbortLabel(this.ctx.streamingMessage, this.ctx.viewSession.retryAttempt);
 				this.ctx.streamingMessage.errorMessage = errorMessage;
 			}
-			const displayMessage: AssistantMessage =
-				silentlyAborted || ttsrSilenced
-					? {
-							// Silence the streaming render by downgrading stopReason to "stop" for
-							// display only — does NOT mutate the persisted message's stopReason
-							// (the marker on errorMessage drives replay-side suppression).
-							...this.ctx.streamingMessage,
-							stopReason: "stop",
-						}
-					: this.ctx.streamingMessage;
+			const displayMessage: AssistantMessage = silentlyAborted
+				? {
+						// Silence the streaming render by downgrading stopReason to "stop" for
+						// display only — does NOT mutate the persisted message's stopReason
+						// (the structural SilentAbort flag drives replay-side suppression).
+						...this.ctx.streamingMessage,
+						stopReason: "stop",
+					}
+				: this.ctx.streamingMessage;
 			const displayTimeline = splitAssistantMessageToolTimeline(displayMessage);
 			this.ctx.streamingComponent.updateContent(displayTimeline.beforeTools);
 
@@ -1998,12 +2001,16 @@ export class EventController {
 			this.#restorePinnedErrorInline = true;
 			this.ctx.clearPinnedError();
 		}
-		const delaySeconds = Math.round(event.delayMs / 1000);
+		const retryStartMs = Date.now();
+		const retryLabel = `Retrying (${event.attempt}/${event.maxAttempts})`;
 		this.ctx.retryLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("warning", spinner),
 			text => theme.fg("muted", text),
-			`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s…${this.#maintenanceEscHint()}`,
+			() => {
+				const remaining = Math.max(0, event.delayMs - (Date.now() - retryStartMs));
+				return `${retryLabel} in ${formatDuration(remaining)}…${this.#maintenanceEscHint()}`;
+			},
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.statusContainer.addChild(this.ctx.retryLoader);

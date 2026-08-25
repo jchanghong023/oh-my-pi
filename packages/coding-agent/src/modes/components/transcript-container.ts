@@ -39,6 +39,8 @@ export interface AppendOnlyTranscriptBlock {
 
 interface FinalizableBlock {
 	isTranscriptBlockFinalized?(): boolean;
+	/** Render the row that must remain represented under emergency viewport pressure. */
+	renderTranscriptBlockEmergencyRow?(width: number): string | undefined;
 }
 
 /**
@@ -529,16 +531,52 @@ export class TranscriptContainer extends Container {
 		rows: number,
 		frame: AnimationFrame,
 	): readonly string[] {
-		const output: string[] = [];
-		const hiddenCount = Math.max(0, shown.length - rows);
+		let visibleRows = rows;
+		let visible: { entry: TranscriptEntry; index: number }[] = [];
+		let emergencyCandidate: { entry: TranscriptEntry; index: number } | undefined;
+		let emergencyRow: string | undefined;
 		let hiddenActive = 0;
-		for (let index = 0; index < hiddenCount; index++) {
-			if (shown[index]!.entry.state === "active") hiddenActive++;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			visible = visibleRows > 0 ? shown.slice(-visibleRows) : [];
+			emergencyCandidate = undefined;
+			emergencyRow = undefined;
+			const visibleStart = shown.length - visibleRows;
+			for (let index = visibleStart - 1; index >= 0; index--) {
+				const candidate = shown[index]!;
+				const block = candidate.entry.component as Component & FinalizableBlock;
+				const row =
+					candidate.entry.state === "settled" ? block.renderTranscriptBlockEmergencyRow?.(width) : undefined;
+				if (row === undefined) continue;
+				emergencyCandidate = candidate;
+				emergencyRow = row;
+				visible = [candidate, ...visible.slice(1)];
+				break;
+			}
+
+			let activeTotal = 0;
+			for (const candidate of shown) {
+				if (candidate.entry.state === "active") activeTotal++;
+			}
+			hiddenActive = activeTotal;
+			for (const candidate of visible) {
+				if (candidate.entry.state === "active") hiddenActive--;
+			}
+			// The summary row itself represents the newest active block when no
+			// active row fits beside it; report only the additional backlog.
+			if (hiddenActive === activeTotal && hiddenActive > 0) hiddenActive--;
+			if (attempt === 0 && hiddenActive > 0) {
+				visibleRows = Math.max(0, rows - 1);
+				continue;
+			}
+			break;
 		}
-		if (hiddenActive > 0) output.push(`${hiddenActive} more transcript blocks active`);
-		const visibleRows = rows - output.length;
-		const visible = visibleRows > 0 ? shown.slice(-visibleRows) : [];
+
+		const output = hiddenActive > 0 ? [`${hiddenActive} more transcript blocks active`] : [];
 		for (const candidate of visible) {
+			if (candidate === emergencyCandidate) {
+				output.push(emergencyRow ?? "");
+				continue;
+			}
 			this.#setAllocation(candidate.entry.component, 1, frame);
 			const rendered = this.#renderEntry(candidate.entry, width).slice(
 				this.#projectedEmitted(candidate.entry, candidate.index, width),

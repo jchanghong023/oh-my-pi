@@ -430,7 +430,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "synthetic",
-		defaultModel: "hf:zai-org/GLM-5.1",
+		defaultModel: "hf:zai-org/GLM-5.2",
 		envVars: ["SYNTHETIC_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => syntheticModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,

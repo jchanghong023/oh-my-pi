@@ -194,8 +194,6 @@ export interface AgentSessionConfig {
 	sideStreamFn?: StreamFn;
 	/** Stream wrapper for advisor requests. */
 	advisorStreamFn?: StreamFn;
-	/** Advisor spend already recorded for the session being opened, restored on resume. */
-	initialAdvisorCosts?: ReadonlyMap<string, number>;
 	/** Prefer websocket transport for OpenAI Codex requests when supported. */
 	preferWebsockets?: boolean;
 	/** Codex saved-reset coordinator; defaults to the process-wide singleton so concurrent sessions can't double-spend. Inject a fresh one in tests. */

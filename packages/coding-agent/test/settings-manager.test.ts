@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
@@ -126,6 +127,25 @@ describe("Settings", () => {
 			expect(await Bun.file(getConfigPath()).exists()).toBe(true);
 			expect(await Bun.file(yamlConfigPath).exists()).toBe(false);
 			expect((await readSettings()).setupVersion).toBe(1);
+		});
+
+		it("writes mapping headers without trailing whitespace and preserves multiline values", async () => {
+			const multiline = ["first line", "scalar line ending in colon: ", "third line "].join("\n");
+			const custom = {
+				"quoted:key": { nested: [{ value: multiline }] },
+				emptyObject: {},
+				emptyArray: [],
+				emptyString: "",
+			};
+			await writeSettings({ custom, theme: { dark: "anthracite" } });
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			settings.set("theme.dark", "titanium");
+			await settings.flush();
+
+			const content = await Bun.file(getConfigPath()).text();
+			expect(content).not.toMatch(/: +$/m);
+			expect(YAML.parse(content)).toEqual({ custom, theme: { dark: "titanium" } });
 		});
 	});
 
@@ -298,9 +318,9 @@ describe("Settings", () => {
 			await writeSettings({ setupVersion: 1 });
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			const canonicalConfigPath = await fs.promises.realpath(getConfigPath());
-			const rename = fs.promises.rename.bind(fs.promises);
+			const rename = fsp.rename.bind(fsp);
 			let injected = false;
-			vi.spyOn(fs.promises, "rename").mockImplementation(async (source, target) => {
+			vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
 				if (!injected && String(source).endsWith(".tmp") && String(target) === canonicalConfigPath) {
 					injected = true;
 					throw new FsCodeError("EPERM", "injected Windows replacement failure");

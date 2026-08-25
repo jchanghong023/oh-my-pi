@@ -2408,11 +2408,17 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 	errorMessage?: string;
 } {
 	if (reason === null) return { stopReason: "stop" };
-	switch (reason) {
+	// Some OpenAI-compatible gateways fronting Google Gemini backends emit the
+	// native uppercase finish reasons (`STOP`, `MAX_TOKENS`) instead of the
+	// lowercase OpenAI contract values. Fold case so a clean completion isn't
+	// misclassified as a provider error.
+	const normalized = typeof reason === "string" ? reason.toLowerCase() : reason;
+	switch (normalized) {
 		case "stop":
 		case "end":
 			return { stopReason: "stop" };
 		case "length":
+		case "max_tokens":
 			return { stopReason: "length" };
 		case "function_call":
 		case "tool_calls":

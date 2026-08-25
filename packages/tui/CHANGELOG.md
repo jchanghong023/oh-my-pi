@@ -17,6 +17,10 @@
 
 - Renamed TerminalFrameProvider.resetHistory to beginHistoryReplay
 
+### Added
+
+- `Loader` now accepts a `() => string` message; the function is re-evaluated on each spinner tick so dynamic labels (live countdowns) advance in sync with the glyph instead of freezing on the initial value. Static strings remain the zero-cost path (`setText` short-circuits on unchanged content).
+
 ### Changed
 
 - History replay batches now bottom-split into leading viewport space and serialize the complete replay remainder plus final viewport in one synchronous terminal write.
@@ -25,6 +29,9 @@
 
 - Fixed graceful terminal shutdown leaving eligible finalized output in the mutable viewport instead of retiring it before shell handoff.
 - Fixed a latched destructive scrollback rebuild (settled rebuild-mode resize, display reset) erasing and re-streaming the whole transcript during stop; the latch is dropped and shutdown writes only the un-retired tail.
+- Fixed tmux pane zoom/resize corrupting terminal scrollback (duplicated frames and silent history loss).
+- Fixed destructive resets (session replace, `/tree`, resize-settle scrollback rebuilds) permanently depositing one duplicate frame in tmux pane history per reset. The reset emitted `CSI 3 J` before `CSI 2 J`, and tmux implements ED2 by scrolling the live screen into pane history — refilling the just-wiped history with a copy of the old screen that the replay then painted again. The erase order is now ED2-then-ED3, which clears the screen first and then wipes history including tmux's push; on xterm-family terminals the two erases are independent and the order is irrelevant.
+- Fixed streaming Markdown fast-tail byte-identity divergences across seams: (1) a `_…_` emphasis row ending in a Unicode letter/number now stays literal per CommonMark intraword rules (fixed seam word-char checks: `[\w\p{L}\p{N}]` for underscore, `[^\s\p{P}\p{S}]` for `*`/`~`); (2) a `*`/`~` row followed by a Unicode format/combining char (`*a.*` + U+200C) now drops emphasis as cold render does; (3) an inert delta completing a GFM table delimiter row now re-renders the tail as a table instead of splicing paragraph rows.
 
 ## [18.0.4] - 2026-08-24
 

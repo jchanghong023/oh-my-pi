@@ -1,4 +1,5 @@
 import { type } from "@oh-my-pi/omptype";
+import { DEFAULT_HUB_LIST_LIMIT, MAX_HUB_LIST_LIMIT } from "./types";
 
 export const hubSchema = type({
 	op: type(
@@ -12,6 +13,10 @@ export const hubSchema = type({
 	"ids?": type("string[]").describe("wait: job ids to watch (omit = all running jobs); cancel: job ids to kill"),
 	"timeoutMs?": type("number").describe("wait (messages/jobs): timeout in milliseconds (0 waits indefinitely)"),
 	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
+	"status?": type("'running' | 'idle' | 'parked'").describe("list: filter by status; omit for running+idle"),
+	"limit?": type("number > 0").describe(
+		`list: max peer rows; default ${DEFAULT_HUB_LIST_LIMIT}, max ${MAX_HUB_LIST_LIMIT}`,
+	),
 	"name?": type("string <= 48").describe("process ops: stable project-scoped launch name"),
 	"application?": type("string > 0").describe("start: executable or application path"),
 	"args?": type("string[]").describe("start: argv passed directly to the application"),

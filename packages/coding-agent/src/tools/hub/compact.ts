@@ -9,7 +9,7 @@ import { hubSchema } from "./schema";
 import { type HubDetails, hubErrorResult } from "./types";
 
 export const compactHubSchema = hubSchema
-	.omit("op", "to", "message", "replyTo", "await", "from", "timeoutMs", "peek")
+	.omit("op", "to", "message", "replyTo", "await", "from", "timeoutMs", "peek", "status", "limit")
 	.and({
 		op: type(
 			"'send' | 'wait' | 'jobs' | 'cancel' | 'start' | 'ps' | 'logs' | 'stop' | 'restart' | 'describe'",

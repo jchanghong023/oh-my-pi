@@ -3727,18 +3727,23 @@ export function populateResponsesUsageFromResponse(
  * A defined value differing across sides IS a difference; a key undefined or
  * absent on both stays equal. Nested values use full {@link Bun.deepEquals}.
  */
-function deepEqualsWithout(a: unknown, b: unknown, omitKeys?: Record<string, boolean>): boolean {
+function deepEqualsWithout(
+	a: unknown,
+	b: unknown,
+	omitKeys?: Readonly<Record<string, boolean>>,
+	additionalOmitKeys?: Readonly<Record<string, boolean>>,
+): boolean {
 	if (!a || !b || typeof a !== "object" || typeof b !== "object") return Bun.deepEquals(a, b);
 	const ao = a as Record<string, unknown>;
 	const bo = b as Record<string, unknown>;
 	for (const key in ao) {
-		if (omitKeys?.[key]) continue;
+		if (omitKeys?.[key] || additionalOmitKeys?.[key]) continue;
 		const av = ao[key];
 		const bv = bo[key];
 		if (av !== bv && !Bun.deepEquals(av, bv)) return false;
 	}
 	for (const key in bo) {
-		if (omitKeys?.[key]) continue;
+		if (omitKeys?.[key] || additionalOmitKeys?.[key]) continue;
 		if (bo[key] !== undefined && !(key in ao)) return false;
 	}
 	return true;
@@ -3783,10 +3788,11 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 	previous: { input?: TItem[] } | undefined,
 	previousResponseItems: readonly TItem[] | undefined,
 	current: { input?: TItem[] },
+	additionalTopLevelExcludeMap?: Readonly<Record<string, boolean>>,
 ): TItem[] | null {
 	if (!previous) return null;
 	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
-	if (!deepEqualsWithout(previous, current, TOP_LEVEL_EXCLUDE_MAP)) {
+	if (!deepEqualsWithout(previous, current, TOP_LEVEL_EXCLUDE_MAP, additionalTopLevelExcludeMap)) {
 		return null;
 	}
 

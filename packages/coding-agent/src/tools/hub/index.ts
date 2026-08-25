@@ -129,6 +129,10 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			call: { op: "list" },
 		},
 		{
+			caption: "Inspect parked peer history",
+			call: { op: "list", status: "parked" },
+		},
+		{
 			caption: "Fire-and-forget DM — same send wakes idle/parked peers",
 			call: {
 				op: "send",
@@ -217,7 +221,15 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			case "list": {
 				const messaging = this.#messaging();
 				if (!messaging) return hubErrorResult("Peer messaging is unavailable in this session.", { op: "list" });
-				return executeList(messaging.registry, messaging.senderId);
+				return executeList(
+					messaging.registry,
+					messaging.senderId,
+					{
+						status: params.status,
+						limit: params.limit,
+					},
+					this.session.getSessionFile(),
+				);
 			}
 			case "send": {
 				const toPeer = params.to?.trim();

@@ -570,6 +570,21 @@ describe("migrateRenamedInstall transaction", () => {
 		);
 		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
 	});
+
+	it("uses the platform-aware PowerShell reinstall hint on Windows", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		if (!platformDescriptor) throw new Error("process.platform descriptor missing");
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+		try {
+			const { steps } = scriptedSteps({ install: [0, 0], verify: [false, false] });
+			const promise = migrateRenamedInstall(release, steps);
+			await expect(promise).rejects.toThrow("irm https://omp.sh/install.ps1");
+			await expect(promise).rejects.not.toThrow("| sh");
+		} finally {
+			Object.defineProperty(process, "platform", platformDescriptor);
+		}
+	});
 });
 
 describe("update-cli bun install command", () => {

@@ -250,8 +250,17 @@ For the bash tool specifically:
 
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
-- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass currently executes nothing (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs) and exists so the first runnable doctest added to a lib crate is actually run.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
+
+### No Local Rust Builds or Checks — Hard Rule
+
+Local development MUST NOT compile, check, test, lint, format, benchmark, or otherwise execute Rust code. Rust verification runs only in GitHub Actions after changes are pushed.
+
+- NEVER run `cargo` locally, including `cargo build`, `check`, `clippy`, `test`, `nextest`, `fmt`, `doc`, or `bench`.
+- NEVER run repository wrappers that invoke Rust or build native addons, including `bun run build:native`, `build`, `check`, `check:rs`, `lint`, `lint:rs`, `fmt`, `fmt:rs`, `test:rs`, or `fastcheck` if it ever gains a Rust step.
+- `bun run fastcheck` MUST remain TypeScript-only and MUST NOT invoke Cargo, Rust tooling, native builds, native smoke tests, or tests that require a locally built addon.
+- If a TypeScript test requires a missing local native addon, do not build the addon to enable it. Report that the test is deferred to GitHub Actions.
+- Rust source and build configuration may be edited locally when required, but do not claim local Rust verification; rely on the GitHub Actions result.
 
 ## Fastcheck — Changed TypeScript Check (`bun run fastcheck`)
 
@@ -265,19 +274,19 @@ The script collects dirty and committed `*.ts`/`*.tsx` files relative to `origin
 
 **Run timing:** Do not run `fastcheck` during iterative editing. Finish all file changes for the task and any necessary focused checks first, then run `bun run fastcheck` once as the final local check before commit or push. If `fastcheck` reveals a problem that requires further edits, fix all resulting changes before running it again.
 
-**Does NOT run:** unaffected TypeScript workspaces, Rust formatting or compilation, native builds, unit tests, integration tests, smoke tests, multi-platform builds, publish, or release. Run the relevant focused checks separately when the change requires them; GitHub CI remains the full verification gate.
+**Does NOT run:** unaffected TypeScript workspaces, Rust tooling or compilation, native builds, unit tests, integration tests, smoke tests, multi-platform builds, publish, or release. Run relevant TypeScript-focused checks separately when the change requires them. Subject to the hard rule above, all Rust and native verification is deferred to GitHub Actions.
 
 **Standard flow:** complete all file edits → run focused checks as needed → `bun run fastcheck` once → commit/push → CI.
 
-## Rust Build Profiles
+## Rust Build Profiles (CI and Release Reference Only)
 
-Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the settings Cargo.toml cannot express. Both are committed, so no local `~/.cargo/config.toml` is required.
+Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the settings Cargo.toml cannot express. They are documented for CI/release maintenance and do not authorize local Rust compilation or checks.
 
 | Profile | Use |
 | --- | --- |
 | `dev` | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
 | `release` | Shipping build: fat LTO, 1 codegen unit, stripped. |
-| `local` | Fast local release iteration: thin LTO, 16 codegen units, incremental. |
+| `local` | Legacy fast-iteration profile; do not invoke during local development. |
 | `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments. |
 | `ci` | Thin LTO, no debuginfo, stripped. |
 

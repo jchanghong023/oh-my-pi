@@ -622,6 +622,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
 	todoPhases: TodoPhase[] = [];
+	/**
+	 * Session that owns the plan currently in {@link todoPhases}. Subagent
+	 * reconciliation persists back to this session — never blindly to
+	 * `viewSession`. During a focus attach `viewSession` flips to the destination
+	 * before `reloadTodos` refreshes the snapshot, so an observer flush in that
+	 * window would otherwise write the previous session's plan into the
+	 * destination's canonical todos (#9575 review).
+	 */
+	#todoPhasesOwner?: AgentSession;
 	hideThinkingBlock = false;
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
 	/** Whether the visible session has produced thinking content the user can reveal. */
@@ -2317,8 +2326,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			}),
 		}));
 		if (!mutated) return;
-		this.session.setTodoPhases(next);
-		this.setTodos(next);
+		// Persist into the session that owns the snapshot we derived `next` from,
+		// not `viewSession`: the two diverge mid focus-attach, and writing to the
+		// destination there would clobber its canonical plan. Leaving the owner
+		// bound (rather than routing through `setTodos`, which rebinds it to
+		// `viewSession`) keeps a follow-up reconcile in the same window correct.
+		const owner = this.#todoPhasesOwner ?? this.session;
+		owner.setTodoPhases(next);
+		this.todoPhases = next;
+		this.#syncTodoAutoClearTimer();
+		this.#renderTodoList();
+		this.ui.requestRender();
 	}
 
 	#cancelTodoAutoClearTimer(): void {
@@ -2638,8 +2656,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.subagentContainer.addChild(new Text(lines.join("\n"), 1, 0));
 	}
 
-	async #loadTodoList(): Promise<void> {
-		this.todoPhases = this.session.getTodoPhases();
+	async #loadTodoList(source: AgentSession = this.session): Promise<void> {
+		this.todoPhases = source.getTodoPhases();
+		this.#todoPhasesOwner = source;
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 	}
@@ -5626,13 +5645,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
+		this.#todoPhasesOwner = this.viewSession;
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
 
-	async reloadTodos(): Promise<void> {
-		await this.#loadTodoList();
+	async reloadTodos(source: AgentSession = this.session): Promise<void> {
+		await this.#loadTodoList(source);
 		this.ui.requestRender();
 	}
 

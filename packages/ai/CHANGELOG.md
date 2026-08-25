@@ -1,10 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
 - Fixed DeepSeek vision SKUs (`deepseek-v4-flash-vision-exp`, any `-vision-` id) losing image input after the text-only DeepSeek guard: genuinely multimodal ids now keep `image_url` parts while text-only DeepSeek endpoints still strip them.
-
+- Fixed OpenAI-compatible completions misclassifying uppercase `finish_reason` values (`STOP`, `MAX_TOKENS`) emitted by some Gemini-backend gateways as provider errors; `mapStopReason` now folds case before matching and maps `MAX_TOKENS` to `length` ([#9566](https://github.com/can1357/oh-my-pi/pull/9566)).
+- Fixed provider message-count limit errors being misclassified as payload rejections instead of recoverable context overflows ([#9629](https://github.com/can1357/oh-my-pi/issues/9629)).
+- Fixed Codex WebSocket `slow_down` and rate-limit rejections discarding a valid `previous_response_id` continuation and forcing retries to replay the full context, including when throttling interrupts streamed output.
+- Fixed Codex WebSocket continuations replaying full context whenever a turn toggled Fast mode, while preserving strict resets for model, instructions, tools, reasoning, verbosity, and response format changes.
+- OMP no longer exits during Codex WebSocket cleanup if Bun throws `ERR_SOCKET_CLOSED` for a socket with an open state.
 
 ### Breaking Changes
 
