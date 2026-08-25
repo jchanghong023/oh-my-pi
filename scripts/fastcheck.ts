@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log(`FASTCHECK: checking ${files.length} changed TypeScript file(s)`);
-	const child = Bun.spawn([process.execPath, "x", "biome", "check", "--no-errors-on-unmatched", ...files], {
+	const child = Bun.spawn([process.execPath, "x", "@biomejs/biome", "check", "--no-errors-on-unmatched", ...files], {
 		cwd: repoRoot,
 		env: { ...Bun.env, ...(await resolveBiomeEnv()) },
 		stdin: "inherit",
