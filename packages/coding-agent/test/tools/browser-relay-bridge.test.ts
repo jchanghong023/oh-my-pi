@@ -88,8 +88,8 @@ function ack(bridge: RelayBridge, socket: FakeExtSocket, op: RelayRpcRequest["op
 	}
 }
 
-/** Reject every unanswered extension RPC of op. */
-function reject(bridge: RelayBridge, socket: FakeExtSocket, op: RelayRpcRequest["op"], error: string): void {
+/** Fail every unanswered extension RPC of `op` with `ok: false`. */
+function nack(bridge: RelayBridge, socket: FakeExtSocket, op: RelayRpcRequest["op"], error = "rpc failed"): void {
 	for (const rpc of socket.pending(op)) {
 		socket.markAcked(rpc.id);
 		bridge.extMessage(socket, JSON.stringify({ t: "rpcResult", id: rpc.id, ok: false, error }));
@@ -603,7 +603,7 @@ describe("RelayBridge attachment release", () => {
 		const replacement = new FakeExtSocket();
 		connect(bridge, replacement, [tab({ tabId: 1 })]);
 		expect(replacement.pending("attach")).toHaveLength(1);
-		reject(bridge, replacement, "attach", "debugger unavailable");
+		nack(bridge, replacement, "attach", "debugger unavailable");
 		await flush();
 
 		const detached = cdp.messages.find(
@@ -740,5 +740,125 @@ describe("RelayBridge attachment release", () => {
 				message.params.sessionId === replacementSession,
 		);
 		expect(userDetach).toBeDefined();
+	});
+
+	it("still fans root Runtime events out to a session that never enabled the domain", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		// omp's own patched-puppeteer client pull-acquires contexts and never
+		// sends Runtime.enable, yet still waits on executionContextCreated.
+		const sessionId = await attachPage(bridge, ext, cdp, connId, 1);
+
+		const context = { context: { id: 42, uniqueId: "context-42" } };
+		bridge.extMessage(
+			ext,
+			JSON.stringify({ t: "cdpEvent", tabId: 1, method: "Runtime.executionContextCreated", params: context }),
+		);
+
+		const received = cdp.messages.filter(
+			message => message.sessionId === sessionId && message.method === "Runtime.executionContextCreated",
+		);
+		expect(received.map(message => message.params)).toEqual([context]);
+
+		// An explicit disable silences the same session — a later re-emit is dropped.
+		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId, method: "Runtime.disable" }));
+		await flush();
+		bridge.extMessage(
+			ext,
+			JSON.stringify({ t: "cdpEvent", tabId: 1, method: "Runtime.executionContextCreated", params: context }),
+		);
+		expect(
+			cdp.messages.filter(
+				message => message.sessionId === sessionId && message.method === "Runtime.executionContextCreated",
+			),
+		).toEqual(received);
+	});
+
+	it("holds a pipelined duplicate Runtime.enable until the in-flight enable settles", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const sessionId = await attachPage(bridge, ext, cdp, connId, 1);
+
+		const enable1 = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: enable1, sessionId, method: "Runtime.enable" }));
+		await flush();
+		const enable2 = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: enable2, sessionId, method: "Runtime.enable" }));
+		await flush();
+
+		// Root disable/enable cycle still pending: neither caller may be acked.
+		expect(cdp.messages.filter(message => message.id === enable1 || message.id === enable2)).toEqual([]);
+
+		ack(bridge, ext, "send"); // Runtime.disable leg
+		await flush();
+		ack(bridge, ext, "send"); // Runtime.enable leg
+		await flush();
+
+		expect(cdp.messages.filter(message => message.id === enable1 && "result" in message)).toHaveLength(1);
+		expect(cdp.messages.filter(message => message.id === enable2 && "result" in message)).toHaveLength(1);
+	});
+
+	it("fails a pipelined duplicate Runtime.enable when the root enable fails", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const sessionId = await attachPage(bridge, ext, cdp, connId, 1);
+
+		const enable1 = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: enable1, sessionId, method: "Runtime.enable" }));
+		await flush();
+		const enable2 = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: enable2, sessionId, method: "Runtime.enable" }));
+		await flush();
+
+		// The first leg of the root cycle fails: both callers must observe it.
+		nack(bridge, ext, "send");
+		await flush();
+
+		expect(cdp.messages.filter(message => message.id === enable1 && "error" in message)).toHaveLength(1);
+		expect(cdp.messages.filter(message => message.id === enable2 && "error" in message)).toHaveLength(1);
+		expect(
+			cdp.messages.filter(message => (message.id === enable1 || message.id === enable2) && "result" in message),
+		).toEqual([]);
+	});
+
+	it("preserves the latest disable when an older and newer enable both fail", async () => {
+		const bridge = new RelayBridge({});
+		const ext = new FakeExtSocket();
+		connect(bridge, ext, [tab({ tabId: 1 })]);
+		const cdp = new FakeCdpSocket();
+		const connId = bridge.cdpConnected(cdp);
+		const sessionId = await attachPage(bridge, ext, cdp, connId, 1);
+
+		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId, method: "Runtime.enable" }));
+		await flush();
+		bridge.cdpMessage(connId, JSON.stringify({ id: ++msgSeq, sessionId, method: "Runtime.disable" }));
+		const latestEnable = ++msgSeq;
+		bridge.cdpMessage(connId, JSON.stringify({ id: latestEnable, sessionId, method: "Runtime.enable" }));
+		await flush();
+
+		nack(bridge, ext, "send");
+		await flush();
+		expect(cdp.messages.filter(message => message.id === latestEnable && "error" in message)).toHaveLength(1);
+
+		const context = { context: { id: 91, uniqueId: "context-91" } };
+		bridge.extMessage(
+			ext,
+			JSON.stringify({ t: "cdpEvent", tabId: 1, method: "Runtime.executionContextCreated", params: context }),
+		);
+		expect(
+			cdp.messages.filter(
+				message => message.sessionId === sessionId && message.method === "Runtime.executionContextCreated",
+			),
+		).toEqual([]);
 	});
 });

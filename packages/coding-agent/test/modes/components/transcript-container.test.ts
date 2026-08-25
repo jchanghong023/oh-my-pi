@@ -36,6 +36,11 @@ class Block implements Component {
 	}
 }
 
+/** A live block the container recognizes as dynamic tool-activity. */
+class ToolBlock extends Block {
+	setToolActivityVisible(): void {}
+}
+
 function literalStableRow(row: string): TranscriptStableRow {
 	return { key: row };
 }
@@ -348,6 +353,21 @@ describe("TranscriptContainer", () => {
 		expect(rows[0]).toBe("2 more transcript blocks active");
 		expect(Bun.stripANSI(rows[1] ?? "").trim()).toBe("Implemented");
 		expect(rows[2]).toBe("task running");
+	});
+
+	it("gives surplus rows to assistant text before a growing tool card (issue 9718)", () => {
+		const transcript = new TranscriptContainer();
+		const assistant = new Block(["A1", "A2", "A3", "A4"], false);
+		const tool = new ToolBlock(["T1", "T2", "T3", "T4"], false);
+		transcript.addChild(assistant);
+		transcript.addChild(tool);
+		// Capacity 5 cannot fit both blocks in full. Surplus (3 rows) goes to the
+		// assistant block first; the tool card collapses to its one-row minimum
+		// instead of clipping already-visible assistant text.
+		const out = transcript.renderViewport(80, 5, frame);
+		expect(out).toEqual(["A1", "A2", "A3", "A4", "T4"]);
+		expect(assistant.allocations.at(-1)).toBe(4);
+		expect(tool.allocations.at(-1)).toBe(1);
 	});
 
 	it("permits removing settled blocks until they are offered or committed", () => {

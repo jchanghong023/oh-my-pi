@@ -58,6 +58,7 @@ import {
 	xaiModelManagerOptions,
 	xaiOAuthModelManagerOptions,
 	xiaomiModelManagerOptions,
+	yoloAutoModelManagerOptions,
 	zenmuxModelManagerOptions,
 	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
@@ -537,6 +538,14 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) =>
 			xiaomiModelManagerOptions({ ...config, providerId: "xiaomi-token-plan-sgp", tokenPlanRegion: "sgp" }),
+	},
+	{
+		id: "yolo-auto",
+		defaultModel: "deepseek-flash-v4",
+		envVars: ["YOLO_AUTO_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => yoloAutoModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Yolo-Auto" },
 	},
 	{
 		id: "zai",

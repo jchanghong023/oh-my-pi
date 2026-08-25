@@ -262,7 +262,18 @@ export class TranscriptContainer extends Container {
 
 		const allocation: number[] = new Array(shown.length).fill(1);
 		let surplus = capacity - shown.length;
-		for (let index = shown.length - 1; index >= 0 && surplus > 0; index--) {
+		// Surplus rows favor ordinary transcript blocks over dynamic tool-activity
+		// cards (newest-first within each class), so a growing tool card collapses to
+		// its compact form instead of clipping already-visible assistant text (#9718).
+		const order: number[] = [];
+		for (let index = shown.length - 1; index >= 0; index--) {
+			if (!isToolActivityComponent(shown[index]!.entry.component)) order.push(index);
+		}
+		for (let index = shown.length - 1; index >= 0; index--) {
+			if (isToolActivityComponent(shown[index]!.entry.component)) order.push(index);
+		}
+		for (const index of order) {
+			if (surplus <= 0) break;
 			const extra = Math.min(Math.max(0, blocks[index]!.length - 1), surplus);
 			allocation[index] += extra;
 			surplus -= extra;

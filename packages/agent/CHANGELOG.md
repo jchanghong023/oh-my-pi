@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## [18.0.5] - 2026-08-25
+
 ### Fixed
 
-- Fixed the remote-compaction summary mislabeling the compaction request's input usage as retained replay tokens; it now reads "Compaction processed N input tokens" ([#9585](https://github.com/can1357/oh-my-pi/issues/9585)).
+- Corrected remote compaction summaries so they accurately report the number of input tokens processed.
 
 ## [18.0.4] - 2026-08-24
 

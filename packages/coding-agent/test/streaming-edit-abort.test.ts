@@ -719,6 +719,12 @@ it(
 		const diff = `${diffLines.join("\n")}\n`;
 
 		await streamDiff(guard, makeEvent, diff);
+		// The time-sliced scan may need more ticks than the stream provided on a
+		// slow machine; drain until the verdict lands (bounded, like the
+		// responsiveness test above).
+		for (let i = 0; i < 400 && !guard.abortTriggered; i += 1) {
+			await drainMacrotasks(1);
+		}
 
 		expect(guard.abortTriggered).toBe(true);
 		expect(abortCalls.count).toBe(1);

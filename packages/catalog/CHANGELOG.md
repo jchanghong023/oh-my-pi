@@ -10,9 +10,16 @@
 
 - Added Command Code as a mixed-wire provider with authenticated model discovery and per-model Anthropic Messages/OpenAI Chat Completions routing ([#9564](https://github.com/can1357/oh-my-pi/pull/9564) by [@himomohi](https://github.com/himomohi)).
 
+## [18.0.5] - 2026-08-25
+
+### Added
+
+- Added built-in DeepInfra provider support (`deepinfra`, `DEEPINFRA_API_KEY`) with live model discovery, including chat models, context windows, pricing, cache-read pricing, vision input, and reasoning-effort capabilities.
+- Added built-in Yolo-Auto provider support with the flat-rate `deepseek-flash-v4` model and live model discovery.
+
 ### Fixed
 
-- Fixed the `synthetic` provider's default model still pointing at the retired `hf:zai-org/GLM-5.1`; an account with only `SYNTHETIC_API_KEY` opened on whichever model sorted first (`hf:moonshotai/Kimi-K3`) instead of the provider default, which is now the bundled `hf:zai-org/GLM-5.2`.
+- Fixed the Synthetic provider’s default model to use `hf:zai-org/GLM-5.2` instead of the retired `hf:zai-org/GLM-5.1`.
 
 ## [18.0.4] - 2026-08-24
 
@@ -63,7 +70,6 @@
 
 ### Added
 
-- Added DeepInfra as a built-in provider (`deepinfra`, `DEEPINFRA_API_KEY`) with dynamic model discovery from DeepInfra's public tagged catalog: chat models, context windows, per-1M-token pricing (including cache reads), vision input, and reasoning-effort support all come from the API at discovery time (output-token caps fall back to bundled/stencil.so references — the catalog’s `max_tokens` restates the context ceiling, and a bundled cap is clamped to the window DeepInfra actually serves). DeepInfra’s discovered modality list is authoritative through the refresh merge, so a model that loses its `vision`/`vlm` tags stops advertising image input instead of retaining it from the bundled reference.
 - Added helper functions and constants for reading enterprise ChatGPT workspace data-residency regions from Codex OAuth access tokens and forwarding the residency header to Codex backend endpoints.
 
 ### Changed
