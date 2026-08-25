@@ -416,8 +416,18 @@ export class ModelHubComponent implements Component {
 					unlocked.add(provider);
 				}
 			}
+			// Fork: command-code has no bundled models (like opencode-go has),
+			// so catalogCounts is 0 and the loops above never create a sidebar
+			// entry. Keep the provider visible by default (VISIBLE_BUILT_IN_PROVIDERS)
+			// like opencode-go/opencode-zen — add a locked entry so /login can be
+			// reached from the hub and the provider flips to unlocked after the
+			// post-login online discovery (#5780) populates runtimeDiscoveredModels.
+			// Other built-ins stay hidden unless they have catalog/discoverable
+			// presence; this is intentionally scoped to command-code only.
+			if (!unlocked.has("command-code") && !locked.has("command-code") && !disabledProviders.has("command-code") && isProviderVisible("command-code")) {
+				locked.add("command-code");
+			}
 		}
-
 		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
 		const providerEntry = (providerId: string, isLocked: boolean): SidebarEntry => ({
 			id: `provider:${providerId}`,
