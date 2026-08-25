@@ -33,11 +33,10 @@ import {
 	resolveOllamaModelCacheProviderId,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { resolveCommandCodeBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/command-code";
 import { collapseBuiltModelVariants } from "@oh-my-pi/pi-catalog/variant-collapse";
+import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
-import { isProviderVisible } from "../modes/fork-model-visibility";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
@@ -760,42 +759,10 @@ export class ModelRegistry {
 	/** Load built-in models, applying provider-level overrides only.
 	 *  Per-model overrides are applied later by #applyModelOverrides. */
 	#loadBuiltInModels(overrides: Map<string, ProviderOverride>, providerFilter?: ReadonlySet<string>): Model<Api>[] {
-		const bundledProviders = new Set<string>(getBundledProviders());
-		// Fork: command-code has no bundled models.json entry (like opencode-go has),
-		// so it would be invisible before its online discovery runs. Inject a
-		// minimal fallback so the hub shows 1 model and the user can select it
-		// immediately after login; the authoritative discovery will replace it.
-		const includeCommandCodeFallback =
-			!bundledProviders.has("command-code") &&
-			(!providerFilter || providerFilter.has("command-code")) &&
-			isProviderVisible("command-code");
-		if (includeCommandCodeFallback) bundledProviders.add("command-code");
-		return [...bundledProviders].flatMap(provider => {
+		return getBundledProviders().flatMap(provider => {
 			if (providerFilter && !providerFilter.has(provider)) return [];
-			if (provider === "command-code" && includeCommandCodeFallback) {
-				const fallbackSpec: ModelSpec<Api> = {
-					id: "deepseek/deepseek-v4-flash",
-					name: "DeepSeek V4 Flash",
-					api: "openai-completions",
-					provider: "command-code",
-					baseUrl: resolveCommandCodeBaseUrl("openai-completions", undefined),
-					reasoning: true,
-					input: ["text"],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 131072,
-					maxTokens: 8192,
-				};
-				const providerOverride = overrides.get(provider);
-				if (!providerOverride) return [buildModel(fallbackSpec)];
-				const withTransportOverride = this.#applyProviderTransportOverride(fallbackSpec, providerOverride);
-				return [
-					buildModel({
-						...withTransportOverride,
-						compat: mergeCompat(undefined, providerOverride.compat),
-					} as ModelSpec<Api>),
-				];
-			}
 			const models = getBundledModels(provider as Parameters<typeof getBundledModels>[0]) as Model<Api>[];
+			const providerOverride = overrides.get(provider);
 
 			return models.map(m => {
 				if (!providerOverride) return m;
