@@ -33,8 +33,8 @@ import {
 	resolveOllamaModelCacheProviderId,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
+import { resolveCommandCodeBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/command-code";
 import { collapseBuiltModelVariants } from "@oh-my-pi/pi-catalog/variant-collapse";
-import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import { isProviderVisible } from "../modes/fork-model-visibility";
@@ -771,13 +771,14 @@ export class ModelRegistry {
 			isProviderVisible("command-code");
 		if (includeCommandCodeFallback) bundledProviders.add("command-code");
 		return [...bundledProviders].flatMap(provider => {
+			if (providerFilter && !providerFilter.has(provider)) return [];
 			if (provider === "command-code" && includeCommandCodeFallback) {
 				const fallbackSpec: ModelSpec<Api> = {
 					id: "deepseek/deepseek-v4-flash",
 					name: "DeepSeek V4 Flash",
 					api: "openai-completions",
 					provider: "command-code",
-					baseUrl: "https://api.commandcode.ai/provider/v1",
+					baseUrl: resolveCommandCodeBaseUrl("openai-completions", undefined),
 					reasoning: true,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -795,7 +796,6 @@ export class ModelRegistry {
 				];
 			}
 			const models = getBundledModels(provider as Parameters<typeof getBundledModels>[0]) as Model<Api>[];
-			const providerOverride = overrides.get(provider);
 
 			return models.map(m => {
 				if (!providerOverride) return m;
