@@ -62,15 +62,33 @@ export function commandCodeModelManagerOptions(config?: ModelManagerConfig): Mod
 		providerId: "command-code",
 		dynamicModelsAuthoritative: true,
 		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels<Api>({
+			fetchDynamicModels: async () => {
+				const models = await fetchOpenAICompatibleModels<Api>({
 					api: "openai-completions",
 					provider: "command-code",
 					baseUrl: discoveryBaseUrl,
 					apiKey,
 					mapModel: (_entry, defaults) => mapCommandCodeModel(defaults, config?.baseUrl),
 					fetch: config?.fetch,
-				}),
+				});
+				if (models && models.length > 0) return models;
+				// Fallback so /model shows 1 entry even when the endpoint is
+				// temporarily empty/unreachable; matches descriptor defaultModel.
+				// The authoritative discovery will replace this on next success.
+				const fallback: ModelSpec<Api> = {
+					id: "deepseek/deepseek-v4-flash",
+					name: "DeepSeek V4 Flash",
+					api: "openai-completions",
+					provider: "command-code",
+					baseUrl: resolveCommandCodeBaseUrl("openai-completions", config?.baseUrl),
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 131072,
+					maxTokens: 8192,
+				};
+				return [mapCommandCodeModel(fallback, config?.baseUrl)];
+			},
 		}),
 	};
 }
