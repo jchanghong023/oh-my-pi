@@ -426,7 +426,12 @@ export class ModelHubComponent implements Component {
 			// is shown instead; otherwise keep it locked.
 			// Other built-ins stay hidden unless they have catalog/discoverable
 			// presence; this is intentionally scoped to command-code only.
-			if (!unlocked.has("command-code") && !locked.has("command-code") && !disabledProviders.has("command-code") && isProviderVisible("command-code")) {
+			if (
+				!unlocked.has("command-code") &&
+				!locked.has("command-code") &&
+				!disabledProviders.has("command-code") &&
+				isProviderVisible("command-code")
+			) {
 				if (authStorage.hasAuth("command-code")) {
 					unlocked.add("command-code");
 				} else {
