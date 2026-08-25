@@ -253,30 +253,17 @@ For the bash tool specifically:
 - Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass currently executes nothing (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs) and exists so the first runnable doctest added to a lib crate is actually run.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 
-## Fastcheck — Local Pre-Push Gate (`bun run fastcheck`)
+## Fastcheck — Changed TypeScript Check (`bun run fastcheck`)
 
-Quick, low-resource, serial integrity gate to run **before commit/push**. Not a CI replacement and not a UT runner.
+Quick local check to run **before commit/push**. It checks only changed TypeScript files and is not a CI replacement.
 
 ```bash
 bun run fastcheck
 ```
 
-**Order (serial, fail-fast — first failure exits non-zero, later steps skipped):**
+The script collects dirty and committed `*.ts`/`*.tsx` files relative to `origin/main` (with local default-branch fallbacks), excludes generated and vendored paths, and runs `biome check` only on those files. With no changed TypeScript files it exits successfully without invoking Biome.
 
-```text
-[1/4] TypeScript check   → changed TS only (git status + diff vs origin/main → biome check <files> + tsgo per affected workspace; no changed TS → SKIP, 0s)
-[2/4] Rust check         → host-only (cargo fmt -p pi-natives --check + cargo clippy -p pi-natives --no-deps -D warnings; no --workspace)
-[3/4] Native host build  → bun run build:native     (host-only .node via packages/natives → scripts/bazel-natives.ts host; utilizes Cargo/Bazel caches, does NOT build all release targets)
-[4/4] OMP process smoke  → bun packages/coding-agent/src/cli.ts --smoke-test  (real CLI entry, native addon load, workers/subprocesses; exits 0 on success)
-```
-
-**Changed-only / host-only (local perf):** `[1/4]` scans only `*.ts/*.tsx` that are dirty or committed vs `origin/main` (excludes `vendor/node_modules` etc.); `[2/4]` clips only `pi-natives` (the crate that produces the host `.node`), not `--workspace`. Full `ci:check:full` / workspace clippy remain in CI.
-
-**Isolation:** smoke creates a temp dir (e.g. `/tmp/omp-fastcheck-XXXXXX`) and runs with `PI_CODING_AGENT_DIR=<tmpdir>` so `~/.omp`, API keys, providers, plugins, sessions and user settings are not read; the temp dir is removed afterwards.
-
-**Output:** concise `PASS`/`FAIL` per step; on failure the failing command's stdout/stderr is preserved, `FASTCHECK FAILED` is printed and the process exits non-zero. On success: `FASTCHECK PASSED`.
-
-**Does NOT run:** `bun test`, `test:ts`, `test:rs`, `ci:test:*`, `test:rs`/`nextest`, browser/install-method tests, GitHub Actions, multi-platform builds, publish/release. Focused tests during development (`bun run test:ts`, `bun run test:rs`, single-file `bun test`) remain the inner loop; `fastcheck` is the final local gate, GitHub CI does full verification after push.
+**Does NOT run:** TypeScript project-wide type checks, Rust formatting or compilation, native builds, unit tests, integration tests, smoke tests, multi-platform builds, publish, or release. Run the relevant focused checks separately when the change requires them; GitHub CI remains the full verification gate.
 
 **Standard flow:** develop → focused tests as needed → `bun run fastcheck` → commit/push → CI.
 
