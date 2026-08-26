@@ -154,6 +154,11 @@ const RECENT_LIMIT = 15;
 const SIDEBAR_MIN_WIDTH = 18;
 const SIDEBAR_MAX_WIDTH = 26;
 
+/** OpenCode Zen exposes paid and free models under one provider; the hub only advertises its free tier. */
+function isVisibleModel(model: Model): boolean {
+	return model.provider !== "opencode" || (model.cost.input <= 0 && model.cost.output <= 0);
+}
+
 /**
  * Providers already auto-refreshed this process. Selecting a provider fetches
  * its live model list at most once per application lifetime (surviving hub
@@ -301,8 +306,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
-	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
-		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll();
+	#reloadRoles(allModels: ReadonlyArray<Model>, autoCandidates: ReadonlyArray<Model>): void {
 		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
@@ -326,7 +330,10 @@ export class ModelHubComponent implements Component {
 			}
 		}
 
-		this.#reloadRoles(availableModels);
+		allModels = allModels.filter(isVisibleModel);
+		availableModels = availableModels.filter(isVisibleModel);
+
+		this.#reloadRoles(allModels, availableModels);
 		this.#buildRolesRows();
 
 		const storage = this.#settings.getStorage();
