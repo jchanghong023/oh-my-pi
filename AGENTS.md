@@ -7,6 +7,10 @@
 
 # Development Rules
 
+## Local Verification
+
+After modifying local TypeScript code, you MUST run `bun run fastcheck` before yielding.
+
 ## Default Context
 
 This repo contains multiple packages, but **`packages/coding-agent/`** is the primary focus. Unless otherwise specified, assume work refers to this package.
