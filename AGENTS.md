@@ -1,3 +1,10 @@
+# Fork Repository
+
+本仓库是 [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi) 的 fork。
+
+- MUST 仅同步上游正式发布版本对应的 tag。
+- NEVER 直接同步上游 `main` 分支。
+
 # Development Rules
 
 ## Default Context
