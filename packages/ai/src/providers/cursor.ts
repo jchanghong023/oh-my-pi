@@ -194,7 +194,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
-import { normalizeSystemPrompts } from "../utils";
+import { normalizeSystemPrompts, normalizeToolCallId } from "../utils";
 import {
 	type CursorExecResolvedCarrier,
 	clearStreamingPartialJson,
@@ -4747,9 +4747,15 @@ function buildCursorAssistantContent(
 				});
 			}
 		} else if (item.type === "toolCall") {
+			// Foreign responses-family history carries composite `"{callId}|{itemId}"`
+			// tool-call ids (encodeResponsesToolCallId). The `|` violates Cursor's
+			// tool-call-id charset (`^[a-zA-Z0-9_-]+$`), so replaying it verbatim
+			// gets the whole Run rejected as opaque resource_exhausted. Sanitize the
+			// id everywhere it reaches the wire; the tool-result side normalizes the
+			// same id identically, so the call/result pairing stays intact.
 			content.push({
 				type: "tool-call",
-				toolCallId: item.id,
+				toolCallId: normalizeToolCallId(item.id),
 				toolName: item.name,
 				args: normalizeCursorMcpArguments(item.arguments),
 			});
@@ -4866,14 +4872,15 @@ function buildRootPromptMessagesJson(
 		} else if (msg.role === "toolResult") {
 			// Emit even when the result text is empty: the assistant `tool-call` is
 			// already in history, so dropping the pair would replay an orphaned call.
+			const toolCallId = normalizeToolCallId(msg.toolCallId);
 			pushJson({
 				role: "tool",
-				id: msg.toolCallId,
+				id: toolCallId,
 				content: [
 					{
 						type: "tool-result",
 						toolName: msg.toolName,
-						toolCallId: msg.toolCallId,
+						toolCallId,
 						result: toolResultToText(msg),
 						...(msg.isError ? { isError: true } : {}),
 					},
@@ -4963,11 +4970,12 @@ function createCursorMcpResult(result: ToolResultMessage) {
 }
 
 function createCursorToolCallStep(toolCall: ToolCall, result: ToolResultMessage | undefined) {
+	const toolCallId = normalizeToolCallId(toolCall.id);
 	const mcpCall = create(McpToolCallSchema, {
 		args: create(McpArgsSchema, {
 			name: toolCall.name,
 			args: encodeCursorMcpArguments(toolCall),
-			toolCallId: toolCall.id,
+			toolCallId,
 			providerIdentifier: "pi-agent",
 			toolName: toolCall.name,
 		}),
@@ -4978,7 +4986,7 @@ function createCursorToolCallStep(toolCall: ToolCall, result: ToolResultMessage 
 			case: "toolCall",
 			value: create(ToolCallSchema, {
 				tool: { case: "mcpToolCall", value: mcpCall },
-				toolCallId: toolCall.id,
+				toolCallId,
 			}),
 		},
 	});

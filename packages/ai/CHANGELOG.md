@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor rejecting resumed/forked sessions whose history came from a Responses-family provider (e.g. Codex) with an opaque `resource_exhausted` by sanitizing composite `callId|itemId` tool-call ids before replay ([#9754](https://github.com/can1357/oh-my-pi/issues/9754)).
+
 ## [18.0.5] - 2026-08-25
 
 ### Breaking Changes
