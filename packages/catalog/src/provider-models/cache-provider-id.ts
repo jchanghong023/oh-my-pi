@@ -18,6 +18,8 @@ export function isCredentialScopedModelCacheProvider(providerId: string): boolea
 
 export function getDefaultModelDiscoveryBaseUrl(providerId: string): string | undefined {
 	switch (providerId) {
+		case "command-code":
+			return "https://api.commandcode.ai/provider";
 		case "ollama":
 			return "http://127.0.0.1:11434";
 		case "litellm":
@@ -53,6 +55,12 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 	switch (providerId) {
 		case "ollama":
 			return resolveOllamaModelCacheProviderId(providerId, options.baseUrl);
+		case "command-code": {
+			const configuredBaseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
+			const trimmedBaseUrl = configuredBaseUrl.trim().replace(/\/+$/g, "");
+			const providerBaseUrl = trimmedBaseUrl.endsWith("/v1") ? trimmedBaseUrl.slice(0, -3) : trimmedBaseUrl;
+			return `command-code:models-v1:${Bun.hash(providerBaseUrl).toString(36)}`;
+		}
 		case "cursor":
 			// v4: Grok 4.5/4.6 rows cached before the effort-less default-tier fix
 			// carry `requestModelId: *-low`, which the Start plan refuses; refetch

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
+import { loginCommandCode } from "@oh-my-pi/pi-ai/registry/command-code";
 import {
 	getOAuthProviders,
 	refreshOAuthToken,
@@ -21,6 +22,8 @@ const ENV_KEYS = [
 	"UMANS_AI_CODING_PLAN_API_KEY",
 	"LLAMA_CPP_API_KEY",
 	"WANDB_API_KEY",
+	"COMMAND_CODE_API_KEY",
+	"COMMANDCODE_API_KEY",
 ] as const;
 const originalEnv = new Map(ENV_KEYS.map(key => [key, Bun.env[key]]));
 
@@ -59,6 +62,38 @@ describe("provider registry auth surface", () => {
 		expect(getEnvApiKey("coreweave")).toBe("wandb-env");
 		Bun.env.COREWEAVE_API_KEY = "coreweave-env";
 		expect(getEnvApiKey("coreweave")).toBe("coreweave-env");
+	});
+
+	test("Command Code env fallback honors documented key and legacy alias precedence", () => {
+		delete Bun.env.COMMAND_CODE_API_KEY;
+		Bun.env.COMMANDCODE_API_KEY = "legacy-command-code-key";
+		expect(getEnvApiKey("command-code")).toBe("legacy-command-code-key");
+
+		Bun.env.COMMAND_CODE_API_KEY = "documented-command-code-key";
+		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
+
+		delete Bun.env.COMMANDCODE_API_KEY;
+		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
+	});
+
+	test("Command Code login validates credentials against authenticated inference", async () => {
+		const fetch = (async (input: unknown, init?: RequestInit) => {
+			expect(String(input)).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
+			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer invalid-command-code-key");
+			expect(JSON.parse(String(init?.body))).toMatchObject({
+				model: "deepseek/deepseek-v4-flash",
+				max_tokens: 1,
+			});
+			return new Response("invalid API key", { status: 401 });
+		}) as unknown as typeof globalThis.fetch;
+
+		await expect(
+			loginCommandCode({
+				onAuth: () => {},
+				onPrompt: async () => "invalid-command-code-key",
+				fetch,
+			}),
+		).rejects.toThrow("Command Code API key validation failed (401)");
 	});
 
 	test("login list contains loginable providers and excludes env-only model providers", () => {
