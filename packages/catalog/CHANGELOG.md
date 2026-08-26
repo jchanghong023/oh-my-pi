@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Command Code as a mixed-wire provider with authenticated model discovery, live provider pricing, endpoint-scoped caching, and per-model Anthropic Messages/OpenAI Chat Completions routing ([#9564](https://github.com/can1357/oh-my-pi/pull/9564) by [@himomohi](https://github.com/himomohi)).
+
 ## [18.0.5] - 2026-08-25
 
 ### Added

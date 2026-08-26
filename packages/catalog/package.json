@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "@oh-my-pi/omptype": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:"
+    "@oh-my-pi/pi-utils": "catalog:",
+    "turbo-stream": "^2.4.1"
   },
   "devDependencies": {
     "@oh-my-pi/pi-ai": "catalog:",
