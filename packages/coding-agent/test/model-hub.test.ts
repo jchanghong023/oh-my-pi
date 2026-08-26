@@ -1005,9 +1005,9 @@ describe("ModelHub", () => {
 
 	describe("provider scopes and search", () => {
 		test("shows only free OpenCode Zen models without filtering paid models from other providers", () => {
-			const zenFree = makeModel("opencode", "zen-free");
+			const zenFree = makeModel("opencode-zen", "zen-free");
 			const zenPaid = {
-				...makeModel("opencode", "zen-paid"),
+				...makeModel("opencode-zen", "zen-paid"),
 				cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
 			};
 			const otherPaid = {
@@ -1018,8 +1018,8 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("opencode/zen-free");
-			expect(rendered).not.toContain("opencode/zen-paid");
+			expect(rendered).toContain("opencode-zen/zen-free");
+			expect(rendered).not.toContain("opencode-zen/zen-paid");
 			expect(rendered).toContain("other-provider/other-paid");
 		});
 

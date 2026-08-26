@@ -154,9 +154,10 @@ const RECENT_LIMIT = 15;
 const SIDEBAR_MIN_WIDTH = 18;
 const SIDEBAR_MAX_WIDTH = 26;
 
-/** OpenCode Zen exposes paid and free models under one provider; the hub only advertises its free tier. */
+/** OpenCode Zen's canonical and legacy provider ids share one catalog; the hub only advertises its free tier. */
 function isVisibleModel(model: Model): boolean {
-	return model.provider !== "opencode" || (model.cost.input <= 0 && model.cost.output <= 0);
+	const isOpenCodeZen = model.provider === "opencode-zen" || model.provider === "opencode";
+	return !isOpenCodeZen || (model.cost.input <= 0 && model.cost.output <= 0);
 }
 
 /**
