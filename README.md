@@ -34,64 +34,31 @@ The most capable agent surface that ships. Continuously tuned by real-world use 
 
 ## Install
 
-**macOS · Linux**
+Install the latest binary published by this fork from
+[`jchanghong023/oh-my-pi` releases](https://github.com/jchanghong023/oh-my-pi/releases).
+These commands use the fork's GitHub release assets directly; they do not install
+the upstream npm, Homebrew, Nix, or `omp.sh` build.
+
+**Linux glibc (x64 · arm64)**
 
 ```sh
-curl -fsSL https://omp.sh/install | sh
+curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh -s -- --binary
 ```
 
-> **Alpine / musl:** the prebuilt musl binary links `libstdc++`/`libgcc` dynamically, which stock Alpine does not ship. Install them first: `apk add libstdc++ libgcc`.
-
-**Homebrew**
-
-```sh
-brew install can1357/tap/omp
-```
-
-**Bun (recommended)**
-
-```sh
-bun install -g @oh-my-pi/pi-coding-agent
-```
-
-**Nix**
-
-```sh
-# Run without installing
-nix run github:can1357/oh-my-pi
-
-# Or install into the active profile
-nix profile install github:can1357/oh-my-pi
-```
-
-Flake consumers can use `packages.<system>.omp`, `overlays.default`, `nixosModules.default`, or `homeManagerModules.default`. A Home Manager configuration can install OMP and own its settings declaratively:
-
-```nix
-{
-  inputs.omp.url = "github:can1357/oh-my-pi";
-
-  # In your Home Manager module:
-  imports = [ inputs.omp.homeManagerModules.default ];
-  programs.omp = {
-    enable = true;
-    settings.startup.quiet = true;
-  };
-}
-```
-
-**Windows (PowerShell)**
+**Windows x64 (PowerShell)**
 
 ```powershell
-irm https://omp.sh/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
 ```
 
-**Pinned versions (mise)**
+The installers resolve the latest published fork release at run time. To install
+a specific fork release, pass its tag with `--ref` on Linux or `-Ref` on Windows.
 
-```sh
-mise use -g github:can1357/oh-my-pi
-```
+Fork release binaries report versions as `omp/<upstream-version>+fork.<build-number>`.
+Workspace package versions remain upstream-compatible because this fork does not
+publish packages to npm.
 
-macOS · Linux · Windows · bun ≥ 1.3.14
+macOS and Linux musl binaries are not currently published by this fork.
 
 ### Shell completions
 

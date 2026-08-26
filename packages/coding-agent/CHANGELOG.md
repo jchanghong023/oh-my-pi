@@ -163,6 +163,10 @@
 - Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
 - Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
 
+### Fixed
+
+- Fork binary verification now preserves the `+fork.<build>` suffix reported by installed executables.
+
 ## [18.0.6] - 2026-08-26
 
 ### Added
