@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { getLatestRelease, runUpdateCommand } from "../../src/cli/update-cli";
+import {
+	compareUpdateVersions,
+	getLatestGitHubRelease,
+	getLatestRelease,
+	runUpdateCommand,
+} from "../../src/cli/update-cli";
 
 type FetchInput = string | URL | Request;
 type FetchInit = RequestInit | BunFetchRequestInit;
@@ -24,6 +29,45 @@ describe("runUpdateCommand fetch cancellation", () => {
 		await runUpdateCommand({ force: false, check: true });
 
 		expect(requestSignal).toBeInstanceOf(AbortSignal);
+	});
+});
+
+describe("compareUpdateVersions", () => {
+	it("orders fork builds whose SemVer precedence ignores build metadata", () => {
+		expect(compareUpdateVersions("18.0.6+fork.124", "18.0.6+fork.123")).toBeGreaterThan(0);
+		expect(compareUpdateVersions("18.0.6+fork.122", "18.0.6+fork.123")).toBeLessThan(0);
+		expect(compareUpdateVersions("18.0.7+fork.1", "18.0.6+fork.999")).toBeGreaterThan(0);
+	});
+});
+
+describe("getLatestGitHubRelease", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("maps the fork's latest GitHub release to a binary-only update", async () => {
+		let requestedUrl = "";
+		const fetchStub = Object.assign(
+			async (input: FetchInput) => {
+				requestedUrl = String(input);
+				return Response.json({ tag_name: "v18.0.6+fork.123" });
+			},
+			{ preconnect: globalThis.fetch.preconnect },
+		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fetchStub);
+
+		const release = await getLatestGitHubRelease("jchanghong023/oh-my-pi");
+
+		expect(requestedUrl).toBe("https://api.github.com/repos/jchanghong023/oh-my-pi/releases/latest");
+		expect(release).toEqual({
+			tag: "v18.0.6+fork.123",
+			version: "18.0.6+fork.123",
+			dist: "binary",
+			packages: {
+				pkg: "@oh-my-pi/pi-coding-agent",
+				natives: "@oh-my-pi/pi-natives",
+			},
+		});
 	});
 });
 

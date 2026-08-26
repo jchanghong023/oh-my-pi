@@ -14,6 +14,10 @@ export interface CodingAgentCompileOptions {
 	readonly outfile: string;
 	/** Concrete Transformers.js version baked into the tiny-model worker. */
 	readonly transformersVersion: string;
+	/** Optional application version embedded into the standalone executable. */
+	readonly buildVersion?: string;
+	/** Optional GitHub repository used by binary-only self-updates. */
+	readonly updateRepository?: string;
 	/** Optional cross-compilation runtime target. */
 	readonly target?: Bun.Build.CompileTarget;
 	/** Optional unmodified Bun executable used as the standalone runtime template. */
@@ -42,6 +46,10 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
+				...(options.updateRepository
+					? { "process.env.PI_UPDATE_REPOSITORY": JSON.stringify(options.updateRepository) }
+					: {}),
 			},
 			minify: {
 				identifiers: options.minifyIdentifiers ?? false,
