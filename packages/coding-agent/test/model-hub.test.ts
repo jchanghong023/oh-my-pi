@@ -1004,6 +1004,25 @@ describe("ModelHub", () => {
 	});
 
 	describe("provider scopes and search", () => {
+		test("shows only free OpenCode Zen models without filtering paid models from other providers", () => {
+			const zenFree = makeModel("opencode", "zen-free");
+			const zenPaid = {
+				...makeModel("opencode", "zen-paid"),
+				cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			};
+			const otherPaid = {
+				...makeModel("other-provider", "other-paid"),
+				cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			};
+			const { hub } = createHub({ models: [zenFree, zenPaid, otherPaid], scoped: true });
+			installTestTheme();
+
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("opencode/zen-free");
+			expect(rendered).not.toContain("opencode/zen-paid");
+			expect(rendered).toContain("other-provider/other-paid");
+		});
+
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
 			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
