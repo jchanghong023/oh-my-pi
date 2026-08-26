@@ -675,7 +675,7 @@ export const SETTINGS_SCHEMA = {
 	// Theme
 	"theme.dark": {
 		type: "string",
-		default: "titanium",
+		default: "dark-terminal",
 		ui: {
 			tab: "appearance",
 			group: "Theme",
