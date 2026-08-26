@@ -11,7 +11,7 @@ export const loginCommandCode = createApiKeyLogin({
 	placeholder: "sk-...",
 	validation: {
 		kind: "chat-completions",
-		provider: "command-code",
+		provider: "Command Code",
 		baseUrl: "https://api.commandcode.ai/provider/v1",
 		model: "deepseek/deepseek-v4-flash",
 	},
