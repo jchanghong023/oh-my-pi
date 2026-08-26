@@ -26,6 +26,8 @@ if (
 	throw new Error("@huggingface/transformers package manifest has no string version");
 }
 const transformersVersion = transformersManifest.version;
+const buildVersion = Bun.env.RELEASE_VERSION;
+const updateRepository = Bun.env.UPDATE_REPOSITORY;
 // Worker threads re-enter the binary's single CLI host entry.
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [
@@ -144,6 +146,8 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		entrypoint,
 		outfile: path.join(repoRoot, target.outfile),
 		transformersVersion,
+		buildVersion,
+		updateRepository,
 		target: target.target,
 		minifyIdentifiers: true,
 		skipBuiltinCodesign: shouldAdhocSignDarwinBinary(target),

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
+
 ## [18.0.6] - 2026-08-26
 
 ### Added

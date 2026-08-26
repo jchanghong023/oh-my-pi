@@ -23,10 +23,11 @@ import {
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
 
-const REPO = "can1357/oh-my-pi";
+const UPDATE_REPOSITORY = process.env.PI_UPDATE_REPOSITORY;
+const REPO = UPDATE_REPOSITORY ?? "can1357/oh-my-pi";
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 const HOMEBREW_FORMULA = "can1357/tap/omp";
-const MISE_TOOL = "github:can1357/oh-my-pi";
+const MISE_TOOL = `github:${REPO}`;
 const NIX_STORE_DIR = "/nix/store";
 /**
  * Official npm registry origin.
@@ -177,6 +178,15 @@ export function shouldForceBinaryUpdate(
 ): boolean {
 	if (release.dist !== undefined) return release.dist === "binary";
 	return majorVersion(release.version) > majorVersion(currentVersion);
+}
+/** Compare SemVer precedence, then this fork's build counter metadata. */
+export function compareUpdateVersions(left: string, right: string): number {
+	const precedence = compareVersions(left, right);
+	if (precedence !== 0) return precedence;
+	const leftRun = /\+fork\.(\d+)$/.exec(left)?.[1];
+	const rightRun = /\+fork\.(\d+)$/.exec(right)?.[1];
+	if (leftRun === undefined || rightRun === undefined) return 0;
+	return Number(leftRun) - Number(rightRun);
 }
 
 /**
@@ -790,17 +800,65 @@ async function fetchLatestManifest(
 	}
 	return { version: data.version, manifest: data };
 }
+/** Resolve the latest published release for a binary-only GitHub distribution. */
+export async function getLatestGitHubRelease(
+	repository: string,
+	timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS,
+): Promise<ReleaseInfo> {
+	let response: Response;
+	try {
+		const headers: Record<string, string> = {
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		};
+		const githubToken = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+		if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+		response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
+			headers,
+			signal: withTimeoutSignal(timeoutMs),
+		});
+	} catch (err) {
+		if (isTimeoutError(err)) {
+			throw new Error(`Timed out fetching release info for ${repository} after ${Math.round(timeoutMs / 1000)}s`, {
+				cause: err,
+			});
+		}
+		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+		throw err;
+	}
+	if (!response.ok) {
+		throw new Error(`Failed to fetch release info for ${repository}: ${response.statusText}`);
+	}
+
+	const data: unknown = await response.json();
+	const tag = isRecord(data) && typeof data.tag_name === "string" ? data.tag_name : "";
+	const version = tag.startsWith("v") ? tag.slice(1) : "";
+	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+		throw new Error(`Malformed GitHub release response for ${repository}: invalid tag_name`);
+	}
+	return {
+		tag,
+		version,
+		dist: "binary",
+		packages: { ...CURRENT_PACKAGES },
+	};
+}
 
 /**
- * Get the latest release info from the npm registry, following `omp.rename`
- * pointers ({@link resolveReleaseRename}) when the package has moved to a new
- * npm name. Version, dist, and install names all come from the final manifest
- * in the chain. Uses npm instead of GitHub API to avoid unauthenticated rate
- * limiting.
+ * Resolve the configured distribution's latest release. Fork binaries embed a
+ * GitHub repository and use its binary-only Releases; other installations use
+ * npm metadata and follow `omp.rename` pointers.
  */
 export async function getLatestRelease(
 	options: { timeoutMs?: number; channel?: UpdateChannel } = {},
 ): Promise<ReleaseInfo> {
+	if (UPDATE_REPOSITORY) {
+		if (options.channel === "canary") {
+			throw new Error("Canary updates are unavailable for this binary-only fork.");
+		}
+		return getLatestGitHubRelease(UPDATE_REPOSITORY, options.timeoutMs);
+	}
+
 	const timeoutMs = options.timeoutMs ?? RELEASE_METADATA_TIMEOUT_MS;
 	const channel = options.channel ?? "stable";
 	const packages: ReleasePackages = { ...CURRENT_PACKAGES };
@@ -1906,13 +1964,12 @@ export async function updateViaShimTakeover(
 }
 
 /**
- * Platform-appropriate installer one-liner for recovery instructions.
- *
- * Forces the installer's binary mode (`--binary` / `-Binary`): the default
- * mode prefers a bun-based install whenever bun is present, which would send
- * a user recovering from a binary-only release straight back through bun.
+ * Platform-appropriate recovery location. Fork binaries stay on the fork's
+ * Releases page; official installs force binary mode so a detected Bun does
+ * not redirect recovery through npm.
  */
 function installerHint(): string {
+	if (UPDATE_REPOSITORY) return `https://github.com/${REPO}/releases/latest`;
 	return process.platform === "win32"
 		? "& ([scriptblock]::Create((irm https://omp.sh/install.ps1))) -Binary"
 		: "curl -fsSL https://omp.sh/install | sh -s -- --binary";
@@ -1959,7 +2016,7 @@ export async function runUpdateCommand(opts: {
 		process.exit(1);
 	}
 
-	const comparison = compareVersions(release.version, VERSION);
+	const comparison = compareUpdateVersions(release.version, VERSION);
 
 	if (comparison <= 0 && !opts.force && !isChannelSwitch) {
 		const icon = theme?.status?.success ?? "✔";
