@@ -1187,15 +1187,14 @@ function resolveOmpPath(): string | undefined {
 }
 
 /**
- * Parse the version a launcher reports from `omp --version` output
- * (`omp/X.Y.Z`, or a prerelease such as `omp/X.Y.Z-canary.1`).
+ * Parse the version a launcher reports from `omp --version` output.
  *
- * The prerelease suffix is preserved so a correctly installed canary build
- * verifies as up to date instead of appearing to report a stale `X.Y.Z` and
- * being mistaken for an unreplaced launcher.
+ * Prerelease and build-metadata suffixes are preserved so canary and fork
+ * binaries verify against the exact release version instead of appearing to
+ * report a stale base version.
  */
 export function parseReportedVersion(output: string): string | undefined {
-	return output.match(/\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)?.[1];
+	return output.match(/\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/)?.[1];
 }
 
 /**

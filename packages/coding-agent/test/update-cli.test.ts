@@ -123,11 +123,11 @@ describe("parseUpdateArgs", () => {
 });
 
 describe("parseReportedVersion", () => {
-	it("preserves the prerelease suffix so a canary launcher verifies as up to date", () => {
-		// Regression: dropping `-canary.1` made a correctly installed canary
-		// build look like a stale `X.Y.Z` launcher, triggering a binary repair
-		// that rejects the prerelease GitHub release.
+	it("preserves release suffixes so canary and fork launchers verify as up to date", () => {
+		// Regression: dropping a suffix made the installed launcher look stale,
+		// triggering a binary repair against an already-installed release.
 		expect(parseReportedVersion("omp/18.0.6-canary.1")).toBe("18.0.6-canary.1");
+		expect(parseReportedVersion("omp/18.0.6+fork.35")).toBe("18.0.6+fork.35");
 		expect(parseReportedVersion("omp/18.0.5")).toBe("18.0.5");
 		expect(parseReportedVersion("not a version")).toBeUndefined();
 	});
