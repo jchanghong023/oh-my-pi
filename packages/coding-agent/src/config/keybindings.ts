@@ -99,7 +99,7 @@ export const KEYBINDINGS = {
 		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: "shift+tab",
+		defaultKeys: "alt+,",
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
@@ -220,7 +220,7 @@ export const KEYBINDINGS = {
 		description: "Unfold or move down",
 	},
 	"app.plan.toggle": {
-		defaultKeys: "alt+shift+p",
+		defaultKeys: "shift+tab",
 		description: "Toggle plan mode",
 	},
 	"app.history.search": {

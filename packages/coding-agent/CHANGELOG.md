@@ -161,6 +161,7 @@
 - Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
 - Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
 - Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
+- Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
 
 ## [18.0.6] - 2026-08-26
 
