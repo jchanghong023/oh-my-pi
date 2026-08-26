@@ -159,6 +159,7 @@
 ### Changed
 
 - Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
+- Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
 
 ## [18.0.6] - 2026-08-26
 
