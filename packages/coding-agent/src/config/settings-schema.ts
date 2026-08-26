@@ -2290,7 +2290,7 @@ export const SETTINGS_SCHEMA = {
 
 	"recap.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "interaction",
 			group: "Notifications",
