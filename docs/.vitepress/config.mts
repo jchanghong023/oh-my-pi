@@ -9,6 +9,13 @@ export default defineConfig({
   markdown: {
     html: false
   },
+  vue: {
+    template: {
+      compilerOptions: {
+        delimiters: ['[[[', ']]]']
+      }
+    }
+  },
   themeConfig: {
     nav: [
       { text: 'Home', link: '/' },
