@@ -434,11 +434,11 @@ jobs:
               # Bun's musl-target binaries link libstdc++/libgcc dynamically;
               # Alpine users install them alongside the binary (same as bun itself).
               docker run --rm -v "$binary:/usr/local/bin/omp:ro" \
-                -e EXPECTED_VERSION="${{ needs.release_metadata.outputs.version }}" alpine:3.22 sh -ec '
+                -e EXPECTED_VERSION="${{ needs.release_metadata.outputs.version }}" -e EXPECTED_TIMESTAMP="${{ needs.release_metadata.outputs.release-timestamp }}" alpine:3.22 sh -ec '
                 apk add --no-cache libstdc++ libgcc >/dev/null
                 runtime_dir="$(mktemp -d)"
                 version_output="$(HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --version)"
-                test "$version_output" = "omp/$EXPECTED_VERSION"
+                test "$version_output" = "omp/$EXPECTED_VERSION (built $EXPECTED_TIMESTAMP)"
                 HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --smoke-test
               '
          - name: Upload release binary artifact
