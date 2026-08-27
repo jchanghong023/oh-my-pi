@@ -53,6 +53,8 @@ if (
 }
 const transformersVersion = transformersManifest.version;
 
+const buildTimestamp = new Date().toISOString().replace(/:\d{2}\.\d{3}Z$/u, "Z");
+
 async function runCommand(
 	command: string[],
 	env: NodeJS.ProcessEnv = Bun.env,
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
 				outfile: outputPath,
 				transformersVersion,
 				target: crossBuild?.target,
+				buildTimestamp,
 				executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 				skipBuiltinCodesign: shouldAdhocSign,
 			});

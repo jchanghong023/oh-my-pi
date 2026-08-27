@@ -27,6 +27,7 @@ if (
 }
 const transformersVersion = transformersManifest.version;
 const buildVersion = Bun.env.RELEASE_VERSION;
+const buildTimestamp = Bun.env.RELEASE_TIMESTAMP;
 const updateRepository = Bun.env.UPDATE_REPOSITORY;
 // Worker threads re-enter the binary's single CLI host entry.
 const isDryRun = process.argv.includes("--dry-run");
@@ -147,6 +148,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		outfile: path.join(repoRoot, target.outfile),
 		transformersVersion,
 		buildVersion,
+		buildTimestamp,
 		updateRepository,
 		target: target.target,
 		minifyIdentifiers: true,
