@@ -137,11 +137,18 @@ export class ExponentialYield {
 	readonly #minMs: number;
 	readonly #maxMs: number;
 	readonly #multiplier: number;
+	readonly #sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
-	constructor(opts?: { minMs?: number; maxMs?: number; multiplier?: number }) {
+	constructor(opts?: {
+		minMs?: number;
+		maxMs?: number;
+		multiplier?: number;
+		sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	}) {
 		this.#minMs = opts?.minMs ?? EXP_DEFAULT_MIN_MS;
 		this.#maxMs = opts?.maxMs ?? EXP_DEFAULT_MAX_MS;
 		this.#multiplier = opts?.multiplier ?? EXP_DEFAULT_MULTIPLIER;
+		this.#sleep = opts?.sleep ?? sleepAtLeast;
 		this.#currentMs = this.#minMs;
 	}
 
@@ -151,7 +158,7 @@ export class ExponentialYield {
 
 	async sleep(signal?: AbortSignal): Promise<number> {
 		const ms = this.#currentMs;
-		await sleepAtLeast(ms, signal);
+		await this.#sleep(ms, signal);
 		this.#currentMs = Math.min(this.#currentMs * this.#multiplier, this.#maxMs);
 		return ms;
 	}
