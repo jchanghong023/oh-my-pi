@@ -8,13 +8,12 @@ export default defineConfig({
   lastUpdated: true,
   ignoreDeadLinks: true,
   markdown: {
-    html: false
-  },
-  vue: {
-    template: {
-      compilerOptions: {
-        delimiters: ['[[[', ']]]']
-      }
+    html: false,
+    config(md) {
+      const renderCodeInline = md.renderer.rules.code_inline
+      if (!renderCodeInline) return
+      md.renderer.rules.code_inline = (...args) =>
+        renderCodeInline(...args).replace('<code>', '<code v-pre>')
     }
   },
   themeConfig: {
