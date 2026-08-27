@@ -52,6 +52,7 @@ import {
 	type SettingPath,
 	type SettingValue,
 } from "./settings-schema";
+import { MOBILE_TUI_PRESET } from "./tui-mobile";
 
 // Re-export types that callers need
 export type * from "./settings-schema";
@@ -2647,9 +2648,18 @@ export class Settings {
 	}
 
 	#rebuildMerged(): void {
-		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
-		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
-		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
+		let merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
+
+		merged = this.#deepMerge(merged, this.#configOverlay);
+
+		const withRuntime = this.#deepMerge(merged, this.#overrides);
+		const mobile = getByPath(withRuntime, ["tui", "mobile"]) ?? getDefault("tui.mobile");
+
+		if (mobile === true) {
+			merged = this.#deepMerge(merged, MOBILE_TUI_PRESET);
+		}
+
+		this.#merged = this.#deepMerge(merged, this.#overrides);
 		this.#resolvedCache.clear();
 		this.#editVariantCache = undefined;
 	}
