@@ -6,6 +6,7 @@ export default defineConfig({
   base: '/oh-my-pi/',
   cleanUrls: true,
   lastUpdated: true,
+  ignoreDeadLinks: true,
   markdown: {
     html: false
   },
