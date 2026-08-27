@@ -644,7 +644,7 @@ pi.registerAssistantThinkingRenderer((context, theme) => {
 - 运行时动作在扩展加载期间不可用。
 - `tool_call` 错误会阻止执行（默认失败关闭）。
 - 与内置命令的命令名称冲突会被跳过并生成诊断信息。
-- 保留的快捷键会被忽略（`ctrl+c`、`ctrl+d`、`ctrl+z`、`ctrl+k`、`ctrl+p`、`ctrl+l`、`ctrl+o`、`ctrl+t`、`ctrl+g`、`ctrl+q`、`alt+m`、`shift+tab`、`shift+ctrl+p`、`alt+enter`、`escape`、`enter`）。
+- 保留的快捷键会被忽略（`ctrl+c`、`ctrl+d`、`ctrl+z`、`ctrl+k`、`ctrl+p`、`ctrl+l`、`ctrl+o`、`ctrl+t`、`ctrl+g`、`ctrl+q`、`alt+m`、`alt+p`、`shift+tab`、`shift+ctrl+p`、`alt+enter`、`escape`、`enter`）。
 - 将 `ctx.reload()` 视为当前命令处理器帧的终止。
 
 ## 扩展 vs 钩子 vs 自定义工具

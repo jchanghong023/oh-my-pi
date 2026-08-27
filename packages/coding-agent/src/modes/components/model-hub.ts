@@ -7,7 +7,7 @@
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
  * Fully mouse-navigable (hover, wheel, click). Session-only switching lives
- * in the compact alt+p picker ({@link ./model-picker}).
+ * in the compact ctrl+t picker ({@link ./model-picker}).
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";

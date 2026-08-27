@@ -61,7 +61,7 @@ export type RoleAssignments = Record<string, RoleAssignment | undefined>;
  * Resolve every known role to its display assignment: configured role values
  * resolve against `allModels`; unconfigured roles fall back to auto-selection
  * over `autoCandidates` (skipped when empty). Shared by the /models hub and
- * the alt+p session picker.
+ * the ctrl+t session picker.
  */
 export function resolveRoleAssignments(
 	settings: Settings,

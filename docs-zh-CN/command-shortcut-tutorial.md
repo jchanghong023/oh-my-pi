@@ -3009,11 +3009,11 @@ omp ttsr scan -r .omp/rules/no-any.md src/
 | 按键 | 绑定 ID | 行为 |
 | --- | --- | --- |
 | `Alt+,` | `app.thinking.cycle` | 在 `off` / `low` / `medium` / `high` 等思考档位间循环 |
-| `Ctrl+T` | `app.thinking.toggle` | 切换推理块（thinking block）的可见性（不改变档位，仅显隐） |
+| `Alt+P` | `app.thinking.toggle` | 切换推理块（thinking block）的可见性（不改变档位，仅显隐） |
 | `Ctrl+P` | `app.model.cycleForward` | 角色模型向前循环（slow → default → smol …） |
 | `Shift+Ctrl+P` | `app.model.cycleBackward` | 角色模型向后循环 |
 | `Alt+M` | `app.model.select` | 打开模型选择器，设定角色默认 |
-| `Alt+P` | `app.model.selectTemporary` | 打开模型选择器，临时改本会话默认；状态栏会提示 `Session-only model` |
+| `Ctrl+T` | `app.model.selectTemporary` | 打开模型选择器，临时改本会话默认；状态栏会提示 `Session-only model` |
 | `Shift+Tab` | `app.plan.toggle` | 切换 Plan 模式（接受计划 → 写入 `plan.md` → 切到实现） |
 
 注意：

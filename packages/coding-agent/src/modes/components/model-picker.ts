@@ -1,5 +1,5 @@
 /**
- * Compact session-model picker (alt+p / `/switch`): a bottom-anchored
+ * Compact session-model picker (ctrl+t / `/switch`): a bottom-anchored
  * floating overlay hosting just a {@link ModelBrowser} — no provider sidebar.
  * Model entries switch the current session only; a search beginning with `@`
  * exposes the configured ctrl+p quick roles.
@@ -62,7 +62,7 @@ const FOOTER_HINT = "↑/↓ models · Enter use for this session · type to sea
 const QUICK_ROLE_FOOTER_HINT = "↑/↓ roles · Enter apply role model · type to search · Esc close";
 
 /**
- * The alt+p picker component. Hosted as a non-fullscreen bottom-anchored
+ * The ctrl+t picker component. Hosted as a non-fullscreen bottom-anchored
  * overlay (`ui.showOverlay(..., { anchor: "bottom-center" })`); keyboard-only,
  * since mouse tracking is reserved for fullscreen overlays.
  */

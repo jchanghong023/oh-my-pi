@@ -10,7 +10,7 @@ With a named profile, bindings from the default profile's agent directory are lo
 
 ```yaml
 app.model.cycleForward: Ctrl+P
-app.model.selectTemporary: Alt+P
+app.model.selectTemporary: Ctrl+T
 app.plan.toggle: Alt+Shift+P
 ```
 
@@ -28,13 +28,13 @@ app.history.search: []
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
-| `app.model.selectTemporary`  | `Alt+P`                                                               | Pick a model temporarily for this session                                                                                                                                            |
+| `app.model.selectTemporary`  | `Ctrl+T`                                                               | Pick a model temporarily for this session                                                                                                                                            |
 | `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
 | `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
-| `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
+| `app.thinking.toggle`        | `Alt+P`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
 | `app.thinking.cycle`         | `Shift+Tab`                                                           | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
 | `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | Queue a follow-up message                                                                                                                                                            |
