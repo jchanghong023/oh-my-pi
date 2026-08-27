@@ -5,6 +5,7 @@
 - MUST 仅同步上游正式发布版本对应的 tag。
 - NEVER 直接同步上游 `main` 分支。
 - 同步上游分支时，直接使用 skill：`.omp/skills/upstream-release-sync/`（读取其中的 `SKILL.md` 并按其流程执行）。
+- 本仓库的 `AGENTS.md` 是 fork 的有意差异：同步上游时 MUST 保留本仓库版本，NEVER 被上游合并覆盖。
 
 # Development Rules
 
