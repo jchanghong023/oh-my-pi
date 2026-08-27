@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [18.0.8] - 2026-08-27
+
+### Added
+
+- Added the Linux `subreaper` spawn option to retain reparented descendants for process-tree cleanup.
+
+### Fixed
+
+- Keep project-directory state unchanged when changing directories fails.
+- Fixed `ptree` timeout cleanup and output capture so timed commands retain their deadline through descendant-held pipes and untimed commands read output to EOF.
+
 ## [18.0.7] - 2026-08-26
 
 ### Added
