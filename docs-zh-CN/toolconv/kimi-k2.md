@@ -1,223 +1,221 @@
-# Kimi K2 tool-calling format
+# Kimi K2 工具调用格式
 
-Native tool-calling convention of Moonshot AI's **Kimi K2** family (`moonshotai/Kimi-K2-Instruct` and `-Base`, `model_type: "kimi_k2"`, 1T-param MoE). It is a ChatML-like envelope built on a TikToken tokenizer (160K vocab): every turn is `<|im_{class}|>{name}<|im_middle|>{body}<|im_end|>`, and tool calls are emitted inside the assistant turn wrapped by a dedicated `<|tool_calls_section_begin|>…<|tool_calls_section_end|>` block. All control tokens are plain ASCII `<|…|>` forms (no fullwidth/unicode variants, unlike DeepSeek). An inference server turns the raw stream into OpenAI-style `tool_calls` with a parser: vLLM and SGLang both expose `--tool-call-parser kimi_k2` (vLLM additionally requires `--enable-auto-tool-choice`). The chat template (a standalone `chat_template.jinja` since the 2025.8.11 update) injects the tool schemas and renders the per-turn markers.
+Moonshot AI **Kimi K2** 系列（`moonshotai/Kimi-K2-Instruct` 与 `-Base`，`model_type: "kimi_k2"`，1T 参数 MoE）的原生工具调用约定。它是一种基于 TikToken 分词器（16 万词表）构建的类 ChatML 信封：每一轮都形如 `<|im_{class}|>{name}<|im_middle|>{body}<|im_end|>`，工具调用则在助手轮内部、由专门的 `<|tool_calls_section_begin|>…<|tool_calls_section_end|>` 块包裹发出。所有控制 token 都是纯 ASCII 的 `<|…|>` 形式（不像 DeepSeek 那样存在全角/Unicode 变体）。推理服务器通过解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 与 SGLang 都提供 `--tool-call-parser kimi_k2`（vLLM 还需要额外加上 `--enable-auto-tool-choice`）。聊天模板（独立 `ch…
 
-This document was verified against the model card, the official `docs/tool_call_guidance.md` and `docs/deploy_guidance.md` (GitHub `MoonshotAI/Kimi-K2`), the raw `chat_template.jinja` and `tokenizer_config.json` from the HF repo (rendered locally for the byte-exact streams below), and the vLLM `kimi_k2` tool parser source.
+本文档已根据模型卡、官方 `docs/tool_call_guidance.md` 与 `docs/deploy_guidance.md`（GitHub `MoonshotAI/Kimi-K2`）、HF 仓库的原始 `chat_template.jinja` 和 `tokenizer_config.json`（本地渲染以获取以下字节级精确流），以及 vLLM `kimi_k2` 工具解析器源码进行了核对。
 
-## Special tokens
+## 特殊 token
 
-The five tool-call markers required for manual parsing, plus the ChatML envelope markers. Token IDs are from `tokenizer_config.json` (`added_tokens_decoder`).
+手动解析所需的五个工具调用标记，外加 ChatML 信封标记。Token ID 取自 `tokenizer_config.json`（`added_tokens_decoder`）。
 
-| Token (verbatim) | ID | Purpose |
+| Token（原文） | ID | 用途 |
 |---|---|---|
-| `<\|tool_calls_section_begin\|>` | 163595 | Opens the tool-call section inside an assistant turn |
-| `<\|tool_call_begin\|>` | 163597 | Opens one individual tool call |
-| `<\|tool_call_argument_begin\|>` | 163598 | Separates the tool-call ID from its JSON arguments |
-| `<\|tool_call_end\|>` | 163599 | Closes one individual tool call |
-| `<\|tool_calls_section_end\|>` | 163596 | Closes the tool-call section |
-| `<\|im_system\|>` | 163594 | Start marker for system-class turns (`system`, `tool`, `tool_declare`) |
-| `<\|im_user\|>` | 163587 | Start marker for a user turn |
-| `<\|im_assistant\|>` | 163588 | Start marker for an assistant turn |
-| `<\|im_middle\|>` | 163601 | Separates the role/name header from the message body |
-| `<\|im_end\|>` | 163586 | Ends any turn |
-| `[BOS]` | 163584 | Sequence-begin token (see notes; not emitted by the chat template) |
-| `[EOS]` | 163585 | Sequence-end token |
+| `<\|tool_calls_section_begin\|>` | 163595 | 在助手轮内部开启工具调用段 |
+| `<\|tool_call_begin\|>` | 163597 | 开启单个工具调用 |
+| `<\|tool_call_argument_begin\|>` | 163598 | 分隔工具调用 ID 与其 JSON 参数 |
+| `<\|tool_call_end\|>` | 163599 | 结束单个工具调用 |
+| `<\|tool_calls_section_end\|>` | 163596 | 结束工具调用段 |
+| `<\|im_system\|>` | 163594 | system 类轮次的起始标记（`system`、`tool`、`tool_declare`） |
+| `<\|im_user\|>` | 163587 | 用户轮的起始标记 |
+| `<\|im_assistant\|>` | 163588 | 助手轮的起始标记 |
+| `<\|im_middle\|>` | 163601 | 分隔角色/名称头与消息正文 |
+| `<\|im_end\|>` | 163586 | 结束任意轮次 |
+| `[BOS]` | 163584 | 序列起始 token（见注释；聊天模板不会发出） |
+| `[EOS]` | 163585 | 序列结束 token |
 
-Notes on exactness:
-- The five tool tokens use ASCII pipe `|` (U+007C) and underscores; reproduce them exactly. There are no fullwidth pipe (`｜`) or `▁` variants in Kimi K2.
-- `<|im_middle|>` is the only envelope token whose ID (163601) is out of sequence with the others (163586–163599); a `163600` slot is unused.
-- Image inputs render via a content macro as the literal sequence `<|media_start|>image<|media_content|><|media_pad|><|media_end|>`. These media markers appear in the template but are **not** registered in `added_tokens_decoder`, so they tokenize as ordinary text rather than single special tokens. They are irrelevant to text tool calling and are listed here only for completeness.
+关于精确性的说明：
+- 五个工具 token 使用 ASCII 管道符 `|`（U+007C）和下划线；请精确复现。Kimi K2 中不存在全角管道符（`｜`）或 `▁` 变体。
+- `<|im_middle|>` 是唯一一个 ID（163601）与其他（163586–163599）不在同一序列中的信封 token；`163600` 槽位未被使用。
+- 图像输入通过内容宏渲染为字面序列 `<|media_start|>image<|media_content|><|media_pad|><|media_end|>`。这些媒体标记出现在模板中，但 **并未** 在 `added_tokens_decoder` 中注册，因此它们会按普通文本进行分词，而非作为单一特殊 token。它们与文本工具调用无关，此处列出仅为完整起见。
 
-## Roles / channels / turn structure
+## 角色 / 通道 / 轮次结构
 
-Kimi K2 uses a ChatML-style envelope. Every message is rendered as:
+Kimi K2 使用类 ChatML 信封。每条消息渲染为：
 
 ```text
 <|im_{class}|>{name}<|im_middle|>{body}<|im_end|>
 ```
 
-- There are exactly **three** start-marker tokens, chosen by `role`:
+- 恰好有 **三个** 起始标记 token，由 `role` 选择：
   - `user` → `<|im_user|>`
   - `assistant` → `<|im_assistant|>`
-  - everything else (`system`, `tool`, and the synthetic `tool_declare`) → `<|im_system|>`
-- The `{name}` segment between the marker and `<|im_middle|>` is `message.name or message.role`. This is the only "channel"/sub-role label Kimi K2 has. For ordinary turns it is literally `system`, `user`, or `assistant`; for a tool-result turn it is the tool's `name` (the function name) when supplied, otherwise `tool`; for the tool-schema turn it is the literal `tool_declare`.
-- `<|im_end|>` terminates every turn. The chat template does **not** emit `[BOS]`/`[EOS]`; turn boundaries are purely `<|im_*|>` markers (the tokenizer is TikToken-based with `add_bos_token`/`add_eos_token` unset, and the manual-parse flow feeds the rendered template straight to `/completions`).
-- **Default system prompt:** if the first message is not a `system` message, the template injects `<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>` before the first turn.
-- **Generation prompt:** with `add_generation_prompt=True` the template ends with `<|im_assistant|>assistant<|im_middle|>`, and the model generates from there.
-- **Thinking/reasoning:** `Kimi-K2-Instruct` is a "reflex-grade" model with no long thinking, so there is no reasoning channel in this format. (Thinking variants are handled separately — vLLM ships a distinct `kimi_k2` reasoning parser keyed on a `</think>` token — but that is out of scope for the Instruct tool-call format documented here.)
+  - 其他（`system`、`tool`，以及合成的 `tool_declare`）→ `<|im_system|>`
+- 标记与 `<|im_middle|>` 之间的 `{name}` 段为 `message.name or message.role`。这是 Kimi K2 唯一的"通道"/子角色标签。对于普通轮次，它就是字面的 `system`、`user` 或 `assistant`；对于工具结果轮次，它在提供时为工具的 `name`（即函数名），否则为 `tool`；对于工具 schema 轮次，它为字面的 `tool_declare`。
+- `<|im_end|>` 终止每一轮。聊天模板 **不会** 发出 `[BOS]`/`[EOS]`；轮次边界仅由 `<|im_*|>` 标记构成（分词器基于 TikToken，`add_bos_token`/`add_eos_token` 未设置，手动解析流程会将渲染好的模板直接送入 `/completions`）。
+- **默认系统提示：** 若首条消息不是 `system` 消息，模板会在第一轮之前注入 `<|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>`。
+- **生成提示：** 当 `add_generation_prompt=True` 时，模板以 `<|im_assistant|>assistant<|im_middle|>` 结尾，模型从该处继续生成。
+- **思考/推理：** `Kimi-K2-Instruct` 是"反射级"模型，没有长思考，因此该格式中没有推理通道。（思考变体另行处理——vLLM 提供一个独立的 `kimi_k2` 推理解析器，以 `</think>` token 为键——但这超出了本文档所涉及的 Instruct 工具调用格式范围。）
 
-## Tool definitions
+## 工具定义
 
-Available tools are advertised in a single dedicated turn placed at the very top of the prompt (before any system/user turn), using the synthetic `tool_declare` sub-role under the `<|im_system|>` marker:
+可用工具通过一条专用轮次在提示词最顶端（任何 system/user 轮之前）声明，使用合成的 `tool_declare` 子角色并置于 `<|im_system|>` 标记下：
 
 ```text
 <|im_system|>tool_declare<|im_middle|>{TOOLS_JSON}<|im_end|>
 ```
 
-`{TOOLS_JSON}` is the standard OpenAI-style `tools` array serialized to JSON with **compact separators** `(',', ':')` (no spaces). The array elements are passed through verbatim, i.e. each is `{"type":"function","function":{"name":…,"description":…,"parameters":{…}}}` with a JSON-Schema `parameters` object. Example (single tool, exactly as emitted):
+`{TOOLS_JSON}` 是标准 OpenAI 风格的 `tools` 数组，使用 **紧凑分隔符** `(',', ':')`（不含空格）序列化为 JSON。数组元素原样透传，即每个元素为 `{"type":"function","function":{"name":…,"description":…,"parameters":{…}}}`，其中 `parameters` 是一个 JSON-Schema 对象。示例（单个工具，与实际发出内容完全一致）：
 
 ```text
 <|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|>
 ```
 
-The `tool_declare` turn is rendered only when `tools` is non-empty.
+`tool_declare` 轮仅在 `tools` 非空时渲染。
 
-## Tool-call format
+## 工具调用格式
 
-When the model decides to call a function, it emits — inside the assistant turn, after any natural-language content — a tool-calls section. Minimal single call (this is the assistant generation that follows `<|im_assistant|>assistant<|im_middle|>`):
+当模型决定调用函数时，它会在助手轮内部、任何自然语言内容之后，发出一个工具调用段。最简单的单次调用（这是 `<|im_assistant|>assistant<|im_middle|>` 之后的助手生成内容）：
 
 ```text
 <|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|>
 ```
 
-Anatomy of one call:
+单次调用的结构：
 
 ```text
 <|tool_call_begin|>  functions.{func_name}:{idx}  <|tool_call_argument_begin|>  {JSON arguments}  <|tool_call_end|>
 ```
 
-- The token between `<|tool_call_begin|>` and `<|tool_call_argument_begin|>` is the **tool-call ID**, with the fixed form `functions.{func_name}:{idx}`.
-  - `functions.` is a literal prefix (it is not derived from the tool schema).
-  - `{func_name}` is the called function's name; the function name is recovered by parsing it back out of this ID, not from a separate field.
-  - `{idx}` is the **0-based call index** within the current assistant turn (`0` for the first call, `1` for the second, …).
-- After `<|tool_call_argument_begin|>` comes the raw JSON arguments object (e.g. `{"city": "Beijing"}`), terminated by `<|tool_call_end|>`.
-- All calls of the turn live between one `<|tool_calls_section_begin|>` / `<|tool_calls_section_end|>` pair. Any assistant text content precedes `<|tool_calls_section_begin|>`.
-- The whole assistant turn is still closed by `<|im_end|>` and the completion's `finish_reason` becomes `tool_calls`.
+- 位于 `<|tool_call_begin|>` 与 `<|tool_call_argument_begin|>` 之间的 token 是 **工具调用 ID**，固定形式为 `functions.{func_name}:{idx}`。
+  - `functions.` 是字面前缀（并非由工具 schema 派生）。
+  - `{func_name}` 是被调函数的名称；函数名是通过从该 ID 中解析回出得到，而不是来自单独的字段。
+  - `{idx}` 是当前助手轮内的 **从 0 开始的调用索引**（第一次调用为 `0`，第二次为 `1`，……）。
+- 在 `<|tool_call_argument_begin|>` 之后是原始 JSON 参数对象（例如 `{"city": "Beijing"}`），由 `<|tool_call_end|>` 终止。
+- 当前轮的所有调用位于同一对 `<|tool_calls_section_begin|>` / `<|tool_calls_section_end|>` 之间。助手文本内容出现在 `<|tool_calls_section_begin|>` 之前。
+- 整个助手轮仍由 `<|im_end|>` 关闭，且补全结果的 `finish_reason` 变为 `tool_calls`。
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
-Two or more calls in one turn are emitted as consecutive `<|tool_call_begin|>…<|tool_call_end|>` blocks inside a single section, with the index incrementing per call. Raw assistant emission for two parallel calls:
+同一轮中的两次或更多调用以连续的 `<|tool_call_begin|>…<|tool_call_end|>` 块形式发在同一段内，索引随每次调用递增。两个并行调用的原始助手输出：
 
 ```text
 <|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_call_begin|>functions.get_weather:1<|tool_call_argument_begin|>{"city": "Shanghai"}<|tool_call_end|><|tool_calls_section_end|>
 ```
 
-Note the IDs `functions.get_weather:0` and `functions.get_weather:1` — same function, distinct trailing index. The index is per-turn (it resets to `0` in the next assistant turn).
+注意 ID `functions.get_weather:0` 和 `functions.get_weather:1`——同一函数，不同的尾部索引。索引是按轮次计的（在下一个助手轮重置为 `0`）。
 
-## Tool-result format
+## 工具结果格式
 
-Tool execution results are fed back as a turn with `role: "tool"`. Because `tool` is not `user`/`assistant`, it renders under the `<|im_system|>` marker; the sub-role label is the message's `name` (the function name) when present, else `tool`. The body is a literal `## Return of {tool_call_id}` header line followed by the result content:
+工具执行结果作为 `role: "tool"` 的轮次回传。因为 `tool` 既不是 `user` 也不是 `assistant`，所以它在 `<|im_system|>` 标记下渲染；子角色标签为该消息的 `name`（函数名），若未提供则为 `tool`。正文是一行字面的 `## Return of {tool_call_id}` 头，后跟结果内容：
 
 ```text
 <|im_system|>get_weather<|im_middle|>## Return of functions.get_weather:0
 {"weather": "Sunny"}<|im_end|>
 ```
 
-- `{tool_call_id}` echoes the exact ID from the originating call (`functions.get_weather:0`), which is how the model correlates a result with the call that produced it.
-- The result `content` is inserted verbatim on the line after the header; callers typically pass a JSON string (e.g. `json.dumps(tool_result)`).
-- If the `tool` message omits `name`, the envelope becomes `<|im_system|>tool<|im_middle|>## Return of …`.
+- `{tool_call_id}` 回显原始调用中的精确 ID（`functions.get_weather:0`），模型借此将结果与产生它的调用关联起来。
+- 结果 `content` 紧接在头之后的行原样插入；调用方通常传入 JSON 字符串（例如 `json.dumps(tool_result)`）。
+- 如果 `tool` 消息省略 `name`，则信封变为 `<|im_system|>tool<|im_middle|>## Return of …`。
 
-## End-to-end example
+## 端到端示例
 
-A complete multi-turn weather exchange. These are the exact rendered streams (system + user supplied explicitly; line breaks inside a turn are literal, turns are otherwise contiguous).
+完整的多轮天气交互。这些是精确的渲染流（system 和 user 显式提供；轮次内的换行是字面的，轮次之间则是连续的）。
 
-**Stage 1 — prompt fed to the model** (`tools` set, `add_generation_prompt=True`):
+**阶段 1 — 输入模型的提示词**（已设置 `tools`，`add_generation_prompt=True`）：
 
 ```text
 <|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>What's the weather like in Beijing today? Use the tool to check.<|im_end|><|im_assistant|>assistant<|im_middle|>
 ```
 
-**Assistant generation** (model output; server reports `finish_reason: "tool_calls"`):
+**助手生成**（模型输出；服务器报告 `finish_reason: "tool_calls"`）：
 
 ```text
 <|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|><|im_end|>
 ```
 
-**Stage 2 — prompt for the next turn**, after appending the assistant tool-call turn and the tool result turn (`add_generation_prompt=True`):
+**阶段 2 — 下一轮的提示词**，在追加了助手工具调用轮和工具结果轮之后（`add_generation_prompt=True`）：
 
 ```text
-<|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>What's the weather like in Beijing today? Use the tool to check.<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>get_weather<|im_middle|>## Return of functions.get_weather:0
+<|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>What's the weather like in Beijing today? Use the tool to check.<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>get_weather<|im_middle|>## …
 {"weather": "Sunny"}<|im_end|><|im_assistant|>assistant<|im_middle|>
 ```
 
-**Final assistant generation** (model produces natural-language answer terminated by `<|im_end|>`; `finish_reason: "stop"`):
+**最终助手生成**（模型产生自然语言回答并以 `<|im_end|>` 结束；`finish_reason: "stop"`）：
 
 ```text
 It's sunny in Beijing today.<|im_end|>
 ```
 
-## OpenAI-compatible API mapping
+## OpenAI 兼容 API 映射
 
-With a server parser active (`--tool-call-parser kimi_k2`), the raw stream maps onto the Chat Completions shape as follows:
+启用服务器解析器（`--tool-call-parser kimi_k2`）后，原始流按如下方式映射到 Chat Completions 形式：
 
-- `choices[].finish_reason` = `"tool_calls"` when the turn contained a tool-calls section (otherwise `"stop"`).
-- `choices[].message.tool_calls[]` — one entry per `<|tool_call_begin|>…<|tool_call_end|>` block:
-  - `.id` = the raw call ID verbatim, e.g. `"functions.get_weather:0"`.
-  - `.type` = `"function"`.
-  - `.function.name` = the function name parsed out of the ID. vLLM computes `id.split(":")[0].split(".")[-1]` → `"get_weather"`.
-  - `.function.arguments` = a **JSON string** (the raw text captured between `<|tool_call_argument_begin|>` and `<|tool_call_end|>`), e.g. `"{\"city\": \"Beijing\"}"`. Clients `json.loads()` it before use.
-- Tool results are sent back as messages of the form:
+- 当该轮包含工具调用段时，`choices[].finish_reason` = `"tool_calls"`（否则为 `"stop"`）。
+- `choices[].message.tool_calls[]` —— 每个 `<|tool_call_begin|>…<|tool_call_end|>` 块对应一项：
+  - `.id` = 原始调用 ID（原文），例如 `"functions.get_weather:0"`。
+  - `.type` = `"function"`。
+  - `.function.name` = 从 ID 中解析出的函数名。vLLM 通过 `id.split(":")[0].split(".")[-1]` 计算 → `"get_weather"`。
+  - `.function.arguments` = 一个 **JSON 字符串**（即 `<|tool_call_argument_begin|>` 与 `<|tool_call_end|>` 之间捕获的原始文本），例如 `"{\"city\": \"Beijing\"}"`。客户端在使用前需 `json.loads()`。
+- 工具结果按以下形式的消息回传：
 
   ```json
   {"role": "tool", "tool_call_id": "functions.get_weather:0", "name": "get_weather", "content": "{\"weather\": \"Sunny\"}"}
   ```
 
-  `tool_call_id` must equal the `id` returned for the call; `name` becomes the `<|im_system|>{name}<|im_middle|>` sub-role; `content` becomes the body after `## Return of …`.
-- Streaming: deltas arrive as `choices[].delta.tool_calls[]` with an `index`; the function `name`/`id` stream once the call header is complete, then `function.arguments` streams as incremental string fragments to be concatenated (standard OpenAI tool-call streaming assembly).
+  `tool_call_id` 必须等于该调用返回的 `id`；`name` 成为 `<|im_system|>{name}<|im_middle|>` 子角色；`content` 成为 `## Return of …` 之后的正文。
+- 流式响应：增量通过 `choices[].delta.tool_calls[]` 到达并带有 `index`；函数 `name`/`id` 在调用头完成后一次性流出，随后 `function.arguments` 以增量字符串片段形式流出以待拼接（标准 OpenAI 工具调用流式装配）。
 
-Moonshot's hosted API (`platform.moonshot.ai`) exposes both OpenAI- and Anthropic-compatible endpoints; the Anthropic-compatible one scales temperature as `real_temperature = request_temperature * 0.6`. Recommended sampling temperature for `Kimi-K2-Instruct` is `0.6`.
+Moonshot 的托管 API（`platform.moonshot.ai`）同时提供 OpenAI 兼容与 Anthropic 兼容端点；其中 Anthropic 兼容端点将温度按 `real_temperature = request_temperature * 0.6` 缩放。`Kimi-K2-Instruct` 的推荐采样温度为 `0.6`。
 
-## Parsing notes & gotchas
+## 解析注意事项与陷阱
 
-- **ID → name parsing differs between references.** The official
-  `tool_call_guidance.md` uses `function_id.split('.')[1].split(':')[0]`,
-  while vLLM and omp take the last dot-separated segment before the colon.
-  The latter tolerates additional namespace segments, but neither convention
-  can preserve a literal dot as part of the function name; tool names SHOULD
-  follow the documented `functions.{name}:{idx}` shape without dots in
-  `{name}`.
-- **Extraction regexes differ too.** Guidance: `<\|tool_call_begin\|>\s*(?P<tool_call_id>[\w\.]+:\d+)\s*<\|tool_call_argument_begin\|>\s*(?P<function_arguments>.*?)\s*<\|tool_call_end\|>`. vLLM: ID class is `[^<]+:\d+` and the argument body uses a negative lookahead `(?:(?!<\|tool_call_begin\|>).)*?` so adjacent calls aren't merged. Both run with `DOTALL`.
-- **`skip_special_tokens` must be False.** The parser depends on the literal marker text surviving detokenization; vLLM forces `skip_special_tokens = False` when tools are enabled and `tool_choice != "none"`. If markers are stripped, no tool call is detected.
-- **Arguments are unvalidated raw text.** Whatever the model emits between the argument marker and `<|tool_call_end|>` is passed straight through as the `arguments` string; it must be valid JSON for downstream `json.loads`, and the model can emit malformed/truncated JSON. Validate before executing.
-- **Index semantics.** `{idx}` is the per-turn call counter starting at `0`; it is not a global counter and resets each assistant turn. Do not assume IDs are unique across turns — disambiguate by turn when persisting history.
-- **Streaming marker splits.** Section and call markers can be split across token boundaries.
-  vLLM holds back any trailing suffix that partially matches a marker and streams
-  argument fragments. omp's owned scanner also holds partial markers, but buffers a
-  call's arguments until `<|tool_call_end|>` and emits no `toolArgDelta` events.
-- **`finish_reason` varies by engine.** The official guide explicitly warns the terminal `finish_reason` for tool calls "may vary across different engines"; loop on `finish_reason == "tool_calls"` but be defensive.
-- **Engine fallback.** Kimi K2 reuses the DeepSeek-V3 architecture; `config.json` sets `model_type: "kimi_k2"` so engines apply the right parser. If you force `model_type: "deepseek_v3"` as a compatibility workaround, no native Kimi tool parser is available and you must parse the `<|tool_calls_section_*|>` markers manually.
-- **Parser availability.** vLLM ships both a Python (`KimiK2ToolParser`) and a newer Rust tool parser; SGLang implements its own `kimi_k2` parser. All key off the same five markers and the `functions.{name}:{idx}` ID convention documented here.
-- **Whitespace artifact.** When no `system` message is supplied, the template injects the default system prompt and a small `\n  ` (newline + two spaces) can appear before the first `<|im_user|>` marker. It is harmless (tokenizes around the markers), but supplying an explicit system message yields the clean streams shown above.
+- **ID → 名称的解析在不同参考中不同。** 官方
+  `tool_call_guidance.md` 使用 `function_id.split('.')[1].split(':')[0]`，
+  而 vLLM 与 omp 取冒号前最后一个点分段的子串。
+  后者能容忍额外的命名空间段，但两种约定
+  都不能保留字面的点作为函数名的一部分；工具名应当遵循
+  文档化的 `functions.{name}:{idx}` 形式，且 `{name}` 中
+  不含点。
+- **抽取正则也不同。** 指南：`<\|tool_call_begin\|>\s*(?P<tool_call_id>[\w\.]+:\d+)\s*<\|tool_call_argument_begin\|>\s*(?P<function_arguments>.*?)\s*<\|tool_call_end\|>`。vLLM：ID 类为 `[^<]+:\d+`，参数主体使用负向先行断言 `(?:(?!<\|tool_call_begin\|>).)*?`，以避免相邻调用被合并。两者都使用 `DOTALL` 模式运行。
+- **`skip_special_tokens` 必须为 False。** 解析器依赖字面标记文本在 detokenize 后仍然存在；vLLM 在启用工具且 `tool_choice != "none"` 时强制将 `skip_special_tokens = False`。若标记被剥离，将检测不到任何工具调用。
+- **参数是未经校验的原始文本。** 模型在参数标记与 `<|tool_call_end|>` 之间发出的任何内容都会原样作为 `arguments` 字符串透传；它对于下游 `json.loads` 必须是合法 JSON，且模型可能发出格式错误/截断的 JSON。执行前请校验。
+- **索引语义。** `{idx}` 是从 `0` 开始的每轮调用计数器；它不是全局计数器，且每个助手轮都会重置。不要假设 ID 在多轮之间唯一——持久化历史时请按轮消歧。
+- **流式标记拆分。** 段标记与调用标记可能被拆到 token 边界之间。
+  vLLM 会暂留任何部分匹配标记的尾部后缀，再流出
+  参数片段。omp 自有的扫描器也会暂留部分标记，但会缓冲
+  单次调用的参数直至 `<|tool_call_end|>`，并且不发出 `toolArgDelta` 事件。
+- **`finish_reason` 因引擎而异。** 官方指南明确警告，工具调用的终止 `finish_reason`"可能因引擎而异"；应以 `finish_reason == "tool_calls"` 为循环条件，但需做防御性处理。
+- **引擎回退。** Kimi K2 复用了 DeepSeek-V3 架构；`config.json` 设置 `model_type: "kimi_k2"`，因此引擎会应用正确的解析器。如果你将 `model_type: "deepseek_v3"` 强行作为兼容性兜底，则没有原生的 Kimi 工具解析器可用，必须手动解析 `<|tool_calls_section_*|>` 标记。
+- **解析器可用性。** vLLM 同时提供 Python（`KimiK2ToolParser`）和较新的 Rust 工具解析器；SGLang 实现自己的 `kimi_k2` 解析器。两者都基于相同的五个标记以及本文档所述的 `functions.{name}:{idx}` ID 约定。
+- **空白伪影。** 若未提供 `system` 消息，模板会注入默认系统提示，并在第一个 `<|im_user|>` 标记之前出现少量 `\n  `（换行+两空格）。这无害（分词会绕过标记），但显式提供 system 消息可得到上文所示的干净流。
 
-## omp / pi converter behavior
+## omp / pi 转换器行为
 
-The repository's `kimi` dialect is an **owned in-band converter**. Select it
-with `PI_DIALECT=kimi` (or the equivalent agent configuration). With tools
-present, the agent appends the Kimi guide and compact tool catalog to the
-system prompt, removes native provider tools, rewrites prior calls/results in
-Kimi text form, and converts streamed output back into canonical pi events.
-Kimi-family model affinity resolves to this dialect.
+仓库的 `kimi` 方言是一个 **自有带内转换器**。通过
+`PI_DIALECT=kimi`（或等效的代理配置）启用。当存在工具时，
+代理会将 Kimi 指南与紧凑工具目录追加到系统提示中，
+移除原生 provider 工具，将先前的调用/结果以 Kimi 文本形式
+改写，并将流式输出转换回规范的 pi 事件。
+Kimi 系列模型的亲和性解析到该方言。
 
-The renderer emits one section per assistant call batch. It preserves a
-pre-existing id that already begins with `functions.`; otherwise it generates
-`functions.{name}:{batchIndex}`. Tool results are rendered as consecutive
-`<|im_system|>{name}<|im_middle|>## Return of …<|im_end|>` turns, and canonical
-tool-result messages are collapsed into one synthetic user message containing
-that text.
+渲染器为每次助手调用批渲染一个段。它会保留
+已以 `functions.` 开头的既有 id；否则生成：
+`functions.{name}:{batchIndex}`。工具结果以连续的
+`<|im_system|>{name}<|im_middle|>## Return of …<|im_end|>` 轮次渲染，规范的
+工具结果消息会合并为一条包含该文本的合成用户消息。
 
-The scanner recognizes only calls inside a section. Once the argument marker
-arrives it preserves the raw header as the call id, derives the name from the
-last dot-separated segment before the first colon, and emits `toolStart`. It
-buffers the argument body until `<|tool_call_end|>`, then applies the shared
-repairing JSON parser and emits `toolEnd`; it does **not** emit incremental
-argument deltas. Invalid/non-object completed arguments normalize to `{}`.
-If EOF arrives after `toolStart` but before the close marker, no `toolEnd` is
-emitted, yet the canonical `{}` call remains and may be dispatched on a normal
-stop. Only incomplete input that never reaches the argument marker is
-discarded without creating a call. Section markers are suppressed from visible
-text, while an isolated call marker outside a section remains ordinary text.
+扫描器仅识别段内的调用。一旦参数标记到达，
+它会将原始头部作为调用 id 保留，并从第一个冒号前的
+最后一个点分段派生名称，然后发出 `toolStart`。
+它会将参数主体缓冲至 `<|tool_call_end|>`，然后应用共享的
+修复型 JSON 解析器并发出 `toolEnd`；它 **不会** 发出增量
+参数增量。无效/非对象的已完成参数会规范化为 `{}`。
+若 EOF 在 `toolStart` 之后、但在关闭标记之前到达，则不会发出 `toolEnd`，
+但规范的 `{}` 调用仍然存在，并可能在正常停止时被派发。
+只有从未到达参数标记的不完整输入会被丢弃而不创建调用。
+段标记会在可见文本中抑制，而段外的孤立调用标记仍为普通文本。
 
-Thinking parsing is enabled by default and maps `<think>…</think>` to thinking
-events. `parseThinking: false` leaves those tags and their contents in visible
-text.
+思考解析默认启用，并将 `<think>…</think>` 映射为思考事件。
+`parseThinking: false` 会将这些标签及其内容保留在可见
+文本中。
 
-## Sources
+## 参考来源
 
-- Model card (Tool Calling section, OpenAI-style example, deployment/API notes): https://huggingface.co/moonshotai/Kimi-K2-Instruct
-- Official tool-call guidance (markers, ID convention, manual parser, `extract_tool_call_info`): https://raw.githubusercontent.com/MoonshotAI/Kimi-K2/main/docs/tool_call_guidance.md (the HF `resolve`/`blob` paths redirected to the model card; verified against this GitHub raw file)
-- Deployment guide (`--tool-call-parser kimi_k2`, `--enable-auto-tool-choice`, SGLang flag, `model_type` fallback): https://raw.githubusercontent.com/MoonshotAI/Kimi-K2/main/docs/deploy_guidance.md
-- Chat template (`chat_template.jinja`, rendered locally for byte-exact streams): https://huggingface.co/moonshotai/Kimi-K2-Instruct/resolve/main/chat_template.jinja
-- Tokenizer config (special-token IDs in `added_tokens_decoder`): https://huggingface.co/moonshotai/Kimi-K2-Instruct/resolve/main/tokenizer_config.json
-- vLLM `kimi_k2` tool parser (markers, regex, name-parsing, `skip_special_tokens`, streaming): https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/kimi_k2_tool_parser.py
-- vLLM PR adding the parser: https://github.com/vllm-project/vllm/pull/20789
-- vLLM tool-calling docs: https://docs.vllm.ai/en/latest/features/tool_calling/
+- 模型卡（Tool Calling 部分、OpenAI 风格示例、部署/API 说明）：https://huggingface.co/moonshotai/Kimi-K2-Instruct
+- 官方工具调用指南（标记、ID 约定、手动解析器、`extract_tool_call_info`）：https://raw.githubusercontent.com/MoonshotAI/Kimi-K2/main/docs/tool_call_guidance.md（HF 的 `resolve`/`blob` 路径会重定向到模型卡；本文已根据该 GitHub 原始文件进行核对）
+- 部署指南（`--tool-call-parser kimi_k2`、`--enable-auto-tool-choice`、SGLang 参数、`model_type` 兜底）：https://raw.githubusercontent.com/MoonshotAI/Kimi-K2/main/docs/deploy_guidance.md
+- 聊天模板（`chat_template.jinja`，本地渲染以获取字节级精确流）：https://huggingface.co/moonshotai/Kimi-K2-Instruct/resolve/main/chat_template.jinja
+- 分词器配置（`added_tokens_decoder` 中的特殊 token ID）：https://huggingface.co/moonshotai/Kimi-K2-Instruct/resolve/main/tokenizer_config.json
+- vLLM `kimi_k2` 工具解析器（标记、正则、名称解析、`skip_special_tokens`、流式）：https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/kimi_k2_tool_parser.py
+- vLLM 添加该解析器的 PR：https://github.com/vllm-project/vllm/pull/20789
+- vLLM 工具调用文档：https://docs.vllm.ai/en/latest/features/tool_calling/

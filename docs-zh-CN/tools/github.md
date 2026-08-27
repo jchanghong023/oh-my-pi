@@ -1,145 +1,145 @@
 # github
 
-> Dispatch GitHub CLI operations for repositories, repository files, pull requests, search, and Actions run watching.
+> 调度 GitHub CLI 操作,涵盖仓库、仓库文件、Pull Request、搜索以及 Actions 运行监听。
 
-## Source
-- Entry: `packages/coding-agent/src/tools/gh.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/github.md`
-- Key collaborators:
-  - `packages/coding-agent/src/tools/gh-format.ts` — shorten commit SHAs for summaries.
-  - `packages/coding-agent/src/tools/gh-renderer.ts` — TUI rendering, especially `run_watch` live/result views.
-  - `packages/coding-agent/src/utils/git.ts` — `gh`/`git` process wrappers, repo locking, branch config writes.
-  - `packages/utils/src/dirs.ts` — base directory for dedicated PR worktrees.
-  - `packages/coding-agent/src/sdk.ts` — session artifact allocation hook.
-  - `packages/coding-agent/src/session/artifacts.ts` — artifact filename format `<id>.<toolType>.log`.
+## 源码
+- 入口:`packages/coding-agent/src/tools/gh.ts`
+- 面向模型的提示词:`packages/coding-agent/src/prompts/tools/github.md`
+- 关键协作模块:
+  - `packages/coding-agent/src/tools/gh-format.ts` — 为摘要缩短 commit SHA。
+  - `packages/coding-agent/src/tools/gh-renderer.ts` — TUI 渲染,尤其是 `run_watch` 的实时/结果视图。
+  - `packages/coding-agent/src/utils/git.ts` — `gh`/`git` 进程包装、仓库锁、分支配置写入。
+  - `packages/utils/src/dirs.ts` — 专用 PR 工作树的基础目录。
+  - `packages/coding-agent/src/sdk.ts` — 会话产物分配钩子。
+  - `packages/coding-agent/src/session/artifacts.ts` — 产物文件名格式 `<id>.<toolType>.log`。
 
-## Availability and approval
+## 可用性与审批
 
-- `github.enabled` defaults to `false`; enable the GitHub CLI tool in **Settings → Tools** before use.
-- The tool is discoverable and strict-schema, and is created only when `gh` is available on `PATH`. Authentication is checked by the CLI when an operation runs.
-- `repo_view`, `file_read`, every `search_*` operation, and `run_watch` request read approval. `pr_create`, `pr_checkout`, and `pr_push` request execution approval.
+- `github.enabled` 默认为 `false`;使用前请在 **Settings → Tools** 中启用 GitHub CLI 工具。
+- 该工具可被发现且采用严格 schema,仅在 `PATH` 上存在 `gh` 时才会创建。认证状态在操作执行时由 CLI 检查。
+- `repo_view`、`file_read`、所有 `search_*` 操作以及 `run_watch` 请求读取审批。`pr_create`、`pr_checkout` 和 `pr_push` 请求执行审批。
 
-## Inputs
+## 输入
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `op` | `"repo_view" \| "file_read" \| "pr_create" \| "pr_checkout" \| "pr_push" \| "search_issues" \| "search_prs" \| "search_code" \| "search_commits" \| "search_repos" \| "run_watch"` | Yes | Dispatch selector. `GithubTool.execute()` switches only on this field. |
-| `repo` | `string` | No | `[host/]owner/repo` override. The host prefix is optional only when it matches the host `gh` defaults to (github.com, or `GH_HOST` when set); a repository on any other host — including github.com while `GH_HOST` names an enterprise instance — must be qualified, or `gh` sends the request to its default host. Ignored when the identifier argument is already a full GitHub URL. For `search_issues`/`search_prs`/`search_code`/`search_commits`, defaults to the current checkout's repository when omitted (skipped when the query already contains a `repo:`/`org:`/`user:`/`owner:` qualifier or when current-repo resolution fails). Required in practice when `gh` cannot infer repo context from the current checkout. |
-| `branch` | `string` | No | Used by `repo_view`, `file_read`, `pr_push`, and `run_watch`. `file_read` omits the ref to use the repository's default branch; `run_watch` falls back to the current git branch when `run` is omitted; `pr_push` falls back to the current branch. |
-| `path` | `string` | No | Required by `file_read`. Repository-relative path to a file in the GitHub repository; leading `/` is rejected. |
-| `pr` | `string \| string[]` | No | Used by `pr_checkout`. Each item may be a PR number, branch name, or GitHub PR URL. Array form enables batching. Omitted means current branch PR. |
-| `force` | `boolean` | No | Used only by `pr_checkout`. Defaults to `false`; allows resetting an existing `pr-<number>` local branch to the PR head commit. |
-| `forceWithLease` | `boolean` | No | Used only by `pr_push`; passed through to git push. |
-| `title` | `string` | No | Used only by `pr_create`. Required unless `fill` is `true`. |
-| `body` | `string` | No | Used only by `pr_create`. Mutually exclusive with `fill`. Empty/omitted body becomes `--body ""` to suppress the interactive editor. Non-empty body is written to a temp file and passed as `--body-file`. |
-| `base` | `string` | No | Used only by `pr_create`; passed as `--base`. |
-| `head` | `string` | No | Used only by `pr_create`; passed as `--head`. |
-| `draft` | `boolean` | No | Used only by `pr_create`. Defaults to `false`. |
-| `fill` | `boolean` | No | Used only by `pr_create`. Defaults to `false`. Mutually exclusive with `title` and `body`. |
-| `reviewer` | `string[]` | No | Used only by `pr_create`; each entry becomes `--reviewer`. |
-| `assignee` | `string[]` | No | Used only by `pr_create`; each entry becomes `--assignee`. |
-| `label` | `string[]` | No | Used only by `pr_create`; each entry becomes `--label`. |
-| `query` | `string` | No | Used by all `search_*` ops. Required by local validation only for `search_code`; the other search ops compose it with optional date/repo/type qualifiers and send the result to GitHub. |
-| `since` | `string` | No | Lower date bound for `search_issues`, `search_prs`, `search_commits`, and `search_repos`. Accepts relative durations (`3d`, `12h`, `2w`, `2mo`, `1y`), `YYYY-MM-DD`, or an ISO datetime. Rejected for `search_code`. |
-| `until` | `string` | No | Upper date bound for `search_issues`, `search_prs`, `search_commits`, and `search_repos`. Same formats as `since`. Rejected for `search_code`. |
-| `dateField` | `"created" \| "updated"` | No | Date qualifier field for issue/PR/repo search. Defaults to `created`; repo search maps `updated` to GitHub's `pushed:` qualifier. Ignored for commit search, which always uses `committer-date:`. |
-| `limit` | `number` | No | Used by all `search_*` ops. Defaults to `10`, floored, clamped to `50`, and must be `> 0`. |
-| `run` | `string` | No | Used only by `run_watch`. Must be a numeric run ID or full GitHub Actions run URL. |
-| `tail` | `number` | No | Used only by `run_watch`. Defaults to `15`, floored, clamped to `200`, and must be `> 0`. |
+| `op` | `"repo_view" \| "file_read" \| "pr_create" \| "pr_checkout" \| "pr_push" \| "search_issues" \| "search_prs" \| "search_code" \| "search_commits" \| "search_repos" \| "run_watch"` | 是 | 调度选择器。`GithubTool.execute()` 仅根据此字段进行分支切换。 |
+| `repo` | `string` | 否 | `[host/]owner/repo` 覆盖项。只有当主机前缀与 `gh` 默认的主机(github.com,或在设置 `GH_HOST` 时使用该值)匹配时,前缀才可省略;位于其他主机的仓库——包括 `GH_HOST` 指向企业实例时的 github.com——必须显式带上主机限定,否则 `gh` 会把请求发到其默认主机。当标识符参数本身已是完整的 GitHub URL 时,该字段被忽略。对于 `search_issues`/`search_prs`/`search_code`/`search_commits`,省略时默认为当前 checkout 所在仓库(当查询已包含 `repo:`/`org:`/`user:`/`owner:` 限定符,或当前仓库解析失败时跳过此默认)。当 `gh` 无法从当前 checkout 推断仓库上下文时,实际上需要显式提供。 |
+| `branch` | `string` | 否 | 由 `repo_view`、`file_read`、`pr_push` 和 `run_watch` 使用。`file_read` 省略该 ref 时使用仓库的默认分支;`run_watch` 在省略 `run` 时回退到当前 git 分支;`pr_push` 回退到当前分支。 |
+| `path` | `string` | 否 | `file_read` 必填。GitHub 仓库中文件的相对路径;不允许以 `/` 开头。 |
+| `pr` | `string \| string[]` | 否 | 由 `pr_checkout` 使用。每项可以是 PR 编号、分支名或 GitHub PR URL。数组形式支持批量处理。省略时表示当前分支对应的 PR。 |
+| `force` | `boolean` | 否 | 仅供 `pr_checkout` 使用。默认为 `false`;允许将已存在的 `pr-<number>` 本地分支重置为 PR head commit。 |
+| `forceWithLease` | `boolean` | 否 | 仅供 `pr_push` 使用;透传给 git push。 |
+| `title` | `string` | 否 | 仅供 `pr_create` 使用。除非 `fill` 为 `true`,否则为必填。 |
+| `body` | `string` | 否 | 仅供 `pr_create` 使用。与 `fill` 互斥。为空或省略时变为 `--body ""` 以抑制交互式编辑器。非空 body 会写入临时文件并通过 `--body-file` 传递。 |
+| `base` | `string` | 否 | 仅供 `pr_create` 使用;作为 `--base` 传递。 |
+| `head` | `string` | 否 | 仅供 `pr_create` 使用;作为 `--head` 传递。 |
+| `draft` | `boolean` | 否 | 仅供 `pr_create` 使用。默认为 `false`。 |
+| `fill` | `boolean` | 否 | 仅供 `pr_create` 使用。默认为 `false`。与 `title` 和 `body` 互斥。 |
+| `reviewer` | `string[]` | 否 | 仅供 `pr_create` 使用;每个条目作为 `--reviewer`。 |
+| `assignee` | `string[]` | 否 | 仅供 `pr_create` 使用;每个条目作为 `--assignee`。 |
+| `label` | `string[]` | 否 | 仅供 `pr_create` 使用;每个条目作为 `--label`。 |
+| `query` | `string` | 否 | 所有 `search_*` 操作都会使用。仅 `search_code` 的本地校验要求为必填;其他搜索操作会将其与可选的日期/仓库/类型限定符组合后发送给 GitHub。 |
+| `since` | `string` | 否 | `search_issues`、`search_prs`、`search_commits` 和 `search_repos` 的下界日期。接受相对时长(`3d`、`12h`、`2w`、`2mo`、`1y`)、`YYYY-MM-DD` 或 ISO 时间。`search_code` 不接受此参数。 |
+| `until` | `string` | 否 | `search_issues`、`search_prs`、`search_commits` 和 `search_repos` 的上界日期。格式与 `since` 相同。`search_code` 不接受此参数。 |
+| `dateField` | `"created" \| "updated"` | 否 | issue/PR/repo 搜索的日期限定符字段。默认为 `created`;仓库搜索将 `updated` 映射为 GitHub 的 `pushed:` 限定符。提交搜索忽略此字段,始终使用 `committer-date:`。 |
+| `limit` | `number` | 否 | 所有 `search_*` 操作都会使用。默认为 `10`,向下取整,上限为 `50`,且必须 `> 0`。 |
+| `run` | `string` | 否 | 仅供 `run_watch` 使用。必须是数字型 run ID 或完整的 GitHub Actions run URL。 |
+| `tail` | `number` | 否 | 仅供 `run_watch` 使用。默认为 `15`,向下取整,上限为 `200`,且必须 `> 0`。 |
 
-## Outputs
-The tool returns a single text result built by `buildTextResult()` in `packages/coding-agent/src/tools/gh.ts`.
+## 输出
+该工具返回由 `packages/coding-agent/src/tools/gh.ts` 中 `buildTextResult()` 构建的单一文本结果。
 
-- `content`: one text block. Multi-item ops join sections with blank lines and `---` separators.
-- `sourceUrl`: set for repository/file/PR/run results when a canonical URL is known.
-- `details`: optional structured metadata used by the TUI renderer.
-  - Common fields: `artifactId`, `repo`, `branch`, `worktreePath`, `remote`, `remoteBranch`, `headSha`, `runId`, `runIds`, `status`, `conclusion`, `failedJobs`.
-  - `pr_checkout` adds `checkouts: GhPrCheckoutSummary[]`.
-  - `run_watch` adds `watch: GhRunWatchViewDetails`, which drives the custom live/result renderer in `packages/coding-agent/src/tools/gh-renderer.ts`.
-- Artifact trailer: when `artifactId` is present, the text body gets an appended line like `Full failed-job logs: artifact://<id>`.
-  - `run_watch` allocates artifacts with `session.allocateOutputArtifact("github")`; persistent sessions therefore save failed-log bodies as `<artifact-dir>/<id>.github.log`.
+- `content`:一个文本块。多项操作的结果以空行和 `---` 分隔符连接各部分。
+- `sourceUrl`:在已知规范 URL 时,为仓库/文件/PR/运行结果设置。
+- `details`:TUI 渲染器使用的可选结构化元数据。
+  - 通用字段:`artifactId`、`repo`、`branch`、`worktreePath`、`remote`、`remoteBranch`、`headSha`、`runId`、`runIds`、`status`、`conclusion`、`failedJobs`。
+  - `pr_checkout` 增加 `checkouts: GhPrCheckoutSummary[]`。
+  - `run_watch` 增加 `watch: GhRunWatchViewDetails`,驱动 `packages/coding-agent/src/tools/gh-renderer.ts` 中的自定义实时/结果渲染器。
+- 产物尾部:当 `artifactId` 存在时,文本正文末尾会追加一行类似 `Full failed-job logs: artifact://<id>`。
+  - `run_watch` 通过 `session.allocateOutputArtifact("github")` 分配产物;因此持久化会话会将失败日志正文保存为 `<artifact-dir>/<id>.github.log`。
 
-`run_watch` is the only streaming op. It emits `onUpdate` snapshots while polling, then returns one final text result.
+`run_watch` 是唯一支持流式输出的操作。它在轮询期间发出 `onUpdate` 快照,然后返回一条最终文本结果。
 
-## Flow
-1. `GithubTool.createIf()` exposes the tool only when `git.github.available()` finds `gh` on `PATH`.
-2. `GithubTool.execute()` wraps dispatch in `untilAborted()` and switches on `params.op`.
-3. Each op normalizes optional strings, arrays, booleans, and numeric caps locally in `packages/coding-agent/src/tools/gh.ts`.
-4. CLI execution goes through `git.github.run/json/text()` in `packages/coding-agent/src/utils/git.ts`:
-   - spawns `gh ...` with `Bun.spawn()`;
-   - trims stdout/stderr unless `trimOutput: false`;
-   - maps common auth/repo-context failures into tool-facing `ToolError` messages;
-   - `json()` rejects empty or invalid JSON.
-   - Current-checkout resolution runs `gh repo view --json url -q .url` and keeps the host: the result is `owner/repo` on github.com and `host/owner/repo` elsewhere. `gh` resolves a host-less `--repo` against `GH_HOST` (github.com by default), so the prefix is what keeps an enterprise checkout off github.com. `gh api` endpoint paths never carry a host, so repo-scoped API calls strip it back off and pass `--hostname` instead; GitHub search qualifiers do the same (`repo:owner/repo` plus `--hostname`).
-   - A host named by a full URL (a `pr://<host>/…` read, a PR/issue/run URL argument) is preserved as given, including `github.com`, so `GH_HOST` cannot redirect that request. Cache rows drop a prefix naming the host `gh` defaults to — `github.com/owner/repo` and `owner/repo` share one row normally, while under `GH_HOST` the explicit `github.com/` form keeps its own rows because the bare form then means the configured instance.
-5. Read-style ops (`repo_view`, `file_read`, `search_*`) fetch repository data and return text or formatted Markdown-like summaries. `file_read` uses GitHub's contents API with the raw-media accept header and preserves the response bytes as text. Single-issue and single-PR views were moved out of the tool and now resolve through the `issue://` / `pr://` internal URL schemes, which share the same SQLite cache.
-6. PR diffs moved out of the tool. `pr://<N>/diff` lists changed files, `pr://<N>/diff/<i>` slices a single file, and `pr://<N>/diff/all` returns the full unified diff — see `docs/tools/read.md`. All three variants share one `gh pr diff` invocation through the `pr-diff` cache row.
-7. `pr_checkout` resolves PR metadata first, then enters `git.withRepoLock()` before any git mutation so parallel checkout calls for the same primary repo do not race on shared `.git` state.
-8. `pr_push` reads PR head metadata back from git branch config, derives a refspec, pushes with `git.push()`, then invalidates the cached `pr://` rows for the pushed PR via `invalidateAllForNumber()` so the next `pr://` read reflects the push.
-9. `pr_create` shells out once, then best-effort re-reads the created PR for a richer summary.
-10. `run_watch` chooses either run mode (`run` supplied) or commit mode (`run` omitted), polls GitHub Actions APIs every 3 seconds for the first minute and every 15 seconds after that, emits streaming updates, and may save a full failed-log artifact before returning.
-11. Final text goes through `toolResult().text(...)`; if `session.allocateOutputArtifact()` returns a slot, failed-log text is persisted with `Bun.write()`.
+## 流程
+1. `GithubTool.createIf()` 仅在 `git.github.available()` 在 `PATH` 上找到 `gh` 时才暴露该工具。
+2. `GithubTool.execute()` 将调度包装在 `untilAborted()` 中,并根据 `params.op` 进行分支切换。
+3. 每个操作在 `packages/coding-agent/src/tools/gh.ts` 中对可选字符串、数组、布尔值和数值上限进行本地规范化。
+4. CLI 执行通过 `packages/coding-agent/src/utils/git.ts` 中的 `git.github.run/json/text()`:
+   - 使用 `Bun.spawn()` 启动 `gh ...`;
+   - 除非 `trimOutput: false`,否则裁剪 stdout/stderr;
+   - 将常见的认证/仓库上下文错误映射为面向工具的 `ToolError` 消息;
+   - `json()` 拒绝空或无效的 JSON。
+   - 当前 checkout 解析运行 `gh repo view --json url -q .url` 并保留主机部分:在 github.com 上结果为 `owner/repo`,在其他主机上为 `host/owner/repo`。`gh` 会将无主机的 `--repo` 解析为 `GH_HOST`(默认为 github.com),因此该前缀正是防止企业 checkout 被错误路由到 github.com 的关键。`gh api` 的端点路径从不携带主机,因此仓库范围的 API 调用会去掉该前缀,改用 `--hostname`;GitHub 搜索限定符同样处理(`repo:owner/repo` 加上 `--hostname`)。
+   - 由完整 URL 提供的主机(来自 `pr://<host>/…` 读取、PR/issue/run URL 参数)会按原样保留,包括 `github.com`,因此 `GH_HOST` 无法重定向该请求。缓存行会丢弃与 `gh` 默认主机同名的主机前缀——通常 `github.com/owner/repo` 和 `owner/repo` 共享同一行,而在 `GH_HOST` 下,显式的 `github.com/` 形式会保留各自的行,因为此时裸形式指的是所配置的实例。
+5. 读取型操作(`repo_view`、`file_read`、`search_*`)获取仓库数据并返回文本或格式化的类 Markdown 摘要。`file_read` 使用带 raw-media accept 头的 GitHub contents API,并将响应字节保留为文本。单 issue 和单 PR 视图已从该工具中移出,现通过 `issue://` / `pr://` 内部 URL 方案解析,这些方案共享同一个 SQLite 缓存。
+6. PR diff 已从该工具中移出。`pr://<N>/diff` 列出变更文件,`pr://<N>/diff/<i>` 切片单个文件,`pr://<N>/diff/all` 返回完整 unified diff——参见 `docs/tools/read.md`。这三种变体通过 `pr-diff` 缓存行共享同一次 `gh pr diff` 调用。
+7. `pr_checkout` 首先解析 PR 元数据,然后在执行任何 git 修改前进入 `git.withRepoLock()`,以避免对同一主仓库的并行 checkout 调用在共享的 `.git` 状态上产生竞争。
+8. `pr_push` 从 git 分支配置中读取 PR head 元数据,推导 refspec,使用 `git.push()` 推送,然后通过 `invalidateAllForNumber()` 使所推送 PR 的 `pr://` 缓存行失效,以便下一次 `pr://` 读取反映该推送。
+9. `pr_create` 仅 shell 一次,然后尽力重新读取已创建的 PR 以获取更丰富的摘要。
+10. `run_watch` 选择 run 模式(提供 `run`)或 commit 模式(省略 `run`),在第一分钟内每 3 秒轮询一次 GitHub Actions API,之后每 15 秒一次,发出流式更新,并可能在返回前保存完整的失败日志产物。
+11. 最终文本通过 `toolResult().text(...)` 输出;如果 `session.allocateOutputArtifact()` 返回了槽位,则失败日志文本会通过 `Bun.write()` 持久化。
 
-## Modes / Variants
+## 模式 / 变体
 
 ### `repo_view`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `branch` |
-| `gh` command | `gh repo view [<repo>] [--branch <branch>] --json <GH_REPO_FIELDS>` |
-| Batching | None |
-| Output | `# <owner/repo>` header, description, URL, default branch, requested branch, visibility, permission, primary language, stars, forks, archive/fork flags, updated timestamp, homepage, topics. `sourceUrl = data.url`. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`branch` |
+| `gh` 命令 | `gh repo view [<repo>] [--branch <branch>] --json <GH_REPO_FIELDS>` |
+| 批处理 | 无 |
+| 输出 | `# <owner/repo>` 头部、描述、URL、默认分支、请求的分支、可见性、权限、主要语言、star、fork、archive/fork 标志、更新时间戳、主页、topics。`sourceUrl = data.url`。 |
 
-If `repo` is omitted, `gh` repository resolution is used.
+如果省略 `repo`,则使用 `gh` 的仓库解析。
 
 ### `file_read`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op`, `path` |
-| Optional fields | `repo`, `branch` |
-| `gh` command | `gh api /repos/<repo>/contents/<encoded-path> --method GET -H "Accept: application/vnd.github.raw+json" [-f ref=<branch>]` |
-| Batching | None |
-| Output | The file content exactly as returned by the contents API (`trimOutput: false`). `sourceUrl` points to `https://github.com/<repo>/blob/<branch-or-HEAD>/<encoded-path>`; `details` contains the resolved `repo` and optional `branch`. |
+| 必填字段 | `op`、`path` |
+| 可选字段 | `repo`、`branch` |
+| `gh` 命令 | `gh api /repos/<repo>/contents/<encoded-path> --method GET -H "Accept: application/vnd.github.raw+json" [-f ref=<branch>]` |
+| 批处理 | 无 |
+| 输出 | 与 contents API 返回的文件内容完全一致(`trimOutput: false`)。`sourceUrl` 指向 `https://github.com/<repo>/blob/<branch-or-HEAD>/<encoded-path>`;`details` 包含已解析的 `repo` 和可选的 `branch`。 |
 
-`repo` defaults to the current checkout's GitHub repository. Omitting `branch` asks GitHub for the repository's default branch. Every path segment is URL-encoded independently. The operation rejects an empty path or one beginning with `/`; GitHub reports missing files, directories, and invalid refs through the normal CLI error mapping. The model-facing prompt requires this operation, rather than `curl` or `wget`, for files hosted in GitHub repositories.
+`repo` 默认为当前 checkout 的 GitHub 仓库。省略 `branch` 时请求 GitHub 返回仓库的默认分支。每个路径段都会独立进行 URL 编码。该操作拒绝空路径或以 `/` 开头的路径;缺失文件、目录和无效 ref 由 GitHub 通过常规 CLI 错误映射上报。面向模型的提示词要求,对于托管在 GitHub 仓库中的文件,应使用本操作而非 `curl` 或 `wget`。
 
-Single-issue and single-PR reads live in the `issue://<N>` / `pr://<N>` URL schemes (see `docs/tools/read.md`). They share `~/.omp/cache/github-cache.db` (override via `OMP_GITHUB_CACHE_DB`) and the `github.cache.softTtlSec` / `github.cache.hardTtlSec` / `github.cache.enabled` settings. The cache retains rendered Markdown plus the raw JSON payload returned by `gh`, including private bodies, comments, reviews, and review comments when comments are enabled; rows are scoped by the local GitHub credential fingerprint. Root and repo-scoped reads (`issue://`, `pr://owner/repo`) issue a live `gh issue list` / `gh pr list` for browsing; query params `state`, `limit`, `author`, `label` pass through to `gh` (`issue://` accepts `state=open|closed|all`; `pr://` also accepts `merged`). PR diffs ride the same cache under `pr://<N>/diff[/…]`: the listing, full diff, and per-file slices all share one `pr-diff` row keyed by repo and PR number.
+单 issue 和单 PR 读取位于 `issue://<N>` / `pr://<N>` URL 方案中(参见 `docs/tools/read.md`)。它们共享 `~/.omp/cache/github-cache.db`(可通过 `OMP_GITHUB_CACHE_DB` 覆盖)以及 `github.cache.softTtlSec` / `github.cache.hardTtlSec` / `github.cache.enabled` 设置。缓存同时保留渲染后的 Markdown 和 `gh` 返回的原始 JSON payload,包括私有正文、评论、reviews 以及启用评论时的 review comments;各行按本地 GitHub 凭据指纹作用域。根级和仓库范围的读取(`issue://`、`pr://owner/repo`)会发起一次实时的 `gh issue list` / `gh pr list` 用于浏览;查询参数 `state`、`limit`、`author`、`label` 透传给 `gh`(`issue://` 接受 `state=open|closed|all`;`pr://` 还接受 …
 
 ### `pr_create`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` plus either `fill=true` or `title` |
-| Optional fields | `repo`, `title`, `body`, `base`, `head`, `draft`, `fill`, `reviewer[]`, `assignee[]`, `label[]` |
-| `gh` command | `gh pr create ...` with flags assembled from provided fields |
-| Batching | None |
-| Output | `# Created Pull Request ...` summary with URL, state, draft flag, base/head, author, created time, labels, optional body. `sourceUrl` is the created PR URL. |
+| 必填字段 | `op` 加上 `fill=true` 或 `title` |
+| 可选字段 | `repo`、`title`、`body`、`base`、`head`、`draft`、`fill`、`reviewer[]`、`assignee[]`、`label[]` |
+| `gh` 命令 | 由所提供字段组装 flag 的 `gh pr create ...` |
+| 批处理 | 无 |
+| 输出 | `# Created Pull Request ...` 摘要,包括 URL、状态、draft 标志、base/head、作者、创建时间、labels、可选 body。`sourceUrl` 为已创建 PR 的 URL。 |
 
-Branches:
-- `fill && (title || body !== undefined)` throws.
-- Non-empty `body` is written under a temp dir `gh-pr-body-*` in `os.tmpdir()`, passed as `--body-file`, then removed in `finally`.
-- After creation, the tool parses the returned URL and best-effort runs `gh pr view <number> --repo <repo> --json <GH_PR_FIELDS_NO_COMMENTS>`; failures there are swallowed.
+分支条件:
+- `fill && (title || body !== undefined)` 抛出异常。
+- 非空 `body` 写入 `os.tmpdir()` 中名为 `gh-pr-body-*` 的临时目录,作为 `--body-file` 传递,然后在 `finally` 中删除。
+- 创建后,工具解析返回的 URL,并尽力执行 `gh pr view <number> --repo <repo> --json <GH_PR_FIELDS_NO_COMMENTS>`;该步骤的失败会被吞掉。
 
 ### `pr_checkout`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `pr`, `force` |
-| `gh` command | For each requested PR: `gh pr view [<pr>] [--repo <repo>] --json <GH_PR_CHECKOUT_FIELDS>`; cross-repo PRs may also call `gh repo view <headRepository> --json <GH_REPO_CLONE_FIELDS>`. |
-| Batching | Yes. `pr` may be `string[]`; each PR is resolved in parallel, but git mutations are serialized per primary repo by `git.withRepoLock()`. |
-| Output | Single PR: checkout/worktree summary plus `details.repo`, `details.branch`, `details.worktreePath`, `details.remote`, `details.remoteBranch`, `details.checkouts`. Batched: `# <n> Pull Request Worktrees (...)` plus one section per PR and aggregated `details.checkouts`. On partial failure the header becomes `# <n>/<total> Pull Request Worktrees checked out (<k> failed)` with a trailing `## Failed` list. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`pr`、`force` |
+| `gh` 命令 | 对每个请求的 PR:`gh pr view [<pr>] [--repo <repo>] --json <GH_PR_CHECKOUT_FIELDS>`;跨仓库 PR 还可能调用 `gh repo view <headRepository> --json <GH_REPO_CLONE_FIELDS>`。 |
+| 批处理 | 是。`pr` 可为 `string[]`;每个 PR 并行解析,但 git 修改由 `git.withRepoLock()` 按主仓库串行化。 |
+| 输出 | 单个 PR:checkout/worktree 摘要加上 `details.repo`、`details.branch`、`details.worktreePath`、`details.remote`、`details.remoteBranch`、`details.checkouts`。批量:`# <n> Pull Request Worktrees (...)` 加每个 PR 一个部分,以及聚合的 `details.checkouts`。部分失败时,头部变为 `# <n>/<total> Pull Request Worktrees checked out (<k> failed)`,并在末尾附加 `## Failed` 列表。 |
 
-Worktree and metadata behavior:
-- Local branch name is always `pr-<number>`.
-- Worktree path is `getWorktreeDir("<number>-<repo-hash>")` = `path.join(getWorktreesDir(), "<number>-<repo-hash>")`, where `<number>` is the PR number and `<repo-hash>` is `hashPath(primaryRepoRoot)` (a 7-hex digest of the primary repo root). `getWorktreesDir()` resolves the base in this order: a valid `OMP_WORKTREE_DIR`, the applied `worktree.base` setting, then the profile/XDG-aware data-root default (normally `~/.omp/wt`). Both overrides expand a leading `~` and must resolve to an absolute path; an invalid relative value is ignored and resolution falls through. `resolveAvailableWorktreePath()` appends a `-2`/`-3`… suffix when the resulting path is already registered with git or present on disk.
-- Existing worktree detection is by branch ref `refs/heads/pr-<number>` from `git.worktree.list()`.
-- New worktree creation calls `git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal })` after verifying the path is neither already registered nor already present on disk.
-- For same-repo PRs, remote is `origin`. For cross-repo PRs, the tool resolves a clone URL for the head repo, reuses an existing remote with the same URL when possible, or creates `fork-<owner>` / `fork-<owner>-<n>`.
-- The branch push metadata is persisted with `git config` under the repository's shared `.git/config` as:
+Worktree 与元数据行为:
+- 本地分支名始终为 `pr-<number>`。
+- worktree 路径为 `getWorktreeDir("<number>-<repo-hash>")` = `path.join(getWorktreesDir(), "<number>-<repo-hash>")`,其中 `<number>` 是 PR 编号,`<repo-hash>` 是 `hashPath(primaryRepoRoot)`(主仓库根路径的 7 位十六进制摘要)。`getWorktreesDir()` 按以下顺序解析基目录:有效的 `OMP_WORKTREE_DIR`、已应用的 `worktree.base` 设置,再是基于 profile/XDG 的数据根默认(通常为 `~/.omp/wt`)。两种覆盖方式都会展开前导的 `~`,且必须解析为绝对路径;无效的相对值会被忽略,解析回退到下一级。当解析出的路径已被 git 注册或已存在于磁盘上时,`resolveAvailableWorktreePath()` 会追加 `-2`/`-3`… 后缀。
+- 已存在 worktree 的检测通过 `git.worktree.list()` 获取分支 ref `refs/heads/pr-<number>`。
+- 新建 worktree 在验证路径既未被注册也不存在于磁盘上后,调用 `git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal })`。
+- 对于同仓库 PR,remote 为 `origin`。对于跨仓库 PR,工具解析 head 仓库的 clone URL,尽可能复用具有相同 URL 的现有 remote,或创建 `fork-<owner>` / `fork-<owner>-<n>`。
+- 分支推送元数据通过 `git config` 持久化到仓库共享的 `.git/config` 中:
   - `branch.pr-<number>.remote`
   - `branch.pr-<number>.merge`
   - `branch.pr-<number>.pushRemote`
@@ -147,161 +147,161 @@ Worktree and metadata behavior:
   - `branch.pr-<number>.ompPrUrl`
   - `branch.pr-<number>.ompPrIsCrossRepository`
   - `branch.pr-<number>.ompPrMaintainerCanModify`
-- If `refs/heads/pr-<number>` already exists at a different commit, checkout fails unless `force=true`, in which case `git branch --force` resets it to the fetched PR head.
-- If a matching worktree already exists, the tool reuses it and reports `reused: true`.
+- 如果 `refs/heads/pr-<number>` 已存在但指向不同的 commit,checkout 会失败,除非 `force=true`,此时 `git branch --force` 将其重置为已 fetch 的 PR head。
+- 如果匹配的 worktree 已存在,工具会复用它并报告 `reused: true`。
 
 ### `pr_push`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `branch`, `forceWithLease` |
-| `gh` command | None. This path uses git, not `gh`. |
-| Batching | None |
-| Output | `# Pushed Pull Request Branch` summary with local branch, remote, remote branch, remote URL, PR URL, and force-with-lease flag. `sourceUrl = prUrl` when known. |
+| 必填字段 | `op` |
+| 可选字段 | `branch`、`forceWithLease` |
+| `gh` 命令 | 无。该路径使用 git,而不是 `gh`。 |
+| 批处理 | 无 |
+| 输出 | `# Pushed Pull Request Branch` 摘要,包括本地分支、remote、remote 分支、remote URL、PR URL 和 force-with-lease 标志。在已知时 `sourceUrl = prUrl`。 |
 
-Push target resolution reads the `branch.<name>.ompPrHeadRef`, `pushRemote`/`remote`, `ompPrUrl`, `ompPrMaintainerCanModify`, and `ompPrIsCrossRepository` git-config keys written by `pr_checkout`. If the current checked-out branch matches the target branch, the source ref is `HEAD`; otherwise it pushes `refs/heads/<branch>`. The refspec is `HEAD:refs/heads/<headRef>` or `refs/heads/<branch>:refs/heads/<headRef>`.
+推送目标解析读取由 `pr_checkout` 写入的 `branch.<name>.ompPrHeadRef`、`pushRemote`/`remote`、`ompPrUrl`、`ompPrMaintainerCanModify` 和 `ompPrIsCrossRepository` git config 项。如果当前 checkout 的分支与目标分支匹配,源 ref 为 `HEAD`;否则推送 `refs/heads/<branch>`。refspec 为 `HEAD:refs/heads/<headRef>` 或 `refs/heads/<branch>:refs/heads/<headRef>`。
 
 ### `search_issues`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` |
-| `gh` command | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:issue" -F per_page=<limit>` |
-| Batching | None |
-| Output | `# GitHub issues search`, echoed query, optional repo, result count, then one bullet per issue with repo/state/author/labels/timestamps/URL. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`query`、`limit`、`since`、`until`、`dateField` |
+| `gh` 命令 | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:issue" -F per_page=<limit>` |
+| 批处理 | 无 |
+| 输出 | `# GitHub issues search`,回显 query、可选 repo、结果数量,然后每条 issue 一行,包含 repo/state/作者/labels/时间戳/URL。 |
 
-`repo` defaults to the current checkout's `owner/repo` via `resolveSearchRepoScope()` when omitted. The default is suppressed when the composed query already contains a leading `repo:`/`org:`/`user:`/`owner:` qualifier or when `gh repo view` fails to resolve the current checkout (e.g. outside a github remote).
+`repo` 在省略时通过 `resolveSearchRepoScope()` 默认为当前 checkout 的 `owner/repo`。当组合后的 query 已包含前导的 `repo:`/`org:`/`user:`/`owner:` 限定符,或 `gh repo view` 无法解析当前 checkout(例如不在 github remote 内)时,此默认会被抑制。
 
 ### `search_prs`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` |
-| `gh` command | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:pr" -F per_page=<limit>` |
-| Batching | None |
-| Output | Same shape as `search_issues`, labeled as pull requests. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`query`、`limit`、`since`、`until`、`dateField` |
+| `gh` 命令 | `gh api -X GET /search/issues -f q="<query> [date qualifier] [repo:<repo>] is:pr" -F per_page=<limit>` |
+| 批处理 | 无 |
+| 输出 | 形状与 `search_issues` 相同,标记为 pull requests。 |
 
-`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
+`repo` 在省略时默认为当前 checkout 的 `owner/repo`,与 `search_issues` 相同。
 
 ### `search_code`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op`, `query` |
-| Optional fields | `repo`, `limit` |
-| `gh` command | `gh api -X GET /search/code -f q="<query> [repo:<repo>]" -F per_page=<limit> -H "Accept: application/vnd.github.text-match+json"` |
-| Batching | None |
-| Output | `# GitHub code search`, result count, then one bullet per match with path, repo, short commit SHA, URL, and first normalized text-match fragment line when present. |
+| 必填字段 | `op`、`query` |
+| 可选字段 | `repo`、`limit` |
+| `gh` 命令 | `gh api -X GET /search/code -f q="<query> [repo:<repo>]" -F per_page=<limit> -H "Accept: application/vnd.github.text-match+json"` |
+| 批处理 | 无 |
+| 输出 | `# GitHub code search`,结果数量,然后每条匹配一项,包含 path、repo、缩短的 commit SHA、URL,以及存在时的第一个规范化 text-match 片段行。 |
 
-`repo` defaults to the current checkout's `owner/repo` as in `search_issues`. `since` and `until` are explicitly rejected for this op because GitHub code search has no supported date qualifier.
+`repo` 在省略时默认为当前 checkout 的 `owner/repo`,与 `search_issues` 相同。由于 GitHub 代码搜索不支持日期限定符,该操作显式拒绝 `since` 和 `until`。
 
 ### `search_commits`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `query`, `limit`, `since`, `until`, `dateField` (accepted but ignored; commit searches use `committer-date`) |
-| `gh` command | `gh api -X GET /search/commits -f q="<query> [committer-date qualifier] [repo:<repo>]" -F per_page=<limit>` |
-| Batching | None |
-| Output | `# GitHub commits search`, result count, then one bullet per commit: short SHA + first commit-message line, repo, author, date, URL. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`query`、`limit`、`since`、`until`、`dateField`(接受但忽略;提交搜索使用 `committer-date`) |
+| `gh` 命令 | `gh api -X GET /search/commits -f q="<query> [committer-date qualifier] [repo:<repo>]" -F per_page=<limit>` |
+| 批处理 | 无 |
+| 输出 | `# GitHub commits search`,结果数量,然后每条 commit 一项:缩短的 SHA + 第一行 commit message、repo、作者、日期、URL。 |
 
-`repo` defaults to the current checkout's `owner/repo` as in `search_issues`.
+`repo` 在省略时默认为当前 checkout 的 `owner/repo`,与 `search_issues` 相同。
 
 ### `search_repos`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `query`, `limit`, `since`, `until`, `dateField` |
-| `gh` command | `gh api -X GET /search/repositories -f q="<query> [date qualifier]" -F per_page=<limit>` |
-| Batching | None |
-| Output | `# GitHub repositories search`, result count, then one bullet per repo with first description line, language, stars, forks, open issues, visibility, archive/fork flags, updated time, URL. |
+| 必填字段 | `op` |
+| 可选字段 | `query`、`limit`、`since`、`until`、`dateField` |
+| `gh` 命令 | `gh api -X GET /search/repositories -f q="<query> [date qualifier]" -F per_page=<limit>` |
+| 批处理 | 无 |
+| 输出 | `# GitHub repositories search`,结果数量,然后每个 repo 一项,包含第一行描述、语言、stars、forks、open issues、可见性、archive/fork 标志、更新时间、URL。 |
 
-`repo` is intentionally not used for this op. If `query`, `since`, and `until` are all omitted, the tool sends an empty GitHub repository-search query and the GitHub API may reject it.
+该操作有意不使用 `repo`。如果 `query`、`since` 和 `until` 同时省略,工具会发送空的 GitHub 仓库搜索 query,GitHub API 可能会拒绝该请求。
 
 ### `run_watch`
 
-| Aspect | Value |
+| 方面 | 值 |
 | --- | --- |
-| Required fields | `op` |
-| Optional fields | `repo`, `branch`, `run`, `tail` |
-| `gh` command | Repo resolution: `gh repo view --json url -q .url` when `repo` and run URL repo are both absent. Single-run mode uses `gh api --method GET /repos/<repo>/actions/runs/<runId>` and `gh api --method GET /repos/<repo>/actions/runs/<runId>/jobs`. Commit mode uses `gh api --method GET /repos/<repo>/branches/<branch>`, `gh api --method GET /repos/<repo>/actions/runs`, `gh api --method GET /repos/<repo>/actions/runs/<runId>/jobs`, and `gh api /repos/<repo>/actions/jobs/<jobId>/logs` for failed jobs. |
-| Batching | Implicit batching only in commit mode: all workflow runs for one commit are tracked together. |
-| Output | Streaming watch snapshots via `onUpdate`, then a final text report. On failure, appends `Full failed-job logs: artifact://<id>` and sets `details.artifactId`. |
+| 必填字段 | `op` |
+| 可选字段 | `repo`、`branch`、`run`、`tail` |
+| `gh` 命令 | 仓库解析:当 `repo` 与 run URL 的 repo 均缺省时,执行 `gh repo view --json url -q .url`。单 run 模式使用 `gh api --method GET /repos/<repo>/actions/runs/<runId>` 和 `gh api --method GET /repos/<repo>/actions/runs/<runId>/jobs`。Commit 模式使用 `gh api --method GET /repos/<repo>/branches/<branch>`、`gh api --method GET /repos/<repo>/actions/runs`、`gh api --method GET /repos/<repo>/actions/runs/<runId>/jobs`,以及 `gh api /repos/<repo>/actions/jobs/<jobId>/logs` 获取失败 job 的日志。 |
+| 批处理 | 仅 commit 模式隐式批处理:同一 commit 的所有 workflow run 会被一起跟踪。 |
+| 输出 | 通过 `onUpdate` 发出流式 watch 快照,然后返回最终文本报告。失败时附加 `Full failed-job logs: artifact://<id>` 并设置 `details.artifactId`。 |
 
-Watch flow:
-- `run` parsing accepts either a decimal run ID or a full run URL. URL repo must match explicit `repo` when both are given.
-- Poll interval is `3` seconds (`RUN_WATCH_INTERVAL_DEFAULT`) for the first `60` seconds of the watch (`RUN_WATCH_FAST_WINDOW_MS`), then `15` seconds (`RUN_WATCH_INTERVAL_SLOW`). Rate-limited poll errors back off at the slow interval and are retried up to `5` consecutive failures (`RUN_WATCH_MAX_POLL_FAILURES`). Commit mode gives up with a clear message after `90` seconds if no runs ever appear (`RUN_WATCH_NO_RUNS_GIVE_UP_MS`).
-- Failure grace period is fixed at 5 seconds (`RUN_WATCH_GRACE_DEFAULT`). When any failed job appears before completion, the tool emits a note, waits once, re-fetches state, then collects logs so concurrent failures are included.
-- Failed-job logs are fetched with `gh api /repos/<repo>/actions/jobs/<jobId>/logs` via `git.github.run()`, not `json()`. Non-zero exit leaves `available: false` instead of failing the whole watch.
-- Inline result includes only the last `tail` lines per failed job. The saved artifact contains full logs (`mode: "full"`).
-- In commit mode, success is intentionally double-checked: once all known runs are successful, the tool waits one more poll interval and succeeds only if the set of run IDs is unchanged. This avoids returning before late workflow runs appear for the same commit.
-- `details.watch` drives a specialized renderer in `packages/coding-agent/src/tools/gh-renderer.ts`; non-watch results fall back to generic text rendering.
+Watch 流程:
+- `run` 解析接受十进制 run ID 或完整 run URL。URL 中的 repo 必须在与显式 `repo` 同时给出时匹配。
+- 轮询间隔在 watch 的最初 `60` 秒(`RUN_WATCH_FAST_WINDOW_MS`)内为 `3` 秒(`RUN_WATCH_INTERVAL_DEFAULT`),之后为 `15` 秒(`RUN_WATCH_INTERVAL_SLOW`)。被限流的轮询错误以慢间隔退避,最多连续重试 `5` 次失败(`RUN_WATCH_MAX_POLL_FAILURES`)。Commit 模式下,如果始终没有 run 出现,会在 `90` 秒后以明确消息放弃(`RUN_WATCH_NO_RUNS_GIVE_UP_MS`)。
+- 失败宽限期固定为 5 秒(`RUN_WATCH_GRACE_DEFAULT`)。当任何失败 job 在完成前出现,工具会发出提示,等待一次,重新拉取状态,然后收集日志,以便包含并发的失败。
+- 失败 job 的日志通过 `gh api /repos/<repo>/actions/jobs/<jobId>/logs` 经由 `git.github.run()` 获取,而不是 `json()`。非零退出码会留下 `available: false`,而不是让整个 watch 失败。
+- 内联结果仅包含每个失败 job 的最后 `tail` 行。已保存的产物包含完整日志(`mode: "full"`)。
+- 在 commit 模式下,成功会被刻意双重确认:一旦所有已知 run 成功,工具会再等待一个轮询间隔,只有当 run ID 集合保持不变时才标记成功。这避免了同一 commit 的后发 workflow run 出现之前就提前返回。
+- `details.watch` 驱动 `packages/coding-agent/src/tools/gh-renderer.ts` 中的专用渲染器;非 watch 结果回退到通用文本渲染。
 
-## Side Effects
-- Filesystem
-  - `pr_create` may create a temp dir under `os.tmpdir()` named `gh-pr-body-*`, write `body.md`, then remove the dir in `finally`.
-  - `pr_checkout` may create worktree directories named `<pr-number>-<repo-hash>` under the base selected by `OMP_WORKTREE_DIR`, then `worktree.base`, then the profile/XDG-aware default (normally `~/.omp/wt`), and add git worktrees there.
-  - `run_watch` may write a session artifact with full failed-job logs.
-- Network
-  - Every op shells out to `gh`, which then talks to GitHub APIs except `pr_push`.
-  - `pr_push` uses git network transport to the configured remote.
-- Subprocesses / native bindings
-  - All `gh` calls use `Bun.spawn(["gh", ...args])`.
-  - `pr_checkout` and `pr_push` also invoke git helpers from `packages/coding-agent/src/utils/git.ts`.
-- Session state (transcript, memory, jobs, checkpoints, registries)
-  - `run_watch` consumes `session.allocateOutputArtifact()` when failed-job logs are persisted.
-  - Returned `details` objects carry run/checkouts metadata for the renderer/UI.
-- User-visible prompts / interactive UI
-  - `gh` interactive editor fallback is suppressed for `pr_create` by forcing either `--body-file` or `--body ""`.
-  - `gh-renderer` provides compact headers for all ops and a custom live watch view for `run_watch`.
-- Background work / cancellation
-  - `run_watch` loops until success/failure and uses `scheduler.wait()` between polls.
-  - `GithubTool.execute()` is wrapped in `untilAborted()`; `git.github.run()` forwards the abort signal into `Bun.spawn()`.
+## 副作用
+- 文件系统
+  - `pr_create` 可能在 `os.tmpdir()` 下创建名为 `gh-pr-body-*` 的临时目录,写入 `body.md`,然后在 `finally` 中删除该目录。
+  - `pr_checkout` 可能创建 worktree 目录,命名为 `<pr-number>-<repo-hash>`,位于由 `OMP_WORKTREE_DIR`、然后 `worktree.base`、再后是基于 profile/XDG 的默认(通常为 `~/.omp/wt`)所选定的基目录下,并在其中添加 git worktree。
+  - `run_watch` 可能写入包含失败 job 完整日志的会话产物。
+- 网络
+  - 除 `pr_push` 外的每个操作都会 shell 出去调用 `gh`,由其与 GitHub API 通信。
+  - `pr_push` 使用 git 网络传输与所配置的 remote 通信。
+- 子进程 / 原生绑定
+  - 所有 `gh` 调用都使用 `Bun.spawn(["gh", ...args])`。
+  - `pr_checkout` 和 `pr_push` 还会调用 `packages/coding-agent/src/utils/git.ts` 中的 git 辅助函数。
+- 会话状态(会话记录、记忆、jobs、checkpoints、注册表)
+  - `run_watch` 在持久化失败 job 日志时会占用 `session.allocateOutputArtifact()`。
+  - 返回的 `details` 对象携带 run/checkouts 元数据,供渲染器/UI 使用。
+- 用户可见的提示 / 交互式 UI
+  - 通过强制使用 `--body-file` 或 `--body ""` 来抑制 `pr_create` 的 `gh` 交互式编辑器回退。
+  - `gh-renderer` 为所有操作提供紧凑的 header,并为 `run_watch` 提供自定义的实时 watch 视图。
+- 后台工作 / 取消
+  - `run_watch` 循环直到成功/失败,并在轮询之间使用 `scheduler.wait()`。
+  - `GithubTool.execute()` 被包装在 `untilAborted()` 中;`git.github.run()` 将 abort signal 转发到 `Bun.spawn()`。
 
-## Limits & Caps
-- Search result default: `10` (`SEARCH_LIMIT_DEFAULT` in `packages/coding-agent/src/tools/gh.ts`).
-- Search result max: `50` (`SEARCH_LIMIT_MAX`).
-- PR file preview inside the `pr://` view: first `50` files only (`FILE_PREVIEW_LIMIT` in `gh.ts`). For aggregate diffs rejected at GitHub's 20,000-line limit, the `pr://<N>/diff` fetcher falls back to the paginated files API (`100` files per page, at most `3000` files); binary or individually oversized patches remain listed with an unavailable-patch marker.
-- Run-watch poll interval: `3s` for the first `60s`, then `15s` (`RUN_WATCH_INTERVAL_DEFAULT`, `RUN_WATCH_FAST_WINDOW_MS`, `RUN_WATCH_INTERVAL_SLOW`); commit mode with no runs gives up after `90s` (`RUN_WATCH_NO_RUNS_GIVE_UP_MS`); up to `5` consecutive rate-limited poll failures are tolerated (`RUN_WATCH_MAX_POLL_FAILURES`).
-- Run-watch failure grace period: `5s` (`RUN_WATCH_GRACE_DEFAULT`).
-- Run-watch failed-log tail default: `15` lines (`RUN_WATCH_TAIL_DEFAULT`).
-- Run-watch failed-log tail max: `200` lines (`RUN_WATCH_TAIL_MAX`).
-- PR review comments page size: `100` (`REVIEW_COMMENTS_PAGE_SIZE`).
-- Actions jobs page size: `100` (`RUN_JOBS_PAGE_SIZE`).
-- Search and tail numeric inputs are floored with `Math.floor()`, clamped to the max, and rejected when non-finite or `<= 0`.
-- `pr_checkout` batch fan-out is unbounded in tool code; all requested PRs are launched with `Promise.allSettled()` so individual failures surface as a partial result instead of aborting the batch.
+## 限制与上限
+- 搜索结果默认值:`10`(`packages/coding-agent/src/tools/gh.ts` 中的 `SEARCH_LIMIT_DEFAULT`)。
+- 搜索结果最大值:`50`(`SEARCH_LIMIT_MAX`)。
+- `pr://` 视图中的 PR 文件预览:仅前 `50` 个文件(`gh.ts` 中的 `FILE_PREVIEW_LIMIT`)。对于达到 GitHub 20,000 行限制而拒绝的聚合 diff,`pr://<N>/diff` 获取器会回退到分页 files API(每页 `100` 个文件,最多 `3000` 个文件);二进制或单个体积过大的 patch 仍会列出,并带有 unavailable-patch 标记。
+- Run-watch 轮询间隔:最初 `60s` 内为 `3s`,之后为 `15s`(`RUN_WATCH_INTERVAL_DEFAULT`、`RUN_WATCH_FAST_WINDOW_MS`、`RUN_WATCH_INTERVAL_SLOW`);无 run 的 commit 模式在 `90s` 后放弃(`RUN_WATCH_NO_RUNS_GIVE_UP_MS`);最多容忍连续 `5` 次被限流的轮询失败(`RUN_WATCH_MAX_POLL_FAILURES`)。
+- Run-watch 失败宽限期:`5s`(`RUN_WATCH_GRACE_DEFAULT`)。
+- Run-watch 失败日志尾部默认值:`15` 行(`RUN_WATCH_TAIL_DEFAULT`)。
+- Run-watch 失败日志尾部最大值:`200` 行(`RUN_WATCH_TAIL_MAX`)。
+- PR review comments 页面大小:`100`(`REVIEW_COMMENTS_PAGE_SIZE`)。
+- Actions jobs 页面大小:`100`(`RUN_JOBS_PAGE_SIZE`)。
+- 搜索和 tail 数值输入会通过 `Math.floor()` 向下取整,被限制到最大值,在非有限或 `<= 0` 时被拒绝。
+- `pr_checkout` 批处理扇出在工具代码中无界;所有请求的 PR 通过 `Promise.allSettled()` 并发启动,使得单个失败以部分结果形式呈现,而不是中止整个批次。
 
-## Errors
-- Tool creation is skipped entirely when `gh` is not installed.
-- `git.github.run()` throws `ToolError("GitHub CLI (gh) is not installed...")` if `gh` is missing at execution time.
-- `git.github.text/json()` map common failures to model-facing messages:
-  - not authenticated → `GitHub CLI is not authenticated. Run \`gh auth login\`.`
-  - missing repo context without explicit `repo` → `GitHub repository context is unavailable. Pass \`repo\` explicitly or run the tool inside a GitHub checkout.`
-  - otherwise stderr/stdout text, or fallback `GitHub CLI command failed: gh ...`
-- `json()` also throws on empty stdout or invalid JSON.
-- Local validation errors throw `ToolError`, including:
-  - missing required per-op fields (`path` for `file_read`, `query` for `search_code`, `title` unless `fill=true`)
-  - invalid numeric `limit` / `tail`
-  - invalid `since` / `until` date bound
-  - invalid `run` format
-  - `fill` combined with `title` or `body`
-  - missing git repo / branch / HEAD context for checkout, push, or watch
-  - `pr_push` on a branch without `ompPrHeadRef` metadata
-  - conflicting existing worktree path or branch without `force`
-  - an absolute `file_read` path (a leading `/`)
-- `run_watch` treats failed-job log fetches specially: missing log content does not fail the watch; it marks that log `available: false` and prints `Log tail unavailable.` / `Full log unavailable.`.
-- `pr_create` swallows only the post-create best-effort `gh pr view` refresh; the create step itself still fails normally.
+## 错误
+- 当 `gh` 未安装时,工具创建被完全跳过。
+- 如果在执行时 `gh` 缺失,`git.github.run()` 抛出 `ToolError("GitHub CLI (gh) is not installed...")`。
+- `git.github.text/json()` 将常见错误映射为面向模型的消息:
+  - 未认证 → `GitHub CLI is not authenticated. Run \`gh auth login\`.`
+  - 缺少显式 `repo` 的仓库上下文 → `GitHub repository context is unavailable. Pass \`repo\` explicitly or run the tool inside a GitHub checkout.`
+  - 其他情况为 stderr/stdout 文本,或回退的 `GitHub CLI command failed: gh ...`
+- `json()` 还在 stdout 为空或 JSON 无效时抛出异常。
+- 本地校验错误抛出 `ToolError`,包括:
+  - 缺少按操作要求的必填字段(`file_read` 缺少 `path`,`search_code` 缺少 `query`,缺少 `title` 除非 `fill=true`)
+  - 无效的数值型 `limit` / `tail`
+  - 无效的 `since` / `until` 日期边界
+  - 无效的 `run` 格式
+  - `fill` 与 `title` 或 `body` 同时使用
+  - checkout、push 或 watch 缺少 git 仓库 / 分支 / HEAD 上下文
+  - `pr_push` 在没有 `ompPrHeadRef` 元数据的分支上
+  - 冲突的现有 worktree 路径或没有 `force` 的分支
+  - `file_read` 的绝对路径(以 `/` 开头)
+- `run_watch` 对失败 job 日志获取做特殊处理:缺失的日志内容不会导致 watch 失败;它将该日志标记为 `available: false` 并打印 `Log tail unavailable.` / `Full log unavailable.`。
+- `pr_create` 仅吞掉创建后尽力而为的 `gh pr view` 刷新;创建步骤本身仍按正常方式失败。
 
-## Notes
-- `appendRepoFlag()` intentionally skips `--repo` when the identifier argument is already a full GitHub URL; that lets `gh` derive repo/number from the URL.
-- `normalizePrIdentifierList()` accepts `reviewer`, `assignee`, and `label` arrays too; the helper name is broader than its callers.
-- `pr_push` depends on `pr_checkout` having run first for that local branch; there is no alternate metadata source.
-- `pr_checkout` stores push metadata in branch config, not in the worktree directory. Reusing the same `pr-<number>` branch reuses those config keys.
-- Worktree write serialization is keyed by the primary repo root, not the current worktree path, because git worktrees share `.git/config`, `packed-refs`, commit-graph, and worktree metadata files.
-- `search_repos` is the only search op that never forwards `repo`; repository scoping must be expressed in the query itself.
-- `run_watch` success on commit mode means “all observed runs succeeded and no additional runs appeared one poll later”, not merely “latest poll looked green”.
-- The TUI renderer collapses failed log previews unless the result view is expanded; the underlying text result still contains the same tailed lines plus any artifact reference.
+## 备注
+- 当标识符参数本身已是完整的 GitHub URL 时,`appendRepoFlag()` 有意跳过 `--repo`;这使得 `gh` 可以从 URL 派生 repo/编号。
+- `normalizePrIdentifierList()` 也接受 `reviewer`、`assignee` 和 `label` 数组;该辅助函数的名称比其调用方所体现的更宽泛。
+- `pr_push` 依赖于该本地分支先运行过 `pr_checkout`;没有其他元数据来源。
+- `pr_checkout` 将推送元数据存储在分支配置中,而不是 worktree 目录中。复用同一个 `pr-<number>` 分支会复用这些配置项。
+- Worktree 写入串行化以主仓库根路径为键,而不是以当前 worktree 路径为键,因为 git worktree 共享 `.git/config`、`packed-refs`、commit-graph 和 worktree 元数据文件。
+- `search_repos` 是唯一从不转发 `repo` 的搜索操作;仓库作用域必须在 query 本身中表达。
+- `run_watch` 在 commit 模式下的成功意味着"所有观察到的 run 都已成功,且一个轮询周期后没有出现新的 run",而不仅仅是"最近一次轮询看起来是绿色"。
+- TUI 渲染器在结果视图未展开时会折叠失败日志预览;底层文本结果仍包含相同的尾部行以及任何产物引用。

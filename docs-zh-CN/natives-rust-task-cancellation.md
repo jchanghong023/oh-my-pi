@@ -1,8 +1,8 @@
-# Native Rust task execution and cancellation (`pi-natives`)
+# Native Rust 任务执行与取消（`pi-natives`）
 
-This document describes how `crates/pi-natives` schedules native work and how cancellation flows from JS options (`timeoutMs`, `AbortSignal`) into Rust execution.
+本文档描述 `crates/pi-natives` 如何调度原生工作，以及取消如何从 JS 选项（`timeoutMs`、`AbortSignal`）流入到 Rust 执行过程。
 
-## Implementation files
+## 实现文件
 
 - `crates/pi-natives/src/task.rs`
 - `crates/pi-natives/src/grep.rs`
@@ -18,61 +18,61 @@ This document describes how `crates/pi-natives` schedules native work and how ca
 - `crates/pi-natives/src/text.rs`
 - `crates/pi-natives/src/ps.rs`
 
-## Core primitives (`task.rs`)
+## 核心原语（`task.rs`）
 
-`task.rs` defines:
+`task.rs` 定义了：
 
 1. `task::blocking(tag, cancel_token, work)`
-   - Wraps `napi::AsyncTask` / `Task`.
-   - `compute()` runs on libuv worker threads.
-   - Returns a JS `Promise<T>` for exported functions.
-   - Records a profiling sample through `profile_region(tag)`.
+   - 包装 `napi::AsyncTask` / `Task`。
+   - `compute()` 在 libuv 工作线程上运行。
+   - 为导出函数返回 JS 的 `Promise<T>`。
+   - 通过 `profile_region(tag)` 记录一份性能剖析采样。
 
 2. `task::future(env, tag, work)`
-   - Wraps `env.spawn_future(...)`.
-   - Runs async work on Tokio's runtime.
-   - Returns `PromiseRaw<'env, T>`.
-   - Records a profiling sample through `profile_region(tag)`.
+   - 包装 `env.spawn_future(...)`。
+   - 在 Tokio 的运行时上运行异步工作。
+   - 返回 `PromiseRaw<'env, T>`。
+   - 通过 `profile_region(tag)` 记录一份性能剖析采样。
 
 3. `CancelToken` / `AbortToken` / `AbortReason`
-   - `CancelToken::new(timeout_ms, signal)` wraps the shared `pi_shell::cancel::CancelToken`, adding an optional JS `AbortSignal` bridge.
-   - `CancelToken::heartbeat()` is cooperative cancellation for blocking loops.
-   - `CancelToken::wait()` asynchronously waits for signal or timeout.
-   - `CancelToken::abort_token()` returns an abort handle backed by the shared flag when one already exists; without a flag, the handle is inert. `emplace_abort_token()` lazily installs the flag and returns a live handle. `CancelToken::new` uses the latter to bridge a JS `AbortSignal` to `AbortReason::Signal`.
-   - `CancelToken::aborted()` provides a non-blocking signal/deadline check, and `into_core()` transfers the token to `pi-shell`.
-   - `AbortToken::abort(reason)` lets external code request abort. Reasons are `Unknown`, `Timeout`, `Signal`, and `User`.
+   - `CancelToken::new(timeout_ms, signal)` 包装共享的 `pi_shell::cancel::CancelToken`，并可选择性地桥接一个 JS `AbortSignal`。
+   - `CancelToken::heartbeat()` 用于阻塞循环的协作式取消。
+   - `CancelToken::wait()` 异步等待信号或超时。
+   - `CancelToken::abort_token()` 在共享标志已存在时返回一个由该标志支撑的 abort 句柄；没有标志时句柄是无效的。`emplace_abort_token()` 惰性安装标志并返回一个可用的句柄。`CancelToken::new` 使用后者将 JS `AbortSignal` 桥接到 `AbortReason::Signal`。
+   - `CancelToken::aborted()` 提供非阻塞的信号/截止时间检查，`into_core()` 将 token 转移给 `pi-shell`。
+   - `AbortToken::abort(reason)` 允许外部代码请求 abort。Reason 取值为 `Unknown`、`Timeout`、`Signal` 与 `User`。
 
-## `blocking` vs `future`: execution model and selection
+## `blocking` 与 `future`：执行模型与选择
 
-### Use `task::blocking`
+### 使用 `task::blocking`
 
-Use when work is CPU-heavy or fundamentally synchronous/blocking:
+在工作是 CPU 密集型或本质上是同步/阻塞时使用：
 
-- regex/file scanning (`grep`, `glob`, `fuzzyFind`)
-- ast-grep search/edit worker work
-- HTML conversion
-- clipboard image read
+- 正则/文件扫描（`grep`、`glob`、`fuzzyFind`）
+- ast-grep 搜索/编辑工作线程工作
+- HTML 转换
+- 剪贴板图像读取
 
-Behavior:
+行为：
 
-- Work closure receives a cloned `CancelToken`.
-- Cancellation is only observed where code checks `ct.heartbeat()?`.
-- Closure `Err(...)` rejects the JS promise.
+- 工作闭包接收一个克隆的 `CancelToken`。
+- 取消仅在代码检查 `ct.heartbeat()?` 的位置被观察到。
+- 闭包返回 `Err(...)` 会使 JS Promise 被 reject。
 
-### Use `task::future`
+### 使用 `task::future`
 
-Use when work must `await` async operations:
+在工作必须 `await` 异步操作时使用：
 
-- shell session orchestration (`Shell.run`, `executeShell`)
-- PTY outer promise (`PtySession.start`) before it enters `spawn_blocking`
-- async task orchestration that must bridge completion and cancellation
+- shell 会话编排（`Shell.run`、`executeShell`）
+- PTY 外层 Promise（`PtySession.start`），在进入 `spawn_blocking` 之前
+- 必须桥接完成与取消的异步任务编排
 
-Behavior:
+行为：
 
-- Future code can race normal completion against `ct.wait()`.
-- On cancel path, async implementations typically cancel subordinate machinery and may force-abort after a grace timeout.
+- Future 代码可以针对 `ct.wait()` 与正常完成进行竞速。
+- 在取消路径上，异步实现通常会取消其下层机制，并可能在宽限超时之后强制中止。
 
-## JS API ↔ Rust export mapping (task/cancel relevant)
+## JS API ↔ Rust 导出映射（与任务/取消相关）
 
 | JS-facing API                                                 | Rust export                 | Scheduler                                                      | Cancellation hookup                                                                                                                  |
 | ------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -90,11 +90,11 @@ Behavior:
 | `encodeSixel(...)`                                            | `encode_sixel`              | synchronous native function                                    | none                                                                                                                                 |
 | `readImageFromClipboard()`                                    | `read_image_from_clipboard` | `task::blocking("clipboard.read_image", (), ...)`              | none (`()` token)                                                                                                                    |
 
-`text.rs`, `tokens.rs`, `keys.rs`, most synchronous `ps.rs` functions, SIXEL encoding, and synchronous utility exports do not use `task::blocking`/`task::future` cancellation. The async `Process.terminate()` and `Process.waitForExit()` methods do.
+`text.rs`、`tokens.rs`、`keys.rs`、大部分同步的 `ps.rs` 函数、SIXEL 编码以及同步的工具类导出都不使用 `task::blocking`/`task::future` 取消。异步的 `Process.terminate()` 与 `Process.waitForExit()` 方法会使用。
 
-## Cancellation lifecycle and state transitions
+## 取消生命周期与状态转换
 
-### `CancelToken` lifecycle
+### `CancelToken` 生命周期
 
 ```text
 Created
@@ -111,109 +111,109 @@ Aborted
   └─ shared flag wakes waiters; a later abort call can replace the stored reason, while a deadline is evaluated independently
 ```
 
-### Before-start vs mid-execution cancellation
+### 启动前与执行中的取消
 
-- **Before start / before first cancellation check**:
-  - `task::future` users that race on `ct.wait()` can resolve cancellation once they enter `select!`.
-  - `task::blocking` users only observe cancellation when closure code reaches `heartbeat()`.
+- **启动前 / 第一次取消检查之前**：
+  - 在 `ct.wait()` 上进行竞速的 `task::future` 使用者，进入 `select!` 后即可立刻解析取消。
+  - `task::blocking` 使用者只有在闭包代码到达 `heartbeat()` 时才会观察到取消。
 
-- **Mid-execution**:
-  - `blocking`: next `heartbeat()` returns `Err("Aborted: ...")`.
-  - `future`: `ct.wait()` branch wins `select!`, then code cancels subordinate async machinery.
-  - shell: cancellation triggers a Tokio cancellation token, sends descendant termination waves, waits up to 2 seconds for the command task, then aborts the task if needed.
-  - PTY: heartbeat failure or `kill()` terminates PTY child/process targets and drains output briefly.
+- **执行过程中**：
+  - `blocking`：下一次 `heartbeat()` 返回 `Err("Aborted: ...")`。
+  - `future`：`ct.wait()` 分支在 `select!` 中胜出，然后代码会取消其下层的异步机制。
+  - shell：取消会触发一个 Tokio 取消 token，发送下层终止波，等待命令任务最多 2 秒，必要时中止该任务。
+  - PTY：`heartbeat` 失败或 `kill()` 会终止 PTY 子进程/目标进程并短暂排空输出。
 
-## Heartbeat expectations for long-running loops
+## 长运行循环的 heartbeat 期望
 
-`heartbeat()` must run at predictable cadence in loops with unbounded or large work sets.
+`heartbeat()` 必须在具有无界或大型工作集的循环中以可预测的节奏运行。
 
-Observed patterns:
+观察到的模式包括：
 
-- `glob` and `fuzzyFind` pass heartbeat callbacks into `pi-walker` traversal and also check result-processing loops.
-- `grep` checks before and during expensive search and passes the token through its scan/search workers.
-- `run_pty_sync` checks every loop tick with a maximum 16ms wait cadence.
-- `listWorkspace` checks during traversal.
+- `glob` 与 `fuzzyFind` 将 heartbeat 回调传入 `pi-walker` 的遍历过程，并同时检查结果处理循环。
+- `grep` 在执行昂贵搜索之前与过程中进行检查，并将 token 透传给其 scan/search 工作线程。
+- `run_pty_sync` 在每个循环 tick 上检查，最大等待节奏为 16ms。
+- `listWorkspace` 在遍历过程中进行检查。
 
-Practical rule: no loop over external-size input should exceed a short bounded interval without a heartbeat.
+实践准则：对于外部规模输入的循环，缺少 heartbeat 的间隔不应超过一个较短的限定时长。
 
-## Failure behavior and error propagation to JS
+## 失败行为与错误向 JS 的传播
 
-### Blocking tasks
+### 阻塞任务
 
-Error path:
+错误路径：
 
-1. Closure returns `Err(napi::Error)` (including `heartbeat()` abort).
-2. `Task::compute()` returns `Err`.
-3. `AsyncTask` rejects JS promise.
+1. 闭包返回 `Err(napi::Error)`（包括 `heartbeat()` 触发的 abort）。
+2. `Task::compute()` 返回 `Err`。
+3. `AsyncTask` reject JS Promise。
 
-Typical error strings:
+典型的错误字符串：
 
 - `Aborted: Timeout`
 - `Aborted: Signal`
-- domain errors (`Failed to decode image: ...`, `Conversion error: ...`, etc.)
+- 领域错误（`Failed to decode image: ...`、`Conversion error: ...` 等）
 
-### Future tasks
+### Future 任务
 
-Error path:
+错误路径：
 
-1. Async body returns `Err(napi::Error)` or join failure is mapped (`... task failed: {err}`).
-2. `task::future`-spawned promise rejects.
-3. Shell and PTY command APIs model cancellation as structured results instead of rejection when the cancellation path wins: `exitCode` omitted, `cancelled` or `timedOut` set.
+1. 异步体返回 `Err(napi::Error)`，或 join 失败被映射为（`... task failed: {err}`）。
+2. 由 `task::future` 启动的 Promise 被 reject。
+3. Shell 与 PTY 命令 API 在取消路径胜出时，将取消建模为结构化结果而非 reject：`exitCode` 省略，`cancelled` 或 `timedOut` 被置位。
 
-### Cancellation reporting split
+### 取消报告的拆分
 
-- **Abort as error**: blocking exports using `heartbeat()?`.
-- **Abort as typed result**: shell/PTY command APIs that model cancellation in result structs.
+- **将 abort 视为错误**：使用 `heartbeat()?` 的阻塞型导出。
+- **将 abort 视为类型化结果**：在结果结构体中建模取消的 shell/PTY 命令 API。
 
-Choose one model per API and document it explicitly.
+每个 API 选择一种模型，并显式地在文档中记录。
 
-## Common pitfalls
+## 常见陷阱
 
-1. **Missing heartbeat in blocking loops**
-   - Symptom: timeout/signal appears ignored until loop ends.
-   - Fix: add `ct.heartbeat()?` at loop top and before expensive per-item steps.
+1. **阻塞循环中缺少 heartbeat**
+   - 现象：直到循环结束之前，timeout/signal 似乎被忽略。
+   - 修复：在循环顶部以及每个开销较大的单步操作前增加 `ct.heartbeat()?`。
 
-2. **Long uncancelable sections**
-   - Symptom: cancellation latency spikes during single large call (decode, sort, compression, parser invocation, etc.).
-   - Fix: split work into chunks with heartbeat boundaries; if impossible, document latency.
+2. **长时间不可取消的段落**
+   - 现象：在单次大调用（解码、排序、压缩、解析器调用等）期间，取消延迟出现尖峰。
+   - 修复：将工作拆分成带 heartbeat 边界的块；若无法拆分，则在文档中说明延迟。
 
-3. **Blocking async executor**
-   - Symptom: async API stalls when sync-heavy code runs directly in future.
-   - Fix: move CPU/sync blocks to `task::blocking` or `tokio::task::spawn_blocking`.
+3. **阻塞式异步执行器**
+   - 现象：当下同步的代码直接在 future 中运行时，异步 API 会停滞。
+   - 修复：将 CPU/同步代码块迁移到 `task::blocking` 或 `tokio::task::spawn_blocking`。
 
-4. **Inconsistent cancel semantics**
-   - Symptom: one API rejects on cancel, another resolves with flags, confusing callers.
-   - Fix: standardize per domain and keep docs aligned.
+4. **取消语义不一致**
+   - 现象：一个 API 在取消时 reject，另一个则以标志位 resolve，导致调用方困惑。
+   - 修复：按领域标准化，并保持文档同步。
 
-5. **Forgetting cancellation bridge in nested async tasks**
-   - Symptom: outer token is cancelled but inner readers/subprocess tasks keep running.
-   - Fix: bridge cancellation to inner token/signal and enforce grace timeout + forced abort fallback.
+5. **在嵌套异步任务中忘记取消桥接**
+   - 现象：外层 token 已被取消，但内部的 reader/子进程任务仍在继续运行。
+   - 修复：将取消桥接到内层 token/signal，并强制执行宽限超时 + 强制 abort 兜底。
 
-## Checklist for new cancellable exports
+## 新增可取消导出的检查清单
 
-1. Classify work correctly:
-   - CPU-bound or sync blocking -> `task::blocking`.
-   - async I/O / `await` orchestration -> `task::future`.
+1. 正确分类工作：
+   - CPU-bound 或同步阻塞 -> `task::blocking`。
+   - 异步 I/O / `await` 编排 -> `task::future`。
 
-2. Expose cancel inputs when needed:
-   - include `timeoutMs` and `signal` in `#[napi(object)]` options,
-   - create `let ct = task::CancelToken::new(timeout_ms, signal);`.
+2. 在需要时暴露取消输入：
+   - 在 `#[napi(object)]` options 中包含 `timeoutMs` 与 `signal`，
+   - 创建 `let ct = task::CancelToken::new(timeout_ms, signal);`。
 
-3. Wire cancellation through all layers:
-   - blocking loops: `ct.heartbeat()?` at stable intervals,
-   - async orchestration: race with `ct.wait()` and cancel sub-tasks/tokens.
+3. 在所有层次中连接取消：
+   - 阻塞循环：以稳定间隔调用 `ct.heartbeat()?`，
+   - 异步编排：与 `ct.wait()` 竞速，并取消子任务/子 token。
 
-4. Decide cancellation contract:
-   - reject promise with abort error, or
-   - resolve typed `{ cancelled, timedOut, ... }`,
-   - keep this contract consistent for the API family.
+4. 决定取消契约：
+   - 以 abort 错误 reject Promise，或
+   - resolve 为类型化的 `{ cancelled, timedOut, ... }`，
+   - 同一 API 族保持该契约一致。
 
-5. Propagate failures with context:
-   - map errors via `Error::from_reason(format!("...: {err}"))`,
-   - include stage-specific prefixes (`spawn`, `decode`, `wait`, etc.).
+5. 带上下文地传播失败：
+   - 通过 `Error::from_reason(format!("...: {err}"))` 映射错误，
+   - 包含阶段相关的前缀（`spawn`、`decode`、`wait` 等）。
 
-6. Handle before-start and mid-flight cancellation:
-   - cancellation check/await must happen before expensive body and during long execution.
+6. 处理启动前与执行中取消：
+   - 取消检查/await 必须发生在开销较大的主体之前，并在长执行过程中持续进行。
 
-7. Validate no executor misuse:
-   - no long sync work directly inside async futures without `spawn_blocking`/blocking task wrapper.
+7. 验证不存在执行器误用：
+   - 在异步 future 内不直接运行长时间同步工作，除非通过 `spawn_blocking`/阻塞任务包装。

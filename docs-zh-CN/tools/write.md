@@ -1,6 +1,6 @@
 # write
 
-> Create or overwrite a file, writable internal resource, archive entry, SQLite row, or merge-conflict resolution.
+> 创建或覆盖文件、可写内部资源、归档条目、SQLite 行，或合并冲突解决方案。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/write.ts`
@@ -74,10 +74,10 @@ Single-shot result.
    - Non-empty `content` is parsed with `Bun.JSON5.parse()`, must be an object, and is routed to insert/update helpers.
    - The scan cache is invalidated and the connection closes in `finally`.
 10. Otherwise it treats `path` as a plain filesystem file.
-   - It rejects high-confidence mis-dispatched read targets: a missing selector-shaped filename with empty content, or a missing semicolon-joined list of selector paths. Existing literal paths win; non-empty content is the escape hatch for a single deliberate selector-shaped filename.
-   - Plan-mode policy and path resolution run before mutation. Existing files pass the generated-file guard.
-   - ACP bridge `writeTextFile` is tried first when available; otherwise the session writethrough writes the content. LSP settings may format, synchronize, and diagnose the write.
-   - A leading shebang may add execute bits. The filesystem scan cache is invalidated.
+    - It rejects high-confidence mis-dispatched read targets: a missing selector-shaped filename with empty content, or a missing semicolon-joined list of selector paths. Existing literal paths win; non-empty content is the escape hatch for a single deliberate selector-shaped filename.
+    - Plan-mode policy and path resolution run before mutation. Existing files pass the generated-file guard.
+    - ACP bridge `writeTextFile` is tried first when available; otherwise the session writethrough writes the content. LSP settings may format, synchronize, and diagnose the write.
+    - A leading shebang may add execute bits. The filesystem scan cache is invalidated.
 11. The tool returns text plus optional diagnostics, executable, resolved-path, or device-dispatch metadata.
 
 ## Modes / Variants

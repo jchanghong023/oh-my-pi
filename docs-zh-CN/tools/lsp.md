@@ -1,6 +1,6 @@
 # lsp
 
-> Query language servers for diagnostics, navigation, symbols, renames, code actions, capabilities, and raw requests.
+> 查询语言服务器，获取诊断、导航、符号、重命名、代码操作、能力以及原始请求。
 
 ## Source
 - Entry: `packages/coding-agent/src/lsp/index.ts`

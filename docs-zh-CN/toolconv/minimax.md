@@ -1,30 +1,30 @@
-# MiniMax owned tool-calling format (`<minimax:tool_call>`)
+# MiniMax 拥有的工具调用格式（`<minimax:tool_call>`）
 
-OMP's `minimax` dialect is the prompt-driven, in-band tool protocol for MiniMax-family models. Calls are ordinary assistant text: one `<minimax:tool_call>` envelope contains one or more `<invoke>` elements. OMP executes the parsed calls and returns a `<function_results>` block in the next user turn. The format carries no tool-call ids, so calls and results are correlated by order.
+OMP 的 `minimax` 方言是面向 MiniMax 系列模型的、由提示驱动且内联的工具协议。调用是普通的助手文本：单个 `<minimax:tool_call>` 信封中包含一个或多个 `<invoke>` 元素。OMP 解析调用并在下一次用户回合中返回 `<function_results>` 块。该格式不携带工具调用 id，因此调用与结果按顺序对应。
 
-This reference describes OMP's implemented converter, not MiniMax's provider-native structured tool API. It is verified against `packages/ai/src/dialect/minimax.ts`, the shared XML scanner in `packages/ai/src/dialect/anthropic.ts`, prompt assembly in `packages/ai/src/dialect/catalog.ts`, and the streaming projection in `packages/ai/src/dialect/owned-stream.ts`.
+本参考描述的是 OMP 已实现的转换器，而非 MiniMax 供应商原生的结构化工具 API。它的实现依据包括 `packages/ai/src/dialect/minimax.ts`、`packages/ai/src/dialect/anthropic.ts` 中的共享 XML 扫描器、`packages/ai/src/dialect/catalog.ts` 中的提示词组装，以及 `packages/ai/src/dialect/owned-stream.ts` 中的流式投影。
 
-## Selection and request conversion
+## 选择与请求转换
 
-Set the format explicitly in `~/.omp/agent/config.yml` or a project/overlay config:
+在 `~/.omp/agent/config.yml` 或项目/覆盖配置中显式设置该格式：
 
 ```yaml
 tools:
   format: minimax
 ```
 
-`tools.format: minimax` forces this owned dialect for the session. In `auto` mode, OMP keeps provider-native tool calling unless the selected model explicitly has `supportsTools: false`; for a MiniMax-family model id, that fallback resolves to `minimax`. See [`tools.format`](../settings.md#tools-and-approvals).
+`tools.format: minimax` 会在本次会话中强制使用该自有方言。在 `auto` 模式下，除非所选模型显式声明 `supportsTools: false`，OMP 会保留供应商原生工具调用；对于 MiniMax 系列模型 id，该回退会解析为 `minimax`。参见 [`tools.format`](../settings.md#tools-and-approvals)。
 
-When an owned dialect is active, OMP:
+当自有方言生效时，OMP 会：
 
-1. removes the native structured `tools` field from the provider request;
-2. appends an in-band tool catalog and the MiniMax format guide to the system prompt;
-3. rewrites prior structured assistant calls and tool-result messages into this text protocol; and
-4. scans the model's text stream back into structured tool-call events.
+1. 从供应商请求中移除原生结构化 `tools` 字段；
+2. 向系统提示词追加内联工具目录和 MiniMax 格式说明；
+3. 将先前的结构化助手调用和工具结果消息改写为本文本协议；以及
+4. 将模型的文本流扫描回结构化的工具调用事件。
 
-## Tool definitions and prompt injection
+## 工具定义与提示词注入
 
-The injected prompt begins with `# Tools`, says calls are text rather than native provider tool messages, and lists the available functions inside `<tools></tools>`. Each line is a compact OpenAI-style function object containing the normalized wire schema:
+注入的提示词以 `# Tools` 开头，说明调用是文本而非供应商原生工具消息，并在 `<tools></tools>` 内列出可用函数。每一行都是一个紧凑的 OpenAI 风格函数对象，包含归一化后的线路 schema：
 
 ```text
 <tools>
@@ -32,11 +32,11 @@ The injected prompt begins with `# Tools`, says calls are text rather than nativ
 </tools>
 ```
 
-The catalog is followed by the MiniMax-specific guide from `packages/ai/src/dialect/minimax.md`. Its contract requires a listed function name, literal string/scalar bodies, JSON lists/objects, one envelope for a batch, and no model-authored result blocks.
+目录之后是来自 `packages/ai/src/dialect/minimax.md` 的 MiniMax 专用说明。其契约要求函数名必须出现在列表中、字符串/标量体保持字面量形式、列表/对象使用 JSON、批量调用使用单一信封，并且禁止模型自行生成结果块。
 
-## Tool-call envelope
+## 工具调用信封
 
-A single call is:
+单个调用如下：
 
 ```text
 <minimax:tool_call>
@@ -44,44 +44,44 @@ A single call is:
 </minimax:tool_call>
 ```
 
-Exact structure:
+精确结构如下：
 
-| Element | Meaning |
+| 元素 | 含义 |
 | --- | --- |
-| `<minimax:tool_call>…</minimax:tool_call>` | Required model-output envelope in the prompt contract. |
-| `<invoke name="TOOL">…</invoke>` | One call. `name` must be a listed tool. |
-| `<parameter name="ARG">VALUE</parameter>` | One named argument. Arguments occur directly inside the invoke. |
+| `<minimax:tool_call>…</minimax:tool_call>` | 提示词契约中要求的模型输出信封。 |
+| `<invoke name="TOOL">…</invoke>` | 一次调用。`name` 必须是已列出的工具。 |
+| `<parameter name="ARG">VALUE</parameter>` | 一个具名参数。参数直接出现在 invoke 内部。 |
 
-The renderer XML-escapes tool and argument names in attributes. Parameter bodies are deliberately **not** XML-escaped: this protocol is delimiter-matched rather than parsed as XML. For example, a string body is `a & b < c`, not `a &amp; b &lt; c`. A literal `</parameter>` is the one reserved sequence because it closes that argument.
+渲染器会对属性中的工具名和参数名做 XML 转义。参数体**不**做 XML 转义：该协议基于分隔符匹配，而非按 XML 解析。例如，字符串体写作 `a & b < c`，而不是 `a &amp; b &lt; c`。字面量 `</parameter>` 是唯一的保留序列，因为它会关闭当前参数。
 
-The scanner is more tolerant than the prompt contract. It accepts the namespaced wrapper above, an unprefixed `<tool_call>` wrapper, or a bare `<invoke>` outside a wrapper. Models should still emit the canonical `<minimax:tool_call>` form so behavior does not depend on recovery paths.
+扫描器比提示词契约更具容错性。它接受上述带命名空间的包装器、不带前缀的 `<tool_call>` 包装器，或独立于包装器之外的裸 `<invoke>`。模型仍应输出规范的 `<minimax:tool_call>` 形式，以保证行为不依赖恢复路径。
 
-## Argument encoding and coercion
+## 参数编码与强制转换
 
-Encoding uses the selected tool's schema:
+编码使用所选工具的 schema：
 
-| Declared/value kind | Rendered parameter body | Parsed value |
+| 声明/值类型 | 渲染后的参数体 | 解析后的值 |
 | --- | --- | --- |
-| Schema-declared string whose runtime value is a string | Verbatim text, including leading/trailing spaces and newlines | Verbatim string |
-| Number, boolean, `null`, array, or object | JSON | Parsed JSON value |
-| Value without a matching string schema | JSON, including quotes around a string | Parsed JSON when valid |
+| schema 声明为字符串且运行时值也是字符串 | 原样文本，包括首尾空格与换行 | 原样字符串 |
+| 数字、布尔值、`null`、数组或对象 | JSON | 解析后的 JSON 值 |
+| 没有匹配字符串 schema 的值 | JSON，字符串会包含引号 | 在合法时解析为 JSON |
 
-Example:
+示例：
 
 ```text
 <invoke name="write"><parameter name="path">notes/a & b.txt</parameter><parameter name="options">{"append":false,"tags":["x","y"]}</parameter></invoke>
 ```
 
-The scanner resolves string arguments from the supplied tool schemas. A parameter attribute can override that decision:
+扫描器根据提供的工具 schema 解析字符串参数。`string` 参数属性可以覆盖该决定：
 
-- `string="true"` (and any value except `false`, `0`, or `no`) forces verbatim string handling.
-- `string="false"`, `string="0"`, or `string="no"` forces JSON parsing even for a schema-declared string.
+- `string="true"`（以及除 `false`、`0`、`no` 之外的任意值）强制按原样字符串处理。
+- `string="false"`、`string="0"` 或 `string="no"` 强制按 JSON 解析，即使 schema 声明为字符串。
 
-For a non-string parameter, surrounding whitespace is trimmed only for the JSON parse. OMP uses its repair-capable JSON parser; if parsing still fails, the original body is retained as a string rather than dropping the argument. Empty bodies also remain empty strings. A parameter with no usable `name` is ignored.
+对于非字符串参数，仅在 JSON 解析阶段会裁剪两端空白。OMP 使用具备修复能力的 JSON 解析器；如果解析仍失败，则保留原始字符串体，而不是丢弃该参数。空体仍保留为空字符串。`name` 不可用的参数会被忽略。
 
-## Multiple and parallel calls
+## 多重与并行调用
 
-Parallel calls are sibling `<invoke>` elements inside one envelope, in emitted order:
+并行调用是同一信封内按输出顺序排列的兄弟 `<invoke>` 元素：
 
 ```text
 <minimax:tool_call>
@@ -90,11 +90,11 @@ Parallel calls are sibling `<invoke>` elements inside one envelope, in emitted o
 </minimax:tool_call>
 ```
 
-The scanner mints an internal id for each invoke because the wire format has no id. OMP can dispatch the resulting calls as a batch. Tool results must be returned in the same order; the result protocol has no call id with which to repair reordering.
+由于线路格式没有 id，扫描器会为每个 invoke 分配一个内部 id。OMP 可以将生成的调用作为一个批次派发。工具结果必须按相同顺序返回；结果协议中不存在可用于纠正顺序的调用 id。
 
-## Tool-result envelope
+## 工具结果信封
 
-OMP batches consecutive tool results into one `<function_results>` block. Success and failure use different records:
+OMP 将连续的工具结果合并为一个 `<function_results>` 块。成功与失败使用不同的记录：
 
 ```text
 <function_results>
@@ -109,19 +109,19 @@ OMP batches consecutive tool results into one `<function_results>` block. Succes
 </function_results>
 ```
 
-For every result:
+对每条结果：
 
-- success is `<result>` with `<stdout>`;
-- `isError: true` is `<error>` with `<stderr>`;
-- `<tool_name>` is XML-text escaped;
-- stdout/stderr is inserted verbatim; and
-- there is no call id, so the model reads records in call order.
+- 成功使用 `<result>`，内容放在 `<stdout>` 中；
+- `isError: true` 使用 `<error>`，内容放在 `<stderr>` 中；
+- `<tool_name>` 经过 XML 文本转义；
+- stdout/stderr 原样插入；并且
+- 不存在调用 id，模型按调用顺序读取记录。
 
-OMP places this text in a synthesized `user` message. Text blocks from one tool result are concatenated; image result blocks remain image blocks after the rendered text. The model must never emit `<function_results>` or `<tool_response>` itself.
+OMP 将此文本放入合成的 `user` 消息中。同一工具结果的文本块会被拼接；图像结果块在渲染文本后仍保持为图像块。模型自身绝不能输出 `<function_results>` 或 `<tool_response>`。
 
-## Thinking and visible text
+## 思考与可见文本
 
-OMP renders a preserved reasoning block as:
+OMP 将保留的推理块渲染为：
 
 ```text
 <thinking>
@@ -129,33 +129,33 @@ reasoning text
 </thinking>
 ```
 
-In the normal owned-tool stream, thinking parsing is enabled. The MiniMax scanner recognizes `<thinking>`, `<think>`, and `<scratchpad>` (including the supported prefixed forms), emits separate thinking events, and keeps the content out of visible assistant text. If `parseThinking` is disabled for a direct scanner consumer, those tags remain visible text. An unterminated thinking block is closed logically on stream flush and its accumulated content is retained.
+在正常的自有工具流中，思考解析是启用的。MiniMax 扫描器识别 `<thinking>`、`<think>` 和 `<scratchpad>`（包括支持的前缀形式），分别发出思考事件，并将内容排除在可见助手文本之外。如果为直接使用扫描器的消费者禁用了 `parseThinking`，这些标签将作为可见文本保留。未闭合的思考块在流刷新时会被逻辑闭合，并保留其累积内容。
 
-Visible prose may precede the tool envelope. Text outside calls remains assistant text; non-call text inside the wrapper is discarded by the scanner.
+可见正文可以出现在工具信封之前。调用之外的文本保留为助手文本；包装器内不属于调用的文本会被扫描器丢弃。
 
-## Streaming, malformed output, and recovery
+## 流式、畸形输出与恢复
 
-The scanner is incremental and chunk-boundary safe: opening/closing tags and parameter bodies may arrive in separate provider deltas. Its observable lifecycle is:
+扫描器是增量且对分块边界安全的：开闭标签和参数体可能出现在不同的供应商 delta 中。其可观测的生命周期为：
 
-1. a non-empty `<invoke name="…">` emits `toolStart` immediately;
-2. each named parameter body emits keyed `toolArgDelta` events as text chunks arrive; and
-3. the matching `</invoke>` performs final coercion and emits `toolEnd` with the complete arguments and exact raw invoke block.
+1. 非空的 `<invoke name="…">` 立即发出 `toolStart`；
+2. 每个具名参数体在文本块到达时发出带键的 `toolArgDelta` 事件；以及
+3. 匹配的 `</invoke>` 执行最终的强制转换，并发出携带完整参数以及精确原始 invoke 块的 `toolEnd`。
 
-Important failure behavior:
+重要的失败行为：
 
-- **Missing call name:** no tool lifecycle is emitted for that invoke.
-- **Missing parameter name:** that parameter is ignored.
-- **Malformed JSON:** falls back to the original parameter text.
-- **Very large parameter:** input is capped at 1,000,000 JavaScript string code units; overflow is replaced by the accepted prefix plus an explicit truncation marker.
-- **Incomplete invoke:** flush resets scanner-local call state and emits no `toolEnd`. However, OMP's stream projector has already materialized a call from `toolStart`; on a normally stopped response it retains that partial call, marks the turn as tool use, and may dispatch it. Already streamed argument text remains uncoerced, and a call with no argument text has `{}`. A provider `length` stop remains `length` rather than becoming runnable tool use.
-- **Incomplete wrapper after complete invokes:** already closed invokes remain valid; the wrapper close is not required to emit their `toolEnd` events.
-- **Incomplete thinking:** retained as thinking and logically ended at flush.
+- **缺少调用名：** 不会为该 invoke 发出任何工具生命周期事件。
+- **缺少参数名：** 该参数会被忽略。
+- **JSON 格式错误：** 回退到原始参数文本。
+- **超大参数：** 输入上限为 1,000,000 个 JavaScript 字符串代码单元；超出部分将替换为已接受的前缀并附上显式的截断标记。
+- **invoke 不完整：** 刷新会重置扫描器本地的调用状态，并且不会发出 `toolEnd`。然而，OMP 的流投影已经从 `toolStart` 物化了一次调用；在正常停止的响应中，它会保留该未完成的调用，将该回合标记为工具使用，并可能派发它。已经流出的参数文本仍保持未强制转换状态，且没有参数文本的调用其参数为 `{}`。供应商的 `length` 停止原因保持为 `length`，而不会成为可运行的工具使用。
+- **invoke 完整但包装器不完整：** 已闭合的 invoke 仍然有效；包装器闭合标签并不是发出其 `toolEnd` 事件的必要条件。
+- **思考不完整：** 保留为思考，并在刷新时逻辑结束。
 
-OMP also guards against a model fabricating tool output after its call. For this dialect, the first `<function_results>` or `<tool_response>` boundary stops projection. With the default `tools.abortOnFabricatedResult: true`, generation is aborted immediately; when disabled, OMP drains the provider stream but discards the fabricated continuation.
+OMP 还会防止模型在自身调用之后伪造工具输出。对于本方言，第一个 `<function_results>` 或 `<tool_response>` 边界会停止投影。在默认的 `tools.abortOnFabricatedResult: true` 下，生成会立即中止；禁用时，OMP 会排空供应商流，但丢弃伪造的续接内容。
 
-## End-to-end example
+## 端到端示例
 
-Injected tool definition (abbreviated to the relevant catalog line):
+注入的工具定义（已缩写为相关目录行）：
 
 ```text
 <tools>
@@ -163,7 +163,7 @@ Injected tool definition (abbreviated to the relevant catalog line):
 </tools>
 ```
 
-Assistant call:
+助手调用：
 
 ```text
 I'll check both cities.
@@ -173,7 +173,7 @@ I'll check both cities.
 </minimax:tool_call>
 ```
 
-Next user turn produced by OMP:
+OMP 生成的下一轮用户消息：
 
 ```text
 <function_results>
@@ -188,24 +188,24 @@ Next user turn produced by OMP:
 </function_results>
 ```
 
-The assistant can then answer normally or emit another complete MiniMax call envelope.
+随后助手可以正常回答，也可以再发出一个完整的 MiniMax 调用信封。
 
-## Parsing notes and gotchas
+## 解析说明与注意事项
 
-- **Not real XML.** Do not entity-escape parameter bodies or run them through an XML DOM parser; matching is based on protocol delimiters.
-- **One envelope, many invokes.** Parallelism is sibling calls inside `<minimax:tool_call>`, not JSON `tool_calls` and not one envelope per required batch.
-- **Schema determines strings.** Without the tool schema, even a JavaScript string renderer value is JSON-quoted; supply tool definitions to renderer/scanner APIs for round trips.
-- **No ids on the wire.** OMP-generated ids are internal. Preserve call/result order.
-- **Errors are first-class records.** Use `<error>/<stderr>`, not a successful `<result>` containing an out-of-band error flag.
-- **Canonical wrapper vs accepted recovery syntax.** The parser accepts bare invokes and `<tool_call>`, but the injected contract requires `<minimax:tool_call>`.
-- **Complete the invoke before stopping.** A natural-language promise to call a tool is not a call; the closing `</invoke>` is what finalizes coercion and the normal lifecycle.
+- **并非真正的 XML。** 不要对参数体进行实体转义，也不要将其交给 XML DOM 解析器；匹配基于协议分隔符。
+- **一个信封，多个 invoke。** 并行通过 `<minimax:tool_call>` 内部的兄弟调用实现，而不是 JSON `tool_calls`，也不是每个必需的批次一个信封。
+- **schema 决定字符串。** 在没有工具 schema 的情况下，即使是 JavaScript 字符串渲染值也会被 JSON 加引号；若需要往返，请在渲染器/扫描器 API 中提供工具定义。
+- **线路上没有 id。** OMP 生成的 id 是内部使用的。请保持调用/结果的顺序。
+- **错误是一等记录。** 使用 `<error>/<stderr>`，而不是在成功的 `<result>` 中附带一个带外的错误标志。
+- **规范包装器与可接受的恢复语法。** 解析器接受裸 invoke 和 `<tool_call>`，但注入的契约要求使用 `<minimax:tool_call>`。
+- **停止前请完成 invoke。** 自然语言中承诺调用工具并不算一次调用；闭合的 `</invoke>` 才是完成强制转换和正常生命周期的标志。
 
-## Sources
+## 资料来源
 
-- `packages/ai/src/dialect/minimax.md` — injected MiniMax format guide.
-- `packages/ai/src/dialect/minimax.ts` — call, result, thinking, and transcript renderers plus scanner configuration.
-- `packages/ai/src/dialect/anthropic.ts` — shared incremental invoke/parameter scanner and coercion behavior.
-- `packages/ai/src/dialect/catalog.ts` and `prompt-template.md` — tool catalog and system-prompt injection.
-- `packages/ai/src/dialect/history.ts` and `owned-stream.ts` — history conversion, streamed projection, incomplete-call behavior, and fabricated-result boundary.
-- `packages/catalog/src/identity/dialect.ts` and `packages/coding-agent/src/sdk.ts` — MiniMax family affinity and `tools.format` resolution.
-- `packages/ai/test/inband-tools.test.ts` — prompt rendering, call round trips, chunked argument deltas, raw blocks, MiniMax wrapper recovery, and result rendering.
+- `packages/ai/src/dialect/minimax.md` — 注入的 MiniMax 格式说明。
+- `packages/ai/src/dialect/minimax.ts` — 调用、结果、思考与转写渲染器，以及扫描器配置。
+- `packages/ai/src/dialect/anthropic.ts` — 共享的增量 invoke/参数扫描器与强制转换行为。
+- `packages/ai/src/dialect/catalog.ts` 与 `prompt-template.md` — 工具目录与系统提示词注入。
+- `packages/ai/src/dialect/history.ts` 与 `owned-stream.ts` — 历史转换、流式投影、不完整调用行为以及伪造结果边界。
+- `packages/catalog/src/identity/dialect.ts` 与 `packages/coding-agent/src/sdk.ts` — MiniMax 系列亲和性以及 `tools.format` 解析。
+- `packages/ai/test/inband-tools.test.ts` — 提示词渲染、调用往返、分块参数 delta、原始块、MiniMax 包装器恢复与结果渲染。

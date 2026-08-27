@@ -1,15 +1,15 @@
-# Mnemopi memory backend
+# Mnemopi 记忆后端
 
-Oh My Pi can use `@oh-my-pi/pi-mnemopi` as a local long-term memory backend.
+Oh My Pi 可以使用 `@oh-my-pi/pi-mnemopi` 作为本地长期记忆后端。
 
-Set:
+设置：
 
 ```yaml
 memory:
   backend: mnemopi
 ```
 
-Example:
+示例：
 
 ```yaml
 memory:
@@ -18,71 +18,71 @@ mnemopi:
   scoping: per-project-tagged
 ```
 
-With this backend enabled, the coding agent:
+启用此后端后，编码智能体会：
 
-1. Opens one or more local Mnemopi SQLite databases according to the configured bank scoping.
-2. Recalls relevant memories into a `<memories>` block for the first model turn of a session and refreshes the base prompt if recall happens from the `agent_start` listener.
-3. Retains completed conversation turns into the retain bank after agent turns, no more often than `mnemopi.retainEveryNTurns`.
-4. Adds recalled memory as extra compaction context when compaction asks the memory backend for `preCompactionContext`.
-5. Uses the normal `/memory view`, `/memory stats`, `/memory diagnose`, `/memory clear`, and `/memory enqueue` commands through the shared memory backend interface.
+1. 根据配置的 bank 作用域，打开一个或多个本地 Mnemopi SQLite 数据库。
+2. 在会话的第一个模型轮次中，将相关记忆回填到 `<memories>` 块中；若从 `agent_start` 监听器触发回查，则刷新基础提示词。
+3. 在智能体轮次之后，将已完成的对话轮次保留到 retain bank 中，频率不高于 `mnemopi.retainEveryNTurns`。
+4. 当压缩向记忆后端请求 `preCompactionContext` 时，将回查到的记忆作为额外的压缩上下文加入。
+5. 通过共享的记忆后端接口，使用常规的 `/memory view`、`/memory stats`、`/memory diagnose`、`/memory clear` 和 `/memory enqueue` 命令。
 
-Recalled memory is background context, not instructions. Current user messages and tool output take precedence when they conflict.
+回查到的记忆属于背景上下文，而非指令。当与当前用户消息或工具输出发生冲突时，以后者为准。
 
-## Agent tools
+## 智能体工具
 
-Selecting Mnemopi makes these discoverable tools available:
+选择 Mnemopi 后，以下工具变为可发现：
 
-- `recall` — search scoped memories. Results are previews and include memory IDs.
-- `retain` — store durable facts explicitly.
-- `reflect` — synthesize an answer across recalled memories.
-- `memory_edit` — `update`, `forget`, or `invalidate` an editable memory by ID. Fact-table rows are read-only.
+- `recall` — 搜索作用域内的记忆。结果为预览形式，并包含记忆 ID。
+- `retain` — 显式存储持久化事实。
+- `reflect` — 在回查到的记忆之间综合得出答案。
+- `memory_edit` — 按 ID 对可编辑的记忆执行 `update`、`forget` 或 `invalidate`。事实表行是只读的。
 
-Read the full content and metadata for a recalled result with `read memory://<memory-id>` before replacing it; clipped recall previews are not safe update payloads. The optional `learn` tool is also able to retain into Mnemopi when `autolearn.enabled: true`.
+在替换回查结果之前，使用 `read memory://<memory-id>` 读取完整的内容和元数据；截断的回查预览不能作为安全的更新载荷。当 `autolearn.enabled: true` 时，可选的 `learn` 工具也能向 Mnemopi 中 retain。
 
-## Settings
+## 设置
 
-| Setting                       | Default            | Description                                                                                                                                                                                                                                                                            |
-| ----------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `memory.backend`              | `off`              | Set to `mnemopi` to enable this backend.                                                                                                                                                                                                                                               |
-| `mnemopi.dbPath`              | agent memories dir | Optional SQLite database path.                                                                                                                                                                                                                                                         |
-| `mnemopi.bank`                | unset              | Optional shared bank base name passed to `Mnemopi`; the coding-agent wrapper scopes from this base according to `mnemopi.scoping`. Unset → shared bank `default`; per-project modes derive a project bank from the working-directory basename plus a stable hash of its absolute path. |
-| `mnemopi.scoping`             | `per-project`      | Memory visibility mode: `global` = one shared bank, `per-project` = isolated project memory, `per-project-tagged` = project-local writes plus global recall visibility.                                                                                                                |
-| `mnemopi.autoRecall`          | `true`             | Recall memory on the first turn of a session.                                                                                                                                                                                                                                          |
-| `mnemopi.autoRetain`          | `true`             | Retain completed turns automatically.                                                                                                                                                                                                                                                  |
-| `mnemopi.polyphonicRecall`    | `false`            | Enable 4-voice polyphonic recall (vector, graph, fact, temporal) with reciprocal rank fusion; `MNEMOPI_POLYPHONIC_RECALL` overrides when set.                                                                                                                                          |
-| `mnemopi.enhancedRecall`      | `false`            | Enable the tiered query result cache for repeated/similar recall queries; `MNEMOPI_ENHANCED_RECALL` overrides when set.                                                                                                                                                                |
-| `mnemopi.proactiveLinking`    | `false`            | Ingest new memories into the episodic graph and link them to related entities/memories as they are stored; `MNEMOPI_PROACTIVE_LINKING` overrides when set.                                                                                                                             |
-| `mnemopi.retainEveryNTurns`   | `4`                | Minimum user turns between automatic retain writes.                                                                                                                                                                                                                                    |
-| `mnemopi.recallLimit`         | `8`                | Maximum recalled memories in the prompt block.                                                                                                                                                                                                                                         |
-| `mnemopi.recallContextTurns`  | `3`                | Prior user-bounded turns included in recall queries.                                                                                                                                                                                                                                   |
-| `mnemopi.recallMaxQueryChars` | `4000`             | Maximum composed recall query length.                                                                                                                                                                                                                                                  |
-| `mnemopi.injectionTokenLimit` | `5000`             | Approximate token budget for memory prompt injection.                                                                                                                                                                                                                                  |
-| `mnemopi.debug`               | `false`            | Enable debug logging for backend failures.                                                                                                                                                                                                                                             |
-| `mnemopi.noEmbeddings`        | `false`            | Pass `noEmbeddings` to `Mnemopi` and force FTS-only recall.                                                                                                                                                                                                                            |
-| `mnemopi.embeddingVariant`    | `en`               | Local embedding model variant: `en` = `BAAI/bge-base-en-v1.5` (768d), `multilingual` = `intfloat/multilingual-e5-large` (1024d). `mnemopi.embeddingModel`/`MNEMOPI_EMBEDDING_MODEL` override it; changing it rebuilds stored embeddings on the next writable start.                    |
-| `mnemopi.embeddingModel`      | variant default    | Explicit embedding model id; overrides `mnemopi.embeddingVariant`. Precedence: this setting > `MNEMOPI_EMBEDDING_MODEL` env > variant default.                                                                                                                                         |
-| `mnemopi.embeddingApiUrl`     | env/default        | OpenAI-compatible embedding endpoint passed to `Mnemopi`.                                                                                                                                                                                                                              |
-| `mnemopi.embeddingApiKey`     | env/default        | Embedding API key passed to `Mnemopi`.                                                                                                                                                                                                                                                 |
-| `mnemopi.llmMode`             | `smol`             | `smol` resolves the configured pi-ai `tiny` role then `smol`; `remote` uses the settings below; `none` disables LLM calls.                                                                                                                                                             |
-| `mnemopi.llmBaseUrl`          | env/default        | OpenAI-compatible LLM endpoint for `llmMode: remote`.                                                                                                                                                                                                                                  |
-| `mnemopi.llmApiKey`           | env/default        | LLM API key for `llmMode: remote`.                                                                                                                                                                                                                                                     |
-| `mnemopi.llmModel`            | env/default        | LLM model id for `llmMode: remote`.                                                                                                                                                                                                                                                    |
+| 设置                          | 默认值            | 描述                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memory.backend`              | `off`             | 设置为 `mnemopi` 以启用此后端。                                                                                                                                                                                                                                                        |
+| `mnemopi.dbPath`              | 智能体记忆目录    | 可选的 SQLite 数据库路径。                                                                                                                                                                                                                                                             |
+| `mnemopi.bank`                | 未设置            | 传递给 `Mnemopi` 的可选共享 bank 基础名称；编码智能体包装器会根据 `mnemopi.scoping` 从该基础派生作用域。未设置 → 共享 bank `default`；per-project 模式从工作目录的 basename 加上其绝对路径的稳定哈希中派生项目 bank。                                                                       |
+| `mnemopi.scoping`             | `per-project`     | 记忆可见性模式：`global` = 一个共享 bank，`per-project` = 隔离的项目记忆，`per-project-tagged` = 项目本地写入加上全局回查可见性。                                                                                                                                                     |
+| `mnemopi.autoRecall`          | `true`            | 在会话的第一个轮次回查记忆。                                                                                                                                                                                                                                                           |
+| `mnemopi.autoRetain`          | `true`            | 自动保留已完成的轮次。                                                                                                                                                                                                                                                                 |
+| `mnemopi.polyphonicRecall`    | `false`           | 启用 4 路多声部回查（向量、图谱、事实、时间），采用倒数排名融合；当设置了 `MNEMOPI_POLYPHONIC_RECALL` 时由其覆盖。                                                                                                                                                                    |
+| `mnemopi.enhancedRecall`      | `false`           | 为重复或相似的回查查询启用分层查询结果缓存；当设置了 `MNEMOPI_ENHANCED_RECALL` 时由其覆盖。                                                                                                                                                                                            |
+| `mnemopi.proactiveLinking`    | `false`           | 在存储新记忆时将其摄入情景图谱，并链接到相关实体/记忆；当设置了 `MNEMOPI_PROACTIVE_LINKING` 时由其覆盖。                                                                                                                                                                              |
+| `mnemopi.retainEveryNTurns`   | `4`               | 自动 retain 写入之间的最小用户轮次数。                                                                                                                                                                                                                                                 |
+| `mnemopi.recallLimit`         | `8`               | 提示词块中回查记忆的最大数量。                                                                                                                                                                                                                                                         |
+| `mnemopi.recallContextTurns`  | `3`               | 回查查询中包含的先前用户限定轮次。                                                                                                                                                                                                                                                     |
+| `mnemopi.recallMaxQueryChars` | `4000`            | 组合回查查询的最大长度。                                                                                                                                                                                                                                                               |
+| `mnemopi.injectionTokenLimit` | `5000`            | 记忆提示词注入的大致 token 预算。                                                                                                                                                                                                                                                      |
+| `mnemopi.debug`               | `false`           | 启用后端失败时的调试日志。                                                                                                                                                                                                                                                             |
+| `mnemopi.noEmbeddings`        | `false`           | 将 `noEmbeddings` 传递给 `Mnemopi` 并强制仅使用 FTS 的回查。                                                                                                                                                                                                                          |
+| `mnemopi.embeddingVariant`    | `en`              | 本地嵌入模型变体：`en` = `BAAI/bge-base-en-v1.5`（768d），`multilingual` = `intfloat/multilingual-e5-large`（1024d）。`mnemopi.embeddingModel` / `MNEMOPI_EMBEDDING_MODEL` 会覆盖它；更改它会在下一次可写启动时重建已存储的嵌入。                                                            |
+| `mnemopi.embeddingModel`      | 变体默认值        | 显式嵌入模型 id；覆盖 `mnemopi.embeddingVariant`。优先级：本设置 > `MNEMOPI_EMBEDDING_MODEL` 环境变量 > 变体默认值。                                                                                                                                                                   |
+| `mnemopi.embeddingApiUrl`     | 环境变量/默认值   | 传递给 `Mnemopi` 的 OpenAI 兼容嵌入端点。                                                                                                                                                                                                                                              |
+| `mnemopi.embeddingApiKey`     | 环境变量/默认值   | 传递给 `Mnemopi` 的嵌入 API 密钥。                                                                                                                                                                                                                                                     |
+| `mnemopi.llmMode`             | `smol`            | `smol` 先解析已配置的 pi-ai `tiny` 角色再解析 `smol`；`remote` 使用下面的设置；`none` 禁用 LLM 调用。                                                                                                                                                                                  |
+| `mnemopi.llmBaseUrl`          | 环境变量/默认值   | `llmMode: remote` 使用的 OpenAI 兼容 LLM 端点。                                                                                                                                                                                                                                        |
+| `mnemopi.llmApiKey`           | 环境变量/默认值   | `llmMode: remote` 使用的 LLM API 密钥。                                                                                                                                                                                                                                                |
+| `mnemopi.llmModel`            | 环境变量/默认值   | `llmMode: remote` 使用的 LLM 模型 id。                                                                                                                                                                                                                                                 |
 
-## Scoping
+## 作用域
 
-The coding-agent wrapper applies scoping on top of the underlying `Mnemopi` package:
+编码智能体包装器在底层 `Mnemopi` 包之上应用作用域：
 
-- `global` uses one shared bank for recall and writes.
-- `per-project` writes to and recalls from a bank derived from the current working directory alone — its basename plus a stable hash of its absolute path, independent of the surrounding git layout.
-- `per-project-tagged` writes to the project-local bank and recalls from both the project-local bank and the shared global bank, with duplicate recall results merged.
+- `global` 对回查和写入使用一个共享 bank。
+- `per-project` 写入并回查一个仅从当前工作目录派生的 bank —— 由其 basename 加上其绝对路径的稳定哈希组成，与周围的 git 布局无关。
+- `per-project-tagged` 写入项目本地 bank，并同时从项目本地 bank 和共享全局 bank 进行回查，重复的回查结果会合并。
 
-The combined project-plus-global behavior lives in the wrapper. The `@oh-my-pi/pi-mnemopi` package itself still exposes banks and constructor options directly, including `bank` for selecting a bank name. Project-local banks other than the shared bank are stored as sibling bank databases managed by Mnemopi's `BankManager`.
+项目加全局的组合行为由包装器实现。`@oh-my-pi/pi-mnemopi` 包本身仍然直接暴露 bank 和构造选项，包括用于选择 bank 名称的 `bank`。除共享 bank 之外的项目本地 bank 存储为由 Mnemopi 的 `BankManager` 管理的兄弟 bank 数据库。
 
-## LLM and embeddings
+## LLM 与嵌入
 
-FTS and embedding paths use the settings below. LLM-backed extraction/consolidation uses the configured local on-device memory model (`providers.memoryModel`) when selected, otherwise `llmMode: smol` resolves the `tiny` role first and then `smol`; `llmMode: remote` uses the OpenAI-compatible endpoint settings; `llmMode: none` disables LLM calls. If no tiny/smol model or current credential resolves, Mnemopi continues without LLM-backed work.
+FTS 和嵌入路径使用下面的设置。基于 LLM 的抽取/整合在选定的情况下使用配置的本地设备端记忆模型（`providers.memoryModel`），否则 `llmMode: smol` 先解析 `tiny` 角色再解析 `smol`；`llmMode: remote` 使用 OpenAI 兼容端点设置；`llmMode: none` 禁用 LLM 调用。如果无法解析 tiny/smol 模型或当前的凭证，Mnemopi 会在没有基于 LLM 的工作的情况下继续运行。
 
-FTS-only:
+仅 FTS：
 
 ```yaml
 memory:
@@ -91,13 +91,13 @@ mnemopi:
   noEmbeddings: true
 ```
 
-Equivalent constructor shape:
+等价的构造形式：
 
 ```ts
 new Mnemopi({ noEmbeddings: true });
 ```
 
-Remote embeddings:
+远程嵌入：
 
 ```yaml
 mnemopi:
@@ -106,7 +106,7 @@ mnemopi:
   embeddingApiKey: ${OPENAI_API_KEY}
 ```
 
-Equivalent constructor shape:
+等价的构造形式：
 
 ```ts
 new Mnemopi({
@@ -116,7 +116,7 @@ new Mnemopi({
 });
 ```
 
-Remote LLM:
+远程 LLM：
 
 ```yaml
 mnemopi:
@@ -126,14 +126,14 @@ mnemopi:
   llmModel: gpt-4.1-mini
 ```
 
-Equivalent constructor shapes:
+等价的构造形式：
 
 ```ts
 new Mnemopi({ llm: { baseUrl, apiKey, model } });
 new Mnemopi({ llmBaseUrl: baseUrl, llmApiKey: apiKey, llmModel: model });
 ```
 
-Dynamic function LLM for rotating OAuth tokens:
+用于轮换 OAuth 令牌的动态函数 LLM：
 
 ```ts
 new Mnemopi({
@@ -148,14 +148,14 @@ new Mnemopi({
 });
 ```
 
-pi-ai tiny/smol role LLM:
+pi-ai tiny/smol 角色 LLM：
 
 ```yaml
 mnemopi:
   llmMode: smol
 ```
 
-The coding agent resolves `tiny` first and then `smol`, and passes a dynamic completion function so every Mnemopi LLM call can fetch current provider credentials at call time:
+编码智能体先解析 `tiny` 再解析 `smol`，并传入一个动态的完成函数，以便每次 Mnemopi LLM 调用都能在调用时获取当前的提供者凭证：
 
 ```ts
 new Mnemopi({
@@ -163,25 +163,25 @@ new Mnemopi({
 });
 ```
 
-## Operational notes
+## 运行注意事项
 
-- The default shared database lives under the agent memories directory in `mnemopi/mnemopi.db`; project-scoped banks use sibling database paths under that Mnemopi directory.
-- `/memory clear` removes every scoped Mnemopi SQLite database and sidecar WAL/SHM files for the active configuration.
-- `/memory enqueue` forces retention of the current session, flushes pending fact extractions, and runs Mnemopi sleep/consolidation for eligible working-memory rows.
-- `/memory stats` and `/memory diagnose` render backend-specific bank statistics/diagnostics when the Mnemopi backend is active.
-- Subagents do not own separate Mnemopi retain loops; they alias the parent state when a parent Mnemopi state exists, and otherwise remain inert.
-- Backend startup is best-effort. If database/model initialization fails, the session continues with Mnemopi inert and logs a warning; memory tools then report that the backend is not initialized.
+- 默认共享数据库位于智能体记忆目录下的 `mnemopi/mnemopi.db`；项目作用域的 bank 使用该 Mnemopi 目录下的兄弟数据库路径。
+- `/memory clear` 会移除当前配置下每个作用域内的 Mnemopi SQLite 数据库以及对应的 WAL/SHM 边车文件。
+- `/memory enqueue` 强制保留当前会话、刷新待处理的事实抽取，并为符合条件的工作记忆行运行 Mnemopi 的 sleep/consolidation。
+- 当 Mnemopi 后端处于激活状态时，`/memory stats` 和 `/memory diagnose` 会呈现特定于后端的 bank 统计/诊断信息。
+- 子智能体不拥有独立的 Mnemopi retain 循环；当存在父级 Mnemopi 状态时，它们复用父级状态，否则保持静默。
+- 后端启动是尽力而为的。如果数据库/模型初始化失败，会话将以 Mnemopi 静默的方式继续，并记录一条警告；随后记忆工具会报告后端尚未初始化。
 
-## Shutdown and durability
+## 关闭与持久性
 
-Normal interactive and print-mode exit uses a deliberately lighter path than `/memory enqueue`:
+常规的交互式和打印模式退出使用的路径刻意比 `/memory enqueue` 更轻量：
 
-1. The primary state retains the current transcript with new fact extraction disabled.
-2. It flushes extractions that were already in flight, but does not run per-session sleep or full cross-session promotion.
-3. Only after that drain settles does it close the owned SQLite bank handles; the embedding worker shuts down after state disposal because the drain may still use it.
+1. 主状态保留当前对话记录，并禁用新的事实抽取。
+2. 它会刷新已经在进行中的抽取，但不运行单次会话的 sleep 或完整的跨会话提升。
+3. 仅在该排空完成之后，它才会关闭所拥有的 SQLite bank 句柄；由于排空过程可能仍在使用嵌入工作线程，嵌入工作线程在状态释放之后才关闭。
 
-Aliased subagent states do not own or close the shared banks; the parent state owns final retention, flushing, and handle closure.
+别名复用的子智能体状态不拥有或不关闭共享 bank；父级状态负责最终的 retain、刷新和句柄关闭。
 
-Interactive and print exits give this drain 1.5 seconds. If the budget expires, shutdown detaches the in-flight drain and arranges for handles to close when it settles rather than racing writes against closed databases. The process may exit first. Working-memory rows already written remain durable, but promotion or embedding for the last few turns can remain incomplete; earlier turn retention performed at agent end is unaffected.
+交互式和打印退出为该排空提供 1.5 秒的时间。如果预算耗尽，关闭过程会分离正在进行的排空，并安排在排空完成时再关闭句柄，以避免与已关闭的数据库产生写入竞争。进程可能会先退出。已经写入的工作记忆行保持持久，但最后几轮的记忆提升或嵌入可能仍未完成；在智能体结束时执行的较早轮次的 retain 不受影响。
 
-`/memory enqueue` is the explicit stronger durability boundary: it forces retention, flushes pending extraction, and runs full sleep/consolidation across the owned banks. It does not bypass Mnemopi's age gate: `sleepAllSessions` selects unconsolidated working-memory rows older than `Math.floor(workingMemoryTtlHours / 2)` hours (12 hours with the default 24-hour TTL). Fresh rows therefore remain in working memory after an immediate enqueue. Use the command before exit to force retention and flush pending work, or after the age gate to promote eligible rows; normal shutdown does not promote them.
+`/memory enqueue` 是显式且更强的持久性边界：它强制 retain、刷新待处理的抽取，并在拥有的 bank 上运行完整的 sleep/consolidation。它不会绕过 Mnemopi 的 age gate：`sleepAllSessions` 选取早于 `Math.floor(workingMemoryTtlHours / 2)` 小时（在默认 24 小时 TTL 下为 12 小时）的未整合工作记忆行。因此，新鲜的行在立即执行 enqueue 后仍保留在工作记忆中。在退出前使用该命令以强制 retain 并刷新待处理工作，或者在 age gate 之后再使用以提升符合条件的行；正常的关闭不会提升它们。

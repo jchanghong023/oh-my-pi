@@ -1,40 +1,40 @@
-# Marketplace plugin system
+# Marketplace 插件系统
 
-The marketplace system lets you discover, install, and manage plugins from Git, local, or direct-catalog sources. It is compatible with the Claude Code plugin registry format.
+Marketplace 系统允许你从 Git、本地或直接 catalog 来源发现、安装和管理插件。它兼容 Claude Code 插件注册表格式。
 
-## Quick start
+## 快速开始
 
 ```
 /marketplace add anthropics/claude-plugins-official
 /marketplace install wordpress.com@claude-plugins-official
 ```
 
-In the TUI, `/marketplace` with no arguments opens the interactive plugin browser. In ACP/RPC command handling, `/marketplace` lists configured marketplaces; use `/marketplace discover` to browse.
+在 TUI 中，不带参数的 `/marketplace` 会打开交互式插件浏览器。在 ACP/RPC 命令处理中，`/marketplace` 列出已配置的 marketplace；使用 `/marketplace discover` 进行浏览。
 
-## Concepts
+## 概念
 
-A **marketplace** is a Git repository (or local directory) containing a catalog file at `.omp-plugin/marketplace.json` (preferred) or `.claude-plugin/marketplace.json` (Claude Code-compatible fallback). The catalog lists available plugins with their sources, descriptions, and metadata.
+**marketplace** 是一个 Git 仓库（或本地目录），其中包含位于 `.omp-plugin/marketplace.json`（首选）或 `.claude-plugin/marketplace.json`（与 Claude Code 兼容的备用）的 catalog 文件。catalog 列出可用的插件及其来源、描述和元数据。
 
-A **plugin** is a directory containing Claude/OMP plugin content such as skills, commands, agents, rules, hooks, tools, MCP servers, or LSP servers. Marketplace installs also load extension modules declared by `package.json` `omp.extensions`: installation symlinks the cached plugin into the scope's `node_modules` tree and records it in `omp-plugins.lock.json`, the same runtime surfaces used by npm-installed and `omp plugin link`ed plugins. Plugins are identified by `name@marketplace` (e.g. `code-review@claude-plugins-official`).
+**plugin** 是一个目录，其中包含 Claude/OMP 插件内容，例如 skills、commands、agents、rules、hooks、tools、MCP servers 或 LSP servers。Marketplace 安装还会加载由 `package.json` 的 `omp.extensions` 声明的扩展模块：安装会将缓存的插件符号链接到作用域的 `node_modules` 树中，并将其记录在 `omp-plugins.lock.json` 中，这与 npm 安装以及 `omp plugin link` 的插件所使用的运行时表面相同。插件通过 `name@marketplace` 进行标识（例如 `code-review@claude-plugins-official`）。
 
-**Scopes**: marketplace plugins can be installed at two scopes:
+**Scopes**：marketplace 插件可以安装在两个作用域：
 
-- **user** (default) -- available in all projects, stored in the user plugins data root's `installed_plugins.json` (`~/.omp/plugins/installed_plugins.json` by default)
-- **project** -- available only in the active project, stored in the nearest project `.omp/plugins/installed_plugins.json`
+- **user**（默认）—— 在所有项目中可用，存储在用户插件数据根目录的 `installed_plugins.json`（默认位于 `~/.omp/plugins/installed_plugins.json`）
+- **project** —— 仅在当前项目中可用，存储在最近项目的 `.omp/plugins/installed_plugins.json` 中
 
-Enabled project-scoped installs shadow enabled user-scoped installs of the same plugin. A disabled project install does not shadow the user install.
+已启用的 project 作用域安装会覆盖同一插件已启用的 user 作用域安装。已禁用的 project 安装不会覆盖 user 安装。
 
-On Linux and macOS, `omp config init-xdg` creates the XDG data, state, and cache roots; it does not move existing data. Once the relevant roots exist and `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` are set, new user marketplace/plugin state resolves under `$XDG_DATA_HOME/omp` (including `marketplaces.json` and `plugins/`). The `~/.omp` paths below are the non-XDG defaults.
+在 Linux 和 macOS 上，`omp config init-xdg` 会创建 XDG data、state 和 cache 根目录；它不会移动现有数据。一旦相关根目录存在并设置了 `XDG_DATA_HOME`、`XDG_STATE_HOME` 和 `XDG_CACHE_HOME`，新的用户 marketplace/插件状态将解析到 `$XDG_DATA_HOME/omp` 下（包括 `marketplaces.json` 和 `plugins/`）。下面的 `~/.omp` 路径是非 XDG 的默认值。
 
-## Commands
+## 命令
 
-### Interactive mode
+### 交互模式
 
 | Command        | Effect                                    |
 | -------------- | ----------------------------------------- |
 | `/marketplace` | Open interactive plugin browser (install) |
 
-### Marketplace management
+### Marketplace 管理
 
 | Command                      | Effect                                       |
 | ---------------------------- | -------------------------------------------- |
@@ -43,7 +43,7 @@ On Linux and macOS, `omp config init-xdg` creates the XDG data, state, and cache
 | `/marketplace update [name]` | Re-fetch catalog(s); omit name to update all |
 | `/marketplace list`          | List configured marketplaces                 |
 
-### Plugin operations
+### 插件操作
 
 | Command                                                                   | Effect                                             |
 | ------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -56,9 +56,9 @@ On Linux and macOS, `omp config init-xdg` creates the XDG data, state, and cache
 | `/plugins enable [--scope user\|project] name@marketplace`                | Enable a marketplace plugin                        |
 | `/plugins disable [--scope user\|project] name@marketplace`               | Disable a marketplace plugin                       |
 
-### CLI equivalents
+### CLI 等效命令
 
-The same operations are available from the command line:
+相同的操作也可在命令行中执行：
 
 ```
 omp plugin marketplace add <source>
@@ -75,11 +75,11 @@ omp plugin list
 
 ```
 
-TUI marketplace mutations (explicit commands and the selector) update disk state and invalidate discovery caches but do not refresh the active session. Run `/reload-plugins` to refresh skills, slash commands, and MCP servers; restart the session for newly installed tools, hooks, or extension modules. ACP/RPC marketplace handlers refresh skills and slash commands automatically, but likewise do not rebuild every initialized capability set.
+TUI marketplace 的修改操作（显式命令和选择器）会更新磁盘状态并使发现缓存失效，但不会刷新当前会话。运行 `/reload-plugins` 以刷新 skills、slash commands 和 MCP servers；新安装的 tools、hooks 或 extension modules 需要重启会话。ACP/RPC marketplace 处理器会自动刷新 skills 和 slash commands，但同样不会重建每个已初始化的能力集。
 
-## Marketplace sources
+## Marketplace 来源
 
-When you run `/marketplace add <source>`, the system classifies the source:
+当你运行 `/marketplace add <source>` 时，系统会按如下方式对来源进行分类：
 
 | Source format                   | Type                                               | Example                                |
 | ------------------------------- | -------------------------------------------------- | -------------------------------------- |
@@ -89,11 +89,11 @@ When you run `/marketplace add <source>`, the system classifies the source:
 | `git@...` / `ssh://...`         | Git repository                                     | `git@github.com:org/repo.git`          |
 | `./path` or `~/path` or `/path` | Local directory                                    | `./my-marketplace`                     |
 
-Git and local sources must contain a catalog at `.omp-plugin/marketplace.json` (preferred) or `.claude-plugin/marketplace.json` (Claude Code-compatible fallback). Direct catalog URLs cache only the JSON catalog; plugins in URL-sourced catalogs cannot use relative string sources like `"./plugins/foo"`.
+Git 和本地来源必须在 `.omp-plugin/marketplace.json`（首选）或 `.claude-plugin/marketplace.json`（与 Claude Code 兼容的备用）包含 catalog。直接 catalog URL 仅缓存 JSON catalog；URL 来源 catalog 中的插件不能使用相对字符串来源（例如 `"./plugins/foo"`）。
 
-## Catalog format (marketplace.json)
+## Catalog 格式（marketplace.json）
 
-A marketplace catalog lives at `.omp-plugin/marketplace.json` in the repository root. When omp is the only intended consumer, prefer this path. To remain Claude Code-compatible (omp loads the same shape from either path), publish at `.claude-plugin/marketplace.json` instead — omp uses it as a fallback when `.omp-plugin/marketplace.json` is absent. A repository may ship both: omp reads the `.omp-plugin/` copy, Claude Code reads the `.claude-plugin/` copy. Same catalog format either way:
+marketplace catalog 位于仓库根目录的 `.omp-plugin/marketplace.json`。当 omp 是唯一的使用者时，优先使用此路径。若要保持与 Claude Code 兼容（omp 会从任一路径加载相同结构），请改用 `.claude-plugin/marketplace.json` 发布——omp 在 `.omp-plugin/marketplace.json` 缺失时将其作为备用。一个仓库可以同时包含两者：omp 读取 `.omp-plugin/` 副本，Claude Code 读取 `.claude-plugin/` 副本。无论哪种方式，catalog 格式都是相同的：
 
 ```json
 {
@@ -120,7 +120,7 @@ A marketplace catalog lives at `.omp-plugin/marketplace.json` in the repository 
 }
 ```
 
-### Required fields
+### 必填字段
 
 | Field        | Description                                                                                                      |
 | ------------ | ---------------------------------------------------------------------------------------------------------------- |
@@ -128,9 +128,9 @@ A marketplace catalog lives at `.omp-plugin/marketplace.json` in the repository 
 | `owner.name` | Marketplace owner name                                                                                           |
 | `plugins`    | Array of plugin entries                                                                                          |
 
-Top-level `metadata.description`, `metadata.version`, and `metadata.pluginRoot` are optional. When `metadata.pluginRoot` is set, it is prepended to relative plugin `source` paths.
+顶层的 `metadata.description`、`metadata.version` 和 `metadata.pluginRoot` 是可选的。当设置了 `metadata.pluginRoot` 时，它会被前置到插件的相对 `source` 路径之前。
 
-### Plugin entry fields
+### 插件条目字段
 
 | Field         | Required | Description                                                                                    |
 | ------------- | -------- | ---------------------------------------------------------------------------------------------- |
@@ -153,17 +153,17 @@ Top-level `metadata.description`, `metadata.version`, and `metadata.pluginRoot` 
 | `lspServers`  | no       | Inline map or in-plugin path; copied to `.lsp.json` during installation                        |
 | `dapAdapters` | no       | Inline map or in-plugin JSON/YAML path; copied to `.dap.json`, `.dap.yaml`, or `.dap.yml`      |
 
-### Plugin source formats
+### 插件来源格式
 
-The `source` field supports these formats. String sources must start with `./` and are resolved inside the marketplace root, after optional `metadata.pluginRoot` is prepended:
+`source` 字段支持以下格式。字符串来源必须以 `./` 开头，并在 marketplace 根目录内解析，可选的 `metadata.pluginRoot` 会被前置：
 
-**Relative path** (within the marketplace repo):
+**相对路径**（在 marketplace 仓库内）：
 
 ```json
 "source": "./my-plugin"
 ```
 
-**Git repository URL**:
+**Git 仓库 URL**：
 
 ```json
 "source": {
@@ -173,7 +173,7 @@ The `source` field supports these formats. String sources must start with `./` a
 }
 ```
 
-**GitHub shorthand**:
+**GitHub 简写**：
 
 ```json
 "source": {
@@ -184,7 +184,7 @@ The `source` field supports these formats. String sources must start with `./` a
 }
 ```
 
-**Git subdirectory** (monorepo):
+**Git 子目录**（monorepo）：
 
 ```json
 "source": {
@@ -196,7 +196,7 @@ The `source` field supports these formats. String sources must start with `./` a
 }
 ```
 
-**npm package** (parsed but not installable yet):
+**npm 包**（已解析但尚不可安装）：
 
 ```json
 "source": {
@@ -206,19 +206,19 @@ The `source` field supports these formats. String sources must start with `./` a
 }
 ```
 
-Current installer behavior rejects npm marketplace sources with `npm plugin sources are not yet supported`; use relative, GitHub, URL, or git-subdir sources.
+当前安装程序的行为会以 `npm plugin sources are not yet supported` 拒绝 npm marketplace 来源；请使用相对、GitHub、URL 或 git-subdir 来源。
 
-Invalid catalog JSON or invalid required top-level fields reject the catalog. An invalid plugin entry is logged and skipped so other valid entries remain available.
+无效的 catalog JSON 或无效的必填顶层字段会拒绝整个 catalog。无效的插件条目会被记录并跳过，以便其他有效条目仍可用。
 
-## Updates, removal, and scope
+## 更新、移除和作用域
 
-- `/marketplace update [name]` refreshes catalogs only; it does not reinstall plugins.
-- `omp plugin upgrade name@marketplace` reinstalls every installed scope when `--scope` is omitted. `/marketplace upgrade name@marketplace`, uninstall, and enable/disable require `--scope user|project` when the plugin exists in both scopes.
-- Upgrading all plugins compares only catalog entries that declare `version`. Semver versions must be newer; non-semver versions are treated as changed when unequal. Per-plugin failures are skipped, so an all-plugin upgrade can partially succeed.
-- `marketplace.autoUpdate` controls startup checks: `off`, `notify` (default), or `auto`. Catalogs older than 24 hours are refreshed best-effort before version checks. Despite its name, current `notify` mode writes update availability only to the debug log; it does not show a user-facing notification.
-- Removing a marketplace removes its registry entry and catalog cache; it does not uninstall plugins already cached and registered.
+- `/marketplace update [name]` 仅刷新 catalog；它不会重新安装插件。
+- 当省略 `--scope` 时，`omp plugin upgrade name@marketplace` 会重新安装每个已安装的作用域。当插件同时存在于两个作用域时，`/marketplace upgrade name@marketplace`、uninstall 以及 enable/disable 需要 `--scope user|project`。
+- 升级所有插件时仅比较声明了 `version` 的 catalog 条目。Semver 版本必须较新；非 semver 版本在不相等时被视为已更改。单个插件的失败会被跳过，因此所有插件的升级可能会部分成功。
+- `marketplace.autoUpdate` 控制启动时的检查：`off`、`notify`（默认）或 `auto`。超过 24 小时的 catalog 会在版本检查前尽力刷新。尽管其名称如此，当前的 `notify` 模式仅将更新可用性写入调试日志；它不会显示面向用户的通知。
+- 移除一个 marketplace 会删除其注册表条目和 catalog 缓存；它不会卸载已经缓存和注册的插件。
 
-## On-disk layout
+## 磁盘布局
 
 ```
 ~/.omp/
@@ -238,15 +238,15 @@ Invalid catalog JSON or invalid required top-level fields reject the catalog. An
     node_modules/<package>        # Symlink to the cached plugin
 ```
 
-## Naming rules
+## 命名规则
 
-Marketplace and plugin names must:
+Marketplace 和插件名称必须满足以下条件：
 
-- Start and end with a lowercase letter or digit
-- Contain only lowercase letters, digits, hyphens, and dots
-- Be at most 64 characters
+- 以小写字母或数字开头和结尾
+- 仅包含小写字母、数字、连字符和点
+- 最多 64 个字符
 
-Plugin IDs (`name@marketplace`) must be at most 128 characters total.
+插件 ID（`name@marketplace`）总计最多 128 个字符。
 
-Valid examples: `my-plugin`, `code-review`, `wordpress.com`, `ai-firstify`
-Invalid examples: `-bad`, `bad-`, `.bad`, `Bad`, `under_score`
+有效示例：`my-plugin`、`code-review`、`wordpress.com`、`ai-firstify`
+无效示例：`-bad`、`bad-`、`.bad`、`Bad`、`under_score`

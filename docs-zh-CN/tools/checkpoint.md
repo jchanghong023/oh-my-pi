@@ -1,6 +1,6 @@
 # checkpoint
 
-> Mark the current top-level conversation state so later `rewind` can collapse exploratory context into a report.
+> 标记当前顶层对话状态，以便后续的 `rewind` 可以将探索性上下文折叠为一份报告。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/checkpoint.ts`

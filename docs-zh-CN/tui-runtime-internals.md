@@ -1,75 +1,72 @@
-# TUI runtime internals
+# TUI 运行时内部机制
 
-This document maps terminal input and rendering ownership in interactive mode. See [`tui-core-renderer.md`](./tui-core-renderer.md) for terminal-write invariants.
+本文档梳理交互模式下终端输入与渲染的归属关系。终端写入的不变量请参阅 [`tui-core-renderer.md`](./tui-core-renderer.md)。
 
-## Ownership
+## 归属
 
-- **`packages/tui`** owns terminal lifecycle, input normalization, focus, overlays, image protocols, cursor placement, scheduling, explicit history writes, and mutable viewport painting.
-- **`packages/coding-agent`** owns transcript order, block finality, tool allocation, editor/status chrome, and the `TerminalFrameProvider` implementation in `modes/composer.ts`.
+- **`packages/tui`** 负责终端生命周期、输入归一化、焦点、浮层、图像协议、光标位置、调度、显式历史写入以及可变视口的绘制。
+- **`packages/coding-agent`** 负责记录顺序、块终态、工具分配、编辑器/状态栏界面，以及 `modes/composer.ts` 中 `TerminalFrameProvider` 的实现。
 
-The terminal core never interprets messages, tools, transcript blocks, or finality.
+终端核心绝不解释消息、工具、记录块或终态。
 
-## Boot and root composition
+## 启动与根组合
 
-`Composer` creates the `TUI`, welcome header, editor, and status host. Once `InteractiveMode` is ready it mounts the session containers, with `TranscriptContainer` as the transcript root.
+`Composer` 创建 `TUI`、欢迎页头、编辑器和状态宿主。一旦 `InteractiveMode` 就绪，它便挂载会话容器，并以 `TranscriptContainer` 作为记录根节点。
 
-Each normal frame:
+每一帧的常规流程：
 
-1. Render mandatory editor, status, HUD, and overlay chrome.
-2. Subtract those rows from the physical viewport.
-3. Offer a history batch only under capacity pressure: the settled prefix that must retire for the live tail to fit the remainder.
-4. Ask `TranscriptContainer` for the live rows within the exact remainder.
-5. Return one bounded `TerminalFramePlan`.
+1. 渲染必需的编辑器、状态、HUD 和浮层界面。
+2. 从物理视口中减去这些行。
+3. 仅在容量压力下提供历史批次：为了让活动尾部适配剩余空间必须退役的已稳定前缀。
+4. 向 `TranscriptContainer` 索取精确剩余空间内的活动行。
+5. 返回一个有界的 `TerminalFramePlan`。
 
-Graceful shutdown switches the provider to Flush policy and synchronously drains
-every currently eligible finalized prefix before terminal handoff.
+优雅停机将提供方切换为 Flush 策略，并在终端交接之前同步排空当前所有符合条件的已终态前缀。
 
-The welcome header follows the same ordered retirement model but is composer-owned: it stays live viewport chrome while its intro animates and while the screen has room, then retires once — before any transcript batch — when content first overflows.
+欢迎页头遵循相同的有序退役模型，但由 composer 拥有：它在介绍动画播放期间以及屏幕仍有空间时保持为活动视口界面，然后在内容首次溢出时——在任何记录批次之前——一次性退役。
 
-## Input and focus
+## 输入与焦点
 
-Input path:
+输入路径：
 
 `stdin -> ProcessTerminal -> StdinBuffer -> TUI.#handleInput -> focusedComponent.handleInput`
 
-`StdinBuffer` assembles fragmented CSI/OSC/DCS/APC/SS3 sequences and bracketed paste before dispatch. TUI input listeners may consume or transform input first. Key releases are filtered unless the focused component opts in.
+`StdinBuffer` 在分发之前将分片的 CSI/OSC/DCS/APC/SS3 序列以及带括号粘贴模式拼装完整。TUI 输入监听器可以先消费或转换输入。除非获得焦点组件的明确许可，否则按键释放事件将被过滤。
 
-`setFocus()` updates `Focusable.focused`; focused components emit `CURSOR_MARKER`, which the frame writer strips while recording the physical cursor target.
+`setFocus()` 更新 `Focusable.focused`；拥有焦点的组件发出 `CURSOR_MARKER`，帧写入器在记录物理光标目标的同时会将其剥离。
 
-Optimistic user submissions call `renderNow()` before agent dispatch so synchronous startup/model work cannot delay the visible user row.
+乐观用户提交在代理派发前调用 `renderNow()`，以保证同步启动/模型工作不会延迟可见的用户行。
 
-## Explicit transcript lifecycle
+## 显式记录生命周期
 
-`TranscriptContainer` keeps blocks in semantic order:
+`TranscriptContainer` 按语义顺序维护块：
 
-- **active** — mutable and viewport-resident;
-- **settled** — finalized but still live: it re-renders at the current width every frame (so resizes reflow it) until capacity pressure retires it;
-- **committed** — acknowledged by the terminal writer and released from render caches.
+- **active（活动）** —— 可变且驻留于视口；
+- **settled（已稳定）** —— 已终态但仍处于活动状态：它会按当前宽度在每一帧重新渲染（以便在缩放时回流），直至容量压力将其退役；
+- **committed（已提交）** —— 已被终端写入器确认并从渲染缓存中释放。
 
-Finalizing a later block never bypasses an active predecessor. `peekFinalizedBatch(width, capacity)` retires the shortest settled prefix that lets the remaining live tail fit `capacity`, stops at the first active block, and reoffers the same id until `acknowledgeFinalizedBatch()` succeeds. `peekFlushBatch(width)` takes the whole eligible prefix during graceful shutdown. While the screen has room nothing retires during ordinary operation, so a submitted message is visible immediately and recent blocks keep reflowing on resize.
+终态化后继块绝不会绕过其活动前驱。`peekFinalizedBatch(width, capacity)` 退役最短的已稳定前缀，以便剩余的活动尾部适配 `capacity`，在第一个活动块处停止，并反复重投同一 id，直到 `acknowledgeFinalizedBatch()` 成功为止。`peekFlushBatch(width)` 在优雅停机时获取整个符合条件的前缀。在屏幕仍有空间时，常规操作中不会退役任何内容，因此提交的消息会立即可见，而最近的块在缩放时仍会持续回流。
 
-Display replay has an independent cursor over committed entries. It never changes
-`committed` states or the logical frontier, and an offered replay never removes
-the active tail from the projected viewport.
+显示重放对已提交条目拥有独立的光标。它从不改变 `committed` 状态或逻辑边界，且所提供的重放绝不会从投影视口中移除活动尾部。
 
-Every emitted transcript block owns one trailing separator row. This preserves spacing between a finalized user/tool block and the next active assistant/tool row without duplicating separators across batches.
+每个发出的记录块都拥有一行尾部分隔行。这可以在已终态的用户/工具块与下一个活动助手/工具行之间保留间距，而不会在批次之间重复分隔行。
 
-## Viewport allocation and tool collapse
+## 视口分配与工具折叠
 
-The product root reserves chrome first, gives every active block one row, then allocates surplus to newer blocks. When active count exceeds available rows, it uses a bounded aggregate rather than committing or cancelling work.
+产品根节点首先预留界面，为每个活动块分配一行，然后将剩余空间分配给较新的块。当活动块数量超过可用行数时，它会使用有界聚合而非提交或取消工作。
 
-`ToolExecutionComponent` owns generic compact presentation:
+`ToolExecutionComponent` 负责通用紧凑呈现：
 
-- three or more rows: full tool renderer;
-- two rows: semantic folded card;
-- one row: stable label/activity line with shared-clock pulse;
-- zero rows: finalized and hidden.
+- 三行及以上：完整工具渲染器；
+- 两行：语义化的折叠卡片；
+- 一行：带共享时钟脉动的稳定标签/活动行；
+- 零行：已终态并隐藏。
 
-Built-in and extension tools use the same wrapper. Renderers may provide semantic activity data; otherwise the wrapper derives command/path/input text and falls back to `tool · running`.
+内置工具和扩展工具使用同一封装。渲染器可以提供语义化的活动数据；否则封装会派生命令/路径/输入文本，并回退为 `tool · running`。
 
-## Terminal write path
+## 终端写入路径
 
-A provider frame contains two channels:
+提供方帧包含两个通道：
 
 ```ts
 interface TerminalFramePlan {
@@ -78,37 +75,37 @@ interface TerminalFramePlan {
 }
 ```
 
-The writer:
+写入器：
 
-1. Normalizes and width-fits every row with autowrap disabled.
-2. Appends only an unacknowledged history id.
-3. Repaints the anchored mutable viewport in place.
-4. Clears stale rows below the viewport.
-5. Restores autowrap, synchronized-output state, and cursor state.
-6. Acknowledges the exact history id only after the write is accepted in-process.
+1. 在禁用自动换行的情况下，对每一行进行归一化并按宽度适配。
+2. 仅追加未经确认的历史 id。
+3. 原地重绘锚定的可变视口。
+4. 清除视口下方的过期行。
+5. 恢复自动换行、同步输出状态和光标状态。
+6. 仅在写入被进程内接受后才确认该精确的历史 id。
 
-Viewport-only frames cannot create history. Theme changes leave native history terminal-owned; settled resizes may replay it according to `ResizeScrollbackMode`.
+仅视口帧不能创建历史。主题更改将原生历史保留为终端所有；已稳定的缩放可根据 `ResizeScrollbackMode` 重放历史。
 
-## Resize
+## 缩放
 
-During resize, TUI borrows the alternate buffer. The frame provider supplies a full semantic viewport tail for that transient buffer; history offers are never acknowledged there. After a short quiet window TUI restores the normal buffer — which the terminal has reflowed — and recovers the viewport anchor with a DSR (CSI 6n) round trip: every normal paint parks the hardware cursor at a known viewport offset, terminals keep that cursor attached to its logical line through width rewrap, and the settled anchor is `min(reported − parkOffset, height − staleReflowedRows)`. The second bound reconstructs height-shrink scrollback pushes that clamp the cursor instead of scrolling it (bottom-preserving resize guarantees the stale viewport ends on the last screen row whenever a push happened); multiplexers clip instead of rewrapping, so the stale-row measure counts one row per row there. The repaint waits for the CPR reply (200 ms timeout falls back to the bounded retained anchor); `packages/tui/test/resize-anchor-recovery.test.ts` validates the formula against kitty's real core.
+缩放期间，TUI 借用备用缓冲区。帧提供方为该瞬态缓冲区提供完整的语义视口尾部；历史提供在此处永远不会被确认。经过短暂的静默窗口后，TUI 恢复正常缓冲区——该缓冲区已被终端回流——并通过 DSR（CSI 6n）往返恢复视口锚点：每次常规绘制都将硬件光标停在已知的视口偏移处，终端通过宽度重新换行将该光标附着在其逻辑行上，已稳定锚点为 `min(reported − parkOffset, height − staleReflowedRows)`。第二个边界重建高度收缩的滚动回溯推送，这些推送夹住光标而非滚动它（保留底部的缩放保证过期视口在最后一行屏幕行结束 whe…
 
-A settled resize then applies `ResizeScrollbackMode`. `rebuild` clears native history with ED3 and asks the provider to replay the complete committed transcript under fresh monotonic ids. `append` performs the same independent replay below retained history. `preserve` skips replay and only repaints the anchored viewport. The raw TUI default is `preserve`; the coding agent sets `rebuild`.
+已稳定的缩放随后应用 `ResizeScrollbackMode`。`rebuild` 通过 ED3 清除原生历史，并请求提供方使用全新的单调 id 完整重放已提交的记录。`append` 在保留的历史下方执行相同的独立重放。`preserve` 跳过重放，仅重绘锚定的视口。裸 TUI 的默认值为 `preserve`；coding agent 将其设置为 `rebuild`。
 
-A shrink can make the terminal itself push live viewport rows into scrollback before the app hears about the resize; those rows are unreachable to an inline app and may remain above the repainted frame at their old width. The screen itself always converges to exactly one copy. Likewise, when a history append overflows the screen, the writer first erases the old live viewport region so a scroll can only push committed rows and blanks into scrollback, never an unfinished frame.
+收缩可能使终端本身在应用获知缩放之前将活动视口行推入滚动回溯；这些行对内联应用不可达，并可能以其原宽度保留在重绘帧的上方。屏幕本身始终收敛到恰好一份副本。同样，当历史追加溢出屏幕时，写入器会首先擦除旧的活动视口区域，这样滚动只能将已提交行和空白推入滚动回溯，而不会推入未完成的帧。
 
-## Explicit display reset
+## 显式显示重置
 
-`resetDisplay()` is destructive and user-driven. It is reserved for session replacement, tree/resume replacement, Ctrl+L, and settings that rebuild the semantic transcript. Before ED3, the provider resets retirement state so the complete finalized prefix is reoffered under new monotonic history ids. The same reset-and-reoffer transaction serves settled resizes in `rebuild` mode; ordinary rendering, animation, and tool finalization cannot reach it.
+`resetDisplay()` 具有破坏性并由用户驱动。它仅保留用于会话替换、tree/resume 替换、Ctrl+L 以及重建语义记录的设置。在 ED3 之前，提供方重置退役状态，以便在新的单调历史 id 下重新提供完整的已终态前缀。同样的 reset-and-reoffer 事务在 `rebuild` 模式下服务于已稳定的缩放；常规渲染、动画和工具终态化无法触发它。
 
-Theme or visibility changes that affect only current/future output repaint the mutable viewport; already-retired history remains immutable.
+仅影响当前/未来输出的主题或可见性更改会重绘可变视口；已退役的历史保持不可变。
 
-## Overlays and images
+## 浮层与图像
 
-Fullscreen overlays use the alternate buffer and never append history. Normal overlays composite over the mutable viewport only.
+全屏浮层使用备用缓冲区，且永不追加历史。普通浮层仅在可变视口之上合成。
 
-Inline image data and purge commands are emitted before row placements. Active images may remain graphical in the viewport; finalized history uses textual fallback unless the protocol can account for stable physical rows.
+内联图像数据和清除命令在行放置之前发出。活动图像可在视口中保持图形形式；已终态历史使用文本回退，除非协议能够说明稳定的物理行。
 
-## Shutdown
+## 停机
 
-Interactive shutdown disposes session-owned work, drains terminal input, restores title/protocol state, and calls `TUI.stop()`. TUI exits any alternate buffer, asks the provider to Flush all eligible finalized history, cancels render/resize timers, preserves terminal-owned image state, places the shell cursor directly after visible TUI content, restores cursor visibility, then delegates terminal-mode restoration to `ProcessTerminal.stop()`.
+交互式停机会释放会话拥有的工作、排空终端输入、恢复标题/协议状态，并调用 `TUI.stop()`。TUI 退出任何备用缓冲区，请求提供方 Flush 所有符合条件的已终态历史，取消渲染/缩放定时器，保留终端拥有的图像状态，将 shell 光标直接放置在可见 TUI 内容之后，恢复光标可见性，然后将终端模式恢复委托给 `ProcessTerminal.stop()`。

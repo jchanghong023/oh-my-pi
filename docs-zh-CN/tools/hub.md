@@ -1,8 +1,8 @@
 # hub
 
-> The single agent-coordination surface: peer messaging over the process-global mailbox bus, background-job control, and supervision of shared long-running processes.
+> 统一的代理协调界面：基于进程全局邮箱总线的对等消息传递、后台任务控制，以及对共享长时进程的管理。
 
-Merged from the former `irc`, `job`, and `launch` tools; each op family keeps its old behavior and rendering.
+由原有的 `irc`、`job` 和 `launch` 工具合并而成；每组操作保留其原有行为和渲染方式。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/hub/index.ts` (schema, `HubTool`, unified `wait`, renderer dispatch)

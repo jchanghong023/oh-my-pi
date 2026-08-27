@@ -1,16 +1,16 @@
 # security_scan
 
-> Plan and run OMP-native security reviews, validate stored findings, and explicitly interact with Codex Security cloud scans.
+> 规划并运行 OMP 原生安全审查、验证已存储的发现，并显式与 Codex Security 云扫描交互。
 
-## Availability and prerequisites
+## 可用性与先决条件
 
-- `security.enabled` defaults to `false`. When disabled, `security_scan` is omitted from the available tool set and `security://` reads fail with an enablement message. Enable it in **Settings → Tools → Security** or set `security.enabled = true`.
-- The tool is discoverable, strict-schema, and classified as `exec`.
-- Native `preflight` requires a Git repository, an active model, the session model and authentication registries, and a stored OAuth credential for the active model's provider. API-key-only authentication is not accepted.
-- If several OAuth accounts exist and none is active, pass `credential_id`; a lone account is selected automatically. The immutable plan pins the credential row and recorded account/workspace identity. Execution and token refresh stay on that row rather than rotating to another account.
-- Cloud actions require an `openai-codex` ChatGPT OAuth credential. They call ChatGPT's Codex Security cloud control plane, not the public OpenAI API, and are never a fallback from a native scan.
+- `security.enabled` 默认为 `false`。禁用时,`security_scan` 会从可用工具集中省略,且 `security://` 读取会因未启用而失败。在 **Settings → Tools → Security** 中启用,或将 `security.enabled` 设为 `true`。
+- 该工具可发现,采用严格 schema,分类为 `exec`。
+- 原生 `preflight` 需要一个 Git 仓库、一个活动的模型、会话模型与认证注册表,以及活动模型提供商的已存储 OAuth 凭据。不接受仅 API 密钥的认证。
+- 如果存在多个 OAuth 账号且没有活动账号,需传入 `credential_id`;若仅有一个账号则会自动选择。不可变计划会固定凭据行以及所记录的账号/工作区身份。执行与令牌刷新都停留在该行上,而不会轮换到其他账号。
+- 云操作需要一个 `openai-codex` ChatGPT OAuth 凭据。它们调用 ChatGPT 的 Codex Security 云控制平面,而非公共 OpenAI API,绝不是原生扫描的兜底方案。
 
-## Source
+## 源码
 
 - Public tool and schema: `packages/coding-agent/src/tools/security-scan.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/security-scan.md`
@@ -21,185 +21,185 @@
 - Cloud client/import: `packages/coding-agent/src/security/cloud.ts`
 - Read-only resources: `packages/coding-agent/src/internal-urls/security-protocol.ts`
 
-## Inputs
+## 输入
 
 | Field | Type | Used by | Description |
 | --- | --- | --- | --- |
-| `action` | `"preflight" \| "start" \| "status" \| "cancel" \| "validate" \| "cloud_scans" \| "cloud_start" \| "cloud_status" \| "cloud_pull"` | All | Required dispatch selector. |
-| `plan_id` | `string` | `start` | Plan ID returned by `preflight`. |
-| `operation_id` | `string` | `status`, `cancel` | Operation ID returned by `start`. |
-| `target_kind` | `"repository" \| "scoped_path" \| "ref_diff" \| "working_tree"` | `preflight` | Defaults to `repository`. |
-| `include_paths` | `string[]` | `preflight` | Repository-relative paths included in the immutable scope. At least one nonblank value is required for `scoped_path`. |
-| `exclude_paths` | `string[]` | `preflight` | Repository-relative paths removed from the scope. Exclusion wins over inclusion. |
-| `base_revision` | `string` | `preflight` with `ref_diff` | Required with `head_revision`; resolved to a commit during preflight. |
-| `head_revision` | `string` | `preflight` with `ref_diff` | Required with `base_revision`; resolved to a commit during preflight. |
-| `knowledge_base_paths` | `string[]` | `preflight` | Files resolved relative to the repository root, canonicalized, and pinned by SHA-256 and size. |
-| `output_root` | `string` | `preflight` | Optional external result directory. It must be outside the repository, canonical, non-symlinked, and empty unless `archive_existing=true`. |
-| `archive_existing` | `boolean` | `preflight` | Defaults to `false`. Allows a nonempty output directory to be renamed to `<output_root>.archive-<scan-id>` when execution begins. |
-| `credential_id` | positive integer | Native `preflight`; every cloud action | Pins one OAuth credential. Native scans select it for the active model provider; cloud actions select it for `openai-codex`. |
-| `scan_id` | `string` | `validate` | Stored scan containing the finding. |
-| `finding_id` | `string` | `validate` | Stored finding to update. |
-| `validation_status` | `"unvalidated" \| "validated" \| "rejected" \| "partial" \| "error"` | `validate` | New validation state. |
-| `validation_summary` | `string` | `validate` | Required, nonblank validation explanation. |
-| `validation_evidence` | `{label: string, explanation: string}[]` | `validate` | Optional evidence appended as validation evidence; labels must be nonempty. |
-| `cloud_configuration_id` | `string` | `cloud_status`, `cloud_pull` | Codex Security cloud configuration ID. |
-| `repository_id` | `string` | `cloud_start` | Required cloud repository identifier. |
-| `repository_url` | `string` | `cloud_start` | Required cloud repository URL. |
-| `environment_id` | `string` | `cloud_start` | Required cloud environment identifier. |
-| `lookback_days` | positive integer or `"all"` | `cloud_start` | Defaults to `30`; `"all"` sends an unlimited lookback. |
+| `action` | `"preflight" \| "start" \| "status" \| "cancel" \| "validate" \| "cloud_scans" \| "cloud_start" \| "cloud_status" \| "cloud_pull"` | All | 必需的调度选择器。 |
+| `plan_id` | `string` | `start` | 由 `preflight` 返回的计划 ID。 |
+| `operation_id` | `string` | `status`, `cancel` | 由 `start` 返回的操作 ID。 |
+| `target_kind` | `"repository" \| "scoped_path" \| "ref_diff" \| "working_tree"` | `preflight` | 默认为 `repository`。 |
+| `include_paths` | `string[]` | `preflight` | 包含在不可变范围内的仓库相对路径。对于 `scoped_path`,至少需要一个非空值。 |
+| `exclude_paths` | `string[]` | `preflight` | 从范围中移除的仓库相对路径。排除优先于包含。 |
+| `base_revision` | `string` | `preflight` with `ref_diff` | 与 `head_revision` 一起必填;在 preflight 期间解析为一次提交。 |
+| `head_revision` | `string` | `preflight` with `ref_diff` | 与 `base_revision` 一起必填;在 preflight 期间解析为一次提交。 |
+| `knowledge_base_paths` | `string[]` | `preflight` | 相对于仓库根目录解析、规范化并通过 SHA-256 和大小固定的文件。 |
+| `output_root` | `string` | `preflight` | 可选的外部结果目录。必须位于仓库外、规范化、非符号链接,除非 `archive_existing=true`,否则必须为空。 |
+| `archive_existing` | `boolean` | `preflight` | 默认为 `false`。允许在执行开始时将非空输出目录重命名为 `<output_root>.archive-<scan-id>`。 |
+| `credential_id` | positive integer | Native `preflight`; every cloud action | 固定一个 OAuth 凭据。原生扫描为活动模型提供商选择它;云操作为 `openai-codex` 选择它。 |
+| `scan_id` | `string` | `validate` | 包含该发现的已存储扫描。 |
+| `finding_id` | `string` | `validate` | 要更新的已存储发现。 |
+| `validation_status` | `"unvalidated" \| "validated" \| "rejected" \| "partial" \| "error"` | `validate` | 新的验证状态。 |
+| `validation_summary` | `string` | `validate` | 必需且非空的验证说明。 |
+| `validation_evidence` | `{label: string, explanation: string}[]` | `validate` | 作为验证证据追加的可选证据;标签必须非空。 |
+| `cloud_configuration_id` | `string` | `cloud_status`, `cloud_pull` | Codex Security 云配置 ID。 |
+| `repository_id` | `string` | `cloud_start` | 必需的云仓库标识符。 |
+| `repository_url` | `string` | `cloud_start` | 必需的云仓库 URL。 |
+| `environment_id` | `string` | `cloud_start` | 必需的云环境标识符。 |
+| `lookback_days` | positive integer or `"all"` | `cloud_start` | 默认为 `30`;`"all"` 表示发送无限回溯范围。 |
 
-Unused optional fields are ignored by actions that do not read them.
+未使用且可选的字段会被不读取它们的操作忽略。
 
-## Outputs and execution model
+## 输出与执行模型
 
-Every action returns one text content block plus structured `details` containing `action` and the action-specific object described below. The tool itself does not stream partial arguments or progress updates. `start` returns a queued operation immediately; its separately registered OMP job reports progress, and callers use `status` for durable operation state.
+每个操作都会返回一个文本内容块以及包含 `action` 和下文所述特定操作对象的结构化 `details`。该工具自身不流式传输部分参数或进度更新。`start` 立即返回一个已排队的操作;其单独注册的 OMP 任务报告进度,调用方使用 `status` 获取持久的操作状态。
 
-## Action reference
+## 操作参考
 
 ### `preflight`
 
-`preflight` resolves and persists an immutable plan, then returns:
+`preflight` 解析并持久化一个不可变的计划,然后返回:
 
 ```text
 Security plan <plan-id> is ready. Fingerprint: <fingerprint>. Start it with action=start and plan_id=<plan-id>.
 ```
 
-`details` is `{ action: "preflight", plan: { id, fingerprint } }`.
+`details` 为 `{ action: "preflight", plan: { id, fingerprint } }`。
 
-The plan pins:
+该计划固定了:
 
-- the canonical repository root and normalized include/exclude scope;
-- the target snapshot;
-- resolved ref-diff revisions and diff digest, when applicable;
-- the active provider/model and optional thinking level;
-- the exact OAuth credential and recorded account/workspace identity;
-- knowledge-base file identities;
-- output policy;
-- the security setting snapshot and fingerprints of the coordinator prompts/workflow.
+- 规范的仓库根目录以及规范化的包含/排除范围;
+- 目标快照;
+- 已解析的 ref-diff 修订及其差异摘要(如适用);
+- 活动提供商/模型以及可选的思考级别;
+- 精确的 OAuth 凭据以及所记录的账号/工作区身份;
+- 知识库文件标识;
+- 输出策略;
+- 安全设置快照以及协调器提示/工作流的指纹。
 
-For `repository`, `scoped_path`, and `working_tree`, the target digest covers in-scope tracked and untracked file paths and contents, executable bits, symlink targets, and the current HEAD (or `unborn`). `ref_diff` instead fingerprints the resolved base/head commits and their raw tree diff. Scope paths must be repository-relative, must exist and resolve inside the repository, and are normalized, deduplicated, and sorted.
+对于 `repository`、`scoped_path` 和 `working_tree`,目标摘要涵盖范围内受跟踪和未受跟踪的文件路径与内容、可执行位、符号链接目标,以及当前 HEAD(或 `unborn`)。`ref_diff` 则会对已解析的 base/head 提交及其原始树差异计算指纹。范围路径必须相对仓库,必须存在且解析到仓库内部,并经过规范化、去重和排序。
 
-If `output_root` is omitted, preflight allocates a private unique directory under the project's OMP security state. A caller-supplied output directory is created during preflight if absent; its parent must already have a canonical identity. Nonempty directories require `archive_existing=true`.
+如果省略 `output_root`,preflight 会在项目的 OMP 安全状态下分配一个私有的唯一目录。调用方提供的输出目录若不存在,则会在 preflight 期间创建;其父目录必须已具有规范身份。非空目录需要 `archive_existing=true`。
 
 ### `start`
 
-`start` loads the stored plan and recomputes its fingerprint from the current target, security setting, knowledge bases, output policy, and workflow. A mismatch fails with:
+`start` 加载已存储的计划,并根据当前目标、安全设置、知识库、输出策略和工作流重新计算其指纹。若不匹配则失败,返回:
 
 ```text
 Security scan plan is stale: expected <old>, got <new>. Run security preflight again.
 ```
 
-On success it returns immediately after registering background work:
+成功后,它在注册后台工作后立即返回:
 
 ```text
 Security scan <scan-id> started as <operation-id>.
 ```
 
-`details.operation` contains `operationId`, `planId`, `scanId`, `phase`, timestamps, `findingCount`, and, when available, `jobId`, `sessionFile`, or `error`.
+`details.operation` 包含 `operationId`、`planId`、`scanId`、`phase`、时间戳、`findingCount`,以及在可用时的 `jobId`、`sessionFile` 或 `error`。
 
-Operation phases are:
+操作阶段为:
 
 ```text
 queued → preparing → reviewing → publishing → completed
 ```
 
-Terminal alternatives are `partial`, `cancelled`, and `failed`. The coordinator creates a restricted, auto-approved scan session with read-only repository inspection tools, read-only LSP, and only `security-reviewer` task workers. Extension discovery, MCP, and IRC are disabled. Model fallback and account rotation are disabled.
+终态的替代值为 `partial`、`cancelled` 和 `failed`。协调器会创建一个受限、自动批准的扫描会话,其中包含只读的仓库检查工具、只读的 LSP,以及仅 `security-reviewer` 任务工作线程。扩展发现、MCP 和 IRC 被禁用。模型兜底和账号轮换被禁用。
 
-For `ref_diff`, execution creates a detached temporary worktree at the pinned head revision and supplies the pinned diff to the review session; cleanup removes that worktree. Other target kinds review the repository root directly.
+对于 `ref_diff`,执行会在固定的 head 修订处创建一个分离的临时工作树,并将固定的差异提供给审查会话;清理阶段会移除该工作树。其他目标类型则直接审查仓库根目录。
 
 ### `status`
 
-Requires `operation_id`. It returns:
+需要 `operation_id`。它返回:
 
 ```text
 Security scan <scan-id>: <phase>; <count> finding(s).
 ```
 
-The full operation snapshot is in `details.operation`. Terminal operations are recovered from the project store across sessions. A process restart marks persisted `running` or `planned` scans as `failed` with `Security scan was interrupted by a process restart` and cleans up a ref-diff target worktree. An unknown ID throws `Unknown security operation: <id>`.
+完整的操作快照位于 `details.operation`。终态操作可从项目存储中跨会话恢复。进程重启会将已持久化的 `running` 或 `planned` 扫描标记为 `failed`,并附带 `Security scan was interrupted by a process restart`,同时清理 ref-diff 目标工作树。未知的 ID 会抛出 `Unknown security operation: <id>`。
 
 ### `cancel`
 
-Requires `operation_id`. Running async jobs are cancelled through the job manager; otherwise the coordinator aborts its local controller and scan session. The result is either:
+需要 `operation_id`。正在运行的异步任务会通过任务管理器取消;否则协调器会中止其本地控制器和扫描会话。结果为以下之一:
 
 ```text
 Cancellation requested for <operation-id>.
 No running operation <operation-id>.
 ```
 
-`details.cancelled` reports whether a request was accepted, and `details.operation` is included when the operation exists. Already-terminal and unknown operations return `false`.
+`details.cancelled` 报告请求是否被接受,当操作存在时会包含 `details.operation`。已处于终态的操作和未知操作返回 `false`。
 
 ### `validate`
 
-Requires `scan_id`, `finding_id`, `validation_status`, and a nonblank `validation_summary`. It updates the canonical stored finding and optionally appends generated validation-evidence records:
+需要 `scan_id`、`finding_id`、`validation_status`,以及非空的 `validation_summary`。它会更新规范存储的发现,并可选择追加生成的验证证据记录:
 
 ```text
 Finding <finding-id> validation is now <status>.
 ```
 
-`details.finding` contains the finding ID and validation status. Missing scans/findings or required fields fail rather than creating a new finding.
+`details.finding` 包含发现 ID 和验证状态。缺失的扫描/发现或必填字段会失败,而不会创建新发现。
 
 ### `cloud_scans`
 
-Lists every paginated configuration visible to the selected ChatGPT account. Each line contains configuration ID, current step, repository ID, environment ID, and repository URL. If none exist, the tool says so. Structured configurations are returned in `details.cloudConfigurations`.
+列出所选 ChatGPT 账号可见的每个分页配置。每一行包含配置 ID、当前步骤、仓库 ID、环境 ID 和仓库 URL。如果不存在,工具会明确说明。结构化的配置在 `details.cloudConfigurations` 中返回。
 
 ### `cloud_start`
 
-Requires `repository_id`, `repository_url`, and `environment_id`. It creates an enabled Codex Security cloud scan configuration and consumes the account's separate cloud scan allowance. `lookback_days` defaults to `30`.
+需要 `repository_id`、`repository_url` 和 `environment_id`。它会创建一个已启用的 Codex Security 云扫描配置,并消耗该账号独立的云扫描配额。`lookback_days` 默认为 `30`。
 
-The text identifies the configuration and repository. `details.cloudScan` contains `{ id, repositoryUrl }`.
+文本中会标识该配置和仓库。`details.cloudScan` 包含 `{ id, repositoryUrl }`。
 
 ### `cloud_status`
 
-Requires `cloud_configuration_id`. It reports the current step and finished/pending commit counts. `details.cloudStats` also contains failed commits, per-severity finding counts, and any last scanned commit/timestamps exposed by the service.
+需要 `cloud_configuration_id`。它报告当前步骤以及已完成/待处理的提交计数。`details.cloudStats` 还包含失败提交数、按严重性统计的发现数,以及服务所暴露的最后扫描提交/时间戳。
 
 ### `cloud_pull`
 
-Requires `cloud_configuration_id`. It fetches the configuration, status, and all attributed finding details, converts them to OMP's canonical schema, generates a report and SARIF, and persists a completed imported scan.
+需要 `cloud_configuration_id`。它会获取配置、状态以及所有归因的发现详情,将其转换为 OMP 的规范 schema,生成报告和 SARIF,并持久化一个已完成的导入扫描。
 
-Import fails closed unless the current project has an `origin` remote whose normalized repository identity matches the cloud configuration URL. Cloud coverage is recorded as `unknown` because the findings API does not expose coverage receipts. `details.importedScan` contains the new scan ID and finding count.
+除非当前项目具有 `origin` 远程、且其规范化的仓库身份与云配置 URL 匹配,否则导入采用失败关闭策略。云覆盖范围被记录为 `unknown`,因为发现 API 未暴露覆盖回执。`details.importedScan` 包含新的扫描 ID 和发现数量。
 
-## Native publication and persistence
+## 原生发布与持久化
 
-`security_publish` is an internal, strict, write-tier tool available only inside the restricted native scan session; it is not a normal caller action. The coordinator requires the scan agent to call it once with:
+`security_publish` 是一个内部的、严格的、写入级工具,仅在受限的原生扫描会话内可用;它不是常规的调用方操作。协调器要求扫描代理使用以下内容调用一次:
 
-- deduplicated findings containing rule, title, summary, severity, confidence, category, at least one in-scope location, optional evidence/remediation/CWE, and validation state;
-- honest coverage completeness, reviewed surfaces, exclusions, deferred work, and open questions;
-- the final Markdown report.
+- 去重后的发现,包含规则、标题、摘要、严重性、置信度、类别、至少一个范围内的位置、可选的证据/修复/CWE,以及验证状态;
+- 诚实的覆盖完整性、已审查的表面、排除项、已推迟工作和未决问题;
+- 最终的 Markdown 报告。
 
-Publication rejects absolute, parent-traversing, or out-of-scope finding and evidence paths. Repeated findings with the same canonical fingerprint are deduplicated. A second successful publication call fails. If the scan session ends without publication, the scan is persisted as `partial`; a successful publication remains `completed` even if later metrics/output refresh fails.
+发布会拒绝绝对路径、父目录穿越或超出范围的发现与证据路径。具有相同规范指纹的重复发现会被去重。第二次成功发布的调用会失败。如果扫描会话在没有发布的情况下结束,则该扫描会被持久化为 `partial`;即使后续的指标/输出刷新失败,成功发布仍保持为 `completed`。
 
-Canonical state is private and project-keyed under OMP's security state root. A completed native output directory contains:
+规范状态为私有并以项目为键,位于 OMP 安全状态根目录下。已完成的原生输出目录包含:
 
-- `scan.json` — public scan manifest, written last as the commit marker;
+- `scan.json` — 公共扫描清单,作为提交标记最后写入;
 - `findings.json`;
 - `report.md`;
 - `results.sarif`;
-- `provenance.json` — private metadata redacted.
+- `provenance.json` — 私有元数据(已脱敏)。
 
-Directories are hardened to mode `0700` and files to `0600` on non-Windows platforms.
+在非 Windows 平台上,目录的权限被加固为模式 `0700`,文件为 `0600`。
 
-## Reading results
+## 读取结果
 
-The `security://` namespace is immutable and project-scoped:
+`security://` 命名空间是不可变的,作用域为项目:
 
 | URL | Result |
 | --- | --- |
-| `security://` | Namespace index. |
-| `security://scans` | Stored scan list. |
-| `security://scans/<scan-id>` | Scan summary and child-resource index. |
-| `security://scans/<scan-id>/manifest` | Public manifest JSON, including the plan. |
-| `security://scans/<scan-id>/findings` | Finding list. |
-| `security://scans/<scan-id>/findings/<finding-id>` | Rendered finding, locations, evidence, and remediation. |
-| `security://scans/<scan-id>/coverage` | Coverage JSON. |
-| `security://scans/<scan-id>/report` | Markdown report, when present. |
-| `security://scans/<scan-id>/sarif` | SARIF JSON, when present. |
-| `security://scans/<scan-id>/provenance` | Redacted provenance JSON. |
+| `security://` | 命名空间索引。 |
+| `security://scans` | 已存储的扫描列表。 |
+| `security://scans/<scan-id>` | 扫描摘要与子资源索引。 |
+| `security://scans/<scan-id>/manifest` | 公共清单 JSON,包括计划。 |
+| `security://scans/<scan-id>/findings` | 发现列表。 |
+| `security://scans/<scan-id>/findings/<finding-id>` | 渲染的发现、位置、证据和修复建议。 |
+| `security://scans/<scan-id>/coverage` | 覆盖范围 JSON。 |
+| `security://scans/<scan-id>/report` | Markdown 报告(若存在)。 |
+| `security://scans/<scan-id>/sarif` | SARIF JSON(若存在)。 |
+| `security://scans/<scan-id>/provenance` | 已脱敏的来源信息 JSON。 |
 
-Use `security_scan` actions or explicit security commands for mutations; URI reads never validate, import, cancel, or otherwise modify state.
+对状态的变更应使用 `security_scan` 操作或显式的安全命令;URI 读取永远不会验证、导入、取消或以其他方式修改状态。
 
-## Examples
+## 示例
 
-Plan and launch a repository scan:
+规划并启动一次仓库扫描:
 
 ```json
 {"action":"preflight","target_kind":"repository","exclude_paths":["vendor","dist"]}
@@ -209,7 +209,7 @@ Plan and launch a repository scan:
 {"action":"start","plan_id":"secplan_<id>"}
 ```
 
-Plan an exact revision diff with an external output directory:
+使用外部输出目录规划一次精确的修订差异:
 
 ```json
 {
@@ -221,7 +221,7 @@ Plan an exact revision diff with an external output directory:
 }
 ```
 
-Validate a finding:
+验证一个发现:
 
 ```json
 {
@@ -236,7 +236,7 @@ Validate a finding:
 }
 ```
 
-Explicitly start and later import a cloud scan:
+显式启动并稍后导入一次云扫描:
 
 ```json
 {
@@ -253,11 +253,11 @@ Explicitly start and later import a cloud scan:
 {"action":"cloud_pull","cloud_configuration_id":"scan_<id>","credential_id":7}
 ```
 
-## Errors and constraints
+## 错误与约束
 
-- Every action first rechecks `security.enabled`; direct execution while disabled throws `Security is disabled. Enable security.enabled before using security_scan.`
-- Required strings are trimmed and reject blank values. ArkType rejects invalid enum values, nonpositive credential/lookback IDs, and malformed validation evidence.
-- Native scans reject missing Git context, unknown refs, escaping/nonexistent scope paths, invalid knowledge-base files, unsafe output directories, unknown/stale plans, unavailable pinned models, OAuth identity changes, and unavailable pinned credentials.
-- Cloud requests retry once on HTTP 401 with a forced refresh, then fail. Other non-success responses report the status and endpoint.
-- `cloud_pull` verifies repository identity and configuration attribution before importing.
-- Cancellation is cooperative. The operation reaches terminal `cancelled` only after the background run handles the abort and persists its terminal bundle.
+- 每个操作都会首先重新检查 `security.enabled`;在禁用状态下直接执行会抛出 `Security is disabled. Enable security.enabled before using security_scan.`。
+- 必需的字符串会被去除首尾空白并拒绝为空值。ArkType 会拒绝无效的枚举值、非正的 credential/lookback ID,以及格式错误的验证证据。
+- 原生扫描会拒绝缺失的 Git 上下文、未知的引用、逃逸或不存在的范围路径、无效的知识库文件、不安全的输出目录、未知/过期的计划、不可用的固定模型、OAuth 身份变更,以及不可用的固定凭据。
+- 云请求在 HTTP 401 时会强制刷新并重试一次,然后失败。其他非成功响应会报告状态码和端点。
+- `cloud_pull` 在导入前会验证仓库身份和配置归属。
+- 取消是协作式的。操作只有在后台运行处理中止并持久化其终态包后,才会进入终态 `cancelled`。

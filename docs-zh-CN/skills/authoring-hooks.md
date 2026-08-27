@@ -3,13 +3,13 @@ name: authoring-hooks
 description: Use when creating a new omp hook. Covers HookAPI, event catalog, blocking/overriding tool calls, and context modification.
 ---
 
-# Authoring Hooks
+# 编写 Hook
 
-Hooks are event-driven interceptors that run alongside the agent loop. They are best used for cross-cutting concerns: safety policy, secret redaction, context pruning, audit logging. A hook module registers handlers via `pi.on(event, handler)` and can block tool execution, override tool output, or rewrite the message context before each LLM call.
+Hook 是事件驱动的拦截器，与 agent 循环并行运行。它们最适合处理横切关注点：安全策略、敏感信息脱敏、上下文裁剪、审计日志。Hook 模块通过 `pi.on(event, handler)` 注册处理器，可以在每次 LLM 调用之前阻止工具执行、覆盖工具输出，或重写消息上下文。
 
-> **Relationship to extensions:** The hook subsystem (`HookAPI`) is the legacy API. The extension runner now handles everything hooks can do plus more. `ExtensionAPI` supports the hook event model plus extension-only events. Use `ExtensionAPI` for new work; use `HookAPI` only if you are maintaining an existing hook module.
+> **与扩展的关系：** Hook 子系统（`HookAPI`）是旧版 API。扩展运行器现在可以处理 Hook 能做的一切，甚至更多。`ExtensionAPI` 支持 Hook 事件模型以及仅限扩展的事件。新工作请使用 `ExtensionAPI`；只有在维护现有 Hook 模块时才使用 `HookAPI`。
 
-## Factory signature
+## 工厂签名
 
 ```ts
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
@@ -21,9 +21,9 @@ export default function myHook(omp: HookAPI): void {
 }
 ```
 
-The default export must be a function (not a class). It receives a `HookAPI` instance and should register handlers during factory execution; the loader awaits a returned promise, so asynchronous initialization is accepted.
+默认导出必须是一个函数（而不是类）。它接收一个 `HookAPI` 实例，并应在工厂执行期间注册处理器；加载器会 await 返回的 Promise，因此可以接受异步初始化。
 
-Alternatively, using `ExtensionAPI` (preferred):
+或者，使用 `ExtensionAPI`（推荐）：
 
 ```ts
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -33,53 +33,53 @@ export default function myExtension(pi: ExtensionAPI): void {
 }
 ```
 
-## Event catalog
+## 事件目录
 
-### Tool lifecycle
+### 工具生命周期
 
-| Event | Fires | Can return |
+| 事件 | 触发时机 | 可返回值 |
 |---|---|---|
-| `tool_call` | Before every tool execution | `{ block?: boolean; reason?: string; input?: Record<string, unknown> }` |
-| `tool_result` | After every tool execution | `{ content?; details?; isError?: boolean }` |
+| `tool_call` | 每次工具执行之前 | `{ block?: boolean; reason?: string; input?: Record<string, unknown> }` |
+| `tool_result` | 每次工具执行之后 | `{ content?; details?; isError?: boolean }` |
 
-### Session lifecycle
+### 会话生命周期
 
-| Event | Fires | Can return |
+| 事件 | 触发时机 | 可返回值 |
 |---|---|---|
-| `session_start` | On initial session load | — |
-| `session_before_switch` | Before session switch | `{ cancel?: boolean }` |
-| `session_switch` | After session switch | — |
-| `session_before_branch` | Before session branch | `{ cancel?: boolean; skipConversationRestore?: boolean }` |
-| `session_branch` | After session branch | — |
-| `session_before_compact` | Before compaction | `{ cancel?: boolean; compaction?: CompactionResult }` |
-| `session.compacting` | During compaction (inject context) | `{ context?: string[]; prompt?: string; preserveData?: Record<string, unknown> }` |
-| `session_compact` | After compaction | — |
-| `session_before_tree` | Before tree navigation | `{ cancel?: boolean; summary?: { summary: string; details?: unknown } }` |
-| `session_tree` | After tree navigation | — |
-| `session_shutdown` | On session shutdown | — |
+| `session_start` | 初始会话加载时 | — |
+| `session_before_switch` | 切换会话之前 | `{ cancel?: boolean }` |
+| `session_switch` | 切换会话之后 | — |
+| `session_before_branch` | 创建会话分支之前 | `{ cancel?: boolean; skipConversationRestore?: boolean }` |
+| `session_branch` | 创建会话分支之后 | — |
+| `session_before_compact` | 压缩之前 | `{ cancel?: boolean; compaction?: CompactionResult }` |
+| `session.compacting` | 压缩过程中（注入上下文） | `{ context?: string[]; prompt?: string; preserveData?: Record<string, unknown> }` |
+| `session_compact` | 压缩之后 | — |
+| `session_before_tree` | 树形导航之前 | `{ cancel?: boolean; summary?: { summary: string; details?: unknown } }` |
+| `session_tree` | 树形导航之后 | — |
+| `session_shutdown` | 会话关闭时 | — |
 
-### Agent/turn lifecycle
+### Agent / 轮次生命周期
 
-| Event | Fires | Can return |
+| 事件 | 触发时机 | 可返回值 |
 |---|---|---|
-| `before_agent_start` | Before agent starts a turn | `{ message?: { customType; content; display; details; attribution? } }` |
-| `agent_start` | Agent streaming starts | — |
-| `agent_end` | Agent streaming ends | — |
-| `turn_start` | Start of a user→agent turn | — |
-| `turn_end` | End of a user→agent turn | — |
-| `context` | Before each LLM API call | `{ messages?: Message[] }` |
-| `auto_compaction_start` | Auto-compaction begins | — |
-| `auto_compaction_end` | Auto-compaction ends | — |
-| `auto_retry_start` | Auto-retry begins | — |
-| `auto_retry_end` | Auto-retry ends | — |
-| `ttsr_triggered` | TTSR (too-short response) triggered | — |
-| `todo_reminder` | Todo reminder fires | — |
+| `before_agent_start` | Agent 开始一轮之前 | `{ message?: { customType; content; display; details; attribution? } }` |
+| `agent_start` | Agent 开始流式输出 | — |
+| `agent_end` | Agent 结束流式输出 | — |
+| `turn_start` | 用户→Agent 轮次开始 | — |
+| `turn_end` | 用户→Agent 轮次结束 | — |
+| `context` | 每次 LLM API 调用之前 | `{ messages?: Message[] }` |
+| `auto_compaction_start` | 自动压缩开始 | — |
+| `auto_compaction_end` | 自动压缩结束 | — |
+| `auto_retry_start` | 自动重试开始 | — |
+| `auto_retry_end` | 自动重试结束 | — |
+| `ttsr_triggered` | TTSR（过短响应）触发 | — |
+| `todo_reminder` | Todo 提醒触发 | — |
 
-Extension-only events such as `tool_execution_start`, `tool_execution_update`, `tool_execution_end`, `input`, `user_bash`, and `user_python` require `ExtensionAPI`.
+仅限扩展的事件（如 `tool_execution_start`、`tool_execution_update`、`tool_execution_end`、`input`、`user_bash` 和 `user_python`）需要使用 `ExtensionAPI`。
 
-## Pre-tool blocking contract
+## 工具调用前阻断合约
 
-Return `{ block: true, reason: "..." }` from a `tool_call` handler to prevent execution:
+从 `tool_call` 处理器返回 `{ block: true, reason: "..." }` 以阻止执行：
 
 ```ts
 omp.on("tool_call", async (event, ctx) => {
@@ -92,17 +92,17 @@ omp.on("tool_call", async (event, ctx) => {
 });
 ```
 
-Contract:
+合约：
 
-- If **any** handler returns `{ block: true }`, execution stops immediately.
-- `reason` becomes the tool error text the LLM sees.
-- If a handler **throws**, the tool is also blocked (fail-closed).
-- Last non-blocking return wins; first `block: true` short-circuits.
-- A non-blocking handler can return `input` to replace the raw arguments passed to the tool. Handlers do not see earlier input revisions, and input replacement is ignored for `computer` calls.
+- 如果**任意一个**处理器返回 `{ block: true }`，执行立即停止。
+- `reason` 会成为 LLM 看到的工具错误文本。
+- 如果处理器**抛出异常**，工具也会被阻止（默认拒绝）。
+- 最后一个非阻断返回值生效；首个 `block: true` 会短路。
+- 非阻断处理器可以返回 `input` 来替换传递给工具的原始参数。处理器看不到此前的 `input` 修订，且 `computer` 调用会忽略 `input` 替换。
 
-## Post-tool override contract
+## 工具执行后覆盖合约
 
-Return `{ content, details, isError }` from a `tool_result` handler to patch what the LLM sees:
+从 `tool_result` 处理器返回 `{ content, details, isError }` 以修补 LLM 看到的内容：
 
 ```ts
 omp.on("tool_result", async (event, ctx) => {
@@ -119,17 +119,17 @@ omp.on("tool_result", async (event, ctx) => {
 });
 ```
 
-Contract:
+合约：
 
-- Handlers run in registration order. For `HookAPI`, each handler receives the original tool result event, and the last returned override wins.
-- `content` replaces the full content array for the LLM.
-- `details` replaces the structured details object.
-- `isError` exists on the shared result type, but `HookToolWrapper` does not propagate it into a successful tool result; on a tool failure, the original error is rethrown after handlers complete.
-- On a tool failure, `tool_result` is still emitted with `isError: true`.
+- 处理器按注册顺序运行。对于 `HookAPI`，每个处理器都接收原始的工具结果事件，最后返回的覆盖值生效。
+- `content` 会替换供 LLM 使用的完整内容数组。
+- `details` 会替换结构化的 details 对象。
+- `isError` 存在于共享的结果类型中，但 `HookToolWrapper` 不会将其传播到成功的工具结果中；工具失败时，原始错误会在处理器完成后被重新抛出。
+- 工具失败时，仍会以 `isError: true` 触发 `tool_result`。
 
-## Context modification contract
+## 上下文修改合约
 
-Return `{ messages: [...] }` from a `context` handler to rewrite the message list before each LLM API call:
+从 `context` 处理器返回 `{ messages: [...] }`，以便在每次 LLM API 调用之前重写消息列表：
 
 ```ts
 omp.on("context", async (event, ctx) => {
@@ -141,15 +141,15 @@ omp.on("context", async (event, ctx) => {
 });
 ```
 
-Contract:
+合约：
 
-- `event.messages` is the current accumulated list.
-- Handlers run in order; each receives the output of the previous handler.
-- Return `undefined` (or nothing) to pass messages through unmodified.
+- `event.messages` 是当前累积的列表。
+- 处理器按顺序运行；每个处理器都接收上一个处理器的输出。
+- 返回 `undefined`（或不返回任何内容）以原样传递消息。
 
-## Three complete examples
+## 三个完整示例
 
-### 1. rm-rf blocker
+### 1. rm-rf 阻断器
 
 ```ts
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
@@ -175,7 +175,7 @@ export default function rmRfBlocker(omp: HookAPI): void {
 }
 ```
 
-### 2. API-key redactor
+### 2. API 密钥脱敏器
 
 ```ts
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
@@ -212,7 +212,7 @@ export default function apiKeyRedactor(omp: HookAPI): void {
 }
 ```
 
-### 3. Context filter
+### 3. 上下文过滤器
 
 ```ts
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
@@ -239,29 +239,29 @@ export default function contextFilter(omp: HookAPI): void {
 }
 ```
 
-## UI methods in hook context
+## Hook 上下文中的 UI 方法
 
-`ctx.ui` is a `HookUIContext`. Available methods:
+`ctx.ui` 是一个 `HookUIContext`。可用方法：
 
-| Method | Description |
+| 方法 | 描述 |
 |---|---|
-| `notify(message, type?)` | Show an in-app notification |
-| `setStatus(key, text)` | Set footer status text (keyed, sorted by key) |
-| `select(title, options)` | Show a selection dialog |
-| `confirm(title, message)` | Show a yes/no dialog |
-| `input(title, placeholder?)` | Show a text input dialog |
-| `editor(title, prefill?, { signal }?, { promptStyle }?)` | Show a multi-line editor |
-| `setEditorText(text)` | Set the input editor content |
-| `getEditorText()` | Get current input editor content |
-| `custom(factory)` | Render a custom TUI component |
-| `theme` | Current theme object |
+| `notify(message, type?)` | 显示应用内通知 |
+| `setStatus(key, text)` | 设置底部状态栏文本（按键名排序） |
+| `select(title, options)` | 显示选择对话框 |
+| `confirm(title, message)` | 显示是/否对话框 |
+| `input(title, placeholder?)` | 显示文本输入对话框 |
+| `editor(title, prefill?, { signal }?, { promptStyle }?)` | 显示多行编辑器 |
+| `setEditorText(text)` | 设置输入编辑器内容 |
+| `getEditorText()` | 获取当前输入编辑器内容 |
+| `custom(factory)` | 渲染自定义 TUI 组件 |
+| `theme` | 当前主题对象 |
 
-Pass `{ promptStyle: true }` as the fourth argument when Enter should submit and Shift+Enter should insert a newline. The default hook editor behavior keeps Enter as newline and submits on the `app.message.followUp` chord (`Ctrl+Q` or `Ctrl+Enter`).
+当希望 Enter 提交而 Shift+Enter 插入换行时，请将 `{ promptStyle: true }` 作为第四个参数传入。默认的 hook 编辑器行为将 Enter 视为换行，并通过 `app.message.followUp` 组合键（`Ctrl+Q` 或 `Ctrl+Enter`）提交。
 
-`ctx.hasUI` is `false` in headless/print/subagent mode — always guard interactive calls.
+在无头/打印/子 agent 模式下 `ctx.hasUI` 为 `false`——务必对交互式调用进行防护。
 
-## Further reading
+## 进一步阅读
 
-- `docs/hooks.md` — hook subsystem internals, ordering rules, error propagation
-- `docs/extensions.md` — `ExtensionAPI` (superset of `HookAPI`)
-- `docs/skills/examples/safety-hook/` — complete working example
+- `docs/hooks.md` — hook 子系统内部细节、排序规则、错误传播
+- `docs/extensions.md` — `ExtensionAPI`（`HookAPI` 的超集）
+- `docs/skills/examples/safety-hook/` — 完整可运行的示例

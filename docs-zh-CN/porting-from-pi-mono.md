@@ -1,48 +1,48 @@
-# Porting From pi-mono: A Practical Merge Guide
+# 从 pi-mono 移植：实用的合并指南
 
-This guide is a repeatable checklist for porting changes from pi-mono into this repo.
-Use it for any merge: single file, feature branch, or full release sync.
+本指南是将变更从 pi-mono 移植到本仓库的可重复检查清单。
+适用于任何合并：单文件、特性分支，或完整发布同步。
 
-## Last Sync Point (historical upstream marker)
+## 上次同步点（历史上游标记）
 
-**Commit:** `b21b42d032919de2f2e6920a76fa9a37c3920c0a`
-**Date:** 2026-03-22
+**提交：** `b21b42d032919de2f2e6920a76fa9a37c3920c0a`
+**日期：** 2026-03-22
 
-Update this section after each sync; do not reuse the previous range. This commit is an upstream pi-mono marker and may not exist in this repo's local object database.
+每次同步后请更新本节；不要重复使用之前的范围。此提交是上游 pi-mono 的标记，可能不存在于本仓库的本地对象数据库中。
 
-When starting a new sync, generate patches from this commit forward in a pi-mono checkout or remote that contains the commit:
+开始新的同步时，从该提交开始，在包含该提交的 pi-mono checkout 或远端中生成补丁：
 
 ```bash
 git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > changes.patch
 ```
 
-## 0) Define the scope
+## 0) 定义范围
 
-- Identify the upstream reference (commit, tag, or PR).
-- List the packages or folders you plan to touch.
-- Decide which features are in-scope and which are intentionally skipped.
+- 确定上游参考（提交、标签或 PR）。
+- 列出你计划涉及的包或文件夹。
+- 决定哪些特性在范围内，哪些刻意跳过。
 
-## 1) Bring code over safely
+## 1) 安全地迁移代码
 
-- Prefer a clean, focused diff rather than a wholesale copy.
-- Avoid copying built artifacts or generated files.
-- If upstream added new files, add them explicitly and review contents.
+- 优先使用干净、聚焦的差异，而不是整体复制。
+- 避免复制构建产物或生成的文件。
+- 如果上游新增了文件，请显式添加并审查其内容。
 
-## 2) Match import extension conventions
+## 2) 匹配 import 扩展名约定
 
-Most runtime TypeScript sources omit `.js` in internal imports, but several current entrypoints and tool modules keep `.js` for ESM/runtime compatibility. Follow the surrounding file and package export style; do not blanket-strip or blanket-add extensions.
+大多数运行时 TypeScript 源在内部 import 中省略 `.js`，但当前的部分入口点和工具模块会保留 `.js` 以兼容 ESM/运行时。遵循周围文件和包的导出风格；不要一刀切地删除或添加扩展名。
 
-- In `packages/coding-agent` runtime sources, prefer extensionless internal imports when the surrounding module does, but preserve existing `.js` imports in files that already require them.
-- In `packages/tui/test` and `packages/natives/bench`, keep `.js` where surrounding files already use it.
-- Keep real file extensions when required by tooling or import assertions (e.g., `.json`, `.css`, `.md` text embeds).
-- Example: `import { x } from "./foo.js";` → `import { x } from "./foo";` only when that package/file convention is extensionless.
+- 在 `packages/coding-agent` 运行时源中，当周围模块省略扩展名时，优先使用无扩展名的内部 import；但在已要求 `.js` 的文件中保留现有的 `.js` import。
+- 在 `packages/tui/test` 和 `packages/natives/bench` 中，当周围文件已使用 `.js` 时，保留 `.js`。
+- 当工具或 import 断言要求真实文件扩展名时（例如 `.json`、`.css`、`.md` 文本嵌入），请保留。
+- 示例：`import { x } from "./foo.js";` → `import { x } from "./foo";` 仅在该包/文件约定为无扩展名时。
 
-## 3) Replace import scopes
+## 3) 替换 import 作用域
 
-Upstream uses different package scopes. Replace them consistently.
+上游使用不同的包作用域。请一致地替换它们。
 
-- Replace old scopes with the local scope used here.
-- Examples (adjust to match the actual packages you are porting):
+- 用本仓库使用的本地作用域替换旧的作用域。
+- 示例（根据实际要移植的包进行调整）：
   - `@mariozechner/pi-coding-agent` → `@oh-my-pi/pi-coding-agent`
   - `@mariozechner/pi-agent-core` → `@oh-my-pi/pi-agent-core`
   - `@mariozechner/pi-tui` → `@oh-my-pi/pi-tui`
@@ -50,38 +50,38 @@ Upstream uses different package scopes. Replace them consistently.
   - `@mariozechner/pi-utils` → `@oh-my-pi/pi-utils`
   - `@mariozechner/pi-catalog` → `@oh-my-pi/pi-catalog`
   - `@mariozechner/pi-natives` → `@oh-my-pi/pi-natives`
-- Some upstream packages publish under the `@earendil-works/*` scope instead of `@mariozechner/*`. Map it the same way (`@earendil-works/pi-coding-agent` → `@oh-my-pi/pi-coding-agent`, and so on).
-- The bare `typebox` package is not an `@oh-my-pi/*` scope; do not rewrite it as one. See the Extensions divergence in section 15 for how tool-parameter schemas map.
+- 部分上游包以 `@earendil-works/*` 作用域发布，而不是 `@mariozechner/*`。以相同方式映射（`@earendil-works/pi-coding-agent` → `@oh-my-pi/pi-coding-agent`，依此类推）。
+- 裸的 `typebox` 包不是 `@oh-my-pi/*` 作用域；不要将其改写为 `@oh-my-pi/*` 作用域。工具参数 schema 的映射方式请参见第 15 节中的 Extensions divergence。
 
-## 4) Use Bun APIs where they improve on Node
+## 4) 在 Bun 优于 Node 的地方使用 Bun API
 
-We run on Bun, but the current source intentionally mixes Bun APIs with small Node standard-library APIs. Replace Node APIs only when Bun provides a clearer, safer, or simpler implementation; do not mechanically rewrite every Node import.
+我们在 Bun 上运行，但当前源码有意将 Bun API 与少量 Node 标准库 API 混合使用。仅当 Bun 提供了更清晰、更安全或更简单的实现时才替换 Node API；不要机械地重写每一个 Node import。
 
-**Prefer replacing when porting new code:**
+**移植新代码时优先替换：**
 
-- Process spawning: prefer Bun Shell `$` for simple commands; use `Bun.spawn`/`Bun.spawnSync` for streaming or process control. Keep existing `child_process` only where its exact semantics are needed.
-- HTTP clients: `node-fetch`, `axios` → native `fetch`
-- SQLite: `better-sqlite3` → `bun:sqlite`
-- Env loading: `dotenv` → Bun loads `.env` automatically
-- Runtime text/assets: prefer Bun imports such as `with { type: "text" }` or `Bun.file()` over copy steps or bundled fallback file reads.
+- 进程派生：简单命令优先使用 Bun Shell `$`；需要流式处理或进程控制时使用 `Bun.spawn`/`Bun.spawnSync`。仅在需要其精确语义时保留现有的 `child_process`。
+- HTTP 客户端：`node-fetch`、`axios` → 原生 `fetch`
+- SQLite：`better-sqlite3` → `bun:sqlite`
+- 环境变量加载：`dotenv` → Bun 自动加载 `.env`
+- 运行时文本/资源：优先使用 Bun 的导入，例如 `with { type: "text" }` 或 `Bun.file()`，而不是复制步骤或打包的兜底文件读取。
 
-**DO NOT replace (these work fine in Bun):**
+**不要替换（在 Bun 中这些工作得很好）：**
 
-- `os.homedir()` — do NOT replace with `Bun.env.HOME` or literal `"~"`
-- `os.tmpdir()` — do NOT replace with `Bun.env.TMPDIR || "/tmp"` or hardcoded paths
-- `fs.mkdtempSync()` — do NOT replace with manual path construction
-- `path.join()`, `path.resolve()`, etc. — these are fine
+- `os.homedir()` — 不要替换为 `Bun.env.HOME` 或字面量 `"~"`
+- `os.tmpdir()` — 不要替换为 `Bun.env.TMPDIR || "/tmp"` 或硬编码路径
+- `fs.mkdtempSync()` — 不要替换为手动构造路径
+- `path.join()`、`path.resolve()` 等 — 这些都没有问题
 
-**Import style:** Use the `node:` prefix for Node standard-library imports. Namespace imports are common, but named imports are acceptable where the surrounding code already uses them.
+**导入风格：** Node 标准库导入使用 `node:` 前缀。命名空间导入很常见，但当周围代码已使用具名导入时，具名导入也可接受。
 
-**Additional Bun conventions:**
+**其他 Bun 约定：**
 
-- Prefer Bun Shell `$` for short, non-streaming commands; use `Bun.spawn` only when you need streaming I/O or process control.
-- Use `Bun.file()`/`Bun.write()` for simple files and `node:fs/promises` for directory-oriented operations. Existing synchronous `node:fs` calls are acceptable when the calling flow is intentionally synchronous.
-- Avoid `Bun.file().exists()` checks; use `isEnoent` handling in try/catch.
-- Prefer `Bun.sleep(ms)` over `setTimeout` wrappers.
+- 简短、非流式的命令优先使用 Bun Shell `$`；仅在需要流式 I/O 或进程控制时使用 `Bun.spawn`。
+- 简单文件使用 `Bun.file()`/`Bun.write()`，面向目录的操作使用 `node:fs/promises`。当调用流程有意为同步时，现有的同步 `node:fs` 调用是可接受的。
+- 避免 `Bun.file().exists()` 检查；在 try/catch 中使用 `isEnoent` 处理。
+- 优先使用 `Bun.sleep(ms)`，而不是 `setTimeout` 包装器。
 
-**Wrong:**
+**错误示例：**
 
 ```typescript
 // BROKEN: env vars may be undefined, "~" is not expanded
@@ -89,7 +89,7 @@ const home = Bun.env.HOME || "~";
 const tmp = Bun.env.TMPDIR || "/tmp";
 ```
 
-**Correct:**
+**正确示例：**
 
 ```typescript
 import * as os from "node:os";
@@ -100,134 +100,122 @@ const configDir = path.join(os.homedir(), ".config", "myapp");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myapp-"));
 ```
 
-## 5) Prefer Bun embeds (no copying)
+## 5) 优先使用 Bun 嵌入（不要复制）
 
-Do not add new runtime asset copy steps. Keep assets in repo and prefer Bun embeds/imports; preserve existing explicit generation workflows such as `packages/coding-agent/src/export/html/tool-views.generated.js` (built from collab-web sources via `bun run gen:tool-views`).
+不要新增运行时资源复制步骤。将资源保留在仓库中并优先使用 Bun 嵌入/import；保留现有的显式生成工作流，例如 `packages/coding-agent/src/export/html/tool-views.generated.js`（通过 `bun run gen:tool-views` 从 collab-web 源构建生成）。
 
-- If upstream copies assets into a dist folder, replace with Bun-friendly embeds.
-- Prompts are static `.md` files; use Bun text imports (`with { type: "text" }`) and Handlebars instead of inline prompt strings.
-- Use `import.meta.dir` + `Bun.file` to load adjacent non-text resources.
-- Keep assets in-repo and let the bundler include them.
-- Eliminate copy scripts unless the user explicitly requests them or the package already has an intentional generation step.
-- If upstream reads a bundled fallback file at runtime, replace filesystem reads with a Bun text embed import unless the current package already uses a generated asset pipeline.
-  - Example (Codex instructions fallback):
-    - `const FALLBACK_PROMPT_PATH = join(import.meta.dir, "codex-instructions.md");` -> removed
+- 如果上游将资源复制到 dist 文件夹，请替换为 Bun 友好的嵌入。
+- 提示词是静态的 `.md` 文件；使用 Bun 文本导入（`with { type: "text" }`）和 Handlebars，而不是内联提示字符串。
+- 使用 `import.meta.dir` + `Bun.file` 加载相邻的非文本资源。
+- 将资源保留在仓库中，由打包器负责包含它们。
+- 除非用户明确要求或包已有有意的生成步骤，否则删除复制脚本。
+- 如果上游在运行时读取打包的兜底文件，除非当前包已使用生成资源流水线，否则请将文件系统读取替换为 Bun 文本嵌入导入。
+  - 示例（Codex 指令兜底）：
+    - `const FALLBACK_PROMPT_PATH = join(import.meta.dir, "codex-instructions.md");` -> 已移除
     - `import FALLBACK_INSTRUCTIONS from "./codex-instructions.md" with { type: "text" };`
-    - Use `return FALLBACK_INSTRUCTIONS;` instead of `readFileSync(FALLBACK_PROMPT_PATH, "utf8")`
+    - 使用 `return FALLBACK_INSTRUCTIONS;` 代替 `readFileSync(FALLBACK_PROMPT_PATH, "utf8")`
 
-## 6) Port `package.json` carefully
+## 6) 谨慎移植 `package.json`
 
-Treat `package.json` as a contract. Merge intentionally.
+将 `package.json` 视为契约。请有意识地合并。
 
-- Keep existing `name`, `version`, `type`, `exports`, and `bin` unless the port requires changes.
-- Replace npm/node scripts with Bun equivalents (e.g., `bun check`, `bun test`).
-- Ensure dependencies use the correct scope.
-- Do not downgrade dependencies to fix type errors; upgrade instead.
-- Validate workspace package links and `peerDependencies`.
+- 保留现有的 `name`、`version`、`type`、`exports` 和 `bin`，除非移植要求变更。
+- 将 npm/node 脚本替换为 Bun 等价物（例如 `bun check`、`bun test`）。
+- 确保依赖使用正确的作用域。
+- 不要通过降级依赖来修复类型错误；应当升级。
+- 验证 workspace 包链接和 `peerDependencies`。
 
-## 7) Align code style and tooling
+## 7) 对齐代码风格和工具
 
-- Keep existing formatting conventions.
-- Do not introduce `any` unless required.
-- Avoid dynamic imports unless they are required for optional dependencies, startup cost, or runtime-only modules; prefer top-level imports otherwise.
-- Never build prompts in code; prompts are static `.md` files rendered with Handlebars.
-- In `packages/coding-agent`, use `logger` from `@oh-my-pi/pi-utils` for internal/runtime logging; CLI command files may use `console.*` for intentional user-facing output.
-- Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
-- Prefer ES `#` private fields for new encapsulated state. Constructor parameter properties already exist in current code and are acceptable; do not churn unrelated access modifiers while porting.
-- Prefer existing helpers and utilities over new ad-hoc code.
-  Preserve Bun-first infrastructure changes already made in this repo:
-  - Runtime is Bun (no Node entry points for the main CLI).
-  - Package manager is Bun (no npm lockfiles).
-  - Heavy Node APIs should not be introduced casually; current source still uses selected Node APIs (`node:crypto`, `node:readline`, synchronous `node:fs`, and `child_process`) where they fit provider, CLI, or process-control semantics.
-  - Lightweight Node APIs (`os.homedir`, `os.tmpdir`, `fs.mkdtempSync`, `path.*`) are kept.
-  - CLI shebangs use `bun` (not `node`, not `tsx`).
-  - TypeScript packages generally use source files directly; `@oh-my-pi/pi-natives` exports generated native bindings from `packages/natives/native`.
-  - CI workflows run Bun for install/check/test.
+- 保留现有的格式化约定。
+- 不要引入 `any`，除非必要。
+- 避免动态 import，除非可选依赖、启动开销或仅运行时模块确实需要；否则优先使用顶层 import。
+- 永远不要在代码中构建提示词；提示词是使用 Handlebars 渲染的静态 `.md` 文件。
+- 在 `packages/coding-agent` 中，使用 `@oh-my-pi/pi-utils` 的 `logger` 进行内部/运行时日志记录；CLI 命令文件可以为面向用户的输出使用 `console.*`。
+- 使用 `Promise.withResolvers()` 代替 `new Promise((resolve, reject) => ...)`。
+- 对于新的封装状态优先使用 ES `#` 私有字段。构造函数参数属性已存在于当前代码中，是可接受的；移植时不要无关地修改访问修饰符。
+- 优先使用现有的辅助函数和实用工具，而不是新增临时代码。
+  保留本仓库已做的 Bun 优先基础设施变更：
+  - 运行时为 Bun（主 CLI 没有 Node 入口点）。
+  - 包管理器为 Bun（没有 npm 锁文件）。
+  - 不应随意引入繁重的 Node API；当前源在适合 provider、CLI 或进程控制语义的地方仍然使用选定的 Node API（`node:crypto`、`node:readline`、同步 `node:fs` 以及 `child_process`）。
+  - 轻量级 Node API（`os.homedir`、`os.tmpdir`、`fs.mkdtempSync`、`path.*`）予以保留。
+  - CLI shebang 使用 `bun`（而不是 `node`，也不是 `tsx`）。
+  - TypeScript 包通常直接使用源文件；`@oh-my-pi/pi-natives` 从 `packages/natives/native` 导出已生成的原生绑定。
+  - CI 工作流使用 Bun 进行 install/check/test。
 
-## 8) Remove old compatibility layers
+## 8) 移除旧兼容性层
 
-Unless requested, remove upstream compatibility shims.
+除非要求，否则移除上游兼容性垫片。
 
-- Delete old APIs that were replaced.
-- Update all call sites to the new API directly.
-- Do not keep `*_v2` or parallel versions.
+- 删除已被替换的旧 API。
+- 将所有调用点直接更新到新 API。
+- 不要保留 `*_v2` 或并行版本。
 
-## 9) Update docs and references
+## 9) 更新文档和引用
 
-- Replace pi-mono repo links where appropriate.
-- Update examples to use Bun and correct package scopes.
-- Ensure README instructions still match the current repo behavior.
+- 适当地替换 pi-mono 仓库链接。
+- 更新示例以使用 Bun 和正确的包作用域。
+- 确保 README 指令仍然与当前仓库行为一致。
 
-## 10) Validate the port
+## 10) 验证移植
 
-Run the checks that cover the port:
+运行覆盖此次移植的检查：
 
-- `bun check` for the repository's TypeScript and Rust checks.
-- Targeted Bun tests for the packages and behavior you changed (for example, `bun test packages/<package>/test/<file>.test.ts`).
-- If dependencies changed, run `bun install --frozen-lockfile` after updating `bun.lock`.
+- `bun check` 用于仓库的 TypeScript 和 Rust 检查。
+- 针对你更改的包和行为的定向 Bun 测试（例如 `bun test packages/<package>/test/<file>.test.ts`）。
+- 如果依赖发生了变化，在更新 `bun.lock` 后运行 `bun install --frozen-lockfile`。
 
-Tests use Bun's runner, not Vitest. Do not substitute a project-wide `bun test` for targeted coverage; the root `test` script uses the repository's sharded runner. If a check already fails for an unrelated reason, call out the exact command and failure.
+测试使用 Bun 的 runner，而不是 Vitest。不要用项目范围内的 `bun test` 替代定向覆盖；根目录的 `test` 脚本使用仓库的分片 runner。如果某项检查已因不相关的原因失败，请明确指出具体的命令和失败信息。
 
-## 11) Protect improved features (regression trap list)
+## 11) 保护已改进的功能（回归陷阱清单）
 
-If you already improved behavior locally, treat those as **non‑negotiable**. Before porting, write down
-the improvements and add explicit checks so they don’t get lost in the merge.
+如果你已经在本地改进了行为，请将其视为**不可协商**。移植之前，请记下这些改进并添加显式检查，确保它们不会在合并中丢失。
 
-- **Freeze the expected behavior**: add a short “before/after” note for each improvement (inputs, outputs,
-  defaults, edge cases). This prevents silent rollback.
-- **Map old → new APIs**: if upstream renamed concepts (hooks → extensions, custom tools → tools, etc.),
-  ensure every old entry point still wires through. One missed flag or export equals lost functionality.
-- **Verify exports**: check `package.json` `exports`, public types, and barrel files. Upstream ports often
-  forget to re-export local additions.
-- **Cover non‑happy paths**: if you fixed error handling, timeouts, or fallback logic, add a test or at
-  least a manual checklist that exercises those paths.
-- **Check defaults and config merge order**: improvements often live in defaults. Confirm new defaults
-  didn’t revert (e.g., new config precedence, disabled features, tool lists).
-- **Audit env/shell behavior**: if you fixed execution or sandboxing, verify the new path still uses your
-  sanitized env and does not reintroduce alias/function overrides.
-- **Re-run targeted samples**: keep a minimal set of "known good" examples and run them after the port
-  (CLI flags, extension registration, tool execution).
+- **冻结预期行为**：为每项改进添加简短的"before/after"说明（输入、输出、默认值、边界情况）。这可以防止静默回滚。
+- **映射旧 API → 新 API**：如果上游重命名了概念（hooks → extensions、custom tools → tools 等），请确保每个旧入口点仍然接通。漏掉一个标志或导出就等于丢失功能。
+- **验证导出**：检查 `package.json` 的 `exports`、公共类型和 barrel 文件。上游移植常常忘记重新导出本地的添加内容。
+- **覆盖非正常路径**：如果你修复了错误处理、超时或兜底逻辑，请添加测试或至少一份手动检查清单来演练这些路径。
+- **检查默认值和配置合并顺序**：改进常常体现在默认值中。确认新默认值没有被还原（例如，新的配置优先级、被禁用的功能、工具列表）。
+- **审计环境/Shell 行为**：如果你修复了执行或沙箱，请验证新路径仍使用你清理过的环境，并且没有重新引入别名/函数覆盖。
+- **重新运行定向样本**：保留一组最小的"已知正常"示例，并在移植后运行它们（CLI 标志、扩展注册、工具执行）。
 
-## 12) Detect and handle reworked code
+## 12) 检测并处理被重写的代码
 
-Before porting a file, check if upstream significantly refactored it:
+移植一个文件之前，请检查上游是否对其进行了重大重构：
 
 ```bash
 # Compare the file you're about to port against what you have locally
 git diff HEAD upstream/main -- path/to/file.ts
 ```
 
-If the diff shows the file was **reworked** (not just patched):
+如果差异显示该文件被**重写**（不仅仅是修补）：
 
-- New abstractions, renamed concepts, merged modules, changed data flow
+- 新的抽象、重命名的概念、合并的模块、改变的数据流
 
-Then you must **read the new implementation thoroughly** before porting. Blind merging of reworked code loses functionality because:
+那么你必须在移植之前**彻底阅读新的实现**。盲目合并被重写的代码会丢失功能，因为：
 
-Note: interactive mode was recently split into controllers/utils/types. When backporting related changes, port updates into the individual files we created and ensure `interactive-mode.ts` wiring stays in sync.
+注意：交互模式最近被拆分为 controllers/utils/types。在回移植相关变更时，请将这些更新移植到我们创建的各个文件中，并确保 `interactive-mode.ts` 的接线保持同步。
 
-1. **Defaults change silently** - A new variable `defaultFoo = [a, b]` may replace an old `getAllFoo()` that returned `[a, b, c, d, e]`.
+1. **默认值静默改变** - 一个新的变量 `defaultFoo = [a, b]` 可能替换了旧的返回 `[a, b, c, d, e]` 的 `getAllFoo()`。
 
-2. **API options get dropped** - When systems merge (e.g., `hooks` + `customTools` → `extensions`), old options may not wire through to the new implementation.
+2. **API 选项被丢弃** - 当系统合并时（例如 `hooks` + `customTools` → `extensions`），旧选项可能没有接通到新实现。
 
-3. **Code paths go stale** - A renamed concept (e.g., `hookMessage` → `custom`) needs updates in every switch statement, type guard, and handler—not just the definition.
+3. **代码路径变陈旧** - 重命名的概念（例如 `hookMessage` → `custom`）需要在每个 switch 语句、类型守卫和处理程序中更新——而不仅仅是在定义处。
 
-4. **Context/capabilities shrink** - Old APIs may have exposed `{ logger, typebox, pi }` that new APIs forgot to include.
+4. **上下文/能力缩减** - 旧 API 可能曾暴露 `{ logger, typebox, pi }`，而新 API 忘记了包含。
 
-### Semantic porting process
+### 语义化移植流程
 
-When upstream reworked a module:
+当上游重写了一个模块时：
 
-1. **Read the old implementation** - Understand what it did, what options it accepted, what it exposed.
+1. **阅读旧实现** - 了解它做了什么、接受哪些选项、暴露了什么。
+2. **阅读新实现** - 了解新的抽象以及它们如何映射到旧行为。
+3. **验证功能对等** - 对于旧代码中的每个能力，确认新代码保留或显式移除了它。
+4. **Grep 遗漏点** - 搜索可能在 switch 语句、处理程序、UI 组件中遗漏的旧名称/概念。
+5. **测试边界** - CLI 标志、SDK 选项、事件处理程序、默认值——这些都是回归隐藏的地方。
 
-2. **Read the new implementation** - Understand the new abstractions and how they map to old behavior.
-
-3. **Verify feature parity** - For each capability in the old code, confirm the new code preserves it or explicitly removes it.
-
-4. **Grep for stragglers** - Search for old names/concepts that may have been missed in switch statements, handlers, UI components.
-
-5. **Test the boundaries** - CLI flags, SDK options, event handlers, default values—these are where regressions hide.
-
-### Quick checks
+### 快速检查
 
 ```bash
 # Find all uses of an old concept that may need updating
@@ -240,24 +228,23 @@ git show upstream/main:path/to/file.ts | rg "default|DEFAULT"
 rg "case \"" path/to/file.ts
 ```
 
-## 13) Quick audit checklist
+## 13) 快速审计清单
 
-Use this as a final pass before you finish:
+将其作为完成前的最终一遍检查：
 
-- [ ] Import extensions follow the local package convention (no blanket `.js` stripping)
-- [ ] No newly introduced Node-only APIs unless they match an existing justified pattern
-- [ ] All package scopes updated
-- [ ] `package.json` scripts use Bun
-- [ ] Prompts are `.md` text imports (no inline prompt strings)
-- [ ] No internal/runtime `console.*` in coding-agent; CLI user-facing output is intentional
-- [ ] Assets load via Bun embed/import patterns, or through an existing intentional generation pipeline
-- [ ] Tests or checks run (or explicitly noted as blocked)
-- [ ] No functionality regressions (see sections 11-12)
+- [ ] import 扩展名遵循本地包约定（不一律去除 `.js`）
+- [ ] 没有新增的仅限 Node 的 API，除非它们匹配现有的合理模式
+- [ ] 所有包作用域已更新
+- [ ] `package.json` 脚本使用 Bun
+- [ ] 提示词使用 `.md` 文本导入（没有内联提示字符串）
+- [ ] coding-agent 中没有内部/运行时 `console.*`；CLI 面向用户的输出是有意的
+- [ ] 资源通过 Bun 嵌入/导入模式加载，或通过现有的有意生成流水线加载
+- [ ] 已运行测试或检查（或明确标注被阻塞）
+- [ ] 没有功能回归（参见第 11-12 节）
 
-## 14) Commit message format
+## 14) 提交信息格式
 
-When committing a backport, follow the repo format `<type>(scope): <past-tense description>` and keep the commit
-range in the title.
+提交回移植时，请遵循仓库格式 `<type>(scope): <past-tense description>`，并在标题中保留提交范围。
 
 ```
 fix(coding-agent): backported pi-mono changes (<from>..<to>)
@@ -270,7 +257,7 @@ packages/<other-package>:
 - <type>: <description>
 ```
 
-**Example:**
+**示例：**
 
 ```
 fix(coding-agent): backported pi-mono changes (9f3eef65f..52532c7c0)
@@ -292,28 +279,28 @@ packages/coding-agent:
 - fix: resolve macOS NFD and curly quote variants in file paths
 ```
 
-**Rules:**
+**规则：**
 
-- Group changes by package
-- Use conventional commit types (`fix`, `feat`, `refactor`, `perf`, `docs`)
-- Include upstream issue/PR numbers and contributor attribution for external contributions
-- The commit range in the title helps track sync points
+- 按包对变更进行分组
+- 使用 conventional commit 类型（`fix`、`feat`、`refactor`、`perf`、`docs`）
+- 包含上游 issue/PR 编号和外部贡献者署名
+- 标题中的提交范围有助于跟踪同步点
 
-## 15) Intentional Divergences
+## 15) 有意的差异
 
-Our fork has architectural decisions that differ from upstream. **Do not port these upstream patterns:**
+我们的 fork 存在与上游不同的架构决策。**不要移植这些上游模式：**
 
-### UI Architecture
+### UI 架构
 
 | Upstream                                    | Our Fork                                                            | Reason                                                                                                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FooterDataProvider` class                  | `StatusLineComponent`                                               | Simpler, integrated status line                                                                                                                |
-| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | No-op stubs in current extension contexts                           | Not currently wired to replace the TUI status/header UI                                                                                        |
-| `ctx.ui.setEditorComponent()`               | Wired in interactive mode; no-op stubs in ACP/RPC/headless contexts | Custom editor replacement works in the interactive TUI; non-TUI runtimes keep stubs                                                            |
-| `ctx.ui.addAutocompleteProvider()`          | Wired in interactive mode; no-op stubs in ACP/RPC/headless contexts | Factory wrapping matches upstream; omp's editor has no custom `triggerCharacters`, so wrapped providers surface at the built-in trigger points |
-| `InteractiveModeOptions` options object     | Positional constructor args (options type still exported)           | Keep constructor signature; update the type when upstream adds fields                                                                          |
+| `FooterDataProvider` class                  | `StatusLineComponent`                                               | 简化、集成状态行                                                                                                                |
+| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | 在当前扩展上下文中为 no-op stub                                     | 当前未接通以替换 TUI 状态/头部 UI                                                                                        |
+| `ctx.ui.setEditorComponent()`               | 在 interactive mode 中接通；在 ACP/RPC/headless 上下文中为 no-op stub | 自定义编辑器替换在交互式 TUI 中有效；非 TUI 运行时保留 stub                                                            |
+| `ctx.ui.addAutocompleteProvider()`          | 在 interactive mode 中接通；在 ACP/RPC/headless 上下文中为 no-op stub | 工厂包装与上游匹配；omp 的编辑器没有自定义 `triggerCharacters`，因此包装的 provider 在内置触发点出现 |
+| `InteractiveModeOptions` options object     | 位置构造参数（options 类型仍导出）                                  | 保留构造函数签名；上游新增字段时更新该类型                                                                          |
 
-### Component Naming
+### 组件命名
 
 | Upstream                     | Our Fork                |
 | ---------------------------- | ----------------------- |
@@ -322,69 +309,69 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | `ExtensionInputComponent`    | `HookInputComponent`    |
 | `ExtensionSelectorComponent` | `HookSelectorComponent` |
 
-### API Naming
+### API 命名
 
 | Upstream                                 | Our Fork                                 | Notes                                     |
 | ---------------------------------------- | ---------------------------------------- | ----------------------------------------- |
-| `sessionManager.appendSessionInfo(name)` | `sessionManager.setSessionName(name)`    | We use `sessionName` throughout           |
-| `sessionManager.getSessionName()`        | `sessionManager.getSessionName()`        | Same (we unified to match upstream's RPC) |
-| `agent.sessionName` / `setSessionName()` | `agent.sessionName` / `setSessionName()` | Same                                      |
+| `sessionManager.appendSessionInfo(name)` | `sessionManager.setSessionName(name)`    | 我们全程使用 `sessionName`                |
+| `sessionManager.getSessionName()`        | `sessionManager.getSessionName()`        | 相同（我们已统一以匹配上游的 RPC）        |
+| `agent.sessionName` / `setSessionName()` | `agent.sessionName` / `setSessionName()` | 相同                                      |
 
-### File Consolidation
+### 文件整合
 
 | Upstream                                           | Our Fork                                                  | Reason                                        |
 | -------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
-| `clipboard.ts` + `clipboard-image.ts` (tool files) | `src/utils/clipboard.ts` backed by `@oh-my-pi/pi-natives` | Native implementation with a small TS wrapper |
+| `clipboard.ts` + `clipboard-image.ts`（工具文件）   | 由 `@oh-my-pi/pi-natives` 支持的 `src/utils/clipboard.ts` | 原生实现，外加一个小型 TS 包装                |
 
-### Test Framework
+### 测试框架
 
 | Upstream                  | Our Fork                      |
 | ------------------------- | ----------------------------- |
 | `vitest` with `vi.mock()` | `bun:test` with `vi` from bun |
 | `node:test` assertions    | `expect()` matchers           |
 
-### Tool Architecture
+### 工具架构
 
 | Upstream                            | Our Fork                                                                                                      | Notes                                                     |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                              | Tool factories accept `ToolSession` and can return `null` |
-| Per-tool `*Operations` interfaces   | Only current per-tool override interfaces remain (for example `FindOperations`)                               | Used for SSH/remote overrides where present               |
-| Node.js `fs/promises` everywhere    | Bun file APIs for simple file writes/reads, `node:fs/promises` for dirs, selected sync `node:fs` where needed | Prefer Bun APIs when they simplify                        |
+| `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                            | 工具工厂接受 `ToolSession` 并可返回 `null`                |
+| 每个工具的 `*Operations` 接口        | 仅保留当前每个工具的覆盖接口（例如 `FindOperations`）                                                          | 在存在的 SSH/远程覆盖处使用                              |
+| 到处使用 Node.js `fs/promises`      | 简单文件读写使用 Bun 文件 API，目录使用 `node:fs/promises`，在需要时使用选定的同步 `node:fs`                  | 在简化的场景下优先使用 Bun API                            |
 
-### Auth Storage
+### 认证存储
 
-| Upstream                        | Our Fork                                    | Notes                                        |
-| ------------------------------- | ------------------------------------------- | -------------------------------------------- |
-| `proper-lockfile` + `auth.json` | `agent.db` (bun:sqlite)                     | Credentials stored exclusively in `agent.db` |
-| Single credential per provider  | Multi-credential with round-robin selection | Session affinity and backoff logic preserved |
+| Upstream                        | Our Fork                                    | Notes                                                  |
+| ------------------------------- | ------------------------------------------- | ------------------------------------------------------ |
+| `proper-lockfile` + `auth.json` | `agent.db` (bun:sqlite)                     | 凭据仅存储在 `agent.db` 中                            |
+| 每个 provider 单个凭据          | 多凭据加轮询选择                            | 保留会话亲和性和退避逻辑                                |
 
-### Extensions
+### 扩展
 
 | Upstream                                                               | Our Fork                                                                                                                                                                                                                                                                                     |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jiti` for TypeScript loading                                          | Native Bun `import()`                                                                                                                                                                                                                                                                        |
-| `pkg.pi` manifest field                                                | `pkg.omp` preferred; fallback to `pkg.pi` remains                                                                                                                                                                                                                                            |
-| `StringEnum` from `pi-ai`                                              | `Type.Enum` from `pi.typebox`, or `pi.arktype.enumerated(...)`; `pi-ai` no longer exports `StringEnum`                                                                                                                                                                                       |
-| `formatSize` from `pi-coding-agent`                                    | `formatBytes` from `@oh-my-pi/pi-utils`                                                                                                                                                                                                                                                      |
-| Upstream resource/package/settings managers as the native architecture | Capability-based discovery (`loadCapability(...)`), the `Settings` singleton, and `EventBus`; legacy extension imports of `DefaultResourceLoader`, `DefaultPackageManager`, and `SettingsManager` are compatibility shims in `legacy-pi-coding-agent-shim.ts`, not the native implementation |
+| 用于 TypeScript 加载的 `jiti`                                          | 原生 Bun `import()`                                                                                                                                                                                                                                                                        |
+| `pkg.pi` 清单字段                                                      | 优先使用 `pkg.omp`；仍保留 `pkg.pi` 兜底                                                                                                                                                                                                                                            |
+| 来自 `pi-ai` 的 `StringEnum`                                           | 来自 `pi.typebox` 的 `Type.Enum`，或 `pi.arktype.enumerated(...)`；`pi-ai` 不再导出 `StringEnum`                                                                                                                                                                                       |
+| 来自 `pi-coding-agent` 的 `formatSize`                                 | 来自 `@oh-my-pi/pi-utils` 的 `formatBytes`                                                                                                                                                                                                                                                      |
+| 上游的资源/包/设置管理器作为原生架构                                    | 基于能力的发现（`loadCapability(...)`）、`Settings` 单例以及 `EventBus`；对 `DefaultResourceLoader`、`DefaultPackageManager` 和 `SettingsManager` 的旧式扩展 import 是 `legacy-pi-coding-agent-shim.ts` 中的兼容性垫片，不是原生实现 |
 
-### Skip These Upstream Features
+### 跳过这些上游特性
 
-When porting, **skip** these files/features entirely:
+移植时，请**完全跳过**这些文件/特性：
 
-- `footer-data-provider.ts` — we use StatusLineComponent
-- `clipboard-image.ts` — image clipboard support is exposed through `src/utils/clipboard.ts` backed by `@oh-my-pi/pi-natives`
-- GitHub workflow files — we have our own CI
-- `models.generated.ts` — auto-generated, regenerate locally (as models.json instead)
+- `footer-data-provider.ts` — 我们使用 StatusLineComponent
+- `clipboard-image.ts` — 图像剪贴板支持通过由 `@oh-my-pi/pi-natives` 支持的 `src/utils/clipboard.ts` 暴露
+- GitHub workflow 文件 — 我们有自己的 CI
+- `models.generated.ts` — 自动生成，请在本地重新生成（改为 models.json）
 
-### Features We Added (Preserve These)
+### 我们添加的特性（请保留）
 
-These exist in our fork but not upstream. **Never overwrite:**
+这些特性存在于我们的 fork 中，但上游没有。**永远不要覆盖：**
 
-- `StatusLineComponent` in interactive mode
-- Multi-credential auth with session affinity
-- Capability-based discovery system (`defineCapability`, `registerProvider`, `loadCapability`, `skillCapability`, etc.)
-- MCP/Exa/SSH integrations
-- LSP writethrough for format-on-save
-- Bash interception (`checkBashInterception`)
-- Fuzzy path suggestions in read tool
+- 交互模式中的 `StatusLineComponent`
+- 带会话亲和性的多凭据认证
+- 基于能力的发现系统（`defineCapability`、`registerProvider`、`loadCapability`、`skillCapability` 等）
+- MCP/Exa/SSH 集成
+- format-on-save 的 LSP 透写
+- Bash 拦截（`checkBashInterception`）
+- read 工具中的模糊路径建议

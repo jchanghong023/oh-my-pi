@@ -1,25 +1,25 @@
-# Generic XML owned tool-calling format (`<invoke>` / `<tool_response>`)
+# 通用 XML 自有工具调用格式（`<invoke>` / `<tool_response>`）
 
-OMP's `xml` dialect is a generic, prompt-driven in-band protocol. The model writes one `<invoke>` element per tool call directly in assistant text; OMP parses those calls and returns one ordered `<tool_response>` block per result in the next user turn. Neither side carries tool-call ids, and result blocks do not carry tool names, so ordering is the correlation mechanism.
+OMP 的 `xml` 方言是一种通用的、由提示词驱动的带内协议。模型在助手文本中直接为每个工具调用写入一个 `<invoke>` 元素；OMP 解析这些调用，并在下一个用户轮次中按顺序为每个结果返回一个 `<tool_response>` 块。双方都不携带工具调用 id，结果块也不携带工具名称，因此顺序就是关联机制。
 
-This reference describes the converter implemented by `packages/ai/src/dialect/xml.ts`. The ordinary `tools.format: xml` path uses the shared Anthropic-style invoke scanner. The exported scanner API can instead select DeepSeek's pipe-wrapped DSML tagset; that scanner-only option is documented separately below.
+本参考描述了由 `packages/ai/src/dialect/xml.ts` 实现的转换器。普通的 `tools.format: xml` 路径使用共享的 Anthropic 风格 invoke 扫描器。导出的扫描器 API 也可以选择 DeepSeek 的用竖线包裹的 DSML 标签集；该仅扫描器选项将在下文单独说明。
 
-## Selection and request conversion
+## 选择与请求转换
 
-Select the dialect in `~/.omp/agent/config.yml`, project config, or an overlay:
+可在 `~/.omp/agent/config.yml`、项目配置或覆盖层中选择该方言：
 
 ```yaml
 tools:
   format: xml
 ```
 
-`tools.format: xml` forces the generic XML owned dialect for the session. `auto` does **not** choose generic XML as its unknown-family fallback: when a model has `supportsTools: false`, the resolver chooses the known model-family dialect or GLM if there is no specific affinity. Use `xml` explicitly when this grammar is required. See [`tools.format`](../settings.md#tools-and-approvals).
+`tools.format: xml` 会在本次会话中强制使用通用 XML 自有方言。`auto` **不会**将通用 XML 选作其未知系列的回退：当某个模型具有 `supportsTools: false` 时，解析器会选用已知的模型系列方言，或者在没有特定亲和性时选用 GLM。需要使用此语法时请显式指定 `xml`。参见 [`tools.format`](../settings.md#tools-and-approvals)。
 
-When selected, OMP removes native structured tools from the provider request, appends the in-band tool catalog and XML guide to the system prompt, converts prior structured calls/results to text, and scans assistant text back into structured tool-call events.
+当选中后，OMP 会从 provider 请求中移除原生结构化工具，将带内工具目录和 XML 指南追加到系统提示词中，将先前的结构化调用/结果转换为文本，并将助手文本扫描回结构化工具调用事件。
 
-## Tool definitions and prompt injection
+## 工具定义与提示词注入
 
-OMP injects the shared `# Tools` prompt. Available functions appear inside `<tools></tools>` as one compact OpenAI-style function object per line, using each tool's normalized wire schema:
+OMP 注入共享的 `# Tools` 提示词。可用函数在 `<tools></tools>` 中以每个工具一行、一个紧凑的 OpenAI 风格函数对象的形式呈现，使用各工具的规范化线路 schema：
 
 ```text
 <tools>
@@ -27,59 +27,59 @@ OMP injects the shared `# Tools` prompt. Available functions appear inside `<too
 </tools>
 ```
 
-The XML-specific guide from `packages/ai/src/dialect/xml.md` follows the catalog. It requires listed function names, literal string bodies, JSON non-string values, ordered results, and complete calls before the model stops. Calls are text, never native `tool_calls` JSON.
+来自 `packages/ai/src/dialect/xml.md` 的 XML 专用指南紧随目录之后。它要求使用列出的函数名称、字面量字符串主体、非字符串值的 JSON、有序的结果，以及在模型停止之前完成的调用。调用是文本，绝不是原生 `tool_calls` JSON。
 
-## Canonical call format
+## 规范调用格式
 
-One call is one invoke:
+一次调用对应一个 invoke：
 
 ```text
 <invoke name="read"><parameter name="path">src/main.ts</parameter><parameter name="count">40</parameter></invoke>
 ```
 
-| Element | Meaning |
+| 元素 | 含义 |
 | --- | --- |
-| `<invoke name="TOOL">…</invoke>` | One tool call. The prompt contract requires a listed tool name. |
-| `<parameter name="ARG">VALUE</parameter>` | One named argument. |
-| `<tool_calls>…</tool_calls>` | Optional model-emitted wrapper accepted by the guide/scanner; OMP's renderer does not add it. |
+| `<invoke name="TOOL">…</invoke>` | 一次工具调用。提示词契约要求使用已列出的工具名称。 |
+| `<parameter name="ARG">VALUE</parameter>` | 一个具名参数。 |
+| `<tool_calls>…</tool_calls>` | 模型可选择发出的可选包装器，指南/扫描器接受该包装器；OMP 的渲染器不会添加它。 |
 
-`renderAssistantToolCalls` emits consecutive invokes separated by newlines, with no outer wrapper. The default scanner also accepts `<function_calls>` as a wrapper alias, `antml:`-prefixed variants of the Anthropic tags, and a bare invoke. Its accepted input is deliberately wider than the canonical renderer output.
+`renderAssistantToolCalls` 输出以换行符分隔的连续 invoke，没有外层包装器。默认扫描器还接受 `<function_calls>` 作为包装器别名、`antml:` 前缀的 Anthropic 标签变体，以及裸的 invoke。其接受的输入刻意比规范渲染器的输出更宽。
 
-Tool and parameter names are XML-escaped when OMP renders attributes. Parameter bodies are not XML-escaped because the format is delimiter-matched, not parsed by an XML DOM. Write `a & b < c`, not `a &amp; b &lt; c`; only a literal `</parameter>` conflicts with the body's close delimiter.
+当 OMP 渲染属性时，工具和参数名称会进行 XML 转义。参数主体不会进行 XML 转义，因为该格式是按分隔符匹配的，而不是由 XML DOM 解析的。应当写 `a & b < c`，而不是 `a &amp; b &lt; c`；只有字面量 `</parameter>` 才会与主体的闭合分隔符冲突。
 
-## Argument encoding and coercion
+## 参数编码与强制转换
 
-The renderer uses the supplied tool schema to decide whether a value is a literal string:
+渲染器使用所提供的工具 schema 来判定一个值是否为字面量字符串：
 
-| Declared/value kind | Rendered body | Default scanner result |
+| 声明/值类型 | 渲染主体 | 默认扫描器结果 |
 | --- | --- | --- |
-| Schema-declared string whose runtime value is a string | Verbatim, whitespace preserved | Verbatim string |
-| Number, boolean, `null`, array, or object | JSON | Parsed JSON value |
-| Runtime string not identified as a string argument | JSON string, including quotes | Parsed string |
+| 运行时值为字符串的 schema 声明的字符串 | 原样保留空白 | 原样保留的字符串 |
+| 数字、布尔值、`null`、数组或对象 | JSON | 解析后的 JSON 值 |
+| 未被识别为字符串参数的运行时字符串 | JSON 字符串，包括引号 | 解析后的字符串 |
 
-Example:
+示例：
 
 ```text
 <invoke name="write"><parameter name="path">notes/a & b.txt</parameter><parameter name="options">{"append":false,"tags":["draft","xml"]}</parameter></invoke>
 ```
 
-The default scanner accepts a `string` override on each parameter:
+默认扫描器在每个参数上接受 `string` 覆盖：
 
-- `string="true"` (or any value other than `false`, `0`, or `no`) forces the raw body to remain a string.
-- `string="false"`, `string="0"`, or `string="no"` forces JSON parsing even when the schema declares a string.
+- `string="true"`（或除 `false`、`0`、`no` 之外的任何值）强制将原始主体保留为字符串。
+- `string="false"`、`string="0"` 或 `string="no"` 即使 schema 声明为字符串，也强制进行 JSON 解析。
 
-Non-string bodies are trimmed for parsing and passed through OMP's repair-capable JSON parser. If repair fails, the original body is retained as a string. Empty bodies remain empty strings. A parameter without a usable name is discarded.
+非字符串主体在解析前会进行修剪，并交由 OMP 支持修复的 JSON 解析器处理。若修复失败，则将原始主体作为字符串保留。空主体保留为空字符串。没有可用名称的参数会被丢弃。
 
-## Multiple and parallel calls
+## 多次调用与并行调用
 
-OMP renders a batch as consecutive invokes:
+OMP 将一批调用渲染为连续的 invoke：
 
 ```text
 <invoke name="read"><parameter name="path">src/a.ts</parameter></invoke>
 <invoke name="read"><parameter name="path">src/b.ts</parameter></invoke>
 ```
 
-The model may optionally wrap the batch:
+模型可以选择将整批调用包装起来：
 
 ```text
 <tool_calls>
@@ -88,11 +88,11 @@ The model may optionally wrap the batch:
 </tool_calls>
 ```
 
-The scanner mints one internal call id per invoke; there is no id in the XML. OMP can dispatch the calls as a batch. Results must preserve call order because `<tool_response>` has neither id nor name.
+扫描器为每个 invoke 生成一个内部调用 id；XML 中没有 id。OMP 可以将这些调用作为一批调度。结果必须保持调用顺序，因为 `<tool_response>` 既没有 id 也没有名称。
 
-## Tool-result format
+## 工具结果格式
 
-OMP returns each result in its own block:
+OMP 将每个结果返回到各自的块中：
 
 ```text
 <tool_response>
@@ -103,13 +103,13 @@ ENOENT: file not found
 </tool_response>
 ```
 
-Consecutive result blocks are newline-separated and placed in one synthesized `user` message. Result text is inserted verbatim. Image blocks from tool results are retained after the rendered text in that message.
+连续的结果块以换行符分隔，并放在一条合成的 `user` 消息中。结果文本按原样插入。工具结果中的图像块在渲染文本之后保留在同一消息中。
 
-The generic XML protocol has **no success/error marker**. `renderToolResults` intentionally renders `isError: true` in the same `<tool_response>` shape as success; the error must be intelligible from its text. The model must never generate `<tool_response>` itself.
+通用 XML 协议**没有成功/错误标记**。`renderToolResults` 故意将 `isError: true` 渲染成与成功相同的 `<tool_response>` 形态；错误必须从其文本中可理解。模型自身绝不能生成 `<tool_response>`。
 
-## Thinking and visible text
+## 思考与可见文本
 
-OMP renders preserved thinking as:
+OMP 将保留的思考渲染为：
 
 ```text
 <thinking>
@@ -117,20 +117,20 @@ reasoning text
 </thinking>
 ```
 
-For the normal owned-tool stream, `parseThinking` is enabled. With the default Anthropic tagset, `<thinking>`, `<think>`, and `<scratchpad>` (including supported prefixed forms) become separate thinking events and do not appear in visible text. A direct scanner consumer that leaves `parseThinking` false sees those tags as text. An unterminated thinking block is logically closed on flush and retains its content.
+对于正常的自有工具流，`parseThinking` 是启用的。在默认的 Anthropic 标签集下，`<thinking>`、`<think>` 和 `<scratchpad>`（包括受支持的前缀形式）会变成独立的思考事件，并且不会出现在可见文本中。将 `parseThinking` 保留为 false 的直接扫描器使用者会将这些标签视为文本。未闭合的思考块在刷新时按逻辑闭合，并保留其内容。
 
-Visible prose may appear before or between unwrapped invokes. Inside a recognized `<tool_calls>` or `<function_calls>` wrapper, non-call text is discarded.
+可见散文可以出现在裸 invoke 之前或之间。在已识别的 `<tool_calls>` 或 `<function_calls>` 包装器内部，非调用文本会被丢弃。
 
-## Scanner tagsets
+## 扫描器标签集
 
-`XmlInbandScanner` delegates to one of two scanners according to `InbandScannerOptions.xmlTagset`:
+`XmlInbandScanner` 根据 `InbandScannerOptions.xmlTagset` 委托给两个扫描器之一：
 
-| `xmlTagset` | Scanner | Accepted call grammar | Argument rule |
+| `xmlTagset` | 扫描器 | 接受的调用语法 | 参数规则 |
 | --- | --- | --- | --- |
-| omitted or `anthropic` | `AnthropicInbandScanner` | Plain/`antml:` `<invoke>/<parameter>`, optionally inside `<tool_calls>` or `<function_calls>` | Tool schema determines strings; `string` attribute can override |
-| `dsml` | `DeepSeekInbandScanner` | Pipe-wrapped DSML envelope and invokes (plus that scanner's DeepSeek token grammar) | Parameters default to strings; only `string="false"` requests JSON coercion |
+| 省略或 `anthropic` | `AnthropicInbandScanner` | 纯/`antml:` `<invoke>/<parameter>`，可选地放在 `<tool_calls>` 或 `<function_calls>` 内部 | 工具 schema 决定字符串；`string` 属性可覆盖 |
+| `dsml` | `DeepSeekInbandScanner` | 用竖线包裹的 DSML 信封和 invoke（以及该扫描器的 DeepSeek token 语法） | 参数默认为字符串；只有 `string="false"` 才会请求 JSON 强制转换 |
 
-A direct API consumer can request DSML parsing:
+直接 API 使用者可以请求 DSML 解析：
 
 ```ts
 import { createInbandScanner } from "@oh-my-pi/pi-ai/dialect";
@@ -141,7 +141,7 @@ const scanner = createInbandScanner("xml", {
 });
 ```
 
-DSML accepts fullwidth-pipe tags:
+DSML 接受全角竖线标签：
 
 ```text
 <｜DSML｜tool_calls>
@@ -152,44 +152,44 @@ DSML accepts fullwidth-pipe tags:
 </｜DSML｜tool_calls>
 ```
 
-It also accepts ASCII-pipe equivalents such as `<|DSML|tool_calls>`. In DSML mode, `string="false"` parses repaired JSON; invalid JSON falls back to the raw string. DSML thinking uses `<think>…</think>` and is parsed by default unless `parseThinking: false`.
+它也接受 ASCII 竖线等效形式，如 `<|DSML|tool_calls>`。在 DSML 模式下，`string="false"` 解析经过修复的 JSON；无效的 JSON 会回退为原始字符串。DSML 思考使用 `<think>…</think>`，除非 `parseThinking: false`，否则默认解析。
 
-`xmlTagset` changes **only scanner selection**. The `xml` definition's call, result, thinking, and transcript renderers always emit the generic plain-XML forms described above. The normal `tools.format: xml` owned-stream path does not pass `xmlTagset`, so it uses the Anthropic tagset. OMP currently uses the DSML selector for stream-markup healing of leaked DSML output, not to change the `tools.format: xml` renderer.
+`xmlTagset` **仅影响扫描器选择**。`xml` 定义的调用、结果、思考和转录渲染器始终输出上文描述的通用纯 XML 形式。正常的 `tools.format: xml` 自有流路径不传递 `xmlTagset`，因此它使用 Anthropic 标签集。OMP 目前将 DSML 选择器用于泄漏的 DSML 输出的流标记修复，而不是用于更改 `tools.format: xml` 渲染器。
 
-## Streaming, malformed output, and recovery
+## 流式、畸形输出与恢复
 
-### Default Anthropic tagset
+### 默认 Anthropic 标签集
 
-Parsing is incremental and safe across provider chunk boundaries. For every non-empty `<invoke name="…">`, the scanner:
+解析是增量的，并且在 provider 数据块边界之间是安全的。对于每个非空的 `<invoke name="…">`，扫描器：
 
-1. emits `toolStart` as soon as the opening invoke tag is complete;
-2. emits keyed `toolArgDelta` events while parameter bodies stream; and
-3. performs final coercion and emits `toolEnd` only after the matching `</invoke>`.
+1. 在起始 invoke 标签闭合后立即发出 `toolStart`；
+2. 在参数主体流式传输期间发出带键的 `toolArgDelta` 事件；并且
+3. 仅在匹配的 `</invoke>` 之后执行最终强制转换并发出 `toolEnd`。
 
-The completed event includes the exact raw invoke block for diagnostics. Wrapper text is not part of that raw block.
+完成的事件包含用于诊断的确切原始 invoke 块。包装器文本不属于该原始块的一部分。
 
-Failure behavior is explicit:
+失败行为是显式的：
 
-- an invoke with a missing/blank name emits no tool lifecycle;
-- a parameter with a missing/blank name is ignored;
-- malformed JSON falls back to the original text;
-- parameter content is capped at 1,000,000 JavaScript string code units, with an explicit truncation marker appended on overflow;
-- an incomplete parameter or invoke emits no `toolEnd` when flushed; and
-- complete invokes remain valid even when the outer wrapper never closes.
+- 名称缺失或为空的 invoke 不会发出任何工具生命周期事件；
+- 名称缺失或为空的参数会被忽略；
+- 畸形的 JSON 会回退为原始文本；
+- 参数内容上限为 1,000,000 个 JavaScript 字符串代码单元，超出时会附加显式的截断标记；
+- 当刷新时，不完整的参数或 invoke 不会发出 `toolEnd`；并且
+- 即便外层包装器永不闭合，完整的 invoke 仍然有效。
 
-OMP's stream projector creates a canonical call at `toolStart`, before `toolEnd`. Therefore, on a normally stopped provider response, an unterminated invoke can remain as a partial runnable call: streamed argument text stays uncoerced, or arguments are `{}` if none arrived. A provider `length` stop remains non-runnable `length`. This behavior applies to the ordinary owned `xml` path and is important when diagnosing model output that stops mid-tag.
+OMP 的流投影器在 `toolEnd` 之前，于 `toolStart` 处创建一个规范调用。因此，在正常停止的 provider 响应中，未闭合的 invoke 可能会保留为可部分运行的调用：流式传输的参数文本保持未强制转换状态，或者若没有任何参数到达则为 `{}`。provider 的 `length` 停止仍为不可运行的 `length`。此行为适用于普通的自有 `xml` 路径，在诊断停在标签中间的模型输出时非常重要。
 
-### DSML tagset
+### DSML 标签集
 
-The DSML scanner also streams each parameter as keyed deltas and emits `toolEnd` only at `</｜DSML｜invoke>` or its ASCII equivalent. An incomplete DSML parameter resets the partial call on flush without a completed event. Because `xmlTagset: dsml` is a direct scanner option rather than the normal owned-renderer path, callers consuming those events own the handling of an unmatched `toolStart`.
+DSML 扫描器也将每个参数流式传输为带键的增量，并且仅在 `</｜DSML｜invoke>` 或其 ASCII 等效形式处发出 `toolEnd`。不完整的 DSML 参数在刷新时会重置部分调用，而不发出完成事件。因为 `xmlTagset: dsml` 是直接的扫描器选项，而非正常的自有渲染器路径，消费这些事件的调用方负责处理未匹配的 `toolStart`。
 
-### Fabricated results
+### 伪造的结果
 
-For the generic XML dialect, the first model-authored `<tool_response>` is treated as a fabricated-result boundary. OMP preserves calls/text before it and stops projection there. The default `tools.abortOnFabricatedResult: true` aborts provider generation; disabling the setting drains but discards the fabricated continuation.
+对于通用 XML 方言，第一个由模型编写的 `<tool_response>` 被视为伪造结果的边界。OMP 会保留此前的调用/文本，并在此处停止投影。默认的 `tools.abortOnFabricatedResult: true` 会中止 provider 生成；禁用该设置则会排空但丢弃伪造的延续内容。
 
-## End-to-end example
+## 端到端示例
 
-Injected catalog line:
+注入的目录行：
 
 ```text
 <tools>
@@ -197,7 +197,7 @@ Injected catalog line:
 </tools>
 ```
 
-Assistant call batch:
+助手调用批次：
 
 ```text
 I'll compare both cities.
@@ -205,7 +205,7 @@ I'll compare both cities.
 <invoke name="get_weather"><parameter name="city">Oslo</parameter><parameter name="days">2</parameter></invoke>
 ```
 
-Next user turn produced by OMP:
+OMP 生成的下一轮用户消息：
 
 ```text
 <tool_response>
@@ -216,26 +216,26 @@ Next user turn produced by OMP:
 </tool_response>
 ```
 
-The assistant then answers normally or emits another sequence of invokes.
+然后助手正常作答，或发出另一序列的 invoke。
 
-## Parsing notes and gotchas
+## 解析注意事项与陷阱
 
-- **Not real XML.** Parameter bodies are delimiter-matched and intentionally unescaped. An XML parser/entity decoder changes their values.
-- **Renderer and scanner acceptance differ.** OMP renders bare consecutive invokes; the default scanner additionally accepts two wrappers and `antml:` variants.
-- **No call ids or result names.** Preserve call/result order across a parallel batch.
-- **Errors are text only.** Generic `<tool_response>` does not encode `isError`.
-- **Schema context matters.** Supply tools to renderer/scanner APIs so schema-declared strings remain literal rather than JSON-quoted/coerced.
-- **`xmlTagset` is scanner-only.** Selecting DSML does not make the XML renderer emit DSML.
-- **A close tag finalizes the call.** `toolStart` and argument deltas stream early, but only `</invoke>` produces the final coerced argument object and `toolEnd`.
+- **不是真正的 XML。** 参数主体按分隔符匹配，并且故意不转义。使用 XML 解析器/实体解码器会改变其值。
+- **渲染器与扫描器的接受范围不同。** OMP 渲染裸的连续 invoke；默认扫描器另外接受两种包装器和 `antml:` 变体。
+- **没有调用 id 或结果名称。** 在并行批次中保持调用/结果顺序。
+- **错误仅为文本。** 通用 `<tool_response>` 不编码 `isError`。
+- **Schema 上下文很重要。** 为渲染器/扫描器 API 提供工具，以便 schema 声明的字符串保持字面量，而不是被 JSON 加引号或强制转换。
+- **`xmlTagset` 仅作用于扫描器。** 选择 DSML 并不会让 XML 渲染器输出 DSML。
+- **闭合标签完成调用。** `toolStart` 和参数增量会尽早流式传输，但只有 `</invoke>` 才会生成最终强制转换后的参数对象和 `toolEnd`。
 
-## Sources
+## 源文件
 
-- `packages/ai/src/dialect/xml.md` — injected generic XML format guide.
-- `packages/ai/src/dialect/xml.ts` — renderer definitions and Anthropic/DSML scanner selection.
-- `packages/ai/src/dialect/anthropic.ts` — default incremental invoke/parameter scanner, coercion, thinking, and incomplete-call behavior.
-- `packages/ai/src/dialect/deepseek.ts` — DSML envelope scanner and `string="false"` coercion.
-- `packages/ai/src/dialect/catalog.ts` and `prompt-template.md` — tool catalog and system-prompt injection.
-- `packages/ai/src/dialect/rendering.ts`, `history.ts`, and `owned-stream.ts` — result rendering, history conversion, projection, and fabricated-result handling.
-- `packages/ai/src/utils/stream-markup-healing.ts` — current DSML scanner integration.
-- `packages/coding-agent/src/sdk.ts` — `tools.format` resolution.
-- `packages/ai/test/inband-tools.test.ts` and `dialect-thinking.test.ts` — round trips, chunked argument deltas, raw blocks, result rendering, and thinking behavior.
+- `packages/ai/src/dialect/xml.md` — 注入的通用 XML 格式指南。
+- `packages/ai/src/dialect/xml.ts` — 渲染器定义以及 Anthropic/DSML 扫描器选择。
+- `packages/ai/src/dialect/anthropic.ts` — 默认的增量 invoke/参数扫描器、强制转换、思考以及不完整调用行为。
+- `packages/ai/src/dialect/deepseek.ts` — DSML 信封扫描器以及 `string="false"` 强制转换。
+- `packages/ai/src/dialect/catalog.ts` 和 `prompt-template.md` — 工具目录和系统提示词注入。
+- `packages/ai/src/dialect/rendering.ts`、`history.ts` 和 `owned-stream.ts` — 结果渲染、历史转换、投影以及伪造结果处理。
+- `packages/ai/src/utils/stream-markup-healing.ts` — 当前的 DSML 扫描器集成。
+- `packages/coding-agent/src/sdk.ts` — `tools.format` 解析。
+- `packages/ai/test/inband-tools.test.ts` 和 `dialect-thinking.test.ts` — 往返、分块参数增量、原始块、结果渲染以及思考行为。

@@ -1,63 +1,63 @@
-# GLM-4.5 / GLM-4.6 tool-calling format
+# GLM-4.5 / GLM-4.6 工具调用格式
 
-Native tool-calling convention of Zhipu AI / Z.ai's **GLM-4.5** family (`zai-org/GLM-4.5` 355B-A32B and `zai-org/GLM-4.5-Air` 106B-A12B, `model_type: "glm4_moe"`), shared byte-for-byte by **GLM-4.6**. Unlike the JSON-in-a-tag conventions used by most families, GLM emits each tool call as an **XML-like** block: `<tool_call>{name}` followed by alternating `<arg_key>`/`<arg_value>` element pairs, closed by `</tool_call>`. The prompt is a GLM-style sequence opened by `[gMASK]<sop>` with turn markers `<|system|>`, `<|user|>`, `<|assistant|>`, `<|observation|>`. An inference server turns the raw stream into OpenAI-style `tool_calls` with a parser plus a reasoning parser: both vLLM and SGLang expose `--tool-call-parser glm45 --reasoning-parser glm45` (vLLM additionally needs `--enable-auto-tool-choice`). Tool calling and reasoning are driven entirely by the bundled `chat_template.jinja`; thinking mode is on by default and is disabled per-request with `chat_template_kwargs={"enable_thinking": False}`.
+智谱 AI / Z.ai **GLM-4.5** 系列（`zai-org/GLM-4.5` 355B-A32B 与 `zai-org/GLM-4.5-Air` 106B-A12B，`model_type: "glm4_moe"`）原生工具调用约定，**GLM-4.6** 字节级共享。与大多数系列使用的"标签内 JSON"约定不同，GLM 将每次工具调用作为一个 **类 XML** 块发出：`<tool_call>{name}` 后接交替出现的 `<arg_key>`/`<arg_value>` 元素对，以 `</tool_call>` 收尾。提示词是 GLM 风格的序列，以 `[gMASK]<sop>` 开头，使用 `<|system|>`、`<|user|>`、`<|assistant|>`、`<|observation|>` 作为回合标记。推理服务器通过工具解析器与推理解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 和 SGLang 均提供 `--tool-call-parser glm45 --reasoning-parser glm45`（vLLM addition…
 
-This document was verified against the authoritative `chat_template.jinja` from the HF repo (fetched raw and **rendered locally with Jinja2** — `trim_blocks=True, lstrip_blocks=True`, transformers' `tojson` filter — to produce the byte-exact streams below), `tokenizer_config.json` and `generation_config.json` for the exact token IDs and stop tokens, the model card, and the vLLM (`Glm4MoeModelToolParser`) and SGLang (`Glm4MoeDetector`) parser sources. The HF `resolve`/`blob` web paths redirect to the model-card API; the byte-exact source was obtained via the `resolve/main/...:raw` cache (template commit `cbb2c7cfb52fa128a9660cb1a7a78e017899e115`). The GLM-4.5 and GLM-4.6 `chat_template.jinja` files are identical (same content hash `41478957…`).
+本文档已对照 HF 仓库中权威的 `chat_template.jinja`（原始抓取并**在本地用 Jinja2 渲染** —— `trim_blocks=True, lstrip_blocks=True`，transformers 的 `tojson` 过滤器 —— 以生成下面字节精确的流）、用于精确 token ID 与停止 token 的 `tokenizer_config.json` 与 `generation_config.json`、模型卡，以及 vLLM（`Glm4MoeModelToolParser`）与 SGLang（`Glm4MoeDetector`）解析器源码进行验证。HF 的 `resolve`/`blob` 网页路径会重定向到模型卡 API；字节精确源码通过 `resolve/main/...:raw` 缓存获取（模板提交 `cbb2c7cfb52fa128a9660cb1a7a78e017899e115`）。GLM-4.5 与 GLM-4.6 的 `chat_template.jinja` 完全相同（内容哈希同为 `41478957…`）。
 
-## Special tokens
+## 特殊 token
 
-Token IDs are from `tokenizer_config.json` (`added_tokens_decoder`). Note the split: the turn/role markers are registered as **special** tokens, whereas the structural tool-call and thinking tags are each a single dedicated vocabulary token but flagged **`special: false`** (they are emitted/printed as ordinary text, not stripped as control tokens).
+Token ID 来自 `tokenizer_config.json`（`added_tokens_decoder`）。注意区分：回合/角色标记注册为 **special** token，而结构性的工具调用与思考标签各为一个专用词表 token，但被标记为 **`special: false`**（作为普通文本发出/打印，而非作为控制 token 被剥离）。
 
-| Token (verbatim) | ID | `special` | Purpose |
+| Token（原文） | ID | `special` | 用途 |
 |---|---|---|---|
-| `[gMASK]` | 151331 | true | GLM prefix / blank-infilling sentinel; first token of every prompt |
-| `<sop>` | 151333 | true | "Start of piece" — immediately follows `[gMASK]` to open the sequence |
-| `<eop>` | 151334 | true | "End of piece" (not emitted by the chat template) |
-| `<\|system\|>` | 151335 | true | Opens a system turn (and the injected tools turn) |
-| `<\|user\|>` | 151336 | true | Opens a user turn (also an EOS id — see below) |
-| `<\|assistant\|>` | 151337 | true | Opens an assistant turn / generation prompt |
-| `<\|observation\|>` | 151338 | true | Opens a tool-result (observation) turn (also an EOS id) |
-| `<\|endoftext\|>` | 151329 | true | End-of-text; `eos_token` and `pad_token` |
-| `<think>` | 151350 | false | Opens the reasoning span inside an assistant turn |
-| `</think>` | 151351 | false | Closes the reasoning span |
-| `<tool_call>` | 151352 | false | Opens one tool call; function name follows on the same line |
-| `</tool_call>` | 151353 | false | Closes one tool call |
-| `<arg_key>` | 151356 | false | Opens an argument-name element |
-| `</arg_key>` | 151357 | false | Closes an argument-name element |
-| `<arg_value>` | 151358 | false | Opens an argument-value element |
-| `</arg_value>` | 151359 | false | Closes an argument-value element |
-| `<tool_response>` | 151354 | false | Wraps one tool result inside an observation turn |
-| `</tool_response>` | 151355 | false | Closes a tool result |
-| `/nothink` | 151360 | true | Soft switch appended to user text to suppress thinking |
+| `[gMASK]` | 151331 | true | GLM 前缀 / 空填充哨兵；每个提示词的第一个 token |
+| `<sop>` | 151333 | true | "Start of piece" — 紧跟在 `[gMASK]` 之后以开启序列 |
+| `<eop>` | 151334 | true | "End of piece"（聊天模板不会发出） |
+| `<\|system\|>` | 151335 | true | 开启系统回合（以及注入的 tools 回合） |
+| `<\|user\|>` | 151336 | true | 开启用户回合（同时是 EOS id —— 见下文） |
+| `<\|assistant\|>` | 151337 | true | 开启助手回合 / 生成提示 |
+| `<\|observation\|>` | 151338 | true | 开启工具结果（observation）回合（同时是 EOS id） |
+| `<\|endoftext\|>` | 151329 | true | 文本结束；`eos_token` 与 `pad_token` |
+| `<think>` | 151350 | false | 在助手回合内开启推理区间 |
+| `</think>` | 151351 | false | 关闭推理区间 |
+| `<tool_call>` | 151352 | false | 开启一次工具调用；函数名紧随其后位于同一行 |
+| `</tool_call>` | 151353 | false | 关闭一次工具调用 |
+| `<arg_key>` | 151356 | false | 开启参数名元素 |
+| `</arg_key>` | 151357 | false | 关闭参数名元素 |
+| `<arg_value>` | 151358 | false | 开启参数值元素 |
+| `</arg_value>` | 151359 | false | 关闭参数值元素 |
+| `<tool_response>` | 151354 | false | 在 observation 回合中包裹一个工具结果 |
+| `</tool_response>` | 151355 | false | 关闭一个工具结果 |
+| `/nothink` | 151360 | true | 附加在用户文本后的软开关，用于抑制思考 |
 
-Notes on exactness:
-- All pipes are ASCII `|` (U+007C); GLM uses no fullwidth `｜` (U+FF5C) or `▁` (U+2581) variants (unlike DeepSeek). Reproduce `<|system|>`, `<|user|>`, `<|assistant|>`, `<|observation|>` exactly, and `[gMASK]` with literal square brackets.
-- Because `<tool_call>`, `<arg_key>`, `<arg_value>`, `<tool_response>`, `<think>` (and their closers) each map to exactly **one** token ID, they cost one token apiece in the stream — but being `special: false` they round-trip through detokenization as plain text. Parsers therefore match them as literal substrings in the decoded text, not as control-token ids.
-- `eos_token_id` is a **list**: `[151329, 151336, 151338]` = `<|endoftext|>`, `<|user|>`, `<|observation|>` (from `generation_config.json`). This is how a tool-call turn ends: after `</tool_call>` the model emits `<|observation|>`, which is an EOS id, so generation halts and the server reports a tool call (see Turn structure).
+关于精确性的注意事项：
+- 所有竖线均为 ASCII `|`（U+007C）；GLM 不使用全角 `｜`（U+FF5C）或 `▁`（U+2581）变体（与 DeepSeek 不同）。请原样复现 `<|system|>`、`<|user|>`、`<|assistant|>`、`<|observation|>`，并使用字面方括号的 `[gMASK]`。
+- 由于 `<tool_call>`、`<arg_key>`、`<arg_value>`、`<tool_response>`、`<think>`（及其闭合标签）每个都精确对应 **一个** token ID，它们在流中各占一个 token —— 但因为 `special: false`，在 detokenize 时作为普通文本往返。因此解析器在解码文本中将它们作为字面子串匹配，而非作为控制 token id。
+- `eos_token_id` 是一个 **列表**：`[151329, 151336, 151338]` = `<|endoftext|>`、`<|user|>`、`<|observation|>`（来自 `generation_config.json`）。工具调用回合的结束方式即此：模型在 `</tool_call>` 之后发出 `<|observation|>`，后者是 EOS id，生成因此停止，服务器上报工具调用（见回合结构）。
 
-## Roles / channels / turn structure
+## 角色 / 通道 / 回合结构
 
-Every prompt begins with the literal two-token prefix `[gMASK]<sop>` (no following newline). Turns are then concatenated, each introduced by its role marker; there is no per-turn terminator token in rendered history (the next marker, or an EOS id during generation, ends a turn).
+每个提示词都以字面两 token 前缀 `[gMASK]<sop>` 开头（其后无换行）。然后回合被串接，每个回合由其角色标记引入；在渲染出的历史中，每回合没有终止 token（下一个标记，或生成期间的 EOS id，结束一个回合）。
 
-- **System** (`<|system|>`): role marker, newline, then the message text. When `tools` are supplied, a synthetic tools system turn is rendered **first**, before any user-supplied system turn (the two are separate `<|system|>` blocks — see Tool definitions).
-- **User** (`<|user|>`): role marker, newline, then text. If `enable_thinking` is false, the literal `/nothink` is appended to the user text (unless it already ends with `/nothink`).
-- **Assistant** (`<|assistant|>`): role marker, then a reasoning span and/or visible content and/or tool calls. The reasoning span is `\n<think>{reasoning}</think>`; visible content follows on its own line; tool calls follow as `<tool_call>…</tool_call>` blocks.
-- **Tool result** (`<|observation|>`): role marker introducing one or more `<tool_response>…</tool_response>` blocks (see Tool-result format).
+- **System**（`<|system|>`）：角色标记、换行，然后是消息文本。当提供 `tools` 时，一个合成的 tools 系统回合会被 **首先** 渲染，位于任何用户提供的系统回合之前（两者是独立的 `<|system|>` 块 —— 见工具定义）。
+- **User**（`<|user|>`）：角色标记、换行，然后是文本。如果 `enable_thinking` 为 false，则将字面量 `/nothink` 追加到用户文本之后（除非它已经以 `/nothink` 结尾）。
+- **Assistant**（`<|assistant|>`）：角色标记，然后是推理区间和/或可见内容和/或工具调用。推理区间为 `\n<think>{reasoning}</think>`；可见内容紧随其单独一行；工具调用作为 `<tool_call>…</tool_call>` 块出现。
+- **Tool result**（`<|observation|>`）：角色标记，引入一个或多个 `<tool_response>…</tool_response>` 块（见工具结果格式）。
 
-Thinking / reasoning channel:
-- Reasoning lives in `<think>…</think>` inside the assistant turn. The `--reasoning-parser glm45` extracts it into a separate `reasoning_content` field; the visible answer is whatever follows `</think>`.
-- **Only the reasoning of assistant turns after the last user message is kept.** The template renders every earlier assistant turn with an empty `<think></think>` and drops its `reasoning_content` (or any inline `<think>…</think>` embedded in `content`). This keeps stale chains of thought out of the context on later turns.
-- An assistant turn with neither preserved reasoning nor an explicit chain renders `\n<think></think>` (empty), then content/tool calls.
+思考 / 推理通道：
+- 推理位于助手回合内的 `<think>…</think>`。`--reasoning-parser glm45` 将其抽取到独立的 `reasoning_content` 字段中；可见答案为 `</think>` 之后的内容。
+- **仅保留最后一条用户消息之后助手回合的推理。** 模板对每个更早的助手回合渲染为空的 `<think></think>`，并丢弃其 `reasoning_content`（或嵌入在 `content` 中的任何行内 `<think>…</think>`）。这避免在后续回合中将陈旧的思维链留在上下文中。
+- 既无保留推理也无显式链的助手回合渲染为 `\n<think></think>`（空），然后是内容/工具调用。
 
-Generation prompt (`add_generation_prompt=True`):
-- **Thinking mode (default):** the prompt ends with a bare `<|assistant|>`; the model continues with `\n<think>…</think>` then its answer or tool calls.
-- **Non-thinking mode** (`enable_thinking=false`): the prompt ends with `<|assistant|>\n<think></think>`, pre-filling an empty reasoning span so the model goes straight to the answer.
+生成提示（`add_generation_prompt=True`）：
+- **思考模式（默认）：** 提示词以裸 `<|assistant|>` 结尾；模型继续以 `\n<think>…</think>` 输出，然后是其答案或工具调用。
+- **非思考模式**（`enable_thinking=false`）：提示词以 `<|assistant|>\n<think></think>` 结尾，预填一个空推理区间，使模型直接进入答案。
 
-How a tool-call turn terminates: there is no dedicated "stop after tool call" token. The model emits `</tool_call>` and then `<|observation|>` (token 151338), which is one of the three EOS ids, so decoding stops. The server inspects the text, finds `<tool_call>`, and returns `finish_reason: "tool_calls"`.
+工具调用回合如何终止：没有专用的"工具调用后停止"token。模型发出 `</tool_call>` 然后是 `<|observation|>`（token 151338），后者是三个 EOS id 之一，解码因此停止。服务器检查文本，发现 `<tool_call>`，返回 `finish_reason: "tool_calls"`。
 
-## Tool definitions
+## 工具定义
 
-When the request carries `tools`, the template prepends one `<|system|>` turn containing a fixed preamble, the tool list wrapped in `<tools>…</tools>`, and a literal description of the output format. Each tool is serialized with `tool | tojson(ensure_ascii=False)` — i.e. the **entire OpenAI tool object verbatim**, including the `{"type": "function", "function": {…}}` wrapper, with default JSON spacing (`", "` / `": "`). One tool per line.
+当请求携带 `tools` 时，模板会在前面加一个 `<|system|>` 回合，其中包含固定前言、用 `<tools>…</tools>` 包裹的工具列表，以及对输出格式的字面描述。每个工具以 `tool | tojson(ensure_ascii=False)` 序列化 —— 即 **整个 OpenAI 工具对象原样** 包含 `{"type": "function", "function": {…}}` 包装层，并使用默认 JSON 缩进（`", "` / `": "`）。每个工具一行。
 
 ```text
 <|system|>
@@ -80,11 +80,11 @@ For each function call, output the function name and arguments within the follow
 </tool_call>
 ```
 
-The `<tool_call>{function-name}` / `<arg_key>` / `<arg_value>` lines above are part of the **prompt text** (the format spec the model is told to follow), not an example call. This tools turn is emitted only when `tools` is non-empty, and it is closed implicitly by the next role marker (e.g. a user-supplied `<|system|>` or the first `<|user|>`), with no blank line between them.
+上面的 `<tool_call>{function-name}` / `<arg_key>` / `<arg_value>` 行属于 **提示词文本**（告知模型遵循的格式规范），不是示例调用。仅当 `tools` 非空时才发出此 tools 回合，并被下一个角色标记（例如用户提供的 `<|system|>` 或第一个 `<|user|>`）隐式关闭，两者之间无空行。
 
-## Tool-call format
+## 工具调用格式
 
-The model emits a call as an `<tool_call>` block: the function **name on the same line** as the opening tag, a newline, then one `<arg_key>…</arg_key>` + `<arg_value>…</arg_value>` pair per argument, closed by `</tool_call>`. Minimal single call (assistant generation in thinking mode; reasoning shown for realism):
+模型以 `<tool_call>` 块形式发出调用：函数 **名与起始标签位于同一行**，一个换行，然后每个参数一组 `<arg_key>…</arg_key>` + `<arg_value>…</arg_value>` 对，以 `</tool_call>` 关闭。最简单的单次调用（助手在思考模式下生成；为逼真起见展示推理）：
 
 ```text
 <think>The user wants the weather in Beijing. I'll call get_weather.</think>
@@ -96,20 +96,20 @@ The model emits a call as an `<tool_call>` block: the function **name on the sam
 </tool_call>
 ```
 
-Anatomy and value encoding (this is the single most error-prone part):
+结构与值编码（这是最容易出错的部分）：
 
-- The function name is the text between `<tool_call>` and the first newline — there is **no** wrapping tag around it and **no** space after `<tool_call>`.
-- Each argument is two adjacent elements: `<arg_key>name</arg_key>` then `<arg_value>value</arg_value>`, conventionally one pair per line.
-- **Argument values are NOT uniformly JSON.** The template renders each value as `value | tojson(ensure_ascii=False) if value is not string else value`:
-  - **string** values are emitted **raw, without surrounding quotes** → `<arg_value>Beijing</arg_value>` (not `"Beijing"`).
-  - **non-string** values (number, boolean, null, object, array) are JSON-encoded → `<arg_value>3</arg_value>`, `<arg_value>true</arg_value>`, `<arg_value>{"k": 1}</arg_value>`.
-- A **zero-argument** call has no pairs: the name is followed by a newline and the closer — `<tool_call>get_time\n</tool_call>`.
+- 函数名是 `<tool_call>` 与第一个换行之间的文本 —— 其外 **没有** 包裹标签，且 `<tool_call>` 后 **没有** 空格。
+- 每个参数由两个相邻元素组成：`<arg_key>name</arg_key>` 后接 `<arg_value>value</arg_value>`，习惯上每对占一行。
+- **参数值并非统一为 JSON。** 模板将每个值渲染为 `value | tojson(ensure_ascii=False) if value is not string else value`：
+  - **string** 值以 **原始形式发出，不带包裹引号** → `<arg_value>Beijing</arg_value>`（而非 `"Beijing"`）。
+  - **非 string** 值（number、boolean、null、object、array）以 JSON 编码 → `<arg_value>3</arg_value>`、`<arg_value>true</arg_value>`、`<arg_value>{"k": 1}</arg_value>`。
+- **零参数** 调用没有键值对：函数名后接一个换行和闭合标签 —— `<tool_call>get_time\n</tool_call>`。
 
-Because string values lose their quotes, a parser must decide per argument whether to JSON-decode or treat the value as a literal string. Both reference parsers do this by consulting the tool's JSON Schema: if the parameter's type is `string`, the raw text is taken as-is; otherwise the value is JSON-decoded (with `ast.literal_eval` and raw-string fallbacks). The model is trained to follow the schema, so it emits a bare string exactly when the parameter is string-typed.
+由于字符串值丢失了引号，解析器必须对每个参数分别决定是 JSON 解码还是将其视为字面字符串。两份参考解析器都通过查询工具的 JSON Schema 来完成此判断：若参数类型为 `string`，则原样采用原始文本；否则进行 JSON 解码（带 `ast.literal_eval` 和 raw-string 兜底）。模型经过训练遵循 schema，因此仅在参数为 string 类型时才发出裸字符串。
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
-Two or more calls in one turn are emitted as consecutive `<tool_call>…</tool_call>` blocks separated by a single newline (no wrapper element around the set). Raw assistant emission for two parallel calls with mixed argument types:
+一轮中两个或更多调用以连续的 `<tool_call>…</tool_call>` 块发出，由单个换行分隔（集合外无包裹元素）。两次并行调用、参数类型混合时助手的原始输出：
 
 ```text
 <think>Two cities. Call get_weather twice in parallel.</think>
@@ -129,11 +129,11 @@ Two or more calls in one turn are emitted as consecutive `<tool_call>…</tool_c
 </tool_call>
 ```
 
-Note `Beijing`/`Shanghai`/`celsius` (string) are bare, while `3` (number) and `true` (boolean) are JSON literals. Parsers split on the non-greedy `<tool_call>.*?</tool_call>` regex, so any number of calls is supported; each becomes a separate entry in `tool_calls[]`.
+注意 `Beijing`/`Shanghai`/`celsius`（字符串）为裸值，而 `3`（数字）与 `true`（布尔）为 JSON 字面量。解析器在非贪婪的 `<tool_call>.*?</tool_call>` 正则上分割，因此支持任意数量的调用；每条作为 `tool_calls[]` 中独立的一项。
 
-## Tool-result format
+## 工具结果格式
 
-Results are returned in an **observation** turn. For a single result: the `<|observation|>` marker, a newline, then the result wrapped in `<tool_response>` / `</tool_response>`:
+结果在 **observation** 回合中返回。对于单个结果：`<|observation|>` 标记，一个换行，然后用 `<tool_response>` / `</tool_response>` 包裹的结果：
 
 ```text
 <|observation|>
@@ -142,7 +142,7 @@ Results are returned in an **observation** turn. For a single result: the `<|obs
 </tool_response>
 ```
 
-The content between the tags is inserted **verbatim** (callers typically pass a JSON string, but any text is allowed). For **multiple** results from a set of parallel calls, the `<|observation|>` marker appears **once** and each result gets its own `<tool_response>` block (consecutive `tool`-role messages are merged under a single observation turn):
+标签之间的内容 **原样** 插入（调用者通常传入 JSON 字符串，但允许任何文本）。对于并行调用集合产生的 **多个** 结果，`<|observation|>` 标记仅出现 **一次**，每个结果各自一个 `<tool_response>` 块（连续的 `tool` 角色消息在单个 observation 回合下合并）：
 
 ```text
 <|observation|>
@@ -154,13 +154,13 @@ The content between the tags is inserted **verbatim** (callers typically pass a 
 </tool_response>
 ```
 
-The chat template reads **only** the tool message's `content` — it does not consult any `tool_call_id`. Results are therefore correlated to calls **positionally / by order**, not by an embedded id (GLM's wire format carries no per-call id; see API mapping).
+聊天模板 **只** 读取工具消息的 `content` —— 不参考任何 `tool_call_id`。因此结果与调用按 **位置 / 顺序** 关联，而非通过嵌入的 id（GLM 的线协议不携带每调用 id；见 API 映射）。
 
-## End-to-end example
+## 端到端示例
 
-A complete multi-turn weather exchange. These are the exact locally rendered streams; newlines inside a turn are literal and turns are otherwise contiguous (no separators between markers).
+一个完整的多轮天气对话。这些是本地渲染出的精确流；回合内的换行是字面的，回合之间其他情况下是连续的（标记之间无分隔符）。
 
-**Stage 1 — prompt fed to the model** (`tools` set, one prior system message, `add_generation_prompt=True`, thinking mode):
+**阶段 1 —— 喂给模型的提示词**（已设置 `tools`、一条先前的系统消息、`add_generation_prompt=True`、思考模式）：
 
 ```text
 [gMASK]<sop><|system|>
@@ -185,7 +185,7 @@ You are a helpful assistant.<|user|>
 What's the weather in Beijing?<|assistant|>
 ```
 
-**Assistant generation** (model output; it ends by emitting `<|observation|>`, an EOS id, so decoding stops there; server returns `finish_reason: "tool_calls"`):
+**助手生成**（模型输出；以发出 `<|observation|>`（EOS id）结束，因此解码在此停止；服务器返回 `finish_reason: "tool_calls"`）：
 
 ```text
 <think>The user wants the weather in Beijing. I'll call get_weather.</think>
@@ -197,7 +197,7 @@ What's the weather in Beijing?<|assistant|>
 </tool_call>
 ```
 
-**Stage 2 — prompt for the next turn**, after appending the assistant tool-call turn and the tool result, then `add_generation_prompt=True`:
+**阶段 2 —— 下一轮的提示词**，在追加了助手工具调用回合与工具结果之后，然后 `add_generation_prompt=True`：
 
 ```text
 [gMASK]<sop><|system|>
@@ -232,16 +232,16 @@ What's the weather in Beijing?<|assistant|>
 </tool_response><|assistant|>
 ```
 
-**Final assistant generation** (natural-language answer, terminated by `<|endoftext|>`; `finish_reason: "stop"`):
+**最终助手生成**（自然语言答案，由 `<|endoftext|>` 终止；`finish_reason: "stop"`）：
 
 ```text
 <think>Got it, 26C and sunny.</think>
 It's 26°C and sunny in Beijing right now.
 ```
 
-Two subtleties visible above: (1) the reasoning of the assistant tool-call turn is **preserved** in Stage 2 only because it is the segment after the last user message; with another user turn after it, that `<think>…</think>` would be re-rendered empty. (2) The tool-call turn and the observation turn abut directly (`</tool_call><|observation|>`), and the observation abuts the next assistant marker (`</tool_response><|assistant|>`).
+上面可见两处细节：(1) 助手工具调用回合的推理仅在阶段 2 中被 **保留**，因为它是最后一条用户消息之后的那一段；若之后又有用户回合，则该 `<think>…</think>` 会被重新渲染为空。(2) 工具调用回合与 observation 回合直接相接（`</tool_call><|observation|>`），observation 又与下一个助手标记相接（`</tool_response><|assistant|>`）。
 
-For **non-thinking** mode the user text carries the soft switch and the generation prompt pre-fills an empty think span:
+对于 **非思考** 模式，用户文本带有软开关，且生成提示预填一个空的 think 区间：
 
 ```text
 <|user|>
@@ -249,90 +249,58 @@ Hi there/nothink<|assistant|>
 <think></think>
 ```
 
-## OpenAI-compatible API mapping
+## OpenAI 兼容 API 映射
 
-With a server parser active (`--tool-call-parser glm45 --reasoning-parser glm45`), the raw stream maps onto Chat Completions as follows:
+当服务器解析器激活时（`--tool-call-parser glm45 --reasoning-parser glm45`），原始流到 Chat Completions 的映射如下：
 
-- `choices[].finish_reason` = `"tool_calls"` when the output contained at least one `<tool_call>` (otherwise `"stop"`).
-- `choices[].message.content` = the text **before** the first `<tool_call>` (normalized to `null` if empty/whitespace). The `<think>…</think>` reasoning is removed by the reasoning parser and surfaced separately as `message.reasoning_content`.
-- `choices[].message.tool_calls[]` — one entry per `<tool_call>…</tool_call>` block:
-  - `.id` = a **server-generated** id (e.g. vLLM's `make_tool_call_id()`), **not** present in the model output. GLM emits no per-call id in the stream.
-  - `.type` = `"function"`.
-  - `.function.name` = the text after `<tool_call>` up to the first newline.
-  - `.function.arguments` = a **JSON string** (an object), reconstructed from the `<arg_key>`/`<arg_value>` pairs with per-argument typing from the tool schema. vLLM returns `json.dumps(arg_dct, ensure_ascii=False)`, e.g. `"{\"location\": \"Beijing\", \"unit\": \"celsius\"}"`. Clients `json.loads()` it before use.
-- **Request side — tool results** are sent back as `role: "tool"` messages, e.g.:
+- `choices[].finish_reason` = `"tool_calls"` 当输出中至少含一个 `<tool_call>`（否则为 `"stop"`）。
+- `choices[].message.content` = 第一个 `<tool_call>` **之前** 的文本（若为空/空白则规范化为 `null`）。`<think>…</think>` 推理由推理解析器移除，并单独作为 `message.reasoning_content` 暴露。
+- `choices[].message.tool_calls[]` —— 每个 `<tool_call>…</tool_call>` 块对应一项：
+  - `.id` = **服务器生成** 的 id（如 vLLM 的 `make_tool_call_id()`），**不** 出现在模型输出中。GLM 在流中不发出每调用 id。
+  - `.type` = `"function"`。
+  - `.function.name` = `<tool_call>` 之后、第一个换行之前的文本。
+  - `.function.arguments` = 一个 **JSON 字符串**（一个对象），由 `<arg_key>`/`<arg_value>` 对根据工具 schema 按参数类型重建。vLLM 返回 `json.dumps(arg_dct, ensure_ascii=False)`，例如 `"{\"location\": \"Beijing\", \"unit\": \"celsius\"}"`。客户端在使用前应 `json.loads()`。
+- **请求侧 —— 工具结果** 以 `role: "tool"` 消息发回，例如：
 
   ```json
   {"role": "tool", "tool_call_id": "call_abc123", "content": "{\"temperature\": 26, \"unit\": \"celsius\", \"condition\": \"Sunny\"}"}
   ```
 
-  The chat template renders only `content` (inside `<tool_response>`); `tool_call_id` is **ignored by the template** and matters only for the client's own bookkeeping. Order results to match the calls.
-- **Request side — assistant tool-call history**: the OpenAI shape carries `function.arguments` as a JSON **string**, but the chat template iterates `arguments.items()` and therefore needs an **object**. vLLM/SGLang parse the string back into a dict before rendering; if you call `tokenizer.apply_chat_template` directly, pass `arguments` as a dict (and optionally `reasoning_content` as a string) or the template will raise.
-- Disable thinking via `extra_body={"chat_template_kwargs": {"enable_thinking": False}}` (OpenAI Python client) — this flips the template to the `/nothink` + pre-filled `<think></think>` path.
+  聊天模板仅渲染 `content`（位于 `<tool_response>` 内）；`tool_call_id` 被模板 **忽略**，仅对客户端自身的簿记有用。按与调用匹配的顺序排列结果。
+- **请求侧 —— 助手工具调用历史**：OpenAI 形式将 `function.arguments` 作为 JSON **字符串** 携带，但聊天模板遍历 `arguments.items()`，因此需要 **对象**。vLLM/SGLang 在渲染前将字符串解析回字典；若你直接调用 `tokenizer.apply_chat_template`，请将 `arguments` 作为字典（可选地，将 `reasoning_content` 作为字符串）传入，否则模板会抛出异常。
+- 通过 `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`（OpenAI Python 客户端）禁用思考 —— 这会将模板切换到 `/nothink` + 预填 `<think></think>` 路径。
 
-## Parsing notes & gotchas
+## 解析注意事项与陷阱
 
-- **String values are unquoted; typing needs the schema.** The decisive rule: a `<arg_value>` is a literal string iff the parameter is string-typed in the tool's JSON Schema; otherwise it is JSON. vLLM's `_is_string_type` and SGLang's `get_argument_type` both walk `properties[arg].type` (handling `anyOf`/`oneOf`/`enum`/`allOf`/type-arrays). If the schema is missing/loose, they fall back to "try `json.loads`, then `ast.literal_eval`, then treat as string" — so a bare word like `celsius` survives as a string, while `26` becomes a number. A string value that *looks* like JSON (e.g. a parameter typed `string` whose value is `{"a":1}`) is correctly kept as the literal string only because the schema says `string`.
-- **Extraction regexes (GLM-4.5/4.6).** vLLM: calls via `<tool_call>.*?</tool_call>` (DOTALL); name/body via `<tool_call>([^\n]*)\n(.*)</tool_call>`; pairs via `<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>`. The name regex **requires a newline** after the name — matching the 4.5/4.6 template. SGLang uses an equivalent `(?:\\n|\n)` form so it also tolerates literal escaped `\n`.
-- **`</arg_value>` in a value breaks parsing.** Values are captured non-greedily up to the next `</arg_value>`; a value whose text contains `</arg_value>` (or `</tool_call>`) truncates early. There is no escaping mechanism in the wire format.
-- **Tool calls are parsed from `content` only, not from reasoning.** A `<tool_call>` emitted inside `<think>…</think>` is ignored by the tool parser (vLLM's reasoning/tool parsers cooperate so only post-`</think>` content is scanned). Don't expect calls made "while thinking" to fire.
-- **Guided decoding is suppressed for GLM.** For `tool_choice: "required"` or a named tool, vLLM deliberately does **not** apply JSON structured-outputs/guided decoding, because that would force JSON output and conflict with GLM's XML syntax; the parser extracts from free-form XML instead.
-- **`skip_special_tokens` must be off.** Although the tool/think tags are `special: false`, vLLM forces `skip_special_tokens = False` when tools are enabled (defensive against transformers 5.x detokenization changes) so the literal `<tool_call>`/`</tool_call>` text survives for the regex.
-- **Streaming.** Long string arguments used to be buffered until the closing tag (vLLM issue #32829); the current parser re-parses the accumulated text each delta and emits only the diff, streaming incremental string content with an open-quote-then-fill strategy and holding back any partial trailing tag (`partial_tag_overlap`). The streamed tool name is the text before the first `\n` or `<arg_key>`. SGLang implements the same as an explicit XML→JSON state machine (`INIT → IN_KEY → WAITING_VALUE → IN_VALUE`). Malformed tails (a missing `</arg_value>` before `</tool_call>`) are closed off heuristically.
-- **Lineage — GLM-4.5 vs GLM-4.6:** identical wire format and identical `chat_template.jinja` (same content hash); the same `glm45` parser serves both.
-- **Lineage — GLM-4.7 / GLM-5 changed the format.** Newer models may omit
-  structural newlines: the function name can sit directly before the first
-  `<arg_key>`, zero-argument calls can be `<tool_call>func</tool_call>`, and
-  parallel calls can abut. vLLM/SGLang require their distinct GLM-4.7
-  parsers for this variant. omp's repository scanner is intentionally broader:
-  it accepts newline, `<arg_key>`, or `</tool_call>` as the name delimiter, so
-  the same `glm` dialect scanner handles both layouts.
+- **字符串值未加引号；类型判断需要 schema。** 决定性规则：仅当工具 JSON Schema 中参数为 string 类型时，`<arg_value>` 为字面字符串；否则为 JSON。vLLM 的 `_is_string_type` 与 SGLang 的 `get_argument_type` 都遍历 `properties[arg].type`（处理 `anyOf`/`oneOf`/`enum`/`allOf`/类型数组）。如果 schema 缺失/宽松，则回退到"尝试 `json.loads`，再 `ast.literal_eval`，最后视为字符串" —— 因此像 `celsius` 这样的裸词保留为字符串，而 `26` 成为数字。仅当 schema 指明为 `string` 时，*看起来* 像 JSON 的字符串值（例如类型为 `string`、值为 `{"a":1}` 的参数）才会被正确保留为字面字符串。
+- **抽取正则（GLM-4.5/4.6）。** vLLM：调用通过 `<tool_call>.*?</tool_call>`（DOTALL）；名称/主体通过 `<tool_call>([^\n]*)\n(.*)</tool_call>`；键值对通过 `<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>`。名称正则 **要求** 名称后跟换行 —— 与 4.5/4.6 模板一致。SGLang 使用等价的 `(?:\\n|\n)` 形式，因此同样能容忍字面转义的 `\n`。
+- **值中出现的 `</arg_value>` 会破坏解析。** 值以非贪婪方式捕获到下一个 `</arg_value>`；若值文本中包含 `</arg_value>`（或 `</tool_call>`），则会提前截断。线协议中没有转义机制。
+- **工具调用仅从 `content` 解析，不从推理解析。** 在 `<think>…</think>` 内发出的 `<tool_call>` 会被工具解析器忽略（vLLM 的推理/工具解析器协同工作，仅扫描 `</think>` 之后的内容）。不要指望"思考时"做出的调用会触发。
+- **GLM 抑制引导解码。** 对于 `tool_choice: "required"` 或具名工具，vLLM 故意 **不** 应用 JSON 结构化输出 / 引导解码，因为这会强制 JSON 输出而与 GLM 的 XML 语法冲突；解析器改为从自由形式的 XML 中抽取。
+- **`skip_special_tokens` 必须关闭。** 尽管工具/思考标签为 `special: false`，vLLM 在启用工具时强制设置 `skip_special_tokens = False`（防御 transformers 5.x detokenize 变更），以使字面 `<tool_call>`/`</tool_call>` 文本能为正则所用。
+- **流式传输。** 长字符串参数过去会一直缓冲到闭合标签（vLLM issue #32829）；当前解析器在每个 delta 上重新解析累积的文本，仅发出差异部分，采用"先开引号再填充"策略流式输出增量字符串内容，并保留任何部分尾部标签（`partial_tag_overlap`）。流式工具名为第一个 `\n` 或 `<arg_key>` 之前的文本。SGLang 将其实现为显式的 XML→JSON 状态机（`INIT → IN_KEY → WAITING_VALUE → IN_VALUE`）。畸形的尾部（在 `</tool_call>` 之前缺少 `</arg_value>`）会通过启发式方式补齐。
+- **谱系 —— GLM-4.5 与 GLM-4.6：** 线协议相同，`chat_template.jinja` 相同（同一内容哈希）；同一 `glm45` 解析器同时为两者服务。
+- **谱系 —— GLM-4.7 / GLM-5 改变了格式。** 较新的模型可能省略结构性换行：函数名可直接位于第一个 `<arg_key>` 之前，零参数调用可以是 `<tool_call>func</tool_call>`，并行调用可紧挨。vLLM/SGLang 对此变体需要各自独立的 GLM-4.7 解析器。omp 的仓库扫描器有意做得更宽：它接受换行、`<arg_key>` 或 `</tool_call>` 作为名称分隔符，因此同一 `glm` 方言扫描器即可处理两种版式。
 
-## omp / pi converter behavior
+## omp / pi 转换器行为
 
-The repository's `glm` dialect is an **owned in-band converter**. Select it
-with `PI_DIALECT=glm`; legacy `PI_DIALECT=1` and `PI_DIALECT=true` also resolve
-to GLM. With tools present, the agent appends the GLM format guide and compact
-tool catalog to the system prompt, removes native provider tools, rewrites
-prior calls/results into grammar-owned text, and scans assistant text back
-into canonical pi events. GLM-family model affinity resolves to this dialect.
+仓库的 `glm` 方言是一个 **自有带内转换器**。可通过 `PI_DIALECT=glm` 选择；遗留的 `PI_DIALECT=1` 与 `PI_DIALECT=true` 同样解析为 GLM。当存在工具时，代理将 GLM 格式指南与精简工具目录追加到系统提示中，移除原生 provider 工具，将先前的调用/结果改写为 grammar 拥有的文本，并将助手文本扫描回规范的 pi 事件。GLM 系列模型亲和性解析到此方言。
 
-The owned renderer always emits the GLM-4.5 newline layout. It consults each
-tool's normalized schema: string-only properties are emitted raw, while all
-other values are JSON-serialized. Parallel calls are newline-separated. In
-owned history, result batches become a synthetic user message containing
-`<observation>` with one `<tool_response>` per result; the lower-level GLM
-transcript renderer uses the model-native `<|observation|>` role marker
-instead.
+自有渲染器始终发出 GLM-4.5 换行版式。它查询每个工具的规范化 schema：纯 string 属性以原始形式发出，而所有其他值被 JSON 序列化。并行调用以换行分隔。在自有历史中，结果批成为包含 `<observation>` 与每个结果对应一个 `<tool_response>` 的合成用户消息；底层 GLM transcript 渲染器则改用模型原生 `<|observation|>` 角色标记。
 
-The scanner synthesizes `ptc_…` ids, emits `toolStart` once the name delimiter
-arrives, and streams each argument body as keyed `toolArgDelta` events.
-String-only schema properties stay verbatim; every other completed property is
-parsed with strict `JSON.parse` after trimming and falls back to the original
-raw text on failure. On flush, an unfinished key/value drops only the scanner's
-private call state. If `toolStart` was already emitted, OMP retains the
-canonical call and a normal stop may dispatch it; previously accumulated
-arguments—including partial value text published through `toolArgDelta`—remain
-on that call. Input that never yields a valid name emits no `toolStart` and
-therefore leaves no call. The scanner also heals narrowly recognizable model
-mistakes: `</arg_key>` used in place of `</arg_value>`, a stray wrong closer
-before the real closer, and a missing value closer immediately before the next
-argument or call close.
+扫描器合成 `ptc_…` id，在名称分隔符到达时发出 `toolStart`，并将每个参数主体作为带键的 `toolArgDelta` 事件流式发出。纯 string schema 属性保持原样；其他已完成的属性在 trim 后以严格 `JSON.parse` 解析，失败时回退到原始文本。flush 时，未完成的键/值仅丢弃扫描器的私有调用状态。若 `toolStart` 已发出，OMP 会保留该规范调用，正常 stop 可分派它；先前累积的参数 —— 包括通过 `toolArgDelta` 发布的部分值文本 —— 仍保留在该调用上。永不产生有效名称的输入不会发出 `toolStart`，因此不会留下任何调用。扫描器还修复可被狭义识别的模型错误：用 `</arg_key>` 替代 `</arg_value>`、真实闭合标签之前的多余错误闭合标签，以及紧接着下一个参数或调用闭合前缺失的值闭合标签。
 
-Thinking parsing is enabled by default and excludes `<think>…</think>` from
-visible text. If `<tool_response>` appears in assistant output, the scanner
-drops that tag and the remainder of the currently buffered chunk rather than
-treating the hallucinated result as assistant content.
+思考解析默认启用，并将 `<think>…</think>` 排除在可见文本之外。若助手输出中出现 `<tool_response>`，扫描器丢弃该标签以及当前已缓冲块的剩余部分，而不会将幻觉出的结果视为助手内容。
 
-## Sources
+## 来源
 
-- Chat template (authoritative; rendered locally for the byte-exact streams), GLM-4.5 commit `cbb2c7c…`: https://huggingface.co/zai-org/GLM-4.5/resolve/main/chat_template.jinja — the `blob`/web path redirects to the model-card API; verified via the raw `resolve/main` cache.
-- Identical GLM-4.6 template (same content hash, confirming shared format): https://huggingface.co/zai-org/GLM-4.6/resolve/main/chat_template.jinja
-- Special-token IDs and `special` flags (`added_tokens_decoder`, `additional_special_tokens`): https://huggingface.co/zai-org/GLM-4.5/resolve/main/tokenizer_config.json
-- Stop tokens (`eos_token_id = [151329, 151336, 151338]`): https://huggingface.co/zai-org/GLM-4.5/resolve/main/generation_config.json
-- Model card (server flags `--tool-call-parser glm45 --reasoning-parser glm45`, `enable_thinking` switch, parser links): https://huggingface.co/zai-org/GLM-4.5
-- vLLM GLM-4.5/4.6 tool parser (`Glm4MoeModelToolParser`: regexes, schema-driven string typing, JSON-string `arguments`, streaming, `skip_special_tokens`): https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/glm4_moe_tool_parser.py
-- vLLM GLM-4.7 tool parser (`Glm47MoeModelToolParser`: same-line name, optional/zero args): https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/glm47_moe_tool_parser.py
-- SGLang GLM-4.5/4.6 detector (`Glm4MoeDetector`: format docstring, XML→JSON state machine, argument typing): https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/function_call/glm4_moe_detector.py
-- SGLang GLM-4.7 detector (`Glm47MoeDetector`: newline-less / back-to-back calls): https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/function_call/glm47_moe_detector.py
-- vLLM tool-calling docs: https://docs.vllm.ai/en/latest/features/tool_calling/
+- 聊天模板（权威；本地渲染以获得字节精确流），GLM-4.5 提交 `cbb2c7c…`：https://huggingface.co/zai-org/GLM-4.5/resolve/main/chat_template.jinja —— `blob`/网页路径会重定向到模型卡 API；已通过原始 `resolve/main` 缓存验证。
+- 完全相同的 GLM-4.6 模板（同一内容哈希，证明格式共享）：https://huggingface.co/zai-org/GLM-4.6/resolve/main/chat_template.jinja
+- 特殊 token ID 与 `special` 标志（`added_tokens_decoder`、`additional_special_tokens`）：https://huggingface.co/zai-org/GLM-4.5/resolve/main/tokenizer_config.json
+- 停止 token（`eos_token_id = [151329, 151336, 151338]`）：https://huggingface.co/zai-org/GLM-4.5/resolve/main/generation_config.json
+- 模型卡（服务器标志 `--tool-call-parser glm45 --reasoning-parser glm45`、`enable_thinking` 开关、解析器链接）：https://huggingface.co/zai-org/GLM-4.5
+- vLLM GLM-4.5/4.6 工具解析器（`Glm4MoeModelToolParser`：正则、schema 驱动的 string 类型判定、JSON 字符串 `arguments`、流式、`skip_special_tokens`）：https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/glm4_moe_tool_parser.py
+- vLLM GLM-4.7 工具解析器（`Glm47MoeModelToolParser`：同行名称、可选/零参数）：https://github.com/vllm-project/vllm/blob/main/vllm/tool_parsers/glm47_moe_tool_parser.py
+- SGLang GLM-4.5/4.6 检测器（`Glm4MoeDetector`：格式 docstring、XML→JSON 状态机、参数类型判定）：https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/function_call/glm4_moe_detector.py
+- SGLang GLM-4.7 检测器（`Glm47MoeDetector`：无换行 / 紧挨调用）：https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/function_call/glm47_moe_detector.py
+- vLLM 工具调用文档：https://docs.vllm.ai/en/latest/features/tool_calling/

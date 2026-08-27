@@ -1,28 +1,28 @@
 # Native Crates
 
-Contributor map for Rust workspace members under `crates/`. They are implementation details behind `@oh-my-pi/pi-natives` and its embedded shell; package consumers use JavaScript entrypoints, not these crate APIs.
+`crates/` 下 Rust workspace 成员的贡献者导览。它们是 `@oh-my-pi/pi-natives` 及其内嵌 shell 背后的实现细节；包的消费者使用 JavaScript 入口点，而非这些 crate 的 API。
 
-The root `Cargo.toml` lists every crate under `crates/` explicitly in `workspace.members` — add new crates there. It also patches crates.io `brush-core` to the vendored copy.
+根目录的 `Cargo.toml` 在 `workspace.members` 中显式列出了 `crates/` 下的每一个 crate —— 在那里添加新 crate。它还会把 crates.io 上的 `brush-core` patch 为 vendored 副本。
 
 ## First-party crates
 
 | Crate           | Path                                              | Role and consumers                                                                                                                                              |
 | --------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pi-natives`    | [`crates/pi-natives`](../crates/pi-natives)       | Top-level N-API `cdylib`. It exposes the JS-visible API and depends on `pi-ast`, `pi-iso`, `pi-shell`, `pi-voice`, and `pi-walker`.                              |
-| `pi-builtins`   | [`crates/pi-builtins`](../crates/pi-builtins)     | Every builtin the embedded shell installs: a patched fork of brush's POSIX/bash builtins, plus one module per in-process command-line utility (`cat`, `grep`/`rg`, `sed`, `ls`, `find`, `jq`, `fd`, `diff`, `ps`, `top`, `kill`, the moreutils set, …). `src/host.rs` holds the `Utility` trait and the `Host` view of the shell (stdio, working directory, exported environment, cancellation) that the utilities run against. Ports of uutils coreutils/findutils/sed and jaq live here too; see the crate `LICENSE` for third-party notices. |
-| `pi-shell`      | [`crates/pi-shell`](../crates/pi-shell)           | Persistent embedded brush shell, command execution/minimization, process plumbing, filesystem walking, and in-process command integration used by `pi-natives`. |
-| `pi-voice`      | [`crates/pi-voice`](../crates/pi-voice)           | Cross-platform microphone/playback and Opus/WebRTC support used by the `AudioCapture`, `AudioPlayback`, and `LiveWebRtcPeer` bindings.                          |
-| `pi-ast`        | [`crates/pi-ast`](../crates/pi-ast)               | tree-sitter/ast-grep language registry, matching/editing, block analysis, and summarization support across the workspace grammar set.                           |
-| `pi-iso`        | [`crates/pi-iso`](../crates/pi-iso)               | Isolation backend implementations and diffing for APFS, Linux/Windows clone/reflink paths, overlayfs, ProjFS, and recursive copy fallback.                      |
-| `pi-walker`     | [`crates/pi-walker`](../crates/pi-walker)         | Parallel, cache-aware filesystem walker using ignore rules and globsets; shared by native grep/glob/workspace paths and shell commands.                         |
+| `pi-natives`    | [`crates/pi-natives`](../crates/pi-natives)       | 顶层 N-API `cdylib`。它对外暴露 JS 可见的 API，并依赖 `pi-ast`、`pi-iso`、`pi-shell`、`pi-voice` 和 `pi-walker`。                              |
+| `pi-builtins`   | [`crates/pi-builtins`](../crates/pi-builtins)     | 内嵌 shell 所安装的全部 builtin：一份 brush POSIX/bash builtin 的 patch 派生版，加上每个进程内命令行实用工具对应的一个模块（`cat`、`grep`/`rg`、`sed`、`ls`、`find`、`jq`、`fd`、`diff`、`ps`、`top`、`kill`、moreutils 套件……）。`src/host.rs` 包含 `Utility` trait 以及 shell 的 `Host` 视图（标准 I/O、工作目录、对外导出的环境、取消机制），各实用工具在此之上运行。uutils coreutils/findutils/sed 与 jaq 的移植也位于此处；第三方声明请见该 crate 的 `LICENSE`。 |
+| `pi-shell`      | [`crates/pi-shell`](../crates/pi-shell)           | 由 `pi-natives` 使用的常驻内嵌 brush shell、命令执行与最小化、进程管道、文件系统遍历以及进程内命令集成。 |
+| `pi-voice`      | [`crates/pi-voice`](../crates/pi-voice)           | `AudioCapture`、`AudioPlayback` 与 `LiveWebRtcPeer` 绑定所使用的跨平台麦克风/回放与 Opus/WebRTC 支持。                          |
+| `pi-ast`        | [`crates/pi-ast`](../crates/pi-ast)               | 跨工作区语法集合的 tree-sitter/ast-grep 语言注册、匹配/编辑、块分析与摘要支持。                           |
+| `pi-iso`        | [`crates/pi-iso`](../crates/pi-iso)               | APFS、Linux/Windows clone/reflink 路径、overlayfs、ProjFS 的隔离后端实现与差异计算，以及递归复制的回退方案。                      |
+| `pi-walker`     | [`crates/pi-walker`](../crates/pi-walker)         | 基于 ignore 规则与 globsets 的并行、可感知缓存的文件系统遍历器；由原生 grep/glob/workspace 路径以及 shell 命令共享。                         |
 
 ## Vendored workspace crates
 
 | Group | Paths | Purpose |
 | ----- | ----- | ------- |
-| Brush | [`crates/vendor/brush-core`](../crates/vendor/brush-core) | Vendored shell engine consumed by `pi-shell` and `pi-builtins`. Its manifest retains upstream package metadata; a workspace patch selects this local fork. |
+| Brush | [`crates/vendor/brush-core`](../crates/vendor/brush-core) | 由 `pi-shell` 与 `pi-builtins` 使用的 vendored shell 引擎。其清单保留上游包的元数据；通过一条 workspace patch 选择该本地派生版本。 |
 
-`pi_builtins::utility_builtins()` and `pi_builtins::process_builtins()` are the authoritative lists of the commands linked into the embedded shell; `pi-shell` decides which of them to register. A directory being a workspace member does not by itself mean that `pi-natives` exposes it as a JavaScript API.
+`pi_builtins::utility_builtins()` 与 `pi_builtins::process_builtins()` 是链接进内嵌 shell 的命令的权威列表；`pi-shell` 决定注册其中的哪些。仅作为 workspace 成员并不等同于 `pi-natives` 将其作为 JavaScript API 对外暴露。
 
 ## Boundary map
 
@@ -35,13 +35,13 @@ The root `Cargo.toml` lists every crate under `crates/` explicitly in `workspace
             -> pi-builtins (bash builtins + utility builtins; host.rs: per-invocation I/O and cwd)
 ```
 
-For the loader and JS boundary, see:
+关于加载器与 JS 边界，参见：
 
 - [`natives-architecture.md`](./natives-architecture.md)
 - [`natives-addon-loader-runtime.md`](./natives-addon-loader-runtime.md)
 - [`natives-binding-contract.md`](./natives-binding-contract.md)
 
-Subsystem details live in:
+子系统细节位于：
 
 - [`natives-build-release-debugging.md`](./natives-build-release-debugging.md)
 - [`natives-media-system-utils.md`](./natives-media-system-utils.md)
@@ -52,4 +52,4 @@ Subsystem details live in:
 
 ## Documentation policy
 
-These crates remain contributor-facing implementation details. Promote one to standalone user-facing documentation only when it gains a public API or executable consumed independently of `@oh-my-pi/pi-natives`; see [`user-facing-packages.md`](./user-facing-packages.md).
+这些 crate 仍是面向贡献者的实现细节。仅当某个 crate 获得了独立于 `@oh-my-pi/pi-natives` 之外被使用的公开 API 或可执行入口时，才将其提升为独立的面向用户的文档；请参见 [`user-facing-packages.md`](./user-facing-packages.md)。

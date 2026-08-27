@@ -1,96 +1,96 @@
-# Anthropic Claude tool use (Messages API content blocks)
+# Anthropic Claude 工具使用（Messages API 内容块）
 
-Anthropic's Claude is a closed, hosted model family; there are no released weights and therefore no `--tool-call-parser` flag to set. The canonical tool-calling convention is the **Messages API** (`POST /v1/messages`, header `anthropic-version: 2023-06-01`): tools are advertised in a top-level `tools` array, the model returns structured `tool_use` **content blocks** with `stop_reason: "tool_use"`, and you feed results back as `tool_result` content blocks inside a `user` message. Tool use is "enabled" simply by including the `tools` parameter (optionally with `tool_choice`); the API then injects a tool-use system prompt and parses the model's output back into JSON blocks for you. This applies to all current models (Claude Opus / Sonnet / Haiku 3.x, 4, 4.x) and is mirrored by gateways such as LiteLLM and by third-party Claude-compatible servers.
+Anthropic 的 Claude 是一个闭源的托管模型系列；没有公开的权重，因此也没有需要设置的 `--tool-call-parser` 标志。规范的工具调用约定是 **Messages API**（`POST /v1/messages`，请求头 `anthropic-version: 2023-06-01`）：工具在顶层 `tools` 数组中声明，模型返回结构化的 `tool_use` **内容块**，并带有 `stop_reason: "tool_use"`，你将结果作为 `tool_result` 内容块放在 `user` 消息内回传。工具使用只需通过包含 `tools` 参数（可选地加上 `tool_choice`）即可“启用”；API 会注入一个工具使用的系统提示，并将模型的输出解析回 JSON 块。这一约定适用于所有当前模型（Claude Opus / Sonnet / Haiku 3.x、4、4.x）以……
 
-Under the hood the model is trained to emit an **XML** function-call syntax (`<function_calls>` / `<invoke>` / `<parameter>`); the API serializes your JSON-Schema tools into a system prompt and converts the model's XML output into JSON `tool_use` blocks. That underlying format is documented as the *secondary* convention below, together with the older, now-retired prompt-based **legacy XML** format (`<tool_name>` / `<parameters>` / `<function_results>`) that pre-dates the Messages API and still surfaces when you do tool use purely through prompting.
+在底层，模型被训练为发出 **XML** 函数调用语法（`<function_calls>` / `<invoke>` / `<parameter>`）；API 会将你的 JSON Schema 工具序列化到系统提示中，并把模型输出的 XML 转换为 JSON 形式的 `tool_use` 块。这一底层格式在下方作为*次要*约定记录，同时记录更早的、现已弃用的基于提示的 **legacy XML** 格式（`<tool_name>` / `<parameters>` / `<function_results>`），该格式早于 Messages API 出现，在你完全通过提示来使用工具时仍会浮现。
 
-The primary, authoritative shape for any parser/renderer is the JSON content-block format. The XML is informational (and the only thing visible if you reconstruct prompts at the token level).
+对于任何解析器/渲染器而言，主要的权威形态是 JSON 内容块格式。XML 仅作为信息参考（在 token 级别重建提示时，它是唯一可见的内容）。
 
 ---
 
-## Content-block types & stop reasons
+## 内容块类型与停止原因
 
-Anthropic has no token-level tool delimiters in the public API. The unit is the **content block**: every `message.content` is an array of typed blocks. Tool calling adds two block types and one stop reason; streaming adds a delta type.
+Anthropic 公共 API 中没有 token 级别的工具分隔符。其单位是**内容块**：每个 `message.content` 是一个由类型化块组成的数组。工具调用增加了两种块类型和一种停止原因；流式响应则增加一种增量类型。
 
-| Item | Where | Shape / meaning |
+| 项目 | 位置 | 形态/含义 |
 | --- | --- | --- |
-| `text` block | assistant & user | `{"type":"text","text":"..."}`. Plain prose. Assistant may emit text *before* its tool calls. |
-| `tool_use` block | assistant | `{"type":"tool_use","id":"toolu_...","name":"<tool>","input":{...}}`. The function call. `input` is a **nested JSON object** (already parsed), conforming to the tool's `input_schema`. |
-| `tool_result` block | user | `{"type":"tool_result","tool_use_id":"toolu_...","content":<string \| block[]>,"is_error":<bool?>}`. The executed result, sent back in a `user` message. |
-| `server_tool_use` block | assistant | `{"type":"server_tool_use","id":"srvtoolu_...","name":"web_search","input":{...}}`. Emitted for Anthropic-executed server tools; you do **not** return a `tool_result` for these. |
-| `web_search_tool_result` (and similar) | assistant | Server-tool output, injected by Anthropic inline in the assistant turn. |
-| `thinking` / `redacted_thinking` block | assistant | Extended-thinking reasoning blocks; carry a `signature`. Must be preserved verbatim across turns when thinking + tools are combined. |
-| `stop_reason: "tool_use"` | response top level | The model invoked one or more tools and is waiting for results. Drives the agentic loop. |
-| `stop_reason: "end_turn"` | response top level | Natural completion (no tool call); the loop exits. |
-| Other `stop_reason` | response top level | `"max_tokens"`, `"stop_sequence"`, `"pause_turn"` (long server-tool turn, resend as-is to continue), `"refusal"`, `"sensitive"` (output flagged by safety filters), `"model_context_window_exceeded"` (output truncated at the context window, treated like `max_tokens`). |
-| `id` prefixes | — | Messages `msg_…`; client tool calls `toolu_…`; server tool calls `srvtoolu_…`. |
+| `text` 块 | 助手与用户 | `{"type":"text","text":"..."}`。纯文本。助手在工具调用之前可能会发出文本。 |
+| `tool_use` 块 | 助手 | `{"type":"tool_use","id":"toolu_...","name":"<tool>","input":{...}}`。函数调用。`input` 是一个**嵌套的 JSON 对象**（已经解析过），需符合该工具的 `input_schema`。 |
+| `tool_result` 块 | 用户 | `{"type":"tool_result","tool_use_id":"toolu_...","content":<string \| block[]>,"is_error":<bool?>}`。执行结果，作为 `user` 消息回传。 |
+| `server_tool_use` 块 | 助手 | `{"type":"server_tool_use","id":"srvtoolu_...","name":"web_search","input":{...}}`。由 Anthropic 执行的服务器工具所产生；你**不**需要为这些返回 `tool_result`。 |
+| `web_search_tool_result`（及类似） | 助手 | 服务器工具的输出，由 Anthropic 在助手回合中内联注入。 |
+| `thinking` / `redacted_thinking` 块 | 助手 | 扩展思考的推理块；带有一个 `signature`。在思考与工具结合使用时，必须在各轮之间原样保留。 |
+| `stop_reason: "tool_use"` | 响应顶层 | 模型调用了一个或多个工具并正在等待结果。驱动代理循环。 |
+| `stop_reason: "end_turn"` | 响应顶层 | 自然结束（没有工具调用）；循环退出。 |
+| 其他 `stop_reason` | 响应顶层 | `"max_tokens"`、`"stop_sequence"`、`"pause_turn"`（长服务器工具回合，原样重发以继续）、`"refusal"`、`"sensitive"`（输出被安全过滤器标记）、`"model_context_window_exceeded"`（在上下文窗口处截断的输出，按 `max_tokens` 处理）。 |
+| `id` 前缀 | — | 消息 `msg_…`；客户端工具调用 `toolu_…`；服务器工具调用 `srvtoolu_…`。 |
 
-Streaming adds these SSE events / delta types (full list under [Roles / channels](#roles--channels--turn-structure) and [Tool-call format](#tool-call-format)):
+流式响应增加了如下 SSE 事件/增量类型（完整列表见 [角色 / 通道 / 回合结构](#角色--通道--回合结构) 和 [工具调用格式](#工具调用格式)）：
 
-| Streaming item | Shape / meaning |
+| 流式项 | 形态/含义 |
 | --- | --- |
-| `message_start` | Carries a `Message` skeleton with empty `content`, `stop_reason: null`. |
-| `content_block_start` | Opens a block at `index`. For a tool call: `content_block.{type:"tool_use",id,name,input:{}}` — `input` starts as an **empty object**. |
-| `content_block_delta` / `input_json_delta` | `{"type":"input_json_delta","partial_json":"<chunk>"}` — a **partial JSON string** fragment of `tool_use.input`. |
-| `content_block_delta` / `text_delta` | `{"type":"text_delta","text":"..."}`. |
-| `content_block_delta` / `thinking_delta`, `signature_delta` | Extended-thinking content / signature. |
-| `content_block_stop` | Closes the block at `index`; this is when accumulated `partial_json` is complete and safe to `JSON.parse`. |
-| `message_delta` | Top-level updates; carries the final `delta.stop_reason` (e.g. `"tool_use"`) and **cumulative** `usage`. |
-| `message_stop` | End of stream. |
-| `ping` / `error` | Keep-alive; `error` (e.g. `overloaded_error`) may appear mid-stream. |
+| `message_start` | 携带一个 `Message` 骨架，`content` 为空，`stop_reason: null`。 |
+| `content_block_start` | 在 `index` 处打开一个块。对于工具调用：`content_block.{type:"tool_use",id,name,input:{}}` —— `input` 初始为一个**空对象**。 |
+| `content_block_delta` / `input_json_delta` | `{"type":"input_json_delta","partial_json":"<chunk>"}` —— `tool_use.input` 的**部分 JSON 字符串**片段。 |
+| `content_block_delta` / `text_delta` | `{"type":"text_delta","text":"..."}`。 |
+| `content_block_delta` / `thinking_delta`、`signature_delta` | 扩展思考的内容/签名。 |
+| `content_block_stop` | 关闭 `index` 处的块；此时累计的 `partial_json` 完整，可以安全地 `JSON.parse`。 |
+| `message_delta` | 顶层更新；携带最终的 `delta.stop_reason`（例如 `"tool_use"`）和**累计**的 `usage`。 |
+| `message_stop` | 流结束。 |
+| `ping` / `error` | 心跳保活；`error`（例如 `overloaded_error`）可能出现在流的中间。 |
 
-### Legacy XML tags (prompt-based, pre-Messages-API)
+### 旧版 XML 标签（基于提示，早于 Messages API）
 
-The retired prompt-based format used these tags. They are nested-element tags (no attributes), distinct from the modern attribute form (`<invoke name="…">`). Verified against Anthropic's archived "Legacy tool use" doc (see [Sources](#sources)).
+已弃用的基于提示的格式使用这些标签。它们是嵌套元素标签（无属性），不同于现代的属性形式（`<invoke name="…">`）。已对照 Anthropic 归档的 “Legacy tool use” 文档进行了验证（见 [来源](#来源)）。
 
-| Tag | Role | Notes |
+| 标签 | 角色 | 备注 |
 | --- | --- | --- |
-| `<tools>` … `</tools>` | tool advertising | Container in the system prompt wrapping all `<tool_description>` entries. |
-| `<tool_description>` | tool advertising | One per tool: holds `<tool_name>`, `<description>`, `<parameters>`. |
-| `<tool_name>` | both | Function name (used in definitions, calls, and results). |
-| `<parameters>` / `<parameter>` | definition | `<parameters>` wraps `<parameter>` entries, each with `<name>`, `<type>`, `<description>`. |
-| `<function_calls>` | model output | Wraps one or more `<invoke>` blocks. |
-| `<invoke>` | model output | One function call; contains `<tool_name>` + a `<parameters>` block of `<paramName>value</paramName>` child tags. |
-| `<function_results>` | tool result (fed back) | Wraps `<result>` (success) or `<error>` (failure). |
-| `<result>` / `<stdout>` | tool result | `<result>` holds `<tool_name>` + `<stdout>`; the output text goes in `<stdout>`. |
-| `<error>` | tool result | Replaces `<result>` when the function raised. |
-| `</function_calls>` | stop sequence | Passed as `stop_sequence` so generation halts after a call. |
-| `<scratchpad>` / `<answer>` | model output | Conventionally used for chain-of-thought and final answer in legacy prompts. |
+| `<tools>` … `</tools>` | 工具声明 | 系统提示中的容器，包裹所有 `<tool_description>` 条目。 |
+| `<tool_description>` | 工具声明 | 每个工具一条：包含 `<tool_name>`、`<description>`、`<parameters>`。 |
+| `<tool_name>` | 两者 | 函数名（在定义、调用和结果中使用）。 |
+| `<parameters>` / `<parameter>` | 定义 | `<parameters>` 包裹若干 `<parameter>` 条目，每条包含 `<name>`、`<type>`、`<description>`。 |
+| `<function_calls>` | 模型输出 | 包裹一个或多个 `<invoke>` 块。 |
+| `<invoke>` | 模型输出 | 一次函数调用；包含 `<tool_name>` + 一个包含 `<paramName>value</paramName>` 子标签的 `<parameters>` 块。 |
+| `<function_results>` | 工具结果（回传） | 包裹 `<result>`（成功）或 `<error>`（失败）。 |
+| `<result>` / `<stdout>` | 工具结果 | `<result>` 包含 `<tool_name>` + `<stdout>`；输出文本放在 `<stdout>` 中。 |
+| `<error>` | 工具结果 | 当函数抛出错误时替代 `<result>`。 |
+| `</function_calls>` | 停止序列 | 作为 `stop_sequence` 传入，使生成在调用后停止。 |
+| `<scratchpad>` / `<answer>` | 模型输出 | 在旧版提示中通常用于思维链和最终答案。 |
 
 ---
 
-## Roles / channels / turn structure
+## 角色 / 通道 / 回合结构
 
-The Messages API uses primarily two conversational roles, `user` and `assistant`, alternating. There is **no** dedicated `tool`/`function` role, and the standard system prompt is a separate top-level `system` parameter (string or text-block array) — not a message role. (Claude Opus 4.8+ and the Fable/Mythos 5 generation additionally accept an opt-in mid-conversation `system` **message** role, gated behind the `mid-conversation-system-2026-04-07` beta; otherwise only `user`/`assistant` are valid.) Tool data rides inside the normal roles:
+Messages API 主要使用两种对话角色 `user` 和 `assistant`，交替出现。没有专门的 `tool`/`function` 角色，标准系统提示是一个单独的顶层 `system` 参数（字符串或文本块数组）——而不是消息角色。（Claude Opus 4.8+ 以及 Fable/Mythos 5 代还接受一个选择加入的会话中间 `system` **消息**角色，由 `mid-conversation-system-2026-04-07` 测试版控制；否则只有 `user`/`assistant` 是有效的。）工具数据承载于普通角色内部：
 
-- `assistant` messages contain AI-generated `text`, `thinking`, and `tool_use` (and `server_tool_use`) blocks.
-- `user` messages contain your `text`/`image`/`document` content and `tool_result` blocks.
+- `assistant` 消息包含 AI 生成的 `text`、`thinking`，以及 `tool_use`（和 `server_tool_use`）块。
+- `user` 消息包含你的 `text`/`image`/`document` 内容以及 `tool_result` 块。
 
-There are no named "channels". The closest analogue to a reasoning channel is the extended-thinking `thinking` content block (a first-class block with a cryptographic `signature`), kept separate from the user-visible `text` block. When thinking is enabled alongside tools, the `thinking` block(s) from a tool-calling turn must be passed back unmodified in the follow-up request.
+没有命名的“通道”。最接近推理通道的是扩展思考的 `thinking` 内容块（一个一等公民的块，带有加密的 `signature`），它与用户可见的 `text` 块保持分离。当思考与工具一起启用时，来自工具调用回合的 `thinking` 块必须在后续请求中原样回传。
 
-The agentic loop is keyed on `stop_reason`:
+代理循环以 `stop_reason` 为驱动：
 
-1. Send `tools` + the user message.
-2. Claude responds with `stop_reason: "tool_use"` and one or more `tool_use` blocks (optionally preceded by a `text` block).
-3. Execute each tool; build a `tool_result` block per call.
-4. Append the assistant message **and** a `user` message carrying all `tool_result` blocks; resend.
-5. Repeat while `stop_reason == "tool_use"`; exit on `end_turn` (or another terminal reason).
+1. 发送 `tools` 和用户消息。
+2. Claude 以 `stop_reason: "tool_use"` 响应，并附带一个或多个 `tool_use` 块（可选地前面有一个 `text` 块）。
+3. 执行每个工具；为每次调用构建一个 `tool_result` 块。
+4. 追加助手消息**并**附加一个携带所有 `tool_result` 块的 `user` 消息；重新发送。
+5. 当 `stop_reason == "tool_use"` 时重复；在 `end_turn`（或其他终止原因）时退出。
 
-Strict ordering rules (a 400 otherwise):
-- `tool_result` blocks must come **first** in the `user` message's `content` array (any text after them).
-- The `tool_result` `user` message must **immediately follow** the assistant `tool_use` message — nothing in between.
-- Every `tool_use.id` must be answered by a `tool_result.tool_use_id` in that next message.
+严格的顺序规则（否则会返回 400）：
+- `tool_result` 块必须位于 `user` 消息 `content` 数组的**最前面**（任何文本都要放在它们之后）。
+- `tool_result` 的 `user` 消息必须**紧跟**助手 `tool_use` 消息——中间不能有其他内容。
+- 每个 `tool_use.id` 都必须由下一条消息中的 `tool_result.tool_use_id` 回答。
 
 ---
 
-## Tool definitions
+## 工具定义
 
-Tools are passed in the top-level `tools` array. Each user-defined (client) tool is a **flat** object — no `{"type":"function", "function":{…}}` wrapper (that wrapper is OpenAI's). Fields:
+工具在顶层 `tools` 数组中传入。每个用户定义（客户端）的工具是一个**扁平**对象 —— 没有 `{"type":"function", "function":{…}}` 包装（那是 OpenAI 的）。字段包括：
 
-- `name` — matches `^[a-zA-Z0-9_-]{1,64}$`.
-- `description` — detailed plaintext (the single biggest driver of tool-call quality).
-- `input_schema` — a JSON Schema object (**not** `parameters`) describing the input the model must produce.
-- Optional: `cache_control` (prompt-cache breakpoint), `strict` (structured-outputs beta), `eager_input_streaming` (fine-grained tool-streaming beta).
+- `name` —— 匹配 `^[a-zA-Z0-9_-]{1,64}$`。
+- `description` —— 详细的纯文本（这是影响工具调用质量的最关键因素）。
+- `input_schema` —— 一个 JSON Schema 对象（**不是** `parameters`），描述模型必须产生的输入。
+- 可选：`cache_control`（提示缓存断点）、`strict`（结构化输出测试版）、`eager_input_streaming`（细粒度工具流测试版）。
 
 ```json
 {
@@ -114,33 +114,33 @@ Tools are passed in the top-level `tools` array. Each user-defined (client) tool
 }
 ```
 
-Anthropic-schema client tools (`bash`, `text_editor`, `computer`, `memory`) and server tools (`web_search`, `web_fetch`, `code_execution`, `tool_search`) instead carry a versioned `type`, e.g. `{"type": "web_search_20250305", "name": "web_search"}`.
+Anthropic 模式的客户端工具（`bash`、`text_editor`、`computer`、`memory`）和服务器工具（`web_search`、`web_fetch`、`code_execution`、`tool_search`）改为携带一个带版本的 `type`，例如 `{"type": "web_search_20250305", "name": "web_search"}`。
 
-### OMP native-adapter schema normalization
+### OMP 原生适配器的 Schema 规范化
 
-The native Anthropic provider does not forward a pi tool's JSON Schema unchanged. Before placing it in `input_schema`, OMP keeps these keywords:
+原生 Anthropic 提供商并不会原样转发 pi 工具的 JSON Schema。在放入 `input_schema` 之前，OMP 保留以下关键字：
 
-- on every node: `$ref`, `$defs`, `$schema`, `definitions`, `type`, `enum`, `const`, `description`, `title`, `default`, and `nullable`;
-- nested `anyOf` and `allOf` (root combinators are not retained, and `oneOf` is not retained at any depth);
-- on objects: `properties`, `required`, and `additionalProperties`;
-- on arrays: `items`, `prefixItems`, and `minItems` only when it is `0` or `1`;
-- on strings: `format` only for `date-time`, `time`, `date`, `duration`, `email`, `hostname`, `uri`, `ipv4`, `ipv6`, or `uuid`.
+- 每个节点上的：`$ref`、`$defs`、`$schema`、`definitions`、`type`、`enum`、`const`、`description`、`title`、`default`，以及 `nullable`；
+- 嵌套的 `anyOf` 和 `allOf`（根级组合器不会被保留，且 `oneOf` 在任何深度都不会被保留）；
+- 对象上的：`properties`、`required` 和 `additionalProperties`；
+- 数组上的：`items`、`prefixItems`，以及仅当值为 `0` 或 `1` 时的 `minItems`；
+- 字符串上的：`format`，仅限 `date-time`、`time`、`date`、`duration`、`email`、`hostname`、`uri`、`ipv4`、`ipv6` 或 `uuid`。
 
-Other constraints—including `pattern`, string-length limits, numeric ranges, `maxItems`, unsupported formats, and unsupported combinators—are appended to that node's `description`. They remain model-visible guidance but are no longer machine-enforced schema keywords. Object nodes default to `additionalProperties: false`; an explicit `true` or schema-valued `additionalProperties` remains open (an empty schema normalizes to `true`).
+其他约束——包括 `pattern`、字符串长度限制、数值范围、`maxItems`、不支持的格式以及不支持的组合器——会被追加到该节点的 `description` 中。它们仍然作为模型可见的指导存在，但不再是机器强制执行的 Schema 关键字。对象节点默认 `additionalProperties: false`；显式的 `true` 或基于 Schema 值的 `additionalProperties` 仍保持开放（空 Schema 规范化为 `true`）。
 
-OMP sends `strict: true` only for eligible built-in tools (`bash`, `python`, `edit`, and `find`) when neither `PI_NO_STRICT` nor provider compatibility/runtime fallback has disabled strict tools, the tool has not opted out, the raw schema avoids `oneOf`, `allOf`, `$ref`, `patternProperties`, and `propertyNames`, and every object is closed. Selection is capped at 20 strict tools per request and shares budgets of 24 optional properties and 16 union uses: after the optional budget is exhausted, another optional property must be converted to required-and-nullable using union budget or that tool remains non-strict. Other tools use the normalized non-strict schema. OMP sends `eager_input_streaming: true` only when the model compatibility data and effective endpoint support it: first-party Anthropic endpoints qualify, as do custom endpoints explicitly configured for that capability; a canonical model rerouted to an unqualified non-Anthropic endpoint does not.
+OMP 仅在满足以下条件时发送 `strict: true`：适用于合格的内置工具（`bash`、`python`、`edit`、`find`），且 `PI_NO_STRICT` 与提供商兼容性/运行时回退都没有禁用严格工具，该工具未主动退出，原始 Schema 避免使用 `oneOf`、`allOf`、`$ref`、`patternProperties` 和 `propertyNames`，并且每个对象都是封闭的。单个请求最多选择 20 个严格工具，并共享 24 个可选属性和 16 个 union 使用的预算：可选属性预算耗尽后，必须使用 union 预算将另一个可选属性转换为 required-and-nullable，否则该工具仍保持非严格。其他工具使用规范化后的非严格 Schema。OMP 仅在模型兼容性数据和有效端点……
 
-`tool_choice` controls invocation (four options):
-- `{"type":"auto"}` — model decides (default when `tools` present).
-- `{"type":"any"}` — must call some tool.
-- `{"type":"tool","name":"get_weather"}` — must call that specific tool.
-- `{"type":"none"}` — no tools (default when no `tools`).
+`tool_choice` 控制调用方式（四种选项）：
+- `{"type":"auto"}` —— 由模型决定（当 `tools` 存在时的默认）。
+- `{"type":"any"}` —— 必须调用某个工具。
+- `{"type":"tool","name":"get_weather"}` —— 必须调用指定的工具。
+- `{"type":"none"}` —— 不调用工具（当没有 `tools` 时的默认）。
 
-With `any` or `tool` the API prefills the assistant turn, so no leading natural-language text precedes the `tool_use` block. Add `"disable_parallel_tool_use": true` inside `tool_choice` to cap at one tool per turn. (Extended thinking only supports `auto`/`none`.)
+使用 `any` 或 `tool` 时，API 会预填助手回合，因此 `tool_use` 块之前不会带有自然语言前置文本。在 `tool_choice` 内添加 `"disable_parallel_tool_use": true` 可将每回合的工具调用限制为一次。（扩展思考仅支持 `auto`/`none`。）
 
-### How the API turns this into a prompt (the bridge to XML)
+### API 如何将其转化为提示（通往 XML 的桥梁）
 
-When `tools` is present, the API constructs a tool-use system prompt with this skeleton (verified from "Define tools"):
+当 `tools` 存在时，API 会构建一个如下骨架的工具使用系统提示（已通过 “Define tools” 验证）：
 
 ```text
 In this environment you have access to a set of tools you can use to answer the user's question.
@@ -152,13 +152,13 @@ Here are the functions available in JSONSchema format:
 {{ TOOL CONFIGURATION }}
 ```
 
-`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` is your `tools` array serialized to JSON Schema. `{{ FORMATTING INSTRUCTIONS }}` is the (unpublished) block teaching the model the XML syntax with `antml:` namespace prefixes (shown under [Tool-call format → underlying XML](#underlying-xml-modern-attribute-form-with-antml-namespace)). The note "parsed with regular expressions" is why output need not be well-formed XML.
+`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` 是你的 `tools` 数组以 JSON Schema 形式序列化后的内容。`{{ FORMATTING INSTRUCTIONS }}` 是（未公开的）教导模型使用带 `antml:` 命名空间前缀的 XML 语法的代码块（见 [工具调用格式 → 底层 XML](#底层-xml-带-antml-命名空间的现代属性形式)）。“parsed with regular expressions” 这一说明解释了为什么输出不需要是良构的 XML。
 
 ---
 
-## Tool-call format
+## 工具调用格式
 
-The wire format your application consumes is JSON. A single call is one `tool_use` content block in the assistant message, with `stop_reason: "tool_use"` at the top level:
+你的应用所消费的网络格式是 JSON。单次调用是助手消息中的一个 `tool_use` 内容块，响应顶层带有 `stop_reason: "tool_use"`：
 
 ```json
 {
@@ -184,14 +184,14 @@ The wire format your application consumes is JSON. A single call is one `tool_us
 }
 ```
 
-Key facts for a parser:
-- `tool_use.input` is an already-parsed **object**, never a JSON string.
-- A leading `text` block is optional and informational; do not rely on its wording.
-- Match calls to results by `id` → `tool_use_id`.
+供解析器使用的一些关键事实：
+- `tool_use.input` 是一个已经解析过的**对象**，而不是 JSON 字符串。
+- 前置的 `text` 块是可选的、仅作为信息呈现；不要依赖其措辞。
+- 通过 `id` → `tool_use_id` 将调用与结果进行匹配。
 
-### Underlying XML (modern attribute form with antml: namespace)
+### 底层 XML（带 `antml:` 命名空间的现代属性形式）
 
-Before the API converts it, the model literally emits an XML block. The current (Claude 3+) form is attribute-based:
+在 API 转换之前，模型实际上发出的是 XML 块。当前（Claude 3+）的形式是基于属性的：
 
 ```text
 <function_calls>
@@ -202,21 +202,21 @@ Before the API converts it, the model literally emits an XML block. The current 
 </function_calls>
 ```
 
-Current Claude models prefix these tags with an `antml:` XML namespace prefix (e.g. `antml:function_calls`, `antml:invoke name="…"`, `antml:parameter name="…"`). The API strips all of this and exposes only the JSON `tool_use` block; integrators should target the JSON, not the XML.
+当前的 Claude 模型在这些标签前加上 `antml:` XML 命名空间前缀（例如 `antml:function_calls`、`antml:invoke name="…"`、`antml:parameter name="…"`）。API 会剥离所有这些内容，只暴露 JSON 形式的 `tool_use` 块；集成者应以 JSON 为目标，而不是 XML。
 
-### OMP `anthropic` dialect
+### OMP `anthropic` 方言
 
-OMP operates on the underlying prompt-driven XML rather than Messages API content blocks. Its renderer always emits the unprefixed attribute form above, wraps multiple calls in one `<function_calls>` block, and renders each argument as a `<parameter name="…">` child. With a tool schema, declared string arguments are inserted as literal text; other values are JSON-serialized. The streaming scanner also accepts `antml:`-prefixed tags, `<tool_calls>` as a wrapper alias, and a bare `<invoke>` outside either wrapper.
+OMP 在底层的基于提示的 XML 上操作，而不是 Messages API 内容块。其渲染器始终发出上面无前缀的属性形式，将多次调用包装在一个 `<function_calls>` 块中，并将每个参数渲染为 `<parameter name="…">` 子标签。对于具有 Schema 的工具，已声明的字符串参数以字面文本插入；其他值则进行 JSON 序列化。流式扫描器也接受带 `antml:` 前缀的标签、`<tool_calls>` 作为包装别名，以及在任一包装外的裸 `<invoke>`。
 
-The scanner mints call ids because this XML has none. It scans streamed text statefully, emits `toolArgDelta` events while each parameter body arrives, and publishes the coerced argument object with `toolEnd` after `</invoke>`. A parameter value is capped at 1,000,000 JavaScript string code units; overflow gains an explicit truncation suffix. JSON-like values are parsed with repair, while schema-declared strings stay strings. With `parseThinking: true`, `<thinking>`, `<think>`, and `<scratchpad>` (prefixed or unprefixed) become thinking events; otherwise those tags remain visible text.
+由于该 XML 不带调用 id，扫描器会生成调用 id。它以有状态方式扫描流式文本，在每个参数体到达时发出 `toolArgDelta` 事件，并在 `</invoke>` 之后通过 `toolEnd` 发布强制类型转换后的参数对象。参数值上限为 1,000,000 个 JavaScript 字符串代码单元；超出后会附加一个明确的截断后缀。类 JSON 值会经过修复后进行解析，而 Schema 声明的字符串则保持为字符串。当 `parseThinking: true` 时，`<thinking>`、`<think>` 和 `<scratchpad>`（带前缀或无前缀）会变成思考事件；否则这些标签会保留为可见文本。
 
-`</invoke>` gates `toolEnd`, but it does not gate creation of the canonical call. Once an opening `<invoke name="…">` has emitted `toolStart`, EOF only resets scanner-local state. On a normally stopped stream, OMP retains that call, changes the turn to `toolUse`, and may dispatch it even though no `toolEnd` arrived. Any `toolArgDelta` text already accumulated survives in the call (without the close-time coercion); a call with no accumulated parameter text runs with `{}`. A `length` stop remains non-runnable.
+`</invoke>` 触发 `toolEnd`，但它并不决定规范化调用的创建。一旦开头的 `<invoke name="…">` 已发出 `toolStart`，EOF 仅重置扫描器局部状态。在正常停止的流上，OMP 会保留该调用，将回合变为 `toolUse`，即使没有 `toolEnd` 也可能会派发它。任何已经累积的 `toolArgDelta` 文本会保留在调用中（不经过关闭时的强制类型转换）；没有累积参数文本的调用会以 `{}` 运行。`length` 停止仍然不可执行。
 
 ---
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
-Parallel calls are the default. Claude emits **multiple `tool_use` blocks in a single assistant message**:
+并行调用是默认行为。Claude 在**单个助手消息中发出多个 `tool_use` 块**：
 
 ```json
 {
@@ -239,7 +239,7 @@ Parallel calls are the default. Claude emits **multiple `tool_use` blocks in a s
 }
 ```
 
-You return **all** results in **one** `user` message, one `tool_result` per call, results first:
+你在**一个** `user` 消息中返回**所有**结果，每个调用对应一个 `tool_result`，结果放在最前面：
 
 ```json
 {
@@ -259,17 +259,17 @@ You return **all** results in **one** `user` message, one `tool_result` per call
 }
 ```
 
-Calls in one turn are **unordered** and may be run concurrently. If two batched calls turn out to depend on each other, return the natural error in a `tool_result` with `"is_error": true`; Claude reissues the dependent call on a later turn. (In the legacy XML format, parallelism is multiple `<invoke>` blocks inside one `<function_calls>`.)
+一轮中的调用是**无序的**，可以并发执行。如果两个批处理调用实际上相互依赖，请在带有 `"is_error": true` 的 `tool_result` 中返回相应的自然错误；Claude 会在后续回合重新发出有依赖关系的调用。（在旧版 XML 格式中，并行通过一个 `<function_calls>` 中的多个 `<invoke>` 块实现。）
 
 ---
 
-## Tool-result format
+## 工具结果格式
 
-A result is a `tool_result` block inside a `user` message:
+结果是 `user` 消息中的一个 `tool_result` 块：
 
-- `tool_use_id` (required) — the `id` of the `tool_use` it answers.
-- `content` (optional) — a string, **or** an array of `text`/`image`/`document` blocks. Omit for an empty result.
-- `is_error` (optional) — `true` for execution failures; put a useful message in `content`.
+- `tool_use_id`（必需）—— 所回答的 `tool_use` 的 `id`。
+- `content`（可选）—— 一个字符串，**或者**一个由 `text`/`image`/`document` 块组成的数组。空结果可省略。
+- `is_error`（可选）—— `true` 表示执行失败；请在 `content` 中放入有用的消息。
 
 ```json
 {
@@ -284,7 +284,7 @@ A result is a `tool_result` block inside a `user` message:
 }
 ```
 
-Error result:
+错误结果：
 
 ```json
 {
@@ -300,7 +300,7 @@ Error result:
 }
 ```
 
-Rich result (text + image blocks):
+富结果（文本 + 图像块）：
 
 ```json
 {
@@ -321,9 +321,9 @@ Rich result (text + image blocks):
 }
 ```
 
-Server tools require **no** `tool_result` from you — Anthropic executes them and injects the result inline in the assistant turn. (Legacy XML feeds results back as `<function_results><result><tool_name>…</tool_name><stdout>…</stdout></result></function_results>`, or `<error>…</error>` on failure.)
+服务器工具**不需要**你返回 `tool_result` —— Anthropic 会执行它们并将结果内联注入到助手回合中。（旧版 XML 将结果作为 `<function_results><result><tool_name>…</tool_name><stdout>…</stdout></result></function_results>` 回传，失败时则为 `<error>…</error>`。）
 
-OMP's prompt-driven dialect is different from Anthropic's server-tool behavior. It renders client results as:
+OMP 基于提示的方言与 Anthropic 的服务器工具行为不同。它将客户端结果渲染为：
 
 ```text
 <function_results>
@@ -338,15 +338,15 @@ OMP's prompt-driven dialect is different from Anthropic's server-tool behavior. 
 </function_results>
 ```
 
-There is no result id in this XML, so results are correlated by call order. OMP includes the tool name in both success and error entries and does not encode `isError` anywhere else.
+该 XML 中没有结果 id，因此按调用顺序关联结果。OMP 在成功和错误条目中都包含工具名称，并且不在其他位置编码 `isError`。
 
 ---
 
-## End-to-end example
+## 端到端示例
 
-A complete multi-turn weather exchange. All JSON is valid.
+一个完整的多回合天气交流。所有 JSON 都是有效的。
 
-**Request 1 — system + tools + user question:**
+**请求 1 —— system + tools + 用户问题：**
 
 ```json
 {
@@ -373,7 +373,7 @@ A complete multi-turn weather exchange. All JSON is valid.
 }
 ```
 
-**Response 1 — assistant requests the tool (`stop_reason: "tool_use"`):**
+**响应 1 —— 助手请求工具（`stop_reason: "tool_use"`）：**
 
 ```json
 {
@@ -396,7 +396,7 @@ A complete multi-turn weather exchange. All JSON is valid.
 }
 ```
 
-**Request 2 — replay history, append the assistant turn and the `tool_result`:**
+**请求 2 —— 重放历史，追加助手回合和 `tool_result`：**
 
 ```json
 {
@@ -445,7 +445,7 @@ A complete multi-turn weather exchange. All JSON is valid.
 }
 ```
 
-**Response 2 — assistant's final answer (`stop_reason: "end_turn"`):**
+**响应 2 —— 助手的最终答案（`stop_reason: "end_turn"`）：**
 
 ```json
 {
@@ -462,9 +462,9 @@ A complete multi-turn weather exchange. All JSON is valid.
 }
 ```
 
-### Streaming (SSE) shape of the tool call
+### 工具调用的流式（SSE）形态
 
-The same tool call, streamed. Note `tool_use` opens with an empty `input`, the arguments arrive as `input_json_delta.partial_json` fragments, and the final `stop_reason` lands in `message_delta`. This block is reproduced verbatim from Anthropic's streaming docs:
+同一个工具调用的流式形式。注意 `tool_use` 以空的 `input` 打开，参数以 `input_json_delta.partial_json` 片段的形式到达，最终的 `stop_reason` 在 `message_delta` 中出现。该块原样复制自 Anthropic 的流式文档：
 
 ```text
 event: message_start
@@ -522,59 +522,59 @@ event: message_stop
 data: {"type":"message_stop"}
 ```
 
-Reassembly: concatenate every `partial_json` for a given `index` (`"" + "{\"location\":" + " \"San" + " Francisc" + "o," + " CA\"}"` → `{"location": "San Francisco, CA"}`), then `JSON.parse` at that block's `content_block_stop`. Tool use also supports fine-grained streaming (`eager_input_streaming` per tool) for finer `partial_json` chunking.
+重组：对于给定的 `index`，将所有 `partial_json` 串接起来（`"" + "{\"location\":" + " \"San" + " Francisc" + "o," + " CA\"}"` → `{"location": "San Francisco, CA"}`），然后在该块的 `content_block_stop` 处执行 `JSON.parse`。工具使用还支持细粒度流式（每个工具的 `eager_input_streaming`）以获得更细的 `partial_json` 分块。
 
 ---
 
-## OpenAI-compatible API mapping
+## 与 OpenAI 兼容 API 的映射
 
-Anthropic integrates tools into the `user`/`assistant` message structure rather than using OpenAI's separate `tool` role and `function` wrapper. Field-by-field:
+Anthropic 将工具集成进 `user`/`assistant` 消息结构，而不是使用 OpenAI 单独的 `tool` 角色和 `function` 包装。逐字段对比：
 
-| Concept | Anthropic Messages API | OpenAI Chat Completions |
+| 概念 | Anthropic Messages API | OpenAI Chat Completions |
 | --- | --- | --- |
-| Tool definition wrapper | flat `{"name","description","input_schema"}` in `tools[]` | `{"type":"function","function":{"name","description","parameters"}}` in `tools[]` |
-| Tool schema key | `input_schema` (JSON Schema) | `parameters` (JSON Schema) |
-| "Must call a tool" | `tool_choice:{"type":"any"}` / `{"type":"tool","name":…}` | `tool_choice:"required"` / `{"type":"function","function":{"name":…}}` |
-| Disable parallel calls | `tool_choice:{…,"disable_parallel_tool_use":true}` | `parallel_tool_calls:false` (top level) |
-| Assistant call container | `tool_use` **content block** in `content[]` | `tool_calls[]` on the assistant `message` |
-| Call id | `tool_use.id` = `toolu_…` | `tool_calls[].id` = `call_…` |
-| Function name | `tool_use.name` | `tool_calls[].function.name` |
-| Function arguments | `tool_use.input` = **nested JSON object** (parsed) | `tool_calls[].function.arguments` = **JSON string** (must `JSON.parse`) |
-| "Tools were called" signal | `stop_reason:"tool_use"` | `finish_reason:"tool_calls"` |
-| Result message role | `user` message containing `tool_result` block(s) | dedicated `{"role":"tool",…}` message(s) |
-| Result ↔ call linkage | `tool_result.tool_use_id` | `tool` message `tool_call_id` |
-| Result payload | `tool_result.content` = string **or** block array (text/image/document) | `tool` message `content` = string |
-| Error result | `tool_result` with `is_error:true` | no dedicated flag; encode in `content` |
-| System prompt | top-level `system` param (no `system` role) | `{"role":"system",…}` message |
-| Streamed args | `input_json_delta.partial_json` fragments | `tool_calls[].function.arguments` string deltas |
+| 工具定义包装 | `tools[]` 中的扁平 `{"name","description","input_schema"}` | `tools[]` 中的 `{"type":"function","function":{"name","description","parameters"}}` |
+| 工具 Schema 键 | `input_schema`（JSON Schema） | `parameters`（JSON Schema） |
+| “必须调用工具” | `tool_choice:{"type":"any"}` / `{"type":"tool","name":…}` | `tool_choice:"required"` / `{"type":"function","function":{"name":…}}` |
+| 禁用并行调用 | `tool_choice:{…,"disable_parallel_tool_use":true}` | `parallel_tool_calls:false`（顶层） |
+| 助手调用容器 | `content[]` 中的 `tool_use` **内容块** | 助手 `message` 上的 `tool_calls[]` |
+| 调用 id | `tool_use.id` = `toolu_…` | `tool_calls[].id` = `call_…` |
+| 函数名 | `tool_use.name` | `tool_calls[].function.name` |
+| 函数参数 | `tool_use.input` = **嵌套的 JSON 对象**（已解析） | `tool_calls[].function.arguments` = **JSON 字符串**（必须 `JSON.parse`） |
+| “已调用工具”信号 | `stop_reason:"tool_use"` | `finish_reason:"tool_calls"` |
+| 结果消息角色 | 包含 `tool_result` 块的 `user` 消息 | 专用的 `{"role":"tool",…}` 消息 |
+| 结果 ↔ 调用关联 | `tool_result.tool_use_id` | `tool` 消息的 `tool_call_id` |
+| 结果负载 | `tool_result.content` = 字符串**或**块数组（text/image/document） | `tool` 消息的 `content` = 字符串 |
+| 错误结果 | 带有 `is_error:true` 的 `tool_result` | 没有专用标志；编码在 `content` 中 |
+| 系统提示 | 顶层 `system` 参数（没有 `system` 角色） | `{"role":"system",…}` 消息 |
+| 流式参数 | `input_json_delta.partial_json` 片段 | `tool_calls[].function.arguments` 字符串增量 |
 
-Conversion gotchas:
-- **Object vs string:** to emit OpenAI shape, `JSON.stringify(tool_use.input)`; to consume OpenAI shape into Anthropic, `JSON.parse(arguments)`.
-- **Role reshaping:** collapse N OpenAI `tool` messages into one Anthropic `user` message of N `tool_result` blocks (order them before any text), and vice-versa.
-- **No `type:"function"`** wrapper on Anthropic custom tools; add/remove it when translating.
-- Id prefixes differ (`toolu_` vs `call_`); never assume one format's id is valid in the other.
+转换时的注意事项：
+- **对象 vs 字符串：** 要输出 OpenAI 形式，使用 `JSON.stringify(tool_use.input)`；要将 OpenAI 形式消费到 Anthropic 侧，使用 `JSON.parse(arguments)`。
+- **角色重塑：** 将 N 条 OpenAI `tool` 消息合并为一条包含 N 个 `tool_result` 块的 Anthropic `user` 消息（将它们放在任何文本之前），反之亦然。
+- Anthropic 自定义工具上**没有** `type:"function"` 包装；在转换时相应地添加或移除它。
+- id 前缀不同（`toolu_` 与 `call_`）；永远不要假设一种格式的 id 在另一种格式中有效。
 
 ---
 
-## Parsing notes & gotchas
+## 解析注意事项与陷阱
 
-- **`input` is an object, not a string.** Unlike OpenAI's `arguments`, do not `JSON.parse` `tool_use.input` from a non-streamed response — it is already an object. Only the *streaming* `partial_json` fragments are strings.
-- **Streaming tool args need reassembly.** `content_block_start` for a `tool_use` always has `input: {}`. Buffer `partial_json` per `index` and parse only at `content_block_stop`; mid-stream fragments are not valid JSON on their own (e.g. `{"location":`). Current models emit one complete key/value at a time, so expect bursts and gaps.
-- **`stop_reason` placement.** In streaming, `stop_reason` is `null` in `message_start` and final value (`"tool_use"`/`"end_turn"`) arrives in `message_delta`, not `message_stop`. `usage` in `message_delta` is **cumulative**.
-- **Ordering is enforced.** `tool_result` blocks must be first in their `user` message and must immediately follow the assistant `tool_use` message; every `tool_use.id` needs a matching `tool_result.tool_use_id`, or you get HTTP 400 ("tool_use ids were found without tool_result blocks immediately after").
-- **`tool_choice:any`/`tool` suppress preamble.** The API prefills the assistant turn, so no leading `text` block appears before `tool_use` — don't write a parser that expects explanatory text.
-- **Parallel results in one message.** Splitting parallel `tool_result`s across multiple `user` messages breaks the contract; send them together.
-- **Treat result content as untrusted.** Tool results can carry indirect prompt injection; keep them inside `tool_result` blocks, never promote to `system`/`user` text.
-- **Server tools differ.** `server_tool_use` / `web_search_tool_result` blocks are produced and consumed by Anthropic; never synthesize `tool_result` for them. `stop_reason:"pause_turn"` means resend the response as-is to let a long server-tool turn continue.
-- **Extended thinking + tools.** Preserve `thinking`/`redacted_thinking` blocks (with their `signature`) verbatim across turns; forced `tool_choice` (`any`/`tool`) is rejected when thinking is on.
-- **Output is not valid XML.** The underlying model output is parsed by Anthropic with regular expressions, not an XML parser ("The output is not expected to be valid XML"). If you reconstruct prompts at token level, do not assume well-formedness; rely on the JSON the API returns.
-- **Legacy vs modern XML are different tag sets.** Legacy: `<invoke>` + child `<tool_name>` + `<parameters>` with per-name child tags; results in `<function_results>/<result>/<stdout>`. Modern: `<invoke name="…">` + `<parameter name="…">`. Mixing them up will misparse. The legacy format also required passing `</function_calls>` as a `stop_sequence` and is not optimized for Claude 3+.
+- **`input` 是对象而不是字符串。** 与 OpenAI 的 `arguments` 不同，请勿对非流式响应中的 `tool_use.input` 调用 `JSON.parse` —— 它已经是对象。只有*流式*的 `partial_json` 片段是字符串。
+- **流式工具参数需要重组。** `tool_use` 的 `content_block_start` 总是具有 `input: {}`。按 `index` 缓冲 `partial_json`，仅在 `content_block_stop` 处进行解析；流中间的片段本身不是有效的 JSON（例如 `{"location":`）。当前模型一次发出一个完整的键/值，因此会出现突发和间隔。
+- **`stop_reason` 的位置。** 在流式响应中，`message_start` 中 `stop_reason` 为 `null`，最终值（`"tool_use"`/`"end_turn"`）在 `message_delta` 中到达，而不是 `message_stop`。`message_delta` 中的 `usage` 是**累计**的。
+- **顺序是强制性的。** `tool_result` 块必须位于其 `user` 消息的最前面，并且必须紧跟在助手 `tool_use` 消息之后；每个 `tool_use.id` 都需要一个匹配的 `tool_result.tool_use_id`，否则会收到 HTTP 400（"tool_use ids were found without tool_result blocks immediately after"）。
+- **`tool_choice:any`/`tool` 会抑制前言。** API 会预填助手回合，因此 `tool_use` 之前不会出现 `text` 块 —— 不要编写期望解释性文本的解析器。
+- **并行结果在同一条消息中。** 将并行的 `tool_result` 拆分为多条 `user` 消息会破坏契约；请将它们一起发送。
+- **将结果内容视为不可信。** 工具结果可能携带间接的提示注入；请将它们保留在 `tool_result` 块内，绝不要提升到 `system`/`user` 文本中。
+- **服务器工具不同。** `server_tool_use` / `web_search_tool_result` 块由 Anthropic 生成和消费；永远不要为它们合成 `tool_result`。`stop_reason:"pause_turn"` 表示原样重发响应以让一个长服务器工具回合继续。
+- **扩展思考 + 工具。** 在各回合之间原样保留 `thinking`/`redacted_thinking` 块（以及它们的 `signature`）；当思考开启时，强制性的 `tool_choice`（`any`/`tool`）会被拒绝。
+- **输出不是有效的 XML。** 底层模型输出由 Anthropic 使用正则表达式解析，而不是 XML 解析器（"The output is not expected to be valid XML"）。如果你在 token 级别重建提示，不要假设其良构性；请依赖 API 返回的 JSON。
+- **旧版与现代 XML 是不同的标签集。** 旧版：`<invoke>` + 子标签 `<tool_name>` + 包含逐参数子标签的 `<parameters>`；结果位于 `<function_results>/<result>/<stdout>`。现代：`<invoke name="…">` + `<parameter name="…">`。混淆它们将导致解析错误。旧版格式还要求将 `</function_calls>` 作为 `stop_sequence` 传入，并且未针对 Claude 3+ 进行优化。
 
-### Legacy XML format (secondary, prompt-based — fully verified, now retired)
+### 旧版 XML 格式（次要，基于提示 —— 已完全验证，现已弃用）
 
-Before the Messages API, tools were defined and called entirely in the prompt. Anthropic's archived "Legacy tool use" doc specifies it verbatim.
+在 Messages API 出现之前，工具的整个定义和调用都在提示中完成。Anthropic 归档的 “Legacy tool use” 文档逐字记录了它。
 
-Tool definition (inside a `<tools>` block in the system prompt):
+工具定义（在系统提示中的一个 `<tools>` 块内）：
 
 ```text
 <tool_description>
@@ -596,7 +596,7 @@ Raises ValueError if the provided location cannot be found.
 </tool_description>
 ```
 
-Model-emitted call (multiple `<invoke>` for parallel calls; pass `</function_calls>` as a `stop_sequence`):
+模型发出的调用（并行调用使用多个 `<invoke>`；将 `</function_calls>` 作为 `stop_sequence` 传入）：
 
 ```text
 <function_calls>
@@ -609,7 +609,7 @@ Model-emitted call (multiple `<invoke>` for parallel calls; pass `</function_cal
 </function_calls>
 ```
 
-Result fed back into the next user turn:
+结果在下一个用户回合中回传：
 
 ```text
 <function_results>
@@ -622,7 +622,7 @@ Result fed back into the next user turn:
 </function_results>
 ```
 
-Error result:
+错误结果：
 
 ```text
 <function_results>
@@ -632,7 +632,7 @@ error message goes here
 </function_results>
 ```
 
-The legacy system-prompt preamble (verbatim from the archived doc) was:
+旧版的系统提示前言（来自归档文档的原文）如下：
 
 ```text
 In this environment you have access to a set of tools you can use to answer the user's question.
@@ -653,17 +653,17 @@ Here are the tools available:
 </tools>
 ```
 
-Legacy notes: no built-in tools (everything is prompt-defined); Anthropic recommended ≤3–5 tools; the model conventionally wrapped reasoning in `<scratchpad>` and final output in `<answer>`. This format is "out of date" and "not optimized for Claude 3" — use the JSON Messages API for anything current.
+旧版注意事项：没有内置工具（一切都通过提示定义）；Anthropic 建议 ≤3–5 个工具；模型按惯例将推理包装在 `<scratchpad>` 中，将最终输出包装在 `<answer>` 中。此格式“已过时”并且“未针对 Claude 3 进行优化”——请对任何当前的工作使用 JSON Messages API。
 
 ---
 
-## Sources
+## 来源
 
-- Tool use overview — https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview
-- How tool use works — https://docs.claude.com/en/docs/agents-and-tools/tool-use/how-tool-use-works
-- Define tools (tool schema, `input_schema`, `tool_choice`, constructed system prompt) — https://docs.claude.com/en/docs/agents-and-tools/tool-use/define-tools
-- Handle tool calls (`tool_use`/`tool_result`, `is_error`, ordering rules) — https://docs.claude.com/en/docs/agents-and-tools/tool-use/handle-tool-calls
-- Parallel tool use — https://docs.claude.com/en/docs/agents-and-tools/tool-use/parallel-tool-use
-- Streaming messages (SSE events, `input_json_delta`, verbatim tool-use stream) — https://docs.claude.com/en/docs/build-with-claude/streaming
-- Messages API reference (`stop_reason` enum, response shape, `tools`) — https://docs.claude.com/en/api/messages
-- Legacy tool use (archived; verbatim XML tags and prompt) — https://web.archive.org/web/20240528231249/https://docs.anthropic.com/en/docs/legacy-tool-use ; also live localized copies, e.g. https://docs.anthropic.com/de/docs/legacy-tool-use (English path now redirects to the tool-use overview)
+- 工具使用概述 — https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview
+- 工具使用的工作原理 — https://docs.claude.com/en/docs/agents-and-tools/tool-use/how-tool-use-works
+- 工具定义（工具 Schema、`input_schema`、`tool_choice`、构造的系统提示） — https://docs.claude.com/en/docs/agents-and-tools/tool-use/define-tools
+- 处理工具调用（`tool_use`/`tool_result`、`is_error`、顺序规则） — https://docs.claude.com/en/docs/agents-and-tools/tool-use/handle-tool-calls
+- 并行工具使用 — https://docs.claude.com/en/docs/agents-and-tools/tool-use/parallel-tool-use
+- 流式消息（SSE 事件、`input_json_delta`、逐字的工具使用流） — https://docs.claude.com/en/docs/build-with-claude/streaming
+- Messages API 参考（`stop_reason` 枚举、响应形态、`tools`） — https://docs.claude.com/en/api/messages
+- 旧版工具使用（已归档；逐字的 XML 标签和提示） — https://web.archive.org/web/20240528231249/https://docs.anthropic.com/en/docs/legacy-tool-use ；还有实时本地化副本，例如 https://docs.anthropic.com/de/docs/legacy-tool-use （英文路径现在会重定向到工具使用概述）

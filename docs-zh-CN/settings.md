@@ -1,16 +1,16 @@
-# Settings
+# 设置
 
-`omp` resolves settings from built-in defaults, a persistent global config file, optional project-local config, one-shot CLI overlays, and in-memory runtime overrides. Reach for project settings when one repository needs a different provider set, model role, tool policy, memory backend, or UI behavior than your global defaults — without touching your machine-wide configuration.
+`omp` 从内置默认值、持久化全局配置文件、可选的本地项目配置、一次性 CLI 覆盖层和内存中的运行时覆盖中解析设置。当某个代码仓库需要与全局默认值不同的 provider 集、模型角色、工具策略、内存后端或 UI 行为时，可使用项目设置——而不必改动机器级配置。
 
-Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from the settings schema. `omp config` exposes the complete schema; the interactive `/settings` panel exposes the schema entries that have UI metadata.
+设置以纯 YAML 映射形式存储。每个键及其类型、默认值和枚举值都来自设置 schema。`omp config` 暴露完整的 schema；交互式 `/settings` 面板暴露具有 UI 元数据的 schema 条目。
 
-- For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
-- For custom model definitions in `models.yml`, see [Models](./models.md).
-- For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
-- For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
-- For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
+- 关于模型/提供方凭据、`.env` 文件以及解析 API 密钥的 env-var 表，请参阅 [Providers](./providers.md)。
+- 关于 `models.yml` 中的自定义模型定义，请参阅 [Models](./models.md)。
+- 关于发现到代理上下文中的指令文件（`AGENTS.md`、`.omp/` 等），请参阅 [Context files](./context-files.md)。
+- 关于环境变量的完整目录，请参阅 [Environment variables](./environment-variables.md)。
+- 关于激活专用逐轮行为的提示词，请参阅 [Magic keywords](./magic-keywords.md)。
 
-## Where settings live
+## 设置存储位置
 
 | Scope             | Path                                                  | Read behavior                                                                                                                            | Write behavior                                                                                                                                                                   |
 | ----------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -25,7 +25,7 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 
 Native project settings are intentionally scoped to the process working directory's `.omp/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.omp/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
 
-## Config file formats
+## 配置文件格式
 
 The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as a compatibility filename. The generic config loader used for other files (for example `models.yml`) accepts `.yml`, `.yaml`, `.json`, and `.jsonc`:
 
@@ -33,7 +33,7 @@ The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as 
 - `.json` and `.jsonc` configs are read as-is, with no migration.
 - A settings YAML file whose top level is not a mapping is invalid. On writable startup, `omp` moves an invalid persistent settings file to a uniquely named `.broken-*` backup and exits with the original error and backup path. A `--config` overlay with a bare array/scalar is also a hard error, but is not moved.
 
-## Reading and writing settings
+## 读取和写入设置
 
 Use the interactive `/settings` panel inside a session, or the `omp config` command from a shell. Both read merged effective settings. Ordinary persistent writes land in the **global** file; model-selector role changes are the exception when `modelRoleStorage: project` (see [Where writes go](#where-writes-go)).
 
@@ -56,7 +56,7 @@ omp config set startup.showSplash true
 
 This only controls the startup splash animation. It does not rerun setup or change setup state, and `startup.quiet: true` still suppresses all startup chrome including the splash.
 
-### Subcommands
+### 子命令
 
 | Command                        | Effect                                                                                                                                                                                                                                                                                            |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -69,7 +69,7 @@ This only controls the startup splash animation. It does not rerun setup or chan
 
 `omp config` with no subcommand, `--help`, or `-h` lists settings. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`.
 
-### Value parsing
+### 值解析
 
 `omp config set` parses the value string according to the target key's schema type. The string is trimmed first.
 
@@ -84,11 +84,11 @@ This only controls the startup splash animation. It does not rerun setup or chan
 
 Keys must match a real schema path exactly. There is no shorthand — set `theme.dark`, not `theme`.
 
-### Where writes go
+### 写入位置
 
 `omp config set`, `omp config reset`, `/settings`, and ordinary runtime settings changes write the global main YAML file under the active agent directory. They do not write arbitrary keys to `<cwd>/.omp/config.yml`. The one supported project write path is a model-selector role assignment when `modelRoleStorage` is `project`; it updates only that role under `<cwd>/.omp/config.yml`, and missing project roles continue to fall back to global roles. To create any other project-local override, edit the project file directly (see [Project-local config](#project-local-config)). Saves are debounced and re-read the file under a lock, so external edits made while a session is open are preserved.
 
-## Precedence
+## 优先级
 
 From lowest to highest priority, the effective value of a setting is built as:
 
@@ -106,7 +106,7 @@ From highest to lowest:
 
 A key that is unset at every layer resolves to its schema default at read time.
 
-### Environment overrides
+### 环境变量覆盖
 
 Environment variables are **not** a single settings layer. Each is read by the feature that owns the value, usually as a per-machine override or fallback, and is never written back to `config.yml`. The ones that map directly onto a setting:
 
@@ -127,7 +127,7 @@ Environment variables are **not** a single settings layer. Each is read by the f
 
 Provider API keys are resolved separately (stored auth, OAuth, `models.yml`, environment, and `.env` files); see [Providers](./providers.md) and the full [Environment variables](./environment-variables.md) reference.
 
-## Merge rules
+## 合并规则
 
 Layers are combined with a deep merge:
 
@@ -148,7 +148,7 @@ tools:
     read: allow
 ```
 
-### Bash command approval patterns
+### Bash 命令批准模式
 
 `tools.approval` is a record keyed by tool name; dotted forms such as `tools.approval.eval` and `tools.approval.computer` identify entries in that record, not separate settings-schema paths. Each entry sets that tool's default policy. For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard.
 
@@ -174,7 +174,7 @@ Matching is asymmetric so that rules mean what they appear to: `deny` and `promp
 
 `bash.patterns` gates the `bash` tool only. It does not cover shells started through `eval`, which can spawn one via subprocess, so a `deny` rule here is bypassed when the same command runs through `eval`. To close that path, add a `tools.approval.eval` policy (`prompt` or `deny`) as well; see [Tool approval mode](./approval-mode.md).
 
-### Bash interceptor patterns
+### Bash 拦截器模式
 
 `bashInterceptor` is separate from `bash.patterns`: it redirects Bash commands to dedicated tools rather than defining whether a command may execute. Enable it explicitly and configure regular-expression patterns with a replacement tool and a model-facing message:
 
@@ -189,7 +189,7 @@ bashInterceptor:
 
 The named replacement tool must be available in the current session or the interceptor does not block the Bash call. For a detailed comparison of permission policy and dedicated-tool routing, including compound-command behavior and ordering, see [the Bash tool documentation](tools/bash.md#command-policy-and-dedicated-tool-routing).
 
-### Worked example: global vs. project
+### 示例：全局与项目
 
 ```yaml
 # ~/.omp/agent/config.yml
@@ -225,7 +225,7 @@ disabledProviders:
 
 Array replacement is the most common surprise: the project's `disabledProviders` does not extend the global list — it becomes the entire list for that project. The same applies to `enabledModels`, `cycleOrder`, `extensions`, and every other array-typed setting.
 
-## Project-local config
+## 项目本地配置
 
 Create `<repo>/.omp/config.yml` when a repository needs its own settings:
 
@@ -251,7 +251,7 @@ theme:
 
 Keep secrets out of committed project config unless your repository policy allows it. Prefer environment variables, stored auth, an auth broker, or an untracked `--config` overlay for credentials.
 
-### One-shot overlays
+### 一次性覆盖
 
 Use `--config` for a temporary layer that should not persist:
 
@@ -266,7 +266,7 @@ Wrappers may instead set `PI_CONFIG_FILES` to a platform-delimited path list (`:
 
 Overlay paths are resolved relative to the process working directory (and `~` is expanded). Each overlay must parse as a YAML mapping; a missing file, invalid YAML, or a top-level array/scalar is a hard error — it does **not** silently fall back to lower-precedence settings.
 
-## Path-scoped arrays
+## 按路径作用域的数组
 
 Two array settings — `enabledModels` and `disabledProviders` — accept path-scoped entries in addition to bare strings, so a single global config can behave differently per directory:
 
@@ -298,7 +298,7 @@ Accepted **value** keys:
 
 Only string values are kept; malformed scoped entries are ignored. Path scoping is resolved **after** the layer merge, so it reads the final effective array.
 
-## Provider and source disabling
+## 提供方和源禁用
 
 `disabledProviders` is a single shared id namespace that gates two different subsystems, before any credential check:
 
@@ -324,11 +324,11 @@ disabledProviders:
 
 The default is an empty array (nothing disabled). For the two subsystems' provider ids and ordering, see [Providers](./providers.md) and [Context files](./context-files.md).
 
-## Settings catalog
+## 设置目录
 
 The catalog below highlights common settings; it is not the complete schema. `omp config list` is the authoritative reference for every key, current value, type, and description. Defaults and enum values shown here come from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
 
-### Models
+### 模型
 
 `modelRoles`, `modelTags`, and `cycleOrder` work together to define the models you can switch between. Role values may carry a thinking suffix (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`).
 
@@ -367,7 +367,7 @@ enabledModels:
 
 See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
 
-### Advisor
+### 顾问
 
 The advisor is a second model that reviews each completed turn and can inject advice into the primary session. Assign a model with `modelRoles.advisor`, then enable it with `advisor.enabled`, `/advisor on`, or by launching with the `--advisor` flag.
 
@@ -380,7 +380,7 @@ See [Advisor and WATCHDOG.md](./advisor-watchdog.md) for runtime behavior, `WATC
 | `advisor.syncBacklog` | enum    | `off`   | Bounded advisor catch-up delay: `off`, `1`, `3`, or `5`. The primary waits up to 30 seconds only while advisor backlog is at or above the threshold. |
 | `advisor.immuneTurns` | number  | `3`     | After a `concern`/`blocker` interrupts, route further concerns/blockers as non-interrupting asides for this many completed primary turns.            |
 
-### Thinking
+### 思考
 
 ```yaml
 defaultThinkingLevel: high
@@ -406,7 +406,7 @@ thinkingBudgets:
 | `thinkingBudgets.max`             | number  | `32768` | Token budget for `max`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `providers.autoThinkingMaxEffort` | enum    | `xhigh` | Highest effort `defaultThinkingLevel: auto` may resolve. `xhigh` keeps the classifier one tier below the top, so only `ultrathink` reaches `max`; `max` lets the classifier bill the top tier on models that expose it. The local on-device classifier stays capped at `xhigh` either way. This governs what `auto` _resolves_: a model whose ladder offers nothing under the ceiling gets no auto level at all, and one whose metadata requires explicit effort still receives its lowest supported effort from the transport — on a `["max"]` ladder that is `max`, because the model accepts nothing else. |
 
-### Sampling
+### 采样
 
 A value of `-1` means "use the provider/model default" — `omp` does not send that parameter.
 
@@ -426,7 +426,7 @@ A value of `-1` means "use the provider/model default" — `omp` does not send t
 | `tier.advisor`      | enum   | `none`    | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the advisor model's family.                                                                                                                                                                      |
 | `personality`       | enum   | `default` | `default`, `friendly`, `pragmatic`, `none`. A user-level `<agent dir>/PERSONALITY.md` replaces the selected preset's text; `none` still omits the block. See [system-prompt-customization](./system-prompt-customization.md).                                                  |
 
-### Retry and fallback
+### 重试和回退
 
 ```yaml
 retry:
@@ -480,9 +480,9 @@ providers:
 | `providers.openai-codex.codeMode`           | enum    | `off`             | Codex Code Mode for `code_mode_only` models (GPT-5.6 Sol/Terra/Luna), mirroring codex-rs: the direct tool surface collapses to `eval`/`ask`/`todo` and every other session tool is invoked from `eval` cells via its `tool.<name>()` bridge, collapsing multi-step tool work into one model round trip. `auto` follows the model catalog's `tool_mode` flag; `on` forces it for any Codex model; `off` (default) leaves the full direct surface. The turn metadata carries codex-rs's `tool_namespaces_info` exposure snapshot while active. |
 | `providers.openai-codex.codeModeDirectTools` | array   | `[]`              | Extra tool names to keep directly callable alongside `eval`/`ask`/`todo` when Codex Code Mode is active; entries that are not enabled in the session are ignored. |
 
-When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. If several roles assign the same model, yaml key order does not decide: the live session role wins, and `default` wins over other matching roles when the session is not on those roles. It skips models whose selectors are still cooling down and switches for the rest of the turn. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
+When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. If several roles assign the same model, yaml key order does not decide: the live session role wins, and `default` wins over other matching roles when the session is not on those roles. It skips models whose selectors are still cooling down and switches for the rest of the turn. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<na…
 
-### Tools and approvals
+### 工具和批准
 
 ```yaml
 tools:
@@ -495,22 +495,22 @@ tools:
   intentTracing: true
 ```
 
-| Key                            | Type    | Default | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tools.format`                 | enum    | `auto`  | Tool wire format: `auto`, `native`, `glm`, `hermes`, `kimi`, `xml`, `anthropic`, `deepseek`, `harmony`, `qwen3`, `gemini`, `gemma`, or `minimax`. `native` always uses provider-native tool calls. `auto` also uses native calls unless the selected model explicitly has `supportsTools: false`; then it selects the model-family owned dialect, falling back to GLM when no specific family dialect is known. Other values force that owned in-band dialect. `xml` is the [generic XML format](./toolconv/xml.md); `minimax` is the [MiniMax format](./toolconv/minimax.md). Applies on session start. See [GLM](./toolconv/glm-4.5.md), [Qwen3/Hermes](./toolconv/qwen3.md), [Kimi](./toolconv/kimi-k2.md), [Anthropic](./toolconv/anthropic.md), [DeepSeek](./toolconv/deepseek.md), [Harmony](./toolconv/harmony.md), [Gemini](./toolconv/gemini.md), and [Gemma](./toolconv/gemma.md). |
-| `tools.approvalMode`           | enum    | `yolo`  | `always-ask` (auto-approve read-only), `write` (auto-approve read + workspace-write), `yolo` (auto-approve all tiers). `--approval-mode` and `--auto-approve`/`--yolo` override per run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `tools.approval`               | record  | `{}`    | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. e.g. `omp config set tools.approval '{"bash":"prompt"}'`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `tools.maxTimeout`             | number  | `0`     | Max tool runtime in seconds; `0` = no cap.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `tools.intentTracing`          | boolean | `true`  | Record per-call intent strings.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `tools.outputMaxColumns`       | number  | `768`   | Per-line byte cap for streaming output; `0` disables.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `tools.artifactSpillThreshold` | number  | `50`    | KB of tool output above which output spills to an artifact.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `tools.artifactHeadBytes`      | number  | `20`    | KB of head kept inline on spill; `0` = tail-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `tools.artifactTailBytes`      | number  | `20`    | KB of tail kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `tools.artifactTailLines`      | number  | `500`   | Max tail lines kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Key                            | Type    | Default | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    …
+| ------------------------------ | ------- | ------- | -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------…
+| `tools.format`                 | enum    | `auto`  | Tool wire format: `auto`, `native`, `glm`, `hermes`, `kimi`, `xml`, `anthropic`, `deepseek`, `harmony`, `qwen3`, `gemini`, `gemma`, or `minimax`. `native` always uses provider-native tool calls. `auto` also uses native calls unless the selected model explicitly has `supportsTools: false`; then it selects the model-family owned dialect, falling back to GLM when no specific family dialect is known. Other values force that owned in-band dialect. `xml` is the [generic XML format](./toolconv/xml.md); `minimax` is the [MiniMax format](./toolconv/minimax.md). Applies on session start. See [GLM](./toolconv/glm-4.5.md), [Qwen3/Hermes](./toolconv/qwen3.md), [Kimi](./toolconv/kimi-k2.md), [Anthropic](./toolconv/ant…
+| `tools.approvalMode`           | enum    | `yolo`  | `always-ask` (auto-approve read-only), `write` (auto-approve read + workspace-write), `yolo` (auto-approve all tiers). `--approval-mode` and `--auto-approve`/`--yolo` override per run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 …
+| `tools.approval`               | record  | `{}`    | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. e.g. `omp config set tools.approval '{"bash":"prompt"}'`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                …
+| `tools.maxTimeout`             | number  | `0`     | Max tool runtime in seconds; `0` = no cap.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               …
+| `tools.intentTracing`          | boolean | `true`  | Record per-call intent strings.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          …
+| `tools.outputMaxColumns`       | number  | `768`   | Per-line byte cap for streaming output; `0` disables.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    …
+| `tools.artifactSpillThreshold` | number  | `50`    | KB of tool output above which output spills to an artifact.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              …
+| `tools.artifactHeadBytes`      | number  | `20`    | KB of head kept inline on spill; `0` = tail-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        …
+| `tools.artifactTailBytes`      | number  | `20`    | KB of tail kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         …
+| `tools.artifactTailLines`      | number  | `500`   | Max tail lines kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     …
 
 Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
 
-### Window-scoped computer use
+### 窗口作用域的计算机使用
 
 The disabled-by-default `computer` essential tool captures and controls one real host window through native OS APIs. Numeric targets isolate an application without focusing it or moving the real pointer; the synthetic `desktop` target preserves the previous selected-display composite and global input behavior. It remains separate from `browser`, which manages Chromium/CDP tabs and structured page automation.
 
@@ -531,7 +531,7 @@ computer:
 
 Computer settings are captured when the desktop controller is created. A model switch that crosses the coordinate-safe sizing boundary recreates the controller and resnapshots those settings; changing config alone does not, so start a new session after a settings change. Every call must name `desktop` or a numeric id from the preceding window list. Switching targets invalidates the prior coordinate frame, so capture the new target before pointer input. Before enabling input, configure `tools.approvalMode` or `tools.approval.computer` and grant platform permissions. See [Window-scoped computer use](computer-use.md).
 
-### Shell, eval, and LSP
+### Shell、eval 和 LSP
 
 ```yaml
 bash:
@@ -575,7 +575,7 @@ lsp:
 | `lsp.diagnosticsDeduplicate`      | boolean | `true`    | Collapse duplicate diagnostics.                                                                                                                             |
 | `shellPath`                       | string  | _(unset)_ | Override the shell binary used by bash.                                                                                                                     |
 
-### Files: editing and reading
+### 文件：编辑和读取
 
 ```yaml
 edit:
@@ -608,7 +608,7 @@ read:
 | `read.toolResultPreview`  | boolean | `false`    | Inline preview of tool results.                   |
 | `readLineNumbers`         | boolean | `false`    | Show plain line numbers.                          |
 
-### Context, compaction, and memory
+### 上下文、压缩和内存
 
 ```yaml
 contextPromotion:
@@ -642,7 +642,7 @@ memory:
 
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
 
-### Appearance and terminal
+### 外观和终端
 
 ```yaml
 theme:
@@ -685,7 +685,7 @@ tui:
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`.
 
-### Interaction
+### 交互
 
 | Key                    | Type    | Default         | Values                                                                                                  |
 | ---------------------- | ------- | --------------- | ------------------------------------------------------------------------------------------------------- |
@@ -699,7 +699,7 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 | `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. (Legacy ms values are migrated to seconds.) |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
 
-### Providers and services
+### 提供方和服务
 
 ```yaml
 providers:
@@ -755,7 +755,7 @@ searxng:
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
 
-### Other groups
+### 其他组
 
 Every schema path not individually tabulated in this catalog is explicitly deferred to `omp config list`. Additional groups include:
 
@@ -767,11 +767,11 @@ Every schema path not individually tabulated in this catalog is explicitly defer
 
 These settings follow the same schema-defined type and default rules shown above.
 
-## Legacy migration
+## 旧版迁移
 
 `omp` migrates older config shapes automatically. None of these require action; they are listed so you know what changes you may see in `config.yml`.
 
-### Startup migration to `config.yml`
+### 启动时迁移到 `config.yml`
 
 When neither `~/.omp/agent/config.yml` nor the compatible `config.yaml` exists, startup builds canonical `config.yml` once from legacy sources, then writes the result:
 
@@ -780,7 +780,7 @@ When neither `~/.omp/agent/config.yml` nor the compatible `config.yaml` exists, 
 
 After either main YAML file exists, these legacy sources are no longer consulted. The generic config loader also performs `.json` -> `.yml` migration for other config files when only the `.json` form is present.
 
-### Field-level migrations
+### 字段级迁移
 
 Applied whenever raw settings are loaded (global, project, overlays, and runtime overrides):
 
@@ -795,9 +795,9 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 | legacy `task.isolation.mode` (`worktree`, `fuse-overlay`, `fuse-projfs`) | `rcopy`, `overlayfs`, `projfs`                                                                               |
 | `lastChangelogVersion`                                                   | moved to a marker file and stripped from `config.yml`                                                        |
 
-## Troubleshooting
+## 故障排除
 
-### A project setting is not taking effect
+### 项目设置未生效
 
 - Start `omp` from the directory that contains `.omp/config.yml`. Settings discovery only checks the current working directory's `.omp/`, not ancestor directories.
 - Ensure `.omp/` is non-empty; empty config directories are ignored.
@@ -805,33 +805,33 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 - Run `omp config get <key>` from that directory to see the effective value.
 - Remember that `--config` overlays and runtime flags override project config.
 
-### A global array disappeared in a project
+### 项目中全局数组消失
 
 Arrays replace; they do not append. If a project sets `disabledProviders`, `enabledModels`, `cycleOrder`, `extensions`, or any other array, include the **complete** desired value in the project layer — the global array is fully replaced.
 
-### A provider is still available after editing config
+### 编辑配置后提供方仍然可用
 
 - Check whether you disabled the model provider id (e.g. `anthropic`) or a discovery source id (e.g. `claude`) — they are different namespaces with different effects.
 - Check for a project (or overlay) `disabledProviders` array replacing your global one.
 - Credentials can still come from environment variables, `.env`, OAuth, stored auth, or `models.yml`; disabling a provider blocks selection regardless, but verify you edited the right layer. See [Providers](./providers.md).
 - Restart the session if the model list was already initialized.
 
-### `omp config set` changed the wrong file
+### `omp config set` 写入了错误的文件
 
 `omp config set` and `omp config reset` always write the global `config.yml` under the active agent directory. Run `omp config path` to print it. For project-local settings, edit `<repo>/.omp/config.yml` directly.
 
-### `omp config reset` did not remove my key
+### `omp config reset` 未删除我的键
 
 `reset` writes the schema **default** value into the global config — it persists the default rather than deleting the key. To stop overriding a project value from global config, delete the key from `~/.omp/agent/config.yml` by hand.
 
-### A `--config` overlay fails at startup
+### 启动时 `--config` 覆盖失败
 
 `--config` files are process-local YAML mappings. A missing file, invalid YAML, or a top-level array/scalar is a hard error — it does not silently fall back to lower-precedence settings. Fix the path or contents.
 
-### An environment variable beats my config
+### 环境变量覆盖了我的配置
 
 Some settings (model roles, eval backends, tiny-model device/precision, auth broker, PTY) are overridable by env vars or CLI flags for per-machine convenience, and those take precedence over `config.yml`. Unset the variable or drop the flag to let the persisted value win. See [Environment overrides](#environment-overrides) and [Environment variables](./environment-variables.md).
 
-### `omp config set <key>` says "Unknown setting"
+### `omp config set <key>` 提示 "Unknown setting"
 
 Keys must match a schema path exactly, with no shorthand. Use `theme.dark`, not `theme`. Run `omp config list` to see every valid key.

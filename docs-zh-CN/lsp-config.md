@@ -1,50 +1,50 @@
-# LSP configuration in OMP
+# OMP 中的 LSP 配置
 
-This guide explains how to configure language servers for the OMP coding agent.
+本指南介绍如何为 OMP 编程代理配置语言服务器。
 
-Source of truth in code:
+代码中的事实来源：
 
-- Server config type: `packages/coding-agent/src/lsp/types.ts` (`ServerConfig`)
-- Config loader: `packages/coding-agent/src/lsp/config.ts`
-- Built-in server definitions: `packages/coding-agent/src/lsp/defaults.json`
+- 服务器配置类型：`packages/coding-agent/src/lsp/types.ts`（`ServerConfig`）
+- 配置加载器：`packages/coding-agent/src/lsp/config.ts`
+- 内置服务器定义：`packages/coding-agent/src/lsp/defaults.json`
 
-## Auto-detection
+## 自动检测
 
-When no config file contributes a server override, OMP auto-detects built-in servers by intersecting two conditions:
+当没有任何配置文件提供服务器覆盖时，OMP 通过同时满足以下两个条件来自动检测内置服务器：
 
-1. The current working directory contains at least one of the server's `rootMarkers`.
-2. The server binary is available — checked in supported project-local bin directories first (for example `node_modules/.bin/`, Python virtual environments, Ruby binstubs, and project `bin/` for Go), then `$PATH`.
+1. 当前工作目录包含服务器的至少一个 `rootMarkers`。
+2. 服务器二进制可用——首先在受支持的项目本地 bin 目录中查找（例如 `node_modules/.bin/`、Python 虚拟环境、Ruby binstubs 以及 Go 的项目 `bin/`），然后在 `$PATH` 中查找。
 
-Root-marker detection at startup is cwd-only; it does not search parent directories. Wildcard markers such as `*.cabal` match entries directly inside the cwd and do not recurse. No configuration is required for common setups; see [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json) for the full built-in set.
+启动时的根标记检测仅作用于当前工作目录，不会搜索父目录。通配符标记（例如 `*.cabal`）仅匹配直接位于当前工作目录中的条目，不会递归。对于常见配置无需任何设置；完整的内置集合请参见 [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json)。
 
-## Config file locations
+## 配置文件位置
 
-OMP merges LSP config from multiple sources, lowest to highest precedence:
+OMP 按从低到高的优先级合并来自多个来源的 LSP 配置：
 
-| Precedence | Location                                                                                                     |
-| ---------: | ------------------------------------------------------------------------------------------------------------ |
-|     Lowest | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml`, `~/lsp.yml`, `~/.lsp.yml`                          |
-|            | Plugin LSP configs (marketplace / `--plugin-dir` roots)                                                      |
-|            | User config dirs: active native agent directory, then `~/.claude/lsp.*`, `~/.codex/lsp.*`, `~/.gemini/lsp.*` |
-|            | Cwd config dirs: `<cwd>/.omp/lsp.*`, `<cwd>/.claude/lsp.*`, `<cwd>/.codex/lsp.*`, `<cwd>/.gemini/lsp.*`      |
-|    Highest | Cwd root: `<cwd>/lsp.*` and `<cwd>/.lsp.*`                                                                   |
+| 优先级       | 位置                                                                                                         |
+| -----------: | ------------------------------------------------------------------------------------------------------------ |
+|       最低   | `~/lsp.json`、`~/.lsp.json`、`~/lsp.yaml`、`~/.lsp.yaml`、`~/lsp.yml`、`~/.lsp.yml`                         |
+|              | 插件 LSP 配置（marketplace / `--plugin-dir` 根目录）                                                          |
+|              | 用户配置目录：当前原生代理目录，然后是 `~/.claude/lsp.*`、`~/.codex/lsp.*`、`~/.gemini/lsp.*`                |
+|              | 当前工作目录配置目录：`<cwd>/.omp/lsp.*`、`<cwd>/.claude/lsp.*`、`<cwd>/.codex/lsp.*`、`<cwd>/.gemini/lsp.*` |
+|       最高   | 当前工作目录根：`<cwd>/lsp.*` 和 `<cwd>/.lsp.*`                                                               |
 
-Each location accepts `.json`, `.yaml`, and `.yml`, including hidden variants. When multiple variants coexist in one location, precedence from highest to lowest is `lsp.json`, `.lsp.json`, `lsp.yaml`, `.lsp.yaml`, `lsp.yml`, `.lsp.yml`.
+每个位置都接受 `.json`、`.yaml` 和 `.yml`，包括隐藏的变体。当同一位置存在多个变体时，从高到低的优先级为 `lsp.json`、`.lsp.json`、`lsp.yaml`、`.lsp.yaml`、`lsp.yml`、`.lsp.yml`。
 
-Merging is shallow per server: a higher-precedence server object overrides only its top-level fields, but object-valued fields such as `settings`, `initOptions`, `capabilities`, and `workspaceReadyTimings` replace the lower value as a whole rather than deep-merging it. Servers absent from override files remain at built-in defaults.
+合并按服务器浅合并：更高优先级的服务器对象仅覆盖其顶层字段，但像 `settings`、`initOptions`、`capabilities` 和 `workspaceReadyTimings` 这类对象类型的字段会整体替换较低优先级的值，而不是深度合并它们。覆盖文件中未列出的服务器保持内置默认值。
 
-The native user config directory follows `PI_CONFIG_DIR` and active profiles; `~/.omp/agent/lsp.json` is the default-profile spelling. This shared config lookup does not use `PI_CODING_AGENT_DIR` as an arbitrary replacement base. Project and cwd sources do not walk ancestors.
+原生用户配置目录遵循 `PI_CONFIG_DIR` 和当前 profile；`~/.omp/agent/lsp.json` 是默认 profile 的形式。此共享配置查找不会将 `PI_CODING_AGENT_DIR` 作为任意的替换基础。项目和当前工作目录来源不会向上遍历父级目录。
 
-**Recommended locations:**
+**推荐位置：**
 
-- User-wide preferences → active native agent directory's `lsp.json`
-- Project-specific overrides → `<cwd>/.omp/lsp.json`
+- 用户全局偏好 → 当前原生代理目录中的 `lsp.json`
+- 项目特定覆盖 → `<cwd>/.omp/lsp.json`
 
-> **Note:** Auto-detection mode is skipped only when at least one readable config contributes a non-empty server map. A config that only sets `idleTimeoutMs` still uses built-in auto-detection. With server overrides, OMP first merges them onto all defaults, then keeps servers whose root markers match the cwd, whose binary resolves, and whose merged config is not `disabled`.
+> **注意：** 仅当至少有一个可读的配置文件贡献了非空的服务器映射时，才会跳过自动检测模式。仅设置了 `idleTimeoutMs` 的配置仍会使用内置自动检测。对于带服务器覆盖的情况，OMP 首先将它们合并到所有默认值之上，然后保留那些根标记与当前工作目录匹配、二进制可解析、且合并后配置未设置为 `disabled` 的服务器。
 
-## File shape
+## 文件格式
 
-Both JSON and YAML are accepted. The top-level object can use either a `servers` wrapper key or a flat map directly:
+JSON 和 YAML 均可接受。顶层对象既可以使用 `servers` 包装键，也可以直接使用扁平映射：
 
 ```json
 {
@@ -55,7 +55,7 @@ Both JSON and YAML are accepted. The top-level object can use either a `servers`
 }
 ```
 
-or (flat, without the `servers` wrapper):
+或者（扁平形式，不带 `servers` 包装键）：
 
 ```json
 {
@@ -64,35 +64,35 @@ or (flat, without the `servers` wrapper):
 }
 ```
 
-Top-level keys:
+顶层键：
 
-- `servers` — map of server name to `ServerConfig` (optional wrapper; flat form is equivalent)
-- `idleTimeoutMs` — shut down idle language servers after this many milliseconds; omitted, zero, and negative values leave idle shutdown disabled
+- `servers` — 服务器名称到 `ServerConfig` 的映射（可选的包装键；扁平形式是等价的）
+- `idleTimeoutMs` — 在此毫秒数后关闭空闲的语言服务器；省略、零和负值都会使空闲关闭保持禁用
 
-Do not mix wrapped and flat server entries: when `servers` is present, sibling keys other than `idleTimeoutMs` are not treated as servers.
+不要混合使用包装形式和扁平形式的服务器条目：当存在 `servers` 时，`idleTimeoutMs` 之外的同级键不会被视为服务器。
 
-## ServerConfig fields
+## ServerConfig 字段
 
-| Field                   | Type       | Required for a new server | Description                                                                                              |
-| ----------------------- | ---------- | ------------------------: | -------------------------------------------------------------------------------------------------------- |
-| `command`               | `string`   |                       yes | Binary name (resolved through local bins / PATH) or absolute path                                        |
-| `args`                  | `string[]` |                        no | Arguments passed to the binary                                                                           |
-| `fileTypes`             | `string[]` |                       yes | File extensions this server handles, for example `[".ts", ".tsx"]`                                       |
-| `languageId`            | `string`   |                        no | LSP language id sent in `textDocument/didOpen`; inferred from the file path when omitted                 |
-| `rootMarkers`           | `string[]` |                       yes | Files/directories indicating a project root; one-level wildcard patterns such as `*.cabal` are supported |
-| `initOptions`           | `object`   |                        no | Sent as `initializationOptions` during the LSP handshake                                                 |
-| `settings`              | `object`   |                        no | Pushed via `workspace/didChangeConfiguration`                                                            |
-| `disabled`              | `boolean`  |                        no | Set `true` to disable this server                                                                        |
-| `warmupTimeoutMs`       | `number`   |                        no | Startup timeout for this server in milliseconds                                                          |
-| `isLinter`              | `boolean`  |                        no | Marks a linter/formatter-only server; excludes it from type-intelligence operations                      |
-| `capabilities`          | `object`   |                        no | Opt-in server-specific features; see [Capabilities](#capabilities)                                       |
-| `workspaceReadyTimings` | `object`   |                        no | Advanced rust-analyzer workspace-readiness timing overrides; see below                                   |
+| 字段                     | 类型       | 新建服务器是否必填  | 描述                                                                                            |
+| ----------------------- | ---------- | ------------------: | ---------------------------------------------------------------------------------------------- |
+| `command`               | `string`   |                  是 | 二进制名称（通过本地 bins / PATH 解析）或绝对路径                                              |
+| `args`                  | `string[]` |                 否 | 传递给二进制的参数                                                                              |
+| `fileTypes`             | `string[]` |                  是 | 该服务器处理的文件扩展名，例如 `[".ts", ".tsx"]`                                                |
+| `languageId`            | `string`   |                 否 | 在 `textDocument/didOpen` 中发送的 LSP language id；省略时从文件路径推断                       |
+| `rootMarkers`           | `string[]` |                  是 | 指示项目根的文件/目录；支持一级通配符模式，例如 `*.cabal`                                        |
+| `initOptions`           | `object`   |                 否 | 在 LSP 握手期间作为 `initializationOptions` 发送                                                |
+| `settings`              | `object`   |                 否 | 通过 `workspace/didChangeConfiguration` 推送                                                    |
+| `disabled`              | `boolean`  |                 否 | 设置为 `true` 以禁用此服务器                                                                    |
+| `warmupTimeoutMs`       | `number`   |                 否 | 该服务器的启动超时（毫秒）                                                                      |
+| `isLinter`              | `boolean`  |                 否 | 标记仅用于 lint/格式化的服务器；将其排除在类型智能操作之外                                       |
+| `capabilities`          | `object`   |                 否 | 选择性启用的服务器特定功能；参见 [Capabilities](#capabilities)                                   |
+| `workspaceReadyTimings` | `object`   |                 否 | 高级的 rust-analyzer 工作区就绪时序覆盖；见下文                                                  |
 
-The required fields may be omitted from an override of a built-in server because they are inherited before validation. A genuinely new server needs all three. `resolvedCommand` and `createClient` are runtime-owned fields and must not be configured.
+对于内置服务器的覆盖，必填字段可以省略，因为它们在验证之前会被继承。一个真正的新服务器需要上述三个必填字段。`resolvedCommand` 和 `createClient` 是运行时拥有的字段，不得在配置中设置。
 
 ### Capabilities
 
-The `capabilities` object enables optional server-specific features that OMP supports on a per-server basis:
+`capabilities` 对象用于启用 OMP 按服务器支持的可选服务器特定功能：
 
 ```json
 {
@@ -106,11 +106,11 @@ The `capabilities` object enables optional server-specific features that OMP sup
 }
 ```
 
-All fields are boolean and optional. They are currently used by `rust-analyzer`.
+所有字段都是布尔值且为可选字段。它们目前被 `rust-analyzer` 使用。
 
-### Advanced rust-analyzer readiness timings
+### 高级 rust-analyzer 就绪时序
 
-`workspaceReadyTimings` tunes rust-analyzer's workspace-ready polling:
+`workspaceReadyTimings` 用于调整 rust-analyzer 的工作区就绪轮询：
 
 ```json
 {
@@ -127,13 +127,13 @@ All fields are boolean and optional. They are currently used by `rust-analyzer`.
 }
 ```
 
-All four fields are optional millisecond values. This is an advanced tuning surface; normal configurations should use the defaults.
+所有四个字段都是可选的毫秒值。这是一个高级的调优面；普通配置应使用默认值。
 
-## Common recipes
+## 常见配置示例
 
-### Override a built-in server's settings
+### 覆盖内置服务器的设置
 
-Partial overrides are merged onto the built-in defaults. You only need to specify the fields you want to change.
+部分覆盖会合并到内置默认值之上。只需指定要更改的字段。
 
 ```json
 {
@@ -154,7 +154,7 @@ servers:
         staticcheck: false
 ```
 
-### Disable a built-in server
+### 禁用内置服务器
 
 ```json
 {
@@ -166,9 +166,9 @@ servers:
 }
 ```
 
-### Register a custom server
+### 注册自定义服务器
 
-New servers require non-empty `command`, `fileTypes`, and `rootMarkers`. Invalid server definitions are ignored with a warning. An unreadable file or invalid JSON/YAML is ignored; the loader continues with the remaining sources.
+新服务器需要非空的 `command`、`fileTypes` 和 `rootMarkers`。无效的服务器定义将被忽略并产生警告。无法读取的文件或无效的 JSON/YAML 会被忽略；加载器会继续处理其余来源。
 
 ```json
 {
@@ -183,9 +183,9 @@ New servers require non-empty `command`, `fileTypes`, and `rootMarkers`. Invalid
 }
 ```
 
-### Set a global idle timeout
+### 设置全局空闲超时
 
-Shut down language servers that have been inactive for more than five minutes:
+关闭空闲超过五分钟的语言服务器：
 
 ```json
 {
@@ -193,9 +193,9 @@ Shut down language servers that have been inactive for more than five minutes:
 }
 ```
 
-### Disable a server for one project, keep it globally
+### 在单个项目中禁用某个服务器，但全局保留
 
-Place the override in `<project>/.omp/lsp.json`:
+将覆盖配置放在 `<project>/.omp/lsp.json` 中：
 
 ```json
 {
@@ -207,11 +207,11 @@ Place the override in `<project>/.omp/lsp.json`:
 }
 ```
 
-The user-level config in `~/.omp/agent/lsp.json` is unaffected; pylsp is only suppressed in this project.
+`~/.omp/agent/lsp.json` 中的用户级配置不受影响；pylsp 仅在此项目中被禁用。
 
-## Built-in server list
+## 内置服务器列表
 
-The following servers ship in `defaults.json` and are eligible for auto-detection:
+以下服务器随 `defaults.json` 提供，可被自动检测：
 
 | Server key                    | Language(s)                   | Binary                            |
 | ----------------------------- | ----------------------------- | --------------------------------- |

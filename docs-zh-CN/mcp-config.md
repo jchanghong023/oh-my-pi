@@ -1,62 +1,62 @@
-# MCP configuration in OMP
+# OMP 中的 MCP 配置
 
-This guide explains how to add, edit, and validate MCP servers for the OMP coding agent.
+本指南介绍如何为 OMP 编程智能体添加、编辑和校验 MCP 服务器。
 
-Source of truth in code:
+代码中的真实来源：
 
-- Runtime config types: `packages/coding-agent/src/mcp/types.ts`
-- Config writer: `packages/coding-agent/src/mcp/config-writer.ts`
-- Loader + validation: `packages/coding-agent/src/mcp/config.ts`
-- Standalone `mcp.json` discovery: `packages/coding-agent/src/discovery/mcp-json.ts`
-- Schema: `packages/coding-agent/src/config/mcp-schema.json`
+- 运行时配置类型：`packages/coding-agent/src/mcp/types.ts`
+- 配置写入器：`packages/coding-agent/src/mcp/config-writer.ts`
+- 加载器与校验：`packages/coding-agent/src/mcp/config.ts`
+- 独立 `mcp.json` 发现：`packages/coding-agent/src/discovery/mcp-json.ts`
+- 模式定义：`packages/coding-agent/src/config/mcp-schema.json`
 
-## Preferred config locations
+## 推荐配置位置
 
-OMP can discover MCP servers from multiple tools (`.claude/`, `.cursor/`, `.vscode/`, `opencode.json`, and more), but for OMP-native configuration you should usually use one of these primary files:
+OMP 可以从多个工具发现 MCP 服务器（`.claude/`、`.cursor/`、`.vscode/`、`opencode.json` 等），但对于 OMP 原生配置，通常应使用以下主要文件之一：
 
-- Project: `.omp/mcp.json`
-- User: `~/.omp/agent/mcp.json` (or `~/.omp/profiles/<name>/agent/mcp.json` when a named profile is active — see [Profiles](#profiles))
+- 项目级：`.omp/mcp.json`
+- 用户级：`~/.omp/agent/mcp.json`（或当某个命名 profile 处于激活状态时使用 `~/.omp/profiles/<name>/agent/mcp.json` —— 参见 [Profiles](#profiles)）
 
-The native provider also reads `.omp/.mcp.json` and `~/.omp/agent/.mcp.json` for compatibility, but OMP writes to the primary `mcp.json` paths above.
+为了保持兼容，原生提供方还会读取 `.omp/.mcp.json` 与 `~/.omp/agent/.mcp.json`，但 OMP 写入的是上面那些主要的 `mcp.json` 路径。
 
-OMP also accepts fallback standalone files in the project root:
+OMP 也接受项目根目录下的独立后备文件：
 
 - `mcp.json`
 - `.mcp.json`
 
-Use `.omp/mcp.json` or `~/.omp/agent/mcp.json` when you want OMP to own the configuration. Use root `mcp.json` / `.mcp.json` only when you want a portable fallback file that other MCP clients may also read.
+当你希望由 OMP 负责该配置时，请使用 `.omp/mcp.json` 或 `~/.omp/agent/mcp.json`。仅在你希望得到一个其他 MCP 客户端也能读取的可移植后备文件时，才使用根目录下的 `mcp.json` / `.mcp.json`。
 
-### Imported tool configs
+### 导入的工具配置
 
-OMP also translates these current tool-native sources:
+OMP 还会翻译以下当前各工具原生配置源：
 
-- Claude Code: `~/.claude.json`, `~/.claude/mcp.json`, and project `.claude/.mcp.json` / `.claude/mcp.json`
-- Codex: `~/.codex/config.toml` and `.codex/config.toml` (`[mcp_servers.*]`)
-- Gemini CLI: `~/.gemini/settings.json` and `.gemini/settings.json`
-- OpenCode: `~/.config/opencode/opencode.json` and project-root `opencode.json`
-- Cursor: `~/.cursor/mcp.json` and `.cursor/mcp.json`
-- Windsurf: `~/.codeium/windsurf/mcp_config.json` and `.windsurf/mcp_config.json`
-- VS Code: project-only `.vscode/mcp.json` using `mcp.servers`
-- installed Claude marketplace plugins and OMP extension packages that declare MCP servers
+- Claude Code：`~/.claude.json`、`~/.claude/mcp.json`，以及项目下的 `.claude/.mcp.json` / `.claude/mcp.json`
+- Codex：`~/.codex/config.toml` 和 `.codex/config.toml`（`[mcp_servers.*]`）
+- Gemini CLI：`~/.gemini/settings.json` 和 `.gemini/settings.json`
+- OpenCode：`~/.config/opencode/opencode.json` 和项目根目录下的 `opencode.json`
+- Cursor：`~/.cursor/mcp.json` 和 `.cursor/mcp.json`
+- Windsurf：`~/.codeium/windsurf/mcp_config.json` 和 `.windsurf/mcp_config.json`
+- VS Code：仅项目级的 `.vscode/mcp.json`，使用 `mcp.servers`
+- 已安装的 Claude 市场上声明了 MCP 服务器的插件，以及 OMP 扩展包
 
-For Claude Code, Codex, Gemini CLI, Cursor, and Windsurf, the project entry is encountered before its same-named user entry — matching OMP-native config, whose project entry precedes its active-profile user entry — so a project `enabled: false` suppresses a same-named user server. OpenCode currently encounters the user entry first. Cross-provider priority is listed in [Discovery and precedence](#discovery-and-precedence).
+对于 Claude Code、Codex、Gemini CLI、Cursor 和 Windsurf，项目级条目会在同名的用户级条目之前被遇到——这与 OMP 原生配置一致，后者也是项目级条目先于当前激活 profile 的用户级条目——因此项目中的 `enabled: false` 会压制同名的用户级服务器。OpenCode 目前是先遇到用户级条目。跨提供方的优先级请参见 [发现与优先级](#discovery-and-precedence)。
 
 ### Profiles
 
-Named profiles (`omp --profile <name>`, the `--alias` shortcut, or `OMP_PROFILE`/`PI_PROFILE`) isolate user-level MCP config. When a profile is active, the **user** scope resolves to the profile's agent directory instead of the default one:
+命名 profile（`omp --profile <name>`、`--alias` 快捷方式，或 `OMP_PROFILE`/`PI_PROFILE`）会隔离用户级 MCP 配置。当某个 profile 处于激活状态时，**用户**作用域解析到该 profile 自身的 agent 目录，而不是默认目录：
 
-- Default profile: `~/.omp/agent/mcp.json`
-- Profile `<name>`: `~/.omp/profiles/<name>/agent/mcp.json`
+- 默认 profile：`~/.omp/agent/mcp.json`
+- profile `<name>`：`~/.omp/profiles/<name>/agent/mcp.json`
 
-Discovery, the `/mcp` commands, and the config writer all follow the active profile, so a profile sees **only** its own user-level servers — never the default profile's `~/.omp/agent/mcp.json`. Add a server to a profile by launching under it (`omp --profile <name>`) and running `/mcp add` → User level, or by editing `~/.omp/profiles/<name>/agent/mcp.json` directly.
+发现过程、`/mcp` 命令以及配置写入器都遵循当前激活的 profile，因此某个 profile 只能看到**它自己的**用户级服务器——绝不会看到默认 profile 的 `~/.omp/agent/mcp.json`。要向某个 profile 添加服务器，可以在该 profile 下启动（`omp --profile <name>`），然后运行 `/mcp add` → 用户级，或者直接编辑 `~/.omp/profiles/<name>/agent/mcp.json`。
 
-Project-scoped MCP config (`.omp/mcp.json`) is keyed to the working directory, not the profile, so it applies under every profile. External-tool configs (`.claude/`, `.cursor/`, etc.) are also profile-independent because they belong to those tools rather than to an OMP profile.
+项目级 MCP 配置（`.omp/mcp.json`）按工作目录绑定，而不是按 profile 绑定，因此它会在所有 profile 下生效。外部工具的配置（`.claude/`、`.cursor/` 等）也独立于 profile，因为它们属于那些工具，而不属于某个 OMP profile。
 
-MCP follows the same profile rules as the rest of OMP-native config; see [Configuration Discovery → Profiles](./config-usage.md#profiles).
+MCP 遵循的 profile 规则与 OMP 原生配置的其他部分相同；请参见 [配置发现 → Profiles](./config-usage.md#profiles)。
 
-## Add a schema reference
+## 添加模式引用
 
-Add this line at the top of the file for editor autocomplete and validation:
+在文件顶部添加这一行，以便编辑器自动补全与校验：
 
 ```json
 {
@@ -65,11 +65,11 @@ Add this line at the top of the file for editor autocomplete and validation:
 }
 ```
 
-OMP now writes this automatically when `/mcp add`, `/mcp enable`, `/mcp disable`, `/mcp reauth`, or other config-writing flows create or update an OMP-managed MCP file.
+当 `/mcp add`、`/mcp enable`、`/mcp disable`、`/mcp reauth` 或其他写入配置的流程创建或更新一个由 OMP 管理的 MCP 文件时，OMP 现在会自动写入这一行。
 
-## File shape
+## 文件结构
 
-OMP supports this top-level structure:
+OMP 支持以下顶层结构：
 
 ```json
 {
@@ -85,43 +85,43 @@ OMP supports this top-level structure:
 }
 ```
 
-Top-level keys:
+顶层键：
 
-- `$schema` — optional JSON Schema URL for tooling
-- `mcpServers` — map of server name to server config
-- `disabledServers` — active-profile user denylist; it hides a discovered server by name regardless of the source entry's `enabled` value
-- `enabledServers` — active-profile user allowlist; it can force-enable a same-named entry whose source says `enabled: false`, but `disabledServers` still wins
+- `$schema` —— 供工具使用的可选 JSON Schema URL
+- `mcpServers` —— 服务器名到服务器配置的映射
+- `disabledServers` —— 当前激活 profile 的用户级黑名单；无论源条目中的 `enabled` 值如何，它都会按名称隐藏一个已发现的服务器
+- `enabledServers` —— 当前激活 profile 的用户级白名单；它可以强制启用某个源声明为 `enabled: false` 的同名条目，但 `disabledServers` 仍然优先
 
-The config writer accepts names up to 100 characters containing letters, numbers, `_`, `-`, `.`, and `:`. The bundled schema currently omits `:` from its name pattern, so an OMP-managed namespaced plugin entry such as `cloudflare:cloudflare-api` may be valid at runtime while an editor reports a schema error.
+配置写入器接受的名称最长为 100 个字符，可包含字母、数字、`_`、`-`、`.` 和 `:`。内置的 schema 当前在其名称 pattern 中省略了 `:`，因此像 `cloudflare:cloudflare-api` 这样由 OMP 管理的带命名空间的插件条目在运行时可能有效，但编辑器会报告模式错误。
 
-## Supported server fields
+## 支持的服务器字段
 
-Shared fields for every transport:
+所有传输方式共有的字段：
 
-- `enabled?: boolean` — skip this server when `false`, unless the active-profile user `enabledServers` allowlist names it
-- `timeout?: number` — MCP request timeout in milliseconds; `0` disables client-side MCP timeouts
-- `requestIdFormat?: "number" | "string"` — outgoing JSON-RPC request-id encoding; defaults to per-transport integers. `"string"` uses collision-resistant snowflake IDs. This OMP-specific field is read only from OMP-native files, root `mcp.json` / `.mcp.json`, and OMP extension packages; configs translated from other tools ignore it.
-- `auth?: { ... }` — stored-credential metadata; managed credential injection is implemented for OAuth
-- `oauth?: { ... }` — explicit OAuth client and callback settings used during auth/reauth
+- `enabled?: boolean` —— 当值为 `false` 时跳过此服务器，除非当前激活 profile 的用户级 `enabledServers` 白名单中列出了它
+- `timeout?: number` —— MCP 请求的超时时间，单位为毫秒；`0` 表示禁用客户端侧的 MCP 超时
+- `requestIdFormat?: "number" | "string"` —— 发出 JSON-RPC 请求时 request id 的编码方式；默认按各传输使用整数。`"string"` 使用抗冲突的雪花 ID。该 OMP 特有字段仅从 OMP 原生文件、根目录的 `mcp.json` / `.mcp.json` 以及 OMP 扩展包中读取；从其他工具翻译过来的配置会忽略它
+- `auth?: { ... }` —— 已存储凭据的元数据；为 OAuth 实现了托管凭据注入
+- `oauth?: { ... }` —— 在 auth/reauth 过程中使用的显式 OAuth 客户端与回调设置
 
-`OMP_MCP_TIMEOUT_MS` has process-wide precedence over every per-server `timeout`. Set it to `0` to disable client-side timeouts, or to a positive millisecond value such as `120000`. If it is unset or invalid, OMP uses the server value and then the 30-second default; invalid values are logged and ignored.
+`OMP_MCP_TIMEOUT_MS` 在进程范围内对每个服务器的 `timeout` 都具有最高优先级。将其设为 `0` 可禁用客户端侧超时，或设为一个正的毫秒数（如 `120000`）。如果未设置或无效，OMP 会先使用服务器的值，再退回到 30 秒的默认值；无效值会被记录并忽略。
 
-### `stdio` transport
+### `stdio` 传输
 
-`stdio` is the default when `type` is omitted.
+当省略 `type` 时，默认就是 `stdio`。
 
-Required:
+必填项：
 
 - `command: string`
 
-Optional:
+可选项：
 
 - `type?: "stdio"`
 - `args?: string[]`
 - `env?: Record<string, string>`
 - `cwd?: string`
 
-Example:
+示例：
 
 ```json
 {
@@ -140,20 +140,20 @@ Example:
 }
 ```
 
-This follows the official Filesystem MCP server package (`@modelcontextprotocol/server-filesystem`).
+这与官方的 Filesystem MCP 服务器包（`@modelcontextprotocol/server-filesystem`）一致。
 
-### `http` transport
+### `http` 传输
 
-Required:
+必填项：
 
 - `type: "http"`
 - `url: string`
 
-Optional:
+可选项：
 
 - `headers?: Record<string, string>`
 
-Example:
+示例：
 
 ```json
 {
@@ -167,20 +167,20 @@ Example:
 }
 ```
 
-This matches GitHub's hosted GitHub MCP server endpoint.
+这与 GitHub 托管的 GitHub MCP 服务器端点一致。
 
-### `sse` transport
+### `sse` 传输
 
-Required:
+必填项：
 
 - `type: "sse"`
 - `url: string`
 
-Optional:
+可选项：
 
 - `headers?: Record<string, string>`
 
-Example:
+示例：
 
 ```json
 {
@@ -194,11 +194,11 @@ Example:
 }
 ```
 
-`sse` is still supported for compatibility, but the MCP spec now prefers Streamable HTTP (`type: "http"`) for new servers.
+为了兼容性仍支持 `sse`，但 MCP 规范现在为新服务器推荐使用 Streamable HTTP（`type: "http"`）。
 
-## Auth fields
+## 认证字段
 
-OMP understands two auth-related objects.
+OMP 理解两类与认证相关的对象。
 
 ### `auth`
 
@@ -213,31 +213,13 @@ OMP understands two auth-related objects.
 }
 ```
 
-For managed OAuth, `auth` tells OMP how to find and refresh a stored credential. Although `"apikey"` is an accepted `type`, it does not load or inject an API key from auth storage. Put API keys directly in stdio `env` or remote `headers` (prefer an environment-variable or `!command` indirection described below).
+对于托管的 OAuth，`auth` 告诉 OMP 如何查找并刷新已存储的凭据。虽然 `"apikey"` 是被接受的 `type`，但它不会从认证存储中加载或注入 API 密钥。请将 API 密钥直接放在 stdio 的 `env` 或远程的 `headers` 中（推荐使用下面介绍的环境变量或 `!command` 间接方式）。
 
-You normally do not need to write this block: when OMP completes an OAuth flow for an `http`/`sse` server, it stores the credential under a deterministic id derived from the active profile and server URL (`mcp_oauth:profile:<profile>:<url>`), with the refresh material embedded. Any
-config that points at the same URL — including a _definition-only_ entry in a
-shared project `mcp.json` with no `auth` block at all — resolves the active
-profile's own credential automatically, including when auth storage is backed by
-a shared auth broker. This is what makes project-scoped servers safe across
-profiles: commit the definition, and each profile authorizes (and stays signed
-in as) its own account via `/mcp reauth <name>`. An explicit `credentialId` is
-still honored when it resolves; if it points at another profile's row, OMP falls
-back to the profile-scoped url-keyed binding.
+通常你不需要编写这个块：当 OMP 为 `http`/`sse` 服务器完成 OAuth 流程时，它会使用一个由当前激活 profile 与服务器 URL 派生的确定性 id（`mcp_oauth:profile:<profile>:<url>`）来存储凭据，并将刷新材料一并嵌入。任何指向同一 URL 的配置——包括共享项目 `mcp.json` 中完全没有 `auth` 块的_仅定义_条目——都会自动解析到当前 profile 自己的凭据，即使认证存储由共享的认证代理托管也是如此。正是这一点让项目级服务器在跨 profile 时也是安全的：提交定义，每个 profile 通过 `/mcp reauth <name>` 自行授权（并保持登录自己的账户）。显式的 `credentialId` 在能够解析时仍会被遵循；如果它指向另一个 profile 的记录，OMP 会回退到按 profile 作用域以 URL 键控的绑定。
 
-`/mcp reauth` on a definition-only entry leaves the file untouched — the
-credential (refresh material included) lives entirely in the active profile's
-auth storage (local `agent.db` or broker), so a committed project config never
-picks up local auth state. An explicitly
-configured `Authorization` header always wins over the url-keyed binding.
+对一个仅含定义的条目执行 `/mcp reauth` 不会改动文件——凭据（包括刷新材料）完全存放在当前激活 profile 的认证存储中（本地 `agent.db` 或代理），因此已提交的项目配置永远不会带入本地认证状态。显式配置的 `Authorization` 头始终优先于按 URL 键控的绑定。
 
-The binding is per profile but not per project: once a profile has authorized
-a URL, _any_ checkout whose `mcp.json` defines a server at that URL connects
-with that profile's credential automatically. Committed MCP definitions are
-trusted input — the same already applies to `stdio` entries, which run
-arbitrary commands — so review a repository's `mcp.json` before opening it
-with a profile that holds credentials you care about, or use a dedicated
-profile for untrusted checkouts.
+该绑定是按 profile 划分的，而不是按项目划分的：一旦某个 profile 授权了某个 URL，_任何_在其 `mcp.json` 中为该 URL 定义了服务器的检出目录都会自动使用该 profile 的凭据连接。已提交的 MCP 定义是受信任的输入——这对 `stdio` 条目同样适用，因为它们会执行任意命令——因此在使用持有你关心的凭据的 profile 打开一个代码库之前，请先审查其 `mcp.json`，或对不受信任的检出使用一个专用的 profile。
 
 ### `oauth`
 
@@ -252,11 +234,11 @@ profile for untrusted checkouts.
 }
 ```
 
-Use `oauth` when the MCP server requires explicit OAuth client or callback settings. The callback listener defaults to port `3000` and path `/callback`; an HTTP loopback `redirectUri` supplies its own port/path unless explicitly overridden. An HTTPS loopback redirect requires a distinct `callbackPort` for the local HTTP listener behind your TLS terminator.
+当 MCP 服务器需要显式的 OAuth 客户端或回调设置时，请使用 `oauth`。回调监听器默认使用端口 `3000` 与路径 `/callback`；HTTP 环回 `redirectUri` 会自带端口/路径，除非被显式覆盖。HTTPS 环回重定向需要在你的 TLS 终止器后端为本地 HTTP 监听器指定一个不同的 `callbackPort`。
 
-`prompt` controls the OAuth `prompt` authorization parameter. By default OMP omits it, except that a requested `offline_access` scope defaults to `"consent"` so the provider can issue refresh access. Set it explicitly to a provider-supported value such as `"consent"` or `"select_account"`, or to `""` to force omission.
+`prompt` 控制 OAuth 的 `prompt` 授权参数。OMP 默认省略它，但有一个例外：当请求了 `offline_access` 作用域时，默认设为 `"consent"`，以便提供方能够签发刷新用的访问令牌。可将其显式设为提供方支持的值，如 `"consent"` 或 `"select_account"`，或设为 `""` 以强制省略。
 
-Example:
+示例：
 
 ```json
 {
@@ -280,15 +262,15 @@ Example:
 }
 ```
 
-Relevant Slack endpoints from Slack's docs:
+来自 Slack 文档的相关端点：
 
-- MCP endpoint: `https://mcp.slack.com/mcp`
-- Authorization endpoint: `https://slack.com/oauth/v2_user/authorize`
-- Token endpoint: `https://slack.com/api/oauth.v2.user.access`
+- MCP 端点：`https://mcp.slack.com/mcp`
+- 授权端点：`https://slack.com/oauth/v2_user/authorize`
+- 令牌端点：`https://slack.com/api/oauth.v2.user.access`
 
-## Common copy-paste examples
+## 常用复制粘贴示例
 
-### Filesystem server via stdio
+### 通过 stdio 接入 Filesystem 服务器
 
 ```json
 {
@@ -307,7 +289,7 @@ Relevant Slack endpoints from Slack's docs:
 }
 ```
 
-### GitHub hosted server via HTTP
+### 通过 HTTP 接入 GitHub 托管服务器
 
 ```json
 {
@@ -321,7 +303,7 @@ Relevant Slack endpoints from Slack's docs:
 }
 ```
 
-### GitHub local server via Docker
+### 通过 Docker 接入 GitHub 本地服务器
 
 ```json
 {
@@ -345,9 +327,9 @@ Relevant Slack endpoints from Slack's docs:
 }
 ```
 
-This matches GitHub's official local Docker image `ghcr.io/github/github-mcp-server`.
+这与 GitHub 官方的本地 Docker 镜像 `ghcr.io/github/github-mcp-server` 一致。
 
-### Slack hosted server via OAuth
+### 通过 OAuth 接入 Slack 托管服务器
 
 ```json
 {
@@ -371,15 +353,15 @@ This matches GitHub's official local Docker image `ghcr.io/github/github-mcp-ser
 }
 ```
 
-## Secrets and variable resolution
+## 密钥与变量解析
 
-This is the part that usually trips people up.
+这一部分通常最容易让人困惑。
 
-### Discovery-time `${...}` expansion
+### 发现阶段的 `${...}` 展开
 
-OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-native files and standalone fallback files. Expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`; unresolved placeholders remain literal strings.
+OMP 在从 OMP 原生文件和独立后备文件中发现 MCP 配置时，会展开 `${VAR}` 和 `${VAR:-default}` 占位符。该展开会递归作用于 `command`、`args`、`env`、`cwd`、`url`、`headers`、`auth`、`oauth` 中的字符串值；未解析的占位符会原样保留为字符串。
 
-Example:
+示例：
 
 ```json
 {
@@ -395,16 +377,16 @@ Example:
 }
 ```
 
-### Pre-connect env/header resolution
+### 连接前的 env/header 解析
 
-Before OMP launches a stdio server or makes an HTTP/SSE request, it resolves stdio `env` values and HTTP/SSE `headers` values like this:
+在 OMP 启动 stdio 服务器或发起 HTTP/SSE 请求之前，它会按以下方式解析 stdio 的 `env` 值与 HTTP/SSE 的 `headers` 值：
 
-1. If a value starts with `!`, OMP runs the rest as a shell command with a 10s timeout and uses trimmed stdout. Successful results are cached for the lifetime of the process.
-2. If the command fails, times out, or prints only whitespace, that `env`/`headers` entry is omitted.
-3. Otherwise OMP checks whether the whole value names an environment variable.
-4. If that environment variable is set to a non-empty value, OMP uses the environment value; otherwise it uses the string literally.
+1. 如果值以 `!` 开头，OMP 将其余部分作为 shell 命令运行，设置 10 秒超时，并使用去除首尾空白后的 stdout。成功的结果会在进程的生命周期内被缓存。
+2. 如果命令失败、超时或只输出空白，那么对应的 `env`/`headers` 条目会被省略。
+3. 否则 OMP 会检查整个值是否正好是一个环境变量的名称。
+4. 如果该环境变量已设置且值非空，OMP 使用该环境变量的值；否则按字符串字面使用。
 
-Examples:
+示例：
 
 ```json
 {
@@ -417,18 +399,18 @@ Examples:
 }
 ```
 
-That means this is valid and convenient for local secrets:
+这意味着以下写法对本地密钥是有效且方便的：
 
-- `"GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_PERSONAL_ACCESS_TOKEN"` → copy from the current shell environment
-- `"Authorization": "Bearer hardcoded-token"` → use the literal value
-- `"Authorization": "!printf 'Bearer %s' \"$GITHUB_TOKEN\""` → build the header from a command
+- `"GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_PERSONAL_ACCESS_TOKEN"` → 从当前 shell 环境中复制
+- `"Authorization": "Bearer hardcoded-token"` → 使用字面值
+- `"Authorization": "!printf 'Bearer %s' \"$GITHUB_TOKEN\""` → 通过命令构造该头
 
-## User-level enable and disable overrides
+## 用户级启用与禁用覆盖
 
-The active profile's user file supplies two cross-source overrides:
+当前激活 profile 的用户文件提供两项跨源的覆盖：
 
-- `disabledServers` is the highest-precedence denylist. It hides a same-named server from any source.
-- `enabledServers` force-enables a same-named entry whose source has `enabled: false`; it cannot override `disabledServers`.
+- `disabledServers` 是优先级最高的黑名单。它会按名称从任何源中隐藏同名服务器。
+- `enabledServers` 会强制启用某个源中标记为 `enabled: false` 的同名条目；它无法覆盖 `disabledServers`。
 
 ```json
 {
@@ -438,99 +420,99 @@ The active profile's user file supplies two cross-source overrides:
 }
 ```
 
-`/mcp enable` and `/mcp disable` update `enabled` directly when the definition is in an OMP-owned writable file. OMP does not mutate another tool's config: for such sources, those commands maintain the user-level allowlist or denylist instead and remove a conflicting stale override.
+当定义位于 OMP 拥有的可写文件中时，`/mcp enable` 和 `/mcp disable` 会直接更新 `enabled`。OMP 不会改写其他工具的配置：对于这些来源，这些命令会改为维护用户级的白名单或黑名单，并移除与之冲突的过时覆盖。
 
-## `/mcp add` vs editing JSON directly
+## `/mcp add` 与直接编辑 JSON
 
-Use `/mcp add` when you want guided setup.
+当你希望获得引导式配置时，请使用 `/mcp add`。
 
-Use direct JSON editing when:
+在以下情况下，直接编辑 JSON：
 
-- you need a transport or auth option the wizard does not prompt for yet
-- you want to paste a server definition from another MCP client
-- you want schema-backed validation in your editor
+- 你需要使用向导目前尚未提示的传输或认证选项
+- 你希望从另一个 MCP 客户端粘贴一份服务器定义
+- 你希望编辑器提供基于 schema 的校验
 
-After editing, use:
+编辑完成后，使用：
 
-- `/mcp reload` to rediscover and reconnect servers in the current session
-- `/mcp list` to see which config file a server came from
-- `/mcp test <name>` to test a single server
-- `/mcp reconnect <name>` to reconnect one server without rediscovering all configs
-- `/mcp reauth <name>` to replace managed OAuth credentials, or `/mcp unauth <name>` to remove them
-- `/mcp resources`, `/mcp prompts`, and `/mcp notifications` to inspect non-tool MCP capabilities
+- `/mcp reload` 在当前会话中重新发现并重连服务器
+- `/mcp list` 查看某个服务器来自哪个配置文件
+- `/mcp test <name>` 测试单个服务器
+- `/mcp reconnect <name>` 重新连接单个服务器而无需重新发现所有配置
+- `/mcp reauth <name>` 替换托管的 OAuth 凭据，或使用 `/mcp unauth <name>` 移除它们
+- `/mcp resources`、`/mcp prompts` 与 `/mcp notifications` 检查非工具类 MCP 能力
 
-## Validation rules OMP enforces
+## OMP 强制执行的校验规则
 
-From `validateServerConfig()` in `packages/coding-agent/src/mcp/config.ts`:
+来自 `packages/coding-agent/src/mcp/config.ts` 中的 `validateServerConfig()`：
 
-- `stdio` requires `command`
-- `http` and `sse` require `url`
-- a server cannot set both `command` and `url`
-- unknown `type` values are rejected
+- `stdio` 需要 `command`
+- `http` 与 `sse` 需要 `url`
+- 一台服务器不能同时设置 `command` 与 `url`
+- 未知 `type` 值会被拒绝
 
-Practical implications:
+实际影响：
 
-- Omitting `type` means `stdio`
-- If you paste a remote server config and forget `"type": "http"`, OMP will treat it as `stdio` and complain that `command` is missing
-- `sse` remains valid for compatibility, but new hosted servers should usually be configured as `http`
+- 省略 `type` 意味着 `stdio`
+- 如果你粘贴了一份远程服务器的配置却忘了写 `"type": "http"`，OMP 会按 `stdio` 处理并报 `command` 缺失
+- `sse` 仍因兼容性而有效，但新托管服务器通常应配置为 `http`
 
-## Discovery and precedence
+## 发现与优先级
 
-OMP loads providers in descending priority. The MCP-capable order is:
+OMP 按从高到低的优先级加载各提供方。支持 MCP 的顺序为：
 
-1. OMP native config
-2. OMP extension packages
+1. OMP 原生配置
+2. OMP 扩展包
 3. Claude Code
-4. Claude marketplace plugins and Codex
+4. Claude 市场上的插件与 Codex
 5. Gemini CLI
 6. OpenCode
-7. Cursor and Windsurf
+7. Cursor 与 Windsurf
 8. VS Code
-9. root `mcp.json` / `.mcp.json` fallback files
+9. 根目录的 `mcp.json` / `.mcp.json` 后备文件
 
-The first definition wins. Duplicate names are not merged. A differently named definition is also shadowed when its transport, endpoint/command inputs, auth, and request-id mode are equivalent to a higher-priority definition.
+第一个定义胜出。重复的名称不会合并。即使名称不同，只要其传输、端点/命令输入、认证和 request id 模式与更高优先级的定义等价，也会被屏蔽。
 
-Within OMP native config, project `.omp/mcp.json` precedes `.omp/.mcp.json`, then the active profile's user `mcp.json` and `.mcp.json`. Root fallback `mcp.json` precedes root `.mcp.json`. In practice:
+在 OMP 原生配置内部，项目级的 `.omp/mcp.json` 先于 `.omp/.mcp.json`，然后是当前激活 profile 的用户级 `mcp.json` 和 `.mcp.json`。根目录的后备 `mcp.json` 先于根目录的 `.mcp.json`。实际上：
 
-- prefer `.omp/mcp.json` or the active profile's user `mcp.json` for an OMP-specific override
-- keep names and endpoint definitions unique across tools when possible
-- use the user `disabledServers` list when a third-party config keeps reintroducing an unwanted server
-- set `mcp.enableProjectConfig: false` to exclude every project-level source before deduplication, allowing a same-named user entry to survive
+- 对于 OMP 特定的覆盖，优先使用 `.omp/mcp.json` 或当前激活 profile 的用户级 `mcp.json`
+- 尽量在各个工具之间保持名称和端点定义唯一
+- 当第三方配置反复引入不需要的服务器时，使用用户级 `disabledServers` 列表
+- 设置 `mcp.enableProjectConfig: false` 以在去重前排除所有项目级源，从而允许同名的用户级条目保留下来
 
-## Troubleshooting
+## 故障排查
 
 ### `Server "name": stdio server requires "command" field`
 
-You probably omitted `type: "http"` on a remote server.
+你很可能在远程服务器上漏掉了 `type: "http"`。
 
 ### `Server "name": both "command" and "url" are set`
 
-Pick one transport. OMP treats `command` as stdio and `url` as http/sse.
+二选一。OMP 将 `command` 视为 stdio，将 `url` 视为 http/sse。
 
-### `/mcp add` worked but the server still does not connect
+### `/mcp add` 成功了，但服务器仍然无法连接
 
-The JSON is valid, but the server may still be unreachable. Use `/mcp test <name>` and check whether:
+JSON 是有效的，但服务器可能仍然无法访问。请使用 `/mcp test <name>`，并检查以下情况：
 
-- the binary or Docker image exists
-- required environment variables are set
-- the remote URL is reachable
-- the OAuth or API token is valid
+- 二进制或 Docker 镜像是否存在
+- 所需的环境变量是否已设置
+- 远程 URL 是否可达
+- OAuth 或 API 令牌是否有效
 
-### The server exists in another tool's config but not in OMP
+### 服务器存在于另一个工具的配置中，但在 OMP 中不存在
 
-Run `/mcp list`. OMP discovers many third-party MCP files, but project-level loading can also be disabled via the `mcp.enableProjectConfig` setting, and a user-level `disabledServers` entry can suppress a server by name.
+运行 `/mcp list`。OMP 会发现许多第三方 MCP 文件，但项目级加载也可以通过 `mcp.enableProjectConfig` 设置禁用，而用户级 `disabledServers` 条目可以按名称压制某个服务器。
 
-### A namespaced server works but the editor rejects its name
+### 带命名空间的服务器可以工作，但编辑器拒绝其名称
 
-The runtime/config writer accepts `:` in names used by marketplace plugins. The bundled JSON schema's `propertyNames` pattern currently does not; this is a schema/runtime mismatch rather than a connection failure.
+运行时/配置写入器接受市场插件所用名称中的 `:`。内置 JSON schema 的 `propertyNames` pattern 当前不接受；这是 schema 与运行时之间的不匹配，而不是连接失败。
 
-### A config file is silently absent from the list
+### 某个配置文件被静默地排除在列表之外
 
-Malformed JSON or a missing/invalid server map makes that provider contribute no entries from the file; depending on the provider, OMP records a discovery warning or logs the parse failure rather than failing the session. Correct the JSON shape, then run `/mcp reload` and `/mcp list`.
+格式错误的 JSON 或缺失/无效的服务器映射会使该提供方无法从该文件提供任何条目；根据提供方的不同，OMP 会记录一条发现警告或记录解析失败，而不是使整个会话失败。请修正 JSON 结构，然后运行 `/mcp reload` 和 `/mcp list`。
 
-## References
+## 参考资料
 
-- MCP transport spec: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
-- Filesystem server package: https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem
-- GitHub MCP server: https://github.com/github/github-mcp-server
-- Slack MCP server docs: https://docs.slack.dev/ai/slack-mcp-server/
+- MCP 传输规范：https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
+- Filesystem 服务器包：https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem
+- GitHub MCP 服务器：https://github.com/github/github-mcp-server
+- Slack MCP 服务器文档：https://docs.slack.dev/ai/slack-mcp-server/

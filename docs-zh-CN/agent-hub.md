@@ -1,95 +1,95 @@
 # Agent Hub
 
-Agent Hub is the interactive TUI for watching and controlling subagents associated with the current session. It combines a live roster, per-agent activity and usage, transcript access, steering, revive, and kill controls. The main agent is not listed because its conversation is the ambient session view.
+Agent Hub 是用于查看和控制当前会话关联子代理的交互式 TUI。它集成了实时代理列表、各代理的活动与用量、转写记录访问、引导、恢复（revive）和终止（kill）控制。主代理不在列表中显示，因为它的对话就是当前会话视图。
 
-The Hub also discovers parked subagents from the current session's persisted artifacts when a session is resumed. Advisor transcript files appear as read-only rows.
+恢复会话时，Hub 还会从当前会话的持久化制品中发现已停放（parked）的子代理。顾问（Advisor）转写记录文件以只读行形式出现。
 
-## Open the Hub
+## 打开 Hub
 
-| Input          | Behavior                                                                                       |
+| 输入          | 行为                                                                                       |
 | -------------- | ---------------------------------------------------------------------------------------------- |
-| `Alt+A`        | Open or close Agent Hub through `app.agents.hub`. This opens the roster even when it is empty. |
-| `Ctrl+S`       | Open or close the same Hub through the legacy `app.session.observe` action.                    |
-| Double-tap `←` | Open the Hub from an empty main-session editor when the current session has an agent to show.  |
+| `Alt+A`        | 通过 `app.agents.hub` 打开或关闭 Agent Hub。即使代理列表为空，该操作也会打开列表视图。 |
+| `Ctrl+S`       | 通过旧的 `app.session.observe` 操作打开或关闭同一个 Hub。                    |
+| 双击 `←` | 在空的主会话编辑器中，当当前会话有待显示的代理时，打开 Hub。  |
 
-Run `/hotkeys` to see the active chords. Remap either action in `~/.omp/agent/keybindings.yml`:
+运行 `/hotkeys` 查看当前生效的快捷键。可在 `~/.omp/agent/keybindings.yml` 中重新映射任一操作：
 
 ```yaml
 app.agents.hub: Alt+A
 app.session.observe: Ctrl+S
 ```
 
-The double-`←` gesture is not a keybinding action. While focused on a subagent, double-`←` returns to the main session instead of opening the Hub.
+双击 `←` 手势不是键绑定操作。聚焦在子代理上时，双击 `←` 会返回主会话，而不是打开 Hub。
 
-## Roster and inspector
+## 代理列表与详情面板
 
-The roster updates from the session's agent registry and progress events. Its responsive rows show:
+代理列表根据会话的代理注册表和进度事件进行更新。其自适应行显示：
 
-- status (`running`, `idle`, `parked`, or `aborted`), agent identity, parent, and unread IRC count;
-- model role, resolved model, and age since last activity;
-- assigned task or current activity;
-- cost, active time or elapsed span, request count, tool-call count, and tokens.
+- 状态（`running`、`idle`、`parked` 或 `aborted`）、代理身份、父级以及未读 IRC 数；
+- 模型角色、已解析的模型，以及自最近一次活动以来的时长；
+- 已分配的任务或当前活动；
+- 成本、活跃时间或已用时长、请求数、工具调用数以及 token 数。
 
-The header aggregates status and usage across measured agents. Press `t` to switch between the stable flat roster and a parent/child tree.
+页眉汇总所有已计量代理的状态和用量。按 `t` 可在稳定的扁平列表与父子树视图之间切换。
 
-On a wide terminal, the selected agent's inspector appears beside the roster. On a narrow terminal, press `Tab` to replace the roster with it. The inspector adds:
+在宽屏终端上，所选代理的详情面板显示在列表旁。在窄屏终端上，按 `Tab` 用详情面板替换列表视图。详情面板补充显示：
 
-- the current tool and arguments, last intent, and retry state;
-- context-window use when available;
-- parent and child lineage;
-- output and patch paths, plus isolated-worktree branch metadata when present.
+- 当前工具及其参数、上一次意图（intent），以及重试状态；
+- 可用时的上下文窗口使用情况；
+- 父级与子级谱系；
+- 输出与补丁路径，以及存在时的隔离工作树（isolated worktree）分支元数据。
 
-Metrics depend on the progress or persisted usage data available for that agent. Missing data appears as `usage —` rather than an estimate.
+指标取决于该代理可用的进度数据或持久化用量数据。缺失的数据显示为 `usage —`，而不是估算值。
 
-### Roster controls
+### 代理列表控制
 
-| Key or input                | Action                                                                       |
+| 按键或输入                | 操作                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `j` / `k`, `↑` / `↓`, wheel | Select an agent.                                                             |
-| `Enter` or click            | Open the selected agent.                                                     |
-| `t`                         | Toggle flat and parent/child views.                                          |
-| `Tab`                       | Toggle the inspector on narrow terminals.                                    |
-| `PageUp` / `PageDown`       | Scroll an open inspector.                                                    |
-| `r`                         | Revive the selected parked agent.                                            |
-| `x`                         | Abort a running turn if necessary, then kill and release the selected agent. |
-| `Esc`                       | Close the inspector first on narrow terminals, then close the Hub.           |
+| `j` / `k`、`↑` / `↓`、滚轮 | 选择一个代理。                                                             |
+| `Enter` 或点击            | 打开所选代理。                                                     |
+| `t`                         | 切换扁平视图与父子视图。                                          |
+| `Tab`                       | 在窄屏终端上切换详情面板。                                    |
+| `PageUp` / `PageDown`       | 滚动打开的详情面板。                                                    |
+| `r`                         | 恢复所选的已停放代理。                                            |
+| `x`                         | 必要时中止正在运行的回合，然后终止并释放所选代理。 |
+| `Esc`                       | 在窄屏终端上先关闭详情面板，然后关闭 Hub。           |
 
-Only `parked` agents can be revived. `x` is immediate; use it only when you intend to discard that agent instance.
+只有 `parked` 状态的代理可以恢复。`x` 是立即生效的操作；仅在确实打算丢弃该代理实例时使用。
 
-## Read and steer a subagent
+## 读取与引导子代理
 
-For a normal local subagent, `Enter` or click focuses the main TUI on that agent's session and closes the Hub. Focusing a parked agent revives it. The transcript, status line, and editor then belong to that subagent:
+对于普通的本地子代理，`Enter` 或点击会将主 TUI 聚焦到该代理的会话，并关闭 Hub。聚焦一个已停放的代理会将其恢复。转写记录、状态行和编辑器随即归属该子代理：
 
-1. Read its live transcript and tool activity.
-2. Type a message and press `Enter` to steer a running turn or prompt an idle agent.
-3. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
+1. 读取其实时转写记录和工具活动。
+2. 输入消息并按 `Enter`，引导正在运行的回合或向空闲代理发送提示。
+3. 在编辑器为空时按 `Esc`，或双击 `←`，可返回主会话。
 
-Steering uses the normal prompt path, so the message and response are written to the subagent's persisted session history. While a subagent is focused, `Esc` returns to the main session; it does not interrupt the subagent.
+引导使用普通的提示路径，因此消息和响应都会写入该子代理的持久化会话历史。聚焦子代理时，`Esc` 会返回主会话，并不会中断该子代理。
 
-Contexts without a local focusable session use the Hub's full-screen transcript viewer instead. This includes collab guests and advisor rows. The viewer incrementally tails the file-backed transcript and provides an input line only when the selected agent can be messaged. Sending there has the same semantics: revive if parked, steer if running, and prompt if idle.
+没有本地可聚焦会话的上下文会改用 Hub 的全屏转写查看器。这包括协作（collab）访客和顾问行。该查看器以增量方式追踪基于文件的转写记录，并且仅在所选代理可被发送消息时提供输入行。在那里发送具有相同的语义：parked 则恢复、running 则引导、idle 则提示。
 
-## Persisted agents and advisors
+## 持久化代理与顾问
 
-Opening the Hub for a persisted session scans that session's artifact tree. Historical subagent JSONL files become parked rows; a killed agent's tombstone keeps it aborted. Nested subagents retain their parent/child lineage. Output and patch artifacts are attached to the corresponding inspector row.
+为已持久化的会话打开 Hub 时，会扫描该会话的制品树。历史子代理的 JSONL 文件变为 parked 行；被终止代理的墓碑（tombstone）会保留其 aborted 状态。嵌套的子代理保留其父子谱系。输出与补丁制品会附加到对应的详情面板行。
 
-Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows under their owning session. They are observability records, not peers:
+顾问转写记录文件（`__advisor*.jsonl`）在其所属会话下以 `advisor` 类型的行出现。它们是可观测性记录，而非同级代理：
 
-- their transcripts can be opened and followed;
-- they cannot be messaged;
-- they cannot be revived;
-- they cannot be killed.
+- 它们的转写记录可以打开并跟踪；
+- 不能向其发送消息；
+- 不能恢复；
+- 不能终止。
 
-These restrictions also apply to collab guests controlling the host's Hub.
+这些限制同样适用于控制宿主 Hub 的协作（collab）访客。
 
-## Related surfaces
+## 相关界面
 
-Agent Hub is the human-facing live session view. Adjacent commands and internal URLs serve narrower purposes:
+Agent Hub 是面向用户、用于查看实时会话的界面。相邻的命令和内部 URL 用于更狭义的用途：
 
-- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view.
-- `history://<id>` gives the coding agent a concise transcript for a live or parked subagent.
-- `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript.
-- `hub` `list` exposes the peer roster to the coding agent, and `hub` `send` steers or follows up with a normal subagent programmatically. Messaging a parked subagent revives it.
+- `/jobs` 打印运行中以及最近结束的异步工具作业的快照。它不取代针对单个代理的转写记录或控制视图。
+- `history://<id>` 为编码代理提供某个运行中或已停放子代理的简要转写记录。
+- `agent://<id>` 解析某个子代理保存的最终输出制品；它不是实时转写记录。
+- `hub` `list` 向编码代理暴露同级代理列表，`hub` `send` 以编程方式引导普通子代理或与其跟进。向已停放的子代理发送消息会将其恢复。
 
-Advisor rows are intentionally excluded from the agent-facing `hub`, `history://`, and `agent://` peer workflows.
+顾问行被刻意排除在面向代理的 `hub`、`history://` 和 `agent://` 同级工作流之外。
 
-See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).
+另请参阅 [Task Agent Discovery and Selection](./task-agent-discovery.md)、[Collaboration](./collab.md) 以及 [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md)。

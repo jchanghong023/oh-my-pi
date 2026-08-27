@@ -4,7 +4,7 @@ Providers are the model backends `omp` can route requests to: Anthropic, OpenAI,
 
 A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
 
-This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
+This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./lo…
 
 ## How `omp` decides a provider is available
 
@@ -24,7 +24,7 @@ The registry can hold a model even when it is not currently selectable. A model 
 
 Keyless local engines are a special case: `ollama`, `llama.cpp`, and `lm-studio` are treated as keyless when no key is configured, so their discovered models are selectable as soon as the engine answers — no login required. See [Built-in local engines](#built-in-local-engines).
 
-## Credentials and precedence
+## 凭据与优先级
 
 When a provider needs an API key, `omp` resolves it in this order (first match wins):
 
@@ -38,7 +38,7 @@ When a provider needs an API key, `omp` resolves it in this order (first match w
 
 Stored credentials live in the auth store at `~/.omp/agent/agent.db` for local auth, or in the configured auth-broker snapshot when running in broker mode. (`PI_CODING_AGENT_DIR` relocates the `~/.omp/agent` base, and the auth store moves with it.)
 
-### OAuth vs API key, and provider-scoped logins
+### OAuth 与 API key，以及 provider-scoped 登录
 
 Logins are **provider-scoped**: authenticating `anthropic` does not authenticate `openai`, and each provider tracks its own credentials. A disabled provider stays disabled even with valid stored auth.
 
@@ -51,7 +51,7 @@ For headless or remote setups backed by a shared auth broker, the CLI exposes `o
 
 When a model has no credentials, `omp` tells you to run `/login` or set the provider's environment variable.
 
-### Pinning a key in `models.yml`
+### 在 `models.yml` 中固定一个 key
 
 A custom provider's `apiKey` is resolved as **environment-variable-name-or-literal**: if the value names an existing environment variable, that variable's value is used; otherwise the string itself is the key. Prefixing the value with `!` runs it as a shell command and uses the trimmed stdout (see [Model and Provider Configuration](./models.md) for the full value syntax).
 
@@ -71,11 +71,11 @@ providers:
 
 If `authHeader: true` is set on a custom provider, the resolved key is injected as an `Authorization: Bearer <key>` header on every request to that provider.
 
-## Environment variables and `.env` files
+## 环境变量与 `.env` 文件
 
 Each provider has one or more environment variables that supply a key when no stored credential exists. The table below is the verified provider → variable map; the full catalog is large, so it is split into core and additional providers. OAuth-backed providers can also accept a token variable in addition to (or instead of) an API key.
 
-### Core providers
+### 核心 provider
 
 | Provider ID      | Environment variable(s)                                                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -94,7 +94,7 @@ Each provider has one or more environment variables that supply a key when no st
 | `azure`          | `AZURE_OPENAI_API_KEY`                                                                                                                           |
 | `amazon-bedrock` | `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or an ECS/IRSA credential chain                                                 |
 
-### Additional hosted providers
+### 其他托管 provider
 
 | Provider ID                      | Environment variable(s)                                                       |
 | -------------------------------- | ----------------------------------------------------------------------------- |
@@ -153,7 +153,7 @@ Each provider has one or more environment variables that supply a key when no st
 
 OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. See [Environment variables](./environment-variables.md) for search-tool and configuration variables not listed here.
 
-### `.env` discovery and precedence
+### `.env` 发现与优先级
 
 `omp` eagerly loads `.env` files into the process environment before any provider lookup. It reads four files and, for each variable, the **first** source that defines it wins. Effective precedence, high to low:
 
@@ -181,7 +181,7 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 - values containing a NUL byte are dropped;
 - an `OMP_`-prefixed key is also mirrored to the matching `PI_`-prefixed name.
 
-## Built-in local engines
+## 内置本地引擎
 
 Three local engines are discovered automatically without needing a `models.yml` entry. Each uses a base URL that can be overridden by an environment variable:
 
@@ -198,7 +198,7 @@ These implicit engines are **skipped** when:
 
 For installing and running these engines, see [Local models](./local-models.md).
 
-## Disabling model providers
+## 禁用模型 provider
 
 Use the `disabledProviders` setting to remove a provider's models from selection:
 
@@ -223,7 +223,7 @@ Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API
 
 Disabling a provider does not delete its stored credentials — re-enable it by removing its ID from the effective list.
 
-## Project-specific provider control
+## 项目级别的 provider 控制
 
 Project settings live in `<project>/.omp/config.yml`. Use them when one repository must allow or hide a different provider set than your global default:
 
@@ -256,7 +256,7 @@ Effective result inside the project:
 
 The project array re-enables `anthropic`, `openai`, and `google` for sessions launched from that project. If you want a project to _add_ to the global set, repeat the global IDs in the project file. See [Settings](./settings.md) for the full precedence chain, including `--config` overlays and runtime overrides.
 
-## Path-scoped `disabledProviders`
+## 路径作用域的 `disabledProviders`
 
 `disabledProviders` can mix plain string entries (apply everywhere) with path-scoped entries (apply only when the current working directory matches a configured path):
 
@@ -287,7 +287,7 @@ For the example above:
 
 Path scopes are resolved **after** the settings merge. Because a higher-precedence layer replaces the whole array, a project-level `disabledProviders` array drops any scoped entries that only existed in the global array. `enabledModels` is the only other setting that supports the same path-scoped form. See [Settings](./settings.md) for details.
 
-## Provider IDs vs discovery provider IDs
+## Provider ID 与 discovery provider ID
 
 `disabledProviders` uses a **single shared ID namespace** that gates two different subsystems:
 
@@ -301,7 +301,7 @@ Path scopes are resolved **after** the settings merge. Because a higher-preceden
 
 Watch the related names. The Google Gemini **API** models use the model provider ID `google`; `gemini` is a **discovery** provider ID (the source that reads `GEMINI.md`), not the Google model provider. Use discovery IDs only when you intend to disable an entire config source. See [Context files](./context-files.md) for the discovery-provider side.
 
-## Custom providers in `models.yml`
+## `models.yml` 中的自定义 provider
 
 Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
 
@@ -358,7 +358,7 @@ disabledProviders:
   - team-proxy
 ```
 
-## Troubleshooting
+## 故障排查
 
 **A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). Keyless local engines only appear once the engine is actually running and responding.
 
@@ -368,4 +368,4 @@ disabledProviders:
 
 **A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
 
-**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-in discovery for that ID. See [Model and Provider Configuration](./models.md).
+**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-…

@@ -1,49 +1,49 @@
-# Qwen3 tool-calling format (Hermes convention)
+# Qwen3 工具调用格式（Hermes 约定）
 
-Tool-calling convention of Alibaba's **Qwen3** family (`Qwen/Qwen3-*`: dense `0.6B–32B` and MoE `30B-A3B`/`235B-A22B`; same template line as `Qwen2.5-*` and `QwQ-32B`). It is the **Hermes** convention — the XML+JSON format originated by NousResearch's Hermes 2 Pro and adopted verbatim by Qwen, plus a long tail of community fine-tunes. The envelope is **ChatML**: every turn is `<|im_start|>{role}\n{body}<|im_end|>\n`. Available tools are advertised in the system turn inside a `<tools>…</tools>` block (one JSON spec per line); the model emits each call as a `<tool_call>\n{json}\n</tool_call>` block whose `arguments` is a **nested JSON object** (not a stringified JSON); tool results are fed back inside `<tool_response>…</tool_response>`. Hybrid reasoning is carried in `<think>…</think>`. The format ships in the model's own `chat_template`, so an inference server enables it with no extra template: vLLM uses `--enable-auto-tool-choice --tool-call-parser hermes` (pair with `--reasoning-parser deepseek_r1` for the thinking split); SGLang exposes the matching parsers (e.g. `--reasoning-parser qwen3`).
+Alibaba **Qwen3** 系列的工具调用约定（`Qwen/Qwen3-*`：稠密 `0.6B–32B` 以及 MoE `30B-A3B`/`235B-A22B`；与 `Qwen2.5-*` 和 `QwQ-32B` 同一模板路线）。它采用 **Hermes** 约定——由 NousResearch 的 Hermes 2 Pro 首创、被 Qwen 原样采用，并被大量社区微调沿用的 XML+JSON 格式。整体外壳是 **ChatML**：每个回合都是 `<|im_start|>{role}\n{body}<|im_end|>\n`。可用工具在 system 回合的 `<tools>…</tools>` 块内声明（每行一个 JSON spec）；模型将每次调用以 `<tool_call>\n{json}\n</tool_call>` 块的形式发出，其中 `arguments` 是**嵌套的 JSON 对象**（而非字符串化 JSON）；工具结果以 `<tool_response>…</tool_response>` 反馈回来。混合推理…
 
-Verified against: Qwen's canonical function-calling guide (`qwen.readthedocs.io/en/latest/framework/function_call.html`, read in full incl. the Qwen-Agent + vLLM sections), the byte-exact `chat_template` field of `Qwen/Qwen3-8B`'s `tokenizer_config.json` (HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218`, rendered locally with Jinja2 for the raw streams below) and its `added_tokens_decoder` for token IDs, the NousResearch `Hermes-Function-Calling` README, and the vLLM tool-calling docs (`hermes` parser + Qwen models section).
+核验来源：Qwen 官方的 function-calling 指南（`qwen.readthedocs.io/en/latest/framework/function_call.html`，全文阅读含 Qwen-Agent 与 vLLM 章节）、`Qwen/Qwen3-8B` 的 `tokenizer_config.json` 中字节级精确的 `chat_template` 字段（HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218`，本地用 Jinja2 渲染得到下方原始流）以及 `added_tokens_decoder` 中的 token ID、NousResearch 的 `Hermes-Function-Calling` README，以及 vLLM 工具调用文档（`hermes` 解析器与 Qwen 模型章节）。
 
-## Special tokens
+## 特殊 token
 
-Only the three ChatML markers are "special" control tokens (`special=true`, skipped by `skip_special_tokens`). The reasoning and tool markers are also single vocabulary tokens (one ID each) but are registered with `special=false`, i.e. they render as ordinary text and are **not** stripped by `skip_special_tokens`. The `<tools>`/`</tools>` wrapper has **no** dedicated token at all — it is plain text that BPE-splits into several tokens. IDs are from `Qwen/Qwen3-8B` `added_tokens_decoder`.
+只有三个 ChatML 标记属于"特殊"控制 token（`special=true`，会被 `skip_special_tokens` 跳过）。推理与工具标记虽然也是单一词表 token（每个各占一个 ID），但注册为 `special=false`，即按普通文本渲染，**不会**被 `skip_special_tokens` 剥离。`<tools>`/`</tools>` 包装层**完全不存在**专用 token——它是普通文本，会被 BPE 拆分为若干 token。ID 取自 `Qwen/Qwen3-8B` 的 `added_tokens_decoder`。
 
-| Token (verbatim) | ID | `special` | Purpose |
+| Token（逐字） | ID | `special` | 用途 |
 |---|---|---|---|
-| `<\|im_start\|>` | 151644 | true | Start of a turn; followed immediately by the role name + `\n` |
-| `<\|im_end\|>` | 151645 | true | End of a turn; the chat stop token |
-| `<\|endoftext\|>` | 151643 | true | Base EOS / pad token |
-| `<think>` | 151667 | false | Opens the reasoning block |
-| `</think>` | 151668 | false | Closes the reasoning block |
-| `<tool_call>` | 151657 | false | Opens one tool call |
-| `</tool_call>` | 151658 | false | Closes one tool call |
-| `<tool_response>` | 151665 | false | Opens one tool result |
-| `</tool_response>` | 151666 | false | Closes one tool result |
-| `<tools>` … `</tools>` | — | — | Plain text wrapper around the tool list in the system turn (not a single token) |
+| `<\|im_start\|>` | 151644 | true | 回合起始；后接 role 名称 + `\n` |
+| `<\|im_end\|>` | 151645 | true | 回合结束；即 chat 停止 token |
+| `<\|endoftext\|>` | 151643 | true | 基础 EOS / pad token |
+| `<think>` | 151667 | false | 开启推理块 |
+| `</think>` | 151668 | false | 关闭推理块 |
+| `<tool_call>` | 151657 | false | 开启一次工具调用 |
+| `</tool_call>` | 151658 | false | 关闭一次工具调用 |
+| `<tool_response>` | 151665 | false | 开启一条工具结果 |
+| `</tool_response>` | 151666 | false | 关闭一条工具结果 |
+| `<tools>` … `</tools>` | — | — | system 回合中工具列表的纯文本包装（并非单一 token） |
 
-Notes on exactness:
-- All markers use the ASCII pipe `|` (U+007C) and ASCII angle brackets. Qwen3 has **no** fullwidth (`｜` U+FF5C) or `▁` (U+2581) variants — that is DeepSeek/SentencePiece territory, not Qwen.
-- `<|im_start|>` and `<|im_end|>` are the only tokens that matter for splitting turns. Because `<tool_call>`, `</tool_call>`, `<tool_response>`, `<think>`, `</think>` are `special=false`, they survive a `skip_special_tokens=True` decode, which is exactly why the regex-based `hermes` parser can recover them from decoded text.
-- The model card confirms `</think>` = token `151668` (used by the reference parsing snippet `output_ids[::-1].index(151668)`).
+关于精确性的说明：
+- 所有标记使用 ASCII 管道符 `|`（U+007C）与 ASCII 尖括号。Qwen3 **没有**全角（`｜` U+FF5C）或 `▁`（U+2581）变体——那是 DeepSeek/SentencePiece 体系的范畴，与 Qwen 无关。
+- `<|im_start|>` 与 `<|im_end|>` 是回合切分中真正起作用的两个 token。由于 `<tool_call>`、`</tool_call>`、`<tool_response>`、`<think>`、`</think>` 是 `special=false`，它们在 `skip_special_tokens=True` 解码后会保留下来，这正是基于正则的 `hermes` 解析器能从解码文本中恢复它们的原因。
+- 模型卡确认 `</think>` = token `151668`（被参考解析片段 `output_ids[::-1].index(151668)` 使用）。
 
-## Roles / channels / turn structure
+## Role / 通道 / 回合结构
 
-ChatML. Each message renders as:
+ChatML。每条消息渲染为：
 
 ```text
 <|im_start|>{role}
-{body}<|im_end|>
+:{body}<|im_end|>
 ```
 
-- Roles: `system`, `user`, `assistant`, `tool`. There is no separate "channel" concept; the only sub-stream is the `<think>` reasoning block inside an assistant turn.
-- `<|im_end|>\n` terminates every turn. With `add_generation_prompt=True` the prompt ends with `<|im_start|>assistant\n` and the model continues from there.
-- **System turn:** if the caller supplies a `system` message it becomes the first turn. When `tools` are present, the tool advertisement is merged **into** that same system turn (the user's system text first, then `\n\n`, then the `# Tools` block — see below). Qwen3 injects no default system prompt when none is given.
-- **Tool-result turns use the `user` envelope.** Qwen3's template maps every `role: "tool"` message into a `<|im_start|>user` turn carrying `<tool_response>` blocks (consecutive tool messages are coalesced into one user turn). This differs from classic Hermes 2 Pro, which used a dedicated `<|im_start|>tool` turn for results — Qwen folds them into `user`.
-- **Thinking/reasoning:** carried in `<think>…</think>` at the start of an assistant turn (see the Parsing notes for the toggle and the history-rerender rule).
+- Role：`system`、`user`、`assistant`、`tool`。不存在独立的"通道"概念；唯一的子流是 assistant 回合内的 `<think>` 推理块。
+- 每个回合以 `<|im_end|>\n` 结束。设置 `add_generation_prompt=True` 时，prompt 以 `<|im_start|>assistant\n` 结尾，模型从该处继续生成。
+- **system 回合：** 若调用方提供 `system` 消息，它会成为第一个回合。当存在 `tools` 时，工具声明会**合并到**同一个 system 回合中（先放用户传入的系统文本，再 `\n\n`，再放 `# Tools` 块——见下文）。Qwen3 在未提供时不注入默认系统提示。
+- **工具结果回合使用 `user` 外壳。** Qwen3 模板把每条 `role: "tool"` 消息映射为一个 `<|im_start|>user` 回合，承载 `<tool_response>` 块（连续的 tool 消息会合并到同一个 user 回合）。这与经典 Hermes 2 Pro 不同——后者使用专门的 `<|im_start|>tool` 回合承载结果；Qwen 将其折入 `user`。
+- **思考/推理：** 通过 assistant 回合开头的 `<think>…</think>` 承载（切换开关与历史重渲染规则见 Parsing notes）。
 
-## Tool definitions
+## 工具定义
 
-Tools are advertised inside the system turn. The template emits a fixed preamble, then each tool object serialized with `tool | tojson` (`json.dumps(..., ensure_ascii=False)`) on **its own line**, then a fixed trailer. Each list element is the full OpenAI tool object `{"type": "function", "function": {...}}` (with a JSON-Schema `parameters` object). The exact, verbatim wrapper Qwen3 produces:
+工具在 system 回合内声明。模板先输出固定的前导文本，然后对每个工具对象用 `tool | tojson`（`json.dumps(..., ensure_ascii=False)`）逐行序列化，最后输出固定的后缀。每个列表元素是完整的 OpenAI 工具对象 `{"type": "function", "function": {...}}`（其中 `parameters` 是一个 JSON-Schema 对象）。Qwen3 实际产出的、逐字精确的包装层如下：
 
 ```text
 <|im_start|>system
@@ -65,13 +65,13 @@ For each function call, return a json object with function name and arguments wi
 </tool_call><|im_end|>
 ```
 
-- If the first message is a `system` message, its content is placed before `# Tools` (separated by a blank line); otherwise the turn opens straight into `# Tools`.
-- The trailing instruction is a literal part of the prompt, including the placeholder line `{"name": <function-name>, "arguments": <args-json-object>}` (those angle-bracket tokens are instructions, not emitted output).
-- Version note: the original Hermes 2 Pro system prompt additionally embedded a `FunctionCall` pydantic schema line (`{"title": "FunctionCall", "type": "object", "properties": {"name": …, "arguments": …}}`). Qwen3 dropped that line; the wrapper above is exactly what Qwen3 emits.
+- 如果首条消息是 `system`，其内容会放在 `# Tools` 之前（以空行分隔）；否则回合直接以 `# Tools` 开头。
+- 末尾的指令是 prompt 的一部分字面内容，包括占位行 `{"name": <function-name>, "arguments": <args-json-object>}`（这些尖括号 token 是指令，不是模型实际输出）。
+- 版本说明：原版 Hermes 2 Pro 的系统提示额外内嵌了一行 `FunctionCall` pydantic schema（`{"title": "FunctionCall", "type": "object", "properties": {"name": …, "arguments": …}}`）。Qwen3 移除了该行；上面的包装层就是 Qwen3 实际产出的内容。
 
-## Tool-call format
+## 工具调用格式
 
-The model emits each call as a `<tool_call>` line, a single-line JSON object, then `</tool_call>`. Minimal single call:
+模型每次调用以一行 `<tool_call>`、一个单行 JSON 对象、然后 `</tool_call>` 的形式发出。最小单次调用：
 
 ```text
 <tool_call>
@@ -79,13 +79,13 @@ The model emits each call as a `<tool_call>` line, a single-line JSON object, th
 </tool_call>
 ```
 
-- `arguments` is a **nested JSON object**, not a JSON-encoded string. On the wire it is `"arguments": {"location": "..."}` — never `"arguments": "{\"location\": ...}"`. (The template renders a dict argument via `tojson`; only if a caller stored `arguments` as a pre-serialized string does it pass through verbatim.)
-- The call object has exactly two keys, `name` (string) and `arguments` (object). There is no per-call ID on the wire — the OpenAI-style `tool_call_id` is minted by the server, not the model (see API mapping).
-- A tool-calling assistant turn may also contain natural-language `content` before the first `<tool_call>`; the template inserts a `\n` between that content and the first call.
+- `arguments` 是**嵌套的 JSON 对象**，不是 JSON 编码字符串。在线协议上是 `"arguments": {"location": "..."}`，**绝不**是 `"arguments": "{\"location\": ...}"`。（模板通过 `tojson` 渲染 dict 形式的参数；只有当调用方把 `arguments` 存为预序列化字符串时，它才会原样透传。）
+- 调用对象恰好有两个键，`name`（字符串）与 `arguments`（对象）。线协议上不存在 per-call ID——OpenAI 风格的 `tool_call_id` 由服务端生成，而非模型生成（见 API 映射）。
+- 工具调用的 assistant 回合也可以在首个 `<tool_call>` 之前包含自然语言 `content`；模板会在该 content 与首个调用之间插入一个 `\n`。
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
-Parallel calls are emitted as consecutive `<tool_call>…</tool_call>` blocks within a single assistant turn, each separated by a newline:
+并行调用以同一 assistant 回合内连续的 `<tool_call>…</tool_call>` 块形式发出，相邻块之间以换行分隔：
 
 ```text
 <|im_start|>assistant
@@ -97,11 +97,11 @@ Parallel calls are emitted as consecutive `<tool_call>…</tool_call>` blocks wi
 </tool_call><|im_end|>
 ```
 
-The parser returns these as `tool_calls[0]`, `tool_calls[1]`, … in emission order. The application must execute them and return one `<tool_response>` per call, in the same order.
+解析器按发射顺序返回 `tool_calls[0]`、`tool_calls[1]`，……应用必须执行它们并按相同顺序返回每个调用对应的 `<tool_response>`。
 
-## Tool-result format
+## 工具结果格式
 
-Each executed result is wrapped in `<tool_response>…</tool_response>`. Qwen3 places them inside a **`user`** turn, and **coalesces** consecutive tool results into one turn (one `<tool_response>` block per result, newline-separated, a single closing `<|im_end|>`):
+每条已执行结果被包裹在 `<tool_response>…</tool_response>` 中。Qwen3 将它们放在 **`user`** 回合内，并**合并**连续的工具结果为同一个回合（每个结果一个 `<tool_response>` 块，换行分隔，共用一个收尾 `<|im_end|>`）：
 
 ```text
 <|im_start|>user
@@ -113,12 +113,12 @@ Each executed result is wrapped in `<tool_response>…</tool_response>`. Qwen3 p
 </tool_response><|im_end|>
 ```
 
-- The body between the tags is the tool's return value (typically a JSON string, but any text is allowed). The function name is **not** repeated inside Qwen3's `<tool_response>` — ordering ties results to calls. (Classic Hermes 2 Pro instead nested `{"name": ..., "content": ...}` inside `<tool_response>` under a `tool` turn; Qwen3's template emits the bare content under a `user` turn.)
-- At the OpenAI API layer a result message is `{"role": "tool", "content": "...", "tool_call_id": "..."}`; the template renders only its `content` into a `<tool_response>` block.
+- 标签之间的内容体是工具返回值（通常是 JSON 字符串，但也允许任意文本）。函数名**不会**在 Qwen3 的 `<tool_response>` 内重复——通过顺序将结果与调用绑定。（经典 Hermes 2 Pro 则在 `tool` 回合下的 `<tool_response>` 内嵌套 `{"name": ..., "content": ...}`；Qwen3 的模板在 `user` 回合下输出纯 content。）
+- 在 OpenAI API 层面，一条结果消息是 `{"role": "tool", "content": "...", "tool_call_id": "..."}`；模板仅将其 `content` 渲染进 `<tool_response>` 块。
 
-## End-to-end example
+## 端到端示例
 
-Complete multi-turn weather exchange in **non-thinking mode** (`enable_thinking=False`), exactly as `apply_chat_template` renders it for the live flow. With thinking disabled, each generation step injects an empty `<think>\n\n</think>\n\n` after `<|im_start|>assistant\n`; the model then emits its tool call / final answer. Copy-pasteable, byte-exact:
+**非思考模式**（`enable_thinking=False`）下的完整多回合天气交互流程，与 `apply_chat_template` 对实时流程渲染出的内容完全一致。关闭思考时，每个生成步骤会在 `<|im_start|>assistant\n` 之后注入一个空的 `<think>\n\n</think>\n\n`；然后模型再发出工具调用 / 最终回答。可直接复制粘贴、字节级精确：
 
 ```text
 <|im_start|>system
@@ -159,23 +159,23 @@ What's the temperature in San Francisco now?<|im_end|>
 The current temperature in San Francisco is 26.1°C.<|im_end|>
 ```
 
-In **thinking mode** (`enable_thinking=True`, the default) the generation prompt instead ends with a bare `<|im_start|>assistant\n` and the model itself produces the `<think>…real reasoning…</think>` block before the `<tool_call>`. (When re-rendering stored history, the template keeps the `<think>` block only for the last assistant message or messages that carry `reasoning_content`, and strips reasoning from earlier turns — see Parsing notes.)
+在**思考模式**（`enable_thinking=True`，默认）下，生成 prompt 改为以裸的 `<|im_start|>assistant\n` 结尾，模型自行在 `<tool_call>` 之前生成 `<think>…真实推理…</think>` 块。（重渲染已存储历史时，模板仅对最后一条 assistant 消息或带有 `reasoning_content` 的消息保留 `<think>` 块，并剥离更早回合的推理——见 Parsing notes。）
 
-## OpenAI-compatible API mapping
+## OpenAI 兼容 API 映射
 
-With `--enable-auto-tool-choice --tool-call-parser hermes`, vLLM converts the raw stream into a standard Chat Completions response:
+使用 `--enable-auto-tool-choice --tool-call-parser hermes` 时，vLLM 会将原始流转换为标准 Chat Completions 响应：
 
-- `finish_reason`: `"tool_calls"` when the turn ended on tool calls (otherwise `"stop"`).
-- `message.role`: `"assistant"`; `message.content`: `null` for a pure tool-call turn (any pre-call prose becomes `content`).
-- `message.tool_calls[]`: one entry per `<tool_call>` block, each:
-  - `id`: server-generated, e.g. `"chatcmpl-tool-924d705adb044ff88e0ef3afdd155f15"` (the model emits no ID).
-  - `type`: `"function"`.
-  - `function.name`: the call's `name`.
-  - `function.arguments`: a **JSON string** at the API boundary, e.g. `'{"location": "San Francisco, CA, USA"}'`. The wire format is a nested object, but the server re-serializes it to a string here (`json.loads(...)` it before use), matching OpenAI and Qwen-Agent.
-- With thinking + `--reasoning-parser deepseek_r1`, the `<think>…</think>` content is split out into `message.reasoning_content` and removed from `content`.
-- Feeding results back: append `{"role": "tool", "content": <result>, "tool_call_id": <id-from-the-call>}` for each result. `tool_call_id` links a result to its call (Qwen3's template ignores the id when rendering — ordering is what reaches the model — but the API still requires it).
+- `finish_reason`：当回合终止于工具调用时为 `"tool_calls"`，否则为 `"stop"`。
+- `message.role`：`"assistant"`；`message.content`：纯工具调用回合为 `null`（任何调用前的自然语言会成为 `content`）。
+- `message.tool_calls[]`：每个 `<tool_call>` 块对应一项，每项包含：
+  - `id`：服务端生成，例如 `"chatcmpl-tool-924d705adb044ff88e0ef3afdd155f15"`（模型不输出 ID）。
+  - `type`：`"function"`。
+  - `function.name`：调用的 `name`。
+  - `function.arguments`：在 API 边界为**JSON 字符串**，例如 `'{"location": "San Francisco, CA, USA"}'`。线协议格式是嵌套对象，但服务端在此处重新序列化为字符串（使用前需 `json.loads(...)`），与 OpenAI 和 Qwen-Agent 行为一致。
+- 启用思考 + `--reasoning-parser deepseek_r1` 时，`<think>…</think>` 内容会被切分为 `message.reasoning_content` 并从 `content` 中移除。
+- 反馈结果：为每条结果追加 `{"role": "tool", "content": <result>, "tool_call_id": <id-from-the-call>}`。`tool_call_id` 将结果与对应调用关联（Qwen3 模板在渲染时忽略 id——到达模型的是顺序——但 API 仍要求该字段）。
 
-Example assistant message returned for the two-call query:
+针对双调用查询返回的 assistant 消息示例：
 
 ```text
 finish_reason='tool_calls'
@@ -186,67 +186,35 @@ message.tool_calls = [
 ]
 ```
 
-## omp / pi converter behavior
+## omp / pi 转换器行为
 
-The repository's `qwen3` dialect is an **owned in-band converter**. Select it
-with `PI_DIALECT=qwen3` (or the equivalent agent configuration). With tools
-present, the agent appends the Qwen3 format guide and compact tool catalog to
-the system prompt, removes native provider tools, rewrites earlier calls and
-results as text in this syntax, and scans streamed output back into canonical
-pi tool-call events. `hermes` remains a separate selectable dialect even
-though both emit the same basic JSON-in-`<tool_call>` convention (see
-[hermes.md](hermes.md)).
+仓库的 `qwen3` 方言是一个**自有的带内转换器**。通过 `PI_DIALECT=qwen3`（或等价的 agent 配置）选择它。当存在工具时，agent 会向系统提示追加 Qwen3 格式指南与精简的工具目录，移除原生 provider 工具，将此前的调用与结果改写为该语法的文本，并将流式输出重新扫描为规范的 pi 工具调用事件。`hermes` 仍是独立可选的方言，尽管两者都发出基本相同的 JSON-in-`<tool_call>` 约定（参见 [hermes.md](hermes.md)）。
 
-The catalog's current family-affinity helper maps every model id containing
-`qwen` to `qwen3`, including Qwen3-Coder. For a Coder endpoint, set
-`tools.format=native` (or the equivalent native-tool setting) and configure the
-serving endpoint itself with its `qwen3_xml` parser. `qwen3_xml` is not an
-OMP-owned dialect and therefore is not a valid `tools.format` value.
+目录当前的家族亲和辅助函数将任何模型 id 中包含 `qwen` 的项映射到 `qwen3`，包括 Qwen3-Coder。对于 Coder 端点，需设置 `tools.format=native`（或等价的 native-tool 设置）并在服务端点本身配置其 `qwen3_xml` 解析器。`qwen3_xml` 不是 OMP 自有的方言，因此不是有效的 `tools.format` 取值。
 
-The omp renderer always writes a nested `arguments` object and renders
-parallel calls newline-separated. Results become newline-delimited
-`<tool_response>` blocks inside the synthetic user history message. The
-scanner mints an id (`ptc_…`) and emits `toolStart` as soon as the leading JSON
-contains a complete string `name`. It waits for `</tool_call>` before emitting
-`toolEnd` and does not stream argument deltas. At close it uses the shared
-repairing JSON parser. For compatibility it also accepts a stringified
-`arguments` value and parses it once more, although the owned renderer never
-emits that shape. A completed string parse failure or non-object argument
-normalizes to `{}`; a completed outer object whose name cannot be recovered is
-consumed without creating a call.
+omp 渲染器始终写出嵌套的 `arguments` 对象，并换行分隔并行调用。结果会成为合成 user 历史消息中换行分隔的 `<tool_response>` 块。扫描器在首段 JSON 中包含完整字符串 `name` 时立即生成 id（`ptc_…`）并发出 `toolStart`。它会等待 `</tool_call>` 后再发出 `toolEnd`，且不流式传输参数增量。结束时使用共享的可修复 JSON 解析器。为兼容起见，它也接受字符串化的 `arguments` 值并再解析一次，尽管自有渲染器永远不会产出该形态。已完成的字符串解析失败或非对象参数会规整为 `{}`；若外层已完成对象但 name 无法恢复，则消费而不创建调用。
 
-If EOF arrives after the name was recovered but before `</tool_call>`, no
-`toolEnd` is emitted, but the canonical call created by `toolStart` survives
-with empty arguments and may be dispatched on a normal stop. Malformed input
-that never yields a name produces no call.
+若 EOF 到达时 name 已恢复但 `</tool_call>` 尚未出现，则不会发出 `toolEnd`，但 `toolStart` 创建的规范调用会以空参数存活，并可能在正常停止时被派发。始终无法产出 name 的畸形输入不产生任何调用。
 
-Thinking parsing is enabled by default: `<think>…</think>` becomes thinking
-events and is excluded from visible text. Callers creating the scanner can set
-`parseThinking: false`, in which case thinking markup is left as ordinary
-text.
+默认开启思考解析：`<think>…</think>` 变为思考事件并从可见文本中排除。创建扫描器的调用方可设置 `parseThinking: false`，此时思考标记会按普通文本保留。
 
-## Parsing notes & gotchas
+## 解析注意事项与陷阱
 
-- **Arguments object vs string:** on the wire `arguments` is a nested JSON object; the OpenAI layer hands it back as a JSON string. Code that reads the raw stream must parse an object; code that reads the API must `json.loads` the string. Do not double-encode.
-- **`<tools>` is not a token.** Only count on `<|im_start|>`/`<|im_end|>` (and the `*tool_call*`/`*tool_response*`/`*think*` single tokens) being atomic. `<tools>`/`</tools>` are plain text.
-- **Regex/streaming parse:** the vLLM `hermes` parser (`vllm/tool_parsers/hermes_tool_parser.py`, `Hermes2ProToolParser`) keys on the literal `<tool_call>` / `</tool_call>` substrings and JSON-decodes the body, supporting multiple blocks per turn. In streaming it buffers from `<tool_call>` until it can incrementally parse `name` then `arguments`; partial argument JSON is emitted as argument deltas. Text before the first `<tool_call>` is streamed as ordinary content.
-- **Thinking toggle:** `enable_thinking=False` (passed via `chat_template_kwargs={"enable_thinking": False}` over the OpenAI API, or `tokenizer.apply_chat_template(..., enable_thinking=False)`) injects an empty `<think>\n\n</think>\n\n` into the generation prompt, hard-suppressing reasoning. Soft switches `/think` and `/no_think` in a user/system message flip it per-turn when thinking is enabled. Greedy decoding is discouraged for Qwen3 (repetition risk).
-- **History rerender asymmetry:** when `apply_chat_template` re-renders a stored conversation, it emits the `<think>` block only for the final assistant message or messages carrying `reasoning_content`; reasoning from earlier turns is dropped. So a stored intermediate tool-call assistant turn shows no `<think>` block, while the live generation step that produced it was prefixed with one (in non-thinking mode). Reasoning is preserved only within the current multi-step tool sequence (after the last real user query).
-- **Reasoning models + stopword templates:** Qwen warns against ReAct-style stopword tool templates for Qwen3, since reasoning text may contain the stopwords and corrupt parsing — use this native Hermes template instead.
-- **Robustness:** the format is prompt/template-driven, so malformed output is possible
-  (truncated JSON, missing `</tool_call>`, prose mixed into a call, or stringified
-  arguments). vLLM may fall back to content depending on its parser path; omp's
-  owned scanner instead consumes a recognized block and emits no call when the
-  outer JSON/name cannot be recovered. Named / `required` tool choice can route
-  through vLLM's structured-outputs backend when using vLLM native tools, but
-  owned mode sends no native provider tool definition and therefore cannot rely
-  on that backend.
-- **Version/scope:** this `hermes` template covers `Qwen3-*`, `Qwen2.5-*`, and `QwQ-32B`. It does **not** cover `Qwen3-Coder`, which uses a different XML scheme parsed by a serving engine's `qwen3_xml` parser. OMP has no `qwen3_xml` owned dialect; use `tools.format=native` and configure that parser at the endpoint.
+- **Arguments 对象 vs 字符串：** 在线协议上 `arguments` 是嵌套的 JSON 对象；OpenAI 层将其作为 JSON 字符串返回。读取原始流的代码必须解析为对象；读取 API 的代码必须 `json.loads` 该字符串。不要双重编码。
+- **`<tools>` 不是 token。** 只有 `<|im_start|>`/`<|im_end|>`（以及 `*tool_call*`/`*tool_response*`/`*think*` 单一 token）可视为原子的。`<tools>`/`</tools>` 是普通文本。
+- **正则/流式解析：** vLLM `hermes` 解析器（`vllm/tool_parsers/hermes_tool_parser.py`，`Hermes2ProToolParser`）以字面量 `<tool_call>` / `</tool_call>` 子串作为关键标记并对内容做 JSON 解码，支持单回合多个块。流式时，它从 `<tool_call>` 开始缓冲，先增量解析 `name` 再解析 `arguments`；部分参数 JSON 作为参数增量发出。首个 `<tool_call>` 之前的文本按普通 content 流式发出。
+- **思考开关：** `enable_thinking=False`（通过 OpenAI API 时以 `chat_template_kwargs={"enable_thinking": False}` 传入，或 `tokenizer.apply_chat_template(..., enable_thinking=False)`）会在生成 prompt 中注入空的 `<think>\n\n</think>\n\n`，硬性抑制推理。用户/系统消息中的软开关 `/think` 与 `/no_think` 在启用思考时可按回合翻转该状态。不推荐对 Qwen3 使用贪心解码（有重复风险）。
+- **历史重渲染不对称：** 当 `apply_chat_template` 重渲染已存储会话时，仅对最后一条 assistant 消息或带有 `reasoning_content` 的消息输出 `<think>` 块；更早回合的推理会被丢弃。因此已存储的中间工具调用 assistant 回合不显示 `<think>` 块，而生成该回合的实时生成步骤（在非思考模式下）原本带有该块。推理仅在当前多步工具序列内（最后一条真实 user 查询之后）保留。
+- **推理模型 + 停止词模板：** Qwen 警告对 Qwen3 不要使用 ReAct 风格的停止词工具模板，因为推理文本可能包含停止词从而破坏解析——应改用此原生 Hermes 模板。
+- **鲁棒性：** 该格式由 prompt/模板驱动，因此可能出现畸形输出
+  （截断的 JSON、缺失 `</tool_call>`、调用中混入自然语言、或字符串化的
+  arguments）。vLLM 视其解析路径可能回退到 content；omp 自有的扫描器则会消费已识别的块，并在外层 JSON/name 无法恢复时不发出调用。Named / `required` tool choice 在使用 vLLM 原生工具时，可经由 vLLM 的结构化输出后端路由；但自有模式不发送原生 provider 工具定义，因此不能依赖该后端。
+- **版本/范围：** 本 `hermes` 模板覆盖 `Qwen3-*`、`Qwen2.5-*` 和 `QwQ-32B`。它**不**覆盖 `Qwen3-Coder`——后者使用不同的 XML 方案，由服务端引擎的 `qwen3_xml` 解析器解析。OMP 没有 `qwen3_xml` 自有方言；请使用 `tools.format=native` 并在端点配置该解析器。
 
-## Sources
+## 来源
 
-- Qwen function-calling guide: https://qwen.readthedocs.io/en/latest/framework/function_call.html
-- Qwen3-8B chat template + token IDs (`tokenizer_config.json`, `chat_template` + `added_tokens_decoder`): https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json (verified via HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218`)
-- Qwen3-8B model card (thinking modes, `enable_thinking`, `</think>`=151668): https://huggingface.co/Qwen/Qwen3-8B
-- NousResearch Hermes-Function-Calling (origin of the convention): https://github.com/NousResearch/Hermes-Function-Calling
-- vLLM tool-calling docs (`hermes` parser, Qwen models, auto tool choice): https://docs.vllm.ai/en/latest/features/tool_calling/
+- Qwen function-calling 指南：https://qwen.readthedocs.io/en/latest/framework/function_call.html
+- Qwen3-8B chat template + token IDs（`tokenizer_config.json`，`chat_template` + `added_tokens_decoder`）：https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json（通过 HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218` 验证）
+- Qwen3-8B 模型卡（思考模式、`enable_thinking`、`</think>`=151668）：https://huggingface.co/Qwen/Qwen3-8B
+- NousResearch Hermes-Function-Calling（该约定的起源）：https://github.com/NousResearch/Hermes-Function-Calling
+- vLLM 工具调用文档（`hermes` 解析器、Qwen 模型、自动工具选择）：https://docs.vllm.ai/en/latest/features/tool_calling/

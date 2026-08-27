@@ -1,116 +1,116 @@
-# Adding a provider
+# 添加一个 provider
 
-A provider is described in two halves:
+一个 provider 由两部分组成：
 
-- **Catalog half** (`packages/catalog`): one entry in the `CATALOG_PROVIDERS`
-  table (`packages/catalog/src/provider-models/descriptors.ts`) carrying the
-  `id`, `defaultModel`, runtime model-discovery factory, and catalog-generation
-  wiring. `KnownProvider`, `PROVIDER_DESCRIPTORS`, and
-  `DEFAULT_MODEL_PER_PROVIDER` are derived from this table.
-- **Auth half** (`packages/ai`): one declarative `ProviderDefinition` in the
-  registry carrying env-key fallbacks and login/refresh flows. The
-  `OAuthProvider` union, the env-key map, the `/login` provider list, the
-  `refreshOAuthToken` / `AuthStorage.login` dispatch, and the coding-agent
-  callback maps are derived from the registry.
+- **目录部分**（`packages/catalog`）：在 `CATALOG_PROVIDERS`
+  表（`packages/catalog/src/provider-models/descriptors.ts`）中的一项，包含
+  `id`、`defaultModel`、运行时模型发现工厂，以及目录生成
+  接线。`KnownProvider`、`PROVIDER_DESCRIPTORS` 和
+  `DEFAULT_MODEL_PER_PROVIDER` 均由该表派生。
+- **鉴权部分**（`packages/ai`）：注册表中的一个声明式 `ProviderDefinition`，
+  包含环境变量键的回退以及登录/刷新流程。
+  `OAuthProvider` 联合类型、环境变量键映射、`/login` 的 provider 列表、
+  `refreshOAuthToken` / `AuthStorage.login` 派发，以及 coding-agent
+  回调映射均从该注册表派生。
 
-**Scope.** This is for a provider that reuses an existing wire API
-(`openai-completions`, `anthropic-messages`, `google-generative-ai`, …) — the
-common case for gateways and API-key providers, since stream dispatch keys on
-`model.api`, not `model.provider`. Adding a _new wire protocol_ (a new
-`KnownApi`) is a separate task that also touches `stream.ts` dispatch,
-`api-registry.ts`, and the catalog `types.ts`.
+**范围。** 适用于复用既有 wire API
+（`openai-completions`、`anthropic-messages`、`google-generative-ai` 等）的
+provider——这是网关和 API key provider 的常见情况，因为流式分派以
+`model.api` 而非 `model.provider` 为键。添加一个_新的 wire 协议_（一个新的
+`KnownApi`）是一项独立任务，还涉及 `stream.ts` 分派、
+`api-registry.ts` 以及目录中的 `types.ts`。
 
-## Shape
+## 形态
 
-For the common case, a provider is **one catalog entry + one def file + one registry line**:
+对于常见情况，一个 provider 是**一个目录条目 + 一个 def 文件 + 一行注册表**：
 
-1. **Add an entry to `CATALOG_PROVIDERS`** in
-   `packages/catalog/src/provider-models/descriptors.ts` with the `id`,
-   `defaultModel`, the plain API-key env var(s) as `envVars`, and (usually) a
-   `createModelManagerOptions` factory. For a
-   simple OpenAI-compatible gateway, build the factory in
-   `packages/catalog/src/provider-models/openai-compat.ts` or inline with the
-   exported `createSimpleOpenAICompletionsOptions(providerId, baseUrl, config)`.
-2. **Create `packages/ai/src/registry/<id>.ts`** exporting one
-   `export const <camelId>Provider = { … } as const satisfies ProviderDefinition;`
-   with the auth fields (`login`, …). Plain env-var names live in the catalog
-   entry's `envVars`; set `envKeys` only for computed resolvers (Foundry/ADC/
-   Bedrock-style probes).
-3. **Add it to the `ALL` array** in `packages/ai/src/registry/registry.ts`
-   (one import + one array entry). `ALL` order is the `/login` list order for
-   loginable providers.
+1. **在 `CATALOG_PROVIDERS` 中添加一项**，
+   位于 `packages/catalog/src/provider-models/descriptors.ts`，包含 `id`、
+   `defaultModel`、作为 `envVars` 的普通 API key 环境变量名（们），以及
+   （通常）一个 `createModelManagerOptions` 工厂。对于一个
+   简单的 OpenAI 兼容网关，可在
+   `packages/catalog/src/provider-models/openai-compat.ts` 中构建工厂，或通过
+   导出的 `createSimpleOpenAICompletionsOptions(providerId, baseUrl, config)` 内联构建。
+2. **创建 `packages/ai/src/registry/<id>.ts`**，导出一个
+   `export const <camelId>Provider = { … } as const satisfies ProviderDefinition;`，
+   包含鉴权字段（`login` 等）。普通环境变量名位于目录
+   条目的 `envVars` 中；仅在需要计算型解析器（Foundry/ADC/
+   Bedrock 风格的探测）时设置 `envKeys`。
+3. **将其加入 `ALL` 数组**，
+   位于 `packages/ai/src/registry/registry.ts`
+   （一个导入 + 一项数组条目）。`ALL` 数组的顺序即
+   可登录 provider 的 `/login` 列表顺序。
 
-That is the full change for:
+这便是以下情况的完整改动：
 
-- env-key-only providers,
-- providers with a simple inline API-key login flow,
-- most OpenAI-compatible gateways.
+- 仅使用环境变量键的 provider；
+- 具有简单内联 API key 登录流程的 provider；
+- 大多数 OpenAI 兼容网关。
 
-For a **non-trivial provider-local OAuth flow**, put the implementation in
-`packages/ai/src/registry/oauth/<vendor>.ts` and lazy-import it from the def
-file. The shared OAuth flow infrastructure it builds on lives in the same
-`registry/oauth/` directory.
+对于**非平凡的 provider 本地 OAuth 流程**，将实现放在
+`packages/ai/src/registry/oauth/<vendor>.ts`，并从 def 文件中按需懒导入。
+其所基于的共享 OAuth 流程基础设施也位于同一
+`registry/oauth/` 目录下。
 
-Descriptors, the default-model map, env-key map, login list, and refresh
-dispatch all update automatically; the `KnownProvider` union gains the new id
-from the catalog table and `OAuthProvider` from the registry.
+描述符、默认模型映射、环境变量键映射、登录列表和刷新
+派发都会自动更新；`KnownProvider` 联合类型从目录表获得新 id，
+`OAuthProvider` 联合类型从注册表获得新 id。
 
-## Field reference
+## 字段参考
 
-**Catalog table entry** (`ProviderCatalogEntry`, see
-`packages/catalog/src/provider-models/descriptor-types.ts` for JSDoc):
+**目录表条目**（`ProviderCatalogEntry`，详见
+`packages/catalog/src/provider-models/descriptor-types.ts` 中的 JSDoc）：
 
-| Field                        | Effect                                                                                                                                                                                                                        |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                         | Required. Member of `KnownProvider`.                                                                                                                                                                                          |
-| `defaultModel`               | Required. Preferred model when no explicit selection is made.                                                                                                                                                                 |
-| `envVars`                    | Env var name(s), in order, for the runtime API-key fallback (`getEnvApiKey`).                                                                                                                                                 |
-| `createModelManagerOptions`  | Runtime model-discovery factory. Present (and not `specialModelManager`) ⇒ appears in `PROVIDER_DESCRIPTORS`.                                                                                                                 |
-| `allowUnauthenticated`       | Runtime creates a model manager even without a key.                                                                                                                                                                           |
-| `dynamicModelsAuthoritative` | Successful discovery replaces bundled models.                                                                                                                                                                                 |
-| `catalogDiscovery`           | `{ label, envVars?, oauthProvider?, allowUnauthenticated? }` for offline catalog generation (`generate-models.ts`). `envVars` here overrides the entry-level list when generation uses different credentials (e.g. `cursor`). |
-| `specialModelManager`        | Bespoke runtime factory (`google-antigravity` / `google-gemini-cli` / `openai-codex`); excluded from `PROVIDER_DESCRIPTORS`.                                                                                                  |
+| 字段                         | 作用                                                                                                                                                                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | 必填。`KnownProvider` 的成员。                                                                                                                                                                                                      |
+| `defaultModel`               | 必填。在没有显式选择时优先使用的模型。                                                                                                                                                                                              |
+| `envVars`                    | 运行时 API key 回退（`getEnvApiKey`）使用的环境变量名（们），按顺序排列。                                                                                                                                                            |
+| `createModelManagerOptions`  | 运行时模型发现工厂。若存在（且非 `specialModelManager`）⇒ 出现在 `PROVIDER_DESCRIPTORS` 中。                                                                                                                                         |
+| `allowUnauthenticated`       | 即使没有 key，运行时也会创建模型管理器。                                                                                                                                                                                            |
+| `dynamicModelsAuthoritative` | 成功的发现会替换内建的模型。                                                                                                                                                                                                        |
+| `catalogDiscovery`           | 用于离线目录生成（`generate-models.ts`）的 `{ label, envVars?, oauthProvider?, allowUnauthenticated? }`。此处的 `envVars` 在生成使用不同凭据时（例如 `cursor`）覆盖条目级列表。                                                          |
+| `specialModelManager`        | 定制的运行时工厂（`google-antigravity` / `google-gemini-cli` / `openai-codex`）；会从 `PROVIDER_DESCRIPTORS` 中排除。                                                                                                                |
 
-**Registry definition** (`ProviderDefinition`, see
-`packages/ai/src/registry/types.ts`):
+**注册表定义**（`ProviderDefinition`，详见
+`packages/ai/src/registry/types.ts`）：
 
-| Field                   | Effect                                                                                                                                                                                                    |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`, `name`            | Required. `name` shows in the `/login` list when the definition has a visible login flow.                                                                                                                 |
-| `available`             | Optional login-list availability flag.                                                                                                                                                                    |
-| `showInLoginList`       | Set to `false` to keep a provider with a `login` flow out of the interactive list.                                                                                                                        |
-| `envKeys`               | Computed env fallback for `getEnvApiKey`, overriding the catalog entry's `envVars`: a var name string or a `() => string \| undefined` resolver. Omit when `envVars` covers it.                           |
-| `allowsMissingApiKey`   | The provider transport can authenticate without a resolved API-key string.                                                                                                                                |
-| `prepareRequest`        | Provider-owned request shaping before generic API dispatch. Returns the model and stream options to dispatch.                                                                                             |
-| `mapSimpleOptions`      | Projects the generic simple-stream option bag into provider-owned options.                                                                                                                                |
-| `prepareModelDiscovery` | Provider-owned authentication or endpoint setup for runtime model discovery.                                                                                                                              |
-| `login`                 | Interactive login. Present ⇒ member of `OAuthProvider`, dispatchable via `AuthStorage.login`, and shown in `/login` unless `showInLoginList` is false. Returns an API-key `string` or `OAuthCredentials`. |
-| `refreshToken`          | OAuth refresher; omit for static-token providers (the dispatch returns credentials unchanged).                                                                                                            |
-| `getApiKey`             | Converts stored OAuth credentials into the API-key/token string used by the transport.                                                                                                                    |
-| `storeCredentialsAs`    | Store credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`).                                                                                                            |
-| `callbackPort`          | Present ⇒ entry in the auth-broker `CALLBACK_PORTS` map.                                                                                                                                                  |
-| `pasteCodeFlow`         | OAuth flow needs a pasted code/redirect URL ⇒ member of `PASTE_CODE_LOGIN_PROVIDERS`.                                                                                                                     |
+| 字段                       | 作用                                                                                                                                                                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`、`name`               | 必填。当定义具有可见的登录流程时，`name` 显示在 `/login` 列表中。                                                                                                                                                                    |
+| `available`                | 可选的登录列表可用性标志。                                                                                                                                                                                                          |
+| `showInLoginList`          | 设为 `false` 以将具有 `login` 流程的 provider 排除在交互式列表之外。                                                                                                                                                                 |
+| `envKeys`                  | `getEnvApiKey` 的计算型环境变量回退，覆盖目录条目中的 `envVars`：一个变量名字符串或一个 `() => string \| undefined` 解析器。当 `envVars` 已覆盖时省略。                                                                              |
+| `allowsMissingApiKey`      | provider 传输可以在没有解析到 API key 字符串的情况下完成鉴权。                                                                                                                                                                      |
+| `prepareRequest`           | 在通用 API 分派之前由 provider 拥有的请求塑形。返回要分派的模型和流选项。                                                                                                                                                            |
+| `mapSimpleOptions`         | 将通用简单流选项包投影为 provider 拥有的选项。                                                                                                                                                                                      |
+| `prepareModelDiscovery`    | 用于运行时模型发现的、由 provider 拥有的鉴权或端点设置。                                                                                                                                                                            |
+| `login`                    | 交互式登录。存在 ⇒ `OAuthProvider` 的成员，可通过 `AuthStorage.login` 派发，除非 `showInLoginList` 为 false，否则显示在 `/login` 列表中。返回一个 API key `string` 或 `OAuthCredentials`。                                              |
+| `refreshToken`             | OAuth 刷新器；对于静态令牌的 provider 省略（派发将原样返回凭据）。                                                                                                                                                                  |
+| `getApiKey`                | 将存储的 OAuth 凭据转换为传输所用的 API key/令牌字符串。                                                                                                                                                                            |
+| `storeCredentialsAs`       | 将凭据存储在不同的 provider id 下（例如 `openai-codex-device` ⇒ `openai-codex`）。                                                                                                                                                  |
+| `callbackPort`             | 若存在 ⇒ 鉴权代理 `CALLBACK_PORTS` 映射中的一项。                                                                                                                                                                                   |
+| `pasteCodeFlow`            | OAuth 流程需要粘贴的 code/重定向 URL ⇒ `PASTE_CODE_LOGIN_PROVIDERS` 的成员。                                                                                                                                                          |
 
-## Conventions
+## 约定
 
-- Use `... as const satisfies ProviderDefinition` so the literal `id` is preserved
-  for the union derivation.
-- `login` / `refreshToken` for simple API-key or validation-based flows can live
-  directly in the provider def file (export the named login function there so
-  tests can import it directly).
-- `login` / `refreshToken` for heavy provider-local OAuth flows MUST reach the
-  adjacent `registry/oauth/*` module via a dynamic-import
-  thunk (`const { loginX } = await import("./oauth/x"); return loginX(cb);`),
-  keeping those flows out of the eager startup graph.
-- All OAuth code lives under `registry/oauth/`: the shared flow infra
-  (`callback-server`, `pkce`, `google-oauth-shared`, `types`, the runtime API
-  `index`) plus every provider flow, including the `github-copilot` / `kimi` /
-  `openai-codex` helpers reused by the streaming and usage layers. The non-OAuth
-  API-key helpers (`api-key-login`, `api-key-validation`) sit beside the def
-  files in `registry/`, since they back simple paste-an-API-key logins.
-- For a simple OpenAI-compatible gateway, build the manager inline with the
-  exported `createSimpleOpenAICompletionsOptions(providerId, baseUrl, config)` —
-  no edits to `openai-compat.ts` required.
-- A `ProviderDefinition` may also be registered at runtime by an extension via
-  `registerOAuthProvider` (the `AuthStorage.login` dispatcher handles built-ins
-  and extensions through the same path).
+- 使用 `... as const satisfies ProviderDefinition`，以便字面量 `id` 在联合类型派生中得以保留。
+- 简单 API key 或基于验证的流程对应的 `login` / `refreshToken` 可以
+  直接放在 provider def 文件中（在此处导出命名的 login 函数，以便
+  测试可以直接导入）。
+- 重量级 provider 本地 OAuth 流程对应的 `login` / `refreshToken` 必须通过动态导入
+  thunk（`const { loginX } = await import("./oauth/x"); return loginX(cb);`）
+  访问相邻的 `registry/oauth/*` 模块，
+  以避免这些流程进入急切启动的依赖图。
+- 所有 OAuth 代码位于 `registry/oauth/` 下：共享的流程基础设施
+  （`callback-server`、`pkce`、`google-oauth-shared`、`types`、运行时 API
+  `index`）以及每一个 provider 流程，包括被流式和用量层复用的
+  `github-copilot` / `kimi` / `openai-codex` 辅助函数。非 OAuth
+  的 API key 辅助函数（`api-key-login`、`api-key-validation`）位于 `registry/` 中
+  def 文件旁边，因为它们支持简单的粘贴 API key 登录。
+- 对于简单的 OpenAI 兼容网关，可使用
+  导出的 `createSimpleOpenAICompletionsOptions(providerId, baseUrl, config)` 内联
+  构建管理器——无需修改 `openai-compat.ts`。
+- `ProviderDefinition` 也可以在运行时由扩展通过
+  `registerOAuthProvider` 进行注册（`AuthStorage.login` 派发器通过同一路径处理内建
+  和扩展）。

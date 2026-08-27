@@ -1,70 +1,70 @@
 # Session Storage and Entry Model
 
-This document is the source of truth for how coding-agent sessions are represented, persisted, migrated, and reconstructed at runtime.
+本文档是 coding-agent 会话如何表示、持久化、迁移以及在运行时重建的权威规范。
 
 ## Scope
 
-Covers:
+涵盖：
 
-- Session JSONL format and versioning
-- Entry taxonomy and tree semantics (`id`/`parentId` + leaf pointer)
-- Migration/compatibility behavior when loading old or malformed files
-- Context reconstruction (`buildSessionContext`)
-- Persistence guarantees, failure behavior, truncation/blob externalization
-- Storage abstractions (`FileSessionStorage`, `MemorySessionStorage`) and related utilities
+- 会话 JSONL 格式与版本管理
+- 条目分类法与树语义（`id`/`parentId` + leaf 指针）
+- 加载旧文件或畸形文件时的迁移/兼容性行为
+- 上下文重建（`buildSessionContext`）
+- 持久化保证、失败行为、截断/blob 外置化
+- 存储抽象（`FileSessionStorage`、`MemorySessionStorage`）及相关工具
 
-Does not cover `/tree` UI rendering behavior beyond semantics that affect session data.
+不涵盖 `/tree` UI 的渲染行为，除非该行为影响会话数据。
 
 ## Implementation Files
 
-- [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts) — orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories
-- [`src/session/session-entries.ts`](../packages/coding-agent/src/session/session-entries.ts) — entry/header types, `SessionEntry` union, `CURRENT_SESSION_VERSION`
-- [`src/session/session-migrations.ts`](../packages/coding-agent/src/session/session-migrations.ts) — version migrations
-- [`src/session/session-loader.ts`](../packages/coding-agent/src/session/session-loader.ts) — file load + blob-ref resolution
+- [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts) — 编排：树/leaf、append、持久化、blob、生命周期工厂
+- [`src/session/session-entries.ts`](../packages/coding-agent/src/session/session-entries.ts) — 条目/header 类型、`SessionEntry` 联合类型、`CURRENT_SESSION_VERSION`
+- [`src/session/session-migrations.ts`](../packages/coding-agent/src/session/session-migrations.ts) — 版本迁移
+- [`src/session/session-loader.ts`](../packages/coding-agent/src/session/session-loader.ts) — 文件加载 + blob-ref 解析
 - [`src/session/session-context.ts`](../packages/coding-agent/src/session/session-context.ts) — `buildSessionContext`
-- [`src/session/session-persistence.ts`](../packages/coding-agent/src/session/session-persistence.ts) — truncation + image blob externalization
-- [`src/session/session-paths.ts`](../packages/coding-agent/src/session/session-paths.ts) — on-disk layout, dir encoding, terminal breadcrumbs
-- [`src/session/session-listing.ts`](../packages/coding-agent/src/session/session-listing.ts) — discovery (list/recent/resolve)
-- [`src/session/session-storage.ts`](../packages/coding-agent/src/session/session-storage.ts) — storage abstractions
-- [`src/session/session-title-slot.ts`](../packages/coding-agent/src/session/session-title-slot.ts) — fixed-width current-title slot
-- [`src/session/indexed-session-storage.ts`](../packages/coding-agent/src/session/indexed-session-storage.ts) — local index + ordered remote-backed storage adapter
-- [`src/session/messages.ts`](../packages/coding-agent/src/session/messages.ts) — custom-message transformers
-- [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts) — content-addressed blob store
-- [`src/session/history-storage.ts`](../packages/coding-agent/src/session/history-storage.ts) — prompt history (separate subsystem)
+- [`src/session/session-persistence.ts`](../packages/coding-agent/src/session/session-persistence.ts) — 截断 + image blob 外置化
+- [`src/session/session-paths.ts`](../packages/coding-agent/src/session/session-paths.ts) — 磁盘布局、目录编码、terminal breadcrumbs
+- [`src/session/session-listing.ts`](../packages/coding-agent/src/session/session-listing.ts) — 发现（list/recent/resolve）
+- [`src/session/session-storage.ts`](../packages/coding-agent/src/session/session-storage.ts) — 存储抽象
+- [`src/session/session-title-slot.ts`](../packages/coding-agent/src/session/session-title-slot.ts) — 定宽当前标题槽
+- [`src/session/indexed-session-storage.ts`](../packages/coding-agent/src/session/indexed-session-storage.ts) — 本地索引 + 有序的远端备份存储适配器
+- [`src/session/messages.ts`](../packages/coding-agent/src/session/messages.ts) — 自定义消息转换器
+- [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts) — 内容寻址 blob 存储
+- [`src/session/history-storage.ts`](../packages/coding-agent/src/session/history-storage.ts) — prompt 历史（独立子系统）
 
 ## On-Disk Layout
 
-Default file-session location:
+默认 file-session 位置：
 
 ```text
 ~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<sessionId>.jsonl
 ```
 
-`<encoded-cwd>` is derived from the canonicalized cwd (so symlink aliases share a bucket): `-<relative>` for directories under home, `-tmp-<relative>` for directories under the temp root, and `--<encoded-absolute>--` for anything else, with path separators replaced by `-`.
+`<encoded-cwd>` 由规范化的 cwd 派生（因此 symlink 别名共享同一个 bucket）：home 下的目录为 `-<relative>`，temp 根目录下的目录为 `-tmp-<relative>`，其余为 `--<encoded-absolute>--`，路径分隔符替换为 `-`。
 
-On access, buckets written by the short-lived hashed scheme (`<scope>-<project-basename>-<sha256(canonical-cwd)>`, used in 17.2.5-17.2.8 and reverted in 17.2.9 by #7397) are migrated back into the path-encoded names best-effort, along with older `--<home-encoded>-*--` spellings of home-relative buckets.
+访问时，由短生命周期的哈希方案（`<scope>-<project-basename>-<sha256(canonical-cwd)>`，用于 17.2.5-17.2.8，并在 17.2.9 中由 #7397 回退）写入的 bucket 会以尽力而为的方式迁移回路径编码名称，连同旧式 `--<home-encoded>-*--` 形式的 home 相对 bucket。
 
-Blob store location:
+Blob 存储位置：
 
 ```text
 ~/.omp/agent/blobs/<sha256>
 ```
 
-Terminal breadcrumb files are written under:
+Terminal breadcrumb 文件写入到：
 
 ```text
 ~/.omp/agent/terminal-sessions/<terminal-id>
 ```
 
-Breadcrumb content is original cwd and session file path, plus an optional third line `fresh`. A fresh breadcrumb preserves a `/new` boundary whose lazily-created JSONL file does not exist yet, preventing `continueRecent()` from reopening the previous session. Writes are synchronous, ordered, and best-effort.
+Breadcrumb 内容是原始 cwd 和会话文件路径，以及可选的第三行 `fresh`。一个 fresh breadcrumb 会保留一个 `/new` 边界——其懒创建的 JSONL 文件尚不存在——以防止 `continueRecent()` 重新打开上一次的会话。写入是同步、有序且尽力而为的。
 
 ## File Format
 
-Session files are JSONL: one JSON object per line. Current files physically begin with a fixed-width, 256-byte `type: "title"` slot, followed by the session header and then `SessionEntry` values. Legacy files may begin directly with the header. Loaders strip the physical slot and fold its current title/source into the logical header.
+会话文件为 JSONL：每行一个 JSON 对象。当前文件在物理上以一个定宽 256 字节的 `type: "title"` 槽开头，随后是会话 header，然后是 `SessionEntry` 值。旧文件可能直接以 header 开头。Loader 会剥离物理槽，并将其当前标题/来源合并到逻辑 header。
 
-- The logical first entry is always the session header (`type: "session"`).
-- Remaining logical entries are `SessionEntry` values.
-- Entries are append-only at runtime; branch navigation moves a pointer (`leafId`) rather than mutating existing entries.
+- 逻辑上的第一条 entry 始终是会话 header（`type: "session"`）。
+- 其余逻辑 entry 是 `SessionEntry` 值。
+- 运行时 entry 是 append-only 的；分支导航通过移动指针（`leafId`）而不是修改现有 entry。
 
 ### Header (`SessionHeader`)
 
@@ -84,18 +84,18 @@ Session files are JSONL: one JSON object per line. Current files physically begi
 }
 ```
 
-Notes:
+说明：
 
-- `additionalDirectories` records normalized, deduplicated workspace roots beyond `cwd`.
-- `previousSessionFiles` records prior absolute locations after successful moves.
-- `providerPromptCacheKey` carries an inherited provider prompt-cache identity for eligible full forks.
-- `parentSession` is an opaque lineage string. Current code writes either a session id or a session path depending on flow (`fork`, `forkFrom`, `createBranchedSession`, or explicit `newSession({ parentSession })`). Treat it as metadata, not a typed foreign key.
+- `additionalDirectories` 记录除 `cwd` 之外经过规范化、去重的工作区根目录。
+- `previousSessionFiles` 记录成功移动后的先前绝对位置。
+- `providerPromptCacheKey` 携带符合条件的完整 fork 所继承的 provider prompt-cache 标识。
+- `parentSession` 是一个不透明的 lineage 字符串。当前代码根据流程（`fork`、`forkFrom`、`createBranchedSession`，或显式的 `newSession({ parentSession })`）写入 session id 或 session path。将其视为元数据，而非类型化的外键。
 
-- `titleSource` is `auto` or `user`; automatic renames cannot overwrite a user title.
+- `titleSource` 为 `auto` 或 `user`；自动重命名不能覆盖用户标题。
 
 ### Entry Base (`SessionEntryBase`)
 
-All non-header entries include:
+所有非 header 的 entry 包含：
 
 ```json
 {
@@ -106,11 +106,11 @@ All non-header entries include:
 }
 ```
 
-`parentId` can be `null` for a root entry (first append, or after `resetLeaf()`).
+`parentId` 对于根 entry（首次 append，或 `resetLeaf()` 之后）可以为 `null`。
 
 ## Entry Taxonomy
 
-`SessionEntry` is the union of:
+`SessionEntry` 是以下类型的联合：
 
 - `message`
 - `thinking_level_change`
@@ -130,7 +130,7 @@ All non-header entries include:
 
 ### `message`
 
-Stores an `AgentMessage` directly.
+直接存储一个 `AgentMessage`。
 
 ```json
 {
@@ -174,7 +174,7 @@ Stores an `AgentMessage` directly.
 }
 ```
 
-`role` is optional; missing is treated as `default` in context reconstruction.
+`role` 是可选的；在上下文重建中，缺失会被视为 `default`。
 
 ### `service_tier_change`
 
@@ -188,7 +188,7 @@ Stores an `AgentMessage` directly.
 }
 ```
 
-`serviceTier` is a per-family map keyed by `openai`/`anthropic`/`google` (each value `auto`/`default`/`flex`/`scale`/`priority`), or `null` when no tier is active. Legacy entries that stored a single string (`"flex"`, `"openai-only"`, `"claude-only"`, …) are normalized to this map on read.
+`serviceTier` 是一个按族映射的 map，键为 `openai`/`anthropic`/`google`（每个值为 `auto`/`default`/`flex`/`scale`/`priority`），当没有激活的 tier 时为 `null`。存储为单个字符串（`"flex"`、`"openai-only"`、`"claude-only"`、…）的旧 entry 在读取时被规范化为此 map。
 
 ### `thinking_level_change`
 
@@ -202,7 +202,7 @@ Stores an `AgentMessage` directly.
 }
 ```
 
-`configured` may additionally preserve the selector the user chose (`"auto"` or a concrete level). Readers of older entries fall back to `thinkingLevel`.
+`configured` 还可以额外保留用户选择的选择器（`"auto"` 或一个具体级别）。读取较旧 entry 的代码会回退到 `thinkingLevel`。
 
 ### `compaction`
 
@@ -237,15 +237,15 @@ Stores an `AgentMessage` directly.
 }
 ```
 
-If branching from root (`branchFromId === null`), `fromId` is the literal string `"root"`.
+如果从根分支（`branchFromId === null`），`fromId` 是字面字符串 `"root"`。
 
 ### `reset_boundary`
 
-A payload-free marker appended by `/clear`. The collapsed live transcript and rebuilt model context begin after the latest applicable boundary; full-history transcript export still retains entries before it.
+由 `/clear` 追加的无 payload 标记。折叠后的实时 transcript 以及重建的 model context 从最新的适用边界之后开始；全历史 transcript 导出会保留其之前的 entry。
 
 ### `custom`
 
-Opaque, non-LLM records owned by core subsystems or extensions. `buildSessionContext` does not directly turn them into model messages, but subsystem-specific replay code can consume `customType` values to restore runtime state or diagnose an interrupted turn.
+由核心子系统或扩展拥有的不透明、非 LLM 记录。`buildSessionContext` 不会直接将它们转换为 model message，但特定子系统的回放代码可以消费 `customType` 值以恢复运行时状态或诊断中断的轮次。
 
 ```json
 {
@@ -258,23 +258,23 @@ Opaque, non-LLM records owned by core subsystems or extensions. `buildSessionCon
 }
 ```
 
-Current core-owned values include:
+当前由核心拥有的值包括：
 
 | `customType`             | `data` schema                                                                                                                                                                                                                                            | Writer and consumer                                                                                                                                                                                                                                                                                        |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tool_execution_start`   | `{ toolCallId: string, toolName: string, startedAt: string, args?: { command?: string, path?: string }, intent?: string }`                                                                                                                               | `AgentSession` writes a marker immediately before a tool implementation starts. Exit diagnostics combine it with assistant tool calls and tool results to reconstruct calls left pending. Argument summaries are truncated projections; older full argument objects are accepted on read.                  |
-| `session_exit`           | `{ reason: string, kind: "normal" \| "signal" \| "fatal" \| "process_exit", recordedAt: string, pendingToolCalls?: Array<{ toolCallId?: string, toolName: string, args?: unknown, intent?: string, assistantTimestamp?: number, startedAt?: string }> }` | Normal disposal and postmortem teardown record the exit when the session has assistant history or pending tool calls. The writer immediately calls `flushSync()` so a subsequent process can inspect the last durable turn; a flush failure is logged. Resume diagnostics consume the latest valid record. |
-| `user_todo_edit`         | `{ phases: TodoPhase[] }`                                                                                                                                                                                                                                | SDK/UI todo editing persists the complete phase snapshot. Todo restoration scans backward for the latest snapshot (or a successful `todo` tool result) and restores its phases.                                                                                                                            |
-| `vibe-session-lifecycle` | Version-1 event with `{ version: 1, id, ownerId, parentSessionId, action, ... }`; `spawn` adds `cli`, `agent`, `childSessionFile`, and `createdAt`; turn events add `turn`; tombstone events add `reason`.                                               | Vibe runtime persists and replays child spawn, turn-started/settled, tombstone, and tombstone-revoked transitions to recover owned child sessions and in-flight state. Invalid or out-of-scope events are ignored.                                                                                         |
-| `autoresearch-control`   | `{ mode: "on" \| "off" \| "clear", goal?: string }`                                                                                                                                                                                                      | The built-in autoresearch command writes mode/goal changes, and experiment-limit shutdown writes `mode: "off"`. `reconstructControlState()` replays valid records on resume to restore whether autoresearch is active and its goal; `clear` removes the goal.                                              |
+| `tool_execution_start`   | `{ toolCallId: string, toolName: string, startedAt: string, args?: { command?: string, path?: string }, intent?: string }`                                                                                                                               | `AgentSession` 在工具实现开始之前立即写入一个标记。退出诊断会将其与 assistant 的 tool call 和 tool result 组合，以重建遗留的待处理 call。参数摘要是截断后的投影；读取时接受旧式的完整参数对象。                                                                                                                |
+| `session_exit`           | `{ reason: string, kind: "normal" \| "signal" \| "fatal" \| "process_exit", recordedAt: string, pendingToolCalls?: Array<{ toolCallId?: string, toolName: string, args?: unknown, intent?: string, assistantTimestamp?: number, startedAt?: string }> }` | 当会话具有 assistant 历史或待处理的 tool call 时，正常释放和事后拆解会记录该退出。写入方会立即调用 `flushSync()`，以便后续进程检查最后持久化的轮次；flush 失败会被记录。Resume 诊断会消费最新的有效记录。 |
+| `user_todo_edit`         | `{ phases: TodoPhase[] }`                                                                                                                                                                                                                                | SDK/UI todo 编辑会持久化完整的 phase 快照。Todo 恢复会向后扫描以查找最新的快照（或成功的 `todo` 工具结果）并恢复其 phase。                                                                                                                                                              |
+| `vibe-session-lifecycle` | 版本为 1 的事件，结构为 `{ version: 1, id, ownerId, parentSessionId, action, ... }`；`spawn` 添加 `cli`、`agent`、`childSessionFile` 和 `createdAt`；turn 事件添加 `turn`；tombstone 事件添加 `reason`。                                               | Vibe 运行时持久化并回放子会话的 spawn、turn-started/settled、tombstone 以及 tombstone-revoked 转换，以恢复所拥有的子会话和进行中的状态。无效或超出范围的事件会被忽略。                                                                                                                                                |
+| `autoresearch-control`   | `{ mode: "on" \| "off" \| "clear", goal?: string }`                                                                                                                                                                                                      | 内置的 autoresearch 命令写入 mode/goal 变更，实验限制关闭写入 `mode: "off"`。`reconstructControlState()` 在 resume 时回放有效记录以恢复 autoresearch 是否激活及其 goal；`clear` 会移除 goal。                                                                                                            |
 
-On resume, a valid latest `session_exit` after a non-terminal conversation tail causes the loader to append a synthetic assistant message with `stopReason: "aborted"` and rebuild the display/agent context. A normal exit only triggers that transition when it recorded pending tool calls; abnormal exit kinds can trigger it without that list. This prevents the restored transcript from presenting an interrupted turn as still live.
+Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `session_exit`，loader 会追加一条带有 `stopReason: "aborted"` 的合成 assistant 消息，并重建显示/agent 上下文。仅当正常退出记录了待处理的 tool call 时，正常退出才会触发该转换；异常退出类型可以在没有该列表的情况下触发该转换。这可以防止恢复后的 transcript 将一个已中断的轮次呈现为仍处于活动状态。
 
-The strings in the table are reserved for their core consumers. Extensions MUST NOT use them. Use a namespaced identifier such as a reverse-domain or package-qualified name for extension records; a collision can cause core replay logic to interpret extension data as lifecycle state. Unknown namespaced values remain opaque to core session-context reconstruction.
+表中的字符串保留给其核心消费者使用。扩展 MUST NOT 使用这些字符串。请使用带命名空间的标识符（例如反向域名或包限定名）作为扩展记录；冲突可能导致核心回放逻辑将扩展数据解释为生命周期状态。未知命名空间的值对核心 session-context 重建保持不透明。
 
 ### `custom_message`
 
-Extension-provided message that does participate in LLM context. `content` can be a string or text/image content blocks, and `attribution` records whether the user or agent initiated it.
+由扩展提供的、确实参与 LLM context 的消息。`content` 可以是字符串或 text/image 内容块，`attribution` 记录该消息是由用户还是 agent 发起的。
 
 ```json
 {
@@ -303,11 +303,11 @@ Extension-provided message that does participate in LLM context. `content` can b
 }
 ```
 
-`label: undefined` clears a label for `targetId`.
+`label: undefined` 会清除 `targetId` 的标签。
 
 ### `title_change`
 
-Append-only audit entry for a session rename. It records `title`, `source` (`auto` or `user`), and optionally `previousTitle` and `trigger`. The current title is also updated in the fixed-width title slot so listing does not require a full-file rewrite.
+会话重命名的 append-only 审计 entry。它记录 `title`、`source`（`auto` 或 `user`），以及可选的 `previousTitle` 和 `trigger`。当前标题也会在定宽标题槽中更新，这样 listing 不需要重写整个文件。
 
 ### `ttsr_injection`
 
@@ -323,7 +323,7 @@ Append-only audit entry for a session rename. It records `title`, `source` (`aut
 
 ### `credential_pin`
 
-Records the provider and a pseudonymous SHA-256 account/scope hash used to re-pin resumed OAuth traffic to the serving account and preserve account-scoped prompt-cache reuse. It does not store the raw account identity; exported hashes remain linkable and are not anonymous.
+记录 provider 和用于将恢复的 OAuth 流量重新绑定到服务账户并保留账户作用域 prompt-cache 重用的伪匿名 SHA-256 账户/作用域哈希。它不存储原始账户身份；导出的哈希仍然可链接，并非匿名。
 
 ### `session_init`
 
@@ -359,155 +359,155 @@ Records the provider and a pseudonymous SHA-256 account/scope hash used to re-pi
 
 ## Versioning and Migration
 
-Current session version: `3`.
+当前会话版本：`3`。
 
 ### v1 -> v2
 
-Applied when header `version` is missing or `< 2`:
+当 header `version` 缺失或 `< 2` 时应用：
 
-- Adds `id` and `parentId` to each non-header entry.
-- Reconstructs a linear parent chain using file order.
-- Migrates compaction field `firstKeptEntryIndex` -> `firstKeptEntryId` when present.
-- Sets header `version = 2`.
+- 为每个非 header entry 添加 `id` 和 `parentId`。
+- 使用文件顺序重建线性的 parent 链。
+- 当 compaction 字段 `firstKeptEntryIndex` 存在时，迁移为 `firstKeptEntryId`。
+- 设置 header `version = 2`。
 
 ### v2 -> v3
 
-Applied when header `version < 3`:
+当 header `version < 3` 时应用：
 
-- For `message` entries: rewrites legacy `message.role === "hookMessage"` to `"custom"`.
-- Sets header `version = 3`.
+- 对于 `message` entry：将旧式的 `message.role === "hookMessage"` 重写为 `"custom"`。
+- 设置 header `version = 3`。
 
 ### Migration Trigger and Persistence
 
-- Migrations run during session load (`setSessionFile`).
-- If any migration ran, the in-memory representation is marked for a full rewrite rather than rewritten immediately.
-- The next persistence operation performs the full rewrite before incremental appends continue.
+- 迁移在会话加载期间运行（`setSessionFile`）。
+- 如果运行了任何迁移，内存中的表示会被标记为需要完整重写，而不是立即重写。
+- 接下来的持久化操作会在增量 append 继续之前执行完整重写。
 
 ## Load and Compatibility Behavior
 
-`loadEntriesFromFile(path)` behavior:
+`loadEntriesFromFile(path)` 行为：
 
-- Missing file (`ENOENT`) -> returns `[]`.
-- Current files at least 8 MiB use a streaming JSONL loader; smaller or non-file storage uses a full text read.
-- Non-parseable lines are handled by the lenient JSONL parser.
-- The optional fixed-width title slot is removed and folded into the header.
-- If the first logical entry is not a valid session header (`type !== "session"` or missing string `id`) -> returns `[]`.
+- 文件缺失（`ENOENT`） -> 返回 `[]`。
+- 至少 8 MiB 的当前文件使用流式 JSONL loader；较小的或非文件存储使用完整文本读取。
+- 不可解析的行由宽松的 JSONL 解析器处理。
+- 可选的定宽标题槽会被移除并合并到 header。
+- 如果第一个逻辑 entry 不是有效的 session header（`type !== "session"` 或缺少字符串 `id`） -> 返回 `[]`。
 
-`SessionManager.setSessionFile()` behavior:
+`SessionManager.setSessionFile()` 行为：
 
-- `[]` from the loader is treated as empty/nonexistent session and replaced with a new initialized session at that exact path; its header is materialized immediately.
-- Valid files are loaded, migrated if needed, blob refs resolved, then indexed.
+- 来自 loader 的 `[]` 被视为空/不存在的会话，并在该确切路径上替换为新初始化的会话；其 header 会被立即物化。
+- 有效文件会被加载，必要时迁移，解析 blob 引用，然后建立索引。
 
 ## Tree and Leaf Semantics
 
-The underlying model is append-only tree + mutable leaf pointer:
+底层模型是 append-only 树 + 可变的 leaf 指针：
 
-- Every append method creates exactly one new entry whose `parentId` is current `leafId`.
-- The new entry becomes the new `leafId`.
-- `branch(entryId)` moves only `leafId`; existing entries remain unchanged.
-- `resetLeaf()` sets `leafId = null`; next append creates a new root entry (`parentId: null`).
-- `branchWithSummary()` sets leaf to branch target and appends a `branch_summary` entry.
+- 每个 append 方法恰好创建一个新 entry，其 `parentId` 为当前 `leafId`。
+- 新 entry 成为新的 `leafId`。
+- `branch(entryId)` 仅移动 `leafId`；现有 entry 保持不变。
+- `resetLeaf()` 设置 `leafId = null`；下一次 append 会创建一个新的根 entry（`parentId: null`）。
+- `branchWithSummary()` 将 leaf 设置为分支目标并追加一个 `branch_summary` entry。
 
-`getEntries()` returns all non-header entries in insertion order. Existing entries are not deleted in normal operation; rewrites preserve logical history while updating representation (migrations, move, targeted rewrite helpers).
+`getEntries()` 按插入顺序返回所有非 header 的 entry。在正常操作中不会删除现有 entry；重写在更新表示（迁移、移动、定向重写辅助函数）的同时保留逻辑历史。
 
 ## Context Reconstruction (`buildSessionContext`)
 
-`buildSessionContext(entries, leafId?, byId?, options?)` resolves what is sent to the model. `options.transcript: true` instead builds a display transcript. Full transcript mode preserves compactions inline; `collapseCompactedHistory` renders only the current compacted tail, and `keepDanglingToolCalls` preserves still-running tool calls during a mid-turn UI rebuild.
+`buildSessionContext(entries, leafId?, byId?, options?)` 解析发送给 model 的内容。`options.transcript: true` 则改为构建显示 transcript。完整 transcript 模式会内联保留 compaction；`collapseCompactedHistory` 仅渲染当前压缩后的尾部，`keepDanglingToolCalls` 在中途 UI 重建期间保留仍在运行的 tool call。
 
-Algorithm:
+算法：
 
-1. Determine leaf:
-   - `leafId === null` -> return empty context.
-   - explicit `leafId` -> use that entry if found.
-   - otherwise fallback to last entry.
-2. Walk `parentId` to root, stopping on a repeated id to bound corrupt cycles, then reverse to root->leaf.
-3. Derive runtime state across the path:
-   - resolved and configured thinking selectors from latest `thinking_level_change`
-   - service tier from latest `service_tier_change`
-   - model map from `model_change` entries (`role ?? "default"`); assistant-message inference is legacy fallback only until an explicit default is seen
-   - deduplicated `injectedTtsrRules`
-   - mode/modeData from latest `mode_change` (default mode `"none"`)
-4. Choose the emission boundary:
-   - a later `reset_boundary` hides everything through that boundary from model context and collapsed live transcript
-   - otherwise the latest compaction emits its summary plus kept/post-compaction messages (provider-native replacement history may supply the kept model context)
-   - full transcript export retains pre-reset history and renders compactions chronologically
-5. Convert `message`, `custom_message`, and `branch_summary` entries into messages. Other entry types only affect replay state or metadata.
-6. Remove dangling tool calls from replay (unless explicitly retained for a mid-turn transcript), neutralizing protected reasoning metadata on rewritten turns; drop unsafe aborted/error assistant turns and their paired tool results from model context.
+1. 确定 leaf：
+   - `leafId === null` -> 返回空 context。
+   - 显式的 `leafId` -> 使用该 entry（如果找到）。
+   - 否则回退到最后一个 entry。
+2. 沿 `parentId` 向根方向遍历，遇到重复的 id 时停止以限制损坏的循环，然后反转得到 root->leaf。
+3. 在整条路径上推导运行时状态：
+   - 来自最新 `thinking_level_change` 的已解析和已配置的 thinking 选择器
+   - 来自最新 `service_tier_change` 的 service tier
+   - 来自 `model_change` entry 的 model map（`role ?? "default"`）；在出现显式 default 之前，assistant 消息推断仅为旧式回退
+   - 去重后的 `injectedTtsrRules`
+   - 来自最新 `mode_change` 的 mode/modeData（默认 mode 为 `"none"`）
+4. 选择发射边界：
+   - 之后的 `reset_boundary` 会将该边界之前的所有内容从 model context 和折叠后的实时 transcript 中隐藏
+   - 否则最新的 compaction 会发出其 summary 以及保留的/compaction 之后的消息（provider 原生的替换历史可以提供保留的 model context）
+   - 完整 transcript 导出会保留 reset 之前的历史，并按时间顺序渲染 compaction
+5. 将 `message`、`custom_message` 和 `branch_summary` entry 转换为消息。其他 entry 类型仅影响回放状态或元数据。
+6. 从回放中移除悬空的 tool call（除非出于中途 transcript 明确保留），在重写的轮次上中和对受保护的推理元数据的处理；从 model context 中删除不安全的 aborted/error assistant 轮次及其配对的 tool result。
 
 ## Persistence Guarantees and Failure Model
 
 ### Persist vs in-memory
 
-- `SessionManager.create/open/continueRecent/forkFrom` -> persistent mode (`persist = true`).
-- `SessionManager.inMemory` -> non-persistent mode (`persist = false`) with `MemorySessionStorage`.
+- `SessionManager.create/open/continueRecent/forkFrom` -> persistent 模式（`persist = true`）。
+- `SessionManager.inMemory` -> 非 persistent 模式（`persist = false`），使用 `MemorySessionStorage`。
 
 ### Write pipeline
 
-Completed entries update memory and are handed to file/memory storage synchronously in the append call once the lazy file-creation gate has been crossed. There is no `fsync`, so the guarantee covers software crashes, not power loss. Streaming partial text is not persisted until the completed message is appended.
+已完成的 entry 会更新内存，并在懒文件创建门控被跨越后，在 append 调用中同步交给文件/内存存储。这里没有 `fsync`，因此保证覆盖软件崩溃，但不覆盖断电。流式的部分文本在已完成消息被追加之前不会被持久化。
 
-- A new ordinary session remains memory-only until it contains an assistant message or a caller invokes `ensureOnDisk()`.
-- Before that gate, entries remain in memory; crossing it writes the full title slot, header, and accumulated entries.
-- Afterwards, entries append incrementally.
-- Saving an editor draft forces a discoverable header and stores `draft.txt` with a marker; if the draft disappears while only startup metadata remains, close removes that draft-only session. Explicit `ensureOnDisk()` sessions remain resumable.
-- Concurrent completed appends supersede an in-flight atomic rewrite with an authoritative full-body rewrite so stale publication cannot clobber them.
+- 一个新的普通会话在包含 assistant 消息或调用方调用 `ensureOnDisk()` 之前，仅存在于内存中。
+- 在该门控之前，entry 保留在内存中；跨越该门控时会写入完整的标题槽、header 以及累积的 entry。
+- 此后，entry 以增量方式 append。
+- 保存编辑器草稿会强制写入可发现的 header，并存储带标记的 `draft.txt`；如果草稿消失而仅剩下启动元数据，close 会删除该仅含草稿的会话。显式的 `ensureOnDisk()` 会话保持可恢复状态。
+- 并发的已完成 append 会用权威的完整正文重写来取代正在进行的原子重写，以防止过时的发布覆盖它们。
 
 ### Durability operations
 
-- `flush()` drains async disk/storage queues and the open writer (no `fsync`); `flushSync()` performs synchronous draining/full rewrite where supported.
-- Atomic full rewrites use storage `writeTextAtomic` with a commit guard; file storage stages then renames over the target, including an EPERM-safe move-aside fallback.
-- Rewrites serve renames, entry rewrites, migrations/sanitization, move/fork, and recovery. Session-title changes normally update the fixed-width title slot and append a `title_change` audit entry instead of rewriting the body.
+- `flush()` 排空异步的磁盘/存储队列和打开的 writer（无 `fsync`）；`flushSync()` 在支持时执行同步排空/完整重写。
+- 原子完整重写使用存储的 `writeTextAtomic` 并带有提交保护；file storage 会先暂存然后重命名覆盖目标，包括 EPERM 安全的 move-aside 回退。
+- 重写服务于重命名、entry 重写、迁移/清理、移动/fork 和恢复。会话标题的变更通常会更新定宽标题槽并追加一个 `title_change` 审计 entry，而不是重写正文。
 
 ### Error behavior
 
-- Persistence errors are latched and rethrown by later flush/close/write operations; the first is logged once with session-file context.
-- Failed atomic publication attempts authoritative repair. If storage may have published a write and repair cannot be proven durable, `SessionPersistenceIndeterminateError` fails closed with the original and recovery errors.
-- Writer close propagates the first meaningful error.
+- 持久化错误会被锁定，并在后续的 flush/close/write 操作中重新抛出；首次错误会连同会话文件上下文一起被记录一次。
+- 失败的原子发布会触发权威修复。如果存储可能已发布写入且无法证明修复是持久的，`SessionPersistenceIndeterminateError` 会以原始错误和恢复错误失败关闭。
+- Writer 关闭时会传播第一个有意义的错误。
 
 ## Data Size Controls and Blob Externalization
 
-Before persisting entries:
+在持久化 entry 之前：
 
-- Strings over 500,000 characters are truncated with `"[Session persistence truncated large content]"`, except signed/encrypted provider blocks, signature fields, and complete Anthropic native web-search history blocks, which must remain byte-exact for replay.
-- Transient `jsonlEvents` is removed.
-- If an object has both string `content` and numeric `lineCount`, line count is recomputed after truncation.
-- Image data URLs in `image_url` fields are always content-addressed in the blob store and replaced with `blob:sha256:<hash>`, regardless of length. Other base64 image payloads are externalized at 1,024 characters: image content/data payloads and image-generation results.
-- Redundant OpenAI Responses `thinkingSignature` copies are omitted when the authoritative reasoning item already exists in `providerPayload`.
+- 超过 500,000 字符的字符串会被截断为 `"[Session persistence truncated large content]"`，但已签名/加密的 provider 块、签名字段以及完整的 Anthropic 原生 web-search 历史块除外——为了回放它们必须保持字节精确。
+- 临时的 `jsonlEvents` 会被移除。
+- 如果一个对象同时具有字符串 `content` 和数值 `lineCount`，则会在截断后重新计算行数。
+- `image_url` 字段中的 image data URL 始终通过内容寻址存入 blob 存储，并替换为 `blob:sha256:<hash>`，无论长度如何。其他 base64 image payload 在 1,024 个字符时进行外置化：image content/data payload 和 image-generation 结果。
+- 当权威的 reasoning 项已存在于 `providerPayload` 中时，省略多余的 OpenAI Responses `thinkingSignature` 副本。
 
-On load, persisted blob references are resolved back to the inline payload shapes expected by downstream transports.
+加载时，已持久化的 blob 引用会被解析回下游传输所期望的内联 payload 形式。
 
 ## Storage Abstractions
 
-`SessionStorage` owns filesystem-like operations used by `SessionManager`: synchronous directory/existence/write/stat/list operations; async read, sliced read, write, guarded atomic write, rename, unlink, artifact-aware deletion, title update, writer creation, and backend drain.
+`SessionStorage` 拥有 `SessionManager` 所使用的类文件系统操作：同步的目录/存在性/写入/stat/list 操作；异步的 read、sliced read、write、带保护的原子 write、rename、unlink、artifact-aware deletion、title update、writer 创建以及后端排空。
 
-Implementations and adapters:
+实现与适配器：
 
-- `FileSessionStorage`: real local files
-- `MemorySessionStorage`: map/chunk-backed in-memory storage for non-persistent sessions and tests
-- `IndexedSessionStorage`: shared local index plus ordered remote publication used by Redis/SQL-backed storage
+- `FileSessionStorage`：真实的本地文件
+- `MemorySessionStorage`：基于 map/chunk 的内存存储，用于非 persistent 会话和测试
+- `IndexedSessionStorage`：共享的本地索引加上有序的远端发布，用于 Redis/SQL 后端的存储
 
-`SessionStorageWriter` exposes `append`, optional `appendSync`, `flush`, optional `flushSync`, `isOpen`, `close`, and `getError`.
+`SessionStorageWriter` 暴露 `append`、可选的 `appendSync`、`flush`、可选的 `flushSync`、`isOpen`、`close` 和 `getError`。
 
 ## Session Discovery Utilities
 
-Discovery helpers live in `session-listing.ts`; `SessionManager` exposes project-scoped wrappers:
+发现辅助函数位于 `session-listing.ts`；`SessionManager` 暴露项目作用域的包装器：
 
-- `getRecentSessions(sessionDir, limit?)` -> lightweight welcome metadata, default limit 4
-- `findMostRecentSession(sessionDir)` -> newest by mtime
-- `listSessions(sessionDir, storage)` / `SessionManager.list(...)` -> project scope with lifecycle status
-- `listSessionsReadOnly(...)` -> same metadata without backup recovery
-- `listAllSessions(storage)` / `SessionManager.listAll()` -> all project scopes
-- `resolveResumableSession(...)` -> local lookup then optional global fallback
+- `getRecentSessions(sessionDir, limit?)` -> 轻量级的欢迎元数据，默认 limit 为 4
+- `findMostRecentSession(sessionDir)` -> 按 mtime 最新的会话
+- `listSessions(sessionDir, storage)` / `SessionManager.list(...)` -> 带生命周期状态的项目作用域
+- `listSessionsReadOnly(...)` -> 相同的元数据，但不进行备份恢复
+- `listAllSessions(storage)` / `SessionManager.listAll()` -> 所有项目作用域
+- `resolveResumableSession(...)` -> 本地查找然后可选的全局回退
 
-Recent/most-recent scans read only a 4 KiB prefix. Full lists read that prefix plus a bounded 32 KiB tail for lifecycle status. Scans are stat-keyed and cached; large sets are processed with bounded parallel workers. Normal per-directory scans also recover the newest orphaned EPERM backup when its primary JSONL is missing. Resume matching is case-insensitive and accepts session id prefixes, full filename prefixes, or the id suffix after the timestamp.
+Recent/most-recent 扫描仅读取 4 KiB 的前缀。完整列表会读取该前缀以及一个上限为 32 KiB 的尾部以获取生命周期状态。扫描是 stat-keyed 并被缓存；大型集合使用有上限的并行 worker 处理。普通的按目录扫描还会在主 JSONL 缺失时恢复最新的孤立 EPERM 备份。Resume 匹配是大小写不敏感的，接受 session id 前缀、完整文件名前缀，或时间戳之后的 id 后缀。
 
 ## Related but Distinct: Prompt History Storage
 
-`HistoryStorage` (`history-storage.ts`) is a separate SQLite subsystem for prompt recall/search, not session replay.
+`HistoryStorage`（`history-storage.ts`）是一个独立的 SQLite 子系统，用于 prompt 回忆/搜索，而非会话回放。
 
-- DB: `~/.omp/agent/history.db`
-- Table: `history(id, prompt, created_at, cwd, session_id)`
-- FTS5 index: `history_fts` with trigger-maintained sync
-- Deduplicates consecutive identical prompts using in-memory last-prompt cache
-- Inserts are batched through an async drain queue (~100 ms delay) so prompt capture does not block turn execution
+- 数据库：`~/.omp/agent/history.db`
+- 表：`history(id, prompt, created_at, cwd, session_id)`
+- FTS5 索引：`history_fts`，由 trigger 维护同步
+- 使用内存中的 last-prompt 缓存对连续相同的 prompt 进行去重
+- 插入通过异步排空队列（~100 ms 延迟）批处理，因此 prompt 捕获不会阻塞轮次执行
 
 Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.

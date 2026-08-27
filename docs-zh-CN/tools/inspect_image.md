@@ -1,6 +1,6 @@
 # inspect_image
 
-> Send a local image file or current-turn image attachment to a vision-capable model and return text analysis.
+> 将本地图片文件或当前轮次的图片附件发送给具备视觉能力的模型，并返回文本分析结果。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/inspect-image.ts`

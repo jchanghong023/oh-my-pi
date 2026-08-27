@@ -1,12 +1,12 @@
-# Keybindings
+# 键盘快捷键
 
-Run `/hotkeys` inside an `omp` session to see the active chords for your current build. The list reflects any remaps loaded from disk and any bindings added by extensions.
+在 `omp` 会话中运行 `/hotkeys` 即可查看当前构建的可用快捷键组合。列表会反映从磁盘加载的所有重映射以及扩展添加的所有绑定。
 
-## Customize keybindings
+## 自定义键盘快捷键
 
-User remaps live in `~/.omp/agent/keybindings.yml`. The file is a YAML mapping whose keys are keybinding action IDs and whose values are either one chord string or an array of chord strings. It is not read from `~/.omp/agent/config.yml`, and there is no nested `keybindings` object.
+用户重映射保存在 `~/.omp/agent/keybindings.yml` 中。该文件是一个 YAML 映射，其键是键盘快捷键动作 ID，其值是一个快捷键字符串或一组快捷键字符串所组成的数组。该文件不会从 `~/.omp/agent/config.yml` 读取，也没有任何嵌套的 `keybindings` 对象。
 
-With a named profile, bindings from the default profile's agent directory are loaded first and the active profile's `keybindings.yml` overrides them action by action. The inherited file is read-only during that profile's startup.
+在使用命名 profile 的情况下，默认 profile 的 agent 目录中的绑定会先被加载，随后活动 profile 的 `keybindings.yml` 会按动作逐个覆盖它们。在该 profile 启动期间，被继承的文件是只读的。
 
 ```yaml
 app.model.cycleForward: Ctrl+P
@@ -14,15 +14,15 @@ app.model.selectTemporary: Alt+P
 app.plan.toggle: Alt+Shift+P
 ```
 
-Chord names are case-insensitive and use the same notation shown in the UI, such as `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, and `Ctrl+Backspace`.
+快捷键名称不区分大小写，并使用 UI 中显示的同一套表示法，例如 `Ctrl+P`、`Alt+Shift+P`、`Shift+Enter` 和 `Ctrl+Backspace`。
 
-Set an action to an empty array to disable it:
+将动作设置为空数组即可禁用该动作：
 
 ```yaml
 app.history.search: []
 ```
 
-## Common action IDs
+## 常用动作 ID
 
 | Action ID                    | Default                                                               | Meaning                                                                                                                                                                              |
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -49,8 +49,8 @@ app.history.search: []
 | `app.live.toggle`            | `Ctrl+L`                                                              | Start or stop live voice mode (same as `/live`)                                                                                                                                      |
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md)                                                                                                                                                 |
 
-On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. When the clipboard holds no image, `app.clipboard.pasteImage` pastes the clipboard text instead, so hosts that deliver only this chord (VS Code's integrated terminal when configured to forward `Ctrl+V`, Windows clipboard history via `Win+V`) work for both payload kinds. Windows Terminal also swallows `Ctrl+Enter`, so the `app.message.followUp` chord also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses — and the same chord submits the agent dashboard's new-agent description and hook-editor prompts. If your existing `keybindings.yml` already assigns `Ctrl+Q` to another action, that user remap wins and follow-up keeps `Ctrl+Enter` unless you explicitly bind `app.message.followUp`.
+在 Windows Terminal 中，`Ctrl+V` 可能会被终端的粘贴命令截获，导致 `omp` 接收不到；当剪贴板图片粘贴似乎没有反应时，请使用 `Alt+V` 作为备用方案。当剪贴板中没有图片时，`app.clipboard.pasteImage` 会改为粘贴剪贴板中的文本，因此仅提供此快捷键的主机（配置为转发 `Ctrl+V` 的 VS Code 集成终端、通过 `Win+V` 调用的 Windows 剪贴板历史记录）可以同时处理这两种内容类型。Windows Terminal 同样会吞掉 `Ctrl+Enter`，因此 `app.message.followUp` 还绑定了 `Ctrl+Q` —— 这与 GitHub Copilot CLI 所使用的快捷键相同 —— 同一快捷键还会提交 agent dashboard 的新 agent 描述和 hook 编辑器提示。如果你现有的 `keybindings.yml` 已将 `Ctrl+Q` 分配给其他动作，该 u…
 
-Terminals that implement OSC 5522 enhanced paste can send clipboard MIME data directly to `omp`; image pastes are attached as `[Image #N]`, while text/plain paste events keep normal paste behavior. When OSC 5522 is unavailable, bracketed paste still handles text, and a pasted single image-file path is loaded as an image when the file is readable from the `omp` host.
+支持 OSC 5522 enhanced paste 的终端可以直接将剪贴板 MIME 数据发送给 `omp`；图片粘贴会作为 `[Image #N]` 附件添加，而 text/plain 粘贴事件则保持正常的粘贴行为。当 OSC 5522 不可用时，bracketed paste 仍可处理文本粘贴；若粘贴的单个图片文件路径可从 `omp` 主机读取，则会作为图片加载。
 
-Older unqualified action names are migrated when `keybindings.yml` is loaded, but new docs and new configs should use the namespaced action IDs above. Existing `keybindings.json` files are still accepted and migrated to `keybindings.yml`; `keybindings.yaml` is also accepted.
+加载 `keybindings.yml` 时，较旧的未限定动作名称会被迁移，但新的文档和新的配置应使用上述带命名空间的动作 ID。现有的 `keybindings.json` 文件仍然可读，并会被迁移到 `keybindings.yml`；`keybindings.yaml` 也同样可读。
