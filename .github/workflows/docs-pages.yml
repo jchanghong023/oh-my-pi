@@ -1,5 +1,6 @@
 name: Deploy documentation to GitHub Pages
 
+# Documentation build/deploy is isolated from the application CI.
 on:
   push:
     branches: [main]
