@@ -35,6 +35,7 @@ import {
 	updateViaBinaryAt,
 	updateViaManager,
 	updateViaShimTakeover,
+	warnOnPathConflict,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -1008,6 +1009,93 @@ describe("update-cli release binary integrity", () => {
 			}),
 		).rejects.toThrow("retry later or set GITHUB_TOKEN or GH_TOKEN");
 		expect(await Bun.file(targetPath).exists()).toBe(false);
+	});
+
+	it("reports download progress through the response stream on a TTY", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		const progress: Array<{ done: number; total: number }> = [];
+		const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		const writeSpy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+			const text = String(chunk);
+			if (text.startsWith("\r") && text.includes("%")) {
+				const match = /(\d+)%/.exec(text);
+				progress.push({ done: Number(match?.[1] ?? 0), total: 100 });
+			}
+			return true;
+		});
+		try {
+			await downloadVerifiedBinary({
+				url,
+				targetPath,
+				expectedSize: Buffer.byteLength(content),
+				expectedDigest: digest,
+				fetchImpl: async () => new Response(content),
+			});
+		} finally {
+			writeSpy.mockRestore();
+			if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+		}
+
+		expect(await Bun.file(targetPath).text()).toBe(content);
+		expect(progress.length).toBeGreaterThan(0);
+	});
+});
+
+describe("update-cli PATH conflict warning", () => {
+	it("warns when the PATH-resolved omp differs from the update target", () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation(message => {
+			logs.push(String(message));
+		});
+
+		warnOnPathConflict("/usr/local/bin/omp", "/usr/bin/omp");
+
+		expect(logs.some(line => line.includes("Warning") && line.includes("/usr/bin/omp"))).toBe(true);
+		expect(logs.some(line => line.includes("/usr/local/bin/omp"))).toBe(true);
+	});
+
+	it("stays silent when the PATH-resolved omp is the update target", () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation(message => {
+			logs.push(String(message));
+		});
+
+		warnOnPathConflict("/usr/local/bin/omp", "/usr/local/bin/omp");
+
+		expect(logs).toEqual([]);
+	});
+
+	it("treats a symlink alias resolving to the target as no conflict", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, "bin", "omp");
+		const aliasPath = path.join(dir, "alias", "omp");
+		await fs.mkdir(path.dirname(targetPath), { recursive: true });
+		await fs.mkdir(path.dirname(aliasPath), { recursive: true });
+		await Bun.write(targetPath, "binary");
+		await fs.symlink(targetPath, aliasPath);
+
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation(message => {
+			logs.push(String(message));
+		});
+
+		warnOnPathConflict(targetPath, aliasPath);
+
+		expect(logs).toEqual([]);
+	});
+
+	it("is silent when no omp is found on PATH", () => {
+		const logs: string[] = [];
+		vi.spyOn(console, "log").mockImplementation(message => {
+			logs.push(String(message));
+		});
+
+		warnOnPathConflict("/usr/local/bin/omp", undefined);
+
+		expect(logs).toEqual([]);
 	});
 });
 

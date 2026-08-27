@@ -12,6 +12,7 @@
 
 - `extendedContext` now defaults to off: models with premium long-context pricing tiers (e.g. GPT-5.6 1M) stay capped at their standard-pricing window unless the setting or `/extended-context on` enables the extended window.
 - Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
+- `omp update` now shows binary download progress and warns when the PATH-resolved `omp` differs from the update target.
 - `omp --version` now includes the UTC release timestamp, rounded to the minute.
 - Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
 - Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.

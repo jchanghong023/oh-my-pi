@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { $env, $which, APP_NAME, compareVersions, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import { $env, $which, APP_NAME, compareVersions, formatBytes, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
@@ -290,6 +290,9 @@ async function getReleaseBinaryAsset(
 	return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
 }
 
+/**
+ * Options for {@link downloadVerifiedBinary}.
+ */
 export interface VerifiedBinaryDownloadOptions {
 	url: string;
 	targetPath: string;
@@ -298,6 +301,53 @@ export interface VerifiedBinaryDownloadOptions {
 	fetchImpl?: Fetch;
 }
 
+/**
+ * Single-line download progress reporter.
+ *
+ * Rewrites the current line via `\r` on a TTY so progress updates don't spam
+ * the log; both callbacks no-op on a non-TTY stdout (CI, pipes) where
+ * carriage-return noise would corrupt log files. The final line is only
+ * emitted by the caller so a verification failure can report its own message.
+ */
+function downloadProgressBar(): { update(done: number, total: number): void; finish(): void } {
+	if (!process.stdout.isTTY) {
+		return { update: () => undefined, finish: () => undefined };
+	}
+	let lastLineLength = 0;
+	const render = (done: number, total: number): void => {
+		const ratio = total > 0 ? Math.min(1, done / total) : 0;
+		const percent = Math.round(ratio * 100);
+		const line = `  ${percent}%  ${formatBytes(done)} / ${formatBytes(total)}`;
+		const pad = " ".repeat(Math.max(0, lastLineLength - line.length));
+		process.stdout.write(`\r${line}${pad}`);
+		lastLineLength = line.length;
+	};
+	return {
+		update: render,
+		finish: () => process.stdout.write("\n"),
+	};
+}
+/**
+ * Warn when the shell resolves `omp` from PATH to a different file than the
+ * update target. The update replaces `targetPath`, but a PATH entry that
+ * differs from it keeps launching the old (or another) binary, so the user
+ * may not be running the freshly updated version at all. Symlink aliases that
+ * resolve to the same file are not a conflict.
+ *
+ * `ompPath` is injectable for tests; it defaults to the PATH-resolved binary.
+ */
+export function warnOnPathConflict(targetPath: string, ompPath: string | undefined = resolveOmpPath()): void {
+	if (!ompPath) return;
+	const resolvedTarget = tryRealpath(targetPath) ?? targetPath;
+	const resolvedOmp = tryRealpath(ompPath) ?? ompPath;
+	if (normalizePathForComparison(resolvedTarget) === normalizePathForComparison(resolvedOmp)) return;
+	console.log(
+		chalk.yellow(
+			`\nWarning: ${APP_NAME} resolves to ${ompPath} in PATH, which differs from the update target ${targetPath}. ` +
+				`Your shell keeps launching the PATH entry; run \`${APP_NAME} --version\` after updating to confirm which binary is active.`,
+		),
+	);
+}
 /**
  * Download a binary and verify its GitHub-reported size and SHA-256 digest.
  */
@@ -324,6 +374,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 
 	const hash = createHash("sha256");
 	let size = 0;
+	const progress = downloadProgressBar();
 	const verifier = new Transform({
 		transform(chunk, _encoding, callback) {
 			size += chunk.byteLength;
@@ -336,12 +387,14 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 				return;
 			}
 			hash.update(chunk);
+			progress.update(size, options.expectedSize);
 			callback(null, chunk);
 		},
 	});
 
 	try {
 		await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
+		progress.finish();
 		const digest = `sha256:${hash.digest("hex")}`;
 		if (size !== options.expectedSize) {
 			throw new Error(`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`);
@@ -1774,6 +1827,7 @@ export async function updateViaBinaryAt(
 	// locked (the previous process image on Windows), so a fixed name would force
 	// the move-aside rename to overwrite it. pid, timestamp, and a process-local
 	// counter keep two updates started in the same millisecond from colliding.
+	warnOnPathConflict(targetPath);
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${targetPath}.${attempt}.new`;
 	const backupPath = `${targetPath}.${attempt}.bak`;
@@ -1867,6 +1921,7 @@ export async function updateViaShimTakeover(
 	const binaryName = options.binaryName ?? getBinaryName();
 	const launcherDir = path.dirname(shimPath);
 	const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
+	warnOnPathConflict(exePath);
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${exePath}.${attempt}.new`;
 	const asset = await getReleaseBinaryAsset(
