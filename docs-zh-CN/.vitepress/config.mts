@@ -56,6 +56,7 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
   const sections: DefaultTheme.SidebarItem[] = [
     section('Start', [
       '/',
+      '/command-shortcut-tutorial',
       '/cli-reference',
       '/config-usage',
       '/settings',
