@@ -15,39 +15,39 @@ interface DocumentationSection {
 
 const sections: DocumentationSection[] = [
   {
-    eyebrow: 'Start',
-    title: 'Use omp effectively',
-    description: 'Set up the CLI, configure a workspace, and understand the session model.',
+    eyebrow: '入门',
+    title: '高效使用 omp',
+    description: '搭建 CLI、配置工作区，并理解会话模型。',
     links: [
-      { label: 'CLI reference', path: '/cli-reference' },
-      { label: 'Configuration', path: '/config-usage' },
-      { label: 'Sessions', path: '/session' }
+      { label: 'CLI 参考', path: '/cli-reference' },
+      { label: '配置', path: '/config-usage' },
+      { label: '会话', path: '/session' }
     ]
   },
   {
-    eyebrow: 'Workflows',
-    title: 'Run complex coding tasks',
-    description: 'Coordinate agents, preserve context, and move between interactive workflows.',
+    eyebrow: '工作流',
+    title: '运行复杂的编码任务',
+    description: '协调 agent、保留上下文，并在交互式工作流之间切换。',
     links: [
       { label: 'Agent Hub', path: '/agent-hub' },
       { label: 'Vibe mode', path: '/vibe-mode' },
-      { label: 'Memory', path: '/memory' }
+      { label: '记忆', path: '/memory' }
     ]
   },
   {
-    eyebrow: 'Models',
-    title: 'Connect any provider',
-    description: 'Choose models, configure providers, and understand compatibility behavior.',
+    eyebrow: '模型',
+    title: '接入任意 provider',
+    description: '选择模型、配置 provider，并理解兼容性行为。',
     links: [
-      { label: 'Models', path: '/models' },
-      { label: 'Providers', path: '/providers' },
-      { label: 'Add a provider', path: '/adding-a-provider' }
+      { label: '模型', path: '/models' },
+      { label: 'Provider', path: '/providers' },
+      { label: '添加 provider', path: '/adding-a-provider' }
     ]
   },
   {
-    eyebrow: 'Extend',
-    title: 'Build on the platform',
-    description: 'Add reusable skills, extensions, tools, and programmatic integrations.',
+    eyebrow: '扩展',
+    title: '在平台之上构建',
+    description: '添加可复用的 skills、extensions、tools，以及编程式集成。',
     links: [
       { label: 'Extensions', path: '/extensions' },
       { label: 'Skills', path: '/skills' },
@@ -60,9 +60,9 @@ const sections: DocumentationSection[] = [
 <template>
   <section class="docs-home-sections" aria-labelledby="browse-documentation">
     <div class="docs-home-heading">
-      <p class="docs-home-kicker">Documentation map</p>
-      <h2 id="browse-documentation">Find the right entry point</h2>
-      <p>Start with a workflow below, or use the complete sidebar and search to reach every document.</p>
+      <p class="docs-home-kicker">文档导览</p>
+      <h2 id="browse-documentation">找到合适的入口</h2>
+      <p>从下方某个工作流开始，或使用完整的侧边栏与搜索直达任一文档。</p>
     </div>
 
     <div class="docs-home-grid">

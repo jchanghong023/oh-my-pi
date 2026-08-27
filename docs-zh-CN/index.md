@@ -3,28 +3,28 @@ layout: home
 
 hero:
   name: Oh My Pi
-  text: Documentation
-  tagline: Browse the project documentation directly in your browser.
+  text: 文档
+  tagline: 在浏览器中直接浏览项目文档。
   actions:
     - theme: brand
       text: Vibe mode
       link: /vibe-mode
     - theme: alt
-      text: CLI reference
+      text: CLI 参考
       link: /cli-reference
 
 features:
   - title: Vibe mode
-    details: Persistent worker sessions coordinated by the top-level director.
+    details: 由顶层 director 协调的持久化 worker 会话。
     link: /vibe-mode
-  - title: CLI reference
-    details: Command-line interface reference and usage notes.
+  - title: CLI 参考
+    details: 命令行接口参考与使用说明。
     link: /cli-reference
-  - title: Configuration
-    details: Project configuration and usage documentation.
+  - title: 配置
+    details: 项目配置与使用相关文档。
     link: /config-usage
   - title: Agent Hub
-    details: Documentation for the agent hub architecture and behavior.
+    details: Agent Hub 架构与行为的文档。
     link: /agent-hub
 ---
 
