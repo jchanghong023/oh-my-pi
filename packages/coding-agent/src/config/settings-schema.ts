@@ -1236,6 +1236,17 @@ export const SETTINGS_SCHEMA = {
 				"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
 		},
 	},
+	"tui.mobile": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Mobile Layout",
+			description: "Use the compact mobile terminal layout",
+		},
+	},
+
 	"tui.tight": {
 		type: "boolean",
 		default: false,

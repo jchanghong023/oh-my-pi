@@ -592,6 +592,26 @@ describe("Settings", () => {
 			expect(isolated.get("display.showTokenUsage")).toBe(true);
 		});
 
+		it("applies the mobile preset below explicit runtime overrides", () => {
+			const mobile = Settings.isolated({ "tui.mobile": true });
+			expect(mobile.get("tui.tight")).toBe(true);
+			expect(mobile.get("composer.shape")).toBe("borderless");
+
+			const customized = Settings.isolated({
+				"tui.mobile": true,
+				"tui.tight": false,
+				"composer.shape": "box",
+			});
+			expect(customized.get("tui.tight")).toBe(false);
+			expect(customized.get("composer.shape")).toBe("box");
+
+			const disabled = Settings.isolated();
+			disabled.set("tui.mobile", true);
+			disabled.override("tui.mobile", false);
+			expect(disabled.get("tui.tight")).toBe(false);
+			expect(disabled.get("composer.shape")).toBe("box");
+		});
+
 		it("re-resolves path-scoped arrays when cwd changes", async () => {
 			const otherDir = path.join(tempDir.toString(), "other-project");
 			fs.mkdirSync(otherDir, { recursive: true });
