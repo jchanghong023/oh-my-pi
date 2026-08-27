@@ -1,6 +1,6 @@
 # generate_image
 
-> Generate or edit images and write generated image files to temporary paths.
+> 生成或编辑图像，并将生成的图像文件写入临时路径。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/image-gen.ts`

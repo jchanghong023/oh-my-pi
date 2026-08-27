@@ -1,404 +1,379 @@
-# Provider endpoint constraints
+# 提供商端点约束
 
-Provider integrations are not interchangeable just because they speak an
-OpenAI-shaped HTTP protocol. A request is shaped by four layers at once:
+提供商集成并不能因为它们都使用类 OpenAI 的 HTTP 协议就互换使用。
+一个请求同时由四层共同决定其形态：
 
-1. endpoint family: `openai-completions`, `openai-responses`,
-   `openai-codex-responses`, `anthropic-messages`, etc.
-2. gateway/auth surface: OpenRouter, Vercel AI Gateway, Azure OpenAI, Copilot,
-   Alibaba Coding Plan, Kimi Code, Fireworks/Firepass, and similar hosts
-3. model metadata and `compat` overrides
-4. request context: tools, images, reasoning mode, stateful session, service tier
+1. 端点族：`openai-completions`、`openai-responses`、
+   `openai-codex-responses`、`anthropic-messages` 等
+2. 网关/认证层：OpenRouter、Vercel AI Gateway、Azure OpenAI、Copilot、
+   Alibaba Coding Plan、Kimi Code、Fireworks/Firepass 等宿主
+3. 模型元数据与 `compat` 覆盖
+4. 请求上下文：工具、图像、推理模式、有状态会话、服务层级
 
-Use this page when adding a provider, adding a compat flag, or moving logic out
-of a provider-specific branch. The goal is to encode endpoint constraints once,
-at the narrowest layer that actually owns the behavior.
+在新增提供商、新增 compat 开关，或将逻辑从提供商特定分支中抽离时，
+请参考本页。目标是仅在真正拥有该行为的最小层一次性编码端点约束。
 
-Related references:
+相关参考：
 
-- [Providers](./providers.md) — provider availability, credentials, custom providers
-- [Model and Provider Configuration](./models.md) — `models.yml`, routing, and compat fields
-- [Provider streaming internals](./provider-streaming-internals.md) — stream event normalization
-- [Provider compat reference](./provider-compat-reference.md) — every compat flag, reasoning levels, tool handling per provider
-- [Provider quirks](./provider-quirks.md) — per-provider special casings, stream behavior, auth/usage, catalog handling
-- [Adding a provider](./adding-a-provider.md) — catalog/auth wiring for a new provider
+- [Providers](./providers.md) — 提供商可用性、凭证、自定义提供商
+- [Model and Provider Configuration](./models.md) — `models.yml`、路由与 compat 字段
+- [Provider streaming internals](./provider-streaming-internals.md) — 流事件归一化
+- [Provider compat reference](./provider-compat-reference.md) — 每个 compat 开关、推理层级、各提供商的工具处理
+- [Provider quirks](./provider-quirks.md) — 各提供商的特例、流行为、认证/用量、目录处理
+- [Adding a provider](./adding-a-provider.md) — 新提供商的目录/认证接入
 
-## Baseline rules
+## 基线规则
 
-- Prefer compat metadata over provider-name branches when behavior is model or
-  endpoint configurable.
-- Keep transport mechanics transport-local. Codex websocket replay, Responses
-  item routing, and Chat Completions SSE decoding are protocol behavior, not
-  generic compat flags.
-- Scope fallbacks to the failing capability. A strict-tool failure should not
-  disable unrelated features. A stale Responses chain should reset chain state,
-  not disable Responses entirely.
-- Do not emit defaults that alter gateway routing. OpenRouter is the known case
-  for default `max_tokens`, but any gateway can treat optional fields as routing
-  hints.
-- Stop retrying after visible side effects. Once text or a tool call is visible
-  to the user/session, retry policy must avoid duplicate output and duplicate
-  tool execution.
+- 当行为可由模型或端点配置决定时，优先使用 compat 元数据，
+  而不是按提供商名称分支。
+- 将传输机制保留在传输层本地。Codex websocket 重放、Responses
+  条目路由、Chat Completions SSE 解码属于协议行为，而非通用
+  compat 开关。
+- 将回退范围限定到失败的能力。严格工具失败不应禁用不相关的功能。
+  过期的 Responses 链应重置链状态，而非完全禁用 Responses。
+- 不要发出会改变网关路由的默认值。OpenRouter 是默认 `max_tokens`
+  的已知案例，但任何网关都可能将可选字段视为路由提示。
+- 在出现可见副作用后停止重试。一旦文本或工具调用对用户/会话可见，
+  重试策略必须避免重复输出和重复工具执行。
 
-## 1. Choose the endpoint family first
+## 1. 首先选择端点族
 
-### OpenAI Chat Completions compatible
+### 兼容 OpenAI Chat Completions
 
-Preserve these differences instead of treating every host as stock OpenAI:
+保留以下差异，而不是把每个宿主都当作标准 OpenAI 处理：
 
-- `stream_options.include_usage` is only safe when compat says streaming usage
-  is supported.
-- `store: false` is accepted only by some hosts.
-- max-output caps use either `max_tokens` or `max_completion_tokens`.
-- stop sequences and frequency penalty live on this path among the current
-  OpenAI-like endpoint set.
-- OpenRouter-style reasoning and routing fields are not portable to other
-  OpenAI-compatible hosts unless compat says so.
+- `stream_options.include_usage` 仅在 compat 指明支持流式用量时才是安全的。
+- `store: false` 仅被部分宿主接受。
+- 最大输出上限使用 `max_tokens` 或 `max_completion_tokens`。
+- 在当前的类 OpenAI 端点集中，停止序列和频率惩罚仅出现在该路径上。
+- OpenRouter 风格的推理与路由字段不可移植到其他 OpenAI 兼容宿主，
+  除非 compat 明确允许。
 
-### OpenAI Responses compatible
+### 兼容 OpenAI Responses
 
-Responses request shape is its own dialect:
+Responses 请求形态自成一派：
 
-- uses `input`, `instructions`, `store`, `prompt_cache_key`, optional
-  `previous_response_id`, and `max_output_tokens`
-- can default official OpenAI requests to stateful chaining with
-  `previous_response_id` plus `store: true`
-- third-party Responses proxies may reject native reasoning history, encrypted
-  reasoning replay, or `previous_response_id`
-- stream completion is authoritative only after `response.completed` or
-  `response.incomplete`; a stream close before either terminal event should fail
-  for OpenAI Responses rather than surface partial output as success
+- 使用 `input`、`instructions`、`store`、`prompt_cache_key`、可选的
+  `previous_response_id`，以及 `max_output_tokens`
+- 可以将官方 OpenAI 请求默认为带 `previous_response_id` 加
+  `store: true` 的有状态链接
+- 第三方 Responses 代理可能拒绝原生推理历史、加密推理重放，
+  或 `previous_response_id`
+- 流式完成仅在 `response.completed` 或 `response.incomplete` 之后
+  才被视为权威；若流在任一终结事件之前关闭，对 OpenAI Responses
+  而言应判定为失败，而非将部分输出作为成功呈现
 
 ### OpenAI Codex Responses
 
-Codex is not plain Responses with a different URL. Keep these as Codex transport
-policy:
+Codex 并不是换了 URL 的普通 Responses。请将以下视为 Codex 传输策略：
 
-- Codex account headers and beta headers
-- `x-codex-turn-state` and `x-models-etag`
-- optional websocket transport plus SSE fallback
+- Codex 账户头和 beta 头
+- `x-codex-turn-state` 和 `x-models-etag`
+- 可选的 websocket 传输及 SSE 回退
 - `responsesLite`
-- prompt-cache/session ids used as transport state
-- websocket-only `previous_response_id` chaining; SSE never chains
-- Codex retry/replay rules, including reconnect and SSE replay boundaries
-- provider retry only before user-visible content has been emitted
-- whitespace-only tool-call argument loop breaker
+- 用作传输状态的 prompt-cache/session id
+- 仅 websocket 的 `previous_response_id` 链接；SSE 从不链接
+- Codex 重试/重放规则，包括重连和 SSE 重放边界
+- 提供商重试仅在用户可见内容尚未发出前进行
+- 仅包含空白字符的工具调用参数循环中断器
 
-Codex intentionally does not forward caller max-token caps because the backend
-rejects them.
+Codex 故意不转发调用方设置的最大 token 上限，因为后端会拒绝。
 
-### Anthropic/OpenAI dual-surface providers
+### Anthropic/OpenAI 双表面提供商
 
-Kimi Code and Synthetic can be called as OpenAI-compatible or
-Anthropic-compatible. The shim may need to:
+Kimi Code 和 Synthetic 可以以 OpenAI 兼容或 Anthropic 兼容方式调用。
+适配层可能需要：
 
-- switch `format`
-- rebuild an Anthropic model when needed
-- map internal reasoning to Anthropic thinking budgets
-- delegate back to OpenAI Completions
+- 切换 `format`
+- 必要时重建一个 Anthropic 模型
+- 将内部推理映射为 Anthropic 思考预算
+- 回退到 OpenAI Completions
 
-Do not encode these as one-way provider migrations; they are runtime surface
-selection decisions.
+不要将这些编码为单向的提供商迁移；它们是运行时的表面选择决策。
 
-## 2. Apply gateway and auth overlays
+## 2. 应用网关与认证覆盖
 
-These constraints sit above the endpoint family. They affect auth, headers,
-routing, model ids, or usage accounting.
+这些约束位于端点族之上。它们影响认证、请求头、路由、模型 id
+或用量统计。
 
 ### Azure OpenAI
 
-- Chat Completions reshapes the base URL to
-  `/deployments/{deployment}/chat/completions?api-version=...`.
-- Responses uses `/responses?api-version=...` without a deployment-scoped URL;
-  the deployment name is instead sent as the request's `model`.
-- Both surfaces can map model ids to deployment names through
-  `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`.
-- Responses authenticates with the `api-key` header, defaults its API version to
-  `v1`, uses stateless `store: false`, and rejects explicit prompt caching.
+- Chat Completions 将基地址改写为
+  `/deployments/{deployment}/chat/completions?api-version=...`。
+- Responses 使用 `/responses?api-version=...` 而无部署作用域的 URL；
+  部署名称改为作为请求的 `model` 发送。
+- 两种表面都可以通过 `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` 将模型 id
+  映射为部署名称。
+- Responses 使用 `api-key` 头进行认证，默认 API 版本为 `v1`，
+  使用无状态的 `store: false`，并拒绝显式 prompt 缓存。
 
 ### GitHub Copilot
 
-- The API key is parsed into an access token.
-- Dynamic Copilot headers depend on messages/images.
-- `premiumRequests` must survive usage population and replacement.
-- Base URL may be resolved from the raw key.
+- API key 被解析为访问令牌。
+- 动态 Copilot 请求头依赖于消息/图像。
+- `premiumRequests` 必须在用量填充与替换过程中保留。
+- 基地址可能从原始 key 解析得到。
 
 ### OpenRouter
 
-- Adds attribution/cache headers.
-- Supports routing suffixes such as `:nitro` and `:floor`.
-- Appends a routing suffix only when the model id has no explicit suffix after
-  the last provider path segment.
-- Uses nested `reasoning` request fields.
-- Routes providers through the OpenRouter `provider` object.
-- Has special cache-write usage accounting.
-- Has strict-tool fallback for Anthropic grammar-size failures.
-- Should omit catalog-default `max_tokens` unless the caller explicitly set a
-  cap, so upstream routing is not biased.
+- 添加归属/缓存头。
+- 支持诸如 `:nitro` 和 `:floor` 的路由后缀。
+- 仅在模型 id 在最后一个提供商路径段后没有显式后缀时，
+  才追加路由后缀。
+- 使用嵌套的 `reasoning` 请求字段。
+- 通过 OpenRouter 的 `provider` 对象路由提供商。
+- 具有特殊的缓存写入用量统计。
+- 对 Anthropic 语法大小失败具有严格工具回退。
+- 应省略目录默认的 `max_tokens`，除非调用方显式设置了上限，
+  以避免对上游路由产生偏向。
 
 ### Vercel AI Gateway
 
-- Routing preferences go under `providerOptions.gateway.only` and
-  `providerOptions.gateway.order`.
-- Do not reuse OpenRouter's `provider` object.
+- 路由偏好放在 `providerOptions.gateway.only` 和
+  `providerOptions.gateway.order` 下。
+- 不要复用 OpenRouter 的 `provider` 对象。
 
 ### Alibaba Coding Plan
 
-- API key bytes may be JSON carrying `{ token, enterpriseUrl }`.
-- Auth and base URL resolution are provider-specific.
+- API key 字节可能是携带 `{ token, enterpriseUrl }` 的 JSON。
+- 认证和基地址解析是提供商特定的。
 
 ### Kimi Code
 
-- The OpenAI-compatible path needs common Kimi headers.
-- It also participates in the OpenAI/Anthropic dual-surface shim.
+- OpenAI 兼容路径需要常见的 Kimi 请求头。
+- 它同时也参与 OpenAI/Anthropic 双表面适配。
 
-### Fireworks and Firepass
+### Fireworks 和 Firepass
 
-- Wire model ids need provider-specific mapping.
-- Fireworks can conflict when DeepSeek-style `thinking` and OpenAI-style
-  `reasoning_effort` are both present after extra body fields are merged.
+- 线协议模型 id 需要提供商特定的映射。
+- 在合并额外 body 字段后，Fireworks 可能在 DeepSeek 风格的
+  `thinking` 与 OpenAI 风格的 `reasoning_effort` 同时存在时发生冲突。
 
-## 3. Serialize request parameters by dialect
+## 3. 按方言序列化请求参数
 
-Check these before adding or forwarding a field:
+在新增或转发字段前检查以下事项：
 
-- **Model id.** Some models resolve a wire id from reasoning effort.
-  Firepass/Fireworks transform ids. OpenRouter suffix handling is path-segment
-  aware.
-- **Max output tokens.** Kimi-family models may require a max-token field even
-  when the caller did not set one. OpenRouter should omit catalog defaults unless
-  explicit. Codex drops caller caps. Responses uses `max_output_tokens`; Chat
-  Completions uses `max_tokens` or `max_completion_tokens`.
-- **Service tier.** Completions, Responses, and Codex all handle service tiers,
-  but allowed values and pricing multipliers differ. Codex has a special
-  priority multiplier for `gpt-5.5`.
-- **Prompt cache/session.** OpenAI Responses uses `prompt_cache_key`.
-  OpenRouter Responses uses `session_id`. Codex uses prompt cache/session ids for
-  transport state. Anthropic-style cache control requires `cache_control` on a
-  text part.
-- **Stateful chaining.** Official OpenAI Responses may chain by default.
-  Third-party endpoints generally should not. Codex chains only on websocket
-  `response.create`.
+- **Model id。** 某些模型会从推理 effort 解析出 wire id。
+  Firepass/Fireworks 会转换 id。OpenRouter 后缀处理是路径段感知的。
+- **Max output tokens。** Kimi 系列模型即使调用方未设置，也可能
+  要求最大 token 字段。OpenRouter 应省略目录默认值，除非显式设置。
+  Codex 丢弃调用方上限。Responses 使用 `max_output_tokens`；Chat
+  Completions 使用 `max_tokens` 或 `max_completion_tokens`。
+- **Service tier。** Completions、Responses 和 Codex 都处理服务层级，
+  但允许的值和价格倍率不同。Codex 对 `gpt-5.5` 有特殊优先级倍率。
+- **Prompt cache/session。** OpenAI Responses 使用 `prompt_cache_key`。
+  OpenRouter Responses 使用 `session_id`。Codex 将 prompt cache/session id
+  用作传输状态。Anthropic 风格的缓存控制需要在文本 part 上设置
+  `cache_control`。
+- **Stateful chaining。** 官方 OpenAI Responses 默认可链接。
+  第三方端点通常不应如此。Codex 仅在 websocket `response.create` 上链接。
 
-## 4. Map reasoning and thinking explicitly
+## 4. 显式映射 reasoning 与 thinking
 
-Reasoning fields are not interchangeable.
+推理字段之间不可互换。
 
-### OpenAI-style `reasoning_effort`
+### OpenAI 风格 `reasoning_effort`
 
-- Effort values come from compat/model metadata.
-- If reasoning is disabled but the host has no real off switch, map to the
-  lowest supported effort rather than inventing an unsupported value.
+- Effort 值来自 compat/模型元数据。
+- 如果禁用了推理但宿主没有真正的关闭开关，应映射为受支持的最低 effort，
+  而不是凭空发明一个不支持的值。
 
 ### Responses `reasoning`
 
-- Uses `reasoning: { effort, summary }`.
-- Can include `reasoning.encrypted_content` for replay.
-- xAI Grok models may require omitting `reasoning.effort`.
-- Some compat paths inject the GPT-5 `# Juice: 0 !important` developer scaffold.
+- 使用 `reasoning: { effort, summary }`。
+- 可包含 `reasoning.encrypted_content` 用于重放。
+- xAI Grok 模型可能需要省略 `reasoning.effort`。
+- 某些 compat 路径会注入 GPT-5 的 `# Juice: 0 !important` 开发者脚手架。
 
 ### OpenRouter `reasoning`
 
-- Uses nested `reasoning: { effort }`.
-- Disabling reasoning must send `reasoning: { enabled: false }`; OpenRouter can
-  otherwise default reasoning models into thinking.
+- 使用嵌套的 `reasoning: { effort }`。
+- 禁用推理必须发送 `reasoning: { enabled: false }`；否则 OpenRouter
+  可能将默认的推理模型切换为思考模式。
 
 ### Z.AI / GLM
 
-- Uses `thinking: { type: "enabled" }` or
-  `thinking: { type: "disabled" }`.
-- GLM 5.2 reasoning-effort models may also receive `reasoning_effort`.
-- Tool requests need `tool_stream: true`.
+- 使用 `thinking: { type: "enabled" }` 或
+  `thinking: { type: "disabled" }`。
+- GLM 5.2 reasoning-effort 模型也可能接收 `reasoning_effort`。
+- 工具请求需要 `tool_stream: true`。
 
 ### Qwen
 
-- One dialect uses top-level `enable_thinking`.
-- Another uses `chat_template_kwargs.enable_thinking`.
+- 一种方言使用顶层 `enable_thinking`。
+- 另一种使用 `chat_template_kwargs.enable_thinking`。
 
-### Anthropic-compatible format
+### 兼容 Anthropic 的格式
 
-- Reasoning maps to Anthropic thinking enablement and thinking-budget tokens,
-  not OpenAI-style fields.
+- 推理映射为 Anthropic 的 thinking 启用与 thinking 预算 token，
+  而非 OpenAI 风格字段。
 
-### DeepSeek reasoning history
+### DeepSeek 推理历史
 
-- DeepSeek-compatible reasoning models may require exact `reasoning_content`
-  replay.
-- Some variants require replay on every assistant turn, not only tool-call turns.
-- Synthetic `"."` placeholders are acceptable for Kimi/OpenRouter-style compat,
-  but not DeepSeek V4 exact replay.
+- DeepSeek 兼容的推理模型可能要求精确的 `reasoning_content` 重放。
+- 某些变体要求在每个助手回合都重放，而不仅限于工具调用回合。
+- 合成的 `"."` 占位符对 Kimi/OpenRouter 风格 compat 可以接受，
+  但对 DeepSeek V4 的精确重放则不行。
 
-### Reasoning plus tool choice
+### 推理加工具选择
 
-- DeepSeek reasoning models can reject `tool_choice` while thinking is enabled.
-- Kimi can reject forced tool choice while thinking is enabled.
-- Compat needs both policies: disable reasoning for any tool choice, and disable
-  reasoning only for forced tool choice.
+- DeepSeek 推理模型在 thinking 启用时可能拒绝 `tool_choice`。
+- Kimi 在 thinking 启用时可能拒绝强制工具选择。
+- Compat 需要同时具备两种策略：对任何工具选择禁用推理，
+  以及仅对强制工具选择禁用推理。
 
-### xAI Grok through Responses (`xai` and `xai-oauth`)
+### xAI Grok 通过 Responses（`xai` 和 `xai-oauth`）
 
-Both the paid API-key provider (`xai` / `XAI_API_KEY`) and SuperGrok OAuth
-(`xai-oauth`) chat over `https://api.x.ai/v1/responses`. Keep these independent:
+付费 API key 提供商（`xai` / `XAI_API_KEY`）和 SuperGrok OAuth
+（`xai-oauth`）都通过 `https://api.x.ai/v1/responses` 进行对话。
+请保持以下各项独立处理：
 
-- omit `reasoning.effort` unless the model is on the Grok effort-capable allowlist
-- omit `reasoning.summary` (the host rejects it; do not fall back to `"auto"`)
-- omit presence/frequency penalties (`/v1/responses` rejects them for every Grok model)
-- include `reasoning.encrypted_content` on the request
-- replay encrypted reasoning items on later turns
+- 除非模型在 Grok effort 支持的允许列表中，否则省略 `reasoning.effort`
+- 省略 `reasoning.summary`（宿主会拒绝；不要回退到 `"auto"`）
+- 省略存在/频率惩罚（`/v1/responses` 对每个 Grok 模型都会拒绝）
+- 在请求中包含 `reasoning.encrypted_content`
+- 在后续回合中重放加密的推理条目
 
-Some models reject only one of those fields; do not collapse them into one
-"Grok mode" branch.
+某些模型仅拒绝其中某一个字段；不要将它们合并为一个"Grok 模式"分支。
 
-## 5. Normalize tools and schemas per endpoint
+## 5. 按端点归一化工具与 schema
 
-### Strict tools
+### 严格工具
 
-Strict schemas are not a universal capability:
+严格 schema 不是通用能力：
 
-- some providers support strict tools
-- some reject mixed strict/non-strict tools
-- some reject strictified schemas
-- OpenRouter Anthropic models can fail with “compiled grammar too large”
+- 部分提供商支持严格工具
+- 部分拒绝混合使用严格/非严格工具
+- 部分拒绝被严格化后的 schema
+- OpenRouter 上的 Anthropic 模型可能因"编译语法过大"而失败
 
-Retry-without-strict should be a compat recovery policy scoped to the current
-session/provider path.
+不带严格模式的回退应该是限定在当前会话/提供商路径的 compat 恢复策略。
 
-### Responses and Codex custom tools
+### Responses 与 Codex 自定义工具
 
-Responses and Codex both support freeform custom grammar tools for `apply_patch`.
-Custom grammar tools do not force request-level `parallel_tool_calls`; Codex
-`responsesLite` separately disables request-level parallel tool calls whenever
-tools are present. Responses additionally:
+Responses 和 Codex 都支持用于 `apply_patch` 的 freeform 自定义语法工具。
+自定义语法工具并不强制请求级别的 `parallel_tool_calls`；Codex 的
+`responsesLite` 在存在工具时单独禁用请求级别的并行工具调用。
+Responses 还会：
 
-- sanitizes schemas differently
-- quarantines invalid enum/const schema contradictions
-- repairs orphan tool outputs into assistant notes
-- synthesizes placeholder outputs for orphan tool calls
+- 以不同方式清理 schema
+- 隔离无效的 enum/const schema 冲突
+- 将孤立的工具输出修复为助手注释
+- 为孤立的工具调用合成占位输出
 
-Codex applies its own request transformation before sending.
+Codex 在发送前应用其自身的请求转换。
 
-### Tool choice
+### 工具选择
 
-Before emitting `tool_choice`:
+在发出 `tool_choice` 之前：
 
-- confirm the endpoint supports it
-- downgrade forced choice to `auto` if forced choice is unsupported
-- drop `tool_choice: "none"` when no tools are emitted
-- drop forced named tool choice if that named tool was filtered out
+- 确认端点支持该选项
+- 如果不支持强制选择，则降级为 `auto`
+- 当没有工具发出时，丢弃 `tool_choice: "none"`
+- 当指定的具名工具被过滤掉时，丢弃强制具名工具选择
 
-### Anthropic through LiteLLM/Bedrock
+### 通过 LiteLLM/Bedrock 的 Anthropic
 
-- If history contains tool calls/results and `context.tools` is undefined, send
-  `tools: []` as a sentinel.
-- If `context.tools = []`, treat it as explicit opt-out and do not emit the
-  sentinel.
+- 如果历史中包含工具调用/结果且 `context.tools` 未定义，则发送
+  `tools: []` 作为哨兵。
+- 如果 `context.tools = []`，则视为显式 opt-out，不要发出该哨兵。
 
 ### Mistral / Devstral
 
-- Tool-call ids must be exactly 9 alphanumeric characters.
-- Some flows need a synthetic assistant bridge after tool results before the next
-  user message.
+- 工具调用 id 必须正好是 9 个字母数字字符。
+- 某些流程在工具结果之后、下一个用户消息之前需要合成的助手桥接。
 
-### Custom tool outputs
+### 自定义工具输出
 
-Responses/Codex must remember whether a call was `custom_tool_call`; the paired
-output must then be `custom_tool_call_output`, not `function_call_output`.
+Responses/Codex 必须记住调用是否为 `custom_tool_call`；配对的输出
+随后必须是 `custom_tool_call_output`，而不是 `function_call_output`。
 
-### MiniMax-compatible streaming arguments
+### MiniMax 兼容的流式参数
 
-Tool arguments can stream as objects instead of JSON strings. Deep-merge object
-deltas, then emit one final concat-safe JSON delta.
+工具参数可以流式作为对象而非 JSON 字符串。深合并对象增量，
+然后发出一个最终可安全拼接的 JSON 增量。
 
-## 6. Convert messages and replay history safely
+## 6. 安全地转换消息并重放历史
 
-- **System/developer roles.** Reasoning models may require `developer`. Some
-  providers do not support `developer` and must downgrade to `user`. Some reject
-  multiple system messages and need coalescing.
-- **Responses system prompts.** Responses usually uses top-level `instructions`.
-  Reasoning models that support `developer` put system prompts inline as
-  developer messages.
-- **Assistant content.** Some OpenAI-compatible backends mirror array content
-  literally, so assistant content is normalized to a string. Tool-call replay may
-  require `content: ""` or `content: "."` instead of `null`.
-- **Thinking replay.** Some models want thinking as visible text. Others need a
-  provider-specific reasoning field. Some permit synthetic placeholders; others
-  need exact replay.
-- **Vision.** If the model/provider cannot accept images, convert image input and
-  tool-result images to placeholders. Some Qwen/Dashscope-compatible modes are
-  text-only even when the high-level model is multimodal.
-- **Native Responses history.** Native provider payload replay is model-bound.
-  Strip or normalize foreign reasoning signatures. Shared code normalizes
-  Responses pipe-separated tool ids, hashes foreign item ids, and can filter
-  reasoning history.
+- **System/developer 角色。** 推理模型可能要求 `developer`。某些
+  提供商不支持 `developer`，必须降级为 `user`。某些拒绝多个系统
+  消息，需要合并。
+- **Responses 系统提示。** Responses 通常使用顶层 `instructions`。
+  支持 `developer` 的推理模型将系统提示内联为 developer 消息。
+- **助手内容。** 某些 OpenAI 兼容后端按字面镜像数组内容，因此助手内容
+  被归一化为字符串。工具调用重放可能要求 `content: ""` 或 `content: "."`
+  而非 `null`。
+- **思考重放。** 某些模型希望将思考作为可见文本。某些需要提供商特定的
+  推理字段。某些允许合成占位符；某些需要精确重放。
+- **视觉。** 如果模型/提供商无法接受图像，将图像输入和工具结果中的图像
+  转换为占位符。某些 Qwen/Dashscope 兼容模式即使在高层模型是多模态
+  时也是纯文本。
+- **原生 Responses 历史。** 原生提供商 payload 重放是模型绑定的。
+  剥离或归一化外部推理签名。共享代码会归一化 Responses 中以竖线分隔
+  的工具 id，对外部条目 id 进行哈希，并可过滤推理历史。
 
-## 7. Decode streams by provider behavior, not just schema
+## 7. 按提供商行为而非仅按 schema 解码流
 
-- **Generic OpenAI-compatible streams.** Keepalive chunks, role-only deltas, and
-  empty `choices: []` are not progress. Idle watchdogs must not sleep forever
-  because of them.
-- **Mistral Medium 3.5-style content.** `delta.content` can be an array/object of
-  text parts, not a string; normalize it to text.
-- **DeepSeek via NVIDIA/native/proxies.** Some endpoints leak chat-template
-  markers like `<｜...｜>` into visible content. Buffering is required because
-  markers can be split across chunks.
-- **DeepSeek/template-leak tool calls.** Some providers leak tool-call markup in
-  text while also producing structured tool calls. Markup healing belongs in the
-  stream decoder policy, not endpoint business logic.
-- **MiniMax-M3 cumulative reasoning.** Reasoning deltas may be cumulative
-  snapshots. Deduplicate by reasoning field signature.
-- **Responses streams.** Route parallel items by `output_index`, `item_id`,
-  call-id aliases, and prefixed `fc_` aliases. Tolerate missing
-  `content_part.added` or `output_item.added`. Finalize pending tool calls at the
-  terminal event.
-- **Terminal behavior.** Chat Completions can break after `finish_reason` plus
-  usage. Responses breaks on `response.completed` or `response.incomplete`. Tool
-  calls with `stop` promote to `toolUse`. Codex/Responses `end_turn:false` maps
-  to `pause_turn`.
-- **Ollama length failures.** `finish_reason: length` with no visible content is
-  treated as context-window failure and mapped to an error.
+- **通用 OpenAI 兼容流。** 保活 chunk、仅 role 的 delta 和空的
+  `choices: []` 都不是进度。空闲看门狗不得因此永远睡眠。
+- **Mistral Medium 3.5 风格内容。** `delta.content` 可以是文本部分的
+  数组/对象，而不是字符串；应归一化为文本。
+- **DeepSeek 通过 NVIDIA/native/代理。** 某些端点会将 chat-template
+  标记（如 `<｜...｜>`）泄漏到可见内容中。由于标记可能被拆分到
+  不同 chunk 中，必须进行缓冲。
+- **DeepSeek/模板泄漏的工具调用。** 某些提供商会同时在文本中泄漏
+  工具调用标记并产生结构化工具调用。标记修复应属于流解码器策略，
+  而非端点业务逻辑。
+- **MiniMax-M3 累积推理。** 推理增量可能是累积快照。应按推理字段签名
+  去重。
+- **Responses 流。** 通过 `output_index`、`item_id`、call-id 别名
+  以及带前缀的 `fc_` 别名路由并行条目。容忍缺失的 `content_part.added`
+  或 `output_item.added`。在终结事件时终结挂起的工具调用。
+- **终结行为。** Chat Completions 可能在 `finish_reason` 加用量之后结束。
+  Responses 在 `response.completed` 或 `response.incomplete` 时结束。
+  `stop` 的工具调用提升为 `toolUse`。Codex/Responses 的 `end_turn:false`
+  映射为 `pause_turn`。
+- **Ollama 长度失败。** `finish_reason: length` 且无可见内容被视为
+  上下文窗口失败，并映射为错误。
 
-## 8. Preserve usage and cost semantics
+## 8. 保留用量与成本语义
 
-- OpenRouter `prompt_tokens_details.cache_write_tokens` is billed differently:
-  subtract it from input tokens and emit it as cache-write usage.
-- DeepSeek native `prompt_cache_miss_tokens` is the billed input portion, not a
-  separate cache-write charge. Do not double-count it.
-- GitHub Copilot `premiumRequests` must survive when usage is populated or
-  replaced.
-- Responses and Codex both adjust cost by resolved service tier, but Codex uses
-  different multipliers.
+- OpenRouter `prompt_tokens_details.cache_write_tokens` 计费方式不同：
+  从输入 token 中减去，并作为 cache-write 用量发出。
+- DeepSeek 原生 `prompt_cache_miss_tokens` 是计费的输入部分，而非单独
+  的 cache-write 费用。不要重复计算。
+- GitHub Copilot `premiumRequests` 必须在用量被填充或替换时保留。
+- Responses 和 Codex 都按解析后的服务层级调整成本，但 Codex 使用
+  不同的倍率。
 
-## 9. Implement recovery at the right boundary
+## 9. 在正确的边界实现恢复
 
-- **Strict tool fallback.** `400`/`422` schema or strict-tool failures should
-  disable strict tools for the appropriate session scope and retry non-strict.
-- **OpenAI Responses stateful fallback.** Stale, invalid, or unsupported
-  `previous_response_id` resets chain state and retries with full context. Zero
-  Data Retention disables chaining immediately.
-- **Codex websocket fallback.** Websocket connection errors, stale sockets,
-  connection limits, retry-budget exhaustion, or unsafe partial output can
-  trigger reconnect or SSE replay.
-- **Codex whitespace tool-loop breaker.** Codex can stream whitespace-only
-  tool-call argument deltas indefinitely. Cap events/chars, drop the degenerate
-  partial tool call, and retry only when safe.
-- **Codex `previous_response_id` fallback.** Stale or unsupported ids are chain
-  breaks and retry with full context, but only for websocket because SSE never
-  chains.
-- **Provider retry before content.** Codex retries retryable provider stream
-  errors only before user-visible content has been emitted.
+- **严格工具回退。** `400`/`422` schema 或严格工具失败应禁用
+  适当会话范围内的严格工具，并以非严格模式重试。
+- **OpenAI Responses 有状态回退。** 过期、无效或不受支持的
+  `previous_response_id` 重置链状态并以完整上下文重试。
+  零数据保留立即禁用链接。
+- **Codex websocket 回退。** Websocket 连接错误、过期的 socket、
+  连接限制、重试预算耗尽或不安全的部分输出都可能触发重连
+  或 SSE 重放。
+- **Codex 空白工具循环中断器。** Codex 可能无限地流式发出仅含空白字符
+  的工具调用参数增量。限制事件/字符数，丢弃退化的部分工具调用，
+  仅在安全时重试。
+- **Codex `previous_response_id` 回退。** 过期或不受支持的 id 属于
+  链中断，并以完整上下文重试，但仅对 websocket 如此，因为 SSE
+  从不链接。
+- **提供商在内容发出前重试。** Codex 仅在用户可见内容尚未发出前
+  对可重试的提供商流错误进行重试。
 
-## 10. Checklist for a new constraint
+## 10. 新约束的检查清单
 
-Before adding a branch or compat field, answer these in order:
+在新增分支或 compat 字段前，按顺序回答以下问题：
 
-1. Is this endpoint-family behavior, gateway behavior, model behavior, or request
-   context behavior?
-2. Can it be represented by existing `compat` metadata?
-3. If not, is a new compat field better than a provider-name branch?
-4. Does the field need provider-level defaults, model-level overrides, or both?
-5. Does it interact with tools, images, reasoning, stateful Responses chains, or
-   service tier?
-6. Can retry happen before visible text/tool calls only?
-7. Does usage accounting still preserve cache reads/writes, billed input, service
-   tier multipliers, and provider-specific counters such as Copilot
-   `premiumRequests`?
+1. 这是端点族行为、网关行为、模型行为，还是请求上下文行为？
+2. 是否可以由现有的 `compat` 元数据表示？
+3. 如果不能，是新增 compat 字段更好还是按提供商名称分支更好？
+4. 该字段需要提供商级默认值、模型级覆盖，还是两者都需要？
+5. 它是否与工具、图像、推理、有状态 Responses 链或服务层级交互？
+6. 重试是否只能在可见文本/工具调用出现之前进行？
+7. 用量统计是否仍然保留 cache 读/写、计费输入、服务层级倍率，
+   以及诸如 Copilot `premiumRequests` 这样的提供商特定计数器？

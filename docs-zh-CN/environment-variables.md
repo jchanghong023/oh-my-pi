@@ -1,616 +1,558 @@
-# Environment Variables (Current Runtime Reference)
+# 环境变量（当前运行时参考）
 
-This reference is derived from current code paths in:
+本参考源自以下代码路径：
 
 - `packages/coding-agent/src/**`
-- `packages/ai/src/**` (provider/auth resolution used by coding-agent)
-- `packages/utils/src/**` and `packages/tui/src/**` where those vars directly affect coding-agent runtime
+- `packages/ai/src/**`（coding-agent 使用的 provider/auth 解析）
+- `packages/utils/src/**` 和 `packages/tui/src/**` 中直接影响 coding-agent 运行时的部分
 
-It documents only active behavior.
+它仅描述当前生效的行为。
 
-## Resolution model and precedence
+## 解析模型与优先级
 
-Most runtime lookups use `$env` from `@oh-my-pi/pi-utils` (`packages/utils/src/env.ts`).
+大多数运行时查找使用来自 `@oh-my-pi/pi-utils`（`packages/utils/src/env.ts`）的 `$env`。
 
-`$env` loading order:
+`$env` 加载顺序：
 
-1. Existing process environment (`Bun.env`)
-2. Project `.env` from the launch working directory for keys whose current value is empty/unset
-3. Active agent `.env` (normally `~/.omp/agent/.env`) for keys whose current value is empty/unset
-4. Active config-root `.env` (normally `~/.omp/.env`) for keys whose current value is empty/unset
-5. Home `.env` (`~/.env`) for keys whose current value is empty/unset
+1. 已存在的进程环境（`Bun.env`）
+2. 来自启动工作目录的项目 `.env`，仅填充当前值为空/未设置的键
+3. 当前 agent 的 `.env`（通常为 `~/.omp/agent/.env`），仅填充当前值为空/未设置的键
+4. 当前配置根目录的 `.env`（通常为 `~/.omp/.env`），仅填充当前值为空/未设置的键
+5. 家目录的 `.env`（`~/.env`），仅填充当前值为空/未设置的键
 
-The agent/root locations respect profiles, `PI_CONFIG_DIR`, and—only for the default profile—`PI_CODING_AGENT_DIR`. Dotenv names must be shell identifiers (`[A-Za-z_][A-Za-z0-9_]*`); unsafe names/values are discarded. OMP's parser keeps values literal; only Bun's own launch-directory dotenv autoload may perform Bun-supported expansion before this module runs.
+agent/根目录位置遵循 profile、`PI_CONFIG_DIR`，以及——仅对默认 profile 生效——`PI_CODING_AGENT_DIR`。Dotenv 名称必须是 shell 标识符（`[A-Za-z_][A-Za-z0-9_]*`）；不合规的名称/值会被丢弃。OMP 的解析器按字面值保留内容；只有 Bun 自身在启动目录进行的 dotenv 自动加载可能在运行此模块之前执行 Bun 支持的变量展开。
 
-Additional rule inside each `.env` file: every `OMP_*` key is mirrored to its `PI_*` alias, and that mirrored value replaces a same-file `PI_*` value. This mirroring applies to parsed dotenv files, not arbitrary variables inherited from the parent process.
-
----
-
-## 1) Model/provider authentication
-
-These are consumed via `getEnvApiKey()` (`packages/ai/src/stream.ts`) unless noted otherwise.
-
-### Core provider credentials
-
-| Variable                        | Used for                                         | Required when                                                  | Notes / precedence                                                                                  |
-| ------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_OAUTH_TOKEN`         | Anthropic API auth                               | Using Anthropic with OAuth token auth                          | Takes precedence over `ANTHROPIC_API_KEY` for provider auth resolution                              |
-| `ANTHROPIC_API_KEY`             | Anthropic API auth                               | Using Anthropic without OAuth token                            | Fallback after `ANTHROPIC_OAUTH_TOKEN`                                                              |
-| `ANTHROPIC_FOUNDRY_API_KEY`     | Anthropic via Azure Foundry / enterprise gateway | `CLAUDE_CODE_USE_FOUNDRY` enabled                              | Takes precedence over `ANTHROPIC_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` when Foundry mode is enabled  |
-| `OPENAI_API_KEY`                | OpenAI auth                                      | Using OpenAI-family providers without explicit apiKey argument | Used by OpenAI Completions/Responses providers                                                      |
-| `GEMINI_API_KEY`                | Google Gemini auth                               | Using `google` provider models                                 | Primary key for Gemini provider mapping                                                             |
-| `GOOGLE_API_KEY`                | Gemini image tool auth fallback                  | Using `gemini_image` tool without `GEMINI_API_KEY`             | Used by coding-agent image tool fallback path                                                       |
-| `GROQ_API_KEY`                  | Groq auth                                        | Using Groq models                                              |                                                                                                     |
-| `CEREBRAS_API_KEY`              | Cerebras auth                                    | Using Cerebras models                                          |                                                                                                     |
-| `FIREWORKS_API_KEY`             | Fireworks auth                                   | Using Fireworks models                                         |                                                                                                     |
-| `FIREPASS_API_KEY`              | Fire Pass auth                                   | Using Fire Pass models                                         |                                                                                                     |
-| `TOGETHER_API_KEY`              | Together auth                                    | Using `together` provider                                      |                                                                                                     |
-| `AIMLAPI_API_KEY`               | AIML API auth                                    | Using `aimlapi` provider                                       | OpenAI-compatible AIML API endpoint at `https://api.aimlapi.com/v1`                                 |
-| `HUGGINGFACE_HUB_TOKEN`         | Hugging Face auth                                | Using `huggingface` provider                                   | Primary Hugging Face token env var                                                                  |
-| `HF_TOKEN`                      | Hugging Face auth                                | Using `huggingface` provider                                   | Fallback when `HUGGINGFACE_HUB_TOKEN` is unset                                                      |
-| `SYNTHETIC_API_KEY`             | Synthetic auth                                   | Using Synthetic models                                         |                                                                                                     |
-| `NVIDIA_API_KEY`                | NVIDIA auth                                      | Using `nvidia` provider                                        |                                                                                                     |
-| `NANO_GPT_API_KEY`              | NanoGPT auth                                     | Using `nanogpt` provider                                       |                                                                                                     |
-| `NOVITA_API_KEY`                | Novita auth                                      | Using `novita` provider                                        |                                                                                                     |
-| `VENICE_API_KEY`                | Venice auth                                      | Using `venice` provider                                        |                                                                                                     |
-| `LITELLM_API_KEY`               | LiteLLM auth                                     | Using `litellm` provider                                       | OpenAI-compatible LiteLLM proxy key                                                                 |
-| `LM_STUDIO_API_KEY`             | LM Studio auth (optional)                        | Using `lm-studio` provider with authenticated hosts            | Local LM Studio usually runs without auth; any non-empty token works when a key is required         |
-| `OLLAMA_API_KEY`                | Ollama auth (optional)                           | Using `ollama` provider with authenticated hosts               | Local Ollama usually runs without auth; any non-empty token works when a key is required            |
-| `LLAMA_CPP_API_KEY`             | llama.cpp auth (optional)                        | Using `llama.cpp` provider with authenticated hosts            | Local llama.cpp usually runs without auth; any non-empty token works when a key is configured       |
-| `XIAOMI_API_KEY`                | Xiaomi MiMo auth                                 | Using `xiaomi` provider                                        |                                                                                                     |
-| `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | Xiaomi MiMo Token Plan auth (AMS)                | Using `xiaomi-token-plan-ams` provider                         |                                                                                                     |
-| `XIAOMI_TOKEN_PLAN_CN_API_KEY`  | Xiaomi MiMo Token Plan auth (CN)                 | Using `xiaomi-token-plan-cn` provider                          |                                                                                                     |
-| `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | Xiaomi MiMo Token Plan auth (SGP)                | Using `xiaomi-token-plan-sgp` provider                         |                                                                                                     |
-| `MOONSHOT_API_KEY`              | Moonshot auth                                    | Using `moonshot` provider                                      |                                                                                                     |
-| `XAI_API_KEY`                   | xAI auth                                         | Using xAI models or as fallback for `xai-oauth`                |                                                                                                     |
-| `XAI_OAUTH_TOKEN`               | xAI OAuth/SuperGrok auth                         | Using `xai-oauth` provider                                     | Takes precedence over `XAI_API_KEY` for `xai-oauth`                                                 |
-| `OPENROUTER_API_KEY`            | OpenRouter auth                                  | Using OpenRouter models                                        | Also used by image tool when preferred/auto provider is OpenRouter                                  |
-| `MISTRAL_API_KEY`               | Mistral auth                                     | Using Mistral models                                           |                                                                                                     |
-| `ZAI_API_KEY`                   | z.ai auth                                        | Using z.ai models                                              | Also used by z.ai web search provider                                                               |
-| `ZHIPU_API_KEY`                 | Zhipu Coding Plan auth                           | Using `zhipu-coding-plan` provider                             |                                                                                                     |
-| `UMANS_AI_CODING_PLAN_API_KEY`  | Umans AI Coding Plan auth                        | Using `umans` provider                                         |                                                                                                     |
-| `MINIMAX_API_KEY`               | MiniMax auth                                     | Using `minimax` provider                                       |                                                                                                     |
-| `MINIMAX_CODE_API_KEY`          | MiniMax Code auth                                | Using `minimax-code` provider                                  |                                                                                                     |
-| `MINIMAX_CODE_CN_API_KEY`       | MiniMax Code CN auth                             | Using `minimax-code-cn` provider                               |                                                                                                     |
-| `OPENCODE_API_KEY`              | OpenCode auth                                    | Using `opencode-go` / `opencode-zen` models                    |                                                                                                     |
-| `QIANFAN_API_KEY`               | Qianfan auth                                     | Using `qianfan` provider                                       |                                                                                                     |
-| `QWEN_OAUTH_TOKEN`              | Qwen Portal auth                                 | Using `qwen-portal` with OAuth token                           | Takes precedence over `QWEN_PORTAL_API_KEY`                                                         |
-| `QWEN_PORTAL_API_KEY`           | Qwen Portal auth                                 | Using `qwen-portal` with API key                               | Fallback after `QWEN_OAUTH_TOKEN`                                                                   |
-| `ZENMUX_API_KEY`                | ZenMux auth                                      | Using `zenmux` provider                                        | Used for ZenMux OpenAI and Anthropic-compatible routes                                              |
-| `VLLM_API_KEY`                  | vLLM auth/discovery opt-in                       | Using `vllm` provider (local OpenAI-compatible servers)        | Any non-empty value works for no-auth local servers                                                 |
-| `CURSOR_ACCESS_TOKEN`           | Cursor provider auth                             | Using Cursor provider                                          |                                                                                                     |
-| `AI_GATEWAY_API_KEY`            | Vercel AI Gateway auth                           | Using `vercel-ai-gateway` provider                             |                                                                                                     |
-| `CLOUDFLARE_AI_GATEWAY_API_KEY` | Cloudflare AI Gateway auth                       | Using `cloudflare-ai-gateway` provider                         | Base URL must be configured as `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic` |
-| `ALIBABA_CODING_PLAN_API_KEY`   | Alibaba Coding Plan auth                         | Using `alibaba-coding-plan` provider                           |                                                                                                     |
-| `ALIBABA_TOKEN_PLAN_API_KEY`    | QwenCloud Token Plan auth                        | Using `alibaba-token-plan` provider                            | Preferred provider-specific name                                                                    |
-| `BAILIAN_TOKEN_PLAN_API_KEY`    | QwenCloud Token Plan auth                        | Using `alibaba-token-plan` provider                            | Compatible with Qwen Code's Token Plan preset                                                       |
-| `DEEPINFRA_API_KEY`             | DeepInfra auth                                   | Using `deepinfra` provider                                     |                                                                                                     |
-| `DEEPSEEK_API_KEY`              | DeepSeek auth                                    | Using DeepSeek models                                          |                                                                                                     |
-| `SILICONFLOW_API_KEY`           | SiliconFlow auth                                 | Using `siliconflow` provider                                   |                                                                                                     |
-| `SILICONFLOW_CN_API_KEY`        | SiliconFlow (China) auth                         | Using `siliconflow-cn` provider                                |                                                                                                     |
-| `KILO_API_KEY`                  | Kilo auth                                        | Using Kilo models                                              |                                                                                                     |
-| `OLLAMA_CLOUD_API_KEY`          | Ollama Cloud auth                                | Using `ollama-cloud` provider                                  |                                                                                                     |
-| `YOLO_AUTO_API_KEY`             | Yolo-Auto auth                                   | Using `yolo-auto` provider                                     | Flat-rate Qwen models; validated against `https://yolo-auto.com/v1/models`                          |
-| `WAFER_SERVERLESS_API_KEY`      | Wafer Serverless auth                            | Using `wafer-serverless` provider                              | Pay-as-you-go Wafer SKU; validated against `https://pass.wafer.ai/v1/models`                        |
-| `GITLAB_TOKEN`                  | GitLab Duo auth                                  | Using `gitlab-duo` provider                                    |                                                                                                     |
-
-### GitHub/Copilot tokens
-
-| Variable               | Used for                       | Notes                                     |
-| ---------------------- | ------------------------------ | ----------------------------------------- |
-| `COPILOT_GITHUB_TOKEN` | GitHub Copilot provider auth   | Generic GitHub tokens are not used here   |
-| `GH_TOKEN`             | GitHub API auth in web scraper | Web scraper fallback after `GITHUB_TOKEN` |
-| `GITHUB_TOKEN`         | GitHub API auth in web scraper | Web scraper checks this before `GH_TOKEN` |
-
-### Auth broker / auth gateway (remote credential vault)
-
-When the broker is enabled, the local SQLite credential store is bypassed and all OAuth refresh / access tokens live on the broker host. See [`auth-broker-gateway.md`](./auth-broker-gateway.md) for the full protocol, CLI surface, and 5-min/15-s usage cache layering.
-
-| Variable                            | Used for                                                                                     | Required when                                                                                                             | Notes / precedence                                                                                                                                                                                                                                                                   |
-| ----------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OMP_AUTH_BROKER_URL`               | Base URL of the remote auth-broker (e.g. `https://broker.tailnet:8765`); selects broker mode | Resolving credentials through a broker; also required by `omp auth-gateway serve` (the gateway is itself a broker client) | Wins over `auth.broker.url` in `config.yml`. When set with no resolvable token, `resolveAuthBrokerConfig()` hard-errors instead of falling back to local SQLite.                                                                                                                     |
-| `OMP_AUTH_BROKER_TOKEN`             | Bearer token sent on every broker endpoint except `/v1/healthz`                              | `OMP_AUTH_BROKER_URL` is set and no token is available from `auth.broker.token` or `<config-dir>/auth-broker.token`       | Resolution: this env → `auth.broker.token` (`$ENV_NAME` indirection supported) → `<config-dir>/auth-broker.token` (mode `0600`). `<config-dir>` is `~/.omp/` (respecting `PI_CONFIG_DIR`).                                                                                           |
-| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`   | Freshness window for the encrypted local broker snapshot cache                               | Optional in broker mode                                                                                                   | Default `3600000` (1 h). Freshness is based on broker `snapshot.generatedAt`; `0` disables cache reads/writes and forces the old blocking fetch every startup.                                                                                                                       |
-| `OMP_AUTH_BROKER_SNAPSHOT_CACHE`    | Path to the encrypted local broker snapshot cache                                            | Optional in broker mode                                                                                                   | Defaults to `~/.omp/cache/auth-broker-snapshot.enc` (or XDG cache equivalent). Useful for tests, ephemeral hosts, or relocating the `0600` cache file.                                                                                                                               |
-| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | Process-scoped OAuth account routing for a trusted broker client                             | Optional in broker mode                                                                                                   | Path to a JSON object mapping provider IDs to exact broker `identityKey` arrays. Missing providers are unrestricted; `[]` hides that provider's OAuth accounts; API keys remain visible. Parsed once at startup and fails closed on invalid input. This is not server authorization. |
-
-The gateway has no dedicated env vars — it inherits `OMP_AUTH_BROKER_*`. Its own inbound bearer token lives at `<config-dir>/auth-gateway.token` and is managed via `omp auth-gateway token`.
+每个 `.env` 文件内部的额外规则：每一个 `OMP_*` 键都会被镜像到其 `PI_*` 别名，且该镜像值会覆盖同一文件中已有的 `PI_*` 值。此镜像仅适用于已解析的 dotenv 文件，不适用于从父进程继承的任意变量。
 
 ---
 
-## 2) Provider-specific runtime configuration
+## 1) 模型/Provider 认证
 
-### Outbound proxy routing
+除非另有说明，这些通过 `getEnvApiKey()`（`packages/ai/src/stream.ts`）使用。
 
-Provider HTTP fetches resolve proxies in this order after applying `NO_PROXY` / `no_proxy`:
+### 核心 Provider 凭证
 
-1. `PI_PROXY_<PROVIDER>` (provider ID uppercased, non-alphanumerics replaced with `_`, for example `PI_PROXY_GITHUB_COPILOT`)
+| 变量                              | 用途                                          | 何时必需                                                     | 备注 / 优先级                                                                                     |
+| --------------------------------- | --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `ANTHROPIC_OAUTH_TOKEN`           | Anthropic API 认证                            | 使用 Anthropic 的 OAuth token 认证                          | 在 provider 认证解析中优先于 `ANTHROPIC_API_KEY`                                                  |
+| `ANTHROPIC_API_KEY`               | Anthropic API 认证                            | 使用 Anthropic 且不使用 OAuth token                          | 在 `ANTHROPIC_OAUTH_TOKEN` 之后作为回退                                                          |
+| `ANTHROPIC_FOUNDRY_API_KEY`       | 通过 Azure Foundry / 企业网关使用 Anthropic   | 启用了 `CLAUDE_CODE_USE_FOUNDRY`                             | 启用 Foundry 模式时优先于 `ANTHROPIC_OAUTH_TOKEN` 和 `ANTHROPIC_API_KEY`                         |
+| `OPENAI_API_KEY`                  | OpenAI 认证                                   | 使用 OpenAI 系列 provider 且未显式传入 apiKey 参数          | 由 OpenAI Completions/Responses provider 使用                                                    |
+| `GEMINI_API_KEY`                  | Google Gemini 认证                            | 使用 `google` provider 模型                                 | Gemini provider 映射的主要密钥                                                                   |
+| `GOOGLE_API_KEY`                  | Gemini 图像工具认证回退                       | 使用 `gemini_image` 工具且未设置 `GEMINI_API_KEY`            | 由 coding-agent 图像工具的回退路径使用                                                            |
+| `GROQ_API_KEY`                    | Groq 认证                                     | 使用 Groq 模型                                               |                                                                                                  |
+| `CEREBRAS_API_KEY`                | Cerebras 认证                                 | 使用 Cerebras 模型                                           |                                                                                                  |
+| `FIREWORKS_API_KEY`               | Fireworks 认证                                | 使用 Fireworks 模型                                          |                                                                                                  |
+| `FIREPASS_API_KEY`                | Fire Pass 认证                                | 使用 Fire Pass 模型                                          |                                                                                                  |
+| `TOGETHER_API_KEY`                | Together 认证                                 | 使用 `together` provider                                     |                                                                                                  |
+| `AIMLAPI_API_KEY`                 | AIML API 认证                                 | 使用 `aimlapi` provider                                      | 端点为 `https://api.aimlapi.com/v1` 的 OpenAI 兼容 AIML API                                       |
+| `HUGGINGFACE_HUB_TOKEN`           | Hugging Face 认证                             | 使用 `huggingface` provider                                  | Hugging Face 主要 token 环境变量                                                                  |
+| `HF_TOKEN`                        | Hugging Face 认证                             | 使用 `huggingface` provider                                  | 在 `HUGGINGFACE_HUB_TOKEN` 未设置时回退                                                          |
+| `SYNTHETIC_API_KEY`               | Synthetic 认证                                | 使用 Synthetic 模型                                          |                                                                                                  |
+| `NVIDIA_API_KEY`                  | NVIDIA 认证                                   | 使用 `nvidia` provider                                       |                                                                                                  |
+| `NANO_GPT_API_KEY`                | NanoGPT 认证                                  | 使用 `nanogpt` provider                                      |                                                                                                  |
+| `NOVITA_API_KEY`                  | Novita 认证                                   | 使用 `novita` provider                                       |                                                                                                  |
+| `VENICE_API_KEY`                  | Venice 认证                                   | 使用 `venice` provider                                       |                                                                                                  |
+| `LITELLM_API_KEY`                 | LiteLLM 认证                                  | 使用 `litellm` provider                                      | OpenAI 兼容的 LiteLLM 代理密钥                                                                   |
+| `LM_STUDIO_API_KEY`               | LM Studio 认证（可选）                        | 使用 `lm-studio` provider 且主机需要认证                     | 本地 LM Studio 通常无需认证；需要密钥时任何非空 token 都可以                                       |
+| `OLLAMA_API_KEY`                  | Ollama 认证（可选）                           | 使用 `ollama` provider 且主机需要认证                        | 本地 Ollama 通常无需认证；需要密钥时任何非空 token 都可以                                          |
+| `LLAMA_CPP_API_KEY`               | llama.cpp 认证（可选）                        | 使用 `llama.cpp` provider 且主机需要认证                    | 本地 llama.cpp 通常无需认证；需要密钥时任何非空 token 都可以                                       |
+| `XIAOMI_API_KEY`                  | Xiaomi MiMo 认证                              | 使用 `xiaomi` provider                                       |                                                                                                  |
+| `XIAOMI_TOKEN_PLAN_AMS_API_KEY`   | Xiaomi MiMo Token Plan 认证（AMS）            | 使用 `xiaomi-token-plan-ams` provider                        |                                                                                                  |
+| `XIAOMI_TOKEN_PLAN_CN_API_KEY`    | Xiaomi MiMo Token Plan 认证（CN）             | 使用 `xiaomi-token-plan-cn` provider                         |                                                                                                  |
+| `XIAOMI_TOKEN_PLAN_SGP_API_KEY`   | Xiaomi MiMo Token Plan 认证（SGP）            | 使用 `xiaomi-token-plan-sgp` provider                        |                                                                                                  |
+| `MOONSHOT_API_KEY`                | Moonshot 认证                                 | 使用 `moonshot` provider                                     |                                                                                                  |
+| `XAI_API_KEY`                     | xAI 认证                                      | 使用 xAI 模型或作为 `xai-oauth` 的回退                       |                                                                                                  |
+| `XAI_OAUTH_TOKEN`                 | xAI OAuth/SuperGrok 认证                      | 使用 `xai-oauth` provider                                    | 在 `xai-oauth` 中优先于 `XAI_API_KEY`                                                            |
+| `OPENROUTER_API_KEY`              | OpenRouter 认证                               | 使用 OpenRouter 模型                                         | 当首选/自动 provider 为 OpenRouter 时，图像工具也会使用                                           |
+| `MISTRAL_API_KEY`                 | Mistral 认证                                  | 使用 Mistral 模型                                            |                                                                                                  |
+| `ZAI_API_KEY`                     | z.ai 认证                                     | 使用 z.ai 模型                                               | z.ai 网络搜索 provider 也会使用                                                                  |
+| `ZHIPU_API_KEY`                   | Zhipu Coding Plan 认证                        | 使用 `zhipu-coding-plan` provider                            |                                                                                                  |
+| `UMANS_AI_CODING_PLAN_API_KEY`    | Umans AI Coding Plan 认证                     | 使用 `umans` provider                                        |                                                                                                  |
+| `MINIMAX_API_KEY`                 | MiniMax 认证                                  | 使用 `minimax` provider                                      |                                                                                                  |
+| `MINIMAX_CODE_API_KEY`            | MiniMax Code 认证                             | 使用 `minimax-code` provider                                 |                                                                                                  |
+| `MINIMAX_CODE_CN_API_KEY`         | MiniMax Code CN 认证                          | 使用 `minimax-code-cn` provider                              |                                                                                                  |
+| `OPENCODE_API_KEY`                | OpenCode 认证                                 | 使用 `opencode-go` / `opencode-zen` 模型                     |                                                                                                  |
+| `QIANFAN_API_KEY`                 | Qianfan 认证                                  | 使用 `qianfan` provider                                      |                                                                                                  |
+| `QWEN_OAUTH_TOKEN`                | Qwen Portal 认证                              | 使用 OAuth token 接入 `qwen-portal`                          | 优先于 `QWEN_PORTAL_API_KEY`                                                                     |
+| `QWEN_PORTAL_API_KEY`             | Qwen Portal 认证                              | 使用 API key 接入 `qwen-portal`                              | 在 `QWEN_OAUTH_TOKEN` 之后作为回退                                                                |
+| `ZENMUX_API_KEY`                  | ZenMux 认证                                   | 使用 `zenmux` provider                                       | 用于 ZenMux 的 OpenAI 与 Anthropic 兼容路由                                                       |
+| `VLLM_API_KEY`                    | vLLM 认证/发现开关                            | 使用 `vllm` provider（本地 OpenAI 兼容服务器）               | 对于无认证的本地服务器，任何非空值都生效                                                          |
+| `CURSOR_ACCESS_TOKEN`             | Cursor provider 认证                          | 使用 Cursor provider                                         |                                                                                                  |
+| `AI_GATEWAY_API_KEY`              | Vercel AI Gateway 认证                        | 使用 `vercel-ai-gateway` provider                            |                                                                                                  |
+| `CLOUDFLARE_AI_GATEWAY_API_KEY`   | Cloudflare AI Gateway 认证                    | 使用 `cloudflare-ai-gateway` provider                        | 基础 URL 必须配置为 `https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic`            |
+| `ALIBABA_CODING_PLAN_API_KEY`     | Alibaba Coding Plan 认证                      | 使用 `alibaba-coding-plan` provider                          |                                                                                                  |
+| `ALIBABA_TOKEN_PLAN_API_KEY`      | QwenCloud Token Plan 认证                     | 使用 `alibaba-token-plan` provider                           | 首选的 provider 特定名称                                                                          |
+| `BAILIAN_TOKEN_PLAN_API_KEY`      | QwenCloud Token Plan 认证                     | 使用 `alibaba-token-plan` provider                           | 兼容 Qwen Code 的 Token Plan 预设                                                                 |
+| `DEEPINFRA_API_KEY`               | DeepInfra 认证                                | 使用 `deepinfra` provider                                    |                                                                                                  |
+| `DEEPSEEK_API_KEY`                | DeepSeek 认证                                 | 使用 DeepSeek 模型                                           |                                                                                                  |
+| `SILICONFLOW_API_KEY`             | SiliconFlow 认证                              | 使用 `siliconflow` provider                                  |                                                                                                  |
+| `SILICONFLOW_CN_API_KEY`          | SiliconFlow（中国）认证                       | 使用 `siliconflow-cn` provider                               |                                                                                                  |
+| `KILO_API_KEY`                    | Kilo 认证                                     | 使用 Kilo 模型                                               |                                                                                                  |
+| `OLLAMA_CLOUD_API_KEY`            | Ollama Cloud 认证                             | 使用 `ollama-cloud` provider                                 |                                                                                                  |
+| `YOLO_AUTO_API_KEY`               | Yolo-Auto 认证                                | 使用 `yolo-auto` provider                                    | 统一价 Qwen 模型；对照 `https://yolo-auto.com/v1/models` 校验                                     |
+| `WAFER_SERVERLESS_API_KEY`        | Wafer Serverless 认证                         | 使用 `wafer-serverless` provider                             | 按量计费 Wafer SKU；对照 `https://pass.wafer.ai/v1/models` 校验                                   |
+| `GITLAB_TOKEN`                    | GitLab Duo 认证                               | 使用 `gitlab-duo` provider                                   |                                                                                                  |
+
+### GitHub/Copilot 令牌
+
+| 变量                  | 用途                              | 备注                                        |
+| --------------------- | --------------------------------- | ------------------------------------------- |
+| `COPILOT_GITHUB_TOKEN`| GitHub Copilot provider 认证      | 此处不使用通用 GitHub token                 |
+| `GH_TOKEN`            | 网络爬虫中的 GitHub API 认证       | 网络爬虫在 `GITHUB_TOKEN` 之后的回退         |
+| `GITHUB_TOKEN`        | 网络爬虫中的 GitHub API 认证       | 网络爬虫先检查此项，再回退到 `GH_TOKEN`     |
+
+### 认证代理 / 认证网关（远程凭证保险库）
+
+当启用 broker 时，会绕过本地 SQLite 凭证存储，所有 OAuth 刷新/访问令牌都保存在 broker 主机上。完整协议、CLI 界面与 5 分钟/15 秒使用缓存分层请参见 [`auth-broker-gateway.md`](./auth-broker-gateway.md)。
+
+| 变量                                  | 用途                                                                                        | 何时必需                                                                                                                                                | 备注 / 优先级                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OMP_AUTH_BROKER_URL`                 | 远程 auth-broker 的基础 URL（如 `https://broker.tailnet:8765`）；选择 broker 模式            | 通过 broker 解析凭证；`omp auth-gateway serve` 同样需要它（网关本身也是 broker 客户端）                                                                  | 优先于 `config.yml` 中的 `auth.broker.url`。当设置此项但无法解析出 token 时，`resolveAuthBrokerConfig()` 会硬错误而不是回退到本地 SQLite。                                                                                                                                                                                                                    |
+| `OMP_AUTH_BROKER_TOKEN`               | 每个 broker 端点（除 `/v1/healthz`）发送的 Bearer token                                      | 设置了 `OMP_AUTH_BROKER_URL` 且无法从 `auth.broker.token` 或 `<config-dir>/auth-broker.token` 获取 token 时                                          | 解析顺序：本环境变量 → `auth.broker.token`（支持 `$ENV_NAME` 间接引用）→ `<config-dir>/auth-broker.token`（权限 `0600`）。`<config-dir>` 为 `~/.omp/`（遵循 `PI_CONFIG_DIR`）。                                                                                                                                                                          |
+| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`     | 加密的本地 broker 快照缓存的保鲜时间窗口                                                    | broker 模式下可选                                                                                                                                       | 默认 `3600000`（1 小时）。保鲜度基于 broker 的 `snapshot.generatedAt`；`0` 禁用缓存读写，强制每次启动时走旧的阻塞拉取。                                                                                                                                                                                                                                      |
+| `OMP_AUTH_BROKER_SNAPSHOT_CACHE`      | 加密的本地 broker 快照缓存路径                                                              | broker 模式下可选                                                                                                                                       | 默认 `~/.omp/cache/auth-broker-snapshot.enc`（或 XDG 缓存等价路径）。常用于测试、临时主机或迁移 `0600` 缓存文件。                                                                                                                                                                                                                                          |
+| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`   | 受信任 broker 客户端的进程级 OAuth 账户路由                                                 | broker 模式下可选                                                                                                                                       | 一个 JSON 对象路径，将 provider ID 映射为精确的 broker `identityKey` 数组。缺失的 provider 不受限；`[]` 会隐藏该 provider 的 OAuth 账户；API key 仍然可见。启动时解析一次，输入无效时失败关闭。这不是服务器授权。                                                                                                                                            |
+
+网关没有专门的环境变量——它继承 `OMP_AUTH_BROKER_*`。其自身的入站 Bearer token 位于 `<config-dir>/auth-gateway.token`，通过 `omp auth-gateway token` 管理。
+
+---
+
+## 2) Provider 特定的运行时配置
+
+### 出站代理路由
+
+provider 的 HTTP 请求在应用 `NO_PROXY` / `no_proxy` 之后按以下顺序解析代理：
+
+1. `PI_PROXY_<PROVIDER>`（provider ID 转大写，非字母数字字符替换为 `_`，例如 `PI_PROXY_GITHUB_COPILOT`）
 2. `PI_PROXY`
-3. `HTTPS_PROXY` / `https_proxy` for HTTPS and WebSocket targets, or `HTTP_PROXY` / `http_proxy` for HTTP
+3. 对 HTTPS 与 WebSocket 目标使用 `HTTPS_PROXY` / `https_proxy`，对 HTTP 目标使用 `HTTP_PROXY` / `http_proxy`
 4. `ALL_PROXY` / `all_proxy`
 
-Provider proxy lookups are cached for the process lifetime. Localhost targets bypass the provider fetch wrapper.
+provider 代理查找结果在进程生命周期内缓存。本地回环目标绕过 provider 请求包装器。
 
-Scope differs between the two `PI_PROXY` forms:
+两种 `PI_PROXY` 形式的范围不同：
 
-- `PI_PROXY` is installed on the process-wide `fetch` at CLI startup, so it also
-  covers requests made outside the provider fetch wrapper — OAuth token refresh
-  and login, usage probes, model discovery. Without that, a region-blocked token
-  endpoint returns `403 Request not allowed` on refresh even though the stream
-  itself is proxied.
-- `PI_PROXY_<PROVIDER>` applies only to that provider's requests, and overrides
-  `PI_PROXY` for them. It does not cover the non-provider-scoped calls above; set
-  `PI_PROXY` too if the provider blocks your region.
+- `PI_PROXY` 在 CLI 启动时安装到进程级 `fetch` 上，因此也覆盖 provider 请求包装器之外的请求——OAuth token 刷新与登录、usage 探测、模型发现。如果不设置，被区域封锁的 token 端点在刷新时会返回 `403 Request not allowed`，即使数据流本身已通过代理。
+- `PI_PROXY_<PROVIDER>` 仅应用于该 provider 的请求，并对其覆盖 `PI_PROXY`。它不覆盖上面非 provider 范围的调用；如果 provider 封锁了你的区域，请同时设置 `PI_PROXY`。
 
-Loopback, link-local, private-range (`10/8`, `172.16/12`, `192.168/16`), and
-`NO_PROXY` targets always bypass, so local model servers and MCP hosts stay direct.
+回环、链路本地、私有网段（`10/8`、`172.16/12`、`192.168/16`）以及 `NO_PROXY` 目标始终绕过，以保证本地模型服务器与 MCP 主机直连。
 
-### Anthropic Foundry Gateway (Azure / enterprise proxy)
+### Anthropic Foundry 网关（Azure / 企业代理）
 
-When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry mode:
+启用 `CLAUDE_CODE_USE_FOUNDRY` 时，Anthropic 请求切换到 Foundry 模式：
 
-- Base URL resolves from `FOUNDRY_BASE_URL` (fallback remains model/default base URL if unset).
-- API key resolution for provider `anthropic` becomes:
-  `ANTHROPIC_FOUNDRY_API_KEY` → `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY`.
-- `ANTHROPIC_CUSTOM_HEADERS` is parsed as comma/newline-separated `key: value`
-  pairs and merged into request headers. They are also forwarded when
-  `ANTHROPIC_BASE_URL` points to a non-Anthropic host (e.g. a corporate API
-  gateway), so enterprise gateways requiring proprietary auth headers work
-  without enabling Foundry mode.
-- TLS client/server material can be injected from env values:
-  `NODE_EXTRA_CA_CERTS`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`.
-  Each accepts either:
-  - a filesystem path to PEM content, or
-  - inline PEM (including escaped `\n` sequences).
+- 基础 URL 从 `FOUNDRY_BASE_URL` 解析（若未设置则回退到模型/默认基础 URL）。
+- provider `anthropic` 的 API key 解析顺序为：
+  `ANTHROPIC_FOUNDRY_API_KEY` → `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY`。
+- `ANTHROPIC_CUSTOM_HEADERS` 被解析为以逗号/换行分隔的 `key: value` 对，并合并到请求头中。当 `ANTHROPIC_BASE_URL` 指向非 Anthropic 主机（例如企业 API 网关）时，这些头也会被转发，这样要求专有认证头的企业网关无需启用 Foundry 模式即可工作。
+- TLS 客户端/服务端材料可从环境变量注入：
+  `NODE_EXTRA_CA_CERTS`、`CLAUDE_CODE_CLIENT_CERT`、`CLAUDE_CODE_CLIENT_KEY`。
+  每个都接受：
+  - 指向 PEM 内容的文件系统路径，或
+  - 内联 PEM（包括转义的 `\n` 序列）。
 
-  `NODE_EXTRA_CA_CERTS` is honoured for every provider fetch (OpenAI-compatible,
-  Codex, Ollama, Azure Responses, Google, Anthropic), not just Foundry — Bun's
-  `fetch` does not consume the env var natively, so the bundle is merged into
-  `RequestInit.tls.ca` alongside the system root store. The `CLAUDE_CODE_*` mTLS
-  material remains Anthropic-Foundry-specific.
+  `NODE_EXTRA_CA_CERTS` 适用于所有 provider 请求（OpenAI 兼容、Codex、Ollama、Azure Responses、Google、Anthropic），不仅仅是 Foundry——Bun 的 `fetch` 本身不使用该环境变量，因此将 CA 链与系统根证书合并后写入 `RequestInit.tls.ca`。`CLAUDE_CODE_*` 的 mTLS 材料仍仅限 Anthropic Foundry。
 
-| Variable                    | Value type                                     | Behavior                                                                                                                                                      |
-| --------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLAUDE_CODE_USE_FOUNDRY`   | Boolean-like string (`1`, `true`, `yes`, `on`) | Enables Foundry mode for Anthropic provider                                                                                                                   |
-| `FOUNDRY_BASE_URL`          | URL string                                     | Anthropic endpoint base URL in Foundry mode                                                                                                                   |
-| `ANTHROPIC_FOUNDRY_API_KEY` | Token string                                   | Used for `Authorization: Bearer <token>`                                                                                                                      |
-| `ANTHROPIC_CUSTOM_HEADERS`  | Header list string                             | Extra headers; format `header-a: value, header-b: value` or newline-separated. Also forwarded outside Foundry whenever `ANTHROPIC_BASE_URL` is non-Anthropic. |
-| `NODE_EXTRA_CA_CERTS`       | PEM path or inline PEM                         | Extra CA chain for server certificate validation                                                                                                              |
-| `CLAUDE_CODE_CLIENT_CERT`   | PEM path or inline PEM                         | mTLS client certificate                                                                                                                                       |
-| `CLAUDE_CODE_CLIENT_KEY`    | PEM path or inline PEM                         | mTLS client private key (must be paired with cert)                                                                                                            |
+| 变量                          | 值类型                                            | 行为                                                                                                                                                          |
+| ----------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE_CODE_USE_FOUNDRY`     | 布尔型字符串（`1`、`true`、`yes`、`on`）          | 为 Anthropic provider 启用 Foundry 模式                                                                                                                       |
+| `FOUNDRY_BASE_URL`            | URL 字符串                                        | Foundry 模式下 Anthropic 端点的基础 URL                                                                                                                       |
+| `ANTHROPIC_FOUNDRY_API_KEY`   | Token 字符串                                      | 用于 `Authorization: Bearer <token>`                                                                                                                           |
+| `ANTHROPIC_CUSTOM_HEADERS`    | 头部列表字符串                                    | 额外头部；格式为 `header-a: value, header-b: value` 或换行分隔。当 `ANTHROPIC_BASE_URL` 指向非 Anthropic 主机时，Foundry 之外也会转发。                            |
+| `NODE_EXTRA_CA_CERTS`         | PEM 路径或内联 PEM                                | 用于服务端证书校验的额外 CA 链                                                                                                                                 |
+| `CLAUDE_CODE_CLIENT_CERT`     | PEM 路径或内联 PEM                                | mTLS 客户端证书                                                                                                                                               |
+| `CLAUDE_CODE_CLIENT_KEY`      | PEM 路径或内联 PEM                                | mTLS 客户端私钥（必须与证书配对）                                                                                                                              |
 
 ### Amazon Bedrock
 
-| Variable                                                                        | Default / behavior                                                                                                                              |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AWS_REGION`                                                                    | Primary region source                                                                                                                           |
-| `AWS_DEFAULT_REGION`                                                            | Fallback if `AWS_REGION` unset                                                                                                                  |
-| `AWS_PROFILE`                                                                   | Enables named profile auth path                                                                                                                 |
-| `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`                                   | Enables IAM key auth path                                                                                                                       |
-| `AWS_BEARER_TOKEN_BEDROCK`                                                      | Highest-precedence bearer token auth path; skips AWS profile/credential-chain lookup when set                                                   |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `AWS_CONTAINER_CREDENTIALS_FULL_URI` | Marks Bedrock as available in provider detection (credential resolution itself covers env keys, profiles/SSO/`credential_process`, then IMDSv2) |
-| `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`                                  | Marks Bedrock as available in provider detection (same caveat as the ECS variables above)                                                       |
-| `AWS_BEDROCK_SKIP_AUTH`                                                         | If `1`, injects dummy credentials (proxy/non-auth scenarios)                                                                                    |
-| `HTTPS_PROXY` / `HTTP_PROXY`                                                    | Honored via Bun's native fetch proxy support (the provider no longer ships an AWS SDK / proxy-agent transport)                                  |
-| `NO_PROXY`                                                                      | Excludes matching hosts from Bun's native proxy routing                                                                                         |
+| 变量                                                                              | 默认 / 行为                                                                                                                                              |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AWS_REGION`                                                                      | 主要区域来源                                                                                                                                              |
+| `AWS_DEFAULT_REGION`                                                              | 在 `AWS_REGION` 未设置时回退                                                                                                                              |
+| `AWS_PROFILE`                                                                     | 启用命名 profile 认证路径                                                                                                                                |
+| `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`                                     | 启用 IAM key 认证路径                                                                                                                                     |
+| `AWS_BEARER_TOKEN_BEDROCK`                                                        | 最高优先级的 Bearer token 认证路径；设置后跳过 AWS profile/凭证链查找                                                                                     |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` / `AWS_CONTAINER_CREDENTIALS_FULL_URI`   | 在 provider 检测中标记 Bedrock 可用（凭证解析本身涵盖环境变量、profile/SSO/`credential_process`，再到 IMDSv2）                                            |
+| `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`                                    | 在 provider 检测中标记 Bedrock 可用（与上述 ECS 变量相同的注意事项）                                                                                      |
+| `AWS_BEDROCK_SKIP_AUTH`                                                           | 若为 `1`，注入虚拟凭证（代理/无认证场景）                                                                                                                  |
+| `HTTPS_PROXY` / `HTTP_PROXY`                                                      | 通过 Bun 原生 fetch 代理支持生效（provider 不再自带 AWS SDK / proxy-agent transport）                                                                     |
+| `NO_PROXY`                                                                        | 从 Bun 的原生代理路由中排除匹配的主机                                                                                                                     |
 
-Region fallback in provider code: `options.region` → `AWS_REGION` → `AWS_DEFAULT_REGION` → `us-east-1`.
+provider 代码中的区域回退：`options.region` → `AWS_REGION` → `AWS_DEFAULT_REGION` → `us-east-1`。
 
-Additional credential-chain controls implemented by the native Bedrock resolver:
+由原生 Bedrock 解析器实现的额外凭证链控制项：
 
-| Variable                                                                      | Behavior                                                                |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `AWS_SESSION_TOKEN`                                                           | Session token paired with `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
-| `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`                              | Override the shared credentials/config INI paths                        |
-| `AWS_SDK_LOAD_CONFIG`                                                         | `1`/`true` enables shared config loading without an explicit profile    |
-| `AWS_ROLE_SESSION_NAME`                                                       | Session name for web-identity role assumption                           |
-| `AWS_CONTAINER_AUTHORIZATION_TOKEN`, `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` | Authorization for ECS container credentials                             |
-| `AWS_EC2_METADATA_DISABLED`                                                   | `true` disables IMDSv2                                                  |
-| `AWS_EC2_METADATA_SERVICE_ENDPOINT`, `AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE` | Override IMDS endpoint / select the IPv6 fallback                       |
+| 变量                                                                          | 行为                                                                  |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `AWS_SESSION_TOKEN`                                                           | 与 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 配对的会话 token      |
+| `AWS_SHARED_CREDENTIALS_FILE`、`AWS_CONFIG_FILE`                              | 覆盖共享凭证/配置 INI 路径                                            |
+| `AWS_SDK_LOAD_CONFIG`                                                         | `1`/`true` 在无显式 profile 时启用共享配置加载                         |
+| `AWS_ROLE_SESSION_NAME`                                                       | Web Identity 角色扮演的会话名称                                       |
+| `AWS_CONTAINER_AUTHORIZATION_TOKEN`、`AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` | ECS 容器凭证的授权                                                    |
+| `AWS_EC2_METADATA_DISABLED`                                                   | `true` 禁用 IMDSv2                                                    |
+| `AWS_EC2_METADATA_SERVICE_ENDPOINT`、`AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE` | 覆盖 IMDS 端点 / 选择 IPv6 回退                                       |
 
 ### Azure OpenAI Responses
 
-| Variable                           | Default / behavior                                                          |
-| ---------------------------------- | --------------------------------------------------------------------------- |
-| `AZURE_OPENAI_API_KEY`             | Required unless API key passed as option                                    |
-| `AZURE_OPENAI_API_VERSION`         | Default `v1`                                                                |
-| `AZURE_OPENAI_BASE_URL`            | Direct base URL override                                                    |
-| `AZURE_OPENAI_RESOURCE_NAME`       | Used to construct base URL: `https://<resource>.openai.azure.com/openai/v1` |
-| `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` | Optional mapping string: `modelId=deploymentName,model2=deployment2`        |
+| 变量                              | 默认 / 行为                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `AZURE_OPENAI_API_KEY`            | 除非以选项形式传入 API key，否则必需                                                       |
+| `AZURE_OPENAI_API_VERSION`        | 默认 `v1`                                                                                 |
+| `AZURE_OPENAI_BASE_URL`           | 直接覆盖基础 URL                                                                          |
+| `AZURE_OPENAI_RESOURCE_NAME`      | 用于构造基础 URL：`https://<resource>.openai.azure.com/openai/v1`                          |
+| `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` | 可选映射字符串：`modelId=deploymentName,model2=deployment2`                                |
 
-Base URL resolution: option `azureBaseUrl` → env `AZURE_OPENAI_BASE_URL` → option/env resource name → `model.baseUrl`.
+基础 URL 解析顺序：选项 `azureBaseUrl` → 环境变量 `AZURE_OPENAI_BASE_URL` → 选项/环境变量资源名 → `model.baseUrl`。
 
 ### Google Vertex AI
 
-| Variable                         | Required?                      | Notes                                                                                                                     |
-| -------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `GOOGLE_CLOUD_PROJECT`           | Yes (unless passed in options) | Primary project ID source                                                                                                 |
-| `GCP_PROJECT`                    | Fallback                       | Alternate project ID source                                                                                               |
-| `GCLOUD_PROJECT`                 | Fallback                       | Alternate project ID source                                                                                               |
-| `GOOGLE_CLOUD_PROJECT_ID`        | OAuth login helper only        | Used by Gemini CLI OAuth project discovery                                                                                |
-| `GOOGLE_VERTEX_LOCATION`         | Yes (unless passed in options) | Primary Vertex location source                                                                                            |
-| `GOOGLE_CLOUD_LOCATION`          | Fallback                       | Alternate Vertex location source                                                                                          |
-| `VERTEX_LOCATION`                | Fallback                       | Alternate Vertex location source                                                                                          |
-| `GOOGLE_CLOUD_API_KEY`           | Conditional                    | Direct Vertex API-key auth; otherwise ADC fallback can authenticate when project and location are set                     |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Conditional                    | If set, file must exist; otherwise ADC fallback path is checked (`~/.config/gcloud/application_default_credentials.json`) |
+| 变量                              | 是否必需                        | 备注                                                                                                                              |
+| --------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GOOGLE_CLOUD_PROJECT`            | 是（除非在选项中传入）          | 主要项目 ID 来源                                                                                                                  |
+| `GCP_PROJECT`                     | 回退                            | 备选项目 ID 来源                                                                                                                  |
+| `GCLOUD_PROJECT`                  | 回退                            | 备选项目 ID 来源                                                                                                                  |
+| `GOOGLE_CLOUD_PROJECT_ID`         | 仅用于 OAuth 登录辅助            | 由 Gemini CLI OAuth 项目发现使用                                                                                                  |
+| `GOOGLE_VERTEX_LOCATION`          | 是（除非在选项中传入）          | 主要 Vertex 位置来源                                                                                                              |
+| `GOOGLE_CLOUD_LOCATION`           | 回退                            | 备选 Vertex 位置来源                                                                                                              |
+| `VERTEX_LOCATION`                 | 回退                            | 备选 Vertex 位置来源                                                                                                              |
+| `GOOGLE_CLOUD_API_KEY`            | 条件性                          | 直接的 Vertex API key 认证；否则当设置了项目和位置时，ADC 回退可进行认证                                                          |
+| `GOOGLE_APPLICATION_CREDENTIALS`  | 条件性                          | 若设置，文件必须存在；否则检查 ADC 回退路径（`~/.config/gcloud/application_default_credentials.json`）                            |
 
-`GOOGLE_CLOUD_ACCESS_TOKEN` (or the compatible `CLOUDSDK_AUTH_ACCESS_TOKEN` fallback) supplies an explicit Google OAuth access token and bypasses ADC token acquisition.
+`GOOGLE_CLOUD_ACCESS_TOKEN`（或兼容的 `CLOUDSDK_AUTH_ACCESS_TOKEN` 回退）提供显式的 Google OAuth 访问令牌，并绕过 ADC token 获取。
 
 ### Kimi
 
-| Variable               | Default / behavior                                       |
-| ---------------------- | -------------------------------------------------------- |
-| `KIMI_CODE_OAUTH_HOST` | Primary OAuth host override                              |
-| `KIMI_OAUTH_HOST`      | Fallback OAuth host override                             |
-| `KIMI_CODE_BASE_URL`   | Overrides Kimi usage endpoint base URL (`usage/kimi.ts`) |
+| 变量                  | 默认 / 行为                                       |
+| --------------------- | ------------------------------------------------- |
+| `KIMI_CODE_OAUTH_HOST`| 主要 OAuth 主机覆盖                               |
+| `KIMI_OAUTH_HOST`     | 回退 OAuth 主机覆盖                              |
+| `KIMI_CODE_BASE_URL`  | 覆盖 Kimi usage 端点基础 URL（`usage/kimi.ts`）   |
 
-OAuth host chain: `KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth.kimi.com`.
+OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth.kimi.com`。
 
-### OpenAI-compatible endpoint controls
+### OpenAI 兼容端点控制
 
-| Variable                            | Default / behavior                                                                          |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| `OPENAI_BASE_URL`                   | Base URL fallback for OpenAI-compatible requests when the model/provider supplies a default |
-| `MOONSHOT_BASE_URL`                 | Moonshot chat and model-discovery endpoint override                                         |
-| `XAI_BASE_URL`                      | xAI HTTP endpoint override                                                                  |
-| `SAKANA_BASE_URL` / `FUGU_BASE_URL` | Sakana/Fugu endpoint override (`SAKANA_BASE_URL` wins)                                      |
-| `PI_OPENROUTER_RESPONSES`           | Responses API is enabled unless set to `0`; `0` selects the OpenAI Completions route        |
-| `UMANS_WEBSEARCH_PROVIDER`          | Default Umans Anthropic web-search provider selection when not supplied explicitly          |
+| 变量                                | 默认 / 行为                                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `OPENAI_BASE_URL`                   | 当 model/provider 提供默认值时，OpenAI 兼容请求的基础 URL 回退                                          |
+| `MOONSHOT_BASE_URL`                 | Moonshot 聊天与模型发现端点覆盖                                                                        |
+| `XAI_BASE_URL`                      | xAI HTTP 端点覆盖                                                                                      |
+| `SAKANA_BASE_URL` / `FUGU_BASE_URL` | Sakana/Fugu 端点覆盖（`SAKANA_BASE_URL` 优先）                                                          |
+| `PI_OPENROUTER_RESPONSES`           | 除非设为 `0`，否则启用 Responses API；`0` 选择 OpenAI Completions 路由                                    |
+| `UMANS_WEBSEARCH_PROVIDER`          | 未显式提供时，Umans Anthropic 网络搜索 provider 的默认选择                                              |
 
-### Gemini CLI and Antigravity compatibility
+### Gemini CLI 与 Antigravity 兼容性
 
-| Variable                    | Default / behavior                                              |
-| --------------------------- | --------------------------------------------------------------- |
-| `PI_AI_GEMINI_CLI_VERSION`  | Overrides Gemini CLI user-agent version tag (`0.46.0` if unset) |
-| `PI_AI_ANTIGRAVITY_VERSION` | Overrides the auto-discovered Antigravity hub user-agent version; when unset and discovery fails, the fallback is `2.8.0` |
-| `PI_AI_ANTIGRAVITY_CL`      | Overrides Antigravity hub user-agent build changelist (`963137146` if unset) |
-| `PI_AI_ANTIGRAVITY_OS`      | Overrides Antigravity hub user-agent os_type (pinned `darwin` if unset) |
-| `PI_AI_ANTIGRAVITY_ARCH`    | Overrides Antigravity hub user-agent arch (pinned `arm64` if unset) |
+| 变量                          | 默认 / 行为                                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `PI_AI_GEMINI_CLI_VERSION`    | 覆盖 Gemini CLI user-agent 版本标签（未设置时为 `0.46.0`）                                                |
+| `PI_AI_ANTIGRAVITY_VERSION`   | 覆盖自动发现的 Antigravity hub user-agent 版本；未设置且发现失败时回退为 `2.8.0`                          |
+| `PI_AI_ANTIGRAVITY_CL`        | 覆盖 Antigravity hub user-agent build changelist（未设置时为 `963137146`）                                |
+| `PI_AI_ANTIGRAVITY_OS`        | 覆盖 Antigravity hub user-agent os_type（未设置时固定为 `darwin`）                                         |
+| `PI_AI_ANTIGRAVITY_ARCH`      | 覆盖 Antigravity hub user-agent arch（未设置时固定为 `arm64`）                                            |
 
 ### GitLab Duo
 
-| Variable                         | Default / behavior                                                                                                                                                                                                                                                                                               |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GITLAB_CLIENT_ID`               | OAuth client ID. If unset, the bundled GitLab OAuth application client ID is used.                                                                                                                                                                                                                               |
-| `GITLAB_REDIRECT_URI`            | Exact OAuth redirect URI advertised to GitLab. If unset, the local callback uses `http://localhost:8080/callback`, with random-port fallback. Must use HTTP or HTTPS; loopback callbacks must use HTTP and bind the URI's host and port.                                                                         |
-| `GITLAB_DUO_NAMESPACE_ID`        | Workflow namespace override. Runtime options take precedence; otherwise namespace/project discovery uses the current credentials and working directory.                                                                                                                                                          |
-| `GITLAB_DUO_PROJECT_ID`          | Workflow project override by ID. Runtime `projectId`, then runtime `projectPath`, take precedence; this variable takes precedence over `GITLAB_DUO_PROJECT_PATH`.                                                                                                                                                |
-| `GITLAB_DUO_PROJECT_PATH`        | Workflow project override by path when no runtime project or `GITLAB_DUO_PROJECT_ID` is set.                                                                                                                                                                                                                     |
-| `GITLAB_DUO_WORKFLOW_DEFINITION` | Workflow definition override; runtime `workflowDefinition` takes precedence. Defaults to `ambient`.                                                                                                                                                                                                              |
-| `GITLAB_DUO_WORKFLOW_TRACE`      | Workflow tracing is enabled only when the value is exactly `1`. Each trace event is appended as one JSON object per line; trace write failures are ignored.                                                                                                                                                      |
-| `GITLAB_DUO_WORKFLOW_TRACE_FILE` | Trace output path. The value is trimmed; unset or blank defaults to the absolute path obtained by resolving `../../../../.tmp/gitlab-duo-workflow-trace.log` from the provider module (in a source checkout, `<repo>/.tmp/gitlab-duo-workflow-trace.log`). Missing parent directories are created automatically. |
+| 变量                                  | 默认 / 行为                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITLAB_CLIENT_ID`                    | OAuth 客户端 ID。若未设置，则使用捆绑的 GitLab OAuth 应用客户端 ID。                                                                                                                                                                                                                                                                                                                     |
+| `GITLAB_REDIRECT_URI`                 | 向 GitLab 声明的精确 OAuth 重定向 URI。若未设置，本地回调使用 `http://localhost:8080/callback`，并以随机端口作为回退。必须使用 HTTP 或 HTTPS；回环回调必须使用 HTTP 并绑定 URI 的主机和端口。                                                                                                                                                                                              |
+| `GITLAB_DUO_NAMESPACE_ID`             | 工作流命名空间覆盖。运行时选项优先；否则命名空间/项目发现使用当前凭证和工作目录。                                                                                                                                                                                                                                                                                                          |
+| `GITLAB_DUO_PROJECT_ID`               | 按 ID 的工作流项目覆盖。运行时 `projectId`、然后运行时 `projectPath` 优先；此变量优先于 `GITLAB_DUO_PROJECT_PATH`。                                                                                                                                                                                                                                                                          |
+| `GITLAB_DUO_PROJECT_PATH`             | 在未设置运行时项目或 `GITLAB_DUO_PROJECT_ID` 时按路径的工作流项目覆盖。                                                                                                                                                                                                                                                                                                                  |
+| `GITLAB_DUO_WORKFLOW_DEFINITION`      | 工作流定义覆盖；运行时 `workflowDefinition` 优先。默认为 `ambient`。                                                                                                                                                                                                                                                                                                                     |
+| `GITLAB_DUO_WORKFLOW_TRACE`           | 仅当值恰好为 `1` 时启用工作流跟踪。每个跟踪事件以每行一个 JSON 对象的方式追加；跟踪写入失败会被忽略。                                                                                                                                                                                                                                                                                       |
+| `GITLAB_DUO_WORKFLOW_TRACE_FILE`      | 跟踪输出路径。该值会被去除首尾空白；未设置或为空白时，默认路径为从 provider 模块解析的 `../../../../.tmp/gitlab-duo-workflow-trace.log` 绝对路径（在源码检出中即 `<repo>/.tmp/gitlab-duo-workflow-trace.log`）。父目录不存在时会自动创建。                                                                                                                                                       |
 
-`GITLAB_CLIENT_ID` and `GITLAB_REDIRECT_URI` affect OAuth login. The four routing/creation
-overrides (`GITLAB_DUO_NAMESPACE_ID`, `GITLAB_DUO_PROJECT_ID`,
-`GITLAB_DUO_PROJECT_PATH`, and `GITLAB_DUO_WORKFLOW_DEFINITION`) affect
-`gitlab-duo-agent` Workflow namespace/project resolution or workflow creation; they
-do not configure OAuth. The two trace variables above affect only local diagnostic
-output. A non-loopback
-redirect URI cannot be served directly by the local callback listener and
-therefore completes through the paste-code path.
+`GITLAB_CLIENT_ID` 和 `GITLAB_REDIRECT_URI` 影响 OAuth 登录。四个路由/创建覆盖项（`GITLAB_DUO_NAMESPACE_ID`、`GITLAB_DUO_PROJECT_ID`、`GITLAB_DUO_PROJECT_PATH` 和 `GITLAB_DUO_WORKFLOW_DEFINITION`）影响 `gitlab-duo-agent` 工作流命名空间/项目解析或工作流创建；它们不配置 OAuth。上述两个跟踪变量仅影响本地诊断输出。非回环重定向 URI 无法由本地回调监听器直接处理，因此走粘贴代码路径完成。
 
-### OpenAI Codex responses (feature/debug controls)
+### OpenAI Codex responses（功能/调试控制）
 
-| Variable                                    | Behavior                                                                                                                                                                                                      |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_CODEX_DEBUG`                            | `1`/`true` enables Codex provider debug logging                                                                                                                                                               |
-| `PI_CODEX_WEBSOCKET`                        | `1`/`true` enables websocket transport preference                                                                                                                                                             |
-| `PI_CODEX_RESPONSES_LITE`                   | `1`/`true` forces Responses Lite; `0`/`false` forces the standard Responses body; unset uses the model catalog default                                                                                        |
-| `PI_OPENAI_STATEFUL`                        | Overrides the stateful-chaining default for the platform OpenAI Responses API (`previous_response_id`, forces `store: true`): on by default against api.openai.com, off elsewhere                             |
-| `PI_CODEX_ZSTD`                             | `0`/`false` disables zstd compression of request bodies sent to the official Codex API (enabled by default)                                                                                                   |
-| `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`        | Positive integer override (default `300000`)                                                                                                                                                                  |
-| `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS` | First-event timeout override (default `300000`)                                                                                                                                                               |
-| `PI_CODEX_WEBSOCKET_PING_INTERVAL_MS`       | Ping interval override (default `10000`)                                                                                                                                                                      |
-| `PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS`        | Pong timeout override (default `60000`)                                                                                                                                                                       |
-| `PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY` | Buffered message capacity override (default `4096`)                                                                                                                                                           |
-| `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS`      | Maximum idle time before a connection is not reused (default `30000`)                                                                                                                                         |
-| `PI_CODEX_WEBSOCKET_RETRY_BUDGET`           | Non-negative integer override (default `5`)                                                                                                                                                                   |
-| `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS`         | Positive integer base backoff override (default `500`)                                                                                                                                                        |
-| `PI_STREAM_FIRST_EVENT_TIMEOUT_MS`          | Generic stream first-event timeout; `0` disables                                                                                                                                                              |
-| `PI_STREAM_IDLE_TIMEOUT_MS`                 | Generic stream idle timeout; `0` disables                                                                                                                                                                     |
-| `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`   | OpenAI-specific first-event timeout override; `0` disables and takes precedence over the generic value. `omp config set providers.streamFirstEventTimeoutSeconds <seconds>` provides the persisted equivalent |
-| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`          | OpenAI-specific idle timeout override; `0` disables and takes precedence over the generic value. `omp config set providers.streamIdleTimeoutSeconds <seconds>` provides the persisted equivalent              |
+| 变量                                              | 行为                                                                                                                                                                                                |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_CODEX_DEBUG`                                  | `1`/`true` 启用 Codex provider 调试日志                                                                                                                                                            |
+| `PI_CODEX_WEBSOCKET`                              | `1`/`true` 启用 WebSocket 传输偏好                                                                                                                                                                  |
+| `PI_CODEX_RESPONSES_LITE`                         | `1`/`true` 强制 Responses Lite；`0`/`false` 强制标准 Responses 体；未设置则使用模型目录默认                                                                                                          |
+| `PI_OPENAI_STATEFUL`                              | 覆盖平台 OpenAI Responses API 的有状态链默认值（`previous_response_id`，强制 `store: true`）：对 api.openai.com 默认开启，其他位置默认关闭                                                       |
+| `PI_CODEX_ZSTD`                                   | `0`/`false` 禁用发往官方 Codex API 的请求体的 zstd 压缩（默认启用）                                                                                                                                  |
+| `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`             | 正整数覆盖（默认 `300000`）                                                                                                                                                                          |
+| `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS`      | 首事件超时覆盖（默认 `300000`）                                                                                                                                                                      |
+| `PI_CODEX_WEBSOCKET_PING_INTERVAL_MS`            | Ping 间隔覆盖（默认 `10000`）                                                                                                                                                                       |
+| `PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS`             | Pong 超时覆盖（默认 `60000`）                                                                                                                                                                       |
+| `PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY`      | 缓冲消息容量覆盖（默认 `4096`）                                                                                                                                                                     |
+| `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS`           | 连接不复用的最大空闲时间（默认 `30000`）                                                                                                                                                            |
+| `PI_CODEX_WEBSOCKET_RETRY_BUDGET`                | 非负整数覆盖（默认 `5`）                                                                                                                                                                            |
+| `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS`              | 正整数基础退避覆盖（默认 `500`）                                                                                                                                                                    |
+| `PI_STREAM_FIRST_EVENT_TIMEOUT_MS`               | 通用流首事件超时；`0` 禁用                                                                                                                                                                          |
+| `PI_STREAM_IDLE_TIMEOUT_MS`                      | 通用流空闲超时；`0` 禁用                                                                                                                                                                            |
+| `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`        | OpenAI 特定的首事件超时覆盖；`0` 禁用并优先于通用值。`omp config set providers.streamFirstEventTimeoutSeconds <seconds>` 提供持久化等价配置                                                       |
+| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`               | OpenAI 特定的空闲超时覆盖；`0` 禁用并优先于通用值。`omp config set providers.streamIdleTimeoutSeconds <seconds>` 提供持久化等价配置                                                                  |
 
-### Cursor provider debug
+### Cursor provider 调试
 
-| Variable           | Behavior                                                                 |
-| ------------------ | ------------------------------------------------------------------------ |
-| `DEBUG_CURSOR`     | Enables provider debug logs; `2`/`verbose` for detailed payload snippets |
-| `DEBUG_CURSOR_LOG` | Optional file path for JSONL debug log output                            |
+| 变量              | 行为                                                                          |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `DEBUG_CURSOR`    | 启用 provider 调试日志；`2`/`verbose` 输出详细负载片段                         |
+| `DEBUG_CURSOR_LOG`| JSONL 调试日志输出的可选文件路径                                                |
 
-### Prompt cache compatibility switch
+### 提示缓存兼容性开关
 
-| Variable             | Behavior                                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_CACHE_RETENTION` | Cache-retention override where supported (`anthropic`, `openai-responses`, Bedrock). Accepts `long`, `short`, or `none`; other values are ignored |
+| 变量                | 行为                                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_CACHE_RETENTION`| 在支持的场景中覆盖缓存保留（`anthropic`、`openai-responses`、Bedrock）。接受 `long`、`short` 或 `none`；其他值会被忽略                                  |
 
 ---
 
-## 3) Web search subsystem
+## 3) 网络搜索子系统
 
-### Search provider credentials
+### 搜索 provider 凭证
 
-| Variable                                            | Used by                                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------------- |
-| `EXA_API_KEY`                                       | Exa search/MCP; alternatively use `/login exa`                            |
-| `BRAVE_API_KEY`                                     | Brave search provider                                                     |
-| `PERPLEXITY_API_KEY`                                | Perplexity search provider API-key mode                                   |
-| `PERPLEXITY_COOKIES`                                | Perplexity cookie-auth search mode                                        |
-| `PI_PERPLEXITY_RESPONSES`                           | `1` selects the Perplexity Responses endpoint instead of Chat Completions |
-| `PI_PERPLEXITY_MODEL`                               | Perplexity consumer-subscription model preference (default `experimental`) |
-| `PI_PERPLEXITY_API_MODEL`                           | Perplexity direct API model override (default `sonar-pro`)                |
-| `FIRECRAWL_BASE_URL`                                | Firecrawl search endpoint override (`FIRECRAWL_API_URL` is a fallback alias) |
-| `GOOGLE_GEMINI_BASE_URL`                            | Gemini search endpoint override; must be a valid absolute HTTP(S) URL     |
-| `TAVILY_API_KEY`                                    | Tavily search provider                                                    |
-| `ZAI_API_KEY`                                       | z.ai search provider (also checks stored OAuth in `agent.db`)             |
-| `OPENAI_API_KEY` / Codex OAuth in DB                | Codex search provider availability/auth                                   |
-| `PI_CODEX_WEB_SEARCH_MODEL`                         | Codex search provider model override                                      |
-| `GEMINI_SEARCH_MODEL`                               | Gemini search model override                                              |
-| `MOONSHOT_SEARCH_API_KEY` / `KIMI_SEARCH_API_KEY`   | Kimi/Moonshot search provider env auth                                    |
-| `MOONSHOT_SEARCH_BASE_URL` / `KIMI_SEARCH_BASE_URL` | Kimi/Moonshot search endpoint override                                    |
-| `KAGI_API_KEY`                                      | Kagi search provider                                                      |
-| `JINA_API_KEY`                                      | Jina search provider                                                      |
-| `PARALLEL_API_KEY`                                  | Parallel search provider                                                  |
-| `SEARXNG_ENDPOINT`, `SEARXNG_TOKEN`                 | SearXNG endpoint and optional bearer token                                |
-| `SEARXNG_BASIC_USERNAME`, `SEARXNG_BASIC_PASSWORD`  | SearXNG HTTP Basic Auth credentials                                       |
+| 变量                                                  | 由谁使用                                                                          |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `EXA_API_KEY`                                         | Exa 搜索/MCP；也可使用 `/login exa`                                                |
+| `BRAVE_API_KEY`                                       | Brave 搜索 provider                                                                |
+| `PERPLEXITY_API_KEY`                                  | Perplexity 搜索 provider 的 API key 模式                                            |
+| `PERPLEXITY_COOKIES`                                  | Perplexity 搜索的 cookie 认证模式                                                   |
+| `PI_PERPLEXITY_RESPONSES`                             | `1` 选择 Perplexity Responses 端点而非 Chat Completions                             |
+| `PI_PERPLEXITY_MODEL`                                 | Perplexity 消费者订阅模型偏好（默认 `experimental`）                                |
+| `PI_PERPLEXITY_API_MODEL`                             | Perplexity 直连 API 模型覆盖（默认 `sonar-pro`）                                    |
+| `FIRECRAWL_BASE_URL`                                  | Firecrawl 搜索端点覆盖（`FIRECRAWL_API_URL` 是回退别名）                             |
+| `GOOGLE_GEMINI_BASE_URL`                              | Gemini 搜索端点覆盖；必须是合法的绝对 HTTP(S) URL                                   |
+| `TAVILY_API_KEY`                                      | Tavily 搜索 provider                                                               |
+| `ZAI_API_KEY`                                         | z.ai 搜索 provider（也会检查 `agent.db` 中存储的 OAuth）                             |
+| `OPENAI_API_KEY` / DB 中的 Codex OAuth                | Codex 搜索 provider 的可用性/认证                                                   |
+| `PI_CODEX_WEB_SEARCH_MODEL`                           | Codex 搜索 provider 模型覆盖                                                        |
+| `GEMINI_SEARCH_MODEL`                                 | Gemini 搜索模型覆盖                                                                 |
+| `MOONSHOT_SEARCH_API_KEY` / `KIMI_SEARCH_API_KEY`     | Kimi/Moonshot 搜索 provider 环境变量认证                                            |
+| `MOONSHOT_SEARCH_BASE_URL` / `KIMI_SEARCH_BASE_URL`   | Kimi/Moonshot 搜索端点覆盖                                                          |
+| `KAGI_API_KEY`                                        | Kagi 搜索 provider                                                                  |
+| `JINA_API_KEY`                                        | Jina 搜索 provider                                                                  |
+| `PARALLEL_API_KEY`                                    | Parallel 搜索 provider                                                              |
+| `SEARXNG_ENDPOINT`、`SEARXNG_TOKEN`                   | SearXNG 端点与可选 bearer token                                                     |
+| `SEARXNG_BASIC_USERNAME`、`SEARXNG_BASIC_PASSWORD`    | SearXNG HTTP Basic 认证凭证                                                          |
 
-SearXNG also reads the equivalent `searxng.endpoint`, `searxng.token`, `searxng.basicUsername`, and `searxng.basicPassword` settings from `~/.omp/agent/config.yml`; environment variables are fallbacks.
+SearXNG 还会从 `~/.omp/agent/config.yml` 读取等价的 `searxng.endpoint`、`searxng.token`、`searxng.basicUsername` 和 `searxng.basicPassword` 设置；环境变量作为回退。
 
-### Anthropic web search auth chain
+### Anthropic 网络搜索认证链
 
-`searchAnthropic()` resolves credentials in this order:
+`searchAnthropic()` 按以下顺序解析凭证：
 
 1. `ANTHROPIC_SEARCH_API_KEY`
-2. `authStorage.getApiKey("anthropic")` fallback credentials (runtime and config overrides, stored OAuth, a login-sourced API key, generic Anthropic environment fallback, then other stored API keys; the environment fallback is `ANTHROPIC_FOUNDRY_API_KEY` → `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY` in Foundry mode, or `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY` otherwise)
+2. `authStorage.getApiKey("anthropic")` 回退凭证（运行时和配置覆盖、存储的 OAuth、登录获取的 API key、通用 Anthropic 环境回退，再之后的存储 API key；环境回退在 Foundry 模式下为 `ANTHROPIC_FOUNDRY_API_KEY` → `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY`，否则为 `ANTHROPIC_OAUTH_TOKEN` → `ANTHROPIC_API_KEY`）
 
-For either credential path, base URL resolution is:
+对于任一凭证路径，基础 URL 解析顺序为：
 
 1. `ANTHROPIC_SEARCH_BASE_URL`
-2. `FOUNDRY_BASE_URL` when `CLAUDE_CODE_USE_FOUNDRY` is enabled
+2. 启用 `CLAUDE_CODE_USE_FOUNDRY` 时使用 `FOUNDRY_BASE_URL`
 3. `ANTHROPIC_BASE_URL`
 4. `https://api.anthropic.com`
 
-Related vars:
+相关变量：
 
-| Variable                    | Default / behavior                                                                                                                                                                                                                         |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ANTHROPIC_SEARCH_API_KEY`  | API key used exclusively for the Anthropic web search provider. Highest-priority search auth; overrides `ANTHROPIC_API_KEY` / OAuth / Foundry for search calls without affecting chat completions.                                         |
-| `ANTHROPIC_SEARCH_BASE_URL` | Base URL used exclusively for the Anthropic web search provider. Applied to either `ANTHROPIC_SEARCH_API_KEY` or fallback Anthropic credentials; overrides `ANTHROPIC_BASE_URL` (and `FOUNDRY_BASE_URL` in Foundry mode) for search calls. |
-| `ANTHROPIC_SEARCH_MODEL`    | Search model override. Defaults to `claude-haiku-4-5`.                                                                                                                                                                                     |
-| `ANTHROPIC_BASE_URL`        | Generic fallback base URL for Anthropic requests when no search-specific base URL is set.                                                                                                                                                  |
+| 变量                          | 默认 / 行为                                                                                                                                                                                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_SEARCH_API_KEY`    | 仅用于 Anthropic 网络搜索 provider 的 API key。搜索认证的最高优先级；覆盖 `ANTHROPIC_API_KEY` / OAuth / Foundry 用于搜索调用，但不影响聊天补全。                                                                                                       |
+| `ANTHROPIC_SEARCH_BASE_URL`   | 仅用于 Anthropic 网络搜索 provider 的基础 URL。应用于 `ANTHROPIC_SEARCH_API_KEY` 或回退的 Anthropic 凭证；用于搜索调用时覆盖 `ANTHROPIC_BASE_URL`（以及 Foundry 模式下的 `FOUNDRY_BASE_URL`）。                                                            |
+| `ANTHROPIC_SEARCH_MODEL`      | 搜索模型覆盖。默认为 `claude-haiku-4-5`。                                                                                                                                                                                                            |
+| `ANTHROPIC_BASE_URL`          | 在未设置搜索专用基础 URL 时，Anthropic 请求的通用回退基础 URL。                                                                                                                                                                                       |
 
-Use `ANTHROPIC_SEARCH_BASE_URL` (optionally with `ANTHROPIC_SEARCH_API_KEY`) to keep chat routed through an enterprise gateway (`ANTHROPIC_BASE_URL` or `CLAUDE_CODE_USE_FOUNDRY=true`) while pointing web search at a direct Anthropic endpoint, or vice versa.
+使用 `ANTHROPIC_SEARCH_BASE_URL`（可与 `ANTHROPIC_SEARCH_API_KEY` 搭配）可在让聊天通过企业网关（`ANTHROPIC_BASE_URL` 或 `CLAUDE_CODE_USE_FOUNDRY=true`）的同时，将网络搜索指向直接的 Anthropic 端点，反之亦然。
 
-### Perplexity OAuth flow behavior flag
+### Perplexity OAuth 流程行为标志
 
-| Variable            | Behavior                                                                        |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `PI_AUTH_NO_BORROW` | If set, disables macOS native-app token borrowing path in Perplexity login flow |
-
----
-
-## 4) Python tooling and kernel runtime
-
-| Variable               | Default / behavior                                                                                  |
-| ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `PI_PY`                | Boolean-like override for Python; unset defers to `eval.py` (default enabled)                       |
-| `PI_JS`                | Boolean-like override for JavaScript; unset defers to `eval.js` (default enabled)                   |
-| `PI_RB`                | Boolean-like override for Ruby; unset defers to `eval.rb` (default disabled)                        |
-| `PI_JL`                | Boolean-like override for Julia; unset defers to `eval.jl` (default disabled)                       |
-| `PI_PYTHON_SKIP_CHECK` | Truthy flag skips Python interpreter availability checks (subprocess runner still starts on demand) |
-| `PI_RUBY_SKIP_CHECK`   | Truthy flag skips Ruby interpreter availability checks                                              |
-| `PI_PYTHON_IPC_TRACE`  | Truthy flag logs NDJSON frames exchanged with the Python runner subprocess                          |
-| `PI_RUBY_IPC_TRACE`    | Truthy flag logs Ruby runner IPC frames                                                             |
-| `PI_JULIA_IPC_TRACE`   | Truthy flag logs Julia runner IPC frames                                                            |
-| `VIRTUAL_ENV`          | Highest-priority venv path for Python runtime resolution                                            |
-| `CONDA_PREFIX`         | Python environment fallback after `VIRTUAL_ENV`, before local `.venv` / `venv` directories          |
-
-Python subprocess filtering denies common API keys and allows safe base variables plus `LC_`, `XDG_`, and `PI_` prefixes.
+| 变量                | 行为                                                                              |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `PI_AUTH_NO_BORROW` | 若设置，则在 Perplexity 登录流程中禁用 macOS 原生应用 token 借用路径                |
 
 ---
 
-## 5) Agent/runtime behavior toggles
+## 4) Python 工具与内核运行时
 
-| Variable                     | Default / behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_SMOL_MODEL`              | Ephemeral model-role override for `smol` (CLI `--smol` takes precedence)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PI_SLOW_MODEL`              | Ephemeral model-role override for `slow` (CLI `--slow` takes precedence)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PI_PLAN_MODEL`              | Ephemeral model-role override for `plan` (CLI `--plan` takes precedence)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PI_NO_TITLE`                | If set (any non-empty value), disables auto session title generation on first user message                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `PI_TINY_DEVICE`             | ONNX execution provider for local tiny models; overrides the `providers.tinyModelDevice` setting (default: CPU; supports `cpu`, `gpu`, `metal`/`webgpu`, `auto`, `cuda`, `dml`, `coreml`, `wasm`, `webnn`, `webnn-gpu`, `webnn-cpu`, `webnn-npu`)                                                                                                                                                                                                                                                                                                                                                          |
-| `PI_TINY_DTYPE`              | ONNX quantization/precision for local tiny models; overrides the `providers.tinyModelDtype` setting (default: each model's shipped dtype, currently `q4`; supports `auto`, `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`)                                                                                                                                                                                                                                                                                                                                     |
-| `PI_NO_INTERLEAVED_THINKING` | If `1`, disables Anthropic interleaved thinking budget behavior and uses output-token inflation for older thinking mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `PI_NO_THINKING_LOOP_GUARD`  | If `1`, disables the model thinking-loop guard                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `NULL_PROMPT`                | If `true`, system prompt builder returns empty string                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `PI_BLOCKED_AGENT`           | Blocks a specific subagent type in task tool                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `PI_SUBPROCESS_CMD`          | Overrides subagent spawn command (`omp` / `omp.cmd` resolution bypass)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `PI_TASK_MAX_OUTPUT_BYTES`   | Max captured output bytes per subagent (default `500000`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PI_TASK_MAX_OUTPUT_LINES`   | Max captured output lines per subagent (default `5000`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `PI_TIMING`                  | If set (any non-empty value), prints a hierarchical timing-span tree to **stderr** via `logger.printTimings()`. In interactive mode the tree prints once the agent is ready (before the TUI starts); in print mode it prints after the whole prompt batch completes. Print-mode prompts are wrapped in `print:prompt:initial` / `print:prompt:next` spans so each user message shows up as its own row. `PI_TIMING=x` exits the process with code 0 right after printing in interactive mode (use to measure cold startup only). `PI_TIMING=full` lists every module-load entry instead of just the top N. |
-| `PI_DEBUG_STARTUP`           | If set (any non-empty value), streams one synchronous `[startup] <phase>:start` / `:done` marker line to **stderr** as each startup phase begins/ends — including command-module imports (`cli:load:<name>`) and the native addon extraction/`dlopen` (`native:*`). Unlike `PI_TIMING` (which prints only once startup completes), the markers survive a hard hang: the last line on stderr names the phase the process is stuck in. Combine with `PI_TIMING` freely; markers and the span tree share the same phase names.                                                                                |
-| `PI_PACKAGE_DIR`             | Overrides package asset base dir resolution (`docs/`, `examples/`, `CHANGELOG.md`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `OMP_SKIP_SETUP`             | Any non-empty value except `0`, `false`, or `no` skips automatic interactive setup scenes; an explicitly forced setup ignores it                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `PI_DISABLE_LSPMUX`          | If `1`, disables lspmux detection/integration and forces direct LSP server spawning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `PI_RPC_EMIT_TITLE`          | Boolean-like flag enabling title events in RPC mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `SMITHERY_URL`               | Smithery web URL override (default `https://smithery.ai`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `SMITHERY_API_URL`           | Smithery API base URL override (default `https://api.smithery.ai`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `SMITHERY_API_KEY`           | Smithery API key for managed MCP auth lookup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `PUPPETEER_EXECUTABLE_PATH`  | Browser tool Chromium executable override                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `LITELLM_BASE_URL`           | LiteLLM proxy base URL fallback (`http://localhost:4000/v1` if unset); explicit `providers.litellm.baseUrl` / `models.yml` config wins                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `LM_STUDIO_BASE_URL`         | Default implicit LM Studio discovery base URL override (`http://127.0.0.1:1234/v1` if unset)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `OLLAMA_BASE_URL`            | Default implicit Ollama discovery base URL override (`OLLAMA_HOST` if unset, then `http://127.0.0.1:11434`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `OLLAMA_HOST`                | Ollama host used for implicit Ollama discovery when `OLLAMA_BASE_URL` is unset; accepts Ollama-style values such as `127.0.0.1:11434` or `http://host:11434`                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `OLLAMA_CONTEXT_LENGTH`      | Positive integer context-window override for implicit Ollama discovery; affects OMP context budgeting only and does not change Ollama's runtime `num_ctx`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `LLAMA_CPP_BASE_URL`         | Default implicit Llama.cpp discovery base URL override (`http://127.0.0.1:8080` if unset)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PI_EDIT_VARIANT`            | Forces edit tool variant when valid (`patch`, `replace`, `hashline`, `apply_patch`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `PI_INTENT_TRACING`          | Boolean-like override for tool intent metadata; falls back to `tools.intentTracing`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `PI_STRICT_EDIT_MODE`        | If `1`, disables built-in model-specific edit-mode fallbacks, so the configured/global `edit.mode` is used unless `PI_EDIT_VARIANT` or `edit.modelVariants` overrides it                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `PI_FORCE_IMAGE_PROTOCOL`    | Forces supported image protocol (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) where used. Setting `kitty` inside tmux also opts into Kitty Unicode placeholder placement unless `PI_KITTY_PLACEHOLDERS=0` or `PI_NO_KITTY_PLACEHOLDERS=1` disables it                                                                                                                                                                                                                                                                                                                                                       |
-| `PI_ALLOW_SIXEL_PASSTHROUGH` | Allows SIXEL passthrough when `PI_FORCE_IMAGE_PROTOCOL=sixel`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `PI_NO_PTY`                  | If `1`, disables interactive PTY path for bash tool                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `OMP_MCP_TIMEOUT_MS`         | Overrides MCP client request timeout (ms) for every MCP server. `0` disables client-side timeouts (`AbortSignal` never fires). Invalid (negative or non-numeric) values are ignored with a warning and the per-server config or default (`30000`) is used.                                                                                                                                                                                                                                                                                                                                                 |
-| `PI_DISABLE_UUTILS_BUILTINS` | Non-empty except `0`/`false` disables the bash tool's uutils built-ins; `shell.env.PI_DISABLE_UUTILS_BUILTINS` wins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `OMP_NO_WEBP`                | `1` or `true` (case-insensitive) disables WebP in image-resize format selection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `MNEMOPI_EMBEDDING_MODEL`    | Embedding-model override for mnemopi memory configuration when no explicit override is supplied                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `PI_AUTO_QA`                 | Boolean flag with highest precedence for the automatic tool-issue report injection/recording (`dev.autoqa` setting is consulted next); `0`/`false` disables, `1`/`true` forces on                                                                                                                                                                                                                                                                                                                                                                                          |
-| `PI_AUTO_QA_PUSH`            | `1`/`true` bypasses the consent dialog and forces tool-issue push recording in headless/non-interactive environments                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `PI_AUTO_QA_PUSH_URL`        | Endpoint override for auto QA grievance push; wins over the `dev.autoqaPush.endpoint` setting                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `PI_BROWSER_RELAY`           | `0`/`1` kill switch for the browser relay; overrides the `browser.relay` setting (relay auto-starts when the browser tool needs it)                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 变量                  | 默认 / 行为                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `PI_PY`               | Python 的布尔型覆盖；未设置时遵循 `eval.py`（默认启用）                                        |
+| `PI_JS`               | JavaScript 的布尔型覆盖；未设置时遵循 `eval.js`（默认启用）                                    |
+| `PI_RB`               | Ruby 的布尔型覆盖；未设置时遵循 `eval.rb`（默认禁用）                                          |
+| `PI_JL`               | Julia 的布尔型覆盖；未设置时遵循 `eval.jl`（默认禁用）                                         |
+| `PI_PYTHON_SKIP_CHECK`| 真值标志，跳过 Python 解释器可用性检查（子进程运行器仍按需启动）                                |
+| `PI_RUBY_SKIP_CHECK`  | 真值标志，跳过 Ruby 解释器可用性检查                                                            |
+| `PI_PYTHON_IPC_TRACE` | 真值标志，记录与 Python 运行器子进程交换的 NDJSON 帧                                          |
+| `PI_RUBY_IPC_TRACE`   | 真值标志，记录 Ruby 运行器 IPC 帧                                                              |
+| `PI_JULIA_IPC_TRACE`  | 真值标志，记录 Julia 运行器 IPC 帧                                                             |
+| `VIRTUAL_ENV`         | Python 运行时解析的最高优先级 venv 路径                                                        |
+| `CONDA_PREFIX`        | Python 环境回退，介于 `VIRTUAL_ENV` 之后，本地 `.venv` / `venv` 目录之前                        |
 
-### Hindsight memory backend
-
-`loadHindsightConfig()` resolves each supported environment override over the corresponding
-`hindsight.*` setting and then its built-in default. String values are trimmed and an empty
-string is ignored. Boolean values are case-insensitive: only `true`, `1`, and `yes` mean true;
-any other defined value means false. Integer values use base-10 `parseInt`; non-numeric values
-are ignored and the loader does not clamp the parsed integer. Enum values must exactly match
-one of the listed lowercase values; invalid values are ignored.
-
-| Variable                           | Setting overridden              | Accepted value / built-in default                                                 |
-| ---------------------------------- | ------------------------------- | --------------------------------------------------------------------------------- |
-| `HINDSIGHT_API_URL`                | `hindsight.apiUrl`              | Non-empty string; default `http://localhost:8888`                                 |
-| `HINDSIGHT_API_TOKEN`              | `hindsight.apiToken`            | Non-empty string; unset by default                                                |
-| `HINDSIGHT_BANK_ID`                | `hindsight.bankId`              | Non-empty string; unset by default, so the selected scoping mode derives the bank |
-| `HINDSIGHT_BANK_MISSION`           | `hindsight.bankMission`         | Non-empty string; default empty string                                            |
-| `HINDSIGHT_RETAIN_MODE`            | `hindsight.retainMode`          | `full-session` or `last-turn`; default `full-session`                             |
-| `HINDSIGHT_RECALL_BUDGET`          | `hindsight.recallBudget`        | `low`, `mid`, or `high`; default `mid`                                            |
-| `HINDSIGHT_AUTO_RECALL`            | `hindsight.autoRecall`          | Boolean; default `true`                                                           |
-| `HINDSIGHT_AUTO_RETAIN`            | `hindsight.autoRetain`          | Boolean; default `true`                                                           |
-| `HINDSIGHT_SCOPING`                | `hindsight.scoping`             | `global`, `per-project`, or `per-project-tagged`; default `per-project-tagged`    |
-| `HINDSIGHT_DEBUG`                  | `hindsight.debug`               | Boolean; default `false`                                                          |
-| `HINDSIGHT_RECALL_MAX_TOKENS`      | `hindsight.recallMaxTokens`     | Integer; default `1024`                                                           |
-| `HINDSIGHT_RECALL_CONTEXT_TURNS`   | `hindsight.recallContextTurns`  | Integer; default `1`                                                              |
-| `HINDSIGHT_RECALL_MAX_QUERY_CHARS` | `hindsight.recallMaxQueryChars` | Integer; default `800`                                                            |
-| `HINDSIGHT_RETAIN_EVERY_N_TURNS`   | `hindsight.retainEveryNTurns`   | Integer; default `3`                                                              |
-| `HINDSIGHT_REQUEST_TIMEOUT_MS`     | `hindsight.requestTimeoutMs`    | Integer milliseconds; default `30000`                                             |
-| `HINDSIGHT_REFLECT_TIMEOUT_MS`     | `hindsight.reflectTimeoutMs`    | Integer milliseconds; default `120000`                                            |
-| `HINDSIGHT_RECALL_TIMEOUT_MS`      | `hindsight.recallTimeoutMs`     | Integer milliseconds; default `30000`                                             |
-| `HINDSIGHT_RETAIN_TIMEOUT_MS`      | `hindsight.retainTimeoutMs`     | Integer milliseconds; default `60000`                                             |
-
-`PI_NO_PTY` is also set internally when CLI `--no-pty` is used.
+Python 子进程过滤会拒绝常见的 API key，并允许安全的基础变量以及 `LC_`、`XDG_`、`PI_` 前缀。
 
 ---
 
-## 6) Storage and config root paths
+## 5) Agent/运行时行为开关
 
-These affect where coding-agent stores data and which process-local settings overlays it loads.
+| 变量                          | 默认 / 行为                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_SMOL_MODEL`               | `smol` 模型角色的临时覆盖（CLI `--smol` 优先）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PI_SLOW_MODEL`               | `slow` 模型角色的临时覆盖（CLI `--slow` 优先）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PI_PLAN_MODEL`               | `plan` 模型角色的临时覆盖（CLI `--plan` 优先）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `PI_NO_TITLE`                 | 若设置（任何非空值），则在首条用户消息时禁用自动会话标题生成                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `PI_TINY_DEVICE`              | 本地 tiny 模型的 ONNX 执行 provider；覆盖 `providers.tinyModelDevice` 设置（默认：CPU；支持 `cpu`、`gpu`、`metal`/`webgpu`、`auto`、`cuda`、`dml`、`coreml`、`wasm`、`webnn`、`webnn-gpu`、`webnn-cpu`、`webnn-npu`）                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `PI_TINY_DTYPE`               | 本地 tiny 模型的 ONNX 量化/精度；覆盖 `providers.tinyModelDtype` 设置（默认：每个模型自带的 dtype，目前为 `q4`；支持 `auto`、`fp32`、`fp16`、`q8`、`int8`、`uint8`、`q4`、`bnb4`、`q4f16`、`q2`、`q2f16`、`q1`、`q1f16`）                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `PI_NO_INTERLEAVED_THINKING`  | 若为 `1`，禁用 Anthropic 交错思考预算行为，并对旧版思考模式使用输出 token 膨胀                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `PI_NO_THINKING_LOOP_GUARD`   | 若为 `1`，禁用模型思考循环保护                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `NULL_PROMPT`                 | 若为 `true`，系统提示构建器返回空字符串                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `PI_AUTO_QA_PUSH`             | `1`/`true` 绕过同意对话框，在无头/非交互环境中强制推送工具问题记录                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `PI_AUTO_QA_PUSH_URL`         | 自动 QA grievance 推送的端点覆盖；优先于 `dev.autoqaPush.endpoint` 设置                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `PI_BROWSER_RELAY`            | `0`/`1` 浏览器中继的关闭开关；覆盖 `browser.relay` 设置（浏览器工具需要时中继会自动启动）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
-| Variable                                            | Default / behavior                                                                                                         |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `OMP_PROFILE`                                       | Canonical named profile selector; wins over `PI_PROFILE` even when explicitly empty                                        |
-| `PI_PROFILE`                                        | Legacy profile selector used only when `OMP_PROFILE` is undefined                                                          |
-| `PI_CONFIG_DIR`                                     | Config root dirname under home (default `.omp`)                                                                            |
-| `PI_CODING_AGENT_DIR`                               | Full agent-directory override for the default profile only; named profiles ignore it                                       |
-| `PI_CODING_AGENT_SESSION_DIR`                       | Initial session-directory override consumed by launch argument parsing                                                     |
-| `PI_CONFIG_FILES`                                   | Platform path-list of settings overlays (`:` on Unix, `;` on Windows); loaded in order before explicit `--config` overlays |
-| `OMP_AUTORESEARCH_DB_DIR`                           | Directory override for per-project autoresearch DB and project-artifact roots                                              |
-| `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | On macOS/Linux, redirect corresponding OMP paths only when the target `omp` root (or named-profile root) already exists    |
-| `PWD`                                               | Used when matching canonical current working directory in path helpers                                                     |
-| `OMP_WORKTREE_DIR`                                  | Agent-managed worktrees directory override (default `~/.omp/wt`); must be absolute or `~`-relative, relative paths are ignored; wins over the `worktree.base` setting                      |
-| `OMP_GITHUB_CACHE_DB`                               | Overrides the GitHub view cache database path (default `~/.omp/cache/github-cache.db`)                                                                                                     |
+### Hindsight 记忆后端
 
----
+`loadHindsightConfig()` 对每个受支持的环境覆盖在对应的 `hindsight.*` 设置之上进行解析，然后是其内建默认值。字符串值会被去除首尾空白，空字符串会被忽略。布尔值不区分大小写：只有 `true`、`1` 和 `yes` 表示真；任何其他已定义的值都表示假。整数值使用 base-10 `parseInt`；非数字值会被忽略，loader 不会对解析得到的整数进行夹紧。枚举值必须精确匹配所列的小写值之一；无效值会被忽略。
 
-## 7) Shell/tool execution environment
+| 变量                                  | 被覆盖的设置                          | 接受的值 / 内建默认值                                                                  |
+| ------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `HINDSIGHT_API_URL`                   | `hindsight.apiUrl`                    | 非空字符串；默认 `http://localhost:8888`                                              |
+| `HINDSIGHT_API_TOKEN`                 | `hindsight.apiToken`                  | 非空字符串；默认未设置                                                                 |
+| `HINDSIGHT_BANK_ID`                   | `hindsight.bankId`                    | 非空字符串；默认未设置，所选的范围模式会派生出 bank                                    |
+| `HINDSIGHT_BANK_MISSION`              | `hindsight.bankMission`               | 非空字符串；默认为空字符串                                                             |
+| `HINDSIGHT_RETAIN_MODE`               | `hindsight.retainMode`                | `full-session` 或 `last-turn`；默认 `full-session`                                    |
+| `HINDSIGHT_RECALL_BUDGET`             | `hindsight.recallBudget`              | `low`、`mid` 或 `high`；默认 `mid`                                                     |
+| `HINDSIGHT_AUTO_RECALL`               | `hindsight.autoRecall`                | 布尔值；默认 `true`                                                                    |
+| `HINDSIGHT_AUTO_RETAIN`               | `hindsight.autoRetain`                | 布尔值；默认 `true`                                                                    |
+| `HINDSIGHT_SCOPING`                   | `hindsight.scoping`                   | `global`、`per-project` 或 `per-project-tagged`；默认 `per-project-tagged`             |
+| `HINDSIGHT_DEBUG`                     | `hindsight.debug`                     | 布尔值；默认 `false`                                                                   |
+| `HINDSIGHT_RECALL_MAX_TOKENS`         | `hindsight.recallMaxTokens`           | 整数；默认 `1024`                                                                      |
+| `HINDSIGHT_RECALL_CONTEXT_TURNS`      | `hindsight.recallContextTurns`        | 整数；默认 `1`                                                                         |
+| `HINDSIGHT_RECALL_MAX_QUERY_CHARS`    | `hindsight.recallMaxQueryChars`       | 整数；默认 `800`                                                                       |
+| `HINDSIGHT_RETAIN_EVERY_N_TURNS`      | `hindsight.retainEveryNTurns`         | 整数；默认 `3`                                                                         |
+| `HINDSIGHT_REQUEST_TIMEOUT_MS`        | `hindsight.requestTimeoutMs`          | 整数毫秒数；默认 `30000`                                                               |
+| `HINDSIGHT_REFLECT_TIMEOUT_MS`        | `hindsight.reflectTimeoutMs`          | 整数毫秒数；默认 `120000`                                                              |
+| `HINDSIGHT_RECALL_TIMEOUT_MS`         | `hindsight.recallTimeoutMs`           | 整数毫秒数；默认 `30000`                                                               |
+| `HINDSIGHT_RETAIN_TIMEOUT_MS`         | `hindsight.retainTimeoutMs`           | 整数毫秒数；默认 `60000`                                                               |
 
-(From `packages/utils/src/procmgr.ts` and coding-agent bash tool integration.)
-
-| Variable                   | Behavior                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------ |
-| `PI_BASH_NO_CI`            | Suppresses automatic `CI=true` injection into spawned shell env                |
-| `CLAUDE_BASH_NO_CI`        | Legacy alias fallback for `PI_BASH_NO_CI`                                      |
-| `PI_BASH_NO_LOGIN`         | Disables login-shell mode; shell args become `['-c']` instead of `['-l','-c']` |
-| `CLAUDE_BASH_NO_LOGIN`     | Legacy alias fallback for `PI_BASH_NO_LOGIN`                                   |
-| `PI_SHELL_PREFIX`          | Optional command prefix wrapper                                                |
-| `CLAUDE_CODE_SHELL_PREFIX` | Legacy alias fallback for `PI_SHELL_PREFIX`                                    |
-| `VISUAL`                   | Preferred external editor command                                              |
-| `EDITOR`                   | Fallback external editor command                                               |
-
-Current implementation: `PI_BASH_NO_LOGIN`/`CLAUDE_BASH_NO_LOGIN` are active; when either is set, `getShellArgs()` returns `['-c']`.
-
-`PI_BASH_NO_CI`, `PI_BASH_NO_LOGIN`, and `PI_SHELL_PREFIX` use their `CLAUDE_*` aliases only when the canonical variable is unset.
-
----
-
-## 8) UI/theme/session detection (auto-detected env)
-
-These are read as runtime signals; they are usually set by the terminal/OS rather than manually configured.
-
-| Variable                                                                           | Used for                                      |
-| ---------------------------------------------------------------------------------- | --------------------------------------------- |
-| `COLORTERM`, `TERM`, `WT_SESSION`                                                  | Color capability detection (theme color mode) |
-| `COLORFGBG`                                                                        | Terminal background light/dark auto-detection |
-| `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMINAL_EMULATOR`                        | Terminal identity in system prompt/context    |
-| `TMUX_PANE`, `CMUX_SURFACE_ID`, `KITTY_WINDOW_ID`, `TERM_SESSION_ID`, `WT_SESSION` | Stable per-terminal session breadcrumb IDs    |
-| `SHELL`, `ComSpec`, `TERM_PROGRAM`, `TERM`                                         | System info diagnostics                       |
-| `APPDATA`, `XDG_CONFIG_HOME`                                                       | lspmux config path resolution                 |
-| `HOME`                                                                             | Path shortening in MCP command UI             |
-
-`COPILOT_HOME` overrides the GitHub Copilot config home (default `~/.copilot`), and `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` supplies additional comma-separated instruction directories. `JS_DEBUG_DAP_SERVER` selects an existing JavaScript debug-adapter server; `XDG_DATA_HOME` also participates in bundled debugger discovery.
+`PI_NO_PTY` 也会在使用 CLI `--no-pty` 时被内部设置。
 
 ---
 
-## 9) TUI runtime flags (shared package, affects coding-agent UX)
+## 6) 存储与配置根路径
 
-| Variable                       | Behavior                                                                                                                                                                                                                                           |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_NOTIFICATIONS`             | `off` / `0` / `false` suppress desktop notifications                                                                                                                                                                                               |
-| `PI_TUI_WRITE_LOG`             | If set, logs TUI writes to file                                                                                                                                                                                                                    |
-| `PI_TUI_RAW_BACKSPACE_IS_CTRL` | If `1`, interprets raw `0x08` as Ctrl+Backspace instead of Backspace; use when SSH/container hops hide a Windows Terminal client                                                                                                                   |
-| `PI_HARDWARE_CURSOR`           | If `1`, enables hardware cursor mode                                                                                                                                                                                                               |
-| `PI_NO_SYNC_OUTPUT`            | If set (any non-empty value), disables DEC 2026 synchronized-output wrappers while keeping TUI autowrap guards                                                                                                                                     |
-| `PI_NO_DECCARA`                | If set (truthy), disables Kitty DECCARA rectangular-SGR background fills (forces padded-string rendering)                                                                                                                                          |
-| `PI_DEBUG_REDRAW`              | If `1`, enables redraw debug logging                                                                                                                                                                                                               |
-| `PI_FORCE_IMAGE_PROTOCOL`      | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`). Setting `kitty` inside tmux also opts into Kitty Unicode placeholder placement unless `PI_KITTY_PLACEHOLDERS=0` or `PI_NO_KITTY_PLACEHOLDERS=1` disables it |
-| `PI_KITTY_PLACEHOLDERS`        | `1` forces Kitty Unicode placeholder placement on; `0` forces it off. Under tmux/screen, use `1` only after confirming the outer terminal supports Kitty `U=1` placeholders—otherwise U+10EEEE may render as literal PUA boxes                     |
-| `PI_NO_KITTY_PLACEHOLDERS`     | `1` hard-disables Kitty Unicode placeholder placement and takes precedence over `PI_KITTY_PLACEHOLDERS`                                                                                                                                            |
-| `PI_TUI_RESIZE_IN_PLACE`       | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles                                                           |
+这些影响 coding-agent 存储数据的位置以及其加载的进程级设置覆盖。
 
-### Browser launch/proxy controls
-
-| Variable                               | Behavior                                                                                 |
-| -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `PUPPETEER_PROXY`                      | Adds Chromium's `--proxy-server` launch argument                                         |
-| `PUPPETEER_PROXY_BYPASS_LOOPBACK`      | Boolean-like flag adds `<-loopback>` to the bypass list so localhost also uses the proxy |
-| `PUPPETEER_PROXY_IGNORE_CERT_ERRORS`   | Boolean-like flag launches Chromium with certificate errors ignored                      |
-| `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID` | Target cmux workspace/surface when the browser opens a split                             |
-| `CMUX_RELAY_ID`, `CMUX_RELAY_TOKEN`    | cmux relay identity/auth fallback                                                        |
+| 变量                                            | 默认 / 行为                                                                                  |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `OMP_PROFILE`                                   | 规范的命名 profile 选择器；即使显式为空也优先于 `PI_PROFILE`                                   |
+| `PI_PROFILE`                                    | 旧版 profile 选择器，仅在 `OMP_PROFILE` 未定义时使用                                           |
+| `PI_CONFIG_DIR`                                 | 家目录下配置根目录的目录名（默认 `.omp`）                                                     |
+| `PI_CODING_AGENT_DIR`                           | 仅对默认 profile 生效的完整 agent 目录覆盖；命名 profile 会忽略它                              |
+| `PI_CODING_AGENT_SESSION_DIR`                   | 由启动参数解析消费的初始会话目录覆盖                                                           |
+| `PI_CONFIG_FILES`                               | 平台路径列表形式的设置覆盖（Unix 上为 `:`，Windows 上为 `;`）；在显式 `--config` 覆盖之前按顺序加载 |
+| `OMP_AUTORESEARCH_DB_DIR`                       | 每项目 autoresearch 数据库与项目产物根目录的目录覆盖                                           |
+| `XDG_DATA_HOME`、`XDG_STATE_HOME`、`XDG_CACHE_HOME` | 在 macOS/Linux 上，仅当目标 `omp` 根目录（或命名 profile 根目录）已存在时才重定向对应的 OMP 路径 |
+| `PWD`                                           | 在路径辅助函数中用于匹配规范化当前工作目录                                                     |
+| `OMP_WORKTREE_DIR`                              | Agent 管理工作树目录覆盖（默认 `~/.omp/wt`）；必须为绝对路径或 `~` 相对路径，相对路径会被忽略；优先于 `worktree.base` 设置 |
+| `OMP_GITHUB_CACHE_DB`                           | 覆盖 GitHub 视图缓存数据库路径（默认 `~/.omp/cache/github-cache.db`）                            |
 
 ---
 
-## 10) Commit generation controls
+## 7) Shell/工具执行环境
 
-| Variable                  | Behavior                                                            |
-| ------------------------- | ------------------------------------------------------------------- |
-| `PI_COMMIT_TEST_FALLBACK` | If `true` (case-insensitive), force commit fallback generation path |
-| `PI_COMMIT_NO_FALLBACK`   | If `true`, disables fallback when agent returns no proposal         |
-| `PI_COMMIT_MAP_REDUCE`    | If `false`, disables map-reduce commit analysis path                |
-| `DEBUG`                   | If set, commit agent error stack traces are printed                 |
+（来自 `packages/utils/src/procmgr.ts` 以及 coding-agent 的 bash 工具集成。）
 
----
+| 变量                          | 行为                                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `PI_BASH_NO_CI`               | 抑制向衍生 shell 环境自动注入 `CI=true`                                                        |
+| `CLAUDE_BASH_NO_CI`           | `PI_BASH_NO_CI` 的旧版别名回退                                                                  |
+| `PI_BASH_NO_LOGIN`            | 禁用 login shell 模式；shell 参数变为 `['-c']` 而不是 `['-l','-c']`                              |
+| `CLAUDE_BASH_NO_LOGIN`        | `PI_BASH_NO_LOGIN` 的旧版别名回退                                                               |
+| `PI_SHELL_PREFIX`             | 可选命令前缀包装                                                                               |
+| `CLAUDE_CODE_SHELL_PREFIX`    | `PI_SHELL_PREFIX` 的旧版别名回退                                                                |
+| `VISUAL`                      | 首选外部编辑器命令                                                                             |
+| `EDITOR`                      | 回退外部编辑器命令                                                                              |
 
-## 11) OpenTelemetry export
+当前实现：`PI_BASH_NO_LOGIN`/`CLAUDE_BASH_NO_LOGIN` 生效；只要任一被设置，`getShellArgs()` 就会返回 `['-c']`。
 
-OMP initializes OTLP export only when at least one signal has an endpoint. `OTEL_SDK_DISABLED=true` disables initialization.
-
-| Variable group                                                                                                  | Behavior                                                                                        |
-| --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                   | Common endpoint fallback                                                                        |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Per-signal endpoint; wins over the common endpoint                                              |
-| `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER`, `OTEL_METRICS_EXPORTER`                                           | A list containing `none` disables that signal                                                   |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` and per-signal `..._PROTOCOL` variants                                            | Only `http/protobuf` is enabled by this runtime; another explicit protocol disables that signal |
-| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`                                                                 | OpenTelemetry resource metadata                                                                 |
-| `OTEL_LOG_LEVEL`                                                                                                | Minimum exported OMP log level                                                                  |
+`PI_BASH_NO_CI`、`PI_BASH_NO_LOGIN` 和 `PI_SHELL_PREFIX` 仅在规范变量未设置时使用其 `CLAUDE_*` 别名。
 
 ---
 
-## Security-sensitive variables
+## 8) UI/主题/会话检测（自动检测的环境变量）
 
-Treat these as secrets; do not log or commit them:
+这些作为运行时信号被读取；通常由终端/操作系统设置，而非手动配置。
 
-- Provider/API keys and OAuth/bearer credentials (all `*_API_KEY`, `*_TOKEN`, OAuth access/refresh tokens)
-- Cloud credentials (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS` path may expose service-account material)
-- Search/provider auth vars (`EXA_API_KEY`, `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, Anthropic search keys)
-- Foundry mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`, `NODE_EXTRA_CA_CERTS` when it points to private CA bundles)
+| 变量                                                                              | 用途                                       |
+| --------------------------------------------------------------------------------- | ------------------------------------------ |
+| `COLORTERM`、`TERM`、`WT_SESSION`                                                  | 颜色能力检测（主题颜色模式）                |
+| `COLORFGBG`                                                                       | 终端背景明暗自动检测                       |
+| `TERM_PROGRAM`、`TERM_PROGRAM_VERSION`、`TERMINAL_EMULATOR`                        | 系统提示/上下文中的终端标识                |
+| `TMUX_PANE`、`CMUX_SURFACE_ID`、`KITTY_WINDOW_ID`、`TERM_SESSION_ID`、`WT_SESSION` | 稳定的每终端会话面包屑 ID                   |
+| `SHELL`、`ComSpec`、`TERM_PROGRAM`、`TERM`                                         | 系统信息诊断                                |
+| `APPDATA`、`XDG_CONFIG_HOME`                                                      | lspmux 配置路径解析                        |
+| `HOME`                                                                            | MCP 命令 UI 中的路径缩写                   |
 
-Python runtime also explicitly strips many common key vars before spawning kernel subprocesses (`packages/coding-agent/src/eval/py/runtime.ts`).
+`COPILOT_HOME` 覆盖 GitHub Copilot 配置主目录（默认 `~/.copilot`），`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` 提供额外的逗号分隔指令目录。`JS_DEBUG_DAP_SERVER` 选择一个已存在的 JavaScript 调试适配器服务器；`XDG_DATA_HOME` 也参与捆绑调试器的发现。
+
+---
+
+## 9) TUI 运行时标志（共享包，影响 coding-agent UX）
+
+| 变量                              | 行为                                                                                                                                                                                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_NOTIFICATIONS`                | `off` / `0` / `false` 抑制桌面通知                                                                                                                                                                                                            |
+| `PI_TUI_WRITE_LOG`                | 若设置，将 TUI 写入记录到文件                                                                                                                                                                                                                  |
+| `PI_TUI_RAW_BACKSPACE_IS_CTRL`    | 若为 `1`，将原始的 `0x08` 解释为 Ctrl+Backspace 而不是 Backspace；在 SSH/容器跳板隐藏了 Windows Terminal 客户端时使用                                                                                                                            |
+| `PI_HARDWARE_CURSOR`              | 若为 `1`，启用硬件光标模式                                                                                                                                                                                                                    |
+| `PI_NO_SYNC_OUTPUT`               | 若设置（任何非空值），禁用 DEC 2026 同步输出包装，同时保留 TUI 自动换行保护                                                                                                                                                                     |
+| `PI_NO_DECCARA`                   | 若设置（真值），禁用 Kitty DECCARA 矩形 SGR 背景填充（强制使用填充字符串渲染）                                                                                                                                                                  |
+| `PI_DEBUG_REDRAW`                 | 若为 `1`，启用重绘调试日志                                                                                                                                                                                                                    |
+| `PI_FORCE_IMAGE_PROTOCOL`         | 强制终端图像协议检测（`kitty`、`iterm2`/`iterm`、`sixel`、`none`）。在 tmux 内设置 `kitty` 还会启用 Kitty Unicode 占位符定位，除非 `PI_KITTY_PLACEHOLDERS=0` 或 `PI_NO_KITTY_PLACEHOLDERS=1` 禁用它                                                  |
+| `PI_KITTY_PLACEHOLDERS`           | `1` 强制启用 Kitty Unicode 占位符定位；`0` 强制禁用。在 tmux/screen 下，仅在确认外层终端支持 Kitty `U=1` 占位符之后才使用 `1`——否则 U+10EEEE 可能渲染为字面 PUA 方块                                                                              |
+| `PI_NO_KITTY_PLACEHOLDERS`        | `1` 硬性禁用 Kitty Unicode 占位符定位，优先于 `PI_KITTY_PLACEHOLDERS`                                                                                                                                                                            |
+| `PI_TUI_RESIZE_IN_PLACE`          | `1`/`true` 强制就地调整大小（不借用 alt-screen，不进行 ED3 重排）；`0`/`false` 强制 alt-screen 快路径。对 Warp 默认开启，因为 Warp 在 alt-screen 切换时会重新报告自身尺寸                                                                       |
+
+### 浏览器启动/代理控制
+
+| 变量                                       | 行为                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `PUPPETEER_PROXY`                          | 添加 Chromium 的 `--proxy-server` 启动参数                                          |
+| `PUPPETEER_PROXY_BYPASS_LOOPBACK`          | 布尔型标志，添加 `<-loopback>` 到绕过列表，使本地回环也走代理                       |
+| `PUPPETEER_PROXY_IGNORE_CERT_ERRORS`       | 布尔型标志，使 Chromium 启动时忽略证书错误                                          |
+| `CMUX_WORKSPACE_ID`、`CMUX_SURFACE_ID`      | 浏览器打开分屏时目标 cmux 工作区/面                                                  |
+| `CMUX_RELAY_ID`、`CMUX_RELAY_TOKEN`         | cmux 中继身份/认证回退                                                              |
+
+---
+
+## 10) Commit 生成控制
+
+| 变量                       | 行为                                                       |
+| -------------------------- | ---------------------------------------------------------- |
+| `PI_COMMIT_TEST_FALLBACK`  | 若为 `true`（不区分大小写），强制 commit 回退生成路径      |
+| `PI_COMMIT_NO_FALLBACK`    | 若为 `true`，在 agent 没有返回提案时禁用回退                |
+| `PI_COMMIT_MAP_REDUCE`     | 若为 `false`，禁用 map-reduce commit 分析路径              |
+| `DEBUG`                    | 若设置，会打印 commit agent 错误的堆栈跟踪                  |
+
+---
+
+## 11) OpenTelemetry 导出
+
+OMP 仅在至少有一个信号具有端点时初始化 OTLP 导出。`OTEL_SDK_DISABLED=true` 禁用初始化。
+
+| 变量组                                                                                                          | 行为                                                                                        |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                   | 通用端点回退                                                                                |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`、`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`、`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 按信号端点；优先于通用端点                                                                  |
+| `OTEL_TRACES_EXPORTER`、`OTEL_LOGS_EXPORTER`、`OTEL_METRICS_EXPORTER`                                           | 包含 `none` 的列表会禁用该信号                                                              |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` 以及按信号的 `..._PROTOCOL` 变体                                                   | 此运行时仅启用 `http/protobuf`；显式指定其他协议会禁用该信号                                 |
+| `OTEL_SERVICE_NAME`、`OTEL_RESOURCE_ATTRIBUTES`                                                                  | OpenTelemetry 资源元数据                                                                     |
+| `OTEL_LOG_LEVEL`                                                                                                | 导出的 OMP 日志最低级别                                                                      |
+
+---
+
+## 安全敏感变量
+
+请将这些视为机密；不要记录或提交：
+
+- Provider/API key 以及 OAuth/bearer 凭证（所有 `*_API_KEY`、`*_TOKEN`、OAuth 访问/刷新令牌）
+- 云凭证（`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS` 路径可能暴露服务账户材料）
+- 搜索/provider 认证变量（`EXA_API_KEY`、`BRAVE_API_KEY`、`PERPLEXITY_API_KEY`、Anthropic 搜索密钥）
+- Foundry mTLS 材料（`CLAUDE_CODE_CLIENT_CERT`、`CLAUDE_CODE_CLIENT_KEY`，以及当 `NODE_EXTRA_CA_CERTS` 指向私有 CA 链时）
+
+Python 运行器在衍生内核子进程之前也会显式剥离许多常见的 key 变量（`packages/coding-agent/src/eval/py/runtime.ts`）。

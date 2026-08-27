@@ -1,115 +1,107 @@
-# DeepSeek tool-calling wire format
+# DeepSeek 工具调用线协议格式
 
-DeepSeek's chat models (DeepSeek-V3, V3-0324, R1, R1-0528, and DeepSeek-V3.1) share a
-single tokenizer family and a distinctive envelope built from **fullwidth-pipe** special
-tokens such as `<｜begin▁of▁sentence｜>` and `<｜User｜>`. Tool calling is emitted as a run
-of dedicated special tokens (`<｜tool▁calls▁begin｜>` … `<｜tool▁calls▁end｜>`) rather than
-JSON-in-text or XML. This document centers on **DeepSeek-V3.1** (the current hybrid
-thinking/non-thinking model) and documents the older **DeepSeek-V3-0324** and
-**DeepSeek-R1-0528** format as an explicit version difference, because their on-the-wire
-tool syntax is *not* the same as V3.1's.
+DeepSeek 的对话模型（DeepSeek-V3、V3-0324、R1、R1-0528 以及 DeepSeek-V3.1）共享同一套
+分词器族，并使用由**全角竖线**特殊 token 构成的独特外壳，例如
+`<｜begin▁of▁sentence｜>` 和 `<｜User｜>`。工具调用通过一段专用特殊 token
+（`<｜tool▁calls▁begin｜>` … `<｜tool▁calls▁end｜>`）输出，而不是文本内嵌 JSON 或 XML。
+本文以 **DeepSeek-V3.1**（当前的思考/非思考混合模型）为中心，并将较早的
+**DeepSeek-V3-0324** 和 **DeepSeek-R1-0528** 格式作为显式的版本差异来记录，因为它们在
+线协议上的工具语法与 V3.1 *并不*相同。
 
-An inference server enables it with a chat template plus a tool-call parser:
+推理服务器通过聊天模板加工具调用解析器来启用它：
 
-- vLLM V3.1: `--enable-auto-tool-choice --tool-call-parser deepseek_v31 --chat-template examples/tool_chat_template_deepseekv31.jinja` (optionally `--reasoning-parser deepseek_r1`).
-- vLLM V3-0324 / R1-0528: `--enable-auto-tool-choice --tool-call-parser deepseek_v3 --chat-template examples/tool_chat_template_deepseekv3.jinja` (V3-0324) or `tool_chat_template_deepseekr1.jinja` (R1-0528).
-- The model's own `tokenizer_config.json` `chat_template` (and the identical `assets/chat_template.jinja`) renders the V3.1 envelope, tool calls, and tool outputs; it does **not** synthesize the `## Tools` advertisement block, so vLLM ships a template that does (see below).
+- vLLM V3.1：`--enable-auto-tool-choice --tool-call-parser deepseek_v31 --chat-template examples/tool_chat_template_deepseekv31.jinja`（可选 `--reasoning-parser deepseek_r1`）。
+- vLLM V3-0324 / R1-0528：`--enable-auto-tool-choice --tool-call-parser deepseek_v3 --chat-template examples/tool_chat_template_deepseekv3.jinja`（V3-0324）或 `tool_chat_template_deepseekr1.jinja`（R1-0528）。
+- 模型自带的 `tokenizer_config.json` 中的 `chat_template`（以及完全相同的 `assets/chat_template.jinja`）会渲染 V3.1 的外壳、工具调用和工具输出；但它**不会**合成 `## Tools` 声明块，因此 vLLM 提供了一个会合成该块的模板（见下文）。
 
-> Verified against: the DeepSeek-V3.1 model card "Chat Template" / "ToolCall" sections, the
-> byte-identical `chat_template` in `tokenizer_config.json` and `assets/chat_template.jinja`,
-> the `added_tokens` in `tokenizer.json` (token IDs), `config.json` (bos/eos IDs), the
-> DeepSeek-V3-0324 and DeepSeek-R1-0528 `tokenizer_config.json` chat templates, the vLLM
-> `tool_chat_template_deepseekv31.jinja`, and the vLLM tool-calling / reasoning-outputs docs.
+> 已对照以下来源验证：DeepSeek-V3.1 模型卡中 “Chat Template” / “ToolCall” 章节；
+> `tokenizer_config.json` 与 `assets/chat_template.jinja` 中逐字节相同的 `chat_template`；
+> `tokenizer.json` 中的 `added_tokens`（token ID）；`config.json`（bos/eos ID）；
+> DeepSeek-V3-0324 和 DeepSeek-R1-0528 的 `tokenizer_config.json` 聊天模板；vLLM 的
+> `tool_chat_template_deepseekv31.jinja`；以及 vLLM 工具调用 / 推理输出文档。
 
-## A note on the unusual Unicode (do not substitute ASCII)
+## 关于不寻常 Unicode 的说明（请勿替换为 ASCII）
 
-DeepSeek's markers do **not** use the ASCII vertical bar `|` (U+007C) or ASCII underscore
-`_`. They use:
+DeepSeek 的标记**并不**使用 ASCII 竖线 `|`（U+007C）或 ASCII 下划线
+`_`。它们使用的是：
 
-- `｜` — **U+FF5C FULLWIDTH VERTICAL LINE**, as the delimiter just inside the angle brackets.
-- `▁` — **U+2581 LOWER ONE EIGHTH BLOCK** (the SentencePiece word-boundary glyph), as the
-  separator *between words* inside a token, e.g. `begin▁of▁sentence`, `tool▁calls▁begin`.
+- `｜` — **U+FF5C FULLWIDTH VERTICAL LINE（全角竖线）**，作为尖括号内紧邻的分隔符。
+- `▁` — **U+2581 LOWER ONE EIGHTH BLOCK（八分之一低块）**（SentencePiece 词边界字形），
+  作为 token *词与词之间*的分隔符，例如 `begin▁of▁sentence`、`tool▁calls▁begin`。
 
-So `<｜tool▁calls▁begin｜>` is `<` + `｜`(FF5C) + `tool` + `▁`(2581) + `calls` + `▁`(2581) +
-`begin` + `｜`(FF5C) + `>`. Copying these tokens as `<|tool_calls_begin|>` (ASCII pipe +
-underscore) produces tokens the model never trained on and will silently break parsing and
-generation. The only DeepSeek markers that use ASCII brackets are the thinking tags
-`<think>` / `</think>` (plain `<`, `/`, `>`) and the rarely used `<|EOT|>` (ASCII pipes).
+因此 `<｜tool▁calls▁begin｜>` 即 `<` + `｜`（FF5C）+ `tool` + `▁`（2581）+ `calls` + `▁`（2581）
++ `begin` + `｜`（FF5C）+ `>`。如果将这些 token 复制为 `<|tool_calls_begin|>`（ASCII 竖线 +
+下划线），模型将得到它从未训练过的 token，并会在解析与生成时静默失败。唯一使用 ASCII
+尖括号的 DeepSeek 标记是思考标签 `<think>` / `</think>`（使用纯 `<`、`/`、`>`）和极少
+使用的 `<|EOT|>`（使用 ASCII 竖线）。
 
-## Special tokens
+## 特殊 token
 
-Token IDs are from DeepSeek-V3.1 `tokenizer.json` (`added_tokens`); `vocab_size` is 129280.
-The `special` column reflects the tokenizer's `"special"` flag (it governs
-`skip_special_tokens`); note that the role/think/tool markers are `special: false`.
+token ID 取自 DeepSeek-V3.1 的 `tokenizer.json`（`added_tokens`）；`vocab_size` 为 129280。
+`special` 列反映分词器的 `"special"` 标志（它控制 `skip_special_tokens`）；请注意角色
+/思考/工具标记的 `special` 为 `false`。
 
-| Token (verbatim) | ID | `special` | Purpose |
+| Token（逐字） | ID | `special` | 用途 |
 | --- | --- | --- | --- |
-| `<｜begin▁of▁sentence｜>` | 0 | true | BOS; prepended once at the very start of the prompt. |
-| `<｜end▁of▁sentence｜>` | 1 | true | EOS; ends every assistant/tool turn and is the stop token. |
-| `<｜▁pad▁｜>` | 2 | true | Padding (`pad_token`; the model card/config also reuse EOS as pad). |
-| `<｜search▁begin｜>` | 128796 | false | Search-agent query open (thinking-mode search tool). |
-| `<｜search▁end｜>` | 128797 | false | Search-agent query close. |
-| `<think>` | 128798 | false | Opens the reasoning/thinking span. ASCII brackets. |
-| `</think>` | 128799 | false | Closes the reasoning span; **also emitted in non-thinking mode** (see below). |
-| `<｜fim▁hole｜>` / `<｜fim▁begin｜>` / `<｜fim▁end｜>` | 128800–128802 | false | Fill-in-the-middle (not chat). |
-| `<｜User｜>` | 128803 | false | User role marker. |
-| `<｜Assistant｜>` | 128804 | false | Assistant role marker. |
-| `<\|EOT\|>` | 128805 | true | End-of-turn (legacy; ASCII pipes, rarely used in chat). |
-| `<｜tool▁calls▁begin｜>` | 128806 | false | Opens the assistant's batch of tool calls. |
-| `<｜tool▁calls▁end｜>` | 128807 | false | Closes the batch of tool calls. |
-| `<｜tool▁call▁begin｜>` | 128808 | false | Opens a single tool call inside the batch. |
-| `<｜tool▁call▁end｜>` | 128809 | false | Closes a single tool call. |
-| `<｜tool▁outputs▁begin｜>` | 128810 | false | Opens a batch of tool results (**R1-0528 / V3-0324 only**). |
-| `<｜tool▁outputs▁end｜>` | 128811 | false | Closes a batch of tool results (**R1-0528 / V3-0324 only**). |
-| `<｜tool▁output▁begin｜>` | 128812 | false | Opens a single tool result. |
-| `<｜tool▁output▁end｜>` | 128813 | false | Closes a single tool result. |
-| `<｜tool▁sep｜>` | 128814 | false | Separator inside a tool call (between name and arguments). |
+| `<｜begin▁of▁sentence｜>` | 0 | true | BOS；在提示最开头仅添加一次。 |
+| `<｜end▁of▁sentence｜>` | 1 | true | EOS；结束每个助手/工具轮次，并作为停止 token。 |
+| `<｜▁pad▁｜>` | 2 | true | 填充（`pad_token`；模型卡/config 也将 EOS 复用作 pad）。 |
+| `<｜search▁begin｜>` | 128796 | false | 搜索代理查询开始（思考模式搜索工具）。 |
+| `<｜search▁end｜>` | 128797 | false | 搜索代理查询结束。 |
+| `<think>` | 128798 | false | 打开推理/思考片段。使用 ASCII 尖括号。 |
+| `</think>` | 128799 | false | 关闭推理片段；**在非思考模式中也会输出**（见下文）。 |
+| `<｜fim▁hole｜>` / `<｜fim▁begin｜>` / `<｜fim▁end｜>` | 128800–128802 | false | 填充中间（不是聊天）。 |
+| `<｜User｜>` | 128803 | false | 用户角色标记。 |
+| `<｜Assistant｜>` | 128804 | false | 助手角色标记。 |
+| `<\|EOT\|>` | 128805 | true | 轮次结束（旧式；使用 ASCII 竖线，聊天中很少使用）。 |
+| `<｜tool▁calls▁begin｜>` | 128806 | false | 打开助手的一批工具调用。 |
+| `<｜tool▁calls▁end｜>` | 128807 | false | 关闭一批工具调用。 |
+| `<｜tool▁call▁begin｜>` | 128808 | false | 打开批次中的单个工具调用。 |
+| `<｜tool▁call▁end｜>` | 128809 | false | 关闭单个工具调用。 |
+| `<｜tool▁outputs▁begin｜>` | 128810 | false | 打开一批工具结果（**仅限 R1-0528 / V3-0324**）。 |
+| `<｜tool▁outputs▁end｜>` | 128811 | false | 关闭一批工具结果（**仅限 R1-0528 / V3-0324**）。 |
+| `<｜tool▁output▁begin｜>` | 128812 | false | 打开单个工具结果。 |
+| `<｜tool▁output▁end｜>` | 128813 | false | 关闭单个工具结果。 |
+| `<｜tool▁sep｜>` | 128814 | false | 工具调用内的分隔符（位于名称和参数之间）。 |
 
-`config.json` confirms `bos_token_id: 0`, `eos_token_id: 1`.
+`config.json` 确认 `bos_token_id: 0`，`eos_token_id: 1`。
 
-## Roles / channels / turn structure
+## 角色 / 通道 / 轮次结构
 
-There is no OpenAI-style `system`/`developer` channel token. Roles are inline markers and
-the prompt is one flat string:
+没有 OpenAI 风格的 `system`/`developer` 通道 token。角色以内联标记呈现，整个提示是一段扁平的字符串：
 
 ```text
 <｜begin▁of▁sentence｜>{system_prompt}<｜User｜>{query}<｜Assistant｜>{response}<｜end▁of▁sentence｜>
 ```
 
-- **System prompt** has no marker. All `system` messages are concatenated (joined with
-  `\n\n` when there are several) and emitted immediately after `<｜begin▁of▁sentence｜>`,
-  before the first `<｜User｜>`. When tools are present the `## Tools` block is appended to
-  this system text (separated by `\n\n`).
-- **User turn**: `<｜User｜>` + content. (No EOS after the user text in V3.1; the assistant
-  marker follows directly.)
-- **Assistant turn**: opens with `<｜Assistant｜>`, then a thinking tag, then content, then
-  `<｜end▁of▁sentence｜>`.
-- **Thinking vs non-thinking (V3.1 hybrid)** — selected by the template, not by the model:
-  - Non-thinking generation prefix: `…<｜Assistant｜></think>` — the model starts *after* a
-    `</think>` it never had to open. Unlike DeepSeek-V3, V3.1 always injects this `</think>`.
-  - Thinking generation prefix: `…<｜Assistant｜><think>` — the model emits its chain of
-    thought, closes with `</think>`, then the answer.
-  - In multi-turn context, **every** stored assistant turn keeps a `</think>`; only the last
-    turn's leading thinking tag reflects the requested mode. When rendering a stored
-    assistant message, any text up to and including `</think>` is stripped from `content`
-    before re-emitting (the template does `content.split('</think>', 1)[1]`).
-- **Tool calling runs in non-thinking mode.** The model card states "Toolcall is supported
-  in non-thinking mode," and the V3.1 tool template opens the tool-call turn with
-  `<｜Assistant｜></think>`. With vLLM, V3.1 reasoning is disabled by default; enable it via
-  `chat_template_kwargs={"thinking": true}`.
-- **Search-agent channel**: a separate thinking-mode protocol using `<｜search▁begin｜>` /
-  `<｜search▁end｜>` (see the model card's `assets/search_tool_trajectory.html`); out of
-  scope for ordinary function calling.
+- **系统提示**没有标记。所有 `system` 消息会拼接在一起（若有多个则用 `\n\n` 连接），
+  并紧接 `<｜begin▁of▁sentence｜>` 之后、第一个 `<｜User｜>` 之前输出。当存在工具时，
+  `## Tools` 块会附加到该系统文本之后（以 `\n\n` 分隔）。
+- **用户轮次**：`<｜User｜>` + 内容。（V3.1 中用户文本后无 EOS；助手标记紧跟其后。）
+- **助手轮次**：以 `<｜Assistant｜>` 开头，然后是思考标签、内容，最后是
+  `<｜end▁of▁sentence｜>`。
+- **思考与非思考（V3.1 混合）** —— 由模板选择，而非由模型决定：
+  - 非思考生成前缀：`…<｜Assistant｜></think>` —— 模型从一个它从未打开过的
+    `</think>` *之后*开始。与 DeepSeek-V3 不同，V3.1 总会注入这个 `</think>`。
+  - 思考生成前缀：`…<｜Assistant｜><think>` —— 模型输出其思维链，以 `</think>` 结束，
+    然后给出答案。
+  - 在多轮上下文中，**每个**存储的助手轮次都会保留 `</think>`；只有最后一轮前导的
+    思考标签反映所请求的模式。渲染存储的助手消息时，在重新输出之前，会将
+    `content` 中直到并包括 `</think>` 的文本剔除（模板执行 `content.split('</think>', 1)[1]`）。
+- **工具调用在非思考模式下运行。**模型卡中说明 “Toolcall is supported in non-thinking mode”，
+  V3.1 工具模板以 `<｜Assistant｜></think>` 打开工具调用轮次。在 vLLM 中，V3.1 默认禁用
+  推理；可通过 `chat_template_kwargs={"thinking": true}` 启用。
+- **搜索代理通道**：一种使用 `<｜search▁begin｜>` / `<｜search▁end｜>` 的独立思考模式协议
+  （参见模型卡中的 `assets/search_tool_trajectory.html`）；不在普通函数调用范围内。
 
-## Tool definitions
+## 工具定义
 
-Tools are advertised as a **Markdown block injected into the system area** (after the system
-prompt, before the first `<｜User｜>`). The chat template in `tokenizer_config.json` does not
-build this block from a `tools=[…]` argument; the caller (or vLLM's
-`tool_chat_template_deepseekv31.jinja`) constructs it. Reproduced verbatim from the
-DeepSeek-V3.1 model card, the full layout is
+工具以**注入系统区域的 Markdown 块**形式声明（位于系统提示之后、第一个 `<｜User｜>`
+之前）。`tokenizer_config.json` 中的聊天模板不会从 `tools=[…]` 参数构建此块；由调用方
+（或 vLLM 的 `tool_chat_template_deepseekv31.jinja`）构造。按 DeepSeek-V3.1 模型卡逐字
+复现，完整布局为：
 `<｜begin▁of▁sentence｜>{system prompt}\n\n{tool_description}<｜User｜>{query}<｜Assistant｜></think>`
-where `{tool_description}` is:
+其中 `{tool_description}` 为：
 
 ```text
 ## Tools
@@ -129,79 +121,76 @@ Where:
 - For multiple tool calls, chain them directly without separators or spaces
 ```
 
-Each tool contributes one `### {name}` section with a `Description:` line and a
-`Parameters: {…}` line whose value is the compact JSON of the JSON-Schema parameters object
-(`json.dumps(parameters)` in the card, `parameters | tojson` in vLLM's template). The
-`IMPORTANT:` instruction block is appended once, after the last tool.
+每个工具贡献一个 `### {name}` 段，包含一行 `Description:` 和一行 `Parameters: {…}`，
+其值是 JSON-Schema 参数对象的紧凑 JSON（模型卡中为 `json.dumps(parameters)`，vLLM 模板中为
+`parameters | tojson`）。`IMPORTANT:` 指令块在最后一个工具之后仅追加一次。
 
-## Tool-call format
+## 工具调用格式
 
-The model emits one batch wrapper containing one or more calls. Each call is
-`name <｜tool▁sep｜> arguments`, where **arguments is a raw JSON object string** (no code
-fence). Minimal single call (what the model generates after the `<｜Assistant｜></think>`
-prefix):
+模型输出一个包含一个或多个调用的批包装。每个调用形式为
+`name <｜tool▁sep｜> arguments`，其中 **arguments 是原始的 JSON 对象字符串**（无代码
+围栏）。最小单次调用（模型在 `<｜Assistant｜></think>` 前缀之后生成的内容）：
 
 ```text
 <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{"location": "San Francisco, CA"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>
 ```
 
-Grammar (V3.1):
+语法（V3.1）：
 
 ```text
 <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>{name}<｜tool▁sep｜>{json_args}<｜tool▁call▁end｜>{…more calls…}<｜tool▁calls▁end｜>
 ```
 
-- `{name}` must exactly match an advertised tool name. It comes **first**, immediately after
-  `<｜tool▁call▁begin｜>`.
-- `{json_args}` is valid JSON conforming to the tool's parameter schema, inlined directly.
-- The whole assistant turn is then closed by the template/server with
-  `<｜end▁of▁sentence｜>`.
+- `{name}` 必须与某个已声明的工具名精确匹配。它位于**最前**，紧跟
+  `<｜tool▁call▁begin｜>` 之后。
+- `{json_args}` 是符合该工具参数 schema 的有效 JSON，直接内联。
+- 之后由模板/服务器用 `<｜end▁of▁sentence｜>` 关闭整个助手轮次。
 
-(V3.1 has **no** `type` field and **no** ` ```json ` fence around arguments — that is the
-older R1/V3-0324 convention; see Version differences.)
+（V3.1 **没有** `type` 字段，也**没有**包裹参数的 ` ```json ` 围栏 —— 那是较早的
+R1/V3-0324 约定；见版本差异一节。）
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
-All calls live inside one `<｜tool▁calls▁begin｜>…<｜tool▁calls▁end｜>` wrapper. After the
-first `<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>`, each additional call is **another
-`<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>` chained directly, with no separator, newline, or
-space between calls** (the card: "chain them directly without separators or spaces"):
+所有调用都位于同一个 `<｜tool▁calls▁begin｜>…<｜tool▁calls▁end｜>` 包装内。在第一个
+`<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>` 之后，每个额外的调用都是
+**直接相连的另一个 `<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>`，调用之间无分隔符、
+换行或空格**（模型卡：“chain them directly without separators or spaces”）：
 
 ```text
 <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{"location": "San Francisco, CA"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{"location": "Seattle, WA"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>
 ```
 
-Note that `<｜tool▁calls▁begin｜>` (plural, id 128806) appears exactly once; each call uses
-the singular `<｜tool▁call▁begin｜>` (id 128808) / `<｜tool▁call▁end｜>` (id 128809).
+请注意 `<｜tool▁calls▁begin｜>`（复数，id 128806）仅出现一次；每个调用使用单数形式的
+`<｜tool▁call▁begin｜>`（id 128808）/ `<｜tool▁call▁end｜>`（id 128809）。
 
-## Tool-result format
+## 工具结果格式
 
-Executed results are fed back as `tool`-role messages. In **V3.1** each result is wrapped in
-the singular output tokens, with **no** plural `<｜tool▁outputs▁…｜>` wrapper, emitted right
-after the assistant tool-call turn's `<｜end▁of▁sentence｜>`:
+执行结果以 `tool` 角色的消息回传。在 **V3.1** 中，每个结果都用单数输出 token 包装，
+**没有**复数形式的 `<｜tool▁outputs▁…｜>` 包装，紧跟在助手工具调用轮次的
+`<｜end▁of▁sentence｜>` 之后：
 
 ```text
 <｜tool▁output▁begin｜>{result_text}<｜tool▁output▁end｜>
 ```
 
-`{result_text}` is the raw tool output (typically a JSON string, but any text). For multiple
-results, the V3.1 template emits one `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>` per `tool`
-message, concatenated directly. There is **no tool-call ID in the wire format** — results are
-matched to calls **positionally** (order of outputs ↔ order of calls).
+`{result_text}` 是原始的工具输出（通常是 JSON 字符串，但可以是任意文本）。对于多个结果，
+V3.1 模板对每个 `tool` 消息输出一个 `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>`，
+彼此直接拼接。线协议中**没有工具调用 ID** —— 结果与调用按**位置**匹配
+（输出顺序 ↔ 调用顺序）。
 
-The model then produces its final answer **directly after `<｜tool▁output▁end｜>`** with no
-`<｜Assistant｜>` marker and no `</think>` (see Parsing notes — the V3.1 reference template
-deliberately renders post-tool assistant content as just `content<｜end▁of▁sentence｜>`).
+然后模型**直接在 `<｜tool▁output▁end｜>` 之后**给出最终答复，没有
+`<｜Assistant｜>` 标记，也没有 `</think>`（见解析注意事项 —— V3.1 参考模板特意将
+工具后的助手内容渲染为仅 `content<｜end▁of▁sentence｜>`）。
 
-> R1-0528 / V3-0324 differ: results are enclosed in a `<｜tool▁outputs▁begin｜>` …
-> `<｜tool▁outputs▁end｜>` batch wrapper, with each result as
-> `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>` and multiple results newline-separated.
+> R1-0528 / V3-0324 不同：结果被包裹在 `<｜tool▁outputs▁begin｜>` …
+> `<｜tool▁outputs▁end｜>` 批包装中，每个结果为
+> `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>`，多个结果以换行分隔。
 
-## End-to-end example
+## 端到端示例
 
-A complete DeepSeek-V3.1 **non-thinking** multi-turn exchange. Everything is one flat string;
-inline `←` comments mark where the model's generation begins (they are not part of the
-stream). Whitespace inside the `## Tools` block is literal newlines.
+一个完整的 DeepSeek-V3.1 **非思考**多轮交互。所有内容是一段扁平字符串；内联的
+`←` 注释标出模型生成的起点（它们不属于流的一部分）。`## Tools` 块内的空白是字面
+换行。
 
 ```text
 <｜begin▁of▁sentence｜>You are a helpful assistant.
@@ -224,85 +213,80 @@ Where:
 <｜User｜>What's the weather in San Francisco?<｜Assistant｜></think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{"location": "San Francisco, CA", "unit": "celsius"}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜><｜tool▁output▁begin｜>{"temperature": 18, "unit": "celsius", "condition": "Foggy"}<｜tool▁output▁end｜>It's currently 18°C and foggy in San Francisco.<｜end▁of▁sentence｜>
 ```
 
-Reading the spans:
+阅读各段：
 
-1. `<｜begin▁of▁sentence｜>` + system text + `\n\n` + `## Tools…` block — prompt prefix.
-2. `<｜User｜>What's the weather in San Francisco?` — user turn.
-3. `<｜Assistant｜></think>` — non-thinking generation prefix (prompt). **Model generates from here.**
-4. `<｜tool▁calls▁begin｜>…<｜tool▁calls▁end｜>` — the model's tool call; server appends `<｜end▁of▁sentence｜>` and stops with `finish_reason: "tool_calls"`.
-5. `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>` — your executed result, appended to the prompt.
-6. `It's currently 18°C and foggy in San Francisco.<｜end▁of▁sentence｜>` — **the model generates the final answer directly after the tool output** (no new `<｜Assistant｜>` marker), ending with EOS.
+1. `<｜begin▁of▁sentence｜>` + 系统文本 + `\n\n` + `## Tools…` 块 —— 提示前缀。
+2. `<｜User｜>What's the weather in San Francisco?` —— 用户轮次。
+3. `<｜Assistant｜></think>` —— 非思考生成前缀（提示）。**模型从此处开始生成。**
+4. `<｜tool▁calls▁begin｜>…<｜tool▁calls▁end｜>` —— 模型发起的工具调用；服务器追加 `<｜end▁of▁sentence｜>` 并以 `finish_reason: "tool_calls"` 停止。
+5. `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>` —— 你执行得到的结果，追加到提示中。
+6. `It's currently 18°C and foggy in San Francisco.<｜end▁of▁sentence｜>` —— **模型在工具输出后直接给出最终答复**（没有新的 `<｜Assistant｜>` 标记），以 EOS 结束。
 
-## OpenAI-compatible API mapping
+## OpenAI 兼容 API 映射
 
-When fronted by an OpenAI-compatible server (e.g. vLLM with `--tool-call-parser
-deepseek_v31`):
+当由 OpenAI 兼容服务器前置时（例如 vLLM 使用 `--tool-call-parser
+deepseek_v31`）：
 
-- **`finish_reason`**: `"tool_calls"` when the model emitted a `<｜tool▁calls▁begin｜>…`
-  batch; otherwise `"stop"`.
-- **`message.tool_calls[]`**: one element per `<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>`.
-  - `.type` = `"function"`.
-  - `.function.name` = the text between `<｜tool▁call▁begin｜>` and `<｜tool▁sep｜>`.
-  - `.function.arguments` = the text between `<｜tool▁sep｜>` and `<｜tool▁call▁end｜>`, returned
-    as a **JSON string** (per the OpenAI spec), not a nested object. The model already emits
-    raw JSON there, so it is passed through.
-  - `.id` = **synthesized by the server** (e.g. `chatcmpl-tool-…`). DeepSeek's wire format
-    carries no call ID.
-- **Tool result messages**: `{"role": "tool", "tool_call_id": "<id>", "content": "<result>"}`.
-  The server renders `content` into `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>`. Because the
-  prompt has no IDs, `tool_call_id` is used only for client-side bookkeeping; **the model
-  relies on ordering**, so preserve the order of results relative to the calls.
-- **Assistant replay**: when you send a prior assistant turn back with `tool_calls`, the
-  template inlines `function.arguments`. The HF reference template inlines it **verbatim**
-  (assumes it is already a JSON string); vLLM's `tool_chat_template_deepseekv31.jinja` pipes
-  it through `| tojson`. Send `arguments` as a JSON **string** per the OpenAI spec (see the
-  gotcha below about double-encoding).
+- **`finish_reason`**：模型输出一批 `<｜tool▁calls▁begin｜>…` 时为 `"tool_calls"`；
+  否则为 `"stop"`。
+- **`message.tool_calls[]`**：每个 `<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>` 对应一个元素。
+  - `.type` = `"function"`。
+  - `.function.name` = `<｜tool▁call▁begin｜>` 与 `<｜tool▁sep｜>` 之间的文本。
+  - `.function.arguments` = `<｜tool▁sep｜>` 与 `<｜tool▁call▁end｜>` 之间的文本，
+    以 **JSON 字符串**形式返回（遵循 OpenAI 规范），而不是嵌套对象。模型本身就在那里
+    输出原始 JSON，因此直接透传。
+  - `.id` = **由服务器合成**（例如 `chatcmpl-tool-…`）。DeepSeek 的线协议不携带调用 ID。
+- **工具结果消息**：`{"role": "tool", "tool_call_id": "<id>", "content": "<result>"}`。
+  服务器将 `content` 渲染为 `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>`。由于提示中
+  没有 ID，`tool_call_id` 仅用于客户端簿记；**模型依赖顺序**，因此请保持结果相对于
+  调用的顺序不变。
+- **助手回放**：当你将先前的助手轮次连同 `tool_calls` 一同发回时，模板会内联
+  `function.arguments`。HF 参考模板将其**逐字**内联（假定它已经是 JSON 字符串）；
+  vLLM 的 `tool_chat_template_deepseekv31.jinja` 则通过 `| tojson` 处理。按 OpenAI 规范
+  以 JSON **字符串**形式发送 `arguments`（见下文关于双重编码的注意事项）。
 
-## Parsing notes & gotchas
+## 解析注意事项与坑
 
-- **Unicode is load-bearing.** Match `｜` = U+FF5C and `▁` = U+2581 exactly. ASCII
-  `<|tool_calls_begin|>` will not tokenize to the special tokens. `<think>`/`</think>` use
-  ASCII brackets; the rare `<|EOT|>` uses ASCII pipes.
-- **Tool/role markers are `special: false`.** Only `<｜begin▁of▁sentence｜>`,
-  `<｜end▁of▁sentence｜>`, `<｜▁pad▁｜>`, and `<|EOT|>` are flagged `special: true`. So
-  decoding with `skip_special_tokens=True` will **not** strip `<｜tool▁calls▁begin｜>`,
-  `<｜tool▁sep｜>`, `<｜Assistant｜>`, `</think>`, etc. — they remain in the decoded string for
-  the parser to find. (Conversely, do not assume special-token filtering removes them.)
-- **No code fence / no `type` field in V3.1.** A parser written for R1/V3-0324
-  (`function<｜tool▁sep｜>name` + ` ```json ` block) will not parse V3.1, and vice-versa.
-  V3.1 is `name<｜tool▁sep｜>raw_json`.
-- **Chaining has no delimiter in V3.1.** Calls abut directly:
-  `…<｜tool▁call▁end｜><｜tool▁call▁begin｜>…`. Do not split on newlines/whitespace; split on
-  the `<｜tool▁call▁begin｜>` / `<｜tool▁call▁end｜>` boundaries. (R1/V3-0324 put a `\n` before
-  each subsequent call.)
-- **No tool-call IDs on the wire.** Match results to calls by position. A server must
-  generate synthetic `tool_call_id`s for the OpenAI shape.
-- **`</think>` appears even in non-thinking mode.** Strip the leading `</think>` (and any
-  preceding reasoning) before treating the remainder as the visible answer; the template does
-  `content.split('</think>', 1)[1]` when replaying stored turns.
-- **Post-tool generation prompt quirk.** The reference V3.1 chat template only appends the
-  `<｜Assistant｜></think>` generation prefix when the **last message is `user`**. After a
-  `tool` message it appends nothing and the model continues straight after
-  `<｜tool▁output▁end｜>`. Agent loops that re-template a conversation ending in a tool result
-  must not expect (or double-insert) an assistant marker there.
-- **`arguments` double-encoding risk.** On replay, vLLM's example template applies
-  `arguments | tojson`. If `arguments` is already a JSON string (the OpenAI convention), that
-  pipe will JSON-encode the string again (wrapping it in quotes and escaping it). Pass an
-  object where the template expects `| tojson`, or a string where the template inlines
-  verbatim — match the template you actually run.
-- **Streaming.** Tool calls arrive token-by-token; the name is complete only at
-  `<｜tool▁sep｜>`, and arguments are partial JSON until `<｜tool▁call▁end｜>`. Buffer per call
-  boundary; do not attempt to `json.loads` arguments before the closing tool-call token.
-- **Malformed output.** With `tool_choice="auto"` and no structural-tag constraint
-  (`VLLM_ENFORCE_STRICT_TOOL_CALLING=false`), the model can emit invalid JSON in
-  `tool_call_arguments` or a `tool_call_name` that does not match any tool; the parser
-  extracts best-effort. Named/`required` tool choice uses the structured-outputs backend and
-  guarantees schema-valid arguments.
+- **Unicode 是承重的。**必须精确匹配 `｜` = U+FF5C 和 `▁` = U+2581。ASCII
+  `<|tool_calls_begin|>` 不会切分到特殊 token。`<think>`/`</think>` 使用 ASCII 尖括号；
+  罕见的 `<|EOT|>` 使用 ASCII 竖线。
+- **工具/角色标记的 `special` 为 `false`。**只有 `<｜begin▁of▁sentence｜>`、
+  `<｜end▁of▁sentence｜>`、`<｜▁pad▁｜>` 和 `<|EOT|>` 被标记为 `special: true`。因此
+  以 `skip_special_tokens=True` 解码时**不会**剔除 `<｜tool▁calls▁begin｜>`、
+  `<｜tool▁sep｜>`、`<｜Assistant｜>`、`</think>` 等 —— 它们仍会留在解码后的字符串中
+  供解析器查找。（反之，不要假设特殊 token 过滤会移除它们。）
+- **V3.1 没有代码围栏 / 没有 `type` 字段。**为 R1/V3-0324 编写的解析器
+  （`function<｜tool▁sep｜>name` + ` ```json ` 块）无法解析 V3.1，反之亦然。
+  V3.1 是 `name<｜tool▁sep｜>raw_json`。
+- **V3.1 的调用链没有分隔符。**调用之间紧邻：
+  `…<｜tool▁call▁end｜><｜tool▁call▁begin｜>…`。不要按换行/空白拆分；按
+  `<｜tool▁call▁begin｜>` / `<｜tool▁call▁end｜>` 边界拆分。（R1/V3-0324 在每个
+  后续调用前放一个 `\n`。）
+- **线协议中没有工具调用 ID。**按位置匹配结果与调用。服务器必须为 OpenAI 形态生成
+  合成的 `tool_call_id`。
+- **`</think>` 即便在非思考模式也会出现。**在将剩余部分视作可见答复之前，需剔除
+  前导的 `</think>`（以及之前的所有推理）；模板在重放存储的轮次时执行
+  `content.split('</think>', 1)[1]`。
+- **工具后生成提示的怪癖。**V3.1 参考聊天模板仅在**最后一条消息是 `user` 时**追加
+  `<｜Assistant｜></think>` 生成前缀。在 `tool` 消息之后它不会追加任何内容，模型
+  直接在 `<｜tool▁output▁end｜>` 之后继续。以工具结果结尾的对话被智能体循环重新套用
+  模板时，不要期望（也不要重复插入）助手标记。
+- **`arguments` 双重编码风险。**回放时，vLLM 的示例模板会应用
+  `arguments | tojson`。如果 `arguments` 已经是 JSON 字符串（OpenAI 约定），该管道
+  将再次对其进行 JSON 编码（用引号包裹并转义）。在模板期望 `| tojson` 的地方传入
+  对象，或者在模板逐字内联的地方传入字符串 —— 匹配你实际运行的模板。
+- **流式。**工具调用逐 token 到达；名称只有在 `<｜tool▁sep｜>` 处才完整，参数在
+  `<｜tool▁call▁end｜>` 之前都是部分 JSON。按调用边界进行缓冲；在调用闭合 token
+  之前不要尝试对参数执行 `json.loads`。
+- **格式错误的输出。**当 `tool_choice="auto"` 且无结构化标签约束
+  （`VLLM_ENFORCE_STRICT_TOOL_CALLING=false`）时，模型可能在
+  `tool_call_arguments` 中输出无效 JSON，或输出与任何工具都不匹配的 `tool_call_name`；
+  解析器会尽力提取。命名/`required` 工具选择使用结构化输出后端，保证参数符合 schema。
 
-## Version differences: V3.1 vs V3-0324 / R1-0528
+## 版本差异：V3.1 与 V3-0324 / R1-0528
 
-The pre-V3.1 models (DeepSeek-V3-0324 and DeepSeek-R1-0528) share an older tool-call
-encoding, served in vLLM with `--tool-call-parser deepseek_v3`. The per-call body is:
+V3.1 之前的模型（DeepSeek-V3-0324 和 DeepSeek-R1-0528）共享一种更早的工具调用编码，
+在 vLLM 中以 `--tool-call-parser deepseek_v3` 提供服务。每次调用的主体为：
 
 ````text
 <｜tool▁call▁begin｜>function<｜tool▁sep｜>{name}
@@ -311,19 +295,19 @@ encoding, served in vLLM with `--tool-call-parser deepseek_v3`. The per-call bod
 ```<｜tool▁call▁end｜>
 ````
 
-Differences from V3.1:
+与 V3.1 的差异：
 
-| Aspect | V3.1 (`deepseek_v31`) | V3-0324 / R1-0528 (`deepseek_v3`) |
+| 方面 | V3.1（`deepseek_v31`） | V3-0324 / R1-0528（`deepseek_v3`） |
 | --- | --- | --- |
-| Field order in a call | `{name}<｜tool▁sep｜>{args}` | `function<｜tool▁sep｜>{name}` (the literal `type`, then name) |
-| Arguments wrapping | raw JSON, inline | fenced ` ```json … ``` ` block (name and args separated by `\n`) |
-| Chaining of calls | abut directly, **no separator** | each subsequent call prefixed with `\n` |
-| Tool results | `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>` per message, no batch wrapper | wrapped in `<｜tool▁outputs▁begin｜>…<｜tool▁outputs▁end｜>`, results newline-separated |
-| User→assistant boundary | user turn = `<｜User｜>{q}`; `<｜Assistant｜></think>` added at generation | user turn = `<｜User｜>{q}<｜Assistant｜>` (assistant marker appended in the user branch) |
-| Thinking | hybrid; `thinking` kwarg toggles `<think>` vs `</think>` prefix | R1-0528 always reasoning (bare `<｜Assistant｜>` generation prefix, model opens `<think>` itself); V3-0324 non-reasoning |
-| vLLM parser | `--tool-call-parser deepseek_v31` | `--tool-call-parser deepseek_v3` |
+| 调用中的字段顺序 | `{name}<｜tool▁sep｜>{args}` | `function<｜tool▁sep｜>{name}`（字面量 `type`，然后是 name） |
+| 参数包装方式 | 原始 JSON，内联 | 用 ` ```json … ``` ` 围栏包裹（名称和参数以 `\n` 分隔） |
+| 调用的串联 | 紧邻，**无分隔符** | 每个后续调用以 `\n` 前缀 |
+| 工具结果 | 每个消息一个 `<｜tool▁output▁begin｜>…<｜tool▁output▁end｜>`，无批包装 | 包裹于 `<｜tool▁outputs▁begin｜>…<｜tool▁outputs▁end｜>` 之中，结果以换行分隔 |
+| 用户→助手边界 | 用户轮次 = `<｜User｜>{q}`；`<｜Assistant｜></think>` 在生成时添加 | 用户轮次 = `<｜User｜>{q}<｜Assistant｜>`（助手标记在用户分支追加） |
+| 思考 | 混合；`thinking` kwarg 切换 `<think>` 与 `</think>` 前缀 | R1-0528 始终推理（裸 `<｜Assistant｜>` 生成前缀，模型自行打开 `<think>`）；V3-0324 不推理 |
+| vLLM 解析器 | `--tool-call-parser deepseek_v31` | `--tool-call-parser deepseek_v3` |
 
-Example R1-0528 / V3-0324 parallel call with its result batch:
+R1-0528 / V3-0324 的并行调用及其结果批示例：
 
 ````text
 <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather
@@ -337,16 +321,16 @@ Example R1-0528 / V3-0324 parallel call with its result batch:
 <｜tool▁output▁begin｜>{"temperature": 14}<｜tool▁output▁end｜><｜tool▁outputs▁end｜>
 ````
 
-The `deepseek_r1` **reasoning** parser (`--reasoning-parser deepseek_r1`) applies to the R1
-series **and** to DeepSeek-V3.1; it extracts the `<think>…</think>` span into the response's
-`reasoning` field. It is independent of the tool-call parser.
+`deepseek_r1` **推理**解析器（`--reasoning-parser deepseek_r1`）适用于 R1 系列**以及**
+DeepSeek-V3.1；它会将 `<think>…</think>` 片段抽取到响应的 `reasoning` 字段中。它独立于
+工具调用解析器。
 
-## DSML envelope (newer DeepSeek models)
+## DSML 外壳（较新的 DeepSeek 模型）
 
-Newer DeepSeek models (for example `deepseek-v4-pro`) emit tool calls in a second, XML-style
-envelope — **DSML** — instead of the `<｜tool▁calls▁begin｜>` special-token run. The tag names
-reuse the same fullwidth pipe (`｜`, U+FF5C), but the body is an Anthropic-style `invoke` /
-`parameter` block rather than a `name<｜tool▁sep｜>{json}` pair:
+较新的 DeepSeek 模型（例如 `deepseek-v4-pro`）以第二种 XML 风格的外壳 —— **DSML** ——
+输出工具调用，而非 `<｜tool▁calls▁begin｜>` 特殊 token 序列。标签名复用相同的全角竖线
+（`｜`，U+FF5C），但主体是 Anthropic 风格的 `invoke` / `parameter` 块，而不是
+`name<｜tool▁sep｜>{json}` 对：
 
 ```text
 <｜DSML｜tool_calls>
@@ -356,63 +340,55 @@ reuse the same fullwidth pipe (`｜`, U+FF5C), but the body is an Anthropic-styl
 </｜DSML｜tool_calls>
 ```
 
-- One `<｜DSML｜tool_calls>…</｜DSML｜tool_calls>` wrapper holds one or more
-  `<｜DSML｜invoke name="…">…</｜DSML｜invoke>` calls; whitespace between tags is insignificant.
-- Each argument is a `<｜DSML｜parameter name="…" string="…">value</｜DSML｜parameter>`. `string`
-  defaults to `"true"` (value kept as a raw string); `string="false"` parses the value as JSON,
-  so `…string="false">15</…>` decodes to the number `15`.
-- An ASCII-pipe variant (`<|DSML|tool_calls>`, `<|DSML|invoke …>`, `<|DSML|parameter …>`) occurs
-  on the wire alongside the fullwidth form.
-- Several OpenAI-compatible hosts (DeepSeek's own API, NanoGPT, NVIDIA, Ollama / Ollama Cloud,
-  Fireworks, OpenRouter, OpenCode) leak this envelope into visible `content` instead of returning
-  structured `tool_calls`; a parser must heal it back into tool calls and strip the markers from
-  user-visible text.
+- 一个 `<｜DSML｜tool_calls>…</｜DSML｜tool_calls>` 包装包含一个或多个
+  `<｜DSML｜invoke name="…">…</｜DSML｜invoke>` 调用；标签之间的空白无意义。
+- 每个参数是一个 `<｜DSML｜parameter name="…" string="…">value</｜DSML｜parameter>`。
+  `string` 默认为 `"true"`（值作为原始字符串保留）；`string="false"` 将值解析为 JSON，
+  因此 `…string="false">15</…>` 解码为数字 `15`。
+- 在线上同时存在 ASCII 竖线变体（`<|DSML|tool_calls>`、`<|DSML|invoke …>`、
+  `<|DSML|parameter …>`）与全角形式。
+- 多个 OpenAI 兼容主机（DeepSeek 自家 API、NanoGPT、NVIDIA、Ollama / Ollama Cloud、
+  Fireworks、OpenRouter、OpenCode）会将此外壳泄漏到可见的 `content` 中，而不是返回
+  结构化的 `tool_calls`；解析器必须将其还原为工具调用，并将这些标记从用户可见文本中
+  剔除。
 
-## omp / pi converter behavior
+## omp / pi 转换器行为
 
-The repository's `deepseek` dialect is an **owned in-band converter**, not a
-vLLM parser wrapper. Select it with `PI_DIALECT=deepseek` (or the equivalent
-agent configuration). When tools are present, the agent appends the dialect
-guide and compact tool catalog to the system prompt, removes native provider
-tools from the request, re-encodes prior calls/results with this syntax, and
-scans streamed assistant text back into canonical pi tool-call events.
+仓库中的 `deepseek` 方言是一个**自有的带内转换器**，而非 vLLM 解析器的包装。
+通过 `PI_DIALECT=deepseek`（或等价的 agent 配置）来选用。当存在工具时，agent 会将
+方言指南和精简的工具目录追加到系统提示中，从请求中移除原生的 provider 工具，
+按本语法重新编码先前的调用/结果，并将流式助手文本扫描回规范的 pi 工具调用事件。
 
-The current scanner accepts all three forms described above:
+当前的扫描器接受上述全部三种形式：
 
-- V3.1 `name<｜tool▁sep｜>{json}` calls;
-- legacy `function<｜tool▁sep｜>name` plus a fenced JSON body; and
-- fullwidth or ASCII DSML `invoke` / `parameter` blocks.
+- V3.1 的 `name<｜tool▁sep｜>{json}` 调用；
+- 旧式的 `function<｜tool▁sep｜>name` 加一个 JSON 围栏主体；以及
+- 全角或 ASCII 的 DSML `invoke` / `parameter` 块。
 
-For V3.1 and legacy calls, omp emits `toolStart` after the header is complete
-but buffers arguments until `<｜tool▁call▁end｜>`; it then uses the shared
-repairing JSON parser. A missing/invalid completed argument object becomes
-`{}`. Flush emits no `toolEnd` for an unfinished call and only clears the
-scanner's private state. Once `toolStart` has been projected, however, the
-canonical call remains and a normally stopped turn may dispatch it: unfinished
-V3.1/legacy calls retain `{}`, while DSML calls retain any argument text already
-published through `toolArgDelta`. DSML is genuinely incremental: parameter
-body text is streamed as those deltas. A DSML parameter is a raw string unless
-`string="false"`; the latter is repairing-JSON-decoded at a completed close and
-falls back to the raw text if decoding fails. Call IDs for id-less DeepSeek
-forms are synthesized as `ptc_…`.
+对于 V3.1 和旧式调用，omp 在头部完成后发出 `toolStart`，但会将参数缓冲至
+`<｜tool▁call▁end｜>`；然后使用共享的修复型 JSON 解析器。缺失/无效的完整参数对象会
+变成 `{}`。Flush 不会为未完成的调用发出 `toolEnd`，只会清除扫描器的私有状态。
+不过一旦 `toolStart` 已被投影，规范调用即已存在，正常停止的轮次可能会派发它：
+未完成的 V3.1/旧式调用保留 `{}`，而 DSML 调用保留已通过 `toolArgDelta` 发布的任何
+参数文本。DSML 是真正增量的：参数主体文本作为这些 delta 进行流式发送。除非
+`string="false"`，DSML 参数为原始字符串；后者在完整闭合时通过修复型 JSON 解码，
+解码失败时回退为原始文本。无 ID 的 DeepSeek 形式的调用 ID 合成形式为 `ptc_…`。
 
-The scanner also removes leaked DeepSeek chat-template control tokens from
-visible text and, by default, maps `<think>…</think>` to thinking events. Its
-renderer emits V3.1 calls, joins parallel calls without separators, and renders
-multiple results as singular output blocks separated by newlines. The DSML
-syntax is accepted for healing leaked provider output but is not the owned
-dialect's emitted history format.
+扫描器还会从可见文本中剔除泄漏的 DeepSeek 聊天模板控制 token，并默认将
+`<think>…</think>` 映射为思考事件。其渲染器发出 V3.1 调用，不加分隔符地连接并行
+调用，并将多个结果渲染为以换行分隔的单数输出块。DSML 语法被接受用于修复泄漏的
+provider 输出，但它并非自有方言所发出的历史格式。
 
-## Sources
+## 来源
 
-- DeepSeek-V3.1 model card (Chat Template / ToolCall sections): <https://huggingface.co/deepseek-ai/DeepSeek-V3.1>
-- DeepSeek-V3.1 `assets/chat_template.jinja`: <https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/assets/chat_template.jinja>
-- DeepSeek-V3.1 `tokenizer_config.json` (`chat_template`, byte-identical to the jinja): <https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/tokenizer_config.json>
-- DeepSeek-V3.1 `tokenizer.json` (`added_tokens` → token IDs and `special` flags): <https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/tokenizer.json>
-- DeepSeek-V3.1 `config.json` (`bos_token_id`, `eos_token_id`, `vocab_size`): <https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/config.json>
-- DeepSeek-R1-0528 model card and `tokenizer_config.json` (older tool format): <https://huggingface.co/deepseek-ai/DeepSeek-R1-0528> · <https://huggingface.co/deepseek-ai/DeepSeek-R1-0528/resolve/main/tokenizer_config.json>
-- DeepSeek-R1 model card: <https://huggingface.co/deepseek-ai/DeepSeek-R1>
-- DeepSeek-V3-0324 `tokenizer_config.json` (older tool format): <https://huggingface.co/deepseek-ai/DeepSeek-V3-0324/resolve/main/tokenizer_config.json>
-- vLLM tool-call template for V3.1 (`## Tools` injection + `| tojson`): <https://github.com/vllm-project/vllm/blob/main/examples/tool_chat_template_deepseekv31.jinja>
-- vLLM Tool Calling docs (`deepseek_v3`, `deepseek_v31` parser flags): <https://docs.vllm.ai/en/latest/features/tool_calling/>
-- vLLM Reasoning Outputs docs (`deepseek_r1` reasoning parser; V3.1 thinking default): <https://docs.vllm.ai/en/latest/features/reasoning_outputs/>
+- DeepSeek-V3.1 模型卡（Chat Template / ToolCall 章节）：<https://huggingface.co/deepseek-ai/DeepSeek-V3.1>
+- DeepSeek-V3.1 `assets/chat_template.jinja`：<https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/assets/chat_template.jinja>
+- DeepSeek-V3.1 `tokenizer_config.json`（`chat_template`，与 jinja 逐字节相同）：<https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/tokenizer_config.json>
+- DeepSeek-V3.1 `tokenizer.json`（`added_tokens` → token ID 与 `special` 标志）：<https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/tokenizer.json>
+- DeepSeek-V3.1 `config.json`（`bos_token_id`、`eos_token_id`、`vocab_size`）：<https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/config.json>
+- DeepSeek-R1-0528 模型卡及 `tokenizer_config.json`（旧工具格式）：<https://huggingface.co/deepseek-ai/DeepSeek-R1-0528> · <https://huggingface.co/deepseek-ai/DeepSeek-R1-0528/resolve/main/tokenizer_config.json>
+- DeepSeek-R1 模型卡：<https://huggingface.co/deepseek-ai/DeepSeek-R1>
+- DeepSeek-V3-0324 `tokenizer_config.json`（旧工具格式）：<https://huggingface.co/deepseek-ai/DeepSeek-V3-0324/resolve/main/tokenizer_config.json>
+- vLLM V3.1 工具调用模板（`## Tools` 注入 + `| tojson`）：<https://github.com/vllm-project/vllm/blob/main/examples/tool_chat_template_deepseekv31.jinja>
+- vLLM 工具调用文档（`deepseek_v3`、`deepseek_v31` 解析器标志）：<https://docs.vllm.ai/en/latest/features/tool_calling/>
+- vLLM 推理输出文档（`deepseek_r1` 推理解析器；V3.1 思考默认）：<https://docs.vllm.ai/en/latest/features/reasoning_outputs/>

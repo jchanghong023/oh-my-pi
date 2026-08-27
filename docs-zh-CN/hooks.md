@@ -1,29 +1,29 @@
 # Hooks
 
-This document describes the **current hook subsystem code** in `packages/coding-agent/src/extensibility/hooks/*`.
+本文档描述 `packages/coding-agent/src/extensibility/hooks/*` 中**当前 hook 子系统的代码**。
 
 ## Current status in runtime
 
-The default CLI runtime initializes the **extension runner** path. In current startup flow:
+默认的 CLI 运行时初始化 **extension runner** 路径。在当前的启动流程中：
 
-- `--hook` is treated as an alias for `--extension` (CLI paths are merged into `additionalExtensionPaths`)
-- JS/TS hook factories discovered through `hookCapability` (for example `.omp/hooks/pre/*.ts`) are loaded as extension modules so their `pi.on(...)` handlers bind to the runtime event bus
-- tools are wrapped by `ExtensionToolWrapper`, not `HookToolWrapper`
-- context transforms and lifecycle emissions go through `ExtensionRunner`
+- `--hook` 被视作 `--extension` 的别名（CLI 路径会被合并到 `additionalExtensionPaths`）
+- 通过 `hookCapability`（例如 `.omp/hooks/pre/*.ts`）发现的 JS/TS hook 工厂会被作为扩展模块加载，使其 `pi.on(...)` 处理器绑定到运行时事件总线
+- 工具由 `ExtensionToolWrapper` 包装，而不是 `HookToolWrapper`
+- 上下文转换和生命周期事件通过 `ExtensionRunner` 发出
 
-So this file documents the legacy hook subsystem implementation itself (types/loader/runner/wrapper), plus the factory shape still accepted when a discovered hook path is loaded by the extension runner.
+因此，本文件既描述遗留 hook 子系统的实现本身（types/loader/runner/wrapper），也描述当已发现的 hook 路径被 extension runner 加载时仍然接受的工厂形态。
 
 ## Key files
 
-- `packages/coding-agent/src/extensibility/hooks/types.ts` — hook context, event types, and result contracts
-- `packages/coding-agent/src/extensibility/hooks/loader.ts` — module loading and hook discovery bridge
-- `packages/coding-agent/src/extensibility/hooks/runner.ts` — event dispatch, command lookup, error signaling
-- `packages/coding-agent/src/extensibility/hooks/tool-wrapper.ts` — pre/post tool interception wrapper
+- `packages/coding-agent/src/extensibility/hooks/types.ts` — hook 上下文、事件类型和结果契约
+- `packages/coding-agent/src/extensibility/hooks/loader.ts` — 模块加载和 hook 发现桥接
+- `packages/coding-agent/src/extensibility/hooks/runner.ts` — 事件派发、命令查找、错误信号
+- `packages/coding-agent/src/extensibility/hooks/tool-wrapper.ts` — 工具调用前/后拦截包装器
 - `packages/coding-agent/src/extensibility/hooks/index.ts` — exports/re-exports
 
 ## What a hook module is
 
-A hook module must default-export a factory:
+一个 hook 模块必须默认导出一个工厂：
 
 ```ts
 import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
@@ -40,63 +40,63 @@ export default function hook(pi: HookAPI): void {
 }
 ```
 
-The factory can:
+该工厂可以：
 
-- register event handlers with `pi.on(...)`
-- send persistent custom messages with `pi.sendMessage(...)`
-- persist non-LLM state with `pi.appendEntry(...)`
-- register slash commands via `pi.registerCommand(...)`
-- register custom message renderers via `pi.registerMessageRenderer(...)`
-- run shell commands via `pi.exec(...)` and log through `pi.logger`
-- use the injected Zod-compatible builder `pi.zod`, native omptype builder `pi.arktype`, legacy `pi.typebox`, and package exports via `pi.pi`
+- 通过 `pi.on(...)` 注册事件处理器
+- 通过 `pi.sendMessage(...)` 发送持久的自定义消息
+- 通过 `pi.appendEntry(...)` 持久化非 LLM 状态
+- 通过 `pi.registerCommand(...)` 注册斜杠命令
+- 通过 `pi.registerMessageRenderer(...)` 注册自定义消息渲染器
+- 通过 `pi.exec(...)` 运行 shell 命令，并通过 `pi.logger` 记录日志
+- 使用注入的 Zod 兼容构建器 `pi.zod`、原生 omptype 构建器 `pi.arktype`、遗留的 `pi.typebox`，以及通过 `pi.pi` 导出包
 
 ## Discovery and loading
 
-Default sessions load JS/TS hook factories discovered by `hookCapability` through the extension runner. `discoverExtensionPaths(configuredPaths, cwd)` does:
+默认会话会加载由 `hookCapability` 通过 extension runner 发现的 JS/TS hook 工厂。`discoverExtensionPaths(configuredPaths, cwd)` 会执行：
 
-1. Load native extension modules from the capability registry
-2. Load importable `.ts`/`.js` hook factories from the hook capability registry
-3. Append plugin extension entry points
-4. Append explicitly configured paths
+1. 从能力注册表加载原生扩展模块
+2. 从 hook 能力注册表加载可导入的 `.ts`/`.js` hook 工厂
+3. 追加插件扩展入口点
+4. 追加显式配置的路径
 
-The legacy `discoverAndLoadHooks(configuredPaths, cwd)` helper still exists and does:
+遗留的 `discoverAndLoadHooks(configuredPaths, cwd)` 辅助函数仍然存在，会执行：
 
-1. Load discovered hooks from capability registry (`loadCapability("hooks")`)
-2. Append explicitly configured paths (deduped by absolute path)
-3. Call `loadHooks(allPaths, cwd)`
+1. 从能力注册表加载已发现的 hooks（`loadCapability("hooks")`）
+2. 追加显式配置的路径（按绝对路径去重）
+3. 调用 `loadHooks(allPaths, cwd)`
 
-`loadHooks` then imports each path and expects a `default` function.
+随后 `loadHooks` 会导入每个路径，并期望其导出一个 `default` 函数。
 
 ### Path resolution
 
-`loader.ts` resolves hook paths as:
+`loader.ts` 按以下方式解析 hook 路径：
 
-- absolute path: used as-is
-- `~` path: expanded
-- relative path: resolved against `cwd`
+- 绝对路径：按原样使用
+- `~` 路径：进行展开
+- 相对路径：相对于 `cwd` 解析
 
 ## Event surfaces
 
-Hook events are strongly typed in `types.ts`.
+Hook 事件在 `types.ts` 中具有强类型定义。
 
 ### Session events
 
 - `session_start`
-- `session_before_switch` → can return `{ cancel?: boolean }`
+- `session_before_switch` → 可返回 `{ cancel?: boolean }`
 - `session_switch`
-- `session_before_branch` → can return `{ cancel?: boolean; skipConversationRestore?: boolean }`
+- `session_before_branch` → 可返回 `{ cancel?: boolean; skipConversationRestore?: boolean }`
 - `session_branch`
-- `session_before_compact` → can return `{ cancel?: boolean; compaction?: CompactionResult }`
-- `session.compacting` → can return `{ context?: string[]; prompt?: string; preserveData?: Record<string, unknown> }`
+- `session_before_compact` → 可返回 `{ cancel?: boolean; compaction?: CompactionResult }`
+- `session.compacting` → 可返回 `{ context?: string[]; prompt?: string; preserveData?: Record<string, unknown> }`
 - `session_compact`
-- `session_before_tree` → can return `{ cancel?: boolean; summary?: { summary: string; details?: unknown } }`
+- `session_before_tree` → 可返回 `{ cancel?: boolean; summary?: { summary: string; details?: unknown } }`
 - `session_tree`
 - `session_shutdown`
 
 ### Agent/context events
 
-- `context` → can return `{ messages?: Message[] }`
-- `before_agent_start` → can return `{ message?: { customType; content; display; details; attribution } }`
+- `context` → 可返回 `{ messages?: Message[] }`
+- `before_agent_start` → 可返回 `{ message?: { customType; content; display; details; attribution } }`
 - `agent_start`
 - `agent_end`
 - `turn_start`
@@ -110,10 +110,10 @@ Hook events are strongly typed in `types.ts`.
 
 ### Tool events (pre/post model)
 
-- `tool_call` (pre-execution) → can return `{ block?: boolean; reason?: string; input?: Record<string, unknown> }`. A non-blocking handler that returns `input` replaces the arguments the tool executes with (the raw execution input, not the normalized `event.input` view); ignored when `block` is true, and not applied to `computer` tool calls.
-- `tool_result` (post-execution) → can return `{ content?; details?; isError? }`
+- `tool_call`（执行前）→ 可返回 `{ block?: boolean; reason?: string; input?: Record<string, unknown> }`。返回 `input` 的非阻塞处理器会用（原始执行输入，而非归一化的 `event.input` 视图）替换工具将要执行的参数；当 `block` 为 `true` 时被忽略，且不应用于 `computer` 工具调用。
+- `tool_result`（执行后）→ 可返回 `{ content?; details?; isError? }`
 
-This is the hook subsystem’s core pre/post interception model.
+这是 hook 子系统的核心 pre/post 拦截模型。
 
 ```text
 Hook tool interception flow
@@ -136,122 +136,122 @@ tool_call handlers
 
 ### 1) Pre-execution: `tool_call`
 
-`HookToolWrapper.execute()` emits `tool_call` before tool execution.
+`HookToolWrapper.execute()` 在工具执行前发出 `tool_call`。
 
-- if any handler returns `{ block: true }`, execution stops
-- if handler throws, wrapper fails closed and blocks execution
-- returned `reason` becomes the thrown error text
+- 如果任何处理器返回 `{ block: true }`，执行将停止
+- 如果处理器抛出错误，包装器将 fail-closed 并阻止执行
+- 返回的 `reason` 将作为抛出的错误文本
 
 ### 2) Tool execution
 
-Underlying tool executes normally if not blocked.
+在未被阻止的情况下，底层工具会正常执行。
 
 ### 3) Post-execution: `tool_result`
 
-After success, wrapper emits `tool_result` with:
+成功执行后，包装器会发出包含以下内容的 `tool_result`：
 
-- `toolName`, `toolCallId`, `input`
+- `toolName`、`toolCallId`、`input`
 - `content`
 - `details`
 - `isError: false`
 
-If handler returns overrides:
+如果处理器返回了覆盖：
 
-- `content` can replace result content
-- `details` can replace result details
+- `content` 可以替换结果内容
+- `details` 可以替换结果详情
 
-On tool failure, wrapper emits `tool_result` with `isError: true` and error text content, then rethrows original error.
+工具执行失败时，包装器会发出 `isError: true` 且内容为错误文本的 `tool_result`，然后重新抛出原始错误。
 
 ### What hooks can mutate
 
-- LLM context for a single call via `context` (`messages` replacement chain)
-- raw tool execution arguments by returning `input` from `tool_call` (except `computer` calls)
-- tool output content/details on successful tool calls (`tool_result` path)
-- pre-agent injected message via `before_agent_start`
-- cancellation/custom compaction/tree behavior via `session_before_*` and `session.compacting`
+- 通过 `context` 对单次调用的 LLM 上下文进行修改（`messages` 替换链）
+- 通过从 `tool_call` 返回 `input` 来修改原始工具执行参数（`computer` 调用除外）
+- 在工具调用成功时修改工具输出内容/详情（`tool_result` 路径）
+- 通过 `before_agent_start` 注入 agent 前的消息
+- 通过 `session_before_*` 和 `session.compacting` 实现取消/自定义压缩/树行为
 
 ### What hooks cannot mutate in this implementation
 
-- a `computer` tool call's raw parameters
-- execution continuation after thrown tool errors (error path rethrows)
-- final success/error status in wrapper behavior (returned `isError` is typed but not applied by `HookToolWrapper`)
+- `computer` 工具调用的原始参数
+- 抛出工具错误后的执行延续（错误路径会重新抛出）
+- 包装器行为中的最终成功/错误状态（返回的 `isError` 已声明类型，但 `HookToolWrapper` 不会应用它）
 
 ## Ordering and conflict behavior
 
 ### Discovery-level ordering
 
-Capability providers are priority-sorted (higher first). Dedupe is by capability key, first wins.
+能力提供者按优先级排序（高优先级优先）。去重按 capability key 进行，首个胜出。
 
-For `hooks`, capability key is `${type}:${tool}:${name}`. Shadowed duplicates from lower-priority providers are marked and excluded from effective discovered list.
+对于 `hooks`，capability key 为 `${type}:${tool}:${name}`。来自较低优先级提供者的被遮蔽重复项会被标记，并从有效发现列表中排除。
 
 ### Load order
 
-`discoverAndLoadHooks` builds a flat `allPaths` list, deduped by resolved absolute path, then `loadHooks` iterates in that order.
-File order within each discovered directory depends on `readdir` output; the hook loader does not perform an additional sort.
+`discoverAndLoadHooks` 构建一个扁平的 `allPaths` 列表，按解析后的绝对路径去重，然后 `loadHooks` 按该顺序进行迭代。
+每个已发现目录内的文件顺序取决于 `readdir` 的输出；hook loader 不会执行额外的排序。
 
 ### Runtime handler order
 
-Inside `HookRunner`, order is deterministic by registration sequence:
+在 `HookRunner` 内部，顺序由注册序列确定：
 
-1. hooks array order
-2. handler registration order per hook/event
+1. hooks 数组顺序
+2. 每个 hook/event 的处理器注册顺序
 
-Conflict behavior by event type:
+按事件类型的冲突行为：
 
-- `tool_call`: last returned result wins unless a handler blocks; first block short-circuits. A returned `input` (execution-argument override) follows the same last-wins rule; handlers do not observe each other's revisions
-- `tool_result`: last returned override wins (no short-circuit)
-- `context`: chained; each handler receives prior handler’s message output
-- `before_agent_start`: first returned message is kept; later messages ignored
-- `session_before_*`: latest returned result is tracked; `cancel: true` short-circuits immediately
-- `session.compacting`: latest returned result wins
+- `tool_call`：除非某个处理器阻止，否则最后返回的结果胜出；首个阻止将短路。返回的 `input`（执行参数覆盖）遵循同样的最后胜出规则；处理器无法观察到彼此的修改
+- `tool_result`：最后返回的覆盖胜出（无短路）
+- `context`：链式；每个处理器接收上一个处理器的消息输出
+- `before_agent_start`：首个返回的消息被保留；后续消息被忽略
+- `session_before_*`：跟踪最近返回的结果；`cancel: true` 将立即短路
+- `session.compacting`：最近返回的结果胜出
 
-Command/renderer conflicts:
+命令/渲染器冲突：
 
-- `getCommand(name)` returns first match across hooks (first loaded wins)
-- `getMessageRenderer(customType)` returns first match
-- `getRegisteredCommands()` returns all commands (no dedupe)
+- `getCommand(name)` 在 hooks 中返回首个匹配项（首个加载的胜出）
+- `getMessageRenderer(customType)` 返回首个匹配项
+- `getRegisteredCommands()` 返回所有命令（不进行去重）
 
 ## UI interactions (`HookContext.ui`)
 
-`HookUIContext` includes:
+`HookUIContext` 包含：
 
-- `select`, `confirm`, `input`, `editor`
+- `select`、`confirm`、`input`、`editor`
 - `notify`
 - `setStatus`
 - `custom`
-- `setEditorText`, `getEditorText`
+- `setEditorText`、`getEditorText`
 - `theme` getter
 
-`ctx` includes `hasUI`, `cwd`, `sessionManager`, `modelRegistry`, current `model`, `isIdle()`, `abort()`, and `hasQueuedMessages()`.
+`ctx` 包含 `hasUI`、`cwd`、`sessionManager`、`modelRegistry`、当前 `model`、`isIdle()`、`abort()` 和 `hasQueuedMessages()`。
 
-When running with no UI, the default no-op context behavior is:
+在没有 UI 的情况下运行时，默认的 no-op 上下文行为为：
 
-- `select/input/editor` return `undefined`
-- `confirm` returns `false`
-- `notify`, `setStatus`, `setEditorText` are no-ops
-- `getEditorText` returns `""`
+- `select`/`input`/`editor` 返回 `undefined`
+- `confirm` 返回 `false`
+- `notify`、`setStatus`、`setEditorText` 为 no-op
+- `getEditorText` 返回 `""`
 
 ### Status line behavior
 
-Hook status text set via `ctx.ui.setStatus(key, text)` is:
+通过 `ctx.ui.setStatus(key, text)` 设置的 hook 状态文本会：
 
-- stored per key
-- sorted by key name
-- sanitized (ANSI/VT escape sequences stripped; control characters mapped to spaces; repeated spaces collapsed; trimmed)
-- joined and width-truncated for display
+- 按 key 存储
+- 按 key 名称排序
+- 进行清理（去除 ANSI/VT 转义序列；将控制字符映射为空格；合并重复空格；进行 trim）
+- 拼接并按宽度截断用于显示
 
 ## Error propagation and fallback
 
 ### Load-time
 
-- invalid module or missing default export → captured in `LoadHooksResult.errors`
-- loading continues for other hooks
+- 模块无效或缺少默认导出 → 捕获到 `LoadHooksResult.errors`
+- 其他 hook 的加载继续进行
 
 ### Event-time
 
-`HookRunner.emit(...)` catches handler errors for most events and emits `HookError` to listeners (`hookPath`, `event`, `error`), then continues.
+`HookRunner.emit(...)` 会捕获大多数事件的处理器错误，并向监听器发出 `HookError`（`hookPath`、`event`、`error`），然后继续。
 
-`emitToolCall(...)` is stricter: handler errors are not swallowed there; they propagate to caller. In `HookToolWrapper`, this blocks the tool call (fail-safe).
+`emitToolCall(...)` 则更严格：那里的处理器错误不会被吞掉；它们会向上传播给调用方。在 `HookToolWrapper` 中，这将阻止工具调用（fail-safe）。
 
 ## Realistic API examples
 
@@ -339,11 +339,11 @@ export default function (pi: HookAPI): void {
 
 ## Export surface
 
-`packages/coding-agent/src/extensibility/hooks/index.ts` and the package subpath `@oh-my-pi/pi-coding-agent/extensibility/hooks` export:
+`packages/coding-agent/src/extensibility/hooks/index.ts` 和包子路径 `@oh-my-pi/pi-coding-agent/extensibility/hooks` 导出：
 
-- loading APIs (`discoverAndLoadHooks`, `loadHooks`)
-- runner and wrapper (`HookRunner`, `HookToolWrapper`)
-- all hook types
+- 加载 API（`discoverAndLoadHooks`、`loadHooks`）
+- runner 和 wrapper（`HookRunner`、`HookToolWrapper`）
+- 所有 hook 类型
 - `execCommand` re-export
 
-The package root (`@oh-my-pi/pi-coding-agent`) does not re-export `HookAPI`; import legacy hook types from the hooks subpath.
+包根（`@oh-my-pi/pi-coding-agent`）不会 re-export `HookAPI`；请从 hooks 子路径导入遗留的 hook 类型。

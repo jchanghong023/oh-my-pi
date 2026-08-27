@@ -1,81 +1,81 @@
-# Extension Loading (TypeScript/JavaScript Modules)
+# 扩展加载（TypeScript/JavaScript 模块）
 
-This document covers how the coding agent discovers and loads extension modules at startup. Scanned native/configured directories auto-discover `.ts` and `.js`; explicitly named files and installed-plugin manifest entries may also use `.mjs` and `.cjs`.
+本文档介绍编码代理在启动时如何发现并加载扩展模块。被扫描的原生/已配置目录会自动发现 `.ts` 和 `.js`；显式指定的文件以及已安装插件的清单条目也可以使用 `.mjs` 和 `.cjs`。
 
-It does **not** cover [`gemini-extension.json` manifest extensions](./gemini-manifest-extensions.md), which are documented separately.
+本文档**不**涵盖 [`gemini-extension.json` 清单扩展](./gemini-manifest-extensions.md)，相关内容单独记录。
 
-## What this subsystem does
+## 本子系统做什么
 
-Extension loading builds a list of module entry files, imports each module with Bun, executes its factory, and returns:
+扩展加载会构建一个模块入口文件列表，使用 Bun 导入每个模块，执行其工厂函数，并返回：
 
-- loaded extension definitions
-- per-path load errors (without aborting the whole load)
-- a shared extension runtime object used later by `ExtensionRunner`
+- 已加载的扩展定义
+- 每个路径的加载错误（不会中止整个加载过程）
+- 一个稍后由 `ExtensionRunner` 使用的共享扩展运行时对象
 
-## Primary implementation files
+## 主要实现文件
 
-- `src/extensibility/extensions/loader.ts` — path discovery + import/execution
-- `src/extensibility/extensions/index.ts` — public exports
-- `src/extensibility/extensions/runner.ts` — runtime/event execution after load
-- `src/discovery/builtin.ts` — native auto-discovery provider for extension modules
-- `src/extensibility/plugins/legacy-pi-compat.ts` — in-place module graph loading and host-package compatibility rewriting
-- `src/config/settings.ts` — loads merged `extensions` / `disabledExtensions` settings
+- `src/extensibility/extensions/loader.ts` — 路径发现 + 导入/执行
+- `src/extensibility/extensions/index.ts` — 公共导出
+- `src/extensibility/extensions/runner.ts` — 加载之后的运行时/事件执行
+- `src/discovery/builtin.ts` — 扩展模块的原生自动发现提供器
+- `src/extensibility/plugins/legacy-pi-compat.ts` — 就地模块图加载与宿主包兼容性改写
+- `src/config/settings.ts` — 加载合并后的 `extensions` / `disabledExtensions` 设置
 
 ---
 
-## Inputs to extension loading
+## 扩展加载的输入
 
-### 1) Auto-discovered native extension modules
+### 1) 自动发现的原生扩展模块
 
-`discoverAndLoadExtensions()` first asks discovery providers for `extension-module` capability items, then keeps only provider `native` items.
+`discoverAndLoadExtensions()` 首先向发现提供器请求 `extension-module` 能力条目，然后只保留提供器为 `native` 的条目。
 
-Native `extension-module` discovery comes from:
+原生 `extension-module` 的发现来源：
 
-- Project directory: `<cwd>/.omp/extensions`
-- User directory: the active agent directory's `extensions/` (default `~/.omp/agent/extensions`)
-- Native legacy/settings JSON entries: `<cwd>/.omp/settings.json#extensions` and the active agent directory's `settings.json#extensions`
+- 项目目录：`<cwd>/.omp/extensions`
+- 用户目录：当前 agent 目录的 `extensions/`（默认 `~/.omp/agent/extensions`）
+- 原生遗留/settings JSON 条目：`<cwd>/.omp/settings.json#extensions` 以及当前 agent 目录的 `settings.json#extensions`
 
-The project root is the native provider's `.omp` directory (`SOURCE_PATHS.native.projectDir`), cwd-only; it does not walk ancestors. The user root is the active profile's agent directory via `getAgentDir()`, so under `omp --profile <name>` it becomes `~/.omp/profiles/<name>/agent/extensions` (and it honors `PI_CODING_AGENT_DIR`). See [Profiles](./config-usage.md#profiles).
+项目根是原生提供器的 `.omp` 目录（`SOURCE_PATHS.native.projectDir`），仅使用 cwd；它不会向上回溯祖先目录。用户根通过 `getAgentDir()` 取自当前 profile 的 agent 目录，因此在 `omp --profile <name>` 下它变为 `~/.omp/profiles/<name>/agent/extensions`（并遵循 `PI_CODING_AGENT_DIR`）。参见 [Profiles](./config-usage.md#profiles)。
 
-Notes:
+注意：
 
-- Native auto-discovery is currently `.omp` based.
-- Legacy `.pi` is still accepted in package manifests (`pi.extensions`) and project override lookup, but `.pi/extensions` is not a native root here.
+- 原生自动发现目前基于 `.omp`。
+- 在包清单（`pi.extensions`）和项目 override 查找中仍然接受遗留的 `.pi`，但 `.pi/extensions` 在这里不是原生根目录。
 
-### 2) Discovered JS/TS hook factories
+### 2) 发现的 JS/TS hook 工厂
 
-After native auto-discovery, `discoverAndLoadExtensions()` also appends JS/TS hook factories from the `hook` capability — any hook whose entry path is a `.ts`/`.js` file — so they load through the same module pipeline.
+在原生自动发现之后，`discoverAndLoadExtensions()` 还会从 `hook` 能力中追加 JS/TS hook 工厂——任何入口路径为 `.ts`/`.js` 文件的 hook——以便它们通过相同的模块管道加载。
 
-Hook-capability loading already applies its own hook-specific disabled ids, so these paths are not additionally filtered by `disabledExtensions` extension-module names.
+hook 能力加载已经应用了它自己的 hook 专用禁用 id，因此这些路径不会被 `disabledExtensions` 中的扩展模块名称额外过滤。
 
-### 3) Installed plugin extension entries
+### 3) 已安装插件的扩展条目
 
-After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
+在 hook 发现之后，`discoverAndLoadExtensions()` 通过 `getAllPluginExtensionPaths(cwd)` 追加来自已启用的已安装插件的扩展入口点。
 
-Plugin extension entries come from package `omp.extensions` / `pi.extensions` manifests, including enabled feature entries.
+插件扩展条目来自包的 `omp.extensions` / `pi.extensions` 清单，包括已启用的 feature 条目。
 
-Installed-plugin manifest resolution accepts explicit `.ts`, `.js`, `.mjs`, and `.cjs` files. For a manifest entry that names a directory, it recognizes `index.ts`, `index.js`, `index.mjs`, or `index.cjs`; extension-directory expansion uses the same four suffixes. This is broader than native and configured-directory auto-scanning, which remains limited to `.ts` and `.js`.
+已安装插件的清单解析接受显式的 `.ts`、`.js`、`.mjs` 和 `.cjs` 文件。对于指向目录的清单条目，它会识别 `index.ts`、`index.js`、`index.mjs` 或 `index.cjs`；扩展目录的展开也使用这四个后缀。这比原生和已配置目录的自动扫描更广，后者仍然仅限于 `.ts` 和 `.js`。
 
-### 4) Explicitly configured paths
+### 4) 显式配置的路径
 
-After plugin extension entries, configured paths are appended and resolved.
+在插件扩展条目之后，配置的路径会被追加并解析。
 
-Configured path sources in the main session startup path (`sdk.ts`):
+主会话启动路径（`sdk.ts`）中已配置路径的来源：
 
-1. CLI-provided paths (`--extension/-e`, and `--hook` is also treated as an extension path)
-2. Merged settings `extensions` array
+1. CLI 提供的路径（`--extension/-e`，`--hook` 也被视作扩展路径）
+2. 合并后的 settings `extensions` 数组
 
-Settings files:
+设置文件：
 
-- User: the active agent directory's `config.yml` (default `~/.omp/agent/config.yml`; with `--profile <name>`, `~/.omp/profiles/<name>/agent/config.yml`; `PI_CODING_AGENT_DIR` can override the agent directory)
-- Project/native settings capability: `<cwd>/.omp/config.yml` and `<cwd>/.omp/settings.json`
+- 用户：当前 agent 目录的 `config.yml`（默认 `~/.omp/agent/config.yml`；在 `--profile <name>` 下为 `~/.omp/profiles/<name>/agent/config.yml`；`PI_CODING_AGENT_DIR` 可覆盖 agent 目录）
+- 项目/原生设置能力：`<cwd>/.omp/config.yml` 和 `<cwd>/.omp/settings.json`
 
-Native extension-module discovery also reads legacy JSON extension lists from:
+原生扩展模块发现还会从以下来源读取遗留 JSON 扩展列表：
 
-- The active agent directory's `settings.json` (default `~/.omp/agent/settings.json`)
+- 当前 agent 目录的 `settings.json`（默认 `~/.omp/agent/settings.json`）
 - `<cwd>/.omp/settings.json`
 
-Examples:
+示例：
 
 ```yaml
 # ~/.omp/agent/config.yml
@@ -92,175 +92,161 @@ extensions:
 
 ---
 
-## Enable/disable controls
+## 启用/禁用控制
 
-### Disable discovery
+### 禁用发现
 
-- CLI: `--no-extensions`
-- SDK option: `disableExtensionDiscovery`
+- CLI：`--no-extensions`
+- SDK 选项：`disableExtensionDiscovery`
 
-Behavior split:
+行为差异：
 
-- SDK: when `disableExtensionDiscovery=true`, ambient extension factories are
-  excluded, while `additionalExtensionPaths` are still resolved normally
-  (including package directories with `package.json#omp.extensions`).
-- CLI: `--no-extensions` follows the same explicit-only contract. Explicit
-  `-e/--extension` and `--hook` paths still load, and only sibling capability
-  roots from explicitly named extension packages remain eligible. Project/user
-  `extensions:` settings and installed OMP extension packages are excluded from
-  that sibling surface.
+- SDK：当 `disableExtensionDiscovery=true` 时，环境扩展工厂被排除，而 `additionalExtensionPaths` 仍会正常解析（包括带有 `package.json#omp.extensions` 的包目录）。
+- CLI：`--no-extensions` 遵循相同的“仅显式”契约。显式的 `-e/--extension` 和 `--hook` 路径仍会加载，且只有来自显式命名扩展包的兄弟能力根仍然合格。项目/用户的 `extensions:` 设置以及已安装的 OMP 扩展包在该兄弟表面中被排除。
 
-This flag governs extension factories and OMP extension-package sibling roots;
-it is not a whole-process capability-isolation switch. Skills, MCP servers,
-tools, prompts, and rules owned by other discovery subsystems retain their own
-enable/disable controls.
+该标志管理扩展工厂和 OMP 扩展包的兄弟根；它不是全进程能力隔离开关。其他发现子系统拥有的 Skills、MCP 服务器、工具、prompts 和 rules 仍保留各自的启用/禁用控制。
 
-### Disable specific extension modules
+### 禁用特定的扩展模块
 
-`disabledExtensions` setting filters by extension id format:
+`disabledExtensions` 设置按扩展 id 格式进行过滤：
 
 - `extension-module:<derivedName>`
 
-`derivedName` is based on entry path (`getExtensionNameFromPath`), for example:
+`derivedName` 基于入口路径（`getExtensionNameFromPath`），例如：
 
 - `/x/foo.ts` -> `foo`
 - `/x/bar/index.ts` -> `bar`
 
-Example:
+示例：
 
 ```yaml
 disabledExtensions:
   - extension-module:foo
 ```
 
-### Disable specific items of other capabilities
+### 禁用其他能力的特定条目
 
-`disabledExtensions` is not limited to extension modules. Every capability that
-defines `toExtensionId` contributes ids to the same list, and loading filters
-them out before the item reaches the session.
+`disabledExtensions` 不仅限于扩展模块。每个定义了 `toExtensionId` 的能力都会向同一个列表贡献 id，加载过程会在条目到达 session 之前将其过滤掉。
 
-Context files use `context-file:<level>:<basename>`, where `<level>` is `user`
-or `project`:
+Context 文件使用 `context-file:<level>:<basename>`，其中 `<level>` 为 `user` 或 `project`：
 
 ```yaml
 disabledExtensions:
   - context-file:user:CLAUDE.md
 ```
 
-The id carries no directory and no depth, so a `project` entry disables files of
-that name at every depth the discovery walk reaches. See
-[Context files](./context-files.md#disabling-a-single-context-file).
+id 不包含目录和深度，因此一个 `project` 条目会禁用发现遍历所到达的每一层中同名的文件。参见 [Context files](./context-files.md#disabling-a-single-context-file)。
 
 ---
 
-## Path and entry resolution
+## 路径与入口解析
 
-### Path normalization
+### 路径规范化
 
-For configured paths:
+对于已配置的路径：
 
-1. Normalize Unicode spaces and supported path shorthands (including `file://`, `@/absolute/path`, and a stray `:` before an absolute/relative path)
-2. Expand `~`
-3. If relative, resolve against current `cwd`
-4. Reject the internal `local://` scheme; it must be resolved by its protocol handler, not treated as a filesystem path
+1. 规范化 Unicode 空格和支持的路径简写（包括 `file://`、`@/absolute/path`，以及在绝对/相对路径之前多余的 `:`）
+2. 展开 `~`
+3. 如果是相对路径，基于当前 `cwd` 解析
+4. 拒绝内部的 `local://` scheme；它必须由其协议处理器解析，不能被当作文件系统路径
 
-### If configured path is a file
+### 如果已配置的路径是文件
 
-It is used directly as a module entry candidate. Explicit `.ts`, `.js`, `.mjs`, and `.cjs` files are supported.
+直接将其用作模块入口候选。支持显式的 `.ts`、`.js`、`.mjs` 和 `.cjs` 文件。
 
-### If configured path is a directory
+### 如果已配置的路径是目录
 
-Resolution order:
+解析顺序：
 
-1. `package.json` in that directory with `omp.extensions` (or legacy `pi.extensions`) -> use declared entries
+1. 该目录中带 `omp.extensions`（或遗留的 `pi.extensions`）的 `package.json` -> 使用声明的条目
 2. `index.ts`
 3. `index.js`
-4. Otherwise scan one level for extension entries:
-   - direct `*.ts` / `*.js`
-   - subdir `index.ts` / `index.js`
-   - subdir `package.json` with `omp.extensions` / `pi.extensions`
+4. 否则扫描一层以寻找扩展条目：
+   - 直接的 `*.ts` / `*.js`
+   - 子目录的 `index.ts` / `index.js`
+   - 子目录中带 `omp.extensions` / `pi.extensions` 的 `package.json`
 
-Rules and constraints:
+规则与约束：
 
-- no recursive discovery beyond one subdirectory level
-- declared `extensions` manifest entries are resolved relative to that package directory
-- declared entries are included only if file exists/access is allowed
-- in `*/index.{ts,js}` pairs, TypeScript is preferred over JavaScript
-- symlinks are treated as eligible files/directories
+- 不进行超过一层子目录的递归发现
+- 声明的 `extensions` 清单条目相对于该包目录解析
+- 只有文件存在/允许访问时，声明的条目才会被包含
+- 在 `*/index.{ts,js}` 对中，TypeScript 优先于 JavaScript
+- 符号链接被视为合格的文件/目录
 
-### Ignore behavior differs by source
+### 不同来源的忽略行为不同
 
-- Native auto-discovery (`discoverExtensionModulePaths` in discovery helpers) uses native glob with `gitignore: true` and `hidden: false`.
-- Explicit configured directory scanning in `loader.ts` uses `readdir` rules and does **not** apply gitignore filtering.
-
----
-
-## Load order and precedence
-
-`discoverAndLoadExtensions()` builds one ordered list and then calls `loadExtensions()`.
-
-Order:
-
-1. Native auto-discovered modules
-2. Discovered JS/TS hook factories
-3. Installed plugin extension entries
-4. Explicit configured paths (in provided order)
-
-In `sdk.ts`, configured order is:
-
-1. CLI additional paths
-2. Settings `extensions`
-
-De-duplication:
-
-- absolute path based
-- first seen path wins
-- later duplicates are ignored
-
-Implication: if the same module path is both auto-discovered and explicitly configured, it is loaded once at the first position (auto-discovered stage).
+- 原生自动发现（discovery helpers 中的 `discoverExtensionModulePaths`）使用原生 glob，配置为 `gitignore: true` 和 `hidden: false`。
+- `loader.ts` 中显式配置的目录扫描使用 `readdir` 规则，并且**不**应用 gitignore 过滤。
 
 ---
 
-## Module import and factory contract
+## 加载顺序与优先级
 
-Each candidate path is loaded via `loadLegacyPiModule()` (`src/extensibility/plugins/legacy-pi-compat.ts`):
+`discoverAndLoadExtensions()` 构建一个有序列表，然后调用 `loadExtensions()`。
 
-- the entry's realpath is resolved, then dynamically imported with an `?mtime` cache-buster so edited source reloads
-- a scoped Bun `onLoad` hook rewrites legacy pi-package specifiers (`@mariozechner/*`, `@earendil-works/*`) and bare `@sinclair/typebox` onto the host-bundled copies before evaluation
-- factory is selected by `getExtensionFactory(module)`: the module itself if it is a function, otherwise `module.default`
-- factory must be a function (`ExtensionFactory`) and may return `void` or a promise; loading awaits it before continuing to the next path
+顺序：
 
-If export is not a function, that path fails with a structured error and loading continues.
+1. 原生自动发现的模块
+2. 发现的 JS/TS hook 工厂
+3. 已安装插件的扩展条目
+4. 显式配置的路径（按提供顺序）
 
----
+在 `sdk.ts` 中，配置的顺序为：
 
-## Failure handling and isolation
+1. CLI 额外路径
+2. settings `extensions`
 
-### During loading
+去重：
 
-Per extension path, failures are captured as `{ path, error }` and do not stop other paths from loading.
+- 基于绝对路径
+- 首次出现的路径胜出
+- 后续重复项被忽略
 
-Common cases:
-
-- import failure / missing file
-- invalid factory export (non-function)
-- exception thrown while executing factory
-
-### Runtime isolation model
-
-- Extensions are **not sandboxed** (same process/runtime).
-- They share one `EventBus` and one `ExtensionRuntime` instance.
-- During load, runtime action methods intentionally throw `ExtensionRuntimeNotInitializedError`; action wiring happens later in `ExtensionRunner.initialize()`.
-
-### After loading
-
-When events run through `ExtensionRunner`, handler exceptions are caught and emitted as extension errors instead of crashing the runner loop.
+含义：如果同一模块路径既被自动发现又被显式配置，它将在第一个位置（自动发现阶段）加载一次。
 
 ---
 
-## Minimal user/project layout examples
+## 模块导入与工厂契约
 
-### User-level
+每个候选路径通过 `loadLegacyPiModule()`（`src/extensibility/plugins/legacy-pi-compat.ts`）加载：
+
+- 入口的 realpath 被解析，然后使用 `?mtime` 缓存破坏器进行动态导入，以便编辑后的源码能够重新加载
+- 作用域内的 Bun `onLoad` hook 会在求值前将遗留的 pi-package 说明符（`@mariozechner/*`、`@earendil-works/*`）和裸的 `@sinclair/typebox` 改写到宿主打包的副本
+- 工厂由 `getExtensionFactory(module)` 选择：如果模块本身是函数则使用它，否则使用 `module.default`
+- 工厂必须是函数（`ExtensionFactory`），可以返回 `void` 或 promise；加载会 await 它，然后再继续下一个路径
+
+如果导出不是函数，该路径会以结构化错误失败，加载会继续。
+
+---
+
+## 失败处理与隔离
+
+### 加载过程中
+
+对于每个扩展路径，失败会被捕获为 `{ path, error }`，不会阻止其他路径的加载。
+
+常见情况：
+
+- 导入失败 / 文件缺失
+- 无效的工厂导出（非函数）
+- 执行工厂时抛出异常
+
+### 运行时隔离模型
+
+- 扩展**不被沙箱化**（同一进程/运行时）。
+- 它们共享一个 `EventBus` 和一个 `ExtensionRuntime` 实例。
+- 在加载过程中，运行时 action 方法会故意抛出 `ExtensionRuntimeNotInitializedError`；action 接线稍后在 `ExtensionRunner.initialize()` 中完成。
+
+### 加载之后
+
+当事件通过 `ExtensionRunner` 运行时，处理函数的异常会被捕获并作为扩展错误发出，而不是让 runner 循环崩溃。
+
+---
+
+## 最小化的用户/项目布局示例
+
+### 用户级
 
 ```text
 ~/.omp/agent/
@@ -271,7 +257,7 @@ When events run through `ExtensionRunner`, handler exceptions are caught and emi
       index.ts
 ```
 
-### Project-level
+### 项目级
 
 ```text
 <repo>/
@@ -283,7 +269,7 @@ When events run through `ExtensionRunner`, handler exceptions are caught and emi
       lint-gates.ts
 ```
 
-`checks/package.json`:
+`checks/package.json`：
 
 ```json
 {
@@ -293,7 +279,7 @@ When events run through `ExtensionRunner`, handler exceptions are caught and emi
 }
 ```
 
-Legacy manifest key still accepted:
+仍然接受遗留的清单 key：
 
 ```json
 {

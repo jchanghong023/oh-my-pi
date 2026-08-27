@@ -1,6 +1,6 @@
 # ask
 
-> Prompts the interactive user for one or more option-picker or free-form answers.
+> 向交互式用户请求一个或多个选项选择器或自由形式的回答。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/ask.ts`

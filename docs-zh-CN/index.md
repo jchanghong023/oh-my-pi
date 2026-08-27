@@ -28,8 +28,8 @@ features:
     link: /agent-hub
 ---
 
-## Documentation
+## 文档
 
-The Markdown files in this directory are published automatically with VitePress and GitHub Pages.
+本目录中的 Markdown 文件通过 VitePress 和 GitHub Pages 自动发布。
 
-Use the navigation above or open any documentation page directly by its filename, for example `vibe-mode.md` becomes `/vibe-mode`.
+使用上方的导航栏,或通过文件名直接打开任意文档页面,例如 `vibe-mode.md` 对应 `/vibe-mode`。

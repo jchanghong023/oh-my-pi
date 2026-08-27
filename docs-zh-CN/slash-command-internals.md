@@ -1,8 +1,8 @@
-# Slash command internals
+# 斜杠命令内部机制
 
-This document describes how slash commands are discovered, deduplicated, surfaced in interactive mode, and expanded at prompt time in `coding-agent`.
+本文档描述了 `coding-agent` 中斜杠命令的发现、去重、在交互模式中的展示以及在提示时的展开方式。
 
-## Implementation files
+## 实现文件
 
 - [`src/extensibility/slash-commands.ts`](../packages/coding-agent/src/extensibility/slash-commands.ts)
 - [`src/capability/slash-command.ts`](../packages/coding-agent/src/capability/slash-command.ts)
@@ -23,251 +23,251 @@ This document describes how slash commands are discovered, deduplicated, surface
 - [`src/modes/controllers/input-controller.ts`](../packages/coding-agent/src/modes/controllers/input-controller.ts)
 - [`src/modes/utils/ui-helpers.ts`](../packages/coding-agent/src/modes/utils/ui-helpers.ts)
 
-## 1) Discovery model
+## 1) 发现模型
 
-Slash commands are a capability (`id: "slash-commands"`) keyed by command name (`key: cmd => cmd.name`).
+斜杠命令是一项能力（`id: "slash-commands"`），以命令名作为键（`key: cmd => cmd.name`）。
 
-The capability registry loads all registered providers, sorted by provider priority descending, and deduplicates by key with **first wins** semantics.
+能力注册表按提供者优先级降序加载所有已注册的提供者，并通过键进行去重，采用**先到优先**的语义。
 
-### Provider precedence
+### 提供者优先级
 
-Current slash-command providers and priorities:
+当前斜杠命令提供者及其优先级：
 
-1. `native` (OMP) — priority `100`
-2. `omp-plugins` (extension packages) — priority `90`
-3. `claude` — priority `80`
-4. `claude-plugins` — priority `70`
-5. `agents` (`.agent`/`.agents` standard dirs) — priority `70`
-6. `codex` — priority `70`
-7. `opencode` — priority `55`
+1. `native`（OMP）— 优先级 `100`
+2. `omp-plugins`（扩展包）— 优先级 `90`
+3. `claude` — 优先级 `80`
+4. `claude-plugins` — 优先级 `70`
+5. `agents`（`.agent`/`.agents` 标准目录）— 优先级 `70`
+6. `codex` — 优先级 `70`
+7. `opencode` — 优先级 `55`
 
-Tie behavior: equal-priority providers keep registration order. Current import order registers `claude-plugins` before `agents` before `codex`, so plugin commands win over both on name collisions.
+平局行为：优先级相等的提供者保持注册顺序。当前的导入顺序依次注册 `claude-plugins`、`agents`、`codex`，因此在名称冲突时插件命令同时优先于后两者。
 
-### Name-collision behavior
+### 名称冲突行为
 
-For `slash-commands`, collisions are resolved strictly by capability dedup:
+对于 `slash-commands`，冲突严格按照能力去重解决：
 
-- highest-precedence item is kept in `result.items`
-- lower-precedence duplicates remain only in `result.all` and are marked `_shadowed = true`
+- 优先级最高的项保留在 `result.items` 中
+- 优先级较低的重复项仅保留在 `result.all` 中，并被标记为 `_shadowed = true`
 
-This applies across providers and also within a provider if it returns duplicate names.
+这适用于跨提供者的情况，也适用于单个提供者返回重复名称的情况。
 
-Built-ins are not items in this file capability. They live in the unified built-in registry and are dispatched before session-level extension/custom/file expansion in TUI and ACP/RPC modes. Autocomplete/ACP availability also reserves built-in names and aliases first.
+内置命令不属于此文件能力中的条目。它们存在于统一的内置注册表中，并在 TUI 和 ACP/RPC 模式中会话级别的扩展/自定义/文件展开之前被分发。自动补全/ACP 可用性也会优先保留内置名称和别名。
 
-### File scanning behavior
+### 文件扫描行为
 
-Providers mostly use `loadFilesFromDir(...)`, which currently:
+提供者主要使用 `loadFilesFromDir(...)`，该函数当前：
 
-- defaults to non-recursive matching (`*.md`)
-- uses native glob with `gitignore: true`, `hidden: false`, `fileType: File`
-- reads matching files in parallel and transforms them into `SlashCommand` items
+- 默认采用非递归匹配（`*.md`）
+- 使用原生 glob，参数为 `gitignore: true`、`hidden: false`、`fileType: File`
+- 并行读取匹配的文件，并将其转换为 `SlashCommand` 项
 
-So hidden files/directories are not loaded, ignored paths are skipped, and file order follows native glob result order unless a provider adds its own ordering.
+因此不会加载隐藏文件/目录，会跳过被忽略的路径，文件顺序遵循原生 glob 的结果顺序，除非提供者添加了自定义排序。
 
-## 2) Provider-specific source paths and local precedence
+## 2) 提供者特定的源路径和本地优先级
 
-## `native` provider (`builtin.ts`)
+## `native` 提供者（`builtin.ts`）
 
-Search roots come from `.omp` directories:
+搜索根目录来自 `.omp` 目录：
 
-- project: `<cwd>/.omp/commands/*.md`
-- user: active profile agent directory `commands/*.md` (`~/.omp/agent/commands/*.md` for the default profile; `~/.omp/profiles/<name>/agent/commands/*.md` for a named profile)
+- 项目：`<cwd>/.omp/commands/*.md`
+- 用户：当前配置文件的 agent 目录 `commands/*.md`（默认配置文件为 `~/.omp/agent/commands/*.md`；具名配置文件为 `~/.omp/profiles/<name>/agent/commands/*.md`）
 
-`getConfigDirs()` returns project first, then user, so **project native commands beat user native commands** when names collide.
+`getConfigDirs()` 优先返回项目目录，然后是用户目录，因此当名称冲突时**项目原生命令优先于用户原生命令**。
 
-## `omp-plugins` provider (`omp-plugins.ts`)
+## `omp-plugins` 提供者（`omp-plugins.ts`）
 
-Scans `commands/*.md` in configured extension-package roots and enabled npm/link plugins. Root precedence is invocation/CLI, project settings, user settings, then installed plugins. Marketplace roots are excluded here to avoid duplicate discovery and are handled by `claude-plugins`.
+在已配置的扩展包根目录以及已启用的 npm/link 插件中扫描 `commands/*.md`。根目录优先级为：调用/CLI、项目设置、用户设置，然后是已安装的插件。此处排除市场根目录以避免重复发现，由 `claude-plugins` 处理。
 
-## `claude` provider (`claude.ts`)
+## `claude` 提供者（`claude.ts`）
 
-Loads, subject to `commands.enableClaudeUser` and `commands.enableClaudeProject` settings:
+在 `commands.enableClaudeUser` 和 `commands.enableClaudeProject` 设置的约束下加载：
 
-- user: `~/.claude/commands/**/*.md` (recursive)
-- project: `<cwd>/.claude/commands/**/*.md` (recursive)
+- 用户：`~/.claude/commands/**/*.md`（递归）
+- 项目：`<cwd>/.claude/commands/**/*.md`（递归）
 
-Commands in subdirectories additionally get a namespaced alias: `foo/bar.md` is registered under both `bar` and `foo:bar` (`addClaudeCommandNamespaceAliases`).
+子目录中的命令还会获得一个命名空间别名：`foo/bar.md` 会同时以 `bar` 和 `foo:bar` 注册（`addClaudeCommandNamespaceAliases`）。
 
-The provider pushes user items before project items, so **user Claude commands beat project Claude commands** on same-name collisions inside this provider.
+该提供者先推送用户项，然后推送项目项，因此在此提供者内部出现同名冲突时，**用户 Claude 命令优先于项目 Claude 命令**。
 
-## `codex` provider (`codex.ts`)
+## `codex` 提供者（`codex.ts`）
 
-Loads:
+加载：
 
-- user: `~/.codex/commands/*.md`
-- project: `<cwd>/.codex/commands/*.md`
+- 用户：`~/.codex/commands/*.md`
+- 项目：`<cwd>/.codex/commands/*.md`
 
-Both sides are loaded then flattened in user-first order, so **user Codex commands beat project Codex commands** on collisions.
+两侧加载后按用户优先的顺序扁平化，因此发生冲突时**用户 Codex 命令优先于项目 Codex 命令**。
 
-Codex command content is parsed with frontmatter stripping (`parseFrontmatter`), and command name can be overridden by frontmatter `name`; otherwise filename is used.
+Codex 命令内容通过剥离 frontmatter 进行解析（`parseFrontmatter`），命令名可由 frontmatter 中的 `name` 覆盖；否则使用文件名。
 
-## `opencode` provider (`opencode.ts`)
+## `opencode` 提供者（`opencode.ts`）
 
-Loads, subject to `commands.enableOpencodeUser` and `commands.enableOpencodeProject` settings:
+在 `commands.enableOpencodeUser` 和 `commands.enableOpencodeProject` 设置的约束下加载：
 
-- user: `~/.config/opencode/commands/*.md`
-- project: `<cwd>/.opencode/commands/*.md`
+- 用户：`~/.config/opencode/commands/*.md`
+- 项目：`<cwd>/.opencode/commands/*.md`
 
-Both sides are loaded then flattened in user-first order, so **user OpenCode commands beat project OpenCode commands** on collisions. OpenCode command content is parsed with frontmatter stripping, and command name can be overridden by frontmatter `name`; otherwise filename is used.
+两侧加载后按用户优先的顺序扁平化，因此发生冲突时**用户 OpenCode 命令优先于项目 OpenCode 命令**。OpenCode 命令内容通过剥离 frontmatter 进行解析，命令名可由 frontmatter 中的 `name` 覆盖；否则使用文件名。
 
-## `claude-plugins` provider (`claude-plugins.ts`)
+## `claude-plugins` 提供者（`claude-plugins.ts`）
 
-Loads plugin command roots via `listClaudePluginRoots(...)`, which reads `~/.claude/plugins/installed_plugins.json`, `~/.omp/plugins/installed_plugins.json`, and the nearest project-scoped registry resolved from cwd. For each root it scans `<pluginRoot>/commands/*.md` (the directory can be remapped by plugin config keys `commands`/`slash-commands`), and command names are prefixed with the plugin name: `<plugin>:<command>`.
+通过 `listClaudePluginRoots(...)` 加载插件命令根目录，该函数读取 `~/.claude/plugins/installed_plugins.json`、`~/.omp/plugins/installed_plugins.json` 以及从 cwd 解析出的最近项目级注册表。对于每个根目录，会扫描 `<pluginRoot>/commands/*.md`（该目录可通过插件配置键 `commands`/`slash-commands` 重新映射），命令名以插件名为前缀：`<plugin>:<command>`。
 
-Across the three registries, roots are merged by precedence rather than sorted: `--plugin-dir` injected roots come first, then project-scoped entries (which shadow user entries for the same plugin id), then user entries, with the OMP registry authoritative over Claude's for the same plugin id. Within each registry, per-plugin entry order from the JSON data is preserved; there is no additional sort step.
+在这三个注册表之间，根目录按优先级合并而非排序：`--plugin-dir` 注入的根目录排在最前，然后是项目级条目（对于同一插件 id，它们会遮蔽用户条目），再然后是用户条目，其中 OMP 注册表对同一插件 id 拥有比 Claude 更高的权威性。在每个注册表内部，JSON 数据中每个插件条目的顺序被保留；没有额外的排序步骤。
 
-## `agents` provider (`agents.ts`)
+## `agents` 提供者（`agents.ts`）
 
-Scans non-recursive `commands/*.md` under `.agent/` and `.agents/` from cwd up to the repository root, then `~/.agent/commands` and `~/.agents/commands`. Within this provider, the nearest project root is first; `.agent` precedes `.agents`; project entries precede user entries.
+从 cwd 向上扫描到仓库根目录下的 `.agent/` 和 `.agents/` 中的非递归 `commands/*.md`，然后是 `~/.agent/commands` 和 `~/.agents/commands`。在此提供者内部，最近的项目根目录优先；`.agent` 先于 `.agents`；项目条目先于用户条目。
 
-## 3) Materialization to runtime `FileSlashCommand`
+## 3) 物化为运行时 `FileSlashCommand`
 
-`loadSlashCommands()` in `src/extensibility/slash-commands.ts` converts capability items into `FileSlashCommand` objects used at prompt time.
+`loadSlashCommands()` 位于 `src/extensibility/slash-commands.ts`，它将能力项转换为提示时使用的 `FileSlashCommand` 对象。
 
-For each command:
+对于每个命令：
 
-1. parse frontmatter/body (`parseFrontmatter`)
-2. description source:
-   - `frontmatter.description` if present
-   - else first non-empty body line (max 60 chars with `...`)
-3. keep parsed body as executable template content
-4. compute a display source string like `via Claude Code Project`
+1. 解析 frontmatter/正文（`parseFrontmatter`）
+2. 描述来源：
+   - 若存在则使用 `frontmatter.description`
+   - 否则使用正文中第一个非空行（最多 60 个字符，超出部分以 `...` 表示）
+3. 将解析后的正文保留为可执行模板内容
+4. 计算类似 `via Claude Code Project` 的展示来源字符串
 
-Frontmatter parse severity is level-dependent:
+Frontmatter 解析的严重程度因级别而异：
 
-- discovered user/project commands use warning-level parsing with fallback key/value parsing
-- a capability item explicitly marked `native` would use fatal parsing
-- bundled fallback templates use fatal parsing
+- 已发现的用户/项目命令使用警告级解析，并附带回退的键/值解析
+- 显式标记为 `native` 的能力项使用致命级解析
+- 内置的回退模板使用致命级解析
 
-### Bundled fallback commands
+### 内置回退命令
 
-After filesystem/provider commands, embedded command templates are appended (`EMBEDDED_COMMAND_TEMPLATES`) if their names are not already present.
+在文件系统/提供者命令之后，如果名称尚未出现，则会追加嵌入式命令模板（`EMBEDDED_COMMAND_TEMPLATES`）。
 
-Current embedded set comes from `src/task/commands.ts` and is used as a fallback (`source: "bundled"`).
+当前的嵌入式集合来自 `src/task/commands.ts`，用作回退（`source: "bundled"`）。
 
-## 4) Interactive mode: where command lists come from
+## 4) 交互模式：命令列表的来源
 
-Interactive mode combines multiple command sources for autocomplete and command routing.
+交互模式组合多个命令源用于自动补全和命令路由。
 
-At construction time it builds a pending command list from:
+在构造时，它从以下来源构建待处理命令列表：
 
-- built-ins (`BUILTIN_SLASH_COMMANDS`, includes argument completion and inline hints for selected commands)
-- extension-registered slash commands (`extensionRunner.getRegisteredCommands(...)`)
-- TypeScript custom commands (`session.customCommands`), mapped to slash command labels
-- optional skill commands (`/skill:<name>`) when `skills.enableSkillCommands` is enabled
+- 内置命令（`BUILTIN_SLASH_COMMANDS`，包括参数补全和选定命令的内联提示）
+- 扩展注册的斜杠命令（`extensionRunner.getRegisteredCommands(...)`）
+- TypeScript 自定义命令（`session.customCommands`），映射为斜杠命令标签
+- 在启用 `skills.enableSkillCommands` 时的可选技能命令（`/skill:<name>`）
 
-Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands and install one autocomplete provider (`createPromptActionAutocompleteProvider`, a `PromptActionAutocompleteProvider` wrapping a `CombinedAutocompleteProvider`) containing:
+然后 `init()` 调用 `refreshSlashCommandState(...)` 来加载基于文件的命令，并安装一个自动补全提供者（`createPromptActionAutocompleteProvider`，一个包装了 `CombinedAutocompleteProvider` 的 `PromptActionAutocompleteProvider`），其包含：
 
-- pending commands above
-- discovered file-based commands
-- discovered prompt-template commands whose names aren't already taken by a built-in/hook/custom/skill/file command
+- 上述待处理命令
+- 已发现的基于文件的命令
+- 名称未被内置/钩子/自定义/技能/文件命令占用的已发现提示模板命令
 
-`refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
+`refreshSlashCommandState(...)` 还会更新 `session.setSlashCommands(...)`，使提示展开使用同一组已发现的文件命令。
 
-### Refresh lifecycle
+### 刷新生命周期
 
-Slash command state is refreshed:
+斜杠命令状态会在以下时机刷新：
 
-- during interactive init
-- after `/move` changes working directory (`applyCwdChange` resets capabilities and refreshes against the new cwd)
-- when the editor component is swapped
-- by explicit plugin reload flows such as `/reload-plugins`
+- 交互初始化期间
+- `/move` 更改工作目录之后（`applyCwdChange` 重置能力并根据新的 cwd 刷新）
+- 编辑器组件被替换时
+- 显式的插件重载流程，例如 `/reload-plugins`
 
-There is no continuous file watcher for command directories.
+不存在针对命令目录的持续文件监视器。
 
-### Other surfacing
+### 其他展示方式
 
-The Extensions dashboard also loads `slash-commands` capability and displays active/shadowed command entries, including `_shadowed` duplicates.
+扩展仪表板还会加载 `slash-commands` 能力，并显示激活/被遮蔽的命令条目，包括 `_shadowed` 重复项。
 
-## 5) Routing and prompt-pipeline placement
+## 5) 路由和提示管线位置
 
-The unified built-in registry is checked before `AgentSession.prompt(...)` in TUI and ACP/RPC modes. A built-in can consume input or return residual prompt text. TUI-only built-ins are omitted from ACP availability and dispatch; ACP-visible built-ins are the entries with a text-mode `handle`.
+在 TUI 和 ACP/RPC 模式中，统一的内置注册表会在 `AgentSession.prompt(...)` 之前被检查。内置命令可以消费输入或返回剩余的提示文本。仅 TUI 的内置命令在 ACP 可用性和分发中会被省略；ACP 可见的内置命令是那些具有文本模式 `handle` 的条目。
 
-After that boundary, `AgentSession.prompt(...)` processes slash input in this order when `expandPromptTemplates !== false`:
+在该边界之后，当 `expandPromptTemplates !== false` 时，`AgentSession.prompt(...)` 按以下顺序处理斜杠输入：
 
-1. **Extension commands** (`#tryExecuteExtensionCommand`)  
-   If `/name` matches an extension-registered command, its handler executes immediately and prompt returns.
-2. **TypeScript custom commands and MCP prompt commands** (`#tryExecuteCustomCommand`)
-   A match may return:
-   - `string` -> replace prompt text with that string
-   - `void/undefined` -> treated as handled; no LLM prompt
-3. **File-based slash commands** (`expandSlashCommand`)  
-   If text still starts with `/`, attempt markdown command expansion.
-4. **Prompt templates** (`expandPromptTemplate`)  
-   Applied after slash/custom processing.
-5. **Delivery**
-   - idle: prompt is sent immediately to agent
-   - streaming: prompt is queued as steer/follow-up depending on `streamingBehavior`
+1. **扩展命令**（`#tryExecuteExtensionCommand`）  
+   如果 `/name` 匹配扩展已注册的命令，其处理程序会立即执行，提示返回。
+2. **TypeScript 自定义命令和 MCP 提示命令**（`#tryExecuteCustomCommand`）  
+   匹配可能返回：
+   - `string` -> 使用该字符串替换提示文本
+   - `void/undefined` -> 视为已处理；不向 LLM 发送提示
+3. **基于文件的斜杠命令**（`expandSlashCommand`）  
+   如果文本仍以 `/` 开头，则尝试进行 markdown 命令展开。
+4. **提示模板**（`expandPromptTemplate`）  
+   在斜杠/自定义处理之后应用。
+5. **投递**
+   - 空闲：提示立即发送给 agent
+   - 流式传输：根据 `streamingBehavior`，提示作为 steer/follow-up 排队
 
-This is why built-ins reserve their names before file commands are considered, slash command expansion sits before prompt-template expansion, and custom commands can transform away the leading slash before file-command matching.
+这就是为什么内置命令在考虑文件命令之前就保留其名称，斜杠命令展开位于提示模板展开之前，自定义命令可以在文件命令匹配之前转换掉前导斜杠。
 
-## 6) Expansion semantics for file-based slash commands
+## 6) 基于文件的斜杠命令的展开语义
 
-`expandSlashCommand(text, fileCommands)` behavior:
+`expandSlashCommand(text, fileCommands)` 的行为：
 
-- only runs when text begins with `/`
-- parses command name from first token after `/`
-- parses args from remaining text via `parseCommandArgs`
-- finds exact name match in loaded `fileCommands`
-- if matched, applies:
-  - positional replacement: `$1`, `$2`, ...
-  - slice replacement: `$@[start]` / `$@[start:length]` using 1-based positions
-  - aggregate replacement: `$ARGUMENTS` and `$@`
-  - template rendering via `prompt.render` with `{ args, ARGUMENTS, arguments }`
-  - inline-argument fallback append when the template did not use an inline argument placeholder
+- 仅在文本以 `/` 开头时运行
+- 从 `/` 之后的第一个标记解析命令名
+- 通过 `parseCommandArgs` 从剩余文本解析参数
+- 在已加载的 `fileCommands` 中查找精确的名称匹配
+- 如果匹配，则应用：
+  - 位置替换：`$1`、`$2` 等
+  - 切片替换：`$@[start]` / `$@[start:length]`，使用基于 1 的位置
+  - 聚合替换：`$ARGUMENTS` 和 `$@`
+  - 通过 `prompt.render` 进行模板渲染，参数为 `{ args, ARGUMENTS, arguments }`
+  - 当模板未使用内联参数占位符时，附加内联参数回退
 
-### `parseCommandArgs` caveats
+### `parseCommandArgs` 的注意事项
 
-The parser is simple quote-aware splitting:
+该解析器是简单的支持引号的拆分：
 
-- supports `'single'` and `"double"` quoting to keep spaces
-- strips quote delimiters
-- does not implement backslash escaping rules
-- unmatched quote is not an error; parser consumes until end
+- 支持 `'单引号'` 和 `"双引号"` 引用以保留空格
+- 剥离引号定界符
+- 不实现反斜杠转义规则
+- 未匹配的引号不是错误；解析器会一直消费到末尾
 
-## 7) Unknown `/...` behavior
+## 7) 未知的 `/...` 行为
 
-Unknown slash input is **not rejected** by core slash logic.
+核心斜杠逻辑**不会拒绝**未知的斜杠输入。
 
-If no built-in, extension, custom, or file command handles it, `expandSlashCommand` returns the original text and the literal `/...` prompt proceeds through prompt-template expansion and LLM delivery.
+如果没有内置、扩展、自定义或文件命令处理它，`expandSlashCommand` 会返回原始文本，字面 `/...` 提示会继续通过提示模板展开和 LLM 投递。
 
-TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...)`. A TUI-only built-in is not advertised or handled in ACP, so an otherwise unhandled spelling can still fall through as ordinary prompt text there.
+TUI 和 ACP/RPC 在 `session.prompt(...)` 之前分发共享的内置注册表。仅 TUI 的内置命令在 ACP 中既不公开也不处理，因此在其他情况下未处理的拼写仍可能作为普通提示文本在那里透传。
 
-## ACP/RPC availability
+## ACP/RPC 可用性
 
-`buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. Built-in primary names and aliases are reserved; extension names such as `model:foo`, whose prefix parses as a built-in, are filtered from ACP availability. The same file-command load updates the session expansion set.
+`buildAvailableSlashCommands(...)` 按以下顺序以先到优先的方式发布命令：具有文本能力的内置命令、可选的技能命令、扩展命令、TypeScript/MCP 自定义命令，然后是已发现的文件命令。内置的主名称和别名被保留；扩展名（例如 `model:foo`）如果其前缀可解析为内置命令，则会从 ACP 可用性中过滤掉。同一个文件命令加载会更新会话的展开集。
 
-## 8) Streaming-time differences vs idle
+## 8) 流式传输时与空闲的差异
 
-## Idle path
+## 空闲路径
 
-- `session.prompt("/x ...")` runs command pipeline and either executes command immediately or sends expanded text directly.
+- `session.prompt("/x ...")` 运行命令管道，立即执行命令或直接发送展开后的文本。
 
-## Streaming path (`session.isStreaming === true`)
+## 流式传输路径（`session.isStreaming === true`）
 
-- `prompt(...)` still runs extension/custom/file/template transforms first
-- then requires `streamingBehavior`:
-  - `"steer"` -> queue interrupt message (`agent.steer`)
-  - `"followUp"` -> queue post-turn message (`agent.followUp`)
-- if `streamingBehavior` is omitted, prompt throws an error
+- `prompt(...)` 仍然首先运行扩展/自定义/文件/模板转换
+- 然后要求 `streamingBehavior`：
+  - `"steer"` -> 排队中断消息（`agent.steer`）
+  - `"followUp"` -> 排队回合后消息（`agent.followUp`）
+- 如果省略 `streamingBehavior`，则 `prompt` 抛出错误
 
-### Important command-specific streaming behavior
+### 重要的命令特定流式传输行为
 
-- Extension commands are executed immediately even during streaming (not queued as text).
-- `steer(...)`/`followUp(...)` helper methods reject extension commands (`#throwIfExtensionCommand`) to avoid queuing command text for handlers that must run synchronously.
-- Compaction queue replay uses `isKnownSlashCommand(...)` to decide whether queued entries should be replayed via `session.prompt(...)` (for known slash commands) vs raw steer/follow-up methods.
+- 即使在流式传输期间，扩展命令也会立即执行（不会作为文本排队）。
+- `steer(...)`/`followUp(...)` 辅助方法会拒绝扩展命令（`#throwIfExtensionCommand`），以避免为必须同步运行的处理程序将命令文本排队。
+- 压缩队列重放使用 `isKnownSlashCommand(...)` 来决定排队的条目是通过 `session.prompt(...)` 重放（针对已知斜杠命令）还是通过原始的 steer/follow-up 方法重放。
 
-## 9) Error handling and failure surfaces
+## 9) 错误处理和失败面
 
-- Provider load failures are isolated; registry collects warnings and continues with other providers.
-- Invalid slash command items (missing name/path/content or invalid level) are dropped by capability validation.
-- Frontmatter parse failures:
-  - native commands: fatal parse error bubbles
-  - non-native commands: warning + fallback key/value parse
-- Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
+- 提供者加载失败是隔离的；注册表会收集警告并继续处理其他提供者。
+- 无效的斜杠命令项（缺少名称/路径/内容或级别无效）会被能力验证丢弃。
+- Frontmatter 解析失败：
+  - 原生命令：致命解析错误会向上抛出
+  - 非原生命令：警告 + 回退的键/值解析
+- 扩展/自定义命令处理程序的异常会被捕获并通过扩展错误通道报告（对于没有扩展运行器的自定义命令，则通过日志记录器回退），并视为已处理（不会意外地回退执行）。
 
-## 10) Built-in command note: `/pause`
+## 10) 内置命令说明：`/pause`
 
-`/pause` is available only in the interactive TUI. It engages a process-global gate for the main agent, in-process subagents, and the advisor. Each agent parks at its next safe boundary: in-flight calls finish, nothing is aborted, and no new work starts until the gate is released.
+`/pause` 仅在交互式 TUI 中可用。它为主要的 agent、进程内的子 agent 以及 advisor 启用一个进程级的门控。每个 agent 都会停在其下一个安全边界处：进行中的调用会完成，不会中止任何操作，并且在门控被释放之前不会开始新的工作。
 
-From the pause screen, press Esc, Enter, Space, or Ctrl+C to resume. Ctrl+C resumes rather than aborting any agent.
+在暂停界面，按 Esc、Enter、Space 或 Ctrl+C 恢复。Ctrl+C 是恢复而不是中止任何 agent。

@@ -1,22 +1,22 @@
 # read
 
-> Read files, directories, archives, SQLite databases, internal resources, images, documents, and URLs through one `path` string.
+> 通过一个 `path` 字符串读取文件、目录、归档、SQLite 数据库、内部资源、图片、文档和 URL。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/read.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/read.md`
 - Key collaborators:
-  - `packages/coding-agent/src/tools/path-utils.ts` — split `path` from trailing selectors; prefer literal filenames; normalize local paths and recover accidental delimited path lists.
-  - `packages/coding-agent/src/utils/zip.ts` — unified ZIP/tar wrapper: detect `archive.ext:inner/path`, index archives, list/read entries.
-  - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite targets, parse selectors, render tables.
-  - `packages/coding-agent/src/tools/fetch.ts` — URL parsing, fetch/render pipeline, URL cache/artifacts.
-  - `packages/coding-agent/src/internal-urls/router.ts` — built-in internal-resource registry, including `ssh://` and `xd://`; MCP may advertise additional schemes.
-  - `packages/coding-agent/src/edit/notebook.ts` — convert `.ipynb` to editable `# %% [...] cell:N` text.
-  - `packages/coding-agent/src/utils/cpuprofile.ts` / `sample-profile.ts` — summarize recognized profiler reports.
-  - `packages/coding-agent/src/utils/file-display-mode.ts` — decide hashline vs line-number vs raw display.
-  - `packages/coding-agent/src/workspace-tree.ts` — render directory trees.
-  - `packages/coding-agent/src/edit/file-snapshot-store.ts` — stores read lines for later hashline edit verification/recovery.
-  - `packages/coding-agent/src/tools/index.ts` — registers `read: s => new ReadTool(s)`.
+  - `packages/coding-agent/src/tools/path-utils.ts` — 从尾部选择器中拆分 `path`;优先使用字面文件名;规范化本地路径并恢复意外出现的分隔符路径列表。
+  - `packages/coding-agent/src/utils/zip.ts` — 统一的 ZIP/tar 包装器:检测 `archive.ext:inner/path`、索引归档、列出/读取条目。
+  - `packages/coding-agent/src/tools/sqlite-reader.ts` — 检测 SQLite 目标,解析选择器,渲染表。
+  - `packages/coding-agent/src/tools/fetch.ts` — URL 解析、获取/渲染流水线、URL 缓存/产物。
+  - `packages/coding-agent/src/internal-urls/router.ts` — 内置的内部资源注册表,包括 `ssh://` 和 `xd://`;MCP 可以注册额外的 scheme。
+  - `packages/coding-agent/src/edit/notebook.ts` — 将 `.ipynb` 转换为可编辑的 `# %% [...] cell:N` 文本。
+  - `packages/coding-agent/src/utils/cpuprofile.ts` / `sample-profile.ts` — 汇总可识别的 profiler 报告。
+  - `packages/coding-agent/src/utils/file-display-mode.ts` — 决定 hashline、行号或原始(raw)显示方式。
+  - `packages/coding-agent/src/workspace-tree.ts` — 渲染目录树。
+  - `packages/coding-agent/src/edit/file-snapshot-store.ts` — 存储已读取的行,以便后续 hashline 编辑验证/恢复。
+  - `packages/coding-agent/src/tools/index.ts` — 注册 `read: s => new ReadTool(s)`。
 
 ## Inputs
 
@@ -325,5 +325,5 @@ Notes: ...
 - A bare `/` resolves to the session cwd, not the filesystem root.
 - URL cache keys are session-scoped and normalized by requested URL + raw/rendered mode; both requested URL and final redirected URL are cached.
 - URL line-range reads request `ensureArtifact: true, preferCached: true` so a later paginated read can reopen the same rendered body from artifact storage.
-- Raw SQLite `q=` execution is not keyword-restricted beyond “no bound parameters”; the read tool relies on the surrounding contract to keep it read-only.
+- Raw SQLite `q=` execution is not keyword-restricted beyond "no bound parameters"; the read tool relies on the surrounding contract to keep it read-only.
 - The file snapshot store is not a read acceleration cache. It exists to verify and recover hashline edits when the file changed after the read.

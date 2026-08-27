@@ -1,25 +1,25 @@
-# Eval Tool Python Backend
+# Eval 工具 Python 后端
 
-This document describes the Python execution stack in `packages/coding-agent`.
-It covers tool behavior, runner lifecycle, environment handling, execution semantics, output rendering, supported magics, and operational failure modes.
+本文档介绍 `packages/coding-agent` 中的 Python 执行栈。
+内容涵盖工具行为、运行器生命周期、环境处理、执行语义、输出渲染、支持的魔术命令以及运行期故障模式。
 
-## Scope and Key Files
+## 范围与关键文件
 
-- Tool surface: `src/tools/eval.ts`
-- Session/per-call kernel orchestration: `src/eval/py/executor.ts`
-- Subprocess kernel client: `src/eval/py/kernel.ts`
-- Python wrapper / NDJSON server: `src/eval/py/runner.py`
-- Prelude helpers loaded into every kernel: `src/eval/py/prelude.py`
-- Host-side subagent helper bridge: `src/eval/agent-bridge.ts`
-- MIME bundle renderer (text + structured outputs): `src/eval/py/display.ts`
-- Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
-- Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
+- 工具面：`src/tools/eval.ts`
+- 会话/按调用内核编排：`src/eval/py/executor.ts`
+- 子进程内核客户端：`src/eval/py/kernel.ts`
+- Python 包装器 / NDJSON 服务端：`src/eval/py/runner.py`
+- 每个内核都会加载的预置辅助代码：`src/eval/py/prelude.py`
+- 宿主侧子代理辅助桥接：`src/eval/agent-bridge.ts`
+- MIME 包渲染器（文本 + 结构化输出）：`src/eval/py/display.ts`
+- 用户触发的 Python 运行的交互模式渲染器：`src/modes/components/eval-execution.ts`
+- 运行时/环境过滤与 Python 解析：`src/eval/py/runtime.ts`
 
-## What eval's Python backend is
+## eval 的 Python 后端是什么
 
-The `eval` tool executes one Python cell per call inside a retained `python` subprocess that speaks NDJSON over stdin/stdout. No Jupyter gateway and no extra pip dependencies are required. The bundled runner uses Python 3.10 syntax (`str | None`), so the effective requirement is Python 3.10+. Rich `display()` output (PIL, pandas, plotly, matplotlib figures) works because the wrapper implements MIME-bundle dispatch.
+`eval` 工具在一次调用中执行一个 Python 代码单元，运行在通过 stdin/stdout 使用 NDJSON 通信的常驻 `python` 子进程中。无需 Jupyter 网关，也无需额外的 pip 依赖。打包的运行器使用 Python 3.10 语法（`str | None`），因此实际要求是 Python 3.10+。富 `display()` 输出（PIL、pandas、plotly、matplotlib 图形）之所以可用，是因为包装器实现了 MIME 包分派。
 
-Current tool input:
+当前工具输入：
 
 ```ts
 {
@@ -31,37 +31,37 @@ Current tool input:
 }
 ```
 
-The session-scoped wire schema advertises only enabled runtimes. The static implementation also supports `"js"`, `"rb"`, and `"jl"`; Python and JavaScript default on, while Ruby and Julia are opt-in. The tool is `concurrency = "exclusive"` for a session, so calls do not overlap. State persists across separate calls to the same language runtime.
+会话作用域的线协议 schema 仅声明已启用的运行时。静态实现同样支持 `"js"`、`"rb"` 和 `"jl"`；Python 与 JavaScript 默认开启，而 Ruby 与 Julia 需显式启用。工具的 `concurrency = "exclusive"` 针对一个会话，因此调用不会并发。同一种语言运行时的多次调用之间状态会保留。
 
-## Kernel lifecycle
+## 内核生命周期
 
-Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to an `omp-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
+每个 Python 内核是一个独立的子进程：`<resolved-python> -u <runner.py>`。运行器随宿主页二进制一同打包（通过 Bun 文本导入加载），按脚本哈希写入操作系统临时目录下名为 `omp-python-runner` 的缓存中一次，后续启动复用同一文件。
 
-Kernel startup sequence:
+内核启动顺序：
 
-1. Availability check (`checkPythonKernelAvailability`) — verifies that a Python interpreter resolves and runs.
-2. Spawn `python -u runner.py` with filtered env and `cwd`.
-3. Send an init request that runs `os.chdir(cwd)`, injects env entries, and adds `cwd` to `sys.path`.
-4. Execute `PYTHON_PRELUDE` (idempotent — only initializes once per process).
+1. 可用性检查（`checkPythonKernelAvailability`）—— 验证 Python 解释器能够解析并运行。
+2. 以经过过滤的环境和 `cwd` 启动 `python -u runner.py`。
+3. 发送初始化请求，执行 `os.chdir(cwd)`，注入环境变量，并将 `cwd` 加入 `sys.path`。
+4. 执行 `PYTHON_PRELUDE`（幂等 —— 每个进程只初始化一次）。
 
-Kernel shutdown:
+内核关闭：
 
-- Send `{"type": "exit"}` over stdin.
-- Wait for process exit with `SHUTDOWN_GRACE_MS` budget.
-- Escalate to `SIGTERM` and finally `SIGKILL` if the process does not exit in time.
+- 通过 stdin 发送 `{"type": "exit"}`。
+- 在 `SHUTDOWN_GRACE_MS` 预算内等待进程退出。
+- 如果进程在该时间内未退出，则升级为 `SIGTERM`，最终使用 `SIGKILL`。
 
-## Wire protocol (NDJSON, host ↔ runner)
+## 线协议（NDJSON，宿主 ↔ 运行器）
 
-One JSON object per line, UTF-8, `\n` terminated.
+每行一个 JSON 对象，UTF-8 编码，以 `\n` 结尾。
 
-Host → runner:
+宿主 → 运行器：
 
 ```jsonc
 {"id": "<reqId>", "code": "<source>", "silent": false, "storeHistory": true, "cwd": "<optional>", "env": {"KEY": "VAL"}}
 {"type": "exit"}
 ```
 
-Runner → host:
+运行器 → 宿主：
 
 ```jsonc
 {"type": "started",  "id": "<reqId>"}
@@ -73,11 +73,11 @@ Runner → host:
 {"type": "done",     "id": "<reqId>", "status": "ok"|"error", "executionCount": N, "cancelled": false}
 ```
 
-Status events the prelude emits (e.g. `_emit_status("find", count=…)`) ship inside display bundles under `application/x-omp-status` so the existing TUI status renderer keeps working.
+预置代码发出的状态事件（例如 `_emit_status("find", count=…)`）以 `application/x-omp-status` 形式随显示包一起传递，从而现有 TUI 状态渲染器可以继续工作。
 
-## Magics
+## 魔术命令
 
-The runner's source transformer rewrites IPython-style magics to plain Python calls before parsing. Supported set:
+运行器的源转换器在解析之前将 IPython 风格的魔术命令重写为普通的 Python 调用。支持的集合：
 
 | Magic                             | Effect                                                                                                                                                      |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -99,132 +99,132 @@ The runner's source transformer rewrites IPython-style magics to plain Python ca
 | `!cmd` / `var = !cmd`             | Run command via subprocess shell; returns an SList-style result with `.n` / `.s` helpers.                                                                   |
 | `var = %name args`                | Assignment forms work for line magics and `!cmd`.                                                                                                           |
 
-Unknown magic names raise `NameError: UsageError: ...` inside the cell.
+未知的魔术命令会在代码单元内抛出 `NameError: UsageError: ...`。
 
-## Session persistence semantics
+## 会话持久化语义
 
-`python.kernelMode` controls retained kernel reuse:
+`python.kernelMode` 控制常驻内核的复用方式：
 
-- `session` (default)
-  - Reuses kernel sessions keyed by namespaced eval session id plus normalized cwd and interpreter.
-  - Multiple owners can share the same retained kernel for that key.
-  - Calls through the tool are exclusive, so tool invocations do not overlap.
-  - A dead retained subprocess is replaced before execution.
-  - If the subprocess dies during execution, it is replaced and the call is retried once.
+- `session`（默认）
+  - 按命名空间化的 eval 会话 id 加上规范化后的 cwd 与解释器作为键，复用内核会话。
+  - 多个所有者可以共享该键下的同一个常驻内核。
+  - 通过该工具的调用是排他的，因此工具调用不会重叠。
+  - 已死的常驻子进程会在执行前被替换。
+  - 如果子进程在执行期间死亡，会进行替换并重试该调用一次。
 - `per-call`
-  - Spawns a fresh subprocess for each call.
-  - Shuts the subprocess down after the call.
-  - No cross-call state persistence.
+  - 每次调用都会启动一个新的子进程。
+  - 调用结束后关闭该子进程。
+  - 调用之间不保留状态。
 
-### State across eval calls
+### eval 调用之间的状态
 
-Each tool call contains one cell. Python calls run sequentially because the tool is exclusive, and later calls reuse the selected retained kernel in `session` mode.
+每次工具调用包含一个代码单元。Python 调用按顺序执行，因为该工具是排他的；在 `session` 模式下，后续调用会复用所选的常驻内核。
 
-If a cell fails, definitions and mutations completed before the error can remain in kernel memory. `reset: true` resets only the selected language runtime before that call; other language runtimes are untouched.
+如果某个代码单元失败，在错误发生之前完成的定义和变更可能会保留在内核内存中。`reset: true` 只会在该调用之前重置所选的语言运行时；其他语言运行时不受影响。
 
-## Environment filtering and runtime resolution
+## 环境过滤与运行时解析
 
-Environment is filtered before launching the runner:
+在启动运行器之前会对环境进行过滤：
 
-- Allowlist includes core vars like `PATH`, `HOME`, locale vars, `VIRTUAL_ENV`, `PYTHONPATH`, etc.
-- Allow-prefixes: `LC_`, `XDG_`, `PI_`
-- Denylist strips common API keys (OpenAI/Anthropic/Gemini/etc.)
+- 白名单包含 `PATH`、`HOME`、区域设置变量、`VIRTUAL_ENV`、`PYTHONPATH` 等核心变量。
+- 允许前缀：`LC_`、`XDG_`、`PI_`
+- 黑名单移除常见的 API 密钥（OpenAI/Anthropic/Gemini 等）
 
-Runtime selection order (skipped entirely when the `python.interpreter` setting names an explicit executable):
+运行时选择顺序（当 `python.interpreter` 设置显式指定了可执行文件时，整套流程会被跳过）：
 
-1. Active/located venv (`VIRTUAL_ENV`, then `CONDA_PREFIX`, then `<cwd>/.venv`, `<cwd>/venv`)
-2. Managed venv at `~/.omp/python-env`
-3. `python` or `python3` on PATH
+1. 活动/已定位的 venv（`VIRTUAL_ENV`，接着 `CONDA_PREFIX`，接着 `<cwd>/.venv`，`<cwd>/venv`）
+2. `~/.omp/python-env` 下的托管 venv
+3. PATH 中的 `python` 或 `python3`
 
-When a venv is selected, its bin/Scripts path is prepended to `PATH`.
+当选择 venv 时，其 bin/Scripts 路径会被前置到 `PATH` 中。
 
-The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` so streamed output reaches the host promptly.
+运行器还会接收 `PYTHONUNBUFFERED=1` 与 `PYTHONIOENCODING=utf-8`，以便流式输出能够及时到达宿主。
 
-## Tool availability and mode selection
+## 工具可用性与模式选择
 
-The backend settings `eval.py` / `eval.js` default to `true`; `eval.rb` / `eval.jl` default to `false`. Optional boolean environment flags `PI_PY`, `PI_JS`, `PI_RB`, and `PI_JL` override their corresponding setting independently.
+后端设置 `eval.py` / `eval.js` 默认为 `true`；`eval.rb` / `eval.jl` 默认为 `false`。可选的布尔环境变量 `PI_PY`、`PI_JS`、`PI_RB` 与 `PI_JL` 各自独立地覆盖对应的设置。
 
-The tool's session-scoped schema lists only enabled runtimes. If Python preflight fails while another runtime is enabled, `eval` remains available for that runtime and a `py` call reports a Python-backend availability error with enabled alternatives.
+该工具的会话作用域 schema 仅列出已启用的运行时。如果 Python 预检失败而另一个运行时处于启用状态，则 `eval` 对该运行时仍然可用，`py` 调用会报告一个 Python 后端不可用的错误，并列出其他可用的运行时。
 
-Python prelude helpers include `agent(prompt, *, agent="task", label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None, handle=False)`. It synchronously calls the host bridge and returns final text, or parsed data when `schema` is supplied. `schema_mode` selects permissive or strict structured-output handling; the isolation/apply/merge flags control task worktree behavior. With `handle=True`, it returns a DAG node dict (`{"text", "output", "handle", "id", "agent"}`) whose handle is the recoverable `agent://<id>` URI; parsed output is also stored under `"data"` when available.
+Python 预置辅助函数包含 `agent(prompt, *, agent="task", label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None, handle=False)`。它会同步调用宿主桥接，并在提供 `schema` 时返回最终文本或已解析的数据。`schema_mode` 选择宽松或严格的结构化输出处理；`isolated`/`apply`/`merge` 标志控制任务工作树行为。当 `handle=True` 时，它返回一个 DAG 节点字典（`{"text", "output", "handle", "id", "agent"}`），其中 `handle` 是可恢复的 `agent://<id>` URI；当存在已解析的输出时，也会存放在 `"data"` 键下。
 
-## Execution flow and cancellation/timeout
+## 执行流程与取消/超时
 
-### Cell timeout
+### 代码单元超时
 
-`timeout` is in seconds and defaults to 30. `0` disables the cell timeout; nonzero values are clamped to `1..3600` seconds and by a positive `tools.maxTimeout` ceiling before being passed to `IdleTimeout`. The timeout is suspended while a host-side `agent()` / `parallel()` / `completion()` bridge call is in flight: those calls emit reference-counted pause/resume events through `withBridgeTimeoutPause`, and a fresh timeout window begins when control returns.
+`timeout` 以秒为单位，默认为 30。`0` 表示禁用代码单元超时；非零值会被夹紧到 `1..3600` 秒之间，并受正值的 `tools.maxTimeout` 上限约束，然后传给 `IdleTimeout`。在宿主侧 `agent()` / `parallel()` / `completion()` 桥接调用进行期间，超时会被暂停：这些调用通过 `withBridgeTimeoutPause` 发出引用计数的 pause/resume 事件，控制流返回时将启动一个新的超时窗口。
 
-The pause/resume events are the sole mechanism that suspends the budget. Compute, `stdout`/`stderr`, `log()`/`phase()`, and ordinary tool calls count against it. The tool combines caller, session, and watchdog abort signals with `AbortSignal.any(...)`; the backend does not arm a competing deadline.
+pause/resume 事件是唯一能够暂停该预算的机制。计算、`stdout`/`stderr`、`log()`/`phase()` 以及普通的工具调用都会计入其中。该工具通过 `AbortSignal.any(...)` 将调用方、会话以及看门狗的中止信号合并使用；后端不会另外启动一个相互竞争的截止时间。
 
-### Kernel execution cancellation
+### 内核执行取消
 
-On abort/timeout:
+发生中止/超时时：
 
-- The host sends `kill("SIGINT")` to the runner subprocess.
-- The runner's exec-time signal handler raises `KeyboardInterrupt` inside the user code.
-- Result includes `cancelled=true`; a kernel timeout is annotated as `eval cell timed out after <n>s; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`
-- Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
+- 宿主向运行器子进程发送 `kill("SIGINT")`。
+- 运行器在执行期注册的信号处理函数会在用户代码内抛出 `KeyboardInterrupt`。
+- 结果会包含 `cancelled=true`；内核超时会被注释为 `eval cell timed out after <n>s; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`
+- 在两次请求之间，运行器将 SIGINT 设为 `SIG_IGN`，以避免误发的取消信号把内核整个关掉。
 
-If the runner does not emit `done` within 5s of the interrupt (`INTERRUPT_ESCALATION_MS` — e.g. stuck in C code holding the GIL), the host shuts the subprocess down (escalating `exit` → `SIGTERM` → `SIGKILL`), the cell is annotated as kernel-killed, and the kernel is recreated on the next call.
+如果在中断后 5 秒内运行器未发出 `done`（`INTERRUPT_ESCALATION_MS` —— 例如卡在持有 GIL 的 C 代码中），宿主会关闭该子进程（依次升级 `exit` → `SIGTERM` → `SIGKILL`），将该代码单元标记为内核被杀，并在下一次调用时重建内核。
 
-### stdin behavior
+### stdin 行为
 
-Interactive stdin is not supported. The runner does not forward `input()` prompts; user code that calls `input()` blocks until cancellation.
+不支持交互式 stdin。运行器不会转发 `input()` 提示；调用 `input()` 的用户代码会一直阻塞，直至被取消。
 
-## Output capture and rendering
+## 输出捕获与渲染
 
-### Captured output classes
+### 捕获的输出类别
 
-From runner frames:
+来自运行器帧：
 
-- `stdout` / `stderr` → plain text chunks
-- `display` / `result` → rich display handling (MIME bundle)
-- `error` → traceback text
-- `application/x-omp-status` MIME inside `display` → structured status events
+- `stdout` / `stderr` → 纯文本块
+- `display` / `result` → 富显示处理（MIME 包）
+- `error` → 回溯文本
+- `display` 内的 `application/x-omp-status` MIME → 结构化状态事件
 
-Display MIME precedence:
+显示 MIME 优先级：
 
 1. `text/markdown`
 2. `text/plain`
-3. `text/html` (converted to basic markdown)
+3. `text/html`（转换为基本 markdown）
 
-Additionally captured as structured outputs:
+另外作为结构化输出捕获：
 
-- `application/json` → JSON tree data
-- `image/png` / `image/jpeg` → image payloads
-- `application/x-omp-status` → status events
+- `application/json` → JSON 树数据
+- `image/png` / `image/jpeg` → 图像负载
+- `application/x-omp-status` → 状态事件
 
 ### Matplotlib
 
-The runner sets `MPLBACKEND=Agg` as an environ default so figures render off-screen. After every cell, `pyplot.get_fignums()` is iterated; each figure is saved to PNG, emitted as an `image/png` display, and closed.
+运行器将 `MPLBACKEND=Agg` 设为默认环境变量，以便图形在离屏渲染。每个代码单元结束后，遍历 `pyplot.get_fignums()`；每张图形被保存为 PNG，作为 `image/png` 显示发出，并关闭。
 
-### Storage and truncation
+### 存储与截断
 
-Output is streamed through `OutputSink` and may be persisted to artifact storage. Tool results can include truncation metadata and `artifact://<id>` for full output recovery.
+输出通过 `OutputSink` 进行流式传输，并可持久化到产物存储中。工具结果可以包含截断元数据以及用于恢复完整输出的 `artifact://<id>`。
 
-### Renderer behavior
+### 渲染器行为
 
-- Tool renderer (`eval-render.ts`, re-exported from `eval.ts`):
-  - shows code-cell blocks with per-cell status
-  - collapsed preview defaults to 10 lines
-  - supports expanded mode for all output retained in the tool result
-- Interactive renderer (`eval-execution.ts`):
-  - used for user-triggered Python execution in TUI
-  - collapsed preview defaults to 20 lines
-  - clamps very long individual lines to 4000 chars for display safety
-  - shows cancellation/error/truncation notices
+- 工具渲染器（`eval-render.ts`，从 `eval.ts` 重新导出）：
+  - 显示带有逐代码单元状态的代码块
+  - 折叠预览默认为 10 行
+  - 支持对工具结果中保留的所有输出进行展开
+- 交互渲染器（`eval-execution.ts`）：
+  - 用于 TUI 中用户触发的 Python 执行
+  - 折叠预览默认为 20 行
+  - 为安全起见，将非常长的单行夹紧到 4000 字符
+  - 显示取消/错误/截断提示
 
-## Operational troubleshooting
+## 运行期故障排查
 
-- **Python backend not available** — Check `eval.py`, `PI_PY`, and that `python`/`python3` is on PATH. If another backend is enabled, use its advertised language token.
-- **No Python on PATH** — Install a system Python 3.10+ or place a compatible venv at `~/.omp/python-env`. `omp setup python --check` reports the resolved interpreter.
-- **Execution hangs then times out** — Increase `timeout` for legitimate work or set it to `0` to disable the watchdog. For stuck native code, cancellation sends `SIGINT` first and then escalates; session mode recreates the kernel on the next request if it had to be killed.
-- **stdin/input prompts in Python code** — `input()` is not supported; pass data programmatically.
-- **Working directory errors** — Python runs in the session cwd. Use `%cd` or `os.chdir()` inside the retained kernel to change it.
+- **Python 后端不可用** —— 检查 `eval.py`、`PI_PY`，并确认 `python`/`python3` 在 PATH 中。如果启用了其他后端，请使用其声明的语言标识。
+- **PATH 中没有 Python** —— 安装系统 Python 3.10+，或在 `~/.omp/python-env` 放置一个兼容的 venv。`omp setup python --check` 会报告解析到的解释器。
+- **执行挂起并最终超时** —— 对于合理的工作请增大 `timeout`，或将其设为 `0` 以禁用看门狗。对于卡住的原生代码，取消会先发送 `SIGINT`，再进行升级；如果不得不杀死内核，会话模式会在下一次请求时重建该内核。
+- **Python 代码中出现 stdin/input 提示** —— 不支持 `input()`；请以编程方式传入数据。
+- **工作目录错误** —— Python 运行在会话 cwd 中。请在常驻内核内使用 `%cd` 或 `os.chdir()` 来更改它。
 
-## Relevant environment variables
+## 相关的环境变量
 
-- `PI_PY` / `PI_JS` / `PI_RB` / `PI_JL` — per-backend exposure overrides
-- `PI_PYTHON_SKIP_CHECK=1` — bypass Python preflight/warm checks
-- `PI_PYTHON_INTEGRATION=1` — enable gated integration tests that spawn a real Python
-- `PI_PYTHON_IPC_TRACE=1` — log NDJSON frames exchanged with the runner subprocess
+- `PI_PY` / `PI_JS` / `PI_RB` / `PI_JL` —— 逐后端的暴露开关覆盖
+- `PI_PYTHON_SKIP_CHECK=1` —— 跳过 Python 预检/预热
+- `PI_PYTHON_INTEGRATION=1` —— 启用会真正派生 Python 的受控集成测试
+- `PI_PYTHON_IPC_TRACE=1` —— 记录与运行器子进程交换的 NDJSON 帧

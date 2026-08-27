@@ -1,61 +1,61 @@
-# Vibe mode
+# Vibe 模式
 
-Vibe mode turns the top-level interactive session into a **director** for persistent background worker sessions instead of letting it edit or execute commands itself. The director's active tools are reduced to `read`, optional parent-owned `todo`, and five worker-control tools. Workers do the searching, editing, running, and building; the director verifies their claims by reading touched files. When available, `todo` belongs only to the parent director.
+Vibe 模式把顶层交互会话变成一个 **导演**（director），用于调度常驻的后台 worker 会话，而不是由它自己去编辑或执行命令。导演的活跃工具被削减为 `read`、可选的父级拥有的 `todo`，以及五个 worker 控制工具。Worker 负责搜索、编辑、运行和构建；导演通过读取被改动的文件来核实它们的主张。在可用时，`todo` 仅属于父级导演。
 
-## Enabling and disabling
+## 启用与关闭
 
-Toggle it with the `/vibe` slash command:
+通过 `/vibe` 斜杠命令切换：
 
 ```text
-/vibe                 # enter vibe mode
-/vibe fix the flaky test in packages/tui   # enter and submit a first directive
-/vibe                 # run again to exit
+/vibe                 # 进入 vibe 模式
+/vibe fix the flaky test in packages/tui   # 进入并提交第一条指令
+/vibe                 # 再次运行以退出
 ```
 
-- Entering activates a parent-session worker scope, installs the vibe tools, reduces the active toolset to `read`, optional parent-owned `todo`, and the vibe tools, and injects the director instructions.
-- An inline prompt (`/vibe <prompt>`) enters the mode and submits that prompt as the first directive.
-- Exiting restores the prior toolset, cancels in-flight worker turns, kills every worker session in the scope, and persists terminal lifecycle records. A worker never outlives an intentional mode exit.
-- Vibe mode is mutually exclusive with both active **and paused** plan/goal modes; exit those modes first.
-- Starting, forking, moving, or handing off the session is rejected while vibe mode is active.
-- The status line shows a `Vibe` indicator while the mode is on.
+- 进入时，会激活一个父会话的 worker 作用域，安装 vibe 工具，把活跃工具集削减为 `read`、可选的父级拥有的 `todo` 以及 vibe 工具，并注入导演指令。
+- 内联提示（`/vibe <prompt>`）会进入该模式并将该提示作为第一条指令提交。
+- 退出时会恢复先前的工具集、取消正在进行的 worker 轮次、终止该作用域内的所有 worker 会话，并持久化终态的生命周期记录。Worker 不会在一次主动的模式退出之后继续存活。
+- Vibe 模式与**当前正在运行**以及**已暂停**的 plan/goal 模式互斥；必须先退出这些模式。
+- 当 vibe 模式处于激活状态时，启动、分叉、移动或交接会话的请求都会被拒绝。
+- 模式开启时，状态栏会显示一个 `Vibe` 指示器。
 
-`/vibe` is an interactive-TUI command. The mode and worker lifecycle events are persisted with the parent session. Resuming a session whose current mode is `vibe` rehydrates completed workers as idle/parked sessions with their child transcripts; a turn interrupted by process restart is not resumed automatically. Explicitly killed or mode-exit workers stay terminal.
+`/vibe` 是一个交互式 TUI 命令。该模式以及 worker 的生命周期事件会随父会话一起持久化。恢复一个当前模式为 `vibe` 的会话时，已完成的 worker 会以 idle/parked 会话的形式重新挂载，并带上它们的子会话记录；由进程重启打断的轮次不会自动恢复。被显式终止或随模式退出而结束的 worker 则保持终态。
 
-## The two worker tiers
+## 两级 worker
 
-Every worker is a real, keep-alive task-executor subagent with the normal coding tool surface and its own persisted child transcript. Choose a tier when spawning:
+每一个 worker 都是一个真实且保持存活的 task-executor 子代理，拥有常规的编码工具集以及各自持久化的子会话记录。在生成 worker 时选择一个等级：
 
-| Tier   | Bundled agent | Default role | Use for                                             |
-| ------ | ------------- | ------------ | --------------------------------------------------- |
-| `fast` | `sonic`       | `@smol`      | Mechanical execution, drafts, high-volume work      |
-| `good` | `task`        | `@task`      | Design, judgment calls, and reviewing `fast` output |
+| 等级   | 内置代理 | 默认角色  | 适用场景                                       |
+| ------ | -------- | --------- | ---------------------------------------------- |
+| `fast` | `sonic`  | `@smol`   | 机械式执行、草稿以及高吞吐量的工作             |
+| `good` | `task`   | `@task`   | 设计、需做判断的工作，以及审阅 `fast` 的输出   |
 
-The tier always selects the bundled `sonic` or `task` definition, not a same-named discovered custom agent. Model resolution otherwise matches task-agent routing: `task.agentModelOverrides.sonic` / `.task` wins over the bundled agent model, and role aliases resolve through `modelRoles`, with the parent active/default model as fallback.
+该等级始终选择内置的 `sonic` 或 `task` 定义，而不是同名且已被发现的定制代理。模型解析在其他方面与 task 代理的路由保持一致：`task.agentModelOverrides.sonic` / `.task` 优先于内置代理的模型；角色别名通过 `modelRoles` 解析，并以父会话的当前/默认模型作为回退。
 
-## Worker-control tools
+## Worker 控制工具
 
-| Tool         | Input and behavior                                                                                                                                                                                   |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibe_spawn` | `{ cli: "fast" \| "good", prompt, name? }`. Starts a blank worker with a complete, self-contained first brief. `name` is sanitized/capped at 48 characters; an id is generated when omitted.         |
-| `vibe_send`  | `{ session, message }`. Steers a streaming turn at its next step; if a turn exists but cannot be steered, queues an automatic next turn; if idle/parked, starts the next turn immediately.           |
-| `vibe_wait`  | `{ sessions?, timeout? }`. Waits for the first watched turn to settle (all in-flight workers when omitted), default 30 seconds. It acknowledges settled jobs so their result is not delivered twice. |
-| `vibe_kill`  | `{ session }`. Cancels an in-flight turn, clears queued messages, releases the worker, and retains any initialized transcript at `history://<id>`.                                                   |
-| `vibe_list`  | `{}`. Lists sessions in spawn order with tier, state, turn/queue counts, resolved model, and recent activity.                                                                                        |
+| 工具          | 输入与行为                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vibe_spawn`  | `{ cli: "fast" \| "good", prompt, name? }`。以完整且自包含的第一条任务说明启动一个全新的 worker。`name` 会被清洗并限制在 48 个字符以内；省略时自动生成一个 id。                                    |
+| `vibe_send`   | `{ session, message }`。在流式轮次的下一步进行引导；若轮次已存在但无法被引导，则将消息排入自动的下一轮；若 worker 处于 idle/parked，则立即开启下一轮。                                         |
+| `vibe_wait`   | `{ sessions?, timeout? }`。等待第一个被监视的轮次结束（省略时等待所有进行中的 worker），默认 30 秒。它会确认已结束的作业，以避免其结果被重复送达。                                              |
+| `vibe_kill`   | `{ session }`。取消一个进行中的轮次，清空已排队的消息，释放该 worker，并在 `history://<id>` 保留任何已初始化的记录。                                                                            |
+| `vibe_list`   | `{}`。按生成顺序列出会话，包含等级、状态、轮次/队列计数、解析出的模型以及最近的活动。                                                                                                            |
 
-Spawn and send return immediately. Each worker-turn result self-delivers into the director conversation through the async job manager; long response text is preview-capped there, with full output available at `agent://<id>`. Running `fast` and `good` workers on independent workstreams concurrently is the normal shape.
+`vibe_spawn` 和 `vibe_send` 会立即返回。每个 worker 轮次的结果会通过异步作业管理器自动投递到导演的对话中；较长的回复文本会在这里做预览截断，完整输出可在 `agent://<id>` 获取。在独立的工作流上同时运行 `fast` 和 `good` worker 是常见形态。
 
-## Scope and failure behavior
+## 作用域与失败行为
 
-Worker ids are scoped to the owning agent and parent session; a worker from another scope is reported as unknown and cannot be controlled. Spawning requires the session async job manager. Spawn failures tear down the partial record; turn failures self-deliver as failed job results, while a recoverable keep-alive worker returns to `idle` for another `vibe_send`. A worker whose registered child session can no longer be resolved becomes `dead`.
+Worker id 的作用域归属于所属代理与父会话；来自其他作用域的 worker 会被报告为未知且无法被控制。生成 worker 需要会话的异步作业管理器。生成失败会拆掉不完整的记录；轮次失败会以失败的作业结果自动投递，而一个可恢复的保持存活的 worker 会回到 `idle` 以便再次接收 `vibe_send`。当某个 worker 已注册的子会话无法再被解析时，它会变成 `dead`。
 
-## Workflow
+## 工作流程
 
-1. Split the request into independent workstreams — one persistent worker per workstream so each accumulates useful conversation context.
-2. Call `vibe_spawn` with a self-contained brief: files, constraints, and observable acceptance criteria. Workers start blank and never see the director's conversation.
-3. Keep directing other workers while turns are in flight. Use `vibe_wait` only when blocked; a timed-out wait can be reissued.
-4. Use `vibe_send` naturally for corrections and next steps. A mid-turn send steers when possible; otherwise it becomes the worker's next turn automatically.
-5. When a result arrives, `read` touched files and inspect full output when the preview is insufficient. Reconcile verified work through the optional parent `todo`.
-6. Route by difficulty: draft with `fast`, escalate to `good` when mechanical execution stalls or judgment is required.
-7. Use `vibe_kill` for a finished/stuck worker. Exiting the mode kills the entire remaining scope.
+1. 将请求拆分为独立的工作流——每个工作流对应一个常驻 worker，以便各自积累有用的对话上下文。
+2. 使用自包含的任务说明调用 `vibe_spawn`：包括文件、约束以及可观测的验收标准。Worker 启动时是空白的，看不到导演的对话内容。
+3. 在轮次进行中继续指挥其他 worker。仅在阻塞时才使用 `vibe_wait`；超时的等待可以重新发起。
+4. 自然地使用 `vibe_send` 进行修正和推进下一步。轮次中途的发送会在可行时进行引导；否则它会自动成为该 worker 的下一轮。
+5. 当结果到达时，`read` 那些被改动的文件，并在预览不足时查看完整输出。可通过可选的父级 `todo` 同步已核实的工作。
+6. 按难度路由：用 `fast` 起草，在机械执行卡住或需要判断时升级到 `good`。
+7. 对已完成或卡住的 worker 使用 `vibe_kill`。退出模式会终止整个剩余作用域。
 
-The director remains responsible for the final outcome: worker completion means the turn settled, not that its claims are correct.
+导演仍然对最终结果负责：worker 完成只意味着该轮次已结束，并不代表它的主张是正确的。

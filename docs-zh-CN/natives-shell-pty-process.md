@@ -1,13 +1,13 @@
-# Natives Shell, PTY, Process, and Key Internals
+# Natives Shell、PTY、Process 与 Key 内部机制
 
-This document covers execution/process/terminal primitives in `@oh-my-pi/pi-natives`: `shell`, `pty`, `ps`, and `keys`, using the architecture terms from `docs/natives-architecture.md`.
+本文档介绍 `@oh-my-pi/pi-natives` 中的 execution/process/terminal 原语：`shell`、`pty`、`ps` 和 `keys`，使用的架构术语来自 `docs/natives-architecture.md`。
 
-## Implementation files
+## 实现文件
 
 - `crates/pi-natives/src/shell.rs`
 - `crates/pi-shell/src/shell.rs`
 - `crates/pi-shell/src/cancel.rs`
-- `crates/pi-shell/src/windows.rs` (Windows-only PATH enrichment)
+- `crates/pi-shell/src/windows.rs`（仅 Windows 上的 PATH 补全）
 - `crates/pi-shell/src/process.rs`
 - `crates/pi-natives/src/pty.rs`
 - `crates/pi-natives/src/ps.rs`
@@ -15,199 +15,199 @@ This document covers execution/process/terminal primitives in `@oh-my-pi/pi-nati
 - `crates/pi-natives/src/task.rs`
 - `packages/natives/native/index.d.ts`
 
-## Layer ownership
+## 分层职责
 
-- **Package entrypoint** (`packages/natives/native/index.js`): loads the `.node` addon and exports generated N-API bindings.
-- **Rust N-API module layer** (`crates/pi-natives/src/*`): JS-facing shell/PTY/process/key exports and callback bridging.
-- **Runtime core** (`crates/pi-shell/src/*`): brush shell execution, cancellation cleanup, minimizer integration, command fixups, and cross-platform process references.
-- **Consumers** (`packages/coding-agent`, `packages/tui`): higher-level session policy, output artifact/minimizer handling, render policy, and UI key handling.
+- **包入口**（`packages/natives/native/index.js`）：加载 `.node` 插件并导出生成的 N-API 绑定。
+- **Rust N-API 模块层**（`crates/pi-natives/src/*`）：面向 JS 的 shell/PTY/process/key 导出与回调桥接。
+- **运行时核心**（`crates/pi-shell/src/*`）：brush shell 执行、取消清理、minimizer 集成、命令修正以及跨平台进程引用。
+- **消费方**（`packages/coding-agent`、`packages/tui`）：更高级别的会话策略、输出 artifact/minimizer 处理、渲染策略以及 UI 按键处理。
 
-## Shell subsystem (`shell`)
+## Shell 子系统（`shell`）
 
-### API model
+### API 模型
 
-Shell execution modes:
+Shell 执行模式：
 
-1. **One-shot** via `executeShell(options, onChunk?)`.
-2. **Persistent session** via `new Shell(options?)` then `shell.run(...)` repeatedly.
+1. **一次性**调用 `executeShell(options, onChunk?)`。
+2. **持久会话**通过 `new Shell(options?)` 创建，然后反复调用 `shell.run(...)`。
 
-Both stream merged stdout/stderr text through a threadsafe callback and return `{ exitCode?, cancelled, timedOut, minimized?, workingDir? }`.
+两者都将合并后的 stdout/stderr 文本通过线程安全的回调流式输出，并返回 `{ exitCode?, cancelled, timedOut, minimized?, workingDir? }`。
 
-Persistent `Shell` also exposes `liveBackgroundJobCount()`, which silently reaps completed jobs and returns the number of live `&`/`nohup` children. This lets a host retain a per-call shell while background children remain alive; dropping the shell would kill them.
+持久化 `Shell` 还暴露 `liveBackgroundJobCount()`，它会在静默回收已结束作业后，返回存活的 `&`/`nohup` 子进程数量。这让宿主可以保留每个调用的 shell，而后台子进程保持存活；丢弃 shell 会将其终止。
 
-`ShellOptions` supports `sessionEnv`, `snapshotPath`, and optional output `minimizer`. `ShellExecuteOptions` additionally supports command, cwd, command-scoped `env`, timeout/signal, and minimizer. `ShellRunOptions` supports command, cwd, command-scoped env, timeout, and signal.
+`ShellOptions` 支持 `sessionEnv`、`snapshotPath` 和可选的输出 `minimizer`。`ShellExecuteOptions` 额外支持 command、cwd、命令作用域 `env`、timeout/signal 以及 minimizer。`ShellRunOptions` 支持 command、cwd、命令作用域 env、timeout 和 signal。
 
-### Session creation and environment model
+### 会话创建与环境模型
 
-Rust creates `brush_core::Shell` with:
+Rust 通过以下方式创建 `brush_core::Shell`：
 
-- inherited environment disabled (`do_not_inherit_env: true`), followed by explicit environment reconstruction from host env,
-- profile and rc loading skipped,
-- bash-mode builtins, with `exec` and `suspend` disabled,
-- native `sleep`, `timeout`, and `nohup` builtins registered,
-- skip-list for shell-sensitive vars (`PS1`, `PWD`, `SHLVL`, bash function exports, etc.),
-- a non-exported `env="$env"` fallback so PowerShell-style `$env:NAME` survives brush parameter expansion unless the user shadows `env`.
+- 禁用继承的环境（`do_not_inherit_env: true`），随后从宿主环境显式重建环境，
+- 跳过 profile 与 rc 加载，
+- 启用 bash 模式内建命令，禁用 `exec` 和 `suspend`，
+- 注册原生 `sleep`、`timeout` 和 `nohup` 内建命令，
+- 对 shell 敏感变量（`PS1`、`PWD`、`SHLVL`、bash 函数导出等）设置跳过列表，
+- 保留一个非导出的 `env="$env"` 兜底，以便 PowerShell 风格的 `$env:NAME` 在 brush 参数展开中得以保留，除非用户覆盖了 `env`。
 
-Session env behavior:
+会话环境行为：
 
-- `ShellOptions.sessionEnv` / one-shot `sessionEnv` is applied at session creation.
-- `ShellRunOptions.env` / one-shot `env` is command-scoped (`EnvironmentScope::Command`) and popped after the command.
-- `PATH` is merged specially on Windows with case-insensitive dedupe.
-- Windows-only path enrichment (`pi-shell/src/windows.rs`) appends discovered Git-for-Windows paths when present and not already included.
-- `snapshotPath`, when present, is sourced during session creation with stdout/stderr/stdin wired to null files.
+- `ShellOptions.sessionEnv` / 一次性 `sessionEnv` 在会话创建时应用。
+- `ShellRunOptions.env` / 一次性 `env` 是命令作用域（`EnvironmentScope::Command`），命令结束后弹出。
+- 在 Windows 上 `PATH` 以大小写不敏感方式去重合并。
+- 仅 Windows 的路径补全（`pi-shell/src/windows.rs`）在发现 Git-for-Windows 路径且尚未包含时将其追加。
+- 若存在 `snapshotPath`，会在会话创建时被 source，并将 stdout/stderr/stdin 接到 null 文件。
 
-### Runtime lifecycle and state transitions
+### 运行时生命周期与状态转换
 
-Persistent shell (`Shell.run`) uses this state machine:
+持久化 shell（`Shell.run`）使用如下状态机：
 
-- **Idle/Uninitialized**: `session: None`.
-- **Running**: first `run()` lazily creates a session, stores an abort token, executes command.
-- **Completed + keepalive**: if execution control flow is normal, abort state is cleared and session is reused.
-- **Completed + teardown**: if control flow is loop/script/shell-exit related, session is dropped.
-- **Cancelled/Timed out**: Tokio cancellation token is triggered, descendants started after the baseline snapshot receive termination waves, a 2-second graceful wait is allowed, the task may be aborted, and the persistent session is dropped if the lock can be acquired.
-- **Error**: session is dropped.
+- **Idle/Uninitialized**：`session: None`。
+- **Running**：首次 `run()` 延迟创建会话，存储 abort token，执行命令。
+- **Completed + keepalive**：若执行控制流正常，则清除 abort 状态并复用会话。
+- **Completed + teardown**：若控制流与 loop/script/shell-exit 相关，则丢弃会话。
+- **Cancelled/Timed out**：触发 Tokio 取消令牌，基线快照之后启动的子孙进程接收终止波次，给予 2 秒的优雅等待时间，任务可能被 abort；若能获取锁则丢弃持久会话。
+- **Error**：丢弃会话。
 
-One-shot shell (`executeShell`) always creates and drops a fresh session per call.
+一次性 shell（`executeShell`）始终为每次调用创建并丢弃一个新会话。
 
-### Streaming/output and minimizer behavior
+### 流式输出/输出与 minimizer 行为
 
-- Stdout/stderr are routed into a shared pipe and read concurrently.
-- Reader decodes UTF-8 incrementally; invalid byte sequences emit `U+FFFD` replacement chunks.
-- The command runs with `ProcessGroupPolicy::NewProcessGroup`.
-- After the foreground command completes, the reader drains until EOF, 250ms of idle output, or 2s maximum; reader shutdown then gets a 250ms timeout.
-- Optional minimizer configuration can capture and rewrite output. When minimization occurs, the result includes `minimized` with filter name, replacement/original text, and byte counts.
-- A successful result can include `workingDir`, reflecting the shell's cwd after execution.
-- Consumers are responsible for persisting or displaying minimizer artifacts; the native result only carries the data.
+- stdout/stderr 被路由到共享管道并并发读取。
+- 读取器以增量方式解码 UTF-8；非法字节序列发出 `U+FFFD` 替换块。
+- 命令以 `ProcessGroupPolicy::NewProcessGroup` 运行。
+- 前台命令结束后，读取器会持续排空，直到 EOF、250ms 空闲输出或最长 2s；随后读取器关闭给予 250ms 超时。
+- 可选的 minimizer 配置可以捕获并改写输出。当发生 minimization 时，结果包含 `minimized`，包括 filter 名称、替换/原始文本以及字节数。
+- 成功结果可以包含 `workingDir`，反映执行后 shell 的 cwd。
+- 由消费方负责持久化或展示 minimizer artifact；原生结果只携带数据。
 
-### Cancellation, timeout, and abort
+### 取消、超时与 abort
 
-- `CancelToken` is constructed from `timeoutMs` and optional `AbortSignal`, then converted into the shared `pi_shell::cancel::CancelToken`.
-- On cancellation/timeout, shell cancellation token is triggered, descendant cleanup runs, then the task gets a 2-second graceful window before forced abort.
-- Structured result flags are used:
-  - timeout -> `exitCode` omitted, `timedOut: true`.
-  - abort signal / `Shell.abort()` -> `exitCode` omitted, `cancelled: true`.
+- `CancelToken` 由 `timeoutMs` 和可选的 `AbortSignal` 构造，然后转换为共享的 `pi_shell::cancel::CancelToken`。
+- 在取消/超时时，触发 shell 取消令牌，运行子孙进程清理，然后任务获得 2 秒的优雅等待窗口，之后强制 abort。
+- 使用结构化的结果标志：
+  - timeout -> 省略 `exitCode`，`timedOut: true`。
+  - abort signal / `Shell.abort()` -> 省略 `exitCode`，`cancelled: true`。
 
-`Shell.abort()` behavior:
+`Shell.abort()` 行为：
 
-- aborts the current running command for that `Shell` instance through the stored `AbortToken`,
-- resolves successfully even when nothing is running.
+- 通过存储的 `AbortToken` abort 该 `Shell` 实例的当前运行命令，
+- 即使没有命令在运行也能成功 resolve。
 
-### Failure behavior
+### 失败行为
 
-Common surfaced errors include:
+常见的暴露错误包括：
 
-- session init failures (`Failed to initialize shell`),
-- cwd errors (`Failed to set cwd`),
-- env set/pop failures,
-- snapshot source failures (`Failed to source snapshot`),
-- pipe creation/clone failures,
-- execution failure (`Shell execution failed: ...`),
-- task wrapper failures (`Shell execution task failed: ...`).
+- 会话初始化失败（`Failed to initialize shell`），
+- cwd 错误（`Failed to set cwd`），
+- 环境 set/pop 失败，
+- snapshot source 失败（`Failed to source snapshot`），
+- 管道创建/clone 失败，
+- 执行失败（`Shell execution failed: ...`），
+- 任务包装器失败（`Shell execution task failed: ...`）。
 
-## PTY subsystem (`pty`)
+## PTY 子系统（`pty`）
 
-### API model
+### API 模型
 
-`new PtySession()` exposes:
+`new PtySession()` 暴露：
 
-- `start(options, onChunk?, onStart?) -> Promise<{ exitCode?, cancelled, timedOut }>` runs a command string through a shell.
-- `startArgv(options, onChunk?, onStart?)` runs an application and argument vector directly, without shell parsing.
+- `start(options, onChunk?, onStart?) -> Promise<{ exitCode?, cancelled, timedOut }>` 通过 shell 运行命令字符串。
+- `startArgv(options, onChunk?, onStart?)` 直接运行应用及其参数向量，不经过 shell 解析。
 - `write(data)`
 - `resize(cols, rows)`
 - `kill()`
 
-Both start methods invoke `onStart(error, pid)` after spawning (the implementation supplies `0` only if a platform child PID is unavailable). `PtyStartOptions` supports `command`, optional `cwd`, `env`, `timeoutMs`, `signal`, `cols`, `rows`, and `shell`; its default shell is `sh`. `PtyArgvStartOptions` instead requires `application` and `args` and has no `shell`.
+两个 start 方法都会在 spawn 之后调用 `onStart(error, pid)`（仅当平台子进程 PID 不可用时，实现才会传 `0`）。`PtyStartOptions` 支持 `command`、可选的 `cwd`、`env`、`timeoutMs`、`signal`、`cols`、`rows` 和 `shell`；默认 shell 是 `sh`。`PtyArgvStartOptions` 则要求提供 `application` 和 `args`，且不包含 `shell`。
 
-### Runtime lifecycle and state transitions
+### 运行时生命周期与状态转换
 
-`PtySession` state machine:
+`PtySession` 状态机：
 
-- **Idle**: `core: None`.
-- **Reserved**: `start()` installs control channel synchronously (`core: Some`) before async work begins, so `write/resize/kill` become immediately valid.
-- **Running**: blocking PTY loop handles child state, reader events, cancellation heartbeat, and control messages.
-- **Terminal closed / drain**: child exit or cancellation starts a short reader drain window.
-- **Finalized**: `core` is always reset to `None` after start task completion (success or error).
+- **Idle**：`core: None`。
+- **Reserved**：`start()` 在异步工作开始前同步安装控制通道（`core: Some`），使 `write/resize/kill` 立即可用。
+- **Running**：阻塞式 PTY 循环处理子进程状态、读取事件、取消心跳以及控制消息。
+- **Terminal closed / drain**：子进程退出或取消启动一个短暂的读取排空窗口。
+- **Finalized**：在 start 任务完成（成功或失败）后，`core` 总是被重置为 `None`。
 
-Concurrency guard:
+并发保护：
 
-- starting while already running returns `PTY session already running`.
+- 在已运行时再次启动会返回 `PTY session already running`。
 
-### Spawn/attach/write/read/terminate patterns
+### Spawn/attach/write/read/terminate 模式
 
-- PTY opened via `portable_pty::native_pty_system().openpty(...)`.
-- On Windows, `openpty()` is run on a helper thread with a 5s startup timeout; timeout rejects with `PTY creation timed out (5s). ConPTY may be unavailable on this system.`
-- `start()` runs the command through the configured shell:
-  - `cmd.exe`/`cmd` gets `/c`,
-  - `powershell`/`pwsh` gets `-Command`,
-  - other shells get `-lc`.
-- `startArgv()` passes each argument directly to `portable_pty::CommandBuilder`.
-- Default size is `120x40`; dimensions are clamped (`cols 20..400`, `rows 5..200`) on start and resize.
-- `write()` sends raw bytes to PTY stdin.
-- `resize()` sends a control message and clamps dimensions again.
-- `kill()` sends a control message that marks the run cancelled and terminates PTY process targets.
+- PTY 通过 `portable_pty::native_pty_system().openpty(...)` 打开。
+- 在 Windows 上，`openpty()` 在辅助线程上运行，并有 5s 启动超时；超时会以 `PTY creation timed out (5s). ConPTY may be unavailable on this system.` 拒绝。
+- `start()` 通过配置的 shell 运行命令：
+  - `cmd.exe`/`cmd` 使用 `/c`，
+  - `powershell`/`pwsh` 使用 `-Command`，
+  - 其他 shell 使用 `-lc`。
+- `startArgv()` 将每个参数直接传递给 `portable_pty::CommandBuilder`。
+- 默认尺寸为 `120x40`；在 start 和 resize 时对尺寸进行限制（`cols 20..400`，`rows 5..200`）。
+- `write()` 将原始字节发送到 PTY stdin。
+- `resize()` 发送控制消息并再次限制尺寸。
+- `kill()` 发送控制消息，将本次运行标记为 cancelled 并终止 PTY 进程目标。
 
-Output path:
+输出路径：
 
-- dedicated reader thread reads master stream,
-- incremental UTF-8 decode emits `U+FFFD` for invalid bytes,
-- chunks forwarded through N-API threadsafe callback.
+- 专用读取线程读取主端流，
+- 增量 UTF-8 解码对非法字节发出 `U+FFFD`，
+- 数据块通过 N-API 线程安全回调转发。
 
-Termination path:
+终止路径：
 
-- `terminate_pty_processes` targets the PTY process group when available and the child pid when available.
-- It sends the platform `TERM_SIGNAL`, calls `child.kill()`, then sends the platform `KILL_SIGNAL`.
-- On Windows, ConPTY input is closed before dropping the master; master drop is offloaded to a background thread and waited for up to 2s to avoid deadlock.
+- `terminate_pty_processes` 在可用时定位 PTY 进程组，并在可用时定位子进程 pid。
+- 它发送平台 `TERM_SIGNAL`，调用 `child.kill()`，然后发送平台 `KILL_SIGNAL`。
+- 在 Windows 上，丢弃主端之前会先关闭 ConPTY 输入；主端的 drop 被卸载到后台线程，并等待最多 2s 以避免死锁。
 
-### Cancellation and timeout semantics
+### 取消与超时语义
 
-- `timeoutMs` and `AbortSignal` feed a `CancelToken`.
-- Loop calls `ct.heartbeat()` periodically with a 16ms maximum wait cadence.
-- Timeout classification is based on the heartbeat error string containing `Timeout`.
-- Cancellation/kill starts a 300ms post-cancel drain window; normal child exit starts a 300ms post-exit drain window.
-- Final reader drain is 50ms on non-Windows and 500ms on Windows.
+- `timeoutMs` 和 `AbortSignal` 喂给 `CancelToken`。
+- 循环以最大 16ms 的等待节奏周期性地调用 `ct.heartbeat()`。
+- 超时分类基于心跳错误字符串是否包含 `Timeout`。
+- 取消/kill 启动 300ms 的取消后排空窗口；正常子进程退出启动 300ms 的退出后排空窗口。
+- 最终读取排空在非 Windows 上为 50ms，在 Windows 上为 500ms。
 
-### Failure behavior
+### 失败行为
 
-Error surfaces include:
+错误场景包括：
 
-- PTY allocation/open failure,
-- Windows PTY startup timeout,
-- PTY spawn failure,
-- writer/reader acquisition failure,
-- child status/wait failures,
-- lock poisoning,
-- control-channel disconnection (`PTY session is no longer available`).
+- PTY 分配/打开失败，
+- Windows PTY 启动超时，
+- PTY spawn 失败，
+- writer/reader 获取失败，
+- 子进程 status/wait 失败，
+- 锁中毒，
+- 控制通道断开（`PTY session is no longer available`）。
 
-Control call failures when not running:
+未运行时的控制调用失败：
 
-- `write/resize/kill` return `PTY session is not running`.
+- `write/resize/kill` 返回 `PTY session is not running`。
 
-## Process subsystem (`ps`)
+## 进程子系统（`ps`）
 
-### API model
+### API 模型
 
-Current JS surface is the `Process` class:
+当前 JS 表面是 `Process` 类：
 
 - `Process.fromPid(pid) -> Process | null`
 - `Process.fromPath(path) -> Process[]`
-- getters: `pid`, `ppid`
-- methods: `args()`, `killTree(signal?)`, `terminate(options?)`, `waitForExit(options?)`, `groupId()`, `children()`, `status()`
+- getters：`pid`、`ppid`
+- methods：`args()`、`killTree(signal?)`、`terminate(options?)`、`waitForExit(options?)`、`groupId()`、`children()`、`status()`
 
-`ProcessTerminateOptions` supports `{ group?, gracefulMs?, timeoutMs?, signal? }`. `ProcessWaitOptions` supports `{ timeoutMs?, signal? }`.
+`ProcessTerminateOptions` 支持 `{ group?, gracefulMs?, timeoutMs?, signal? }`。`ProcessWaitOptions` 支持 `{ timeoutMs?, signal? }`。
 
-### Behavior
+### 行为
 
-- `killTree(signal?)` sends the requested signal to the process and descendants, children first; on Windows the signal argument is ignored and processes are terminated via `TerminateProcess`.
-- `terminate(options?)` is async. By default it uses a 1000ms graceful phase and a 5000ms post-hard-kill wait. Passing `gracefulMs < 0` skips the graceful phase. `group: true` also targets the process group where supported; aborting its signal rejects the promise.
-- `waitForExit(options?)` resolves `true` when the process exits and `false` on timeout; aborting its signal rejects the promise.
+- `killTree(signal?)` 向进程及其子孙进程发送所请求的信号，先子进程后父进程；在 Windows 上忽略 signal 参数，并通过 `TerminateProcess` 终止进程。
+- `terminate(options?)` 是异步的。默认使用 1000ms 优雅阶段和 5000ms 硬终止后等待。传入 `gracefulMs < 0` 跳过优雅阶段。支持时 `group: true` 还会定位进程组；abort 其 signal 会 reject promise。
+- `waitForExit(options?)` 在进程退出时 resolve `true`，超时时 resolve `false`；abort 其 signal 会 reject promise。
 
-The platform-specific implementation lives in `pi_shell::process`; `crates/pi-natives/src/ps.rs` is a N-API shim plus re-exports used by PTY termination.
+平台特定实现位于 `pi_shell::process`；`crates/pi-natives/src/ps.rs` 是 N-API shim 以及供 PTY 终止使用的 re-export。
 
-## Key parsing subsystem (`keys`)
+## 按键解析子系统（`keys`）
 
-### API model
+### API 模型
 
-Exposed helpers:
+暴露的辅助函数：
 
 - `parseKey(data, kittyProtocolActive)`
 - `matchesKey(data, keyId, kittyProtocolActive)`
@@ -215,32 +215,32 @@ Exposed helpers:
 - `matchesKittySequence(data, expectedCodepoint, expectedModifier)`
 - `matchesLegacySequence(data, keyName)`
 
-### Parsing model
+### 解析模型
 
-The parser combines:
+解析器结合了：
 
-- direct single-byte mappings (`enter`, `tab`, `ctrl+<letter>`, printable ASCII),
-- O(1) legacy escape-sequence lookup (PHF map),
-- xterm `modifyOtherKeys` parsing,
-- Kitty protocol parsing (`CSI u`, `CSI ~`, `CSI 1;...<letter>`),
-- normalization to key IDs (`ctrl+c`, `shift+tab`, `pageUp`, `f5`, etc.).
+- 直接单字节映射（`enter`、`tab`、`ctrl+<letter>`、可打印 ASCII），
+- O(1) 旧式转义序列查找（PHF map），
+- xterm `modifyOtherKeys` 解析，
+- Kitty 协议解析（`CSI u`、`CSI ~`、`CSI 1;...<letter>`），
+- 标准化为 key ID（`ctrl+c`、`shift+tab`、`pageUp`、`f5` 等）。
 
-Modifier handling:
+修饰键处理：
 
-- only shift/alt/ctrl/super bits are compared for key matching,
-- lock bits are masked out before comparisons.
+- 按键匹配时只比较 shift/alt/ctrl/super 位，
+- 比较前屏蔽掉 lock 位。
 
-Layout behavior:
+布局行为：
 
-- base-layout fallback is intentionally constrained so remapped layouts do not create false matches for ASCII letters/symbols.
+- 基础布局兜底被刻意收紧，使重映射的布局不会为 ASCII 字母/符号产生错误匹配。
 
-### Failure behavior
+### 失败行为
 
-- Unrecognized or invalid sequences produce `null` from parse functions.
-- Match functions return `false` on parse failure or mismatch.
-- No thrown error surface for malformed key input.
+- 无法识别或非法的序列会从 parse 函数返回 `null`。
+- 解析失败或不匹配时，match 函数返回 `false`。
+- 不会对格式错误的按键输入抛出错误。
 
-## JS API ↔ Rust export mapping
+## JS API ↔ Rust 导出映射
 
 ### Shell + PTY + Process
 
@@ -275,8 +275,8 @@ Layout behavior:
 | `parseKittySequence(data)`                     | `parseKittySequence` (`parse_kitty_sequence`)       | Structured Kitty parse result   |
 | `matchesKey(data, keyId, kittyProtocolActive)` | `matchesKey` (`matches_key`)                        | High-level key matcher          |
 
-## Abandoned session cleanup and finalization notes
+## 弃用会话清理与收尾说明
 
-- **Shell persistent session**: if a run is cancelled/timed out/errors/non-keepalive control flow, Rust drops the internal session state. Successful normal runs keep the session for reuse.
-- **PTY session**: `core` is always cleared after `start()` finishes, including failure paths.
-- **No explicit JS finalizer-driven kill contract** is exposed by wrappers; cleanup is primarily tied to run completion/cancellation paths. Callers should use `timeoutMs`, `AbortSignal`, `shell.abort()`, or `pty.kill()` for deterministic teardown.
+- **Shell 持久化会话**：若一次 run 被取消/超时/出错/控制流非 keepalive，Rust 会丢弃内部会话状态。成功的常规 run 保留会话以供复用。
+- **PTY 会话**：`core` 在 `start()` 结束后总是被清除，包括失败路径。
+- 包装器**未暴露由 JS finalizer 驱动的显式 kill 契约**；清理主要绑定到 run 完成/取消路径。调用方应使用 `timeoutMs`、`AbortSignal`、`shell.abort()` 或 `pty.kill()` 实现确定性的 teardown。

@@ -1,28 +1,28 @@
 # safety-hook
 
-An `oh-my-pi` extension that demonstrates `tool_call` blocking. It intercepts `bash` tool calls and returns `{ block: true, reason: "..." }` when the command contains `rm -rf /` with normal whitespace, preventing the tool from executing.
+一个 `oh-my-pi` 扩展，用于演示 `tool_call` 阻塞。它会拦截 `bash` 工具调用，当命令包含带普通空格的 `rm -rf /` 时返回 `{ block: true, reason: "..." }`，从而阻止该工具执行。
 
-## What it demonstrates
+## 演示内容
 
-- `pi.on("tool_call", ...)` — pre-execution interception
-- `return { block: true, reason: "..." }` — blocking contract
-- Regex guard on bash input (`/\brm\s+-rf\s+\//`)
+- `pi.on("tool_call", ...)` — 执行前的拦截
+- `return { block: true, reason: "..." }` — 阻塞契约
+- 对 bash 输入的正则守卫（`/\brm\s+-rf\s+\//`）
 
-## Install
+## 安装
 
 ```
 cp -r . ~/.omp/agent/extensions/safety-hook
 ```
 
-Restart `omp`. The hook is active for all sessions.
+重启 `omp`。该钩子对所有会话生效。
 
-Or load once:
+或者一次性加载：
 
 ```
 omp --extension ./safety-hook
 ```
 
-## How it works
+## 工作原理
 
 ```
 LLM calls bash tool
@@ -37,4 +37,4 @@ tool_call handlers run
 tool executes (if not blocked)
 ```
 
-The `reason` text is what the LLM receives as the tool error, so it can understand why the call was rejected and try a different approach.
+`reason` 文本就是 LLM 作为工具错误接收到的内容，因此它能够理解调用被拒绝的原因并尝试其他方式。

@@ -1,73 +1,73 @@
-# Compaction and Branch Summaries
+# 压缩与分支摘要
 
-Compaction and branch summaries are the two mechanisms that keep long sessions usable without losing prior work context.
+压缩与分支摘要是两种机制，让长会话保持可用、同时不丢失先前工作的上下文。
 
-- **Compaction** rewrites old history into a summary on the current branch.
-- **Branch summary** captures abandoned branch context during `/tree` navigation.
+- **压缩（Compaction）** 将旧历史改写为当前分支上的一条摘要。
+- **分支摘要（Branch summary）** 在 `/tree` 导航过程中捕获被放弃的分支上下文。
 
-Both are persisted as session entries and converted back into user-context messages when rebuilding LLM input.
+两者都作为会话条目持久化，并在重建 LLM 输入时被转换回用户上下文消息。
 
-## Key implementation files
+## 关键实现文件
 
-- `packages/agent/src/compaction/compaction.ts` (context-full summarization and handoff generation)
-- `packages/snapcompact/src/snapcompact.ts` (snapcompact strategy: history archived as dense bitmap images)
+- `packages/agent/src/compaction/compaction.ts`（上下文完整的摘要生成与交接文档生成）
+- `packages/snapcompact/src/snapcompact.ts`（snapcompact 策略：将历史以密集位图归档）
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
-- `packages/agent/src/compaction/compaction-v2-streaming.ts` (provider-native streaming compaction)
-- `packages/agent/src/compaction/shake.ts` (mechanical content elision)
+- `packages/agent/src/compaction/compaction-v2-streaming.ts`（provider 原生流式压缩）
+- `packages/agent/src/compaction/shake.ts`（机械式内容删减）
 - `packages/agent/src/compaction/utils.ts`
 - `packages/agent/src/compaction/openai.ts`
 - `packages/coding-agent/src/session/session-manager.ts`
 - `packages/coding-agent/src/session/agent-session.ts`
-- `packages/coding-agent/src/session/session-maintenance.ts` (automatic maintenance orchestration)
+- `packages/coding-agent/src/session/session-maintenance.ts`（自动维护编排）
 - `packages/coding-agent/src/session/messages.ts`
 - `packages/coding-agent/src/extensibility/hooks/types.ts`
 - `packages/coding-agent/src/config/settings-schema.ts`
 
-## Session entry model
+## 会话条目模型
 
-Compaction and branch summaries are first-class session entries, not plain assistant/user messages.
+压缩和分支摘要是头等的会话条目，而不是普通的 assistant/user 消息。
 
 - `CompactionEntry`
   - `type: "compaction"`
-  - `summary`, optional `shortSummary`
-  - `firstKeptEntryId` (compaction boundary)
+  - `summary`，可选的 `shortSummary`
+  - `firstKeptEntryId`（压缩边界）
   - `tokensBefore`
-  - optional `details`, `preserveData`, `fromExtension`
+  - 可选的 `details`、`preserveData`、`fromExtension`
 - `BranchSummaryEntry`
   - `type: "branch_summary"`
-  - `fromId`, `summary`
-  - optional `details`, `fromExtension`
+  - `fromId`、`summary`
+  - 可选的 `details`、`fromExtension`
 
-When context is rebuilt (`buildSessionContext`):
+在重建上下文时（`buildSessionContext`）：
 
-1. Latest compaction on the active path is converted to one `compactionSummary` message.
-2. Kept entries from `firstKeptEntryId` to the compaction point are re-included.
-3. Later entries on the path are appended.
-4. `branch_summary` entries are converted to `branchSummary` messages.
-5. `custom_message` entries are converted to `custom` messages.
+1. 活动路径上最新的压缩被转换为一条 `compactionSummary` 消息。
+2. 从 `firstKeptEntryId` 到压缩点的被保留条目被重新纳入。
+3. 路径上之后的条目被追加在后面。
+4. `branch_summary` 条目被转换为 `branchSummary` 消息。
+5. `custom_message` 条目被转换为 `custom` 消息。
 
-Those custom roles are then transformed into LLM-facing messages in `convertToLlm()`: `compactionSummary` and `branchSummary` become user messages rendered through the static templates
+随后这些自定义角色在 `convertToLlm()` 中被转换为面向 LLM 的消息：`compactionSummary` 和 `branchSummary` 通过静态模板渲染为 user 消息
 
 - `packages/agent/src/compaction/prompts/compaction-summary-context.md`
 - `packages/agent/src/compaction/prompts/branch-summary-context.md`
 
-while `custom` messages pass through as developer messages with their raw content (no template).
+而 `custom` 消息则作为 developer 消息直接以原始内容透传（不使用模板）。
 
-## Compaction pipeline
+## 压缩流程
 
-### Triggers
+### 触发条件
 
-Compaction/context maintenance can run in six ways:
+压缩/上下文维护可以通过六种方式运行：
 
-1. **Manual context compaction**: `/compact [instructions]` calls `AgentSession.compact(...)`.
-2. **Automatic overflow recovery**: after a same-model assistant error that matches context overflow.
-3. **Automatic incomplete-output recovery**: after a same-model assistant message ends with `stopReason === "length"` (OpenAI/Codex `response.incomplete`).
-4. **Automatic threshold maintenance**: after a successful turn when context exceeds the resolved threshold.
-5. **Mid-turn threshold maintenance**: before the next provider request when a tool-loop turn crosses the threshold and `compaction.midTurnEnabled !== false`.
-6. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
+1. **手动上下文压缩**：`/compact [instructions]` 调用 `AgentSession.compact(...)`。
+2. **自动溢出恢复**：在同模型 assistant 报错且匹配上下文溢出后。
+3. **自动不完整输出恢复**：在同模型 assistant 消息以 `stopReason === "length"` 结束时（OpenAI/Codex `response.incomplete`）。
+4. **自动阈值维护**：在成功的轮次之后，上下文超过解析得到的阈值时。
+5. **轮次中途阈值维护**：在工具循环轮次跨过阈值且 `compaction.midTurnEnabled !== false` 时，在下一次 provider 请求之前。
+6. **空闲维护**：`runIdleCompaction()` 可以以 `"idle"` 为 reason 触发相同的自动维护路径。
 
-### Compaction shape (visual)
+### 压缩形态（可视化）
 
 ```text
 Before compaction:
@@ -101,122 +101,119 @@ What the LLM sees:
     prompt   from cmp          messages from firstKeptEntryId
 ```
 
-### Overflow/incomplete recovery vs threshold/idle maintenance
+### 溢出/不完整恢复 与 阈值/空闲维护
 
-The automatic paths are intentionally different:
+自动路径在设计上有所不同：
 
-- **Overflow recovery**
-  - Trigger: current-model assistant error is detected as context overflow and the error is not older than the latest compaction.
-  - The failing assistant error message is removed from active agent state before retry.
-  - Context promotion is tried first; if a configured larger model is available, the agent switches model and retries without compacting.
-  - If promotion is unavailable and compaction is enabled, automatic maintenance walks `compaction.methodOrder` with `reason: "overflow"` and `willRetry: true`; handoff is skipped because its request would reuse the overflowing input.
-  - On success, `agent.continue()` is scheduled to retry the turn.
+- **溢出恢复**
+  - 触发：检测到当前模型的 assistant 错误是上下文溢出，且该错误不早于最近一次压缩。
+  - 失败的 assistant 错误消息在重试前从活动的 agent 状态中移除。
+  - 优先尝试上下文提升（context promotion）；若配置了更大的模型，则 agent 切换模型后重试而不进行压缩。
+  - 若提升不可用且压缩已启用，则自动维护以 `reason: "overflow"` 和 `willRetry: true` 遍历 `compaction.methodOrder`；由于交接请求会复用溢出的输入，因此跳过交接。
+  - 成功时调度 `agent.continue()` 以重试该轮次。
+- **不完整输出恢复**
+  - 触发：同模型 assistant 消息以 `stopReason === "length"` 结束，且该消息不早于最近一次压缩。
+  - 不完整的 assistant 消息在恢复前从活动 agent 状态中移除。
+  - 优先尝试上下文提升。
+  - 若提升不可用且压缩已启用，则自动维护以 `reason: "incomplete"` 和 `willRetry: true` 遍历 `compaction.methodOrder`。
+  - 与溢出不同，可达的 `handoff` 偏好可以运行，因为输入上下文仍然可用。
+  - 软压缩成功时调度 `agent.continue()` 以重试该轮次。
+- **阈值维护**
+  - 触发：成功的、非错误的 assistant 消息，其调整后上下文 token 数超过 `resolveThresholdTokens(...)`。
+  - 当 `compaction.midTurnEnabled !== false` 时，轮次中途维护也会在下一次 provider 请求之前检查安全的工具循环边界。
+  - 工具输出剪枝（tool-output pruning）可以在阈值比较前降低测得的 token 数。
+  - 上下文提升在轮次后压缩之前先尝试。
+  - 若提升不可用，则自动维护以 `reason: "threshold"` 和 `willRetry: false` 遍历 `compaction.methodOrder`。
+  - 当 `handoff` 是下一个可运行方法时，轮次后阈值维护通常会调度一个 post-prompt 任务来生成交接文档并将其作为压缩条目提交；pre-prompt 和 mid-turn 检查以内联方式运行所有方法，以避免与下一轮竞争。
+  - 成功时，如果 `compaction.autoContinue !== false`，轮次后维护会从 `prompts/system/auto-continue.md` 调度一个由 agent 编写的 developer 自动续接 prompt；mid-turn 维护永远不会调度单独的续接，因为核心循环已经拥有了下一个 provider 请求。
+- **空闲维护**
+  - 触发：`runIdleCompaction()` 在未流式处理或已压缩时。
+  - 使用 `reason: "idle"` 且之后不会自动续接。
 
-- **Incomplete-output recovery**
-  - Trigger: same-model assistant message ends with `stopReason === "length"` and the message is not older than the latest compaction.
-  - The incomplete assistant message is removed from active agent state before recovery.
-  - Context promotion is tried first.
-  - If promotion is unavailable and compaction is enabled, auto maintenance walks `compaction.methodOrder` with `reason: "incomplete"` and `willRetry: true`.
-  - Unlike overflow, a reachable `handoff` preference may run because the input context is still usable.
-  - On soft-compaction success, `agent.continue()` is scheduled to retry the turn.
+### Shake 方法
 
-- **Threshold maintenance**
-  - Trigger: successful, non-error assistant message whose adjusted context tokens exceed `resolveThresholdTokens(...)`.
-  - Mid-turn maintenance also checks safe tool-loop boundaries before the next provider request when `compaction.midTurnEnabled !== false`.
-  - Tool-output pruning can reduce the measured token count before threshold comparison.
-  - Context promotion is tried before post-turn compaction.
-  - If promotion is unavailable, auto maintenance walks `compaction.methodOrder` with `reason: "threshold"` and `willRetry: false`.
-  - When `handoff` is the next runnable method, post-turn threshold maintenance normally schedules a post-prompt task that generates the handoff document and commits it as a compaction entry; pre-prompt and mid-turn checks run all methods inline to avoid racing the next turn.
-  - On success, if `compaction.autoContinue !== false`, post-turn maintenance schedules an agent-authored developer auto-continue prompt from `prompts/system/auto-continue.md`; mid-turn maintenance never schedules a separate continuation because the core loop already owns the next provider request.
+在 `compaction.methodOrder` 中包含 `shake` 会执行内联的、本地的缩减，而不会调用摘要模型。它使用受保护的最近 token 窗口和最小节省阈值，将符合条件的工具结果和大型围栏/XML 块替换为可恢复的 `artifact://` 引用。自动 shake 以 `action: "shake"` 发出正常的自动压缩事件。
 
-- **Idle maintenance**
-  - Trigger: `runIdleCompaction()` when not streaming or already compacting.
-  - Uses `reason: "idle"` and does not auto-continue afterward.
+阈值、不完整输出和溢出恢复在 shake 无法回收足够上下文以回到恢复带之下时，会推进到下一个已配置方法；这避免了重复的空操作 shake 循环。空闲 shake 不使用该回退，因为空闲计时器会在再次运行前重新检查使用量。手动 `/shake` 是一个独立的、更激进的命令，可以针对所有符合条件的历史。
 
-### Shake method
+### Snapcompact 方法
 
-Including `shake` in `compaction.methodOrder` performs an inline, local reduction instead of calling a summarization model. It replaces eligible tool results and large fenced/XML blocks with recoverable `artifact://` references, using a protected recent-token window and minimum-savings threshold. Automatic shake emits the normal auto-compaction events with `action: "shake"`.
+在 `compaction.methodOrder` 中包含 `snapcompact` 会将 LLM 摘要调用替换为本地、确定性的归档过程（`@oh-my-pi/snapcompact` 中的 `compact`）：
 
-Threshold, incomplete-output, and overflow recovery advance to the next configured method when shake cannot reclaim enough context to get below the recovery band; this prevents repeated no-op shake loops. Idle shake does not use that fallback because the idle timer rechecks usage before running again. Manual `/shake` is a separate, more aggressive command that can target all eligible history.
+- 丢弃的历史被序列化、空格折叠，并使用内嵌的公共领域像素字体打印到模型相关的 PNG 帧上（每种形状的帧宽度固定；帧高度贴合实际打印的行数）。形状和帧大小在测量模型行时通过 **model id** 解析：Claude 读取 X.org `8x13` 字形、采用 11px 步进（额外字距、黑色墨水 — `11on16-bw`；高分辨率行 — Opus 4.7+、Fable、Mythos — 在 Anthropic 的 4,784 visual-token 上限下获得 1932px 帧，旧行保持 1568px），Gemini 读取 `8x13` 字形、采用 22px 间距（额外行距、黑色墨水 — `8on22-bw` 在 2048px，因为 Gemini 3.x 对每张图按固定的 1,120-token 预算计费、与像素大小无关），GPT/Codex 以 1568px 读取相同的 `8on22-bw` 形状（…
+- 序列化保持归档的对话密度：工具结果按头+尾截断（默认 2,000 字符、头尾比例 0.6），工具调用的参数值按值（500）和按调用（2,000）封顶，并且工具输出以暗灰色墨水打印，使对话读起来比工具噪声更突出。所有预算和调暗行为都可通过 `SerializeOptions`（`toolResultMaxChars`、`toolArgMaxChars`、`toolCallMaxChars`、`truncateHeadRatio`、`dimToolResults`）配置。
+- snapcompact 归档持久化在 `CompactionEntry.preserveData.snapcompact` 下，作为有界源文本加上渲染后的帧。在每次上下文重建时，它被重建为有序的压缩块：最旧边缘的纯文本、中间的图像块、最新边缘的纯文本。条目的 `summary` 只是简短的恢复引导加上通常的文件操作列表。
+- 后续压缩从该有界源文本（`Archive.text`）重新渲染，而不是盲目地携带旧 PNG 向前。`maxFrames` 现在默认为 `MAX_FRAMES_DEFAULT`（80）并仅作为上限；当图像块较大时，会在内部进行注视点渲染（HQ/LQ/HQ），而两个时序边缘则保持逐字的文本。
+- 不涉及模型、API 密钥或网络，因此 snapcompact 也安全用于溢出恢复。它需要具备视觉能力的当前模型（`model.input` 包含 `"image"`）；否则自动维护会跳过它并推进到下一个已配置方法。手动 `/compact` 遵守方法顺序，除非给出了自定义指令（这些指令意味着有向的 LLM 摘要）。
+- 原理：形状表来自 `packages/snapcompact` 中的 snapcompact 200k-token 评估，在该评估中，与原始文本相比，位图帧以更低的计费 token 成本为具备视觉能力的模型保留了 QA 召回。
 
-### Snapcompact method
+### 显示式会话记录
 
-Including `snapcompact` in `compaction.methodOrder` replaces the LLM summarization call with a local, deterministic archival pass (`compact` from `@oh-my-pi/snapcompact`):
+压缩不再从视觉上重启会话。TUI 渲染 **display transcript**（`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`）：按时间顺序的每条路径条目，每次压缩在触发处以纤细分隔线 `── 📷 compacted · ctrl+o ──` 内联显示。展开（ctrl+o）会显示摘要。只有 LLM 上下文在压缩边界处重置；分隔线上方的滚动历史保持完整，包括跨会话恢复时也是如此。
 
-- The discarded history is serialized, whitespace-collapsed, and printed onto model-aware PNG frames (frame width fixed per shape; frame height hugs the rows actually printed) using bundled public-domain pixel fonts. The shape — and frame size — resolve from the **model id** when the model line was measured: Claude reads X.org `8x13` glyphs on an 11px advance (extra letter-spacing, black ink — `11on16-bw`; high-res lines — Opus 4.7+, Fable, Mythos — get 1932px frames under Anthropic's 4,784 visual-token cap, older lines stay at 1568px), Gemini reads `8x13` glyphs on a 22px pitch (extra leading, black ink — `8on22-bw` at 2048px, since Gemini 3.x bills a fixed 1,120-token budget per image at any pixel size), GPT/Codex read the same `8on22-bw` shape at 1568px (patch billing is area-proportional, so larger frames cannot improve chars per token), and Kimi/GLM read `8x13` glyphs on a 16px pitch (`8on16-bw` at 1568px — kimi's processor downscales past 1792px). A Claude routed through Vertex or OpenRouter keeps its Claude shape. Unmeasured models fall back to their wire API family (Anthropic-family/unknown → `11on16-bw`, Google → `8on22-bw`, OpenAI-compatible → `8on22-bw`); billing (per-family patch/budget formulas, OpenAI's `detail: "original"` hint) always follows the API carrying the request, computed for the resolved frame size. The `snapcompact.shape` setting (default `auto`) forces one of the research-eval variants instead: square grids (`8x8r`/`8x8u`/`6x6u`/`5x8` × sentence-hue/black ink) or the per-model eval winners (`6x12-dim`, `8x13-bw`, `8on16-bw`, `8on22-bw`, `11on16-bw`, and the two-column word-wrapped `doc-8on16-bw`/`-sent`/`-sent-dim`, where `dim` prints stopwords in gray). A forced variant keeps its geometry but is re-priced for the target provider's image billing. The same setting governs inline system-prompt/tool-result imaging (`snapcompact.systemPrompt`, `snapcompact.toolResults`).
-- Serialization keeps the archive conversation-dense: tool results are truncated head+tail (default 2,000 chars at a 0.6 head ratio), tool-call argument values are capped per value (500) and per call (2,000), and tool output is printed in dim gray ink so conversation reads louder than tool noise. All budgets and the dimming are configurable via `SerializeOptions` (`toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`).
-- The snapcompact archive persists under `CompactionEntry.preserveData.snapcompact` as bounded source text plus rendered frames. On each context rebuild it is reconstructed into ordered compaction blocks: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. The entry's `summary` is just the short resume lead-in plus the usual file-operation list.
-- Later compactions re-render from that bounded source text (`Archive.text`), not by carrying old PNGs forward blindly. `maxFrames` now defaults to `MAX_FRAMES_DEFAULT` (80) and acts only as an upper limit; when the imaged middle is large it foveates internally (HQ/LQ/HQ), while both chronological edges stay verbatim text.
-- No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise automatic maintenance skips it and advances to the next configured method. Manual `/compact` honors the method order unless custom instructions are given (those imply a directed LLM summary).
-- Rationale: the shape table comes from the snapcompact 200k-token evals in `packages/snapcompact`, where bitmap frames preserved QA recall at lower billed-token cost than raw text for vision-capable models.
+### 压缩前剪枝
 
-### Display transcript
+在压缩检查之前，工具结果剪枝可能会运行（`pruneToolOutputs`）。
 
-Compaction no longer visually restarts the conversation. The TUI renders the **display transcript** (`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`): every path entry in chronological order, with each compaction shown inline as a slim divider — `── 📷 compacted · ctrl+o ──` — at the point it fired. Expanding (ctrl+o) reveals the summary. Only the LLM context resets at the compaction boundary; the scrollback above the divider stays intact, including across session resume.
+默认剪枝策略：
 
-### Pre-compaction pruning
+- 保护最新的 `40_000` 工具输出 token。
+- 要求至少 `20_000` 的总估计节省。
+- 永远不要将结果清空到 `50` token 以下（`MIN_PRUNE_TOKENS`）：`[Output truncated - N tokens]` 占位符本身约 8 个 token，因此对低于阈值的结果进行剪枝反而会扩大上下文并无谓地搅动 prompt 缓存。（被取代和无用的结果保持各自的规则 — 无用收集器已经丢弃无节省的候选项；被取代的读取会出于正确性进行剪枝，与大小无关。）
+- 永远不要剪枝 `skill` 工具结果、`skill://` 路径的 `read` 结果，或活动计划引用文件的读取（通过 `AgentSession` 的计划保护加入）。
 
-Before compaction checks, tool-result pruning may run (`pruneToolOutputs`).
-
-Default prune policy:
-
-- Protect newest `40_000` tool-output tokens.
-- Require at least `20_000` total estimated savings.
-- Never blank a result below `50` tokens (`MIN_PRUNE_TOKENS`): the `[Output truncated - N tokens]` placeholder costs ~8 tokens, so pruning a sub-floor result would grow the context and churn the prompt cache for nothing. (Superseded and useless results keep their own rules — the useless collector already drops no-savings candidates; superseded reads prune for correctness regardless of size.)
-- Never prune `skill` tool results, `read` results of `skill://` paths, or reads of the active plan reference file (added via `AgentSession`'s plan protection).
-
-Pruned tool results are replaced with:
+剪枝后的工具结果被替换为：
 
 - `[Output truncated - N tokens]`
 
-If pruning changes entries, session storage is rewritten and agent message state is refreshed before compaction decisions.
+如果剪枝改变了条目，则在压缩决策之前会重写会话存储并刷新 agent 消息状态。
 
-### Useless-result elision
+### 无用结果的删减
 
-Tools can flag a finished result as contextually useless — a search with zero matches, a `hub` wait that timed out with everything still running, an empty `hub` inbox drain. The flag originates on the tool result (`AgentToolResult.useless`, set via `ToolResultBuilder.useless()` or directly on the returned object), is copied by the agent loop onto the persisted `ToolResultMessage` (never together with `isError` — errors always win), and is consumed in three places:
+工具可以将已完成的结果标记为上下文无用 — 零匹配的搜索、超时且所有内容仍在运行的 `hub` 等待、空的 `hub` 收件箱排出。该标记源自工具结果（`AgentToolResult.useless`，通过 `ToolResultBuilder.useless()` 设置或直接设置在返回对象上），由 agent 循环复制到持久化的 `ToolResultMessage` 上（绝不与 `isError` 同时出现 — 错误总是优先），并在三个地方被消费：
 
-- **Per-turn stale-result pass** (`pruneSupersededToolResults`, gated by `compaction.dropUseless`, default on): flagged results are blanked to the exact placeholder `[Uneventful result elided]` (`USELESS_NOTICE`) with the same cache-aware timing as superseded reads — only when the suffix after the candidate is small (≤ ~8k tokens) or the session has idled past the provider prompt-cache lifetime. Results smaller than the notice itself are never blanked (no savings), and protected tools are exempt.
-- **Threshold prune** (`pruneToolOutputs`): flagged results bypass the protect-recent window, same as superseded reads, and receive `USELESS_NOTICE` instead of the token-count placeholder.
-- **Summary serialization**: `serializeConversation` (agent and snapcompact) drops the whole tool call/result pair from summarizer/archive input — the source region is discarded after summarization anyway, so the exclusion costs no cache.
+- **每轮过时结果扫描**（`pruneSupersededToolResults`，由 `compaction.dropUseless` 守护，默认开启）：被标记的结果被清空为精确占位符 `[Uneventful result elided]`（`USELESS_NOTICE`），其时序与被取代的读取相同的缓存感知策略 — 仅当候选之后的后缀很小（≤ 约 8k token）或会话空闲时间已超过 provider prompt 缓存生命周期时。结果小于通知本身的永远不会被清空（无节省），且受保护工具豁免。
+- **阈值剪枝**（`pruneToolOutputs`）：被标记的结果绕过"保护最近"窗口，与被取代的读取相同，并接收 `USELESS_NOTICE` 而不是 token 数占位符。
+- **摘要序列化**：`serializeConversation`（agent 和 snapcompact）从摘要器/归档输入中丢弃整个工具调用/结果对 — 源区域反正会在摘要后被丢弃，因此该排除不会产生缓存成本。
 
-The flag never reaches provider wire formats, and flagged pairs are never removed from history (only blanked in place), so tool-call/result pairing and provider-native history replay stay intact.
+该标记永远不到达 provider 线格式，并且被标记的成对项永远不从历史中移除（仅就地清空），因此工具调用/结果配对和 provider 原生历史重放保持完整。
 
-### Boundary and cut-point logic
+### 边界与切点逻辑
 
-`prepareCompaction()` only considers entries since the last compaction entry (if any).
+`prepareCompaction()` 仅考虑自上次压缩条目（如果有）以来的条目。
 
-1. Find previous compaction index.
-2. Compute `boundaryStart = prevCompactionIndex + 1`.
-3. Adapt `keepRecentTokens` using measured usage ratio when available.
-4. Run `findCutPoint()` over the boundary window.
+1. 找到前一次压缩的索引。
+2. 计算 `boundaryStart = prevCompactionIndex + 1`。
+3. 在可用时使用测得的使用率调整 `keepRecentTokens`。
+4. 在边界窗口上运行 `findCutPoint()`。
 
-Valid cut points include:
+有效的切点包括：
 
-- message entries with roles: `user`, `assistant`, `bashExecution`, `hookMessage`, `branchSummary`, `compactionSummary`
-- `custom_message` entries
-- `branch_summary` entries
+- 角色为以下的消息条目：`user`、`assistant`、`bashExecution`、`hookMessage`、`branchSummary`、`compactionSummary`
+- `custom_message` 条目
+- `branch_summary` 条目
 
-Hard rule: never cut at `toolResult`.
+硬性规则：永远不要在 `toolResult` 处切。
 
-If there are non-message metadata entries immediately before the cut point (`model_change`, `thinking_level_change`, labels, etc.), they are pulled into the kept region by moving cut index backward until a message or compaction boundary is hit.
+如果切点紧邻存在非消息元数据条目（`model_change`、`thinking_level_change`、标签等），则通过向后移动切点索引直到命中消息或压缩边界，将它们拉入被保留区域。
 
-### Split-turn handling
+### 切分轮次的处理
 
-If cut point is not at a user-turn start, compaction treats it as a split turn.
+如果切点不在用户轮次开始处，则压缩将其视为切分轮次。
 
-Turn start detection treats these as user-turn boundaries:
+轮次开始检测将以下视为用户轮次边界：
 
 - `message.role === "user"`
 - `message.role === "bashExecution"`
-- `custom_message` entry
-- `branch_summary` entry
+- `custom_message` 条目
+- `branch_summary` 条目
 
-Split-turn compaction generates two summaries:
+切分轮次压缩生成两份摘要：
 
-1. History summary (`messagesToSummarize`)
-2. Turn-prefix summary (`turnPrefixMessages`)
+1. 历史摘要（`messagesToSummarize`）
+2. 轮次前缀摘要（`turnPrefixMessages`）
 
-Final stored summary is merged as:
+最终存储的摘要按如下方式合并：
 
 ```markdown
 <history summary>
@@ -228,56 +225,56 @@ Final stored summary is merged as:
 <turn prefix summary>
 ```
 
-### Summary generation
+### 摘要生成
 
-`compact(...)` builds summaries from serialized conversation text:
+`compact(...)` 从序列化后的会话文本构建摘要：
 
-1. Convert messages via `convertToLlm()`.
-2. Serialize with `serializeConversation()`.
-3. Wrap in `<conversation>...</conversation>`.
-4. Optionally include `<previous-summary>...</previous-summary>`.
-5. Optionally inject extension hook context and active memory-backend compaction context as `<additional-context>` entries.
-6. Execute summarization prompt with `SUMMARIZATION_SYSTEM_PROMPT`.
+1. 通过 `convertToLlm()` 转换消息。
+2. 使用 `serializeConversation()` 序列化。
+3. 包装在 `<conversation>...</conversation>` 内。
+4. 可选地包含 `<previous-summary>...</previous-summary>`。
+5. 可选地将扩展钩子上下文和活动 memory-backend 压缩上下文注入为 `<additional-context>` 条目。
+6. 使用 `SUMMARIZATION_SYSTEM_PROMPT` 执行摘要 prompt。
 
-Prompt selection:
+Prompt 选择：
 
-- first compaction: `compaction-summary.md`
-- iterative compaction with prior summary: `compaction-update-summary.md`
-- split-turn second pass: `compaction-turn-prefix.md`
-- short UI summary: `compaction-short-summary.md`
-- handoff document: `handoff-document.md` (used by `generateHandoff(...)`, not serialized compaction)
+- 第一次压缩：`compaction-summary.md`
+- 已有先前摘要的迭代压缩：`compaction-update-summary.md`
+- 切分轮次的第二轮：`compaction-turn-prefix.md`
+- 短 UI 摘要：`compaction-short-summary.md`
+- 交接文档：`handoff-document.md`（由 `generateHandoff(...)` 使用，非序列化压缩）
 
-Remote summarization modes:
+远程摘要模式：
 
-- If `compaction.remoteEndpoint` is set and remote compaction is enabled, local summary generation POSTs one of two wire formats:
-  - custom omp summarizer endpoints receive `{ systemPrompt, prompt }` and must return JSON containing at least `{ summary }`.
-  - OpenAI-compatible endpoints whose path ends in `/chat/completions` receive `{ model, messages, stream: false }`, where `messages` contains one system prompt and one user prompt. The summary is read from `choices[0].message.content`, which lets self-hosted servers such as llama.cpp and vLLM act as remote compactors without a separate summarizer shim.
-- Compatible OpenAI Responses, Azure OpenAI Responses, and Codex models whose catalog metadata enables V2 streaming compaction first append a `compaction_trigger` to a normal Responses stream. The returned compaction item plus retained real user messages become replacement history, bounded by `compaction.v2RetainedMessageBudget`; the replacement is persisted under `preserveData.openaiRemoteCompaction`.
-- If V2 is unavailable or fails, eligible OpenAI/OpenAI Codex models try the provider-native `/responses/compact` path. Native failure then falls back to local summarization.
+- 如果设置了 `compaction.remoteEndpoint` 并启用了远程压缩，本地摘要生成会 POST 以下两种线路格式之一：
+  - 自定义 omp 摘要器端点接收 `{ systemPrompt, prompt }` 并必须返回至少包含 `{ summary }` 的 JSON。
+  - 路径以 `/chat/completions` 结尾的 OpenAI 兼容端点接收 `{ model, messages, stream: false }`，其中 `messages` 包含一条 system prompt 和一条 user prompt。摘要从 `choices[0].message.content` 读取，这使得自托管服务器（如 llama.cpp 和 vLLM）可以充当远程压缩器而无需单独的摘要器垫片。
+- 启用 V2 流式压缩的兼容 OpenAI Responses、Azure OpenAI Responses 和 Codex 模型（其目录元数据启用）首先将 `compaction_trigger` 追加到正常的 Responses 流。返回的压缩项加上保留的真实用户消息成为替换历史，受 `compaction.v2RetainedMessageBudget` 限制；该替换持久化在 `preserveData.openaiRemoteCompaction` 下。
+- 如果 V2 不可用或失败，符合条件的 OpenAI/OpenAI Codex 模型会尝试 provider 原生的 `/responses/compact` 路径。本地失败再回退到本地摘要。
 
-### Handoff generation
+### 交接生成
 
-`packages/agent/src/compaction/compaction.ts` also exports `generateHandoff(...)`. Handoff generation uses the same `completeSimple(...)` oneshot style as summarization, but it preserves the live agent cache prefix by sending the active system prompt, tool array, and real LLM message history, then appending one agent-attributed `user` message containing the handoff prompt. It forces `toolChoice: "none"` and returns joined text blocks directly.
+`packages/agent/src/compaction/compaction.ts` 还导出 `generateHandoff(...)`。交接生成使用与摘要相同的 `completeSimple(...)` oneshot 风格，但它通过发送活动系统 prompt、工具数组和真实 LLM 消息历史来保留活动的 agent 缓存前缀，然后追加一条由 agent 归属的包含交接 prompt 的 `user` 消息。它强制 `toolChoice: "none"` 并直接返回已合并的文本块。
 
-Handoff commits a regular `CompactionEntry` on the current session: `SessionMaintenance.handoff()` (manual `/handoff`) and the auto-maintenance `handoff` method both generate the document via `SessionHandoff.generateDocument()` and store it as the compaction summary with `firstKeptEntryId` from `prepareCompaction`, so recent history is kept and the session id, transcript, and provider cache key are unchanged.
+交接在当前会话上提交一个常规的 `CompactionEntry`：`SessionMaintenance.handoff()`（手动 `/handoff`）和自动维护的 `handoff` 方法都通过 `SessionHandoff.generateDocument()` 生成文档，并将其作为压缩摘要存储，`firstKeptEntryId` 来自 `prepareCompaction`，因此最近历史被保留，且会话 id、记录和 provider 缓存键不变。
 
-When `compaction.handoffSaveToDisk` is enabled, an **automatically triggered** handoff also writes `handoff-<ISO timestamp>.md` in the persisted session's artifact directory. Manual handoffs are not written by this setting, and non-persisted sessions have no artifact directory.
+当 `compaction.handoffSaveToDisk` 启用时，**自动触发** 的交接还会在持久化会话的工件目录中写入 `handoff-<ISO timestamp>.md`。手动交接不会通过此设置写入，未持久化的会话没有工件目录。
 
-### File-operation context in summaries
+### 摘要中的文件操作上下文
 
-Compaction tracks cumulative file activity using assistant tool calls:
+压缩使用 assistant 工具调用跟踪累积的文件活动：
 
-- `read(path)` → read set
-- `write(path)` → modified set
-- `edit(path)` → modified set
+- `read(path)` → 已读集合
+- `write(path)` → 已修改集合
+- `edit(path)` → 已修改集合
 
-Cumulative behavior:
+累积行为：
 
-- Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
-- In split turns, includes turn-prefix file ops too.
-- `details.readFiles` excludes files also modified; `details.modifiedFiles` carries the rest (persisted shape is unchanged).
+- 仅当先前条目是 pi 生成时（`fromExtension !== true`）才包含先前压缩详情。
+- 在切分轮次中，也包含轮次前缀文件操作。
+- `details.readFiles` 排除同时被修改的文件；`details.modifiedFiles` 承载其余文件（持久化形状不变）。
 
-The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. LLM-summary strategies append it as a `<files>` tag (via `upsertFileOperations`); snapcompact renders it inside its summary template as a `FILES` section instead.
+文件列表是分组的、前缀折叠的目录树（find-tool 形状），每个文件带一个访问标记 — 仅读取的文件为 `(Read)`，仅修改且从未读取的为 `(Write)`，也出现在累积已读集合中的已修改文件为 `(RW)`。上限为 20 个文件，并带一行 `[…N files elided…]`。LLM 摘要策略将其作为 `<files>` 标签追加（通过 `upsertFileOperations`）；snapcompact 则在其摘要模板中作为 `FILES` 部分进行渲染。
 
 ```xml
 <files>
@@ -289,33 +286,33 @@ file-operations.md (Write)
 </files>
 ```
 
-Legacy `<read-files>`/`<modified-files>` tags from summaries written by earlier versions are stripped (alongside `<files>`) before re-appending, so old summaries self-heal on the next compaction.
+旧版摘要写入的遗留 `<read-files>`/`<modified-files>` 标签（连同 `<files>`）在重新追加之前会被剥离，因此旧摘要会在下次压缩时自愈。
 
-### Persist and reload
+### 持久化与重载
 
-After summary generation (or hook-provided summary), agent session:
+在生成摘要（或由钩子提供摘要）后，agent 会话：
 
-1. Appends `CompactionEntry` with `appendCompaction(...)`; the handoff method commits the generated document as the entry's summary on the same session.
-2. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
-3. Replaces live agent messages with rebuilt context.
-4. Synchronizes active todo phases from the rebuilt branch and closes provider sessions whose history was rewritten.
-5. Emits `session_compact` hook event.
+1. 通过 `appendCompaction(...)` 追加 `CompactionEntry`；handoff 方法将生成的文档作为该条目在同一会话上的摘要提交。
+2. 通过 `buildDisplaySessionContext()` 从活动叶子重建显示上下文。
+3. 用重建的上下文替换活动的 agent 消息。
+4. 从重建的分支同步活动 todo 阶段，并关闭其历史已被重写的 provider 会话。
+5. 发出 `session_compact` 钩子事件。
 
-## Branch summarization pipeline
+## 分支摘要流程
 
-Branch summarization is tied to tree navigation, not token overflow.
+分支摘要与树导航相关，而非 token 溢出。
 
-### Trigger
+### 触发
 
-During `navigateTree(...)`:
+在 `navigateTree(...)` 期间：
 
-1. Compute abandoned entries from old leaf to common ancestor using `collectEntriesForBranchSummary(...)`.
-2. If caller requested summary (`options.summarize`), generate summary before switching leaf.
-3. If summary exists, attach it at the navigation target using `branchWithSummary(...)`.
+1. 使用 `collectEntriesForBranchSummary(...)` 从旧叶子到共同祖先计算被放弃的条目。
+2. 如果调用者请求了摘要（`options.summarize`），则在切换叶子前生成摘要。
+3. 如果存在摘要，则使用 `branchWithSummary(...)` 将其附加到导航目标。
 
-Operationally this is commonly driven by `/tree` flow when `branchSummary.enabled` is enabled.
+在操作上，这通常由 `/tree` 流程在启用 `branchSummary.enabled` 时驱动。
 
-### Branch switch shape (visual)
+### 分支切换形态（可视化）
 
 ```text
 Tree before navigation:
@@ -334,111 +331,111 @@ After navigation with summary:
          └─ E ─ F ─ [summary of B,C,D] (new leaf)
 ```
 
-### Preparation and token budget
+### 准备与 token 预算
 
-`generateBranchSummary(...)` computes budget as:
+`generateBranchSummary(...)` 按以下方式计算预算：
 
 - `tokenBudget = model.contextWindow - branchSummary.reserveTokens`
 
-`prepareBranchEntries(...)` then:
+然后 `prepareBranchEntries(...)`：
 
-1. First pass: collect cumulative file ops from all summarized entries, including prior pi-generated `branch_summary` details.
-2. Second pass: walk newest → oldest, adding messages until token budget is reached.
-3. Prefer preserving recent context.
-4. May still include large summary entries near budget edge for continuity.
+1. 第一遍：从所有被摘要的条目中收集累积文件操作，包括先前 pi 生成的 `branch_summary` 详情。
+2. 第二遍：从最新到最旧遍历，添加消息直到达到 token 预算。
+3. 优先保留最近上下文。
+4. 仍可能在预算边缘附近包含大型摘要条目以保持连续性。
 
-Compaction entries are included as messages (`compactionSummary`) during branch summarization input.
+在分支摘要输入中，压缩条目作为消息（`compactionSummary`）被包含。
 
-### Summary generation and persistence
+### 摘要生成与持久化
 
-Branch summarization:
+分支摘要：
 
-1. Converts and serializes selected messages.
-2. Wraps in `<conversation>`.
-3. Uses custom instructions if supplied, otherwise `branch-summary.md`.
-4. Calls summarization model with `SUMMARIZATION_SYSTEM_PROMPT`.
-5. Prepends `branch-summary-preamble.md`.
-6. Appends file-operation tags.
+1. 转换并序列化选定的消息。
+2. 包装在 `<conversation>` 内。
+3. 如果提供了自定义指令则使用，否则使用 `branch-summary.md`。
+4. 使用 `SUMMARIZATION_SYSTEM_PROMPT` 调用摘要模型。
+5. 前置 `branch-summary-preamble.md`。
+6. 追加文件操作标签。
 
-Result is stored as `BranchSummaryEntry` with optional details (`readFiles`, `modifiedFiles`).
+结果作为 `BranchSummaryEntry` 存储，可选详情（`readFiles`、`modifiedFiles`）。
 
-## Extension and hook touchpoints
+## 扩展与钩子切入点
 
 ### `session_before_compact`
 
-Pre-compaction hook.
+压缩前钩子。
 
-Can:
+可以：
 
-- cancel compaction (`{ cancel: true }`)
-- provide full custom compaction payload (`{ compaction: CompactionResult }`)
+- 取消压缩（`{ cancel: true }`）
+- 提供完整自定义压缩负载（`{ compaction: CompactionResult }`）
 
 ### `session.compacting`
 
-Prompt/context customization hook for default compaction.
+默认压缩的 Prompt/上下文自定义钩子。
 
-Can return:
+可以返回：
 
-- `prompt` (override base summary prompt)
-- `context` (extra context lines injected into `<additional-context>`)
-- `preserveData` (stored on compaction entry)
+- `prompt`（覆盖基础摘要 prompt）
+- `context`（注入 `<additional-context>` 的额外上下文行）
+- `preserveData`（存储在压缩条目上）
 
 ### `session_compact`
 
-Post-compaction notification with saved `compactionEntry` and `fromExtension` flag.
+压缩后通知，包含已保存的 `compactionEntry` 和 `fromExtension` 标志。
 
 ### `session_before_tree`
 
-Runs on tree navigation before default branch summary generation.
+在树导航上、默认分支摘要生成之前运行。
 
-Can:
+可以：
 
-- cancel navigation
-- provide custom `{ summary: { summary, details } }` used when user requested summarization
+- 取消导航
+- 提供自定义 `{ summary: { summary, details } }`，在用户请求摘要时使用
 
 ### `session_tree`
 
-Post-navigation event exposing new/old leaf and optional summary entry.
+导航后事件，公开新/旧叶子以及可选的摘要条目。
 
-## Runtime behavior and failure semantics
+## 运行时行为与失败语义
 
-- Manual compaction aborts current agent operation first.
-- `abortCompaction()` cancels manual compaction, auto-compaction, and handoff generation controllers.
-- Auto compaction emits start/end session events for UI/state updates.
-- Auto compaction can try multiple model candidates and retry transient failures; long retry delays prefer the next candidate when one is available.
-- Overflow errors are excluded from generic retry path because they are handled by context promotion/compaction.
-- If auto-compaction fails:
-  - overflow path emits `Context overflow recovery failed: ...`
-  - incomplete-output path emits `Incomplete response recovery failed: ...`
-  - threshold/idle paths emit `Auto-compaction failed: ...`
-- Branch summarization can be cancelled via abort signal (e.g., Escape), returning canceled/aborted navigation result.
+- 手动压缩首先中止当前 agent 操作。
+- `abortCompaction()` 取消手动压缩、自动压缩和交接生成控制器。
+- 自动压缩发出 start/end 会话事件以供 UI/状态更新。
+- 自动压缩可以尝试多个模型候选项并重试瞬态失败；当有下一个候选项时，长重试延迟优先使用下一个候选项。
+- 溢出错误被排除在通用重试路径之外，因为它们由上下文提升/压缩处理。
+- 如果自动压缩失败：
+  - 溢出路径发出 `Context overflow recovery failed: ...`
+  - 不完整输出路径发出 `Incomplete response recovery failed: ...`
+  - 阈值/空闲路径发出 `Auto-compaction failed: ...`
+- 分支摘要可以通过中止信号取消（例如 Escape），返回已取消/中止的导航结果。
 
-## Settings and defaults
+## 设置与默认值
 
-From `settings-schema.ts`:
+来自 `settings-schema.ts`：
 
 - `compaction.enabled` = `true`
-- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`. `remote` uses provider-native OpenAI-compatible server compaction when available; unavailable or failed methods advance to the next preference.
-- `compaction.asyncEnabled` = `true`. Async (speculative) compaction: when context enters the pre-threshold band `[threshold − lead, threshold)` (lead = `clamp(threshold × 0.125, 8192, 32000)`), maintenance starts a background summarization for the first configured LLM-backed method (`remote`, `handoff`, or `soft`) off a branch snapshot, isolated from the live turn by a side session id. The armed result is committed instantly when the threshold is actually crossed, hiding summarization latency; post-snapshot turns are appended after the summary unchanged. Armed results are discarded when the branch prefix changes (new compaction, reset boundary, `/tree` navigation), when a provider-native replay payload is no longer readable by the active model, or when context grows past `keepRecentTokens` since compute (a fresh speculation replaces it). Speculation is skipped while an extension registers `session_before_compact`. The status line pulses the auto-compact icon while a speculation runs and holds it in accent when a result is armed.
-- `compaction.reserveTokens` is unset by default. The compaction layer normally applies a `16384`-token floor and at least 15% of the context window; on small windows where that default would be impractical, budget checks use the 15% proportional reserve. An explicit configured reserve is honored.
+- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`。`remote` 在可用时使用 provider 原生的 OpenAI 兼容服务器压缩；不可用或失败的方法会推进到下一个偏好。
+- `compaction.asyncEnabled` = `true`。异步（推测）压缩：当上下文进入预阈值带 `[threshold − lead, threshold)`（lead = `clamp(threshold × 0.125, 8192, 32000)`）时，维护会为第一个已配置的 LLM 支持方法（`remote`、`handoff` 或 `soft`）在分支快照上启动后台摘要，该快照通过侧会话 id 与活动轮次隔离。当真正跨过阈值时，已装备的结果会立即提交，隐藏摘要延迟；快照后轮次在摘要后原样追加。当分支前缀发生变化（新的压缩、重置边界、`/tree` 导航）、当 provider 原生重放负载不再可被活动模型读取，或当 cont…
+- `compaction.reserveTokens` 默认未设置。压缩层通常应用 `16384` token 的下限和至少上下文窗口的 15%；在较小的窗口上该默认值不切实际时，预算检查使用 15% 的比例保留。显式配置的保留值会被遵守。
 - `compaction.keepRecentTokens` = `20000`
 - `compaction.autoContinue` = `true`
 - `compaction.midTurnEnabled` = `true`
 - `compaction.handoffSaveToDisk` = `false`
-- The `handoff` method generates a handoff document through the live-cache side-request pipeline and commits it as a compaction entry on the current session (no new session is created); `/handoff` does the same manually.
+- `handoff` 方法通过 live-cache 侧请求管道生成交接文档，并将其作为压缩条目提交到当前会话（不创建新会话）；`/handoff` 手动执行相同操作。
 - `compaction.remoteEndpoint` = `undefined`
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`
-- `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; a positive fixed token limit takes precedence over percentage, and otherwise the reserve-based threshold is used.
+- `compaction.thresholdPercent` = `-1` 且 `compaction.thresholdTokens` = `-1`；正固定 token 限制优先于百分比，否则使用基于保留的阈值。
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`
 - `compaction.idleTimeoutSeconds` = `300`
 - `compaction.supersedeReads` = `true`
 - `compaction.dropUseless` = `true`
-- `snapcompact.systemPrompt` = `"none"` (`"agents-md"` and `"all"` opt into transient system-prompt imaging)
-- `snapcompact.toolResults` = `false` (transient imaging of large historical tool results)
+- `snapcompact.systemPrompt` = `"none"`（`"agents-md"` 和 `"all"` 选择加入对系统 prompt 的瞬时成像）
+- `snapcompact.toolResults` = `false`（对大型历史工具结果进行瞬时成像）
 - `snapcompact.shape` = `"auto"`
 - `branchSummary.enabled` = `false`
 - `branchSummary.reserveTokens` = `16384`
 
-These values are consumed at runtime by `AgentSession`, `SessionMaintenance`, and the compaction/branch-summarization modules.
+这些值在运行时由 `AgentSession`、`SessionMaintenance` 和压缩/分支摘要模块消费。

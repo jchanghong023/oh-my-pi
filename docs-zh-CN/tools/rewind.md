@@ -1,46 +1,46 @@
 # rewind
 
-> End an active checkpoint by pruning exploratory context and retaining a concise report.
+> 通过裁剪探索性上下文并保留精炼报告来结束一个活跃的检查点。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/checkpoint.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/rewind.md`
 - Key collaborators:
-  - `packages/coding-agent/src/session/agent-session.ts` — validates pending rewind state, applies the actual rewind, and injects the retained report.
-  - `packages/coding-agent/src/session/session-manager.ts` — branches the persisted session tree and appends persisted summary/report entries.
-  - `packages/coding-agent/src/session/session-context.ts` — `buildSessionContext()` converts persisted `branch_summary` entries into LLM-visible `branchSummary` messages on rebuilt context.
-  - `packages/coding-agent/src/tools/index.ts` — registers the tool and shares the `checkpoint.enabled` gate.
+  - `packages/coding-agent/src/session/agent-session.ts` — 验证待处理的 rewind 状态、执行实际的 rewind，并注入保留的报告。
+  - `packages/coding-agent/src/session/session-manager.ts` — 分叉已持久化的会话树，并追加持久化的 summary/report 条目。
+  - `packages/coding-agent/src/session/session-context.ts` — `buildSessionContext()` 在重建上下文时将持久化的 `branch_summary` 条目转换为对 LLM 可见的 `branchSummary` 消息。
+  - `packages/coding-agent/src/tools/index.ts` — 注册该工具并共享 `checkpoint.enabled` 开关。
 
 ## Registration / Visibility
-- Tool metadata: `approval = "read"`, `strict = true`, `loadMode = "discoverable"`. Execution is single-shot; rewind side effects are deferred rather than streamed as progress updates.
+- Tool metadata: `approval = "read"`, `strict = true`, `loadMode = "discoverable"`。执行是单次的；rewind 副作用会被延迟处理，而不会以进度更新的形式流式输出。
 - Registration requires `checkpoint.enabled = true` (default `false`).
-- Top-level sessions receive the tool when enabled. Subagents do not discover it by default, but may receive it through an explicit `tools:`/requested-tools list.
-- `checkpoint` and `rewind` are a safety pair: explicitly requesting either while the feature is enabled automatically includes the other.
+- 启用时，顶级会话会获得该工具。Subagent 默认不会发现它，但可以通过显式的 `tools:`/requested-tools 列表获得。
+- `checkpoint` 和 `rewind` 是一对安全工具：在特性启用时，显式请求其中任意一个会自动包含另一个。
 - In an ordinary `tools.xdev` session, discoverable built-ins may be presented as `xd://rewind`; an explicitly requested tool remains top-level.
 
 ## Inputs
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `report` | `string` | Yes | Investigation findings. `execute()` trims it and rejects the empty result. |
+| `report` | `string` | Yes | 调查结果。`execute()` 会对其进行 trim，并在结果为空时拒绝。 |
 
 ## Outputs
-The tool returns a single text result plus structured details:
+该工具返回单个文本结果以及结构化详情：
 
 - text body:
   - `Rewind requested.`
   - `Report captured for context replacement.`
 - `details`:
-  - `report: string` — trimmed report text
+  - `report: string` — trim 后的报告文本
   - `rewound: true`
 
-The returned tool result is not the final rewind. `AgentSession` waits until `turn_end`, then applies the rewind side effects asynchronously.
+返回的工具结果并非最终的 rewind。`AgentSession` 会等待 `turn_end`，然后异步应用 rewind 副作用。
 
 ## Flow
 1. Tool registration in `packages/coding-agent/src/tools/index.ts` enforces `checkpoint.enabled` and the top-level/explicit-subagent visibility rules. `RewindTool.createIf()` itself always constructs the tool.
-2. Without an active checkpoint, `execute()` distinguishes two states:
-   - a retained completed rewind exists: `ToolError("Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.")`
-   - no completed rewind exists: `ToolError("No active checkpoint. Create a checkpoint before calling rewind.")`
+2. 没有活跃检查点时，`execute()` 区分两种状态：
+   - 已存在保留的已完成 rewind：`ToolError("Checkpoint already completed; continue from the retained rewind report instead of calling rewind again.")`
+   - 不存在已完成的 rewind：`ToolError("No active checkpoint. Create a checkpoint before calling rewind.")`
 3. It trims `params.report`; if empty, it throws `ToolError("Report cannot be empty.")`.
 4. It returns a `toolResult()` with `details.report` and `details.rewound = true`.
 5. On the successful rewind tool result, `AgentSession` extracts the report from `details.report` or the first text content block and stores it in `#pendingRewindReport`.

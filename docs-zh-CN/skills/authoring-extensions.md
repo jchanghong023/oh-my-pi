@@ -3,11 +3,11 @@ name: authoring-extensions
 description: Use when creating a new omp extension. Covers ExtensionAPI, factory signature, tool/command/event registration, and local-dev testing.
 ---
 
-# Authoring Extensions
+# 编写扩展
 
-Extensions are the primary way to add capabilities to `oh-my-pi`. A single extension module can register tools the LLM can call, slash commands users can invoke, and event handlers that run throughout the session lifecycle — all from one TypeScript file. Its default factory may initialize synchronously or return a promise.
+扩展是为 `oh-my-pi` 添加能力的主要方式。一个扩展模块就可以注册 LLM 可调用的工具、用户可调用的斜杠命令，以及贯穿整个会话生命周期运行的事件处理器 —— 全部集中在一个 TypeScript 文件中。其默认工厂既可以同步初始化，也可以返回 Promise。
 
-## Minimum viable extension
+## 最小可用扩展
 
 ```ts
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -19,11 +19,11 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-That is a working extension. Drop it into `~/.omp/agent/extensions/hello.ts` and restart omp to see the notification.
+这就是一个可工作的扩展。把它放到 `~/.omp/agent/extensions/hello.ts` 并重启 omp，就能看到通知。
 
-## Full example
+## 完整示例
 
-The following extension registers a slash command, a tool, and a session-start hook:
+下面的扩展注册了一个斜杠命令、一个工具以及一个 session-start 钩子：
 
 ```ts
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -73,34 +73,34 @@ export default function myExtension(pi: ExtensionAPI) {
 }
 ```
 
-## Discovery paths
+## 发现路径
 
-omp loads extension modules from these sources:
+omp 从以下来源加载扩展模块：
 
-1. Native `.omp` locations discovered through the capability system:
+1. 通过能力系统发现的原生 `.omp` 位置：
    - `<cwd>/.omp/extensions/`
    - `~/.omp/agent/extensions/`
-   - legacy extension paths listed in `.omp/settings.json#extensions` or `~/.omp/agent/settings.json#extensions`
-2. Enabled installed plugins under `~/.omp/plugins/node_modules` or a project plugin root — including npm, marketplace, and `omp plugin link` installs — via their `omp.extensions`/`pi.extensions` manifests.
-3. Explicit configured paths passed by the CLI (`omp --extension ./my-ext.ts`, also `-e`; `--hook` is treated as an alias) and by the `extensions:` setting in config.
+   - 在 `.omp/settings.json#extensions` 或 `~/.omp/agent/settings.json#extensions` 中列出的旧版扩展路径
+2. 启用并已安装的插件，位于 `~/.omp/plugins/node_modules` 或项目插件根目录下 —— 包括 npm、marketplace 以及 `omp plugin link` 安装的插件 —— 通过它们的 `omp.extensions`/`pi.extensions` 清单。
+3. 由 CLI 显式配置的路径（`omp --extension ./my-ext.ts`，也可用 `-e`；`--hook` 被视为别名）以及配置中 `extensions:` 设置所指定的路径。
 
-The runtime de-duplicates by resolved absolute path — first seen wins.
+运行时会按解析后的绝对路径去重 —— 先到先得。
 
-The user directory is the active profile's agent directory: the default is `~/.omp/agent`, while `omp --profile <name>` uses `~/.omp/profiles/<name>/agent` (and `PI_CODING_AGENT_DIR` overrides it).
+用户目录是当前活跃 profile 的 agent 目录：默认为 `~/.omp/agent`，而 `omp --profile <name>` 使用 `~/.omp/profiles/<name>/agent`（并可被 `PI_CODING_AGENT_DIR` 覆盖）。
 
-When a path points to a directory, omp resolves the entry point in this order:
+当一个路径指向目录时，omp 按以下顺序解析入口点：
 
-1. `package.json` with `omp.extensions` (or legacy `pi.extensions`) field
+1. `package.json` 中带有 `omp.extensions`（或旧版 `pi.extensions`）字段
 2. `index.ts`
 3. `index.js`
 
-When scanning an `extensions/` directory, omp also loads direct `*.ts`/`*.js` files and one-level subdirectories that have `index.ts`, `index.js`, or a manifest.
+扫描 `extensions/` 目录时，omp 还会加载直接的 `*.ts`/`*.js` 文件，以及具有 `index.ts`、`index.js` 或清单文件的一级子目录。
 
-Extension packages can also bundle sibling capability directories. When a package is loaded through `extensions:` or `--extension`/`-e`, the `omp-plugins` provider discovers its `skills/`, `hooks/pre|post/`, `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json`.
+扩展包也可以捆绑同级的能力目录。当一个包通过 `extensions:` 或 `--extension`/`-e` 加载时，`omp-plugins` 提供者会扫描其 `skills/`、`hooks/pre|post/`、`tools/`、`commands/`、`rules/`、`prompts/` 和 `.mcp.json`。
 
-## package.json manifest
+## package.json 清单
 
-To package an extension as an installable plugin, add an `omp` field to `package.json`:
+要将扩展打包为可安装的插件，请在 `package.json` 中添加一个 `omp` 字段：
 
 ```json
 {
@@ -111,7 +111,7 @@ To package an extension as an installable plugin, add an `omp` field to `package
 }
 ```
 
-The legacy `pi` key is also accepted for backwards compatibility:
+为了向后兼容，旧版 `pi` 键同样被接受：
 
 ```json
 {
@@ -121,7 +121,7 @@ The legacy `pi` key is also accepted for backwards compatibility:
 }
 ```
 
-Multiple entry points are supported:
+支持多个入口点：
 
 ```json
 {
@@ -131,9 +131,9 @@ Multiple entry points are supported:
 }
 ```
 
-Installed-plugin manifest entries may be `.ts`, `.js`, `.mjs`, or `.cjs`; a manifest entry naming a directory resolves `index.ts`, `index.js`, `index.mjs`, or `index.cjs`. Automatic scanning of native/configured extension directories remains limited to `.ts` and `.js`.
+已安装插件的清单条目可以是 `.ts`、`.js`、`.mjs` 或 `.cjs`；指向目录的清单条目会解析为 `index.ts`、`index.js`、`index.mjs` 或 `index.cjs`。对原生/已配置扩展目录的自动扫描仍仅限于 `.ts` 和 `.js`。
 
-## Registering commands
+## 注册命令
 
 ```ts
 pi.registerCommand("my-cmd", {
@@ -148,7 +148,7 @@ pi.registerCommand("my-cmd", {
 });
 ```
 
-`ExtensionCommandContext` session-control methods (safe to call from commands only):
+`ExtensionCommandContext` 的会话控制方法（仅可在命令中安全调用）：
 
 | Method | Effect |
 |---|---|
@@ -160,11 +160,9 @@ pi.registerCommand("my-cmd", {
 | `reload()` | Reload the session runtime |
 | `compact(opts?)` | Compact the current context |
 
-## Registering tools
+## 注册工具
 
-Tools are called by the LLM. Parameter definitions may use the injected
-Zod-compatible omptype builder; `pi.arktype` and the legacy-compatible
-`pi.typebox` are also available:
+工具由 LLM 调用。参数定义可以使用注入的、兼容 Zod 的 omptype 构建器；`pi.arktype` 以及向后兼容的 `pi.typebox` 也可用：
 
 ```ts
 const z = pi.zod;
@@ -191,9 +189,9 @@ pi.registerTool({
 });
 ```
 
-Tool definitions may also set `loadMode: "essential" | "discoverable"` (`"discoverable"` by default), `approval: "read" | "write" | "exec"` (`"exec"` by default), and `strict` for provider structured-output grammar behavior.
+工具定义还可以设置 `loadMode: "essential" | "discoverable"`（默认为 `"discoverable"`）、`approval: "read" | "write" | "exec"`（默认为 `"exec"`），以及用于 provider 结构化输出语法行为的 `strict`。
 
-## Subscribing to events
+## 订阅事件
 
 ```ts
 pi.on("tool_call", async (event, ctx) => {
@@ -216,9 +214,9 @@ pi.on("session_stop", async (event) => {
 });
 ```
 
-Full event catalog: see [extension authoring guide](../extensions.md).
+完整事件目录：参见 [extension authoring guide](../extensions.md)。
 
-## Extension vs hook — when to use which
+## 扩展 vs 钩子 —— 何时使用哪个
 
 | Need | Use |
 |---|---|
@@ -228,19 +226,19 @@ Full event catalog: see [extension authoring guide](../extensions.md).
 | Registering a provider, shortcut, or CLI flag | **Extension only** |
 | Shipping as a marketplace plugin | **Extension** (use `package.json` manifest) |
 
-Extensions are a strict superset of hooks. New authoring should use `ExtensionAPI`.
+扩展是钩子的严格超集。新的编写工作应使用 `ExtensionAPI`。
 
-## Debugging
+## 调试
 
-omp writes structured logs under the active state root's `logs/` directory (by default `~/.omp/logs/`; debug level is always on, and nothing is written to the console because that would corrupt the TUI). Each filename includes the process ID. Tail today's default-profile logs to see extension load diagnostics:
+omp 将结构化日志写入当前 state root 的 `logs/` 目录（默认为 `~/.omp/logs/`；调试级别始终开启，且不会向控制台写入任何内容，因为这会破坏 TUI）。每个文件名都包含进程 ID。跟踪当天的默认 profile 日志可查看扩展加载诊断信息：
 
 ```
 tail -f ~/.omp/logs/omp.$(date +%F).*.log
 ```
 
-Failed extension loads are logged with their path and error. Loaded extensions may also emit their own debug logs via `pi.logger`.
+扩展加载失败时会连同其路径和错误一起记录。已加载的扩展也可以通过 `pi.logger` 输出它们自己的调试日志。
 
-To temporarily disable a specific extension module by name without removing the file:
+要按名称临时禁用某个特定的扩展模块而无需移除文件：
 
 ```yaml
 # ~/.omp/agent/config.yml
@@ -248,19 +246,19 @@ disabledExtensions:
   - extension-module:my-ext
 ```
 
-The derived name is the filename stem (or directory name for `index.ts`-style entries): `/path/to/my-ext.ts` → `my-ext`.
+派生的名称是文件名的词干（对于 `index.ts` 形式的条目则是目录名）：`/path/to/my-ext.ts` → `my-ext`。
 
-## Important constraints
+## 重要约束
 
-- **Do not call runtime actions during load.** Methods like `pi.sendMessage()` throw `ExtensionRuntimeNotInitializedError` if called synchronously during module evaluation (before a session is active). Register handlers/tools/commands during load; perform runtime actions only from event handlers, tools, or commands.
-- **`tool_call` errors are fail-closed.** If a `tool_call` handler throws, the tool is blocked.
-- **Self-scheduled callbacks run in-process with no isolation.** A raw `setInterval`/`setTimeout`/detached-promise callback that throws escapes the handler-dispatch try/catch and crashes the whole session (`uncaughtException`). Use `ctx.setInterval` / `ctx.setTimeout` for background work — they contain callback throws and auto-clear on `session_shutdown`. With raw timers you must add your own `try/catch` and cleanup.
-- **Command names must not clash with built-ins.** Conflicts are skipped with a diagnostic log.
-- **Reserved shortcuts are ignored** (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).
+- **不要在加载期间调用运行时操作。** 像 `pi.sendMessage()` 这样的方法如果在模块求值期间（活动会话开始之前）同步调用，会抛出 `ExtensionRuntimeNotInitializedError`。在加载期间注册处理器/工具/命令；运行时操作仅在事件处理器、工具或命令中执行。
+- **`tool_call` 错误是 fail-closed 的。** 如果 `tool_call` 处理器抛出异常，该工具将被阻止。
+- **自调度回调在没有隔离的情况下与进程内运行。** 一个抛出异常的原生 `setInterval`/`setTimeout`/分离的 Promise 回调会逃出处理器分发的 try/catch，并使整个会话崩溃（`uncaughtException`）。后台工作请使用 `ctx.setInterval` / `ctx.setTimeout` —— 它们会捕获回调中的异常，并在 `session_shutdown` 时自动清理。对于原生定时器，你必须自行添加 `try/catch` 和清理逻辑。
+- **命令名不能与内建命令冲突。** 冲突会以诊断日志形式被跳过。
+- **保留的快捷键会被忽略**（`ctrl+c`、`ctrl+d`、`ctrl+z`、`ctrl+k`、`ctrl+p`、`ctrl+l`、`ctrl+o`、`ctrl+t`、`ctrl+g`、`ctrl+q`、`alt+m`、`shift+tab`、`shift+ctrl+p`、`alt+enter`、`escape`、`enter`）。
 
-## Further reading
+## 进一步阅读
 
-- `docs/extensions.md` — runtime internals and full API surface reference
-- `docs/extension-loading.md` — detailed path resolution rules
-- `docs/hooks.md` — hook subsystem internals
-- `docs/skills/examples/hello-extension/` — complete working example
+- `docs/extensions.md` — 运行时内部细节与完整 API 参考
+- `docs/extension-loading.md` — 详细的路径解析规则
+- `docs/hooks.md` — 钩子子系统内部细节
+- `docs/skills/examples/hello-extension/` — 完整可运行的示例

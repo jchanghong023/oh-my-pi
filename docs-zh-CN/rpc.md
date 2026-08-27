@@ -1,11 +1,11 @@
-# RPC Protocol Reference
+# RPC 协议参考
 
-RPC mode runs the coding agent as a newline-delimited JSON protocol over stdio.
+RPC 模式通过 stdio 运行编码代理，采用以换行符分隔的 JSON 协议。
 
-- **stdin**: commands (`RpcCommand`), extension UI responses, and host-tool updates/results
-- **stdout**: a ready frame, command responses (`RpcResponse`), session/agent events, extension UI requests, host-tool requests/cancellations
+- **stdin**：命令（`RpcCommand`）、扩展 UI 响应以及宿主工具的更新/结果
+- **stdout**：ready 帧、命令响应（`RpcResponse`）、会话/代理事件、扩展 UI 请求、宿主工具的请求/取消
 
-Primary implementation:
+主要实现：
 
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`
 - `packages/coding-agent/src/modes/rpc/rpc-types.ts`
@@ -13,27 +13,27 @@ Primary implementation:
 - `packages/agent/src/agent.ts`
 - `packages/agent/src/agent-loop.ts`
 
-## Startup
+## 启动
 
 ```bash
 omp --mode rpc [regular CLI options]
 ```
 
-Behavior notes:
+行为说明：
 
-- `@file` CLI arguments are rejected in RPC mode.
-- RPC mode disables automatic session title generation by default to avoid an extra model call.
-- RPC/ACP host defaults cover task isolation/execution, memory, advisor, tier, async-job, and bash auto-background settings. They are applied only when a path is not explicitly configured; project/global config, `--config`, and isolated settings remain authoritative. Todo settings are not host-defaulted.
-- The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame before processing commands. The frame advertises supported protocol versions and transport limits.
-- When stdin closes, pending extension UI, host-tool, and host-URI requests are rejected; accepted commands are drained, the session is disposed, and the process exits with code `0`.
-- Responses/events are written as one JSON object per line.
+- RPC 模式拒绝 `@file` CLI 参数。
+- RPC 模式默认禁用自动会话标题生成，以避免额外的模型调用。
+- RPC/ACP 宿主默认值覆盖任务隔离/执行、内存、advisor、tier、async-job 以及 bash 自动后台设置。仅当某项配置未显式设置时才会应用；项目/全局配置、`--config` 以及隔离设置仍以更高优先级为准。Todo 设置不会被宿主默认值覆盖。
+- 进程在扩展发现之前就占用 stdin，然后按行解析非空的 JSONL 输入。格式错误的 JSON 会发出可恢复的 `command: "parse"` 失败，但不会终止循环。
+- 启动时会先写入一个 `ready` 帧，再开始处理命令。该帧声明所支持的协议版本以及传输限制。
+- 当 stdin 关闭时，挂起的扩展 UI、宿主工具和宿主 URI 请求将被拒绝；已接受的命令会排空，会话被释放，进程以退出码 `0` 退出。
+- 响应/事件以每行一个 JSON 对象的格式写入。
 
-## Transport and Framing
+## 传输与帧格式
 
-Protocol v1 stdout frames are a single JSON object followed by `\n`. The server caps each physical stdout frame at 1 MiB. Inbound commands are always one unchunked JSONL object; clients SHOULD keep them within the advertised physical-frame limit.
+协议 v1 的 stdout 帧是单个 JSON 对象后接 `\n`。服务器将每个物理 stdout 帧上限限制为 1 MiB。入站命令始终是单个未分块的 JSONL 对象；客户端应将它们控制在已声明的物理帧限制之内。
 
-The initial ready frame uses protocol v1 and advertises the opt-in lossless transport:
+初始的 ready 帧使用协议 v1，并声明可选的无损传输：
 
 ```json
 {
@@ -45,13 +45,13 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
 }
 ```
 
-Clients that support protocol v2 SHOULD immediately send:
+支持协议 v2 的客户端应立即发送：
 
 ```json
 { "id": "protocol-1", "type": "negotiate_protocol", "protocolVersion": 2 }
 ```
 
-After the success response, oversized stdout objects are emitted losslessly as an uninterrupted sequence of `rpc_chunk` frames. Each chunk carries a base64 segment of the original UTF-8 JSON object:
+在收到成功响应后，超大 stdout 对象会作为不间断的 `rpc_chunk` 帧序列进行无损发送。每个 chunk 携带原始 UTF-8 JSON 对象的一段 base64 片段：
 
 ```json
 {
@@ -64,51 +64,51 @@ After the success response, oversized stdout objects are emitted losslessly as a
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript and Python `RpcClient` implementations negotiate v2 automatically when the ready frame advertises it.
+客户端必须校验 `chunkId`、`index`、`count` 和 `byteLength`，拒绝交错或中断的序列，强制执行已声明的重组上限，按索引顺序拼接解码后的字节，将其作为严格的 UTF-8 解码，并将结果解析为单个 JSON 对象。从 `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame` 导出的 TypeScript `RpcFrameDecoder` 实现了此校验。捆绑的 TypeScript 和 Python `RpcClient` 实现会在 ready 帧声明 v2 时自动协商 v2。
 
-Legacy clients may ignore the added ready fields and remain on v1. V1 retains its bounded fallback behavior for oversized output. Frames above the v2 reassembly ceiling still fail explicitly; large history APIs should use pagination rather than depending on arbitrarily large logical frames.
+旧版客户端可以忽略新增的 ready 字段并继续使用 v1。V1 对超大输出仍保留有界回退行为。超过 v2 重组上限的帧仍会显式失败；大型历史 API 应使用分页，而不是依赖任意大的逻辑帧。
 
-### Outbound frame categories (stdout)
+### 出站帧类别（stdout）
 
-1. Ready frame (`{ type: "ready" }`)
-2. `RpcResponse` (`{ type: "response", ... }`)
-3. `AgentSessionEvent` objects (`agent_start`, `message_update`, etc.)
-4. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
-5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`)
-6. Host URI requests/cancellations (`host_uri_request`, `host_uri_cancel`)
-7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
-8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
-9. Prompt lifecycle hints (`{ type: "prompt_result", id?, agentInvoked }`) for scheduled prompts that later resolve without invoking the agent
-10. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-11. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+1. Ready 帧（`{ type: "ready" }`）
+2. `RpcResponse`（`{ type: "response", ... }`）
+3. `AgentSessionEvent` 对象（`agent_start`、`message_update` 等）
+4. `RpcExtensionUIRequest`（`{ type: "extension_ui_request", ... }`）
+5. 宿主工具的请求/取消（`host_tool_call`、`host_tool_cancel`）
+6. 宿主 URI 的请求/取消（`host_uri_request`、`host_uri_cancel`）
+7. 扩展错误（`{ type: "extension_error", extensionPath, event, error }`）
+8. 可用命令更新（`{ type: "available_commands_update", commands }`），在启动时以及命令元数据变更时发出
+9. 提示词生命周期提示（`{ type: "prompt_result", id?, agentInvoked }`），用于稍后解析但未调用代理的已调度提示词
+10. 子代理帧（`subagent_lifecycle`、`subagent_progress`、`subagent_event`），由 `set_subagent_subscription` 控制
+11. 内建斜杠命令的旁路通道（`command_output`、`session_info_update`、`config_update`）
 
-### Inbound frame categories (stdin)
+### 入站帧类别（stdin）
 
 1. `RpcCommand`
-2. `RpcExtensionUIResponse` (`{ type: "extension_ui_response", ... }`)
-3. Host tool updates/results (`host_tool_update`, `host_tool_result`)
-4. Host URI results (`host_uri_result`)
+2. `RpcExtensionUIResponse`（`{ type: "extension_ui_response", ... }`）
+3. 宿主工具的更新/结果（`host_tool_update`、`host_tool_result`）
+4. 宿主 URI 结果（`host_uri_result`）
 
-## Request/Response Correlation
+## 请求/响应关联
 
-All commands accept optional `id?: string`.
+所有命令都接受可选的 `id?: string`。
 
-- If provided, normal command responses echo the same `id`.
-- `RpcClient` relies on this for pending-request resolution.
+- 如果提供了 `id`，正常的命令响应会回显相同的 `id`。
+- `RpcClient` 依赖此机制来解析挂起的请求。
 
-Important edge behavior from runtime:
+来自运行时的重要边界行为：
 
-- Unknown command responses are emitted with `id: undefined` (even if the request had an `id`).
-- Malformed JSON and synchronous dispatch failures emit `command: "parse"` with `id: undefined`. Exceptions while handling a recognized command emit a failure with that command's `type` and `id`.
-- `prompt` and `abort_and_prompt` return immediate success, then may emit a later error response with the **same** id if async prompt scheduling fails.
-- `prompt` success responses may include `data.agentInvoked`. `false` means the prompt completed locally without an agent turn; `true` means the prompt produced agent lifecycle events; omitted means the host must rely on session events for completion.
-- `abort_and_prompt` does not currently emit `data.agentInvoked` or `prompt_result`; hosts should treat it as the legacy abort-then-schedule path and rely on session events or same-id scheduling errors.
+- 未知命令的响应会以 `id: undefined` 发出（即使请求带有 `id`）。
+- 格式错误的 JSON 以及同步派发失败会以 `command: "parse"` 且 `id: undefined` 发出。处理已识别命令时发生的异常会以该命令的 `type` 和 `id` 发出失败响应。
+- `prompt` 和 `abort_and_prompt` 会立即返回成功，然后如果异步提示词调度失败，可能稍后会发出带有**相同** id 的错误响应。
+- `prompt` 成功响应可能包含 `data.agentInvoked`。`false` 表示提示词已在本地完成，没有启动代理轮次；`true` 表示提示词产生了代理生命周期事件；若省略，则宿主必须依赖会话事件来判断完成。
+- `abort_and_prompt` 当前不发出 `data.agentInvoked` 或 `prompt_result`；宿主应将其视为旧式的 abort-then-schedule 路径，并依赖会话事件或相同 id 的调度错误。
 
-## Command Schema (canonical)
+## 命令模式（标准）
 
-`RpcCommand` is defined in `packages/coding-agent/src/modes/rpc/rpc-types.ts`:
+`RpcCommand` 定义于 `packages/coding-agent/src/modes/rpc/rpc-types.ts`：
 
-### Prompting
+### 提示词
 
 - `{ id?, type: "prompt", message: string, images?: ImageContent[], streamingBehavior?: "steer" | "followUp" }`
 - `{ id?, type: "steer", message: string, images?: ImageContent[] }`
@@ -117,11 +117,11 @@ Important edge behavior from runtime:
 - `{ id?, type: "abort_and_prompt", message: string, images?: ImageContent[] }`
 - `{ id?, type: "new_session", parentSession?: string }`
 
-### Protocol
+### 协议
 
 - `{ id?, type: "negotiate_protocol", protocolVersion: 2 }`
 
-### State
+### 状态
 
 - `{ id?, type: "get_state" }`
 - `{ id?, type: "set_fast_mode", enabled: boolean }`
@@ -133,29 +133,29 @@ Important edge behavior from runtime:
 - `{ id?, type: "get_subagents" }`
 - `{ id?, type: "get_subagent_messages", subagentId?: string, sessionFile?: string, fromByte?: number }`
 
-### Model
+### 模型
 
 - `{ id?, type: "set_model", provider: string, modelId: string }`
 - `{ id?, type: "cycle_model" }`
 - `{ id?, type: "get_available_models" }`
 
-### Thinking
+### 思考
 
 - `{ id?, type: "set_thinking_level", level: ThinkingLevel }`
 - `{ id?, type: "cycle_thinking_level" }`
 
-### Queue modes
+### 队列模式
 
 - `{ id?, type: "set_steering_mode", mode: "all" | "one-at-a-time" }`
 - `{ id?, type: "set_follow_up_mode", mode: "all" | "one-at-a-time" }`
 - `{ id?, type: "set_interrupt_mode", mode: "immediate" | "wait" }`
 
-### Compaction
+### 压缩
 
 - `{ id?, type: "compact", customInstructions?: string }`
 - `{ id?, type: "set_auto_compaction", enabled: boolean }`
 
-### Retry
+### 重试
 
 - `{ id?, type: "set_auto_retry", enabled: boolean }`
 - `{ id?, type: "abort_retry" }`
@@ -165,14 +165,13 @@ Important edge behavior from runtime:
 - `{ id?, type: "bash", command: string }`
 - `{ id?, type: "abort_bash" }`
 
-`bash` is dispatched concurrently: the RPC server continues reading commands
-while the shell command runs, so `abort_bash` (or any other command) sent
-during a long-running `bash` is handled without waiting for it to finish on
-its own. The `bash` response is emitted when the command completes; hosts
-correlate it via `id`. Ordering across concurrent commands is not guaranteed
-— clients MUST match responses on `id`, not on emission order.
+`bash` 是并发派发的：RPC 服务器在 shell 命令运行期间会继续读取命令，
+因此在长时间运行的 `bash` 期间发送的 `abort_bash`（或任何其他命令）
+无需等待其自行完成即可被处理。`bash` 响应会在命令完成时发出；
+宿主通过 `id` 进行关联。并发命令之间的顺序不作保证——客户端必须
+按 `id`（而非按发出顺序）来匹配响应。
 
-### Session
+### 会话
 
 - `{ id?, type: "get_session_stats" }`
 - `{ id?, type: "export_html", outputPath?: string }`
@@ -183,32 +182,32 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "set_session_name", name: string }`
 - `{ id?, type: "handoff", customInstructions?: string }`
 
-### Messages
+### 消息
 
 - `{ id?, type: "get_messages" }`
 - `{ id?, type: "get_messages_page", cursor?: string, limit?: number }`
 
-`get_messages_page` returns a stable chronological page with `messages`, `totalMessages`, and an opaque `nextCursor` when more messages remain. Cursors are bound to the session ID, durable leaf, and message count. The server rejects stale cursors if the session changes between requests, and refuses to start a paging walk while the session is streaming or compacting. Failed page requests carry a machine-readable `code` on the error response — `session_busy` (session is streaming or compacting) or `stale_cursor` (the snapshot behind the cursor changed, e.g. a background bash appended a message between pages) — so clients can react without matching error-message text. Pages contain at most 256 messages and normally stay below the v1 physical-frame ceiling. A v1 caller can page ordinary histories, but an individual message whose response exceeds that ceiling produces an overflow error; retrieving it losslessly requires negotiated v2 framing.
+`get_messages_page` 返回一个稳定的按时间顺序的页面，其中包含 `messages`、`totalMessages`，以及在还有更多消息时的 `nextCursor`（不透明字符串）。游标与会话 ID、持久化的叶子节点和消息数量绑定。如果会话在请求之间发生变化，服务器会拒绝过期的游标，并拒绝在会话正在流式传输或压缩时启动分页遍历。失败的页面请求在错误响应中带有机器可读的 `code`——`session_busy`（会话正在流式传输或压缩中）或 `stale_cursor`（游标背后的快照已变更，例如在两次分页之间有后台 bash 追加了消息）——以便客户端无需匹配错误消息文本即可做出反应。每个页面最多包含 256 条消息，通常保持在 v1 物理帧上限之下。v1…
 
-The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messages()` drain this paged endpoint automatically after negotiating v2. They retain the legacy monolithic command when connected to a v1 server, and on either `session_busy` or `stale_cursor` they discard partial pages and fall back to the legacy best-effort snapshot. Direct `getMessagesPage()` and `get_messages_page()` calls remain strict so incremental hosts never mix snapshots silently.
+捆绑的 TypeScript `RpcClient.getMessages()` 和 Python `RpcClient.get_messages()` 在协商 v2 后会自动排空这个分页端点。连接到 v1 服务器时，它们仍保留旧式的单一命令；无论遇到 `session_busy` 还是 `stale_cursor`，它们都会丢弃部分页面并回退到旧式的尽力而为快照。直接的 `getMessagesPage()` 和 `get_messages_page()` 调用仍然保持严格，增量式宿主绝不会在不知情的情况下混合不同的快照。
 
-### Login
+### 登录
 
 - `{ id?, type: "get_login_providers" }`
 - `{ id?, type: "login", providerId: string }`
 
-## Response Schema
+## 响应模式
 
-All command results use `RpcResponse`:
+所有命令结果都使用 `RpcResponse`：
 
-- Success: `{ id?, type: "response", command: <command>, success: true, data?: ... }`
-- Failure: `{ id?, type: "response", command: string, success: false, error: string, code?: string }`
+- 成功：`{ id?, type: "response", command: <command>, success: true, data?: ... }`
+- 失败：`{ id?, type: "response", command: string, success: false, error: string, code?: string }`
 
-Data payloads are command-specific and defined in `rpc-types.ts`.
+数据负载因命令而异，定义于 `rpc-types.ts`。
 
-### `prompt` payload
+### `prompt` 负载
 
-`prompt` is acknowledged after the command is accepted, not after a model turn finishes:
+`prompt` 在命令被接受后即被确认，而不是在模型轮次结束后：
 
 ```json
 {
@@ -220,30 +219,30 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
 }
 ```
 
-`data.agentInvoked: false` is a completion signal for local-only prompts, including slash commands that produce output without starting an agent turn. `data.agentInvoked: true` means the prompt produced agent lifecycle events; those events can be emitted before or after the prompt response depending on the command path. Older runtimes may omit `data`; hosts should then rely on `agent_end`, custom message completion, or `prompt_result`.
+`data.agentInvoked: false` 是仅在本地完成的提示词的完成信号，包括那些产生输出但未启动代理轮次的斜杠命令。`data.agentInvoked: true` 表示提示词产生了代理生命周期事件；这些事件可能根据命令路径在 prompt 响应之前或之后发出。较旧的运行时可能省略 `data`；此时宿主应依赖 `agent_end`、自定义消息完成或 `prompt_result`。
 
-`prompt_result` is emitted when a prompt was accepted immediately but later resolves as local-only:
+当一个提示词被立即接受但稍后解析为仅在本地完成时，会发出 `prompt_result`：
 
 ```json
 { "type": "prompt_result", "id": "req_1", "agentInvoked": false }
 ```
 
-Local-only slash commands may emit `command_output` frames before completing via `data.agentInvoked: false` or a later `prompt_result`. They do not emit `agent_end`.
+仅在本地完成的斜杠命令可能在通过 `data.agentInvoked: false` 或稍后的 `prompt_result` 完成之前发出 `command_output` 帧。它们不会发出 `agent_end`。
 
-### `get_state` payload
+### `get_state` 负载
 
-`tokensPerSecond` is a number when output throughput is available and `null`
-otherwise. `fastModeEnabled` reports the session setting, while
-`fastModeActive` reports the actual computed active state. For Fireworks,
-`providers.fireworksTier: priority` is a provider-level setting independent of
-the `/fast` family setting, so `fastModeActive` may remain `true` for an
-unsupported Fireworks model.
+`tokensPerSecond` 在可获得输出吞吐时为数字，否则为
+`null`。`fastModeEnabled` 报告会话设置，而
+`fastModeActive` 报告实际计算出的激活状态。对于 Fireworks，
+`providers.fireworksTier: priority` 是一项独立于 `/fast` 系列
+设置的 provider 级设置，因此对于不支持的 Fireworks 模型，
+`fastModeActive` 可能仍为 `true`。
 
-For direct Anthropic, a provider rejection of `speed: "fast"` uses a sticky
-fallback scoped by the resolved endpoint and exact model: `fastModeEnabled` may
-remain `true` while `fastModeActive` is `false`. An explicit `set_fast_mode`
-enable expresses retry intent and clears that fallback so the provider attempt
-is re-armed.
+对于直接的 Anthropic，provider 拒绝 `speed: "fast"` 时会使用
+一个粘性回退，其作用域为已解析的端点和精确的模型：即使
+`fastModeEnabled` 仍为 `true`，`fastModeActive` 也可能为
+`false`。显式调用 `set_fast_mode` 启用即表示重试意图，
+并清除该回退，以便重新发起 provider 尝试。
 
 ```json
 {
@@ -292,22 +291,21 @@ is re-armed.
 }
 ```
 
-### `set_fast_mode` payload
+### `set_fast_mode` 负载
 
-`set_fast_mode` changes whether fast mode is enabled for the session. The
-request is:
+`set_fast_mode` 更改会话是否启用快速模式。请求为：
 
 ```json
 { "id": "req_fast_on", "type": "set_fast_mode", "enabled": true }
 ```
 
-On success, `data` always contains both `enabled` and `active`. These are the
-actual computed values: `enabled` reports the session setting, and `active`
-reports the resulting active state, including any provider-level Fireworks
-priority setting:
+成功时，`data` 始终同时包含 `enabled` 和 `active`。这是
+实际计算出的值：`enabled` 报告会话设置，`active` 报告
+产生的激活状态，包括任何 provider 级别的 Fireworks
+priority 设置：
 
-For direct Anthropic, an explicit enable also re-arms a provider attempt after
-the sticky rejection fallback, even when fast mode was already enabled.
+对于直接的 Anthropic，显式启用还会在粘性拒绝回退之后
+重新发起 provider 尝试，即使快速模式已经处于启用状态。
 
 ```json
 {
@@ -319,8 +317,8 @@ the sticky rejection fallback, even when fast mode was already enabled.
 }
 ```
 
-Enabling fast mode on a model without a service-tier family fails with the
-exact error below:
+在没有 service-tier 系列的模型上启用快速模式将失败，并
+返回以下精确错误：
 
 ```json
 {
@@ -332,13 +330,13 @@ exact error below:
 }
 ```
 
-Disabling fast mode is idempotent, including on an unsupported model. It
-succeeds as an off/no-op result, but disabling `/fast` does not override
-provider-level settings, so a successful disable does not guarantee
-`active: false`. For example, with an unsupported
-`fireworks/deepseek-v4-flash` model and `providers.fireworksTier: priority`,
-the response reports the session setting as disabled while the provider
-priority keeps the computed active state true:
+禁用快速模式是幂等的，包括在不支持的模型上也是如此。它
+作为 off/no-op 结果成功，但禁用 `/fast` 不会覆盖
+provider 级别的设置，因此成功禁用并不保证
+`active: false`。例如，对于不支持的
+`fireworks/deepseek-v4-flash` 模型和 `providers.fireworksTier: priority`，
+响应报告会话设置为已禁用，而 provider priority
+会保持计算出的激活状态为 true：
 
 ```json
 {
@@ -350,7 +348,7 @@ priority keeps the computed active state true:
 }
 ```
 
-The corresponding `get_state` result reports the same computed state:
+对应的 `get_state` 结果报告相同的计算状态：
 
 ```json
 {
@@ -359,9 +357,9 @@ The corresponding `get_state` result reports the same computed state:
 }
 ```
 
-### `set_todos` payload
+### `set_todos` 负载
 
-Replaces the in-memory todo state for the current session and returns the normalized phase list:
+替换当前会话的内存 todo 状态，并返回规范化后的阶段列表：
 
 ```json
 {
@@ -388,12 +386,11 @@ Replaces the in-memory todo state for the current session and returns the normal
 }
 ```
 
-This is useful for hosts that want to pre-seed a plan before the first prompt.
+这对于希望在首次提示词之前预先植入计划的宿主很有用。
 
-### `set_host_tools` payload
+### `set_host_tools` 负载
 
-Replaces the current set of host-owned tools that the RPC server may call back
-into over stdio:
+替换 RPC 服务器可通过 stdio 回调使用的当前宿主自有工具集：
 
 ```json
 {
@@ -417,7 +414,7 @@ into over stdio:
 }
 ```
 
-The response payload is:
+响应负载为：
 
 ```json
 {
@@ -425,18 +422,14 @@ The response payload is:
 }
 ```
 
-These tools are added to the active session tool registry before the next model
-call. Re-sending `set_host_tools` replaces the previous host-owned set.
+这些工具会在下一次模型调用之前被添加到活动会话的工具注册表中。重新发送 `set_host_tools` 会替换先前的宿主自有工具集。
 
-Definitions also accept `hidden?: boolean` and
-`loadMode?: "essential" | "discoverable"`. An explicit mode wins. When omitted,
-known essential built-in names remain `"essential"`; other host tools default
-to `"discoverable"`. `toolNames` in the response lists the registered names.
+定义还接受 `hidden?: boolean` 和
+`loadMode?: "essential" | "discoverable"`。显式指定的模式优先。若省略，已知属于 essential 的内建名称保持为 `"essential"`；其他宿主工具默认为 `"discoverable"`。响应中的 `toolNames` 列出已注册名称。
 
-### `set_host_uri_schemes` payload
+### `set_host_uri_schemes` 负载
 
-Replaces the current set of host-owned URL schemes the RPC server should
-dispatch reads/writes through:
+替换 RPC 服务器应对其进行读/写分发的当前宿主自有 URL scheme 集：
 
 ```json
 {
@@ -453,7 +446,7 @@ dispatch reads/writes through:
 }
 ```
 
-The response payload is:
+响应负载为：
 
 ```json
 {
@@ -461,32 +454,29 @@ The response payload is:
 }
 ```
 
-Schemes are case-insensitive on the wire and normalized to lowercase before
-the response is sent. Re-sending `set_host_uri_schemes` replaces the entire
-previous set — schemes missing from the new list are unregistered.
+Scheme 在传输中不区分大小写，并在发送响应之前被规范化为小写。重新发送 `set_host_uri_schemes` 会替换整个先前的集合——未出现在新列表中的 scheme 将被注销。
 
-`security://` is reserved for OMP's producer-neutral software-security resource
-store. RPC hosts cannot register or shadow that scheme.
+`security://` 保留给 OMP 的、与生产者无关的软件安全资源存储使用。RPC 宿主不能注册或覆盖该 scheme。
 
-## Event Stream Schema
+## 事件流模式
 
-RPC mode forwards `AgentSessionEvent` objects from `AgentSession.subscribe(...)`.
+RPC 模式从 `AgentSession.subscribe(...)` 转发 `AgentSessionEvent` 对象。
 
-Common event types:
+常见事件类型：
 
-- `agent_start`, `agent_end`
-- `turn_start`, `turn_end`
-- `message_start`, `message_update`, `message_end`
-- `tool_execution_start`, `tool_execution_update`, `tool_execution_end`
-- `auto_compaction_start`, `auto_compaction_end`
-- `auto_retry_start`, `auto_retry_end`
-- `retry_fallback_applied`, `retry_fallback_succeeded`
-- `model_changed`, `thinking_level_changed`
+- `agent_start`、`agent_end`
+- `turn_start`、`turn_end`
+- `message_start`、`message_update`、`message_end`
+- `tool_execution_start`、`tool_execution_update`、`tool_execution_end`
+- `auto_compaction_start`、`auto_compaction_end`
+- `auto_retry_start`、`auto_retry_end`
+- `retry_fallback_applied`、`retry_fallback_succeeded`
+- `model_changed`、`thinking_level_changed`
 - `ttsr_triggered`
-- `todo_reminder`, `todo_auto_clear`
-- `irc_message`, `notice`, `goal_updated`
+- `todo_reminder`、`todo_auto_clear`
+- `irc_message`、`notice`、`goal_updated`
 
-Extension runner errors are emitted separately as:
+扩展运行器错误单独以以下形式发出：
 
 ```json
 {
@@ -497,9 +487,9 @@ Extension runner errors are emitted separately as:
 }
 ```
 
-`message_update` includes streaming deltas in `assistantMessageEvent` (text/thinking/toolcall deltas).
+`message_update` 在 `assistantMessageEvent` 中包含流式增量（文本/思考/工具调用增量）。
 
-`agent_end` has this session-level shape (in addition to optional telemetry fields):
+`agent_end` 具有以下会话级别的形状（除可选的遥测字段外）：
 
 ```ts
 {
@@ -509,101 +499,90 @@ Extension runner errors are emitted separately as:
 }
 ```
 
-`isTerminal: false` means maintenance or async delivery has scheduled more work,
-so the session will resume before its true final settle. Treat an `agent_end` as
-run completion only when `isTerminal !== false`; the field is optional so frames
-from older runtimes, where it is absent, remain terminal-compatible.
+`isTerminal: false` 表示维护或异步交付已调度了更多工作，
+因此会话会在其真正的最终结算之前继续运行。只有当 `isTerminal !== false` 时，才应将 `agent_end` 视为运行完成；该字段是可选的，因此来自较旧运行时的（其中该字段缺失的）帧仍与终止状态兼容。
 
-### Available commands
+### 可用命令
 
-`get_available_commands` returns `{ commands }`, and the same array is pushed
-in `available_commands_update` frames at startup and after command metadata
-changes. Each command has `name`, `source`, and optional `aliases`,
-`description`, `input.hint`, and `subcommands`.
+`get_available_commands` 返回 `{ commands }`，同样的数组在启动时以及命令元数据变更后通过 `available_commands_update` 帧进行推送。每个命令都有 `name`、`source`，以及可选的 `aliases`、`description`、`input.hint` 和 `subcommands`。
 
-### Subagent subscriptions
+### 子代理订阅
 
-Subagent forwarding defaults to `"off"`. `set_subagent_subscription` selects:
+子代理转发默认为 `"off"`。`set_subagent_subscription` 可选择：
 
-- `"off"`: no forwarded subagent frames
-- `"progress"`: lifecycle and progress frames
-- `"events"`: lifecycle, progress, and full subagent event frames
+- `"off"`：不转发子代理帧
+- `"progress"`：生命周期和进度帧
+- `"events"`：生命周期、进度以及完整的子代理事件帧
 
-`get_subagents` returns the registry snapshot sorted by subagent index and id.
-`get_subagent_messages` selects a transcript by `subagentId` or `sessionFile`;
-`fromByte` supports incremental reads. Its result contains `sessionFile`,
-`fromByte`, `nextByte`, `reset`, raw transcript `entries`, and converted
-`messages`. If `fromByte` exceeds the current file size, reading restarts at
-byte zero and reports `reset: true`.
+`get_subagents` 返回按子代理索引和 id 排序的注册表快照。`get_subagent_messages` 通过 `subagentId` 或 `sessionFile` 选择一个转录；`fromByte` 支持增量读取。其结果包含 `sessionFile`、`fromByte`、`nextByte`、`reset`、原始转录 `entries` 以及转换后的 `messages`。如果 `fromByte` 超过当前文件大小，读取将从字节零重新开始，并报告 `reset: true`。
 
-## Prompt/Queue Concurrency and Ordering
+## 提示词/队列并发与顺序
 
-This is the most important operational behavior.
+这是最重要的运行行为。
 
-### Immediate ack vs completion
+### 立即确认与完成
 
-`prompt` and `abort_and_prompt` are **acknowledged immediately**:
+`prompt` 和 `abort_and_prompt` 被**立即确认**：
 
 ```json
 { "id": "req_1", "type": "response", "command": "prompt", "success": true }
 ```
 
-That means:
+这意味着：
 
-- command acceptance != run completion
-- agent turns complete only on `agent_end` frames where `isTerminal !== false`
-- local-only prompts complete via `data.agentInvoked: false` on the response or via a later `prompt_result`
+- 命令被接受 != 运行完成
+- 代理轮次仅在 `isTerminal !== false` 的 `agent_end` 帧上完成
+- 仅在本地完成的提示词通过响应上的 `data.agentInvoked: false` 或通过稍后的 `prompt_result` 完成
 
-### While streaming
+### 流式传输期间
 
-`AgentSession.prompt()` requires `streamingBehavior` during active streaming:
+`AgentSession.prompt()` 在主动流式传输期间要求 `streamingBehavior`：
 
-- `"steer"` => queued steering message (interrupt path)
-- `"followUp"` => queued follow-up message (post-turn path)
+- `"steer"` => 排队的转向消息（中断路径）
+- `"followUp"` => 排队的后续消息（轮次后路径）
 
-If omitted during streaming, prompt fails.
+在流式传输期间若省略，则 prompt 失败。
 
-### Queue defaults
+### 队列默认值
 
-From `packages/agent/src/agent.ts` defaults:
+来自 `packages/agent/src/agent.ts` 的默认值：
 
-- `steeringMode`: `"one-at-a-time"`
-- `followUpMode`: `"one-at-a-time"`
-- `interruptMode`: `"immediate"`
+- `steeringMode`：`"one-at-a-time"`
+- `followUpMode`：`"one-at-a-time"`
+- `interruptMode`：`"immediate"`
 
-### Mode semantics
+### 模式语义
 
 - `set_steering_mode` / `set_follow_up_mode`
-  - `"one-at-a-time"`: dequeue one queued message per turn
-  - `"all"`: dequeue entire queue at once
+  - `"one-at-a-time"`：每轮出队一条排队的消息
+  - `"all"`：一次出队整个队列
 - `set_interrupt_mode`
-  - `"immediate"`: tool execution checks steering between tool calls; pending steering can abort remaining tool calls in the turn
-  - `"wait"`: defer steering until turn completion
+  - `"immediate"`：工具执行在工具调用之间检查转向；挂起的转向可中止本轮中剩余的工具调用
+  - `"wait"`：将转向推迟到轮次完成
 
-## Extension UI Sub-Protocol
+## 扩展 UI 子协议
 
-Extensions in RPC mode use request/response UI frames.
+RPC 模式下的扩展使用请求/响应 UI 帧。
 
-### Outbound request
+### 出站请求
 
-`RpcExtensionUIRequest` (`type: "extension_ui_request"`) methods:
+`RpcExtensionUIRequest`（`type: "extension_ui_request"`）方法：
 
-- `select`, `confirm`, `input`, `editor`, `cancel`
-  - `select` keeps labels in `options: string[]` and, when any option has a
-    description, emits a positionally aligned
-    `optionDetails: Array<{ description?: string }>` array. Hosts that do not
-    render descriptions can continue using `options` alone.
-- `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
-- `open_url` (emitted by RPC login flows)
+- `select`、`confirm`、`input`、`editor`、`cancel`
+  - `select` 将标签保存在 `options: string[]` 中，并在任一选项带有
+    description 时，发出一个按位置对齐的
+    `optionDetails: Array<{ description?: string }>` 数组。不渲染
+    description 的宿主可以继续单独使用 `options`。
+- `notify`、`setStatus`、`setWidget`、`setTitle`、`set_editor_text`
+- `open_url`（由 RPC 登录流程发出）
 
-Runtime note:
+运行时说明：
 
-- Automatic session title generation is disabled in RPC mode, and `setTitle` UI
-  requests are also suppressed by default because most hosts do not have a
-  meaningful terminal-title surface. Set `PI_RPC_EMIT_TITLE=1` to opt back in to
-  the UI event only.
+- RPC 模式禁用了自动会话标题生成，`setTitle` UI
+  请求默认也会被抑制，因为大多数宿主没有有意义的终端标题表面。
+  设置 `PI_RPC_EMIT_TITLE=1` 可选择重新启用该 UI 事件。
 
-Example:
+示例：
 
 ```json
 {
@@ -616,24 +595,24 @@ Example:
 }
 ```
 
-### Inbound response
+### 入站响应
 
-`RpcExtensionUIResponse` (`type: "extension_ui_response"`):
+`RpcExtensionUIResponse`（`type: "extension_ui_response"`）：
 
 - `{ type: "extension_ui_response", id: string, value: string }`
 - `{ type: "extension_ui_response", id: string, confirmed: boolean }`
 - `{ type: "extension_ui_response", id: string, cancelled: true, timedOut?: boolean }`
 
-If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires.
+如果对话框具有超时，则在超时/中止触发时，RPC 模式会解析为默认值。
 
-## Host Tool Sub-Protocol
+## 宿主工具子协议
 
-RPC hosts can expose custom tools to the agent by sending `set_host_tools`, then
-serving execution requests over the same transport.
+RPC 宿主可通过发送 `set_host_tools` 向代理暴露自定义工具，
+然后通过同一传输来提供执行请求。
 
-### Outbound request
+### 出站请求
 
-When the agent wants the host to execute one of those tools, RPC mode emits:
+当代理希望宿主执行其中一个工具时，RPC 模式会发出：
 
 ```json
 {
@@ -645,7 +624,7 @@ When the agent wants the host to execute one of those tools, RPC mode emits:
 }
 ```
 
-If the tool execution is later aborted, RPC mode emits:
+如果工具执行稍后被中止，RPC 模式会发出：
 
 ```json
 {
@@ -655,9 +634,9 @@ If the tool execution is later aborted, RPC mode emits:
 }
 ```
 
-### Inbound updates and completion
+### 入站更新与完成
 
-Hosts can optionally stream progress:
+宿主可以选择性地流式推送进度：
 
 ```json
 {
@@ -669,7 +648,7 @@ Hosts can optionally stream progress:
 }
 ```
 
-Completion uses:
+完成时使用：
 
 ```json
 {
@@ -681,18 +660,18 @@ Completion uses:
 }
 ```
 
-Set top-level `isError: true` on `host_tool_result` to reject the pending host tool call and surface the returned text content as a tool error.
+在 `host_tool_result` 上设置顶层 `isError: true` 可拒绝挂起的宿主工具调用，并将返回的文本内容作为工具错误呈现。
 
-## Host URI Sub-Protocol
+## 宿主 URI 子协议
 
-RPC hosts can also own custom URL schemes (virtual files). After
-`set_host_uri_schemes`, every read of `<scheme>://…` and write of
-`<scheme>://…` (when registered as `writable`) is bounced back to the host
-over the same transport.
+RPC 宿主还可以拥有自定义的 URL scheme（虚拟文件）。在
+`set_host_uri_schemes` 之后，每次对 `<scheme>://…` 的读取
+以及（当注册为 `writable` 时）对 `<scheme>://…` 的写入
+都会通过同一传输反弹回宿主。
 
-### Outbound request
+### 出站请求
 
-When a session tool resolves a host-owned URL, RPC mode emits:
+当会话工具解析了一个宿主自有的 URL 时，RPC 模式会发出：
 
 ```json
 {
@@ -703,11 +682,11 @@ When a session tool resolves a host-owned URL, RPC mode emits:
 }
 ```
 
-Writes look the same with `"operation": "write"` and an additional
-`"content": "..."` field carrying the full replacement bytes.
+写入看起来与之相同，但使用 `"operation": "write"` 以及一个
+额外的 `"content": "..."` 字段，用于携带完整的替换字节。
 
-If the request is later aborted (caller cancels, session ends), RPC mode
-emits:
+如果请求稍后被中止（调用方取消、会话结束），RPC 模式
+会发出：
 
 ```json
 {
@@ -717,9 +696,9 @@ emits:
 }
 ```
 
-### Inbound result
+### 入站结果
 
-For successful reads:
+对于成功读取：
 
 ```json
 {
@@ -732,14 +711,14 @@ For successful reads:
 }
 ```
 
-For successful writes, omit content:
+对于成功写入，省略 content：
 
 ```json
 { "type": "host_uri_result", "id": "uri_1" }
 ```
 
-To reject the request, set `isError: true` and either populate `error` with
-a message or fall back to `content` for textual error surfacing:
+若要拒绝请求，请设置 `isError: true` 并在 `error` 中填入
+消息，或退回到使用 `content` 来提供文本形式的错误信息：
 
 ```json
 {
@@ -750,24 +729,23 @@ a message or fall back to `content` for textual error surfacing:
 }
 ```
 
-### Constraints
+### 约束
 
-- The agent's `edit` tool does not target host URIs. Hosts that want to
-  mutate virtual files expose `write` and let the model use the `write` tool
-  with replacement content.
-- Schemes are global to the process; `set_host_uri_schemes` replaces the
-  previous set, unregistering anything not in the new list.
-- Schemes are normalized to lowercase before registration.
-- Successful reads require `content`. `contentType` defaults to `text/plain`
-  and, when supplied, is `"text/plain"`, `"text/markdown"`, or
-  `"application/json"`. A result-level `immutable` overrides the registered
-  scheme's value for that read.
+- 代理的 `edit` 工具不会针对宿主 URI 进行操作。希望修改虚拟
+  文件的宿主应暴露 `write`，并让模型使用 `write` 工具配合替换内容。
+- Scheme 对进程全局生效；`set_host_uri_schemes` 会替换
+  先前的集合，注销任何未在新列表中出现的 scheme。
+- Scheme 在注册之前被规范化为小写。
+- 成功读取需要 `content`。`contentType` 默认为 `text/plain`，
+  若提供，则为 `"text/plain"`、`"text/markdown"` 或
+  `"application/json"`。结果级别的 `immutable` 会覆盖该次读取所
+  注册 scheme 的对应值。
 
-## Error Model and Recoverability
+## 错误模型与可恢复性
 
-### Command-level failures
+### 命令级失败
 
-Failures are `success: false` with string `error`.
+失败为 `success: false`，并带有字符串 `error`。
 
 ```json
 {
@@ -779,25 +757,25 @@ Failures are `success: false` with string `error`.
 }
 ```
 
-### Recoverability expectations
+### 可恢复性预期
 
-- Most command failures are recoverable; process remains alive.
-- Malformed JSONL / parse-loop exceptions emit a `parse` error response and continue reading subsequent lines.
-- Empty `set_session_name` is rejected (`Session name cannot be empty`).
-- Extension UI responses with unknown `id` are ignored.
-- Process termination conditions are stdin close or explicit extension-triggered shutdown after the current command.
+- 大多数命令失败都是可恢复的；进程保持存活。
+- 格式错误的 JSONL / 解析循环异常会发出 `parse` 错误响应，并继续读取后续行。
+- 为空的 `set_session_name` 会被拒绝（`Session name cannot be empty`）。
+- 带有未知 `id` 的扩展 UI 响应会被忽略。
+- 进程终止条件是 stdin 关闭，或在当前命令之后由扩展显式触发的关闭。
 
-## Compact Command Flows
+## 紧凑命令流
 
-### 1) Prompt and stream
+### 1) 提示词并流式传输
 
-stdin:
+stdin：
 
 ```json
 { "id": "req_1", "type": "prompt", "message": "Summarize this repo" }
 ```
 
-stdout sequence (typical):
+stdout 序列（典型）：
 
 ```json
 { "id": "req_1", "type": "response", "command": "prompt", "success": true }
@@ -806,9 +784,9 @@ stdout sequence (typical):
 { "type": "agent_end", "messages": [], "isTerminal": true }
 ```
 
-### 2) Prompt during streaming with explicit queue policy
+### 2) 流式传输期间使用显式队列策略进行提示
 
-stdin:
+stdin：
 
 ```json
 {
@@ -819,9 +797,9 @@ stdin:
 }
 ```
 
-### 3) Inspect and tune queue behavior
+### 3) 检查并调整队列行为
 
-stdin:
+stdin：
 
 ```json
 { "id": "q1", "type": "get_state" }
@@ -829,9 +807,9 @@ stdin:
 { "id": "q3", "type": "set_interrupt_mode", "mode": "wait" }
 ```
 
-### 4) Extension UI round trip
+### 4) 扩展 UI 往返
 
-stdout:
+stdout：
 
 ```json
 {
@@ -843,29 +821,29 @@ stdout:
 }
 ```
 
-stdin:
+stdin：
 
 ```json
 { "type": "extension_ui_response", "id": "ui_7", "value": "feature/rpc-host" }
 ```
 
-## Client libraries
+## 客户端库
 
-### TypeScript helper
+### TypeScript 辅助工具
 
-`packages/coding-agent/src/modes/rpc/rpc-client.ts` is a convenience wrapper, not the protocol definition.
+`packages/coding-agent/src/modes/rpc/rpc-client.ts` 是一个便利性包装器，并非协议定义本身。
 
-Current helper characteristics:
+当前辅助工具的特性：
 
-- Spawns `bun <cliPath> --mode rpc`
-- Correlates responses by generated `req_<n>` ids
-- Dispatches recognized core `AgentEvent` types to listeners
-- Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
-- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use raw protocol frames for any surface not wrapped by the helper.
+- 生成 `bun <cliPath> --mode rpc` 进程
+- 通过生成的 `req_<n>` id 来关联响应
+- 将已识别的核心 `AgentEvent` 类型分派给监听器
+- 通过 `setCustomTools()` 支持宿主自有的自定义工具，并自动处理 `host_tool_call` / `host_tool_cancel`
+- 包装常见的协议命令，包括 OAuth 的 `getLoginProviders()` / `login(...)`；对于辅助工具未包装的任何表面，请使用原始协议帧。
 
-### Python package
+### Python 包
 
-The bundled [`omp-rpc`](../python/omp-rpc/pyproject.toml) distribution provides the process-backed Python client. Its import package is `omp_rpc`; the package API, typed commands and events, host-tool/host-URI helpers, and orchestration examples are maintained in the [`omp-rpc` README](../python/omp-rpc/README.md).
+捆绑的 [`omp-rpc`](../python/omp-rpc/pyproject.toml) 发行版提供了基于进程的 Python 客户端。其导入包为 `omp_rpc`；包 API、类型化命令和事件、宿主工具/宿主 URI 辅助工具以及编排示例在 [`omp-rpc` README](../python/omp-rpc/README.md) 中维护。
 
 ```python
 from omp_rpc import RpcClient
@@ -876,4 +854,4 @@ with RpcClient(provider="anthropic", model="claude-sonnet-4-5") as client:
     print(turn.require_assistant_text())
 ```
 
-By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v2 negotiation and chunk reassembly, message pagination, extension UI, and host-owned tools and URI schemes. The Python package owns that client API and process lifecycle; this document and `rpc-types.ts` remain the canonical wire contract. Use raw protocol frames when a client library does not wrap the surface you need.
+默认情况下，`RpcClient` 会启动 `omp --mode rpc`；通过传入 `command=[...]` 可拥有精确的子命令。它负责请求关联、类型化通知、v2 协商与 chunk 重组、消息分页、扩展 UI，以及宿主自有的工具和 URI scheme。Python 包拥有该客户端 API 和进程生命周期；本文档及 `rpc-types.ts` 仍为权威的线路契约。当客户端库未包装所需的表面时，请使用原始协议帧。

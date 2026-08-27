@@ -1,65 +1,65 @@
-# Natives Binding Contract (JavaScript/TypeScript Side)
+# Natives 绑定契约（JavaScript/TypeScript 端）
 
-This page defines the public JS/TS boundary between `@oh-my-pi/pi-natives` callers and its N-API addon. The authoritative public root surface is `packages/natives/native/index.d.ts` plus the explicit ESM exports in `native/index.js`; Rust internals not present there are not package API.
+本文定义了 `@oh-my-pi/pi-natives` 调用方与其 N-API 插件之间的公共 JS/TS 边界。权威的公共根表面是 `packages/natives/native/index.d.ts` 以及 `native/index.js` 中显式导出的 ESM 模块；不在其中的 Rust 内部实现不属于包 API。
 
-## Contract layers
+## 契约层
 
-1. `crates/pi-natives/src/**/*.rs` defines `#[napi]` functions, classes, objects, and enums.
-2. `bun --cwd=packages/natives run build:bindings` runs napi-rs, installs the host addon and generated `native/index.d.ts`, then runs `gen-enums.ts`.
-3. `gen-enums.ts` reads the declarations, rewrites napi-rs `const enum` declarations to runtime-usable declarations, and replaces the marked block in `native/index.js` with explicit class/function exports and literal enum objects.
-4. `native/index.js` loads the addon and binds that generated root surface.
+1. `crates/pi-natives/src/**/*.rs` 定义 `#[napi]` 函数、类、对象和枚举。
+2. `bun --cwd=packages/natives run build:bindings` 运行 napi-rs，安装宿主插件和生成的 `native/index.d.ts`，然后运行 `gen-enums.ts`。
+3. `gen-enums.ts` 读取声明文件，将 napi-rs 的 `const enum` 声明改写为运行时可用的声明，并使用显式的类/函数导出和字面量枚举对象替换 `native/index.js` 中标记的代码块。
+4. `native/index.js` 加载插件并绑定该生成的根表面。
 
-There is no `NativeBindings` declaration-merging lifecycle or `packages/natives/src/<module>` wrapper convention. The loader validates only a release-version sentinel for install/compiled loads, not every public symbol.
+不存在 `NativeBindings` 声明合并生命周期或 `packages/natives/src/<module>` 包装器约定。加载器仅对安装/编译后加载的发布版本哨兵进行校验，而不是对每个公共符号都做校验。
 
-## Public entrypoints
+## 公共入口
 
-`packages/natives/package.json` exports:
+`packages/natives/package.json` 导出：
 
-| Entry                            | Public values                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `@oh-my-pi/pi-natives`           | Generated root classes, functions, and enum objects from `native/index.js` / `index.d.ts`. Importing is eager.                  |
-| `@oh-my-pi/pi-natives/desktop`   | `createDesktopSession(options): DesktopSession`; addon load is deferred until invocation.                                       |
-| `@oh-my-pi/pi-natives/clipboard` | `copyToClipboard(text)` and `readImageFromClipboard()` plus the `ClipboardImage` type; addon load is deferred until invocation. |
+| 入口                              | 公共值                                                                                                                              |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `@oh-my-pi/pi-natives`            | 来自 `native/index.js` / `index.d.ts` 的根类、函数和枚举对象。导入是急切的（eager）。                                              |
+| `@oh-my-pi/pi-natives/desktop`    | `createDesktopSession(options): DesktopSession`；插件加载延迟到调用时。                                                            |
+| `@oh-my-pi/pi-natives/clipboard`  | `copyToClipboard(text)` 和 `readImageFromClipboard()` 以及 `ClipboardImage` 类型；插件加载延迟到调用时。                           |
 
-Do not import unexported `native/*` implementation paths from package consumers.
+包使用者不得导入未导出的 `native/*` 实现路径。
 
-## Current root surface by owner
+## 按所有者划分的当前根表面
 
-| Category                 | Representative public exports                                                                                                                                     | Rust owner                                                            | Call style           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | -------------------- |
-| Search and workspace     | `grep`, `search`, `hasMatch`, `fuzzyFind`, `glob`, `invalidateFsScanCache`, `listWorkspace`                                                                       | `grep.rs`, `fd.rs`, `glob.rs`, `iofs.rs`, `workspace.rs`              | mixed sync/promise   |
-| AST and code structure   | `astGrep`, `astMatch`, `astEdit`, `blockRangeAt`, `enclosingBlockBoundaries`, `summarizeCode`                                                                     | `ast.rs`, `block.rs`, `summary.rs`                                    | mixed sync/promise   |
-| Diff and vectors         | `diffLines`, `diffWords`, `diffLineRuns`, `structuredPatchHunks`, `cosineSimilarityPairs`, `mmrRerankIndices`, `vectorIndexTopK`                                  | `diff.rs`, `vectors.rs`                                               | sync                 |
-| Shell and PTY            | `executeShell`, `Shell`, `PtySession`                                                                                                                             | `shell.rs`, `pty.rs`                                                  | classes/promises     |
-| Process and files        | `Process`, `FileLock`                                                                                                                                             | `ps.rs`, `file_lock/mod.rs`                                           | classes/mixed        |
-| Desktop and clipboard    | `DesktopSession`, `copyToClipboard`, `readImageFromClipboard`                                                                                                     | `desktop/mod.rs`, `clipboard.rs`                                      | class, sync, promise |
-| Audio and live media     | `AudioCapture`, `AudioPlayback`, `LiveWebRtcPeer`                                                                                                                 | `audio.rs`, `live.rs`                                                 | classes/mixed        |
-| Text and highlighting    | `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth`, `extractSegments`, `visibleWidth`, `setHangulCompatJamoWidthOverride`, `highlightCode`, language queries | `text.rs`, `highlight.rs`                                             | sync                 |
-| Conversion and rendering | `htmlToMarkdown`, `encodeSixel`, `renderSnapcompactPng`, `snapcompactSupportedChars`                                                                              | `html.rs`, `sixel.rs`, `snapcompact.rs`                               | mixed sync/promise   |
-| Tokens and system        | `countTokens`, macOS appearance/power exports, `getWorkProfile`, `deviceCheckGenerateToken`                                                                       | `tokens.rs`, `appearance.rs`, `power.rs`, `prof.rs`, `devicecheck.rs` | mixed                |
-| Isolation                | `isoBackend`, `isoProbe`, `isoResolve`, `isoIsUnavailableError`, `isoStart`, `isoStop`, `isoDiff`                                                                 | `iso.rs`                                                              | mixed sync/promise   |
-| Keys                     | `parseKey`, `matchesKey`, Kitty/legacy helpers                                                                                                                    | `keys.rs`                                                             | sync                 |
+| 类别                | 代表性的公共导出                                                                                                                                          | Rust 所有者                                                           | 调用风格              |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
+| 搜索和工作区        | `grep`、`search`、`hasMatch`、`fuzzyFind`、`glob`、`invalidateFsScanCache`、`listWorkspace`                                                                | `grep.rs`、`fd.rs`、`glob.rs`、`iofs.rs`、`workspace.rs`              | 同步/Promise 混合     |
+| AST 与代码结构      | `astGrep`、`astMatch`、`astEdit`、`blockRangeAt`、`enclosingBlockBoundaries`、`summarizeCode`                                                              | `ast.rs`、`block.rs`、`summary.rs`                                    | 同步/Promise 混合     |
+| Diff 与向量         | `diffLines`、`diffWords`、`diffLineRuns`、`structuredPatchHunks`、`cosineSimilarityPairs`、`mmrRerankIndices`、`vectorIndexTopK`                          | `diff.rs`、`vectors.rs`                                               | 同步                 |
+| Shell 与 PTY        | `executeShell`、`Shell`、`PtySession`                                                                                                                     | `shell.rs`、`pty.rs`                                                  | 类/Promise            |
+| 进程与文件          | `Process`、`FileLock`                                                                                                                                     | `ps.rs`、`file_lock/mod.rs`                                           | 类/混合               |
+| 桌面与剪贴板        | `DesktopSession`、`copyToClipboard`、`readImageFromClipboard`                                                                                             | `desktop/mod.rs`、`clipboard.rs`                                      | 类、同步、Promise     |
+| 音频与实时媒体      | `AudioCapture`、`AudioPlayback`、`LiveWebRtcPeer`                                                                                                         | `audio.rs`、`live.rs`                                                 | 类/混合               |
+| 文本与高亮          | `wrapTextWithAnsi`、`truncateToWidth`、`sliceWithWidth`、`extractSegments`、`visibleWidth`、`setHangulCompatJamoWidthOverride`、`highlightCode`、语言查询   | `text.rs`、`highlight.rs`                                             | 同步                 |
+| 转换与渲染          | `htmlToMarkdown`、`encodeSixel`、`renderSnapcompactPng`、`snapcompactSupportedChars`                                                                       | `html.rs`、`sixel.rs`、`snapcompact.rs`                               | 同步/Promise 混合     |
+| Tokens 与系统       | `countTokens`、macOS 外观/电源相关导出、`getWorkProfile`、`deviceCheckGenerateToken`                                                                       | `tokens.rs`、`appearance.rs`、`power.rs`、`prof.rs`、`devicecheck.rs` | 混合                 |
+| 隔离                | `isoBackend`、`isoProbe`、`isoResolve`、`isoIsUnavailableError`、`isoStart`、`isoStop`、`isoDiff`                                                          | `iso.rs`                                                              | 同步/Promise 混合     |
+| 按键                | `parseKey`、`matchesKey`、Kitty/legacy 辅助函数                                                                                                            | `keys.rs`                                                             | 同步                 |
 
-Consult `native/index.d.ts` for exact option/result fields and signatures. Notable current signatures include `renderSnapcompactPng(...): Promise<string>`, `readImageFromClipboard(): Promise<ClipboardImage | undefined | null>`, and typed-array vector inputs/results.
+请参考 `native/index.d.ts` 以获取精确的选项/结果字段和签名。当前值得注意的签名包括 `renderSnapcompactPng(...): Promise<string>`、`readImageFromClipboard(): Promise<ClipboardImage | undefined | null>` 以及类型化数组形式的向量输入/结果。
 
-## Sync, Promise, and callback rules
+## 同步、Promise 与回调规则
 
-The call style is part of the public contract:
+调用风格是公共契约的一部分：
 
-- CPU-heavy/blocking APIs generally return promises through napi-rs tasks, including `grep`, `glob`, `fuzzyFind`, AST search/edit, snapcompact rendering, and HTML conversion.
-- Tokio-backed operations such as shell, PTY, isolation lifecycle, device check, desktop operations, and live media use promises where declared.
-- In-memory transforms and direct probes generally remain synchronous: `search`, `hasMatch`, block boundaries, text/layout helpers, diffs, vector ranking, highlighting, key parsing, and isolation probe/resolve helpers.
-- Stateful resources are classes. Their constructors and individual methods can have different sync/async behavior; use the declarations rather than assuming the whole class is asynchronous.
+- CPU 密集型/阻塞型 API 通常通过 napi-rs 任务返回 Promise，包括 `grep`、`glob`、`fuzzyFind`、AST 搜索/编辑、snapcompact 渲染以及 HTML 转换。
+- 由 Tokio 支持的操作（如 shell、PTY、隔离生命周期、设备检查、桌面操作以及实时媒体）在已声明的情况下使用 Promise。
+- 内存中的转换和直接探测通常保持同步：`search`、`hasMatch`、块边界、文本/布局辅助、diff、向量排序、高亮、按键解析以及隔离的 probe/resolve 辅助。
+- 有状态资源是类。它们的构造函数和各个方法可以具有不同的同步/异步行为；应使用声明文件而不是假设整个类都是异步的。
 
-Changing a public function between synchronous and promise-returning is breaking. `renderSnapcompactPng`, for example, must be awaited even though adjacent snapcompact character probing is synchronous.
+在同步和返回 Promise 之间切换公共函数是破坏性变更。例如，`renderSnapcompactPng` 必须使用 `await`，即使其相邻的 snapcompact 字符探测是同步的。
 
-Callback parameters generated from napi-rs `ThreadsafeFunction` use an error-first shape such as `(error: Error | null, value) => void`. Streaming callbacks do not replace the owning promise/result. Their exact timing and optionality are declared per export.
+由 napi-rs 的 `ThreadsafeFunction` 生成的回调参数使用 error-first 形式，如 `(error: Error | null, value) => void`。流式回调不会取代所属的 Promise/结果。它们的精确时序和可选项按各导出来声明。
 
-## Objects, enums, and binary data
+## 对象、枚举与二进制数据
 
-`#[napi(object)]` structs become TS interfaces such as search results, AST payloads, shell/PTY results, desktop options/results, audio/live events, and isolation records. napi-rs owns runtime conversion; TypeScript optionality does not provide semantic validation to untyped callers.
+`#[napi(object)]` 结构体成为 TS 接口，例如搜索结果、AST 负载、shell/PTY 结果、桌面选项/结果、音频/实时事件以及隔离记录。运行时转换由 napi-rs 负责；TypeScript 的可选性并不能为非类型化调用方提供语义校验。
 
-The generated runtime enum objects currently are:
+当前生成的运行时枚举对象为：
 
 - `AstMatchStrictness`
 - `Ellipsis`
@@ -72,22 +72,22 @@ The generated runtime enum objects currently are:
 - `MacOSAppearance`
 - `ProcessStatus`
 
-Numeric and string enum declarations constrain TypeScript callers but do not by themselves prove that arbitrary untyped values are semantically valid. Binary APIs use typed arrays (`Uint8Array`, `Float32Array`, `Float64Array`, `Uint32Array`) where declared; do not replace them with ordinary arrays without an explicit conversion.
+数值型和字符串型枚举声明约束了 TypeScript 调用方，但本身并不能证明任意非类型化值在语义上是合法的。二进制 API 在已声明的情况下使用类型化数组（`Uint8Array`、`Float32Array`、`Float64Array`、`Uint32Array`）；在缺少显式转换的情况下，不要用普通数组替换它们。
 
-## Import and error behavior
+## 导入与错误行为
 
-- Importing the root throws if no compatible addon candidate loads. Lazy desktop/clipboard subpaths defer that failure until their wrapper is called.
-- Install and compiled candidates missing the expected version sentinel are rejected during loading. Workspace-development candidates skip sentinel validation.
-- A resident prior-version addon can produce a restart-specific mismatch; a stale file on disk produces a reinstall diagnosis.
-- The loader does not check the full export set. A same-version incomplete build can therefore load and later expose `undefined` members.
-- N-API conversion errors throw or reject before Rust business logic runs. Native task and async failures reject their returned promises.
+- 导入根入口时，如果没有兼容的插件候选项可加载，则会抛出错误。懒加载的 desktop/clipboard 子路径会将该失败延迟到其包装函数被调用时。
+- 安装版和编译版候选项若缺少预期的版本哨兵，在加载时会被拒绝。工作区开发版候选项会跳过哨兵校验。
+- 残留的旧版本插件可能产生特定于重启的不匹配；磁盘上残留的过期文件会触发重新安装诊断。
+- 加载器不会检查完整的导出集合。因此，同一版本的不完整构建可以加载，并在稍后暴露出值为 `undefined` 的成员。
+- N-API 转换错误会在 Rust 业务逻辑运行之前抛出或 reject。原生任务和异步失败会 reject 其返回的 Promise。
 
-## Binding-change checklist
+## 绑定变更清单
 
-1. Add or change the owning Rust `#[napi]` item; register a new module in `crates/pi-natives/src/lib.rs`.
-2. Run `bun --cwd=packages/natives run build:bindings` when the exported type surface changes. This is the declaration/local-addon path; the normal `build` script is the Bazel shipping-addon path.
-3. Confirm `native/index.d.ts` has the intended JS name, types, optionality, callback shape, and sync/promise return.
-4. Confirm the marked block in `native/index.js` contains the class/function and any enum runtime object.
-5. Add a lazy subpath wrapper only when deferred loading is required, and then add matching `package.json#exports` runtime/types entries.
-6. Update all direct consumers and remove the obsolete implementation when the native path becomes canonical.
-7. Run a focused scenario that imports and invokes the changed export against the newly built addon.
+1. 添加或修改所属 Rust 的 `#[napi]` 项；在 `crates/pi-natives/src/lib.rs` 中注册新模块。
+2. 当导出类型表面发生变化时，运行 `bun --cwd=packages/natives run build:bindings`。这是声明/本地插件路径；常规的 `build` 脚本是 Bazel 发行版插件路径。
+3. 确认 `native/index.d.ts` 中包含期望的 JS 名称、类型、可选性、回调形式以及同步/Promise 返回。
+4. 确认 `native/index.js` 中标记的代码块包含了该类/函数以及任何枚举运行时对象。
+5. 仅在需要延迟加载时添加懒加载子路径包装器，并相应地添加 `package.json#exports` 中匹配的 runtime/types 条目。
+6. 当原生路径成为规范路径时，更新所有直接使用者并移除过时的实现。
+7. 运行一个聚焦的场景，在新构建的插件上导入并调用被修改的导出。

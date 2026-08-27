@@ -1,29 +1,29 @@
 # mini-marketplace
 
-A minimal `oh-my-pi` marketplace catalog that demonstrates the `marketplace.json` format. It lists one plugin (`my-plugin`) using a relative path source.
+一个最小的 `oh-my-pi` marketplace 目录，演示 `marketplace.json` 格式。它通过相对路径源列出一个插件（`my-plugin`）。
 
-## Install command
+## 安装命令
 
 ```
 /marketplace add ./docs/skills/examples/mini-marketplace
 /marketplace install my-plugin@example-marketplace
 ```
 
-Or from the CLI:
+或者从 CLI：
 
 ```
 omp plugin marketplace add ./docs/skills/examples/mini-marketplace
 omp plugin install my-plugin@example-marketplace
 ```
 
-## What it demonstrates
+## 演示内容
 
-- Minimum required `marketplace.json` fields: `name`, `owner.name`, `plugins`
-- Relative path plugin source using `./` prefix (`"source": "./my-plugin"`)
-- Plugin bundled inside the same directory tree as the marketplace catalog
-- Extra catalog metadata: the example includes a top-level `description`; current marketplace parsing preserves extra top-level fields, while runtime behavior uses required fields and plugin entries.
+- 必需的最小 `marketplace.json` 字段：`name`、`owner.name`、`plugins`
+- 使用 `./` 前缀的相对路径插件源（`"source": "./my-plugin"`）
+- 插件与 marketplace 目录打包在同一个目录树中
+- 额外的目录元数据：本示例包含顶层 `description`；当前 marketplace 解析会保留额外的顶层字段，而运行时行为仅使用必需字段和插件条目。
 
-## Structure
+## 结构
 
 ```
 mini-marketplace/
@@ -35,4 +35,4 @@ mini-marketplace/
     index.ts              ← extension entry point
 ```
 
-Published and local marketplaces use the same catalog location. omp loads `.omp-plugin/marketplace.json` first and falls back to `.claude-plugin/marketplace.json` (the Claude Code-compatible path this example ships) inside the marketplace root. Point `/marketplace add` at this folder to load the example.
+已发布和本地的 marketplace 使用相同的目录位置。omp 优先加载 `.omp-plugin/marketplace.json`，回退到 `.claude-plugin/marketplace.json`（本示例提供的与 Claude Code 兼容的路径），它们都位于 marketplace 根目录中。将 `/marketplace add` 指向此文件夹即可加载该示例。

@@ -1,50 +1,50 @@
-# Resolution devices runtime
+# 解析设备运行时
 
-Pending previews and plan approval do not use a `resolve` tool. They finalize through plain-text `write` calls to virtual `xd://` devices implemented in `packages/coding-agent/src/tools/resolve.ts`:
+待处理的预览与计划审批并不使用 `resolve` 工具。它们通过纯文本 `write` 调用完成，目标是 `packages/coding-agent/src/tools/resolve.ts` 中实现的虚拟 `xd://` 设备：
 
-- `xd://resolve` — apply the pending staged preview; body = a one-sentence reason
-- `xd://reject` — discard the pending staged preview; body = a one-sentence reason
-- `xd://propose` — submit a plan for approval while plan mode is active; body = the plan slug (`<slug>` for `local://<slug>-plan.md`)
+- `xd://resolve` —— 应用待处理的暂存预览；正文 = 一句话原因
+- `xd://reject` —— 丢弃待处理的暂存预览；正文 = 一句话原因
+- `xd://propose` —— 在计划模式处于激活状态时提交一份计划以供审批；正文 = 计划 slug（`local://<slug>-plan.md` 中的 `<slug>`）
 
-These are internal URLs, not filesystem paths. `read xd://resolve`, `read xd://reject`, and `read xd://propose` return a one-line usage hint. Completed device writes carry `details.xdev` metadata; consumers recover the inner result through `writeDeviceDispatch()` and `resolveDispatchDetails()`.
+这些是内部 URL，而非文件系统路径。`read xd://resolve`、`read xd://reject` 与 `read xd://propose` 会返回一行使用提示。已完成的设备写入会携带 `details.xdev` 元数据；消费者通过 `writeDeviceDispatch()` 与 `resolveDispatchDetails()` 恢复内部结果。
 
-## Preview flows
+## 预览流程
 
-Preview producers call `queueResolveHandler(...)` with `apply(reason)` and optional `reject(reason)` callbacks. Each preview receives a unique pending-invoker ID in `ToolChoiceQueue`, so stacked previews do not overwrite one another.
+预览生产者通过 `queueResolveHandler(...)` 调用，并传入 `apply(reason)` 以及可选的 `reject(reason)` 回调。每个预览在 `ToolChoiceQueue` 中都会获得一个唯一的待处理调用方 ID，因此堆叠的预览之间不会相互覆盖。
 
-While a preview is pending, `AgentSession.nextToolChoiceDirective()` returns a soft requirement:
+当某个预览处于待处理状态时，`AgentSession.nextToolChoiceDirective()` 会返回一条软性约束：
 
 - `toolName: "write"`
 - `satisfies: isPreviewResolutionToolCall`
-- reminder from `resolve-device-reminder.md`
+- 来自 `resolve-device-reminder.md` 的提示
 
-The model complies by writing to `xd://resolve` or `xd://reject`. A different write does not resolve the preview and is skipped or escalated by the soft-requirement lifecycle.
+模型通过向 `xd://resolve` 或 `xd://reject` 写入来遵循该约束。任何其他写入都无法解析该预览，并会被软性约束生命周期跳过或升级处理。
 
-Dispatch invokes the pending queue head through `runResolveInvocation(...)`.
+调度过程会通过 `runResolveInvocation(...)` 调用待处理队列的头部项。
 
-- A successful apply or discard consumes that pending invoker exactly once.
-- If apply throws, the same preview is re-registered so the model can reject it or retry after fixing the cause.
-- Rejecting with no pending action succeeds with `Nothing to reject; no pending action remains.`
-- Resolving with no pending action throws.
-- An apply callback's ordinary error becomes `ToolError("Apply failed: ...")`; an existing `ToolError` is preserved.
+- 一次成功的应用或丢弃会精确消费该待处理调用方一次。
+- 若 apply 抛出异常，同一预览会被重新注册，以便模型在修复原因后拒绝或重试。
+- 在没有待处理动作时执行 reject 会以 `Nothing to reject; no pending action remains.` 成功完成。
+- 在没有待处理动作时执行 resolve 会抛出异常。
+- apply 回调中的常规错误会变为 `ToolError("Apply failed: ...")`；已有的 `ToolError` 会被原样保留。
 
-## Plan approval
+## 计划审批
 
-Plan mode installs a separate proposal handler through `setPlanProposalHandler(...)`.
+计划模式会通过 `setPlanProposalHandler(...)` 安装一个独立的提案处理器。
 
-- Interactive mode hands `PlanApprovalDetails` to the plan-review UI.
-- ACP mode runs elicitation/approval and emits mode updates.
-- PlanYolo auto-approves and switches to the execution target.
+- 交互式模式将 `PlanApprovalDetails` 交给计划审查 UI。
+- ACP 模式运行 elicitation/审批并发出模式更新。
+- PlanYolo 自动审批并切换到执行目标。
 
-`xd://propose` dispatches the written slug to the installed plan proposal handler and is valid only while plan mode is active.
+`xd://propose` 会将写入的 slug 分发给已安装的计划提案处理器，并且仅在计划模式处于激活状态时有效。
 
-## Why `write` is guaranteed
+## 为何 `write` 一定可用
 
-Because previews and plan approval ride `write`, the harness keeps `write` available whenever needed:
+由于预览与计划审批都依赖于 `write`，因此只要需要，harness 都会保持 `write` 可用：
 
-- `createTools(...)` auto-appends `write` when a deferrable tool such as `ast_edit` is active.
-- `createAgentSession(...)` keeps `write` registered when a deferrable tool exists or plan mode is enabled.
+- `createTools(...)` 在存在可延迟工具（如 `ast_edit`）时会自动追加 `write`。
+- `createAgentSession(...)` 在存在可延迟工具或启用计划模式时，会保持 `write` 已注册。
 
-## Custom tools
+## 自定义工具
 
-Custom tools still stage previews through `pushPendingAction(...)`; the loader forwards them into `queueResolveHandler(...)`. The custom-tool preview API is unchanged except for the model-facing finalization step: follow up with a plain-text write to `xd://resolve` or `xd://reject`, not a `resolve` tool call.
+自定义工具仍然通过 `pushPendingAction(...)` 来暂存预览；加载器会将其转发至 `queueResolveHandler(...)`。除了面向模型的定稿步骤之外，自定义工具的预览 API 保持不变：随后应通过向 `xd://resolve` 或 `xd://reject` 写入纯文本来完成，而不是通过 `resolve` 工具调用。

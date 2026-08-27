@@ -1,10 +1,10 @@
-# Gemini Manifest Extensions (`gemini-extension.json`)
+# Gemini 清单扩展（`gemini-extension.json`）
 
-This document covers how the coding-agent discovers and parses Gemini-style manifest extensions (`gemini-extension.json`) into the `extensions` capability.
+本文档介绍 coding-agent 如何发现并解析 Gemini 风格的清单扩展（`gemini-extension.json`），并将其接入 `extensions` 能力。
 
-It does **not** cover TypeScript/JavaScript extension module loading (`extensions/*.ts`, `index.ts`, `package.json omp.extensions`), which is documented in [Extension Loading](./extension-loading.md).
+本文档**不**涉及 TypeScript/JavaScript 扩展模块加载（`extensions/*.ts`、`index.ts`、`package.json omp.extensions`），相关内容请参见 [Extension Loading](./extension-loading.md)。
 
-## Implementation files
+## 实现文件
 
 - [`packages/coding-agent/src/discovery/gemini.ts`](../packages/coding-agent/src/discovery/gemini.ts)
 - [`packages/coding-agent/src/discovery/builtin.ts`](../packages/coding-agent/src/discovery/builtin.ts)
@@ -16,43 +16,43 @@ It does **not** cover TypeScript/JavaScript extension module loading (`extension
 
 ---
 
-## What gets discovered
+## 发现范围
 
-The Gemini provider (`id: gemini`, priority `60`) registers an `extensions` loader that scans two fixed roots:
+Gemini provider（`id: gemini`，优先级 `60`）注册了一个 `extensions` 加载器，用于扫描两个固定的根目录：
 
-- User: `~/.gemini/extensions`
-- Project: `<cwd>/.gemini/extensions`
+- 用户级：`~/.gemini/extensions`
+- 项目级：`<cwd>/.gemini/extensions`
 
-Path resolution is direct from `ctx.home` and `ctx.cwd` via `getUserPath()` / `getProjectPath()`.
+路径解析直接通过 `getUserPath()` / `getProjectPath()` 从 `ctx.home` 和 `ctx.cwd` 取得。
 
-Important scope rule: project lookup is **cwd-only**. It does not walk parent directories.
+重要的范围规则：项目级查找**仅限 cwd**，不会向上遍历父目录。
 
 ---
 
-## Directory scan rules
+## 目录扫描规则
 
-For each root (`~/.gemini/extensions` and `<cwd>/.gemini/extensions`), discovery does:
+对每个根目录（`~/.gemini/extensions` 和 `<cwd>/.gemini/extensions`），发现流程会执行：
 
 1. `readDirEntries(root)`
-2. keep only direct child directories (`entry.isDirectory()`)
-3. for each child `<name>`, attempt to read exactly:
+2. 仅保留直接子目录（`entry.isDirectory()`）
+3. 对每个子目录 `<name>`，尝试读取以下精确路径：
    - `<root>/<name>/gemini-extension.json`
 
-There is no recursive scan beyond one directory level.
+除一级目录之外，不会进行递归扫描。
 
-### Hidden directories
+### 隐藏目录
 
-Gemini manifest discovery does **not** filter out dot-prefixed directory names. If a hidden child directory exists and contains `gemini-extension.json`, it is considered.
+Gemini 清单发现**不会**过滤以点号开头的目录名。如果存在隐藏的子目录且其中包含 `gemini-extension.json`，则会被纳入考虑。
 
-### Missing/unreadable files
+### 文件缺失或不可读
 
-If `gemini-extension.json` is missing or unreadable, that directory is skipped silently (no warning).
+如果 `gemini-extension.json` 缺失或不可读，该目录会被静默跳过（不产生警告）。
 
 ---
 
-## Manifest shape (as implemented)
+## 清单结构（按实现）
 
-The capability type defines this manifest shape:
+能力类型定义了如下清单结构：
 
 ```ts
 interface ExtensionManifest {
@@ -64,31 +64,31 @@ interface ExtensionManifest {
 }
 ```
 
-Discovery-time behavior is intentionally loose:
+发现阶段的行为有意保持宽松：
 
-- The file must be non-empty and `tryParseJson()` must return a truthy value.
-  Invalid JSON and valid JSON literals `null`, `false`, `0`, or `""` therefore
-  take the same warning path.
-- There is no runtime schema validation for field types/content after that gate.
-- The parsed value is stored as `manifest` on the capability item.
+- 文件必须非空，并且 `tryParseJson()` 必须返回真值。
+  因此，无效的 JSON 以及合法的 JSON 字面量 `null`、`false`、`0` 或 `""`
+  都会走同一条警告路径。
+- 在此之后，不会对字段类型/内容进行运行时 schema 校验。
+- 解析后的值会以 `manifest` 字段存储在能力项上。
 
-### Name normalization
+### 名称规范化
 
-`Extension.name` is set to:
+`Extension.name` 按以下规则设置：
 
-1. `manifest.name` if it is not `null`/`undefined`
-2. otherwise the extension directory name
+1. 如果 `manifest.name` 不是 `null`/`undefined`，则使用它
+2. 否则使用扩展目录名
 
-No string-type enforcement is applied here.
+此处不会进行字符串类型强制。
 
 ---
 
-## Materialization into capability items
+## 物化为能力项
 
-A valid parsed manifest creates one `Extension` capability item:
+一个有效解析的清单会创建一个 `Extension` 能力项：
 
 ```ts
-{
+:{
 	name: manifest.name ?? <directory-name>,
 	path: <extension-directory>,
 	manifest: <parsed-json>,
@@ -99,91 +99,87 @@ A valid parsed manifest creates one `Extension` capability item:
 		path: <absolute-manifest-path>,
 		level: "user" | "project"
 	}
-}
+:}
 ```
 
-Notes:
+补充说明：
 
-- `_source.path` is normalized to an absolute path by `createSourceMeta()`.
-- Registry-level capability validation for `extensions` only checks presence of `name` and `path`.
-- Manifest internals (`mcpServers`, `tools`, `context`) are not validated during discovery.
-
----
-
-## Error handling and warning semantics
-
-### Warned
-
-- Invalid JSON, or a syntactically valid falsy JSON literal, in a non-empty
-  manifest file:
-  - warning format: `Invalid JSON in <manifestPath>`
-
-### Not warned (silent skip)
-
-- `extensions` directory missing
-- child directory has no `gemini-extension.json`
-- unreadable or empty manifest file
-- manifest JSON is truthy but semantically odd/incomplete
-
-This means semantic validity is not enforced; the warning gate is the truthiness
-of `tryParseJson()` rather than an `ExtensionManifest` runtime validator.
+- `_source.path` 由 `createSourceMeta()` 规范化为绝对路径。
+- 针对 `extensions` 的注册表级能力校验仅检查 `name` 和 `path` 是否存在。
+- 清单内部字段（`mcpServers`、`tools`、`context`）在发现阶段不会被校验。
 
 ---
 
-## Precedence and deduplication with other sources
+## 错误处理与警告语义
 
-`extensions` capability is aggregated across providers by the capability registry.
+### 触发警告
 
-Current providers for this capability:
+- 在非空清单文件中出现无效 JSON，或语法合法但为假值的 JSON 字面量：
+  - 警告格式：`Invalid JSON in <manifestPath>`
 
-- `native` (`packages/coding-agent/src/discovery/builtin.ts`) priority `100`
-- `gemini` (`packages/coding-agent/src/discovery/gemini.ts`) priority `60`
+### 不触发警告（静默跳过）
 
-Dedup key is `ext.name` (`extensionCapability.key = ext => ext.name`).
+- `extensions` 目录缺失
+- 子目录下没有 `gemini-extension.json`
+- 清单文件不可读或为空
+- 清单 JSON 为真值但语义上奇怪/不完整
 
-### Cross-provider precedence
-
-Higher-priority provider wins on duplicate extension names.
-
-- If `native` and `gemini` both emit extension name `foo`, the native item is kept.
-- Lower-priority duplicate is retained only in `result.all` with `_shadowed = true`.
-
-### Intra-provider order effects
-
-Because dedup is “first seen wins”, provider-local item order matters.
-
-- Gemini loader appends **user first**, then **project**.
-- Therefore, duplicate names between `~/.gemini/extensions` and `<cwd>/.gemini/extensions` keep the user entry and shadow the project entry.
-
-By contrast, native provider builds config dir order differently (`project` then `user` in `getConfigDirs()`), so native intra-provider shadowing is the opposite direction.
+这意味着不会强制语义有效性；警告的判定依据是 `tryParseJson()` 的真值性，
+而不是 `ExtensionManifest` 的运行时校验器。
 
 ---
 
-## User vs project behavior summary
+## 与其他来源的优先级与去重
 
-For Gemini manifests specifically:
+`extensions` 能力由能力注册表跨 provider 聚合。
 
-- Both user and project roots are scanned every load.
-- Project root is fixed to `<cwd>/.gemini/extensions` (no ancestor walk).
-- Duplicate names inside Gemini source resolve to user-first.
-- Duplicate names against higher-priority providers (notably native) lose by priority.
+该能力当前的 provider：
+
+- `native`（`packages/coding-agent/src/discovery/builtin.ts`）优先级 `100`
+- `gemini`（`packages/coding-agent/src/discovery/gemini.ts`）优先级 `60`
+
+去重键为 `ext.name`（`extensionCapability.key = ext => ext.name`）。
+
+### 跨 provider 优先级
+
+在出现重复扩展名时，优先级更高的 provider 胜出。
+
+- 如果 `native` 和 `gemini` 都输出了名为 `foo` 的扩展，则保留 native 项。
+- 较低优先级的重复项仅在 `result.all` 中保留，并带有 `_shadowed = true`。
+
+### 同 provider 内的顺序影响
+
+由于去重遵循“先到先得”，provider 内部的项顺序会影响结果。
+
+- Gemini 加载器按**先用户级、后项目级**的顺序追加。
+- 因此，`~/.gemini/extensions` 与 `<cwd>/.gemini/extensions` 之间出现重名时，会保留用户级条目，并将项目级条目标记为 shadow。
+
+相比之下，native provider 的配置目录顺序不同（`getConfigDirs()` 中为 `project` 然后 `user`），因此 native provider 内部的 shadow 方向正好相反。
 
 ---
 
-## Boundary: manifest metadata vs runtime extension modules
+## 用户级与项目级行为总结
 
-`gemini-extension.json` discovery feeds the `extensions` metadata capability. It
-does **not** identify a runnable TS/JS entry point.
+针对 Gemini 清单的具体行为：
 
-The Gemini provider separately populates the `extension-module` capability by
-scanning the same two extension roots for direct `.ts`/`.js` files,
-`<name>/index.ts` / `index.js`, and `package.json` `omp`/`pi` extension entries.
-Those module records are independent of `gemini-extension.json`.
+- 每次加载时都会扫描用户级和项目级根目录。
+- 项目级根目录固定为 `<cwd>/.gemini/extensions`（不向上回溯）。
+- Gemini 源内部的重名解析遵循“用户级优先”。
+- 与更高优先级的 provider（尤其是 native）重名时，会因优先级而落败。
 
-The ambient startup path in `discoverExtensionPaths()` currently requests only
-the `native` provider, so Gemini-discovered module records are not automatically
-executed there. Explicitly configured extension paths can still be loaded.
+---
 
-Practical implication: a Gemini manifest is discoverable metadata, but neither
-the manifest itself nor a neighboring module is automatically executed merely
-because it appears under `.gemini/extensions`.
+## 边界：清单元数据与运行时扩展模块
+
+`gemini-extension.json` 的发现为 `extensions` 元数据能力提供输入。
+它**不**标识可运行的 TS/JS 入口点。
+
+Gemini provider 会另行扫描相同的两个扩展根目录中的直接 `.ts`/`.js` 文件、
+`<name>/index.ts` / `index.js` 以及 `package.json` 中的 `omp`/`pi` 扩展条目，
+以此填充 `extension-module` 能力。这些模块记录独立于 `gemini-extension.json`。
+
+`discoverExtensionPaths()` 中的环境启动路径当前只请求 `native` provider，
+因此 Gemini 发现的模块记录不会在那里被自动执行。显式配置的扩展路径仍然可以被加载。
+
+实际影响：Gemini 清单是可发现的元数据，但仅仅因为它出现在 `.gemini/extensions` 下，
+无论是清单本身还是相邻的模块，都不会被自动执行。

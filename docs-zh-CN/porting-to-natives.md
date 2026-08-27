@@ -1,90 +1,90 @@
-# Porting Hot Paths to `pi-natives`
+# 将热路径移植到 `pi-natives`
 
-This is the contributor path for moving a measured JS/TS hot path into `crates/pi-natives` and exposing it through `@oh-my-pi/pi-natives`.
+这是将经过实测的 JS/TS 热路径迁移到 `crates/pi-natives` 并通过 `@oh-my-pi/pi-natives` 暴露的贡献者路径。
 
-## Decide whether to port
+## 判断是否需要移植
 
-Port when native code removes demonstrated CPU, blocking-I/O, allocation, or platform-integration cost and the boundary can stay data-oriented. Keep JS when the work depends heavily on JS object identity, dynamic imports, callbacks into application state, or native conversion cost erases the gain.
+当原生代码能够消除已证实的 CPU、阻塞 I/O、内存分配或平台集成开销，且边界可以保持面向数据时，进行移植。当工作严重依赖 JS 对象身份、动态导入、回调到应用状态，或原生转换成本会抵消收益时，保留在 JS 中。
 
-Start with a behavior-compatible JS baseline and representative inputs. A native export that exists but is slower or behaviorally different is not a successful port.
+从一个行为兼容的 JS 基线和有代表性的输入开始。一个存在但更慢或行为不同的原生导出并不是一次成功的移植。
 
-## Current package and build split
+## 当前包与构建拆分
 
-The package has no `packages/natives/src/<module>` wrapper layer. Its entrypoints are:
+本包没有 `packages/natives/src/<module>` 包装层。其入口点为：
 
-- eager root: `native/index.js` with generated `native/index.d.ts`;
-- lazy desktop wrapper: `native/desktop.js` / `desktop.d.ts`;
-- lazy clipboard wrapper: `native/clipboard.js` / `clipboard.d.ts`.
+- 急切加载的根：`native/index.js` 以及生成的 `native/index.d.ts`；
+- 惰性加载的桌面包装：`native/desktop.js` / `desktop.d.ts`；
+- 惰性加载的剪贴板包装：`native/clipboard.js` / `clipboard.d.ts`。
 
-Two commands serve different purposes:
+两个命令用途不同：
 
-- `bun --cwd=packages/natives run build:bindings` runs napi-rs for the host, installs a local variant addon and generated declarations, and regenerates explicit ESM/enum exports. Use this when the Rust public type surface changes.
-- `bun --cwd=packages/natives run build` invokes `scripts/bazel-natives.ts host --dest native`. The host target builds through the local cargo/napi-rs backend by default (`OMP_NATIVE_BUILD_BACKEND=bazel` opts into bazel) but does not regenerate declarations.
+- `bun --cwd=packages/natives run build:bindings` 为宿主运行 napi-rs，安装本地变体 addon 和生成的声明，并重新生成显式的 ESM/enum 导出。当 Rust 公共类型表面发生变化时使用此命令。
+- `bun --cwd=packages/natives run build` 调用 `scripts/bazel-natives.ts host --dest native`。宿主目标默认通过本地 cargo/napi-rs 后端构建（`OMP_NATIVE_BUILD_BACKEND=bazel` 选择 bazel），但不会重新生成声明。
 
-Release builds use Bazel targets and publish `.node` files in platform leaf packages. The core publish rewrite removes addons and injects lockstep optional dependencies generated from `LEAF_TARGETS` in `gen-npm-packages.ts`.
+发布构建使用 Bazel 目标，并将 `.node` 文件发布到平台 leaf 包中。核心发布重写会移除 addon 并注入由 `gen-npm-packages.ts` 中 `LEAF_TARGETS` 生成的同版本可选依赖。
 
-## Design the N-API boundary
+## 设计 N-API 边界
 
-1. Put implementation in the owning `crates/pi-natives/src/<module>.rs`; register new modules in `lib.rs`.
-2. Keep the computation in a plain Rust function where practical, then expose a thin `#[napi]` boundary.
-3. Prefer owned N-API-compatible values: `String`, vectors, typed arrays, and `#[napi(object)]` option/result structs. Avoid borrowed public inputs whose lifetime cannot cross N-API work.
-4. Let napi-rs apply the default snake_case-to-camelCase name unless a deliberate public name requires `js_name`.
-5. Preserve the JS contract: null/undefined distinctions, ordering, error versus result semantics, callback timing, and sync versus Promise behavior.
+1. 将实现放在所属的 `crates/pi-natives/src/<module>.rs` 中；在 `lib.rs` 中注册新模块。
+2. 在可行的情况下，将计算保留在普通 Rust 函数中，然后暴露一个轻量的 `#[napi]` 边界。
+3. 优先使用拥有所有权的 N-API 兼容值：`String`、向量、类型化数组，以及 `#[napi(object)]` option/result 结构体。避免使用其生命周期无法跨越 N-API 工作的借用公共输入。
+4. 让 napi-rs 应用默认的 snake_case 到 camelCase 名称转换，除非某个公共名称有意需要 `js_name`。
+5. 保留 JS 契约：null/undefined 区分、顺序、错误与结果语义、回调时机，以及同步与 Promise 行为。
 
-### Work scheduling and cancellation
+### 工作调度与取消
 
-- Use `task::blocking(tag, cancel_token, work)` for CPU-heavy or blocking work. It returns an `AsyncTask`, profiles the work, and catches panics before they cross the async-work FFI boundary.
-- Use `task::future(env, tag, future)` for Tokio async I/O. It returns a `PromiseRaw` through `Env::spawn_future`.
-- When the public options expose `timeoutMs` or `AbortSignal`, build `task::CancelToken::new(timeout_ms, signal)` and call `heartbeat()` at meaningful intervals in blocking loops. Cancellation is cooperative; a token that is never checked does not stop work.
-- Do not create runtimes or worker pools in module initialization. The JS loader performs the optional `__ompInstallTokioRuntime` post-load step after the dynamic-loader lock is released.
+- 对 CPU 密集或阻塞型工作使用 `task::blocking(tag, cancel_token, work)`。它会返回一个 `AsyncTask`，对工作进行性能分析，并在 panic 跨越异步工作 FFI 边界前捕获它们。
+- 对 Tokio 异步 I/O 使用 `task::future(env, tag, future)`。它通过 `Env::spawn_future` 返回一个 `PromiseRaw`。
+- 当公共选项暴露 `timeoutMs` 或 `AbortSignal` 时，构建 `task::CancelToken::new(timeout_ms, signal)` 并在阻塞循环中按有意义的间隔调用 `heartbeat()`。取消是协作式的；一个从未被检查的 token 不会停止工作。
+- 不要在模块初始化中创建运行时或工作线程池。JS 加载器在动态加载器锁释放后执行可选的 `__ompInstallTokioRuntime` 加载后步骤。
 
-Match an existing export with the same scheduling/error shape rather than introducing a second convention.
+匹配具有相同调度/错误形状的现有导出，而不是引入第二种约定。
 
-## End-to-end checklist
+## 端到端检查清单
 
-### 1. Implement and expose
+### 1. 实现并暴露
 
-- Add the Rust logic and focused Rust tests for pure invariants when needed.
-- Add the `#[napi]` item and object/enum types.
-- Register a new module in `crates/pi-natives/src/lib.rs`.
-- If the port uses another first-party crate, add the dependency to `crates/pi-natives/Cargo.toml` and its build-system inputs as required by the native build.
+- 添加 Rust 逻辑，并在需要时为纯不变量添加有针对性的 Rust 测试。
+- 添加 `#[napi]` 项以及 object/enum 类型。
+- 在 `crates/pi-natives/src/lib.rs` 中注册新模块。
+- 如果移植使用了另一个第一方 crate，请将其依赖添加到 `crates/pi-natives/Cargo.toml` 及其原生构建所需的构建系统输入中。
 
-### 2. Regenerate and inspect the binding
+### 2. 重新生成并检查绑定
 
-Run:
+运行：
 
 ```bash
 bun --cwd=packages/natives run build:bindings
 ```
 
-Then verify:
+然后验证：
 
-- `native/index.d.ts` contains the intended JS name, exact input/result types, callback shape, and sync/Promise return;
-- the marked generated block in `native/index.js` contains the class/function export;
-- changed enums have both declarations and literal runtime objects.
+- `native/index.d.ts` 包含预期的 JS 名称、精确的输入/结果类型、回调形状以及同步/Promise 返回；
+- `native/index.js` 中标记的生成块包含 class/function 导出；
+- 已更改的 enum 同时具有声明和字面量运行时对象。
 
-`gen-enums.ts` derives exports by reading top-level `export declare class`, `export declare function`, and enum declarations. An item absent from the declarations will not become a named root ESM export.
+`gen-enums.ts` 通过读取顶层 `export declare class`、`export declare function` 以及 enum 声明来派生导出。声明中缺失的项不会成为命名的根 ESM 导出。
 
-### 3. Add a lazy entrypoint only when justified
+### 3. 仅在有正当理由时添加惰性入口点
 
-The root eagerly loads the addon. If a worker must import without paying that startup cost, follow the desktop/clipboard pattern:
+根会急切加载 addon。如果某个 worker 必须在不付出该启动成本的情况下导入，请遵循 desktop/clipboard 模式：
 
-- a small JS wrapper calls `loadNative()` inside the exported function;
-- a matching `.d.ts` imports/re-exports root types;
-- `package.json#exports` supplies both `types` and `import` paths.
+- 一个小型 JS 包装在导出函数内部调用 `loadNative()`；
+- 匹配的 `.d.ts` 导入/重新导出根类型；
+- `package.json#exports` 同时提供 `types` 和 `import` 路径。
 
-Do not add a wrapper merely to rename a generated root export.
+不要仅仅为了重命名生成的根导出而添加包装。
 
-### 4. Migrate consumers cleanly
+### 4. 干净地迁移消费者
 
-- Import the generated root symbol or intentional lazy subpath from `@oh-my-pi/pi-natives`.
-- Compare results and errors against the JS baseline on boundary cases.
-- Switch every intended caller and remove the obsolete implementation in the same change.
-- Keep user-facing policy and rendering in the consumer when the native primitive does not own it.
+- 从 `@oh-my-pi/pi-natives` 导入生成的根符号或有意为之的惰性子路径。
+- 在边界用例上将结果和错误与 JS 基线进行比较。
+- 在同一次变更中切换所有预期的调用方并移除过时的实现。
+- 当原生原语不拥有面向用户的策略和渲染时，将它们保留在消费者中。
 
-### 5. Benchmark representative work
+### 5. 对有代表性的工作进行基准测试
 
-Place a durable benchmark with the owning package (`packages/natives/bench`, `packages/tui/bench`, `packages/coding-agent/bench`, or another existing package bench directory). Run JS and native implementations in the same process on identical prepared input. Separate setup/conversion from the timed operation when callers can reuse that setup.
+将一个持久的基准测试放在所属包中（`packages/natives/bench`、`packages/tui/bench`、`packages/coding-agent/bench` 或其他现有包基准测试目录）。在同一进程中，在相同的准备输入上运行 JS 和原生实现。当调用方可以复用设置时，将设置/转换与计时操作分开。
 
 ```ts
 const ITERATIONS = 2_000;
@@ -103,42 +103,42 @@ bench("feature/js", () => jsImpl(sample));
 bench("feature/native", () => nativeImpl(sample));
 ```
 
-For Promise-returning operations, use an async benchmark loop and await every call; do not time promise creation alone.
+对于返回 Promise 的操作，使用异步基准测试循环并 await 每个调用；不要仅对 promise 创建进行计时。
 
-### 6. Verify the loaded artifact
+### 6. 验证已加载的产物
 
-Run the narrow scenario against the addon you just built. When diagnosing a candidate mismatch, inspect the candidate path reported by the loader:
+针对刚刚构建的 addon 运行窄场景。在诊断候选不匹配时，检查加载器报告的候选路径：
 
 ```bash
 bun -e 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const mod = require(process.argv[1]); console.log(Object.keys(mod).sort())' -- /path/to/pi_natives.<tag>[-variant].node
 ```
 
-Confirm the export and the package-version sentinel are present. Do not add optional consumer checks for a required export to conceal an artifact mismatch.
+确认导出和包版本哨兵都存在。不要为必需的导出添加可选的消费者检查来掩盖产物不匹配。
 
-## Common failures
+## 常见失败
 
-### Stale variant or cache wins
+### 过时的变体或缓存获胜
 
-x64 candidate order is modern → baseline → unsuffixed for a modern host, and baseline → unsuffixed for a baseline host. Compiled and staged Windows loads can also win from `<getNativesDir()>/<version>` before package paths.
+对于现代宿主，x64 候选顺序为 modern → baseline → unsuffixed；对于基线宿主，候选顺序为 baseline → unsuffixed。已编译和暂存的 Windows 加载也可能先于包路径从 `<getNativesDir()>/<version>` 获胜。
 
-Remove only the stale local artifacts/cache identified by loader diagnostics, then rebuild. The loader best-effort deletes cache directories from valid older releases after a successful load, but it intentionally preserves the current-version directory.
+仅移除加载器诊断所标识的过时本地产物/缓存，然后重新构建。加载器在成功加载后会尽力从有效旧版本中删除缓存目录，但它会刻意保留当前版本目录。
 
-### Declarations changed but shipping addon did not
+### 声明已更改但发布的 addon 没有更改
 
-`build:bindings` owns declaration generation; `build` owns the Bazel host artifact. CI/release targets own cross-platform artifacts. Verify both generated source control outputs and the actual binary used by the scenario.
+`build:bindings` 负责声明生成；`build` 负责 Bazel 宿主产物。CI/发布目标负责跨平台产物。验证生成的源代码控制输出和场景实际使用的二进制两者。
 
-### Same-version incomplete addon
+### 同版本的不完整 addon
 
-The sentinel proves release version, not the complete export set. A locally produced same-version binary can pass loading while missing a newly generated member. Inspect `Object.keys` on the actual candidate and rebuild it; do not weaken the caller.
+哨兵证明的是发布版本，而非完整的导出集。本地生成的同版本二进制可以通过加载，但缺少新生成的成员。检查实际候选上的 `Object.keys` 并重新构建；不要削弱调用方。
 
-### Runtime enum missing
+### 运行时 enum 缺失
 
-napi-rs enum declarations alone do not supply the root's literal runtime object. Run `build:bindings` and verify the generated block. If `gen-enums.ts` cannot parse the declaration shape, fix the generator rather than hand-editing its marked block.
+仅 napi-rs enum 声明不会提供根的字面量运行时对象。运行 `build:bindings` 并验证生成块。如果 `gen-enums.ts` 无法解析声明形状，请修复生成器，而不是手动编辑其标记块。
 
-### Wrong sync/async assumption
+### 错误的同步/异步假设
 
-Use `native/index.d.ts` as authority. For example, `renderSnapcompactPng` returns `Promise<string>`, while `snapcompactSupportedChars` is synchronous. A port that changes call style requires an intentional consumer migration.
+以 `native/index.d.ts` 为权威。例如，`renderSnapcompactPng` 返回 `Promise<string>`，而 `snapcompactSupportedChars` 是同步的。改变调用方式的移植需要有意的消费者迁移。
 
-## Completion criteria
+## 完成标准
 
-A port is complete only when the generated declaration and ESM export match the Rust API, the intended consumers use it, obsolete JS code is gone, a focused real invocation succeeds against the built addon, and representative comparison shows acceptable behavior and performance.
+只有在生成的声明和 ESM 导出与 Rust API 匹配、预期的消费者正在使用它、过时的 JS 代码已被移除、针对已构建 addon 的有针对性真实调用成功，且代表性比较显示可接受的行为和性能时，移植才告完成。

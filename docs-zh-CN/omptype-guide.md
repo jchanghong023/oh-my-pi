@@ -1,84 +1,74 @@
-# omptype Guide (schema authoring in this repo)
+# omptype 指南（本仓库的 schema 编写方式）
 
-Internal schemas use **`@oh-my-pi/omptype`** — an ArkType-compatible validator
-with a lazy JIT runtime (`packages/omptype`). Author types with
-`import { type } from "@oh-my-pi/omptype"`.
+内部 schema 使用 **`@oh-my-pi/omptype`** —— 一个兼容 ArkType 的校验器，运行时采用懒编译 JIT（`packages/omptype`）。使用以下方式定义类型：
+
+```ts
+import { type } from "@oh-my-pi/omptype";
+```
 
 
-## Why omptype (perf contract)
+## 为什么选用 omptype（性能约定）
 
-- `type()` construction is ~100x cheaper than arktype (no eager codegen, no node interning).
-- The first two calls run an interpreter; the third call JIT-compiles a specialized
-  validator via `new Function`. Hot-path validation is tens of nanoseconds; failures
-  allocate one small error object with lazy message building.
-- There is no `jitless` switch and no `scope()` — lazy JIT removed the startup tax
-  those existed to dodge. Import `type` directly.
+- `type()` 构造比 arktype 快约 100 倍（无急切代码生成，无需节点内部化）。
+- 前两次调用走解释器；第三次调用通过 `new Function` JIT 编译出专用的校验器。热路径校验耗时仅几十纳秒；失败时分配一个带有懒消息构建的小错误对象。
+- 没有 `jitless` 开关，也没有 `scope()` —— 懒编译 JIT 已经消除了它们原本试图回避的启动开销。直接导入 `type` 即可。
 
-## The detection contract (don't break it)
+## 检测约定（请勿破坏）
 
-`packages/ai/src/utils/schema/wire.ts` distinguishes two schema kinds:
+`packages/ai/src/utils/schema/wire.ts` 区分两种 schema：
 
-- **omptype** = a callable function with `.toJsonSchema` and `.assert` methods (`isArkSchema`).
-- **JSON Schema** = a plain object.
+- **omptype** = 可调用函数，并带有 `.toJsonSchema` 和 `.assert` 方法（`isArkSchema`）。
+- **JSON Schema** = 普通对象。
 
-At the provider boundary, `toolWireSchema()` calls `toJsonSchema()`, prunes
-`T | undefined` branches, and closes declared objects with
-`additionalProperties: false`. Predicates (`.narrow`) and morphs (`.pipe`)
-validate locally but degrade to their base schema on the wire.
+在 provider 边界，`toolWireSchema()` 会调用 `toJsonSchema()`，裁剪 `T | undefined` 分支，并使用 `additionalProperties: false` 闭合已声明的对象。谓词（`.narrow`）和变形（`.pipe`）在本地校验，但在传输时退化为其基础 schema。
 
-## Definition language (arktype-compatible subset)
+## 定义语言（兼容 arktype 的子集）
 
-| Construct                  | Form                                                              |
+| 构造 | 形式 |
 | -------------------------- | ----------------------------------------------------------------- |
-| Primitives                 | `"string"`, `"number"`, `"boolean"`, `"null"`, `"undefined"`, `"unknown"`, `"object"`, `"bigint"` |
-| Integer                    | `"number.integer"`                                                |
-| URL string                 | `"string.url"`                                                    |
-| Literals                   | `"'x'"`, `"5"`, `"true"`                                          |
-| Unions                     | `"'a' \| 'b'"`, `"string \| null"`                                |
-| Arrays                     | `"string[]"`, `"(string \| number)[]"`, `[def, "[]"]`             |
-| Bounds                     | `"number >= 0"`, `"0 < number <= 3600"`, `"1 <= string <= 10"`    |
-| Optional key               | `{ "limit?": "number" }` or value-suffix `{ limit: "number?" }`   |
-| Defaults                   | `{ count: "number = 10" }`, `type("string[]").default(() => [])`  |
-| Undeclared keys            | `"+": "reject"` (fail) / `"+": "delete"` (strip) / default keep   |
-| Records                    | `{ "[string]": "number" }` — NOT `"Record<string, number>"`       |
-| Runtime enums              | `type.enumerated(...RUNTIME_ARRAY)`                               |
-| Runtime-built object defs  | `type.raw({...})` (returns `BaseType`)                            |
-| Keyword statics            | `type.number.atLeast(5).atMost(300)`, `type.string`               |
+| 基本类型 | `"string"`、`"number"`、`"boolean"`、`"null"`、`"undefined"`、`"unknown"`、`"object"`、`"bigint"` |
+| 整数 | `"number.integer"` |
+| URL 字符串 | `"string.url"` |
+| 字面量 | `"'x'"`、`"5"`、`"true"` |
+| 联合 | `"'a' \| 'b'"`、`"string \| null"` |
+| 数组 | `"string[]"`、`"(string \| number)[]"`、`[def, "[]"]` |
+| 边界 | `"number >= 0"`、`"0 < number <= 3600"`、`"1 <= string <= 10"` |
+| 可选键 | `{ "limit?": "number" }` 或值后缀形式 `{ limit: "number?" }` |
+| 默认值 | `{ count: "number = 10" }`、`type("string[]").default(() => [])` |
+| 未声明键 | `"+": "reject"`（失败）/ `"+": "delete"`（剥离）/ 默认保留 |
+| 记录类型 | `{ "[string]": "number" }` —— 不是 `"Record<string, number>"` |
+| 运行时枚举 | `type.enumerated(...RUNTIME_ARRAY)` |
+| 运行时构建的对象定义 | `type.raw({...})`（返回 `BaseType`） |
+| 关键字静态链 | `type.number.atLeast(5).atMost(300)`、`type.string` |
 
-## Validating (same as arktype)
+## 校验（与 arktype 相同）
 
 ```ts
 import { type } from "@oh-my-pi/omptype";
 const out = schema(value);
 if (out instanceof type.errors) {
-  // out.summary → human message; entries have .path (array) and .problem
+  // out.summary → 人类可读消息；条目包含 .path（数组）和 .problem
   throw new Error(out.summary);
 }
-// `out` is the validated/morphed value (defaults filled, extras stripped)
+// `out` 是经过校验/变形后的值（默认值已填充，多余字段已剥离）
 ```
 
-- Failure returns an `OmpErrors` (array of `OmpError`); `type.errors === OmpErrors`.
-- Validation is fast-fail: one error entry per failure.
-- Morphs never mutate the input; when defaults/`"+": "delete"`/pipes apply, a fresh
-  object is returned.
-- NEVER use `.allows()` for tool validation — it skips morphs/defaults/pipes.
-- `.infer` / `.inferIn` are inference-only properties.
-- Definition mistakes (bad DSL, illegal composition) throw `OmpTypeError` at
-  `type()` time.
+- 失败时返回 `OmpErrors`（`OmpError` 数组）；`type.errors === OmpErrors`。
+- 校验是快速失败的：每次失败对应一条错误条目。
+- 变形永不会修改入参；当默认值/`"+": "delete"`/管道生效时，会返回一个新对象。
+- 切勿在工具校验中使用 `.allows()` —— 它会跳过变形/默认值/管道。
+- `.infer` / `.inferIn` 仅用于类型推断。
+- 定义错误（DSL 不合法、组合非法）会在调用 `type()` 时抛出 `OmpTypeError`。
 
-## Methods
+## 方法
 
-`.describe(d)`, `.default(v | () => v)`, `.or(TypeOrStringDef)`, `.and(Type)`,
-`.array()`, `.atLeastLength(n)` / `.atMostLength(n)` (string/array),
-`.atLeast(n)` / `.atMost(n)` (number), `.pipe(fn)`, `.narrow(fn)` (with
-`ctx.mustBe("...")`), `.allows(v)`, `.assert(v)`, `.toJsonSchema()`.
+`.describe(d)`、`.default(v | () => v)`、`.or(TypeOrStringDef)`、`.and(Type)`、`.array()`、`.atLeastLength(n)` / `.atMostLength(n)`（字符串/数组）、`.atLeast(n)` / `.atMost(n)`（数字）、`.pipe(fn)`、`.narrow(fn)`（配合 `ctx.mustBe("...")`）、`.allows(v)`、`.assert(v)`、`.toJsonSchema()`。
 
-Note on `.or()` typing: schema and string operands infer precisely;
-object-literal operands degrade — wrap them with `type({...})` first.
+关于 `.or()` 的类型说明：schema 与字符串操作数可以精确推导；对象字面量操作数会降级 —— 请先用 `type({...})` 包装。
 
-## Adapters
+## 适配器
 
-TypeBox-style and Zod-style authoring are backed by the omptype runtime:
+TypeBox 风格和 Zod 风格的写法底层均由 omptype 运行时支持：
 
 ```ts
 import { Type, type Static } from "@oh-my-pi/omptype/typebox";
@@ -88,5 +78,4 @@ const User = z.object({ name: z.string() });
 type User = z.infer<typeof User>;
 ```
 
-These produce real omptype schemas with JIT validation and `toJsonSchema`.
-Internal code authors the string DSL directly.
+这些写法会生成真正的 omptype schema，具备 JIT 校验和 `toJsonSchema`。内部代码直接使用字符串 DSL 进行编写。

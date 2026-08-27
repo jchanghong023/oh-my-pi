@@ -1,146 +1,146 @@
 # todo
 
-> Applies one mutation to the session todo list and returns a text summary plus the full phase/task state.
+> 对会话 todo 列表应用一次变更,并返回文本摘要以及完整的 phase/task 状态。
 
-## Source
-- Entry: `packages/coding-agent/src/tools/todo.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/todo.md`
-- Key collaborators:
-  - `packages/coding-agent/src/tools/index.ts` — registers tool, exposes session hooks, gates availability.
-  - `packages/coding-agent/src/modes/controllers/event-controller.ts` — updates the visible todo UI on tool completion.
-  - `packages/coding-agent/src/session/agent-session.ts` — stores cached phases, strips done/dropped tasks on session resume, emits failure reminders.
-  - `packages/coding-agent/src/modes/controllers/todo-command-controller.ts` — `/todo` command path, custom-entry persistence, transcript reminder injection.
-  - `packages/coding-agent/src/tools/render-utils.ts` — collapsed-preview cap for renderer trees.
+## 来源
+- 入口:`packages/coding-agent/src/tools/todo.ts`
+- 模型侧提示:`packages/coding-agent/src/prompts/tools/todo.md`
+- 主要协作者:
+  - `packages/coding-agent/src/tools/index.ts` — 注册工具、暴露会话钩子、控制可用性。
+  - `packages/coding-agent/src/modes/controllers/event-controller.ts` — 工具完成后更新可见的 todo UI。
+  - `packages/coding-agent/src/session/agent-session.ts` — 存储缓存的 phase、在会话恢复时移除已完成/已丢弃的任务、发出失败提醒。
+  - `packages/coding-agent/src/modes/controllers/todo-command-controller.ts` — `/todo` 命令路径、自定义条目持久化、转录提醒注入。
+  - `packages/coding-agent/src/tools/render-utils.ts` — 渲染器树的折叠预览上限。
 
-## Inputs
+## 输入
 
-The params object **is** a single op — the discriminator and its fields live at the top level (no `ops` array wrapper).
+params 对象**就是**单个 op —— 判别字段及其属性位于顶层(没有 `ops` 数组包装)。
 
-| Op | Required fields | Optional fields | Effect |
+| Op | 必填字段 | 可选字段 | 效果 |
 | --- | --- | --- | --- |
-| `init` | `list` **or** flat `items` | `phase` (names the phase for the flat `items` form; defaults to `Tasks`) | Replaces the entire list — with `list`, uses the given phases; with a flat `items` array, synthesizes one phase. Every new task starts `pending` before normalization. |
-| `start` | `task` | None | Marks one task `in_progress`; any other `in_progress` task is demoted to `pending`. |
-| `done` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `completed`. |
-| `drop` | `task` or `phase` or neither | None | Marks the target task, phase, or all tasks `abandoned`. |
-| `block` | `task` or `phase` | `reason` | Marks actionable target tasks `blocked`; completed/abandoned tasks are left closed. Whitespace in `reason` is collapsed to one line. |
-| `unblock` | `task` or `phase` | None | Returns blocked target tasks to `pending` and clears their blocker notes. |
-| `rm` | `task` or `phase` or neither | None | Removes the target task, clears the phase's task list, or clears all task lists. |
-| `append` | `phase`, `items` | None | Appends new `pending` tasks to a phase; creates the phase if missing. |
-| `view` | None | None | Echoes the current list. A `view` call is read-only: no normalization, no state write. |
+| `init` | `list` **或** 扁平的 `items` | `phase`(为扁平 `items` 形式命名 phase;默认为 `Tasks`) | 替换整个列表 —— 使用 `list` 时,采用给定的 phase;使用扁平 `items` 数组时,合成一个 phase。每个新任务在规范化前都以 `pending` 状态开始。 |
+| `start` | `task` | 无 | 将一个任务标记为 `in_progress`;其他任何 `in_progress` 任务会被降级为 `pending`。 |
+| `done` | `task` 或 `phase` 或两者皆无 | 无 | 将目标任务、目标 phase 或所有任务标记为 `completed`。 |
+| `drop` | `task` 或 `phase` 或两者皆无 | 无 | 将目标任务、目标 phase 或所有任务标记为 `abandoned`。 |
+| `block` | `task` 或 `phase` | `reason` | 将可操作的目标任务标记为 `blocked`;已完成/已丢弃的任务保持关闭状态。`reason` 中的空白会被合并为一行。 |
+| `unblock` | `task` 或 `phase` | 无 | 将被阻塞的目标任务恢复为 `pending` 并清除其阻塞原因。 |
+| `rm` | `task` 或 `phase` 或两者皆无 | 无 | 移除目标任务、清空该 phase 的任务列表,或清空所有任务列表。 |
+| `append` | `phase`、`items` | 无 | 向 phase 追加新的 `pending` 任务;若 phase 不存在则创建。 |
+| `view` | 无 | 无 | 回显当前列表。`view` 调用是只读的:不进行规范化,不写入状态。 |
 
-### Fields
+### 字段
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `op` | `"init" \| "start" \| "done" \| "rm" \| "drop" \| "block" \| "unblock" \| "append" \| "view"` | Yes in the schema | Operation discriminator. At execution time, an omitted op is repaired only for unambiguous `list`/`items` payloads (see Flow). |
-| `list` | `{ phase: string; items: string[] }[]` | For `init` (unless a flat `items` list is given) | Full replacement payload. Each `items` array has `minItems: 1`. |
-| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`block`/`unblock`/`rm` | Exact task content match. |
-| `phase` | `string` | For `append`; for phase-targeted `done`/`drop`/`block`/`unblock`/`rm`; optional for a flat `init` | Exact phase name match, except `append` lazily creates a missing phase and a flat `init` synthesizes one (default `Tasks`). |
-| `items` | `string[]` | For `append`; or as a flat `init` payload | Tasks to append, or the full task list for a flat `init`. Op-specific validation requires at least one item; a stray empty array on an unrelated op is schema-valid and ignored. |
-| `reason` | `string` | No | Optional blocker note for `block`; normalized to a single trimmed line. |
+| `op` | `"init" \| "start" \| "done" \| "rm" \| "drop" \| "block" \| "unblock" \| "append" \| "view"` | schema 中必填 | 操作判别符。执行时,仅在无歧义的 `list`/`items` 负载下才会补全缺失的 op(见 Flow)。 |
+| `list` | `{ phase: string; items: string[] }[]` | 用于 `init`(除非给出扁平 `items` 列表) | 完整替换负载。每个 `items` 数组具有 `minItems: 1`。 |
+| `task` | `string` | 用于 `start`;用于针对任务的 `done`/`drop`/`block`/`unblock`/`rm` | 精确匹配任务内容。 |
+| `phase` | `string` | 用于 `append`;用于针对 phase 的 `done`/`drop`/`block`/`unblock`/`rm`;扁平 `init` 时可选 | 精确匹配 phase 名称,但 `append` 会惰性创建缺失的 phase,扁平 `init` 会合成一个(默认为 `Tasks`)。 |
+| `items` | `string[]` | 用于 `append`;或作为扁平 `init` 负载 | 要追加的任务,或扁平 `init` 的完整任务列表。特定 op 的验证要求至少一项;不相关 op 上的多余空数组在 schema 上合法但会被忽略。 |
+| `reason` | `string` | 否 | `block` 的可选阻塞原因;规范化为单行去除首尾空白的形式。 |
 
-## Outputs
-The tool returns a single-shot `AgentToolResult`:
+## 输出
+该工具返回单次调用的 `AgentToolResult`:
 
-- `content`: one text part containing the summary from `formatSummary(...)`.
-  - Empty final state with no errors: `Todo list cleared.` (`Todo list is empty.` for a pure-`view` call).
-  - Non-empty final state: remaining-item list, current phase progress, then a per-phase tree.
-  - If the op produced validation/runtime errors, the summary starts with `Errors: ...` and the result is marked `isError: true`; the mutation is discarded — the returned and persisted state stay at the pre-call list.
+- `content`:一个文本部分,包含来自 `formatSummary(...)` 的摘要。
+  - 无错误的空最终状态:`Todo list cleared.`(纯 `view` 调用时为 `Todo list is empty.`)。
+  - 非空最终状态:剩余项目列表、当前 phase 进度,然后是按 phase 的树形结构。
+  - 如果 op 产生验证/运行时错误,摘要以 `Errors: ...` 开头,结果被标记为 `isError: true`;变更被丢弃 —— 返回和持久化的状态保持在调用前的列表。
 - `details`:
   - `phases: TodoPhase[]`
   - `storage: "session" | "memory"`
-  - `completedTasks?: TodoCompletionTransition[]` when a task changed from non-completed to `completed` during the call
-  - `op?: TodoOperation` identifies the resolved operation, including a mutation that later produced op-specific errors; absent on schema-validation failures and legacy transcript entries.
+  - `completedTasks?: TodoCompletionTransition[]` 当任务在调用期间从非完成状态变为 `completed` 时
+  - `op?: TodoOperation` 标识已解析的操作,包括后来产生特定 op 错误的变更;在 schema 验证失败和旧版转录条目中不存在。
 
-`TodoPhase` / `TodoItem` state model:
+`TodoPhase` / `TodoItem` 状态模型:
 
-- `TodoPhase`: `{ name: string, tasks: TodoItem[] }`
-- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" | "blocked", blocker?: string }`
+- `TodoPhase`:`{ name: string, tasks: TodoItem[] }`
+- `TodoItem`:`{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" | "blocked", blocker?: string }`
 
-The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block and renders phases as a tree. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
+TUI 渲染器(`todoToolRenderer`)将调用和结果合并为一个转录块,并将 phase 渲染为树形结构。折叠转录预览将树项数限制为 `PREVIEW_LIMITS.COLLAPSED_ITEMS`(`8`)。
 
-## Flow
-1. `TodoTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo.ts`).
-2. `resolveTodoParams(...)` validates the raw single-op payload. Because the tool enables `lenientArgValidation`, it may repair a missing `op` only when the shape is unambiguous: non-empty `list` means `init`; non-empty `items` plus `phase` means `append`; bare non-empty `items` means `init` only when no phases exist. Ambiguous targeting fields and all other schema failures return `Invalid todo arguments: ...`.
-3. `applyParams(...)` applies the resolved op with `applyEntry(...)`.
-4. Each op mutates the working phase array:
-   - `initPhases(...)` rebuilds the list from scratch.
-   - `start` resolves a task by exact `content`, demotes every other `in_progress` task to `pending`, then marks the target `in_progress`.
-   - `done` / `drop` use `getTaskTargets(...)` to target one task, one phase, or every task.
-   - `block` requires a task or phase target. It marks only `pending`, `in_progress`, or already-`blocked` targets as blocked, preserving completed/abandoned tasks; a repeated block can replace or clear the note.
-   - `unblock` requires a task or phase target and changes only blocked targets to `pending`.
-   - `rm` removes one task, clears one phase's `tasks`, or clears all phases' task arrays.
-   - `appendItems(...)` resolves or creates the target phase and pushes new `pending` tasks unless the same task content already exists anywhere.
-5. Missing task/phase references and op-specific failures are recorded in an `errors` array; any error discards the op's mutations at the end.
-6. After a successful mutation, `normalizeInProgressTask(...)` enforces the single-active-task invariant:
-   - if multiple tasks are `in_progress`, only the first stays active and the rest become `pending`;
-   - if none are `in_progress`, the first `pending` task in phase/task order is auto-promoted to `in_progress`;
-   - blocked tasks are skipped, so a list may have no active task when all open work is blocked.
-7. `execute(...)` stores the updated phases with `session.setTodoPhases?.(...)` only when the op produced no errors and was not a `view`; a failed op is discarded. `storage` is `"session"` when `session.getSessionFile()` exists, else `"memory"`.
-8. `getCompletionTransitions(...)` compares the previous and updated phases (skipped for failed or `view` calls); newly completed tasks are returned in `details.completedTasks`.
-9. Details include the resolved `op` on success or op-specific failure, including an op inferred from omitted input. A payload that cannot be schema-validated returns before an op is available.
-10. The agent runtime watches `todo` tool results in `packages/coding-agent/src/session/agent-session.ts`; successful results refresh cached todos, failed results inject a hidden next-turn reminder telling the model that todo progress is not visible until it retries.
-11. The event controller updates the visible todo UI from `result.details.phases` on success, or shows a warning on error (`packages/coding-agent/src/modes/controllers/event-controller.ts`).
+## 流程
+1. `TodoTool.execute(...)` 从 `session.getTodoPhases?.() ?? []` 克隆当前缓存的 phase(`packages/coding-agent/src/tools/todo.ts`)。
+2. `resolveTodoParams(...)` 验证原始的单一 op 负载。由于该工具启用了 `lenientArgValidation`,仅在形状无歧义时才可能补全缺失的 `op`:非空 `list` 意味着 `init`;非空 `items` 加上 `phase` 意味着 `append`;单独的非空 `items` 仅在没有 phase 存在时才意味着 `init`。模糊的目标字段和所有其他 schema 失败返回 `Invalid todo arguments: ...`。
+3. `applyParams(...)` 通过 `applyEntry(...)` 应用已解析的 op。
+4. 每个 op 修改工作中的 phase 数组:
+   - `initPhases(...)` 从头开始重建列表。
+   - `start` 通过精确的 `content` 解析任务,将所有其他 `in_progress` 任务降级为 `pending`,然后将目标标记为 `in_progress`。
+   - `done` / `drop` 使用 `getTaskTargets(...)` 来定位一个任务、一个 phase 或每个任务。
+   - `block` 需要任务或 phase 目标。它仅将 `pending`、`in_progress` 或已经是 `blocked` 的目标标记为阻塞,保留已完成/已丢弃的任务;重复的 block 可以替换或清除原因。
+   - `unblock` 需要任务或 phase 目标,仅将阻塞目标更改为 `pending`。
+   - `rm` 移除一个任务、清空一个 phase 的 `tasks`,或清空所有 phase 的任务数组。
+   - `appendItems(...)` 解析或创建目标 phase,并推送新的 `pending` 任务,除非任何地方已经存在相同的任务内容。
+5. 缺失的任务/phase 引用和特定 op 的失败记录在 `errors` 数组中;任何错误都会在最后丢弃该 op 的变更。
+6. 成功变更后,`normalizeInProgressTask(...)` 强制执行单活跃任务不变量:
+   - 如果多个任务为 `in_progress`,只有第一个保持活跃,其余变为 `pending`;
+   - 如果没有任务为 `in_progress`,则按 phase/task 顺序将第一个 `pending` 任务自动提升为 `in_progress`;
+   - 被阻塞的任务会被跳过,因此当所有未完成的工作都被阻塞时,列表可能没有活跃任务。
+7. `execute(...)` 仅在 op 没有错误且不是 `view` 时,通过 `session.setTodoPhases?.(...)` 存储更新后的 phase;失败的 op 会被丢弃。当 `session.getSessionFile()` 存在时,`storage` 为 `"session"`,否则为 `"memory"`。
+8. `getCompletionTransitions(...)` 比较之前和更新后的 phase(失败的或 `view` 调用会跳过);新完成的任务在 `details.completedTasks` 中返回。
+9. 详情包括成功时或特定 op 失败时已解析的 `op`,包括从省略输入推断的 op。无法通过 schema 验证的负载在 op 可用之前返回。
+10. 代理运行时在 `packages/coding-agent/src/session/agent-session.ts` 中监视 `todo` 工具结果;成功的结果会刷新缓存的 todos,失败的结果会注入一个隐藏的下轮提醒,告诉模型在重试之前 todo 进度不可见。
+11. 事件控制器在成功时根据 `result.details.phases` 更新可见的 todo UI,或在出错时显示警告(`packages/coding-agent/src/modes/controllers/event-controller.ts`)。
 
-## Modes / Variants
-### State transitions
+## 模式 / 变体
+### 状态转换
 
-| Current status | `start` | `done` | `drop` | `block` | `unblock` | `rm` | `append` |
+| 当前状态 | `start` | `done` | `drop` | `block` | `unblock` | `rm` | `append` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `pending` | `in_progress` on target | `completed` | `abandoned` | `blocked` | No change | Removed | New tasks enter as `pending` |
-| `in_progress` | Target stays `in_progress`; non-target active tasks become `pending` | `completed` | `abandoned` | `blocked` | No change | Removed | No status change |
-| `blocked` | Can be set to `in_progress` if targeted | `completed` | `abandoned` | Stays blocked; note may change | `pending`, note cleared | Removed | No status change |
-| `completed` | Can be set back to `in_progress` if targeted | Stays `completed` | Becomes `abandoned` if targeted | No change | No change | Removed | No status change |
-| `abandoned` | Can be set back to `in_progress` if targeted | Becomes `completed` if targeted | Stays `abandoned` | No change | No change | Removed | No status change |
+| `pending` | 目标变为 `in_progress` | `completed` | `abandoned` | `blocked` | 无变化 | 移除 | 新任务以 `pending` 状态进入 |
+| `in_progress` | 目标保持 `in_progress`;非目标的活跃任务变为 `pending` | `completed` | `abandoned` | `blocked` | 无变化 | 移除 | 状态无变化 |
+| `blocked` | 若为目标可设为 `in_progress` | `completed` | `abandoned` | 保持阻塞;原因可更改 | `pending`,原因被清除 | 移除 | 状态无变化 |
+| `completed` | 若为目标可设回 `in_progress` | 保持 `completed` | 若为目标则变为 `abandoned` | 无变化 | 无变化 | 移除 | 状态无变化 |
+| `abandoned` | 若为目标可设回 `in_progress` | 若为目标则变为 `completed` | 保持 `abandoned` | 无变化 | 无变化 | 移除 | 状态无变化 |
 
-Normalization then re-applies the single-active-task rule after the op runs.
+规范化随后在 op 运行后重新应用单活跃任务规则。
 
-### Op targeting rules
-- `done`, `drop`, `rm`:
-  - `task` set: affect one exact-content task.
-  - else `phase` set: affect every task in that exact-name phase.
-  - else: affect every task in every phase.
-- `block` and `unblock` use the same task-or-phase lookup but reject an omitted target.
-- `append` is the only op that creates a missing phase.
-- `init` discards previous phases entirely.
+### Op 目标定位规则
+- `done`、`drop`、`rm`:
+  - 设置 `task`:影响一个内容精确匹配的任务。
+  - 否则设置 `phase`:影响该精确名称 phase 中的每个任务。
+  - 否则:影响每个 phase 中的每个任务。
+- `block` 和 `unblock` 使用相同的任务或 phase 查找,但拒绝省略的目标。
+- `append` 是唯一会创建缺失 phase 的 op。
+- `init` 完全丢弃之前的 phase。
 
-### Markdown round-trip helpers
-The same file also exposes non-tool helpers used by `/todo`:
-- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`, `[!]`). A blocked reason is preserved in a trailing `<!-- blocker: ... -->` comment.
-- `markdownToPhases(...)` parses that format, defaults orphan tasks into a `Todos` phase, also accepts `>` as `in_progress` and `~` as `abandoned`, restores blocked notes, and runs the same normalization step.
+### Markdown 往返辅助函数
+同一文件还暴露了 `/todo` 使用的非工具辅助函数:
+- `phasesToMarkdown(...)` 将 phase 序列化为标题加复选框列表项(`[ ]`、`[/]`、`[x]`、`[-]`、`[!]`)。阻塞原因保留在末尾的 `<!-- blocker: ... -->` 注释中。
+- `markdownToPhases(...)` 解析该格式,将孤立任务默认为 `Todos` phase,也接受 `>` 作为 `in_progress`、`~` 作为 `abandoned`,恢复阻塞原因,并运行相同的规范化步骤。
 
-## Side Effects
-- Filesystem
-  - None in the tool itself.
-- Session state (transcript, memory, jobs, checkpoints, registries)
-  - Mutates the session todo cache through `setTodoPhases`.
-  - `storage` reports whether the session has a backing session file, but the tool does not append a custom session entry itself.
-  - Successful tool-result messages carry `details.phases`; `getLatestTodoPhasesFromEntries(...)` can reconstruct state later from those transcript entries.
-  - Failed `todo` results cause `agent-session` to enqueue a hidden next-turn reminder (`customType: "todo-error-reminder"`).
-- User-visible prompts / interactive UI
-  - Transcript block is rendered by `todoToolRenderer` and merged with the call line.
-  - `event-controller` updates the visible todo panel from successful results.
-  - On error, `event-controller` shows `Todo update failed...`; the visible panel may stay stale until a later successful call.
-  - `/todo expand` shows every phase and task in the sticky HUD; `/todo collapse` restores its bounded preview. Both are display-only and leave todo state unchanged.
-- Background work / cancellation
-  - Session-level auto-clear of `completed`/`abandoned` tasks was removed (the timer mutated canonical phases between tool calls); the TUI todo widget still clears closed entries after `tasks.todoClearDelay` (display-only, `packages/coding-agent/src/modes/interactive-mode.ts`).
+## 副作用
+- 文件系统
+  - 工具本身不涉及。
+- 会话状态(转录、内存、作业、检查点、注册表)
+  - 通过 `setTodoPhases` 修改会话 todo 缓存。
+  - `storage` 报告会话是否有后备会话文件,但工具本身不会附加自定义会话条目。
+  - 成功的工具结果消息携带 `details.phases`;`getLatestTodoPhasesFromEntries(...)` 稍后可以从这些转录条目重建状态。
+  - 失败的 `todo` 结果会使 `agent-session` 排队一个隐藏的下轮提醒(`customType: "todo-error-reminder"`)。
+- 用户可见的提示 / 交互式 UI
+  - 转录块由 `todoToolRenderer` 渲染并与调用行合并。
+  - `event-controller` 根据成功结果更新可见的 todo 面板。
+  - 出错时,`event-controller` 显示 `Todo update failed...`;可见面板在后续成功调用之前可能保持陈旧。
+  - `/todo expand` 在 sticky HUD 中显示每个 phase 和任务;`/todo collapse` 恢复其有界预览。两者都仅用于显示,不会改变 todo 状态。
+- 后台工作 / 取消
+  - 会话级别的 `completed`/`abandoned` 任务自动清除已被移除(计时器在工具调用之间修改规范的 phase);TUI todo 小部件在 `tasks.todoClearDelay` 后仍会清除已关闭的条目(仅显示,`packages/coding-agent/src/modes/interactive-mode.ts`)。
 
-## Limits & Caps
-- `init.list`: applies to a single op (`todoSchema`). The params object carries exactly one op.
-- `init.list[*].items`: schema-level `minItems: 1`.
-- Flat `init.items` and `append.items`: the shared schema allows any array length, but op-specific execution rejects missing/empty lists.
-- Renderer collapsed preview: `PREVIEW_LIMITS.COLLAPSED_ITEMS = 8` (`packages/coding-agent/src/tools/render-utils.ts`).
-- Execution-time repair: an omitted `op` is inferred only for the unambiguous payloads described above; the schema itself still requires `op`.
-- Auto-clear delay: `tasks.todoClearDelay` default `60` seconds; `< 0` disables auto-clear, `0` clears immediately. Display-only — applied by the TUI widget (`packages/coding-agent/src/modes/interactive-mode.ts`); the setting is inert at the session level.
-- Tool execution mode: `concurrency = "exclusive"`, `strict = true`, `loadMode = "discoverable"`.
+## 限制与上限
+- `init.list`:适用于单个 op(`todoSchema`)。params 对象正好携带一个 op。
+- `init.list[*].items`:schema 级别 `minItems: 1`。
+- 扁平的 `init.items` 和 `append.items`:共享的 schema 允许任何数组长度,但特定 op 的执行会拒绝缺失/空的列表。
+- 渲染器折叠预览:`PREVIEW_LIMITS.COLLAPSED_ITEMS = 8`(`packages/coding-agent/src/tools/render-utils.ts`)。
+- 执行时补全:仅针对上述无歧义的负载推断省略的 `op`;schema 本身仍然要求 `op`。
+- 自动清除延迟:`tasks.todoClearDelay` 默认为 `60` 秒;`< 0` 禁用自动清除,`0` 立即清除。仅显示 —— 由 TUI 小部件应用(`packages/coding-agent/src/modes/interactive-mode.ts`);该设置在会话级别无效。
+- 工具执行模式:`concurrency = "exclusive"`,`strict = true`,`loadMode = "discoverable"`。
 
-## Errors
-- Ordinary bad op payloads are accumulated as human-readable strings in `errors`; the result is marked `isError: true` and the mutation is discarded — the returned and persisted state stay at the pre-call list.
-- Error strings come from the helpers in `packages/coding-agent/src/tools/todo.ts`, including:
+## 错误
+- 普通的错误 op 负载作为人类可读字符串累积在 `errors` 中;结果被标记为 `isError: true`,变更被丢弃 —— 返回和持久化的状态保持在调用前的列表。
+- 错误字符串来自 `packages/coding-agent/src/tools/todo.ts` 中的辅助函数,包括:
   - `Missing list for init operation`
   - `Missing task content`
   - `Duplicate phase "..." in init list` / `Duplicate task "..." in init list`
-  - `Task "..." not found` with an extra empty-list hint when applicable, or a hint that tasks are referenced by content (not `task-N` IDs) when the missing content looks like an ID
+  - `Task "..." not found` 在适用时带有额外的空列表提示,或者当缺失内容看起来像 ID 时提示任务通过内容(而非 `task-N` ID)引用
   - `Missing phase name`
   - `Phase "..." not found`
   - `Missing phase name for append operation`
@@ -148,22 +148,22 @@ The same file also exposes non-tool helpers used by `/todo`:
   - `unblock requires a task or phase target`
   - `Missing items for append operation`
   - `Task "..." already exists`
-- A `todo` call carries a single op; any error in it discards every mutation the op made.
-- Runtime-level tool failure is handled outside the tool body: `agent-session` injects a hidden reminder and the event controller warns the user that visible progress may be stale.
-- Idempotency is op-specific:
-  - `init` is a full replacement; replaying the same payload yields the same state.
-  - `start`, `done`, `drop`, `block`, and `unblock` are effectively idempotent on an existing target state, though `start` also demotes another active task and a repeated `block` can update its reason.
-  - `rm` is not idempotent for targeted removals: the second call errors because the task or phase is gone.
-  - `append` is not idempotent: duplicate task content is rejected with `Task "..." already exists`; the `append` op validates up front, so an op with any duplicate appends nothing.
+- `todo` 调用携带单个 op;其中的任何错误都会丢弃该 op 所做的所有变更。
+- 运行时级别的工具失败在工具主体之外处理:`agent-session` 注入隐藏的提醒,事件控制器警告用户可见的进度可能已过时。
+- 幂等性因 op 而异:
+  - `init` 是完全替换;重放相同负载会产生相同状态。
+  - `start`、`done`、`drop`、`block` 和 `unblock` 在现有目标状态上实际上是幂等的,尽管 `start` 还会降级另一个活跃任务,重复的 `block` 可以更新其原因。
+  - `rm` 对于有目标的删除不是幂等的:第二次调用会出错,因为任务或 phase 已不存在。
+  - `append` 不是幂等的:重复的任务内容会被 `Task "..." already exists` 拒绝;`append` op 会预先验证,因此包含任何重复项的 op 不会追加任何内容。
 
-## Notes
-- Task lookup is exact string equality inside the tool. The model-facing prompt says task content and phase names are identifiers and should stay unique; `append` enforces task uniqueness globally, and `init` rejects duplicate phase names and duplicate task contents in its payload.
-- `findTaskByContent(...)` returns the first matching task across phases. Duplicate task contents make later targeted ops ambiguous.
-- `normalizeInProgressTask(...)` runs once after the op, not mid-op. A single op (e.g. `init`) can build an intermediate invalid state and rely on final normalization.
-- `storage: "session"` means the session has a session-file backing; it does not mean this tool wrote a durable custom entry.
-- Reload persistence differs by path:
-  - plain `todo` calls survive in transcript tool-result details;
-  - `/todo` command edits additionally append `customType: "user_todo_edit"` entries and inject a visible-to-model `<system-reminder>` developer message describing the manual edit.
-- On session resume, `AgentSession.#syncTodoPhasesFromBranch()` strips `completed` and `abandoned` tasks before restoring the cached list. The `/todo` command works around that by reading the latest transcript/custom-entry state so historical done/dropped tasks still appear to the user.
-- Tool availability is gated by `todo.enabled`, and the registry excludes it when `includeYield` is enabled unless the session is prewalk-armed (`packages/coding-agent/src/tools/index.ts`).
-- Subagents do not inherit `todo`; `packages/coding-agent/src/task/executor.ts` also filters it from the active set as a parent-owned tool. Exception (both layers): prewalk-armed subagents keep it — the prewalk plan nudge and todo gate require the child to commit its own todo list before the hand-off.
+## 备注
+- 任务查找在工具内是精确的字符串相等比较。模型侧提示指出任务内容和 phase 名称是标识符,应保持唯一;`append` 全局强制任务唯一性,`init` 拒绝其负载中重复的 phase 名称和重复的任务内容。
+- `findTaskByContent(...)` 返回跨 phase 的第一个匹配任务。重复的任务内容会使后续有目标的 op 产生歧义。
+- `normalizeInProgressTask(...)` 在 op 之后运行一次,而非 op 期间。单个 op(例如 `init`)可以构建中间的无效状态并依赖最终规范化。
+- `storage: "session"` 意味着该会话有会话文件后备;并不意味着此工具写入了持久的自定义条目。
+- 重载持久化因路径而异:
+  - 普通 `todo` 调用在转录工具结果详情中保留;
+  - `/todo` 命令编辑还会附加 `customType: "user_todo_edit"` 条目,并向模型注入一条描述手动编辑的可见 `<system-reminder>` 开发者消息。
+- 在会话恢复时,`AgentSession.#syncTodoPhasesFromBranch()` 在恢复缓存列表之前会剥离 `completed` 和 `abandoned` 任务。`/todo` 命令通过读取最新的转录/自定义条目状态来绕过这一点,以便历史已完成/已丢弃的任务仍对用户可见。
+- 工具可用性由 `todo.enabled` 控制,当 `includeYield` 启用时,注册表会排除该工具,除非会话已预先武装 prewalk(`packages/coding-agent/src/tools/index.ts`)。
+- 子代理不继承 `todo`;`packages/coding-agent/src/task/executor.ts` 也将其作为父级拥有的工具从活动集中过滤掉。例外(两个层级):预先武装 prewalk 的子代理保留它 —— prewalk 计划提示和 todo 网关要求子代理在交接之前提交自己的 todo 列表。

@@ -1,180 +1,166 @@
-# AI tool-schema normalization
+# AI 工具 schema 规范化
 
-`@oh-my-pi/pi-ai` exposes one unified schema normalizer that providers consume
-before tools are sent on the wire. All walkers live in
-`packages/ai/src/utils/schema/normalize.ts`; the operational contract is
-`packages/ai/src/utils/schema/CONSTRAINTS.md`.
+`@oh-my-pi/pi-ai` 暴露了一个统一的 schema 规范化器，供各 provider 在工具通过线路发送前消费。
+所有 walker 都位于 `packages/ai/src/utils/schema/normalize.ts`；运行契约位于
+`packages/ai/src/utils/schema/CONSTRAINTS.md`。
 
-There is no separate `strict-mode.ts` module any more — OpenAI strict-mode
-sanitization, OpenAI Responses `oneOf` rewriting, Google/Vertex/Gemini-CLI
-sanitization, Cloud Code Assist Claude sanitization, and MCP sanitization all
-share the same option-driven walk.
+现在不再有独立的 `strict-mode.ts` 模块——OpenAI 严格模式清洗、OpenAI Responses
+`oneOf` 重写、Google/Vertex/Gemini-CLI 清洗、Cloud Code Assist Claude 清洗以及
+MCP 清洗都共享同一个由选项驱动的遍历流程。
 
-## Entry points
+## 入口点
 
-All exports live under `@oh-my-pi/pi-ai/utils/schema`:
+所有导出都位于 `@oh-my-pi/pi-ai/utils/schema` 之下：
 
-- `normalizeSchema(value, options)` — generic option-driven walker.
-- `normalizeSchemaForGoogle(value)` — Gemini / Vertex / Gemini CLI.
-- `normalizeSchemaForCCA(value)` — Cloud Code Assist Claude (Antigravity + GCA).
-- `normalizeSchemaForMCP(value)` — MCP inputSchemas before they enter the
-  custom-tool registry. `tool-bridge.ts` runs every MCP `inputSchema` through
-  this dispatcher.
-- `sanitizeSchemaForOpenAIResponses(schema)` (alias
-  `normalizeSchemaForOpenAIResponses`) — recursively rewrites `oneOf` →
-  `anyOf`, adds empty `properties` to object schemas, and removes regex
-  lookarounds that the Responses API rejects.
-- `sanitizeSchemaForStrictMode(schema)` and
-  `enforceStrictSchema(schema)` / `tryEnforceStrictSchema(schema)` — the
-  OpenAI strict-mode pipeline (sanitize → enforce). All three are exported
-  from `normalize.ts`.
-- `adaptSchemaForStrict(schema, strict)` from `./adapt` — thin composer that
-  upgrades draft-07 inputs to 2020-12 and wraps `tryEnforceStrictSchema` for
-  provider call sites. `./adapt` also exports the `NO_STRICT` global-bypass
-  flag (env `PI_NO_STRICT`) honored by every provider that emits `strict: true`.
-- `normalizeSchemaForMoonshot(value)` — Moonshot/Kimi's MFJS subset.
-- `sanitizeSchemaForOllama(schema)` — rewrites boolean subschemas, type
-  arrays, and boolean object-openness keywords for Ollama's Go schema parser.
-- `sanitizeSchemaForGrammar(schema)` — widens boolean subschemas for
-  grammar-constrained OpenAI-compatible backends while preserving boolean
-  `additionalProperties` / `unevaluatedProperties`.
+- `normalizeSchema(value, options)` — 通用的、由选项驱动的 walker。
+- `normalizeSchemaForGoogle(value)` — Gemini / Vertex / Gemini CLI。
+- `normalizeSchemaForCCA(value)` — Cloud Code Assist Claude（Antigravity + GCA）。
+- `normalizeSchemaForMCP(value)` — MCP `inputSchema` 在进入自定义工具注册表之前的
+  处理。`tool-bridge.ts` 会将每个 MCP 的 `inputSchema` 通过此调度器运行。
+- `sanitizeSchemaForOpenAIResponses(schema)`（别名
+  `normalizeSchemaForOpenAIResponses`）— 递归地将 `oneOf` 重写为 `anyOf`，
+  为对象 schema 添加空的 `properties`，并移除 Responses API 不接受的正则
+  前后瞻断言。
+- `sanitizeSchemaForStrictMode(schema)` 以及
+  `enforceStrictSchema(schema)` / `tryEnforceStrictSchema(schema)` — OpenAI
+  严格模式流水线（清洗 → 强制）。这三者都从 `normalize.ts` 导出。
+- 来自 `./adapt` 的 `adaptSchemaForStrict(schema, strict)` — 一个轻量的组合器，
+  将 draft-07 输入升级到 2020-12，并为 provider 调用点包装
+  `tryEnforceStrictSchema`。`./adapt` 还导出 `NO_STRICT` 全局绕过标志
+  （环境变量 `PI_NO_STRICT`），被每个发出 `strict: true` 的 provider 所遵守。
+- `normalizeSchemaForMoonshot(value)` — Moonshot/Kimi 的 MFJS 子集。
+- `sanitizeSchemaForOllama(schema)` — 为 Ollama 的 Go schema 解析器重写
+  布尔子 schema、类型数组和布尔型对象开放性关键字。
+- `sanitizeSchemaForGrammar(schema)` — 为支持语法约束的 OpenAI 兼容后端
+  放宽布尔子 schema，同时保留布尔型的 `additionalProperties` /
+  `unevaluatedProperties`。
 
-Removed in the unified-flow refactor:
+在统一流重构中已移除：
 
-- `strict-mode.ts` (merged into `normalize.ts`).
-- `sanitize-google.ts` and `normalize-cca.ts` (replaced by
-  `normalizeSchemaFor*` dispatchers).
-- `StringEnum` helper — use `type.enumerated(...)`; omptype emits
-  provider-compatible JSON Schema.
-- `sanitizeSchemaFor{Google,CCA,MCP}` / `prepareSchemaForCCA` — renamed to
-  `normalizeSchemaFor{Google,CCA,MCP}`.
+- `strict-mode.ts`（已合并到 `normalize.ts`）。
+- `sanitize-google.ts` 和 `normalize-cca.ts`（已替换为
+  `normalizeSchemaFor*` 调度器）。
+- `StringEnum` 辅助函数 — 请使用 `type.enumerated(...)`；omptype 会输出
+  provider 兼容的 JSON Schema。
+- `sanitizeSchemaFor{Google,CCA,MCP}` / `prepareSchemaForCCA` — 已重命名为
+  `normalizeSchemaFor{Google,CCA,MCP}`。
 
-## Dispatcher mapping
+## 调度器映射
 
-| Provider transport(s)                                              | Dispatcher                                                                   |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `openai-completions`                                               | `adaptSchemaForStrict` (sanitize + enforce when strict mode is enabled)      |
-| `openai-responses`, `openai-codex-responses`                       | `sanitizeSchemaForOpenAIResponses` before strict-mode adaptation             |
-| `azure-openai-responses`                                           | `sanitizeSchemaForOpenAIResponses`; emits `strict: false` without adaptation |
-| Moonshot/Kimi native hosts using MFJS                              | `normalizeSchemaForMoonshot`                                                 |
-| Grammar-flavored OpenAI-compatible hosts                           | `sanitizeSchemaForGrammar`                                                   |
-| `ollama`                                                           | `sanitizeSchemaForOllama`                                                    |
-| `google-generative-ai`, `google-vertex`, Gemini CLI                | `normalizeSchemaForGoogle`                                                   |
-| Cloud Code Assist Claude (Antigravity + GCA, `claude-*` model ids) | `normalizeSchemaForCCA`                                                      |
-| MCP `inputSchema` ingestion                                        | `normalizeSchemaForMCP`                                                      |
-| `anthropic-messages` (native, not CCA)                             | per-provider whitelist in `anthropic.ts`                                     |
+| Provider 传输方式                                                  | 调度器                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `openai-completions`                                               | `adaptSchemaForStrict`（启用严格模式时进行清洗 + 强制）                          |
+| `openai-responses`, `openai-codex-responses`                       | 在严格模式适配之前使用 `sanitizeSchemaForOpenAIResponses`                       |
+| `azure-openai-responses`                                           | `sanitizeSchemaForOpenAIResponses`；发出 `strict: false` 而不进行适配            |
+| 使用 MFJS 的 Moonshot/Kimi 原生主机                                | `normalizeSchemaForMoonshot`                                                    |
+| 语法风格的 OpenAI 兼容主机                                         | `sanitizeSchemaForGrammar`                                                      |
+| `ollama`                                                           | `sanitizeSchemaForOllama`                                                       |
+| `google-generative-ai`, `google-vertex`, Gemini CLI                | `normalizeSchemaForGoogle`                                                      |
+| Cloud Code Assist Claude（Antigravity + GCA，`claude-*` 模型 id）  | `normalizeSchemaForCCA`                                                         |
+| MCP `inputSchema` 接入                                             | `normalizeSchemaForMCP`                                                         |
+| `anthropic-messages`（原生，非 CCA）                               | `anthropic.ts` 中的 provider 白名单                                              |
 
-Gemini CLI / Antigravity CCA MUST run the full `normalizeSchemaForCCA`
-pipeline (not just the first keyword-stripping pass) to keep parity with the
-shared Google Claude path.
+Gemini CLI / Antigravity CCA 必须运行完整的 `normalizeSchemaForCCA` 流水线
+（不仅仅是首次的关键字剥离步骤），以保持与共享的 Google Claude 路径一致。
 
-## Walk semantics
+## 遍历语义
 
-`normalizeSchema` upgrades inputs to JSON Schema 2020-12, dereferences the tree,
-then walks it with the option set pinned by the dispatcher. Each node:
+`normalizeSchema` 将输入升级到 JSON Schema 2020-12，对树进行解引用，
+然后使用调度器固定的选项集进行遍历。每个节点：
 
-1. Renames `snake_case` combinator/property keys to camelCase
-   (`any_of` → `anyOf`, etc.; collisions follow python-genai
-   `pop(from)`/`set(to)` semantics — snake_case wins).
-2. Applies the `handle_null_fields` collapse for nullable unions before
-   recursing into children.
-3. Strips keys the target provider does not support, optionally lifting
-   human-meaningful keys (`pattern`, `format`, min/max, `default`,
-   `examples`, ...) into the sibling `description` via the spill formatter
-   (`spill.ts`). Structural/meta keys (`$ref`, `$defs`,
-   `additionalProperties`) are not spilled.
-4. Normalizes type unions (`type: ["T", "null"]` → `type: "T"` + nullable
-   marker on Google, plain `type: "T"` on CCA).
-5. Collapses object-only / same-type combiners, optionally lossy-collapses
-   mixed-type combiners (CCA only), and runs the residual-combiner fixpoint.
-6. Validates with the in-house structural validator (`isValidJsonSchema`
-   from `meta-validator.ts`) when `validateAndFallback` is set (CCA path)
-   and emits the per-tool fallback `{ "type": "object", "properties": {} }`
-   on residual incompatibility — `type` array, `type: "null"`, `nullable`
-   key, or any remaining `anyOf`/`oneOf`/`allOf`.
+1. 将 `snake_case` 的组合子/属性键重命名为 camelCase
+   （`any_of` → `anyOf` 等；冲突时遵循 python-genai 的
+   `pop(from)`/`set(to)` 语义——snake_case 优先）。
+2. 在递归进入子节点之前，对可空联合应用 `handle_null_fields` 折叠。
+3. 剥离目标 provider 不支持的键，可选地将具有人类可读含义的键
+   （`pattern`、`format`、min/max、`default`、`examples` 等）通过溢出格式化器
+   （`spill.ts`）提升到同级 `description` 中。结构/元键
+   （`$ref`、`$defs`、`additionalProperties`）不会被溢出。
+4. 规范化类型联合（`type: ["T", "null"]` → 在 Google 上为 `type: "T"`
+   加上可空标记，在 CCA 上为普通的 `type: "T"`）。
+5. 折叠仅对象 / 同类型的组合子，可选地有损折叠混合类型的组合子
+   （仅 CCA），并运行残余组合子不动点。
+6. 当设置 `validateAndFallback` 时（CCA 路径），使用内部结构验证器
+   （来自 `meta-validator.ts` 的 `isValidJsonSchema`）进行验证，
+   并在残余不兼容时发出每个工具的兜底 `{ "type": "object", "properties": {} }` —
+   `type` 数组、`type: "null"`、`nullable` 键，或任何剩余的
+   `anyOf`/`oneOf`/`allOf`。
 
-## OpenAI strict-mode pipeline
+## OpenAI 严格模式流水线
 
-`adaptSchemaForStrict(schema, strict)` runs `tryEnforceStrictSchema`,
-which composes:
+`adaptSchemaForStrict(schema, strict)` 运行 `tryEnforceStrictSchema`，
+后者组合了：
 
-1. **Sanitize** (`sanitizeSchemaForStrictMode`): strips non-structural
-   keywords (`format`, `pattern`, min/max, `examples`, `default`,
-   `if`/`then`/`else`, `not`, `unevaluated*`, `patternProperties`,
-   `dependent*`, `content*`, `min/maxProperties`, `$dynamicRef`, etc.). The
-   `default` value is inlined into the sibling `description` as
-   ` (default: X)` before being dropped, unless `description` already
-   contains `(default:` or no `description` exists.
-2. **Enforce** (`enforceStrictSchema`): every object node gets
-   `additionalProperties: false`, every property goes into `required`, and
-   optional properties become nullable unions
-   (`anyOf: [<original>, { "type": "null" }]`). Tuple `prefixItems` are
-   strictified recursively.
+1. **清洗**（`sanitizeSchemaForStrictMode`）：剥离非结构性的关键字
+   （`format`、`pattern`、min/max、`examples`、`default`、
+   `if`/`then`/`else`、`not`、`unevaluated*`、`patternProperties`、
+   `dependent*`、`content*`、`min/maxProperties`、`$dynamicRef` 等）。
+   `default` 值在丢弃之前会以 ` (default: X)` 的形式内联到同级的
+   `description` 中，除非 `description` 已经包含 `(default:` 或者
+   不存在 `description`。
+2. **强制**（`enforceStrictSchema`）：每个对象节点都会获得
+   `additionalProperties: false`，每个属性都会进入 `required`，
+   可选属性变成可空联合
+   （`anyOf: [<original>, { "type": "null" }]`）。元组 `prefixItems`
+   会被递归地严格化。
 
-The two passes use cache/cycle guards, so refs, `allOf`, and nullable wrapping
-stay deterministic without recursing forever. `tryEnforceStrictSchema` is
-fail-open: if anything throws, it returns `{ strict: false, schema: upgraded }`
-so callers MUST emit `strict: true` only when enforcement actually succeeded.
+这两个过程使用缓存/循环保护，因此 ref、`allOf` 和可空包装保持确定性，
+不会无限递归。`tryEnforceStrictSchema` 是 fail-open 的：如果抛出任何异常，
+它返回 `{ strict: false, schema: upgraded }`，因此调用方仅在强制实际成功时
+才必须发出 `strict: true`。
 
-### Edge cases the strict-mode normalizer handles
+### 严格模式规范化器处理的边界情况
 
-- **Local `$ref` inlining.** OpenAI strict mode rejects
-  `{ "$ref": "...", "description": "..." }` with sibling keys. The
-  sanitizer pre-resolves local `#/...` refs against the root and merges
-  with **sibling keys winning** over the resolved def — same precedence
-  as `openai-python`'s `_ensure_strict_json_schema`. Recursive refs are
-  guarded by the per-walk epoch.
-- **Single-item `allOf`.** A `{ "allOf": [X], ...siblings }` collapses to
-  `{ ...X, ...siblings }` with the inlined entry's keys winning over the
-  original siblings (matches `openai-python`'s `_pydantic.py:79-83`). Multi-
-  item `allOf` is left intact for the downstream validator to reject if
-  needed.
-- **Type-array branches and nullable unions.** When a node has
-  `type: ["T", "U"]`, the sanitizer emits one variant schema per type,
-  pruning type-specific keywords (e.g. `properties`/`required` only stay on
-  the `object` variant, `items` only on the `array` variant). The shared
-  `description` is **hoisted onto the `anyOf` wrapper** instead of being
-  duplicated on every branch — so a strict nullable union becomes
-  `{ anyOf: [T, { type: "null" }], description: "..." }`, not
-  `anyOf: [{ ..., description }, { ..., description }]`.
-- **Enum/const without a `type`.** Both sanitize and enforce paths call
-  `inferStrictPrimitiveTypeFromEnumOrConst` to infer the primitive `type`
-  from `enum` / `const` values. Mixed-primitive enums (`[1, "two", null]`),
-  enums containing objects/arrays, and non-primitive `const` values
-  (`{a:1}`, `[1,2,3]`) cannot be described by a single `type` keyword and
-  trigger the strict-mode fail-open path — emitting a typeless schema
-  would just be rejected on the wire by OpenAI.
+- **本地 `$ref` 内联。** OpenAI 严格模式拒绝带有同级键的
+  `{ "$ref": "...", "description": "..." }`。清洗器预先将本地 `#/...`
+  ref 针对根进行解析，并合并到已解析的 def 上，**同级键优先**于已解析
+  的 def——与 `openai-python` 的 `_ensure_strict_json_schema` 优先级相同。
+  递归 ref 由每次遍历的 epoch 进行保护。
+- **单元素 `allOf`。** `{ "allOf": [X], ...siblings }` 折叠为
+  `{ ...X, ...siblings }`，其中内联条目的键优先于原始同级键
+  （与 `openai-python` 的 `_pydantic.py:79-83` 一致）。多元素
+  `allOf` 保持原样，由下游验证器根据需要进行拒绝。
+- **类型数组分支和可空联合。** 当节点具有 `type: ["T", "U"]` 时，
+  清洗器为每个类型发出一个变体 schema，修剪类型特定的关键字
+  （例如 `properties`/`required` 仅保留在 `object` 变体上，`items`
+  仅保留在 `array` 变体上）。共享的 `description` 被**提升到 `anyOf`
+  包装器上**，而不是在每个分支上重复——因此严格的可空联合变为
+  `{ anyOf: [T, { type: "null" }], description: "..." }`，而不是
+  `anyOf: [{ ..., description }, { ..., description }]`。
+- **没有 `type` 的 enum/const。** 清洗和强制路径都会调用
+  `inferStrictPrimitiveTypeFromEnumOrConst` 从 `enum` / `const` 值推断
+  基本 `type`。混合基本类型的 enum（`[1, "two", null]`）、包含对象/
+  数组的 enum，以及非基本类型的 `const` 值（`{a:1}`、`[1,2,3]`）
+  无法用单个 `type` 关键字描述，会触发严格模式的 fail-open 路径——
+  因为发出无类型的 schema 在 OpenAI 端会被直接拒绝。
 
-## Performance: static fingerprint cache
+## 性能：静态指纹缓存
 
-`resolveProviderModels` in `packages/catalog/src/model-manager.ts` and
-`readModelCache`/`writeModelCache` in `packages/catalog/src/model-cache.ts`
-cooperate via a `static_fingerprint` column on the `model_cache` SQLite
-table (current cache schema version 12).
+`packages/catalog/src/model-manager.ts` 中的 `resolveProviderModels` 以及
+`packages/catalog/src/model-cache.ts` 中的 `readModelCache`/`writeModelCache`
+通过 `model_cache` SQLite 表上的 `static_fingerprint` 列进行协作
+（当前缓存 schema 版本为 12）。
 
-- `fingerprintStatic(staticModels, dynamicModelsAuthoritative)` hashes the
-  static catalog slice (`Bun.hash(JSON.stringify(models))` in base36), prefixes
-  the fingerprint format/version and authoritative mode, and memoizes the
-  non-authoritative result by tagging the array with a symbol property.
-  Endpoint-migration drop IDs are also folded into cache identity.
-- When network fetching is skipped, the cache is fresh and authoritative,
-  restored headers are complete, and the static fingerprint matches,
-  `resolveProviderModels` returns the restored cached models without rebuilding
-  the static/dynamic merge.
-- `mergeModelSources` and `mergeDynamicModels` short-circuit empty-source
-  inputs, avoiding unnecessary `Map` construction.
+- `fingerprintStatic(staticModels, dynamicModelsAuthoritative)` 对静态目录切片
+  进行哈希（`Bun.hash(JSON.stringify(models))`，以 base36 表示），为指纹
+  格式/版本和权威模式添加前缀，并通过为数组标记 symbol 属性来记忆化
+  非权威结果。端点迁移丢弃的 ID 也会被纳入缓存标识。
+- 当跳过网络获取时，如果缓存是新鲜的且权威的、恢复的 header 完整，
+  并且静态指纹匹配，`resolveProviderModels` 会直接返回恢复的缓存模型，
+  而不重建静态/动态合并。
+- `mergeModelSources` 和 `mergeDynamicModels` 会对空源输入进行短路，
+  避免不必要的 `Map` 构造。
 
-Rows from every older cache schema version are deleted. Newly added cache
-columns use conservative defaults, but a row is reused only when its stored
-version is exactly the current version.
+来自所有较旧缓存 schema 版本的行都会被删除。新增的缓存列使用保守的默认值，
+但只有当存储的版本恰好是当前版本时，行才会被复用。
 
-## Related
+## 相关内容
 
-- `docs/models.md` — registry, equivalence, compat flags
-  (`supportsStrictMode`, `toolStrictMode`, `disableStrictTools`).
-- `docs/provider-streaming-internals.md` — how the normalized schemas are
-  used downstream during the provider stream loop.
-- `docs/mcp-server-tool-authoring.md` — MCP `inputSchema` ingestion via
-  `normalizeSchemaForMCP`.
-- `packages/ai/src/utils/schema/CONSTRAINTS.md` — operational contract for
-  every normalization rule.
+- `docs/models.md` — 注册表、等价性、兼容标志
+  （`supportsStrictMode`、`toolStrictMode`、`disableStrictTools`）。
+- `docs/provider-streaming-internals.md` — 规范化的 schema 在 provider
+  流循环下游的使用方式。
+- `docs/mcp-server-tool-authoring.md` — 通过 `normalizeSchemaForMCP`
+  接入 MCP `inputSchema`。
+- `packages/ai/src/utils/schema/CONSTRAINTS.md` — 每个规范化规则的
+  运行契约。

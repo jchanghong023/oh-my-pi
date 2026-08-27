@@ -1,159 +1,108 @@
-# Embedded Local Tiny-Model Experiments
+# 嵌入式本地小模型实验
 
-This document summarizes the experiments behind the optional **local** tiny-model paths for
-session-title generation (`providers.tinyModel`), Mnemopi memory extraction/consolidation
-(`providers.memoryModel`), and the `auto` thinking-level difficulty classifier
-(`providers.autoThinkingModel`, which uses the memory-model registry). It is a factual engineering
-record for maintainers: what we measured, which recipes won, and which models we shipped. All three
-settings default to `online`, so existing users incur no downloads or on-device inference cost unless
-they opt in. On the online path, the configured `tiny` role is preferred and the task-specific online
-fallback is used when that role is unset.
+本文档汇总了会话标题生成（`providers.tinyModel`）、Mnemopi 记忆提取/整合（`providers.memoryModel`）以及 `auto` 思维层级难度分类器（`providers.autoThinkingModel`，使用记忆模型注册表）三个可选 **local** 小模型路径背后的实验。它是面向维护者的一份客观工程记录：我们测量了什么、哪些方案胜出，以及我们发布了哪些模型。三个设置均默认 `online`，因此除非用户主动启用，否则现有用户不会产生下载或设备端推理开销。在在线路径上，优先使用已配置的 `tiny` 角色；当该角色未设置时，则使用该任务特定的在线回退。
 
-## Runtime / environment findings
+## 运行时 / 环境发现
 
-- **Stack**: `@huggingface/transformers` (transformers.js) v4 running under Bun. In Bun the library
-  loads the **native `onnxruntime-node` backend** (not the WASM build).
-- **Non-FHS distros (NixOS, and any host without `libstdc++.so.6` on the loader path)**: the
-  on-demand `onnxruntime-node` / `sherpa-onnx-node` / `sharp` addons are prebuilt binaries that
-  `dlopen` `libstdc++.so.6` and `libgcc_s.so.1`, and they carry their own `DT_RUNPATH`, so nothing in
-  the omp executable's own RPATH can resolve them. Set `OMP_NATIVE_LIBRARY_PATH` to the
-  colon-separated directories holding those libraries; omp appends it to `LD_LIBRARY_PATH` for the
-  inference worker subprocesses only (never for shell/eval/daemon children). The Nix package
-  (`nix/package.nix`) sets this by default.
-- **Device policy**: local tiny models default to CPU-only inference and retry once on CPU if an
-  explicit accelerated provider cannot initialize.
-  - Pick a provider persistently with the `providers.tinyModelDevice` setting (`default` keeps CPU),
-    or per-run with the `PI_TINY_DEVICE` env var (which overrides the setting).
-  - Accepted values are `cpu`, `gpu`, `metal`/`webgpu`, `auto`, `cuda`, `dml`, `coreml`, `wasm`,
-    `webnn`, `webnn-gpu`, `webnn-cpu`, and `webnn-npu`.
-  - Direct `coreml` remains opt-in via `PI_TINY_DEVICE=coreml`; it is not part of the default because
-    cached decoder-LLM ONNX loads can fail during session initialization.
-  - WebGPU/Metal works for the single-process eval harness, but the production worker forces
-    Darwin `gpu`/`webgpu`/`auto` requests back to CPU because ONNX Runtime/Bun currently
-    hard-crashes on worker teardown after WebGPU inference.
-  - Use `providers.tinyModelDevice` or `PI_TINY_DEVICE` only when explicitly opting out of the CPU
-    default.
-- **Quantization: q4 is the sweet spot** — smaller on disk, faster to load, and fast at inference.
-  q8/int8 loads slower _and_ infers slower on CPU. Every shipped model defaults to `q4`; override the
-  precision persistently with the `providers.tinyModelDtype` setting (`default` keeps `q4`, e.g. `fp16`
-  for higher fidelity), or per-run with `PI_TINY_DTYPE` (which overrides the setting). Accepts `auto`,
-  `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `bnb4`, `q4f16`, `q2`, `q2f16`, `q1`, `q1f16`; an
-  unrecognized value fails loudly at worker startup.
-- **Load-time correction (important).** An earlier belief that "q4 >=1B models take minutes to load"
-  was a **measurement artifact** caused by running ~5 multi-GB HuggingFace downloads in parallel
-  (I/O saturation). Clean, isolated **warm** loads are all sub-3s:
-  - TinyLlama-1.1B q4: ~0.5s
-  - Llama-3.2-1B q4: ~2.8s (`graphOpt=all`) / ~0.5s (`disabled`)
-  - LFM2-1.2B q4: ~0.36s
-  - Qwen2.5-1.5B q4: ~1.5s
-  - Qwen3-1.7B q4: ~1.6s
-  - gemma-3-1b q4: ~1.1s
-  - Conclusion: **1B–1.7B models are viable on CPU.**
-- **`session_options.graphOptimizationLevel`** trades load vs inference speed: `disabled` = fastest
-  load, slightly slower inference; `all` = default.
-- **First run** downloads weights from the HF Hub to a cache dir (q4 weights ~200MB–1.1GB depending
-  on model); subsequent **warm** loads are sub-second to ~3s. Inference is async and
-  background-friendly for memory tasks; titles are semi-interactive.
+- **技术栈**：`@huggingface/transformers`（transformers.js）v4，运行在 Bun 之上。在 Bun 中，该库会加载**原生 `onnxruntime-node` 后端**（而非 WASM 构建）。
+- **非 FHS 发行版（NixOS，以及任何加载器路径上缺少 `libstdc++.so.6` 的主机）**：按需加载的 `onnxruntime-node` / `sherpa-onnx-node` / `sharp` 插件均为预编译二进制文件，会 `dlopen` `libstdc++.so.6` 和 `libgcc_s.so.1`，并自带 `DT_RUNPATH`，因此 omp 可执行文件自身的 RPATH 无法解析它们。请将 `OMP_NATIVE_LIBRARY_PATH` 设置为保存这些库的冒号分隔目录；omp 只会将其追加到推理工作进程的 `LD_LIBRARY_PATH` 中（绝不会追加到 shell/eval/daemon 子进程）。Nix 包（`nix/package.nix`）默认会进行此设置。
+- **设备策略**：本地小模型默认仅在 CPU 上推理，并且在显式加速提供方无法初始化时会在 CPU 上重试一次。
+  - 通过 `providers.tinyModelDevice` 设置（`default` 保持 CPU）持久选择提供方，或通过 `PI_TINY_DEVICE` 环境变量进行单次运行选择（其会覆盖设置）。
+  - 接受的值包括 `cpu`、`gpu`、`metal`/`webgpu`、`auto`、`cuda`、`dml`、`coreml`、`wasm`、`webnn`、`webnn-gpu`、`webnn-cpu` 和 `webnn-npu`。
+  - 直接使用 `coreml` 仍需通过 `PI_TINY_DEVICE=coreml` 显式启用；它不属于默认项，因为缓存的 decoder-LLM ONNX 在会话初始化阶段可能加载失败。
+  - WebGPU/Metal 可在单进程 eval 评测环境中工作，但生产工作进程会强制将 Darwin 上的 `gpu`/`webgpu`/`auto` 请求回退到 CPU，因为在 WebGPU 推理后，ONNX Runtime/Bun 当前在工作进程销毁时会硬崩溃。
+  - 仅在显式放弃 CPU 默认值时，才使用 `providers.tinyModelDevice` 或 `PI_TINY_DEVICE`。
+- **量化：q4 是最佳折中** — 磁盘占用更小、加载更快、推理也快。在 CPU 上，q8/int8 的加载更慢_并且_推理也更慢。每个已发布模型默认均为 `q4`；可通过 `providers.tinyModelDtype` 设置（`default` 保持 `q4`，例如 `fp16` 以获得更高保真度）持久覆盖精度，或通过 `PI_TINY_DTYPE`（其会覆盖设置）进行单次运行覆盖。可接受 `auto`、`fp32`、`fp16`、`q8`、`int8`、`uint8`、`q4`、`bnb4`、`q4f16`、`q2`、`q2f16`、`q1`、`q1f16`；未识别的值会在工作进程启动时直接报错。
+- **加载时间修正（重要）。**此前认为“q4 >=1B 模型加载需要数分钟”的观点是**测量假象**，由并行运行约 5 个多 GB 的 HuggingFace 下载（I/O 饱和）所致。干净、隔离的**热**加载均低于 3 秒：
+  - TinyLlama-1.1B q4：约 0.5 秒
+  - Llama-3.2-1B q4：约 2.8 秒（`graphOpt=all`）/ 约 0.5 秒（`disabled`）
+  - LFM2-1.2B q4：约 0.36 秒
+  - Qwen2.5-1.5B q4：约 1.5 秒
+  - Qwen3-1.7B q4：约 1.6 秒
+  - gemma-3-1b q4：约 1.1 秒
+  - 结论：**1B–1.7B 模型在 CPU 上是可行的。**
+- **`session_options.graphOptimizationLevel`** 在加载速度与推理速度之间权衡：`disabled` = 加载最快，推理略慢；`all` = 默认值。
+- **首次运行**会从 HF Hub 下载权重到缓存目录（q4 权重约 200MB–1.1GB，取决于模型）；后续的**热**加载均在亚秒级到约 3 秒之间。推理是异步的，对记忆任务适合在后台执行；标题生成则属于半交互式。
 
-## Task 1: Session title generation (`providers.tinyModel`)
+## 任务 1：会话标题生成（`providers.tinyModel`）
 
-**Task**: turn the first user message into a 3–6 word title. Tiny models (sub-1B) suffice.
+**任务**：将第一条用户消息转换为 3–6 个单词的标题。亚 1B 的小模型即可胜任。
 
-**Winning recipe**:
+**胜出方案**：
 
-- Plain system prompt (no few-shot).
-- **Prefill** the assistant turn with `<title>` and **stop at `</title>`**, then take the first line.
-- Greedy decoding (`do_sample:false`), `enable_thinking:false` in the chat template.
+- 简洁的系统提示（无少样本示例）。
+- **预填充**助手轮次为 `<title>` 并**在 `</title>` 处停止**，然后取第一行。
+- 贪婪解码（`do_sample:false`），聊天模板中设置 `enable_thinking:false`。
 
-**What we learned**:
+**我们的发现**：
 
-- **Few-shot examples HURT sub-0.6B models** for titles; the tag-prefill rescues even 270M models.
-- **Token biasing (`bad_words_ids`) is a confirmed no-op** here — the prefill already controls the
-  opener.
+- **少样本示例对亚 0.6B 模型的标题生成有害**；标签预填充甚至能让 270M 模型成功。
+- **Token 偏置（`bad_words_ids`）在此被证实无效** — 预填充已经控制了开头。
 
-**Leaderboard** (tag trick, CPU, warm):
+**排行榜**（标签技巧，CPU，热）：
 
 | Model         | Verdict                             |
 | ------------- | ----------------------------------- |
-| LFM2-350M     | Best speed/quality balance (~212MB) |
-| Qwen3-0.6B    | Most robust                         |
-| gemma-3-270m  | Smallest viable                     |
-| Qwen2.5-0.5B  | Acceptable                          |
-| SmolLM2-135M  | Too small                           |
-| flan-t5-small | Rejected — just echoes the input    |
+| LFM2-350M     | 速度/质量最佳平衡（约 212MB） |
+| Qwen3-0.6B    | 最稳健 |
+| gemma-3-270m  | 最小可用模型 |
+| Qwen2.5-0.5B  | 可接受 |
+| SmolLM2-135M  | 太小 |
+| flan-t5-small | 已否决 — 仅会回显输入 |
 
-**Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
-**Default setting**: `online`. The default local download for `omp tiny-models` is `lfm2-700m`.
+**已发布的本地选项**：`lfm2-350m`、`qwen3-0.6b`、`gemma-270m`、`qwen2.5-0.5b`、`lfm2-700m`。
+**默认设置**：`online`。`omp tiny-models` 的默认本地下载为 `lfm2-700m`。
 
-## Task 2: Mnemopi memory (`providers.memoryModel`)
+## 任务 2：Mnemopi 记忆（`providers.memoryModel`）
 
-Mnemopi runs two small-LLM tasks:
+Mnemopi 运行两个小 LLM 任务：
 
-1. **Extraction** — pull durable, structured items from a single message.
-2. **Consolidation** — summarize a list of memories into 1–3 faithful sentences.
+1. **提取** — 从单条消息中抽取持久且结构化的条目。
+2. **整合** — 将一组记忆概括为 1–3 句忠实的句子。
 
-These need **bigger models than titles: 1B–1.7B**. We tested LFM2-1.2B, Qwen2.5-1.5B, Qwen3-1.7B,
-and gemma-3-1b (q4, CPU) via four parallel agents each running 27–31 experiments.
+这些任务**需要比标题生成更大的模型：1B–1.7B**。我们通过四个并行代理各运行 27–31 次实验，测试了 LFM2-1.2B、Qwen2.5-1.5B、Qwen3-1.7B 和 gemma-3-1b（q4，CPU）。
 
-### Extraction findings
+### 提取发现
 
-The stock 5-category JSON prompt fails on small models in two ways:
+标准的 5 类 JSON 提示在小模型上会以下面两种方式失败：
 
-1. The all-empty example `{"facts":[],...}` gets **copied verbatim** → 0 facts extracted.
-2. Capable models emit **JSON objects inside arrays**, which Mnemopi's `String(item)` coerces into
-   the literal string `[object Object]`.
+1. 全空示例 `{"facts":[],...}` 被**逐字复制** → 提取到 0 条事实。
+2. 能力足够的模型会输出**JSON 对象嵌入数组**的形式，而 Mnemopi 的 `String(item)` 会将其强制转换为字面字符串 `[object Object]`。
 
-The robust fix is a **one-item-per-line output format** (consumed by Mnemopi's parser line-fallback)
-or a **flat JSON array of strings**. Every model also over-extracts pure small talk; an explicit
-chit-chat → NONE example is the best mitigation.
+稳健的修复方案是**逐行一条**的输出格式（由 Mnemopi 解析器的行回退消费）或**扁平的字符串 JSON 数组**。每个模型都会过度提取纯闲聊；显式的闲聊 → NONE 示例是最佳缓解手段。
 
-### Technique polarity flips vs titles
+### 与标题生成相比的技术极性反转
 
-- At 1B+, **few-shot is the dominant quality lever**: e.g. Qwen2.5-1.5B extraction F1 0.52 → 0.83
-  going 1 → 3 shots; gemma recall 0.65 → 0.92 with 2 shots.
-- **Prefill HURTS extraction** — it forces output on small talk, producing false positives.
-- **System-split** (instructions in the system role) helps models that have a system role.
-- **Greedy >= temperature** for both tasks.
-- **Token biasing** is again a no-op.
+- 在 1B+ 时，**少样本是主导的质量杠杆**：例如 Qwen2.5-1.5B 提取 F1 从 1 样本到 3 样本由 0.52 提升至 0.83；gemma 在 2 样本下召回率由 0.65 提升至 0.92。
+- **预填充对提取有害** — 它会在闲聊上强制输出，产生假阳性。
+- **系统拆分**（指令放在 system 角色中）有助于具备 system 角色的模型。
+- **贪婪解码 >= 温度采样**，对两个任务皆成立。
+- **Token 偏置**同样无效。
 
-### Per-model verdicts (head-to-head, 16-fixture set)
+### 各模型判定（直接对比，16 样本集）
 
-- **Qwen3-1.7B** — most disciplined extraction: returns empty on small talk, no buried-fact leak,
-  preserves language, clean flat JSON. Weaknesses: coarse granularity, missed a multi-turn value
-  update.
-- **Qwen2.5-1.5B** — best extraction granularity (atomic facts), caught the value update, zero
-  small-talk leakage. Weaknesses: weakest consolidation (run-on, no dedup) and one degenerate
-  buried-fact output.
-- **gemma-3-1b** — best consolidation (dedup works, faithful, clean single-memory). Weaknesses: leaks
-  small talk and translated German.
-- **LFM2-1.2B** — solid and fastest to load. Weaknesses: `Label: value` noise, small-talk + buried
-  leaks, a fluffy single-memory summary.
+- **Qwen3-1.7B** — 提取最有纪律：闲聊时返回空，无埋藏事实泄漏，保留语言，干净的扁平 JSON。弱点：粒度较粗，漏掉了一次多轮的价值更新。
+- **Qwen2.5-1.5B** — 提取粒度最佳（原子级事实），捕获了价值更新，零闲聊泄漏。弱点：整合最弱（连写、无去重），并出现过一次退化的埋藏事实输出。
+- **gemma-3-1b** — 整合最佳（去重有效、忠实、干净的单条记忆）。弱点：会泄漏闲聊和德语翻译内容。
+- **LFM2-1.2B** — 稳健且加载最快。弱点：`Label: value` 噪声、闲聊 + 埋藏事实泄漏，以及一条松散的单条记忆摘要。
 
-### Recommendation and current availability
+### 推荐与当前可用情况
 
-The experiments favored **Qwen3-1.7B** for extraction precision, but the shipped ONNX export cannot
-currently run under `onnxruntime-node`: its RotaryEmbedding cache updates are unsupported. The
-runtime rejects this choice before loading the model rather than failing during inference.
+实验倾向于在提取精度上选择 **Qwen3-1.7B**，但其已发布的 ONNX 导出当前无法在 `onnxruntime-node` 下运行：其 RotaryEmbedding 缓存更新不被支持。运行时会先于加载模型阶段直接拒绝此选择，而非在推理时失败。
 
-Of the runnable options, the registry marks `lfm2-1.2b` as the recommended local memory model.
-`gemma-3-1b` favors consolidation quality, while `qwen2.5-1.5b` favors fine-grained extraction.
+在可运行选项中，注册表将 `lfm2-1.2b` 标记为推荐的本地记忆模型。`gemma-3-1b` 偏向整合质量，而 `qwen2.5-1.5b` 偏向细粒度提取。
 
-**Configured local options**: `llama3.2:3b`, `qwen3-1.7b` (currently disabled as described above),
-`gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
-**Default setting**: `online`.
+**已配置的本地选项**：`llama3.2:3b`、`qwen3-1.7b`（当前因上文所述原因被禁用）、`gemma-3-1b`、`qwen2.5-1.5b`、`lfm2-1.2b`。
+**默认设置**：`online`。
 
-### Known Mnemopi parser bugs (surfaced by these experiments)
+### 已知 Mnemopi 解析器缺陷（由这些实验暴露）
 
-- `String(item)` produces `[object Object]` on object array items.
-- The line-fallback drops items `<=10` chars, so a correct short fact like `Name: Can` is discarded.
+- `String(item)` 在对象数组项上会产生 `[object Object]`。
+- 行回退会丢弃 `<=10` 个字符的条目，因此类似 `Name: Can` 的正确短事实会被丢弃。
 
-## Integration notes
+## 集成说明
 
-- `providers.tinyModel`, `providers.memoryModel`, and `providers.autoThinkingModel` default to
-  `online`, so existing users get **no downloads or on-device inference cost** unless they opt in.
-- Local inference runs **in a worker** (off the main thread); models are cached on disk and
-  downloaded on first use.
-- The memory local path applies the refined recipes (line-format + small-talk-guarded extraction
-  prompt, hardened consolidation prompt) via Mnemopi prompt overrides; the **online path is
-  unchanged**.
-- `providers.autoThinkingModel` uses the same shipped local options as `providers.memoryModel`.
+- `providers.tinyModel`、`providers.memoryModel` 和 `providers.autoThinkingModel` 默认均为 `online`，因此现有用户**除非主动启用，否则不会产生下载或设备端推理开销**。
+- 本地推理在**工作进程**中运行（独立于主线程）；模型缓存在磁盘上，并在首次使用时下载。
+- 记忆的本地路径通过 Mnemopi 提示覆盖应用了精炼后的方案（行格式 + 防闲聊的提取提示、强化的整合提示）；**在线路径未发生变化**。
+- `providers.autoThinkingModel` 使用与 `providers.memoryModel` 相同的已发布本地选项。

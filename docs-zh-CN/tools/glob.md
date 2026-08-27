@@ -1,6 +1,6 @@
 # glob
 
-> Find filesystem paths by glob; use `grep` when you need content matches instead of path matches.
+> 通过 glob 查找文件系统路径；当需要按内容匹配而非按路径匹配时，请使用 `grep`。
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/glob.ts`
@@ -18,15 +18,15 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path` | `string` | No | Glob, file, directory, or path-backed internal URL. Separate multiple targets with `;`; omitted or empty defaults to `.`. Existing paths containing delimiters remain literal when they exist. Each target becomes its own walk root and multi-target scans run concurrently. `memory://` alone supports internal-URL glob patterns; `ssh://` is rejected because it has no local backing path. |
-| `hidden` | `boolean` | No | Include hidden files. Defaults to `true`. |
-| `gitignore` | `boolean` | No | Respect `.gitignore` during local native globbing. Defaults to `true`; set `false` to include gitignored files. |
-| `limit` | `number` | No | Max returned paths. Defaults to `200`; finite positive inputs are floored then clamped to `1..200`. |
+| `path` | `string` | No | Glob、文件、目录或由路径支持的内部 URL。使用 `;` 分隔多个目标；省略或为空时默认为 `.`。包含分隔符的已存在路径在存在时保持字面值。每个目标都成为各自的遍历根，多目标扫描会并发运行。`memory://` 单独支持内部 URL 的 glob 模式；`ssh://` 被拒绝，因为它没有本地支持的路径。 |
+| `hidden` | `boolean` | No | 包含隐藏文件。默认为 `true`。 |
+| `gitignore` | `boolean` | No | 在本地原生 glob 时遵循 `.gitignore`。默认为 `true`；设为 `false` 以包含被 gitignore 排除的文件。 |
+| `limit` | `number` | No | 返回路径的最大数量。默认为 `200`；有限正整数输入会向下取整后被限制在 `1..200` 范围内。 |
 
-`glob` is enabled by default (`glob.enabled = true`) and is an essential tool.
+`glob` 默认启用（`glob.enabled = true`），是必备工具。
 
 ## Outputs
-The tool returns a single text block plus structured `details`.
+工具返回一个文本块以及结构化的 `details`。
 
 - Success text: matching paths grouped as a multi-level, prefix-folded directory tree (`formatGroupedPaths()`): one `#` per nesting level, single-child directory chains fold into one header (`# a/b/c/`), and files are listed bare under the deepest owning header; root-level matches are listed without a header. Directory matches carry a trailing `/`. Exact file inputs return that file path as one line.
 - Empty result text: `No files found matching pattern`, optionally followed by a timeout or missing-path notice.
