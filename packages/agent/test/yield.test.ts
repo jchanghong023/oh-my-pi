@@ -65,33 +65,21 @@ describe("YieldGate.yieldIfDue", () => {
 });
 
 describe("ExponentialYield.race", () => {
-	it("returns the racer's value as soon as it settles", async () => {
-		const ey = new ExponentialYield({ minMs: 5_000, maxMs: 10_000 });
-		const racer = Bun.sleep(10).then(() => "done");
-		const start = performance.now();
-		const out = await ey.race([racer]);
-		const elapsed = performance.now() - start;
-		expect(out).toBe("done");
-		// The 5s yield must not have delayed us: settle within a comfy margin.
-		expect(elapsed).toBeLessThan(500);
-	});
+	it("returns the racer's value and cancels the losing sleep", async () => {
+		const sleepStarted = Promise.withResolvers<AbortSignal>();
+		const sleep = (_ms: number, signal?: AbortSignal) => {
+			if (!signal) throw new Error("Expected cancellable sleep");
+			sleepStarted.resolve(signal);
+			const cancelled = Promise.withResolvers<void>();
+			signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+			return cancelled.promise;
+		};
+		const ey = new ExponentialYield({ minMs: 2_000, maxMs: 2_000, sleep });
 
-	it("cancels the losing sleep so it does not keep the loop alive", async () => {
-		// If the losing Bun.sleep weren't cancelled, this test would block for
-		// the full minMs after the racer wins, since the prior implementation
-		// kept fresh timers ticking. We pick a minMs far larger than the racer
-		// delay and assert we return well before it.
-		const ey = new ExponentialYield({ minMs: 2_000, maxMs: 2_000 });
-		const racer = Bun.sleep(20).then(() => 42);
-		const start = performance.now();
-		const out = await ey.race([racer]);
-		const elapsed = performance.now() - start;
-		expect(out).toBe(42);
-		expect(elapsed).toBeLessThan(500);
+		const result = await ey.race([Promise.resolve(42)]);
+		const losingSignal = await sleepStarted.promise;
 
-		// After race resolves, ensure the AbortController-driven cancel really
-		// unblocked the underlying timer: a short follow-up sleep should not
-		// be perturbed by residual pending timers. (Sanity: this returns.)
-		await Bun.sleep(30);
+		expect(result).toBe(42);
+		expect(losingSignal.aborted).toBeTrue();
 	});
 });
