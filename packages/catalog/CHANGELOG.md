@@ -8,6 +8,10 @@
 
 ## [18.0.7] - 2026-08-26
 
+### Added
+
+- Added cached background refresh from the shared models.dev catalog so newly published models for known providers can appear without a new OMP release, while bundled models remain the offline fallback.
+
 ### Fixed
 
 - Fixed LiteLLM model discovery so model pricing is correctly populated when pricing information is provided by a later metadata endpoint.
