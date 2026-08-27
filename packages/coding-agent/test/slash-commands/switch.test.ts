@@ -30,7 +30,7 @@ describe("/model slash command", () => {
 });
 
 describe("/switch slash command", () => {
-	it("opens the temporary model selector (mirrors alt+p)", async () => {
+	it("opens the temporary model selector (mirrors ctrl+t)", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/switch", harness.runtime);

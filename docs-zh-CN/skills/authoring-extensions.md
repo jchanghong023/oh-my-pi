@@ -254,7 +254,7 @@ disabledExtensions:
 - **`tool_call` 错误是 fail-closed 的。** 如果 `tool_call` 处理器抛出异常，该工具将被阻止。
 - **自调度回调在没有隔离的情况下与进程内运行。** 一个抛出异常的原生 `setInterval`/`setTimeout`/分离的 Promise 回调会逃出处理器分发的 try/catch，并使整个会话崩溃（`uncaughtException`）。后台工作请使用 `ctx.setInterval` / `ctx.setTimeout` —— 它们会捕获回调中的异常，并在 `session_shutdown` 时自动清理。对于原生定时器，你必须自行添加 `try/catch` 和清理逻辑。
 - **命令名不能与内建命令冲突。** 冲突会以诊断日志形式被跳过。
-- **保留的快捷键会被忽略**（`ctrl+c`、`ctrl+d`、`ctrl+z`、`ctrl+k`、`ctrl+p`、`ctrl+l`、`ctrl+o`、`ctrl+t`、`ctrl+g`、`ctrl+q`、`alt+m`、`shift+tab`、`shift+ctrl+p`、`alt+enter`、`escape`、`enter`）。
+- **保留的快捷键会被忽略**（`ctrl+c`、`ctrl+d`、`ctrl+z`、`ctrl+k`、`ctrl+p`、`ctrl+l`、`ctrl+o`、`ctrl+t`、`ctrl+g`、`ctrl+q`、`alt+m`、`alt+p`、`shift+tab`、`shift+ctrl+p`、`alt+enter`、`escape`、`enter`）。
 
 ## 进一步阅读
 

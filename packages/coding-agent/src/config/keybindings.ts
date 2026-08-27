@@ -103,7 +103,7 @@ export const KEYBINDINGS = {
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
-		defaultKeys: "ctrl+t",
+		defaultKeys: "alt+p",
 		description: "Toggle thinking mode",
 	},
 	"app.model.cycleForward": {
@@ -119,7 +119,7 @@ export const KEYBINDINGS = {
 		description: "Select model",
 	},
 	"app.model.selectTemporary": {
-		defaultKeys: "alt+p",
+		defaultKeys: "ctrl+t",
 		description: "Select temporary model for current session",
 	},
 	"app.tools.expand": {
