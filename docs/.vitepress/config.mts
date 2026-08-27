@@ -6,6 +6,9 @@ export default defineConfig({
   base: '/oh-my-pi/',
   cleanUrls: true,
   lastUpdated: true,
+  markdown: {
+    html: false
+  },
   themeConfig: {
     nav: [
       { text: 'Home', link: '/' },
