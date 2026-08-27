@@ -334,9 +334,10 @@ function downloadProgressBar(): { update(done: number, total: number): void; fin
  * may not be running the freshly updated version at all. Symlink aliases that
  * resolve to the same file are not a conflict.
  *
- * `ompPath` is injectable for tests; it defaults to the PATH-resolved binary.
+ * `ompPath` is injectable so callers can resolve PATH once and tests can cover
+ * an absent entry without consulting the current process environment.
  */
-export function warnOnPathConflict(targetPath: string, ompPath: string | undefined = resolveOmpPath()): void {
+export function warnOnPathConflict(targetPath: string, ompPath: string | undefined): void {
 	if (!ompPath) return;
 	const resolvedTarget = tryRealpath(targetPath) ?? targetPath;
 	const resolvedOmp = tryRealpath(ompPath) ?? ompPath;
@@ -1827,7 +1828,7 @@ export async function updateViaBinaryAt(
 	// locked (the previous process image on Windows), so a fixed name would force
 	// the move-aside rename to overwrite it. pid, timestamp, and a process-local
 	// counter keep two updates started in the same millisecond from colliding.
-	warnOnPathConflict(targetPath);
+	warnOnPathConflict(targetPath, resolveOmpPath());
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${targetPath}.${attempt}.new`;
 	const backupPath = `${targetPath}.${attempt}.bak`;
@@ -1921,7 +1922,7 @@ export async function updateViaShimTakeover(
 	const binaryName = options.binaryName ?? getBinaryName();
 	const launcherDir = path.dirname(shimPath);
 	const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
-	warnOnPathConflict(exePath);
+	warnOnPathConflict(exePath, resolveOmpPath());
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${exePath}.${attempt}.new`;
 	const asset = await getReleaseBinaryAsset(
