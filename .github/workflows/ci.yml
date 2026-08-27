@@ -26,6 +26,7 @@ jobs:
          is-release: "true"
          release-tag: ${{ steps.detect.outputs.release-tag }}
          version: ${{ steps.detect.outputs.version }}
+         release-timestamp: ${{ steps.detect.outputs.release-timestamp }}
          channel: "stable"
       steps:
          - name: Derive version from latest upstream release
@@ -41,9 +42,11 @@ jobs:
                 exit 1
               fi
               version="${upstream_tag#v}+fork.${{ github.run_number }}"
+              release_timestamp="$(date -u +%Y-%m-%dT%H:%MZ)"
               {
                 echo "release-tag=v$version"
                 echo "version=$version"
+                echo "release-timestamp=$release_timestamp"
               } >> "$GITHUB_OUTPUT"
               echo "Building fork version $version from upstream $upstream_tag"
 
@@ -409,6 +412,7 @@ jobs:
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
               RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
+              RELEASE_TIMESTAMP: ${{ needs.release_metadata.outputs.release-timestamp }}
               UPDATE_REPOSITORY: ${{ github.repository }}
            run: bun run ci:release:build-binaries
          # Windows binary is cross-built on Linux, so we have no Windows runner
@@ -421,7 +425,7 @@ jobs:
            run: |
               runtime_dir="$(mktemp -d)"
               version_output="$(HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version)"
-              test "$version_output" = "omp/${{ needs.release_metadata.outputs.version }}"
+              test "$version_output" = "omp/${{ needs.release_metadata.outputs.version }} (built ${{ needs.release_metadata.outputs.release-timestamp }})"
               HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
          - name: Smoke musl release binary on Alpine
            if: matrix.libc == 'musl'

@@ -340,6 +340,10 @@ async function runTinyWorker(): Promise<void> {
 }
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
+const displayVersion = process.env.PI_BUILD_TIMESTAMP
+	? `${VERSION} (built ${process.env.PI_BUILD_TIMESTAMP})`
+	: VERSION;
+
 export async function runCli(argv: string[]): Promise<void> {
 	let resolvedArgv = argv;
 	try {
@@ -453,7 +457,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			process.exitCode = 1;
 			return;
 		}
-		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp });
+		await run({ bin: APP_NAME, version: displayVersion, argv: resolved.argv, commands, metadataHelp: showHelp });
 	} finally {
 		stopStartupComposer?.();
 	}
