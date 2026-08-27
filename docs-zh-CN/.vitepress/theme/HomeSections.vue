@@ -15,43 +15,72 @@ interface DocumentationSection {
 
 const sections: DocumentationSection[] = [
   {
-    eyebrow: '入门',
-    title: '高效使用 omp',
-    description: '搭建 CLI、配置工作区，并理解会话模型。',
+    eyebrow: '开始',
+    title: '先完成一次真实任务',
+    description: '从安装、配置与交互开始，再理解会话如何保存和延续。',
     links: [
-      { label: 'CLI 参考', path: '/cli-reference' },
+      { label: '命令与快捷键教程', path: '/command-shortcut-tutorial' },
       { label: '配置', path: '/config-usage' },
-      { label: '会话', path: '/session' }
-    ]
-  },
-  {
-    eyebrow: '工作流',
-    title: '运行复杂的编码任务',
-    description: '协调 agent、保留上下文，并在交互式工作流之间切换。',
-    links: [
-      { label: 'Agent Hub', path: '/agent-hub' },
-      { label: 'Vibe mode', path: '/vibe-mode' },
+      { label: '设置', path: '/settings' },
+      { label: '会话', path: '/session' },
       { label: '记忆', path: '/memory' }
     ]
   },
   {
-    eyebrow: '模型',
-    title: '接入任意 provider',
-    description: '选择模型、配置 provider，并理解兼容性行为。',
+    eyebrow: '能力',
+    title: '把 IDE 能力接入 Agent',
+    description: '使用代码智能、专业子 agent 与协作模式完成复杂工作。',
     links: [
-      { label: '模型', path: '/models' },
-      { label: 'Provider', path: '/providers' },
-      { label: '添加 provider', path: '/adding-a-provider' }
+      { label: '代码智能', path: '/lsp-config' },
+      { label: '子 Agent', path: '/task-agent-discovery' },
+      { label: 'Vibe mode', path: '/vibe-mode' },
+      { label: 'Collab', path: '/collab' },
+      { label: '计算机控制', path: '/computer-use' }
     ]
   },
   {
-    eyebrow: '扩展',
-    title: '在平台之上构建',
-    description: '添加可复用的 skills、extensions、tools，以及编程式集成。',
+    eyebrow: '模型',
+    title: '为每类工作选择模型',
+    description: '连接 provider、本地模型与兼容端点，并配置模型路由。',
     links: [
-      { label: 'Extensions', path: '/extensions' },
+      { label: 'Provider', path: '/providers' },
+      { label: '模型', path: '/models' },
+      { label: '本地模型', path: '/local-models' },
+      { label: '添加 Provider', path: '/adding-a-provider' },
+      { label: 'Prewalk', path: '/prewalk' }
+    ]
+  },
+  {
+    eyebrow: '自定义',
+    title: '让 omp 适配你的项目',
+    description: '通过上下文、skills、hooks、工具与 MCP 固化项目工作流。',
+    links: [
+      { label: '上下文文件', path: '/context-files' },
       { label: 'Skills', path: '/skills' },
-      { label: 'SDK', path: '/sdk' }
+      { label: 'Hooks', path: '/hooks' },
+      { label: '自定义工具', path: '/custom-tools' },
+      { label: 'MCP', path: '/mcp-config' }
+    ]
+  },
+  {
+    eyebrow: '编程接入',
+    title: '嵌入应用与自动化系统',
+    description: '通过 SDK、RPC 与类型系统接入非交互式工作流。',
+    links: [
+      { label: 'SDK', path: '/sdk' },
+      { label: 'RPC', path: '/rpc' },
+      { label: 'Omptype', path: '/omptype-guide' }
+    ]
+  },
+  {
+    eyebrow: '参考',
+    title: '查找精确接口与约束',
+    description: '按需查询 CLI、环境变量、认证与工具审批行为。',
+    links: [
+      { label: 'CLI 参考', path: '/cli-reference' },
+      { label: '环境变量', path: '/environment-variables' },
+      { label: '密钥与认证', path: '/secrets' },
+      { label: '工具审批', path: '/approval-mode' }
     ]
   }
 ]
@@ -60,9 +89,9 @@ const sections: DocumentationSection[] = [
 <template>
   <section class="docs-home-sections" aria-labelledby="browse-documentation">
     <div class="docs-home-heading">
-      <p class="docs-home-kicker">文档导览</p>
-      <h2 id="browse-documentation">找到合适的入口</h2>
-      <p>从下方某个工作流开始，或使用完整的侧边栏与搜索直达任一文档。</p>
+      <p class="docs-home-kicker">官方文档结构</p>
+      <h2 id="browse-documentation">按任务找到下一步</h2>
+      <p>目录顺序与 omp.sh/docs 保持一致：先上手，再深入能力、模型、自定义、编程接入与参考。</p>
     </div>
 
     <div class="docs-home-grid">

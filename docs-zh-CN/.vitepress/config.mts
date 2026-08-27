@@ -54,10 +54,9 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
   })
 
   const sections: DefaultTheme.SidebarItem[] = [
-    section('Start', [
+    section('开始', [
       '/',
       '/command-shortcut-tutorial',
-      '/cli-reference',
       '/config-usage',
       '/settings',
       '/keybindings',
@@ -65,49 +64,50 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
       '/session-switching-and-recent-listing',
       '/session-tree-plan',
       '/memory',
-      '/compaction'
+      '/compaction',
+      '/handoff-generation-pipeline'
     ]),
-    section('Capabilities', [
-      '/vibe-mode',
-      '/agent-hub',
+    section('能力', [
+      '/lsp-config',
       '/task-agent-discovery',
-      '/approval-mode',
+      '/agent-hub',
       '/advisor-watchdog',
+      '/vibe-mode',
       '/collab',
       '/computer-use',
-      '/lsp-config',
-      '/prewalk',
       '/notebook-tool-runtime',
       '/python-repl'
     ]),
-    section('Models', [
-      '/models',
+    section('模型', [
       '/providers',
-      '/adding-a-provider',
+      '/models',
       '/local-models',
+      '/adding-a-provider',
+      '/prewalk',
       '/provider-compat-reference',
       '/provider-endpoint-constraints',
       '/provider-quirks',
       '/provider-streaming-internals'
     ]),
-    section('Customization', [
+    section('自定义', [
       '/context-files',
       '/skills',
       '/system-prompt-customization',
       '/magic-keywords',
       '/hooks',
       '/custom-tools',
+      '/mcp-config',
+      '/mcp-server-tool-authoring',
+      '/theme',
+      '/ttsr-injection-lifecycle',
       '/extensions',
       '/extension-loading',
       '/marketplace',
-      '/theme',
-      '/ttsr-injection-lifecycle',
-      '/mcp-config',
-      '/mcp-server-tool-authoring',
       '/mcp-runtime-lifecycle',
       '/mcp-protocol-transports'
     ]),
-    section('Programmatic', ['/sdk', '/rpc', '/omptype-guide', '/user-facing-packages'], true)
+    section('编程接入', ['/sdk', '/rpc', '/omptype-guide', '/user-facing-packages'], true),
+    section('参考', ['/cli-reference', '/environment-variables', '/secrets', '/approval-mode'], true)
   ]
 
   const grouped = new Map<string, DocEntry[]>()
@@ -120,10 +120,10 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
   }
 
   const groupLabels: Record<string, string> = {
-    reference: 'Reference & internals',
-    skills: 'Extension authoring',
-    toolconv: 'Model dialects',
-    tools: 'Tool reference'
+    reference: '参考与内部实现',
+    skills: '扩展开发',
+    toolconv: '模型协议',
+    tools: '工具参考'
   }
   for (const key of ['reference', ...[...grouped.keys()].filter((group) => group !== 'reference').sort()]) {
     const documents = grouped.get(key)
@@ -141,8 +141,9 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
 }
 
 export default defineConfig({
-  title: 'Oh My Pi',
-  description: 'Oh My Pi documentation',
+  lang: 'zh-CN',
+  title: 'omp 中文文档',
+  description: 'omp 终端编码 agent 中文文档',
   base: '/oh-my-pi/',
   cleanUrls: true,
   lastUpdated: true,
@@ -158,9 +159,10 @@ export default defineConfig({
   },
   themeConfig: {
     nav: [
-      { text: 'Home', link: '/' },
-      { text: 'Vibe mode', link: '/vibe-mode' },
-      { text: 'CLI', link: '/cli-reference' },
+      { text: '文档首页', link: '/' },
+      { text: '快速开始', link: '/command-shortcut-tutorial' },
+      { text: 'CLI 参考', link: '/cli-reference' },
+      { text: '官方网站', link: 'https://omp.sh' },
       { text: 'GitHub', link: 'https://github.com/jchanghong023/oh-my-pi' }
     ],
     sidebar: buildSidebar(),
@@ -171,11 +173,11 @@ export default defineConfig({
       { icon: 'github', link: 'https://github.com/jchanghong023/oh-my-pi' }
     ],
     editLink: {
-      pattern: 'https://github.com/jchanghong023/oh-my-pi/edit/main/docs/:path',
-      text: 'Edit this page on GitHub'
+      pattern: 'https://github.com/jchanghong023/oh-my-pi/edit/main/docs-zh-CN/:path',
+      text: '在 GitHub 上编辑此页'
     },
     footer: {
-      message: 'Documentation published from the repository Markdown files.'
+      message: '内容基于 oh-my-pi 仓库文档整理。'
     }
   }
 })
