@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/**'
+      - 'docs-zh-CN/**'
       - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
 
@@ -31,11 +31,11 @@ jobs:
           node-version: 22
 
       - name: Install documentation dependencies
-        working-directory: docs
+        working-directory: docs-zh-CN
         run: npm install
 
       - name: Build documentation
-        working-directory: docs
+        working-directory: docs-zh-CN
         run: npm run docs:build
 
       - name: Setup Pages
@@ -44,7 +44,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/.vitepress/dist
+          path: docs-zh-CN/.vitepress/dist
 
   deploy:
     environment:
