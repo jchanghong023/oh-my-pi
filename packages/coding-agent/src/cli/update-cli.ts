@@ -240,7 +240,13 @@ export function resolveReleaseBinaryAsset(
 	}
 
 	const expectedUrl = `https://github.com/${REPO}/releases/download/${expectedTag}/${binaryName}`;
-	if (asset.browser_download_url !== expectedUrl) {
+	// GitHub percent-encodes tag characters in browser_download_url (e.g. `+`
+	// as `%2B`); this fork's `+fork.N` build metadata lands in release tags,
+	// so compare percent-decoded and accept either spelling of the same URL.
+	if (
+		typeof asset.browser_download_url !== "string" ||
+		decodeURIComponent(asset.browser_download_url) !== decodeURIComponent(expectedUrl)
+	) {
 		throw new Error(`GitHub release asset ${binaryName} has an unexpected download URL`);
 	}
 

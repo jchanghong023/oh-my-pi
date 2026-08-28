@@ -39,7 +39,7 @@
 
 ### 发布与文档
 
-- **Fork 发布与更新**：安装脚本和 README 使用 `jchanghong023/oh-my-pi` release；POSIX 与 PowerShell installer 默认/仅 `--ref`/`-Ref` 都走 fork binary，仅显式 `--source`/`-Source` 才 clone fork（默认 `main`）并安装本地 `packages/coding-agent`；保留下载进度、PATH 冲突警告与 `--version` build timestamp。
+- **更新 URL 校验**：`omp update` 校验 GitHub release asset URL 前先做 percent-decode 归一化，容忍 tag 中 `+` 被编码为 `%2B`（`v18.0.9+fork.N` 的 `browser_download_url` 必需）。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
 
 ### 开发维护

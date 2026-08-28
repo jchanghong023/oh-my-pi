@@ -805,6 +805,25 @@ describe("update-cli release binary integrity", () => {
 		});
 	});
 
+	it("accepts GitHub percent-encoding of a +fork build tag in the asset download URL", () => {
+		// GitHub encodes `+` as `%2B` in browser_download_url; the fork's
+		// `+fork.N` build metadata lands in release tags (v18.0.9+fork.137),
+		// so the encoded spelling must resolve to the same binary.
+		const forkTag = "v18.0.9+fork.137";
+		const encodedUrl = url.replace(tag, encodeURIComponent(forkTag));
+		expect(
+			resolveReleaseBinaryAsset(
+				{ ...releaseAsset({ browser_download_url: encodedUrl }), tag_name: forkTag },
+				forkTag,
+				binaryName,
+			),
+		).toEqual({
+			url: `https://github.com/can1357/oh-my-pi/releases/download/${forkTag}/${binaryName}`,
+			size: Buffer.byteLength(content),
+			digest,
+		});
+	});
+
 	it("rejects missing and unsupported release asset digests", () => {
 		expect(() => resolveReleaseBinaryAsset(releaseAsset({ digest: null }), tag, binaryName)).toThrow("has no digest");
 		expect(() => resolveReleaseBinaryAsset(releaseAsset({ digest: "sha512:abc" }), tag, binaryName)).toThrow(
