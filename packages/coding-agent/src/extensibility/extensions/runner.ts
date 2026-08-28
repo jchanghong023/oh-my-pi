@@ -1024,6 +1024,9 @@ export class ExtensionRunner {
 		"ctrl+o": true,
 		"ctrl+t": true,
 		"ctrl+g": true,
+		// Default chord for `app.message.followUp` (Windows Terminal can't deliver Ctrl+Enter; #1903).
+		"ctrl+q": true,
+		"alt+m": true,
 		"alt+p": true,
 		"shift+tab": true,
 		"shift+ctrl+p": true,

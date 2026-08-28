@@ -124,6 +124,13 @@ test.skipIf(process.platform === "win32")(
 
 			const pid = Number.parseInt((await Bun.file(pidFile).text()).trim(), 10);
 			escaped = Process.fromPid(pid);
+			// Same kernel-reap window as the session-escape case: poll until the
+			// descendant is gone so the assertion means "no survivor", not "already
+			// reaped this instant".
+			const deadline = Date.now() + 2000;
+			while (escaped?.status() === ProcessStatus.Running && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
 			expect(escaped?.status(), `reparented descendant ${pid} survived the timeout`).not.toBe(ProcessStatus.Running);
 		} finally {
 			escaped?.killTree(9);
@@ -151,6 +158,14 @@ test.skipIf(process.platform !== "linux")(
 
 			const pid = Number.parseInt((await Bun.file(pidFile).text()).trim(), 10);
 			escaped = Process.fromPid(pid);
+			// The SIGKILL lands asynchronously: the hard-kill wave is sent, then
+			// the resolver reports once the wave is issued, but the kernel can
+			// take a scheduler tick to reap the victim. Poll so the assertion is
+			// about "no survivor", not "already reaped this instant".
+			const deadline = Date.now() + 2000;
+			while (escaped?.status() === ProcessStatus.Running && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
 			expect(escaped?.status(), `session-escaping descendant ${pid} survived the timeout`).not.toBe(
 				ProcessStatus.Running,
 			);
