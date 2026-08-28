@@ -188,6 +188,14 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.statsHelp,
 	},
 	{
+		name: "sync-claude",
+		load: () => import("./commands/sync-claude").then(m => m.default),
+		help: {
+			description:
+				"Sync Claude Code ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN into the active profile's models.yml",
+		},
+	},
+	{
 		name: "update",
 		load: () => import("./commands/update").then(m => m.default),
 		help: commandHelp.updateHelp,
