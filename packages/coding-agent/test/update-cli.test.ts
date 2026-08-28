@@ -885,6 +885,31 @@ describe("update-cli release binary integrity", () => {
 		expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 	});
 
+	it("reports HTTP status, URL, and server error body when a download fails", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		const error = await downloadVerifiedBinary({
+			url,
+			targetPath,
+			expectedSize: 1,
+			expectedDigest: digest,
+			fetchImpl: async () =>
+				new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+					status: 403,
+					statusText: "Forbidden",
+				}),
+		}).then(
+			() => null,
+			(err: unknown) => err,
+		);
+		expect(error).not.toBeNull();
+		const message = error instanceof Error ? error.message : String(error);
+		expect(message).toContain("HTTP 403");
+		expect(message).toContain(url);
+		expect(message).toContain("API rate limit exceeded");
+		expect(await Bun.file(targetPath).exists()).toBe(false);
+	});
+
 	it("aborts the response stream as soon as it exceeds the expected size", async () => {
 		const dir = await makeTempDir();
 		const targetPath = path.join(dir, binaryName);

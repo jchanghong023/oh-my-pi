@@ -231,6 +231,24 @@ function Install-ViaBun {
     Write-Host "Run 'omp' to get started!"
 }
 
+# Windows locks a running executable, so replacing omp.exe fails while a
+# previous instance is alive. Stop every process whose binary path is the
+# install target before the new file is moved into place.
+function Stop-RunningOmp {
+    param([string]$TargetPath)
+    try {
+        $running = Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { try { $_.Path -eq $TargetPath } catch { $false } }
+        if ($running) {
+            Write-Host "Stopping running omp..." -ForegroundColor Yellow
+            $running | Stop-Process -Force -ErrorAction SilentlyContinue
+            $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Process enumeration races with process exit; never block the install.
+    }
+}
+
 function Install-Binary {
     if ($Ref) {
         Write-Host "Fetching release $Ref..."
@@ -252,11 +270,37 @@ function Install-Binary {
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-    # Download binary
+    # Windows locks a running executable, so omp.exe cannot be overwritten
+    # while a previous instance is alive: download to a temp file first (a
+    # failed download leaves the old install working), stop the running
+    # instance, then move the new binary into place. Prefer the in-box
+    # curl.exe (Windows 10 1803+) for a live progress bar; fall back to
+    # Invoke-WebRequest.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $OutPath = Join-Path $InstallDir "omp.exe"
-    Invoke-WebRequest -Uri $BinaryUrl -OutFile $OutPath -TimeoutSec 900
+    $TmpPath = "$OutPath.tmp"
+    $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+    try {
+        if ($curlExe) {
+            & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+                throw "Download failed: $BinaryUrl (curl exit $LASTEXITCODE)"
+            }
+        } else {
+            try {
+                Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpPath -TimeoutSec 900 -UseBasicParsing
+            } catch {
+                Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+                throw "Download failed: $BinaryUrl`n$($_.Exception.Message)"
+            }
+        }
+        Stop-RunningOmp -TargetPath $OutPath
+        Move-Item -Force -Path $TmpPath -Destination $OutPath
+    } finally {
+        Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+    }
 
     Write-Host ""
     Write-Host "[OK] Installed omp to $OutPath" -ForegroundColor Green

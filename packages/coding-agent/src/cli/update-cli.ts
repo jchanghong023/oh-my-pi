@@ -290,7 +290,8 @@ async function getReleaseBinaryAsset(
 		);
 	}
 	if (!response.ok) {
-		throw new Error(`Failed to fetch GitHub release metadata: ${response.statusText}`);
+		const detail = await responseBodyDetail(response);
+		throw new Error(`Failed to fetch GitHub release metadata: HTTP ${httpStatusText(response)}${detail}`);
 	}
 
 	return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
@@ -320,10 +321,29 @@ function downloadProgressBar(): { update(done: number, total: number): void; fin
 		return { update: () => undefined, finish: () => undefined };
 	}
 	let lastLineLength = 0;
+	let lastTime = performance.now();
+	let lastDone = 0;
+	let speed = 0;
+	let speedValid = false;
 	const render = (done: number, total: number): void => {
+		const now = performance.now();
+		const dt = Math.max(0, (now - lastTime) / 1000);
+		const delta = done - lastDone;
+		lastTime = now;
+		lastDone = done;
+		if (dt > 0 && delta >= 0) {
+			const instant = delta / dt;
+			speed = speedValid ? speed * 0.6 + instant * 0.4 : instant;
+			speedValid = true;
+		}
 		const ratio = total > 0 ? Math.min(1, done / total) : 0;
 		const percent = Math.round(ratio * 100);
-		const line = `  ${percent}%  ${formatBytes(done)} / ${formatBytes(total)}`;
+		const barWidth = 18;
+		const filled = Math.min(barWidth, Math.round(ratio * barWidth));
+		const bar = "█".repeat(filled) + "░".repeat(barWidth - filled);
+		const speedText = speedValid ? ` · ${formatBytes(Math.round(speed))}/s` : "";
+		const etaText = speedValid ? ` · ETA ${formatEta(Math.max(0, total - done) / speed)}` : "";
+		const line = `  ${bar} ${String(percent).padStart(3)}%  ${formatBytes(done)} / ${formatBytes(total)}${speedText}${etaText}`;
 		const pad = " ".repeat(Math.max(0, lastLineLength - line.length));
 		process.stdout.write(`\r${line}${pad}`);
 		lastLineLength = line.length;
@@ -332,6 +352,30 @@ function downloadProgressBar(): { update(done: number, total: number): void; fin
 		update: render,
 		finish: () => process.stdout.write("\n"),
 	};
+}
+
+/** Format a seconds count as a compact duration for the progress ETA. */
+function formatEta(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+	if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ${String(Math.round(seconds % 60)).padStart(2, "0")}s`;
+	return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** `status [reason]` for an HTTP response, omitting empty reason phrases. */
+function httpStatusText(response: Response): string {
+	return `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+}
+
+/** First lines of an HTTP error body (GitHub API rate-limit / not-found messages). */
+async function responseBodyDetail(response: Response): Promise<string> {
+	try {
+		const text = (await response.text()).trim();
+		return text ? `\n${text.slice(0, 400)}` : "";
+	} catch {
+		return "";
+	}
 }
 /**
  * Warn when the shell resolves `omp` from PATH to a different file than the
@@ -375,8 +419,12 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
 		throw err;
 	}
-	if (!response.ok || !response.body) {
-		throw new Error(`Download failed: ${response.statusText}`);
+	if (!response.ok) {
+		const detail = await responseBodyDetail(response);
+		throw new Error(`Download failed: HTTP ${httpStatusText(response)} for ${options.url}${detail}`);
+	}
+	if (!response.body) {
+		throw new Error(`Download failed: response has no body for ${options.url}`);
 	}
 
 	const hash = createHash("sha256");
@@ -411,6 +459,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 		}
 		await fs.promises.chmod(options.targetPath, 0o755);
 	} catch (err) {
+		progress.finish();
 		await unlinkIfExists(options.targetPath);
 		if (isTimeoutError(err)) {
 			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
@@ -851,7 +900,8 @@ async function fetchLatestManifest(
 		if (response.status === 404 && channel === "canary") {
 			throw new Error(`No canary release has been published for ${pkg} yet. Try \`${APP_NAME} update --stable\`.`);
 		}
-		throw new Error(`Failed to fetch release info for ${pkg}: ${response.statusText}`);
+		const detail = await responseBodyDetail(response);
+		throw new Error(`Failed to fetch release info for ${pkg}: HTTP ${httpStatusText(response)}${detail}`);
 	}
 
 	const data: unknown = await response.json();
@@ -887,7 +937,8 @@ export async function getLatestGitHubRelease(
 		throw err;
 	}
 	if (!response.ok) {
-		throw new Error(`Failed to fetch release info for ${repository}: ${response.statusText}`);
+		const detail = await responseBodyDetail(response);
+		throw new Error(`Failed to fetch release info for ${repository}: HTTP ${httpStatusText(response)}${detail}`);
 	}
 
 	const data: unknown = await response.json();

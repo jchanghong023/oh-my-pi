@@ -204,6 +204,44 @@ install_via_bun() {
     echo "Run 'omp' to get started!"
 }
 
+# Stop a running omp so the installed binary can be replaced. Directly
+# overwriting an executing ELF fails with ETXTBSY (curl error 23), and Windows
+# locks running executables outright, so both installers stop the old process
+# first. Match by resolved executable so PATH-launched instances whose argv is
+# just "omp" are found too.
+stop_running_omp() {
+    PIDS=""
+    if [ -d /proc ]; then
+        for EXE in /proc/[0-9]*/exe; do
+            [ -r "$EXE" ] || continue
+            EXE_PATH="$(readlink "$EXE" 2>/dev/null)" || continue
+            [ "$EXE_PATH" = "${INSTALL_DIR}/omp" ] || continue
+            PID="${EXE#/proc/}"
+            PIDS="$PIDS ${PID%/exe}"
+        done
+    elif command -v pgrep >/dev/null 2>&1; then
+        PIDS="$(pgrep -f "${INSTALL_DIR}/omp" 2>/dev/null || true) $(pgrep -x omp 2>/dev/null || true)"
+    fi
+    [ -z "$PIDS" ] && return 0
+
+    echo "Stopping running omp..."
+    # TERM first, escalate to KILL after a short grace period.
+    kill $PIDS 2>/dev/null || true
+    i=0
+    while [ "$i" -lt 100 ]; do
+        REMAIN=""
+        for PID in $PIDS; do
+            kill -0 "$PID" 2>/dev/null && REMAIN="$REMAIN $PID"
+        done
+        [ -z "$REMAIN" ] && return 0
+        if [ "$i" -eq 30 ]; then
+            kill -9 $REMAIN 2>/dev/null || true
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+}
+
 # Install binary from GitHub releases
 install_binary() {
     # Detect platform
@@ -250,12 +288,28 @@ install_binary() {
     fi
     echo "Using version: $LATEST"
 
-    mkdir -p "$INSTALL_DIR"
-    # Download binary
+    # If a previous omp is still running, stop it before replacing the binary.
+    # Download to a temp file first so a failed download keeps the old install
+    # working; rename(2) then replaces the entry without touching any inode a
+    # lingering process might still hold.
+    TMP_BINARY="${INSTALL_DIR}/.omp.tmp.$$"
+    trap 'rm -f "$TMP_BINARY"' EXIT
+    # Download binary. --progress-bar shows a live bar with speed on a TTY;
+    # without -s, curl also prints the concrete failure reason (HTTP status or
+    # network error) itself, which we augment with URL and target below.
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
-    curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$BINARY_URL" -o "${INSTALL_DIR}/omp"
-    chmod +x "${INSTALL_DIR}/omp"
+    if ! curl -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
+        echo ""
+        echo "✗ Download failed" >&2
+        echo "  URL:    ${BINARY_URL}" >&2
+        echo "  Target: ${INSTALL_DIR}/omp" >&2
+        exit 1
+    fi
+    chmod +x "$TMP_BINARY"
+    stop_running_omp
+    mv -f "$TMP_BINARY" "${INSTALL_DIR}/omp"
+    trap - EXIT
 
     # Verify the freshly installed binary can actually start before reporting
     # success. Bun's musl-target binaries link libstdc++/libgcc dynamically,
