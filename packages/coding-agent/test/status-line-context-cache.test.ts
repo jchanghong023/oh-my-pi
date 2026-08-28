@@ -576,7 +576,7 @@ describe("StatusLineComponent context breakdown", () => {
 		const gapped = comp.render(80);
 		expect(gapped).toHaveLength(3);
 		expect(gapped[0]).toBe("");
-		expect(gapped.slice(1)).toEqual(lines);
+		expect(gapped.slice(1)).toEqual([...lines]);
 	});
 
 	it("standalone bar yields to the autocomplete menu via the probe", () => {
