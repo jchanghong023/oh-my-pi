@@ -165,7 +165,7 @@ describe("libkitty end-to-end", () => {
 		expect(plainRows(term.getViewport()).filter(row => row.includes("MARKER_DRAFTX")).length).toBe(1);
 	});
 
-	it("hides thinking already retired to native scrollback when Ctrl+T toggles", async () => {
+	it("hides thinking already retired to native scrollback when Alt+P toggles", async () => {
 		const usage: Usage = {
 			input: 0,
 			output: 0,
@@ -209,7 +209,7 @@ describe("libkitty end-to-end", () => {
 		void mode.getUserInput();
 		await term.waitForRender();
 
-		// Observed reasoning content unlocks Ctrl+T and renders the block visible.
+		// Observed reasoning content unlocks Alt+P and renders the block visible.
 		mode.noteDisplayableThinkingContent(thinkingMessage);
 		mode.addMessageToChat(thinkingMessage);
 		for (let i = 0; i < 12; i++) {
@@ -232,8 +232,8 @@ describe("libkitty end-to-end", () => {
 		term.sendInput("LIVE_EDITOR_DRAFT");
 		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT")));
 
-		// Ctrl+T (0x14): the real keybinding path toggles thinking hidden.
-		term.sendInput("\x14");
+		// Alt+P (ESC p): the real keybinding path toggles thinking hidden.
+		term.sendInput("\x1bp");
 		await term.waitForRender(() => !plainRows(term.getScrollBuffer()).some(row => row.includes(THINK)));
 
 		// The retired history was cleared and replayed hidden — the marker is gone
