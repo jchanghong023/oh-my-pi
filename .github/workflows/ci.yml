@@ -93,12 +93,6 @@ jobs:
            uses: ./.github/actions/bazel-cache
            with:
               scope: linux
-         - name: Rust tests
-           # The ulimit guard runs in the step that launches the bazel server
-           # (limits are per-process and the server persists across steps).
-           run: |
-              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test //crates/...
          # Clippy scope mirrors `cargo clippy --workspace` (libraries only, no
          # test targets) plus the strict/default split: crates with
          # `[lints] workspace = true` get the workspace policy, except
@@ -120,11 +114,47 @@ jobs:
                 | xargs bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=clippy-ported --
          - name: Rustfmt
            run: bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=rustfmt //crates/...
-
-   # Build every native addon needed by the non-macOS binaries and TS tests.
-   native_addons:
-      name: Build native addons (bazel)
+   # Bazel Rust tests, split across two parallel shards so they overlap the
+   # native addon builds instead of serializing behind them.
+   rust_test:
+      name: Rust tests (shard ${{ matrix.shard.name }})
       runs-on: ubuntu-22.04
+      strategy:
+         fail-fast: false
+         matrix:
+            shard:
+               - { name: builtins-vendor, targets: "//crates/pi-builtins/... //crates/vendor/..." }
+               - { name: rest, targets: "//crates/pi-natives/... //crates/pi-shell/... //crates/pi-ast/... //crates/pi-iso/... //crates/pi-vcs/... //crates/pi-voice/... //crates/pi-walker/..." }
+      steps:
+         - uses: actions/checkout@v4
+         - uses: ./.github/actions/bun-install
+         - id: cache
+           uses: ./.github/actions/bazel-cache
+           with:
+              scope: linux
+         - name: Rust tests
+           # The ulimit guard runs in the step that launches the bazel server
+           # (limits are per-process and the server persists across steps).
+           run: |
+              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
+              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test ${{ matrix.shard.targets }}
+
+   # Build every native addon needed by the non-macOS binaries and TS tests,
+   # one runner per target triple, then gather the pieces back into the single
+   # artifact layout consumed by native-artifacts / scripts/bazel-natives.ts.
+   native_addon_build:
+      name: Build native addon ${{ matrix.target_id }}
+      runs-on: ubuntu-22.04
+      strategy:
+         fail-fast: false
+         matrix:
+            include:
+               - { target_id: linux-arm64, target: natives-linux-arm64, save_cache: false }
+               - { target_id: linux-musl-arm64, target: natives-linux-musl-arm64, save_cache: false }
+               - { target_id: linux-musl-x64-baseline, target: natives-linux-musl-x64-baseline, save_cache: false }
+               - { target_id: linux-x64-baseline, target: natives-linux-x64-baseline, save_cache: true }
+               - { target_id: linux-x64-modern, target: natives-linux-x64-modern, save_cache: false }
+               - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline, save_cache: false }
       steps:
          - uses: actions/checkout@v4
 
@@ -132,23 +162,11 @@ jobs:
            uses: ./.github/actions/bazel-cache
            with:
               scope: linux
-         - name: Build native addons once
+         - name: Build native addon
            run: |
               set -eo pipefail
               if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              # Each addon link peaks at several GiB of RSS. Serialize the
-              # heavy links so the standard four-core hosted runner does not OOM.
-              : > "$RUNNER_TEMP/bazel-build.log"
-              for target in \
-                natives-linux-arm64 \
-                natives-linux-musl-arm64 \
-                natives-linux-musl-x64-baseline \
-                natives-linux-x64-baseline \
-                natives-linux-x64-modern \
-                natives-win32-x64-baseline; do
-                bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build "//:$target" 2>&1 | tee -a "$RUNNER_TEMP/bazel-build.log"
-              done
-              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build //:natives-linux-all 2>&1 | tee -a "$RUNNER_TEMP/bazel-build.log"
+              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build "//:${{ matrix.target }}" 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
          # Cache-hit visibility: a supposedly warm build that executes
          # thousands of actions is the failure mode that made CI slow — make
          # it visible in the run summary instead of discovering it weeks in.
@@ -161,8 +179,12 @@ jobs:
               summary=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/bazel-build.log" | grep -E '[0-9]+ processes:' | tail -1 || true)
               echo "::notice title=Bazel build summary::${summary:-no process summary found}"
 
+         # Only the linux-x64-baseline leg saves the disk cache: concurrent
+         # actions/cache saves of the same key fail (key already exists).
+         # Every leg restores the shared archive; content addressing keeps it
+         # complete even though each leg contributes different blobs.
          - name: Save bazel disk cache
-           if: steps.cache.outputs.save-needed == 'true'
+           if: steps.cache.outputs.save-needed == 'true' && matrix.save_cache
            uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               # Must mirror the restore path list in the bazel-cache action.
@@ -171,11 +193,39 @@ jobs:
                  ~/.cache/omp-bazel-repo
               key: ${{ steps.cache.outputs.cache-key }}
 
-         - name: Upload native addon artifacts
-           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+         # Stage outputs underneath a natives-<target> directory so this
+         # artifact keeps the same internal layout as the upstream
+         # bazel-bin/natives-*/*.node upload: a glob like
+         # bazel-bin/<target>/*.node would flatten the directory away.
+         - name: Upload native addon artifact
+           run: |
+              set -eo pipefail
+              mkdir -p "addon-staging/natives-${{ matrix.target_id }}"
+              cp bazel-bin/${{ matrix.target }}/*.node "addon-staging/natives-${{ matrix.target_id }}/"
+         - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: native-addons-${{ matrix.target_id }}
+              path: addon-staging/natives-*/*.node
+              if-no-files-found: error
+              retention-days: 1
+
+   # Gather the per-triple artifacts back into the single native-addons
+   # artifact consumed by native-artifacts and the release_binary jobs.
+   native_addons:
+      name: Gather native addons
+      needs: [native_addon_build]
+      if: ${{ !cancelled() && needs.native_addon_build.result == 'success' }}
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+           with:
+              pattern: native-addons-*
+              path: tmp-gather
+              merge-multiple: true
+         - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
               name: native-addons
-              path: bazel-bin/natives-*/*.node
+              path: tmp-gather/natives-*/*.node
               if-no-files-found: error
               retention-days: 1
 
@@ -332,6 +382,7 @@ jobs:
       name: Release validation gate
       if: ${{ !cancelled() &&
          needs.rust_validate.result == 'success' &&
+         needs.rust_test.result == 'success' &&
          needs.native_addons.result == 'success' &&
          needs.test_workspace.result == 'success' &&
          needs.test_coding_agent_singleton.result == 'success' &&
@@ -341,7 +392,7 @@ jobs:
          needs.test_coding_agent_native.result == 'success' &&
          needs.test_smoke.result == 'success' && needs.check.result == 'success' &&
          needs.install_methods.result == 'success' }}
-      needs: [release_metadata, check, rust_validate, native_addons, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods]
+      needs: [release_metadata, check, rust_validate, rust_test, native_addons, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods]
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@v4
