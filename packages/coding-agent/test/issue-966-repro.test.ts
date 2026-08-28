@@ -28,8 +28,14 @@ try {
 	await repo.unstage([]);
 	await repo.stageHunks([{ path: "new-file.txt", kind: "all" }], originalStagedDiff);
 	const firstStage = await repo.changedFiles({ cached: true });
+	const firstStageGit = (await $\`git diff --cached --name-only\`.cwd(dir).text()).trim().split("\\n").filter(Boolean);
 	if (!Bun.deepEquals(firstStage, ["new-file.txt"])) {
-		throw new Error("unexpected first stage: " + JSON.stringify(firstStage));
+		throw new Error(
+			"unexpected first stage: native=" +
+				JSON.stringify(firstStage) +
+				", git=" +
+				JSON.stringify(firstStageGit),
+		);
 	}
 	await repo.commitCreate("feat: add new file", {});
 	await repo.stageHunks([{ path: "tracked.txt", kind: "all" }], originalStagedDiff);
