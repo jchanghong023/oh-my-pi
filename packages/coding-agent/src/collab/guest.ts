@@ -41,6 +41,9 @@ import { CollabSocket } from "./relay-client";
 
 /** Commands a guest may run locally; everything else is host-only. */
 export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
+	ultrathink: true,
+	orchestrate: true,
+	workflowz: true,
 	dump: true,
 	export: true,
 	copy: true,
