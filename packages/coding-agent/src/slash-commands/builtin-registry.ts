@@ -1,5 +1,6 @@
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
+import { JCH_SLASH_COMMANDS } from "../jch-commands";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import {
 	buildArgumentCompletions,
@@ -42,6 +43,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS,
+	...JCH_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
 ];
 
