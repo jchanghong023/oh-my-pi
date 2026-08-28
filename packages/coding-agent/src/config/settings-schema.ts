@@ -5001,7 +5001,7 @@ export const SETTINGS_SCHEMA = {
 
 	"task.maxConcurrency": {
 		type: "number",
-		default: 32,
+		default: 8,
 		ui: {
 			tab: "tasks",
 			group: "Subagents",

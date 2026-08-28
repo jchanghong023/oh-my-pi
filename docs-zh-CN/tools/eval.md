@@ -173,7 +173,7 @@ JS 的文件系统/桥接 helper 是异步的；Python、Ruby 和 Julia 的 help
 - 输出 sink 默认窗口：50 KiB（`DEFAULT_MAX_BYTES`）；实时尾部：100 KiB；截断 helper 上限为 3000 行。
 - 包含在模型可见文本中的每个 JSON display 值上限为 8000 字符；完整的结构化值保留在 `jsonOutputs` 中。
 - 转录预览默认为 10 行。
-- eval 子代理的生成遵循 `task.maxRecursionDepth`（默认 `2`；负值允许无限深度）。helper 扇出使用 `task.maxConcurrency`（默认 32，`0` 表示无界）。
+- eval 子代理的生成遵循 `task.maxRecursionDepth`（默认 `2`；负值允许无限深度）。helper 扇出使用 `task.maxConcurrency`（默认 8，`0` 表示无界）。
 - 畸形参数为 schema 错误；不可用/已禁用的后端以及缺失的会话为 `ToolError`。
 - 运行时异常会以非零退出的后端输出形式呈现。交互式 stdin 为错误。输出截断不会导致调用失败。
 - 已死的被管理保留内核可被替换，并由其 executor 重试一次。

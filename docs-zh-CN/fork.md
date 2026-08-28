@@ -25,7 +25,7 @@
 - **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；状态栏 env metadata 按 `$pickenv` 优先级回显真实 envVar（`COMMAND_CODE_API_KEY` 优先，缺省回退 legacy `COMMANDCODE_API_KEY`）。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 与旧 `opencode` 中 catalog bundled 且 input/output 价格都为零的模型，gateway 新 ID 在 catalog 更新前按“价格未知”隐藏，主列表与 locked preview 共用同一过滤。
 - **讨论模式**：新增 `/discuss on|off|status`；启用时只允许调查和讨论，移除写工具、执行、todo 与实现行为；session 切换到目标 transcript 时恢复源 session 的工具快照（包括合法空数组），失败需抛错，禁止留下“模式已关闭、工具仍被过滤”的静默状态。
-- **Fullsend**：新增独立小写关键词与 `/fullsend [task]`，以最快的完整、正确、已验证交付为目标，同速时优先并行委派。
+  - 子代理满载并发：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令。
 - **JCH 个人命令**：新增 `/jchfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitpush`、`/jchgitforcesync`、`/jchgitcommit` 8 个可携带任务文本的斜杠命令，实现见 `packages/coding-agent/src/jch-commands/`：
   - `/jchfix`：复现或确认现象后读取真实实现与调用方定位根因，做最小修复并迁移受影响调用方、按可观察契约验证；用于把问题一次修好，不压制症状、不 commit/push。
@@ -41,7 +41,7 @@
 
 ### 默认行为
 
-- **默认设置**：`recap.enabled=false`、深色主题 `dark-terminal`、`display.showTurnTime=true`。
+- **默认设置**：`recap.enabled=false`、深色主题 `dark-terminal`、`display.showTurnTime=true`、`task.maxConcurrency=8`（上游默认 `32`）。
 - **快捷键**：`Shift+Tab` 切换计划模式、`Ctrl+T` 选择临时模型、`Alt+P` 切换 thinking，并保留对应扩展快捷键冲突检查。
 - **状态栏**：默认显示 active time；空间不足时把溢出段保留到第二行，按 editor top-border content width 居中并以 `floor((width-statusWidth)/2)` 左 inset 独立拟合终端行宽；每个 part 前重新打开文本色，分隔符后也复位，无自带 ANSI 的段（如 `time_spent`）不继承终端默认或 `statusLineSep` 色。
 
