@@ -275,6 +275,6 @@ describe("StatusLineComponent hook statuses", () => {
 		component.setHookStatus("project-time", "$0.04 (dev)");
 		component.setHookStatus("ponytail", "Ponytail");
 
-		expect(component.render(8)).toEqual(["π ", "Ponytail", "$0.04 (…"]);
+		expect(component.render(8).map(stripVTControlCharacters)).toEqual(["π ", "Ponytail", "$0.04 (…"]);
 	});
 });

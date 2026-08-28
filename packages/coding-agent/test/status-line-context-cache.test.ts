@@ -565,7 +565,7 @@ describe("StatusLineComponent context breakdown", () => {
 
 		comp.setComposerStyle({ bottomBar: "full", bottomBarGap: false });
 		const lines = comp.render(80);
-		expect(lines).toHaveLength(1);
+		expect(lines).toHaveLength(2);
 		// Plain bar: transparent background, no powerline caps or bg fill.
 		expect(lines[0]).not.toContain("\x1b[48;");
 		expect(lines[0]).toContain("\x1b[49m");
@@ -574,9 +574,9 @@ describe("StatusLineComponent context breakdown", () => {
 		// the bar doesn't sit flush against the last input row.
 		comp.setComposerStyle({ bottomBar: "full", bottomBarGap: true });
 		const gapped = comp.render(80);
-		expect(gapped).toHaveLength(2);
+		expect(gapped).toHaveLength(3);
 		expect(gapped[0]).toBe("");
-		expect(gapped[1]).toBe(lines[0]);
+		expect(gapped.slice(1)).toEqual(lines);
 	});
 
 	it("standalone bar yields to the autocomplete menu via the probe", () => {
