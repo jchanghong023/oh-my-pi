@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as settingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { BUILTIN_SLASH_COMMAND_DEFS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { renderAsciiBar } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/format";
 
 const testTheme = {
@@ -52,5 +53,15 @@ describe("renderAsciiBar", () => {
 
 		expect(rendered).toContain("\x1b[36m");
 		expect(Bun.stripANSI(rendered)).toBe("[····]");
+	});
+});
+
+describe("/discuss metadata", () => {
+	it("advertises the explicit lifecycle actions", () => {
+		const discuss = BUILTIN_SLASH_COMMAND_DEFS.find(command => command.name === "discuss");
+
+		expect(discuss?.description).toBe("Discuss and investigate without modifying or executing");
+		expect(discuss?.inlineHint).toBe("[on|off|status]");
+		expect(discuss?.subcommands?.map(command => command.name)).toEqual(["on", "off", "status"]);
 	});
 });

@@ -115,6 +115,7 @@ import {
 	onModelRolesChanged,
 } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
+import type { DiscussModeState } from "../discuss-mode/state";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { PythonResult } from "../eval/py/executor";
 import type { BashPtyOptions, BashResult } from "../exec/bash-executor";
@@ -170,6 +171,7 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
+import discussModeActivePrompt from "../prompts/system/discuss-mode-active.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -547,6 +549,7 @@ export class AgentSession {
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
 	#planModeState: PlanModeState | undefined;
+	#discussModeState: DiscussModeState | undefined;
 	/** Session-scoped `/vision` override; undefined = follow persisted `inspect_image.mode`. */
 	#inspectImageModeOverride: InspectImageMode | undefined;
 	#vibeModeState: VibeModeState | undefined;
@@ -1137,6 +1140,7 @@ export class AgentSession {
 			getEnabledToolNames: () => this.getEnabledToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
+			discussModeEnabled: () => this.#discussModeState?.enabled === true,
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
@@ -1385,6 +1389,7 @@ export class AgentSession {
 			isStreaming: () => this.isStreaming,
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
+			discussModeEnabled: () => this.#discussModeState?.enabled === true,
 			model: () => this.model,
 			setCodeModeNamespacesInfo: info => {
 				this.#codeModeState.namespacesInfo = info;
@@ -5217,6 +5222,14 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
+	getDiscussModeState(): DiscussModeState | undefined {
+		return this.#discussModeState;
+	}
+
+	setDiscussModeState(state: DiscussModeState | undefined): void {
+		this.#discussModeState = state;
+	}
+
 	/** Prewalk state, if armed and active */
 	getPrewalkState(): Prewalk | undefined {
 		return this.#prewalk.state;
@@ -5372,6 +5385,20 @@ export class AgentSession {
 				content: message.content,
 				display: message.display,
 				details: message.details,
+			},
+			options ? { deliverAs: options.deliverAs } : undefined,
+		);
+	}
+
+	async sendDiscussModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
+		const message = this.#buildDiscussModeMessage();
+		if (!message) return;
+		await this.sendCustomMessage(
+			{
+				customType: message.customType,
+				content: message.content,
+				display: message.display,
+				attribution: message.attribution,
 			},
 			options ? { deliverAs: options.deliverAs } : undefined,
 		);
@@ -5536,6 +5563,18 @@ export class AgentSession {
 			role: "custom",
 			customType: "plan-mode-context",
 			content,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
+	#buildDiscussModeMessage(): CustomMessage | null {
+		if (!this.#discussModeState?.enabled) return null;
+		return {
+			role: "custom",
+			customType: "discuss-mode-context",
+			content: discussModeActivePrompt,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -6007,6 +6046,10 @@ export class AgentSession {
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
+			}
+			const discussModeMessage = this.#buildDiscussModeMessage();
+			if (discussModeMessage) {
+				messages.push(discussModeMessage);
 			}
 			const goalModeMessage = this.#buildGoalModeMessage();
 			if (goalModeMessage) {

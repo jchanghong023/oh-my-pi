@@ -40,6 +40,7 @@ function createCtx(activeMs: number): SegmentContext {
 		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
+		discussMode: null,
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,

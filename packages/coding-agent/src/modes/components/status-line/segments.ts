@@ -257,6 +257,11 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, content), visible: true };
 		}
 
+		const discuss = ctx.discussMode;
+		if (discuss?.enabled) {
+			return { content: theme.fg("accent", "Discuss · Read-only"), visible: true };
+		}
+
 		const prewalk = ctx.prewalk;
 		if (prewalk?.enabled) {
 			const content = withIcon(theme.icon.prewalk, "Prewalk");

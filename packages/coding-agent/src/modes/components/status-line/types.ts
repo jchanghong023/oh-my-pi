@@ -74,6 +74,9 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
+	discussMode: {
+		enabled: boolean;
+	} | null;
 	prewalk: {
 		enabled: boolean;
 	} | null;

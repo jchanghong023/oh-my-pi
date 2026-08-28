@@ -53,6 +53,7 @@ function createCtx(overrides?: {
 			},
 		},
 		planMode: null,
+		discussMode: null,
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,

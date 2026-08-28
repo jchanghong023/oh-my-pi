@@ -174,6 +174,7 @@ export interface InteractiveModeContext {
 	hideToolActivity: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	discussModeEnabled: boolean;
 	vibeModeEnabled: boolean;
 	goalModeEnabled: boolean;
 	goalModePaused: boolean;
@@ -479,6 +480,7 @@ export interface InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean>;
+	handleDiscussModeCommand(args?: string): Promise<boolean>;
 	handleVibeModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,

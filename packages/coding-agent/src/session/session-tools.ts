@@ -7,6 +7,7 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
 import type { Settings, SkillsSettings } from "../config/settings";
+import { filterDiscussToolNames } from "../discuss-mode/state";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
@@ -55,6 +56,7 @@ export interface SessionToolsHost {
 	isStreaming(): boolean;
 	queuedMessageCount(): number;
 	planModeEnabled(): boolean;
+	discussModeEnabled(): boolean;
 	model(): Model | undefined;
 	memoryBackendSession(): MemoryBackendStartOptions["session"];
 	clearInheritedProviderPromptCacheKey(): void;
@@ -861,7 +863,7 @@ export class SessionTools {
 
 	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
-		toolNames = normalizeToolNames(toolNames);
+		toolNames = normalizeToolNames(this.#host.discussModeEnabled() ? filterDiscussToolNames(toolNames) : toolNames);
 		const codeMode = resolveCodeMode({
 			provider: this.#host.model()?.provider ?? "",
 			toolMode: this.#host.model()?.toolMode,
@@ -906,14 +908,16 @@ export class SessionTools {
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
-		const mountCandidates = selectedTools.filter(
-			({ name, tool }) =>
-				this.#xdev !== undefined &&
-				xdevReadAvailable &&
-				xdevWriteAvailable &&
-				!isPresentationPinned(name) &&
-				isMountableUnderXdev(tool),
-		);
+		const mountCandidates = this.#host.discussModeEnabled()
+			? []
+			: selectedTools.filter(
+					({ name, tool }) =>
+						this.#xdev !== undefined &&
+						xdevReadAvailable &&
+						xdevWriteAvailable &&
+						!isPresentationPinned(name) &&
+						isMountableUnderXdev(tool),
+				);
 		const mountNames = new Set(mountCandidates.map(({ name }) => name));
 		// Demoted tools stay reachable through the eval bridge, so nothing is
 		// mounted under xd:// while code mode restricts the direct surface.
@@ -927,8 +931,10 @@ export class SessionTools {
 		}
 
 		const pinnedWrite = isPresentationPinned("write");
-		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
-		const transportNeeded = mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled();
+		const activeDeferrableTool = !this.#host.discussModeEnabled() && tools.some(tool => tool.deferrable === true);
+		const transportNeeded =
+			!this.#host.discussModeEnabled() &&
+			(mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled());
 		if (transportNeeded && !builtInWriteAvailable) {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			builtInWriteAvailable = writeRegistration ? (await untilAborted(signal, writeRegistration)) === true : false;
@@ -950,8 +956,10 @@ export class SessionTools {
 			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
 		}
 
-		let appliedTools = tools;
-		let appliedNames = validToolNames;
+		let appliedTools = this.#host.discussModeEnabled() ? tools.filter(tool => tool.name !== "write") : tools;
+		let appliedNames = this.#host.discussModeEnabled()
+			? validToolNames.filter(name => name !== "write")
+			: validToolNames;
 		let nextCodeModeNamespacesInfo: ToolNamespacesInfo | undefined;
 		if (codeMode.active) {
 			// The write tool survives demotion only when plan mode or a deferrable

@@ -66,6 +66,7 @@ import {
 	settings,
 } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
+import { filterDiscussToolNames } from "../discuss-mode/state";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
@@ -606,6 +607,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	hideToolActivity = false;
 	todoExpanded = false;
 	planModeEnabled = false;
+	discussModeEnabled = false;
 	planModePaused = false;
 	goalModeEnabled = false;
 	goalModePaused = false;
@@ -725,6 +727,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #version: string;
 	readonly #startupChangelog: StartupChangelogSelection | undefined;
 	#planModePreviousTools: string[] | undefined;
+	#discussModePreviousTools: string[] | undefined;
 	#goalModePreviousTools: string[] | undefined;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
@@ -2769,6 +2772,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	#updateDiscussModeStatus(): void {
+		this.statusLine.setDiscussModeStatus(this.discussModeEnabled ? { enabled: true } : undefined);
+		this.ui.requestRender();
+	}
+
 	#updateVibeModeStatus(): void {
 		this.statusLine.setVibeModeStatus(this.vibeModeEnabled ? { enabled: true } : undefined);
 		this.ui.requestRender();
@@ -2984,6 +2992,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveVibe?: boolean;
 		vibeScopeAlreadySuspended?: boolean;
 	}): Promise<void> {
+		if (this.discussModeEnabled) {
+			this.session.setDiscussModeState(undefined);
+			this.discussModeEnabled = false;
+			this.#discussModePreviousTools = undefined;
+			this.#updateDiscussModeStatus();
+		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
 			try {
@@ -3061,6 +3075,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
 		await this.#clearTransientModeState({ preserveVibe, vibeScopeAlreadySuspended });
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
+		if (sessionContext.mode === "discuss") {
+			await this.#enterDiscussMode({
+				persistModeChange: false,
+				previousTools:
+					readPersistedToolNames(sessionContext.modeData?.previousTools) ?? this.session.getEnabledToolNames(),
+			});
+			return;
+		}
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -3123,12 +3145,93 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async #enterDiscussMode(options?: { persistModeChange?: boolean; previousTools?: string[] }): Promise<void> {
+		if (this.discussModeEnabled) return;
+		if (this.planModeEnabled || this.planModePaused) {
+			this.showWarning("Exit plan mode first with /plan.");
+			return;
+		}
+		if (this.goalModeEnabled || this.goalModePaused) {
+			this.showWarning("Exit goal mode first.");
+			return;
+		}
+		if (this.vibeModeEnabled) {
+			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+
+		const previousTools = options?.previousTools ?? this.session.getEnabledToolNames();
+		const previousMountedTools = this.session.getMountedXdevToolNames();
+		const previousState = this.session.getDiscussModeState();
+		const apply = async (): Promise<void> => {
+			this.session.setDiscussModeState({ enabled: true });
+			try {
+				await this.session.setActiveToolsByName(filterDiscussToolNames(previousTools));
+			} catch (error) {
+				this.session.setDiscussModeState(previousState);
+				try {
+					await this.session.setActiveToolPresentation(previousTools, previousMountedTools);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore tools after discuss mode entry failure", {
+						error: String(rollbackError),
+					});
+				}
+				throw error;
+			}
+		};
+		if (this.session.isStreaming) {
+			await this.session.runModeExitTeardown(async () => {
+				await this.session.abort({ reason: USER_INTERRUPT_LABEL });
+				await apply();
+			});
+		} else {
+			await apply();
+		}
+
+		this.#discussModePreviousTools = previousTools;
+		this.discussModeEnabled = true;
+		this.lastAssistantUsage = undefined;
+		this.#updateDiscussModeStatus();
+		if (options?.persistModeChange !== false) {
+			this.sessionManager.appendModeChange("discuss", { previousTools });
+		}
+		this.showStatus("Discuss mode enabled. Write and execution tools are disabled.");
+	}
+
+	async #exitDiscussMode(): Promise<void> {
+		if (!this.discussModeEnabled) return;
+		const discussState = this.session.getDiscussModeState();
+		const discussTools = this.session.getEnabledToolNames();
+		const discussMountedTools = this.session.getMountedXdevToolNames();
+		this.session.setDiscussModeState(undefined);
+		try {
+			await this.session.setActiveToolsByName(this.#discussModePreviousTools ?? []);
+		} catch (error) {
+			this.session.setDiscussModeState(discussState ?? { enabled: true });
+			try {
+				await this.session.setActiveToolPresentation(discussTools, discussMountedTools);
+			} catch (rollbackError) {
+				logger.warn("Failed to restore discuss tools after exit failure", { error: String(rollbackError) });
+			}
+			throw error;
+		}
+		this.discussModeEnabled = false;
+		this.#discussModePreviousTools = undefined;
+		this.lastAssistantUsage = undefined;
+		this.#updateDiscussModeStatus();
+		this.sessionManager.appendModeChange("none");
+		this.showStatus("Discuss mode disabled. Previous tools restored.");
+	}
 	async #enterPlanMode(options?: {
 		planFilePath?: string;
 		workflow?: "parallel" | "iterative";
 		preserveRestoredModel?: boolean;
 	}): Promise<void> {
 		if (this.planModeEnabled) {
+			return;
+		}
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
 			return;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -3332,6 +3435,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #enterGoalMode(options: { objective?: string; resume?: boolean; silent?: boolean }): Promise<void> {
 		if (this.goalModeEnabled) {
+			return;
+		}
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -3878,10 +3985,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	async handleDiscussModeCommand(args?: string): Promise<boolean> {
+		const action = args?.trim().toLowerCase() || "on";
+		if (action === "status") {
+			this.showStatus(`Discuss mode is ${this.discussModeEnabled ? "enabled" : "disabled"}.`);
+			return false;
+		}
+		if (action === "off") {
+			if (this.discussModeEnabled) {
+				await this.#exitDiscussMode();
+			} else {
+				this.showStatus("Discuss mode is disabled.");
+			}
+			return false;
+		}
+		if (action !== "on") {
+			this.showWarning("Usage: /discuss [on|off|status]");
+			return false;
+		}
+		if (this.discussModeEnabled) {
+			this.showStatus("Discuss mode is enabled.");
+			return false;
+		}
+		await this.#enterDiscussMode();
+		return false;
+	}
+
 	async handlePlanModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
+			return false;
+		}
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -3955,6 +4092,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
+			return false;
+		}
 		if (this.vibeModeEnabled) {
 			await this.#exitVibeMode();
 			return false;
@@ -3994,6 +4135,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #enterVibeMode(options?: { persistModeChange?: boolean; previousTools?: string[] }): Promise<void> {
 		if (this.vibeModeEnabled) {
+			return;
+		}
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4092,6 +4237,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
+			return false;
+		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.showWarning("Exit plan mode first.");
 			return false;
@@ -4134,6 +4283,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		if (this.discussModeEnabled) {
+			this.showWarning("Exit discuss mode first with /discuss off.");
+			return false;
+		}
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
 				this.showWarning("Exit plan mode first.");

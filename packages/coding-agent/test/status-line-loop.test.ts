@@ -18,6 +18,7 @@ function createContext(loopMode: SegmentContext["loopMode"]): SegmentContext {
 		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
+		discussMode: null,
 		loopMode,
 		prewalk: null,
 		goalMode: null,

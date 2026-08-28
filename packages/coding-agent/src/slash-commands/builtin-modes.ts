@@ -236,6 +236,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const planFile = runtime.ctx.planModePlanFilePath;
 				return `Plan: on${planFile ? ` (${path.basename(planFile)})` : ""}`;
 			}
+			if (runtime.ctx.discussModeEnabled) return "Plan: blocked by discuss mode";
 			if (runtime.ctx.goalModeEnabled) return "Plan: blocked by goal mode";
 			return "Plan: off";
 		},
@@ -243,6 +244,24 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			await runWithDetachedModeDraft(command, runtime, () =>
 				runtime.ctx.handlePlanModeCommand(command.args || undefined, runtime.input),
 			);
+		},
+	},
+	{
+		name: "discuss",
+		icon: "eye",
+		description: "Discuss and investigate without modifying or executing",
+		inlineHint: "[on|off|status]",
+		allowArgs: true,
+		subcommands: [
+			{ name: "on", description: "Enable read-only discussion mode" },
+			{ name: "off", description: "Disable discussion mode and restore tools" },
+			{ name: "status", description: "Show discussion mode status" },
+		],
+		getTuiAutocompleteDescription: runtime =>
+			runtime.ctx.discussModeEnabled ? "Discuss: on (read-only)" : "Discuss: off",
+		handleTui: async (command, runtime) => {
+			await runtime.ctx.handleDiscussModeCommand(command.args || undefined);
+			runtime.ctx.editor.setText("");
 		},
 	},
 	{
@@ -266,6 +285,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
 			if (runtime.ctx.goalModeEnabled) return "Vibe: blocked by goal mode";
+			if (runtime.ctx.discussModeEnabled) return "Vibe: blocked by discuss mode";
 			return "Vibe: off";
 		},
 		handleTui: async (command, runtime) => {
@@ -290,6 +310,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!runtime.ctx.settings.get("goal.enabled" as SettingPath)) return "Goal: disabled in settings";
+			if (runtime.ctx.discussModeEnabled) return "Goal: blocked by discuss mode";
 			if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
 			const state = runtime.ctx.session.getGoalModeState();
 			return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";

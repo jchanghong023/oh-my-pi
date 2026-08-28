@@ -57,6 +57,7 @@ export interface TodoTrackerHost {
 	getEnabledToolNames(): string[];
 	toolRegistry(): Map<string, AgentTool>;
 	planModeEnabled(): boolean;
+	discussModeEnabled(): boolean;
 	consumeLastServedToolChoiceLabel(): string | undefined;
 }
 
@@ -133,7 +134,7 @@ export class TodoTracker {
 	): { message: AgentMessage; toolChoice?: ToolChoice } | undefined {
 		const mode = this.#host.settings.get("todo.eager");
 		if (mode === "default" || !this.#host.settings.get("todo.enabled")) return undefined;
-		if (this.#host.planModeEnabled() || this.#phases.length > 0) return undefined;
+		if (this.#host.planModeEnabled() || this.#host.discussModeEnabled() || this.#phases.length > 0) return undefined;
 		if (promptText !== undefined) {
 			if (this.#host.agent.state.messages.some(message => message.role === "user")) return undefined;
 			const trimmedPromptText = promptText.trimEnd();
@@ -168,7 +169,9 @@ export class TodoTracker {
 	/** Builds the first-turn eager task-delegation prelude. */
 	createEagerTaskPrelude(promptText: string | undefined): AgentMessage | undefined {
 		if (this.#host.settings.get("task.eager") !== "always") return undefined;
-		if (this.#host.agentKind() === "sub" || this.#host.planModeEnabled()) return undefined;
+		if (this.#host.agentKind() === "sub" || this.#host.planModeEnabled() || this.#host.discussModeEnabled()) {
+			return undefined;
+		}
 		if (promptText !== undefined) {
 			if (this.#host.agent.state.messages.some(message => message.role === "user")) return undefined;
 			const trimmed = promptText.trimEnd();
@@ -198,7 +201,7 @@ export class TodoTracker {
 	/** Checks a terminal assistant turn and schedules continuation for incomplete todos. */
 	async checkCompletion(message: AssistantMessage): Promise<boolean> {
 		if (this.#host.consumeLastServedToolChoiceLabel() === "user-force") return false;
-		if (this.#host.planModeEnabled()) return false;
+		if (this.#host.planModeEnabled() || this.#host.discussModeEnabled()) return false;
 		if (this.#reminderAwaitingProgress) {
 			logger.debug("Todo completion: prior reminder still awaiting agent action; staying silent", {
 				attempt: this.#reminderCount,
@@ -292,7 +295,13 @@ export class TodoTracker {
 		if (this.#mutationsSinceLastTouch < MID_RUN_NUDGE_MUTATION_THRESHOLD) return null;
 		if (this.#midRunNudgeCount >= MID_RUN_NUDGE_MAX_PER_CYCLE) return null;
 		if (!this.#host.settings.get("todo.enabled") || !this.#host.settings.get("todo.reminders")) return null;
-		if (this.#host.planModeEnabled() || !this.#host.getActiveToolNames().includes("todo")) return null;
+		if (
+			this.#host.planModeEnabled() ||
+			this.#host.discussModeEnabled() ||
+			!this.#host.getActiveToolNames().includes("todo")
+		) {
+			return null;
+		}
 		const incomplete = this.#phases
 			.flatMap(phase => phase.tasks)
 			.filter(task => task.status === "pending" || task.status === "in_progress");
