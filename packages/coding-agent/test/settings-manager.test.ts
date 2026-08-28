@@ -609,7 +609,7 @@ describe("Settings", () => {
 			disabled.set("tui.mobile", true);
 			disabled.override("tui.mobile", false);
 			expect(disabled.get("tui.tight")).toBe(false);
-			expect(disabled.get("composer.shape")).toBe("box");
+			expect(disabled.get("composer.shape")).toBe("band");
 		});
 
 		it("re-resolves path-scoped arrays when cwd changes", async () => {
