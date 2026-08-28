@@ -326,7 +326,7 @@ The default is an empty array (nothing disabled). For the two subsystems' provid
 
 ## 设置目录
 
-The catalog below highlights common settings; it is not the complete schema. `omp config list` is the authoritative reference for every key, current value, type, and description. Defaults and enum values shown here come from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
+The catalog below highlights common settings; it is not the complete schema. The full, generated list of every key with its type, default, allowed enum values, and Chinese descriptions is in [Settings Reference（设置参考：全部配置项）](./settings-reference.md). `omp config list` is the authoritative runtime reference for every key, current value, type, and description. Defaults and enum values shown here come from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
 
 ### 模型
 
