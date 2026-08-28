@@ -561,7 +561,7 @@ describe("StatusLineComponent context breakdown", () => {
 			usage: { tokens: 1000, contextWindow: 100_000, percent: 1 },
 		});
 		const comp = new StatusLineComponent(session);
-		expect(comp.render(80)).toHaveLength(0); // box mode: main status lives in the editor border
+		expect(comp.render(80)).toHaveLength(1); // box main lives in the border; dropped segments use the overflow row
 
 		comp.setComposerStyle({ bottomBar: "full", bottomBarGap: false });
 		const lines = comp.render(80);
@@ -590,7 +590,7 @@ describe("StatusLineComponent context breakdown", () => {
 		comp.setAutocompleteActiveProbe(() => menuOpen);
 		expect(comp.render(80)).toHaveLength(0);
 		menuOpen = false;
-		expect(comp.render(80)).toHaveLength(2); // spacer + bar return together
+		expect(comp.render(80)).toHaveLength(3); // spacer + bar + overflow return together
 	});
 
 	it("claude layout splits groups: left-only bottom bar, right group as top-rule chip", () => {

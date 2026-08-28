@@ -41,6 +41,7 @@ describe("InteractiveMode discuss mode lifecycle", () => {
 		await initTheme();
 		tempDir = TempDir.createSync("@pi-discuss-toggle-");
 		authStorage = createInMemoryAuthStorage();
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

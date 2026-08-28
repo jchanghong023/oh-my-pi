@@ -2844,7 +2844,10 @@ export class AuthStorage {
 		if (stored.some(credential => credential.type === "api_key" && credential.source === "login")) {
 			return { kind: "api_key" };
 		}
-		if (this.#hasDedicatedEnvAuth(provider)) return { kind: "env", envVar: getEnvApiKeyName(provider) };
+		if (this.#hasDedicatedEnvAuth(provider)) {
+			const envVar = getEnvApiKeyName(provider);
+			return envVar ? { kind: "env", envVar } : { kind: "env" };
+		}
 		if (stored.some(credential => credential.type === "api_key")) return { kind: "api_key" };
 		if (this.#fallbackResolver?.(provider)) return { kind: "fallback" };
 		return undefined;

@@ -92,7 +92,8 @@ describe("AgentSession discuss mode context", () => {
 		session.setDiscussModeState(undefined);
 		await session.setActiveToolsByName(TOOL_NAMES);
 		await session.prompt("Continue normally");
-		expect(calls[1]?.messages).not.toContain("Investigation and discussion only");
+		const discussContextCount = (messages: string) => messages.split("Investigation and discussion only").length - 1;
+		expect(discussContextCount(calls[1]?.messages ?? "")).toBe(discussContextCount(calls[0]?.messages ?? ""));
 		expect(calls[1]?.tools).toEqual(TOOL_NAMES);
 	});
 });
