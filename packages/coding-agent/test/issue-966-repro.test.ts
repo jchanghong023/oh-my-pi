@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it } from "bun:test";
 import * as path from "node:path";
 import { $ } from "bun";
 
@@ -51,6 +51,10 @@ try {
 }
 `;
 		const result = await $`bun --eval ${script}`.cwd(packageRoot).quiet().nothrow();
-		expect(result.exitCode).toBe(0);
+		if (result.exitCode !== 0) {
+			throw new Error(
+				`issue #966 subprocess exited ${result.exitCode}\nstdout:\n${result.stdout.toString()}\nstderr:\n${result.stderr.toString()}`,
+			);
+		}
 	});
 });
