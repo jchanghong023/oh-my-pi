@@ -12,7 +12,10 @@ const SUPPRESS_ENV = {
 	OPENAI_API_KEY: undefined,
 	ANTHROPIC_API_KEY: undefined,
 	ANTHROPIC_OAUTH_TOKEN: undefined,
+	ANTHROPIC_FOUNDRY_API_KEY: undefined,
 	COPILOT_GITHUB_TOKEN: undefined,
+	COMMAND_CODE_API_KEY: undefined,
+	COMMANDCODE_API_KEY: undefined,
 } as const;
 
 describe("AuthStorage.getCredentialOrigin", () => {
@@ -100,6 +103,54 @@ describe("AuthStorage.getCredentialOrigin", () => {
 
 			auth.setRuntimeApiKey("openai", "cli-flag-bearer");
 			expect(auth.getCredentialOrigin("openai")).toEqual({ kind: "runtime" });
+		});
+	});
+
+	test("Command Code env origin reports legacy alias when only it is set", async () => {
+		// No registry `envKeys` override; catalog lists ["COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"]
+		// and the legacy alias is what $pickenv resolves when the documented key is empty.
+		await withEnv({ ...SUPPRESS_ENV, COMMANDCODE_API_KEY: "legacy-command-code-key" }, () => {
+			expect(auth?.getCredentialOrigin("command-code")).toEqual({
+				kind: "env",
+				envVar: "COMMANDCODE_API_KEY",
+			});
+		});
+	});
+
+	test("Command Code env origin reports documented key when both are set", async () => {
+		// Documented COMMAND_CODE_API_KEY wins per $pickenv priority; the legacy alias is
+		// still set so the resolver preference is exercised, not just the absence path.
+		await withEnv(
+			{
+				...SUPPRESS_ENV,
+				COMMAND_CODE_API_KEY: "documented-command-code-key",
+				COMMANDCODE_API_KEY: "legacy-command-code-key",
+			},
+			() => {
+				expect(auth?.getCredentialOrigin("command-code")).toEqual({
+					kind: "env",
+					envVar: "COMMAND_CODE_API_KEY",
+				});
+			},
+		);
+	});
+
+	test("Command Code env origin reports documented key when only it is set", async () => {
+		// No legacy alias present; first slot of the catalog's envVars list is the source.
+		await withEnv({ ...SUPPRESS_ENV, COMMAND_CODE_API_KEY: "documented-command-code-key" }, () => {
+			expect(auth?.getCredentialOrigin("command-code")).toEqual({
+				kind: "env",
+				envVar: "COMMAND_CODE_API_KEY",
+			});
+		});
+	});
+
+	test("Anthropic computed resolver still omits the env var", async () => {
+		// Regression: registry $pickenv override (Anthropic Foundry/OAuth/API) has no single
+		// describing variable, so the origin must stay `{kind:"env"}` with no envVar key.
+		await withEnv({ ...SUPPRESS_ENV, ANTHROPIC_API_KEY: "sk-fake" }, () => {
+			expect(auth?.getCredentialOrigin("anthropic")).toEqual({ kind: "env" });
+			expect(auth?.getCredentialOrigin("anthropic")).not.toHaveProperty("envVar");
 		});
 	});
 });

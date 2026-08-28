@@ -11,7 +11,6 @@ set -e
 #   -r <ref>       Shorthand for --ref
 
 REPO="jchanghong023/oh-my-pi"
-PACKAGE="@oh-my-pi/pi-coding-agent"
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 MIN_BUN_VERSION="1.3.14"
 
@@ -61,10 +60,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# If a ref is provided, default to source install
-if [ -n "$REF" ] && [ -z "$MODE" ]; then
-    MODE="source"
-fi
 
 # Check if bun is available
 has_bun() {
@@ -171,45 +166,39 @@ has_git_lfs() {
     command -v git-lfs >/dev/null 2>&1
 }
 
-# Install via bun
+# Install the fork source via bun
 install_via_bun() {
     echo "Installing via bun..."
-    if [ -n "$REF" ]; then
-        if ! has_git; then
-            echo "git is required for --ref when installing from source"
-            exit 1
-        fi
-
-        TMP_DIR="$(mktemp -d)"
-        trap 'rm -rf "$TMP_DIR"' EXIT
-
-        if git clone --depth 1 --branch "$REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
-            :
-        else
-            git clone "https://github.com/${REPO}.git" "$TMP_DIR"
-            (cd "$TMP_DIR" && git checkout "$REF")
-        fi
-
-        # Pull LFS files
-        if has_git_lfs; then
-            (cd "$TMP_DIR" && git lfs pull)
-        fi
-
-        if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
-            echo "Expected package at ${TMP_DIR}/packages/coding-agent"
-            exit 1
-        fi
-
-        bun install -g "$TMP_DIR/packages/coding-agent" || {
-            echo "Failed to install from source"
-            exit 1
-        }
-    else
-        bun install -g "$PACKAGE" || {
-            echo "Failed to install $PACKAGE"
-            exit 1
-        }
+    if ! has_git; then
+        echo "git is required when installing from source"
+        exit 1
     fi
+
+    SOURCE_REF="${REF:-main}"
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+
+    if git clone --depth 1 --branch "$SOURCE_REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
+        :
+    else
+        git clone "https://github.com/${REPO}.git" "$TMP_DIR"
+        (cd "$TMP_DIR" && git checkout "$SOURCE_REF")
+    fi
+
+    # Pull LFS files
+    if has_git_lfs; then
+        (cd "$TMP_DIR" && git lfs pull)
+    fi
+
+    if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
+        echo "Expected package at ${TMP_DIR}/packages/coding-agent"
+        exit 1
+    fi
+
+    bun install -g "$TMP_DIR/packages/coding-agent" || {
+        echo "Failed to install from source"
+        exit 1
+    }
     echo ""
     echo "✓ Installed omp via bun"
     echo "Run 'omp' to get started!"
@@ -315,20 +304,7 @@ case "$MODE" in
         fi
         install_via_bun
         ;;
-    binary)
+    binary|"")
         install_binary
-        ;;
-    *)
-        # Default: use bun only when it matches the host architecture, otherwise
-        # fall back to the prebuilt binary so Rosetta bun can't force an x86_64 build.
-        if has_bun && bun_arch_matches_host; then
-            require_bun_version
-            install_via_bun
-        else
-            if has_bun; then
-                echo "Detected bun with architecture '$(bun_arch)' on a '$(host_arch)' host; using the prebuilt binary instead."
-            fi
-            install_binary
-        fi
         ;;
 esac

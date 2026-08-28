@@ -58,7 +58,7 @@ Fork release binaries report versions as `omp/<upstream-version>+fork.<build-num
 Workspace package versions remain upstream-compatible because this fork does not
 publish packages to npm.
 
-macOS and Linux musl binaries are not currently published by this fork.
+Linux musl binaries (x64 · arm64) are published by this fork. macOS binaries are not currently published by this fork.
 
 ### Shell completions
 

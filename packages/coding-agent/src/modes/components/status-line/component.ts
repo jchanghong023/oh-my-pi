@@ -1819,6 +1819,7 @@ export class StatusLineComponent implements Component {
 		width: number,
 		layout: "box" | "plain-full" | "plain-left" | "plain-right" = "box",
 		previewTitle?: string,
+		overflowWidth?: number,
 	): { main: string; overflow: string; overflowParts: string[] } {
 		const effectiveSettings = this.#resolveSettings();
 		const plain = layout !== "box";
@@ -2076,7 +2077,7 @@ export class StatusLineComponent implements Component {
 		const retainedLeft = new Set(leftSourceIndices);
 		const overflowParts = originalLeft.filter((_, index) => !retainedLeft.has(index));
 		overflowParts.push(...originalRight.slice(right.length));
-		const overflow = this.#fitOverflowRow("", overflowParts, topFillWidth);
+		const overflow = this.#fitOverflowRow("", overflowParts, overflowWidth ?? topFillWidth);
 		return { main, overflow, overflowParts };
 	}
 
@@ -2230,12 +2231,23 @@ export class StatusLineComponent implements Component {
 	}
 
 	#fitOverflowRow(initial: string, parts: readonly string[], width: number): string {
+		const textAnsi = theme.getFgAnsi("text");
+		// Each separator (theme.fg) ends with this reset, so the row must
+		// reopen the text color before the next plain part instead of leaking
+		// statusLineSep or the terminal default into it.
+		const fgReset = "\x1b[39m";
 		let content = initial;
 		let appended = 0;
 		for (const part of parts) {
 			if (!content) {
-				content = visibleWidth(part) > width ? truncateToWidth(part, width) : part;
-				if (visibleWidth(part) > width) break;
+				if (visibleWidth(part) > width) {
+					content = truncateToWidth(part, width);
+					// Still part of the row: anchor text color and close with
+					// a fg reset so terminal default color doesn't leak past
+					// the last visible character.
+					return `${textAnsi}${content}${fgReset}`;
+				}
+				content = `${textAnsi}${part}`;
 				appended++;
 				continue;
 			}
@@ -2243,12 +2255,15 @@ export class StatusLineComponent implements Component {
 				initial && appended === 0
 					? `${theme.fg("statusLineSep", theme.sep.dot.trim())} `
 					: theme.fg("statusLineSep", theme.sep.dot);
-			const candidate = content + separator + part;
+			// Reopen text color after the separator's fg reset so plain
+			// parts never inherit statusLineSep or the terminal default.
+			const decorated = `${separator}${textAnsi}${part}`;
+			const candidate = content + decorated;
 			if (visibleWidth(candidate) > width) break;
 			content = candidate;
 			appended++;
 		}
-		return content;
+		return content ? `${content}${fgReset}` : "";
 	}
 
 	#renderSplitBottomLine(width: number): string {
@@ -2265,8 +2280,9 @@ export class StatusLineComponent implements Component {
 		width: number,
 		layout: "box" | "plain-full" | "plain-left" | "plain-right",
 		previewTitle?: string,
+		overflowWidth?: number,
 	): { main: string; overflow: string } {
-		const lines = this.#buildStatusLines(width, layout, previewTitle);
+		const lines = this.#buildStatusLines(width, layout, previewTitle, overflowWidth);
 		if (!this.#focusedAgentId) return lines;
 		const dim = (content: string): string =>
 			content ? `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m` : "";
@@ -2380,9 +2396,18 @@ export class StatusLineComponent implements Component {
 				}
 				if (status.overflow) lines.push(status.overflow);
 			} else {
+				// The box main line is sized to the editor's top-border content
+				// width (statusWidth), but the overflow row drops onto the
+				// terminal line directly and can use the rest of the row —
+				// `leftInset` mirrors the editor's left chrome so the
+				// overflow aligns under the main row, and the overflow is
+				// built with `width - leftInset` budget (no separator dot
+				// between the inset padding and the first overflow part).
 				const statusWidth = this.#topBorderWidthProvider?.(width) ?? width;
-				const overflow = this.#renderStatusLines(statusWidth, "box").overflow;
-				if (overflow) lines.push(overflow);
+				const leftInset = Math.max(0, Math.floor((width - statusWidth) / 2));
+				const overflowWidth = Math.max(0, width - leftInset);
+				const overflow = this.#renderStatusLines(statusWidth, "box", undefined, overflowWidth).overflow;
+				if (overflow) lines.push(`${" ".repeat(leftInset)}${overflow}`);
 			}
 		}
 		const showHooks = this.#settings.showHookStatus ?? true;

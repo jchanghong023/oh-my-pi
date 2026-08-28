@@ -29,26 +29,39 @@ jobs:
          release-timestamp: ${{ steps.detect.outputs.release-timestamp }}
          channel: "stable"
       steps:
-         - name: Derive version from latest upstream release
+         - uses: actions/checkout@v4
+         - name: Derive version from fork upstream baseline
            id: detect
            shell: bash
-           env:
-              GH_TOKEN: ${{ github.token }}
            run: |
               set -euo pipefail
-              upstream_tag="$(gh api repos/can1357/oh-my-pi/releases/latest --jq .tag_name)"
-              if [[ ! "$upstream_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                echo "Latest upstream release has unsupported tag: $upstream_tag" >&2
+              fork_doc="docs-zh-CN/fork.md"
+              baseline_section="$(awk '/^## 当前上游基线/{flag=1; next} /^## /{flag=0} flag' "$fork_doc")"
+              if [[ -z "$baseline_section" ]]; then
+                echo "Missing '当前上游基线' section in $fork_doc" >&2
                 exit 1
               fi
-              version="${upstream_tag#v}+fork.${{ github.run_number }}"
+              mapfile -t version_lines < <(printf '%s\n' "$baseline_section" | grep -E '^- \*\*版本\*\*')
+              if [[ "${#version_lines[@]}" -ne 1 ]]; then
+                echo "Expected exactly one '**版本**' entry in '当前上游基线', found ${#version_lines[@]}" >&2
+                exit 1
+              fi
+              baseline_tag="$(printf '%s' "${version_lines[0]}" | sed -nE 's/^- \*\*版本\*\*[：:][[:space:]]*`([^`]+)`.*/\1/p')"
+              if [[ -z "$baseline_tag" ]]; then
+                baseline_tag="$(printf '%s' "${version_lines[0]}" | sed -nE 's/^- \*\*版本\*\*[：:][[:space:]]*([^[:space:]]+).*/\1/p')"
+              fi
+              if [[ ! "$baseline_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "Current upstream baseline version has unsupported tag: $baseline_tag" >&2
+                exit 1
+              fi
+              version="${baseline_tag#v}+fork.${{ github.run_number }}"
               release_timestamp="$(date -u +%Y-%m-%dT%H:%MZ)"
               {
                 echo "release-tag=v$version"
                 echo "version=$version"
                 echo "release-timestamp=$release_timestamp"
               } >> "$GITHUB_OUTPUT"
-              echo "Building fork version $version from upstream $upstream_tag"
+              echo "Building fork version $version from upstream baseline $baseline_tag"
 
 
    check:

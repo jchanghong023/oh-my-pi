@@ -13,6 +13,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { getCatalogProviderEntry } from "@oh-my-pi/pi-catalog/provider-models";
 import {
 	type Component,
@@ -153,11 +154,24 @@ const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
 const SIDEBAR_MIN_WIDTH = 18;
 const SIDEBAR_MAX_WIDTH = 26;
+/** OpenCode Zen's canonical and legacy provider ids share one catalog; the hub only advertises known-free entries from that catalog. */
+const BUNDLED_FREE_SELECTORS = (() => {
+	const selectors = new Set<string>();
+	for (const provider of ["opencode-zen", "opencode"] as const) {
+		const bundled = getBundledModels(provider);
+		for (const model of bundled) {
+			if (model.cost.input === 0 && model.cost.output === 0) {
+				selectors.add(`${model.provider}/${model.id}`);
+			}
+		}
+	}
+	return selectors;
+})();
 
-/** OpenCode Zen's canonical and legacy provider ids share one catalog; the hub only advertises its free tier. */
 function isVisibleModel(model: Model): boolean {
-	const isOpenCodeZen = model.provider === "opencode-zen" || model.provider === "opencode";
-	return !isOpenCodeZen || (model.cost.input <= 0 && model.cost.output <= 0);
+	if (model.provider !== "opencode-zen" && model.provider !== "opencode") return true;
+	if (model.cost.input !== 0 || model.cost.output !== 0) return false;
+	return BUNDLED_FREE_SELECTORS.has(`${model.provider}/${model.id}`);
 }
 
 /**
@@ -1927,6 +1941,7 @@ export class ModelHubComponent implements Component {
 			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll();
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
+				if (!isVisibleModel(model)) continue;
 				if (lines.length >= rows) break;
 				lines.push(truncateToWidth(theme.fg("dim", `    ${model.id}`), width));
 			}

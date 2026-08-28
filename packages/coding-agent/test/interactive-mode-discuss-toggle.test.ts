@@ -154,4 +154,43 @@ describe("InteractiveMode discuss mode lifecycle", () => {
 		await mode.handleDiscussModeCommand("off");
 		expect(session.getActiveToolNames()).toEqual(TOOL_NAMES);
 	});
+
+	it("restores previous tools when switching to a different session", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handleDiscussModeCommand("on");
+		expect(mode.discussModeEnabled).toBe(true);
+		expect(session.getDiscussModeState()).toEqual({ enabled: true });
+		expect(session.getActiveToolNames()).toEqual(filterDiscussToolNames(TOOL_NAMES));
+
+		await session.sessionManager.ensureOnDisk();
+		const sourceSessionFile = session.sessionFile;
+		if (!sourceSessionFile) throw new Error("Expected persisted source session file");
+
+		// Create a fresh, unrelated target session file so the manager swaps
+		// sessions during switchSession. The target's discuss state is empty
+		// and its active toolset must NOT be polluted by the source's discuss
+		// filter or any "mode_change:none" entry written on the source's
+		// behalf.
+		const targetSessionFile = SessionManager.createEmptySessionFile(tempDir.path());
+		expect(targetSessionFile).not.toBe(sourceSessionFile);
+
+		const switched = await session.switchSession(targetSessionFile);
+		expect(switched).toBe(true);
+
+		// After cross-session reconciliation the InteractiveMode instance no
+		// longer reports discuss as enabled…
+		expect(mode.discussModeEnabled).toBe(false);
+		// …the new active session has no discuss state written into it…
+		expect(session.getDiscussModeState()).toBeUndefined();
+		// …and the previously-saved toolset is fully restored even though the
+		// manager was already pointing at the target session when
+		// #clearTransientModeState ran.
+		expect(session.getActiveToolNames()).toEqual(TOOL_NAMES);
+		expect(await Bun.file(targetSessionFile).text()).not.toContain('"type":"mode_change"');
+		// The source session retains its persisted "discuss" mode_change and
+		// tool snapshot, untouched by the cross-session exit.
+		expect(session.sessionFile).toBe(targetSessionFile);
+		const sourceContent = await Bun.file(sourceSessionFile).text();
+		expect(sourceContent).toContain('"type":"mode_change"');
+	});
 });

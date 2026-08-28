@@ -17,7 +17,6 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Repo = "jchanghong023/oh-my-pi"
-$Package = "@oh-my-pi/pi-coding-agent"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
 $BinaryName = "omp-windows-x64.exe"
 $MinimumBunVersion = "1.3.14"
@@ -173,61 +172,55 @@ function Install-Bun {
 
 function Install-ViaBun {
     Write-Host "Installing via bun..."
-    if ($Ref) {
-        if (-not (Test-GitInstalled)) {
-            throw "git is required for -Ref when installing from source"
-        }
+    if (-not (Test-GitInstalled)) {
+        throw "git is required when installing from source"
+    }
 
-        $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("omp-install-" + [System.Guid]::NewGuid().ToString("N"))
-        New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+    $sourceRef = if ($Ref) { $Ref } else { "main" }
+    $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("omp-install-" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
 
+    try {
+        $repoUrl = "https://github.com/$Repo.git"
+        $cloneOk = $false
         try {
-            $repoUrl = "https://github.com/$Repo.git"
+            git clone --depth 1 --branch $sourceRef $repoUrl $tmpRoot | Out-Null
+            $cloneOk = $true
+        } catch {
             $cloneOk = $false
+        }
+
+        if (-not $cloneOk) {
+            git clone $repoUrl $tmpRoot | Out-Null
+            Push-Location $tmpRoot
             try {
-                git clone --depth 1 --branch $Ref $repoUrl $tmpRoot | Out-Null
-                $cloneOk = $true
-            } catch {
-                $cloneOk = $false
+                git checkout $sourceRef | Out-Null
+            } finally {
+                Pop-Location
             }
-
-            if (-not $cloneOk) {
-                git clone $repoUrl $tmpRoot | Out-Null
-                Push-Location $tmpRoot
-                try {
-                    git checkout $Ref | Out-Null
-                } finally {
-                    Pop-Location
-                }
-            }
-
-            # Pull LFS files
-            if (Test-GitLfsInstalled) {
-                Push-Location $tmpRoot
-                try {
-                    git lfs pull | Out-Null
-                } finally {
-                    Pop-Location
-                }
-            }
-
-            $packagePath = Join-Path $tmpRoot "packages\coding-agent"
-            if (-not (Test-Path $packagePath)) {
-                throw "Expected package at $packagePath"
-            }
-
-            bun install -g $packagePath
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to install from $packagePath via bun"
-            }
-        } finally {
-            Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
         }
-    } else {
-        bun install -g $Package
+
+        # Pull LFS files
+        if (Test-GitLfsInstalled) {
+            Push-Location $tmpRoot
+            try {
+                git lfs pull | Out-Null
+            } finally {
+                Pop-Location
+            }
+        }
+
+        $packagePath = Join-Path $tmpRoot "packages\coding-agent"
+        if (-not (Test-Path $packagePath)) {
+            throw "Expected package at $packagePath"
+        }
+
+        bun install -g $packagePath
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to install $Package via bun"
+            throw "Failed to install from $packagePath via bun"
         }
+    } finally {
+        Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
     }
 
     Write-Host ""
@@ -286,10 +279,6 @@ function Install-Binary {
 }
 
 # Main logic
-if ($Ref -and -not $Source -and -not $Binary) {
-    $Source = $true
-}
-
 if ($Source) {
     if (-not (Test-BunInstalled)) {
         Install-Bun
@@ -299,11 +288,5 @@ if ($Source) {
 } elseif ($Binary) {
     Install-Binary
 } else {
-    # Default: use bun if available, otherwise binary
-    if (Test-BunInstalled) {
-        Assert-BunVersion $MinimumBunVersion
-        Install-ViaBun
-    } else {
-        Install-Binary
-    }
+    Install-Binary
 }

@@ -1,6 +1,6 @@
 # 设置参考（全部配置项）
 
-本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 479 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
+本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 480 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
 
 - 每个键就是 `config.yml` 中的嵌套路径（如 `theme.dark`、`tools.approvalMode`），无缩写；键必须与 schema 完全一致：写 `theme.dark`，而不是 `theme`。
 - 优先级、存储位置、写入方式与合并规则见 [Settings（设置）](./settings.md)；配置发现与解析机制见 [Config usage（配置发现与解析）](./config-usage.md)。

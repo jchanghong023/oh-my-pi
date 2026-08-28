@@ -511,3 +511,77 @@ describe("overflow: path survives before model", () => {
 		expect(rendered).not.toContain("MODEL_SHOULD_DROP");
 	});
 });
+
+describe("overflow: box alignment under non-standalone render", () => {
+	it("aligns the overflow row to the editor content width via leftInset", () => {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "omp-overflow-box-alignment-very-long-directory-name-here-"),
+		);
+		setProjectDir(tmpDir);
+		try {
+			const component = new StatusLineComponent(
+				createStatusLineSession("align", "x".repeat(100)),
+			);
+			component.updateSettings({
+				preset: "custom",
+				leftSegments: ["pi"],
+				// Multiple right segments with a long model name — when the
+				// editor's top-border content width (statusWidth) is much
+				// narrower than the terminal, every right segment lands in
+				// the overflow row, where the second line uses
+				// `width - leftInset` columns and starts after `leftInset`
+				// spaces of padding.
+				rightSegments: ["session_name", "model", "path"],
+				separator: "powerline-thin",
+				sessionAccent: false,
+			});
+			const terminalWidth = 100;
+			const statusWidth = 98;
+			component.setTopBorderWidthProvider(() => statusWidth);
+
+			const lines = component.render(terminalWidth);
+			expect(lines).toHaveLength(1);
+			const overflow = lines[0]!;
+			const leftInset = Math.floor((terminalWidth - statusWidth) / 2);
+			expect(leftInset).toBe(1);
+			// The row must begin with exactly `leftInset` visible spaces
+			// — no separator dot between the inset padding and the first
+			// overflow part.
+			const plain = stripAnsi(overflow);
+			expect(plain.startsWith(" ".repeat(leftInset))).toBe(true);
+			expect(visibleWidth(overflow)).toBeLessThanOrEqual(terminalWidth);
+			// The dropped right-group segments (long model name first)
+			// are present in the overflow row.
+			expect(plain).toContain("x".repeat(24));
+		} finally {
+			setProjectDir(originalProjectDir);
+		}
+	});
+
+	it("reopens text color before plain overflow parts and after separators", () => {
+		const component = new StatusLineComponent(createStatusLineSession("ansi"));
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi"],
+			// `time` and `hostname` render as plain text (no ANSI of
+			// their own), so the row's color anchoring is observable.
+			rightSegments: ["time", "hostname"],
+			separator: "powerline-thin",
+			sessionAccent: false,
+		});
+		// Force every right segment into the overflow row.
+		const terminalWidth = 80;
+		const statusWidth = 4;
+		component.setTopBorderWidthProvider(() => statusWidth);
+
+		const lines = component.render(terminalWidth);
+		expect(lines).toHaveLength(1);
+		const overflow = lines[0]!;
+		const textAnsi = theme.getFgAnsi("text");
+		const leftInset = Math.floor((terminalWidth - statusWidth) / 2);
+		expect(overflow.slice(leftInset).startsWith(textAnsi)).toBe(true);
+		const separatorThenText = `${theme.fg("statusLineSep", theme.sep.dot)}${textAnsi}`;
+		expect(overflow).toContain(separatorThenText);
+		expect(overflow.endsWith("\x1b[39m")).toBe(true);
+	});
+});

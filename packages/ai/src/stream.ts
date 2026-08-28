@@ -823,6 +823,26 @@ const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEnt
 	return [[provider.id, resolver] as [string, KeyResolver]];
 });
 
+const REGISTRY_ENV_KEY_PROVIDERS = new Set(
+	PROVIDER_REGISTRY.filter(provider => provider.envKeys != null).map(provider => provider.id),
+);
+
+// Catalog providers with multiple env-var candidates keep their ordered list so
+// `getEnvApiKeyName` can echo whichever variable is currently set (mirrors
+// `$pickenv(...envVars)` priority: first non-empty wins). Single-var and
+// registry-overridden entries are intentionally absent — their display name
+// comes straight from `serviceProviderMap`.
+const CATALOG_ENTRY_ENV_NAMES: Record<string, readonly string[]> = Object.fromEntries(
+	(CATALOG_PROVIDERS as readonly ProviderCatalogEntry[])
+		.filter((provider): provider is ProviderCatalogEntry & { envVars: readonly string[] } => {
+			const envVars = provider.envVars;
+			return (
+				Array.isArray(envVars) && envVars.length > 1 && !REGISTRY_ENV_KEY_PROVIDERS.has(provider.id)
+			);
+		})
+		.map(provider => [provider.id, provider.envVars] as [string, readonly string[]]),
+);
+
 const serviceProviderMap: Record<string, KeyResolver> = {
 	...Object.fromEntries(CATALOG_ENTRY_ENV_KEYS),
 	...Object.fromEntries(
@@ -848,15 +868,28 @@ export function getEnvApiKey(provider: string): string | undefined {
 }
 
 /**
- * Name of the environment variable that backs `getEnvApiKey` for a provider,
- * when that provider maps to a single named variable (e.g. `github-copilot` →
- * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
- * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
- * single variable name describes the source.
+ * Name of the environment variable that backs `getEnvApiKey` for a provider.
+ *
+ * - String resolver (single-var catalog entry, registry envKeys string, or a
+ *   legacy non-provider key) → that variable name.
+ * - Catalog multi-var entry (`command-code` with documented `COMMAND_CODE_API_KEY`
+ *   + legacy `COMMANDCODE_API_KEY`) → the first variable in the catalog's
+ *   ordered `envVars` list that is currently set, matching the priority used
+ *   by `$pickenv(...envVars)` inside `getEnvApiKey`.
+ * - Registry computed resolver (Anthropic $pickenv, Vertex ADC, Bedrock
+ *   probe, …) → undefined, because no single variable name describes the
+ *   resolved source.
  */
 export function getEnvApiKeyName(provider: string): string | undefined {
 	const resolver = serviceProviderMap[provider];
-	return typeof resolver === "string" ? resolver : undefined;
+	if (typeof resolver === "string") return resolver;
+	const envVars = CATALOG_ENTRY_ENV_NAMES[provider];
+	if (envVars) {
+		for (const name of envVars) {
+			if (Bun.env[name]?.trim()) return name;
+		}
+	}
+	return undefined;
 }
 
 /**

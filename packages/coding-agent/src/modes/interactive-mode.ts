@@ -2993,10 +2993,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		vibeScopeAlreadySuspended?: boolean;
 	}): Promise<void> {
 		if (this.discussModeEnabled) {
+			const discussPreviousTools = this.#discussModePreviousTools;
 			this.session.setDiscussModeState(undefined);
-			this.discussModeEnabled = false;
-			this.#discussModePreviousTools = undefined;
-			this.#updateDiscussModeStatus();
+			try {
+				await this.session.setActiveToolsByName(discussPreviousTools ?? []);
+			} finally {
+				this.discussModeEnabled = false;
+				this.#discussModePreviousTools = undefined;
+				this.#updateDiscussModeStatus();
+			}
 		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
