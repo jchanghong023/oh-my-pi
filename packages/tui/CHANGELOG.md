@@ -4,6 +4,12 @@
 
 ## [18.0.9] - 2026-08-28
 
+### Added
+
+- Exported TuiDebugServer for programmatic headless control
+- Added debug demonstration script to examples
+- Added an `OMP_TUI_DEBUG` Unix socket for headless TUI driving and structured inspection.
+
 ### Changed
 
 - Inline hex colors now render with VS Code-style colored backgrounds and automatically selected black or white text for readability, alongside the color swatch.
