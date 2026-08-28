@@ -14,9 +14,9 @@
 ## Local Verification
 
 After modifying local TypeScript code, you MUST run `bun run fastcheck` before yielding.
-- 本地开发禁止编译 Rust 代码。
+- NEVER 本地开发禁止编译 Rust 代码。
 
 ## Change Discipline
 
-- 不要为了测试而测试：仅为守护真实、可观察的契约添加测试，NEVER 为凑数、覆盖率或惯例添加。
+- 不要为了测试而测试：仅为守护真实、可观察的契约添加测试，NEVER 为凑数、覆盖率或惯例添加测试。
 - 本仓库长期与上游保持同步：自身修改 MUST 内聚、克制 —— 最小必要变更，改动集中，不引入无关重构、抽象或范围扩展。
