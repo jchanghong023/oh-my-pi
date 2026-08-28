@@ -77,10 +77,16 @@ impl GitRepo {
 	/// Stage worktree files, or every change when `files` is empty.
 	pub fn stage_files(&self, files: &[String]) -> Result<()> {
 		let repo = self.gix()?;
-		let mut index = repo
-			.index_or_load_from_head_or_empty()
-			.map_err(|err| Error::backend("git add", err))?
-			.into_owned();
+		let mut index = if repo.index_path().is_file() {
+			repo
+				.open_index()
+				.map_err(|err| Error::backend("git add", err))?
+		} else {
+			repo
+				.index_or_load_from_head_or_empty()
+				.map_err(|err| Error::backend("git add", err))?
+				.into_owned()
+		};
 		let mut selected = collect_stage_paths(self.root(), files)?;
 		let all = files.is_empty();
 		let requested: BTreeSet<&str> = files.iter().map(String::as_str).collect();
@@ -111,10 +117,16 @@ impl GitRepo {
 		let repo = self.gix()?;
 		let head = head_tree(&repo)?;
 		let head_index = index_for_tree(&repo, head.as_ref())?;
-		let mut current = repo
-			.index_or_load_from_head_or_empty()
-			.map_err(|err| Error::backend("git reset", err))?
-			.into_owned();
+		let mut current = if repo.index_path().is_file() {
+			repo
+				.open_index()
+				.map_err(|err| Error::backend("git reset", err))?
+		} else {
+			repo
+				.index_or_load_from_head_or_empty()
+				.map_err(|err| Error::backend("git reset", err))?
+				.into_owned()
+		};
 		copy_index_paths(&mut current, &head_index, files);
 		current
 			.write(INDEX_WRITE)
@@ -132,10 +144,16 @@ impl GitRepo {
 			.try_peel_to_id()
 			.map_err(|err| Error::backend("git commit", err))?
 			.map(|id| id.detach());
-		let index = repo
-			.index_or_load_from_head_or_empty()
-			.map_err(|err| Error::backend("git commit", err))?
-			.into_owned();
+		let index = if repo.index_path().is_file() {
+			repo
+				.open_index()
+				.map_err(|err| Error::backend("git commit", err))?
+		} else {
+			repo
+				.index_or_load_from_head_or_empty()
+				.map_err(|err| Error::backend("git commit", err))?
+				.into_owned()
+		};
 		let tree = if options.files.is_empty() {
 			write_index_tree(&repo, &index)?
 		} else {

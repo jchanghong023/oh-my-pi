@@ -310,9 +310,16 @@ fn index_changes(
 	tree_id: gix::ObjectId,
 	files: &[String],
 ) -> Result<Vec<FileChange>> {
-	let index = repo
-		.index_or_empty()
-		.map_err(|err| Error::backend("git diff --cached", err))?;
+	let index = if repo.index_path().is_file() {
+		repo
+			.open_index()
+			.map_err(|err| Error::backend("git diff --cached", err))?
+	} else {
+		repo
+			.index_or_empty()
+			.map_err(|err| Error::backend("git diff --cached", err))?
+			.into_owned()
+	};
 	let mut pathspec = make_pathspec(repo, files, false)?;
 	let mut out = Vec::new();
 	repo

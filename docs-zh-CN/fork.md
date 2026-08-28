@@ -46,3 +46,4 @@
 
 - **本地快速检查**：新增 `bun run fastcheck`，从 `biome.json` 的 `files.includes` 编译正/排除 glob，只把实际交给 Biome 的文件标为 `checking`、其余标为 `skipping ... outside biome.json files.includes`；配置缺失或解析失败立即报错，零 included 时直接成功退出，禁止回退到“全部已检查”。
 - **CI 与回归稳定性**：仅保留消费者实际恢复的 `warm_bun` Bun store cache 预热（删除无消费者的 `warm_darwin` 及其注释）；校验 timestamped musl binary、重试已知 pi-shell 信号竞态，并让 yield cancellation 与 fd inheritance 测试确定化。
+- **原生 VCS 索引一致性**：连续 stage/unstage/commit 时直接重读磁盘 index，避免文件系统时间戳粒度导致 gitoxide 复用旧快照；状态读取使用 fresh repository handle。

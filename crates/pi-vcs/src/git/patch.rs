@@ -1190,9 +1190,16 @@ fn blob_bytes(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<u8>> {
 }
 
 fn index_map(repo: &gix::Repository) -> Result<BTreeMap<String, FileEntry>> {
-	let index = repo
-		.index_or_load_from_head_or_empty()
-		.map_err(|err| Error::backend("git read index", err))?;
+	let index = if repo.index_path().is_file() {
+		repo
+			.open_index()
+			.map_err(|err| Error::backend("git read index", err))?
+	} else {
+		repo
+			.index_or_load_from_head_or_empty()
+			.map_err(|err| Error::backend("git read index", err))?
+			.into_owned()
+	};
 	Ok(index_state_map(&index))
 }
 
