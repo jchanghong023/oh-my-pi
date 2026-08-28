@@ -698,6 +698,13 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
 | `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. (Legacy ms values are migrated to seconds.) |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
+| `magicKeywords.enabled` | boolean | `true`          | Enable hidden notices for all four magic keywords.                                                      |
+| `magicKeywords.ultrathink` | boolean | `true`       | Enable the standalone `ultrathink` notice and maximum-auto-thinking override.                           |
+| `magicKeywords.orchestrate` | boolean | `true`      | Enable the standalone `orchestrate` multi-agent notice.                                                 |
+| `magicKeywords.workflow` | boolean | `true`         | Enable the standalone `workflowz` eval-workflow notice.                                                 |
+| `magicKeywords.fullsend` | boolean | `true`         | Enable fastest verified execution without cost/token constraints; equal-time paths delegate for cleaner context. |
+
+All four keyword slash commands accept optional task text: `/ultrathink [task]`, `/orchestrate [task]`, `/workflowz [task]`, and `/fullsend [task]`.
 
 ### Providers and services
 

@@ -698,6 +698,13 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
 | `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. (Legacy ms values are migrated to seconds.) |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
+| `magicKeywords.enabled` | boolean | `true`          | 启用四个魔法关键词的隐藏通知。                                                                          |
+| `magicKeywords.ultrathink` | boolean | `true`       | 启用独立 `ultrathink` 通知及最高自动思考覆盖。                                                          |
+| `magicKeywords.orchestrate` | boolean | `true`      | 启用独立 `orchestrate` 多智能体通知。                                                                    |
+| `magicKeywords.workflow` | boolean | `true`         | 启用独立 `workflowz` eval 工作流通知。                                                                   |
+| `magicKeywords.fullsend` | boolean | `true`         | 启用不受成本/token 限制的最快验证执行；预计同速时为获得干净上下文而选择委派。                            |
+
+四个关键词斜杠命令均接受可选任务文本：`/ultrathink [task]`、`/orchestrate [task]`、`/workflowz [task]` 和 `/fullsend [task]`。
 
 ### 提供方和服务
 

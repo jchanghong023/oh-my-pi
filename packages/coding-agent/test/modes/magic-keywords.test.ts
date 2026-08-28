@@ -9,31 +9,31 @@ beforeAll(async () => {
 
 describe("highlightMagicKeywords", () => {
 	it("paints every magic keyword in a single prose pass, preserving visible text", () => {
-		const input = "first ultrathink then orchestrate the workflowz";
+		const input = "first ultrathink then orchestrate the workflowz and fullsend";
 		const decorated = highlightMagicKeywords(input);
 		expect(decorated).not.toBe(input);
 		expect(decorated).toContain("\x1b[38");
 		expect(Bun.stripANSI(decorated)).toBe(input);
 		// Each keyword is gradient-painted character-by-character, so none survives as a
 		// contiguous run in the decorated output.
-		for (const keyword of ["ultrathink", "orchestrate", "workflowz"]) {
+		for (const keyword of ["ultrathink", "orchestrate", "workflowz", "fullsend"]) {
 			expect(decorated).not.toContain(keyword);
 			expect(Bun.stripANSI(decorated)).toContain(keyword);
 		}
 	});
 
 	it("paints punctuation-adjacent prose keywords without changing visible text", () => {
-		const input = 'first "ultrathink," then orchestrate. Finally workflowz!';
+		const input = 'first "ultrathink," then orchestrate. Next workflowz; finally fullsend!';
 		const decorated = highlightMagicKeywords(input);
 		expect(decorated).not.toBe(input);
 		expect(Bun.stripANSI(decorated)).toBe(input);
-		for (const keyword of ["ultrathink", "orchestrate", "workflowz"]) {
+		for (const keyword of ["ultrathink", "orchestrate", "workflowz", "fullsend"]) {
 			expect(decorated).not.toContain(keyword);
 		}
 	});
 
 	it("never paints keywords inside code spans, fenced blocks, or XML sections", () => {
-		const input = "`ultrathink`\n```\norchestrate\n```\n<x>workflowz</x>";
+		const input = "`ultrathink`\n```\norchestrate\n```\n<x>workflowz fullsend</x>";
 		expect(highlightMagicKeywords(input)).toBe(input);
 	});
 
@@ -79,10 +79,11 @@ describe("hasMagicKeyword", () => {
 		expect(hasMagicKeyword("please ultrathink this")).toBe(true);
 		expect(hasMagicKeyword("now orchestrate everything")).toBe(true);
 		expect(hasMagicKeyword("just workflowz the steps")).toBe(true);
+		expect(hasMagicKeyword("please fullsend this")).toBe(true);
 	});
 
 	it("detects standalone keywords beside prose punctuation and quotes", () => {
-		for (const text of ["please ultrathink.", 'say "orchestrate" now', "then workflowz, please"]) {
+		for (const text of ["please ultrathink.", 'say "orchestrate" now', "then workflowz, please", "go fullsend!"]) {
 			expect(hasMagicKeyword(text)).toBe(true);
 		}
 	});
@@ -92,9 +93,11 @@ describe("hasMagicKeyword", () => {
 			"ultrathink()",
 			"orchestrate()",
 			"workflowz()",
+			"fullsend()",
 			"foo::ultrathink",
 			"foo::orchestrate",
 			"foo::workflowz",
+			"foo::fullsend",
 		]) {
 			expect(hasMagicKeyword(text)).toBe(false);
 			expect(highlightMagicKeywords(text)).toBe(text);
@@ -104,19 +107,23 @@ describe("hasMagicKeyword", () => {
 	it("rejects casing, inflections, old workflow names, and paths", () => {
 		expect(hasMagicKeyword("Ultrathink")).toBe(false);
 		expect(hasMagicKeyword("ORCHESTRATE")).toBe(false);
+		expect(hasMagicKeyword("Fullsend")).toBe(false);
 		expect(hasMagicKeyword("workflow")).toBe(false);
 		expect(hasMagicKeyword("workflows")).toBe(false);
 		expect(hasMagicKeyword("ultrathinking is fun")).toBe(false);
 		expect(hasMagicKeyword("workflowzed already")).toBe(false);
+		expect(hasMagicKeyword("fullsender")).toBe(false);
 		expect(hasMagicKeyword("src/modes/ultrathink.ts")).toBe(false);
 		expect(hasMagicKeyword("orchestrate.ts is a file")).toBe(false);
 		expect(hasMagicKeyword("packages/coding-agent/test/modes/workflowz.test.ts")).toBe(false);
+		expect(hasMagicKeyword("packages/coding-agent/src/modes/fullsend.ts")).toBe(false);
 	});
 
 	it("rejects keywords inside code spans, fences, and xml sections", () => {
 		expect(hasMagicKeyword("`ultrathink`")).toBe(false);
 		expect(hasMagicKeyword("```\norchestrate\n```")).toBe(false);
 		expect(hasMagicKeyword("<x>workflowz</x>")).toBe(false);
+		expect(hasMagicKeyword("use `fullsend` here")).toBe(false);
 	});
 
 	it("returns false for empty / keyword-free text", () => {

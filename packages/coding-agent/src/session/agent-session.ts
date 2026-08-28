@@ -156,6 +156,7 @@ import type { IrcMessage } from "../irc/bus";
 import type { DaemonCompletionNotification } from "../launch/protocol";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
+import { containsFullsend, renderFullsendNotice } from "../modes/fullsend";
 import { containsOrchestrate, renderOrchestrateNotice } from "../modes/orchestrate";
 import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
@@ -5625,7 +5626,7 @@ export class AgentSession {
 		return this.#providerBoundary.normalizeAgentMessageImages(message);
 	}
 
-	#magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow"): boolean {
+	#magicKeywordEnabled(keyword: "fullsend" | "orchestrate" | "ultrathink" | "workflow"): boolean {
 		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
 	}
 
@@ -5674,6 +5675,16 @@ export class AgentSession {
 					timestamp,
 				});
 			}
+		}
+		if (this.#magicKeywordEnabled("fullsend") && containsFullsend(text)) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "fullsend-notice",
+				content: renderFullsendNotice({ tools: this.getEnabledToolNames() }),
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
 		}
 		return keywordNotices;
 	}
@@ -5736,9 +5747,9 @@ export class AgentSession {
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
-		// Magic keywords ("ultrathink", "orchestrate"): append hidden system notices after the
-		// user's message that steer this turn. User-authored prompts only — synthetic /
-		// agent-initiated turns never trigger them.
+		// Magic keywords ("ultrathink", "orchestrate", "workflowz", "fullsend"): prepend
+		// hidden system notices that steer this turn. User-authored prompts only —
+		// synthetic / agent-initiated turns never trigger them.
 		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
 
 		// A user-initiated prompt (typed message or the `.`/`c` continue shortcut)

@@ -44,6 +44,7 @@ export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
 	ultrathink: true,
 	orchestrate: true,
 	workflowz: true,
+	fullsend: true,
 	dump: true,
 	export: true,
 	copy: true,

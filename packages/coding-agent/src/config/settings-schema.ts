@@ -2217,7 +2217,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Magic Keywords",
-			description: "Enable hidden notices for standalone ultrathink, orchestrate, and workflowz keywords",
+			description: "Enable hidden notices for standalone ultrathink, orchestrate, workflowz, and fullsend keywords",
 		},
 	},
 
@@ -2251,6 +2251,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Magic Keywords",
 			label: "Workflow Keyword",
 			description: "Let standalone workflowz append its hidden eval workflow notice",
+		},
+	},
+
+	"magicKeywords.fullsend": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Fullsend Keyword",
+			description: "Let standalone fullsend prioritize fastest verified execution without cost or token constraints",
 		},
 	},
 

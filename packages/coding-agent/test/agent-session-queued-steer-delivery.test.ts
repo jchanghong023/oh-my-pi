@@ -215,32 +215,35 @@ describe("AgentSession queued steer delivery", () => {
 		expect(session.getQueuedMessages().steering).toEqual([]);
 	});
 
-	it("dequeuing an ultrathink prompt mid-stream restores the text and drops its companion notice", async () => {
-		const { session } = await createSession([{ content: ["host answer"] }]);
-		let queuedShape: string[] | undefined;
-		let clearedSteering: unknown;
-		let hasQueuedAfterClear: boolean | undefined;
-		let injected = false;
-		session.agent.setOnBeforeYield(async () => {
-			if (injected) return;
-			injected = true;
-			// Real path: a magic-keyword prompt steered mid-stream enqueues the hidden
-			// notice immediately before the user message.
-			await session.prompt("ultrathink fix it", { streamingBehavior: "steer" });
-			queuedShape = session.agent.peekSteeringQueue().map(m => (m.role === "custom" ? m.customType : m.role));
-			// Alt+Up restore mid-flight: only the user's text returns; the companion
-			// notice must not be left orphaned in the queue.
-			const cleared = session.clearQueue();
-			clearedSteering = cleared.steering;
-			hasQueuedAfterClear = session.agent.hasQueuedMessages();
-		});
+	it.each(["ultrathink", "fullsend"] as const)(
+		"dequeuing a %s prompt mid-stream restores the text and drops its companion notice",
+		async keyword => {
+			const { session } = await createSession([{ content: ["host answer"] }]);
+			let queuedShape: string[] | undefined;
+			let clearedSteering: unknown;
+			let hasQueuedAfterClear: boolean | undefined;
+			let injected = false;
+			session.agent.setOnBeforeYield(async () => {
+				if (injected) return;
+				injected = true;
+				// Real path: a magic-keyword prompt steered mid-stream enqueues the hidden
+				// notice immediately before the user message.
+				await session.prompt(`${keyword} fix it`, { streamingBehavior: "steer" });
+				queuedShape = session.agent.peekSteeringQueue().map(m => (m.role === "custom" ? m.customType : m.role));
+				// Alt+Up restore mid-flight: only the user's text returns; the companion
+				// notice must not be left orphaned in the queue.
+				const cleared = session.clearQueue();
+				clearedSteering = cleared.steering;
+				hasQueuedAfterClear = session.agent.hasQueuedMessages();
+			});
 
-		await session.prompt("hello");
+			await session.prompt("hello");
 
-		expect(queuedShape).toEqual(["ultrathink-notice", "user"]);
-		expect(clearedSteering).toEqual([{ text: "ultrathink fix it", images: undefined }]);
-		expect(hasQueuedAfterClear).toBe(false);
-	});
+			expect(queuedShape).toEqual([`${keyword}-notice`, "user"]);
+			expect(clearedSteering).toEqual([{ text: `${keyword} fix it`, images: undefined }]);
+			expect(hasQueuedAfterClear).toBe(false);
+		},
+	);
 
 	it("a fresh user prompt delivers queued steer and follow-up work", async () => {
 		const { session } = await createSession([{ content: ["one"] }, { content: ["two"] }, { content: ["three"] }]);

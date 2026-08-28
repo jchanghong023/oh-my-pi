@@ -1434,10 +1434,10 @@
 
 ### `magicKeywords.enabled` — Magic Keywords
 
-- **作用**：是否启用 ultrathink、orchestrate、workflowz 等魔法关键词
+- **作用**：是否启用 ultrathink、orchestrate、workflowz、fullsend 等魔法关键词
 - **类型**：`boolean`
 - **默认值**：`true`
-- **功能**：为独立的 `ultrathink`、`orchestrate`、`workflowz` 关键字启用隐藏提示。
+- **功能**：为独立的 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 关键字启用隐藏提示。
 
 - **可选值**：
   - `true`
@@ -1471,6 +1471,17 @@
 - **类型**：`boolean`
 - **默认值**：`true`
 - **功能**：允许独立的 `workflowz` 附加其隐藏的 eval workflow 提示。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `magicKeywords.fullsend` — Fullsend Keyword
+
+- **作用**：独立的 `fullsend` 关键词是否触发最快且经过验证的执行策略
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：允许独立的 `fullsend` 在不受成本或 token 限制的前提下优先最快的完整、正确、已验证交付；预计同速时优先委派，以子智能体的干净上下文作为质量决胜因素。
 
 - **可选值**：
   - `true`

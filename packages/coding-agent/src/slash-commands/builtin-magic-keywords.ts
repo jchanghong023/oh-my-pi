@@ -1,19 +1,15 @@
 import type { SlashCommandSpec } from "./types";
 
-export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
-	{
-		name: "ultrathink",
-		description: "Send the ultrathink magic keyword",
-		handle: () => ({ prompt: "ultrathink" }),
+const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"] as const;
+
+export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = MAGIC_KEYWORDS.map(keyword => ({
+	name: keyword,
+	description: `Send the ${keyword} magic keyword`,
+	allowArgs: true,
+	inlineHint: "[task]",
+	acpInputHint: "[task]",
+	handle: command => {
+		const args = command.args.trim();
+		return { prompt: args ? `${keyword} ${args}` : keyword };
 	},
-	{
-		name: "orchestrate",
-		description: "Send the orchestrate magic keyword",
-		handle: () => ({ prompt: "orchestrate" }),
-	},
-	{
-		name: "workflowz",
-		description: "Send the workflowz magic keyword",
-		handle: () => ({ prompt: "workflowz" }),
-	},
-];
+}));
