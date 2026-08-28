@@ -13,8 +13,7 @@ import { ModelsConfigFile } from "../config/models-config";
 import type { ModelsConfig } from "../config/models-config-schema";
 import { replaceFileAtomically } from "../utils/atomic-file";
 
-const DESCRIPTION =
-	"Sync Claude Code ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN into the active profile's models.yml";
+const DESCRIPTION = "Sync Claude Code ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN into the active profile's models.yml";
 
 interface ClaudeAnthropicValues {
 	baseUrl: string;
@@ -125,11 +124,7 @@ function yamlString(value: string): string {
 	return JSON.stringify(value);
 }
 
-function updateProviderValues(
-	source: string,
-	providerName: string,
-	values: ClaudeAnthropicValues,
-): string {
+function updateProviderValues(source: string, providerName: string, values: ClaudeAnthropicValues): string {
 	const newline = source.includes("\r\n") ? "\r\n" : "\n";
 	const lines = source.split(/\r?\n/);
 
@@ -232,7 +227,10 @@ function updateProviderValues(
 
 async function validateAndReplaceModelsConfig(configPath: string, content: string): Promise<void> {
 	const mode = (await fs.stat(configPath)).mode;
-	const tempPath = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.${randomUUID()}.tmp.yml`);
+	const tempPath = path.join(
+		path.dirname(configPath),
+		`.${path.basename(configPath)}.${process.pid}.${randomUUID()}.tmp.yml`,
+	);
 	try {
 		await fs.writeFile(tempPath, content, { encoding: "utf8", mode });
 		const staged = ModelsConfigFile.relocate(tempPath).tryLoad();
@@ -241,15 +239,13 @@ async function validateAndReplaceModelsConfig(configPath: string, content: strin
 		}
 		await replaceFileAtomically(tempPath, configPath);
 	} finally {
-		try {
-			await fs.rm(tempPath);
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-		}
+		await fs.rm(tempPath, { force: true });
 	}
 }
 
-async function syncClaude(providerFlag: string | undefined): Promise<{ provider: string; configPath: string; changed: boolean }> {
+async function syncClaude(
+	providerFlag: string | undefined,
+): Promise<{ provider: string; configPath: string; changed: boolean }> {
 	const values = await readClaudeAnthropicValues();
 	const modelsConfig = ModelsConfigFile.relocate(path.join(getAgentDir(), "models.yml"));
 	const loaded = modelsConfig.tryLoad();
@@ -276,18 +272,16 @@ export default class SyncClaude extends Command {
 			description: "Provider id to update when models.yml contains multiple Anthropic-compatible providers",
 		}),
 	};
-	static examples = [
-		"omp sync-claude",
-		"omp --profile work sync-claude",
-		"omp sync-claude --provider my-anthropic",
-	];
+	static examples = ["omp sync-claude", "omp --profile work sync-claude", "omp sync-claude --provider my-anthropic"];
 
 	async run(): Promise<void> {
 		const { flags } = await this.parse(SyncClaude);
 		try {
 			const result = await syncClaude(flags.provider);
 			const action = result.changed ? "Synced" : "Already synced";
-			process.stdout.write(`${action} Claude Code Anthropic settings to provider "${result.provider}" in ${result.configPath}\n`);
+			process.stdout.write(
+				`${action} Claude Code Anthropic settings to provider "${result.provider}" in ${result.configPath}\n`,
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			process.stderr.write(`Error: ${message}\n`);
