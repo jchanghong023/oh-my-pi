@@ -836,9 +836,7 @@ const CATALOG_ENTRY_ENV_NAMES: Record<string, readonly string[]> = Object.fromEn
 	(CATALOG_PROVIDERS as readonly ProviderCatalogEntry[])
 		.filter((provider): provider is ProviderCatalogEntry & { envVars: readonly string[] } => {
 			const envVars = provider.envVars;
-			return (
-				Array.isArray(envVars) && envVars.length > 1 && !REGISTRY_ENV_KEY_PROVIDERS.has(provider.id)
-			);
+			return Array.isArray(envVars) && envVars.length > 1 && !REGISTRY_ENV_KEY_PROVIDERS.has(provider.id);
 		})
 		.map(provider => [provider.id, provider.envVars] as [string, readonly string[]]),
 );

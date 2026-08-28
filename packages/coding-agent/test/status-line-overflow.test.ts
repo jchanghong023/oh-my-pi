@@ -519,9 +519,7 @@ describe("overflow: box alignment under non-standalone render", () => {
 		);
 		setProjectDir(tmpDir);
 		try {
-			const component = new StatusLineComponent(
-				createStatusLineSession("align", "x".repeat(100)),
-			);
+			const component = new StatusLineComponent(createStatusLineSession("align", "x".repeat(100)));
 			component.updateSettings({
 				preset: "custom",
 				leftSegments: ["pi"],

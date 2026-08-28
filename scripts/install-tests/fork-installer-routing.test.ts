@@ -132,9 +132,7 @@ describe("fork installer routing", () => {
 	test("a ref without source mode selects that fork release", async () => {
 		const result = await runInstaller(["--ref", "v18.0.9+fork.125"]);
 		expect(result.exitCode, result.stdout).toBe(0);
-		expect(result.commands).toContain(
-			"api.github.com/repos/jchanghong023/oh-my-pi/releases/tags/v18.0.9+fork.125",
-		);
+		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/tags/v18.0.9+fork.125");
 		expect(result.commands).not.toContain("git clone");
 		expect(result.commands).not.toContain("bun install");
 	});

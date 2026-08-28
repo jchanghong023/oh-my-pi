@@ -1,5 +1,5 @@
-import { $ } from "bun";
 import * as path from "node:path";
+import { $ } from "bun";
 
 const TYPESCRIPT_PATHS = ["*.ts", "*.tsx", "*.mts", "*.cts"];
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -65,11 +65,7 @@ function compileFilters(entries: BiomeIncludeEntry[]): { positive: Bun.Glob[]; n
 	return { positive, negative };
 }
 
-function isBiomeManaged(
-	filePath: string,
-	positive: readonly Bun.Glob[],
-	negative: readonly Bun.Glob[],
-): boolean {
+function isBiomeManaged(filePath: string, positive: readonly Bun.Glob[], negative: readonly Bun.Glob[]): boolean {
 	return positive.some(g => g.match(filePath)) && !negative.some(g => g.match(filePath));
 }
 

@@ -92,7 +92,11 @@ exit ${options?.biomeExitCode ?? 0}
 }
 
 async function runFastcheck(fixture: Fixture) {
-	const result = await spawn([process.execPath, path.join(fixture.repo, "scripts/fastcheck.ts")], fixture.repo, fixture.env);
+	const result = await spawn(
+		[process.execPath, path.join(fixture.repo, "scripts/fastcheck.ts")],
+		fixture.repo,
+		fixture.env,
+	);
 	const argv = (await Bun.file(fixture.biomeLog).text()).split("\0").filter(Boolean);
 	return { ...result, argv };
 }
@@ -105,12 +109,7 @@ describe("fastcheck biome scope", () => {
 		});
 		const result = await runFastcheck(fixture);
 		expect(result.exitCode, result.stdout + result.stderr).toBe(0);
-		expect(result.argv).toEqual([
-			"check",
-			"--no-errors-on-unmatched",
-			"src/included.ts",
-			"src/untracked.ts",
-		]);
+		expect(result.argv).toEqual(["check", "--no-errors-on-unmatched", "src/included.ts", "src/untracked.ts"]);
 		for (const file of [
 			"src/excluded.ts",
 			"src/excluded-untracked.ts",
