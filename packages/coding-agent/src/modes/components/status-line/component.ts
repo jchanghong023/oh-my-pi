@@ -356,6 +356,7 @@ export class StatusLineComponent implements Component {
 	#standalone: false | "full" | "left-only" = false;
 	#standaloneGap = false;
 	#autocompleteActiveProbe: (() => boolean) | undefined;
+	#topBorderWidthProvider: ((terminalWidth: number) => number) | undefined;
 	#renderRevision = 0;
 	#settings: StatusLineSettings = {};
 	#effectiveSettings: EffectiveStatusLineSettings | undefined;
@@ -1808,11 +1809,11 @@ export class StatusLineComponent implements Component {
 	 * `previewTitle` is a stand-in session title for composer previews; the
 	 * `session_name` segment renders it when the session is unnamed.
 	 */
-	#buildStatusLine(
+	#buildStatusLines(
 		width: number,
 		layout: "box" | "plain-full" | "plain-left" | "plain-right" = "box",
 		previewTitle?: string,
-	): string {
+	): { main: string; overflow: string; overflowParts: string[] } {
 		const effectiveSettings = this.#resolveSettings();
 		const plain = layout !== "box";
 		const includePath =
@@ -1909,6 +1910,9 @@ export class StatusLineComponent implements Component {
 		const topFillWidth = Math.max(0, width);
 		const left = [...leftParts];
 		const right = [...rightParts];
+		const originalLeft = [...left];
+		const originalRight = [...right];
+		const leftSourceIndices = originalLeft.map((_, index) => index);
 
 		const leftSepWidth = visibleWidth(separatorDef.left);
 		const rightSepWidth = visibleWidth(separatorDef.right);
@@ -2013,6 +2017,7 @@ export class StatusLineComponent implements Component {
 			while (totalWidth() > topFillWidth && left.length > 0) {
 				const dropIdx = leftOverflowDropIndex();
 				left.splice(dropIdx, 1);
+				leftSourceIndices.splice(dropIdx, 1);
 				leftSegIds.splice(dropIdx, 1);
 				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
@@ -2042,22 +2047,31 @@ export class StatusLineComponent implements Component {
 
 		const leftGroup = renderGroup(left, "left");
 		const rightGroup = renderGroup(right, "right");
-		if (!leftGroup && !rightGroup) return "";
-
-		if (topFillWidth === 0 || (plain && (left.length === 0 || right.length === 0))) {
-			return leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;
+		let main = "";
+		if (leftGroup || rightGroup) {
+			if (topFillWidth === 0 || (plain && (left.length === 0 || right.length === 0))) {
+				main = leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;
+			} else {
+				const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
+				if (plain) {
+					// Standalone composers: no gauge line between the groups, just air.
+					main = leftGroup + padding(gapWidth) + rightGroup;
+				} else {
+					// Box layout: with one group absent (an unnamed session hides
+					// `session_name`, emptying the default preset's right group) the gauge
+					// runs to the border edge instead of disappearing, so embedded context
+					// labels don't fall back to a context chip until the session is titled.
+					main =
+						leftGroup + this.#buildContextGaugeFill(gapWidth, ctx, effectiveSettings, embedContext) + rightGroup;
+				}
+			}
 		}
 
-		const gapWidth = Math.max(1, topFillWidth - leftWidth - rightWidth);
-		if (plain) {
-			// Standalone composers: no gauge line between the groups, just air.
-			return leftGroup + padding(gapWidth) + rightGroup;
-		}
-		// Box layout: with one group absent (an unnamed session hides
-		// `session_name`, emptying the default preset's right group) the gauge
-		// runs to the border edge instead of disappearing, so embedded context
-		// labels don't fall back to a context chip until the session is titled.
-		return leftGroup + this.#buildContextGaugeFill(gapWidth, ctx, effectiveSettings, embedContext) + rightGroup;
+		const retainedLeft = new Set(leftSourceIndices);
+		const overflowParts = originalLeft.filter((_, index) => !retainedLeft.has(index));
+		overflowParts.push(...originalRight.slice(right.length));
+		const overflow = this.#fitOverflowRow("", overflowParts, topFillWidth);
+		return { main, overflow, overflowParts };
 	}
 
 	/**
@@ -2209,13 +2223,52 @@ export class StatusLineComponent implements Component {
 		}
 	}
 
-	getTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
-		let content = this.#buildStatusLine(width, "box", previewTitle);
+	#fitOverflowRow(initial: string, parts: readonly string[], width: number): string {
+		let content = initial;
+		let appended = 0;
+		for (const part of parts) {
+			if (!content) {
+				content = visibleWidth(part) > width ? truncateToWidth(part, width) : part;
+				if (visibleWidth(part) > width) break;
+				appended++;
+				continue;
+			}
+			const separator =
+				initial && appended === 0
+					? `${theme.fg("statusLineSep", theme.sep.dot.trim())} `
+					: theme.fg("statusLineSep", theme.sep.dot);
+			const candidate = content + separator + part;
+			if (visibleWidth(candidate) > width) break;
+			content = candidate;
+			appended++;
+		}
+		return content;
+	}
+
+	#renderSplitBottomLine(width: number): string {
+		const left = this.#buildStatusLines(width, "plain-left");
+		const right = this.#buildStatusLines(width, "plain-right");
+		let content = this.#fitOverflowRow(left.main, [...left.overflowParts, ...right.overflowParts], width);
 		if (this.#focusedAgentId && content) {
-			// Dim the whole bar while focus-proxied. Group/cap terminators emit full
-			// `\x1b[0m` resets that would cancel faint mid-bar, so re-open it after each.
 			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
 		}
+		return content;
+	}
+
+	#renderStatusLines(
+		width: number,
+		layout: "box" | "plain-full" | "plain-left" | "plain-right",
+		previewTitle?: string,
+	): { main: string; overflow: string } {
+		const lines = this.#buildStatusLines(width, layout, previewTitle);
+		if (!this.#focusedAgentId) return lines;
+		const dim = (content: string): string =>
+			content ? `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m` : "";
+		return { main: dim(lines.main), overflow: dim(lines.overflow) };
+	}
+
+	getTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
+		const content = this.#renderStatusLines(width, "box", previewTitle).main;
 		return {
 			content,
 			width: visibleWidth(content),
@@ -2236,6 +2289,11 @@ export class StatusLineComponent implements Component {
 		this.#standaloneGap = style.bottomBarGap;
 	}
 
+	/** Map the status host's terminal width to the editor's top-border content width. */
+	setTopBorderWidthProvider(provider: ((terminalWidth: number) => number) | undefined): void {
+		this.#topBorderWidthProvider = provider;
+	}
+
 	/** While true, the standalone bar yields its row to the editor's autocomplete menu. */
 	setAutocompleteActiveProbe(probe: (() => boolean) | undefined): void {
 		this.#autocompleteActiveProbe = probe;
@@ -2243,10 +2301,7 @@ export class StatusLineComponent implements Component {
 
 	/** Plain right-group content for the claude composer's top rule. */
 	getStandaloneTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
-		let content = this.#buildStatusLine(width, "plain-right", previewTitle);
-		if (this.#focusedAgentId && content) {
-			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
-		}
+		const content = this.#renderStatusLines(width, "plain-right", previewTitle).main;
 		return {
 			content,
 			width: visibleWidth(content),
@@ -2261,11 +2316,7 @@ export class StatusLineComponent implements Component {
 	 * the active one).
 	 */
 	renderBottomBar(width: number, groups: "left" | "full", previewTitle?: string): string {
-		let content = this.#buildStatusLine(width, groups === "left" ? "plain-left" : "plain-full", previewTitle);
-		if (this.#focusedAgentId && content) {
-			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
-		}
-		return content;
+		return this.#renderStatusLines(width, groups === "left" ? "plain-left" : "plain-full", previewTitle).main;
 	}
 	/**
 	 * Status bar lines for a composer layout, rendered through the real
@@ -2282,8 +2333,9 @@ export class StatusLineComponent implements Component {
 			style?.bottomBar ?? (this.#standalone === false ? "none" : this.#standalone === "left-only" ? "left" : "full");
 		const lines: string[] = [];
 		if (attachment === "top-border") {
-			const border = this.getTopBorder(width);
-			if (border.content) lines.push(border.content);
+			const status = this.#renderStatusLines(width, "box");
+			if (status.main) lines.push(status.main);
+			if (status.overflow) lines.push(status.overflow);
 		} else if (attachment === "top-rule-chip") {
 			// Render the chip on its rule exactly as the claude composer does.
 			const rule = claudeComposerStyle.renderTop({
@@ -2297,20 +2349,34 @@ export class StatusLineComponent implements Component {
 			});
 			if (rule !== undefined) lines.push(rule);
 		}
-		if (bottomBar !== "none") {
-			const main = this.renderBottomBar(width, bottomBar);
-			if (main) lines.push(main);
+		if (bottomBar === "left") {
+			const content = this.#renderSplitBottomLine(width);
+			if (content) lines.push(content);
+		} else if (bottomBar === "full") {
+			const status = this.#renderStatusLines(width, "plain-full");
+			if (status.main) lines.push(status.main);
+			if (status.overflow) lines.push(status.overflow);
 		}
 		return lines;
 	}
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
-		if (this.#standalone && !this.#autocompleteActiveProbe?.()) {
-			const content = this.renderBottomBar(width, this.#standalone === "left-only" ? "left" : "full");
-			if (content) {
-				if (this.#standaloneGap) lines.push("");
-				lines.push(content);
+		if (!this.#autocompleteActiveProbe?.()) {
+			if (this.#standalone) {
+				const status =
+					this.#standalone === "left-only"
+						? { main: this.#renderSplitBottomLine(width), overflow: "" }
+						: this.#renderStatusLines(width, "plain-full");
+				if (status.main) {
+					if (this.#standaloneGap) lines.push("");
+					lines.push(status.main);
+				}
+				if (status.overflow) lines.push(status.overflow);
+			} else {
+				const statusWidth = this.#topBorderWidthProvider?.(width) ?? width;
+				const overflow = this.#renderStatusLines(statusWidth, "box").overflow;
+				if (overflow) lines.push(overflow);
 			}
 		}
 		const showHooks = this.#settings.showHookStatus ?? true;

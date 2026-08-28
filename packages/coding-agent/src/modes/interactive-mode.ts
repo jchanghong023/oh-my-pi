@@ -2124,6 +2124,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		const style = getComposerStyle(shape);
 		this.composer.setPreferences({ composerShape: shape });
 		this.statusLine.setAutocompleteActiveProbe(() => this.editor.isAutocompleteActive());
+		this.statusLine.setTopBorderWidthProvider(
+			style.statusAttachment === "top-border"
+				? terminalWidth => this.editor.getTopBorderAvailableWidth(terminalWidth)
+				: undefined,
+		);
 		switch (style.statusAttachment) {
 			case "top-border":
 				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
