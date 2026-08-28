@@ -240,7 +240,6 @@ async function validateAndReplaceModelsConfig(configPath: string, content: strin
 			throw staged.status === "error" ? staged.error : new Error("Staged models config could not be loaded");
 		}
 		await replaceFileAtomically(tempPath, configPath);
-		ModelsConfigFile.invalidate();
 	} finally {
 		try {
 			await fs.rm(tempPath);
@@ -252,19 +251,21 @@ async function validateAndReplaceModelsConfig(configPath: string, content: strin
 
 async function syncClaude(providerFlag: string | undefined): Promise<{ provider: string; configPath: string; changed: boolean }> {
 	const values = await readClaudeAnthropicValues();
-	const loaded = ModelsConfigFile.tryLoad();
+	const modelsConfig = ModelsConfigFile.relocate(path.join(getAgentDir(), "models.yml"));
+	const loaded = modelsConfig.tryLoad();
 	if (loaded.status === "not-found") {
 		throw new Error(`OMP models config not found under active agent directory: ${getAgentDir()}`);
 	}
 	if (loaded.status === "error") throw loaded.error;
 
 	const provider = selectProvider(loaded.value, providerFlag?.trim() || undefined);
-	const configPath = ModelsConfigFile.path();
+	const configPath = modelsConfig.path();
 	const source = await fs.readFile(configPath, "utf8");
 	const updated = updateProviderValues(source, provider, values);
 	if (updated === source) return { provider, configPath, changed: false };
 
 	await validateAndReplaceModelsConfig(configPath, updated);
+	modelsConfig.invalidate();
 	return { provider, configPath, changed: true };
 }
 
