@@ -315,10 +315,7 @@ fn index_changes(
 			.open_index()
 			.map_err(|err| Error::backend("git diff --cached", err))?
 	} else {
-		repo
-			.index_or_empty()
-			.map_err(|err| Error::backend("git diff --cached", err))?
-			.into_owned()
+		gix::index::File::from_state(gix::index::State::new(repo.object_hash()), repo.index_path())
 	};
 	let mut pathspec = make_pathspec(repo, files, false)?;
 	let mut out = Vec::new();
