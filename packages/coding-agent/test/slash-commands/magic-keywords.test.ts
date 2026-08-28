@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
-const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"] as const;
+const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"];
 
 describe("magic keyword slash commands", () => {
 	it.each(MAGIC_KEYWORDS)("advertises and sends /%s with optional task text", async keyword => {
