@@ -3,6 +3,12 @@ import { defineJchPromptCommand } from "./define";
 
 export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	defineJchPromptCommand({
+		name: "jchgs",
+		description: "JCH Git：查看仓库与当前目录状态",
+		inlineHint: "[关注点，如 remote、log]",
+		prompt: `查看当前目录对应 Git 仓库的状态。严格只读：不修改文件，不 stage、commit、stash、pull、push 或切换分支。运行 git status（包含分支与 upstream 信息、conflicts、staged、unstaged、untracked）和 git remote -v，按需补充 ahead/behind 与最近提交，据此描述当前目录的 Git 状态：当前分支、upstream、未提交改动、未推送提交、远端配置；指出异常（如丢失 upstream、未推送提交、未提交修改）和最小安全的下一步。参数存在时用于缩小关注范围。`,
+	}),
+	defineJchPromptCommand({
 		name: "jchgitpull",
 		description: "JCH Git：安全拉取当前分支",
 		inlineHint: "[remote/branch 或其他要求]",
