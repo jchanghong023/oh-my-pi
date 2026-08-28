@@ -14,7 +14,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { adjustHsv, formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
+import { adjustHsv, formatNumber, getProjectDir, hexToRgb, rgbToHex } from "@oh-my-pi/pi-utils";
 import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
 import type { OAuthAccountIdentity } from "../../../session/auth-storage";
@@ -47,6 +47,10 @@ import type {
 const JJ_REFRESH_TTL_MS = 5000;
 const JJ_COMMAND_TIMEOUT_MS = 5_000;
 const WATCHER_FAILURE_POLL_TTL_MS = 5000;
+/** Brand-color fade duration across working-state edges (rust omp's `BRAND_FADE`). */
+const BRAND_FADE_MS = 450;
+/** Repaint cadence while the brand fade is in flight (rust omp's `FADE_FRAME`). */
+const BRAND_FADE_FRAME_MS = 40;
 
 /** A displayable limit after provider, account, model, and window filtering. */
 interface UsageWindowCandidate {
@@ -354,6 +358,7 @@ function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean 
 
 export class StatusLineComponent implements Component {
 	#standalone: false | "full" | "left-only" = false;
+	#topAttachment: ComposerStyle["statusAttachment"] = "top-border";
 	#standaloneGap = false;
 	#autocompleteActiveProbe: (() => boolean) | undefined;
 	#topBorderWidthProvider: ((terminalWidth: number) => number) | undefined;
@@ -392,6 +397,12 @@ export class StatusLineComponent implements Component {
 	/** Pulse timer for the running-speculation indicator; live only while speculation runs. */
 	#speculationBlinkTimer: NodeJS.Timeout | undefined;
 	#speculationBlinkOn = true;
+	/** In-flight brand-color fade across a working-state edge; null when settled. */
+	#brandFade: { fromHex: string; toHex: string; startedAt: number } | null = null;
+	/** Working flag as of the last brand render, for edge detection. */
+	#brandWorking = false;
+	/** Frame timer driving repaints while the brand fade is unsettled. */
+	#brandFadeTimer: NodeJS.Timeout | undefined;
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
 	#runningSubagentIds = new Set<string>();
@@ -637,6 +648,14 @@ export class StatusLineComponent implements Component {
 		if (meter.activeStartedAt === null) return meter.activeMs;
 		return meter.activeMs + Math.max(0, Date.now() - meter.activeStartedAt);
 	}
+	/**
+	 * Elapsed ms of the currently-open active-processing window, or null when
+	 * idle. Feeds the `pi` segment's working spinner + turn timer.
+	 */
+	getTurnElapsedMs(): number | null {
+		const startedAt = this.#meter().activeStartedAt;
+		return startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+	}
 
 	/**
 	 * Return (lazily creating) the meter for the currently-attached
@@ -766,6 +785,7 @@ export class StatusLineComponent implements Component {
 		this.#resetJjRequests();
 		this.#onBranchChange = null;
 		this.#stopSpeculationBlink();
+		this.#stopBrandFadeTimer();
 		this.#clearUsageStartTimer();
 		this.#onCodexResetFireworks = undefined;
 		this.#codexResetSnapshots.clear();
@@ -795,6 +815,76 @@ export class StatusLineComponent implements Component {
 		clearInterval(this.#speculationBlinkTimer);
 		this.#speculationBlinkTimer = undefined;
 		this.#speculationBlinkOn = true;
+	}
+	/**
+	 * Foreground ANSI for the `pi` brand segment: dim gray while idle, fading
+	 * to the accent (session accent when enabled, else theme accent) while a
+	 * turn runs — a port of rust omp's status-band brand fade (450ms cubic
+	 * ease-in-out). A working-state edge retargets the tween from the color
+	 * currently on screen, so interrupting a running fade never jumps, and arms
+	 * a 40ms frame timer so the fade keeps animating after the working loader
+	 * (the usual repaint driver) has stopped.
+	 */
+	#brandFgAnsi(working: boolean, sessionAccentEnabled: boolean): string {
+		const sessionName = sessionAccentEnabled ? this.session.sessionManager?.getSessionName() : undefined;
+		const idleHex = theme.getColorHex("dim");
+		const workingHex =
+			(sessionName ? getSessionAccentHex(sessionName, theme.sessionAccentInputs) : undefined) ??
+			theme.getColorHex("accent");
+		const now = Date.now();
+		if (working !== this.#brandWorking) {
+			const previousTargetHex = this.#brandWorking ? workingHex : idleHex;
+			this.#brandFade = {
+				fromHex: this.#sampleBrandHex(previousTargetHex, now),
+				toHex: working ? workingHex : idleHex,
+				startedAt: now,
+			};
+			this.#brandWorking = working;
+			this.#startBrandFadeTimer();
+		}
+		const hex = this.#sampleBrandHex(working ? workingHex : idleHex, now);
+		return getSessionAccentAnsi(hex) ?? theme.getFgAnsi(working ? "accent" : "dim");
+	}
+
+	/**
+	 * The brand hex at `now`: the eased blend while a fade is in flight,
+	 * otherwise `settledHex`. A fade past its deadline is cleared here so the
+	 * next frame timer tick shuts the timer down.
+	 */
+	#sampleBrandHex(settledHex: string, now: number): string {
+		const fade = this.#brandFade;
+		if (!fade) return settledHex;
+		const t = (now - fade.startedAt) / BRAND_FADE_MS;
+		if (t >= 1) {
+			this.#brandFade = null;
+			return settledHex;
+		}
+		// Cubic ease-in-out, matching rust omp's Easing::EaseInOut.
+		const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+		const from = hexToRgb(fade.fromHex);
+		const to = hexToRgb(fade.toHex);
+		return rgbToHex({
+			r: Math.round(from.r + (to.r - from.r) * eased),
+			g: Math.round(from.g + (to.g - from.g) * eased),
+			b: Math.round(from.b + (to.b - from.b) * eased),
+		});
+	}
+
+	#startBrandFadeTimer(): void {
+		if (this.#brandFadeTimer || this.#disposed) return;
+		this.#brandFadeTimer = setInterval(() => {
+			const fade = this.#brandFade;
+			if (!fade || Date.now() - fade.startedAt >= BRAND_FADE_MS) this.#stopBrandFadeTimer();
+			// One trailing repaint after the stop paints the settled color.
+			this.invalidate();
+			this.#onBranchChange?.();
+		}, BRAND_FADE_FRAME_MS);
+	}
+
+	#stopBrandFadeTimer(): void {
+		if (!this.#brandFadeTimer) return;
+		clearInterval(this.#brandFadeTimer);
+		this.#brandFadeTimer = undefined;
 	}
 
 	#clearUsageStartTimer(): void {
@@ -1717,10 +1807,12 @@ export class StatusLineComponent implements Component {
 		const gitPr = includePr ? this.#lookupPr(activeRepoCache.effectiveGitCwd) : null;
 		const compactionSpeculation = this.session.compactionSpeculation ?? "idle";
 		this.#syncSpeculationBlink(compactionSpeculation);
+		const sessionAccentEnabled = this.#resolveSettings().sessionAccent !== false;
+		const turnElapsedMs = this.getTurnElapsedMs();
 		return {
 			session: this.session,
 			focusedAgentId: this.#focusedAgentId,
-			sessionAccent: this.#resolveSettings().sessionAccent !== false,
+			sessionAccent: sessionAccentEnabled,
 			previewTitle,
 			activeRepo: activeRepoCache.activeRepo,
 			width,
@@ -1745,6 +1837,8 @@ export class StatusLineComponent implements Component {
 			speculationBlinkOn: this.#speculationBlinkOn,
 			subagentCount: this.#subagentCount,
 			activeMs: this.getActiveMs(),
+			turnElapsedMs,
+			brandFgAnsi: this.#brandFgAnsi(turnElapsedMs !== null, sessionAccentEnabled),
 			git: {
 				branch: gitBranch,
 				status: gitStatus,
@@ -1803,9 +1897,11 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Build the status bar for one of four layouts:
+	 * Build the status bar for one of five layouts:
 	 * - `box`: powerline groups joined by the context-reactive gauge line
 	 *   (embedded in the editor's top border).
+	 * - `band`: the box layout opened by a soft flush-left cap, for the band
+	 *   composer's frameless full-width top row.
 	 * - `plain-full`: no background, no powerline caps, dot separators, gap is
 	 *   plain spaces — the standalone bottom bar for pi/borderless composers.
 	 * - `plain-left`: left segments only (claude composer; the right group
@@ -1817,12 +1913,12 @@ export class StatusLineComponent implements Component {
 	 */
 	#buildStatusLines(
 		width: number,
-		layout: "box" | "plain-full" | "plain-left" | "plain-right" = "box",
+		layout: "box" | "band" | "plain-full" | "plain-left" | "plain-right" = "box",
 		previewTitle?: string,
 		overflowWidth?: number,
 	): { main: string; overflow: string; overflowParts: string[] } {
 		const effectiveSettings = this.#resolveSettings();
-		const plain = layout !== "box";
+		const plain = layout !== "box" && layout !== "band";
 		const includePath =
 			hasPathSegment(effectiveSettings.leftSegments) || hasPathSegment(effectiveSettings.rightSegments);
 		const gitEnabled = this.#gitEnabled();
@@ -1865,6 +1961,8 @@ export class StatusLineComponent implements Component {
 		const leftSegmentIds = layout === "plain-right" ? [] : effectiveSettings.leftSegments;
 		for (const segId of leftSegmentIds) {
 			if (subagentBadge && segId === "subagents") continue;
+			// The band composer relocates the title to the working row's trailer.
+			if (layout === "band" && segId === "session_name") continue;
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
@@ -1877,6 +1975,7 @@ export class StatusLineComponent implements Component {
 		const rightSegmentIds = layout === "plain-left" ? [] : effectiveSettings.rightSegments;
 		for (const segId of rightSegmentIds) {
 			if (subagentBadge && segId === "subagents") continue;
+			if (layout === "band" && segId === "session_name") continue;
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
 				rightParts.push(rendered.content);
@@ -1927,6 +2026,11 @@ export class StatusLineComponent implements Component {
 		// so the width budget excludes them too.
 		const leftCapWidth = separatorDef.endCaps && !transparentBg ? visibleWidth(separatorDef.endCaps.right) : 0;
 		const rightCapWidth = separatorDef.endCaps && !transparentBg ? visibleWidth(separatorDef.endCaps.left) : 0;
+		// The band layout opens flush against the terminal edge with a soft cap
+		// (rust omp's status band). Like the other caps it needs an opaque
+		// background to bridge, and only powerline separator styles carry caps.
+		const bandCap = layout === "band" && separatorDef.endCaps && !transparentBg ? theme.sep.powerlineCapLeft : "";
+		const bandCapWidth = visibleWidth(bandCap);
 
 		const groupWidth = (parts: string[], capWidth: number, sepWidth: number): number => {
 			if (parts.length === 0) return 0;
@@ -1935,7 +2039,7 @@ export class StatusLineComponent implements Component {
 			return partsWidth + sepTotal + 2 + capWidth;
 		};
 
-		let leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+		let leftWidth = groupWidth(left, leftCapWidth + bandCapWidth, leftSepWidth);
 		let rightWidth = groupWidth(right, rightCapWidth, rightSepWidth);
 		// Embedded mode removes the standalone context segment before overflow
 		// handling, so the gauge must reserve enough room for both labels. Without
@@ -2006,7 +2110,7 @@ export class StatusLineComponent implements Component {
 							reRendered = adjusted;
 						}
 						left[pathIdx] = reRendered.content;
-						leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+						leftWidth = groupWidth(left, leftCapWidth + bandCapWidth, leftSepWidth);
 					}
 				}
 			}
@@ -2026,7 +2130,7 @@ export class StatusLineComponent implements Component {
 				left.splice(dropIdx, 1);
 				leftSourceIndices.splice(dropIdx, 1);
 				leftSegIds.splice(dropIdx, 1);
-				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
+				leftWidth = groupWidth(left, leftCapWidth + bandCapWidth, leftSepWidth);
 			}
 		}
 
@@ -2041,15 +2145,17 @@ export class StatusLineComponent implements Component {
 					: "";
 			const capPrefix = separatorDef.endCaps?.useBgAsFg ? bgAnsi.replace("\x1b[48;", "\x1b[38;") : bgAnsi + sepAnsi;
 			const capText = cap ? `${capPrefix}${this.#focusedAgentId ? "\x1b[22m" : ""}${cap}\x1b[0m` : "";
+			const openText =
+				direction === "left" && bandCap
+					? `${capPrefix}${this.#focusedAgentId ? "\x1b[22m" : ""}${bandCap}\x1b[0m`
+					: "";
 
 			let content = bgAnsi + fgAnsi;
 			content += ` ${parts.join(` ${sepAnsi}${sep}${fgAnsi} `)} `;
 			content += "\x1b[0m";
 
-			if (capText) {
-				return direction === "right" ? capText + content : content + capText;
-			}
-			return content;
+			if (direction === "right") return capText + content;
+			return openText + content + capText;
 		};
 
 		const leftGroup = renderGroup(left, "left");
@@ -2099,9 +2205,7 @@ export class StatusLineComponent implements Component {
 	): string {
 		const sessionName =
 			effectiveSettings.sessionAccent !== false ? this.session.sessionManager?.getSessionName() : undefined;
-		const accentHex = sessionName
-			? getSessionAccentHex(sessionName, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance)
-			: undefined;
+		const accentHex = sessionName ? getSessionAccentHex(sessionName, theme.sessionAccentInputs) : undefined;
 		const usedColor = getSessionAccentAnsi(accentHex) ?? theme.getFgAnsi("borderAccent");
 		const horizontal = theme.boxRound.horizontal;
 		const mode = effectiveSettings.contextLine ?? "embedded";
@@ -2278,7 +2382,7 @@ export class StatusLineComponent implements Component {
 
 	#renderStatusLines(
 		width: number,
-		layout: "box" | "plain-full" | "plain-left" | "plain-right",
+		layout: "box" | "band" | "plain-full" | "plain-left" | "plain-right",
 		previewTitle?: string,
 		overflowWidth?: number,
 	): { main: string; overflow: string } {
@@ -2297,6 +2401,17 @@ export class StatusLineComponent implements Component {
 			revision: this.#renderRevision,
 		};
 	}
+
+	/** Flush-left soft-capped powerline band (the band composer's top row). */
+	getBandTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
+		const content = this.#renderStatusLines(width, "band", previewTitle).main;
+		return {
+			content,
+			width: visibleWidth(content),
+			revision: this.#renderRevision,
+		};
+	}
+
 	/**
 	 * Standalone bar placement derived from the composer style. `bottomBar`
 	 * `"full"` renders both groups on the bottom bar (pi/borderless/field/rail);
@@ -2306,8 +2421,9 @@ export class StatusLineComponent implements Component {
 	 * `bottomBarGap` inserts a blank spacer row above the bar for styles whose
 	 * editor has no bottom chrome.
 	 */
-	setComposerStyle(style: Pick<ComposerStyle, "bottomBar" | "bottomBarGap">): void {
+	setComposerStyle(style: Pick<ComposerStyle, "statusAttachment" | "bottomBar" | "bottomBarGap">): void {
 		this.#standalone = style.bottomBar === "none" ? false : style.bottomBar === "left" ? "left-only" : "full";
+		this.#topAttachment = style.statusAttachment;
 		this.#standaloneGap = style.bottomBarGap;
 	}
 
@@ -2348,9 +2464,7 @@ export class StatusLineComponent implements Component {
 	 * render.
 	 */
 	getPreviewLines(width: number, style?: Pick<ComposerStyle, "statusAttachment" | "bottomBar">): string[] {
-		const attachment =
-			style?.statusAttachment ??
-			(this.#standalone === false ? "top-border" : this.#standalone === "left-only" ? "top-rule-chip" : "none");
+		const attachment = style?.statusAttachment ?? this.#topAttachment;
 		const bottomBar =
 			style?.bottomBar ?? (this.#standalone === false ? "none" : this.#standalone === "left-only" ? "left" : "full");
 		const lines: string[] = [];
@@ -2358,6 +2472,9 @@ export class StatusLineComponent implements Component {
 			const status = this.#renderStatusLines(width, "box");
 			if (status.main) lines.push(status.main);
 			if (status.overflow) lines.push(status.overflow);
+		} else if (attachment === "top-band") {
+			const band = this.getBandTopBorder(width);
+			if (band.content) lines.push(band.content);
 		} else if (attachment === "top-rule-chip") {
 			// Render the chip on its rule exactly as the claude composer does.
 			const rule = claudeComposerStyle.renderTop({
