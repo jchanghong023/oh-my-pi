@@ -86,7 +86,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 			setLabel: (targetId, label) => {
 				session.sessionManager.appendLabelChange(targetId, label);
 			},
-			getActiveTools: () => session.getEnabledToolNames(),
+			getActiveTools: () => session.getBaseActiveToolNames(),
 			getAllTools: () => session.getAllToolInfos(),
 			setActiveTools: (toolNames: string[]) => session.setActiveToolsByName(toolNames),
 			getCommands: () => getSessionSlashCommands(session),

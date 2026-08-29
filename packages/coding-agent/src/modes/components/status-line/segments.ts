@@ -305,11 +305,6 @@ const modeSegment: StatusLineSegment = {
 			};
 		}
 
-		const discuss = ctx.discussMode;
-		if (discuss?.enabled) {
-			return { content: theme.fg("accent", "Discuss · Read-only"), visible: true };
-		}
-
 		const prewalk = ctx.prewalk;
 		if (prewalk?.enabled) {
 			const content = withIcon(theme.icon.prewalk, "Prewalk");
@@ -337,7 +332,8 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, parts.join(" ")), visible: true };
 		}
 
-		return { content: "", visible: false };
+		const label = ctx.primaryAgent === "discuss" ? "Discuss" : "Main";
+		return { content: theme.fg("accent", label), visible: true };
 	},
 };
 

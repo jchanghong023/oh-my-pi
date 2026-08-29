@@ -715,6 +715,8 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
+	/** Called when Tab has no active autocomplete or custom binding to consume it. */
+	onTabFallback?: () => void;
 
 	/** Fired when a sustained space-bar hold is recognized — the push-to-talk STT start. The
 	 *  optimistically-typed spaces have already been deleted by the time this runs. */
@@ -976,6 +978,10 @@ export class CustomEditor extends Editor {
 
 		const parsedKey = parseKey(data);
 		const canonical = parsedKey !== undefined ? canonicalKeyId(parsedKey) : undefined;
+		if (canonical === "tab" && this.isShowingAutocomplete()) {
+			super.handleInput(data);
+			return;
+		}
 
 		// Left-arrow on an empty editor: surface for the agent-hub double-tap
 		// gesture. Plain "left" only — modified arrows and any in-text cursor
@@ -1130,6 +1136,10 @@ export class CustomEditor extends Editor {
 				handler();
 				return;
 			}
+		}
+		if (canonical === "tab" && !this.isShowingAutocomplete() && this.onTabFallback) {
+			this.onTabFallback();
+			return;
 		}
 
 		// Pass to parent for normal handling

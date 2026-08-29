@@ -115,7 +115,6 @@ import {
 	onModelRolesChanged,
 } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
-import type { DiscussModeState } from "../discuss-mode/state";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import type { PythonResult } from "../eval/py/executor";
 import type { BashPtyOptions, BashResult } from "../exec/bash-executor";
@@ -167,11 +166,12 @@ import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
 import type { PlanModeState } from "../plan-mode/state";
+import { getPrimaryAgentProfile } from "../primary-agent/profiles";
+import type { PrimaryAgentId } from "../primary-agent/types";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
-import discussModeActivePrompt from "../prompts/system/discuss-mode-active.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -551,7 +551,8 @@ export class AgentSession {
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#queuedMessageDrainScheduled = false;
 	#planModeState: PlanModeState | undefined;
-	#discussModeState: DiscussModeState | undefined;
+	#activePrimaryAgentId: PrimaryAgentId = "main";
+	#pendingPrimaryAgentId: PrimaryAgentId | undefined;
 	/** Session-scoped `/vision` override; undefined = follow persisted `inspect_image.mode`. */
 	#inspectImageModeOverride: InspectImageMode | undefined;
 	#vibeModeState: VibeModeState | undefined;
@@ -1054,6 +1055,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
+		this.#activePrimaryAgentId = this.sessionManager.buildSessionContext().primaryAgent ?? "main";
 		this.settings = config.settings;
 		this.#modelRegistry = config.modelRegistry;
 		this.#extensionRoots =
@@ -1142,7 +1144,7 @@ export class AgentSession {
 			getEnabledToolNames: () => this.getEnabledToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
-			discussModeEnabled: () => this.#discussModeState?.enabled === true,
+			primaryAgentIsDiscuss: () => this.#activePrimaryAgentId === "discuss",
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
@@ -1258,7 +1260,7 @@ export class AgentSession {
 			takeMnemopiSessionState: () => setMnemopiSessionState(this, undefined),
 			setBaseSystemPrompt: prompt => {
 				this.#tools.setBaseSystemPrompt(prompt);
-				this.agent.setSystemPrompt(prompt);
+				this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 			},
 			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(),
 			replaceMemoryTools: tools => this.#tools.replaceMemoryTools(tools),
@@ -1391,7 +1393,7 @@ export class AgentSession {
 			isStreaming: () => this.isStreaming,
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
-			discussModeEnabled: () => this.#discussModeState?.enabled === true,
+			primaryAgentProfile: () => getPrimaryAgentProfile(this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId),
 			model: () => this.model,
 			setCodeModeNamespacesInfo: info => {
 				this.#codeModeState.namespacesInfo = info;
@@ -4822,6 +4824,10 @@ export class AgentSession {
 	getEnabledToolNames(): string[] {
 		return this.#tools.getEnabledToolNames();
 	}
+	/** Complete requested tool slate before Primary Agent projection. */
+	getBaseActiveToolNames(): string[] {
+		return this.#tools.getBaseActiveToolNames();
+	}
 
 	/** Names of dynamic tools mounted under `xd://`. */
 	getMountedXdevToolNames(): string[] {
@@ -4954,6 +4960,7 @@ export class AgentSession {
 	 */
 	initializeCodeMode(): Promise<void> {
 		const model = this.model;
+		if (this.#activePrimaryAgentId === "discuss") return this.#tools.reapplyPrimaryAgentProfile();
 		if (!model || !this.#tools.codeModeChangesBetween(undefined, model)) return Promise.resolve();
 		return this.#tools.reconcileCodeMode();
 	}
@@ -5233,12 +5240,69 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
-	getDiscussModeState(): DiscussModeState | undefined {
-		return this.#discussModeState;
+	getPrimaryAgentId(): PrimaryAgentId {
+		return this.#activePrimaryAgentId;
 	}
 
-	setDiscussModeState(state: DiscussModeState | undefined): void {
-		this.#discussModeState = state;
+	async setPrimaryAgent(id: PrimaryAgentId): Promise<void> {
+		if (id === this.#activePrimaryAgentId) return;
+		if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
+		if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
+		let workflowPersisted = false;
+		if (id === "discuss" && !this.#planModeState && !this.#goalModeState && !this.#vibeModeState) {
+			const workflowMode = this.sessionManager.buildSessionContext().mode;
+			workflowPersisted =
+				workflowMode === "plan" ||
+				workflowMode === "plan_paused" ||
+				workflowMode === "goal" ||
+				workflowMode === "goal_paused" ||
+				workflowMode === "vibe";
+		}
+		if (
+			id === "discuss" &&
+			(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowPersisted)
+		) {
+			throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
+		}
+		const previous = this.#activePrimaryAgentId;
+		const previousBase = this.#tools.getBaseActiveToolNames();
+		const legacyBase =
+			id === "main" ? this.sessionManager.buildSessionContext().legacyDiscussPreviousTools : undefined;
+		this.#pendingPrimaryAgentId = id;
+		try {
+			await this.#tools.reapplyPrimaryAgentProfile(legacyBase);
+			this.sessionManager.appendPrimaryAgentChange(id);
+			this.#activePrimaryAgentId = id;
+		} catch (error) {
+			this.#pendingPrimaryAgentId = previous;
+			try {
+				await this.#tools.reapplyPrimaryAgentProfile(previousBase);
+			} finally {
+				this.#pendingPrimaryAgentId = undefined;
+			}
+			throw error;
+		}
+		this.#pendingPrimaryAgentId = undefined;
+	}
+
+	async cyclePrimaryAgent(): Promise<PrimaryAgentId> {
+		const next = this.#activePrimaryAgentId === "main" ? "discuss" : "main";
+		await this.setPrimaryAgent(next);
+		return next;
+	}
+	async #restorePrimaryAgent(id: PrimaryAgentId): Promise<void> {
+		if (id === this.#activePrimaryAgentId) return;
+		const previous = this.#activePrimaryAgentId;
+		this.#pendingPrimaryAgentId = id;
+		try {
+			await this.#tools.reapplyPrimaryAgentProfile();
+			this.#activePrimaryAgentId = id;
+		} catch (error) {
+			this.#activePrimaryAgentId = previous;
+			throw error;
+		} finally {
+			this.#pendingPrimaryAgentId = undefined;
+		}
 	}
 
 	/** Prewalk state, if armed and active */
@@ -5396,20 +5460,6 @@ export class AgentSession {
 				content: message.content,
 				display: message.display,
 				details: message.details,
-			},
-			options ? { deliverAs: options.deliverAs } : undefined,
-		);
-	}
-
-	async sendDiscussModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
-		const message = this.#buildDiscussModeMessage();
-		if (!message) return;
-		await this.sendCustomMessage(
-			{
-				customType: message.customType,
-				content: message.content,
-				display: message.display,
-				attribution: message.attribution,
 			},
 			options ? { deliverAs: options.deliverAs } : undefined,
 		);
@@ -5574,18 +5624,6 @@ export class AgentSession {
 			role: "custom",
 			customType: "plan-mode-context",
 			content,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
-
-	#buildDiscussModeMessage(): CustomMessage | null {
-		if (!this.#discussModeState?.enabled) return null;
-		return {
-			role: "custom",
-			customType: "discuss-mode-context",
-			content: discussModeActivePrompt,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
@@ -6057,10 +6095,6 @@ export class AgentSession {
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
-			}
-			const discussModeMessage = this.#buildDiscussModeMessage();
-			if (discussModeMessage) {
-				messages.push(discussModeMessage);
 			}
 			const goalModeMessage = this.#buildGoalModeMessage();
 			if (goalModeMessage) {
@@ -8369,6 +8403,7 @@ export class AgentSession {
 		// error-recovery path rebuilds the context on demand from the restored
 		// state instead.
 		const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
+		const previousPrimaryAgentId = this.#activePrimaryAgentId;
 		// switchSession replaces these arrays wholesale during load/rollback, so retaining
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
@@ -8386,7 +8421,7 @@ export class AgentSession {
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
-		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
+		const previousBaseSystemPrompt = this.#tools.unprofiledBaseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
@@ -8549,6 +8584,7 @@ export class AgentSession {
 			if (switchingToDifferentSession || didReloadConversationChange) {
 				this.#clearSessionScopedToolState();
 			}
+			await this.#restorePrimaryAgent(sessionContext.primaryAgent ?? "main");
 			this.#reconnectToAgent();
 			try {
 				await this.#sessionSwitchReconciler?.();
@@ -8588,6 +8624,7 @@ export class AgentSession {
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();
 			this.agent.setTools(previousTools);
+			this.#activePrimaryAgentId = previousPrimaryAgentId;
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
 			this.agent.setSystemPrompt(previousSystemPrompt);
@@ -8746,6 +8783,7 @@ export class AgentSession {
 
 			// Reload messages from entries (works for both file and in-memory mode)
 			const sessionContext = this.buildDisplaySessionContext();
+			await this.#restorePrimaryAgent(sessionContext.primaryAgent ?? "main");
 
 			// Emit session_branch event to hooks (after branch completes)
 			if (this.#extensionRunner) {

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@oh-my-pi/pi-ai";
+import type { PrimaryAgentId } from "../primary-agent/types";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import type { CompactionMethod } from "./compaction-methods";
 
@@ -245,6 +246,11 @@ export interface ModeChangeEntry extends SessionEntryBase {
 	/** Optional mode-specific data (e.g. plan file path) */
 	data?: Record<string, unknown>;
 }
+/** Primary Agent profile change on the shared main session. */
+export interface PrimaryAgentChangeEntry extends SessionEntryBase {
+	type: "primary_agent_change";
+	primaryAgent: PrimaryAgentId;
+}
 
 /**
  * Custom message entry for extensions to inject messages into LLM context.
@@ -283,6 +289,7 @@ export type SessionEntry =
 	| TtsrInjectionEntry
 	| SessionInitEntry
 	| ModeChangeEntry
+	| PrimaryAgentChangeEntry
 	| CredentialPinEntry
 	| ResetBoundaryEntry;
 

@@ -5,6 +5,7 @@ import type {
 	StatusLineSegmentId,
 	StatusLineSeparatorStyle,
 } from "../../../config/settings-schema";
+import type { PrimaryAgentId } from "../../../primary-agent/types";
 import type { AgentSession } from "../../../session/agent-session";
 import type { ActiveRepoContext } from "../../../utils/active-repo-context";
 import type { LoopLimitRuntime } from "../../loop-limit";
@@ -74,9 +75,7 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
-	discussMode: {
-		enabled: boolean;
-	} | null;
+	primaryAgent: PrimaryAgentId;
 	prewalk: {
 		enabled: boolean;
 	} | null;

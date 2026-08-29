@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
+import type { PrimaryAgentId } from "../primary-agent/types";
 import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
@@ -73,6 +74,10 @@ export interface SessionContext {
 	mode: string;
 	/** Mode-specific data from the last mode_change entry */
 	modeData?: Record<string, unknown>;
+	/** Active Primary Agent profile on the shared main session. */
+	primaryAgent?: PrimaryAgentId;
+	/** Tool slate saved by the active legacy Discuss mode entry, for one-time restoration on exit. */
+	legacyDiscussPreviousTools?: string[];
 	/**
 	 * Array parallel to messages, indicating which assistant turns should
 	 * have their prompt-cache misses suppressed/explained (because a model,
@@ -196,6 +201,7 @@ export function buildSessionContext(
 			models: {},
 			injectedTtsrRules: [],
 			mode: "none",
+			primaryAgent: "main",
 		};
 	}
 	if (leafId) {
@@ -214,6 +220,7 @@ export function buildSessionContext(
 			models: {},
 			injectedTtsrRules: [],
 			mode: "none",
+			primaryAgent: "main",
 		};
 	}
 
@@ -238,6 +245,8 @@ export function buildSessionContext(
 	const injectedTtsrRulesSet = new Set<string>();
 	let mode = "none";
 	let modeData: Record<string, unknown> | undefined;
+	let primaryAgent: PrimaryAgentId = "main";
+	let legacyDiscussPreviousTools: string[] | undefined;
 	// Track whether an explicit `model_change` with role="default" has been
 	// seen on this path. Once a user (or the agent itself) records an
 	// explicit default, later assistant-message inference must NOT overwrite
@@ -281,6 +290,21 @@ export function buildSessionContext(
 		} else if (entry.type === "mode_change") {
 			mode = entry.mode;
 			modeData = entry.data;
+			// Read-only compatibility for transcripts written by legacy Discuss Mode.
+			primaryAgent = entry.mode === "discuss" ? "discuss" : primaryAgent === "discuss" ? "main" : primaryAgent;
+			const previousTools = entry.data?.previousTools;
+			legacyDiscussPreviousTools =
+				entry.mode === "discuss" &&
+				Array.isArray(previousTools) &&
+				previousTools.every((name): name is string => typeof name === "string")
+					? [...previousTools]
+					: undefined;
+		} else if (
+			entry.type === "primary_agent_change" &&
+			(entry.primaryAgent === "main" || entry.primaryAgent === "discuss")
+		) {
+			primaryAgent = entry.primaryAgent;
+			legacyDiscussPreviousTools = undefined;
 		}
 	}
 
@@ -307,6 +331,8 @@ export function buildSessionContext(
 		if (entry.type === "compaction") {
 			pendingReset = true;
 		} else if (entry.type === "model_change") {
+			pendingReset = true;
+		} else if (entry.type === "primary_agent_change") {
 			pendingReset = true;
 		} else if (entry.type === "mode_change") {
 			const isPlanTransition = (entry.mode === "plan") !== (currentMode === "plan");
@@ -595,5 +621,7 @@ export function buildSessionContext(
 		injectedTtsrRules,
 		mode,
 		modeData,
+		primaryAgent,
+		legacyDiscussPreviousTools,
 	};
 }

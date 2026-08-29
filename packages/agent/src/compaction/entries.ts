@@ -116,6 +116,10 @@ export interface ModeChangeEntry extends SessionEntryBase {
 	/** Optional mode-specific data (e.g. plan file path) */
 	data?: Record<string, unknown>;
 }
+export interface PrimaryAgentChangeEntry extends SessionEntryBase {
+	type: "primary_agent_change";
+	primaryAgent: "main" | "discuss";
+}
 
 /**
  * Durable context-reset marker recorded by an in-place `/clear`. It carries no
@@ -143,6 +147,7 @@ export type SessionEntry =
 	| TtsrInjectionEntry
 	| SessionInitEntry
 	| ModeChangeEntry
+	| PrimaryAgentChangeEntry
 	| ResetBoundaryEntry
 	| CustomCompactionSessionEntries[keyof CustomCompactionSessionEntries];
 

@@ -2554,7 +2554,7 @@ export class AcpAgent implements Agent {
 				setLabel: (targetId, label) => {
 					record.session.sessionManager.appendLabelChange(targetId, label);
 				},
-				getActiveTools: () => record.session.getEnabledToolNames(),
+				getActiveTools: () => record.session.getBaseActiveToolNames(),
 				getAllTools: () => record.session.getAllToolInfos(),
 				setActiveTools: toolNames => record.session.setActiveToolsByName(toolNames),
 				getCommands: () => getSessionSlashCommands(record.session),

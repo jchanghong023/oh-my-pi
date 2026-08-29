@@ -18,6 +18,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import type { PrimaryAgentId } from "../primary-agent/types";
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
@@ -45,6 +46,7 @@ import {
 	type ModeChangeEntry,
 	type ModelChangeEntry,
 	type NewSessionOptions,
+	type PrimaryAgentChangeEntry,
 	type ResetBoundaryEntry,
 	type ServiceTierChangeEntry,
 	type SessionEntry,
@@ -2318,6 +2320,15 @@ export class SessionManager {
 
 	appendModeChange(mode: string, data?: Record<string, unknown>): string {
 		const entry: ModeChangeEntry = { type: "mode_change", ...this.#freshEntryFields(), mode, data };
+		this.#recordEntry(entry);
+		return entry.id;
+	}
+	appendPrimaryAgentChange(primaryAgent: PrimaryAgentId): string {
+		const entry: PrimaryAgentChangeEntry = {
+			type: "primary_agent_change",
+			...this.#freshEntryFields(),
+			primaryAgent,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}

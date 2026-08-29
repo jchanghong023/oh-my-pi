@@ -3777,7 +3777,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					return;
 				}
 
-				const enabled = session.getEnabledToolNames();
+				const enabled = session.getBaseActiveToolNames();
+				const currentlyExposed = session.getEnabledToolNames().includes(name);
 				const alreadyEnabled = enabled.includes(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
 				const mounted = session.getMountedXdevToolNames();
@@ -3788,7 +3789,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				session.setExtensionMCPTool(name, liveTool);
 				try {
 					if ((registered.definition.defaultInactive || registered.definition.hidden) && !explicitlyRequested) {
-						if (!alreadyEnabled) return;
+						if (!currentlyExposed) return;
 						await session.setActiveToolPresentation(
 							enabled.filter(enabledName => enabledName !== name),
 							mounted.filter(mountedName => mountedName !== name),

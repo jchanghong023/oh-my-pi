@@ -426,7 +426,7 @@ export class StatusLineComponent implements Component {
 	 */
 	#activeMeters: WeakMap<AgentSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
-	#discussModeStatus: { enabled: boolean } | null = null;
+	#primaryAgentStatus: SegmentContext["primaryAgent"] = "main";
 	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
@@ -690,8 +690,8 @@ export class StatusLineComponent implements Component {
 		this.#planModeStatus = status ?? null;
 	}
 
-	setDiscussModeStatus(status: { enabled: boolean } | undefined): void {
-		this.#discussModeStatus = status ?? null;
+	setPrimaryAgentStatus(primaryAgent: SegmentContext["primaryAgent"]): void {
+		this.#primaryAgentStatus = primaryAgent;
 	}
 
 	setLoopModeStatus(status: NonNullable<SegmentContext["loopMode"]> | undefined): void {
@@ -1819,7 +1819,7 @@ export class StatusLineComponent implements Component {
 			options: segmentOptions ?? {},
 			compactThinkingLevel: this.#resolveSettings().compactThinkingLevel ?? false,
 			planMode: this.#planModeStatus,
-			discussMode: this.#discussModeStatus,
+			primaryAgent: this.#primaryAgentStatus,
 			loopMode: this.#loopModeStatus,
 			prewalk:
 				typeof this.session.getPrewalkState === "function" && this.session.getPrewalkState()

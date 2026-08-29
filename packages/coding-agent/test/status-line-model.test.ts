@@ -25,7 +25,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
-		discussMode: null,
+		primaryAgent: "main",
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,

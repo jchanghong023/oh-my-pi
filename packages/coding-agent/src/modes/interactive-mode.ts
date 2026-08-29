@@ -68,7 +68,6 @@ import {
 	settings,
 } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
-import { filterDiscussToolNames } from "../discuss-mode/state";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
@@ -595,7 +594,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	hideToolActivity = false;
 	todoExpanded = false;
 	planModeEnabled = false;
-	discussModeEnabled = false;
 	planModePaused = false;
 	goalModeEnabled = false;
 	goalModePaused = false;
@@ -728,7 +726,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #version: string;
 	readonly #startupChangelog: StartupChangelogSelection | undefined;
 	#planModePreviousTools: string[] | undefined;
-	#discussModePreviousTools: string[] | undefined;
 	#goalModePreviousTools: string[] | undefined;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
@@ -984,6 +981,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		this.statusLine.setPrimaryAgentStatus(session.getPrimaryAgentId());
 		this.#codexResetFireworksController = new CodexResetFireworksController(this);
 		this.statusLine.setCodexResetFireworksHandler(event => {
 			this.#codexResetFireworksController.show(event);
@@ -2727,9 +2725,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
-
-	/**
-	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
 	 * editor. Driven entirely by observer-registry change events, so rows appear
 	 * on spawn and the whole block clears itself once the last subagent leaves
 	 * the "active" state.
@@ -2775,9 +2770,35 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	#updateDiscussModeStatus(): void {
-		this.statusLine.setDiscussModeStatus(this.discussModeEnabled ? { enabled: true } : undefined);
+	#updatePrimaryAgentStatus(): void {
+		this.statusLine.setPrimaryAgentStatus(this.session.getPrimaryAgentId());
 		this.ui.requestRender();
+	}
+
+	#isDiscussPrimaryAgent(): boolean {
+		return this.session.getPrimaryAgentId() === "discuss";
+	}
+	async cyclePrimaryAgentFromTab(): Promise<void> {
+		if (this.viewSession !== this.session) return;
+		if (
+			this.session.isStreaming ||
+			this.session.queuedMessageCount > 0 ||
+			this.planModeEnabled ||
+			this.planModePaused ||
+			this.goalModeEnabled ||
+			this.goalModePaused ||
+			this.vibeModeEnabled
+		) {
+			return;
+		}
+		try {
+			const active = await this.session.cyclePrimaryAgent();
+			this.lastAssistantUsage = undefined;
+			this.#updatePrimaryAgentStatus();
+			this.showStatus(`Primary Agent: ${active === "main" ? "Main" : "Discuss"}`);
+		} catch (error) {
+			this.showWarning(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	#updateVibeModeStatus(): void {
@@ -2995,29 +3016,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveVibe?: boolean;
 		vibeScopeAlreadySuspended?: boolean;
 	}): Promise<void> {
-		if (this.discussModeEnabled) {
-			const discussState = this.session.getDiscussModeState();
-			const discussTools = this.session.getEnabledToolNames();
-			const discussMountedTools = this.session.getMountedXdevToolNames();
-			const discussPreviousTools = this.#discussModePreviousTools;
-			this.session.setDiscussModeState(undefined);
-			try {
-				await this.session.setActiveToolsByName(discussPreviousTools ?? []);
-			} catch (error) {
-				this.session.setDiscussModeState(discussState ?? { enabled: true });
-				try {
-					await this.session.setActiveToolPresentation(discussTools, discussMountedTools);
-				} catch (rollbackError) {
-					logger.warn("Failed to restore discuss tools after switch failure", {
-						error: String(rollbackError),
-					});
-				}
-				throw error;
-			}
-			this.discussModeEnabled = false;
-			this.#discussModePreviousTools = undefined;
-			this.#updateDiscussModeStatus();
-		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
 			try {
@@ -3078,6 +3076,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#vibeScopeSuspendedForSwitch = false;
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const vibeSession = this.#vibeParentSession();
+		this.#updatePrimaryAgentStatus();
 		const targetVibeScope = VibeSessionRegistry.global().ownerScope(vibeSession);
 		const preserveVibe =
 			this.vibeModeEnabled &&
@@ -3095,14 +3094,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
 		await this.#clearTransientModeState({ preserveVibe, vibeScopeAlreadySuspended });
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
-		if (sessionContext.mode === "discuss") {
-			await this.#enterDiscussMode({
-				persistModeChange: false,
-				previousTools:
-					readPersistedToolNames(sessionContext.modeData?.previousTools) ?? this.session.getEnabledToolNames(),
-			});
-			return;
-		}
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
 			this.session.goalRuntime.clearAccounting();
@@ -3165,83 +3156,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async #enterDiscussMode(options?: { persistModeChange?: boolean; previousTools?: string[] }): Promise<void> {
-		if (this.discussModeEnabled) return;
-		if (this.planModeEnabled || this.planModePaused) {
-			this.showWarning("Exit plan mode first with /plan.");
-			return;
-		}
-		if (this.goalModeEnabled || this.goalModePaused) {
-			this.showWarning("Exit goal mode first.");
-			return;
-		}
-		if (this.vibeModeEnabled) {
-			this.showWarning("Exit vibe mode first.");
-			return;
-		}
-
-		const previousTools = options?.previousTools ?? this.session.getEnabledToolNames();
-		const previousMountedTools = this.session.getMountedXdevToolNames();
-		const previousState = this.session.getDiscussModeState();
-		const apply = async (): Promise<void> => {
-			this.session.setDiscussModeState({ enabled: true });
-			try {
-				await this.session.setActiveToolsByName(filterDiscussToolNames(previousTools));
-			} catch (error) {
-				this.session.setDiscussModeState(previousState);
-				try {
-					await this.session.setActiveToolPresentation(previousTools, previousMountedTools);
-				} catch (rollbackError) {
-					logger.warn("Failed to restore tools after discuss mode entry failure", {
-						error: String(rollbackError),
-					});
-				}
-				throw error;
-			}
-		};
-		if (this.session.isStreaming) {
-			await this.session.runModeExitTeardown(async () => {
-				await this.session.abort({ reason: USER_INTERRUPT_LABEL });
-				await apply();
-			});
-		} else {
-			await apply();
-		}
-
-		this.#discussModePreviousTools = previousTools;
-		this.discussModeEnabled = true;
-		this.lastAssistantUsage = undefined;
-		this.#updateDiscussModeStatus();
-		if (options?.persistModeChange !== false) {
-			this.sessionManager.appendModeChange("discuss", { previousTools });
-		}
-		this.showStatus("Discuss mode enabled. Write and execution tools are disabled.");
-	}
-
-	async #exitDiscussMode(): Promise<void> {
-		if (!this.discussModeEnabled) return;
-		const discussState = this.session.getDiscussModeState();
-		const discussTools = this.session.getEnabledToolNames();
-		const discussMountedTools = this.session.getMountedXdevToolNames();
-		this.session.setDiscussModeState(undefined);
-		try {
-			await this.session.setActiveToolsByName(this.#discussModePreviousTools ?? []);
-		} catch (error) {
-			this.session.setDiscussModeState(discussState ?? { enabled: true });
-			try {
-				await this.session.setActiveToolPresentation(discussTools, discussMountedTools);
-			} catch (rollbackError) {
-				logger.warn("Failed to restore discuss tools after exit failure", { error: String(rollbackError) });
-			}
-			throw error;
-		}
-		this.discussModeEnabled = false;
-		this.#discussModePreviousTools = undefined;
-		this.lastAssistantUsage = undefined;
-		this.#updateDiscussModeStatus();
-		this.sessionManager.appendModeChange("none");
-		this.showStatus("Discuss mode disabled. Previous tools restored.");
-	}
 	async #enterPlanMode(options?: {
 		planFilePath?: string;
 		workflow?: "parallel" | "iterative";
@@ -3250,8 +3164,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.planModeEnabled) {
 			return;
 		}
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering plan.");
 			return;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -3457,8 +3371,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.goalModeEnabled) {
 			return;
 		}
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering vibe.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4005,38 +3919,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async handleDiscussModeCommand(args?: string): Promise<boolean> {
-		const action = args?.trim().toLowerCase() || "on";
-		if (action === "status") {
-			this.showStatus(`Discuss mode is ${this.discussModeEnabled ? "enabled" : "disabled"}.`);
-			return false;
-		}
-		if (action === "off") {
-			if (this.discussModeEnabled) {
-				await this.#exitDiscussMode();
-			} else {
-				this.showStatus("Discuss mode is disabled.");
-			}
-			return false;
-		}
-		if (action !== "on") {
-			this.showWarning("Usage: /discuss [on|off|status]");
-			return false;
-		}
-		if (this.discussModeEnabled) {
-			this.showStatus("Discuss mode is enabled.");
-			return false;
-		}
-		await this.#enterDiscussMode();
-		return false;
-	}
-
 	async handlePlanModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering plan.");
 			return false;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -4112,8 +4000,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering vibe.");
 			return false;
 		}
 		if (this.vibeModeEnabled) {
@@ -4157,8 +4045,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.vibeModeEnabled) {
 			return;
 		}
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering goal.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4257,8 +4145,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering goal.");
 			return false;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4303,8 +4191,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.discussModeEnabled) {
-			this.showWarning("Exit discuss mode first with /discuss off.");
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Tab before entering the workflow.");
 			return false;
 		}
 		try {
