@@ -41,6 +41,7 @@ async function createHarness(): Promise<Harness> {
 		state: { model: undefined },
 		model: undefined,
 		thinkingLevel: undefined,
+		getPrimaryAgentId: () => "main" as const,
 		get isStreaming() {
 			return streaming;
 		},

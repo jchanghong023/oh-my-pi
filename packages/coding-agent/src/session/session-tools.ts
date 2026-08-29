@@ -409,7 +409,8 @@ export class SessionTools {
 	}
 
 	#getActiveNonMCPToolNames(): string[] {
-		return this.getBaseActiveToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
+		const requestedNames = [...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])];
+		return normalizeToolNames(requestedNames).filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/** Names of tools currently exposed at the top level. */

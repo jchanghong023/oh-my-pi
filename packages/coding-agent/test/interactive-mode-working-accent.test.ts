@@ -59,6 +59,7 @@ async function createHarness(sessionName: string): Promise<Harness> {
 		state: { model: undefined },
 		model: undefined,
 		thinkingLevel: undefined,
+		getPrimaryAgentId: () => "main" as const,
 	} as unknown as AgentSession;
 	const mode = new InteractiveMode(session, "test");
 	harness = { mode, sessionManager, tempDir };

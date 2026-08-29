@@ -24,7 +24,7 @@
 
 - **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；状态栏 env metadata 按 `$pickenv` 优先级回显真实 envVar（`COMMAND_CODE_API_KEY` 优先，缺省回退 legacy `COMMANDCODE_API_KEY`）。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 与旧 `opencode` 中 catalog bundled 且 input/output 价格都为零的模型，gateway 新 ID 在 catalog 更新前按“价格未知”隐藏，主列表与 locked preview 共用同一过滤。
-- **主代理切换**：TUI 在自动补全未接管且主会话空闲时，以 `Tab` 在同一会话的默认主代理与讨论主代理间切换；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派。
+- **主代理切换**：TUI 在自动补全未接管且主会话空闲时，以 `Tab` 在同一会话的默认主代理与讨论主代理间切换；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
 - **子代理满载并发**：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令。
 - **JCH 个人命令**：新增 `/jchfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitforcesync` 6 个可携带任务文本的斜杠命令（`/jchgitpush`、`/jchgitcommit` 已移除），实现见 `packages/coding-agent/src/jch-commands/`：
