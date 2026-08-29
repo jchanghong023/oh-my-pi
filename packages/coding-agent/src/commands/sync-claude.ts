@@ -62,7 +62,7 @@ async function readClaudeAnthropicValues(): Promise<ClaudeAnthropicValues> {
 		throw new Error(`Claude Code settings env.ANTHROPIC_AUTH_TOKEN is missing or empty: ${settingsPath}`);
 	}
 
-	return { baseUrl: baseUrl.trim(), apiKey };
+	return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
 }
 
 function providerUsesAnthropicMessages(provider: NonNullable<ModelsConfig["providers"]>[string]): boolean {

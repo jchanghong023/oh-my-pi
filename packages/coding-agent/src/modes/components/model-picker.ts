@@ -112,7 +112,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentSelector = options.currentSelector;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#taskSelector = options.taskSelector;
-		this.#taskModeKeyLabel = options.taskModeKeyLabel ?? "alt+p";
+		this.#taskModeKeyLabel = options.taskModeKeyLabel ?? "ctrl+t";
 		if (callbacks.onPickTask) {
 			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
 		}

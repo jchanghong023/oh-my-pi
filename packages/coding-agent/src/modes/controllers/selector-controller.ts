@@ -860,7 +860,7 @@ export class SelectorController {
 				currentContextTokens,
 				currentSelector,
 				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
-				taskModeKeyLabel: this.ctx.keybindings.getDisplayString("app.model.selectTemporary") || "alt+p",
+				taskModeKeyLabel: this.ctx.keybindings.getDisplayString("app.model.selectTemporary") || "ctrl+t",
 				taskSelector,
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
