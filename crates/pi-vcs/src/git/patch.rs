@@ -1304,7 +1304,8 @@ fn untracked_worktree_map(
 	gix_repo: &gix::Repository,
 	index: &BTreeMap<String, FileEntry>,
 ) -> Result<BTreeMap<String, FileEntry>> {
-	let mut walk_index = super::read::open_index_fresh(gix_repo, "git read index for untracked files")?;
+	let mut walk_index =
+		super::read::open_index_fresh(gix_repo, "git read index for untracked files")?;
 	for entry in walk_index.entries_mut() {
 		entry.flags.insert(Flags::UPTODATE);
 	}
