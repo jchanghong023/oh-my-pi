@@ -2774,12 +2774,12 @@ mod tests {
 		let _cleanup = PidfileProcessCleanup(vec![first_pidfile.clone(), second_pidfile.clone()]);
 		let first_ready = dir.path().join("first.ready");
 		let second_ready = dir.path().join("second.ready");
-		let first_script = "trap 'exit 42' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while \
-		                    :; do sleep 0.05; done";
-		let second_script = "trap 'exit 43' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; \
-		                     while :; do sleep 0.05; done";
+		let first_script =
+			"trap 'exit 42' TERM; echo $$ > \"$1\"; : > \"$2\"; while :; do sleep 0.05; done";
+		let second_script =
+			"trap 'exit 43' TERM; echo $$ > \"$1\"; : > \"$2\"; while :; do sleep 0.05; done";
 		let command = format!(
-			"sh -c {} sh {} {} | sh -c {} sh {} {}",
+			"sh -c {} sh {} {} | sh -c {} sh {} {} &",
 			quote_arg(first_script),
 			quote_arg(first_pidfile.to_str().expect("utf8 first pidfile")),
 			quote_arg(first_ready.to_str().expect("utf8 first ready path")),
@@ -2790,13 +2790,11 @@ mod tests {
 		let (mut session, params) = kill_test_context().await;
 		let source_info = SourceInfo::from("pi-natives:test");
 
-		time::timeout(
-			Duration::from_secs(15),
-			session.shell.run_string(command, &source_info, &params),
-		)
-		.await
-		.expect("pipeline did not stop")
-		.expect("stopped pipeline");
+		session
+			.shell
+			.run_string(command, &source_info, &params)
+			.await
+			.expect("background pipeline");
 		time::timeout(Duration::from_secs(15), async {
 			while !first_ready.exists() || !second_ready.exists() {
 				time::sleep(Duration::from_millis(10)).await;
@@ -2809,7 +2807,7 @@ mod tests {
 				.shell
 				.jobs()
 				.current_job()
-				.expect("stopped pipeline job")
+				.expect("background pipeline job")
 				.process_ids()
 				.count(),
 			2,
@@ -2825,7 +2823,7 @@ mod tests {
 
 		let killed = session
 			.shell
-			.run_string("kill -CONT %1; kill %1", &source_info, &params)
+			.run_string("kill %1", &source_info, &params)
 			.await
 			.expect("kill jobspec");
 		assert_eq!(exit_code(&killed), 0, "`kill %1` should signal every pipeline process");
