@@ -957,7 +957,7 @@ fn checkout_tree(
 	let mut target = repo
 		.index_from_tree(&tree)
 		.map_err(|e| Error::backend("git checkout", e))?;
-	let current = super::read::open_index_fresh(&repo, "git checkout")?;
+	let current = super::read::open_index_fresh(repo, "git checkout")?;
 	let conflicts = checkout_conflicts(owner.root(), repo, &current, &target)?;
 	if !overwrite && !conflicts.is_empty() {
 		return Err(Error::Conflict { paths: conflicts });
