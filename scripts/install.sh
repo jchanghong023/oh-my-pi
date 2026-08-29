@@ -6,7 +6,7 @@ set -e
 #
 # Options:
 #   --source       Install via bun (installs bun if needed)
-#   --binary       Always install prebuilt binary
+#   --binary       Install prebuilt binary
 #   --ref <ref>    Install specific tag/commit/branch
 #   -r <ref>       Shorthand for --ref
 
@@ -125,6 +125,17 @@ version_ge() {
     fi
 
     [ "$current_patch" -ge "$minimum_patch" ]
+}
+
+# True when the binary at the install target already matches a release tag.
+# `omp --version` starts with `omp/<version>` and release tags start with `v`.
+installed_binary_matches() {
+    target="${INSTALL_DIR}/omp"
+    [ -x "$target" ] || return 1
+    installed_output=$("$target" --version 2>/dev/null) || return 1
+    installed_version=${installed_output#omp/}
+    installed_version=${installed_version%% *}
+    [ "$installed_version" = "${1#v}" ]
 }
 
 require_bun_version() {
@@ -311,6 +322,11 @@ install_binary() {
         exit 1
     fi
     echo "Using version: $LATEST"
+
+    if installed_binary_matches "$LATEST"; then
+        echo "omp $LATEST is already installed at ${INSTALL_DIR}/omp"
+        return
+    fi
 
     # Fresh installs may not have the target directory yet; create it before
     # writing the temporary download or the final binary.

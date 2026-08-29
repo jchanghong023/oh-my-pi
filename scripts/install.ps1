@@ -249,6 +249,29 @@ function Stop-RunningOmp {
     }
 }
 
+# True when the binary at the install target already matches a release tag.
+# `omp --version` starts with `omp/<version>` and release tags start with `v`.
+function Test-InstalledBinaryVersion {
+    param(
+        [string]$TargetPath,
+        [string]$ReleaseTag
+    )
+
+    if (-not (Test-Path -PathType Leaf $TargetPath)) {
+        return $false
+    }
+
+    try {
+        $versionText = (& $TargetPath --version 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
+            return $false
+        }
+        return $Matches[1] -eq ($ReleaseTag -replace '^v', '')
+    } catch {
+        return $false
+    }
+}
+
 function Install-Binary {
     if ($Ref) {
         Write-Host "Fetching release $Ref..."
@@ -268,6 +291,12 @@ function Install-Binary {
     }
     Write-Host "Using version: $Latest"
 
+    $OutPath = Join-Path $InstallDir "omp.exe"
+    if (Test-InstalledBinaryVersion -TargetPath $OutPath -ReleaseTag $Latest) {
+        Write-Host "omp $Latest is already installed at $OutPath"
+        return
+    }
+
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
     # Windows locks a running executable, so omp.exe cannot be overwritten
@@ -278,7 +307,6 @@ function Install-Binary {
     # Invoke-WebRequest when curl is unavailable or fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
-    $OutPath = Join-Path $InstallDir "omp.exe"
     $TmpPath = "$OutPath.tmp"
     $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
     $curlExit = $null
