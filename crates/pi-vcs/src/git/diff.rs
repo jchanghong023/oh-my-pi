@@ -310,13 +310,7 @@ fn index_changes(
 	tree_id: gix::ObjectId,
 	files: &[String],
 ) -> Result<Vec<FileChange>> {
-	let index = if repo.index_path().is_file() {
-		repo
-			.open_index()
-			.map_err(|err| Error::backend("git diff --cached", err))?
-	} else {
-		gix::index::File::from_state(gix::index::State::new(repo.object_hash()), repo.index_path())
-	};
+	let index = super::read::open_index_or_empty_fresh(repo, "git diff --cached")?;
 	let mut pathspec = make_pathspec(repo, files, false)?;
 	let mut out = Vec::new();
 	repo
@@ -436,9 +430,11 @@ fn index_change(repo: &gix::Repository, change: gix::diff::index::Change) -> Res
 
 fn worktree_changes(repo: &gix::Repository, files: &[String]) -> Result<Vec<FileChange>> {
 	let patterns = bstring_patterns(files);
+	let index = super::read::open_index_or_empty_fresh(repo, "git diff")?;
 	let mut iter = repo
 		.status(gix::progress::Discard)
 		.map_err(|err| Error::backend("git diff", err))?
+		.index(index.into())
 		.untracked_files(gix::status::UntrackedFiles::None)
 		.index_worktree_options_mut(|options| options.dirwalk_options = None)
 		.into_index_worktree_iter(patterns)
