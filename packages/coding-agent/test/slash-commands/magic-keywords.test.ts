@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
+import {
+	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
+	lookupBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"];
@@ -33,5 +37,17 @@ describe("magic keyword slash commands", () => {
 		expect(bareResult).toEqual({ prompt: keyword });
 		expect(whitespaceResult).toEqual({ prompt: keyword });
 		expect(taskResult).toEqual({ prompt: `${keyword} 完成这个任务` });
+	});
+	it.each(MAGIC_KEYWORDS)("registers /%s in the builtin registry without shadowing", keyword => {
+		// The keyword must be reachable through the builtin registry lookup and
+		// resolve to its own magic keyword spec — a collision with another
+		// command's name or alias would silently overwrite the lookup entry.
+		const resolved = lookupBuiltinSlashCommand(keyword);
+		expect(resolved).toMatchObject({
+			name: keyword,
+			allowArgs: true,
+			inlineHint: "[task]",
+		});
+		expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has(keyword)).toBe(true);
 	});
 });
