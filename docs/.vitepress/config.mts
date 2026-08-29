@@ -142,7 +142,7 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
 export default defineConfig({
   title: 'Oh My Pi',
   description: 'Oh My Pi documentation',
-  base: '/oh-my-pi/',
+  base: '/oh-my-pi/en/',
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: true,
