@@ -856,6 +856,14 @@ describe("update-cli release binary integrity", () => {
 			),
 		).toThrow("has an unexpected download URL");
 	});
+	it("rejects a malformed percent-encoded download URL with the descriptive error", () => {
+		// A trailing `%` is not a valid URI escape, so decodeURIComponent would
+		// throw URIError; the guard must surface the descriptive error instead.
+		const malformedUrl = `${url}%`;
+		expect(() =>
+			resolveReleaseBinaryAsset(releaseAsset({ browser_download_url: malformedUrl }), tag, binaryName),
+		).toThrow("has an unexpected download URL");
+	});
 
 	it("installs a prerelease asset only when a canary update permits it", () => {
 		// Canary GitHub releases are marked prerelease; a canary update passes

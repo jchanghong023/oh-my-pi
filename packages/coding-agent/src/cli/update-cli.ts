@@ -243,10 +243,17 @@ export function resolveReleaseBinaryAsset(
 	// GitHub percent-encodes tag characters in browser_download_url (e.g. `+`
 	// as `%2B`); this fork's `+fork.N` build metadata lands in release tags,
 	// so compare percent-decoded and accept either spelling of the same URL.
-	if (
-		typeof asset.browser_download_url !== "string" ||
-		decodeURIComponent(asset.browser_download_url) !== decodeURIComponent(expectedUrl)
-	) {
+	// A malformed `%` sequence decodes to the raw URL so the comparison below
+	// fails with the descriptive error instead of a URIError.
+	let decodedAssetUrl: string | undefined;
+	if (typeof asset.browser_download_url === "string") {
+		try {
+			decodedAssetUrl = decodeURIComponent(asset.browser_download_url);
+		} catch {
+			decodedAssetUrl = asset.browser_download_url;
+		}
+	}
+	if (decodedAssetUrl === undefined || decodedAssetUrl !== decodeURIComponent(expectedUrl)) {
 		throw new Error(`GitHub release asset ${binaryName} has an unexpected download URL`);
 	}
 
