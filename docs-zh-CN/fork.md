@@ -39,7 +39,7 @@
 
 ### 默认行为
 
-- **默认设置**：`recap.enabled=false`、`composer.shape=pi`（状态栏独立置于输入框下方并按需自动换行）、深色主题 `dark-terminal`、`display.showTurnTime=true`、`task.maxConcurrency=8`（上游默认 `32`）。
+- **默认设置**：`recap.enabled=false`、`statusLine.compactThinkingLevel=false`、`composer.shape=pi`（状态栏独立置于输入框下方并按需自动换行）、深色主题 `dark-terminal`、`display.showTurnTime=true`、`task.maxConcurrency=8`（上游默认 `32`）。
 - **本地化/终端默认**：`statusLine.separator=slash`（上游 `powerline-thin`，默认字体无需 Nerd Font）、`mnemopi.embeddingVariant=multilingual`（上游 `en`，中文记忆召回）、`stt.language=zh-CN`（上游 `en`，中文语音转写）。
 - **文件日志关闭**：集中日志器默认不启用文件 transport，不创建日志目录、日志文件或空文件；显式调用 `setTransports` 的服务与测试不受影响。
 - **快捷键**：`Shift+Tab` 切换计划模式、`Ctrl+T` 选择临时模型、`Alt+P` 显示或隐藏 thinking blocks，并保留对应扩展快捷键冲突检查。

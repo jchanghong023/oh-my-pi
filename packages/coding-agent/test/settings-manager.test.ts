@@ -576,6 +576,7 @@ describe("Settings", () => {
 			expect(isolated.get("setupVersion")).toBe(0);
 			expect(isolated.get("shellPath")).toBe("");
 			expect(isolated.get("enabledModels")).toEqual([]);
+			expect(isolated.get("statusLine.compactThinkingLevel")).toBe(false);
 		});
 
 		it("invalidates cached resolved values after set, override, and clearOverride", () => {
