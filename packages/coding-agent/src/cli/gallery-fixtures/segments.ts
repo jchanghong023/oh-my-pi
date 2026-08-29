@@ -41,6 +41,7 @@ function baseContext(sessionOptions?: GallerySessionOptions): SegmentContext {
 		},
 		compactThinkingLevel: false,
 		planMode: { enabled: true, paused: false },
+		primaryAgent: "main",
 		prewalk: null,
 		loopMode: null,
 		goalMode: null,

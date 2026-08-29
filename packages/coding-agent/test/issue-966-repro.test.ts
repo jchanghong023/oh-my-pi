@@ -94,6 +94,5 @@ try {
 			const stderr = result.stderr.toString();
 			throw new Error(`issue-966 repro child exited ${result.exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 		}
-		expect(result.exitCode).toBe(0);
 	});
 });

@@ -345,7 +345,7 @@ jobs:
          - name: Test coding-agent native/unit bucket
            env:
               OMP_TEST_CONCURRENCY: "4"
-           run: bun run ci:test:coding-agent:native
+           run: xvfb-run -a bun run ci:test:coding-agent:native
 
    test_smoke:
       name: Test CLI smoke (TS)
