@@ -194,4 +194,50 @@ describe("InteractiveMode discuss mode lifecycle", () => {
 		const sourceContent = await Bun.file(sourceSessionFile).text();
 		expect(sourceContent).toContain('"type":"mode_change"');
 	});
+
+	it("keeps discuss mode consistently on when tool restore fails during a session switch", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handleDiscussModeCommand("on");
+		expect(mode.discussModeEnabled).toBe(true);
+		expect(session.getDiscussModeState()).toEqual({ enabled: true });
+
+		await session.sessionManager.ensureOnDisk();
+		const sourceSessionFile = session.sessionFile;
+		if (!sourceSessionFile) throw new Error("Expected persisted source session file");
+		const targetSessionFile = SessionManager.createEmptySessionFile(tempDir.path());
+		expect(targetSessionFile).not.toBe(sourceSessionFile);
+
+		// Fail exactly the discuss teardown's restore call, which targets the full
+		// pre-discuss toolset; delegate every other call to the real method so the
+		// remainder of the switch runs untouched.
+		const originalSetActiveToolsByName = session.setActiveToolsByName.bind(session);
+		const setActiveToolsByNameSpy = vi.spyOn(session, "setActiveToolsByName").mockImplementation(async toolNames => {
+			if (toolNames.length === TOOL_NAMES.length && toolNames.every((name, i) => name === TOOL_NAMES[i])) {
+				throw new Error("restore failed");
+			}
+			return originalSetActiveToolsByName(toolNames);
+		});
+
+		// The switch reconciler catches the rethrown restore error and logs a
+		// warning, so the switch still commits — but the contract forbids a silent
+		// half-exit: the flag must stay on and the discuss state/tool filter must
+		// remain consistent so a later exit can still recover.
+		const switched = await session.switchSession(targetSessionFile);
+		expect(switched).toBe(true);
+
+		expect(setActiveToolsByNameSpy).toHaveBeenCalledWith(TOOL_NAMES);
+		// Rolled back, not cleared: the mode stays enabled…
+		expect(mode.discussModeEnabled).toBe(true);
+		expect(session.getDiscussModeState()).toEqual({ enabled: true });
+		// …and the active toolset is still the read-only discuss filter — never the
+		// "flag off, write tools still filtered" limbo.
+		expect(session.getActiveToolNames()).not.toContain("write");
+
+		// The previous-tools snapshot survived the failed restore, so a later
+		// /discuss off still restores the full toolset cleanly.
+		setActiveToolsByNameSpy.mockRestore();
+		await mode.handleDiscussModeCommand("off");
+		expect(mode.discussModeEnabled).toBe(false);
+		expect(session.getActiveToolNames()).toEqual(TOOL_NAMES);
+	});
 });

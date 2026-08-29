@@ -2996,15 +2996,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		vibeScopeAlreadySuspended?: boolean;
 	}): Promise<void> {
 		if (this.discussModeEnabled) {
+			const discussState = this.session.getDiscussModeState();
+			const discussTools = this.session.getEnabledToolNames();
+			const discussMountedTools = this.session.getMountedXdevToolNames();
 			const discussPreviousTools = this.#discussModePreviousTools;
 			this.session.setDiscussModeState(undefined);
 			try {
 				await this.session.setActiveToolsByName(discussPreviousTools ?? []);
-			} finally {
-				this.discussModeEnabled = false;
-				this.#discussModePreviousTools = undefined;
-				this.#updateDiscussModeStatus();
+			} catch (error) {
+				this.session.setDiscussModeState(discussState ?? { enabled: true });
+				try {
+					await this.session.setActiveToolPresentation(discussTools, discussMountedTools);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore discuss tools after switch failure", {
+						error: String(rollbackError),
+					});
+				}
+				throw error;
 			}
+			this.discussModeEnabled = false;
+			this.#discussModePreviousTools = undefined;
+			this.#updateDiscussModeStatus();
 		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
