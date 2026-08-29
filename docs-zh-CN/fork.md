@@ -27,15 +27,13 @@
 - **讨论模式**：新增 `/discuss on|off|status`；启用时只允许调查和讨论，移除写工具、执行、todo 与实现行为；session 切换到目标 transcript 时恢复源 session 的工具快照（包括合法空数组），失败需抛错，禁止留下“模式已关闭、工具仍被过滤”的静默状态。
   - 子代理满载并发：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令。
-- **JCH 个人命令**：新增 `/jchfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitpush`、`/jchgitforcesync`、`/jchgitcommit` 8 个可携带任务文本的斜杠命令，实现见 `packages/coding-agent/src/jch-commands/`：
-  - `/jchfix`：复现或确认现象后读取真实实现与调用方定位根因，做最小修复并迁移受影响调用方、按可观察契约验证；用于把问题一次修好，不压制症状、不 commit/push。
-  - `/jchfixactions`：定位最近一次失败的 GitHub Actions workflow run 并读取失败日志定位根因，修复后按仓库约定提交、普通 push，再用 `gh` 触发同一 workflow 验证；用于闭环修复 CI。
-  - `/jchcatchup`：严格只读梳理仓库、分支、冲突、工作区 diff 与最近 commits，还原当前改造的进度与风险，输出“已完成 / 当前状态 / 未完成与异常 / 建议下一步”；用于接续工作时快速恢复现场。
-  - `/jchgs`：严格只读地运行 git status、git remote -v 等并梳理分支、upstream、ahead/behind、工作区改动与远端配置，指出异常与最小安全的下一步；用于快速了解当前目录及其仓库的状态。
-  - `/jchgitpull`：先核对当前分支、upstream 与工作区状态再按仓库配置拉取，保留本地修改、不 reset/clean/stash，拉取不安全时说明阻塞；用于安全更新当前分支。
-  - `/jchgitpush`：先核对 upstream 与相对远端的 ahead/behind，默认普通 push、不推无关分支或 tags，仅参数明确要求时才用 `--force-with-lease`；用于安全推送当前分支。
-  - `/jchgitforcesync`：命令本身即授权丢弃本地改动——fetch 后把当前分支 reset 到远端 tip 并清理 untracked 文件，默认不删 ignored、不 force-push；用于彻底对齐远端最新状态。
-  - `/jchgitcommit`：按仓库提交约定只提交目标相关文件，必要时拆分明显无关的修改，不 push；用于生成干净、聚焦的 commit。
+- **JCH 个人命令**：新增 `/jchfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitforcesync` 6 个可携带任务文本的斜杠命令（`/jchgitpush`、`/jchgitcommit` 已移除），实现见 `packages/coding-agent/src/jch-commands/`：
+  - `/jchfix`：复现或确认现象后读取真实实现与调用链定位根因，只做最小修复、仅更新实际受影响的调用方与跨文件契约，测试按可观察行为更新，配置本身是根因时才允许修改；环境无法验证时报告阻塞、不提交。
+  - `/jchfixactions`：先 `git fetch --all`，从当前分支 upstream remote URL 解析目标 GitHub 仓库，定位该仓库与当前分支相关的最新有效失败 run（failure/timed_out/startup_failure）并读 job/step/log 定位真实根因，按 event 判定 head SHA，只提交本次 CI 修复并普通 push，优先用 push 自然产生的新 run 验证，最多 3 轮修复；用于闭环修复 CI。
+  - `/jchcatchup`：先 `git fetch --all`，再只读梳理仓库、分支、upstream、conflicts、staged/unstaged/untracked 与 diff、ahead/behind、local-only 与 remote-only commits，按修改路径或提交差异查看约 10–20 个相关 commits，输出“已完成 / 当前状态 / 未完成与异常 / 建议下一步”；用于接续工作时快速恢复现场。
+  - `/jchgs`：先 `git fetch --all` 更新远端引用，再梳理当前分支、upstream、remote、conflicts、staged/unstaged/untracked、ahead/behind、未推送提交与远端新增提交，指出异常与最小安全的下一步；用于快速了解当前目录及其仓库的状态。
+  - `/jchgitpull`：先 `git fetch --all`，再对当前分支按仓库已有 pull 配置执行普通 `git pull`，不自行决定 merge/rebase 策略、保留本地修改、失败时报告阻塞；用于更新当前分支。
+  - `/jchgitforcesync`：命令本身即授权丢弃当前分支全部本地内容（staged、unstaged、untracked、ignored 与 local-only commits）——fetch all 后 hard reset 到最新 upstream tip 并彻底 clean，无 upstream 时停止、不 force-push；用于彻底对齐远端最新状态。
 - **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 写入当前 profile 的 `models.yml`。
 - **移动端 TUI**：新增 `tui.mobile` 紧凑布局预设，默认关闭。
 
