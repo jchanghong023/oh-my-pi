@@ -55,6 +55,6 @@
 ### 开发维护
 
 - **本地快速检查**：新增 `bun run fastcheck`，从 `biome.json` 的 `files.includes` 编译正/排除 glob，只把实际交给 Biome 的文件标为 `checking`、其余标为 `skipping ... outside biome.json files.includes`；配置缺失或解析失败立即报错，零 included 时直接成功退出，禁止回退到“全部已检查”。
-- **CI 与回归稳定性**：`pi-shell` 的 jobspec pipeline 信号测试在同一次 shell 执行内完成后台启动、就绪握手、`%1` 信号与回收，避免依赖前台 STOP 通知及跨命令 job table 生命周期；状态栏 VCS 测试在 `git.enabled=false` 默认下显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化。
+- **CI 与回归稳定性**：Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化。
 - **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
 - **原生 VCS 索引一致性**：连续 stage/unstage/commit 时直接重读磁盘 index，避免文件系统时间戳粒度导致 gitoxide 复用旧快照；状态读取使用 fresh repository handle。

@@ -474,33 +474,39 @@ async fn classify_background_process_pipeline<SE: extensions::ShellExtensions>(
 		return Ok(BackgroundProcessPipeline::Internal);
 	}
 
-	let [ast::Command::Simple(simple_cmd)] = pipeline.seq.as_slice() else {
-		return Ok(BackgroundProcessPipeline::Internal);
-	};
-	let Some(command_word) = simple_cmd.word_or_name.as_ref() else {
-		return Ok(BackgroundProcessPipeline::Internal);
-	};
-
-	let expanded = expansion::full_expand_and_split_word(shell, params, command_word).await?;
-	let [command_name] = expanded.as_slice() else {
-		return Ok(BackgroundProcessPipeline::Internal);
-	};
-
-	if shell.aliases().contains_key(command_name) {
+	if pipeline.seq.is_empty() {
 		return Ok(BackgroundProcessPipeline::Internal);
 	}
-	if let Some(registration) = shell.builtins().get(command_name.as_str())
-		&& !registration.disabled
-	{
-		return if registration.transparent_background_wrapper {
-			Ok(unwrap_transparent_background_wrapper(pipeline)
-				.map_or(BackgroundProcessPipeline::Internal, BackgroundProcessPipeline::Wrapper))
-		} else {
-			Ok(BackgroundProcessPipeline::Internal)
+
+	for command in &pipeline.seq {
+		let ast::Command::Simple(simple_cmd) = command else {
+			return Ok(BackgroundProcessPipeline::Internal);
 		};
-	}
-	if shell.funcs().get(command_name.as_str()).is_some() {
-		return Ok(BackgroundProcessPipeline::Internal);
+		let Some(command_word) = simple_cmd.word_or_name.as_ref() else {
+			return Ok(BackgroundProcessPipeline::Internal);
+		};
+
+		let expanded = expansion::full_expand_and_split_word(shell, params, command_word).await?;
+		let [command_name] = expanded.as_slice() else {
+			return Ok(BackgroundProcessPipeline::Internal);
+		};
+
+		if shell.aliases().contains_key(command_name) {
+			return Ok(BackgroundProcessPipeline::Internal);
+		}
+		if let Some(registration) = shell.builtins().get(command_name.as_str())
+			&& !registration.disabled
+		{
+			return if pipeline.seq.len() == 1 && registration.transparent_background_wrapper {
+				Ok(unwrap_transparent_background_wrapper(pipeline)
+					.map_or(BackgroundProcessPipeline::Internal, BackgroundProcessPipeline::Wrapper))
+			} else {
+				Ok(BackgroundProcessPipeline::Internal)
+			};
+		}
+		if shell.funcs().get(command_name.as_str()).is_some() {
+			return Ok(BackgroundProcessPipeline::Internal);
+		}
 	}
 
 	Ok(BackgroundProcessPipeline::Direct)
