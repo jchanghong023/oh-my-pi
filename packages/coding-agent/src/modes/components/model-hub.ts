@@ -170,6 +170,7 @@ const BUNDLED_FREE_SELECTORS = (() => {
 
 function isVisibleModel(model: Model): boolean {
 	if (model.provider !== "opencode-zen" && model.provider !== "opencode") return true;
+	if (!model.cost) return false;
 	if (model.cost.input !== 0 || model.cost.output !== 0) return false;
 	return BUNDLED_FREE_SELECTORS.has(`${model.provider}/${model.id}`);
 }

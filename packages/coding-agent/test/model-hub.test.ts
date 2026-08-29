@@ -1079,6 +1079,22 @@ describe("ModelHub", () => {
 				expect(rendered).not.toContain("claude-opus-4-8");
 				expect(rendered).not.toContain("zen-fake-zero");
 			});
+
+			test("hides OpenCode Zen models with missing cost instead of throwing", () => {
+				const zenNoCost = { ...makeModel("opencode-zen", "zen-no-cost"), cost: undefined } as unknown as Model;
+				const zenFree = getBundledModel("opencode-zen", "big-pickle");
+				if (!zenFree) {
+					throw new Error("Expected bundled Zen fixture to be present");
+				}
+				const { hub } = createHub({ models: [zenNoCost, zenFree], scoped: true });
+				installTestTheme();
+
+				const rendered = normalize(hub.render(220));
+				// "Price unknown → hidden": a Zen model with no cost data is filtered out, not crashed on.
+				expect(rendered).not.toContain("opencode-zen/zen-no-cost");
+				// The known-free bundled model is untouched by the guard.
+				expect(rendered).toContain("opencode-zen/big-pickle");
+			});
 		});
 
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
