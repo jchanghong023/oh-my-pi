@@ -2779,40 +2779,28 @@ mod tests {
 		let second_script =
 			"trap 'exit 43' TERM; echo $$ > \"$1\"; : > \"$2\"; while :; do sleep 0.05; done";
 		let command = format!(
-			"sh -c {} sh {} {} | sh -c {} sh {} {} &",
+			"sh -c {} sh {} {} | sh -c {} sh {} {} & while ! test -e {} || ! test -e {}; do sleep \
+			 0.01; done; kill %1; kill_status=$?; wait %1; test \"$kill_status\" -eq 0",
 			quote_arg(first_script),
 			quote_arg(first_pidfile.to_str().expect("utf8 first pidfile")),
 			quote_arg(first_ready.to_str().expect("utf8 first ready path")),
 			quote_arg(second_script),
 			quote_arg(second_pidfile.to_str().expect("utf8 second pidfile")),
 			quote_arg(second_ready.to_str().expect("utf8 second ready path")),
+			quote_arg(first_ready.to_str().expect("utf8 first ready path")),
+			quote_arg(second_ready.to_str().expect("utf8 second ready path")),
 		);
 		let (mut session, params) = kill_test_context().await;
 		let source_info = SourceInfo::from("pi-natives:test");
 
-		session
-			.shell
-			.run_string(command, &source_info, &params)
-			.await
-			.expect("background pipeline");
-		time::timeout(Duration::from_secs(15), async {
-			while !first_ready.exists() || !second_ready.exists() {
-				time::sleep(Duration::from_millis(10)).await;
-			}
-		})
+		let killed = time::timeout(
+			Duration::from_secs(15),
+			session.shell.run_string(command, &source_info, &params),
+		)
 		.await
-		.expect("pipeline processes did not become ready");
-		assert_eq!(
-			session
-				.shell
-				.jobs()
-				.current_job()
-				.expect("background pipeline job")
-				.process_ids()
-				.count(),
-			2,
-			"jobspec must retain every external pipeline process",
-		);
+		.expect("pipeline lifecycle timed out")
+		.expect("pipeline command");
+		assert_eq!(exit_code(&killed), 0, "`kill %1` should signal every pipeline process");
 		let pids = [&first_pidfile, &second_pidfile].map(|pidfile| {
 			fs::read_to_string(pidfile)
 				.expect("pipeline pidfile")
@@ -2820,18 +2808,6 @@ mod tests {
 				.parse::<i32>()
 				.expect("pipeline pid")
 		});
-
-		let killed = session
-			.shell
-			.run_string("kill %1", &source_info, &params)
-			.await
-			.expect("kill jobspec");
-		assert_eq!(exit_code(&killed), 0, "`kill %1` should signal every pipeline process");
-		let _ = session
-			.shell
-			.run_string("wait %1", &source_info, &params)
-			.await
-			.expect("reap jobspec");
 		for pid in pids {
 			assert!(process::Process::from_pid(pid).is_none(), "pipeline process {pid} survived");
 		}

@@ -26,7 +26,7 @@ const originalProjectDir = getProjectDir();
 
 beforeAll(async () => {
 	resetSettingsForTest();
-	await Settings.init({ inMemory: true });
+	await Settings.init({ inMemory: true, overrides: { "git.enabled": true } });
 	await initTheme();
 });
 
