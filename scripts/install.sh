@@ -211,11 +211,28 @@ install_via_bun() {
 # just "omp" are found too.
 stop_running_omp() {
     PIDS=""
+    # Resolve the install target's real path so a symlinked $INSTALL_DIR (e.g.
+    # $HOME/.local) still matches the canonical /proc/<pid>/exe of a running
+    # omp. readlink -f is GNU-only (macOS/BSD lack -f), so fall back to a POSIX
+    # cd + pwd -P on the directory. On a fresh install the binary may not exist
+    # yet, in which case keep the literal path.
+    if [ -e "${INSTALL_DIR}/omp" ]; then
+        if INSTALL_OMP="$(readlink -f "${INSTALL_DIR}/omp" 2>/dev/null)"; then
+            :
+        elif [ -d "$INSTALL_DIR" ]; then
+            INSTALL_OMP="$(CDPATH= cd -- "$INSTALL_DIR" 2>/dev/null && pwd -P)/omp"
+        else
+            INSTALL_OMP="${INSTALL_DIR}/omp"
+        fi
+    else
+        INSTALL_OMP="${INSTALL_DIR}/omp"
+    fi
+
     if [ -d /proc ]; then
         for EXE in /proc/[0-9]*/exe; do
             [ -r "$EXE" ] || continue
-            EXE_PATH="$(readlink "$EXE" 2>/dev/null)" || continue
-            [ "$EXE_PATH" = "${INSTALL_DIR}/omp" ] || continue
+            EXE_PATH="$(readlink -f "$EXE" 2>/dev/null)" || EXE_PATH="$(readlink "$EXE" 2>/dev/null)" || continue
+            [ "$EXE_PATH" = "$INSTALL_OMP" ] || continue
             PID="${EXE#/proc/}"
             PIDS="$PIDS ${PID%/exe}"
         done
@@ -227,6 +244,13 @@ stop_running_omp() {
     echo "Stopping running omp..."
     # TERM first, escalate to KILL after a short grace period.
     kill $PIDS 2>/dev/null || true
+    # busybox built without FEATURE_FLOAT_SLEEP rejects fractional sleep under
+    # set -e, so probe once and fall back to a whole-second poll on such systems.
+    if sleep 0.1 2>/dev/null; then
+        SLEEP_INTERVAL="0.1"
+    else
+        SLEEP_INTERVAL="1"
+    fi
     i=0
     while [ "$i" -lt 100 ]; do
         REMAIN=""
@@ -237,7 +261,7 @@ stop_running_omp() {
         if [ "$i" -eq 30 ]; then
             kill -9 $REMAIN 2>/dev/null || true
         fi
-        sleep 0.1
+        sleep "$SLEEP_INTERVAL"
         i=$((i + 1))
     done
 }
@@ -288,6 +312,10 @@ install_binary() {
     fi
     echo "Using version: $LATEST"
 
+    # Fresh installs may not have the target directory yet; create it before
+    # writing the temporary download or the final binary.
+    mkdir -p "$INSTALL_DIR"
+
     # If a previous omp is still running, stop it before replacing the binary.
     # Download to a temp file first so a failed download keeps the old install
     # working; rename(2) then replaces the entry without touching any inode a
@@ -297,9 +325,20 @@ install_binary() {
     # Download binary. --progress-bar shows a live bar with speed on a TTY;
     # without -s, curl also prints the concrete failure reason (HTTP status or
     # network error) itself, which we augment with URL and target below.
+    #
+    # Prefer --fail-with-body (curl >= 7.76) so an HTTP error keeps the server's
+    # response body; --fail discards it. Fall back to --fail when the version
+    # cannot be probed.
+    CURL_VERSION="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
+    CURL_VERSION="${CURL_VERSION%%-*}"
+    if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.76.0"; then
+        CURL_FAIL_FLAG="--fail-with-body"
+    else
+        CURL_FAIL_FLAG="-f"
+    fi
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
-    if ! curl -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
+    if ! curl "$CURL_FAIL_FLAG" -L --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
         echo ""
         echo "✗ Download failed" >&2
         echo "  URL:    ${BINARY_URL}" >&2
