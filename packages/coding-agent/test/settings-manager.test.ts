@@ -613,7 +613,7 @@ describe("Settings", () => {
 			disabled.set("tui.mobile", true);
 			disabled.override("tui.mobile", false);
 			expect(disabled.get("tui.tight")).toBe(false);
-			expect(disabled.get("composer.shape")).toBe("band");
+			expect(disabled.get("composer.shape")).toBe("pi");
 		});
 
 		it("lets explicit user settings win over the mobile preset", () => {

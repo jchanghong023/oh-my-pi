@@ -106,7 +106,7 @@ export type ComposerShape = string;
 export const BUILTIN_COMPOSER_SHAPES = [
 	{
 		value: "band",
-		label: "Status Band (Default)",
+		label: "Status Band",
 		description: "Flush soft-capped status band above a curved prompt, no frame",
 	},
 	{
@@ -121,7 +121,7 @@ export const BUILTIN_COMPOSER_SHAPES = [
 	},
 	{
 		value: "pi",
-		label: "Pi",
+		label: "Pi (Default)",
 		description: "Framed horizontal rules with status line at bottom",
 	},
 	{
@@ -732,7 +732,7 @@ export const SETTINGS_SCHEMA = {
 	// Composer
 	"composer.shape": {
 		type: "string",
-		default: "band",
+		default: "pi",
 		ui: {
 			tab: "appearance",
 			group: "Composer",

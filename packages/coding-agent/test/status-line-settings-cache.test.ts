@@ -273,9 +273,8 @@ describe("StatusLineComponent effective settings cache", () => {
 describe("StatusLineComponent hook statuses", () => {
 	it("renders every keyed status on a deterministic line", () => {
 		const component = makeComponent({ showHookStatus: true });
-		// The fork's default composer shape is `band`, whose top row lives in
-		// the editor and never synthesizes a box overflow row — at a narrow
-		// width the render yields only the hook rows.
+		// Band's top row lives in the editor and never synthesizes a box
+		// overflow row, so a narrow render yields only the hook rows.
 		component.setComposerStyle(getComposerStyle("band"));
 		component.setHookStatus("project-time", "$0.04 (dev)");
 		component.setHookStatus("ponytail", "Ponytail");
