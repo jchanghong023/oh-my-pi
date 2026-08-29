@@ -14,7 +14,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
-const TOOL_NAMES = ["read", "write", "bash", "todo", "ask", "lsp", "mystery"];
+const TOOL_NAMES = ["read", "write", "bash", "todo", "ask", "task", "lsp", "mystery"];
 
 function stubTool(name: string): AgentTool {
 	return {
@@ -87,9 +87,11 @@ describe("InteractiveMode discuss mode lifecycle", () => {
 		expect(mode.discussModeEnabled).toBe(true);
 		expect(session.getActiveToolNames()).toEqual(filterDiscussToolNames(TOOL_NAMES));
 		expect(session.getActiveToolNames()).not.toContain("write");
+		expect(session.getActiveToolNames()).not.toContain("task");
 
-		await session.setActiveToolsByName(["write", "bash", "read", "ask", "mystery"]);
+		await session.setActiveToolsByName(["write", "bash", "read", "ask", "task", "mystery"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "ask"]);
+		expect(session.getActiveToolNames()).not.toContain("task");
 
 		await mode.handleDiscussModeCommand("on");
 		expect(mode.discussModeEnabled).toBe(true);
