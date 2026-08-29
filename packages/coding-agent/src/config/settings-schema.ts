@@ -767,7 +767,7 @@ export const SETTINGS_SCHEMA = {
 	"statusLine.separator": {
 		type: "enum",
 		values: ["powerline", "powerline-thin", "slash", "pipe", "block", "none", "ascii"] as const,
-		default: "powerline-thin",
+		default: "slash",
 		ui: {
 			tab: "appearance",
 			group: "Status Line",
@@ -2450,7 +2450,7 @@ export const SETTINGS_SCHEMA = {
 
 	"stt.language": {
 		type: "string",
-		default: "en",
+		default: "zh-CN",
 	},
 
 	"stt.modelName": {
@@ -3092,7 +3092,7 @@ export const SETTINGS_SCHEMA = {
 	"mnemopi.embeddingVariant": {
 		type: "enum",
 		values: ["en", "multilingual"] as const,
-		default: "en",
+		default: "multilingual",
 		ui: {
 			tab: "memory",
 			group: "Mnemopi",
