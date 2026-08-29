@@ -275,25 +275,30 @@ function Install-Binary {
     # failed download leaves the old install working), stop the running
     # instance, then move the new binary into place. Prefer the in-box
     # curl.exe (Windows 10 1803+) for a live progress bar; fall back to
-    # Invoke-WebRequest.
+    # Invoke-WebRequest when curl is unavailable or fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $OutPath = Join-Path $InstallDir "omp.exe"
     $TmpPath = "$OutPath.tmp"
     $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+    $curlExit = $null
     try {
         if ($curlExe) {
             & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath
-            if ($LASTEXITCODE -ne 0) {
+            $curlExit = $LASTEXITCODE
+            if ($curlExit -ne 0) {
                 Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
-                throw "Download failed: $BinaryUrl (curl exit $LASTEXITCODE)"
+                Write-Host "[WARN] curl download failed (exit $curlExit); retrying with Invoke-WebRequest..." -ForegroundColor Yellow
             }
-        } else {
+        }
+
+        if (-not $curlExe -or $curlExit -ne 0) {
             try {
                 Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpPath -TimeoutSec 900 -UseBasicParsing
             } catch {
                 Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
-                throw "Download failed: $BinaryUrl`n$($_.Exception.Message)"
+                $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
+                throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
         }
         Stop-RunningOmp -TargetPath $OutPath

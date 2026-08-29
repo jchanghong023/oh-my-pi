@@ -47,7 +47,7 @@
 ### 发布与文档
 
 - **更新 URL 校验**：`omp update` 校验 GitHub release asset URL 前先做 percent-decode 归一化，容忍 tag 中 `+` 被编码为 `%2B`（`v18.0.9+fork.N` 的 `browser_download_url` 必需）。
-- **安装/更新体验**：`install.sh` 与 `install.ps1` 在替换前先终止目标路径正在运行的旧 omp（Linux 按 `/proc/*/exe` 解析，Windows 按进程 Path 匹配）；下载到临时文件后原子替换（Linux 用 `mv`，Windows 用 `Move-Item`），避免 ETXTBSY/curl 23 与 exe 文件锁；安装与 `omp update` 下载显示进度条（百分比/速度/ETA），失败时输出 URL、HTTP 状态与服务器错误正文。
+- **安装/更新体验**：`install.sh` 与 `install.ps1` 在替换前先终止目标路径正在运行的旧 omp（Linux 按 `/proc/*/exe` 解析，Windows 按进程 Path 匹配）；下载到临时文件后原子替换（Linux 用 `mv`，Windows 用 `Move-Item`），避免 ETXTBSY/curl 23 与 exe 文件锁；Windows `curl.exe` 下载失败时自动回退 `Invoke-WebRequest`；安装与 `omp update` 下载显示进度条（百分比/速度/ETA），失败时输出 URL、HTTP 状态与服务器错误正文。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
 
 ### 开发维护
