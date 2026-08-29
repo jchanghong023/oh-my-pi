@@ -6,7 +6,7 @@ Shared utilities for [oh-my-pi](https://github.com/can1357/oh-my-pi) packages. Z
 
 | Module | Purpose |
 | --- | --- |
-| `logger` | Centralized logger writing to `~/.omp/logs/` with rotation (TUI-safe — never stdout) |
+| `logger` | Centralized structured logger; local transports are disabled by default and services may opt into console/file sinks |
 | `prompt` | Handlebars-based prompt templating and formatting helpers |
 | `dirs` | Path helpers for omp config directories (`~/.omp`, XDG-aware on Linux) |
 | `stream` | `readStream` / `readLines` helpers over `ReadableStream` |

@@ -103,7 +103,7 @@ switch (scenario) {
 		writeResult({ events });
 		break;
 	}
-	case "default-file":
+	case "default-disabled":
 		logger.info("mode-default", { mode: "default" });
 		disableTransports();
 		break;

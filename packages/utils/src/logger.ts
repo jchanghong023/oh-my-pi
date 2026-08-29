@@ -1,10 +1,9 @@
 /**
  * Centralized logger for omp.
  *
- * Default: rotating `~/.omp/logs/omp.<DATE>.<PID>.log`, no console output (writing
- * to stdout/stderr would corrupt the TUI). Long-running headless services
- * (the auth broker, etc.) call {@link setTransports} to swap in a console
- * transport so a process supervisor (pm2, journald, k8s) captures the logs.
+ * Default: no local file or console output. Long-running headless services
+ * (the auth broker, etc.) call {@link setTransports} to enable console output
+ * so a process supervisor (pm2, journald, k8s) captures the logs.
  *
  * Each entry includes `process.pid` so concurrent omp instances stay
  * traceable.
@@ -250,9 +249,9 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 
 /**
  * Desired transport configuration, applied when local logging is initialized.
- * Default: file ON (TUI-safe), console OFF.
+ * Default: file OFF, console OFF.
  */
-let transportOpts: { console?: boolean; file?: boolean | string } = { file: true };
+let transportOpts: { console?: boolean; file?: boolean | string } = { file: false };
 
 interface LocalTransports {
 	readonly file: RotatingFileSink | undefined;

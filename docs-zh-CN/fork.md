@@ -41,7 +41,7 @@
 
 - **默认设置**：`recap.enabled=false`、深色主题 `dark-terminal`、`display.showTurnTime=true`、`task.maxConcurrency=8`（上游默认 `32`）。
 - **本地化/终端默认**：`statusLine.separator=slash`（上游 `powerline-thin`，默认字体无需 Nerd Font）、`mnemopi.embeddingVariant=multilingual`（上游 `en`，中文记忆召回）、`stt.language=zh-CN`（上游 `en`，中文语音转写）。
-- **文件日志开关**：新增 `logging.file`（默认开启）；全局配置设为 `false` 时在启动日志 transport 初始化前关闭轮转文件输出，不创建日志目录、日志文件或空文件。
+- **文件日志关闭**：集中日志器默认不启用文件 transport，不创建日志目录、日志文件或空文件；显式调用 `setTransports` 的服务与测试不受影响。
 - **快捷键**：`Shift+Tab` 切换计划模式、`Ctrl+T` 选择临时模型、`Alt+P` 切换 thinking，并保留对应扩展快捷键冲突检查。
 - **状态栏**：默认显示 active time；空间不足时把溢出段保留到第二行，按 editor top-border content width 居中并以 `floor((width-statusWidth)/2)` 左 inset 独立拟合终端行宽；每个 part 前重新打开文本色，分隔符后也复位，无自带 ANSI 的段（如 `time_spent`）不继承终端默认或 `statusLineSep` 色。
 

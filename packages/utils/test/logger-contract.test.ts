@@ -174,13 +174,12 @@ describe("central logger byte contract", () => {
 });
 
 describe("central logger transport lifecycle", () => {
-	test("defaults to file-only without touching stdout or stderr", async () => {
-		const result = await runScenario("default-file");
+	test("defaults to no local transports without creating a logs directory", async () => {
+		const result = await runScenario("default-disabled");
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
 		const defaultLogsDir = path.join(result.primaryDir, ".omp", "logs");
-		const log = await readSingleLog(defaultLogsDir);
-		expect(log.text).toBe(expectedLine(result.pid, "info", "mode-default", { mode: "default" }));
+		await expect(fs.readdir(defaultLogsDir)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
 	test("emits file-only, console-only, and dual modes exactly once", async () => {

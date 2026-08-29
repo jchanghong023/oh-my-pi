@@ -232,13 +232,7 @@ Extensions are a strict superset of hooks. New authoring should use `ExtensionAP
 
 ## Debugging
 
-omp writes structured logs under the active state root's `logs/` directory (by default `~/.omp/logs/`; debug level is always on, and nothing is written to the console because that would corrupt the TUI). Each filename includes the process ID. Tail today's default-profile logs to see extension load diagnostics:
-
-```
-tail -f ~/.omp/logs/omp.$(date +%F).*.log
-```
-
-Failed extension loads are logged with their path and error. Loaded extensions may also emit their own debug logs via `pi.logger`.
+Local file and console transports are disabled by default. `pi.logger` still emits structured events to explicitly registered sinks, but ordinary interactive sessions do not create `~/.omp/logs/` files.
 
 To temporarily disable a specific extension module by name without removing the file:
 
