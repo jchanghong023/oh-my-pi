@@ -7,7 +7,10 @@ use std::{
 
 use gix::bstr::ByteSlice;
 
-use super::GitRepo;
+use super::{
+	GitRepo,
+	open::{load_index_or_empty, status_with_fresh_index},
+};
 use crate::{
 	error::{Error, Result},
 	types::{
@@ -185,9 +188,7 @@ impl GitRepo {
 				.map(|status| !status.is_empty());
 		}
 		let repo = self.gix_fresh()?;
-		let platform = repo
-			.status(gix::progress::Discard)
-			.map_err(|err| Error::backend("git status", err))?
+		let platform = status_with_fresh_index(&repo, "git status")?
 			.untracked_files(gix::status::UntrackedFiles::Collapsed);
 		let iter = platform
 			.into_iter(options.pathspecs.iter().map(|path| path.as_bytes().into()))
@@ -246,10 +247,7 @@ impl GitRepo {
 			UntrackedMode::Normal => gix::status::UntrackedFiles::Collapsed,
 			UntrackedMode::All => gix::status::UntrackedFiles::Files,
 		};
-		let platform = repo
-			.status(gix::progress::Discard)
-			.map_err(|err| Error::backend("git status", err))?
-			.untracked_files(untracked);
+		let platform = status_with_fresh_index(&repo, "git status")?.untracked_files(untracked);
 		let iter = platform
 			.into_iter(options.pathspecs.iter().map(|path| path.as_bytes().into()))
 			.map_err(|err| Error::backend("git status", err))?;
@@ -700,9 +698,7 @@ impl GitRepo {
 		}
 		if !others {
 			let repo = self.gix_fresh()?;
-			let index = repo
-				.index_or_empty()
-				.map_err(|err| Error::backend("git ls-files", err))?;
+			let index = load_index_or_empty(&repo, "git ls-files")?;
 			let mut out: Vec<_> = index
 				.entries()
 				.iter()
@@ -714,9 +710,7 @@ impl GitRepo {
 			return Ok(out);
 		}
 		let repo = self.gix_fresh()?;
-		let mut platform = repo
-			.status(gix::progress::Discard)
-			.map_err(|e| Error::backend("git ls-files", e))?
+		let mut platform = status_with_fresh_index(&repo, "git ls-files")?
 			.untracked_files(gix::status::UntrackedFiles::Files);
 		if !exclude_standard {
 			platform = platform.dirwalk_options(|opts| {
@@ -943,41 +937,6 @@ fn valid_ref_path(name: &str) -> bool {
 }
 fn bytes_to_path(value: &gix::bstr::BStr) -> String {
 	value.to_str_lossy().into_owned()
-}
-/// Open the worktree index straight from disk, bypassing the cached handle's
-/// mtime-validated snapshot (1s granularity misses same-second changes).
-///
-/// When the index file is absent — or vanishes between check and open (TOCTOU)
-/// — fall back to an in-memory index from `HEAD^{tree}`, or empty when HEAD is
-/// unborn, mirroring `index_or_load_from_head_or_empty` instead of erroring.
-pub(crate) fn open_index_fresh(
-	repo: &gix::Repository,
-	context: &'static str,
-) -> Result<gix::index::File> {
-	match repo.open_index() {
-		Ok(index) => Ok(index),
-		Err(_) if !repo.index_path().is_file() => repo
-			.index_or_load_from_head_or_empty()
-			.map_err(|err| Error::backend(context, err))
-			.map(|index| index.into_owned()),
-		Err(err) => Err(Error::backend(context, err)),
-	}
-}
-
-/// Like [`open_index_fresh`], but falls back to an empty index when the file is
-/// absent (the `index_or_empty` semantics) instead of building one from HEAD.
-pub(crate) fn open_index_or_empty_fresh(
-	repo: &gix::Repository,
-	context: &'static str,
-) -> Result<gix::index::File> {
-	match repo.open_index() {
-		Ok(index) => Ok(index),
-		Err(_) if !repo.index_path().is_file() => Ok(gix::index::File::from_state(
-			gix::index::State::new(repo.object_hash()),
-			repo.index_path(),
-		)),
-		Err(err) => Err(Error::backend(context, err)),
-	}
 }
 
 /// Whether any regular file (or symlink) exists beneath `dir`. git omits
