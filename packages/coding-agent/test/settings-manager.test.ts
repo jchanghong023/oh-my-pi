@@ -612,6 +612,22 @@ describe("Settings", () => {
 			expect(disabled.get("composer.shape")).toBe("band");
 		});
 
+		it("lets explicit user settings win over the mobile preset", () => {
+			// The mobile preset is a lowest-priority base: enabling mobile via
+			// persisted user config must not clobber explicit tui/composer settings.
+			const mobile = Settings.isolated();
+			mobile.set("tui.mobile", true);
+			expect(mobile.get("tui.tight")).toBe(true);
+			expect(mobile.get("composer.shape")).toBe("borderless");
+
+			const customized = Settings.isolated();
+			customized.set("tui.mobile", true);
+			customized.set("tui.tight", false);
+			customized.set("composer.shape", "box");
+			expect(customized.get("tui.tight")).toBe(false);
+			expect(customized.get("composer.shape")).toBe("box");
+		});
+
 		it("re-resolves path-scoped arrays when cwd changes", async () => {
 			const otherDir = path.join(tempDir.toString(), "other-project");
 			fs.mkdirSync(otherDir, { recursive: true });

@@ -2652,11 +2652,12 @@ export class Settings {
 
 		merged = this.#deepMerge(merged, this.#configOverlay);
 
-		const withRuntime = this.#deepMerge(merged, this.#overrides);
-		const mobile = getByPath(withRuntime, ["tui", "mobile"]) ?? getDefault("tui.mobile");
-
+		const mobile = getByPath(this.#deepMerge(merged, this.#overrides), ["tui", "mobile"]) ?? getDefault("tui.mobile");
 		if (mobile === true) {
-			merged = this.#deepMerge(merged, MOBILE_TUI_PRESET);
+			// MOBILE_TUI_PRESET is the lowest-priority base: explicit user config
+			// (global → project → overlay → overrides) always wins over the preset
+			// instead of the preset clobbering a user-set tui.tight/composer.shape.
+			merged = this.#deepMerge(MOBILE_TUI_PRESET, merged);
 		}
 
 		this.#merged = this.#deepMerge(merged, this.#overrides);
