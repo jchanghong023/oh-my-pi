@@ -262,8 +262,10 @@ function Test-InstalledBinaryVersion {
     }
 
     try {
-        $versionText = (& $TargetPath --version 2>$null | Select-Object -First 1)
-        if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
+        $versionOutput = & $TargetPath --version 2>$null
+        $exitCode = $LASTEXITCODE
+        $versionText = $versionOutput | Select-Object -First 1
+        if ($exitCode -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
             return $false
         }
         return $Matches[1] -eq ($ReleaseTag -replace '^v', '')
