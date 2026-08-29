@@ -587,7 +587,7 @@ export const SETTINGS_SCHEMA = {
 	shellPath: { type: "string", default: undefined },
 	"git.enabled": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "interaction",
 			group: "Git",

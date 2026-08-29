@@ -578,10 +578,6 @@ describe("Settings", () => {
 			expect(isolated.get("enabledModels")).toEqual([]);
 		});
 
-		it("disables Git integration by default", () => {
-			expect(Settings.isolated().get("git.enabled")).toBe(false);
-		});
-
 		it("invalidates cached resolved values after set, override, and clearOverride", () => {
 			const isolated = Settings.isolated();
 
