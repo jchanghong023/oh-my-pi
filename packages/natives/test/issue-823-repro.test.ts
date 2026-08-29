@@ -34,6 +34,7 @@ import {
 	type EmbeddedAddonFile,
 	extractEmbeddedAddonArchive,
 	getAddonFilenames,
+	initLoaderContext,
 	resolveLoaderCandidates,
 } from "../native/loader-state.js";
 
@@ -195,6 +196,20 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 		expect(candidates).toEqual(
 			addonFilenames.flatMap(filename => [path.join(nativeDir, filename), path.join(execDir, filename)]),
 		);
+	});
+
+	it("restricts explicit source-mode loads to the requested native directory", () => {
+		const nativeDir = "/home/u/.omp/natives/18.0.10";
+		const ctx = initLoaderContext({
+			exclusiveNativeDir: nativeDir,
+			isCompiledBinary: false,
+			platform: "linux",
+		});
+
+		expect(ctx.isExclusiveNativeLoad).toBe(true);
+		expect(ctx.isWorkspaceLoad).toBe(false);
+		expect(ctx.leafPackageDir).toBeNull();
+		expect(ctx.candidates).toEqual(ctx.addonFilenames.map(filename => path.join(nativeDir, filename)));
 	});
 
 	it("extracts all bundled native variants from one gzip archive and skips current files", async () => {

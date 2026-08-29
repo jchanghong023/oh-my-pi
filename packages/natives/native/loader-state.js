@@ -741,6 +741,14 @@ function installNativeTokioRuntime(bindings) {
 
 
 function buildHelpMessage(ctx) {
+	if (ctx.isExclusiveNativeLoad) {
+		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.nativeDir, filename)}`).join("\n");
+		return (
+			`PI_NATIVE_DIR restricts native addon loading to:\n  ${ctx.nativeDir}\n\n` +
+			`Expected one of:\n${expectedPaths}\n\n` +
+			`Start the installed omp ${ctx.packageVersion} once to populate its native cache.`
+		);
+	}
 	if (ctx.isCompiledBinary) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
 		const downloadHints = ctx.addonFilenames
@@ -767,15 +775,26 @@ function buildHelpMessage(ctx) {
  * decision once so the inner load loop stays a pure require/validate pipeline.
  * Called from `loadNative()` rather than at module scope so importing pure
  * helpers from this file doesn't trigger AVX2 detection or filesystem probes.
- */
-/**
- * @param {{ nativeDir?: string; platform?: NodeJS.Platform | string; isCompiledBinary?: boolean; leafPackageDir?: string | null }} [overrides]
+ *
+ * `exclusiveNativeDir` (or `PI_NATIVE_DIR`) is a strict source override: no
+ * workspace, executable, leaf-package, staging, or embedded candidates are
+ * allowed to mask a missing or incompatible addon in that directory.
+ *
+ * @param {{
+ *   nativeDir?: string;
+ *   exclusiveNativeDir?: string;
+ *   platform?: NodeJS.Platform | string;
+ *   isCompiledBinary?: boolean;
+ *   leafPackageDir?: string | null;
+ * }} [overrides]
  */
 export function initLoaderContext(overrides = {}) {
 	const platform = overrides.platform ?? process.platform;
 	const platformTag = `${platform}-${process.arch}`;
 	const packageVersion = packageJson.version;
-	const nativeDir = overrides.nativeDir ?? path.join(import.meta.dir, "..", "native");
+	const requestedNativeDir = overrides.exclusiveNativeDir ?? process.env.PI_NATIVE_DIR?.trim();
+	const exclusiveNativeDir = requestedNativeDir ? path.resolve(requestedNativeDir) : null;
+	const nativeDir = exclusiveNativeDir ?? overrides.nativeDir ?? path.join(import.meta.dir, "..", "native");
 	const execDir = path.dirname(process.execPath);
 	const nativesDir = getNativesDir();
 	const versionedDir = path.join(nativesDir, packageVersion);
@@ -793,11 +812,12 @@ export function initLoaderContext(overrides = {}) {
 		});
 	const normalizedNativeDir = platform === "win32" ? nativeDir.toLowerCase() : nativeDir;
 	const isWorkspaceLoad =
+		exclusiveNativeDir === null &&
 		!isCompiledBinary &&
 		!normalizedNativeDir.includes("\\node_modules\\") &&
 		!normalizedNativeDir.includes("/node_modules/");
 	const leafPackageDir =
-		isCompiledBinary || isWorkspaceLoad
+		exclusiveNativeDir !== null || isCompiledBinary || isWorkspaceLoad
 			? null
 			: overrides.leafPackageDir === undefined
 				? resolveLeafPackageDir(platformTag)
@@ -812,16 +832,19 @@ export function initLoaderContext(overrides = {}) {
 	const addonFilenames = getAddonFilenames({ tag: platformTag, arch: process.arch, variant: selectedVariant });
 	const addonLabel = selectedVariant ? `${platformTag} (${selectedVariant})` : platformTag;
 
-	const candidates = resolveLoaderCandidates({
-		addonFilenames,
-		isCompiledBinary,
-		stageFromNodeModules,
-		nativeDir,
-		leafPackageDir,
-		execDir,
-		versionedDir,
-		userDataDir,
-	});
+	const candidates =
+		exclusiveNativeDir === null
+			? resolveLoaderCandidates({
+					addonFilenames,
+					isCompiledBinary,
+					stageFromNodeModules,
+					nativeDir,
+					leafPackageDir,
+					execDir,
+					versionedDir,
+					userDataDir,
+				})
+			: addonFilenames.map(filename => path.join(exclusiveNativeDir, filename));
 
 	// Version sentinel emitted by the Rust addon under a `js_name` that encodes
 	// the package version (`__piNativesV{major}_{minor}_{patch}`).
@@ -838,6 +861,7 @@ export function initLoaderContext(overrides = {}) {
 		nativeDir,
 		leafPackageDir,
 		versionedDir,
+		isExclusiveNativeLoad: exclusiveNativeDir !== null,
 		isCompiledBinary,
 		stageFromNodeModules,
 		selectedVariant,
@@ -856,8 +880,9 @@ export function loadNative() {
 	const require_ = createRequire(import.meta.url);
 
 	const errors = [];
-	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
-	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
+	const embeddedCandidate = ctx.isExclusiveNativeLoad ? null : maybeExtractEmbeddedAddon(ctx, errors);
+	const stagedCandidate =
+		ctx.isExclusiveNativeLoad || embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
 	const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
 	const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
 
@@ -867,7 +892,9 @@ export function loadNative() {
 			const bindings = require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
-	        cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
+			if (!ctx.isExclusiveNativeLoad) {
+				cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
+			}
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {
