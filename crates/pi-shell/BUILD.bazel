@@ -34,18 +34,10 @@ rust_library(
     ],
 )
 
-# The `kill_builtin_signals_every_process_in_a_jobspec_pipeline` test holds
-# the shell's signal delivery to a hard 5 s budget. Under heavy bazel
-# contention (e.g. 2 900+ actions in the same CI shard) the kernel can take
-# longer to deliver the wake-up signal to STOPped pipeline members, which
-# makes the test time out without indicating a real regression. Mark the
-# target as `flaky` so bazel retries the run up to its default attempt
-# budget on transient timing failures.
 rust_test(
     name = "pi-shell_test",
     crate = ":pi-shell",
     edition = "2024",
-    flaky = True,
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
     deps = all_crate_deps(normal_dev = True),
 )

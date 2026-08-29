@@ -232,15 +232,16 @@ function Install-ViaBun {
 }
 
 # Windows locks a running executable, so replacing omp.exe fails while a
-# previous instance is alive. Stop every process whose binary path is the
-# install target before the new file is moved into place.
+# previous instance is alive. Stop only processes whose exact binary path is
+# the install target.
 function Stop-RunningOmp {
     param([string]$TargetPath)
     try {
         $running = Get-Process -ErrorAction SilentlyContinue |
             Where-Object { try { $_.Path -eq $TargetPath } catch { $false } }
         if ($running) {
-            Write-Host "Stopping running omp..." -ForegroundColor Yellow
+            Write-Host "[WARN] Windows must stop processes running the locked target: $TargetPath" -ForegroundColor Yellow
+            Write-Host "[WARN] Matching processes will be stopped. To preserve a session, cancel now, exit it manually, then retry." -ForegroundColor Yellow
             $running | Stop-Process -Force -ErrorAction SilentlyContinue
             $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
         }
@@ -302,14 +303,14 @@ function Install-Binary {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
     # Windows locks a running executable, so omp.exe cannot be overwritten
-    # while a previous instance is alive: download to a temp file first (a
-    # failed download leaves the old install working), stop the running
-    # instance, then move the new binary into place. Prefer the in-box
-    # curl.exe (Windows 10 1803+) for a live progress bar; fall back to
-    # Invoke-WebRequest when curl is unavailable or fails.
+    # while a previous instance is alive: download to a unique same-directory
+    # temp file first (a failed download leaves the old install working), warn
+    # and stop exact-path processes, then move the new binary into place.
+    # Prefer the in-box curl.exe (Windows 10 1803+) for a live progress bar;
+    # fall back to Invoke-WebRequest when curl is unavailable or fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
-    $TmpPath = "$OutPath.tmp"
+    $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
     $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
     $curlExit = $null
     try {

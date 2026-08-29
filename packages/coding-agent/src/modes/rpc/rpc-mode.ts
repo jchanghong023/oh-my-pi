@@ -250,6 +250,20 @@ export function watchAndReportLocalOnlyPromptResult(input: {
 	});
 }
 
+export type RpcBuiltinResidualSession = Pick<AgentSession, "prompt">;
+
+/** Forward a builtin's residual prompt through the same RPC options as a normal prompt. */
+export function promptRpcBuiltinResidual(
+	session: RpcBuiltinResidualSession,
+	prompt: string,
+	command: Pick<Extract<RpcCommand, { type: "prompt" }>, "images" | "streamingBehavior">,
+): Promise<boolean> {
+	return session.prompt(prompt, {
+		images: command.images,
+		streamingBehavior: command.streamingBehavior,
+	});
+}
+
 /**
  * Dependencies for {@link dispatchRpcInputFrame}. Provided by the RPC mode
  * entrypoint; broken out so tests can drive the input loop with stubs.
@@ -1042,7 +1056,7 @@ export async function runRpcMode(
 					if ("prompt" in builtinResult) {
 						watchAndReportLocalOnlyPromptResult({
 							id,
-							startPrompt: () => session.prompt(builtinResult.prompt, { images: command.images }),
+							startPrompt: () => promptRpcBuiltinResidual(session, builtinResult.prompt, command),
 							output,
 							onError: promptError => output(error(id, "prompt", promptError.message)),
 							extensionUserMessageTracker,

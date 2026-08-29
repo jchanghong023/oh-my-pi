@@ -10,6 +10,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	collectBundledFreeSelectors,
 	type ModelHubCallbacks,
 	ModelHubComponent,
 	type ModelHubOptions,
@@ -1080,19 +1081,19 @@ describe("ModelHub", () => {
 				expect(rendered).not.toContain("zen-fake-zero");
 			});
 
-			test("hides OpenCode Zen models with missing cost instead of throwing", () => {
+			test("skips bundled and discovered OpenCode Zen models with missing cost", () => {
 				const zenNoCost = { ...makeModel("opencode-zen", "zen-no-cost"), cost: undefined } as unknown as Model;
 				const zenFree = getBundledModel("opencode-zen", "big-pickle");
 				if (!zenFree) {
 					throw new Error("Expected bundled Zen fixture to be present");
 				}
+				expect(() => collectBundledFreeSelectors([zenNoCost, zenFree])).not.toThrow();
+				expect([...collectBundledFreeSelectors([zenNoCost, zenFree])]).toEqual(["opencode-zen/big-pickle"]);
+
 				const { hub } = createHub({ models: [zenNoCost, zenFree], scoped: true });
 				installTestTheme();
-
 				const rendered = normalize(hub.render(220));
-				// "Price unknown → hidden": a Zen model with no cost data is filtered out, not crashed on.
 				expect(rendered).not.toContain("opencode-zen/zen-no-cost");
-				// The known-free bundled model is untouched by the guard.
 				expect(rendered).toContain("opencode-zen/big-pickle");
 			});
 		});

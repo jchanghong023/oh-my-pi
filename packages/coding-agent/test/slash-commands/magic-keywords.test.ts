@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { JCH_WORKFLOW_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/workflow";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
 import {
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
@@ -49,5 +50,20 @@ describe("magic keyword slash commands", () => {
 			inlineHint: "[task]",
 		});
 		expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has(keyword)).toBe(true);
+	});
+});
+
+describe("JCH workflow slash commands", () => {
+	it("keeps workflow and branch arguments as joint failed-run constraints", async () => {
+		const command = JCH_WORKFLOW_SLASH_COMMANDS.find(candidate => candidate.name === "jchfixactions");
+		if (!command?.handle) throw new Error("Expected /jchfixactions to be registered");
+		const args = "workflow=CI branch=release";
+		const result = await command.handle(
+			{ name: command.name, args, text: `${command.name} ${args}` },
+			{} as SlashCommandRuntime,
+		);
+		if (!result || !("prompt" in result)) throw new Error("Expected /jchfixactions to expand to a prompt");
+		expect(result.prompt).toContain("参数指定 workflow 或 branch 时，仅在同时满足这些条件的范围内选择目标失败 run");
+		expect(result.prompt).toContain(args);
 	});
 });

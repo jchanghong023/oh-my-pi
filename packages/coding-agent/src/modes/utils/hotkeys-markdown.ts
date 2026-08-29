@@ -36,7 +36,7 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"**Other**",
 		"| Key | Action |",
 		"|-----|--------|",
-		"| `Tab` | Path completion / accept autocomplete |",
+		"| `Tab` | Accept completion; when idle with no completion, switch Main / Discuss |",
 		`| \`${appKey(bindings, "app.interrupt")}\` | Cancel autocomplete / interrupt active work |`,
 		`| \`${appKey(bindings, "app.clear")}\` | Clear editor (first) / exit (second) |`,
 		`| \`${appKey(bindings, "app.exit")}\` | Exit (saves current prompt as draft) |`,

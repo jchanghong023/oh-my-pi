@@ -2778,8 +2778,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#isDiscussPrimaryAgent(): boolean {
 		return this.session.getPrimaryAgentId() === "discuss";
 	}
-	async cyclePrimaryAgentFromTab(): Promise<void> {
-		if (this.viewSession !== this.session) return;
+	cyclePrimaryAgentFromTab(): boolean {
+		if (this.viewSession !== this.session) return false;
 		if (
 			this.session.isStreaming ||
 			this.session.queuedMessageCount > 0 ||
@@ -2789,8 +2789,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.goalModePaused ||
 			this.vibeModeEnabled
 		) {
-			return;
+			return false;
 		}
+		void this.#cyclePrimaryAgentFromTab();
+		return true;
+	}
+
+	async #cyclePrimaryAgentFromTab(): Promise<void> {
 		try {
 			const active = await this.session.cyclePrimaryAgent();
 			this.lastAssistantUsage = undefined;

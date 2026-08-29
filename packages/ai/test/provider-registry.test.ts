@@ -76,24 +76,21 @@ describe("provider registry auth surface", () => {
 		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
 	});
 
-	test("Command Code login validates credentials against authenticated inference", async () => {
-		const fetch = (async (input: unknown, init?: RequestInit) => {
-			expect(String(input)).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
-			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer invalid-command-code-key");
-			expect(JSON.parse(String(init?.body))).toMatchObject({
-				model: "deepseek/deepseek-v4-flash",
-				max_tokens: 1,
-			});
-			return new Response("invalid API key", { status: 401 });
-		}) as unknown as typeof globalThis.fetch;
+	test("Command Code login trims and returns the key without binding to an inference endpoint", async () => {
+		const onAuth = vi.fn();
+		const onPrompt = vi.fn(async () => "  tenant-key  ");
+		const fetch = vi.fn(async () => new Response("unexpected")) as unknown as typeof globalThis.fetch;
 
-		await expect(
-			loginCommandCode({
-				onAuth: () => {},
-				onPrompt: async () => "invalid-command-code-key",
-				fetch,
-			}),
-		).rejects.toThrow("Command Code API key validation failed (401)");
+		await expect(loginCommandCode({ onAuth, onPrompt, fetch })).resolves.toBe("tenant-key");
+		expect(onAuth).toHaveBeenCalledWith({
+			url: "https://commandcode.ai/studio/api-keys",
+			instructions: "Create or copy a Provider API key from Command Code Studio",
+		});
+		expect(onPrompt).toHaveBeenCalledWith({
+			message: "Paste your Command Code API key",
+			placeholder: "sk-...",
+		});
+		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	test("login list contains loginable providers and excludes env-only model providers", () => {

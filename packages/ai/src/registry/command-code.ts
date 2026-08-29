@@ -9,12 +9,7 @@ export const loginCommandCode = createApiKeyLogin({
 	instructions: "Create or copy a Provider API key from Command Code Studio",
 	promptMessage: "Paste your Command Code API key",
 	placeholder: "sk-...",
-	validation: {
-		kind: "chat-completions",
-		provider: "Command Code",
-		baseUrl: "https://api.commandcode.ai/provider/v1",
-		model: "deepseek/deepseek-v4-flash",
-	},
+	validation: null,
 });
 
 export const commandCodeProvider = {

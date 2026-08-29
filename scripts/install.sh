@@ -215,12 +215,11 @@ install_via_bun() {
     echo "Run 'omp' to get started!"
 }
 
-# Stop a running omp so the installed binary can be replaced. Directly
-# overwriting an executing ELF fails with ETXTBSY (curl error 23), and Windows
-# locks running executables outright, so both installers stop the old process
-# first. Match by resolved executable so PATH-launched instances whose argv is
-# just "omp" are found too.
-stop_running_omp() {
+# Detect sessions using the installed Linux binary before atomically replacing
+# its directory entry. Existing processes keep their old inode and must never
+# be terminated by the installer.
+warn_running_omp() {
+    OMP_PROCESS_DETECTION_AVAILABLE=false
     PIDS=""
     # Resolve the install target's real path so a symlinked $INSTALL_DIR (e.g.
     # $HOME/.local) still matches the canonical /proc/<pid>/exe of a running
@@ -240,6 +239,7 @@ stop_running_omp() {
     fi
 
     if [ -d /proc ]; then
+        OMP_PROCESS_DETECTION_AVAILABLE=true
         for EXE in /proc/[0-9]*/exe; do
             [ -r "$EXE" ] || continue
             EXE_PATH="$(readlink -f "$EXE" 2>/dev/null)" || EXE_PATH="$(readlink "$EXE" 2>/dev/null)" || continue
@@ -247,34 +247,13 @@ stop_running_omp() {
             PID="${EXE#/proc/}"
             PIDS="$PIDS ${PID%/exe}"
         done
-    elif command -v pgrep >/dev/null 2>&1; then
-        PIDS="$(pgrep -f "${INSTALL_DIR}/omp" 2>/dev/null || true) $(pgrep -x omp 2>/dev/null || true)"
     fi
-    [ -z "$PIDS" ] && return 0
 
-    echo "Stopping running omp..."
-    # TERM first, escalate to KILL after a short grace period.
-    kill $PIDS 2>/dev/null || true
-    # busybox built without FEATURE_FLOAT_SLEEP rejects fractional sleep under
-    # set -e, so probe once and fall back to a whole-second poll on such systems.
-    if sleep 0.1 2>/dev/null; then
-        SLEEP_INTERVAL="0.1"
-    else
-        SLEEP_INTERVAL="1"
-    fi
-    i=0
-    while [ "$i" -lt 100 ]; do
-        REMAIN=""
-        for PID in $PIDS; do
-            kill -0 "$PID" 2>/dev/null && REMAIN="$REMAIN $PID"
-        done
-        [ -z "$REMAIN" ] && return 0
-        if [ "$i" -eq 30 ]; then
-            kill -9 $REMAIN 2>/dev/null || true
-        fi
-        sleep "$SLEEP_INTERVAL"
-        i=$((i + 1))
-    done
+    [ -z "$PIDS" ] && return 0
+    echo ""
+    echo "⚠ Running omp sessions detected at ${INSTALL_OMP} (PIDs:${PIDS})."
+    echo "  They will continue using the old inode and old version after this atomic update."
+    echo "  Exit and restart those sessions to use the new version; there is no need to force-end current work."
 }
 
 # Install binary from GitHub releases
@@ -332,10 +311,9 @@ install_binary() {
     # writing the temporary download or the final binary.
     mkdir -p "$INSTALL_DIR"
 
-    # If a previous omp is still running, stop it before replacing the binary.
-    # Download to a temp file first so a failed download keeps the old install
-    # working; rename(2) then replaces the entry without touching any inode a
-    # lingering process might still hold.
+    # Download to a same-directory temp file first so a failed download keeps
+    # the old install working. rename(2) atomically replaces the directory entry
+    # while any running Linux process safely retains the old inode.
     TMP_BINARY="${INSTALL_DIR}/.omp.tmp.$$"
     trap 'rm -f "$TMP_BINARY"' EXIT
     # Download binary. --progress-bar shows a live bar with speed on a TTY;
@@ -362,7 +340,7 @@ install_binary() {
         exit 1
     fi
     chmod +x "$TMP_BINARY"
-    stop_running_omp
+    warn_running_omp
     mv -f "$TMP_BINARY" "${INSTALL_DIR}/omp"
     trap - EXIT
 
@@ -389,6 +367,9 @@ install_binary() {
 
     echo ""
     echo "✓ Installed omp to ${INSTALL_DIR}/omp"
+    if [ "$OMP_PROCESS_DETECTION_AVAILABLE" != "true" ]; then
+        echo "Existing omp sessions may still use the previous version; exit and restart them to use this update."
+    fi
 
     # Check if in PATH
     case ":$PATH:" in

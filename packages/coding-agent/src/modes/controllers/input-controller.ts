@@ -466,7 +466,7 @@ export class InputController {
 			}
 		};
 
-		this.ctx.editor.onTabFallback = () => void this.ctx.cyclePrimaryAgentFromTab();
+		this.ctx.editor.onTabFallback = () => this.ctx.cyclePrimaryAgentFromTab();
 
 		this.ctx.editor.setActionKeys("app.clear", this.ctx.keybindings.getKeys("app.clear"));
 		this.ctx.editor.onClear = () => this.handleCtrlC();

@@ -17,7 +17,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 - 无冲突 → NEVER 运行代码测试、代码检查、构建或编译命令。
 - 有冲突 → 仅运行 `bun run fastcheck`；NEVER 运行其他代码验证命令。
 - NEVER push、force-push、创建 tag 或发布 Release，除非用户明确要求。
-- MUST 维护 `docs-zh-CN/fork.md`：新 merge 后记录 merge hash + UTC 日期、更新“当前上游基线”、追加唯一“上游同步记录”，随后创建独立 docs commit；release 已合入路径必须先验证基线/记录一致，不一致时按历史补写并独立提交。
+- MUST 维护 `docs-zh-CN/fork.md`：该页是当前快照；“上游同步记录”必须且只能保留当前 release 的一条记录。新 merge 后原位替换记录并创建独立 docs commit；release 已合入路径仅校正当前基线记录。
 - merge commit 与 fork-doc commit 共同构成同一次同步变更；任一未完成 → NEVER 报告完成。
 </critical>
 
@@ -39,7 +39,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 4. 无未解决冲突；工作区状态符合合并前要求。
 5. 无冲突时未运行代码验证；有冲突时仅运行且通过 `bun run fastcheck`。
 6. 报告 Release URL、版本、tag commit、合并提交、验证结果、push 状态、fork-doc commit（如创建）。
-7. `docs-zh-CN/fork.md` 已同步：当前上游基线、唯一同步记录与本轮 merge 一致；新 merge 路径产出独立 docs commit，already-contained 路径补写后亦产出独立 docs commit。
+7. `docs-zh-CN/fork.md` 已同步：当前上游基线与唯一一条同步记录均匹配当前 Release；新 merge 路径产出独立 docs commit，already-contained 路径校正后亦产出独立 docs commit。
 
 ## 流程
 
@@ -55,8 +55,8 @@ printf 'tracking=%s\n' "$tracking_ref"
 git remote get-url origin
 git remote get-url upstream
 git rev-parse --is-inside-work-tree
-test -f docs-zh-CN/fork.md
 ```
+随后 MUST 用 Read 工具读取 `docs-zh-CN/fork.md` 全文；仅检查文件存在不满足前置约束。
 
 要求：
 
@@ -141,26 +141,26 @@ git ls-remote --exit-code --tags upstream "refs/tags/$release_tag" "refs/tags/$r
 git merge-base --is-ancestor "$release_tag" HEAD
 ```
 
-返回 0 → Release 已包含：进入第 4a 节“账本对账与补写”，NEVER 运行代码测试、代码检查、构建或编译命令。
+返回 0 → Release 已包含：进入第 4a 节“当前账本对账”，NEVER 运行代码测试、代码检查、构建或编译命令。
 
-### 4a. 账本对账（已合入路径）
+### 4a. 当前账本对账（已合入路径）
 
 `docs-zh-CN/fork.md` MUST 同时满足：
 
 - “当前上游基线”的 `**版本**` 行 = `release_tag`。
-- “上游同步记录”已存在唯一一条引用 `release_tag` 的条目。
+- “上游同步记录”段必须且只能有 1 条记录，且该记录引用 `release_tag`。
 
-两条均满足 → 跳过 docs commit，直接进入第 7 节历史验证。
+两条均满足 → 跳过 docs commit，直接进入第 7 节验证。
 
-任一不满足 → 走第 4b 节“历史补写”定位唯一 merge commit，再走第 4c 节“独立 docs commit”补齐账本。
+任一不满足 → 走第 4b 节定位当前 Release 的唯一 merge commit，再走第 4c 节以当前记录替换同步记录段。
 
-### 4b. 历史补写定位
+### 4b. 当前 Release merge 定位
 
-仅在已合入但账本不匹配时使用：
+仅在已合入但当前账本不匹配时使用：
 
 ```bash
 historical_matches="$(
-  TZ=UTC git log --first-parent --date=format-local:%F --pretty=format:'%H%x09%ad%x09%s' \
+  git log --first-parent --pretty=format:'%H%x09%cI%x09%s' \
     | awk -F '\t' -v subject="Merge tag '${release_tag}'" '$3 == subject {print}'
 )"
 printf '%s\n' "$historical_matches"
@@ -169,7 +169,13 @@ printf '%s\n' "$historical_matches"
 要求：
 
 - 输出 MUST 恰好 1 行；0 行或多行 → STOP，不得猜测。
-- 取该行 hash 作为 `historical_merge_hash`、UTC 日期作为 `historical_merge_date`。
+- 取该行 hash 作为 `historical_merge_hash`、`%cI` 值作为 `historical_merge_timestamp`。
+- `historical_merge_date` MUST 由 `historical_merge_timestamp` 转为 UTC `YYYY-MM-DD`，NEVER 使用 author date：
+
+```bash
+historical_merge_date="$(bun -e 'console.log(new Date(process.argv[1]).toISOString().slice(0, 10))' "$historical_merge_timestamp")"
+```
+
 - historical merge hash MUST 为 `pre_merge_head` 的祖先；不满足 → STOP。
 
 ### 4c. 独立 docs commit（已合入路径）
@@ -177,15 +183,14 @@ printf '%s\n' "$historical_matches"
 将 `historical_merge_hash` 与 `historical_merge_date` 写入 `docs-zh-CN/fork.md`：
 
 - “当前上游基线”的 `**版本**` 改为 `release_tag`；`**同步日期**` 改为 `historical_merge_date`（UTC，`YYYY-MM-DD`）；`**Merge**` 改为 `historical_merge_hash` 前 10 位。
-- “上游同步记录”中无 `release_tag` → 追加唯一规范记录；恰好 1 条 → 原位校正日期/hash，NEVER 追加；多于 1 条 → STOP。
-- 规范记录：`historical_merge_date`：合入正式 release `release_tag`（merge `historical_merge_hash`）。
+- 将“上游同步记录”段的内容原位替换为唯一规范记录：`historical_merge_date`：合入正式 release `release_tag`（merge `historical_merge_hash`）。
 
 `docs-zh-CN/fork.md` MUST 满足以下不变量：
 
 - “当前上游基线”`##` 段恰好 1 个。
 - “上游同步记录”`##` 段恰好 1 个。
 - “当前上游基线”下 `**版本**` 唯一且匹配 `^v[0-9]+\.[0-9]+\.[0-9]+$`。
-- “上游同步记录”下每条记录唯一，且该路径下引用 `release_tag` 的条目恰好 1 条。
+- “上游同步记录”段必须且只能有 1 条记录，且该记录引用 `release_tag`。
 
 任一不变量失败 → STOP，NEVER 提交。
 
@@ -221,14 +226,14 @@ NEVER 使用 `git merge upstream/main`、`git pull upstream main`、rebase、squ
 ```bash
 merge_commit="$(git rev-parse HEAD)"
 merge_timestamp="$(git log -1 --pretty=format:%cI "$merge_commit")"
-merge_date="$(TZ=UTC git log -1 --date=format-local:%F --pretty=format:%ad "$merge_commit")"
+merge_date="$(bun -e 'console.log(new Date(process.argv[1]).toISOString().slice(0, 10))' "$merge_timestamp")"
 merge_short="$(printf '%s' "$merge_commit" | cut -c1-10)"
 ```
 
 改写 `docs-zh-CN/fork.md`：
 
 - “当前上游基线”的 `**版本**` = `release_tag`；`**同步日期**` = `merge_date`；`**Merge**` = `merge_short`。
-- “上游同步记录”中已存在 `release_tag` → STOP；否则追加唯一一条 `merge_date`：合入正式 release `release_tag`（merge `merge_short`）。
+- 将“上游同步记录”段的内容原位替换为唯一一条记录：`merge_date`：合入正式 release `release_tag`（merge `merge_short`）。
 - MUST 满足第 4c 节的全部文档不变量。
 
 ### 5b. 独立 docs commit（新建 merge 路径）
@@ -307,14 +312,14 @@ git rev-parse "$release_tag^{commit}"
 
 已合入后补写路径额外 MUST 满足：
 
-- `HEAD` = `fork_doc_commit`；该提交的 tree diff仅包含 `docs-zh-CN/fork.md`。
-- `merge_commit` = 第 4b 节唯一历史 merge hash。
+- `HEAD` = `fork_doc_commit`；该提交的 tree diff 仅包含 `docs-zh-CN/fork.md`。
+- `merge_commit` = 第 4b 节唯一的当前 Release merge hash。
 
 `docs-zh-CN/fork.md` 必检：
 
 - 单一基线段、单一同步记录段、版本行格式 `^v[0-9]+\.[0-9]+\.[0-9]+$`。
-- “上游同步记录”恰好 1 条引用 `release_tag` 的条目。
-- 同步日期 MUST 等于由 merge commit `%cI` 转换出的 UTC 日期；与 Release `published_at` 不一致属正常。
+- “上游同步记录”段必须且只能有 1 条记录，且该记录引用 `release_tag`。
+- 同步日期 MUST 等于 merge commit `%cI` 转换出的 UTC 日期；NEVER 使用 author date。与 Release `published_at` 不一致属正常。
 
 任一必检失败 → STOP。
 
@@ -357,7 +362,7 @@ Push: not performed / 明确授权后的实际结果
 - MUST 验证 Release tag 与合并前分支头均可达。
 - 无冲突 → NEVER 运行代码测试、代码检查、构建或编译。
 - 有冲突 → 提交前仅运行 `bun run fastcheck`；NEVER 编译本地代码。
-- MUST 维护 `docs-zh-CN/fork.md`：新 merge 完成后立刻产出独立 docs commit；已合入路径以历史补写后独立 docs commit 收尾。
+- MUST 维护 `docs-zh-CN/fork.md`：新 merge 后原位替换唯一同步记录并立刻产出独立 docs commit；已合入路径仅校正当前基线对应记录并以独立 docs commit 收尾。
 - merge commit + fork-doc commit 共同记为一次同步变更；docs commit 缺失或被混入其他文件 → NEVER 报告完成。
-- 同步记录出现重复或非唯一 → STOP，不得猜测。
+- 同步记录不是历史账本：总数不为 1 或未引用当前 Release → STOP，不得猜测。
 - NEVER push，除非用户明确授权。

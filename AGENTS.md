@@ -6,8 +6,8 @@
 - NEVER 直接同步上游 `main` 分支。
 - 同步上游分支时，直接使用 skill：`.omp/skills/upstream-release-sync/`（读取其中的 `SKILL.md` 并按其流程执行）。
 - 本仓库的 `AGENTS.md` 是 fork 的有意差异：同步上游时 MUST 保留本仓库版本，NEVER 被上游合并覆盖。
-- Fork 差异清单：[`docs-zh-CN/fork.md`](docs-zh-CN/fork.md)。
-- 合入上游正式 release，或新增、修改、移除任何 fork 改动时，MUST 在同一变更中更新该文档；每项描述 MUST 不超过 2 个 Markdown 源码行。不添加兼容别名或第二份清单。
+- 修改本 fork 前，MUST 先阅读当前差异快照：[`docs-zh-CN/fork.md`](docs-zh-CN/fork.md)。
+- 合入上游正式 release，或新增、修改、移除任何 fork 改动后，MUST 在同一变更中更新该快照；“上游同步记录”仅保留当前 release，不作历史账本；每项描述 MUST 不超过 2 个 Markdown 源码行。不添加兼容别名或第二份清单。
 
 # Development Rules
 

@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import {
+	promptRpcBuiltinResidual,
+	type RpcBuiltinResidualSession,
 	RpcExtensionUserMessageTracker,
 	reportLocalOnlyPromptResult,
 	watchAndReportLocalOnlyPromptResult,
@@ -22,6 +24,31 @@ async function waitForTrackedPromptHandlers(trackedPrompt: {
 	await Promise.resolve();
 	await Promise.resolve();
 }
+
+describe("RPC builtin residual prompt routing", () => {
+	test.each(["steer", "followUp"] as const)(
+		"forwards %s while streaming instead of rejecting the residual prompt as busy",
+		async streamingBehavior => {
+			const prompt = vi.fn(
+				async (_message: string, options?: { streamingBehavior?: "steer" | "followUp" }): Promise<boolean> => {
+					if (!options?.streamingBehavior) throw new Error("AgentBusyError");
+					return true;
+				},
+			);
+			const session = { prompt } as unknown as RpcBuiltinResidualSession;
+
+			await expect(
+				promptRpcBuiltinResidual(session, "fullsend inspect the active task", {
+					streamingBehavior,
+				}),
+			).resolves.toBe(true);
+			expect(prompt).toHaveBeenCalledWith("fullsend inspect the active task", {
+				images: undefined,
+				streamingBehavior,
+			});
+		},
+	);
+});
 
 describe("reportLocalOnlyPromptResult", () => {
 	test("emits prompt_result when prompt resolves without invoking the agent or extension user message", async () => {

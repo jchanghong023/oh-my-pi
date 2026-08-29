@@ -121,6 +121,19 @@ describe("AgentSession Primary Agent", () => {
 		expect(session.sessionManager.getEntries()).toHaveLength(entriesBefore);
 	});
 
+	it("serializes rapid cycle intents in input order", async () => {
+		const first = session.cyclePrimaryAgent();
+		const second = session.cyclePrimaryAgent();
+		await expect(Promise.all([first, second])).resolves.toEqual(["discuss", "main"]);
+		expect(session.getPrimaryAgentId()).toBe("main");
+		expect(
+			session.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "primary_agent_change")
+				.map(entry => entry.primaryAgent),
+		).toEqual(["discuss", "main"]);
+	});
+
 	it("persists successful profile changes with a dedicated entry", async () => {
 		await session.setPrimaryAgent("discuss");
 		expect(session.sessionManager.buildSessionContext().primaryAgent).toBe("discuss");

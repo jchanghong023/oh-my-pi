@@ -33,7 +33,7 @@ jobs:
 
       - name: Install documentation dependencies
         working-directory: docs-zh-CN
-        run: npm install
+        run: npm ci
 
       - name: Build documentation
         working-directory: docs-zh-CN
@@ -41,7 +41,7 @@ jobs:
 
       - name: Install English documentation dependencies
         working-directory: docs
-        run: npm install
+        run: npm ci
 
       - name: Build English documentation
         working-directory: docs

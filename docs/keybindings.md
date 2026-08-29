@@ -1,7 +1,7 @@
 # Keybindings
 
 Run `/hotkeys` inside an `omp` session to see the active chords for your current build. The list reflects any remaps loaded from disk and any bindings added by extensions.
-In the normal editor, `Tab` accepts an open autocomplete popup first; otherwise, while the main session is idle, it switches the shared session between the Main and Discuss Primary Agents. `Shift+Tab` keeps its Plan toggle behavior.
+In the normal editor, `Tab` accepts completion when available; with no completion and the main session idle, it switches the shared session between the Main and Discuss Primary Agents. `Shift+Tab` keeps its Plan toggle behavior.
 
 
 ## Customize keybindings

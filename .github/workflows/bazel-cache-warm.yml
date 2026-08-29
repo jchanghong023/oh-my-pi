@@ -10,27 +10,16 @@ name: Warm bun store cache
 #                             the 10 GB repo cache quota and evicted every
 #                             bazel archive).
 #
-# Paths mirror the cache-key inputs (bun-install action) — a packages/**
-# push cannot change the lockfile, so it does not trigger a warm.
+# Push paths are limited to the Bun store key/content inputs and this workflow.
+# Rust, Cargo, and Bazel changes cannot affect `bun-<os>-<lockhash>`.
 
 on:
    push:
       branches: [main]
       paths:
-         - "crates/**"
-         - "bazel/**"
-         - "MODULE.bazel"
-         - "MODULE.bazel.lock"
-         - "BUILD.bazel"
-         - ".bazelrc"
-         - ".bazelignore"
-         - ".bazelversion"
-         - "Cargo.toml"
-         - "Cargo.lock"
-         - "rust-toolchain.toml"
-         - "rustfmt.toml"
          - "bun.lock"
-         - ".github/**"
+         - ".github/actions/bun-install/**"
+         - ".github/workflows/bazel-cache-warm.yml"
    workflow_dispatch:
 
 permissions:

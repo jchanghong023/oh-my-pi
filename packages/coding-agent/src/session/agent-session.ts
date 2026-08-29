@@ -553,6 +553,9 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#activePrimaryAgentId: PrimaryAgentId = "main";
 	#pendingPrimaryAgentId: PrimaryAgentId | undefined;
+	#primaryAgentCycleTail: Promise<void> = Promise.resolve();
+	#lastQueuedPrimaryAgentId: PrimaryAgentId | undefined;
+	#primaryAgentCycleSequence = 0;
 	/** Session-scoped `/vision` override; undefined = follow persisted `inspect_image.mode`. */
 	#inspectImageModeOverride: InspectImageMode | undefined;
 	#vibeModeState: VibeModeState | undefined;
@@ -5286,9 +5289,23 @@ export class AgentSession {
 	}
 
 	async cyclePrimaryAgent(): Promise<PrimaryAgentId> {
-		const next = this.#activePrimaryAgentId === "main" ? "discuss" : "main";
-		await this.setPrimaryAgent(next);
-		return next;
+		const basis = this.#lastQueuedPrimaryAgentId ?? this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId;
+		const next = basis === "main" ? "discuss" : "main";
+		const sequence = ++this.#primaryAgentCycleSequence;
+		this.#lastQueuedPrimaryAgentId = next;
+		const request = this.#primaryAgentCycleTail.then(() => this.setPrimaryAgent(next));
+		this.#primaryAgentCycleTail = request.then(
+			() => {},
+			() => {},
+		);
+		try {
+			await request;
+			return next;
+		} finally {
+			if (this.#primaryAgentCycleSequence === sequence) {
+				this.#lastQueuedPrimaryAgentId = undefined;
+			}
+		}
 	}
 	async #restorePrimaryAgent(id: PrimaryAgentId): Promise<void> {
 		if (id === this.#activePrimaryAgentId) return;

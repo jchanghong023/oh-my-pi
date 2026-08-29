@@ -715,8 +715,8 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
-	/** Called when Tab has no active autocomplete or custom binding to consume it. */
-	onTabFallback?: () => void;
+	/** Called when Tab has no active autocomplete or custom binding. Returns true when consumed. */
+	onTabFallback?: () => boolean;
 
 	/** Fired when a sustained space-bar hold is recognized — the push-to-talk STT start. The
 	 *  optimistically-typed spaces have already been deleted by the time this runs. */
@@ -1137,8 +1137,7 @@ export class CustomEditor extends Editor {
 				return;
 			}
 		}
-		if (canonical === "tab" && !this.isShowingAutocomplete() && this.onTabFallback) {
-			this.onTabFallback();
+		if (canonical === "tab" && !this.isShowingAutocomplete() && this.onTabFallback?.()) {
 			return;
 		}
 

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -71,16 +71,47 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 
 	it("cycles while idle without changing the draft", async () => {
 		mode.editor.setText("draft stays here");
-		await mode.cyclePrimaryAgentFromTab();
+		const firstSwitch = Promise.withResolvers<void>();
+		const secondSwitch = Promise.withResolvers<void>();
+		let switchCount = 0;
+		const previousOnEntryAppended = session.sessionManager.onEntryAppended;
+		session.sessionManager.onEntryAppended = entry => {
+			previousOnEntryAppended?.(entry);
+			if (entry.type !== "primary_agent_change") return;
+			(++switchCount === 1 ? firstSwitch : secondSwitch).resolve();
+		};
+		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		await firstSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("discuss");
 		expect(mode.editor.getText()).toBe("draft stays here");
-		await mode.cyclePrimaryAgentFromTab();
+		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		await secondSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("main");
 	});
 
-	it("does not switch while a workflow is active", async () => {
+	it("falls through to the base completion pipeline while a workflow blocks switching", () => {
 		mode.planModeEnabled = true;
-		await mode.cyclePrimaryAgentFromTab();
+		mode.editor.setText("/he");
+		const baseEditorPrototype = Object.getPrototypeOf(Object.getPrototypeOf(mode.editor)) as {
+			handleInput(data: string): void;
+		};
+		const baseHandleInput = vi.spyOn(baseEditorPrototype, "handleInput");
+		mode.editor.handleInput("\t");
 		expect(session.getPrimaryAgentId()).toBe("main");
+		expect(baseHandleInput).toHaveBeenCalledWith("\t");
+	});
+
+	it("shows a warning when an accepted switch fails", async () => {
+		const warning = vi.spyOn(mode, "showWarning");
+		const attempted = Promise.withResolvers<void>();
+		vi.spyOn(session, "cyclePrimaryAgent").mockImplementationOnce(async () => {
+			attempted.resolve();
+			throw new Error("switch failed");
+		});
+		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		await attempted.promise;
+		await Promise.resolve();
+		expect(session.getPrimaryAgentId()).toBe("main");
+		expect(warning).toHaveBeenCalledWith("switch failed");
 	});
 });
