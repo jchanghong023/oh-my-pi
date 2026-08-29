@@ -2512,7 +2512,7 @@ export class StatusLineComponent implements Component {
 					lines.push(status.main);
 				}
 				if (status.overflow) lines.push(status.overflow);
-			} else {
+			} else if (this.#topAttachment === "top-border") {
 				// The box main line is sized to the editor's top-border content
 				// width (statusWidth), but the overflow row drops onto the
 				// terminal line directly and can use the rest of the row —
@@ -2520,6 +2520,8 @@ export class StatusLineComponent implements Component {
 				// overflow aligns under the main row, and the overflow is
 				// built with `width - leftInset` budget (no separator dot
 				// between the inset padding and the first overflow part).
+				// Only the box (top-border) mount has an overflow contract;
+				// band/rule mounts render their single row in the editor.
 				const statusWidth = this.#topBorderWidthProvider?.(width) ?? width;
 				const leftInset = Math.max(0, Math.floor((width - statusWidth) / 2));
 				const overflowWidth = Math.max(0, width - leftInset);

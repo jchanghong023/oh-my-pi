@@ -8,6 +8,7 @@ import { StatusLineComponent, type StatusLineSettings } from "@oh-my-pi/pi-codin
 import { STATUS_LINE_PRESETS } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/presets";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { getComposerStyle } from "@oh-my-pi/pi-tui";
 import { removeSyncWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -272,9 +273,13 @@ describe("StatusLineComponent effective settings cache", () => {
 describe("StatusLineComponent hook statuses", () => {
 	it("renders every keyed status on a deterministic line", () => {
 		const component = makeComponent({ showHookStatus: true });
+		// The fork's default composer shape is `band`, whose top row lives in
+		// the editor and never synthesizes a box overflow row — at a narrow
+		// width the render yields only the hook rows.
+		component.setComposerStyle(getComposerStyle("band"));
 		component.setHookStatus("project-time", "$0.04 (dev)");
 		component.setHookStatus("ponytail", "Ponytail");
 
-		expect(component.render(8).map(stripVTControlCharacters)).toEqual(["π ", "Ponytail", "$0.04 (…"]);
+		expect(component.render(8).map(stripVTControlCharacters)).toEqual(["Ponytail", "$0.04 (…"]);
 	});
 });
