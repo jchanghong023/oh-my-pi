@@ -512,7 +512,7 @@ describe("overflow: path survives before model", () => {
 });
 
 describe("overflow: box alignment under non-standalone render", () => {
-	it("aligns the overflow row to the editor content width via leftInset", () => {
+	it("aligns every overflow row to the editor content width via leftInset", () => {
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "omp-overflow-box-alignment-very-long-directory-name-here-"),
 		);
@@ -525,9 +525,8 @@ describe("overflow: box alignment under non-standalone render", () => {
 				// Multiple right segments with a long model name — when the
 				// editor's top-border content width (statusWidth) is much
 				// narrower than the terminal, every right segment lands in
-				// the overflow row, where the second line uses
-				// `width - leftInset` columns and starts after `leftInset`
-				// spaces of padding.
+				// wrapped overflow rows. Each row uses `width - leftInset`
+				// columns and starts after `leftInset` spaces of padding.
 				rightSegments: ["session_name", "model", "path"],
 				separator: "powerline-thin",
 				sessionAccent: false,
@@ -537,19 +536,17 @@ describe("overflow: box alignment under non-standalone render", () => {
 			component.setTopBorderWidthProvider(() => statusWidth);
 
 			const lines = component.render(terminalWidth);
-			expect(lines).toHaveLength(1);
-			const overflow = lines[0]!;
+			expect(lines.length).toBeGreaterThan(1);
 			const leftInset = Math.floor((terminalWidth - statusWidth) / 2);
 			expect(leftInset).toBe(1);
-			// The row must begin with exactly `leftInset` visible spaces
-			// — no separator dot between the inset padding and the first
-			// overflow part.
-			const plain = stripAnsi(overflow);
-			expect(plain.startsWith(" ".repeat(leftInset))).toBe(true);
-			expect(visibleWidth(overflow)).toBeLessThanOrEqual(terminalWidth);
-			// The dropped right-group segments (long model name first)
-			// are present in the overflow row.
-			expect(plain).toContain("x".repeat(24));
+			for (const overflow of lines) {
+				// Every row begins with exactly `leftInset` visible spaces
+				// — no separator dot between the inset padding and its first part.
+				expect(stripAnsi(overflow).startsWith(" ".repeat(leftInset))).toBe(true);
+				expect(visibleWidth(overflow)).toBeLessThanOrEqual(terminalWidth);
+			}
+			// Dropped right-group segments survive across the wrapped rows.
+			expect(stripAnsi(lines.join("\n"))).toContain("x".repeat(24));
 		} finally {
 			setProjectDir(originalProjectDir);
 		}
@@ -580,5 +577,33 @@ describe("overflow: box alignment under non-standalone render", () => {
 		const separatorThenText = `${theme.fg("statusLineSep", theme.sep.dot)}${textAnsi}`;
 		expect(overflow).toContain(separatorThenText);
 		expect(overflow.endsWith("\x1b[39m")).toBe(true);
+	});
+});
+
+describe("overflow: automatic row wrapping", () => {
+	it("preserves every visible full-preset segment while adapting to width", () => {
+		const component = new StatusLineComponent(createStatusLineSession("session-marker", "model-marker"));
+		component.updateSettings({
+			preset: "full",
+			separator: "slash",
+			sessionAccent: false,
+		});
+		component.setComposerStyle({
+			statusAttachment: "none",
+			bottomBar: "full",
+			bottomBarGap: false,
+		});
+
+		const wideLines = component.render(240);
+		const narrowLines = component.render(24);
+		const narrowPlain = stripAnsi(narrowLines.join("\n"));
+
+		expect(wideLines).toHaveLength(1);
+		expect(narrowLines.length).toBeGreaterThan(2);
+		expect(narrowLines.every(line => visibleWidth(line) <= 24)).toBe(true);
+		expect(narrowPlain).toContain("model-marker");
+		expect(narrowPlain).toContain("Main");
+		expect(narrowPlain).toContain("0%");
+		expect(narrowPlain).toContain("session-marker");
 	});
 });

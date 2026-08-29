@@ -1916,7 +1916,7 @@ export class StatusLineComponent implements Component {
 		layout: "box" | "band" | "plain-full" | "plain-left" | "plain-right" = "box",
 		previewTitle?: string,
 		overflowWidth?: number,
-	): { main: string; overflow: string; overflowParts: string[] } {
+	): { main: string; overflow: string[]; overflowParts: string[] } {
 		const effectiveSettings = this.#resolveSettings();
 		const plain = layout !== "box" && layout !== "band";
 		const includePath =
@@ -2183,7 +2183,7 @@ export class StatusLineComponent implements Component {
 		const retainedLeft = new Set(leftSourceIndices);
 		const overflowParts = originalLeft.filter((_, index) => !retainedLeft.has(index));
 		overflowParts.push(...originalRight.slice(right.length));
-		const overflow = this.#fitOverflowRow("", overflowParts, overflowWidth ?? topFillWidth);
+		const overflow = this.#wrapOverflowRows("", overflowParts, overflowWidth ?? topFillWidth);
 		return { main, overflow, overflowParts };
 	}
 
@@ -2334,50 +2334,59 @@ export class StatusLineComponent implements Component {
 		}
 	}
 
-	#fitOverflowRow(initial: string, parts: readonly string[], width: number): string {
+	#wrapOverflowRows(initial: string, parts: readonly string[], width: number): string[] {
+		if (width <= 0) return [];
 		const textAnsi = theme.getFgAnsi("text");
-		// Each separator (theme.fg) ends with this reset, so the row must
+		// Each separator (theme.fg) ends with this reset, so every row must
 		// reopen the text color before the next plain part instead of leaking
 		// statusLineSep or the terminal default into it.
 		const fgReset = "\x1b[39m";
+		const rows: string[] = [];
 		let content = initial;
 		let appended = 0;
+		const closeRow = (): void => {
+			if (!content) return;
+			rows.push(`${content}${fgReset}`);
+			content = "";
+			appended = 0;
+		};
+		const startRow = (part: string): void => {
+			const fitted = visibleWidth(part) > width ? truncateToWidth(part, width) : part;
+			content = `${textAnsi}${fitted}`;
+			appended = 1;
+		};
+
 		for (const part of parts) {
 			if (!content) {
-				if (visibleWidth(part) > width) {
-					content = truncateToWidth(part, width);
-					// Still part of the row: anchor text color and close with
-					// a fg reset so terminal default color doesn't leak past
-					// the last visible character.
-					return `${textAnsi}${content}${fgReset}`;
-				}
-				content = `${textAnsi}${part}`;
-				appended++;
+				startRow(part);
 				continue;
 			}
 			const separator =
-				initial && appended === 0
+				initial && rows.length === 0 && appended === 0
 					? `${theme.fg("statusLineSep", theme.sep.dot.trim())} `
 					: theme.fg("statusLineSep", theme.sep.dot);
 			// Reopen text color after the separator's fg reset so plain
 			// parts never inherit statusLineSep or the terminal default.
 			const decorated = `${separator}${textAnsi}${part}`;
 			const candidate = content + decorated;
-			if (visibleWidth(candidate) > width) break;
+			if (visibleWidth(candidate) > width) {
+				closeRow();
+				startRow(part);
+				continue;
+			}
 			content = candidate;
 			appended++;
 		}
-		return content ? `${content}${fgReset}` : "";
+		closeRow();
+		return rows;
 	}
 
-	#renderSplitBottomLine(width: number): string {
+	#renderSplitBottomLines(width: number): string[] {
 		const left = this.#buildStatusLines(width, "plain-left");
 		const right = this.#buildStatusLines(width, "plain-right");
-		let content = this.#fitOverflowRow(left.main, [...left.overflowParts, ...right.overflowParts], width);
-		if (this.#focusedAgentId && content) {
-			content = `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`;
-		}
-		return content;
+		const lines = this.#wrapOverflowRows(left.main, [...left.overflowParts, ...right.overflowParts], width);
+		if (!this.#focusedAgentId) return lines;
+		return lines.map(content => `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`);
 	}
 
 	#renderStatusLines(
@@ -2385,12 +2394,12 @@ export class StatusLineComponent implements Component {
 		layout: "box" | "band" | "plain-full" | "plain-left" | "plain-right",
 		previewTitle?: string,
 		overflowWidth?: number,
-	): { main: string; overflow: string } {
+	): { main: string; overflow: string[] } {
 		const lines = this.#buildStatusLines(width, layout, previewTitle, overflowWidth);
 		if (!this.#focusedAgentId) return lines;
 		const dim = (content: string): string =>
 			content ? `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m` : "";
-		return { main: dim(lines.main), overflow: dim(lines.overflow) };
+		return { main: dim(lines.main), overflow: lines.overflow.map(dim) };
 	}
 
 	getTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
@@ -2471,7 +2480,7 @@ export class StatusLineComponent implements Component {
 		if (attachment === "top-border") {
 			const status = this.#renderStatusLines(width, "box");
 			if (status.main) lines.push(status.main);
-			if (status.overflow) lines.push(status.overflow);
+			lines.push(...status.overflow);
 		} else if (attachment === "top-band") {
 			const band = this.getBandTopBorder(width);
 			if (band.content) lines.push(band.content);
@@ -2489,12 +2498,11 @@ export class StatusLineComponent implements Component {
 			if (rule !== undefined) lines.push(rule);
 		}
 		if (bottomBar === "left") {
-			const content = this.#renderSplitBottomLine(width);
-			if (content) lines.push(content);
+			lines.push(...this.#renderSplitBottomLines(width));
 		} else if (bottomBar === "full") {
 			const status = this.#renderStatusLines(width, "plain-full");
 			if (status.main) lines.push(status.main);
-			if (status.overflow) lines.push(status.overflow);
+			lines.push(...status.overflow);
 		}
 		return lines;
 	}
@@ -2503,30 +2511,28 @@ export class StatusLineComponent implements Component {
 		const lines: string[] = [];
 		if (!this.#autocompleteActiveProbe?.()) {
 			if (this.#standalone) {
-				const status =
+				const statusLines =
 					this.#standalone === "left-only"
-						? { main: this.#renderSplitBottomLine(width), overflow: "" }
-						: this.#renderStatusLines(width, "plain-full");
-				if (status.main) {
+						? this.#renderSplitBottomLines(width)
+						: (() => {
+								const status = this.#renderStatusLines(width, "plain-full");
+								return status.main ? [status.main, ...status.overflow] : status.overflow;
+							})();
+				if (statusLines.length > 0) {
 					if (this.#standaloneGap) lines.push("");
-					lines.push(status.main);
+					lines.push(...statusLines);
 				}
-				if (status.overflow) lines.push(status.overflow);
 			} else if (this.#topAttachment === "top-border") {
-				// The box main line is sized to the editor's top-border content
-				// width (statusWidth), but the overflow row drops onto the
-				// terminal line directly and can use the rest of the row —
-				// `leftInset` mirrors the editor's left chrome so the
-				// overflow aligns under the main row, and the overflow is
-				// built with `width - leftInset` budget (no separator dot
-				// between the inset padding and the first overflow part).
-				// Only the box (top-border) mount has an overflow contract;
-				// band/rule mounts render their single row in the editor.
+				// The box main row is sized to the editor's top-border content
+				// width. Wrapped overflow rows mount below it and can use the
+				// terminal's remaining width after the matching left inset.
 				const statusWidth = this.#topBorderWidthProvider?.(width) ?? width;
 				const leftInset = Math.max(0, Math.floor((width - statusWidth) / 2));
 				const overflowWidth = Math.max(0, width - leftInset);
 				const overflow = this.#renderStatusLines(statusWidth, "box", undefined, overflowWidth).overflow;
-				if (overflow) lines.push(`${" ".repeat(leftInset)}${overflow}`);
+				for (const row of overflow) {
+					lines.push(`${" ".repeat(leftInset)}${row}`);
+				}
 			}
 		}
 		const showHooks = this.#settings.showHookStatus ?? true;

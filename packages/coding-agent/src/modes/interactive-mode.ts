@@ -982,6 +982,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
 		this.statusLine.setPrimaryAgentStatus(session.getPrimaryAgentId());
+		this.#syncStatusLineSettings();
 		this.#codexResetFireworksController = new CodexResetFireworksController(this);
 		this.statusLine.setCodexResetFireworksHandler(event => {
 			this.#codexResetFireworksController.show(event);
