@@ -128,7 +128,11 @@ describe("JCH workflow slash commands", () => {
 
 			const result = await command.handle(
 				{ name: command.name, args, text: `/${command.name}${args ? ` ${args}` : ""}` },
-				{ output: text => output.push(text) } as SlashCommandRuntime,
+				{
+					output: text => {
+						output.push(text);
+					},
+				} as SlashCommandRuntime,
 			);
 
 			expect(result).toEqual({ consumed: true });

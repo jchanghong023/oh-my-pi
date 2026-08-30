@@ -4,6 +4,7 @@ import type { ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/compos
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	beginStartupComposer,
+	type ComposerLease,
 	stopPendingStartupComposer,
 	takeStartupComposerLease,
 } from "@oh-my-pi/pi-coding-agent/modes/startup-composer";
@@ -70,10 +71,14 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 		scrollBuffer: string;
 	}> {
 		const terminal = new CapturingTerminal(100, 30);
-		beginStartupComposer({ preferences: config, terminal, version: "18.0.4", cache: false });
-		await terminal.waitForRender();
-		const lease = takeStartupComposerLease();
-		expect(lease).toBeDefined();
+		let lease: ComposerLease | undefined;
+		if (!resuming) {
+			// The real CLI prepaints only an empty argv or --no-session, never a resumed session.
+			beginStartupComposer({ preferences: config, terminal, version: "18.0.4", cache: false });
+			await terminal.waitForRender();
+			lease = takeStartupComposerLease();
+			expect(lease).toBeDefined();
+		}
 		const testSession = await createTestSession({ inMemory: true });
 		if (resuming) {
 			testSession.sessionManager.appendMessage(userMsg("resume marker question"));
@@ -87,9 +92,9 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			undefined,
 			undefined,
 			undefined,
-			lease!.composer,
+			lease?.composer,
 		);
-		lease!.adopt();
+		lease?.adopt();
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		try {
 			await mode.init({ suppressWelcomeIntro: resuming, clearInitialTerminalHistory: true });
