@@ -105,6 +105,15 @@ describe("WikiTool", () => {
 		} finally {
 			service.close();
 		}
+		await expect(tool.execute("fts-lookup", { op: "lookup", key: "scan", index: "secondary" })).rejects.toThrow(
+			"requires a structured index; secondary is mode=fts",
+		);
+		await expect(
+			tool.execute("fts-relations", { op: "relations", entityId: fixture.commandId, index: "secondary" }),
+		).rejects.toThrow("requires a structured index; secondary is mode=fts");
+		await expect(tool.execute("fts-conflicts", { op: "conflicts", index: "secondary" })).rejects.toThrow(
+			"requires a structured index; secondary is mode=fts",
+		);
 		await expect(tool.execute("12", { op: "search", query: "scan" })).rejects.toThrow(
 			"specify index to keep research corpus-scoped",
 		);

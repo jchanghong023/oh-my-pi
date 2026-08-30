@@ -11,14 +11,11 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
-// Guards the auto-learn tool ACTIVATION wiring in createAgentSession: createTools
-// force-includes manage_skill into the built registry for an enabled top-level
-// session, but an explicit `toolNames` whitelist would otherwise drop it from the
-// active set — so the SDK must re-activate it (mirroring the `yield` invariant),
-// or the nudge/guidance would point at a tool the model cannot call. No memory
-// backend is configured (manage_skill needs only `autolearn.enabled`), so the
-// session starts without a heavy backend.
-describe("createAgentSession auto-learn tool activation", () => {
+// Guards builtins that createTools force-includes into the registry but an
+// explicit `toolNames` whitelist would otherwise drop from the active set.
+// createAgentSession must mirror those inclusions so the callable surface
+// remains consistent with wiki/read pairing and auto-learn guidance.
+describe("createAgentSession force-included tool activation", () => {
 	let registryDir: string;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
@@ -63,6 +60,11 @@ describe("createAgentSession auto-learn tool activation", () => {
 		sessions.push(session);
 		return session.getActiveToolNames();
 	}
+
+	it("activates wiki when an unrestricted explicit tool set includes read", async () => {
+		const names = await activeToolNames(Settings.isolated({}));
+		expect(names).toContain("wiki");
+	});
 
 	it("activates force-included manage_skill in a restricted top-level session", async () => {
 		const names = await activeToolNames(Settings.isolated({ "autolearn.enabled": true }));

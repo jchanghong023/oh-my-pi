@@ -68,6 +68,16 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				throw new ToolError(
 					"Multiple document indexes are available; specify index to keep research corpus-scoped",
 				);
+			const selectedIndex =
+				params.index !== undefined ? indexes.find(index => index.name === params.index) : indexes[0];
+			if (
+				selectedIndex?.mode === "fts" &&
+				params.op !== "status" &&
+				params.op !== "search" &&
+				params.op !== "read"
+			) {
+				throw new ToolError(`wiki ${params.op} requires a structured index; ${selectedIndex.name} is mode=fts`);
+			}
 			const limit = Math.max(1, Math.min(50, Math.floor(params.limit ?? 10)));
 			let text: string;
 			switch (params.op) {

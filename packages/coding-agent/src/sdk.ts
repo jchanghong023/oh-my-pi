@@ -3158,15 +3158,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		) {
 			explicitlyRequestedToolNames.push("yield");
 		}
-		// Auto-learn builtins are force-included into the registry by `createTools`
-		// for enabled top-level sessions (tools/index.ts), but — like `yield` above —
-		// an explicit `toolNames` list would otherwise drop them from the ACTIVE set,
-		// leaving the nudge/guidance pointing at tools the model cannot call. Activate
-		// exactly the builtins createTools built (`builtInToolNames` — provenance, so a
-		// same-named custom/extension tool is never force-activated when auto-learn is
-		// off) to keep guidance, controller, and the active set consistent.
+		// Builtins force-included into the registry by `createTools` would otherwise be
+		// dropped from the ACTIVE set when the caller supplied an explicit `toolNames`
+		// list. Activate exactly the builtins createTools built (`builtInToolNames` —
+		// provenance, so a same-named custom/extension tool is never force-activated).
+		// This keeps the wiki/read pairing and auto-learn guidance consistent with the
+		// callable tool surface.
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
-			for (const name of ["manage_skill", "learn"]) {
+			for (const name of ["wiki", "manage_skill", "learn"]) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}
