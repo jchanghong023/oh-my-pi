@@ -157,7 +157,7 @@ import type { DaemonCompletionNotification } from "../launch/protocol";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsFullsend, renderFullsendNotice } from "../modes/fullsend";
-import { keywordInProse } from "../modes/markdown-prose";
+import { maskNonProse } from "../modes/markdown-prose";
 import { containsOrchestrate, renderOrchestrateNotice } from "../modes/orchestrate";
 import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
@@ -374,8 +374,17 @@ import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 const PLAN_MODE_REMINDER_MAX = 3;
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
-const DOCUMENT_SUBAGENT_REQUEST =
-	/(?:^|[\s，。；：])(?:请)?(?:用|使用|调用|让)\s*文档子代理(?:搜索|检索|查询|查找|查)?/u;
+const DOCUMENT_SUBAGENT_REQUEST = /(?:用|使用|调用|让)\s*文档子代理(?:搜索|检索|查询|查找|查)?/gu;
+const NEGATED_DOCUMENT_SUBAGENT_REQUEST = /(?:不(?:要|必|用|需要)?|别|勿|无需|禁止)(?:再)?\s*$/u;
+
+function containsDocumentSubagentRequest(text: string): boolean {
+	const prose = maskNonProse(text);
+	for (const match of prose.matchAll(DOCUMENT_SUBAGENT_REQUEST)) {
+		const prefix = prose.slice(0, match.index);
+		if (!NEGATED_DOCUMENT_SUBAGENT_REQUEST.test(prefix)) return true;
+	}
+	return false;
+}
 
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
@@ -5748,7 +5757,7 @@ export class AgentSession {
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (this.getEnabledToolNames().includes("task") && keywordInProse(text, DOCUMENT_SUBAGENT_REQUEST)) {
+		if (this.getEnabledToolNames().includes("task") && containsDocumentSubagentRequest(text)) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "document-subagent-notice",

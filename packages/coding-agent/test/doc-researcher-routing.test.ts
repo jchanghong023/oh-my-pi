@@ -36,7 +36,10 @@ describe("manual document researcher routing", () => {
 		const command = lookupBuiltinSlashCommand("doc");
 		if (!command?.handle) throw new Error("Expected /doc to be registered");
 		const output: string[] = [];
-		const runtime = { output: (text: string) => output.push(text) } as unknown as SlashCommandRuntime;
+		const runtime = {
+			output: (text: string) => output.push(text),
+			session: { getEnabledToolNames: () => ["task"] },
+		} as unknown as SlashCommandRuntime;
 
 		const empty = await command.handle({ name: "doc", args: "", text: "/doc" }, runtime);
 		const routed = await command.handle(
@@ -59,5 +62,27 @@ describe("manual document researcher routing", () => {
 				"What does the indexed guide require?",
 			].join("\n"),
 		});
+	});
+
+	it("rejects /doc when the active session cannot delegate", async () => {
+		const command = lookupBuiltinSlashCommand("doc");
+		if (!command?.handle) throw new Error("Expected /doc to be registered");
+		const output: string[] = [];
+		const runtime = {
+			output: (text: string) => output.push(text),
+			session: { getEnabledToolNames: () => [] },
+		} as unknown as SlashCommandRuntime;
+
+		const result = await command.handle(
+			{
+				name: "doc",
+				args: "What does the indexed guide require?",
+				text: "/doc What does the indexed guide require?",
+			},
+			runtime,
+		);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output).toEqual(["Document research is unavailable: this session cannot delegate tasks."]);
 	});
 });

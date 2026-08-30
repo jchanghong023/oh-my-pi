@@ -481,6 +481,10 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output("Usage: /doc <question>");
 				return commandConsumed();
 			}
+			if (!runtime.session.getEnabledToolNames().includes("task")) {
+				await runtime.output("Document research is unavailable: this session cannot delegate tasks.");
+				return commandConsumed();
+			}
 			return {
 				prompt: [
 					"Manual document research request.",
