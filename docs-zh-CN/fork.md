@@ -28,8 +28,9 @@
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
 - **子代理满载并发**：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令；RPC builtin residual prompt 同步转发 images 与 steer/followUp 行为。
-- **JCH 个人命令**：新增 `/jchfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitforcesync` 6 个可携带任务文本的斜杠命令（`/jchgitpush`、`/jchgitcommit` 已移除），实现见 `packages/coding-agent/src/jch-commands/`：
+- **JCH 个人命令**：新增 `/jchfix`、`/jchfastreviewfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitforcesync` 7 个可携带任务文本的斜杠命令（`/jchgitpush`、`/jchgitcommit` 已移除），实现见 `packages/coding-agent/src/jch-commands/`：
   - `/jchfix`：复现或确认现象后读取真实实现与调用链定位根因，只做最小修复、仅更新实际受影响的调用方与跨文件契约，测试按可观察行为更新，配置本身是根因时才允许修改；环境无法验证时报告阻塞、不提交。
+  - `/jchfastreviewfix`：显式选择未提交修改、指定 commit 或整个仓库，委派任务 MUST 逐项携带完整 Review 契约，独立只读子代理先筛选、主代理裁决后最小修复；每条验证命令设 10 秒硬上限。
   - `/jchfixactions`：先 `git fetch --all`，从当前分支 upstream remote URL 解析目标 GitHub 仓库；workflow/branch 参数必须同时约束失败 run；定位最新有效失败并读 job/step/log，按 event 判定 head SHA，只提交本次 CI 修复并普通 push，优先用 push 新 run 验证，最多 3 轮。
   - `/jchcatchup`：先 `git fetch --all`，再只读梳理仓库、分支、upstream、conflicts、staged/unstaged/untracked 与 diff、ahead/behind、local-only 与 remote-only commits，按修改路径或提交差异查看约 10–20 个相关 commits，输出“已完成 / 当前状态 / 未完成与异常 / 建议下一步”；用于接续工作时快速恢复现场。
   - `/jchgs`：先 `git fetch --all` 更新远端引用，再梳理当前分支、upstream、remote、conflicts、staged/unstaged/untracked、ahead/behind、未推送提交与远端新增提交，指出异常与最小安全的下一步；用于快速了解当前目录及其仓库的状态。
