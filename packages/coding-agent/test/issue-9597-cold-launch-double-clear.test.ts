@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/composer";
+import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-coding-agent/modes/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	beginStartupComposer,
@@ -79,6 +79,9 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			lease = takeStartupComposerLease();
 			expect(lease).toBeDefined();
 		}
+		const composer = resuming
+			? new Composer({ terminal, preferences: config, welcome: { version: "18.0.4" } })
+			: lease?.composer;
 		const testSession = await createTestSession({ inMemory: true });
 		if (resuming) {
 			testSession.sessionManager.appendMessage(userMsg("resume marker question"));
@@ -92,7 +95,7 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			undefined,
 			undefined,
 			undefined,
-			lease?.composer,
+			composer,
 		);
 		lease?.adopt();
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});

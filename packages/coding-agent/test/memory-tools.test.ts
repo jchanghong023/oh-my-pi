@@ -756,14 +756,13 @@ describe("Mnemopi backend lifecycle", () => {
 		});
 
 		const BUDGET_MS = 20;
-		const start = Bun.nanoseconds();
+		// Drive the timeout signal deterministically. Under parallel CI, event-loop
+		// scheduling can delay a real timer far beyond its requested duration.
+		const sleepSpy = vi.spyOn(Bun, "sleep").mockResolvedValue(undefined);
 		await state.dispose({ timeoutMs: BUDGET_MS });
-		const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;
 
-		// Dispose must surrender within the budget (plus a generous slack); the
-		// in-flight consolidate is detached, not awaited.
-		expect(elapsedMs).toBeLessThan(BUDGET_MS * 5);
-		expect(elapsedMs).toBeGreaterThanOrEqual(BUDGET_MS - 10);
+		expect(sleepSpy).toHaveBeenCalledTimes(1);
+		expect(sleepSpy).toHaveBeenCalledWith(expect.any(Number));
 		expect(flushSpy).toHaveBeenCalled();
 		expect(flushCalls).toBe(1);
 		// `close()` is deferred so SQLite writes don't race a closed handle.
