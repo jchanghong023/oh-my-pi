@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { Settings } from "../src/config/settings";
 import { DocsService } from "../src/docs/service";
 import type { DocumentExtraction } from "../src/docs/types";
-import { DocsTool } from "../src/tools/docs";
+import { WikiTool } from "../src/tools/wiki";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -73,10 +73,10 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 	return result.content.map(item => item.text ?? "").join("\n");
 }
 
-describe("DocsTool", () => {
+describe("WikiTool", () => {
 	it("serves all six operations and enforces operation-specific required fields", async () => {
 		const fixture = await indexedFixture();
-		const tool = new DocsTool(session(fixture.agent, fixture.root));
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
 		const search = await tool.execute("1", { op: "search", query: "scan", index: "manual" });
 		expect(text(search)).toContain("Sections:");
 		expect(text(await tool.execute("2", { op: "lookup", key: "s", index: "manual" }))).toContain("aliases=s");
@@ -110,10 +110,19 @@ describe("DocsTool", () => {
 		);
 	});
 
-	it("rejects use when no document indexes exist", async () => {
+	it("reports user-run FTS initialization without creating an index", async () => {
 		const root = await tempDir("docs-tool-empty-root-");
 		const agent = await tempDir("docs-tool-empty-agent-");
-		const tool = new DocsTool(session(agent, root));
-		await expect(tool.execute("empty", { op: "status" })).rejects.toThrow("No document indexes");
+		const tool = new WikiTool(session(agent, root));
+		await expect(tool.execute("empty", { op: "status" })).rejects.toThrow(
+			"No document indexes. Run: omp docs init <dir> --name <name> --mode fts",
+		);
+
+		const service = new DocsService({ agentDir: agent, cwd: root });
+		try {
+			expect(service.list()).toEqual([]);
+		} finally {
+			service.close();
+		}
 	});
 });

@@ -47,7 +47,6 @@ import { type BuiltinToolName, type HiddenToolName, normalizeToolNames } from ".
 import { type CheckpointState, CheckpointTool, type CompletedRewindState, RewindTool } from "./checkpoint";
 import { ComputerTool } from "./computer";
 import { DebugTool } from "./debug";
-import { DocsTool } from "./docs";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
@@ -67,6 +66,7 @@ import type { PlanProposalHandler } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase, TodoTool } from "./todo";
+import { WikiTool } from "./wiki";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
@@ -474,7 +474,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
-	docs: s => new DocsTool(s),
+	wiki: s => new WikiTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	computer: s => new ComputerTool(s),
@@ -513,6 +513,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
+	if (!restrictToolNames && requestedTools?.includes("read") && !requestedTools.includes("wiki")) {
+		requestedTools.push("wiki");
+	}
 	// createTools may be called more than once for the same ToolSession. A later
 	// explicit (or full-set) write request is a real grant and must upgrade any
 	// device-only transport left by an earlier read-only call.
@@ -656,7 +659,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
 		if (name === "eval") return allowEval;
-		if (name === "docs") return requestedTools?.includes("docs") === true;
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo")
 			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");

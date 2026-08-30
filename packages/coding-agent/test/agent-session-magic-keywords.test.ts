@@ -123,54 +123,21 @@ describe("AgentSession magic keyword settings", () => {
 		]);
 	});
 
-	it.each(["fdth 是什么 用文档子代理搜索", "帮我用文档子代理搜索 fdth", "我想调用文档子代理查询 fdth"])(
-		"routes an explicit Chinese document-subagent request: %s",
-		async text => {
-			const created = await createMagicKeywordSession(modelRegistry, [mockTaskTool]);
-			session = created.session;
-			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
-
-			await session.prompt(text);
-
-			const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{
-				role?: string;
-				customType?: string;
-				content?: string | Array<{ type: string; text?: string }>;
-				display?: boolean;
-				attribution?: string;
-			}>;
-			const noticeIdx = promptMessages.findIndex(message => message.customType === "document-subagent-notice");
-			const userIdx = promptMessages.findIndex(message => message.role === "user");
-			const notice = promptMessages[noticeIdx];
-			expect(notice).toMatchObject({
-				role: "custom",
-				customType: "document-subagent-notice",
-				display: false,
-				attribution: "user",
-			});
-			expect(notice?.content).toContain('agent: "doc-researcher"');
-			expect(notice?.content).toContain("NEVER substitute `librarian`");
-			expect(noticeIdx).toBeLessThan(userIdx);
-			expect(promptMessages[userIdx]?.content).toEqual([{ type: "text", text }]);
-		},
-	);
-
-	it.each([
-		"不用文档子代理搜索 fdth",
-		"不要用文档子代理搜索 fdth",
-		"不要使用文档子代理查询 fdth",
-		"别调用文档子代理查询 fdth",
-		"勿让文档子代理搜索 fdth",
-		"禁止调用文档子代理查询 fdth",
-	])("does not route a negated document-subagent request: %s", async text => {
+	it("does not route document-subagent prose", async () => {
+		const text = "帮我用文档子代理搜索 fdth";
 		const created = await createMagicKeywordSession(modelRegistry, [mockTaskTool]);
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt(text);
 
-		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.some(message => message.customType === "document-subagent-notice")).toBe(false);
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{
+			role?: string;
+			customType?: string;
+			content?: Array<{ type: string; text?: string }>;
+		}>;
+		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+		expect(promptMessages.find(message => message.role === "user")?.content).toEqual([{ type: "text", text }]);
 	});
 
 	it("prepends a hidden user-attributed fullsend notice without task and preserves the user message", async () => {

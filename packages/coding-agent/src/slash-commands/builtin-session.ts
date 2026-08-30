@@ -470,33 +470,6 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "doc",
-		icon: "tree",
-		description: "Ask the indexed document researcher",
-		inlineHint: "<question>",
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			const question = command.args.trim();
-			if (!question) {
-				await runtime.output("Usage: /doc <question>");
-				return commandConsumed();
-			}
-			if (!runtime.session.getEnabledToolNames().includes("task")) {
-				await runtime.output("Document research is unavailable: this session cannot delegate tasks.");
-				return commandConsumed();
-			}
-			return {
-				prompt: [
-					"Manual document research request.",
-					'MUST delegate through `task` with `agent: "doc-researcher"` and wait for its result.',
-					"MUST pass the question verbatim as the assignment, then return its evidence-backed answer and citations.",
-					"",
-					question,
-				].join("\n"),
-			};
-		},
-	},
-	{
 		name: "git",
 		icon: "branch",
 		description: "Open the git UI (split diff viewer, staging, commit composer)",

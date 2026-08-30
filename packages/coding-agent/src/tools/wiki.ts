@@ -2,12 +2,12 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { DocsService } from "../docs/service";
-import docsDescription from "../prompts/tools/docs.md" with { type: "text" };
+import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const docsSchema = type({
+const wikiSchema = type({
 	op: type("'search' | 'lookup' | 'relations' | 'read' | 'conflicts' | 'status'").describe(
 		"document research operation",
 	),
@@ -23,10 +23,10 @@ const docsSchema = type({
 	"+": "reject",
 });
 
-export type DocsToolParams = typeof docsSchema.infer;
+export type WikiToolParams = typeof wikiSchema.infer;
 
 function requireString(value: string | undefined, field: string, op: string): string {
-	if (!value?.trim()) throw new ToolError(`docs ${op} requires ${field}`);
+	if (!value?.trim()) throw new ToolError(`wiki ${op} requires ${field}`);
 	return value;
 }
 
@@ -38,21 +38,21 @@ function render(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-export class DocsTool implements AgentTool<typeof docsSchema> {
-	readonly name = "docs";
+export class WikiTool implements AgentTool<typeof wikiSchema> {
+	readonly name = "wiki";
 	readonly approval = "read" as const;
-	readonly label = "Docs";
-	readonly loadMode = "discoverable" as const;
-	readonly summary = "Research indexed external Markdown documentation";
-	readonly description = prompt.render(docsDescription);
-	readonly parameters = docsSchema;
+	readonly label = "Wiki";
+	readonly loadMode = "essential" as const;
+	readonly summary = "Search and read indexed Markdown knowledge";
+	readonly description = prompt.render(wikiDescription);
+	readonly parameters = wikiSchema;
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,
-		params: DocsToolParams,
+		params: WikiToolParams,
 		_signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
@@ -60,7 +60,8 @@ export class DocsTool implements AgentTool<typeof docsSchema> {
 		const service = new DocsService({ agentDir: this.session.settings.getAgentDir(), cwd: this.session.cwd });
 		try {
 			const indexes = service.list();
-			if (indexes.length === 0) throw new ToolError("No document indexes. Run: omp docs init <dir> --name <name>");
+			if (indexes.length === 0)
+				throw new ToolError("No document indexes. Run: omp docs init <dir> --name <name> --mode fts");
 			if (params.index && !indexes.some(index => index.name === params.index))
 				throw new ToolError(`Unknown document index: ${params.index}`);
 			if (params.op !== "status" && !params.index && indexes.length > 1)
@@ -113,7 +114,7 @@ export class DocsTool implements AgentTool<typeof docsSchema> {
 					break;
 				}
 				case "relations": {
-					if (!Number.isInteger(params.entityId)) throw new ToolError("docs relations requires entityId");
+					if (!Number.isInteger(params.entityId)) throw new ToolError("wiki relations requires entityId");
 					const relations = service.relations(params.entityId as number, {
 						index: params.index,
 						limit,
@@ -138,9 +139,9 @@ export class DocsTool implements AgentTool<typeof docsSchema> {
 				}
 				case "read": {
 					if (params.evidenceId === undefined && params.sectionId === undefined)
-						throw new ToolError("docs read requires evidenceId or sectionId");
+						throw new ToolError("wiki read requires evidenceId or sectionId");
 					if (params.evidenceId !== undefined && params.sectionId !== undefined)
-						throw new ToolError("docs read accepts only one of evidenceId or sectionId");
+						throw new ToolError("wiki read accepts only one of evidenceId or sectionId");
 					const result = service.read({
 						evidenceId: params.evidenceId,
 						sectionId: params.sectionId,

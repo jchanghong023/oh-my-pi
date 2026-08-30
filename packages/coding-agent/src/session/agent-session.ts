@@ -157,7 +157,6 @@ import type { DaemonCompletionNotification } from "../launch/protocol";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsFullsend, renderFullsendNotice } from "../modes/fullsend";
-import { maskNonProse } from "../modes/markdown-prose";
 import { containsOrchestrate, renderOrchestrateNotice } from "../modes/orchestrate";
 import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
@@ -173,7 +172,6 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
-import documentSubagentNotice from "../prompts/system/document-subagent-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -374,17 +372,6 @@ import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 const PLAN_MODE_REMINDER_MAX = 3;
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
-const DOCUMENT_SUBAGENT_REQUEST = /(?:用|使用|调用|让)\s*文档子代理(?:搜索|检索|查询|查找|查)?/gu;
-const NEGATED_DOCUMENT_SUBAGENT_REQUEST = /(?:不(?:要|必|用|需要)?|别|勿|无需|禁止)(?:再)?\s*$/u;
-
-function containsDocumentSubagentRequest(text: string): boolean {
-	const prose = maskNonProse(text);
-	for (const match of prose.matchAll(DOCUMENT_SUBAGENT_REQUEST)) {
-		const prefix = prose.slice(0, match.index);
-		if (!NEGATED_DOCUMENT_SUBAGENT_REQUEST.test(prefix)) return true;
-	}
-	return false;
-}
 
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
@@ -5757,16 +5744,6 @@ export class AgentSession {
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (this.getEnabledToolNames().includes("task") && containsDocumentSubagentRequest(text)) {
-			keywordNotices.push({
-				role: "custom",
-				customType: "document-subagent-notice",
-				content: documentSubagentNotice,
-				display: false,
-				attribution: "user",
-				timestamp,
-			});
-		}
 		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text)) {
 			keywordNotices.push({
 				role: "custom",
@@ -5879,9 +5856,8 @@ export class AgentSession {
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
-		// Explicit document-subagent requests and magic keywords prepend hidden
-		// system notices that steer only this turn. User-authored prompts only:
-		// synthetic / agent-initiated turns never trigger them.
+		// Magic keywords prepend hidden system notices that steer only this turn.
+		// User-authored prompts only: synthetic / agent-initiated turns never trigger them.
 		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
 
 		// A user-initiated prompt (typed message or the `.`/`c` continue shortcut)

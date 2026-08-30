@@ -22,7 +22,7 @@
 
 ### 用户功能
 
-- **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema；`/docs` 管理索引，用户通过 `/doc <question>` 或含“用/使用/调用/让文档子代理”的肯定自然语句显式触发 `@smol` 的 `doc-researcher`，自然语言触发仅注入当轮路由指令，`/doc` 在当前会话无 `task` 时明确拒绝，`docs` 工具仍不进入主代理及默认代理上下文；默认仅建 FTS，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
+- **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema；`/docs` 管理索引，`wiki` 作为 essential 只读内置工具默认提供给非受限代理，受限会话保持显式白名单；无专用文档子代理、`/doc` 或自然语言路由；默认仅建 FTS，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
 - **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；登录只 trim/store、不绑定官方校验端点，实际请求使用配置的 provider baseUrl；env metadata 优先 `COMMAND_CODE_API_KEY`，回退 legacy `COMMANDCODE_API_KEY`。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 与旧 `opencode` 中 catalog bundled 且 input/output 价格都为零的模型；缺失 cost 的 bundled/discovered 行直接跳过，gateway 新 ID 按“价格未知”隐藏，主列表与 locked preview 共用过滤。
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
