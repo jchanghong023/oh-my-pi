@@ -53,7 +53,7 @@
 - **Fork 二进制发布**：CI 由 `workflow_dispatch` 构建、按输入发布 `+fork.N` GitHub Release；二进制嵌入 fork 版本、构建时间与更新仓库，`omp update` 比较 fork build counter 并从 fork Release 更新。
 - **安装/更新体验**：安装器比较已装版本、同版本跳过下载并以唯一同目录临时文件原子替换；Linux 不终止现有会话，旧进程继续使用旧 inode 并提示重启；Windows 因 exe 文件锁仅在提前告警后终止目标 Path 精确匹配的进程；保留下载进度、curl 回退与错误正文。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；两套 locale 各自提交 `package-lock.json` 并以 `npm ci` 锁定依赖构建，中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
-- **DFT 知识调研**：新增 OMP 访问内部 Markdown 知识的技术调研报告，覆盖结构化知识服务、MCP、Agent Skills、Task 子代理、OCR/ASR 治理、安全与落地路线，并记录内置 FTS 对比 grep 的速度、精确率与召回率实测。
+- **DFT 知识调研**：完全重写为 OMP 内置 Markdown 索引技术报告；先概览采集、FTS/RAG、结构化抽取、图/MCP、Agent/代码索引等相关技术，再详述 `docs`/`wiki` 的 FTS 与 structured 实现、生命周期、安全和适用边界，并保留 grep 对照实测基线。
 
 ### 开发维护
 

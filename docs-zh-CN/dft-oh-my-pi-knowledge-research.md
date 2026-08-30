@@ -1,1096 +1,353 @@
-# DFT 团队使用 Oh My Pi 访问内部 Markdown 知识的技术调研报告
+# Oh My Pi 内置 Markdown 知识索引：技术全景、实现与 DFT 实测
 
-**报告日期：** 2026-08-30  
-**适用环境：** 芯片开发 DFT 内网研发环境  
-**资料形态：** 约 100 MB Markdown，来源包含原始文档、图片 OCR、音视频转写  
-**工具环境：** 本文面向当前项目 **Oh My Pi（OMP）**。OMP 原生支持上下文文件、Skills、Task 子代理、Rules、Hooks、扩展、Marketplace 和 MCP，可将知识检索与编码工作流组合在同一套 Agent 运行时中。
+**重写日期：** 2026-08-31  
+**目标场景：** DFT 内网研发；约 100 MB Markdown，含原始文档及由图片、Office/PDF、音视频转换得到的 OCR/ASR 文本  
+**讨论对象：** 本 fork 新增的外部 Markdown 持久索引：`omp docs`、TUI `/docs` 与 Agent 工具 `wiki`；不是 `omp://` 内嵌产品手册
 
----
+## 1. 结论
 
-## 1. 执行摘要
+1. **现阶段默认使用内置 FTS 索引。** 它以标题章节切分 Markdown，持久化到 SQLite FTS5，使用 BM25 排序；建索引和检索均不调用模型。对 DFT 命令、信号、版本、报错等高信息量字面词，已测速度和命中质量足以形成实用闭环。
+2. **`wiki` 是查询面，`docs` 是管理面。** 用户通过 `omp docs` 或 `/docs` 创建、重建、查看、删除索引；Agent 通过只读 `wiki` 执行 `status → search → read`，读取索引中保存的原始章节并引用路径与行号。
+3. **结构化模式是可选的模型抽取层，不是 FTS 的同义词。** 显式选择 `structured` 后，OMP 才按 schema 抽取实体、断言、关系和证据，开放 `lookup`、`relations`、`conflicts`。它需要模型凭据，成本与失败面远高于 FTS；当前实测只覆盖 FTS。
+4. **保留 grep，按缺口引入外部技术。** 正则、全量枚举、检查工作区最新内容仍用 grep；只有出现可量化的语义召回缺口时再评估向量/混合检索，出现中央服务、细粒度权限、审计或多客户端需求时再评估 MCP。
+5. **本 fork 没有专用文档子代理、`/doc` 快捷命令或自然语言路由器。** `wiki` 作为 essential 只读工具进入非受限会话；是否调用仍由 Agent 根据任务与工具说明判断。需要强制查询时，可用简短项目规则或 Skill 补充行为约束，但不复制知识库。
 
-当前问题不是“Oh My Pi 能不能读取 Markdown”，而是下面四个问题同时存在：
+## 2. 相关技术全景
 
-1. **知识与代码仓库分离。** 各代码项目基本没有项目文档，OMP 只能从代码反推设计意图。
-2. **术语高度内部化。** Lander、Sailor、Hibist、`stage/group/tc`、`top_repair`、各种 `define_*` 配置命令及版本组合具有明显的公司内部语义，通用模型不能可靠补全。
-3. **知识不是纯自然语言。** 资料中有精确命令、选项、Tcl 示例、流程依赖、版本限制、输入输出件和报错；这些内容不能只按“语义相似度”处理。
-4. **资料质量不均。** 同一知识库混有正式手册、需求/设计说明、培训材料、会议材料、OCR 和语音转写。错误地自动纠正命令、信号名或路径，可能比不检索更危险。
+知识系统至少包含五层：**采集 → 切分 → 检索 → 知识表示 → Agent 接入**。grep、RAG、MCP、Skills 解决的问题不同，不能放在同一维度比较。
 
-因此，不建议把问题简化为“grep 还是 RAG”。更合理的总体架构是：
+### 2.1 采集、切分与检索
 
-```text
-Oh My Pi
-   │
-   ├── 技术二：DFT OMP 插件
-   │      ├── Agent Skills：何时查、查什么、如何使用证据
-   │      ├── DFT 文档研究 Task 子代理：隔离检索上下文
-   │      ├── 精简规则：项目类型、版本和风险边界
-   │      └── 可选 Hooks：注入当前分支、工具版本、任务类型
-   │
-   └── 技术一：DFT 文档知识服务（MCP）
-          ├── 原始 Markdown，只读保留
-          ├── 规范化检索副本和内部术语别名表
-          ├── 标题/章节全文索引
-          ├── 命令、选项、模式、版本、示例、限制的结构化索引
-          ├── 可选向量检索
-          └── 后续可加入“文档符号 ↔ 代码符号”映射
-```
+| 技术 | 核心机制 | 适用价值 | 主要边界 | 内置 `docs` 状态 |
+|---|---|---|---|---|
+| OCR / ASR / 文档转换 | 图片、PDF、Office、音视频转成文本或 Markdown | 把不可直接检索的资料变成语料 | 可能破坏命令拼写、表格、代码块、说话人和时间信息 | **不内置**；只接收转换后的 `.md` |
+| 结构切分 | 按标题、段落或语法块生成检索单元，并保留来源位置 | 命中结果可读、可引用，减少无关上下文 | 固定长度会切断表格/代码；完整 AST 成本更高 | **内置**轻量标题切分，不是完整 Markdown AST |
+| grep / 正则 | 每次顺序扫描当前源文件 | 无索引、结果实时、支持正则与全量枚举 | 每次读取全语料；无章节排序和持久快照 | **外部互补工具** |
+| 倒排全文检索 | 维护“词项 → 章节”映射 | 字面词查询快，适合命令、信号、版本、报错 | 不理解同义表达；索引需要更新 | **FTS 核心**：SQLite FTS5 |
+| BM25 排序 | 综合词频、文档频率、长度与字段权重排序 | 让标题命中、高区分度词优先 | 排名不是事实正确性；宽泛词仍会产生大量命中 | **已内置** |
+| 向量检索 | embedding 将查询与文本映射到向量空间，按距离召回 | 适合“换一种说法”的概念查询 | 精确符号、数字和近似命令可能不稳定；需模型与向量库 | **未内置** |
+| 混合检索 / 重排 | 合并字面与向量候选，再用规则或 reranker 排序 | 同时兼顾精确词与语义召回 | 系统、评测、成本复杂度上升 | **未内置** |
 
-### 最终推荐的两种技术
+### 2.2 知识表示、接入与使用
 
-| 推荐 | 技术 | 定位 | 主要解决的问题 |
-|---|---|---|---|
-| 1 | **结构化 DFT 文档知识服务，并通过 MCP 接入 OMP** | 知识后端 | 让 Agent 能按命令、选项、版本、流程和章节进行可靠查询，而不是只做文本相似度搜索 |
-| 2 | **Agent Skills + 专用 Task 子代理，并封装成团队 OMP 插件** | Agent 行为和团队分发层 | 让 OMP 知道“什么时候必须查文档、调用哪些工具、如何处理冲突和 OCR 噪声” |
+| 技术 | 核心机制 | 适用价值 | 主要边界 | 内置 `docs` 状态 |
+|---|---|---|---|---|
+| RAG | 检索外部证据，将命中内容放入模型上下文后生成答案 | 知识可更新、可追溯，不必写进模型参数 | 答案质量仍受检索、上下文和模型影响 | `wiki search/read + Agent` 构成**工具式字面 RAG** |
+| Schema 结构化抽取 | 将文本抽成实体、字段、关系、条件和证据 | 直接查询“命令—选项—版本—流程” | 抽取昂贵且会错，必须校验证据 | **可选 `structured` 模式** |
+| 知识图谱 | 以节点和边表达实体关系 | 适合多跳关系、版本依赖和影响分析 | 图的正确性取决于抽取质量 | 内置关系表只覆盖直接关系，不是完整图平台 |
+| GraphRAG | 在知识图上聚类、生成社区摘要并执行局部/全局检索 | 适合跨文档综合与全局主题问题 | 构建与查询成本高，错误边会扩散 | **未内置** |
+| MCP | 用标准协议把外部资源、工具、服务接入 Agent host | 中央部署、多客户端、服务端鉴权和审计 | MCP 是接口，不决定检索质量 | 内置索引**不经过 MCP**；MCP 是外部替代/扩展 |
+| Rules / Skills / Task / Hooks | 约束何时检索、如何核验，或隔离研究上下文 | 提高触发稳定性，注入少量项目状态 | 不是知识库；规则过长会占上下文 | OMP 通用能力；本 fork **无专用 docs 编排层** |
+| LSP / Tree-sitter / ctags | 解析代码符号、定义、引用和语法结构 | 建立“文档概念 → 源码实现”映射 | 多语言、动态 Tcl/Python、生成代码较难 | 与 `docs` **分离** |
+| 超长上下文 / Prompt Cache | 直接发送大量文本，并缓存重复前缀 | 小型稳定资料实现简单 | 约 100 MB 语料不适合整体注入；冲突和噪声仍在 | **未采用** |
+| 微调 / 继续预训练 | 把领域模式写入模型参数 | 改善术语理解、分类或风格 | 难引用来源，更新滞后，不能保证精确命令 | **不属于索引方案** |
 
-这两项不是互斥方案。第一项提供“可查询的事实”，第二项提供“使用事实的方法”。组合部署最适合本项目。
+关键关系：
 
----
+- **RAG 不等于向量检索。** FTS、向量、结构化查询都可作为 RAG 的检索器；本 fork 当前以 FTS 为默认检索器。
+- **MCP 不等于知识库。** 它标准化连接；后端仍需自行选择 FTS、向量、图或数据库。
+- **结构化关系表不等于 GraphRAG。** 内置模式能遍历直接关系、检测部分冲突，但没有社区聚类、社区摘要或全局图检索。
+- **Skills / 子代理不等于索引。** 它们只影响 Agent 何时、怎样使用证据。
 
-## 2. 项目现状与资料特征
+## 3. 内置 `docs` / `wiki` 的实际技术
 
-### 2.1 从项目资料确认的知识特点
-
-本项目资料不是普通的软件 API 文档，而是多套内部平台、EDA 工具和业务方法学的组合：
-
-- Lander 从 Sailor、Hibist 和用户配置获取数据，并以 `STAGE`、`GROUP`、`TC` 等维度承载验证方案。
-- MBIST、ATPG、IJTAG、3D 场景分别存在不同流程、模式、输入输出件和配置命令。
-- 资料中存在大量类似 `define_project_info`、`define_mbist_info`、`define_atpg_info`、`define_test_setup`、`define_sim_info` 的内部命令和选项。
-- 工具版本之间存在兼容关系，某些文档明确要求 Lander、Sailor、Hibist 等版本匹配，否则可能出现解析错误。
-- IDE/Lander 方案本身强调配置、输入输出、执行结果和版本数据的可追溯性，存在 `IDE.json`、`IDE_detail.json`、按用例生成 JSON，以及 Git/OBS 数据管理设计。
-
-这些特征决定了：
-
-> 对本项目而言，“命令和版本的精确命中”与“自然语言语义检索”同样重要，且前者在修改代码和配置时通常风险更高。
-
-### 2.2 Markdown 数据的主要质量风险
-
-| 风险 | 示例类型 | 对 Agent 的影响 |
-|---|---|---|
-| OCR 字符混淆 | `0/O`、`1/l/I`、`5/S`、`8/B`、`-/_` | 可能把真实命令、实例名或路径纠错成错误内容 |
-| ASR 同音/断句 | 工具名、内部缩写、英文命令被中文化或拆分 | 语义检索召回下降，摘要可能改变原意 |
-| 表格转写错位 | 命令、可选值、说明不在同一行 | 错误建立“选项—含义”关系 |
-| 重复与版本并存 | 培训材料、需求说明、实现说明、测试说明同时存在 | Agent 可能拿旧版本覆盖新版本，或把需求当已实现事实 |
-| 内部拼写本身非标准 | 例如某些接口名可能有历史拼写 | 不能把所有“不像英文”的词都自动修正 |
-| 代码块被破坏 | 反斜杠、引号、换行丢失 | 生成不可运行的 Tcl、Shell 或配置片段 |
-
-### 2.3 完成条件
-
-方案必须满足以下要求，才算真正提高编码效率：
-
-1. OMP 在涉及内部 DFT 概念或接口时，能够主动或半主动查询资料。
-2. 查询结果必须附带原始文档、章节、版本或日期，便于工程师复核。
-3. 精确符号查询不能被 OCR 自动纠错污染。
-4. 文档冲突必须显式呈现，不能自动“选一个看起来合理的答案”。
-5. 知识服务初期必须只读，不允许文档内容直接触发代码执行或外部写操作。
-6. 接入方式要适用于大量无文档代码仓库，不要求每个仓库复制 100 MB 资料。
-7. 团队级规则、技能和工具可以统一升级、版本化和回滚。
-
----
-
-## 3. 技术方案全景
-
-下面将 grep、传统 RAG 作为已知基线，同时列出其他可选技术。需要注意：有些是“知识存储/检索技术”，有些是“Agent 使用知识的技术”，还有些是“接入与分发技术”，不能混为同一层进行比较。
-
-### 3.1 方案对比
-
-| 技术 | 基本原理 | 适合本项目程度 | 主要价值 | 主要限制 |
-|---|---|---:|---|---|
-| 精确检索：grep/BM25/全文索引 | 根据字面词项、倒排索引和相关性排序查找文本 | 高 | 报错、命令、选项、信号、路径命中可靠 | 不理解同义词和隐含问题；无法直接表达版本和关系 |
-| 通用 RAG | 将文本切块、向量化，按语义相似度取回片段后放入模型上下文 | 中高 | 适合“为什么”“怎么做”“某场景相关资料”等自然语言问题 | 对短命令、相近命令、数字和版本不够稳定；OCR 会污染向量 |
-| **结构化文档编译/符号索引** | 解析 Markdown AST，抽取命令、选项、模式、版本、示例、限制及关系，存入可查询数据库 | **很高** | 精确回答“这个命令有什么选项、在哪个版本、适用于什么 stage/mode” | 初次建设需要定义数据模型和抽取规则；必须保留人工校验机制 |
-| **Agent Skills / Topic Packs** | 把某类任务的操作流程、检索策略和判断规则写成按需加载的技能文件 | **很高** | 不必每次加载全部知识；可教会 OMP 何时查文档和如何核验 | 不是事实数据库；技能过多或触发描述不准会误触发/漏触发 |
-| 专用 Task 子代理 | 将“查资料、比较版本、输出证据”委托给独立上下文的研究 Agent | 高 | 避免主编码上下文被大量检索片段污染；职责清晰 | 仍需可靠知识工具；多一次 Agent 调用有额外延迟和 token 消耗 |
-| Hooks 动态上下文注入 | 在用户提交提示、会话启动、工具调用前后执行脚本，注入分支、版本、路径等上下文 | 中高 | 可以确定性提供“当前项目实际版本/分支”，减少模型猜测 | 不适合注入大量文档；错误 hook 会对每次请求增加噪声 |
-| `AGENTS.md` / `RULES.md` / 路径规则 | 在用户或项目的原生 `.omp/` 目录中提供持久上下文、粘性约束和按需规则 | 中高 | 适合放简短项目约束、版本入口和“必须查文档”的规则 | 不是 100 MB 知识库；长文件持续占上下文并降低遵循度 |
-| MCP 文档服务 | 把查询、读取章节、查命令等能力作为工具提供给 OMP | 很高 | 将知识库与代码仓解耦；可统一权限、版本和升级 | MCP 只是接入协议，后端检索质量仍要自行建设 |
-| 代码静态分析/仓库语义图 | 用 Tree-sitter、ctags、LSP、调用图等解析代码结构，再把文档术语映射到源码符号 | 高，适合作为第二阶段 | 解决“文档知道概念，但不知道代码实现在哪里” | 多语言、动态 Tcl/Python、生成代码会增加解析难度 |
-| 自定义 DFT DSL LSP/校验器 | 将配置命令和合法组合做成语法、补全、hover、诊断或 lint 规则 | 高，但建设成本较高 | 把文档变成可执行约束；能直接发现非法选项和版本组合 | 只覆盖结构明确的命令/config，不能替代概念资料和流程说明 |
-| 知识图谱/GraphRAG | 将实体和关系构造成图，再结合图遍历或社区摘要回答跨文档问题 | 中，后续可选 | 适合工具—版本—模式—步骤—输入输出的复杂关联分析 | OCR 和关系抽取错误会扩散；图构建和更新成本高；不宜作为首期核心 |
-| 案例推理/经验库 | 以历史问题、根因、最小修复和验证结果为案例，根据当前问题找相似案例 | 高，前提是有优质历史案例 | 对 debug、错误定位和回归问题价值高 | 需要整理问题单、日志和最终修复，当前仅 Markdown 文档可能覆盖不足 |
-| 自动代码考古与“活文档” | 从源码、测试、提交历史和调用关系生成仓库地图、模块说明和接口卡片 | 中高 | 代码仓无文档时可快速补充局部上下文 | 自动生成内容是推断，不应冒充正式业务规范；需要持续更新 |
-| 领域微调/持续预训练 | 用内部语料调整模型参数，使模型熟悉术语、表达和常见任务 | 低到中，不建议首期 | 可提高内部术语理解、分类和生成风格 | 文档更新后模型不会自动更新；难以引用来源；训练、评测和安全成本高；不能保证精确命令正确 |
-| 超长上下文/Prompt Cache | 将大量文档直接放进上下文，并通过缓存降低重复输入成本 | 低 | 实现简单，适合少量稳定资料 | 100 MB 远超合理工作集；噪声、冲突、检索位置偏差和成本问题明显 |
-
-### 3.2 除 grep 和 RAG 外，最值得关注的技术
-
-#### 3.2.1 结构化文档编译
-
-它不是“搜索包含某个词的段落”，而是把 Markdown 编译为以下实体：
+### 3.1 架构与数据流
 
 ```text
-Command        define_mbist_info
-Option         -mode
-Value          sub | top | top_repair | ...
-AppliesTo      MBIST
-Stage          DFT | PR | POST | VECTOR
-ToolVersion    Lander x / Sailor y / Hibist z
-Example        原始 Tcl 代码块
-Constraint     版本兼容、必选/可选、合法组合
-Source         文件、标题路径、日期、资料等级
+PDF / Office / 图片 / 音视频
+            │  外部 OCR、ASR、转换与质量治理
+            ▼
+      Markdown 目录（只读源）
+            │
+            │ omp docs init / reinit
+            ▼
+   隐藏的新一代索引 __building__*
+      ├── documents：路径、标题、hash、mtime、大小
+      ├── sections：标题路径、行/字节范围、raw Markdown
+      ├── sections_fts：路径、标题、正文词项 + BM25
+      └── structured 可选层
+          ├── entities / aliases / assertions / relations
+          └── evidence：原文 quote、行/字节范围、confidence
+            │
+            │ 全量成功后，同一 SQLite 事务原子提升
+            ▼
+      当前可见代际（持久快照）
+            │
+      ┌─────┴──────────────┐
+      ▼                    ▼
+/docs、omp docs          wiki（只读 Agent 工具）
+管理与人工预览            status/search/read/...
 ```
 
-OMP 可以直接调用：
+索引查询不再读取原 Markdown；`wiki read` 返回 SQLite 中保存的索引快照。因此：
 
-```text
-lookup_symbol("define_mbist_info")
-get_command_schema("define_sim_info")
-get_examples(symbol="top_repair", stage="POST")
-get_constraints(symbol="define_test_setup", tool_version="...")
-report_conflicts(symbol="define_incomming_info")
-```
+- 源文件临时离线或被删除，旧证据仍可读；
+- 源文件发生变化，结果不会自动更新，必须 `reinit`；
+- 路径与行号对应**建索引时**的版本，而非未重建的工作区现状。
 
-这比单纯向量相似度更适合内部 EDA/DFT DSL。
+### 3.2 两个管理入口、一个查询入口
 
-#### 3.2.2 Agent Skills / Topic Packs
-
-Skill 不是把所有材料再复制一遍，而是为某类任务写一份短小的“专家操作规程”。例如：
-
-- `lander-config`：修改 Lander cfg 前要查哪些命令、版本和示例。
-- `mbist-debug`：遇到 `top_repair`、`mrb_trace`、`only_rcr_test` 时的资料查询和验证顺序。
-- `atpg-debug`：按 mode、fault type、stage、group、tc 组织检索。
-- `ijtag-integration`：先查 ICL/PDL、SIB/TDR 结构和工具版本。
-- `dft-doc-evidence`：如何区分正式手册、实现说明、培训、OCR/ASR 转写。
-
-OMP 只在相关任务出现时通过 `skill://<name>` 读取完整 Skill，因此能减少常驻上下文噪声。
-
-#### 3.2.3 文档—代码符号映射
-
-由于代码仓库没有文档，单纯查到“`define_sim_info` 的资料”还不够，Agent 还需要知道：
-
-```text
-文档符号 define_sim_info
-      │
-      ├── 定义位置：parser/config/...
-      ├── 参数校验：...
-      ├── 调用位置：gen_sim_env/...
-      ├── 测试位置：tests/...
-      └── 历史实现：...
-```
-
-可通过 Tree-sitter、ctags、LSP、静态调用分析和精确字符串引用建立仓库地图。对动态 Python/Tcl 代码，应允许“已确认映射”和“启发式推断”分别标记。
-
-#### 3.2.4 可执行知识：DSL Schema、Linter 和 LSP
-
-若大量开发工作围绕 `define_*` 配置命令，可以把文档中的命令规格转换为 JSON/YAML Schema 或内部 DSL 模型，再开发：
-
-- 参数补全；
-- 参数类型、枚举和必选项检查；
-- stage/mode/version 合法组合检查；
-- hover 显示内部说明和来源；
-- 直接跳转到实现或文档章节。
-
-这类工具能够在 OMP 生成配置后立即验证，比“让模型记住所有规则”可靠。但它适合在结构化索引稳定后建设，不建议作为第一步。
-
-#### 3.2.5 知识图谱/GraphRAG
-
-DFT 流程确实存在复杂关系：
-
-```text
-Tool → Version → Command → Mode → Stage → Step → Input → Output → Check
-```
-
-因此知识图谱有潜力。不过首期不建议直接做 GraphRAG，原因是：
-
-1. OCR/ASR 数据会产生错误实体和错误边；
-2. 很多关系可以先用结构化表表达，不必先引入图数据库；
-3. 需要先建立可靠术语表、版本元数据和来源可信度；
-4. 图谱效果评估比精确符号查询更复杂。
-
-建议把结构化数据库设计为未来可导出成图，而不是首期直接以图为中心。
-
-#### 3.2.6 微调/领域继续预训练
-
-微调能够让模型更熟悉内部术语，但不适合作为文档查询主方案：
-
-- 不能自然给出原始出处；
-- 版本更新后容易陈旧；
-- 精确命令、枚举和路径仍可能生成错误；
-- 训练语料中的 OCR 错误会被学习；
-- 需要单独解决内网数据合规、训练基础设施和模型评测。
-
-后续若使用内网本地模型做“查询分类、术语归一、问题改写”，可考虑小规模微调；不建议让微调模型直接替代知识服务。
-
----
-
-## 4. 评估标准
-
-建议用以下维度评估技术，而不是只看“回答看起来是否聪明”：
-
-| 维度 | 说明 |
-|---|---|
-| 精确性 | 命令、选项、枚举值、版本、路径和流程步骤是否准确 |
-| 召回能力 | 用户不用精确术语时，是否仍能找到正确资料 |
-| 可追溯性 | 是否能返回文件、标题路径、日期、版本和原文片段 |
-| 冲突处理 | 多版本、多来源冲突时是否并列展示而非自动融合 |
-| OCR/ASR 鲁棒性 | 能否通过别名召回，同时保留原始文本不被篡改 |
-| 更新成本 | 新增或修改 Markdown 后能否增量更新 |
-| 接入成本 | 是否需要修改每个代码仓、每台机器或现有 EDA 环境 |
-| 运维能力 | 是否支持统一版本、权限、增量更新、回滚和查询审计 |
-| Agent 触发质量 | OMP 是否在该查时查、不该查时不查 |
-| 代码闭环 | 检索结果能否指导源码定位、修改、测试和验证 |
-| 安全性 | 内部资料是否越权暴露；文档是否可能形成 prompt injection |
-| 性能 | 首次查询延迟、并发、索引大小、上下文和 token 开销 |
-
----
-
-## 5. 推荐技术一：结构化 DFT 文档知识服务 + MCP
-
-### 5.1 原理
-
-将 Markdown 处理为三层数据，而不是只有一个向量库：
-
-```text
-A. 原始证据层
-   raw_markdown / raw_section / raw_code_block
-
-B. 检索层
-   标题路径、全文倒排、别名、可选向量
-
-C. 结构化知识层
-   command / option / value / mode / stage / version /
-   example / constraint / error / input / output / relation
-```
-
-再通过 MCP（Model Context Protocol）向 OMP 暴露只读工具。MCP 是 Agent 与外部工具、数据库和 API 之间的标准接口；它不是检索算法，因此内部可以同时使用精确查询、全文查询、结构化查询和可选向量检索。
-
-#### 5.1.1 推荐工具接口
-
-首期建议只提供少量高价值、只读接口：
-
-```text
-search_docs
-  输入：query、domain、source_type、tool_version、stage、mode、limit
-  输出：候选章节、得分、来源、标题路径、资料等级
-
-lookup_symbol
-  输入：精确命令/选项/术语
-  输出：定义、别名、所属工具、相关章节、冲突数量
-
-get_command_schema
-  输入：command、可选 tool_version
-  输出：options、类型、可选值、必选性、约束和证据来源
-
-get_examples
-  输入：symbol、stage、mode、source_quality
-  输出：保留原文的 Tcl/Shell/JSON 示例及来源
-
-get_constraints
-  输入：symbol、tool/version/stage/mode
-  输出：版本兼容、限制、前置条件和检查项
-
-read_section
-  输入：section_id、view=raw|normalized
-  输出：完整章节；默认优先 raw
-
-report_conflicts
-  输入：symbol 或 topic
-  输出：不同文档、版本或日期间的差异，不自动裁决
-
-find_code_refs（第二阶段）
-  输入：symbol、repo_root
-  输出：源码定义、引用、测试和置信度
-```
-
-#### 5.1.2 为什么适合本项目
-
-1. **内部命令高度结构化。** 资料中已有大量命令表、选项表、示例和合法性说明，适合抽取为符号数据库。
-2. **版本敏感。** 可以把版本作为一等字段进行过滤，而不是把版本号当普通文本。
-3. **资料混杂。** 可以给来源设置可信等级，使正式手册和实现说明优先于培训转写。
-4. **代码仓无文档。** 知识服务集中部署，无需在每个仓库复制整个语料库。
-5. **便于扩展。** 后续可以加入代码引用、问题单、测试结果和 LSP，而不改变 OMP 的调用方式。
-
-### 5.2 数据准备
-
-#### 5.2.1 原始文本与规范化文本双轨保存
-
-数据库必须同时保存：
-
-```text
-raw_text         原始 Markdown 文本，永不自动覆盖
-normalized_text  只用于检索的规范化副本
-```
-
-规范化动作只能用于召回，例如：
-
-```text
-C0RE1  → 搜索别名 CORE1
-PoST   → 搜索别名 POST
-```
-
-但结果展示和代码生成必须回到 `raw_text`，并结合可靠来源确认。对于代码块、反引号内容、路径、文件名、信号名和参数，默认禁止自动改写。
-
-#### 5.2.2 按 Markdown 结构切分
-
-不要采用单纯的固定 token 切块。推荐规则：
-
-1. 解析 Markdown AST；
-2. 以标题路径为主边界；
-3. 表格、代码块、列表和紧邻说明保持完整；
-4. 超长章节再按语义段落拆分；
-5. 每个子块继承完整标题路径和文档元数据；
-6. 相同代码示例与解释建立父子关系。
-
-示例元数据：
-
-```yaml
-section_id: Lander交流.md#...#子模块后仿（三）
-document: Lander交流.md
-heading_path:
-  - Lander2023年现场交流会
-  - 子模块后仿（三）
-source_type: training
-source_date: 2023-12-11
-domain: MBIST
-tool_versions:
-  - lander/...
-  - sailor/...
-content_kinds:
-  - explanation
-  - tcl_example
-ocr_or_asr: false
-quality_grade: B
-```
-
-#### 5.2.3 建立公司术语表和别名表
-
-建议由领域专家维护以下表：
-
-| 字段 | 示例 |
-|---|---|
-| canonical_name | `top_repair` |
-| aliases | 中文称呼、历史称呼、OCR 变体 |
-| entity_type | mode / command / option / tool / file / testcase |
-| domain | MBIST / ATPG / IJTAG / Lander |
-| valid_versions | 适用版本范围或未知 |
-| notes | 不允许自动纠正、易与其他词混淆等 |
-
-别名只影响查询扩展，不修改证据原文。
-
-#### 5.2.4 来源可信度分级
-
-建议至少分为：
-
-| 等级 | 来源 | 使用策略 |
-|---|---|---|
-| A | 对应版本正式用户手册、正式规格、已发布实现说明 | 可用于命令和约束的主要依据 |
-| B | 测试设计、评审通过的技术方案、维护者说明 | 可补充实现和场景信息 |
-| C | 培训材料、交流会、经验总结 | 适合解释和案例，命令需与 A/B 级交叉验证 |
-| D | OCR、音视频转写、未评审会议记录 | 仅作线索；不得单独作为高风险修改依据 |
-
-#### 5.2.5 版本与冲突模型
-
-每条结构化事实至少带：
-
-```text
-source_id
-source_date
-source_type
-tool_name
-tool_version
-valid_from / valid_to（若能确认）
-confidence
-review_status
-```
-
-当同一命令存在不同定义时，不覆盖旧记录，而是返回冲突集合：
-
-```text
-事实 A：来源、版本、原文
-事实 B：来源、版本、原文
-当前项目版本：由仓库配置或 hook 注入
-系统判断：可过滤 / 仍需人工确认
-```
-
-### 5.3 所需软件
-
-#### 5.3.1 MVP 软件栈
-
-| 组件 | 推荐选项 | 用途 |
-|---|---|---|
-| 独立运行环境 | 内网 Linux 服务器或隔离容器 | 不污染 CentOS 7 EDA 运行环境 |
-| 开发语言 | Python 3.10/3.11；也可用 Go/Rust 单二进制 | Markdown 解析、索引构建、MCP 服务 |
-| Markdown 解析 | `markdown-it-py`、`mistune` 等支持 AST 的解析器 | 按标题、表格和代码块切分 |
-| 结构化数据库 | SQLite；中央并发较高时可换 PostgreSQL | 保存文档、章节、符号和关系 |
-| 全文检索 | SQLite FTS5、Tantivy、OpenSearch/Elasticsearch 中任选其一 | 标题和正文倒排检索 |
-| MCP SDK | 官方 Python 或 TypeScript MCP SDK，按部署的 OMP 版本固定兼容版本 | 向 OMP 提供工具 |
-| 可选向量层 | 内网 embedding 模型 + FAISS/Qdrant 等 | 补充自然语言语义召回 |
-| 可选代码解析 | Tree-sitter、ctags、已有 LSP | 第二阶段建立代码映射 |
-| 版本管理 | 内部 Git/GitLab | 管理抽取规则、术语表、插件和索引版本 |
-
-#### 5.3.2 与现有项目环境的隔离
-
-项目现有 Python 3.6.4、Tcl 8.4 和旧版 EDA 工具应保持不变。知识服务应独立部署：
-
-```text
-EDA 项目 shell / Python 3.6        不修改
-          │
-          └── OMP 调用 MCP
-                    │
-                    └── 独立 Python/Go/Rust 知识服务
-```
-
-如果必须在 CentOS 7 本机运行，需要先验证：
-
-- Python/Node/二进制与系统 glibc 的兼容性；
-- SQLite 是否编译了 FTS5；
-- 当前 OMP 版本支持的 MCP 传输和配置格式；
-- 内网代理、证书和权限。
-
-SQLite FTS5 可用性可用以下只读命令检查：
+#### CLI：`omp docs`
 
 ```bash
-python - <<'PY'
-import sqlite3
-conn = sqlite3.connect(':memory:')
-print('sqlite:', sqlite3.sqlite_version)
-print([row[0] for row in conn.execute('pragma compile_options')
-       if 'FTS5' in row[0]])
-PY
+# 默认 FTS；--schema 省略时仍记录内嵌 dft schema 元数据
+omp docs init "/srv/dft/markdown" --name dft --mode fts
+
+omp docs list
+omp docs status dft
+omp docs reinit dft
+
+# 显式切换为结构化模式；需要已配置的 task 模型与凭据
+omp docs reinit dft --mode structured --schema dft
+
+# 只删除索引，不删除源 Markdown
+omp docs remove dft --force
 ```
 
-若输出没有 `ENABLE_FTS5`，应使用自带 FTS5 的独立运行环境或改用其他全文检索引擎，不要替换系统 SQLite 影响 EDA 工具。
+支持的动作：`init | reinit | list | status | remove`。`--json` 输出机器可读结果；`init/reinit` 可选 `--schema <dft|JSON路径>` 与 `--mode <fts|structured>`；删除必须显式 `--force`。
 
-### 5.4 建设步骤
+#### TUI：`/docs`
 
-### 阶段 A：数据审计
+`/docs` 打开索引管理 Hub：
 
-1. 生成文档清单：文件、大小、来源、日期、所属领域、是否 OCR/ASR。
-2. 识别重复文档和版本关系。
-3. 收集高频命令、模式、stage、testcase 和工具版本。
-4. 建立首版内部术语表。
-5. 准备真实开发问题评测集，例如 50～100 个：
-   - 查命令/选项；
-   - 查版本限制；
-   - 根据报错定位资料；
-   - 修改 cfg；
-   - 定位实现代码；
-   - 比较两个文档冲突。
+- `n`：新建；向导默认 `schema=dft`、`mode=fts`；
+- `r`：全量重建当前索引；
+- `/`：在当前索引搜索并预览章节/实体；
+- `i`：查看状态、计数和冲突；
+- `v`：查看保存的 schema；
+- `d`：确认后删除索引；
+- `c`：取消正在构建的隐藏代际。
 
-### 阶段 B：文档编译和精确索引
+#### Agent：`wiki`
 
-1. 解析 Markdown AST；
-2. 生成章节 ID 和标题路径；
-3. 保存 raw/normalized 双文本；
-4. 建立全文索引；
-5. 用规则抽取 `define_*` 命令、前导 `-option`、代码块和表格；
-6. 人工审核高频和高风险符号；
-7. 建立来源等级和版本字段。
-
-首期先不做 embedding，也能够提供高价值服务。
-
-### 阶段 C：MCP 只读服务
-
-实现并测试：
+`wiki` 只查询既有索引，**不会**创建或重建。推荐调用顺序：
 
 ```text
-search_docs
-lookup_symbol
-get_command_schema
-get_examples
-get_constraints
-read_section
-report_conflicts
+status
+  → 选择一个索引并固定 index
+  → search(query)
+  → read(sectionId)             # FTS 与 structured
+  → lookup(key)                 # structured only
+  → relations(entityId)         # structured only
+  → conflicts()                 # structured only
+  → read(evidenceId)            # 回到原始证据
 ```
 
-每个返回结果都必须包含来源和章节，不允许只返回模型生成摘要。
+无索引时，Agent 只能提示用户运行 `omp docs init ... --mode fts`；重建失败时提示 `omp docs reinit <name>`。存在多个索引时，除 `status` 外必须指定准确的 `index`，防止跨语料混查。
 
-### 阶段 D：可选增强
+本 fork 没有 `/doc`、`doc-researcher` 或自然语言路由快捷层。`/docs` 是管理 UI，不是“替用户完成一轮文档研究”的命令。
 
-1. 加入向量检索，只处理自然语言问题；
-2. 加入文档—代码符号映射；
-3. 加入历史问题单和修复案例；
-4. 将结构化规格输出给 DFT cfg linter/LSP；
-5. 在使用量和关系复杂度证明有价值后，再评估知识图谱。
+### 3.3 Markdown 扫描与章节切分
 
-### 5.5 接入 Oh My Pi
+当前实现是轻量、确定性的 Markdown 结构解析：
 
-#### 5.5.1 本机试点：stdio MCP
+1. 递归枚举 `.md`，按路径排序；忽略其他扩展名与符号链接。
+2. 打开文件时使用 `O_NOFOLLOW`，并校验解析后的路径仍在索引根目录内。
+3. 识别 ATX 标题（`#`～`######`）与 Setext 标题；围栏代码块中的 `#` 不视为标题。
+4. 用标题层级构造 `headingPath`；保存每节的原始 Markdown、绝对行范围和 UTF-8 字节范围。
+5. 单节超过 24,000 字符时优先在空行处分块；极长单行硬切。超长表格或代码块因此仍可能跨块。
+6. 生成仅供 FTS 的 plain text：去除部分 Markdown 标记、保留可检索文字；原始章节不被覆盖。
+7. 保存源文件 SHA-256、mtime、大小和标题，但当前更新策略仍是全量重建，不做增量 watcher。
 
-执行环境：安装了 `omp` 的开发机。可在 OMP TUI 中运行 `/mcp add`，选择用户级作用域并填写 stdio 命令；也可直接创建 `~/.omp/agent/mcp.json`：
+这套切分比固定 token 窗口更保留文档结构，但不是 CommonMark AST，也不会理解表格列关系、代码语法或 frontmatter 中的版本语义。
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
-  "mcpServers": {
-    "dft-docs": {
-      "type": "stdio",
-      "command": "/opt/dft-ai/runtime/bin/python",
-      "args": [
-        "/opt/dft-ai/dft_doc_mcp/server.py",
-        "--config",
-        "/opt/dft-ai/config.toml"
-      ]
-    }
-  }
-}
-```
+### 3.4 FTS 模式：SQLite FTS5 + BM25
 
-用途：
+#### 索引结构
 
-- 用户级 `~/.omp/agent/mcp.json`：同一 OMP profile 的多个代码仓都可使用；
-- 命名 profile：配置位于 `~/.omp/profiles/<name>/agent/mcp.json`，与默认 profile 隔离；
-- `stdio`：由 OMP 在本机启动知识服务进程。
+所有索引共用当前 agent 目录下的 `docs.db`。默认目录通常是 `~/.omp/agent/`；具体位置随 profile 的 agent 目录变化。数据库配置包括：
 
-保存后在 OMP 中验证：
+- SQLite WAL；`synchronous=NORMAL`；外键开启；
+- 5 秒 busy timeout；
+- 数据库文件权限设为 `0600`；
+- `sections_fts` 使用 FTS5 contentless-delete 表；原始内容保存在普通 `sections` 表；
+- FTS 字段：相对路径、标题路径、正文；章节 ID 与索引 ID 不参与全文索引。
+
+#### 文本与查询归一化
+
+索引文本先做 NFKC；连续空白折叠。`U+3400–U+9FFF` 范围内汉字逐字增加词边界，使常见中文查询不依赖外部分词词典。
+
+查询处理不是直接透传 FTS5 语法，而是：
+
+1. NFKC；
+2. 提取单个汉字，或由 Unicode 字母、数字、下划线组成的词元；
+3. 每个词元转为精确 phrase；
+4. 全部以 `AND` 连接。
+
+因此：
+
+- `top_repair SailorV600` 要求同一章节同时包含两个词元；
+- 输入中的 `OR` 不会成为布尔操作符；
+- 不支持 regex、模糊匹配或隐式前缀搜索；
+- 同义词应拆成多次查询，不能依赖 embedding 召回；
+- 下划线保留，适合 DFT 信号、命令和配置名。
+
+#### 排序与返回
+
+章节使用 SQLite `bm25()` 排序，字段权重为：
 
 ```text
-/mcp reload
-/mcp list
-/mcp test dft-docs
+relative_path = 0.5
+heading_path  = 2.0
+body          = 1.0
 ```
 
-`/mcp list` 应显示服务器来源，`/mcp test dft-docs` 必须成功连接；实际状态文字以部署的 OMP 版本为准。
+标题命中因此比正文命中更重要。`search` 默认最多 10 条、硬上限 50 条；结果按**章节**而不是按文件去重，宽泛词可能由同一文件的多个章节占满 Top-K。每条结果带 `sectionId`、索引名、相对路径、标题路径、行范围、摘要和 rank；`read(sectionId)` 再返回完整的 stored raw Markdown。
 
-#### 5.5.2 团队部署：内网 HTTP MCP
+FTS 建索引与本地搜索都不需要模型。只有 Agent 调用 `wiki` 并把返回章节用于回答时，命中内容才进入当前对话模型的上下文。
 
-中央知识库更适合使用内网 HTTP 服务，避免每台机器重复构建索引。管理员可通过 OMP 插件统一下发，也可在用户级 `mcp.json` 中配置：
+### 3.5 结构化模式：schema 约束的模型抽取
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
-  "mcpServers": {
-    "dft-docs": {
-      "type": "http",
-      "url": "https://<internal-host>/mcp"
-    }
-  }
-}
-```
+FTS 索引也保存 schema ID/hash，但**不执行抽取**，所以实体、断言、关系计数为 0。只有显式 `--mode structured` 才启用下面流程。
 
-服务端必须实施：
-
-- 用户/团队鉴权；
-- 文档域权限；
-- 查询审计；
-- 只读工具白名单；
-- 返回内容长度限制；
-- 索引版本和更新时间暴露；
-- Prompt injection 防护。
-
-#### 5.5.3 项目级 `.omp/mcp.json`
-
-如希望某个仓库固定接入，可在项目根目录提交 `.omp/mcp.json`：
-
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
-  "mcpServers": {
-    "dft-docs": {
-      "type": "http",
-      "url": "${DFT_DOC_MCP_URL}"
-    }
-  }
-}
-```
-
-项目级 MCP 定义对所有 profile 生效，但 OAuth 凭据仍按 profile 隔离。由于 `stdio` 条目可以执行任意命令、远程条目可能使用当前 profile 的凭据，加载前应校验仓库中的 MCP 配置。对于大量仓库，更适合使用用户级配置或插件统一下发，避免逐仓维护。
-
-### 5.6 验证方法
-
-对每个评测问题记录：
-
-1. 是否调用了正确的 MCP 工具；
-2. Top-3 是否包含正确章节；
-3. 精确命令是否原样返回；
-4. 是否按当前工具版本过滤；
-5. 是否显示冲突来源；
-6. OMP 最终修改是否通过已有测试/静态检查；
-7. 是否出现没有资料支持的命令或参数。
-
-建议重点监控“虚构内部命令率”和“引用错误版本率”，它们比回答流畅度更重要。
-
----
-
-## 6. 推荐技术二：Agent Skills + DFT 专用 Task 子代理 + 团队插件
-
-### 6.1 原理
-
-知识服务能回答问题，但主 Agent 未必会在正确时机调用。第二项技术解决的是“Agent 行为编排”：
-
-```text
-用户要求修改代码
-      │
-      ▼
-Skill 判断：是否涉及内部 DFT 概念/命令/版本？
-      │ 是
-      ▼
-通过 task 委托 dft-doc-researcher 子代理
-      │
-      ├── 读取当前仓库信息、相关代码和版本
-      ├── 调用 MCP 查询精确符号、章节和约束
-      ├── 比较来源与冲突
-      └── 输出紧凑的证据包
-      │
-      ▼
-主 Agent 基于证据修改代码
-      │
-      ▼
-运行项目已有测试、lint 或最小验证
-```
-
-OMP 原生支持用户/项目级上下文文件、Skills、Rules、Task 子代理、Hooks、扩展、Marketplace 和 MCP。Skill 的 `name` 与 `description` 以轻量元数据进入系统提示，完整内容由模型通过 `skill://<name>` 按需读取；Task 子代理拥有独立会话上下文，适合把文档研究与编码隔离。插件可统一携带 skills、agents、rules、hooks、tools 和 MCP 配置。
-
-### 6.2 为什么适合本项目
-
-1. **代码仓没有文档。** Skill 可以为所有仓库统一提供内部流程，而不依赖仓库自身 README。
-2. **领域任务可以分类。** ATPG、MBIST、IJTAG、Lander cfg、后仿、repair 等都有明显触发词和工作流。
-3. **检索内容可能较长。** Task 子代理负责查资料并压缩为证据包，减少主 Agent 上下文污染。
-4. **分发方式统一。** OMP 插件可版本化，并通过内部 Git 仓和 Marketplace 安装。
-5. **可以逐步演进。** 先在 `.omp/` 下试点，成熟后转为插件，无需一次建设完整平台。
-
-### 6.3 组件设计
-
-#### 6.3.1 精简 `AGENTS.md` 与 `RULES.md`
-
-将仓库概览、构建方式和通用 DFT 工作约束放入项目 `.omp/AGENTS.md`；只把在长会话中也必须持续生效的少量硬约束放入 `.omp/RULES.md`。两者都不应复制知识库正文。
-
-`.omp/AGENTS.md` 示例：
-
-```markdown
-# DFT 项目 AI 规则
-
-- 公司内部 DFT 命令、模式、版本和流程不得根据通用知识猜测。
-- 任务涉及 Lander、Sailor、Hibist、ATPG、MBIST、IJTAG、scan、repair、
-  3D、cfg、PDL、ICL 或内部 define_* 命令时，优先使用 dft-doc-router Skill。
-- 生成或修改精确命令前，至少取得一个 A/B 级来源；只有 C/D 级来源时要明确提示。
-- 对代码块、信号名、实例名、路径和历史接口拼写不得静默纠正。
-- 文档冲突时列出来源、版本和差异，不自行合并成单一结论。
-- 修改后运行当前仓库已有的最小相关测试；未运行不得声称已验证。
-```
-
-`.omp/RULES.md` 只保留类似“内部命令不得猜测”“文档冲突不得静默裁决”的硬性要求。OMP 会把它作为 always-apply 粘性规则加载；冗长背景仍放在 `AGENTS.md`。
-
-#### 6.3.2 路径规则
-
-对于特定类型文件，使用 `.omp/rules/` 中带 `globs` 的规则按需加载：
-
-```markdown
----
-name: dft-config-files
-description: Rules for DFT Tcl, cfg, ATPG, and MBIST files.
-globs:
-  - "**/*.tcl"
-  - "**/*.cfg"
-  - "**/atpg/**"
-  - "**/mbist/**"
----
-
-修改这些文件前：
-1. 识别涉及的内部命令和当前工具版本；
-2. 查询 dft-docs；
-3. 保留原有 Tcl 8.4 / Python 3.6 兼容性要求；
-4. 不进行无关重构。
-```
-
-#### 6.3.3 Skill 设计
-
-建议首期不要创建几十个 Skill，先做 4～6 个：
-
-```text
-dft-doc-router
-lander-config
-atpg-debug
-mbist-debug
-ijtag-integration
-dft-version-check
-```
-
-项目级 Skill 放在 `.omp/skills/<name>/SKILL.md`；用户级 Skill 放在 `~/.omp/agent/skills/<name>/SKILL.md`。`dft-doc-router/SKILL.md` 示例：
-
-```markdown
----
-name: dft-doc-router
-description: >-
-  Use when changing, reviewing, or debugging code/config related to company-internal
-  DFT terms or flows, including Lander, Sailor, Hibist, ATPG, MBIST, IJTAG, scan,
-  repair, 3D, PDL/ICL, stage/group/tc, or define_* commands. Retrieve exact internal
-  definitions, examples, version constraints, and source citations before editing.
----
-
-1. 从任务和代码中提取内部符号、mode、stage、tool/version。
-2. 对精确符号先调用 lookup_symbol/get_command_schema。
-3. 对概念问题再调用 search_docs；必要时使用语义检索。
-4. 读取命中章节的 raw 版本，代码块不得从 normalized 文本复制。
-5. 按来源等级和版本筛选。
-6. 有冲突时调用 report_conflicts，不自行裁决。
-7. 输出一个证据包：结论、来源、适用版本、待确认项、对代码的影响。
-8. 主 Agent 修改后运行现有测试或最小静态检查。
-```
-
-OMP 的 Skill frontmatter 不承担工具权限控制。MCP 工具由当前会话的工具集合提供；部署后应通过 `/mcp list` 和 `/mcp test dft-docs` 验证服务器，并确认模型可见的实际工具名。工程师也可用 `/skill:dft-doc-router` 显式触发。
-
-#### 6.3.4 DFT 文档研究 Task 子代理
-
-文件示例：`.omp/agents/dft-doc-researcher.md`
-
-```markdown
----
-name: dft-doc-researcher
-description: >-
-  Researches company-internal DFT documentation and returns versioned, cited evidence
-  before code or configuration changes.
-model: "@review"
-tools:
-  - read
-  - grep
-  - glob
-autoloadSkills:
-  - dft-doc-router
----
-
-你是只读的 DFT 文档研究 Agent。
-
-必须完成：
-1. 读取当前任务相关代码，但不修改文件。
-2. 确认项目可见的工具版本；无法确认则标记未知。
-3. 调用 dft-docs MCP 做精确符号、全文和冲突查询。
-4. 优先 A/B 级来源；C/D 级只能作为线索。
-5. 输出已确认事实、适用版本/场景、原始来源和章节、文档冲突、
-   对实现的直接要求，以及仍需代码或运行结果验证的事项。
-6. 不根据行业通用知识补造公司内部接口。
-```
-
-上例中的 `tools` 只是基础只读工具。部署时必须把 OMP 实际暴露的 dft-docs MCP 只读工具名加入白名单，否则子代理无法查询知识服务；不得加入 `write`、`edit`、`bash` 等写入或执行工具。`model: "@review"` 可通过 `modelRoles.review` 映射到指定模型。
-
-#### 6.3.5 Hooks 与扩展
-
-Hooks 不用来塞文档，而用于确定性注入小量运行上下文，例如：
-
-- 当前 Git 分支、tag、仓库根目录；
-- `project.cshrc` 或工具清单中解析到的 Lander/Sailor/Hibist 版本；
-- 当前修改文件所属领域；
-- 知识索引版本和更新时间。
-
-OMP 的 Hook 是通过扩展运行时加载的 TS/JS 工厂。可在 `session_start` 做一次只读探测并缓存结果，再在 `before_agent_start` 返回一条自定义消息，或在 `context` 事件中追加短小上下文。Hook 必须遵循 OMP 的事件与返回值契约。
-
-注意：
-
-- hook 脚本只能做只读探测；
-- 解析失败时返回“未知”，不能猜版本；
-- 不应把整篇 Markdown 注入每次提示；
-- 版本探测规则需针对仓库实际配置测试；
-- 工具调用拦截器必须 fail-closed，且不得把文档内容当可执行指令。
-
-### 6.4 团队插件结构
-
-建议成熟后封装为 OMP 插件包：
-
-```text
-dft-ai-plugin/
-├── package.json
-├── skills/
-│   ├── dft-doc-router/SKILL.md
-│   ├── lander-config/SKILL.md
-│   ├── atpg-debug/SKILL.md
-│   ├── mbist-debug/SKILL.md
-│   ├── ijtag-integration/SKILL.md
-│   └── dft-version-check/SKILL.md
-├── agents/
-│   └── dft-doc-researcher.md
-├── rules/
-│   └── dft-config-files.md
-├── hooks/
-│   └── detect-dft-context.ts
-├── .mcp.json
-├── config/
-│   └── defaults.json
-└── README.md
-```
-
-`package.json` 的 `omp.extensions` 声明 Hook 扩展入口；OMP 插件能力发现会扫描同包的 `skills/`、`agents/`、`rules/`、`hooks/` 和 `.mcp.json`。`.mcp.json` 可以指向中央内网服务：
-
-```json
-{
-  "mcpServers": {
-    "dft-docs": {
-      "type": "http",
-      "url": "${DFT_DOC_MCP_URL}"
-    }
-  }
-}
-```
-
-或启动随插件分发的本地二进制：
-
-```json
-{
-  "mcpServers": {
-    "dft-docs": {
-      "command": "${OMP_DFT_PLUGIN_ROOT}/bin/dft-doc-mcp",
-      "args": ["--config", "${OMP_DFT_PLUGIN_ROOT}/config/defaults.json"]
-    }
-  }
-}
-```
-
-这里的 `OMP_DFT_PLUGIN_ROOT` 是团队安装流程显式设置的环境变量，不是 OMP 内置变量。中央服务更适合统一更新和权限控制；本地二进制适合完全离线或试点。
-
-### 6.5 所需软件和准备
-
-| 项目 | 内容 |
-|---|---|
-| Oh My Pi | 固定部署版本，验证 Skills、Task 子代理、Rules、Hooks、插件、Marketplace 和 MCP 行为 |
-| 内部 Git/GitLab | 存储插件、Marketplace catalog、抽取规则和索引版本 |
-| 插件仓 | 包含 skills、agents、rules、hooks、MCP 配置和版本元数据 |
-| 评测仓 | 保存脱敏后的触发/不触发案例、查询用例和预期证据 |
-| 版本探测脚本 | 只读解析每个仓库中可确认的工具配置 |
-| 安全配置 | MCP 地址、证书、用户身份、允许工具列表和审计策略 |
-
-### 6.6 接入 Oh My Pi
-
-#### 6.6.1 试点阶段
-
-先在一个试点仓库使用原生 `.omp/` 配置：
-
-```text
-repo/
-└── .omp/
-    ├── AGENTS.md
-    ├── RULES.md
-    ├── mcp.json
-    ├── rules/
-    ├── skills/
-    └── agents/
-```
-
-验证技能触发率、误触发率、Task 子代理输出和 MCP 检索质量后再封装插件。
-
-#### 6.6.2 插件分发
-
-建立内部 OMP Marketplace，catalog 放在内部 GitLab 仓库的 `.omp-plugin/marketplace.json`。安装形式示例：
-
-```text
-/marketplace add <internal-marketplace-repository>
-/marketplace install --scope user dft-ai@<internal-marketplace-name>
-/reload-plugins
-```
-
-命令行等价形式：
-
-```bash
-omp plugin marketplace add <internal-marketplace-repository>
-omp plugin install --scope user dft-ai@<internal-marketplace-name>
-```
-
-Marketplace 与插件使用固定 tag/commit。`/reload-plugins` 可刷新 Skills、斜杠命令和 MCP；新安装的 tools、hooks 或扩展模块需要重启会话。
-
-#### 6.6.3 旧 EDA 环境兼容性说明
-
-OMP 是独立的 Agent 运行时，不要求替换团队现有 VS Code。若旧 CentOS 7 EDA 主机无法直接运行 OMP 二进制，可在兼容开发机或隔离容器中运行 OMP，通过内网 HTTP MCP 访问知识服务，并仅同步代码与配置；不得为安装 OMP 替换系统 Python、Node、glibc 或 SQLite。
-
----
-
-## 7. 两项推荐技术的组合工作流
-
-### 7.1 用户请求示例
-
-```text
-“修改 top_repair 的 gen_run_env 逻辑，支持某个新的 testcase，
-同时保持旧版本行为不变。”
-```
-
-### 7.2 Agent 应执行的流程
-
-1. **识别任务类型**
-   - Skill 检出 `top_repair`、`gen_run_env`、testcase，判定为内部 MBIST/Lander 任务。
-
-2. **确认代码和版本上下文**
-   - 读取相关源码、测试和项目工具配置；
-   - hook 提供当前分支及可确认版本，未知字段保持未知。
-
-3. **委托文档研究**
-   - Task 子代理调用：
-
-```text
-lookup_symbol("top_repair")
-lookup_symbol("gen_run_env")
-get_examples(symbol="top_repair")
-get_constraints(symbol="gen_run_env", tool_version=<current>)
-report_conflicts(topic="top_repair testcase")
-```
-
-4. **生成证据包**
-
-```text
-已确认：当前模式的流程步骤、输入输出和已有 testcase
-来源：文件 + 标题路径 + 日期/版本
-冲突：旧培训材料与新实现说明的差异
-未知：当前分支是否已包含某特性
-实现要求：需要修改哪些代码路径和测试
-```
-
-5. **主 Agent 修改代码**
-   - 只做与目标相关的最小修改；
-   - 不从 OCR 规范化文本直接复制命令。
-
-6. **验证**
-   - 运行现有单元测试、静态检查或最小 dry-run；
-   - 没有环境时，明确标注“仅完成代码修改，未运行 EDA 流程验证”。
-
-7. **输出结果**
-   - 列出变更、验证、引用的内部资料和仍需人工确认的版本问题。
-
----
-
-## 8. OCR/ASR 专项处理方案
-
-### 8.1 处理原则
-
-```text
-原始证据不可改
-       │
-       ├── 规范化副本：用于召回
-       ├── 别名表：用于查询扩展
-       ├── 置信度：用于排序和提示
-       └── 人工校对：用于高风险结构化事实
-```
-
-#### 8.1.1 禁止自动改写的区域
-
-默认禁止对以下内容做自动纠错：
-
-- fenced code block；
-- inline code；
-- 命令和选项；
-- 文件名、路径、URL；
-- Verilog/Tcl/Python 标识符；
-- instance、pin、port、signal；
-- 日志字段和报错原文；
-- 版本号和工单号。
-
-#### 8.1.2 可以做查询扩展的区域
-
-自然语言正文和标题可以：
-
-- 全半角和空白规范化；
-- 常见 OCR 字符混淆生成别名；
-- 中英文工具名别名；
-- 内部缩写与全称映射；
-- ASR 断句重组，但必须保留原始时间戳和原文。
-
-#### 8.1.3 高风险事实的人工审核清单
-
-优先审核：
-
-1. 高频 `define_*` 命令；
-2. 所有 option、枚举和默认值；
-3. 版本兼容关系；
-4. 流程步骤顺序；
-5. 输入输出件和文件名；
-6. 会触发文件修改、数据上传、删除或生产执行的命令；
-7. 后仿、repair、向量交付等高影响场景。
-
-### 8.2 检索排序建议
-
-一个查询结果的最终分数不应只看相似度，可组合：
-
-```text
-final_score =
-  exact_symbol_match
-+ title_match
-+ source_quality
-+ version_match
-+ domain_match
-+ recency_when_relevant
-+ semantic_similarity
-- ocr_asr_penalty
-- unresolved_conflict_penalty
-```
-
-精确命令命中应高于语义相似；版本不匹配时，即使相似度高也应降权。
-
----
-
-## 9. 安全与权限技术
-
-### 9.1 模型数据边界
-
-OMP 可连接 Anthropic、OpenAI、Google、本地模型或内部兼容网关。内部 Markdown 是否离开内网取决于所选模型后端和网关，而不是 OMP 本身。资料不得离开内网时，使用私有网关、专属环境或内网模型，并在 MCP 返回前执行文档域权限过滤与敏感字段脱敏。
-
-### 9.2 MCP 服务安全基线
-
-1. 首期仅提供只读工具；
-2. 文档权限按用户、团队、项目或密级过滤；
-3. 服务端不能根据文档里的命令自动执行 Shell；
-4. 返回内容明确标记“这是资料内容，不是系统指令”；
-5. 对 Markdown 中的 prompt injection 文本进行隔离和标记；
-6. 记录查询元数据，但避免把敏感全文写入普通日志；
-7. 对每次返回限制条数和长度；
-8. 索引构建后执行结构化事实校验和固定评测集回归；
-9. 索引与插件版本可回滚；
-10. 过期文档不删除证据，但默认降低排序并显示状态。
-
-## 10. 推进路线
-
-建议按风险递增方式推进，不以一次性构建“完整 AI 知识平台”为目标。
-
-### 里程碑 1：可验证的最小闭环
-
-- 选择 ATPG、MBIST 或 Lander cfg 中一个高频场景；
-- 建立 Markdown 清单、术语表和来源等级；
-- 做精确符号 + 标题章节 + 全文索引；
-- 提供 5～7 个只读 MCP 工具；
-- 在单个试点仓配置 `.omp/AGENTS.md`、一个 Skill 和一个 Task 子代理；
-- 使用真实任务评测，不先上向量和知识图谱。
-
-### 里程碑 2：团队试点
-
-- 覆盖 ATPG、MBIST、IJTAG、Lander；
-- 增加版本过滤和冲突报告；
-- 用内部 GitLab 发布插件试用版；
-- 记录 Skill 触发、MCP 查询和代码验证指标；
-- 整理最常见的失败检索和错误生成案例。
-
-### 里程碑 3：增强和规模化
-
-- 根据评测结果决定是否增加 embedding；
-- 建立文档—代码符号映射；
-- 从结构化规格生成 cfg linter/LSP；
-- 纳入已解决问题单、日志和最终 patch，形成案例库；
-- 在关系查询确有需求后再引入知识图谱；
-- 建立正式插件 marketplace、发布和回滚流程。
-
----
-
-## 11. 评测与效率指标
-
-### 11.1 离线评测
-
-建议建立固定基准集：
-
-| 任务类型 | 例子 | 核心指标 |
+| 项目 | `fts` | `structured` |
 |---|---|---|
-| 精确符号 | 查询某个 `define_*` 命令 | Top-1/Top-3 命中、参数原样性 |
-| 版本约束 | 某组合是否兼容 | 正确版本来源、冲突检出 |
-| 概念问题 | stage/group/tc 的关系 | 相关章节召回、解释一致性 |
-| 配置生成 | 按场景生成 cfg 片段 | 命令合法性、版本匹配、可验证性 |
-| Debug | 根据报错找资料和代码 | 首个有效线索位置、根因准确率 |
-| 文档冲突 | 两份材料定义不同 | 是否并列证据、是否避免擅自裁决 |
-| OCR 噪声 | 输入含错误字符 | 是否通过别名召回、是否保留原文 |
-| 代码定位 | 从术语找到实现 | 正确文件/符号命中率 |
+| 默认 | 是 | 否 |
+| 构建时模型调用 | 无 | 每个章节至少一次，失败后最多纠正一次 |
+| 基础存储 | 文档、章节、FTS | 同左 |
+| 额外存储 | 无 | 实体、别名、断言、关系、证据 |
+| `wiki` 操作 | `status/search/read` | 六项操作全部可用 |
+| 凭据 | 不需要 | 需要可用的 `task` 角色模型和 API 凭据 |
+| 主要用途 | 目标式字面检索 | 反复查询命令 schema、版本关系、约束和冲突 |
 
-### 11.2 在线效率指标
+#### Schema
 
-不建议只统计“使用次数”。应同时记录：
+默认内嵌 `dft@1`，也可传入自定义 JSON schema。DFT preset 包含：
 
-- 查找内部资料的平均人工耗时变化；
-- 首次代码修改通过 review 的比例；
-- 因内部接口理解错误导致的返工数；
-- OMP 虚构命令/选项的次数；
-- 引用错误版本的次数；
-- Skill 应触发而未触发、误触发的比例；
-- MCP 查询延迟和失败率；
-- 修改后实际测试通过率；
-- 工程师对证据可复核性的评价。
+- 实体：command、option、mode、stage、flow、step、tool、version、test case、input/output/artifact、example、constraint、error、group；
+- 身份作用域：global、document、section、parent；
+- 关系：`has_option`、`belongs_to_stage`、`requires`、`conflicts_with`、`consumes`、`produces`、`introduced_in`、`deprecated_in` 等；
+- 证据要求：原文 quote、绝对行范围、confidence；矛盾事实保留为独立记录，不由模型猜测合并。
 
-所有目标值应先用现状基线测量后设定，不建议在没有数据时承诺固定百分比提升。
+自定义 schema 定义实体种类、字段类型、必填项、身份规则、谓词源/目标类型与一对一/一对多基数；载入时做严格结构校验并保存规范化 JSON 的 SHA-256。
 
-### 11.3 已实现内置索引的实测基线
+#### 抽取与校验
 
-下表记录内置 `docs` FTS 索引在清理后语料上的实测结果。测试语料共 341 个 Markdown 文件、79,548,098 字节和 42,235 个结构化章节；首次建索引用时 8.64 秒，生成的 SQLite 数据库为 128,548,864 字节。FTS 查询只访问本地索引，不再读取位于网络存储上的原 Markdown。
+每个章节独立发送给 `task` 角色模型：temperature 0、reasoning 关闭、输出上限 8192 tokens。模型返回 `entities`、`assertions`、`relations` JSON；第一次无效时把错误反馈给模型纠正一次。
 
-测试环境中的原文件位于本地 WSL 文件系统，因此下列 grep 时间已经接近有利条件；原文件位于网络存储时，逐次 grep 的实际延迟通常更高。查询时间取热查询中位数：
+入库前检查：
+
+- JSON shape、字段类型、必填身份和 local ID 唯一性；
+- 谓词是否允许对应的源/目标实体类型；
+- parent identity 是否能解析，是否存在环；
+- evidence 行号是否位于当前章节；
+- quote 是否真实存在于声明的原文行范围；
+- confidence 是否在 `[0,1]`。
+
+这些检查能拒绝不可定位的“证据”，但不能证明模型对原文语义的解释一定正确。`conflicts` 只检测同一实体、字段、条件下的多个规范化值，以及 schema 标记为 cardinality=`one` 的关系多目标；它不是通用自然语言矛盾检测器。
+
+#### 规模影响
+
+当前实现逐章节调用模型，构建并发受 `task.maxConcurrency` 控制且硬上限为 8。按本次 42,235 个章节推算，全库结构化构建至少约 4.2 万次模型请求，失败纠正时更多；任何文档存在抽取/证据错误都会阻止新代际提升。
+
+因此，DFT 全库首先使用 FTS。只有真实问题反复需要实体/关系查询时，才应对**经筛选的小型高质量子库**试点 structured，并单独测量成本、时延、抽取准确率和冲突质量。
+
+### 3.6 `wiki` 操作语义
+
+| `op` | FTS | Structured | 关键输入 | 返回 |
+|---|:---:|:---:|---|---|
+| `status` | ✓ | ✓ | 可选 `index` | mode、state、schema、文档/章节/实体计数、错误 |
+| `search` | ✓ | ✓ | `query`；可选 `limit` | 章节命中；structured 还返回实体前缀/别名命中 |
+| `read` | ✓ | ✓ | `sectionId` 或 `evidenceId`，二选一 | stored raw Markdown，或 quote + 完整存储章节 |
+| `lookup` | ✗ | ✓ | canonical key、alias、display name 或实体 ID | 实体、别名、字段断言及证据 |
+| `relations` | ✗ | ✓ | `entityId`；可选方向、predicate、limit | 入边/出边、条件与证据 |
+| `conflicts` | ✗ | ✓ | 可选 `limit` | 可机械判定的多值冲突及各自证据 |
+
+`limit` 默认 10、最大 50。工具层会拒绝在 FTS 索引上调用 `lookup/relations/conflicts`，而不是返回空结果掩盖模式错误。
+
+`wiki` 是 approval=`read`、load mode=`essential` 的内置工具：
+
+- 非受限默认会话获得 `wiki`；
+- 非受限显式工具集包含 `read` 时也补入 `wiki`；
+- 受限会话严格保持宿主白名单，只有显式列出 `wiki` 才可使用。
+
+工具提示要求：先 `status`，固定一个索引，读取支撑每个实质结论的存储证据，并引用索引、相对路径、精确行范围和原文摘录。
+
+### 3.7 重建、故障与一致性
+
+`init/reinit` 不是在当前索引上原地修改：
+
+1. 创建不可见的 `__building__<UUID>`；
+2. 全量扫描并构建新代际；
+3. 任何失败或取消：删除临时代际，旧代际继续服务；
+4. 全量成功：在 SQLite 事务内删除旧代际并把临时代际改成公开名。
+
+这提供查询侧原子切换，避免用户读到一半新、一半旧的数据；代价是重建需要完整的时间和临时磁盘空间。当前保存的 hash/mtime 用于记录，不用于增量跳过。
+
+### 3.8 安全边界
+
+已实现的本地边界：
+
+- 只读扫描 Markdown；跳过 symlink，阻止路径逃逸；
+- `wiki` 只有读批准级别，不提供建库、执行命令或写源文件能力；
+- SQLite 文件设为 `0600`；
+- FTS 失败/取消不破坏当前代际。
+
+未实现或需部署者负责的边界：
+
+- 无文档级 ACL、中央鉴权、查询审计、静态加密或跨用户服务；
+- 无 OCR/ASR 纠错、来源可信度、版本过滤、敏感字段脱敏；
+- `wiki read` 返回原始 Markdown，未做内容级 prompt-injection 指令剥离；文档必须作为不可信证据而非系统指令处理；
+- FTS 建库不调用模型，但命中内容会进入当前 Agent 所用模型；
+- structured 会把每个章节发送给配置的 `task` 模型，必须先确认模型后端和数据出境策略。
+
+单机、单 profile 可依赖 OS 权限隔离。需要团队中央服务、细粒度权限、审计、服务端脱敏或统一更新时，才值得把相同索引能力放到内网服务后通过 MCP 暴露。
+
+## 4. DFT 场景的使用方式
+
+### 4.1 推荐查询流程
+
+1. `wiki status`：确认索引 `ready`、mode 和更新时间。
+2. 先搜稀有精确词：完整命令、信号、报错 token、版本，例如 `dft_rst_n`、`SailorV600`。
+3. 宽泛主题加入高信息量限定词，例如分别查询 `MBIST top_repair`、`MBIST SailorV600`；不要把同义词用 `OR` 写在一次查询中。
+4. 读取命中章节，不只依赖 320 字符搜索摘要。
+5. 结论引用 `index + relative path + line range + excerpt`；版本冲突必须并列证据。
+6. 文档变更后运行 `omp docs reinit <name>`；重建失败时继续使用旧代际并修复错误。
+7. 需要所有出现位置、正则、否定条件或确认工作区最新文本时改用 grep。
+
+### 4.2 OCR / ASR 资料治理
+
+内置索引不会修复源文本。入库前至少应：
+
+- 保留原始转换文件和来源标识；
+- 标题中写明工具、版本、日期或资料类型，使 FTS 可检索；
+- 保持 code fence、inline code、路径、命令、信号和报错原样；
+- OCR/ASR 推测值与原文分开记录，不静默覆盖历史拼写；
+- 对高风险命令、选项、默认值、版本关系和流程顺序人工复核。
+
+若需要别名、来源等级或版本过滤，FTS 当前没有专用字段过滤器：可先用多次查询和人工证据判断；需求稳定后再试 structured schema 或外部服务。
+
+### 4.3 何时使用其他技术
+
+| 需求 | 首选 | 原因 |
+|---|---|---|
+| 精确命令、信号、版本、报错；目标式问答 | 内置 FTS + `wiki` | 快、无模型建库、可读原文证据 |
+| 正则、全部命中、合规枚举、工作区即时状态 | grep | 无 Top-K、无索引陈旧、支持正则 |
+| 固定命令 schema、直接关系、机械冲突查询 | 小型 curated structured 索引 | 能查询实体/断言/关系，但需承担模型成本 |
+| 大量自然语言改写导致 FTS 漏召回 | 外部向量或混合检索 | 先用真实问题证明语义缺口，再增加系统复杂度 |
+| 中央语料、多客户端、ACL、审计、统一更新 | 内网知识服务 + MCP | 服务端集中治理；MCP 只负责接入 |
+| 文档概念必须定位到源码定义/引用 | LSP / Tree-sitter / ctags | 这是代码索引，不是文档索引 |
+| Agent 经常忘记查文档 | 短 Rule 或 Skill | 只补触发策略；不复制 100 MB 语料 |
+
+## 5. 内置 FTS 实测基线
+
+本节保留原报告的 2026-08-30 测量值；本次重写未重新计时。基线只代表该语料、当次构建和记录的 WSL 本地文件系统环境，不是跨机器性能承诺。
+
+### 5.1 语料与构建
+
+| 指标 | 实测值 |
+|---|---:|
+| Markdown 文件 | 341 |
+| 原始字节数 | 79,548,098 B |
+| 索引章节 | 42,235 |
+| 首次 FTS 建索引 | 8.64 s |
+| 当次 SQLite 数据库 | 128,548,864 B |
+
+FTS 查询只访问本地 SQLite 索引，不再读取原 Markdown。数据库体积是当次生成文件值；不是长期页复用、重建或多索引场景的上限。
+
+### 5.2 查询时延
+
+原文件和 SQLite 均位于本地 WSL 文件系统。grep 每次扫描原 Markdown；下表为热查询中位数，因此没有把网络存储延迟算作 FTS 优势。
 
 | 查询 | grep | docs FTS | 加速 |
 |---|---:|---:|---:|
@@ -1100,7 +357,12 @@ OMP 可连接 Anthropic、OpenAI、Google、本地模型或内部兼容网关。
 | `OCC` | 26.98 ms | 5.60 ms | 4.8× |
 | `MBIST` | 30.44 ms | 5.79 ms | 5.3× |
 
-准确率以“文件是否包含不区分大小写的原文字面量”为 ground truth。精确率表示 Top-50 章节结果涉及的文件中实际包含该字面量的比例；召回率表示这些结果覆盖了全部相关文件的比例：
+### 5.3 字面命中精确率与文件召回率
+
+Ground truth：文件是否包含不区分大小写的原文字面量。
+
+- **Top-50 精确率：** 返回的前 50 个章节所涉及文件中，实际包含该字面量的比例。
+- **文件召回率：** Top-50 章节覆盖的相关文件数 ÷ 全部含该字面量的文件数。
 
 | 查询 | Top-50 精确率 | 文件召回率 |
 |---|---:|---:|
@@ -1110,122 +372,45 @@ OMP 可连接 Anthropic、OpenAI、Google、本地模型或内部兼容网关。
 | `OCC` | 100% | 6.9% |
 | `MBIST` | 100% | 9.4% |
 
-结果表明：
+### 5.4 数据解释
 
-1. 对具体、稀有的技术词，FTS 在本基准中同时达到 100% 精确率和文件召回率，并比本地 grep 快 12.6～50.5 倍。
-2. 对 `IJTAG`、`OCC`、`MBIST` 等高频宽泛词，Top-50 结果仍全部相关，但章节上限和同一文件的多个高分章节会降低全库文件召回率。此时应缩小查询、增加限定词，或在必须穷举全部出现位置时使用 grep。
-3. 该准确率衡量检索结果相对字面量 ground truth 的覆盖，不等同于模型最终回答准确率；文档研究代理仍必须读取命中章节的存储证据并给出路径和行号。
-4. 内置索引适合生产中的目标式技术问答和员工知识查询，但不应替代正则搜索、合规审计或全量枚举。默认 FTS 模式不调用模型；只有显式选择结构化模式时才进行模型抽取。
+1. 稀有词 `dft_rst_n`、`SailorV600` 在本基准中同时达到 100% 精确率与文件召回率，并比本地 grep 快 12.6～50.5 倍。
+2. 高频宽泛词仍有 100% 字面精确率，但文件召回率只有 6.9%～14.1%。原因是 Top-50 按章节截断，且同一文件的多个章节可以重复占位；不是相关文件不存在于索引。
+3. FTS 适合“找最相关证据”的目标式查询，不适合把 Top-K 当成全量枚举。宽泛词应缩小范围；必须穷举时使用 grep。
+4. 该精确率只证明返回文件含字面量，不证明章节回答了问题，更不等于 Agent 最终答案准确率。Agent 仍需 `read` 原始章节并给出引用。
+5. 基线没有测 structured 模式、语义问题、冷查询、并发/p95、重建峰值磁盘、模型端到端答案质量或网络文件系统。上述维度不能从现有数据外推。
 
----
+## 6. 落地建议
 
-## 12. 不推荐作为首期主方案的做法
+1. **全库先建 FTS。** 使用稳定索引名；把 `reinit` 纳入语料发布流程，而不是依赖工程师记忆。
+2. **建立真实问题集。** 至少覆盖精确命令、版本、概念、报错、宽泛主题、OCR 噪声和文档冲突；记录 Top-K 章节与最终引用是否正确。
+3. **保留双路径。** `wiki` 负责目标式证据检索；grep 负责正则、全量与最新工作区检查。
+4. **structured 只做小库试点。** 先测每种实体/关系的抽取准确率、证据有效率、冲突误报、模型成本和全量成功率；没有收益数据不扩到 42,235 节。
+5. **按缺口扩展。** 语义漏召回才加向量/混合检索；中央治理才加 MCP；文档到代码定位才加 LSP/Tree-sitter；触发不稳定才加短 Rule/Skill。
+6. **先确定模型数据边界。** FTS 只在本地建库不代表资料不会进入模型；`wiki read` 与 structured extraction 都必须符合内网数据策略。
 
-### 12.1 把 100 MB Markdown 放入 `AGENTS.md`
+最终判断：
 
-不合适。`AGENTS.md` 应只放常驻项目背景和工作规则；少量长期硬约束放在 `.omp/RULES.md`。大文件会持续占用上下文并降低规则遵循度，知识正文应通过 MCP 按需检索。
+> 对当前 DFT Markdown 语料，OMP 内置 FTS 已经是最小、可追溯、可实测的默认方案；结构化抽取和外部知识平台应由真实缺口触发，而不是先于基线建设。
 
-### 12.2 只建一个向量库
+## 7. 实现依据与延伸阅读
 
-不合适。自然语言问题会受益，但精确命令、版本、枚举、路径和相近内部术语容易出错。向量检索应作为混合检索的一层，而不是唯一事实源。
+### 7.1 当前 fork 实现
 
-### 12.3 对所有 OCR 文本先自动纠错再入库
+- `packages/coding-agent/src/docs/markdown.ts`：Markdown 枚举、symlink 防护、标题切分、24,000 字符分块、行/字节范围。
+- `packages/coding-agent/src/docs/storage.ts`：SQLite schema、FTS5、WAL、`0600`、代际提升。
+- `packages/coding-agent/src/docs/service.ts`：FTS query/BM25、全量构建、结构化入库、查询与冲突检测。
+- `packages/coding-agent/src/docs/extractor.ts`：模型抽取、一次纠正、schema/evidence 校验。
+- `packages/coding-agent/src/docs/schema.ts`、`schemas/dft.ts`：自定义 schema 与内嵌 `dft@1`。
+- `packages/coding-agent/src/tools/wiki.ts`、`prompts/tools/wiki.md`：Agent 工具参数、模式限制、证据输出与使用约束。
+- `packages/coding-agent/src/modes/components/docs-hub.ts`：TUI `/docs` 管理界面。
+- `packages/coding-agent/test/docs-index.test.ts`、`wiki-tool.test.ts`、`wiki-tool-availability.test.ts`：代际、FTS、中英文检索、证据、模式与工具可用性契约。
 
-风险高。历史接口拼写、路径、信号和代码可能被“纠正”成不存在的名称。必须采用 raw/normalized 双轨和别名扩展。
+### 7.2 技术资料
 
-### 12.4 先做全量知识图谱
-
-投入大、错误传播风险高。应先用结构化表解决 80% 的命令、版本、流程和来源问题，再根据真实查询决定是否图谱化。
-
-### 12.5 先微调模型
-
-不能解决最新文档、来源引用和版本冲突问题，且难以证明精确命令可靠。首期投入产出比低于结构化知识服务和 Skills。
-
-### 12.6 只要求用户手工输入“请查文档”
-
-不能形成团队效率。必须通过 Skill 描述、项目规则和必要的只读 hook，让 Agent 在相关任务中有稳定触发机制，同时保留人工显式调用入口。
-
----
-
-## 13. 最终建议
-
-### 13.1 技术选择
-
-**第一优先：结构化 DFT 文档知识服务 + MCP。**
-
-- 它解决“事实从哪里来”。
-- 首期采用 Markdown AST + 原始/规范化双轨 + SQLite/全文索引 + 命令/选项/版本结构化表。
-- 不必先做向量库；自然语言召回不足时再添加。
-- 统一部署在内网，向多个代码仓提供只读查询。
-
-**第二优先：Agent Skills + DFT 文档研究 Task 子代理，并封装为 OMP 团队插件。**
-
-- 它解决“什么时候查、怎么查、查完如何用”。
-- `.omp/AGENTS.md` 只放常驻项目背景，`.omp/RULES.md` 只放少量粘性硬规则；路径规则按文件加载；Skill 按任务触发；Task 子代理负责资料研究和证据压缩。
-- 成熟后通过内部 GitLab OMP Marketplace 统一发布和升级。
-
-### 13.2 推荐落地形态
-
-```text
-                         内部 GitLab
-                    ┌────────┴────────┐
-                    │ DFT AI Plugin   │
-                    │ 版本/发布/回滚   │
-                    └────────┬────────┘
-                             │ 安装
-                             ▼
-代码仓库 ─────────────── Oh My Pi
-  │                          │
-  │ 源码/测试/当前配置         ├── Skills / Rules / Hooks
-  │                          └── dft-doc-researcher
-  │                                      │
-  └──────────────────────────────────────┤
-                                         ▼
-                                  DFT Docs MCP
-                                         │
-              ┌──────────────────────────┼─────────────────────────┐
-              ▼                          ▼                         ▼
-        原始 Markdown              结构化符号数据库            全文/可选向量索引
-              │                          │                         │
-              └────────── 来源、版本、可信度、冲突 ────────────────┘
-```
-
-### 13.3 核心判断
-
-本项目真正需要的不是“让模型读过公司文档”，而是：
-
-> 把内部 DFT 文档转化为可追溯、可按版本查询、可被 Agent 主动调用的工程知识工具，并把查询行为固化为团队级 OMP 工作流。
-
-在此基础上，后续的 RAG、代码图谱、LSP、案例库和微调才有可靠的数据基础。
-
----
-
-## 14. 资料依据与证据边界
-
-### 14.1 项目内部资料
-
-本报告主要依据本项目已提供的 Markdown 集合进行场景分析，包括：
-
-- `IDE.md`：Lander/IDE 管理、版本、Git/OBS、`IDE.json`/`IDE_detail.json` 和交互方案；
-- `Lander交流.md`：Lander 平台架构、`STAGE/GROUP/TC`、ATPG/MBIST 验证方法学、配置和版本说明；
-- `MBIST.md`：MBIST sub/top/top_repair 流程、工具调用及目录/输入输出；
-- `ATPG.md`：ATPG/Lander 概念、命令和选项材料；
-- `IJTAG.md`：IJTAG/Boundary Scan/CRG 等专题；
-- `3D_MBIST.md`：3D、诊断、测试设计和 JSON/日志类资料；
-- `COT.md`、`其他.md`：DFT 流程、培训、工具和音视频转写类内容。
-
-本文没有假定这些文档全部属于同一工具版本，也没有将需求说明中的内容自动视为已经实现。建立索引时必须补充每份文档的版本、日期、来源类型和校验状态。
-
-### 14.2 外部官方资料
-
-OMP 接入方式依据当前项目源码及本仓库文档，包括：
-
-- `context-files.md`：`.omp/AGENTS.md`、`.omp/RULES.md`、上下文发现、粘性规则和优先级；
-- `skills.md`：Skill 布局、frontmatter、`skill://` 与 `/skill:<name>`；
-- `task-agent-discovery.md`：`.omp/agents/`、工具白名单、`autoloadSkills`、模型角色和 Task 分派；
-- `hooks.md`、`extensions.md`、`extension-loading.md`：Hook/扩展工厂、事件和插件加载；
-- `mcp-config.md`：`.omp/mcp.json`、用户/profile 配置、stdio/HTTP、`/mcp` 校验命令；
-- `marketplace.md`、`plugin-manager-installer-plumbing.md`：OMP Marketplace、插件能力目录和发布命令；
-- Model Context Protocol 官方规范/SDK说明，以及 SQLite FTS5、Tree-sitter 等项目官方资料。
-
-OMP 功能和配置格式可能继续变化。部署前应运行 `omp --version`，并在 TUI 中执行 `/mcp list`、`/mcp test dft-docs` 和试点插件验证；不应直接假定其他 Agent 客户端的配置与 OMP 相同。
+- [SQLite FTS5 官方文档](https://www.sqlite.org/fts5.html)：FTS5 virtual table、tokenizer、contentless table、BM25。
+- [Retrieval-Augmented Generation 原始论文](https://arxiv.org/abs/2005.11401)：参数化模型与外部非参数记忆结合。
+- [Model Context Protocol 最新规范](https://modelcontextprotocol.io/specification/latest)：host/client/server、resources、prompts、tools 与安全边界。
+- [Microsoft GraphRAG](https://microsoft.github.io/graphrag/)：实体关系抽取、图社区、局部/全局检索。
+- [Language Server Protocol](https://microsoft.github.io/language-server-protocol/)：代码补全、定义、引用等语言服务协议。
+- [Tree-sitter](https://tree-sitter.github.io/tree-sitter/)：增量解析与具体语法树。
