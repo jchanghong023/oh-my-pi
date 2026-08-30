@@ -22,6 +22,7 @@
 
 ### 用户功能
 
+- **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema，通过 `omp docs`、`/docs`、只读 `docs` 工具及 `doc-researcher` 统一管理和检索；默认仅建 FTS，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
 - **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；登录只 trim/store、不绑定官方校验端点，实际请求使用配置的 provider baseUrl；env metadata 优先 `COMMAND_CODE_API_KEY`，回退 legacy `COMMANDCODE_API_KEY`。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 与旧 `opencode` 中 catalog bundled 且 input/output 价格都为零的模型；缺失 cost 的 bundled/discovered 行直接跳过，gateway 新 ID 按“价格未知”隐藏，主列表与 locked preview 共用过滤。
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
@@ -51,6 +52,7 @@
 - **Fork 二进制发布**：CI 由 `workflow_dispatch` 构建、按输入发布 `+fork.N` GitHub Release；二进制嵌入 fork 版本、构建时间与更新仓库，`omp update` 比较 fork build counter 并从 fork Release 更新。
 - **安装/更新体验**：安装器比较已装版本、同版本跳过下载并以唯一同目录临时文件原子替换；Linux 不终止现有会话，旧进程继续使用旧 inode 并提示重启；Windows 因 exe 文件锁仅在提前告警后终止目标 Path 精确匹配的进程；保留下载进度、curl 回退与错误正文。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；两套 locale 各自提交 `package-lock.json` 并以 `npm ci` 锁定依赖构建，中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
+- **DFT 知识调研**：新增 OMP 访问内部 Markdown 知识的技术调研报告，覆盖结构化知识服务、MCP、Agent Skills、Task 子代理、OCR/ASR 治理、安全与落地路线，并记录内置 FTS 对比 grep 的速度、精确率与召回率实测。
 
 ### 开发维护
 

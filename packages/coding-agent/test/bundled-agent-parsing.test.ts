@@ -28,6 +28,16 @@ describe("bundled agent parsing", () => {
 		expect(task?.thinkingLevel).toBe(AUTO_THINKING);
 	});
 
+	it("bundles doc-researcher as a docs-only read-only agent", () => {
+		const researcher = getBundledAgent("doc-researcher");
+
+		expect(researcher).toBeDefined();
+		expect(researcher?.source).toBe("bundled");
+		expect(researcher?.tools?.filter(tool => tool !== "yield")).toEqual(["docs"]);
+		expect(researcher?.model).toEqual(["@smol"]);
+		expect(researcher?.thinkingLevel).toBe(Effort.Medium);
+	});
+
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
 	// suffix must survive agent-pattern expansion and model resolution for the
 	// bundled agents routed at that role. The executor prefers an explicit
@@ -81,6 +91,7 @@ describe("bundled agent parsing", () => {
 			["task", "task", "anthropic/sonnet"],
 			["sonic", "smol", "fast/hy3"],
 			["scout", "smol", "fast/hy3"],
+			["doc-researcher", "smol", "fast/hy3"],
 			["reviewer", "slow", "codex/sol"],
 			["designer", "designer", "anthropic/opus"],
 		] as const) {

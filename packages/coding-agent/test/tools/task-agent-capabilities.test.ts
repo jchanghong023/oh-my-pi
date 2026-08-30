@@ -10,10 +10,11 @@ function agentByName(agents: AgentDefinition[], name: string): AgentDefinition {
 }
 
 describe("task agent capability descriptions", () => {
-	it("classifies bundled scout as the only read-only delegated agent", () => {
+	it("classifies bundled scout and doc-researcher as read-only delegated agents", () => {
 		const agents = loadBundledAgents();
 
 		expect(isReadOnlyAgent(agentByName(agents, "scout"))).toBe(true);
+		expect(isReadOnlyAgent(agentByName(agents, "doc-researcher"))).toBe(true);
 		for (const name of ["task", "sonic", "reviewer", "designer"]) {
 			expect(isReadOnlyAgent(agentByName(agents, name))).toBe(false);
 		}
@@ -31,7 +32,7 @@ describe("task agent capability descriptions", () => {
 	it("ships every bundled agent without prewalk; hand-off is opt-in via task.agentPrewalk", () => {
 		const agents = loadBundledAgents();
 
-		for (const name of ["task", "scout", "sonic", "reviewer", "designer", "librarian"]) {
+		for (const name of ["task", "scout", "doc-researcher", "sonic", "reviewer", "designer", "librarian"]) {
 			expect(agentByName(agents, name).prewalk).toBeUndefined();
 		}
 	});

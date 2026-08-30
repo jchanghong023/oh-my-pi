@@ -88,6 +88,7 @@ import { AgentHubOverlayComponent } from "../components/agent-hub";
 import { AgentsHubComponent } from "../components/agents-hub";
 import { AssistantMessageComponent } from "../components/assistant-message";
 import { CopySelectorComponent } from "../components/copy-selector";
+import { DocsHubComponent } from "../components/docs-hub";
 import { ExtensionDashboard } from "../components/extensions";
 import { listLiveToolRecords, liveToolRecordFromSession } from "../components/extensions/live-tool-session";
 import { HistorySearchComponent } from "../components/history-search";
@@ -453,6 +454,28 @@ export class SelectorController {
 				extensionRoots: () => this.ctx.session.effectiveExtensionRoots,
 			},
 			{ onCancel: () => done() },
+		);
+		overlayHandle = this.#showFullscreenMenu(hub);
+	}
+
+	async showDocsDashboard(): Promise<void> {
+		let overlayHandle: OverlayHandle | undefined;
+		let hub: DocsHubComponent | undefined;
+		let closed = false;
+		const done = () => {
+			if (closed) return;
+			closed = true;
+			hub?.dispose();
+			overlayHandle?.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		hub = await DocsHubComponent.create(
+			this.ctx.ui,
+			getProjectDir(),
+			this.ctx.settings,
+			this.ctx.session.modelRegistry,
+			{ onCancel: done },
 		);
 		overlayHandle = this.#showFullscreenMenu(hub);
 	}

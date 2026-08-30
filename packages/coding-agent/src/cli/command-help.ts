@@ -40,6 +40,9 @@ export const compressHelp = {
 } satisfies CommandMetadata;
 
 export const configHelp = { description: "Manage configuration settings" } satisfies CommandMetadata;
+export const docsHelp = {
+	description: "Manage persistent external Markdown document indexes",
+} satisfies CommandMetadata;
 
 export const dryBalanceHelp = {
 	description: "Dry-run OAuth account balancing across random session ids",
