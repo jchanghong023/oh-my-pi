@@ -656,6 +656,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
 		if (name === "eval") return allowEval;
+		if (name === "docs") return requestedTools?.includes("docs") === true;
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo")
 			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");

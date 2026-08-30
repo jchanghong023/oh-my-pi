@@ -64,6 +64,7 @@ export function isUserQueuedMessage(message: AgentMessage): boolean {
 
 /** Hidden magic-keyword notices queued alongside a user prompt. */
 export const MAGIC_KEYWORD_NOTICE_TYPES: Record<string, true> = {
+	"document-subagent-notice": true,
 	"ultrathink-notice": true,
 	"orchestrate-notice": true,
 	"workflow-notice": true,

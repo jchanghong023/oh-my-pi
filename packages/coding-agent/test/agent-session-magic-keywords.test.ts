@@ -123,6 +123,35 @@ describe("AgentSession magic keyword settings", () => {
 		]);
 	});
 
+	it("routes an explicit Chinese document-subagent request to doc-researcher", async () => {
+		const created = await createMagicKeywordSession(modelRegistry, [mockTaskTool]);
+		session = created.session;
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("fdth 是什么 用文档子代理搜索");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{
+			role?: string;
+			customType?: string;
+			content?: string | Array<{ type: string; text?: string }>;
+			display?: boolean;
+			attribution?: string;
+		}>;
+		const noticeIdx = promptMessages.findIndex(message => message.customType === "document-subagent-notice");
+		const userIdx = promptMessages.findIndex(message => message.role === "user");
+		const notice = promptMessages[noticeIdx];
+		expect(notice).toMatchObject({
+			role: "custom",
+			customType: "document-subagent-notice",
+			display: false,
+			attribution: "user",
+		});
+		expect(notice?.content).toContain('agent: "doc-researcher"');
+		expect(notice?.content).toContain("NEVER substitute `librarian`");
+		expect(noticeIdx).toBeLessThan(userIdx);
+		expect(promptMessages[userIdx]?.content).toEqual([{ type: "text", text: "fdth 是什么 用文档子代理搜索" }]);
+	});
+
 	it("prepends a hidden user-attributed fullsend notice without task and preserves the user message", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
