@@ -185,4 +185,18 @@ describe("fork installer routing", () => {
 		expect(script).toContain("-f $PID, [System.Guid]::NewGuid()");
 		expect(script).not.toContain('$TmpPath = "$OutPath.tmp"');
 	});
+
+	test("force-stops every Windows omp process and removes the old target before moving", async () => {
+		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
+		expect(script).toContain('Get-Process -Name "omp"');
+		expect(script).toContain("Stop-Process -Force");
+		expect(script).not.toContain("Where-Object { try { $_.Path -eq $TargetPath }");
+
+		const stopIndex = script.indexOf("        Stop-RunningOmp");
+		const removeIndex = script.indexOf("            Remove-Item -LiteralPath $OutPath -Force", stopIndex);
+		const moveIndex = script.indexOf("        Move-Item -Path $TmpPath -Destination $OutPath", removeIndex);
+		expect(stopIndex).toBeGreaterThan(-1);
+		expect(removeIndex).toBeGreaterThan(stopIndex);
+		expect(moveIndex).toBeGreaterThan(removeIndex);
+	});
 });

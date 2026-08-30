@@ -231,22 +231,22 @@ function Install-ViaBun {
     Write-Host "Run 'omp' to get started!"
 }
 
-# Windows locks a running executable, so replacing omp.exe fails while a
-# previous instance is alive. Stop only processes whose exact binary path is
-# the install target.
+# Windows locks running executables. Binary installs deliberately stop every
+# omp process before replacement so stale sessions cannot keep omp.exe locked.
 function Stop-RunningOmp {
-    param([string]$TargetPath)
-    try {
-        $running = Get-Process -ErrorAction SilentlyContinue |
-            Where-Object { try { $_.Path -eq $TargetPath } catch { $false } }
-        if ($running) {
-            Write-Host "[WARN] Windows must stop processes running the locked target: $TargetPath" -ForegroundColor Yellow
-            Write-Host "[WARN] Matching processes will be stopped. To preserve a session, cancel now, exit it manually, then retry." -ForegroundColor Yellow
-            $running | Stop-Process -Force -ErrorAction SilentlyContinue
-            $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
-        }
-    } catch {
-        # Process enumeration races with process exit; never block the install.
+    $running = @(Get-Process -Name "omp" -ErrorAction SilentlyContinue)
+    if (-not $running) {
+        return
+    }
+
+    Write-Host "[WARN] Force-stopping all running omp processes before installation." -ForegroundColor Yellow
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+
+    $remaining = @(Get-Process -Name "omp" -ErrorAction SilentlyContinue)
+    if ($remaining) {
+        $processIds = ($remaining | ForEach-Object { $_.Id }) -join ", "
+        throw "Failed to stop all omp processes (PIDs: $processIds)."
     }
 }
 
@@ -302,10 +302,10 @@ function Install-Binary {
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-    # Windows locks a running executable, so omp.exe cannot be overwritten
-    # while a previous instance is alive: download to a unique same-directory
-    # temp file first (a failed download leaves the old install working), warn
-    # and stop exact-path processes, then move the new binary into place.
+    # Windows cannot overwrite an existing or running omp.exe. Download to a
+    # unique same-directory temp file first so failed downloads leave the old
+    # install working, then force-stop every omp process, remove the old target,
+    # and move the new binary into place.
     # Prefer the in-box curl.exe (Windows 10 1803+) for a live progress bar;
     # fall back to Invoke-WebRequest when curl is unavailable or fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
@@ -332,8 +332,11 @@ function Install-Binary {
                 throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
         }
-        Stop-RunningOmp -TargetPath $OutPath
-        Move-Item -Force -Path $TmpPath -Destination $OutPath
+        Stop-RunningOmp
+        if (Test-Path -LiteralPath $OutPath) {
+            Remove-Item -LiteralPath $OutPath -Force
+        }
+        Move-Item -Path $TmpPath -Destination $OutPath
     } finally {
         Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
     }
