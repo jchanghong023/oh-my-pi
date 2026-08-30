@@ -18,6 +18,7 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jchgitforcesync",
 		description: "JCH Git：强制同步到 upstream 并丢弃全部本地改动",
 		inlineHint: "[可选补充要求]",
+		tuiOnly: true,
 		prompt: `把当前 Git 分支完全同步为其远端 upstream 的当前状态，本地内容全部丢弃。本命令本身即授权删除：staged 修改、unstaged tracked 修改、untracked 文件和目录、ignored 文件和目录，以及当前分支所有未推送/local-only commits。先确认当前分支和 upstream 均明确存在；没有明确 upstream 时停止，不猜测远端。先运行 git fetch --all，再将当前分支 hard reset 到最新 upstream tip，并彻底 clean（包含 untracked 与 ignored 内容）。不删除其他本地分支，不修改远端，不 force-push。最后验证 HEAD 与 upstream 完全一致且工作区干净。`,
 	}),
 ];

@@ -1,4 +1,4 @@
-import type { SlashCommandSpec } from "../slash-commands/types";
+import type { ParsedSlashCommand, SlashCommandSpec } from "../slash-commands/types";
 
 export interface JchPromptCommandDefinition {
 	name: string;
@@ -6,6 +6,7 @@ export interface JchPromptCommandDefinition {
 	prompt: string;
 	aliases?: string[];
 	inlineHint?: string;
+	tuiOnly?: boolean;
 }
 
 function expandPrompt(prompt: string, args: string): string {
@@ -17,12 +18,15 @@ function expandPrompt(prompt: string, args: string): string {
 
 /** Define a fork-personal slash command that expands into a normal user prompt. */
 export function defineJchPromptCommand(definition: JchPromptCommandDefinition): SlashCommandSpec {
-	return {
+	const spec: SlashCommandSpec = {
 		name: definition.name,
 		aliases: definition.aliases,
 		description: definition.description,
 		allowArgs: true,
 		inlineHint: definition.inlineHint,
-		handle: command => ({ prompt: expandPrompt(definition.prompt, command.args) }),
 	};
+	const handle = (command: ParsedSlashCommand) => ({ prompt: expandPrompt(definition.prompt, command.args) });
+	if (definition.tuiOnly) spec.handleTui = handle;
+	else spec.handle = handle;
+	return spec;
 }

@@ -35,7 +35,7 @@
   - `/jchcatchup`：先 `git fetch --all`，再只读梳理仓库、分支、upstream、conflicts、staged/unstaged/untracked 与 diff、ahead/behind、local-only 与 remote-only commits，按修改路径或提交差异查看约 10–20 个相关 commits，输出“已完成 / 当前状态 / 未完成与异常 / 建议下一步”；用于接续工作时快速恢复现场。
   - `/jchgs`：先 `git fetch --all` 更新远端引用，再梳理当前分支、upstream、remote、conflicts、staged/unstaged/untracked、ahead/behind、未推送提交与远端新增提交，指出异常与最小安全的下一步；用于快速了解当前目录及其仓库的状态。
   - `/jchgitpull`：先 `git fetch --all`，再对当前分支按仓库已有 pull 配置执行普通 `git pull`，不自行决定 merge/rebase 策略、保留本地修改、失败时报告阻塞；用于更新当前分支。
-  - `/jchgitforcesync`：命令本身即授权丢弃当前分支全部本地内容（staged、unstaged、untracked、ignored 与 local-only commits）——fetch all 后 hard reset 到最新 upstream tip 并彻底 clean，无 upstream 时停止、不 force-push；用于彻底对齐远端最新状态。
+  - `/jchgitforcesync`：命令本身即授权丢弃当前分支全部本地内容（staged、unstaged、untracked、ignored 与 local-only commits）——fetch all 后 hard reset 到最新 upstream tip 并彻底 clean，无 upstream 时停止、不 force-push；仅在交互式 TUI 提供，避免无 `ask` 的 RPC/文本会话展示实际无法执行的命令。
 - **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 写入当前 profile 的 `models.yml`。
 - **移动端 TUI**：新增 `tui.mobile` 紧凑布局预设，默认关闭。
 

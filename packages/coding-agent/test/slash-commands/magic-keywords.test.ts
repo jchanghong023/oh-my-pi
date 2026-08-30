@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
+import { JCH_GIT_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/git";
 import { JCH_WORKFLOW_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/workflow";
+import { ACP_BUILTIN_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
 import {
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
 	lookupBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"];
 
@@ -142,4 +144,24 @@ describe("JCH workflow slash commands", () => {
 			expect(result).not.toHaveProperty("prompt");
 		},
 	);
+});
+
+describe("JCH git slash commands", () => {
+	it("keeps destructive force sync interactive-only", async () => {
+		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitforcesync");
+		if (!command?.handleTui) throw new Error("Expected /jchgitforcesync to be registered for the TUI");
+
+		expect(command.handle).toBeUndefined();
+		expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === "jchgitforcesync")).toBe(false);
+
+		const args = "执行前报告目标 upstream";
+		const result = await command.handleTui(
+			{ name: command.name, args, text: `/${command.name} ${args}` },
+			{} as TuiSlashCommandRuntime,
+		);
+		if (!result || !("prompt" in result)) throw new Error("Expected /jchgitforcesync to expand to a prompt");
+		expect(result.prompt).toContain("本命令本身即授权删除");
+		expect(result.prompt).toContain("不得改变命令的核心动作或读写性质");
+		expect(result.prompt).toContain(args);
+	});
 });
