@@ -152,7 +152,8 @@ describe("DocsService indexing contract", () => {
 			expect(conflict[0]?.values.map(item => item.value).toSorted()).toEqual(["FAST", "fast"]);
 			const evidence = service
 				.lookup("Alpha", { index: "manual" })[0]
-				?.assertions[0]?.evidence.find(item => item.path === "one.md");
+				?.assertions.flatMap(assertion => assertion.evidence)
+				.find(item => item.path === "one.md");
 			expect(evidence?.quote).toMatch(/^Item: Alpha/);
 			if (!evidence) throw new Error("expected evidence");
 			await fs.rm(path.join(root, "one.md"));
