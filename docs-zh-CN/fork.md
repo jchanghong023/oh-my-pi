@@ -28,14 +28,18 @@
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
 - **子代理满载并发**：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令；RPC builtin residual prompt 同步转发 images 与 steer/followUp 行为。
-- **JCH 个人命令**：新增 `/jchfix`、`/jchfastreviewfix`、`/jchfixactions`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitforcesync` 7 个可携带任务文本的斜杠命令（`/jchgitpush`、`/jchgitcommit` 已移除），实现见 `packages/coding-agent/src/jch-commands/`：
-  - `/jchfix`：复现或确认现象后读取真实实现与调用链定位根因，只做最小修复、仅更新实际受影响的调用方与跨文件契约，测试按可观察行为更新，配置本身是根因时才允许修改；环境无法验证时报告阻塞、不提交。
-  - `/jchfastreviewfix`：显式选择未提交修改、指定 commit 或整个仓库，委派任务 MUST 逐项携带完整 Review 契约，独立只读子代理先筛选、主代理裁决后最小修复；每条验证命令设 10 秒硬上限。
-  - `/jchfixactions`：先 `git fetch --all`，从当前分支 upstream remote URL 解析目标 GitHub 仓库；workflow/branch 参数必须同时约束失败 run；定位最新有效失败并读 job/step/log，按 event 判定 head SHA，只提交本次 CI 修复并普通 push，优先用 push 新 run 验证，最多 3 轮。
-  - `/jchcatchup`：先 `git fetch --all`，再只读梳理仓库、分支、upstream、conflicts、staged/unstaged/untracked 与 diff、ahead/behind、local-only 与 remote-only commits，按修改路径或提交差异查看约 10–20 个相关 commits，输出“已完成 / 当前状态 / 未完成与异常 / 建议下一步”；用于接续工作时快速恢复现场。
-  - `/jchgs`：先 `git fetch --all` 更新远端引用，再梳理当前分支、upstream、remote、conflicts、staged/unstaged/untracked、ahead/behind、未推送提交与远端新增提交，指出异常与最小安全的下一步；用于快速了解当前目录及其仓库的状态。
-  - `/jchgitpull`：先 `git fetch --all`，再对当前分支按仓库已有 pull 配置执行普通 `git pull`，不自行决定 merge/rebase 策略、保留本地修改、失败时报告阻塞；用于更新当前分支。
-  - `/jchgitforcesync`：命令本身即授权丢弃当前分支全部本地内容（staged、unstaged、untracked、ignored 与 local-only commits）——fetch all 后 hard reset 到最新 upstream tip 并彻底 clean，无 upstream 时停止、不 force-push；仅在交互式 TUI 提供，避免无 `ask` 的 RPC/文本会话展示实际无法执行的命令。
+- **JCH 个人命令**：新增 `/jchfix`、`/jchdiagnose`、`/jchfuncreview`、`/jchfuncreviewfix`、`/jchverify`、`/jchci`、`/jchcifix`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitdiscardall` 11 个个人斜杠命令，实现见 `packages/coding-agent/src/jch-commands/`：
+  - `/jchfix`：必填问题参数，按真实调用链定位根因并最小修复，执行直接验证和项目强制检查，不提交或推送。
+  - `/jchdiagnose`：必填问题参数，只读确认正确行为、根因证据、影响范围与最小修复边界，不改变文件或外部状态。
+  - `/jchfuncreview`：显式选择未提交修改、指定 commit 或路径，委派独立只读子代理按现实可达、高置信功能问题门槛审查，主代理复核后只报告成立问题。
+  - `/jchfuncreviewfix`：显式选择未提交修改、指定 commit 或整个仓库，独立只读子代理先审查、主代理裁决后最小修复；项目强制检查不受可选验证 10 秒上限约束。
+  - `/jchverify`：显式选择未提交修改、指定 commit 或路径，只读执行直接行为验证、相关既有测试和项目强制检查，报告是否可交付而不修复。
+  - `/jchci`：只读检查当前分支及可确认关联 PR 的有效 GitHub Actions runs、HEAD 关系和失败证据，不重跑、触发、取消、提交或推送。
+  - `/jchcifix`：定位当前分支最新有效 CI 失败，最小修复后仅提交并普通推送相关改动；手动 dispatch 必须指定已推送 upstream branch，验证对应 HEAD，最多 3 轮。
+  - `/jchcatchup`：更新远端引用后梳理分支、upstream、工作区 diff、相关 untracked 源文件及提交差异，读取足以解释现场且默认不超过 20 个相关 commits。
+  - `/jchgs`：更新远端引用后报告当前分支、upstream、remote、工作区、ahead/behind、未推送与远端新增提交，以及最小安全下一步。
+  - `/jchgitpull`：先 fetch all，再按既有 pull 配置更新当前分支；参数仅作补充，不改变当前分支目标或 merge/rebase 策略。
+  - `/jchgitdiscardall`：交互式 TUI 专用，明确授权丢弃当前分支 staged、unstaged、untracked、ignored 与 local-only 内容；fetch 后复核 upstream 存在再 reset/clean，不修改远端。
 - **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 写入当前 profile 的 `models.yml`。
 - **移动端 TUI**：新增 `tui.mobile` 紧凑布局预设，默认关闭。
 
