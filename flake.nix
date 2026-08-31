@@ -164,7 +164,11 @@
             cd source
             mv nix/bun.nix nix/bun.expected.nix
             bun2nix -l bun.lock -c ../ -o nix/bun.nix
-            diff -u nix/bun.expected.nix nix/bun.nix
+            # The native CLI omits the final newline while its npm/WASM wrapper
+            # appends one; normalize that non-semantic difference before diffing.
+            awk '{ print }' nix/bun.expected.nix > nix/bun.expected.normalized.nix
+            awk '{ print }' nix/bun.nix > nix/bun.normalized.nix
+            diff -u nix/bun.expected.normalized.nix nix/bun.normalized.nix
             touch "$out"
           '';
           modules = modulesEvaluate;
