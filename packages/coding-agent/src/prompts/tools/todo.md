@@ -32,7 +32,7 @@ After each successful state-changing op: if nothing is `in_progress`, the earlie
 
 ## Create a list
 
-- Task requires 3+ distinct steps.
+- Request has 3+ independent user-facing outcomes; routine preflight → execution → verification counts as one.
 - User explicitly requests one.
 - User provides a set of tasks.
 - New instructions arrive mid-task: capture before proceeding.
