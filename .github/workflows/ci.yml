@@ -10,6 +10,7 @@ on:
 
 concurrency:
    group: "${{ github.workflow }}-${{ github.ref }}"
+   queue: max
    cancel-in-progress: false
 
 env:
@@ -29,6 +30,13 @@ jobs:
          release-timestamp: ${{ steps.detect.outputs.release-timestamp }}
          channel: "stable"
       steps:
+         - name: Reject release publication outside main
+           if: ${{ inputs.publish_release && github.ref != 'refs/heads/main' }}
+           env:
+              RELEASE_REF: ${{ github.ref }}
+           run: |
+              echo "::error::Fork releases must be published from refs/heads/main, got $RELEASE_REF"
+              exit 1
          - uses: actions/checkout@v4
          - name: Derive version from fork upstream baseline
            id: detect
@@ -384,6 +392,7 @@ jobs:
    release_gate:
       name: Release validation gate
       if: ${{ !cancelled() &&
+         needs.release_metadata.result == 'success' &&
          needs.rust_validate.result == 'success' &&
          needs.rust_test.result == 'success' &&
          needs.native_addons.result == 'success' &&
@@ -409,7 +418,9 @@ jobs:
    # publish_release is false.
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
-      if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
+      if: ${{ !cancelled() &&
+         needs.release_metadata.result == 'success' &&
+         needs.native_addons.result == 'success' }}
       needs: [release_metadata, native_addons]
       strategy:
          fail-fast: false
@@ -516,7 +527,10 @@ jobs:
 
    release_github:
       name: Publish GitHub release
-      if: ${{ inputs.publish_release && !cancelled() &&
+      if: ${{ inputs.publish_release &&
+         github.ref == 'refs/heads/main' &&
+         !cancelled() &&
+         needs.release_metadata.result == 'success' &&
          needs.release_gate.result == 'success' &&
          needs.release_binary.result == 'success' }}
       needs: [release_metadata, release_gate, release_binary]

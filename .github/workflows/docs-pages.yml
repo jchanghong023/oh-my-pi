@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # VitePress lastUpdated needs each page's actual commit history.
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4

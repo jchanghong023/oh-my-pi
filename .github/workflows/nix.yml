@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   evaluate:
-    name: Evaluate flake
+    name: Evaluate flake and Bun lock
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -57,3 +57,5 @@ jobs:
             accept-flake-config = true
       - name: Evaluate every supported system
         run: nix flake check --all-systems --no-build --show-trace
+      - name: Check generated Bun dependency lock
+        run: nix build .#checks.x86_64-linux.bun-lock --no-link --show-trace
