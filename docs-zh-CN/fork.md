@@ -17,8 +17,9 @@
 ### 仓库治理
 
 - **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 release 同步完成后在同一变更中更新当前快照。
-- **上游同步**：只将上游最新正式 GitHub Release tag 合入 `main`，使用 `.omp/skills/upstream-release-sync/SKILL.md`；冲突由代理主动解决，无冲突不跑代码检查，有冲突仅在 merge commit 前运行 `bun run fastcheck`。
-- **Release 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者必须精确等于最新正式 Release commit，不承载 fork 提交；缺失或漂移时由同步 skill 自动创建/校正，远端覆盖仅允许带精确 lease 的 `--force-with-lease`。
+- **上游同步**：只将上游最新正式 GitHub Release tag 事务式合入已存在的本地 `main`；使用 `--no-commit` 在提交前自动解决冲突并验证，失败自动 abort，不同步 `upstream/main`，不自动 push `main`。
+- **轻量验证**：提交 merge 前执行 staged Git 检查和经脚本图复核的 TS-only 静态检查；冲突时追加 `fastcheck` 与顺序执行的精确直接测试，禁止完整测试套件及全部 Rust/native 本地工作。
+- **Release 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者在本地合入、验证和快照完成后精确更新为最新正式 Release commit；远端漂移只允许带精确旧 SHA lease 的 `--force-with-lease`。
 - **Release 基线**：`.github/workflows/ci.yml` 的 `release_metadata` 从本页“当前上游基线”读取 `baseline_tag`，生成 `<baseline-without-v>+fork.${{ github.run_number }}`，不再回退到上游 latest。
 
 ### 用户功能
