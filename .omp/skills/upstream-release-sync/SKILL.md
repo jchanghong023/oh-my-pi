@@ -140,7 +140,22 @@ baseline_upstream_commit
 baseline_integration
 ```
 
-必须能读取 `baseline_upstream_commit` commit 对象。若本地历史足以判断，还必须证明它是 `main` 的祖先；无法证明时记录 `baseline_ancestry_unproven=true`，不得走无变化或镜像修复路径，只能在有新上游 commit 时进入第 2.2 节定向补证。
+尝试读取 `baseline_upstream_commit` commit 对象，并检查它是否为本地 `main` 的祖先：
+
+```bash
+baseline_ancestry_unproven=false
+if ! git_guarded cat-file -e "$baseline_upstream_commit^{commit}" || \
+   ! git_guarded merge-base --is-ancestor "$baseline_upstream_commit" main; then
+  if [ "$(git_guarded rev-parse --is-shallow-repository)" = true ]; then
+    baseline_ancestry_unproven=true
+  else
+    echo "fork snapshot baseline is missing or not contained by main" >&2
+    exit 1
+  fi
+fi
+```
+
+浅仓库允许把缺失对象或无法证明的祖先关系标记为 `baseline_ancestry_unproven=true`，但不得据此走无变化或镜像修复路径；只有上游存在新 commit 时，才可在第 2.2 节通过一次定向 deepen 补证。非浅仓库读取失败或祖先检查失败 → STOP，视为快照与本地 `main` 不一致。
 
 ## 0.3 读取镜像状态
 

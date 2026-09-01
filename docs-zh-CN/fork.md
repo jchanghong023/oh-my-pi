@@ -21,7 +21,7 @@
 - **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 `main` 同步完成后在同一变更中更新当前快照。
 - **每次精确门禁**：只读取固定上游 URL 的精确 `refs/heads/main` 与 `origin/upstream`；上游 commit、当前基线和四项镜像均未变化时真正 no-op，不查询 Release、tag、`origin/main`、配置型 `upstream/main` 或其他分支。
 - **前进与移动保护**：当前基线必须是候选上游 commit 的祖先；fetch 后重新确认远端 HEAD，期间移动只重试一次，非快进历史改写或反复移动立即停止。
-- **浅历史边界**：缺少前进关系或 merge base 证据时，仅对固定上游 `refs/heads/main` 和本地 `main` 精确 HEAD SHA 做一次定向 `deepen=1024`，仍不足即停止，永不 unshallow。
+- **浅历史边界**：浅克隆缺少基线对象或祖先证据时，无变化路径立即停止；仅有新上游 commit 才对固定上游 `refs/heads/main` 和本地 `main` 精确 HEAD SHA 做一次定向 `deepen=1024`，仍不足即停止，永不 unshallow。
 - **上游同步**：每次执行直接把确认稳定的上游 `main` HEAD 事务式合入已存在的本地 `main`；使用 `--no-ff --no-commit` 自动解决可靠冲突，失败自动 abort，不自动 push `main` 或 tag。
 - **窄范围验证**：无冲突只做 staged Git 检查；若触及 fork 的 `fastcheck`/lint/format 契约，或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试，禁止完整测试及全部 Rust/native 本地工作。
 - **Main 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最近成功合入本地 `main` 的上游 commit；它是本 fork 唯一允许自动 push 的远程分支，不承载 fork 提交。
