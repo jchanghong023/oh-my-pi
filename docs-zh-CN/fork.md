@@ -1,30 +1,31 @@
 # Fork 与上游差异
 
-本页是最近合入的上游正式 release 与当前 fork 差异的状态快照，不是 release 历史账本；每个列表项的描述最多占 2 个 Markdown 源码行；只维护一个“当前上游基线”段与一个仅含当前 release 的“上游同步记录”段。
+本页是最近成功合入的上游 `main` 精确 commit 与当前 fork 差异的状态快照，不是同步历史账本；每个列表项的描述最多占 2 个 Markdown 源码行；只维护一个“当前上游基线”段与一个仅含当前 `main` 基线的“上游同步记录”段。
 
 ## 当前上游基线
 
+- **分支**：`can1357/oh-my-pi@main`
 - **版本**：`v18.0.11`
-- **Release commit**：`b8ce33a58911c26bed1d84f0db9a5e2e727c49a2`
+- **Upstream commit**：`b8ce33a58911c26bed1d84f0db9a5e2e727c49a2`
 - **同步日期**：2026-08-29
-- **Merge**：`3ad7875fdd`
+- **Integration**：`3ad7875fdd`
 
 ## 上游同步记录
 
-- 2026-08-29：合入正式 release `v18.0.11`（release `b8ce33a58911`，merge `3ad7875fdd`）。
+- 2026-08-29：合入 `can1357/oh-my-pi@main` 的 `b8ce33a58911`（package `18.0.11`，integration `3ad7875fdd`）。
 
 ## Fork 改动
 
 ### 仓库治理
 
-- **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 release 同步完成后在同一变更中更新当前快照。
-- **每日精确门禁**：只读取上游 `/releases/latest`、该 Release 的原始 tag ref/commit 和 `origin/upstream`；tag 与完整 Release commit 均未变化时立即结束，不查询任何其他远程分支、tag 或 Release。
-- **改写与回退保护**：同名 Release tag 指向不同 commit 时立即停止；新 tag 必须是严格更高的 `vMAJOR.MINOR.PATCH`，防止 retag、Release 删除或回退导致镜像和 `main` 被错误降级。
-- **浅历史边界**：无新 Release 时不补历史；新 Release 缺少 merge base 时，仅对当前 Release tag 和本地 `main` 精确 HEAD SHA 做一次 `deepen=256`，仍不足即停止，永不 unshallow。
-- **上游同步**：新 Release tag 事务式合入已存在的本地 `main`；使用 `--no-commit` 自动解决冲突并在提交前验证，失败自动 abort，不同步 `upstream/main`，不自动 push `main` 或 tag。
-- **窄范围验证**：无冲突只做 staged Git 检查；冲突时只运行一次 `fastcheck`、冲突 workspace 的安全 `check:types` 和最多 3 个直接测试，禁止全 workspace/完整测试及全部 Rust/native 本地工作。
-- **Release 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最新正式 Release commit；它是唯一允许访问和自动 push 的远程分支，不承载 fork 提交。
-- **Release 基线**：`.github/workflows/ci.yml` 的 `release_metadata` 从本页“当前上游基线”读取 `baseline_tag`，生成 `<baseline-without-v>+fork.${{ github.run_number }}`，不再回退到上游 latest。
+- **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 `main` 同步完成后在同一变更中更新当前快照。
+- **每次精确门禁**：只读取固定上游 URL 的精确 `refs/heads/main` 与 `origin/upstream`；上游 commit、当前基线和四项镜像均未变化时真正 no-op，不查询 Release、tag、`origin/main`、配置型 `upstream/main` 或其他分支。
+- **前进与移动保护**：当前基线必须是候选上游 commit 的祖先；fetch 后重新确认远端 HEAD，期间移动只重试一次，非快进历史改写或反复移动立即停止。
+- **浅历史边界**：缺少前进关系或 merge base 证据时，仅对固定上游 `refs/heads/main` 和本地 `main` 精确 HEAD SHA 做一次定向 `deepen=1024`，仍不足即停止，永不 unshallow。
+- **上游同步**：每次执行直接把确认稳定的上游 `main` HEAD 事务式合入已存在的本地 `main`；使用 `--no-ff --no-commit` 自动解决可靠冲突，失败自动 abort，不自动 push `main` 或 tag。
+- **窄范围验证**：无冲突只做 staged Git 检查；若触及 fork 的 `fastcheck`/lint/format 契约，或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试，禁止完整测试及全部 Rust/native 本地工作。
+- **Main 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最近成功合入本地 `main` 的上游 commit；它是本 fork 唯一允许自动 push 的远程分支，不承载 fork 提交。
+- **版本基线**：`.github/workflows/ci.yml` 的 `release_metadata` 继续从本页“当前上游基线”读取 `版本`；该值取精确上游 commit 中 coding-agent package SemVer 的核心三段，不读取或回退到 GitHub latest Release。
 
 ### 用户功能
 
