@@ -30,6 +30,23 @@ interface SectionDraft {
 	lines: SourceLine[];
 }
 
+type FenceMarker = "`" | "~";
+
+interface Fence {
+	marker: FenceMarker;
+	length: number;
+}
+
+interface FenceMatch extends Fence {
+	trailing: string;
+}
+
+function parseFence(line: string): FenceMatch | undefined {
+	const match = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n)?$/);
+	if (!match) return undefined;
+	return { marker: match[1][0] as FenceMarker, length: match[1].length, trailing: match[2] };
+}
+
 function sourceKind(relativePath: string): string {
 	const kind = path
 		.basename(relativePath)
@@ -147,14 +164,14 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	const drafts: SectionDraft[] = [];
 	let headingPath: string[] = [];
 	let current: SectionDraft = { headingPath: [], headingLevel: 0, lines: [] };
-	let fence: string | undefined;
+	let fence: Fence | undefined;
 	let title: string | undefined;
 	const finish = () => {
 		if (current.lines.length > 0 && current.lines.some(line => line.text.length > 0)) drafts.push(current);
 	};
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
-		const fenceMatch = line.text.match(/^ {0,3}(`{3,}|~{3,})/);
+		const fenceMatch = parseFence(line.text);
 		const heading = parseHeading(line.text, lines[index + 1]?.text, fence !== undefined);
 		if (heading) {
 			finish();
@@ -167,9 +184,13 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 		}
 		current.lines.push(line);
 		if (fenceMatch) {
-			const marker = fenceMatch[1][0];
-			if (!fence) fence = marker;
-			else if (fence === marker) fence = undefined;
+			if (!fence) fence = { marker: fenceMatch.marker, length: fenceMatch.length };
+			else if (
+				fence.marker === fenceMatch.marker &&
+				fenceMatch.length >= fence.length &&
+				/^[ \t]*$/.test(fenceMatch.trailing)
+			)
+				fence = undefined;
 		}
 	}
 	finish();

@@ -218,16 +218,14 @@ export class DocsStorage {
 	}
 
 	list(): StoredIndex[] {
-		return (
-			this.db
-				.query(`${SUMMARY_SQL} WHERE i.name NOT LIKE '__building__%' ORDER BY i.name`)
-				.all() as SummaryCountRow[]
-		).map(mapIndex);
+		return (this.db.query(`${SUMMARY_SQL} WHERE i.state!='building' ORDER BY i.name`).all() as SummaryCountRow[]).map(
+			mapIndex,
+		);
 	}
 
 	get(name: string): StoredIndex | undefined {
 		const row = this.db
-			.query(`${SUMMARY_SQL} WHERE i.name=? AND i.name NOT LIKE '__building__%'`)
+			.query(`${SUMMARY_SQL} WHERE i.name=? AND i.state!='building'`)
 			.get(name) as SummaryCountRow | null;
 		return row ? mapIndex(row) : undefined;
 	}
@@ -276,9 +274,9 @@ export class DocsStorage {
 	}
 
 	remove(name: string): boolean {
-		const row = this.db
-			.query("SELECT id FROM doc_indexes WHERE name=? AND name NOT LIKE '__building__%'")
-			.get(name) as { id: number } | null;
+		const row = this.db.query("SELECT id FROM doc_indexes WHERE name=? AND state!='building'").get(name) as {
+			id: number;
+		} | null;
 		if (!row) return false;
 		this.removeById(row.id);
 		return true;
@@ -338,7 +336,7 @@ export class DocsStorage {
 	evidence(id: number): DocsEvidenceResult | undefined {
 		const row = this.db
 			.query(`SELECT e.id,i.name index_name,d.relative_path,s.heading_path,e.line_start,e.line_end,e.byte_start,e.byte_end,e.quote,e.confidence,s.raw_markdown
-		 FROM evidence e JOIN doc_indexes i ON i.id=e.index_id JOIN sections s ON s.id=e.section_id JOIN documents d ON d.id=s.document_id WHERE e.id=? AND i.name NOT LIKE '__building__%'`)
+		 FROM evidence e JOIN doc_indexes i ON i.id=e.index_id JOIN sections s ON s.id=e.section_id JOIN documents d ON d.id=s.document_id WHERE e.id=? AND i.state!='building'`)
 			.get(id) as Record<string, unknown> | null;
 		if (!row) return undefined;
 		return {

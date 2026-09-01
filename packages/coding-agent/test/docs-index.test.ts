@@ -118,6 +118,29 @@ describe("document schema and Markdown parsing", () => {
 			"child text",
 		);
 	});
+
+	it("requires matching fence length and whitespace-only closing content", () => {
+		const text = [
+			"# Document",
+			"````md",
+			"```",
+			"# inside fence",
+			"``` trailing text",
+			"```",
+			"#### still inside",
+			"````\t",
+			"## Outside",
+			"outside",
+		].join("\n");
+		const parsed = parseMarkdown(new TextEncoder().encode(text));
+		expect(parsed.sections.some(section => section.headingPath.at(-1) === "inside fence")).toBe(false);
+		expect(parsed.sections.some(section => section.headingPath.at(-1) === "still inside")).toBe(false);
+		expect(parsed.sections.some(section => section.headingPath.at(-1) === "Outside")).toBe(true);
+		expect(parsed.sections.find(section => section.headingPath.at(-1) === "Document")?.rawMarkdown).toContain(
+			"# inside fence",
+		);
+	});
+
 	it("skips and refuses symbolic-link Markdown sources", async () => {
 		const root = await tempDir("docs-safe-root-");
 		const outside = path.join(await tempDir("docs-safe-outside-"), "outside.md");
@@ -243,6 +266,27 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "mixed", path.relative(root, await schemaFile(root)));
 			expect(service.search("Alpha", { index: "mixed" }).sections.length).toBe(1);
 			expect(service.search("中文", { index: "mixed" }).sections.length).toBe(1);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("keeps ordinary names containing the building pattern visible", async () => {
+		const root = await tempDir("docs-visible-root-");
+		const agent = await tempDir("docs-visible-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# Guide\nbuilding visibility\n");
+		const service = new DocsService({ agentDir: agent, cwd: root, extractor: null });
+		const name = "abbuildingcd";
+		try {
+			await service.init(".", name, "dft");
+			expect(service.list().map(index => index.name)).toEqual([name]);
+			const status = service.status(name);
+			if (Array.isArray(status)) throw new Error("expected one index");
+			expect(status.name).toBe(name);
+			expect(service.search("visibility", { index: name }).sections).toHaveLength(1);
+			await expect(service.init(".", "__building__user", "dft")).rejects.toThrow("reserved prefix");
+			service.remove(name);
+			expect(service.list()).toEqual([]);
 		} finally {
 			service.close();
 		}

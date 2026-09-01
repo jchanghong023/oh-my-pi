@@ -87,11 +87,16 @@ function searchExcerpt(rawMarkdown: string, query: string): string {
 	const end = Math.min(text.length, start + 320);
 	return `${start > 0 ? "… " : ""}${text.slice(start, end)}${end < text.length ? " …" : ""}`;
 }
+
+const BUILDING_INDEX_PREFIX = "__building__";
+
 function validateName(name: string): string {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error("Document index name must not be empty");
 	if ([...trimmed].length > 64) throw new Error("Document index name must contain at most 64 Unicode scalar values");
 	if (/\p{Cc}/u.test(trimmed)) throw new Error("Document index name must not contain control characters");
+	if (trimmed.startsWith(BUILDING_INDEX_PREFIX))
+		throw new Error(`Document index name uses reserved prefix: ${BUILDING_INDEX_PREFIX}`);
 	return trimmed;
 }
 
@@ -118,7 +123,7 @@ function evidenceLocation(
 }
 
 function indexFilter(index: string | undefined, alias = "i"): { sql: string; args: string[] } {
-	const visible = ` AND ${alias}.name NOT LIKE '__building__%'`;
+	const visible = ` AND ${alias}.state!='building'`;
 	return index ? { sql: `${visible} AND ${alias}.name=?`, args: [index] } : { sql: visible, args: [] };
 }
 
@@ -229,7 +234,7 @@ export class DocsService {
 		replacedId?: number;
 	}): Promise<DocsBuildResult> {
 		const temp = this.storage.create({
-			name: `__building__${crypto.randomUUID()}`,
+			name: `${BUILDING_INDEX_PREFIX}${crypto.randomUUID()}`,
 			rootPath: input.rootPath,
 			schemaId: input.schema.id,
 			schemaVersion: input.schema.version,
