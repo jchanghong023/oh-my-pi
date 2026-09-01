@@ -5,14 +5,14 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-- **版本**：`v18.0.11`
-- **Upstream commit**：`b8ce33a58911c26bed1d84f0db9a5e2e727c49a2`
-- **同步日期**：2026-08-29
-- **Integration**：`3ad7875fdd`
+- **版本**：`v18.1.2`
+- **Upstream commit**：`530664c8f59abb8029c0138494494b5678457d4c`
+- **同步日期**：2026-09-01
+- **Integration**：`238fe84845`
 
 ## 上游同步记录
 
-- 2026-08-29：合入 `can1357/oh-my-pi@main` 的 `b8ce33a58911`（package `18.0.11`，integration `3ad7875fdd`）。
+- 2026-09-01：合入 `can1357/oh-my-pi@main` 的 `530664c8f59a`（package `18.1.2`，integration `238fe84845`）。
 
 ## Fork 改动
 
@@ -70,7 +70,7 @@
 
 ### 开发维护
 
-- **本地快速检查**：新增 `bun run fastcheck`，从 `biome.json` 的 `files.includes` 编译正/排除 glob，只把实际交给 Biome 的文件标为 `checking`、其余标为 `skipping ... outside biome.json files.includes`；配置缺失或解析失败立即报错，零 included 时直接成功退出，禁止回退到“全部已检查”。
+- **本地快速检查**：新增 `bun run fastcheck`，对本地修改的 TypeScript 文件运行 Oxlint，并只对根 Oxfmt 输入模式覆盖的文件检查格式；命令按路径长度分批以兼容 Windows，未命中格式范围时明确跳过。
 - **Todo 使用边界**：仅当请求包含至少 3 个独立的用户可见结果时创建列表；常规事前检查、执行与验证合计为一个结果。
 - **源码 UI 启动**：新增 `bun run omp2`，仅从 `$HOME/.omp/natives/<version>` 加载匹配版本的原生包，以当前仓库 TypeScript 源码启动交互式界面且不触发本地原生构建；`AGENTS.md` 要求仅测试交互式 UI 时使用该命令。
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
