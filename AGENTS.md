@@ -24,7 +24,7 @@ After modifying local TypeScript code, you MUST run `bun run fastcheck` before y
 
 其他规则：
 
-- NEVER 本地开发禁止编译 Rust 代码。
+- NEVER 在本地开发中编译 Rust 代码。
 - 仅测试交互式 UI 时，MUST 使用 `bun run omp2`；该命令从 `$HOME/.omp/natives/<version>` 加载原生包并运行仓库 TypeScript 源码，NEVER 本地编译原生代码。
 
 ## Change Discipline
