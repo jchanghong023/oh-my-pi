@@ -15,9 +15,11 @@ description: Merge the latest formally published can1357/oh-my-pi GitHub Release
 - Release MUST 满足 `draft=false`、`prerelease=false`、`published_at` 非空。
 - 目标分支固定为 `main`；NEVER 将 Release 合入其他 fork 分支。
 - MUST 仅合并 Release 的原始 `tag_name`；NEVER merge/pull `upstream/main`。
+- 同步前 MUST fetch `origin/main`：本地 `main` 落后时仅 fast-forward；本地领先可继续；本地与 `origin/main` 已分叉时 STOP。
 - `origin/upstream` MUST 精确等于 `release_commit`，不得包含 fork-only commit。
 - 本地 `upstream` MUST 精确等于 `release_commit` 并跟踪 `origin/upstream`；缺失时自动创建，tracking 缺失或错误时自动校正。
 - `upstream` 是专用镜像分支，允许为恢复镜像不变量而重建本地 ref，并仅对 `origin/upstream` 使用带精确 lease 的 `--force-with-lease`；NEVER 对其他分支 force-push。
+- 任何用于判定远端 ref 的查询失败都 MUST STOP；NEVER 把网络、认证或远端错误当成“分支不存在”。
 - 工作区不干净或已有 merge/rebase/cherry-pick 进行中时 STOP；NEVER 自动 stash、reset 或丢弃用户改动。
 - merge 出现冲突时 MUST 主动尝试完整解决；NEVER 仅因出现冲突就停止。只有无法从代码、历史、调用关系和 fork 差异中可靠判断正确结果时才 STOP。
 - 无冲突 merge 不运行代码测试、检查、构建或编译；发生冲突并修改解决结果时，提交 merge 前 MUST 且仅运行 `bun run fastcheck`。这是 `AGENTS.md` Local Verification 的上游同步专用规则。
@@ -41,7 +43,7 @@ description: Merge the latest formally published can1357/oh-my-pi GitHub Release
 仅当以下条件全部满足时报告完成：
 
 1. `release_tag` 来自最新正式 GitHub Release，且本地 tag 对应 `release_commit`。
-2. `main` 包含 `release_commit`，并保留同步前 `main` 历史。
+2. `main` 包含 `release_commit`，并保留同步前 `main` 历史；同步前本地 `main` 与 `origin/main` 未分叉。
 3. merge 无未解决冲突；若本次出现冲突，`bun run fastcheck` 已通过。
 4. 本地 `refs/heads/upstream == release_commit`。
 5. 远端 `origin/upstream == release_commit`，以远端实际 ref 再次确认。
@@ -79,6 +81,23 @@ git remote add upstream https://github.com/can1357/oh-my-pi.git
 
 ```bash
 git switch main
+```
+
+先把本地 `main` 与 fork 远端基线对齐。fetch 失败或 `origin/main` 不存在 → STOP：
+
+```bash
+git fetch origin "refs/heads/main:refs/remotes/origin/main"
+```
+
+判定关系：
+
+- 本地 `main` 是 `origin/main` 祖先 → `git merge --ff-only origin/main`，只允许 fast-forward。
+- `origin/main` 是本地 `main` 祖先 → 本地相同或领先，继续并保留本地提交。
+- 两者均不是对方祖先 → 已分叉，STOP；NEVER 自动 merge/rebase/reset `origin/main`。
+
+完成上述对齐后再记录：
+
+```bash
 pre_merge_head="$(git rev-parse HEAD)"
 ```
 
@@ -133,17 +152,23 @@ release_commit="$(git rev-parse "$release_tag^{commit}")"
 refs/heads/upstream == origin/upstream == release_commit
 ```
 
-先查询远端镜像是否存在：
+查询远端镜像。命令失败 → STOP；只有命令成功且输出为空才表示 `origin/upstream` 不存在：
 
 ```bash
-remote_upstream_line="$(git ls-remote --heads origin refs/heads/upstream)"
+if ! remote_upstream_line="$(git ls-remote --heads origin refs/heads/upstream)"; then
+  exit 1
+fi
 ```
+
+精确 ref 查询最多只能返回一条；若出现多条或结果无法解析 → STOP。
 
 始终将本地镜像 ref 重建到 Release commit；当前已在 `main`，因此不会修改检出的工作树：
 
 ```bash
 git branch -f upstream "$release_commit"
 ```
+
+如果 `upstream` 正被其他 worktree 检出导致 `git branch -f` 拒绝 → STOP；NEVER 强行绕过 worktree 保护。
 
 #### 4a. `origin/upstream` 不存在
 
@@ -155,7 +180,7 @@ git push origin "refs/heads/upstream:refs/heads/upstream"
 
 #### 4b. `origin/upstream` 已存在
 
-提取查询到的远端旧 SHA 为 `expected_origin_upstream`。若其已经等于 `release_commit`，无需 push。
+从唯一查询结果提取远端旧 SHA 为 `expected_origin_upstream`。若其已经等于 `release_commit`，无需 push。
 
 若不同，专用镜像分支允许覆盖旧镜像，但 MUST 使用精确 lease 防止并发覆盖：
 
@@ -174,13 +199,16 @@ git fetch origin "refs/heads/upstream:refs/remotes/origin/upstream"
 git branch --set-upstream-to=origin/upstream upstream
 ```
 
-立即验证：
+立即验证；远端查询失败与 SHA 不匹配都视为失败：
 
 ```bash
 test "$(git rev-parse refs/heads/upstream)" = "$release_commit"
 test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
 test "$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)" = "origin/upstream"
-test "$(git ls-remote --heads origin refs/heads/upstream | awk '{print $1}')" = "$release_commit"
+if ! remote_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream | awk 'NR==1 {print $1}')"; then
+  exit 1
+fi
+test "$remote_upstream_sha" = "$release_commit"
 ```
 
 任一失败 → 镜像同步未完成，STOP。
@@ -317,16 +345,19 @@ fork_doc_commit="$(git rev-parse HEAD)"
 test "$(git branch --show-current)" = "main"
 git merge-base --is-ancestor "$release_commit" main
 git merge-base --is-ancestor "$pre_merge_head" main
-git status --porcelain=v1
+test -z "$(git status --porcelain=v1)"
 ```
 
-镜像必须再次从远端确认：
+镜像必须再次从远端确认。远端查询失败 → STOP：
 
 ```bash
 test "$(git rev-parse refs/heads/upstream)" = "$release_commit"
 test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
 test "$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)" = "origin/upstream"
-test "$(git ls-remote --heads origin refs/heads/upstream | awk '{print $1}')" = "$release_commit"
+if ! remote_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream | awk 'NR==1 {print $1}')"; then
+  exit 1
+fi
+test "$remote_upstream_sha" = "$release_commit"
 ```
 
 文档必须满足：
