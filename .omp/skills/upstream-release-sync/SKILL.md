@@ -60,7 +60,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 git rev-parse --is-inside-work-tree
 git rev-parse --show-toplevel
 test "$(git rev-parse --is-shallow-repository)" = "false"
-test -z "$(git status --porcelain=v1 --untracked-files=all)"
+test -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"
 ```
 
 浅克隆或工作区不干净 → STOP。NEVER 自动 unshallow、stash、commit、reset、clean 或丢弃用户改动。
@@ -136,7 +136,7 @@ git_guarded remote add upstream https://github.com/can1357/oh-my-pi.git
 
 若已存在，其 fetch URL MUST 解析为 `can1357/oh-my-pi`；错误或不确定 → STOP，NEVER 自动改写。
 
-MUST 读取所有生效的仓库、info 和用户 attributes，以及相关 Git 配置，审计本仓库实际使用的 `merge=<driver>`、`filter=<driver>`：
+MUST 读取所有生效的 system/global/repository/info attributes 及相关 Git 配置，审计本仓库实际使用的 `merge=<driver>`、`filter=<driver>`：
 
 - 内建 text/binary/union 行为允许。
 - 标准 Git LFS filter 允许，但始终设置 `GIT_LFS_SKIP_SMUDGE=1`，禁止自动下载大对象。
@@ -298,22 +298,24 @@ bun run --sequential --workspaces --if-present check
 
 仅当第 5.2 节确认每个实际 workspace `check` 都是 TS/JS/配置静态检查时运行。若出现不安全 workspace，逐个运行其余安全 workspace；任何受本次 merge 影响的 workspace 无安全静态检查 → abort。
 
+无冲突路径在本节执行上述命令一次；冲突路径先进入第 5.4 节，在 `fastcheck` 后执行上述命令一次，NEVER 重复执行。
+
 NEVER 运行根 `bun run check`、任何 `*:rs`、`build`、`build:native`、`ci:test:full`、`cargo`、`bazel`、`nix build` 或 native binary 命令。
 
-### 5.4 冲突路径附加验证与不可变检查
+### 5.4 冲突路径附加验证与通用不可变检查
 
 仅当 `merge_had_conflicts=true`：
 
 1. 审计后运行 `bun run fastcheck`。
-2. 再执行第 5.3 节顺序静态检查。
+2. 随后执行第 5.3 节顺序静态检查一次。
 3. 对 `initial_conflicted_paths` 中的实现文件，仅逐个运行最直接、已存在、不会构建 native、更新 snapshot 或写入仓库的精确测试文件。
 4. Shell/Python 冲突可运行不写文件的 `bash -n` / Python AST 解析；NEVER 为验证安装工具。
 5. 不存在安全直接测试时记录 `focused_tests=none found`，不得编造。
 6. Rust/native 源码即使冲突，也 NEVER 在本机运行其工具链；只做逐行语义审查和非 Rust 调用侧静态检查，并报告验证边界。
 
-无冲突路径不运行 `fastcheck` 或 focused tests，但仍完成第 5.1–5.3 节。
+无冲突路径不运行 `fastcheck` 或 focused tests。
 
-所有实际检查结束后、commit 前必须证明检查没有改写 index、worktree 或生成 untracked 文件：
+无论有无冲突，所有实际检查结束后、commit 前都必须证明检查没有改写 index、worktree 或生成 untracked 文件：
 
 ```bash
 test "$(git_guarded write-tree)" = "$validation_index_tree"
@@ -357,9 +359,14 @@ test -z "$(git_guarded status --porcelain=v1 --untracked-files=all)"
 - “上游同步记录”唯一一条当前 Release 记录；
 - “Fork 改动”：删除上游已等价实现的条目，保留实际差异，更新因冲突解决改变的描述。
 
-提交前验证 index 只包含 `docs-zh-CN/fork.md`，worktree 无其他改动，再执行：
+验证文档不变量后，MUST 仅暂存该文件并再次检查提交范围：
 
 ```bash
+git_guarded add docs-zh-CN/fork.md
+test "$(git_guarded diff --cached --name-only)" = "docs-zh-CN/fork.md"
+test -z "$(git_guarded diff --name-only)"
+test -z "$(git_guarded ls-files --others --exclude-standard)"
+git_guarded diff --cached --check
 git_guarded commit --no-gpg-sign -m "docs(fork): record upstream ${release_tag}"
 fork_doc_commit="$(git_guarded rev-parse HEAD)"
 ```
@@ -370,7 +377,7 @@ fork_doc_commit="$(git_guarded rev-parse HEAD)"
 
 即使 `fork.md` 已写相同 tag，也 MUST 校验日期和 Merge。定位 `main` first-parent 历史中第二父提交精确等于 `release_commit` 的 merge commit；要求恰好一个。
 
-以该 merge 的 committer UTC 日期和前 10 位 hash 校验版本、日期、Merge 及唯一同步记录。全部一致 → 不提交；不一致 → 校正并创建只修改 `fork.md` 的 docs commit。0 或多条匹配 → STOP，保持 clean，不更新镜像。
+以该 merge 的 committer UTC 日期和前 10 位 hash 校验版本、日期、Merge 及唯一同步记录。全部一致 → 不提交；不一致 → 校正并按第 6.1 节的暂存、范围检查和 docs commit 流程执行。0 或多条匹配 → STOP，保持 clean，不更新镜像。
 
 ### 6.3 文档不变量与失败
 
@@ -395,7 +402,7 @@ fork_doc_commit="$(git_guarded rev-parse HEAD)"
 --no-verify --no-follow-tags --no-signed --recurse-submodules=no
 ```
 
-远端不存在，使用空 expected-value lease 防止并发创建：
+远端不存在，使用空 expected-value lease防止并发创建：
 
 ```bash
 git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
@@ -405,9 +412,25 @@ git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=n
 
 远端存在时，先精确 fetch 到 `origin/upstream` 并确认其 SHA 等于刚查询的 `expected_origin_upstream`：
 
-- 已等于 `release_commit` → 不 push。
-- `expected_origin_upstream` 是 `release_commit` 祖先 → 普通 push，不使用 force。
-- 非 fast-forward → 仅对该 ref 使用 `--force-with-lease="refs/heads/upstream:$expected_origin_upstream"`。
+```bash
+git_guarded fetch origin "+refs/heads/upstream:refs/remotes/origin/upstream"
+test "$(git_guarded rev-parse refs/remotes/origin/upstream)" = "$expected_origin_upstream"
+```
+
+若已经等于 `release_commit`，不 push。若旧 SHA 是 `release_commit` 的祖先，普通 push：
+
+```bash
+git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
+  origin "${release_commit}:refs/heads/upstream"
+```
+
+若不是 fast-forward，仅对该 ref 使用精确 lease：
+
+```bash
+git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
+  --force-with-lease="refs/heads/upstream:$expected_origin_upstream" \
+  origin "${release_commit}:refs/heads/upstream"
+```
 
 任何 push 失败后只重新查询一次：远端已等于 `release_commit` 则视为并发完成；否则 STOP，NEVER 用新 lease 自动覆盖重试。
 
