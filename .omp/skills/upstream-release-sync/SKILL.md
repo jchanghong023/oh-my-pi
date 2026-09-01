@@ -205,10 +205,11 @@ git branch --set-upstream-to=origin/upstream upstream
 test "$(git rev-parse refs/heads/upstream)" = "$release_commit"
 test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
 test "$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)" = "origin/upstream"
-if ! remote_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream | awk 'NR==1 {print $1}')"; then
+if ! verified_remote_line="$(git ls-remote --heads origin refs/heads/upstream)"; then
   exit 1
 fi
-test "$remote_upstream_sha" = "$release_commit"
+verified_remote_sha="$(printf '%s\n' "$verified_remote_line" | awk 'NR==1 {print $1}')"
+test "$verified_remote_sha" = "$release_commit"
 ```
 
 任一失败 → 镜像同步未完成，STOP。
@@ -354,10 +355,11 @@ test -z "$(git status --porcelain=v1)"
 test "$(git rev-parse refs/heads/upstream)" = "$release_commit"
 test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
 test "$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)" = "origin/upstream"
-if ! remote_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream | awk 'NR==1 {print $1}')"; then
+if ! verified_remote_line="$(git ls-remote --heads origin refs/heads/upstream)"; then
   exit 1
 fi
-test "$remote_upstream_sha" = "$release_commit"
+verified_remote_sha="$(printf '%s\n' "$verified_remote_line" | awk 'NR==1 {print $1}')"
+test "$verified_remote_sha" = "$release_commit"
 ```
 
 文档必须满足：
