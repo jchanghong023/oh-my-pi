@@ -1,102 +1,44 @@
 ---
 name: upstream-release-sync
-description: Safely merge the latest formally published can1357/oh-my-pi GitHub Release into this fork's existing local main branch, automatically resolve reliable conflicts, validate sequentially without Rust or native-binary work, and keep origin/upstream as an exact Release mirror. Use when the user asks to sync, merge, update, or pull the newest upstream release/version/tag; 上游发布新版本、同步上游正式版、合入最新 release、按发布页版本升级。 Requires a published GitHub Release, never a tag-only version.
+description: Quickly detect whether can1357/oh-my-pi has a new formal GitHub Release; if so, merge it into this fork's existing local main, automatically resolve reliable conflicts, validate on a low-resource machine without Rust/native builds, and keep origin/upstream as an exact Release mirror. Use for 更新上游、同步上游正式版、合入最新 release、按发布页版本升级。 Never sync upstream/main or tag-only versions.
 ---
 
 # 上游正式 Release 同步
 
 固定目标：
 
-1. 将 `can1357/oh-my-pi` 最新正式 GitHub Release 合入本 fork 已存在的本地 `main`，发生冲突时主动自动解决。
-2. 本地合入、验证和 fork 快照全部完成后，使本地 `upstream`、`origin/upstream` 与该 Release commit 精确一致。
+1. **先快速判断是否真的有新 Release**；没有新版本时立即结束，不做历史补全、分支切换、脚本审计或测试。
+2. 有新 Release 时，将其合入本 fork 已存在的本地 `main`，冲突由代理主动解决。
+3. 本地合入、验证和 `fork.md` 更新成功后，使本地 `upstream`、`origin/upstream` 精确等于该 Release commit。
 
 <critical>
-- MUST 以 GitHub Release API 返回的最新正式 Release 为唯一版本来源；NEVER 用 tag 排序、`git describe`、`git ls-remote` 或 `upstream/main` 猜版本。
-- Release MUST 满足 `draft=false`、`prerelease=false`、`published_at` 非空。
-- 目标分支固定为已存在的本地 `main`；MUST 用 `git switch --no-guess main`，NEVER 隐式创建。
-- MUST 仅合并 Release 的原始 `tag_name`；NEVER merge/pull `upstream/main`。
-- merge MUST 使用 `--no-commit`；冲突解决和验证全部通过后才能创建 merge commit。失败 MUST 自动 abort 并验证恢复。
-- 冲突 MUST 主动尝试完整解决；只有无法从代码、历史、调用关系和 fork 差异可靠确定正确结果时才回滚并停止。
-- 弱机策略：静态检查和直接相关测试 MUST 顺序执行；NEVER 运行完整测试套件、UI/browser/heavy 测试、Docker、benchmark、打包或发布流程。
-- NEVER 在本机运行会编译、检查、测试、lint、fmt、clippy、生成或打包 Rust 源码/native 二进制的命令；NEVER 运行 `cargo`、`bazel`、`nix build` 或间接触发这些工作的脚本。
-- TS/JS 对 native 包装层的纯静态检查 MAY 运行，但 MUST 先确认脚本不调用 Rust/native 工具链。根级 `bun run check` 包含 Rust 检查，NEVER 运行。
-- 所有 Git 命令 MUST 隔离本地 hooks、rerere、签名、自动 maintenance/GC、隐式 tag/submodule push 和交互认证；未知自定义 merge/filter driver → STOP。
-- 三个 fork 治理文件 MUST 无条件保留同步前版本：`AGENTS.md`、`.omp/skills/upstream-release-sync/SKILL.md`、`docs-zh-CN/fork.md`；`fork.md` 随后按实际 merge 更新。
-- `origin/upstream` 是可重建的纯 Release 镜像，MUST 精确等于 `release_commit`，不得包含 fork-only commit。
-- 本地 `upstream` MUST 精确等于 `release_commit` 并跟踪 `origin/upstream`；缺失或 tracking 错误时自动创建/校正。
-- 镜像只在本地 `main` 合入、验证和 fork 快照全部完成后更新；非 fast-forward 漂移只允许对 `origin/upstream` 使用精确旧 SHA 的 `--force-with-lease`。
-- 任何远端查询失败都 MUST STOP；NEVER 把网络、认证、权限或远端错误误判为“分支不存在”。
-- NEVER 自动 push `main`、push tag 或发布 Release；默认自动 push 的唯一 ref 是 `refs/heads/upstream`。
+- 第 0 节快速门禁 MUST 是第一步；NEVER 在确认存在新 Release 前执行 unshallow/deepen、fetch `origin/main`、切换分支、审计全部脚本、运行 Bun 或创建 TODO 工作树。
+- 最新正式 Release 仅由 GitHub Release API 决定，必须满足 `draft=false`、`prerelease=false`、`published_at` 非空；NEVER 用 tag 排序、`git describe` 或 `upstream/main` 猜版本。
+- 若 Release tag 与 `main:docs-zh-CN/fork.md` 的当前基线相同，进入快速 no-op／镜像修复路径；浅克隆完全允许，NEVER 要求用户手动 unshallow。
+- 只有确认存在新 Release 且确实需要历史时，才自动按需 deepen；仍不足时自动 unshallow。NEVER 仅因仓库是浅克隆而停止，也 NEVER 把手动 unshallow 作为前置要求。
+- 目标分支固定为已存在的本地 `main`；NEVER 隐式创建，NEVER 合入其他 fork 分支，NEVER merge/pull `upstream/main`。
+- merge 使用 `--no-ff --no-commit`；冲突解决和验证通过后才提交。失败必须 `git merge --abort` 并验证恢复。
+- 本机弱机策略：只检查本次改动和受影响 workspace，全部顺序执行；NEVER 扫描/测试所有 workspace，NEVER 运行完整测试套件、UI/browser/heavy、Docker、benchmark、打包或发布流程。
+- NEVER 在本机运行 Rust/native build、check、test、lint、fmt、clippy、codegen 或 packaging；NEVER 运行 `cargo`、`bazel`、`nix build`、根级 `bun run check` 或间接触发这些工作的脚本。
+- `AGENTS.md`、本文件、`docs-zh-CN/fork.md` 始终保留同步前 fork 版本；`fork.md` 在 merge 后按实际 Release 更新。
+- `origin/upstream` 是可重建的纯 Release 镜像，不承载 fork commit；默认自动 push 的唯一 ref 是 `refs/heads/upstream`。NEVER 自动 push `main` 或 tag。
 </critical>
 
-## 固定对象与完成条件
+## 固定对象
 
 - Fork：`jchanghong023/oh-my-pi`
 - 目标分支：本地 `main`
 - Fork 远端：`origin`
 - 上游仓库：`can1357/oh-my-pi`
-- 上游远端：`upstream` → `https://github.com/can1357/oh-my-pi.git`
+- 上游 URL：`https://github.com/can1357/oh-my-pi.git`
+- 上游远端名：`upstream`
 - Release API：`https://api.github.com/repos/can1357/oh-my-pi/releases/latest`
 - Release 镜像：本地 `upstream` → `origin/upstream`
 - Fork 快照：`docs-zh-CN/fork.md`
 
-仅当以下条件全部满足时报告完成：
+## Git 隔离入口
 
-1. `release_tag` 来自最新正式 GitHub Release，本地 tag 精确对应 `release_commit`。
-2. 本地 `main` 包含 `release_commit` 和同步前 `pre_merge_head`，且同步前未与 `origin/main` 分叉。
-3. 新 merge 在提交前通过检查；没有 unresolved conflict；失败路径已安全 abort。
-4. `fork.md` 的版本、UTC 日期、Merge 和唯一同步记录与实际 Release merge 一致。
-5. 本地 `upstream == origin/upstream == release_commit`，且本地 tracking 正确。
-6. 工作区最终 clean；未自动 push `main` 或 tag。
-7. 未运行本地 hook、rerere 自动复用、签名、自动 maintenance/GC、Rust/native 工具链或完整重型测试。
-
-## 1. 强前置检查
-
-### 1.1 仓库、历史和操作状态
-
-从仓库根目录先执行最小只读检查：
-
-```bash
-git rev-parse --is-inside-work-tree
-git rev-parse --show-toplevel
-test "$(git rev-parse --is-shallow-repository)" = "false"
-test -z "$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"
-```
-
-浅克隆或工作区不干净 → STOP。NEVER 自动 unshallow、stash、commit、reset、clean 或丢弃用户改动。
-
-显式检查正在进行的 Git 操作：
-
-```bash
-for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD AM_HEAD BISECT_START; do
-  marker_path="$(git rev-parse --git-path "$marker")"
-  test ! -e "$marker_path" || exit 1
-done
-for state_dir in rebase-merge rebase-apply sequencer; do
-  state_path="$(git rev-parse --git-path "$state_dir")"
-  test ! -e "$state_path" || exit 1
-done
-```
-
-任一状态存在 → STOP。NEVER 接管已有操作。
-
-### 1.2 建立隔离的 Git 调用
-
-可靠区分配置型 hook 查询结果：
-
-```bash
-configured_hook_commands="$(git config --show-origin --get-regexp '^hook\..*\.command$' 2>/dev/null)"
-hook_query_status=$?
-if [ "$hook_query_status" -eq 0 ]; then
-  printf '%s\n' "$configured_hook_commands"
-  exit 1
-fi
-test "$hook_query_status" -eq 1 || exit 1
-```
-
-发现 `hook.*.command` 或查询失败 → STOP。
-
-定义唯一 Git 入口：
+需要执行 Git 命令时统一使用：
 
 ```bash
 git_guarded() {
@@ -109,10 +51,7 @@ git_guarded() {
     -c commit.gpgSign=false \
     -c push.gpgSign=false \
     -c push.followTags=false \
-    -c push.pushOption= \
     -c push.recurseSubmodules=no \
-    -c push.useForceIfIncludes=false \
-    -c remote.origin.mirror=false \
     -c rerere.enabled=false \
     -c rerere.autoupdate=false \
     -c maintenance.auto=false \
@@ -122,101 +61,193 @@ git_guarded() {
 }
 ```
 
-从这里开始，MUST 使用 `git_guarded` 执行所有 Git 命令，包括只读命令；若执行工具不保留 shell function，必须把同样的环境变量和 `-c` 配置直接附到每次调用。
+所有写 ref、index、worktree、commit、tracking 或远端的命令 MUST 使用 `git_guarded`；push 额外使用 `--no-verify --no-follow-tags --no-signed --recurse-submodules=no`。
 
-### 1.3 远端与外部 Git 驱动
+# 0. 快速 Release 门禁——永远先执行
 
-读取全部 fetch/push URL。`origin` MUST 恰好只有一个 push URL，且 fetch/push 都解析为 `jchanghong023/oh-my-pi`；SSH alias 无法展开确认、多个 push URL、`remote.origin.mirror=true`、自定义 `remote.origin.receivepack/uploadpack` → STOP。
+本节目标是用最少读取和最多几个轻量远端查询判断“有没有新版本”。不要先创建长 TODO；门禁确认需要更新后再建立后续任务。
 
-`upstream` 缺失时：
+## 0.1 读取最新正式 Release
 
-```bash
-git_guarded remote add upstream https://github.com/can1357/oh-my-pi.git
+用 Read 工具读取 Release API，提取：
+
+```text
+tag_name
+html_url
+published_at
+draft
+prerelease
 ```
 
-若已存在，其 fetch URL MUST 解析为 `can1357/oh-my-pi`；错误或不确定 → STOP，NEVER 自动改写。
+字段不完整、API 失败、草稿或预发布 → STOP。设置：
 
-MUST 读取所有生效的 system/global/repository/info attributes 及相关 Git 配置，审计本仓库实际使用的 `merge=<driver>`、`filter=<driver>`：
+```text
+release_tag = 原始 tag_name
+```
 
-- 内建 text/binary/union 行为允许。
-- 标准 Git LFS filter 允许，但始终设置 `GIT_LFS_SKIP_SMUDGE=1`，禁止自动下载大对象。
-- 自定义 merge/filter 命令、Git LFS merge driver 的 `--program`、或任何可能调用包管理器、编译器、构建、网络脚本的 driver → STOP。
-- 配置解析失败或无法证明 driver 安全 → STOP。
+## 0.2 读取当前声明基线
 
-### 1.4 固定并对齐本地 `main`
+只做轻量只读检查，不要求完整历史，也不切分支：
+
+```bash
+git rev-parse --is-inside-work-tree
+git show-ref --verify --quiet refs/heads/main
+fork_snapshot="$(git show main:docs-zh-CN/fork.md)"
+```
+
+从 `fork_snapshot` 提取：
+
+- 唯一“当前上游基线”版本 `baseline_tag`；
+- 唯一“上游同步记录”，且该记录引用 `baseline_tag`。
+
+结构不唯一或无法解析 → 进入第 1 节严格检查，不得假装无更新。
+
+## 0.3 精确解析 Release commit
+
+仅查询该 tag，不 fetch 历史：
+
+```bash
+tag_lines="$(git_guarded ls-remote --tags \
+  https://github.com/can1357/oh-my-pi.git \
+  "refs/tags/$release_tag" "refs/tags/$release_tag^{}")"
+```
+
+要求恰好一个直接 tag ref，最多一个 peeled ref。若有 peeled ref，以 peeled SHA 为 `release_commit`；否则以直接 SHA 为 `release_commit`。查询失败、缺失或歧义 → STOP。
+
+## 0.4 判定
+
+### A. `release_tag != baseline_tag`
+
+确认有新 Release，进入第 1 节。此时才允许创建后续 TODO、补历史、merge 和验证。
+
+### B. `release_tag == baseline_tag`
+
+这是**无新版本路径**。只检查镜像状态：
+
+```bash
+origin_upstream_line="$(git_guarded ls-remote --heads origin refs/heads/upstream)"
+```
+
+同时读取本地 `upstream` SHA 与 tracking（不存在视为空）。
+
+若同时满足：
+
+```text
+实际 origin/upstream == release_commit
+本地 upstream == release_commit
+本地 upstream tracking == origin/upstream
+```
+
+立即报告：
+
+```text
+Release: <release_tag>（无新版本）
+Main: 未修改
+Upstream mirror: already current
+Shallow repository: accepted; no history expansion performed
+Checks/tests/push: not performed
+```
+
+然后结束。MUST NOT 继续执行任何后续章节。
+
+若 Release 未变化但镜像缺失或漂移，只执行第 7 节“镜像修复”；不得 deepen/unshallow、切换 `main`、merge、运行 Bun 或测试。镜像修复后立即报告结束。
+
+# 1. 新 Release 的严格前置检查
+
+仅由第 0.4-A 进入。
+
+## 1.1 工作区和 Git 状态
+
+```bash
+test -z "$(git_guarded status --porcelain=v1 --untracked-files=all)"
+```
+
+工作区不干净 → STOP；NEVER 自动 stash、reset、clean 或提交用户改动。
+
+显式检查：
+
+```text
+MERGE_HEAD、CHERRY_PICK_HEAD、REVERT_HEAD、REBASE_HEAD、AM_HEAD、BISECT_START
+rebase-merge、rebase-apply、sequencer
+```
+
+任一存在 → STOP。检查其他 worktree；本地 `upstream` 被任一 worktree 检出时，后续镜像移动将受阻，应在 merge 前 STOP。
+
+## 1.2 远端身份和治理文件
+
+- `origin` 的 fetch/push URL MUST 唯一解析为 `jchanghong023/oh-my-pi`。
+- `upstream` 缺失时自动添加上述固定 URL；已存在但指向其他仓库 → STOP。
+- 完整读取 `AGENTS.md`、本文件和 `docs-zh-CN/fork.md`。
+- 只在真正 merge 前审计实际生效的自定义 merge/filter driver；标准 text/binary/union 和 Git LFS 允许，未知外部命令 → STOP。
+
+## 1.3 固定并对齐本地 `main`
 
 ```bash
 git_guarded show-ref --verify --quiet refs/heads/main
 git_guarded switch --no-guess main
-test "$(git_guarded branch --show-current)" = "main"
-test -z "$(git_guarded status --porcelain=v1 --untracked-files=all)"
-git_guarded fetch origin "+refs/heads/main:refs/remotes/origin/main"
+git_guarded fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
 ```
 
-本地 `main` 不存在、切换失败、fetch 失败或 `origin/main` 不存在 → STOP。
-
-判定关系：
+先比较 SHA；相同直接继续。不同则判定祖先关系：
 
 - 本地 `main` 是 `origin/main` 祖先 → `git_guarded merge --ff-only origin/main`。
-- `origin/main` 是本地 `main` 祖先 → 本地相同或领先，继续。
-- 两者均不是对方祖先 → STOP；NEVER 自动 merge/rebase/reset `origin/main`。
+- `origin/main` 是本地 `main` 祖先 → 本地领先，保留并继续。
+- 两项均失败且仓库为浅克隆 → 按第 2 节自动补历史后重试，不能立即认定分叉。
+- 完整历史下仍均失败 → 分叉，STOP；NEVER 自动 merge/rebase/reset `origin/main`。
 
-`main` 无 tracking 时设置 `origin/main`；已跟踪其他 ref 时 STOP：
+无 tracking 时设置 `main → origin/main`；错误 tracking → STOP。完成后重新读取 `main:fork.md`：若远端 fast-forward 后基线已等于 `release_tag`，直接转第 7 节镜像检查/修复，不执行 merge 或测试。
 
-```bash
-main_tracking="$(git_guarded for-each-ref --format='%(upstream:short)' refs/heads/main)"
-if [ -z "$main_tracking" ]; then
-  git_guarded branch --set-upstream-to=origin/main main
-elif [ "$main_tracking" != "origin/main" ]; then
-  exit 1
-fi
-```
-
-再次确认 clean 后记录：
+记录：
 
 ```bash
 pre_merge_head="$(git_guarded rev-parse main)"
 ```
 
-### 1.5 治理文件与 worktree
+# 2. 浅克隆自动补历史
 
-MUST 完整读取：
+浅克隆不是错误。仅当新 Release 路径中的祖先关系、merge-base 或历史对账因缺失历史无法确定时执行。
 
-- `AGENTS.md`
-- `.omp/skills/upstream-release-sync/SKILL.md`
-- `docs-zh-CN/fork.md`
+## 2.1 优先增量 deepen
 
-三者缺失、不可读，或 `fork.md` 没有唯一“当前上游基线”和唯一“上游同步记录”段 → STOP。
-
-若任一 worktree 正检出本地 `upstream` → STOP，避免移动使用中的分支。
-
-## 2. 确定并获取最新正式 Release
-
-读取 Release API，记录 `tag_name`、`html_url`、`published_at`、`draft`、`prerelease`。仅在下列条件成立时继续：
-
-```text
-draft == false
-prerelease == false
-published_at != null
-html_url 属于 can1357/oh-my-pi/releases/tag/
-```
-
-`release_tag` MUST 等于原始 `tag_name`。API 不可达、限流、字段缺失或不是正式 Release → STOP，NEVER 降级到其他版本发现方式。
-
-仅 fetch 已选 tag：
+按顺序尝试增量 `64`、`256`、`1024`，每轮只取需要的 ref，并在每轮后立即重试原判定：
 
 ```bash
-git_guarded fetch upstream "refs/tags/$release_tag:refs/tags/$release_tag"
-git_guarded show-ref --verify --quiet "refs/tags/$release_tag"
-release_commit="$(git_guarded rev-parse "$release_tag^{commit}")"
-git_guarded cat-file -e "$release_commit^{commit}"
+git_guarded fetch --no-tags --deepen=<N> origin "+refs/heads/main:refs/remotes/origin/main"
+git_guarded fetch --no-tags --deepen=<N> --update-shallow upstream \
+  "refs/tags/$release_tag:refs/tags/$release_tag"
 ```
 
-fetch 失败时只允许只读查询该精确 tag 诊断。本地与远端同名 tag 对象不同 → STOP，NEVER 覆盖；网络/认证/权限错误也直接 STOP。
+一旦祖先关系或 merge-base 可确定，立即停止 deepen。不要为了“完整”继续下载历史。
 
-## 3. 准备未提交 merge
+## 2.2 最后自动 unshallow
 
-确认仍在 `main`、HEAD 未变且 clean。若 `release_commit` 已是 `main` 祖先，标记 `already_contained=true`，进入第 6 节。
+三轮仍不足且仓库仍 shallow 时，自动执行一次：
+
+```bash
+git_guarded fetch --unshallow --no-tags origin \
+  "+refs/heads/main:refs/remotes/origin/main"
+git_guarded fetch --no-tags upstream \
+  "refs/tags/$release_tag:refs/tags/$release_tag"
+```
+
+随后重试判定。失败则报告原始网络/权限/Git 错误并 STOP；NEVER 要求用户先手动 unshallow。
+
+# 3. 获取 tag 并准备事务式 merge
+
+若本地尚无正确 tag：
+
+```bash
+git_guarded fetch --no-tags --update-shallow upstream \
+  "refs/tags/$release_tag:refs/tags/$release_tag"
+```
+
+本地同名 tag 与远端对象不一致 → STOP，NEVER force 覆盖。确认：
+
+```bash
+test "$(git_guarded rev-parse "$release_tag^{commit}")" = "$release_commit"
+```
+
+若 `release_commit` 已是 `main` 祖先，进入第 6.2 节对账；浅克隆下判定不确定时先执行第 2 节。
 
 否则：
 
@@ -228,16 +259,11 @@ else
   merge_had_conflicts=true
   initial_conflicted_paths="$(git_guarded diff --name-only --diff-filter=U)"
 fi
-merge_head_path="$(git_guarded rev-parse --git-path MERGE_HEAD)"
 ```
 
-状态要求：
+必须存在 `MERGE_HEAD == release_commit`。merge 失败但没有有效 `MERGE_HEAD`，或声称冲突却没有 U 路径 → 不是普通冲突，按第 5.4 节回滚。
 
-- 有效 merge MUST 存在 `MERGE_HEAD` 且其值精确等于 `release_commit`。
-- merge 失败但无 `MERGE_HEAD`，或报告冲突却无 U 路径 → 不是普通冲突；确认 `HEAD == pre_merge_head` 且工作区 clean 后 STOP，否则保留现场准确报告。
-- `MERGE_HEAD` 存在但错误 → 第 5.5 节 abort 后 STOP。
-
-有效 merge 建立后，不论是否冲突，恢复三个治理文件：
+无论是否冲突，恢复三个治理文件：
 
 ```bash
 git_guarded restore --source="$pre_merge_head" --staged --worktree -- \
@@ -246,242 +272,203 @@ git_guarded restore --source="$pre_merge_head" --staged --worktree -- \
   docs-zh-CN/fork.md
 ```
 
-## 4. 自动解决冲突
+# 4. 自动解决冲突
 
-若 `merge_had_conflicts=true`：
+仅当 `merge_had_conflicts=true`：
 
 1. 三个治理文件保持 fork 版本。
-2. 其他文件逐文件理解双方意图；NEVER 批量选 `--ours`/`--theirs`。
-3. 以 `fork.md` 的当前 fork 功能为保留基线，同时迁移 Release 的新接口、类型、数据结构、调用方和行为。
-4. 修改、移动或删除导出符号前搜索全部 references，并审查调用方及测试。
-5. Lockfile：先正确合并 manifests，再运行 `bun install --lockfile-only --ignore-scripts`；确认除 manifests/lockfile 外无生成文件，NEVER 升级无关依赖。
-6. 证据不足或语义不能可靠兼容 → 第 5.5 节 abort，不留下半完成 merge。
+2. 其他文件逐个理解双方意图；NEVER 批量 `--ours`/`--theirs`。
+3. 以 `fork.md` 当前差异为保留基线，同时迁移 Release 的新接口、类型、数据结构、调用方和行为。
+4. 修改、移动或删除导出符号前搜索全部 references，并审查调用方及相关测试。
+5. Lockfile 冲突：先合并 manifests，再运行 `bun install --lockfile-only --ignore-scripts`；确认除 manifests/lockfile 外无生成文件。
+6. 无法可靠判断 → 第 5.4 节 abort；不得留下半完成 merge。
 7. NEVER 使用 rebase、squash、cherry-pick、`git reset --hard` 或全局 ours/theirs 策略。
 
-解决后逐文件 `git_guarded add`，要求无 unmerged、无 unstaged、无 untracked 文件。
+解决后逐文件 `git_guarded add`，要求无 unmerged、unstaged 和 untracked 文件。
 
-## 5. 提交前弱机验证
+# 5. 提交前弱机验证
 
-所有验证都在 merge commit 前执行；任何失败进入第 5.5 节。
+验证只针对本次 staged 变更和受影响 workspace，顺序执行。任何失败进入第 5.4 节。
 
-### 5.1 Git 检查与 index 快照
+## 5.1 Git 与脚本安全检查
 
 ```bash
 git_guarded diff --cached --check
 test "$(git_guarded rev-parse MERGE_HEAD)" = "$release_commit"
-test -z "$(git_guarded diff --name-only)"
-test -z "$(git_guarded ls-files -u)"
-test -z "$(git_guarded ls-files --others --exclude-standard)"
-validation_index_tree="$(git_guarded write-tree)"
+validation_tree="$(git_guarded write-tree)"
 ```
 
-审查 staged diff，确认无冲突标记、误删治理文件、无关生成文件或异常全仓格式化。
+读取根 `package.json` 及**受影响 workspace** 的 `package.json`，审计拟运行 script 和 pre/post script。含以下任一内容则禁止执行：
 
-### 5.2 审计脚本图
-
-运行任何 Bun script 前，MUST 读取合并结果中的：
-
-- 根 `package.json` 的目标 script 及对应 pre/post script；
-- 所有 workspace `package.json` 的 `check` 及对应 pre/post script；
-- 拟运行精确测试的配置和脚本。
-
-出现 Rust/native 工具链、`run-rs-task`、`cargo`、`bazel`、`nix build`、native codegen、打包、发布、Docker、隐式安装或未知间接命令 → 禁止执行并 abort。缺少 Bun/依赖时也 abort，NEVER 自动完整 `bun install`。
-
-### 5.3 顺序 TS-only 静态检查
-
-当前默认批准的弱机命令是根 `check:ts` 的显式顺序等价形式：
-
-```bash
-bun run check:tools
-bun run --sequential --workspaces --if-present check
+```text
+cargo、bazel、nix build、run-rs-task、*:rs、native build/codegen/package
+Docker、完整 CI/测试套件、隐式 bun install、发布或打包
 ```
 
-仅当第 5.2 节确认每个实际 workspace `check` 都是 TS/JS/配置静态检查时运行。若出现不安全 workspace，逐个运行其余安全 workspace；任何受本次 merge 影响的 workspace 无安全静态检查 → abort。
+## 5.2 轻量静态检查
 
-无冲突路径在本节执行上述命令一次；冲突路径先进入第 5.4 节，在 `fastcheck` 后执行上述命令一次，NEVER 重复执行。
+按顺序执行：
 
-NEVER 运行根 `bun run check`、任何 `*:rs`、`build`、`build:native`、`ci:test:full`、`cargo`、`bazel`、`nix build` 或 native binary 命令。
-
-### 5.4 冲突路径附加验证与通用不可变检查
-
-仅当 `merge_had_conflicts=true`：
-
-1. 审计后运行 `bun run fastcheck`。
-2. 随后执行第 5.3 节顺序静态检查一次。
-3. 对 `initial_conflicted_paths` 中的实现文件，仅逐个运行最直接、已存在、不会构建 native、更新 snapshot 或写入仓库的精确测试文件。
-4. Shell/Python 冲突可运行不写文件的 `bash -n` / Python AST 解析；NEVER 为验证安装工具。
-5. 不存在安全直接测试时记录 `focused_tests=none found`，不得编造。
-6. Rust/native 源码即使冲突，也 NEVER 在本机运行其工具链；只做逐行语义审查和非 Rust 调用侧静态检查，并报告验证边界。
-
-无冲突路径不运行 `fastcheck` 或 focused tests。
-
-无论有无冲突，所有实际检查结束后、commit 前都必须证明检查没有改写 index、worktree 或生成 untracked 文件：
+1. staged 变更含 Biome 管理的 TS/JS/JSON/CSS 等文本时，运行 `bun run check:tools`；否则跳过并记录原因。
+2. staged 变更含 TypeScript/JavaScript 源码时，运行 `bun run fastcheck`。
+3. 找出发生源码变化的 workspace；只对这些 workspace 逐个运行其经审计、确认不触发 Rust/native 的 `check` script：
 
 ```bash
-test "$(git_guarded write-tree)" = "$validation_index_tree"
-test -z "$(git_guarded diff --name-only)"
-test -z "$(git_guarded ls-files --others --exclude-standard)"
-git_guarded diff --cached --check
+bun --cwd=<affected-workspace> run check
 ```
 
-### 5.5 失败时安全回滚
+NEVER 使用 `bun run --workspaces ...` 扫描全部 workspace，NEVER 运行根级 `bun run check`。
+
+## 5.3 冲突附加验证
+
+仅当发生过冲突：
+
+- 对原始冲突涉及的实现文件，只运行最直接、已存在、不会写仓库或构建 native 的精确测试文件，每个测试顺序执行。
+- Shell/Python 冲突可运行 `bash -n` / Python AST 解析。
+- 没有安全直接测试时记录 `focused_tests=none found`。
+- Rust/native 源码冲突不在本机运行其工具链，只做语义审查和非 Rust 调用侧检查，明确报告验证边界。
+
+## 5.4 失败回滚
 
 ```bash
-merge_head_path="$(git_guarded rev-parse --git-path MERGE_HEAD)"
-if [ -e "$merge_head_path" ]; then
+if [ -e "$(git_guarded rev-parse --git-path MERGE_HEAD)" ]; then
   git_guarded merge --abort
 fi
 test "$(git_guarded rev-parse HEAD)" = "$pre_merge_head"
 test -z "$(git_guarded status --porcelain=v1 --untracked-files=all)"
 ```
 
-无 `MERGE_HEAD` 时不运行必然失败的 abort，只验证状态未变。abort/恢复验证失败时 NEVER 改用 `reset --hard`；保留现场报告。回滚成功后状态为 blocked，不得更新镜像。
+abort 失败时 NEVER 改用 `reset --hard`；保留现场并准确报告。回滚成功后不得更新镜像。
 
-### 5.6 创建并验证 merge commit
+## 5.5 提交 merge
+
+检查命令不得改写 index/worktree：
+
+```bash
+test "$(git_guarded write-tree)" = "$validation_tree"
+test -z "$(git_guarded diff --name-only)"
+test -z "$(git_guarded ls-files --others --exclude-standard)"
+```
 
 全部通过后：
 
 ```bash
 git_guarded commit --no-edit --no-gpg-sign
 merge_commit="$(git_guarded rev-parse HEAD)"
-test "$(git_guarded rev-parse "$merge_commit^1")" = "$pre_merge_head"
-test "$(git_guarded rev-parse "$merge_commit^2")" = "$release_commit"
-test -z "$(git_guarded status --porcelain=v1 --untracked-files=all)"
 ```
 
-## 6. 更新和校验 `fork.md`
+验证其第一父提交为 `pre_merge_head`、第二父提交为 `release_commit`。
 
-### 6.1 新建 merge
+# 6. 更新和校验 `fork.md`
 
-以 `merge_commit` 的 committer timestamp 转 UTC `YYYY-MM-DD`，并取前 10 位 hash。更新：
+## 6.1 新 merge
 
-- “当前上游基线”的版本、同步日期、Merge；
-- “上游同步记录”唯一一条当前 Release 记录；
-- “Fork 改动”：删除上游已等价实现的条目，保留实际差异，更新因冲突解决改变的描述。
+以 `merge_commit` 的 committer timestamp 转 UTC `YYYY-MM-DD`，取前 10 位 hash，并更新：
 
-验证文档不变量后，MUST 仅暂存该文件并再次检查提交范围：
+- 当前上游基线的版本、同步日期、Merge；
+- 唯一一条当前 Release 同步记录；
+- Fork 改动：删除上游已等价实现的条目，保留实际差异，更新因冲突解决改变的描述。
+
+只暂存 `docs-zh-CN/fork.md`，检查范围后创建独立 docs commit。该 commit 的父提交必须是 `merge_commit`，且只修改此文件。
+
+## 6.2 已包含路径
+
+即使 tag 相同，也校验日期和 Merge。定位 `main` first-parent 历史中第二父提交精确等于 `release_commit` 的唯一 merge；浅历史不足时自动执行第 2 节。
+
+以该 merge 的 committer UTC 日期和短 hash 校验版本、日期、Merge 和唯一同步记录。字段不一致则校正并创建只修改 `fork.md` 的 docs commit；0 或多条匹配 → STOP，不更新镜像。
+
+# 7. 快速镜像检查／修复
+
+本节既供第 0 节无新 Release 使用，也供新 merge 完成后使用。它不需要完整历史。
+
+## 7.1 前置安全检查
+
+- 确认 `origin` 的唯一 push URL 是 `jchanghong023/oh-my-pi`。
+- 确认没有其他 worktree 检出本地 `upstream`；当前 worktree 若在 `upstream`，只有工作区 clean 时才切到既有 `main`。
+- 若本地没有 `release_commit` 对象，仅 fetch 该 tag 的深度 1：
 
 ```bash
-git_guarded add docs-zh-CN/fork.md
-test "$(git_guarded diff --cached --name-only)" = "docs-zh-CN/fork.md"
-test -z "$(git_guarded diff --name-only)"
-test -z "$(git_guarded ls-files --others --exclude-standard)"
-git_guarded diff --cached --check
-git_guarded commit --no-gpg-sign -m "docs(fork): record upstream ${release_tag}"
-fork_doc_commit="$(git_guarded rev-parse HEAD)"
+git_guarded fetch --depth=1 --no-tags --update-shallow upstream \
+  "refs/tags/$release_tag:refs/tags/$release_tag"
 ```
 
-验证该 commit 只修改 `fork.md`，且父提交是 `merge_commit`。
+NEVER deepen/unshallow。
 
-### 6.2 Release 已包含
+## 7.2 更新唯一远端镜像 ref
 
-即使 `fork.md` 已写相同 tag，也 MUST 校验日期和 Merge。定位 `main` first-parent 历史中第二父提交精确等于 `release_commit` 的 merge commit；要求恰好一个。
+查询实际远端 `refs/heads/upstream`。查询失败 STOP；输出为空才表示不存在。
 
-以该 merge 的 committer UTC 日期和前 10 位 hash 校验版本、日期、Merge 及唯一同步记录。全部一致 → 不提交；不一致 → 校正并按第 6.1 节的暂存、范围检查和 docs commit 流程执行。0 或多条匹配 → STOP，保持 clean，不更新镜像。
+- 不存在：使用空 expected-value lease 创建。
+- 已存在且等于 `release_commit`：不 push。
+- 已存在但不同：使用精确旧 SHA 的 `--force-with-lease`。
 
-### 6.3 文档不变量与失败
-
-- “当前上游基线”恰好一个。
-- “上游同步记录”恰好一个且仅含当前 Release 一条记录。
-- 版本、UTC 日期和 Merge hash 与唯一实际 merge 精确一致。
-- 新 docs commit 只修改 `fork.md`。
-
-文档修改或提交前验证失败 → 恢复 `fork.md` 并确认 clean，不更新镜像；已创建的本地 Release merge 报告为 partial，NEVER 报 completed。
-
-## 7. 最后同步 Release 镜像
-
-只有本地 merge、验证、`fork.md` 全部成功且工作区 clean 后执行。保存 `main_final_head`，再次确认没有 worktree 使用本地 `upstream`。
-
-查询实际远端 ref；失败 STOP，成功且输出为空才表示不存在。精确查询只能返回一条。
-
-### 7.1 推送唯一镜像 ref
-
-所有 push MUST 显式使用：
+所有 push 必须显式：
 
 ```text
 --no-verify --no-follow-tags --no-signed --recurse-submodules=no
 ```
 
-远端不存在，使用空 expected-value lease防止并发创建：
+refspec 必须是：
 
-```bash
-git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
-  --force-with-lease="refs/heads/upstream:" \
-  origin "${release_commit}:refs/heads/upstream"
+```text
+<release_commit>:refs/heads/upstream
 ```
 
-远端存在时，先精确 fetch 到 `origin/upstream` 并确认其 SHA 等于刚查询的 `expected_origin_upstream`：
+push 失败后只重新查询一次；远端已达到目标则视为并发完成，否则 STOP，不刷新 lease 自动重试。
 
-```bash
-git_guarded fetch origin "+refs/heads/upstream:refs/remotes/origin/upstream"
-test "$(git_guarded rev-parse refs/remotes/origin/upstream)" = "$expected_origin_upstream"
-```
+## 7.3 本地 tracking 和验证
 
-若已经等于 `release_commit`，不 push。若旧 SHA 是 `release_commit` 的祖先，普通 push：
-
-```bash
-git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
-  origin "${release_commit}:refs/heads/upstream"
-```
-
-若不是 fast-forward，仅对该 ref 使用精确 lease：
-
-```bash
-git_guarded push --no-verify --no-follow-tags --no-signed --recurse-submodules=no \
-  --force-with-lease="refs/heads/upstream:$expected_origin_upstream" \
-  origin "${release_commit}:refs/heads/upstream"
-```
-
-任何 push 失败后只重新查询一次：远端已等于 `release_commit` 则视为并发完成；否则 STOP，NEVER 用新 lease 自动覆盖重试。
-
-### 7.2 建立本地镜像 tracking
-
-远端确认正确后：
+远端正确后：
 
 ```bash
 git_guarded branch -f upstream "$release_commit"
-git_guarded fetch origin "+refs/heads/upstream:refs/remotes/origin/upstream"
+git_guarded fetch --no-tags origin "+refs/heads/upstream:refs/remotes/origin/upstream"
 git_guarded branch --set-upstream-to=origin/upstream upstream
 ```
-
-分支被其他 worktree 占用 → STOP，NEVER 绕过保护。
-
-### 7.3 精确验证
 
 必须同时满足：
 
 ```text
-refs/heads/upstream == release_commit
-refs/remotes/origin/upstream == release_commit
+本地 refs/heads/upstream == release_commit
+本地 refs/remotes/origin/upstream == release_commit
 实际远端 refs/heads/upstream == release_commit
 本地 upstream tracking == origin/upstream
-main == main_final_head
 ```
 
-## 8. 最终报告
+# 8. 最终报告
 
-最终再次验证：本地 `main` 包含 `release_commit` 与 `pre_merge_head`、工作区 clean、文档和镜像不变量成立、执行记录无 hooks/rerere/signing/auto-maintenance、无 Rust/native 工具链、无完整重型测试。
+## 无新 Release
+
+```text
+Release: <release_tag>（无新版本）
+Fast gate: matched fork baseline
+Main: not modified
+Upstream mirror: already current / repaired
+Shallow repository: accepted; no deepen or unshallow
+Checks/tests: not run
+Main/tag push: not performed
+```
+
+## 有新 Release
 
 ```text
 Release: <release_tag>
-Release URL: <html_url>
-Published: <published_at>
 Release commit: <release_commit>
+History: already sufficient / auto-deepened / auto-unshallowed
 Main: merged @ <merge_commit> / already contained
 Conflict resolution: none / auto-resolved / blocked and aborted
-Validation: staged Git check; sequential TS static checks; focused tests <list/none>; all passed/failed
-Git isolation: hooks/rerere/signing/auto-maintenance/implicit pushes disabled
-Rust/native local toolchain: not run
+Validation: changed-file checks; affected-workspace checks; focused tests <list/none>
+Rust/native local work: not run
 Fork snapshot: updated @ <fork_doc_commit> / already current / blocked
 Upstream mirror: local upstream == origin/upstream == <release_commit> / blocked
 Working tree: clean / not clean
-Main or tag push: not performed
+Main/tag push: not performed
 ```
 
 <critical>
+- 无新 Release：必须在第 0 节快速结束；浅克隆不是阻塞原因。
+- 有新 Release：历史不足由流程自动增量补全，最后才自动 unshallow；不得要求用户手工处理。
+- 本机绝不运行 Rust/native 工具链或完整重型测试。
 - 核心关系：本地 `main` 包含 `release_commit`；本地 `upstream == origin/upstream == release_commit`。
-- merge 在 commit 前验证；失败自动 abort；镜像最后更新。
-- 三个治理文件始终保留 fork 版本；`fork.md` 再按实际 merge 更新。
-- 本机绝不运行 Rust/native 工具链或完整重型测试套件。
 - NEVER 同步 `upstream/main`；NEVER 自动 push `main` 或 tag。
 </critical>
