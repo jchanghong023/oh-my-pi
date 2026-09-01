@@ -12,7 +12,7 @@ description: Quickly detect whether can1357/oh-my-pi has a new formal GitHub Rel
 3. 本地合入、验证和 `fork.md` 更新成功后，使本地 `upstream`、`origin/upstream` 精确等于该 Release commit。
 
 <critical>
-- 第 0 节快速门禁 MUST 是第一步；NEVER 在确认存在新 Release 前执行 unshallow/deepen、fetch `origin/main`、切换分支、审计全部脚本、运行 Bun 或创建 TODO 工作树。
+- 第 0 节快速门禁 MUST 是第一步；NEVER 在确认存在新 Release 前执行 unshallow/deepen、fetch `origin/main`、切换分支、审计全部脚本、运行 Bun 或创建长 TODO。
 - 最新正式 Release 仅由 GitHub Release API 决定，必须满足 `draft=false`、`prerelease=false`、`published_at` 非空；NEVER 用 tag 排序、`git describe` 或 `upstream/main` 猜版本。
 - 若 Release tag 与 `main:docs-zh-CN/fork.md` 的当前基线相同，进入快速 no-op／镜像修复路径；浅克隆完全允许，NEVER 要求用户手动 unshallow。
 - 只有确认存在新 Release 且确实需要历史时，才自动按需 deepen；仍不足时自动 unshallow。NEVER 仅因仓库是浅克隆而停止，也 NEVER 把手动 unshallow 作为前置要求。
@@ -38,7 +38,7 @@ description: Quickly detect whether can1357/oh-my-pi has a new formal GitHub Rel
 
 ## Git 隔离入口
 
-需要执行 Git 命令时统一使用：
+网络查询及所有写 ref、index、worktree、commit、tracking 或远端的命令统一使用：
 
 ```bash
 git_guarded() {
@@ -61,7 +61,7 @@ git_guarded() {
 }
 ```
 
-所有写 ref、index、worktree、commit、tracking 或远端的命令 MUST 使用 `git_guarded`；push 额外使用 `--no-verify --no-follow-tags --no-signed --recurse-submodules=no`。
+push 额外使用 `--no-verify --no-follow-tags --no-signed --recurse-submodules=no`。
 
 # 0. 快速 Release 门禁——永远先执行
 
@@ -85,7 +85,7 @@ prerelease
 release_tag = 原始 tag_name
 ```
 
-## 0.2 读取当前声明基线
+## 0.2 读取当前声明基线并确认 fork 身份
 
 只做轻量只读检查，不要求完整历史，也不切分支：
 
@@ -93,7 +93,11 @@ release_tag = 原始 tag_name
 git rev-parse --is-inside-work-tree
 git show-ref --verify --quiet refs/heads/main
 fork_snapshot="$(git show main:docs-zh-CN/fork.md)"
+git remote get-url --all origin
+git remote get-url --push --all origin
 ```
+
+`origin` 的 fetch/push URL 必须唯一解析为 `jchanghong023/oh-my-pi`；缺失、多个不同目标、其他仓库或无法确认的 SSH alias → STOP。不得在身份未确认时报告镜像正确或执行 push。
 
 从 `fork_snapshot` 提取：
 
@@ -107,9 +111,11 @@ fork_snapshot="$(git show main:docs-zh-CN/fork.md)"
 仅查询该 tag，不 fetch 历史：
 
 ```bash
-tag_lines="$(git_guarded ls-remote --tags \
+if ! tag_lines="$(git_guarded ls-remote --tags \
   https://github.com/can1357/oh-my-pi.git \
-  "refs/tags/$release_tag" "refs/tags/$release_tag^{}")"
+  "refs/tags/$release_tag" "refs/tags/$release_tag^{}")"; then
+  exit 1
+fi
 ```
 
 要求恰好一个直接 tag ref，最多一个 peeled ref。若有 peeled ref，以 peeled SHA 为 `release_commit`；否则以直接 SHA 为 `release_commit`。查询失败、缺失或歧义 → STOP。
@@ -125,7 +131,9 @@ tag_lines="$(git_guarded ls-remote --tags \
 这是**无新版本路径**。只检查镜像状态：
 
 ```bash
-origin_upstream_line="$(git_guarded ls-remote --heads origin refs/heads/upstream)"
+if ! origin_upstream_line="$(git_guarded ls-remote --heads origin refs/heads/upstream)"; then
+  exit 1
+fi
 ```
 
 同时读取本地 `upstream` SHA 与 tracking（不存在视为空）。
@@ -145,12 +153,14 @@ Release: <release_tag>（无新版本）
 Main: 未修改
 Upstream mirror: already current
 Shallow repository: accepted; no history expansion performed
-Checks/tests/push: not performed
+Checks/tests: not run
+Mirror push: not needed
+Main/tag push: not performed
 ```
 
 然后结束。MUST NOT 继续执行任何后续章节。
 
-若 Release 未变化但镜像缺失或漂移，只执行第 7 节“镜像修复”；不得 deepen/unshallow、切换 `main`、merge、运行 Bun 或测试。镜像修复后立即报告结束。
+若 Release 未变化但镜像缺失或漂移，只执行第 7 节“镜像修复”；不得 deepen/unshallow、切换 `main`、merge、运行 Bun 或测试。镜像修复后立即报告结束，并准确写明 `Mirror push: performed / not needed`。
 
 # 1. 新 Release 的严格前置检查
 
@@ -175,7 +185,7 @@ rebase-merge、rebase-apply、sequencer
 
 ## 1.2 远端身份和治理文件
 
-- `origin` 的 fetch/push URL MUST 唯一解析为 `jchanghong023/oh-my-pi`。
+- 再次确认 `origin` 的 fetch/push URL 唯一解析为 `jchanghong023/oh-my-pi`。
 - `upstream` 缺失时自动添加上述固定 URL；已存在但指向其他仓库 → STOP。
 - 完整读取 `AGENTS.md`、本文件和 `docs-zh-CN/fork.md`。
 - 只在真正 merge 前审计实际生效的自定义 merge/filter driver；标准 text/binary/union 和 Git LFS 允许，未知外部命令 → STOP。
@@ -369,7 +379,7 @@ merge_commit="$(git_guarded rev-parse HEAD)"
 - 唯一一条当前 Release 同步记录；
 - Fork 改动：删除上游已等价实现的条目，保留实际差异，更新因冲突解决改变的描述。
 
-只暂存 `docs-zh-CN/fork.md`，检查范围后创建独立 docs commit。该 commit 的父提交必须是 `merge_commit`，且只修改此文件。
+只暂存 `docs-zh-CN/fork.md`，检查范围后使用 `git_guarded commit --no-gpg-sign` 创建独立 docs commit。该 commit 的父提交必须是 `merge_commit`，且只修改此文件。
 
 ## 6.2 已包含路径
 
@@ -383,12 +393,13 @@ merge_commit="$(git_guarded rev-parse HEAD)"
 
 ## 7.1 前置安全检查
 
-- 确认 `origin` 的唯一 push URL 是 `jchanghong023/oh-my-pi`。
-- 确认没有其他 worktree 检出本地 `upstream`；当前 worktree 若在 `upstream`，只有工作区 clean 时才切到既有 `main`。
-- 若本地没有 `release_commit` 对象，仅 fetch 该 tag 的深度 1：
+- 再次确认 `origin` 的唯一 push URL 是 `jchanghong023/oh-my-pi`。
+- 确认没有其他 worktree 检出本地 `upstream`；当前 worktree若在 `upstream`，只有工作区 clean 时才切到既有 `main`。
+- 若本地没有 `release_commit` 对象，仅从固定上游 URL fetch 该 tag 的深度 1：
 
 ```bash
-git_guarded fetch --depth=1 --no-tags --update-shallow upstream \
+git_guarded fetch --depth=1 --no-tags --update-shallow \
+  https://github.com/can1357/oh-my-pi.git \
   "refs/tags/$release_tag:refs/tags/$release_tag"
 ```
 
@@ -446,6 +457,7 @@ Main: not modified
 Upstream mirror: already current / repaired
 Shallow repository: accepted; no deepen or unshallow
 Checks/tests: not run
+Mirror push: not needed / performed
 Main/tag push: not performed
 ```
 
