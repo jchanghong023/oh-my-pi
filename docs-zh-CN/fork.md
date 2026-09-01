@@ -17,9 +17,11 @@
 ### 仓库治理
 
 - **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 release 同步完成后在同一变更中更新当前快照。
-- **上游同步**：只将上游最新正式 GitHub Release tag 事务式合入已存在的本地 `main`；使用 `--no-commit` 在提交前自动解决冲突并验证，失败自动 abort，不同步 `upstream/main`，不自动 push `main`。
-- **轻量验证**：提交 merge 前执行 staged Git 检查和经脚本图复核的 TS-only 静态检查；冲突时追加 `fastcheck` 与顺序执行的精确直接测试，禁止完整测试套件及全部 Rust/native 本地工作。
-- **Release 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者在本地合入、验证和快照完成后精确更新为最新正式 Release commit；远端漂移只允许带精确旧 SHA lease 的 `--force-with-lease`。
+- **快速门禁**：上游同步首先比较 Release API 的正式版本与本页基线；版本未变化且镜像正确时立即 no-op，不切分支、不补历史、不运行检查或测试，也不创建长 TODO。
+- **浅克隆处理**：无新 Release 时浅克隆完全允许；只有新 Release 确需历史时才自动分级 deepen，最后自动 unshallow，禁止把手动 unshallow 作为用户前置步骤。
+- **上游同步**：新 Release tag 事务式合入已存在的本地 `main`；使用 `--no-commit` 自动解决冲突并在提交前验证，失败自动 abort，不同步 `upstream/main`，不自动 push `main`。
+- **弱机验证**：只检查 staged 改动及受影响 workspace，全部顺序执行；冲突时追加精确直接测试，禁止全 workspace/完整测试套件及全部 Rust/native 本地工作。
+- **Release 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最新正式 Release commit；无新 Release 时可独立快速修复，新 Release 时只在 merge、验证和快照完成后更新。
 - **Release 基线**：`.github/workflows/ci.yml` 的 `release_metadata` 从本页“当前上游基线”读取 `baseline_tag`，生成 `<baseline-without-v>+fork.${{ github.run_number }}`，不再回退到上游 latest。
 
 ### 用户功能
