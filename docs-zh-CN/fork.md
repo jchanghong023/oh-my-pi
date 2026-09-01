@@ -21,12 +21,12 @@
 - **差异维护**：`AGENTS.md` 要求修改本 fork 前先阅读本页，并要求 fork 改动与上游 `main` 同步完成后在同一变更中更新当前快照。
 - **每次精确门禁**：只读取固定上游 URL 的精确 `refs/heads/main` 与 `origin/upstream`；上游 commit、当前基线和四项镜像均未变化时真正 no-op，不查询 Release、tag、`origin/main`、配置型 `upstream/main` 或其他分支。
 - **前进与移动保护**：当前基线必须是候选上游 commit 的祖先；fetch 后重新确认远端 HEAD，期间移动只重试一次，非快进历史改写或反复移动立即停止。
-- **浅历史边界**：浅克隆缺少基线对象或祖先证据时，无变化路径立即停止；仅有新上游 commit 才对固定上游 `refs/heads/main` 和本地 `main` 精确 HEAD SHA 做一次定向 `deepen=1024`，仍不足即停止，永不 unshallow。
-- **上游同步**：每次执行直接把确认稳定的上游 `main` HEAD 事务式合入已存在的本地 `main`；使用 `--no-ff --no-commit` 自动解决可靠冲突，失败自动 abort，不自动 push `main` 或 tag。
-- **窄范围验证**：无冲突只做 staged Git 检查；上游仅引入尾随空白时可最小归一化并重验；若触及 `fastcheck`/lint/format 契约或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试。
+- **浅历史边界**：缺少祖先证据时只对固定上游与必要本地 ref 定向 deepen，永不 unshallow 或扩散查询其他远程历史。
+- **上游同步**：把稳定的上游 `main` HEAD 以 `--no-ff --no-commit` 合入现有本地 `main`；逐文件保留 fork 意图，仅在无法可靠解决或 Git 状态损坏时 abort。
+- **窄范围验证**：所有合并先做 staged Git 检查；TS 或工具链受影响时只运行 `fastcheck`，可修复错误必须修复后重验，不运行其他测试、完整检查或 Rust/native。
 - **Main 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最近成功合入本地 `main` 的上游 commit；它是本 fork 唯一允许自动 push 的远程分支，不承载 fork 提交。
 - **版本基线**：`.github/workflows/ci.yml` 的 `release_metadata` 继续从本页“当前上游基线”读取 `版本`；该值取精确上游 commit 中 coding-agent package SemVer 的核心三段，不读取或回退到 GitHub latest Release。
-- **同步技能压缩**：上游同步 Skill 改为声明式约束，删除重复规则与具体命令模板；固定上游、事务式 merge、冲突处理、窄验证、失败回滚与镜像语义不变。
+- **同步技能精简**：Skill 从 159 行压缩至 91 行，删除重复门禁、超时、状态枚举与过度回滚规则；保留固定上游、前进保护、治理文件、事务 merge、快照和镜像安全边界。
 
 ### 用户功能
 
