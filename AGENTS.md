@@ -21,8 +21,9 @@ After modifying local TypeScript code, you MUST run `bun run fastcheck` before y
 上游 Release 同步是唯一例外，MUST 按 `.omp/skills/upstream-release-sync/SKILL.md`：
 
 - MUST 使用 `git merge --no-ff --no-commit`，在创建 merge commit 前完成检查；任一检查失败 MUST `git merge --abort` 并验证恢复到同步前状态。
-- 无论是否发生冲突，MUST 运行 staged Git 检查，以及经脚本图复核确认不触发 Rust/native 工作的 TS-only 静态检查；当前默认命令为 `bun run check:ts`。
-- 发生冲突时，额外运行 `bun run fastcheck`，并仅逐个运行与原始冲突直接相关、不会构建 native 或写入仓库的精确测试文件；NEVER 运行完整测试套件。
+- 所有会修改 ref、index、worktree、commit、tracking 或远端的 Git 命令 MUST 按 skill 禁用本地 hooks；存在配置型 hook command 时停止，防止 hook 暗中触发重型工作。
+- 无论是否发生冲突，MUST 运行 staged Git 检查，并在脚本图审计后顺序执行 `bun run check:tools` 与 `bun run --sequential --workspaces --if-present check`。
+- 发生冲突时额外运行经审计的 `bun run fastcheck`，并仅逐个运行与原始冲突直接相关、不会构建 native 或写入仓库的精确测试文件；NEVER 运行完整测试套件。
 - 上游同步期间 NEVER 运行任何 Rust/native build、check、test、lint、fmt、clippy、codegen 或 packaging；NEVER 运行根级 `bun run check`、`cargo`、`bazel`、`nix build`、Docker/native build 或会间接触发这些工作的脚本。
 
 其他规则：
