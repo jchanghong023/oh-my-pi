@@ -5,7 +5,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 
 # 上游正式发布版本同步
 
-将 `can1357/oh-my-pi` 最新正式 GitHub Release 的 tag 合入当前 fork 分支。
+将 `can1357/oh-my-pi` 最新正式 GitHub Release 的 tag 合入当前 fork 分支，并同步到 fork 的固定 `upstream` Release 镜像分支。
 
 <critical>
 - MUST 以 GitHub Release API 返回的正式版本为唯一版本来源。
@@ -13,10 +13,11 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 - MUST 仅合并 Release 的原始 `tag_name`；NEVER 同步 `upstream/main`。
 - MUST 保留当前分支历史和用户改动；工作区不干净时 NEVER 合并。
 - 目标分支 SHOULD 跟踪 fork 的 `origin/<branch>`；NEVER 跟踪 `upstream/*`。
-- NEVER 创建中转分支、rebase、squash、cherry-pick 或覆盖同名 tag。
+- 固定本地镜像分支 `upstream` MUST 跟踪 `origin/upstream`；本地分支缺失或未设置 tracking 时 MUST 建立。
+- NEVER 创建中转分支、rebase、squash、cherry-pick 或覆盖同名 tag；固定 `upstream` Release 镜像分支不属于中转分支。
 - 无冲突 → NEVER 运行代码测试、代码检查、构建或编译命令。
 - 有冲突 → 仅运行 `bun run fastcheck`；NEVER 运行其他代码验证命令。
-- NEVER push、force-push、创建 tag 或发布 Release，除非用户明确要求。
+- MUST 仅自动 push 固定镜像分支 `upstream` 到 `origin/upstream`；NEVER 自动 push 目标分支、force-push、创建 tag 或发布 Release，除非用户明确要求。
 - MUST 维护 `docs-zh-CN/fork.md`：该页是当前快照；“上游同步记录”必须且只能保留当前 release 的一条记录。新 merge 后原位替换记录并创建独立 docs commit；release 已合入路径仅校正当前基线记录。
 - merge commit 与 fork-doc commit 共同构成同一次同步变更；任一未完成 → NEVER 报告完成。
 </critical>
@@ -26,6 +27,8 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 - 上游仓库：`https://github.com/can1357/oh-my-pi.git`
 - GitHub 仓库：`can1357/oh-my-pi`
 - 上游远端名：`upstream`
+- Fork Release 镜像分支：`upstream`
+- 镜像 tracking：`upstream` → `origin/upstream`
 - Release API：`https://api.github.com/repos/can1357/oh-my-pi/releases/latest`
 - Fork 账本：`docs-zh-CN/fork.md`
 
@@ -35,11 +38,12 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 
 1. 版本来自非草稿、非预发布 GitHub Release。
 2. 本地 tag 名与 Release `tag_name` 完全相同。
-3. Release commit 和合并前分支头均为当前 `HEAD` 的祖先。
+3. Release commit 和合并前分支头均为当前目标分支 `HEAD` 的祖先。
 4. 无未解决冲突；工作区状态符合合并前要求。
 5. 无冲突时未运行代码验证；有冲突时仅运行且通过 `bun run fastcheck`。
 6. 报告 Release URL、版本、tag commit、合并提交、验证结果、push 状态、fork-doc commit（如创建）。
 7. `docs-zh-CN/fork.md` 已同步：当前上游基线与唯一一条同步记录均匹配当前 Release；新 merge 路径产出独立 docs commit，already-contained 路径校正后亦产出独立 docs commit。
+8. 本地 `upstream` MUST 跟踪 `origin/upstream`；`refs/heads/upstream` 与 `refs/remotes/origin/upstream` MUST 均精确指向 `release_commit`。
 
 ## 流程
 
@@ -49,7 +53,8 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 
 ```bash
 git status --branch
-git branch --show-current
+target_branch="$(git branch --show-current)"
+printf 'branch=%s\n' "$target_branch"
 tracking_ref="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
 printf 'tracking=%s\n' "$tracking_ref"
 git remote get-url origin
@@ -61,11 +66,12 @@ git rev-parse --is-inside-work-tree
 要求：
 
 - 用户未指定目标分支 → 使用当前分支；detached HEAD → STOP。
+- 目标分支 MUST NOT 为固定镜像分支 `upstream`；该分支只承载最新正式 Release。
 - 工作区 MUST 无 staged、unstaged、untracked 文件。
 - merge、rebase、cherry-pick 进行中 → STOP。
 - `origin` MUST 指向用户 fork；错误或缺失 → STOP，NEVER 自动改写。
 - `upstream` MUST 指向 `can1357/oh-my-pi`。
-- `upstream` 缺失 → 仅添加远端，NEVER 创建分支或 tracking：
+- `upstream` 远端缺失 → 仅添加远端；固定本地镜像分支及 tracking 在第 7a 节建立：
 
 ```bash
 git remote add upstream https://github.com/can1357/oh-my-pi.git
@@ -73,10 +79,10 @@ git remote add upstream https://github.com/can1357/oh-my-pi.git
 
 - `docs-zh-CN/fork.md` MUST 存在；缺失 → STOP。
 
-Tracking 判定：
+目标分支 Tracking 判定：
 
 - `origin/<当前分支>` → 继续。
-- 空 → MAY 继续；最终报告 `none`，NEVER 自动设置。
+- 空 → MAY 继续；最终报告 `none`，NEVER 自动设置目标分支 tracking。
 - `upstream/*` 或其他错误关系 → STOP；用户明确授权后才可改为 `origin/<当前分支>`。
 
 记录合并前提交：
@@ -125,7 +131,7 @@ git show-ref --verify --quiet "refs/tags/$release_tag"
 release_commit="$(git rev-parse "$release_tag^{commit}")"
 ```
 
-Fetch 成功即完成上游来源确认，NEVER 再运行 `git ls-remote`。
+Fetch 成功即完成上游来源确认，NEVER 再运行 `git ls-remote` 查询上游版本。
 
 本地同名 tag 导致 fetch 拒绝 → 才可运行：
 
@@ -150,7 +156,7 @@ git merge-base --is-ancestor "$release_tag" HEAD
 - “当前上游基线”的 `**版本**` 行 = `release_tag`。
 - “上游同步记录”段必须且只能有 1 条记录，且该记录引用 `release_tag`。
 
-两条均满足 → 跳过 docs commit，直接进入第 7 节验证。
+两条均满足 → 跳过 docs commit，直接进入第 7 节镜像同步与验证。
 
 任一不满足 → 走第 4b 节定位当前 Release 的唯一 merge commit，再走第 4c 节以当前记录替换同步记录段。
 
@@ -293,16 +299,80 @@ git commit --no-edit
 
 合并提交完成后立即执行第 5a 节账本更新，再执行第 5b 节独立 docs commit。merge commit → docs commit 是固定顺序；NEVER 调换。
 
-### 7. 验证历史与状态
+### 7. 同步 `upstream` 镜像并验证历史与状态
+
+#### 7a. 同步固定 `upstream` Release 镜像分支
+
+仅在目标分支的 merge/docs 路径已完成后执行。固定本地分支 `upstream` 只承载最新正式 Release，MUST 跟踪 fork 的 `origin/upstream`；NEVER 合入目标分支的 fork-only 提交。
+
+先保存目标分支最终状态并读取 fork 远端镜像：
+
+```bash
+target_final_head="$(git rev-parse HEAD)"
+git fetch origin "refs/heads/upstream:refs/remotes/origin/upstream"
+origin_mirror_head="$(git rev-parse refs/remotes/origin/upstream)"
+```
+
+`origin/upstream` 缺失或 fetch 失败 → STOP；NEVER 猜测或改写其他远端分支。
+
+建立/校正本地 tracking：
+
+```bash
+if ! git show-ref --verify --quiet refs/heads/upstream; then
+  git branch --track upstream origin/upstream
+fi
+
+mirror_tracking="$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)"
+if [ -z "$mirror_tracking" ]; then
+  git branch --set-upstream-to=origin/upstream upstream
+elif [ "$mirror_tracking" != "origin/upstream" ]; then
+  printf 'unexpected upstream tracking: %s\n' "$mirror_tracking"
+  exit 1
+fi
+```
+
+若本地 `upstream` 不存在，MUST 从 `origin/upstream` 建立；若存在但未设置 tracking，MUST 设置为 `origin/upstream`。若已跟踪其他 ref → STOP，NEVER 自动覆盖该关系。
+
+更新前 MUST 确认本地和远端镜像均可安全快进到 `release_commit`：
+
+```bash
+mirror_head="$(git rev-parse refs/heads/upstream)"
+git merge-base --is-ancestor "$mirror_head" "$release_commit"
+git merge-base --is-ancestor "$origin_mirror_head" "$release_commit"
+```
+
+任一返回非 0 → STOP；NEVER reset、force-update 或 force-push 镜像分支。
+
+切换镜像分支并仅做 fast-forward：
+
+```bash
+git switch upstream
+git merge --ff-only "$release_tag"
+test "$(git rev-parse HEAD)" = "$release_commit"
+git push origin "refs/heads/upstream:refs/heads/upstream"
+git fetch origin "refs/heads/upstream:refs/remotes/origin/upstream"
+test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
+git switch "$target_branch"
+test "$(git rev-parse HEAD)" = "$target_final_head"
+```
+
+此 `git push` 是唯一默认允许的自动 push，仅用于固定镜像 `origin/upstream`。目标分支仍 MUST NOT 自动 push。
+
+镜像同步不运行任何代码测试、检查、构建或编译。
+
+#### 7b. 验证目标分支历史与状态
 
 ```bash
 git merge-base --is-ancestor "$release_tag" HEAD
 git merge-base --is-ancestor "$pre_merge_head" HEAD
 git status --short --branch
 git rev-parse "$release_tag^{commit}"
+test "$(git rev-parse refs/heads/upstream)" = "$release_commit"
+test "$(git rev-parse refs/remotes/origin/upstream)" = "$release_commit"
+test "$(git for-each-ref --format='%(upstream:short)' refs/heads/upstream)" = "origin/upstream"
 ```
 
-两个 `merge-base` MUST 返回 0；已提前包含 Release 时报告 `already contained`。
+两个目标分支 `merge-base` MUST 返回 0；已提前包含 Release 时报告 `already contained`。三个镜像检查 MUST 全部通过。
 
 新建 merge 路径额外 MUST 满足：
 
@@ -323,7 +393,7 @@ git rev-parse "$release_tag^{commit}"
 
 任一必检失败 → STOP。
 
-历史与工作区验证不是代码测试，不受“无冲突不跑测试”规则影响。
+历史、镜像与工作区验证不是代码测试，不受“无冲突不跑测试”规则影响。
 
 ### 8. 恢复授权的 stash
 
@@ -347,10 +417,12 @@ Merge commit: <merge_commit 或 already contained>
 Fork-doc commit: <fork_doc_commit 或 none>
 Branch: <branch>
 Tracking branch: <origin/<branch>、none 或错误关系>
-Verification: <历史检查；有冲突时另列 fastcheck 结果>
+Upstream mirror: upstream -> origin/upstream @ <release_commit>
+Mirror push: performed / failed
+Verification: <历史检查；镜像检查；有冲突时另列 fastcheck 结果>
 Fork ledger: <已合入：基线/记录一致 / 补写后一致；新建 merge：基线/记录已更新>
 Working tree: <clean 或恢复后的用户改动>
-Push: not performed / 明确授权后的实际结果
+Target branch push: not performed / 明确授权后的实际结果
 ```
 
 仅有 tag、无对应 GitHub Release → `不可合入：不是发布页面版本`。
@@ -358,11 +430,15 @@ Push: not performed / 明确授权后的实际结果
 <critical>
 - Release API 选版本；Git tag 仅承载已选 Release。
 - NEVER 同步 `upstream/main`，即使版本号更高。
-- 工作区不干净、Release 证据不足、冲突未解、历史验证失败、账本不变量失败 → NEVER 报告完成。
+- 工作区不干净、Release 证据不足、冲突未解、历史验证失败、镜像同步失败、账本不变量失败 → NEVER 报告完成。
 - MUST 验证 Release tag 与合并前分支头均可达。
+- 固定本地 `upstream` MUST 跟踪 `origin/upstream`，且两者最终 MUST 精确指向当前 `release_commit`。
+- 本地 `upstream` 缺失或无 tracking → MUST 建立；错误 tracking → STOP，NEVER 猜测覆盖。
+- `upstream` 镜像仅允许 fast-forward；NEVER reset、force-update 或 force-push。
 - 无冲突 → NEVER 运行代码测试、代码检查、构建或编译。
 - 有冲突 → 提交前仅运行 `bun run fastcheck`；NEVER 编译本地代码。
 - MUST 维护 `docs-zh-CN/fork.md`：新 merge 后原位替换唯一同步记录并立刻产出独立 docs commit；已合入路径仅校正当前基线对应记录并以独立 docs commit 收尾。
 - merge commit + fork-doc commit 共同记为一次同步变更；docs commit 缺失或被混入其他文件 → NEVER 报告完成。
 - 同步记录不是历史账本：总数不为 1 或未引用当前 Release → STOP，不得猜测。
-- NEVER push，除非用户明确授权。
+- MUST 自动 push 的唯一分支是固定镜像 `upstream` → `origin/upstream`；目标分支 NEVER 自动 push，除非用户明确要求。
+</critical>
