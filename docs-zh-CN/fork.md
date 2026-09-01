@@ -23,7 +23,7 @@
 - **前进与移动保护**：当前基线必须是候选上游 commit 的祖先；fetch 后重新确认远端 HEAD，期间移动只重试一次，非快进历史改写或反复移动立即停止。
 - **浅历史边界**：浅克隆缺少基线对象或祖先证据时，无变化路径立即停止；仅有新上游 commit 才对固定上游 `refs/heads/main` 和本地 `main` 精确 HEAD SHA 做一次定向 `deepen=1024`，仍不足即停止，永不 unshallow。
 - **上游同步**：每次执行直接把确认稳定的上游 `main` HEAD 事务式合入已存在的本地 `main`；使用 `--no-ff --no-commit` 自动解决可靠冲突，失败自动 abort，不自动 push `main` 或 tag。
-- **窄范围验证**：无冲突只做 staged Git 检查；若触及 fork 的 `fastcheck`/lint/format 契约，或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试，禁止完整测试及全部 Rust/native 本地工作。
+- **窄范围验证**：无冲突只做 staged Git 检查；上游仅引入尾随空白时可最小归一化并重验；若触及 `fastcheck`/lint/format 契约或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试。
 - **Main 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最近成功合入本地 `main` 的上游 commit；它是本 fork 唯一允许自动 push 的远程分支，不承载 fork 提交。
 - **版本基线**：`.github/workflows/ci.yml` 的 `release_metadata` 继续从本页“当前上游基线”读取 `版本`；该值取精确上游 commit 中 coding-agent package SemVer 的核心三段，不读取或回退到 GitHub latest Release。
 

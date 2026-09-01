@@ -362,6 +362,7 @@ test -z "$(git_guarded ls-files -u)"
 test -z "$(git_guarded ls-files --others --exclude-standard)"
 validation_tree="$(git_guarded write-tree)"
 ```
+若 `git diff --cached --check` 仅报告上游引入的尾随空白，逐个删除受影响行尾空白并重新暂存；禁止改变其他内容。修复后必须重新执行该校验。
 
 审查 staged diff，确认无冲突标记、误删治理文件、异常全仓格式化、无关生成文件或不属于 `baseline_upstream_commit..upstream_head` 与必要冲突解决的改动。
 
@@ -380,7 +381,7 @@ bun --cwd=<conflicted-workspace> run check:types
 
 3. 最直接既有测试最多 3 个，逐个运行；禁止 workspace/全仓测试、UI/browser/heavy/native 和网络集成测试。
 4. Shell/Python/JSON/YAML 冲突只做对应轻量语法解析；不得借此启动完整构建。
-5. 缺少 Bun/依赖、超时、脚本不安全或验证失败 → abort。
+5. 缺少 Bun/依赖、超时、不安全脚本、非尾随空白校验错误或修复后验证失败 → abort。
 
 检查后证明无写回：
 
@@ -558,5 +559,6 @@ Main/tag push: not performed
 - 唯一允许访问的远程分支是固定上游 `main` 与 `origin/upstream`；不查询或同步其他远程分支。
 - 浅历史最多一次定向 deepen；NEVER unshallow。
 - 本机绝不运行 Rust/native 工具链或完整重型测试。
+- 上游引入的尾随空白只可做不改变语义的最小归一化；其他校验失败仍必须 abort。
 - 不自动 push `main` 或 tag。
 </critical>
