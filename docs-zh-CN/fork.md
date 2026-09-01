@@ -26,6 +26,7 @@
 - **窄范围验证**：无冲突只做 staged Git 检查；上游仅引入尾随空白时可最小归一化并重验；若触及 `fastcheck`/lint/format 契约或发生冲突，只运行一次安全的 `fastcheck`、冲突 workspace 的 `check:types` 和最多 3 个直接测试。
 - **Main 镜像**：本地 `upstream` 跟踪 `origin/upstream`，两者精确等于最近成功合入本地 `main` 的上游 commit；它是本 fork 唯一允许自动 push 的远程分支，不承载 fork 提交。
 - **版本基线**：`.github/workflows/ci.yml` 的 `release_metadata` 继续从本页“当前上游基线”读取 `版本`；该值取精确上游 commit 中 coding-agent package SemVer 的核心三段，不读取或回退到 GitHub latest Release。
+- **同步技能压缩**：上游同步 Skill 改为声明式约束，删除重复规则与具体命令模板；固定上游、事务式 merge、冲突处理、窄验证、失败回滚与镜像语义不变。
 
 ### 用户功能
 
