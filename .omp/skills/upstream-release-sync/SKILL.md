@@ -20,7 +20,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 - 本地弱机策略：静态检查和直接相关测试 MUST 顺序执行；NEVER 运行完整测试套件、UI/browser/heavy 测试、Docker、benchmark、打包或发布流程。
 - 上游同步期间 NEVER 运行任何本地 Rust/native build、check、test、lint、fmt、clippy、codegen 或 packaging；NEVER 运行 `cargo`、`bazel`、`nix build` 或会间接触发这些工作的脚本。
 - 根级 `bun run check` 包含 Rust 检查，禁止运行。全仓静态检查必须使用经脚本图复核的 TS-only 顺序命令。
-- 为防止本地 Git hooks 暗中运行重型或 Rust/native 工作，所有会改变 ref、index、worktree、commit 或远端的 Git 命令 MUST 按第 1.2 节禁用本地 hooks；配置型 `hook.*.command` 存在时 STOP。
+- 所有会改变 ref、index、worktree、commit、tracking 或远端的 Git 命令 MUST 禁用本地 hooks、GPG commit signing 和自动 maintenance/GC；配置型 `hook.*.command` 存在时 STOP。
 - 三个 fork 治理文件 MUST 无条件保留同步前版本：`AGENTS.md`、`.omp/skills/upstream-release-sync/SKILL.md`、`docs-zh-CN/fork.md`；即使 Git 无冲突自动合并，也必须恢复，再按本流程更新 `fork.md`。
 - `origin/upstream` 是可重建的纯 Release 镜像，MUST 精确等于 `release_commit`，不得包含 fork-only commit。
 - 本地 `upstream` MUST 精确等于 `release_commit` 并跟踪 `origin/upstream`；缺失或 tracking 错误时自动创建/校正。
@@ -51,7 +51,7 @@ description: Safely merge the latest formally published can1357/oh-my-pi GitHub 
 5. 本地 `refs/heads/upstream == release_commit`，且跟踪 `origin/upstream`。
 6. 远端实际 `origin/upstream == release_commit`。
 7. 工作区最终 clean；未自动 push `main`。
-8. 未运行任何 Rust/native 工作、完整测试套件或本地 Git hook。
+8. 未运行本地 Git hook、GPG commit signing、自动 maintenance/GC、任何 Rust/native 工作或完整测试套件。
 
 ## 1. 强前置检查
 
@@ -83,26 +83,37 @@ done
 
 任一状态存在 → STOP。NEVER 接管或覆盖已有操作。
 
-### 1.2 禁用本地 Git hooks
+### 1.2 禁用 hooks、签名与自动维护
 
-先检查配置型 hooks：
+可靠区分配置型 hook 查询结果：
 
 ```bash
-configured_hook_commands="$(git config --show-origin --get-regexp '^hook\..*\.command$' 2>/dev/null || true)"
-test -z "$configured_hook_commands"
+configured_hook_commands="$(git config --show-origin --get-regexp '^hook\..*\.command$' 2>/dev/null)"
+hook_query_status=$?
+if [ "$hook_query_status" -eq 0 ]; then
+  printf '%s\n' "$configured_hook_commands"
+  exit 1
+fi
+test "$hook_query_status" -eq 1 || exit 1
 ```
 
-存在 `hook.*.command` → STOP；不得冒险执行未知 hook。
+发现 `hook.*.command` 或查询失败 → STOP；不得冒险执行未知 hook。
 
 本流程以下文 `git_safe` 表示：
 
 ```bash
 git_safe() {
-  command git -c core.hooksPath=/dev/null "$@"
+  command git \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgSign=false \
+    -c maintenance.auto=false \
+    -c gc.auto=0 \
+    -c fetch.writeCommitGraph=false \
+    "$@"
 }
 ```
 
-所有会修改 ref、index、worktree、commit、tracking 或远端的 Git 命令 MUST 使用 `git_safe`。若命令工具不保留 shell function，则必须把 `-c core.hooksPath=/dev/null` 直接写入每条命令。只读查询可使用普通 `git`。
+所有会修改 ref、index、worktree、commit、tracking 或远端的 Git 命令 MUST 使用 `git_safe`。若命令工具不保留 shell function，必须把上述 `-c` 配置直接写入每条命令。只读查询可使用普通 `git`。
 
 ### 1.3 远端身份
 
@@ -245,19 +256,20 @@ else
 fi
 ```
 
-进入 merge 路径后 MUST 验证：
+检查 merge 状态：
 
 ```bash
 merge_head_path="$(git rev-parse --git-path MERGE_HEAD)"
-test -f "$merge_head_path"
-test "$(git rev-parse MERGE_HEAD)" = "$release_commit"
 ```
 
-若 merge 返回失败但没有有效 `MERGE_HEAD`，或 `merge_had_conflicts=true` 但原始冲突清单为空 → 不是可处理的普通冲突；按第 6.5 节回滚后 STOP。
+- `MERGE_HEAD` 存在时 MUST 精确等于 `release_commit`；不一致则按第 6.5 节 abort。
+- merge 返回成功但没有 `MERGE_HEAD` → 状态异常；确认 `HEAD == pre_merge_head` 且工作区 clean 后 STOP，否则保留现场报告。
+- merge 返回失败且没有 `MERGE_HEAD` → 不是普通冲突；确认 `HEAD == pre_merge_head` 且工作区 clean 后 STOP，否则保留现场报告。
+- `merge_had_conflicts=true` 但 `initial_conflicted_paths` 为空 → 按第 6.5 节 abort 后 STOP。
 
 ### 4.1 无条件保留三个治理文件
 
-不论这些文件是否显示 conflict，MUST 从同步前 `main` 恢复并暂存：
+仅在有效 `MERGE_HEAD` 已确认后执行。不论这些文件是否显示 conflict，MUST 从同步前 `main` 恢复并暂存：
 
 ```bash
 git_safe restore --source="$pre_merge_head" --staged --worktree -- \
@@ -276,7 +288,7 @@ git_safe restore --source="$pre_merge_head" --staged --worktree -- \
 2. 其他文件 MUST 逐文件理解双方意图；NEVER 批量选 `--ours` 或 `--theirs`。
 3. MUST 以 `fork.md` 的当前 fork 功能为保留基线，同时迁移 Release 的新接口、类型、数据结构、调用方和行为变化。
 4. 修改、移动或删除导出符号前 MUST 搜索全部 references；调用方与测试必须同步审查。
-5. Lockfile 冲突：先正确合并 package manifests，再运行 `bun install --lockfile-only --ignore-scripts`；之后确认除 manifests/lockfile 外没有额外生成文件。NEVER 运行 lifecycle scripts或升级无关依赖。
+5. Lockfile 冲突：先正确合并 package manifests，再运行 `bun install --lockfile-only --ignore-scripts`；之后确认除 manifests/lockfile 外没有额外生成文件。NEVER 运行 lifecycle scripts 或升级无关依赖。
 6. 证据不足、双方语义不可兼容或不能可靠确定正确行为 → 按第 6.5 节安全回滚，不留下半完成 merge。
 7. NEVER 使用 rebase、squash、cherry-pick、`git reset --hard` 或全局 ours/theirs 策略逃避冲突。
 
@@ -293,11 +305,14 @@ test -z "$(git ls-files --others --exclude-standard)"
 
 所有验证都在 merge commit 创建前执行。任一失败按第 6.5 节回滚。
 
-### 6.1 通用 Git 检查
+### 6.1 通用 Git 检查与基线快照
 
 ```bash
 git diff --cached --check
 test "$(git rev-parse MERGE_HEAD)" = "$release_commit"
+test -z "$(git diff --name-only)"
+test -z "$(git ls-files --others --exclude-standard)"
+validation_index_tree="$(git write-tree)"
 ```
 
 审查 staged diff，确认无遗留冲突标记、误删治理文件、无关生成文件或异常全仓格式化。
@@ -337,7 +352,7 @@ bun run ci:test:full
 任何 cargo / bazel / nix build / native build 命令
 ```
 
-### 6.4 冲突路径附加验证
+### 6.4 冲突路径附加验证与不可变检查
 
 仅当 `merge_had_conflicts=true`：
 
@@ -351,24 +366,38 @@ bun run ci:test:full
 
 无冲突路径不运行 `fastcheck` 或 focused tests，但仍 MUST 完成第 6.1–6.3 节。
 
-### 6.5 失败时安全回滚
-
-冲突不能可靠解决、unmerged 残留、脚本不安全、检查/测试失败或 merge 状态异常时：
+完成所有实际验证后、创建 commit 前，MUST 证明任何检查或测试都没有改写 index、worktree 或生成文件：
 
 ```bash
-git_safe merge --abort
+test "$(git write-tree)" = "$validation_index_tree"
+test -z "$(git diff --name-only)"
+test -z "$(git ls-files --others --exclude-standard)"
+git diff --cached --check
+```
+
+任一不满足 → 不得提交，按第 6.5 节回滚。
+
+### 6.5 失败时安全回滚
+
+冲突不能可靠解决、unmerged 残留、脚本不安全、检查/测试失败、验证改写文件或 merge 状态异常时：
+
+```bash
+merge_head_path="$(git rev-parse --git-path MERGE_HEAD)"
+if [ -e "$merge_head_path" ]; then
+  git_safe merge --abort
+fi
 test "$(git rev-parse HEAD)" = "$pre_merge_head"
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
-abort 失败时 NEVER 改用 `git reset --hard`；保留现场并准确报告。回滚成功后状态为 blocked，且不得更新 `origin/upstream`。
+没有 `MERGE_HEAD` 时不运行必然失败的 abort，只验证 Git 已保持同步前状态。abort 或恢复验证失败时 NEVER 改用 `git reset --hard`；保留现场并准确报告。回滚成功后状态为 blocked，且不得更新 `origin/upstream`。
 
 ### 6.6 创建并验证 merge commit
 
 全部检查通过后：
 
 ```bash
-git_safe commit --no-edit
+git_safe commit --no-edit --no-gpg-sign
 merge_commit="$(git rev-parse HEAD)"
 ```
 
@@ -404,7 +433,7 @@ merge_short="$(printf '%s' "$merge_commit" | cut -c1-10)"
 
 ```bash
 git_safe add docs-zh-CN/fork.md
-git_safe commit -m "docs(fork): record upstream ${release_tag}"
+git_safe commit --no-gpg-sign -m "docs(fork): record upstream ${release_tag}"
 fork_doc_commit="$(git rev-parse HEAD)"
 ```
 
@@ -434,7 +463,7 @@ integration_matches="$(
 
 ### 7.3 文档失败处理与不变量
 
-文档修改后若不变量或提交检查失败，MUST 用 `git_safe restore --source=HEAD --staged --worktree -- docs-zh-CN/fork.md` 恢复并确认 clean；不得更新镜像。本地 Release merge 可能已完成，最终状态报告为 partial。
+文档修改后若不变量或提交检查失败，MUST 用 `git_safe restore --source=HEAD --staged --worktree -- docs-zh-CN/fork.md` 恢复并确认 clean；不得更新镜像。本地 Release merge可能已完成，最终状态报告为 partial。
 
 最终不变量：
 
@@ -523,7 +552,7 @@ git merge-base --is-ancestor "$pre_merge_head" main
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
 ```
 
-再次确认第 7 节文档不变量、第 8.3 节镜像不变量，以及执行记录中没有本地 hook、Rust/native 或完整重型测试命令。
+再次确认第 7 节文档不变量、第 8.3 节镜像不变量，以及执行记录中没有本地 hook、GPG commit signing、自动 maintenance/GC、Rust/native 或完整重型测试命令。
 
 最终报告：
 
@@ -535,7 +564,7 @@ Release commit: <release_commit>
 Main: merged @ <merge_commit> / already contained
 Conflict resolution: none / auto-resolved / blocked and aborted
 Validation: staged Git check; sequential TS static checks; focused tests <list/none>; all passed/failed
-Git hooks: disabled for mutating commands
+Git hooks/signing/auto-maintenance: disabled for mutating commands
 Rust/native local work: not run
 Fork snapshot: updated @ <fork_doc_commit> / already current / blocked
 Upstream mirror: local upstream == origin/upstream == <release_commit> / blocked
@@ -548,6 +577,6 @@ Main push: not performed
 - merge 在提交前验证；失败自动 abort；镜像最后更新。
 - `upstream` 是可重建的正式 Release 镜像，不保留 fork commit。
 - 三个治理文件始终保留 fork 版本；`fork.md` 再按实际 merge 更新。
-- 本机绝不运行 Git hooks、Rust/native 工作或完整重型测试套件。
+- 本机绝不运行 Git hooks、GPG commit signing、自动 maintenance/GC、Rust/native 工作或完整重型测试套件。
 - NEVER 同步 `upstream/main`；NEVER 自动 push `main`。
 </critical>
