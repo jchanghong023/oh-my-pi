@@ -9,6 +9,7 @@ import { azureProvider } from "./azure";
 import { basetenProvider } from "./baseten";
 import { bedrockMantleProvider } from "./bedrock-mantle";
 import { cerebrasProvider } from "./cerebras";
+import { clinePassProvider } from "./cline-pass";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { commandCodeProvider } from "./command-code";
 import { coreWeaveProvider } from "./coreweave";
@@ -120,6 +121,7 @@ const ALL = [
 	xiaomiTokenPlanCnProvider,
 	firepassProvider,
 	commandCodeProvider,
+	clinePassProvider,
 	deepseekProvider,
 	metaProvider,
 	moonshotProvider,

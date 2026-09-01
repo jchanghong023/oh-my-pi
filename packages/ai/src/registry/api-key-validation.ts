@@ -6,6 +6,8 @@ type OpenAICompatibleValidationOptions = {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
+	maxTokensField?: "max_tokens" | "max_completion_tokens";
+	maxTokens?: number;
 	signal?: AbortSignal;
 	fetch?: FetchImpl;
 	tolerateModelDenied?: boolean;
@@ -96,7 +98,7 @@ export async function validateOpenAICompatibleApiKey(options: OpenAICompatibleVa
 		body: JSON.stringify({
 			model: options.model,
 			messages: [{ role: "user", content: "ping" }],
-			max_tokens: 1,
+			[options.maxTokensField ?? "max_tokens"]: options.maxTokens ?? 1,
 			temperature: 0,
 		}),
 		signal,
@@ -159,7 +161,7 @@ export async function validateApiKeyAgainstModelsEndpoint(options: ModelListVali
 	const response = await fetchImpl(options.modelsUrl, {
 		method: "GET",
 		headers: {
-			...(resolveValidationHeaders(options.headers) ?? {}),
+			...resolveValidationHeaders(options.headers),
 			Authorization: `Bearer ${options.apiKey}`,
 		},
 		signal,

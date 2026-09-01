@@ -8,6 +8,7 @@
  * - re-exported `SqliteAuthCredentialStore`: concrete SQLite-backed implementation
  */
 import { createHash } from "node:crypto";
+import { planRequirementFor } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { $env, $envExact, extractRetryHint, getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import {
 	isSqliteCorruptionError,
@@ -51,7 +52,9 @@ import type {
 import { resolveUsedFraction } from "./usage";
 import { alibabaTokenPlanRankingStrategy, alibabaTokenPlanUsageProvider } from "./usage/alibaba-token-plan";
 import { claudeRankingStrategy, claudeUsageProvider } from "./usage/claude";
+import { clinePassUsageProvider } from "./usage/cline-pass";
 import { cursorUsageProvider } from "./usage/cursor";
+import { devinUsageProvider } from "./usage/devin";
 import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
@@ -72,11 +75,7 @@ import { umansUsageProvider } from "./usage/umans";
 import { xaiOauthUsageProvider } from "./usage/xai-oauth";
 import { zaiRankingStrategy, zaiUsageProvider } from "./usage/zai";
 
-export {
-	isSqliteBusyError,
-	isSqliteCorruptionError,
-	SqliteAuthCredentialStore,
-} from "./auth/sqlite-credential-store";
+export { isSqliteBusyError, isSqliteCorruptionError, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
 /**
@@ -667,6 +666,7 @@ const DEFAULT_USAGE_PROVIDERS: UsageProvider[] = [
 	ollamaUsageProvider,
 	ollamaCloudUsageProvider,
 	claudeUsageProvider,
+	clinePassUsageProvider,
 	zaiUsageProvider,
 	umansUsageProvider,
 	opencodeGoUsageProvider,
@@ -674,6 +674,7 @@ const DEFAULT_USAGE_PROVIDERS: UsageProvider[] = [
 	cursorUsageProvider,
 	syntheticUsageProvider,
 	xaiOauthUsageProvider,
+	devinUsageProvider,
 ];
 
 const DEFAULT_USAGE_PROVIDER_MAP = new Map<Provider, UsageProvider>(
@@ -993,7 +994,6 @@ function isAbortSignalOption(
 type OpenAICodexPlanRequirement = "none" | "paid" | "pro";
 type OpenAICodexPlanClass = "free" | "paid" | "pro" | "unknown";
 
-const GPT_56_PAID_CODEX_MODEL_PATTERN = /^gpt-5\.6-(?:sol|luna)(?:-pro)?$/;
 const OPENAI_CODEX_PRO_PLAN_TOKENS: Record<string, true> = {
 	pro: true,
 };
@@ -1024,11 +1024,7 @@ const OPENAI_CODEX_FREE_PLAN_TOKENS: Record<string, true> = {
  */
 function resolveOpenAICodexPlanRequirement(provider: string, modelId: string | undefined): OpenAICodexPlanRequirement {
 	if (provider !== "openai-codex" || typeof modelId !== "string") return "none";
-	const separator = modelId.lastIndexOf("/");
-	const bareModelId = (separator === -1 ? modelId : modelId.slice(separator + 1)).toLowerCase();
-	if (bareModelId.includes("-spark")) return "pro";
-	if (bareModelId === "gpt-5.6" || GPT_56_PAID_CODEX_MODEL_PATTERN.test(bareModelId)) return "paid";
-	return "none";
+	return (planRequirementFor("openai-codex", modelId) as OpenAICodexPlanRequirement | undefined) ?? "none";
 }
 
 const MODEL_ACCOUNT_POLICY_BLOCK_SCOPE_PREFIX = "model-policy:";
@@ -1448,7 +1444,7 @@ export class AuthStorage {
 	#bumpGeneration(reason: string): void {
 		this.#generation += 1;
 		this.#store.acknowledgeLocalChanges?.();
-		for (const listener of [...this.#generationListeners]) {
+		for (const listener of Array.from(this.#generationListeners)) {
 			try {
 				listener(this.#generation);
 			} catch (error) {
@@ -3569,7 +3565,7 @@ export class AuthStorage {
 		const exhausted = parsedReport.limits.some(limit => this.#isUsageLimitExhausted(limit));
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
 		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
-		const metadata: Record<string, unknown> = { ...(parsedReport.metadata ?? {}) };
+		const metadata: Record<string, unknown> = { ...parsedReport.metadata };
 		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
 		if (credential.email && metadata.email === undefined) metadata.email = credential.email;
 		if (credential.projectId && metadata.projectId === undefined) metadata.projectId = credential.projectId;
@@ -3608,8 +3604,8 @@ export class AuthStorage {
 				fetchedAt: now,
 				limits,
 				metadata: {
-					...(report.metadata ?? {}),
-					...(prior.metadata ?? {}),
+					...report.metadata,
+					...prior.metadata,
 					source: prior.metadata?.source,
 					headersUpdatedAt: now,
 				},
@@ -3793,7 +3789,7 @@ export class AuthStorage {
 		const base = sorted[0];
 		const mergedLimits = [...base.limits];
 		const limitIds = new Set(mergedLimits.map(limit => limit.id));
-		const mergedMetadata: Record<string, unknown> = { ...(base.metadata ?? {}) };
+		const mergedMetadata: Record<string, unknown> = { ...base.metadata };
 		let fetchedAt = base.fetchedAt;
 
 		for (const report of sorted.slice(1)) {
