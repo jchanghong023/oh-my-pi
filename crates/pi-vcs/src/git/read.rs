@@ -187,7 +187,7 @@ impl GitRepo {
 				.status_porcelain(&options)
 				.map(|status| !status.is_empty());
 		}
-		let repo = self.gix_fresh()?;
+		let repo = self.gix()?;
 		let platform = status_with_fresh_index(&repo, "git status")?
 			.untracked_files(gix::status::UntrackedFiles::Collapsed);
 		let iter = platform
@@ -261,7 +261,7 @@ impl GitRepo {
 	/// without a git binary. Must stay byte-identical to `git status
 	/// --porcelain` — the oracle test compares both against the real CLI.
 	fn status_porcelain_gix(&self, options: &StatusOptions) -> Result<String> {
-		let repo = self.gix_fresh()?;
+		let repo = self.gix()?;
 		let untracked = match options.untracked {
 			UntrackedMode::No => gix::status::UntrackedFiles::None,
 			UntrackedMode::Normal => gix::status::UntrackedFiles::Collapsed,
@@ -717,7 +717,7 @@ impl GitRepo {
 			return cli_lines(self.root(), &args);
 		}
 		if !others {
-			let repo = self.gix_fresh()?;
+			let repo = self.gix()?;
 			let index = load_index_or_empty(&repo, "git ls-files")?;
 			let mut out: Vec<_> = index
 				.entries()
@@ -729,7 +729,7 @@ impl GitRepo {
 			out.dedup();
 			return Ok(out);
 		}
-		let repo = self.gix_fresh()?;
+		let repo = self.gix()?;
 		let mut platform = status_with_fresh_index(&repo, "git ls-files")?
 			.untracked_files(gix::status::UntrackedFiles::Files);
 		if !exclude_standard {

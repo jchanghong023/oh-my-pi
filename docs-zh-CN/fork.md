@@ -76,4 +76,3 @@
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
 - **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
 - **Nix Bun 依赖锁**：为 Command Code 的 `turbo-stream` 同步再生 `nix/bun.nix`；OMP Nix 显式构建 `bun-lock` check，并规范 native/WASM 生成器的 EOF 换行差异，防止依赖表达式漂移。
-- **原生 VCS 索引一致性**：连续 stage/unstage/commit 时直接重读磁盘 index，避免文件系统时间戳粒度导致 gitoxide 复用旧快照；状态读取使用 fresh repository handle。
