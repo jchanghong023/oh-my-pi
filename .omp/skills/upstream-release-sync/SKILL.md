@@ -395,15 +395,24 @@ merge_commit="$(git_guarded rev-parse HEAD)"
 
 - 再次确认 `origin` 的唯一 push URL 是 `jchanghong023/oh-my-pi`。
 - 确认没有其他 worktree 检出本地 `upstream`；当前 worktree若在 `upstream`，只有工作区 clean 时才切到既有 `main`。
-- 若本地没有 `release_commit` 对象，仅从固定上游 URL fetch 该 tag 的深度 1：
+- 若本地没有 `release_commit` 对象，先读取当前 shallow 状态；只对本来就是 shallow 的仓库使用深度 1，完整仓库必须普通 fetch，避免把完整仓库变成浅仓库：
 
 ```bash
-git_guarded fetch --depth=1 --no-tags --update-shallow \
-  https://github.com/can1357/oh-my-pi.git \
-  "refs/tags/$release_tag:refs/tags/$release_tag"
+if ! git_guarded cat-file -e "$release_commit^{commit}" 2>/dev/null; then
+  if [ "$(git_guarded rev-parse --is-shallow-repository)" = "true" ]; then
+    git_guarded fetch --depth=1 --no-tags --update-shallow \
+      https://github.com/can1357/oh-my-pi.git \
+      "refs/tags/$release_tag:refs/tags/$release_tag"
+  else
+    git_guarded fetch --no-tags \
+      https://github.com/can1357/oh-my-pi.git \
+      "refs/tags/$release_tag:refs/tags/$release_tag"
+  fi
+fi
+git_guarded cat-file -e "$release_commit^{commit}"
 ```
 
-NEVER deepen/unshallow。
+此路径 NEVER deepen/unshallow，也不得改变仓库原有的 shallow/full 属性。
 
 ## 7.2 更新唯一远端镜像 ref
 
