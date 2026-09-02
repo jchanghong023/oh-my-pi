@@ -1,30 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { isolateReportBundleDirs, type ReportBundleTestDirs } from "../helpers/report-bundle-isolation";
 
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalXdgStateHome = process.env.XDG_STATE_HOME;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
-let cleanupRoot: string | undefined;
+let dirs: ReportBundleTestDirs | undefined;
 
 afterEach(async () => {
-	if (originalXdgStateHome === undefined) {
-		delete process.env.XDG_STATE_HOME;
-	} else {
-		process.env.XDG_STATE_HOME = originalXdgStateHome;
-	}
-	if (originalAgentDir) {
-		setAgentDir(originalAgentDir);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
-	if (cleanupRoot) {
-		await removeWithRetries(cleanupRoot);
-		cleanupRoot = undefined;
+	if (dirs) {
+		await dirs.cleanup();
+		dirs = undefined;
 	}
 });
 
@@ -35,13 +20,9 @@ async function archiveMembers(archivePath: string): Promise<string[]> {
 
 describe("report bundle sessions", () => {
 	it("bundles only the current session's subtree, not unrelated co-located sessions", async () => {
-		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-report-sessions-"));
-		const xdgStateHome = path.join(cleanupRoot, "state");
-		await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
-		process.env.XDG_STATE_HOME = xdgStateHome;
-		setAgentDir(fallbackAgentDir);
+		dirs = await isolateReportBundleDirs();
 
-		const sessionsDir = path.join(cleanupRoot, "sessions");
+		const sessionsDir = path.join(dirs.rootDir, "sessions");
 		await fs.mkdir(sessionsDir, { recursive: true });
 
 		// Current session and its artifacts subtree: a genuine subagent transcript
@@ -63,9 +44,11 @@ describe("report bundle sessions", () => {
 			'{"type":"session","secret":"private-b"}\n',
 		);
 
-		const result = await createReportBundle({ sessionFile });
+		const result = await createReportBundle({ sessionFile, reportsDir: dirs.reportsDir, logsDir: dirs.logsDir });
 		const members = await archiveMembers(result.path);
 		await fs.rm(result.path, { force: true });
+
+		expect(result.path.startsWith(dirs.reportsDir)).toBe(true);
 
 		// Genuine subtree is captured recursively.
 		expect(members).toContain("artifacts/SubTask.jsonl");

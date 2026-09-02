@@ -77,3 +77,4 @@
 - **TypeScript 测试静态检查**：预览合并测试将只初始化一次的组件改为 `const`，主代理切换测试用 resolver 队列替代未使用计数器，保持原断言行为并消除 Oxlint 报告。
 - **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
 - **Nix Bun 依赖锁**：为 Command Code 的 `turbo-stream` 同步再生 `nix/bun.nix`；OMP Nix 显式构建 `bun-lock` check，并规范 native/WASM 生成器的 EOF 换行差异，防止依赖表达式漂移。
+- **报告测试跨平台隔离**：`createReportBundle` 支持 `reportsDir`/`logsDir` 目录注入，`report-bundle-logs/sessions` 测试经共享 helper 落临时目录；修复 Windows 上 XDG 隔离失效导致假崩溃日志与报告写穿真实 `~/.omp/logs`、`~/.omp/reports`。

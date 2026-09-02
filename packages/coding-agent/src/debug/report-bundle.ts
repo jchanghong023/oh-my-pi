@@ -40,6 +40,10 @@ async function readLastLines(filePath: string, n: number, maxBytes = MAX_LOG_BYT
 export interface ReportBundleOptions {
 	/** Session file path */
 	sessionFile: string | undefined;
+	/** Reports directory override (tests isolate here; defaults to ~/.omp/reports). */
+	reportsDir?: string;
+	/** Logs directory override (tests isolate here; defaults to ~/.omp/logs). */
+	logsDir?: string;
 	/** Settings to include */
 	settings?: Record<string, unknown>;
 	/** CPU profile (for performance reports) */
@@ -83,7 +87,8 @@ export interface DebugLogSource {
  * - work.svg: Work profile flamegraph (work report only)
  */
 export async function createReportBundle(options: ReportBundleOptions): Promise<ReportBundleResult> {
-	const reportsDir = getReportsDir();
+	const reportsDir = options.reportsDir ?? getReportsDir();
+	const logsDir = options.logsDir ?? getLogsDir();
 	await fs.mkdir(reportsDir, { recursive: true });
 
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -110,7 +115,7 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 	// Recent logs (last 1000 lines) across every same-day process. PID-qualified
 	// filenames mean a report generated from a later invocation must still gather
 	// the crashed process's log, so read all of today's files, not just our own.
-	const logs = await collectSameDayLogs(1000);
+	const logs = await collectSameDayLogs(1000, logsDir);
 	if (logs) {
 		data["logs.txt"] = logs;
 		files.push("logs.txt");
@@ -213,8 +218,7 @@ export async function getLogText(): Promise<string> {
  * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. Files
  * are ordered oldest-first by mtime and separated by a filename header.
  */
-async function collectSameDayLogs(linesPerFile: number): Promise<string> {
-	const logsDir = getLogsDir();
+async function collectSameDayLogs(linesPerFile: number, logsDir = getLogsDir()): Promise<string> {
 	const today = new Date().toISOString().slice(0, 10);
 	const sameDay: Array<{ name: string; mtimeMs: number }> = [];
 	try {
