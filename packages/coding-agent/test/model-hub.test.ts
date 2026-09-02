@@ -1028,18 +1028,16 @@ describe("ModelHub", () => {
 			test("All-models view shows known-free Zen, hides paid and unknown Zen, keeps other providers", () => {
 				const zenFree = getBundledModel("opencode-zen", "big-pickle");
 				const zenPaid = getBundledModel("opencode-zen", "claude-opus-4-8");
-				const legacyFree = getBundledModel("opencode", "glm-5-free");
-				const legacyPaid = getBundledModel("opencode", "gpt-5.4");
 				const zenUnknown = makeModel("opencode-zen", "zen-fake-zero");
 				const otherPaid = {
 					...makeModel("other-provider", "other-paid"),
 					cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
 				};
-				if (!zenFree || !zenPaid || !legacyFree || !legacyPaid) {
-					throw new Error("Expected bundled Zen / legacy opencode fixtures to be present");
+				if (!zenFree || !zenPaid) {
+					throw new Error("Expected bundled Zen fixtures to be present");
 				}
 				const { hub } = createHub({
-					models: [zenFree, zenPaid, legacyFree, legacyPaid, zenUnknown, otherPaid],
+					models: [zenFree, zenPaid, zenUnknown, otherPaid],
 					scoped: true,
 				});
 				installTestTheme();
@@ -1047,11 +1045,9 @@ describe("ModelHub", () => {
 				const rendered = normalize(hub.render(220));
 				// Known-free Zen bundled fixtures are visible in the All-models view.
 				expect(rendered).toContain("opencode-zen/big-pickle");
-				expect(rendered).toContain("opencode/glm-5-free");
-				// Paid Zen (canonical and legacy) is hidden — the hub only advertises
-				// known-free tiers, not priced ones users must consciously choose.
+				// Paid Zen is hidden — the hub only advertises known-free tiers,
+				// not priced ones users must consciously choose.
 				expect(rendered).not.toContain("opencode-zen/claude-opus-4-8");
-				expect(rendered).not.toContain("opencode/gpt-5.4");
 				// Unknown zero-cost Zen IDs are NOT advertised as free: gateway quirks
 				// must not collapse every newly-served model into the free tier.
 				expect(rendered).not.toContain("opencode-zen/zen-fake-zero");

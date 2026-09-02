@@ -166,14 +166,11 @@ export function collectBundledFreeSelectors(models: readonly Model[]): Set<strin
 	return selectors;
 }
 
-/** OpenCode Zen's canonical and legacy provider ids share one catalog; the hub only advertises known-free entries from that catalog. */
-const BUNDLED_FREE_SELECTORS = collectBundledFreeSelectors([
-	...getBundledModels("opencode-zen"),
-	...getBundledModels("opencode"),
-]);
+/** The hub only advertises OpenCode Zen entries whose bundled pricing is explicitly free. */
+const BUNDLED_FREE_SELECTORS = collectBundledFreeSelectors(getBundledModels("opencode-zen"));
 
 function isVisibleModel(model: Model): boolean {
-	if (model.provider !== "opencode-zen" && model.provider !== "opencode") return true;
+	if (model.provider !== "opencode-zen") return true;
 	if (!model.cost) return false;
 	if (model.cost.input !== 0 || model.cost.output !== 0) return false;
 	return BUNDLED_FREE_SELECTORS.has(`${model.provider}/${model.id}`);

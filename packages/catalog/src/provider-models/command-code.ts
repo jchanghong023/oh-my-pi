@@ -1,11 +1,11 @@
 import { decode } from "turbo-stream";
+import { classifyModel } from "../compat/taxonomy";
 import {
 	DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS,
 	fetchOpenAICompatibleModels,
 	withOpenAICompatibleDiscoveryTimeout,
 } from "../discovery/openai-compatible";
 import { getBundledModelReferenceIndex } from "../identity/bundled";
-import { isAnthropicNamespacedModelId, isClaudeModelId } from "../identity/family";
 import { inheritReferenceThinking, resolveModelReference } from "../identity/reference";
 import type { ModelManagerOptions } from "../model-manager";
 import type { Api, FetchImpl, ModelCost, ModelSpec, TokenCost } from "../types";
@@ -34,7 +34,7 @@ export function resolveCommandCodeBaseUrl(api: Api, baseUrl?: string): string {
  * lookup, because the same GPT/Gemini id can appear on Anthropic-shaped gateways.
  */
 export function resolveCommandCodeApi(modelId: string): Api {
-	return isClaudeModelId(modelId) || isAnthropicNamespacedModelId(modelId)
+	return classifyModel("command-code", modelId, { lenient: true }).class === "anthropic"
 		? "anthropic-messages"
 		: "openai-completions";
 }
