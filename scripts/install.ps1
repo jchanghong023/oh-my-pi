@@ -231,22 +231,56 @@ function Install-ViaBun {
     Write-Host "Run 'omp' to get started!"
 }
 
-# Windows locks running executables. Binary installs deliberately stop every
-# omp process before replacement so stale sessions cannot keep omp.exe locked.
+# Windows locks a running executable. Stop only processes whose executable path
+# matches the install target; unrelated omp.exe processes must remain untouched.
 function Stop-RunningOmp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
     $running = @(Get-Process -Name "omp" -ErrorAction SilentlyContinue)
     if (-not $running) {
         return
     }
 
-    Write-Host "[WARN] Force-stopping all running omp processes before installation." -ForegroundColor Yellow
-    $running | Stop-Process -Force -ErrorAction SilentlyContinue
-    $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+    $normalizedTarget = [System.IO.Path]::GetFullPath($TargetPath)
+    $matching = @()
+    $unreadableProcessIds = @()
+    foreach ($process in $running) {
+        try {
+            $processPath = $process.Path
+            if ([string]::IsNullOrWhiteSpace($processPath)) {
+                throw "Executable path is unavailable."
+            }
+            $normalizedProcessPath = [System.IO.Path]::GetFullPath($processPath)
+        } catch {
+            $unreadableProcessIds += $process.Id
+            continue
+        }
 
-    $remaining = @(Get-Process -Name "omp" -ErrorAction SilentlyContinue)
+        if ([System.StringComparer]::OrdinalIgnoreCase.Equals($normalizedProcessPath, $normalizedTarget)) {
+            $matching += $process
+        }
+    }
+
+    if ($unreadableProcessIds) {
+        $processIds = $unreadableProcessIds -join ", "
+        throw "Cannot safely identify running omp processes because their executable paths are unavailable (PIDs: $processIds)."
+    }
+    if (-not $matching) {
+        return
+    }
+
+    $processIds = ($matching | ForEach-Object { $_.Id }) -join ", "
+    Write-Host "[WARN] Force-stopping omp processes running from $normalizedTarget (PIDs: $processIds)." -ForegroundColor Yellow
+    $matching | Stop-Process -Force -ErrorAction SilentlyContinue
+    $matching | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+
+    $remaining = @($matching | Where-Object { -not $_.HasExited })
     if ($remaining) {
         $processIds = ($remaining | ForEach-Object { $_.Id }) -join ", "
-        throw "Failed to stop all omp processes (PIDs: $processIds)."
+        throw "Failed to stop omp processes running from $normalizedTarget (PIDs: $processIds)."
     }
 }
 
@@ -304,8 +338,8 @@ function Install-Binary {
 
     # Windows cannot overwrite an existing or running omp.exe. Download to a
     # unique same-directory temp file first so failed downloads leave the old
-    # install working, then force-stop every omp process, remove the old target,
-    # and move the new binary into place.
+    # install working, then force-stop only processes running the install target,
+    # remove the old target, and move the new binary into place.
     # Prefer the in-box curl.exe (Windows 10 1803+) for a live progress bar;
     # fall back to Invoke-WebRequest when curl is unavailable or fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
@@ -332,7 +366,7 @@ function Install-Binary {
                 throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
         }
-        Stop-RunningOmp
+        Stop-RunningOmp -TargetPath $OutPath
         if (Test-Path -LiteralPath $OutPath) {
             Remove-Item -LiteralPath $OutPath -Force
         }

@@ -265,55 +265,78 @@ export class DocsService {
 		const extractor = index.mode === "structured" ? await this.#extractor() : undefined;
 		if (index.mode === "structured" && !extractor)
 			throw new Error("Structured indexing requires a configured task model and credential");
+		const controller = new AbortController();
+		const cancelWorkers = () => controller.abort();
+		options.signal?.addEventListener("abort", cancelWorkers, { once: true });
+		if (options.signal?.aborted) controller.abort();
+		const signal = controller.signal;
 		let cursor = 0;
 		let completed = 0;
 		let failed = 0;
+		let firstError: unknown;
+		let hasError = false;
 		const runWorker = async () => {
-			while (cursor < files.length) {
-				if (options.signal?.aborted) throw abortError();
-				const relativePath = files[cursor++];
-				const document = await readMarkdownDocument(index.rootPath, relativePath);
-				options.onProgress?.({
-					phase: index.mode === "structured" ? "extract" : "fts",
-					total: files.length,
-					completed,
-					failed,
-					currentPath: document.relativePath,
-				});
-				const extracted: SectionExtraction[] = [];
-				for (const section of document.sections) {
-					if (options.signal?.aborted) throw abortError();
-					if (!extractor) {
-						extracted.push({ section });
-						continue;
-					}
-					try {
-						extracted.push({
-							section,
-							payload: await extractor({ schema, document, section, signal: options.signal }),
-						});
-					} catch (error) {
-						if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-							throw abortError();
+			try {
+				while (cursor < files.length) {
+					if (signal.aborted) throw abortError();
+					const relativePath = files[cursor++];
+					const document = await readMarkdownDocument(index.rootPath, relativePath);
+					options.onProgress?.({
+						phase: index.mode === "structured" ? "extract" : "fts",
+						total: files.length,
+						completed,
+						failed,
+						currentPath: document.relativePath,
+					});
+					const extracted: SectionExtraction[] = [];
+					for (const section of document.sections) {
+						if (signal.aborted) throw abortError();
+						if (!extractor) {
+							extracted.push({ section });
+							continue;
 						}
-						extracted.push({ section, error: error instanceof Error ? error.message : String(error) });
+						try {
+							extracted.push({
+								section,
+								payload: await extractor({ schema, document, section, signal }),
+							});
+						} catch (error) {
+							if (signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+								throw abortError();
+							}
+							extracted.push({ section, error: error instanceof Error ? error.message : String(error) });
+						}
 					}
+					if (signal.aborted) throw abortError();
+					const errors = this.#commitDocument(index.id, schema, document, extracted);
+					if (errors.length > 0) failed++;
+					completed++;
+					options.onProgress?.({
+						phase: "fts",
+						total: files.length,
+						completed,
+						failed,
+						currentPath: document.relativePath,
+						...(errors.at(-1) ? { message: errors.at(-1) } : {}),
+					});
 				}
-				if (options.signal?.aborted) throw abortError();
-				const errors = this.#commitDocument(index.id, schema, document, extracted);
-				if (errors.length > 0) failed++;
-				completed++;
-				options.onProgress?.({
-					phase: "fts",
-					total: files.length,
-					completed,
-					failed,
-					currentPath: document.relativePath,
-					...(errors.at(-1) ? { message: errors.at(-1) } : {}),
-				});
+			} catch (error) {
+				if (!hasError) {
+					firstError = error;
+					hasError = true;
+				}
+				controller.abort();
+				throw error;
 			}
 		};
-		await Promise.all(Array.from({ length: Math.min(this.#maxConcurrency, Math.max(1, files.length)) }, runWorker));
+		try {
+			const workers = Array.from({ length: Math.min(this.#maxConcurrency, Math.max(1, files.length)) }, runWorker);
+			await Promise.allSettled(workers);
+			if (hasError) throw firstError;
+			if (signal.aborted) throw abortError();
+		} finally {
+			options.signal?.removeEventListener("abort", cancelWorkers);
+		}
 		options.onProgress?.({ phase: "cleanup", total: files.length, completed, failed });
 		this.storage.transaction(() => this.storage.garbageCollect(index.id));
 		const refreshed = this.storage.getById(index.id) as StoredIndex;

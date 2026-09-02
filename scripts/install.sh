@@ -60,6 +60,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# This fork does not publish macOS release binaries. Keep the no-argument
+# installer useful on macOS by selecting the supported source path.
+if [ -z "$MODE" ] && [ "$(uname -s)" = "Darwin" ]; then
+    MODE="source"
+fi
+
 
 # Check if bun is available
 has_bun() {
@@ -263,9 +269,13 @@ install_binary() {
     ARCH="$(host_arch)"
 
     case "$OS" in
-        Linux)  PLATFORM="linux" ;;
-        Darwin) PLATFORM="darwin" ;;
-        *)      echo "Unsupported OS: $OS"; exit 1 ;;
+        Linux) PLATFORM="linux" ;;
+        Darwin)
+            echo "Prebuilt macOS binaries are not published by this fork."
+            echo "Install from source instead by passing --source."
+            exit 1
+            ;;
+        *) echo "Unsupported OS: $OS"; exit 1 ;;
     esac
 
     case "$ARCH" in
@@ -389,7 +399,7 @@ case "$MODE" in
             echo "Error: bun reports architecture '$(bun_arch)' but this host is '$(host_arch)'."
             echo "Installing from source with this bun would produce a mismatched binary"
             echo "(e.g. x86_64 under Rosetta on Apple Silicon), causing slow startup and AVX warnings."
-            echo "Install a native bun for your architecture, or re-run without --source to fetch the prebuilt $(host_arch) binary."
+            echo "Install a native bun for your architecture, then re-run with --source."
             exit 1
         fi
         install_via_bun

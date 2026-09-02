@@ -31,7 +31,7 @@
 ### 用户功能
 
 - **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema；`/docs` 管理索引，`wiki` 作为 essential 只读内置工具默认提供给非受限代理，受限会话保持显式白名单；无专用文档子代理、`/doc` 或自然语言路由；默认仅建 FTS 且工具层拒绝结构化操作，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
-- **索引回归修复**：Markdown 围栏严格按字符、长度与尾随空白闭合；索引可见性改用 `state` 并拒绝 `__building__` 保留前缀，避免普通名称被隐藏。
+- **索引回归修复**：Markdown 围栏严格按字符、长度与尾随空白闭合，ATX 标题仅删除空格分隔的关闭井号；索引可见性改用 `state` 并拒绝 `__building__` 保留前缀；构建失败或取消时先取消并等待全部 worker，再删除临时代际。
 - **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；模型协议路由使用集中式 KDL taxonomy；登录只 trim/store、不绑定官方校验端点，实际请求使用配置的 provider baseUrl；env metadata 优先 `COMMAND_CODE_API_KEY`，回退 legacy `COMMANDCODE_API_KEY`。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 中 catalog bundled 且 input/output 价格都为零的模型；缺失 cost 的 bundled/discovered 行直接跳过，gateway 新 ID 按“价格未知”隐藏，主列表与 locked preview 共用过滤。
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
@@ -64,7 +64,7 @@
 
 - **更新 URL 校验**：`omp update` 校验 GitHub release asset URL 前先做 percent-decode 归一化，容忍 tag 中 `+` 被编码为 `%2B`（`v18.0.9+fork.N` 的 `browser_download_url` 必需）。
 - **Fork 二进制发布**：CI 由 `workflow_dispatch` 构建，`queue: max` 保留同 ref 的全部等待运行，仅允许从 `main` 按输入发布 `+fork.N` GitHub Release；二进制嵌入 fork 版本、构建时间与更新仓库，`omp update` 比较 fork build counter 并从 fork Release 更新。
-- **安装/更新体验**：安装器比较已装版本、同版本跳过下载并以唯一同目录临时文件原子替换；Linux 不终止现有会话，旧进程继续使用旧 inode 并提示重启；Windows 因 exe 文件锁仅在提前告警后终止目标 Path 精确匹配的进程；保留下载进度、curl 回退与错误正文。
+- **安装/更新体验**：安装器比较已装版本、同版本跳过下载并以唯一同目录临时文件原子替换；Linux 不终止现有会话；Windows 仅终止目标 Path 精确匹配的进程且路径不可读时安全失败；macOS 默认源码安装并拒绝不存在的预编译资产路径；保留下载进度、curl 回退与错误正文。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；两套 locale 各自提交 `package-lock.json` 并以 `npm ci` 锁定依赖构建，部署 checkout 完整 Git 历史以输出页面真实 `lastUpdated`；中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
 - **DFT 知识调研**：完全重写为 OMP 内置 Markdown 索引技术报告；先概览采集、FTS/RAG、结构化抽取、图/MCP、Agent/代码索引等相关技术，再详述 `docs`/`wiki` 的 FTS 与 structured 实现、生命周期、安全和适用边界，并保留 grep 对照实测基线。
 

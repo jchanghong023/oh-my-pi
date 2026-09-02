@@ -22,7 +22,7 @@ async function writeExecutable(directory: string, name: string, content: string)
 	await fs.chmod(file, 0o755);
 }
 
-async function createFixture(): Promise<InstallerFixture> {
+async function createFixture(osName = "Linux"): Promise<InstallerFixture> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-installer-"));
 	tempDirs.push(dir);
 	const binDir = path.join(dir, "bin");
@@ -31,8 +31,8 @@ async function createFixture(): Promise<InstallerFixture> {
 	await fs.mkdir(binDir);
 	await Bun.write(log, "");
 
-	await writeExecutable(binDir, "uname", '#!/bin/sh\n[ "$1" = "-s" ] && echo Linux || echo x86_64\n');
-	await writeExecutable(binDir, "ldd", "#!/bin/sh\necho 'ldd (GNU libc) 2.39'\n");
+	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo x86_64\n`);
+	await writeExecutable(binDir, "sysctl", "#!/bin/sh\necho 0\n");
 	await writeExecutable(
 		binDir,
 		"curl",
@@ -150,6 +150,26 @@ describe("fork installer routing", () => {
 		expect(result.commands).not.toContain("bun install");
 	});
 
+	test("defaults to source installation on macOS", async () => {
+		const result = await runInstallerWithFixture([], await createFixture("Darwin"));
+		expect(result.exitCode, result.stdout).toBe(0);
+		expect(result.commands).toContain(
+			"git clone --depth 1 --branch main https://github.com/jchanghong023/oh-my-pi.git",
+		);
+		expect(result.commands).toContain("bun install -g");
+		expect(result.commands).not.toContain("api.github.com");
+		expect(result.commands).not.toContain("omp-darwin-");
+	});
+
+	test("rejects explicit binary installation on macOS before requesting a release", async () => {
+		const result = await runInstallerWithFixture(["--binary"], await createFixture("Darwin"));
+		expect(result.exitCode).toBe(1);
+		expect(result.stdout).toContain("Prebuilt macOS binaries are not published by this fork.");
+		expect(result.stdout).toContain("passing --source");
+		expect(result.commands).not.toContain("api.github.com");
+		expect(result.commands).not.toContain("omp-darwin-");
+	});
+
 	test("atomically replaces Linux targets without stopping running sessions", async () => {
 		const fixture = await createFixture();
 		await fs.mkdir(fixture.installDir, { recursive: true });
@@ -186,13 +206,16 @@ describe("fork installer routing", () => {
 		expect(script).not.toContain('$TmpPath = "$OutPath.tmp"');
 	});
 
-	test("force-stops every Windows omp process and removes the old target before moving", async () => {
+	test("stops only Windows omp processes running from the install target before moving", async () => {
 		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
 		expect(script).toContain('Get-Process -Name "omp"');
-		expect(script).toContain("Stop-Process -Force");
-		expect(script).not.toContain("Where-Object { try { $_.Path -eq $TargetPath }");
+		expect(script).toContain("[System.IO.Path]::GetFullPath($TargetPath)");
+		expect(script).toContain("[System.IO.Path]::GetFullPath($processPath)");
+		expect(script).toContain("[System.StringComparer]::OrdinalIgnoreCase.Equals");
+		expect(script).toContain("$matching | Stop-Process -Force");
+		expect(script).toContain("executable paths are unavailable");
 
-		const stopIndex = script.indexOf("        Stop-RunningOmp");
+		const stopIndex = script.indexOf("        Stop-RunningOmp -TargetPath $OutPath");
 		const removeIndex = script.indexOf("            Remove-Item -LiteralPath $OutPath -Force", stopIndex);
 		const moveIndex = script.indexOf("        Move-Item -Path $TmpPath -Destination $OutPath", removeIndex);
 		expect(stopIndex).toBeGreaterThan(-1);

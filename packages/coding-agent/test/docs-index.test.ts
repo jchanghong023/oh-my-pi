@@ -119,6 +119,16 @@ describe("document schema and Markdown parsing", () => {
 		);
 	});
 
+	it("preserves literal trailing hashes unless a spaced closing sequence is present", () => {
+		const literal = parseMarkdown(new TextEncoder().encode("# C#\nbody\n## F#\nbody\n# Topic#\nbody\n"));
+		expect(literal.title).toBe("C#");
+		expect(literal.sections.map(section => section.headingPath.at(-1))).toEqual(["C#", "F#", "Topic#"]);
+
+		const closed = parseMarkdown(new TextEncoder().encode("# C# ###\nbody\n"));
+		expect(closed.title).toBe("C#");
+		expect(closed.sections[0]?.headingPath).toEqual(["C#"]);
+	});
+
 	it("requires matching fence length and whitespace-only closing content", () => {
 		const text = [
 			"# Document",
@@ -253,6 +263,77 @@ describe("DocsService indexing contract", () => {
 			expect(rebuilt.index.id).not.toBe(initial.index.id);
 			expect(service.search("Beta", { index: "fts" }).sections).not.toHaveLength(0);
 		} finally {
+			service.close();
+		}
+	});
+
+	it("cancels peer workers and waits for them before discarding a failed generation", async () => {
+		const root = await tempDir("docs-worker-cancel-root-");
+		const agent = await tempDir("docs-worker-cancel-agent-");
+		await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha\n");
+		await fs.writeFile(path.join(root, "b.md"), "# B\nItem: Beta\n");
+
+		let started = 0;
+		let resolveBothStarted!: () => void;
+		const bothStarted = new Promise<void>(resolve => {
+			resolveBothStarted = resolve;
+		});
+		let resolveSlowWorker!: () => void;
+		const slowWorkerRelease = new Promise<void>(resolve => {
+			resolveSlowWorker = resolve;
+		});
+		let resolveSlowWorkerCancelled!: () => void;
+		const slowWorkerCancelled = new Promise<void>(resolve => {
+			resolveSlowWorkerCancelled = resolve;
+		});
+		const workerAbortError = () => {
+			const error = new Error("worker cancelled");
+			error.name = "AbortError";
+			return error;
+		};
+		const service = new DocsService({
+			agentDir: agent,
+			cwd: root,
+			maxConcurrency: 2,
+			extractor: async ({ document, signal }) => {
+				started++;
+				if (started === 2) resolveBothStarted();
+				await bothStarted;
+				if (document.relativePath === "a.md") throw workerAbortError();
+				await new Promise<void>(resolve => {
+					if (signal?.aborted) resolve();
+					else signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+				resolveSlowWorkerCancelled();
+				await slowWorkerRelease;
+				throw workerAbortError();
+			},
+		});
+		try {
+			const initial = await service.init(".", "idx", path.relative(root, await schemaFile(root)));
+			let buildSettled = false;
+			const build = service.reinit("idx", { mode: "structured" });
+			void build.then(
+				() => {
+					buildSettled = true;
+				},
+				() => {
+					buildSettled = true;
+				},
+			);
+			await slowWorkerCancelled;
+			expect(buildSettled).toBe(false);
+			resolveSlowWorker();
+			await expect(build).rejects.toMatchObject({ name: "AbortError" });
+			expect(buildSettled).toBe(true);
+			const unchanged = service.status("idx");
+			if (Array.isArray(unchanged)) throw new Error("expected one index");
+			expect(unchanged.id).toBe(initial.index.id);
+			expect(
+				service.storage.db.query("SELECT COUNT(*) AS count FROM doc_indexes WHERE state='building'").get(),
+			).toEqual({ count: 0 });
+		} finally {
+			resolveSlowWorker();
 			service.close();
 		}
 	});

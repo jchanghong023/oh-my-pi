@@ -83,7 +83,7 @@ function parseHeading(
 	inFence: boolean,
 ): { level: number; text: string; setext: boolean } | undefined {
 	if (inFence) return undefined;
-	const atx = line.replace(/\r?\n$/, "").match(/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/);
+	const atx = line.replace(/\r?\n$/, "").match(/^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/);
 	if (atx) return { level: atx[1].length, text: atx[2].trim(), setext: false };
 	if (nextLine !== undefined && line.trim() !== "" && /^ {0,3}(=+|-+)[ \t]*\r?\n?$/.test(nextLine)) {
 		return { level: nextLine.trimStart().startsWith("=") ? 1 : 2, text: line.trim(), setext: true };
