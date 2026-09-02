@@ -1,14 +1,16 @@
-# Oh My Pi 内置 Markdown 知识索引：技术全景、实现与 DFT 实测
+# Oh My Pi 内置 Markdown 知识索引：技术全景与实现
 
 **重写日期：** 2026-08-31  
-**目标场景：** DFT 内网研发；约 100 MB Markdown，含原始文档及由图片、Office/PDF、音视频转换得到的 OCR/ASR 文本  
+**目标场景：** 私有研发资料的 Markdown 知识检索，语料可包含由图片、Office/PDF、音视频转换得到的 OCR/ASR 文本  
 **讨论对象：** 本 fork 新增的外部 Markdown 持久索引：`omp docs`、TUI `/docs` 与 Agent 工具 `wiki`；不是 `omp://` 内嵌产品手册
+
+> 隐私说明：本文仅描述公开实现、通用使用方式与匿名化结论，不记录内部项目名、产品名、信号名、原始语料规模、文件数量、索引数量、数据库大小、查询词、逐项性能数据或可用于反推私有语料的信息。
 
 ## 1. 结论
 
-1. **现阶段默认使用内置 FTS 索引。** 它以标题章节切分 Markdown，持久化到 SQLite FTS5，使用 BM25 排序；建索引和检索均不调用模型。对 DFT 命令、信号、版本、报错等高信息量字面词，已测速度和命中质量足以形成实用闭环。
+1. **现阶段默认使用内置 FTS 索引。** 它以标题章节切分 Markdown，持久化到 SQLite FTS5，使用 BM25 排序；建索引和检索均不调用模型。对命令、信号、版本、报错等高信息量字面词，FTS 适合作为低成本默认检索层。
 2. **`wiki` 是查询面，`docs` 是管理面。** 用户通过 `omp docs` 或 `/docs` 创建、重建、查看、删除索引；Agent 通过只读 `wiki` 执行 `status → search → read`，读取索引中保存的原始章节并引用路径与行号。
-3. **结构化模式是可选的模型抽取层，不是 FTS 的同义词。** 显式选择 `structured` 后，OMP 才按 schema 抽取实体、断言、关系和证据，开放 `lookup`、`relations`、`conflicts`。它需要模型凭据，成本与失败面远高于 FTS；当前实测只覆盖 FTS。
+3. **结构化模式是可选的模型抽取层，不是 FTS 的同义词。** 显式选择 `structured` 后，OMP 才按 schema 抽取实体、断言、关系和证据，开放 `lookup`、`relations`、`conflicts`。它需要模型凭据，成本与失败面远高于 FTS。
 4. **保留 grep，按缺口引入外部技术。** 正则、全量枚举、检查工作区最新内容仍用 grep；只有出现可量化的语义召回缺口时再评估向量/混合检索，出现中央服务、细粒度权限、审计或多客户端需求时再评估 MCP。
 5. **本 fork 没有专用文档子代理、`/doc` 快捷命令或自然语言路由器。** `wiki` 作为 essential 只读工具进入非受限会话；是否调用仍由 Agent 根据任务与工具说明判断。需要强制查询时，可用简短项目规则或 Skill 补充行为约束，但不复制知识库。
 
@@ -38,8 +40,8 @@
 | GraphRAG | 在知识图上聚类、生成社区摘要并执行局部/全局检索 | 适合跨文档综合与全局主题问题 | 构建与查询成本高，错误边会扩散 | **未内置** |
 | MCP | 用标准协议把外部资源、工具、服务接入 Agent host | 中央部署、多客户端、服务端鉴权和审计 | MCP 是接口，不决定检索质量 | 内置索引**不经过 MCP**；MCP 是外部替代/扩展 |
 | Rules / Skills / Task / Hooks | 约束何时检索、如何核验，或隔离研究上下文 | 提高触发稳定性，注入少量项目状态 | 不是知识库；规则过长会占上下文 | OMP 通用能力；本 fork **无专用 docs 编排层** |
-| LSP / Tree-sitter / ctags | 解析代码符号、定义、引用和语法结构 | 建立“文档概念 → 源码实现”映射 | 多语言、动态 Tcl/Python、生成代码较难 | 与 `docs` **分离** |
-| 超长上下文 / Prompt Cache | 直接发送大量文本，并缓存重复前缀 | 小型稳定资料实现简单 | 约 100 MB 语料不适合整体注入；冲突和噪声仍在 | **未采用** |
+| LSP / Tree-sitter / ctags | 解析代码符号、定义、引用和语法结构 | 建立“文档概念 → 源码实现”映射 | 多语言、动态脚本、生成代码较难 | 与 `docs` **分离** |
+| 超长上下文 / Prompt Cache | 直接发送大量文本，并缓存重复前缀 | 小型稳定资料实现简单 | 大型语料不适合整体注入；冲突和噪声仍在 | **未采用** |
 | 微调 / 继续预训练 | 把领域模式写入模型参数 | 改善术语理解、分类或风格 | 难引用来源，更新滞后，不能保证精确命令 | **不属于索引方案** |
 
 关键关系：
@@ -90,27 +92,27 @@ PDF / Office / 图片 / 音视频
 #### CLI：`omp docs`
 
 ```bash
-# 默认 FTS；--schema 省略时仍记录内嵌 dft schema 元数据
-omp docs init "/srv/dft/markdown" --name dft --mode fts
+# 默认 FTS；索引名和路径仅为通用示例
+omp docs init "/srv/docs/markdown" --name knowledge --mode fts
 
 omp docs list
-omp docs status dft
-omp docs reinit dft
+omp docs status knowledge
+omp docs reinit knowledge
 
-# 显式切换为结构化模式；需要已配置的 task 模型与凭据
-omp docs reinit dft --mode structured --schema dft
+# 结构化模式可使用自定义 JSON schema
+omp docs reinit knowledge --mode structured --schema ./schema.json
 
 # 只删除索引，不删除源 Markdown
-omp docs remove dft --force
+omp docs remove knowledge --force
 ```
 
-支持的动作：`init | reinit | list | status | remove`。`--json` 输出机器可读结果；`init/reinit` 可选 `--schema <dft|JSON路径>` 与 `--mode <fts|structured>`；删除必须显式 `--force`。
+支持的动作：`init | reinit | list | status | remove`。`--json` 输出机器可读结果；`init/reinit` 可选 `--schema <内置预设|JSON路径>` 与 `--mode <fts|structured>`；删除必须显式 `--force`。
 
 #### TUI：`/docs`
 
 `/docs` 打开索引管理 Hub：
 
-- `n`：新建；向导默认 `schema=dft`、`mode=fts`；
+- `n`：新建；向导使用默认 schema 与 `mode=fts`；
 - `r`：全量重建当前索引；
 - `/`：在当前索引搜索并预览章节/实体；
 - `i`：查看状态、计数和冲突；
@@ -176,11 +178,11 @@ status
 
 因此：
 
-- `top_repair SailorV600` 要求同一章节同时包含两个词元；
+- 多词查询要求同一章节同时包含全部词元；
 - 输入中的 `OR` 不会成为布尔操作符；
 - 不支持 regex、模糊匹配或隐式前缀搜索；
 - 同义词应拆成多次查询，不能依赖 embedding 召回；
-- 下划线保留，适合 DFT 信号、命令和配置名。
+- 下划线保留，适合信号、命令和配置名。
 
 #### 排序与返回
 
@@ -212,12 +214,7 @@ FTS 索引也保存 schema ID/hash，但**不执行抽取**，所以实体、断
 
 #### Schema
 
-默认内嵌 `dft@1`，也可传入自定义 JSON schema。DFT preset 包含：
-
-- 实体：command、option、mode、stage、flow、step、tool、version、test case、input/output/artifact、example、constraint、error、group；
-- 身份作用域：global、document、section、parent；
-- 关系：`has_option`、`belongs_to_stage`、`requires`、`conflicts_with`、`consumes`、`produces`、`introduced_in`、`deprecated_in` 等；
-- 证据要求：原文 quote、绝对行范围、confidence；矛盾事实保留为独立记录，不由模型猜测合并。
+实现提供内嵌预设，也可传入自定义 JSON schema。预设覆盖命令、选项、模式、阶段、流程、步骤、工具、版本、测试、输入输出、示例、约束、错误、分组等通用实体；关系可描述依赖、冲突、输入输出、版本引入或弃用等语义。
 
 自定义 schema 定义实体种类、字段类型、必填项、身份规则、谓词源/目标类型与一对一/一对多基数；载入时做严格结构校验并保存规范化 JSON 的 SHA-256。
 
@@ -238,9 +235,9 @@ FTS 索引也保存 schema ID/hash，但**不执行抽取**，所以实体、断
 
 #### 规模影响
 
-当前实现逐章节调用模型，构建并发受 `task.maxConcurrency` 控制且硬上限为 8。按本次 42,235 个章节推算，全库结构化构建至少约 4.2 万次模型请求，失败纠正时更多；任何文档存在抽取/证据错误都会阻止新代际提升。
+当前实现逐章节调用模型，构建并发受 `task.maxConcurrency` 控制且硬上限为 8。结构化构建的模型请求量随章节数线性增长，失败纠正时更多；任何文档存在抽取/证据错误都会阻止新代际提升。
 
-因此，DFT 全库首先使用 FTS。只有真实问题反复需要实体/关系查询时，才应对**经筛选的小型高质量子库**试点 structured，并单独测量成本、时延、抽取准确率和冲突质量。
+因此，大型私有语料首先使用 FTS。只有真实问题反复需要实体/关系查询时，才应对**经筛选的小型高质量子库**试点 structured，并单独测量成本、时延、抽取准确率和冲突质量。
 
 ### 3.6 `wiki` 操作语义
 
@@ -293,14 +290,14 @@ FTS 索引也保存 schema ID/hash，但**不执行抽取**，所以实体、断
 
 单机、单 profile 可依赖 OS 权限隔离。需要团队中央服务、细粒度权限、审计、服务端脱敏或统一更新时，才值得把相同索引能力放到内网服务后通过 MCP 暴露。
 
-## 4. DFT 场景的使用方式
+## 4. 私有研发语料的使用方式
 
 ### 4.1 推荐查询流程
 
 1. `wiki status`：确认索引 `ready`、mode 和更新时间。
-2. 先搜稀有精确词：完整命令、信号、报错 token、版本，例如 `dft_rst_n`、`SailorV600`。
-3. 宽泛主题加入高信息量限定词，例如分别查询 `MBIST top_repair`、`MBIST SailorV600`；不要把同义词用 `OR` 写在一次查询中。
-4. 读取命中章节，不只依赖 320 字符搜索摘要。
+2. 先搜稀有精确词：完整命令、信号、报错 token、版本等。
+3. 宽泛主题加入高信息量限定词；不要把同义词用 `OR` 写在一次查询中。
+4. 读取命中章节，不只依赖搜索摘要。
 5. 结论引用 `index + relative path + line range + excerpt`；版本冲突必须并列证据。
 6. 文档变更后运行 `omp docs reinit <name>`；重建失败时继续使用旧代际并修复错误。
 7. 需要所有出现位置、正则、否定条件或确认工作区最新文本时改用 grep。
@@ -327,71 +324,34 @@ FTS 索引也保存 schema ID/hash，但**不执行抽取**，所以实体、断
 | 大量自然语言改写导致 FTS 漏召回 | 外部向量或混合检索 | 先用真实问题证明语义缺口，再增加系统复杂度 |
 | 中央语料、多客户端、ACL、审计、统一更新 | 内网知识服务 + MCP | 服务端集中治理；MCP 只负责接入 |
 | 文档概念必须定位到源码定义/引用 | LSP / Tree-sitter / ctags | 这是代码索引，不是文档索引 |
-| Agent 经常忘记查文档 | 短 Rule 或 Skill | 只补触发策略；不复制 100 MB 语料 |
+| Agent 经常忘记查文档 | 短 Rule 或 Skill | 只补触发策略；不复制大型语料 |
 
-## 5. 内置 FTS 实测基线
+## 5. FTS 验证原则
 
-本节保留原报告的 2026-08-30 测量值；本次重写未重新计时。基线只代表该语料、当次构建和记录的 WSL 本地文件系统环境，不是跨机器性能承诺。
+原报告曾包含来自私有语料的精确规模、查询词、构建耗时、数据库大小、查询时延、精确率和召回率。这些数据与内部语料存在关联性，因此本文不再保留逐项数值或原始查询词。
 
-### 5.1 语料与构建
+公开文档只保留以下可复现实验方法：
 
-| 指标 | 实测值 |
-|---|---:|
-| Markdown 文件 | 341 |
-| 原始字节数 | 79,548,098 B |
-| 索引章节 | 42,235 |
-| 首次 FTS 建索引 | 8.64 s |
-| 当次 SQLite 数据库 | 128,548,864 B |
-
-FTS 查询只访问本地 SQLite 索引，不再读取原 Markdown。数据库体积是当次生成文件值；不是长期页复用、重建或多索引场景的上限。
-
-### 5.2 查询时延
-
-原文件和 SQLite 均位于本地 WSL 文件系统。grep 每次扫描原 Markdown；下表为热查询中位数，因此没有把网络存储延迟算作 FTS 优势。
-
-| 查询 | grep | docs FTS | 加速 |
-|---|---:|---:|---:|
-| `dft_rst_n` | 27.65 ms | 2.20 ms | 12.6× |
-| `SailorV600` | 19.69 ms | 0.39 ms | 50.5× |
-| `IJTAG` | 29.00 ms | 4.22 ms | 6.9× |
-| `OCC` | 26.98 ms | 5.60 ms | 4.8× |
-| `MBIST` | 30.44 ms | 5.79 ms | 5.3× |
-
-### 5.3 字面命中精确率与文件召回率
-
-Ground truth：文件是否包含不区分大小写的原文字面量。
-
-- **Top-50 精确率：** 返回的前 50 个章节所涉及文件中，实际包含该字面量的比例。
-- **文件召回率：** Top-50 章节覆盖的相关文件数 ÷ 全部含该字面量的文件数。
-
-| 查询 | Top-50 精确率 | 文件召回率 |
-|---|---:|---:|
-| `dft_rst_n` | 100% | 100% |
-| `SailorV600` | 100% | 100% |
-| `IJTAG` | 100% | 14.1% |
-| `OCC` | 100% | 6.9% |
-| `MBIST` | 100% | 9.4% |
-
-### 5.4 数据解释
-
-1. 稀有词 `dft_rst_n`、`SailorV600` 在本基准中同时达到 100% 精确率与文件召回率，并比本地 grep 快 12.6～50.5 倍。
-2. 高频宽泛词仍有 100% 字面精确率，但文件召回率只有 6.9%～14.1%。原因是 Top-50 按章节截断，且同一文件的多个章节可以重复占位；不是相关文件不存在于索引。
-3. FTS 适合“找最相关证据”的目标式查询，不适合把 Top-K 当成全量枚举。宽泛词应缩小范围；必须穷举时使用 grep。
-4. 该精确率只证明返回文件含字面量，不证明章节回答了问题，更不等于 Agent 最终答案准确率。Agent 仍需 `read` 原始章节并给出引用。
-5. 基线没有测 structured 模式、语义问题、冷查询、并发/p95、重建峰值磁盘、模型端到端答案质量或网络文件系统。上述维度不能从现有数据外推。
+1. **构建指标**：记录 Markdown 文件数、总字节数、章节数、首次建索引耗时和数据库大小，但仅在本地测试报告中保存。
+2. **查询时延**：同一文件系统、同一热缓存条件下比较 grep 与 FTS，并区分冷查询、热查询和网络文件系统。
+3. **字面精确率**：以“原文件是否实际包含查询字面量”为 ground truth，检查 Top-K 命中。
+4. **文件召回率**：统计 Top-K 章节覆盖的相关文件数与全部相关文件数之比，避免把章节级 Top-K 当作完整文件枚举。
+5. **结果解释**：精确字面词通常更适合 FTS；高频宽泛词会受 Top-K 和同文件多章节占位影响；需要穷举时使用 grep。
+6. **边界**：字面命中不等于最终答案正确；Agent 仍需 `read` 原始章节并引用证据。structured、语义问题、并发、p95、峰值磁盘、模型端到端质量等需要独立评测。
 
 ## 6. 落地建议
 
 1. **全库先建 FTS。** 使用稳定索引名；把 `reinit` 纳入语料发布流程，而不是依赖工程师记忆。
-2. **建立真实问题集。** 至少覆盖精确命令、版本、概念、报错、宽泛主题、OCR 噪声和文档冲突；记录 Top-K 章节与最终引用是否正确。
+2. **建立真实问题集。** 至少覆盖精确命令、版本、概念、报错、宽泛主题、OCR 噪声和文档冲突；测试结果保留在受控环境，不写入公开仓库。
 3. **保留双路径。** `wiki` 负责目标式证据检索；grep 负责正则、全量与最新工作区检查。
-4. **structured 只做小库试点。** 先测每种实体/关系的抽取准确率、证据有效率、冲突误报、模型成本和全量成功率；没有收益数据不扩到 42,235 节。
+4. **structured 只做小库试点。** 先测每种实体/关系的抽取准确率、证据有效率、冲突误报、模型成本和全量成功率；没有收益数据不扩到全库。
 5. **按缺口扩展。** 语义漏召回才加向量/混合检索；中央治理才加 MCP；文档到代码定位才加 LSP/Tree-sitter；触发不稳定才加短 Rule/Skill。
-6. **先确定模型数据边界。** FTS 只在本地建库不代表资料不会进入模型；`wiki read` 与 structured extraction 都必须符合内网数据策略。
+6. **先确定模型数据边界。** FTS 只在本地建库不代表资料不会进入模型；`wiki read` 与 structured extraction 都必须符合内部数据策略。
+7. **公开文档必须匿名化。** 不提交可关联真实语料的项目名、产品名、信号名、内部路径、文件清单、样本查询、精确规模或 benchmark 原始数据。
 
 最终判断：
 
-> 对当前 DFT Markdown 语料，OMP 内置 FTS 已经是最小、可追溯、可实测的默认方案；结构化抽取和外部知识平台应由真实缺口触发，而不是先于基线建设。
+> 对大型私有 Markdown 语料，OMP 内置 FTS 是低复杂度、可追溯的默认方案；结构化抽取和外部知识平台应由真实缺口触发。公开仓库只记录通用方法和实现，不记录能够关联或反推私有语料的原始标识与测量数据。
 
 ## 7. 实现依据与延伸阅读
 
@@ -401,7 +361,7 @@ Ground truth：文件是否包含不区分大小写的原文字面量。
 - `packages/coding-agent/src/docs/storage.ts`：SQLite schema、FTS5、WAL、`0600`、代际提升。
 - `packages/coding-agent/src/docs/service.ts`：FTS query/BM25、全量构建、结构化入库、查询与冲突检测。
 - `packages/coding-agent/src/docs/extractor.ts`：模型抽取、一次纠正、schema/evidence 校验。
-- `packages/coding-agent/src/docs/schema.ts`、`schemas/dft.ts`：自定义 schema 与内嵌 `dft@1`。
+- `packages/coding-agent/src/docs/schema.ts`：自定义 schema 与内嵌预设的加载逻辑。
 - `packages/coding-agent/src/tools/wiki.ts`、`prompts/tools/wiki.md`：Agent 工具参数、模式限制、证据输出与使用约束。
 - `packages/coding-agent/src/modes/components/docs-hub.ts`：TUI `/docs` 管理界面。
 - `packages/coding-agent/test/docs-index.test.ts`、`wiki-tool.test.ts`、`wiki-tool-availability.test.ts`：代际、FTS、中英文检索、证据、模式与工具可用性契约。
