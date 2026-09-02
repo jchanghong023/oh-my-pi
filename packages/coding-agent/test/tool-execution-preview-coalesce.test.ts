@@ -121,7 +121,6 @@ describe("streaming edit preview coalescing", () => {
 		const deferreds: Array<PromiseWithResolvers<PerFileDiffPreview[] | null>> = [];
 		const firstStarted = Promise.withResolvers<void>();
 		const secondStarted = Promise.withResolvers<void>();
-		let component: ToolExecutionComponent | undefined;
 		let stopped = false;
 		let settled = false;
 		let previewSettled: Promise<void> | undefined;
@@ -136,7 +135,7 @@ describe("streaming edit preview coalescing", () => {
 
 		const ui = { requestRender() {} } as unknown as TUI;
 		const tool = { mode: "replace" } as unknown as AgentTool;
-		component = new ToolExecutionComponent(
+		const component = new ToolExecutionComponent(
 			"edit",
 			{ path: file, old_string: "const a = 1;", new_string: "a" },
 			{},
@@ -187,7 +186,6 @@ describe("streaming edit preview coalescing", () => {
 		let updates = 0;
 		let computes = 0;
 		let stopped = false;
-		let component: ToolExecutionComponent | undefined;
 		const updatesDone = Promise.withResolvers<void>();
 		const beaconResult = Promise.withResolvers<{ updates: number; computes: number }>();
 		// This is a task boundary, not a duration-based wait; fake timers cannot
@@ -218,7 +216,7 @@ describe("streaming edit preview coalescing", () => {
 
 		const ui = { requestRender() {} } as unknown as TUI;
 		const tool = { mode: "replace" } as unknown as AgentTool;
-		component = new ToolExecutionComponent(
+		const component = new ToolExecutionComponent(
 			"edit",
 			{ path: file, old_string: "const a = 1;", new_string: "0" },
 			{},

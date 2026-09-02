@@ -73,12 +73,12 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 		mode.editor.setText("draft stays here");
 		const firstSwitch = Promise.withResolvers<void>();
 		const secondSwitch = Promise.withResolvers<void>();
-		let switchCount = 0;
+		const switches = [firstSwitch, secondSwitch];
 		const previousOnEntryAppended = session.sessionManager.onEntryAppended;
 		session.sessionManager.onEntryAppended = entry => {
 			previousOnEntryAppended?.(entry);
 			if (entry.type !== "primary_agent_change") return;
-			(++switchCount === 1 ? firstSwitch : secondSwitch).resolve();
+			switches.shift()?.resolve();
 		};
 		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
 		await firstSwitch.promise;

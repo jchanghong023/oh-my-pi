@@ -1,24 +1,93 @@
-import type { SlashCommandSpec } from "../slash-commands/types";
-import { defineJchPromptCommand } from "./define";
+import type { SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "../slash-commands/types";
+
+interface GitStep {
+	args: string[];
+}
+
+interface GitSequenceResult {
+	ok: boolean;
+	output: string;
+}
+
+function formatGitOutput(stdout: string, stderr: string): string {
+	return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+async function runGit(cwd: string, args: readonly string[]) {
+	const process = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	const [exitCode, stdout, stderr] = await Promise.all([
+		process.exited,
+		new Response(process.stdout).text(),
+		new Response(process.stderr).text(),
+	]);
+	return { exitCode, stdout, stderr };
+}
+
+async function runGitSequence(cwd: string, steps: readonly GitStep[]): Promise<GitSequenceResult> {
+	const output: string[] = [];
+	for (const step of steps) {
+		const result = await runGit(cwd, step.args);
+		const text = formatGitOutput(result.stdout, result.stderr);
+		if (text) output.push(text);
+		if (result.exitCode !== 0) {
+			const command = `git ${step.args.join(" ")}`;
+			output.push(`${command} failed with exit code ${result.exitCode}`);
+			return { ok: false, output: output.join("\n") };
+		}
+	}
+	return { ok: true, output: output.join("\n") || "Done." };
+}
+
+async function handleGitSequence(runtime: SlashCommandRuntime, steps: readonly GitStep[]): Promise<SlashCommandResult> {
+	try {
+		const result = await runGitSequence(runtime.cwd, steps);
+		await runtime.output(result.output);
+	} catch (error) {
+		await runtime.output(formatError(error));
+	}
+	return { consumed: true };
+}
+
+export function handleQuickGitSummary(runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	return handleGitSequence(runtime, [
+		{ args: ["status", "--short", "--branch"] },
+		{ args: ["log", "--oneline", "--decorate", "-10"] },
+	]);
+}
 
 export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
-	defineJchPromptCommand({
+	{
 		name: "jchgs",
-		description: "JCH Git：刷新远端引用并查看当前 Git 状态",
-		inlineHint: "[关注点，如 remote、log]",
-		prompt: `查看当前目录对应 Git 仓库的状态。不修改工作区和分支，但 MUST 先运行 git fetch --all 更新远端引用；不 pull、reset、clean、stash、commit、push 或切换分支。检查当前分支、upstream、remote、conflicts、staged、unstaged、untracked，以及相对 upstream 的 ahead/behind、未推送提交和远端新增提交。报告当前状态、异常和最小安全下一步；参数只缩小关注范围。`,
-	}),
-	defineJchPromptCommand({
+		description: "JCH Git：刷新远端引用并显示简短分支状态",
+		handle: (_command, runtime) =>
+			handleGitSequence(runtime, [{ args: ["fetch", "--all"] }, { args: ["status", "--short", "--branch"] }]),
+	},
+	{
 		name: "jchgitpull",
-		description: "JCH Git：按既有策略拉取当前分支",
-		inlineHint: "[关注点或补充要求]",
-		prompt: `更新当前 Git 分支。固定流程：先运行 git fetch --all，再对当前分支执行普通 git pull；使用仓库/Git 已有 pull 配置，NEVER 自行选择 merge 或 rebase 策略。不 reset、clean、stash 或丢弃本地修改；pull 失败时直接报告错误和阻塞原因。完成后验证分支、upstream 和工作区状态。参数只作补充，不得改变“当前分支 fetch all + pull”的核心语义。`,
-	}),
-	defineJchPromptCommand({
+		description: "JCH Git：直接拉取当前分支",
+		handle: (_command, runtime) => handleGitSequence(runtime, [{ args: ["pull"] }]),
+	},
+	{
 		name: "jchgitdiscardall",
-		description: "JCH Git：丢弃全部本地状态并重置到 upstream",
-		inlineHint: "[可选补充要求]",
-		tuiOnly: true,
-		prompt: `把当前 Git 分支完全重置为远端 upstream 的当前状态并丢弃全部本地内容。本命令本身即授权删除 staged、unstaged tracked、untracked、ignored 内容及当前分支全部 local-only commits。先确认当前分支和 upstream 均明确存在；运行 git fetch --all 后重新确认 upstream remote branch 仍存在，已删除或不明确时停止，NEVER 使用陈旧 remote-tracking ref 猜测。随后 hard reset 到最新 upstream tip，并彻底 clean untracked 与 ignored 内容。不删除其他本地分支，不修改远端，不 force-push。最后验证 HEAD 与 upstream 完全一致、工作区干净且无残留 untracked/ignored 内容。`,
-	}),
+		description: "JCH Git：刷新、重置到 upstream 并清理全部本地内容",
+		handleTui: async (_command, runtime) => {
+			runtime.ctx.editor.setText("");
+			try {
+				const result = await runGitSequence(runtime.ctx.sessionManager.getCwd(), [
+					{ args: ["fetch", "--all", "--prune"] },
+					{ args: ["reset", "--hard", "@{upstream}"] },
+					{ args: ["clean", "-xdf"] },
+				]);
+				if (result.ok) runtime.ctx.showStatus(result.output);
+				else runtime.ctx.showError(result.output);
+			} catch (error) {
+				runtime.ctx.showError(formatError(error));
+			}
+			return { consumed: true };
+		},
+	},
 ];

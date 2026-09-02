@@ -6,7 +6,7 @@ import {
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
 	lookupBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"];
 
@@ -197,8 +197,12 @@ describe("JCH workflow slash commands", () => {
 		expect(prompt).toContain("CI");
 	});
 
-	it("recovers relevant untracked source without imposing a commit minimum", async () => {
-		const prompt = await expandJchCommand("jchcatchup", "");
+	it("keeps deep catchup behind an explicit full subcommand", async () => {
+		expect(lookupBuiltinSlashCommand("jchcatchup")).toMatchObject({
+			description: "JCH：快速摘要工作现场；full 深度恢复",
+			subcommands: [{ name: "full", description: "通过代理深度恢复工作现场", usage: "[路径、提交范围或关注点]" }],
+		});
+		const prompt = await expandJchCommand("jchcatchup", "full");
 
 		expect(prompt).toContain("读取与当前工作相关的 untracked 文本源文件");
 		expect(prompt).toContain("默认不超过 20 个");
@@ -215,35 +219,24 @@ describe("JCH workflow slash commands", () => {
 });
 
 describe("JCH git slash commands", () => {
-	it("advertises pull arguments as supplemental rather than a remote target", async () => {
-		const command = lookupBuiltinSlashCommand("jchgitpull");
-		expect(command).toMatchObject({
-			description: "JCH Git：按既有策略拉取当前分支",
-			inlineHint: "[关注点或补充要求]",
+	it("registers direct git handlers without prompt arguments", () => {
+		expect(lookupBuiltinSlashCommand("jchgs")).toMatchObject({
+			description: "JCH Git：刷新远端引用并显示简短分支状态",
+			handle: expect.any(Function),
 		});
-
-		const prompt = await expandJchCommand("jchgitpull", "origin main");
-		expect(prompt).toContain("不得改变“当前分支 fetch all + pull”的核心语义");
-		expect(prompt).toContain("NEVER 改变基础任务的核心动作、读写性质或安全边界");
-		expect(prompt).toContain("origin main");
+		expect(lookupBuiltinSlashCommand("jchgitpull")).toMatchObject({
+			description: "JCH Git：直接拉取当前分支",
+			handle: expect.any(Function),
+		});
 	});
 
-	it("keeps destructive discard-all interactive-only", async () => {
+	it("keeps destructive discard-all interactive-only", () => {
 		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
-		if (!command?.handleTui) throw new Error("Expected /jchgitdiscardall to be registered for the TUI");
-
-		expect(command.handle).toBeUndefined();
+		expect(command).toMatchObject({
+			description: "JCH Git：刷新、重置到 upstream 并清理全部本地内容",
+			handleTui: expect.any(Function),
+		});
+		expect(command?.handle).toBeUndefined();
 		expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === "jchgitdiscardall")).toBe(false);
-
-		const args = "执行前报告目标 upstream";
-		const result = await command.handleTui(
-			{ name: command.name, args, text: `/${command.name} ${args}` },
-			{} as TuiSlashCommandRuntime,
-		);
-		if (!result || !("prompt" in result)) throw new Error("Expected /jchgitdiscardall to expand to a prompt");
-		expect(result.prompt).toContain("本命令本身即授权删除");
-		expect(result.prompt).toContain("NEVER 使用陈旧 remote-tracking ref 猜测");
-		expect(result.prompt).toContain("NEVER 改变基础任务的核心动作、读写性质或安全边界");
-		expect(result.prompt).toContain(args);
 	});
 });

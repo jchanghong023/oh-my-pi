@@ -45,10 +45,10 @@
   - `/jchverify`：显式选择未提交修改、指定 commit 或路径，只读执行直接行为验证、相关既有测试和项目强制检查，报告是否可交付而不修复。
   - `/jchci`：只读检查当前分支及可确认关联 PR 的有效 GitHub Actions runs、HEAD 关系和失败证据，不重跑、触发、取消、提交或推送。
   - `/jchcifix`：定位当前分支最新有效 CI 失败，最小修复后仅提交并普通推送相关改动；手动 dispatch 必须指定已推送 upstream branch，验证对应 HEAD，最多 3 轮。
-  - `/jchcatchup`：更新远端引用后梳理分支、upstream、工作区 diff、相关 untracked 源文件及提交差异，读取足以解释现场且默认不超过 20 个相关 commits。
-  - `/jchgs`：更新远端引用后报告当前分支、upstream、remote、工作区、ahead/behind、未推送与远端新增提交，以及最小安全下一步。
-  - `/jchgitpull`：先 fetch all，再按既有 pull 配置更新当前分支；参数仅作补充，不改变当前分支目标或 merge/rebase 策略。
-  - `/jchgitdiscardall`：交互式 TUI 专用，明确授权丢弃当前分支 staged、unstaged、untracked、ignored 与 local-only 内容；fetch 后复核 upstream 存在再 reset/clean，不修改远端。
+  - `/jchcatchup`：默认不调用代理，直接显示本地 `git status --short --branch` 与最近 10 个提交；`full` 更新远端引用后深度梳理 diff、相关 untracked 源文件与提交差异。
+  - `/jchgs`：不调用代理，直接依次执行 `git fetch --all` 与 `git status --short --branch`。
+  - `/jchgitpull`：不调用代理，直接执行 `git pull`，沿用当前分支既有 upstream 与 pull 配置。
+  - `/jchgitdiscardall`：交互式 TUI 专用；不调用代理，直接依次执行 `git fetch --all --prune`、`git reset --hard @{upstream}` 与 `git clean -xdf`，远端 upstream 已删除时在 reset 失败后停止。
 - **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 写入当前 profile 的 `models.yml`。
 - **移动端 TUI**：新增 `tui.mobile` 紧凑布局预设，默认关闭。
 
@@ -74,5 +74,6 @@
 - **Todo 使用边界**：仅当请求包含至少 3 个独立的用户可见结果时创建列表；常规事前检查、执行与验证合计为一个结果。
 - **源码 UI 启动**：新增 `bun run omp2`，仅从 `$HOME/.omp/natives/<version>` 加载匹配版本的原生包，以当前仓库 TypeScript 源码启动交互式界面且不触发本地原生构建；`AGENTS.md` 要求仅测试交互式 UI 时使用该命令。
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
+- **TypeScript 测试静态检查**：预览合并测试将只初始化一次的组件改为 `const`，主代理切换测试用 resolver 队列替代未使用计数器，保持原断言行为并消除 Oxlint 报告。
 - **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
 - **Nix Bun 依赖锁**：为 Command Code 的 `turbo-stream` 同步再生 `nix/bun.nix`；OMP Nix 显式构建 `bun-lock` check，并规范 native/WASM 生成器的 EOF 换行差异，防止依赖表达式漂移。

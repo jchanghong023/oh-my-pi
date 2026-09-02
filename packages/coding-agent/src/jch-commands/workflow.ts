@@ -1,12 +1,16 @@
 import { parseSubcommand, usage } from "../slash-commands/helpers/parse";
 import type { SlashCommandSpec } from "../slash-commands/types";
 import { defineJchPromptCommand } from "./define";
+import { handleQuickGitSummary } from "./git";
 
 const JCH_FUNCTIONAL_REVIEW_FIX_USAGE =
 	"用法：/jchfuncreviewfix uncommitted | /jchfuncreviewfix commit <ref> | /jchfuncreviewfix repo";
 const JCH_FUNCTIONAL_REVIEW_USAGE =
 	"用法：/jchfuncreview uncommitted | /jchfuncreview commit <ref> | /jchfuncreview path <path>";
 const JCH_VERIFY_USAGE = "用法：/jchverify uncommitted | /jchverify commit <ref> | /jchverify path <path>";
+const JCH_CATCHUP_USAGE = "用法：/jchcatchup | /jchcatchup full [路径、提交范围或关注点]";
+
+const JCH_CATCHUP_FULL_PROMPT = `恢复当前代码工作现场。不修改工作区，先运行 git fetch --all 更新远端引用；不 pull、push、reset、clean、stash、commit、切换分支或自动继续实现。识别仓库、当前分支和 upstream；检查 conflicts、staged、unstaged、untracked，阅读 staged/unstaged diff，并读取与当前工作相关的 untracked 文本源文件，跳过生成物、依赖、二进制和大文件。确认相对最新 upstream 的 ahead/behind、local-only 和 remote-only commits。存在本地修改时，按涉及路径读取足以解释修改的相关 commits，默认不超过 20 个；工作区干净时，根据分支差异和最近提交恢复上下文。结合真实代码总结“已完成 / 当前状态 / 未完成与异常 / 建议下一步”。参数只缩小路径、提交范围或关注点。`;
 
 function resolveJchScope(args: string, mode: "review-fix" | "read-only"): string | undefined {
 	const { verb, rest } = parseSubcommand(args);
@@ -158,10 +162,17 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 
 验证 run 必须对应刚推送的代码：push/workflow_dispatch 的 head SHA 等于 pushed HEAD；pull_request run 可使用 merge SHA，但 PR head SHA必须等于 pushed HEAD。失败则读取新日志继续最小修复、提交、push 和验证，总计最多 3 轮；第 3 轮仍失败时停止并报告证据和尝试。不要修改其他仓库、删除或回滚无关修改。`,
 	}),
-	defineJchPromptCommand({
+	{
 		name: "jchcatchup",
-		description: "JCH：从 Git 与代码恢复工作现场（不改工作区）",
-		inlineHint: "[路径、提交范围或关注点]",
-		prompt: `恢复当前代码工作现场。不修改工作区，先运行 git fetch --all 更新远端引用；不 pull、push、reset、clean、stash、commit、切换分支或自动继续实现。识别仓库、当前分支和 upstream；检查 conflicts、staged、unstaged、untracked，阅读 staged/unstaged diff，并读取与当前工作相关的 untracked 文本源文件，跳过生成物、依赖、二进制和大文件。确认相对最新 upstream 的 ahead/behind、local-only 和 remote-only commits。存在本地修改时，按涉及路径读取足以解释修改的相关 commits，默认不超过 20 个；工作区干净时，根据分支差异和最近提交恢复上下文。结合真实代码总结“已完成 / 当前状态 / 未完成与异常 / 建议下一步”。参数只缩小路径、提交范围或关注点。`,
-	}),
+		description: "JCH：快速摘要工作现场；full 深度恢复",
+		allowArgs: true,
+		subcommands: [{ name: "full", description: "通过代理深度恢复工作现场", usage: "[路径、提交范围或关注点]" }],
+		async handle(command, runtime) {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (!verb) return handleQuickGitSummary(runtime);
+			if (verb !== "full") return usage(JCH_CATCHUP_USAGE, runtime);
+			const focus = rest ? `\n\nFull 模式关注点如下；只缩小路径、提交范围或关注点，不改变只读性质：\n${rest}` : "";
+			return { prompt: `${JCH_CATCHUP_FULL_PROMPT}${focus}` };
+		},
+	},
 ];
