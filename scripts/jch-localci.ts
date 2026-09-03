@@ -315,9 +315,12 @@ function formatElapsed(milliseconds: number): string {
 async function runCommand(command: Command): Promise<number> {
 	console.log(`\n==> ${command.label}`);
 	console.log(`$ ${commandText(command)}`);
+	// `bun test` never reads stdin; an inherited pipe whose write end stays open
+	// (supervisor/pty-less contexts) would keep tests that wait on stdin EOF —
+	// e.g. main-startup-watchdog's runRootCommand — hung until their timeout.
 	const process = Bun.spawn([...command.argv], {
 		cwd: path.join(repoRoot, command.cwd),
-		stdin: "inherit",
+		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
 	});

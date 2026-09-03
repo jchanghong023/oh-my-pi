@@ -72,6 +72,7 @@
 
 - **本地快速检查**：新增 `bun run fastcheck`，对本地修改的 TypeScript 文件运行 Oxlint，并只对根 Oxfmt 输入模式覆盖的文件检查格式；命令按路径长度分批以兼容 Windows，未命中格式范围时明确跳过。
 - **独立 localci**：新增 `bun scripts/jch-localci.ts [full]`，仅 Linux-x64 运行核心 TS 白名单、核心类型检查、选定 Rust crate 与轻量 CLI smoke；默认不构建 native，`full` 才构建，不改上游 CI 聚合器或 workflow；白名单随 18.1.6 移除已删的 hashline TS 测试与 edit-diff，Rust 白名单加 `pi-edit`。
+- **localci stdin 隔离**：测试组命令以 `stdin: "ignore"` 运行；上游 `main-startup-watchdog` 测试的 `runRootCommand` 会等待 stdin EOF，pty-less 监督上下文（如 hub）继承打开的 stdin pipe 会使其确定性 5000ms 超时，`/dev/null` 语义下正常通过。
 - **Git 测试环境兼容**：索引快照失败回归测试改用确定性的目录替换故障，避免 root 用户绕过 Unix 权限位导致全量测试失败。
 - **Todo 使用边界**：仅当请求包含至少 3 个独立的用户可见结果时创建列表；常规事前检查、执行与验证合计为一个结果。
 - **源码 UI 启动**：删除 fork 自加的 `bun run omp2` 启动脚本（含 `scripts/omp2.ts`），测试交互式 UI 直接用上游自带 `bun run dev`（`bun --cwd=packages/coding-agent src/cli.ts`），native 由默认 loader 解析包内已构建 addon。
