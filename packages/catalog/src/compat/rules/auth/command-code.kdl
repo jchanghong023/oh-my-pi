@@ -1,0 +1,8 @@
+auth "command-code" {
+	name "Command Code"
+	login "api-key" {
+		auth-url "https://commandcode.ai/studio/api-keys"
+		instructions "Create or copy a Provider API key from Command Code Studio"
+		prompt "Paste your Command Code API key" placeholder="sk-..."
+	}
+}

@@ -11,6 +11,7 @@ import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } fro
 import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
 import {
+	abliterationModelManagerOptions,
 	aiandModelManagerOptions,
 	aimlApiModelManagerOptions,
 	alibabaCodingPlanModelManagerOptions,
@@ -72,6 +73,14 @@ import {
 } from "./special";
 
 export const CATALOG_PROVIDERS = [
+	{
+		id: "abliteration",
+		defaultModel: "abliterated-model",
+		envVars: ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => abliterationModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Abliteration" },
+	},
 	{
 		id: "aiand",
 		defaultModel: "moonshotai/kimi-k2.7-code",

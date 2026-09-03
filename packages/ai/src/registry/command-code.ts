@@ -1,23 +1,16 @@
 import { resolveCommandCodeBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/command-code";
-import { createApiKeyLogin } from "./api-key-login";
-import type { OAuthLoginCallbacks } from "./oauth/types";
-import type { ProviderDefinition } from "./types";
+import type { ProviderTransport } from "./build";
 
-export const loginCommandCode = createApiKeyLogin({
-	providerLabel: "Command Code",
-	authUrl: "https://commandcode.ai/studio/api-keys",
-	instructions: "Create or copy a Provider API key from Command Code Studio",
-	promptMessage: "Paste your Command Code API key",
-	placeholder: "sk-...",
-	validation: null,
-});
-
-export const commandCodeProvider = {
-	id: "command-code",
-	name: "Command Code",
+/**
+ * Command Code request shaping: rewrite the model base URL for the provider's
+ * unified `/provider` endpoint. Anthropic wire models talk to the bare path,
+ * every other model to `/provider/v1` (see `resolveCommandCodeBaseUrl`).
+ * Login is declarative: `rules/auth/command-code.kdl` (api-key paste, no
+ * endpoint validation), matching the legacy flow's trim-only storage.
+ */
+export const commandCodeTransport: ProviderTransport = {
 	prepareRequest: (model, options) => ({
 		model: { ...model, baseUrl: resolveCommandCodeBaseUrl(model.api, model.baseUrl) },
 		options,
 	}),
-	login: (cb: OAuthLoginCallbacks) => loginCommandCode(cb),
-} as const satisfies ProviderDefinition;
+};
