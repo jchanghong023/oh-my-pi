@@ -18,7 +18,11 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "jchanghong023/oh-my-pi"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
-$BinaryName = "omp-windows-x64.exe"
+$NativeArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($NativeArchitecture -notin @("x64", "arm64")) {
+    throw "Unsupported Windows architecture: $NativeArchitecture"
+}
+$BinaryName = "omp-windows-$NativeArchitecture.exe"
 $MinimumBunVersion = "1.3.14"
 
 function Test-BunInstalled {
