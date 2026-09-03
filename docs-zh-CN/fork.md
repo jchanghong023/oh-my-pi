@@ -5,14 +5,14 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-- **版本**：`v18.1.4`
-- **Upstream commit**：`39cf639c7bb6b5014a1cc8ea8175558cccb23905`
-- **同步日期**：2026-09-02
-- **Integration**：`736535cadc`
+- **版本**：`v18.1.6`
+- **Upstream commit**：`f7764ca2d0f6198f28f9c538232cc73d6151e584`
+- **同步日期**：2026-09-03
+- **Integration**：`cb639b6cf8`
 
 ## 上游同步记录
 
-- 2026-09-02：合入 `can1357/oh-my-pi@main` 的 `39cf639c7bb6`（package `18.1.4`，integration `736535cadc`）。
+- 2026-09-03：合入 `can1357/oh-my-pi@main` 的 `f7764ca2d0f6`（package `18.1.6`，integration `cb639b6cf8`）。
 
 ## Fork 改动
 
@@ -32,7 +32,7 @@
 
 - **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema；`/docs` 管理索引，`wiki` 作为 essential 只读内置工具默认提供给非受限代理，受限会话保持显式白名单；无专用文档子代理、`/doc` 或自然语言路由；默认仅建 FTS 且工具层拒绝结构化操作，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
 - **索引回归修复**：Markdown 围栏严格按字符、长度与尾随空白闭合，ATX 标题仅删除空格分隔的关闭井号；索引可见性改用 `state` 并拒绝 `__building__` 保留前缀；构建失败或取消时先取消并等待全部 worker，再删除临时代际。
-- **Command Code**：新增 `command-code` provider、API key 登录、模型发现与缓存身份归一化；模型协议路由使用集中式 KDL taxonomy；登录只 trim/store、不绑定官方校验端点，实际请求使用配置的 provider baseUrl；env metadata 优先 `COMMAND_CODE_API_KEY`，回退 legacy `COMMANDCODE_API_KEY`。
+- **Command Code**：fork 独有 `command-code` provider 迁入上游 KDL 声明架构——`rules/auth/command-code.kdl`（api-key 粘贴登录，只 trim/store、不绑定官方校验端点）+ registry `TRANSPORTS` transport（实际请求改写为配置的 provider baseUrl）；模型发现、双协议路由（anthropic-messages/openai-completions）与缓存身份归一化在 catalog provider-models，env metadata 优先 `COMMAND_CODE_API_KEY`、回退 legacy `COMMANDCODE_API_KEY`。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 中 catalog bundled 且 input/output 价格都为零的模型；缺失 cost 的 bundled/discovered 行直接跳过，gateway 新 ID 按“价格未知”隐藏，主列表与 locked preview 共用过滤。
 - **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
 - **子代理满载并发**：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
