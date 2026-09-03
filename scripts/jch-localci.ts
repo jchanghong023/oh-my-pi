@@ -21,19 +21,9 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 
 const CORE_TYPECHECK_PACKAGES = ["agent", "ai", "tui", "natives", "coding-agent"] as const;
 
-const CORE_RUST_CRATES = ["pi-natives", "pi-shell", "pi-ast", "pi-iso", "pi-vcs", "pi-walker"] as const;
+const CORE_RUST_CRATES = ["pi-natives", "pi-shell", "pi-edit", "pi-ast", "pi-iso", "pi-vcs", "pi-walker"] as const;
 
 const CORE_TEST_GROUPS: readonly TestGroup[] = [
-	{
-		label: "core/hashline",
-		cwd: "packages/hashline",
-		files: [
-			"test/boundary-repair.test.ts",
-			"test/core-contracts.test.ts",
-			"test/file-ops.test.ts",
-			"test/patcher.test.ts",
-		],
-	},
 	{
 		label: "core/wire",
 		cwd: "packages/wire",
@@ -164,7 +154,6 @@ const CODING_AGENT_TEST_GROUPS: readonly TestGroup[] = [
 			"test/bash-executor.test.ts",
 			"test/bash-failure-result.test.ts",
 			"test/edit-blackbox.test.ts",
-			"test/edit-diff.test.ts",
 			"test/edit-mode.test.ts",
 			"test/read-multi-range.test.ts",
 			"test/read-single-pass.test.ts",
