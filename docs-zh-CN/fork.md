@@ -5,14 +5,14 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-- **版本**：`v18.1.7`
-- **Upstream commit**：`c4da0d08e8275659f3e09cf381c7df7018a19025`
+- **版本**：`v18.1.8`
+- **Upstream commit**：`596f2da7101178214aa27a753529d15e6b7ad91d`
 - **同步日期**：2026-09-04
-- **Integration**：`221d1782a1`
+- **Integration**：`cba1ad3b3a`
 
 ## 上游同步记录
 
-- 2026-09-04：合入 `can1357/oh-my-pi@main` 的 `c4da0d08e827`（package `18.1.7`，integration `221d1782a1`）。
+- 2026-09-04：合入 `can1357/oh-my-pi@main` 的 `596f2da710`（package `18.1.8`，integration `cba1ad3b3a`）。
 
 ## Fork 改动
 
