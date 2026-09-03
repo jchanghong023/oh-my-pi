@@ -74,7 +74,7 @@
 - **独立 localci**：新增 `bun scripts/jch-localci.ts [full]`，仅 Linux-x64 运行核心 TS 白名单、核心类型检查、选定 Rust crate 与轻量 CLI smoke；默认不构建 native，`full` 才构建，不改上游 CI 聚合器或 workflow；白名单随 18.1.6 移除已删的 hashline TS 测试与 edit-diff，Rust 白名单加 `pi-edit`。
 - **Git 测试环境兼容**：索引快照失败回归测试改用确定性的目录替换故障，避免 root 用户绕过 Unix 权限位导致全量测试失败。
 - **Todo 使用边界**：仅当请求包含至少 3 个独立的用户可见结果时创建列表；常规事前检查、执行与验证合计为一个结果。
-- **源码 UI 启动**：新增 `bun run omp2`，仅从 `$HOME/.omp/natives/<version>` 加载匹配版本的原生包，以当前仓库 TypeScript 源码启动交互式界面且不触发本地原生构建；`AGENTS.md` 要求仅测试交互式 UI 时使用该命令。
+- **源码 UI 启动**：删除 fork 自加的 `bun run omp2` 启动脚本（含 `scripts/omp2.ts`），测试交互式 UI 直接用上游自带 `bun run dev`（`bun --cwd=packages/coding-agent src/cli.ts`），native 由默认 loader 解析包内已构建 addon。
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
 - **TypeScript 测试静态检查**：预览合并测试将只初始化一次的组件改为 `const`，主代理切换测试用 resolver 队列替代未使用计数器，保持原断言行为并消除 Oxlint 报告。
 - **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
