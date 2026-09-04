@@ -5,14 +5,14 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-- **版本**：`v18.1.8`
-- **Upstream commit**：`fdfeef1f78ba75cd2c0a3b555be1d6043af4de57`
+- **版本**：`v18.1.9`
+- **Upstream commit**：`3f8347bcd6d17bd985e1d97e4f07d2d765dde006`
 - **同步日期**：2026-09-04
-- **Integration**：`377db715b4`
+- **Integration**：`d852c7bf6e`
 
 ## 上游同步记录
 
-- 2026-09-04：合入 `can1357/oh-my-pi@main` 的 `fdfeef1f78`（package `18.1.8`，integration `377db715b4`）。
+- 2026-09-04：合入 `can1357/oh-my-pi@main` 的 `3f8347bcd6`（package `18.1.9`，integration `d852c7bf6e`）。
 
 ## Fork 改动
 
@@ -74,7 +74,7 @@
 - **独立 localci**：新增 `bun scripts/jch-localci.ts [full]`，仅 Linux-x64 运行核心 TS 白名单、核心类型检查、选定 Rust crate 与轻量 CLI smoke；默认不构建 native，`full` 才构建，不改上游 CI 聚合器或 workflow；白名单随 18.1.6 移除已删的 hashline TS 测试与 edit-diff，Rust 白名单加 `pi-edit`。
 - **localci stdin 隔离**：测试组命令以 `stdin: "ignore"` 运行；上游 `main-startup-watchdog` 测试的 `runRootCommand` 会等待 stdin EOF，pty-less 监督上下文（如 hub）继承打开的 stdin pipe 会使其确定性 5000ms 超时，`/dev/null` 语义下正常通过。
 - **Git 测试环境兼容**：索引快照失败回归测试改用确定性的目录替换故障，避免 root 用户绕过 Unix 权限位导致全量测试失败。
-- **OAuth 回调测试环境适配**：上游原生 OAuth 注册测试假定 Linux 桌面会话；WSL/headless 下 `start_blocking` 返回 `Unsupported` 或失败注入测试误炸，helper 改为显式跳过；修正上游 `linux.rs` 桌面段续行拼接缺陷与 reflink no-op clone 测试的乐观探测假设（fallback 回退正确性仍断言）。
+- **OAuth 回调测试环境适配**：上游原生 OAuth 注册测试假定 Linux 桌面会话；WSL/headless 下 `start_blocking` 返回 `Unsupported` 或失败注入测试误炸，helper 改为显式跳过；`linux.rs` 续行拼接与 reflink no-op clone 断言已随 18.1.9 上游官方修复收敛。
 - **Todo 使用边界**：仅当请求包含至少 3 个独立的用户可见结果时创建列表；常规事前检查、执行与验证合计为一个结果。
 - **源码 UI 启动**：删除 fork 自加的 `bun run omp2` 启动脚本（含 `scripts/omp2.ts`），测试交互式 UI 直接用上游自带 `bun run dev`（`bun --cwd=packages/coding-agent src/cli.ts`），native 由默认 loader 解析包内已构建 addon。
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
