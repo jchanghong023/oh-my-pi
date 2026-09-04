@@ -2462,11 +2462,17 @@ mod tests {
 				keep_changes: false,
 			})
 			.unwrap();
-		assert!(
-			result.clone_error.is_none() || pi_iso::clone_candidates(None).is_empty(),
-			"an identical tree must not fail the clone path: {:?}",
-			result.clone_error
-		);
+		// A no-op clone must not fail on filesystems where a clone backend
+		// works. Probes are host-level and optimistic (Linux reflink only
+		// checks the OS), so a filesystem that rejects FICLONE at clone time
+		// legitimately falls back with a recorded `clone_error`; the
+		// rev-parse/status assertions below verify the fallback worktree.
+		if result.cloned_with.is_none() {
+			assert!(
+				result.clone_error.is_some() || pi_iso::clone_candidates(None).is_empty(),
+				"a failed no-op clone must surface its reason"
+			);
+		}
 		assert_eq!(git(&linked, &["rev-parse", "HEAD"]), git(temp.path(), &["rev-parse", "HEAD"]));
 		assert_eq!(git(&linked, &["status", "--porcelain"]), "");
 		let _ = repo.worktree_remove(&linked, true);

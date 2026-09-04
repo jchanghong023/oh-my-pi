@@ -105,10 +105,28 @@ fn core(home: PathBuf, env: BTreeMap<String, String>) -> Core {
 	}
 }
 
-fn active(result: StartOutcome) -> Box<Registration> {
+/// Require an active registration, or skip the test when the host session
+/// cannot support one (headless/SSH/WSL sessions report `Unsupported`).
+fn active(result: StartOutcome) -> Option<Box<Registration>> {
 	match result {
-		StartOutcome::Active(registration) => registration,
-		StartOutcome::Unsupported => panic!("test environment must be supported"),
+		StartOutcome::Active(registration) => Some(registration),
+		StartOutcome::Unsupported => {
+			eprintln!("skipped: oauth callback registration is unsupported in this session");
+			None
+		},
+	}
+}
+
+/// Require an error outcome (failure-injection tests), or skip when the host
+/// session cannot even attempt a registration.
+fn start_expecting_error(core: &Core, cancel: CancelToken) -> Option<anyhow::Error> {
+	match start_blocking(core, cancel) {
+		Ok(StartOutcome::Unsupported) => {
+			eprintln!("skipped: oauth callback registration is unsupported in this session");
+			None
+		},
+		Ok(StartOutcome::Active(_)) => panic!("expected an error outcome"),
+		Err(error) => Some(error),
 	}
 }
 
@@ -138,9 +156,17 @@ fn prepare_failure_releases_lease_and_removes_private_artifacts() {
 	let _serial = TEST_SERIAL.lock();
 	let home = temp_home("prepare");
 	let failing = core(home.clone(), environment(&[("TEST_PREPARE_FAIL", "1")]));
-	assert!(start_blocking(&failing, CancelToken::default()).is_err());
+	if start_expecting_error(&failing, CancelToken::default()).is_none() {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	}
 	let succeeding = core(home.clone(), environment(&[]));
-	let mut registration = active(start_blocking(&succeeding, CancelToken::default()).unwrap());
+	let Some(mut registration) =
+		active(start_blocking(&succeeding, CancelToken::default()).unwrap())
+	else {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	};
 	cleanup_registration(&mut registration, CancelToken::default()).unwrap();
 	fs::remove_dir_all(home).unwrap();
 }
@@ -150,9 +176,10 @@ fn activation_failure_restores_even_after_mutating_os_state() {
 	let _serial = TEST_SERIAL.lock();
 	let home = temp_home("activation");
 	let core = core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1")]));
-	let error = start_blocking(&core, CancelToken::default())
-		.err()
-		.expect("activation should fail");
+	let Some(error) = start_expecting_error(&core, CancelToken::default()) else {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	};
 	assert!(error.to_string().contains("injected activation failure"));
 	assert!(!home.join(".oauth-owner-omp-test").exists());
 	assert!(
@@ -169,9 +196,10 @@ fn uncertain_restore_retains_journal_and_ownership() {
 	let home = temp_home("restore");
 	let core =
 		core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1"), ("TEST_RESTORE_FAIL", "1")]));
-	let error = start_blocking(&core, CancelToken::default())
-		.err()
-		.expect("restoration should fail");
+	let Some(error) = start_expecting_error(&core, CancelToken::default()) else {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	};
 	assert!(error.to_string().contains("recovery journal retained"));
 	assert!(home.join(".oauth-owner-omp-test").exists());
 	assert!(
@@ -212,7 +240,11 @@ fn stale_journal_is_recovered_before_successor_activation() {
 		.unwrap();
 
 	let core = core(home.clone(), environment(&[]));
-	let mut registration = active(start_blocking(&core, CancelToken::default()).unwrap());
+	let Some(mut registration) = active(start_blocking(&core, CancelToken::default()).unwrap())
+	else {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	};
 	assert_ne!(registration.context.id, old_id);
 	assert_eq!(
 		fs::read_to_string(home.join(".oauth-owner-omp-test")).unwrap(),
@@ -228,7 +260,11 @@ fn lease_excludes_competing_receivers_in_same_process() {
 	let home = temp_home("compete");
 	let first = core(home.clone(), environment(&[]));
 	let second = core(home.clone(), environment(&[]));
-	let mut registration = active(start_blocking(&first, CancelToken::default()).unwrap());
+	let Some(mut registration) = active(start_blocking(&first, CancelToken::default()).unwrap())
+	else {
+		fs::remove_dir_all(home).unwrap();
+		return;
+	};
 	assert!(
 		start_blocking(&second, CancelToken::default())
 			.err()
