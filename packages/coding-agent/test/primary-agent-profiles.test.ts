@@ -9,6 +9,12 @@ describe("Primary Agent profile projection", () => {
 	});
 
 	it("keeps only approved Discuss tools in their base order", () => {
-		expect(projectPrimaryAgentToolNames(tools, getPrimaryAgentProfile("discuss"))).toEqual(["read", "grep", "ask"]);
+		expect(
+			projectPrimaryAgentToolNames(
+				tools,
+				getPrimaryAgentProfile("discuss"),
+				name => name === "read" || name === "grep" || name === "ask",
+			),
+		).toEqual(["read", "grep", "ask"]);
 	});
 });

@@ -5,26 +5,18 @@ set -e
 # Usage: curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh
 #
 # Options:
-#   --source       Install via bun (installs bun if needed)
 #   --binary       Install prebuilt binary
-#   --ref <ref>    Install specific tag/commit/branch
-#   -r <ref>       Shorthand for --ref
+#   --ref <tag>    Install a specific published release
+#   -r <tag>      Shorthand for --ref
 
 REPO="jchanghong023/oh-my-pi"
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
-MIN_BUN_VERSION="1.3.14"
 
 # Parse arguments
-MODE=""
 REF=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --source)
-            MODE="source"
-            shift
-            ;;
         --binary)
-            MODE="binary"
             shift
             ;;
         --ref)
@@ -60,49 +52,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# This fork does not publish macOS release binaries. Keep the no-argument
-# installer useful on macOS by selecting the supported source path.
-if [ -z "$MODE" ] && [ "$(uname -s)" = "Darwin" ]; then
-    MODE="source"
+# This fork supports Linux only through the POSIX installer.
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo "macOS is not supported by this fork."
+    exit 1
 fi
 
-
-# Check if bun is available
-has_bun() {
-    command -v bun >/dev/null 2>&1
-}
-
-# Normalized host architecture (x64|arm64). On macOS this uses
-# `sysctl hw.optional.arm64` so it stays correct inside a Rosetta session,
-# where `uname -m` reports the translated x86_64.
-host_arch() {
-    if [ "$(uname -s)" = "Darwin" ]; then
-        if [ "$(sysctl -in hw.optional.arm64 2>/dev/null || /usr/sbin/sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; then
-            echo "arm64"
-        else
-            echo "x64"
-        fi
-        return
-    fi
-    case "$(uname -m)" in
-        x86_64|amd64)  echo "x64" ;;
-        arm64|aarch64) echo "arm64" ;;
-        *)             uname -m ;;
-    esac
-}
-
-# Bun's own architecture (x64|arm64), or empty when it can't be determined.
-bun_arch() {
-    bun -e 'process.stdout.write(process.arch)' 2>/dev/null
-}
-
-# True when Bun's architecture matches the host. If Bun's arch can't be read,
-# assume a match rather than block the install.
-bun_arch_matches_host() {
-    ba="$(bun_arch)"
-    [ -z "$ba" ] && return 0
-    [ "$ba" = "$(host_arch)" ]
-}
 
 version_ge() {
     current="$1"
@@ -144,82 +99,6 @@ installed_binary_matches() {
     [ "$installed_version" = "${1#v}" ]
 }
 
-require_bun_version() {
-    version_raw=$(bun --version 2>/dev/null || true)
-    if [ -z "$version_raw" ]; then
-        echo "Failed to read bun version"
-        exit 1
-    fi
-
-    version_clean=${version_raw%%-*}
-    if ! version_ge "$version_clean" "$MIN_BUN_VERSION"; then
-        echo "Bun ${MIN_BUN_VERSION} or newer is required. Current version: ${version_clean}"
-        echo "Upgrade Bun at https://bun.sh/docs/installation"
-        exit 1
-    fi
-}
-
-# Check if git is available
-has_git() {
-    command -v git >/dev/null 2>&1
-}
-
-# Install bun
-install_bun() {
-    echo "Installing bun..."
-    if command -v bash >/dev/null 2>&1; then
-        curl -fsSL https://bun.sh/install | bash
-    else
-        echo "bash not found; attempting install with sh..."
-        curl -fsSL https://bun.sh/install | sh
-    fi
-    export BUN_INSTALL="$HOME/.bun"
-    export PATH="$BUN_INSTALL/bin:$PATH"
-    require_bun_version
-}
-
-# Check if git-lfs is available
-has_git_lfs() {
-    command -v git-lfs >/dev/null 2>&1
-}
-
-# Install the fork source via bun
-install_via_bun() {
-    echo "Installing via bun..."
-    if ! has_git; then
-        echo "git is required when installing from source"
-        exit 1
-    fi
-
-    SOURCE_REF="${REF:-main}"
-    TMP_DIR="$(mktemp -d)"
-    trap 'rm -rf "$TMP_DIR"' EXIT
-
-    if git clone --depth 1 --branch "$SOURCE_REF" "https://github.com/${REPO}.git" "$TMP_DIR" >/dev/null 2>&1; then
-        :
-    else
-        git clone "https://github.com/${REPO}.git" "$TMP_DIR"
-        (cd "$TMP_DIR" && git checkout "$SOURCE_REF")
-    fi
-
-    # Pull LFS files
-    if has_git_lfs; then
-        (cd "$TMP_DIR" && git lfs pull)
-    fi
-
-    if [ ! -d "$TMP_DIR/packages/coding-agent" ]; then
-        echo "Expected package at ${TMP_DIR}/packages/coding-agent"
-        exit 1
-    fi
-
-    bun install -g "$TMP_DIR/packages/coding-agent" || {
-        echo "Failed to install from source"
-        exit 1
-    }
-    echo ""
-    echo "✓ Installed omp via bun"
-    echo "Run 'omp' to get started!"
-}
 
 # Detect sessions using the installed Linux binary before atomically replacing
 # its directory entry. Existing processes keep their old inode and must never
@@ -270,11 +149,6 @@ install_binary() {
 
     case "$OS" in
         Linux) PLATFORM="linux" ;;
-        Darwin)
-            echo "Prebuilt macOS binaries are not published by this fork."
-            echo "Install from source instead by passing --source."
-            exit 1
-            ;;
         *) echo "Unsupported OS: $OS"; exit 1 ;;
     esac
 
@@ -297,7 +171,7 @@ install_binary() {
             LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
         else
             echo "Release tag not found: $REF"
-            echo "For branch/commit installs, use --source with --ref."
+            echo "Only published release tags are supported."
             exit 1
         fi
     else
@@ -388,23 +262,5 @@ install_binary() {
     esac
 }
 
-# Main logic
-case "$MODE" in
-    source)
-        if ! has_bun; then
-            install_bun
-        fi
-        require_bun_version
-        if ! bun_arch_matches_host; then
-            echo "Error: bun reports architecture '$(bun_arch)' but this host is '$(host_arch)'."
-            echo "Installing from source with this bun would produce a mismatched binary"
-            echo "(e.g. x86_64 under Rosetta on Apple Silicon), causing slow startup and AVX warnings."
-            echo "Install a native bun for your architecture, then re-run with --source."
-            exit 1
-        fi
-        install_via_bun
-        ;;
-    binary|"")
-        install_binary
-        ;;
-esac
+# This installer only downloads published release binaries.
+install_binary

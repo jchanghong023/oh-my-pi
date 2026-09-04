@@ -60,14 +60,11 @@ const NATIVES_PACKAGE = "@oh-my-pi/pi-natives";
  * `packages/natives/scripts/gen-npm-packages.ts`; kept here as the local
  * source of truth so the update path stays free of cross-package imports.
  */
-const SUPPORTED_NATIVE_TAGS: ReadonlySet<string> = new Set([
-	"linux-x64",
-	"linux-arm64",
-	"darwin-x64",
-	"darwin-arm64",
-	"win32-x64",
-	"win32-arm64",
-]);
+const SUPPORTED_NATIVE_TAGS: Readonly<Record<string, true>> = {
+	"linux-x64": true,
+	"linux-arm64": true,
+	"win32-x64": true,
+};
 
 function currentNativeTag(): string {
 	return `${process.platform}-${process.arch}`;
@@ -1270,9 +1267,6 @@ function getBinaryName(): string {
 		case "linux":
 			os = isMuslLinux() ? "linux-musl" : "linux";
 			break;
-		case "darwin":
-			os = "darwin";
-			break;
 		case "win32":
 			os = "windows";
 			break;
@@ -1290,6 +1284,9 @@ function getBinaryName(): string {
 			break;
 		default:
 			throw new Error(`Unsupported architecture: ${arch}`);
+	}
+	if (platform === "win32" && archName !== "x64") {
+		throw new Error(`Unsupported Windows architecture: ${arch}`);
 	}
 
 	if (os === "windows") {
@@ -1495,7 +1492,7 @@ function buildVersionedPackageInstallArgs(
 	packages: ReleasePackages,
 ): string[] {
 	const args = [`${packages.pkg}@${expectedVersion}`, `${packages.natives}@${expectedVersion}`];
-	if (SUPPORTED_NATIVE_TAGS.has(nativeTag)) {
+	if (SUPPORTED_NATIVE_TAGS[nativeTag] === true) {
 		args.push(`${packages.natives}-${nativeTag}@${expectedVersion}`);
 	}
 	return args;
@@ -1593,7 +1590,7 @@ export function buildRenameCleanupPackages(
 	nativeTag: string = currentNativeTag(),
 ): string[] {
 	const old = [PACKAGE, NATIVES_PACKAGE];
-	if (SUPPORTED_NATIVE_TAGS.has(nativeTag)) {
+	if (SUPPORTED_NATIVE_TAGS[nativeTag] === true) {
 		old.push(`${NATIVES_PACKAGE}-${nativeTag}`);
 	}
 	const newLeaf = `${packages.natives}-${nativeTag}`;

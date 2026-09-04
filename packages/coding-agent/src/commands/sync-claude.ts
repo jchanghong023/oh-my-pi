@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { JSONC, YAML } from "bun";
@@ -65,9 +66,24 @@ async function readClaudeAnthropicValues(): Promise<ClaudeAnthropicValues> {
 	return { baseUrl: baseUrl.trim(), apiKey: apiKey.trim() };
 }
 
-function providerUsesAnthropicMessages(provider: NonNullable<ModelsConfig["providers"]>[string]): boolean {
+const BUNDLED_ANTHROPIC_MESSAGE_PROVIDERS = new Set<string>(
+	getBundledProviders().filter(provider =>
+		getBundledModels(provider as GeneratedProvider).some(model => model.api === "anthropic-messages"),
+	),
+);
+
+function providerUsesAnthropicMessages(
+	name: string,
+	provider: NonNullable<ModelsConfig["providers"]>[string],
+): boolean {
 	if (provider.api === "anthropic-messages") return true;
-	return (provider.models ?? []).some(model => model.api === "anthropic-messages");
+	let hasExplicitModelApi = false;
+	for (const model of provider.models ?? []) {
+		if (model.api === "anthropic-messages") return true;
+		if (model.api !== undefined) hasExplicitModelApi = true;
+	}
+	if (provider.api !== undefined || hasExplicitModelApi) return false;
+	return BUNDLED_ANTHROPIC_MESSAGE_PROVIDERS.has(name);
 }
 
 function selectProvider(config: ModelsConfig, explicitProvider: string | undefined): string {
@@ -81,7 +97,7 @@ function selectProvider(config: ModelsConfig, explicitProvider: string | undefin
 		return explicitProvider;
 	}
 
-	const candidates = names.filter(name => providerUsesAnthropicMessages(providers[name]));
+	const candidates = names.filter(name => providerUsesAnthropicMessages(name, providers[name]));
 	if (candidates.length === 1) return candidates[0];
 	if (candidates.length === 0) {
 		const configured = names.length > 0 ? ` Configured providers: ${names.sort().join(", ")}.` : "";

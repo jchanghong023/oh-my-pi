@@ -289,7 +289,13 @@ export class DocsStorage {
 		});
 	}
 
-	promote(tempId: number, name: string, replacedId?: number): StoredIndex {
+	promote(
+		tempId: number,
+		name: string,
+		state: Exclude<DocsIndexState, "building">,
+		lastError?: string,
+		replacedId?: number,
+	): StoredIndex {
 		return this.transaction(() => {
 			if (replacedId !== undefined) {
 				this.db
@@ -297,9 +303,10 @@ export class DocsStorage {
 					.run(replacedId);
 				this.db.query("DELETE FROM doc_indexes WHERE id=?").run(replacedId);
 			}
+			const now = new Date().toISOString();
 			this.db
-				.query("UPDATE doc_indexes SET name=?,updated_at=? WHERE id=?")
-				.run(name, new Date().toISOString(), tempId);
+				.query("UPDATE doc_indexes SET name=?,state=?,last_error=?,updated_at=?,indexed_at=? WHERE id=?")
+				.run(name, state, lastError ?? null, now, now, tempId);
 			return this.getById(tempId) as StoredIndex;
 		});
 	}

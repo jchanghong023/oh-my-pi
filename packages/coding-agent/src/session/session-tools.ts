@@ -207,6 +207,7 @@ export class SessionTools {
 	#createInspectImageTool: SessionToolsOptions["createInspectImageTool"];
 	#installedVibeToolNames = new Set<string>();
 	#builtInToolNames: Set<string>;
+	#builtInToolInstances = new Map<string, AgentTool>();
 	#rpcHostToolNames = new Set<string>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
@@ -292,6 +293,10 @@ export class SessionTools {
 		this.#createThinkTool = options.createThinkTool;
 		this.#createInspectImageTool = options.createInspectImageTool;
 		this.#builtInToolNames = new Set(options.builtInToolNames ?? []);
+		for (const name of this.#builtInToolNames) {
+			const tool = this.#toolRegistry.get(name);
+			if (tool) this.#builtInToolInstances.set(name, tool);
+		}
 		this.#mcpManagerToolNames = new Set(options.mcpManagerToolNames ?? []);
 		if (options.mcpManagerToolNames === undefined) {
 			for (const name of this.#toolRegistry.keys()) {
@@ -439,12 +444,18 @@ export class SessionTools {
 		const mountedNames = this.#xdev?.mountedNames;
 		const base = this.#enabledToolNames.size > 0 ? [...this.#enabledToolNames] : this.getActiveToolNames();
 		const names = !mountedNames || mountedNames.size === 0 ? base : [...new Set([...base, ...mountedNames])];
-		return projectPrimaryAgentToolNames(names, this.#host.primaryAgentProfile());
+		return projectPrimaryAgentToolNames(names, this.#host.primaryAgentProfile(), name =>
+			this.#isCurrentBuiltInTool(name),
+		);
 	}
 
 	/** Names currently presented as `xd://` devices. */
 	getMountedXdevToolNames(): string[] {
-		return projectPrimaryAgentToolNames([...(this.#xdev?.mountedNames ?? [])], this.#host.primaryAgentProfile());
+		return projectPrimaryAgentToolNames(
+			[...(this.#xdev?.mountedNames ?? [])],
+			this.#host.primaryAgentProfile(),
+			name => this.#isCurrentBuiltInTool(name),
+		);
 	}
 
 	/** Whether the edit tool is registered. */
@@ -485,32 +496,43 @@ export class SessionTools {
 		return evalTool.supportsCodeModeTransport?.() ?? false;
 	}
 
+	#isCurrentBuiltInTool(name: string, tool: AgentTool | undefined = this.#toolRegistry.get(name)): boolean {
+		return tool !== undefined && this.#builtInToolInstances.get(name) === tool;
+	}
+
+	#recordBuiltInTool(name: string): void {
+		this.#builtInToolNames.add(name);
+		const tool = this.#toolRegistry.get(name);
+		if (tool) this.#builtInToolInstances.set(name, tool);
+		else this.#builtInToolInstances.delete(name);
+	}
+
+	#forgetBuiltInTool(name: string): void {
+		this.#builtInToolNames.delete(name);
+		this.#builtInToolInstances.delete(name);
+	}
+
 	/**
-	 * Whether a registry entry came from a built-in factory.
+	 * Whether the live registry entry came from a built-in factory.
 	 *
-	 * Resolves `customWireName` aliases too: a built-in tool may present on the
-	 * wire under a different name (e.g. `edit` exposes itself as `apply_patch` in
-	 * apply_patch mode), and tool cards render the call under that wire name. An
-	 * extension registering the literal alias name shadows it — the agent loop
-	 * routes exact-name matches ahead of wire aliases — so a registered non-built-in
-	 * tool with that name wins and the alias no longer counts as built-in.
+	 * Resolves `customWireName` aliases too. An exact-name replacement wins
+	 * over a built-in alias and does not inherit the replaced tool's provenance.
 	 */
 	hasBuiltInTool(name: string): boolean {
-		if (this.#builtInToolNames.has(name)) return true;
-		if (this.#toolRegistry.has(name)) return false;
-		for (const builtInName of this.#builtInToolNames) {
-			if (this.#toolRegistry.get(builtInName)?.customWireName === name) return true;
+		const exact = this.#toolRegistry.get(name);
+		if (exact) return this.#isCurrentBuiltInTool(name, exact);
+		for (const [builtInName, builtInTool] of this.#builtInToolInstances) {
+			if (this.#toolRegistry.get(builtInName) === builtInTool && builtInTool.customWireName === name) {
+				return true;
+			}
 		}
 		return false;
 	}
 
 	/** Updates source provenance when a live registry entry is replaced or restored. */
 	setToolBuiltIn(name: string, builtIn: boolean): void {
-		if (builtIn) {
-			this.#builtInToolNames.add(name);
-		} else {
-			this.#builtInToolNames.delete(name);
-		}
+		if (builtIn) this.#recordBuiltInTool(name);
+		else this.#forgetBuiltInTool(name);
 	}
 
 	/** Whether the live registry entry is owned by the RPC host. */
@@ -578,7 +600,7 @@ export class SessionTools {
 	 */
 	getAllToolInfos(): ToolInfo[] {
 		return Array.from(this.#toolRegistry, ([name, tool]) => {
-			const source = this.#builtInToolNames.has(name)
+			const source = this.#isCurrentBuiltInTool(name, tool)
 				? "builtin"
 				: isMCPToolName(name)
 					? "mcp"
@@ -618,7 +640,7 @@ export class SessionTools {
 			for (const tool of tools) {
 				if (this.#toolRegistry.has(tool.name)) continue;
 				this.#toolRegistry.set(tool.name, this.#wrapRuntimeTool(tool));
-				this.#builtInToolNames.add(tool.name);
+				this.#recordBuiltInTool(tool.name);
 				this.#installedVibeToolNames.add(tool.name);
 			}
 
@@ -647,7 +669,7 @@ export class SessionTools {
 	#uninstallVibeTools(): void {
 		for (const name of this.#installedVibeToolNames) {
 			this.#toolRegistry.delete(name);
-			this.#builtInToolNames.delete(name);
+			this.#forgetBuiltInTool(name);
 		}
 		this.#installedVibeToolNames.clear();
 	}
@@ -794,7 +816,7 @@ export class SessionTools {
 					ctx: never,
 				) => {
 					const profile = this.#host.primaryAgentProfile();
-					if (!isPrimaryAgentToolAllowed(target.name, profile)) {
+					if (!isPrimaryAgentToolAllowed(tool.name, profile, this.#isCurrentBuiltInTool(tool.name, tool))) {
 						throw new ToolError(`Tool "${target.name}" is unavailable to the ${profile.label} primary agent`);
 					}
 					return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
@@ -939,7 +961,7 @@ export class SessionTools {
 		const normalizedBase = normalizeToolNames(toolNames);
 		if (updateBase) this.#baseActiveToolNames = normalizedBase;
 		const profile = this.#host.primaryAgentProfile();
-		toolNames = projectPrimaryAgentToolNames(normalizedBase, profile);
+		toolNames = projectPrimaryAgentToolNames(normalizedBase, profile, name => this.#isCurrentBuiltInTool(name));
 		const codeMode = resolveCodeMode({
 			provider: this.#host.model()?.provider ?? "",
 			toolMode: this.#host.model()?.toolMode,
@@ -948,7 +970,7 @@ export class SessionTools {
 			enabledToolNames: toolNames,
 			evalTransportAvailable: this.#hasCodeModeEvalTransport(),
 		});
-		let builtInWriteAvailable = this.#builtInToolNames.has("write");
+		let builtInWriteAvailable = this.#isCurrentBuiltInTool("write");
 		const fullWriteSelected =
 			toolNames.includes("write") &&
 			(this.#presentationPinnedToolNames?.has("write") === true ||
@@ -957,7 +979,7 @@ export class SessionTools {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			if (writeRegistration) {
 				builtInWriteAvailable = (await untilAborted(signal, writeRegistration)) === true;
-				if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+				if (builtInWriteAvailable) this.#recordBuiltInTool("write");
 			}
 		}
 		const upgradeDeviceOnlyWrite =
@@ -974,7 +996,7 @@ export class SessionTools {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [{ name, tool }] : [];
 		});
-		const xdevReadAvailable = this.#builtInToolNames.has("read") && selectedTools.some(({ name }) => name === "read");
+		const xdevReadAvailable = this.#isCurrentBuiltInTool("read") && selectedTools.some(({ name }) => name === "read");
 		const xdevWriteAvailable =
 			builtInWriteAvailable &&
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
@@ -1007,7 +1029,7 @@ export class SessionTools {
 		if (transportNeeded && !builtInWriteAvailable) {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			builtInWriteAvailable = writeRegistration ? (await untilAborted(signal, writeRegistration)) === true : false;
-			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+			if (builtInWriteAvailable) this.#recordBuiltInTool("write");
 		}
 		if (transportNeeded && builtInWriteAvailable) {
 			const write = this.#toolRegistry.get("write");
@@ -1020,16 +1042,16 @@ export class SessionTools {
 			(this.#presentationPinnedToolNames !== undefined || this.#runtimeSelectedToolNames !== undefined)
 		) {
 			const writeNameIndex = validToolNames.indexOf("write");
-			if (writeNameIndex >= 0 && this.#builtInToolNames.has("write")) validToolNames.splice(writeNameIndex, 1);
-			const writeToolIndex = tools.findIndex(tool => tool.name === "write" && this.#builtInToolNames.has("write"));
+			if (writeNameIndex >= 0 && this.#isCurrentBuiltInTool("write")) validToolNames.splice(writeNameIndex, 1);
+			const writeToolIndex = tools.findIndex(tool => tool.name === "write" && this.#isCurrentBuiltInTool("write"));
 			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
 		}
 
 		let appliedTools = profile.restrictTools
-			? tools.filter(tool => isPrimaryAgentToolAllowed(tool.name, profile))
+			? tools.filter(tool => isPrimaryAgentToolAllowed(tool.name, profile, this.#isCurrentBuiltInTool(tool.name)))
 			: tools;
 		let appliedNames = profile.restrictTools
-			? validToolNames.filter(name => isPrimaryAgentToolAllowed(name, profile))
+			? validToolNames.filter(name => isPrimaryAgentToolAllowed(name, profile, this.#isCurrentBuiltInTool(name)))
 			: validToolNames;
 		let nextCodeModeNamespacesInfo: ToolNamespacesInfo | undefined;
 		if (codeMode.active) {
@@ -1482,7 +1504,7 @@ export class SessionTools {
 		const deviceOnlyWriteActive = this.#isDeviceOnlyWrite?.() === true;
 		const transportWriteActive =
 			normalized.includes("write") &&
-			this.#builtInToolNames.has("write") &&
+			this.#isCurrentBuiltInTool("write") &&
 			this.#presentationPinnedToolNames?.has("write") !== true &&
 			this.#runtimeSelectedToolNames?.has("write") !== true &&
 			((this.#host.planModeEnabled() && (!writeSelected || deviceOnlyWriteActive)) ||
@@ -1502,11 +1524,11 @@ export class SessionTools {
 	/** Replaces memory-backend tools while preserving unrelated selections. */
 	replaceMemoryTools(tools: AgentTool[]): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
-			const removed = new Set<string>(MEMORY_BACKEND_TOOL_NAMES.filter(name => this.#builtInToolNames.has(name)));
+			const removed = new Set<string>(MEMORY_BACKEND_TOOL_NAMES.filter(name => this.#isCurrentBuiltInTool(name)));
 			const nextActive = this.getBaseActiveToolNames().filter(name => !removed.has(name));
 			for (const name of removed) {
 				this.#toolRegistry.delete(name);
-				this.#builtInToolNames.delete(name);
+				this.#forgetBuiltInTool(name);
 			}
 
 			for (const tool of tools) {
@@ -1515,7 +1537,7 @@ export class SessionTools {
 				}
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
-				this.#builtInToolNames.add(wrapped.name);
+				this.#recordBuiltInTool(wrapped.name);
 				nextActive.push(wrapped.name);
 			}
 			await this.#applyActiveToolsByName([...new Set(nextActive)]);
@@ -1557,7 +1579,7 @@ export class SessionTools {
 				}
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
-				this.#builtInToolNames.add(wrapped.name);
+				this.#recordBuiltInTool(wrapped.name);
 			}
 			if (!active.includes("computer")) {
 				await this.#applyActiveToolsByName([...active, "computer"]);
@@ -1600,7 +1622,7 @@ export class SessionTools {
 				if (tool?.name !== "think") return false;
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
-				this.#builtInToolNames.add(wrapped.name);
+				this.#recordBuiltInTool(wrapped.name);
 			}
 			if (!active.includes("think")) {
 				await this.#applyActiveToolsByName([...active, "think"]);
@@ -1667,7 +1689,7 @@ export class SessionTools {
 				}
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
-				this.#builtInToolNames.add(wrapped.name);
+				this.#recordBuiltInTool(wrapped.name);
 			}
 			syncReadDescription(true);
 			await this.#applyActiveToolsByName([...active, "inspect_image"]);

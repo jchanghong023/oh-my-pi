@@ -20,8 +20,7 @@
  *      `exports[*]` import paths) repointed there, with a `bun` condition
  *      keeping TS-source resolution for Bun consumers — so the published
  *      package runs on plain Node. The on-repo manifest keeps pointing at
- *      source so local dev and source installs (`bun link`,
- *      `install.sh --source`) work without a build.
+ *      source so local `bun link` development works without a build.
  *   3. Pack with `bun pm pack` (resolves the `catalog:`/`workspace:`
  *      protocols npm cannot, and runs each package's `prepack` lifecycle),
  *      then publish the resolved tarball with `npm publish` — see
@@ -59,8 +58,8 @@ export interface PublishPackage {
 	publishJs?: boolean;
 	/**
 	 * `bin` map for the published manifest. The on-repo manifest points `bin`
-	 * at TS source so source installs (`bun link`, `install.sh --source`) work
-	 * without a build; publish swaps in the `prepack` bundle.
+	 * at TS source for local `bun link` development; publish swaps in the
+	 * `prepack` bundle.
 	 */
 	publishBin?: Readonly<Record<string, string>>;
 }

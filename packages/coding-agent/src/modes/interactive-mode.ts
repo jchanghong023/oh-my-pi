@@ -2849,7 +2849,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#isDiscussPrimaryAgent(): boolean {
 		return this.session.getPrimaryAgentId() === "discuss";
 	}
-	cyclePrimaryAgentFromTab(): boolean {
+	cyclePrimaryAgentFromShortcut(): boolean {
 		if (this.viewSession !== this.session) return false;
 		if (
 			this.session.isStreaming ||
@@ -2862,11 +2862,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			return false;
 		}
-		void this.#cyclePrimaryAgentFromTab();
+		void this.#cyclePrimaryAgentFromShortcut();
 		return true;
 	}
 
-	async #cyclePrimaryAgentFromTab(): Promise<void> {
+	async #cyclePrimaryAgentFromShortcut(): Promise<void> {
 		try {
 			const active = await this.session.cyclePrimaryAgent();
 			this.lastAssistantUsage = undefined;
@@ -3245,7 +3245,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering plan.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering plan.");
 			return;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -3460,7 +3460,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering vibe.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering vibe.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4017,7 +4017,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering plan.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering plan.");
 			return false;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -4094,7 +4094,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering vibe.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering vibe.");
 			return false;
 		}
 		if (this.vibeModeEnabled) {
@@ -4139,7 +4139,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering goal.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering goal.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4239,7 +4239,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering goal.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering goal.");
 			return false;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4285,7 +4285,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Tab before entering the workflow.");
+			this.showWarning("Switch back to Main with Ctrl+0 before entering the workflow.");
 			return false;
 		}
 		try {
@@ -5447,6 +5447,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
 		await this.#uiHelpers.renderInitialMessages(options);
+		if (this.viewSession === this.session) this.#updatePrimaryAgentStatus();
 		this.syncRetryHintRow();
 	}
 	/**

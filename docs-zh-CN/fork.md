@@ -31,10 +31,10 @@
 ### 用户功能
 
 - **Markdown 文档索引**：新增外部 Markdown 目录持久索引与内嵌 `dft` schema；`/docs` 管理索引，`wiki` 作为 essential 只读内置工具默认提供给非受限代理，受限会话保持显式白名单；无专用文档子代理、`/doc` 或自然语言路由；默认仅建 FTS 且工具层拒绝结构化操作，结构化提取需显式选择，`init/reinit` 以隐藏代际全量构建并原子切换。
-- **索引回归修复**：Markdown 围栏严格按字符、长度与尾随空白闭合，ATX 标题仅删除空格分隔的关闭井号；索引可见性改用 `state` 并拒绝 `__building__` 保留前缀；构建失败或取消时先取消并等待全部 worker，再删除临时代际。
+- **索引回归修复**：严格解析 Markdown 围栏与 ATX 关闭井号；隐藏代际在 promote 事务前始终保持 `building`；CRLF 多行 evidence 映射回原始字节；document scope 保留 Linux 路径大小写；CLI/DocsHub 统一清理外部终端文本。
 - **Command Code**：fork 独有 `command-code` provider 迁入上游 KDL 声明架构——`rules/auth/command-code.kdl`（api-key 粘贴登录，只 trim/store、不绑定官方校验端点）+ registry `TRANSPORTS` transport（实际请求改写为配置的 provider baseUrl）；模型发现、双协议路由（anthropic-messages/openai-completions）与缓存身份归一化在 catalog provider-models，env metadata 优先 `COMMAND_CODE_API_KEY`、回退 legacy `COMMANDCODE_API_KEY`。
 - **OpenCode Zen 免费模型**：模型中心只展示 `opencode-zen` 中 catalog bundled 且 input/output 价格都为零的模型；缺失 cost 的 bundled/discovered 行直接跳过，gateway 新 ID 按“价格未知”隐藏，主列表与 locked preview 共用过滤。
-- **主代理切换**：TUI 的 `Tab` 在有补全时接受补全，无补全且主会话空闲时按输入顺序切换 Main/Discuss；讨论主代理仅保留只读调查工具，禁止执行命令、写入、todo 和子代理委派；工具目录刷新保留动态挂载的 `xd://` 设备。
+- **主代理切换**：TUI 用 `Ctrl+0` 按输入顺序切换 Main/Discuss，`Tab` 完整保留补全；分支导航恢复对应代理并同步状态栏，`/new` 记录当前代理；Discuss 白名单同时校验当前 registry 实例确为内置工具，拒绝同名扩展与陈旧句柄。
 - **子代理满载并发**：待办充足时任一完成立即补位、禁止多数等单个慢任务；任务不足窗口时全量启动、不硬凑。
 - **魔法关键词斜杠命令**：为 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 注册可携带任务文本的斜杠命令；RPC builtin residual prompt 同步转发 images 与 steer/followUp 行为。
 - **JCH 个人命令**：新增 `/jchfix`、`/jchdiagnose`、`/jchfuncreview`、`/jchfuncreviewfix`、`/jchverify`、`/jchci`、`/jchcifix`、`/jchcatchup`、`/jchgs`、`/jchgitpull`、`/jchgitdiscardall` 11 个个人斜杠命令，实现见 `packages/coding-agent/src/jch-commands/`：
@@ -49,7 +49,7 @@
   - `/jchgs`：不调用代理，直接依次执行 `git fetch --all` 与 `git status --short --branch`。
   - `/jchgitpull`：不调用代理，直接执行 `git pull`，沿用当前分支既有 upstream 与 pull 配置。
   - `/jchgitdiscardall`：交互式 TUI 专用；不调用代理，直接依次执行 `git fetch --all --prune`、`git reset --hard @{upstream}` 与 `git clean -xdf`，远端 upstream 已删除时在 reset 失败后停止。
-- **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 写入当前 profile 的 `models.yml`。
+- **Claude 配置同步**：新增 `omp sync-claude [--provider <name>]`，把 Claude Code 的 endpoint/token 写入当前 profile；仅覆写 `baseUrl`/`apiKey` 的内置 Anthropic provider 也可自动识别。
 - **移动端 TUI**：新增 `tui.mobile` 紧凑布局预设，默认关闭。
 
 ### 默认行为
@@ -64,7 +64,7 @@
 
 - **更新 URL 校验**：`omp update` 校验 GitHub release asset URL 前先做 percent-decode 归一化，容忍 tag 中 `+` 被编码为 `%2B`（`v18.0.9+fork.N` 的 `browser_download_url` 必需）。
 - **Fork 二进制发布**：CI 由 `workflow_dispatch` 构建，`queue: max` 保留同 ref 的全部等待运行，仅允许从 `main` 按输入发布 `+fork.N` GitHub Release；二进制嵌入 fork 版本、构建时间与更新仓库，`omp update` 比较 fork build counter 并从 fork Release 更新。
-- **安装/更新体验**：安装器比较已装版本、同版本跳过下载并以唯一同目录临时文件原子替换；Linux 不终止现有会话；Windows 仅终止目标 Path 精确匹配的进程且路径不可读时安全失败；macOS 默认源码安装并拒绝不存在的预编译资产路径；保留下载进度、curl 回退与错误正文。
+- **安装/更新体验**：安装器仅从 fork GitHub Release 下载已发布二进制并原子替换，不提供源码/Bun 安装路径；POSIX 仅支持 Linux x64/arm64 并拒绝 macOS，Windows 仅支持 x64。
 - **文档站**：新增英文/中文 VitePress 首页、自动侧栏与 GitHub Pages 发布；两套 locale 各自提交 `package-lock.json` 并以 `npm ci` 锁定依赖构建，部署 checkout 完整 Git 历史以输出页面真实 `lastUpdated`；中文站提供完整翻译、使用指南和 `config.yml` 设置参考。
 - **DFT 知识调研**：完全重写为 OMP 内置 Markdown 索引技术报告；先概览采集、FTS/RAG、结构化抽取、图/MCP、Agent/代码索引等相关技术，再详述 `docs`/`wiki` 的 FTS 与 structured 实现、生命周期、安全和适用边界，并保留 grep 对照实测基线。
 
@@ -78,6 +78,6 @@
 - **源码 UI 启动**：删除 fork 自加的 `bun run omp2` 启动脚本（含 `scripts/omp2.ts`），测试交互式 UI 直接用上游自带 `bun run dev`（`bun --cwd=packages/coding-agent src/cli.ts`），native 由默认 loader 解析包内已构建 addon。
 - **CI 与回归稳定性**：原生 TS 分桶经 `xvfb-run` 提供显示服务覆盖可见 Chromium，进程内用例保留启动页避免关闭最后窗口时浏览器退出；Brush 将全外部命令的后台 pipeline 直接记录为含全部进程的 job；`pi-shell` jobspec 信号测试在同一次 shell 执行内完成就绪、`%1` 信号与回收；Git 测试 fixture 禁用自动维护且状态栏 VCS 测试显式启用 Git；`warm_bun` 按需预热，yield cancellation 与 fd inheritance 测试保持确定化；冷启动恢复夹具遵循真实 CLI 的 prepaint gate，resume/continue/fork 使用绑定同一测试终端但尚未启动的 composer；文档 evidence 夹具跨断言按源路径选择证据，Mnemopi dispose 超时夹具使用可控 timer。
 - **TypeScript 测试静态检查**：预览合并测试将只初始化一次的组件改为 `const`，主代理切换测试用 resolver 队列替代未使用计数器，保持原断言行为并消除 Oxlint 报告。
-- **CI 原生构建与测试并行化**：原生 addon 构建按 triple 拆成 6 个并行 job（matrix）+ gather 合并产物，Rust 测试拆 2 分片并行；下游 `needs` 与 `native-addons` artifact 布局不变。
+- **CI 原生构建与测试并行化**：原生 addon 按 triple 拆成 6 个并行 job + gather，Rust 测试拆 2 分片且 `rest` 显式覆盖 `pi-diff`/`pi-edit`；下游 `needs` 与 artifact 布局不变。
 - **Nix Bun 依赖锁**：为 Command Code 的 `turbo-stream` 同步再生 `nix/bun.nix`；OMP Nix 显式构建 `bun-lock` check，并规范 native/WASM 生成器的 EOF 换行差异，防止依赖表达式漂移。
 - **报告测试跨平台隔离**：`createReportBundle` 支持 `reportsDir`/`logsDir` 目录注入，`report-bundle-logs/sessions` 测试经共享 helper 落临时目录；修复 Windows 上 XDG 隔离失效导致假崩溃日志与报告写穿真实 `~/.omp/logs`、`~/.omp/reports`。

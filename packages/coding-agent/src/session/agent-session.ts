@@ -7726,6 +7726,9 @@ export class AgentSession {
 					...options,
 					additionalDirectories: this.settings.get("workspace.additionalDirectories"),
 				});
+				if (this.#activePrimaryAgentId !== "main") {
+					this.sessionManager.appendPrimaryAgentChange(this.#activePrimaryAgentId);
+				}
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit
@@ -9728,6 +9731,25 @@ export class AgentSession {
 
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
+		try {
+			await this.#restorePrimaryAgent(stateContext.primaryAgent ?? "main");
+		} catch (error) {
+			const rollbackTransition = this.#bash.beginSessionTransition();
+			let rolledBack = false;
+			try {
+				if (oldLeafId === null) {
+					this.sessionManager.resetLeaf();
+				} else {
+					this.sessionManager.branch(oldLeafId);
+				}
+				this.#bash.markSessionTransition(rollbackTransition);
+				rolledBack = true;
+			} finally {
+				this.#bash.finishSessionTransition(rollbackTransition, rolledBack);
+				this.#branchSummaryAbortController = undefined;
+			}
+			throw error;
+		}
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();

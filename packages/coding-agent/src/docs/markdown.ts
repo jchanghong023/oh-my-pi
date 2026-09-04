@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
-import type { MarkdownDocument, MarkdownSection } from "./types";
+import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./types";
 
 const MAX_SECTION_CHARS = 24_000;
 const SOURCE_KINDS: Record<string, true> = {
@@ -17,17 +17,10 @@ const SOURCE_KINDS: Record<string, true> = {
 	m4a: true,
 };
 
-interface SourceLine {
-	text: string;
-	line: number;
-	byteStart: number;
-	byteEnd: number;
-}
-
 interface SectionDraft {
 	headingPath: string[];
 	headingLevel: number;
-	lines: SourceLine[];
+	lines: MarkdownSourceLine[];
 }
 
 type FenceMarker = "`" | "~";
@@ -55,9 +48,9 @@ function sourceKind(relativePath: string): string {
 	return kind && SOURCE_KINDS[kind] ? kind : "markdown";
 }
 
-function splitLines(bytes: Uint8Array): SourceLine[] {
+function splitLines(bytes: Uint8Array): MarkdownSourceLine[] {
 	const text = new TextDecoder().decode(bytes);
-	const lines: SourceLine[] = [];
+	const lines: MarkdownSourceLine[] = [];
 	let charStart = 0;
 	let byteStart = 0;
 	let line = 1;
@@ -105,7 +98,7 @@ function normalizePlainText(markdown: string): string {
 function chunkDraft(draft: SectionDraft): SectionDraft[] {
 	if (draft.lines.reduce((sum, line) => sum + line.text.length, 0) <= MAX_SECTION_CHARS) return [draft];
 	const chunks: SectionDraft[] = [];
-	let current: SourceLine[] = [];
+	let current: MarkdownSourceLine[] = [];
 	let chars = 0;
 	const flush = () => {
 		if (current.length === 0) return;
@@ -198,7 +191,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	const sections = drafts.flatMap(chunkDraft).map(draft => {
 		const rawMarkdown = draft.lines.map(line => line.text).join("");
 		const first = draft.lines[0];
-		const last = draft.lines.at(-1) as SourceLine;
+		const last = draft.lines.at(-1) as MarkdownSourceLine;
 		return {
 			ordinal: ordinal++,
 			headingPath: draft.headingPath,
@@ -207,6 +200,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			lineEnd: last.line,
 			byteStart: first.byteStart,
 			byteEnd: last.byteEnd,
+			sourceLines: draft.lines,
 			rawMarkdown,
 			plainText: normalizePlainText(rawMarkdown),
 		};

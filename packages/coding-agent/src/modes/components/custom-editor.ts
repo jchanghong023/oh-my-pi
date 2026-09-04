@@ -39,6 +39,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.model.cycleBackward"
 	| "app.model.select"
 	| "app.model.selectTemporary"
+	| "app.primaryAgent.cycle"
 	| "app.tools.toggleVisibility"
 	| "app.thinking.toggle"
 	| "app.editor.external"
@@ -61,6 +62,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.model.cycleBackward": ["shift+ctrl+p"],
 	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["ctrl+t"],
+	"app.primaryAgent.cycle": ["ctrl+0"],
 	"app.tools.toggleVisibility": ["ctrl+shift+o"],
 	"app.thinking.toggle": ["alt+p"],
 	"app.editor.external": ["ctrl+g"],
@@ -726,8 +728,8 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
-	/** Called when Tab has no active autocomplete or custom binding. Returns true when consumed. */
-	onTabFallback?: () => boolean;
+	/** Called when the configured primary-agent shortcut is pressed. Returns true when consumed. */
+	onCyclePrimaryAgent?: () => boolean;
 
 	/** Fired when a sustained space-bar hold is recognized — the push-to-talk STT start. The
 	 *  optimistically-typed spaces have already been deleted by the time this runs. */
@@ -1000,10 +1002,6 @@ export class CustomEditor extends Editor {
 
 		const parsedKey = parseKey(data);
 		const canonical = parsedKey !== undefined ? canonicalKeyId(parsedKey) : undefined;
-		if (canonical === "tab" && this.isShowingAutocomplete()) {
-			super.handleInput(data);
-			return;
-		}
 
 		// Left-arrow on an empty editor: surface for the agent-hub double-tap
 		// gesture. Plain "left" only — modified arrows and any in-text cursor
@@ -1043,6 +1041,11 @@ export class CustomEditor extends Editor {
 			// Intercept configured temporary model selector shortcut
 			if (this.#matchesAction(canonical, "app.model.selectTemporary") && this.onSelectModelTemporary) {
 				this.onSelectModelTemporary();
+				return;
+			}
+			// Intercept configured primary-agent cycling. Blocked workflow states
+			// fall through so the editor retains ownership of the key sequence.
+			if (this.#matchesAction(canonical, "app.primaryAgent.cycle") && this.onCyclePrimaryAgent?.()) {
 				return;
 			}
 
@@ -1158,9 +1161,6 @@ export class CustomEditor extends Editor {
 				handler();
 				return;
 			}
-		}
-		if (canonical === "tab" && !this.isShowingAutocomplete() && this.onTabFallback?.()) {
-			return;
 		}
 
 		// Pass to parent for normal handling

@@ -29,6 +29,7 @@ describe("AgentSession Primary Agent", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession;
+	let toolRegistry: Map<string, AgentTool>;
 	let failRebuild = false;
 	const calls: Array<{ tools: string[]; messages: string; systemPrompt: string }> = [];
 
@@ -40,6 +41,7 @@ describe("AgentSession Primary Agent", () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 		const tools = TOOL_NAMES.map(stubTool);
+		toolRegistry = new Map(tools.map(tool => [tool.name, tool]));
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -65,7 +67,7 @@ describe("AgentSession Primary Agent", () => {
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.eager": "default", "task.eager": "off" }),
 			modelRegistry,
-			toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
+			toolRegistry,
 			builtInToolNames: TOOL_NAMES,
 			rebuildSystemPrompt: async () => {
 				if (failRebuild) throw new Error("rebuild failed");
@@ -112,6 +114,19 @@ describe("AgentSession Primary Agent", () => {
 			"unavailable to the Discuss primary agent",
 		);
 	});
+
+	it("rejects a same-name extension replacement in Discuss, including stale built-in handles", async () => {
+		const staleRead = session.agent.state.tools.find(tool => tool.name === "read");
+		if (!staleRead) throw new Error("Expected active read tool");
+		toolRegistry.set("read", stubTool("read"));
+		session.setToolBuiltIn("read", false);
+
+		await session.setPrimaryAgent("discuss");
+		expect(session.getActiveToolNames()).toEqual(["grep", "ask"]);
+		await expect(staleRead.execute("stale", {}, undefined, () => {}, undefined as never)).rejects.toThrow(
+			"unavailable to the Discuss primary agent",
+		);
+	});
 	it("rolls back the profile and does not persist when projection fails", async () => {
 		const entriesBefore = session.sessionManager.getEntries().length;
 		failRebuild = true;
@@ -141,5 +156,60 @@ describe("AgentSession Primary Agent", () => {
 			type: "primary_agent_change",
 			primaryAgent: "discuss",
 		});
+	});
+
+	it("restores the primary-agent profile in both directions when navigating branches", async () => {
+		await session.prompt("Main branch");
+		const mainAssistant = session.sessionManager
+			.getEntries()
+			.find(entry => entry.type === "message" && entry.message.role === "assistant");
+		if (!mainAssistant) throw new Error("Expected Main assistant entry");
+
+		await session.setPrimaryAgent("discuss");
+		await session.prompt("Discuss branch");
+		const discussAssistant = session.sessionManager
+			.getEntries()
+			.findLast(entry => entry.type === "message" && entry.message.role === "assistant");
+		if (!discussAssistant) throw new Error("Expected Discuss assistant entry");
+		await session.setPrimaryAgent("main");
+
+		await session.navigateTree(discussAssistant.id);
+		expect(session.getPrimaryAgentId()).toBe("discuss");
+		expect(session.getActiveToolNames()).toEqual(["read", "grep", "ask"]);
+
+		await session.navigateTree(mainAssistant.id);
+		expect(session.getPrimaryAgentId()).toBe("main");
+		expect(session.getActiveToolNames()).toEqual(TOOL_NAMES);
+	});
+
+	it("rolls back the leaf and active profile when branch profile restoration fails", async () => {
+		await session.prompt("Main branch");
+		await session.setPrimaryAgent("discuss");
+		await session.prompt("Discuss branch");
+		const discussAssistant = session.sessionManager
+			.getEntries()
+			.findLast(entry => entry.type === "message" && entry.message.role === "assistant");
+		if (!discussAssistant) throw new Error("Expected Discuss assistant entry");
+		await session.setPrimaryAgent("main");
+		const oldLeafId = session.sessionManager.getLeafId();
+
+		failRebuild = true;
+		await expect(session.navigateTree(discussAssistant.id)).rejects.toThrow("rebuild failed");
+		expect(session.sessionManager.getLeafId()).toBe(oldLeafId);
+		expect(session.getPrimaryAgentId()).toBe("main");
+		expect(session.getActiveToolNames()).toEqual(TOOL_NAMES);
+	});
+
+	it("records the active primary agent in a new session journal", async () => {
+		await session.setPrimaryAgent("discuss");
+		await expect(session.newSession()).resolves.toBe(true);
+		expect(session.getPrimaryAgentId()).toBe("discuss");
+		expect(session.sessionManager.buildSessionContext().primaryAgent).toBe("discuss");
+		expect(
+			session.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "primary_agent_change")
+				.map(entry => entry.primaryAgent),
+		).toEqual(["discuss"]);
 	});
 });

@@ -97,6 +97,13 @@ export interface ResolvedDocumentSchema {
 	source: "embedded" | string;
 }
 
+export interface MarkdownSourceLine {
+	text: string;
+	line: number;
+	byteStart: number;
+	byteEnd: number;
+}
+
 export interface MarkdownSection {
 	ordinal: number;
 	headingPath: string[];
@@ -105,6 +112,7 @@ export interface MarkdownSection {
 	lineEnd: number;
 	byteStart: number;
 	byteEnd: number;
+	sourceLines: MarkdownSourceLine[];
 	rawMarkdown: string;
 	plainText: string;
 }

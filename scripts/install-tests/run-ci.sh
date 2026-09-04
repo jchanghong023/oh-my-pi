@@ -93,15 +93,6 @@ mkdir -p "$BINARY_DIR"
 cp packages/coding-agent/dist/omp "$BINARY_DIR/omp"
 smoke_cli "$BINARY_DIR/omp"
 
-section "Source install smoke"
-SOURCE_BUN_HOME="$WORK_DIR/bun-source"
-(
-   export BUN_INSTALL="$SOURCE_BUN_HOME"
-   export PATH="$BUN_INSTALL/bin:$PATH"
-   bun --cwd="$ROOT_DIR/packages/coding-agent" link
-   smoke_cli "$BUN_INSTALL/bin/omp"
-)
-
 section "Tarball install smoke"
 TARBALL_DIR="$WORK_DIR/tarballs"
 mkdir -p "$TARBALL_DIR"
@@ -143,10 +134,9 @@ for pkg in utils wire omptype catalog ai mnemopi snapcompact agent tui stats col
 done
 
 # 4. Pack the coding agent with its *published* manifest: release swaps
-#    `bin.omp` from `src/cli.ts` to the prepack bundle `dist/cli.js`. The repo
-#    manifest keeps pointing at source so `bun link`/`install.sh --source`
-#    work without a build, so the swap must be reproduced here for the smoke
-#    to exercise the bundled worker-host entry the published package ships.
+#    `bin.omp` from `src/cli.ts` to the prepack bundle `dist/cli.js`; the repo
+#    manifest points at TypeScript source for workspace development. Reproduce
+#    the release swap here so the smoke exercises the bundled worker-host entry.
 #    Always restore the working-tree manifest.
 agent_pkg_backup="$WORK_DIR/coding-agent-package.json.orig"
 cp "$ROOT_DIR/packages/coding-agent/package.json" "$agent_pkg_backup"

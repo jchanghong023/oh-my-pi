@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { setKittyProtocolActive } from "@oh-my-pi/pi-tui";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -24,7 +25,7 @@ function stubTool(name: string): AgentTool {
 	};
 }
 
-describe("InteractiveMode Primary Agent Tab fallback", () => {
+describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
@@ -41,6 +42,7 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 
 	beforeEach(async () => {
 		resetSettingsForTest();
+		setKittyProtocolActive(true);
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model");
@@ -56,11 +58,14 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 		});
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, new EventBus());
 		await session.setActiveToolsByName(TOOL_NAMES);
+		// Bind editor actions without starting a real terminal.
+		mode.setEditorComponent(undefined);
 	});
 
 	afterEach(async () => {
 		mode.stop();
 		await session.dispose();
+		setKittyProtocolActive(false);
 		resetSettingsForTest();
 	});
 
@@ -69,8 +74,9 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 		tempDir.removeSync();
 	});
 
-	it("cycles while idle without changing the draft", async () => {
+	it("cycles both directions with Ctrl+0 while preserving the draft", async () => {
 		mode.editor.setText("draft stays here");
+		const cycle = vi.spyOn(session, "cyclePrimaryAgent");
 		const firstSwitch = Promise.withResolvers<void>();
 		const secondSwitch = Promise.withResolvers<void>();
 		const switches = [firstSwitch, secondSwitch];
@@ -80,17 +86,20 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 			if (entry.type !== "primary_agent_change") return;
 			switches.shift()?.resolve();
 		};
-		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		expect(mode.keybindings.getKeys("app.primaryAgent.cycle")).toEqual(["ctrl+0"]);
+		expect(mode.editor.onClear).toBeDefined();
+		expect(mode.editor.onCyclePrimaryAgent).toBeDefined();
+		mode.editor.handleInput("\x1b[48;5u");
+		expect(cycle).toHaveBeenCalledTimes(1);
 		await firstSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("discuss");
 		expect(mode.editor.getText()).toBe("draft stays here");
-		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		mode.editor.handleInput("\x1b[48;5u");
 		await secondSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("main");
 	});
 
-	it("falls through to the base completion pipeline while a workflow blocks switching", () => {
-		mode.planModeEnabled = true;
+	it("keeps Tab in the base completion pipeline", () => {
 		mode.editor.setText("/he");
 		const baseEditorPrototype = Object.getPrototypeOf(Object.getPrototypeOf(mode.editor)) as {
 			handleInput(data: string): void;
@@ -101,6 +110,31 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 		expect(baseHandleInput).toHaveBeenCalledWith("\t");
 	});
 
+	it("blocks Ctrl+0 while streaming or a workflow is enabled or paused", () => {
+		const cycle = vi.spyOn(session, "cyclePrimaryAgent");
+		const blockedStates: Array<readonly [string, () => void, () => void]> = [
+			["streaming", () => (session.agent.state.isStreaming = true), () => (session.agent.state.isStreaming = false)],
+			["plan", () => (mode.planModeEnabled = true), () => (mode.planModeEnabled = false)],
+			["paused plan", () => (mode.planModePaused = true), () => (mode.planModePaused = false)],
+			["goal", () => (mode.goalModeEnabled = true), () => (mode.goalModeEnabled = false)],
+			["paused goal", () => (mode.goalModePaused = true), () => (mode.goalModePaused = false)],
+			["vibe", () => (mode.vibeModeEnabled = true), () => (mode.vibeModeEnabled = false)],
+		];
+		for (const [name, enable, disable] of blockedStates) {
+			enable();
+			mode.editor.handleInput("\x1b[48;5u");
+			disable();
+			expect(cycle, name).not.toHaveBeenCalled();
+		}
+	});
+
+	it("refreshes the status-line primary agent after a transcript replay", async () => {
+		const status = vi.spyOn(mode.statusLine, "setPrimaryAgentStatus");
+		await session.setPrimaryAgent("discuss");
+		await mode.renderInitialMessages();
+		expect(status).toHaveBeenLastCalledWith("discuss");
+	});
+
 	it("shows a warning when an accepted switch fails", async () => {
 		const warning = vi.spyOn(mode, "showWarning");
 		const attempted = Promise.withResolvers<void>();
@@ -108,7 +142,7 @@ describe("InteractiveMode Primary Agent Tab fallback", () => {
 			attempted.resolve();
 			throw new Error("switch failed");
 		});
-		expect(mode.cyclePrimaryAgentFromTab()).toBe(true);
+		expect(mode.cyclePrimaryAgentFromShortcut()).toBe(true);
 		await attempted.promise;
 		await Promise.resolve();
 		expect(session.getPrimaryAgentId()).toBe("main");

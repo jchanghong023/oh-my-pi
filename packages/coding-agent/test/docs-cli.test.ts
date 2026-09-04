@@ -60,6 +60,30 @@ describe("runDocsCommand", () => {
 		expect(calls).toEqual([false, false, false, true, false]);
 	});
 
+	it("sanitizes control sequences in progress paths before writing to the terminal", async () => {
+		const cwd = await tempDir("docs-cli-controls-root-");
+		const agentDir = await tempDir("docs-cli-controls-agent-");
+		const attack = "\x1b]0;OSC\x07\x1b[31mCSI\x1b[0m\rFORGED\tTAB\u0085";
+		await fs.writeFile(path.join(cwd, `guide-${attack}.md`), "# Guide\nText\n");
+		const stdout: string[] = [];
+		const stderr: string[] = [];
+		const code = await runDocsCommand(
+			{ action: "init", target: ".", name: "controls", cwd },
+			{
+				createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd, extractor: null }),
+				stdout: text => stdout.push(text),
+				stderr: text => stderr.push(text),
+			},
+		);
+		expect(code).toBe(0);
+		const terminalOutput = `${stdout.join("")}${stderr.join("")}`;
+		expect(terminalOutput).not.toContain("\x1b");
+		expect(terminalOutput).not.toContain("\r");
+		expect(terminalOutput).not.toContain("\t");
+		expect(terminalOutput).not.toContain("\u0085");
+		expect(terminalOutput).not.toContain("\nFORGED");
+	});
+
 	it("returns 130 and JSON cancelled output for an aborted initialization", async () => {
 		const cwd = await tempDir("docs-cli-abort-root-");
 		const agentDir = await tempDir("docs-cli-abort-agent-");

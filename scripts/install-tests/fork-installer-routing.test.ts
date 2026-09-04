@@ -59,30 +59,6 @@ case "$*" in
 esac
 `,
 	);
-	await writeExecutable(
-		binDir,
-		"bun",
-		`#!/bin/sh
-printf 'bun %s\\n' "$*" >> "$TEST_LOG"
-case "$1" in
-  --version) echo 1.3.14 ;;
-  -e) printf x64 ;;
-  install) exit 0 ;;
-  *) exit 1 ;;
-esac
-`,
-	);
-	await writeExecutable(
-		binDir,
-		"git",
-		`#!/bin/sh
-printf 'git %s\\n' "$*" >> "$TEST_LOG"
-if [ "$1" = "clone" ]; then
-  for destination do :; done
-  mkdir -p "$destination/packages/coding-agent"
-fi
-`,
-	);
 
 	return {
 		log,
@@ -122,7 +98,7 @@ async function runInstaller(args: string[]): Promise<{ exitCode: number; stdout:
 }
 
 describe("fork installer routing", () => {
-	test("defaults to the latest fork release even when Bun is available", async () => {
+	test("defaults to the latest fork release", async () => {
 		const result = await runInstaller([]);
 		expect(result.exitCode, result.stdout).toBe(0);
 		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/latest");
@@ -132,17 +108,14 @@ describe("fork installer routing", () => {
 		expect(result.commands).not.toContain("bun install");
 	});
 
-	test("source mode clones fork main and installs its local package", async () => {
+	test("rejects the removed source mode before network access", async () => {
 		const result = await runInstaller(["--source"]);
-		expect(result.exitCode, result.stdout).toBe(0);
-		expect(result.commands).toContain(
-			"git clone --depth 1 --branch main https://github.com/jchanghong023/oh-my-pi.git",
-		);
-		expect(result.commands).toMatch(/bun install -g \/tmp\/tmp\.[^/]+\/packages\/coding-agent/);
+		expect(result.exitCode).toBe(1);
+		expect(result.stdout).toContain("Unknown option: --source");
 		expect(result.commands).not.toContain("api.github.com");
 	});
 
-	test("a ref without source mode selects that fork release", async () => {
+	test("a release ref selects that published fork release", async () => {
 		const result = await runInstaller(["--ref", "v18.0.9+fork.125"]);
 		expect(result.exitCode, result.stdout).toBe(0);
 		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/tags/v18.0.9+fork.125");
@@ -150,24 +123,15 @@ describe("fork installer routing", () => {
 		expect(result.commands).not.toContain("bun install");
 	});
 
-	test("defaults to source installation on macOS", async () => {
-		const result = await runInstallerWithFixture([], await createFixture("Darwin"));
-		expect(result.exitCode, result.stdout).toBe(0);
-		expect(result.commands).toContain(
-			"git clone --depth 1 --branch main https://github.com/jchanghong023/oh-my-pi.git",
-		);
-		expect(result.commands).toContain("bun install -g");
-		expect(result.commands).not.toContain("api.github.com");
-		expect(result.commands).not.toContain("omp-darwin-");
-	});
-
-	test("rejects explicit binary installation on macOS before requesting a release", async () => {
-		const result = await runInstallerWithFixture(["--binary"], await createFixture("Darwin"));
-		expect(result.exitCode).toBe(1);
-		expect(result.stdout).toContain("Prebuilt macOS binaries are not published by this fork.");
-		expect(result.stdout).toContain("passing --source");
-		expect(result.commands).not.toContain("api.github.com");
-		expect(result.commands).not.toContain("omp-darwin-");
+	test("rejects every installation mode on macOS before network access", async () => {
+		for (const args of [[], ["--binary"]]) {
+			const result = await runInstallerWithFixture(args, await createFixture("Darwin"));
+			expect(result.exitCode).toBe(1);
+			expect(result.stdout).toContain("macOS is not supported by this fork.");
+			expect(result.commands).not.toContain("api.github.com");
+			expect(result.commands).not.toContain("git clone");
+			expect(result.commands).not.toContain("bun install");
+		}
 	});
 
 	test("atomically replaces Linux targets without stopping running sessions", async () => {
@@ -197,6 +161,21 @@ describe("fork installer routing", () => {
 			running.kill();
 			await running.exited;
 		}
+	});
+
+	test("limits the Windows installer and release asset to x64", async () => {
+		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
+		expect(script).toContain('$NativeArchitecture -ne "x64"');
+		expect(script).toContain('$BinaryName = "omp-windows-x64.exe"');
+		expect(script).not.toContain('"omp-windows-$NativeArchitecture.exe"');
+	});
+
+	test("does not expose a PowerShell source installation path", async () => {
+		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
+		expect(script).not.toContain("[switch]$Source");
+		expect(script).not.toContain("Install-ViaBun");
+		expect(script).not.toContain("git clone");
+		expect(script).not.toContain("bun install -g");
 	});
 
 	test("uses a unique same-directory Windows temp path for every attempt", async () => {

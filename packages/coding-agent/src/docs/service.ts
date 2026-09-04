@@ -110,16 +110,42 @@ function evidenceLocation(
 	section: MarkdownSection,
 	evidence: ExtractionEvidence,
 ): { byteStart: number; byteEnd: number } | undefined {
-	if (evidence.lineStart < section.lineStart || evidence.lineEnd > section.lineEnd) return undefined;
-	const lines = section.rawMarkdown.match(/.*(?:\n|$)/g)?.filter(value => value !== "") ?? [];
-	const localStart = evidence.lineStart - section.lineStart;
-	const localEnd = evidence.lineEnd - section.lineStart;
-	const selected = lines.slice(localStart, localEnd + 1).join("");
-	if (!selected.includes(evidence.quote)) return undefined;
-	const before = lines.slice(0, localStart).join("");
-	const quoteOffset = selected.indexOf(evidence.quote);
-	const byteStart = section.byteStart + Buffer.byteLength(before) + Buffer.byteLength(selected.slice(0, quoteOffset));
-	return { byteStart, byteEnd: byteStart + Buffer.byteLength(evidence.quote) };
+	if (
+		evidence.lineStart < section.lineStart ||
+		evidence.lineEnd > section.lineEnd ||
+		evidence.lineStart > evidence.lineEnd
+	) {
+		return undefined;
+	}
+	const selectedLines = section.sourceLines.filter(
+		line => line.line >= evidence.lineStart && line.line <= evidence.lineEnd,
+	);
+	const first = selectedLines[0];
+	const last = selectedLines.at(-1);
+	if (!first || !last || first.line !== evidence.lineStart || last.line !== evidence.lineEnd) return undefined;
+
+	const raw = selectedLines.map(line => line.text).join("");
+	let normalized = "";
+	const rawOffsets = [0];
+	for (let rawOffset = 0; rawOffset < raw.length;) {
+		if (raw[rawOffset] === "\r" && raw[rawOffset + 1] === "\n") {
+			normalized += "\n";
+			rawOffset += 2;
+		} else {
+			normalized += raw[rawOffset];
+			rawOffset += 1;
+		}
+		rawOffsets.push(rawOffset);
+	}
+	const quote = evidence.quote.replace(/\r\n/g, "\n");
+	const quoteOffset = normalized.indexOf(quote);
+	if (!quote || quoteOffset < 0) return undefined;
+	const rawStart = rawOffsets[quoteOffset];
+	const rawEnd = rawOffsets[quoteOffset + quote.length];
+	if (rawStart === undefined || rawEnd === undefined) return undefined;
+	const byteStart = first.byteStart + Buffer.byteLength(raw.slice(0, rawStart));
+	const byteEnd = first.byteStart + Buffer.byteLength(raw.slice(0, rawEnd));
+	return { byteStart, byteEnd };
 }
 
 function indexFilter(index: string | undefined, alias = "i"): { sql: string; args: string[] } {
@@ -245,9 +271,15 @@ export class DocsService {
 		try {
 			const result = await this.#buildIndex(temp, input.schema, input.options, input.files);
 			if (result.failed > 0)
-				throw new Error(result.index.lastError ?? `${result.failed} document(s) failed structured extraction`);
-			const promoted = this.storage.promote(temp.id, input.publicName, input.replacedId);
-			return { ...result, index: publicIndex(promoted) };
+				throw new Error(result.lastError ?? `${result.failed} document(s) failed structured extraction`);
+			const promoted = this.storage.promote(
+				temp.id,
+				input.publicName,
+				result.state,
+				result.lastError,
+				input.replacedId,
+			);
+			return { processed: result.processed, failed: result.failed, index: publicIndex(promoted) };
 		} catch (error) {
 			if (this.storage.getById(temp.id)) this.storage.removeById(temp.id);
 			throw error;
@@ -259,7 +291,7 @@ export class DocsService {
 		schema: DocumentSchemaV1,
 		options: DocsBuildOptions,
 		files: string[],
-	): Promise<DocsBuildResult> {
+	): Promise<{ processed: number; failed: number; state: "ready" | "partial"; lastError?: string }> {
 		if (options.signal?.aborted) throw abortError();
 		options.onProgress?.({ phase: "scan", total: files.length, completed: 0, failed: 0 });
 		const extractor = index.mode === "structured" ? await this.#extractor() : undefined;
@@ -344,11 +376,12 @@ export class DocsService {
 		const partialError = this.storage.db
 			.query("SELECT last_error FROM documents WHERE index_id=? AND status='partial' ORDER BY relative_path LIMIT 1")
 			.get(index.id) as { last_error: string | null } | null;
-		this.storage.setState(index.id, state, partialError?.last_error ?? undefined, true);
+		const lastError = partialError?.last_error ?? undefined;
 		return {
-			index: publicIndex(this.storage.getById(index.id) as StoredIndex),
 			processed: completed,
 			failed,
+			state,
+			...(lastError ? { lastError } : {}),
 		};
 	}
 
@@ -447,9 +480,10 @@ export class DocsService {
 				return undefined;
 			}
 			let prefix = "";
-			if (kind.identity.scope === "document") prefix = `${normalizeIdentity(document.relativePath)}\u001f`;
+			const documentScopePath = document.relativePath;
+			if (kind.identity.scope === "document") prefix = `${documentScopePath}\u001f`;
 			else if (kind.identity.scope === "section")
-				prefix = `${normalizeIdentity(document.relativePath)}\u001f${section.ordinal}\u001f${normalizeIdentity(section.headingPath)}\u001f`;
+				prefix = `${documentScopePath}\u001f${section.ordinal}\u001f${normalizeIdentity(section.headingPath)}\u001f`;
 			else if (kind.identity.scope === "parent") {
 				const parent = payload.relations.find(
 					relation =>

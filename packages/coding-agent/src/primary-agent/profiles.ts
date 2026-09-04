@@ -33,12 +33,16 @@ export function getPrimaryAgentProfile(id: PrimaryAgentId): PrimaryAgentProfile 
 }
 
 /** Projects a base tool slate through a profile without changing its order. */
-export function projectPrimaryAgentToolNames(toolNames: readonly string[], profile: PrimaryAgentProfile): string[] {
+export function projectPrimaryAgentToolNames(
+	toolNames: readonly string[],
+	profile: PrimaryAgentProfile,
+	isBuiltIn: (name: string) => boolean = () => false,
+): string[] {
 	if (!profile.restrictTools) return [...toolNames];
 	const allowed = profile.allowedToolNames;
-	return allowed ? toolNames.filter(name => allowed[name] === true) : [];
+	return allowed ? toolNames.filter(name => allowed[name] === true && isBuiltIn(name)) : [];
 }
 
-export function isPrimaryAgentToolAllowed(name: string, profile: PrimaryAgentProfile): boolean {
-	return !profile.restrictTools || profile.allowedToolNames?.[name] === true;
+export function isPrimaryAgentToolAllowed(name: string, profile: PrimaryAgentProfile, isBuiltIn = false): boolean {
+	return !profile.restrictTools || (isBuiltIn && profile.allowedToolNames?.[name] === true);
 }

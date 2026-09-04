@@ -1,4 +1,4 @@
-import { getAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { DocsService } from "../docs/service";
@@ -25,6 +25,10 @@ export interface DocsCliDependencies {
 	stderr?: (text: string) => void;
 }
 
+function sanitizeTerminalLine(text: string): string {
+	return sanitizeText(text).replace(/[\n\t]+/g, " ");
+}
+
 async function createDefaultService(cwd: string, needsModel: boolean): Promise<DocsService> {
 	if (!needsModel) return new DocsService({ agentDir: getAgentDir(), cwd });
 	const settings = await Settings.init({ cwd });
@@ -41,8 +45,8 @@ async function createDefaultService(cwd: string, needsModel: boolean): Promise<D
 }
 
 function progressLine(progress: DocsProgress): string {
-	const path = progress.currentPath ? ` ${progress.currentPath}` : "";
-	const message = progress.message ? ` — ${progress.message}` : "";
+	const path = progress.currentPath ? ` ${sanitizeTerminalLine(progress.currentPath)}` : "";
+	const message = progress.message ? ` — ${sanitizeTerminalLine(progress.message)}` : "";
 	return `${progress.phase} ${progress.completed}/${progress.total} failed=${progress.failed}${path}${message}\n`;
 }
 
@@ -52,8 +56,10 @@ function buildExitCode(result: DocsBuildResult): number {
 
 export async function runDocsCommand(input: DocsCommandInput, dependencies: DocsCliDependencies = {}): Promise<number> {
 	const cwd = input.cwd ?? process.cwd();
-	const stdout = dependencies.stdout ?? (text => process.stdout.write(text));
-	const stderr = dependencies.stderr ?? (text => process.stderr.write(text));
+	const stdoutSink = dependencies.stdout ?? (text => process.stdout.write(text));
+	const stderrSink = dependencies.stderr ?? (text => process.stderr.write(text));
+	const stdout = (text: string): void => stdoutSink(sanitizeText(text));
+	const stderr = (text: string): void => stderrSink(sanitizeText(text));
 	const service = await (dependencies.createService ?? createDefaultService)(
 		cwd,
 		input.action === "reinit" || input.mode === "structured",

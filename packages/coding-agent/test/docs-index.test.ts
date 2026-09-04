@@ -43,9 +43,9 @@ const schema: DocumentSchemaV1 = {
 	],
 };
 
-async function schemaFile(cwd: string): Promise<string> {
+async function schemaFile(cwd: string, value: DocumentSchemaV1 = schema): Promise<string> {
 	const file = path.join(cwd, "schema.json");
-	await fs.writeFile(file, JSON.stringify(schema));
+	await fs.writeFile(file, JSON.stringify(value));
 	return file;
 }
 
@@ -211,6 +211,53 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
+	it("maps multiline LF evidence onto CRLF source bytes", async () => {
+		const root = await tempDir("docs-crlf-root-");
+		const agent = await tempDir("docs-crlf-agent-");
+		const source = "# CRLF\r\nItem: Alpha first\r\ncontinued line\r\n";
+		const documentPath = path.join(root, "crlf.md");
+		await fs.writeFile(documentPath, source);
+		const service = new DocsService({
+			agentDir: agent,
+			cwd: root,
+			extractor: async () => ({
+				entities: [
+					{
+						localId: "item",
+						kind: "item",
+						identity: { name: "Alpha" },
+						displayName: "Alpha",
+						aliases: [],
+						evidence: {
+							quote: "Item: Alpha first\ncontinued line",
+							lineStart: 2,
+							lineEnd: 3,
+							confidence: 1,
+						},
+					},
+				],
+				assertions: [],
+				relations: [],
+			}),
+		});
+		try {
+			const created = await service.init(".", "crlf", path.relative(root, await schemaFile(root)), {
+				mode: "structured",
+			});
+			expect(created.index.state).toBe("ready");
+			const evidence = service.storage.db
+				.query("SELECT quote,byte_start,byte_end FROM evidence WHERE index_id=?")
+				.get(created.index.id) as { quote: string; byte_start: number; byte_end: number };
+			expect(evidence.quote).toBe("Item: Alpha first\ncontinued line");
+			const bytes = await fs.readFile(documentPath);
+			expect(bytes.subarray(evidence.byte_start, evidence.byte_end).toString()).toBe(
+				"Item: Alpha first\r\ncontinued line",
+			);
+		} finally {
+			service.close();
+		}
+	});
+
 	it("reinitializes an immutable generation for added, changed, and deleted Markdown files", async () => {
 		const root = await tempDir("docs-reinit-root-");
 		const agent = await tempDir("docs-reinit-agent-");
@@ -224,11 +271,21 @@ describe("DocsService indexing contract", () => {
 			const schema = path.relative(root, await schemaFile(root));
 			const initial = await service.init(".", "idx", schema, { mode: "structured" });
 			expect(initial.processed).toBe(1);
+			let observedBuildingGeneration = false;
+			const originalPromote = service.storage.promote.bind(service.storage);
+			service.storage.promote = (...args: Parameters<typeof service.storage.promote>) => {
+				expect(service.storage.getById(args[0])?.state).toBe("building");
+				expect(service.list().map(index => index.id)).toEqual([initial.index.id]);
+				observedBuildingGeneration = true;
+				return originalPromote(...args);
+			};
 			await fs.writeFile(path.join(root, "b.md"), "# B\nItem: Beta\n");
 			await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha changed\n");
 			const rebuilt = await service.reinit("idx");
 			expect(rebuilt.processed).toBe(2);
 			expect(rebuilt.index.id).not.toBe(initial.index.id);
+			expect(observedBuildingGeneration).toBe(true);
+			service.storage.promote = originalPromote;
 			await fs.rm(path.join(root, "b.md"));
 			expect((await service.reinit("idx")).processed).toBe(1);
 			const indexStatus = service.status("idx");
@@ -347,6 +404,34 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "mixed", path.relative(root, await schemaFile(root)));
 			expect(service.search("Alpha", { index: "mixed" }).sections.length).toBe(1);
 			expect(service.search("中文", { index: "mixed" }).sections.length).toBe(1);
+		} finally {
+			service.close();
+		}
+	});
+
+	it.skipIf(process.platform !== "linux")("keeps case-distinct document identity scopes separate", async () => {
+		const root = await tempDir("docs-case-root-");
+		const agent = await tempDir("docs-case-agent-");
+		await fs.writeFile(path.join(root, "A.md"), "# Upper\nItem: Alpha one\n");
+		await fs.writeFile(path.join(root, "a.md"), "# Lower\nItem: Alpha two\n");
+		const documentScopedSchema: DocumentSchemaV1 = {
+			...schema,
+			id: "test-docs-document-scope",
+			entityKinds: schema.entityKinds.map(kind =>
+				kind.name === "item" ? { ...kind, identity: { ...kind.identity, scope: "document" } } : kind,
+			),
+		};
+		const service = new DocsService({
+			agentDir: agent,
+			cwd: root,
+			extractor: async ({ section }) =>
+				extraction(section.rawMarkdown, section.rawMarkdown.includes("two") ? "two" : "one"),
+		});
+		try {
+			await service.init(".", "case", path.relative(root, await schemaFile(root, documentScopedSchema)), {
+				mode: "structured",
+			});
+			expect(service.lookup("Alpha", { index: "case" })).toHaveLength(2);
 		} finally {
 			service.close();
 		}

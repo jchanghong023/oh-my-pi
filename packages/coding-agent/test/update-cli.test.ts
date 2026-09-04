@@ -483,10 +483,10 @@ describe("update-cli npm rename contract", () => {
 
 	it("removes the old agent package and its natives companions when both names moved", () => {
 		const packages = { pkg: "@new/omp", natives: "@new/natives" };
-		expect(buildRenameCleanupPackages(packages, "darwin-arm64")).toEqual([
+		expect(buildRenameCleanupPackages(packages, "linux-arm64")).toEqual([
 			"@oh-my-pi/pi-coding-agent",
 			"@oh-my-pi/pi-natives",
-			"@oh-my-pi/pi-natives-darwin-arm64",
+			"@oh-my-pi/pi-natives-linux-arm64",
 		]);
 		expect(buildRenameCleanupPackages(packages, "linux-arm")).toEqual([
 			"@oh-my-pi/pi-coding-agent",
@@ -496,7 +496,7 @@ describe("update-cli npm rename contract", () => {
 
 	it("keeps the natives packages on an agent-only rename so cleanup cannot strip the addon the new install pinned", () => {
 		const packages = { pkg: "@new/omp", natives: "@oh-my-pi/pi-natives" };
-		expect(buildRenameCleanupPackages(packages, "darwin-arm64")).toEqual(["@oh-my-pi/pi-coding-agent"]);
+		expect(buildRenameCleanupPackages(packages, "linux-arm64")).toEqual(["@oh-my-pi/pi-coding-agent"]);
 		expect(buildRenameCleanupPackages(packages, "linux-arm")).toEqual(["@oh-my-pi/pi-coding-agent"]);
 	});
 });
@@ -623,22 +623,19 @@ describe("update-cli bun install command", () => {
 		// file and aborted at validateLoadedBindings with `The .node file on
 		// disk is from a different release than this loader`. See
 		// https://github.com/can1357/oh-my-pi/issues/1824.
-		for (const tag of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"]) {
+		for (const tag of ["linux-x64", "linux-arm64", "win32-x64"]) {
 			const args = buildBunInstallArgs("15.9.0", tag);
 			expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
 			expect(args).toContain(`@oh-my-pi/pi-natives-${tag}@15.9.0`);
 		}
 	});
 
-	it("omits the leaf on unsupported platform tags so an EBADPLATFORM swap does not mask the underlying `no matching version` error", () => {
-		// Defensive: an unsupported tag (e.g. linux-arm32) still installs the
-		// core natives package — which will fail at module load if the platform
-		// truly is unsupported — but we never request a leaf the release
-		// pipeline doesn't publish, otherwise bun aborts with EBADPLATFORM
-		// and hides the real diagnostic from `loadNative`'s aggregated error.
-		const args = buildBunInstallArgs("15.9.0", "linux-arm");
-		expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
-		expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
+	it("omits leaves for macOS, Windows ARM64, and unknown platform tags", () => {
+		for (const tag of ["darwin-x64", "darwin-arm64", "win32-arm64", "linux-arm"]) {
+			const args = buildBunInstallArgs("15.9.0", tag);
+			expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
+			expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
+		}
 	});
 
 	it("derives global node_modules from supported Bun locations with the explicit global directory taking precedence", () => {

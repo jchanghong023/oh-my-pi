@@ -499,7 +499,7 @@ export interface InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean>;
-	cyclePrimaryAgentFromTab(): boolean;
+	cyclePrimaryAgentFromShortcut(): boolean;
 	handleVibeModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
