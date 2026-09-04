@@ -827,7 +827,6 @@ export class SelectorController {
 	}
 
 	/**
-	/**
 	 * Session-only model switch (`/switch <selector>`): applies the resolved
 	 * model without persisting it. Compacts first when the transcript exceeds
 	 * the target's context window, mirroring an over-context pick in the ctrl+t
