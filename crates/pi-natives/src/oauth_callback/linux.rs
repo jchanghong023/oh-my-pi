@@ -1,5 +1,6 @@
 use std::{
 	collections::BTreeSet,
+	fmt::Write as _,
 	fs,
 	os::unix::fs::PermissionsExt,
 	path::{Component, Path, PathBuf},
@@ -274,10 +275,8 @@ fn change_default(
 		let Some((key, _)) = line.split_once('=') else {
 			continue;
 		};
-		if key.trim() == mime_type {
-			if entry_index.replace(index).is_some() {
-				bail!("ambiguous duplicate {mime_type} defaults");
-			}
+		if key.trim() == mime_type && entry_index.replace(index).is_some() {
+			bail!("ambiguous duplicate {mime_type} defaults");
 		}
 	}
 
@@ -313,10 +312,11 @@ fn change_default(
 	if !result.is_empty() && !has_blank_separator {
 		result.push_str(newline);
 	}
-	result.push_str(&format!(
+	let _ = write!(
+		result,
 		"[{DEFAULT_APPLICATIONS_SECTION}]{newline}{mime_type}={}{newline}",
 		desired.value
-	));
+	);
 	Ok(result)
 }
 
@@ -692,7 +692,7 @@ mod tests {
 		}
 	}
 
-	fn test_context(root: &TempDir, desktop: &str, inherited: &str) -> Context {
+	fn context(root: &TempDir, desktop: &str, inherited: &str) -> Context {
 		let home = root.0.join("home");
 		let directory = home.join("transaction");
 		let config = home.join("xdg-config");
@@ -751,7 +751,8 @@ mod tests {
 	#[test]
 	fn removes_only_the_generated_default_section_that_owned_the_entry() {
 		let before = concat!(
-			"[Default Applications]\ntext/plain=editor.desktop;\n\n[Other]\nkey=value\n\n",
+			"[Default Applications]\ntext/plain=editor.desktop;\n\n",
+			"[Other]\nkey=value\n\n",
 			"[Default Applications]\nx-scheme-handler/test=owned.desktop;\n",
 		);
 		let without_entry = change_default(before, "x-scheme-handler/test", &DefaultEntry {
@@ -784,12 +785,12 @@ mod tests {
 	#[test]
 	fn chooses_first_valid_current_desktop_for_highest_user_precedence() {
 		let root = TempDir::new();
-		let context = test_context(&root, " INVALID! :KDE:GNOME:KDE", "inherited.desktop");
-		let expected = expected_paths(&context).unwrap();
-		assert_eq!(expected.preference_path, context.home.join("xdg-config/kde-mimeapps.list"));
-		assert_eq!(expected.applications_directory, context.home.join("xdg-data/applications"));
+		let kde = context(&root, " INVALID! :KDE:GNOME:KDE", "inherited.desktop");
+		let expected = expected_paths(&kde).unwrap();
+		assert_eq!(expected.preference_path, kde.home.join("xdg-config/kde-mimeapps.list"));
+		assert_eq!(expected.applications_directory, kde.home.join("xdg-data/applications"));
 
-		let no_desktop = test_context(&root, "", "inherited.desktop");
+		let no_desktop = context(&root, "", "inherited.desktop");
 		assert_eq!(
 			expected_paths(&no_desktop).unwrap().preference_path,
 			no_desktop.home.join("xdg-config/mimeapps.list")
@@ -799,7 +800,7 @@ mod tests {
 	#[test]
 	fn accepts_absolute_xdg_locations_outside_home() {
 		let root = TempDir::new();
-		let mut context = test_context(&root, "KDE", "inherited.desktop");
+		let mut context = context(&root, "KDE", "inherited.desktop");
 		let config = root.0.join("external-config");
 		let data = root.0.join("external-data");
 		context
@@ -818,7 +819,7 @@ mod tests {
 	#[test]
 	fn desktop_exec_escapes_literals_but_leaves_field_code_unquoted() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE", "inherited.desktop");
+		let context = context(&root, "KDE", "inherited.desktop");
 		let preference = read_preference(
 			&expected_paths(&context).unwrap().preference_path,
 			"x-scheme-handler/omp-auth",
@@ -844,7 +845,7 @@ mod tests {
 	#[test]
 	fn activation_and_restore_preserve_unrelated_concurrent_edits() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE:GNOME", "inherited.desktop");
+		let context = context(&root, "KDE:GNOME", "inherited.desktop");
 		let preference_path = expected_paths(&context).unwrap().preference_path;
 		fs::create_dir_all(preference_path.parent().unwrap()).unwrap();
 		fs::write(
@@ -871,7 +872,7 @@ mod tests {
 	#[test]
 	fn restore_preserves_external_scheme_choice() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE", "inherited.desktop");
+		let context = context(&root, "KDE", "inherited.desktop");
 		let snapshot = prepare(&context).unwrap();
 		activate(&context, &snapshot).unwrap();
 		let current = fs::read_to_string(&snapshot.preference_path).unwrap();
@@ -891,7 +892,7 @@ mod tests {
 	#[test]
 	fn restore_rejects_a_modified_owned_desktop_entry() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE", "inherited.desktop");
+		let context = context(&root, "KDE", "inherited.desktop");
 		let snapshot = prepare(&context).unwrap();
 		activate(&context, &snapshot).unwrap();
 		fs::write(&snapshot.desktop_path, b"externally modified").unwrap();
@@ -902,7 +903,7 @@ mod tests {
 	#[test]
 	fn restoration_returns_to_inherited_default_and_removes_generated_file() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE", "inherited.desktop");
+		let context = context(&root, "KDE", "inherited.desktop");
 		let snapshot = prepare(&context).unwrap();
 		assert!(!snapshot.preference_file_existed);
 		assert_eq!(snapshot.original_effective, "inherited.desktop");
@@ -915,7 +916,7 @@ mod tests {
 	#[test]
 	fn snapshot_validation_rejects_unrelated_paths() {
 		let root = TempDir::new();
-		let context = test_context(&root, "KDE", "inherited.desktop");
+		let context = context(&root, "KDE", "inherited.desktop");
 		let mut snapshot = prepare(&context).unwrap();
 		snapshot.desktop_path = context.home.join("unrelated.desktop");
 		assert!(validate_snapshot(&context, &snapshot).is_err());
