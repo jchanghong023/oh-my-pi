@@ -3111,17 +3111,6 @@
   - `auto`
   - `always`
 
-### `tui.mobile` — Mobile Layout
-
-- **作用**：切换到紧凑版移动端终端布局的开关。
-- **类型**：`boolean`
-- **默认值**：`false`
-- **功能**：使用紧凑的移动端终端布局
-
-- **可选值**：
-  - `true`
-  - `false`
-
 ### `tui.tight` — Tight Layout
 
 - **作用**：去除终端输出左右各 1 字符水平内边距的紧凑布局开关。

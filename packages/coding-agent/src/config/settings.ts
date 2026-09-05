@@ -53,7 +53,6 @@ import {
 	type SettingPath,
 	type SettingValue,
 } from "./settings-schema";
-import { MOBILE_TUI_PRESET } from "./tui-mobile";
 
 // Re-export types that callers need
 export type * from "./settings-schema";
@@ -2960,14 +2959,6 @@ export class Settings {
 		let merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
 
 		merged = this.#deepMerge(merged, this.#configOverlay);
-
-		const mobile = getByPath(this.#deepMerge(merged, this.#overrides), ["tui", "mobile"]) ?? getDefault("tui.mobile");
-		if (mobile === true) {
-			// MOBILE_TUI_PRESET is the lowest-priority base: explicit user config
-			// (global → project → overlay → overrides) always wins over the preset
-			// instead of the preset clobbering a user-set tui.tight/composer.shape.
-			merged = this.#deepMerge(MOBILE_TUI_PRESET, merged);
-		}
 
 		this.#merged = this.#deepMerge(merged, this.#overrides);
 		this.#resolvedCache.clear();

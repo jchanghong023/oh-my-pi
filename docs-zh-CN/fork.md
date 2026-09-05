@@ -84,11 +84,9 @@
 * `theme=dark-terminal`
 * `display.showTurnTime=true`
 * `task.maxConcurrency=8`
-* `statusLine.separator=slash`
 * `mnemopi.embeddingVariant=multilingual`
 * `stt.language=zh-CN`
 * 文件日志默认关闭
-* `tui.mobile` 默认关闭
 
 ### 快捷键与状态栏
 
