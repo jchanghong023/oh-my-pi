@@ -100,7 +100,7 @@ export const KEYBINDINGS = {
 		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: "alt+,",
+		defaultKeys: "shift+f1",
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
@@ -124,7 +124,7 @@ export const KEYBINDINGS = {
 		description: "Select temporary model for current session",
 	},
 	"app.primaryAgent.cycle": {
-		defaultKeys: "ctrl+0",
+		defaultKeys: "shift+f2",
 		description: "Cycle primary agent",
 	},
 	"app.tools.expand": {

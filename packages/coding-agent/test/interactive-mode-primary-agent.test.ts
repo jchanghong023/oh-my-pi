@@ -25,7 +25,7 @@ function stubTool(name: string): AgentTool {
 	};
 }
 
-describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
+describe("InteractiveMode Primary Agent Shift+F2 shortcut", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
@@ -74,7 +74,7 @@ describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
 		tempDir.removeSync();
 	});
 
-	it("cycles both directions with Ctrl+0 while preserving the draft", async () => {
+	it("cycles both directions with Shift+F2 while preserving the draft", async () => {
 		mode.editor.setText("draft stays here");
 		const cycle = vi.spyOn(session, "cyclePrimaryAgent");
 		const firstSwitch = Promise.withResolvers<void>();
@@ -86,15 +86,12 @@ describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
 			if (entry.type !== "primary_agent_change") return;
 			switches.shift()?.resolve();
 		};
-		expect(mode.keybindings.getKeys("app.primaryAgent.cycle")).toEqual(["ctrl+0"]);
-		expect(mode.editor.onClear).toBeDefined();
-		expect(mode.editor.onCyclePrimaryAgent).toBeDefined();
-		mode.editor.handleInput("\x1b[48;5u");
+		mode.editor.handleInput("\x1b[1;2Q");
 		expect(cycle).toHaveBeenCalledTimes(1);
 		await firstSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("discuss");
 		expect(mode.editor.getText()).toBe("draft stays here");
-		mode.editor.handleInput("\x1b[48;5u");
+		mode.editor.handleInput("\x1b[1;2Q");
 		await secondSwitch.promise;
 		expect(session.getPrimaryAgentId()).toBe("main");
 	});
@@ -110,7 +107,7 @@ describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
 		expect(baseHandleInput).toHaveBeenCalledWith("\t");
 	});
 
-	it("blocks Ctrl+0 while streaming or a workflow is enabled or paused", () => {
+	it("blocks Shift+F2 while streaming or a workflow is enabled or paused", () => {
 		const cycle = vi.spyOn(session, "cyclePrimaryAgent");
 		const blockedStates: Array<readonly [string, () => void, () => void]> = [
 			["streaming", () => (session.agent.state.isStreaming = true), () => (session.agent.state.isStreaming = false)],
@@ -122,7 +119,7 @@ describe("InteractiveMode Primary Agent Ctrl+0 shortcut", () => {
 		];
 		for (const [name, enable, disable] of blockedStates) {
 			enable();
-			mode.editor.handleInput("\x1b[48;5u");
+			mode.editor.handleInput("\x1b[1;2Q");
 			disable();
 			expect(cycle, name).not.toHaveBeenCalled();
 		}

@@ -1,7 +1,7 @@
 # Keybindings
 
 Run `/hotkeys` inside an `omp` session to see the active chords for your current build. The list reflects any remaps loaded from disk and any bindings added by extensions.
-In the normal editor, `Tab` accepts completion when available; with no completion and the main session idle, it switches the shared session between the Main and Discuss Primary Agents. `Shift+Tab` keeps its Plan toggle behavior.
+In the normal editor, `Tab` accepts completion; `Shift+F2` switches the idle shared session between the Main and Discuss Primary Agents. `Shift+Tab` keeps its Plan toggle behavior.
 
 
 ## Customize keybindings
@@ -33,11 +33,12 @@ app.history.search: []
 | `app.model.selectTemporary`  | `Ctrl+T`                                                               | Pick a model temporarily for this session                                                                                                                                            |
 | `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
 | `app.plan.toggle`            | `Shift+Tab`                                                           | Toggle plan mode                                                                                                                                                                     |
+| `app.primaryAgent.cycle`     | `Shift+F2`                                                            | Switch between Main and Discuss while idle                                                                                                                                           |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
 | `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
 | `app.thinking.toggle`        | `Alt+P`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
-| `app.thinking.cycle`         | `Alt+,`                                                               | Cycle thinking level                                                                                                                                                                 |
+| `app.thinking.cycle`         | `Shift+F1`                                                            | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
 | `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | Queue a follow-up message                                                                                                                                                            |
 | `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |

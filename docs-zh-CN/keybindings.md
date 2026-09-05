@@ -1,7 +1,7 @@
 # 键盘快捷键
 
 在 `omp` 会话中运行 `/hotkeys` 即可查看当前构建的可用快捷键组合。列表会反映从磁盘加载的所有重映射以及扩展添加的所有绑定。
-普通编辑状态下，`Tab` 在有补全时接受补全；无补全且主会话空闲时，则在共享同一会话的 Main 与 Discuss 主代理间切换。`Shift+Tab` 仍用于切换 Plan。
+普通编辑状态下，`Tab` 用于接受补全；主会话空闲时，`Shift+F2` 在共享同一会话的 Main 与 Discuss 主代理间切换。`Shift+Tab` 仍用于切换 Plan。
 
 
 ## 自定义键盘快捷键
@@ -33,11 +33,12 @@ app.history.search: []
 | `app.model.selectTemporary`  | `Ctrl+T`                                                               | Pick a model temporarily for this session                                                                                                                                            |
 | `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
 | `app.plan.toggle`            | `Shift+Tab`                                                           | Toggle plan mode                                                                                                                                                                     |
+| `app.primaryAgent.cycle`     | `Shift+F2`                                                            | 空闲时切换 Main 与 Discuss |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
 | `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
 | `app.thinking.toggle`        | `Alt+P`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
-| `app.thinking.cycle`         | `Alt+,`                                                               | Cycle thinking level                                                                                                                                                                 |
+| `app.thinking.cycle`         | `Shift+F1`                                                            | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
 | `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | Queue a follow-up message                                                                                                                                                            |
 | `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |

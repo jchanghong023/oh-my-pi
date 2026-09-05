@@ -3245,7 +3245,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering plan.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering plan.");
 			return;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -3460,7 +3460,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering vibe.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4016,7 +4016,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering plan.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering plan.");
 			return false;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -4093,7 +4093,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering vibe.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
 			return false;
 		}
 		if (this.vibeModeEnabled) {
@@ -4138,7 +4138,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering goal.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4238,7 +4238,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering goal.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
 			return false;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4284,7 +4284,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Ctrl+0 before entering the workflow.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering the workflow.");
 			return false;
 		}
 		try {
