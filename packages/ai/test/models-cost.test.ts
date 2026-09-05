@@ -37,9 +37,17 @@ describe("calculateCost", () => {
 		expect(usage.cost.total).toBeCloseTo(2.18, 8);
 	});
 
-	it("keeps token-based calculation for non-Copilot providers", () => {
+	it.each([
+		["openai", undefined],
+		["command-code", "provider"],
+		["command-code", "reference"],
+		["command-code", "unknown"],
+		["command-code", undefined],
+	] as const)("keeps token-based calculation for %s regardless of price provenance", (provider, costSource) => {
 		const model = {
 			...getBundledModel("openai", "gpt-4o-mini"),
+			provider,
+			costSource,
 			cost: {
 				input: 1000,
 				output: 2000,

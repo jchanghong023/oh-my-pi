@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildBrowserItems,
@@ -236,5 +240,43 @@ describe("ModelBrowser native model metadata", () => {
 
 	test("models without upstream metadata render the plain detail line", () => {
 		expect(renderDetail(makeModel("openai", "gpt-5"))).toContain("gpt-5 · 128k ctx · 1k out · free per M");
+	});
+
+	test.each([
+		["provider", 2, 8, "$2/8 (quote)"],
+		["provider", 0, 0, "$0/0 (quote)"],
+		["reference", 2, 8, "$2/8 (est.)"],
+		["reference", 0, 0, "$0/0 (est.)"],
+		["unknown", 0, 0, "unknown"],
+		[undefined, 0, 0, "unknown"],
+		[undefined, 2, 8, "unknown"],
+	] as const)("renders cached Command Code source %s with rates %s/%s", (costSource, input, output, label) => {
+		const root = mkdtempSync(join(tmpdir(), "omp-price-display-"));
+		try {
+			const model = makeModel("command-code", "test-model");
+			model.cost = { input, output, cacheRead: 0, cacheWrite: 0 };
+			if (costSource !== undefined) model.costSource = costSource;
+			const dbPath = join(root, "cache.db");
+			writeModelCache("command-code", Date.now(), [model], true, "test", dbPath);
+			const cached = readModelCache("command-code", 60_000, Date.now, dbPath);
+			expect(cached?.models[0]?.costSource).toBe(costSource);
+			const restored = buildModel(cached!.models[0]!);
+			const browser = makeBrowser([restored], []);
+			const lines = browser.render(160).map(line => Bun.stripANSI(line));
+			expect(lines.filter(line => line.includes(label)).length).toBe(2); // list and detail
+			expect(lines.join("\n")).not.toContain("free");
+			expect(restored.cost).toEqual(model.cost);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("price provenance does not change other providers' display", () => {
+		const model = makeModel("openai", "gpt-5");
+		model.costSource = "unknown";
+		expect(renderDetail(model)).toContain("free per M");
+		model.cost.input = 2;
+		model.cost.output = 8;
+		expect(renderDetail(model)).toContain("$2/8 per M");
 	});
 });

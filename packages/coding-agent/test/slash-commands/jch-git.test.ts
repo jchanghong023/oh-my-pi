@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JCH_GIT_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/git";
 import { JCH_WORKFLOW_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/workflow";
+import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 function git(cwd: string, args: string[]): string {
@@ -22,13 +23,13 @@ describe("direct JCH git slash commands", () => {
 	let seed: string;
 	let work: string;
 
-	async function runDiscardAll() {
+	async function runDiscardAll(args = "") {
 		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
 		if (!command?.handleTui) throw new Error("Missing /jchgitdiscardall TUI handler");
 		let status = "";
 		let error = "";
 		let editor = "/jchgitdiscardall";
-		const result = await command.handleTui({ name: command.name, args: "", text: "/jchgitdiscardall" }, {
+		const consumed = await executeBuiltinSlashCommand(`/jchgitdiscardall ${args}`, {
 			ctx: {
 				editor: {
 					setText: (text: string) => {
@@ -44,7 +45,7 @@ describe("direct JCH git slash commands", () => {
 				},
 			},
 		} as unknown as TuiSlashCommandRuntime);
-		return { result, status, error, editor };
+		return { result: { consumed }, status, error, editor };
 	}
 
 	beforeEach(() => {
@@ -114,7 +115,7 @@ describe("direct JCH git slash commands", () => {
 		expect(git(work, ["rev-parse", "refs/remotes/origin/main"])).toBe(git(seed, ["rev-parse", "HEAD"]));
 	});
 
-	it("fetches, hard-resets to upstream, and cleans ignored files", async () => {
+	it.each(["", "--ignored=false", "--ignored=true"])("fetches, resets and cleans with %s", async args => {
 		writeFileSync(join(work, "tracked.txt"), "local commit\n");
 		git(work, ["add", "tracked.txt"]);
 		git(work, ["commit", "-m", "local commit"]);
@@ -122,7 +123,7 @@ describe("direct JCH git slash commands", () => {
 		writeFileSync(join(work, "untracked.txt"), "untracked\n");
 		writeFileSync(join(work, "ignored.txt"), "ignored\n");
 
-		const { result, status, error, editor } = await runDiscardAll();
+		const { result, status, error, editor } = await runDiscardAll(args);
 
 		expect(result).toEqual({ consumed: true });
 		expect(editor).toBe("");
@@ -131,10 +132,52 @@ describe("direct JCH git slash commands", () => {
 		expect(git(work, ["rev-parse", "HEAD"])).toBe(git(work, ["rev-parse", "@{upstream}"]));
 		expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("base");
 		expect(existsSync(join(work, "untracked.txt"))).toBe(false);
-		expect(existsSync(join(work, "ignored.txt"))).toBe(false);
+		expect(existsSync(join(work, "ignored.txt"))).toBe(args !== "--ignored=true");
 	});
 
-	it("stops before reset and clean when the upstream branch was deleted", async () => {
+	it.each([
+		"--ignored",
+		"--ignored=yes",
+		"--ignored=true --ignored=true",
+		"--ignored=false --ignored=true",
+		"extra",
+		"--ignored=false extra",
+	])("rejects %s before any Git side effects", async args => {
+		const oldRemote = git(work, ["rev-parse", "origin/main"]);
+		writeFileSync(join(seed, "tracked.txt"), "remote update\n");
+		git(seed, ["commit", "-am", "remote update"]);
+		git(seed, ["push"]);
+		writeFileSync(join(work, "tracked.txt"), "dirty\n");
+		writeFileSync(join(work, "untracked.txt"), "untracked\n");
+		writeFileSync(join(work, "ignored.txt"), "ignored\n");
+		const before = git(work, ["status", "--porcelain", "--ignored"]);
+
+		const { status, error } = await runDiscardAll(args);
+
+		expect(status).toBe("");
+		expect(error).toContain("Usage:");
+		expect(git(work, ["rev-parse", "origin/main"])).toBe(oldRemote);
+		expect(existsSync(join(work, ".git", "FETCH_HEAD"))).toBe(false);
+		expect(git(work, ["status", "--porcelain", "--ignored"])).toBe(before);
+		expect(readFileSync(join(work, "tracked.txt"), "utf8")).toBe("dirty\n");
+	});
+
+	it("stops before reset and clean when fetch fails", async () => {
+		git(work, ["remote", "set-url", "origin", join(root, "missing.git")]);
+		writeFileSync(join(work, "tracked.txt"), "dirty\n");
+		writeFileSync(join(work, "untracked.txt"), "untracked\n");
+		writeFileSync(join(work, "ignored.txt"), "ignored\n");
+
+		const { status, error } = await runDiscardAll("--ignored=true");
+
+		expect(status).toBe("");
+		expect(error).toContain("git fetch --all --prune failed");
+		expect(readFileSync(join(work, "tracked.txt"), "utf8")).toBe("dirty\n");
+		expect(existsSync(join(work, "untracked.txt"))).toBe(true);
+		expect(existsSync(join(work, "ignored.txt"))).toBe(true);
+	});
+
+	it("stops before clean when the upstream branch was deleted", async () => {
 		git(remote, ["config", "receive.denyDeleteCurrent", "ignore"]);
 		git(seed, ["push", "origin", "--delete", "main"]);
 		writeFileSync(join(work, "tracked.txt"), "dirty\n");

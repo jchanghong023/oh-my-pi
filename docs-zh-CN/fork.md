@@ -4,8 +4,6 @@
 
 本页面向本人和 AI agent，只记录**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节、修复或同步历史。开发规则见 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`。
 
-冲突很大或上游重写模块时，可以先采用上游实现，再依据本页重建 fork 功能；保留的是行为，不是旧代码。三份 fork 文档不得被上游覆盖。上游已提供等价且满足个人需求的行为时，删除对应差异；未能可靠恢复的功能不能视为同步完成。
-
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
@@ -13,7 +11,7 @@
 * **Upstream commit**：`5964a0f7649275bcde818f20073193fd032451f2`
 * **同步日期**：2026-09-05
 
-## Fork 意图
+## 当前功能差异
 
 ### Markdown 文档索引
 
@@ -21,7 +19,7 @@
 * 默认仅启用全文检索；结构化提取必须显式请求，支持内置 DFT 或自定义 JSON schema，并需要已配置的 task 模型和凭据。
 * `wiki` 支持全文搜索、原文章节/证据读取和索引状态查询；结构化索引另支持实体查找、关系遍历与冲突查询。存在多个索引时，除状态查询外必须指定索引。
 * 索引重建期间继续提供完整旧索引，完成后整体切换，不暴露未完成结果。
-* 正确处理 Markdown 围栏、标题、CRLF 原文证据、Linux 路径大小写和终端文本。
+* Markdown 围栏中的标题不拆分章节，结束围栏须使用相同字符、长度不少于起始围栏且后面仅有空白；支持 ATX/Setext 标题，CRLF 文件的证据保持原文字节定位；Linux 上仅大小写不同的文档保持独立身份，终端展示过滤控制字符。
 
 ### Command Code
 
@@ -30,25 +28,27 @@
 * API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
 * provider 默认模型为 `deepseek/deepseek-v4-flash`。
 * 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
+* 模型列表与详情分别标示渠道报价（`quote`）、参考估算（`est.`）与未知（`unknown`）；未携带价格来源的旧缓存也显示未知，不显示为免费。费用计算与累计费用展示仍使用原有回退价格，不受来源标识影响。
 
 ### OpenCode Zen
 
 * `/models` 面板仅展示内置目录明确标为免费、且当前 input/output 价格均为 0 的 `opencode-zen` 模型。
 * 缺失价格或未列入内置免费目录的模型隐藏，新发现模型即使报告零价也不例外；此过滤不代表全局禁用其他模型。
 
-### 主代理与 Discuss
+### 代理行为与 Discuss
 
+* Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。
 * `Ctrl+0` 固定在 Main ↔ Discuss 之间切换，不支持配置顺序；运行中或有排队消息时不能切换。
 * 会话/分支切换后恢复对应代理状态。
 * Discuss 只能使用允许的**内置工具实例**，不能被同名扩展替代。
-* Discuss 仅用于调查讨论，不执行命令、修改文件或外部状态、创建 Todo、编写实施计划或委派工作；需要实施时须切回 Main，不自动重放请求。
+* Discuss 可在聊天内给出实施方案和步骤，但不写计划文件、不执行命令、修改文件或外部状态、创建 Todo 或委派工作；需要实施时提示用 `Ctrl+0` 切回 Main，不自动重放或实施请求。
 * Discuss 与 Plan/Goal/Vibe 互斥，相关模式暂停时也不能切入 Discuss。
 
 ### 魔法关键词的内置命令与 fullsend
 
 * 上游已有 `ultrathink`、`orchestrate`、`workflowz` 魔法关键词，可在任务正文中以独立小写词触发，无需整条消息只有关键词；代码块、行内代码和 XML/HTML 区域不触发。fork 新增的关键词只有 `fullsend`，遵循同样的匹配规则。
 * fork 为这四个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`，方便输入，并允许命令后直接携带任务文本。
-* `fullsend` 注入执行策略：不以成本或 token 用量为约束，同时优先速度与验证质量，要求端到端完成任务，不牺牲正确性、完整性或必要验证。
+* `fullsend` 注入执行策略：成本和 token 用量不作为优化约束；在同等正确性、完整性与验证标准下缩短完成时间，端到端完成任务。仅做对速度或验证质量有实际收益的调用与并行，不把额外调用或花费视为目标，不扩大任务范围或权限。
 * 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
 
 ### JCH 命令
@@ -65,7 +65,7 @@
 * `/jchcatchup`：查看本地状态/最近提交；`full` 时深入比较远端差异。
 * `/jchgs`：`fetch --all` 后显示状态。
 * `/jchgitpull`：直接按当前 upstream/pull 配置执行 `git pull`。
-* `/jchgitdiscardall`：无交互确认，直接执行 `git fetch --all --prune`、`git reset --hard @{upstream}`、`git clean -xdf`；丢弃本地修改并清理未跟踪内容（包括被 Git 忽略的文件和目录）。目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
+* `/jchgitdiscardall [--ignored=true|false]`：始终无交互确认，先执行 `git fetch --all --prune`、`git reset --hard @{upstream}`。无参数或 `--ignored=false` 时以 `git clean -df` 清理未跟踪内容，保留 ignored；`--ignored=true` 时以 `git clean -xdf` 同时清理 ignored 文件和目录。非法、重复或多余参数在任何 Git 操作前报用法错误；任一步失败即停止。重置目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
 
 ### Claude 配置同步
 
@@ -84,7 +84,7 @@
 * `task.maxConcurrency=8`
 * `mnemopi.embeddingVariant=multilingual`
 * `stt.language=zh-CN`
-* 文件日志默认关闭
+* 文件日志默认关闭；临时开启方式见“安装与运行”。
 
 ### 快捷键与状态栏
 
@@ -96,7 +96,10 @@
 * 状态栏在未显示其他模式状态时显示当前主代理 Main/Discuss。
 * `composer.shape=pi` 时状态栏独立位于输入框下方。
 
-### 个人安装与更新
+### 安装与运行
+
+* `omp --log-file` 仅为本次启动启用现有轮转文件日志，写入当前 profile 的默认日志目录；例如 `omp --profile work --log-file`。不启用控制台日志、不写持久配置；未传参数时默认不写文件，也不覆盖已有显式日志配置。
+* `PI_NATIVE_DIR` 严格限定 native addon 加载目录；指定后不回退到工作区、安装包、缓存或内嵌 addon，缺失或不兼容则加载失败。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
@@ -108,11 +111,9 @@
 ### 文档站
 
 * 保留供个人查阅的中英文 VitePress 文档站及 GitHub Pages 部署能力。
-* 中文站保留完整翻译、使用指南和 `config.yml` 设置参考。
+* 中文站以覆盖上游全部文档的完整翻译为目标，并保留使用指南和 `config.yml` 设置参考；翻译独立同步，内容可能落后于当前代码基线。
 
 ### Fork 开发工具
 
 * 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
 * 保留 `bun scripts/jch-localci.ts [full]` 作为独立 Linux-x64 本地检查入口；默认不构建 native，`full` 才构建。
-* `PI_NATIVE_DIR` 严格限定 native addon 加载目录；指定后不回退到工作区、安装包、缓存或内嵌 addon，缺失或不兼容则加载失败。
-* Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。

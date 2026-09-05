@@ -99,6 +99,7 @@ describe("Command Code provider", () => {
 			baseUrl: "https://api.commandcode.ai/provider",
 			provider: "command-code",
 			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+			costSource: "provider",
 		});
 		expect(byId.get("gpt-5.5")).toMatchObject({
 			api: "openai-completions",
@@ -136,5 +137,18 @@ describe("Command Code provider", () => {
 		const models = (await options.fetchDynamicModels?.()) ?? [];
 		expect(models[0]?.cost.input).toBeGreaterThan(0);
 		expect(models[0]?.cost.output).toBeGreaterThan(0);
+		expect(models[0]?.costSource).toBe("reference");
+	});
+
+	test("marks discovery defaults unknown without changing their rates", async () => {
+		const fetch = (async (input: unknown) => {
+			if (String(input) === "https://commandcode.ai/models.data") return new Response(null, { status: 503 });
+			return Response.json({ data: [{ id: "unlisted-test-model-xyz" }] });
+		}) as typeof globalThis.fetch;
+		const models = await commandCodeModelManagerOptions({ apiKey: "test-key", fetch }).fetchDynamicModels?.();
+		expect(models?.[0]).toMatchObject({
+			costSource: "unknown",
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		});
 	});
 });

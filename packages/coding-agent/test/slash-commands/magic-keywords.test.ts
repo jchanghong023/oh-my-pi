@@ -233,7 +233,9 @@ describe("JCH git slash commands", () => {
 	it("keeps destructive discard-all interactive-only", () => {
 		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
 		expect(command).toMatchObject({
-			description: "JCH Git：刷新、重置到 upstream 并清理全部本地内容",
+			description: "JCH Git：无确认重置到跟踪分支并清理未跟踪内容（默认保留 ignored）",
+			allowArgs: true,
+			inlineHint: "[--ignored=true|false]",
 			handleTui: expect.any(Function),
 		});
 		expect(command?.handle).toBeUndefined();

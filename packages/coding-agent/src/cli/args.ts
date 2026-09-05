@@ -29,6 +29,7 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
+	logFile?: boolean;
 	provider?: string;
 	model?: string;
 	config?: string[];
@@ -228,6 +229,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.version = true;
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
+		} else if (arg === "--log-file") {
+			result.logFile = true;
 		} else if (arg === "--profile" && i + 1 < args.length) {
 			// Normally stripped by `extractProfileFlags` before parseArgs sees it;
 			// kept here as a fallback for direct parseArgs callers.

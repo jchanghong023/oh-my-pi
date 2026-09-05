@@ -1115,6 +1115,8 @@ export interface Model<TApi extends Api = Api> {
 	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
 	cursorMaxMode?: boolean;
 	cost: ModelCost;
+	/** Optional unit-price provenance; does not change cost calculation. */
+	costSource?: "provider" | "reference" | "unknown";
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;

@@ -147,6 +147,7 @@ function mapCommandCodeModel(
 		reasoning: reference?.reasoning ?? defaults.reasoning,
 		input: reference?.input ?? defaults.input,
 		cost: pricingCost ?? reference?.cost ?? defaults.cost,
+		costSource: pricingCost ? "provider" : reference?.cost ? "reference" : "unknown",
 		contextWindow: reference?.contextWindow ?? defaults.contextWindow,
 		maxTokens: reference?.maxTokens ?? defaults.maxTokens,
 		// Wire-model aliases such as effortRouting are provider-specific. Keep

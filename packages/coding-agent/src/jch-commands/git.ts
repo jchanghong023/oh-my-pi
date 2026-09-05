@@ -73,14 +73,21 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "jchgitdiscardall",
-		description: "JCH Git：刷新、重置到 upstream 并清理全部本地内容",
-		handleTui: async (_command, runtime) => {
+		description: "JCH Git：无确认重置到跟踪分支并清理未跟踪内容（默认保留 ignored）",
+		allowArgs: true,
+		inlineHint: "[--ignored=true|false]",
+		handleTui: async (command, runtime) => {
+			const args = command.args.trim();
+			if (args !== "" && args !== "--ignored=false" && args !== "--ignored=true") {
+				runtime.ctx.showError("Usage: /jchgitdiscardall [--ignored=true|false]");
+				return { consumed: true };
+			}
 			runtime.ctx.editor.setText("");
 			try {
 				const result = await runGitSequence(runtime.ctx.sessionManager.getCwd(), [
 					{ args: ["fetch", "--all", "--prune"] },
 					{ args: ["reset", "--hard", "@{upstream}"] },
-					{ args: ["clean", "-xdf"] },
+					{ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"] },
 				]);
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);

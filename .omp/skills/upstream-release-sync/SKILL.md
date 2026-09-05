@@ -13,7 +13,7 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * `main` 集成个人改动；fork 的 `upstream` 精确镜像最近成功合入的上游 commit，供 GitHub PR/差异比较，不含 fork commit。
 * 只查询固定上游 ref 与 fork 的远端 `upstream`，NEVER 使用 Release、tag、`origin/main`、其他远程分支或配置型 `upstream/main` 作为来源。
 * 只允许推送 fork 的 `upstream`；NEVER 推送 `main` 或 tag，不创建 PR、不打包、不发布。
-* MUST 保留 `AGENTS.md`、本 Skill、`docs-zh-CN/fork.md` 的 fork 版本。`fork.md` 是功能差异的唯一清单，保留行为意图而非旧实现。
+* 维护原则与三份文档职责见 `AGENTS.md`；当前功能契约以 `docs-zh-CN/fork.md` 为准，本流程不另建差异清单。
 
 ## 0. 快速门禁
 
@@ -46,9 +46,9 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * 将基线和功能差异更新纳入同一集成提交；目标已在 `main` 历史中时，只提交必要的文档修正。
 * MUST 通过 `git diff --cached --check`，检查冲突标记、三个 fork 文档和变更范围；不得遗留 unmerged、unstaged、意外 untracked 文件或无关生成物，只修正本次涉及的空白错误。
 * 无冲突：仅 staged Git 检查；TS 或工具链变化确有必要时运行一次 `bun run fastcheck`。
-* 有冲突：按影响选择最多一次 `fastcheck`、安全且相关的 `check:types`、最多 3 个精确测试，顺序执行。先确认脚本不会触发下列禁用工作；依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
+* 有冲突：按影响选择首轮最多一次 `fastcheck`、一次安全且相关的 `check:types`、最多 3 个精确测试，顺序执行。先确认脚本不会触发下列禁用工作；依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
 * 同步期间 NEVER 运行全 workspace 检查、根级 `bun run check`、完整测试、UI/browser/heavy、Docker、benchmark、`jch-localci`、打包、发布，或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。
-* 检查失败且无法在上述预算内修复并验证时，不提交、不更新镜像。未提交的 merge 用 `git merge --abort`；其他中止路径仅撤销本次操作，恢复原分支和工作区，不清理用户原有状态。
+* 首次检查失败后可修复本次相关问题，仅允许对首轮失败项额外复验一轮，不重跑已通过项、不追加检查范围；复验仍失败或无法在此范围内确认修复时立即中止，不提交、不更新镜像。未提交的 merge 用 `git merge --abort`；其他中止路径仅撤销本次操作，恢复原分支和工作区，不清理用户原有状态。
 * 验证通过后提交 `sync(upstream): merge main@<目标前12位>`，禁 hooks/签名以避免隐式重型任务。若创建 merge commit，确认第一父为原 `main`、第二父为目标；补记文档提交不要求双亲。
 
 ## 4. 更新镜像
@@ -61,4 +61,4 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 
 ## 5. 清理与报告
 
-删除本次使用的 `refs/omp-sync/upstream-main`。简要报告旧/新基线、集成提交、功能保留与冲突结果、实际验证及未验证项、镜像和工作区状态；明确 `main` 未推送。无变化时只报告已是最新。
+删除本次使用的 `refs/omp-sync/upstream-main`。简要报告旧/新基线、集成提交、功能保留与冲突结果、实际验证及未验证项、镜像和工作区状态；明确 `main` 未推送：本地集成与镜像完成不等于 GitHub 最新差异比较就绪；只有远端 `main` 另行更新到本次集成后，GitHub 的 base=`upstream`、compare=`main` 才反映最新 fork 差异。不为比较就绪而自动推送 `main`。无变化时只报告已是最新。
