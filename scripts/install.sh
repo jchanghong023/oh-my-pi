@@ -141,6 +141,15 @@ warn_running_omp() {
     echo "  Exit and restart those sessions to use the new version; there is no need to force-end current work."
 }
 
+# Normalize Linux host architecture to the release asset name.
+host_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "x64" ;;
+        arm64|aarch64) echo "arm64" ;;
+        *)             uname -m ;;
+    esac
+}
+
 # Install binary from GitHub releases
 install_binary() {
     # Detect platform

@@ -75,9 +75,11 @@ describe("fullsend notice", () => {
 		expect(notice).toContain("Speed and verified quality are joint top priorities");
 		expect(notice).toContain("Monetary cost and token usage are not constraints");
 		expect(notice).toContain("Dispatch independent substantial work in parallel");
-		expect(notice).toContain("delegation overhead would finish later");
-		expect(notice).toContain("clean context is the quality tie-breaker");
-		expect(notice).toContain("strongest relevant verification");
+		expect(notice).toContain("Work directly when delegation adds no material speed or verification benefit");
+		expect(notice).toContain("launch a replacement when a subagent finishes");
+		expect(notice).toContain("When fewer tasks remain than available slots, launch them together");
+		expect(notice).toContain("never pad or expand work just to fill the window");
+		expect(notice).toContain("complete the required, relevant verification");
 		expect(notice).toContain("Yield only when the task is complete");
 		expect(notice).not.toMatch(/{{.*}}/);
 	});
@@ -85,9 +87,12 @@ describe("fullsend notice", () => {
 	it("retains direct execution policy without task-dependent clauses", () => {
 		const notice = renderFullsendNotice({ tools: ["read"] });
 		expect(notice).toContain("shortest expected wall-clock time");
-		expect(notice).toContain("strongest relevant verification");
+		expect(notice).toContain("complete the required, relevant verification");
+		expect(notice).toContain("Additional calls or spend are not goals");
+		expect(notice).toContain("do not expand the requested scope or granted permissions");
 		expect(notice).not.toContain("Dispatch independent substantial work in parallel");
-		expect(notice).not.toContain("clean context is the quality tie-breaker");
+		expect(notice).not.toContain("Work directly when delegation");
+		expect(notice).not.toContain("keep the concurrency window full");
 		expect(notice).not.toMatch(/{{.*}}/);
 	});
 });

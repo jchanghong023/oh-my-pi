@@ -166,7 +166,7 @@ describe("AgentSession magic keyword settings", () => {
 		expect(notice?.content).toContain("Speed and verified quality are joint top priorities");
 		expect(notice?.content).toContain("Monetary cost and token usage are not constraints");
 		expect(notice?.content).toContain("shortest expected wall-clock time");
-		expect(notice?.content).toContain("strongest relevant verification");
+		expect(notice?.content).toContain("complete the required, relevant verification");
 		expect(notice?.content).toContain("Yield only when the task is complete");
 		expect(noticeIdx).toBeLessThan(userIdx);
 		expect(promptMessages[userIdx]?.content).toEqual([{ type: "text", text: "fullsend 完成这个任务" }]);

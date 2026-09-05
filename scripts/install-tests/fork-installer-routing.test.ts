@@ -22,7 +22,7 @@ async function writeExecutable(directory: string, name: string, content: string)
 	await fs.chmod(file, 0o755);
 }
 
-async function createFixture(osName = "Linux"): Promise<InstallerFixture> {
+async function createFixture(osName = "Linux", arch = "x86_64"): Promise<InstallerFixture> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-installer-"));
 	tempDirs.push(dir);
 	const binDir = path.join(dir, "bin");
@@ -31,7 +31,7 @@ async function createFixture(osName = "Linux"): Promise<InstallerFixture> {
 	await fs.mkdir(binDir);
 	await Bun.write(log, "");
 
-	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo x86_64\n`);
+	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo ${arch}\n`);
 	await writeExecutable(binDir, "sysctl", "#!/bin/sh\necho 0\n");
 	await writeExecutable(
 		binDir,
@@ -98,12 +98,15 @@ async function runInstaller(args: string[]): Promise<{ exitCode: number; stdout:
 }
 
 describe("fork installer routing", () => {
-	test("defaults to the latest fork release", async () => {
-		const result = await runInstaller([]);
+	test.each([
+		["x86_64", "x64"],
+		["aarch64", "arm64"],
+	])("defaults to the latest fork release for %s", async (arch, assetArch) => {
+		const result = await runInstallerWithFixture([], await createFixture("Linux", arch));
 		expect(result.exitCode, result.stdout).toBe(0);
 		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/latest");
 		expect(result.commands).toContain(
-			"github.com/jchanghong023/oh-my-pi/releases/download/v18.0.9+fork.125/omp-linux-x64",
+			`github.com/jchanghong023/oh-my-pi/releases/download/v18.0.9+fork.125/omp-linux-${assetArch}`,
 		);
 		expect(result.commands).not.toContain("bun install");
 	});
