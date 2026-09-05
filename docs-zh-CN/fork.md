@@ -17,8 +17,9 @@
 
 ### Markdown 文档索引
 
-* 支持外部 Markdown 目录持久索引，通过 `/docs` 管理，并向普通代理提供只读 `wiki` 查询工具。
-* 默认仅启用全文检索；结构化提取必须显式请求。
+* 支持外部 Markdown 目录持久索引，通过 `/docs` 面板或 `omp docs init/reinit/list/status/remove` 管理，并向普通代理提供只读 `wiki` 查询工具；CLI 删除索引须带 `--force`。
+* 默认仅启用全文检索；结构化提取必须显式请求，支持内置 DFT 或自定义 JSON schema，并需要已配置的 task 模型和凭据。
+* `wiki` 支持全文搜索、原文章节/证据读取和索引状态查询；结构化索引另支持实体查找、关系遍历与冲突查询。存在多个索引时，除状态查询外必须指定索引。
 * 索引重建期间继续提供完整旧索引，完成后整体切换，不暴露未完成结果。
 * 正确处理 Markdown 围栏、标题、CRLF 原文证据、Linux 路径大小写和终端文本。
 
@@ -27,22 +28,28 @@
 * 保留 `command-code` provider，支持 API Key 登录和配置的 provider `baseUrl`。
 * 支持 Anthropic Messages / OpenAI Completions 双协议及模型发现。
 * API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
+* provider 默认模型为 `deepseek/deepseek-v4-flash`。
+* 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
 
 ### OpenCode Zen
 
-* `opencode-zen` 只展示明确确认 input/output 均免费（价格为 0）的模型。
-* 缺失价格或新发现但价格未知的模型默认隐藏。
+* `/models` 面板仅展示内置目录明确标为免费、且当前 input/output 价格均为 0 的 `opencode-zen` 模型。
+* 缺失价格或未列入内置免费目录的模型隐藏，新发现模型即使报告零价也不例外；此过滤不代表全局禁用其他模型。
 
 ### 主代理与 Discuss
 
-* `Ctrl+0` 按配置顺序切换 Main/Discuss。
+* `Ctrl+0` 固定在 Main ↔ Discuss 之间切换，不支持配置顺序；运行中或有排队消息时不能切换。
 * 会话/分支切换后恢复对应代理状态。
 * Discuss 只能使用允许的**内置工具实例**，不能被同名扩展替代。
+* Discuss 仅用于调查讨论，不执行命令、修改文件或外部状态、创建 Todo、编写实施计划或委派工作；需要实施时须切回 Main，不自动重放请求。
+* Discuss 与 Plan/Goal/Vibe 互斥，相关模式暂停时也不能切入 Discuss。
 
-### 魔法命令与 fullsend
+### 魔法关键词的内置命令与 fullsend
 
-* 保留 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`，并允许命令后直接携带任务文本。
-* `fullsend` 并发执行时，有待办任务则任一任务完成立即补位，不等待其他慢任务；任务不足并发上限时直接全部启动。
+* 上游已有 `ultrathink`、`orchestrate`、`workflowz` 魔法关键词，可在任务正文中以独立小写词触发，无需整条消息只有关键词；代码块、行内代码和 XML/HTML 区域不触发。fork 新增的关键词只有 `fullsend`，遵循同样的匹配规则。
+* fork 为这四个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`，方便输入，并允许命令后直接携带任务文本。
+* `fullsend` 注入执行策略：不以成本或 token 用量为约束，同时优先速度与验证质量，要求端到端完成任务，不牺牲正确性、完整性或必要验证。
+* 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
 
 ### JCH 命令
 
@@ -58,7 +65,7 @@
 * `/jchcatchup`：查看本地状态/最近提交；`full` 时深入比较远端差异。
 * `/jchgs`：`fetch --all` 后显示状态。
 * `/jchgitpull`：直接按当前 upstream/pull 配置执行 `git pull`。
-* `/jchgitdiscardall`：交互确认后恢复到 upstream，并清理所有未跟踪文件。
+* `/jchgitdiscardall`：无交互确认，直接执行 `git fetch --all --prune`、`git reset --hard @{upstream}`、`git clean -xdf`；丢弃本地修改并清理未跟踪内容（包括被 Git 忽略的文件和目录）。目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
 
 ### Claude 配置同步
 
@@ -72,7 +79,7 @@
 * `recap.enabled=false`
 * `statusLine.compactThinkingLevel=false`
 * `composer.shape=pi`
-* `theme=dark-terminal`
+* `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 * `display.showTurnTime=true`
 * `task.maxConcurrency=8`
 * `mnemopi.embeddingVariant=multilingual`
@@ -84,7 +91,9 @@
 * `Shift+Tab`：计划模式。
 * `Ctrl+T`：临时模型。
 * `Alt+P`：thinking blocks 显示/隐藏。
+* `Alt+,`：循环切换 thinking level。
 * 状态栏默认显示 active time，并支持窄终端自动换行。
+* 状态栏在未显示其他模式状态时显示当前主代理 Main/Discuss。
 * `composer.shape=pi` 时状态栏独立位于输入框下方。
 
 ### 个人安装与更新
@@ -105,4 +114,5 @@
 
 * 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
 * 保留 `bun scripts/jch-localci.ts [full]` 作为独立 Linux-x64 本地检查入口；默认不构建 native，`full` 才构建。
-* Todo 仅在请求包含至少 3 个独立用户可见结果时创建。
+* `PI_NATIVE_DIR` 严格限定 native addon 加载目录；指定后不回退到工作区、安装包、缓存或内嵌 addon，缺失或不兼容则加载失败。
+* Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。
