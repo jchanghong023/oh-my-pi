@@ -65,21 +65,34 @@ describe("YieldGate.yieldIfDue", () => {
 });
 
 describe("ExponentialYield.race", () => {
-	it("returns the racer's value and cancels the losing sleep", async () => {
-		const sleepStarted = Promise.withResolvers<AbortSignal>();
-		const sleep = (_ms: number, signal?: AbortSignal) => {
-			if (!signal) throw new Error("Expected cancellable sleep");
-			sleepStarted.resolve(signal);
-			const cancelled = Promise.withResolvers<void>();
-			signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-			return cancelled.promise;
-		};
-		const ey = new ExponentialYield({ minMs: 2_000, maxMs: 2_000, sleep });
-
-		const result = await ey.race([Promise.resolve(42)]);
-		const losingSignal = await sleepStarted.promise;
-
-		expect(result).toBe(42);
-		expect(losingSignal.aborted).toBeTrue();
-	});
+	it("cancels the losing sleep so it does not keep the loop alive", async () => {
+		// A child process makes event-loop liveness observable without measuring
+		// how quickly a loaded CI worker schedules a short racer. If race() leaves
+		// its losing timer behind, the child cannot exit before the watchdog.
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`
+					import { ExponentialYield } from "./src/utils/yield.ts";
+					const ey = new ExponentialYield({ minMs: 60_000, maxMs: 60_000 });
+					const out = await ey.race([Promise.resolve(42)]);
+					if (out !== 42) process.exit(1);
+				`,
+			],
+			{
+				cwd: import.meta.dir + "/..",
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "inherit",
+			},
+		);
+		const watchdog = setTimeout(() => child.kill(), 10_000);
+		try {
+			expect(await child.exited).toBe(0);
+		} finally {
+			clearTimeout(watchdog);
+			child.kill();
+		}
+	}, 15_000);
 });
