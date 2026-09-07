@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
 import { getMemoriesDir, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
+import { getCompanyEmbeddingDefaults } from "./company-embeddings";
 
 export type MnemopiLlmMode = "none" | "smol" | "remote";
 
@@ -87,6 +88,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 			embeddingModel,
 			embeddingApiUrl: settings.get("mnemopi.embeddingApiUrl"),
 			embeddingApiKey: settings.get("mnemopi.embeddingApiKey"),
+			...getCompanyEmbeddingDefaults(settings),
 			llm:
 				llmMode === "remote"
 					? {

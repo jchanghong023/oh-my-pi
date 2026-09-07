@@ -30,6 +30,7 @@ import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from
 import { BLOB_BROKER_WORKER_ARG } from "./blob-broker/protocol";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
+import "./config/company-provider";
 import { startJsEvalProcess } from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";

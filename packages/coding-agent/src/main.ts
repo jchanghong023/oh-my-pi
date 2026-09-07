@@ -33,6 +33,7 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { configureStartupLogging } from "./cli/startup-logging";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "./config/company-provider";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -1492,6 +1493,15 @@ export async function runRootCommand(
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		const companyProviderError = getCompanyConfigError();
+		if (companyProviderError) {
+			if (parsedArgs.provider === COMPANY_PROVIDER_ID || parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`)) {
+				process.stderr.write(`${companyProviderError}\n`);
+				process.exit(1);
+			}
+			if (isInteractive) notifs.push({ kind: "warn", message: companyProviderError });
+			else process.stderr.write(`${companyProviderError}\n`);
+		}
 		// Only the interactive host renders a focusable Agent Hub / subagent session
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
 		// title refresh) can tell a focusable process from a print/RPC/eval one.

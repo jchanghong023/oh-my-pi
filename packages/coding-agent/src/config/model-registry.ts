@@ -44,6 +44,8 @@ import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
+import { getCompanyChatModels } from "./company-models";
+import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./company-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -730,9 +732,19 @@ export class ModelRegistry {
 			configuredProviders = new Set<string>(),
 			error: configError,
 		} = logger.time("modelRegistry:loadCustomModels", () => this.#loadCustomModels());
+		const companyError = getCompanyConfigError();
 		this.#configError = configError;
+		this.#providerDiscoveryStates.set(COMPANY_PROVIDER_ID, {
+			provider: COMPANY_PROVIDER_ID,
+			status: companyError ? "unavailable" : "ok",
+			optional: false,
+			stale: false,
+			source: "bundled",
+			models: getCompanyChatModels().map(model => model.id),
+			error: companyError,
+		});
 		this.#keylessProviders = keylessProviders;
-		this.#discoverableProviders = discoverableProviders;
+		this.#discoverableProviders = discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
 		this.#modelOverrides = modelOverrides;
@@ -767,6 +779,7 @@ export class ModelRegistry {
 
 	#knownStaticProviders(): string[] {
 		const providers = new Set<string>(getBundledProviders());
+		providers.add(COMPANY_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);
@@ -867,7 +880,11 @@ export class ModelRegistry {
 		const combined = this.#mergeCustomModels(withConfigModels, select(this.#runtimeModelOverlays));
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
-		return this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock));
+		const models = this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)).filter(
+			model => model.provider !== COMPANY_PROVIDER_ID,
+		);
+		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) models.push(...getCompanyChatModels());
+		return models;
 	}
 
 	#composeStaticModels(providerFilter?: ReadonlySet<string>): Model<Api>[] {
@@ -1339,6 +1356,7 @@ export class ModelRegistry {
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 		for (const [providerName, providerConfig] of providerEntries) {
+			if (providerName === COMPANY_PROVIDER_ID) continue;
 			const resolvedProviderHeaders = resolveConfigHeaders(providerConfig.headers);
 			const commandConfigs = new Set<string>();
 			this.#collectCommandConfigValues(commandConfigs, providerConfig.apiKey, providerConfig.headers);
@@ -2233,7 +2251,9 @@ export class ModelRegistry {
 			if (available === undefined) {
 				available =
 					!disabledProviders.has(provider) &&
-					(this.#keylessProviders.has(provider) || this.authStorage.hasAuth(provider));
+					(provider === COMPANY_PROVIDER_ID
+						? getCompanyConfig() !== undefined
+						: this.#keylessProviders.has(provider) || this.authStorage.hasAuth(provider));
 				byProvider.set(provider, available);
 			}
 			return available;
@@ -2291,6 +2311,7 @@ export class ModelRegistry {
 	 * ignores that alias so SuperGrok is not auto-selected from a paid key.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
+		if (model.provider === COMPANY_PROVIDER_ID) return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
 			isCommandConfigValue(keyConfig) ||
@@ -2309,6 +2330,7 @@ export class ModelRegistry {
 	 * and issue #9967.
 	 */
 	hasConcreteAuth(provider: string): boolean {
+		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		return (
 			isCommandConfigValue(keyConfig) ||
@@ -2386,6 +2408,7 @@ export class ModelRegistry {
 	 * Get provider-level headers without including per-model overrides.
 	 */
 	getProviderHeaders(provider: string): Record<string, string> | undefined {
+		if (provider === COMPANY_PROVIDER_ID) return undefined;
 		return createLiveConfigHeaders([
 			this.#providerOverrides.get(provider)?.headers,
 			this.#runtimeProviderOverrides.get(provider)?.headers,
@@ -2400,6 +2423,7 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: { signal?: AbortSignal },
 	): Promise<string | undefined> {
+		if (model.provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
 		if (commandKey.configured) return commandKey.value;
 		if (this.#keylessProviders.has(model.provider) && !this.authStorage.hasAuth(model.provider)) {
@@ -2438,6 +2462,7 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
 	): Promise<string | undefined> {
+		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
 		if (options?.forceRefresh) this.#invalidateProviderCommandConfigs(provider);
 		const commandKey = this.#resolveCommandBackedApiKey(
 			provider,
@@ -2465,6 +2490,9 @@ export class ModelRegistry {
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
 	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
 	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
+		if ((typeof target === "string" ? target : target.provider) === COMPANY_PROVIDER_ID) {
+			return () => getCompanyConfig()?.token;
+		}
 		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
 		if (typeof target === "string") {
 			return createApiKeyResolver(this, target, options);
@@ -2569,6 +2597,7 @@ export class ModelRegistry {
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
 	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
+		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 		}

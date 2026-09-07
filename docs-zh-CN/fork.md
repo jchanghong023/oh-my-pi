@@ -72,6 +72,24 @@
 * 保留 `omp sync-claude [--provider <name>]`，将 Claude Code endpoint/token 同步到当前 OMP profile。
 * 可自动识别仅修改 `baseUrl`/`apiKey` 的内置 Anthropic provider。
 
+### 公司内网模型
+
+* 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 `~/.claude/settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
+* URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
+* 聊天使用 Anthropic Messages 协议和 Bearer 认证，不做公司模型发现、不请求对应厂商的公网 API。内置参数固定如下（token 数）：
+
+  | Model ID | 输入 | 上下文 | 最大输出 |
+  | --- | --- | ---: | ---: |
+  | `DeepSeek-V4-Flash-public` | 文本 | 1,000,000 | 384,000 |
+  | `GLM-5.2-public` | 文本 | 1,000,000 | 131,072 |
+  | `MiniMax-M2.7` | 文本 | 204,800 | 131,072 |
+  | `Qwen3.6-27B-public` | 文本、图片 | 262,144 | 262,144 |
+  | `Qwen3.6-35B-A3B` | 文本、图片 | 262,144 | 262,144 |
+
+* Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-Embedding-8B`，复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址和凭据配置仍优先；不会将公司 Token 发送给显式配置的其他地址。
+* 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
+* 检索模型目录还包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，三种检索模型不作为聊天模型展示。现有记忆流程只接文本向量；显式选择 `Qwen3-VL-Embedding-2B` 时也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
+
 ### 默认设置
 
 保持以下 fork 默认值：
