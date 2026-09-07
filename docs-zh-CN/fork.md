@@ -99,6 +99,7 @@
 ### 安装与运行
 
 * `omp --log-file` 仅为本次启动启用现有轮转文件日志，写入当前 profile 的默认日志目录；例如 `omp --profile work --log-file`。不启用控制台日志、不写持久配置；未传参数时默认不写文件，也不覆盖已有显式日志配置。
+* `omp --offline` 以无公网模式启动本次进程：仅在当前进程内临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`（不写 `~/.omp/agent/config.yml`，退出即消失），并在系统提示词中追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等其他能力不受影响。
 * `PI_NATIVE_DIR` 严格限定 native addon 加载目录；指定后不回退到工作区、安装包、缓存或内嵌 addon，缺失或不兼容则加载失败。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。

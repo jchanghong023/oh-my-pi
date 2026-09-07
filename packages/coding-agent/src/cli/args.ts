@@ -30,6 +30,8 @@ export interface Args {
 	alias?: string;
 	allowHome?: boolean;
 	logFile?: boolean;
+	/** Restrict this launch to local resources: disable Web Search, Browser, and URL fetch tools for the process and tell the model there is no public network. */
+	offline?: boolean;
 	provider?: string;
 	model?: string;
 	config?: string[];
@@ -231,6 +233,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.allowHome = true;
 		} else if (arg === "--log-file") {
 			result.logFile = true;
+		} else if (arg === "--offline") {
+			result.offline = true;
 		} else if (arg === "--profile" && i + 1 < args.length) {
 			// Normally stripped by `extractProfileFlags` before parseArgs sees it;
 			// kept here as a fallback for direct parseArgs callers.

@@ -7,6 +7,7 @@ import {
 	readPipedInput,
 	submitInteractiveInput,
 } from "@oh-my-pi/pi-coding-agent/main";
+import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { discoverTitleSystemPromptFile } from "@oh-my-pi/pi-coding-agent/system-prompt";
@@ -60,12 +61,42 @@ describe("readPipedInput", () => {
 describe("applyResolvedSystemPromptInputs", () => {
 	it("routes SYSTEM.md content through template-aware session options", () => {
 		const options: CreateAgentSessionOptions = {};
+		const parsed = parseArgs([]);
 
-		applyResolvedSystemPromptInputs(options, "project system prompt", "append prompt");
+		applyResolvedSystemPromptInputs(options, "project system prompt", "append prompt", parsed);
 
 		expect(options.customSystemPrompt).toBe("project system prompt");
 		expect(options.appendSystemPrompt).toBe("append prompt");
 		expect(options.systemPrompt).toBeUndefined();
+	});
+
+	it("keeps the offline notice out of the append prompt without --offline", () => {
+		const options: CreateAgentSessionOptions = {};
+		const parsed = parseArgs([]);
+
+		applyResolvedSystemPromptInputs(options, undefined, undefined, parsed);
+
+		expect(options.appendSystemPrompt).toBeUndefined();
+	});
+
+	it("appends the offline notice when launched with --offline", () => {
+		const options: CreateAgentSessionOptions = {};
+		const parsed = parseArgs(["--offline"]);
+
+		applyResolvedSystemPromptInputs(options, undefined, undefined, parsed);
+
+		expect(options.appendSystemPrompt).toContain("offline 模式");
+	});
+
+	it("appends the offline notice after an existing append prompt under --offline", () => {
+		const options: CreateAgentSessionOptions = {};
+		const parsed = parseArgs(["--offline"]);
+
+		applyResolvedSystemPromptInputs(options, undefined, "existing append", parsed);
+
+		expect(options.appendSystemPrompt).toBe(
+			"existing append\n\n当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。",
+		);
 	});
 });
 

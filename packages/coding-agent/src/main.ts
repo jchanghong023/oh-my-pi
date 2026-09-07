@@ -1068,12 +1068,21 @@ export function applyResolvedSystemPromptInputs(
 	options: CreateAgentSessionOptions,
 	resolvedSystemPrompt: string | undefined,
 	resolvedAppendPrompt: string | undefined,
+	parsed: Args,
 ): void {
 	if (resolvedSystemPrompt) {
 		options.customSystemPrompt = resolvedSystemPrompt;
 	}
 	if (resolvedAppendPrompt) {
 		options.appendSystemPrompt = resolvedAppendPrompt;
+	}
+	// --offline: append the offline-environment notice after any resolved append
+	// prompt so it reaches the model in every session built from this launch.
+	if (parsed.offline) {
+		const offlineNotice = "当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。";
+		options.appendSystemPrompt = options.appendSystemPrompt
+			? `${options.appendSystemPrompt}\n\n${offlineNotice}`
+			: offlineNotice;
 	}
 }
 
@@ -1319,7 +1328,7 @@ export async function buildSessionOptions(
 	// (handled by caller before createAgentSession)
 
 	// System prompt
-	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt);
+	applyResolvedSystemPromptInputs(options, resolvedSystemPrompt, resolvedAppendPrompt, parsed);
 	// Replan-driven title refresh resolves the override from this same field on
 	// `AgentSession`, so threading it through `CreateAgentSessionOptions` keeps
 	// both first-input titling (`input-controller.ts`) and replan refresh
@@ -1576,6 +1585,16 @@ export async function runRootCommand(
 		// Apply --external-thinking CLI flag (ephemeral, not persisted)
 		if (parsedArgs.externalThinking) {
 			settingsInstance.override("externalThinking", true);
+		}
+		// Apply --offline CLI flag (ephemeral, not persisted): this process only —
+		// no config.yml writes, no effect after exit. Disables the public-network
+		// tools; the session system prompt additionally tells the model there is
+		// no public network. Company-internal model APIs and every local tool
+		// (bash/eval, files, LSP, git, Computer Use) stay untouched.
+		if (parsedArgs.offline) {
+			settingsInstance.override("web_search.enabled", false);
+			settingsInstance.override("browser.enabled", false);
+			settingsInstance.override("fetch.enabled", false);
 		}
 
 		await logger.time(
