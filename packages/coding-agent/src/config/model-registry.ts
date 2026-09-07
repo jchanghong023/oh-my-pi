@@ -44,7 +44,7 @@ import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
-import { getCompanyChatModels } from "./company-models";
+import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
 import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./company-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
@@ -740,7 +740,7 @@ export class ModelRegistry {
 			optional: false,
 			stale: false,
 			source: "bundled",
-			models: getCompanyChatModels().map(model => model.id),
+			models: getCompanyChatModelIds(),
 			error: companyError,
 		});
 		this.#keylessProviders = keylessProviders;

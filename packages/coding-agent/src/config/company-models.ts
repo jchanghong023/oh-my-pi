@@ -29,6 +29,10 @@ export const COMPANY_RETRIEVAL_MODELS = [
 
 let chatModels: Model<"anthropic-messages">[] | undefined;
 
+export function getCompanyChatModelIds(): string[] {
+	return getCompanyConfig() ? CHAT_MODELS.map(model => model.id) : [];
+}
+
 export function getCompanyChatModels(): Model<"anthropic-messages">[] {
 	const config = getCompanyConfig();
 	if (!config) return [];
