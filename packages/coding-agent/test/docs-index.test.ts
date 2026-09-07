@@ -432,6 +432,20 @@ describe("DocsService indexing contract", () => {
 				mode: "structured",
 			});
 			expect(service.lookup("Alpha", { index: "case" })).toHaveLength(2);
+			const hits = service.search("Alpha", { index: "case" }).entities;
+			for (const [document, value] of [
+				["A.md", "one"],
+				["a.md", "two"],
+			]) {
+				const hit = hits.find(entity => entity.key.startsWith(`${document}\u001f`));
+				expect(hit).toBeDefined();
+				const entities = service.lookup(hit!.key, { index: "case" });
+				expect(entities.map(entity => entity.entityId)).toEqual([hit!.entityId]);
+				expect(entities[0].assertions.map(assertion => assertion.value)).toEqual([value]);
+				expect(entities[0].assertions.flatMap(assertion => assertion.evidence.map(item => item.path))).toEqual([
+					document,
+				]);
+			}
 		} finally {
 			service.close();
 		}

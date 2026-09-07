@@ -661,11 +661,12 @@ export class DocsService {
 	lookup(key: string, options: { index?: string } = {}): DocsEntityResult[] {
 		const filter = indexFilter(options.index);
 		const normalized = normalizeIdentity(key);
+		const canonicalKey = key.includes("\u001f") ? key : normalized;
 		const id = /^\d+$/.test(key) ? Number(key) : -1;
 		const rows = this.storage.db
 			.query(`SELECT DISTINCT e.id,i.name index_name,e.kind,e.canonical_key,e.display_name FROM entities e JOIN doc_indexes i ON i.id=e.index_id LEFT JOIN entity_aliases a ON a.entity_id=e.id
 		 WHERE (e.id=? OR e.canonical_key=? OR a.normalized_alias=? OR e.display_name=?)${filter.sql} ORDER BY i.name,e.kind,e.display_name`)
-			.all(id, normalized, normalized, key, ...filter.args) as Array<Record<string, unknown>>;
+			.all(id, canonicalKey, normalized, key, ...filter.args) as Array<Record<string, unknown>>;
 		return rows.map(row => {
 			const entityId = row.id as number;
 			const aliases = (
