@@ -33,6 +33,7 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { configureStartupLogging } from "./cli/startup-logging";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
+import { setCompanyChatContextWindow } from "./config/company-models";
 import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "./config/company-provider";
 import { ModelRegistry } from "./config/model-registry";
 import {
@@ -1556,6 +1557,14 @@ export async function runRootCommand(
 			applyAcpDefaultSettingOverrides(settingsInstance);
 		}
 
+		// Process-only offline overrides; apply before the registry captures company models.
+		if (parsedArgs.offline) {
+			settingsInstance.override("web_search.enabled", false);
+			settingsInstance.override("browser.enabled", false);
+			settingsInstance.override("fetch.enabled", false);
+			setCompanyChatContextWindow(200000);
+		}
+
 		// The registry composes policy-dependent metadata synchronously, including
 		// extended-context window caps, so it must receive the finalized settings.
 		const modelRegistry = logger.time(
@@ -1607,16 +1616,6 @@ export async function runRootCommand(
 		// Apply --external-thinking CLI flag (ephemeral, not persisted)
 		if (parsedArgs.externalThinking) {
 			settingsInstance.override("externalThinking", true);
-		}
-		// Apply --offline CLI flag (ephemeral, not persisted): this process only —
-		// no config.yml writes, no effect after exit. Disables the public-network
-		// tools; the session system prompt additionally tells the model there is
-		// no public network. Company-internal model APIs and every local tool
-		// (bash/eval, files, LSP, git, Computer Use) stay untouched.
-		if (parsedArgs.offline) {
-			settingsInstance.override("web_search.enabled", false);
-			settingsInstance.override("browser.enabled", false);
-			settingsInstance.override("fetch.enabled", false);
 		}
 
 		await logger.time(

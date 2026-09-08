@@ -1,3 +1,4 @@
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import type { Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -22,12 +23,18 @@ const CHAT_MODELS: ReadonlyArray<
 
 // These are retrieval models, not Anthropic Messages models or tool-calling agents.
 export const COMPANY_RETRIEVAL_MODELS = [
-	{ id: "Qwen3-Embedding-8B", type: "embedding", input: ["text"], contextWindow: 32768, dimensions: 4096 },
 	{ id: "Qwen3-VL-Embedding-2B", type: "embedding", input: ["text", "image"], contextWindow: 32768, dimensions: 2048 },
 	{ id: "Qwen3-VL-Reranker-2B", type: "reranker", input: ["text", "image"], contextWindow: 32768 },
 ] as const;
 
 let chatModels: Model<"anthropic-messages">[] | undefined;
+const contextWindowKey = "omp.company-models.contextWindow";
+
+/** Set before registry initialization; workers inherit this process-only override. */
+export function setCompanyChatContextWindow(contextWindow: number): void {
+	setEnvironmentData(contextWindowKey, contextWindow);
+	chatModels = undefined;
+}
 
 export function getCompanyChatModelIds(): string[] {
 	return getCompanyConfig() ? CHAT_MODELS.map(model => model.id) : [];
@@ -39,6 +46,7 @@ export function getCompanyChatModels(): Model<"anthropic-messages">[] {
 	return (chatModels ??= CHAT_MODELS.map(spec =>
 		buildModel({
 			...spec,
+			contextWindow: (getEnvironmentData(contextWindowKey) as number | undefined) ?? spec.contextWindow,
 			name: spec.id,
 			provider: COMPANY_PROVIDER_ID,
 			api: "anthropic-messages",

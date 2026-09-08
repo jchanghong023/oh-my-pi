@@ -86,9 +86,9 @@
   | `Qwen3.6-27B-public` | 文本、图片 | 262,144 | 262,144 |
   | `Qwen3.6-35B-A3B` | 文本、图片 | 262,144 | 262,144 |
 
-* Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-Embedding-8B`，复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址和凭据配置仍优先；不会将公司 Token 发送给显式配置的其他地址。
+* Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-VL-Embedding-2B`，复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址和凭据配置仍优先；不会将公司 Token 发送给显式配置的其他地址。
 * 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
-* 检索模型目录还包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，三种检索模型不作为聊天模型展示。现有记忆流程只接文本向量；显式选择 `Qwen3-VL-Embedding-2B` 时也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
+* 检索模型目录仅包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，不包含 8B 模型，两种检索模型不作为聊天模型展示。现有记忆流程只接文本向量，默认的 `Qwen3-VL-Embedding-2B` 也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
 
 ### 默认设置
 
@@ -117,7 +117,7 @@
 ### 安装与运行
 
 * `omp --log-file` 仅为本次启动启用现有轮转文件日志，写入当前 profile 的默认日志目录；例如 `omp --profile work --log-file`。不启用控制台日志、不写持久配置；未传参数时默认不写文件，也不覆盖已有显式日志配置。
-* `omp --offline` 以无公网模式启动本次进程：仅在当前进程内临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`（不写 `~/.omp/agent/config.yml`，退出即消失），并在系统提示词中追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等其他能力不受影响。
+* `omp --offline` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些覆盖不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 * `PI_NATIVE_DIR` 严格限定 native addon 加载目录；指定后不回退到工作区、安装包、缓存或内嵌 addon，缺失或不兼容则加载失败。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
