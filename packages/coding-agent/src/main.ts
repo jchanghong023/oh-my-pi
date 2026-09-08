@@ -516,6 +516,7 @@ async function runInteractiveMode(
 	joinLink?: string,
 	startBackgroundModelDiscovery?: () => Promise<void>,
 	startupLease?: ComposerLease,
+	offline = false,
 ): Promise<void> {
 	let mode: InteractiveMode;
 	try {
@@ -547,7 +548,7 @@ async function runInteractiveMode(
 		// setting needs the shared setup splash renderer.
 		const storedSetupVersion = settings.get("setupVersion");
 		setupWizard =
-			forceSetupWizard || storedSetupVersion < CURRENT_SETUP_VERSION || showStartupSplash
+			forceSetupWizard || (!offline && (storedSetupVersion < CURRENT_SETUP_VERSION || showStartupSplash))
 				? await import("./modes/setup-wizard")
 				: undefined;
 		setupScenes = setupWizard
@@ -573,8 +574,11 @@ async function runInteractiveMode(
 		throw error;
 	}
 
-	if (setupWizard && playStartupSplash) {
-		await setupWizard.runStartupSplash(mode);
+	if (playStartupSplash) {
+		// Keep optional animation code off the offline startup path when no splash is requested.
+		const runStartupSplash =
+			setupWizard?.runStartupSplash ?? (await import("./modes/setup-wizard/startup-splash")).runStartupSplash;
+		await runStartupSplash(mode);
 	}
 
 	if (setupWizard && setupScenes.length > 0) {
@@ -1562,6 +1566,9 @@ export async function runRootCommand(
 			settingsInstance.override("web_search.enabled", false);
 			settingsInstance.override("browser.enabled", false);
 			settingsInstance.override("fetch.enabled", false);
+			settingsInstance.override("startup.setupWizard", false);
+			settingsInstance.override("startup.checkUpdate", false);
+			settingsInstance.override("marketplace.autoUpdate", "off");
 			setCompanyChatContextWindow(200000);
 			if (getCompanyConfig()) {
 				const roleDefaults = {
@@ -2012,14 +2019,15 @@ export async function runRootCommand(
 			// Startup changelog is only consumed by interactive mode below; kick the
 			// CHANGELOG.md parse off now so it overlaps session creation instead of
 			// serializing after it.
-			const startupChangelogPromise = isInteractive
-				? logger.time(
-						"main:getChangelogForDisplay",
-						getChangelogForDisplay,
-						parsedArgs,
-						settingsInstance.get("startup.changelogMode"),
-					)
-				: undefined;
+			const startupChangelogPromise =
+				isInteractive && !parsedArgs.offline
+					? logger.time(
+							"main:getChangelogForDisplay",
+							getChangelogForDisplay,
+							parsedArgs,
+							settingsInstance.get("startup.changelogMode"),
+						)
+					: undefined;
 
 			const {
 				session,
@@ -2150,8 +2158,9 @@ export async function runRootCommand(
 						initialMessage,
 						initialImages,
 						parsedArgs.join,
-						startBackgroundModelDiscovery,
+						parsedArgs.offline ? undefined : startBackgroundModelDiscovery,
 						startupLease,
+						parsedArgs.offline,
 					);
 				} finally {
 					startupLease?.dispose();
