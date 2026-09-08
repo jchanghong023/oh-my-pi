@@ -3242,14 +3242,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		) {
 			explicitlyRequestedToolNames.push("yield");
 		}
-		// Builtins force-included into the registry by `createTools` would otherwise be
-		// dropped from the ACTIVE set when the caller supplied an explicit `toolNames`
-		// list. Activate exactly the builtins createTools built (`builtInToolNames` —
-		// provenance, so a same-named custom/extension tool is never force-activated).
+		// Session-managed builtins may be force-included by createTools. Keep the
+		// active set consistent with that registry decision, using built-in
+		// provenance so same-named extension tools are never force-activated.
 		// This keeps the wiki/read pairing and auto-learn guidance consistent with the
 		// callable tool surface.
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
-			for (const name of ["wiki", "manage_skill", "learn"]) {
+			for (const name of ["wiki", "manage_skill", "learn", "context_notes", "new_context"]) {
 				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}
