@@ -1,7 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { lookupBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 function makeSession(restrictToolNames = false): ToolSession {
@@ -28,13 +26,5 @@ describe("built-in wiki availability", () => {
 		expect(readTools.map(tool => tool.name)).toEqual(expect.arrayContaining(["read", "wiki"]));
 		expect(restrictedReadTools.map(tool => tool.name)).toEqual(["read"]);
 		expect(restrictedWikiTools.map(tool => tool.name)).toEqual(["wiki"]);
-	});
-
-	it("removes the dedicated agent and document research shortcut", async () => {
-		const task = await TaskTool.create(makeSession());
-
-		expect(task.description).not.toContain("doc-researcher");
-		expect(lookupBuiltinSlashCommand("doc")).toBeUndefined();
-		expect(lookupBuiltinSlashCommand("docs")).toBeDefined();
 	});
 });

@@ -1,12 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
+import { unlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { enumerateMarkdownFiles, parseMarkdown, readMarkdownDocument } from "../src/docs/markdown";
-import { resolveDocumentSchema } from "../src/docs/schema";
 import { DocsService } from "../src/docs/service";
-import type { DocumentExtraction, DocumentSchemaV1 } from "../src/docs/types";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -15,80 +14,11 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-const schema: DocumentSchemaV1 = {
-	id: "test-docs",
-	version: 1,
-	title: "Test documents",
-	description: "Minimal schema for indexing behavior",
-	instructions: [],
-	entityKinds: [
-		{
-			name: "item",
-			description: "A documented item",
-			identity: { scope: "global", fields: ["name"] },
-			fields: [
-				{ name: "name", type: "string", description: "Name", required: true },
-				{ name: "value", type: "string", description: "Value" },
-			],
-		},
-		{
-			name: "tool",
-			description: "A tool",
-			identity: { scope: "global", fields: ["name"] },
-			fields: [{ name: "name", type: "string", description: "Name", required: true }],
-		},
-	],
-	predicates: [
-		{ name: "uses", description: "Uses", sourceKinds: ["item"], targetKinds: ["tool"], cardinality: "many" },
-	],
-};
-
-async function schemaFile(cwd: string, value: DocumentSchemaV1 = schema): Promise<string> {
-	const file = path.join(cwd, "schema.json");
-	await fs.writeFile(file, JSON.stringify(value));
-	return file;
-}
-
-function extraction(sectionText: string, value: string, invalidEvidence = false): DocumentExtraction {
-	const line = sectionText.split("\n").findIndex(item => item.includes("Item:")) + 1;
-	const quote = sectionText.split("\n").find(item => item.includes("Item:")) ?? sectionText.trim();
-	const evidence = {
-		quote: invalidEvidence ? "not source text" : quote,
-		lineStart: line,
-		lineEnd: line,
-		confidence: 0.9,
-	};
-	return {
-		entities: [
-			{ localId: "item", kind: "item", identity: { name: "Alpha" }, displayName: "Alpha", aliases: ["A"], evidence },
-			{
-				localId: "tool",
-				kind: "tool",
-				identity: { name: sectionText.includes("two") ? "Runner Two" : "Runner One" },
-				displayName: sectionText.includes("two") ? "Runner Two" : "Runner One",
-				aliases: [],
-				evidence,
-			},
-		],
-		assertions: [{ subjectLocalId: "item", field: "value", value, evidence }],
-		relations: [{ sourceLocalId: "item", predicate: "uses", targetLocalId: "tool", evidence }],
-	};
-}
-
 afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-describe("document schema and Markdown parsing", () => {
-	it("uses the embedded DFT schema by default and hashes canonical JSON", async () => {
-		const first = await resolveDocumentSchema(undefined, process.cwd());
-		const second = await resolveDocumentSchema("dft", process.cwd());
-		expect(first.source).toBe("embedded");
-		expect(first.schema.id).toBe("dft");
-		expect(first.json).toBe(second.json);
-		expect(first.hash).toBe(second.hash);
-	});
-
+describe("Markdown parsing", () => {
 	it("parses headings, setext headings, tables, fences, and oversized sections with source ranges", () => {
 		const large = "x".repeat(24_100);
 		const text = [
@@ -110,7 +40,7 @@ describe("document schema and Markdown parsing", () => {
 		expect(parsed.title).toBe("Document title");
 		expect(parsed.sections.some(section => section.headingPath.at(-1) === "Commands")).toBe(true);
 		expect(parsed.sections.some(section => section.rawMarkdown.includes("# inside a fence"))).toBe(true);
-		expect(parsed.sections.length).toBeGreaterThan(3);
+		expect(parsed.sections.map(section => section.rawMarkdown).join("")).toBe(text);
 		expect(
 			parsed.sections.every(section => section.byteEnd > section.byteStart && section.lineEnd >= section.lineStart),
 		).toBe(true);
@@ -161,237 +91,124 @@ describe("document schema and Markdown parsing", () => {
 	});
 });
 describe("DocsService indexing contract", () => {
-	it("merges entities and aliases, preserves conflicts, rejects unverifiable evidence, and serves stored evidence", async () => {
-		const root = await tempDir("docs-root-");
-		const agent = await tempDir("docs-agent-");
-		await fs.writeFile(path.join(root, "one.md"), "# One\nItem: Alpha one\n");
-		await fs.writeFile(path.join(root, "two.md"), "# Two\nItem: Alpha two\n");
-		const service = new DocsService({
-			agentDir: agent,
-			cwd: root,
-			extractor: async ({ section }) =>
-				extraction(section.rawMarkdown, section.rawMarkdown.includes("two") ? "fast" : "FAST"),
-		});
+	it("publishes only complete imports and discards cancellation or read failures", async () => {
+		const root = await tempDir("docs-atomic-root-");
+		const agentDir = await tempDir("docs-atomic-agent-");
+		await fs.writeFile(path.join(root, "a.md"), "# A\nAlpha\n");
+		await fs.writeFile(path.join(root, "b.md"), "# B\nBeta\n");
+		const service = new DocsService({ agentDir, cwd: root });
 		try {
-			const created = await service.init(".", "manual", path.relative(root, await schemaFile(root)), {
-				mode: "structured",
-			});
-			expect(created.index.state).toBe("ready");
-			expect(created.index.entityCount).toBe(3);
-			expect((await fs.stat(service.storage.path)).mode & 0o777).toBe(0o600);
-			expect(service.lookup("A", { index: "manual" })[0]?.aliases).toEqual(["A"]);
-			const conflict = service.conflicts({ index: "manual" });
-			expect(conflict).toHaveLength(1);
-			expect(conflict[0]?.values.map(item => item.value).toSorted()).toEqual(["FAST", "fast"]);
-			const evidence = service
-				.lookup("Alpha", { index: "manual" })[0]
-				?.assertions.flatMap(assertion => assertion.evidence)
-				.find(item => item.path === "one.md");
-			expect(evidence?.quote).toMatch(/^Item: Alpha/);
-			if (!evidence) throw new Error("expected evidence");
-			await fs.rm(path.join(root, "one.md"));
-			expect(service.read({ evidenceId: evidence.id }).rawMarkdown).toContain("Item: Alpha one");
-		} finally {
-			service.close();
-		}
-
-		const invalidAgent = await tempDir("docs-agent-invalid-");
-		const invalid = new DocsService({
-			agentDir: invalidAgent,
-			cwd: root,
-			extractor: async ({ section }) => extraction(section.rawMarkdown, "bad", true),
-		});
-		try {
-			await expect(
-				invalid.init(".", "invalid", path.relative(root, await schemaFile(root)), { mode: "structured" }),
-			).rejects.toThrow("Unverifiable evidence");
-			expect(() => invalid.status("invalid")).toThrow("Unknown document index");
-		} finally {
-			invalid.close();
-		}
-	});
-
-	it("maps multiline LF evidence onto CRLF source bytes", async () => {
-		const root = await tempDir("docs-crlf-root-");
-		const agent = await tempDir("docs-crlf-agent-");
-		const source = "# CRLF\r\nItem: Alpha first\r\ncontinued line\r\n";
-		const documentPath = path.join(root, "crlf.md");
-		await fs.writeFile(documentPath, source);
-		const service = new DocsService({
-			agentDir: agent,
-			cwd: root,
-			extractor: async () => ({
-				entities: [
-					{
-						localId: "item",
-						kind: "item",
-						identity: { name: "Alpha" },
-						displayName: "Alpha",
-						aliases: [],
-						evidence: {
-							quote: "Item: Alpha first\ncontinued line",
-							lineStart: 2,
-							lineEnd: 3,
-							confidence: 1,
-						},
-					},
-				],
-				assertions: [],
-				relations: [],
-			}),
-		});
-		try {
-			const created = await service.init(".", "crlf", path.relative(root, await schemaFile(root)), {
-				mode: "structured",
-			});
-			expect(created.index.state).toBe("ready");
-			const evidence = service.storage.db
-				.query("SELECT quote,byte_start,byte_end FROM evidence WHERE index_id=?")
-				.get(created.index.id) as { quote: string; byte_start: number; byte_end: number };
-			expect(evidence.quote).toBe("Item: Alpha first\ncontinued line");
-			const bytes = await fs.readFile(documentPath);
-			expect(bytes.subarray(evidence.byte_start, evidence.byte_end).toString()).toBe(
-				"Item: Alpha first\r\ncontinued line",
-			);
-		} finally {
-			service.close();
-		}
-	});
-
-	it("reinitializes an immutable generation for added, changed, and deleted Markdown files", async () => {
-		const root = await tempDir("docs-reinit-root-");
-		const agent = await tempDir("docs-reinit-agent-");
-		await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha\n");
-		const service = new DocsService({
-			agentDir: agent,
-			cwd: root,
-			extractor: async ({ section }) => extraction(section.rawMarkdown, "v"),
-		});
-		try {
-			const schema = path.relative(root, await schemaFile(root));
-			const initial = await service.init(".", "idx", schema, { mode: "structured" });
-			expect(initial.processed).toBe(1);
-			let observedBuildingGeneration = false;
-			const originalPromote = service.storage.promote.bind(service.storage);
-			service.storage.promote = (...args: Parameters<typeof service.storage.promote>) => {
-				expect(service.storage.getById(args[0])?.state).toBe("building");
-				expect(service.list().map(index => index.id)).toEqual([initial.index.id]);
-				observedBuildingGeneration = true;
-				return originalPromote(...args);
-			};
-			await fs.writeFile(path.join(root, "b.md"), "# B\nItem: Beta\n");
-			await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha changed\n");
-			const rebuilt = await service.reinit("idx");
-			expect(rebuilt.processed).toBe(2);
-			expect(rebuilt.index.id).not.toBe(initial.index.id);
-			expect(observedBuildingGeneration).toBe(true);
-			service.storage.promote = originalPromote;
-			await fs.rm(path.join(root, "b.md"));
-			expect((await service.reinit("idx")).processed).toBe(1);
-			const indexStatus = service.status("idx");
-			if (Array.isArray(indexStatus)) throw new Error("expected one index");
-			expect(indexStatus.documentCount).toBe(1);
-		} finally {
-			service.close();
-		}
-	});
-
-	it("keeps the active generation on cancellation and defaults to ready FTS-only indexing", async () => {
-		const root = await tempDir("docs-cancel-root-");
-		const agent = await tempDir("docs-cancel-agent-");
-		await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha\n");
-		const service = new DocsService({ agentDir: agent, cwd: root, extractor: null });
-		try {
-			const initial = await service.init(".", "fts", path.relative(root, await schemaFile(root)));
-			expect(initial.index.state).toBe("ready");
-			expect(initial.index.mode).toBe("fts");
-			await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Beta\n");
 			const controller = new AbortController();
-			controller.abort();
-			await expect(service.reinit("fts", { signal: controller.signal })).rejects.toMatchObject({
-				name: "AbortError",
-			});
-			const unchanged = service.status("fts");
-			if (Array.isArray(unchanged)) throw new Error("expected one index");
-			expect(unchanged.id).toBe(initial.index.id);
-			expect(service.search("Alpha", { index: "fts" }).sections).not.toHaveLength(0);
-			expect(service.search("Beta", { index: "fts" }).sections).toHaveLength(0);
-			const rebuilt = await service.reinit("fts");
-			expect(rebuilt.index.id).not.toBe(initial.index.id);
-			expect(service.search("Beta", { index: "fts" }).sections).not.toHaveLength(0);
+			await expect(
+				service.init(".", "cancelled", {
+					signal: controller.signal,
+					onProgress: progress => {
+						if (progress.completed === 1) {
+							expect(service.search("Alpha").sections).toEqual([]);
+							expect(service.list()).toEqual([]);
+							controller.abort();
+						}
+					},
+				}),
+			).rejects.toMatchObject({ name: "AbortError" });
+			expect(service.list()).toEqual([]);
+			await expect(
+				service.init(".", "failed", {
+					onProgress: progress => {
+						if (progress.completed === 1) {
+							// The next source disappears after enumeration.
+							unlinkSync(path.join(root, "b.md"));
+						}
+					},
+				}),
+			).rejects.toThrow();
+			expect(service.search("Alpha").sections).toEqual([]);
+			const imported = await service.init(".", "manual");
+			expect(imported.index.documentCount).toBe(1);
+			await expect(service.init(".", "manual")).rejects.toThrow("already exists");
+			expect(service.read({ sectionId: service.search("Alpha").sections[0].sectionId }).rawMarkdown).toBe(
+				"# A\nAlpha\n",
+			);
+			service.remove("manual");
+			expect(service.search("Alpha").sections).toEqual([]);
+			await service.init(".", "again");
+			expect(service.search("Alpha").sections.map(hit => hit.index)).toEqual(["again"]);
 		} finally {
 			service.close();
 		}
 	});
 
-	it("cancels peer workers and waits for them before discarding a failed generation", async () => {
-		const root = await tempDir("docs-worker-cancel-root-");
-		const agent = await tempDir("docs-worker-cancel-agent-");
-		await fs.writeFile(path.join(root, "a.md"), "# A\nItem: Alpha\n");
-		await fs.writeFile(path.join(root, "b.md"), "# B\nItem: Beta\n");
-
-		let started = 0;
-		let resolveBothStarted!: () => void;
-		const bothStarted = new Promise<void>(resolve => {
-			resolveBothStarted = resolve;
-		});
-		let resolveSlowWorker!: () => void;
-		const slowWorkerRelease = new Promise<void>(resolve => {
-			resolveSlowWorker = resolve;
-		});
-		let resolveSlowWorkerCancelled!: () => void;
-		const slowWorkerCancelled = new Promise<void>(resolve => {
-			resolveSlowWorkerCancelled = resolve;
-		});
-		const workerAbortError = () => {
-			const error = new Error("worker cancelled");
-			error.name = "AbortError";
-			return error;
-		};
-		const service = new DocsService({
-			agentDir: agent,
-			cwd: root,
-			maxConcurrency: 2,
-			extractor: async ({ document, signal }) => {
-				started++;
-				if (started === 2) resolveBothStarted();
-				await bothStarted;
-				if (document.relativePath === "a.md") throw workerAbortError();
-				await new Promise<void>(resolve => {
-					if (signal?.aborted) resolve();
-					else signal?.addEventListener("abort", () => resolve(), { once: true });
-				});
-				resolveSlowWorkerCancelled();
-				await slowWorkerRelease;
-				throw workerAbortError();
-			},
-		});
-		try {
-			const initial = await service.init(".", "idx", path.relative(root, await schemaFile(root)));
-			let buildSettled = false;
-			const build = service.reinit("idx", { mode: "structured" });
-			void build.then(
-				() => {
-					buildSettled = true;
-				},
-				() => {
-					buildSettled = true;
-				},
+	it.each([1, 2, 3])("migrates v%i structured and FTS indexes without source files", async version => {
+		const agentDir = await tempDir("docs-legacy-agent-");
+		const legacy = new Database(path.join(agentDir, "docs.db"), { strict: true, create: true });
+		legacy.run(await Bun.file(path.join(import.meta.dir, "fixtures/docs-v3.sql")).text());
+		if (version === 1) legacy.run("ALTER TABLE doc_indexes DROP COLUMN mode");
+		if (version < 3) {
+			legacy.run("DROP TABLE sections_fts");
+			legacy.run(
+				"CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED,index_id UNINDEXED,relative_path,heading_path,body)",
 			);
-			await slowWorkerCancelled;
-			expect(buildSettled).toBe(false);
-			resolveSlowWorker();
-			await expect(build).rejects.toMatchObject({ name: "AbortError" });
-			expect(buildSettled).toBe(true);
-			const unchanged = service.status("idx");
-			if (Array.isArray(unchanged)) throw new Error("expected one index");
-			expect(unchanged.id).toBe(initial.index.id);
-			expect(
-				service.storage.db.query("SELECT COUNT(*) AS count FROM doc_indexes WHERE state='building'").get(),
-			).toEqual({ count: 0 });
+			legacy.run("ALTER TABLE sections ADD COLUMN plain_text TEXT NOT NULL DEFAULT ''");
+		}
+		for (const [id, name, mode] of [
+			[7, "structured", "structured"],
+			[11, "fulltext", "fts"],
+		] as const) {
+			legacy
+				.query(`INSERT INTO doc_indexes(id,name,root_path,schema_id,schema_version,schema_json,schema_hash,state,created_at,updated_at${version > 1 ? ",mode" : ""})
+				VALUES(?,?,'/source-no-longer-exists','dft',1,'{}','old','ready','created','updated'${version > 1 ? ",?" : ""})`)
+				.run(id, name, ...(version > 1 ? [mode] : []));
+			legacy
+				.query(
+					"INSERT INTO documents(id,index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms,status) VALUES(?,?,?,'Guide','markdown','hash',40,0,'ready')",
+				)
+				.run(id, id, `${name}.md`);
+			legacy
+				.query(
+					"INSERT INTO sections(id,index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,0,'Guide',1,1,2,0,40,?)",
+				)
+				.run(id, id, id, `# Guide\r\nAlpha 中文 ${name}\r\n`);
+			legacy
+				.query(
+					"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,'Guide',?)",
+				)
+				.run(id, id, id, `${name}.md`, `Alpha 中 文 ${name}`);
+		}
+		legacy.run(
+			"INSERT INTO entities(id,index_id,kind,canonical_key,display_name) VALUES(1,7,'item','alpha','Alpha')",
+		);
+		legacy.run(
+			"INSERT INTO evidence(index_id,section_id,entity_id,quote,line_start,line_end,byte_start,byte_end,confidence) VALUES(7,7,1,'Alpha',2,2,9,14,1)",
+		);
+		legacy.run(`PRAGMA user_version=${version}`);
+		legacy.close();
+
+		const service = new DocsService({ agentDir });
+		try {
+			expect(service.list().map(index => index.name)).toEqual(["fulltext", "structured"]);
+			for (const [id, name] of [
+				[7, "structured"],
+				[11, "fulltext"],
+			] as const) {
+				expect(service.search("Alpha 中文", { index: name }).sections.map(hit => hit.sectionId)).toEqual([id]);
+				expect(service.read({ sectionId: id, index: name })).toMatchObject({
+					path: `${name}.md`,
+					lineStart: 1,
+					lineEnd: 2,
+					rawMarkdown: `# Guide\r\nAlpha 中文 ${name}\r\n`,
+				});
+			}
+			expect(service.storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+			service.remove("structured");
+			expect(service.search("Alpha").sections.map(hit => hit.index)).toEqual(["fulltext"]);
 		} finally {
-			resolveSlowWorker();
 			service.close();
+		}
+		const reopened = new DocsService({ agentDir });
+		try {
+			expect(reopened.read({ sectionId: 11 }).rawMarkdown).toBe("# Guide\r\nAlpha 中文 fulltext\r\n");
+		} finally {
+			reopened.close();
 		}
 	});
 
@@ -399,9 +216,9 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-search-root-");
 		const agent = await tempDir("docs-search-agent-");
 		await fs.writeFile(path.join(root, "mixed.md"), "# Mixed\nItem: Alpha\n中文接口说明\n");
-		const service = new DocsService({ agentDir: agent, cwd: root, extractor: null });
+		const service = new DocsService({ agentDir: agent, cwd: root });
 		try {
-			await service.init(".", "mixed", path.relative(root, await schemaFile(root)));
+			await service.init(".", "mixed");
 			expect(service.search("Alpha", { index: "mixed" }).sections.length).toBe(1);
 			expect(service.search("中文", { index: "mixed" }).sections.length).toBe(1);
 		} finally {
@@ -409,43 +226,22 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it.skipIf(process.platform !== "linux")("keeps case-distinct document identity scopes separate", async () => {
+	it.skipIf(process.platform !== "linux")("keeps case-distinct source documents separate", async () => {
 		const root = await tempDir("docs-case-root-");
 		const agent = await tempDir("docs-case-agent-");
 		await fs.writeFile(path.join(root, "A.md"), "# Upper\nItem: Alpha one\n");
 		await fs.writeFile(path.join(root, "a.md"), "# Lower\nItem: Alpha two\n");
-		const documentScopedSchema: DocumentSchemaV1 = {
-			...schema,
-			id: "test-docs-document-scope",
-			entityKinds: schema.entityKinds.map(kind =>
-				kind.name === "item" ? { ...kind, identity: { ...kind.identity, scope: "document" } } : kind,
-			),
-		};
-		const service = new DocsService({
-			agentDir: agent,
-			cwd: root,
-			extractor: async ({ section }) =>
-				extraction(section.rawMarkdown, section.rawMarkdown.includes("two") ? "two" : "one"),
-		});
+		const service = new DocsService({ agentDir: agent, cwd: root });
 		try {
-			await service.init(".", "case", path.relative(root, await schemaFile(root, documentScopedSchema)), {
-				mode: "structured",
-			});
-			expect(service.lookup("Alpha", { index: "case" })).toHaveLength(2);
-			const hits = service.search("Alpha", { index: "case" }).entities;
-			for (const [document, value] of [
-				["A.md", "one"],
-				["a.md", "two"],
-			]) {
-				const hit = hits.find(entity => entity.key.startsWith(`${document}\u001f`));
-				expect(hit).toBeDefined();
-				const entities = service.lookup(hit!.key, { index: "case" });
-				expect(entities.map(entity => entity.entityId)).toEqual([hit!.entityId]);
-				expect(entities[0].assertions.map(assertion => assertion.value)).toEqual([value]);
-				expect(entities[0].assertions.flatMap(assertion => assertion.evidence.map(item => item.path))).toEqual([
-					document,
-				]);
-			}
+			await service.init(".", "case");
+			const hits = service.search("Alpha", { index: "case" }).sections;
+			expect(hits.map(hit => hit.path).sort()).toEqual(["A.md", "a.md"]);
+			expect(service.read({ sectionId: hits.find(hit => hit.path === "A.md")!.sectionId }).rawMarkdown).toContain(
+				"Alpha one",
+			);
+			expect(service.read({ sectionId: hits.find(hit => hit.path === "a.md")!.sectionId }).rawMarkdown).toContain(
+				"Alpha two",
+			);
 		} finally {
 			service.close();
 		}
@@ -455,16 +251,16 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-visible-root-");
 		const agent = await tempDir("docs-visible-agent-");
 		await fs.writeFile(path.join(root, "guide.md"), "# Guide\nbuilding visibility\n");
-		const service = new DocsService({ agentDir: agent, cwd: root, extractor: null });
+		const service = new DocsService({ agentDir: agent, cwd: root });
 		const name = "abbuildingcd";
 		try {
-			await service.init(".", name, "dft");
+			await service.init(".", name);
 			expect(service.list().map(index => index.name)).toEqual([name]);
 			const status = service.status(name);
 			if (Array.isArray(status)) throw new Error("expected one index");
 			expect(status.name).toBe(name);
 			expect(service.search("visibility", { index: name }).sections).toHaveLength(1);
-			await expect(service.init(".", "__building__user", "dft")).rejects.toThrow("reserved prefix");
+			await expect(service.init(".", "__building__user")).rejects.toThrow("reserved prefix");
 			service.remove(name);
 			expect(service.list()).toEqual([]);
 		} finally {
@@ -472,32 +268,87 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("migrates legacy duplicated FTS storage without losing searchability", async () => {
-		const root = await tempDir("docs-migrate-root-");
-		const agent = await tempDir("docs-migrate-agent-");
-		await fs.writeFile(path.join(root, "guide.md"), "# Guide\nAlpha migration contract\n");
-		const initial = new DocsService({ agentDir: agent, cwd: root, extractor: null });
-		await initial.init(".", "legacy", "dft");
-		const databasePath = initial.storage.path;
-		initial.close();
-
-		const legacy = new Database(databasePath, { strict: true });
-		legacy.run("DROP TABLE sections_fts");
-		legacy.run(
-			"CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED,index_id UNINDEXED,relative_path,heading_path,body)",
-		);
-		legacy.run("ALTER TABLE sections ADD COLUMN plain_text TEXT NOT NULL DEFAULT ''");
-		legacy.run("PRAGMA user_version=2");
-		legacy.close();
-
-		const migrated = new DocsService({ agentDir: agent, cwd: root, extractor: null });
+	it("ranks continuous Chinese text above scattered characters without dropping fallback matches", async () => {
+		const root = await tempDir("docs-chinese-rank-");
+		const agentDir = await tempDir("docs-chinese-agent-");
+		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n缓**存**配置。\n${"背景说明 ".repeat(100)}`);
+		await fs.writeFile(path.join(root, "scattered.md"), "# Notes\n缓慢增长，存储优化。\n");
+		await fs.writeFile(path.join(root, "punctuated.md"), "# Notes\n缓，存。\n");
+		const service = new DocsService({ agentDir, cwd: root });
 		try {
-			expect(migrated.search("Alpha", { index: "legacy" }).sections).toHaveLength(1);
-			const columns = migrated.storage.db.query("PRAGMA table_info(sections)").all() as Array<{ name: string }>;
-			expect(columns.some(column => column.name === "plain_text")).toBe(false);
-			expect(migrated.storage.db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+			await service.init(".", "manual");
+			await fs.rm(root, { recursive: true });
+			const hits = service.search("缓存", { index: "manual" }).sections;
+			expect(hits[0].path).toBe("exact.md");
+			expect(hits.map(hit => hit.path).sort()).toEqual(["exact.md", "punctuated.md", "scattered.md"]);
+			expect(service.read({ sectionId: hits[0].sectionId }).rawMarkdown).toContain("缓**存**配置");
 		} finally {
-			migrated.close();
+			service.close();
+		}
+	});
+
+	it.each([
+		{ query: "C++", exact: "支持C++接口。", loose: "C C# C++17" },
+		{ query: "std::vector", exact: "Use `std::vector`.", loose: "vector std" },
+		{ query: "--flag", exact: "Set `--flag=value`.", loose: "flag" },
+		{ query: "foo_bar", exact: "Call `foo_bar`.", loose: "foo bar foo_bar_baz" },
+		{ query: "v1.2.3", exact: "Install v1.2.3.", loose: "v1 2 3 v1.2.30" },
+		{ query: "src/foo.ts", exact: "Edit `src/foo.ts`.", loose: "ts elsewhere foo src src/foo.ts.bak" },
+	])("prioritizes the complete technical name $query", async ({ query, exact, loose }) => {
+		const root = await tempDir("docs-technical-rank-");
+		const agentDir = await tempDir("docs-technical-agent-");
+		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n${exact}\n${"background ".repeat(100)}`);
+		await fs.writeFile(path.join(root, "loose.md"), `# Notes\n${loose}\n`);
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search(query, { index: "manual" }).sections;
+			expect(hits.map(hit => hit.path)).toEqual(["exact.md", "loose.md"]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("prefers a topical section title over an incidental mention or inherited heading", async () => {
+		const root = await tempDir("docs-title-rank-");
+		const agentDir = await tempDir("docs-title-agent-");
+		await fs.writeFile(path.join(root, "topic.md"), `# Cache invalidation\n${"background ".repeat(150)}`);
+		await fs.writeFile(path.join(root, "mention.md"), "# Notes\nCache invalidation.\n");
+		await fs.writeFile(path.join(root, "inherited.md"), "# Cache invalidation\n## Unrelated appendix\nNotes.\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search("cache invalidation", { index: "manual" }).sections;
+			const topic = hits.findIndex(hit => hit.path === "topic.md");
+			expect(topic).toBeGreaterThanOrEqual(0);
+			expect(topic).toBeLessThan(hits.findIndex(hit => hit.path === "mention.md"));
+			expect(topic).toBeLessThan(hits.findIndex(hit => hit.headingPath.endsWith("Unrelated appendix")));
+		} finally {
+			service.close();
+		}
+	});
+
+	it("reranks beyond the requested result window while preserving AND and index isolation", async () => {
+		const root = await tempDir("docs-candidates-rank-");
+		const agentDir = await tempDir("docs-candidates-agent-");
+		for (let index = 0; index < 20; index++)
+			await fs.writeFile(path.join(root, `loose-${index}.md`), "# Notes\nvector std\n");
+		await fs.writeFile(path.join(root, "exact.md"), `# Notes\nUse std::vector.\n${"background ".repeat(150)}`);
+		await fs.writeFile(path.join(root, "partial.md"), "# Notes\nstd only\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			await service.init(".", "other");
+			expect(service.search("std::vector", { index: "manual", limit: 1 }).sections.map(hit => hit.path)).toEqual([
+				"exact.md",
+			]);
+			const all = service.search("std::vector", { index: "manual", limit: 50 }).sections;
+			expect(all).toHaveLength(21);
+			expect(all.every(hit => hit.index === "manual" && hit.path !== "partial.md")).toBe(true);
+			expect(service.search("std::vector nonexistent", { index: "manual" }).sections).toEqual([]);
+			expect(service.search("!!!", { index: "manual" }).sections).toEqual([]);
+		} finally {
+			service.close();
 		}
 	});
 });

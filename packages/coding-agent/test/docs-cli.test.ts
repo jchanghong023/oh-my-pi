@@ -17,18 +17,14 @@ afterEach(async () => {
 });
 
 describe("runDocsCommand", () => {
-	it("routes init/list/status/reinit/remove, emits JSON, and defaults to FTS", async () => {
+	it("imports, lists, inspects and removes a stored index through JSON output", async () => {
 		const cwd = await tempDir("docs-cli-root-");
 		const agentDir = await tempDir("docs-cli-agent-");
 		await fs.writeFile(path.join(cwd, "guide.md"), "# Guide\nText for indexing\n");
 		const stdout: string[] = [];
 		const stderr: string[] = [];
-		const calls: boolean[] = [];
 		const dependencies = {
-			createService: async (serviceCwd: string, needsModel: boolean) => {
-				calls.push(needsModel);
-				return new DocsService({ agentDir, cwd: serviceCwd, extractor: null });
-			},
+			createService: async (serviceCwd: string) => new DocsService({ agentDir, cwd: serviceCwd }),
 			stdout: (text: string) => stdout.push(text),
 			stderr: (text: string) => stderr.push(text),
 		};
@@ -38,8 +34,8 @@ describe("runDocsCommand", () => {
 			dependencies,
 		);
 		expect(initCode).toBe(0);
-		const initValue = JSON.parse(stdout.pop() as string) as { index: { name: string; state: string; mode: string } };
-		expect(initValue.index).toMatchObject({ name: "manual", state: "ready", mode: "fts" });
+		const initValue = JSON.parse(stdout.pop() as string);
+		expect(initValue.index).toMatchObject({ name: "manual", state: "ready", documentCount: 1 });
 		expect(stderr).toEqual([]);
 
 		const listCode = await runDocsCommand({ action: "list", json: true, cwd }, dependencies);
@@ -49,15 +45,11 @@ describe("runDocsCommand", () => {
 		expect(statusCode).toBe(0);
 		expect(JSON.parse(stdout.pop() as string).name).toBe("manual");
 
-		const reinitCode = await runDocsCommand({ action: "reinit", target: "manual", cwd }, dependencies);
-		expect(reinitCode).toBe(0);
-		expect(stderr.some(line => line.startsWith("scan "))).toBe(true);
-		expect(stdout.pop()).toContain('"state":"ready"');
-
 		const removeCode = await runDocsCommand({ action: "remove", target: "manual", json: true, cwd }, dependencies);
 		expect(removeCode).toBe(0);
 		expect(JSON.parse(stdout.pop() as string)).toEqual({ removed: "manual" });
-		expect(calls).toEqual([false, false, false, true, false]);
+		await runDocsCommand({ action: "list", json: true, cwd }, dependencies);
+		expect(JSON.parse(stdout.pop() as string)).toEqual([]);
 	});
 
 	it("sanitizes control sequences in progress paths before writing to the terminal", async () => {
@@ -70,7 +62,7 @@ describe("runDocsCommand", () => {
 		const code = await runDocsCommand(
 			{ action: "init", target: ".", name: "controls", cwd },
 			{
-				createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd, extractor: null }),
+				createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd }),
 				stdout: text => stdout.push(text),
 				stderr: text => stderr.push(text),
 			},
@@ -94,7 +86,7 @@ describe("runDocsCommand", () => {
 		const code = await runDocsCommand(
 			{ action: "init", target: ".", name: "cancelled", json: true, cwd, signal: controller.signal },
 			{
-				createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd, extractor: null }),
+				createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd }),
 				stdout: text => output.push(text),
 			},
 		);

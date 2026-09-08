@@ -1,6 +1,5 @@
 import { type Component, Input, matchesKey, type TUI, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import { DocsService } from "../../docs/service";
 import type { DocsIndexSummary, DocsProgress, DocsSearchResult } from "../../docs/types";
@@ -11,7 +10,7 @@ export interface DocsHubCallbacks {
 	onCancel: () => void;
 }
 type HubMode = "list" | "search" | "detail" | "confirm-remove" | "confirm-cancel-close";
-type SearchHit = { kind: "entity"; id: number; label: string } | { kind: "section"; id: number; label: string };
+type SearchHit = { id: number; label: string };
 
 function sanitizeTerminalText(text: string): string {
 	return sanitizeText(text).replaceAll("\t", "    ");
@@ -46,7 +45,6 @@ export class DocsHubComponent implements Component {
 		tui: TUI,
 		cwd: string,
 		settings: Settings,
-		modelRegistry: ModelRegistry,
 		callbacks: DocsHubCallbacks,
 	): Promise<DocsHubComponent> {
 		const hub = new DocsHubComponent(
@@ -54,9 +52,6 @@ export class DocsHubComponent implements Component {
 			new DocsService({
 				agentDir: settings.getAgentDir(),
 				cwd,
-				settings,
-				modelRegistry,
-				maxConcurrency: settings.get("task.maxConcurrency"),
 			}),
 			callbacks,
 		);
@@ -107,22 +102,7 @@ export class DocsHubComponent implements Component {
 	#create(result: DocsAddWizardResult): void {
 		this.#wizard = undefined;
 		this.#start(signal =>
-			this.service.init(result.directory, result.name, result.schema, {
-				mode: result.mode,
-				signal,
-				onProgress: progress => {
-					this.#progress = progress;
-					this.tui.requestRender();
-				},
-			}),
-		);
-	}
-
-	#reinit(): void {
-		const index = this.#selectedIndex();
-		if (!index) return;
-		this.#start(signal =>
-			this.service.reinit(index.name, {
+			this.service.init(result.directory, result.name, {
 				signal,
 				onProgress: progress => {
 					this.#progress = progress;
@@ -137,21 +117,13 @@ export class DocsHubComponent implements Component {
 		if (!query) return;
 		try {
 			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit: 20 });
-			this.#hits = [
-				...result.entities.map(hit => ({
-					kind: "entity" as const,
-					id: hit.entityId,
-					label: sanitizeTerminalLine(`[entity] ${hit.kind} ${hit.displayName} (${hit.entityId})`),
-				})),
-				...result.sections.map(hit => ({
-					kind: "section" as const,
-					id: hit.sectionId,
-					label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
-				})),
-			];
+			this.#hits = result.sections.map(hit => ({
+				id: hit.sectionId,
+				label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
+			}));
 			this.#hitIndex = 0;
 			this.#mode = "detail";
-			this.#detail = [`Entity hits: ${result.entities.length}`, `Section hits: ${result.sections.length}`];
+			this.#detail = [`Section hits: ${result.sections.length}`];
 		} catch (error) {
 			this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
 		}
@@ -162,26 +134,14 @@ export class DocsHubComponent implements Component {
 		const hit = this.#hits[this.#hitIndex];
 		if (!hit) return;
 		try {
-			if (hit.kind === "section") {
-				const value = this.service.read({ sectionId: hit.id });
-				if ("rawMarkdown" in value)
-					this.#detail = [
-						sanitizeTerminalLine(
-							`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
-						),
-						"",
-						sanitizeTerminalText(value.rawMarkdown),
-					];
-			} else {
-				const entities = this.service.lookup(String(hit.id), { index: this.#selectedIndex()?.name });
-				this.#detail = entities.flatMap(entity => [
-					sanitizeTerminalLine(`[${entity.index}] ${entity.kind} ${entity.displayName} id=${entity.entityId}`),
-					sanitizeTerminalLine(`key=${entity.key}`),
-					...entity.assertions.map(assertion =>
-						sanitizeTerminalLine(`${assertion.field}=${JSON.stringify(assertion.value)}`),
-					),
-				]);
-			}
+			const value = this.service.read({ sectionId: hit.id, index: this.#selectedIndex()?.name });
+			this.#detail = [
+				sanitizeTerminalLine(
+					`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
+				),
+				"",
+				sanitizeTerminalText(value.rawMarkdown),
+			];
 			this.#hits = [];
 		} catch (error) {
 			this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
@@ -192,32 +152,12 @@ export class DocsHubComponent implements Component {
 	#showInfo(): void {
 		const index = this.#selectedIndex();
 		if (!index) return;
-		const conflicts = this.service.conflicts({ index: index.name, limit: 20 });
 		this.#detail = [
-			`${index.name} ${index.state} schema=${index.schemaId}@${index.schemaVersion}`,
+			`${index.name} ${index.state}`,
 			`root=${index.rootPath}`,
-			`mode=${index.mode} documents=${index.documentCount} partial=${index.partialCount} sections=${index.sectionCount}`,
-			`entities=${index.entityCount} assertions=${index.assertionCount} relations=${index.relationCount}`,
+			`documents=${index.documentCount} partial=${index.partialCount} sections=${index.sectionCount}`,
 			...(index.lastError ? [`error=${index.lastError}`] : []),
-			"",
-			`Conflicts: ${conflicts.length}`,
-			...conflicts.map(
-				conflict =>
-					`${conflict.subjectName} ${conflict.predicate}: ${conflict.values.map(value => JSON.stringify(value.value)).join(" <> ")}`,
-			),
 		].map(sanitizeTerminalLine);
-		this.#mode = "detail";
-	}
-
-	#showSchema(): void {
-		const index = this.#selectedIndex();
-		if (!index) return;
-		const stored = this.service.storage.get(index.name);
-		this.#detail = [
-			sanitizeTerminalLine(`${index.schemaId}@${index.schemaVersion} ${index.schemaHash}`),
-			"",
-			sanitizeTerminalText(JSON.stringify(JSON.parse(stored?.schemaJson ?? "{}"), null, 2)),
-		];
 		this.#mode = "detail";
 	}
 
@@ -273,12 +213,10 @@ export class DocsHubComponent implements Component {
 					this.#wizard = undefined;
 				},
 			);
-		else if (data === "r") this.#reinit();
 		else if (data === "/") {
 			this.#mode = "search";
 			this.#search = new Input();
 		} else if (data === "i") this.#showInfo();
-		else if (data === "v") this.#showSchema();
 		else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (data === "c" && this.#abort) this.#abort.abort();
 		else if (matchesKey(data, "up")) this.#selected = Math.max(0, this.#selected - 1);
@@ -290,7 +228,7 @@ export class DocsHubComponent implements Component {
 		if (this.#wizard) return this.#wizard.render(width);
 		const lines = [
 			theme.bold(theme.fg("accent", "Document indexes")),
-			theme.fg("dim", "n new  r reinit  / search  i info  v schema  d delete  c cancel  Esc close"),
+			theme.fg("dim", "n new  / search  i info  d delete  c cancel  Esc close"),
 		];
 		if (this.#mode === "confirm-remove")
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
@@ -307,7 +245,7 @@ export class DocsHubComponent implements Component {
 				const item = this.#indexes[index];
 				lines.push(
 					sanitizeTerminalLine(
-						`${index === this.#selected ? ">" : " "} ${item.name}  ${item.schemaId}@${item.schemaVersion}  ${item.mode}  ${item.state}  docs=${item.documentCount} partial=${item.partialCount}`,
+						`${index === this.#selected ? ">" : " "} ${item.name}  ${item.state}  docs=${item.documentCount} partial=${item.partialCount}`,
 					),
 					sanitizeTerminalLine(`    ${item.rootPath}  updated=${item.indexedAt ?? item.updatedAt}`),
 				);

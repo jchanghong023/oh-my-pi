@@ -1,22 +1,19 @@
 import { type Component, Input, matchesKey, truncateToWidth } from "@oh-my-pi/pi-tui";
-import type { DocsIndexMode } from "../../docs/types";
 import { theme } from "../theme/theme";
 
 export interface DocsAddWizardResult {
 	name: string;
 	directory: string;
-	schema: string;
-	mode: DocsIndexMode;
 }
 
-type DocsWizardStep = "name" | "directory" | "schema" | "mode" | "confirm";
+type DocsWizardStep = "name" | "directory" | "confirm";
 
-const STEPS: DocsWizardStep[] = ["name", "directory", "schema", "mode", "confirm"];
+const STEPS: DocsWizardStep[] = ["name", "directory", "confirm"];
 
 export class DocsAddWizard implements Component {
 	#stepIndex = 0;
 	#input = new Input();
-	#values: DocsAddWizardResult = { name: "", directory: "", schema: "dft", mode: "fts" };
+	#values: DocsAddWizardResult = { name: "", directory: "" };
 	#error?: string;
 
 	constructor(
@@ -44,12 +41,7 @@ export class DocsAddWizard implements Component {
 			this.#error = `${step} must not be empty`;
 			return;
 		}
-		if (step === "mode" && value !== "fts" && value !== "structured") {
-			this.#error = "mode must be fts or structured";
-			return;
-		}
-		if (step === "mode") this.#values.mode = value as DocsIndexMode;
-		else this.#values[step] = value;
+		this.#values[step] = value;
 		this.#error = undefined;
 		this.#stepIndex++;
 		this.#syncInput();
@@ -74,13 +66,14 @@ export class DocsAddWizard implements Component {
 
 	render(width: number): string[] {
 		const step = STEPS[this.#stepIndex];
-		const lines = [theme.bold(theme.fg("accent", "Add document index")), `Step ${this.#stepIndex + 1}/5: ${step}`];
+		const lines = [
+			theme.bold(theme.fg("accent", "Add document index")),
+			`Step ${this.#stepIndex + 1}/${STEPS.length}: ${step}`,
+		];
 		if (step === "confirm") {
 			lines.push(
 				`Name: ${this.#values.name}`,
 				`Directory: ${this.#values.directory}`,
-				`Schema: ${this.#values.schema}`,
-				`Mode: ${this.#values.mode}`,
 				"",
 				theme.fg("dim", "Enter create  Esc back"),
 			);

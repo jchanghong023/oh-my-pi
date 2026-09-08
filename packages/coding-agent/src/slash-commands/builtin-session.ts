@@ -461,7 +461,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "docs",
+		name: "wiki",
 		icon: "tree",
 		description: "Open the document index hub",
 		handleTui: (_command, runtime) => {

@@ -84,7 +84,7 @@ function parseHeading(
 	return undefined;
 }
 
-function normalizePlainText(markdown: string): string {
+export function normalizePlainText(markdown: string): string {
 	return markdown
 		.replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
 		.replace(/^ {0,3}(=+|-+)[ \t]*$/gm, "")
@@ -200,7 +200,6 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			lineEnd: last.line,
 			byteStart: first.byteStart,
 			byteEnd: last.byteEnd,
-			sourceLines: draft.lines,
 			rawMarkdown,
 			plainText: normalizePlainText(rawMarkdown),
 		};

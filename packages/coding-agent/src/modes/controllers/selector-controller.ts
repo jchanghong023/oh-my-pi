@@ -507,13 +507,7 @@ export class SelectorController {
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
-		const hub = await DocsHubComponent.create(
-			this.ctx.ui,
-			getProjectDir(),
-			this.ctx.settings,
-			this.ctx.session.modelRegistry,
-			{ onCancel: done },
-		);
+		const hub = await DocsHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
 		const overlayHandle = this.#showFullscreenMenu(hub);
 	}
 

@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "../src/config/settings";
 import { DocsService } from "../src/docs/service";
-import type { DocumentExtraction } from "../src/docs/types";
 import { WikiTool } from "../src/tools/wiki";
 
 const tempDirs: string[] = [];
@@ -28,42 +27,16 @@ function session(agentDir: string, cwd: string) {
 	};
 }
 
-function extraction(sectionText: string): DocumentExtraction {
-	const quote = sectionText.split("\n").find(line => line.startsWith("Command:")) ?? sectionText.trim();
-	const lineStart = sectionText.split("\n").indexOf(quote) + 1;
-	const evidence = { quote, lineStart, lineEnd: lineStart, confidence: 1 };
-	return {
-		entities: [
-			{
-				localId: "command",
-				kind: "command",
-				identity: { name: "scan" },
-				displayName: "scan",
-				aliases: ["s"],
-				evidence,
-			},
-			{ localId: "tool", kind: "tool", identity: { name: "tester" }, displayName: "tester", aliases: [], evidence },
-		],
-		assertions: [{ subjectLocalId: "command", field: "summary", value: "runs scan", evidence }],
-		relations: [{ sourceLocalId: "command", predicate: "uses_tool", targetLocalId: "tool", evidence }],
-	};
-}
-
-async function indexedFixture(): Promise<{ root: string; agent: string; commandId: number; sectionId: number }> {
+async function indexedFixture(): Promise<{ root: string; agent: string; sectionId: number }> {
 	const root = await tempDir("docs-tool-root-");
 	const agent = await tempDir("docs-tool-agent-");
 	await fs.writeFile(path.join(root, "guide.md"), "# Guide\nCommand: scan\n");
-	const service = new DocsService({
-		agentDir: agent,
-		cwd: root,
-		extractor: async ({ section }) => extraction(section.rawMarkdown),
-	});
+	const service = new DocsService({ agentDir: agent, cwd: root });
 	try {
-		await service.init(".", "manual", "dft", { mode: "structured" });
-		const command = service.lookup("scan", { index: "manual" })[0];
+		await service.init(".", "manual");
 		const section = service.search("scan", { index: "manual" }).sections[0];
-		if (!command || !section) throw new Error("fixture indexing failed");
-		return { root, agent, commandId: command.entityId, sectionId: section.sectionId };
+		if (!section) throw new Error("fixture indexing failed");
+		return { root, agent, sectionId: section.sectionId };
 	} finally {
 		service.close();
 	}
@@ -74,46 +47,37 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 }
 
 describe("WikiTool", () => {
-	it("serves all six operations and enforces operation-specific required fields", async () => {
+	it("searches and reads stored sections after the source directory is removed", async () => {
 		const fixture = await indexedFixture();
+		await fs.rm(fixture.root, { recursive: true });
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
 		const search = await tool.execute("1", { op: "search", query: "scan", index: "manual" });
-		expect(text(search)).toContain("Sections:");
-		expect(text(await tool.execute("2", { op: "lookup", key: "s", index: "manual" }))).toContain("aliases=s");
-		expect(
-			text(await tool.execute("3", { op: "relations", entityId: fixture.commandId, index: "manual" })),
-		).toContain("uses_tool");
+		expect(text(search)).toContain("guide.md:1-2");
 		expect(text(await tool.execute("4", { op: "read", sectionId: fixture.sectionId, index: "manual" }))).toContain(
 			"Command: scan",
 		);
-		expect(text(await tool.execute("5", { op: "conflicts", index: "manual" }))).toBe("No conflicts.");
 		expect(text(await tool.execute("6", { op: "status", index: "manual" }))).toContain("[manual] ready");
 
 		await expect(tool.execute("7", { op: "search", index: "manual" })).rejects.toThrow("requires query");
-		await expect(tool.execute("8", { op: "lookup", index: "manual" })).rejects.toThrow("requires key");
-		await expect(tool.execute("9", { op: "relations", index: "manual" })).rejects.toThrow("requires entityId");
-		await expect(tool.execute("10", { op: "read", index: "manual" })).rejects.toThrow(
-			"requires evidenceId or sectionId",
-		);
-		await expect(
-			tool.execute("11", { op: "read", evidenceId: 1, sectionId: fixture.sectionId, index: "manual" }),
-		).rejects.toThrow("accepts only one");
+		await expect(tool.execute("10", { op: "read", index: "manual" })).rejects.toThrow("requires sectionId");
+	});
 
-		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root, extractor: null });
+	it("requires an index with multiple corpora and prevents cross-index section reads", async () => {
+		const fixture = await indexedFixture();
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
 		try {
-			await service.init(".", "secondary", "dft");
+			await service.init(".", "secondary");
 		} finally {
 			service.close();
 		}
-		await expect(tool.execute("fts-lookup", { op: "lookup", key: "scan", index: "secondary" })).rejects.toThrow(
-			"requires a structured index; secondary is mode=fts",
-		);
 		await expect(
-			tool.execute("fts-relations", { op: "relations", entityId: fixture.commandId, index: "secondary" }),
-		).rejects.toThrow("requires a structured index; secondary is mode=fts");
-		await expect(tool.execute("fts-conflicts", { op: "conflicts", index: "secondary" })).rejects.toThrow(
-			"requires a structured index; secondary is mode=fts",
-		);
+			tool.execute("wrong-corpus", {
+				op: "read",
+				sectionId: fixture.sectionId,
+				index: "secondary",
+			}),
+		).rejects.toThrow("Unknown section");
 		await expect(tool.execute("12", { op: "search", query: "scan" })).rejects.toThrow(
 			"specify index to keep research corpus-scoped",
 		);
@@ -123,9 +87,7 @@ describe("WikiTool", () => {
 		const root = await tempDir("docs-tool-empty-root-");
 		const agent = await tempDir("docs-tool-empty-agent-");
 		const tool = new WikiTool(session(agent, root));
-		await expect(tool.execute("empty", { op: "status" })).rejects.toThrow(
-			"No document indexes. Run: omp docs init <dir> --name <name> --mode fts",
-		);
+		await expect(tool.execute("empty", { op: "status" })).rejects.toThrow("No document indexes");
 
 		const service = new DocsService({ agentDir: agent, cwd: root });
 		try {
