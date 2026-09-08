@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
+
 ## [18.1.14] - 2026-09-07
 
 ### Fixed

@@ -3680,6 +3680,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	#debouncedUpdateAutocomplete(): void {
+		// Network filesystem discovery can outlive cancellation. Filter the known
+		// candidates immediately instead of leaving an unrelated selection active.
+		if (this.#autocompletePrefix.startsWith("@") && this.#autocompleteList) {
+			const line = this.#state.lines[this.#state.cursorLine] ?? "";
+			const beforeCursor = line.slice(0, this.#state.cursorCol);
+			const match = /(?:^|[\s"'=])@(?:"([^"]*)|([^\s"']*))$/.exec(beforeCursor);
+			if (match) {
+				this.#autocompleteList.setFilter(match[1] ?? match[2] ?? "");
+				this.onAutocompleteUpdate?.();
+			}
+		}
 		if (this.#autocompleteTimeout) {
 			clearTimeout(this.#autocompleteTimeout);
 		}
