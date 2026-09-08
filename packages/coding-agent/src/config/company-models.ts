@@ -12,13 +12,13 @@ const CHAT_MODELS: ReadonlyArray<
 		id: "DeepSeek-V4-Flash-public",
 		input: ["text"],
 		contextWindow: 1000000,
-		maxTokens: 384000,
+		maxTokens: 81920,
 		tokenizer: "deepseek-v3",
 	},
-	{ id: "GLM-5.2-public", input: ["text"], contextWindow: 1000000, maxTokens: 131072, tokenizer: "glm5" },
-	{ id: "MiniMax-M2.7", input: ["text"], contextWindow: 204800, maxTokens: 131072 },
-	{ id: "Qwen3.6-27B-public", input: ["text", "image"], contextWindow: 262144, maxTokens: 262144, tokenizer: "qwen3" },
-	{ id: "Qwen3.6-35B-A3B", input: ["text", "image"], contextWindow: 262144, maxTokens: 262144, tokenizer: "qwen3" },
+	{ id: "GLM-5.2-public", input: ["text"], contextWindow: 1000000, maxTokens: 81920, tokenizer: "glm5" },
+	{ id: "MiniMax-M2.7", input: ["text"], contextWindow: 204800, maxTokens: 81920 },
+	{ id: "Qwen3.6-27B-public", input: ["text", "image"], contextWindow: 262144, maxTokens: 81920, tokenizer: "qwen3" },
+	{ id: "Qwen3.6-35B-A3B", input: ["text", "image"], contextWindow: 262144, maxTokens: 81920, tokenizer: "qwen3" },
 ];
 
 // These are retrieval models, not Anthropic Messages models or tool-calling agents.
