@@ -34,7 +34,7 @@ import { configureStartupLogging } from "./cli/startup-logging";
 import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { setCompanyChatContextWindow } from "./config/company-models";
-import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "./config/company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./config/company-provider";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -1563,6 +1563,24 @@ export async function runRootCommand(
 			settingsInstance.override("browser.enabled", false);
 			settingsInstance.override("fetch.enabled", false);
 			setCompanyChatContextWindow(200000);
+			if (getCompanyConfig()) {
+				const roleDefaults = {
+					default: "company/Qwen3.6-27B-public",
+					smol: "company/Qwen3.6-35B-A3B",
+					tiny: "company/Qwen3.6-35B-A3B",
+					commit: "company/Qwen3.6-35B-A3B",
+					task: "company/Qwen3.6-27B-public",
+					vision: "company/Qwen3.6-27B-public",
+					advisor: "company/Qwen3.6-27B-public",
+					plan: "company/GLM-5.2-public",
+					slow: "company/GLM-5.2-public",
+				};
+				for (const [role, model] of Object.entries(roleDefaults)) {
+					if (!settingsInstance.getModelRole(role)) {
+						settingsInstance.overrideModelRoles({ [role]: model });
+					}
+				}
+			}
 		}
 
 		// The registry composes policy-dependent metadata synchronously, including
