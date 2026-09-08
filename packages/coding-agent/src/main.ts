@@ -166,6 +166,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"advisor.enabled",
 	"advisor.syncBacklog",
 	"advisor.immuneTurns",
+	"advisor.maxNotesPerUpdate",
 	"tier.advisor",
 ];
 
