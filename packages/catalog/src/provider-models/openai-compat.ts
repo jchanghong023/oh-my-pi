@@ -3189,6 +3189,11 @@ function openCodeModelManagerOptions(
 								api,
 								provider: providerId,
 								baseUrl,
+								// The lineage borrows `deepseek-v4-flash` from the first-party
+								// catalog, so its rates and peak/off-peak scheme belong to
+								// api.deepseek.com, not this gateway. Keep the gateway's own
+								// value, as the reference-less branch below does.
+								cost: defaults.cost,
 								contextWindow: toPositiveNumber(entry.context_length, v41.contextWindow),
 								maxTokens: toPositiveNumber(entry.max_completion_tokens, v41.maxTokens),
 							};

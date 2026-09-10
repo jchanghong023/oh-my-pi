@@ -1012,6 +1012,12 @@ describe("issue #10416 — retired bare opencode provider", () => {
 			// `deepseek-v4-flash` row the rest of the surface is inherited from.
 			expect(model.input).toEqual(["text", "image"]);
 			expect(isOpenAICompletionsVisionSupported(model as Model<"openai-completions">)).toBe(true);
+			// The borrowed surface is `deepseek-v4-flash` from the first-party
+			// catalog, so its rates — and its peak/off-peak billing scheme — must not
+			// reach this gateway. The gateway reports none here, so the row is
+			// unpriced rather than billed at api.deepseek.com rates.
+			expect(model.cost.timeBased).toBeUndefined();
+			expect(model.cost.input).toBe(0);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
