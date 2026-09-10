@@ -161,9 +161,9 @@ describe("Command Code provider", () => {
 
 	// The discovery payload carries no capability flags, so an id with no bundled
 	// reference row would otherwise keep `reasoning: false` and offer no level at
-	// all. Such an id is registered instead and must resolve the concrete range
-	// its siblings on this provider expose.
-	test("gives registered reasoning ids a selectable thinking range", async () => {
+	// all. It inherits the shared V4.1 Flash lineage instead, which must resolve
+	// the concrete range its DeepSeek siblings expose.
+	test("gives V4.1 Flash ids a selectable thinking range", async () => {
 		const fetch = (async (input: unknown) => {
 			if (String(input) === "https://commandcode.ai/models.data") return new Response(null, { status: 503 });
 			return Response.json({ data: [{ id: "deepseek/deepseek-v4.1-flash" }] });
@@ -173,14 +173,18 @@ describe("Command Code provider", () => {
 
 		expect(built.reasoning).toBe(true);
 		expect(built.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		// The surface is inherited wholesale from the bundled `deepseek-v4-flash`
+		// row, so the endpoint's own limits come along with the effort ladder.
+		expect(built.contextWindow).toBe(1_000_000);
+		expect(built.maxTokens).toBe(384_000);
 	});
 
-	// A declaration only reaches an installation that still fetches the catalog.
-	// The gateway is authoritative, so a cache written before the declaration is
-	// reused verbatim and keeps `reasoning: false` until the TTL lapses — the
-	// level stays missing even though the code is fixed. Declared ids are
-	// therefore part of the migration policy and must force a refetch.
-	test("invalidates catalogs cached before a reasoning declaration", async () => {
+	// The inherited surface only reaches an installation that still fetches the
+	// catalog. The gateway is authoritative, so a cache written before the
+	// lineage existed is reused verbatim and keeps `reasoning: false` until the
+	// TTL lapses — the level stays missing even though the code is fixed.
+	// Lineage ids are therefore part of the migration policy and must refetch.
+	test("invalidates catalogs cached before the V4.1 lineage", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-command-code-reasoning-cache-"));
 		const cacheDbPath = path.join(tempDir, "models.db");
 		// `fetchDynamicModels` closes over this mock, so the counter has to live
@@ -197,7 +201,7 @@ describe("Command Code provider", () => {
 			const cacheProviderId = options.cacheProviderId;
 			if (!cacheProviderId) throw new Error("Command Code cache provider id is missing");
 
-			// Fingerprint an installation predating the declaration would have
+			// Fingerprint an installation predating the lineage would have
 			// written, then replace its rows with what that build discovered: the
 			// untouched `reasoning: false` default.
 			await resolveProviderModels({ ...options, cacheDbPath, dropCachedModelIdsOnStaticMismatch: [] }, "online");
@@ -215,6 +219,9 @@ describe("Command Code provider", () => {
 				contextWindow: 1_000_000,
 				maxTokens: 384_000,
 			});
+			// The manager matches cached row ids exactly, and those carry the
+			// provider namespace — a bare lineage key would leave the row in place.
+			expect(options.dropCachedModelIdsOnStaticMismatch).toContain(stale.id);
 			writeModelCache(
 				cacheProviderId,
 				priorCache.updatedAt,

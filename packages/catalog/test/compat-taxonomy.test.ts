@@ -88,6 +88,17 @@ describe("classifyModel", () => {
 			logicalId: "qwen/qwq-32b",
 		});
 	});
+
+	test("canonical bare V4.1 ids classify into the flash family", () => {
+		// DeepSeek's V4.1 canonical id dropped the `v4` segment, so the
+		// `*deepseek*v4*flash*` glob missed it and the id classified family-less —
+		// which falls through to the generic effort ladder instead of the
+		// DeepSeek-native low/high/max. The stricter glob still wins for
+		// `deepseek-v4-flash`, so both spellings resolve to the same family.
+		expect(classifyModel("deepseek", "deepseek-flash")).toEqual({ class: "deepseek", family: "flash" });
+		expect(classifyModel("opencode-go", "deepseek-flash")).toEqual({ class: "deepseek", family: "flash" });
+		expect(classifyModel("deepseek", "deepseek-v4-flash")).toEqual({ class: "deepseek", family: "flash" });
+	});
 });
 
 describe("collapse and variant vocabulary", () => {

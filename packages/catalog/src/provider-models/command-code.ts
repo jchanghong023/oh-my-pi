@@ -11,6 +11,7 @@ import type { ModelManagerOptions } from "../model-manager";
 import type { Api, FetchImpl, ModelCost, ModelSpec, TokenCost } from "../types";
 import { discoveryFetch, isRecord } from "../utils";
 import { resolveModelCacheProviderId } from "./cache-provider-id";
+import { DEEPSEEK_V41_FLASH_IDS, deepseekV41FlashName, deepseekV41FlashReference } from "./openai-compat";
 import type { ModelManagerConfig } from "./descriptor-types";
 
 const COMMAND_CODE_PROVIDER_BASE_URL = "https://api.commandcode.ai/provider";
@@ -19,15 +20,6 @@ const COMMAND_CODE_PRICING_URL = "https://commandcode.ai/models.data";
 // reusing an older cached catalog at startup hides those models until the TTL
 // lapses, so this provider refreshes far more often than the 2h default.
 const COMMAND_CODE_CACHE_TTL_MS = 15 * 60 * 1000;
-// Command Code's `/v1/models` payload carries no capability flags, so a model
-// with no bundled reference row keeps the discovery default `reasoning: false`,
-// and buildModel skips the thinking cascade for non-reasoning specs — leaving
-// the model with no selectable level. Declare those ids here instead; the
-// cascade then derives the same effort range as the siblings on this provider
-// (`deepseek/deepseek-v4-flash` → low/high/max, all accepted by the endpoint).
-const COMMAND_CODE_REASONING_MODEL_IDS: Readonly<Record<string, true>> = {
-	"deepseek/deepseek-v4.1-flash": true,
-};
 
 function normalizeBasePath(baseUrl: string | undefined): string {
 	const value = (baseUrl ?? COMMAND_CODE_PROVIDER_BASE_URL).trim().replace(/\/+$/, "");
@@ -148,13 +140,16 @@ function mapCommandCodeModel(
 ): ModelSpec<Api> {
 	const reference = resolveModelReference(defaults.id, getBundledModelReferenceIndex());
 	const api = resolveCommandCodeApi(defaults.id);
-	const thinking = inheritReferenceThinking(defaults.thinking, reference, "command-code");
-	// Declared ids win over the reference: the table records a capability proven
-	// against the endpoint's own `reasoning_effort` handling.
-	const reasoning = COMMAND_CODE_REASONING_MODEL_IDS[defaults.id] ?? reference?.reasoning ?? defaults.reasoning;
+	// A V4.1 Flash id has no bundled row anywhere, so inherit the shared
+	// `deepseek-v4-flash` capability surface rather than the `reasoning: false`
+	// discovery default; like every other cross-provider lookup here, it supplies
+	// capabilities only — cost and transport stay provider-local.
+	const lineage = deepseekV41FlashReference(defaults.id);
+	const thinking = lineage?.thinking ?? inheritReferenceThinking(defaults.thinking, reference, "command-code");
+	const reasoning = lineage?.reasoning ?? reference?.reasoning ?? defaults.reasoning;
 	return {
 		...defaults,
-		name: reference?.name ?? defaults.name,
+		name: deepseekV41FlashName(defaults.id) ?? reference?.name ?? defaults.name,
 		api,
 		provider: "command-code",
 		baseUrl: resolveCommandCodeBaseUrl(api, baseUrl),
@@ -164,8 +159,8 @@ function mapCommandCodeModel(
 		input: reference?.input ?? defaults.input,
 		cost: pricingCost ?? reference?.cost ?? defaults.cost,
 		costSource: pricingCost ? "provider" : reference?.cost ? "reference" : "unknown",
-		contextWindow: reference?.contextWindow ?? defaults.contextWindow,
-		maxTokens: reference?.maxTokens ?? defaults.maxTokens,
+		contextWindow: lineage?.contextWindow ?? reference?.contextWindow ?? defaults.contextWindow,
+		maxTokens: lineage?.maxTokens ?? reference?.maxTokens ?? defaults.maxTokens,
 		// Wire-model aliases such as effortRouting are provider-specific. Keep
 		// discovery-provided thinking, but never inherit another provider's routing.
 		...(thinking ? { thinking } : {}),
@@ -175,20 +170,22 @@ function mapCommandCodeModel(
 export function commandCodeModelManagerOptions(config?: ModelManagerConfig): ModelManagerOptions<Api> {
 	const apiKey = config?.apiKey;
 	const discoveryBaseUrl = resolveCommandCodeBaseUrl("openai-completions", config?.baseUrl);
+	// Cache rows are keyed by the discovered id, which carries this provider's
+	// `deepseek/` namespace, so the bare lineage keys cannot match them directly.
+	// The manager only drops a row whose id it finds in this list, and the
+	// fingerprint hash alone is not the contract the list exists for.
+	const v41CacheIds = Object.keys(DEEPSEEK_V41_FLASH_IDS).map(id => `deepseek/${id}`);
 
 	return {
 		providerId: "command-code",
 		cacheProviderId: resolveModelCacheProviderId("command-code", { baseUrl: discoveryBaseUrl }),
 		cacheTtlMs: COMMAND_CODE_CACHE_TTL_MS,
 		dynamicModelsAuthoritative: true,
-		// The declarations above double as the cache-migration policy: the manager
-		// folds this list into the static fingerprint, and an authoritative
-		// provider only reuses a cache whose fingerprint matches, so adding a
-		// declaration forces the refresh that the declaration itself needs.
-		// Without it a row written before the declaration keeps `reasoning: false`
-		// until the TTL lapses — which is what the first release of the v4.1
-		// declaration did to installations that had already cached the catalog.
-		dropCachedModelIdsOnStaticMismatch: Object.keys(COMMAND_CODE_REASONING_MODEL_IDS),
+		// Rows written before the V4.1 lineage existed keep the discovery default
+		// `reasoning: false` until they are dropped; the manager folds this list
+		// into the static fingerprint as well, so adding an id also forces the
+		// refresh that produces the row it names.
+		dropCachedModelIdsOnStaticMismatch: v41CacheIds,
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const [models, pricing] = await Promise.all([

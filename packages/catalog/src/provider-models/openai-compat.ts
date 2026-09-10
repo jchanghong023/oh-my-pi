@@ -1874,28 +1874,35 @@ export interface DeepSeekModelManagerConfig {
 }
 
 /**
- * Discovery ids that have no bundled DeepSeek row of their own.
+ * DeepSeek V4.1 Flash ships under ids that carry no `v4` segment, so they match
+ * neither a bundled row nor the `*deepseek*v4*flash*` taxonomy glob. They are
+ * the same served model as `deepseek-v4-flash` (that id is aliased onto V4.1),
+ * so every one of them inherits that row's capability surface — same effort
+ * ladder, same limits — and only the display name differs.
  *
- * DeepSeek's `/v1/models` returns only `{id, object, owned_by}`, and
- * `mapWithBundledReference` keeps the discovery default `reasoning: false` when
- * no row matches — so an unmatched id loses both its thinking dial and its
- * limits (`deepseek-flash` surfaced as non-reasoning with a null context
- * window). `deepseek-flash` is the canonical DeepSeek V4.1 Flash id that
- * supersedes `deepseek-v4-flash`, so it borrows that row's effort ladder and
- * limits; the label is overridden because the borrowed row predates the
- * rename. A bundled row for the new id wins over the alias when one exists.
+ * Keyed by bare id so namespace forms (`deepseek/deepseek-v4.1-flash`) match.
+ * Providers whose cache rows carry the bare id use these keys directly for
+ * cache migration; a provider that namespaces its ids projects them (see
+ * `commandCodeModelManagerOptions`).
  */
-const DEEPSEEK_DISCOVERY_ALIASES: Readonly<Record<string, { readonly referenceId: string; readonly name: string }>> = {
-	"deepseek-flash": { referenceId: "deepseek-v4-flash", name: "DeepSeek V4.1 Flash" },
+export const DEEPSEEK_V41_FLASH_IDS: Readonly<Record<string, string>> = {
+	"deepseek-flash": "DeepSeek V4.1 Flash",
+	"deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
 };
 
-let deepseekAliasReferences: Map<string, ModelSpec<"openai-completions">> | undefined;
+let deepseekV4FlashReference: ModelSpec<"openai-completions"> | undefined;
 
-function deepseekAliasedReference(id: string): ModelSpec<"openai-completions"> | undefined {
-	const alias = DEEPSEEK_DISCOVERY_ALIASES[id];
-	if (!alias) return undefined;
-	deepseekAliasReferences ??= createBundledReferenceMap<"openai-completions">("deepseek");
-	return deepseekAliasReferences.get(alias.referenceId);
+/** Display name when `id` is a V4.1 Flash spelling, else undefined. */
+export function deepseekV41FlashName(id: string): string | undefined {
+	const slash = id.lastIndexOf("/");
+	return DEEPSEEK_V41_FLASH_IDS[slash === -1 ? id : id.slice(slash + 1)];
+}
+
+/** The bundled `deepseek-v4-flash` row every V4.1 Flash id inherits from. */
+export function deepseekV41FlashReference(id: string): ModelSpec<"openai-completions"> | undefined {
+	if (deepseekV41FlashName(id) === undefined) return undefined;
+	deepseekV4FlashReference ??= createBundledReferenceMap<"openai-completions">("deepseek").get("deepseek-v4-flash");
+	return deepseekV4FlashReference;
 }
 
 export function deepseekModelManagerOptions(
@@ -1907,14 +1914,11 @@ export function deepseekModelManagerOptions(
 		defaultBaseUrl: "https://api.deepseek.com",
 		config,
 		requireApiKey: true,
-		// The alias only runs while mapping a live fetch, and the resulting rows
-		// are authoritative once cached, so it must also invalidate rows written
-		// before it existed (the cached id, not the alias target, is the trigger).
-		dropCachedModelIdsOnStaticMismatch: Object.keys(DEEPSEEK_DISCOVERY_ALIASES),
+		dropCachedModelIdsOnStaticMismatch: Object.keys(DEEPSEEK_V41_FLASH_IDS),
 		mapModel: (entry, defaults, reference) => {
-			const spec = mapWithBundledReference(entry, defaults, reference ?? deepseekAliasedReference(defaults.id));
-			const alias = DEEPSEEK_DISCOVERY_ALIASES[defaults.id];
-			return alias ? { ...spec, name: toModelName(entry.name, alias.name) } : spec;
+			const spec = mapWithBundledReference(entry, defaults, reference ?? deepseekV41FlashReference(defaults.id));
+			const name = deepseekV41FlashName(defaults.id);
+			return name === undefined ? spec : { ...spec, name: toModelName(entry.name, name) };
 		},
 	});
 }
@@ -3106,6 +3110,9 @@ function openCodeModelManagerOptions(
 		dropCachedModelIdsOnStaticMismatch: [
 			...apiRouteExactModelIds(providerId),
 			...OPENCODE_CACHE_MIGRATION_MODEL_IDS,
+			// V4.1 Flash rows cached before the lineage existed carry the generic
+			// discovery defaults (no `max` tier, unknown limits).
+			...Object.keys(DEEPSEEK_V41_FLASH_IDS),
 			...(providerId === "opencode-zen" ? OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS : []),
 		],
 		modelsDev: {
@@ -3139,6 +3146,22 @@ function openCodeModelManagerOptions(
 						// stencil fallback; the fallback never selects a transport.
 						const api = resolveApi(defaults.id, defaults.api);
 						const baseUrl = openCodeBaseUrlForApi(api, basePath);
+						// DeepSeek's V4.1 ids have no bundled row under either gateway, so
+						// the generic defaults would hide the effort dial; inherit the
+						// `deepseek-v4-flash` surface like the Muse Spark lineage below.
+						const v41 = deepseekV41FlashReference(defaults.id);
+						if (v41) {
+							return {
+								...v41,
+								id: defaults.id,
+								name: toModelName(entry.name, deepseekV41FlashName(defaults.id) ?? v41.name),
+								api,
+								provider: providerId,
+								baseUrl,
+								contextWindow: toPositiveNumber(entry.context_length, v41.contextWindow),
+								maxTokens: toPositiveNumber(entry.max_completion_tokens, v41.maxTokens),
+							};
+						}
 						const lineage = museSparkLineageSpec(defaults.id);
 						if (lineage) {
 							// Gateway lists Muse Spark as bare ids with no capability

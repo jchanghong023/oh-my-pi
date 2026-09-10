@@ -433,6 +433,11 @@
 						"priority": 0
 					},
 					{
+						"id": "flash",
+						"glob": "*deepseek-flash*",
+						"priority": 0
+					},
+					{
 						"id": "v4",
 						"glob": "*deepseek-v4*",
 						"priority": 0

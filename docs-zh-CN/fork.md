@@ -29,7 +29,7 @@
 * 模型目录缓存 TTL 为 15 分钟（上游默认 2 小时）：Command Code 会不定期增删模型（含免费档），缩短 TTL 避免启动后长时间看到过期目录；hub 内选中 provider 或 F5 仍可立即强制在线刷新。
 * API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
 * provider 默认模型为 `deepseek/deepseek-v4-flash`。
-* 可选思考等级与同 provider 的 DeepSeek 模型一致：`deepseek/deepseek-v4.1-flash`、`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 均为 `low` / `high` / `max`。Command Code 的模型列表不携带能力标记，未被内置目录覆盖的模型需要单独声明为推理模型，否则不会出现等级选项；声明同时作为缓存失效策略，新增声明会在下次启动时自动重新拉取目录，无需等待 TTL 或手动刷新。
+* 可选思考等级与同 provider 的 DeepSeek 模型一致：`deepseek/deepseek-v4.1-flash`、`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 均为 `low` / `high` / `max`；Command Code 的模型列表不携带能力标记，V4.1 Flash 的等级与限额由下方「DeepSeek V4.1 Flash」的继承规则提供。
 * 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
 * 模型列表与详情分别标示渠道报价（`quote`）、参考估算（`est.`）与未知（`unknown`）；未携带价格来源的旧缓存也显示未知，不显示为免费。费用计算与累计费用展示仍使用原有回退价格，不受来源标识影响。
 
@@ -38,12 +38,14 @@
 * `/models` 面板仅展示内置目录明确标为免费、且当前 input/output 价格均为 0 的 `opencode-zen` 模型。
 * 缺失价格或未列入内置免费目录的模型隐藏，新发现模型即使报告零价也不例外；此过滤不代表全局禁用其他模型。
 
-### DeepSeek 官方
+### DeepSeek V4.1 Flash
 
-* 官方 `deepseek` provider 的 `deepseek-flash`（DeepSeek V4.1 Flash）在发现阶段复用内置 `deepseek-v4-flash` 行的能力元数据：可选思考等级 `low` / `high` / `max`，上下文 1M、最大输出 384K，显示名为 `DeepSeek V4.1 Flash`。
-* 原因：DeepSeek 的 `/v1/models` 只返回 `id/object/owned_by`，而未被内置目录覆盖的模型会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知；`deepseek-flash` 是取代 `deepseek-v4-flash` 的同一模型，故复用其条目。该映射同时作为缓存失效策略，新增映射会在下次启动时自动重新拉取目录。
-* 内置目录出现 `deepseek-flash` 正式条目后自动以该条目为准，无需保留此映射。
-* 未改动 provider 默认模型（仍为 `deepseek-v4-pro`），未调整价格。
+* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此既无内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：可选思考等级 `low` / `high` / `max`，上下文 1M、最大输出 384K，显示名 `DeepSeek V4.1 Flash`。
+* 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`command-code`。未继承其他 provider 的价格与传输（`command-code` 仍取自己的价格源）。
+* 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
+* 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
+* 内置目录出现这些 id 的正式条目后自动以条目为准；上游补齐分类规则后，本 fork 的对应改动可整体移除。
+* 未改动各 provider 的默认模型与价格。
 
 ### 代理行为与 Discuss
 

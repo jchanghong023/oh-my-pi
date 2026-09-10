@@ -961,4 +961,53 @@ describe("issue #10416 — retired bare opencode provider", () => {
 		expect(getBundledModels("opencode-go").length).toBeGreaterThan(0);
 		expect(getBundledModels("opencode-zen").length).toBeGreaterThan(0);
 	});
+
+	// The Go gateway's bare `deepseek-flash` is DeepSeek's canonical V4.1 Flash.
+	// It has no bundled row here and its id carries no `v4` segment, so a
+	// family-less classification handed it the generic ladder — dropping `max`
+	// from the effort selector even though the gateway accepts it.
+	test("bare deepseek-flash keeps the DeepSeek V4 effort ladder", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-go-deepseek-flash-"));
+		try {
+			const options = opencodeGoModelManagerOptions({
+				apiKey: "go-account-key",
+				fetch: async () => modelListResponse(["deepseek-flash"]),
+			});
+			// The inherited surface is baked into the cached spec, so rows written
+			// before the lineage existed must be dropped or the fix never lands.
+			expect(options.dropCachedModelIdsOnStaticMismatch).toContain("deepseek-flash");
+			const modelsDev = options.modelsDev;
+			if (!modelsDev) throw new Error("OpenCode model manager did not configure stencil fallback");
+			const resolved = await resolveProviderModels(
+				{
+					...options,
+					cacheDbPath: path.join(tempDir, "models.db"),
+					modelsDev: {
+						...modelsDev,
+						fetch: async () => ({
+							"opencode-go": {
+								models: {
+									"deepseek-flash": {
+										id: "deepseek-flash",
+										name: "DeepSeek V4 Flash",
+										tool_call: true,
+										reasoning: true,
+										limit: { context: 1_000_000, output: 384_000 },
+										modalities: { input: ["text"], output: ["text"] },
+									},
+								},
+							},
+						}),
+					},
+				},
+				"online",
+			);
+			const model = resolved.models.find(candidate => candidate.id === "deepseek-flash");
+			if (!model) throw new Error("deepseek-flash was not resolved");
+
+			expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });
