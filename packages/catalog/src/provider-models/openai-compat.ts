@@ -1890,6 +1890,15 @@ export const DEEPSEEK_V41_FLASH_IDS: Readonly<Record<string, string>> = {
 	"deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
 };
 
+/**
+ * Revision of the surface above, and a cache migration key rather than a model
+ * id. It joins every V4.1 Flash drop list because the resolver only drops rows
+ * through the migration-policy fingerprint: without it, a row cached by the
+ * previous surface would keep serving it. The `@` prefix keeps the token from
+ * ever matching a discovered id.
+ */
+export const DEEPSEEK_V41_FLASH_SURFACE_KEY = "@v41-flash-surface/2";
+
 let deepseekV4FlashReference: ModelSpec<"openai-completions"> | undefined;
 
 /** Display name when `id` is a V4.1 Flash spelling, else undefined. */
@@ -1898,10 +1907,27 @@ export function deepseekV41FlashName(id: string): string | undefined {
 	return DEEPSEEK_V41_FLASH_IDS[slash === -1 ? id : id.slice(slash + 1)];
 }
 
-/** The bundled `deepseek-v4-flash` row every V4.1 Flash id inherits from. */
+/**
+ * The capability surface every V4.1 Flash id inherits from the bundled
+ * `deepseek-v4-flash` row.
+ *
+ * V4.1 Flash is natively multimodal while the borrowed row is text-only, and
+ * the id matches neither the `vision` nor the `ocr` token the class rules
+ * whitelist — so the modality and its strip override have to travel with the
+ * surface. Everything else (effort ladder, limits, wire quirks) is the
+ * sibling's.
+ */
 export function deepseekV41FlashReference(id: string): ModelSpec<"openai-completions"> | undefined {
 	if (deepseekV41FlashName(id) === undefined) return undefined;
-	deepseekV4FlashReference ??= createBundledReferenceMap<"openai-completions">("deepseek").get("deepseek-v4-flash");
+	deepseekV4FlashReference ??= (() => {
+		const reference = createBundledReferenceMap<"openai-completions">("deepseek").get("deepseek-v4-flash");
+		if (!reference) return undefined;
+		return {
+			...reference,
+			input: ["text", "image"],
+			compat: { ...reference.compat, stripImageInput: false },
+		};
+	})();
 	return deepseekV4FlashReference;
 }
 
@@ -1914,7 +1940,7 @@ export function deepseekModelManagerOptions(
 		defaultBaseUrl: "https://api.deepseek.com",
 		config,
 		requireApiKey: true,
-		dropCachedModelIdsOnStaticMismatch: Object.keys(DEEPSEEK_V41_FLASH_IDS),
+		dropCachedModelIdsOnStaticMismatch: [...Object.keys(DEEPSEEK_V41_FLASH_IDS), DEEPSEEK_V41_FLASH_SURFACE_KEY],
 		mapModel: (entry, defaults, reference) => {
 			const spec = mapWithBundledReference(entry, defaults, reference ?? deepseekV41FlashReference(defaults.id));
 			const name = deepseekV41FlashName(defaults.id);
@@ -3113,6 +3139,7 @@ function openCodeModelManagerOptions(
 			// V4.1 Flash rows cached before the lineage existed carry the generic
 			// discovery defaults (no `max` tier, unknown limits).
 			...Object.keys(DEEPSEEK_V41_FLASH_IDS),
+			DEEPSEEK_V41_FLASH_SURFACE_KEY,
 			...(providerId === "opencode-zen" ? OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS : []),
 		],
 		modelsDev: {

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isOpenAICompletionsVisionSupported } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -1006,6 +1008,10 @@ describe("issue #10416 — retired bare opencode provider", () => {
 			if (!model) throw new Error("deepseek-flash was not resolved");
 
 			expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.High, Effort.Max]);
+			// V4.1 Flash is natively multimodal, unlike the text-only
+			// `deepseek-v4-flash` row the rest of the surface is inherited from.
+			expect(model.input).toEqual(["text", "image"]);
+			expect(isOpenAICompletionsVisionSupported(model as Model<"openai-completions">)).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

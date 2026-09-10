@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isOpenAICompletionsVisionSupported } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -11,6 +13,7 @@ import {
 	resolveCommandCodeApi,
 	resolveCommandCodeBaseUrl,
 } from "@oh-my-pi/pi-catalog/provider-models/command-code";
+import { DEEPSEEK_V41_FLASH_SURFACE_KEY } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import { encode } from "turbo-stream";
 
 describe("Command Code provider", () => {
@@ -177,6 +180,9 @@ describe("Command Code provider", () => {
 		// row, so the endpoint's own limits come along with the effort ladder.
 		expect(built.contextWindow).toBe(1_000_000);
 		expect(built.maxTokens).toBe(384_000);
+		// Multimodal, and exempt from the DeepSeek class's image stripping.
+		expect(built.input).toEqual(["text", "image"]);
+		expect(isOpenAICompletionsVisionSupported(built as Model<"openai-completions">)).toBe(true);
 	});
 
 	// The inherited surface only reaches an installation that still fetches the
@@ -238,6 +244,57 @@ describe("Command Code provider", () => {
 			expect(fetches).toBe(1);
 			expect(model?.reasoning).toBe(true);
 			expect(model?.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	// The lineage ids are unchanged between the reasoning revision and the
+	// modality one, so an id-only policy leaves a text-only row in place and the
+	// fingerprint it was written under keeps matching. The surface revision key
+	// is what makes the policy, and therefore the fingerprint, differ.
+	test("re-fetches rows cached with the text-only V4.1 surface", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-command-code-vision-cache-"));
+		const cacheDbPath = path.join(tempDir, "models.db");
+		let fetches = 0;
+		const fetch = (async (input: unknown) => {
+			if (String(input) === "https://commandcode.ai/models.data") return new Response(null, { status: 503 });
+			fetches++;
+			return Response.json({ data: [{ id: "deepseek/deepseek-v4.1-flash" }] });
+		}) as typeof globalThis.fetch;
+
+		try {
+			const options = commandCodeModelManagerOptions({ apiKey: "test-key", fetch });
+			const cacheProviderId = options.cacheProviderId;
+			const dropIds = options.dropCachedModelIdsOnStaticMismatch;
+			if (!cacheProviderId || !dropIds) throw new Error("Command Code migration policy is missing");
+			// The revision this guards against: same lineage ids, no surface key.
+			const priorDropIds = dropIds.filter(id => id !== DEEPSEEK_V41_FLASH_SURFACE_KEY);
+
+			await resolveProviderModels(
+				{ ...options, cacheDbPath, dropCachedModelIdsOnStaticMismatch: priorDropIds },
+				"online",
+			);
+			const priorCache = readModelCache(cacheProviderId, Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
+			if (!priorCache) throw new Error("Command Code cache was not written");
+			// Rewrite the rows as that revision served them: same fingerprint,
+			// text-only surface.
+			writeModelCache(
+				cacheProviderId,
+				priorCache.updatedAt,
+				priorCache.models.map(model => ({ ...model, input: ["text"] as const })),
+				priorCache.authoritative,
+				priorCache.staticFingerprint,
+				cacheDbPath,
+			);
+
+			fetches = 0;
+			const upgraded = await resolveProviderModels({ ...options, cacheDbPath }, "online-if-uncached");
+			const model = upgraded.models.find(candidate => candidate.id === "deepseek/deepseek-v4.1-flash");
+
+			expect(fetches).toBe(1);
+			expect(model?.input).toEqual(["text", "image"]);
+			expect(isOpenAICompletionsVisionSupported(model as Model<"openai-completions">)).toBe(true);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

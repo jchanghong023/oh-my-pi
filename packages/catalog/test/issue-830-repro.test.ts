@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { isOpenAICompletionsVisionSupported } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -85,5 +86,10 @@ describe("deepseek built-in provider (issue #830)", () => {
 		expect(built.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
 		expect(built.contextWindow).toBe(1_000_000);
 		expect(built.name).toBe("DeepSeek V4.1 Flash");
+		// V4.1 Flash reads images; the id matches neither the `vision` nor the
+		// `ocr` token, so the surface must carry both the modality and the
+		// exemption from the class default that would strip them downstream.
+		expect(built.input).toEqual(["text", "image"]);
+		expect(isOpenAICompletionsVisionSupported(built)).toBe(true);
 	});
 });

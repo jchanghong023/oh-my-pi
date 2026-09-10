@@ -11,7 +11,12 @@ import type { ModelManagerOptions } from "../model-manager";
 import type { Api, FetchImpl, ModelCost, ModelSpec, TokenCost } from "../types";
 import { discoveryFetch, isRecord } from "../utils";
 import { resolveModelCacheProviderId } from "./cache-provider-id";
-import { DEEPSEEK_V41_FLASH_IDS, deepseekV41FlashName, deepseekV41FlashReference } from "./openai-compat";
+import {
+	DEEPSEEK_V41_FLASH_IDS,
+	DEEPSEEK_V41_FLASH_SURFACE_KEY,
+	deepseekV41FlashName,
+	deepseekV41FlashReference,
+} from "./openai-compat";
 import type { ModelManagerConfig } from "./descriptor-types";
 
 const COMMAND_CODE_PROVIDER_BASE_URL = "https://api.commandcode.ai/provider";
@@ -156,7 +161,7 @@ function mapCommandCodeModel(
 		// Reasoning is an intrinsic model capability; buildModel derives the
 		// Command Code transport's wire controls from the new API/id pair.
 		reasoning,
-		input: reference?.input ?? defaults.input,
+		input: lineage?.input ?? reference?.input ?? defaults.input,
 		cost: pricingCost ?? reference?.cost ?? defaults.cost,
 		costSource: pricingCost ? "provider" : reference?.cost ? "reference" : "unknown",
 		contextWindow: lineage?.contextWindow ?? reference?.contextWindow ?? defaults.contextWindow,
@@ -164,6 +169,9 @@ function mapCommandCodeModel(
 		// Wire-model aliases such as effortRouting are provider-specific. Keep
 		// discovery-provided thinking, but never inherit another provider's routing.
 		...(thinking ? { thinking } : {}),
+		// V4.1 Flash is multimodal; the class default strips images on every
+		// DeepSeek id that matches neither the `vision` nor the `ocr` token.
+		...(lineage?.compat ? { compat: { ...defaults.compat, ...lineage.compat } } : {}),
 	};
 }
 
@@ -174,7 +182,10 @@ export function commandCodeModelManagerOptions(config?: ModelManagerConfig): Mod
 	// `deepseek/` namespace, so the bare lineage keys cannot match them directly.
 	// The manager only drops a row whose id it finds in this list, and the
 	// fingerprint hash alone is not the contract the list exists for.
-	const v41CacheIds = Object.keys(DEEPSEEK_V41_FLASH_IDS).map(id => `deepseek/${id}`);
+	const v41CacheIds = [
+		...Object.keys(DEEPSEEK_V41_FLASH_IDS).map(id => `deepseek/${id}`),
+		DEEPSEEK_V41_FLASH_SURFACE_KEY,
+	];
 
 	return {
 		providerId: "command-code",
