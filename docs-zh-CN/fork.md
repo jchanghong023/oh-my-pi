@@ -29,6 +29,7 @@
 * 模型目录缓存 TTL 为 15 分钟（上游默认 2 小时）：Command Code 会不定期增删模型（含免费档），缩短 TTL 避免启动后长时间看到过期目录；hub 内选中 provider 或 F5 仍可立即强制在线刷新。
 * API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
 * provider 默认模型为 `deepseek/deepseek-v4-flash`。
+* 可选思考等级与同 provider 的 DeepSeek 模型一致：`deepseek/deepseek-v4.1-flash`、`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 均为 `low` / `high` / `max`。Command Code 的模型列表不携带能力标记，未被内置目录覆盖的模型需要单独声明为推理模型，否则不会出现等级选项。
 * 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
 * 模型列表与详情分别标示渠道报价（`quote`）、参考估算（`est.`）与未知（`unknown`）；未携带价格来源的旧缓存也显示未知，不显示为免费。费用计算与累计费用展示仍使用原有回退价格，不受来源标识影响。
 

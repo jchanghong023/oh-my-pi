@@ -19,6 +19,15 @@ const COMMAND_CODE_PRICING_URL = "https://commandcode.ai/models.data";
 // reusing an older cached catalog at startup hides those models until the TTL
 // lapses, so this provider refreshes far more often than the 2h default.
 const COMMAND_CODE_CACHE_TTL_MS = 15 * 60 * 1000;
+// Command Code's `/v1/models` payload carries no capability flags, so a model
+// with no bundled reference row keeps the discovery default `reasoning: false`,
+// and buildModel skips the thinking cascade for non-reasoning specs — leaving
+// the model with no selectable level. Declare those ids here instead; the
+// cascade then derives the same effort range as the siblings on this provider
+// (`deepseek/deepseek-v4-flash` → low/high/max, all accepted by the endpoint).
+const COMMAND_CODE_REASONING_MODEL_IDS: Readonly<Record<string, true>> = {
+	"deepseek/deepseek-v4.1-flash": true,
+};
 
 function normalizeBasePath(baseUrl: string | undefined): string {
 	const value = (baseUrl ?? COMMAND_CODE_PROVIDER_BASE_URL).trim().replace(/\/+$/, "");
@@ -140,6 +149,9 @@ function mapCommandCodeModel(
 	const reference = resolveModelReference(defaults.id, getBundledModelReferenceIndex());
 	const api = resolveCommandCodeApi(defaults.id);
 	const thinking = inheritReferenceThinking(defaults.thinking, reference, "command-code");
+	// Declared ids win over the reference: the table records a capability proven
+	// against the endpoint's own `reasoning_effort` handling.
+	const reasoning = COMMAND_CODE_REASONING_MODEL_IDS[defaults.id] ?? reference?.reasoning ?? defaults.reasoning;
 	return {
 		...defaults,
 		name: reference?.name ?? defaults.name,
@@ -148,7 +160,7 @@ function mapCommandCodeModel(
 		baseUrl: resolveCommandCodeBaseUrl(api, baseUrl),
 		// Reasoning is an intrinsic model capability; buildModel derives the
 		// Command Code transport's wire controls from the new API/id pair.
-		reasoning: reference?.reasoning ?? defaults.reasoning,
+		reasoning,
 		input: reference?.input ?? defaults.input,
 		cost: pricingCost ?? reference?.cost ?? defaults.cost,
 		costSource: pricingCost ? "provider" : reference?.cost ? "reference" : "unknown",

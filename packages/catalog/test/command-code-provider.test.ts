@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
 	commandCodeModelManagerOptions,
 	resolveCommandCodeApi,
@@ -150,5 +152,21 @@ describe("Command Code provider", () => {
 			costSource: "unknown",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		});
+	});
+
+	// The discovery payload carries no capability flags, so an id with no bundled
+	// reference row would otherwise keep `reasoning: false` and offer no level at
+	// all. Such an id is registered instead and must resolve the concrete range
+	// its siblings on this provider expose.
+	test("gives registered reasoning ids a selectable thinking range", async () => {
+		const fetch = (async (input: unknown) => {
+			if (String(input) === "https://commandcode.ai/models.data") return new Response(null, { status: 503 });
+			return Response.json({ data: [{ id: "deepseek/deepseek-v4.1-flash" }] });
+		}) as typeof globalThis.fetch;
+		const models = await commandCodeModelManagerOptions({ apiKey: "test-key", fetch }).fetchDynamicModels?.();
+		const built = buildModel(models![0]!);
+
+		expect(built.reasoning).toBe(true);
+		expect(built.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
 	});
 });
