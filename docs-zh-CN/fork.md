@@ -38,6 +38,13 @@
 * `/models` 面板仅展示内置目录明确标为免费、且当前 input/output 价格均为 0 的 `opencode-zen` 模型。
 * 缺失价格或未列入内置免费目录的模型隐藏，新发现模型即使报告零价也不例外；此过滤不代表全局禁用其他模型。
 
+### DeepSeek 官方
+
+* 官方 `deepseek` provider 的 `deepseek-flash`（DeepSeek V4.1 Flash）在发现阶段复用内置 `deepseek-v4-flash` 行的能力元数据：可选思考等级 `low` / `high` / `max`，上下文 1M、最大输出 384K，显示名为 `DeepSeek V4.1 Flash`。
+* 原因：DeepSeek 的 `/v1/models` 只返回 `id/object/owned_by`，而未被内置目录覆盖的模型会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知；`deepseek-flash` 是取代 `deepseek-v4-flash` 的同一模型，故复用其条目。该映射同时作为缓存失效策略，新增映射会在下次启动时自动重新拉取目录。
+* 内置目录出现 `deepseek-flash` 正式条目后自动以该条目为准，无需保留此映射。
+* 未改动 provider 默认模型（仍为 `deepseek-v4-pro`），未调整价格。
+
 ### 代理行为与 Discuss
 
 * Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。

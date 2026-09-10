@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
-import { MODELS_DEV_PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import {
+	deepseekModelManagerOptions,
+	MODELS_DEV_PROVIDER_DESCRIPTORS,
+} from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
 describe("deepseek built-in provider (issue #830)", () => {
@@ -52,5 +57,33 @@ describe("deepseek built-in provider (issue #830)", () => {
 		expect(compat?.requiresAssistantContentForToolCalls).toBe(true);
 		expect(compat?.reasoningContentField).toBe("reasoning_content");
 		expect(compat?.extraBody).toEqual({ thinking: { type: "enabled" } });
+	});
+
+	// DeepSeek's `/v1/models` reports nothing but `{id, object, owned_by}`, so the
+	// canonical V4.1 Flash id (`deepseek-flash`) has no capability source at all
+	// until a bundled row exists for it: discovery kept `reasoning: false` and a
+	// null context window, which left the model with no thinking dial.
+	test("discovery gives deepseek-flash the V4.1 capability surface", async () => {
+		const fetch = (async (input: unknown) => {
+			if (String(input).includes("/models")) {
+				return Response.json({
+					object: "list",
+					data: [{ id: "deepseek-flash", object: "model", owned_by: "deepseek" }],
+				});
+			}
+			return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+		}) as typeof globalThis.fetch;
+
+		const options = deepseekModelManagerOptions({ apiKey: "test-key", fetch });
+		// The alias only runs while mapping a live fetch, so pre-fix cache rows
+		// have to be invalidated or the fix never reaches an upgraded install.
+		expect(options.dropCachedModelIdsOnStaticMismatch).toContain("deepseek-flash");
+
+		const models = await options.fetchDynamicModels?.();
+		const built = buildModel(models![0]!);
+		expect(built.reasoning).toBe(true);
+		expect(built.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		expect(built.contextWindow).toBe(1_000_000);
+		expect(built.name).toBe("DeepSeek V4.1 Flash");
 	});
 });

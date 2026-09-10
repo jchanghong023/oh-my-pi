@@ -1873,10 +1873,50 @@ export interface DeepSeekModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+/**
+ * Discovery ids that have no bundled DeepSeek row of their own.
+ *
+ * DeepSeek's `/v1/models` returns only `{id, object, owned_by}`, and
+ * `mapWithBundledReference` keeps the discovery default `reasoning: false` when
+ * no row matches — so an unmatched id loses both its thinking dial and its
+ * limits (`deepseek-flash` surfaced as non-reasoning with a null context
+ * window). `deepseek-flash` is the canonical DeepSeek V4.1 Flash id that
+ * supersedes `deepseek-v4-flash`, so it borrows that row's effort ladder and
+ * limits; the label is overridden because the borrowed row predates the
+ * rename. A bundled row for the new id wins over the alias when one exists.
+ */
+const DEEPSEEK_DISCOVERY_ALIASES: Readonly<Record<string, { readonly referenceId: string; readonly name: string }>> = {
+	"deepseek-flash": { referenceId: "deepseek-v4-flash", name: "DeepSeek V4.1 Flash" },
+};
+
+let deepseekAliasReferences: Map<string, ModelSpec<"openai-completions">> | undefined;
+
+function deepseekAliasedReference(id: string): ModelSpec<"openai-completions"> | undefined {
+	const alias = DEEPSEEK_DISCOVERY_ALIASES[id];
+	if (!alias) return undefined;
+	deepseekAliasReferences ??= createBundledReferenceMap<"openai-completions">("deepseek");
+	return deepseekAliasReferences.get(alias.referenceId);
+}
+
 export function deepseekModelManagerOptions(
 	config?: DeepSeekModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("deepseek", "https://api.deepseek.com", config);
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "deepseek",
+		defaultBaseUrl: "https://api.deepseek.com",
+		config,
+		requireApiKey: true,
+		// The alias only runs while mapping a live fetch, and the resulting rows
+		// are authoritative once cached, so it must also invalidate rows written
+		// before it existed (the cached id, not the alias target, is the trigger).
+		dropCachedModelIdsOnStaticMismatch: Object.keys(DEEPSEEK_DISCOVERY_ALIASES),
+		mapModel: (entry, defaults, reference) => {
+			const spec = mapWithBundledReference(entry, defaults, reference ?? deepseekAliasedReference(defaults.id));
+			const alias = DEEPSEEK_DISCOVERY_ALIASES[defaults.id];
+			return alias ? { ...spec, name: toModelName(entry.name, alias.name) } : spec;
+		},
+	});
 }
 
 // ---------------------------------------------------------------------------
