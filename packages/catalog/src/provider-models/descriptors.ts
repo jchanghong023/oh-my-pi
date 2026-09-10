@@ -5,8 +5,6 @@
  * half (env keys, OAuth login/refresh) stays in the pi-ai registry, which
  * type-checks itself against `KnownProvider` from this table.
  */
-
-import { commandCodeModelManagerOptions } from "./command-code";
 import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } from "./descriptor-types";
 import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
@@ -22,6 +20,7 @@ import {
 	cerebrasModelManagerOptions,
 	clinePassModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
+	commandCodeModelManagerOptions,
 	coreWeaveModelManagerOptions,
 	deepinfraModelManagerOptions,
 	deepseekModelManagerOptions,
@@ -159,11 +158,13 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "Cloudflare AI Gateway" },
 	},
 	{
-		id: "command-code",
-		defaultModel: "deepseek/deepseek-v4-flash",
+		id: "commandcode",
+		defaultModel: "claude-sonnet-4-6",
 		envVars: ["COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => commandCodeModelManagerOptions(config),
+		allowUnauthenticated: true,
 		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Command Code", allowUnauthenticated: true },
 	},
 	{
 		id: "cursor",

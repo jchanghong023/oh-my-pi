@@ -1029,9 +1029,30 @@ export interface LongContextTokenCost extends TokenCost {
 	inputThresholdInclusive?: boolean;
 }
 
-/** Base token rates plus an optional long-context tier. */
+/** Recurring UTC peak interval; weekdays use Sunday = 0, and the end is exclusive. */
+export interface PeakPricingWindow {
+	weekdays: readonly number[];
+	startMinute: number;
+	endMinute: number;
+}
+
+/** Complete replacement rate card effective from a Unix-millisecond timestamp. */
+export interface EffectiveTokenCost extends TokenCost {
+	effectiveFrom: number;
+	longContext?: LongContextTokenCost;
+}
+
+/** Scheduled discounts applied after selecting the effective rate card and context tier. */
+export interface TimeBasedCost {
+	offPeakMultiplier: number;
+	peakWindows: readonly PeakPricingWindow[];
+	effectiveRates?: readonly EffectiveTokenCost[];
+}
+
+/** Base token rates plus optional long-context and time-based pricing. */
 export interface ModelCost extends TokenCost {
 	longContext?: LongContextTokenCost;
+	timeBased?: TimeBasedCost;
 }
 
 /**
@@ -1118,8 +1139,6 @@ export interface Model<TApi extends Api = Api> {
 	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
 	cursorMaxMode?: boolean;
 	cost: ModelCost;
-	/** Optional unit-price provenance; does not change cost calculation. */
-	costSource?: "provider" | "reference" | "unknown";
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;

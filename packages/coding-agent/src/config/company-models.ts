@@ -55,7 +55,6 @@ export function getCompanyChatModels(): Model<"anthropic-messages">[] {
 			supportsTools: true,
 			thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			costSource: "unknown",
 			compat: {
 				supportsContextManagement: false,
 				supportsOutputEffort: false,

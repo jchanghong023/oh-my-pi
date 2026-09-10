@@ -8,7 +8,7 @@
 
 * **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.1.16`
-* **Upstream commit**：`d884057f09c50ad096ccd4ca16cec79602e9879c`
+* **Upstream commit**：`004dd415640c5d60f69542f016a11de4821862c4`
 * **同步日期**：2026-09-10
 
 ## 当前功能差异
@@ -24,14 +24,10 @@
 
 ### Command Code
 
-* 保留 `command-code` provider，支持 API Key 登录和配置的 provider `baseUrl`。
-* 支持 Anthropic Messages / OpenAI Completions 双协议及模型发现。
-* 模型目录缓存 TTL 为 15 分钟（上游默认 2 小时）：Command Code 会不定期增删模型（含免费档），缩短 TTL 避免启动后长时间看到过期目录；hub 内选中 provider 或 F5 仍可立即强制在线刷新。
-* API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
-* provider 默认模型为 `deepseek/deepseek-v4-flash`。
-* 可选思考等级与同 provider 的 DeepSeek 模型一致：`deepseek/deepseek-v4.1-flash`、`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 均为 `low` / `high` / `max`；Command Code 的模型列表不携带能力标记，V4.1 Flash 的等级与限额由下方「DeepSeek V4.1 Flash」的继承规则提供。
-* 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
-* 模型列表与详情分别标示渠道报价（`quote`）、参考估算（`est.`）与未知（`unknown`）；未携带价格来源的旧缓存也显示未知，不显示为免费。费用计算与累计费用展示仍使用原有回退价格，不受来源标识影响。
+* 采用上游 provider（id `commandcode`，默认模型 `claude-sonnet-4-6`、双协议发现、KDL 静态价目表与逐 id 思考等级表），fork 不再维护自己的 `command-code` provider。
+* 迁移：`modelRoles` 等配置中的 `command-code/...` 需改为 `commandcode/...`；已存凭据的 provider 键同步改名，否则重新登录。
+* 仅有一处 fork 增量：模型列表不带能力标记，`deepseek/deepseek-v4.1-flash` 因此拿不到 `reasoning`，其思考等级与图片输入失效。fork 在映射时按「DeepSeek V4.1 Flash」的继承规则补上，等级与图片支持见下节；价格仍取上游静态表。
+* 上游 KDL 未收录该 id 前，此增量是它获得等级的唯一来源；上游收录后应删除本增量并在 KDL 中保留条目。
 
 ### OpenCode Zen
 
@@ -41,12 +37,12 @@
 ### DeepSeek V4.1 Flash
 
 * DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此既无内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：可选思考等级 `low` / `high` / `max`，上下文 1M、最大输出 384K，显示名 `DeepSeek V4.1 Flash`。
-* 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`command-code`。未继承其他 provider 的价格与传输（`command-code` 仍取自己的价格源）。
+* 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
 * V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。因此继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
 * 内置目录出现这些 id 的正式条目后自动以条目为准；上游补齐分类规则后，本 fork 的对应改动可整体移除。
-* 未改动各 provider 的默认模型与价格。
+* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」增量提供等级与图片输入，价格取上游静态表；官方 `deepseek` 的 `deepseek-flash` 在内置目录中只有价格条目，能力仍来自本继承面。
 
 ### 代理行为与 Discuss
 

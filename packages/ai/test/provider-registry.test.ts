@@ -65,13 +65,13 @@ describe("provider registry auth surface", () => {
 	test("Command Code env fallback honors documented key and legacy alias precedence", () => {
 		delete Bun.env.COMMAND_CODE_API_KEY;
 		Bun.env.COMMANDCODE_API_KEY = "legacy-command-code-key";
-		expect(getEnvApiKey("command-code")).toBe("legacy-command-code-key");
+		expect(getEnvApiKey("commandcode")).toBe("legacy-command-code-key");
 
 		Bun.env.COMMAND_CODE_API_KEY = "documented-command-code-key";
-		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
+		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
 
 		delete Bun.env.COMMANDCODE_API_KEY;
-		expect(getEnvApiKey("command-code")).toBe("documented-command-code-key");
+		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
 	});
 
 	test("Command Code login trims and returns the key without binding to an inference endpoint", async () => {
@@ -79,16 +79,16 @@ describe("provider registry auth surface", () => {
 		const onPrompt = vi.fn(async () => "  tenant-key  ");
 		const fetch = vi.fn(async () => new Response("unexpected")) as unknown as typeof globalThis.fetch;
 
-		const login = getProviderDefinition("command-code")?.login;
+		const login = getProviderDefinition("commandcode")?.login;
 		expect(login).toBeDefined();
 		await expect(login!({ onAuth, onPrompt, fetch })).resolves.toBe("tenant-key");
 		expect(onAuth).toHaveBeenCalledWith({
-			url: "https://commandcode.ai/studio/api-keys",
+			url: "https://commandcode.ai/studio",
 			instructions: "Create or copy a Provider API key from Command Code Studio",
 		});
 		expect(onPrompt).toHaveBeenCalledWith({
 			message: "Paste your Command Code API key",
-			placeholder: "sk-...",
+			placeholder: "user_...",
 		});
 		expect(fetch).not.toHaveBeenCalled();
 	});

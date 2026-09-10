@@ -355,21 +355,15 @@ export function formatRoleChip(role: string, assignment: RoleAssignment, setting
 	return theme.fg(info.color ?? "muted", `${theme.status.enabled} ${label}`) + suffix;
 }
 
-/** Command Code prices distinguish quotes, estimates, and untrusted legacy defaults. */
 function formatCostPair(model: Model): string {
 	const cost = model.cost;
-	const commandCode = model.provider === "command-code";
-	if (commandCode && (!cost || (model.costSource !== "provider" && model.costSource !== "reference"))) {
-		return "unknown";
-	}
-	if (!commandCode && (!cost || (cost.input <= 0 && cost.output <= 0))) return "free";
+	if (!cost || (cost.input <= 0 && cost.output <= 0)) return "free";
 	const fmt = (n: number): string => {
 		if (n <= 0) return "0";
 		const s = n >= 100 ? String(Math.round(n)) : n >= 10 ? n.toFixed(1) : n.toFixed(2);
 		return s.replace(/\.?0+$/, "");
 	};
-	const pair = `$${fmt(cost.input)}/${fmt(cost.output)}`;
-	return commandCode ? `${pair} (${model.costSource === "provider" ? "quote" : "est."})` : pair;
+	return `$${fmt(cost.input)}/${fmt(cost.output)}`;
 }
 
 /** Provider-supplied blurb, flattened to a single renderable detail-line cell. */
