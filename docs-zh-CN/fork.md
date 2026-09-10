@@ -7,9 +7,9 @@
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.1.16`
-* **Upstream commit**：`13a38b12afbe62bb05d30b7edd59a2ded738483a`
-* **同步日期**：2026-09-10
+* **版本**：`v18.1.17`
+* **Upstream commit**：`3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec`
+* **同步日期**：2026-09-11
 
 ## 当前功能差异
 
@@ -26,8 +26,10 @@
 
 * 采用上游 provider（id `commandcode`，默认模型 `claude-sonnet-4-6`、双协议发现、KDL 静态价目表与逐 id 思考等级表），fork 不再维护自己的 `command-code` provider。
 * 迁移：`modelRoles` 等配置中的 `command-code/...` 需改为 `commandcode/...`；已存凭据的 provider 键同步改名，否则重新登录。
-* 仅有一处 fork 增量：模型列表不带能力标记，`deepseek/deepseek-v4.1-flash` 因此拿不到 `reasoning`，其思考等级与图片输入失效。fork 在映射时按「DeepSeek V4.1 Flash」的继承规则补上，等级与图片支持见下节；价格仍取上游静态表。
-* 上游 KDL 未收录该 id 前，此增量是它获得等级的唯一来源；上游收录后应删除本增量并在 KDL 中保留条目。
+* fork 增量只在 `providers/commandcode.kdl`：`deepseek/deepseek-v4.1-flash` 并入 `deepseek/deepseek-v4-flash` 一组的等级阶梯（`high` / `max`），并声明输入模态 `text` + `image` 与 `strip-image-input #false`。等级与图片支持见下节。
+* 发现结果保持中性：上游映射器不再从同名模型继承 `reasoning` 与上下文，映射代码不再有 fork 增量；KDL 的精确 `thinking-efforts` 配合 provider 级 `thinking-upgrade-neutral` 负责把中性默认升级为可推理模型。
+* 价格取上游静态表：上游已收录该 id 的 `cost-patch`（`0.15` / `0.60`），fork 不再把它并入 `deepseek-v4-flash` 的价目组。
+* 上游若在 KDL 中补齐该 id 的等级阶梯与模态，上述 fork 条目可整体删除。
 
 ### OpenCode Zen
 
@@ -42,7 +44,7 @@
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
 * 内置目录出现这些 id 的正式条目后自动以条目为准；上游补齐分类规则后，本 fork 的对应改动可整体移除。
-* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」增量提供等级与图片输入，价格取上游静态表；官方 `deepseek` 的 `deepseek-flash` 在内置目录中只有价格条目，能力仍来自本继承面。
+* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」的 KDL 条目提供等级与图片输入，价格取上游 `cost-patch`；官方 `deepseek` 的 `deepseek-flash` 在内置目录中只有价格条目，能力仍来自本继承面。
 
 ### 代理行为与 Discuss
 
