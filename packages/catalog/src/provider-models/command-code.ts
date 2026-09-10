@@ -181,6 +181,14 @@ export function commandCodeModelManagerOptions(config?: ModelManagerConfig): Mod
 		cacheProviderId: resolveModelCacheProviderId("command-code", { baseUrl: discoveryBaseUrl }),
 		cacheTtlMs: COMMAND_CODE_CACHE_TTL_MS,
 		dynamicModelsAuthoritative: true,
+		// The declarations above double as the cache-migration policy: the manager
+		// folds this list into the static fingerprint, and an authoritative
+		// provider only reuses a cache whose fingerprint matches, so adding a
+		// declaration forces the refresh that the declaration itself needs.
+		// Without it a row written before the declaration keeps `reasoning: false`
+		// until the TTL lapses — which is what the first release of the v4.1
+		// declaration did to installations that had already cached the catalog.
+		dropCachedModelIdsOnStaticMismatch: Object.keys(COMMAND_CODE_REASONING_MODEL_IDS),
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const [models, pricing] = await Promise.all([

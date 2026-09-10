@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import {
 	commandCodeModelManagerOptions,
 	resolveCommandCodeApi,
@@ -168,5 +173,66 @@ describe("Command Code provider", () => {
 
 		expect(built.reasoning).toBe(true);
 		expect(built.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+	});
+
+	// A declaration only reaches an installation that still fetches the catalog.
+	// The gateway is authoritative, so a cache written before the declaration is
+	// reused verbatim and keeps `reasoning: false` until the TTL lapses — the
+	// level stays missing even though the code is fixed. Declared ids are
+	// therefore part of the migration policy and must force a refetch.
+	test("invalidates catalogs cached before a reasoning declaration", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-command-code-reasoning-cache-"));
+		const cacheDbPath = path.join(tempDir, "models.db");
+		// `fetchDynamicModels` closes over this mock, so the counter has to live
+		// here — overriding `fetch` on the resolve options has no effect.
+		let fetches = 0;
+		const fetch = (async (input: unknown) => {
+			if (String(input) === "https://commandcode.ai/models.data") return new Response(null, { status: 503 });
+			fetches++;
+			return Response.json({ data: [{ id: "deepseek/deepseek-v4.1-flash" }] });
+		}) as typeof globalThis.fetch;
+
+		try {
+			const options = commandCodeModelManagerOptions({ apiKey: "test-key", fetch });
+			const cacheProviderId = options.cacheProviderId;
+			if (!cacheProviderId) throw new Error("Command Code cache provider id is missing");
+
+			// Fingerprint an installation predating the declaration would have
+			// written, then replace its rows with what that build discovered: the
+			// untouched `reasoning: false` default.
+			await resolveProviderModels({ ...options, cacheDbPath, dropCachedModelIdsOnStaticMismatch: [] }, "online");
+			const priorCache = readModelCache(cacheProviderId, Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
+			if (!priorCache) throw new Error("Command Code cache was not written");
+			const stale = buildModel({
+				id: "deepseek/deepseek-v4.1-flash",
+				name: "DeepSeek V4.1 Flash",
+				api: "openai-completions",
+				provider: "command-code",
+				baseUrl: "https://api.commandcode.ai/provider/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 384_000,
+			});
+			writeModelCache(
+				cacheProviderId,
+				priorCache.updatedAt,
+				[stale],
+				true,
+				priorCache.staticFingerprint,
+				cacheDbPath,
+			);
+
+			fetches = 0;
+			const upgraded = await resolveProviderModels({ ...options, cacheDbPath }, "online-if-uncached");
+			const model = upgraded.models.find(candidate => candidate.id === stale.id);
+
+			expect(fetches).toBe(1);
+			expect(model?.reasoning).toBe(true);
+			expect(model?.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 });
