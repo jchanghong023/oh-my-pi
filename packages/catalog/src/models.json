@@ -53474,9 +53474,10 @@
 			"api": "openai-completions",
 			"provider": "commandcode",
 			"baseUrl": "https://api.commandcode.ai/provider/v1",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0.15,
@@ -53493,11 +53494,18 @@
 			},
 			"requiresGlyphTokenization": false,
 			"supportsComputerUse": false,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"max"
+				]
+			},
 			"compat": {
 				"supportsStore": false,
 				"supportsDeveloperRole": false,
 				"supportsMultipleSystemMessages": true,
-				"supportsReasoningEffort": false,
+				"supportsReasoningEffort": true,
 				"supportsReasoningParams": true,
 				"supportsSamplingParams": true,
 				"supportsPenaltyAndStopParams": true,
@@ -53505,7 +53513,7 @@
 				"supportsUsageInStreaming": true,
 				"alwaysSendMaxTokens": false,
 				"disableReasoningOnForcedToolChoice": false,
-				"disableReasoningOnToolChoice": false,
+				"disableReasoningOnToolChoice": true,
 				"supportsToolChoice": true,
 				"supportsForcedToolChoice": true,
 				"supportsNamedToolChoice": true,
@@ -53516,13 +53524,13 @@
 				"requiresMistralToolIds": false,
 				"thinkingFormat": "openai",
 				"reasoningDisableMode": "lowest-effort",
-				"omitReasoningEffort": true,
+				"omitReasoningEffort": false,
 				"includeEncryptedReasoning": true,
 				"filterReasoningHistory": false,
 				"reasoningContentField": "reasoning_content",
-				"requiresReasoningContentForToolCalls": false,
-				"requiresReasoningContentForAllAssistantTurns": false,
-				"allowsSyntheticReasoningContentForToolCalls": true,
+				"requiresReasoningContentForToolCalls": true,
+				"requiresReasoningContentForAllAssistantTurns": true,
+				"allowsSyntheticReasoningContentForToolCalls": false,
 				"replayReasoningContent": false,
 				"qwenPreserveThinking": false,
 				"qwenTemplateReasoningEffort": false,
@@ -53542,7 +53550,7 @@
 				"nativeKimiK3Reasoning": false,
 				"zaiReasoningEffortDialect": false,
 				"clampOutputToModelMax": false,
-				"stripImageInput": true,
+				"stripImageInput": false,
 				"thinkingLoopGuard": "deepseek",
 				"rejectRootObjectUnion": false,
 				"retryWithoutStrictOnGrammarError": false,
