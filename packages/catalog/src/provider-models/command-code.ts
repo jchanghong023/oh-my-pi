@@ -15,6 +15,10 @@ import type { ModelManagerConfig } from "./descriptor-types";
 
 const COMMAND_CODE_PROVIDER_BASE_URL = "https://api.commandcode.ai/provider";
 const COMMAND_CODE_PRICING_URL = "https://commandcode.ai/models.data";
+// Command Code adds and removes models (including free lanes) without notice;
+// reusing an older cached catalog at startup hides those models until the TTL
+// lapses, so this provider refreshes far more often than the 2h default.
+const COMMAND_CODE_CACHE_TTL_MS = 15 * 60 * 1000;
 
 function normalizeBasePath(baseUrl: string | undefined): string {
 	const value = (baseUrl ?? COMMAND_CODE_PROVIDER_BASE_URL).trim().replace(/\/+$/, "");
@@ -163,6 +167,7 @@ export function commandCodeModelManagerOptions(config?: ModelManagerConfig): Mod
 	return {
 		providerId: "command-code",
 		cacheProviderId: resolveModelCacheProviderId("command-code", { baseUrl: discoveryBaseUrl }),
+		cacheTtlMs: COMMAND_CODE_CACHE_TTL_MS,
 		dynamicModelsAuthoritative: true,
 		...(apiKey && {
 			fetchDynamicModels: async () => {

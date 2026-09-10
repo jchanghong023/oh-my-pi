@@ -26,6 +26,7 @@
 
 * 保留 `command-code` provider，支持 API Key 登录和配置的 provider `baseUrl`。
 * 支持 Anthropic Messages / OpenAI Completions 双协议及模型发现。
+* 模型目录缓存 TTL 为 15 分钟（上游默认 2 小时）：Command Code 会不定期增删模型（含免费档），缩短 TTL 避免启动后长时间看到过期目录；hub 内选中 provider 或 F5 仍可立即强制在线刷新。
 * API Key 环境变量优先 `COMMAND_CODE_API_KEY`，兼容 `COMMANDCODE_API_KEY`。
 * provider 默认模型为 `deepseek/deepseek-v4-flash`。
 * 模型价格优先取 Command Code 价格源；缺失时依次回退到内置参考模型价格、模型发现默认价格。
