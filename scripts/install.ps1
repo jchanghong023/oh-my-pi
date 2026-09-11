@@ -1,9 +1,14 @@
 # OMP Coding Agent Installer for Windows
+# Requires Windows PowerShell 5.1 or PowerShell 7+ (x64).
 # Usage: irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1 | iex
 #
 # Or with options:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary -Ref 'v18.0.6+fork.123'
+#
+# Web requests use Invoke-RestMethod plus Invoke-WebRequest -UseBasicParsing:
+# the HTML parsing engine PowerShell 5.1 otherwise loads needs Internet
+# Explorer, which is absent on current Windows builds and Server Core.
 
 param(
     [switch]$Binary,
