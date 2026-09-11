@@ -13,7 +13,8 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * `main` 集成个人改动；fork 的 `upstream` 精确镜像最近成功合入的上游 commit，供 GitHub PR/差异比较，不含 fork commit。
 * 只查询固定上游 ref 与 fork 的远端 `upstream`，NEVER 使用 Release、tag、`origin/main`、其他远程分支或配置型 `upstream/main` 作为来源。
 * 只允许推送 fork 的 `upstream`；NEVER 推送 `main` 或 tag，不创建 PR、不打包、不发布。
-* 维护原则与三份文档职责见 `AGENTS.md`；当前功能契约以 `docs-zh-CN/fork.md` 为准，本流程不另建差异清单。
+* 维护原则与文档职责见 `AGENTS.md`；当前功能契约以 `docs-zh-CN/fork.md` 为准，本流程不另建差异清单。
+* 根 `README.md`（中文版）与 `docs-zh-CN/README.upstream.md`（上游英文快照）按第 3 节处理：其他文档 NEVER 被上游覆盖，README 正文则必须跟随上游。
 
 ## 0. 快速门禁
 
@@ -26,16 +27,16 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 ## 1. 获取与集成
 
 * 要求工作区 clean、无进行中的 Git 操作；NEVER 用 stash/reset/clean 清理用户状态。
-* 记录原分支和本地 `main` HEAD，切换到已存在的本地 `main`；保存三个文档的 fork 版本。
+* 记录原分支和本地 `main` HEAD，切换到已存在的本地 `main`；保存四个文档的 fork 版本（`AGENTS.md`、本 Skill、`fork.md`、根 `README.md`）。
 * 用 `--no-tags` 精确 fetch 固定上游 `refs/heads/main` 到 `refs/omp-sync/upstream-main`，再查询远端 HEAD。目标移动则重新 fetch/确认一次，再移动即停止。
 * 原基线 MUST 是目标祖先，`main` 与目标 MUST 有 merge base；不接受历史改写。浅仓库缺历史时仅可按所需精确 SHA 定向 deepen，NEVER unshallow；无法证明则停止。
 * 目标未包含于 `main` 时执行 `git merge --no-ff --no-commit --no-edit refs/omp-sync/upstream-main`；已包含则不创建空 merge，只补齐基线记录。
-* 恢复三个文档的 fork 版本，再按本次集成结果更新 `fork.md`，不得被上游覆盖。
+* 恢复四个文档的 fork 版本（`AGENTS.md`、本 Skill、`fork.md`、根 `README.md`），再按本次集成结果更新 `fork.md`，不得被上游覆盖。
 
 ## 2. 保留功能与解决冲突
 
 * 以 `fork.md` 为行为契约，优先采用上游最新接口和实现，只复核上游变化与冲突直接影响的条目，不全仓重审。
-* 通常逐文件合并双方意图。冲突很大或模块重写时，可将受影响代码整体采用上游版本，再按契约重写 fork 功能；不得直接批量选 ours/theirs 后视为完成，也不得覆盖三个 fork 文档或改写 `main` 历史。
+* 通常逐文件合并双方意图。冲突很大或模块重写时，可将受影响代码整体采用上游版本，再按契约重写 fork 功能；不得直接批量选 ours/theirs 后视为完成，也不得覆盖四个 fork 文档或改写 `main` 历史。
 * 上游已提供等价且满足个人需求的行为时，采用上游实现并删除对应差异；不能因冲突难解决而删除仍需保留的功能。
 * 接口或导出变化时检查直接调用方；工具链跟随上游，不保留已删除工具。Lockfile 冲突先合并 manifests，必要时无脚本重建。
 * Rust/native 冲突仅做源码语义审查；无法可靠解决或无法在允许的验证范围内确认结果时，中止并报告未保留的功能或未验证项。
@@ -43,8 +44,9 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 ## 3. 更新记录、验证与提交
 
 * 提交前更新 `fork.md`：保留 `can1357/oh-my-pi@main`、目标 package version（来自 `packages/coding-agent/package.json`）、完整 `Upstream commit`、UTC 同步日期及当前功能差异。不要追加历史、Integration 字段或第二份清单。
+* README 同步（并入同一集成提交）：用本次 fetch 的上游版本与 `docs-zh-CN/README.upstream.md` 比较，先更新该快照，再把变化段落重译进根 `README.md`；Install / 下载段保持 fork 原文并照其翻译。上游 README 未变则两者都不动；merge 或恢复过程改动了 `README.md` 时，提交前按快照复核正文。
 * 将基线和功能差异更新纳入同一集成提交；目标已在 `main` 历史中时，只提交必要的文档修正。
-* MUST 通过 `git diff --cached --check`，检查冲突标记、三个 fork 文档和变更范围；不得遗留 unmerged、unstaged、意外 untracked 文件或无关生成物，只修正本次涉及的空白错误。
+* MUST 通过 `git diff --cached --check`，检查冲突标记、四个 fork 文档和变更范围；不得遗留 unmerged、unstaged、意外 untracked 文件或无关生成物，只修正本次涉及的空白错误。
 * 无冲突：仅 staged Git 检查；TS 或工具链变化确有必要时运行一次 `bun run fastcheck`。
 * 有冲突：按影响选择首轮最多一次 `fastcheck`、一次安全且相关的 `check:types`、最多 3 个精确测试，顺序执行。先确认脚本不会触发下列禁用工作；依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
 * 同步期间 NEVER 运行全 workspace 检查、根级 `bun run check`、完整测试、UI/browser/heavy、Docker、benchmark、`jch-localci`、打包、发布，或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。

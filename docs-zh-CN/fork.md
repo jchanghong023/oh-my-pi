@@ -153,6 +153,8 @@
 
 ### 文档站
 
+* 仓库根 `README.md` 是上游 README 的**中文版**，正文跟随上游更新；Install / 下载段与「提示词控制」中 fork 新增的 `fullsend` 条目为有意保留的 fork 内容（下载段不采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法），其余正文与上游一致。上游英文快照保存在 `docs-zh-CN/README.upstream.md`，仅作同步对照稿源，已从中文文档站排除。
+* `README.md` 与三份维护文档一样在同步时保护：上游 README 有变化时先更新快照，再把变化段落重译进中文正文；上游未变则不动。
 * 保留供个人查阅的中英文 VitePress 文档站及 GitHub Pages 部署能力。
 * 中文站以覆盖上游全部文档的完整翻译为目标，并保留使用指南和 `config.yml` 设置参考；翻译独立同步，内容可能落后于当前代码基线。
 

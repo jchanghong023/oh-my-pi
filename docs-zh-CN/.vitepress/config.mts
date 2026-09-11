@@ -142,6 +142,8 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
 
 export default defineConfig({
   lang: 'zh-CN',
+  // 上游英文快照只作同步对照稿源，不作为站点页面与搜索内容。
+  srcExclude: ['README.upstream.md'],
   title: 'omp 中文文档',
   description: 'omp 终端编码 agent 中文文档',
   base: '/oh-my-pi/',

@@ -8,7 +8,14 @@
 * `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
 * `docs-zh-CN/fork.md`：面向本人和 AI agent 的当前上游基线与用户可感知的功能契约，也是冲突后重建 fork 功能的依据。
 
-同步 MUST 保留这三份文档的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容。
+同步 MUST 保留这四份文档的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
+
+## README 与上游同步
+
+* 仓库根 `README.md` 是上游 README 的**中文版**，内容跟随上游：上游改了正文，同步时把对应段落重译进 `README.md`。
+* `docs-zh-CN/README.upstream.md` 是最近一次合入的上游 README 英文快照，只作对照稿源，不对外；同步时先更新快照，再据差异改中文正文（上游 README 未变则不动）。
+* `README.md` 的 Install / 下载段是 fork 专有内容（fork release 链接、`install.sh --binary`、`install.ps1 -Binary`、`+fork.N` 版本说明、平台支持声明），NEVER 采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法；中文翻译照此段本身翻译。
+* 除下载段与「提示词控制」中 fork 新增的 `fullsend` 条目外，`README.md` 不保留 fork 专有内容：其余正文以当前上游快照为准。
 
 ## 开发与差异记录
 
