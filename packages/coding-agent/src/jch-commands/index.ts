@@ -1,4 +1,5 @@
 import type { SlashCommandSpec } from "../slash-commands/types";
+import { JCH_DFT_SLASH_COMMANDS } from "./dft";
 import { JCH_GIT_SLASH_COMMANDS } from "./git";
 import { JCH_WORKFLOW_SLASH_COMMANDS } from "./workflow";
 
@@ -6,4 +7,5 @@ import { JCH_WORKFLOW_SLASH_COMMANDS } from "./workflow";
 export const JCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	...JCH_WORKFLOW_SLASH_COMMANDS,
 	...JCH_GIT_SLASH_COMMANDS,
+	...JCH_DFT_SLASH_COMMANDS,
 ];
