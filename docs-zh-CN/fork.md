@@ -38,7 +38,8 @@
 
 ### DeepSeek V4.1 Flash
 
-* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此在下列 provider 上既无内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。
+* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此在下列 provider 上既无上游内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。
+* 这两条 id 在 `opencode-go` 上另带 fork 维护的内置目录行（显示名 `DeepSeek V4.1 Flash`、`low` / `high` / `max`、1M / 384K、`text` + `image`、不剥离图片）：发现完成前或缓存行被迁移丢弃时，选择器与 `modelRoles` 仍能解析到本 lane。此前这两条 id 仅存在于发现结果中，缺失时 role 会静默改绑同网关的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-go/deepseek-flash:等级` 也会直接报 not found。发现成功后仍以动态行与本继承面为准。
 * 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
 * OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目与 `openrouter.kdl`（思考等级 `low` / `high` / `max`、图片输入）独立提供，不属于本继承面。
 * V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。因此继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
