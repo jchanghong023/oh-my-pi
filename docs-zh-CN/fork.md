@@ -8,7 +8,7 @@
 
 * **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.1.17`
-* **Upstream commit**：`3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec`
+* **Upstream commit**：`8d01d3b79099a0ad10d050538a08bd4c22886dd7`
 * **同步日期**：2026-09-11
 
 ## 当前功能差异
@@ -38,8 +38,9 @@
 
 ### DeepSeek V4.1 Flash
 
-* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此既无内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。
+* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此在下列 provider 上既无内置目录条目、也不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。
 * 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
+* OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目与 `openrouter.kdl`（思考等级 `low` / `high` / `max`、图片输入）独立提供，不属于本继承面。
 * V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。因此继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
