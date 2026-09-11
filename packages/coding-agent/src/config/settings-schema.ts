@@ -5376,7 +5376,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"skills.enableCodexUser": { type: "boolean", default: false },
+	"skills.enableCodexUser": { type: "boolean", default: true },
 
 	"skills.enableClaudeUser": { type: "boolean", default: false },
 

@@ -136,7 +136,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const {
 		cwd = getProjectDir(),
 		enabled = true,
-		enableCodexUser = false,
+		enableCodexUser = true,
 		enableClaudeUser = false,
 		enableClaudeProject = true,
 		enablePiUser = true,
