@@ -140,6 +140,7 @@
 * 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成。
 * 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
+* `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`），且无法通过任何后续代码改动自愈：这类机器只能用安装器重装后再交给 `omp update`。
 * 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
 
 ### 文档站
