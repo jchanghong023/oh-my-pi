@@ -34,6 +34,12 @@ export interface ComposerPreviewStatusSource {
 	getStandaloneTopBorder(width: number, previewTitle?: string): { content: string; width: number };
 	/** Plain standalone bottom bar carrying the given segment groups. */
 	renderBottomBar(width: number, groups: "left" | "full", previewTitle?: string): string;
+	/**
+	 * As {@link renderBottomBar}, plus the wrapped overflow rows a narrow
+	 * terminal pushes segments onto. Optional: a source without it renders the
+	 * single first row.
+	 */
+	renderBottomBarLines?(width: number, groups: "left" | "full", previewTitle?: string): readonly string[];
 }
 
 export interface ComposerShapePreviewOptions {
@@ -106,10 +112,18 @@ export function renderComposerShapePreview(
 	if (bottom !== undefined) lines.push(bottom);
 
 	if (style.bottomBar !== "none" && status) {
-		const bar = status.renderBottomBar(previewWidth, style.bottomBar, PREVIEW_TITLE);
-		if (bar) {
+		// Prefer the line-aware renderer so a narrow preview keeps the segments
+		// the live bar wraps onto extra rows instead of dropping them.
+		let barLines: readonly string[];
+		if (status.renderBottomBarLines) {
+			barLines = status.renderBottomBarLines(previewWidth, style.bottomBar, PREVIEW_TITLE);
+		} else {
+			const bar = status.renderBottomBar(previewWidth, style.bottomBar, PREVIEW_TITLE);
+			barLines = bar ? [bar] : [];
+		}
+		if (barLines.length > 0) {
 			if (style.bottomBarGap) lines.push("");
-			lines.push(bar);
+			lines.push(...barLines);
 		}
 	}
 	return lines;

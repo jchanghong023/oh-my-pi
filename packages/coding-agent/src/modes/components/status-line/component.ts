@@ -359,6 +359,13 @@ function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean 
 
 type StatusLineLayout = "box" | "band" | "plain-full" | "plain-left" | "plain-right";
 
+/**
+ * Cells the top-rule chrome reserves around a status chip — the claude/rule
+ * composer keeps one rule cell on each side (`renderTopRule`). Chip content
+ * budgeted any wider is truncated by the rule instead of wrapping.
+ */
+const CHIP_RULE_RESERVE = 2;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // StatusLineComponent
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2496,7 +2503,11 @@ export class StatusLineComponent implements Component {
 
 	#renderSplitBottomLines(width: number): string[] {
 		const left = this.#buildStatusLines(width, "plain-left");
-		const right = this.#buildStatusLines(width, "plain-right");
+		// The right group rides the top-rule chip, whose rule reserves
+		// CHIP_RULE_RESERVE cells. Budget it the chip's real content width so a
+		// segment that no longer fits the chip lands in the wrapped rows below
+		// instead of being clipped by the rule.
+		const right = this.#buildStatusLines(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right");
 		const lines = this.#wrapOverflowRows(left.main, [...left.overflowParts, ...right.overflowParts], width);
 		if (!this.#focusedAgentId) return lines;
 		return lines.map(content => `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`);
@@ -2570,7 +2581,9 @@ export class StatusLineComponent implements Component {
 
 	/** Plain right-group content for the claude composer's top rule. */
 	getStandaloneTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
-		const content = this.#renderStatusLines(width, "plain-right", previewTitle).main;
+		// Match the split bar's right-group budget: the chip must fit the rule's
+		// content width, or `renderTopRule` clips its trailing segment.
+		const content = this.#renderStatusLines(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right", previewTitle).main;
 		return {
 			content,
 			width: visibleWidth(content),
@@ -2580,12 +2593,25 @@ export class StatusLineComponent implements Component {
 
 	/**
 	 * The plain standalone bottom bar through the real segment/gauge pipeline —
-	 * `groups` picks which segment groups it carries. Used by the live render
-	 * loop and by composer previews (which inject a candidate layout instead of
-	 * the active one).
+	 * `groups` picks which segment groups it carries. Returns the bar's first
+	 * row only; {@link renderBottomBarLines} carries the wrapped overflow rows
+	 * too.
 	 */
 	renderBottomBar(width: number, groups: "left" | "full", previewTitle?: string): string {
 		return this.#renderStatusLines(width, groups === "left" ? "plain-left" : "plain-full", previewTitle).main;
+	}
+
+	/**
+	 * {@link renderBottomBar} plus the wrapped overflow rows the live
+	 * standalone render appends below it, so a narrow composer preview keeps
+	 * every segment instead of dropping the ones that no longer fit the first
+	 * row. `groups: "left"` matches the live split bar, whose right group rides
+	 * the editor's top rule.
+	 */
+	renderBottomBarLines(width: number, groups: "left" | "full", previewTitle?: string): readonly string[] {
+		if (groups === "left") return this.#renderSplitBottomLines(width);
+		const status = this.#renderStatusLines(width, "plain-full", previewTitle);
+		return status.main ? [status.main, ...status.overflow] : status.overflow;
 	}
 	/**
 	 * Status bar lines for a composer layout, rendered through the real
