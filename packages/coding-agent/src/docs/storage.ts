@@ -219,8 +219,14 @@ export class DocsStorage {
 
 	/** Name a finished build so it becomes visible. */
 	promote(tempId: number, name: string): DocsIndexSummary {
-		this.db.query("UPDATE doc_indexes SET name=? WHERE id=?").run(name, tempId);
-		return this.getById(tempId) as DocsIndexSummary;
+		const updated = this.db.query("UPDATE doc_indexes SET name=? WHERE id=?").run(name, tempId);
+		const published = updated.changes > 0 ? this.getById(tempId) : undefined;
+		if (!published) {
+			// Another import swept this build as abandoned (`removeAbandoned`); report
+			// it instead of publishing a success that leaves no visible index.
+			throw new Error(`Document index build was removed before it could be published: ${name}`);
+		}
+		return published;
 	}
 
 	transaction<T>(callback: () => T): T {
