@@ -35,8 +35,9 @@
 
 ## 验证
 
-* 普通 TypeScript 修改后 MUST 运行 `bun run fastcheck`；纯文档修改只做差异与格式检查。
-* 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布。
+* 本地编译与测试默认禁止：除用户明确要求外，NEVER 运行任何本地编译、类型检查或测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）。唯一例外是本 fork 的 `bun scripts/jch-localci.ts [full]`，且同样仅在用户明确要求时运行。
+* 普通 TypeScript 修改后 MUST 运行 `bun run fastcheck`；纯文档修改只做差异与格式检查。该入口只做 lint 与格式检查，不属于上一条禁止的编译或测试。
+* 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
 * 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口仅明确要求 `full` 时构建 Linux-x64 native addon。
 * 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
 
