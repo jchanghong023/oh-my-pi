@@ -4,7 +4,12 @@ import { open, readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./types";
 
-const MAX_SECTION_CHARS = 24_000;
+/**
+ * Sections are capped below the `wiki` tool's page budget so that any stored
+ * section can be delivered whole by one call; a larger cap would put content
+ * beyond the page and leave no way to read it.
+ */
+const MAX_SECTION_CHARS = 18_000;
 const SOURCE_KINDS: Record<string, true> = {
 	doc: true,
 	docx: true,
@@ -95,6 +100,25 @@ export function normalizePlainText(markdown: string): string {
 		.trim();
 }
 
+const HEADING_LINE = /^[ \t]*#{1,6}[ \t].*$/gmu;
+const SETEXT_LINE = /^[ \t]*(?:=+|-+)[ \t]*$/gmu;
+const HEADING_MARKER = /^[ \t]*#{1,6}[ \t]?/gmu;
+
+/**
+ * What a stored section holds. Converter output (docx/pptx/xlsx) emits its
+ * structural labels as headings with no body — `#### Cell` alone appears
+ * hundreds of thousands of times — and those index nothing readable (`stub`).
+ * A heading whose text is a real phrase (Chinese, or several words) is kept as
+ * `heading-only`: requirement and checklist documents often state the whole
+ * requirement in the heading itself.
+ */
+export function sectionShape(markdown: string): "stub" | "heading-only" | "content" {
+	if (markdown.replace(HEADING_LINE, "").replace(SETEXT_LINE, "").trim().length > 0) return "content";
+	const heading = markdown.replace(HEADING_MARKER, "").replace(SETEXT_LINE, "").trim();
+	if (heading.length === 0) return "stub";
+	return /[\s\u3400-\u4dbf\u4e00-\u9fff]/u.test(heading) ? "heading-only" : "stub";
+}
+
 function chunkDraft(draft: SectionDraft): SectionDraft[] {
 	if (draft.lines.reduce((sum, line) => sum + line.text.length, 0) <= MAX_SECTION_CHARS) return [draft];
 	const chunks: SectionDraft[] = [];
@@ -160,7 +184,11 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	let fence: Fence | undefined;
 	let title: string | undefined;
 	const finish = () => {
-		if (current.lines.length > 0 && current.lines.some(line => line.text.length > 0)) drafts.push(current);
+		if (current.lines.length === 0 || !current.lines.some(line => line.text.length > 0)) return;
+		// Keep the document's first section whatever it holds: it is the only FTS
+		// row that carries the relative path, so dropping it would hide the file name.
+		if (drafts.length > 0 && sectionShape(current.lines.map(line => line.text).join("")) === "stub") return;
+		drafts.push(current);
 	};
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];

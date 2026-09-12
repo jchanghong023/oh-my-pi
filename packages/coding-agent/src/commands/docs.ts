@@ -3,14 +3,14 @@ import { docsHelp as commandHelp } from "../cli/command-help";
 import { type DocsAction, runDocsCommand } from "../cli/docs-cli";
 import { CliUsageError } from "../cli/usage-error";
 
-const ACTIONS: DocsAction[] = ["init", "list", "status", "remove"];
+const ACTIONS: DocsAction[] = ["init", "remove"];
 
 export default class Docs extends Command {
 	static description = commandHelp.description;
 	static args = {
 		action: Args.string({ description: "Docs action", required: true, options: ACTIONS }),
 		target: Args.string({
-			description: "Directory for init or index name for status/remove",
+			description: "Directory for init or index name for remove",
 			required: false,
 		}),
 	};
@@ -28,11 +28,6 @@ export default class Docs extends Command {
 			if (!target) throw new CliUsageError("docs init requires <dir>");
 			if (!flags.name?.trim()) throw new CliUsageError("docs init requires --name <name>");
 			if (flags.force) throw new CliUsageError("--force is valid only for docs remove");
-		} else if (action === "list") {
-			if (target) throw new CliUsageError("docs list accepts no index name");
-			if (flags.name || flags.force) throw new CliUsageError("docs list accepts only --json");
-		} else if (action === "status") {
-			if (flags.name || flags.force) throw new CliUsageError("docs status accepts only an optional name and --json");
 		} else {
 			if (!target) throw new CliUsageError("docs remove requires <name>");
 			if (!flags.force) throw new CliUsageError("docs remove requires --force");

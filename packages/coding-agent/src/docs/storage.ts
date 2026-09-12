@@ -1,22 +1,24 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
-import type { DocsIndexState, DocsIndexSummary } from "./types";
+import type { DocsIndexSummary } from "./types";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+
+/** Indexes being built are named with this prefix and renamed once complete. */
+export const BUILDING_INDEX_PREFIX = "__building__";
 
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS doc_indexes (
- id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, root_path TEXT NOT NULL,
- state TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, indexed_at TEXT
+ id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, root_path TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS documents (
  id INTEGER PRIMARY KEY, index_id INTEGER NOT NULL REFERENCES doc_indexes(id) ON DELETE CASCADE,
  relative_path TEXT NOT NULL, title TEXT NOT NULL, source_kind TEXT NOT NULL, sha256 TEXT NOT NULL,
- size_bytes INTEGER NOT NULL, mtime_ms REAL NOT NULL, status TEXT NOT NULL, last_error TEXT,
+ size_bytes INTEGER NOT NULL, mtime_ms REAL NOT NULL,
  UNIQUE(index_id, relative_path)
 );
 CREATE TABLE IF NOT EXISTS sections (
@@ -26,7 +28,6 @@ CREATE TABLE IF NOT EXISTS sections (
  byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL, raw_markdown TEXT NOT NULL,
  UNIQUE(document_id, ordinal)
 );
-CREATE INDEX IF NOT EXISTS documents_index_status ON documents(index_id, status);
 CREATE INDEX IF NOT EXISTS sections_index_document ON sections(index_id, document_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(section_id UNINDEXED, index_id UNINDEXED, relative_path, heading_path, body, content='', contentless_delete=1);
 `;
@@ -46,22 +47,15 @@ interface IndexRow {
 	id: number;
 	name: string;
 	root_path: string;
-	state: DocsIndexState;
-	last_error: string | null;
-	created_at: string;
-	updated_at: string;
-	indexed_at: string | null;
 }
 
 interface SummaryCountRow extends IndexRow {
 	document_count: number;
-	partial_count: number;
 	section_count: number;
 }
 
-const SUMMARY_SQL = `SELECT i.*,
+const SUMMARY_SQL = `SELECT i.id,i.name,i.root_path,
  (SELECT count(*) FROM documents d WHERE d.index_id=i.id) document_count,
- (SELECT count(*) FROM documents d WHERE d.index_id=i.id AND d.status!='ready') partial_count,
  (SELECT count(*) FROM sections s WHERE s.index_id=i.id) section_count
  FROM doc_indexes i`;
 
@@ -70,13 +64,7 @@ function mapIndex(row: SummaryCountRow): DocsIndexSummary {
 		id: row.id,
 		name: row.name,
 		rootPath: row.root_path,
-		state: row.state,
-		...(row.last_error ? { lastError: row.last_error } : {}),
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-		...(row.indexed_at ? { indexedAt: row.indexed_at } : {}),
 		documentCount: row.document_count,
-		partialCount: row.partial_count,
 		sectionCount: row.section_count,
 	};
 }
@@ -139,6 +127,21 @@ export class DocsStorage {
 					const sectionColumns = this.db.query("PRAGMA table_info(sections)").all() as Array<{ name: string }>;
 					if (sectionColumns.some(column => column.name === "plain_text"))
 						this.db.run("ALTER TABLE sections DROP COLUMN plain_text");
+					if (version < 5) {
+						// Indexes carry no state or timestamps: a half-built index is hidden
+						// by its `__building__` name alone.
+						this.db.run("DROP INDEX IF EXISTS documents_index_status");
+						const indexColumns = this.db.query("PRAGMA table_info(doc_indexes)").all() as Array<{ name: string }>;
+						for (const column of ["state", "last_error", "created_at", "updated_at", "indexed_at"])
+							if (indexColumns.some(item => item.name === column))
+								this.db.run(`ALTER TABLE doc_indexes DROP COLUMN ${column}`);
+						const documentColumns = this.db.query("PRAGMA table_info(documents)").all() as Array<{
+							name: string;
+						}>;
+						for (const column of ["status", "last_error"])
+							if (documentColumns.some(item => item.name === column))
+								this.db.run(`ALTER TABLE documents DROP COLUMN ${column}`);
+					}
 					this.db.run(`PRAGMA user_version=${SCHEMA_VERSION}`);
 				});
 			} else if (version === 0) this.db.run(`PRAGMA user_version=${SCHEMA_VERSION}`);
@@ -150,24 +153,22 @@ export class DocsStorage {
 		}
 	}
 
-	static open(agentDir: string): DocsStorage {
-		return new DocsStorage(path.join(agentDir, "docs.db"));
-	}
-
-	close(): void {
-		this.db.close();
-	}
-
+	/**
+	 * Visible indexes only: an import builds under a `__building__` name and is
+	 * renamed once it is complete, so the prefix is the whole visibility rule.
+	 */
 	list(): DocsIndexSummary[] {
-		return (this.db.query(`${SUMMARY_SQL} WHERE i.state!='building' ORDER BY i.name`).all() as SummaryCountRow[]).map(
-			mapIndex,
-		);
+		return (
+			this.db
+				.query(`${SUMMARY_SQL} WHERE i.name NOT GLOB ? ORDER BY i.name`)
+				.all(`${BUILDING_INDEX_PREFIX}*`) as SummaryCountRow[]
+		).map(mapIndex);
 	}
 
 	get(name: string): DocsIndexSummary | undefined {
 		const row = this.db
-			.query(`${SUMMARY_SQL} WHERE i.name=? AND i.state!='building'`)
-			.get(name) as SummaryCountRow | null;
+			.query(`${SUMMARY_SQL} WHERE i.name=? AND i.name NOT GLOB ?`)
+			.get(name, `${BUILDING_INDEX_PREFIX}*`) as SummaryCountRow | null;
 		return row ? mapIndex(row) : undefined;
 	}
 
@@ -177,16 +178,23 @@ export class DocsStorage {
 	}
 
 	create(input: { name: string; rootPath: string }): DocsIndexSummary {
-		const now = new Date().toISOString();
-		this.db
-			.query("INSERT INTO doc_indexes(name,root_path,state,created_at,updated_at) VALUES(?,?,'building',?,?)")
-			.run(input.name, input.rootPath, now, now);
+		this.db.query("INSERT INTO doc_indexes(name,root_path) VALUES(?,?)").run(input.name, input.rootPath);
 		const created = this.db.query("SELECT id FROM doc_indexes WHERE name=?").get(input.name) as { id: number };
 		return this.getById(created.id) as DocsIndexSummary;
 	}
 
+	/** Drop every half-built index: `init` calls this before starting a new one. */
+	removeAbandoned(): void {
+		const rows = this.db
+			.query("SELECT id FROM doc_indexes WHERE name GLOB ?")
+			.all(`${BUILDING_INDEX_PREFIX}*`) as Array<{ id: number }>;
+		for (const row of rows) this.removeById(row.id);
+	}
+
 	remove(name: string): boolean {
-		const row = this.db.query("SELECT id FROM doc_indexes WHERE name=? AND state!='building'").get(name) as {
+		const row = this.db
+			.query("SELECT id FROM doc_indexes WHERE name=? AND name NOT GLOB ?")
+			.get(name, `${BUILDING_INDEX_PREFIX}*`) as {
 			id: number;
 		} | null;
 		if (!row) return false;
@@ -201,14 +209,18 @@ export class DocsStorage {
 		});
 	}
 
+	static open(agentDir: string): DocsStorage {
+		return new DocsStorage(path.join(agentDir, "docs.db"));
+	}
+
+	close(): void {
+		this.db.close();
+	}
+
+	/** Name a finished build so it becomes visible. */
 	promote(tempId: number, name: string): DocsIndexSummary {
-		return this.transaction(() => {
-			const now = new Date().toISOString();
-			this.db
-				.query("UPDATE doc_indexes SET name=?,state='ready',last_error=NULL,updated_at=?,indexed_at=? WHERE id=?")
-				.run(name, now, now, tempId);
-			return this.getById(tempId) as DocsIndexSummary;
-		});
+		this.db.query("UPDATE doc_indexes SET name=? WHERE id=?").run(name, tempId);
+		return this.getById(tempId) as DocsIndexSummary;
 	}
 
 	transaction<T>(callback: () => T): T {

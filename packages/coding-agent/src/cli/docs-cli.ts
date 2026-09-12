@@ -2,7 +2,7 @@ import { getAgentDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import { DocsService } from "../docs/service";
 import type { DocsProgress } from "../docs/types";
 
-export type DocsAction = "init" | "list" | "status" | "remove";
+export type DocsAction = "init" | "remove";
 
 export interface DocsCommandInput {
 	action: DocsAction;
@@ -42,23 +42,15 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 	const onProgress = input.json ? undefined : (progress: DocsProgress) => stderr(progressLine(progress));
 	try {
 		let value: unknown;
-		let exitCode = 0;
+		const exitCode = 0;
 		switch (input.action) {
 			case "init": {
-				const result = await service.init(input.target as string, input.name as string, {
+				value = await service.init(input.target as string, input.name as string, {
 					signal: input.signal,
 					onProgress,
 				});
-				value = result;
-				exitCode = result.index.state === "ready" ? 0 : 1;
 				break;
 			}
-			case "list":
-				value = service.list();
-				break;
-			case "status":
-				value = service.status(input.target);
-				break;
 			case "remove":
 				service.remove(input.target as string);
 				value = { removed: input.target };

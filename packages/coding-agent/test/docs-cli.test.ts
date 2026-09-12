@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe("runDocsCommand", () => {
-	it("imports, lists, inspects and removes a stored index through JSON output", async () => {
+	it("imports and removes a stored index through JSON output", async () => {
 		const cwd = await tempDir("docs-cli-root-");
 		const agentDir = await tempDir("docs-cli-agent-");
 		await fs.writeFile(path.join(cwd, "guide.md"), "# Guide\nText for indexing\n");
@@ -35,21 +35,15 @@ describe("runDocsCommand", () => {
 		);
 		expect(initCode).toBe(0);
 		const initValue = JSON.parse(stdout.pop() as string);
-		expect(initValue.index).toMatchObject({ name: "manual", state: "ready", documentCount: 1 });
+		expect(initValue.index).toMatchObject({ name: "manual", documentCount: 1 });
 		expect(stderr).toEqual([]);
-
-		const listCode = await runDocsCommand({ action: "list", json: true, cwd }, dependencies);
-		expect(listCode).toBe(0);
-		expect(JSON.parse(stdout.pop() as string)).toHaveLength(1);
-		const statusCode = await runDocsCommand({ action: "status", target: "manual", json: true, cwd }, dependencies);
-		expect(statusCode).toBe(0);
-		expect(JSON.parse(stdout.pop() as string).name).toBe("manual");
 
 		const removeCode = await runDocsCommand({ action: "remove", target: "manual", json: true, cwd }, dependencies);
 		expect(removeCode).toBe(0);
 		expect(JSON.parse(stdout.pop() as string)).toEqual({ removed: "manual" });
-		await runDocsCommand({ action: "list", json: true, cwd }, dependencies);
-		expect(JSON.parse(stdout.pop() as string)).toEqual([]);
+		await expect(
+			runDocsCommand({ action: "remove", target: "manual", json: true, cwd }, dependencies),
+		).rejects.toThrow("Unknown document index");
 	});
 
 	it("sanitizes control sequences in progress paths before writing to the terminal", async () => {

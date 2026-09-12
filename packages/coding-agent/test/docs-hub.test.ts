@@ -36,8 +36,8 @@ async function fixture(): Promise<{
 	const seed = new DocsService({ agentDir, cwd: root });
 	const result = await seed.init(".", "safe");
 	seed.storage.db
-		.query("UPDATE doc_indexes SET name=?,root_path=?,last_error=? WHERE id=?")
-		.run(`index-${attack}`, `root-${attack}`, `error-${attack}`, result.index.id);
+		.query("UPDATE doc_indexes SET name=?,root_path=? WHERE id=?")
+		.run(`index-${attack}`, `root-${attack}`, result.index.id);
 	seed.close();
 
 	const tui = { requestRender: () => {} } as unknown as TUI;

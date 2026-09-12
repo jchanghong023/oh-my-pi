@@ -1,4 +1,3 @@
-export type DocsIndexState = "building" | "ready" | "partial";
 export type DocsProgressPhase = "scan" | "fts";
 
 export interface DocsProgress {
@@ -44,13 +43,7 @@ export interface DocsIndexSummary {
 	id: number;
 	name: string;
 	rootPath: string;
-	state: DocsIndexState;
-	lastError?: string;
-	createdAt: string;
-	updatedAt: string;
-	indexedAt?: string;
 	documentCount: number;
-	partialCount: number;
 	sectionCount: number;
 }
 
@@ -61,12 +54,19 @@ export interface DocsSectionHit {
 	headingPath: string;
 	lineStart: number;
 	lineEnd: number;
-	excerpt: string;
+	/** Full stored Markdown of the section; search is the content, not a pointer. */
+	text: string;
 	rank: number;
 }
 
 export interface DocsSearchResult {
+	/** Sections on the requested page, in relevance order. */
 	sections: DocsSectionHit[];
+	/**
+	 * Matching sections in the corpus, or `undefined` when only an index-scoped
+	 * search was run (its count would need the joined, expensive form).
+	 */
+	total?: number;
 }
 
 export interface DocsBuildResult {

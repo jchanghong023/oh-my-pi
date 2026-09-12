@@ -49,6 +49,30 @@ describe("Markdown parsing", () => {
 		);
 	});
 
+	it("drops converter structural labels but keeps heading-only requirement lines", () => {
+		const text = [
+			"# Doc",
+			"#### Cell",
+			"###### Cell",
+			"##### Row",
+			"## 12.2.1.1.2 支持单DIE/多DIE同构分组",
+			"## 个人目录",
+		].join("\n");
+		const parsed = parseMarkdown(new TextEncoder().encode(text));
+		const kept = parsed.sections.map(section => section.rawMarkdown.trim());
+		// Structural labels index nothing; a heading that reads as a phrase is content.
+		expect(kept).not.toContain("#### Cell");
+		expect(kept).not.toContain("##### Row");
+		expect(kept.some(section => section.includes("支持单DIE/多DIE同构分组"))).toBe(true);
+		expect(kept.some(section => section.includes("个人目录"))).toBe(true);
+	});
+
+	it("caps sections below the page budget so every hit can be delivered whole", () => {
+		const parsed = parseMarkdown(new TextEncoder().encode(`# Doc\n${"y".repeat(40_000)}\n`));
+		expect(parsed.sections.length).toBeGreaterThan(1);
+		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThan(20_000);
+	});
+
 	it("preserves literal trailing hashes unless a spaced closing sequence is present", () => {
 		const literal = parseMarkdown(new TextEncoder().encode("# C#\nbody\n## F#\nbody\n# Topic#\nbody\n"));
 		expect(literal.title).toBe("C#");
@@ -256,9 +280,7 @@ describe("DocsService indexing contract", () => {
 		try {
 			await service.init(".", name);
 			expect(service.list().map(index => index.name)).toEqual([name]);
-			const status = service.status(name);
-			if (Array.isArray(status)) throw new Error("expected one index");
-			expect(status.name).toBe(name);
+			expect(service.list()[0]?.rootPath).toBe(root);
 			expect(service.search("visibility", { index: name }).sections).toHaveLength(1);
 			await expect(service.init(".", "__building__user")).rejects.toThrow("reserved prefix");
 			service.remove(name);
@@ -268,7 +290,7 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("ranks continuous Chinese text above scattered characters without dropping fallback matches", async () => {
+	it("matches Chinese words by adjacency, ranking the unbroken spelling first", async () => {
 		const root = await tempDir("docs-chinese-rank-");
 		const agentDir = await tempDir("docs-chinese-agent-");
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n缓**存**配置。\n${"背景说明 ".repeat(100)}`);
@@ -279,8 +301,9 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "manual");
 			await fs.rm(root, { recursive: true });
 			const hits = service.search("缓存", { index: "manual" }).sections;
-			expect(hits[0].path).toBe("exact.md");
-			expect(hits.map(hit => hit.path).sort()).toEqual(["exact.md", "punctuated.md", "scattered.md"]);
+			// Scattered characters (`缓慢…存储`) no longer satisfy the word, and the
+			// unbroken spelling outranks the punctuation-split one.
+			expect(hits.map(hit => hit.path)).toEqual(["exact.md", "punctuated.md"]);
 			expect(service.read({ sectionId: hits[0].sectionId }).rawMarkdown).toContain("缓**存**配置");
 		} finally {
 			service.close();
@@ -328,7 +351,7 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("reranks beyond the requested result window while preserving AND and index isolation", async () => {
+	it("reranks beyond the requested result window and keeps index isolation", async () => {
 		const root = await tempDir("docs-candidates-rank-");
 		const agentDir = await tempDir("docs-candidates-agent-");
 		for (let index = 0; index < 20; index++)
@@ -343,10 +366,113 @@ describe("DocsService indexing contract", () => {
 				"exact.md",
 			]);
 			const all = service.search("std::vector", { index: "manual", limit: 50 }).sections;
-			expect(all).toHaveLength(21);
-			expect(all.every(hit => hit.index === "manual" && hit.path !== "partial.md")).toBe(true);
-			expect(service.search("std::vector nonexistent", { index: "manual" }).sections).toEqual([]);
+			expect(all.every(hit => hit.index === "manual")).toBe(true);
+			// A section holding one term only still matches the union, but ranks below
+			// the section carrying the complete name.
+			expect(all.findIndex(hit => hit.path === "partial.md")).toBeGreaterThan(
+				all.findIndex(hit => hit.path === "exact.md"),
+			);
+			// An unknown term does not empty the result: the known terms still answer.
+			expect(service.search("std::vector nonexistent", { index: "manual" }).sections.length).toBeGreaterThan(0);
 			expect(service.search("!!!", { index: "manual" }).sections).toEqual([]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("finds the readable hits of a query whose whole candidate window is stubs", async () => {
+		const root = await tempDir("docs-stub-window-");
+		const agentDir = await tempDir("docs-stub-window-agent-");
+		for (let index = 0; index < 150; index++)
+			await fs.writeFile(
+				path.join(root, `req-${index}.md`),
+				`# Requirement ${index}\n## 检查项\n${"背景说明 ".repeat(120)}本项检查 needle 的结果必须记录。\n`,
+			);
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const indexId = service.list()[0].id as number;
+			// A legacy index keeps the converter's structural labels, and a short row
+			// repeating the term outscores a long section that mentions it once: more
+			// of them match than the first window can hold, so widening is the only
+			// way to reach the readable sections ranked behind them.
+			service.storage.transaction(() => {
+				for (let index = 0; index < 700; index++) {
+					const document = service.storage.db
+						.query(
+							"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
+						)
+						.get(indexId, `legacy/label-${index}.md`, "Cell", "doc", "0", 0, 0) as { id: number };
+					const section = service.storage.db
+						.query(
+							"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+						)
+						.get(indexId, document.id, 0, "Cell", 2, 1, 1, 0, 11, "## Cell\n") as { id: number };
+					service.storage.db
+						.query(
+							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+						)
+						.run(section.id, section.id, indexId, "", "Cell", "needle needle needle needle needle needle");
+				}
+			});
+			const hits = service.search("needle", { index: "manual", limit: 200 }).sections;
+			// Every readable hit outranks the labels filling the window: without
+			// widening, this page is 200 stubs and no body text at all. Stubs only
+			// remain as padding after all of them, which the caller filters.
+			const readable = hits.filter(hit => hit.text.includes("必须记录"));
+			expect(readable.length).toBe(150);
+			expect(hits.slice(0, 150).every(hit => hit.text.includes("必须记录"))).toBe(true);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("counts only the matches the page may serve", async () => {
+		const root = await tempDir("docs-hidden-count-");
+		const agentDir = await tempDir("docs-hidden-count-agent-");
+		await fs.writeFile(path.join(root, "visible.md"), "# Visible\nneedle in the visible index\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			// A half-built import shares this database under a hidden name; its rows
+			// must not pad a count the page is never allowed to serve from.
+			const hidden = service.storage.create({ name: "__building__count", rootPath: root });
+			const document = service.storage.db
+				.query(
+					"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
+				)
+				.get(hidden.id, "hidden.md", "Hidden", "doc", "0", 0, 0) as { id: number };
+			const section = service.storage.db
+				.query(
+					"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+				)
+				.get(hidden.id, document.id, 0, "Hidden", 1, 1, 2, 0, 30, "# Hidden\nneedle in the hidden index\n") as {
+				id: number;
+			};
+			service.storage.db
+				.query(
+					"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+				)
+				.run(section.id, section.id, hidden.id, "hidden.md", "Hidden", "needle hidden body");
+			const result = service.search("needle");
+			expect(result.sections.map(hit => hit.path)).toEqual(["visible.md"]);
+			expect(result.total).toBe(1);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("keeps the tail of a query that exceeds the term budget", async () => {
+		const root = await tempDir("docs-query-tail-");
+		const agentDir = await tempDir("docs-query-tail-agent-");
+		await fs.writeFile(path.join(root, "tail.md"), "# Tail\nneedle here\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			// 33 filler terms push the query past the 32-term sampling budget; a
+			// sentence's final term must still reach the corpus.
+			const query = [...Array.from({ length: 33 }, (_, index) => `zz${index}`), "needle"].join(" ");
+			expect(service.search(query).sections.map(hit => hit.path)).toEqual(["tail.md"]);
 		} finally {
 			service.close();
 		}

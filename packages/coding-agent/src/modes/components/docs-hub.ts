@@ -153,10 +153,9 @@ export class DocsHubComponent implements Component {
 		const index = this.#selectedIndex();
 		if (!index) return;
 		this.#detail = [
-			`${index.name} ${index.state}`,
+			index.name,
 			`root=${index.rootPath}`,
-			`documents=${index.documentCount} partial=${index.partialCount} sections=${index.sectionCount}`,
-			...(index.lastError ? [`error=${index.lastError}`] : []),
+			`documents=${index.documentCount} sections=${index.sectionCount}`,
 		].map(sanitizeTerminalLine);
 		this.#mode = "detail";
 	}
@@ -245,9 +244,9 @@ export class DocsHubComponent implements Component {
 				const item = this.#indexes[index];
 				lines.push(
 					sanitizeTerminalLine(
-						`${index === this.#selected ? ">" : " "} ${item.name}  ${item.state}  docs=${item.documentCount} partial=${item.partialCount}`,
+						`${index === this.#selected ? ">" : " "} ${item.name}  docs=${item.documentCount} sections=${item.sectionCount}`,
 					),
-					sanitizeTerminalLine(`    ${item.rootPath}  updated=${item.indexedAt ?? item.updatedAt}`),
+					sanitizeTerminalLine(`    ${item.rootPath}`),
 				);
 			}
 		if (this.#progress)
