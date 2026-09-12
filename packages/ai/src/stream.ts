@@ -859,7 +859,9 @@ const serviceProviderMap: Record<string, KeyResolver> = {
  * Checks Bun.env, then cwd/.env, then ~/.env.
  */
 export function getEnvApiKey(provider: string): string | undefined {
-	const resolver = serviceProviderMap[provider];
+	// Own-key lookup only, like `getEnvApiKeyName`: a prototype-named id would
+	// otherwise resolve `Object.prototype.constructor` and return junk or throw.
+	const resolver = Object.hasOwn(serviceProviderMap, provider) ? serviceProviderMap[provider] : undefined;
 	if (typeof resolver === "string") {
 		return $env[resolver];
 	}
@@ -884,7 +886,10 @@ export function getEnvApiKey(provider: string): string | undefined {
 export function getEnvApiKeyName(provider: string): string | undefined {
 	const resolver = serviceProviderMap[provider];
 	if (typeof resolver === "string") return resolver;
-	const envVars = CATALOG_ENTRY_ENV_NAMES[provider];
+	// Own-key lookup only: `CATALOG_ENTRY_ENV_NAMES` inherits `Object.prototype`, so a
+	// prototype-named id (`constructor`, `toString`, `__proto__`, …) would otherwise
+	// read a truthy prototype value and throw when iterated.
+	const envVars = Object.hasOwn(CATALOG_ENTRY_ENV_NAMES, provider) ? CATALOG_ENTRY_ENV_NAMES[provider] : undefined;
 	if (envVars) {
 		for (const name of envVars) {
 			if (Bun.env[name]?.trim()) return name;

@@ -35,7 +35,9 @@ export const PROVIDER_REGISTRY: readonly ProviderDefinition[] = authProviders().
 const BY_ID: Record<string, ProviderDefinition> = Object.fromEntries(PROVIDER_REGISTRY.map(p => [p.id, p]));
 
 export function getProviderDefinition(id: string): ProviderDefinition | undefined {
-	return BY_ID[id];
+	// Own-key lookup only: `BY_ID` inherits `Object.prototype`, so a prototype-named
+	// id (`constructor`, `toString`, …) would otherwise masquerade as a definition.
+	return Object.hasOwn(BY_ID, id) ? BY_ID[id] : undefined;
 }
 
 /** Compile-time completeness: every catalog chat-model provider must have an auth policy. */
