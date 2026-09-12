@@ -80,6 +80,7 @@ export interface PrewalkCoordinatorHost {
 	getEnabledToolNames(): string[];
 	getMountedXdevToolNames(): string[];
 	hasBuiltInTool(name: string): boolean;
+	primaryAgentIsDiscuss(): boolean;
 	getPlanModeState(): PlanModeState | undefined;
 	setPlanModeState(state: PlanModeState | undefined): void;
 	getPlanReferencePath(): string;
@@ -297,6 +298,11 @@ export class PrewalkCoordinator {
 	/** Lazily enables plan-yolo's plan phase before the first prompt is built. */
 	async armPlanYoloIfNeeded(): Promise<void> {
 		if (!this.#planYolo || this.#planYoloArmed) return;
+		// Discuss forbids plan mode, and SessionTools records whatever it is applied
+		// as the session's base slate — applying the projected Discuss tools here
+		// would strip Main's own tools for the rest of the session. Stay unarmed so
+		// a later Main prompt arms plan-yolo instead.
+		if (this.#host.primaryAgentIsDiscuss()) return;
 		this.#planYoloArmed = true;
 		const previousEnabledTools = this.#host.getEnabledToolNames();
 		const previousMountedTools = this.#host.getMountedXdevToolNames();

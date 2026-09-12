@@ -1314,6 +1314,7 @@ export class AgentSession {
 			hasBuiltInTool: name => this.hasBuiltInTool(name),
 			getPlanModeState: () => this.getPlanModeState(),
 			setPlanModeState: state => this.setPlanModeState(state),
+			primaryAgentIsDiscuss: () => (this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId) === "discuss",
 			getPlanReferencePath: () => this.getPlanReferencePath(),
 			setPlanProposalHandler: handler => this.setPlanProposalHandler(handler),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),

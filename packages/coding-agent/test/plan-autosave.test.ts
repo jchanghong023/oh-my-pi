@@ -181,6 +181,7 @@ describe("plan-yolo approval autosave", () => {
 			getEnabledToolNames: () => [],
 			getMountedXdevToolNames: () => [],
 			hasBuiltInTool: () => false,
+			primaryAgentIsDiscuss: () => false,
 			getPlanModeState: () => planModeState,
 			setPlanModeState: state => {
 				planModeState = state;
