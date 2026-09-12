@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { enumerateMarkdownFiles, normalizePlainText, readMarkdownDocument, sectionShape } from "./markdown";
 import { BUILDING_INDEX_PREFIX, DocsStorage } from "./storage";
 import type {
@@ -75,14 +76,22 @@ function analyzeQuery(query: string): string[] {
 				if (!QUERY_FUNCTION_WORDS.has(characters[0])) terms.push(characters[0]);
 				continue;
 			}
+			// The table also lists multi-character function words (`是否`, `介绍`).
+			// Looking up single characters can never see those entries, so a run that
+			// spells one out whole is dropped before the bigram cut.
+			if (QUERY_FUNCTION_WORDS.has(run)) continue;
 			for (let index = 0; index + 1 < characters.length; index += 1) {
 				// Pairs come from the run as written: filtering characters out first
 				// would pair characters that never sit together in the corpus
-				// (`作用域` → `作域`), which no indexed text can match. Only pairs that
-				// are nothing but function words are dropped, as they carry no meaning.
+				// (`作用域` → `作域`), which no indexed text can match. A pair is
+				// dropped when the table lists it (`是否`) or when both of its
+				// characters are function words (`和与`): either way it carries no
+				// meaning.
+				const pair = `${characters[index]}${characters[index + 1]}`;
+				if (QUERY_FUNCTION_WORDS.has(pair)) continue;
 				if (QUERY_FUNCTION_WORDS.has(characters[index]) && QUERY_FUNCTION_WORDS.has(characters[index + 1]))
 					continue;
-				terms.push(`${characters[index]}${characters[index + 1]}`);
+				terms.push(pair);
 			}
 		}
 	}
@@ -145,9 +154,10 @@ const CANDIDATE_WINDOW_MAX = 1_000;
 const CANDIDATE_LIMIT_MAX = 10_000;
 
 /**
- * Markdown characters fetched per candidate for scoring. Sections cap at 24k
- * characters, and pulling every candidate's full text dominated query time on
- * large corpora; the page's real text is loaded afterwards, by id.
+ * Markdown characters fetched per candidate for scoring. Sections cap at 18k
+ * characters (`MAX_SECTION_CHARS` in `markdown.ts`), and pulling every
+ * candidate's full text dominated query time on large corpora; the page's real
+ * text is loaded afterwards, by id.
  */
 const CANDIDATE_SNIPPET_CHARS = 2_000;
 
@@ -198,6 +208,13 @@ function indexFilter(index: string | undefined): { sql: string; args: string[] }
 	return index ? { sql: `${visible} AND i.name=?`, args: [index] } : { sql: visible, args: [] };
 }
 
+/**
+ * Bounded wait for the shared import lock. The holder keeps it for a whole
+ * import, so a second import should report the conflict instead of queueing
+ * behind minutes of indexing.
+ */
+const IMPORT_LOCK_OPTIONS = { retries: 3, retryDelayMs: 100 } as const;
+
 export class DocsService {
 	readonly storage: DocsStorage;
 	readonly cwd: string;
@@ -223,36 +240,54 @@ export class DocsService {
 		const files = await enumerateMarkdownFiles(rootPath);
 		checkCancelled(options.signal);
 		if (files.length === 0) throw new Error(`No Markdown files found in: ${rootPath}`);
-		// A killed import leaves a half-built index behind; clear those out now that
-		// this process is the one building.
-		this.storage.removeAbandoned();
-		const temp = this.storage.create({ name: `${BUILDING_INDEX_PREFIX}${crypto.randomUUID()}`, rootPath });
+		// Enumeration runs before the lock: only the database writes need to be
+		// exclusive, and the lease is held for the whole build.
+		let lease: FileLockHandle;
 		try {
-			options.onProgress?.({ phase: "scan", total: files.length, completed: 0, failed: 0 });
-			let completed = 0;
-			for (const relativePath of files) {
-				checkCancelled(options.signal);
-				const document = await readMarkdownDocument(rootPath, relativePath);
-				checkCancelled(options.signal);
-				this.#commitDocument(temp.id, document);
-				completed++;
-				options.onProgress?.({
-					phase: "fts",
-					total: files.length,
-					completed,
-					failed: 0,
-					currentPath: relativePath,
-				});
-			}
-			checkCancelled(options.signal);
-			return { processed: completed, failed: 0, index: this.storage.promote(temp.id, storedName) };
+			lease = await acquireFileLock(this.storage.path, IMPORT_LOCK_OPTIONS);
 		} catch (error) {
-			this.storage.removeById(temp.id);
-			throw error;
+			throw new Error(`Another document index build is already running for this profile: ${this.storage.path}`, {
+				cause: error,
+			});
+		}
+		try {
+			checkCancelled(options.signal);
+			// Another import may have published this name while we waited for the lease.
+			if (this.storage.get(storedName)) throw new Error(`Document index already exists: ${storedName}`);
+			// A killed import leaves a half-built index behind; clear those out now that
+			// this process is the one building.
+			this.storage.removeAbandoned();
+			const temp = this.storage.create({ name: `${BUILDING_INDEX_PREFIX}${crypto.randomUUID()}`, rootPath });
+			try {
+				options.onProgress?.({ phase: "scan", total: files.length, completed: 0, failed: 0 });
+				let completed = 0;
+				for (const relativePath of files) {
+					checkCancelled(options.signal);
+					const document = await readMarkdownDocument(rootPath, relativePath);
+					checkCancelled(options.signal);
+					this.#commitDocument(temp.id, document);
+					completed++;
+					options.onProgress?.({
+						phase: "fts",
+						total: files.length,
+						completed,
+						failed: 0,
+						currentPath: relativePath,
+					});
+				}
+				checkCancelled(options.signal);
+				return { processed: completed, failed: 0, index: this.storage.promote(temp.id, storedName) };
+			} catch (error) {
+				this.storage.removeById(temp.id);
+				throw error;
+			}
+		} finally {
+			lease.release();
 		}
 	}
 
 	remove(name: string): void {
+		// Only visible rows move here; a hidden build belongs to the import lease.
 		if (!this.storage.remove(name)) throw new Error(`Unknown document index: ${name}`);
 	}
 
