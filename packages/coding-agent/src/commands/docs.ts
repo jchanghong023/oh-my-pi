@@ -42,7 +42,6 @@ export default class Docs extends Command {
 				target,
 				name: flags.name,
 				json: flags.json,
-				force: flags.force,
 				signal: controller.signal,
 			});
 		} finally {

@@ -9,7 +9,6 @@ export interface DocsCommandInput {
 	target?: string;
 	name?: string;
 	json?: boolean;
-	force?: boolean;
 	cwd?: string;
 	signal?: AbortSignal;
 }

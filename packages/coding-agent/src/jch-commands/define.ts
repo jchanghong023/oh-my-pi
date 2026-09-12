@@ -4,7 +4,6 @@ import type {
 	SlashCommandResult,
 	SlashCommandRuntime,
 	SlashCommandSpec,
-	TuiSlashCommandRuntime,
 } from "../slash-commands/types";
 
 export interface JchPromptCommandDefinition {
@@ -14,7 +13,6 @@ export interface JchPromptCommandDefinition {
 	requiredArgsUsage?: string;
 	aliases?: string[];
 	inlineHint?: string;
-	tuiOnly?: boolean;
 }
 
 function expandPrompt(prompt: string, args: string): string {
@@ -33,25 +31,14 @@ export function defineJchPromptCommand(definition: JchPromptCommandDefinition): 
 		allowArgs: true,
 		inlineHint: definition.inlineHint,
 	};
-	if (definition.tuiOnly) {
-		spec.handleTui = (command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): SlashCommandResult => {
-			if (definition.requiredArgsUsage && !command.args.trim()) {
-				runtime.ctx.showStatus(definition.requiredArgsUsage);
-				runtime.ctx.editor.setText("");
-				return { consumed: true };
-			}
-			return { prompt: expandPrompt(definition.prompt, command.args) };
-		};
-	} else {
-		spec.handle = (
-			command: ParsedSlashCommand,
-			runtime: SlashCommandRuntime,
-		): SlashCommandResult | Promise<SlashCommandResult> => {
-			if (definition.requiredArgsUsage && !command.args.trim()) {
-				return usage(definition.requiredArgsUsage, runtime);
-			}
-			return { prompt: expandPrompt(definition.prompt, command.args) };
-		};
-	}
+	spec.handle = (
+		command: ParsedSlashCommand,
+		runtime: SlashCommandRuntime,
+	): SlashCommandResult | Promise<SlashCommandResult> => {
+		if (definition.requiredArgsUsage && !command.args.trim()) {
+			return usage(definition.requiredArgsUsage, runtime);
+		}
+		return { prompt: expandPrompt(definition.prompt, command.args) };
+	};
 	return spec;
 }
