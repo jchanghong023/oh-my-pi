@@ -1,10 +1,20 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { Shell } from "@oh-my-pi/pi-natives";
 
+// `executeBash` calls `Settings.init()` unconditionally; without an in-memory
+// instance the load reaches the host's real agent.db, so a corrupted or
+// concurrently written ~/.omp fails otherwise unrelated assertions.
+beforeEach(async () => {
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true });
+});
+
 afterEach(() => {
 	mock.restore();
+	resetSettingsForTest();
 });
 
 function makeSession(): ToolSession {
