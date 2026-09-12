@@ -744,4 +744,14 @@ collapse {
 		mode "effort"
 		efforts "low" "medium" "high" "xhigh" "max"
 	}
+	// The Go gateway serves one SKU under both its versioned id and the bare
+	// `deepseek-flash` alias. Fold them into a single row (logical id = the
+	// versioned one; the bare id keeps resolving as a selector) and declare the
+	// effort surface, which the collapsed row would otherwise drop.
+	variant-family "opencode-go" "deepseek-v4.1-flash" name="DeepSeek V4.1 Flash" {
+		members "deepseek-v4.1-flash" "deepseek-flash"
+		mode "effort"
+		efforts "low" "high" "max"
+		default-member "deepseek-v4.1-flash"
+	}
 }

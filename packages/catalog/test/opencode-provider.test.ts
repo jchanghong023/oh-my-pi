@@ -6,6 +6,7 @@ import { isOpenAICompletionsVisionSupported } from "@oh-my-pi/pi-ai/providers/vi
 import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import { resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -998,11 +999,12 @@ describe("issue #10416 — retired bare opencode provider", () => {
 		expect(getBundledModels("opencode-zen").length).toBeGreaterThan(0);
 	});
 
-	// The Go gateway's bare `deepseek-flash` is DeepSeek's canonical V4.1 Flash.
-	// It has no bundled row here and its id carries no `v4` segment, so a
-	// family-less classification handed it the generic ladder — dropping `max`
-	// from the effort selector even though the gateway accepts it.
-	test("bare deepseek-flash keeps the DeepSeek V4 effort ladder", async () => {
+	// The Go gateway serves its canonical V4.1 Flash under both the bare
+	// `deepseek-flash` alias and the versioned id. They fold into a single row
+	// whose logical id is the versioned one — the bare id keeps resolving as a
+	// selector, and the lane keeps the DeepSeek V4 effort ladder rather than the
+	// generic one its `v4`-less id would otherwise fall through to.
+	test("the DeepSeek V4.1 Flash lanes fold into one row that keeps the V4 ladder", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-go-deepseek-flash-"));
 		try {
 			const options = opencodeGoModelManagerOptions({
@@ -1038,8 +1040,10 @@ describe("issue #10416 — retired bare opencode provider", () => {
 				},
 				"online",
 			);
-			const model = resolved.models.find(candidate => candidate.id === "deepseek-flash");
-			if (!model) throw new Error("deepseek-flash was not resolved");
+			const model = resolved.models.find(candidate => candidate.id === "deepseek-v4.1-flash");
+			if (!model) throw new Error("deepseek-v4.1-flash was not resolved");
+			expect(resolved.models.some(candidate => candidate.id === "deepseek-flash")).toBe(false);
+			expect(resolveVariantSelector("opencode-go", "deepseek-flash")).toBe("deepseek-v4.1-flash");
 
 			expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.High, Effort.Max]);
 			// V4.1 Flash is natively multimodal, unlike the text-only

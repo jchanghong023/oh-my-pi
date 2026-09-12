@@ -3170,6 +3170,23 @@
 						"xhigh",
 						"max"
 					]
+				},
+				{
+					"provider": "opencode-go",
+					"id": "deepseek-v4.1-flash",
+					"name": "DeepSeek V4.1 Flash",
+					"members": [
+						"deepseek-v4.1-flash",
+						"deepseek-flash"
+					],
+					"routing": {},
+					"mode": "effort",
+					"efforts": [
+						"low",
+						"high",
+						"max"
+					],
+					"defaultMember": "deepseek-v4.1-flash"
 				}
 			],
 			"providerAliases": {
