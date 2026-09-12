@@ -1529,7 +1529,7 @@ export async function runRootCommand(
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 		// The company lane exists only in --offline processes; flip it before any
 		// consumer (startup error check, model registry) reads company state.
-		setCompanyOfflineEnabled(parsedArgs.offline);
+		setCompanyOfflineEnabled(parsedArgs.offline === true);
 		const companyExplicitlyRequested =
 			parsedArgs.provider === COMPANY_PROVIDER_ID ||
 			parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`) === true;

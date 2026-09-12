@@ -94,11 +94,6 @@
 * 仅适用于技能：`~/.codex` 下的 MCP、hooks、commands、AGENTS.md 等其它能力仍按上游规则保持 opt-in。
 * 技能是否进入系统提示词列表仍由自身 `disable-model-invocation` / `hide` 决定；不可由模型调用的技能只通过 `/skill:<name>` 与 `skill://<name>` 使用。
 
-### Claude 配置同步
-
-* 保留 `omp sync-claude [--provider <name>]`，将 Claude Code endpoint/token 同步到当前 OMP profile。
-* 可自动识别仅修改 `baseUrl`/`apiKey` 的内置 Anthropic provider。
-
 ### 公司内网模型（仅 `--offline`）
 
 * `company` lane 只在 `--offline` 进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `--offline`。以下条目均限于 `--offline` 进程。
@@ -168,8 +163,8 @@
 
 * 仓库根 `README.md` 是上游 README 的**中文版**，正文跟随上游更新；Install / 下载段与「提示词控制」中 fork 新增的 `fullsend` 条目为有意保留的 fork 内容（下载段不采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法），其余正文与上游一致。上游英文快照保存在 `docs-zh-CN/README.upstream.md`，仅作同步对照稿源，已从中文文档站排除。
 * `README.md` 与三份维护文档一样在同步时保护：上游 README 有变化时先更新快照，再把变化段落重译进中文正文；上游未变则不动。
-* 保留供个人查阅的中英文 VitePress 文档站及 GitHub Pages 部署能力。
-* 中文站以覆盖上游全部文档的完整翻译为目标，并保留使用指南和 `config.yml` 设置参考；翻译独立同步，内容可能落后于当前代码基线。
+* 保留供个人查阅的中英文 VitePress 文档站及 GitHub Pages 部署能力；中文站为主站，上游英文 `docs` 由 fork 补充的 VitePress 构建后合并到 `/en/` 子路径。
+* 中文站不是纯翻译站点：以覆盖上游全部文档的完整翻译为目标，同时收录 fork 新增文档——命令与快捷键教程 `command-shortcut-tutorial.md`、`config.yml` 全量设置参考 `settings-reference.md`、知识索引研究 `dft-oh-my-pi-knowledge-research.md` 和 fork 契约 `fork.md`；翻译独立同步，内容可能落后于当前代码基线。
 
 ### Fork 开发工具
 
