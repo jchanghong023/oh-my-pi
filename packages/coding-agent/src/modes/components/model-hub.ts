@@ -372,10 +372,15 @@ export class ModelHubComponent implements Component {
 			}
 		}
 
+		// The visibility filter only governs what the browser advertises: a role
+		// explicitly pinned to a hidden model still runs that model at runtime, so
+		// resolve configured roles against the unfiltered catalog (auto-selection
+		// and the option list keep using the filtered sets).
+		const roleCatalog = allModels;
 		allModels = allModels.filter(isVisibleModel);
 		availableModels = availableModels.filter(isVisibleModel);
 
-		this.#reloadRoles(allModels, availableModels);
+		this.#reloadRoles(roleCatalog, availableModels);
 		this.#buildRolesRows();
 
 		const storage = this.#settings.getStorage();
