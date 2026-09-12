@@ -50,6 +50,7 @@ import type {
 	AgentToolContext,
 	AgentTurnEndContext,
 	AsideMessage,
+	SpeculativeToolExecutionConfig,
 	StreamFn,
 	ToolCallContext,
 	ToolChoiceDirective,
@@ -242,13 +243,22 @@ export interface AgentOptions {
 	 * Use for deobfuscating secrets or rewriting arguments.
 	 */
 	transformToolCallArguments?: (args: Record<string, unknown>, toolName: string) => Record<string, unknown>;
+	/** Host authorization and telemetry for opt-in speculative tool execution. */
+	speculativeToolExecution?: SpeculativeToolExecutionConfig;
 
 	/**
 	 * Resolve a tool call whose name matched no advertised tool. Lets hosts
 	 * route calls to tools exposed through side transports (e.g. `xd://`
 	 * device mounts) instead of failing with "Tool not found".
 	 */
-	resolveFallbackTool?: (name: string) => AgentTool<any> | undefined;
+	resolveFallbackTool?: (name: string, advertised: readonly AgentTool<any>[]) => AgentTool<any> | undefined;
+
+	/**
+	 * Names routable by {@link resolveFallbackTool} that the advertised set
+	 * omits (e.g. `xd://` device mounts), used only to suggest a target when a
+	 * call misses.
+	 */
+	suggestFallbackToolNames?: () => Iterable<string>;
 
 	/** Enable intent tracing schema injection/stripping in the harness. */
 	intentTracing?: boolean;
@@ -407,7 +417,9 @@ export class Agent {
 	#kimiApiFormat?: "openai" | "anthropic";
 	#preferWebsockets?: boolean;
 	#transformToolCallArguments?: (args: Record<string, unknown>, toolName: string) => Record<string, unknown>;
-	#resolveFallbackTool?: (name: string) => AgentTool<any> | undefined;
+	#speculativeToolExecution?: SpeculativeToolExecutionConfig;
+	#resolveFallbackTool?: (name: string, advertised: readonly AgentTool<any>[]) => AgentTool<any> | undefined;
+	#suggestFallbackToolNames?: () => Iterable<string>;
 	#intentTracing: boolean;
 	#pruneToolDescriptions: boolean;
 	#dialect?: Dialect;
@@ -496,7 +508,9 @@ export class Agent {
 		this.#kimiApiFormat = opts.kimiApiFormat;
 		this.#preferWebsockets = opts.preferWebsockets;
 		this.#transformToolCallArguments = opts.transformToolCallArguments;
+		this.#speculativeToolExecution = opts.speculativeToolExecution;
 		this.#resolveFallbackTool = opts.resolveFallbackTool;
+		this.#suggestFallbackToolNames = opts.suggestFallbackToolNames;
 		this.#intentTracing = opts.intentTracing === true;
 		this.#pruneToolDescriptions = opts.pruneToolDescriptions === true;
 		this.#dialect = opts.dialect;
@@ -1461,7 +1475,9 @@ export class Agent {
 			cwd: this.#cwd,
 			getCwd: this.#cwdResolver,
 			transformToolCallArguments: this.#transformToolCallArguments,
+			speculativeToolExecution: this.#speculativeToolExecution,
 			resolveFallbackTool: this.#resolveFallbackTool,
+			suggestFallbackToolNames: this.#suggestFallbackToolNames,
 			intentTracing: this.#intentTracing,
 			pruneToolDescriptions: this.#pruneToolDescriptions,
 			dialect: this.#dialect,
