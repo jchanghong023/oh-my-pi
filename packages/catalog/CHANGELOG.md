@@ -6,6 +6,10 @@
 
 - Added Command Code as a mixed-wire provider with authenticated model discovery, live provider pricing, endpoint-scoped caching, and per-model Anthropic Messages/OpenAI Chat Completions routing ([#9564](https://github.com/can1357/oh-my-pi/pull/9564) by [@himomohi](https://github.com/himomohi)).
 
+### Added
+
+- Added Charm Hyper as a built-in provider with API-key login, live model discovery, and per-model pricing, effort ladders, and limits read straight from its catalog ([#11656](https://github.com/can1357/oh-my-pi/pull/11656) by [@oldschoola](https://github.com/oldschoola)).
+
 ## [18.1.18] - 2026-09-11
 
 ### Added
