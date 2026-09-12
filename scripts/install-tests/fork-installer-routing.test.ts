@@ -173,6 +173,19 @@ describe("fork installer routing", () => {
 		expect(script).not.toContain('"omp-windows-$NativeArchitecture.exe"');
 	});
 
+	test("relaxes the error preference around Windows installer native calls", async () => {
+		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
+		// Windows PowerShell 5.1 turns a native executable's stderr lines into a
+		// terminating NativeCommandError while $ErrorActionPreference is "Stop",
+		// which would abort the install before the Invoke-WebRequest fallback.
+		expect(script).toContain('$ErrorActionPreference = "Continue"');
+		for (const line of script.split("\n")) {
+			if (!/(^|\s)&\s+\$/.test(line)) continue;
+			if (line.includes("& $Command")) continue; // the Invoke-Native helper itself
+			expect(line).toContain("Invoke-Native {");
+		}
+	});
+
 	test("does not expose a PowerShell source installation path", async () => {
 		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
 		expect(script).not.toContain("[switch]$Source");

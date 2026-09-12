@@ -18,6 +18,9 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 		Bun.env.MNEMOPI_EMBEDDING_API_KEY
 	)
 		return undefined;
+	// An explicitly configured variant is a user-chosen local model too; only the
+	// schema default yields to the company lane.
+	if (settings.isConfigured("mnemopi.embeddingVariant")) return undefined;
 	if (model && !COMPANY_RETRIEVAL_MODELS.some(entry => entry.type === "embedding" && entry.id === model)) {
 		return undefined;
 	}

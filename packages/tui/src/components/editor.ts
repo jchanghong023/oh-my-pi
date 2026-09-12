@@ -1643,7 +1643,14 @@ export class Editor implements Component, Focusable {
 						this.#cancelAutocomplete();
 						return;
 					}
-					if (selected && this.#autocompleteProvider) {
+					if (!selected) {
+						// An `@` popup whose narrowing filter matched nothing stays open with no
+						// candidate (see #debouncedUpdateAutocomplete). Nothing to accept: cancel the
+						// popup and fall through so Tab keeps its normal completion role and a right
+						// arrow at end of line moves the cursor.
+						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
+					} else if (this.#autocompleteProvider) {
 						const shouldChainAutocomplete =
 							this.#isSlashCommandNameAutocompleteSelection() || isDirectoryCompletionValue(selected.value);
 						const result = this.#autocompleteProvider.applyCompletion(
@@ -1671,7 +1678,8 @@ export class Editor implements Component, Focusable {
 							queueMicrotask(() => void this.#tryTriggerAutocomplete());
 						}
 					}
-					return;
+					// Only an accepted candidate consumes the key; an empty list falls through.
+					if (selected) return;
 				}
 
 				// If Enter was pressed on a submitted slash command (not an absolute-path
@@ -1718,6 +1726,12 @@ export class Editor implements Component, Focusable {
 					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
+					} else if (!selected) {
+						// An `@` popup whose narrowing filter matched nothing stays open with no
+						// candidate (see #debouncedUpdateAutocomplete). Nothing to accept: cancel the
+						// popup and fall through so Enter submits the draft instead of being swallowed.
+						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
 					} else {
 						if (selected && this.#autocompleteProvider) {
 							const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();

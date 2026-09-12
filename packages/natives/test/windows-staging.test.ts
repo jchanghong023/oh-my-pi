@@ -120,7 +120,14 @@ describe("windows native addon staging", () => {
 		const leafPackageDir = "/tmp/node_modules/@oh-my-pi/pi-natives-darwin-arm64";
 		const uppercaseNodeModulesNativeDir = "/tmp/NODE_MODULES/@oh-my-pi/pi-natives/native";
 		const variantCacheKey = "__PI_NATIVE_VARIANT_CACHE";
+		const nativeDirEnvKey = "PI_NATIVE_DIR";
 		const previousVariantCache = process.env[variantCacheKey];
+		const previousNativeDir = process.env[nativeDirEnvKey];
+		// `PI_NATIVE_DIR` is a strict source override inside `initLoaderContext`, so
+		// it would mask the explicit `nativeDir` passed below and flip every
+		// workspace/leaf-package classification this test pins. Clear it while the
+		// assertions run and restore whatever the caller had.
+		delete process.env[nativeDirEnvKey];
 		try {
 			const workspace = initLoaderContext({
 				platform: "linux",
@@ -169,6 +176,8 @@ describe("windows native addon staging", () => {
 		} finally {
 			if (previousVariantCache === undefined) delete process.env[variantCacheKey];
 			else process.env[variantCacheKey] = previousVariantCache;
+			if (previousNativeDir === undefined) delete process.env[nativeDirEnvKey];
+			else process.env[nativeDirEnvKey] = previousNativeDir;
 		}
 	});
 

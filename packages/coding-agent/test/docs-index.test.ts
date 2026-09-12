@@ -49,6 +49,22 @@ describe("Markdown parsing", () => {
 		);
 	});
 
+	it("drops skipped-level gaps from stored heading paths but keeps level fallback", () => {
+		const skipped = parseMarkdown(new TextEncoder().encode("# A\n\n#### B\n\nDeep needle\n"));
+		expect(skipped.sections.map(section => section.headingPath)).toEqual([["A"], ["A", "B"]]);
+
+		const belowRoot = parseMarkdown(new TextEncoder().encode("## X\n\nbody\n"));
+		expect(belowRoot.sections[0]?.headingPath).toEqual(["X"]);
+
+		const fallback = parseMarkdown(new TextEncoder().encode("# A\n\na\n\n## B\n\nb\n\n### C\n\nc\n\n# D\n\nd\n"));
+		expect(fallback.sections.map(section => section.headingPath)).toEqual([
+			["A"],
+			["A", "B"],
+			["A", "B", "C"],
+			["D"],
+		]);
+	});
+
 	it("drops converter structural labels but keeps heading-only requirement lines", () => {
 		const text = [
 			"# Doc",

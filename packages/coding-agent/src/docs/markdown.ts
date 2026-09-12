@@ -199,7 +199,15 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			headingPath = headingPath.slice(0, heading.level - 1);
 			headingPath[heading.level - 1] = heading.text;
 			title ??= heading.text;
-			current = { headingPath: [...headingPath], headingLevel: heading.level, lines: [line] };
+			// `headingPath` is indexed by heading level, so a skipped level (# A then
+			// #### B) or a document that opens below `#` leaves holes. They exist only
+			// to keep level-based truncation working; the stored path drops them so it
+			// never renders as "A >  >  > B" or " > X".
+			current = {
+				headingPath: headingPath.filter(segment => segment !== undefined),
+				headingLevel: heading.level,
+				lines: [line],
+			};
 			if (heading.setext && lines[index + 1]) current.lines.push(lines[++index]);
 			continue;
 		}

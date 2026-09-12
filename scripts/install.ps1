@@ -25,6 +25,23 @@ if ($NativeArchitecture -ne "x64") {
 }
 $BinaryName = "omp-windows-x64.exe"
 
+# PowerShell 5.1 raises a terminating NativeCommandError for any line a native
+# executable writes to stderr while $ErrorActionPreference is "Stop", regardless
+# of the process exit code. `omp --version` and curl.exe both report progress on
+# stderr, so run them with the preference relaxed to "Continue" and let callers
+# gate on $LASTEXITCODE. Global "Stop" stays in effect for the cmdlet-driven
+# operations (Invoke-WebRequest/Invoke-RestMethod) that depend on it.
+function Invoke-Native {
+    param([Parameter(Mandatory = $true)][scriptblock]$Command)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 function Find-BashShell {
     # Check Git Bash first (most common on Windows)
     $gitBash = "C:\Program Files\Git\bin\bash.exe"
@@ -171,7 +188,7 @@ function Test-InstalledBinaryVersion {
     }
 
     try {
-        $versionOutput = & $TargetPath --version 2>$null
+        $versionOutput = Invoke-Native { & $TargetPath --version 2>$null }
         $exitCode = $LASTEXITCODE
         $versionText = $versionOutput | Select-Object -First 1
         if ($exitCode -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
@@ -223,7 +240,7 @@ function Install-Binary {
     $curlExit = $null
     try {
         if ($curlExe) {
-            & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath
+            Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath }
             $curlExit = $LASTEXITCODE
             if ($curlExit -ne 0) {
                 Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue

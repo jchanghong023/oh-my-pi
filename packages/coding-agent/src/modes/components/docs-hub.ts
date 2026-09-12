@@ -169,7 +169,13 @@ export class DocsHubComponent implements Component {
 		if (this.#mode === "confirm-remove") {
 			if (data.toLowerCase() === "y") {
 				const name = this.#selectedIndex()?.name;
-				if (name) this.service.remove(name);
+				if (name) {
+					try {
+						this.service.remove(name);
+					} catch (error) {
+						this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+					}
+				}
 				this.#mode = "list";
 				this.#refresh();
 			} else if (data.toLowerCase() === "n" || matchesKey(data, "escape")) this.#mode = "list";
@@ -205,14 +211,16 @@ export class DocsHubComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		if (data === "n")
-			this.#wizard = new DocsAddWizard(
-				result => this.#create(result),
-				() => {
-					this.#wizard = undefined;
-				},
-			);
-		else if (data === "/") {
+		if (data === "n") {
+			if (this.#abort) this.#latestError = "Indexing already in progress.";
+			else
+				this.#wizard = new DocsAddWizard(
+					result => this.#create(result),
+					() => {
+						this.#wizard = undefined;
+					},
+				);
+		} else if (data === "/") {
 			this.#mode = "search";
 			this.#search = new Input();
 		} else if (data === "i") this.#showInfo();

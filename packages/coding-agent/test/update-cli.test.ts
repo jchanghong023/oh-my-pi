@@ -133,6 +133,17 @@ describe("parseReportedVersion", () => {
 		expect(parseReportedVersion("not a version")).toBeUndefined();
 	});
 
+	it("parses release binaries that append a build timestamp", () => {
+		// Regression: `displayVersion` (cli.ts) appends `(built …)` to release
+		// binaries, and the anchored match ran against that raw string — so
+		// verification failed, `omp update` rolled back its fresh binary, and a
+		// symlinked release install was rejected as foreign.
+		expect(parseReportedVersion("omp/18.1.18+fork.188 (built 2026-09-12T00:36Z)")).toBe("18.1.18+fork.188");
+		expect(parseReportedVersion("omp/18.1.18-canary.3 (built 2026-09-12T00:36Z)")).toBe("18.1.18-canary.3");
+		expect(parseReportedVersion("omp/18.1.18 (built 2026-09-12T00:36Z)")).toBe("18.1.18");
+		expect(parseReportedVersion("omp/18.1.18")).toBe("18.1.18");
+	});
+
 	it("rejects version output from a different executable", () => {
 		expect(parseReportedVersion("node/18.0.5")).toBeUndefined();
 		expect(parseReportedVersion("codex/18.0.5")).toBeUndefined();

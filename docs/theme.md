@@ -176,7 +176,7 @@ Auto theme slot selection uses terminal appearance in this order:
 
 Current defaults from settings schema:
 
-- `theme.dark = "titanium"`
+- `theme.dark = "dark-terminal"`
 - `theme.light = "light"`
 - `symbolPreset = "unicode"`
 - `colorBlindMode = false`

@@ -9,7 +9,7 @@ import {
 	unregisterOAuthProviders,
 } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/registry/oauth/types";
-import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
+import { getEnvApiKey, getEnvApiKeyName } from "@oh-my-pi/pi-ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
 const ENV_KEYS = [
@@ -66,12 +66,15 @@ describe("provider registry auth surface", () => {
 		delete Bun.env.COMMAND_CODE_API_KEY;
 		Bun.env.COMMANDCODE_API_KEY = "legacy-command-code-key";
 		expect(getEnvApiKey("commandcode")).toBe("legacy-command-code-key");
+		expect(getEnvApiKeyName("commandcode")).toBe("COMMANDCODE_API_KEY");
 
 		Bun.env.COMMAND_CODE_API_KEY = "documented-command-code-key";
 		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
+		expect(getEnvApiKeyName("commandcode")).toBe("COMMAND_CODE_API_KEY");
 
 		delete Bun.env.COMMANDCODE_API_KEY;
 		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
+		expect(getEnvApiKeyName("commandcode")).toBe("COMMAND_CODE_API_KEY");
 	});
 
 	test("Command Code login trims and returns the key without binding to an inference endpoint", async () => {

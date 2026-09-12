@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
+import { normalizeSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/asr-worker";
 import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { getTinyModelsCacheDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -193,5 +194,23 @@ describe("STTController preflight", () => {
 		expect(stopCapture).toHaveBeenCalledTimes(1);
 		expect(editor.clearVolatileText).toHaveBeenCalledTimes(1);
 		expect(options.showWarning).toHaveBeenCalledWith("Microphone permission denied");
+	});
+});
+
+describe("stt language normalization", () => {
+	it("reduces configured BCP-47 tags to the base language code the engines accept", () => {
+		// The fork default `stt.language=zh-CN` must reach Whisper as `zh`.
+		expect(normalizeSttLanguage("zh-CN")).toBe("zh");
+		expect(normalizeSttLanguage("en-US")).toBe("en");
+		expect(normalizeSttLanguage("zh-Hans-CN")).toBe("zh");
+		// Underscore and uppercase variants.
+		expect(normalizeSttLanguage("zh_TW")).toBe("zh");
+		expect(normalizeSttLanguage("ZH-cn")).toBe("zh");
+		// Bare codes and non-tags pass through to the engine's own validation.
+		expect(normalizeSttLanguage("zh")).toBe("zh");
+		expect(normalizeSttLanguage("<|zh|>")).toBe("<|zh|>");
+		expect(normalizeSttLanguage("chinese")).toBe("chinese");
+		expect(normalizeSttLanguage("")).toBe("");
+		expect(normalizeSttLanguage(undefined)).toBeUndefined();
 	});
 });

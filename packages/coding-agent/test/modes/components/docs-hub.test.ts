@@ -31,7 +31,7 @@ describe("DocsHubComponent shared interaction contract", () => {
 		const ready = Promise.withResolvers<void>();
 		const tui = {
 			requestRender: () => {
-				if (hub && text(hub).includes("  ready  ")) ready.resolve();
+				if (hub && text(hub).includes("handbook  docs=")) ready.resolve();
 			},
 		} as unknown as TUI;
 		const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });

@@ -397,6 +397,20 @@ async function loadModel(modelKey: SttModelKey, transport: SttTransport, request
 	return loaded;
 }
 
+/**
+ * Reduce a BCP-47 tag to the base language subtag the ASR engines expect
+ * (`zh-CN`/`zh_TW` → `zh`, `en-US` → `en`). The fork's default
+ * `stt.language=zh-CN` is a regional tag, which Whisper's
+ * `whisper_language_to_code` rejects outright. Anything that is not a
+ * well-formed tag (language names, `<|zh|>`, unknown strings, empty) is passed
+ * through unchanged, leaving validation to the engine.
+ */
+export function normalizeSttLanguage(language: string | undefined): string | undefined {
+	const match = /^([A-Za-z]{2,3})(?:[-_][A-Za-z0-9]{2,8})*$/.exec(language ?? "");
+	if (!match) return language;
+	return match[1].toLowerCase();
+}
+
 async function decodeSegment(
 	model: LoadedModel,
 	spec: SttModel,
@@ -418,7 +432,8 @@ async function decodeSegment(
 	// take the configured source language (auto-detected when omitted).
 	if (!spec.englishOnly) {
 		options.task = "transcribe";
-		if (language) options.language = language;
+		const languageCode = normalizeSttLanguage(language);
+		if (languageCode) options.language = languageCode;
 	}
 	const output = (await model.pipeline(audio, options)) as AutomaticSpeechRecognitionOutput;
 	return (output.text ?? "").trim();

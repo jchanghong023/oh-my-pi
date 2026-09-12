@@ -10,6 +10,10 @@ interface DocEntry {
 
 const docsDirectory = path.resolve(import.meta.dirname, '..')
 
+// 只作同步对照稿源、不作为站点页面与搜索内容的文件（相对 docs 目录的路径）。
+// 发现阶段与 VitePress `srcExclude` 共用此表，否则被排除的稿源会经兜底分组漏进侧栏。
+const excludedSources = ['README.upstream.md']
+
 function discoverDocuments(directory = docsDirectory, relativeDirectory = ''): DocEntry[] {
   const documents: DocEntry[] = []
   const entries = fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
@@ -25,6 +29,7 @@ function discoverDocuments(directory = docsDirectory, relativeDirectory = ''): D
       continue
     }
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue
+    if (excludedSources.includes(relativePath)) continue
 
     const routePath = relativePath.slice(0, -3)
     const route = routePath === 'index' ? '/' : `/${routePath}`
@@ -143,7 +148,7 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
 export default defineConfig({
   lang: 'zh-CN',
   // 上游英文快照只作同步对照稿源，不作为站点页面与搜索内容。
-  srcExclude: ['README.upstream.md'],
+  srcExclude: excludedSources,
   title: 'omp 中文文档',
   description: 'omp 终端编码 agent 中文文档',
   base: '/oh-my-pi/',

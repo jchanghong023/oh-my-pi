@@ -2151,6 +2151,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleLoopCommand(args = ""): Promise<string | undefined> {
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Shift+F2 before entering loop mode.");
+			return undefined;
+		}
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
 			return undefined;
@@ -3162,7 +3166,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.planModePaused ||
 			this.goalModeEnabled ||
 			this.goalModePaused ||
-			this.vibeModeEnabled
+			this.vibeModeEnabled ||
+			this.loopModeEnabled ||
+			this.loopModePaused
 		) {
 			return false;
 		}

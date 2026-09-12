@@ -116,6 +116,8 @@ describe("InteractiveMode Primary Agent Shift+F2 shortcut", () => {
 			["goal", () => (mode.goalModeEnabled = true), () => (mode.goalModeEnabled = false)],
 			["paused goal", () => (mode.goalModePaused = true), () => (mode.goalModePaused = false)],
 			["vibe", () => (mode.vibeModeEnabled = true), () => (mode.vibeModeEnabled = false)],
+			["loop", () => (mode.loopModeEnabled = true), () => (mode.loopModeEnabled = false)],
+			["paused loop", () => (mode.loopModePaused = true), () => (mode.loopModePaused = false)],
 		];
 		for (const [name, enable, disable] of blockedStates) {
 			enable();
@@ -123,6 +125,14 @@ describe("InteractiveMode Primary Agent Shift+F2 shortcut", () => {
 			disable();
 			expect(cycle, name).not.toHaveBeenCalled();
 		}
+	});
+
+	it("refuses to start loop mode while Discuss is the primary agent", async () => {
+		const warning = vi.spyOn(mode, "showWarning");
+		await session.setPrimaryAgent("discuss");
+		expect(await mode.handleLoopCommand("keep going")).toBeUndefined();
+		expect(mode.loopModeEnabled).toBe(false);
+		expect(warning).toHaveBeenCalledWith("Switch back to Main with Shift+F2 before entering loop mode.");
 	});
 
 	it("refreshes the status-line primary agent after a transcript replay", async () => {

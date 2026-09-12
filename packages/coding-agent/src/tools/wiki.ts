@@ -119,10 +119,21 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 					bodies.push(header);
 					used += header.length + 2;
 				}
+				// On this path the header is all a hit delivers, so one that did not fit
+				// is withheld like any other section; the stub rule skipped these before
+				// the budget was consulted, so nothing is counted twice.
+				skippedForSize += result.sections.length - bodies.length;
 			}
 			if (bodies.length === 0) throw new ToolError(`Sections matching "${query}" carry no body text.`);
 
-			const hidden = result.total !== undefined ? result.total > bodies.length : skippedForSize > 0;
+			// `total` counts every FTS row, the structural labels included, and those
+			// never reach `bodies` by design: measured against `bodies` it reported a cut
+			// page whenever a document title matched, and it swallowed the collapse note
+			// whenever duplicates were the only reduction. What this page withholds is
+			// what it dropped for size here, plus the hits the ranked page never reached
+			// — hits the page did reach count as served even when they render no text.
+			const beyondPage = result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
+			const hidden = skippedForSize > 0 || beyondPage > 0;
 			const scope =
 				result.total !== undefined
 					? `${result.total} matching section(s)`
@@ -131,7 +142,9 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
 			const footer = hidden
 				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections within ${TEXT_BUDGET_CHARS} characters${skipped}${collapsed}; search again with narrower terms for the rest.`
-				: "";
+				: collapsed
+					? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
+					: "";
 			const text = [`"${query}" · ${scope} · ${used}/${TEXT_BUDGET_CHARS} characters`, ...bodies].join("\n\n");
 			return toolResult()
 				.text(text + footer)

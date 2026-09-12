@@ -283,7 +283,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 - `ultrathink` — 要求谨慎的多步推理，并使用所支持的最高自动思考强度。
 - `orchestrate` — 通过并行子 agent 执行大量独立工作，并逐阶段验证。
 - `workflowz` — 用当前 `task` 工具构建确定性的多子 agent 工作流。
-- `fullsend` — 在不受金钱或 token 限制的前提下，选择最快达成完整且经过验证的质量的路径；若两条路径同样快则选择委派，因为干净的子 agent 上下文是决胜因素。
+- `fullsend` — 不以金钱或 token 为约束，在同等正确性、完整性与验证标准下选择预期完成时间最短的路径；委派仅在能带来实际速度或验证收益时使用。
 
 它们只在正文中触发，出现在行内代码、围栏代码块、XML/HTML 区段、标识符或路径中都不会触发。精确的匹配规则与配置见 [魔法关键词](docs/magic-keywords.md)。
 

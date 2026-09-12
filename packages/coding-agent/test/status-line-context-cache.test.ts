@@ -14,25 +14,43 @@
  * redraw — that per-event recompute is what previously froze large sessions.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { StatusLineComponent } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { initTheme, setSymbolPreset, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { getSessionAccentAnsi } from "@oh-my-pi/pi-coding-agent/utils/session-color";
-import { adjustHsv } from "@oh-my-pi/pi-utils";
+import { adjustHsv, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { StatusLineTestComponents } from "./helpers/status-line";
 
 const statusLines = new StatusLineTestComponents();
+/**
+ * The `path` segment renders `getProjectDir()` (= `process.cwd()`), so the
+ * default preset's 80-wide layout overflows only when the invoking cwd renders
+ * as a long path: the render-shape assertions below would otherwise depend on
+ * where the suite was started. Pin a fixed project dir — its leaf alone is what
+ * the path segment shows (it sits under a scratch root) — so the bar's segment
+ * set fits (or overflows) identically from any cwd.
+ */
+const originalProjectDir = getProjectDir();
+const fixtureProjectDir = path.join(os.tmpdir(), "omp-status-line-context-cache-fixture-project-root");
+
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme();
+	fs.mkdirSync(fixtureProjectDir, { recursive: true });
+	setProjectDir(fixtureProjectDir);
 });
 
 afterAll(() => {
 	statusLines.dispose();
 	resetSettingsForTest();
+	setProjectDir(originalProjectDir);
+	fs.rmSync(fixtureProjectDir, { recursive: true, force: true });
 });
 
 interface Fake {

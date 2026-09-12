@@ -1896,7 +1896,7 @@ export const DEEPSEEK_V41_FLASH_IDS: Readonly<Record<string, string>> = {
  * previous surface would keep serving it. The `@` prefix keeps the token from
  * ever matching a discovered id.
  */
-export const DEEPSEEK_V41_FLASH_SURFACE_KEY = "@v41-flash-surface/2";
+export const DEEPSEEK_V41_FLASH_SURFACE_KEY = "@v41-flash-surface/3";
 
 let deepseekV4FlashReference: ModelSpec<"openai-completions"> | undefined;
 
@@ -3178,17 +3178,27 @@ function openCodeModelManagerOptions(
 						const api = resolveApi(defaults.id, defaults.api);
 						const baseUrl = openCodeBaseUrlForApi(api, basePath);
 						// DeepSeek's V4.1 ids have no bundled row under either gateway, so
-						// the generic defaults would hide the effort dial; inherit the
-						// `deepseek-v4-flash` surface like the Muse Spark lineage below.
+						// the generic defaults would hide the effort dial; carry the
+						// `deepseek-v4-flash` capability surface like the Muse Spark
+						// lineage below. Only that surface travels: the lineage's `compat`
+						// is api.deepseek.com wire config (`max_tokens`, an always-sent
+						// `thinking` extraBody, and required assistant content on tool
+						// calls) that this gateway rejects, so only the modality carve-out
+						// is kept and the rest is derived from this gateway's own rules,
+						// as the reference-less branch below does.
 						const v41 = deepseekV41FlashReference(defaults.id);
 						if (v41) {
 							return {
-								...v41,
+								...defaults,
 								id: defaults.id,
 								name: toModelName(entry.name, deepseekV41FlashName(defaults.id) ?? v41.name),
 								api,
 								provider: providerId,
 								baseUrl,
+								reasoning: v41.reasoning,
+								input: v41.input,
+								thinking: v41.thinking,
+								compat: { stripImageInput: false },
 								// The lineage borrows `deepseek-v4-flash` from the first-party
 								// catalog, so its rates and peak/off-peak scheme belong to
 								// api.deepseek.com, not this gateway. Keep the gateway's own

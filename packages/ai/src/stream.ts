@@ -826,20 +826,18 @@ const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEnt
 	return [[provider.id, resolver] as [string, KeyResolver]];
 });
 
-const REGISTRY_ENV_KEY_PROVIDERS = new Set(
-	PROVIDER_REGISTRY.filter(provider => provider.envKeys != null).map(provider => provider.id),
-);
-
 // Catalog providers with multiple env-var candidates keep their ordered list so
 // `getEnvApiKeyName` can echo whichever variable is currently set (mirrors
-// `$pickenv(...envVars)` priority: first non-empty wins). Single-var and
-// registry-overridden entries are intentionally absent — their display name
-// comes straight from `serviceProviderMap`.
+// `$pickenv(...envVars)` priority: first non-empty wins). Single-var entries are
+// intentionally absent — their resolver is the plain name in `serviceProviderMap`.
+// Registry defs with several `envKeys` (e.g. `commandcode`) resolve to a computed
+// `$pickenv` resolver too, so they still need the catalog list to name the
+// variable actually in use.
 const CATALOG_ENTRY_ENV_NAMES: Record<string, readonly string[]> = Object.fromEntries(
 	(CATALOG_PROVIDERS as readonly ProviderCatalogEntry[])
 		.filter((provider): provider is ProviderCatalogEntry & { envVars: readonly string[] } => {
 			const envVars = provider.envVars;
-			return Array.isArray(envVars) && envVars.length > 1 && !REGISTRY_ENV_KEY_PROVIDERS.has(provider.id);
+			return Array.isArray(envVars) && envVars.length > 1;
 		})
 		.map(provider => [provider.id, provider.envVars] as [string, readonly string[]]),
 );
@@ -873,13 +871,15 @@ export function getEnvApiKey(provider: string): string | undefined {
  *
  * - String resolver (single-var catalog entry, registry envKeys string, or a
  *   legacy non-provider key) → that variable name.
- * - Catalog multi-var entry (`command-code` with documented `COMMAND_CODE_API_KEY`
+ * - Catalog multi-var entry (`commandcode` with documented `COMMAND_CODE_API_KEY`
  *   + legacy `COMMANDCODE_API_KEY`) → the first variable in the catalog's
  *   ordered `envVars` list that is currently set, matching the priority used
- *   by `$pickenv(...envVars)` inside `getEnvApiKey`.
- * - Registry computed resolver (Anthropic $pickenv, Vertex ADC, Bedrock
- *   probe, …) → undefined, because no single variable name describes the
- *   resolved source.
+ *   by `$pickenv(...envVars)` inside `getEnvApiKey`. Applies to registry-backed
+ *   ids too when the registry resolves the same multi-var list to a computed
+ *   `$pickenv` resolver.
+ * - Registry computed resolver with no catalog multi-var list (Anthropic
+ *   $pickenv, Vertex ADC, Bedrock probe, …) → undefined, because no single
+ *   variable name describes the resolved source.
  */
 export function getEnvApiKeyName(provider: string): string | undefined {
 	const resolver = serviceProviderMap[provider];

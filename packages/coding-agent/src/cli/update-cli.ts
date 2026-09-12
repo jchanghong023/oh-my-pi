@@ -1316,7 +1316,12 @@ function resolveOmpPath(): string | undefined {
  */
 export function parseReportedVersion(output: string): string | undefined {
 	if (!output.startsWith(`${APP_NAME}/`)) return undefined;
-	return output.slice(APP_NAME.length + 1).match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/)?.[1];
+	// Release binaries append the build timestamp to `--version`
+	// (`omp/1.2.3+fork.4 (built 2026-09-12T00:36Z)`; see `displayVersion` in
+	// cli.ts). Drop that optional suffix before the anchored SemVer match, or
+	// every verification against a release binary reports "no version".
+	const reported = output.slice(APP_NAME.length + 1).replace(/\s+\(built [^)]*\)$/, "");
+	return reported.match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/)?.[1];
 }
 
 async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {

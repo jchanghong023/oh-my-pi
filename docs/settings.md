@@ -690,7 +690,7 @@ tui:
 
 | Key                         | Type    | Default          | Values                                                                    |
 | --------------------------- | ------- | ---------------- | ------------------------------------------------------------------------- |
-| `theme.dark`                | string  | `titanium`       | Theme used on a dark terminal background.                                 |
+| `theme.dark`                | string  | `dark-terminal`  | Theme used on a dark terminal background.                                 |
 | `theme.light`               | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
@@ -729,7 +729,7 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `magicKeywords.ultrathink` | boolean | `true`       | Enable the standalone `ultrathink` notice and maximum-auto-thinking override.                           |
 | `magicKeywords.orchestrate` | boolean | `true`      | Enable the standalone `orchestrate` multi-agent notice.                                                 |
 | `magicKeywords.workflow` | boolean | `true`         | Enable the standalone `workflowz` eval-workflow notice.                                                 |
-| `magicKeywords.fullsend` | boolean | `true`         | Enable fastest verified execution without cost/token constraints; equal-time paths delegate for cleaner context. |
+| `magicKeywords.fullsend` | boolean | `true`         | Enable fastest verified execution without cost/token constraints; delegation is used only when it yields real speed or verification benefit. |
 
 All four keyword slash commands accept optional task text: `/ultrathink [task]`, `/orchestrate [task]`, `/workflowz [task]`, and `/fullsend [task]`.
 

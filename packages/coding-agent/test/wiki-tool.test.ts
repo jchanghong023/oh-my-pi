@@ -89,6 +89,34 @@ describe("WikiTool", () => {
 		expect(page).toContain(`carries ${shown} of 12 sections within 20000 characters`);
 	});
 
+	it("does not claim a cut page when the withheld hits carry no text", async () => {
+		// A document title matches once per document and occupies a page slot while
+		// rendering nothing; the readable hit below it is delivered whole. Nothing
+		// was withheld, so the footer must not send the caller after narrower terms.
+		const fixture = await indexedFixture({
+			"title.md": "# Guide\n",
+			"body.md": "# Guide\nCommand: scan\n",
+		});
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const page = text(await run(tool, { query: "guide" }));
+		expect(page).toContain("2 matching section(s)");
+		expect(page).toContain("Command: scan");
+		expect(page).not.toContain("search again with narrower terms");
+	});
+
+	it("reports collapsed duplicates even when the page was not cut", async () => {
+		// Two documents ship the same section verbatim, so the second becomes a
+		// pointer at the first. Everything fit the budget, but the page still owes
+		// the caller the count of hits it collapsed.
+		const section = `## Shared\n${"长".repeat(220)} needle\n`;
+		const fixture = await indexedFixture({ "a.md": section, "b.md": section });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const page = text(await run(tool, { query: "needle" }));
+		expect(page).toContain("(identical text to an earlier hit on this page)");
+		expect(page).toContain("1 repeated hit(s) collapsed to a pointer");
+		expect(page).not.toContain("search again with narrower terms");
+	});
+
 	it("delivers a long section whole inside one page", async () => {
 		// ~17.2k characters: the largest a stored section can be (the parser caps at
 		// 18k so that every hit fits the 20000-character page), delivered unabridged.

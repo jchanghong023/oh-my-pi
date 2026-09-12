@@ -36,8 +36,7 @@
   },
   "dependencies": {
     "@oh-my-pi/omptype": "catalog:",
-    "@oh-my-pi/pi-utils": "catalog:",
-    "turbo-stream": "^2.4.1"
+    "@oh-my-pi/pi-utils": "catalog:"
   },
   "devDependencies": {
     "@bgotink/kdl": "0.4.0",

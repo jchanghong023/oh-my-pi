@@ -31,7 +31,7 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { configureStartupLogging } from "./cli/startup-logging";
-import { getLatestRelease } from "./cli/update-cli";
+import { compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { setCompanyChatContextWindow } from "./config/company-models";
 import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./config/company-provider";
@@ -132,7 +132,9 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 	try {
 		const channel = settings.get("update.channel");
 		const release = await getLatestRelease({ timeoutMs: 5_000, channel });
-		return Bun.semver.order(release.version, currentVersion) > 0 ? release.version : undefined;
+		// SemVer precedence alone ignores build metadata, so a newer fork build of
+		// the same base (`18.1.18+fork.189` vs `+fork.188`) would not be announced.
+		return compareUpdateVersions(release.version, currentVersion) > 0 ? release.version : undefined;
 	} catch {
 		return undefined;
 	}

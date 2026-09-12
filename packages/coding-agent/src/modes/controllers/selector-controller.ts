@@ -503,6 +503,8 @@ export class SelectorController {
 
 	async showDocsDashboard(): Promise<void> {
 		let closed = false;
+		let hub: DocsHubComponent | undefined;
+		let overlayHandle: OverlayHandle | undefined;
 		const done = () => {
 			if (closed) return;
 			closed = true;
@@ -511,8 +513,15 @@ export class SelectorController {
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
-		const hub = await DocsHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
-		const overlayHandle = this.#showFullscreenMenu(hub);
+		try {
+			hub = await DocsHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
+			overlayHandle = this.#showFullscreenMenu(hub);
+		} catch (error) {
+			// A failed open (unsupported index database, missing FTS5, unreadable
+			// path) surfaces in the status line instead of silently dying.
+			hub?.dispose();
+			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	/**

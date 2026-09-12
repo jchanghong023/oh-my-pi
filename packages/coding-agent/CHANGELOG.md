@@ -378,9 +378,6 @@
 ### Fixed
 
 - Fixed the TUI becoming unresponsive while streamed edit previews arrive in a burst.
-
-### Fixed
-
 - Active sessions now keep memory proportional to truncated raw SSE and tool outputs instead of retaining complete oversized backing strings ([#10547](https://github.com/can1357/oh-my-pi/issues/10547)).
 - Anthropic sessions now keep tool-roster changes and warm-prefix pruning from invalidating preserved thinking or the prompt cache.
 - TypeScript code intelligence now works on TypeScript 7 projects: the built-in `typescript-native` server runs `tsc --lsp --stdio` when the resolved TypeScript install no longer ships `tsserver.js`, replacing `typescript-language-server` for that project.
@@ -710,17 +707,6 @@
 - Accelerated SHA-2 and SHA-3 checksum builtins on supported ARM64 hardware.
 - Fixed joined collaboration guests becoming inconsistent with the host after host-side compaction.
 - Fixed `hub list` and child peer rosters counting parked agents from stale root sessions; the persisted roster now scopes to the current root, retries transient filesystem faults, and renders live rows through the production subagent prompt template with a truthful omitted count.
-
-### Changed
-
-- Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
-- Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
-- Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
-- Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
-- The `/model` interface now shows only free models for OpenCode Zen while leaving every other provider unchanged.
-
-### Fixed
-
 - Fork binary verification now preserves the `+fork.<build>` suffix reported by installed executables.
 
 ## [18.0.6] - 2026-08-26

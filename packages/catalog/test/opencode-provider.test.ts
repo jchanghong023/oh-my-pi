@@ -1058,6 +1058,14 @@ describe("issue #10416 — retired bare opencode provider", () => {
 			expect(model.cost.timeBased).toBeUndefined();
 			expect(model.cost.input).toBe(0.15);
 			expect(model.cost.output).toBe(0.6);
+			// The lineage borrows `deepseek-v4-flash` from the first-party catalog, so
+			// its wire config (`max_tokens`, a mandatory `thinking` body, synthesized
+			// assistant content) belongs to api.deepseek.com and must not reach this
+			// gateway — its own rules own those fields.
+			const compat = (model as Model<"openai-completions">).compat;
+			expect(compat?.maxTokensField).toBe("max_completion_tokens");
+			expect(compat?.requiresAssistantContentForToolCalls).toBe(false);
+			expect(compat?.extraBody).toBeUndefined();
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
