@@ -223,7 +223,9 @@ function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
 	// Startup-recorded selector state that does not survive as user intent
 	// once the draft is cleared. `mode_change` covers the `plan.defaultOnStartup`
 	// path (interactive-mode.ts enters plan mode before draft restoration) and
-	// `/plan` toggles that leave the session otherwise empty; entries carrying
+	// `/plan` toggles that leave the session otherwise empty; `primary_agent_change`
+	// covers the Shift+F2 profile cycle and the profile carried into a new session
+	// (agent-session.ts records it before the first user turn); entries carrying
 	// real conversation state — messages, compactions, branch summaries,
 	// custom/custom_message, session_init, labels, title/tool selection — never
 	// reach this branch and always keep the file resumable.
@@ -232,6 +234,7 @@ function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
 		case "thinking_level_change":
 		case "service_tier_change":
 		case "mode_change":
+		case "primary_agent_change":
 		case "credential_pin":
 			return true;
 		default:
