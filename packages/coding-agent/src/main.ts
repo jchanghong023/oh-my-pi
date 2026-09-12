@@ -113,7 +113,7 @@ import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChange
 import { EventBus } from "./utils/event-bus";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
-type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
+type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<number>;
 type RunRpcMode = (
 	session: AgentSession,
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
@@ -2172,7 +2172,7 @@ export async function runRootCommand(
 				// Branch-only single-shot runner: keep print-mode code out of normal interactive startup.
 				stopStartupWatchdog();
 				const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
-				await runPrintMode(session, {
+				const exitCode = await runPrintMode(session, {
 					mode,
 					messages: initialArgs.messages,
 					initialMessage,
@@ -2185,7 +2185,7 @@ export async function runRootCommand(
 				}
 				await session.dispose();
 				stopThemeWatcher();
-				await postmortem.quit(0);
+				await postmortem.quit(exitCode);
 			}
 		}
 	} catch (error) {
