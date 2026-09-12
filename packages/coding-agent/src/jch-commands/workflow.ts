@@ -109,7 +109,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		async handle(command, runtime) {
 			const scope = resolveJchScope(command.args, "read-only");
 			if (!scope) return usage(JCH_FUNCTIONAL_REVIEW_USAGE, runtime);
-			return { prompt: JCH_FUNCTIONAL_REVIEW_PROMPT.replace("{{REVIEW_SCOPE}}", scope).trim() };
+			return { prompt: JCH_FUNCTIONAL_REVIEW_PROMPT.replace("{{REVIEW_SCOPE}}", () => scope).trim() };
 		},
 	},
 	{
@@ -125,7 +125,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		async handle(command, runtime) {
 			const scope = resolveJchScope(command.args, "review-fix");
 			if (!scope) return usage(JCH_FUNCTIONAL_REVIEW_FIX_USAGE, runtime);
-			return { prompt: JCH_FUNCTIONAL_REVIEW_FIX_PROMPT.replace("{{REVIEW_SCOPE}}", scope).trim() };
+			return { prompt: JCH_FUNCTIONAL_REVIEW_FIX_PROMPT.replace("{{REVIEW_SCOPE}}", () => scope).trim() };
 		},
 	},
 	{
@@ -141,7 +141,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		async handle(command, runtime) {
 			const scope = resolveJchScope(command.args, "read-only");
 			if (!scope) return usage(JCH_VERIFY_USAGE, runtime);
-			return { prompt: JCH_VERIFY_PROMPT.replace("{{VERIFY_SCOPE}}", scope).trim() };
+			return { prompt: JCH_VERIFY_PROMPT.replace("{{VERIFY_SCOPE}}", () => scope).trim() };
 		},
 	},
 	defineJchPromptCommand({
