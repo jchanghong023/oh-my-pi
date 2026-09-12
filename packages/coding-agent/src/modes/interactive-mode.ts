@@ -2493,7 +2493,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#persistComposerStatus(): void {
 		if (!this.sessionManager.getSessionFile()) return;
-		const shape = settings.get("composer.shape") ?? "band";
+		const shape = settings.get("composer.shape") ?? "pi";
 		const style = getComposerStyle(shape);
 		const terminalWidth = this.ui.terminal.columns;
 		const availableWidth = this.editor.getTopBorderAvailableWidth(terminalWidth);
@@ -3792,7 +3792,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
 			return;
 		}
 		if (this.planModeEnabled || this.planModePaused) {
@@ -4622,7 +4622,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
 			return;
 		}
 		const inFlight = this.#vibeModeEntry;
@@ -4790,7 +4790,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
 		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering the workflow.");
+			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
 			return false;
 		}
 		try {
