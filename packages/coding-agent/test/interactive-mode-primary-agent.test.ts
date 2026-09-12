@@ -5,6 +5,7 @@ import { setKittyProtocolActive } from "@oh-my-pi/pi-tui";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -133,6 +134,15 @@ describe("InteractiveMode Primary Agent Shift+F2 shortcut", () => {
 		expect(await mode.handleLoopCommand("keep going")).toBeUndefined();
 		expect(mode.loopModeEnabled).toBe(false);
 		expect(warning).toHaveBeenCalledWith("Switch back to Main with Shift+F2 before entering loop mode.");
+	});
+
+	it("refuses to dispatch /tan while Discuss is the primary agent", async () => {
+		const warning = vi.spyOn(mode, "showWarning");
+		const start = vi.spyOn(TanCommandController.prototype, "start");
+		await session.setPrimaryAgent("discuss");
+		await mode.handleTanCommand("background work");
+		expect(start).not.toHaveBeenCalled();
+		expect(warning).toHaveBeenCalledWith("Switch back to Main with Shift+F2 before dispatching /tan.");
 	});
 
 	it("refreshes the status-line primary agent after a transcript replay", async () => {

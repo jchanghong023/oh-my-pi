@@ -6434,6 +6434,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleTanCommand(work: string): Promise<void> {
+		if (this.#isDiscussPrimaryAgent()) {
+			this.showWarning("Switch back to Main with Shift+F2 before dispatching /tan.");
+			return Promise.resolve();
+		}
 		return this.#tanCommandController.start(work);
 	}
 
