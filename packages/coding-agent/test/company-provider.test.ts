@@ -23,7 +23,11 @@ function runSnapshotProbe(initial: string | undefined): Record<string, unknown> 
 			const initial = ${JSON.stringify(initial) ?? "undefined"};
 			if (initial !== undefined) writeFileSync(file, initial);
 			// Import must happen after fixture creation: this probes eager configuration capture.
-			const { getCompanyConfig, getCompanyConfigError } = await import(${JSON.stringify(modulePath)});
+			const { getCompanyConfig, getCompanyConfigError, setCompanyOfflineEnabled } = await import(${JSON.stringify(modulePath)});
+			// The lane starts gated off even when the fixture config is valid.
+			const gatedConfig = getCompanyConfig();
+			const gatedError = getCompanyConfigError();
+			setCompanyOfflineEnabled(true);
 			const before = getCompanyConfig();
 			const error = getCompanyConfigError();
 			writeFileSync(file, JSON.stringify({ env: {
@@ -43,6 +47,8 @@ function runSnapshotProbe(initial: string | undefined): Record<string, unknown> 
 				worker.once("error", reject);
 			});
 			console.log(JSON.stringify({
+				gatedConfigUndefined: gatedConfig === undefined,
+				gatedErrorUndefined: gatedError === undefined,
 				available: before !== undefined,
 				unchanged: before === afterWrite && before === getCompanyConfig() && error === getCompanyConfigError(),
 				baseUrl: before?.baseUrl,
@@ -73,6 +79,8 @@ describe("company provider startup snapshot", () => {
 				},
 			}),
 		);
+		expect(result.gatedConfigUndefined).toBe(true);
+		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.available).toBe(true);
 		expect(result.unchanged).toBe(true);
 		expect(result.workerMatches).toBe(true);
@@ -84,6 +92,8 @@ describe("company provider startup snapshot", () => {
 
 	test("does not recover a missing startup file until the next process", () => {
 		const result = runSnapshotProbe(undefined);
+		expect(result.gatedConfigUndefined).toBe(true);
+		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
 		expect(result.workerMatches).toBe(true);
@@ -92,6 +102,8 @@ describe("company provider startup snapshot", () => {
 
 	test("caches malformed JSON failure without exposing its contents", () => {
 		const result = runSnapshotProbe('{"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-secret"');
+		expect(result.gatedConfigUndefined).toBe(true);
+		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
 		expect(result.workerMatches).toBe(true);

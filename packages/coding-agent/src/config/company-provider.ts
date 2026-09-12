@@ -90,10 +90,32 @@ if (isMainThread) {
 	Object.freeze(startupSnapshot.config);
 }
 
+// The company lane only exists in --offline processes: normal startups get no
+// company provider, models, embedding fallback, or startup warnings. Workers
+// read the flag lazily; it is always set before any worker can spawn.
+const offlineKey = "omp.company-provider.offline";
+let offlineEnabled = false;
+
+function companyLaneActive(): boolean {
+	return isMainThread ? offlineEnabled : getEnvironmentData(offlineKey) === true;
+}
+
+/** Enables or disables the company lane for this process; call before any consumer reads it. */
+export function setCompanyOfflineEnabled(enabled: boolean): void {
+	if (!isMainThread) return;
+	offlineEnabled = enabled;
+	setEnvironmentData(offlineKey, enabled);
+}
+
+/** Whether the company lane is active in this process (regardless of configuration validity). */
+export function isCompanyLaneActive(): boolean {
+	return companyLaneActive();
+}
+
 export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
-	return startupSnapshot.config;
+	return companyLaneActive() ? startupSnapshot.config : undefined;
 }
 
 export function getCompanyConfigError(): string | undefined {
-	return startupSnapshot.error;
+	return companyLaneActive() ? startupSnapshot.error : undefined;
 }

@@ -49,7 +49,7 @@ import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
-import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError, isCompanyLaneActive } from "./company-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -740,15 +740,19 @@ export class ModelRegistry {
 		} = logger.time("modelRegistry:loadCustomModels", () => this.#loadCustomModels());
 		const companyError = getCompanyConfigError();
 		this.#configError = configError;
-		this.#providerDiscoveryStates.set(COMPANY_PROVIDER_ID, {
-			provider: COMPANY_PROVIDER_ID,
-			status: companyError ? "unavailable" : "ok",
-			optional: false,
-			stale: false,
-			source: "bundled",
-			models: getCompanyChatModelIds(),
-			error: companyError,
-		});
+		// The company provider only registers in --offline processes; inactive
+		// lanes leave no discovery state, so the provider is simply absent.
+		if (isCompanyLaneActive()) {
+			this.#providerDiscoveryStates.set(COMPANY_PROVIDER_ID, {
+				provider: COMPANY_PROVIDER_ID,
+				status: companyError ? "unavailable" : "ok",
+				optional: false,
+				stale: false,
+				source: "bundled",
+				models: getCompanyChatModelIds(),
+				error: companyError,
+			});
+		}
 		this.#keylessProviders = keylessProviders;
 		this.#discoverableProviders = discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
 		this.#customModelOverlays = customModels;
@@ -785,7 +789,7 @@ export class ModelRegistry {
 
 	#knownStaticProviders(): string[] {
 		const providers = new Set<string>(getBundledProviders());
-		providers.add(COMPANY_PROVIDER_ID);
+		if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);

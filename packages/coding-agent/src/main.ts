@@ -34,7 +34,12 @@ import { configureStartupLogging } from "./cli/startup-logging";
 import { compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { setCompanyChatContextWindow } from "./config/company-models";
-import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError } from "./config/company-provider";
+import {
+	COMPANY_PROVIDER_ID,
+	getCompanyConfig,
+	getCompanyConfigError,
+	setCompanyOfflineEnabled,
+} from "./config/company-provider";
 import { ModelRegistry } from "./config/model-registry";
 import {
 	DEFAULT_PREWALK_TARGET,
@@ -1522,14 +1527,23 @@ export async function runRootCommand(
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// The company lane exists only in --offline processes; flip it before any
+		// consumer (startup error check, model registry) reads company state.
+		setCompanyOfflineEnabled(parsedArgs.offline);
+		const companyExplicitlyRequested =
+			parsedArgs.provider === COMPANY_PROVIDER_ID ||
+			parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`) === true;
 		const companyProviderError = getCompanyConfigError();
 		if (companyProviderError) {
-			if (parsedArgs.provider === COMPANY_PROVIDER_ID || parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`)) {
+			if (companyExplicitlyRequested) {
 				process.stderr.write(`${companyProviderError}\n`);
 				process.exit(1);
 			}
 			if (isInteractive) notifs.push({ kind: "warn", message: companyProviderError });
 			else process.stderr.write(`${companyProviderError}\n`);
+		} else if (!parsedArgs.offline && companyExplicitlyRequested) {
+			process.stderr.write("Company provider is only available with --offline.\n");
+			process.exit(1);
 		}
 		// Only the interactive host renders a focusable Agent Hub / subagent session
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
