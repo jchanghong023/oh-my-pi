@@ -58,7 +58,7 @@ provider "opencode-go" {
 			thinking-mode "effort"
 		}
 		revision ">=3.7 <3.9" {
-			thinking-efforts "minimal" "low" "medium" "high"
+			thinking-efforts "minimal" "low" "medium" "high" 
 			thinking-mode "effort"
 		}
 	}
