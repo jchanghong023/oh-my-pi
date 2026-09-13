@@ -55,7 +55,15 @@ export class DocsHubComponent implements Component {
 			}),
 			callbacks,
 		);
-		hub.#refresh();
+		try {
+			hub.#refresh();
+		} catch (error) {
+			// Opening the database can succeed on a damaged or exclusively locked
+			// index file only to fail on the first read. `create` never returns the
+			// component then, so the caller cannot dispose it — close it here.
+			hub.service.close();
+			throw error;
+		}
 		return hub;
 	}
 

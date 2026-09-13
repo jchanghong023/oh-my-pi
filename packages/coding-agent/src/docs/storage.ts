@@ -77,10 +77,18 @@ export class DocsStorage {
 		this.path = dbPath;
 		mkdirSync(path.dirname(dbPath), { recursive: true });
 		this.db = new Database(dbPath, { create: true, strict: true });
-		chmodSync(dbPath, 0o600);
-		this.db.run("PRAGMA busy_timeout=5000");
-		const version =
-			(this.db.query("PRAGMA user_version").get() as { user_version: number } | null)?.user_version ?? 0;
+		let version: number;
+		try {
+			chmodSync(dbPath, 0o600);
+			this.db.run("PRAGMA busy_timeout=5000");
+			version = (this.db.query("PRAGMA user_version").get() as { user_version: number } | null)?.user_version ?? 0;
+		} catch (error) {
+			// A truncated, foreign, or permission-hostile `docs.db` fails on the first
+			// pragma read, before the schema guard below. The caller never receives a
+			// storage instance in that case, so nothing else can close this handle.
+			this.db.close();
+			throw error;
+		}
 		if (version > SCHEMA_VERSION) {
 			this.db.close();
 			throw new Error(

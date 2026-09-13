@@ -89,6 +89,15 @@ describe("Markdown parsing", () => {
 		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThan(20_000);
 	});
 
+	it("keeps every chunk within the cap when a blank-line split leaves a long tail", () => {
+		// A blank line near the top and a long blank-free block after it: the split keeps
+		// that block whole, so the line that triggered the split must not be appended.
+		const text = `# Doc\n\n${"| cell |\n".repeat(1_500)}${"z".repeat(5_000)}\n`;
+		const parsed = parseMarkdown(new TextEncoder().encode(text));
+		expect(parsed.sections.map(section => section.rawMarkdown).join("")).toBe(text);
+		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThanOrEqual(18_000);
+	});
+
 	it("preserves literal trailing hashes unless a spaced closing sequence is present", () => {
 		const literal = parseMarkdown(new TextEncoder().encode("# C#\nbody\n## F#\nbody\n# Topic#\nbody\n"));
 		expect(literal.title).toBe("C#");

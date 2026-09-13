@@ -167,6 +167,11 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 				flush();
 				current = remainder;
 				chars = remainder.reduce((sum, item) => sum + item.text.length, 0);
+				// The split honours the blank-line boundary, not the budget: the tail it
+				// keeps can still be one line short of the cap, and pushing the trigger
+				// line onto it would store a section past MAX_SECTION_CHARS — the cap the
+				// wiki page budget is sized against. Emit the tail on its own instead.
+				if (chars + line.text.length > MAX_SECTION_CHARS) flush();
 			} else flush();
 		}
 		current.push(line);
@@ -266,7 +271,7 @@ export async function readMarkdownDocument(rootPath: string, relativePath: strin
 	const root = path.resolve(rootPath);
 	const absolutePath = path.resolve(root, relativePath);
 	const relative = path.relative(root, absolutePath);
-	if (relative.startsWith("..") || path.isAbsolute(relative))
+	if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
 		throw new Error(`Markdown path escapes root: ${relativePath}`);
 	const handle = await open(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
 	let bytes: Uint8Array;
