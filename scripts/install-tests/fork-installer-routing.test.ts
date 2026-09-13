@@ -168,7 +168,8 @@ describe("fork installer routing", () => {
 
 	test("limits the Windows installer and release asset to x64", async () => {
 		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		expect(script).toContain('$NativeArchitecture -ne "x64"');
+		expect(script).toContain('"AMD64" { "x64" }');
+		expect(script).toContain("Unsupported Windows architecture");
 		expect(script).toContain('$BinaryName = "omp-windows-x64.exe"');
 		expect(script).not.toContain('"omp-windows-$NativeArchitecture.exe"');
 	});
