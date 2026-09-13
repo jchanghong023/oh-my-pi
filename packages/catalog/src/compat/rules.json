@@ -3949,6 +3949,28 @@
 				}
 			},
 			{
+				"source": "classes/anthropic.kdl:181",
+				"class": "anthropic",
+				"providers": [
+					"anthropic"
+				],
+				"family": "fable",
+				"revision": [
+					{
+						"op": "=",
+						"revision": "5.1.0"
+					}
+				],
+				"catalog": {
+					"costPatch": {
+						"input": 10,
+						"output": 50,
+						"cacheRead": 0.25,
+						"cacheWrite": 12.5
+					}
+				}
+			},
+			{
 				"source": "classes/anthropic.kdl:165",
 				"class": "anthropic",
 				"providers": [
@@ -3969,7 +3991,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:177",
+				"source": "classes/anthropic.kdl:194",
 				"class": "anthropic",
 				"providers": [
 					"anthropic"
@@ -3989,7 +4011,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:195",
+				"source": "classes/anthropic.kdl:212",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4012,7 +4034,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:200",
+				"source": "classes/anthropic.kdl:217",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4032,7 +4054,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:206",
+				"source": "classes/anthropic.kdl:223",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4061,7 +4083,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:220",
+				"source": "classes/anthropic.kdl:237",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4085,7 +4107,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:226",
+				"source": "classes/anthropic.kdl:243",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4105,7 +4127,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:235",
+				"source": "classes/anthropic.kdl:252",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4130,7 +4152,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:241",
+				"source": "classes/anthropic.kdl:258",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4149,7 +4171,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:246",
+				"source": "classes/anthropic.kdl:263",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4172,7 +4194,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:251",
+				"source": "classes/anthropic.kdl:268",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4192,7 +4214,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:257",
+				"source": "classes/anthropic.kdl:274",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4211,7 +4233,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:262",
+				"source": "classes/anthropic.kdl:279",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4231,7 +4253,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:270",
+				"source": "classes/anthropic.kdl:287",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4250,7 +4272,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:275",
+				"source": "classes/anthropic.kdl:292",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4270,7 +4292,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:283",
+				"source": "classes/anthropic.kdl:300",
 				"class": "anthropic",
 				"providers": [
 					"amazon-bedrock"
@@ -4290,7 +4312,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:293",
+				"source": "classes/anthropic.kdl:310",
 				"class": "anthropic",
 				"family": "haiku",
 				"revision": [
@@ -4304,7 +4326,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:299",
+				"source": "classes/anthropic.kdl:316",
 				"class": "anthropic",
 				"providers": [
 					"google-antigravity",
@@ -4316,7 +4338,7 @@
 				}
 			},
 			{
-				"source": "classes/anthropic.kdl:303",
+				"source": "classes/anthropic.kdl:320",
 				"class": "anthropic",
 				"providers": [
 					"google-antigravity"
