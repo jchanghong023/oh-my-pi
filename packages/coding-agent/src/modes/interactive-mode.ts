@@ -3164,6 +3164,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (
 			this.session.isStreaming ||
 			this.session.queuedMessageCount > 0 ||
+			this.session.isCompacting ||
+			this.compactionQueuedMessages.length > 0 ||
 			this.planModeEnabled ||
 			this.planModePaused ||
 			this.goalModeEnabled ||
@@ -3505,6 +3507,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// vibe must restore.
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
 		await this.#clearTransientModeState({ preserveVibe, vibeScopeAlreadySuspended });
+		if ((this.loopModeEnabled || this.loopModePaused) && this.#isDiscussPrimaryAgent()) {
+			// Loop mode and the read-only Discuss profile are mutually exclusive; a switch
+			// into a Discuss session would otherwise leave both active with no way back —
+			// the shortcut and `/loop` both refuse while loop mode is on.
+			this.disableLoopMode("Loop mode disabled: Discuss is active.");
+		}
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {

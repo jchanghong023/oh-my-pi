@@ -5624,6 +5624,7 @@ export class AgentSession {
 		if (id === this.#activePrimaryAgentId) return;
 		if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
 		if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
+		if (this.isCompacting) throw new Error("Primary Agent cannot change while the session is compacting.");
 		let workflowPersisted = false;
 		if (id === "discuss" && !this.#planModeState && !this.#goalModeState && !this.#vibeModeState) {
 			const workflowMode = this.sessionManager.buildSessionContext().mode;
@@ -10043,6 +10044,15 @@ export class AgentSession {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		this.#branchSummaryAbortController = undefined;
+
+		// A leaf move can restore the read-only Discuss profile (a
+		// `primary_agent_change` entry inside the branch it lands on). Loop mode cannot
+		// coexist with Discuss and the switch shortcut refuses while loop mode is on, so
+		// run the interactive reconciler exactly then — the same step `branch()` and
+		// `branchFromBtw()` always run. Other profiles keep the previous behavior.
+		if (this.#activePrimaryAgentId === "discuss") {
+			await this.#reconcileModeAfterBranch();
+		}
 
 		// Report a committed `ask` re-answer so the interactive caller can resume
 		// the agent via `resumeAfterAskReanswer()` *after* rebuilding its

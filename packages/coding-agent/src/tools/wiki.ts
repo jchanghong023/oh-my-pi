@@ -1,8 +1,9 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { sectionShape } from "../docs/markdown";
+import { sectionShape, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
+import type { DocsSectionHit } from "../docs/types";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { ToolError } from "./tool-errors";
@@ -28,6 +29,16 @@ const PAGE_SECTIONS = 200;
 
 function lineRange(path: string, start: number, end: number): string {
 	return `${path}:${start}-${end}`;
+}
+
+/**
+ * Header line for one hit. The heading is bounded because an index built before
+ * headings were capped can still carry a whole document as its heading, and the
+ * header must not spend the page budget it exists to describe.
+ */
+function sectionHeader(index: number, section: DocsSectionHit): string {
+	const heading = truncateHeading(section.headingPath);
+	return `[${index}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${heading} · sectionId=${section.sectionId}`;
 }
 
 export class WikiTool implements AgentTool<typeof wikiSchema> {
@@ -80,7 +91,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				// a heading that reads as a real phrase is content and stays.
 				const shape = sectionShape(section.text);
 				if (shape === "stub") continue;
-				const header = `[${bodies.length + 1}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${section.headingPath} · sectionId=${section.sectionId}`;
+				const header = sectionHeader(bodies.length + 1, section);
 				// The same text often ships in several documents (attachment copies,
 				// re-exports). Repeating it spends the page on nothing new, so a later
 				// copy is reduced to a pointer at the first one.
@@ -104,9 +115,10 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				bodies.push(`${header}\n${body}`);
 				used += cost;
 				// Only text this page actually carries counts as shown: a section dropped
-				// for size was never delivered, and a pointer to it would be a lie.
+				// for size was never delivered, and a pointer to it would be a lie. The
+				// heading-only body never renders the pointer, so it is not a collapse.
 				seen.add(section.text);
-				duplicates += alreadyShown ? 1 : 0;
+				duplicates += alreadyShown && shape !== "heading-only" ? 1 : 0;
 			}
 			// Every match is a stub: the document's first section is indexed on purpose
 			// (its row is the only one carrying the relative path), and a name search
@@ -114,7 +126,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			// have carried says no more — so the call answers instead of failing.
 			if (bodies.length === 0) {
 				for (const section of result.sections) {
-					const header = `[${bodies.length + 1}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${section.headingPath} · sectionId=${section.sectionId}`;
+					const header = sectionHeader(bodies.length + 1, section);
 					if (used + header.length > TEXT_BUDGET_CHARS) break;
 					bodies.push(header);
 					used += header.length + 2;

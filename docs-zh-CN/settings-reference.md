@@ -853,7 +853,7 @@
 
 - **作用**：是否扫描用户级 Claude 技能源（`~/.claude/skills`）。
 - **类型**：`boolean`
-- **默认值**：`true`
+- **默认值**：`false`
 - **功能**：无说明
 
 - **可选值**：
@@ -1300,15 +1300,15 @@
 
 ### `doubleEscapeAction` — Double-Escape Action
 
-- **作用**：编辑器为空时双击 Escape 触发的动作（树/分支/无）
+- **作用**：编辑器为空时双击 Escape 触发的动作（回溯选择器/会话树/无）
 - **类型**：`enum`
-- **默认值**：`"tree"`
+- **默认值**：`"rewind"`
 - **功能**：在编辑器为空时连按两次 Escape 触发的动作。
 
 - **可选值**：
-  - `branch`
-  - `tree`
-  - `none`
+  - `rewind` — 打开 transcript 回溯选择器（默认；旧值 `branch` 由 `config/settings.ts` 迁移为此值）
+  - `tree` — 打开会话树
+  - `none` — 不触发任何动作
 
 ### `treeFilterMode` — Session Tree Filter
 
@@ -2742,22 +2742,21 @@
 - **功能**：会话标题模型：默认 `online`（来自 `/models` 的 TINY 角色，否则 `@smol`），或本地端侧模型。
 - **可选值**：
   - `online` — 在线标题生成：TINY 模型角色（在 `/models` 中设置）若已分配则使用它，否则使用在线回退（commit 角色，然后 `@smol`）。不下载本地模型、不做端侧推理
-  - `lfm2-350m` — 推荐的本地模型；速度/质量平衡最佳，缓存约 212 MB
-  - `qwen3-0.6b` — 最稳健的本地选项；首次加载较慢，缓存约 500 MB
-  - `gemma-270m` — 最小可用的本地选项；质量较低、缓存占用最小
-  - `qwen2.5-0.5b` — 平衡的本地回退；质量与缓存占用适中
-  - `lfm2-700m` — 质量最高的本地选项；比 LFM2 350M 更大且更慢
+  - `lfm2.5-230m` — 推荐的本地模型；最快的 LFM2.5 选项，缓存约 214 MB
+  - `lfm2.5-350m` — 更大的 LFM2.5 选项，缓存约 292 MB；倾向于简洁标题
+  - `falcon-h1-90m` — 最小选项，缓存约 147 MB；复杂提示下保真度较低
 
 ### `providers.tinyModelDevice` — Tiny Model Device
 
-- **作用**：本地 tiny 模型推理的 ONNX 执行后端（CPU/GPU/Metal/CUDA 等）
+- **作用**：本地 tiny 模型推理的后端（ONNX 执行提供者 / MLX）
 - **类型**：`enum`
 - **默认值**：`"default"`
-- **功能**：本地 tiny 模型（标题 + 内存）的 ONNX 执行提供者。Default 仅使用 CPU 推理。环境变量 `PI_TINY_DEVICE` 覆盖此设置。
+- **功能**：本地 tiny 模型（标题 + 内存）的推理后端：ONNX 执行提供者，或 `mlx` 以下载 MLX 权重并通过 mlx-lm 在 Apple 芯片上运行。Default 仅使用 CPU 推理。环境变量 `PI_TINY_DEVICE` 覆盖此设置。
 - **可选值**：
   - `default` — default
   - `gpu` — gpu
   - `cpu` — cpu
+  - `mlx` — Apple 芯片 GPU，通过 mlx-lm（Python 子进程；macOS arm64）
   - `metal` — metal
   - `webgpu` — webgpu
   - `cuda` — cuda
@@ -2882,16 +2881,17 @@
 
 ### `providers.fetch` — Fetch Provider
 
-- **作用**：fetch/read URL 工具的 reader 后端优先级（native / trafilatura / lynx / parallel / jina）
+- **作用**：fetch/read URL 工具的 reader 后端优先级（native / trafilatura / lynx / parallel / firecrawl / jina）
 - **类型**：`enum`
 - **默认值**：`"auto"`
 - **功能**：`fetch`/read URL 工具的 reader 后端优先级。
 - **可选值**：
-  - `auto` — Auto：优先级 native > trafilatura > lynx > parallel > jina
+  - `auto` — Auto：优先级 native > trafilatura > lynx > parallel > firecrawl > jina
   - `native` — Native：进程内 HTML→Markdown 转换器（始终可用）
   - `trafilatura` — Trafilatura：通过 uv/pip 自动安装
   - `lynx` — Lynx：需要系统安装 lynx 包
   - `parallel` — Parallel：需要 `PARALLEL_API_KEY`
+  - `firecrawl` — Firecrawl：需要 `FIRECRAWL_API_KEY`
   - `jina` — Jina：使用 `r.jina.ai` reader（`JINA_API_KEY` 可选）
 
 ### `codexResets.autoRedeem` — Codex Auto-Redeem Saved Resets
@@ -3047,7 +3047,7 @@
 
 - **作用**：状态栏各分段之间的分隔符样式（powerline / 斜杠 / 竖线等）。
 - **类型**：`enum`
-- **默认值**：`"slash"`
+- **默认值**：`"powerline-thin"`
 - **功能**：段与段之间分隔符的样式
 - **可选值**：
   - `powerline` — 实心箭头（Nerd Font）
@@ -4385,9 +4385,6 @@
   - `doc-8on16-bw` — 两栏报纸式排版，8x13 字形位于 16px 行距上，黑色墨水
   - `doc-8on16-sent` — 两栏文档排版配句调墨水
   - `doc-8on16-sent-dim` — 两栏文档排版，句调墨水，功能词以灰色淡化
-  - `dotmatrix` — 
-  - `6x12-bw`
-  - `6x12-bright`
 
 ### `branchSummary.enabled` — Branch Summaries
 
@@ -4485,15 +4482,16 @@
 
 ### `memory.backend` — Memory Backend
 
-- **作用**：记忆子系统后端选择（关闭 / 本地总结 / Mnemopi SQLite / Hindsight 远程）
+- **作用**：记忆子系统后端选择（关闭 / 本地总结 / Mnemopi SQLite / Hindsight 远程 / Sharpshooter 项目决策）
 - **类型**：`enum`
 - **默认值**：`"off"`
-- **功能**：在 off、本地摘要流水线、Mnemopi SQLite、Hindsight 远程记忆服务之间选择。（源码注释：选择本地 memories 流水线、Mnemopi 本地 SQLite、Hindsight 远程记忆或 off 的后端选择器；旧版 `memories.enabled` 标志仅作为迁移输入，参见 config/settings.ts。）
+- **功能**：在 off、本地摘要流水线、Mnemopi SQLite、Hindsight 远程记忆服务、Sharpshooter 项目决策之间选择。（源码注释：在本地 memories 流水线、Mnemopi 本地 SQLite、Hindsight 远程记忆、Sharpshooter 项目决策或 off 之间选择的后端选择器；旧版 `memories.enabled` 标志仅作为迁移输入，参见 config/settings.ts。）
 - **可选值**：
   - `off` — 不运行任何记忆子系统
   - `local` — 本地会话摘要流水线（memory_summary.md）
   - `hindsight` — Vectorize Hindsight 远程记忆服务
   - `mnemopi` — 本地 SQLite recall/retain 后端，可选启用 embeddings
+  - `sharpshooter` — 摩擦门控的项目决策文件（架构/产品/风格），在后台整合
 
 ### `autolearn.enabled` — Auto-Learn (experimental)
 
@@ -5650,7 +5648,7 @@
 
 - **作用**：是否从 ~/.claude/commands/ 加载用户级 Claude 斜杠命令
 - **类型**：`boolean`
-- **默认值**：`true`
+- **默认值**：`false`
 - **功能**：从 `~/.claude/commands/` 加载命令。（源码注释：Commands）
 
 - **可选值**：
@@ -5672,7 +5670,7 @@
 
 - **作用**：是否从 ~/.config/opencode/commands/ 加载用户级 OpenCode 斜杠命令
 - **类型**：`boolean`
-- **默认值**：`true`
+- **默认值**：`false`
 - **功能**：从 `~/.config/opencode/commands/` 加载命令
 
 - **可选值**：

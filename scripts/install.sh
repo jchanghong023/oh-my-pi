@@ -128,6 +128,11 @@ warn_running_omp() {
         for EXE in /proc/[0-9]*/exe; do
             [ -r "$EXE" ] || continue
             EXE_PATH="$(readlink -f "$EXE" 2>/dev/null)" || EXE_PATH="$(readlink "$EXE" 2>/dev/null)" || continue
+            # A binary replaced by a previous install resolves to
+            # "/path/omp (deleted)" for the process still holding the old inode.
+            case "$EXE_PATH" in
+                *" (deleted)") EXE_PATH="${EXE_PATH% (deleted)}" ;;
+            esac
             [ "$EXE_PATH" = "$INSTALL_OMP" ] || continue
             PID="${EXE#/proc/}"
             PIDS="$PIDS ${PID%/exe}"
@@ -147,6 +152,14 @@ host_arch() {
         x86_64|amd64)  echo "x64" ;;
         arm64|aarch64) echo "arm64" ;;
         *)             uname -m ;;
+    esac
+}
+
+# Report how to make the installed binary reachable.
+report_path_hint() {
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) echo "Run 'omp' to get started!" ;;
+        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'omp'" ;;
     esac
 }
 
@@ -197,6 +210,7 @@ install_binary() {
 
     if installed_binary_matches "$LATEST"; then
         echo "omp $LATEST is already installed at ${INSTALL_DIR}/omp"
+        report_path_hint
         return
     fi
 
@@ -265,10 +279,7 @@ install_binary() {
     fi
 
     # Check if in PATH
-    case ":$PATH:" in
-        *":$INSTALL_DIR:"*) echo "Run 'omp' to get started!" ;;
-        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'omp'" ;;
-    esac
+    report_path_hint
 }
 
 # This installer only downloads published release binaries.

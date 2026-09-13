@@ -129,6 +129,9 @@ export function resolveZcodeApiBaseUrl(): string {
 	// to the public API; keep the loopback default instead.
 	const override = Bun.env.ZCODE_API_BASE_URL?.trim().replace(/\/+$/, "");
 	if (!override) return ZCODE_API_DEFAULT_BASE_URL;
+	// No `/v1` handling here: `normalizeAnthropicBaseUrl` (packages/ai/src/providers/
+	// anthropic.ts) already trims, drops trailing slashes and strips a trailing `/v1`
+	// for every anthropic-messages row before the route is appended.
 	return override;
 }
 

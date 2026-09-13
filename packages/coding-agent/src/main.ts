@@ -248,6 +248,8 @@ const STARTUP_WATCHDOG_INTERVAL_MS = 10_000;
 let startupWatchdogTimer: NodeJS.Timeout | undefined;
 let startupWatchdogActive = false;
 let startupWatchdogStartedAt = 0;
+/** Whether this process writes a rotating log file (`--log-file`). */
+let startupWatchdogFileLogEnabled = false;
 
 function armStartupWatchdog(): void {
 	if (isBunTestRuntime()) return;
@@ -255,9 +257,14 @@ function armStartupWatchdog(): void {
 	startupWatchdogTimer = setInterval(() => {
 		const elapsed = Math.round((Date.now() - startupWatchdogStartedAt) / 1000);
 		const phase = logger.openSpanPath().join(" > ") || "module load / pre-phase work";
+		// File logging is off by default, so naming a log path would point at a file
+		// this process never writes; the marker hint stays useful either way.
+		const logHint = startupWatchdogFileLogEnabled
+			? `  logs: ${getLogPath()} · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers`
+			: "  re-run with PI_DEBUG_STARTUP=1 for streaming phase markers";
 		process.stderr.write(
 			`${chalk.yellow(`Still starting after ${elapsed}s`)}${chalk.dim(` — phase: ${phase}`)}\n` +
-				`${chalk.dim(`  logs: ${getLogPath()} · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers`)}\n`,
+				`${chalk.dim(logHint)}\n`,
 		);
 	}, STARTUP_WATCHDOG_INTERVAL_MS);
 	startupWatchdogTimer.unref?.();
@@ -270,8 +277,9 @@ function disarmStartupWatchdog(): void {
 }
 
 /** Begin watching startup (idempotent). */
-function startStartupWatchdog(): void {
+function startStartupWatchdog(fileLogEnabled: boolean): void {
 	if (isBunTestRuntime()) return;
+	startupWatchdogFileLogEnabled = fileLogEnabled;
 	startupWatchdogActive = true;
 	startupWatchdogStartedAt = Date.now();
 	armStartupWatchdog();
@@ -1447,7 +1455,7 @@ export async function runRootCommand(
 ): Promise<void> {
 	configureStartupLogging(parsed);
 	logger.startTiming();
-	startStartupWatchdog();
+	startStartupWatchdog(parsed.logFile === true);
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
 		// already initialized its cached theme synchronously for the first frame.

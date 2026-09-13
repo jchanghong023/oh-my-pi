@@ -143,6 +143,22 @@ function Configure-BashShell {
     }
 }
 
+# PATH and shell configuration shared by the install and repair paths.
+function Set-InstallEnvironment {
+    # Add to PATH if not already there
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    # Literal membership, not a wildcard match: an install dir containing `[`, `]`,
+    # `*` or `?` would otherwise match a different PATH entry (or never match),
+    # so the entry would be added on every run — or never added at all.
+    $needsRestart = -not (($UserPath -split ";") -contains $InstallDir)
+    if ($needsRestart) {
+        Write-Host "Adding $InstallDir to PATH..."
+        [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+    }
+
+    Configure-BashShell
+    return $needsRestart
+}
 
 # Windows locks a running executable. Stop only processes whose executable path
 # matches the install target; unrelated omp.exe processes must remain untouched.
@@ -205,7 +221,7 @@ function Test-InstalledBinaryVersion {
         [string]$ReleaseTag
     )
 
-    if (-not (Test-Path -PathType Leaf $TargetPath)) {
+    if (-not (Test-Path -LiteralPath $TargetPath -PathType Leaf)) {
         return $false
     }
 
@@ -244,6 +260,9 @@ function Install-Binary {
     $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-InstalledBinaryVersion -TargetPath $OutPath -ReleaseTag $Latest) {
         Write-Host "omp $Latest is already installed at $OutPath"
+        if (Set-InstallEnvironment) {
+            Write-Host "Restart your terminal, then run 'omp' to get started!"
+        }
         return
     }
 
@@ -265,7 +284,7 @@ function Install-Binary {
             Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath }
             $curlExit = $LASTEXITCODE
             if ($curlExit -ne 0) {
-                Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
                 Write-Host "[WARN] curl download failed (exit $curlExit); retrying with Invoke-WebRequest..." -ForegroundColor Yellow
             }
         }
@@ -274,7 +293,7 @@ function Install-Binary {
             try {
                 Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpPath -TimeoutSec 900 -UseBasicParsing
             } catch {
-                Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
                 $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
                 throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
@@ -283,25 +302,15 @@ function Install-Binary {
         if (Test-Path -LiteralPath $OutPath) {
             Remove-Item -LiteralPath $OutPath -Force
         }
-        Move-Item -Path $TmpPath -Destination $OutPath
+        Move-Item -LiteralPath $TmpPath -Destination $OutPath
     } finally {
-        Remove-Item -Force $TmpPath -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host ""
     Write-Host "[OK] Installed omp to $OutPath" -ForegroundColor Green
 
-    # Add to PATH if not already there
-    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $needsRestart = $UserPath -notlike "*$InstallDir*"
-    if ($needsRestart) {
-        Write-Host "Adding $InstallDir to PATH..."
-        [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
-    }
-
-    Configure-BashShell
-
-    if ($needsRestart) {
+    if (Set-InstallEnvironment) {
         Write-Host "Restart your terminal, then run 'omp' to get started!"
     } else {
         Write-Host "Run 'omp' to get started!"

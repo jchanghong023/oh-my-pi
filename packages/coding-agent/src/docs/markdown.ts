@@ -10,6 +10,30 @@ import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./ty
  * beyond the page and leave no way to read it.
  */
 const MAX_SECTION_CHARS = 18_000;
+
+/**
+ * Longest heading segment kept in `headingPath`. A heading line can be as long as
+ * the whole document (a one-line file starting with `#`), and the path is stored —
+ * and repeated — for every chunk of a split section, so only a readable prefix is
+ * kept. The section text still carries the full line; the `wiki` page header is
+ * bounded by the same limit so an index built before this rule cannot overshoot
+ * the page budget either.
+ */
+export const HEADING_LABEL_MAX_CHARS = 300;
+
+/**
+ * Bounds a heading label. `truncate` cuts by UTF-16 unit, so an astral character
+ * straddling the cut would leave a lone high surrogate that SQLite recombines with
+ * the next character on encode (and that the page header would render). Back off one
+ * unit instead, the same way `chunkDraft` refuses to split a pair.
+ */
+export function truncateHeading(text: string, maxChars = HEADING_LABEL_MAX_CHARS): string {
+	if (text.length <= maxChars) return text;
+	let end = Math.max(0, maxChars - 1);
+	const last = text.charCodeAt(end - 1);
+	if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+	return `${text.slice(0, end)}…`;
+}
 const SOURCE_KINDS: Record<string, true> = {
 	doc: true,
 	docx: true,
@@ -136,7 +160,13 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 			let consumedChars = 0;
 			let consumedBytes = 0;
 			while (consumedChars < line.text.length) {
-				const text = line.text.slice(consumedChars, consumedChars + MAX_SECTION_CHARS);
+				let text = line.text.slice(consumedChars, consumedChars + MAX_SECTION_CHARS);
+				// Never cut between the halves of a surrogate pair: the lone half would be
+				// stored as U+FFFD and shift every later byte offset.
+				const lastChar = text.charCodeAt(text.length - 1);
+				if (lastChar >= 0xd800 && lastChar <= 0xdbff && consumedChars + text.length < line.text.length) {
+					text = text.slice(0, -1);
+				}
 				const length = Buffer.byteLength(text);
 				chunks.push({
 					...draft,
@@ -202,7 +232,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 		if (heading) {
 			finish();
 			headingPath = headingPath.slice(0, heading.level - 1);
-			headingPath[heading.level - 1] = heading.text;
+			headingPath[heading.level - 1] = truncateHeading(heading.text);
 			title ??= heading.text;
 			// `headingPath` is indexed by heading level, so a skipped level (# A then
 			// #### B) or a document that opens below `#` leaves holes. They exist only

@@ -213,7 +213,7 @@ describe("fork installer routing", () => {
 
 		const stopIndex = script.indexOf("        Stop-RunningOmp -TargetPath $OutPath");
 		const removeIndex = script.indexOf("            Remove-Item -LiteralPath $OutPath -Force", stopIndex);
-		const moveIndex = script.indexOf("        Move-Item -Path $TmpPath -Destination $OutPath", removeIndex);
+		const moveIndex = script.indexOf("        Move-Item -LiteralPath $TmpPath -Destination $OutPath", removeIndex);
 		expect(stopIndex).toBeGreaterThan(-1);
 		expect(removeIndex).toBeGreaterThan(stopIndex);
 		expect(moveIndex).toBeGreaterThan(removeIndex);

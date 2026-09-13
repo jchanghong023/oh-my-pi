@@ -2021,7 +2021,10 @@ export async function updateViaShimTakeover(
 	const binaryName = options.binaryName ?? getBinaryName();
 	const launcherDir = path.dirname(shimPath);
 	const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
-	warnOnPathConflict(exePath, resolveOmpPath());
+	// No PATH-conflict warning here: the comparison would always differ (the PATH
+	// entry is this launcher script, the target is its sibling `omp.exe`), while
+	// the takeover is exactly what keeps that PATH entry launching the new binary.
+	// `updateViaBinaryAt` keeps the check, where the target is a resolved install.
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${exePath}.${attempt}.new`;
 	const asset = await getReleaseBinaryAsset(

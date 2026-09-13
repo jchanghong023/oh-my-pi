@@ -48,7 +48,7 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * 将基线和功能差异更新纳入同一集成提交；目标已在 `main` 历史中时，只提交必要的文档修正。
 * MUST 通过 `git diff --cached --check`，检查冲突标记、四个 fork 文档和变更范围；不得遗留 unmerged、unstaged、意外 untracked 文件或无关生成物，只修正本次涉及的空白错误。
 * 无冲突：仅 staged Git 检查；TS 或工具链变化确有必要时运行一次 `bun run fastcheck`。
-* 有冲突：按影响选择首轮最多一次 `fastcheck`、一次安全且相关的 `check:types`、最多 3 个精确测试，顺序执行。先确认脚本不会触发下列禁用工作；依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
+* 有冲突：只做源码语义审查，不运行编译、类型检查或测试（含 `check:types` 与精确测试）；确有必要时最多一次 `bun run fastcheck`。依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
 * 同步期间 NEVER 运行全 workspace 检查、根级 `bun run check`、完整测试、UI/browser/heavy、Docker、benchmark、`jch-localci`、打包、发布，或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。
 * 首次检查失败后可修复本次相关问题，仅允许对首轮失败项额外复验一轮，不重跑已通过项、不追加检查范围；复验仍失败或无法在此范围内确认修复时立即中止，不提交、不更新镜像。未提交的 merge 用 `git merge --abort`；其他中止路径仅撤销本次操作，恢复原分支和工作区，不清理用户原有状态。
 * 验证通过后提交 `sync(upstream): merge main@<目标前12位>`，禁 hooks/签名以避免隐式重型任务。若创建 merge commit，确认第一父为原 `main`、第二父为目标；补记文档提交不要求双亲。

@@ -1904,7 +1904,11 @@ let deepseekV4FlashReference: ModelSpec<"openai-completions"> | undefined;
 /** Display name when `id` is a V4.1 Flash spelling, else undefined. */
 export function deepseekV41FlashName(id: string): string | undefined {
 	const slash = id.lastIndexOf("/");
-	return DEEPSEEK_V41_FLASH_IDS[slash === -1 ? id : id.slice(slash + 1)];
+	const bare = slash === -1 ? id : id.slice(slash + 1);
+	// Own-key lookup only: the table inherits `Object.prototype`, so a prototype-named
+	// id (`constructor`, `toString`, …) would otherwise resolve to a function and be
+	// handed to the record's typed consumers as a model name.
+	return Object.hasOwn(DEEPSEEK_V41_FLASH_IDS, bare) ? DEEPSEEK_V41_FLASH_IDS[bare] : undefined;
 }
 
 /**

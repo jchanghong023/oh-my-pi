@@ -3161,12 +3161,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// custom/extension tool that merely shares the name, and reflects the
 			// session-start build — so a subagent that filtered them out, a mid-session
 			// enable that never built them, or a same-named custom tool while auto-learn
-			// is off all get no guidance.
+			// is off all get no guidance. The applied slate is what the model can really
+			// call, so a restricted profile that drops the tools (Discuss) gets none.
 			const autoLearnInstructions = restrictToolNames
 				? undefined
 				: buildAutoLearnInstructions({
-						manageSkill: builtInToolNames.includes("manage_skill"),
-						learn: builtInToolNames.includes("learn"),
+						manageSkill: builtInToolNames.includes("manage_skill") && toolNames.includes("manage_skill"),
+						learn: builtInToolNames.includes("learn") && toolNames.includes("learn"),
 					});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
