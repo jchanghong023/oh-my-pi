@@ -13272,7 +13272,19 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:49",
+				"source": "providers/opencode-go.kdl:55",
+				"class": "meta",
+				"providers": [
+					"opencode-go"
+				],
+				"family": "muse-spark",
+				"wire": {
+					"includeEncryptedReasoning": false,
+					"filterReasoningHistory": true
+				}
+			},
+			{
+				"source": "providers/opencode-go.kdl:61",
 				"class": "mimo",
 				"providers": [
 					"opencode-go"
@@ -13283,7 +13295,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:48",
+				"source": "providers/opencode-go.kdl:60",
 				"class": "mimo",
 				"providers": [
 					"opencode-go"
@@ -13293,7 +13305,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:56",
+				"source": "providers/opencode-go.kdl:68",
 				"class": "qwen",
 				"providers": [
 					"opencode-go"
@@ -13319,7 +13331,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:60",
+				"source": "providers/opencode-go.kdl:72",
 				"class": "qwen",
 				"providers": [
 					"opencode-go"
@@ -13345,7 +13357,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:66",
+				"source": "providers/opencode-go.kdl:78",
 				"providers": [
 					"opencode-go"
 				],
@@ -13370,7 +13382,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:71",
+				"source": "providers/opencode-go.kdl:83",
 				"providers": [
 					"opencode-go"
 				],
@@ -13390,7 +13402,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:76",
+				"source": "providers/opencode-go.kdl:88",
 				"providers": [
 					"opencode-go"
 				],
@@ -13412,7 +13424,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:81",
+				"source": "providers/opencode-go.kdl:93",
 				"providers": [
 					"opencode-go"
 				],
@@ -13433,7 +13445,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:85",
+				"source": "providers/opencode-go.kdl:97",
 				"providers": [
 					"opencode-go"
 				],
@@ -13460,7 +13472,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:89",
+				"source": "providers/opencode-go.kdl:101",
 				"providers": [
 					"opencode-go"
 				],
@@ -13482,7 +13494,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:94",
+				"source": "providers/opencode-go.kdl:106",
 				"providers": [
 					"opencode-go"
 				],
@@ -13497,7 +13509,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-go.kdl:98",
+				"source": "providers/opencode-go.kdl:110",
 				"providers": [
 					"opencode-go"
 				],
@@ -13589,7 +13601,19 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:30",
+				"source": "providers/opencode-zen.kdl:36",
+				"class": "meta",
+				"providers": [
+					"opencode-zen"
+				],
+				"family": "muse-spark",
+				"wire": {
+					"includeEncryptedReasoning": false,
+					"filterReasoningHistory": true
+				}
+			},
+			{
+				"source": "providers/opencode-zen.kdl:42",
 				"class": "mimo",
 				"providers": [
 					"opencode-zen"
@@ -13600,7 +13624,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:35",
+				"source": "providers/opencode-zen.kdl:47",
 				"class": "minimax",
 				"providers": [
 					"opencode-zen"
@@ -13611,7 +13635,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:40",
+				"source": "providers/opencode-zen.kdl:52",
 				"class": "openai",
 				"providers": [
 					"opencode-zen"
@@ -13631,7 +13655,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:44",
+				"source": "providers/opencode-zen.kdl:56",
 				"class": "unknown",
 				"providers": [
 					"opencode-zen"
@@ -13641,7 +13665,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:48",
+				"source": "providers/opencode-zen.kdl:60",
 				"class": "xai",
 				"providers": [
 					"opencode-zen"
@@ -13652,7 +13676,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:53",
+				"source": "providers/opencode-zen.kdl:65",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13674,7 +13698,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:58",
+				"source": "providers/opencode-zen.kdl:70",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13692,7 +13716,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:62",
+				"source": "providers/opencode-zen.kdl:74",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13749,7 +13773,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:67",
+				"source": "providers/opencode-zen.kdl:79",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13770,7 +13794,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:71",
+				"source": "providers/opencode-zen.kdl:83",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13794,7 +13818,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:75",
+				"source": "providers/opencode-zen.kdl:87",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13812,7 +13836,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:79",
+				"source": "providers/opencode-zen.kdl:91",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13835,7 +13859,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:84",
+				"source": "providers/opencode-zen.kdl:96",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13859,7 +13883,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:89",
+				"source": "providers/opencode-zen.kdl:101",
 				"providers": [
 					"opencode-zen"
 				],
@@ -13879,7 +13903,7 @@
 				}
 			},
 			{
-				"source": "providers/opencode-zen.kdl:99",
+				"source": "providers/opencode-zen.kdl:111",
 				"providers": [
 					"opencode-zen"
 				],
