@@ -114,6 +114,7 @@ import {
 	STARTUP_MODEL_CACHE_PROVIDER_IDS,
 	withModelDiscoveryTimeout,
 } from "./model-provider-discovery";
+import { getZcodeApiModels, ZCODE_API_PROVIDER_ID } from "./zcode-api-models";
 
 export { mergeDiscoveredModel } from "./model-patch";
 export {
@@ -790,6 +791,7 @@ export class ModelRegistry {
 	#knownStaticProviders(): string[] {
 		const providers = new Set<string>(getBundledProviders());
 		if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
+		providers.add(ZCODE_API_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);
@@ -891,9 +893,10 @@ export class ModelRegistry {
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
 		const models = this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)).filter(
-			model => model.provider !== COMPANY_PROVIDER_ID,
+			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
 		);
 		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) models.push(...getCompanyChatModels());
+		if (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID)) models.push(...getZcodeApiModels());
 		return models;
 	}
 
@@ -1313,6 +1316,10 @@ export class ModelRegistry {
 			});
 			this.#keylessProviders.add("lm-studio");
 		}
+		// Built-in `zcode-api` (local ZCode Proxy) is credential-free by design:
+		// request auth resolves to the no-auth sentinel and the model rows are
+		// static, so it needs neither discovery nor a stored key.
+		this.#keylessProviders.add(ZCODE_API_PROVIDER_ID);
 	}
 
 	#loadCustomModels(): CustomModelsResult {

@@ -83,6 +83,7 @@ export type AuthProviderId =
 	| "yolo-auto"
 	| "zai"
 	| "zai-coding-plan"
+	| "zcode-api"
 	| "zenmux"
 	| "zhipu-coding-plan";
 

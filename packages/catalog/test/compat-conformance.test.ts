@@ -23,6 +23,9 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// including its tariff and effort ladder, comes from the live /v1/models
 	// snapshot, so no bundled rows are frozen into models.json.
 	"charm-hyper",
+	// Built-in ZCode Proxy relay: rows are built at runtime in
+	// packages/coding-agent/src/config/zcode-api-models.ts.
+	"zcode-api",
 ]);
 
 function collectReferencedProviders(): Map<string, string> {

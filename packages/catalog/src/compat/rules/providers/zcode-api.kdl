@@ -1,0 +1,35 @@
+// fork: provider-wire compat for "zcode-api" — the local ZCode Proxy relaying
+// the domestic Zhipu coding plan over its Anthropic Messages route. Model rows
+// are built at runtime (packages/coding-agent/src/config/zcode-api-models.ts);
+// there is deliberately no models.json block (loopback endpoints are banned
+// from the bundled catalog).
+
+provider "zcode-api" {
+	// GLM coding-plan endpoints require the tool_use id mirrored onto
+	// tool_result blocks (same Z.AI workaround as provider "zai", issue #814).
+	requires-tool-result-id #true
+	// Coding-plan effort sets: pre-5.2 SKUs serve minimal..high; glm-5.2*
+	// serves high/max; glm-5.3* serves low/high/max with default max (the
+	// class `*glm-5.3*` rule). Without these rules the Anthropic-route
+	// fallback ladder would admit xhigh on the pre-5.2 SKUs, which the
+	// coding-plan lane does not serve.
+	class "glm" {
+		revision "<5.2" {
+			thinking-efforts "minimal" "low" "medium" "high"
+			thinking-mode "budget"
+		}
+		// The vision SKU's digits run into a letter (`glm-5v-turbo`), so it
+		// carries no revision and needs the family selector.
+		family "vision" {
+			thinking-efforts "minimal" "low" "medium" "high"
+			thinking-mode "budget"
+		}
+	}
+	models "glm-5.2*" {
+		thinking-efforts "high" "max"
+		thinking-mode "anthropic-budget-effort"
+	}
+	models "glm-5.3" "glm-5.3-flash" "glm-5.3-highspeed" {
+		thinking-mode "anthropic-budget-effort"
+	}
+}

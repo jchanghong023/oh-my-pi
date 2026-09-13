@@ -83,6 +83,7 @@
 		"auth/yolo-auto.kdl",
 		"auth/zai-coding-plan.kdl",
 		"auth/zai.kdl",
+		"auth/zcode-api.kdl",
 		"auth/zenmux.kdl",
 		"auth/zhipu-coding-plan.kdl",
 		"classes/amazon.kdl",
@@ -171,6 +172,7 @@
 		"providers/xiaomi.kdl",
 		"providers/yolo-auto.kdl",
 		"providers/zai.kdl",
+		"providers/zcode-api.kdl",
 		"providers/zenmux.kdl",
 		"providers/zhipu-coding-plan.kdl",
 		"runtime/behavior.kdl",
@@ -15629,6 +15631,96 @@
 				}
 			},
 			{
+				"source": "providers/zcode-api.kdl:17",
+				"class": "glm",
+				"providers": [
+					"zcode-api"
+				],
+				"revision": [
+					{
+						"op": "<",
+						"revision": "5.2.0"
+					}
+				],
+				"thinking": {
+					"efforts": [
+						"minimal",
+						"low",
+						"medium",
+						"high"
+					],
+					"mode": "budget"
+				}
+			},
+			{
+				"source": "providers/zcode-api.kdl:23",
+				"class": "glm",
+				"providers": [
+					"zcode-api"
+				],
+				"family": "vision",
+				"thinking": {
+					"efforts": [
+						"minimal",
+						"low",
+						"medium",
+						"high"
+					],
+					"mode": "budget"
+				}
+			},
+			{
+				"source": "providers/zcode-api.kdl:28",
+				"providers": [
+					"zcode-api"
+				],
+				"models": [
+					{
+						"kind": "glob",
+						"value": "glm-5.2*"
+					}
+				],
+				"thinking": {
+					"efforts": [
+						"high",
+						"max"
+					],
+					"mode": "anthropic-budget-effort"
+				}
+			},
+			{
+				"source": "providers/zcode-api.kdl:32",
+				"providers": [
+					"zcode-api"
+				],
+				"models": [
+					{
+						"kind": "exact",
+						"value": "glm-5.3"
+					},
+					{
+						"kind": "exact",
+						"value": "glm-5.3-flash"
+					},
+					{
+						"kind": "exact",
+						"value": "glm-5.3-highspeed"
+					}
+				],
+				"thinking": {
+					"mode": "anthropic-budget-effort"
+				}
+			},
+			{
+				"source": "providers/zcode-api.kdl:7",
+				"providers": [
+					"zcode-api"
+				],
+				"wire": {
+					"requiresToolResultId": true
+				}
+			},
+			{
 				"source": "providers/zenmux.kdl:7",
 				"class": "anthropic",
 				"providers": [
@@ -19206,6 +19298,17 @@
 				"id": "openai",
 				"apiKeyFormat": "bearer",
 				"name": "OpenAI"
+			},
+			{
+				"id": "zcode-api",
+				"apiKeyFormat": "bearer",
+				"name": "ZCode API (Local Proxy)",
+				"env": {
+					"vars": [
+						"ZCODE_API_KEY",
+						"ZCODE_PROXY_API_KEY"
+					]
+				}
 			}
 		]
 	}

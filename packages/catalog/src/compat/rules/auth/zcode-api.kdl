@@ -1,0 +1,7 @@
+// fork: local ZCode Proxy provider. No login flow: the proxy owns upstream
+// authentication; clients may optionally send the proxy key via ZCODE_API_KEY
+// or ZCODE_PROXY_API_KEY.
+auth "zcode-api" {
+	name "ZCode API (Local Proxy)"
+	env "ZCODE_API_KEY" "ZCODE_PROXY_API_KEY"
+}
