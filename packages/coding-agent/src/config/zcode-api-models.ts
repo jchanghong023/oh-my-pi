@@ -124,9 +124,12 @@ const CHAT_MODELS: ReadonlyArray<
 
 /** Resolves the proxy endpoint; `ZCODE_API_BASE_URL` overrides the loopback default. */
 export function resolveZcodeApiBaseUrl(): string {
-	const override = Bun.env.ZCODE_API_BASE_URL?.trim();
+	// A value that reduces to nothing (`/`, `///`) would leave the rows with an
+	// empty base URL, which the Anthropic transport treats as unset and reroutes
+	// to the public API; keep the loopback default instead.
+	const override = Bun.env.ZCODE_API_BASE_URL?.trim().replace(/\/+$/, "");
 	if (!override) return ZCODE_API_DEFAULT_BASE_URL;
-	return override.replace(/\/+$/, "");
+	return override;
 }
 
 let cachedBaseUrl: string | undefined;
