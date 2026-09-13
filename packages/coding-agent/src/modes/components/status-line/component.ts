@@ -2501,13 +2501,13 @@ export class StatusLineComponent implements Component {
 		return rows;
 	}
 
-	#renderSplitBottomLines(width: number): string[] {
-		const left = this.#buildStatusLines(width, "plain-left");
+	#renderSplitBottomLines(width: number, previewTitle?: string): string[] {
+		const left = this.#buildStatusLines(width, "plain-left", previewTitle);
 		// The right group rides the top-rule chip, whose rule reserves
 		// CHIP_RULE_RESERVE cells. Budget it the chip's real content width so a
 		// segment that no longer fits the chip lands in the wrapped rows below
 		// instead of being clipped by the rule.
-		const right = this.#buildStatusLines(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right");
+		const right = this.#buildStatusLines(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right", previewTitle);
 		const lines = this.#wrapOverflowRows(left.main, [...left.overflowParts, ...right.overflowParts], width);
 		if (!this.#focusedAgentId) return lines;
 		return lines.map(content => `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`);
@@ -2609,7 +2609,7 @@ export class StatusLineComponent implements Component {
 	 * the editor's top rule.
 	 */
 	renderBottomBarLines(width: number, groups: "left" | "full", previewTitle?: string): readonly string[] {
-		if (groups === "left") return this.#renderSplitBottomLines(width);
+		if (groups === "left") return this.#renderSplitBottomLines(width, previewTitle);
 		const status = this.#renderStatusLines(width, "plain-full", previewTitle);
 		return status.main ? [status.main, ...status.overflow] : status.overflow;
 	}

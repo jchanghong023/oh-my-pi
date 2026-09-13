@@ -29,7 +29,7 @@ const CURATED_ITEMS: readonly SelectItem[] = [
 		label: "Match terminal",
 		description: "Your dark theme in dark terminals, Light in light terminals",
 	},
-	{ value: "theme:titanium", label: "Titanium", description: "Default dark theme" },
+	{ value: "theme:titanium", label: "Titanium", description: "Classic dark theme" },
 	{ value: "theme:light", label: "Light", description: "Default light theme" },
 	{ value: "colorblind", label: "Colorblind colors", description: "Adjust red/green contrast" },
 	{ value: "ansi", label: "ANSI-safe", description: "ASCII glyphs with the dark terminal theme" },

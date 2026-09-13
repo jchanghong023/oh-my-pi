@@ -50,9 +50,9 @@ export interface ModelPickerOptions {
 	quickRoleOrder?: ReadonlyArray<string>;
 	/** Active quick role, highlighted when the search begins with `@`. */
 	currentQuickRole?: string;
-	/** Keys that toggle task-subagent mode while the picker is open; typically the alt+p binding. */
+	/** Keys that toggle task-subagent mode while the picker is open; typically the ctrl+t binding. */
 	taskModeKeys?: readonly KeyId[];
-	/** Human-readable label for the toggle key, shown in footer hints (e.g. "alt+p"). */
+	/** Human-readable label for the toggle key, shown in footer hints (e.g. "ctrl+t"). */
 	taskModeKeyLabel?: string;
 	/** `provider/id` highlighted and preselected in task mode (current Task subagent model). */
 	taskSelector?: string;
