@@ -385,6 +385,7 @@ class TreeList implements Component {
 				entry.type === "session_init" ||
 				entry.type === "ttsr_injection" ||
 				entry.type === "mode_change" ||
+				entry.type === "primary_agent_change" ||
 				entry.type === "reset_boundary";
 
 			switch (this.#filterMode) {
@@ -517,6 +518,9 @@ class TreeList implements Component {
 				break;
 			case "ttsr_injection":
 				parts.push("ttsr injection", ...entry.injectedRules);
+				break;
+			case "primary_agent_change":
+				parts.push("primary agent", entry.primaryAgent);
 				break;
 			case "reset_boundary":
 				parts.push("reset boundary");

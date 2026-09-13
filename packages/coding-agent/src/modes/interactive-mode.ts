@@ -6002,7 +6002,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	truncateTranscriptFromMessage(message: AgentMessage): boolean {
-		return this.#uiHelpers.truncateTranscriptFromMessage(message);
+		const truncated = this.#uiHelpers.truncateTranscriptFromMessage(message);
+		// An in-place rewind skips the full transcript replay below, and the dropped
+		// range can carry a `primary_agent_change` (Esc-Esc / tree navigation across
+		// a Shift+F2 switch). Refresh the session-derived chrome this path bypasses.
+		if (truncated) this.#updatePrimaryAgentStatus();
+		return truncated;
 	}
 
 	getUserMessageText(message: Message): string {

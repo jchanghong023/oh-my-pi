@@ -1830,14 +1830,15 @@ export class AcpAgent implements Agent {
 
 	#getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {
 		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: "Default", description: "Standard ACP headless mode" }];
-		if (session.settings.get("plan.enabled")) {
+		// Discuss is mutually exclusive with plan mode (same rule the TUI enforces),
+		// so a session resumed into the Discuss profile is not offered Plan.
+		if (session.settings.get("plan.enabled") && session.getPrimaryAgentId() !== "discuss") {
 			modes.push({
 				id: ACP_PLAN_MODE_ID,
 				name: "Plan",
 				description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
 			});
 		}
-		void session;
 		return modes;
 	}
 
