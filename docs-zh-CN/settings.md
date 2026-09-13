@@ -508,7 +508,7 @@ tools:
 | `tools.artifactTailBytes`      | number  | `20`    | KB of tail kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         …
 | `tools.artifactTailLines`      | number  | `500`   | Max tail lines kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     …
 
-Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
+Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. Image questions use `read <image>?q=<question>` and honor `images.questionTimeoutMs`.
 
 ### 窗口作用域的计算机使用
 
@@ -668,7 +668,7 @@ tui:
 
 | Key                         | Type    | Default          | Values                                                                    |
 | --------------------------- | ------- | ---------------- | ------------------------------------------------------------------------- |
-| `theme.dark`                | string  | `titanium`       | Theme used on a dark terminal background.                                 |
+| `theme.dark`                | string  | `dark-terminal`  | Theme used on a dark terminal background.                                 |
 | `theme.light`               | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
@@ -702,7 +702,7 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 | `magicKeywords.ultrathink` | boolean | `true`       | 启用独立 `ultrathink` 通知及最高自动思考覆盖。                                                          |
 | `magicKeywords.orchestrate` | boolean | `true`      | 启用独立 `orchestrate` 多智能体通知。                                                                    |
 | `magicKeywords.workflow` | boolean | `true`         | 启用独立 `workflowz` eval 工作流通知。                                                                   |
-| `magicKeywords.fullsend` | boolean | `true`         | 启用不受成本/token 限制的最快验证执行；预计同速时为获得干净上下文而选择委派。                            |
+| `magicKeywords.fullsend` | boolean | `true`         | 启用不受成本/token 限制的最快验证执行；仅当委派带来实际速度或验证收益时才使用委派。                      |
 
 四个关键词斜杠命令均接受可选任务文本：`/ultrathink [task]`、`/orchestrate [task]`、`/workflowz [task]` 和 `/fullsend [task]`。
 
@@ -793,13 +793,15 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 
 | Old                                                                      | New                                                                                                          |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `inspect_image.enabled` boolean                                          | `inspect_image.mode` (`true` → `on`, `false` → `off`)                                                        |
+| `inspect_image.enabled` / `inspect_image.mode`                           | removed                                                                                                      |
+| `inspect_image.timeoutMs`                                                | `images.questionTimeoutMs`                                                                                   |
 | `queueMode`                                                              | `steeringMode`                                                                                               |
 | `ask.timeout` in milliseconds (value `> 1000`)                           | seconds (divided by 1000)                                                                                    |
 | flat `theme: "<name>"` string                                            | `theme.dark` / `theme.light` (slot chosen by luminance; built-in `light`/`dark` are dropped to use defaults) |
-| `task.isolation.enabled: true/false`                                     | `task.isolation.mode: auto/none`                                                                             |
+| legacy `task.isolation.mode: none`                                       | `task.isolation.enabled: false`                                                                              |
+| legacy `task.isolation.mode: <backend>`                                  | `task.isolation.enabled: true` + `isolation.backend: <backend>`                                              |
 | `task.simple`                                                            | removed                                                                                                      |
-| legacy `task.isolation.mode` (`worktree`, `fuse-overlay`, `fuse-projfs`) | `rcopy`, `overlayfs`, `projfs`                                                                               |
+| legacy isolation backends (`worktree`, `fuse-overlay`, `fuse-projfs`)    | `rcopy`, `overlayfs`, `projfs`                                                                               |
 | `lastChangelogVersion`                                                   | moved to a marker file and stripped from `config.yml`                                                        |
 
 ## 故障排除

@@ -1,6 +1,6 @@
 # 设置参考（全部配置项）
 
-本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 480 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
+本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 502 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
 
 - 每个键就是 `config.yml` 中的嵌套路径（如 `theme.dark`、`tools.approvalMode`），无缩写；键必须与 schema 完全一致：写 `theme.dark`，而不是 `theme`。
 - 优先级、存储位置、写入方式与合并规则见 [Settings（设置）](./settings.md)；配置发现与解析机制见 [Config usage（配置发现与解析）](./config-usage.md)。
@@ -20,7 +20,7 @@
 
 ## 无 UI 面板的配置项
 
-以下配置项不在 `/settings` 面板中展示，但可以直接写入 `config.yml`（部分由设置向导、命令行或运行时功能读取）。共 122 项。
+以下配置项不在 `/settings` 面板中展示，但可以直接写入 `config.yml`（部分由设置向导、命令行或运行时功能读取）。共 125 项。
 
 
 
@@ -78,6 +78,16 @@
 - **功能**：无说明
 
 - **可选值**：任意字符串数组（无固定枚举）
+
+### `enabledProviders`
+
+- **作用**：显式启用被默认关闭的 provider/来源 id 列表
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：无说明。用于按 id 显式启用默认关闭的 provider 与来源（`*` 或 `all` 表示全部；如 `claude` 对应 `claude-plugins`）。项目级配置同样参与路径作用域。
+
+- **可选值**：
+  - 任意字符串数组（无固定枚举）
 
 ### `disabledProviders`
 
@@ -446,6 +456,26 @@
 
 - **可选值**：任意数字（无固定枚举）
 
+### `sharpshooter.intervalMinutes`
+
+- **作用**：Sharpshooter 抽取/整合之间的最小间隔分钟数
+- **类型**：`number`
+- **默认值**：`5`
+- **功能**：无说明。用于 Sharpshooter 记忆后端的调度与整合节流；小于等于 0 视为不等待。
+
+- **可选值**：
+  - 任意数字（无固定枚举）
+
+### `sharpshooter.injectionTokenLimit`
+
+- **作用**：Sharpshooter 注入记忆块的近似 token 上限
+- **类型**：`number`
+- **默认值**：`15000`
+- **功能**：无说明。Sharpshooter 注入到提示词中的记忆内容会按该近似 token 数截断。
+
+- **可选值**：
+  - 任意数字（无固定枚举）
+
 ### `mnemopi.retainEveryNTurns`
 
 - **作用**：Mnemopi 后端两次自动 retain 写入之间的最少用户轮次间隔。
@@ -733,17 +763,6 @@
 
 - **可选值**：任意数字（无固定枚举）
 
-### `inspect_image.enabled`
-
-- **作用**：旧版图像检查工具开关（仅迁移兼容，应改用 inspect_image.mode）。
-- **类型**：`boolean`
-- **默认值**：`false`
-- **功能**：无说明（源码注释：Legacy boolean kept only for back-compat migration to `inspect_image.mode`\n(see config/settings.ts). Hidden from UI.）
-
-- **可选值**：
-  - `true`
-  - `false`
-
 ### `async.maxJobs`
 
 - **作用**：进程内并发异步任务的最大数量。
@@ -779,6 +798,16 @@
 - **功能**：无说明
 
 - **可选值**：任意键值对象（无固定枚举）
+
+### `task.agentServiceTierOverrides`
+
+- **作用**：逐代理的服务档位（service tier）覆盖表
+- **类型**：`record`
+- **默认值**：`{}`
+- **功能**：无说明。按代理名精确匹配的服务档位覆盖，取值与 `tier.*` 相同（`inherit`、`auto`、`none` 或各家族档位）；在模型解析之后应用。
+
+- **可选值**：
+  - 任意键值对象（无固定枚举）
 
 ### `task.agentPrewalk`
 
@@ -1175,7 +1204,7 @@
 ## Interaction（交互）
 
 
-共 44 项。
+共 49 项。
 
 
 ### `autoResume` — Auto Resume
@@ -1255,6 +1284,19 @@
   - `prompt` — 把提示作为跟进消息重新提交（当前行为）
   - `compact` — 压缩会话上下文，然后重新提交提示
   - `reset` — 开启一个新会话，然后重新提交提示
+
+### `loop.conditionTimeoutMs` — Loop Condition Timeout (ms)
+
+- **作用**：`/loop --while` / `--until` 条件命令的最长等待时间（毫秒）
+- **类型**：`number`
+- **默认值**：`30000`
+- **功能**：`/loop --while` / `--until` 条件命令超过该时间即视为失效并停止循环。设为 0 表示无限等待。
+
+- **可选值**：
+  - `0` — Unlimited
+  - `10000` — 10 seconds
+  - `30000` — 30 seconds
+  - `120000` — 2 minutes
 
 ### `doubleEscapeAction` — Double-Escape Action
 
@@ -1355,6 +1397,41 @@
   - `250` — 250 lines
   - `500` — 500 lines
   - `1000` — 1000 lines
+
+### `composer.recallClearedDrafts` — Recall Cleared Drafts
+
+- **作用**：是否把 `Ctrl+C` 清空的草稿保留在本地上/下历史中
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：被 `Ctrl+C` 清空的草稿会保留在本地 Up/Down 历史中直到退出；关闭只影响之后的清空。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tui.vimMode` — Vim Editing Mode
+
+- **作用**：提示符的 Vim 模态编辑（Insert / Normal / Visual）
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：模态化的提示符编辑：Insert 下 `Escape` 进入 Normal；Normal 支持 hjkl、0、$、^、w、b、e、gg、G、计数、x/D/C、dd/yy、p 与 u，操作符可接动作或文本对象（diw、ca(、dap）；v/V 开始 Visual 选择，y 复制、d 删除。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tui.vimModeDisplay` — Vim Mode Indicator
+
+- **作用**：状态栏中当前 Vim 模式的显示方式
+- **类型**：`enum`
+- **默认值**：`"text"`
+- **条件**：`vimModeEnabled` 为真时适用
+- **功能**：当前 Vim 模式在状态栏中的呈现方式（完整模式名、单个字形或不显示）。
+
+- **可选值**：
+  - `text` — Text（完整模式名：NORMAL、INSERT、VISUAL、V-LINE）
+  - `icon` — Icon（每个模式一个紧凑字形）
+  - `none` — Hidden（不在状态栏显示模式）
 
 ### `startup.quiet` — Quiet Startup
 
@@ -1481,7 +1558,7 @@
 - **作用**：独立的 `fullsend` 关键词是否触发最快且经过验证的执行策略
 - **类型**：`boolean`
 - **默认值**：`true`
-- **功能**：允许独立的 `fullsend` 在不受成本或 token 限制的前提下优先最快的完整、正确、已验证交付；预计同速时优先委派，以子智能体的干净上下文作为质量决胜因素。
+- **功能**：允许独立的 `fullsend` 在不受成本或 token 限制的前提下优先最快的完整、正确、已验证交付；仅在委派能带来实际速度或验证收益时才委派。
 
 - **可选值**：
   - `true`
@@ -1684,7 +1761,7 @@
 ## Model（模型）
 
 
-共 52 项。
+共 55 项。
 
 
 ### `advisor.enabled` — Enable Advisor
@@ -1736,6 +1813,21 @@
   - `4` — 4 turns
   - `5` — 5 turns
 - **条件**：`advisorEnabled` 为真时适用
+
+### `advisor.maxNotesPerUpdate` — Advisor Max Notes Per Update
+
+- **作用**：每次顾问提示更新可接受的非阻塞建议条数上限（1–32）
+- **类型**：`number`
+- **默认值**：`4`
+- **条件**：`advisorEnabled` 为真时适用
+- **功能**：每次顾问提示更新可接受的非阻塞建议条数上限（1–32；UI 提供 1–5 的快捷选项）。阻塞项不受该上限限制。
+
+- **可选值**：
+  - `1` — 1 note（Anti-flood（严格））
+  - `2` — 2 notes
+  - `3` — 3 notes
+  - `4` — 4 notes（默认）
+  - `5` — 5 notes
 
 ### `modelRoleStorage` — Model Role Storage
 
@@ -2036,6 +2128,17 @@
   - `true`
   - `false`
 
+### `skillful` — List Skills in Prompt
+
+- **作用**：是否把可用技能列入系统提示词
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：在系统提示词中列出可用技能；关闭可节省上下文，也可用 `/skillful` 按会话切换。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ### `personality` — Personality
 
 - **作用**：写入系统提示人格段落的沟通风格预设
@@ -2226,6 +2329,17 @@
 - **功能**：Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets.
 
 - **可选值**：任意数字（无固定枚举）
+
+### `retry.waitForUsageReset` — Wait For Usage Reset
+
+- **作用**：配额耗尽且给出重置时间时是否等待到重置再继续
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：当 provider 报告用量配额耗尽并给出重置时间（任意 provider 的 5 小时或每周配额窗口）时，等待到重置而不是在超过 `retry.maxDelayMs` 后立即失败。等待可用 `Esc` 中止，但也会挂住子代理，无人值守运行时建议保持关闭。
+
+- **可选值**：
+  - `true`
+  - `false`
 
 ### `retry.modelFallback` — Retry Model Fallback
 
@@ -2862,7 +2976,7 @@
 ## Appearance（外观）
 
 
-共 34 项。
+共 36 项。
 
 
 ### `theme.dark` — Dark Theme
@@ -3122,6 +3236,28 @@
   - `true`
   - `false`
 
+### `tui.reactions` — Agent Reactions
+
+- **作用**：是否允许代理用 emoji 徽标回应你的消息
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：允许代理在其气泡上用 emoji 徽标回应你的消息。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tui.mouse` — Mouse Click-to-Focus
+
+- **作用**：是否在主会话中捕获鼠标点击以聚焦子代理卡片与 HUD 行
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：在主会话中捕获鼠标点击，使实时子代理卡片与 HUD 行可点击聚焦，并对目标显示悬停高亮。开启后原生文本选择改为 `Shift`+拖拽，滚轮滚动改为 `Shift`+滚轮。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ### `display.shimmer` — Shimmer
 
 - **作用**：工作/加载消息的动画风格（经典余弦波 / KITT 扫描条 / 关闭）。
@@ -3132,6 +3268,18 @@
   - `classic` — 跨文本扫过的柔和余弦波
   - `kitt` — 1982《霹雳车》红色扫描灯左右往返
   - `disabled` — 无动画，静态暗色文字
+
+### `display.pinnedAgents` — Pinned Agents
+
+- **作用**：编辑器上方固定显示的活动代理跳转列表
+- **类型**：`enum`
+- **默认值**：`"collapsed"`
+- **功能**：编辑器上方固定显示的活动代理跳转列表：off 隐藏，collapsed 显示少量行并提供展开控件，full 始终列出全部活动代理。
+
+- **可选值**：
+  - `off` — Off（隐藏固定跳转列表）
+  - `collapsed` — Collapsed（显示少量行并提供展开控件）
+  - `full` — Full（始终列出所有活动代理）
 
 ### `display.smoothStreaming` — Smooth Streaming
 
@@ -3236,7 +3384,7 @@
 ## Tools（工具）
 
 
-共 59 项。
+共 62 项。
 
 
 ### `tools.artifactSpillThreshold` — Artifact Spill Threshold (KB)
@@ -3482,16 +3630,19 @@
   - `true`
   - `false`
 
-### `inspect_image.mode` — Inspect Image
+### `images.questionTimeoutMs` — Image Question Timeout
 
-- **作用**：是否在模型缺乏原生视觉输入时暴露 inspect_image 视觉理解工具
-- **类型**：`enum`
-- **默认值**：`"auto"`
-- **功能**：控制 inspect_image 工具，该工具将图像理解委托给支持视觉的模型。`auto` 仅在当前模型没有原生图像输入时暴露；`on` 始终暴露；`off` 永不暴露。
+- **作用**：`read` 的 `?q=` 图像提问所用视觉模型调用的单次超时（毫秒）
+- **类型**：`number`
+- **默认值**：`300000`
+- **功能**：`read` 的 `?q=` 图像提问所调用的视觉模型的单请求超时（毫秒）。提供方停滞时会快速失败并返回超时错误，而不是阻塞到手动中止。设为 0 禁用超时。
+
 - **可选值**：
-  - `auto` — Auto (only for models without vision)
-  - `on` — On
-  - `off` — Off
+  - `0` — Disabled
+  - `60000` — 1 minute
+  - `120000` — 2 minutes
+  - `180000` — 3 minutes
+  - `300000` — 5 minutes
 
 ### `computer.enabled` — Computer
 
@@ -3530,19 +3681,6 @@
 - **功能**：合成截图的最大高度（像素）。
 
 - **可选值**：任意数字（无固定枚举）
-
-### `inspect_image.timeoutMs` — Inspect Image Timeout
-
-- **作用**：inspect_image 视觉模型调用的单次超时（毫秒）
-- **类型**：`number`
-- **默认值**：`300000`
-- **功能**：inspect_image 视觉模型调用的单请求超时（毫秒）。当提供方停滞时会快速失败并返回超时错误，而不是阻塞到手动中止。设为 0 禁用超时。
-- **可选值**：
-  - `0` — Disabled
-  - `60000` — 1 minute
-  - `120000` — 2 minutes
-  - `180000` — 3 minutes
-  - `300000` — 5 minutes
 
 ### `checkpoint.enabled` — Checkpoint/Rewind
 
@@ -3721,6 +3859,30 @@
 
 - **可选值**：任意字符串（无固定枚举）
 
+### `browser.freezeOnTurnEnd` — Freeze Browser Tabs On Turn End
+
+- **作用**：turn 结束时是否冻结 OMP 掌管的无头浏览器标签页
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：turn 结束时冻结 OMP 掌管的无头浏览器标签页，使动画页面在空闲时不再占用 CPU/GPU。标签页在下次使用时自动解冻；`open` 时传 `persist:true` 可让某个标签页豁免。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `browser.idleCloseSec` — Browser Idle Close Timeout
+
+- **作用**：OMP 掌管的无头浏览器标签页空闲多久后关闭（秒）
+- **类型**：`number`
+- **默认值**：`1800`
+- **功能**：空闲超过该秒数后关闭 OMP 掌管的无头浏览器标签页（0 = 从不；会话销毁仍会回收）。仅适用于 OMP 启动的无头标签页，不涉及 relay/CDP/外部启动的浏览器或其他会话的标签页。
+
+- **可选值**：
+  - `0` — Never
+  - `900` — 15 minutes
+  - `1800` — 30 minutes
+  - `3600` — 1 hour
+
 ### `tools.intentTracing` — Intent Tracing
 
 - **作用**：是否要求模型在每次工具调用前先描述其意图
@@ -3756,6 +3918,30 @@
   - `120` — 120 seconds
   - `300` — 5 minutes
   - `600` — 10 minutes
+
+### `tools.speculativeExecution.enabled` — Experimental Speculative Execution
+
+- **作用**：是否启用可安全丢弃的推测执行首个切片
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：启用可安全丢弃的首个切片：通过直接 `read` 调用与嵌套 eval 进行已校验的本地读取。网络请求、provider 补全与实时文件写入不在该基线范围内。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tools.speculativeExecution.maxInFlight` — Speculative Execution Concurrency
+
+- **作用**：正常派发前允许并发运行的已校验本地读取数上限
+- **类型**：`number`
+- **默认值**：`2`
+- **功能**：正常派发前允许并发运行的已校验本地读取数量上限。
+
+- **可选值**：
+  - `1` — 1 operation
+  - `2` — 2 operations
+  - `3` — 3 operations
+  - `4` — 4 operations
 
 ### `async.enabled` — Async Execution
 
@@ -3916,7 +4102,7 @@
 ## Context（上下文）
 
 
-共 28 项。
+共 29 项。
 
 
 ### `workspace.additionalDirectories` — Additional Workspace Dirs
@@ -3956,6 +4142,17 @@
 - **类型**：`boolean`
 - **默认值**：`true`
 - **功能**：当上下文过大时自动压缩。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `compaction.experimentalContextManagement` — Notes-backed context windows (experimental)
+
+- **作用**：是否跨上下文窗口保留持久笔记与可检索的原始历史
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：跨上下文窗口保留持久笔记与可搜索的原始历史。重启后可用工具集才会更新（启用后才有 `context_notes` / `new_context`）。
 
 - **可选值**：
   - `true`
@@ -4283,7 +4480,7 @@
 ## Memory（记忆）
 
 
-共 30 项。
+共 31 项。
 
 
 ### `memory.backend` — Memory Backend
@@ -4320,6 +4517,16 @@
 - **可选值**：
   - `true`
   - `false`
+
+### `sharpshooter.model` — Sharpshooter Model
+
+- **作用**：Sharpshooter 抽取/整合所用的模型选择器（空 = `smol` 角色）
+- **类型**：`string`
+- **默认值**：—（未设默认值）
+- **功能**：抽取/整合使用的模型选择器；留空表示使用 `smol` 角色。
+
+- **可选值**：
+  - 任意字符串（无固定枚举）
 
 ### `mnemopi.dbPath` — Mnemopi DB Path
 
@@ -4631,7 +4838,7 @@
 ## Files（文件）
 
 
-共 26 项。
+共 27 项。
 
 
 ### `edit.mode` — Edit Mode
@@ -4720,6 +4927,17 @@
 - **类型**：`boolean`
 - **默认值**：`false`
 - **功能**：当编辑破坏文件的 AST 解析时，请求 smol 模型修复损坏区域（通过重新解析校验；失败则降级为告警）。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `edit.recoverInlineEdits` — Recover Inline Edit Payloads
+
+- **作用**：是否把模型以纯文本发出的 edit 载荷转换为 edit 工具调用
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：把模型以纯文本形式发出的 edit 载荷转换成 edit 工具调用后执行。
 
 - **可选值**：
   - `true`
@@ -4919,7 +5137,7 @@
 ## Shell（终端）
 
 
-共 17 项。
+共 16 项。
 
 
 ### `bash.enabled` — Bash
@@ -4952,6 +5170,17 @@
 - **功能**：有序的 bash 命令审批规则数组；每项包含 `match` 与 `approval` 字段，仅支持 `*` 通配符。
 
 - **可选值**：任意字符串数组（无固定枚举）
+
+### `bash.allowCompoundCommands` — Allow Compound Commands
+
+- **作用**：是否逐条评估字面 `&&` 链中的命令
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：逐条评估字面 `&&` 链中的命令；不匹配的命令仍走常规 bash 审批策略与模式。
+
+- **可选值**：
+  - `true`
+  - `false`
 
 ### `bashInterceptor.enabled` — Bash Interceptor
 
@@ -5026,23 +5255,23 @@
   - `true`
   - `false`
 
-### `eval.rb` — Ruby Eval Backend
+### `eval.tools.enabled` — Eval-Defined Tools
 
-- **作用**：eval 工具是否允许把 Ruby cell 分发到持久 Ruby 内核
+- **作用**：是否允许 eval cell 定义可供子代理调用的工具
 - **类型**：`boolean`
-- **默认值**：`false`
-- **功能**：允许 eval 工具将 Ruby 代码 cell 分发到常驻 Ruby 内核执行。
+- **默认值**：`true`
+- **功能**：允许 eval cell 定义工具（Python 的 `@tool`、JS 的 `tool(fn)`），供 `task`、`agent()` 与 `workpool()` 子代理调用。
 
 - **可选值**：
   - `true`
   - `false`
 
-### `eval.jl` — Julia Eval Backend
+### `eval.workpool.freshAgents` — Fresh Workpool Agents
 
-- **作用**：eval 工具是否允许把 Julia cell 分发到持久 Julia 内核
+- **作用**：是否为每个 workpool 条目新建子代理
 - **类型**：`boolean`
 - **默认值**：`false`
-- **功能**：允许 eval 工具将 Julia 代码 cell 分发到常驻 Julia 内核执行。
+- **功能**：为每个 workpool 条目新建子代理，而不是复用 worker 或把排队条目批量交给同一 worker。
 
 - **可选值**：
   - `true`
@@ -5078,29 +5307,10 @@
 
 - **可选值**：任意字符串（无固定枚举）
 
-### `ruby.interpreter` — Ruby Interpreter
-
-- **作用**：指定 Ruby 解释器绝对路径；设置后跳过自动运行时探测
-- **类型**：`string`
-- **默认值**：`""`
-- **功能**：可选的精确 Ruby 可执行文件路径。设置后将跳过自动的 Ruby 运行时探测。
-
-- **可选值**：任意字符串（无固定枚举）
-
-### `julia.interpreter` — Julia Interpreter
-
-- **作用**：指定 Julia 解释器绝对路径；设置后跳过自动运行时探测
-- **类型**：`string`
-- **默认值**：`""`
-- **功能**：可选的精确 Julia 可执行文件路径。设置后将跳过自动的 Julia 运行时探测。
-
-- **可选值**：任意字符串（无固定枚举）
-
-
 ## Tasks（任务）
 
 
-共 28 项。
+共 33 项。
 
 
 ### `plan.enabled` — Plan Mode
@@ -5125,6 +5335,29 @@
 - **可选值**：
   - `true`
   - `false`
+
+### `plan.autosave` — Autosave Plans
+
+- **作用**：计划模式完成时是否自动把已批准计划保存到磁盘
+- **类型**：`boolean`
+- **默认值**：`false`
+- **条件**：`planModeEnabled` 为真时适用
+- **功能**：计划模式完成时自动把已批准的计划保存到磁盘。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `plan.autosaveDir` — Autosave Directory
+
+- **作用**：自动保存计划的目录
+- **类型**：`string`
+- **默认值**：—（未设默认值）
+- **条件**：`planAutosaveEnabled` 为真时适用
+- **功能**：自动保存计划的目录，支持 `~`、绝对路径与相对 cwd 的路径；留空使用 `<project>/.omp/plans/`。
+
+- **可选值**：
+  - 任意字符串（无固定枚举）
 
 ### `goal.enabled` — Goal Mode
 
@@ -5168,23 +5401,34 @@
   - `true`
   - `false`
 
-### `task.isolation.mode` — Isolation Mode
+### `task.isolation.enabled` — Isolate Subagents
 
-- **作用**：子代理隔离后端（auto 让 PAL 自动挑选最优：CoW 文件系统 → overlayfs/ProjFS → git worktree / 递归复制兜底）
-- **类型**：`enum`
-- **默认值**：`"none"`
-- **功能**：子代理的隔离后端。`"auto"` 让原生 PAL 选择最佳可用后端（识别 CoW 的文件系统，然后是 overlayfs/ProjFS，最后回退到 git worktree / 递归复制）。（源码注释：Delegation）
+- **作用**：是否在检出的隔离副本中运行子代理并随后整合其改动
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：在检出的隔离副本中运行子代理，并在之后整合它们的改动。
+
 - **可选值**：
-  - `none` — 不进行隔离
-  - `auto` — 由 PAL 选择最佳可用后端
-  - `apfs` — macOS clonefile reflink（APFS）
-  - `btrfs` — btrfs 子卷快照
-  - `zfs` — ZFS 快照 + 克隆
-  - `reflink` — Linux FICLONE 单文件 reflink
-  - `overlayfs` — Linux 内核 overlay（或 fuse-overlayfs 回退）
-  - `projfs` — Windows Projected File System
-  - `block-clone` — Windows FSCTL_DUPLICATE_EXTENTS_TO_FILE（NTFS/ReFS）
-  - `rcopy` — 递归复制
+  - `true`
+  - `false`
+
+### `isolation.backend` — Isolation Backend
+
+- **作用**：子代理隔离与 worktree 克隆使用的后端
+- **类型**：`enum`
+- **默认值**：`"auto"`
+- **功能**：子代理隔离与 worktree 克隆使用的后端。
+
+- **可选值**：
+  - `auto` — Auto（由 PAL 选择可用的最佳后端）
+  - `apfs` — APFS（macOS clonefile reflink）
+  - `btrfs` — btrfs（btrfs subvolume 快照）
+  - `zfs` — ZFS（ZFS 快照 + clone）
+  - `reflink` — Reflink（Linux FICLONE 逐文件 reflink）
+  - `overlayfs` — Overlayfs（Linux 内核 overlay，或 fuse-overlayfs 回退）
+  - `projfs` — ProjFS（Windows Projected File System）
+  - `block-clone` — Block clone（Windows FSCTL_DUPLICATE_EXTENTS_TO_FILE，NTFS/ReFS）
+  - `rcopy` — Recursive copy（可用时用 git worktree，否则递归复制）
 
 ### `task.isolation.apply` — Apply Isolated Changes
 
@@ -5225,6 +5469,28 @@
 - **功能**：代理管理工作区的基目录——任务隔离副本、`github` PR checkout 以及 `omp worktree` 清理都位于此目录。未设置时使用 `~/.omp/wt`。必须是绝对路径或以 `~` 开头的相对路径；相对路径会被忽略。环境变量 `OMP_WORKTREE_DIR` 优先于此设置
 
 - **可选值**：任意字符串（无固定枚举）
+
+### `worktree.clone` — Clone Checkout into Worktrees
+
+- **作用**：新建 worktree 是否以当前检出的写时复制克隆开始
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：`github pr_checkout` 与 bash 中 `git worktree add` 新建的 worktree 以当前检出的写时复制克隆开始，使 ignored 构建产物（`node_modules`、`target`）一并带上；文件系统不支持克隆时回退为普通检出。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `worktree.cleanSource` — Clean Source Checkout on /wt
+
+- **作用**：`/wt` 创建 worktree 后是否清理原检出
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：用 `/wt` 创建 worktree 时，在把改动带过去之后重置原检出的已跟踪改动并删除未跟踪文件。
+
+- **可选值**：
+  - `true`
+  - `false`
 
 ### `task.eager` — Prefer Task Delegation
 

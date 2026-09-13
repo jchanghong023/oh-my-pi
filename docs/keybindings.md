@@ -13,7 +13,7 @@ With a named profile, bindings from the default profile's agent directory are lo
 ```yaml
 app.model.cycleForward: Ctrl+P
 app.model.selectTemporary: Ctrl+T
-app.plan.toggle: Alt+Shift+P
+app.plan.toggle: Shift+Tab
 ```
 
 Chord names are case-insensitive and use the same notation shown in the UI, such as `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, and `Ctrl+Backspace`.

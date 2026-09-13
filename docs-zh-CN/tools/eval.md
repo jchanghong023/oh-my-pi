@@ -1,8 +1,8 @@
 # eval
 
-> 在持久化的语言运行时中执行一个 Python、JavaScript、Ruby 或 Julia 单元。一次工具调用即一个单元；状态在后续调用之间保持。
+> 在持久化的语言运行时中执行一个 Python 或 JavaScript 单元。一次工具调用即一个单元；状态在后续调用之间保持。
 
-> **注意：** 不要通过 `bash` 调用 `python -c`、`ruby -e`、`julia -e`、`bun -e` 或 `node -e` 来执行临时代码。`eval` 提供保留状态、结构化的 `display()` 捕获、工具/子代理桥接、流式输出、取消以及由 artifact 支持的截断功能。
+> **注意：** 不要通过 `bash` 调用 `python -c`、`bun -e` 或 `node -e` 来执行临时代码。`eval` 提供保留状态、结构化的 `display()` 捕获、工具/子代理桥接、流式输出、取消以及由 artifact 支持的截断功能。
 
 ## Source
 - 入口与动态 schema：`packages/coding-agent/src/tools/eval.ts`
@@ -12,8 +12,6 @@
 - 宿主桥接：`packages/coding-agent/src/eval/agent-bridge.ts`、`completion-bridge.ts`、`concurrency-bridge.ts`、`budget-bridge.ts`
 - JavaScript：`packages/coding-agent/src/eval/js/`
 - Python：`packages/coding-agent/src/eval/py/`
-- Ruby：`packages/coding-agent/src/eval/rb/`
-- Julia：`packages/coding-agent/src/eval/jl/`
 - 输出/截断：`packages/coding-agent/src/session/streaming-output.ts`
 - Python 内部细节：`docs/python-repl.md`
 
@@ -23,7 +21,7 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `language` | `"py" \| "js" \| "rb" \| "jl"` | Yes | 显式的后端标记。通常线上 schema 仅包含已启用的运行时；见下文全部禁用的边界情况。 |
+| `language` | `"py" \| "js"` | Yes | 显式的后端标记。通常线上 schema 仅包含已启用的运行时。 |
 | `code` | `string` | Yes | 单元主体，按原样执行。 |
 | `title` | `string` | No | 简短的转录标签。 |
 | `timeout` | `number` | No | 运行时工作的超时时间（秒）。默认 30；`0` 禁用单元超时。非零值受工具超时策略和 `tools.maxTimeout` 限制。 |
@@ -51,10 +49,8 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 | --- | --- | --- | --- | --- |
 | `py` | 保留的 IPython 风格 Python 内核 | `eval.py=true` | `PI_PY` | 可用的已配置 Python 解释器/内核 |
 | `js` | 保留的 Bun worker VM | `eval.js=true` | `PI_JS` | 内置 JS 运行时 |
-| `rb` | 保留的 Ruby 内核 | `eval.rb=false` | `PI_RB` | 可用的 `ruby.interpreter` 或已发现的 Ruby |
-| `jl` | 保留的 Julia 内核 | `eval.jl=false` | `PI_JL` | 可用的 `julia.interpreter` 或已发现的 Julia |
 
-Ruby 与 Julia 为可选启用。当至少有一个运行时启用时，已禁用的运行时将从会话作用域的线上 schema 与模型提示词中移除。若**四个全部**禁用，当前的 `parameters` 回退会返回完整的静态联合类型，尽管每次执行都会被 `resolveBackend(...)` 拒绝；这与附近源码注释中“已禁用的后端不会到达模型”的说法相矛盾。请求不可用的运行时将抛出 `ToolError`；该工具绝不会替换为另一种语言。
+当至少有一个运行时启用时，已禁用的运行时将从会话作用域的线上 schema 与模型提示词中移除。请求不可用的运行时将抛出 `ToolError`；该工具绝不会替换为另一种语言。`eval.tools.enabled=true`（默认）独立控制内核自定义工具与 `tools` 子代理字段是否被公布和可用。
 
 ## Outputs
 
@@ -81,10 +77,10 @@ Ruby 与 Julia 为可选启用。当至少有一个运行时启用时，已禁�
 ## Execution flow
 
 1. `EvalTool` 根据已启用的语言构建会话特定的 schema。它是 essential、strict，`approval="exec"`，在单个代理会话内 `concurrency="exclusive"`。
-2. `execute()` 将 `py/js/rb/jl` 映射到 `python/js/ruby/julia`，解析可用性，并将单一输入包装为渲染器兼容的内部单元列表。
+2. `execute()` 将 `py/js` 映射到 `python/js`，解析可用性，并将单一输入包装为渲染器兼容的内部单元列表。
 3. 它从 `session.getEvalSessionId?.()` 或 `defaultEvalSessionId(session)` 获取保留的 executor id，分配输出 sink/artifact，并通过 `trackEvalExecution?.(...)` 注册本次运行。
 4. 超时默认为 30 秒。`0` 不创建看门狗；否则 `IdleTimeout` 与工具及会话中止信号组合。
-5. `agent()`、`parallel()` 和 `completion()` 会发出 pause/resume 状态操作：在这些宿主桥接中花费的时间不消耗单元的运行时工作预算。计算、输出、状态 helper 和普通的 `tool.*` 调用则会消耗预算。
+5. 等待 `agent()` 与 `completion()` handle 会发出 pause/resume 状态操作：在这些宿主桥接中花费的时间不消耗单元的运行时工作预算。计算、输出、状态 helper 和普通的 `tool.*` 调用则会消耗预算。
 6. 选定的后端接收 cwd、保留的会话 id、会话文件、内核所有者、reset 标志、回调以及取消信号。
 7. 输出块流入支持 artifact 的 `OutputSink` 和实时尾部。丰富的 display 被分离为 JSON、图像、markdown 和状态通道。
 8. 成功、非零退出和取消被组装为上文的结果形态。即使执行失败，输出 sink 也会被终结。
@@ -107,20 +103,6 @@ Ruby 与 Julia 为可选启用。当至少有一个运行时启用时，已禁�
 - 交互式 stdin 将被拒绝，并报错 `Kernel requested stdin; interactive input is not supported.`。
 - 同步块使用默认执行器，并复制 ContextVars；Python 字节码仍会争抢 GIL。
 
-### Ruby (`rb`)
-
-- 保留的内核由 `ruby:${sessionId}`、归一化的 cwd 和解释器键控。
-- 单元在持久化的 `TOPLEVEL_BINDING` 中求值；局部变量、方法和常量都会保留。尾部值在不是 nil、赋值或定义时，会像 IRB 一样展示。
-- 富显示支持 OMP MIME 约定以及与 IRuby 兼容的 MIME hook，使用共享的内核 display 管线。
-- `reset` 会替换保留的 Ruby 内核。
-
-### Julia (`jl`)
-
-- 保留的内核由 `julia:${sessionId}`、归一化的 cwd 和解释器键控。
-- 单元在持久化的 `Main` 中求值；带有值的尾部表达式会被展示，除非被语句形式抑制。
-- Julia 的 display 栈被桥接到相同的 MIME/status 管线。
-- `reset` 会替换保留的 Julia 内核。
-
 ## Prelude helpers
 
 所有已启用的运行时在语言允许的情况下暴露等价的 helper：
@@ -128,19 +110,20 @@ Ruby 与 Julia 为可选启用。当至少有一个运行时启用时，已禁�
 - `display(value)`、`print(...)`
 - `read(path, offset?, limit?)`、`write(path, content)`、`env(...)`、`output(...)`
 - `tool.<name>(args)` 用于一次普通的会话工具调用
-- `completion(...)`、`agent(...)`、`parallel(...)`、`pipeline(...)`
+- `@tool` / `tool(fn, {...})` 用于为子代理定义内核本地工具（`eval.tools.enabled`，默认开启）
+- `completion(...)`、`agent(...)`、`wait(...)`、`workpool(...)`
 - `log(message)`、`phase(title)`、`budget`
 
-JS 的文件系统/桥接 helper 是异步的；Python、Ruby 和 Julia 的 helper 是同步的。`read()` 将非 `local://` 协议委托给已注册的 read 工具，通过注入的根解析 `local://`，并相对于 cwd 读取常规路径。`write()` 接受常规路径和 `local://` 路径，但拒绝其他协议 URL。
+JS 的 helper 是异步的；Python 的文件 helper 是同步的，而 `tool.<name>()` 是协程。`read()` 将非 `local://` 协议委托给已注册的 read 工具，通过注入的根解析 `local://`，并相对于 cwd 读取常规路径。`write()` 接受常规路径和 `local://` 路径，但拒绝其他协议 URL。
 
-`display()` 根据后端捕获 JSON 兼容结构、图像、markdown 或文本。Ruby 和 Julia 还会自动展示符合条件的尾部表达式。
+`display()` 根据后端捕获 JSON 兼容结构、图像、markdown 或文本。
 
 ### `completion()`
 
 一次无状态、无工具的 one-shot 模型调用：
 
 - JS：`await completion(prompt, { model?, system?, schema? })`
-- Python/Ruby/Julia：使用带 `model`、`system` 和 `schema` 关键字参数的形式
+- Python：使用带 `model`、`system` 和 `schema` 关键字参数的形式
 - `model`：`"smol"`、`"default"` 或 `"slow"` 档位；默认为当前激活/默认档位。
 - `schema`：用于合成 `respond` 工具的 JSON Schema；成功的结构化调用返回解析后的数据。
 - 未解析的档位、缺少凭据、错误/中止停止、空输出以及无效的结构化输出都会在单元内抛出。
@@ -150,19 +133,31 @@ JS 的文件系统/桥接 helper 是异步的；Python、Ruby 和 Julia 的 help
 通过 `runStructuredSubagent(...)` 运行一个子代理：
 
 - JS 支持首选的 `await agent(prompt, { agent?, label?, schema?, schemaMode?, isolated?, apply?, merge?, handle? })`；旧式位置参数槽位仍然实现。
-- Python/Ruby/Julia 使用关键字参数（JS 之外使用 `schema_mode`）。
+- Python 使用关键字参数（JS 之外使用 `schema_mode`）。
 - `agent` 默认为当前的 spawn policy；所选代理的 frontmatter 模型和设置始终生效（不接受每次调用的模型覆盖 — `model` 不被接受）。`schema` 会覆盖代理/会话 schema；`schemaMode`/`schema_mode` 选择 `permissive` 或 `strict`。
 - `isolated` 请求隔离。`apply` 控制是否合并捕获的变更；`merge=false` 选择 patch 模式，而常规设置控制 branch 模式。
 - `handle=true` 返回 `{ text, output, handle, id, agent }`，可选的解析后 `data`，以及隔离元数据，而不仅仅是 output/data。
 - Eval 子代理是一次性的（`keepAlive=false`），完成后会被注销/释放，并且**不共享调用方的 eval executor**（`shareEvalSession=false`）。因此它们对代码的修改不会出现在调用方的保留 VM/内核中。
 - spawn policy、已发现代理的可用性、`task.maxRecursionDepth` 闸门（默认 `2`；负值禁用上限）、硬性轮次预算、子代理失败、严格 schema 失败以及隔离-应用失败都会被强制作为单元错误抛出。
 
-`parallel(thunks)` 在有界池中运行零参 callable，并保留输入顺序。`pipeline(items, ...stages)` 将每个阶段应用为带屏障的波次。池宽度从 `task.maxConcurrency` 实时读取；`0` 表示一次性运行所有项。最低索引的失败会被向上传播。
+### `wait()`
+
+`wait(handles, timeout=None, raise_errors=True)`（JS：`wait(handles, { timeout, raiseErrors })`）阻塞直到列出的每个 agent/completion handle 结束，并按输入顺序返回它们的值。超过 `timeout` 仍在运行的 handle 会抛出 `TimeoutError`；失败或被取消的 handle 会抛出其错误，`raise_errors=False` 时则作为错误对象留在原槽位返回。等待会暂停单元看门狗，并把外部中止推迟到等待结束；中止会取消被等待的 handle。
+
+### `workpool()`
+
+`workpool(agent=None, name=None, context=None, tools=None)` 创建由实时 `task.maxConcurrency` 限流的 keep-alive 子代理池：
+
+- `.push(*items)` 返回条目 id（`<pool>#<seq>`）。条目会交给上下文占用最低的空闲 worker，池内还有余量时新建 worker，否则以轮转方式排入忙碌 worker 的队列，并在该 worker 轮次结束时整批交接。`eval.workpool.freshAgents=true` 则在容量释放时为每个条目排队新建代理，使每个条目都有新上下文且不发生后续批量交接。
+- worker 通过 `yield({ key: <从 1 开始的编号>, data: {...} })` 或 `yield({ key, error })` 逐条提交批次条目；每次响应都会给出剩余 key，最后一个 key 会自动结束该轮。
+- 池名同时是它聚合异步作业的 id 与标签。首次完全排空即结算并关闭该池；进入下一阶段请新建具名池。聚合结果只会投递一次，内部批次作业会被消费。
+- 完全阻塞？离开 eval，用 `hub` 的 `{ op: "wait", ids: [pool.name] }` 查询；重复直到结算。没有 `pool.wait()`，因此内核仍可服务 `@tool` 调用。
+- `.status()` 报告 worker/条目数量与上下文占用；`.peek()` 返回不消费的 `{ batches, pending }` 快照；`.close()` 丢弃仍在排队的条目。池是进程本地的；重启后它们的 worker 仍是可通过 `hub` 触达的已暂挂 keep-alive 代理。
 
 ## Side effects and cancellation
 
 - Prelude helper 可能读/写文件并调用任意已注册的工具；JS 暴露具有网络能力的 `fetch`。
-- Python、Ruby 和 Julia 使用保留的子进程内核，通过本地 IPC 帧协议通信。JavaScript 使用 worker VM。
+- Python 使用保留的子进程内核，通过本地 IPC 帧协议通信。JavaScript 使用 worker VM。
 - 保留的运行时在 reset、所有者清理或进程退出之前会在调用之间保持存活。
 - 必要时取消具有破坏性：JS 终止其 worker；被管理的内核被中断，并可能升级为关闭。reset 同样会对共享该后端会话的并发工作造成破坏。
 - eval 驱动的 `agent()` 可以运行工具和隔离工作区，但其子代会被释放，而不会为 hub 跟进而保留。
@@ -181,7 +176,7 @@ JS 的文件系统/桥接 helper 是异步的；Python、Ruby 和 Julia 的 help
 ## Notes
 
 - 一次调用即一个单元。利用持久化分别调用，仅重跑失败的步骤。
-- 状态按语言隔离；reset Python 不会 reset JS、Ruby 或 Julia。
-- 当前 schema 标记仅有 `py`、`js`、`rb` 和 `jl`；较长的语言名称是渲染器/审批格式化的别名，不是线上值。
+- 状态按语言隔离；reset Python 不会 reset JS。
+- 当前 schema 标记仅有 `py` 和 `js`；较长的语言名称是渲染器/审批格式化的别名，不是线上值。
 - 原先的多单元 `cells` 载荷、`*** Cell` 解析器、探测回退以及受限的 `eval.lark` 语法均已移除。
 - 父代理和普通任务子代理可共享继承的 eval executor id；由 eval 自身的 `agent()` 创建的子代理显式不共享。

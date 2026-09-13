@@ -13,7 +13,7 @@
 ```yaml
 app.model.cycleForward: Ctrl+P
 app.model.selectTemporary: Ctrl+T
-app.plan.toggle: Alt+Shift+P
+app.plan.toggle: Shift+Tab
 ```
 
 快捷键名称不区分大小写，并使用 UI 中显示的同一套表示法，例如 `Ctrl+P`、`Alt+Shift+P`、`Shift+Enter` 和 `Ctrl+Backspace`。

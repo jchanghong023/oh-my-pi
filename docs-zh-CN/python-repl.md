@@ -142,7 +142,7 @@
 
 ## 工具可用性与模式选择
 
-后端设置 `eval.py` / `eval.js` 默认为 `true`；`eval.rb` / `eval.jl` 默认为 `false`。可选的布尔环境变量 `PI_PY`、`PI_JS`、`PI_RB` 与 `PI_JL` 各自独立地覆盖对应的设置。
+后端设置 `eval.py` / `eval.js` 默认为 `true`。可选的布尔环境变量 `PI_PY` 与 `PI_JS` 各自独立地覆盖对应的设置。`eval.tools.enabled` 同样默认为 `true`；关闭它会移除 `tools` 生成字段与内核自定义工具的相关指引。
 
 该工具的会话作用域 schema 仅列出已启用的运行时。如果 Python 预检失败而另一个运行时处于启用状态，则 `eval` 对该运行时仍然可用，`py` 调用会报告一个 Python 后端不可用的错误，并列出其他可用的运行时。
 
@@ -224,7 +224,7 @@ pause/resume 事件是唯一能够暂停该预算的机制。计算、`stdout`/`
 
 ## 相关的环境变量
 
-- `PI_PY` / `PI_JS` / `PI_RB` / `PI_JL` —— 逐后端的暴露开关覆盖
+- `PI_PY` / `PI_JS` —— 逐后端的暴露开关覆盖
 - `PI_PYTHON_SKIP_CHECK=1` —— 跳过 Python 预检/预热
 - `PI_PYTHON_INTEGRATION=1` —— 启用会真正派生 Python 的受控集成测试
 - `PI_PYTHON_IPC_TRACE=1` —— 记录与运行器子进程交换的 NDJSON 帧

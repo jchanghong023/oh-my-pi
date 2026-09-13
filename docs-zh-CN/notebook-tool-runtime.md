@@ -6,8 +6,8 @@
 
 ## 实现文件
 
-- [`src/edit/notebook.ts`](../packages/coding-agent/src/edit/notebook.ts)
-- [`src/edit/read-file.ts`](../packages/coding-agent/src/edit/read-file.ts)
+- [`crates/pi-edit/src/notebook.rs`](../crates/pi-edit/src/notebook.rs)
+- [`crates/pi-edit/src/files.rs`](../crates/pi-edit/src/files.rs)
 - [`src/tools/read.ts`](../packages/coding-agent/src/tools/read.ts)
 - [`src/tools/eval.ts`](../packages/coding-agent/src/tools/eval.ts)
 - [`src/eval/py/executor.ts`](../packages/coding-agent/src/eval/py/executor.ts)
@@ -16,7 +16,7 @@
 
 ## 1) 运行时边界：编辑与执行
 
-## `.ipynb` 文件转换（`src/edit/notebook.ts`）
+## `.ipynb` 文件转换（`crates/pi-edit/src/notebook.rs`）
 
 - `read` 将 `.ipynb` 文件视为 notebook，除非选择器为 `:raw`。
 - 默认的 notebook 视图是带标记的可编辑文本：
@@ -24,7 +24,7 @@
   - `# %% [markdown] cell:N`
   - `# %% [raw] cell:N`
 - 行选择器和多范围选择器都作用于这段虚拟文本。
-- 编辑管道通过 `serializeEditedNotebookText(...)` 将虚拟文本往返转换回 notebook JSON。
+- 编辑管道通过 `serialize_edited_notebook_text(...)` 将虚拟文本往返转换回 notebook JSON。
 - 当某个标记引用已存在但未使用的 `cell:N` 时，保留原有 notebook 元数据；新单元格会获得全新的空元数据。
 - 如果传入序列化器的 notebook 不存在，则从一个空的 nbformat 4.5 notebook 开始。
 - 独立的 `write` 工具不具备 notebook 感知能力：它会用提供的字节直接覆盖文件。仅在传入合法 notebook JSON 时使用它，不要传入虚拟标记表示。

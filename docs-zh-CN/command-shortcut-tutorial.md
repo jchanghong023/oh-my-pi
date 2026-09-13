@@ -3207,7 +3207,7 @@ OMP 在大型任务里会用**加权并行子代理**自动派工；如果想**�
 - 想禁止 agent 跑任何外部命令 → `--no-tools` 或 `--approval-mode yolo` 的反向收紧。
 - 怀疑长寿命进程泄漏 → `omp ps`，按需 `stop`/`kill`/`restart`。
 
-> launch 旗标、profile bootstrap、approval-mode 详尽列表见「启动交互与协议接入」与 [approval mode](../approval-mode.md)。
+> launch 旗标、profile bootstrap、approval-mode 详尽列表见「启动交互与协议接入」与 [approval mode](./approval-mode.md)。
 
 ### 代码搜索、阅读与提交流程
 
@@ -3253,7 +3253,7 @@ omp commit                # 让 agent 生成 message + 更新 CHANGELOG
 - 想给某个项目定制一套 agents → `omp agents unpack --project`（见「并行 agent 与诊断清理」）。
 - 怀疑扩展出问题 → 加 `--no-extensions` 临时关掉发现。
 
-> 插件发现顺序、hook 优先级、trusted vs untrusted 差异见 [extensions](../extensions.md) 与 [extension loading](../extension-loading.md)。
+> 插件发现顺序、hook 优先级、trusted vs untrusted 差异见 [extensions](./extensions.md) 与 [extension loading](./extension-loading.md)。
 
 ### 升级、清理与使用统计
 
@@ -3277,7 +3277,7 @@ omp worktree clear   # 4. 回收 worktree 残骸
 omp gc               # 5. 回收存储
 ```
 
-> `omp stats` / `omp usage` 的输出 schema 与 provider 配额刷新逻辑见「诊断、基准与专用工具」与 [models](../models.md)。
+> `omp stats` / `omp usage` 的输出 schema 与 provider 配额刷新逻辑见「诊断、基准与专用工具」与 [models](./models.md)。
 
 ### 协议接入：把 OMP 嵌入编辑器或脚本
 
@@ -3298,7 +3298,7 @@ omp gc               # 5. 回收存储
 - 多台机器共用一套凭据 → 选一台跑 `omp auth-broker serve`，其它机器 `omp auth-gateway`。
 - 想用本机 Chrome 而不是无头浏览器 → 先 `omp browser-relay` 起中继，再让 agent 用 browser 工具。
 
-> 各协议的握手细节、ACP session 与 approval mode 的交互见 [approval mode](../approval-mode.md)、[rpc](../rpc.md)、[auth broker / gateway](../auth-broker-gateway.md)。
+> 各协议的握手细节、ACP session 与 approval mode 的交互见 [approval mode](./approval-mode.md)、[rpc](./rpc.md)、[auth broker / gateway](./auth-broker-gateway.md)。
 
 ### 协作分享与展示
 

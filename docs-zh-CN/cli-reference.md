@@ -213,12 +213,15 @@ advisor 运行时的情况下 print 模式的处理（disposal）语义。
 | `completions` | 打印 shell 补全脚本（bash、zsh 或 fish）。 | |
 | `compress` | 将文本文件改写为密集的 prompt register，并报告被丢弃的内容。 | |
 | `config` | 管理配置项。 | [config usage](./config-usage.md)、[settings](./settings.md) |
+| `docs` | 管理持久的外部 Markdown 文档索引。 | [wiki 工具](./tools/wiki.md) |
 | `dry-balance` | 在随机 session ids 上 dry-run OAuth 账户平衡。 | |
 | `gc` | 运行存储垃圾回收。 | |
 | `grep` | 从 CLI 测试 grep 工具。（[`grep` 工具](./tools/grep.md) 是一个独立的 agent 工具。） | |
 | `gallery` | 跨 streaming、in-progress、success 和 failure 状态预览工具渲染器。 | |
+| `git` | 交互式全屏 git UI：split diff 视图、staging 侧栏与 commit composer。 | |
 | `grievances` | 查看、清理或上报已报告的工具问题（auto-QA grievances）。 | |
 | `if-bench` | 基准测试指令遵循与工作记忆：单个带缓存的 thread，依次执行 glyph 数组动作，并以一个贯穿 prompt 的猫叫声指令作为额外要求。 | |
+| `images`, `img` | 检查、诊断、探测并清理图片发布后端。 | |
 | `install` | 安装或链接一个扩展包（`plugin install` / `plugin link` 的别名）。 | [extensions](./extensions.md) |
 | `join` | 加入一个共享的 collab 会话（与 `/join` 相同）。 | [collab](./collab.md) |
 | `models` | 列出、搜索并刷新可用模型。 | [models](./models.md) |
@@ -229,6 +232,7 @@ advisor 运行时的情况下 print 模式的处理（disposal）语义。
 | `setup` | 运行 onboarding 设置或安装可选功能所需的依赖。 | |
 | `shell` | 交互式 shell 控制台。 | |
 | `read` | 显示 read 工具将针对某个路径、URL 或内部 URI 返回的内容。（[`read` 工具](./tools/read.md) 是一个独立的 agent 工具。） | |
+| `render` | 用生产环境的 transcript 管线绘制整个会话线程（含重绘计时）。 | |
 | `ssh` | 管理 SSH 主机配置。 | |
 | `stats` | 查看使用统计。 | |
 | `update` | 检查并安装更新。 | |

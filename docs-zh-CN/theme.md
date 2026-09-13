@@ -176,7 +176,7 @@
 
 设置模式中的当前默认值：
 
-- `theme.dark = "titanium"`
+- `theme.dark = "dark-terminal"`
 - `theme.light = "light"`
 - `symbolPreset = "unicode"`
 - `colorBlindMode = false`

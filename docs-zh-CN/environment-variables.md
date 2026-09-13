@@ -373,13 +373,8 @@ SearXNG 还会从 `~/.omp/agent/config.yml` 读取等价的 `searxng.endpoint`�
 | --------------------- | -------------------------------------------------------------------------------------------- |
 | `PI_PY`               | Python 的布尔型覆盖；未设置时遵循 `eval.py`（默认启用）                                        |
 | `PI_JS`               | JavaScript 的布尔型覆盖；未设置时遵循 `eval.js`（默认启用）                                    |
-| `PI_RB`               | Ruby 的布尔型覆盖；未设置时遵循 `eval.rb`（默认禁用）                                          |
-| `PI_JL`               | Julia 的布尔型覆盖；未设置时遵循 `eval.jl`（默认禁用）                                         |
 | `PI_PYTHON_SKIP_CHECK`| 真值标志，跳过 Python 解释器可用性检查（子进程运行器仍按需启动）                                |
-| `PI_RUBY_SKIP_CHECK`  | 真值标志，跳过 Ruby 解释器可用性检查                                                            |
 | `PI_PYTHON_IPC_TRACE` | 真值标志，记录与 Python 运行器子进程交换的 NDJSON 帧                                          |
-| `PI_RUBY_IPC_TRACE`   | 真值标志，记录 Ruby 运行器 IPC 帧                                                              |
-| `PI_JULIA_IPC_TRACE`  | 真值标志，记录 Julia 运行器 IPC 帧                                                             |
 | `VIRTUAL_ENV`         | Python 运行时解析的最高优先级 venv 路径                                                        |
 | `CONDA_PREFIX`        | Python 环境回退，介于 `VIRTUAL_ENV` 之后，本地 `.venv` / `venv` 目录之前                        |
 
