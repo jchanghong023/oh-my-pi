@@ -6,8 +6,11 @@ import { join } from "node:path";
 const modulePath = join(import.meta.dir, "../src/config/company-provider.ts");
 
 // Separate processes exercise the real eager module boundary without touching host Claude credentials.
-function runSnapshotProbe(initial: string | undefined): Record<string, unknown> {
+// Claude's config directory is pinned into the fixture home so a host-level CLAUDE_CONFIG_DIR cannot
+// redirect the read; `relocateClaudeConfig` points it at a sibling directory instead.
+function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = false): Record<string, unknown> {
 	const home = mkdtempSync(join(tmpdir(), "company-snapshot-"));
+	const claudeConfigDir = relocateClaudeConfig ? join(home, "relocated-claude") : join(home, ".claude");
 	try {
 		const child = Bun.spawnSync(
 			[
@@ -15,11 +18,9 @@ function runSnapshotProbe(initial: string | undefined): Record<string, unknown> 
 				"--eval",
 				`
 			import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-			import { homedir } from "node:os";
-			import { join } from "node:path";
 			import { Worker } from "node:worker_threads";
-			const file = join(homedir(), ".claude", "settings.json");
-			mkdirSync(join(homedir(), ".claude"), { recursive: true });
+			const file = ${JSON.stringify(join(claudeConfigDir, "settings.json"))};
+			mkdirSync(${JSON.stringify(claudeConfigDir)}, { recursive: true });
 			const initial = ${JSON.stringify(initial) ?? "undefined"};
 			if (initial !== undefined) writeFileSync(file, initial);
 			// Import must happen after fixture creation: this probes eager configuration capture.
@@ -60,7 +61,11 @@ function runSnapshotProbe(initial: string | undefined): Record<string, unknown> 
 			}));
 			`,
 			],
-			{ env: { ...process.env, HOME: home, USERPROFILE: home }, stdout: "pipe", stderr: "pipe" },
+			{
+				env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: claudeConfigDir },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
 		);
 		if (child.exitCode !== 0) throw new Error(child.stderr.toString());
 		return JSON.parse(child.stdout.toString());
@@ -109,5 +114,17 @@ describe("company provider startup snapshot", () => {
 		expect(result.workerMatches).toBe(true);
 		expect(result.error).toContain("not valid JSON");
 		expect(JSON.stringify(result)).not.toContain("fixture-secret");
+	});
+
+	test("reads Claude's active config dir when CLAUDE_CONFIG_DIR relocates it", () => {
+		const result = runSnapshotProbe(
+			JSON.stringify({
+				env: { ANTHROPIC_BASE_URL: "http://relocated.invalid/gateway", ANTHROPIC_AUTH_TOKEN: "fixture-secret" },
+			}),
+			true,
+		);
+		expect(result.available).toBe(true);
+		expect(result.tokenMatches).toBe(true);
+		expect(result.baseUrl).toBe("http://relocated.invalid/gateway");
 	});
 });

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { resolveClaudePaths } from "./claude-paths";
 
 export const COMPANY_PROVIDER_ID = "company";
 
@@ -14,21 +14,20 @@ interface CompanyConfig {
 type CompanySnapshot = { config: Readonly<CompanyConfig>; error?: never } | { config?: never; error: string };
 
 function readStartupConfig(): CompanySnapshot {
+	// Claude Code's active config directory (honors `CLAUDE_CONFIG_DIR`), the same
+	// source OMP's `.claude` settings, skills, and session stores read.
+	const settingsPath = join(resolveClaudePaths().configDir, "settings.json");
 	let text: string;
 	try {
-		text = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8");
+		text = readFileSync(settingsPath, "utf8");
 	} catch {
-		return {
-			error: "Company provider unavailable: cannot read ~/.claude/settings.json. Restart OMP after fixing it.",
-		};
+		return { error: `Company provider unavailable: cannot read ${settingsPath}. Restart OMP after fixing it.` };
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
 	} catch {
-		return {
-			error: "Company provider unavailable: ~/.claude/settings.json is not valid JSON. Restart OMP after fixing it.",
-		};
+		return { error: `Company provider unavailable: ${settingsPath} is not valid JSON. Restart OMP after fixing it.` };
 	}
 	const env = parsed && typeof parsed === "object" && "env" in parsed ? parsed.env : undefined;
 	if (!env || typeof env !== "object") {
