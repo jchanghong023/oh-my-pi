@@ -1777,6 +1777,11 @@ mod tests {
 		let output = Command::new("git")
 			.arg("-C")
 			.arg(dir)
+			// Host-global git config (core.autocrlf, diff drivers, …) must not
+			// leak into fixtures: a Windows host with autocrlf=true rewrites
+			// LF↔CRLF on checkout and breaks byte-exact patch/status asserts.
+			.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+			.env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
 			.args(args)
 			.output()
 			.unwrap();
@@ -1788,8 +1793,18 @@ mod tests {
 	}
 
 	fn fixture() -> (TempDir, GitRepo) {
+		// Hermetic git for the whole test (nextest runs one test per process):
+		// neutralize host-global config for spawned git children and the
+		// in-process gix backend alike — a Windows host with core.autocrlf=true
+		// otherwise rewrites LF↔CRLF and breaks byte-exact assertions.
+		// SAFETY: plain #[test], so no other thread can observe the mutation.
+		unsafe {
+			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
+			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
+		}
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
+		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
 		fs::write(temp.path().join("a"), "one\n").unwrap();

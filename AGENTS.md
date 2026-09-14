@@ -38,8 +38,9 @@
 * 本地编译与测试默认禁止：除用户明确要求外，NEVER 运行任何本地编译、类型检查或测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）。唯一例外是本 fork 的 `bun scripts/jch-localci.ts [full]`，且同样仅在用户明确要求时运行。
 * 普通 TypeScript 修改后 MUST 运行 `bun run fastcheck`；纯文档修改只做差异与格式检查。该入口只做 lint 与格式检查，不属于上一条禁止的编译或测试。
 * 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
-* 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口仅明确要求 `full` 时构建 Linux-x64 native addon。
-* 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
+* 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口支持 Windows x64 与 Linux x64（含 WSL2 同目录），仅明确要求 `full` 时构建当前宿主平台 native addon，Rust 核心测试走 `cargo nextest`。
+* 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。自动化入口 `bun scripts/jch-dev-ui-test.ts`（PTY 启动 dev TUI、断言渲染/交互/退出）同样仅在用户明确要求时运行，双平台通用。
+* WSL2 与 Windows 共享同一检出目录时，node_modules 为 Windows 安装；WSL 侧运行 localci / fastcheck / UI 测试需要 WSL 内全局安装同版本 `oxlint` / `oxfmt` / `tsgo`（`bun install -g`）与 `~/.cargo/bin` 在 PATH，cargo 构建建议以 `CARGO_TARGET_DIR` 指向 WSL 本地文件系统。
 
 ## 中文文档
 

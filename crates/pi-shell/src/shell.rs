@@ -3382,7 +3382,6 @@ mod tests {
 			"date",
 			"diff",
 			"dirname",
-			"errno",
 			"fd",
 			"find",
 			"grep",
@@ -3429,6 +3428,13 @@ mod tests {
 			"xargs",
 			"yes",
 		];
+		// `errno` is a POSIX-only utility and is not compiled into the registry
+		// on Windows.
+		let mut expected = expected.to_vec();
+		if cfg!(unix) {
+			expected.push("errno");
+			expected.sort_unstable();
+		}
 		let mut names: Vec<&'static str> =
 			pi_builtins::utility_builtins::<brush_core::extensions::DefaultShellExtensions>()
 				.into_iter()
@@ -3784,15 +3790,21 @@ mod tests {
 			.expect("find");
 		let found = read("find.txt");
 		assert!(!found.trim().is_empty(), "find produced no output");
+		// The operand prefix is `.` with the platform's separator.
+		let dot_prefix = if cfg!(windows) { ".\\" } else { "./" };
 		for line in found.lines() {
 			assert!(
-				line.starts_with("./"),
+				line.starts_with(dot_prefix),
 				"find path is not operand-relative: {line:?} (full: {found:?})"
 			);
 		}
 		assert!(
-			found.contains("./data.txt") && found.contains("./sub/nested.txt"),
-			"find output: {found:?}"
+			found.contains("./data.txt") || found.contains(".\\data.txt"),
+			"find missed data.txt: {found:?}"
+		);
+		assert!(
+			found.contains("./sub/nested.txt") || found.contains(".\\sub\\nested.txt"),
+			"find missed nested file: {found:?}"
 		);
 		// cat: concatenate a cwd-resolved file with -n line numbering.
 		session
@@ -3846,7 +3858,11 @@ mod tests {
 		assert_eq!(exit_code(&exec), 0, "rg recursive search should match");
 		let out = read("rg.txt");
 		assert!(out.contains("data.txt:needle"), "rg missed visible file: {out:?}");
-		assert!(out.contains("sub/nested.txt:needle"), "rg missed nested file: {out:?}");
+		// Like ripgrep, nested paths print with the platform separator.
+		assert!(
+			out.contains("sub/nested.txt:needle") || out.contains("sub\\nested.txt:needle"),
+			"rg missed nested file: {out:?}"
+		);
 		assert!(!out.contains(".hidden.txt"), "rg searched hidden file by default: {out:?}");
 		assert!(!out.contains("ignored.log"), "rg ignored .gitignore by default: {out:?}");
 		assert!(!out.contains("binary.bin"), "rg printed binary file by default: {out:?}");
@@ -3919,7 +3935,11 @@ mod tests {
 		assert_eq!(exit_code(&exec), 0, "fd should match visible files");
 		let out = read("fd.txt");
 		assert!(out.contains("needle.txt"), "fd missed visible file: {out:?}");
-		assert!(out.contains("sub/needle.rs"), "fd missed nested file: {out:?}");
+		// Nested paths print with the platform separator, like fd itself.
+		assert!(
+			out.contains("sub/needle.rs") || out.contains("sub\\needle.rs"),
+			"fd missed nested file: {out:?}"
+		);
 		assert!(!out.contains(".hidden-needle.txt"), "fd searched hidden file: {out:?}");
 		assert!(!out.contains("ignored-needle.log"), "fd ignored .gitignore: {out:?}");
 		assert!(!out.contains("fdignored-needle.tmp"), "fd ignored .fdignore: {out:?}");
@@ -3959,7 +3979,14 @@ mod tests {
 			.run_string("fd --glob '*.rs' sub > glob.txt", &si, &params)
 			.await
 			.expect("fd glob");
-		assert_eq!(read("glob.txt"), "sub/needle.rs\n");
+		assert_eq!(
+			read("glob.txt"),
+			if cfg!(windows) {
+				"sub\\needle.rs\n"
+			} else {
+				"sub/needle.rs\n"
+			}
+		);
 
 		let no_match = session
 			.shell
@@ -4191,6 +4218,7 @@ mod tests {
 	/// The find display/match surface must use the operand-relative path while
 	/// filesystem actions still target the real (resolved) path: `-path` and
 	/// `-printf %p` see `./...`, while `-delete` removes the correct file.
+	#[cfg_attr(windows, ignore = "POSIX-shaped: `./`-style -path/-printf output and `-exec sh -c`")]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn uutils_find_display_and_actions_split_paths() {
 		let tmp = std::env::temp_dir().join(format!("pi-find-split-{}", std::process::id()));

@@ -200,9 +200,13 @@ impl PathPolicy {
 		if is_internal_url(authored) {
 			return false;
 		}
-		let recovered = lexical_absolute(recovered, &self.cwd);
-		is_within(&recovered, &lexical_absolute(&self.cwd, &self.cwd))
-			|| self.targets_local_sandbox(&recovered)
+		// Compare both sides in the same cleaned form as `canonical_key`:
+		// `Path::starts_with` matches per-component, and a verbatim `\\?\C:\…`
+		// cwd (std canonicalize on Windows) never component-matches the cleaned
+		// store-key form `C:\…`, silently rejecting every recovery.
+		let recovered = strip_windows_verbatim_path(lexical_absolute(recovered, &self.cwd));
+		let root = strip_windows_verbatim_path(lexical_absolute(&self.cwd, &self.cwd));
+		is_within(&recovered, &root) || self.targets_local_sandbox(&recovered)
 	}
 
 	/// Return the model-facing generated-file rejection, when applicable.
@@ -598,6 +602,9 @@ mod tests {
 		assert_eq!(p.resolve("/").unwrap().absolute, tmp.path());
 		assert_eq!(p.resolve("@~/x").unwrap().absolute, tmp.path().join("home/x"));
 		assert_eq!(p.resolve(":./x").unwrap().absolute, tmp.path().join("./x"));
+		// The file URL's `/tmp/...` path maps to a POSIX root; on Windows it
+		// resolves onto the current drive instead (`C:\tmp\...`).
+		#[cfg(unix)]
 		assert_eq!(p.resolve("file:///tmp/a%20b").unwrap().absolute, PathBuf::from("/tmp/a b"));
 		assert!(
 			p.resolve("agent://x")
@@ -706,11 +713,15 @@ mod tests {
 	fn canonicalizes_existing_parent() {
 		let tmp = tempfile::tempdir().unwrap();
 		let missing = tmp.path().join("missing.txt");
+		// canonical_key strips the `\\?\` verbatim prefix std canonicalize
+		// yields on Windows; apply the same cleaning to the expectation.
 		assert_eq!(
 			canonical_key(&missing),
-			std::fs::canonicalize(tmp.path())
-				.unwrap()
-				.join("missing.txt")
+			strip_windows_verbatim_path(
+				std::fs::canonicalize(tmp.path())
+					.unwrap()
+					.join("missing.txt")
+			)
 		);
 	}
 }

@@ -1577,6 +1577,9 @@ mod tests {
 	fn git(cwd: &Path, args: &[&str]) -> String {
 		let output = Command::new("git")
 			.current_dir(cwd)
+			// Hermetic: host-global git config (autocrlf etc.) must not leak.
+			.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+			.env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
 			.args(args)
 			.output()
 			.expect("run git");
@@ -1592,6 +1595,8 @@ mod tests {
 		let output = Command::new("git")
 			.current_dir(cwd)
 			.env("GIT_INDEX_FILE", index)
+			.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+			.env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
 			.args(args)
 			.output()
 			.expect("run git with alternate index");
@@ -1605,8 +1610,16 @@ mod tests {
 	}
 
 	fn init(files: &[(&str, &[u8])]) -> TempDir {
+		// Hermetic git (host autocrlf etc. must not leak; nextest: one test per
+		// process so the process-wide override cannot bleed across tests).
+		// SAFETY: plain #[test], so no other thread can observe the mutation.
+		unsafe {
+			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
+			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
+		}
 		let temp = tempfile::tempdir().expect("tempdir");
 		git(temp.path(), &["init", "-q"]);
+		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Patch Test"]);
 		git(temp.path(), &["config", "user.email", "patch@example.com"]);
 		for (path, bytes) in files {

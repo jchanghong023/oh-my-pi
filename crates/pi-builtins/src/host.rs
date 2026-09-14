@@ -106,6 +106,15 @@ pub(crate) struct Host {
 	cancel:                Arc<AtomicBool>,
 	exit_code:             i32,
 	stdin_is_search_input: bool,
+	/// Whether fd 1's destination is a regular file, snapshotted before the
+	/// SIGPIPE guard wraps the stream: the guard hides the inner `OpenFile`
+	/// behind `OpenFile::Stream`, which defeats `is_regular_file`'s variant
+	/// match on Windows (Unix sees through it via `try_borrow_as_fd`). Drives
+	/// [`Host::stdout_writer`]'s block-vs-line policy, so `rg pattern > out.txt`
+	/// keeps its output invisible to the walk until the utility exits on every
+	/// platform — line-buffered output let the walker match `out.txt`'s own
+	/// growing content on Windows, amplifying a few matches into gigabytes.
+	stdout_is_regular_file: bool,
 	/// The shared stdout/stderr writer when both fds point at one
 	/// destination; `None` when they diverge.
 	merged_out:            Option<Arc<Mutex<StreamWriter>>>,
@@ -342,7 +351,8 @@ impl Host {
 	pub fn stdout_writer(&self) -> StreamWriter {
 		match &self.merged_out {
 			Some(shared) => StreamWriter::Shared(Arc::clone(shared)),
-			None => StreamWriter::new(self.stdout.clone()),
+			None if self.stdout_is_regular_file => StreamWriter::block(self.stdout.clone()),
+			None => StreamWriter::line(self.stdout.clone()),
 		}
 	}
 
@@ -1013,6 +1023,9 @@ fn build_host<SE: ShellExtensions>(
 
 	let stdout = or_null(context.try_fd(OpenFiles::STDOUT_FD))?;
 	let stderr_file = or_null(context.try_fd(OpenFiles::STDERR_FD))?;
+	// Snapshot before the SIGPIPE guard wraps stdout: after wrapping, the
+	// `OpenFile::Stream` variant hides the destination on Windows.
+	let stdout_is_regular_file = is_regular_file(&stdout);
 	let sigpipe = Arc::new(Sigpipe::default());
 	// `2>&1` (and the default capture pipe): one shared writer keeps
 	// diagnostics and output in exact write order. It carries stdout output,
@@ -1042,6 +1055,7 @@ fn build_host<SE: ShellExtensions>(
 		cancel,
 		exit_code: 0,
 		stdin_is_search_input,
+		stdout_is_regular_file,
 		merged_out,
 		sigpipe,
 	})
@@ -1226,6 +1240,7 @@ mod testing {
 				cancel,
 				exit_code:             0,
 				stdin_is_search_input: false,
+				stdout_is_regular_file: false,
 				merged_out:            None,
 				sigpipe,
 			};
@@ -1237,6 +1252,7 @@ mod testing {
 		/// that model a departed reader (`… | head`) hand in the write end of a
 		/// pipe whose read end is already dropped.
 		pub(crate) fn set_test_stdout(&mut self, file: OpenFile) {
+			self.stdout_is_regular_file = is_regular_file(&file);
 			self.stdout = SigpipeGuard::wrap(file, GuardedStream::Stdout, &self.sigpipe);
 		}
 

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -228,6 +229,12 @@ describe("Settings.reloadForCwd", () => {
 
 		afterEach(() => {
 			resetSettingsForTest();
+			// Each test's `Settings.init` opens an AgentStorage SQLite db inside
+			// the temp agentDir; on Windows an open db handle blocks the recursive
+			// delete below with EBUSY (POSIX unlinks it fine). Close every
+			// process-wide storage before removing the fixture, like the other
+			// settings suites do.
+			AgentStorage.close();
 			if (fs.existsSync(testDir)) {
 				removeSyncWithRetries(testDir);
 			}

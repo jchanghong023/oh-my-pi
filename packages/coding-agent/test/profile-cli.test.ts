@@ -243,6 +243,9 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				// os.homedir() resolves USERPROFILE on Windows; redirect it too or
+				// the probe reads the real home and never sees the fixture .env.
+				USERPROFILE: home,
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",

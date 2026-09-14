@@ -1233,7 +1233,13 @@ mod tests {
 	type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 	fn git(cwd: &Path, args: &[&str]) -> std::result::Result<String, Box<dyn std::error::Error>> {
-		let output = Command::new("git").current_dir(cwd).args(args).output()?;
+		let output = Command::new("git")
+			.current_dir(cwd)
+			// Hermetic: host-global git config (autocrlf etc.) must not leak.
+			.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+			.env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
+			.args(args)
+			.output()?;
 		if !output.status.success() {
 			return Err(
 				format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr))
@@ -1244,8 +1250,16 @@ mod tests {
 	}
 
 	fn repo() -> std::result::Result<(TempDir, GitRepo), Box<dyn std::error::Error>> {
+		// Hermetic git (host autocrlf etc. must not leak; nextest: one test per
+		// process so the process-wide override cannot bleed across tests).
+		// SAFETY: plain #[test], so no other thread can observe the mutation.
+		unsafe {
+			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
+			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
+		}
 		let dir = tempfile::tempdir()?;
 		git(dir.path(), &["init", "-b", "main"])?;
+		git(dir.path(), &["config", "core.autocrlf", "false"])?;
 		git(dir.path(), &["config", "user.name", "Test User"])?;
 		git(dir.path(), &["config", "user.email", "test@example.com"])?;
 		let repo = GitRepo::require(dir.path())?;
@@ -1455,7 +1469,15 @@ mod tests {
 		let worktrees = repo.worktrees()?;
 		assert_eq!(worktrees.len(), 2);
 		assert_eq!(worktrees[0].path, dir.path());
-		assert_eq!(worktrees[1].path, linked.canonicalize()?);
+		// std canonicalize returns a `\\?\`-prefixed verbatim path on Windows;
+		// the repo reports the equivalent clean path.
+		let expected_linked = linked.canonicalize()?;
+		#[cfg(windows)]
+		let expected_linked = {
+			let cleaned = expected_linked.to_string_lossy().into_owned();
+			PathBuf::from(cleaned.strip_prefix(r"\\?\").unwrap_or(&cleaned))
+		};
+		assert_eq!(worktrees[1].path, expected_linked);
 		assert_eq!(worktrees[1].branch.as_deref(), Some("refs/heads/linked-branch"));
 		Ok(())
 	}

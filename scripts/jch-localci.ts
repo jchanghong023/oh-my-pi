@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -9,6 +10,7 @@ interface Command {
 	label: string;
 	cwd: string;
 	argv: readonly string[];
+	env?: Record<string, string>;
 }
 
 interface TestGroup {
@@ -231,7 +233,7 @@ function shellQuote(value: string): string {
 
 function printUsage(): void {
 	console.log("Usage: bun scripts/jch-localci.ts [full]");
-	console.log("  default  Linux-x64 core regression without native rebuild");
+	console.log("  default  Windows-x64 / Linux-x64 core regression without native rebuild");
 	console.log("  full     Build the host native addon, then run the full localci scope");
 }
 
@@ -318,13 +320,14 @@ async function runCommand(command: Command): Promise<number> {
 	// `bun test` never reads stdin; an inherited pipe whose write end stays open
 	// (supervisor/pty-less contexts) would keep tests that wait on stdin EOF —
 	// e.g. main-startup-watchdog's runRootCommand — hung until their timeout.
-	const process = Bun.spawn([...command.argv], {
+	const child = Bun.spawn([...command.argv], {
 		cwd: path.join(repoRoot, command.cwd),
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
+		env: command.env ? { ...process.env, ...command.env } : undefined,
 	});
-	return process.exited;
+	return child.exited;
 }
 
 async function runRequired(command: Command): Promise<void> {
@@ -380,9 +383,41 @@ async function runTypechecks(): Promise<void> {
 	}
 }
 
+/**
+ * On Windows the workspace forces `CMAKE_GENERATOR = Ninja` (see
+ * .cargo/config.toml), so building audiopus_sys's bundled Opus needs both
+ * `cmake` and `ninja` on PATH. VS Build Tools ships both without exposing
+ * them; resolve the VS install via vswhere and prepend its CMake/Ninja dirs —
+ * the same augmentation packages/natives/scripts/build-bindings.ts applies
+ * for the addon build. Other platforms return undefined (inherit env).
+ */
+function windowsRustBuildEnv(): Record<string, string> | undefined {
+	if (process.platform !== "win32" || (Bun.which("cmake") && Bun.which("ninja"))) return undefined;
+	const vcToolsComponent =
+		process.arch === "arm64"
+			? "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+			: "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
+	const vswhere = path.join(
+		process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+		"Microsoft Visual Studio",
+		"Installer",
+		"vswhere.exe",
+	);
+	const probe = Bun.spawnSync(
+		[vswhere, "-latest", "-products", "*", "-requires", vcToolsComponent, "-property", "installationPath"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	const vsRoot = probe.exitCode === 0 ? probe.stdout.toString("utf-8").trim() : "";
+	if (!vsRoot) return undefined;
+	const cmakeExt = path.join(vsRoot, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake");
+	const extraDirs = [path.join(cmakeExt, "CMake", "bin"), path.join(cmakeExt, "Ninja")].filter(dir => existsSync(dir));
+	if (extraDirs.length === 0) return undefined;
+	return { PATH: [...extraDirs, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+}
+
 async function runRustTests(): Promise<void> {
 	const argv = ["cargo", "nextest", "run", ...CORE_RUST_CRATES.flatMap(crate => ["-p", crate])];
-	await runRequired({ label: "rust/core", cwd: ".", argv });
+	await runRequired({ label: "rust/core", cwd: ".", argv, env: windowsRustBuildEnv() });
 }
 
 async function runCliSmoke(): Promise<void> {
@@ -397,8 +432,9 @@ async function runCliSmoke(): Promise<void> {
 }
 
 async function main(mode: Mode): Promise<void> {
-	if (process.platform !== "linux" || process.arch !== "x64") {
-		throw new Error(`jch-localci supports Linux x64 only (found ${process.platform}-${process.arch})`);
+	const platformSupported = (process.platform === "linux" || process.platform === "win32") && process.arch === "x64";
+	if (!platformSupported) {
+		throw new Error(`jch-localci supports Windows x64 and Linux x64 (found ${process.platform}-${process.arch})`);
 	}
 
 	const changedPaths = await getChangedPaths();

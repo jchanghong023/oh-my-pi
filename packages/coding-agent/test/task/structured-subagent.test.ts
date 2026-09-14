@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
@@ -21,6 +22,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
 import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const AGENT: AgentDefinition = {
 	name: "worker",
@@ -223,7 +225,10 @@ describe("structured subagent primitive", () => {
 			expect(liveSettings.get("retry.modelFallback")).toBe(false);
 		} finally {
 			liveSettings.cancelPendingSaves();
-			await fs.rm(root, { recursive: true, force: true });
+			// loadIsolated opened an AgentStorage db inside the temp agentDir;
+			// Windows cannot delete a directory holding an open db handle.
+			AgentStorage.close();
+			await removeWithRetries(root);
 		}
 	});
 
@@ -262,7 +267,10 @@ describe("structured subagent primitive", () => {
 			expect(second.serviceTierOverride).toBe("none");
 		} finally {
 			liveSettings.cancelPendingSaves();
-			await fs.rm(root, { recursive: true, force: true });
+			// loadIsolated opened an AgentStorage db inside the temp agentDir;
+			// Windows cannot delete a directory holding an open db handle.
+			AgentStorage.close();
+			await removeWithRetries(root);
 		}
 	});
 

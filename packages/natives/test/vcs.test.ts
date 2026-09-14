@@ -30,6 +30,11 @@ async function repository() {
 	const root = await mkdtemp(join(tmpdir(), "pi-natives-vcs-"));
 	roots.push(root);
 	await git(root, "init", "-b", "main");
+	// A host-level `core.autocrlf=true` (the Windows installer default) rewrites
+	// LF→CRLF on checkout, so patches generated before `git restore` no longer
+	// apply and `canApplyPatch` fails. Disable conversion like the diff-driver
+	// neutralization above so the fixture stays byte-stable on any host.
+	await git(root, "config", "core.autocrlf", "false");
 	await git(root, "config", "user.name", "Native Test");
 	await git(root, "config", "user.email", "native@example.test");
 	await writeFile(join(root, "tracked.txt"), "one\ntwo\n");

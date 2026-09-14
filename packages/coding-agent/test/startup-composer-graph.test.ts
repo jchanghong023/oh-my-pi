@@ -14,7 +14,9 @@ describe("startup composer prepaint graph", () => {
 			proc.exited,
 		]);
 		expect(code, err).toBe(0);
-		const modules: string[] = JSON.parse(out.trim().split("\n").at(-1)!);
+		// Loader registry keys are native-separator paths (`src\modes\…` on
+		// Windows); normalize to `/` so the controls below match everywhere.
+		const modules: string[] = JSON.parse(out.trim().split("\n").at(-1)!).map((m: string) => m.replaceAll("\\", "/"));
 		expect(modules.length).toBeGreaterThan(50); // sanity: registry actually enumerated
 		// Positive controls — the scene really is on this graph.
 		expect(modules.some(m => m.includes("modes/components/welcome"))).toBe(true);

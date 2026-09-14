@@ -622,9 +622,12 @@ fn input_supports_fallback_path_and_absolute_paths_in_cwd() {
 	let fallback = SplitOptions { cwd: None, path: Some("a.ts") };
 	let patch = Patch::parse("PUT <1:\n+x", &fallback).unwrap();
 	assert_eq!(patch.sections[0].path, "a.ts");
-	let cwd = Path::new("/tmp/work");
-	let options = SplitOptions { cwd: Some(cwd), path: None };
-	let patch = Patch::parse("[/tmp/work/src/a.ts]\nPUT <1:\n+x", &options).unwrap();
+	// Use a real absolute cwd so the header's absolute path strips cleanly on
+	// every platform (a POSIX literal like `/tmp/work` cannot on Windows).
+	let cwd = std::env::temp_dir();
+	let header = format!("[{}]\nPUT <1:\n+x", cwd.join("src/a.ts").display());
+	let options = SplitOptions { cwd: Some(&cwd), path: None };
+	let patch = Patch::parse(&header, &options).unwrap();
 	assert_eq!(patch.sections[0].path, "src/a.ts");
 	assert!(Patch::parse("plain text", &fallback).is_err());
 }

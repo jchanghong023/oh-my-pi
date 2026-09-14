@@ -74,12 +74,17 @@ function getDefaultSessionDirName(cwd: string): {
 	const tempRelative = path.relative(canonicalTempRoot, canonicalCwd);
 	let encodedDirName: string;
 	let scope: "home" | "tmp" | "abs";
-	if (homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative))) {
-		encodedDirName = encodeRelativeSessionDirName("-", homeRelative);
-		scope = "home";
-	} else if (tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative))) {
+	// The temp root must be tested before home: on Windows `os.tmpdir()`
+	// (`C:\Users\<user>\AppData\Local\Temp`) lives inside `os.homedir()`, so a
+	// temp cwd would otherwise be classified as home-relative and encoded as
+	// `-AppData-Local-Temp-…` instead of the `-tmp-…` contract. On POSIX the
+	// temp root is outside home and the order is irrelevant.
+	if (tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative))) {
 		encodedDirName = encodeRelativeSessionDirName("-tmp", tempRelative);
 		scope = "tmp";
+	} else if (homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative))) {
+		encodedDirName = encodeRelativeSessionDirName("-", homeRelative);
+		scope = "home";
 	} else {
 		encodedDirName = encodeLegacyAbsoluteSessionDirName(canonicalCwd);
 		scope = "abs";
@@ -100,6 +105,18 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 	const oldPrefix = `--${homeEncoded}-`;
 	const oldExact = `--${homeEncoded}--`;
 
+	// Windows nests the temp root inside the home directory, so a legacy
+	// absolute-name dir for a temp cwd (`--C--…-Temp-…--`) also matches the
+	// `--<home-encoded>-…--` prefix below; redirecting it here would strand it
+	// under a `-AppData-…` name that the per-cwd temp-root migration can no
+	// longer find. When the temp root lives inside home, leave those entries
+	// for migrateLegacyAbsoluteSessionDir instead.
+	const canonicalHome = resolveEquivalentPath(home);
+	const canonicalTempRoot = resolveEquivalentPath(os.tmpdir());
+	const tempRelative = path.relative(canonicalHome, canonicalTempRoot);
+	const tempUnderHome = tempRelative !== "" && !tempRelative.startsWith("..") && !path.isAbsolute(tempRelative);
+	const tempRemainderPrefix = tempUnderHome ? `${tempRelative.replace(/[/\\:]/g, "-")}-` : null;
+
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(sessionsRoot);
@@ -116,6 +133,7 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 		} else {
 			continue;
 		}
+		if (tempRemainderPrefix !== null && remainder.startsWith(tempRemainderPrefix)) continue;
 
 		const newName = remainder ? `-${remainder}` : "-";
 		const oldPath = path.join(sessionsRoot, entry);
