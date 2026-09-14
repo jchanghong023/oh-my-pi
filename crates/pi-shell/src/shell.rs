@@ -2841,17 +2841,19 @@ mod tests {
 		let source_info = SourceInfo::from("pi-natives:test");
 
 		time::timeout(
-			// Fork: 15 s instead of upstream's 5 s. Under bazel contention the
-			// kernel can take longer than 5 s to deliver the wake-up signal to
-			// STOPped pipeline members, which timed out here without a real
-			// regression; the injected timeout budget absorbs that.
-			Duration::from_secs(15),
+			// Fork: 60 s instead of upstream's 5 s. The test needs only
+			// milliseconds of work, but the CI Rust shard runs ~3 300 bazel
+			// actions on 4 vCPUs and the sandboxed pipeline can be starved past
+			// a 15 s budget (measured: passes alone on an idle runner, times out
+			// at both 5 s and 15 s inside the shard). The wider budget only
+			// absorbs scheduler contention, so a real hang still fails the test.
+			Duration::from_secs(60),
 			session.shell.run_string(command, &source_info, &params),
 		)
 		.await
 		.expect("pipeline did not stop")
 		.expect("stopped pipeline");
-		time::timeout(Duration::from_secs(15), async {
+		time::timeout(Duration::from_secs(60), async {
 			while !first_ready.exists() || !second_ready.exists() {
 				time::sleep(Duration::from_millis(10)).await;
 			}
