@@ -1632,7 +1632,10 @@ export class SessionTools {
 				return this.#baseSystemPrompt;
 			}
 
-			this.#host.captureMemoryPromotionSnapshot(previousBaseSystemPrompt);
+			// Capture the unprofiled base: setBaseSystemPrompt re-applies the
+			// active profile on restore, so a profiled snapshot would double the
+			// Discuss prompt after a transcript reset.
+			this.#host.captureMemoryPromotionSnapshot(this.#unprofiledBaseSystemPrompt);
 			const stablePrompt = [...previousBaseSystemPrompt, injected];
 			this.#baseSystemPrompt = stablePrompt;
 			this.#applyAgentSystemPrompt(stablePrompt);

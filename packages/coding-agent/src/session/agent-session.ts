@@ -1338,7 +1338,9 @@ export class AgentSession {
 			getEnabledToolNames: () => this.getEnabledToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
-			primaryAgentIsDiscuss: () => this.#activePrimaryAgentId === "discuss",
+			// Pending-aware like the prewalk host: while a Discuss switch is in
+			// flight, todo continuation must not queue messages that would abort it.
+			primaryAgentIsDiscuss: () => (this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId) === "discuss",
 			prewalkWillHandoff: () => this.#prewalk.willHandoff,
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
@@ -5620,24 +5622,29 @@ export class AgentSession {
 		return this.#activePrimaryAgentId;
 	}
 
+	/** Primary agent a switch is currently in flight toward, if any. */
+	getPendingPrimaryAgentId(): PrimaryAgentId | undefined {
+		return this.#pendingPrimaryAgentId;
+	}
+
 	async setPrimaryAgent(id: PrimaryAgentId): Promise<void> {
 		if (id === this.#activePrimaryAgentId) return;
 		if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
 		if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
 		if (this.isCompacting) throw new Error("Primary Agent cannot change while the session is compacting.");
-		let workflowPersisted = false;
-		if (id === "discuss" && !this.#planModeState && !this.#goalModeState && !this.#vibeModeState) {
+		const workflowModePersisted = (): boolean => {
 			const workflowMode = this.sessionManager.buildSessionContext().mode;
-			workflowPersisted =
+			return (
 				workflowMode === "plan" ||
 				workflowMode === "plan_paused" ||
 				workflowMode === "goal" ||
 				workflowMode === "goal_paused" ||
-				workflowMode === "vibe";
-		}
+				workflowMode === "vibe"
+			);
+		};
 		if (
 			id === "discuss" &&
-			(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowPersisted)
+			(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowModePersisted())
 		) {
 			throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
 		}
@@ -5648,12 +5655,33 @@ export class AgentSession {
 		this.#pendingPrimaryAgentId = id;
 		try {
 			await this.#tools.reapplyPrimaryAgentProfile(legacyBase);
+			// Re-sample the runtime guards: a turn may have started, a message
+			// queued, or compaction begun while the reapply sat in the
+			// tool-mutation queue.
+			if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
+			if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
+			if (this.isCompacting) throw new Error("Primary Agent cannot change while the session is compacting.");
+			if (
+				id === "discuss" &&
+				(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowModePersisted())
+			) {
+				// A mode became visible — in-memory state, or persisted while
+				// the reapply sat in the tool-mutation queue — during the
+				// await above; the catch below restores the previous toolset,
+				// and skipping the append keeps a mode + Discuss combo (which
+				// nothing in the UI can exit) out of the session file.
+				throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
+			}
 			this.sessionManager.appendPrimaryAgentChange(id);
 			this.#activePrimaryAgentId = id;
 		} catch (error) {
 			this.#pendingPrimaryAgentId = previous;
 			try {
 				await this.#tools.reapplyPrimaryAgentProfile(previousBase);
+			} catch (rollbackError) {
+				// Never mask the original failure; the next apply self-heals the
+				// toolset signature.
+				logger.warn("Failed to roll back Primary Agent toolset", { error: String(rollbackError) });
 			} finally {
 				this.#pendingPrimaryAgentId = undefined;
 			}
@@ -9402,6 +9430,16 @@ export class AgentSession {
 			this.#memory.rekeyForCurrentSessionId();
 			this.agent.setTools(previousTools);
 			this.#activePrimaryAgentId = previousPrimaryAgentId;
+			try {
+				// A completed #restorePrimaryAgent leaves the truncated target
+				// profile applied; re-derive it from the restored profile so a
+				// late switch failure cannot strand the Main toolset.
+				await this.#tools.reapplyPrimaryAgentProfile();
+			} catch (reapplyError) {
+				logger.warn("Failed to reapply Primary Agent profile after session switch rollback", {
+					error: String(reapplyError),
+				});
+			}
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
 			this.agent.setSystemPrompt(previousSystemPrompt);

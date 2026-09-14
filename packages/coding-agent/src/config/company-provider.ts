@@ -70,23 +70,37 @@ function readStartupConfig(): CompanySnapshot {
 	}
 }
 
-// Worker threads inherit the parent's snapshot in memory; they never read Claude settings.
+// Worker threads inherit the parent's snapshot in memory; they never read
+// Claude settings. The main thread reads its snapshot lazily so a normal
+// (non-`--offline`) startup never touches `~/.claude/settings.json` and never
+// holds the token in memory or hands it to workers.
 const snapshotKey = "omp.company-provider.startup";
-const startupSnapshot: CompanySnapshot = isMainThread
-	? readStartupConfig()
-	: ((getEnvironmentData(snapshotKey) as CompanySnapshot | undefined) ?? {
-			error: "Company provider unavailable: no startup configuration snapshot in this worker.",
-		});
-if (isMainThread) {
-	setEnvironmentData(
-		snapshotKey,
-		startupSnapshot.config
-			? { config: { ...startupSnapshot.config, token: startupSnapshot.config.token } }
-			: startupSnapshot,
-	);
-} else if (startupSnapshot.config) {
-	Object.defineProperty(startupSnapshot.config, "token", { enumerable: false });
-	Object.freeze(startupSnapshot.config);
+let mainSnapshot: CompanySnapshot | undefined;
+let workerSnapshot: CompanySnapshot | undefined;
+
+function ensureStartupSnapshot(): CompanySnapshot {
+	if (!isMainThread) {
+		if (!workerSnapshot) {
+			const snapshot = (getEnvironmentData(snapshotKey) as CompanySnapshot | undefined) ?? {
+				error: "Company provider unavailable: no startup configuration snapshot in this worker.",
+			};
+			if (snapshot.config) {
+				Object.defineProperty(snapshot.config, "token", { enumerable: false });
+				Object.freeze(snapshot.config);
+			}
+			workerSnapshot = snapshot;
+		}
+		return workerSnapshot;
+	}
+	if (!mainSnapshot) {
+		const snapshot = readStartupConfig();
+		setEnvironmentData(
+			snapshotKey,
+			snapshot.config ? { config: { ...snapshot.config, token: snapshot.config.token } } : snapshot,
+		);
+		mainSnapshot = snapshot;
+	}
+	return mainSnapshot;
 }
 
 // The company lane only exists in --offline processes: normal startups get no
@@ -104,6 +118,9 @@ export function setCompanyOfflineEnabled(enabled: boolean): void {
 	if (!isMainThread) return;
 	offlineEnabled = enabled;
 	setEnvironmentData(offlineKey, enabled);
+	// Publish the snapshot (and only then hand it to workers) before any worker
+	// can spawn; normal startups skip the Claude settings read entirely.
+	if (enabled) ensureStartupSnapshot();
 }
 
 /** Whether the company lane is active in this process (regardless of configuration validity). */
@@ -112,9 +129,9 @@ export function isCompanyLaneActive(): boolean {
 }
 
 export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
-	return companyLaneActive() ? startupSnapshot.config : undefined;
+	return companyLaneActive() ? ensureStartupSnapshot().config : undefined;
 }
 
 export function getCompanyConfigError(): string | undefined {
-	return companyLaneActive() ? startupSnapshot.error : undefined;
+	return companyLaneActive() ? ensureStartupSnapshot().error : undefined;
 }

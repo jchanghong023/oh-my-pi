@@ -10,8 +10,10 @@ class "deepseek" {
     // miss it and the id classifies without a family — which falls through to
     // the generic effort ladder (minimal/low/medium/high/xhigh) instead of the
     // DeepSeek-native low/high/max. `deepseek-v4-flash` keeps matching the
-    // stricter glob; the two never overlap.
-    family "flash" glob="*deepseek-flash*"
+    // stricter glob; the two never overlap. The trailing anchor leaves ids like
+    // `deepseek-flash-v4` family-less (their upstream classification) instead
+    // of capturing them into the flash family.
+    family "flash" glob="*deepseek-flash"
     // Bare V4 chat/reasoner ids without a flash/pro segment.
     family "v4" glob="*deepseek-v4*"
     family "v3" glob="*deepseek-v3*"

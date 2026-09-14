@@ -439,7 +439,7 @@
 					},
 					{
 						"id": "flash",
-						"glob": "*deepseek-flash*",
+						"glob": "*deepseek-flash",
 						"priority": 0
 					},
 					{

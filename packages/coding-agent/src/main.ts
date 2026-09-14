@@ -2150,7 +2150,11 @@ export async function runRootCommand(
 				stopStartupWatchdog();
 				await runRpcMode(session, mode === "rpc-ui" ? setToolUIContext : undefined, subagentEventBus, rpcInput);
 			} else if (isInteractive) {
-				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
+				// Offline startup must not reach the network at all; the runtime
+				// `startup.checkUpdate` override only suppresses the banner.
+				const versionCheckPromise = parsedArgs.offline
+					? Promise.resolve(undefined)
+					: checkForNewVersion(VERSION).catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

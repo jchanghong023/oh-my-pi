@@ -975,7 +975,9 @@ export async function getLatestRelease(
 ): Promise<ReleaseInfo> {
 	if (UPDATE_REPOSITORY) {
 		if (options.channel === "canary") {
-			throw new Error("Canary updates are unavailable for this binary-only fork.");
+			throw new Error(
+				`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`,
+			);
 		}
 		return getLatestGitHubRelease(UPDATE_REPOSITORY, options.timeoutMs);
 	}

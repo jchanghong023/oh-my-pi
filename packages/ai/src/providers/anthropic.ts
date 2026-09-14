@@ -122,7 +122,7 @@ import {
 	resolveGitHubCopilotBaseUrl,
 	wrapFetchForCopilotFallback,
 } from "./github-copilot-headers";
-import { getOpenAIPromptCacheKey } from "./openai-shared";
+import { getOpenAIPromptCacheKey, NO_AUTH_SENTINEL } from "./openai-shared";
 import { applyInferenceHeaders } from "./inference-headers";
 import { redactSensitiveCredentials, transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
@@ -365,10 +365,17 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		};
 		return allowAnthropicHeaderOverrides ? mergeHeaders(headers, anthropicHeaderOverrides) : headers;
 	} else if (!isOfficialAnthropicApiUrl(options.baseUrl)) {
+		// A keyless provider (`auth: none`) resolves to the `N/A` sentinel
+		// rather than a real key; custom endpoints that authenticate via their
+		// own headers may reject a bogus bearer, so send no Authorization —
+		// same sentinel guard as the openai transports. A caller-supplied
+		// Authorization in `model.headers` still wins.
+		const bearer =
+			incomingAuthorization ?? (options.apiKey !== NO_AUTH_SENTINEL ? `Bearer ${options.apiKey}` : undefined);
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
-			Authorization: incomingAuthorization ?? `Bearer ${options.apiKey}`,
+			...(bearer ? { Authorization: bearer } : {}),
 			...sharedHeaders,
 			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
 			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
@@ -3718,8 +3725,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// the proxy to deal with two competing credentials when the user explicitly
 	// asked for one.
 	const authorizationHeader = getHeaderCaseInsensitive(defaultHeaders, "Authorization");
+	// A keyless provider resolves to the `N/A` sentinel, for which no
+	// Authorization was built above; the client would otherwise inject a
+	// bogus `X-Api-Key: N/A` of its own.
 	const shouldSuppressClientApiKey =
-		!oauthToken && !model.compat.officialEndpoint && typeof authorizationHeader === "string";
+		!oauthToken &&
+		!model.compat.officialEndpoint &&
+		(typeof authorizationHeader === "string" || apiKey === NO_AUTH_SENTINEL);
 
 	return {
 		isOAuthToken: oauthToken,

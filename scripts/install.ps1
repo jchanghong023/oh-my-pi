@@ -35,8 +35,8 @@ $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCA
 # host on 64-bit Windows still reports the OS architecture.
 # Note: PROCESSOR_ARCHITEW6432 is only set for 32-bit (WOW64) processes, so
 # x64 PowerShell under ARM64 emulation reports AMD64 and installs the x64
-# binary (runs emulated, not natively). Native ARM64 and x86-on-ARM64 hosts
-# still resolve to arm64.
+# binary (runs emulated, not natively). Native ARM64 and x86 hosts are
+# rejected below — only x64 is supported.
 $RawArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if (-not $RawArchitecture) {
     throw "Unable to determine Windows architecture"
@@ -268,12 +268,16 @@ function Install-Binary {
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-    # Windows cannot overwrite an existing or running omp.exe. Download to a
-    # unique same-directory temp file first so failed downloads leave the old
-    # install working, then force-stop only processes running the install target,
-    # remove the old target, and move the new binary into place.
-    # Prefer the in-box curl.exe (Windows 10 1803+) for a live progress bar;
-    # fall back to Invoke-WebRequest when curl is unavailable or fails.
+    # Windows cannot overwrite omp.exe in place, but renaming the running
+    # executable itself is permitted (only deleting its still-mapped image is
+    # not — see replaceBinaryForUpdate). Download to a unique same-directory
+    # temp file first so failed downloads leave the old install working, then
+    # rename the old binary aside so live sessions keep running, move the new
+    # one in, and roll back if that move fails. If the rename is blocked (e.g.
+    # by antivirus), fall back to force-stopping only processes running the
+    # install target. Prefer the in-box curl.exe (Windows 10 1803+) for a live
+    # progress bar; fall back to Invoke-WebRequest when curl is unavailable or
+    # fails.
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
@@ -298,11 +302,31 @@ function Install-Binary {
                 throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
         }
-        Stop-RunningOmp -TargetPath $OutPath
+
+        $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))
+        $renamedAside = $false
         if (Test-Path -LiteralPath $OutPath) {
-            Remove-Item -LiteralPath $OutPath -Force
+            try {
+                Move-Item -LiteralPath $OutPath -Destination $OldPath
+                $renamedAside = $true
+            } catch {
+                Stop-RunningOmp -TargetPath $OutPath
+                Remove-Item -LiteralPath $OutPath -Force
+            }
         }
-        Move-Item -LiteralPath $TmpPath -Destination $OutPath
+        try {
+            Move-Item -LiteralPath $TmpPath -Destination $OutPath
+        } catch {
+            if ($renamedAside) {
+                Move-Item -LiteralPath $OldPath -Destination $OutPath
+            }
+            throw
+        }
+        # Best-effort cleanup of the renamed-aside binary and stale asides from
+        # earlier installs. A still-running omp keeps its image locked, so its
+        # aside simply survives until the next install.
+        Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*" -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
     } finally {
         Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
     }

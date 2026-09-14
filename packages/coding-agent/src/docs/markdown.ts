@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { lstat, open, readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./types";
 
@@ -127,6 +127,10 @@ export function normalizePlainText(markdown: string): string {
 const HEADING_LINE = /^[ \t]*#{1,6}[ \t].*$/gmu;
 const SETEXT_LINE = /^[ \t]*(?:=+|-+)[ \t]*$/gmu;
 const HEADING_MARKER = /^[ \t]*#{1,6}[ \t]?/gmu;
+// A setext heading's text line together with its underline — the ATX strips
+// cover only `#` lines, so this pair is what keeps setext heading-only
+// sections from being misread as content.
+const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n[ \t]*(?:=+|-+)[ \t]*$/gmu;
 
 /**
  * What a stored section holds. Converter output (docx/pptx/xlsx) emits its
@@ -137,7 +141,8 @@ const HEADING_MARKER = /^[ \t]*#{1,6}[ \t]?/gmu;
  * requirement in the heading itself.
  */
 export function sectionShape(markdown: string): "stub" | "heading-only" | "content" {
-	if (markdown.replace(HEADING_LINE, "").replace(SETEXT_LINE, "").trim().length > 0) return "content";
+	if (markdown.replace(SETEXT_HEADING_PAIR, "").replace(HEADING_LINE, "").replace(SETEXT_LINE, "").trim().length > 0)
+		return "content";
 	const heading = markdown.replace(HEADING_MARKER, "").replace(SETEXT_LINE, "").trim();
 	if (heading.length === 0) return "stub";
 	return /[\s\u3400-\u4dbf\u4e00-\u9fff]/u.test(heading) ? "heading-only" : "stub";
@@ -303,6 +308,10 @@ export async function readMarkdownDocument(rootPath: string, relativePath: strin
 	const relative = path.relative(root, absolutePath);
 	if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
 		throw new Error(`Markdown path escapes root: ${relativePath}`);
+	// `O_NOFOLLOW` is undefined on Windows (0 | undefined === 0), so an lstat
+	// precheck is the only cross-platform way to keep refusing symlink sources.
+	if ((await lstat(absolutePath)).isSymbolicLink())
+		throw new Error(`Markdown path is a symbolic link: ${relativePath}`);
 	const handle = await open(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
 	let bytes: Uint8Array;
 	let metadata: Stats;

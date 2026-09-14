@@ -18,7 +18,7 @@
 * 索引管理只有两个命令：`omp docs init "<dir>" --name "<name>"` 新建（同名已存在直接报错）与 `omp docs remove <name> --force` 删除；没有 list/status/更新/重建等其他命令入口（`/wiki` 面板会列出已有索引供检索，并可直接发起这两个动作），索引也不记录状态或时间戳。删除只删数据库中的索引，不删源文件。
 * 文档重新导出后，刷新方式固定为「先 remove 删除旧索引，再 init 新建」。本 fork 只维护这两个命令：新增其他索引维护入口属于超出当前契约的范围，NEVER 引入。
 * 固定使用 SQLite FTS5 全文检索；在有界 BM25 候选中优先排列连续中文词组、带符号及边界的完整技术名称和当前章节标题匹配，同级继续按 BM25 排序。保留原有 AND 全词匹配作为精确档（全部词元都出现的章节优先）；不改变数据库结构；导入和查询不调用模型，不需要凭据、向量、结构化提取或 schema。
-* 普通代理可用的只读 `wiki` 工具只有一个参数 `query`，用法等同搜索框：关键词或整句都可以，没有需要学习的语法（`AND`/`OR`/引号/通配都按普通字符处理）。分析在实现内完成：拉丁词与数字按整词匹配（`MBIST是什么` 这类中英粘连写法同样保留整词），汉字串去功能字后按相邻 bigram 切分，查询之间是**并集**而非过滤，命中越多排序越靠前；超过 32 个词元的长查询按等距取样保留首尾，需求句的尾部技术点不会被丢弃。排序优先级：查询原样字面量出现在标题 → 出现在正文（`std::vector` 优于散落的 `vector std`）→ 全部词元都出现 → 同级按 BM25。返回命中章节的**完整 Markdown 正文**（每节带路径、行号区间、`sectionId`），单次上限约 20000 字符；入库段落上限 18000 字符，因此任何命中都能整段返回。表头给出命中总数，页脚显示被预算截断、因过长跳过的段数与折叠的重复命中；跨文档逐字重复的段落只保留首条，其余折叠为指针行。转换器结构标签（`#### Cell` 之类，约 33 万条）不入库；标题本身即内容的需求/清单条目单独保留，以「仅有标题」形式返回。多个索引时一次查询覆盖全部索引。参数只接受 `query`；多带的无关键会被忽略，缺 `query` 时报错并指出实际收到的参数名与示例。
+* 普通代理可用的只读 `wiki` 工具只有一个参数 `query`，用法等同搜索框：关键词或整句都可以，没有需要学习的语法（`AND`/`OR`/引号/通配都按普通字符处理）。分析在实现内完成：拉丁词与数字按整词匹配（`MBIST是什么` 这类中英粘连写法同样保留整词），汉字串按书写原样做相邻 bigram 切分（功能词整词丢弃，不先删单字功能词，避免产生语料中不存在的组合），查询之间是**并集**而非过滤，命中越多排序越靠前；超过 32 个词元的长查询按等距取样保留首尾，需求句的尾部技术点不会被丢弃。排序优先级：查询原样字面量出现在标题 → 出现在正文（`std::vector` 优于散落的 `vector std`）→ 全部词元都出现 → 同级按 BM25。返回命中章节的**完整 Markdown 正文**（每节带路径、行号区间、`sectionId`），单次上限约 20000 字符；入库段落上限 18000 字符，因此任何命中都能整段返回。表头给出命中总数，页脚显示被预算截断、因过长跳过的段数与折叠的重复命中；跨文档逐字重复的段落只保留首条，其余折叠为指针行（约 200 字符以下的短重复不折叠）。转换器结构标签（`#### Cell` 之类，约 33 万条）不入库；标题本身即内容的需求/清单条目单独保留，以「仅有标题」形式返回。多个索引时一次查询覆盖全部索引。参数只接受 `query`；多带的无关键会被忽略，缺 `query` 时报错并指出实际收到的参数名与示例。
 * 被强杀的中断导入留下的隐藏半成品索引（`list`/`remove` 都够不到）会在下一次 `init` 枚举到非空语料后回收，避免它长期占用空间。
 * 数据库保存完整 Markdown 文字、原始路径和行号；导入成功后，查询不再依赖源目录。图片、附件及链接目标不随文字入库；路径和行号对应导入时的版本。
 * 导入全量成功后才公开索引，失败或取消不留下可见半成品；旧版全文或结构化数据库自动迁移，保留原文章节和全文检索，移除结构化数据。
@@ -40,7 +40,7 @@
 
 ### DeepSeek V4.1 Flash
 
-* DeepSeek V4.1 Flash 使用不带 `v4` 段的 id（官方 `deepseek-flash`，Command Code 的 `deepseek/deepseek-v4.1-flash`），因此不匹配原有 `*deepseek*v4*flash*` 分类规则。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。官方 `deepseek` 的裸别名自本基线起另有上游内置条目与精确兼容规则（等级阶梯、`max_tokens` + `reasoning_content` 回放契约），该 lane 的推理能力不再依赖本继承面。
+* DeepSeek V4.1 Flash 的裸 id `deepseek-flash` 不带 `v4` 段，不匹配原有 `*deepseek*v4*flash*` 分类规则（带版本号的 `deepseek-v4.1-flash` 本就命中原规则、family 已是 flash）。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。官方 `deepseek` 的裸别名自本基线起另有上游内置条目与精确兼容规则（等级阶梯、`max_tokens` + `reasoning_content` 回放契约），该 lane 的推理能力不再依赖本继承面。
 * 这两条 id 在 `opencode-go` 上另带 fork 维护的内置目录行（显示名 `DeepSeek V4.1 Flash`、`low` / `high` / `max`、1M / 384K、`text` + `image`、不剥离图片）：发现完成前或缓存行被迁移丢弃时，选择器与 `modelRoles` 仍能解析到本 lane。此前这两条 id 仅存在于发现结果中，缺失时 role 会静默改绑同网关的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-go/deepseek-flash:等级` 也会直接报 not found。发现成功后仍以动态行与本继承面为准。
 * 官方 `deepseek` 的内置行也直接携带该能力面：显示名、图片输入与「不剥离图片」由 fork 的行提供，推理等级与 wire 契约由上游条目提供；此前只有发现行携带表面，未发现或内置行优先时界面会同时出现 `deepseek-flash` 与 `DeepSeek V4.1 Flash` 两个名称，且该 lane 无视觉、无思考等级。
 * 本 lane 按同网关 Flash 档定价（`0.15` / `0.6`）：网关只对 `deepseek-v4.1-flash`、`deepseek-v4-flash` 下发价格，裸别名未定价，此前在面板里显示为 free。
@@ -52,7 +52,7 @@
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
 * 内置目录出现这些 id 的正式条目后自动以条目为准。上游已为官方 `deepseek` 裸别名补齐等级阶梯与 wire 契约，本继承面在该 lane 只剩显示名与图片模态；`opencode-go`、`opencode-zen`、`commandcode` 仍整体由本继承面提供，这些 provider 在 KDL 中补齐等级阶梯与模态后，本 fork 的对应改动即可整体移除。
 * `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」的 KDL 条目提供等级与图片输入，价格取上游 `cost-patch`；官方 `deepseek` 的 `deepseek-flash` 自本基线起由上游条目提供推理等级与 wire 契约，本继承面在该处只补显示名与图片输入。
-* 分类侧另有一处 fork 改动：`taxonomy/deepseek.kdl` 用 `*deepseek-flash*` glob 把不带 `v4` 段的裸 id 归入 Flash 家族，避免落到通用档位；官方 `deepseek` 已由上游精确规则覆盖，该 glob 主要服务 `opencode-go`、`opencode-zen`、`commandcode` 的裸 id，档位生效仍以对应能力面开启推理为前提。
+* 分类侧另有一处 fork 改动：`taxonomy/deepseek.kdl` 用 `*deepseek-flash` glob（尾锚定）把以 `deepseek-flash` 结尾的裸 id 归入 Flash 家族，避免落到通用档位；`deepseek-flash-v4` 这类以版本段结尾的 id 不再被卷入（其 id 不含 `deepseek-v4` 段，回落为无 family 的通用档位，与 models.json 烘焙的 identity 一致）；官方 `deepseek` 已由上游精确规则覆盖，该 glob 主要服务 `opencode-go`、`opencode-zen`、`commandcode` 的裸 id，档位生效仍以对应能力面开启推理为前提。
 
 ### 代理行为与 Discuss
 
@@ -142,7 +142,7 @@
 * `Ctrl+T`：临时模型。
 * `Alt+P`：thinking blocks 显示/隐藏。
 * `Shift+F1`：循环切换 thinking level。
-* 状态栏默认显示 active time，并支持窄终端自动换行。
+* 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 * 状态栏在未显示其他模式状态时显示当前主代理 Main/Discuss。
 * `composer.shape=pi` 时状态栏独立位于输入框下方。
 * `@` 文件补全在输入、删除字符时立即过滤已有候选，不等待后台目录搜索完成；网络文件系统上的新文件仍需等待扫描结果，后台搜索保持串行，避免堆积 I/O。
@@ -162,6 +162,7 @@
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
 * `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`），且无法通过任何后续代码改动自愈：这类机器只能用安装器重装后再交给 `omp update`。
 * 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
+* 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。
 
 ### 文档站
 

@@ -105,16 +105,28 @@ export class DocsStorage {
 						const insert = this.db.query(
 							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
 						);
+						// Fresh imports index the plain text (markdown syntax
+						// stripped); prefer the legacy plain_text column when the
+						// old schema still carries it so migrated indexes rank like
+						// rebuilt ones. Old schemas are not guaranteed to have it,
+						// and rows written with the column's '' default (or NULL)
+						// must fall back to the raw markdown.
+						const legacySectionColumns = this.db.query("PRAGMA table_info(sections)").all() as Array<{
+							name: string;
+						}>;
+						const bodyColumn = legacySectionColumns.some(column => column.name === "plain_text")
+							? "COALESCE(NULLIF(s.plain_text,''),s.raw_markdown)"
+							: "s.raw_markdown";
 						const rows = this.db
-							.query(`SELECT s.id,s.index_id,d.relative_path,s.ordinal,s.heading_path,s.raw_markdown
-							FROM sections s JOIN documents d ON d.id=s.document_id ORDER BY s.id`)
+							.query(`SELECT s.id,s.index_id,d.relative_path,s.ordinal,s.heading_path,${bodyColumn} AS body
+						FROM sections s JOIN documents d ON d.id=s.document_id ORDER BY s.id`)
 							.iterate() as Iterable<{
 							id: number;
 							index_id: number;
 							relative_path: string;
 							ordinal: number;
 							heading_path: string;
-							raw_markdown: string;
+							body: string;
 						}>;
 						for (const row of rows)
 							insert.run(
@@ -123,7 +135,7 @@ export class DocsStorage {
 								row.index_id,
 								row.ordinal === 0 ? normalizeFtsContent(row.relative_path) : "",
 								normalizeFtsContent(row.heading_path),
-								normalizeFtsContent(row.raw_markdown),
+								normalizeFtsContent(row.body),
 							);
 					}
 					for (const table of ["evidence", "entity_aliases", "assertions", "relations", "entities"])
