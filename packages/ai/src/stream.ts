@@ -13,7 +13,7 @@ import {
 	requireSupportedEffort,
 	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
-import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
+import { providerEntries } from "@oh-my-pi/pi-catalog/compat/providers";
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, $pickenv, getProviderInFlightRoot, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
@@ -815,11 +815,12 @@ const LEGACY_ENV_KEYS: Record<string, KeyResolver> = {
 };
 
 /**
- * Env fallbacks derived from the catalog table — the single source for plain
- * provider env-var names. Registry defs override with computed resolvers
- * (Foundry/ADC/Bedrock probes); legacy non-provider keys merge last.
+ * Env fallbacks derived from the catalog provider entries (`env` in
+ * `providers/<id>.kdl`) — the single source for plain provider env-var names.
+ * Registry defs override with computed resolvers (Foundry/ADC/Bedrock
+ * probes); legacy non-provider keys merge last.
  */
-const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEntry[]).flatMap(provider => {
+const CATALOG_ENTRY_ENV_KEYS = Object.values(providerEntries()).flatMap(provider => {
 	const envVars = provider.envVars;
 	if (!envVars || envVars.length === 0) return [];
 	const resolver: KeyResolver = envVars.length === 1 ? envVars[0] : () => $pickenv(...envVars);
@@ -834,12 +835,10 @@ const CATALOG_ENTRY_ENV_KEYS = (CATALOG_PROVIDERS as readonly ProviderCatalogEnt
 // `$pickenv` resolver too, so they still need the catalog list to name the
 // variable actually in use.
 const CATALOG_ENTRY_ENV_NAMES: Record<string, readonly string[]> = Object.fromEntries(
-	(CATALOG_PROVIDERS as readonly ProviderCatalogEntry[])
-		.filter((provider): provider is ProviderCatalogEntry & { envVars: readonly string[] } => {
-			const envVars = provider.envVars;
-			return Array.isArray(envVars) && envVars.length > 1;
-		})
-		.map(provider => [provider.id, provider.envVars] as [string, readonly string[]]),
+	Object.values(providerEntries()).flatMap(provider => {
+		const envVars = provider.envVars;
+		return envVars && envVars.length > 1 ? [[provider.id, envVars] as [string, readonly string[]]] : [];
+	}),
 );
 
 const serviceProviderMap: Record<string, KeyResolver> = {

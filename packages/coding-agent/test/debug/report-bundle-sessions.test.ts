@@ -1,12 +1,15 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import * as jsc from "bun:jsc";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { collectMemoryStats } from "@oh-my-pi/pi-coding-agent/debug/profiler";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
 import { isolateReportBundleDirs, type ReportBundleTestDirs } from "../helpers/report-bundle-isolation";
 
 let dirs: ReportBundleTestDirs | undefined;
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	if (dirs) {
 		await dirs.cleanup();
 		dirs = undefined;
@@ -18,7 +21,44 @@ async function archiveMembers(archivePath: string): Promise<string[]> {
 	return [...(await archive.files()).keys()].sort();
 }
 
-describe("report bundle sessions", () => {
+describe("report bundle privacy", () => {
+	it("exports numeric memory diagnostics without live credentials or runtime type names", async () => {
+		dirs = await isolateReportBundleDirs();
+		const credential = `sk-ant-ort01-${crypto.randomUUID()}`;
+		const heap = jsc.heapStats();
+		vi.spyOn(jsc, "heapStats").mockReturnValue({
+			...heap,
+			objectTypeCounts: { [credential]: 1 },
+			protectedObjectTypeCounts: { [credential]: 1 },
+		});
+
+		const result = await createReportBundle({
+			sessionFile: undefined,
+			memoryStats: collectMemoryStats(),
+			reportsDir: dirs.reportsDir,
+			logsDir: dirs.logsDir,
+		});
+		const archive = new Bun.Archive(await Bun.file(result.path).bytes());
+		const members = await archive.files();
+
+		expect(members.has("heap.heapsnapshot")).toBe(false);
+		const memory = members.get("memory.json");
+		if (!memory) throw new Error("Memory report missing numeric diagnostics");
+		const stats: { process: Record<string, unknown>; heap: Record<string, unknown> } = await memory.json();
+		for (const section of [stats.process, stats.heap]) {
+			for (const key in section) {
+				const value = section[key];
+				expect(typeof value).toBe("number");
+				expect(Number.isFinite(value)).toBe(true);
+			}
+		}
+		expect(stats.process.rss).toBeGreaterThan(0);
+		expect(stats.heap.heapSize).toBeGreaterThan(0);
+		for (const member of members.values()) {
+			expect(await member.text()).not.toContain(credential);
+		}
+	});
+
 	it("bundles only the current session's subtree, not unrelated co-located sessions", async () => {
 		dirs = await isolateReportBundleDirs();
 
@@ -44,7 +84,11 @@ describe("report bundle sessions", () => {
 			'{"type":"session","secret":"private-b"}\n',
 		);
 
-		const result = await createReportBundle({ sessionFile, reportsDir: dirs.reportsDir, logsDir: dirs.logsDir });
+		const result = await createReportBundle({
+			sessionFile,
+			reportsDir: dirs.reportsDir,
+			logsDir: dirs.logsDir,
+		});
 		const members = await archiveMembers(result.path);
 		await fs.rm(result.path, { force: true });
 

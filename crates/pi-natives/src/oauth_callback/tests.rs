@@ -2,16 +2,19 @@ use std::{
 	collections::BTreeMap,
 	fs,
 	path::PathBuf,
-	sync::atomic::{AtomicU64, Ordering},
+	sync::{
+		LazyLock,
+		atomic::{AtomicU64, Ordering},
+	},
 };
 
 use anyhow::{Result, bail};
-use parking_lot::Mutex as TestMutex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as TestMutex;
 
 use super::*;
 
-static TEST_SERIAL: TestMutex<()> = TestMutex::new(());
+static TEST_SERIAL: LazyLock<TestMutex<()>> = LazyLock::new(|| TestMutex::new(()));
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(super) mod backend {
@@ -132,7 +135,7 @@ fn start_expecting_error(core: &Core, cancel: CancelToken) -> Option<anyhow::Err
 
 #[test]
 fn invalid_scheme_is_rejected_before_filesystem_access() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	assert!(validate_scheme("../another-handler").is_err());
 	assert!(validate_scheme("OMP").is_err());
 	assert!(validate_scheme("omp+oauth.test").is_ok());
@@ -140,7 +143,7 @@ fn invalid_scheme_is_rejected_before_filesystem_access() {
 
 #[test]
 fn remote_start_is_unsupported_without_creating_storage() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("remote");
 	let core = core(home.clone(), environment(&[("SSH_CONNECTION", "remote")]));
 	assert!(matches!(
@@ -153,7 +156,7 @@ fn remote_start_is_unsupported_without_creating_storage() {
 
 #[test]
 fn prepare_failure_releases_lease_and_removes_private_artifacts() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("prepare");
 	let failing = core(home.clone(), environment(&[("TEST_PREPARE_FAIL", "1")]));
 	if start_expecting_error(&failing, CancelToken::default()).is_none() {
@@ -173,7 +176,7 @@ fn prepare_failure_releases_lease_and_removes_private_artifacts() {
 
 #[test]
 fn activation_failure_restores_even_after_mutating_os_state() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("activation");
 	let core = core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1")]));
 	let Some(error) = start_expecting_error(&core, CancelToken::default()) else {
@@ -192,7 +195,7 @@ fn activation_failure_restores_even_after_mutating_os_state() {
 
 #[test]
 fn uncertain_restore_retains_journal_and_ownership() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("restore");
 	let core =
 		core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1"), ("TEST_RESTORE_FAIL", "1")]));
@@ -212,7 +215,7 @@ fn uncertain_restore_retains_journal_and_ownership() {
 
 #[test]
 fn stale_journal_is_recovered_before_successor_activation() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("stale");
 	let root = storage_root(&home, "omp-test");
 	ensure_storage_root(&root).unwrap();
@@ -256,7 +259,7 @@ fn stale_journal_is_recovered_before_successor_activation() {
 
 #[test]
 fn lease_excludes_competing_receivers_in_same_process() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("compete");
 	let first = core(home.clone(), environment(&[]));
 	let second = core(home.clone(), environment(&[]));
@@ -278,7 +281,7 @@ fn lease_excludes_competing_receivers_in_same_process() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancellation_prevents_start_and_wait_claims_once() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.lock().await;
 	let home = temp_home("cancel");
 	let core = core(home.clone(), environment(&[]));
 	let mut cancel = CancelToken::default();
@@ -319,7 +322,7 @@ async fn cancellation_prevents_start_and_wait_claims_once() {
 
 #[test]
 fn journal_rejects_traversal_and_unknown_fields() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	assert!(validate_transaction_id("../escape").is_err());
 	let json = br#"{
 		"version":1,

@@ -14,7 +14,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
-import { getCatalogProviderEntry } from "@oh-my-pi/pi-catalog/provider-models";
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import {
 	type Component,
 	extractPrintableText,
@@ -2134,7 +2134,7 @@ export class ModelHubComponent implements Component {
 		lines.push("");
 		lines.push(truncateToWidth(theme.fg("warning", `  ${entry.label} has no credentials configured`), width));
 		lines.push("");
-		const envVars = entry.providerId ? (getCatalogProviderEntry(entry.providerId)?.envVars ?? []) : [];
+		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		if (envVars.length > 0) {
 			lines.push(
 				truncateToWidth(
