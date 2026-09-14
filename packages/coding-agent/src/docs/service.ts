@@ -360,15 +360,22 @@ export class DocsService {
 	 */
 	#countMatches(match: string): number {
 		const hidden = `${BUILDING_INDEX_PREFIX}*`;
-		const building = this.storage.db.query("SELECT 1 FROM doc_indexes WHERE name GLOB ? LIMIT 1").get(hidden);
-		const row = (
-			building
-				? this.storage.db
-						.query(`SELECT count(*) n FROM sections_fts f JOIN sections s ON s.id=f.rowid
-						 JOIN doc_indexes i ON i.id=s.index_id WHERE sections_fts MATCH ? AND i.name NOT GLOB ?`)
-						.get(match, hidden)
-				: this.storage.db.query("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH ?").get(match)
-		) as { n: number } | null;
+		const probeBuilding = this.storage.db.query("SELECT 1 FROM doc_indexes WHERE name GLOB ? LIMIT 1");
+		const countHiddenExcluded = () =>
+			(
+				this.storage.db
+					.query(`SELECT count(*) n FROM sections_fts f JOIN sections s ON s.id=f.rowid
+							 JOIN doc_indexes i ON i.id=s.index_id WHERE sections_fts MATCH ? AND i.name NOT GLOB ?`)
+					.get(match, hidden) as { n: number } | null
+			)?.n ?? 0;
+		if (probeBuilding.get(hidden)) return countHiddenExcluded();
+		const row = this.storage.db
+			.query("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH ?")
+			.get(match) as { n: number } | null;
+		// A concurrent import can commit hidden rows between the probe above and this
+		// count's snapshot; they would inflate the total with hits the page never
+		// serves, so pay the join and recount instead of trusting the fast number.
+		if (probeBuilding.get(hidden)) return countHiddenExcluded();
 		return row?.n ?? 0;
 	}
 
