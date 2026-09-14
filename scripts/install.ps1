@@ -153,7 +153,14 @@ function Set-InstallEnvironment {
     $needsRestart = -not (($UserPath -split ";") -contains $InstallDir)
     if ($needsRestart) {
         Write-Host "Adding $InstallDir to PATH..."
-        [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+        # A missing user PATH (or one ending in ";") must not produce an empty
+        # entry: Windows resolves empty PATH entries as the current directory.
+        $trimmedUserPath = "$UserPath".TrimEnd(";")
+        if ($trimmedUserPath) {
+            [Environment]::SetEnvironmentVariable("Path", "$trimmedUserPath;$InstallDir", "User")
+        } else {
+            [Environment]::SetEnvironmentVariable("Path", $InstallDir, "User")
+        }
     }
 
     Configure-BashShell
