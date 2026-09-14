@@ -1,0 +1,33 @@
+name: CI diag rust
+
+# Temporary diagnostic for the pi-shell kill-test failure in CI. Runs the one
+# target alone on an idle runner to separate scheduler contention from a
+# sandbox-specific hang. Deleted once the fix lands.
+
+on:
+   workflow_dispatch:
+
+jobs:
+   rust:
+      runs-on: ubuntu-22.04
+      timeout-minutes: 30
+      steps:
+         - uses: actions/checkout@v4
+         - uses: ./.github/actions/bun-install
+         - id: cache
+           uses: ./.github/actions/bazel-cache
+           with:
+              scope: linux
+         - name: Environment
+           run: nproc; free -m | sed -n '1,2p'; ulimit -Sn
+         - name: Kill test alone on an idle runner
+           run: |
+              set -x
+              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
+              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test //crates/pi-shell:pi-shell_test \
+                --test_filter=shell::tests::kill_builtin_signals_every_process_in_a_jobspec_pipeline \
+                --test_output=errors --test_timeout=300
+         - name: Whole pi-shell target
+           run: |
+              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
+              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test //crates/pi-shell:... --test_output=errors
