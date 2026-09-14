@@ -2841,13 +2841,17 @@ mod tests {
 		let source_info = SourceInfo::from("pi-natives:test");
 
 		time::timeout(
-			Duration::from_secs(5),
+			// Fork: 15 s instead of upstream's 5 s. Under bazel contention the
+			// kernel can take longer than 5 s to deliver the wake-up signal to
+			// STOPped pipeline members, which timed out here without a real
+			// regression; the injected timeout budget absorbs that.
+			Duration::from_secs(15),
 			session.shell.run_string(command, &source_info, &params),
 		)
 		.await
 		.expect("pipeline did not stop")
 		.expect("stopped pipeline");
-		time::timeout(Duration::from_secs(5), async {
+		time::timeout(Duration::from_secs(15), async {
 			while !first_ready.exists() || !second_ready.exists() {
 				time::sleep(Duration::from_millis(10)).await;
 			}

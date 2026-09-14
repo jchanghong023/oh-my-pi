@@ -183,6 +183,15 @@ class FakeAgentSession {
 		return this.models;
 	}
 
+	/**
+	 * Fork: `AcpAgent` reads the primary agent to keep a session resumed into
+	 * the Discuss profile out of plan mode, so the double mirrors the real
+	 * accessor instead of leaving the method undefined.
+	 */
+	getPrimaryAgentId(): string {
+		return this.sessionManager.buildSessionContext().primaryAgent ?? "main";
+	}
+
 	getAvailableThinkingLevels(): ReadonlyArray<string> {
 		return ["low", "medium", "high"];
 	}
