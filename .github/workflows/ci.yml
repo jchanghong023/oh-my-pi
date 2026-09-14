@@ -351,6 +351,23 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
+         - name: Point the browser suites at the real Chrome binary
+           shell: bash
+           run: |
+              # Debian/Ubuntu ship google-chrome-stable as a wrapper script that
+              # execs /opt/google/chrome/chrome. The reusable-CDP scan matches
+              # processes by executable path, so with the wrapper resolved a live
+              # instance stays undiscoverable and the attach suites relaunch it
+              # (deadlocking on the profile lock) instead of reusing it. Prefer
+              # the real ELF whenever the runner offers one.
+              for candidate in /opt/google/chrome/chrome "$(readlink -f "$(command -v google-chrome-stable || command -v google-chrome || true)" 2>/dev/null)"; do
+                if [ -n "$candidate" ] && [ -x "$candidate" ] && [ "$(head -c 2 "$candidate")" != "#!" ]; then
+                  echo "PUPPETEER_EXECUTABLE_PATH=$candidate" >> "$GITHUB_ENV"
+                  echo "browser suites will use $candidate"
+                  exit 0
+                fi
+              done
+              echo "no real Chrome binary on this runner; leaving chromium resolution untouched"
          - name: Test coding-agent native/unit bucket
            env:
               OMP_TEST_CONCURRENCY: "4"
