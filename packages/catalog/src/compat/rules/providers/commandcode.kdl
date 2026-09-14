@@ -53,11 +53,12 @@ provider "commandcode" {
 	// The roster carries no modality metadata and the mapper keeps the
 	// discovery default (`["text"]`), so a verified image route opts in here.
 	// V4.1 Flash accepts `image_url` and reads the image (verified against the
-	// live gateway 2026-09-10); the id matches none of the class token rules.
+	// live gateway 2026-09-10).
 	models "deepseek/deepseek-v4.1-flash" {
 		input-modalities "text" "image"
-		// Its id matches neither the `vision` nor the `ocr` token the class
-		// rules exempt, so the class default would strip them again.
+		// The upstream class rule carves `*v4.1-flash*` out of the class-wide
+		// strip; pin the same value here so the lane keeps its image surface
+		// even if that carve-out is narrowed.
 		strip-image-input #false
 	}
 	models "google/gemini-3.1-flash-lite" "google/gemini-3.5-flash" \

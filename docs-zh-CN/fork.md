@@ -7,9 +7,9 @@
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.1.19`
-* **Upstream commit**：`4457ac8ef9c99d429832a043cd2606661b1cd188`
-* **同步日期**：2026-09-13
+* **版本**：`v18.1.20`
+* **Upstream commit**：`9b2a43514bfcfc0b9607ac9ac160115aec897f06`
+* **同步日期**：2026-09-14
 
 ## 当前功能差异
 
@@ -46,8 +46,8 @@
 * 本 lane 按同网关 Flash 档定价（`0.15` / `0.6`）：网关只对 `deepseek-v4.1-flash`、`deepseek-v4-flash` 下发价格，裸别名未定价，此前在面板里显示为 free。
 * `opencode-go` 上同一 SKU 的两个 id（`deepseek-v4.1-flash` 与裸别名 `deepseek-flash`）在目录层收敛为一行：规范 id 取带版本号的 `deepseek-v4.1-flash`，名称 `DeepSeek V4.1 Flash`；裸别名仍可继续作为选择器（`modelRoles`、`--model` 无需改动），档位 `low` / `high` / `max` 与图片输入不变。
 * 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
-* OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目与 `openrouter.kdl`（思考等级 `low` / `high` / `max`、图片输入）独立提供，不属于本继承面。
-* V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。因此继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
+* OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目独立提供，不属于本继承面；其图片输入自本基线起改由上游 DeepSeek 类规则覆盖（`classes/deepseek.kdl` 的 `models "*v4.1-flash*"` 关闭图片剥离，取代原先 `openrouter.kdl` 的 provider 级条目）。
+* V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。类规则自本基线起对带版本号的 `*v4.1-flash*` 关闭剥离，裸别名仍需继承面自行覆盖：继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
 * 内置目录出现这些 id 的正式条目后自动以条目为准。上游已为官方 `deepseek` 裸别名补齐等级阶梯与 wire 契约，本继承面在该 lane 只剩显示名与图片模态；`opencode-go`、`opencode-zen`、`commandcode` 仍整体由本继承面提供，这些 provider 在 KDL 中补齐等级阶梯与模态后，本 fork 的对应改动即可整体移除。
