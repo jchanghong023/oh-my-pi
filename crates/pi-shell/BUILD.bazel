@@ -40,6 +40,9 @@ rust_test(
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
     deps = all_crate_deps(normal_dev = True),
+    # Fork: the default 300 s ceiling fires before the kill test's own widened
+    # budget can apply, so let the in-test deadlines decide.
+    timeout = "long",
 )
 
 rust_test(
