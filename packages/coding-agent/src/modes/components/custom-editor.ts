@@ -14,7 +14,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
 import type { AppKeybinding } from "../../config/keybindings";
-import { allowsSkillTokens, SKILL_TOKEN_RE } from "../../extensibility/skills";
+import { allowsSkillTokens, SKILL_TOKEN_RE } from "../../extensibility/skill-tokens";
 import { isVideoPath, videoPreviewSource } from "../../utils/video";
 import {
 	attachmentSgr,

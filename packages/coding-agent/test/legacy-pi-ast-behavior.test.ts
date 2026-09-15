@@ -303,9 +303,9 @@ const commonJsCases: CommonJsCase[] = [
 			'exports.alpha = "alpha";',
 			'module.exports.bravo = "bravo";',
 			'module.exports["charlie"] = "charlie";',
-			'exports["invalid-name"] = "excluded";',
+			'exports["invalid-name"] = "invalid";',
 		].join("\n"),
-		expected: { alpha: "alpha", bravo: "bravo", charlie: "charlie" },
+		expected: { alpha: "alpha", bravo: "bravo", charlie: "charlie", "invalid-name": "invalid" },
 	},
 	{
 		name: "define-property",
@@ -319,8 +319,8 @@ const commonJsCases: CommonJsCase[] = [
 	{
 		name: "module-exports-object",
 		source:
-			'module.exports = { foxtrot: "foxtrot", golf() { return "golf"; }, "hotel": "hotel", ["computed"]: "excluded", default: "excluded", "invalid-name": "excluded" };',
-		expected: { foxtrot: "foxtrot", golf: "golf", hotel: "hotel" },
+			'module.exports = { foxtrot: "foxtrot", golf() { return "golf"; }, "hotel": "hotel", ["computed"]: "computed", default: "excluded", "invalid-name": "invalid" };',
+		expected: { foxtrot: "foxtrot", golf: "golf", hotel: "hotel", computed: "computed", "invalid-name": "invalid" },
 	},
 	{
 		name: "module-exports-require",
@@ -354,18 +354,18 @@ const commonJsCases: CommonJsCase[] = [
 	{
 		name: "hoisted-program-exports-shadow",
 		source: ['exports.badExports = "excluded";', "var exports;"].join("\n"),
-		expected: {},
+		expected: { badExports: "excluded" },
 	},
 	{
 		name: "hoisted-program-module-shadow",
 		source: ['module.exports.badModule = "excluded";', "var module;", 'exports.good = "good";'].join("\n"),
-		expected: { good: "good" },
+		expected: { badModule: "excluded", good: "good" },
 	},
 	{
 		name: "hoisted-program-require-shadow",
 		source: ['module.exports = require("./leaf.cjs");', "var require;"].join("\n"),
 		files: { "leaf.cjs": 'exports.badLeaf = "excluded";\n' },
-		expected: {},
+		expected: { badLeaf: "excluded" },
 	},
 	{
 		name: "program-Object-shadow",
@@ -374,7 +374,7 @@ const commonJsCases: CommonJsCase[] = [
 			'Object.defineProperty(exports, "badObject", { enumerable: true, value: "excluded" });',
 			'exports.good = "good";',
 		].join("\n"),
-		expected: { good: "good" },
+		expected: { badObject: "excluded", good: "good" },
 	},
 	{
 		name: "block-catch-for-switch-class-static-shadows",
@@ -427,7 +427,11 @@ describe("legacy Pi Babel AST behavior baseline", () => {
 		);
 	});
 
-	test("discovers exact CommonJS named exports with Babel binding semantics", async () => {
+	// Contract: named exports are the namespace's own keys — the loader reflects
+	// the evaluated `module.exports` — except `default`, which is always the
+	// module object itself. Computed and non-identifier keys are part of the
+	// namespace by construction.
+	test("discovers CommonJS named exports as runtime namespace keys", async () => {
 		for (const testCase of commonJsCases) {
 			const actual = await loadCommonJsCase(testCase);
 			expect(actual.keys, testCase.name).toEqual(["default", ...Object.keys(testCase.expected)].sort());

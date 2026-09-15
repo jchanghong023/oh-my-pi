@@ -15,6 +15,7 @@ import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text"
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
+import { allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 export interface Skill {
 	name: string;
 	description: string;
@@ -433,28 +434,6 @@ export interface ParsedSkillInvocation {
 }
 
 /**
- * One `/skill:<name>` token delimited by whitespace or line edges. Group 1 is
- * the leading delimiter (empty at line start), group 2 the bare skill name.
- * Global so callers can walk every token; reset `lastIndex` before reuse.
- */
-export const SKILL_TOKEN_RE = /(^|\s)\/skill:([^\s/]+)(?=\s|$)/g;
-
-/**
- * Whether `/skill:<name>` tokens in `text` are invocations. False when the
- * draft starts with a different slash command (`/compact /skill:foo`) or a
- * local-execution sigil — `!cmd` / `!!cmd` for the bash tool and `$ cmd` /
- * `$$ cmd` for the python tool. Those handlers run after the skill-command
- * dispatcher and their bodies routinely contain `/skill:<name>` references
- * that are not meant as skill invocations.
- */
-export function allowsSkillTokens(text: string): boolean {
-	const trimmedStart = text.trimStart();
-	if (trimmedStart.startsWith("/skill:")) return true;
-	if (trimmedStart.startsWith("/")) return false;
-	return !startsWithLocalExecutionPrefix(trimmedStart);
-}
-
-/**
  * Detect a `/skill:<name>` invocation in a user draft.
  *
  * Returns `undefined` when the text contains no skill token. Otherwise:
@@ -492,22 +471,7 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 	return { name, args, prompt };
 }
 
-/**
- * Whether the (already left-trimmed) draft begins with a TUI local-execution
- * sigil that downstream branches will consume verbatim — `!`/`!!` for the bash
- * tool and `$`/`$$` followed by ASCII whitespace for the python tool. Mirrors
- * `pythonCommandPrefixLength` in `modes/controllers/input-controller` so the
- * two checks agree without forcing a circular import.
- */
-function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
-	if (trimmedStart.startsWith("!")) return true;
-	if (trimmedStart.charCodeAt(0) !== 36 /* $ */) return false;
-	if (trimmedStart.charCodeAt(1) === 123 /* { */) return false;
-	const sigilLength = trimmedStart.charCodeAt(1) === 36 /* $ */ ? 2 : 1;
-	const next = trimmedStart.charCodeAt(sigilLength);
-	if (Number.isNaN(next)) return true;
-	return next === 32 /* space */ || next === 9 /* tab */ || next === 10 /* LF */ || next === 13; /* CR */
-}
+export { allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 
 export type SkillInvocationKind = "user" | "autoload";
 
