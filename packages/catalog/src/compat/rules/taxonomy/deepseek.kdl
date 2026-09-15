@@ -5,15 +5,12 @@ class "deepseek" {
     family "r1" glob="*deepseek-r1*"
     family "reasoner" glob="*deepseek-reasoner*"
     family "flash" glob="*deepseek*v4*flash*"
-    family "pro" glob="*deepseek*v4*pro*"
-    // DeepSeek's canonical V4.1 id carries no `v4` segment, so the globs above
-    // miss it and the id classifies without a family — which falls through to
-    // the generic effort ladder (minimal/low/medium/high/xhigh) instead of the
-    // DeepSeek-native low/high/max. `deepseek-v4-flash` keeps matching the
-    // stricter glob; the two never overlap. The trailing anchor leaves ids like
-    // `deepseek-flash-v4` family-less (their upstream classification) instead
-    // of capturing them into the flash family.
+    // V4.1 Flash dropped the generation digit from its release id: the native
+    // roster serves it as bare `deepseek-flash`, which the `v4` glob cannot
+    // match. Without a family the descriptor's V4-generation filter drops the
+    // row, so it survived only as a stale previous-snapshot entry.
     family "flash" glob="*deepseek-flash"
+    family "pro" glob="*deepseek*v4*pro*"
     // Bare V4 chat/reasoner ids without a flash/pro segment.
     family "v4" glob="*deepseek-v4*"
     family "v3" glob="*deepseek-v3*"
