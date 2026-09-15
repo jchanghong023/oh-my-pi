@@ -69,6 +69,23 @@ function getWorkerParentPort(): MessagePort | null {
 	return workerThreads.parentPort;
 }
 
+/**
+ * Launch flags that only switch off discovery or persistence. An argv made of
+ * these still enters interactive mode, so the speculative first frame is
+ * valid; anything else (subcommands, `-p`, model/session selectors) skips it.
+ */
+const PREPAINT_SAFE_FLAGS: Record<string, true> = {
+	"--no-session": true,
+	"--no-extensions": true,
+	"--no-skills": true,
+	"--no-rules": true,
+	"--no-tools": true,
+	"--no-lsp": true,
+	"--no-title": true,
+	"--no-prewalk": true,
+	"--no-pty": true,
+};
+
 /** Complete the OS-visible process-name setup after speculative first paint. */
 async function setFullProcessName(): Promise<void> {
 	// Latency boundary: bun:ffi/node:os are unnecessary before the first frame.
@@ -531,7 +548,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		!process.env.PI_TIMING &&
 		process.stdin.isTTY === true &&
 		process.stdout.isTTY === true &&
-		(resolvedArgv.length === 0 || (resolvedArgv.length === 1 && resolvedArgv[0] === "--no-session"))
+		resolvedArgv.every(arg => PREPAINT_SAFE_FLAGS[arg] === true)
 	) {
 		// Intentional exception to the static-import convention: this latency boundary
 		// keeps the TUI graph out of worker, subcommand, help, and version launches.
