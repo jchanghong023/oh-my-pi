@@ -791,10 +791,10 @@ export class SessionTools {
 	#wrapToolForRuntimePermissions<T extends AgentTool>(tool: T): T {
 		const permissionWrapped = this.#wrapToolForAcpPermission(tool);
 		// With a pass-through ACP layer the gate behaves identically for a given tool
-		// instance, so reuse its proxy: reconciliation and the status-line cache
-		// compare applied tool sets by reference, and a fresh proxy per apply would
-		// defeat that reuse. Invalidation is unnecessary because the gate reads the
-		// live primary-agent profile at execute time.
+		// instance, so reuse its proxy rather than rebuilding one per apply: session
+		// reconciliation and the status-line cache compare applied tool sets by
+		// reference, and a fresh proxy per apply would defeat that reuse. Invalidation
+		// is unnecessary because the gate reads the live profile at execute time.
 		if (permissionWrapped === tool) {
 			const cached = this.#runtimePermissionWrappers.get(tool);
 			if (cached) return cached as T;

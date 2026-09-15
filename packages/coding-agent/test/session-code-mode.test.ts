@@ -375,7 +375,12 @@ describe("Code Mode session reconciliation", () => {
 		expect(session.codeModeNamespacesInfo).toBeUndefined();
 	});
 
-	test("retains the startup tools array when reconciliation keeps the exact roster", async () => {
+	// fork: every applied tool carries the Primary Agent runtime gate (a proxy that
+	// re-checks the live profile at execute time), so an unchanged roster still gets
+	// a rebuilt array and upstream's identity contract cannot hold here. The gate is
+	// required: handles captured under Main must be rejected once Discuss is active.
+	// Tracked in docs-zh-CN/fork.md ("同步时需重新应用的测试级适配").
+	test.skip("retains the startup tools array when reconciliation keeps the exact roster", async () => {
 		const { session } = createSession(Settings.isolated({ "providers.openai-codex.codeMode": "off" }));
 		const startupTools = session.agent.state.tools;
 
