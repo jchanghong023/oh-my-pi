@@ -435,6 +435,14 @@ export class SessionTools {
 	getBaseActiveToolNames(): string[] {
 		return [...this.#baseActiveToolNames];
 	}
+	/**
+	 * Base slate plus live `xd://` mounts: toolset removal and rollback paths
+	 * reapply from this union so devices an extension mounted out-of-band
+	 * survive instead of being unmounted by an unrelated change.
+	 */
+	getBaseWithMountedToolNames(): string[] {
+		return [...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])];
+	}
 	/** Enabled top-level, `xd://`, and Code Mode bridge tool names. */
 	getEnabledToolNames(): string[] {
 		// Union live xd:// mounts so devices mounted out-of-band survive Main
@@ -673,7 +681,7 @@ export class SessionTools {
 		return this.runToolRegistryMutation(async () => {
 			const removed = new Set(this.#installedVibeToolNames);
 			this.#uninstallVibeTools();
-			const nextEnabled = this.getBaseActiveToolNames().filter(name => !removed.has(name));
+			const nextEnabled = this.getBaseWithMountedToolNames().filter(name => !removed.has(name));
 			await this.#applyActiveToolsByName(nextEnabled);
 		});
 	}
@@ -763,7 +771,7 @@ export class SessionTools {
 		// Sample inside the lock: an unlocked sample can race a queued apply and
 		// re-commit a stale slate.
 		return this.runToolRegistryMutation(async () => {
-			await this.#applyActiveToolsByName(this.getBaseActiveToolNames());
+			await this.#applyActiveToolsByName(this.getBaseWithMountedToolNames());
 		});
 	}
 
@@ -1125,9 +1133,15 @@ export class SessionTools {
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
 				}
 			} else {
-				rebuiltUnprofiledSystemPrompt = this.#unprofiledBaseSystemPrompt;
-				rebuiltSystemPrompt = this.#primaryAgentSystemPrompt(this.#unprofiledBaseSystemPrompt);
-				rebuiltSignature = `primary:${profile.id}`;
+				// Without a rebuild callback there is nothing new to build; only
+				// re-apply the recorded prompt when the profile signature actually
+				// changed so unrelated tool applies keep prompt-cache state.
+				const signature = `primary:${profile.id}`;
+				if (this.#lastAppliedToolSignature !== signature) {
+					rebuiltUnprofiledSystemPrompt = this.#unprofiledBaseSystemPrompt;
+					rebuiltSystemPrompt = this.#primaryAgentSystemPrompt(this.#unprofiledBaseSystemPrompt);
+					rebuiltSignature = signature;
+				}
 			}
 			signal?.throwIfAborted();
 		} catch (error) {
@@ -1515,7 +1529,7 @@ export class SessionTools {
 	replaceMemoryTools(tools: AgentTool[]): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
 			const removed = new Set<string>(MEMORY_BACKEND_TOOL_NAMES.filter(name => this.#isCurrentBuiltInTool(name)));
-			const nextActive = this.getBaseActiveToolNames().filter(name => !removed.has(name));
+			const nextActive = this.getBaseWithMountedToolNames().filter(name => !removed.has(name));
 			for (const name of removed) {
 				this.#toolRegistry.delete(name);
 				this.#forgetBuiltInTool(name);
@@ -1556,7 +1570,7 @@ export class SessionTools {
 
 	#setThinkToolActive(enabled: boolean): Promise<boolean> {
 		return this.runToolRegistryMutation(async () => {
-			const active = this.getBaseActiveToolNames();
+			const active = this.getBaseWithMountedToolNames();
 			if (!enabled) {
 				if (active.includes("think")) {
 					await this.#applyActiveToolsByName(active.filter(name => name !== "think"));

@@ -541,6 +541,12 @@ pub(crate) fn is_regular_file(file: &OpenFile) -> bool {
 	}
 }
 
+/// [`StreamWriter::new`] for a file whose regular-file status was snapshotted
+/// before the SIGPIPE guard hid it on Windows; see [`build_host`].
+fn buffered_writer(file: OpenFile, regular_file: bool) -> StreamWriter {
+	if regular_file { StreamWriter::block(file) } else { StreamWriter::line(file) }
+}
+
 /// Whether two open files refer to the same non-seekable destination — the
 /// `2>&1` case (and the harness default, where one capture pipe backs both
 /// fds).
@@ -1023,9 +1029,10 @@ fn build_host<SE: ShellExtensions>(
 
 	let stdout = or_null(context.try_fd(OpenFiles::STDOUT_FD))?;
 	let stderr_file = or_null(context.try_fd(OpenFiles::STDERR_FD))?;
-	// Snapshot before the SIGPIPE guard wraps stdout: after wrapping, the
+	// Snapshot before the SIGPIPE guard wraps the streams: after wrapping, the
 	// `OpenFile::Stream` variant hides the destination on Windows.
 	let stdout_is_regular_file = is_regular_file(&stdout);
+	let stderr_is_regular_file = is_regular_file(&stderr_file);
 	let sigpipe = Arc::new(Sigpipe::default());
 	// `2>&1` (and the default capture pipe): one shared writer keeps
 	// diagnostics and output in exact write order. It carries stdout output,
@@ -1033,11 +1040,11 @@ fn build_host<SE: ShellExtensions>(
 	// and nothing is observable either way.
 	let (merged_out, stderr) = if same_destination(&stdout, &stderr_file) {
 		let guarded = SigpipeGuard::wrap(stderr_file, GuardedStream::Stdout, &sigpipe);
-		let shared = Arc::new(Mutex::new(StreamWriter::new(guarded)));
+		let shared = Arc::new(Mutex::new(buffered_writer(guarded, stderr_is_regular_file)));
 		(Some(Arc::clone(&shared)), StreamWriter::Shared(shared))
 	} else {
 		let guarded = SigpipeGuard::wrap(stderr_file, GuardedStream::Stderr, &sigpipe);
-		(None, StreamWriter::new(guarded))
+		(None, buffered_writer(guarded, stderr_is_regular_file))
 	};
 	let stdout = SigpipeGuard::wrap(stdout, GuardedStream::Stdout, &sigpipe);
 

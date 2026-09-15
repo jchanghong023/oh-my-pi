@@ -1671,11 +1671,12 @@ export function deepseekV41FlashName(id: string): string | undefined {
  * The capability surface every V4.1 Flash id inherits from the bundled
  * `deepseek-v4-flash` row.
  *
- * V4.1 Flash is natively multimodal while the borrowed row is text-only, and
- * the id matches neither the `vision` nor the `ocr` token the class rules
- * whitelist — so the modality and its strip override have to travel with the
- * surface. Everything else (effort ladder, limits, wire quirks) is the
- * sibling's.
+ * V4.1 Flash is natively multimodal, but the borrowed row's DeepSeek class
+ * rule strips image input by default (its `input` already lists `image`;
+ * `compat.stripImageInput` is what removes it) and the id matches neither the
+ * `vision` nor the `ocr` token the class rules whitelist — so the strip
+ * override, with the modality kept explicit, has to travel with the surface.
+ * Everything else (effort ladder, limits, wire quirks) is the sibling's.
  */
 export function deepseekV41FlashReference(id: string): ModelSpec<"openai-completions"> | undefined {
 	if (deepseekV41FlashName(id) === undefined) return undefined;
@@ -1702,9 +1703,9 @@ export function deepseekModelManagerOptions(
 		requireApiKey: true,
 		dropCachedModelIdsOnStaticMismatch: [...Object.keys(DEEPSEEK_V41_FLASH_IDS), DEEPSEEK_V41_FLASH_SURFACE_KEY],
 		mapModel: (entry, defaults, reference) => {
-			// The bundled catalog carries the V4.1 alias as a price-only row, so
-			// the lineage — not the row — supplies the capability surface; the row
-			// keeps its own rates.
+			// Only the bare `deepseek-flash` alias has a bundled row (none exists
+			// under `deepseek-v4.1-flash`), so the lineage — not the row —
+			// supplies the capability surface; the row only contributes its rates.
 			const lineage = deepseekV41FlashReference(defaults.id);
 			const surface = lineage ? { ...lineage, cost: reference?.cost ?? lineage.cost } : reference;
 			const spec = mapWithBundledReference(entry, defaults, surface);
@@ -2907,8 +2908,9 @@ function openCodeModelManagerOptions(
 						// stencil fallback; the fallback never selects a transport.
 						const api = resolveApi(defaults.id, defaults.api);
 						const baseUrl = openCodeBaseUrlForApi(api, basePath);
-						// DeepSeek's V4.1 ids have no bundled row under either gateway, so
-						// the generic defaults would hide the effort dial; carry the
+						// The effort dial must not depend on the bundled rows — they
+						// carry it too, but the lineage keeps discovery resolving
+						// before rows load or if a row goes missing — so carry the
 						// `deepseek-v4-flash` capability surface like the Muse Spark
 						// lineage below. Only that surface travels: the lineage's `compat`
 						// is api.deepseek.com wire config (`max_tokens`, an always-sent

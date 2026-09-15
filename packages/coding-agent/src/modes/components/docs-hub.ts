@@ -124,14 +124,18 @@ export class DocsHubComponent implements Component {
 		const query = this.#search.getValue().trim();
 		if (!query) return;
 		try {
-			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit: 20 });
+			// Index-scoped searches do not report a total; cap hits and mark the
+			// truncation instead of silently showing the limit as the count.
+			const limit = 20;
+			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit });
 			this.#hits = result.sections.map(hit => ({
 				id: hit.sectionId,
 				label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
 			}));
 			this.#hitIndex = 0;
 			this.#mode = "detail";
-			this.#detail = [`Section hits: ${result.sections.length}`];
+			const hits = result.sections.length;
+			this.#detail = [`Section hits: ${result.total ?? (hits >= limit ? `${hits}+` : `${hits}`)}`];
 		} catch (error) {
 			this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
 		}

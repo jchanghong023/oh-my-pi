@@ -64,6 +64,7 @@ function encodeHashedSessionDirName(canonicalCwd: string, scope: "home" | "tmp" 
 function getDefaultSessionDirName(cwd: string): {
 	encodedDirName: string;
 	hashedDirName: string;
+	legacyHomeHashedDirName?: string;
 	resolvedCwd: string;
 } {
 	const resolvedCwd = path.resolve(cwd);
@@ -74,6 +75,12 @@ function getDefaultSessionDirName(cwd: string): {
 	const canonicalTempRoot = resolveEquivalentPath(tempRoot);
 	const homeRelative = path.relative(canonicalHome, canonicalCwd);
 	const tempRelative = path.relative(canonicalTempRoot, canonicalCwd);
+	// A temp root that contains (or equals) the home directory (`TEMP` set to
+	// `%USERPROFILE%`, a drive root, …) would capture every home cwd into the
+	// tmp scope; keep those cwds on the home-relative names they always had.
+	const homeRelativeToTemp = path.relative(canonicalTempRoot, canonicalHome);
+	const tempCapturesHome =
+		homeRelativeToTemp === "" || (!homeRelativeToTemp.startsWith("..") && !path.isAbsolute(homeRelativeToTemp));
 	let encodedDirName: string;
 	let scope: "home" | "tmp" | "abs";
 	// The temp root must be tested before home: on Windows `os.tmpdir()`
@@ -81,7 +88,10 @@ function getDefaultSessionDirName(cwd: string): {
 	// temp cwd would otherwise be classified as home-relative and encoded as
 	// `-AppData-Local-Temp-…` instead of the `-tmp-…` contract. On POSIX the
 	// temp root is outside home and the order is irrelevant.
-	if (tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative))) {
+	if (
+		!tempCapturesHome &&
+		(tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative)))
+	) {
 		encodedDirName = encodeRelativeSessionDirName("-tmp", tempRelative);
 		scope = "tmp";
 	} else if (homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative))) {
@@ -91,7 +101,15 @@ function getDefaultSessionDirName(cwd: string): {
 		encodedDirName = encodeLegacyAbsoluteSessionDirName(canonicalCwd);
 		scope = "abs";
 	}
-	return { encodedDirName, hashedDirName: encodeHashedSessionDirName(canonicalCwd, scope), resolvedCwd };
+	return {
+		encodedDirName,
+		hashedDirName: encodeHashedSessionDirName(canonicalCwd, scope),
+		// Before the temp root was classified ahead of home, a temp-under-home
+		// cwd hashed as `home-…`, so 17.2.5-17.2.8 dirs for such cwds exist
+		// under that spelling; probe it too.
+		legacyHomeHashedDirName: scope === "tmp" ? encodeHashedSessionDirName(canonicalCwd, "home") : undefined,
+		resolvedCwd,
+	};
 }
 
 /**
@@ -111,13 +129,15 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 	// absolute-name dir for a temp cwd (`--C--…-Temp-…--`) also matches the
 	// `--<home-encoded>-…--` prefix below; redirecting it here would strand it
 	// under a `-AppData-…` name that the per-cwd temp-root migration can no
-	// longer find. When the temp root lives inside home, leave those entries
-	// for migrateLegacyAbsoluteSessionDir instead.
+	// longer find. When the temp root lives inside home, leave those entries —
+	// the temp root itself included — for migrateLegacyAbsoluteSessionDir, and
+	// hand home-relative temp names to the `-tmp` pass below instead.
 	const canonicalHome = resolveEquivalentPath(home);
 	const canonicalTempRoot = resolveEquivalentPath(os.tmpdir());
 	const tempRelative = path.relative(canonicalHome, canonicalTempRoot);
 	const tempUnderHome = tempRelative !== "" && !tempRelative.startsWith("..") && !path.isAbsolute(tempRelative);
-	const tempRemainderPrefix = tempUnderHome ? `${tempRelative.replace(/[/\\:]/g, "-")}-` : null;
+	// Encoded temp-root remainder relative to home, e.g. `AppData-Local-Temp`.
+	const tempRemainder = tempUnderHome ? tempRelative.replace(/[/\\:]/g, "-") : null;
 
 	let entries: string[];
 	try {
@@ -135,7 +155,8 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 		} else {
 			continue;
 		}
-		if (tempRemainderPrefix !== null && remainder.startsWith(tempRemainderPrefix)) continue;
+		if (tempRemainder !== null && (remainder === tempRemainder || remainder.startsWith(`${tempRemainder}-`)))
+			continue;
 
 		const newName = remainder ? `-${remainder}` : "-";
 		const oldPath = path.join(sessionsRoot, entry);
@@ -149,6 +170,37 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 				newPath,
 				error: String(error),
 			});
+		}
+	}
+
+	// Sessions written while a temp cwd still classified as home-relative live
+	// under `-<temp-relative>…` names; rename them to the `-tmp` canonical form.
+	// The encoded name alone cannot prove the cwd was under the temp root
+	// (`AppData\Local\Temp-foo` encodes identically to `%TEMP%\foo`), so entries
+	// whose temp-side path does not exist are left alone.
+	if (tempRemainder !== null) {
+		const tempOldExact = `-${tempRemainder}`;
+		const tempOldPrefix = `${tempOldExact}-`;
+		for (const entry of entries) {
+			let rest: string;
+			if (entry === tempOldExact) rest = "";
+			else if (entry.startsWith(tempOldPrefix)) rest = entry.slice(tempOldPrefix.length);
+			else continue;
+			if (rest !== "" && !fs.existsSync(path.join(canonicalTempRoot, rest))) continue;
+			const oldPath = path.join(sessionsRoot, entry);
+			const newPath = path.join(sessionsRoot, encodeRelativeSessionDirName("-tmp", rest));
+			// A temp root directly under home whose encoded remainder is `tmp`
+			// (e.g. `TEMP=%USERPROFILE%\tmp`) makes both sides the same dir.
+			if (oldPath === newPath) continue;
+			try {
+				migrateSessionDirPath(oldPath, newPath);
+			} catch (error) {
+				logger.warn("Failed to migrate temp session directory", {
+					oldPath,
+					newPath,
+					error: String(error),
+				});
+			}
 		}
 	}
 }
@@ -207,11 +259,12 @@ export function computeDefaultSessionDir(
 	storage: SessionStorage,
 	sessionsRoot: string = getSessionsDir(),
 ): string {
-	const { encodedDirName, hashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
+	const { encodedDirName, hashedDirName, legacyHomeHashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
 	migrateHomeSessionDirs(sessionsRoot);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
 	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
 	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
+	if (legacyHomeHashedDirName) migrateHashedSessionDir(legacyHomeHashedDirName, sessionDir, sessionsRoot);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }

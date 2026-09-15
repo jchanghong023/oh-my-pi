@@ -1060,8 +1060,9 @@ describe("issue #10416 — retired bare opencode provider", () => {
 			expect(resolveVariantSelector("opencode-go", "deepseek-flash")).toBe("deepseek-v4.1-flash");
 
 			expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.High, Effort.Max]);
-			// V4.1 Flash is natively multimodal, unlike the text-only
-			// `deepseek-v4-flash` row the rest of the surface is inherited from.
+			// V4.1 Flash is natively multimodal; the borrowed `deepseek-v4-flash`
+			// row's DeepSeek class rule strips image input by default, so the
+			// surface has to carry the strip override.
 			expect(model.input).toEqual(["text", "image"]);
 			expect(isOpenAICompletionsVisionSupported(model as Model<"openai-completions">)).toBe(true);
 			// The borrowed surface is `deepseek-v4-flash` from the first-party

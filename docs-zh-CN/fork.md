@@ -27,7 +27,7 @@
 ### Command Code
 
 * 采用上游 provider（id `commandcode`，默认模型 `claude-sonnet-4-6`、双协议发现、KDL 静态价目表与逐 id 思考等级表），fork 不再维护自己的 `command-code` provider。
-* 迁移：`modelRoles` 等配置中的 `command-code/...` 需改为 `commandcode/...`；已存凭据的 provider 键同步改名，否则重新登录。
+* 迁移：`modelRoles` 等配置中的 `command-code/...` 需改为 `commandcode/...`；旧 `command-code` 的已存凭据不会自动迁移（代码不含改名逻辑），需重新登录。
 * fork 增量有两处：`providers/commandcode.kdl` 把 `deepseek/deepseek-v4.1-flash` 并入 `deepseek/deepseek-v4-flash` 一组的等级阶梯（`high` / `max`），并声明输入模态 `text` + `image` 与 `strip-image-input #false`；`src/models.json` 的同名内置行按该 KDL 重新烘焙（`reasoning`、等级、图片与相应 compat），以通过「烘焙值 = 引擎值」的 parity 门禁。等级与图片支持见下节。
 * 发现结果保持中性：上游映射器不再从同名模型继承 `reasoning` 与上下文，映射代码不再有 fork 增量；KDL 的精确 `thinking-efforts` 配合 provider 级 `thinking-upgrade-neutral` 负责把中性默认升级为可推理模型。
 * 价格取上游静态表：上游已收录该 id 的 `cost-patch`（`0.15` / `0.60`），fork 不再把它并入 `deepseek-v4-flash` 的价目组。
@@ -41,17 +41,17 @@
 ### DeepSeek V4.1 Flash
 
 * DeepSeek V4.1 Flash 的裸 id `deepseek-flash` 不带 `v4` 段，不匹配原有 `*deepseek*v4*flash*` 分类规则（带版本号的 `deepseek-v4.1-flash` 本就命中原规则、family 已是 flash）。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。官方 `deepseek` 的裸别名自本基线起另有上游内置条目与精确兼容规则（等级阶梯、`max_tokens` + `reasoning_content` 回放契约），该 lane 的推理能力不再依赖本继承面。
-* 这两条 id 在 `opencode-go` 上另带 fork 维护的内置目录行（显示名 `DeepSeek V4.1 Flash`、`low` / `high` / `max`、1M / 384K、`text` + `image`、不剥离图片）：发现完成前或缓存行被迁移丢弃时，选择器与 `modelRoles` 仍能解析到本 lane。此前这两条 id 仅存在于发现结果中，缺失时 role 会静默改绑同网关的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-go/deepseek-flash:等级` 也会直接报 not found。发现成功后仍以动态行与本继承面为准。
+* 这两条 id 在 `opencode-go` 上另带 fork 维护的内置目录行（显示名 `DeepSeek V4.1 Flash`、`low` / `high` / `max`、1M / 384K、`text` + `image`、不剥离图片、`int` / `tps`（39.5 / 214.4）对齐上游 v4.1 条目，重烘时须保留）：发现完成前或缓存行被迁移丢弃时，选择器与 `modelRoles` 仍能解析到本 lane。此前这两条 id 仅存在于发现结果中，缺失时 role 会静默改绑同网关被类规则剥离图片的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-go/deepseek-flash:等级` 也会直接报 not found。发现成功后仍以动态行与本继承面为准。
 * 官方 `deepseek` 的内置行也直接携带该能力面：显示名、图片输入与「不剥离图片」由 fork 的行提供，推理等级与 wire 契约由上游条目提供；此前只有发现行携带表面，未发现或内置行优先时界面会同时出现 `deepseek-flash` 与 `DeepSeek V4.1 Flash` 两个名称，且该 lane 无视觉、无思考等级。
 * 本 lane 按同网关 Flash 档定价（`0.15` / `0.6`）：网关只对 `deepseek-v4.1-flash`、`deepseek-v4-flash` 下发价格，裸别名未定价，此前在面板里显示为 free。
 * `opencode-go` 上同一 SKU 的两个 id（`deepseek-v4.1-flash` 与裸别名 `deepseek-flash`）在目录层收敛为一行：规范 id 取带版本号的 `deepseek-v4.1-flash`，名称 `DeepSeek V4.1 Flash`；裸别名仍可继续作为选择器（`modelRoles`、`--model` 无需改动），档位 `low` / `high` / `max` 与图片输入不变。
 * 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
 * OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目独立提供，不属于本继承面；其图片输入自本基线起改由上游 DeepSeek 类规则覆盖（`classes/deepseek.kdl` 的 `models "*v4.1-flash*"` 关闭图片剥离，取代原先 `openrouter.kdl` 的 provider 级条目）。
-* V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目为纯文本，其 id 也不含 `vision` / `ocr` 字样、会命中 DeepSeek 类规则默认的图片剥离。类规则自本基线起对带版本号的 `*v4.1-flash*` 关闭剥离，裸别名仍需继承面自行覆盖：继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
+* V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目会命中 DeepSeek 类规则默认的图片剥离（其模态声明并非纯文本，但 `stripImageInput` 默认开启），其 id 也不含 `vision` / `ocr` 字样。类规则自本基线起对带版本号的 `*v4.1-flash*` 关闭剥离，裸别名仍需继承面自行覆盖：继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
 * 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
 * 内置目录出现这些 id 的正式条目后自动以条目为准。上游已为官方 `deepseek` 裸别名补齐等级阶梯与 wire 契约，本继承面在该 lane 只剩显示名与图片模态；`opencode-go`、`opencode-zen`、`commandcode` 仍整体由本继承面提供，这些 provider 在 KDL 中补齐等级阶梯与模态后，本 fork 的对应改动即可整体移除。
-* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」的 KDL 条目提供等级与图片输入，价格取上游 `cost-patch`；官方 `deepseek` 的 `deepseek-flash` 自本基线起由上游条目提供推理等级与 wire 契约，本继承面在该处只补显示名与图片输入。
+* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」的 KDL 条目提供等级与图片输入，价格取上游 `cost-patch`；官方 `deepseek` 的 `deepseek-flash` 自本基线起由上游条目提供推理等级与 wire 契约，本继承面在该处只补显示名与图片输入（该行的 `name` / `input` / `stripImageInput` 为手工烘焙、无规则侧来源，重烘时须保留；`identity` 由 fork 的 `*deepseek-flash` 分类规则产出，行内值仅是快照）。
 * 分类侧另有一处 fork 改动：`taxonomy/deepseek.kdl` 用 `*deepseek-flash` glob（尾锚定）把以 `deepseek-flash` 结尾的裸 id 归入 Flash 家族，避免落到通用档位；`deepseek-flash-v4` 这类以版本段结尾的 id 不再被卷入（其 id 不含 `deepseek-v4` 段，回落为无 family 的通用档位，与 models.json 烘焙的 identity 一致）；官方 `deepseek` 已由上游精确规则覆盖，该 glob 主要服务 `opencode-go`、`opencode-zen`、`commandcode` 的裸 id，档位生效仍以对应能力面开启推理为前提。
 
 ### 代理行为与 Discuss
@@ -101,6 +101,7 @@
 * 模型与参数照抄国内「智谱 coding plan」lane（`zhipu-coding-plan`）：14 个 GLM（`glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.6v` / `glm-4.7` / `glm-5` / `glm-5-turbo` / `glm-5v-turbo` / `glm-5.1` / `glm-5.2` / `glm-5.2-highspeed` / `glm-5.3` / `glm-5.3-flash` / `glm-5.3-highspeed`），上下文窗口、最大输出、视觉输入、tokenizer 与价格同该 lane；`glm-5.2-highspeed[1m]` 是该 lane 的折叠别名，本 provider 无折叠表，不收录。思考档位与 coding plan 相同（多数 SKU `minimal`–`high`；`glm-5.2*` 为 `high`/`max`；`glm-5.3*` 为 `low`/`high`/`max`、默认 `max` 且不可关闭）。
 * 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。
 * 传输面在 `packages/catalog/src/compat/rules/providers/zcode-api.kdl`（tool_result id 镜像、思考模式），认证面在 `rules/auth/zcode-api.kdl`（无 login，不出现在 `/login`）。
+* `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。
 * WSL（NAT 模式）下 `127.0.0.1` 指向 WSL 自身而非 Windows 主机：代理跑在 Windows、OMP 跑在 WSL 时，需将 `ZCODE_API_BASE_URL` 指向主机地址（如 `http://172.17.80.1:8080`，取自 `ip route show default`）或在 WSL 内运行代理。
 
 ### 公司内网模型（仅 `--offline`）
@@ -124,7 +125,12 @@
 
 ### Windows 内建工具输出缓冲
 
-* 内建工具（`rg`、`grep` 等）的 stdout 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
+* 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
+
+### Windows 会话目录命名
+
+* cwd 位于 `%TEMP%`（含子目录）时，会话目录按 `-tmp-…` 分类命名（temp 优先于 home；上游顺序相反，会把同一 cwd 编码为 home 相对名 `-AppData-Local-Temp-…`）。例外：`TEMP` 被指到包含或等于 home 的路径（如 `%USERPROFILE%`、盘根）时不抢占分类，home 命名保持与上游一致。
+* 启动时的目录迁移会把旧 home 相对名的 temp 会话目录改名为 `-tmp-…`，仅当对应 temp 侧路径仍存在（防 `AppData\Local\Temp-foo` 与 `%TEMP%\foo` 的同形歧义误伤）；多级子目录的旧名（路径分隔符编码展平后字面目录通常不存在）可能被保守跳过，目录与数据保留，只是不再按 cwd 关联。
 
 ### 默认设置
 
@@ -180,5 +186,5 @@
 * 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
 * 保留 `bun scripts/jch-localci.ts [full]` 作为独立本地检查入口，支持 Windows x64 与 Linux x64（含 WSL2 同一目录双平台运行）：默认不构建 native，`full` 才构建当前宿主平台的 native addon；Rust 核心测试统一走 `cargo nextest`，Windows 上会自动把 VS Build Tools 的 CMake/Ninja 注入 PATH（`.cargo/config.toml` 固定 Ninja 生成器）。个别 POSIX 专有断言（umask、uid、exec bit、bash symlink、依赖 `sh -c` 输出形态的 find 断言）在 Windows 上由测试内 `skipIf` / `ignore` 按平台跳过，其余测试双平台同套运行。
 * 保留 `bun scripts/jch-dev-ui-test.ts` 作为 `bun run dev` 界面的自动化冒烟测试（`--debug` 可转储 TUI 原始输出）：通过本地构建的 pi-natives PTY（Windows ConPTY / POSIX openpty）启动 dev TUI，断言全屏界面渲染（光标控制序列 + 状态栏 Main 指示）、按键触发重绘、Ctrl+D 优雅退出（exit 0）；仅使用本地 addon，不联网。启动参数固定 `--offline --profile localci-ui`，不触发首次配置向导和网络请求。
-* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 180 秒（CI 分片 CPU 争用）；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）。
+* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 180 秒（CI 分片 CPU 争用）；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`oauth_callback` 测试在无头/SSH/WSL 会话遇到 `Unsupported` 时跳过；`pi-vcs` 的 git 测试以 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向空设备、`pi-vcs` 与 `natives` 的 git 测试在 fixture 内固定 `core.autocrlf=false`（hermetic 化，防宿主配置破坏字节级断言）；`pi-vcs` 另有 worktree 断言剥 `\\?\` 前缀、index 快照失败用目录占位替代 `chmod 000` 两处 Windows 适配。
 * WSL2 与 Windows 共享同一检出目录时，node_modules 为 Windows 安装：WSL 侧的 `oxlint` / `oxfmt` / `tsgo` 需按仓库同版本全局安装（`bun install -g`），native addon 因文件名带平台前缀可共存，cargo 构建缓存建议用 `CARGO_TARGET_DIR` 指到 WSL 本地文件系统。

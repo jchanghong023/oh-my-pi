@@ -233,7 +233,10 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
 		const fenceMatch = parseFence(line.text);
-		const heading = parseHeading(line.text, lines[index + 1]?.text, fence !== undefined);
+		// A fence delimiter line can never begin a heading: an ATX line cannot
+		// start with backticks or tildes, and a setext text line must be a
+		// paragraph line, which a fence opener is not.
+		const heading = parseHeading(line.text, lines[index + 1]?.text, fence !== undefined || fenceMatch !== undefined);
 		if (heading) {
 			finish();
 			headingPath = headingPath.slice(0, heading.level - 1);
@@ -253,8 +256,13 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 		}
 		current.lines.push(line);
 		if (fenceMatch) {
-			if (!fence) fence = { marker: fenceMatch.marker, length: fenceMatch.length };
-			else if (
+			if (!fence) {
+				// CommonMark: a backtick fence's info string cannot contain
+				// backticks — such a line is a paragraph, not a fence opener.
+				if (!(fenceMatch.marker === "`" && fenceMatch.trailing.includes("`"))) {
+					fence = { marker: fenceMatch.marker, length: fenceMatch.length };
+				}
+			} else if (
 				fence.marker === fenceMatch.marker &&
 				fenceMatch.length >= fence.length &&
 				/^[ \t]*$/.test(fenceMatch.trailing)

@@ -5690,7 +5690,7 @@ export class AgentSession {
 			throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
 		}
 		const previous = this.#activePrimaryAgentId;
-		const previousBase = this.#tools.getBaseActiveToolNames();
+		const previousBase = this.#tools.getBaseWithMountedToolNames();
 		const legacyBase =
 			id === "main" ? this.sessionManager.buildSessionContext().legacyDiscussPreviousTools : undefined;
 		this.#pendingPrimaryAgentId = id;

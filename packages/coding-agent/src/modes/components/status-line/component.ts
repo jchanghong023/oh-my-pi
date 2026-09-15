@@ -837,7 +837,9 @@ export class StatusLineComponent implements Component {
 	}
 
 	setPrimaryAgentStatus(primaryAgent: SegmentContext["primaryAgent"]): void {
+		if (this.#primaryAgentStatus === primaryAgent) return;
 		this.#primaryAgentStatus = primaryAgent;
+		this.#invalidateStatusLineRenderCache();
 	}
 
 	setLoopModeStatus(status: NonNullable<SegmentContext["loopMode"]> | undefined): void {

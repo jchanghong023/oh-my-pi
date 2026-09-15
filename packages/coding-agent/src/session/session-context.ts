@@ -334,6 +334,10 @@ export function buildSessionContext(
 	let modeData: Record<string, unknown> | undefined;
 	let primaryAgent: PrimaryAgentId = "main";
 	let legacyDiscussPreviousTools: string[] | undefined;
+	// Whether `primaryAgent === "discuss"` came from a legacy `mode_change`
+	// entry (and can therefore be toggled off by a later one) rather than from
+	// an explicit `primary_agent_change`.
+	let legacyDiscussFromModeChange = false;
 	// Track whether an explicit `model_change` with role="default" has been
 	// seen on this path. Once a user (or the agent itself) records an
 	// explicit default, later assistant-message inference must NOT overwrite
@@ -377,8 +381,18 @@ export function buildSessionContext(
 		} else if (entry.type === "mode_change") {
 			mode = entry.mode;
 			modeData = entry.data;
-			// Read-only compatibility for transcripts written by legacy Discuss Mode.
-			primaryAgent = entry.mode === "discuss" ? "discuss" : primaryAgent === "discuss" ? "main" : primaryAgent;
+			// Read-only compatibility for transcripts written by legacy Discuss
+			// Mode: `mode_change` toggles that legacy state, but an explicit
+			// `primary_agent_change` supersedes it — otherwise the repair append
+			// of `mode_change("none")` under a running Discuss agent would flip
+			// the next restore back to Main.
+			if (entry.mode === "discuss") {
+				primaryAgent = "discuss";
+				legacyDiscussFromModeChange = true;
+			} else if (legacyDiscussFromModeChange) {
+				primaryAgent = primaryAgent === "discuss" ? "main" : primaryAgent;
+				legacyDiscussFromModeChange = false;
+			}
 			const previousTools = entry.data?.previousTools;
 			legacyDiscussPreviousTools =
 				entry.mode === "discuss" &&
@@ -392,6 +406,7 @@ export function buildSessionContext(
 		) {
 			primaryAgent = entry.primaryAgent;
 			legacyDiscussPreviousTools = undefined;
+			legacyDiscussFromModeChange = false;
 		}
 	}
 

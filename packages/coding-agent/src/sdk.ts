@@ -3958,7 +3958,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				session.setExtensionMCPTool(name, liveTool);
 				try {
 					if ((registered.definition.defaultInactive || registered.definition.hidden) && !explicitlyRequested) {
-						if (!currentlyExposed) return;
+						// Skip only when the tool is exposed neither at the top level
+						// nor as an `xd://` device: under Discuss the projection hides
+						// base tools, and a re-registration turning defaultInactive
+						// must still remove them from the presentation.
+						if (!alreadyEnabled && !currentlyExposed) return;
 						await session.setActiveToolPresentation(
 							enabled.filter(enabledName => enabledName !== name),
 							mounted.filter(mountedName => mountedName !== name),

@@ -78067,7 +78067,8 @@
 			"contextWindow": 1000000,
 			"maxTokens": 384000,
 			"identity": {
-				"class": "deepseek"
+				"class": "deepseek",
+			"family": "flash"
 			},
 			"requiresGlyphTokenization": false,
 			"tokenizer": "deepseek-v3",
@@ -78189,7 +78190,7 @@
 					"nativeKimiK3Reasoning": false,
 					"zaiReasoningEffortDialect": false,
 					"clampOutputToModelMax": true,
-					"stripImageInput": true,
+					"stripImageInput": false,
 					"thinkingLoopGuard": "deepseek",
 					"rejectRootObjectUnion": false,
 					"retryWithoutStrictOnGrammarError": false,
@@ -282310,6 +282311,8 @@
 			],
 			"contextWindow": 1000000,
 			"maxTokens": 384000,
+			"int": 39.5,
+			"tps": 214.4,
 			"tokenizer": "deepseek-v3",
 			"requiresGlyphTokenization": false,
 			"supportsComputerUse": false,
@@ -286593,6 +286596,8 @@
 			],
 			"contextWindow": 1000000,
 			"maxTokens": 384000,
+			"int": 39.5,
+			"tps": 214.4,
 			"tokenizer": "deepseek-v3",
 			"requiresGlyphTokenization": false,
 			"supportsComputerUse": false,

@@ -28,7 +28,6 @@
 
 ### Added
 
-- Added Command Code API-key login with authenticated inference validation and mixed-wire request routing ([#9564](https://github.com/can1357/oh-my-pi/pull/9564) by [@himomohi](https://github.com/himomohi)).
 - Charm Hyper accounts now report their remaining prepaid credit balance in `/usage` ([#11656](https://github.com/can1357/oh-my-pi/pull/11656) by [@oldschoola](https://github.com/oldschoola)).
 
 ### Fixed
