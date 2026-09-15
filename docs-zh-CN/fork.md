@@ -122,6 +122,10 @@
 * 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
 * 检索模型目录仅包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，不包含 8B 模型，两种检索模型不作为聊天模型展示。现有记忆流程只接文本向量，默认的 `Qwen3-VL-Embedding-2B` 也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
 
+### Windows 内建工具输出缓冲
+
+* 内建工具（`rg`、`grep` 等）的 stdout 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
+
 ### 默认设置
 
 保持以下 fork 默认值：
@@ -176,4 +180,5 @@
 * 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
 * 保留 `bun scripts/jch-localci.ts [full]` 作为独立本地检查入口，支持 Windows x64 与 Linux x64（含 WSL2 同一目录双平台运行）：默认不构建 native，`full` 才构建当前宿主平台的 native addon；Rust 核心测试统一走 `cargo nextest`，Windows 上会自动把 VS Build Tools 的 CMake/Ninja 注入 PATH（`.cargo/config.toml` 固定 Ninja 生成器）。个别 POSIX 专有断言（umask、uid、exec bit、bash symlink、依赖 `sh -c` 输出形态的 find 断言）在 Windows 上由测试内 `skipIf` / `ignore` 按平台跳过，其余测试双平台同套运行。
 * 保留 `bun scripts/jch-dev-ui-test.ts` 作为 `bun run dev` 界面的自动化冒烟测试（`--debug` 可转储 TUI 原始输出）：通过本地构建的 pi-natives PTY（Windows ConPTY / POSIX openpty）启动 dev TUI，断言全屏界面渲染（光标控制序列 + 状态栏 Main 指示）、按键触发重绘、Ctrl+D 优雅退出（exit 0）；仅使用本地 addon，不联网。启动参数固定 `--offline --profile localci-ui`，不触发首次配置向导和网络请求。
+* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 180 秒（CI 分片 CPU 争用）；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`legacy-pi-ast` 的 CJS 导出基线按运行时命名空间语义断言（上游实现已改、测试未跟进）。
 * WSL2 与 Windows 共享同一检出目录时，node_modules 为 Windows 安装：WSL 侧的 `oxlint` / `oxfmt` / `tsgo` 需按仓库同版本全局安装（`bun install -g`），native addon 因文件名带平台前缀可共存，cargo 构建缓存建议用 `CARGO_TARGET_DIR` 指到 WSL 本地文件系统。
