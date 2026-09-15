@@ -19,6 +19,7 @@ const CHAT_MODELS: ReadonlyArray<
 	{ id: "MiniMax-M2.7", input: ["text"], contextWindow: 204800, maxTokens: 81920 },
 	{ id: "Qwen3.6-27B-public", input: ["text", "image"], contextWindow: 262144, maxTokens: 81920, tokenizer: "qwen3" },
 	{ id: "Qwen3.6-35B-A3B", input: ["text", "image"], contextWindow: 262144, maxTokens: 81920, tokenizer: "qwen3" },
+	{ id: "Qwen3.8-27B", input: ["text", "image"], contextWindow: 262144, maxTokens: 81920, tokenizer: "qwen3" },
 ];
 
 // These are retrieval models, not Anthropic Messages models or tool-calling agents.
