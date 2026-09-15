@@ -6,6 +6,10 @@
 
 - Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
 
+### Added
+
+- Added collapseToAtom method to compress text spans into UI-friendly atoms
+
 ## [18.1.17] - 2026-09-10
 
 ### Added
