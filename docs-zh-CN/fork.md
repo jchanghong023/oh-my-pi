@@ -7,9 +7,9 @@
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.2.0`
-* **Upstream commit**：`6f2c14b3e4cc065139789da893e4f86f3d72958c`
-* **同步日期**：2026-09-15
+* **版本**：`v18.2.1`
+* **Upstream commit**：`acf943d3c8dc1ed135b42aa33fef4d9d2ff61c9a`
+* **同步日期**：2026-09-16
 
 ## 当前功能差异
 
@@ -28,10 +28,7 @@
 
 * 采用上游 provider（id `commandcode`，默认模型 `claude-sonnet-4-6`、双协议发现、KDL 静态价目表与逐 id 思考等级表），fork 不再维护自己的 `command-code` provider。
 * 迁移：`modelRoles` 等配置中的 `command-code/...` 需改为 `commandcode/...`；旧 `command-code` 的已存凭据不会自动迁移（代码不含改名逻辑），需重新登录。
-* fork 增量有两处：`providers/commandcode.kdl` 把 `deepseek/deepseek-v4.1-flash` 并入 `deepseek/deepseek-v4-flash` 一组的等级阶梯（`high` / `max`），并声明输入模态 `text` + `image` 与 `strip-image-input #false`；`src/models.json` 的同名内置行按该 KDL 重新烘焙（`reasoning`、等级、图片与相应 compat），以通过「烘焙值 = 引擎值」的 parity 门禁。等级与图片支持见下节。
-* 发现结果保持中性：上游映射器不再从同名模型继承 `reasoning` 与上下文，映射代码不再有 fork 增量；KDL 的精确 `thinking-efforts` 配合 provider 级 `thinking-upgrade-neutral` 负责把中性默认升级为可推理模型。
-* 价格取上游静态表：上游已收录该 id 的 `cost-patch`（`0.15` / `0.60`），fork 不再把它并入 `deepseek-v4-flash` 的价目组。
-* 上游若在 KDL 中补齐该 id 的等级阶梯与模态，上述 fork 条目可整体删除。
+* 上游已在其 KDL 与烘焙目录中直接收录 `deepseek/deepseek-v4.1-flash`（`low` / `high` / `max`、`text` + `image`、不剥离图片、`0.15` / `0.60`），本节不再有 fork 增量；此前 fork 的并入条目已删除。
 
 ### OpenCode Zen
 
@@ -40,19 +37,12 @@
 
 ### DeepSeek V4.1 Flash
 
-* DeepSeek V4.1 Flash 的裸 id `deepseek-flash` 不带 `v4` 段，不匹配原有 `*deepseek*v4*flash*` 分类规则（带版本号的 `deepseek-v4.1-flash` 本就命中原规则、family 已是 flash）。这些 id 统一按同一模型处理，继承内置 `deepseek-v4-flash` 条目的能力元数据：显示名 `DeepSeek V4.1 Flash`，上下文 1M；官方 `deepseek`、`opencode-go`、`opencode-zen` 为思考等级 `low` / `high` / `max`、最大输出 384K，`commandcode` 则按该网关既有条目为 `high` / `max`、最大输出 64K。官方 `deepseek` 的裸别名自本基线起另有上游内置条目与精确兼容规则（等级阶梯、`max_tokens` + `reasoning_content` 回放契约），该 lane 的推理能力不再依赖本继承面。
-* 这两条 id 在 `opencode-go` 上另带 fork 维护的内置目录行（显示名 `DeepSeek V4.1 Flash`、`low` / `high` / `max`、1M / 384K、`text` + `image`、不剥离图片、`int` / `tps`（39.5 / 214.4）对齐上游 v4.1 条目，重烘时须保留）：发现完成前或缓存行被迁移丢弃时，选择器与 `modelRoles` 仍能解析到本 lane。此前这两条 id 仅存在于发现结果中，缺失时 role 会静默改绑同网关被类规则剥离图片的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-go/deepseek-flash:等级` 也会直接报 not found。发现成功后仍以动态行与本继承面为准。
-* 官方 `deepseek` 的内置行也直接携带该能力面：显示名、图片输入与「不剥离图片」由 fork 的行提供，推理等级与 wire 契约由上游条目提供；此前只有发现行携带表面，未发现或内置行优先时界面会同时出现 `deepseek-flash` 与 `DeepSeek V4.1 Flash` 两个名称，且该 lane 无视觉、无思考等级。
-* 本 lane 按同网关 Flash 档定价（`0.15` / `0.6`）：网关只对 `deepseek-v4.1-flash`、`deepseek-v4-flash` 下发价格，裸别名未定价，此前在面板里显示为 free。
-* `opencode-go` 上同一 SKU 的两个 id（`deepseek-v4.1-flash` 与裸别名 `deepseek-flash`）在目录层收敛为一行：规范 id 取带版本号的 `deepseek-v4.1-flash`，名称 `DeepSeek V4.1 Flash`；裸别名仍可继续作为选择器（`modelRoles`、`--model` 无需改动），档位 `low` / `high` / `max` 与图片输入不变。
-* 影响范围：官方 `deepseek` provider、`opencode-go`、`opencode-zen`、`commandcode`。不继承其他 provider 的价格与传输。
-* OpenRouter 的同名 `deepseek/deepseek-v4.1-flash` 由上游内置条目独立提供，不属于本继承面；其图片输入自本基线起改由上游 DeepSeek 类规则覆盖（`classes/deepseek.kdl` 的 `models "*v4.1-flash*"` 关闭图片剥离，取代原先 `openrouter.kdl` 的 provider 级条目）。
-* V4.1 Flash 原生支持图片输入，而被继承的 `deepseek-v4-flash` 条目会命中 DeepSeek 类规则默认的图片剥离（其模态声明并非纯文本，但 `stripImageInput` 默认开启），其 id 也不含 `vision` / `ocr` 字样。类规则自本基线起对带版本号的 `*v4.1-flash*` 关闭剥离，裸别名仍需继承面自行覆盖：继承面同时携带输入模态（`text` + `image`）与「不剥离图片」的覆盖；图片按原样交给网关，不做本地降级。上游 `opencode-go.kdl` 已自行声明该 provider 的模态与不剥离图片，此处继承面只补充推理能力与限额；官方 `deepseek` 与 `opencode-zen` 的这两项仍来自继承面。思考等级、限额与显示名仍与同类 DeepSeek 模型一致。
-* 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或分类规则覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。
-* 继承关系同时作为缓存失效策略：修复前写入的旧缓存行会在下次启动时自动重新拉取，无需等待 TTL 或手动刷新。
-* 内置目录出现这些 id 的正式条目后自动以条目为准。上游已为官方 `deepseek` 裸别名补齐等级阶梯与 wire 契约，本继承面在该 lane 只剩显示名与图片模态；`opencode-go`、`opencode-zen`、`commandcode` 仍整体由本继承面提供，这些 provider 在 KDL 中补齐等级阶梯与模态后，本 fork 的对应改动即可整体移除。
-* `commandcode` 的 `deepseek/deepseek-v4.1-flash` 由上方「Command Code」的 KDL 条目提供等级与图片输入，价格取上游 `cost-patch`；官方 `deepseek` 的 `deepseek-flash` 自本基线起由上游条目提供推理等级与 wire 契约，本继承面在该处只补显示名与图片输入（该行的 `name` / `input` / `stripImageInput` 为手工烘焙、无规则侧来源，重烘时须保留；`identity` 由 fork 的 `*deepseek-flash` 分类规则产出，行内值仅是快照）。
-* 分类侧另有一处 fork 改动：`taxonomy/deepseek.kdl` 用 `*deepseek-flash` glob（尾锚定）把以 `deepseek-flash` 结尾的裸 id 归入 Flash 家族，避免落到通用档位；`deepseek-flash-v4` 这类以版本段结尾的 id 不再被卷入（其 id 不含 `deepseek-v4` 段，回落为无 family 的通用档位，与 models.json 烘焙的 identity 一致）；官方 `deepseek` 已由上游精确规则覆盖，该 glob 主要服务 `opencode-go`、`opencode-zen`、`commandcode` 的裸 id，档位生效仍以对应能力面开启推理为前提。
+* 自本基线起，上游已直接收录该模型的大部分目录面，fork 剩余差异收敛为两处：`opencode-go` 的折叠裸别名烘焙行，以及 `opencode-zen` 的发现期运行时继承面（`openai-compat.ts` 的 `DEEPSEEK_V41_FLASH_IDS` / `deepseekV41FlashReference`，fork 维护）。
+* 官方 `deepseek` 与 `commandcode` 由上游条目完整提供：显示名 `DeepSeek V4.1 Flash`、`text` + `image`、不剥离图片、`low` / `high` / `max` 等级、wire 契约与 Flash 档定价（`0.15` / `0.6`），fork 在这两个 lane 无增量；taxonomy 的尾锚定 glob `*deepseek-flash`（把裸 id 归入 Flash 家族、不卷入 `deepseek-flash-v4` 这类版本段结尾 id）也已由上游收录。
+* `opencode-go` 上 fork 维护折叠裸别名行：目录层同一 SKU 收敛为一行（规范 id `deepseek-v4.1-flash`），fork 在规范行旁烘焙 `deepseek-flash` 行——复制上游规范行（含 `int` / `tps`（39.5 / 212.1），随上游 census 更新）并仅改 `id`，重烘时须保留。裸别名仍可作为选择器（`modelRoles`、`--model` 无需改动）。
+* `opencode-zen` 无 v4.1 烘焙行：发现完成前由继承面按内置 `deepseek-v4-flash` 条目补齐显示名、`text` + `image`、不剥离图片与 `low` / `high` / `max` 推理能力（1M / 384K）。缺失时 role 会静默改绑同网关被类规则剥离图片的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-zen/deepseek-flash:等级` 也会直接报 not found。
+* 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或继承面覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。继承关系同时作为缓存失效策略：表面变化会使旧缓存行在下次启动时自动重新拉取。
+* 影响范围：`opencode-go`（折叠行）、`opencode-zen`（发现继承面）。不继承其他 provider 的价格与传输；OpenRouter 的同名模型由上游条目独立提供。
 
 ### 代理行为与 Discuss
 

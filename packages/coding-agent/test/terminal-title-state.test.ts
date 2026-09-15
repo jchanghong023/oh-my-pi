@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import {
 	buildTerminalTitleWithState,
 	disposeTerminalTitleState,
+	setTerminalTitle,
+	initTerminalTitleState,
 	setSessionTerminalTitle,
+	setTerminalTitleSpinnerStyle,
 	setTerminalTitleState,
 } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { isConPTYHosted } from "@oh-my-pi/pi-tui";
@@ -57,6 +60,18 @@ describe("buildTerminalTitleWithState", () => {
 		expect(buildTerminalTitleWithState(LABEL, "attention", 0, false)).toBe(`${BRAND}: ${LABEL}`);
 		expect(buildTerminalTitleWithState(undefined, "idle", 0, false)).toBe(BRAND);
 	});
+
+	it("cycles the dots and line glyph sets while working", () => {
+		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "linux", "dots")).toBe(`${BRAND} ⠁ ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "working", 1, true, "linux", "dots")).toBe(`${BRAND} ⠂ ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "linux", "line")).toBe(`${BRAND} - ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "working", 1, true, "linux", "line")).toBe(`${BRAND} \\ ${LABEL}`);
+	});
+
+	it("keeps the static colon on Windows regardless of style", () => {
+		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "win32", "dots")).toBe(`${BRAND} : ${LABEL}`);
+		expect(buildTerminalTitleWithState(LABEL, "working", 0, true, "win32", "line")).toBe(`${BRAND} : ${LABEL}`);
+	});
 });
 
 // Regression coverage for the shutdown-leak bug (PR #4451): the run-state
@@ -102,7 +117,10 @@ describe("disposeTerminalTitleState", () => {
 		});
 
 		// Drive the module-global to a known state from the public API so the
-		// tests are order-independent: a fresh session base, run state idle.
+		// tests are order-independent: the UI owns the terminal (the previous
+		// test's teardown latched it off), a fresh session base, run state idle.
+		initTerminalTitleState();
+		setTerminalTitleSpinnerStyle("braille");
 		setSessionTerminalTitle("my-project");
 		setTerminalTitleState("idle");
 		writes.length = 0;
@@ -145,4 +163,145 @@ describe("disposeTerminalTitleState", () => {
 		vi.advanceTimersByTime(4000);
 		expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ))).toEqual([]);
 	});
+
+	it("latches: a direct setTerminalTitle after dispose cannot write the shell's tab", () => {
+		// `setTerminalTitle` is EXPORTED and writes OSC/Win32 straight out, so it
+		// bypasses the composed-state path entirely. A direct importer firing from
+		// a delayed callback after teardown — the same window the spinner latch
+		// covers — would otherwise land in the parent shell's tab, whose title
+		// `popTerminalTitle()` has already restored.
+
+		// Control: before dispose the sink really does write, so the silence below
+		// is the latch and not a headless/TTY misconfiguration.
+		writes.length = 0;
+		setTerminalTitle("live write");
+		expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ)).length).toBeGreaterThan(0);
+
+		disposeTerminalTitleState();
+
+		writes.length = 0;
+		setTerminalTitle("after teardown");
+		expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ))).toEqual([]);
+
+		// And the latch releases only on the explicit ownership path.
+		initTerminalTitleState();
+		writes.length = 0;
+		setTerminalTitle("owned again");
+		expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ)).length).toBeGreaterThan(0);
+	});
+
+	it("latches: a run-state change after dispose cannot re-arm the spinner", () => {
+		// CONTRACT: dispose is teardown, not a pause. `InteractiveMode.shutdown()`
+		// calls `disposeTerminalTitleState()` and `popTerminalTitle()` BEFORE
+		// `this.stop()` unsubscribes the session, so in that window a live
+		// `#handleAgentStart` can still call `setTerminalTitleState("working")`.
+		// If dispose only stops the timer, that call re-arms it and a tick writes
+		// `π ⠋ …` into the parent shell's tab — the exact leak the ordering
+		// comment in `shutdown()` claims to prevent.
+		disposeTerminalTitleState();
+
+		writes.length = 0;
+		setTerminalTitleState("working");
+
+		// Assert on the TIMER, not only the writes: the `emitTerminalTitle` latch
+		// already silences anything a re-armed interval would emit, so a write-only
+		// assertion cannot tell "never re-armed" from "re-armed and ticking
+		// silently forever" — the latter leaks an interval past shutdown that no
+		// later dispose reaches.
+		expect(vi.getTimerCount()).toBe(0);
+
+		vi.advanceTimersByTime(4000);
+		expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ))).toEqual([]);
+	});
+
+	it("keeps a routine session title update from releasing the latch", () => {
+		// CONTRACT (the leak): `setSessionTerminalTitle` is reached by ordinary
+		// session updates — rename, cwd change, collab host frame, and an
+		// extension `newSession()` resuming past its `await`. That last one can
+		// land AFTER `shutdown()` disposed and `popTerminalTitle()` handed the tab
+		// back, and `stop()` cannot cancel it. If a routine update released the
+		// latch, this write — and a re-armed spinner behind it — would land in the
+		// parent shell's tab. Only terminal ownership (`initTerminalTitleState`)
+		// releases it.
+		setTerminalTitleState("working");
+		disposeTerminalTitleState();
+
+		writes.length = 0;
+		setSessionTerminalTitle("late-async-session");
+
+		expect(writes).toEqual([]);
+		// And nothing re-armed behind the silence: a live interval past shutdown
+		// is a leak no later dispose reaches.
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("re-emits on ownership release even when the new session's title is unchanged", () => {
+		// CONTRACT: `popTerminalTitle()` hands the terminal back to the shell, so
+		// after dispose the runtime does NOT know what is on screen. Deduping the
+		// first post-release write against a pre-dispose `lastEmitted` would leave
+		// the shell's own title in place while the runtime believes it owns the
+		// tab. Same label in and out is the case that catches it.
+		setSessionTerminalTitle("same-session");
+		setTerminalTitleState("idle");
+		disposeTerminalTitleState();
+
+		writes.length = 0;
+		initTerminalTitleState();
+		setSessionTerminalTitle("same-session");
+
+		expect(writes.some(payload => payload.includes("same-session"))).toBe(true);
+	});
+
+	it.skipIf(isConPTYHosted())("emits the selected glyph set on the next spinner tick", () => {
+		setTerminalTitleSpinnerStyle("line");
+		setTerminalTitleState("working");
+		writes.length = 0;
+
+		vi.advanceTimersByTime(400);
+
+		const titles = writes.map(payload => /\x1b\]0;([\s\S]*?)\x07/.exec(payload)?.[1]);
+		expect(titles.length).toBeGreaterThan(0);
+		for (const title of titles) {
+			expect(title).toContain("my-project");
+			expect(title).toMatch(/^π [-\\|/] my-project$/);
+			expect(title).not.toContain("⠋");
+		}
+	});
+
+	it.skipIf(isConPTYHosted())("falls back to braille for an unknown style", () => {
+		setTerminalTitleSpinnerStyle("line");
+		setTerminalTitleSpinnerStyle("nope");
+		setTerminalTitleState("working");
+		writes.length = 0;
+
+		vi.advanceTimersByTime(160);
+
+		const titles = writes.map(payload => /\x1b\]0;([\s\S]*?)\x07/.exec(payload)?.[1]);
+		expect(titles.length).toBeGreaterThan(0);
+		expect(titles.some(title => title?.includes("⠋") || title?.includes("⠙"))).toBe(true);
+	});
+
+	it.skipIf(isConPTYHosted())(
+		"releases the latch and re-arms a live spinner when the terminal is claimed again",
+		() => {
+			// CONTRACT: the latch is teardown-scoped, not permanent. Claiming the
+			// terminal again owns the title, so it must resume — including a LIVE
+			// spinner if the run state is still `working`. Releasing the flag alone
+			// would leave a stopped timer behind a `working` state: a frozen frame.
+			setTerminalTitleState("working");
+			disposeTerminalTitleState();
+
+			writes.length = 0;
+			initTerminalTitleState();
+			setSessionTerminalTitle("next-session");
+
+			// The new session's title emitted...
+			expect(writes.some(payload => payload.includes("next-session"))).toBe(true);
+
+			// ...and the spinner is genuinely ticking again, not frozen on one frame.
+			writes.length = 0;
+			vi.advanceTimersByTime(400);
+			expect(writes.filter(payload => payload.includes(OSC_TITLE_SEQ)).length).toBeGreaterThan(0);
+		},
+	);
 });

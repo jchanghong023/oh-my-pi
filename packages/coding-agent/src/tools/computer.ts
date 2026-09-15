@@ -11,7 +11,7 @@ import { type ComputerCallStep, isReadOnlyComputerCall, renderComputerCall } fro
 import type { ComputerScreenshot, ComputerSessionSnapshot } from "./computer/protocol";
 import { type ComputerController, ComputerSupervisor, registerComputerController } from "./computer/supervisor";
 import type { ToolSession } from "./index";
-import { renderFunctionRun } from "./run-code";
+import { renderCallChain, renderFunctionRun } from "./run-code";
 import { ToolError, throwIfAborted } from "./tool-errors";
 import { clampTimeout } from "./tool-timeouts";
 
@@ -145,7 +145,23 @@ export function createComputerPrelude(
 			}
 			return await invokeComputer(session, controller, parsed, context, lifetime);
 		},
+		status: describeComputerCall,
 	};
+}
+
+/** Status-tree line for a completed computer call: `desktop.window(3).focus()`, `run(fn)`, `close`. */
+function describeComputerCall(parameters: unknown): string | undefined {
+	const parsed = getComputerParamsSchema()(parameters);
+	if (parsed instanceof type.errors) return undefined;
+	switch (parsed.action) {
+		case "call":
+			return `desktop.${renderCallChain(parsed.chain)}`;
+		case "run":
+			return `run(${parsed.fn !== undefined ? "fn" : (parsed.code?.trim().split("\n", 1)[0] ?? "")})`;
+		case "capabilities":
+		case "close":
+			return parsed.action;
+	}
 }
 
 interface ComputerLifetime {
@@ -168,7 +184,9 @@ async function invokeComputer(
 			if (lifetime.isClosed()) throw new ToolError("Computer session is closed");
 			return await runComputer(session, controller, params, context.signal);
 		case "capabilities": {
-			const capabilities = lifetime.isClosed() ? undefined : await controller.capabilities();
+			const capabilities = lifetime.isClosed()
+				? undefined
+				: await controller.capabilities(buildComputerSnapshot(session, true), context.signal);
 			throwIfAborted(context.signal);
 			return {
 				content: [
@@ -205,20 +223,12 @@ function resolveComputerRunCode(params: ComputerRunParams | ComputerCallParams):
 	throw new ToolError("Action 'run' requires exactly one of 'code' or 'fn'.");
 }
 
-async function runComputer(
-	session: ToolSession,
-	controller: ComputerController,
-	params: ComputerRunParams | ComputerCallParams,
-	signal?: AbortSignal,
-): Promise<AgentToolResult<unknown>> {
-	const code = resolveComputerRunCode(params);
-	// Direct inspection calls run read-only so the desktop guard backs the read approval tier.
-	const readOnly = params.action === "call" ? isReadOnlyComputerCall(params.chain) : (params.read_only ?? false);
-	const timeoutSeconds = clampTimeout("computer", params.timeout, session.settings.get("tools.maxTimeout"));
+/** Freezes the current session settings into the snapshot every worker command carries. */
+function buildComputerSnapshot(session: ToolSession, readOnly: boolean): ComputerSessionSnapshot {
 	const coordinateSafe = usesCoordinateSafeImageSizing(session.getActiveModel?.());
 	const configuredMaxWidth = session.settings.get("computer.maxWidth");
 	const configuredMaxHeight = session.settings.get("computer.maxHeight");
-	const snapshot: ComputerSessionSnapshot = {
+	return {
 		cwd: session.cwd,
 		sessionId: session.getEvalSessionId?.() ?? session.getSessionId?.() ?? "computer",
 		captureMaxWidth: coordinateSafe
@@ -230,6 +240,19 @@ async function runComputer(
 		display: session.settings.get("computer.display") ?? "all",
 		readOnly,
 	};
+}
+
+async function runComputer(
+	session: ToolSession,
+	controller: ComputerController,
+	params: ComputerRunParams | ComputerCallParams,
+	signal?: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
+	const code = resolveComputerRunCode(params);
+	// Direct inspection calls run read-only so the desktop guard backs the read approval tier.
+	const readOnly = params.action === "call" ? isReadOnlyComputerCall(params.chain) : (params.read_only ?? false);
+	const timeoutSeconds = clampTimeout("computer", params.timeout, session.settings.get("tools.maxTimeout"));
+	const snapshot = buildComputerSnapshot(session, readOnly);
 	const run = await controller.run(code, timeoutSeconds * 1000, snapshot, signal);
 	throwIfAborted(signal);
 
