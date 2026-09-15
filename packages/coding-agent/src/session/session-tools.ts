@@ -199,6 +199,8 @@ export class SessionTools {
 	#installedVibeToolNames = new Set<string>();
 	#builtInToolNames: Set<string>;
 	#builtInToolInstances = new Map<string, AgentTool>();
+	/** Runtime-permission proxies keyed by the tool instance they gate. */
+	#runtimePermissionWrappers = new WeakMap<AgentTool, AgentTool>();
 	#rpcHostToolNames = new Set<string>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
@@ -788,7 +790,16 @@ export class SessionTools {
 	 */
 	#wrapToolForRuntimePermissions<T extends AgentTool>(tool: T): T {
 		const permissionWrapped = this.#wrapToolForAcpPermission(tool);
-		return new Proxy(permissionWrapped, {
+		// With a pass-through ACP layer the gate behaves identically for a given tool
+		// instance, so reuse its proxy: reconciliation and the status-line cache
+		// compare applied tool sets by reference, and a fresh proxy per apply would
+		// defeat that reuse. Invalidation is unnecessary because the gate reads the
+		// live primary-agent profile at execute time.
+		if (permissionWrapped === tool) {
+			const cached = this.#runtimePermissionWrappers.get(tool);
+			if (cached) return cached as T;
+		}
+		const wrapped = new Proxy(permissionWrapped, {
 			get: (target, prop) => {
 				if (prop !== "execute") return target[prop as keyof T];
 				return async (
@@ -806,6 +817,8 @@ export class SessionTools {
 				};
 			},
 		}) as T;
+		if (permissionWrapped === tool) this.#runtimePermissionWrappers.set(tool, wrapped);
+		return wrapped;
 	}
 
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
