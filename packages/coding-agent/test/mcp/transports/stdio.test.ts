@@ -272,14 +272,23 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 			// grandchild process is a real external OS process writing to a real
 			// file, with no in-process signal this test can `await` directly.
 			let grandchildPid: number | undefined;
+			let lastRaw: string | undefined;
+			// Only a pid with a live process behind it counts: the writer
+			// truncates before writing, so a read racing that window can parse
+			// an empty or partial number that names no process.
 			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
 				try {
-					grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+					lastRaw = await fs.readFile(grandchildPidPath, "utf8");
+					const parsed = Number.parseInt(lastRaw, 10);
+					if (processExists(parsed)) grandchildPid = parsed;
 				} catch {
-					await Bun.sleep(20);
+					// Not written yet.
 				}
+				if (grandchildPid === undefined) await Bun.sleep(20);
 			}
-			if (grandchildPid === undefined) throw new Error("grandchild never reported its pid");
+			if (grandchildPid === undefined) {
+				throw new Error(`grandchild never reported its pid (last read: ${JSON.stringify(lastRaw)})`);
+			}
 			expect(processExists(grandchildPid)).toBe(true);
 
 			await terminateStdioProcess(proc, true, process.platform, TEST_TERM_GRACE_MS);
@@ -344,14 +353,23 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 
 		try {
 			let grandchildPid: number | undefined;
+			let lastRaw: string | undefined;
+			// Only a pid with a live process behind it counts: the writer
+			// truncates before writing, so a read racing that window can parse
+			// an empty or partial number that names no process.
 			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
 				try {
-					grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+					lastRaw = await fs.readFile(grandchildPidPath, "utf8");
+					const parsed = Number.parseInt(lastRaw, 10);
+					if (processExists(parsed)) grandchildPid = parsed;
 				} catch {
-					await Bun.sleep(20);
+					// Not written yet.
 				}
+				if (grandchildPid === undefined) await Bun.sleep(20);
 			}
-			if (grandchildPid === undefined) throw new Error("grandchild never reported its pid");
+			if (grandchildPid === undefined) {
+				throw new Error(`grandchild never reported its pid (last read: ${JSON.stringify(lastRaw)})`);
+			}
 			expect(processExists(grandchildPid)).toBe(true);
 
 			const started = performance.now();
