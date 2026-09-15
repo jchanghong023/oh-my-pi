@@ -2848,20 +2848,20 @@ mod tests {
 		let source_info = SourceInfo::from("pi-natives:test");
 
 		time::timeout(
-			// Fork: 180 s instead of upstream's 5 s. The test needs only
+			// Fork: 600 s instead of upstream's 5 s. The test needs only
 			// milliseconds of work, but the CI Rust shard runs ~3 300 bazel
 			// actions on 4 vCPUs and the sandboxed pipeline can be starved —
-			// measured failures at 5 s, 15 s, and at 60 s once the parallel
-			// builtins-vendor shard overlaps this one. The wider budget only
-			// absorbs scheduler contention, so a real hang still fails the
+			// measured failures at 5 s, 15 s, 60 s, and at 180 s once the
+			// parallel builtins-vendor shard overlaps this one. The wider budget
+			// only absorbs scheduler contention, so a real hang still fails the
 			// test.
-			Duration::from_secs(180),
+			Duration::from_secs(600),
 			session.shell.run_string(command, &source_info, &params),
 		)
 		.await
 		.expect("pipeline did not stop")
 		.expect("stopped pipeline");
-		time::timeout(Duration::from_secs(180), async {
+		time::timeout(Duration::from_secs(600), async {
 			while !first_ready.exists() || !second_ready.exists() {
 				time::sleep(Duration::from_millis(10)).await;
 			}
