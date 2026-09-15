@@ -11,11 +11,14 @@ import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, isUserSourceEnabled, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
+import { allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
-import { allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
+
+export { allowsSkillTokens, SKILL_TOKEN_RE };
+
 export interface Skill {
 	name: string;
 	description: string;
@@ -470,8 +473,6 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 		.trim();
 	return { name, args, prompt };
 }
-
-export { allowsSkillTokens, SKILL_TOKEN_RE } from "./skill-tokens";
 
 export type SkillInvocationKind = "user" | "autoload";
 
