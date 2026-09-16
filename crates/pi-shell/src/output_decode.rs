@@ -268,6 +268,14 @@ mod tests {
 
 	#[test]
 	fn incomplete_utf8_at_eof_becomes_replacement() {
+		// Windows `new()` falls back to the ANSI code page, where an EOF-dangling
+		// byte decodes through ACP by design (see
+		// `incomplete_utf8_at_eof_falls_back_to_acp`); on a DBCS code page that
+		// yields the default char, not the replacement. Pin the replacement
+		// policy with the UTF-8 fallback so the case holds on every host.
+		#[cfg(windows)]
+		let mut decoder = OutputDecoder::with_fallback_codepage(CP_UTF8);
+		#[cfg(not(windows))]
 		let mut decoder = OutputDecoder::new();
 		assert_eq!(decoder.push(&[0xe4]), "");
 		assert_eq!(decoder.finish(), "\u{FFFD}");
