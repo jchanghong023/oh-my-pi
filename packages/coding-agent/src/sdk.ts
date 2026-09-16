@@ -4019,7 +4019,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const currentlyExposed = session.getEnabledToolNames().includes(name);
 				const alreadyEnabled = enabled.includes(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				const mounted = session.getMountedXdevToolNames();
+				// Raw mounts: the presentation snapshot must pair the unprojected
+				// base slate with the unprojected mount set, or a restricting
+				// profile (Discuss) would pin every mounted device top-level.
+				const mounted = session.getRawMountedXdevToolNames();
 				const wasBuiltIn = builtInRegistryToolNames.has(name);
 				toolRegistry.set(name, liveTool);
 				builtInRegistryToolNames.delete(name);

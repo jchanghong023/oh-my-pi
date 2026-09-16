@@ -5412,9 +5412,19 @@ export class AgentSession {
 		return this.#tools.getBaseActiveToolNames();
 	}
 
+	/** Base slate plus live `xd://` mounts, used by removal and rollback paths. */
+	getBaseWithMountedToolNames(): string[] {
+		return this.#tools.getBaseWithMountedToolNames();
+	}
+
 	/** Names of dynamic tools mounted under `xd://`. */
 	getMountedXdevToolNames(): string[] {
 		return this.#tools.getMountedXdevToolNames();
+	}
+
+	/** Live `xd://` mounts without Primary Agent projection. */
+	getRawMountedXdevToolNames(): string[] {
+		return this.#tools.getRawMountedXdevToolNames();
 	}
 
 	/** Whether the edit tool is registered in this session. */

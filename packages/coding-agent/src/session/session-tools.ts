@@ -501,6 +501,16 @@ export class SessionTools {
 		);
 	}
 
+	/**
+	 * Live `xd://` mounts without Primary Agent projection — the raw set the
+	 * presentation APIs snapshot. Pair it with the unprojected base slate so
+	 * callers under a restricting profile still restore the same top-level /
+	 * `xd://` partition instead of pinning everything top-level.
+	 */
+	getRawMountedXdevToolNames(): string[] {
+		return [...(this.#xdev?.mountedNames ?? [])];
+	}
+
 	/** Whether the edit tool is registered. */
 	get hasEditTool(): boolean {
 		return this.#toolRegistry.has("edit");
@@ -2007,7 +2017,7 @@ export class SessionTools {
 			if (isMCPToolName(name)) previousMcpTools.set(name, tool);
 		}
 		const previousMcpManagerToolNames = new Set(this.#mcpManagerToolNames);
-		const previousActiveMcpToolNames = this.getBaseActiveToolNames().filter(isMCPToolName);
+		const previousActiveMcpToolNames = this.getBaseWithMountedToolNames().filter(isMCPToolName);
 		const restorePreviousMcpTools = () => {
 			for (const name of this.#toolRegistry.keys()) {
 				if (isMCPToolName(name)) this.#toolRegistry.delete(name);
@@ -2082,7 +2092,7 @@ export class SessionTools {
 		}
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
-		const previousActiveToolNames = this.getBaseActiveToolNames();
+		const previousActiveToolNames = this.getBaseWithMountedToolNames();
 		const previousRpcHostTools = new Map(
 			[...previousRpcHostToolNames].flatMap(name => {
 				const tool = this.#toolRegistry.get(name);
