@@ -49,6 +49,7 @@
 * Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。
 * `Shift+F2` 固定在 Main ↔ Discuss 之间切换，不支持配置顺序；运行中或有排队消息时不能切换。
 * 会话/分支切换后恢复对应代理状态。
+* 工具集刷新（MCP、扩展、RPC 等变化触发的基准工具集重设）不丢弃扩展挂载的 `xd://` 设备：刷新后按「基准工具集 ∪ 存活挂载」恢复，受限 profile 下也保持原有顶层 / `xd://` 划分。
 * Discuss 只能使用允许的**内置工具实例**，不能被同名扩展替代；可用只读工具含 `wiki`，因此 `/jchdftexplain` 等只读命令在 Discuss 下同样可用。
 * Discuss 可在聊天内给出实施方案和步骤，但不写计划文件、不执行命令、修改文件或外部状态、创建 Todo 或委派工作；需要实施时提示用 `Shift+F2` 切回 Main，不自动重放或实施请求。
 * Discuss 与 Plan/Goal/Vibe/Loop 互斥，相关模式启用或暂停时都不能切入 Discuss；循环模式也不能在 Discuss 下启动。
@@ -89,7 +90,7 @@
 * 内置 provider `zcode-api`，默认指向本机 ZCode Proxy（`http://127.0.0.1:8080`；环境变量 `ZCODE_API_BASE_URL` 以完整的 `http://主机:端口` 基地址覆盖；Anthropic 传输会自行去掉末尾斜杠与多余的 `/v1`），无登录、无配置即在模型面板与 `omp models` 中可见可用；`disabledProviders` 仍可禁用。
 * 固定使用代理的 Anthropic Messages 直通路由（`/v1/messages`，与 Claude Code 同路径）：工具调用、thinking、上游错误状态原样传递，不经过 OpenAI 翻译层。不做模型发现，不写入 `models.json`（上游守护测试禁止内置目录携带回环地址；模型在 `packages/coding-agent/src/config/zcode-api-models.ts` 运行时构建）。
 * 模型与参数照抄国内「智谱 coding plan」lane（`zhipu-coding-plan`）：14 个 GLM（`glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.6v` / `glm-4.7` / `glm-5` / `glm-5-turbo` / `glm-5v-turbo` / `glm-5.1` / `glm-5.2` / `glm-5.2-highspeed` / `glm-5.3` / `glm-5.3-flash` / `glm-5.3-highspeed`），上下文窗口、最大输出、视觉输入、tokenizer 与价格同该 lane；`glm-5.2-highspeed[1m]` 是该 lane 的折叠别名，本 provider 无折叠表，不收录。思考档位与 coding plan 相同（多数 SKU `minimal`–`high`；`glm-5.2*` 为 `high`/`max`；`glm-5.3*` 为 `low`/`high`/`max`、默认 `max` 且不可关闭）。
-* 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。
+* 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。无凭据时直通不发送 `Authorization`，也不注入 `X-Api-Key`；`model.headers` 中显式给出的 `Authorization` 仍然生效。
 * 传输面在 `packages/catalog/src/compat/rules/providers/zcode-api.kdl`（tool_result id 镜像、思考模式），认证面在 `rules/auth/zcode-api.kdl`（无 login，不出现在 `/login`）。
 * `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。
 * WSL（NAT 模式）下 `127.0.0.1` 指向 WSL 自身而非 Windows 主机：代理跑在 Windows、OMP 跑在 WSL 时，需将 `ZCODE_API_BASE_URL` 指向主机地址（如 `http://172.17.80.1:8080`，取自 `ip route show default`）或在 WSL 内运行代理。
@@ -122,6 +123,11 @@
 
 * cwd 位于 `%TEMP%`（含子目录）时，会话目录按 `-tmp-…` 分类命名（temp 优先于 home；上游顺序相反，会把同一 cwd 编码为 home 相对名 `-AppData-Local-Temp-…`）。例外：`TEMP` 被指到包含或等于 home 的路径（如 `%USERPROFILE%`、盘根）时不抢占分类，home 命名保持与上游一致。
 * 启动时的目录迁移会把旧 home 相对名的 temp 会话目录改名为 `-tmp-…`，仅当对应 temp 侧路径仍存在（防 `AppData\Local\Temp-foo` 与 `%TEMP%\foo` 的同形歧义误伤）；多级子目录的旧名（路径分隔符编码展平后字面目录通常不存在）可能被保守跳过，目录与数据保留，只是不再按 cwd 关联。
+
+### Windows 编辑路径与临时清理
+
+* hashline 标签的路径恢复在 Windows 上与非 Windows 一致：比较前对恢复路径与工作目录都清理 `\\?\` verbatim 前缀，避免 std canonicalize 产生的 verbatim 形式 cwd 使恢复被静默拒绝。
+* 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。
 
 ### 默认设置
 

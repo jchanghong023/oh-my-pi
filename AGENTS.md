@@ -2,13 +2,62 @@
 
 本仓库 fork 自 `can1357/oh-my-pi`，仅供个人使用，不以对外发布为目标。持续同步上游最新 `main`，同时维护个人功能和默认值，使安装后无需额外配置即可使用。
 
-## 三份文档的职责
+## 项目概况
+
+* `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`python/omp-rpc`）与 VitePress 文档站。
+* 本仓库完全由 AI Agent 实现和维护：改动是否正确不能依赖用户手工读代码或人工回归来保证，MUST 依靠可复现的自动化验证，以及本文件（开发与维护规则）、`docs-zh-CN/fork.md`（需求契约）中的明确约定。
+
+## 主要入口
+
+关键目录（不是完整清单）：
+
+* `packages/coding-agent/`：主 CLI（`omp`）实现，日常改动的主要目标。
+* `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
+* `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
+* `scripts/`：仓库脚本与 fork 工具（`jch-localci.ts`、`jch-dev-ui-test.ts`、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
+* `docs/`：上游英文文档（fork 补充了 VitePress 构建配置，合并到中文站 `/en/` 子路径）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
+* `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
+
+核心代码入口：
+
+* CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/fullsend.ts`、`src/primary-agent/`、`src/session/session-paths.ts`（Windows 会话目录命名）。
+
+常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
+
+| 目的 | 入口 |
+| --- | --- |
+| 安装依赖 | `bun install`（`bun run setup` 会继续构建 native addon 并链接 `omp`） |
+| 运行 CLI（源码） | `bun run dev` |
+| 类型检查 + lint（workspace 门禁） | `bun run check:ts` |
+| 仅静态检查（oxlint / oxfmt） | `bun run check:tools` |
+| fork 默认静态检查（只查本地修改的 TS 文件） | `bun run fastcheck` |
+| TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
+| Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
+| Python 测试 | `bun run test:py` |
+| 仓库脚本测试 | `bun run test:scripts` |
+| 端到端冒烟（真实 CLI 公开入口） | `bun run ci:test:smoke` |
+| 安装器端到端 | `bun run ci:test:install-methods` |
+| fork 本地 CI | `bun scripts/jch-localci.ts [full]` |
+| fork TUI 冒烟（真实 PTY） | `bun scripts/jch-dev-ui-test.ts`（`--debug` 转储原始输出） |
+| 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
+
+## 开发约束
+
+* 平台：日常在 Windows x64（Git Bash）上工作，同时支持 Linux x64 与 WSL2（可与 Windows 共享同一检出目录）。
+* 工具链版本跟随上游固定，不在 fork 内单独升级：Bun `>=1.4`（`package.json` 的 `packageManager`）、Rust `nightly-2026-08-12`（`rust-toolchain.toml`）、Bazel `9.2.0`（`.bazelversion`）。
+* WSL2 与 Windows 共享检出目录时 `node_modules` 为 Windows 安装：WSL 侧运行 localci / fastcheck / UI 测试需全局安装同版本 `oxlint` / `oxfmt` / `tsgo`（`bun install -g`）并把 `~/.cargo/bin` 加入 PATH，cargo 构建建议以 `CARGO_TARGET_DIR` 指向 WSL 本地文件系统；参见「验证」一节。
+* 上游开发约定（代码质量、Bun 优先、prompt 放 `.md`、模型/Provider 策略在 KDL、生成文件与 changelog 规则等）同样适用于 fork 改动，但不在本文件重复：以 `fork.md` 记录的 Upstream commit 为准，用 `git show <upstream-commit>:AGENTS.md` 读取。fork 改动 MUST 与上游既有风格和机制一致，不引入局部风格。
+
+## 权威来源与文档职责
+
+本仓库是持续同步上游的 Fork（同步来源与分支约定见「上游与分支」），文档职责如下：
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
 * `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
 * `docs-zh-CN/fork.md`：面向本人和 AI agent 的当前上游基线与用户可感知的功能契约，也是冲突后重建 fork 功能的依据。
 
-同步 MUST 保留这四份文档的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
+同步 MUST 保留这四份文档的 fork 版本（上述三份与根 `README.md`），NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
 
 ## README 与上游同步
 
@@ -21,8 +70,10 @@
 
 * 修改前 MUST 阅读 `docs-zh-CN/fork.md`。
 * fork 改动 MUST 最小、集中、内聚；不做无关重构，不为覆盖率或惯例添加测试。
-* 功能或默认值变化时 MUST 同步更新 `fork.md`；成功合入上游时 MUST 更新基线并复核受影响条目。
+* 功能或默认值变化时 MUST 同步更新 `fork.md`；成功合入上游时 MUST 更新基线并复核受影响条目，而不是只检查是否存在 Git 冲突。
 * `fork.md` 只记录当前有效的功能、默认值及必要行为约束，不记实现流水账、修复历史或同步历史，不建第二份差异清单。
+* `fork.md` 的 `## 当前上游基线` 是 Release CI 的机器可读输入：该节 MUST 保留唯一一行以 `* **版本**：` 开头、值为反引号包裹的 `v数字.数字.数字` 的条目；改标题、改格式或增加第二个版本行会让 fork Release 在 `release_metadata` 阶段直接失败。
+* 需求或预期用户可见行为变化时 MUST 检查并同步 `fork.md`；仅实现方式变化且需求不变时，不制造需求变更，也不得改写需求来合理化实现缺陷。
 * 优先采用上游最新实现。冲突很大时，可在上游实现上重写 fork 功能，不必保留旧代码；无法可靠保留功能时 MUST 中止同步，不能静默丢弃。
 
 ## 上游与分支
@@ -32,6 +83,20 @@
 * `upstream`：最近成功合入的上游 `main` 的精确镜像，不含 fork commit；GitHub 上用于 PR/差异比较（base 为 `upstream`，compare 为 `main`）。
 * 同步 MUST 遵循 Skill 的门禁、集成、验证、镜像与中止流程；NEVER 接受上游历史改写。
 * 同步只完成本地 `main` 集成与 `upstream` 镜像，不自动推送 `main`；本地完成不代表 GitHub 已可比较最新 fork 差异，后者取决于远端 `main` 是否另行更新。
+
+## 测试与验证要求
+
+* 功能性开发和功能性修改 MUST 有自动化验证：UT 验证局部逻辑，E2E 从真实公开入口跑到可观察结果（本仓库已有 `bun run ci:test:smoke`、`bun run ci:test:install-methods`、`bun scripts/jch-dev-ui-test.ts`），跨模块交互按需要增加集成测试；已有有效覆盖可以复用，不要求为每处修改机械新增测试。
+* UT、编译、静态检查和局部模拟 MUST NOT 替代 E2E；桩与模拟可用于补充测试，但未经真实边界验证的部分 MUST 说明，不能把局部模拟冒充端到端验证。
+* 测试 MUST 对应 `fork.md` 中的需求与验收条件，覆盖核心成功路径和关键失败路径；不得只复述实现，也不得只验证「没有崩溃」。
+* 状态 MUST 区分「已实现」「验证通过」「验证失败」「未验证」；环境、依赖或权限不足时说明未验证范围，NEVER 声称功能已验收。
+* 缺少 UT 或 E2E 时 MUST 如实写明缺口与后续要求，不编造命令、不降低标准；纯文档等非功能性变更按实际影响验证，不强制运行无关的完整测试。
+
+现状与缺口（2026-09-16 依据仓库内容整理，编写本文档时未运行任何检查）：
+
+* fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`，以及 `scripts/fastcheck.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。
+* E2E 入口存在，但 fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器）：fork 改动不会自动跑这些验证，`release_gate` 也只在手动运行且各验证作业全部通过时放行。
+* 受「验证」一节约束，未经用户明确要求的改动处于「未验证」状态；此时 MUST NOT 报告为已验证或已修复。
 
 ## 验证
 
