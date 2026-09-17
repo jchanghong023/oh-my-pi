@@ -1,4 +1,5 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reportCliUsageError } from "../cli/args";
 import { docsHelp as commandHelp } from "../cli/command-help";
 import { type DocsAction, runDocsCommand } from "../cli/docs-cli";
@@ -56,6 +57,15 @@ export default class Docs extends Command {
 				json: flags.json,
 				signal: controller.signal,
 			});
+		} catch (error) {
+			// Service failures (duplicate name, unknown index, empty root, a
+			// build already running) are expected user-facing errors: report the
+			// message like the usage-error path above instead of letting the
+			// framework print a stack. Aborts are already mapped to exit code
+			// 130 inside runDocsCommand; anything reaching this catch is a real
+			// failure.
+			process.stderr.write(`${chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`)}\n`);
+			process.exitCode = 1;
 		} finally {
 			process.off("SIGINT", onSigint);
 		}

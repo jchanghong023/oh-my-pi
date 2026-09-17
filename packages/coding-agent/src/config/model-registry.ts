@@ -966,6 +966,20 @@ export class ModelRegistry {
 		logger.warn("extension model projection failed; serving unprojected catalog", { provider, error });
 	}
 
+	/**
+	 * Runtime-synthesized provider rows (company, zcode-api) must never carry
+	 * user `models:` overlays or provider model overrides: strip any rows the
+	 * composition passes touched and re-push the pristine memoized rows.
+	 */
+	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
+		const stripped = models.filter(
+			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
+		);
+		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) stripped.push(...getCompanyChatModels());
+		if (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID)) stripped.push(...getZcodeApiModels());
+		return stripped;
+	}
+
 	#composeUnprojectedStaticModels(providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		const select = <T extends { provider: string }>(models: readonly T[]): T[] =>
 			providerFilter ? models.filter(model => providerFilter.has(model.provider)) : [...models];
@@ -988,12 +1002,10 @@ export class ModelRegistry {
 		const combined = this.#mergeCustomModels(withConfigModels, select(this.#runtimeModelOverlays));
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
-		const models = this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)).filter(
-			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
+		return this.#withRuntimeSyntheticModels(
+			this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
+			providerFilter,
 		);
-		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) models.push(...getCompanyChatModels());
-		if (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID)) models.push(...getZcodeApiModels());
-		return models;
 	}
 
 	#composeStaticModels(providerFilter?: ReadonlySet<string>): Model<Api>[] {
@@ -1490,18 +1502,22 @@ export class ModelRegistry {
 				baseUrlApis.add(providerConfig.api);
 			}
 			const baseUrlScope = baseUrlApis.size > 0 ? [...baseUrlApis] : undefined;
-			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools/guardrail*/transport are present
+			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools/guardrail*/transport are present.
+			// zcode-api is excluded: its runtime-synthesized rows bypass user
+			// overrides, so a provider-level entry could only leak baseUrl or
+			// headers through secondary readers; the apiKey below still applies.
 			if (
-				providerConfig.baseUrl ||
-				resolvedProviderHeaders ||
-				providerConfig.apiKey ||
-				providerConfig.authHeader !== undefined ||
-				providerConfig.compat ||
-				providerConfig.disableStrictTools ||
-				providerConfig.guardrailIdentifier ||
-				providerConfig.requestMetadata ||
-				providerConfig.remoteCompaction ||
-				providerConfig.transport
+				providerName !== ZCODE_API_PROVIDER_ID &&
+				(providerConfig.baseUrl ||
+					resolvedProviderHeaders ||
+					providerConfig.apiKey ||
+					providerConfig.authHeader !== undefined ||
+					providerConfig.compat ||
+					providerConfig.disableStrictTools ||
+					providerConfig.guardrailIdentifier ||
+					providerConfig.requestMetadata ||
+					providerConfig.remoteCompaction ||
+					providerConfig.transport)
 			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				overrides.set(providerName, {
@@ -1684,8 +1700,8 @@ export class ModelRegistry {
 		const combined = this.#mergeCustomModels(withConfigModels, this.#runtimeModelOverlays);
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
-		this.#unprojectedModels = this.#applyLlamaCppModelFixups(
-			this.#applyRuntimeProviderOverrides(withProviderBedrock),
+		this.#unprojectedModels = this.#withRuntimeSyntheticModels(
+			this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
 		);
 		this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 	}

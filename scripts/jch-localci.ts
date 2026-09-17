@@ -203,6 +203,11 @@ const CODING_AGENT_TEST_GROUPS: readonly TestGroup[] = [
 			"test/task/task-schema.test.ts",
 		],
 	},
+	{
+		label: "coding-agent/jch-commands",
+		cwd: "packages/coding-agent",
+		files: ["test/slash-commands/jch-git.test.ts"],
+	},
 ];
 
 const NATIVE_REBUILD_PATHS = [

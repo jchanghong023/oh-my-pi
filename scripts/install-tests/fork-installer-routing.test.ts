@@ -97,7 +97,9 @@ async function runInstaller(args: string[]): Promise<{ exitCode: number; stdout:
 	return runInstallerWithFixture(args, await createFixture());
 }
 
-describe("fork installer routing", () => {
+// The fixtures stub uname/curl with POSIX `sh` scripts, join PATH with `:`,
+// and spawn the installer through `sh`, none of which exist on Windows.
+describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 	test.each([
 		["x86_64", "x64"],
 		["aarch64", "arm64"],

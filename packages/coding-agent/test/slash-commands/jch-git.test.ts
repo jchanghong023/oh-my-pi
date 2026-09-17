@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JCH_GIT_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/git";
@@ -23,7 +23,7 @@ describe("direct JCH git slash commands", () => {
 	let seed: string;
 	let work: string;
 
-	async function runDiscardAll(args = "") {
+	async function runDiscardAll(args = "", cwd = work) {
 		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
 		if (!command?.handleTui) throw new Error("Missing /jchgitdiscardall TUI handler");
 		let status = "";
@@ -36,7 +36,7 @@ describe("direct JCH git slash commands", () => {
 						editor = text;
 					},
 				},
-				sessionManager: { getCwd: () => work },
+				sessionManager: { getCwd: () => cwd },
 				showStatus: (text: string) => {
 					status = text;
 				},
@@ -192,6 +192,36 @@ describe("direct JCH git slash commands", () => {
 		expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("dirty");
 		expect(existsSync(join(work, "untracked.txt"))).toBe(true);
 		expect(existsSync(join(work, "ignored.txt"))).toBe(true);
+	});
+
+	it("cleans the whole worktree when the session cwd is a subdirectory", async () => {
+		const sub = join(work, "sub");
+		mkdirSync(sub, { recursive: true });
+		writeFileSync(join(work, "untracked-root.txt"), "root\n");
+		writeFileSync(join(sub, "untracked-sub.txt"), "sub\n");
+
+		const { result, status, error } = await runDiscardAll("", sub);
+
+		expect(result).toEqual({ consumed: true });
+		expect(error).toBe("");
+		expect(status).toContain("HEAD is now at");
+		expect(existsSync(join(work, "untracked-root.txt"))).toBe(false);
+		expect(existsSync(join(sub, "untracked-sub.txt"))).toBe(false);
+	});
+
+	it("refuses to run outside the interactive TUI instead of prompting the model", async () => {
+		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
+		if (!command?.handle) throw new Error("Missing /jchgitdiscardall text handler");
+		const output: string[] = [];
+		const result = await command.handle({ name: command.name, args: "", text: "/jchgitdiscardall" }, {
+			cwd: work,
+			output: (text: string) => {
+				output.push(text);
+			},
+		} as unknown as SlashCommandRuntime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output.join("\n")).toContain("interactive TUI");
 	});
 
 	it("uses a direct local summary for bare jchcatchup", async () => {

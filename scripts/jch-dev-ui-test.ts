@@ -49,7 +49,10 @@ const result = session.startArgv(
 		else console.log(`dev-ui-test: child pid ${pid}`);
 	},
 );
-result.then(outcome => exited?.(outcome as Outcome));
+result.then(
+	outcome => exited?.(outcome as Outcome),
+	error => fail(`PTY session failed: ${error instanceof Error ? error.message : String(error)}`),
+);
 
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -66,6 +69,13 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<boo
 
 function fail(message: string): never {
 	console.error(`dev-ui-test: FAIL — ${message}`);
+	// The ConPTY/openpty handle dying with this process does not guarantee the
+	// child dies with it; kill the dev TUI so failed runs leave no orphan. The
+	// non-zero-exit path gets here after the child already tore the session
+	// down, where kill() rejects — nothing left to clean up then.
+	try {
+		session.kill();
+	} catch {}
 	process.exit(1);
 }
 

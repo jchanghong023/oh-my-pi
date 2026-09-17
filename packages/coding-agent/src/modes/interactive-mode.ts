@@ -4855,7 +4855,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.#isDiscussPrimaryAgent()) {
 				// Discuss switched in while the tool mutation was queued; the
 				// projection it applied is the live set, so abort the entry
-				// instead of enabling vibe on top of it.
+				// instead of enabling vibe on top of it. Restore the pre-vibe
+				// toolset first: with vibe never enabled there is no
+				// #exitVibeMode path that would recover the replaced base.
+				await this.session.deactivateVibeTools(previousTools);
 				throw new Error("Switch back to Main with Shift+F2 before entering vibe.");
 			}
 			this.#vibeModePreviousTools = previousTools;

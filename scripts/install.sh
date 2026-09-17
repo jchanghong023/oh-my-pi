@@ -248,21 +248,20 @@ install_binary() {
     fi
     chmod +x "$TMP_BINARY"
     warn_running_omp
-    mv -f "$TMP_BINARY" "${INSTALL_DIR}/omp"
-    trap - EXIT
 
-    # Verify the freshly installed binary can actually start before reporting
-    # success. Bun's musl-target binaries link libstdc++/libgcc dynamically,
-    # which stock Alpine/musl systems do not ship, so the download succeeds while
-    # the binary exits 127 with relocation errors. Never claim success for a
-    # binary that cannot run.
-    if ! SMOKE_OUTPUT="$("${INSTALL_DIR}/omp" --version 2>&1)"; then
+    # Verify the downloaded binary can actually start before replacing the
+    # installed one. Bun's musl-target binaries link libstdc++/libgcc
+    # dynamically, which stock Alpine/musl systems do not ship, so the download
+    # succeeds while the binary exits 127 with relocation errors. Smoking the
+    # temp binary first keeps the previous install working when the new one
+    # cannot run.
+    if ! SMOKE_OUTPUT="$("$TMP_BINARY" --version 2>&1)"; then
         echo ""
-        echo "✗ omp was downloaded to ${INSTALL_DIR}/omp but cannot start:"
+        echo "✗ The downloaded omp binary cannot start:"
         echo "$SMOKE_OUTPUT" | sed 's/^/    /'
         if [ "$PLATFORM" = "linux-musl" ]; then
             echo ""
-            echo "The musl build links libstdc++/libgcc dynamically. Install them, then re-run 'omp':"
+            echo "The musl build links libstdc++/libgcc dynamically. Install them, then re-run the installer:"
             if command -v apk >/dev/null 2>&1; then
                 echo "    apk add libstdc++ libgcc"
             else
@@ -271,6 +270,9 @@ install_binary() {
         fi
         exit 1
     fi
+
+    mv -f "$TMP_BINARY" "${INSTALL_DIR}/omp"
+    trap - EXIT
 
     echo ""
     echo "✓ Installed omp to ${INSTALL_DIR}/omp"

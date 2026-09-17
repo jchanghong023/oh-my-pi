@@ -238,8 +238,11 @@ export class DocsHubComponent implements Component {
 		} else if (data === "i") this.#showInfo();
 		else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (data === "c" && this.#abort) this.#abort.abort();
-		else if (matchesKey(data, "up")) this.#selected = Math.max(0, this.#selected - 1);
-		else if (matchesKey(data, "down")) this.#selected = Math.min(this.#indexes.length - 1, this.#selected + 1);
+		// In detail mode without a hit list the arrows must not move the hidden
+		// list selection that `d` and scoped `/` searches act on.
+		else if (matchesKey(data, "up") && this.#mode !== "detail") this.#selected = Math.max(0, this.#selected - 1);
+		else if (matchesKey(data, "down") && this.#mode !== "detail")
+			this.#selected = Math.min(this.#indexes.length - 1, this.#selected + 1);
 		this.tui.requestRender();
 	}
 

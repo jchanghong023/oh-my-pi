@@ -2,6 +2,7 @@ import type { SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "
 
 interface GitStep {
 	args: string[];
+	cwd?: string;
 }
 
 interface GitSequenceResult {
@@ -30,7 +31,7 @@ async function runGit(cwd: string, args: readonly string[]) {
 async function runGitSequence(cwd: string, steps: readonly GitStep[]): Promise<GitSequenceResult> {
 	const output: string[] = [];
 	for (const step of steps) {
-		const result = await runGit(cwd, step.args);
+		const result = await runGit(step.cwd ?? cwd, step.args);
 		const text = formatGitOutput(result.stdout, result.stderr);
 		if (text) output.push(text);
 		if (result.exitCode !== 0) {
@@ -76,6 +77,12 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "JCH Git：无确认重置到跟踪分支并清理未跟踪内容（默认保留 ignored）",
 		allowArgs: true,
 		inlineHint: "[--ignored=true|false]",
+		handle: async (_command, runtime) => {
+			// Destructive imperative text must not fall through to the model on
+			// non-TUI channels; point the user at the interactive TUI instead.
+			await runtime.output("/jchgitdiscardall only runs in the interactive TUI.");
+			return { consumed: true };
+		},
 		handleTui: async (command, runtime) => {
 			const args = command.args.trim();
 			if (args !== "" && args !== "--ignored=false" && args !== "--ignored=true") {
@@ -84,10 +91,19 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			runtime.ctx.editor.setText("");
 			try {
-				const result = await runGitSequence(runtime.ctx.sessionManager.getCwd(), [
+				const cwd = runtime.ctx.sessionManager.getCwd();
+				// `clean` only sweeps below its cwd while the reset is repo-wide;
+				// resolve the toplevel so a session opened in a subdirectory still
+				// discards untracked files across the whole worktree.
+				const toplevel = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+				if (toplevel.exitCode !== 0) {
+					runtime.ctx.showError(formatGitOutput(toplevel.stdout, toplevel.stderr));
+					return { consumed: true };
+				}
+				const result = await runGitSequence(cwd, [
 					{ args: ["fetch", "--all", "--prune"] },
 					{ args: ["reset", "--hard", "@{upstream}"] },
-					{ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"] },
+					{ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"], cwd: toplevel.stdout.trim() },
 				]);
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);

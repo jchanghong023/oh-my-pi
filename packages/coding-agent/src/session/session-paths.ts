@@ -193,7 +193,16 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 			if (entry === tempOldExact) rest = "";
 			else if (entry.startsWith(tempOldPrefix)) rest = entry.slice(tempOldPrefix.length);
 			else continue;
-			if (rest !== "" && !fs.existsSync(path.join(canonicalTempRoot, rest))) continue;
+			if (rest !== "") {
+				if (!fs.existsSync(path.join(canonicalTempRoot, rest))) continue;
+				// The same legacy name also matches a literal sibling of the
+				// temp root (`AppData\Local\Temp-foo` encodes like `%TEMP%\foo`);
+				// when both sides exist the entry is ambiguous, so keep it.
+				if (
+					fs.existsSync(path.join(path.dirname(canonicalTempRoot), `${path.basename(canonicalTempRoot)}-${rest}`))
+				)
+					continue;
+			}
 			const oldPath = path.join(sessionsRoot, entry);
 			const newPath = path.join(sessionsRoot, encodeRelativeSessionDirName("-tmp", rest));
 			// A temp root directly under home whose encoded remainder is `tmp`

@@ -290,6 +290,9 @@ function Install-Binary {
     $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
     $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
     $curlExit = $null
+    $renamedAside = $false
+    $rollbackFailed = $false
+    $hadExisting = $false
     try {
         if ($curlExe) {
             Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath }
@@ -311,8 +314,8 @@ function Install-Binary {
         }
 
         $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))
-        $renamedAside = $false
-        if (Test-Path -LiteralPath $OutPath) {
+        $hadExisting = Test-Path -LiteralPath $OutPath
+        if ($hadExisting) {
             try {
                 Move-Item -LiteralPath $OutPath -Destination $OldPath
                 $renamedAside = $true
@@ -325,7 +328,15 @@ function Install-Binary {
             Move-Item -LiteralPath $TmpPath -Destination $OutPath
         } catch {
             if ($renamedAside) {
-                Move-Item -LiteralPath $OldPath -Destination $OutPath
+                try {
+                    Move-Item -LiteralPath $OldPath -Destination $OutPath
+                } catch {
+                    # Rollback failed too: the aside binary is the only restored
+                    # copy and the fresh download below is the other recovery
+                    # path, so the finally must keep it.
+                    $rollbackFailed = $true
+                    throw
+                }
             }
             throw
         }
@@ -335,7 +346,13 @@ function Install-Binary {
         Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*" -File -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
     } finally {
-        Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
+        # A failed swap must not leave the install directory without any omp
+        # binary: when the old one is gone (kill fallback or a failed rollback)
+        # keep the downloaded file so re-running the installer — or renaming it
+        # back manually — recovers.
+        if (-not ($hadExisting -and (-not $renamedAside -or $rollbackFailed) -and -not (Test-Path -LiteralPath $OutPath))) {
+            Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Host ""

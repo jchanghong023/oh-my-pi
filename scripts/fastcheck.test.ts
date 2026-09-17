@@ -108,7 +108,9 @@ async function runFastcheck(fixture: Fixture) {
 	return { ...result, lintArgv, formatArgv };
 }
 
-describe("fastcheck oxlint/oxfmt scope", () => {
+// The fixtures stub oxlint/oxfmt with POSIX `sh` scripts and join PATH with
+// `:`, so the suite can only run where those exist.
+describe.skipIf(process.platform === "win32")("fastcheck oxlint/oxfmt scope", () => {
 	test("lints only modified and untracked TypeScript paths and formats the root-managed subset", async () => {
 		const fixture = await createFixture({
 			changed: ["packages/sample/src/included.ts", "outside/tracked-outside.ts"],

@@ -55,10 +55,7 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 				value = { removed: input.target };
 				break;
 		}
-		if (input.json) stdout(`${JSON.stringify(value)}\n`);
-		else if (Array.isArray(value)) {
-			for (const item of value) stdout(`${JSON.stringify(item)}\n`);
-		} else stdout(`${JSON.stringify(value)}\n`);
+		stdout(`${JSON.stringify(value)}\n`);
 		return exitCode;
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {

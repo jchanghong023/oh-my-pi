@@ -1741,7 +1741,6 @@ export class SessionTools {
 	}
 
 	/**
-
 	 * Session-scoped enable/disable for the private `think` scratchpad tool.
 	 *
 	 * Enabling constructs the tool once and refreshes the model's tool contract;

@@ -230,7 +230,7 @@ describe("JCH git slash commands", () => {
 		});
 	});
 
-	it("keeps destructive discard-all interactive-only", () => {
+	it("keeps destructive discard-all out of agent dispatch", () => {
 		const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitdiscardall");
 		expect(command).toMatchObject({
 			description: "JCH Git：无确认重置到跟踪分支并清理未跟踪内容（默认保留 ignored）",
@@ -238,7 +238,11 @@ describe("JCH git slash commands", () => {
 			inlineHint: "[--ignored=true|false]",
 			handleTui: expect.any(Function),
 		});
-		expect(command?.handle).toBeUndefined();
-		expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === "jchgitdiscardall")).toBe(false);
+		// The text-mode handle must refuse without dispatching anything to the
+		// model; the destructive sequence stays TUI-only. The handle also makes
+		// the command ACP-advertised (like jchgs/jchgitpull) so clients get the
+		// refusal instead of a model dispatch.
+		expect(command?.handle).toBeTypeOf("function");
+		expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === "jchgitdiscardall")).toBe(true);
 	});
 });

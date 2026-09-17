@@ -1791,7 +1791,9 @@ mod tests {
 		// neutralize host-global config for spawned git children and the
 		// in-process gix backend alike — a Windows host with core.autocrlf=true
 		// otherwise rewrites LF↔CRLF and breaks byte-exact assertions.
-		// SAFETY: plain #[test], so no other thread can observe the mutation.
+		// SAFETY: every thread in the test binary writes the same platform constant, so a
+		// racing read still observes a value with the intended effect; nextest (localci)
+		// runs each test in its own process.
 		unsafe {
 			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
 			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });

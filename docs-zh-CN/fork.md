@@ -37,12 +37,12 @@
 
 ### DeepSeek V4.1 Flash
 
-* 自本基线起，上游已直接收录该模型的大部分目录面，fork 剩余差异收敛为两处：`opencode-go` 的折叠裸别名烘焙行，以及 `opencode-zen` 的发现期运行时继承面（`openai-compat.ts` 的 `DEEPSEEK_V41_FLASH_IDS` / `deepseekV41FlashReference`，fork 维护）。
-* 官方 `deepseek` 与 `commandcode` 由上游条目完整提供：显示名 `DeepSeek V4.1 Flash`、`text` + `image`、不剥离图片、`low` / `high` / `max` 等级、wire 契约与 Flash 档定价（`0.15` / `0.6`），fork 在这两个 lane 无增量；taxonomy 的尾锚定 glob `*deepseek-flash`（把裸 id 归入 Flash 家族、不卷入 `deepseek-flash-v4` 这类版本段结尾 id）也已由上游收录。
+* 自本基线起，上游已直接收录该模型的大部分目录面，fork 剩余差异收敛为两处：`opencode-go` 的折叠裸别名烘焙行，以及发现期运行时继承面（`openai-compat.ts` 的 `DEEPSEEK_V41_FLASH_IDS` / `deepseekV41FlashReference`，fork 维护，接入官方 `deepseek` lane 与 `opencode-*` 网关的共享发现路径）。
+* 官方 `deepseek` 与 `commandcode` 的静态目录面由上游条目完整提供：显示名 `DeepSeek V4.1 Flash`、`text` + `image`、不剥离图片、`low` / `high` / `max` 等级、wire 契约与 Flash 档定价（`0.15` / `0.6`），fork 在这两个 lane 无烘焙增量；官方 `deepseek` 的发现期继承面（裸 `deepseek-flash` 的能力 surface 注入与缓存失效键）为 fork 维护，`commandcode` 无任何 fork 增量。taxonomy 的尾锚定 glob `*deepseek-flash`（把裸 id 归入 Flash 家族、不卷入 `deepseek-flash-v4` 这类版本段结尾 id）也已由上游收录。
 * `opencode-go` 上 fork 维护折叠裸别名行：目录层同一 SKU 收敛为一行（规范 id `deepseek-v4.1-flash`），fork 在规范行旁烘焙 `deepseek-flash` 行——复制上游规范行（含 `int` / `tps`（39.5 / 212.1），随上游 census 更新）并仅改 `id`，重烘时须保留。裸别名仍可作为选择器（`modelRoles`、`--model` 无需改动）。
 * `opencode-zen` 无 v4.1 烘焙行：发现完成前由继承面按内置 `deepseek-v4-flash` 条目补齐显示名、`text` + `image`、不剥离图片与 `low` / `high` / `max` 推理能力（1M / 384K）。缺失时 role 会静默改绑同网关被类规则剥离图片的纯文本 `deepseek-v4-flash`（表现为「V4.1 Flash 没有视觉」），`--model opencode-zen/deepseek-flash:等级` 也会直接报 not found。
 * 原因：这些网关的模型列表只返回 `id` 等有限字段，未被内置目录或继承面覆盖的 id 会保留发现默认值 `reasoning: false`，导致没有思考等级、上下文未知。继承关系同时作为缓存失效策略：表面变化会使旧缓存行在下次启动时自动重新拉取。
-* 影响范围：`opencode-go`（折叠行）、`opencode-zen`（发现继承面）。不继承其他 provider 的价格与传输；OpenRouter 的同名模型由上游条目独立提供。
+* 影响范围：`opencode-go`（折叠行）；发现继承面覆盖官方 `deepseek` lane 与 `opencode-*` 网关的共享路径（`opencode-zen` 的补齐表现见上）。不继承其他 provider 的价格与传输；OpenRouter 的同名模型由上游条目独立提供。
 
 ### 代理行为与 Discuss
 
@@ -76,7 +76,7 @@
 * `/jchcatchup`：查看本地状态/最近提交；`full` 时深入比较远端差异。
 * `/jchgs`：`fetch --all` 后显示状态。
 * `/jchgitpull`：直接按当前 upstream/pull 配置执行 `git pull`。
-* `/jchgitdiscardall [--ignored=true|false]`：始终无交互确认，先执行 `git fetch --all --prune`、`git reset --hard @{upstream}`。无参数或 `--ignored=false` 时以 `git clean -df` 清理未跟踪内容，保留 ignored；`--ignored=true` 时以 `git clean -xdf` 同时清理 ignored 文件和目录。非法、重复或多余参数在任何 Git 操作前报用法错误；任一步失败即停止。重置目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
+* `/jchgitdiscardall [--ignored=true|false]`：始终无交互确认，先执行 `git fetch --all --prune`、`git reset --hard @{upstream}`。无参数或 `--ignored=false` 时以 `git clean -df` 清理未跟踪内容，保留 ignored；`--ignored=true` 时以 `git clean -xdf` 同时清理 ignored 文件和目录。clean 以 `git rev-parse --show-toplevel` 解析的仓库根为工作目录，会话位于仓库子目录时同样清理整个工作树（reset 本就是全仓生效）。该命令仅在交互界面（TUI）执行；其他通道输入只返回提示、不派发给模型。非法、重复或多余参数在任何 Git 操作前报用法错误；任一步失败即停止。重置目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
 * `/jchdftexplain`：面向 DFT 新手解释文件、目录、代码和业务概念，命令参数为待解释对象。只读：可读取文件、搜索代码和调用 `wiki`，不修改文件、不执行待解释脚本、不启动 EDA 流程；内部术语主动用 `wiki` 核对并标注来源，代码解释按命令去重、结论先行。
 
 ### Codex 用户技能
@@ -122,7 +122,7 @@
 ### Windows 会话目录命名
 
 * cwd 位于 `%TEMP%`（含子目录）时，会话目录按 `-tmp-…` 分类命名（temp 优先于 home；上游顺序相反，会把同一 cwd 编码为 home 相对名 `-AppData-Local-Temp-…`）。例外：`TEMP` 被指到包含或等于 home 的路径（如 `%USERPROFILE%`、盘根）时不抢占分类，home 命名保持与上游一致。
-* 启动时的目录迁移会把旧 home 相对名的 temp 会话目录改名为 `-tmp-…`，仅当对应 temp 侧路径仍存在（防 `AppData\Local\Temp-foo` 与 `%TEMP%\foo` 的同形歧义误伤）；多级子目录的旧名（路径分隔符编码展平后字面目录通常不存在）可能被保守跳过，目录与数据保留，只是不再按 cwd 关联。
+* 启动时的目录迁移会把旧 home 相对名的 temp 会话目录改名为 `-tmp-…`，仅当对应 temp 侧路径仍存在且同形字面目录（如 `AppData\Local\Temp-foo`）不存在（防与 `%TEMP%\foo` 的同形歧义误伤，两侧同存时同样保守跳过）；多级子目录的旧名（路径分隔符编码展平后字面目录通常不存在）可能被保守跳过，目录与数据保留，只是不再按 cwd 关联。
 
 ### Windows 编辑路径与临时清理
 
@@ -164,12 +164,12 @@
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-* 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成。
+* 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 * 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
 * `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`），且无法通过任何后续代码改动自愈：这类机器只能用安装器重装后再交给 `omp update`。
 * 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
-* 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。
+* 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
 
 ### 文档站
 
@@ -183,5 +183,5 @@
 * 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
 * 保留 `bun scripts/jch-localci.ts [full]` 作为独立本地检查入口，支持 Windows x64 与 Linux x64（含 WSL2 同一目录双平台运行）：默认不构建 native，`full` 才构建当前宿主平台的 native addon；Rust 核心测试统一走 `cargo nextest`，Windows 上会自动把 VS Build Tools 的 CMake/Ninja 注入 PATH（`.cargo/config.toml` 固定 Ninja 生成器）。个别 POSIX 专有断言（umask、uid、exec bit、bash symlink、依赖 `sh -c` 输出形态的 find 断言）在 Windows 上由测试内 `skipIf` / `ignore` 按平台跳过，其余测试双平台同套运行。
 * 保留 `bun scripts/jch-dev-ui-test.ts` 作为 `bun run dev` 界面的自动化冒烟测试（`--debug` 可转储 TUI 原始输出）：通过本地构建的 pi-natives PTY（Windows ConPTY / POSIX openpty）启动 dev TUI，断言全屏界面渲染（光标控制序列 + 状态栏 Main 指示）、按键触发重绘、Ctrl+D 优雅退出（exit 0）；仅使用本地 addon，不联网。启动参数固定 `--offline --profile localci-ui`，不触发首次配置向导和网络请求。
-* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 600 秒、该测试目标的 bazel `timeout` 设为 `long`（CI 分片 CPU 争用；bazel 默认 300 秒上限会先于用例内预算触发）；`pi-shell` 的 `incomplete_utf8_at_eof_becomes_replacement` 在 Windows 上改用 UTF-8 回退构造器（上游 `new()` 在非 UTF-8 ACP 主机上会把 EOF 悬挂字节按设计交给 ACP 解码，DBCS 代码页产出默认字符 `?` 而非替换符，与该用例期望冲突；上游 CI 仅 Linux 测不到）；`session-code-mode` 的「保留启动工具体数组引用」用例在 fork 下跳过（`test.skip`）：应用工具一律经 Primary Agent 执行期门禁包装，Main 下捕获的句柄切到 Discuss 后必须被拒绝，上游新增的引用复用契约对包装后的实例不再适用，该跳过是本 fork 的有意偏差；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`oauth_callback` 测试在无头/SSH/WSL 会话遇到 `Unsupported` 时跳过；`pi-vcs` 的 git 测试以 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向空设备、`pi-vcs` 与 `natives` 的 git 测试在 fixture 内固定 `core.autocrlf=false`（hermetic 化，防宿主配置破坏字节级断言）；`pi-vcs` 另有 worktree 断言剥 `\\?\` 前缀、index 快照失败用目录占位替代 `chmod 000` 两处 Windows 适配。
+* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 600 秒、该测试目标的 bazel `timeout` 设为 `long`（CI 分片 CPU 争用；bazel 默认 300 秒上限会先于用例内预算触发）；`pi-shell` 的 `incomplete_utf8_at_eof_becomes_replacement` 在 Windows 上改用 UTF-8 回退构造器（上游 `new()` 在非 UTF-8 ACP 主机上会把 EOF 悬挂字节按设计交给 ACP 解码，DBCS 代码页产出默认字符 `?` 而非替换符，与该用例期望冲突；上游 CI 仅 Linux 测不到）；`session-code-mode` 的「保留启动工具体数组引用」用例在 fork 下跳过（`test.skip`）：应用工具一律经 Primary Agent 执行期门禁包装，Main 下捕获的句柄切到 Discuss 后必须被拒绝，上游新增的引用复用契约对包装后的实例不再适用，该跳过是本 fork 的有意偏差；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`oauth_callback` 测试在无头/SSH/WSL 会话遇到 `Unsupported` 时跳过；`pi-vcs` 的 git 测试以 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向空设备、`pi-vcs` 与 `natives` 的 git 测试在 fixture 内固定 `core.autocrlf=false`（hermetic 化，防宿主配置破坏字节级断言）；`pi-vcs` 另有 worktree 断言剥 `\\?\` 前缀的 Windows 适配，以及 index 快照失败用目录占位替代 `chmod 000` 的 root 确定性改造（该用例仍为 unix 门控：Windows 上打开目录得到 `PermissionDenied` 而非 `IsADirectory`，不随 localci 在 Windows 运行）；`pi-shell` 的 registry 期望列表在 Windows 上不含 `errno`（`cfg!(unix)` 条件注入）、find/fd/rg 输出断言接受平台路径分隔符（`.\`、`sub\nested.txt` 形态），`pi-edit` 的两个 hashline 测试以真实临时目录 cwd 替代 POSIX 字面路径（`/workspace`、`/tmp/work` 在 Windows 无法剥离）。
 * WSL2 与 Windows 共享同一检出目录时，node_modules 为 Windows 安装：WSL 侧的 `oxlint` / `oxfmt` / `tsgo` 需按仓库同版本全局安装（`bun install -g`），native addon 因文件名带平台前缀可共存，cargo 构建缓存建议用 `CARGO_TARGET_DIR` 指到 WSL 本地文件系统。
