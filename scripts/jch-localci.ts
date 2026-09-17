@@ -206,7 +206,7 @@ const CODING_AGENT_TEST_GROUPS: readonly TestGroup[] = [
 	{
 		label: "coding-agent/jch-commands",
 		cwd: "packages/coding-agent",
-		files: ["test/slash-commands/jch-git.test.ts"],
+		files: ["test/slash-commands/jch-git.test.ts", "test/slash-commands/magic-keywords.test.ts"],
 	},
 ];
 

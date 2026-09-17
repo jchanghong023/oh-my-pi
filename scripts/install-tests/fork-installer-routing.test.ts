@@ -167,7 +167,11 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 			await running.exited;
 		}
 	});
+});
 
+// The text assertions below only read the installer sources, so they need no
+// POSIX fixtures and run on every platform.
+describe("fork installer routing (install.ps1 text)", () => {
 	test("limits the Windows installer and release asset to x64", async () => {
 		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
 		expect(script).toContain('"AMD64" { "x64" }');

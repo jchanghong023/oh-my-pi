@@ -1547,7 +1547,14 @@ export class ModelRegistry {
 				keylessProviders.add(providerName);
 			}
 
-			if (providerConfig.discovery && (providerConfig.api || providerConfig.discovery.type === "proxy")) {
+			// zcode-api is excluded: its rows are synthesized at runtime and never
+			// discovered, so a user-level `discovery` block could only fire a probe
+			// whose results #withRuntimeSyntheticModels would discard anyway.
+			if (
+				providerName !== ZCODE_API_PROVIDER_ID &&
+				providerConfig.discovery &&
+				(providerConfig.api || providerConfig.discovery.type === "proxy")
+			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				discoverableProviders.push({
 					provider: providerName,
