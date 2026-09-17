@@ -15,13 +15,13 @@
 * `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`jch-localci.ts`、`jch-dev-ui-test.ts`、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
-* `docs/`：上游英文文档（fork 补充了 VitePress 构建配置，合并到中文站 `/en/` 子路径）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
+* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/fullsend.ts`、`src/primary-agent/`、`src/session/session-paths.ts`（Windows 会话目录命名）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/fullsend.ts`、`src/primary-agent/`。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 
@@ -44,9 +44,8 @@
 
 ## 开发约束
 
-* 平台：日常在 Windows x64（Git Bash）上工作，同时支持 Linux x64 与 WSL2（可与 Windows 共享同一检出目录）。
+* 平台：日常在 Windows x64（PowerShell）上工作，同时支持 Linux x64 与 WSL2；本地验证只在当前操作系统运行对应测试。
 * 工具链版本跟随上游固定，不在 fork 内单独升级：Bun `>=1.4`（`package.json` 的 `packageManager`）、Rust `nightly-2026-08-12`（`rust-toolchain.toml`）、Bazel `9.2.0`（`.bazelversion`）。
-* WSL2 与 Windows 共享检出目录时 `node_modules` 为 Windows 安装：WSL 侧运行 localci / fastcheck / UI 测试需全局安装同版本 `oxlint` / `oxfmt` / `tsgo`（`bun install -g`）并把 `~/.cargo/bin` 加入 PATH，cargo 构建建议以 `CARGO_TARGET_DIR` 指向 WSL 本地文件系统；参见「验证」一节。
 * 上游开发约定（代码质量、Bun 优先、prompt 放 `.md`、模型/Provider 策略在 KDL、生成文件与 changelog 规则等）同样适用于 fork 改动，但不在本文件重复：以 `fork.md` 记录的 Upstream commit 为准，用 `git show <upstream-commit>:AGENTS.md` 读取。fork 改动 MUST 与上游既有风格和机制一致，不引入局部风格。
 
 ## 权威来源与文档职责
@@ -103,9 +102,8 @@
 * 本地编译与测试默认禁止：除用户明确要求外，NEVER 运行任何本地编译、类型检查或测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）。唯一例外是本 fork 的 `bun scripts/jch-localci.ts [full]`，且同样仅在用户明确要求时运行。
 * 普通 TypeScript 修改后 MUST 运行 `bun run fastcheck`；纯文档修改只做差异与格式检查。该入口只做 lint 与格式检查，不属于上一条禁止的编译或测试。
 * 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
-* 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口支持 Windows x64 与 Linux x64（含 WSL2 同目录），仅明确要求 `full` 时构建当前宿主平台 native addon，Rust 核心测试走 `cargo nextest`。
-* 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。自动化入口 `bun scripts/jch-dev-ui-test.ts`（PTY 启动 dev TUI、断言渲染/交互/退出）同样仅在用户明确要求时运行，双平台通用。
-* WSL2 与 Windows 共享同一检出目录时，node_modules 为 Windows 安装；WSL 侧运行 localci / fastcheck / UI 测试需要 WSL 内全局安装同版本 `oxlint` / `oxfmt` / `tsgo`（`bun install -g`）与 `~/.cargo/bin` 在 PATH，cargo 构建建议以 `CARGO_TARGET_DIR` 指向 WSL 本地文件系统。
+* 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口在当前操作系统上运行、只运行当前操作系统对应的测试，不维护 WSL2/双平台运行能力；仅明确要求 `full` 时构建当前宿主平台 native addon，Rust 核心测试走 `cargo nextest`。
+* 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。自动化入口 `bun scripts/jch-dev-ui-test.ts`（PTY 启动 dev TUI、断言渲染/交互/退出）同样仅在用户明确要求时运行。
 
 ## 中文文档
 
