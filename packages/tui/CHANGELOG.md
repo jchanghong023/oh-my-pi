@@ -6,6 +6,24 @@
 
 - Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
 
+## [18.2.3] - 2026-09-17
+
+### Added
+
+- Editors support whitespace-delimited `^` mention autocomplete and expose registered atoms for host-defined chip rendering.
+
+### Changed
+
+- `fuzzyRank` accepts readonly candidate arrays without copying them.
+
+### Fixed
+
+- Masked inputs no longer expose their text in diagnostic previews.
+
+### Removed
+
+- Removed the internal `fastTailSplices` and `resetFastTailSplices` Markdown instrumentation exports.
+
 ## [18.2.1] - 2026-09-15
 
 ### Added
