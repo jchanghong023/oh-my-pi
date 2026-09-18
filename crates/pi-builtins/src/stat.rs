@@ -2995,6 +2995,15 @@ mod win_tests {
 		(code, capture.out(), capture.err())
 	}
 
+	// The unix twin below uses a canonicalized path for macOS mount-point
+	// expansion; Windows assertions compare plain joined names, so the raw
+	// tempdir path is enough here.
+	fn tempdir() -> (tempfile::TempDir, PathBuf) {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().to_path_buf();
+		(dir, path)
+	}
+
 	#[test]
 	fn reports_size_and_type_for_regular_file() {
 		let (_dir, root) = tempdir();

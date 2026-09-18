@@ -541,6 +541,9 @@ mod tests {
 		assert_eq!(args.duration, "-1");
 	}
 
+	// Unix signal table: Windows exposes none of the kill(2) spellings, so the
+	// parse/display contract only holds where the table exists.
+	#[cfg(unix)]
 	#[test]
 	fn signal_spellings_parse_and_display_without_prefix() {
 		// Failure mode: rejecting a signal spelling GNU accepts.
@@ -573,9 +576,19 @@ mod tests {
 		// for a command killed by the timeout signal.
 		let result = run_with_deadline("timeout --preserve-status 0.010 slow-test").await;
 
+		// Unix: death by the configured TERM signal is 128+15. Windows has no
+		// signal semantics, so the delivered signal number is 0 and the same
+		// deterministic mapping yields 128.
+		#[cfg(unix)]
 		assert_eq!(u8::from(result.exit_code), 143);
+		#[cfg(windows)]
+		assert_eq!(u8::from(result.exit_code), 128);
 	}
 
+	// SIGKILL takedown semantics do not exist on Windows; the escalated
+	// `-k` variant below reaches EXIT_KILLED cross-platform, but a bare
+	// `-s KILL` does not.
+	#[cfg(unix)]
 	#[tokio::test]
 	async fn kill_signal_reports_137() {
 		// GNU exits 128+9 when the command is taken down with SIGKILL.
