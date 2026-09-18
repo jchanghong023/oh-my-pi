@@ -900,7 +900,9 @@ export function getEnvApiKey(provider: string): string | undefined {
  *   variable name describes the resolved source.
  */
 export function getEnvApiKeyName(provider: string): string | undefined {
-	const resolver = serviceProviderMap[provider];
+	// Own-key lookup only, like `getEnvApiKey`: a prototype-named id would
+	// otherwise resolve `Object.prototype.constructor` and take the string branch.
+	const resolver = Object.hasOwn(serviceProviderMap, provider) ? serviceProviderMap[provider] : undefined;
 	if (typeof resolver === "string") return resolver;
 	// Own-key lookup only: `CATALOG_ENTRY_ENV_NAMES` inherits `Object.prototype`, so a
 	// prototype-named id (`constructor`, `toString`, `__proto__`, …) would otherwise
@@ -908,7 +910,10 @@ export function getEnvApiKeyName(provider: string): string | undefined {
 	const envVars = Object.hasOwn(CATALOG_ENTRY_ENV_NAMES, provider) ? CATALOG_ENTRY_ENV_NAMES[provider] : undefined;
 	if (envVars) {
 		for (const name of envVars) {
-			if (Bun.env[name]?.trim()) return name;
+			// `$env`, not `Bun.env`: `getEnvApiKey` resolves through cwd/.env and
+			// ~/.env fallbacks too, and the echoed name must agree with where the
+			// key actually came from.
+			if ($env[name]?.trim()) return name;
 		}
 	}
 	return undefined;
