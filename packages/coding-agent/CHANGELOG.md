@@ -5,6 +5,9 @@
 ### Fixed
 
 - Fixed startup aborting when the plugins directory exists but cannot be read — a sandboxed run, a restrictive mode, or a manifest symlinked into a denied path; the unreadable root is now skipped with a warning.
+- Fixed `update.channel=canary` failing silently on fork binary installs: the startup version check now shows a notice that the canary channel is unavailable and points at `omp update --stable`.
+- Fixed external Markdown document indexes dropping a section whose only content is an indented-code `#` heading line, and stopped directory imports from recursing forever through a cyclic Windows junction.
+
 ## [18.2.4] - 2026-09-17
 
 ### Added
