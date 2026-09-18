@@ -556,6 +556,36 @@ describe("overflow: box alignment under non-standalone render", () => {
 		}
 	});
 
+	it("keeps wrapped rows within width when segments carry CJK and emoji wide characters", () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-overflow-cjk-宽字符目录名-"));
+		setProjectDir(tmpDir);
+		try {
+			const component = new StatusLineComponent(createStatusLineSession("会话名-セッション-🙂", "列".repeat(60)));
+			component.updateSettings({
+				preset: "custom",
+				leftSegments: ["pi"],
+				rightSegments: ["session_name", "model", "path"],
+				separator: "powerline-thin",
+				sessionAccent: false,
+			});
+			const terminalWidth = 100;
+			const statusWidth = 98;
+			component.setTopBorderWidthProvider(() => statusWidth);
+
+			const lines = component.render(terminalWidth);
+			expect(lines.length).toBeGreaterThan(1);
+			for (const line of lines) {
+				// Wide characters count 2 columns each; wrapping must budget for that.
+				expect(visibleWidth(line)).toBeLessThanOrEqual(terminalWidth);
+			}
+			const joined = stripAnsi(lines.join("\n"));
+			expect(joined).toContain("列列列列");
+			expect(joined).toContain("宽字符目录名");
+		} finally {
+			setProjectDir(originalProjectDir);
+		}
+	});
+
 	it("reopens text color before plain overflow parts and after separators", () => {
 		const component = new StatusLineComponent(createStatusLineSession("ansi"));
 		component.updateSettings({
