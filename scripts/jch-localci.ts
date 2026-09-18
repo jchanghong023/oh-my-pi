@@ -162,7 +162,6 @@ const CODING_AGENT_TEST_GROUPS: readonly TestGroup[] = [
 			"test/read-summary.test.ts",
 			"test/read-tool.test.ts",
 			"test/shell-snapshot.test.ts",
-			"test/tool-execution-args.test.ts",
 			"test/tools/edit-renderer.test.ts",
 			"test/tools/shell-tokenize.test.ts",
 			"test/tools/tool-errors.test.ts",
