@@ -2,11 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isOpenAICompletionsVisionSupported } from "@oh-my-pi/pi-ai/providers/vision-guard";
-import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
-import { resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -1011,78 +1008,5 @@ describe("issue #10416 — retired bare opencode provider", () => {
 	test("the split OpenCode providers remain populated", () => {
 		expect(getBundledModels("opencode-go").length).toBeGreaterThan(0);
 		expect(getBundledModels("opencode-zen").length).toBeGreaterThan(0);
-	});
-
-	// The Go gateway serves its canonical V4.1 Flash under both the bare
-	// `deepseek-flash` alias and the versioned id. They fold into a single row
-	// whose logical id is the versioned one — the bare id keeps resolving as a
-	// selector, and the lane keeps the DeepSeek V4 effort ladder rather than the
-	// generic one its `v4`-less id would otherwise fall through to.
-	test("the DeepSeek V4.1 Flash lanes fold into one row that keeps the V4 ladder", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-go-deepseek-flash-"));
-		try {
-			const options = opencodeGoModelManagerOptions({
-				apiKey: "go-account-key",
-				fetch: async () => modelListResponse(["deepseek-flash"]),
-			});
-			// The inherited surface is baked into the cached spec, so rows written
-			// before the lineage existed must be dropped or the fix never lands.
-			expect(options.dropCachedModelIdsOnStaticMismatch).toContain("deepseek-flash");
-			const modelsDev = options.modelsDev;
-			if (!modelsDev) throw new Error("OpenCode model manager did not configure stencil fallback");
-			const resolved = await resolveProviderModels(
-				{
-					...options,
-					cacheDbPath: path.join(tempDir, "models.db"),
-					modelsDev: {
-						...modelsDev,
-						fetch: async () => ({
-							"opencode-go": {
-								models: {
-									"deepseek-flash": {
-										id: "deepseek-flash",
-										name: "DeepSeek V4 Flash",
-										tool_call: true,
-										reasoning: true,
-										limit: { context: 1_000_000, output: 384_000 },
-										modalities: { input: ["text"], output: ["text"] },
-									},
-								},
-							},
-						}),
-					},
-				},
-				"online",
-			);
-			const model = resolved.models.find(candidate => candidate.id === "deepseek-v4.1-flash");
-			if (!model) throw new Error("deepseek-v4.1-flash was not resolved");
-			expect(resolved.models.some(candidate => candidate.id === "deepseek-flash")).toBe(false);
-			expect(resolveVariantSelector("opencode-go", "deepseek-flash")).toBe("deepseek-v4.1-flash");
-
-			expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.High, Effort.Max]);
-			// V4.1 Flash is natively multimodal; the borrowed `deepseek-v4-flash`
-			// row's DeepSeek class rule strips image input by default, so the
-			// surface has to carry the strip override.
-			expect(model.input).toEqual(["text", "image"]);
-			expect(isOpenAICompletionsVisionSupported(model as Model<"openai-completions">)).toBe(true);
-			// The borrowed surface is `deepseek-v4-flash` from the first-party
-			// catalog, so its rates — and its peak/off-peak billing scheme — must not
-			// reach this gateway. This gateway lists ids without prices, so the
-			// bundled row's own Flash rate stands in for the unpriced bare alias
-			// instead of billing at api.deepseek.com rates or showing it as free.
-			expect(model.cost.timeBased).toBeUndefined();
-			expect(model.cost.input).toBe(0.15);
-			expect(model.cost.output).toBe(0.6);
-			// The lineage borrows `deepseek-v4-flash` from the first-party catalog, so
-			// its wire config (`max_tokens`, a mandatory `thinking` body, synthesized
-			// assistant content) belongs to api.deepseek.com and must not reach this
-			// gateway — its own rules own those fields.
-			const compat = (model as Model<"openai-completions">).compat;
-			expect(compat?.maxTokensField).toBe("max_completion_tokens");
-			expect(compat?.requiresAssistantContentForToolCalls).toBe(false);
-			expect(compat?.extraBody).toBeUndefined();
-		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
-		}
 	});
 });

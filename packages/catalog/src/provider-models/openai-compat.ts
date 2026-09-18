@@ -1832,89 +1832,10 @@ export interface DeepSeekModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-/**
- * DeepSeek V4.1 Flash ships under ids that carry no `v4` segment, so they match
- * neither a bundled row nor the `*deepseek*v4*flash*` taxonomy glob. They are
- * the same served model as `deepseek-v4-flash` (that id is aliased onto V4.1),
- * so they inherit that row's capability surface — same effort ladder, same
- * limits — and only the display name differs.
- *
- * Keyed by bare id so namespace forms (`deepseek/deepseek-v4.1-flash`) match.
- * The gateways that serve these ids name their cache rows with the bare id, so
- * the table doubles as their cache migration list.
- */
-export const DEEPSEEK_V41_FLASH_IDS: Readonly<Record<string, string>> = {
-	"deepseek-flash": "DeepSeek V4.1 Flash",
-	"deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
-};
-
-/**
- * Revision of the surface above, and a cache migration key rather than a model
- * id. It joins every V4.1 Flash drop list because the resolver only drops rows
- * through the migration-policy fingerprint: without it, a row cached by the
- * previous surface would keep serving it. The `@` prefix keeps the token from
- * ever matching a discovered id.
- */
-export const DEEPSEEK_V41_FLASH_SURFACE_KEY = "@v41-flash-surface/3";
-
-let deepseekV4FlashReference: ModelSpec<"openai-completions"> | undefined;
-
-/** Display name when `id` is a V4.1 Flash spelling, else undefined. */
-export function deepseekV41FlashName(id: string): string | undefined {
-	const slash = id.lastIndexOf("/");
-	const bare = slash === -1 ? id : id.slice(slash + 1);
-	// Own-key lookup only: the table inherits `Object.prototype`, so a prototype-named
-	// id (`constructor`, `toString`, …) would otherwise resolve to a function and be
-	// handed to the record's typed consumers as a model name.
-	return Object.hasOwn(DEEPSEEK_V41_FLASH_IDS, bare) ? DEEPSEEK_V41_FLASH_IDS[bare] : undefined;
-}
-
-/**
- * The capability surface every V4.1 Flash id inherits from the bundled
- * `deepseek-v4-flash` row.
- *
- * V4.1 Flash is natively multimodal, but the borrowed row's DeepSeek class
- * rule strips image input by default (its `input` already lists `image`;
- * `compat.stripImageInput` is what removes it) and the id matches neither the
- * `vision` nor the `ocr` token the class rules whitelist — so the strip
- * override, with the modality kept explicit, has to travel with the surface.
- * Everything else (effort ladder, limits, wire quirks) is the sibling's.
- */
-export function deepseekV41FlashReference(id: string): ModelSpec<"openai-completions"> | undefined {
-	if (deepseekV41FlashName(id) === undefined) return undefined;
-	deepseekV4FlashReference ??= (() => {
-		const reference = createBundledReferenceMap<"openai-completions">("deepseek").get("deepseek-v4-flash");
-		if (!reference) return undefined;
-		return {
-			...reference,
-			input: ["text", "image"],
-			compat: { ...reference.compat, stripImageInput: false },
-		};
-	})();
-	return deepseekV4FlashReference;
-}
-
 export function deepseekModelManagerOptions(
 	config?: DeepSeekModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createOpenAICompatibleModelManagerOptions({
-		api: "openai-completions",
-		providerId: "deepseek",
-		defaultBaseUrl: "https://api.deepseek.com",
-		config,
-		requireApiKey: true,
-		dropCachedModelIdsOnStaticMismatch: [...Object.keys(DEEPSEEK_V41_FLASH_IDS), DEEPSEEK_V41_FLASH_SURFACE_KEY],
-		mapModel: (entry, defaults, reference) => {
-			// Only the bare `deepseek-flash` alias has a bundled row (none exists
-			// under `deepseek-v4.1-flash`), so the lineage — not the row —
-			// supplies the capability surface; the row only contributes its rates.
-			const lineage = deepseekV41FlashReference(defaults.id);
-			const surface = lineage ? { ...lineage, cost: reference?.cost ?? lineage.cost } : reference;
-			const spec = mapWithBundledReference(entry, defaults, surface);
-			const name = deepseekV41FlashName(defaults.id);
-			return name === undefined ? spec : { ...spec, name: toModelName(entry.name, name) };
-		},
-	});
+	return createSimpleOpenAICompletionsOptions("deepseek", "https://api.deepseek.com", config);
 }
 
 // ---------------------------------------------------------------------------
@@ -3077,10 +2998,6 @@ function openCodeModelManagerOptions(
 		dropCachedModelIdsOnStaticMismatch: [
 			...apiRouteExactModelIds(providerId),
 			...OPENCODE_CACHE_MIGRATION_MODEL_IDS,
-			// V4.1 Flash rows cached before the lineage existed carry the generic
-			// discovery defaults (no `max` tier, unknown limits).
-			...Object.keys(DEEPSEEK_V41_FLASH_IDS),
-			DEEPSEEK_V41_FLASH_SURFACE_KEY,
 			...(providerId === "opencode-zen" ? OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS : []),
 		],
 		modelsDev: {
@@ -3114,38 +3031,6 @@ function openCodeModelManagerOptions(
 						// stencil fallback; the fallback never selects a transport.
 						const api = resolveApi(defaults.id, defaults.api);
 						const baseUrl = openCodeBaseUrlForApi(api, basePath);
-						// The effort dial must not depend on the bundled rows — they
-						// carry it too, but the lineage keeps discovery resolving
-						// before rows load or if a row goes missing — so carry the
-						// `deepseek-v4-flash` capability surface like the Muse Spark
-						// lineage below. Only that surface travels: the lineage's `compat`
-						// is api.deepseek.com wire config (`max_tokens`, an always-sent
-						// `thinking` extraBody, and required assistant content on tool
-						// calls) that this gateway rejects, so only the modality carve-out
-						// is kept and the rest is derived from this gateway's own rules,
-						// as the reference-less branch below does.
-						const v41 = deepseekV41FlashReference(defaults.id);
-						if (v41) {
-							return {
-								...defaults,
-								id: defaults.id,
-								name: toModelName(entry.name, deepseekV41FlashName(defaults.id) ?? v41.name),
-								api,
-								provider: providerId,
-								baseUrl,
-								reasoning: v41.reasoning,
-								input: v41.input,
-								thinking: v41.thinking,
-								compat: { stripImageInput: false },
-								// The lineage borrows `deepseek-v4-flash` from the first-party
-								// catalog, so its rates and peak/off-peak scheme belong to
-								// api.deepseek.com, not this gateway. Keep the gateway's own
-								// value, as the reference-less branch below does.
-								cost: defaults.cost,
-								contextWindow: toPositiveNumber(entry.context_length, v41.contextWindow),
-								maxTokens: toPositiveNumber(entry.max_completion_tokens, v41.maxTokens),
-							};
-						}
 						const lineage = museSparkLineageSpec(defaults.id);
 						if (lineage) {
 							// Gateway lists Muse Spark as bare ids with no capability
