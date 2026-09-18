@@ -555,6 +555,14 @@
       "import": "./src/web/search/providers/*.ts"
     },
     "./prompts/*": "./src/prompts/*.md",
-    "./*.js": "./src/*.ts"
+    "./*.js": "./src/*.ts",
+    "./team": {
+      "types": "./src/team/index.ts",
+      "import": "./src/team/index.ts"
+    },
+    "./team/*": {
+      "types": "./src/team/*.ts",
+      "import": "./src/team/*.ts"
+    }
   }
 }

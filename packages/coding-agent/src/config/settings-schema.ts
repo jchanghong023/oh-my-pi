@@ -5249,6 +5249,15 @@ export const SETTINGS_SCHEMA = {
 		default: [] as string[],
 	},
 
+	// Fork: /team multi-model discussion participants (full model IDs, e.g.
+	// "company/GLM-5.2-public"). Unset or empty means "not configured": /team
+	// then falls back to the company lane snapshot under --offline and errors
+	// with a configuration example otherwise.
+	"team.members": {
+		type: "array",
+		default: [] as string[],
+	},
+
 	"task.agentModelOverrides": {
 		type: "record",
 		default: DEFAULT_AGENT_MODEL_OVERRIDES,

@@ -224,6 +224,11 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/modes/fullsend.test.ts",
 			"test/slash-commands/jch-git.test.ts",
 			"test/slash-commands/magic-keywords.test.ts",
+			"test/slash-commands/team-command.test.ts",
+			"test/team/integration.test.ts",
+			"test/team/members.test.ts",
+			"test/team/orchestrator.test.ts",
+			"test/team/schemas.test.ts",
 		],
 	},
 ];
