@@ -197,7 +197,11 @@ describe("SessionManager temp cwd session dirs", () => {
 		removeSyncWithRetries(testAgentDir);
 	});
 
-	it("stores temp-root cwd sessions under -tmp-prefixed directories", () => {
+	// These three assume os.tmpdir() sits outside the home directory (Linux
+	// /tmp), so the home-first classifier yields a `-tmp` name. Windows %TEMP%
+	// lives under the profile, which the upstream classifier treats as
+	// home-relative by design.
+	it.skipIf(process.platform === "win32")("stores temp-root cwd sessions under -tmp-prefixed directories", () => {
 		const tempCwd = path.join(testAgentDir, `temp-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -208,7 +212,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(path.dirname(sessionFile)).toBe(path.join(getSessionsDir(), expectedTempSessionDirName(tempCwd)));
 	});
 
-	it("migrates legacy temp-root absolute session dirs to -tmp prefixes", () => {
+	it.skipIf(process.platform === "win32")("migrates legacy temp-root absolute session dirs to -tmp prefixes", () => {
 		const tempCwd = path.join(testAgentDir, `legacy-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -227,7 +231,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(fs.existsSync(path.join(expectedDir, "carried.jsonl"))).toBe(true);
 	});
 
-	it("migrates hashed-scheme session dirs back into legacy names", () => {
+	it.skipIf(process.platform === "win32")("migrates hashed-scheme session dirs back into legacy names", () => {
 		const tempCwd = path.join(testAgentDir, `hashed-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
