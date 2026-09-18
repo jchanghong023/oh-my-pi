@@ -844,20 +844,6 @@ const CATALOG_ENTRY_ENV_KEYS = Object.values(providerEntries()).flatMap(provider
 	return [[provider.id, resolver] as [string, KeyResolver]];
 });
 
-// Catalog providers with multiple env-var candidates keep their ordered list so
-// `getEnvApiKeyName` can echo whichever variable is currently set (mirrors
-// `$pickenv(...envVars)` priority: first non-empty wins). Single-var entries are
-// intentionally absent — their resolver is the plain name in `serviceProviderMap`.
-// Registry defs with several `envKeys` (e.g. `commandcode`) resolve to a computed
-// `$pickenv` resolver too, so they still need the catalog list to name the
-// variable actually in use.
-const CATALOG_ENTRY_ENV_NAMES: Record<string, readonly string[]> = Object.fromEntries(
-	Object.values(providerEntries()).flatMap(provider => {
-		const envVars = provider.envVars;
-		return envVars && envVars.length > 1 ? [[provider.id, envVars] as [string, readonly string[]]] : [];
-	}),
-);
-
 const serviceProviderMap: Record<string, KeyResolver> = {
 	...Object.fromEntries(CATALOG_ENTRY_ENV_KEYS),
 	...Object.fromEntries(
@@ -875,9 +861,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
  * Checks Bun.env, then cwd/.env, then ~/.env.
  */
 export function getEnvApiKey(provider: string): string | undefined {
-	// Own-key lookup only, like `getEnvApiKeyName`: a prototype-named id would
-	// otherwise resolve `Object.prototype.constructor` and return junk or throw.
-	const resolver = Object.hasOwn(serviceProviderMap, provider) ? serviceProviderMap[provider] : undefined;
+	const resolver = serviceProviderMap[provider];
 	if (typeof resolver === "string") {
 		return $env[resolver];
 	}
@@ -885,38 +869,15 @@ export function getEnvApiKey(provider: string): string | undefined {
 }
 
 /**
- * Name of the environment variable that backs `getEnvApiKey` for a provider.
- *
- * - String resolver (single-var catalog entry, registry envKeys string, or a
- *   legacy non-provider key) → that variable name.
- * - Catalog multi-var entry (`commandcode` with documented `COMMAND_CODE_API_KEY`
- *   + legacy `COMMANDCODE_API_KEY`) → the first variable in the catalog's
- *   ordered `envVars` list that is currently set, matching the priority used
- *   by `$pickenv(...envVars)` inside `getEnvApiKey`. Applies to registry-backed
- *   ids too when the registry resolves the same multi-var list to a computed
- *   `$pickenv` resolver.
- * - Registry computed resolver with no catalog multi-var list (Anthropic
- *   $pickenv, Vertex ADC, Bedrock probe, …) → undefined, because no single
- *   variable name describes the resolved source.
+ * Name of the environment variable that backs `getEnvApiKey` for a provider,
+ * when that provider maps to a single named variable (e.g. `github-copilot` →
+ * `COPILOT_GITHUB_TOKEN`). Returns undefined for providers whose env fallback
+ * is computed (multi-var pickers, Vertex ADC / Bedrock probes, …) since no
+ * single variable name describes the source.
  */
 export function getEnvApiKeyName(provider: string): string | undefined {
-	// Own-key lookup only, like `getEnvApiKey`: a prototype-named id would
-	// otherwise resolve `Object.prototype.constructor` and take the string branch.
-	const resolver = Object.hasOwn(serviceProviderMap, provider) ? serviceProviderMap[provider] : undefined;
-	if (typeof resolver === "string") return resolver;
-	// Own-key lookup only: `CATALOG_ENTRY_ENV_NAMES` inherits `Object.prototype`, so a
-	// prototype-named id (`constructor`, `toString`, `__proto__`, …) would otherwise
-	// read a truthy prototype value and throw when iterated.
-	const envVars = Object.hasOwn(CATALOG_ENTRY_ENV_NAMES, provider) ? CATALOG_ENTRY_ENV_NAMES[provider] : undefined;
-	if (envVars) {
-		for (const name of envVars) {
-			// `$env`, not `Bun.env`: `getEnvApiKey` resolves through cwd/.env and
-			// ~/.env fallbacks too, and the echoed name must agree with where the
-			// key actually came from.
-			if ($env[name]?.trim()) return name;
-		}
-	}
-	return undefined;
+	const resolver = serviceProviderMap[provider];
+	return typeof resolver === "string" ? resolver : undefined;
 }
 
 /**

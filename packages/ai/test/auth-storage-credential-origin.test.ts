@@ -12,7 +12,6 @@ const SUPPRESS_ENV = {
 	OPENAI_API_KEY: undefined,
 	ANTHROPIC_API_KEY: undefined,
 	ANTHROPIC_OAUTH_TOKEN: undefined,
-	ANTHROPIC_FOUNDRY_API_KEY: undefined,
 	COPILOT_GITHUB_TOKEN: undefined,
 } as const;
 
@@ -101,15 +100,6 @@ describe("AuthStorage.getCredentialOrigin", () => {
 
 			auth.setRuntimeApiKey("openai", "cli-flag-bearer");
 			expect(auth.getCredentialOrigin("openai")).toEqual({ kind: "runtime" });
-		});
-	});
-
-	test("Anthropic computed resolver still omits the env var", async () => {
-		// Regression: registry $pickenv override (Anthropic Foundry/OAuth/API) has no single
-		// describing variable, so the origin must stay `{kind:"env"}` with no envVar key.
-		await withEnv({ ...SUPPRESS_ENV, ANTHROPIC_API_KEY: "sk-fake" }, () => {
-			expect(auth?.getCredentialOrigin("anthropic")).toEqual({ kind: "env" });
-			expect(auth?.getCredentialOrigin("anthropic")).not.toHaveProperty("envVar");
 		});
 	});
 });

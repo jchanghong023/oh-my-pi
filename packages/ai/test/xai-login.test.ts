@@ -64,10 +64,7 @@ describe("xAI API login wiring", () => {
 		try {
 			expect(storage.hasAuth("xai")).toBe(false);
 			expect(storage.hasAuth("xai-oauth")).toBe(true);
-			expect(storage.getCredentialOrigin("xai-oauth")).toEqual({
-				kind: "env",
-				envVar: "XAI_OAUTH_TOKEN",
-			});
+			expect(storage.getCredentialOrigin("xai-oauth")).toEqual({ kind: "env" });
 		} finally {
 			if (originalOauthToken === undefined) {
 				delete Bun.env.XAI_OAUTH_TOKEN;

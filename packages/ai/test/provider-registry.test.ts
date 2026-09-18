@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
-import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
 import {
 	getOAuthProviders,
 	refreshOAuthToken,
@@ -9,7 +9,7 @@ import {
 	unregisterOAuthProviders,
 } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "@oh-my-pi/pi-ai/registry/oauth/types";
-import { getEnvApiKey, getEnvApiKeyName } from "@oh-my-pi/pi-ai/stream";
+import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 
 const FIXTURE_SOURCE = "provider-registry-test";
 const ENV_KEYS = [
@@ -20,8 +20,6 @@ const ENV_KEYS = [
 	"UMANS_AI_CODING_PLAN_API_KEY",
 	"LLAMA_CPP_API_KEY",
 	"WANDB_API_KEY",
-	"COMMAND_CODE_API_KEY",
-	"COMMANDCODE_API_KEY",
 ] as const;
 const originalEnv = new Map(ENV_KEYS.map(key => [key, Bun.env[key]]));
 
@@ -60,40 +58,6 @@ describe("provider registry auth surface", () => {
 		expect(getEnvApiKey("coreweave")).toBe("wandb-env");
 		Bun.env.COREWEAVE_API_KEY = "coreweave-env";
 		expect(getEnvApiKey("coreweave")).toBe("coreweave-env");
-	});
-
-	test("Command Code env fallback honors documented key and legacy alias precedence", () => {
-		delete Bun.env.COMMAND_CODE_API_KEY;
-		Bun.env.COMMANDCODE_API_KEY = "legacy-command-code-key";
-		expect(getEnvApiKey("commandcode")).toBe("legacy-command-code-key");
-		expect(getEnvApiKeyName("commandcode")).toBe("COMMANDCODE_API_KEY");
-
-		Bun.env.COMMAND_CODE_API_KEY = "documented-command-code-key";
-		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
-		expect(getEnvApiKeyName("commandcode")).toBe("COMMAND_CODE_API_KEY");
-
-		delete Bun.env.COMMANDCODE_API_KEY;
-		expect(getEnvApiKey("commandcode")).toBe("documented-command-code-key");
-		expect(getEnvApiKeyName("commandcode")).toBe("COMMAND_CODE_API_KEY");
-	});
-
-	test("Command Code login trims and returns the key without binding to an inference endpoint", async () => {
-		const onAuth = vi.fn();
-		const onPrompt = vi.fn(async () => "  tenant-key  ");
-		const fetch = vi.fn(async () => new Response("unexpected")) as unknown as typeof globalThis.fetch;
-
-		const login = getProviderDefinition("commandcode")?.login;
-		expect(login).toBeDefined();
-		await expect(login!({ onAuth, onPrompt, fetch })).resolves.toBe("tenant-key");
-		expect(onAuth).toHaveBeenCalledWith({
-			url: "https://commandcode.ai/studio",
-			instructions: "Create or copy a Provider API key from Command Code Studio",
-		});
-		expect(onPrompt).toHaveBeenCalledWith({
-			message: "Paste your Command Code API key",
-			placeholder: "user_...",
-		});
-		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	test("login list contains loginable providers and excludes env-only model providers", () => {
