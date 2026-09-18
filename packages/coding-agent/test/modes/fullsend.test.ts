@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { containsFullsend, highlightFullsend, renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/fullsend";
 import { containsOrchestrate, highlightOrchestrate } from "@oh-my-pi/pi-coding-agent/modes/orchestrate";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { containsUltrathink, highlightUltrathink } from "@oh-my-pi/pi-coding-agent/modes/ultrathink";
 import { containsWorkflow, highlightWorkflow } from "@oh-my-pi/pi-coding-agent/modes/workflow";
 

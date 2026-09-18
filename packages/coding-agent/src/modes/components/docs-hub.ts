@@ -3,7 +3,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import { DocsService } from "../../docs/service";
 import type { DocsIndexSummary, DocsProgress, DocsSearchResult } from "../../docs/types";
-import { theme } from "../theme/theme";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import { DocsAddWizard, type DocsAddWizardResult } from "./docs-add-wizard";
 
 export interface DocsHubCallbacks {

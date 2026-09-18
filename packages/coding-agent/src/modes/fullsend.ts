@@ -1,8 +1,8 @@
 import { prompt } from "@oh-my-pi/pi-utils";
 import fullsendNoticeTemplate from "../prompts/system/fullsend-notice.md" with { type: "text" };
-import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
-import { magicKeywordRegex } from "./magic-keyword-boundary";
-import { keywordInProse } from "./markdown-prose";
+import { createGradientHighlighter, type KeywordHighlighter } from "@oh-my-pi/pi-tui/prompt/gradient-highlight";
+import { magicKeywordRegex } from "@oh-my-pi/pi-tui/prompt/magic-keyword-boundary";
+import { keywordInProse } from "@oh-my-pi/pi-tui/prompt/markdown-prose";
 
 const FULLSEND_WORD = magicKeywordRegex("fullsend");
 

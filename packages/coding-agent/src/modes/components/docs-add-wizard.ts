@@ -1,5 +1,5 @@
 import { type Component, Input, matchesKey, truncateToWidth } from "@oh-my-pi/pi-tui";
-import { theme } from "../theme/theme";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 
 export interface DocsAddWizardResult {
 	name: string;

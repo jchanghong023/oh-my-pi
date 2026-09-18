@@ -6,7 +6,7 @@ import type { TUI } from "@oh-my-pi/pi-tui";
 import { Settings } from "../../../src/config/settings";
 import { DocsService } from "../../../src/docs/service";
 import { DocsHubComponent } from "../../../src/modes/components/docs-hub";
-import { initTheme } from "../../../src/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 function text(component: { render(width: number): string[] }): string {
 	return component

@@ -7,7 +7,7 @@ import type { Settings } from "../src/config/settings";
 import { DocsService } from "../src/docs/service";
 import type { DocsBuildResult, DocsProgress } from "../src/docs/types";
 import { DocsHubComponent } from "../src/modes/components/docs-hub";
-import { initTheme } from "../src/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 const tempDirs: string[] = [];
 const attack = "\x1b]0;OSC\x07\x1b[31mCSI\x1b[0m\rRETURN\nFORGED\tTAB\u0085";

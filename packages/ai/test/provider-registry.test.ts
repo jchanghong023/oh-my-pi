@@ -118,6 +118,7 @@ describe("provider registry auth surface", () => {
 				"google-gemini-cli",
 				"openai-codex",
 				"openrouter",
+				"stencil",
 				"zai-coding-plan",
 			].sort(),
 		);

@@ -1,4 +1,6 @@
-export type PrimaryAgentId = "main" | "discuss";
+import type { PrimaryAgentId } from "@oh-my-pi/pi-tui/status-line/types";
+
+export type { PrimaryAgentId };
 
 export interface PrimaryAgentProfile {
 	readonly id: PrimaryAgentId;

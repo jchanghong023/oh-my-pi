@@ -5,6 +5,17 @@
 
 - Fixed the reported credential source for providers with multiple candidate environment variables: the echoed variable name now also resolves through cwd/.env and ~/.env, matching where `getEnvApiKey` actually finds the key.
 - Fixed Anthropic prompt-cache breakpoints stalling on sessions with mid-conversation tool changes: the rolling tail no longer parks on tool-control messages that cannot carry `cache_control`, so the growing message tail keeps its breakpoint instead of being re-billed as uncached input ([#12318](https://github.com/can1357/oh-my-pi/issues/12318)).
+- Fixed auth-broker client config resolution failing silently on Windows when reading the token file or `config.yml`; reads now use `node:fs` instead of `Bun.file`.
+
+## [18.2.5] - 2026-09-17
+
+### Added
+
+- Added support for templating and custom base and authentication URLs in OAuth flows.
+
+### Fixed
+
+- Fixed Anthropic prompt-cache breakpoints stalling when conversations include mid-conversation tool changes, preventing growing message tails from being unnecessarily re-billed as uncached input.
 
 ## [18.2.4] - 2026-09-17
 
