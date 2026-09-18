@@ -29,7 +29,7 @@ import { buildInitialMessage } from "./cli/initial-message";
 import type { selectSession } from "./cli/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { configureStartupLogging } from "./cli/startup-logging";
-import { compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
+import { CanaryChannelUnavailableError, compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { setCompanyChatContextWindow } from "./config/company-models";
 import {
@@ -162,7 +162,11 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		// SemVer precedence alone ignores build metadata, so a newer fork build of
 		// the same base (`18.1.18+fork.189` vs `+fork.188`) would not be announced.
 		return compareUpdateVersions(release.version, currentVersion) > 0 ? release.version : undefined;
-	} catch {
+	} catch (error) {
+		// The canary misconfiguration is deterministic and actionable; let it
+		// reach the startup notification path instead of vanishing like a
+		// transient network failure.
+		if (error instanceof CanaryChannelUnavailableError) throw error;
 		return undefined;
 	}
 }
@@ -2351,7 +2355,15 @@ export async function runRootCommand(
 				// `startup.checkUpdate` override only suppresses the banner.
 				const versionCheckPromise = parsedArgs.offline
 					? Promise.resolve(undefined)
-					: checkForNewVersion(VERSION).catch(() => undefined);
+					: checkForNewVersion(VERSION).catch(error => {
+							// Surface the one deterministic misconfiguration (fork binary +
+							// `update.channel=canary`); everything else stays silent, as
+							// before.
+							if (!(error instanceof CanaryChannelUnavailableError)) return undefined;
+							if (isInteractive) notifs.push({ kind: "warn", message: error.message });
+							else process.stderr.write(`${error.message}\n`);
+							return undefined;
+						});
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

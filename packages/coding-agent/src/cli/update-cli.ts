@@ -74,6 +74,14 @@ function currentNativeTag(): string {
 export type ReleaseDist = "npm" | "binary";
 export type UpdateChannel = "stable" | "canary";
 
+/**
+ * Fork binaries publish stable releases only, so a canary channel request can
+ * never resolve. Distinct from a plain Error so the startup version check can
+ * surface this deterministic misconfiguration instead of swallowing it with
+ * transient network failures.
+ */
+export class CanaryChannelUnavailableError extends Error {}
+
 /** npm package names a release installs: the agent package and its natives companion. */
 export interface ReleasePackages {
 	pkg: string;
@@ -1016,7 +1024,7 @@ export async function getLatestRelease(
 ): Promise<ReleaseInfo> {
 	if (UPDATE_REPOSITORY) {
 		if (options.channel === "canary") {
-			throw new Error(
+			throw new CanaryChannelUnavailableError(
 				`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`,
 			);
 		}
