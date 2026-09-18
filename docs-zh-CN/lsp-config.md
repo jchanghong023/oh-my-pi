@@ -21,23 +21,23 @@
 
 OMP 按从低到高的优先级合并来自多个来源的 LSP 配置：
 
-| 优先级       | 位置                                                                                                         |
-| -----------: | ------------------------------------------------------------------------------------------------------------ |
-|       最低   | `~/lsp.json`、`~/.lsp.json`、`~/lsp.yaml`、`~/.lsp.yaml`、`~/lsp.yml`、`~/.lsp.yml`                         |
-|              | 插件 LSP 配置（marketplace / `--plugin-dir` 根目录）                                                          |
-|              | 用户配置目录：当前原生代理目录，然后是 `~/.claude/lsp.*`、`~/.codex/lsp.*`、`~/.gemini/lsp.*`                |
-|              | 当前工作目录配置目录：`<cwd>/.omp/lsp.*`、`<cwd>/.claude/lsp.*`、`<cwd>/.codex/lsp.*`、`<cwd>/.gemini/lsp.*` |
-|       最高   | 当前工作目录根：`<cwd>/lsp.*` 和 `<cwd>/.lsp.*`                                                               |
+| 优先级 | 位置                                                                                                         |
+| -----: | ------------------------------------------------------------------------------------------------------------ |
+|   最低 | `~/lsp.json`、`~/.lsp.json`、`~/lsp.yaml`、`~/.lsp.yaml`、`~/lsp.yml`、`~/.lsp.yml`                          |
+|        | 插件 LSP 配置（marketplace / `--plugin-dir` 根目录）                                                         |
+|        | 用户配置目录：当前原生 agent 目录，然后是 `~/.claude/lsp.*`、`~/.codex/lsp.*`、`~/.gemini/lsp.*`             |
+|        | 当前工作目录配置目录：`<cwd>/.omp/lsp.*`、`<cwd>/.claude/lsp.*`、`<cwd>/.codex/lsp.*`、`<cwd>/.gemini/lsp.*` |
+|   最高 | 当前工作目录根：`<cwd>/lsp.*` 和 `<cwd>/.lsp.*`                                                              |
 
 每个位置都接受 `.json`、`.yaml` 和 `.yml`，包括隐藏的变体。当同一位置存在多个变体时，从高到低的优先级为 `lsp.json`、`.lsp.json`、`lsp.yaml`、`.lsp.yaml`、`lsp.yml`、`.lsp.yml`。
 
 合并按服务器浅合并：更高优先级的服务器对象仅覆盖其顶层字段，但像 `settings`、`initOptions`、`capabilities` 和 `workspaceReadyTimings` 这类对象类型的字段会整体替换较低优先级的值，而不是深度合并它们。覆盖文件中未列出的服务器保持内置默认值。
 
-原生用户配置目录遵循 `PI_CONFIG_DIR` 和当前 profile；`~/.omp/agent/lsp.json` 是默认 profile 的形式。此共享配置查找不会将 `PI_CODING_AGENT_DIR` 作为任意的替换基础。项目和当前工作目录来源不会向上遍历父级目录。
+原生用户配置目录遵循 `PI_CONFIG_DIR` 和当前激活的 profile；`~/.omp/agent/lsp.json` 是默认 profile 的写法。此共享配置查找不会将 `PI_CODING_AGENT_DIR` 用作任意的替换基准。项目和当前工作目录来源不会向上遍历父级目录。
 
 **推荐位置：**
 
-- 用户全局偏好 → 当前原生代理目录中的 `lsp.json`
+- 用户全局偏好 → 当前原生 agent 目录中的 `lsp.json`
 - 项目特定覆盖 → `<cwd>/.omp/lsp.json`
 
 > **注意：** 仅当至少有一个可读的配置文件贡献了非空的服务器映射时，才会跳过自动检测模式。仅设置了 `idleTimeoutMs` 的配置仍会使用内置自动检测。对于带服务器覆盖的情况，OMP 首先将它们合并到所有默认值之上，然后保留那些根标记与当前工作目录匹配、二进制可解析、且合并后配置未设置为 `disabled` 的服务器。
@@ -73,20 +73,20 @@ JSON 和 YAML 均可接受。顶层对象既可以使用 `servers` 包装键，�
 
 ## ServerConfig 字段
 
-| 字段                     | 类型       | 新建服务器是否必填  | 描述                                                                                            |
-| ----------------------- | ---------- | ------------------: | ---------------------------------------------------------------------------------------------- |
-| `command`               | `string`   |                  是 | 二进制名称（通过本地 bins / PATH 解析）或绝对路径                                              |
-| `args`                  | `string[]` |                 否 | 传递给二进制的参数                                                                              |
-| `fileTypes`             | `string[]` |                  是 | 该服务器处理的文件扩展名，例如 `[".ts", ".tsx"]`                                                |
+| 字段                    | 类型       | 新建服务器是否必填 | 描述                                                                                           |
+| ----------------------- | ---------- | -----------------: | ---------------------------------------------------------------------------------------------- |
+| `command`               | `string`   |                 是 | 二进制名称（通过本地 bins / PATH 解析）或绝对路径                                              |
+| `args`                  | `string[]` |                 否 | 传递给二进制的参数                                                                             |
+| `fileTypes`             | `string[]` |                 是 | 该服务器处理的文件扩展名，例如 `[".ts", ".tsx"]`                                               |
 | `languageId`            | `string`   |                 否 | 在 `textDocument/didOpen` 中发送的 LSP language id；省略时从文件路径推断                       |
-| `rootMarkers`           | `string[]` |                  是 | 指示项目根的文件/目录；支持一级通配符模式，例如 `*.cabal`                                        |
-| `initOptions`           | `object`   |                 否 | 在 LSP 握手期间作为 `initializationOptions` 发送                                                |
-| `settings`              | `object`   |                 否 | 通过 `workspace/didChangeConfiguration` 推送                                                    |
-| `disabled`              | `boolean`  |                 否 | 设置为 `true` 以禁用此服务器                                                                    |
-| `warmupTimeoutMs`       | `number`   |                 否 | 该服务器的启动超时（毫秒）                                                                      |
-| `isLinter`              | `boolean`  |                 否 | 标记仅用于 lint/格式化的服务器；将其排除在类型智能操作之外                                       |
-| `capabilities`          | `object`   |                 否 | 选择性启用的服务器特定功能；参见 [Capabilities](#capabilities)                                   |
-| `workspaceReadyTimings` | `object`   |                 否 | 高级的 rust-analyzer 工作区就绪时序覆盖；见下文                                                  |
+| `rootMarkers`           | `string[]` |                 是 | 指示项目根的文件/目录；支持一级通配符模式，例如 `*.cabal`                                      |
+| `initOptions`           | `object`   |                 否 | 在 LSP 握手期间作为 `initializationOptions` 发送                                               |
+| `settings`              | `object`   |                 否 | 通过 `workspace/didChangeConfiguration` 推送                                                   |
+| `disabled`              | `boolean`  |                 否 | 设置为 `true` 以禁用此服务器                                                                   |
+| `warmupTimeoutMs`       | `number`   |                 否 | 该服务器的启动超时（毫秒）                                                                     |
+| `isLinter`              | `boolean`  |                 否 | 标记仅用于 lint/格式化的服务器；将其排除在类型智能操作之外                                     |
+| `capabilities`          | `object`   |                 否 | 选择性启用的服务器特定功能；参见 [Capabilities](#capabilities)                                 |
+| `workspaceReadyTimings` | `object`   |                 否 | 高级的 rust-analyzer 工作区就绪时序覆盖；见下文                                                |
 
 对于内置服务器的覆盖，必填字段可以省略，因为它们在验证之前会被继承。一个真正的新服务器需要上述三个必填字段。`resolvedCommand` 和 `createClient` 是运行时拥有的字段，不得在配置中设置。
 
@@ -213,13 +213,14 @@ servers:
 
 以下服务器随 `defaults.json` 提供，可被自动检测：
 
-| Server key                    | Language(s)                   | Binary                            |
+| 服务器键                      | 语言                          | 二进制文件                        |
 | ----------------------------- | ----------------------------- | --------------------------------- |
 | `rust-analyzer`               | Rust                          | `rust-analyzer`                   |
 | `clangd`                      | C, C++, ObjC                  | `clangd`                          |
 | `zls`                         | Zig                           | `zls`                             |
 | `gopls`                       | Go                            | `gopls`                           |
-| `typescript-language-server`  | TypeScript, JavaScript        | `typescript-language-server`      |
+| `typescript-language-server`  | TypeScript, JavaScript (≤ 6)  | `typescript-language-server`      |
+| `typescript-native`           | TypeScript, JavaScript (7+)   | `tsc --lsp --stdio`               |
 | `denols`                      | TypeScript, JavaScript (Deno) | `deno`                            |
 | `biome`                       | TS/JS/JSON (linter)           | `biome`                           |
 | `eslint`                      | TS/JS/Vue/Svelte (linter)     | `vscode-eslint-language-server`   |
@@ -233,6 +234,7 @@ servers:
 | `pyright`                     | Python                        | `pyright-langserver`              |
 | `basedpyright`                | Python                        | `basedpyright-langserver`         |
 | `pylsp`                       | Python                        | `pylsp`                           |
+| `ty`                          | Python                        | `ty`                              |
 | `ruff`                        | Python (linter)               | `ruff`                            |
 | `jdtls`                       | Java                          | `jdtls`                           |
 | `kotlin-lsp`                  | Kotlin                        | `kotlin-lsp`                      |
@@ -268,3 +270,5 @@ servers:
 | `sourcekit-lsp`               | Swift                         | `sourcekit-lsp`                   |
 | `swiftlint`                   | Swift (linter)                | `swiftlint`                       |
 | `tlaplus`                     | TLA+                          | `tlapm_lsp`                       |
+
+每个项目只保留一个 TypeScript 服务器：当解析到的 `tsc` 属于不含 `lib/tsserver.js` 的 TypeScript 安装（TypeScript 7+）时，`typescript-native` 胜出而 `typescript-language-server` 被丢弃，因为它无法驱动该安装；否则 `typescript-native` 被丢弃，因为较旧的 `tsc` 会拒绝 `--lsp` 参数。

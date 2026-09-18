@@ -17,7 +17,7 @@ features:
   - title: IDE 级代码智能
     details: 通过 LSP 导航定义、引用与诊断，让跨文件修改更可靠。
     link: /lsp-config
-  - title: 并行专业 Agent
+  - title: 并行专业 agent
     details: 把独立工作交给专业子 agent，并集中监督结果与依赖。
     link: /task-agent-discovery
   - title: 灵活的模型接入

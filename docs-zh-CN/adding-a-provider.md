@@ -26,7 +26,7 @@ provider——这是网关和 API key provider 的常见情况，因为流式分
 
 1. **在 `CATALOG_PROVIDERS` 中添加一项**，
    位于 `packages/catalog/src/provider-models/descriptors.ts`，包含 `id`、
-   `defaultModel`、作为 `envVars` 的普通 API key 环境变量名（们），以及
+   `defaultModel`、作为 `envVars` 的普通 API key 环境变量名（一个或多个），以及
    （通常）一个 `createModelManagerOptions` 工厂。对于一个
    简单的 OpenAI 兼容网关，可在
    `packages/catalog/src/provider-models/openai-compat.ts` 中构建工厂，或通过
@@ -65,10 +65,10 @@ provider——这是网关和 API key provider 的常见情况，因为流式分
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`                         | 必填。`KnownProvider` 的成员。                                                                                                                                                                                                      |
 | `defaultModel`               | 必填。在没有显式选择时优先使用的模型。                                                                                                                                                                                              |
-| `envVars`                    | 运行时 API key 回退（`getEnvApiKey`）使用的环境变量名（们），按顺序排列。                                                                                                                                                            |
+| `envVars`                    | 运行时 API key 回退（`getEnvApiKey`）使用的环境变量名（一个或多个），按顺序排列。                                                                                                                                                    |
 | `createModelManagerOptions`  | 运行时模型发现工厂。若存在（且非 `specialModelManager`）⇒ 出现在 `PROVIDER_DESCRIPTORS` 中。                                                                                                                                         |
 | `allowUnauthenticated`       | 即使没有 key，运行时也会创建模型管理器。                                                                                                                                                                                            |
-| `dynamicModelsAuthoritative` | 成功的发现会替换内建的模型。                                                                                                                                                                                                        |
+| `dynamicModelsAuthoritative` | 成功的发现会替换随包内置的模型。                                                                                                                                                                                                    |
 | `catalogDiscovery`           | 用于离线目录生成（`generate-models.ts`）的 `{ label, envVars?, oauthProvider?, allowUnauthenticated? }`。此处的 `envVars` 在生成使用不同凭据时（例如 `cursor`）覆盖条目级列表。                                                          |
 | `specialModelManager`        | 定制的运行时工厂（`google-antigravity` / `google-gemini-cli` / `openai-codex`）；会从 `PROVIDER_DESCRIPTORS` 中排除。                                                                                                                |
 
@@ -101,7 +101,7 @@ provider——这是网关和 API key provider 的常见情况，因为流式分
 - 重量级 provider 本地 OAuth 流程对应的 `login` / `refreshToken` 必须通过动态导入
   thunk（`const { loginX } = await import("./oauth/x"); return loginX(cb);`）
   访问相邻的 `registry/oauth/*` 模块，
-  以避免这些流程进入急切启动的依赖图。
+  让这些流程不进入启动时急切加载的依赖图。
 - 所有 OAuth 代码位于 `registry/oauth/` 下：共享的流程基础设施
   （`callback-server`、`pkce`、`google-oauth-shared`、`types`、运行时 API
   `index`）以及每一个 provider 流程，包括被流式和用量层复用的

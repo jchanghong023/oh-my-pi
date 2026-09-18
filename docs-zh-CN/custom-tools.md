@@ -6,7 +6,7 @@
 
 ## 是什么（以及不是什么）
 
-- **Custom tool（自定义工具）**：在模型轮次中可被调用（`execute` + 参数 schema）。
+- **Custom tool（自定义工具）**：在轮次中可被模型调用（`execute` + 参数 schema）。
 - **Extension（扩展）**：生命周期/事件框架，可以注册工具并拦截/修改事件。
 - **Hook（钩子）**：通过扩展运行器加载的遗留事件驱动拦截器 API。
 - **Skill（技能）**：静态的指引/上下文包，不是可执行的工具代码。
@@ -54,9 +54,10 @@ CustomTool.execute(toolCallId, params, onUpdate, ctx, signal)
 
 ### 重要行为
 
-- 重复解析的路径会被去重。
-- 工具名称冲突会对照内置工具和已加载的自定义工具进行拒绝。
-- `.md` 和 `.json` 文件会被某些提供者作为工具元数据发现，但可执行模块加载器会拒绝将它们作为可运行的工具。
+- 重复解析出的路径会被去重。
+- 工具名称冲突会对照内置工具和已加载的自定义工具予以拒绝。
+- 自动工具目录扫描会发现 `.ts` 和 `.js` 模块；原生 OMP 的发现还会检查直接子目录中的 `index.ts`。可执行模块发现会排除 `.d.ts`，并在工具名称去重之前过滤掉元数据和脚本。`.md` 和 `.json` 等声明式元数据仍然可供能力消费者使用，但不会被加载为可执行工具。
+- `.mjs` 和 `.cjs` 模块可以通过显式配置的路径或插件声明的工具条目加载，但上述工具目录扫描不会自动发现它们。显式配置的 `.md` 或 `.json` 路径仍会产生加载错误。
 - 相对配置路径相对于 `cwd` 解析；`~` 会被展开。
 
 ## 模块契约
@@ -142,21 +143,21 @@ execute(toolCallId, params, onUpdate, ctx, signal);
 ```
 
 - `params` 通过 `Static<TParams>` 由其 omptype 或 TypeBox schema 提供静态类型。
-- 运行时的参数校验会在 agent 循环中、`execute` 执行之前发生。
-- `onUpdate` 用于为 UI 流式输出发送部分结果。
+- 运行时的参数校验会在 agent 循环中、执行之前发生。
+- `onUpdate` 为 UI 流式输出发出部分结果。
 - `ctx` 包含 `sessionManager`、`modelRegistry`、当前的 `model`、`isIdle()`、`hasQueuedMessages()`、`abort()`，以及可选的 `settings`、`fetch`、`localProtocolOptions` 和 `autoApprove`。
 - `signal` 携带取消信号，可能为 `undefined`。
 
 会话引导桥接器将自定义工具转换为扩展的 `ToolDefinition`，并以正确的参数顺序转发调用。`CustomToolAdapter` 仍然可供那些直接将自定义工具适配为 agent 工具接口的库使用者使用。
 
-工具定义还可以声明 `strict`、`hidden`、`loadMode`、`deferrable`、`mcpServerName`、`mcpToolName` 和 `approval`。当 `loadMode` 被省略时，自定义工具名称默认为 `"discoverable"`，但规范的必备内置工具名称（`read`、`write`、`bash`、`edit`、`glob`、`computer`、`eval`、`task`、`hub`、`learn` 和 `manage_skill`）除外，它们默认为 `"essential"`，这样包装器或重新注册就不会降级它们。显式指定的 `loadMode` 始终优先生效；要将其他任何工具保持为顶层，请使用 `"essential"`。尽管公开的 `CustomTool` 类型也声明了 `formatApprovalDetails`，但 SDK/发现桥接器不会将该回调传递到已注册的工具定义中，因此在正常的集成路径上无法自定义审批详情……
+工具定义还可以声明 `strict`、`hidden`、`loadMode`、`deferrable`、`mcpServerName`、`mcpToolName` 和 `approval`。当 `loadMode` 被省略时，自定义工具名称默认为 `"discoverable"`，但规范的必备内置工具名称（`read`、`write`、`bash`、`edit`、`glob`、`computer`、`eval`、`task`、`hub`、`learn` 和 `manage_skill`）除外——它们默认为 `"essential"`，这样包装器或重新注册就不会将其降级。显式指定的 `loadMode` 始终优先生效；要将其他任何工具保持在顶层，请使用 `"essential"`。尽管公开的 `CustomTool` 类型也声明了 `formatApprovalDetails`，但 SDK/发现桥接器不会将该回调传递到已注册的工具定义中，因此在正常的集成路径上无法用它自定义审批详情。
 
 ## 工具如何暴露给模型
 
-- 会话引导将包含的 SDK 提供和发现到的自定义工具包装为扩展的工具定义；库使用者也可以直接使用 `CustomToolAdapter`。
+- 会话引导会将纳入的 SDK 提供和发现到的自定义工具包装为扩展的工具定义；库使用者也可以改为直接使用 `CustomToolAdapter`。
 - 它们按名称插入到会话工具注册表中。
-- 在非受限的 SDK 引导中，自定义工具和扩展注册的工具会被强制包含在初始激活集合中。受限会话会排除 SDK 提供的自定义工具，除非设置 `allowRestrictedCustomTools: true`，并且只有在某个自定义工具的名称出现在 `toolNames` 中时才会将其作为已启用的工具暴露。
-- 命令行 `--tools` 目前仅校验内置工具名称；自定义工具的纳入通过发现/注册路径和 SDK 选项处理。
+- 在非受限的 SDK 引导中，自定义工具和扩展注册的工具会被强制包含在初始激活集合中。受限会话会排除 SDK 提供的自定义工具，除非设置 `allowRestrictedCustomTools: true`，并且只有当某个已启用自定义工具的名称出现在 `toolNames` 中时才会将其暴露。
+- CLI 的 `--tools` 目前仅校验内置工具名称；自定义工具的纳入通过发现/注册路径和 SDK 选项处理。
 
 ## 渲染钩子
 
@@ -188,19 +189,19 @@ TUI 中的运行时行为：
 
 ### 同步/异步失败
 
-- 在 `execute` 中抛出（或返回 rejected promise）被视为工具失败。
+- 在 `execute` 中抛出异常（或 promise 被拒绝）会被视为工具失败。
 - Agent 运行时将失败转换为带有 `isError: true` 和错误文本内容的工具结果消息。
 - 使用扩展包装器时，`tool_result` 处理器可以进一步重写 content/details，甚至覆盖错误状态。
 
 ### 取消
 
 - Agent 的中止会通过 `AbortSignal` 传播到 `execute`。
-- 将 `signal` 转发到子进程工作（`pi.exec(..., { signal })`）以支持协作式取消。
+- 将 `signal` 转发给子进程工作（`pi.exec(..., { signal })`）以实现协作式取消。
 - `ctx.abort()` 允许工具请求中止当前的 agent 操作。
 
 ### onSession 错误
 
-- `onSession` 中的错误会被捕获并以警告形式记录；它们不会导致会话崩溃。
+- `onSession` 中的错误会被捕获并作为警告记录；它们不会导致会话崩溃。
 
 ## 设计时需要考虑的真正约束
 

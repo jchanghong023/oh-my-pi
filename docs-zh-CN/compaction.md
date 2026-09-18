@@ -1,6 +1,6 @@
 # 压缩与分支摘要
 
-压缩与分支摘要是两种机制，让长会话保持可用、同时不丢失先前工作的上下文。
+压缩与分支摘要是让长会话保持可用、同时不丢失先前工作上下文的两种机制。
 
 - **压缩（Compaction）** 将旧历史改写为当前分支上的一条摘要。
 - **分支摘要（Branch summary）** 在 `/tree` 导航过程中捕获被放弃的分支上下文。
@@ -10,7 +10,7 @@
 ## 关键实现文件
 
 - `packages/agent/src/compaction/compaction.ts`（上下文完整的摘要生成与交接文档生成）
-- `packages/snapcompact/src/snapcompact.ts`（snapcompact 策略：将历史以密集位图归档）
+- `packages/snapcompact/src/snapcompact.ts`（snapcompact 策略：将历史归档为密集位图图像）
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
 - `packages/agent/src/compaction/compaction-v2-streaming.ts`（provider 原生流式压缩）
@@ -26,18 +26,19 @@
 
 ## 会话条目模型
 
-压缩和分支摘要是头等的会话条目，而不是普通的 assistant/user 消息。
+压缩和分支摘要是一等会话条目，而不是普通的 assistant/user 消息。
 
 - `CompactionEntry`
-  - `type: "compaction"`
-  - `summary`，可选的 `shortSummary`
-  - `firstKeptEntryId`（压缩边界）
-  - `tokensBefore`
-  - 可选的 `details`、`preserveData`、`fromExtension`
+   - `type: "compaction"`
+   - `summary`，可选的 `shortSummary`
+   - `firstKeptEntryId`（压缩边界）
+   - `tokensBefore`
+   - 可选的 `details`、`preserveData`、`fromExtension`
+   - 可选的 `providerReplayThroughEntryId`（native 重放快照覆盖的最后一个条目）
 - `BranchSummaryEntry`
-  - `type: "branch_summary"`
-  - `fromId`、`summary`
-  - 可选的 `details`、`fromExtension`
+   - `type: "branch_summary"`
+   - `fromId`、`summary`
+   - 可选的 `details`、`fromExtension`
 
 在重建上下文时（`buildSessionContext`）：
 
@@ -54,6 +55,10 @@
 
 而 `custom` 消息则作为 developer 消息直接以原始内容透传（不使用模板）。
 
+native 重放还要求活动模型匹配相应的 provider 并使用 Responses 家族 API。一个独立的 native 压缩端点并不会让 Chat Completions 或 Anthropic 编码器获得消费其输出的能力。
+
+禁用未来的 native 压缩并不会禁用对既有负载的正常重放。压缩准备有一项独立的、更严格的重用策略：本地摘要必须重新展开原始消息，而不是把一个不透明的占位符当作可读摘要。
+
 ## 压缩流程
 
 ### 触发条件
@@ -61,11 +66,11 @@
 压缩/上下文维护可以通过六种方式运行：
 
 1. **手动上下文压缩**：`/compact [instructions]` 调用 `AgentSession.compact(...)`。
-2. **自动溢出恢复**：在同模型 assistant 报错且匹配上下文溢出后。
+2. **自动溢出恢复**：在同模型 assistant 报错且匹配上下文溢出之后。
 3. **自动不完整输出恢复**：在同模型 assistant 消息以 `stopReason === "length"` 结束时（OpenAI/Codex `response.incomplete`）。
-4. **自动阈值维护**：在成功的轮次之后，上下文超过解析得到的阈值时。
+4. **自动阈值维护**：在成功的轮次之后，上下文超过解析出的阈值时。
 5. **轮次中途阈值维护**：在工具循环轮次跨过阈值且 `compaction.midTurnEnabled !== false` 时，在下一次 provider 请求之前。
-6. **空闲维护**：`runIdleCompaction()` 可以以 `"idle"` 为 reason 触发相同的自动维护路径。
+6. **空闲维护**：`runIdleCompaction()` 可以以 `"idle"` 为 reason 调用相同的自动维护路径。
 
 ### 压缩形态（可视化）
 
@@ -101,34 +106,61 @@ What the LLM sees:
     prompt   from cmp          messages from firstKeptEntryId
 ```
 
-### 溢出/不完整恢复 与 阈值/空闲维护
+### 溢出/不完整恢复与阈值/空闲维护
 
-自动路径在设计上有所不同：
+各自动路径的差异是有意为之的：
 
 - **溢出恢复**
-  - 触发：检测到当前模型的 assistant 错误是上下文溢出，且该错误不早于最近一次压缩。
-  - 失败的 assistant 错误消息在重试前从活动的 agent 状态中移除。
-  - 优先尝试上下文提升（context promotion）；若配置了更大的模型，则 agent 切换模型后重试而不进行压缩。
-  - 若提升不可用且压缩已启用，则自动维护以 `reason: "overflow"` 和 `willRetry: true` 遍历 `compaction.methodOrder`；由于交接请求会复用溢出的输入，因此跳过交接。
-  - 成功时调度 `agent.continue()` 以重试该轮次。
+   - 触发：检测到当前模型的 assistant 错误为上下文溢出，且该错误不早于最近一次压缩。
+   - 失败的 assistant 错误消息在重试前从活动 agent 状态中移除。
+   - 优先尝试上下文提升；若配置了更大的模型，则 agent 切换模型并重试，而不进行压缩。
+   - 若提升不可用且压缩已启用，自动维护会以 `reason: "overflow"` 和 `willRetry: true` 遍历 `compaction.methodOrder`；由于交接请求会复用已溢出的输入，因此跳过交接。
+   - 成功时，调度 `agent.continue()` 以重试该轮次。
+
 - **不完整输出恢复**
-  - 触发：同模型 assistant 消息以 `stopReason === "length"` 结束，且该消息不早于最近一次压缩。
-  - 不完整的 assistant 消息在恢复前从活动 agent 状态中移除。
-  - 优先尝试上下文提升。
-  - 若提升不可用且压缩已启用，则自动维护以 `reason: "incomplete"` 和 `willRetry: true` 遍历 `compaction.methodOrder`。
-  - 与溢出不同，可达的 `handoff` 偏好可以运行，因为输入上下文仍然可用。
-  - 软压缩成功时调度 `agent.continue()` 以重试该轮次。
+   - 触发：同模型 assistant 消息以 `stopReason === "length"` 结束，且该消息不早于最近一次压缩。
+   - 不完整的 assistant 消息在恢复前从活动 agent 状态中移除。
+   - 优先尝试上下文提升。
+   - 若提升不可用且压缩已启用，自动维护会以 `reason: "incomplete"` 和 `willRetry: true` 遍历 `compaction.methodOrder`。
+   - 与溢出不同，可达的 `handoff` 偏好可以运行，因为输入上下文仍然可用。
+   - 软压缩成功时，调度 `agent.continue()` 以重试该轮次。
+
 - **阈值维护**
-  - 触发：成功的、非错误的 assistant 消息，其调整后上下文 token 数超过 `resolveThresholdTokens(...)`。
-  - 当 `compaction.midTurnEnabled !== false` 时，轮次中途维护也会在下一次 provider 请求之前检查安全的工具循环边界。
-  - 工具输出剪枝（tool-output pruning）可以在阈值比较前降低测得的 token 数。
-  - 上下文提升在轮次后压缩之前先尝试。
-  - 若提升不可用，则自动维护以 `reason: "threshold"` 和 `willRetry: false` 遍历 `compaction.methodOrder`。
-  - 当 `handoff` 是下一个可运行方法时，轮次后阈值维护通常会调度一个 post-prompt 任务来生成交接文档并将其作为压缩条目提交；pre-prompt 和 mid-turn 检查以内联方式运行所有方法，以避免与下一轮竞争。
-  - 成功时，如果 `compaction.autoContinue !== false`，轮次后维护会从 `prompts/system/auto-continue.md` 调度一个由 agent 编写的 developer 自动续接 prompt；mid-turn 维护永远不会调度单独的续接，因为核心循环已经拥有了下一个 provider 请求。
+   - 触发：成功的、非错误的 assistant 消息，其调整后的上下文 token 数超过 `resolveThresholdTokens(...)`。测量值来自 `calculateContextTokens(...)`，它会减去 provider 侧的编排 token（计费，但从不重放进对话前缀），因此自动压缩与上下文提升阈值不会因它们而虚高。
+   - 当 `compaction.midTurnEnabled !== false` 时，轮次中途维护也会在下一次 provider 请求之前检查安全的工具循环边界。
+   - 工具输出剪枝可以在阈值比较之前降低测得的 token 数。
+   - 上下文提升在轮次后压缩之前先尝试。
+   - 若提升不可用，自动维护会以 `reason: "threshold"` 和 `willRetry: false` 遍历 `compaction.methodOrder`。
+   - 当 `handoff` 是下一个可运行方法时，轮次后阈值维护通常会调度一个 post-prompt 任务，生成交接文档并将其作为压缩条目提交；pre-prompt 与轮次中途检查则内联运行所有方法，以避免与下一轮竞争。
+   - 成功时，若 `compaction.autoContinue !== false`，轮次后维护会从 `prompts/system/auto-continue.md` 调度一个由 agent 撰写的 developer 自动续接 prompt；轮次中途维护从不调度单独的续接，因为核心循环已经掌握下一次 provider 请求。
+
 - **空闲维护**
-  - 触发：`runIdleCompaction()` 在未流式处理或已压缩时。
-  - 使用 `reason: "idle"` 且之后不会自动续接。
+   - 触发：`runIdleCompaction()`，在未处于流式处理且未在压缩时。
+   - 使用 `reason: "idle"`，且之后不会自动续接。
+
+### 实验性笔记支撑的上下文窗口
+
+在 `/settings` 中启用**笔记支撑的上下文窗口（实验性）**，然后重启会话以刷新其工具清单。等价的配置为：
+
+```yaml
+compaction:
+   experimentalContextManagement: true
+```
+
+这一可选开启的模式用本地上下文窗口边界取代自动摘要再压缩。它同样适用于未显式指定模式或聚焦文本的 `/compact`。显式压缩模式和聚焦指令保留其既有行为。
+
+- `context_notes` 在省略 `text` 时读取当前笔记本，提供 `text` 时替换它，使用 `text: ""` 清空它。
+- 笔记本修订是活动分支上的日志条目。只有最新的可见修订会被注入模型上下文，包括在恢复或 fork 之后。上下文重置会清空可见笔记本。每次替换限制为 **16,384 UTF-8 字节**；超限写入会失败且不替换笔记。
+- `new_context` 请求在下一个安全的工具循环边界进行轮转（rollover）。轮转保留完整的近期工具调用/结果单元和笔记本，而不调用摘要模型。接近自动阈值时，模型会收到每个窗口一次的提醒，提示其保存工作状态。
+- `read` 和 `grep` 可以通过 `history://current/full` 恢复原始消息和工具输出。文本包含稳定的条目 ID 和窗口边界。共享选择器可用，例如 `history://current/full:1-200` 和 `history://current/full:raw:1-200`。查询串、片段、末尾斜杠以及额外的路径组成部分都会被拒绝。
+- 完整历史路由绑定到调用会话的当前分支。它绝不会回退到其他已注册的 agent 或磁盘上的会话搜索。既有 `history://<id>` 路由保留其简洁会话记录行为。
+
+实验性轮转要求生效工具集包含 `context_notes`、`new_context`、`read` 和 `grep`。缺少全部四者的受限会话保留旧版维护。禁用该设置会恢复旧版压缩，并禁用实验性工具与完整历史路由；既有笔记仍保留在日志和 provider 上下文中。
+
+默认值为 `false`。这是对持久化笔记与可搜索历史的一套独立实现，以既有会话日志作为其唯一的会话记录存储。[^experimental-context-history]
+
+[^experimental-context-history]:
+    更早的剪枝或显式的破坏性历史操作无法通过启用该设置来撤销。文本历史将图像表示为标记。笔记本的质量与及时更新仍是模型的责任；该模式不会自动生成缺失的笔记。
 
 ### Shake 方法
 
@@ -138,18 +170,18 @@ What the LLM sees:
 
 ### Snapcompact 方法
 
-在 `compaction.methodOrder` 中包含 `snapcompact` 会将 LLM 摘要调用替换为本地、确定性的归档过程（`@oh-my-pi/snapcompact` 中的 `compact`）：
+在 `compaction.methodOrder` 中包含 `snapcompact` 会将 LLM 摘要调用替换为一个本地、确定性的归档过程（`@oh-my-pi/snapcompact` 中的 `compact`）：
 
-- 丢弃的历史被序列化、空格折叠，并使用内嵌的公共领域像素字体打印到模型相关的 PNG 帧上（每种形状的帧宽度固定；帧高度贴合实际打印的行数）。形状和帧大小在测量模型行时通过 **model id** 解析：Claude 读取 X.org `8x13` 字形、采用 11px 步进（额外字距、黑色墨水 — `11on16-bw`；高分辨率行 — Opus 4.7+、Fable、Mythos — 在 Anthropic 的 4,784 visual-token 上限下获得 1932px 帧，旧行保持 1568px），Gemini 读取 `8x13` 字形、采用 22px 间距（额外行距、黑色墨水 — `8on22-bw` 在 2048px，因为 Gemini 3.x 对每张图按固定的 1,120-token 预算计费、与像素大小无关），GPT/Codex 以 1568px 读取相同的 `8on22-bw` 形状（…
-- 序列化保持归档的对话密度：工具结果按头+尾截断（默认 2,000 字符、头尾比例 0.6），工具调用的参数值按值（500）和按调用（2,000）封顶，并且工具输出以暗灰色墨水打印，使对话读起来比工具噪声更突出。所有预算和调暗行为都可通过 `SerializeOptions`（`toolResultMaxChars`、`toolArgMaxChars`、`toolCallMaxChars`、`truncateHeadRatio`、`dimToolResults`）配置。
+- 被丢弃的历史会被序列化、折叠空白，并使用内嵌的公共领域像素字体打印到模型感知的 PNG 帧上（帧宽度按形状固定；帧高度贴合实际打印的行数）。形状——以及帧大小——在该模型线被测量后从 **model id** 解析得出：Claude 以 11px 步进读取 X.org `8x13` 字形（额外字距、黑色墨水——`11on16-bw`；高分辨率线——Opus 4.7+、Fable、Mythos——在 Anthropic 的 4,784 visual-token 上限下获得 1932px 帧，较旧的线保持 1568px）；Gemini 以 22px 间距读取 `8x13` 字形（额外行距、黑色墨水——2048px 的 `8on22-bw`，因为 Gemini 3.x 对每张图像按固定的 1,120-token 预算计费、与像素尺寸无关）；GPT/Codex 以 1568px 读取同样的 `8on22-bw` 形状（patch 计费与面积成正比，因此更大的帧无法提升每 token 字符数）；Kimi/GLM 以 16px 间距读取 `8x13` 字形（1568px 的 `8on16-bw`——kimi 的处理器会对超过 1792px 的图像降采样）。经 Vertex 或 OpenRouter 路由的 Claude 保留其 Claude 形状。自动选择还具备字体感知（`resolveShapeForText`）：当模型默认字体无法安全渲染会话记录，或宽幅 CJK 字形占主导且 `silver16-bw` 网格能安全渲染时，auto 会切换到 `silver16-bw`；被强制指定的变体绝不会被覆盖。未经测量的模型按其线上 API 家族回退（Anthropic 家族/未知 → `11on16-bw`，Google → `8on22-bw`，OpenAI 兼容 → `8on22-bw`）；计费（各家族的 patch/预算公式、OpenAI 的 `detail: "original"` 提示）始终跟随承载请求的 API，并按解析出的帧尺寸计算。`snapcompact.shape` 设置（默认 `auto`）可改为强制指定研究评估变体之一：方形网格（`8x8r`/`8x8u`/`6x6u`/`5x8` × 句子色调/黑色墨水）或各模型的评估优胜者（`6x12-dim`、`8x13-bw`、`8on16-bw`、`8on22-bw`、`11on16-bw`、`silver16-bw`——内嵌的 Silver TrueType 字体、16px 网格，面向 CJK 及其他非拉丁文本——以及双栏自动换行的 `doc-8on16-bw`/`-sent`/`-sent-dim`，其中 `dim` 以灰色打印停用词）。强制变体保留其几何形状，但会按目标 provider 的图像计费重新定价。同一设置也管控内联的系统 prompt/工具结果成像（`snapcompact.systemPrompt`、`snapcompact.toolResults`）。
+- 序列化保持归档的对话密度：工具结果按头+尾截断（默认 2,000 字符、头部比例 0.6），工具调用的参数值按单个值（500）和按调用（2,000）封顶，并且工具输出以暗灰色墨水打印，使对话比工具噪声更醒目。所有预算与调暗行为均可通过 `SerializeOptions`（`toolResultMaxChars`、`toolArgMaxChars`、`toolCallMaxChars`、`truncateHeadRatio`、`dimToolResults`）配置。
 - snapcompact 归档持久化在 `CompactionEntry.preserveData.snapcompact` 下，作为有界源文本加上渲染后的帧。在每次上下文重建时，它被重建为有序的压缩块：最旧边缘的纯文本、中间的图像块、最新边缘的纯文本。条目的 `summary` 只是简短的恢复引导加上通常的文件操作列表。
-- 后续压缩从该有界源文本（`Archive.text`）重新渲染，而不是盲目地携带旧 PNG 向前。`maxFrames` 现在默认为 `MAX_FRAMES_DEFAULT`（80）并仅作为上限；当图像块较大时，会在内部进行注视点渲染（HQ/LQ/HQ），而两个时序边缘则保持逐字的文本。
+- 后续压缩从该有界源文本（`Archive.text`）重新渲染，而不是盲目地携带旧 PNG 向前。`maxFrames` 现在默认为 `MAX_FRAMES_DEFAULT`（80）并仅作为上限；当图像块较大时，会在内部进行注视点渲染（HQ/LQ/HQ），而两个时序边缘则保持逐字文本。
 - 不涉及模型、API 密钥或网络，因此 snapcompact 也安全用于溢出恢复。它需要具备视觉能力的当前模型（`model.input` 包含 `"image"`）；否则自动维护会跳过它并推进到下一个已配置方法。手动 `/compact` 遵守方法顺序，除非给出了自定义指令（这些指令意味着有向的 LLM 摘要）。
-- 原理：形状表来自 `packages/snapcompact` 中的 snapcompact 200k-token 评估，在该评估中，与原始文本相比，位图帧以更低的计费 token 成本为具备视觉能力的模型保留了 QA 召回。
+- 原理：形状表来自 `packages/snapcompact` 中的 snapcompact 200k-token 评估，在该评估中，对具备视觉能力的模型而言，位图帧以比原始文本更低的计费 token 成本保留了 QA 召回。
 
 ### 显示式会话记录
 
-压缩不再从视觉上重启会话。TUI 渲染 **display transcript**（`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`）：按时间顺序的每条路径条目，每次压缩在触发处以纤细分隔线 `── 📷 compacted · ctrl+o ──` 内联显示。展开（ctrl+o）会显示摘要。只有 LLM 上下文在压缩边界处重置；分隔线上方的滚动历史保持完整，包括跨会话恢复时也是如此。
+压缩不再从视觉上重启对话。TUI 渲染 **display transcript**（`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`）：按时间顺序呈现每条路径条目，每次压缩在其触发点以内联的纤细分隔线显示——`── 📷 compacted · ctrl+o ──`。展开（ctrl+o）会显示摘要。只有 LLM 上下文在压缩边界处重置；分隔线上方的滚动历史保持完整，包括跨会话恢复时也是如此。
 
 ### 压缩前剪枝
 
@@ -159,8 +191,8 @@ What the LLM sees:
 
 - 保护最新的 `40_000` 工具输出 token。
 - 要求至少 `20_000` 的总估计节省。
-- 永远不要将结果清空到 `50` token 以下（`MIN_PRUNE_TOKENS`）：`[Output truncated - N tokens]` 占位符本身约 8 个 token，因此对低于阈值的结果进行剪枝反而会扩大上下文并无谓地搅动 prompt 缓存。（被取代和无用的结果保持各自的规则 — 无用收集器已经丢弃无节省的候选项；被取代的读取会出于正确性进行剪枝，与大小无关。）
-- 永远不要剪枝 `skill` 工具结果、`skill://` 路径的 `read` 结果，或活动计划引用文件的读取（通过 `AgentSession` 的计划保护加入）。
+- 绝不将结果清空到低于 `50` token（`MIN_PRUNE_TOKENS`）：`[Output truncated - N tokens]` 占位符本身约耗费 8 个 token，因此对低于下限的结果进行剪枝反而会扩大上下文并无谓地搅动 prompt 缓存。（被取代和无用的结果遵循各自规则——无用收集器本就丢弃无节省的候选项；被取代的读取出于正确性进行剪枝，与大小无关。）
+- 绝不剪枝 `skill` 工具结果、`skill://` 路径的 `read` 结果，或活动计划引用文件的读取（通过 `AgentSession` 的计划保护加入）。
 
 剪枝后的工具结果被替换为：
 
@@ -170,32 +202,36 @@ What the LLM sees:
 
 ### 无用结果的删减
 
-工具可以将已完成的结果标记为上下文无用 — 零匹配的搜索、超时且所有内容仍在运行的 `hub` 等待、空的 `hub` 收件箱排出。该标记源自工具结果（`AgentToolResult.useless`，通过 `ToolResultBuilder.useless()` 设置或直接设置在返回对象上），由 agent 循环复制到持久化的 `ToolResultMessage` 上（绝不与 `isError` 同时出现 — 错误总是优先），并在三个地方被消费：
+工具可以将已完成的结果标记为上下文无用——零匹配的搜索、超时且所有任务仍在运行的 `hub` 等待、清空了空 `hub` 收件箱的排出操作。该标记源自工具结果（`AgentToolResult.useless`，通过 `ToolResultBuilder.useless()` 设置或直接设置在返回对象上），由 agent 循环复制到持久化的 `ToolResultMessage` 上（绝不与 `isError` 同时存在——错误总是优先），并在三处被消费：
 
-- **每轮过时结果扫描**（`pruneSupersededToolResults`，由 `compaction.dropUseless` 守护，默认开启）：被标记的结果被清空为精确占位符 `[Uneventful result elided]`（`USELESS_NOTICE`），其时序与被取代的读取相同的缓存感知策略 — 仅当候选之后的后缀很小（≤ 约 8k token）或会话空闲时间已超过 provider prompt 缓存生命周期时。结果小于通知本身的永远不会被清空（无节省），且受保护工具豁免。
-- **阈值剪枝**（`pruneToolOutputs`）：被标记的结果绕过"保护最近"窗口，与被取代的读取相同，并接收 `USELESS_NOTICE` 而不是 token 数占位符。
-- **摘要序列化**：`serializeConversation`（agent 和 snapcompact）从摘要器/归档输入中丢弃整个工具调用/结果对 — 源区域反正会在摘要后被丢弃，因此该排除不会产生缓存成本。
+- **每轮过时结果扫描**（`pruneSupersededToolResults`，由 `compaction.dropUseless` 守护，默认开启）：被标记的结果被清空为精确占位符 `[Uneventful result elided]`（`USELESS_NOTICE`），时序上采用与被取代读取相同的缓存感知策略——仅当候选之后的后缀很小（≤ 约 8k token）或会话空闲时间已超过 provider prompt 缓存生命周期时。结果小于通知本身的绝不清空（无节省），且受保护工具豁免。
+- **阈值剪枝**（`pruneToolOutputs`）：被标记的结果绕过“保护最近”窗口，与被取代读取相同，并接收 `USELESS_NOTICE` 而不是 token 数占位符。
+- **摘要序列化**：`serializeConversation`（agent 与 snapcompact）从摘要器/归档输入中丢弃整个工具调用/结果对——源区域在摘要后本就会被丢弃，因此该排除不产生缓存成本。
 
-该标记永远不到达 provider 线格式，并且被标记的成对项永远不从历史中移除（仅就地清空），因此工具调用/结果配对和 provider 原生历史重放保持完整。
+该标记永远不到达 provider 线上格式，并且被标记的成对项永远不从历史中移除（仅就地清空），因此工具调用/结果配对和 provider 原生历史重放保持完整。
 
 ### 边界与切点逻辑
 
-`prepareCompaction()` 仅考虑自上次压缩条目（如果有）以来的条目。
+`prepareCompaction()` 构建单一的有效消息序列，用于估算、切点选择，以及历史摘要、轮次前缀和被保留消息三个区域。
 
-1. 找到前一次压缩的索引。
-2. 计算 `boundaryStart = prevCompactionIndex + 1`。
-3. 在可用时使用测得的使用率调整 `keepRecentTokens`。
-4. 在边界窗口上运行 `findCutPoint()`。
+1. 找到其摘要或 provider 原生历史可被活动模型重用的最新压缩。
+2. 遵循最近一次 `/clear` 的 `reset_boundary`：更新的重置会丢弃先前的摘要，而更旧的重置仍是恢复被保留消息的下界。
+3. 对于本地摘要，恢复从 `firstKeptEntryId` 到前一个压缩记录之间的原始条目，再追加该记录之后的条目。
+4. 对于可重用的 provider 原生历史，当 `providerReplayThroughEntryId` 标识的是一个较旧的快照时，从它之后开始，且不越过最近的重置边界。这会恢复未被覆盖的快照到提交之间的区间，而不是已被 native 重放覆盖的原始消息。末尾的 native 压缩记录并不意味着该区间已被压缩。
+5. 排除压缩记录和其他非消息元数据。先前的摘要通过 `previousSummary` 单独传入；保留携带消息的 `custom_message` 和 `branch_summary` 条目。
+6. 使用测得的使用率调整 `keepRecentTokens`，然后运行 `findCutPoint()`，将同一序列划分为 `messagesToSummarize`、`turnPrefixMessages` 和 `recentMessages`。
 
-有效的切点包括：
+更新本地摘要时，每条有效的原始消息恰好属于这三个区域之一。例如，当 `summary(A) + B` 增长为 `summary(A) + B + C` 时，下一次准备会同时分配 B 和 C，而不只是 C。新的 `firstKeptEntryId` 指向一条原始条目；准备过程不会移动、复制或重写日志条目。这是本地摘要准备的保证，不是对 provider 原生或推测性 native 重放的端到端保证。
+
+有效切点包括：
 
 - 角色为以下的消息条目：`user`、`assistant`、`bashExecution`、`hookMessage`、`branchSummary`、`compactionSummary`
 - `custom_message` 条目
 - `branch_summary` 条目
 
-硬性规则：永远不要在 `toolResult` 处切。
+硬性规则：绝不在 `toolResult` 处切。
 
-如果切点紧邻存在非消息元数据条目（`model_change`、`thinking_level_change`、标签等），则通过向后移动切点索引直到命中消息或压缩边界，将它们拉入被保留区域。
+准备过程在选择被保留消息边界之前会过滤掉纯元数据（`model_change`、`thinking_level_change`、标签等）。这些记录仍保留在日志中，但不是对话输入。
 
 ### 切分轮次的处理
 
@@ -233,32 +269,41 @@ What the LLM sees:
 2. 使用 `serializeConversation()` 序列化。
 3. 包装在 `<conversation>...</conversation>` 内。
 4. 可选地包含 `<previous-summary>...</previous-summary>`。
-5. 可选地将扩展钩子上下文和活动 memory-backend 压缩上下文注入为 `<additional-context>` 条目。
+5. 可选地将扩展钩子上下文和活动的 memory-backend 压缩上下文注入为 `<additional-context>` 条目。
 6. 使用 `SUMMARIZATION_SYSTEM_PROMPT` 执行摘要 prompt。
 
 Prompt 选择：
 
 - 第一次压缩：`compaction-summary.md`
-- 已有先前摘要的迭代压缩：`compaction-update-summary.md`
+- 带先前摘要的迭代压缩：`compaction-update-summary.md`
 - 切分轮次的第二轮：`compaction-turn-prefix.md`
 - 短 UI 摘要：`compaction-short-summary.md`
 - 交接文档：`handoff-document.md`（由 `generateHandoff(...)` 使用，非序列化压缩）
 
-远程摘要模式：
+远程摘要模式按顺序依次尝试（某一阶段不可用时回退到下一阶段）：
 
-- 如果设置了 `compaction.remoteEndpoint` 并启用了远程压缩，本地摘要生成会 POST 以下两种线路格式之一：
-  - 自定义 omp 摘要器端点接收 `{ systemPrompt, prompt }` 并必须返回至少包含 `{ summary }` 的 JSON。
-  - 路径以 `/chat/completions` 结尾的 OpenAI 兼容端点接收 `{ model, messages, stream: false }`，其中 `messages` 包含一条 system prompt 和一条 user prompt。摘要从 `choices[0].message.content` 读取，这使得自托管服务器（如 llama.cpp 和 vLLM）可以充当远程压缩器而无需单独的摘要器垫片。
-- 启用 V2 流式压缩的兼容 OpenAI Responses、Azure OpenAI Responses 和 Codex 模型（其目录元数据启用）首先将 `compaction_trigger` 追加到正常的 Responses 流。返回的压缩项加上保留的真实用户消息成为替换历史，受 `compaction.v2RetainedMessageBudget` 限制；该替换持久化在 `preserveData.openaiRemoteCompaction` 下。
-- 如果 V2 不可用或失败，符合条件的 OpenAI/OpenAI Codex 模型会尝试 provider 原生的 `/responses/compact` 路径。本地失败再回退到本地摘要。
+- **V2 流式 Responses 压缩**（最先尝试，默认通过 `compaction.remoteStreamingV2Enabled` 开启）：对符合条件的模型——`shouldUseCompactionV2Streaming(...)`：`openai-responses`、`azure-openai-responses` 或 `openai-codex-responses` API，带 `remoteCompaction.v2StreamingEnabled` 且可解析出 Responses 端点——压缩会把完整对话（包括 provider 原生的工具调用历史重放）转发到模型正常的 Responses 流式端点，并附带一个位于末尾的 `compaction_trigger` 输入项，同时要求流中恰好包含一个 `compaction` 输出项。请求携带会话路由与 prompt 缓存标识（路由/会话 id 请求头加上 `prompt_cache_key`），并以与普通轮次相同的方式解析模型的推理力度（reasoning effort）。替换历史是 Codex 风格的：`compaction.v2RetainedMessageBudget`（默认 `64000` token，封顶于该上限）内被保留的真实 user 消息，后随压缩项，存储在 `preserveData.openaiRemoteCompaction`（版本 `"v2"`）。瞬态流错误最多重试 `V2_COMPACTION_MAX_RETRIES`（`2`）次，采用指数退避，超时为 3 分钟（`V2_COMPACTION_TIMEOUT_MS`，与 V1 相同）；用户中止绝不重试。
+- **V1 native `/responses/compact`**：对 OpenAI/OpenAI Codex 模型（`shouldUseOpenAiRemoteCompaction`），当远程压缩已启用且 V2 未运行（不符合条件或失败）时，压缩会尝试 provider 原生的 `/responses/compact` 端点。它把 provider 替换历史保存在 `preserveData.openaiRemoteCompaction` 中。native 失败会呈现其传输错误，而不是静默切换到通用摘要——除非设置了 `compaction.remoteEndpoint`，此时摘要生成会落到该端点/本地摘要。
+- **Anthropic 服务端压缩**（`compact-2026-01-12` beta）：对该 beta 支持的模型线（`compat.supportsServerCompaction`，一条目录规则：Opus 4.6+、Sonnet 4.6+、Fable/Mythos 5）且请求到达官方端点时（`shouldUseAnthropicNativeCompaction` 以与 provider 相同的方式解析 URL，因此经 Foundry 或 `ANTHROPIC_BASE_URL` 改道的情况被排除在外；其他 Anthropic 兼容路由可通过 `remoteCompaction.enabled` 选择加入），当远程压缩已启用且没有适用的 OpenAI 通道时，压缩会发出当前活动轮次自身的请求——相同的系统 prompt、工具和消息历史，因此能读到上一轮写入的 prompt 缓存——再加上带 `pause_after_compaction` 的 `compact_20260112` 编辑、一个位于 API 50k 下限处的触发器，以及作为 `instructions` 的 harness 摘要 prompt。这些 instructions 指明被保留尾部从何处开始，因此摘要只覆盖重建上下文将丢弃的历史。API 以一个 `compaction` 块作答，provider 将其呈现为 `anthropicCompaction` 负载。其纯文本摘要成为条目的 `summary`（加上文件操作列表）**以及** `preserveData.anthropicCompaction`；此后在支持压缩的端点上的 Anthropic 请求会把它作为一个位于开头的 assistant `compaction` 块重放——当被保留尾部以 assistant 轮次开头时会折叠进该轮次——并携带该 beta 以及一个永不触发的编辑（API 会丢弃该块之前的所有内容，且要求该策略必须存在）；而所有其他 provider，以及被改道的 Anthropic 会话，则读取摘要文本。切点之后的被保留尾部以与会话条目完全一致的方式重放，如同本地摘要一样；上下文低于 `ANTHROPIC_COMPACTION_MIN_CONTEXT_TOKENS`（55k）时走本地摘要，因为请求无法触发。没有摘要的响应——当其输入从未达到触发器时 API 会直接回答该 prompt，或在模型于摘要期间调用工具时返回空块——与 OpenAI 通道一样视为 native 失败。
+- **自定义远程端点**：如果设置了 `compaction.remoteEndpoint` 且远程压缩已启用，本地摘要生成会 POST 以下两种线上格式之一：
+   - 自定义 omp 摘要器端点接收 `{ systemPrompt, prompt }`，且必须返回至少包含 `{ summary }` 的 JSON。
+   - 路径以 `/chat/completions` 结尾的 OpenAI 兼容端点接收 `{ model, messages, stream: false }`，其中 `messages` 包含一条 system prompt 和一条 user prompt。摘要从 `choices[0].message.content` 读取，这使得 llama.cpp 和 vLLM 等自托管服务器无需单独的摘要器垫片即可充当远程压缩器。
+
+当 native 远程压缩（V2、V1 或 Anthropic）成功时，本地 LLM 摘要被完全跳过。对 OpenAI 通道而言，持久化历史存于 provider 重放负载中，存储的 `summary` 只是占位引导加文件操作列表；Anthropic 通道存储真实摘要文本，因此之后任何 provider 的压缩都可以基于它构建。
+
+当 native 压缩从普通本地摘要出发时，该摘要会作为一条上下文消息与准备好的对话一起包含。后续的 native 轮次重用 provider 负载，而不是重新注入其占位摘要。Snapcompact 源文本保留其独立的归档迁移路径。
+
+对于推测性 native 压缩，`providerReplayThroughEntryId` 记录的是快照的最后一条条目，而不是之后的提交位置。上下文重建和下一次压缩准备都会包含在这两个位置之间追加的消息，其后是提交之后的消息。native 负载与未覆盖区间各重放一次；当 `/clear` 使该压缩失效时会同时丢弃两者。
+
+Advisor 运行时会保留 native `preserveData` 供后续维护使用，并把其 provider 负载附加到内存中的压缩摘要上，用于下一次模型请求。native 重放已包含被保留尾部，因此 advisor 不会再把该尾部作为原始消息追加。本地摘要仍单独保留最近消息。Advisor 请求使用共享的消息转换器，因此文本压缩摘要和 native 负载都会到达 provider。
 
 ### 交接生成
 
 `packages/agent/src/compaction/compaction.ts` 还导出 `generateHandoff(...)`。交接生成使用与摘要相同的 `completeSimple(...)` oneshot 风格，但它通过发送活动系统 prompt、工具数组和真实 LLM 消息历史来保留活动的 agent 缓存前缀，然后追加一条由 agent 归属的包含交接 prompt 的 `user` 消息。它强制 `toolChoice: "none"` 并直接返回已合并的文本块。
 
-交接在当前会话上提交一个常规的 `CompactionEntry`：`SessionMaintenance.handoff()`（手动 `/handoff`）和自动维护的 `handoff` 方法都通过 `SessionHandoff.generateDocument()` 生成文档，并将其作为压缩摘要存储，`firstKeptEntryId` 来自 `prepareCompaction`，因此最近历史被保留，且会话 id、记录和 provider 缓存键不变。
+交接在当前会话上提交一个常规的 `CompactionEntry`：`SessionMaintenance.handoff()`（手动 `/handoff`）和自动维护的 `handoff` 方法都通过 `SessionHandoff.generateDocument()` 生成文档，并将其作为压缩摘要存储，`firstKeptEntryId` 来自 `prepareCompaction`，因此最近历史被保留，且会话 id、会话记录和 provider 缓存键不变。
 
-当 `compaction.handoffSaveToDisk` 启用时，**自动触发** 的交接还会在持久化会话的工件目录中写入 `handoff-<ISO timestamp>.md`。手动交接不会通过此设置写入，未持久化的会话没有工件目录。
+当 `compaction.handoffSaveToDisk` 启用时，**自动触发**的交接还会在持久化会话的工件目录中写入 `handoff-<ISO timestamp>.md`。手动交接不会通过此设置写入，未持久化的会话没有工件目录。
 
 ### 摘要中的文件操作上下文
 
@@ -274,7 +319,7 @@ Prompt 选择：
 - 在切分轮次中，也包含轮次前缀文件操作。
 - `details.readFiles` 排除同时被修改的文件；`details.modifiedFiles` 承载其余文件（持久化形状不变）。
 
-文件列表是分组的、前缀折叠的目录树（find-tool 形状），每个文件带一个访问标记 — 仅读取的文件为 `(Read)`，仅修改且从未读取的为 `(Write)`，也出现在累积已读集合中的已修改文件为 `(RW)`。上限为 20 个文件，并带一行 `[…N files elided…]`。LLM 摘要策略将其作为 `<files>` 标签追加（通过 `upsertFileOperations`）；snapcompact 则在其摘要模板中作为 `FILES` 部分进行渲染。
+文件列表是分组的、前缀折叠的目录树（find-tool 形状），每个文件带一个访问标记——仅读取的文件为 `(Read)`，仅修改且从未读取的为 `(Write)`，也出现在累积已读集合中的已修改文件为 `(RW)`。上限为 20 个文件，并带一行 `[…N files elided…]`。LLM 摘要策略将其作为 `<files>` 标签追加（通过 `upsertFileOperations`）；snapcompact 则在其摘要模板中作为 `FILES` 部分进行渲染。
 
 ```xml
 <files>
@@ -292,7 +337,7 @@ file-operations.md (Write)
 
 在生成摘要（或由钩子提供摘要）后，agent 会话：
 
-1. 通过 `appendCompaction(...)` 追加 `CompactionEntry`；handoff 方法将生成的文档作为该条目在同一会话上的摘要提交。
+1. 通过 `appendCompaction(...)` 追加 `CompactionEntry`；handoff 方法将生成的文档作为该条目的摘要在同一会话上提交。
 2. 通过 `buildDisplaySessionContext()` 从活动叶子重建显示上下文。
 3. 用重建的上下文替换活动的 agent 消息。
 4. 从重建的分支同步活动 todo 阶段，并关闭其历史已被重写的 provider 会话。
@@ -357,7 +402,7 @@ After navigation with summary:
 5. 前置 `branch-summary-preamble.md`。
 6. 追加文件操作标签。
 
-结果作为 `BranchSummaryEntry` 存储，可选详情（`readFiles`、`modifiedFiles`）。
+结果作为 `BranchSummaryEntry` 存储，带可选详情（`readFiles`、`modifiedFiles`）。
 
 ## 扩展与钩子切入点
 
@@ -369,6 +414,8 @@ After navigation with summary:
 
 - 取消压缩（`{ cancel: true }`）
 - 提供完整自定义压缩负载（`{ compaction: CompactionResult }`）
+
+该钩子的 `customInstructions` 只承载公开的用户聚焦内容。摘要器内部指引——目前是计划模式的“批准并压缩上下文”蒸馏 prompt——通过 `CompactOptions` 上独立的 `internalGuidance` 通道传递，只到达 native 摘要，绝不到达该钩子或 `session.compacting`；当两者都被设置时，摘要器使用 `internalGuidance`，而钩子仍看到公开的 `customInstructions`（issue #4359）。
 
 ### `session.compacting`
 
@@ -399,15 +446,15 @@ After navigation with summary:
 
 ## 运行时行为与失败语义
 
-- 手动压缩首先中止当前 agent 操作。
+- 手动压缩会先中止当前 agent 操作。如果该中止打断了一个进行中的轮次，压缩会在摘要提交后恢复它——或在该次压缩作为空操作被拒绝（会话太小/已压缩）时立即恢复，因为该次处理不会更改历史——恢复方式优先使用已排队的 steer/follow-up，否则使用自动续接 prompt。钩子取消或摘要器失败不会触发恢复。当 `compaction.autoContinue` 为 `false` 或调用方传入 `suppressContinuation`（计划模式审批会自行派发执行轮次）时，跳过恢复。空闲时发起的手动压缩绝不启动轮次。压缩运行期间提交的 prompt 会等待其完成，并且如果它启动或排队了一个轮次，则取代该恢复；本地处理的扩展/自定义命令会把恢复交还——除非它触发的轮次（`pi.sendMessage(..., { triggerTurn: true })`、`pi.sendUserMessage()`）、之后的 prompt 或任何其他轮次先行启动。在此类恢复仍被扣留期间启动的第二次手动压缩会接管它。
 - `abortCompaction()` 取消手动压缩、自动压缩和交接生成控制器。
 - 自动压缩发出 start/end 会话事件以供 UI/状态更新。
-- 自动压缩可以尝试多个模型候选项并重试瞬态失败；当有下一个候选项时，长重试延迟优先使用下一个候选项。
+- 自动压缩可以尝试多个模型候选项并重试瞬态失败；当有下一个候选项可用时，长时间的重试延迟会优先改用下一个候选项。
 - 溢出错误被排除在通用重试路径之外，因为它们由上下文提升/压缩处理。
 - 如果自动压缩失败：
-  - 溢出路径发出 `Context overflow recovery failed: ...`
-  - 不完整输出路径发出 `Incomplete response recovery failed: ...`
-  - 阈值/空闲路径发出 `Auto-compaction failed: ...`
+   - 溢出路径发出 `Context overflow recovery failed: ...`
+   - 不完整输出路径发出 `Incomplete response recovery failed: ...`
+   - 阈值/空闲路径发出 `Auto-compaction failed: ...`
 - 分支摘要可以通过中止信号取消（例如 Escape），返回已取消/中止的导航结果。
 
 ## 设置与默认值
@@ -415,8 +462,9 @@ After navigation with summary:
 来自 `settings-schema.ts`：
 
 - `compaction.enabled` = `true`
-- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`。`remote` 在可用时使用 provider 原生的 OpenAI 兼容服务器压缩；不可用或失败的方法会推进到下一个偏好。
-- `compaction.asyncEnabled` = `true`。异步（推测）压缩：当上下文进入预阈值带 `[threshold − lead, threshold)`（lead = `clamp(threshold × 0.125, 8192, 32000)`）时，维护会为第一个已配置的 LLM 支持方法（`remote`、`handoff` 或 `soft`）在分支快照上启动后台摘要，该快照通过侧会话 id 与活动轮次隔离。当真正跨过阈值时，已装备的结果会立即提交，隐藏摘要延迟；快照后轮次在摘要后原样追加。当分支前缀发生变化（新的压缩、重置边界、`/tree` 导航）、当 provider 原生重放负载不再可被活动模型读取，或当 cont…
+- `compaction.experimentalContextManagement` = `false`。可选择开启的持久化笔记、绑定分支的原始历史检索，以及本地上下文窗口轮转；启用后重启以刷新可用工具。
+- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`。`remote` 在可用时使用 provider 原生的服务器压缩（OpenAI Responses compact、Anthropic 压缩 beta）；不可用或失败的方法会推进到下一个偏好。
+- `compaction.asyncEnabled` = `true`。异步（推测）压缩：当上下文进入预阈值带 `[threshold − lead, threshold)`（lead = `clamp(threshold × 0.125, 8192, 32000)`）时，维护会为第一个已配置的 LLM 支持方法（`remote`、`handoff` 或 `soft`）基于分支快照启动后台摘要，并通过侧会话 id 与活动轮次隔离。当真正跨过阈值时，已装备的结果会立即提交，从而隐藏摘要延迟；快照之后的轮次在摘要后原样追加。已装备的结果在以下情况被丢弃：分支前缀变化（新的压缩、重置边界、`/tree` 导航）、provider 原生重放负载不再能被活动模型读取，或上下文在计算之后增长超过 `keepRecentTokens`（由一次全新的推测取代）。当扩展注册了 `session_before_compact` 时跳过推测。推测运行期间状态行会让自动压缩图标闪烁，而有结果被装备时则将其保持为高亮色。
 - `compaction.reserveTokens` 默认未设置。压缩层通常应用 `16384` token 的下限和至少上下文窗口的 15%；在较小的窗口上该默认值不切实际时，预算检查使用 15% 的比例保留。显式配置的保留值会被遵守。
 - `compaction.keepRecentTokens` = `20000`
 - `compaction.autoContinue` = `true`
@@ -426,7 +474,7 @@ After navigation with summary:
 - `compaction.remoteEndpoint` = `undefined`
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`
-- `compaction.thresholdPercent` = `-1` 且 `compaction.thresholdTokens` = `-1`；正固定 token 限制优先于百分比，否则使用基于保留的阈值。
+- `compaction.thresholdPercent` = `-1` 且 `compaction.thresholdTokens` = `-1`；正的固定 token 限制优先于百分比，否则使用基于保留的阈值。
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`
 - `compaction.idleTimeoutSeconds` = `300`
