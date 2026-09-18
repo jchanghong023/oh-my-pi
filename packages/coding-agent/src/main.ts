@@ -668,7 +668,7 @@ async function runInteractiveMode(
 		if (playStartupSplash) {
 			// Keep optional animation code off the offline startup path when no splash is requested.
 			const runStartupSplash =
-				setupWizard?.runStartupSplash ?? (await import("./modes/setup-wizard/startup-splash")).runStartupSplash;
+				setupWizard?.runStartupSplash ?? (await import("@oh-my-pi/pi-tui/setup/startup-splash")).runStartupSplash;
 			await runStartupSplash(mode);
 		}
 

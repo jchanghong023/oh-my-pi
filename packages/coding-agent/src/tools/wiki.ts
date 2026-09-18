@@ -1,12 +1,12 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { sectionShape, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
 import type { DocsSectionHit } from "../docs/types";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
 import type { ToolSession } from ".";
-import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const wikiSchema = type({

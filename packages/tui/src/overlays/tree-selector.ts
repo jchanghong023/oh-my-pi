@@ -24,6 +24,7 @@ import {
 	matchesSelectUp,
 } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
+import type { PrimaryAgentId } from "../status-line/types";
 
 /** Fields consumed when displaying persisted entries in the session tree. */
 export type SessionTreeEntry = { id: string; parentId: string | null } & (
@@ -40,6 +41,7 @@ export type SessionTreeEntry = { id: string; parentId: string | null } & (
 	| { type: "mode_change"; mode: string }
 	| { type: "credential_pin"; provider: string }
 	| { type: "ttsr_injection"; injectedRules: string[] }
+	| { type: "primary_agent_change"; primaryAgent: PrimaryAgentId }
 	| { type: "session_init" | "reset_boundary" }
 );
 

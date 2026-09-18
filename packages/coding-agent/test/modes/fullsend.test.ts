@@ -1,9 +1,10 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { containsFullsend, highlightFullsend, renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/fullsend";
-import { containsOrchestrate, highlightOrchestrate } from "@oh-my-pi/pi-coding-agent/modes/orchestrate";
+import { renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/fullsend";
+import { containsFullsend, highlightFullsend } from "@oh-my-pi/pi-tui/prompt/fullsend";
+import { containsOrchestrate, highlightOrchestrate } from "@oh-my-pi/pi-tui/prompt/orchestrate";
+import { containsUltrathink, highlightUltrathink } from "@oh-my-pi/pi-tui/prompt/ultrathink";
+import { containsWorkflow, highlightWorkflow } from "@oh-my-pi/pi-tui/prompt/workflow";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { containsUltrathink, highlightUltrathink } from "@oh-my-pi/pi-coding-agent/modes/ultrathink";
-import { containsWorkflow, highlightWorkflow } from "@oh-my-pi/pi-coding-agent/modes/workflow";
 
 beforeAll(() => {
 	initTheme();
