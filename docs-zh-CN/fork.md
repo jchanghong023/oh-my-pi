@@ -110,6 +110,10 @@
 * hashline 标签的路径恢复在 Windows 上与非 Windows 一致：比较前对恢复路径与工作目录都清理 `\\?\` verbatim 前缀，避免 std canonicalize 产生的 verbatim 形式 cwd 使恢复被静默拒绝。
 * 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。
 
+### 凭据环境变量
+
+* 多候选环境变量的 provider，凭据来源摘要回显实际生效的变量名；解析范围与取键一致（进程 env、`cwd/.env`、`~/.env`）。
+
 ### 默认设置
 
 保持以下 fork 默认值：
@@ -148,6 +152,7 @@
 * 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 * 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
+* `update.channel=canary` 在 fork 二进制上不可用：启动版本检查会提示该配置并指向 `omp update --stable`；其余更新检查失败仍静默。
 * `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`），且无法通过任何后续代码改动自愈：这类机器只能用安装器重装后再交给 `omp update`。
 * 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
 * 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
