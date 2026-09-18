@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, open, readdir, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./types";
 
@@ -124,13 +124,16 @@ export function normalizePlainText(markdown: string): string {
 		.trim();
 }
 
-const HEADING_LINE = /^[ \t]*#{1,6}[ \t].*$/gmu;
-const SETEXT_LINE = /^[ \t]*(?:=+|-+)[ \t]*$/gmu;
-const HEADING_MARKER = /^[ \t]*#{1,6}[ \t]?/gmu;
+// Heading recognition here must agree with `parseHeading`: at most three
+// spaces of indentation, so an indented-code `# word` line (4+ spaces, or a
+// tab) counts as content rather than as a heading.
+const HEADING_LINE = /^ {0,3}#{1,6}[ \t].*$/gmu;
+const SETEXT_LINE = /^ {0,3}(?:=+|-+)[ \t]*$/gmu;
+const HEADING_MARKER = /^ {0,3}#{1,6}[ \t]?/gmu;
 // A setext heading's text line together with its underline — the ATX strips
 // cover only `#` lines, so this pair is what keeps setext heading-only
 // sections from being misread as content.
-const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n[ \t]*(?:=+|-+)[ \t]*$/gmu;
+const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/gmu;
 
 /**
  * What a stored section holds. Converter output (docx/pptx/xlsx) emits its
@@ -291,13 +294,22 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	return { title, sections };
 }
 
-async function enumerateDirectory(root: string, relative = ""): Promise<string[]> {
-	const entries = await readdir(path.join(root, relative), { withFileTypes: true });
+async function enumerateDirectory(root: string, relative = "", visited?: Set<string>): Promise<string[]> {
+	// Windows junctions report as directories without the symlink bit, so the
+	// `isSymbolicLink` skip above cannot see them. Resolve each directory to its
+	// real path and refuse to descend twice: a junction pointing at an ancestor
+	// would otherwise recurse forever.
+	const seen = visited ?? new Set<string>();
+	const directory = path.join(root, relative);
+	const real = await realpath(directory);
+	if (seen.has(real)) return [];
+	seen.add(real);
+	const entries = await readdir(directory, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries) {
 		if (entry.isSymbolicLink()) continue;
 		const child = relative ? path.join(relative, entry.name) : entry.name;
-		if (entry.isDirectory()) files.push(...(await enumerateDirectory(root, child)));
+		if (entry.isDirectory()) files.push(...(await enumerateDirectory(root, child, seen)));
 		else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) files.push(child);
 	}
 	return files;

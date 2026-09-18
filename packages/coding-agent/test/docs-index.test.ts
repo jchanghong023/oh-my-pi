@@ -4,7 +4,7 @@ import { unlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { enumerateMarkdownFiles, parseMarkdown, readMarkdownDocument } from "../src/docs/markdown";
+import { enumerateMarkdownFiles, parseMarkdown, readMarkdownDocument, sectionShape } from "../src/docs/markdown";
 import { DocsService } from "../src/docs/service";
 
 const tempDirs: string[] = [];
@@ -137,6 +137,24 @@ describe("Markdown parsing", () => {
 		await fs.symlink(outside, path.join(root, "linked.md"));
 		expect(await enumerateMarkdownFiles(root)).toEqual([]);
 		await expect(readMarkdownDocument(root, "linked.md")).rejects.toThrow();
+	});
+
+	it.skipIf(process.platform !== "win32")("does not recurse into cyclic Windows junctions", async () => {
+		const root = await tempDir("docs-junction-root-");
+		await fs.mkdir(path.join(root, "sub"));
+		await fs.writeFile(path.join(root, "sub", "note.md"), "# Note\nbody\n");
+		// A junction back at the root reports as a plain directory, so only the
+		// resolved-path guard can stop the descent from looping forever.
+		await fs.symlink(root, path.join(root, "loop"), "junction");
+		expect(await enumerateMarkdownFiles(root)).toEqual([path.join("sub", "note.md")]);
+	});
+
+	it("judges indented-code heading lines as content, matching the parser's heading rules", () => {
+		expect(sectionShape("#### Cell\n")).toBe("stub");
+		expect(sectionShape("  ## Cell\n")).toBe("stub");
+		expect(sectionShape("    # word\n")).toBe("content");
+		expect(sectionShape("\t# word\n")).toBe("content");
+		expect(sectionShape("Word\n    ---\n")).toBe("content");
 	});
 });
 describe("DocsService indexing contract", () => {
