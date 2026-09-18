@@ -692,7 +692,7 @@ tui:
 
 | Key                         | Type    | Default          | Values                                                                    |
 | --------------------------- | ------- | ---------------- | ------------------------------------------------------------------------- |
-| `theme.dark`                | string  | `dark-terminal`  | Theme used on a dark terminal background.                                 |
+| `theme.dark`                | string  | `titanium`       | Theme used on a dark terminal background.                                 |
 | `theme.light`               | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`              | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`            | boolean | `false`          | Use blue instead of green for diff additions.                             |
@@ -727,13 +727,6 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
 | `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
-| `magicKeywords.enabled` | boolean | `true`          | Enable hidden notices for all four magic keywords.                                                      |
-| `magicKeywords.ultrathink` | boolean | `true`       | Enable the standalone `ultrathink` notice and maximum-auto-thinking override.                           |
-| `magicKeywords.orchestrate` | boolean | `true`      | Enable the standalone `orchestrate` multi-agent notice.                                                 |
-| `magicKeywords.workflow` | boolean | `true`         | Enable the standalone `workflowz` eval-workflow notice.                                                 |
-| `magicKeywords.fullsend` | boolean | `true`         | Enable fastest verified execution without cost/token constraints; delegation is used only when it yields real speed or verification benefit. |
-
-All four keyword slash commands accept optional task text: `/ultrathink [task]`, `/orchestrate [task]`, `/workflowz [task]`, and `/fullsend [task]`.
 
 ### Providers and services
 

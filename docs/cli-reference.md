@@ -218,7 +218,6 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `completions` | Print a shell completion script (bash, zsh, or fish). | |
 | `compress` | Rewrite a text file into the dense prompt register, reporting what it drops. | |
 | `config` | Manage configuration settings. | [config usage](./config-usage.md), [settings](./settings.md) |
-| `docs` | Manage persistent external Markdown document indexes. | [wiki tool](./tools/wiki.md) |
 | `dry-balance` | Dry-run OAuth account balancing across random session ids. | |
 | `gc` | Run storage garbage collection. | |
 | `grep` | Test the grep tool from the CLI. (The [`grep` tool](./tools/grep.md) is a separate agent tool.) | |
