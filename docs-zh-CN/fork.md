@@ -74,12 +74,11 @@
 ### ZCode 本地代理（zcode-api）
 
 * 内置 provider `zcode-api`，默认指向本机 ZCode Proxy（`http://127.0.0.1:8080`；环境变量 `ZCODE_API_BASE_URL` 以完整的 `http://主机:端口` 基地址覆盖；Anthropic 传输会自行去掉末尾斜杠与多余的 `/v1`），无登录、无配置即在模型面板与 `omp models` 中可见可用；`disabledProviders` 仍可禁用。
-* 固定使用代理的 Anthropic Messages 直通路由（`/v1/messages`，与 Claude Code 同路径）：工具调用、thinking、上游错误状态原样传递，不经过 OpenAI 翻译层。不做模型发现，不写入 `models.json`（上游守护测试禁止内置目录携带回环地址；模型在 `packages/coding-agent/src/config/zcode-api-models.ts` 运行时构建）。
+* 固定使用代理的 Anthropic Messages 直通路由（`/v1/messages`，与 Claude Code 同路径）：工具调用、thinking、上游错误状态原样传递，不经过 OpenAI 翻译层。不做模型发现，不写入 `models.json`（上游守护测试禁止内置目录携带回环地址），模型清单在运行时构建。
 * 模型与参数照抄国内「智谱 coding plan」lane（`zhipu-coding-plan`）：14 个 GLM（`glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.6v` / `glm-4.7` / `glm-5` / `glm-5-turbo` / `glm-5v-turbo` / `glm-5.1` / `glm-5.2` / `glm-5.2-highspeed` / `glm-5.3` / `glm-5.3-flash` / `glm-5.3-highspeed`），上下文窗口、最大输出、视觉输入、tokenizer 与价格同该 lane；`glm-5.2-highspeed[1m]` 是该 lane 的折叠别名，本 provider 无折叠表，不收录。思考档位与 coding plan 相同（多数 SKU `minimal`–`high`；`glm-5.2*` 为 `high`/`max`；`glm-5.3*` 为 `low`/`high`/`max`、默认 `max` 且不可关闭）。
 * 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。无凭据时直通不发送 `Authorization`，也不注入 `X-Api-Key`；`model.headers` 中显式给出的 `Authorization` 仍然生效。
-* 传输面在 `packages/catalog/src/compat/rules/providers/zcode-api.kdl`（tool_result id 镜像、思考模式），认证面在 `rules/auth/zcode-api.kdl`（无 login，不出现在 `/login`）。
+* 兼容规则提供 tool_result id 镜像与思考模式适配；认证面无 login 流程，不出现在 `/login`。
 * `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。
-* WSL（NAT 模式）下 `127.0.0.1` 指向 WSL 自身而非 Windows 主机：代理跑在 Windows、OMP 跑在 WSL 时，需将 `ZCODE_API_BASE_URL` 指向主机地址（如 `http://172.17.80.1:8080`，取自 `ip route show default`）或在 WSL 内运行代理。
 
 ### 公司内网模型（仅 `--offline`）
 
@@ -101,18 +100,11 @@
 * 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
 * 检索模型目录仅包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，不包含 8B 模型，两种检索模型不作为聊天模型展示。现有记忆流程只接文本向量，默认的 `Qwen3-VL-Embedding-2B` 也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
 
-### Windows 内建工具输出缓冲
+### Windows 行为修复
 
 * 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
-
-### Windows 编辑路径与临时清理
-
 * hashline 标签的路径恢复在 Windows 上与非 Windows 一致：比较前对恢复路径与工作目录都清理 `\\?\` verbatim 前缀，避免 std canonicalize 产生的 verbatim 形式 cwd 使恢复被静默拒绝。
 * 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。
-
-### 凭据环境变量
-
-* 多候选环境变量的 provider，凭据来源摘要回显实际生效的变量名；解析范围与取键一致（进程 env、`cwd/.env`、`~/.env`）。
 
 ### 默认设置
 
@@ -153,7 +145,7 @@
 * 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
 * `update.channel=canary` 在 fork 二进制上不可用：启动版本检查会提示该配置并指向 `omp update --stable`；其余更新检查失败仍静默。
-* `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`），且无法通过任何后续代码改动自愈：这类机器只能用安装器重装后再交给 `omp update`。
+* `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`）且无法自愈，只能用安装器重装后再交给 `omp update`。
 * 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
 * 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
 
@@ -164,9 +156,12 @@
 * 只保留中文 VitePress 文档站及 GitHub Pages 部署能力；不维护英文站点，不为上游英文 `docs` 提供构建或 `/en/` 子路径合并。
 * 中文站不是纯翻译站点：以覆盖上游全部文档的完整翻译为目标，同时收录 fork 新增文档——命令与快捷键教程 `command-shortcut-tutorial.md`、`config.yml` 全量设置参考 `settings-reference.md`、知识索引研究 `dft-oh-my-pi-knowledge-research.md` 和 fork 契约 `fork.md`；翻译独立同步，内容可能落后于当前代码基线。
 
-### Fork 开发工具
+## Fork 验证体系
 
-* 保留 `bun run fastcheck`，仅检查本地修改的 TypeScript lint/format。
-* 保留 `bun scripts/jch-localci.ts [full]` 作为独立本地检查入口，在当前操作系统上运行（日常为 Windows x64），只运行当前操作系统对应的测试；默认不构建 native，`full` 才构建当前宿主平台的 native addon。Rust 核心测试统一走 `cargo nextest`，Windows 上会自动把 VS Build Tools 的 CMake/Ninja 注入 PATH（`.cargo/config.toml` 固定 Ninja 生成器）。个别 POSIX 专有断言（umask、uid、exec bit、bash symlink、依赖 `sh -c` 输出形态的 find 断言）在 Windows 上由测试内 `skipIf` / `ignore` 按平台跳过，其余测试同套运行。不维护 WSL2 与 Windows 双平台测试运行能力及相关工具链约定。
-* 保留 `bun scripts/jch-dev-ui-test.ts` 作为 `bun run dev` 界面的自动化冒烟测试（`--debug` 可转储 TUI 原始输出）：通过本地构建的 pi-natives PTY（Windows ConPTY / POSIX openpty）启动 dev TUI，断言全屏界面渲染（光标控制序列 + 状态栏 Main 指示）、按键触发重绘、Ctrl+D 优雅退出（exit 0）；仅使用本地 addon，不联网。启动参数固定 `--offline --profile localci-ui`，不触发首次配置向导和网络请求。
-* 同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 600 秒、该测试目标的 bazel `timeout` 设为 `long`（CI 分片 CPU 争用；bazel 默认 300 秒上限会先于用例内预算触发）；`pi-shell` 的 `incomplete_utf8_at_eof_becomes_replacement` 在 Windows 上改用 UTF-8 回退构造器（上游 `new()` 在非 UTF-8 ACP 主机上会把 EOF 悬挂字节按设计交给 ACP 解码，DBCS 代码页产出默认字符 `?` 而非替换符，与该用例期望冲突；上游 CI 仅 Linux 测不到）；`session-code-mode` 的「保留启动工具体数组引用」用例在 fork 下跳过（`test.skip`）：应用工具一律经 Primary Agent 执行期门禁包装，Main 下捕获的句柄切到 Discuss 后必须被拒绝，上游新增的引用复用契约对包装后的实例不再适用，该跳过是本 fork 的有意偏差；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`oauth_callback` 测试在无头/SSH/WSL 会话遇到 `Unsupported` 时跳过；`pi-vcs` 的 git 测试以 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向空设备、`pi-vcs` 与 `natives` 的 git 测试在 fixture 内固定 `core.autocrlf=false`（hermetic 化，防宿主配置破坏字节级断言）；`pi-vcs` 另有 worktree 断言剥 `\\?\` 前缀的 Windows 适配，以及 index 快照失败用目录占位替代 `chmod 000` 的 root 确定性改造（该用例仍为 unix 门控：Windows 上打开目录得到 `PermissionDenied` 而非 `IsADirectory`，不随 localci 在 Windows 运行）；`pi-shell` 的 registry 期望列表在 Windows 上不含 `errno`（`cfg!(unix)` 条件注入）、find/fd/rg 输出断言接受平台路径分隔符（`.\`、`sub\nested.txt` 形态），`pi-edit` 的两个 hashline 测试以真实临时目录 cwd 替代 POSIX 字面路径（`/workspace`、`/tmp/work` 在 Windows 无法剥离）；`pi-builtins` 的 stat `win_tests` 模块补上游缺失的 `tempdir` 助手（上游从未在 Windows 编译该 `cfg(all(test, windows))` 目标）、`timeout` 的 preserve-status 用例在 Windows 断言 128（无信号语义，交付信号号为 0 的确定性映射）、`timeout` 的信号拼写表与 `-s KILL` 单独杀停两用例门控 unix（Windows 无 kill(2) 信号表与 SIGKILL 语义）；`session-manager` 的三个 temp 会话目录用例（`-tmp` 命名与两段迁移）在 Windows 跳过（上游 home 优先分类把 %TEMP% 下的 cwd 归为 home 命名，用例隐含「tmpdir 不在 home 下」的 Linux 假设）。已知边界：`pi-builtins` 完整测试套件在 Windows 上另有约 21 个上游既有失败（信号表、POSIX 输出形态类），fork 验证范围（`jch-localci` 的 `CORE_RUST_CRATES`）本就不含该 crate，不逐项适配。
+三级命令为 fork 专属验证入口，名称与职责全新设计；旧入口 `jch-localci`、`jch-dev-ui-test` 废弃，能力并入新体系：
+
+* `bun run fastcheck`：静态检查 = TS 三件套（类型检查、lint、格式）+ Rust 静态检查（cargo check），只查不测、不产构建物。agent 可按需自主调用；TypeScript 修改后 MUST 运行。
+* `bun run fulltest`（仅限用户明确要求）：fastcheck 全部静态检查 + 当前操作系统可运行的全部测试：TS 全部分片、Rust（`cargo nextest`，Windows 自动把 VS Build Tools 的 CMake/Ninja 注入 PATH，`.cargo/config.toml` 固定 Ninja 生成器）、Python 测试、脚本测试、UI 冒烟（原 `jch-dev-ui-test` 并入：PTY 启动 `bun run dev` TUI，断言全屏渲染/交互/Ctrl+D 退出，仅使用本地构建的 native addon；启动参数固定 `--offline --profile localci-ui`，不触发向导与网络请求；`--debug` 可转储 TUI 原始输出）。需要时先构建当前宿主平台 native addon。只运行当前操作系统对应的测试，不维护 WSL2/双平台测试运行能力。端到端冒烟与安装器 E2E 不在本地跑，由 slowtest 的流水线覆盖。
+* `bun run slowtest`（仅限用户明确要求）：fulltest 全部内容 + 把本地 `main` 自动 push 到远端，触发仓库 GitHub Actions CI（手动 `workflow_dispatch`），并持续轮询监控该次运行直到结束，返回成功/失败结论与失败日志入口。
+
+同步时需重新应用的测试级适配（上游重写对应文件后会丢失，且上游 CI 覆盖不到）：`is_regular_file` 需导入 `pi-builtins` 的测试宿主模块（fork 自有代码，上游不编译该目标）；`pi-shell` 的 jobspec 强杀测试预算放宽到 600 秒、该测试目标的 bazel `timeout` 设为 `long`（CI 分片 CPU 争用；bazel 默认 300 秒上限会先于用例内预算触发）；`pi-shell` 的 `incomplete_utf8_at_eof_becomes_replacement` 在 Windows 上改用 UTF-8 回退构造器（上游 `new()` 在非 UTF-8 ACP 主机上会把 EOF 悬挂字节按设计交给 ACP 解码，DBCS 代码页产出默认字符 `?` 而非替换符，与该用例期望冲突；上游 CI 仅 Linux 测不到）；`session-code-mode` 的「保留启动工具体数组引用」用例在 fork 下跳过（`test.skip`）：应用工具一律经 Primary Agent 执行期门禁包装，Main 下捕获的句柄切到 Discuss 后必须被拒绝，上游新增的引用复用契约对包装后的实例不再适用，该跳过是本 fork 的有意偏差；mcp stdio pidfile 轮询只接受活进程 pid；`startup-composer-graph` 测试把注册表路径归一化为 `/`（Windows）；`oauth_callback` 测试在无头/SSH/WSL 会话遇到 `Unsupported` 时跳过；`pi-vcs` 的 git 测试以 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向空设备、`pi-vcs` 与 `natives` 的 git 测试在 fixture 内固定 `core.autocrlf=false`（hermetic 化，防宿主配置破坏字节级断言）；`pi-vcs` 另有 worktree 断言剥 `\\?\` 前缀的 Windows 适配，以及 index 快照失败用目录占位替代 `chmod 000` 的 root 确定性改造（该用例仍为 unix 门控：Windows 上打开目录得到 `PermissionDenied` 而非 `IsADirectory`，不随本地验证在 Windows 运行）；`pi-shell` 的 registry 期望列表在 Windows 上不含 `errno`（`cfg!(unix)` 条件注入）、find/fd/rg 输出断言接受平台路径分隔符（`.\`、`sub\nested.txt` 形态），`pi-edit` 的两个 hashline 测试以真实临时目录 cwd 替代 POSIX 字面路径（`/workspace`、`/tmp/work` 在 Windows 无法剥离）；`pi-builtins` 的 stat `win_tests` 模块补上游缺失的 `tempdir` 助手（上游从未在 Windows 编译该 `cfg(all(test, windows))` 目标）、`timeout` 的 preserve-status 用例在 Windows 断言 128（无信号语义，交付信号号为 0 的确定性映射）、`timeout` 的信号拼写表与 `-s KILL` 单独杀停两用例门控 unix（Windows 无 kill(2) 信号表与 SIGKILL 语义）；`session-manager` 的三个 temp 会话目录用例（`-tmp` 命名与两段迁移）在 Windows 跳过（上游 home 优先分类把 %TEMP% 下的 cwd 归为 home 命名，用例隐含「tmpdir 不在 home 下」的 Linux 假设）。已知边界：`pi-builtins` 完整测试套件在 Windows 上另有约 21 个上游既有失败（信号表、POSIX 输出形态类），fork 本地验证范围（fulltest 的 Rust 核心 crate 集合）本就不含该 crate，不逐项适配。

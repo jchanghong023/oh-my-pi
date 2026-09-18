@@ -14,7 +14,7 @@
 * `packages/coding-agent/`：主 CLI（`omp`）实现，日常改动的主要目标。
 * `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
-* `scripts/`：仓库脚本与 fork 工具（`jch-localci.ts`、`jch-dev-ui-test.ts`、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
+* `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
 * `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
@@ -31,15 +31,15 @@
 | 运行 CLI（源码） | `bun run dev` |
 | 类型检查 + lint（workspace 门禁） | `bun run check:ts` |
 | 仅静态检查（oxlint / oxfmt） | `bun run check:tools` |
-| fork 默认静态检查（只查本地修改的 TS 文件） | `bun run fastcheck` |
+| fork 静态检查（TS 类型检查 + lint + 格式、cargo check） | `bun run fastcheck` |
 | TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
 | Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
 | Python 测试 | `bun run test:py` |
 | 仓库脚本测试 | `bun run test:scripts` |
 | 端到端冒烟（真实 CLI 公开入口） | `bun run ci:test:smoke` |
 | 安装器端到端 | `bun run ci:test:install-methods` |
-| fork 本地 CI | `bun scripts/jch-localci.ts [full]` |
-| fork TUI 冒烟（真实 PTY） | `bun scripts/jch-dev-ui-test.ts`（`--debug` 转储原始输出） |
+| fork 本地全量测试（当前 OS，含 UI 冒烟） | `bun run fulltest` |
+| fork 流水线验证（自动 push + 触发 + 监控 GH CI） | `bun run slowtest` |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
 
 ## 开发约束
@@ -85,7 +85,7 @@
 
 ## 测试与验证要求
 
-* 功能性开发和功能性修改 MUST 有自动化验证：UT 验证局部逻辑，E2E 从真实公开入口跑到可观察结果（本仓库已有 `bun run ci:test:smoke`、`bun run ci:test:install-methods`、`bun scripts/jch-dev-ui-test.ts`），跨模块交互按需要增加集成测试；已有有效覆盖可以复用，不要求为每处修改机械新增测试。
+* 功能性开发和功能性修改 MUST 有自动化验证：UT 验证局部逻辑，E2E 从真实公开入口跑到可观察结果（本仓库已有 `bun run ci:test:smoke`、`bun run ci:test:install-methods`，UI 冒烟并入 `bun run fulltest`），跨模块交互按需要增加集成测试；已有有效覆盖可以复用，不要求为每处修改机械新增测试。
 * UT、编译、静态检查和局部模拟 MUST NOT 替代 E2E；桩与模拟可用于补充测试，但未经真实边界验证的部分 MUST 说明，不能把局部模拟冒充端到端验证。
 * 测试 MUST 对应 `fork.md` 中的需求与验收条件，覆盖核心成功路径和关键失败路径；不得只复述实现，也不得只验证「没有崩溃」。
 * 状态 MUST 区分「已实现」「验证通过」「验证失败」「未验证」；环境、依赖或权限不足时说明未验证范围，NEVER 声称功能已验收。
@@ -99,11 +99,11 @@
 
 ## 验证
 
-* 本地编译与测试默认禁止：除用户明确要求外，NEVER 运行任何本地编译、类型检查或测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）。唯一例外是本 fork 的 `bun scripts/jch-localci.ts [full]`，且同样仅在用户明确要求时运行。
-* 普通 TypeScript 修改后 MUST 运行 `bun run fastcheck`；纯文档修改只做差异与格式检查。该入口只做 lint 与格式检查，不属于上一条禁止的编译或测试。
+* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统可运行的全部测试：TS 全部分片、Rust `cargo nextest`、Python、脚本测试、UI 冒烟；需要时先构建当前宿主平台 native addon）、`bun run slowtest`（fulltest 全部内容 + 自动 push 本地 `main` 到远端、触发 GitHub Actions CI 并持续监控直到返回；端到端冒烟与安装器 E2E 由该流水线覆盖）。
+* `bun run fastcheck` agent 可按需自主调用，普通 TypeScript 修改后 MUST 运行；纯文档修改只做差异与格式检查。除 fastcheck 外的本地编译、类型检查、测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）以及 push、触发外部流水线，MUST 仅在用户明确要求时进行。
+* `bun run fulltest` 与 `bun run slowtest` 在当前操作系统上运行、只运行当前操作系统对应的测试，不维护 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
+* UI 冒烟（原 `jch-dev-ui-test` 能力，已并入 fulltest）MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
 * 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
-* 仅用户明确要求时运行 `bun scripts/jch-localci.ts`；该入口在当前操作系统上运行、只运行当前操作系统对应的测试，不维护 WSL2/双平台运行能力；仅明确要求 `full` 时构建当前宿主平台 native addon，Rust 核心测试走 `cargo nextest`。
-* 用户要求 UI 测试时 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。自动化入口 `bun scripts/jch-dev-ui-test.ts`（PTY 启动 dev TUI、断言渲染/交互/退出）同样仅在用户明确要求时运行。
 
 ## 中文文档
 
