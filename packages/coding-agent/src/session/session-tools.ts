@@ -1004,16 +1004,11 @@ export class SessionTools {
 		});
 	}
 
-	async #applyActiveToolsByName(
-		toolNames: string[],
-		forcePromptRefresh = false,
-		signal?: AbortSignal,
-		updateBase = true,
-	): Promise<void> {
+	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
 		const previousBaseActiveToolNames = this.#baseActiveToolNames;
 		const normalizedBase = normalizeToolNames(toolNames);
-		if (updateBase) this.#baseActiveToolNames = normalizedBase;
+		this.#baseActiveToolNames = normalizedBase;
 		const profile = this.#host.primaryAgentProfile();
 		toolNames = projectPrimaryAgentToolNames(normalizedBase, profile, name => this.#isCurrentBuiltInTool(name));
 		const codeMode = resolveCodeMode({

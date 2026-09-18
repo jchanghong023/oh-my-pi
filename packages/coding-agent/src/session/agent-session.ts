@@ -9684,6 +9684,10 @@ export class AgentSession {
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
+		// The rollback below reprojects the tool slate; snapshot the pre-switch
+		// base because a completed target restore can rebase it onto the target
+		// session's mode (goal/vibe) toolset before a late step fails the switch.
+		const previousPrimaryAgentBase = this.#tools.getBaseWithMountedToolNames();
 		const previousBaseSystemPrompt = this.#tools.unprofiledBaseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
@@ -9910,9 +9914,11 @@ export class AgentSession {
 			this.#activePrimaryAgentId = previousPrimaryAgentId;
 			try {
 				// A completed #restorePrimaryAgent leaves the truncated target
-				// profile applied; re-derive it from the restored profile so a
-				// late switch failure cannot strand the Main toolset.
-				await this.#tools.reapplyPrimaryAgentProfile();
+				// profile applied, and the target's mode restoration may have
+				// rebased the tool slate; reproject the snapshotted pre-switch
+				// base under the restored profile so a late switch failure cannot
+				// strand either the target's toolset or the Main profile.
+				await this.#tools.reapplyPrimaryAgentProfile(previousPrimaryAgentBase);
 			} catch (reapplyError) {
 				logger.warn("Failed to reapply Primary Agent profile after session switch rollback", {
 					error: String(reapplyError),
