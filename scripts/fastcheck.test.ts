@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { buildFastcheckPhases, FASTCHECK_TIMEOUT_MS, FastcheckTimeoutError } from "./fastcheck.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+	buildFastcheckPhases,
+	fastcheckBudgetMsFromEnv,
+	FASTCHECK_TIMEOUT_MS,
+	FastcheckTimeoutError,
+} from "./fastcheck.ts";
 
 describe("fastcheck phase plan", () => {
 	test("always runs both static passes in order", () => {
@@ -39,11 +44,40 @@ describe("wall-clock budget", () => {
 	});
 
 	test("timeout failures are distinguishable from ordinary phase failures", () => {
-		expect(new FastcheckTimeoutError(61_234)).toBeInstanceOf(FastcheckTimeoutError);
+		expect(new FastcheckTimeoutError(FASTCHECK_TIMEOUT_MS, 61_234)).toBeInstanceOf(FastcheckTimeoutError);
 		expect(new Error("static/rs (cargo check) failed with exit code 101")).not.toBeInstanceOf(FastcheckTimeoutError);
 	});
 
 	test("the timeout error reports the budget it blew", () => {
-		expect(new FastcheckTimeoutError(61_234).message).toContain("60s wall-clock budget");
+		expect(new FastcheckTimeoutError(60_000, 61_234).message).toContain("60s wall-clock budget");
+	});
+});
+
+describe("budget override", () => {
+	const original = process.env.FASTCHECK_BUDGET_MS;
+
+	afterEach(() => {
+		if (original === undefined) delete process.env.FASTCHECK_BUDGET_MS;
+		else process.env.FASTCHECK_BUDGET_MS = original;
+	});
+
+	test("defaults to the 60s quick-feedback budget", () => {
+		delete process.env.FASTCHECK_BUDGET_MS;
+		expect(fastcheckBudgetMsFromEnv()).toBe(FASTCHECK_TIMEOUT_MS);
+	});
+
+	test("fulltest's zero budget runs the gate unbounded", () => {
+		process.env.FASTCHECK_BUDGET_MS = "0";
+		expect(fastcheckBudgetMsFromEnv()).toBe(0);
+	});
+
+	test("explicit budgets are honored", () => {
+		process.env.FASTCHECK_BUDGET_MS = "90000";
+		expect(fastcheckBudgetMsFromEnv()).toBe(90_000);
+	});
+
+	test("malformed values fail loudly instead of silently re-budgeting", () => {
+		process.env.FASTCHECK_BUDGET_MS = "60s";
+		expect(() => fastcheckBudgetMsFromEnv()).toThrow("FASTCHECK_BUDGET_MS");
 	});
 });

@@ -6,7 +6,8 @@
 // files changed, this gate must never pass silently. The whole run is bounded
 // by a hard 60s wall-clock budget: on expiry the live phase children are
 // killed and the gate fails with TIMEOUT (a cold Rust cache can legitimately
-// blow the budget; the unbounded static pass belongs to fulltest).
+// blow the budget; the unbounded static pass belongs to fulltest, which reuses
+// this gate with FASTCHECK_BUDGET_MS=0).
 
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -25,13 +26,28 @@ interface Command {
  * silent pass. */
 export const FASTCHECK_TIMEOUT_MS = 60_000;
 
-/** Raised when the gate exceeds FASTCHECK_TIMEOUT_MS; distinct from ordinary
+/** Raised when the gate exceeds its wall-clock budget; distinct from ordinary
  * phase failures so the CLI reports TIMEOUT instead of FAIL. */
 export class FastcheckTimeoutError extends Error {
-	constructor(elapsedMs: number) {
-		super(`exceeded the ${FASTCHECK_TIMEOUT_MS / 1000}s wall-clock budget after ${(elapsedMs / 1000).toFixed(2)}s`);
+	constructor(budgetMs: number, elapsedMs: number) {
+		super(`exceeded the ${budgetMs / 1000}s wall-clock budget after ${(elapsedMs / 1000).toFixed(2)}s`);
 		this.name = "FastcheckTimeoutError";
 	}
+}
+
+/** Effective wall-clock budget in milliseconds. Defaults to the 60s
+ * quick-feedback budget; the FASTCHECK_BUDGET_MS env var overrides it per
+ * invocation (fulltest passes 0 to run the same gate unbounded — by contract
+ * the unbounded static pass belongs to fulltest, and a cold Rust cache
+ * legitimately needs more than 60s). */
+export function fastcheckBudgetMsFromEnv(): number {
+	const raw = process.env.FASTCHECK_BUDGET_MS;
+	if (raw === undefined) return FASTCHECK_TIMEOUT_MS;
+	const budgetMs = Number(raw);
+	if (!Number.isInteger(budgetMs) || budgetMs < 0) {
+		throw new Error(`FASTCHECK_BUDGET_MS must be a non-negative integer of milliseconds, got: ${raw}`);
+	}
+	return budgetMs;
 }
 
 export interface FastcheckOptions {
@@ -129,8 +145,9 @@ async function runCommand(command: Command): Promise<void> {
 }
 
 /** Race the whole gate against the hard budget; on expiry kill the live phase
- * children and surface a timeout failure. */
-async function enforceBudget<T>(startedAtMs: number, work: () => Promise<T>): Promise<T> {
+ * children and surface a timeout failure. A zero budget runs unbounded. */
+async function enforceBudget<T>(startedAtMs: number, budgetMs: number, work: () => Promise<T>): Promise<T> {
+	if (budgetMs === 0) return await work();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await Promise.race([
@@ -143,9 +160,9 @@ async function enforceBudget<T>(startedAtMs: number, work: () => Promise<T>): Pr
 								child.kill();
 							} catch {}
 						}
-						reject(new FastcheckTimeoutError(performance.now() - startedAtMs));
+						reject(new FastcheckTimeoutError(budgetMs, performance.now() - startedAtMs));
 					},
-					Math.max(0, FASTCHECK_TIMEOUT_MS - (performance.now() - startedAtMs)),
+					Math.max(0, budgetMs - (performance.now() - startedAtMs)),
 				);
 			}),
 		]);
@@ -170,7 +187,10 @@ if (import.meta.main) {
 	} else {
 		const startedAt = performance.now();
 		const elapsedSeconds = () => ((performance.now() - startedAt) / 1000).toFixed(2);
-		enforceBudget(startedAt, main)
+		const gate = async (): Promise<void> => {
+			await enforceBudget(startedAt, fastcheckBudgetMsFromEnv(), main);
+		};
+		gate()
 			.then(() => {
 				console.log(`\nfastcheck: PASS`);
 				console.log(`fastcheck: total time ${elapsedSeconds()}s`);

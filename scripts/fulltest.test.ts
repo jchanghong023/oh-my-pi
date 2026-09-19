@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { buildFulltestPhases, CORE_RUST_CRATES, parseFulltestArgs, WHITELIST_TEST_GROUPS } from "./fulltest.ts";
+import {
+	buildFulltestPhases,
+	CORE_RUST_CRATES,
+	type GroupChild,
+	type GroupRunPlan,
+	parseFulltestArgs,
+	runGroupPool,
+	WHITELIST_TEST_GROUPS,
+} from "./fulltest.ts";
 
 const options = { debug: false, cargoBinary: "cargo", rustEnv: undefined };
 
@@ -52,12 +60,22 @@ describe("fulltest phase plan", () => {
 		expect(rust?.argv[0]).toBe("C:/toolchain/cargo.exe");
 	});
 
+	test("the static stage reuses the fastcheck gate without its quick-feedback budget", () => {
+		// Regression: fulltest used to inherit fastcheck's 60s hard budget, so a
+		// cold Rust cache killed the whole run at its very first phase.
+		const fastcheck = buildFulltestPhases(options).find(phase => phase.label === "static/fastcheck");
+		expect(fastcheck?.env).toEqual({ FASTCHECK_BUDGET_MS: "0" });
+	});
+
 	test("rust env is forwarded to the Rust phases only", () => {
 		const phases = buildFulltestPhases({ ...options, rustEnv: { PATH: "augmented" } });
 		expect(phases.filter(phase => phase.env !== undefined).map(phase => phase.label)).toEqual([
+			"static/fastcheck",
 			"rust/compile",
 			"rust/core",
 		]);
+		const rust = phases.find(phase => phase.label === "rust/core");
+		expect(rust?.env).toEqual({ PATH: "augmented" });
 	});
 });
 
@@ -97,5 +115,56 @@ describe("parseFulltestArgs", () => {
 	test("unknown or mixed arguments are rejected", () => {
 		expect(parseFulltestArgs(["full"])).toBeNull();
 		expect(parseFulltestArgs(["--debug", "extra"])).toBeNull();
+	});
+});
+
+function groupPlan(label: string): GroupRunPlan {
+	return { label, cwd: "packages/x", argv: ["bun", "test", "example.test.ts"] };
+}
+
+/** A child whose exit only ever happens via kill() or an explicit exit() call. */
+function hangingChild(): GroupChild & { exit(code: number): void } {
+	const { promise, resolve } = Promise.withResolvers<number>();
+	return { exited: promise, kill: () => resolve(137), exit: resolve };
+}
+
+describe("runGroupPool", () => {
+	test("runs every group within the concurrency bound and reports failures", async () => {
+		const started: string[] = [];
+		let active = 0;
+		let maxActive = 0;
+		const failures = await runGroupPool([groupPlan("a"), groupPlan("b"), groupPlan("c")], {
+			label: "ts/test",
+			concurrency: 2,
+			spawn: plan => {
+				started.push(plan.label);
+				active++;
+				maxActive = Math.max(maxActive, active);
+				const code = plan.label === "b" ? 1 : 0;
+				return { exited: Promise.resolve(code).finally(() => active--), kill: () => {} };
+			},
+		});
+		expect(started.sort()).toEqual(["a", "b", "c"]);
+		expect(maxActive).toBe(2);
+		expect(failures).toEqual([{ label: "b", exitCode: 1 }]);
+	});
+
+	test("expiry stops the queue instead of only killing the running children", async () => {
+		// Regression: the timeout verdict only killed the active children, and
+		// their workers then drained the remaining queued groups — the phase
+		// kept burning CPU after fulltest had already printed its FAIL verdict.
+		const started: string[] = [];
+		const run = runGroupPool(["g1", "g2", "g3", "g4", "g5", "g6"].map(groupPlan), {
+			label: "ts/test",
+			concurrency: 2,
+			timeoutMs: 100,
+			spawn: plan => {
+				started.push(plan.label);
+				return hangingChild();
+			},
+		});
+		await expect(run).rejects.toThrow("exceeded the");
+		await Bun.sleep(100);
+		expect(started).toEqual(["g1", "g2"]);
 	});
 });

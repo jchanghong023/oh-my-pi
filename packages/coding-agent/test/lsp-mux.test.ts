@@ -398,6 +398,31 @@ describe("LspMuxServer", () => {
 	);
 
 	it.skipIf(process.platform === "win32")(
+		"survives a language server that exits while documents are open",
+		async () => {
+			// Regression: session teardown wrote didClose to the exited child's
+			// stdin; that rejection escaped #closeSession (invoked via `void`
+			// from the socket "close" handler) and killed the whole daemon.
+			const { client } = await link();
+			await initialize(client);
+			const uri = "file:///crash.ts";
+			client.notify("textDocument/didOpen", {
+				textDocument: { uri, languageId: "typescript", version: 1, text: "x" },
+			});
+			await pollUntil(async () => (await state(client)).didOpen[uri] === 1, "didOpen to reach the server");
+			const closed = client.waitForClose();
+			client.notify(MUX_RESTART_METHOD);
+			await closed;
+			await pollUntil(() => Promise.resolve(server.serverKeys.length === 0), "exited server cleanup");
+			// The daemon itself must keep serving fresh sessions.
+			const fresh = await link();
+			await initialize(fresh.client);
+			expect(await fresh.client.request<{ alive: boolean }>("test/echo", { alive: true })).toEqual({ alive: true });
+		},
+		10_000,
+	);
+
+	it.skipIf(process.platform === "win32")(
 		"finishes orphan document closes before reusing a server",
 		async () => {
 			const first = await link();

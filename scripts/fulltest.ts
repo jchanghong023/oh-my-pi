@@ -272,7 +272,10 @@ function pinnedRustChannel(): string {
 export function buildFulltestPhases(options: FulltestOptions): readonly FulltestCommand[] {
 	const uiSmokeArgs = ["bun", "scripts/fulltest-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])];
 	return [
-		{ label: "static/fastcheck", argv: ["bun", "scripts/fastcheck.ts"] },
+		// Unbounded by design: fulltest owns the no-time-limit static pass, so
+		// the fastcheck gate runs without its 60s quick-feedback budget — a
+		// cold Rust cache must fail on its own errors, not on the budget.
+		{ label: "static/fastcheck", argv: ["bun", "scripts/fastcheck.ts"], env: { FASTCHECK_BUDGET_MS: "0" } },
 		{ label: "build/native", argv: ["bun", "run", "build:native"] },
 		// The whitelist phase is driven by runWhitelistPhase, not a single argv;
 		// the placeholder keeps it visible in the phase plan.
@@ -350,8 +353,16 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 }
 
 /** Race a phase promise against the test budget; on expiry kill the children
- * and fail the phase. Untimed phases (compile/static) pass straight through. */
-async function withTestTimeout<T>(label: string, exited: Promise<T>, kill: () => void, timed: boolean): Promise<T> {
+ * and fail the phase. Untimed phases (compile/static) pass straight through.
+ * The budget defaults to TEST_PHASE_TIMEOUT_MS; the group pool passes its own
+ * (tests use short budgets). */
+async function withTestTimeout<T>(
+	label: string,
+	exited: Promise<T>,
+	kill: () => void,
+	timed: boolean,
+	timeoutMs: number = TEST_PHASE_TIMEOUT_MS,
+): Promise<T> {
 	if (!timed) return exited;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -362,8 +373,8 @@ async function withTestTimeout<T>(label: string, exited: Promise<T>, kill: () =>
 					try {
 						kill();
 					} catch {}
-					reject(new Error(`${label} exceeded the ${TEST_PHASE_TIMEOUT_MS / 60_000}-minute test timeout`));
-				}, TEST_PHASE_TIMEOUT_MS);
+					reject(new Error(`${label} exceeded the ${timeoutMs / 60_000}-minute test timeout`));
+				}, timeoutMs);
 			}),
 		]);
 	} finally {
@@ -403,51 +414,69 @@ async function validateTestFiles(groups: readonly TestGroup[]): Promise<void> {
 	}
 }
 
-/** Run the fork green test groups in a bounded parallel pool; every group is a
- * plain black-and-white gate — any failure fails fulltest. The whole phase is
- * bounded by the test timeout; on expiry all live group children are killed. */
-async function runWhitelistPhase(): Promise<void> {
-	console.log(`\n==> ts/whitelist`);
-	await validateTestFiles(WHITELIST_TEST_GROUPS);
-	const queue = WHITELIST_TEST_GROUPS.map(group => ({
-		label: `${group.label} (${group.files.length} files)`,
-		cwd: group.cwd,
-		argv: ["bun", "test", ...group.files] as const,
-	}));
+/** One green-set group resolved to a spawn plan for the whitelist pool. */
+export interface GroupRunPlan {
+	label: string;
+	cwd: string;
+	argv: readonly string[];
+}
+
+/** Spawned group child as seen by the pool: awaitable exit code and kill. */
+export interface GroupChild {
+	exited: Promise<number>;
+	kill(): void;
+}
+
+export interface GroupPoolOptions {
+	/** Phase label used in the timeout verdict. */
+	label: string;
+	/** Max concurrently running groups. */
+	concurrency: number;
+	/** Spawn one group child. */
+	spawn: (plan: GroupRunPlan) => GroupChild;
+	/** Hard phase budget override; defaults to TEST_PHASE_TIMEOUT_MS. */
+	timeoutMs?: number;
+}
+
+/** Run the green-set groups in a bounded parallel pool under the hard test
+ * budget. On expiry every live child is killed AND the queue stops draining —
+ * workers re-check the expiry flag before starting the next queued group, so
+ * the timeout verdict ends the phase instead of only the running children
+ * (freed workers would otherwise drain the rest of the queue after the
+ * verdict was already printed). */
+export async function runGroupPool(
+	plans: readonly GroupRunPlan[],
+	options: GroupPoolOptions,
+): Promise<Array<{ label: string; exitCode: number }>> {
+	const queue = [...plans];
 	const failures: Array<{ label: string; exitCode: number }> = [];
-	const concurrency = Math.max(1, Math.min(4, os.availableParallelism()));
-	const active = new Set<ReturnType<typeof Bun.spawn>>();
-	console.log(`ts/whitelist: running ${queue.length} green-set groups with ${concurrency} workers`);
+	const active = new Set<GroupChild>();
+	let expired = false;
 
 	async function worker(): Promise<void> {
 		for (;;) {
-			const entry = queue.shift();
-			if (!entry) return;
-			console.log(`\n==> ${entry.label}`);
-			console.log(`(cd ${entry.cwd} && ${entry.argv.map(shellQuote).join(" ")})`);
-			// `bun test` never reads stdin; an inherited pipe whose write end stays
-			// open would keep stdin-EOF-waiting tests hung until their timeout.
-			const child = Bun.spawn([...entry.argv], {
-				cwd: path.join(repoRoot, entry.cwd),
-				stdin: "ignore",
-				stdout: "inherit",
-				stderr: "inherit",
-			});
+			if (expired) return;
+			const plan = queue.shift();
+			if (!plan) return;
+			console.log(`\n==> ${plan.label}`);
+			console.log(`(cd ${plan.cwd} && ${plan.argv.map(shellQuote).join(" ")})`);
+			const child = options.spawn(plan);
 			active.add(child);
 			try {
 				const exitCode = await child.exited;
-				if (exitCode !== 0) failures.push({ label: entry.label, exitCode });
+				if (exitCode !== 0) failures.push({ label: plan.label, exitCode });
 			} finally {
 				active.delete(child);
 			}
 		}
 	}
 
-	const pool = Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => worker()));
+	const pool = Promise.all(Array.from({ length: Math.min(options.concurrency, plans.length) }, () => worker()));
 	await withTestTimeout(
-		"ts/whitelist",
+		options.label,
 		pool,
 		() => {
+			expired = true;
 			for (const child of active) {
 				try {
 					child.kill();
@@ -455,7 +484,40 @@ async function runWhitelistPhase(): Promise<void> {
 			}
 		},
 		true,
+		options.timeoutMs,
 	);
+	return failures;
+}
+
+/** Run the fork green test groups in a bounded parallel pool; every group is a
+ * plain black-and-white gate — any failure fails fulltest. The whole phase is
+ * bounded by the test timeout; on expiry all live group children are killed
+ * and no further groups start. */
+async function runWhitelistPhase(): Promise<void> {
+	console.log(`\n==> ts/whitelist`);
+	await validateTestFiles(WHITELIST_TEST_GROUPS);
+	const plans = WHITELIST_TEST_GROUPS.map(group => ({
+		label: `${group.label} (${group.files.length} files)`,
+		cwd: group.cwd,
+		argv: ["bun", "test", ...group.files] as const,
+	}));
+	const concurrency = Math.max(1, Math.min(4, os.availableParallelism()));
+	console.log(`ts/whitelist: running ${plans.length} green-set groups with ${concurrency} workers`);
+	const failures = await runGroupPool(plans, {
+		label: "ts/whitelist",
+		concurrency,
+		spawn: plan => {
+			// `bun test` never reads stdin; an inherited pipe whose write end stays
+			// open would keep stdin-EOF-waiting tests hung until their timeout.
+			const child = Bun.spawn([...plan.argv], {
+				cwd: path.join(repoRoot, plan.cwd),
+				stdin: "ignore",
+				stdout: "inherit",
+				stderr: "inherit",
+			});
+			return { exited: child.exited, kill: () => child.kill() };
+		},
+	});
 	if (failures.length > 0) {
 		const details = failures.map(({ label, exitCode }) => `  - ${label}: exit ${exitCode}`).join("\n");
 		throw new Error(`ts/whitelist group(s) failed:\n${details}`);

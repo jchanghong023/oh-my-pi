@@ -107,6 +107,18 @@ describe("MCP scope filtering precedes connection-equivalence deduplication", ()
 		expect(result.sources.shared?.level).toBe("user");
 	});
 
+	test("a malformed user mcp.json fails soft instead of dropping every source", async () => {
+		// Regression: the user-level allow/deny list read ran before any source
+		// loading, so a hand-edited user mcp.json with a JSON syntax error made
+		// loadAllMCPConfigs itself reject — every MCP provider vanished (the
+		// mcp-json provider already skips a malformed file with a warning).
+		clearFsCache();
+		await fs.writeFile(path.join(userAgentDir, "mcp.json"), "{ not valid json");
+		const result = await loadAllMCPConfigs(projectDir, { enableProjectConfig: true, filterExa: false });
+		expect(Object.keys(result.configs)).toEqual(["projcontext"]);
+		expect(result.sources.projcontext?.level).toBe("project");
+	});
+
 	test("effective extension roots survive scopeless MCP rediscovery", async () => {
 		const extensionDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-extension-"));
 		try {
