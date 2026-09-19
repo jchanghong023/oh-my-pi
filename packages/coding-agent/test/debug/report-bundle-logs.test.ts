@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
+import { localDay } from "@oh-my-pi/pi-utils";
 import { isolateReportBundleDirs, type ReportBundleTestDirs } from "../helpers/report-bundle-isolation";
 
 let dirs: ReportBundleTestDirs | undefined;
@@ -17,7 +18,7 @@ describe("report bundle logs", () => {
 	it("collects every same-day PID log, not only the current process", async () => {
 		dirs = await isolateReportBundleDirs();
 
-		const today = new Date().toISOString().slice(0, 10);
+		const today = localDay(new Date());
 		const crashedName = `omp.${today}.4242.log`;
 		const rotatedName = `${crashedName}.1`;
 		const currentName = `omp.${today}.${process.pid}.log`;

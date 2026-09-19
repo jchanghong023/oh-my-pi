@@ -102,16 +102,34 @@ function readConsoleInputMode(kernel32: Kernel32): ConsoleInputMode {
  */
 function listConsoleProcesses(kernel32: Kernel32): ConsoleProcess[] | undefined {
 	try {
+		// A zero-length buffer makes GetConsoleProcessList fail outright (it
+		// returns 0 with GetLastError=ERROR_INVALID_PARAMETER), so probe with a
+		// one-element buffer: a return of 1 means the sole attached pid was
+		// written into it; any larger return is the required buffer size for a
+		// second, exact query.
 		const scratch = new Uint32Array(1);
-		const needed = kernel32.symbols.GetConsoleProcessList(scratch, 0);
-		if (typeof needed !== "number" || needed <= 0) {
+		const n1 = kernel32.symbols.GetConsoleProcessList(scratch, 1);
+		if (typeof n1 !== "number" || n1 <= 0) {
 			return undefined;
 		}
-		const pids = new Uint32Array(needed);
-		const count = kernel32.symbols.GetConsoleProcessList(pids, needed);
+		let pids: Uint32Array;
+		let count: number;
+		if (n1 === 1) {
+			pids = scratch;
+			count = 1;
+		} else {
+			pids = new Uint32Array(n1);
+			const n2 = kernel32.symbols.GetConsoleProcessList(pids, n1);
+			// The attached set can change between the two calls: if it grew,
+			// n2 > n1 and the buffer contents are undefined; if it shrank, exactly
+			// the first n2 entries are valid.
+			if (typeof n2 !== "number" || n2 <= 0 || n2 > n1) {
+				return undefined;
+			}
+			count = n2;
+		}
 		const result: ConsoleProcess[] = [];
-		const bounded = typeof count === "number" && count > 0 ? Math.min(count, needed) : needed;
-		for (let i = 0; i < bounded; i++) {
+		for (let i = 0; i < count; i++) {
 			const pid = pids[i];
 			const entry: ConsoleProcess = { pid, self: pid === process.pid };
 			const name = queryProcessImageName(kernel32, pid);

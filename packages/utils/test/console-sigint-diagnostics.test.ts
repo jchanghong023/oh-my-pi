@@ -33,6 +33,11 @@ describe("SIGINT console diagnostics", () => {
 			// Without a console attached (test runner stdin is a pipe) the mode
 			// probe reports a contained error instead of throwing.
 			expect(record.console).toBeDefined();
+			// The attached-process list is the payload this record exists for:
+			// the test runner shares this console, so the probe must return at
+			// least one entry (the current process).
+			expect(Array.isArray(record.processes)).toBe(true);
+			expect((record.processes as unknown[]).length).toBeGreaterThan(0);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

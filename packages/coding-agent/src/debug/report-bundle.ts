@@ -8,7 +8,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { WorkProfile } from "@oh-my-pi/pi-natives";
-import { APP_NAME, getLogPath, getLogsDir, getReportsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getLogPath, getLogsDir, getReportsDir, isEnoent, localDay } from "@oh-my-pi/pi-utils";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import type { CpuProfile, MemoryStats } from "./profiler";
 import { collectSystemInfo, sanitizeEnv } from "./system-info";
@@ -215,11 +215,13 @@ export async function getLogText(): Promise<string> {
 
 /**
  * Concatenate the tail of every same-day process log so a report generated
- * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. Files
- * are ordered oldest-first by mtime and separated by a filename header.
+ * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. The
+ * day key is the LOCAL calendar day, matching the rotating sink's file
+ * naming (see `localDay`). Files are ordered oldest-first by mtime and
+ * separated by a filename header.
  */
 async function collectSameDayLogs(linesPerFile: number, logsDir = getLogsDir()): Promise<string> {
-	const today = new Date().toISOString().slice(0, 10);
+	const today = localDay(new Date());
 	const sameDay: Array<{ name: string; mtimeMs: number }> = [];
 	try {
 		const entries = await fs.readdir(logsDir, { withFileTypes: true });
