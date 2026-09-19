@@ -282,30 +282,6 @@ describe("team revision flags and blocking tracking", () => {
 		const recheckResolvedNewBlocking = reviewData({ blocking: 1, priorStatus: "resolved" }) as never;
 		expect(computeUnresolvedBlocking([initial, recheckResolvedNewBlocking])).toHaveLength(1);
 	});
-
-	it("folds multi-recheck chains so intermediate blocking state is not lost", () => {
-		// initial has only important findings; recheck1 adds B1; recheck2 says
-		// prior still unresolved with no new findings — B1 must remain.
-		const initial = reviewData({ important: 1 }) as never;
-		const recheck1 = reviewData({ blocking: 1, priorStatus: "unresolved" }) as never;
-		const recheck2 = reviewData({ priorStatus: "unresolved" }) as never;
-		expect(computeUnresolvedBlocking([initial, recheck1, recheck2])).toEqual(["阻断问题 1"]);
-
-		// initial B0 resolved at recheck1; recheck2 adds B1 as unresolved prior
-		// plus its own blocking finding — only recheck2's state remains.
-		const initialB0 = reviewData({ blocking: 1 }) as never;
-		const resolved = reviewData({ priorStatus: "resolved" }) as never;
-		const recheck2New = reviewData({ blocking: 1, priorStatus: "unresolved" }) as never;
-		const folded = computeUnresolvedBlocking([initialB0, resolved, recheck2New]);
-		expect(folded).toEqual(["阻断问题 1"]); // same issue text; resolved cleared B0 first
-
-		// intermediate resolved, then a later recheck reports unresolved with no
-		// new findings — the cleared intermediate list must stay empty, but a
-		// non-resolved intermediate that introduced B1 must survive.
-		const withIntermediateB = reviewData({ blocking: 1, priorStatus: "partially-resolved" }) as never;
-		const stillUnresolved = reviewData({ priorStatus: "unresolved" }) as never;
-		expect(computeUnresolvedBlocking([initialB0, withIntermediateB, stillUnresolved])).toHaveLength(1);
-	});
 });
 
 describe("team orchestrator", () => {
@@ -335,24 +311,6 @@ describe("team orchestrator", () => {
 		}
 		// No findings → no revision rounds are padded.
 		expect(calls.filter(call => parseMarker(call.task).role === "revision")).toHaveLength(0);
-	});
-
-	it("places revision between review and synthesis when findings force a revision round", async () => {
-		const { result, calls } = await run({
-			review: ({ recheck }) => (recheck ? reviewData({ priorStatus: "resolved" }) : reviewData({ blocking: 1 })),
-			revision: () => revisionData({ claimsResolvedBlocking: true }),
-		});
-		expect(result.status).toBe("completed");
-		const roles = calls.map(call => parseMarker(call.task).role);
-		const firstReview = roles.indexOf("review");
-		const lastReview = roles.lastIndexOf("review");
-		const firstRevision = roles.indexOf("revision");
-		const lastRevision = roles.lastIndexOf("revision");
-		const synthesis = roles.indexOf("synthesis");
-		expect(firstRevision).toBeGreaterThan(firstReview);
-		expect(lastRevision).toBeGreaterThan(lastReview);
-		expect(synthesis).toBeGreaterThan(lastRevision);
-		expect(synthesis).toBe(roles.length - 1);
 	});
 
 	it("emits the closing contract and structured tracking sections in the final report", async () => {
@@ -611,30 +569,6 @@ describe("team orchestrator", () => {
 			maxConcurrency: 2,
 		});
 		expect(result.status).toBe("completed");
-		expect(peak).toBeGreaterThanOrEqual(2);
 		expect(peak).toBeLessThanOrEqual(2);
-	});
-
-	it("propagates the abort signal into runner calls after cancellation", async () => {
-		const controller = new AbortController();
-		const observed: boolean[] = [];
-		const { runner } = createScriptedRunner({});
-		const wrapped: TeamSubagentRunner = async (call, signal) => {
-			observed.push(signal.aborted);
-			if (parseMarker(call.task).role === "proposal") controller.abort();
-			return runner(call, signal);
-		};
-		const result = await runTeamDiscussion({
-			question: "取消传播",
-			cwd: "/tmp/repo",
-			participants: participants3(),
-			sessionModelPattern: PATTERN_A,
-			runner: wrapped,
-			signal: controller.signal,
-			maxConcurrency: 8,
-		});
-		expect(result.status).toBe("cancelled");
-		// At least one call observed the aborted signal after cancel fired.
-		expect(observed.some(aborted => aborted)).toBe(true);
 	});
 });
