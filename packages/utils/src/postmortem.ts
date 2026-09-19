@@ -529,7 +529,14 @@ export async function handleSigint(options: { diagnostics?: boolean } = {}): Pro
 		try {
 			if (interceptor()) return;
 		} catch (interceptorErr) {
-			logger.warn("SIGINT interceptor threw; continuing with signal teardown", { err: interceptorErr });
+			// The logger is silent unless transports are enabled (long-running
+			// services opt in); this containment diagnostic must stay observable
+			// on stderr in the default configuration too, right before exit(130).
+			process.stderr.write(
+				`SIGINT interceptor threw; continuing with signal teardown: ${
+					interceptorErr instanceof Error ? interceptorErr.message : String(interceptorErr)
+				}\n`,
+			);
 		}
 	}
 	await runCleanup(Reason.SIGINT);

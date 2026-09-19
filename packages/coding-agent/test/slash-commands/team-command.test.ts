@@ -41,10 +41,12 @@ function textRuntime(session: AgentSession): { runtime: SlashCommandRuntime; out
 function tuiRuntime(
 	session: AgentSession,
 	settings = Settings.isolated(),
-): { runtime: TuiSlashCommandRuntime; status: string[]; warnings: string[]; editorClears: number } {
+): { runtime: TuiSlashCommandRuntime; status: string[]; warnings: string[]; editorClears: { count: number } } {
 	const status: string[] = [];
 	const warnings: string[] = [];
-	let editorClears = 0;
+	// Object counter: a bare number would be snapshotted at return time and the
+	// test's destructure would forever see the initial 0.
+	const editorClears = { count: 0 };
 	const runtime = {
 		ctx: {
 			session,
@@ -52,7 +54,7 @@ function tuiRuntime(
 			sessionManager: { getCwd: () => "/tmp/repo" },
 			editor: {
 				setText: (text: string) => {
-					if (text === "") editorClears++;
+					if (text === "") editorClears.count++;
 				},
 			},
 			showStatus: (text: string) => {
@@ -124,7 +126,7 @@ describe("/team command gates", () => {
 	it("keeps the question in the TUI editor when dispatch fails validation", async () => {
 		const { runtime, editorClears } = tuiRuntime(stubSession({ model: undefined }));
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
-		expect(editorClears).toBe(0);
+		expect(editorClears.count).toBe(0);
 	});
 
 	it("clears the TUI editor only after a successful dispatch", async () => {
@@ -140,6 +142,6 @@ describe("/team command gates", () => {
 		const settings = Settings.isolated({ "team.members": [MODEL_PATTERN] });
 		const { runtime, editorClears } = tuiRuntime(session, settings);
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
-		expect(editorClears).toBe(1);
+		expect(editorClears.count).toBe(1);
 	});
 });
