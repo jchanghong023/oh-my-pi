@@ -95,23 +95,29 @@ export function needsRecheck(flags: TeamRevisionFlags): boolean {
 }
 
 /**
- * Mechanically recompute the unresolved blocking list from the review chain:
- * the initial review's blocking findings stand until a recheck reports them
- * resolved; recheck-added blocking findings join the list. Reviews that never
+ * Mechanically recompute the unresolved blocking list from the review chain.
+ * Folds every recheck in order: start from the initial review's blocking
+ * findings; each recheck with `priorBlockingStatus === "resolved"` clears the
+ * accumulated list (then re-appends its own blocking findings), while
+ * `unresolved` / `partially-resolved` / `not-applicable` keep the prior state
+ * and union in that recheck's own blocking findings. Reviews that never
  * happened (skipped recheck) leave the prior state untouched.
  */
 export function computeUnresolvedBlocking(reviews: readonly TeamReviewOutput[]): string[] {
 	const initial = reviews[0];
 	if (!initial) return [];
-	const initialBlocking = initial.findings
-		.filter(finding => finding.severity === "blocking")
-		.map(finding => finding.issue);
-	const rechecks = reviews.slice(1);
-	if (rechecks.length === 0) return initialBlocking;
-	const last = rechecks[rechecks.length - 1];
-	const newBlocking = last.findings.filter(finding => finding.severity === "blocking").map(finding => finding.issue);
-	if (last.priorBlockingStatus === "resolved") return [...new Set(newBlocking)];
-	return [...new Set([...initialBlocking, ...newBlocking])];
+	let unresolved = initial.findings.filter(finding => finding.severity === "blocking").map(finding => finding.issue);
+	for (const recheck of reviews.slice(1)) {
+		const newBlocking = recheck.findings
+			.filter(finding => finding.severity === "blocking")
+			.map(finding => finding.issue);
+		if (recheck.priorBlockingStatus === "resolved") {
+			unresolved = [...new Set(newBlocking)];
+		} else {
+			unresolved = [...new Set([...unresolved, ...newBlocking])];
+		}
+	}
+	return unresolved;
 }
 
 function proposalLabel(index: number): string {

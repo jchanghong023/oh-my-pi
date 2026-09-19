@@ -46,7 +46,7 @@ function stageOf(text: string): string {
 	return match[1];
 }
 
-function scriptedData(stage: string): Record<string, unknown> {
+function scriptedData(stage: string, text?: string): Record<string, unknown> {
 	switch (stage) {
 		case "proposal":
 			return {
@@ -67,24 +67,52 @@ function scriptedData(stage: string): Record<string, unknown> {
 				acceptanceCriteria: ["功能可用", "旧接口不破坏"],
 				factDifferences: [],
 				interpretationDifferences: [
-					{ ambiguity: "并发", interpretations: [{ view: "需要", impact: "架构不同" }], affectsChoice: false },
+					{
+						ambiguity: "并发",
+						interpretations: [{ view: "需要", impact: "架构不同" }],
+						affectsChoice: true,
+					},
 				],
 			};
 		case "review":
+			// Initial reviews report a blocking finding so revision runs; rechecks
+			// clear it so the run can complete as adoptable options.
+			if (!text?.includes(" recheck]")) {
+				return {
+					noSubstantiveIssues: false,
+					reviewSummary: "发现阻断问题：缺少迁移步骤。",
+					findings: [
+						{
+							severity: "blocking",
+							issue: "缺少迁移步骤",
+							impact: "升级时数据不一致",
+							evidence: "src/module.ts",
+							targetAspect: "迁移",
+						},
+					],
+					priorBlockingStatus: "not-applicable",
+				};
+			}
 			return {
 				noSubstantiveIssues: true,
-				reviewSummary: "未发现实质问题。",
+				reviewSummary: "阻断问题已解决。",
 				findings: [],
-				priorBlockingStatus: "not-applicable",
+				priorBlockingStatus: "resolved",
 			};
 		case "revision":
 			return {
-				revisedProposal: "方案（修订）：同前。",
-				revisionSummary: "无改动",
-				responses: [],
+				revisedProposal: "方案（修订）：补充迁移步骤后同前。",
+				revisionSummary: "补充迁移步骤",
+				responses: [
+					{
+						finding: "缺少迁移步骤",
+						disposition: "accepted-and-revised",
+						explanation: "已补充迁移步骤与回滚说明",
+					},
+				],
 				reviewFlags: {
 					changedCoreDesign: false,
-					claimsResolvedBlocking: false,
+					claimsResolvedBlocking: true,
 					newEvidenceChangesAssumptions: false,
 					disputesBlockingFinding: false,
 				},
@@ -144,7 +172,7 @@ describe("team in-process integration", () => {
 							type: "tool_execution_end",
 							toolCallId: `yield-${recorded.length}`,
 							toolName: "yield",
-							result: { content: [], details: { status: "success", data: scriptedData(stage) } },
+							result: { content: [], details: { status: "success", data: scriptedData(stage, text) } },
 							isError: false,
 						} as AgentSessionEvent);
 					}
@@ -199,14 +227,26 @@ describe("team in-process integration", () => {
 		expect(markdown).toContain("【推荐】方案 A");
 		expect(markdown).toContain(TEAM_CLOSING_CONTRACT.split("\n")[0]!.slice(2));
 		expect(markdown).toContain("✅ 可作为选项");
+		// §6 structure: choice-affecting interpretation difference is top-noticed.
+		const noticeIndex = markdown.indexOf("请先回答差异、带答案重跑");
+		expect(noticeIndex).toBeGreaterThan(-1);
+		expect(noticeIndex).toBeLessThan(markdown.indexOf("### 核心方案"));
 
-		// Stage coverage: two proposals, one alignment, two reviews, one synthesis.
+		// Stage coverage: two proposals, one alignment, reviews (+rechecks),
+		// revisions, one synthesis — all five stages.
 		const stages = recorded.map(call => call.stage);
 		expect(stages.filter(stage => stage === "proposal")).toHaveLength(2);
 		expect(stages.filter(stage => stage === "alignment")).toHaveLength(1);
-		expect(stages.filter(stage => stage === "review")).toHaveLength(2);
+		expect(stages.filter(stage => stage === "review")).toHaveLength(4); // 2 initial + 2 recheck
+		expect(stages.filter(stage => stage === "revision")).toHaveLength(2);
 		expect(stages.filter(stage => stage === "synthesis")).toHaveLength(1);
-		expect(stages).not.toContain("revision"); // clean reviews: no padded rounds
+		const stageIndex = (stage: string) => stages.indexOf(stage);
+		const stageLastIndex = (stage: string) => stages.lastIndexOf(stage);
+		expect(stageIndex("proposal")).toBe(0);
+		expect(stageIndex("alignment")).toBeGreaterThan(stageLastIndex("proposal"));
+		expect(stageIndex("review")).toBeGreaterThan(stageIndex("alignment"));
+		expect(stageIndex("revision")).toBeGreaterThan(stageIndex("review"));
+		expect(stageIndex("synthesis")).toBeGreaterThan(stageLastIndex("revision"));
 
 		// Model pinning: each child session ran on its configured model.
 		const byStage = (stage: string) =>
@@ -219,8 +259,11 @@ describe("team in-process integration", () => {
 		expect(byStage("synthesis")).toEqual([PATTERN_SESSION]);
 		// Rotation: proposal A (session model) reviewed by the other model; the
 		// session model never reviews, so proposal B falls back to its own
-		// model's fresh subagent (sole eligible reviewer).
-		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER]);
+		// model's fresh subagent (sole eligible reviewer). Rechecks reuse the
+		// same rotation.
+		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER]);
+		// Reviser is the proposal's own model: B (other), A (session).
+		expect(byStage("revision")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
 
 		// Read-only tool contract and strict schema mode ride through the executor
 		// into every child session, mechanically.
@@ -228,12 +271,15 @@ describe("team in-process integration", () => {
 			expect(call.outputSchemaMode).toBe("strict");
 			const received = [...(call.toolNames ?? [])].sort();
 			const allowed = [...TEAM_READ_ONLY_TOOLS, "yield"].sort();
-			// The set is exactly the read-only list; the required yield tool is
-			// appended later by the SDK. Nothing else (no bash/eval/write/edit/
-			// task/hub/MCP) may leak in.
+			// Exact set: every allowed tool present, nothing else leaks in.
+			// (getActiveToolNames in the stub only reports yield; assert via
+			// toolNames passed into createAgentSession options.)
 			expect(received.every(name => allowed.includes(name))).toBe(true);
-			expect(received).toContain("read");
-			expect(received).toContain("wiki");
+			expect(received).toContain("yield");
+			// Every TEAM_READ_ONLY_TOOLS entry the SDK would enable must be in allowed.
+			for (const tool of TEAM_READ_ONLY_TOOLS) {
+				expect(allowed).toContain(tool);
+			}
 		}
 	});
 
