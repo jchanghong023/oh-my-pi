@@ -88,7 +88,7 @@ function runCapture(argv: readonly string[]): { exitCode: number; stdout: string
 	return { exitCode: result.exitCode, stdout: result.stdout?.toString("utf-8") ?? "" };
 }
 
-function runInherit(argv: readonly string[]): number {
+async function runInherit(argv: readonly string[]): Promise<number> {
 	console.log(`$ ${argv.map(shellQuote).join(" ")}`);
 	const child = Bun.spawn([...argv], {
 		cwd: repoRoot,
@@ -96,12 +96,15 @@ function runInherit(argv: readonly string[]): number {
 		stdout: "inherit",
 		stderr: "inherit",
 	});
-	return child.exited;
+	// Await: `child.exited` is a Promise<number>, and returning it unchecked
+	// once made every `!== 0` comparison true ("[object Promise]") — slowtest
+	// could never get past its first phase.
+	return await child.exited;
 }
 
 async function main(debug: boolean): Promise<number> {
 	const fulltestStartedAt = performance.now();
-	const fulltestExit = runInherit(["bun", "scripts/fulltest.ts", ...(debug ? ["--debug"] : [])]);
+	const fulltestExit = await runInherit(["bun", "scripts/fulltest.ts", ...(debug ? ["--debug"] : [])]);
 	if (fulltestExit !== 0) fail(`fulltest failed with exit code ${fulltestExit}; not pushing or triggering CI`);
 	logStageDone("fulltest", fulltestStartedAt);
 
@@ -112,7 +115,7 @@ async function main(debug: boolean): Promise<number> {
 	if (headSha === "") fail("could not resolve HEAD sha");
 
 	const pushStartedAt = performance.now();
-	if (runInherit(["git", "push", "origin", "main"]) !== 0) {
+	if ((await runInherit(["git", "push", "origin", "main"])) !== 0) {
 		fail("git push origin main failed; resolve the remote state before re-running slowtest");
 	}
 	logStageDone("push", pushStartedAt);
@@ -121,7 +124,7 @@ async function main(debug: boolean): Promise<number> {
 	console.log(`\nslowtest: triggering ${WORKFLOW_FILE} (workflow_dispatch, no release) for ${headSha.slice(0, 12)}`);
 	const triggeredAtMs = Date.now();
 	const triggerStartedAt = performance.now();
-	if (runInherit(["gh", "workflow", "run", WORKFLOW_FILE]) !== 0) {
+	if ((await runInherit(["gh", "workflow", "run", WORKFLOW_FILE])) !== 0) {
 		fail(`gh workflow run ${WORKFLOW_FILE} failed (check 'gh auth status')`);
 	}
 
