@@ -2876,15 +2876,15 @@ mod tests {
 		let second_ready = dir.path().join("second.ready");
 		let first_script = "trap 'exit 42' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while \
 		                    :; do sleep 0.05; done";
-		// Fork: the second process must not self-stop until the first one already
-		// has. brush-core's stopped-children poll consumes every pending WUNTRACED
-		// notification in one `waitid(All)` sweep, so with both stops pending at the
-		// same instant one process's waiter eats both notifications while the other
-		// keeps waiting for a SIGCHLD that real-time signal coalescing already
-		// merged away — a lost wakeup that hung the foreground pipeline wait until
-		// the 600 s budget (two consecutive CI hangs on 2026-09-19 with a
-		// byte-identical code path). Gating the second stop on the first process's
-		// ready file keeps at most one stop pending per poll and closes the window.
+		// Gate the second process's self-stop on the first one's ready file.
+		// brush-core's stopped-children poll consumes every pending WUNTRACED
+		// notification in one `waitid(All)` sweep, so simultaneous stops let a
+		// concurrent waiter steal a notification; sequencing the stops keeps
+		// at most one in flight. (The foreground wait itself no longer depends
+		// on this: `ChildProcess::wait` re-polls stopped children on a fixed
+		// interval, recovering the case where a child's SIGCHLD was dropped by
+		// the signal registry before the waiter subscribed — the lost-wakeup
+		// hang seen twice in CI on 2026-09-19.)
 		let second_script = "trap 'exit 43' TERM; while [ ! -f \"$3\" ]; do sleep 0.01; done; echo \
 		                     $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while :; do sleep 0.05; done";
 		let command = format!(
@@ -2954,6 +2954,56 @@ mod tests {
 		for pid in pids {
 			assert!(process::Process::from_pid(pid).is_none(), "pipeline process {pid} survived");
 		}
+	}
+
+	/// A background job that self-stopped while no foreground waiter had a
+	/// SIGCHLD listener subscribed must still be reported as stopped by
+	/// `wait %1`: the stop's SIGCHLD is dropped by the signal registry (it has
+	/// no receiver at delivery time), so only `ChildProcess::wait`'s periodic
+	/// stopped-children poll can recover the state — without it this wait never
+	/// wakes. Runs isolated so sibling tests' child activity cannot supply a
+	/// substitute SIGCHLD.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn wait_jobspec_observes_background_stop_after_dropped_sigchld() {
+		const MARKER: &str = "PI_SHELL_TEST_WAIT_BG_STOP_DROPPED_SIGCHLD";
+		if std::env::var_os(MARKER).is_none() {
+			run_isolated_kill_test(
+				"shell::tests::wait_jobspec_observes_background_stop_after_dropped_sigchld",
+				MARKER,
+				false,
+			)
+			.await;
+			return;
+		}
+
+		let (mut session, params) = kill_test_context().await;
+		let source_info = SourceInfo::from("pi-natives:test");
+		let spawned = session
+			.shell
+			.run_string("sh -c 'kill -STOP $$' &", &source_info, &params)
+			.await
+			.expect("spawn self-stopping background job");
+		assert_eq!(exit_code(&spawned), 0);
+
+		// Let the child stop and its listener-less SIGCHLD drain before any
+		// waiter subscribes.
+		time::sleep(Duration::from_millis(500)).await;
+
+		let waited = time::timeout(
+			Duration::from_secs(10),
+			session.shell.run_string("wait %1", &source_info, &params),
+		)
+		.await
+		.expect("wait must recover a stop whose SIGCHLD was dropped")
+		.expect("wait jobspec");
+		assert_eq!(exit_code(&waited), 148, "wait should report the stopped job");
+
+		let _ = session
+			.shell
+			.run_string("kill -KILL %1; wait %1", &source_info, &params)
+			.await
+			.expect("reap background job");
 	}
 
 	/// A failed target makes `kill` return non-zero without preventing later

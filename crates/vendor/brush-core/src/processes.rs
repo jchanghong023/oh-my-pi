@@ -2,6 +2,7 @@
 
 use futures::FutureExt;
 use std::io::Write;
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -9,6 +10,18 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{error, openfiles::OpenFile, sys};
+
+/// How often `ChildProcess::wait` re-checks children for stops, on top of
+/// SIGCHLD/SIGTSTP notifications.
+///
+/// The interval's first tick fires immediately. This is deliberate: a SIGCHLD
+/// that arrives before a waiter subscribes its signal listener (e.g. while the
+/// rest of a pipeline is still spawning) is dropped by the signal registry's
+/// broadcast — no receiver exists yet — so a child that already stopped in
+/// that window would otherwise never wake the waiter. The periodic sweeps also
+/// recover a stop whose notification was consumed by a concurrent
+/// `poll_for_stopped_children` caller.
+const STOPPED_CHILDREN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 struct CompletionMarker {
 	output:            OpenFile,
@@ -98,6 +111,11 @@ impl ChildProcess {
 		let mut sigtstp = sys::signal::tstp_signal_listener()?;
 		#[allow(unused_mut, reason = "only mutated on some platforms")]
 		let mut sigchld = sys::signal::chld_signal_listener()?;
+		// The first tick completes immediately, so the loop below polls for
+		// already-stopped children once before it starts waiting on signals;
+		// see STOPPED_CHILDREN_POLL_INTERVAL for why that matters.
+		let mut stopped_poll = tokio::time::interval(STOPPED_CHILDREN_POLL_INTERVAL);
+		stopped_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
 		let cancelled = async {
 			match &cancel_token {
@@ -121,6 +139,11 @@ impl ChildProcess {
 					self.kill();
 					self.write_completion_marker(130);
 					break Ok(ProcessWaitResult::Cancelled)
+				},
+				_ = stopped_poll.tick() => {
+					if sys::signal::poll_for_stopped_children()? {
+						break Ok(ProcessWaitResult::Stopped);
+					}
 				},
 				_ = sigtstp.recv() => {
 					break Ok(ProcessWaitResult::Stopped)
