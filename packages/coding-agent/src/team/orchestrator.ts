@@ -4,8 +4,9 @@
  * Every guarantee from docs-zh-CN/team.md is mechanical here:
  * - independent investigation: identical inputs fanned out in parallel under
  *   the `task.maxConcurrency` semaphore, no shared digest;
- * - reviewer rotation to the next different model (same model only when there
- *   is exactly one distinct model);
+ * - reviewer rotation to the next different non-session model (the session
+ *   model never reviews; the proposer model's own fresh subagent reviews only
+ *   when it is the sole eligible reviewer);
  * - revision rounds counted in code, third round refused;
  * - recheck reviews triggered by structured flags only;
  * - unresolved blocking findings tracked in code and rendered as
@@ -63,9 +64,10 @@ export interface TeamOrchestratorOptions {
 }
 
 /**
- * Rotation rule (§2.5): the reviewer for proposal i is the next participant
- * with a *different* model in proposer order; with a single distinct model the
- * same model's fresh subagent reviews.
+ * Rotation rule (§2.5 + §2.2): the reviewer for proposal i is the next
+ * non-session participant with a *different* model in proposer order. The
+ * session model runs alignment/synthesis and never reviews; with no other
+ * eligible model the proposer model's own fresh subagent reviews.
  */
 export function assignReviewerParticipant(
 	participants: readonly TeamParticipant[],
@@ -76,6 +78,7 @@ export function assignReviewerParticipant(
 	const count = participants.length;
 	for (let offset = 1; offset < count; offset++) {
 		const candidate = participants[(proposalIndex + offset) % count];
+		if (candidate.isSessionModel) continue;
 		if (candidate.modelPattern !== proposer.modelPattern) return candidate;
 	}
 	return proposer;
@@ -152,6 +155,11 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		try {
 			const outcome = await runner(call, signal);
 			return outcome.ok ? { ok: true, data: outcome.data } : { ok: false, error: outcome.error };
+		} catch (error) {
+			// A throwing runner (e.g. a failed artifacts lease) must surface as a
+			// failed call with a reported status, never as a rejected run.
+			if (signal.aborted) return { ok: false, error: "cancelled" };
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		} finally {
 			semaphore.release();
 		}
@@ -363,6 +371,10 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 			}
 			record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
 			if (record.unresolvedBlocking.length === 0) break;
+			// Without a recheck the blocking state cannot change mechanically
+			// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
+			// revision prompt would only pad rounds.
+			if (!needsRecheck(revision.reviewFlags)) break;
 			if (round === TEAM_MAX_REVISION_ROUNDS) {
 				record.blockedAfterRoundCap = true; // third round is refused by the loop bound
 			}

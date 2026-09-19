@@ -28,7 +28,7 @@ export {
 	buildRevisionTask,
 	buildSynthesisTask,
 } from "./prompts";
-export { TEAM_READ_ONLY_TOOLS, createTeamSubagentRunner } from "./runner";
+export { TEAM_READ_ONLY_TOOLS, createTeamSubagentRunner, modelMatches } from "./runner";
 export { resolveTeamParticipants, type TeamMembersInput, type TeamMembersResult } from "./members";
 export { TEAM_CLOSING_CONTRACT, assembleTeamFailure, assembleTeamReport } from "./report";
 export {
@@ -36,6 +36,7 @@ export {
 	TEAM_RESULT_MESSAGE_TYPE,
 	resolveTeamParticipantsForSession,
 	startTeamDiscussion,
+	waitForSessionIdle,
 	type TeamControllerHooks,
 } from "./controller";
 export type {

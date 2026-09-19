@@ -141,6 +141,46 @@ describe("team parsers", () => {
 		expect(revision.reviewFlags.changedCoreDesign).toBe(false);
 	});
 
+	it("rejects a vacuous review with no findings, no summary, and no explicit no-issues record", () => {
+		// §2.5/§2.8: an all-empty payload is not a review — passing it through
+		// would let an unexamined proposal reach "✅ 可作为选项".
+		expect(
+			parseTeamReview({
+				noSubstantiveIssues: false,
+				reviewSummary: "",
+				findings: [],
+				priorBlockingStatus: "not-applicable",
+			}),
+		).toBeUndefined();
+		expect(
+			parseTeamReview({
+				noSubstantiveIssues: false,
+				reviewSummary: "   ",
+				findings: [{ severity: "blocking", issue: "  ", impact: "m", evidence: "e", targetAspect: "t" }],
+				priorBlockingStatus: "not-applicable",
+			}),
+		).toBeUndefined();
+	});
+
+	it("accepts an explicit no-findings review and a summary-only review", () => {
+		const explicit = parseTeamReview({
+			noSubstantiveIssues: true,
+			reviewSummary: "",
+			findings: [],
+			priorBlockingStatus: "not-applicable",
+		})!;
+		expect(explicit.noSubstantiveIssues).toBe(true);
+
+		const summaryOnly = parseTeamReview({
+			noSubstantiveIssues: false,
+			reviewSummary: "复核了事实差异，未发现新问题",
+			findings: [],
+			priorBlockingStatus: "resolved",
+		})!;
+		expect(summaryOnly.noSubstantiveIssues).toBe(false);
+		expect(summaryOnly.priorBlockingStatus).toBe("resolved");
+	});
+
 	it("parses alignment and synthesis payloads", () => {
 		const alignment = parseTeamAlignment({
 			unifiedUnderstanding: "u",

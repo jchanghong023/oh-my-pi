@@ -9,7 +9,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { startTeamDiscussion } from "@oh-my-pi/pi-coding-agent/team";
+import { startTeamDiscussion, waitForSessionIdle } from "@oh-my-pi/pi-coding-agent/team";
 
 const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
@@ -104,5 +104,56 @@ describe("team controller dispatch", () => {
 		expect(sent).toHaveLength(1);
 		expect(sent[0]!.customType).toBe("team-dispatch");
 		expect(sent[0]!.content).toContain("[team-dispatch bg_stub_1]");
+	});
+});
+
+describe("waitForSessionIdle", () => {
+	const neverAborted = () => new AbortController().signal;
+
+	it("resolves immediately when the session is idle", async () => {
+		const started = Date.now();
+		const idle = await waitForSessionIdle({ isStreaming: false }, neverAborted(), {
+			timeoutMs: 1_000,
+			pollMs: 5,
+		});
+		expect(idle).toBe(true);
+		expect(Date.now() - started).toBeLessThan(100);
+	});
+
+	it("waits until a streaming turn ends instead of queueing into the volatile next-turn buffer", async () => {
+		let streaming = true;
+		const session = {
+			get isStreaming() {
+				return streaming;
+			},
+		};
+		setTimeout(() => {
+			streaming = false;
+		}, 25);
+		const started = Date.now();
+		const idle = await waitForSessionIdle(session, neverAborted(), { timeoutMs: 5_000, pollMs: 5 });
+		expect(idle).toBe(true);
+		expect(streaming).toBe(false);
+		expect(Date.now() - started).toBeGreaterThanOrEqual(20);
+	});
+
+	it("gives up after the bound and reports the session as still streaming", async () => {
+		const session = { isStreaming: true };
+		const started = Date.now();
+		const idle = await waitForSessionIdle(session, neverAborted(), { timeoutMs: 30, pollMs: 5 });
+		expect(idle).toBe(false);
+		const elapsed = Date.now() - started;
+		expect(elapsed).toBeGreaterThanOrEqual(25);
+		expect(elapsed).toBeLessThan(2_000);
+	});
+
+	it("stops waiting when the job signal aborts", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const session = { isStreaming: true };
+		const started = Date.now();
+		const idle = await waitForSessionIdle(session, controller.signal, { timeoutMs: 5_000, pollMs: 5 });
+		expect(idle).toBe(false);
+		expect(Date.now() - started).toBeLessThan(100);
 	});
 });

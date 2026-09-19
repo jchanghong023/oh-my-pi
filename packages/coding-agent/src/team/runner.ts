@@ -92,11 +92,14 @@ function sanitizeAgentId(value: string): string {
 	return sanitized || "team-agent";
 }
 
-function modelMatches(resolved: string | undefined, pattern: string): boolean {
+export function modelMatches(resolved: string | undefined, pattern: string): boolean {
 	if (!resolved) return true;
 	if (resolved === pattern) return true;
-	// Selectors may carry thinking-suffix annotations after the model id.
-	return resolved.startsWith(`${pattern}[`) || resolved.startsWith(`${pattern}:`);
+	// Selectors may carry thinking-suffix annotations after the model id, and
+	// routing-qualified ids carry `@upstream` after the base id.
+	return (
+		resolved.startsWith(`${pattern}[`) || resolved.startsWith(`${pattern}:`) || resolved.startsWith(`${pattern}@`)
+	);
 }
 
 /** Build the default runner bound to the dispatching session's dependencies. */

@@ -322,10 +322,17 @@ export function parseTeamReview(data: unknown): TeamReviewOutput | undefined {
 			};
 		})
 		.filter(finding => finding.issue.trim().length > 0);
+	const summary = enforceTextBudget(asString(data.reviewSummary).trim(), TEAM_REVIEW_BUDGET);
+	const noSubstantiveIssues = asBoolean(data.noSubstantiveIssues) && findings.length === 0;
+	// §2.5: a review must carry findings, explicitly record "no substantive
+	// issues", or say something in its summary. An all-empty payload is not a
+	// review — passing it through would mark an unexamined proposal as
+	// reviewed (§2.8: failure must not read as "no issues found").
+	if (findings.length === 0 && !noSubstantiveIssues && !summary) return undefined;
 	const status = asString(data.priorBlockingStatus);
 	return {
-		noSubstantiveIssues: asBoolean(data.noSubstantiveIssues) && findings.length === 0,
-		reviewSummary: enforceTextBudget(asString(data.reviewSummary).trim(), TEAM_REVIEW_BUDGET),
+		noSubstantiveIssues,
+		reviewSummary: summary,
 		findings,
 		priorBlockingStatus:
 			status === "resolved" || status === "partially-resolved" || status === "unresolved"

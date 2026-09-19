@@ -15,7 +15,7 @@ export interface TeamParticipant {
 	/** Exact `provider/id` pattern pinned for this participant's subagents. */
 	modelPattern: string;
 	model: Model;
-	/** True when the participant joined only because it is the session model. */
+	/** True for the participant whose model is the session model, however it joined. */
 	isSessionModel: boolean;
 }
 

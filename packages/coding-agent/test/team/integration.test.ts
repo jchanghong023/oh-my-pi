@@ -217,8 +217,10 @@ describe("team in-process integration", () => {
 		expect(byStage("proposal")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
 		expect(byStage("alignment")).toEqual([PATTERN_SESSION]);
 		expect(byStage("synthesis")).toEqual([PATTERN_SESSION]);
-		// Rotation: proposal A (session model) reviewed by the other model and vice versa.
-		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
+		// Rotation: proposal A (session model) reviewed by the other model; the
+		// session model never reviews, so proposal B falls back to its own
+		// model's fresh subagent (sole eligible reviewer).
+		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER]);
 
 		// Read-only tool contract and strict schema mode ride through the executor
 		// into every child session, mechanically.

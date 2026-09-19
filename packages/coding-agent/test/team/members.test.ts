@@ -44,7 +44,13 @@ describe("team member resolution", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toContain("team.members");
+			// The copy-paste example must not suggest IDs that only exist in a
+			// --offline process; concrete company ids are named only as an
+			// offline-lane note, with `omp models` as the source of real ids.
+			expect(result.error).toContain("<provider>/<model-id>");
+			expect(result.error).toContain("omp models");
 			expect(result.error).toContain("company/GLM-5.2-public");
+			expect(result.error).toContain("--offline");
 			expect(result.error).toContain("不会静默降级为单模型");
 		}
 	});
@@ -135,7 +141,10 @@ describe("team member resolution", () => {
 				"anthropic/claude-sonnet-4-5",
 				"company/GLM-5.2-public",
 			]);
-			expect(result.participants[0]!.isSessionModel).toBe(false);
+			// The session-model participant is flagged however it joined:
+			// reviewer rotation excludes it (§2.2).
+			expect(result.participants[0]!.isSessionModel).toBe(true);
+			expect(result.participants[1]!.isSessionModel).toBe(false);
 		}
 	});
 

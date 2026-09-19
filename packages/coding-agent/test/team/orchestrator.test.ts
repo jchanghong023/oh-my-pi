@@ -198,8 +198,9 @@ function createScriptedRunner(script: Script): { runner: TeamSubagentRunner; cal
 	return { runner, calls };
 }
 
+/** Mirrors resolveTeamParticipants: the session model (PATTERN_A here) is always one participant. */
 function participants3(): TeamParticipant[] {
-	return [participantOf(MODEL_A, 0), participantOf(MODEL_B, 1), participantOf(MODEL_C, 2)];
+	return [participantOf(MODEL_A, 0, true), participantOf(MODEL_B, 1), participantOf(MODEL_C, 2)];
 }
 
 async function run(
@@ -224,7 +225,20 @@ describe("team reviewer rotation", () => {
 		const participants = participants3();
 		expect(assignReviewerParticipant(participants, 0)).toBe(participants[1]);
 		expect(assignReviewerParticipant(participants, 1)).toBe(participants[2]);
-		expect(assignReviewerParticipant(participants, 2)).toBe(participants[0]);
+		// Wraps past the session-model participant (index 0) to model B.
+		expect(assignReviewerParticipant(participants, 2)).toBe(participants[1]);
+	});
+
+	it("never assigns the session-model participant as reviewer", () => {
+		const session = participantOf(MODEL_A, 0, true);
+		const b = participantOf(MODEL_B, 1);
+		const c = participantOf(MODEL_C, 2);
+		expect(assignReviewerParticipant([session, b, c], 0)).toBe(b);
+		expect(assignReviewerParticipant([session, b, c], 1)).toBe(c);
+		expect(assignReviewerParticipant([session, b, c], 2)).toBe(b);
+		// With only the session model besides the proposer, the proposer model's
+		// own fresh subagent reviews (§2.5 same-model fallback).
+		expect(assignReviewerParticipant([session, b], 1)).toBe(b);
 	});
 
 	it("skips same-model participants", () => {
@@ -286,9 +300,10 @@ describe("team orchestrator", () => {
 		expect(proposalTasks).toHaveLength(3);
 		for (const task of proposalTasks.slice(1)) expect(task).toBe(proposalTasks[0]);
 
-		// Rotation: proposal A (model A) reviewed by model B, B→C, C→A.
+		// Rotation: proposal A reviewed by model B, B→C, C→B (the session model
+		// never reviews, so C wraps past it).
 		const reviewCalls = calls.filter(call => parseMarker(call.task).role === "review");
-		expect(reviewCalls.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_A]);
+		expect(reviewCalls.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
 		// Review prompts are anonymous: no author model name appears.
 		const authorPatterns = [PATTERN_A, PATTERN_B, PATTERN_C, MODEL_A.id, MODEL_B.id, MODEL_C.id];
 		for (const call of reviewCalls) {
@@ -343,7 +358,7 @@ describe("team orchestrator", () => {
 		expect(revisions).toHaveLength(3);
 		expect(rechecks).toHaveLength(3);
 		// Rechecks run on the rotation-assigned reviewer model (same as initial).
-		expect(rechecks.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_A]);
+		expect(rechecks.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
 		// Blocking resolved: report has no 尚不可采用 entries.
 		expect(result.reportMarkdown).not.toContain("尚不可采用 — 未解决阻断问题");
 		expect(reviewCalls).toBe(6);
@@ -374,7 +389,10 @@ describe("team orchestrator", () => {
 		});
 		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
 		expect(rechecks).toHaveLength(0);
-		// Two revision rounds, then the cap marks it blocked.
+		// Without a recheck the blocking state cannot change (§2.5: 不强凑修订
+		// 轮次): one revision round per proposal, then it stays blocked.
+		const revisions = calls.filter(call => parseMarker(call.task).role === "revision");
+		expect(revisions).toHaveLength(3);
 		expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题");
 	});
 
@@ -417,6 +435,23 @@ describe("team orchestrator", () => {
 		expect(result.status).toBe("failed");
 		expect(result.failureReason).toContain("所有提案子代理均失败");
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
+	});
+
+	it("treats a throwing runner as a failed call instead of a rejected run", async () => {
+		const runner: TeamSubagentRunner = async () => {
+			throw new Error("runner exploded");
+		};
+		const result = await runTeamDiscussion({
+			question: "异常路径测试",
+			cwd: "/tmp/repo",
+			participants: participants3(),
+			sessionModelPattern: PATTERN_A,
+			runner,
+			signal: new AbortController().signal,
+			maxConcurrency: 8,
+		});
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("所有提案子代理均失败");
 	});
 
 	it("continues with the remaining proposals when one proposer fails and notes the gap", async () => {

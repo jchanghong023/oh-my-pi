@@ -47,6 +47,31 @@ export interface StartTeamDiscussionResult {
 
 const QUESTION_PREVIEW_LENGTH = 80;
 
+/** How long the final report may wait for a streaming turn to end. */
+const DELIVERY_IDLE_TIMEOUT_MS = 10 * 60_000;
+const DELIVERY_IDLE_POLL_MS = 250;
+
+/**
+ * `deliverAs: "nextTurn"` persists only when the session is idle; during a
+ * streaming turn it parks in a volatile in-memory queue that a conversation
+ * reset or process exit drops — unrecoverable for `/team`, whose job-manager
+ * delivery was already acknowledged at dispatch. Wait (bounded) for the turn
+ * to end so the report lands in the transcript immediately; past the bound,
+ * fall back to the queue rather than holding the job open forever.
+ */
+export async function waitForSessionIdle(
+	session: Pick<AgentSession, "isStreaming">,
+	signal: AbortSignal,
+	options?: { timeoutMs?: number; pollMs?: number },
+): Promise<boolean> {
+	const deadline = Date.now() + (options?.timeoutMs ?? DELIVERY_IDLE_TIMEOUT_MS);
+	const pollMs = options?.pollMs ?? DELIVERY_IDLE_POLL_MS;
+	while (session.isStreaming && !signal.aborted && Date.now() < deadline) {
+		await Bun.sleep(pollMs);
+	}
+	return !session.isStreaming;
+}
+
 function previewQuestion(question: string): string {
 	const singleLine = question.trim().replace(/\s+/g, " ");
 	if (singleLine.length <= QUESTION_PREVIEW_LENGTH) return singleLine;
@@ -143,6 +168,7 @@ export async function startTeamDiscussion(
 					onProgress,
 				});
 				const deliver = async (content: string): Promise<void> => {
+					await waitForSessionIdle(session, signal);
 					await session.sendCustomMessage(
 						{
 							customType: TEAM_RESULT_MESSAGE_TYPE,

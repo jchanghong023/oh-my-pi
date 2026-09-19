@@ -66,9 +66,8 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showWarning(DISCUSS_NOTICE);
 				return { consumed: true };
 			}
-			ctx.editor.setText("");
 			const { startTeamDiscussion } = await import("../team/controller");
-			await startTeamDiscussion(question, {
+			const outcome = await startTeamDiscussion(question, {
 				session: ctx.session,
 				settings: ctx.settings,
 				cwd: ctx.sessionManager.getCwd(),
@@ -84,6 +83,10 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					},
 				},
 			});
+			// Clear only after a successful dispatch: on a validation or config
+			// error the question must stay in the editor for the user to fix and
+			// resubmit.
+			if (outcome.started) ctx.editor.setText("");
 			return { consumed: true };
 		},
 	},

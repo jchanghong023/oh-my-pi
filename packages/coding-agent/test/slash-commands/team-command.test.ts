@@ -1,15 +1,20 @@
 /**
  * `/team` command entry-gate tests: bare command asks for the question,
- * Discuss primary agent refuses to dispatch (Shift+F2 notice), and a session
- * without a model reports the configuration error without running stages.
+ * Discuss primary agent refuses to dispatch (Shift+F2 notice), a session
+ * without a model reports the configuration error without running stages,
+ * and the TUI editor keeps the question on a failed dispatch.
  */
 import { describe, expect, it } from "bun:test";
+import type { Model } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TEAM_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/team";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const command = TEAM_SLASH_COMMANDS[0]!;
+const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
 
 function stubSession(overrides: Partial<Record<string, unknown>> = {}): AgentSession {
 	return {
@@ -33,15 +38,23 @@ function textRuntime(session: AgentSession): { runtime: SlashCommandRuntime; out
 	return { runtime, output };
 }
 
-function tuiRuntime(session: AgentSession): { runtime: TuiSlashCommandRuntime; status: string[]; warnings: string[] } {
+function tuiRuntime(
+	session: AgentSession,
+	settings = Settings.isolated(),
+): { runtime: TuiSlashCommandRuntime; status: string[]; warnings: string[]; editorClears: number } {
 	const status: string[] = [];
 	const warnings: string[] = [];
+	let editorClears = 0;
 	const runtime = {
 		ctx: {
 			session,
-			settings: Settings.isolated(),
+			settings,
 			sessionManager: { getCwd: () => "/tmp/repo" },
-			editor: { setText: () => {} },
+			editor: {
+				setText: (text: string) => {
+					if (text === "") editorClears++;
+				},
+			},
 			showStatus: (text: string) => {
 				status.push(text);
 			},
@@ -52,9 +65,10 @@ function tuiRuntime(session: AgentSession): { runtime: TuiSlashCommandRuntime; s
 				status.push(text);
 			},
 			rebuildChatFromMessages: () => {},
+			ui: { requestRender: () => {} },
 		},
 	} as unknown as TuiSlashCommandRuntime;
-	return { runtime, status, warnings };
+	return { runtime, status, warnings, editorClears };
 }
 
 describe("/team command gates", () => {
@@ -105,5 +119,27 @@ describe("/team command gates", () => {
 		await command.handle!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(output).toHaveLength(1);
 		expect(output[0]).toContain("会话模型");
+	});
+
+	it("keeps the question in the TUI editor when dispatch fails validation", async () => {
+		const { runtime, editorClears } = tuiRuntime(stubSession({ model: undefined }));
+		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
+		expect(editorClears).toBe(0);
+	});
+
+	it("clears the TUI editor only after a successful dispatch", async () => {
+		const session = stubSession({
+			model: MODEL,
+			modelRegistry: { getAvailable: () => [MODEL], authStorage: undefined },
+			asyncJobManager: {
+				register: () => "bg_1",
+				acknowledgeDeliveries: () => {},
+			},
+			sendCustomMessage: async () => false,
+		});
+		const settings = Settings.isolated({ "team.members": [MODEL_PATTERN] });
+		const { runtime, editorClears } = tuiRuntime(session, settings);
+		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
+		expect(editorClears).toBe(1);
 	});
 });

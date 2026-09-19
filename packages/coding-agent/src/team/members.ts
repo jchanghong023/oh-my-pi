@@ -33,13 +33,13 @@ export type TeamMembersResult =
 const CONFIG_EXAMPLE = [
 	"team.members 未配置，且当前进程没有可用的 company 模型 lane，无法组建多模型团队。",
 	"",
-	"在 settings（config.yml）中配置参与模型（完整 ID），例如：",
+	"在 settings（config.yml）中配置参与模型（完整 ID；可用 ID 以 `omp models` 输出为准），格式例如：",
 	"",
 	"  team.members:",
-	"    - company/GLM-5.2-public",
-	"    - company/Qwen3.6-27B-public",
-	"    - company/DeepSeek-V4-Flash-public",
+	"    - <provider>/<model-id>",
+	"    - <provider>/<model-id>",
 	"",
+	"注：`company/GLM-5.2-public` 等 company 模型仅存在于 `--offline` 进程；普通启动请从 `omp models` 列出的可用模型中选择。",
 	"--offline 进程中未配置时默认使用 company lane 全部可用聊天模型；普通启动必须显式配置。",
 	"/team 不会静默降级为单模型流程。",
 ].join("\n");
@@ -111,6 +111,10 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 			].join("\n"),
 		};
 	}
+	// Whether the session model came from the configured list or joined as the
+	// extra proposer, the matching participant is flagged: reviewer rotation
+	// excludes it (§2.2) and the report labels it 会话模型.
+	participants.find(participant => participant.modelPattern === modelKey(sessionModel))!.isSessionModel = true;
 
 	if (participants.length === 0) {
 		return { ok: false, error: CONFIG_EXAMPLE };
