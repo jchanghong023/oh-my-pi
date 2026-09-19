@@ -269,17 +269,11 @@ describe("team in-process integration", () => {
 		// into every child session, mechanically.
 		for (const call of recorded) {
 			expect(call.outputSchemaMode).toBe("strict");
-			const received = [...(call.toolNames ?? [])].sort();
-			const allowed = [...TEAM_READ_ONLY_TOOLS, "yield"].sort();
-			// Exact set: every allowed tool present, nothing else leaks in.
-			// (getActiveToolNames in the stub only reports yield; assert via
-			// toolNames passed into createAgentSession options.)
-			expect(received.every(name => allowed.includes(name))).toBe(true);
-			expect(received).toContain("yield");
-			// Every TEAM_READ_ONLY_TOOLS entry the SDK would enable must be in allowed.
-			for (const tool of TEAM_READ_ONLY_TOOLS) {
-				expect(allowed).toContain(tool);
-			}
+			// Exact set: the session receives precisely the read-only tools —
+			// nothing else (no bash/eval/write/edit/task/hub/MCP) may leak in.
+			// `yield` is appended by the executor's required-yield path after
+			// these options, so it never appears in `toolNames` here.
+			expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
 		}
 	});
 
