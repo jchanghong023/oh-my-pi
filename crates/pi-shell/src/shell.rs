@@ -2876,16 +2876,26 @@ mod tests {
 		let second_ready = dir.path().join("second.ready");
 		let first_script = "trap 'exit 42' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while \
 		                    :; do sleep 0.05; done";
-		let second_script = "trap 'exit 43' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; \
-		                     while :; do sleep 0.05; done";
+		// Fork: the second process must not self-stop until the first one already
+		// has. brush-core's stopped-children poll consumes every pending WUNTRACED
+		// notification in one `waitid(All)` sweep, so with both stops pending at the
+		// same instant one process's waiter eats both notifications while the other
+		// keeps waiting for a SIGCHLD that real-time signal coalescing already
+		// merged away — a lost wakeup that hung the foreground pipeline wait until
+		// the 600 s budget (two consecutive CI hangs on 2026-09-19 with a
+		// byte-identical code path). Gating the second stop on the first process's
+		// ready file keeps at most one stop pending per poll and closes the window.
+		let second_script = "trap 'exit 43' TERM; while [ ! -f \"$3\" ]; do sleep 0.01; done; echo \
+		                     $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while :; do sleep 0.05; done";
 		let command = format!(
-			"sh -c {} sh {} {} | sh -c {} sh {} {}",
+			"sh -c {} sh {} {} | sh -c {} sh {} {} {}",
 			quote_arg(first_script),
 			quote_arg(first_pidfile.to_str().expect("utf8 first pidfile")),
 			quote_arg(first_ready.to_str().expect("utf8 first ready path")),
 			quote_arg(second_script),
 			quote_arg(second_pidfile.to_str().expect("utf8 second pidfile")),
 			quote_arg(second_ready.to_str().expect("utf8 second ready path")),
+			quote_arg(first_ready.to_str().expect("utf8 first ready path again")),
 		);
 		let (mut session, params) = kill_test_context().await;
 		let source_info = SourceInfo::from("pi-natives:test");
