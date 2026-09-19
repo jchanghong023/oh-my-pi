@@ -15,7 +15,7 @@ import type {
 	ThinkingConfig,
 } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { buildDiscoveredModel, buildModel } from "@oh-my-pi/pi-catalog/build";
 import { collapseBuiltVariants } from "@oh-my-pi/pi-catalog/compat/collapse";
 import {
 	clampCodexContextWindow,
@@ -69,7 +69,6 @@ import {
 	resolveConfigValue,
 } from "./resolve-config-value";
 import {
-	applyLlamaCppQwenThinking,
 	DISCOVERY_DEFAULT_MAX_TOKENS,
 	type DiscoveryContext,
 	type DiscoveryProviderConfig,
@@ -1060,7 +1059,7 @@ export class ModelRegistry {
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
 		return this.#withRuntimeSyntheticModels(
-			this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
+			this.#applyDiscoveryPolicies(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
 			providerFilter,
 		);
 	}
@@ -1756,7 +1755,7 @@ export class ModelRegistry {
 		const withModelOverrides = this.#applyModelOverrides(collapseBuiltVariants(combined), this.#modelOverrides);
 		const withProviderBedrock = this.#applyProviderBedrockOverrides(withModelOverrides);
 		this.#unprojectedModels = this.#withRuntimeSyntheticModels(
-			this.#applyLlamaCppModelFixups(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
+			this.#applyDiscoveryPolicies(this.#applyRuntimeProviderOverrides(withProviderBedrock)),
 		);
 		this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 	}
@@ -2271,27 +2270,18 @@ export class ModelRegistry {
 		});
 	}
 
-	// #applyLlamaCppModelFixups is the outermost transform for llama.cpp-provider
-	// models, after discovery merges, cache fallbacks, and provider/transport
-	// overrides have run. It applies Qwen-specific fixes (api, reasoning, compat)
-	// and ensures all non-transport models have the `/v1` prefix in their baseUrl,
-	// even when a configured override or stale cache row would strip it.
-	#applyLlamaCppModelFixups(models: Model<Api>[]): Model<Api>[] {
-		const llamaCppProviders = new Set<string>();
-		for (const provider of this.#discoverableProviders) {
-			if (provider.discovery.type === "llama.cpp") llamaCppProviders.add(provider.provider);
-		}
-		if (llamaCppProviders.size === 0) return models;
+	// Reapply catalog policy after cache/config merges; native discovery URLs
+	// are not request roots, while custom transports own their URL suffixes.
+	#applyDiscoveryPolicies(models: Model<Api>[]): Model<Api>[] {
+		const providers = new Map(this.#discoverableProviders.map(config => [config.provider, config.discovery.type]));
 		return models.map(model => {
-			if (!llamaCppProviders.has(model.provider)) return model;
-			const withFixups = applyLlamaCppQwenThinking(model);
-			if (!withFixups.transport && !withFixups.baseUrl.endsWith("/v1")) {
-				return buildModel({
-					...withFixups,
-					baseUrl: ensureLlamaCppV1BaseUrl(normalizeLlamaCppBaseUrl(withFixups.baseUrl)),
-				});
+			const providerType = providers.get(model.provider);
+			if (providerType !== "llama.cpp") return model;
+			const spec = toModelSpec(model);
+			if (!model.transport) {
+				spec.baseUrl = ensureLlamaCppV1BaseUrl(normalizeLlamaCppBaseUrl(model.baseUrl));
 			}
-			return withFixups;
+			return buildDiscoveredModel(spec, providerType);
 		});
 	}
 
@@ -3130,7 +3120,7 @@ export class ModelRegistry {
 			);
 			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
 			if (this.#hasFullSnapshot) {
-				this.#unprojectedModels = this.#applyLlamaCppModelFixups(
+				this.#unprojectedModels = this.#applyDiscoveryPolicies(
 					this.#unprojectedModels.map(model => {
 						if (model.provider !== providerName) return model;
 						return this.#applyProviderTransportOverrideToModel(model, transportOverride);
