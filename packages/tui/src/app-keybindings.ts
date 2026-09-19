@@ -35,7 +35,6 @@ interface AppKeybindings {
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
 	"app.model.selectTemporary": true;
-	"app.primaryAgent.cycle": true;
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.editor.external": true;
@@ -129,10 +128,6 @@ export const KEYBINDINGS = {
 	"app.model.selectTemporary": {
 		defaultKeys: "ctrl+t",
 		description: "Select temporary model for current session",
-	},
-	"app.primaryAgent.cycle": {
-		defaultKeys: "shift+f2",
-		description: "Cycle primary agent",
 	},
 	"app.tools.expand": {
 		defaultKeys: "ctrl+o",

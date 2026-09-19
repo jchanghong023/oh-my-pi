@@ -402,8 +402,7 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, parts.join(" ")), visible: true };
 		}
 
-		const label = ctx.primaryAgent === "discuss" ? "Discuss" : "Main";
-		return { content: theme.fg("accent", label), visible: true };
+		return { content: "", visible: false };
 	},
 };
 

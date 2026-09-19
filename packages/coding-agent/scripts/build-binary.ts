@@ -58,6 +58,13 @@ const transformersVersion = transformersManifest.version;
 
 const buildTimestamp = new Date().toISOString().replace(/:\d{2}\.\d{3}Z$/u, "Z");
 
+// Self-update target baked into local binaries (same role as the CI
+// UPDATE_REPOSITORY env in ci-release-build-binaries.ts): without it the
+// compile-time PI_UPDATE_REPOSITORY stays undefined and `omp update` falls
+// back to the upstream can1357/oh-my-pi + npm channel, which would replace a
+// fork install with an official upstream build.
+const updateRepository = "jchanghong023/oh-my-pi";
+
 async function runCommand(
 	command: string[],
 	env: NodeJS.ProcessEnv = Bun.env,
@@ -101,6 +108,7 @@ async function main(): Promise<void> {
 				transformersVersion,
 				target: crossBuild?.target,
 				buildTimestamp,
+				updateRepository,
 				executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 				skipBuiltinCodesign: shouldAdhocSign,
 			});

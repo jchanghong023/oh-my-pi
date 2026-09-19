@@ -76,7 +76,6 @@ function startTui(argv: string[], env: Record<string, string>): TuiHandle {
 			env: {
 				...process.env,
 				TERM: "xterm-256color",
-				NO_UPDATE_CHECK: "1",
 				...env,
 			} as Record<string, string>,
 		},
@@ -126,15 +125,15 @@ console.log("ui-smoke: waiting for the full-screen interface to render…");
 const main = startTui(["--offline", "--profile", "localci-ui"], {});
 const rendered = await waitFor(() => {
 	// The TUI repaints in place: hides the cursor, positions it absolutely,
-	// and paints the status line (which always names the active primary
-	// agent "Main" under fork defaults). It does not use the alternate screen.
+	// and paints the status line (whose "π" brand segment is present under
+	// the fork-default `composer.shape=pi`). It does not use the alternate screen.
 	const cursorControl =
 		main.output.includes("\x1b[?25l") || main.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(main.output);
-	return cursorControl && main.output.includes("Main") && main.totalBytes > 4_000;
+	return cursorControl && main.output.includes("π") && main.totalBytes > 4_000;
 }, 120_000);
 if (!rendered) {
 	fail(
-		`interface did not render within 120 s (bytes=${main.totalBytes}, cursorControl=${/\x1b\[\d+;\d+H/.test(main.output)}, mainMarker=${main.output.includes("Main")})`,
+		`interface did not render within 120 s (bytes=${main.totalBytes}, cursorControl=${/\x1b\[\d+;\d+H/.test(main.output)}, mainMarker=${main.output.includes("π")})`,
 		main.session,
 	);
 }
@@ -461,7 +460,7 @@ try {
 	const teamRendered = await waitFor(() => {
 		const cursorControl =
 			team.output.includes("\x1b[?25l") || team.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(team.output);
-		return cursorControl && team.output.includes("Main") && team.totalBytes > 4_000;
+		return cursorControl && team.output.includes("π") && team.totalBytes > 4_000;
 	}, 120_000);
 	if (!teamRendered) {
 		dumpTail(team);
@@ -553,10 +552,10 @@ try {
 	const teamOutcome = await Promise.race([team.exitPromise, sleep(20_000).then(() => undefined)]);
 	if (!teamOutcome) {
 		team.session.kill();
-		fail("/team TUI did not exit within 20 s after Ctrl+D", stubServer);
+		fail("/team TUI did not exit within 20 s after Ctrl+D");
 	}
 	if (teamOutcome.exitCode !== 0) {
-		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`, stubServer);
+		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`);
 	}
 	console.log("ui-smoke: /team case PASS — real TUI run reached the final /team report");
 
@@ -578,7 +577,7 @@ try {
 			cancelTui.output.includes("\x1b[?25l") ||
 			cancelTui.output.includes("\x1b[H") ||
 			/\x1b\[\d+;\d+H/.test(cancelTui.output);
-		return cursorControl && cancelTui.output.includes("Main") && cancelTui.totalBytes > 4_000;
+		return cursorControl && cancelTui.output.includes("π") && cancelTui.totalBytes > 4_000;
 	}, 120_000);
 	if (!cancelRendered) {
 		dumpTail(cancelTui);
@@ -649,10 +648,10 @@ try {
 	const cancelOutcome = await Promise.race([cancelTui.exitPromise, sleep(20_000).then(() => undefined)]);
 	if (!cancelOutcome) {
 		cancelTui.session.kill();
-		fail("/team cancel TUI did not exit within 20 s after Ctrl+D", stubServer);
+		fail("/team cancel TUI did not exit within 20 s after Ctrl+D");
 	}
 	if (cancelOutcome.exitCode !== 0) {
-		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`, stubServer);
+		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`);
 	}
 	console.log("ui-smoke: /team cancellation case PASS — cancel reached the orchestrator before any later stage");
 } finally {

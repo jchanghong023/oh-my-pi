@@ -420,6 +420,14 @@ export interface CreateAgentSessionOptions {
 	modelPatternFallbackRole?: string;
 	/** Validated default retry chain to install when a deferred singleton pattern resolves. */
 	modelPatternDefaultFallbackChain?: string[];
+	/**
+	 * Process runs with `--offline`: the automatic model-discovery fallbacks
+	 * (session-restore retry, default-role resolution) use the cache-only
+	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
+	 * catalog degrades to the default role instead of reaching the network.
+	 * Explicit `modelPattern` resolution keeps its normal cache-aware strategy.
+	 */
+	offline?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -2377,9 +2385,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (candidateProviders.size > 0) {
 					// This skips the static reload and all-other-runtime restore
 					// performed by `refreshProvider`, so unrelated runtime providers
-					// continue independently.
+					// continue independently. An offline process keeps the cache-only
+					// strategy: a cold catalog falls back to the default role rather
+					// than fetching from the provider's discovery endpoint.
 					await logger.time("restoreSessionModelDiscoveryFallback", () =>
-						modelRegistry.refreshDiscoverableProviders(candidateProviders, "online-if-uncached"),
+						modelRegistry.refreshDiscoverableProviders(
+							candidateProviders,
+							options.offline ? "offline" : "online-if-uncached",
+						),
 					);
 					restoreSessionModel();
 				}
@@ -2428,6 +2441,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
+				// Explicit `--model` patterns keep the cache-aware online strategy even
+				// in an offline process: explicit model resolution preserves its normal
+				// behavior (an intranet discovery proxy must stay resolvable).
 				await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
 					modelRegistry.refresh("online-if-uncached"),
 				);
@@ -2764,7 +2780,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					(defaultRoleConfigured || !pick) &&
 					modelRegistry.getDiscoverableProviders().length > 0
 				) {
-					await logger.time("resolveModelDiscoveryFallback", () => modelRegistry.refresh("online-if-uncached"));
+					// Offline processes resolve this fallback from the cache only; the
+					// discovery endpoint is never fetched automatically.
+					await logger.time("resolveModelDiscoveryFallback", () =>
+						modelRegistry.refresh(options.offline ? "offline" : "online-if-uncached"),
+					);
 					if (!(await tryResolveDefaultRole()) && !model) {
 						const refreshedCandidates = await resolveAllowedModels(
 							modelRegistry,
@@ -3228,13 +3248,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// custom/extension tool that merely shares the name, and reflects the
 			// session-start build — so a subagent that filtered them out, a mid-session
 			// enable that never built them, or a same-named custom tool while auto-learn
-			// is off all get no guidance. The applied slate is what the model can really
-			// call, so a restricted profile that drops the tools (Discuss) gets none.
+			// is off all get no guidance.
 			const autoLearnInstructions = restrictToolNames
 				? undefined
 				: buildAutoLearnInstructions({
-						manageSkill: builtInToolNames.includes("manage_skill") && toolNames.includes("manage_skill"),
-						learn: builtInToolNames.includes("learn") && toolNames.includes("learn"),
+						manageSkill: builtInToolNames.includes("manage_skill"),
+						learn: builtInToolNames.includes("learn"),
 					});
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
@@ -4019,9 +4038,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const currentlyExposed = session.getEnabledToolNames().includes(name);
 				const alreadyEnabled = enabled.includes(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
-				// Raw mounts: the presentation snapshot must pair the unprojected
-				// base slate with the unprojected mount set, or a restricting
-				// profile (Discuss) would pin every mounted device top-level.
+				// Raw mounts: the presentation snapshot pairs the unprojected base
+				// slate with the unprojected mount set so the existing top-level /
+				// `xd://` partition survives the re-registration.
 				const mounted = session.getRawMountedXdevToolNames();
 				const wasBuiltIn = builtInRegistryToolNames.has(name);
 				toolRegistry.set(name, liveTool);
@@ -4031,9 +4050,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				try {
 					if ((registered.definition.defaultInactive || registered.definition.hidden) && !explicitlyRequested) {
 						// Skip only when the tool is exposed neither at the top level
-						// nor as an `xd://` device: under Discuss the projection hides
-						// base tools, and a re-registration turning defaultInactive
-						// must still remove them from the presentation.
+						// nor as an `xd://` device; a re-registration turning
+						// defaultInactive must still remove it from the presentation.
 						if (!alreadyEnabled && !currentlyExposed) return;
 						await session.setActiveToolPresentation(
 							enabled.filter(enabledName => enabledName !== name),

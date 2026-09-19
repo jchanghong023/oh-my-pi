@@ -198,7 +198,6 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/main-startup-watchdog.test.ts",
 			"test/startup-composer-graph.test.ts",
 			"test/status-line-overflow.test.ts",
-			"test/status-line-primary-agent.test.ts",
 			"test/streaming-output.test.ts",
 			"test/terminal-title-state.test.ts",
 		],
@@ -223,6 +222,11 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		label: "coding-agent/fork-features",
 		cwd: "packages/coding-agent",
 		files: [
+			"test/docs-cli.test.ts",
+			"test/docs-hub.test.ts",
+			"test/docs-index.test.ts",
+			"test/main-rebuild-scoped-models.test.ts",
+			"test/modes/components/docs-hub.test.ts",
 			"test/modes/fullsend.test.ts",
 			"test/modes/sigint-gate.test.ts",
 			"test/slash-commands/jch-git.test.ts",
@@ -234,6 +238,8 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/team/orchestrator.test.ts",
 			"test/team/runner.test.ts",
 			"test/team/schemas.test.ts",
+			"test/wiki-tool-availability.test.ts",
+			"test/wiki-tool.test.ts",
 		],
 	},
 ];
@@ -352,6 +358,30 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 	return { PATH: [...extraDirs, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
 }
 
+/** Hard-kill a phase child together with its whole process tree. Bun's
+ * kill() has no tree semantics (only the direct child gets the signal), so a
+ * timed-out phase would otherwise leave grandchildren running — the ui/smoke
+ * PTY dev TUI, or the inner `bun test` of the scripts phase. Timeout path
+ * only; normally exiting children never go through here. */
+function killProcessTree(child: { pid: number }): void {
+	if (process.platform === "win32") {
+		// taskkill /T walks the spawned tree; a failure (already-dead PID,
+		// missing taskkill) is ignored — the timeout verdict already failed
+		// the phase.
+		Bun.spawnSync(["taskkill.exe", "/PID", String(child.pid), "/T", "/F"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		return;
+	}
+	try {
+		// Phase children spawn detached as process-group leaders, so -pid
+		// signals every group member; an ESRCH throw just means the group
+		// already exited.
+		process.kill(-child.pid, "SIGKILL");
+	} catch {}
+}
+
 /** Race a phase promise against the test budget; on expiry kill the children
  * and fail the phase. Untimed phases (compile/static) pass straight through.
  * The budget defaults to TEST_PHASE_TIMEOUT_MS; the group pool passes its own
@@ -387,12 +417,20 @@ async function runPhase(command: FulltestCommand): Promise<void> {
 	console.log(`$ ${command.argv.map(shellQuote).join(" ")}`);
 	const child = Bun.spawn([...command.argv], {
 		cwd: repoRoot,
+		// POSIX: detached makes the child a process-group leader so a timeout
+		// can kill its whole tree via killProcessTree; Windows uses taskkill.
+		detached: process.platform !== "win32",
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
 		env: command.env ? { ...process.env, ...command.env } : undefined,
 	});
-	const exitCode = await withTestTimeout(command.label, child.exited, () => child.kill(), command.timed === true);
+	const exitCode = await withTestTimeout(
+		command.label,
+		child.exited,
+		() => killProcessTree(child),
+		command.timed === true,
+	);
 	if (exitCode !== 0) throw new Error(`${command.label} failed with exit code ${exitCode}`);
 }
 
@@ -511,11 +549,13 @@ async function runWhitelistPhase(): Promise<void> {
 			// open would keep stdin-EOF-waiting tests hung until their timeout.
 			const child = Bun.spawn([...plan.argv], {
 				cwd: path.join(repoRoot, plan.cwd),
+				// POSIX: detached so a timeout can kill the group's whole tree.
+				detached: process.platform !== "win32",
 				stdin: "ignore",
 				stdout: "inherit",
 				stderr: "inherit",
 			});
-			return { exited: child.exited, kill: () => child.kill() };
+			return { exited: child.exited, kill: () => killProcessTree(child) };
 		},
 	});
 	if (failures.length > 0) {

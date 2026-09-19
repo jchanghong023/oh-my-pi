@@ -80,6 +80,7 @@ import { type Effort, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { type EditStore, PowerAssertion, type PowerAssertionOptions } from "@oh-my-pi/pi-natives";
@@ -176,8 +177,6 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/appr
 import { listPlanFiles, readPlanFile } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
-import { getPrimaryAgentProfile } from "../primary-agent/profiles";
-import type { PrimaryAgentId } from "../primary-agent/types";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
@@ -649,11 +648,6 @@ export class AgentSession {
 	/** A single model-only notebook reminder queued for the current prompt generation. */
 	#experimentalContextNotesReminder: { prompt: string; generation: number } | undefined;
 	#planModeState: PlanModeState | undefined;
-	#activePrimaryAgentId: PrimaryAgentId = "main";
-	#pendingPrimaryAgentId: PrimaryAgentId | undefined;
-	#primaryAgentCycleTail: Promise<void> = Promise.resolve();
-	#lastQueuedPrimaryAgentId: PrimaryAgentId | undefined;
-	#primaryAgentCycleSequence = 0;
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
@@ -1305,7 +1299,6 @@ export class AgentSession {
 		this.#reseedTokenRate();
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
-		this.#activePrimaryAgentId = this.sessionManager.buildSessionContext().primaryAgent ?? "main";
 		this.settings = config.settings;
 		this.memoryEnabled = config.memoryEnabled ?? true;
 		this.#modelRegistry = config.modelRegistry;
@@ -1374,7 +1367,6 @@ export class AgentSession {
 			hasBuiltInTool: name => this.hasBuiltInTool(name),
 			getPlanModeState: () => this.getPlanModeState(),
 			setPlanModeState: state => this.setPlanModeState(state),
-			primaryAgentIsDiscuss: () => (this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId) === "discuss",
 			getPlanReferencePath: () => this.getPlanReferencePath(),
 			setPlanProposalHandler: handler => this.setPlanProposalHandler(handler),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
@@ -1398,9 +1390,6 @@ export class AgentSession {
 			getEnabledToolNames: () => this.getEnabledToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
-			// Pending-aware like the prewalk host: while a Discuss switch is in
-			// flight, todo continuation must not queue messages that would abort it.
-			primaryAgentIsDiscuss: () => (this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId) === "discuss",
 			prewalkWillHandoff: () => this.#prewalk.willHandoff,
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
@@ -1529,7 +1518,7 @@ export class AgentSession {
 			takeMnemopiSessionState: () => setMnemopiSessionState(this, undefined),
 			setBaseSystemPrompt: prompt => {
 				this.#tools.setBaseSystemPrompt(prompt);
-				this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
+				this.agent.setSystemPrompt(prompt);
 			},
 			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(),
 			replaceMemoryTools: tools => this.#tools.replaceMemoryTools(tools),
@@ -1675,7 +1664,6 @@ export class AgentSession {
 			isStreaming: () => this.isStreaming,
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
-			primaryAgentProfile: () => getPrimaryAgentProfile(this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId),
 			model: () => this.model,
 			setCodeModeNamespacesInfo: info => {
 				this.#codeModeState.namespacesInfo = info;
@@ -5411,7 +5399,7 @@ export class AgentSession {
 	getEnabledToolNames(): string[] {
 		return this.#tools.getEnabledToolNames();
 	}
-	/** Complete requested tool slate before Primary Agent projection. */
+	/** Complete requested tool slate, as last passed to a toolset apply. */
 	getBaseActiveToolNames(): string[] {
 		return this.#tools.getBaseActiveToolNames();
 	}
@@ -5426,7 +5414,7 @@ export class AgentSession {
 		return this.#tools.getMountedXdevToolNames();
 	}
 
-	/** Live `xd://` mounts without Primary Agent projection. */
+	/** Live `xd://` mounts, unfiltered for presentation snapshots. */
 	getRawMountedXdevToolNames(): string[] {
 		return this.#tools.getRawMountedXdevToolNames();
 	}
@@ -5549,7 +5537,6 @@ export class AgentSession {
 	 */
 	initializeCodeMode(): Promise<void> {
 		const model = this.model;
-		if (this.#activePrimaryAgentId === "discuss") return this.#tools.reapplyPrimaryAgentProfile();
 		if (!model || !this.#tools.codeModeChangesBetween(undefined, model)) return Promise.resolve();
 		return this.#tools.reconcileCodeMode();
 	}
@@ -5800,112 +5787,6 @@ export class AgentSession {
 	/** Prompt templates */
 	getPlanModeState(): PlanModeState | undefined {
 		return this.#planModeState;
-	}
-
-	getPrimaryAgentId(): PrimaryAgentId {
-		return this.#activePrimaryAgentId;
-	}
-
-	/** Primary agent a switch is currently in flight toward, if any. */
-	getPendingPrimaryAgentId(): PrimaryAgentId | undefined {
-		return this.#pendingPrimaryAgentId;
-	}
-
-	async setPrimaryAgent(id: PrimaryAgentId): Promise<void> {
-		if (id === this.#activePrimaryAgentId) return;
-		if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
-		if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
-		if (this.isCompacting) throw new Error("Primary Agent cannot change while the session is compacting.");
-		const workflowModePersisted = (): boolean => {
-			const workflowMode = this.sessionManager.buildSessionContext().mode;
-			return (
-				workflowMode === "plan" ||
-				workflowMode === "plan_paused" ||
-				workflowMode === "goal" ||
-				workflowMode === "goal_paused" ||
-				workflowMode === "vibe"
-			);
-		};
-		if (
-			id === "discuss" &&
-			(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowModePersisted())
-		) {
-			throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
-		}
-		const previous = this.#activePrimaryAgentId;
-		const previousBase = this.#tools.getBaseWithMountedToolNames();
-		const legacyBase =
-			id === "main" ? this.sessionManager.buildSessionContext().legacyDiscussPreviousTools : undefined;
-		this.#pendingPrimaryAgentId = id;
-		try {
-			await this.#tools.reapplyPrimaryAgentProfile(legacyBase);
-			// Re-sample the runtime guards: a turn may have started, a message
-			// queued, or compaction begun while the reapply sat in the
-			// tool-mutation queue.
-			if (this.isStreaming) throw new Error("Primary Agent cannot change while the session is running.");
-			if (this.queuedMessageCount > 0) throw new Error("Primary Agent cannot change while messages are queued.");
-			if (this.isCompacting) throw new Error("Primary Agent cannot change while the session is compacting.");
-			if (
-				id === "discuss" &&
-				(this.#planModeState || this.#goalModeState || this.#vibeModeState || workflowModePersisted())
-			) {
-				// A mode became visible — in-memory state, or persisted while
-				// the reapply sat in the tool-mutation queue — during the
-				// await above; the catch below restores the previous toolset,
-				// and skipping the append keeps a mode + Discuss combo (which
-				// nothing in the UI can exit) out of the session file.
-				throw new Error("Exit plan, goal, or vibe before switching to Discuss.");
-			}
-			this.sessionManager.appendPrimaryAgentChange(id);
-			this.#activePrimaryAgentId = id;
-		} catch (error) {
-			this.#pendingPrimaryAgentId = previous;
-			try {
-				await this.#tools.reapplyPrimaryAgentProfile(previousBase);
-			} catch (rollbackError) {
-				// Never mask the original failure; the next apply self-heals the
-				// toolset signature.
-				logger.warn("Failed to roll back Primary Agent toolset", { error: String(rollbackError) });
-			} finally {
-				this.#pendingPrimaryAgentId = undefined;
-			}
-			throw error;
-		}
-		this.#pendingPrimaryAgentId = undefined;
-	}
-
-	async cyclePrimaryAgent(): Promise<PrimaryAgentId> {
-		const basis = this.#lastQueuedPrimaryAgentId ?? this.#pendingPrimaryAgentId ?? this.#activePrimaryAgentId;
-		const next = basis === "main" ? "discuss" : "main";
-		const sequence = ++this.#primaryAgentCycleSequence;
-		this.#lastQueuedPrimaryAgentId = next;
-		const request = this.#primaryAgentCycleTail.then(() => this.setPrimaryAgent(next));
-		this.#primaryAgentCycleTail = request.then(
-			() => {},
-			() => {},
-		);
-		try {
-			await request;
-			return next;
-		} finally {
-			if (this.#primaryAgentCycleSequence === sequence) {
-				this.#lastQueuedPrimaryAgentId = undefined;
-			}
-		}
-	}
-	async #restorePrimaryAgent(id: PrimaryAgentId): Promise<void> {
-		if (id === this.#activePrimaryAgentId) return;
-		const previous = this.#activePrimaryAgentId;
-		this.#pendingPrimaryAgentId = id;
-		try {
-			await this.#tools.reapplyPrimaryAgentProfile();
-			this.#activePrimaryAgentId = id;
-		} catch (error) {
-			this.#activePrimaryAgentId = previous;
-			throw error;
-		} finally {
-			this.#pendingPrimaryAgentId = undefined;
-		}
 	}
 
 	/** Prewalk state, if armed and active */
@@ -6750,6 +6631,11 @@ export class AgentSession {
 					queueChipText: options?.queueChipText,
 				}),
 			);
+		} else if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
+			// A collab-forwarded guest prompt is user-identity text: apply the same
+			// magic-keyword notices (and turn-budget parsing) as the local #prompt
+			// path, which sees its text through #createMagicKeywordNotices too.
+			keywordNotices = this.#createMagicKeywordNotices(textContent);
 		}
 
 		if (options?.queueOnly) {
@@ -8480,9 +8366,6 @@ export class AgentSession {
 					...options,
 					additionalDirectories: this.settings.get("workspace.additionalDirectories"),
 				});
-				if (this.#activePrimaryAgentId !== "main") {
-					this.sessionManager.appendPrimaryAgentChange(this.#activePrimaryAgentId);
-				}
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit
@@ -9654,7 +9537,6 @@ export class AgentSession {
 		// error-recovery path rebuilds the context on demand from the restored
 		// state instead.
 		const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
-		const previousPrimaryAgentId = this.#activePrimaryAgentId;
 		// switchSession replaces these arrays wholesale during load/rollback, so retaining
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
@@ -9672,11 +9554,7 @@ export class AgentSession {
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
-		// The rollback below reprojects the tool slate; snapshot the pre-switch
-		// base because a completed target restore can rebase it onto the target
-		// session's mode (goal/vibe) toolset before a late step fails the switch.
-		const previousPrimaryAgentBase = this.#tools.getBaseWithMountedToolNames();
-		const previousBaseSystemPrompt = this.#tools.unprofiledBaseSystemPrompt;
+		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
@@ -9852,7 +9730,6 @@ export class AgentSession {
 			if (switchingToDifferentSession || didReloadConversationChange) {
 				this.#clearSessionScopedToolState();
 			}
-			await this.#restorePrimaryAgent(sessionContext.primaryAgent ?? "main");
 			this.#reconnectToAgent();
 			try {
 				await this.#sessionSwitchReconciler?.();
@@ -9900,19 +9777,6 @@ export class AgentSession {
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();
 			this.agent.setTools(previousTools);
-			this.#activePrimaryAgentId = previousPrimaryAgentId;
-			try {
-				// A completed #restorePrimaryAgent leaves the truncated target
-				// profile applied, and the target's mode restoration may have
-				// rebased the tool slate; reproject the snapshotted pre-switch
-				// base under the restored profile so a late switch failure cannot
-				// strand either the target's toolset or the Main profile.
-				await this.#tools.reapplyPrimaryAgentProfile(previousPrimaryAgentBase);
-			} catch (reapplyError) {
-				logger.warn("Failed to reapply Primary Agent profile after session switch rollback", {
-					error: String(reapplyError),
-				});
-			}
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
 			this.agent.setSystemPrompt(previousSystemPrompt);
@@ -10080,7 +9944,6 @@ export class AgentSession {
 
 			// Reload messages from entries (works for both file and in-memory mode)
 			const sessionContext = this.buildDisplaySessionContext();
-			await this.#restorePrimaryAgent(sessionContext.primaryAgent ?? "main");
 
 			// Emit session_branch event to hooks (after branch completes)
 			if (this.#extensionRunner) {
@@ -10550,25 +10413,6 @@ export class AgentSession {
 
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
-		try {
-			await this.#restorePrimaryAgent(stateContext.primaryAgent ?? "main");
-		} catch (error) {
-			const rollbackTransition = this.#bash.beginSessionTransition();
-			let rolledBack = false;
-			try {
-				if (oldLeafId === null) {
-					this.sessionManager.resetLeaf();
-				} else {
-					this.sessionManager.branch(oldLeafId);
-				}
-				this.#bash.markSessionTransition(rollbackTransition);
-				rolledBack = true;
-			} finally {
-				this.#bash.finishSessionTransition(rollbackTransition, rolledBack);
-				this.#branchSummaryAbortController = undefined;
-			}
-			throw error;
-		}
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
@@ -10578,15 +10422,6 @@ export class AgentSession {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		this.#branchSummaryAbortController = undefined;
-
-		// A leaf move can restore the read-only Discuss profile (a
-		// `primary_agent_change` entry inside the branch it lands on). Loop mode cannot
-		// coexist with Discuss and the switch shortcut refuses while loop mode is on, so
-		// run the interactive reconciler exactly then — the same step `branch()` and
-		// `branchFromBtw()` always run. Other profiles keep the previous behavior.
-		if (this.#activePrimaryAgentId === "discuss") {
-			await this.#reconcileModeAfterBranch();
-		}
 
 		// Report a committed `ask` re-answer so the interactive caller can resume
 		// the agent via `resumeAfterAskReanswer()` *after* rebuilding its

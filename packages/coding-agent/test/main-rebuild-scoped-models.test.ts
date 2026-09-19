@@ -37,6 +37,7 @@ class FakeRegistry {
 	available: Model<Api>[];
 	discoverableProviders = ["prov"];
 	refreshCalls = 0;
+	refreshStrategies: (string | undefined)[] = [];
 	onRefresh: (() => void) | undefined;
 	constructor(initial: Model<Api>[], onRefresh?: () => void) {
 		this.available = initial;
@@ -48,8 +49,9 @@ class FakeRegistry {
 	getDiscoverableProviders(): string[] {
 		return this.discoverableProviders;
 	}
-	async refresh(): Promise<void> {
+	async refresh(strategy?: string): Promise<void> {
 		this.refreshCalls += 1;
+		this.refreshStrategies.push(strategy);
 		this.onRefresh?.();
 	}
 	async awaitBackgroundRefresh(): Promise<void> {
@@ -158,6 +160,20 @@ describe("resolveScopedModels", () => {
 		const scoped = await resolveScopedModels(parseArgs(["--models", "prov/b"]), registry, settings);
 
 		expect(registry.refreshCalls).toBe(1);
+		expect(registry.refreshStrategies).toEqual(["online-if-uncached"]);
+		expect(scoped.map(entry => entry.model.id)).toEqual(["b"]);
+	});
+
+	it("keeps the collapsed-scope refresh cache-only in an offline process", async () => {
+		const settings = Settings.isolated();
+		const registry = new FakeRegistry([], () => {
+			registry.available = [model("b")];
+		});
+
+		const scoped = await resolveScopedModels(parseArgs(["--models", "prov/b", "--offline"]), registry, settings);
+
+		expect(registry.refreshCalls).toBe(1);
+		expect(registry.refreshStrategies).toEqual(["offline"]);
 		expect(scoped.map(entry => entry.model.id)).toEqual(["b"]);
 	});
 });
@@ -208,5 +224,25 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(options.model?.id).toBe("a");
 		expect(options.rebindModelAfterDiscovery).toBe(true);
 		expect(options.scopedModels?.map(entry => entry.model.id)).toEqual(["a"]);
+	});
+
+	it("forwards --offline to the session options and defaults it off otherwise", async () => {
+		const offline = await buildSessionOptions(
+			parseArgs(["--offline"]),
+			[],
+			SessionManager.inMemory(),
+			registry(),
+			Settings.isolated(),
+		);
+		expect(offline.offline).toBe(true);
+
+		const online = await buildSessionOptions(
+			parseArgs([]),
+			[],
+			SessionManager.inMemory(),
+			registry(),
+			Settings.isolated(),
+		);
+		expect(online.offline).toBe(false);
 	});
 });

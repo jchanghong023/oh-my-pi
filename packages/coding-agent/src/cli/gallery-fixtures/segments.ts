@@ -42,7 +42,6 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		},
 		compactThinkingLevel: false,
 		planMode: { enabled: true, paused: false },
-		primaryAgent: "main",
 		prewalk: null,
 		loopMode: null,
 		goalMode: null,

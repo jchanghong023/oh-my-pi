@@ -130,7 +130,9 @@ describe("Markdown parsing", () => {
 		);
 	});
 
-	it("skips and refuses symbolic-link Markdown sources", async () => {
+	// A plain (non-junction) symlink needs Windows Developer Mode or an
+	// elevated token; without it fs.symlink fails with EPERM.
+	it.skipIf(process.platform === "win32")("skips and refuses symbolic-link Markdown sources", async () => {
 		const root = await tempDir("docs-safe-root-");
 		const outside = path.join(await tempDir("docs-safe-outside-"), "outside.md");
 		await fs.writeFile(outside, "# Outside\nsecret\n");

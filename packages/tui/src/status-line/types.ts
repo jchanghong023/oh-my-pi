@@ -6,9 +6,6 @@ import type { LoopConditionConfig, LoopLimitRuntime } from "./loop";
 
 export type { ContextLineMode, StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle };
 
-/** Which primary agent (Main or Discuss) the status line reflects. */
-export type PrimaryAgentId = "main" | "discuss";
-
 /** Context-window occupancy shown by the status line and exposed to extensions. */
 export interface ContextUsage {
 	/** Estimated context tokens. */
@@ -100,7 +97,6 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
-	primaryAgent: PrimaryAgentId;
 	prewalk: {
 		enabled: boolean;
 	} | null;

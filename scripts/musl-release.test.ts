@@ -34,7 +34,10 @@ async function writeExecutable(directory: string, name: string, content: string)
 	await fs.chmod(file, 0o755);
 }
 
-describe("musl release artifacts", () => {
+// Linux-only: the install.sh smoke-check stubs uname/ldd/curl as POSIX sh
+// scripts and splices a colon-delimited PATH, which non-POSIX hosts cannot
+// run (musl is a Linux libc anyway).
+describe.skipIf(process.platform !== "linux")("musl release artifacts", () => {
 	test("builds the requested x64 and arm64 musl asset names with Bun's musl targets", async () => {
 		const result = await run([
 			"bun",

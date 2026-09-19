@@ -939,11 +939,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Loop reset guards treat a pending entry as active, and a concurrent /vibe
 	// command awaits it instead of dispatching its prompt on the stale toolset.
 	#vibeModeEntry: Promise<void> | undefined;
-	// In-flight #enterGoalMode promise: set before the goalRuntime await (while
-	// goalModeEnabled is still false) and cleared when entry settles. The
-	// Shift+F2 guard treats a pending entry as active so Discuss cannot switch
-	// in mid-activation and strand a goal + Discuss combo nothing can exit.
-	#goalModeEntry: Promise<void> | undefined;
 	// FIFO tail + live count for concurrent /vibe skill dispatches. A skill
 	// prompt yields on its file read before the turn reserves, so each skill
 	// links behind its predecessor (arrival order) while the count — visible
@@ -1298,7 +1293,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session, statusLineHost);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
-		this.statusLine.setPrimaryAgentStatus(session.getPrimaryAgentId());
 		this.#syncStatusLineSettings();
 		this.#codexResetFireworksController = new CodexResetFireworksController(this);
 		this.statusLine.setCodexResetFireworksHandler(event => {
@@ -1450,7 +1444,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		// runs callbacks in REVERSE registration order — this callback (registered
 		// after the AgentSession constructor's `agent-session:<id>` recorder) runs
 		// FIRST and its dispose() would otherwise persist the generic "dispose".
-		this.#cleanupUnsubscribe = postmortem.register("session-teardown", reason => this.#signalTeardown!(reason));
+		this.#cleanupUnsubscribe = postmortem.register("session-teardown", reason => {
+			// Arm the shutdown flag on the signal path too: while this teardown
+			// runs (and can get stuck), the SIGINT gate's `isShuttingDown()` must
+			// report true so a follow-up signal falls through to the hard-abort
+			// instead of being consumed as a fresh first press once the 5s
+			// confirm window lapses (sigint-gate.ts). The keypress paths set the
+			// flag themselves; #handleTeardownError's reset only applies to
+			// those retryable keypress teardowns.
+			this.#isShuttingDown = true;
+			return this.#signalTeardown!(reason);
+		});
 
 		// A real SIGINT reaching the process-level handler must not exit the
 		// TUI on the first hit: Windows console ctrl events arrive regardless
@@ -2319,14 +2323,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleLoopCommand(args = ""): Promise<string | undefined> {
 		if (this.loopModeEnabled) {
-			// Exit stays reachable in Discuss: a legacy or raced session can pair
-			// loop mode with the Discuss profile, and both the shortcut and this
-			// command's entry warning refuse there — disabling is the only way out.
 			this.disableLoopMode();
-			return undefined;
-		}
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering loop mode.");
 			return undefined;
 		}
 		const parsed = parseLoopArgs(args);
@@ -3351,50 +3348,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	#updatePrimaryAgentStatus(): void {
-		this.statusLine.setPrimaryAgentStatus(this.session.getPrimaryAgentId());
-		this.ui.requestRender();
-	}
-
-	#isDiscussPrimaryAgent(): boolean {
-		// Pending-aware: a Discuss switch already in flight must gate mode entry
-		// too, or the mode could commit on top of the committed switch.
-		return this.session.getPrimaryAgentId() === "discuss" || this.session.getPendingPrimaryAgentId() === "discuss";
-	}
-	cyclePrimaryAgentFromShortcut(): boolean {
-		if (this.viewSession !== this.session) return false;
-		if (
-			this.session.isStreaming ||
-			this.session.queuedMessageCount > 0 ||
-			this.session.isCompacting ||
-			this.compactionQueuedMessages.length > 0 ||
-			this.planModeEnabled ||
-			this.planModePaused ||
-			this.goalModeEnabled ||
-			this.goalModePaused ||
-			this.vibeModeEnabled ||
-			this.loopModeEnabled ||
-			this.loopModePaused ||
-			this.#goalModeEntry !== undefined ||
-			this.#vibeModeEntry !== undefined
-		) {
-			return false;
-		}
-		void this.#cyclePrimaryAgentFromShortcut();
-		return true;
-	}
-
-	async #cyclePrimaryAgentFromShortcut(): Promise<void> {
-		try {
-			const active = await this.session.cyclePrimaryAgent();
-			this.lastAssistantUsage = undefined;
-			this.#updatePrimaryAgentStatus();
-			this.showStatus(`Primary Agent: ${active === "main" ? "Main" : "Discuss"}`);
-		} catch (error) {
-			this.showWarning(error instanceof Error ? error.message : String(error));
-		}
-	}
-
 	#updateVibeModeStatus(): void {
 		this.statusLine.setVibeModeStatus(this.vibeModeEnabled ? { enabled: true } : undefined);
 		this.ui.requestRender();
@@ -3711,7 +3664,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#vibeScopeSuspendedForSwitch = false;
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const vibeSession = this.#vibeParentSession();
-		this.#updatePrimaryAgentStatus();
 		const targetVibeScope = VibeSessionRegistry.global().ownerScope(vibeSession);
 		const preserveVibe =
 			this.vibeModeEnabled &&
@@ -3728,12 +3680,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// vibe must restore.
 		const vibeToolsetLostToTeardown = this.vibeModeEnabled && !preserveVibe;
 		await this.#clearTransientModeState({ preserveVibe, vibeScopeAlreadySuspended });
-		if ((this.loopModeEnabled || this.loopModePaused) && this.#isDiscussPrimaryAgent()) {
-			// Loop mode and the read-only Discuss profile are mutually exclusive; a switch
-			// into a Discuss session would otherwise leave both active with no way back —
-			// the shortcut and `/loop` both refuse while loop mode is on.
-			this.disableLoopMode("Loop mode disabled: Discuss is active.");
-		}
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
@@ -3744,15 +3690,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused") {
 			const goal = this.#goalFromModeData(sessionContext.modeData);
 			if (!goal) {
-				this.sessionManager.appendModeChange("none");
-				return;
-			}
-			if (this.#isDiscussPrimaryAgent()) {
-				// A legacy session file can pair goal mode with the Discuss
-				// profile (written before the switch guards existed). Restoring
-				// both would strand the session: the shortcut refuses while a
-				// mode is on, and every /goal subcommand refuses in Discuss.
-				this.session.goalRuntime.clearAccounting();
 				this.sessionManager.appendModeChange("none");
 				return;
 			}
@@ -3797,24 +3734,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (sessionContext.mode === "plan") {
-			if (this.#isDiscussPrimaryAgent()) {
-				// A legacy session file can pair plan mode with the Discuss
-				// profile (written before the switch guards existed). Drop the
-				// persisted mode instead of re-warning on every restore; the
-				// plan file stays on disk for a later /plan.
-				this.sessionManager.appendModeChange("none");
-				return;
-			}
 			const planFilePath = sessionContext.modeData?.planFilePath as string | undefined;
 			await this.#enterPlanMode({ planFilePath, preserveRestoredModel: true });
 		} else if (sessionContext.mode === "plan_paused") {
-			if (this.#isDiscussPrimaryAgent()) {
-				// Same legacy pairing: restoring the paused flag would strand
-				// the session — the shortcut refuses while paused and /plan's
-				// paused→off branch refuses in Discuss.
-				this.sessionManager.appendModeChange("none");
-				return;
-			}
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
 			this.#updatePlanModeStatus();
@@ -3827,10 +3749,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveRestoredModel?: boolean;
 	}): Promise<void> {
 		if (this.planModeEnabled) {
-			return;
-		}
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering plan.");
 			return;
 		}
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -4057,20 +3975,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.goalModeEnabled) {
 			return;
 		}
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
-			return;
-		}
-		const inFlight = this.#goalModeEntry;
-		if (inFlight) {
-			// A second /goal (possibly with an objective, or a silent reconciler
-			// resume) submitted while activation is still in flight must not
-			// dispatch on the stale toolset: wait for the first entry, then
-			// return with goal active. A failed entry rejects here too, so the
-			// objective is dropped instead of running outside goal mode.
-			await inFlight;
-			return;
-		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return;
@@ -4081,37 +3985,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const previousTools = this.session.getEnabledToolNames().filter(name => name !== "goal");
 		const goalTools = [...new Set([...previousTools, "goal"])];
-		// The entry runs as a stored promise (like #enterVibeMode) so the
-		// Shift+F2 guard can see it before goalModeEnabled flips, and a failure
-		// is always observed (no unhandled rejection).
-		const entry = (async () => {
-			const state = options.resume
-				? await this.session.goalRuntime.resumeGoal()
-				: await this.session.goalRuntime.createGoal({ objective: options.objective ?? "" });
-			if (this.#isDiscussPrimaryAgent()) {
-				// Discuss switched in while the goal state was loading; abort
-				// before touching the toolset so its projection stays live.
-				throw new Error("Switch back to Main with Shift+F2 before entering goal.");
-			}
-			this.#goalModePreviousTools = previousTools;
-			this.goalModePaused = false;
-			await this.session.setActiveToolsByName(goalTools);
-			this.session.setGoalModeState(state);
-			this.goalModeEnabled = true;
-			this.#resetGoalContinuationSuppression();
-			this.#updateGoalModeStatus();
-			if (this.session.isStreaming) {
-				await this.session.sendGoalModeContext({ deliverAs: "steer" });
-			}
-			if (!options.silent) {
-				this.showStatus(options.resume ? "Goal mode resumed." : "Goal mode enabled.");
-			}
-		})();
-		this.#goalModeEntry = entry;
-		try {
-			await entry;
-		} finally {
-			if (this.#goalModeEntry === entry) this.#goalModeEntry = undefined;
+		this.#goalModePreviousTools = previousTools;
+		this.goalModePaused = false;
+		const state = options.resume
+			? await this.session.goalRuntime.resumeGoal()
+			: await this.session.goalRuntime.createGoal({ objective: options.objective ?? "" });
+		await this.session.setActiveToolsByName(goalTools);
+		this.session.setGoalModeState(state);
+		this.goalModeEnabled = true;
+		this.#resetGoalContinuationSuppression();
+		this.#updateGoalModeStatus();
+		if (this.session.isStreaming) {
+			await this.session.sendGoalModeContext({ deliverAs: "steer" });
+		}
+		if (!options.silent) {
+			this.showStatus(options.resume ? "Goal mode resumed." : "Goal mode enabled.");
 		}
 	}
 
@@ -4725,10 +4613,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering plan.");
-			return false;
-		}
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -4802,10 +4686,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
-			return false;
-		}
 		if (this.vibeModeEnabled) {
 			await this.#exitVibeMode();
 			return false;
@@ -4915,10 +4795,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.vibeModeEnabled) {
 			return;
 		}
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering vibe.");
-			return;
-		}
 		const inFlight = this.#vibeModeEntry;
 		if (inFlight) {
 			// A second /vibe (possibly with a prompt) submitted while activation
@@ -4955,15 +4831,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// rejection) and propagates to every joiner, dropping their prompts.
 		const entry = (async () => {
 			await this.session.activateVibeTools(vibeBaseTools);
-			if (this.#isDiscussPrimaryAgent()) {
-				// Discuss switched in while the tool mutation was queued; the
-				// projection it applied is the live set, so abort the entry
-				// instead of enabling vibe on top of it. Restore the pre-vibe
-				// toolset first: with vibe never enabled there is no
-				// #exitVibeMode path that would recover the replaced base.
-				await this.session.deactivateVibeTools(previousTools);
-				throw new Error("Switch back to Main with Shift+F2 before entering vibe.");
-			}
 			this.#vibeModePreviousTools = previousTools;
 			this.#vibeModeOwnerScope = ownerScope;
 			this.vibeModeEnabled = true;
@@ -5046,10 +4913,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
-			return false;
-		}
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -5092,10 +4955,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before entering goal.");
-			return false;
-		}
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
@@ -6357,7 +6216,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
 		await this.#uiHelpers.renderInitialMessages(options);
-		if (this.viewSession === this.session) this.#updatePrimaryAgentStatus();
 		this.syncRetryHintRow();
 	}
 	/**
@@ -6389,12 +6247,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	truncateTranscriptFromMessage(message: AgentMessage): boolean {
-		const truncated = this.#uiHelpers.truncateTranscriptFromMessage(message);
-		// An in-place rewind skips the full transcript replay below, and the dropped
-		// range can carry a `primary_agent_change` (Esc-Esc / tree navigation across
-		// a Shift+F2 switch). Refresh the session-derived chrome this path bypasses.
-		if (truncated) this.#updatePrimaryAgentStatus();
-		return truncated;
+		return this.#uiHelpers.truncateTranscriptFromMessage(message);
 	}
 
 	findLastAssistantMessage(): AssistantMessage | undefined {
@@ -6823,10 +6676,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	handleTanCommand(work: string): Promise<void> {
-		if (this.#isDiscussPrimaryAgent()) {
-			this.showWarning("Switch back to Main with Shift+F2 before dispatching /tan.");
-			return Promise.resolve();
-		}
 		return this.#tanCommandController.start(work);
 	}
 

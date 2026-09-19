@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the fork-only Main/Discuss primary-agent mode (`Shift+F2`) along with its tool gating, prompt section, and status-bar segment; existing sessions resume as regular sessions.
+
+### Changed
+
+- Local `build-binary` builds now embed the fork update repository, so `omp update` on a locally built binary targets fork releases instead of the official upstream distribution.
+
+### Fixed
+
+- Fixed Windows built-in tools (rg/grep/ls/…) block-buffering captured-pipe output until tool exit: anonymous pipes are no longer misdetected as regular files, and `sed` redirected output now uses the regular-file snapshot.
+- Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
+- Fixed watchdog and debug-bundle log paths using a UTC date while the rotating sink writes local-date filenames.
+- Fixed `/team` crashing with a raw TypeError when `team.members` is not a list; it now reports a configuration example instead.
+- Fixed the docs hub keeping a stale error line after successful follow-up actions, and collab-forwarded magic-keyword prompts now receive the keyword strategy notices.
+- Marked the `musl-release` script test Linux-only and added the docs/wiki suites to the local fulltest whitelist; fulltest/fastcheck phase timeouts now kill the whole child process tree.
+
 ## [18.2.6] - 2026-09-18
 
 ### Fixed
@@ -30,7 +47,6 @@
 
 ### Fixed
 
-- Fixed startup aborting when the plugins directory exists but cannot be read — a sandboxed run, a restrictive mode, or a manifest symlinked into a denied path; the unreadable root is now skipped with a warning.
 - Fixed `update.channel=canary` failing silently on fork binary installs: the startup version check now shows a notice that the canary channel is unavailable and points at `omp update --stable`.
 - Fixed external Markdown document indexes dropping a section whose only content is an indented-code `#` heading line, and stopped directory imports from recursing forever through a cyclic Windows junction.
 

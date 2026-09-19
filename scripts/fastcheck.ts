@@ -122,6 +122,30 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 	return { PATH: [...extraDirs, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
 }
 
+/** Hard-kill a phase child together with its whole process tree. Bun's
+ * kill() has no tree semantics (only the direct child gets the signal), so a
+ * timed-out gate would otherwise leave grandchildren running (the per-package
+ * toolchain spawns under check:ts, cargo's build helpers). Timeout path only;
+ * normally exiting children never go through here. */
+function killProcessTree(child: { pid: number }): void {
+	if (process.platform === "win32") {
+		// taskkill /T walks the spawned tree; a failure (already-dead PID,
+		// missing taskkill) is ignored — the timeout verdict already failed
+		// the gate.
+		Bun.spawnSync(["taskkill.exe", "/PID", String(child.pid), "/T", "/F"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		return;
+	}
+	try {
+		// Phase children spawn detached as process-group leaders, so -pid
+		// signals every group member; an ESRCH throw just means the group
+		// already exited.
+		process.kill(-child.pid, "SIGKILL");
+	} catch {}
+}
+
 /** Live phase children, so the budget path can kill whatever is running. */
 const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
 
@@ -130,6 +154,9 @@ async function runCommand(command: Command): Promise<void> {
 	console.log(`$ ${command.argv.map(shellQuote).join(" ")}`);
 	const child = Bun.spawn([...command.argv], {
 		cwd: repoRoot,
+		// POSIX: detached makes the child a process-group leader so a timeout
+		// can kill its whole tree via killProcessTree; Windows uses taskkill.
+		detached: process.platform !== "win32",
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
@@ -157,7 +184,7 @@ async function enforceBudget<T>(startedAtMs: number, budgetMs: number, work: () 
 					() => {
 						for (const child of liveChildren) {
 							try {
-								child.kill();
+								killProcessTree(child);
 							} catch {}
 						}
 						reject(new FastcheckTimeoutError(budgetMs, performance.now() - startedAtMs));

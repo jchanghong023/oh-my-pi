@@ -185,6 +185,34 @@ interface RankedRow {
 	phrase: boolean;
 }
 
+/**
+ * Score one candidate row against the query's literal patterns. Pure per
+ * section: the snippet is a fixed prefix of the stored Markdown and the BM25
+ * rank is row-local, so a row scored in one window keeps its score in every
+ * wider one and `#fill` can reuse it.
+ */
+function scoreCandidate(row: Record<string, unknown>, patterns: readonly RegExp[], phrase: RegExp): RankedRow {
+	const raw = normalizeSearchText(row.snippet as string);
+	const plain = normalizeSearchText(normalizePlainText(row.snippet as string));
+	const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
+	const path = normalizeSearchText(row.relative_path as string);
+	const separator = heading.lastIndexOf(" > ");
+	const title = separator < 0 ? heading : heading.slice(separator + 3);
+	let literalCount = 0;
+	for (const term of patterns) {
+		if (term.test(raw) || term.test(plain) || term.test(heading) || term.test(path)) literalCount++;
+	}
+	return {
+		row,
+		literalCount,
+		// Judged on the snippet, which is all this window loads; the stored
+		// section is the final word (that text is what the caller renders).
+		stub: sectionShape(`${row.snippet as string}\n`) === "stub",
+		titlePhrase: phrase.test(title),
+		phrase: phrase.test(raw) || phrase.test(plain) || phrase.test(heading) || phrase.test(path),
+	};
+}
+
 function validateName(name: string): string {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error("Document index name must not be empty");
@@ -399,10 +427,13 @@ export class DocsService {
 		// The window is cut from the top, so a query that matches nothing but
 		// structural labels (`#### Cell`, hundreds of thousands of them in a legacy
 		// index) widens it until readable hits appear or the corpus runs out.
-		let page = this.#fill([], patterns, phrase, limit);
+		// Every wider window re-reads the rows the narrower one already scored, so
+		// each section is scored once and reused across the whole widening chain.
+		const scored = new Map<number, RankedRow>();
+		let page = this.#fill(scored, [], patterns, phrase, limit);
 		for (const candidateLimit of candidateWindows(Math.min(CANDIDATE_WINDOW_MAX, limit * 3 + 50))) {
 			const candidates = this.#candidates(match, filter, candidateLimit);
-			page = this.#fill(candidates, patterns, phrase, limit);
+			page = this.#fill(scored, candidates, patterns, phrase, limit);
 			if (page.readable >= limit || candidates.length < candidateLimit) break;
 		}
 		return this.#hits(page.entries);
@@ -422,34 +453,29 @@ export class DocsService {
 			.all(match, ...filter.args, candidateLimit) as Array<Record<string, unknown>>;
 	}
 
-	/** One candidate window, ranked, split into readable hits and stub padding. */
+	/**
+	 * One candidate window, ranked, split into readable hits and stub padding.
+	 * `scored` caches every row already scored in an earlier (narrower) window,
+	 * keyed by section id, so only the never-seen tail of a window pays for
+	 * scoring.
+	 */
 	#fill(
+		scored: Map<number, RankedRow>,
 		candidates: Array<Record<string, unknown>>,
 		patterns: readonly RegExp[],
 		phrase: RegExp,
 		limit: number,
 	): { entries: RankedRow[]; readable: number } {
-		const ranked: RankedRow[] = candidates.map(row => {
-			const raw = normalizeSearchText(row.snippet as string);
-			const plain = normalizeSearchText(normalizePlainText(row.snippet as string));
-			const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
-			const path = normalizeSearchText(row.relative_path as string);
-			const separator = heading.lastIndexOf(" > ");
-			const title = separator < 0 ? heading : heading.slice(separator + 3);
-			let literalCount = 0;
-			for (const term of patterns) {
-				if (term.test(raw) || term.test(plain) || term.test(heading) || term.test(path)) literalCount++;
+		const ranked: RankedRow[] = [];
+		for (const row of candidates) {
+			const sectionId = row.section_id as number;
+			let entry = scored.get(sectionId);
+			if (entry === undefined) {
+				entry = scoreCandidate(row, patterns, phrase);
+				scored.set(sectionId, entry);
 			}
-			return {
-				row,
-				literalCount,
-				// Judged on the snippet, which is all this window loads; the stored
-				// section is the final word (that text is what the caller renders).
-				stub: sectionShape(`${row.snippet as string}\n`) === "stub",
-				titlePhrase: phrase.test(title),
-				phrase: phrase.test(raw) || phrase.test(plain) || phrase.test(heading) || phrase.test(path),
-			};
-		});
+			ranked.push(entry);
+		}
 		// Ranking tiers, most precise first: the query's own spelling in the heading,
 		// then in the body (`std::vector` beats a scattered `vector std`), then
 		// sections carrying every analyzed term. BM25 closes each tier — it is the

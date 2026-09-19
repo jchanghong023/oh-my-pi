@@ -209,7 +209,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const planFile = runtime.ctx.planModePlanFilePath;
 				return `Plan: on${planFile ? ` (${path.basename(planFile)})` : ""}`;
 			}
-			if (runtime.ctx.session.getPrimaryAgentId() === "discuss") return "Plan: switch to Main first";
 			if (runtime.ctx.goalModeEnabled) return "Plan: blocked by goal mode";
 			return "Plan: off";
 		},
@@ -240,7 +239,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
 			if (runtime.ctx.goalModeEnabled) return "Vibe: blocked by goal mode";
-			if (runtime.ctx.session.getPrimaryAgentId() === "discuss") return "Vibe: switch to Main first";
 			return "Vibe: off";
 		},
 		handleTui: async (command, runtime) => {
@@ -265,7 +263,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!runtime.ctx.settings.get("goal.enabled" as SettingPath)) return "Goal: disabled in settings";
-			if (runtime.ctx.session.getPrimaryAgentId() === "discuss") return "Goal: switch to Main first";
 			if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
 			const state = runtime.ctx.session.getGoalModeState();
 			return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";

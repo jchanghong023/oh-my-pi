@@ -57,7 +57,9 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-describe("DocsHub terminal text safety", () => {
+// Windows filenames cannot contain control characters (\r, \t, ESC…), so the
+// attack-path fixture cannot be created there; the sanitization surface is POSIX-only.
+describe.skipIf(process.platform === "win32")("DocsHub terminal text safety", () => {
 	it("sanitizes list, detail, stored Markdown, and error text", async () => {
 		const { hub } = await fixture();
 		try {

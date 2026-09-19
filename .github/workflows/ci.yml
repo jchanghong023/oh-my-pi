@@ -258,9 +258,10 @@ jobs:
               OMP_TEST_CONCURRENCY: "4"
            run: |
               bun run ci:test:ts:workspace
-              # Not `test:scripts`: scripts/musl-release.test.ts fails on main
-              # (its install.sh smoke-check executes a fake binary), so running
-              # the whole group here would red this job on an unrelated break.
+              # Not the whole `test:scripts` group: scripts/musl-release.test.ts
+              # is Linux-only (skipIf-gated; its install.sh smoke-check stubs
+              # uname/ldd/curl as POSIX sh scripts and splices a colon-delimited
+              # PATH, so it needs a POSIX toolchain and cannot run on Windows).
               # The fork-only script tests are hermetic, so run them directly.
               bun test scripts/ci-test-ts.test.ts scripts/release.test.ts scripts/fastcheck.test.ts scripts/install-tests/fork-installer-routing.test.ts
 

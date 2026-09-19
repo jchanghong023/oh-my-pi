@@ -44,7 +44,6 @@ function createCtx(activeMs: number): SegmentContext {
 		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
-		primaryAgent: "main",
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,

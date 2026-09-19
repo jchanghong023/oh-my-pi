@@ -41,7 +41,6 @@ type ConfigurableEditorAction = Extract<
 	| "app.model.cycleBackward"
 	| "app.model.select"
 	| "app.model.selectTemporary"
-	| "app.primaryAgent.cycle"
 	| "app.message.dequeue"
 	| "app.retry"
 	| "app.clipboard.pasteImage"
@@ -60,7 +59,6 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.model.cycleBackward": ["shift+ctrl+p"],
 	"app.model.select": ["alt+m"],
 	"app.model.selectTemporary": ["ctrl+t"],
-	"app.primaryAgent.cycle": ["shift+f2"],
 	"app.message.dequeue": ["alt+up", "shift+up"],
 	"app.retry": ["f5", "alt+r"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
@@ -902,8 +900,6 @@ export class CustomEditor extends Editor {
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
 	onLeftAtStart?: () => void;
-	/** Called when the configured primary-agent shortcut is pressed. Returns true when consumed. */
-	onCyclePrimaryAgent?: () => boolean;
 
 	/** Fired when a sustained space-bar hold is recognized — the push-to-talk STT start. The
 	 *  optimistically-typed spaces have already been deleted by the time this runs. */
@@ -1214,11 +1210,6 @@ export class CustomEditor extends Editor {
 			// Intercept configured temporary model selector shortcut
 			if (this.#matchesAction(canonical, "app.model.selectTemporary") && this.onSelectModelTemporary) {
 				this.onSelectModelTemporary();
-				return;
-			}
-			// Intercept configured primary-agent cycling. Blocked workflow states
-			// fall through so the editor retains ownership of the key sequence.
-			if (this.#matchesAction(canonical, "app.primaryAgent.cycle") && this.onCyclePrimaryAgent?.()) {
 				return;
 			}
 

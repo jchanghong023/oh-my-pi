@@ -38,7 +38,6 @@ function createPathContext(): SegmentContext {
 			},
 		},
 		planMode: null,
-		primaryAgent: "main",
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,

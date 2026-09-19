@@ -68,7 +68,6 @@ export function buildHotkeysMarkdown(bindings: HotkeysMarkdownBindings): string 
 		"| Key | Action |",
 		"|-----|--------|",
 		"| `Tab` | Path completion / accept autocomplete |",
-		`| \`${hotkeyLabel(bindings, "app.primaryAgent.cycle")}\` | Switch Main / Discuss while idle |`,
 		`| \`${hotkeyLabel(bindings, "app.interrupt")}\` | Cancel autocomplete / interrupt active work |`,
 		`| \`${hotkeyLabel(bindings, "app.clear")}\` | Clear editor (first) / exit (second) |`,
 		...exitRows,

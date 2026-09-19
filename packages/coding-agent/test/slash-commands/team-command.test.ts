@@ -1,8 +1,7 @@
 /**
- * `/team` command entry-gate tests: bare command asks for the question,
- * Discuss primary agent refuses to dispatch (Shift+F2 notice), a session
- * without a model reports the configuration error without running stages,
- * and the TUI editor keeps the question on a failed dispatch.
+ * `/team` command entry-gate tests: bare command asks for the question, a
+ * session without a model reports the configuration error without running
+ * stages, and the TUI editor keeps the question on a failed dispatch.
  */
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -18,8 +17,6 @@ const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
 
 function stubSession(overrides: Partial<Record<string, unknown>> = {}): AgentSession {
 	return {
-		getPrimaryAgentId: () => "main",
-		getPendingPrimaryAgentId: () => undefined,
 		model: undefined,
 		...overrides,
 	} as unknown as AgentSession;
@@ -94,26 +91,6 @@ describe("/team command gates", () => {
 		const result = await command.handleTui!({ name: "team", args: "  ", text: "/team" }, runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(status[0]).toContain("用法");
-	});
-
-	it("refuses to dispatch under a Discuss primary agent with the Shift+F2 notice", async () => {
-		const discuss = stubSession({ getPrimaryAgentId: () => "discuss" });
-		const text = textRuntime(discuss);
-		const textResult = await command.handle!({ name: "team", args: "分析 X", text: "/team 分析 X" }, text.runtime);
-		expect(textResult).toEqual({ consumed: true });
-		expect(text.output[0]).toContain("Shift+F2");
-		expect(text.output[0]).toContain("Main");
-
-		const tui = tuiRuntime(discuss);
-		const tuiResult = await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, tui.runtime);
-		expect(tuiResult).toEqual({ consumed: true });
-		expect(tui.warnings[0]).toContain("Shift+F2");
-
-		// A pending (in-flight) Discuss switch gates the same way.
-		const pendingDiscuss = stubSession({ getPendingPrimaryAgentId: () => "discuss" });
-		const pending = textRuntime(pendingDiscuss);
-		await command.handle!({ name: "team", args: "分析 X", text: "/team 分析 X" }, pending.runtime);
-		expect(pending.output[0]).toContain("Shift+F2");
 	});
 
 	it("reports the missing session model without running any stage", async () => {

@@ -2,7 +2,6 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { MCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import type { MCPServerConnection, MCPToolDefinition } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import { getPrimaryAgentProfile } from "@oh-my-pi/pi-coding-agent/primary-agent/profiles";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionTools, type SessionToolsHost } from "@oh-my-pi/pi-coding-agent/session/session-tools";
 
@@ -53,7 +52,6 @@ const host: SessionToolsHost = {
 	isStreaming: () => false,
 	queuedMessageCount: () => 0,
 	planModeEnabled: () => false,
-	primaryAgentProfile: () => getPrimaryAgentProfile("main"),
 	model: () => undefined,
 	memoryBackendSession: () => ({}) as never,
 	clearInheritedProviderPromptCacheKey: () => {},

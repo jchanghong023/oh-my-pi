@@ -1047,9 +1047,8 @@ export class ExtensionRunner {
 		"alt+p": true,
 		"shift+tab": true,
 		"shift+ctrl+p": true,
-		// Fork default chords for `app.thinking.cycle` / `app.primaryAgent.cycle`.
+		// Fork default chord for `app.thinking.cycle`.
 		"shift+f1": true,
-		"shift+f2": true,
 		"alt+enter": true,
 		escape: true,
 		enter: true,

@@ -62,7 +62,6 @@ async function createHarness(sessionName: string): Promise<Harness> {
 		isStreaming: true,
 		model: undefined,
 		thinkingLevel: undefined,
-		getPrimaryAgentId: () => "main" as const,
 		titleGenerationSignal: new AbortController().signal,
 		notifyTitleGenerationStart: () => undefined,
 	} as unknown as AgentSession;

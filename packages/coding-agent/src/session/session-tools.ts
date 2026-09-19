@@ -20,8 +20,6 @@ import { resolveMemoryBackend } from "../memory-backend/resolve";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions } from "../memory-backend/types";
-import { isPrimaryAgentToolAllowed, projectPrimaryAgentToolNames } from "../primary-agent/profiles";
-import type { PrimaryAgentProfile } from "../primary-agent/types";
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
@@ -62,7 +60,6 @@ export interface SessionToolsHost {
 	isStreaming(): boolean;
 	queuedMessageCount(): number;
 	planModeEnabled(): boolean;
-	primaryAgentProfile(): PrimaryAgentProfile;
 	model(): Model | undefined;
 	memoryBackendSession(): MemoryBackendStartOptions["session"];
 	clearInheritedProviderPromptCacheKey(): void;
@@ -229,10 +226,8 @@ export class SessionTools {
 	#createVibeTools: (() => AgentTool[]) | undefined;
 	#createThinkTool: SessionToolsOptions["createThinkTool"];
 	#installedVibeToolNames = new Set<string>();
-	#builtInToolNames: Set<string>;
+	/** Registry entries that came from a built-in factory, keyed by name. */
 	#builtInToolInstances = new Map<string, AgentTool>();
-	/** Runtime-permission proxies keyed by the tool instance they gate. */
-	#runtimePermissionWrappers = new WeakMap<AgentTool, AgentTool>();
 	#rpcHostToolNames = new Set<string>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
@@ -258,7 +253,6 @@ export class SessionTools {
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
-	#unprofiledBaseSystemPrompt: string[];
 	/**
 	 * Per-turn system prompt returned by a `before_agent_start` extension hook
 	 * ("replace the system prompt for this turn"). While set, base-prompt
@@ -271,7 +265,7 @@ export class SessionTools {
 	#lastAppliedToolSignature: string | undefined;
 	/** Full enabled set, including tools demoted from the model-visible surface. */
 	#enabledToolNames = new Set<string>();
-	/** Complete requested slate before the active Primary Agent projects it. */
+	/** Complete requested slate from the last toolset apply. */
 	#baseActiveToolNames: string[] = [];
 	/** Names currently exposed through tool-session `isToolActive` predicates. */
 	#toolPredicateNames: readonly string[] | undefined;
@@ -332,8 +326,7 @@ export class SessionTools {
 		this.#toolRegistry = options.toolRegistry ?? new Map();
 		this.#createVibeTools = options.createVibeTools;
 		this.#createThinkTool = options.createThinkTool;
-		this.#builtInToolNames = new Set(options.builtInToolNames ?? []);
-		for (const name of this.#builtInToolNames) {
+		for (const name of options.builtInToolNames ?? []) {
 			const tool = this.#toolRegistry.get(name);
 			if (tool) this.#builtInToolInstances.set(name, tool);
 		}
@@ -361,10 +354,9 @@ export class SessionTools {
 		if (this.#xdev && this.#xdev.tools !== this.#toolRegistry) {
 			throw new Error("xd:// state must reference the canonical session tool map");
 		}
-		if (this.#xdev) this.#xdev.decorateExecution = tool => this.#wrapToolForRuntimePermissions(tool);
+		if (this.#xdev) this.#xdev.decorateExecution = tool => this.#wrapToolForAcpPermission(tool);
 		this.#setActiveToolNames = options.setActiveToolNames;
 		this.#baseSystemPrompt = options.baseSystemPrompt;
-		this.#unprofiledBaseSystemPrompt = options.baseSystemPrompt;
 		this.#skills = options.skills ?? [];
 		this.#skillWarnings = options.skillWarnings ?? [];
 		this.#skillsSettings = options.skillsSettings;
@@ -390,23 +382,10 @@ export class SessionTools {
 	get baseSystemPrompt(): string[] {
 		return this.#baseSystemPrompt;
 	}
-	get unprofiledBaseSystemPrompt(): string[] {
-		return this.#unprofiledBaseSystemPrompt;
-	}
 
-	/** Replaces the unprofiled prompt and recomposes the active Primary Agent prompt. */
+	/** Replaces the controller-owned base prompt without applying it to the agent. */
 	setBaseSystemPrompt(prompt: string[]): void {
-		this.#unprofiledBaseSystemPrompt = prompt;
-		this.#baseSystemPrompt = this.#primaryAgentSystemPrompt(prompt);
-		this.#lastAppliedToolSignature = undefined;
-	}
-
-	/**
-	 * Adds the active Primary Agent prompt to the stable rebuilt prompt.
-	 */
-	#primaryAgentSystemPrompt(base: string[]): string[] {
-		const profilePrompt = this.#host.primaryAgentProfile().systemPrompt;
-		return profilePrompt ? [...base, profilePrompt] : base;
+		this.#baseSystemPrompt = prompt;
 	}
 
 	/**
@@ -460,20 +439,19 @@ export class SessionTools {
 		const activeTools = this.getActiveToolNames()
 			.map(name => this.#toolRegistry.get(name))
 			.filter((tool): tool is AgentTool => tool !== undefined)
-			.map(tool => this.#wrapToolForRuntimePermissions(tool));
+			.map(tool => this.#wrapToolForAcpPermission(tool));
 		this.#host.agent.setTools(activeTools);
 	}
 
 	#getActiveNonMCPToolNames(): string[] {
-		const requestedNames = [...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])];
-		return normalizeToolNames(requestedNames).filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
+		return this.getEnabledToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/** Names of tools currently exposed at the top level. */
 	getActiveToolNames(): string[] {
 		return this.#host.agent.state.tools.map(t => t.name);
 	}
-	/** Complete requested set before Primary Agent restrictions. */
+	/** Complete requested set from the last toolset apply. */
 	getBaseActiveToolNames(): string[] {
 		return [...this.#baseActiveToolNames];
 	}
@@ -483,35 +461,24 @@ export class SessionTools {
 	 * survive instead of being unmounted by an unrelated change.
 	 */
 	getBaseWithMountedToolNames(): string[] {
-		return [...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])];
+		return [...new Set([...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])])];
 	}
 	/** Enabled top-level, `xd://`, and Code Mode bridge tool names. */
 	getEnabledToolNames(): string[] {
-		// Union live xd:// mounts so devices mounted out-of-band survive Main
-		// reapplication, then fail closed through the active Primary Agent.
+		// Union live xd:// mounts so devices mounted out-of-band (plugins writing
+		// to xdev state directly) survive the next apply.
 		const mountedNames = this.#xdev?.mountedNames;
 		const base = this.#enabledToolNames.size > 0 ? [...this.#enabledToolNames] : this.getActiveToolNames();
-		const names = !mountedNames || mountedNames.size === 0 ? base : [...new Set([...base, ...mountedNames])];
-		return projectPrimaryAgentToolNames(names, this.#host.primaryAgentProfile(), name =>
-			this.#isCurrentBuiltInTool(name),
-		);
+		if (!mountedNames || mountedNames.size === 0) return base;
+		return [...new Set([...base, ...mountedNames])];
 	}
 
 	/** Names currently presented as `xd://` devices. */
 	getMountedXdevToolNames(): string[] {
-		return projectPrimaryAgentToolNames(
-			[...(this.#xdev?.mountedNames ?? [])],
-			this.#host.primaryAgentProfile(),
-			name => this.#isCurrentBuiltInTool(name),
-		);
+		return [...(this.#xdev?.mountedNames ?? [])];
 	}
 
-	/**
-	 * Live `xd://` mounts without Primary Agent projection — the raw set the
-	 * presentation APIs snapshot. Pair it with the unprojected base slate so
-	 * callers under a restricting profile still restore the same top-level /
-	 * `xd://` partition instead of pinning everything top-level.
-	 */
+	/** Live `xd://` mounts, unfiltered for presentation snapshots. */
 	getRawMountedXdevToolNames(): string[] {
 		return [...(this.#xdev?.mountedNames ?? [])];
 	}
@@ -540,11 +507,11 @@ export class SessionTools {
 		return resolveMCPToolAlias(bareName, candidate => this.#toolRegistry.get(candidate));
 	}
 
-	/** Looks up an enabled tool through the same runtime permission gates as direct calls. */
+	/** Looks up an enabled tool through the same ACP permission gate as direct calls. */
 	getToolForEvalBridge(name: string): AgentTool | undefined {
 		if (!this.getEnabledToolNames().includes(name)) return undefined;
 		const tool = this.#toolRegistry.get(name);
-		return tool ? this.#wrapToolForRuntimePermissions(tool) : undefined;
+		return tool ? this.#wrapToolForAcpPermission(tool) : undefined;
 	}
 
 	/** Canonical allowlist advertised by and enforced for the eval bridge. */
@@ -573,14 +540,12 @@ export class SessionTools {
 	}
 
 	#recordBuiltInTool(name: string): void {
-		this.#builtInToolNames.add(name);
 		const tool = this.#toolRegistry.get(name);
 		if (tool) this.#builtInToolInstances.set(name, tool);
 		else this.#builtInToolInstances.delete(name);
 	}
 
 	#forgetBuiltInTool(name: string): void {
-		this.#builtInToolNames.delete(name);
 		this.#builtInToolInstances.delete(name);
 	}
 
@@ -846,39 +811,6 @@ export class SessionTools {
 	 * explicit session flag is required: default-config ACP sessions keep the
 	 * client-side permission gate.
 	 */
-	#wrapToolForRuntimePermissions<T extends AgentTool>(tool: T): T {
-		const permissionWrapped = this.#wrapToolForAcpPermission(tool);
-		// With a pass-through ACP layer the gate behaves identically for a given tool
-		// instance, so reuse its proxy rather than rebuilding one per apply: session
-		// reconciliation and the status-line cache compare applied tool sets by
-		// reference, and a fresh proxy per apply would defeat that reuse. Invalidation
-		// is unnecessary because the gate reads the live profile at execute time.
-		if (permissionWrapped === tool) {
-			const cached = this.#runtimePermissionWrappers.get(tool);
-			if (cached) return cached as T;
-		}
-		const wrapped = new Proxy(permissionWrapped, {
-			get: (target, prop) => {
-				if (prop !== "execute") return target[prop as keyof T];
-				return async (
-					toolCallId: string,
-					args: unknown,
-					signal: AbortSignal | undefined,
-					onUpdate: never,
-					ctx: never,
-				) => {
-					const profile = this.#host.primaryAgentProfile();
-					if (!isPrimaryAgentToolAllowed(tool.name, profile, this.#isCurrentBuiltInTool(tool.name, tool))) {
-						throw new ToolError(`Tool "${target.name}" is unavailable to the ${profile.label} primary agent`);
-					}
-					return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
-				};
-			},
-		}) as T;
-		if (permissionWrapped === tool) this.#runtimePermissionWrappers.set(tool, wrapped);
-		return wrapped;
-	}
-
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
 		const bridge = this.#host.clientBridge();
 		// Match the capability+method gating pattern used by read/write/bash.
@@ -997,23 +929,11 @@ export class SessionTools {
 		);
 	}
 
-	/** Reprojects the base slate, optionally replacing it for legacy restoration. */
-	reapplyPrimaryAgentProfile(baseOverride?: readonly string[]): Promise<void> {
-		return this.runToolRegistryMutation(() => {
-			const base = normalizeToolNames(
-				baseOverride ?? [...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])],
-			);
-			return this.#applyActiveToolsByName(base, true);
-		});
-	}
-
 	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
 		const previousBaseActiveToolNames = this.#baseActiveToolNames;
-		const normalizedBase = normalizeToolNames(toolNames);
-		this.#baseActiveToolNames = normalizedBase;
-		const profile = this.#host.primaryAgentProfile();
-		toolNames = projectPrimaryAgentToolNames(normalizedBase, profile, name => this.#isCurrentBuiltInTool(name));
+		toolNames = normalizeToolNames(toolNames);
+		this.#baseActiveToolNames = toolNames;
 		const codeMode = resolveCodeMode({
 			provider: this.#host.model()?.provider ?? "",
 			toolMode: this.#host.model()?.toolMode,
@@ -1040,6 +960,10 @@ export class SessionTools {
 			this.#isDeviceOnlyWrite?.() === true &&
 			this.#setDeviceOnlyWrite !== undefined &&
 			this.#setPendingFullWriteDescription !== undefined;
+		// Goal mode may have been enabled after session creation, leaving the
+		// registry without `goal`. Register it before resolving the selection so
+		// `#enterGoalMode`'s `[...tools, "goal"]` request is honored instead of
+		// silently dropped (issue #9444).
 		if (toolNames.includes("goal") && !this.#toolRegistry.has("goal")) {
 			const goalRegistration = this.#ensureGoalRegistered?.();
 			if (goalRegistration) await untilAborted(signal, goalRegistration);
@@ -1054,30 +978,29 @@ export class SessionTools {
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
-		const mountCandidates = profile.restrictTools
-			? []
-			: selectedTools.filter(
-					({ name, tool }) =>
-						this.#xdev !== undefined &&
-						xdevReadAvailable &&
-						xdevWriteAvailable &&
-						!isPresentationPinned(name) &&
-						isMountableUnderXdev(tool),
-				);
+		const mountCandidates = selectedTools.filter(
+			({ name, tool }) =>
+				this.#xdev !== undefined &&
+				xdevReadAvailable &&
+				xdevWriteAvailable &&
+				!isPresentationPinned(name) &&
+				isMountableUnderXdev(tool),
+		);
 		const mountNames = new Set(mountCandidates.map(({ name }) => name));
+		// Demoted tools stay reachable through the eval bridge, so nothing is
+		// mounted under xd:// while code mode restricts the direct surface.
 		if (codeMode.active) mountNames.clear();
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		for (const { name, tool } of selectedTools) {
 			if (mountNames.has(name)) continue;
-			tools.push(this.#wrapToolForRuntimePermissions(tool));
+			tools.push(this.#wrapToolForAcpPermission(tool));
 			validToolNames.push(name);
 		}
 
 		const pinnedWrite = isPresentationPinned("write");
-		const activeDeferrableTool = !profile.restrictTools && tools.some(tool => tool.deferrable === true);
-		const transportNeeded =
-			!profile.restrictTools && (mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled());
+		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
+		const transportNeeded = mountNames.size > 0 || activeDeferrableTool || this.#host.planModeEnabled();
 		if (transportNeeded && !builtInWriteAvailable) {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			builtInWriteAvailable = writeRegistration ? (await untilAborted(signal, writeRegistration)) === true : false;
@@ -1086,7 +1009,7 @@ export class SessionTools {
 		if (transportNeeded && builtInWriteAvailable) {
 			const write = this.#toolRegistry.get("write");
 			if (write && !validToolNames.includes("write")) {
-				tools.push(this.#wrapToolForRuntimePermissions(write));
+				tools.push(this.#wrapToolForAcpPermission(write));
 				validToolNames.push("write");
 			}
 		} else if (
@@ -1099,12 +1022,8 @@ export class SessionTools {
 			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
 		}
 
-		let appliedTools = profile.restrictTools
-			? tools.filter(tool => isPrimaryAgentToolAllowed(tool.name, profile, this.#isCurrentBuiltInTool(tool.name)))
-			: tools;
-		let appliedNames = profile.restrictTools
-			? validToolNames.filter(name => isPrimaryAgentToolAllowed(name, profile, this.#isCurrentBuiltInTool(name)))
-			: validToolNames;
+		let appliedTools = tools;
+		let appliedNames = validToolNames;
 		let nextCodeModeNamespacesInfo: ToolNamespacesInfo | undefined;
 		if (codeMode.active) {
 			if (transportNeeded && validToolNames.includes("write")) codeMode.directToolNames.add("write");
@@ -1155,17 +1074,24 @@ export class SessionTools {
 		this.#setMountedNames(mountNames);
 		this.#toolPredicateNames = codeMode.active ? [...this.#enabledToolNames] : appliedNames;
 		this.#setActiveToolNames?.(this.#toolPredicateNames);
+		// The eval tool advertises whatever stays direct, including a plan-mode
+		// transport `write`, so the applied partition lands before the rebuild
+		// reads the tool descriptions.
 		this.#codeModeDirectToolNames = codeMode.active ? appliedNames : undefined;
 
 		let rebuiltSystemPrompt: string[] | undefined;
 		let rebuiltSignature: string | undefined;
 		let frozenSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
-		let rebuiltUnprofiledSystemPrompt: string[] | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(true);
 			if (this.#rebuildSystemPrompt) {
+				// The provider receives only `appliedNames`, but prompt capability and
+				// safety gates must see every enabled tool that remains callable via
+				// the Code Mode eval bridge. The rendered tool inventory is restricted
+				// to the direct names so the prompt never advertises bridge-only tools
+				// as provider-callable functions.
 				const promptToolNames = codeMode.active ? [...this.#enabledToolNames] : appliedNames;
 				const promptTools = codeMode.active
 					? promptToolNames.flatMap(name => {
@@ -1178,12 +1104,12 @@ export class SessionTools {
 					const tool = this.#toolRegistry.get(name);
 					return tool ? [tool] : [];
 				});
-				const signature = `${this.#computeAppliedToolSignature(
+				const signature = this.#computeAppliedToolSignature(
 					promptToolNames,
 					promptTools,
 					directToolNames,
 					mountedSignatureTools,
-				)}primary:${profile.id}`;
+				);
 				const freezeImplicitPromptRefresh =
 					!forcePromptRefresh &&
 					signature !== this.#lastAppliedToolSignature &&
@@ -1197,20 +1123,9 @@ export class SessionTools {
 						signal,
 						this.#rebuildSystemPrompt(promptToolNames, this.#toolRegistry, { directToolNames }),
 					);
-					rebuiltUnprofiledSystemPrompt = built.systemPrompt;
-					rebuiltSystemPrompt = this.#primaryAgentSystemPrompt(built.systemPrompt);
+					rebuiltSystemPrompt = built.systemPrompt;
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
-				}
-			} else {
-				// Without a rebuild callback there is nothing new to build; only
-				// re-apply the recorded prompt when the profile signature actually
-				// changed so unrelated tool applies keep prompt-cache state.
-				const signature = `primary:${profile.id}`;
-				if (this.#lastAppliedToolSignature !== signature) {
-					rebuiltUnprofiledSystemPrompt = this.#unprofiledBaseSystemPrompt;
-					rebuiltSystemPrompt = this.#primaryAgentSystemPrompt(this.#unprofiledBaseSystemPrompt);
-					rebuiltSignature = signature;
 				}
 			}
 			signal?.throwIfAborted();
@@ -1258,7 +1173,6 @@ export class SessionTools {
 				this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 				invalidateToolSchemaMetadata(this.#host.agent.state.tools);
 				this.#lastAppliedToolSignature = rebuiltSignature;
-				if (rebuiltUnprofiledSystemPrompt) this.#unprofiledBaseSystemPrompt = rebuiltUnprofiledSystemPrompt;
 				this.#promptModelKey = this.#currentPromptModelKey();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
@@ -1810,8 +1724,7 @@ export class SessionTools {
 				if (this.#host.isDisposed() || isCurrent?.() === false) return false;
 				// A handler may have rebuilt policy while this preparation was awaiting its final commit.
 				if (this.#baseSystemPrompt !== previousBaseSystemPrompt) return true;
-				this.#unprofiledBaseSystemPrompt = built.systemPrompt;
-				this.#baseSystemPrompt = this.#primaryAgentSystemPrompt(built.systemPrompt);
+				this.#baseSystemPrompt = built.systemPrompt;
 				this.#setBasePromptXdevNames(built.xdevCatalogNames);
 				this.#host.clearMemoryPromotionSnapshot();
 				if (
@@ -1836,12 +1749,12 @@ export class SessionTools {
 					const tool = this.#toolRegistry.get(name);
 					return tool ? [tool] : [];
 				});
-				this.#lastAppliedToolSignature = `${this.#computeAppliedToolSignature(
+				this.#lastAppliedToolSignature = this.#computeAppliedToolSignature(
 					promptToolNames,
 					promptTools,
 					directToolNames,
 					mountedSignatureTools,
-				)}primary:${this.#host.primaryAgentProfile().id}`;
+				);
 				return true;
 			},
 		};
@@ -1877,10 +1790,7 @@ export class SessionTools {
 			}
 			if (!isCurrent()) return { systemPrompt: this.#baseSystemPrompt };
 
-			const preparedBase =
-				refreshed?.systemPrompt !== undefined
-					? this.#primaryAgentSystemPrompt(refreshed.systemPrompt)
-					: this.#baseSystemPrompt;
+			const preparedBase = refreshed?.systemPrompt ?? this.#baseSystemPrompt;
 			const stablePrompt = [...preparedBase, injected];
 			return {
 				systemPrompt: stablePrompt,
@@ -1890,10 +1800,7 @@ export class SessionTools {
 					// A handler may have refreshed tools or policy. Promote the recall onto
 					// that winning base, never replace it with the preparation's snapshot.
 					const currentBase = this.#baseSystemPrompt;
-					// Capture the unprofiled base: setBaseSystemPrompt re-applies the
-					// active profile on restore, so a profiled snapshot would double the
-					// Discuss prompt after a transcript reset.
-					this.#host.captureMemoryPromotionSnapshot(this.#unprofiledBaseSystemPrompt);
+					this.#host.captureMemoryPromotionSnapshot(currentBase);
 					this.#baseSystemPrompt = currentBase === preparedBase ? stablePrompt : [...currentBase, injected];
 					this.#applyAgentSystemPrompt(this.#baseSystemPrompt);
 					return true;

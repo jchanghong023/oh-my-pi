@@ -57,7 +57,6 @@ function createCtx(overrides?: {
 			},
 		},
 		planMode: null,
-		primaryAgent: "main",
 		loopMode: null,
 		prewalk: null,
 		goalMode: null,
@@ -648,7 +647,6 @@ describe("overflow: automatic row wrapping", () => {
 		expect(narrowLines.length).toBeGreaterThan(2);
 		expect(narrowLines.every(line => visibleWidth(line) <= 24)).toBe(true);
 		expect(narrowPlain).toContain("model-marker");
-		expect(narrowPlain).toContain("Main");
 		expect(narrowPlain).toContain("0%");
 		expect(narrowPlain).toContain("session-marker");
 	});

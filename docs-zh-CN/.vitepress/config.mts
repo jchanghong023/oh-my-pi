@@ -159,9 +159,25 @@ export default defineConfig({
     html: false,
     config(md) {
       const renderCodeInline = md.renderer.rules.code_inline
-      if (!renderCodeInline) return
-      md.renderer.rules.code_inline = (...args) =>
-        renderCodeInline(...args).replace('<code>', '<code v-pre>')
+      if (renderCodeInline) {
+        md.renderer.rules.code_inline = (...args) =>
+          renderCodeInline(...args).replace('<code>', '<code v-pre>')
+      }
+      // 文档里 `../packages/`、`../crates/` 开头的相对链接面向 GitHub 仓库浏览，
+      // 发布到 GitHub Pages 后全部 404；渲染时改写为指向仓库源码的绝对链接。
+      const renderLinkOpen = md.renderer.rules.link_open
+      if (renderLinkOpen) {
+        md.renderer.rules.link_open = (...args) => {
+          const [tokens, idx] = args
+          const href = tokens[idx].attrGet('href')
+          if (href && (href.startsWith('../packages/') || href.startsWith('../crates/'))) {
+            const sourcePath = href.slice(3).replace(/\/+$/, '')
+            const view = /\.[^/]+$/.test(sourcePath) ? 'blob' : 'tree'
+            tokens[idx].attrSet('href', `https://github.com/jchanghong023/oh-my-pi/${view}/main/${sourcePath}`)
+          }
+          return renderLinkOpen(...args)
+        }
+      }
     }
   },
   themeConfig: {

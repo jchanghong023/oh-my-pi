@@ -972,7 +972,9 @@ export async function resolveScopedModels(
 	if (scopedModels.length > 0 || modelRegistry.getDiscoverableProviders().length === 0) {
 		return scopedModels;
 	}
-	await modelRegistry.refresh("online-if-uncached");
+	// Offline processes keep this cache-aware pass cache-only; a collapsed scope
+	// surfaces its models from SQLite instead of fetching discovery endpoints.
+	await modelRegistry.refresh(parsed.offline ? "offline" : "online-if-uncached");
 	return await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings);
 }
 
@@ -1273,6 +1275,7 @@ export async function buildSessionOptions(
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
 		autoApprove: parsed.autoApprove ?? false,
+		offline: parsed.offline === true,
 	};
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
 	if (parsed.serviceTier !== undefined) {

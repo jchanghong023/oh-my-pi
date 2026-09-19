@@ -25,7 +25,6 @@ import {
 	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
-import type { PrimaryAgentId } from "../primary-agent/types";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, lazyImageDataSync } from "./blob-store";
@@ -54,7 +53,6 @@ import {
 	type ModelChangeEntry,
 	type ModelUsageEntry,
 	type NewSessionOptions,
-	type PrimaryAgentChangeEntry,
 	type ResetBoundaryEntry,
 	type ServiceTierChangeEntry,
 	type SessionEntry,
@@ -382,9 +380,7 @@ function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
 	// Startup-recorded selector state that does not survive as user intent
 	// once the draft is cleared. `mode_change` covers the `plan.defaultOnStartup`
 	// path (interactive-mode.ts enters plan mode before draft restoration) and
-	// `/plan` toggles that leave the session otherwise empty; `primary_agent_change`
-	// covers the Shift+F2 profile cycle and the profile carried into a new session
-	// (agent-session.ts records it before the first user turn); entries carrying
+	// `/plan` toggles that leave the session otherwise empty; entries carrying
 	// real conversation state — messages, compactions, branch summaries,
 	// custom/custom_message, session_init, labels, title/tool selection — never
 	// reach this branch and always keep the file resumable.
@@ -393,7 +389,6 @@ function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
 		case "thinking_level_change":
 		case "service_tier_change":
 		case "mode_change":
-		case "primary_agent_change":
 		case "credential_pin":
 			return true;
 		default:
@@ -2817,15 +2812,6 @@ export class SessionManager {
 
 	appendModeChange(mode: string, data?: Record<string, unknown>): string {
 		const entry: ModeChangeEntry = { type: "mode_change", ...this.#freshEntryFields(), mode, data };
-		this.#recordEntry(entry);
-		return entry.id;
-	}
-	appendPrimaryAgentChange(primaryAgent: PrimaryAgentId): string {
-		const entry: PrimaryAgentChangeEntry = {
-			type: "primary_agent_change",
-			...this.#freshEntryFields(),
-			primaryAgent,
-		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}

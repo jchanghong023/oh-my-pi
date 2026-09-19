@@ -24,7 +24,6 @@ import {
 	matchesSelectUp,
 } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
-import type { PrimaryAgentId } from "../status-line/types";
 
 /** Fields consumed when displaying persisted entries in the session tree. */
 export type SessionTreeEntry = { id: string; parentId: string | null } & (
@@ -41,7 +40,6 @@ export type SessionTreeEntry = { id: string; parentId: string | null } & (
 	| { type: "mode_change"; mode: string }
 	| { type: "credential_pin"; provider: string }
 	| { type: "ttsr_injection"; injectedRules: string[] }
-	| { type: "primary_agent_change"; primaryAgent: PrimaryAgentId }
 	| { type: "session_init" | "reset_boundary" }
 );
 
@@ -340,7 +338,6 @@ class TreeList implements Component {
 				entry.type === "session_init" ||
 				entry.type === "ttsr_injection" ||
 				entry.type === "mode_change" ||
-				entry.type === "primary_agent_change" ||
 				entry.type === "reset_boundary";
 
 			switch (filterMode) {
@@ -460,9 +457,6 @@ class TreeList implements Component {
 				break;
 			case "ttsr_injection":
 				parts.push("ttsr injection", ...entry.injectedRules);
-				break;
-			case "primary_agent_change":
-				parts.push("primary agent", entry.primaryAgent);
 				break;
 			case "reset_boundary":
 				parts.push("reset boundary");

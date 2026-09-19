@@ -525,7 +525,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 */
 	#activeMeters: WeakMap<TSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
-	#primaryAgentStatus: SegmentContext["primaryAgent"] = "main";
 	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
@@ -850,12 +849,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			return;
 		}
 		this.#planModeStatus = next;
-		this.#invalidateStatusLineRenderCache();
-	}
-
-	setPrimaryAgentStatus(primaryAgent: SegmentContext["primaryAgent"]): void {
-		if (this.#primaryAgentStatus === primaryAgent) return;
-		this.#primaryAgentStatus = primaryAgent;
 		this.#invalidateStatusLineRenderCache();
 	}
 
@@ -2137,7 +2130,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			compactThinkingLevel: this.#resolveSettings().compactThinkingLevel ?? false,
 			hookStatuses: this.#sortedHookStatuses,
 			planMode: this.#planModeStatus,
-			primaryAgent: this.#primaryAgentStatus,
 			loopMode: this.#loopModeStatus,
 			prewalk:
 				typeof this.session.getPrewalkState === "function" && this.session.getPrewalkState()

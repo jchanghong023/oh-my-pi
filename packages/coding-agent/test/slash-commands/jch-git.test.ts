@@ -48,6 +48,8 @@ describe("direct JCH git slash commands", () => {
 		return { result: { consumed }, status, error, editor };
 	}
 
+	// The fixture runs ~12 git subprocesses; on a loaded Windows host that can
+	// exceed bun's 5s default hook timeout (git clones get killed mid-flight).
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "omp-jch-git-"));
 		remote = join(root, "remote.git");
@@ -67,11 +69,11 @@ describe("direct JCH git slash commands", () => {
 		git(root, ["clone", remote, work]);
 		git(work, ["config", "user.name", "OMP Test"]);
 		git(work, ["config", "user.email", "omp@example.invalid"]);
-	});
+	}, 30_000);
 
 	afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
-	});
+	}, 30_000);
 
 	it("runs git pull directly", async () => {
 		writeFileSync(join(seed, "remote.txt"), "remote\n");

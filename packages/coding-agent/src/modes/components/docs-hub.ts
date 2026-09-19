@@ -128,6 +128,7 @@ export class DocsHubComponent implements Component {
 			// truncation instead of silently showing the limit as the count.
 			const limit = 20;
 			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit });
+			this.#latestError = undefined;
 			this.#hits = result.sections.map(hit => ({
 				id: hit.sectionId,
 				label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
@@ -147,6 +148,7 @@ export class DocsHubComponent implements Component {
 		if (!hit) return;
 		try {
 			const value = this.service.read({ sectionId: hit.id, index: this.#selectedIndex()?.name });
+			this.#latestError = undefined;
 			this.#detail = [
 				sanitizeTerminalLine(
 					`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
@@ -184,6 +186,7 @@ export class DocsHubComponent implements Component {
 				if (name) {
 					try {
 						this.service.remove(name);
+						this.#latestError = undefined;
 					} catch (error) {
 						this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
 					}
