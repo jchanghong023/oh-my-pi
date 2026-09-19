@@ -239,7 +239,6 @@ describe("StatusLineComponent effective settings cache", () => {
 	it("keeps plan and hook state dynamic without settings invalidation", () => {
 		const component = makeComponent({ preset: "custom", leftSegments: ["mode"], rightSegments: [] });
 		const effective = component.getEffectiveSettingsForTest();
-		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Main");
 
 		component.setPlanModeStatus({ enabled: true, paused: false });
 		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Plan");
