@@ -341,6 +341,18 @@ impl Host {
 		self.stderr.dup_file()
 	}
 
+	/// Whether fd 1's destination is a regular file, per the snapshot
+	/// [`build_host`] took before the SIGPIPE guard wrapped the stream.
+	///
+	/// The guard hides the destination behind `OpenFile::Stream`, which
+	/// [`is_regular_file`] cannot see through on Windows (unix reads the
+	/// descriptor out from under the wrapper), so a consumer that buffers its
+	/// own duplicate of stdout — `sed`'s `InPlace`, say — must read this
+	/// rather than re-probe [`Host::stdout_clone`].
+	pub const fn stdout_is_regular_file(&self) -> bool {
+		self.stdout_is_regular_file
+	}
+
 	/// A buffered stdout with a flush policy chosen by the destination of
 	/// fd 1; see [`StdoutWriter`].
 	///
@@ -513,15 +525,60 @@ impl Write for StreamWriter {
 	}
 }
 
+/// Windows handle probes backing [`is_regular_file`] and
+/// [`same_destination`].
+///
+/// `metadata` cannot tell Windows destinations apart — an anonymous pipe
+/// handle reports `FILE_ATTRIBUTE_NORMAL`, which reads as a regular file — so
+/// the device type behind the handle is the only reliable signal.
+#[cfg(windows)]
+mod win {
+	use std::os::windows::io::AsRawHandle;
+
+	use windows_sys::Win32::Storage::FileSystem::{
+		BY_HANDLE_FILE_INFORMATION, FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType,
+	};
+
+	/// Whether `file`'s handle points at a disk file, as opposed to a pipe, a
+	/// character device (the console, the null device), or a socket.
+	pub(super) fn is_disk_file(file: &std::fs::File) -> bool {
+		// SAFETY: `as_raw_handle` is a live handle owned by `file`; the call
+		// only queries its device type.
+		unsafe { GetFileType(file.as_raw_handle()) == FILE_TYPE_DISK }
+	}
+
+	/// The volume serial and file index of a disk file — the Windows analogue
+	/// of fstat's `dev`+`ino` pair — or `None` for any non-disk handle or
+	/// query failure.
+	pub(super) fn disk_file_id(file: &std::fs::File) -> Option<(u32, u64)> {
+		if !is_disk_file(file) {
+			return None;
+		}
+		// SAFETY: zeroed `BY_HANDLE_FILE_INFORMATION` is a valid out buffer,
+		// and the handle stays open across the call.
+		let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+		// SAFETY: as above.
+		if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+			return None;
+		}
+		Some((
+			info.dwVolumeSerialNumber,
+			(u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+		))
+	}
+}
+
 /// Whether writes to `file` land in a regular file, where output is only ever
 /// observed after the utility exits.
 ///
 /// A pipe wrapped in `std::fs::File` (how the shell hands the capture pipe to
 /// a command) reports a fifo file type, and `metadata` on exotic handles can
 /// fail outright; both classify as "not a regular file" and get line
-/// buffering, the visibility-safe default. The check goes through the
-/// descriptor rather than the variant so a [`SigpipeGuard`] around a file
-/// still block-buffers.
+/// buffering, the visibility-safe default. On Windows the same wrapped pipe
+/// reports `FILE_ATTRIBUTE_NORMAL` from `metadata`, so the handle's device
+/// type is the discriminator there. The check goes through the descriptor or
+/// handle rather than the variant so a [`SigpipeGuard`] around a file still
+/// block-buffers.
 pub(crate) fn is_regular_file(file: &OpenFile) -> bool {
 	#[cfg(unix)]
 	{
@@ -533,7 +590,14 @@ pub(crate) fn is_regular_file(file: &OpenFile) -> bool {
 		};
 		std::fs::File::from(dup).metadata().is_ok_and(|m| m.is_file())
 	}
-	#[cfg(not(unix))]
+	#[cfg(windows)]
+	{
+		match file {
+			OpenFile::File(f) => win::is_disk_file(f),
+			_ => false,
+		}
+	}
+	#[cfg(not(any(unix, windows)))]
 	{
 		match file {
 			OpenFile::File(f) => f.metadata().is_ok_and(|m| m.is_file()),
@@ -575,7 +639,30 @@ fn same_destination(a: &OpenFile, b: &OpenFile) -> bool {
 	}
 }
 
-#[cfg(not(unix))]
+/// The Windows counterpart: volume serial + file index — the `dev`+`ino`
+/// analogue from fstat — identifies two handles onto one disk file, so `>f
+/// 2>&1` shares a writer and keeps exact write order.
+///
+/// Non-disk handles (the capture pipe, the console, the null device) compare
+/// as `false`: `GetFileInformationByHandle` is only meaningful for disk
+/// files, so a pipe-backed `2>&1` keeps separate writers on Windows. The
+/// probe also cannot tell one shared-offset handle from two independent
+/// opens of the same file (`>f 2>&1` vs `>f 2>f`); both merge through one
+/// writer, which interleaves the streams rather than letting independent
+/// offsets overwrite each other.
+#[cfg(windows)]
+fn same_destination(a: &OpenFile, b: &OpenFile) -> bool {
+	fn id(file: &OpenFile) -> Option<(u32, u64)> {
+		let OpenFile::File(f) = file else { return None };
+		win::disk_file_id(f)
+	}
+	match (id(a), id(b)) {
+		(Some(a), Some(b)) => a == b,
+		_ => false,
+	}
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_destination(_a: &OpenFile, _b: &OpenFile) -> bool {
 	false
 }
@@ -1423,6 +1510,23 @@ mod testing {
 		fn pipe_wrapped_as_file_gets_line_buffering() {
 			let (reader, writer) = std::io::pipe().unwrap();
 			let file = std::fs::File::from(std::os::fd::OwnedFd::from(writer));
+			assert!(matches!(StreamWriter::new(OpenFile::File(file)), StreamWriter::Line(_)));
+			drop(reader);
+		}
+
+		/// Contract: the Windows twin — `metadata` on the pipe's handle reports
+		/// `FILE_ATTRIBUTE_NORMAL`, which `is_file` reads as a regular file, so
+		/// the handle's device type must reject it or live tool output stalls
+		/// until the utility exits.
+		#[cfg(windows)]
+		#[test]
+		fn pipe_wrapped_as_file_gets_line_buffering() {
+			use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
+			let (reader, writer) = os_pipe::pipe().unwrap();
+			// SAFETY: `into_raw_handle` hands over sole ownership of the
+			// write end, making the `File` its only owner.
+			let file = unsafe { std::fs::File::from_raw_handle(writer.into_raw_handle()) };
 			assert!(matches!(StreamWriter::new(OpenFile::File(file)), StreamWriter::Line(_)));
 			drop(reader);
 		}

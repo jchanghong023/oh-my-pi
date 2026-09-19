@@ -6174,6 +6174,7 @@ dependencies = [
  "num-traits",
  "onig",
  "os_display",
+ "os_pipe",
  "parking_lot",
  "parse_datetime",
  "pi-walker",
