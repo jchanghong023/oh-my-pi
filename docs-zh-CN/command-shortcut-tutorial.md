@@ -3049,7 +3049,6 @@ omp ttsr scan -r .omp/rules/no-any.md src/
 | 按住 `Space` | （手势）| 在 `stt.enabled` 为真时进行语音转文字推讲（push-to-talk） |
 | `Alt+A` | `app.agents.hub` | 打开 Agent Hub（agent 列表面板） |
 | `Ctrl+S` | `app.session.observe` | 同样打开 Agent Hub（与 `Alt+A` 等价，便于肌肉记忆） |
-| `Shift+F2` | `app.primaryAgent.cycle` | 在 Main 与 Discuss 两个主 agent 之间切换（状态栏显示 `Main` / `Discuss`）；仅空闲时生效——流式生成中、队列中有消息、压缩中，或 Plan / Goal / Vibe / Loop 任一模式开启或暂停时静默拒绝，Discuss 也不能从这些模式进入；Discuss 为只读，须再按一次切回 Main 才能写文件、执行命令或派工 |
 | 双击 `←`（空编辑器）| （手势）| 在编辑器空内容时连按 `Left` 打开 Agent Hub |
 | `Ctrl+R` | `app.history.search` | 编辑器聚焦时打开历史搜索面板 |
 | `Ctrl+P` | `app.session.togglePath` | 当前**仅有默认键定义，运行时未接线**——按 `Ctrl+P` 在编辑器内会走 `app.model.cycleForward`（循环角色模型），会话选择器内也不会切换路径列 |
@@ -3063,7 +3062,6 @@ omp ttsr scan -r .omp/rules/no-any.md src/
 注意：
 
 - `Alt+A` 与 `Ctrl+S` 都映射到“打开 Agent Hub”，由 `selector-controller.ts` 把两组键合并到 `hubKeys` 集合，避免在 hub 内再次按下时关闭——同一组键在 hub 关闭态按下打开、在 hub 内按下关闭（实现见 `agent-hub.ts` / `selector-controller.ts`）。
-- `app.primaryAgent.cycle`（默认 `Shift+F2`）由 `input-controller.ts` 的 `setActionKeys` 接线到 `cyclePrimaryAgentFromShortcut()`：正在查看其它会话（`viewSession !== session`）、正在流式生成、队列有消息、正在压缩或压缩待发消息非空，或 Plan / Goal / Vibe / Loop 任一模式处于启用/暂停态时返回 `false`，按键被吞掉且不提示；通过守卫后调用 `session.cyclePrimaryAgent()` 切换，并在提示行打印 `Primary Agent: Main` / `Primary Agent: Discuss`（状态栏段由 `segments.ts` 渲染为 `Main` / `Discuss`）。即使绕过快捷键，`setPrimaryAgent("discuss")` 也会在 Plan / Goal / Vibe 有效时抛 `Exit plan, goal, or vibe before switching to Discuss.`。Discuss 主 agent 由 `primary-agent/profiles.ts` 的 `restrictTools` 加只读工具白名单约束（只做调研与讨论，不能改文件、执行命令、写计划文件或派工），必须再按一次 `Shift+F2` 切回 Main。
 - 上表 §7 中以 “当前**仅有默认键定义，运行时未接线**” 标注的 7 个绑定（`app.session.togglePath` / `app.session.toggleSort` / `app.session.rename` / `app.session.delete` / `app.session.deleteNoninvasive` / `app.tree.foldOrUp` / `app.tree.unfoldOrDown`）仅在 `packages/coding-agent/src/config/keybindings.ts` 的 `KEYBINDINGS` 表与 `AppKeybindings` 接口中声明；源码搜索未发现任何 `setActionKeys` / `setCustomKeyHandler` / controller 消费这些 ID，因此无论是否在 `keybindings.yml` 中重新映射，当前都不能启用对应的 session/tree 行为。按下它们的默认键时，实际生效的是上文已接线的同键动作（`app.model.cycleForward` / `app.exit` / `tui.editor.deleteWordBackward` / `tui.editor.cursorWordLeft` / `tui.editor.cursorWordRight` / `app.session.observe` / `app.history.search` 等）。`KEYBINDING_NAME_MIGRATIONS` 把旧名 `toggleSessionNamedFilter` 迁到 `app.session.togglePath`，但迁移本身也不消费运行时输入。
 - `app.session.new` / `app.session.tree` / `app.session.fork` / `app.session.resume` 的 `defaultKeys` 均为空数组 `[]`：这些动作只能通过 `Ctrl+C` 双击（清空开始新会话）、或调用 `/tree` / `/fork` / `/resume` slash 命令触发；用户可以在 `keybindings.yml` 中显式绑定快捷键启用。
 - `app.stt.toggle` 的 `defaultKeys` 也是空数组；语音转文字默认靠“按住 Space”的手势触发（`stt.enabled` 开启时）。

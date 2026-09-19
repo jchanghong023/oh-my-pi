@@ -113,6 +113,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		cwd: "packages/tui",
 		files: [
 			"test/autocomplete.test.ts",
+			"test/editor-autocomplete-actions.test.ts",
 			"test/editor.test.ts",
 			"test/input.test.ts",
 			"test/keybindings.test.ts",
@@ -222,10 +223,12 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		label: "coding-agent/fork-features",
 		cwd: "packages/coding-agent",
 		files: [
+			"test/agent-session-magic-keywords.test.ts",
 			"test/docs-cli.test.ts",
 			"test/docs-hub.test.ts",
 			"test/docs-index.test.ts",
 			"test/main-rebuild-scoped-models.test.ts",
+			"test/model-hub.test.ts",
 			"test/modes/components/docs-hub.test.ts",
 			"test/modes/fullsend.test.ts",
 			"test/modes/sigint-gate.test.ts",

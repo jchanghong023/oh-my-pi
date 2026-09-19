@@ -13,6 +13,7 @@
 // the run must reach the observable final report in the transcript.
 
 import * as fs from "node:fs/promises";
+import { rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PtySession } from "@oh-my-pi/pi-natives";
@@ -27,6 +28,14 @@ interface Outcome {
 
 const debugDump = process.argv.includes("--debug");
 const teamOnly = process.argv.includes("--team-only");
+
+// Filled once the /team stub server exists. fail() exits the process, which
+// bypasses the try/finally that normally stops the server and removes the team
+// config root — this cleanup gives the failure path the same teardown. Declared
+// before any fail() call site can run: base-case failures happen before the
+// server (and teamConfigRoot below) even exist, and `.run?.()` must stay a
+// no-op there rather than hit a temporal dead zone.
+const stubServerCleanup: { run?: () => void } = {};
 
 function dumpTail(handle: TuiHandle, bytes = 3500): void {
 	const normalizedTail = normalizePtyOutput(handle.output).slice(-bytes);
@@ -108,6 +117,8 @@ function fail(message: string, ...sessions: PtySession[]): never {
 			session.kill();
 		} catch {}
 	}
+	// process.exit() below skips the try/finally cleanup, so run it here too.
+	stubServerCleanup.run?.();
 	process.exit(1);
 }
 
@@ -431,6 +442,14 @@ const stubServer = Bun.serve({
 	},
 });
 console.log(`ui-smoke: /team stub Anthropic server on 127.0.0.1:${stubServer.port}`);
+stubServerCleanup.run = () => {
+	try {
+		stubServer.stop(true);
+	} catch {}
+	try {
+		rmSync(teamConfigRoot, { recursive: true, force: true });
+	} catch {}
+};
 
 try {
 	const profileAgentDir = path.join(teamConfigRoot, "profiles", TEAM_PROFILE, "agent");
@@ -464,7 +483,7 @@ try {
 	}, 120_000);
 	if (!teamRendered) {
 		dumpTail(team);
-		fail("/team TUI did not render within 120 s", team.session, stubServer);
+		fail("/team TUI did not render within 120 s", team.session);
 	}
 	// Warm the session with one plain chat turn first — the realistic /team
 	// usage pattern (the report lands in an ongoing conversation) and it gives
@@ -474,7 +493,7 @@ try {
 	const warmed = await waitFor(() => normalizePtyOutput(team.output).includes("MAINOK"), 60_000);
 	if (!warmed) {
 		dumpTail(team);
-		fail("main-session warm-up turn did not complete within 60 s", team.session, stubServer);
+		fail("main-session warm-up turn did not complete within 60 s", team.session);
 	}
 	// MAINOK matches mid-stream; wait for the turn to settle so /team is
 	// dispatched against an idle session (otherwise the report custom message
@@ -502,7 +521,6 @@ try {
 		fail(
 			`/team dispatch notice did not appear within 60 s (stub requests: ${stubRequests.map(r => r.stage).join(",") || "none"})`,
 			team.session,
-			stubServer,
 		);
 	}
 	console.log("ui-smoke: /team dispatched; waiting for the final report…");
@@ -517,7 +535,6 @@ try {
 		fail(
 			`/team never reached the synthesis stage (stub requests: ${stubRequests.map(r => r.stage).join(",") || "none"})`,
 			team.session,
-			stubServer,
 		);
 	}
 	const completed = await waitFor(() => normalizePtyOutput(team.output).includes("team-result"), 60_000);
@@ -526,13 +543,12 @@ try {
 		fail(
 			`/team final report did not appear after synthesis (stub requests: ${stubRequests.map(r => r.stage).join(",")})`,
 			team.session,
-			stubServer,
 		);
 	}
 	// The failure message carries the distinct ASCII marker team-incomplete.
 	if (normalizePtyOutput(team.output).includes("team-incomplete")) {
 		dumpTail(team);
-		fail("/team run finished with the incomplete marker instead of a report", team.session, stubServer);
+		fail("/team run finished with the incomplete marker instead of a report", team.session);
 	}
 	const stageCounts = new Map<string, number>();
 	for (const request of stubRequests) {
@@ -545,7 +561,7 @@ try {
 		(stageCounts.get("review") ?? 0) < 2 ||
 		(stageCounts.get("synthesis") ?? 0) < 1
 	) {
-		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session, stubServer);
+		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session);
 	}
 
 	team.session.write("\x04");
@@ -581,7 +597,7 @@ try {
 	}, 120_000);
 	if (!cancelRendered) {
 		dumpTail(cancelTui);
-		fail("/team cancel TUI did not render within 120 s", cancelTui.session, stubServer);
+		fail("/team cancel TUI did not render within 120 s", cancelTui.session);
 	}
 	// Warm up like the success case: on a fresh session the dispatch
 	// breadcrumb's first render can lag by seconds, and this case must issue
@@ -590,7 +606,7 @@ try {
 	const cancelWarmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("MAINOK"), 60_000);
 	if (!cancelWarmed) {
 		dumpTail(cancelTui);
-		fail("/team cancel case: warm-up turn did not complete", cancelTui.session, stubServer);
+		fail("/team cancel case: warm-up turn did not complete", cancelTui.session);
 	}
 	{
 		let settledBytes = cancelTui.totalBytes;
@@ -615,7 +631,7 @@ try {
 	);
 	if (!proposalInFlight) {
 		dumpTail(cancelTui);
-		fail("/team cancel case: no proposal request reached the stub", cancelTui.session, stubServer);
+		fail("/team cancel case: no proposal request reached the stub", cancelTui.session);
 	}
 	console.log("ui-smoke: proposals in flight; issuing hub cancel via a chat turn…");
 	cancelTui.session.write("CANCELTEAM 请取消刚才的 /team 后台任务\r");
@@ -628,7 +644,6 @@ try {
 				.map(r => r.stage)
 				.join(",")})`,
 			cancelTui.session,
-			stubServer,
 		);
 	}
 	// The slow stage delay gives uncancelled runs plenty of time to advance;
@@ -641,7 +656,6 @@ try {
 		fail(
 			`/team cancel case: stages ran after cancellation (${lateStages.map(r => r.stage).join(",")})`,
 			cancelTui.session,
-			stubServer,
 		);
 	}
 	cancelTui.session.write("\x04");
