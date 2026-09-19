@@ -72,6 +72,12 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/** Per-stage wall-clock reporting: the total time alone can't show where a
+ * slowtest run spent its minutes (fulltest vs push vs CI wait). */
+function logStageDone(label: string, startedAtMs: number): void {
+	console.log(`slowtest: stage ${label} done in ${((performance.now() - startedAtMs) / 1000).toFixed(2)}s`);
+}
+
 function runCapture(argv: readonly string[]): { exitCode: number; stdout: string } {
 	const result = Bun.spawnSync([...argv], {
 		cwd: repoRoot,
@@ -94,8 +100,10 @@ function runInherit(argv: readonly string[]): number {
 }
 
 async function main(debug: boolean): Promise<number> {
+	const fulltestStartedAt = performance.now();
 	const fulltestExit = runInherit(["bun", "scripts/fulltest.ts", ...(debug ? ["--debug"] : [])]);
 	if (fulltestExit !== 0) fail(`fulltest failed with exit code ${fulltestExit}; not pushing or triggering CI`);
+	logStageDone("fulltest", fulltestStartedAt);
 
 	const branch = runCapture(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
 	if (branch !== "main") fail(`slowtest pushes local main, but the current branch is '${branch}'`);
@@ -103,13 +111,16 @@ async function main(debug: boolean): Promise<number> {
 	const headSha = runCapture(["git", "rev-parse", "HEAD"]).stdout.trim();
 	if (headSha === "") fail("could not resolve HEAD sha");
 
+	const pushStartedAt = performance.now();
 	if (runInherit(["git", "push", "origin", "main"]) !== 0) {
 		fail("git push origin main failed; resolve the remote state before re-running slowtest");
 	}
+	logStageDone("push", pushStartedAt);
 
 	if (Bun.which("gh") === null) fail("the GitHub CLI ('gh') is required to trigger and monitor the CI run");
 	console.log(`\nslowtest: triggering ${WORKFLOW_FILE} (workflow_dispatch, no release) for ${headSha.slice(0, 12)}`);
 	const triggeredAtMs = Date.now();
+	const triggerStartedAt = performance.now();
 	if (runInherit(["gh", "workflow", "run", WORKFLOW_FILE]) !== 0) {
 		fail(`gh workflow run ${WORKFLOW_FILE} failed (check 'gh auth status')`);
 	}
@@ -118,6 +129,7 @@ async function main(debug: boolean): Promise<number> {
 	if (run === undefined) {
 		fail(`no ${WORKFLOW_FILE} run for ${headSha.slice(0, 12)} appeared within ${RUN_APPEAR_TIMEOUT_MS / 1000} s`);
 	}
+	logStageDone("trigger+appear", triggerStartedAt);
 	console.log(`slowtest: monitoring run ${run.databaseId} — ${run.url}`);
 
 	return await monitorRun(run);
@@ -153,6 +165,7 @@ async function waitForTriggeredRun(headSha: string, triggeredAtMs: number): Prom
 
 async function monitorRun(run: GhRunSummary): Promise<number> {
 	let consecutiveFailures = 0;
+	const monitorStartedAt = performance.now();
 	for (;;) {
 		const current = ghJson(
 			["gh", "run", "view", String(run.databaseId), "--json", "status,conclusion,url"],
@@ -170,6 +183,7 @@ async function monitorRun(run: GhRunSummary): Promise<number> {
 			const status = current["status"] as string;
 			const conclusion = (current["conclusion"] as string | null) ?? null;
 			if (status === "completed") {
+				logStageDone("monitor-ci", monitorStartedAt);
 				console.log(`\nslowtest: run ${run.databaseId} completed — conclusion: ${conclusion ?? "unknown"}`);
 				console.log(`slowtest: ${run.url}`);
 				if (conclusion !== "success") reportFailedJobs(run);

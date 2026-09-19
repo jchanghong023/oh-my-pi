@@ -3,7 +3,10 @@
 // oxlint + oxfmt --check + per-package tsc) plus a plain `cargo check
 // --workspace`. Always runs both passes — unlike `bun run check:rs` (fmt
 // --check + clippy via run-rs-task), which self-skips when no Rust-affecting
-// files changed, this gate must never pass silently.
+// files changed, this gate must never pass silently. The whole run is bounded
+// by a hard 60s wall-clock budget: on expiry the live phase children are
+// killed and the gate fails with TIMEOUT (a cold Rust cache can legitimately
+// blow the budget; the unbounded static pass belongs to fulltest).
 
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -15,6 +18,32 @@ interface Command {
 	label: string;
 	argv: readonly string[];
 	env?: Record<string, string>;
+}
+
+/** Hard wall-clock budget for the whole gate (AGENTS.md「验证」): fastcheck is
+ * the agent's quick-feedback loop, so blowing the budget is a failure, never a
+ * silent pass. */
+export const FASTCHECK_TIMEOUT_MS = 60_000;
+
+/** Raised when the gate exceeds FASTCHECK_TIMEOUT_MS; distinct from ordinary
+ * phase failures so the CLI reports TIMEOUT instead of FAIL. */
+export class FastcheckTimeoutError extends Error {
+	constructor(elapsedMs: number) {
+		super(`exceeded the ${FASTCHECK_TIMEOUT_MS / 1000}s wall-clock budget after ${(elapsedMs / 1000).toFixed(2)}s`);
+		this.name = "FastcheckTimeoutError";
+	}
+}
+
+export interface FastcheckOptions {
+	cargoBinary: string;
+	rustEnv?: Record<string, string>;
+}
+
+export function buildFastcheckPhases(options: FastcheckOptions): readonly Command[] {
+	return [
+		{ label: "static/ts (types + lint + format)", argv: ["bun", "run", "check:ts"] },
+		{ label: "static/rs (cargo check)", argv: [options.cargoBinary, "check", "--workspace"], env: options.rustEnv },
+	];
 }
 
 function pinnedRustChannel(): string {
@@ -77,6 +106,9 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 	return { PATH: [...extraDirs, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
 }
 
+/** Live phase children, so the budget path can kill whatever is running. */
+const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
+
 async function runCommand(command: Command): Promise<void> {
 	console.log(`\n==> ${command.label}`);
 	console.log(`$ ${command.argv.map(shellQuote).join(" ")}`);
@@ -87,18 +119,47 @@ async function runCommand(command: Command): Promise<void> {
 		stderr: "inherit",
 		env: command.env ? { ...process.env, ...command.env } : undefined,
 	});
-	const exitCode = await child.exited;
-	if (exitCode !== 0) throw new Error(`${command.label} failed with exit code ${exitCode}`);
+	liveChildren.add(child);
+	try {
+		const exitCode = await child.exited;
+		if (exitCode !== 0) throw new Error(`${command.label} failed with exit code ${exitCode}`);
+	} finally {
+		liveChildren.delete(child);
+	}
+}
+
+/** Race the whole gate against the hard budget; on expiry kill the live phase
+ * children and surface a timeout failure. */
+async function enforceBudget<T>(startedAtMs: number, work: () => Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			work(),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => {
+						for (const child of liveChildren) {
+							try {
+								child.kill();
+							} catch {}
+						}
+						reject(new FastcheckTimeoutError(performance.now() - startedAtMs));
+					},
+					Math.max(0, FASTCHECK_TIMEOUT_MS - (performance.now() - startedAtMs)),
+				);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 async function main(): Promise<void> {
-	const cargoBinary = await resolveCargoBinary();
-	await runCommand({ label: "static/ts (types + lint + format)", argv: ["bun", "run", "check:ts"] });
-	await runCommand({
-		label: "static/rs (cargo check)",
-		argv: [cargoBinary, "check", "--workspace"],
-		env: { ...windowsRustBuildEnv(), RUSTUP_TOOLCHAIN: pinnedRustChannel() },
+	const phases = buildFastcheckPhases({
+		cargoBinary: await resolveCargoBinary(),
+		rustEnv: { ...windowsRustBuildEnv(), RUSTUP_TOOLCHAIN: pinnedRustChannel() },
 	});
+	for (const command of phases) await runCommand(command);
 }
 
 if (import.meta.main) {
@@ -108,13 +169,18 @@ if (import.meta.main) {
 		process.exitCode = 2;
 	} else {
 		const startedAt = performance.now();
-		main()
+		const elapsedSeconds = () => ((performance.now() - startedAt) / 1000).toFixed(2);
+		enforceBudget(startedAt, main)
 			.then(() => {
 				console.log(`\nfastcheck: PASS`);
-				console.log(`fastcheck: total time ${((performance.now() - startedAt) / 1000).toFixed(2)}s`);
+				console.log(`fastcheck: total time ${elapsedSeconds()}s`);
 			})
 			.catch(error => {
-				console.error(`\nfastcheck: FAIL — ${error instanceof Error ? error.message : String(error)}`);
+				const timedOut = error instanceof FastcheckTimeoutError;
+				console.error(
+					`\nfastcheck: ${timedOut ? "TIMEOUT" : "FAIL"} — ${error instanceof Error ? error.message : String(error)}`,
+				);
+				console.error(`fastcheck: total time ${elapsedSeconds()}s`);
 				process.exitCode = 1;
 			});
 	}

@@ -99,7 +99,7 @@
 
 ## 验证
 
-* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；各测试执行阶段设 3 分钟硬超时、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + 自动 push 本地 `main` 到远端、触发 GitHub Actions CI 并持续监控直到返回；端到端冒烟与安装器 E2E 由该流水线覆盖）。
+* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测；整体 60 秒墙钟硬超时，超时杀掉运行中的子进程、输出 TIMEOUT 与已耗时间并判失败——冷缓存如同步后首次 Rust 编译超时属预期失败，无时限完整静态验证由 fulltest 承担）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；各测试执行阶段设 3 分钟硬超时、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + 自动 push 本地 `main` 到远端、触发 GitHub Actions CI 并持续监控直到返回，并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
 * `bun run fastcheck` agent 可按需自主调用，普通 TypeScript 修改后 MUST 运行；纯文档修改只做差异与格式检查。除 fastcheck 外的本地编译、类型检查、测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）以及 push、触发外部流水线，MUST 仅在用户明确要求时进行。
 * `bun run fulltest` 与 `bun run slowtest` 在当前操作系统上运行、只运行当前操作系统对应的测试，不维护 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
 * UI 冒烟（原 `jch-dev-ui-test` 能力，已并入 fulltest）MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
