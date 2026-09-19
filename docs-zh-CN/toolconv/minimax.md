@@ -13,7 +13,7 @@ tools:
   format: minimax
 ```
 
-`tools.format: minimax` 会在本次会话中强制使用该自有方言。在 `auto` 模式下，除非所选模型显式声明 `supportsTools: false`，OMP 会保留供应商原生工具调用；对于 MiniMax 系列模型 id，该回退会解析为 `minimax`。参见 [`tools.format`](../settings.md#tools-and-approvals)。
+`tools.format: minimax` 会在本次会话中强制使用该自有方言。在 `auto` 模式下，除非所选模型显式声明 `supportsTools: false`，OMP 会保留供应商原生工具调用；对于 MiniMax 系列模型 id，该回退会解析为 `minimax`。参见 [`tools.format`](../settings.md#工具和审批)。
 
 当自有方言生效时，OMP 会：
 

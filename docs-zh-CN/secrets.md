@@ -16,7 +16,8 @@ secrets:
 1. 在会话启动时，密钥从以下来源收集：
    - **环境变量**：名称匹配常见密钥模式（`KEY`、`SECRET`、`TOKEN`、`PASSWORD`、`PASS`、`AUTH`、`CREDENTIAL`、`PRIVATE`、`OAUTH`），且值长度至少为 8 个字符
    - **`secrets.yml` 文件**（见下文）
-   - 一条内置的可逆正则，用于匹配仅出现在会话内容或工具结果中、形态类似 GitHub、GitLab、OpenAI 凭据令牌的字符串
+   - 内置的可逆正则，用于匹配仅出现在会话内容或工具结果中的常见凭据形态：GitHub、GitLab、OpenAI 与 Anthropic 令牌、AWS 访问密钥、Google API 密钥、Slack 令牌、npm 令牌、Stripe 密钥（secret 与 restricted）及 webhook 密钥、Hugging Face 令牌、SendGrid 密钥、JWT、Bearer 头令牌与 PEM 私钥块
+   - 连接 URL 环境值中内嵌的密码——任何持有 `scheme://user:password@host` 形式值的变量（例如 `DATABASE_URL`），无论变量名如何，其密码都会被注册为密钥
 
 2. 对提供方可见的文本中，匹配的值会被替换为确定性占位符，例如 `$$3P8W5JH1TK2Q$$`、`$$3P8W5JH1TK2Q:L$$` 或 `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$`。
 
@@ -83,6 +84,10 @@ obfuscate 模式下的普通值以及短于 8 个字符的正则匹配会被忽�
 
 这会生成形如 `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$` 的占位符。友好名称会被清理为仅含大写字母与数字，长度上限为 32 个字符；若清理后为空则省略。无效的可选 `friendlyName` 元数据不会使该密钥条目失效；该密钥仍会使用无标签的占位符进行混淆。如果某个占位符的标签会泄露已配置的明文密钥值或匹配到已配置的密钥正则，该标签也会被丢弃。
 
+Native Responses 回放的明文也会被混淆，包括消息文本、工具参数/结果，以及文件/网页搜索文本。`mcp_list_tools`、`tool_search_output` 与 `additional_tools` 中的动态定义还会遮蔽工具/命名空间描述、shell 技能描述、MCP 注解，以及 schema 的描述性注解与示例。schema 约束（包括 `enum`/`const`）、执行默认值、未知的 schema 扩展、标识符、认证/路由设置以及语法均保持不变，不参与文本遮蔽。静态的 `context.tools`、系统提示词以及图像/文件字节保持不变。
+
+原生冲突值会在遮蔽前通过同一套字段遍历进行收集，因此一个仅出现在动态定义或搜索项中的值，也可能使历史记录或待处理的 advisor 更新中较早的 friendly 前缀失效。advisor 会在维护提交后重新清洗回放及其下一次 compaction 的源，包括包含新发现值的 snapshot。加密的回放与未知协议变体保持不透明；加密的历史无法被回溯检查或改写。
+
 12 字符的哈希基是精确密钥在某个安装级私有密钥下的 HMAC（该密钥存储在 `~/.omp/agent/secret-placeholder.key`，在启用 XDG 的安装中为 `$XDG_STATE_HOME/omp/secret-placeholder.key`，绝不会发送给模型）。这可以防止会话阅读者通过字典哈希将占位符反推回密钥。仅大小写不同的密钥会得到独立的基，因此仅看到一个占位符无法让提供方通过改变大小写提示合成另一个占位符。在内置令牌懒加载路径上若无法持久化该密钥，会话会发出警告并使用进程级临时密钥；混淆在同一进程内仍可逆，但占位符在重启之间不稳定。大小写提示后缀用于标注被遮蔽值的大小写形式：
 
 | 提示 | 含义                            |
@@ -111,7 +116,7 @@ regex 条目上的 `friendlyName` 标注的是所配置的正则条目本身，�
   content: "/bearer\\s+[a-zA-Z0-9._~+\\/=-]+/i"
 ```
 
-regex 条目始终以全局方式扫描（`g` 标志会被自动强制启用）。正则字面量语法 `/pattern/flags` 可作为独立的 `content` + `flags` 字段的替代形式。模式中的转义斜杠（`\\/`，按字面量呈现两个反斜杠加斜杠的写法）会被正确处理。
+regex 条目始终以全局方式扫描（`g` 标志会被自动强制启用）。正则字面量语法 `/pattern/flags` 可作为独立的 `content` + `flags` 字段的替代形式。模式中的转义斜杠（`\\/`）会被正确处理。
 
 #### replace 模式与正则
 

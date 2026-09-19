@@ -1,8 +1,7 @@
-# Session Storage and Entry Model
-
+# 会话存储与条目模型
 本文档是 coding-agent 会话如何表示、持久化、迁移以及在运行时重建的权威规范。
 
-## Scope
+## 范围
 
 涵盖：
 
@@ -15,7 +14,7 @@
 
 不涵盖 `/tree` UI 的渲染行为，除非该行为影响会话数据。
 
-## Implementation Files
+## 实现文件
 
 - [`src/session/session-manager.ts`](../packages/coding-agent/src/session/session-manager.ts) — 编排：树/leaf、append、持久化、blob、生命周期工厂
 - [`src/session/session-entries.ts`](../packages/coding-agent/src/session/session-entries.ts) — 条目/header 类型、`SessionEntry` 联合类型、`CURRENT_SESSION_VERSION`
@@ -32,8 +31,7 @@
 - [`src/session/blob-store.ts`](../packages/coding-agent/src/session/blob-store.ts) — 内容寻址 blob 存储
 - [`src/session/history-storage.ts`](../packages/coding-agent/src/session/history-storage.ts) — prompt 历史（独立子系统）
 
-## On-Disk Layout
-
+## 磁盘布局
 默认 file-session 位置：
 
 ```text
@@ -58,16 +56,14 @@ Terminal breadcrumb 文件写入到：
 
 Breadcrumb 内容是原始 cwd 和会话文件路径，以及可选的第三行 `fresh`。一个 fresh breadcrumb 会保留一个 `/new` 边界——其懒创建的 JSONL 文件尚不存在——以防止 `continueRecent()` 重新打开上一次的会话。写入是同步、有序且尽力而为的。
 
-## File Format
-
+## 文件格式
 会话文件为 JSONL：每行一个 JSON 对象。当前文件在物理上以一个定宽 256 字节的 `type: "title"` 槽开头，随后是会话 header，然后是 `SessionEntry` 值。旧文件可能直接以 header 开头。Loader 会剥离物理槽，并将其当前标题/来源合并到逻辑 header。
 
 - 逻辑上的第一条 entry 始终是会话 header（`type: "session"`）。
 - 其余逻辑 entry 是 `SessionEntry` 值。
 - 运行时 entry 是 append-only 的；分支导航通过移动指针（`leafId`）而不是修改现有 entry。
 
-### Header (`SessionHeader`)
-
+### 头部（`SessionHeader`）
 ```json
 {
   "type": "session",
@@ -93,8 +89,7 @@ Breadcrumb 内容是原始 cwd 和会话文件路径，以及可选的第三行 
 
 - `titleSource` 为 `auto` 或 `user`；自动重命名不能覆盖用户标题。
 
-### Entry Base (`SessionEntryBase`)
-
+### 条目基类（`SessionEntryBase`）
 所有非 header 的 entry 包含：
 
 ```json
@@ -108,8 +103,7 @@ Breadcrumb 内容是原始 cwd 和会话文件路径，以及可选的第三行 
 
 `parentId` 对于根 entry（首次 append，或 `resetLeaf()` 之后）可以为 `null`。
 
-## Entry Taxonomy
-
+## 条目分类
 `SessionEntry` 是以下类型的联合：
 
 - `message`
@@ -160,6 +154,31 @@ Breadcrumb 内容是原始 cwd 和会话文件路径，以及可选的第三行 
   }
 }
 ```
+
+持久化的 `message.role` 判别字段是 **camelCase**，而不是 LLM 线上格式或扩展 hook 名称所用的 snake_case。普通对话记录在 `type: "message"` 下使用以下角色：
+
+| 持久化的 `message.role` | 所属包 | 说明 |
+| ------------------------ | ------------- | --------------------------------------------------------------------------------- |
+| `user`                   | pi-ai         | 用户/tool 反馈轮次。 |
+| `developer`              | pi-ai         | developer 角色的指令轮次。 |
+| `assistant`              | pi-ai         | model 轮次；tool call 以 `{ "type": "toolCall" }` 块的形式存在于其 `content` 中。 |
+| `toolResult`             | pi-ai         | 一次 tool call 的结果——**不是** `tool_result`。携带 `toolCallId`/`toolName`。 |
+| `bashExecution`          | coding-agent  | 独立的 `!` bash 运行。 |
+| `pythonExecution`        | coding-agent  | 独立的 python 运行。 |
+| `hookMessage`            | coding-agent  | 旧式 hook 注入的消息，为迁移而保留；新代码使用 `custom`。 |
+| `fileMention`            | coding-agent  | 内联的 `@file` 提及内容。 |
+
+分支与 compaction 摘要角色是在会话上下文重建期间由专门顶层 entry 合成的。通过 `pi.sendMessage` 发送的扩展消息同样会持久化为 `custom_message` entry，并重建为 `custom`：
+
+| 持久化的 entry 类型 | 重建后的角色 |
+| -------------------- | ------------------- |
+| `branch_summary`     | `branchSummary`     |
+| `compaction`         | `compactionSummary` |
+| `custom_message`     | `custom`            |
+
+内部调用方可以直接追加 `custom` 消息，因此读取方必须依据 `entry.type` 判别，而不是从重建后的角色推断持久化的形态。
+
+`toolCall` 是 **`assistant` 消息 `content` 数组内的内容块类型**，不是消息角色。如果扩展基于 `message.role` 去匹配 snake_case 常量（`tool_result`、`tool_call`）或在比较前将角色转为小写，就会静默跳过 `toolResult`（以及其他所有 camelCase 角色）——不会抛出任何错误。请逐字匹配上述 camelCase 值。基础角色是 `packages/ai/src/types.ts` 中的 `Message`；其余角色被合并进 `CustomAgentMessages`（`packages/agent/src/compaction/messages.ts`、`packages/coding-agent/src/session/messages.ts`）。
 
 ### `model_change`
 
@@ -309,6 +328,8 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 
 会话重命名的 append-only 审计 entry。它记录 `title`、`source`（`auto` 或 `user`），以及可选的 `previousTitle` 和 `trigger`。当前标题也会在定宽标题槽中更新，这样 listing 不需要重写整个文件。
 
+`/rename <title>` 设置显式标题。不带标题的 `/rename` 会使用配置的 tiny title model 根据最近的对话生成一个标题。两者都是用户请求的重命名（`source: "user"`），因此后续的自动命名不能替换它们。空对话或生成失败会保持当前标题不变。生成运行期间的会话切换或更新的重命名会丢弃过时的结果。本地 tiny-model 失败绝不会回退到在线 provider。
+
 ### `ttsr_injection`
 
 ```json
@@ -357,8 +378,7 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 }
 ```
 
-## Versioning and Migration
-
+## 版本与迁移
 当前会话版本：`3`。
 
 ### v1 -> v2
@@ -377,14 +397,12 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 - 对于 `message` entry：将旧式的 `message.role === "hookMessage"` 重写为 `"custom"`。
 - 设置 header `version = 3`。
 
-### Migration Trigger and Persistence
-
+### 迁移触发与持久化
 - 迁移在会话加载期间运行（`setSessionFile`）。
 - 如果运行了任何迁移，内存中的表示会被标记为需要完整重写，而不是立即重写。
 - 接下来的持久化操作会在增量 append 继续之前执行完整重写。
 
-## Load and Compatibility Behavior
-
+## 加载与兼容行为
 `loadEntriesFromFile(path)` 行为：
 
 - 文件缺失（`ENOENT`） -> 返回 `[]`。
@@ -398,8 +416,7 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 - 来自 loader 的 `[]` 被视为空/不存在的会话，并在该确切路径上替换为新初始化的会话；其 header 会被立即物化。
 - 有效文件会被加载，必要时迁移，解析 blob 引用，然后建立索引。
 
-## Tree and Leaf Semantics
-
+## 树与叶子语义
 底层模型是 append-only 树 + 可变的 leaf 指针：
 
 - 每个 append 方法恰好创建一个新 entry，其 `parentId` 为当前 `leafId`。
@@ -410,8 +427,7 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 
 `getEntries()` 按插入顺序返回所有非 header 的 entry。在正常操作中不会删除现有 entry；重写在更新表示（迁移、移动、定向重写辅助函数）的同时保留逻辑历史。
 
-## Context Reconstruction (`buildSessionContext`)
-
+## 上下文重建（`buildSessionContext`）
 `buildSessionContext(entries, leafId?, byId?, options?)` 解析发送给 model 的内容。`options.transcript: true` 则改为构建显示 transcript。完整 transcript 模式会内联保留 compaction；`collapseCompactedHistory` 仅渲染当前压缩后的尾部，`keepDanglingToolCalls` 在中途 UI 重建期间保留仍在运行的 tool call。
 
 算法：
@@ -434,15 +450,12 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 5. 将 `message`、`custom_message` 和 `branch_summary` entry 转换为消息。其他 entry 类型仅影响回放状态或元数据。
 6. 从回放中移除悬空的 tool call（除非出于中途 transcript 明确保留），在重写的轮次上中和对受保护的推理元数据的处理；从 model context 中删除不安全的 aborted/error assistant 轮次及其配对的 tool result。
 
-## Persistence Guarantees and Failure Model
-
-### Persist vs in-memory
-
+## 持久化保证与失败模型
+### 持久化 vs 内存中
 - `SessionManager.create/open/continueRecent/forkFrom` -> persistent 模式（`persist = true`）。
 - `SessionManager.inMemory` -> 非 persistent 模式（`persist = false`），使用 `MemorySessionStorage`。
 
-### Write pipeline
-
+### 写入流水线
 已完成的 entry 会更新内存，并在懒文件创建门控被跨越后，在 append 调用中同步交给文件/内存存储。这里没有 `fsync`，因此保证覆盖软件崩溃，但不覆盖断电。流式的部分文本在已完成消息被追加之前不会被持久化。
 
 - 一个新的普通会话在包含 assistant 消息或调用方调用 `ensureOnDisk()` 之前，仅存在于内存中。
@@ -451,20 +464,17 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 - 保存编辑器草稿会强制写入可发现的 header，并存储带标记的 `draft.txt`；如果草稿消失而仅剩下启动元数据，close 会删除该仅含草稿的会话。显式的 `ensureOnDisk()` 会话保持可恢复状态。
 - 并发的已完成 append 会用权威的完整正文重写来取代正在进行的原子重写，以防止过时的发布覆盖它们。
 
-### Durability operations
-
+### 持久性操作
 - `flush()` 排空异步的磁盘/存储队列和打开的 writer（无 `fsync`）；`flushSync()` 在支持时执行同步排空/完整重写。
 - 原子完整重写使用存储的 `writeTextAtomic` 并带有提交保护；file storage 会先暂存然后重命名覆盖目标，包括 EPERM 安全的 move-aside 回退。
 - 重写服务于重命名、entry 重写、迁移/清理、移动/fork 和恢复。会话标题的变更通常会更新定宽标题槽并追加一个 `title_change` 审计 entry，而不是重写正文。
 
-### Error behavior
-
+### 错误行为
 - 持久化错误会被锁定，并在后续的 flush/close/write 操作中重新抛出；首次错误会连同会话文件上下文一起被记录一次。
 - 失败的原子发布会触发权威修复。如果存储可能已发布写入且无法证明修复是持久的，`SessionPersistenceIndeterminateError` 会以原始错误和恢复错误失败关闭。
 - Writer 关闭时会传播第一个有意义的错误。
 
-## Data Size Controls and Blob Externalization
-
+## 数据体积控制与 Blob 外置
 在持久化 entry 之前：
 
 - 超过 500,000 字符的字符串会被截断为 `"[Session persistence truncated large content]"`，但已签名/加密的 provider 块、签名字段以及完整的 Anthropic 原生 web-search 历史块除外——为了回放它们必须保持字节精确。
@@ -475,8 +485,7 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 
 加载时，已持久化的 blob 引用会被解析回下游传输所期望的内联 payload 形式。
 
-## Storage Abstractions
-
+## 存储抽象
 `SessionStorage` 拥有 `SessionManager` 所使用的类文件系统操作：同步的目录/存在性/写入/stat/list 操作；异步的 read、sliced read、write、带保护的原子 write、rename、unlink、artifact-aware deletion、title update、writer 创建以及后端排空。
 
 实现与适配器：
@@ -487,8 +496,14 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 
 `SessionStorageWriter` 暴露 `append`、可选的 `appendSync`、`flush`、可选的 `flushSync`、`isOpen`、`close` 和 `getError`。
 
-## Session Discovery Utilities
+### 手动存储维护
+`omp gc` 默认只预览维护操作；需要 `--apply` 才会真正清扫未引用的 blob、归档符合条件的冷会话或对数据库 WAL 执行 checkpoint。存储维护与 model-context compaction 是彼此独立的。
 
+在 blob 引用扫描、归档历史/统计对账、gzip 创建和回滚期间，journal payload I/O 都以流式方式处理。活跃的 `.jsonl`、可恢复的 `.jsonl.*.bak` 以及已归档的 `.jsonl.gz` 记录都参与引用发现，包括畸形 JSON 文本中的引用。压缩扫描必须先排空并校验完整流，其结果才能授权删除。归档在解压时保留原始 JSONL 字节，artifact 树保持其现有布局。
+
+流式处理避免将整个 journal 物化到内存；但这并不会让 GC 成为常量内存。单条长记录、引用集合以及历史/统计身份集合仍会消耗内存。在归档发布期间，原始文件与临时压缩输出也会同时存在。
+
+## 会话发现工具
 发现辅助函数位于 `session-listing.ts`；`SessionManager` 暴露项目作用域的包装器：
 
 - `getRecentSessions(sessionDir, limit?)` -> 轻量级的欢迎元数据，默认 limit 为 4
@@ -500,8 +515,7 @@ Resume 时，如果非终止的会话尾部之后存在一个有效的最新 `se
 
 Recent/most-recent 扫描仅读取 4 KiB 的前缀。完整列表会读取该前缀以及一个上限为 32 KiB 的尾部以获取生命周期状态。扫描是 stat-keyed 并被缓存；大型集合使用有上限的并行 worker 处理。普通的按目录扫描还会在主 JSONL 缺失时恢复最新的孤立 EPERM 备份。Resume 匹配是大小写不敏感的，接受 session id 前缀、完整文件名前缀，或时间戳之后的 id 后缀。
 
-## Related but Distinct: Prompt History Storage
-
+## 相关但不同：提示历史存储
 `HistoryStorage`（`history-storage.ts`）是一个独立的 SQLite 子系统，用于 prompt 回忆/搜索，而非会话回放。
 
 - 数据库：`~/.omp/agent/history.db`
@@ -510,4 +524,4 @@ Recent/most-recent 扫描仅读取 4 KiB 的前缀。完整列表会读取该前
 - 使用内存中的 last-prompt 缓存对连续相同的 prompt 进行去重
 - 插入通过异步排空队列（~100 ms 延迟）批处理，因此 prompt 捕获不会阻塞轮次执行
 
-Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.
+会话文件用于对话图/状态回放；prompt 历史 UX 则使用 `HistoryStorage`。

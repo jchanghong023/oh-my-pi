@@ -15,7 +15,7 @@
 OMP 可以从多个工具发现 MCP 服务器（`.claude/`、`.cursor/`、`.vscode/`、`opencode.json` 等），但对于 OMP 原生配置，通常应使用以下主要文件之一：
 
 - 项目级：`.omp/mcp.json`
-- 用户级：`~/.omp/agent/mcp.json`（或当某个命名 profile 处于激活状态时使用 `~/.omp/profiles/<name>/agent/mcp.json` —— 参见 [Profiles](#profiles)）
+- 用户级：`~/.omp/agent/mcp.json`（或当某个命名 profile 处于激活状态时使用 `~/.omp/profiles/<name>/agent/mcp.json` —— 参见 [命名 profile](#命名-profile)）
 
 为了保持兼容，原生提供方还会读取 `.omp/.mcp.json` 与 `~/.omp/agent/.mcp.json`，但 OMP 写入的是上面那些主要的 `mcp.json` 路径。
 
@@ -39,9 +39,9 @@ OMP 还会翻译以下当前各工具原生配置源：
 - VS Code：仅项目级的 `.vscode/mcp.json`，使用 `mcp.servers`
 - 已安装的 Claude 市场上声明了 MCP 服务器的插件，以及 OMP 扩展包
 
-对于 Claude Code、Codex、Gemini CLI、Cursor 和 Windsurf，项目级条目会在同名的用户级条目之前被遇到——这与 OMP 原生配置一致，后者也是项目级条目先于当前激活 profile 的用户级条目——因此项目中的 `enabled: false` 会压制同名的用户级服务器。OpenCode 目前是先遇到用户级条目。跨提供方的优先级请参见 [发现与优先级](#discovery-and-precedence)。
+对于 Claude Code、Codex、Gemini CLI、Cursor 和 Windsurf，项目级条目会在同名的用户级条目之前被遇到——这与 OMP 原生配置一致，后者也是项目级条目先于当前激活 profile 的用户级条目——因此项目中的 `enabled: false` 会压制同名的用户级服务器。OpenCode 目前是先遇到用户级条目。跨提供方的优先级请参见 [发现与优先级](#发现与优先级)。
 
-### Profiles
+### 命名 profile
 
 命名 profile（`omp --profile <name>`、`--alias` 快捷方式，或 `OMP_PROFILE`/`PI_PROFILE`）会隔离用户级 MCP 配置。当某个 profile 处于激活状态时，**用户**作用域解析到该 profile 自身的 agent 目录，而不是默认目录：
 
@@ -52,7 +52,7 @@ OMP 还会翻译以下当前各工具原生配置源：
 
 项目级 MCP 配置（`.omp/mcp.json`）按工作目录绑定，而不是按 profile 绑定，因此它会在所有 profile 下生效。外部工具的配置（`.claude/`、`.cursor/` 等）也独立于 profile，因为它们属于那些工具，而不属于某个 OMP profile。
 
-MCP 遵循的 profile 规则与 OMP 原生配置的其他部分相同；请参见 [配置发现 → Profiles](./config-usage.md#profiles)。
+MCP 遵循的 profile 规则与 OMP 原生配置的其他部分相同；请参见 [配置发现 → Profiles](./config-usage.md#profile)。
 
 ## 添加模式引用
 

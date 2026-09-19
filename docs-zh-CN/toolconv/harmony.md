@@ -132,7 +132,7 @@ OMP 输出上述第一种形式：不带 `<|constrain|>` 标记、收件人位�
 
 参数会持续累积，直到遇到 `<|call|>`、`<|end|>` 或 `<|return|>`，然后通过 JSON 修复进行解析。空参数、或经修复后仍无法解析的输入，会成为 `{}` 而非扫描器错误。扫描器在头部完成时发出 `toolStart`，仅在消息终止符处发出 `toolEnd`；`analysis` 正文块以思考增量的形式流式输出，而普通的助手 `commentary`/`final` 正文以文本形式流式输出。非助手消息（包括工具结果封装）会被此输出扫描器跳过。
 
-与规范 Harmony 不同，有一个重要的自有扫描器边界情况需要留意。当携带收件人的头部到达 `<|message|>` 时，OMP 已经发出了 `toolStart`。如果普通流式路径已排空正文字节，而流随后在没有 `<|call|>`、`<|end|>` 或 `<|return|>` 的情况下结束，`flush()` 不会发出 `toolEnd`，也不会撤回先前的 start。Harmony 扫描器不发出参数增量，因此即使出现过未终止的正文文本，被保留的规范调用仍然具有 `{}`。在正常的停止时，OMP 会将该轮次改为 `toolUse`，并可能派发该空调用。这是一种宽松且不安全的恢复行为，并非合法的 Harmony 终止符规则。
+与规范 Harmony 不同，有一个重要的自有扫描器边界情况需要留意。当携带收件人的头部到达 `<\|message\|>` 时，OMP 已经发出了 `toolStart`。如果普通流式路径已排空正文字节，而流随后在没有 `<\|call\|>`、`<\|end\|>` 或 `<\|return\|>` 的情况下结束，`flush()` 不会发出 `toolEnd`，也不会撤回先前的 start。Harmony 扫描器不发出参数增量，因此即使出现过未终止的正文文本，被保留的规范调用仍然具有 `{}`。在正常的停止时，OMP 会将该轮次改为 `toolUse`，并可能派发该空调用。这是一种宽松且不安全的恢复行为，并非合法的 Harmony 终止符规则。
 
 ## 多次 / 并行工具调用
 
@@ -224,7 +224,7 @@ format?: "celsius" | "fahrenheit", // default: celsius
 - **流式解析。** 使用有状态解析器（该库提供 `StreamableParser`），以便增量地重建不完整的 UTF-8 以及头部/通道/收件人/内容类型字段；朴素的子串扫描无法正确处理多字节切分和可选的头部字段。`parse_messages_from_completion_tokens` 接受 `strict=True|False` —— `strict=False` 可容忍某些畸形的头部。不要将尾部的停止词元传入解析器。
 - **编码。** 使用 `o200k_harmony`（即 `o200k_base` 的 rank 加上上述 Harmony 特殊词元）。在编码和解码两侧都将 `<|...|>` 词元视为原子的特殊词元；将它们作为普通文本进行编码会产生不同的 rank 并破坏流。
 
-## 参考资料
+## 来源
 
 - OpenAI Cookbook —— OpenAI harmony 响应格式：https://cookbook.openai.com/articles/openai-harmony
 - openai/harmony 渲染器（README）：https://github.com/openai/harmony

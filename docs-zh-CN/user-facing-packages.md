@@ -39,7 +39,7 @@
 来源：[`packages/omptype/README.md`](../packages/omptype/README.md)、[`packages/omptype/package.json`](../packages/omptype/package.json) 以及仓库中的 [omptype 编写指南](./omptype-guide.md)。
 
 - 包：公开的 `@oh-my-pi/omptype`；使用 `bun add @oh-my-pi/omptype` 安装；需要 Bun 1.3.14 或更高版本。
-- 特性：可调用的、兼容 ArkType 的模式，具有低开销的解析启动、热路径的惰性编译、校验错误、默认值和变形（morph），以及 JSON Schema 导出。
+- 特性：可调用的、兼容 ArkType 的模式，具有低开销的解释执行启动、热路径惰性编译、校验错误、默认值和变形（morph），以及 JSON Schema 导出。
 - 公共接口：`@oh-my-pi/omptype` 用于原生编写，`/typebox` 和 `/zod` 用于兼容构建器，`/ark` 用于无别名的 ArkType 兼容门面。
 - 运行时行为：模式调用返回校验后的值或 `type.errors`；`.assert()` 返回值或在失败时抛出；`.allows()` 执行布尔检查。
 - 限制：这是一个有明确范围的兼容接口，并非对 ArkType、TypeBox 或 Zod 每个 API 的完整实现。

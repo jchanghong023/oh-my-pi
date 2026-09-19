@@ -1,8 +1,8 @@
 # Qwen3 工具调用格式（Hermes 约定）
 
-Alibaba **Qwen3** 系列的工具调用约定（`Qwen/Qwen3-*`：稠密 `0.6B–32B` 以及 MoE `30B-A3B`/`235B-A22B`；与 `Qwen2.5-*` 和 `QwQ-32B` 同一模板路线）。它采用 **Hermes** 约定——由 NousResearch 的 Hermes 2 Pro 首创、被 Qwen 原样采用，并被大量社区微调沿用的 XML+JSON 格式。整体外壳是 **ChatML**：每个回合都是 `<|im_start|>{role}\n{body}<|im_end|>\n`。可用工具在 system 回合的 `<tools>…</tools>` 块内声明（每行一个 JSON spec）；模型将每次调用以 `<tool_call>\n{json}\n</tool_call>` 块的形式发出，其中 `arguments` 是**嵌套的 JSON 对象**（而非字符串化 JSON）；工具结果以 `<tool_response>…</tool_response>` 反馈回来。混合推理…
+Alibaba **Qwen3** 系列的工具调用约定（`Qwen/Qwen3-*`：稠密 `0.6B–32B` 以及 MoE `30B-A3B`/`235B-A22B`；与 `Qwen2.5-*` 和 `QwQ-32B` 同一模板路线）。它采用 **Hermes** 约定——由 NousResearch 的 Hermes 2 Pro 首创、被 Qwen 原样采用，并被大量社区微调沿用的 XML+JSON 格式。整体外壳是 **ChatML**：每个回合都是 `<|im_start|>{role}\n{body}<|im_end|>\n`。可用工具在 system 回合的 `<tools>…</tools>` 块内声明（每行一个 JSON spec）；模型将每次调用以 `<tool_call>\n{json}\n</tool_call>` 块的形式发出，其中 `arguments` 是**嵌套的 JSON 对象**（而非字符串化 JSON）；工具结果以 `<tool_response>…</tool_response>` 反馈回来。混合推理通过 `<think>…</think>` 承载。该格式随模型自带的 `chat_template` 提供，推理服务器无需额外模板即可启用：vLLM 使用 `--enable-auto-tool-choice --tool-call-parser hermes`（搭配 `--reasoning-parser deepseek_r1` 进行思考拆分）；SGLang 暴露对应的解析器（例如 `--reasoning-parser qwen3`）。
 
-核验来源：Qwen 官方的 function-calling 指南（`qwen.readthedocs.io/en/latest/framework/function_call.html`，全文阅读含 Qwen-Agent 与 vLLM 章节）、`Qwen/Qwen3-8B` 的 `tokenizer_config.json` 中字节级精确的 `chat_template` 字段（HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218`，本地用 Jinja2 渲染得到下方原始流）以及 `added_tokens_decoder` 中的 token ID、NousResearch 的 `Hermes-Function-Calling` README，以及 vLLM 工具调用文档（`hermes` 解析器与 Qwen 模型章节）。
+核验来源：Qwen 官方的 function-calling 指南（`qwen.readthedocs.io/en/latest/framework/function_call.html`，全文阅读含 Qwen-Agent 与 vLLM 章节）、`Qwen/Qwen3-8B` 的 `tokenizer_config.json` 中字节级精确的 `chat_template` 字段（HF resolve-cache 提交 `b968826d9c46dd6066d109eabc6255188de91218`，本地用 Jinja2 渲染得到下方原始流）以及 `added_tokens_decoder` 中的 token ID、NousResearch 的 `Hermes-Function-Calling` README，以及 vLLM 工具调用文档（`hermes` 解析器与 Qwen 模型章节）。
 
 ## 特殊 token
 
@@ -32,7 +32,7 @@ ChatML。每条消息渲染为：
 
 ```text
 <|im_start|>{role}
-:{body}<|im_end|>
+{body}<|im_end|>
 ```
 
 - Role：`system`、`user`、`assistant`、`tool`。不存在独立的"通道"概念；唯一的子流是 assistant 回合内的 `<think>` 推理块。
@@ -159,7 +159,7 @@ What's the temperature in San Francisco now?<|im_end|>
 The current temperature in San Francisco is 26.1°C.<|im_end|>
 ```
 
-在**思考模式**（`enable_thinking=True`，默认）下，生成 prompt 改为以裸的 `<|im_start|>assistant\n` 结尾，模型自行在 `<tool_call>` 之前生成 `<think>…真实推理…</think>` 块。（重渲染已存储历史时，模板仅对最后一条 assistant 消息或带有 `reasoning_content` 的消息保留 `<think>` 块，并剥离更早回合的推理——见 Parsing notes。）
+在**思考模式**（`enable_thinking=True`，默认）下，生成 prompt 改为以裸的 `<|im_start|>assistant\n` 结尾，模型自行在 `<tool_call>` 之前生成 `<think>…real reasoning…</think>` 块。（重渲染已存储历史时，模板仅对最后一条 assistant 消息或带有 `reasoning_content` 的消息保留 `<think>` 块，并剥离更早回合的推理——见 Parsing notes。）
 
 ## OpenAI 兼容 API 映射
 
@@ -214,7 +214,7 @@ omp 渲染器始终写出嵌套的 `arguments` 对象，并换行分隔并行调
 ## 来源
 
 - Qwen function-calling 指南：https://qwen.readthedocs.io/en/latest/framework/function_call.html
-- Qwen3-8B chat template + token IDs（`tokenizer_config.json`，`chat_template` + `added_tokens_decoder`）：https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json（通过 HF resolve-cache commit `b968826d9c46dd6066d109eabc6255188de91218` 验证）
+- Qwen3-8B 聊天模板 + token ID（`tokenizer_config.json`，`chat_template` + `added_tokens_decoder`）：https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json（通过 HF resolve-cache 提交 `b968826d9c46dd6066d109eabc6255188de91218` 验证）
 - Qwen3-8B 模型卡（思考模式、`enable_thinking`、`</think>`=151668）：https://huggingface.co/Qwen/Qwen3-8B
 - NousResearch Hermes-Function-Calling（该约定的起源）：https://github.com/NousResearch/Hermes-Function-Calling
 - vLLM 工具调用文档（`hermes` 解析器、Qwen 模型、自动工具选择）：https://docs.vllm.ai/en/latest/features/tool_calling/

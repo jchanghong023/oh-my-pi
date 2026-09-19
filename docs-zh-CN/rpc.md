@@ -68,6 +68,10 @@ omp --mode rpc [regular CLI options]
 
 旧版客户端可以忽略新增的 ready 字段并继续使用 v1。V1 对超大输出仍保留有界回退行为。超过 v2 重组上限的帧仍会显式失败；大型历史 API 应使用分页，而不是依赖任意大的逻辑帧。
 
+在读取方跟得上的情况下，输出会直接写入 stdout。出现背压时，服务器会把待发送的字节溢写到私有的临时文件中，并以 64 KiB 为块进行排空，同时保持帧顺序。这限制了排队输出的内存占用，代价是磁盘 I/O 与临时磁盘占用，后者可能持续增长直到读取方赶上。当积压排空或进程关闭时会删除该文件。输出或溢写失败会被记录、释放会话，并以退出码 `1` 退出。
+
+客户端在关闭 stdin 之后必须继续读取 stdout。正常 EOF 与扩展请求的关闭会等待挂起的输出交付完毕；如果客户端保持其 stdout 管道打开而不读取，可能会无限期延迟退出。
+
 ### 出站帧类别（stdout）
 
 1. Ready 帧（`{ type: "ready" }`）
@@ -195,6 +199,8 @@ omp --mode rpc [regular CLI options]
 
 - `{ id?, type: "get_login_providers" }`
 - `{ id?, type: "login", providerId: string }`
+
+登录仅在 provider 发出授权 URL 之后才转发普通的 OAuth 输入提示。标记为 `secret: true` 的提示总是会被拒绝，并返回一个失败的 `login` 响应，引导用户前往终端 UI；不会发出普通的 `input` 请求。RPC 不协商秘密输入支持。
 
 ## 响应模式
 

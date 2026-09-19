@@ -113,7 +113,7 @@ Provider 排序优先按优先级（数值高者优先），并列时按注册�
 3. 未被忽略
 4. 被包含（若存在 include 列表）
 
-`agents` provider（`.agent[s]/skills`）是规范的 OMP 原生位置，拥有独立的 `enableAgentsUser`/`enableAgentsProject` 开关——禁用 Claude/Codex/Pi **不会**关闭它。没有专用开关的 provider（`claude-plugins`、`opencode`、`github` ……）在**任意**具名第三方来源开关被启用时即被启用。
+`agents` provider（`.agent[s]/skills`）是规范的 OMP 原生位置，拥有独立的 `enableAgentsUser`/`enableAgentsProject` 开关——禁用 Claude/Codex/Pi **不会**关闭它。外部用户级 provider 通过 `enabledProviders` 选择性启用；其项目根目录默认仍会加载。原生 OMP 来源以及在 `~/.omp/plugins` 下注册的 marketplace 插件默认也会加载。对于 `claude-plugins`，选择启用仅控制来自 Claude Code 自身用户注册表的插件。
 
 ### 冲突与重复处理
 
@@ -155,7 +155,12 @@ Task 工具的子代理通过常规会话创建接收当前会话的已发现/�
   - **Enter** → 在流式输出期间，将 skill 投递到 `steer` 队列（与自由文本 Enter 行为一致，同样用于 steer）；当智能体未在流式输出时，作为普通的空闲提示
   - **Ctrl+Enter**（`app.message.followUp`）→ 在流式输出期间，将 skill 投递到 `followUp` 队列；当智能体未在流式输出时，作为普通的空闲提示
 
-没有任何标志、模式选择器或 frontmatter 旋钮可以覆写投递模式——按键绑定 _就是_ 选择，与流式输出期间的自由文本路由完全一致。
+没有任何标志、模式选择器或 frontmatter 旋钮可以覆写投递模式——按键绑定 _就是_ 选择，与流式输出期间的自由文本路由完全一致。两条提交路径都通过 `input-controller.ts` 中的 `#invokeSkillCommand` 派发，后者委托给 `src/modes/skill-command.ts` 中的 `invokeSkillCommandFromText`。
+
+已调用的 skill 内容按调用类型区分，各自有独立的提示词模板（位于 `src/prompts/skills/`，由 `src/extensibility/skills.ts` 中的 `buildSkillPromptMessage` 渲染）：
+
+- **用户调用**（`user-invocation.md`，供 `/skill:<name>` 使用）：消息开头声明由用户调用了该 skill，嵌入 skill 正文，并追加 skill 目录（`[Skill directory: <baseDir>]`）以及要求据此解析 skill 相对路径（脚本、模板）的说明，此外还有可选的 `User: <args>`。
+- **自动加载**（`autoload.md`）：一种仅含来源信息的最小格式——正文后跟 `Skill: <path>` 与可选的 `User: <args>`——用于子代理自动注入由 agent frontmatter 字段 `autoloadSkills` 声明的 skill；这些隐藏消息不得声称用户调用了它们。
 
 ## `skill://` URL 行为
 

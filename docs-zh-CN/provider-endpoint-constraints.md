@@ -143,6 +143,37 @@ Kimi Code 和 Synthetic 可以以 OpenAI 兼容或 Anthropic 兼容方式调用�
 - OpenAI 兼容路径需要常见的 Kimi 请求头。
 - 它同时也参与 OpenAI/Anthropic 双表面适配。
 
+### ClinePass
+
+- 请求携带官方 Cline CLI 客户端身份（`X-CLIENT-TYPE`、`X-CLIENT-VERSION`、
+  `X-PLATFORM`、`X-CORE-VERSION`、`User-Agent` 及相关请求头）。推理请求
+  还会携带 OMP 的稳定会话 key 作为 `X-Task-ID`；账户与发现调用则省略它。
+  这是 Cline 门控花名册条目所支持的识别契约。
+- 公开目录 id 省略网关的 `cline-pass/` 命名空间；Chat Completions 在线上
+  协议中添加它。免费层 id 保留完整的 OpenRouter 风格命名空间，因为网关
+  接收到的就是线上形式。
+- 公开的 `recommended-models` 端点是成员资格的权威来源。必需的
+  `clinePass` 桶和可选的 `free` 桶当前解析为十六个模型的花名册；格式错误
+  的订阅数据会被拒绝，以确保生成的回退内容得以保留。
+- 已知 id 使用 Cline 编写的元数据快照来获取精确的限制、订阅价格、输入
+  模态和各模型的推理控制。未知 id 在实时 OpenRouter 富化或重新生成提供
+  元数据之前，仍可使用保守限制且不虚构推理控制。
+- 订阅模型显示 Cline 的 API 等价列表价，但流式 `usage.cost` 是计费/折扣
+  后金额的权威来源。免费层模型确实为 $0。
+- 推理是模型特定的：effort 模型仅发送其声明的线上层级，Qwen3.7 Plus 将
+  OMP effort 映射为 Cline 嵌套的 `reasoning.max_tokens` 预算，而在 Cline
+  宣称支持开关的模型上，关闭思考会发送 `reasoning: { enabled: false }`。
+- Cline 托管的 Qwen 路由接收 Anthropic 风格的临时缓存断点。推理延续仅对
+  需要它的模型家族通过 `delta.reasoning` 重放。
+- 登录时针对 `/users/me` 验证 key；随后的推理验证在不消耗配额的情况下
+  证明模型访问权限。
+- 订阅窗口耗尽（`clinepass limit`）和免费层上限
+  （`free limit reached on model ...`）归类为用量限制。花名册轮换与账户
+  策略错误会获得提供商特定的恢复指引。
+- 仪表盘的 `/users/me/plan/usage-limits` 路由接受推理 API key 并报告
+  五小时、每周和每月的用量；`/users/me` 提供账户标签。用量报告不需要
+  账户 OAuth。
+
 ### Fireworks 和 Firepass
 
 - 线协议模型 id 需要提供商特定的映射。
@@ -154,7 +185,8 @@ Kimi Code 和 Synthetic 可以以 OpenAI 兼容或 Anthropic 兼容方式调用�
 在新增或转发字段前检查以下事项：
 
 - **Model id。** 某些模型会从推理 effort 解析出 wire id。
-  Firepass/Fireworks 会转换 id。OpenRouter 后缀处理是路径段感知的。
+  ClinePass、Firepass 和 Fireworks 会转换 id。OpenRouter 后缀处理是
+  路径段感知的。
 - **Max output tokens。** Kimi 系列模型即使调用方未设置，也可能
   要求最大 token 字段。OpenRouter 应省略目录默认值，除非显式设置。
   Codex 丢弃调用方上限。Responses 使用 `max_output_tokens`；Chat
@@ -183,7 +215,13 @@ Kimi Code 和 Synthetic 可以以 OpenAI 兼容或 Anthropic 兼容方式调用�
 - 使用 `reasoning: { effort, summary }`。
 - 可包含 `reasoning.encrypted_content` 用于重放。
 - xAI Grok 模型可能需要省略 `reasoning.effort`。
-- 某些 compat 路径会注入 GPT-5 的 `# Juice: 0 !important` 开发者脚手架。
+- 当 GPT-5.6+ Responses 模型的推理被强制关闭时，会在末尾追加一个
+  developer 条目 `# Juice: <N> !important`，其中 `N` 由请求的 effort
+  映射而来（`none`→0、`minimal`→2、`low`→4、`medium`→8、`high`→48、
+  `xhigh`→112、`max`→960；默认 8）——参见
+  `packages/ai/src/providers/openai-shared.ts` 中的 `getJuiceValue` 以及
+  `packages/ai/src/providers/openai-responses.ts` 中的 `forceReasoningOff`
+  路径。
 
 ### OpenRouter `reasoning`
 

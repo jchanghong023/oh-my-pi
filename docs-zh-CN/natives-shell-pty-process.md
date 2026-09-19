@@ -1,12 +1,13 @@
 # Natives Shell、PTY、Process 与 Key 内部机制
 
-本文档介绍 `@oh-my-pi/pi-natives` 中的 execution/process/terminal 原语：`shell`、`pty`、`ps` 和 `keys`，使用的架构术语来自 `docs/natives-architecture.md`。
+本文档介绍 `@oh-my-pi/pi-natives` 中的执行/进程/终端原语：`shell`、`pty`、`ps` 和 `keys`，使用的架构术语来自 `docs/natives-architecture.md`。
 
 ## 实现文件
 
 - `crates/pi-natives/src/shell.rs`
 - `crates/pi-shell/src/shell.rs`
 - `crates/pi-shell/src/cancel.rs`
+- `crates/pi-builtins`（embedded-shell 内建命令：bash 内建命令加上进程内实用工具/进程命令）
 - `crates/pi-shell/src/windows.rs`（仅 Windows 上的 PATH 补全）
 - `crates/pi-shell/src/process.rs`
 - `crates/pi-natives/src/pty.rs`
@@ -44,7 +45,8 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 - 禁用继承的环境（`do_not_inherit_env: true`），随后从宿主环境显式重建环境，
 - 跳过 profile 与 rc 加载，
 - 启用 bash 模式内建命令，禁用 `exec` 和 `suspend`，
-- 注册原生 `sleep`、`timeout` 和 `nohup` 内建命令，
+- 无条件注册来自 `pi_builtins::process_builtins()` 的 process 内建命令——`nohup`、`pgrep`、`pkill`、`pidwait`、`ps`、`sleep`、`timeout` 和 `top`（设置 `PI_DISABLE_NOHUP_BUILTIN` 时不注册 `nohup`；`kill` 来自默认的 bash 模式集合，其中 `pi-builtins` 更丰富的实现会替换 brush 的原始实现），
+- 从 `pi_builtins::utility_builtins()` 注册进程内实用工具内建命令（见下一节），
 - 对 shell 敏感变量（`PS1`、`PWD`、`SHLVL`、bash 函数导出等）设置跳过列表，
 - 保留一个非导出的 `env="$env"` 兜底，以便 PowerShell 风格的 `$env:NAME` 在 brush 参数展开中得以保留，除非用户覆盖了 `env`。
 
@@ -56,26 +58,42 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 - 仅 Windows 的路径补全（`pi-shell/src/windows.rs`）在发现 Git-for-Windows 路径且尚未包含时将其追加。
 - 若存在 `snapshotPath`，会在会话创建时被 source，并将 stdout/stderr/stdin 接到 null 文件。
 
+### 进程内实用工具内建命令（源自 uutils）
+
+除 bash 内建命令之外，会话创建还会注册由 `pi-builtins` crate（`crates/pi-builtins`）实现的进程内命令行实用工具内建命令——它们是 uutils coreutils/findutils/sed 与 jaq 的内部移植版，构建在 `uucore` 0.8.0 之上。该集合包含 `cat`、`head`、`tail`、`wc`、`sort`、`uniq`、`ls`、`find`、`grep`、`mkdir`、`rm`、`mv`、`ln`、`sed`、`jq`、`fd`、`diff`、校验和/`tr`/`cut`/`date` 系列等；`pi_builtins::utility_builtins()` 是权威列表。
+
+有三个与搜索相关的内建命令值得单独说明：
+
+- `grep` 基于 ripgrep 的库（`grep-regex`/`grep-searcher`）实现，递归目录遍历由 `pi-walker` 提供。
+- `rg` 是采用 ripgrep 默认行为（递归搜索、ignore/hidden 过滤、二进制抑制）的姊妹内建命令——它有独立的模块与参数模型，并非 `grep` 的别名。
+- `fd` 由 `pi-walker`、`globset` 和 `regex` 支撑。
+
+每个内建命令都在 shell 进程内运行（没有 `fork`/`exec`），并面向 `pi-builtins` 提供的 shell `Host` 视图（`src/host.rs`）：stdio 通过命令的（可能已管道化/已重定向的）文件描述符路由，路径操作数相对于 shell 工作目录解析，shell 已导出的环境可见，abort/timeout 取消会被遵守。由于这些内建命令会遮蔽系统二进制，注册在 `crates/pi-shell/src/shell.rs` 中受到门控：
+
+- `PI_DISABLE_UUTILS_BUILTINS` 禁用整个实用工具集合（裸名称重新解析到系统二进制），
+- `PI_DISABLE_UUTILS_DESTRUCTIVE` 一次性禁用破坏性遮蔽命令（`rm`、`mv` 以及可通过 `-f` 强行覆盖的 `ln`），
+- `PI_DISABLE_RM_BUILTIN` / `PI_DISABLE_MV_BUILTIN` 分别禁用 `rm`/`mv`。
+
 ### 运行时生命周期与状态转换
 
 持久化 shell（`Shell.run`）使用如下状态机：
 
-- **Idle/Uninitialized**：`session: None`。
-- **Running**：首次 `run()` 延迟创建会话，存储 abort token，执行命令。
-- **Completed + keepalive**：若执行控制流正常，则清除 abort 状态并复用会话。
-- **Completed + teardown**：若控制流与 loop/script/shell-exit 相关，则丢弃会话。
-- **Cancelled/Timed out**：触发 Tokio 取消令牌，基线快照之后启动的子孙进程接收终止波次，给予 2 秒的优雅等待时间，任务可能被 abort；若能获取锁则丢弃持久会话。
-- **Error**：丢弃会话。
+- **空闲/未初始化**：`session: None`。
+- **运行中**：首次 `run()` 延迟创建会话，存储 abort token，执行命令。
+- **已完成 + keepalive**：若执行控制流正常，则清除 abort 状态并复用会话。
+- **已完成 + teardown**：若控制流与 loop/script/shell-exit 相关，则丢弃会话。
+- **已取消/已超时**：触发 Tokio 取消令牌，基线快照之后启动的子孙进程接收终止波次，给予 2 秒的优雅等待时间，任务可能被 abort；若能获取锁则丢弃持久会话。
+- **错误**：丢弃会话。
 
 一次性 shell（`executeShell`）始终为每次调用创建并丢弃一个新会话。
 
-### 流式输出/输出与 minimizer 行为
+### 流式/输出与 minimizer 行为
 
 - stdout/stderr 被路由到共享管道并并发读取。
 - 读取器以增量方式解码 UTF-8；非法字节序列发出 `U+FFFD` 替换块。
 - 命令以 `ProcessGroupPolicy::NewProcessGroup` 运行。
 - 前台命令结束后，读取器会持续排空，直到 EOF、250ms 空闲输出或最长 2s；随后读取器关闭给予 250ms 超时。
-- 可选的 minimizer 配置可以捕获并改写输出。当发生 minimization 时，结果包含 `minimized`，包括 filter 名称、替换/原始文本以及字节数。
+- 可选的 minimizer 配置可以捕获并改写输出。当发生 minimization 时，结果包含 `minimized`，其中包括 filter 名称、替换/原始文本以及字节数。
 - 成功结果可以包含 `workingDir`，反映执行后 shell 的 cwd。
 - 由消费方负责持久化或展示 minimizer artifact；原生结果只携带数据。
 
@@ -99,7 +117,7 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 - 会话初始化失败（`Failed to initialize shell`），
 - cwd 错误（`Failed to set cwd`），
 - 环境 set/pop 失败，
-- snapshot source 失败（`Failed to source snapshot`），
+- source snapshot 失败（`Failed to source snapshot`），
 - 管道创建/clone 失败，
 - 执行失败（`Shell execution failed: ...`），
 - 任务包装器失败（`Shell execution task failed: ...`）。
@@ -116,23 +134,23 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 - `resize(cols, rows)`
 - `kill()`
 
-两个 start 方法都会在 spawn 之后调用 `onStart(error, pid)`（仅当平台子进程 PID 不可用时，实现才会传 `0`）。`PtyStartOptions` 支持 `command`、可选的 `cwd`、`env`、`timeoutMs`、`signal`、`cols`、`rows` 和 `shell`；默认 shell 是 `sh`。`PtyArgvStartOptions` 则要求提供 `application` 和 `args`，且不包含 `shell`。
+两个 start 方法都会在 spawn 之后调用 `onStart(error, pid)`（仅当平台子进程 PID 不可用时，实现才会传 `0`）。`PtyStartOptions` 支持 `command`、可选的 `cwd`、`env`、`timeoutMs`、`signal`、`cols`、`rows` 和 `shell`；其默认 shell 是 `sh`。`PtyArgvStartOptions` 则要求提供 `application` 和 `args`，且没有 `shell`。
 
 ### 运行时生命周期与状态转换
 
 `PtySession` 状态机：
 
-- **Idle**：`core: None`。
-- **Reserved**：`start()` 在异步工作开始前同步安装控制通道（`core: Some`），使 `write/resize/kill` 立即可用。
-- **Running**：阻塞式 PTY 循环处理子进程状态、读取事件、取消心跳以及控制消息。
-- **Terminal closed / drain**：子进程退出或取消启动一个短暂的读取排空窗口。
-- **Finalized**：在 start 任务完成（成功或失败）后，`core` 总是被重置为 `None`。
+- **空闲**：`core: None`。
+- **已预留**：`start()` 在异步工作开始前同步安装控制通道（`core: Some`），使 `write/resize/kill` 立即可用。
+- **运行中**：阻塞式 PTY 循环处理子进程状态、读取事件、取消心跳以及控制消息。
+- **终端已关闭 / 排空**：子进程退出或取消会启动一个短暂的读取排空窗口。
+- **已收尾**：在 start 任务完成（成功或失败）后，`core` 总是被重置为 `None`。
 
 并发保护：
 
 - 在已运行时再次启动会返回 `PTY session already running`。
 
-### Spawn/attach/write/read/terminate 模式
+### 生成/附加/写入/读取/终止模式
 
 - PTY 通过 `portable_pty::native_pty_system().openpty(...)` 打开。
 - 在 Windows 上，`openpty()` 在辅助线程上运行，并有 5s 启动超时；超时会以 `PTY creation timed out (5s). ConPTY may be unavailable on this system.` 拒绝。
@@ -141,9 +159,9 @@ Rust 通过以下方式创建 `brush_core::Shell`：
   - `powershell`/`pwsh` 使用 `-Command`，
   - 其他 shell 使用 `-lc`。
 - `startArgv()` 将每个参数直接传递给 `portable_pty::CommandBuilder`。
-- 默认尺寸为 `120x40`；在 start 和 resize 时对尺寸进行限制（`cols 20..400`，`rows 5..200`）。
+- 默认尺寸为 `120x40`；在 start 和 resize 时对尺寸进行钳制（`cols 20..400`，`rows 5..200`）。
 - `write()` 将原始字节发送到 PTY stdin。
-- `resize()` 发送控制消息并再次限制尺寸。
+- `resize()` 发送控制消息并再次钳制尺寸。
 - `kill()` 发送控制消息，将本次运行标记为 cancelled 并终止 PTY 进程目标。
 
 输出路径：
@@ -163,7 +181,7 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 - `timeoutMs` 和 `AbortSignal` 喂给 `CancelToken`。
 - 循环以最大 16ms 的等待节奏周期性地调用 `ct.heartbeat()`。
 - 超时分类基于心跳错误字符串是否包含 `Timeout`。
-- 取消/kill 启动 300ms 的取消后排空窗口；正常子进程退出启动 300ms 的退出后排空窗口。
+- 取消/kill 会启动 300ms 的取消后排空窗口；正常子进程退出会启动 300ms 的退出后排空窗口。
 - 最终读取排空在非 Windows 上为 50ms，在 Windows 上为 500ms。
 
 ### 失败行为
@@ -190,8 +208,8 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 
 - `Process.fromPid(pid) -> Process | null`
 - `Process.fromPath(path) -> Process[]`
-- getters：`pid`、`ppid`
-- methods：`args()`、`killTree(signal?)`、`terminate(options?)`、`waitForExit(options?)`、`groupId()`、`children()`、`status()`
+- getter：`pid`、`ppid`
+- 方法：`args()`、`killTree(signal?)`、`terminate(options?)`、`waitForExit(options?)`、`groupId()`、`children()`、`status()`
 
 `ProcessTerminateOptions` 支持 `{ group?, gracefulMs?, timeoutMs?, signal? }`。`ProcessWaitOptions` 支持 `{ timeoutMs?, signal? }`。
 
@@ -236,46 +254,46 @@ Rust 通过以下方式创建 `brush_core::Shell`：
 
 ### 失败行为
 
-- 无法识别或非法的序列会从 parse 函数返回 `null`。
-- 解析失败或不匹配时，match 函数返回 `false`。
-- 不会对格式错误的按键输入抛出错误。
+- 无法识别或非法的序列会让解析函数返回 `null`。
+- 解析失败或不匹配时，匹配函数返回 `false`。
+- 对格式错误的按键输入不会抛出错误。
 
 ## JS API ↔ Rust 导出映射
 
 ### Shell + PTY + Process
 
-| JS API                                       | Rust N-API export                  | Notes                                            |
-| -------------------------------------------- | ---------------------------------- | ------------------------------------------------ |
-| `executeShell(options, onChunk?)`            | `executeShell` (`execute_shell`)   | One-shot shell execution                         |
-| `new Shell(options?)`                        | `Shell` class                      | Persistent shell session                         |
-| `shell.run(options, onChunk?)`               | `Shell::run`                       | Reuses session on keepalive control flow         |
-| `shell.abort()`                              | `Shell::abort`                     | Aborts active run for that shell instance        |
-| `shell.liveBackgroundJobCount()`             | `Shell::live_background_job_count` | Reaps jobs, then counts live background children |
-| `new PtySession()`                           | `PtySession` class                 | Stateful PTY session                             |
-| `pty.start(options, onChunk?, onStart?)`     | `PtySession::start`                | Shell-command PTY run                            |
-| `pty.startArgv(options, onChunk?, onStart?)` | `PtySession::start_argv`           | Direct executable/argv PTY run                   |
-| `pty.write(data)`                            | `PtySession::write`                | Raw stdin passthrough                            |
-| `pty.resize(cols, rows)`                     | `PtySession::resize`               | Clamped terminal dimensions                      |
-| `pty.kill()`                                 | `PtySession::kill`                 | Terminates active PTY child/targets              |
-| `Process.fromPid(pid)`                       | `Process::from_pid`                | Stable process reference lookup                  |
-| `Process.fromPath(path)`                     | `Process::from_path`               | Executable-path process lookup                   |
-| `process.killTree(signal?)`                  | `Process::kill_tree`               | Children-first process tree termination          |
-| `process.terminate(options?)`                | `Process::terminate`               | Graceful then hard process termination           |
-| `process.waitForExit(options?)`              | `Process::wait_for_exit`           | Async exit wait                                  |
-| `process.children()`                         | `Process::children`                | Direct children as `Process[]`                   |
-| `process.status()`                           | `Process::status`                  | `running` / `exited`                             |
+| JS API                                       | Rust N-API 导出                    | 备注                              |
+| -------------------------------------------- | ---------------------------------- | --------------------------------- |
+| `executeShell(options, onChunk?)`            | `executeShell` (`execute_shell`)   | 一次性 shell 执行                 |
+| `new Shell(options?)`                        | `Shell` 类                         | 持久化 shell 会话                 |
+| `shell.run(options, onChunk?)`               | `Shell::run`                       | keepalive 控制流下复用会话        |
+| `shell.abort()`                              | `Shell::abort`                     | 中止该 shell 实例上活动的 run     |
+| `shell.liveBackgroundJobCount()`             | `Shell::live_background_job_count` | 回收作业后统计存活的后台子进程    |
+| `new PtySession()`                           | `PtySession` 类                    | 有状态 PTY 会话                   |
+| `pty.start(options, onChunk?, onStart?)`     | `PtySession::start`                | 通过 shell 命令的 PTY 运行        |
+| `pty.startArgv(options, onChunk?, onStart?)` | `PtySession::start_argv`           | 直接以可执行文件/argv 的 PTY 运行 |
+| `pty.write(data)`                            | `PtySession::write`                | 原始 stdin 透传                   |
+| `pty.resize(cols, rows)`                     | `PtySession::resize`               | 钳制后的终端尺寸                  |
+| `pty.kill()`                                 | `PtySession::kill`                 | 终止活动的 PTY 子进程/目标        |
+| `Process.fromPid(pid)`                       | `Process::from_pid`                | 稳定的进程引用查找                |
+| `Process.fromPath(path)`                     | `Process::from_path`               | 按可执行文件路径查找进程          |
+| `process.killTree(signal?)`                  | `Process::kill_tree`               | 子进程优先的进程树终止            |
+| `process.terminate(options?)`                | `Process::terminate`               | 先优雅后强制的进程终止            |
+| `process.waitForExit(options?)`              | `Process::wait_for_exit`           | 异步等待退出                      |
+| `process.children()`                         | `Process::children`                | 直接子进程，类型为 `Process[]`    |
+| `process.status()`                           | `Process::status`                  | `running` / `exited`              |
 
 ### Keys
 
-| JS API                                         | Rust N-API export                                   | Notes                           |
-| ---------------------------------------------- | --------------------------------------------------- | ------------------------------- |
-| `matchesKittySequence(data, cp, mod)`          | `matchesKittySequence` (`matches_kitty_sequence`)   | Kitty codepoint+modifier match  |
-| `parseKey(data, kittyProtocolActive)`          | `parseKey` (`parse_key`)                            | Normalized key-id parser        |
-| `matchesLegacySequence(data, keyName)`         | `matchesLegacySequence` (`matches_legacy_sequence`) | Exact legacy sequence map check |
-| `parseKittySequence(data)`                     | `parseKittySequence` (`parse_kitty_sequence`)       | Structured Kitty parse result   |
-| `matchesKey(data, keyId, kittyProtocolActive)` | `matchesKey` (`matches_key`)                        | High-level key matcher          |
+| JS API                                         | Rust N-API 导出                                     | 备注                    |
+| ---------------------------------------------- | --------------------------------------------------- | ----------------------- |
+| `matchesKittySequence(data, cp, mod)`          | `matchesKittySequence` (`matches_kitty_sequence`)   | Kitty 码点+修饰键匹配   |
+| `parseKey(data, kittyProtocolActive)`          | `parseKey` (`parse_key`)                            | 归一化的 key ID 解析器  |
+| `matchesLegacySequence(data, keyName)`         | `matchesLegacySequence` (`matches_legacy_sequence`) | 精确的旧式序列映射检查  |
+| `parseKittySequence(data)`                     | `parseKittySequence` (`parse_kitty_sequence`)       | 结构化的 Kitty 解析结果 |
+| `matchesKey(data, keyId, kittyProtocolActive)` | `matchesKey` (`matches_key`)                        | 高层按键匹配器          |
 
-## 弃用会话清理与收尾说明
+## 被遗弃会话的清理与收尾说明
 
 - **Shell 持久化会话**：若一次 run 被取消/超时/出错/控制流非 keepalive，Rust 会丢弃内部会话状态。成功的常规 run 保留会话以供复用。
 - **PTY 会话**：`core` 在 `start()` 结束后总是被清除，包括失败路径。

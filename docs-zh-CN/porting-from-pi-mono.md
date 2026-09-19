@@ -48,8 +48,6 @@ git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > chang
   - `@mariozechner/pi-tui` → `@oh-my-pi/pi-tui`
   - `@mariozechner/pi-ai` → `@oh-my-pi/pi-ai`
   - `@mariozechner/pi-utils` → `@oh-my-pi/pi-utils`
-  - `@mariozechner/pi-catalog` → `@oh-my-pi/pi-catalog`
-  - `@mariozechner/pi-natives` → `@oh-my-pi/pi-natives`
 - 部分上游包以 `@earendil-works/*` 作用域发布，而不是 `@mariozechner/*`。以相同方式映射（`@earendil-works/pi-coding-agent` → `@oh-my-pi/pi-coding-agent`，依此类推）。
 - 裸的 `typebox` 包不是 `@oh-my-pi/*` 作用域；不要将其改写为 `@oh-my-pi/*` 作用域。工具参数 schema 的映射方式请参见第 15 节中的 Extensions divergence。
 
@@ -160,13 +158,13 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myapp-"));
 
 ## 10) 验证移植
 
-运行覆盖此次移植的检查：
+在更改后运行覆盖此次移植的检查：
 
-- `bun check` 用于仓库的 TypeScript 和 Rust 检查。
-- 针对你更改的包和行为的定向 Bun 测试（例如 `bun test packages/<package>/test/<file>.test.ts`）。
+- `bun check`
+- 运行演练所更改行为的定向 Bun 测试或冒烟场景。
 - 如果依赖发生了变化，在更新 `bun.lock` 后运行 `bun install --frozen-lockfile`。
 
-测试使用 Bun 的 runner，而不是 Vitest。不要用项目范围内的 `bun test` 替代定向覆盖；根目录的 `test` 脚本使用仓库的分片 runner。如果某项检查已因不相关的原因失败，请明确指出具体的命令和失败信息。
+如果仓库中已存在与你的变更无关的失败检查，请明确指出。测试使用 Bun 的 runner（而非 Vitest），但不要用不加区分的全仓库 `bun test` 替代定向的行为验证。
 
 ## 11) 保护已改进的功能（回归陷阱清单）
 
@@ -292,7 +290,7 @@ packages/coding-agent:
 
 ### UI 架构
 
-| Upstream                                    | Our Fork                                                            | Reason                                                                                                                                         |
+| 上游                                    | 我们的 fork                                                            | 原因                                                                                                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `FooterDataProvider` class                  | `StatusLineComponent`                                               | 简化、集成状态行                                                                                                                |
 | `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | 在当前扩展上下文中为 no-op stub                                     | 当前未接通以替换 TUI 状态/头部 UI                                                                                        |
@@ -302,7 +300,7 @@ packages/coding-agent:
 
 ### 组件命名
 
-| Upstream                     | Our Fork                |
+| 上游                     | 我们的 fork                |
 | ---------------------------- | ----------------------- |
 | `extension-input.ts`         | `hook-input.ts`         |
 | `extension-selector.ts`      | `hook-selector.ts`      |
@@ -311,7 +309,7 @@ packages/coding-agent:
 
 ### API 命名
 
-| Upstream                                 | Our Fork                                 | Notes                                     |
+| 上游                                 | 我们的 fork                                 | 备注                                     |
 | ---------------------------------------- | ---------------------------------------- | ----------------------------------------- |
 | `sessionManager.appendSessionInfo(name)` | `sessionManager.setSessionName(name)`    | 我们全程使用 `sessionName`                |
 | `sessionManager.getSessionName()`        | `sessionManager.getSessionName()`        | 相同（我们已统一以匹配上游的 RPC）        |
@@ -319,41 +317,42 @@ packages/coding-agent:
 
 ### 文件整合
 
-| Upstream                                           | Our Fork                                                  | Reason                                        |
+| 上游                                           | 我们的 fork                                                  | 原因                                        |
 | -------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
 | `clipboard.ts` + `clipboard-image.ts`（工具文件）   | 由 `@oh-my-pi/pi-natives` 支持的 `src/utils/clipboard.ts` | 原生实现，外加一个小型 TS 包装                |
 
 ### 测试框架
 
-| Upstream                  | Our Fork                      |
+| 上游                  | 我们的 fork                      |
 | ------------------------- | ----------------------------- |
 | `vitest` with `vi.mock()` | `bun:test` with `vi` from bun |
 | `node:test` assertions    | `expect()` matchers           |
 
 ### 工具架构
 
-| Upstream                            | Our Fork                                                                                                      | Notes                                                     |
+| 上游                            | 我们的 fork                                                                                                      | 备注                                                     |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                            | 工具工厂接受 `ToolSession` 并可返回 `null`                |
-| 每个工具的 `*Operations` 接口        | 仅保留当前每个工具的覆盖接口（例如 `FindOperations`）                                                          | 在存在的 SSH/远程覆盖处使用                              |
+| 每个工具的 `*Operations` 接口        | 仅保留当前每个工具的覆盖接口（例如 `tools/glob.ts` 中的 `GlobOperations`）；在 find→glob 重命名后，`FindOperations` 仅存于旧版垫片（`src/extensibility/legacy-pi-coding-agent-shim.ts`）中 | 在存在的 SSH/远程覆盖处使用                              |
 | 到处使用 Node.js `fs/promises`      | 简单文件读写使用 Bun 文件 API，目录使用 `node:fs/promises`，在需要时使用选定的同步 `node:fs`                  | 在简化的场景下优先使用 Bun API                            |
 
 ### 认证存储
 
-| Upstream                        | Our Fork                                    | Notes                                                  |
+| 上游                        | 我们的 fork                                    | 备注                                                  |
 | ------------------------------- | ------------------------------------------- | ------------------------------------------------------ |
 | `proper-lockfile` + `auth.json` | `agent.db` (bun:sqlite)                     | 凭据仅存储在 `agent.db` 中                            |
 | 每个 provider 单个凭据          | 多凭据加轮询选择                            | 保留会话亲和性和退避逻辑                                |
 
 ### 扩展
 
-| Upstream                                                               | Our Fork                                                                                                                                                                                                                                                                                     |
+| 上游                                                               | 我们的 fork                                                                                                                                                                                                                                                                                     |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 用于 TypeScript 加载的 `jiti`                                          | 原生 Bun `import()`                                                                                                                                                                                                                                                                        |
 | `pkg.pi` 清单字段                                                      | 优先使用 `pkg.omp`；仍保留 `pkg.pi` 兜底                                                                                                                                                                                                                                            |
 | 来自 `pi-ai` 的 `StringEnum`                                           | 来自 `pi.typebox` 的 `Type.Enum`，或 `pi.arktype.enumerated(...)`；`pi-ai` 不再导出 `StringEnum`                                                                                                                                                                                       |
 | 来自 `pi-coding-agent` 的 `formatSize`                                 | 来自 `@oh-my-pi/pi-utils` 的 `formatBytes`                                                                                                                                                                                                                                                      |
 | 上游的资源/包/设置管理器作为原生架构                                    | 基于能力的发现（`loadCapability(...)`）、`Settings` 单例以及 `EventBus`；对 `DefaultResourceLoader`、`DefaultPackageManager` 和 `SettingsManager` 的旧式扩展 import 是 `legacy-pi-coding-agent-shim.ts` 中的兼容性垫片，不是原生实现 |
+| 返回同步管理器并带有 `getGlobalSettings()`/`getProjectSettings()` 的 `SettingsManager.create(cwd)` | 垫片的 `SettingsManager.create()` 是同步的，会先解析活动扩展会话的 `Settings`，然后是与 `cwd`/`agentDir` 匹配的活跃实例，或一个隔离的兜底实例；`Settings` 暴露 `getGlobalSettings()`/`getProjectSettings()`，它们对原始的全局/项目层进行深拷贝，以便扩展读取自己命名空间下的键（#10397） |
 
 ### 跳过这些上游特性
 

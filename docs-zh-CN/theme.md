@@ -13,11 +13,11 @@
 - 由原生高亮器使用的语法高亮颜色（`@oh-my-pi/pi-natives`）
 - 状态栏分段颜色
 
-主要实现位于：`src/modes/theme/theme.ts`。
+主要实现位于：`packages/tui/src/theme/theme.ts`。
 
 ## Theme JSON 结构
 
-主题文件是 JSON 对象，依据 `theme.ts`（`themeJsonSchema`）中的运行时模式进行校验，并由 `src/modes/theme/theme-schema.json` 镜像描述。
+主题文件是 JSON 对象，依据 `theme.ts`（`themeJsonSchema`）中的运行时模式进行校验，并由 `packages/tui/src/theme/theme-schema.json` 镜像描述。
 
 顶层字段：
 
@@ -158,6 +158,14 @@
 
 ## 运行时切换行为
 
+`theme` 导出是实时绑定（在打包的扩展中同样如此）。请在渲染回调内部读取它，而不要跨切换保留主题实例。扩展渲染器回调也可以使用其传入的 theme 参数。
+
+```ts
+import { theme } from "@oh-my-pi/pi-coding-agent";
+
+const renderStatus = () => theme.fg("accent", "Ready");
+```
+
 ### 初始主题（`initTheme`）
 
 `main.ts` 使用以下设置初始化主题：
@@ -176,7 +184,7 @@
 
 设置模式中的当前默认值：
 
-- `theme.dark = "dark-terminal"`
+- `theme.dark = "titanium"`
 - `theme.light = "light"`
 - `symbolPreset = "unicode"`
 - `colorBlindMode = false`
@@ -353,6 +361,6 @@
 
 - 自定义主题中除可选的 `thinkingMax`（回退到 `thinkingXhigh`）外，所有 `colors` 令牌均为必填。
 - `export` 与 `symbols` 是可选的。
-- 主题 JSON 中的 `$schema` 仅作信息说明；运行时校验由代码中的 ArkType 模式强制执行。
+- 主题 JSON 中的 `$schema` 仅作信息说明；运行时校验由代码中的 ArkType 兼容 schema 强制执行（`packages/tui/src/theme/schema.ts` 中的 `themeJsonSchema`）。
 - `setTheme` 失败时回退到 `dark`；`previewTheme` 失败时不会替换当前主题。
 - 文件监听器重载错误或文件临时缺失会保留当前已加载的主题，直到成功重载或显式主题切换。

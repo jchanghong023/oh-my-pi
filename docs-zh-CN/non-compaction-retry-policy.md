@@ -27,6 +27,14 @@
 
 因此：过载/限流/服务器/网络类故障使用本重试策略；上下文窗口溢出使用压缩恢复。
 
+### Responses 请求体读取超时特例
+
+仅当 provider 记录了**实际提交的请求**是一次完整重放（而非 `previous_response_id` 增量）时，错误文本为 `Timed out reading request body` 的精确 OpenAI Responses HTTP 408 才具有特殊性。传输层在初次响应之后才会暴露这一完整重放情形。增量以及未知/遗留的请求形态仍保留普通的传输重试行为：在增量之后修改历史可能迫使更大的完整重放，因此自动本地省略不能仅凭该诊断推断安全性。在任何完整重放恢复之前，会话保留常规的重放安全否决与重试预算，要求启用压缩且在 `compaction.methodOrder` 中包含 `shake`，然后执行一次保守的、以产物为支撑的本地 `shake elide`。该一次性标记作用于逻辑提示序列；提示代次（prompt generation）仍是取消/会话切换的围栏。只有在该操作确实重写了符合条件的历史时才重试；被禁用、无进展、产物保存失败、取消、重试预算耗尽，或第二次匹配到该错误，都会终止本轮而不进行一次未改变的重放。
+
+自动请求体超时恢复只会省略符合条件的工具结果文本。它绝不重写 assistant/user 文本、围栏/XML 块、推理、图像或原生 Responses 重放负载；没有任何符合条件的工具结果的会话会直接终止，而不是再提交一次未改变的请求。
+
+这不是上下文溢出或负载拒绝的处理，也不确立 provider 的字节上限或网关原因。它绝不遍历配置的压缩方法，因此不会选择远程压缩、handoff 或 snapcompact；普通的 408/429/5xx 重试保持不变。
+
 ## 重试分类
 
 `TurnRecovery.isRetryableError(...)` 需要同时满足以下所有条件：
@@ -67,7 +75,7 @@
 1. 读取 `retry` 设置组，当重试被禁用时停止（固有的 Fireworks Fast 一次性回退到基础模型除外）。
 2. 增加重试尝试次数，并在首次尝试时创建共享的重试生命周期 Promise。
 3. 判断当前模型的重试预算是否已耗尽。
-4. 对错误进行分类，解析重试时机，并计算带上限并加入抖动的退避：`min(retry.baseDelayMs * 2^(attempt-1), 8000ms) * (75–100% 抖动)`。陈旧的 OpenAI Responses 重放错误会重置 provider 会话并使用 `0` 延迟。
+4. 对错误进行分类，解析重试时机，并计算带上限并加入抖动的退避：`min(retry.baseDelayMs * 2^(attempt-1), 8000ms) * (75–100% jitter)`。陈旧的 OpenAI Responses 重放错误会重置 provider 会话并使用 `0` 延迟。
 5. 对于使用上限，立即应用一次成功的凭据切换或已储备的 Codex 重置；否则等待提供商提示与下一个暂时被屏蔽的同级凭据中较早出现的时机。
 6. 在允许的情况下，查阅已配置的模型回退链。切换使用 `0` 延迟；分类器拒绝仅在应用了回退时才会继续。
 7. 如果当前模型的重试预算已耗尽，则停止，除非找到了回退模型。回退模型会获得全新的重试预算。
@@ -146,14 +154,22 @@
 
 ## 流式与提示完成行为
 
-`prompt()` 最终在 `agent.prompt(...)` 返回后等待 `#waitForPostPromptRecovery()`；该循环会与 TTSR 恢复和延迟的后置提示任务一起等待重试生命周期 Promise。
+`prompt()` 最终在 `agent.prompt(...)` 返回后等待 `#waitForPostPromptRecovery()`；该循环会与 TTSR 恢复以及延迟的后置提示任务一起等待重试生命周期 Promise。
 
-效果：
+重试生命周期 Promise 属于该逻辑提示执行，但它的完成并不是持久化或事件投递的屏障。核心事件订阅者是异步运行的：即使重试 Promise 已经完成，成功的重试恢复仍可能在改写持久化的错误标注，之后才发出 `auto_retry_end`。
 
-- 一次提示调用在任何已启动的重试链结束（成功/失败/取消）之前不会完全解析
-- 重试生命周期属于同一次逻辑提示执行的边界
+在提示之后分离监听器或销毁会话的无头调用方，应先等待会话结算：
 
-这可以防止调用方过早地将正在重试的轮次视为已完成。
+```ts
+await session.prompt(input);
+await session.waitForIdle();
+unsubscribe();
+await session.dispose();
+```
+
+`AgentSession.waitForIdle()` 会排空核心流式输出、待发的 advisor card 事件、内部会话事件处理器以及延迟的恢复。它会重新检查结算期间新启动的流式输出与事件处理器。这样，成功的重试所产生的 `auto_retry_end` 在调用方取消订阅之前仍然可被观察到，且不改变重试策略或 `agent_end` 相对 `auto_retry_end` 的顺序。
+
+该屏障不会等待公共订阅者启动的任意异步工作。不要在其完成会被会话本身等待的回调中调用它，否则排空可能等待自己的调用方。该屏障自身没有超时，因此宿主仍需为停滞的工作提供外部截止时间。
 
 ## 控制项：设置与 RPC
 
@@ -174,7 +190,7 @@
 
 会话中的程序化开关：
 
-- `setAutoRetryEnabled(enabled)` 写入 `retry.enabled`
+- `setAutoRetryEnabled(enabled)` 应用会话级的 `retry.enabled` 覆盖；传入 `persist: true` 以写入全局设置
 - `autoRetryEnabled` 读取 `retry.enabled`
 - `isRetrying` 报告重试生命周期 Promise 是否处于活动状态
 
@@ -195,9 +211,11 @@ RPC 命令接口：
 会话级重试事件：
 
 - `auto_retry_start { attempt, maxAttempts, delayMs, errorMessage, errorId? }`
-- `auto_retry_end { success, attempt, finalError?, recoveredErrors? }`
+- `auto_retry_end { success, attempt, finalError?, retryErrors? }`
 - `retry_fallback_applied { from, to, role }`
 - `retry_fallback_succeeded { model, role }`
+
+成功时，`auto_retry_end` 还会附带增量的 `retryErrors`：对重试链遗留下的每一条已持久化错误条目，各对应一个 `RetryErrorUpdate`（`entryId`、`persistenceKey?`、`note`、`retryRecovery`），记录恢复是如何发生的（`recovery`：`plain`/`wait`/`credential`/`model`，外加人类可读的 `note`，例如 `rate-limited; switched account; retried`），以及是哪条成功消息取代了每个错误（`supersededBy`，含 timestamp/provider/model/responseId）。扩展与 RPC 消费者接收相同的字段。
 
 传播：
 
@@ -230,7 +248,7 @@ RPC 命令接口：
 ## 操作注意事项
 
 - 分类使用归一化的 `AIError` 标志/状态以及可识别提供商的文本回退；它不仅限于结构化错误，也不限于单独的正则匹配。
-- 重试在重新继续之前会从**运行时上下文**中剥离失败的助手错误，但会话历史仍保留该错误条目。
+- 重试在重新继续之前会从**运行时上下文**中剥离失败的助手错误，但会话历史仍保留该错误条目。当重试链最终成功时，链中留下的每条已持久化错误条目都会被打上 `retryRecovery` 标记（`status: "recovered"`，外加 kind/attempt/note 与取代它的消息；其错误已变得无关紧要的条目则改为携带 `status: "superseded"`）。被标记的条目会渲染为暗色的、非错误的一行备注，而不是红色失败（包括实时 UI，通过成功事件的 `retryErrors`），并且在重建 LLM 上下文时被排除——显示转录中它们仍然可见。
 - `RpcSessionState` 当前暴露 `autoCompactionEnabled`，但不暴露 `autoRetryEnabled` 字段；RPC 调用方必须自行跟踪其开关状态，或通过其他 API 查询设置。
 - 模型回退变更会追加临时的 `model_change` 条目，并可能在主模型冷却到期后根据 `retry.fallbackRevertPolicy` 恢复为主模型。
 - 当 `retry.modelFallback` 和 `retry.usageAwareFallback` 同时启用时，使用量感知的回退会在提供商请求之前运行。未知/未映射的使用量采用开放失败策略。在保留阈值处，`"confirm"` 会向交互式会话询问并在被拒绝时保留当前模型；没有确认 UI 的会话会自动应用一个已配置的可用回退。`"auto"` 会在不询问的情况下应用可用回退。`"fail-closed"` 会在保留或已耗尽的使用量上拒绝调用，而不是消耗它或选择回退。其他策略下的已耗尽使用量会应用可用回退而不进行保留确认。

@@ -68,10 +68,10 @@ Collab session started!
 `omp collab list`（以及 TUI 内的 `/collab list`）会枚举同一 omp 配置根目录下本机上所有活动中的 Collab 主机——跨终端、跨项目、跨 profile。列出仅涉及元数据；它从不打印或传输链接：
 
 ```
-omp collab list                          # 每个主机一行，不含链接
+omp collab list                          # one row per host, no links
 omp collab list --json                   # {"version": 1, "hosts": [...]}
-omp collab link <instanceId|pid>         # 打印该主机的完整控制浏览器 URL
-omp collab link <instanceId|pid> --view  # 打印其只读浏览器 URL
+omp collab link <instanceId|pid>         # print that host's full-control browser URL
+omp collab link <instanceId|pid> --view  # print its view-only browser URL
 omp collab link <instanceId> --json      # {"version": 1, "instanceId", "generation", "access", "url"}
 ```
 
@@ -88,16 +88,16 @@ omp collab link <instanceId> --json      # {"version": 1, "instanceId", "generat
 可被 `/join <link>` 和 `omp join "<link>"` 接受的形式：
 
 ```
-<roomId>.<key>                                                    → 默认中继 (wss://my.omp.sh)
-<roomId>#<key>                                                    → 旧版裸形式
-host[:port]/r/<roomId>.<key>                                     → 自定义中继，隐式 wss://
-host[:port]/r/<roomId>#<key>                                     → 旧版直接中继形式
-https://host[:port]/r/<roomId>.<key>                             → 直接中继 URL，归一化为 wss://
-wss://host[:port]/r/<roomId>.<key>                               → 直接 WebSocket 中继 URL
-ws://localhost:7475/r/<roomId>.<key>                             → 直接明文 ws，仅限 localhost
-https://host[:port]/#<link>                                      → Web UI 与中继同主机时的浏览器深链接
-https://web-host[:port][/<path>]/#<relay-link>                   → 浏览器 UI 包装，fragment 中携带中继链接
-https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → Web UI 与中继位于不同主机
+<roomId>.<key>                                                    → default relay (wss://my.omp.sh)
+<roomId>#<key>                                                    → legacy bare form
+host[:port]/r/<roomId>.<key>                                     → custom relay, wss:// inferred
+host[:port]/r/<roomId>#<key>                                     → legacy direct relay form
+https://host[:port]/r/<roomId>.<key>                             → direct relay URL, normalized to wss://
+wss://host[:port]/r/<roomId>.<key>                               → direct websocket relay URL
+ws://localhost:7475/r/<roomId>.<key>                             → direct plain ws, localhost only
+https://host[:port]/#<link>                                      → browser deep link when web UI and relay share a host
+https://web-host[:port][/<path>]/#<relay-link>                   → browser UI wrapper with relay link in the fragment
+https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → web UI and relay on different hosts
 ```
 
 `<link>` / `<relay-link>` 会递归地按上文任意一种可接受的链接解析。对于带可解析 fragment 的 `http(s)` 浏览器包装链接，fragment 优先于 HTTP host/path 被当作中继处理。这使得 `https://web.example/collab/#relay.example.com/r/<roomId>.<key>` 能在 `web.example` 打开 Web UI，同时加入 `wss://relay.example.com/r/<roomId>`。如果 fragment 不是完整的 collab 链接，解析会回退到旧版直接中继形式，因此 `https://relay.example.com/r/<roomId>#<key>` 仍表示中继 `relay.example.com`。

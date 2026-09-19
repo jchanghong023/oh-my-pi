@@ -99,6 +99,7 @@ omp.on("tool_call", async (event, ctx) => {
 - 如果处理器**抛出异常**，工具也会被阻止（默认拒绝）。
 - 最后一个非阻断返回值生效；首个 `block: true` 会短路。
 - 非阻断处理器可以返回 `input` 来替换传递给工具的原始参数。处理器看不到此前的 `input` 修订，且 `computer` 调用会忽略 `input` 替换。
+- 诸如 `browser.open(...)` 的 Eval 预置项调用、直接的 `BrowserTab` 辅助方法、`tab.run(...)`、直接的 `computer` 辅助方法，以及 `computer.run(fnOrCode, options)` 都不属于工具调用，不会发出这些钩子。
 
 ## 工具执行后覆盖合约
 

@@ -2,7 +2,7 @@
 
 一个最简的 `oh-my-pi` 扩展，演示两种最常见的编写模式：订阅 `session_start` 在加载时发出通知，以及注册一个 `/hello` 斜杠命令向会话中发送问候。它故意做得非常精简——你可以把它作为编写自己扩展的复制粘贴起点。
 
-## Install
+## 安装
 
 **选项 A — 放入用户扩展目录：**
 
@@ -28,11 +28,11 @@ extensions:
 omp --extension ./hello-extension
 ```
 
-## Usage
+## 用法
 
 加载完成后，在 omp 提示符中输入 `/hello` 或 `/hello Ada`。该命令会向会话中发送一条可见的问候自定义消息，并显示 "Message sent!" 通知。
 
-## What it demonstrates
+## 演示内容
 
 - 默认导出工厂接收 `ExtensionAPI`
 - `pi.on("session_start", ...)` —— 会话生命周期钩子

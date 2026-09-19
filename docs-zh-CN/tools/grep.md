@@ -2,7 +2,7 @@
 
 > 使用正则表达式在文件、目录、glob 和内部 URL 中进行 grep 搜索。
 
-## Source
+## 源码
 - 入口：`packages/coding-agent/src/tools/grep.ts`
 - 面向模型的提示词：`packages/coding-agent/src/prompts/tools/grep.md`
 - 主要协作者：
@@ -16,19 +16,19 @@
   - `crates/pi-natives/src/grep.rs` — 原生正则/文件搜索实现。
   - `docs/natives-text-search-pipeline.md` — 原生搜索流水线概览。
 
-## Inputs
+## 输入
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `pattern` | `string` | Yes | 正则表达式模式。`grep.ts` 会拒绝仅包含空白字符的输入，但会原样保留模式内容。原生匹配器优先尝试 Rust 正则引擎，然后回退到 PCRE2 以支持诸如前瞻/后顾（lookaround）和反向引用等特性，最后对格式错误的花括号/圆括号进行有针对性的字面量恢复。仅当模式包含字面量换行符或两字符序列 `\n` 时才启用多行模式。 |
-| `path` | `string` | No | 文件、目录、glob、归档成员、内部 URL、已获取的 URL，或单文件行选择器（例如 `src/foo.ts:50-100`）。使用 `;` 分隔多个根路径。省略或为空时默认为 `.`。已存在且包含分号的路径将保持原样；内部 URL 不能包含 glob 字符。 |
-| `case` | `boolean` | No | 大小写敏感搜索。默认为 `true`。传递给原生的 `ignoreCase`，或在虚拟资源上作为 JS `RegExp` 标志使用。 |
-| `gitignore` | `boolean` | No | 在目录扫描期间遵循 `.gitignore`。默认为 `true`。 |
-| `skip` | `number \| null` | No | 多文件结果的文件分页偏移量。默认为 `0`；有限值会向下取整，负数或非有限值会失败。单文件搜索忽略此参数。 |
+| `pattern` | `string` | 是 | 正则表达式模式。`grep.ts` 会拒绝仅包含空白字符的输入，但会原样保留模式内容。原生匹配器优先尝试 Rust 正则引擎，然后回退到 PCRE2 以支持诸如前瞻/后顾（lookaround）和反向引用等特性，最后对格式错误的花括号/圆括号进行有针对性的字面量恢复。仅当模式包含字面量换行符或两字符序列 `\\n` 时才启用多行模式。 |
+| `path` | `string` | 否 | 单个文件路径、目录路径、glob 形式路径、归档成员、可读的外部 URL、内部 URL，或单文件行选择器（例如 `src/foo.ts:50-100`）— 或以分号分隔的列表形式给出其中若干项（`"src; tests"`）。省略或为空时默认为 `.`。空条目会被拒绝。分号分隔的列表无条件拆分；意外用逗号或空白连接的条目仅在存在性验证之后才展开；已存在且包含分隔符的路径保持原样。内部 URL 不能包含 glob 字符。 |
+| `case` | `boolean` | 否 | 大小写敏感搜索。默认为 `true`。传递给原生的 `ignoreCase`，或在虚拟资源上作为 JS `RegExp` 标志使用。 |
+| `gitignore` | `boolean` | 否 | 在目录扫描期间遵循 `.gitignore`。默认为 `true`。 |
+| `skip` | `number` | 否 | 多文件结果的文件分页偏移量。默认为 `0`；`grep.ts` 会将有限数值向下取整，并拒绝负数或非有限值。单文件搜索会忽略它，因为它们不按文件分页。 |
 
 `grep` 默认启用（`grep.enabled = true`），属于可发现但非必需的工具。上下文默认值可通过 `grep.contextBefore` 和 `grep.contextAfter` 进行配置。
 
-## Outputs
+## 输出
 该工具在 `content[0].text` 中返回单个文本块，并附带结构化的 `details`。
 
 - 匹配行通过 `formatMatchLine()` 格式化为 `*LINE:content`（匹配行）和 ` LINE:content`（上下文行），在 hashline 模式下位于 `[PATH#TAG]` 头部下。
@@ -46,18 +46,21 @@
   - `missingPaths` — 因基础路径不存在而被跳过的多路径条目。
 - 无匹配结果的文本为 `No matches found`（当 `skip` 指向最后一页之后时为 `No more results (...)`），可选地后跟跳过的缺失路径、不可读归档或超大文件的说明。
 
-## Flow
+## 流程
 1. `GrepTool.execute()` 在 `packages/coding-agent/src/tools/grep.ts` 中验证和规范化输入：
    - 拒绝仅包含空白字符的模式，但原样保留模式内容；
-   - 将省略或为空的 `path` 默认为 `.`，并拆分以分号分隔的根路径，同时保留已包含分隔符的路径；
+   - 将省略或为空的 `path` 默认为 `["."]`（工作区根目录）；
    - 将 `skip` 规范化为非负整数；
+   - 通过 `expandDelimitedPathEntries()` 展开以分隔符压平的 `path` 条目：保留已包含分隔符的路径不动，无条件拆分分号分隔的列表，当至少一部分可解析时接受逗号拆分，仅当每一部分都可解析时才接受空白拆分；
    - 从每个根路径中剥离任何行范围选择器；
    - 从会话设置中读取 `grep.contextBefore` 和 `grep.contextAfter`（默认分别为 `1` 和 `3`）；
    - 仅当 `pattern` 包含 `\n` 或实际换行符时才启用多行模式。
 2. 在共享范围解析期间，每个 `path` 根再次通过 `normalizePathLikeInput()` 进行规范化；对于已通过分隔符展开完成规范化的条目，此操作为空操作。
 3. 诸如 `bundle.zip:src/foo.ts` 的归档成员路径在原生 grep 之前被物化为临时的 UTF-8 暂存文件。属于二进制或非 UTF-8 的归档成员将被报告为已跳过/不可读。
-4. 内部 URL 在文件系统范围解析之前解析：
+4. 内部 URL 与外部 URL 在文件系统范围解析之前解析（`resolveToolSearchScope()`）：
    - 内部 URL 拒绝 glob 元字符（`*`、`?`、`[`、`{`）；
+   - `ssh://` 路径会提前失败（`ssh://` 没有本地后备文件）；
+   - 可读的外部 URL（`http(s)://`、折叠写法 `http(s):/host`、以及在没有本地路径时的 `www.` 写法）会被抓取并物化为不可变的本地文件；`ftp`/`ws`/`wss` 与被拒的抓取会以显式错误失败；
    - 具有 `sourcePath` 的资源通过其后备文件进行搜索；
    - 没有 `sourcePath` 的资源使用 JavaScript `RegExp` 在内存中搜索；
    - `omp://` 通过 URL 完成展开为每个内嵌的文档文件；
@@ -71,7 +74,6 @@
 9. 它使用以下参数从 `@oh-my-pi/pi-natives` 调用原生 `grep()`：
    - `pattern`、`ignoreCase`、`multiline`、`gitignore`；
    - `hidden: true`；
-   - `cache: false`；
    - 从设置中读取的 `contextBefore` / `contextAfter`；
    - `maxColumns: DEFAULT_MAX_COLUMN`（`512`）；
    - `maxCount: INTERNAL_TOTAL_CAP`（`2000`）；
@@ -95,7 +97,7 @@
 14. 最终文本通过 `truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER })` 进行处理，因此有效上限来自 `streaming-output.ts` 的默认字节上限，而不是默认行上限。
 15. `toolResult()` 附加文本以及限制/截断元数据。
 
-## Modes / Variants
+## 模式 / 变体
 1. **单文件路径**
    - `grep()` 搜索单个文件。
    - 输出为匹配/上下文行的扁平列表。
@@ -117,7 +119,7 @@
    - 内部 URL 不支持 glob。
    - 不可变和虚拟源会抑制可编辑的 hashline anchor。
 
-## Side Effects
+## 副作用
 - 文件系统
   - 对已解析的搜索根和输入路径执行 stat。
   - 通过原生 `grep()` 读取匹配的文件。
@@ -130,7 +132,7 @@
   - 在 JS 层通过 `untilAborted(signal, ...)` 包装。
   - `grep.ts` 将 abort `signal` 和 `timeoutMs: SEARCH_GREP_TIMEOUT_MS`（`30_000`）传递给原生 `grep()`，因此原生扫描可取消且有超时限制。
 
-## Limits & Caps
+## 限制与上限
 - 文件分页限制：每页 `20` 个文件（`packages/coding-agent/src/tools/grep.ts` 中的 `DEFAULT_FILE_LIMIT`）。
 - 每文件匹配上限：多文件范围 `20`（`MULTI_FILE_PER_FILE_MATCHES`），单文件范围 `200`（`SINGLE_FILE_MATCHES`）。
 - 原生/JS 预选上限：`2000` 个匹配（`INTERNAL_TOTAL_CAP`）。
@@ -138,23 +140,25 @@
 - 最终文本截断：`truncateHead()` 默认字节上限为 `50 * 1024` 字节（`packages/coding-agent/src/session/streaming-output.ts` 中的 `DEFAULT_MAX_BYTES`）。`grep.ts` 将 `maxLines` 覆盖为 `Number.MAX_SAFE_INTEGER`，因此普通 grep 输出受字节限制，而非行数限制。
 - 上下文默认值：`packages/coding-agent/src/config/settings-schema.ts` 中 `grep.contextBefore = 1`，`grep.contextAfter = 3`。
 - 分页：`skip` 是多文件范围的文件分页偏移量。当还有更多文件时，结果文本会显示 `Use skip=<N> for the next page`。
-- 原生目录扫描缓存：在 `grep.rs` 中可用，但本工具始终设置 `cache: false`。
+- 原生目录扫描缓存：本工具在原生层面禁用 — `GrepOptions` 没有 `cache` 字段；`build_grep_walk_request` 在 `crates/pi-natives/src/grep.rs` 中硬编码了 `.cache(false)`。
 - 原生 grep 时钟预算：每次调用 `30_000ms`（`packages/coding-agent/src/tools/grep.ts` 中的 `SEARCH_GREP_TIMEOUT_MS`）；达到此限制会抛出 `Grep timed out after 30s; ...`。
 - 原生每文件大小上限：`4 * 1024 * 1024` 字节（`crates/pi-natives/src/grep.rs` 中的 `MAX_FILE_BYTES`，在 `grep.ts` 中镜像为 `NATIVE_GREP_MAX_FILE_BYTES`）。超大文件系统文件被跳过并以部分覆盖形式呈现（显式文件给出名称，目录扫描给出数量）。超大虚拟资源以行为边界分块进行搜索（行模式）；多行虚拟搜索回退到 JavaScript 正则。
 
-## Errors
+## 错误
 - 当修剪后的 `pattern` 为空时：`Pattern must not be empty`。
 - 对于负数或非有限的 `skip`：`Skip must be a non-negative number`。
-- 当规范化的根为空时：`` `path` must contain non-empty paths or globs ``。
+- 当规范化的 `path` 条目为空时：`Search scope entries must be non-empty paths or globs`。
 - 对于内部 URL + glob 元字符：`Glob patterns are not supported for internal URLs: ...`。
+- 对于 `ssh://` 输入：`Cannot search a remote ssh:// path (no local file): ...`，并附带提示：请用 `read` 读取远程路径，或对特定的远程文件执行 grep。
+- 对于不可抓取的外部 URL scheme（`ftp`/`ws`/`wss`）或抓取被拒的情况：`Cannot search external URL: ... Use \`read\` to fetch web content, then search the returned text.`
 - 行范围选择器错误包括 `Line-range selector requires a single file, not a glob: ...`、`Line-range selector requires a single file: ... is a directory` 以及 `Path not found for line-range selector: ...`。
 - 当所有归档选择器均不可读、属于二进制或非 UTF-8 时：`Cannot search archive member(s): ...`。
-- 当文件系统支持的已解析基础路径缺失，或每个多根文件系统条目都缺失时（当不可读的归档成员造成影响时附带归档提示）：`Path not found: ...; list each target in the semicolon-delimited \`path\``。
+- 当文件系统支持的已解析基础路径缺失时报 `Path not found: ...`（多路径调用会追加提示 `(\`path\` list entries must each exist relative to cwd)`）；当每个多路径文件系统条目都缺失时报 `Path not found: ...; list each target in the semicolon-delimited \`path\``（当不可读的归档成员造成影响时附带归档提示）。
 - 虚拟资源的 JavaScript 正则编译可能报告 `Invalid regex: ...`。文件系统支持的原生搜索通常从 Rust 正则回退到 PCRE2，最后回退到字面量模式，而不是拒绝正则语法。
 - 多文件原生扫描在 `grep.rs` 内部跳过每文件的打开/搜索失败；扫描会继续处理剩余文件。
 - 当原生 grep 达到 `SEARCH_GREP_TIMEOUT_MS` 时：``Grep timed out after 30s; narrow paths or pattern, or scope with `glob` first``。
 
-## Notes
+## 备注
 - 文件系统支持的搜索优先使用 Rust 正则，当模式需要前瞻或反向引用等特性时回退到 PCRE2。虚拟内存资源使用 JavaScript `RegExp`。
 - 原生 `build_matcher()` 会自动转义不能作为有效量词的花括号。诸如 `a{2,4}` 的有效量词保持为正则语法。
 - 如果 Rust 正则和 PCRE2 都拒绝组语法，原生编译会在转义未转义的圆括号之后重试，最后将原始模式按字面量处理。

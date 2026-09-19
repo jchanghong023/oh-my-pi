@@ -30,11 +30,12 @@ const { rulebookRules, alwaysApplyRules } = bucketRules(
   {
     builtinRules: ttsrSettings.builtinRules,
     disabledRules: ttsrSettings.disabledRules,
+    agentName: resolvedAgentName,
   },
 );
 ```
 
-`bucketRules(...)` 会丢弃 `ttsr.disabledRules` 中列出的名称，当 `ttsr.builtinRules === false` 时丢弃内嵌的 `builtin-defaults` 规则，注册被接受的 TTSR 规则，然后将其余规则路由到 always-apply/rulebook 两个桶中。
+`bucketRules(...)` 会丢弃 `ttsr.disabledRules` 中列出的名称，当 `ttsr.builtinRules === false` 时丢弃内嵌的 `builtin-defaults` 规则，丢弃 `agents` globs 与本会话代理不匹配的规则，注册被接受的 TTSR 规则，然后将其余规则路由到 always-apply/rulebook 两个桶中。
 
 ### 注册前去重行为
 
@@ -55,9 +56,9 @@ const { rulebookRules, alwaysApplyRules } = bucketRules(
 
 ### AST 条件（`astCondition`）
 
-AST 条件仅在工具参数流上求值，且仅限于那些暴露重建后的 `matcherDigest` 或逐文件 `matcherEntries` 的工具，并仅在候选路径提供了可用于语言推断的文件扩展名时执行。内建的 edit/write 工具提供了这些接口，但协调器会从当前激活的工具泛化地解析它们。
+AST 条件仅在工具参数流上求值，且仅限于那些暴露重建后的 `matcherDigest` 或逐文件 `matcherEntries` 的工具，并仅在候选路径提供了可用于语言推断的文件扩展名时执行。内建的 edit/write 工具提供了这些接口，但协调器会从当前激活的工具泛化地解析它们。它们匹配的对象是工具重建出的来源快照——可用时为逐文件的 `matcherEntries` 摘要，否则为合并的 `matcherDigest`——而非原始线路增量；没有可用文件路径的流（散文、思考、无路径的工具调用）会完全跳过 AST 条件。一条规则可以混合使用 `condition` 与 `astCondition`：正则路径在每个 scope 上继续生效，而 AST 路径仅应用于那些工具流。
 
-快照是承载源码的 payload，而非整个未来文件：除非调用重复出现，否则预存在的目标内容不可见。当前的编辑模式为 replace 形式暴露 `new_string`，为 JSON patch、hashline 和 apply-patch 形式暴露新增行，为 create 形式暴露完整内容；write 暴露其整个 `content`。多文件 hashline/apply-patch 调用会被拆分为独立的 `{ path, digest }` 条目，因此 AST 语言、路径 scope/globs、缓冲区和匹配都是按文件进行的。匹配通过原生 `astMatch` 以 Smart 严格性在内存中完成。
+快照是承载源码的 payload，而非整个未来文件：除非调用中重复携带了这些内容，否则预存在的目标内容不可见。当前的编辑模式为 replace 形式暴露 `new_string`，为 JSON patch、hashline 和 apply-patch 形式暴露新增行，为 create 形式暴露完整内容；write 暴露其整个 `content`。多文件 hashline/apply-patch 调用会被拆分为独立的 `{ path, digest }` 条目，因此 AST 语言、路径 scope/globs、缓冲区和匹配都是按文件进行的。匹配通过原生 `astMatch` 以 Smart 严格性在内存中完成。
 
 ### 设置开关
 
@@ -65,15 +66,15 @@ AST 条件仅在工具参数流上求值，且仅限于那些暴露重建后的 
 
 设置项缺省时的管理器默认值：
 
-| Setting         | Default                                          |
+| 设置            | 默认值                                           |
 | --------------- | ------------------------------------------------ |
 | `enabled`       | `true`                                           |
 | `contextMode`   | `"discard"`                                      |
 | `interruptMode` | `"always"`                                       |
 | `repeatMode`    | `"once"`                                         |
-| `repeatGap`     | `10` completed turns                             |
-| `builtinRules`  | `true` (consumed by `bucketRules`, not matching) |
-| `disabledRules` | `[]` (consumed by `bucketRules`, not matching)   |
+| `repeatGap`     | `10` 个已完成回合                                |
+| `builtinRules`  | `true`（由 `bucketRules` 消费，而非匹配）        |
+| `disabledRules` | `[]`（由 `bucketRules` 消费，而非匹配）          |
 
 ## 2. 流监听器生命周期
 
@@ -91,8 +92,11 @@ TTSR 检测由 `AgentSession.#handleAgentEvent` 委托给会话拥有的 `TtsrCo
 
 - 监听 `text_delta`、`thinking_delta` 和 `toolcall_delta`
 - 按来源或工具调用流键隔离缓冲区
-- 如果当前工具暴露了逐文件 `matcherEntries`，则将每个文件作用域的缓冲区替换为其 digest 并调用 `checkSnapshot`；否则，在可用时使用单个 `matcherDigest` 快照，回退时通过 `checkDelta` 追加原始 delta
-- 当 AST 规则存在时，对同一份重建的逐文件或单一快照运行 `checkAstSnapshot`；同一流键的连续相同快照会被跳过
+- 匹配上下文的文件路径优先采用工具的 `matcherPaths(args)` 钩子——编辑策略会暴露嵌入在线路负载中的路径（hashline 的 `[path#TAG]` 章节头、apply_patch 的 `*** Add/Update/Delete File:` 信封标记），并能容忍尚未完整流出的缓冲区——回退到通用的顶层 `path`/`paths` 参数扫描
+- 对于暴露 `matcherEntries(args)` 的工具，流式负载会按每个被触及的文件投影为 `{ path, digest }` 条目（仅新增行，同一路径的章节/块会合并）；每个条目在各自文件路径与流键（`<toolcall>#<path>`）下通过 `checkSnapshot(entry.digest, perFileContext)` 单独检查，因此像 `tool:edit(*.ts)` 这样的路径作用域规则绝不会在多文件负载中对属于同级 Markdown 块的文本触发
+- 否则，对于暴露合并 `matcherDigest` 的工具（edit/write），用重建出的来源快照替换作用域缓冲区并调用 `checkSnapshot(snapshot, matchContext)`；再否则，将 delta 追加到作用域管理器缓冲区并调用 `checkDelta(delta, matchContext)`（两种方式都做同步正则匹配）
+- 当没有任何已注册规则允许该来源（`canMatchText`/`canMatchThinking`）时，`checkDelta` 对 text/thinking 来源完全跳过缓冲，因此未被匹配的散文/思考 delta 不承担缓冲成本
+- 当存在 AST 规则时，对同一份重建的逐文件或单一快照运行 `checkAstSnapshot`（会 await）；同一流键的连续相同快照会被跳过
 
 `checkDelta()`/`checkSnapshot()` 遍历已注册规则，并返回所有通过 scope、全局路径 glob、正则条件和重复策略检查的匹配规则。`checkAstSnapshot()` 应用相同的 scope/路径/重复门控，根据候选文件路径推断语言，然后测试每个候选规则的 AST 模式。正则和 AST 匹配数组馈入相同的触发决策处理器。
 
@@ -133,7 +137,7 @@ TTSR 检测由 `AgentSession.#handleAgentEvent` 委托给会话拥有的 `TtsrCo
 ```xml
 <system-interrupt reason="rule_violation" rule="{{name}}" path="{{path}}">
 ...
-:{{content}}
+{{content}}
 </system-interrupt>
 ```
 
@@ -254,7 +258,8 @@ TTSR 检测由 `AgentSession.#handleAgentEvent` 委托给会话拥有的 `TtsrCo
 - 在管理器层的重复名称：第二次注册被忽略。
 - `ttsr.disabledRules`：列出的名称在 TTSR 注册之前被丢弃，且不会通过 always-apply/rulebook 桶暴露。
 - `ttsr.builtinRules: false`：内嵌的 `builtin-defaults` 规则在 TTSR 注册之前被丢弃；用户/项目规则仍会加载。
-- TTSR 规则上的 `globs` 要求至少有一个候选文件路径匹配其规范化路径或 basename。
+- TTSR 规则上的 `globs` 要求至少有一个候选文件路径匹配其规范化路径或 basename；对于 hashline/apply_patch 编辑流，这些路径来自工具的 `matcherPaths` 钩子，而不是顶层参数。
+- 未暴露 `matcherPaths`/`matcherEntries` 的工具仍保留通用的顶层路径扫描与合并的 `matcherDigest` 行为——逐文件钩子是增量式的。
 - 默认 scope 监听文本和工具，不监听思考。
 - `contextMode: "keep"`：部分违规输出可以在提醒重试之前保留在上下文中。
 - `interruptMode: "never"`：prose-source 匹配会在成功的助手消息之后排队一个延迟的隐藏注入；tool-source 匹配通过 `afterToolCall` 钩子将一个内联的 `<system-reminder>` 折叠到匹配的工具调用的 `toolResult` 内容中（无流中中止，无独立的后续回合）。

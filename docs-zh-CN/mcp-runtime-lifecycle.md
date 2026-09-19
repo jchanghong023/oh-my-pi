@@ -1,249 +1,249 @@
-# MCP runtime lifecycle
+# MCP 运行时生命周期
 
-本文档介绍在 coding-agent runtime 中 MCP 服务器是如何被发现、连接、暴露为工具、刷新以及拆解的。
+本文档介绍在 coding-agent 运行时中，MCP 服务器是如何被发现、连接、暴露为工具、刷新以及拆解的。
 
-## Lifecycle at a glance
+## 生命周期一览
 
-1. **SDK startup** 启动 MCP 发现（除非 MCP 被禁用）：headless/SDK 会话会 `await discoverAndLoadMCPTools()`；interactive 会话（`hasUI: true`）会立即创建 manager，并将 `discoverAndConnect()` 延迟到会话激活后再执行。
-2. **Discovery** （`loadAllMCPConfigs`）从 capability 源解析 MCP server configs，过滤掉被禁用/项目/Exa 的条目，并在启用内置 browser tool 时过滤掉 browser MCP servers，同时保留 source 元数据。
-3. **Manager connect phase** （`MCPManager.connectServers`）并行启动每个服务器的 connect + `tools/list`。
-4. **Fast startup gate** 最长等待 250ms，然后可能返回：
-   - 已完整加载的 `MCPTool`，
-   - 每个服务器的失败信息，
-   - 或针对仍处于 pending 状态的服务器的缓存 `DeferredMCPTool`。
-5. **SDK wiring** 将 MCP tools 合并到会话的 runtime tool registry 中。
-6. **Post-connect enrichment** 以 best-effort 方式加载 resources、resource templates、prompts 以及可选的 resource subscriptions。
-7. **Live session** 通过 manager 回调接收迟到的工具变更；`/mcp reload` 执行 `disconnectAll` + 重新发现 + `session.refreshMCPTools`，而 transport close 和 `/mcp reconnect` 则使用 per-server reconnect 路径。
-8. **Teardown** 在显式的 manager 断开时发生，并在所属的 `AgentSession` 被释放时自动发生；被借用的父级 manager 不会被子 agent 断开。
+1. **SDK 启动**会启动 MCP 发现（除非 MCP 被禁用）：无头/SDK 会话会等待 `discoverAndLoadMCPTools()`；交互式会话（`hasUI: true`）会预先创建管理器，并把 `discoverAndConnect()` 推迟到会话激活之后。
+2. **发现**（`loadAllMCPConfigs`）从能力源解析 MCP 服务器配置，过滤被禁用/项目/Exa 条目，并在启用内置浏览器 prelude 时过滤浏览器 MCP 服务器，同时保留来源元数据。
+3. **管理器连接阶段**（`MCPManager.connectServers`）并行启动每个服务器的连接 + `tools/list`。
+4. **快速启动闸门**最多等待 250ms，然后可能返回：
+   - 完全加载的 `MCPTool`，
+   - 每个服务器的失败，
+   - 或为仍在进行中的服务器提供缓存的 `DeferredMCPTool`。
+5. **SDK 接线**把 MCP 工具合并到该会话的运行时工具注册表。
+6. **连接后增强**以尽力而为的方式加载资源、资源模板、提示词以及可选的资源订阅。
+7. **活动会话**通过管理器回调接收迟到的工具变更；`/mcp reload` 执行 `disconnectAll` + 重新发现 + `session.refreshMCPTools`，而传输关闭和 `/mcp reconnect` 则走逐服务器重连路径。
+8. **拆解**发生在显式断开管理器时，并在所属 `AgentSession` 被释放时自动发生；被借用的父管理器不会被子代理断开。
 
-## Discovery and load phase
+## 发现与加载阶段
 
-### Entry path from SDK
+### 来自 SDK 的入口路径
 
-`createAgentSession()` 在 `src/sdk.ts` 中，当 `enableMCP` 为 true（默认）时执行 MCP 启动。共有两条路径：
+`createAgentSession()`（位于 `src/sdk.ts`）在 `enableMCP` 为 true（默认）时执行 MCP 启动。共有两条路径：
 
-- **Headless/SDK**（无 UI，未提供 manager）：`await discoverAndLoadMCPTools(cwd, { ... })`，并将返回的 tools 合并到启动时的 `customTools` 集合中。
-- **Interactive/TUI**（`hasUI: true`，未提供 manager）：立即构造 `MCPManager`（包含 cache + auth storage），将 `discoverAndConnect()` 延迟到会话创建后启动的后台任务中执行，然后通过 `session.refreshMCPTools(...)` 绑定 tools（如果会话在连接中途被拆解，则释放 manager）。
+- **无头/SDK**（无 UI、未提供管理器）：等待 `discoverAndLoadMCPTools(cwd, { ... })`，并把返回的工具合并到启动时的 `customTools` 集合中。
+- **交互式/TUI**（`hasUI: true`、未提供管理器）：立即构造 `MCPManager`（含缓存 + 认证存储），把 `discoverAndConnect()` 推迟到会话存在后启动的后台任务，然后通过 `session.refreshMCPTools(...)` 绑定工具（如果会话在连接中途被拆解，则释放该管理器）。
 
 两条路径都会：
 
-- 传入 `authStorage`、cache storage、`mcp.enableProjectConfig`，以及基于 `browser.enabled` 设置的 browser-MCP 过滤，
+- 传入 `authStorage`、缓存存储、`mcp.enableProjectConfig`，以及基于 `browser.enabled` prelude 设置的浏览器 MCP 过滤，
 - 始终设置 `filterExa: true`，
-- 记录每个服务器的 load/connect 错误，
-- 将 manager 存储到 `toolSession.mcpManager` 以及会话结果中。
+- 记录每个服务器的加载/连接错误，
+- 把管理器存入 `toolSession.mcpManager` 以及会话结果。
 
-如果 `enableMCP` 为 false，则完全跳过 MCP discovery。
+如果 `enableMCP` 为 false，则完全跳过 MCP 发现。
 
-### Config discovery and filtering
+### 配置发现与过滤
 
-`loadAllMCPConfigs()`（`src/mcp/config.ts`）通过 capability discovery 加载规范的 MCP server items，然后转换为遗留的 `MCPServerConfig`。
+`loadAllMCPConfigs()`（`src/mcp/config.ts`）通过能力发现加载规范的 MCP 服务器条目，然后转换为遗留的 `MCPServerConfig`。
 
 过滤行为：
 
 - `enableProjectConfig: false` 会移除项目级条目（`_source.level === "project"`）。
-- `enabled: false` 的条目会被抑制，除非当前 profile 的用户 `enabledServers` allowlist 显式启用了它们；用户 `disabledServers` denylist 始终会抑制同名条目。
-- 默认会过滤掉 Exa servers，并提取 API key 用于 native Exa tool 集成，除非 config 明确请求 native integration 未提供的 Exa tools（`web_fetch_exa`、`web_search_advanced_exa`）；当 `filterBrowser` 为 true 时，会过滤掉 browser automation MCP servers。
+- `enabled: false` 的条目会被抑制，除非当前激活 profile 的用户级 `enabledServers` 白名单列出了它们；用户级 `disabledServers` 黑名单始终会抑制同名条目。
+- 默认会过滤掉 Exa 服务器，并提取 API key 用于原生 Exa 工具集成，除非配置显式请求原生集成未提供的 Exa 工具（`web_fetch_exa`、`web_search_advanced_exa`）；当 `filterBrowser` 为 true 时，会过滤掉浏览器自动化 MCP 服务器。
 
 结果同时包含 `configs` 和 `sources`（后续用于 provider 标记的元数据）。
 
-### Discovery-level failure behavior
+### 发现层面的失败行为
 
 `discoverAndLoadMCPTools()` 区分两类失败：
 
-- **Discovery hard failure**（`manager.discoverAndConnect` 抛出异常，通常来自 config discovery）：返回一个空的 tool 集以及一个合成的错误 `{ path: ".mcp.json", error }`。
-- **Per-server runtime/connect failure**：manager 返回带有 `errors` 映射的部分成功结果；其他服务器继续。
+- **发现硬失败**（`manager.discoverAndConnect` 抛出异常，通常来自配置发现）：返回空的工具集以及一个合成的错误 `{ path: ".mcp.json", error }`。
+- **逐服务器的运行时/连接失败**：管理器返回带 `errors` 映射的部分成功；其他服务器继续。
 
-因此，即使个别 MCP server 失败，也不会让整个 agent session 启动失败。
+因此，即使个别 MCP 服务器失败，启动也不会让整个 agent 会话失败。
 
-## Manager state model
+## 管理器状态模型
 
-`MCPManager` 使用独立的注册表跟踪 runtime 生命周期：
+`MCPManager` 用相互独立的注册表跟踪运行时生命周期：
 
 - `#connections: Map<string, MCPServerConnection>` — 完全连接的服务器。
-- `#pendingConnections: Map<string, Promise<MCPServerConnection>>` — 握手进行中。
-- `#pendingToolLoads: Map<string, Promise<{ connection, serverTools }>>` — 已初始化但 `tools/list` 仍在进行的连接。
-- `#tools: CustomTool[]` — 暴露给调用方的当前 MCP tool 视图，按稳定的 name 顺序维护。
-- `#sources: Map<string, SourceMeta>` — 即使在 connect 完成前也保留 provider/source 元数据。
-- `#pendingReconnections: Map<string, Promise<MCPServerConnection | null>>` — 在 transport 断开或显式 reconnect 之后正在进行的重连。
-- `#serverConfigs: Map<string, MCPServerConfig>` — 保留的原始未解析 configs，以便 reconnect 时能重新解析凭据而不泄露已解析的 token。
-- `#reconnectHistory: Map<string, number[]>` 与 `#epoch` — 每个服务器的 crash-window 计数以及使超出全局 disconnect 生命周期的 reconnect 尝试失效的机制。
-- listener/callback 状态，包括一个有界 pending-notification FIFO 以及被跟踪的 resource subscriptions/refreshes。
+- `#pendingConnections: Map<string, Promise<MCPServerConnection>>` — 握手中。
+- `#pendingToolLoads: Map<string, Promise<{ connection, serverTools }>>` — 已初始化、其 `tools/list` 仍在进行中的连接。
+- `#tools: CustomTool[]` — 暴露给调用方的当前 MCP 工具视图，保持稳定的名称顺序。
+- `#sources: Map<string, SourceMeta>` — 即使连接完成之前也存在的 provider/来源元数据。
+- `#pendingReconnections: Map<string, Promise<MCPServerConnection | null>>` — 传输掉线或显式重连之后正在进行的重连。
+- `#serverConfigs: Map<string, MCPServerConfig>` — 保留的原始未解析配置，以便重连时能重新解析凭据而不泄露已解析的 token。
+- `#reconnectHistory: Map<string, number[]>` 加上 `#epoch` — 逐服务器的崩溃窗口统计，以及使存活时间超过全局断开的重连尝试失效的机制。
+- 监听器/回调状态，包括一个有界的待处理通知 FIFO 以及被跟踪的资源订阅/刷新。
 
 `getConnectionStatus(name)` 从这些映射派生状态：
 
 - 如果在 `#connections` 中则为 `connected`，
-- 如果存在 pending connect、pending tool load 或 pending reconnect 则为 `connecting`，
+- 如果存在进行中的连接、进行中的工具加载或进行中的重连则为 `connecting`，
 - 否则为 `disconnected`。
 
-## Connection establishment and startup timing
+## 连接建立与启动时序
 
-### Per-server connect pipeline
+### 逐服务器的连接流水线
 
-对于 `connectServers()` 中每个被发现的 server：
+对于 `connectServers()` 中的每个已发现服务器：
 
-1. 存储/更新 source 元数据，
-2. 如果已经 connected/pending/reconnecting 则跳过，
-3. 校验 transport 字段（`validateServerConfig`），
-4. 保存未解析的 config 以便可能的 reconnect，
-5. 解析托管的 OAuth 凭据以及 env/header 的 shell 替换（`#resolveAuthConfig`），
-6. 使用 manager 的 notification/request handler 调用 `connectToServer(name, resolvedConfig)`，
-7. 接入 HTTP OAuth refresh 以及 transport 的 `onClose` reconnect 处理，
+1. 存储/更新来源元数据，
+2. 如果已连接/正在进行/正在重连则跳过，
+3. 校验传输字段（`validateServerConfig`），
+4. 保存未解析的配置以便将来重连，
+5. 解析托管 OAuth 凭据以及 env/header 的 shell 替换（`#resolveAuthConfig`），
+6. 调用 `connectToServer(name, resolvedConfig)`，并传入管理器的通知/请求处理器，
+7. 接好 HTTP OAuth 刷新以及传输 `onClose` 的重连处理，
 8. 调用 `listTools(connection)`，
-9. 以 best-effort 方式缓存 tool 定义（`MCPToolCache.set`），
-10. 在 tools 加载完成后，以 best-effort 方式加载 resources、resource templates、prompts 以及 subscriptions。
+9. 以尽力而为的方式缓存工具定义（`MCPToolCache.set`），
+10. 在工具加载后以尽力而为的方式加载资源、资源模板、提示词和订阅。
 
 `connectToServer()` 行为（`src/mcp/client.ts`）：
 
-- 创建 stdio 或 HTTP/SSE transport，
-- 使用协议版本 `2025-11-25` 执行 MCP `initialize`，并声明 `roots` capability，
-- 应答 server-to-client 的 `ping` 和 `roots/list` 请求；不支持的 request method 返回 JSON-RPC `-32601`，
+- 创建 stdio 或 HTTP/SSE 传输，
+- 使用协议版本 `2025-11-25` 执行 MCP `initialize`，并声明 `roots` 能力，
+- 应答服务器到客户端的 `ping` 和 `roots/list` 请求；不支持的请求方法返回 JSON-RPC `-32601`，
 - 在任何后续会话流量之前发送 `notifications/initialized`，
-- 对于 Streamable HTTP，仅在 `notifications/initialized` 之后才启动后台 SSE listener，
-- timeout 优先级为 `OMP_MCP_TIMEOUT_MS`，然后是 `config.timeout`，最后是 30s；`0` 表示禁用客户端侧 timeout，
-- 在 init 失败时关闭 transport。
+- 对于 Streamable HTTP，仅在 `notifications/initialized` 之后才启动后台 SSE 监听器，
+- 超时优先级为 `OMP_MCP_TIMEOUT_MS`、`config.timeout`，然后是 30s；`0` 禁用客户端侧超时，
+- 初始化失败时关闭传输。
 
-### Fast startup gate + deferred fallback
+### 快速启动闸门 + 延迟回退
 
-`connectServers()` 等待以下两者的竞争结果：
+`connectServers()` 等待以下两者之间的竞速：
 
-- 所有 connect/tool-load 任务都已 settled，
-- 以及 `STARTUP_TIMEOUT_MS = 250`。
+- 所有连接/工具加载任务都已落定，以及
+- `STARTUP_TIMEOUT_MS = 250`。
 
 250ms 之后：
 
-- 已完成的任务变为活跃的 `MCPTool`，
-- 被拒绝的任务产生 per-server 错误，
-- 仍 pending 的任务：
-  - 如果存在缓存的 tool 定义（`MCPToolCache.get`），则使用它们创建 `DeferredMCPTool`，
-  - 否则在启动时不贡献任何 tools；它们保持在飞行中，并由后台 continuation 在 connect/list 完成后通过 `#onToolsChanged` 注册它们的 tools（慢速 server 不再阻塞启动 — issue #2100）。
+- 成功的任务成为活动的 `MCPTool`，
+- 被拒绝的任务产生逐服务器的错误，
+- 仍在进行中的任务：
+  - 如果有可用的缓存工具定义（`MCPToolCache.get`），则用它们创建 `DeferredMCPTool`，
+  - 否则在启动时不贡献任何工具；它们保持在途，后台续接在连接/列表完成后通过 `#onToolsChanged` 注册其工具（慢速服务器不再阻塞启动 — issue #2100）。
 
-这是一种混合启动模型：在有缓存时快速返回并附带 deferred handles；在没有缓存时则通过后台延迟注册。
+这是一种混合启动模型：有缓存时用延迟句柄快速返回，没有缓存时则在后台延迟注册。
 
-### Background completion behavior
+### 后台完成行为
 
-每个 pending 的 `toolsPromise` 还附带一个最终会执行以下操作的后台 continuation：
+每个进行中的 `toolsPromise` 还带有一个后台续接，它最终会：
 
-- 替换 manager 状态中该 server 的 tool 切片，并恢复稳定的 name 排序，
-- 调用 `#onToolsChanged`，以便 live session 可以重新绑定迟到的 tools，
+- 替换管理器状态中该服务器的工具切片，并恢复稳定的名称排序，
+- 调用 `#onToolsChanged`，让活动会话可以重新绑定迟到的工具，
 - 写入缓存，
-- 仅在 startup 之后记录迟到的失败（`allowBackgroundLogging`）。
+- 仅在启动之后记录迟到的失败（`allowBackgroundLogging`）。
 
-## Tool exposure and live-session availability
+## 工具暴露与活动会话可用性
 
-### Startup registration
+### 启动时的注册
 
-`discoverAndLoadMCPTools()` 将 manager 的 tools 转换为 `LoadedCustomTool[]`，并在已知时装饰路径（`mcp:<server> via <providerName>`）。
+`discoverAndLoadMCPTools()` 把管理器工具转换为 `LoadedCustomTool[]`，并装饰路径（在已知时为 `mcp:<server> via <providerName>`）。
 
-`createAgentSession()` 随后将这些 tools 推入 `customTools`，后者会被包装并以 `mcp__<server>_<tool>` 这样的名字加入 runtime tool registry。
+随后 `createAgentSession()` 把这些工具推入 `customTools`，后者被包装并以 `mcp__<server>_<tool>` 这样的名称加入运行时工具注册表。
 
-Server 和 tool 名称组件会统一小写并规范化为字母/下划线。如果两个不同的来源产生了相同的 runtime name，OMP 会记录冲突并根据原始 server/tool 标识保留一个确定性的胜出者，从而确保 reconnect 顺序不会改变归属。
+服务器和工具的名称组件会被转为小写，并规范化为字母/下划线。如果两个不同的来源产生了相同的运行时名称，OMP 会记录该冲突，并基于原始的服务器/工具身份保留一个确定性的胜出者，因此重连顺序不会改变归属。
 
-### Tool calls
+### 工具调用
 
-- `MCPTool` 通过一个已连接的 `MCPServerConnection` 调用 tool。
-- `DeferredMCPTool` 在调用前会等待 `waitForConnection(server)`；这允许缓存在连接就绪之前就已存在。
-- 两者都会针对可重试的 connection failure 尝试一次 reconnect + single retry。
-- 一个结构化的 tool-result auth challenge 可以触发已配置的 auth handler、reconnect 以及一次 retry。interactive 模式会将其接入 `/mcp` OAuth controller；没有 handler 时，challenge 将作为 MCP 错误保持不变。
+- `MCPTool` 通过已连接的 `MCPServerConnection` 调用工具。
+- `DeferredMCPTool` 在调用前等待 `waitForConnection(server)`；这允许缓存工具在连接就绪之前就存在。
+- 两者都会针对可重试的连接失败尝试一次重连 + 单次重试。
+- 结构化的工具结果认证挑战可以触发已配置的认证处理器、重连以及一次重试。交互式模式会把它接到 `/mcp` OAuth 控制器；没有处理器时，该挑战仍作为 MCP 错误。
 
-两者都返回结构化的 tool output，并将其余的 transport/tool 错误转换为 `MCP error: ...` tool content（abort 仍保持为 abort）。
+两者都返回结构化的工具输出，并把其余传输/工具错误转换为 `MCP error: ...` 工具内容（abort 仍是 abort）。
 
-## Refresh/reload paths (startup vs live reload)
+## 刷新/重载路径（启动时 vs 活动重载）
 
-### Initial startup path
+### 初始启动路径
 
-- 在 `sdk.ts` 中执行一次性的 discovery/load，
-- tools 在初始的会话 tool registry 中完成注册。
+- 在 `sdk.ts` 中进行一次性的发现/加载，
+- 工具在初始会话工具注册表中完成注册。
 
-### Interactive reload and live-change paths
+### 交互式重载与活动变更路径
 
-`/mcp reload`（`src/modes/controllers/mcp-command-controller.ts`）执行：
+`/mcp reload`（`src/modes/controllers/mcp-command-controller.ts`）会：
 
 1. `mcpManager.disconnectAll()`，
-2. 清理过期的 MCP prompt commands，
-3. 使用与启动时相同的 project/Exa/browser 过滤器调用 `mcpManager.discoverAndConnect()`，
+2. 清除陈旧的 MCP 提示词命令，
+3. 使用与启动时相同的项目/Exa/浏览器过滤器调用 `mcpManager.discoverAndConnect()`，
 4. 调用 `session.refreshMCPTools(mcpManager.getTools())`。
 
-`session.refreshMCPTools()`（`src/session/agent-session.ts`）移除所有 `mcp__` tools，重新包装最新的 MCP tools，并重新激活该 tool 集合，以便在不重启的情况下应用变更。所属的 SDK session 还会安装 `setOnToolsChanged`，因此迟到的初始连接、服务器 `tools/list_changed` 通知、reconnects 以及 disconnects 都能触发同样的重新绑定。显式的 `/mcp reconnect <name>` 会在 manager reconnect 完成后执行最后一次 refresh。
+`session.refreshMCPTools()`（`src/session/agent-session.ts`）会移除所有 `mcp__` 工具，重新包装最新的 MCP 工具，并重新激活该工具集，使变更无需重启即可生效。所属的 SDK 会话还会安装 `setOnToolsChanged`，因此迟到的初始连接、服务器 `tools/list_changed` 通知、重连和断开都能触发同样的重新绑定。显式的 `/mcp reconnect <name>` 会在管理器重连完成后执行最后一次刷新。
 
-## Server-initiated notifications
+## 服务器发起的通知
 
-MCP 服务器可以在 `initialize` 完成之后的任意时刻推送 JSON-RPC notification 帧。transport 通过 `onNotification` 暴露这些帧；manager 沿两条路径进行扇出：
+MCP 服务器可以在 `initialize` 完成后的任意时刻推送 JSON-RPC 通知帧。传输通过 `onNotification` 暴露它们；管理器分两条路径扇出：
 
-1. **Internal refresh** 针对已知 method：
+1. 针对已知方法的**内部刷新**：
    - `notifications/tools/list_changed` → `refreshServerTools`
    - `notifications/resources/list_changed` → `refreshServerResources`
    - `notifications/resources/updated` → `#onResourcesChanged`（仅针对当前已订阅的 URI）
    - `notifications/prompts/list_changed` → `refreshServerPrompts`
-2. **Listener fanout**：在完成任何 internal refresh 之后，每条通知（包括已知的和服务器自定义的）都会被分发。`MCPManager.addNotificationListener(listener)` 返回一个 unsubscribe 函数；多个 listener 之间具有独立的错误隔离。
+2. **监听器扇出**：每条通知（已知的和服务器自定义的都包括）都会在任何内部刷新之后投递。`MCPManager.addNotificationListener(listener)` 返回一个取消订阅函数；多个监听器之间具有独立的错误隔离。
 
-如果没有 listener 附加，manager 会缓冲最多 100 帧，溢出时丢弃最旧的帧，然后在该 FIFO 上第一个附加进来的 listener 上排空。`sdk.ts` 注册了一个 per-session listener，它桥接到 extension runner 的 `mcp_notification` 事件，事件内容为 `{ server, method, params }`；extension runner 自身也拥有一个有界的启动缓冲区。listener 和 debounce 计时器会在会话的 postmortem cleanup 中被释放。
+如果没有附加监听器，管理器会缓冲最多 100 帧，溢出时丢弃最旧的帧，然后在第一个附加的监听器上排空该 FIFO。`sdk.ts` 注册了一个逐会话监听器，它桥接到扩展运行器的 `mcp_notification` 事件，事件内容为 `{ server, method, params }`；扩展运行器自身也有一个有界的启动缓冲。监听器和防抖计时器会通过会话事后清理释放。
 
-## Health, reconnect, and partial failure behavior
+## 健康状态、重连与部分失败行为
 
-当前 runtime 行为由 connection 事件驱动：
+当前运行时行为由连接事件驱动：
 
-- manager/client 中**没有自主轮询的 health monitor**。
-- **自动 reconnect 被接入 `transport.onClose`**，用于托管连接。
-- Reconnect 使用回退重试（`500`、`1000`、`2000`、`4000` ms），重新加载 tools，并在成功时通知使用者。当 30s 内出现超过 5 次 reconnect 尝试时，crash-storm 熔断器会挂起该 server 的自动 reconnect；手动 `/mcp reconnect` 会重置该历史记录。
-- 遇到可重试 connection 错误的 tool call 也会尝试一次 reconnect + retry。
-- Reconnect 也可以通过 `/mcp reconnect <name>` 或范围更广的 `/mcp reload` 显式发起。
+- 管理器/客户端中**没有自主轮询的健康监视器**。
+- **自动重连接在 `transport.onClose` 上**，用于受管连接。
+- 重连以退避方式重试（`500`、`1000`、`2000`、`4000` ms），重新加载工具，并在成功时通知使用方。当 30s 内重连调用超过 5 次时，崩溃风暴熔断器会暂停该服务器的自动重连；手动 `/mcp reconnect` 会重置该历史。
+- 遇到可重试连接错误的工具调用也会尝试一次重连 + 重试。
+- 重连也可以通过 `/mcp reconnect <name>` 或范围更大的 `/mcp reload` 显式发起。
 
-运行时行为：
+在运维层面：
 
-- 单个 server 失败不会移除健康 server 的 tools，
-- connect/list 失败在每个 server 上是隔离的，
-- 在尝试 reconnect 期间，过时的 tools 可能会保持可见；调用在恢复失败时返回 MCP 错误，
-- tool cache、resource/prompt 加载、subscriptions 以及后台更新都是 best-effort（会记录 warning/error，不会硬性中断）。
+- 一个服务器失败不会移除健康服务器的工具，
+- 连接/列表失败按服务器隔离，
+- 重连期间陈旧工具可能仍然可见；如果恢复失败，调用会报告 MCP 错误，
+- 工具缓存、资源/提示词加载、订阅和后台更新都是尽力而为（记录警告/错误，不做硬性停止）。
 
-## Teardown semantics
+## 拆解语义
 
-### Server-level teardown
+### 服务器级拆解
 
 `disconnectServer(name)`：
 
-- 移除 pending connect/tool-load/reconnect 条目、source 元数据、保存的 config、reconnect history 以及 resource refresh/subscription 状态，
-- 分离 `onClose`，使显式关闭不会触发 reconnect，
-- 如果已连接则关闭 transport，
-- 按其精确的 `mcpServerName` 所有者（而不是规范化的 name 前缀）移除 tools，并通知 tool 使用者，
-- 当需要移除过时的 prompt commands 时，通知 prompt 使用者。
+- 移除进行中的连接/工具加载/重连条目、来源元数据、已保存的配置、重连历史以及资源刷新/订阅状态，
+- 分离 `onClose`，使显式关闭不会触发重连，
+- 若已连接则关闭传输，
+- 按工具的精确 `mcpServerName` 归属移除工具（而不是按规范化后的名称前缀），并通知工具使用方，
+- 在陈旧提示词命令需要移除时通知提示词使用方。
 
-### Global teardown and ownership
+### 全局拆解与所有权
 
 `disconnectAll()`：
 
-- 增加生命周期 epoch，使得晚于全局 disconnect 完成的 reconnect 尝试无法复活旧连接，
-- 分离所有活跃 transport 的 `onClose`，然后使用 `Promise.allSettled` 关闭它们，
-- 清空 pending maps、sources、保存的 configs、connections、subscriptions、resource refreshes、reconnect history 以及 manager tools。
+- 递增生命周期 epoch，使稍后完成的重连尝试无法复活旧连接，
+- 为所有活动传输分离 `onClose`，然后用 `Promise.allSettled` 关闭它们，
+- 清空进行中的映射、来源、已保存的配置、连接、订阅、资源刷新、重连历史以及管理器工具。
 
-顶层会话拥有它们创建的 manager。`AgentSession.dispose()` 会在 3 秒 cleanup 超时内 disconnect 所属的 manager，并记录 cleanup 失败；通过 `options.mcpManager` 被传入的子 agent/session 借用父级 manager，并且不会 disconnect 它。`/mcp reload` 在 `disconnectAll` 之后刻意复用 manager 对象，以便已安装的 callbacks/listeners 在下一次 discovery 周期中仍可用。
+顶层会话拥有自己创建的管理器。`AgentSession.dispose()` 会断开该所属管理器，清理超时为 3 秒，并记录清理失败；通过 `options.mcpManager` 获得管理器的子代理/会话借用父管理器，不会断开它。`/mcp reload` 在 `disconnectAll` 之后有意复用管理器对象，因此已安装的回调/监听器在下一个发现周期仍然可用。
 
-## Failure modes and guarantees
+## 失败模式与保证
 
-| Scenario                                             | Behavior                                                                                                                  | Hard fail vs best-effort       |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| Discovery throws (capability/config load path)       | Loader returns empty tools + synthetic `.mcp.json` error                                                                  | Best-effort session startup    |
-| Invalid server config                                | Server skipped with validation error entry                                                                                | Best-effort per server         |
-| Connect timeout/init failure                         | Server error recorded; others continue                                                                                    | Best-effort per server         |
-| `tools/list` still pending at startup with cache hit | Deferred tools returned immediately                                                                                       | Best-effort fast startup       |
-| `tools/list` still pending at startup without cache  | No tools at startup; background continuation registers them via `#onToolsChanged` when ready                              | Best-effort late registration  |
-| Late background tool-load failure                    | Logged after startup gate                                                                                                 | Best-effort logging            |
-| Runtime dropped transport                            | Manager attempts reconnect; stale tools remain while reconnecting and future calls may retry once or fail with MCP errors | Best-effort automatic recovery |
-| More than 5 reconnect invocations within 30s         | Circuit breaker closes/removes the stale connection but leaves tools registered; manual reconnect resets the history      | Automatic reconnect suspended  |
-| Owning session disposal                              | Owned manager disconnect is awaited for up to 3s; failure is logged                                                       | Bounded best-effort cleanup    |
+| 场景 | 行为 | 硬失败 vs 尽力而为 |
+| ---- | ---- | ---- |
+| 发现抛出异常（能力/配置加载路径） | 加载器返回空工具 + 合成的 `.mcp.json` 错误 | 会话启动尽力而为 |
+| 无效的服务器配置 | 跳过该服务器并记录校验错误条目 | 每个服务器尽力而为 |
+| 连接超时/初始化失败 | 记录服务器错误；其他服务器继续 | 每个服务器尽力而为 |
+| 启动时 `tools/list` 仍进行中且缓存命中 | 立即返回延迟工具 | 快速启动尽力而为 |
+| 启动时 `tools/list` 仍进行中且无缓存 | 启动时没有工具；后台续接在就绪后通过 `#onToolsChanged` 注册它们 | 延迟注册尽力而为 |
+| 后台工具加载迟到失败 | 在启动闸门之后记录 | 日志尽力而为 |
+| 运行时传输掉线 | 管理器尝试重连；重连期间陈旧工具保留，后续调用可能重试一次或以 MCP 错误失败 | 自动恢复尽力而为 |
+| 30s 内重连调用超过 5 次 | 熔断器关闭/移除陈旧连接，但保留已注册的工具；手动重连会重置该历史 | 自动重连暂停 |
+| 所属会话被释放 | 等待所属管理器断开最多 3s；失败会被记录 | 有界尽力而为清理 |
 
-## Public API surface
+## 公开 API 面
 
-`src/mcp/index.ts` 重新导出了 client operations、config loader/writer APIs、loader 和 manager APIs、OAuth discovery、tool bridges/cache、HTTP 和 stdio transports、protocol types，以及 `callMCP`/`parseSSE`。`src/sdk.ts` 将 `discoverMCPServers()` 暴露为 `discoverAndLoadMCPTools` 的便捷包装器；它返回 `{ manager, tools, errors, connectedServers, exaApiKeys }`。
+`src/mcp/index.ts` 重新导出客户端操作、配置加载器/写入器 API、加载器与管理器 API、OAuth 发现、工具桥接/缓存、HTTP 与 stdio 传输、协议类型，以及轻量级 HTTP 辅助函数 `callMCP`、`readMcpJsonRpcResponse` 和 `redactUrlForLog`。`src/sdk.ts` 将 `discoverMCPServers()` 暴露为 `discoverAndLoadMCPTools` 之上的便捷包装；它返回 `{ manager, tools, errors, connectedServers, exaApiKeys }`。
 
-## Implementation files
+## 实现文件
 
-- [`src/mcp/loader.ts`](../packages/coding-agent/src/mcp/loader.ts) — loader facade、discovery error 规范化、`LoadedCustomTool` 转换。
-- [`src/mcp/manager.ts`](../packages/coding-agent/src/mcp/manager.ts) — 生命周期状态注册表、并行 connect/list 流程、refresh/disconnect。
-- [`src/mcp/client.ts`](../packages/coding-agent/src/mcp/client.ts) — transport 建立、initialize 握手、list/call/disconnect。
-- [`src/mcp/index.ts`](../packages/coding-agent/src/mcp/index.ts) — MCP module API exports。
-- [`src/sdk.ts`](../packages/coding-agent/src/sdk.ts) — 启动到 session/tool registry 的接线。
-- [`src/mcp/config.ts`](../packages/coding-agent/src/mcp/config.ts) — manager 使用的 config discovery/filtering/validation。
-- [`src/mcp/tool-bridge.ts`](../packages/coding-agent/src/mcp/tool-bridge.ts) — `MCPTool` 和 `DeferredMCPTool` 的运行时行为。
+- [`src/mcp/loader.ts`](../packages/coding-agent/src/mcp/loader.ts) — 加载器门面、发现错误规范化、`LoadedCustomTool` 转换。
+- [`src/mcp/manager.ts`](../packages/coding-agent/src/mcp/manager.ts) — 生命周期状态注册表、并行连接/列表流程、刷新/断开。
+- [`src/mcp/client.ts`](../packages/coding-agent/src/mcp/client.ts) — 传输建立、初始化握手、列表/调用/断开。
+- [`src/mcp/index.ts`](../packages/coding-agent/src/mcp/index.ts) — MCP 模块 API 导出。
+- [`src/sdk.ts`](../packages/coding-agent/src/sdk.ts) — 启动到会话/工具注册表的接线。
+- [`src/mcp/config.ts`](../packages/coding-agent/src/mcp/config.ts) — 管理器使用的配置发现/过滤/校验。
+- [`src/mcp/tool-bridge.ts`](../packages/coding-agent/src/mcp/tool-bridge.ts) — `MCPTool` 与 `DeferredMCPTool` 的运行时行为。
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts) — `refreshMCPTools` 实时重新绑定。
-- [`src/modes/controllers/mcp-command-controller.ts`](../packages/coding-agent/src/modes/controllers/mcp-command-controller.ts) — interactive reload/reconnect 流程。
-- [`src/task/executor.ts`](../packages/coding-agent/src/task/executor.ts) — 通过父 manager 连接的子 agent MCP 代理。
+- [`src/modes/controllers/mcp-command-controller.ts`](../packages/coding-agent/src/modes/controllers/mcp-command-controller.ts) — 交互式重载/重连流程。
+- [`src/task/executor.ts`](../packages/coding-agent/src/task/executor.ts) — 通过父管理器连接的子代理 MCP 代理。

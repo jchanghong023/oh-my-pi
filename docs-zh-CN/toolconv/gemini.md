@@ -4,7 +4,7 @@ Google 托管的 **Gemini** 模型（当前代，包括 `gemini-3.5-flash` / `*-
 
 验证来源：官方 Gemma 3 function-calling 指南（`ai.google.dev/gemma/docs/capabilities/function-calling`——两个推荐 prompt，一个 Pythonic，一个 JSON）、Simon Willison 对这两个 prompt 的转录、Philipp Schmid 的 Gemma 3 演练（`philschmid.de/gemma-function-calling`），以及从 `MALFORMED_FUNCTION_CALL` 报告中逆向工程得到的托管 Gemini 形式：`google/adk-go#492`（`Malformed function call: print(default_api.`）、`google-gemini/cookbook#929`（`executableCode` 部分 = `print(default_api.get_complaint_number_tool(consumer_number_or_mobile_number='2001234567'))`）、`firebase/genkit#2628`（```` ```tool_code ```` 的 markdown 包装），以及 Google AI 开发者论坛的帖子 "Gemini 2 flash returns raw markdown ……
 
-## "Special" tokens
+## “特殊” token
 
 **None.** 这里没有 token 化器特殊 token 表中的控制 token——以下每个标记在 BPE 中都会拆分为普通文本，并能通过 `skip_special_tokens=True` 解码后保留。这是该约定的决定性特征，也是它同时 (a) 能够在托管 Gemini 和开源 Gemma 上不依赖 token 化器工作，以及 (b) 会发生泄漏的原因。功能性标记有：
 
@@ -28,7 +28,7 @@ Pythonic 负载独立于外壳，而外壳因部署方式而异：
 
 本文档规定**负载**（两个围栏代码块 + Python 调用形式）；外层的轮次标记属于承载它的任何模板。
 
-## Tool definitions
+## 工具定义
 
 工具在 prompt 中以 JSON-Schema 目录的形式进行声明。Gemma 3 官方指南提供了**两套**可互换的系统 prompt 模板，区别仅在于告诉模型如何作答：
 
@@ -41,7 +41,7 @@ Pythonic 负载独立于外壳，而外壳因部署方式而异：
 
 托管 Gemini 将同样的思路包装在 markdown 围栏和 `default_api` 命名空间中。函数签名本身以 OpenAI 风格的工具 JSON 传递（`{"type":"function","function":{name,description,parameters}}`）。OMP 的渲染器输出 `default_api.NAME(...)`，不带 `print`；其扫描器也接受下面列出的包装和裸的变体。
 
-## Tool-call format
+## 工具调用格式
 
 一次调用是一个 Python 调用表达式。托管 Gemini 通常输出 `default_api` 方法的 `print()`：
 
@@ -71,7 +71,7 @@ print(default_api.get_current_temperature(location="London", unit="celsius"))
 
 字符串使用 Python 转义（`\n`, `\t`, `\\`, `\'`, `\"`）；托管 Gemini 输出单引号（`location='London'`），Gemma 示例使用双引号——两者都合法。参数使用关键字形式（`name=value`）；不使用位置参数，因为运行时映射到带名称的 schema。
 
-## Multiple / parallel tool calls
+## 多次 / 并行工具调用
 
 在单个 `tool_code` 块内有两种编码形式：
 
@@ -91,7 +91,7 @@ print(default_api.get_current_temperature(location="London", unit="celsius"))
 
 OMP 扫描器按源代码顺序从任一形式中提取顶层调用表达式。它为每个解析出的调用生成一个 tool-call id；该文本约定本身没有 id。
 
-## Tool-result format
+## 工具结果格式
 
 已执行的结果通过 ```` ```tool_outputs ```` 块返回给模型。OMP 按调用顺序为每个结果渲染一个完整块；它不单独编码 `isError`。Gemma 3 文档也展示了赋值风格的值（`result = 92.3`），而透明输出可以作为文本/JSON 返回：
 
@@ -103,7 +103,7 @@ OMP 扫描器按源代码顺序从任一形式中提取顶层调用表达式。�
 
 模型随后以自然语言答案或另一个 `tool_code` 块继续。
 
-## End-to-end example
+## 端到端示例
 
 ````text
 <user>
@@ -129,7 +129,7 @@ It's currently 11.4°C in London.
 - 当从 OpenAI 兼容的 shim 中解析出来时，每个恢复出的调用变为 `tool_calls[i] = {id (server-minted), type:"function", function:{name, arguments:<JSON string>}}` — Python 关键字参数在该边界被重新序列化为 JSON 字符串。
 - 将结果作为部署的工具/`functionResponse` 轮次（托管）或下一 user 轮次中的 `tool_outputs` 块（prompt 驱动）回传。
 
-## Parsing notes & gotchas
+## 解析注意事项与陷阱
 
 - **Python, not JSON.** `True`/`False`/`None`（而非 `true`/`false`/`null`）、单引号字符串和尾部逗号都是合法的。JSON 解析器会拒绝合法的调用；应解码 Python 字面量。
 - **Strip the wrapper.** 在读取调用名之前，归一化移除 `print(...)`、`default_api.`（或任何 `module.`）前缀，以及 `LHS =` 赋值。`print` 永远不是工具名。
@@ -141,7 +141,7 @@ It's currently 11.4°C in London.
 - **Variant divergence.** Gemma **4** 放弃了这种 Pythonic 形式，转而使用由 token 分隔的大括号语法（`<|tool_call>call:NAME{…}<tool_call|>`）——这是另一种约定，记录在 `gemma.md` 中。本规范涵盖托管 Gemini 和 Gemma 3。
 - **Gemma 3 automatic-selection caveat.** OMP 当前的家族亲和映射将每个已识别的 Gemma 版本——包括 Gemma 3——都映射到 `gemma` 方言。因此，当 Gemma 3 模型被标记为 `supportsTools: false` 并从原生工具回退时，`tools.format=auto` 会选择不兼容的 Gemma 4 语法。对于本文档所述的 Pythonic Gemma 3 约定，请显式设置 `tools.format=gemini`。
 
-## Sources
+## 来源
 
 - Gemma 3 function calling (two recommended prompts): https://ai.google.dev/gemma/docs/capabilities/function-calling
 - Simon Willison, "Function calling with Gemma": https://simonwillison.net/2025/Mar/26/function-calling-with-gemma/

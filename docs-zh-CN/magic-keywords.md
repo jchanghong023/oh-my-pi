@@ -47,7 +47,6 @@ omp config set magicKeywords.enabled false
 omp config set magicKeywords.ultrathink false
 omp config set magicKeywords.orchestrate false
 omp config set magicKeywords.workflow false
-omp config set magicKeywords.fullsend false
 ```
 
 全局开关和四个按关键词开关的默认值均为 `true`。全局开关控制所有隐藏通知；按关键词开关仅控制该通知（以及 ultrathink 的最高自动思考覆盖）。这些设置目前不会禁用编辑器/消息的渐变。运行 `omp config list` 以检查每个设置及其当前值。有关配置作用域、优先级和项目本地覆盖，请参阅 [Settings](./settings.md)。

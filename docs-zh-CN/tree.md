@@ -17,7 +17,7 @@
 - `src/slash-commands/builtin-registry.ts`（`/tree`、`/branch` 命令路由）
 - `src/modes/controllers/input-controller.ts`（按键绑定，连按两次 Esc 的行为）
 - `src/modes/controllers/selector-controller.ts`（树界面启动 + 摘要提示流程）
-- `src/modes/components/tree-selector.ts`（导航、过滤、搜索、标签、渲染）
+- `packages/tui/src/overlays/tree-selector.ts`（导航、过滤、搜索、标签、渲染）
 - `src/session/agent-session.ts`（`navigateTree` 叶子切换 + 可选摘要）
 - `src/session/session-manager.ts`（`getTree`、`branch`、`branchWithSummary`、`resetLeaf`、标签持久化）
 
@@ -27,8 +27,8 @@
 
 - `/tree`
 - `app.session.tree` 动作的已配置按键绑定
-- 编辑器为空时连按两次 Esc，且 `doubleEscapeAction = "tree"`（默认）
-- 当 `doubleEscapeAction = "tree"` 时使用 `/branch`（会路由到树选择器，而不是仅 user 的分支选择器）
+
+编辑器为空时连按两次 Esc 会改为打开全屏 transcript 回退选择器（见 `doubleEscapeAction`）：它会重放 transcript、勾勒出回退将落到的块，并对 user 提示通过 `branch()`、对其他内容通过 `navigateTree()` 执行回退。
 
 ## 树界面模型
 
@@ -41,7 +41,7 @@
 - 缺失父节点、自父条目以及显式 null 父节点都会成为根节点；多个根节点共享一个虚拟分支根
 
 ```text
-树视图示例（活跃路径用 • 标记）：
+Example tree view (active path marked with •):
 
 ├─ user: "Start task"
 │  └─ assistant: "Plan"
@@ -158,7 +158,7 @@
 - 当前叶子的 `ask` 结果仍允许重新回答流程
 
 ```text
-选择决策（简化版）：
+Selection decision (simplified):
 
 selected node
    │
@@ -213,12 +213,12 @@ selected node
 
 ## `/tree` 与相邻操作的对比
 
-| Operation | Scope                                            | Result                                                                                                                                                   |
+| 操作      | 作用范围                                         | 结果                                                                                                                                                   |
 | --------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/tree`   | Current session file                             | Moves leaf to selected point (same file)                                                                                                                 |
-| `/branch` | Usually current session file -> new session file | By default branches from selected **user** message into a new session file; if `doubleEscapeAction = "tree"`, `/branch` opens tree navigation UI instead |
-| `/fork`   | Whole current session                            | Duplicates session into a new persisted session file                                                                                                     |
-| `/resume` | Session list                                     | Switches to another session file                                                                                                                         |
+| `/tree`   | 当前会话文件                                     | 将叶子移动到所选位置（同一文件内）                                                                                                                 |
+| `/branch` | 通常是当前会话文件 -> 新会话文件                 | 打开 transcript 回退选择器；目标为 **user** 消息时分支到新的会话文件，其他目标则原地重新定位叶子 |
+| `/fork`   | 整个当前会话                            | 将会话复制为新的持久化会话文件                                                                                                     |
+| `/resume` | 会话列表                                     | 切换到另一个会话文件                                                                                                                         |
 
 关键区别：`/tree` 是单个会话文件内的导航/重新定位工具。`/branch`、`/fork` 和 `/resume` 都会改变会话文件上下文。
 

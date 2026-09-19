@@ -2,115 +2,115 @@
 
 > 通过 glob 查找文件系统路径；当需要按内容匹配而非按路径匹配时，请使用 `grep`。
 
-## Source
-- Entry: `packages/coding-agent/src/tools/glob.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/glob.md`
-- Key collaborators:
-  - `packages/coding-agent/src/tools/path-utils.ts` — normalize inputs; split base path vs glob.
-  - `packages/coding-agent/src/tools/list-limit.ts` — apply result-count caps.
-  - `packages/coding-agent/src/session/streaming-output.ts` — truncate text output at byte cap.
-  - `packages/coding-agent/src/tools/tool-result.ts` — build `content` and `details.meta`.
-  - `packages/coding-agent/src/tools/output-meta.ts` — encode limit / truncation metadata.
-  - `packages/coding-agent/src/tools/tool-errors.ts` — map user-facing tool errors.
-  - `packages/coding-agent/src/tools/index.ts` — register the built-in local implementation.
+## 源码
+- 入口：`packages/coding-agent/src/tools/glob.ts`
+- 面向模型的提示词：`packages/coding-agent/src/prompts/tools/glob.md`
+- 关键协作者：
+  - `packages/coding-agent/src/tools/path-utils.ts` — 规范化输入；拆分基础路径与 glob。
+  - `packages/coding-agent/src/tools/list-limit.ts` — 应用结果数量上限。
+  - `packages/coding-agent/src/session/streaming-output.ts` — 在字节上限处截断文本输出。
+  - `packages/coding-agent/src/tools/tool-result.ts` — 构建 `content` 与 `details.meta`。
+  - `packages/coding-agent/src/tools/output-meta.ts` — 编码 limit / 截断元数据。
+  - `packages/coding-agent/src/tools/tool-errors.ts` — 映射面向用户的工具错误。
+  - `packages/coding-agent/src/tools/index.ts` — 注册内置本地实现。
 
-## Inputs
+## 输入
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `path` | `string` | No | Glob、文件、目录或由路径支持的内部 URL。使用 `;` 分隔多个目标；省略或为空时默认为 `.`。包含分隔符的已存在路径在存在时保持字面值。每个目标都成为各自的遍历根，多目标扫描会并发运行。`memory://` 单独支持内部 URL 的 glob 模式；`ssh://` 被拒绝，因为它没有本地支持的路径。 |
-| `hidden` | `boolean` | No | 包含隐藏文件。默认为 `true`。 |
-| `gitignore` | `boolean` | No | 在本地原生 glob 时遵循 `.gitignore`。默认为 `true`；设为 `false` 以包含被 gitignore 排除的文件。 |
-| `limit` | `number` | No | 返回路径的最大数量。默认为 `200`；有限正整数输入会向下取整后被限制在 `1..200` 范围内。 |
+| `path` | `string` | 否 | Glob、文件、目录或由路径支持的内部 URL——也可以是其中若干项组成的分号分隔列表（`"src/**/*.ts; test/**/*.ts"`）；省略或为空时默认为 `.`。空条目会被拒绝。分号分隔的列表无条件拆分；被逗号或空白意外连接的条目仅在通过存在性校验后才展开；包含分隔符的既有路径保持字面值。每个目标都成为各自的遍历根，多目标扫描会并发运行。仅 `memory://` 支持内部 URL 的 glob 模式；`ssh://` 会被拒绝，因为它没有本地后备路径。 |
+| `hidden` | `boolean` | 否 | 包含隐藏文件。默认为 `true`。 |
+| `gitignore` | `boolean` | 否 | 在本地原生 glob 期间遵循 `.gitignore`。默认为 `true`；设为 `false` 可包含被 gitignore 排除的文件。 |
+| `limit` | `number` | 否 | 返回路径的最大数量。默认为 `200`；有限的正数输入会先向下取整，然后被限制到 `1..200`。 |
 
 `glob` 默认启用（`glob.enabled = true`），是必备工具。
 
-## Outputs
-工具返回一个文本块以及结构化的 `details`。
+## 输出
+该工具返回单个文本块以及结构化的 `details`。
 
-- Success text: matching paths grouped as a multi-level, prefix-folded directory tree (`formatGroupedPaths()`): one `#` per nesting level, single-child directory chains fold into one header (`# a/b/c/`), and files are listed bare under the deepest owning header; root-level matches are listed without a header. Directory matches carry a trailing `/`. Exact file inputs return that file path as one line.
-- Empty result text: `No files found matching pattern`, optionally followed by a timeout or missing-path notice.
-- Multi-path partial miss: appends `Skipped missing paths: ...` after the result block, or after the empty-result line.
-- `details` may include:
-  - `scopePath`: display form of the searched root or merged roots.
-  - `fileCount`: number of paths returned after result limiting.
-  - `files`: returned paths as an array.
-  - `truncated`: whether result count or byte truncation occurred.
-  - `resultLimitReached`: reached result limit.
-  - `missingPaths`: skipped missing inputs in multi-path calls.
-  - `truncation` / `meta.limits`: structured truncation and limit metadata for renderers.
-- Streaming: when the runtime supplies `onUpdate`, the local implementation emits incremental newline-delimited text snapshots during globbing, throttled to 200 ms. Final output is grouped; streaming snapshots are not.
+- 成功文本：匹配路径被分组为多级、前缀折叠的目录树（`formatGroupedPaths()`）：每一层嵌套对应一个 `#`，单子目录链折叠为一个标题（`# a/b/c/`），文件以裸名形式列在最深的所属标题之下；根层级的匹配项不带头部标题列出。目录匹配项带有尾部 `/`。精确文件输入会把该文件路径作为一行返回。
+- 空结果文本：`No files found matching pattern`，其后可选地跟随超时或路径缺失提示。
+- 多路径部分缺失：在结果块之后、或空结果行之后追加 `Skipped missing paths: ...`。
+- `details` 可能包含：
+  - `scopePath`：被搜索根或合并根的显示形式。
+  - `fileCount`：结果数量限制之后返回的路径数。
+  - `files`：以数组形式返回的路径。
+  - `truncated`：是否发生了结果数量截断或字节截断。
+  - `resultLimitReached`：达到了结果上限。
+  - `missingPaths`：多路径调用中被跳过的缺失输入。
+  - `truncation` / `meta.limits`：供渲染器使用的结构化截断与上限元数据。
+- 流式：当运行时提供 `onUpdate` 时，本地实现在 glob 期间发出增量的、以换行分隔的文本快照，节流为 200 ms。最终输出是分组的；流式快照不是。
 
-## Flow
+## 流程
 
-1. `GlobTool.execute()` converts the optional semicolon-delimited `path` string into roots (default `.`), preserving an existing delimiter-containing path. Unless custom operations are injected, it expands the roots with `expandDelimitedPathEntries(..., parseFindPattern)`.
-2. The tool normalizes each entry with `normalizePathLikeInput()` and `/\\/g -> "/"`. Empty normalized entries fail with `` `path` must contain non-empty globs or paths ``.
-3. For multi-path local calls, `partitionExistingPaths(..., parseFindPattern)` (`packages/coding-agent/src/tools/path-utils.ts`) stats each base path. Missing entries are skipped; if all are missing, the tool throws `Path not found: ...`. Single missing paths still hard-fail.
-4. The tool calls `resolveExplicitFindPatterns()` for multi-entry calls; it parses each entry into its own `(basePath, globPattern, hasGlob)` target so every path is walked as its own root (collapsing to a shared ancestor would scan unrelated siblings). Single-entry calls parse with `parseFindPattern()` directly.
-5. `parseFindPattern()` determines `(basePath, globPattern, hasGlob)`:
-   - no glob chars (`*`, `?`, `[`, `{`) => search that path with implicit `**/*`.
-   - glob in the first segment => search from `.` and, unless the pattern already starts with `**/`, prefix it with `**/`.
-   - glob later in the path => split at the first glob-bearing segment.
-6. `resolveToCwd()` converts the base path to an absolute path under the session cwd. A resolved `/` is rejected with `Searching from root directory '/' is not allowed`.
-7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. An internal timeout of `5` seconds (`5000` ms) is built via `AbortSignal.timeout(...)`.
-8. Execution then branches:
-   - **Custom operations branch**: if `GlobToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
-   - **Built-in local branch**: the tool stats each target's `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, `recursive: false` (recursion comes from the `**/` prefix `parseFindPattern()` adds), and the combined abort signal; multi-target calls run their globs concurrently.
-9. In the local branch, optional `onMatch` callbacks convert each match to a cwd-relative display path and emit throttled progress updates.
-10. After native glob returns, JS merges per-target results, deduplicates repeated display paths, and sorts the merged list by `mtime` descending before formatting paths.
-11. `buildResult()` applies `applyListLimit()` to cap the array again at `effectiveLimit`, formats paths with `formatGroupedPaths()` (from `@oh-my-pi/pi-utils`), appends notices, then runs `truncateHead()` with `maxLines: Number.MAX_SAFE_INTEGER`. In practice this leaves the 50 KB byte cap in place while disabling the default 3000-line cap.
-12. `toolResult()` packages text plus `details`, and records result-limit / truncation metadata for renderers.
+1. `GlobTool.execute()` 将可选的分号分隔 `path` 字符串转换为根（默认 `.`）。除非注入了自定义操作，它会用 `expandDelimitedPathEntries(..., parseFindPattern)` 展开这些根：包含分隔符的既有路径保持完整，分号分隔的列表无条件拆分，逗号拆分在至少一个部分能解析时才被接受，空白拆分仅在每个部分都能解析时进行。
+2. 该工具用 `normalizePathLikeInput()` 与 `/\\/g -> "/"` 规范化每个条目。规范化后为空的条目会以 `` `path` must contain non-empty globs or paths `` 失败。
+3. 对于多路径本地调用，`partitionExistingPaths(..., parseFindPattern)`（`packages/coding-agent/src/tools/path-utils.ts`）对每个基础路径执行 stat。缺失条目会被跳过；若全部缺失，该工具抛出 `Path not found: ...`。单个缺失路径仍会硬失败。
+4. 对于多条目调用，该工具调用 `resolveExplicitFindPatterns()`；它把每个条目解析成各自的 `(basePath, globPattern, hasGlob)` 目标，因此每条路径都作为自己的根被遍历（折叠到共享祖先会扫描无关的兄弟目录）。单条目调用直接用 `parseFindPattern()` 解析。
+5. `parseFindPattern()` 确定 `(basePath, globPattern, hasGlob)`：
+   - 没有 glob 字符（`*`、`?`、`[`、`{`）=> 以隐式 `**/*` 搜索该路径。
+   - glob 位于第一段 => 从 `.` 开始搜索；除非模式已经以 `**/` 开头，否则为它加上 `**/` 前缀。
+   - glob 位于路径中更靠后的位置 => 在第一个含 glob 的段处拆分。
+6. `resolveToCwd()` 把基础路径转换为会话 cwd 下的绝对路径。解析结果为 `/` 时会被拒绝，并给出 `Searching from root directory '/' is not allowed`。
+7. `limit` 默认为 `DEFAULT_LIMIT`（`200`），必须为正且有限，会先向下取整，然后被限制到 `MAX_LIMIT`（`200`）。`hidden` 与 `gitignore` 均默认为 `true`。内部超时为 `5` 秒（`5000` ms），通过 `AbortSignal.timeout(...)` 构建。
+8. 执行随后分叉：
+   - **自定义操作分支**：如果 `GlobToolOptions.operations.glob` 存在，该工具用 `operations.exists()` 检查存在性；在可用时通过 `operations.stat()` 对精确文件输入短路；然后调用 `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`。
+   - **内置本地分支**：该工具对每个目标的 `searchPath` 执行 stat。精确文件输入立即返回。目录输入以 `hidden`、`maxResults: effectiveLimit`、`sortByMtime: true`、`gitignore: useGitignore`、`recursive: false`（递归来自 `parseFindPattern()` 添加的 `**/` 前缀）以及合并后的中止信号调用 `natives.glob()`；多目标调用会并发运行各自的 glob。
+9. 在本地分支中，可选的 `onMatch` 回调会把每个匹配项转换为相对于 cwd 的显示路径，并发出节流的进度更新。
+10. 原生 glob 返回后，JS 合并各目标的结果，对重复的显示路径去重，并在格式化路径之前按 `mtime` 降序对合并后的列表排序。
+11. `buildResult()` 应用 `applyListLimit()` 把数组再次限制到 `effectiveLimit`，用 `formatGroupedPaths()`（来自 `@oh-my-pi/pi-utils`）格式化路径，追加提示信息，然后以 `maxLines: Number.MAX_SAFE_INTEGER` 运行 `truncateHead()`。实践中这会保留 50 KB 的字节上限，同时禁用默认的 3000 行上限。
+12. `toolResult()` 打包文本与 `details`，并为渲染器记录结果上限 / 截断元数据。
 
-## Modes / Variants
-- **Exact file path**: if the parsed input has no glob and the resolved path stats as a file, output is that one path.
-- **Directory path**: if the parsed input has no glob and stats as a directory, the tool searches it with implicit `**/*`.
-- **Single glob path**: one input parsed by `parseFindPattern()`.
-- **Multi-path search**: multiple inputs resolved by `resolveExplicitFindPatterns()` into per-entry targets, each walked as its own root concurrently and merged afterwards.
-- **Partial multi-path search with missing inputs**: local multi-path calls skip missing base paths and surface them as `missingPaths` / `Skipped missing paths: ...`.
-- **Internal URL input**: exact path-backed URLs are supported. `memory://` additionally supports glob patterns against its backing tree. Other internal-URL globs and every `ssh://` input are rejected.
-- **Custom delegated search**: uses injected `GlobOperations` instead of local fs + native glob.
+## 模式 / 变体
+- **精确文件路径**：如果解析后的输入不含 glob，且解析出的路径 stat 为文件，输出就是那一个路径。
+- **目录路径**：如果解析后的输入不含 glob 且 stat 为目录，该工具以隐式 `**/*` 搜索它。
+- **单个 glob 路径**：一个由 `parseFindPattern()` 解析的输入。
+- **多路径搜索**：多个输入由 `resolveExplicitFindPatterns()` 解析为逐条目目标，每个目标作为自己的根并发遍历，随后合并。
+- **带缺失输入的部分多路径搜索**：本地多路径调用会跳过缺失的基础路径，并以 `missingPaths` / `Skipped missing paths: ...` 呈现它们。
+- **内部 URL 输入**：支持精确的、由路径支持的 URL。`memory://` 还额外支持针对其后备树的 glob 模式。其他内部 URL glob 以及每一个 `ssh://` 输入都会被拒绝。
+- **自定义委托搜索**：使用注入的 `GlobOperations`，而不是本地 fs + 原生 glob。
 
-## Side Effects
-- Filesystem
-  - Stats the resolved base path, and in local multi-path mode stats every candidate base path up front.
-  - Does not write files.
-- Subprocesses / native bindings
-  - Built-in local mode calls the native `@oh-my-pi/pi-natives` glob implementation.
-- Session state (transcript, memory, jobs, checkpoints, registries)
-  - Emits structured progress updates when `onUpdate` is provided.
-  - Adds truncation / limit metadata to the tool result.
-- Background work / cancellation
-  - Local globbing is cancellable through the caller abort signal plus the internal timeout.
+## 副作用
+- 文件系统
+  - 对解析后的基础路径执行 stat；在本地多路径模式下会预先对每个候选基础路径执行 stat。
+  - 不写入文件。
+- 子进程 / 原生绑定
+  - 内置本地模式调用原生 `@oh-my-pi/pi-natives` glob 实现。
+- 会话状态（转录、记忆、作业、检查点、注册表）
+  - 在提供 `onUpdate` 时发出结构化进度更新。
+  - 向工具结果添加截断 / 上限元数据。
+- 后台工作 / 取消
+  - 通过调用方中止信号加上内部超时，本地 glob 可以被取消。
 
-## Limits & Caps
-- Default result limit: `200` (`DEFAULT_LIMIT` in `packages/coding-agent/src/tools/glob.ts`).
-- Maximum result limit: `200` (`MAX_LIMIT`); larger inputs are clamped.
-- Local glob timeout: fixed at `5000` ms.
-- Output byte cap: `50 * 1024` bytes (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`).
-- Default generic line cap in `truncateHead()` is `3000`, but `glob` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so byte size — not line count — is the practical output truncation cap.
-- Streaming update throttle: `200` ms between `onUpdate` emissions.
-- Sort order: most recent `mtime` first in the built-in local branch and promised in the prompt. The tool re-sorts in JS even though native glob receives `sortByMtime: true` so native code can still stop early at `maxResults`.
+## 限制与上限
+- 默认结果上限：`200`（`packages/coding-agent/src/tools/glob.ts` 中的 `DEFAULT_LIMIT`）。
+- 最大结果上限：`200`（`MAX_LIMIT`）；更大的输入会被限制到该值。
+- 本地 glob 超时：固定为 `5000` ms。
+- 输出字节上限：`50 * 1024` 字节（`packages/coding-agent/src/session/streaming-output.ts` 中的 `DEFAULT_MAX_BYTES`）。
+- `truncateHead()` 中默认的通用行数上限为 `3000`，但 `glob` 把 `maxLines` 覆盖为 `Number.MAX_SAFE_INTEGER`，因此实际生效的输出截断上限是字节大小——而非行数。
+- 流式更新节流：两次 `onUpdate` 发出之间相隔 `200` ms。
+- 排序顺序：在内置本地分支中按最新 `mtime` 优先，提示词中也如此承诺。尽管原生 glob 收到 `sortByMtime: true`，该工具仍会在 JS 中重新排序，这样原生代码仍然可以在 `maxResults` 处提前停止。
 
-## Errors
-- User-facing `ToolError`s from `GlobTool.execute()` include:
+## 错误
+- `GlobTool.execute()` 抛出的面向用户的 `ToolError` 包括：
   - `` `path` must contain non-empty globs or paths ``
   - `Path not found: ...`
   - `Searching from root directory '/' is not allowed`
   - `Limit must be a positive number`
   - `Path is not a directory: ...`
-  - timeout result text is `glob timed out after <seconds>s; returning <N> partial matches — narrow the pattern instead of retrying blindly` and is returned as a successful, truncated partial result rather than an error.
-  - `find cannot operate on a remote ssh:// path: ...` for SSH inputs.
-  - `Glob patterns are not supported for internal URLs: ...` except for `memory://` patterns.
-  - `Cannot find internal URL without a backing file: ...` for virtual-only resources.
-- If the caller aborts, the local branch converts `AbortError` into `ToolAbortError`.
-- Non-`ENOENT` stat failures and other unexpected errors are rethrown.
-- Empty matches are not errors; they return the no-files text result.
+  - 超时结果文本为 `glob timed out after <seconds>s; returning <N> partial matches — narrow the pattern instead of retrying blindly`，它会作为成功的、已截断的部分结果返回，而不是错误。
+  - 对 SSH 输入为 `find cannot operate on a remote ssh:// path: ...`。
+  - 除 `memory://` 模式外，`Glob patterns are not supported for internal URLs: ...`。
+  - 对仅虚拟的资源为 `Cannot find internal URL without a backing file: ...`。
+- 如果调用方中止，本地分支会把 `AbortError` 转换为 `ToolAbortError`。
+- 非 `ENOENT` 的 stat 失败与其他意外错误会被重新抛出。
+- 空匹配不是错误；它们返回无文件的文本结果。
 
-## Notes
-- Reach for `glob` for filename / path discovery. Reach for `grep` when the selection criterion is file contents or regex matches; `grep` takes a `pattern` and returns anchored content matches, while `glob` only returns matching paths (`packages/coding-agent/src/prompts/tools/glob.md`, `packages/coding-agent/src/prompts/tools/grep.md`).
-- Bare top-level globs are made recursive. `*.ts` is parsed as base `.` plus glob `**/*.ts`; `src/*.ts` stays rooted at `src` with a non-recursive `*.ts` segment; `src/**/*.ts` preserves explicit recursion.
-- `.gitignore` defaults to enabled in the built-in local branch. Use `gitignore: false` to disable it for native traversal.
-- `hidden` defaults to `true`; hidden-file exclusion is opt-out, not opt-in.
-- Multi-path missing-input tolerance applies in both branches, but only the built-in local branch surfaces `missingPaths` / `Skipped missing paths: ...`. The custom-operations branch hard-fails a missing `searchPath` only for single-input calls; in multi-input calls a missing target silently contributes no results.
-- The custom `GlobOperations.glob()` hook receives `ignore` and `limit`, but not the `hidden` flag or an explicit `.gitignore` toggle. A remote delegate must account for that itself if it wants parity with the local branch.
-- Built-in local globbing does not force `fileType: File`; it can return files and directories from native glob. Directory outputs also occur through exact-path passthrough or custom delegates that return them.
+## 备注
+- 文件名 / 路径发现应使用 `glob`。当选择标准是文件内容或正则匹配时应使用 `grep`；`grep` 接受 `pattern` 并返回带锚点的内容匹配，而 `glob` 只返回匹配的路径（`packages/coding-agent/src/prompts/tools/glob.md`、`packages/coding-agent/src/prompts/tools/grep.md`）。
+- 裸的顶层 glob 会被递归化。`*.ts` 被解析为基础 `.` 加上 glob `**/*.ts`；`src/*.ts` 仍以 `src` 为根，并带有非递归的 `*.ts` 段；`src/**/*.ts` 保留显式递归。
+- `.gitignore` 在内置本地分支中默认启用。使用 `gitignore: false` 可对原生遍历禁用它。
+- `hidden` 默认为 `true`；隐藏文件排除是选择退出，而非选择加入。
+- 多路径的缺失输入容忍在两个分支中都适用，但只有内置本地分支会呈现 `missingPaths` / `Skipped missing paths: ...`。自定义操作分支仅对单输入调用硬失败缺失的 `searchPath`；在多输入调用中，缺失的目标会静默地不贡献任何结果。
+- 自定义 `GlobOperations.glob()` 钩子会收到 `ignore` 与 `limit`，但不会收到 `hidden` 标志或显式的 `.gitignore` 开关。远程委托方若想与本地分支保持一致，必须自行处理这一点。
+- 内置本地 glob 不会强制 `fileType: File`；它可能从原生 glob 返回文件和目录。目录输出也可能来自精确路径直通，或来自返回目录的自定义委托。

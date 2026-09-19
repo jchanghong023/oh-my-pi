@@ -25,7 +25,7 @@ Anthropic 公共 API 中没有 token 级别的工具分隔符。其单位是**�
 | 其他 `stop_reason` | 响应顶层 | `"max_tokens"`、`"stop_sequence"`、`"pause_turn"`（长服务器工具回合，原样重发以继续）、`"refusal"`、`"sensitive"`（输出被安全过滤器标记）、`"model_context_window_exceeded"`（在上下文窗口处截断的输出，按 `max_tokens` 处理）。 |
 | `id` 前缀 | — | 消息 `msg_…`；客户端工具调用 `toolu_…`；服务器工具调用 `srvtoolu_…`。 |
 
-流式响应增加了如下 SSE 事件/增量类型（完整列表见 [角色 / 通道 / 回合结构](#角色--通道--回合结构) 和 [工具调用格式](#工具调用格式)）：
+流式响应增加了如下 SSE 事件/增量类型（完整列表见 [角色 / 通道 / 回合结构](#角色-通道-回合结构) 和 [工具调用格式](#工具调用格式)）：
 
 | 流式项 | 形态/含义 |
 | --- | --- |
@@ -128,7 +128,7 @@ Anthropic 模式的客户端工具（`bash`、`text_editor`、`computer`、`memo
 
 其他约束——包括 `pattern`、字符串长度限制、数值范围、`maxItems`、不支持的格式以及不支持的组合器——会被追加到该节点的 `description` 中。它们仍然作为模型可见的指导存在，但不再是机器强制执行的 Schema 关键字。对象节点默认 `additionalProperties: false`；显式的 `true` 或基于 Schema 值的 `additionalProperties` 仍保持开放（空 Schema 规范化为 `true`）。
 
-OMP 仅在满足以下条件时发送 `strict: true`：适用于合格的内置工具（`bash`、`python`、`edit`、`find`），且 `PI_NO_STRICT` 与提供商兼容性/运行时回退都没有禁用严格工具，该工具未主动退出，原始 Schema 避免使用 `oneOf`、`allOf`、`$ref`、`patternProperties` 和 `propertyNames`，并且每个对象都是封闭的。单个请求最多选择 20 个严格工具，并共享 24 个可选属性和 16 个 union 使用的预算：可选属性预算耗尽后，必须使用 union 预算将另一个可选属性转换为 required-and-nullable，否则该工具仍保持非严格。其他工具使用规范化后的非严格 Schema。OMP 仅在模型兼容性数据和有效端点……
+OMP 仅在满足以下条件时发送 `strict: true`：适用于合格的内置工具（`bash`、`python`、`edit`、`find`），且 `PI_NO_STRICT` 与提供商兼容性/运行时回退都没有禁用严格工具，该工具未主动退出，原始 Schema 避免使用 `oneOf`、`allOf`、`$ref`、`patternProperties` 和 `propertyNames`，并且每个对象都是封闭的。单个请求最多选择 20 个严格工具，并共享 24 个可选属性和 16 个 union 使用的预算：可选属性预算耗尽后，必须使用 union 预算将另一个可选属性转换为 required-and-nullable，否则该工具仍保持非严格。其他工具使用规范化后的非严格 Schema。仅当模型兼容性数据和有效端点支持时，OMP 才发送 `eager_input_streaming: true`：第一方 Anthropic 端点符合条件，显式为该能力配置的自定义端点也符合条件；被重定向到不符合条件的非 Anthropic 端点的规范模型则不符合。
 
 `tool_choice` 控制调用方式（四种选项）：
 - `{"type":"auto"}` —— 由模型决定（当 `tools` 存在时的默认）。
@@ -152,7 +152,7 @@ Here are the functions available in JSONSchema format:
 {{ TOOL CONFIGURATION }}
 ```
 
-`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` 是你的 `tools` 数组以 JSON Schema 形式序列化后的内容。`{{ FORMATTING INSTRUCTIONS }}` 是（未公开的）教导模型使用带 `antml:` 命名空间前缀的 XML 语法的代码块（见 [工具调用格式 → 底层 XML](#底层-xml-带-antml-命名空间的现代属性形式)）。“parsed with regular expressions” 这一说明解释了为什么输出不需要是良构的 XML。
+`{{ TOOL DEFINITIONS IN JSON SCHEMA }}` 是你的 `tools` 数组以 JSON Schema 形式序列化后的内容。`{{ FORMATTING INSTRUCTIONS }}` 是（未公开的）教导模型使用带 `antml:` 命名空间前缀的 XML 语法的代码块（见 [工具调用格式 → 底层 XML](#底层-xml带-antml-命名空间的现代属性形式)）。“parsed with regular expressions” 这一说明解释了为什么输出不需要是良构的 XML。
 
 ---
 

@@ -36,7 +36,7 @@
 - 用户目录：当前 agent 目录的 `extensions/`（默认 `~/.omp/agent/extensions`）
 - 原生遗留/settings JSON 条目：`<cwd>/.omp/settings.json#extensions` 以及当前 agent 目录的 `settings.json#extensions`
 
-项目根是原生 provider 的 `.omp` 目录（`SOURCE_PATHS.native.projectDir`），仅使用 cwd；它不会向上回溯祖先目录。用户根通过 `getAgentDir()` 取自当前 profile 的 agent 目录，因此在 `omp --profile <name>` 下它变为 `~/.omp/profiles/<name>/agent/extensions`（并遵循 `PI_CODING_AGENT_DIR`）。参见 [Profiles](./config-usage.md#profiles)。
+项目根是原生 provider 的 `.omp` 目录（`SOURCE_PATHS.native.projectDir`），仅使用 cwd；它不会向上回溯祖先目录。用户根通过 `getAgentDir()` 取自当前 profile 的 agent 目录，因此在 `omp --profile <name>` 下它变为 `~/.omp/profiles/<name>/agent/extensions`（并遵循 `PI_CODING_AGENT_DIR`）。参见 [Profiles](./config-usage.md#profile)。
 
 注意：
 
@@ -45,7 +45,7 @@
 
 ### 2) 发现的 JS/TS hook 工厂
 
-在原生自动发现之后，`discoverAndLoadExtensions()` 还会从 `hook` 能力中追加 JS/TS hook 工厂——任何入口路径为 `.ts`/`.js` 文件的 hook——使它们通过相同的模块管道加载。原生 provider 只会在 `<cwd>/.omp/hooks/pre|post/` 和 `<agentDir>/hooks/pre|post/` 下发现这些 hook；所需的 `pre/`/`post/` 目录布局参见 [Hooks：原生发现位置](./hooks.md#native-discovery-location)。
+在原生自动发现之后，`discoverAndLoadExtensions()` 还会从 `hook` 能力中追加 JS/TS hook 工厂——任何入口路径为 `.ts`/`.js` 文件的 hook——使它们通过相同的模块管道加载。原生 provider 只会在 `<cwd>/.omp/hooks/pre|post/` 和 `<agentDir>/hooks/pre|post/` 下发现这些 hook；所需的 `pre/`/`post/` 目录布局参见 [Hooks：原生发现位置](./hooks.md#native-发现位置)。
 
 hook 能力加载已经应用了它自己的 hook 专用禁用 id，因此这些路径不会被 `disabledExtensions` 中的扩展模块名称额外过滤。
 
@@ -136,7 +136,7 @@ disabledExtensions:
   - context-file:user:CLAUDE.md
 ```
 
-该 id 不携带目录与深度信息，因此一个 `project` 条目会禁用发现遍历所到达的每一层中同名的文件。参见 [上下文文件](./context-files.md#disabling-a-single-context-file)。
+该 id 不携带目录与深度信息，因此一个 `project` 条目会禁用发现遍历所到达的每一层中同名的文件。参见 [上下文文件](./context-files.md#禁用单个上下文文件)。
 
 ---
 

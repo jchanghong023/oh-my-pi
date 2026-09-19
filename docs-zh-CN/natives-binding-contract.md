@@ -25,22 +25,31 @@
 
 ## 按所有者划分的当前根表面
 
-| 类别                | 代表性的公共导出                                                                                                                                          | Rust 所有者                                                           | 调用风格              |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
-| 搜索和工作区        | `grep`、`search`、`hasMatch`、`fuzzyFind`、`glob`、`invalidateFsScanCache`、`listWorkspace`                                                                | `grep.rs`、`fd.rs`、`glob.rs`、`iofs.rs`、`workspace.rs`              | 同步/Promise 混合     |
-| AST 与代码结构      | `astGrep`、`astMatch`、`astEdit`、`blockRangeAt`、`enclosingBlockBoundaries`、`summarizeCode`                                                              | `ast.rs`、`block.rs`、`summary.rs`                                    | 同步/Promise 混合     |
-| Diff 与向量         | `diffLines`、`diffWords`、`diffLineRuns`、`structuredPatchHunks`、`cosineSimilarityPairs`、`mmrRerankIndices`、`vectorIndexTopK`                          | `diff.rs`、`vectors.rs`                                               | 同步                 |
-| Shell 与 PTY        | `executeShell`、`Shell`、`PtySession`                                                                                                                     | `shell.rs`、`pty.rs`                                                  | 类/Promise            |
-| 进程与文件          | `Process`、`FileLock`                                                                                                                                     | `ps.rs`、`file_lock/mod.rs`                                           | 类/混合               |
-| 桌面与剪贴板        | `DesktopSession`、`copyToClipboard`、`readImageFromClipboard`                                                                                             | `desktop/mod.rs`、`clipboard.rs`                                      | 类、同步、Promise     |
-| 音频与实时媒体      | `AudioCapture`、`AudioPlayback`、`LiveWebRtcPeer`                                                                                                         | `audio.rs`、`live.rs`                                                 | 类/混合               |
-| 文本与高亮          | `wrapTextWithAnsi`、`truncateToWidth`、`sliceWithWidth`、`extractSegments`、`visibleWidth`、`setHangulCompatJamoWidthOverride`、`highlightCode`、语言查询   | `text.rs`、`highlight.rs`                                             | 同步                 |
-| 转换与渲染          | `htmlToMarkdown`、`encodeSixel`、`renderSnapcompactPng`、`snapcompactSupportedChars`                                                                       | `html.rs`、`sixel.rs`、`snapcompact.rs`                               | 同步/Promise 混合     |
-| Tokens 与系统       | `countTokens`、macOS 外观/电源相关导出、`getWorkProfile`、`deviceCheckGenerateToken`                                                                       | `tokens.rs`、`appearance.rs`、`power.rs`、`prof.rs`、`devicecheck.rs` | 混合                 |
-| 隔离                | `isoBackend`、`isoProbe`、`isoResolve`、`isoIsUnavailableError`、`isoStart`、`isoStop`、`isoDiff`                                                          | `iso.rs`                                                              | 同步/Promise 混合     |
-| 按键                | `parseKey`、`matchesKey`、Kitty/legacy 辅助函数                                                                                                            | `keys.rs`                                                             | 同步                 |
+| 类别 | 代表性的公共导出 | Rust 所有者 | 调用风格 |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | -------------------- |
+| 搜索与工作区 | `grep`, `search`, `hasMatch`, `fuzzyFind`, `glob`, `invalidateFsScanCache`, `listWorkspace` | `grep.rs`, `fd.rs`, `glob.rs`, `iofs.rs`, `workspace.rs` | 同步/Promise 混合 |
+| AST 与代码结构 | `astGrep`, `astMatch`, `astEdit`, `blockRangeAt`, `nodeChainAt`, `enclosingBlockBoundaries`, `summarizeCode` | `ast.rs`, `block.rs`, `summary.rs` | 同步/Promise 混合 |
+| Diff 与向量 | `diffLines`, `diffWords`, `diffLineRuns`, `structuredPatchHunks`, `DiffStream`, `cosineSimilarityPairs`, `mmrRerankIndices`, `vectorIndexTopK` | `diff.rs`, `vectors.rs` | 同步 |
+| Shell 与 PTY | `executeShell`, `Shell`, `PtySession` | `shell.rs`, `pty.rs` | 类/Promise |
+| 进程与文件 | `Process`, `FileLock`, `execReplace` | `ps.rs`, `file_lock/mod.rs` | 类/混合 |
+| 桌面与剪贴板 | `DesktopSession`, `copyToClipboard`, `readImageFromClipboard` | `desktop/mod.rs`, `clipboard.rs` | 类、同步、Promise |
+| 音频与实时媒体 | `AudioCapture`, `AudioPlayback`, `LiveWebRtcPeer` | `audio.rs`, `live.rs` | 类/混合 |
+| 文本与高亮 | `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth`, `extractSegments`, `visibleWidth`, `setHangulCompatJamoWidthOverride`, `highlightCode`, `HighlightStream`, 语言查询 | `text.rs`, `highlight.rs` | 同步 |
+| 转换与渲染 | `htmlToMarkdown`, `pdfToMarkdown`, `rasterizeSvg`, `encodeSixel`, `renderSnapcompactPng`, `snapcompactSupportedChars` | `html.rs`, `pdf.rs`, `svg.rs`, `sixel.rs`, `snapcompact.rs` | 同步/Promise 混合 |
+| Tokens 与系统 | `countTokens`, macOS 外观、跨平台电源相关导出, `getWorkProfile`, `deviceCheckGenerateToken` | `tokens.rs`, `appearance.rs`, `power.rs`, `prof.rs`, `devicecheck.rs` | 混合 |
+| 拼写（macOS） | `macOSCheckSpelling`, `macOSCompleteWord`, `macOSAutocorrectWord`, `macOSSpellingGuesses`, `macOSSpellCheckerAvailable` | `spelling.rs` | 同步/Promise 混合 |
+| 版本控制 | `vcsDiscover`, `vcsGitClone`, `vcsDetachGitDir`, `vcsJoinPatches`, `vcsValidateHunkSelections`, `VcsRepo`, `VcsGitRepo`, `VcsJjWorkspace` | `vcs.rs` | 同步/Promise 混合 |
+| 终端输出 | `TtyWriter` | `tty_writer.rs` | 类 |
+| 隔离 | `isoBackend`, `isoProbe`, `isoResolve`, `isoIsUnavailableError`, `isoStart`, `isoStop`, `isoDiff` | `iso.rs` | 同步/Promise 混合 |
+| 按键 | `parseKey`, `matchesKey`, Kitty/legacy 辅助函数 | `keys.rs` | 同步 |
 
 请参考 `native/index.d.ts` 以获取精确的选项/结果字段和签名。当前值得注意的签名包括 `renderSnapcompactPng(...): Promise<string>`、`readImageFromClipboard(): Promise<ClipboardImage | undefined | null>` 以及类型化数组形式的向量输入/结果。
+
+既有导出上较新的表面成员（均存在于 `native/index.d.ts` 中）：
+
+- `ShellRunResult.workingDir?` —— 命令完成后的 shell 工作目录（16.3.0 新增），让宿主无需隐藏的探测命令即可同步 cwd。
+- `GrepOptions.maxCountPerFile?` —— 内容模式下按文件计的匹配上限（15.10.11 新增）。注意 `GrepOptions` 没有 `cache` 字段；目录 grep 始终不使用缓存（`FuzzyFindOptions`/`GlobOptions` 才带有可选的 `cache` 标志）。
+- `snapcompactSupportedChars(font, chars)` —— 字体字形能力探测（16.2.7 新增）。
 
 ## 同步、Promise 与回调规则
 
@@ -62,6 +71,7 @@
 当前生成的运行时枚举对象为：
 
 - `AstMatchStrictness`
+- `DiffSide`
 - `Ellipsis`
 - `Encoding`
 - `FileType`

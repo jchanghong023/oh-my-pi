@@ -2,7 +2,7 @@
 
 > 应用源码编辑。默认的 `hashline` 模式接收一个按行锚定的补丁字符串，并直接编辑已存在的文件。
 
-## Source
+## 源码
 - 入口与模式注册：`packages/coding-agent/src/edit/index.ts`
 - Hashline 模式参数：`packages/coding-agent/src/edit/hashline/params.ts`
 - 面向模型的 hashline 提示词：`packages/hashline/src/prompt.md`
@@ -12,7 +12,7 @@
 - Coding-agent 执行与结果整形：`packages/coding-agent/src/edit/hashline/execute.ts`
 - 流式预览策略：`packages/coding-agent/src/edit/streaming.ts`、`packages/coding-agent/src/edit/hashline/diff.ts`
 
-## Mode selection and availability
+## 模式选择与可用性
 
 `edit` 是一个核心内置工具。`resolveEditMode()` 按以下顺序选择当前生效的线协议：
 
@@ -23,7 +23,7 @@
 
 支持的模式有 `hashline`、`apply_patch`、`patch` 和 `replace`。除非设置了 `PI_STRICT_EDIT_MODE`，否则一个简短的模型排除列表可能会用 `replace` 替换默认的 hashline 协议。本页面说明的是默认的 hashline 协议；该工具的 schema、提示词、示例、渲染器以及可选的自定义 Lark 格式都会随所选模式切换。在 `apply_patch` custom-tool 模式下，线协议名称为 `apply_patch`；调度最终仍会抵达同一个内部工具。
 
-## Input
+## 输入
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -39,7 +39,7 @@ PUT 4.=4:
 
 使用 `write` 来创建或完全覆盖一个文件。Hashline 在应用时会拒绝没有标签的锚定编辑。
 
-## Canonical patch language
+## 规范补丁语言
 
 所有行号都指代带标签的原始快照，而非同一调用中早期 hunk 的行号。
 
@@ -61,7 +61,7 @@ PUT 4.=4:
 
 只有带 body 的 `PUT ...:` 头部才会接收 body 行。每个 body 行都是 `+TEXT`；单独的 `+` 表示插入一个空行。body 是最终内容，永远不是 unified-diff 的 before/after 对。以字面量 `-` 或 `+` 开头的内容需要写成 `+-...` 或 `++...`。`CUT`、由寄存器支持的 `PUT`、`REM` 和 `MV` 不接受 body。
 
-### Block anchors
+### 块锚点
 
 块形式会从其起始行解析到 tree-sitter 节点的结尾。锚点应放在构造的起始行，而不能是结束分隔符、最后可见行、空行或内部语句。单行节点会被拒绝，并提示使用对应的显式行操作。当没有块能够解析时，`PUT >N*:` 会降级为普通的 `PUT >N:` 并发出警告；而 replace/cut 的块形式在这种情况下会失败，而不是去猜测。
 
@@ -69,7 +69,7 @@ PUT 4.=4:
 
 应使用紧凑的行范围，并将不相邻的改动分到不同的操作中。不要仅仅为了重新格式化或调整代码风格而使用 `edit`；请在完成实质性编辑后运行项目自带的格式化工具。
 
-## Examples
+## 示例
 
 给定：
 
@@ -116,7 +116,7 @@ MV lib/welcome.py
 *** End Patch
 ```
 
-## Output and side effects
+## 输出与副作用
 
 Hashline 在一次工具调用内完成应用；它不使用 `ast_edit` 所采用的分阶段 `xd://resolve` / `xd://reject` 流程。
 
@@ -126,7 +126,7 @@ Hashline 在一次工具调用内完成应用；它不使用 `ast_edit` 所采�
 
 对于多段调用，所有段会在任何写入开始之前完成解析和准备，这样语法、锚点和空操作相关的错误会快速失败。然后文件按顺序写入；操作系统的写入失败可能导致此前已落地的前缀部分被应用。具名寄存器的会话状态仅会针对已落地的前缀部分前进。
 
-## Limits and validation
+## 限制与校验
 
 - 快照标签是四个大写十六进制字符，由规范化后的文件内容派生，并记录在会话快照存储中。
 - `read`/`grep` 暴露的范围很重要：针对所记录可见范围之外行的编辑会被拒绝。在编辑被省略或未显示的范围之前，请重新读取它们。
@@ -136,7 +136,7 @@ Hashline 在一次工具调用内完成应用；它不使用 `ast_edit` 所采�
 - 过期标签会尝试基于快照进行恢复。恢复仅在已记录的快照链能够证明一个唯一安全的结果时才会应用；否则返回与当前上下文不匹配的错误。
 - 字节级完全相同的编辑是错误。连续三次重复相同的空操作负载会通过空操作循环保护进行升级处理。
 
-## Common failures
+## 常见失败
 
 - 缺失或格式错误的 `[PATH#TAG]`、未知的快照标签，或者文件路径已不存在。
 - 锚点位于文件之外、所记录的可见行范围之外、被省略的区域之中，或基于无法安全恢复的过期快照。

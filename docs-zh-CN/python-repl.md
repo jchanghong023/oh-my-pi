@@ -12,7 +12,7 @@
 - 每个内核都会加载的预置辅助代码：`src/eval/py/prelude.py`
 - 宿主侧子代理辅助桥接：`src/eval/agent-bridge.ts`
 - MIME 包渲染器（文本 + 结构化输出）：`src/eval/py/display.ts`
-- 用户触发的 Python 运行的交互模式渲染器：`src/modes/components/eval-execution.ts`
+- 用户触发的 Python 运行的交互模式渲染器：`packages/tui/src/chat/eval-execution.ts`
 - 运行时/环境过滤与 Python 解析：`src/eval/py/runtime.ts`
 
 ## eval 的 Python 后端是什么
@@ -31,7 +31,7 @@
 }
 ```
 
-会话作用域的线协议 schema 仅声明已启用的运行时。静态实现同样支持 `"js"`、`"rb"` 和 `"jl"`；Python 与 JavaScript 默认开启，而 Ruby 与 Julia 需显式启用。工具的 `concurrency = "exclusive"` 针对一个会话，因此调用不会并发。同一种语言运行时的多次调用之间状态会保留。
+会话作用域的线协议 schema 仅声明已启用的运行时（"py" 与 "js"）。Python 与 JavaScript 默认开启。工具的 `concurrency = "exclusive"` 针对一个会话，因此调用不会并发。同一种语言运行时的多次调用之间状态会保留。
 
 ## 内核生命周期
 
@@ -79,25 +79,25 @@
 
 运行器的源转换器在解析之前将 IPython 风格的魔术命令重写为普通的 Python 调用。支持的集合：
 
-| Magic                             | Effect                                                                                                                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `%pip <args>`                     | `python -m pip <args>` with live streaming output. Newly installed packages are evicted from `sys.modules` so the next `import` picks up the fresh install. |
-| `%cd <path>`                      | `os.chdir(path)` (with `~` expansion); emits status event.                                                                                                  |
-| `%pwd`                            | Returns `os.getcwd()`.                                                                                                                                      |
-| `%ls [path]`                      | Returns `sorted(os.listdir(path))`.                                                                                                                         |
-| `%env [KEY[=VAL]]`                | List, read, or set env vars (matches prelude `env()` semantics).                                                                                            |
-| `%set_env KEY VALUE`              | Set `os.environ[KEY]`.                                                                                                                                      |
-| `%time <expr>` / `%timeit <expr>` | Time the expression; emits status event with elapsed ms.                                                                                                    |
-| `%who` / `%whos`                  | List user-namespace names.                                                                                                                                  |
-| `%reset`                          | Clear user globals and re-inject prelude.                                                                                                                   |
-| `%load <path>`                    | Read a file into a fresh cell and execute.                                                                                                                  |
-| `%run <path>`                     | `runpy.run_path` and merge globals back.                                                                                                                    |
-| `%%bash` / `%%sh`                 | Run the cell body via `bash`/`sh`.                                                                                                                          |
-| `%%capture [name]`                | Run body with stdout/stderr captured into `name`.                                                                                                           |
-| `%%timeit`                        | Time the cell body.                                                                                                                                         |
-| `%%writefile <path>`              | Write body to file.                                                                                                                                         |
-| `!cmd` / `var = !cmd`             | Run command via subprocess shell; returns an SList-style result with `.n` / `.s` helpers.                                                                   |
-| `var = %name args`                | Assignment forms work for line magics and `!cmd`.                                                                                                           |
+| 魔术命令 | 效果 |
+| --- | --- |
+| `%pip <args>` | `python -m pip <args>`，实时流式输出。新安装的包会从 `sys.modules` 中移除，以便下一次 `import` 能用上新安装的版本。 |
+| `%cd <path>` | `os.chdir(path)`（展开 `~`）；发出状态事件。 |
+| `%pwd` | 返回 `os.getcwd()`。 |
+| `%ls [path]` | 返回 `sorted(os.listdir(path))`。 |
+| `%env [KEY[=VAL]]` | 列出、读取或设置环境变量（与预置 `env()` 语义一致）。 |
+| `%set_env KEY VALUE` | 设置 `os.environ[KEY]`。 |
+| `%time <expr>` / `%timeit <expr>` | 对表达式计时；发出带有耗时毫秒数的状态事件。 |
+| `%who` / `%whos` | 列出用户命名空间中的名称。 |
+| `%reset` | 清空用户全局变量并重新注入预置代码。 |
+| `%load <path>` | 读取文件到一个新代码单元并执行。 |
+| `%run <path>` | `runpy.run_path` 并把全局变量合并回来。 |
+| `%%bash` | 通过 `bash` 运行代码单元主体。唯一注册的 shell cell magic —— `%%sh` 并不存在，未注册的名称会抛出 `Cell magic function '%%<name>' not found`。 |
+| `%%capture [name]` | 运行主体，并将 stdout/stderr 捕获到 `name` 中。 |
+| `%%timeit` | 对代码单元主体计时。 |
+| `%%writefile <path>` | 将主体写入文件。 |
+| `!cmd` / `var = !cmd` | 通过子进程 shell 运行命令；返回带 `.n` / `.s` 辅助方法的 SList 风格结果。 |
+| `var = %name args` | 赋值形式适用于行魔术命令和 `!cmd`。 |
 
 未知的魔术命令会在代码单元内抛出 `NameError: UsageError: ...`。
 
@@ -146,13 +146,15 @@
 
 该工具的会话作用域 schema 仅列出已启用的运行时。如果 Python 预检失败而另一个运行时处于启用状态，则 `eval` 对该运行时仍然可用，`py` 调用会报告一个 Python 后端不可用的错误，并列出其他可用的运行时。
 
-Python 预置辅助函数包含 `agent(prompt, *, agent="task", label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None, handle=False)`。它会同步调用宿主桥接，并在提供 `schema` 时返回最终文本或已解析的数据。`schema_mode` 选择宽松或严格的结构化输出处理；`isolated`/`apply`/`merge` 标志控制任务工作树行为。当 `handle=True` 时，它返回一个 DAG 节点字典（`{"text", "output", "handle", "id", "agent"}`），其中 `handle` 是可恢复的 `agent://<id>` URI；当存在已解析的输出时，也会存放在 `"data"` 键下。
+Python 预置辅助函数包含 `agent(prompt, *, agent=None, label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None, tools=None)`，它会注册一个后台子代理作业并返回一个 `AgentHandle`（`.id`、`.handle` = `agent://<id>`、`.status`、`.done()`、`.wait(timeout=None)`、`.send()`、`.cancel()`、`.output()`，可 await）。`completion(...)` 同样返回一个 `CompletionHandle`。`wait(handles, timeout=None, raise_errors=True)` 按输入顺序对句柄进行栅栏同步。`workpool(...)` 返回一个 `WorkPool`（`push`、`status`、`peek`、`close`）；其名称就是与 `hub wait` 搭配使用的聚合异步作业 id。`tool.<name>(args)` 是一个协程（`await tool.read({...})`）；当 `eval.tools.enabled` 开启时，`@tool` 会把内核本地函数注册为供子代理使用的工具（schema 从类型标注推断）。
+
+运行器还会在代码单元请求之外接受 `{"type": "tool", "id", "op": "describe"|"call", ...}` 请求。它由一个专用的守护线程提供服务（POSIX 上如此；Windows 上则在代码单元之间处理），针对内核的 `__omp_tools__` 注册表进行应答，回复一个 `application/json` 显示包（`{ok, tools, missing}` 或 `{ok, value}`），并把抛出异常的工具作为 `error` 帧上报，而不触碰正在运行的代码单元。调用方契约参见 `docs/tools/eval.md`。
 
 ## 执行流程与取消/超时
 
 ### 代码单元超时
 
-`timeout` 以秒为单位，默认为 30。`0` 表示禁用代码单元超时；非零值会被夹紧到 `1..3600` 秒之间，并受正值的 `tools.maxTimeout` 上限约束，然后传给 `IdleTimeout`。在宿主侧 `agent()` / `parallel()` / `completion()` 桥接调用进行期间，超时会被暂停：这些调用通过 `withBridgeTimeoutPause` 发出引用计数的 pause/resume 事件，控制流返回时将启动一个新的超时窗口。
+`timeout` 以秒为单位，默认为 30。`0` 表示禁用代码单元超时；非零值会被夹紧到 `1..3600` 秒之间，并受正值的 `tools.maxTimeout` 上限约束，然后传给 `IdleTimeout`。当宿主侧对 `agent()` / `completion()` 句柄的 `wait()` 正在进行时，超时会被暂停：这些调用通过 `withBridgeTimeoutPause` 发出引用计数的 pause/resume 事件，控制流返回时将启动一个新的超时窗口。
 
 pause/resume 事件是唯一能够暂停该预算的机制。计算、`stdout`/`stderr`、`log()`/`phase()` 以及普通的工具调用都会计入其中。该工具通过 `AbortSignal.any(...)` 将调用方、会话以及看门狗的中止信号合并使用；后端不会另外启动一个相互竞争的截止时间。
 

@@ -2,26 +2,26 @@
 
 > 创建或覆盖文件、可写内部资源、归档条目、SQLite 行，或合并冲突解决方案。
 
-## Source
-- Entry: `packages/coding-agent/src/tools/write.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/write.md`
-- Key collaborators:
-  - `packages/coding-agent/src/utils/zip.ts` — parse archive selectors and atomically rewrite ZIP/tar containers.
-  - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite paths and perform row insert/update/delete.
-  - `packages/coding-agent/src/tools/conflict-detect.ts` — parse `conflict://` URIs, register/validate regions, and expand side tokens.
-  - `packages/coding-agent/src/internal-urls/router.ts` / `packages/coding-agent/src/tools/xdev.ts` — writable internal resources and `xd://` tool-device dispatch.
-  - `packages/coding-agent/src/lsp/index.ts` — format-on-write and diagnostics writethrough.
-  - `packages/coding-agent/src/tools/auto-generated-guard.ts` — block overwriting generated files.
-  - `packages/coding-agent/src/tools/fs-cache-invalidation.ts` — invalidate shared FS scan caches after writes.
-  - `packages/coding-agent/src/tools/plan-mode-guard.ts` — resolve paths and enforce plan-mode write policy.
+## 源码
+- 入口：`packages/coding-agent/src/tools/write.ts`
+- 面向模型的提示词：`packages/coding-agent/src/prompts/tools/write.md`
+- 关键协作模块：
+  - `packages/utils/src/ar`（`@oh-my-pi/pi-utils/ar`）— 统一归档注册表：`parseArchivePathCandidates()` 解析归档选择器，`readArchiveEntries()`/`writeArchive()` 以原子方式重写容器。
+  - `packages/coding-agent/src/tools/sqlite-reader.ts` — 检测 SQLite 路径并执行行插入/更新/删除。
+  - `packages/coding-agent/src/tools/conflict-detect.ts` — 解析 `conflict://` URI，注册/校验区域，并展开 side token。
+  - `packages/coding-agent/src/internal-urls/router.ts` / `packages/coding-agent/src/tools/xdev.ts` — 可写内部资源与 `xd://` 工具设备分派。
+  - `packages/coding-agent/src/lsp/index.ts` — 写入时格式化与诊断透写。
+  - `packages/coding-agent/src/tools/auto-generated-guard.ts` — 阻止覆盖生成的文件。
+  - `packages/coding-agent/src/tools/fs-cache-invalidation.ts` — 写入后使共享 FS 扫描缓存失效。
+  - `packages/coding-agent/src/tools/plan-mode-guard.ts` — 解析路径并执行计划模式写入策略。
 
-## Inputs
-| Field | Type | Required | Description |
+## 输入
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `path` | `string` | Yes | Target path. Plain paths write files. Writable internal URLs delegate to their handler. `xd://<device>` dispatches a mounted tool using JSON in `content`. `archive.ext:inner/path` writes an archive entry for `.tar`, `.tar.gz`, `.tgz`, `.zip`, `.jar`, `.war`, `.ear`, or `.apk`. `db.sqlite:table` inserts a row; `db.sqlite:table:key` updates/deletes one. `conflict://<id>` resolves a registered conflict and `conflict://*` performs a bulk resolution. A copied `[path#TAG]` wrapper is accepted and removed. |
-| `content` | `string` | Yes | Full replacement file/archive/internal-resource content, conflict replacement, or SQLite row payload. SQLite non-delete writes must parse as a JSON5 object; empty or whitespace-only content deletes a keyed row. For `xd://`, this is the mounted tool's JSON argument object. |
+| `path` | `string` | 是 | 目标路径。纯路径写入文件。可写内部 URL 会委托给其处理器。`xd://<device>` 使用 `content` 中的 JSON 分派一个已挂载的工具。`archive.ext:inner/path` 为 `.zip` 及 ZIP 格式别名（`.jar`、`.war`、`.ear`、`.apk`、…）、`.tar`、`.tar.gz`/`.tgz`、`.tar.zst`/`.tzst` 或 `.asar` 写入一个归档条目。`db.sqlite:table` 插入一行；`db.sqlite:table:key` 更新/删除一行。`conflict://<id>` 解决一个已注册的冲突，`conflict://*` 执行批量解决。被复制的 `[path#TAG]` 包装会被接受并移除。 |
+| `content` | `string` | 是 | 完整替换的文件/归档/内部资源内容、冲突替换内容，或 SQLite 行负载。SQLite 的非删除写入必须能解析为 JSON5 对象；为空或仅含空白字符的内容会删除带键的行。对于 `xd://`，这是已挂载工具的 JSON 参数对象。 |
 
-Worked examples:
+完整示例：
 
 ```text
 path: "src/generated/config.json"
@@ -38,173 +38,173 @@ path: "data/app.sqlite:users:42"
 content: "{name: 'Ada', active: true}"
 ```
 
-## Outputs
-Single-shot result.
+## 输出
+单次调用结果。
 
-- Success always returns at least one text block, except that an `xd://` dispatch preserves the mounted tool's own content/error result.
-  - Plain file write: `Successfully wrote <chars> bytes to <relative-path>` (the count is `cleanContent.length`, not encoded byte length).
-  - Internal URL write: `Successfully wrote <chars> bytes to <url>`.
-  - Archive write: `Successfully wrote <chars> bytes to <relative-archive-path>:<entry-path>`.
-  - SQLite write: one of `Inserted row into <table>`, `Updated row '<key>' in <table>`, `No row updated ...`, `Deleted row ...`, `No row deleted ...`.
-  - Conflict resolution: conflict-specific success text, with fresh hashline snapshot headers when applicable. Bulk resolution can return `isError: true` after some files succeeded and others failed.
-- During execution, `onUpdate` may emit `Writing <chars> bytes to <path>...`; `xd://` forwards the mounted tool's updates.
-- If hashline prefixes were copied from `read` output and stripped first, the first text block gets an extra note.
-- In hashline display mode, plain file writes (including ACP bridge writes) and conflict resolutions prepend a fresh `[<relative-path>#TAG]` header so the next `edit` has a current snapshot tag without an extra `read`. Bulk conflict resolutions append a `Snapshots:` block listing one header per successfully written file.
-- Plain file writes may also return `details.diagnostics` plus `details.meta.diagnostics` when LSP diagnostics-on-write is enabled, and `details.madeExecutable` when a newly written shebang file is chmodded executable.
-- Plain/archive/conflict results set `details.resolvedPath` when backed by a file. SQLite writes additionally set `details.meta.source` to the database file through `sourcePath(...)`. Internal URL writes return empty `details`; device dispatch sets `details.xdev`.
+- 成功时始终返回至少一个文本块，但 `xd://` 分派会保留已挂载工具自身的内容/错误结果。
+  - 普通文件写入：`Successfully wrote <chars> bytes to <relative-path>`（计数为 `cleanContent.length`，而非编码后的字节长度）。
+  - 内部 URL 写入：`Successfully wrote <chars> bytes to <url>`。
+  - 归档写入：`Successfully wrote <chars> bytes to <relative-archive-path>:<entry-path>`。
+  - SQLite 写入：`Inserted row into <table>`、`Updated row '<key>' in <table>`、`No row updated ...`、`Deleted row ...`、`No row deleted ...` 之一。
+  - 冲突解决：冲突专用的成功文本，在适用时附带新的 hashline 快照头。批量解决可能在某些文件成功、其他文件失败后返回 `isError: true`。
+- 执行期间，`onUpdate` 可能发出 `Writing <chars> bytes to <path>...`；`xd://` 转发已挂载工具的更新。
+- 如果 hashline 前缀是从 `read` 输出中复制并先行剥离的，第一个文本块会得到一条额外说明。
+- 在 hashline 显示模式下，普通文件写入（包括 ACP 桥写入）和冲突解决会前置一个新的 `[<relative-path>#TAG]` 头，使下一次 `edit` 无需额外 `read` 即可拥有当前快照标签。批量冲突解决会追加一个 `Snapshots:` 块，为每个成功写入的文件列出一个头。
+- 当 LSP 的写入时诊断（diagnostics-on-write）被启用时，普通文件写入还可能返回 `details.diagnostics` 以及 `details.meta.diagnostics`；当新写入的 shebang 文件被 chmod 为可执行时，返回 `details.madeExecutable`。
+- 普通/归档/冲突结果在由文件支撑时设置 `details.resolvedPath`。SQLite 写入还通过 `sourcePath(...)` 将 `details.meta.source` 设置为数据库文件。内部 URL 写入返回空的 `details`；设备分派设置 `details.xdev`。
 
-## Flow
-1. `WriteTool.execute()` unwraps a copied `[path#TAG]` argument and peels a valid read selector from internal URLs so write and read address the same resource. Malformed/range selectors on writable URLs are rejected.
-2. In hashline display mode it strips pasted `[PATH#HASH]` headers and `LINE:` prefixes from `content`.
-3. It validates URI-like targets. Unknown schemes and common `xd://` misspellings fail instead of becoming local filenames; prefix with `./` to deliberately create a URI-looking POSIX filename.
-4. If `path` is an internal URL whose handler exposes `write`, the tool delegates to it. `xd://` validates and dispatches JSON to the mounted tool while preserving its result and approval tier; `local://` falls through to the session-local filesystem path.
-5. `conflict://...` is handled next. Scope reads such as `conflict://<id>/ours` are read-only; writable conflict URIs omit the scope. Registered on-disk markers are revalidated before replacement.
-6. It calls `#resolveArchiveWritePath()`. Candidate archive files are checked longest-first; when none exists, the shortest candidate archive path is used for creating a new container.
-7. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
-   - The parent directory is created recursively.
-   - Existing entries are loaded through `readArchiveEntries()`, the target is replaced in the entry map, and `writeArchive()` serializes a complete replacement.
-   - The replacement is written to a sibling temporary path and renamed over the destination. Existing archive symlinks are resolved first so the target is updated rather than replacing the symlink.
-   - ZIP-format aliases remain ZIP. Tar gzip compression is selected for `.tar.gz`/`.tgz`.
-   - `invalidateFsScanAfterWrite()` runs on the archive file path.
-8. If not an archive, it tries SQLite candidates. Existing non-SQLite files suppress SQLite interpretation.
-9. SQLite writes call `enforcePlanModeWrite(..., { op: "update" })`, then `#writeSqliteRow()`.
-   - The database must already exist.
-   - It opens Bun SQLite with `{ create: false, strict: true }` and `PRAGMA busy_timeout = 3000`.
-   - Whitespace-only `content` with a row key deletes a row.
-   - Non-empty `content` is parsed with `Bun.JSON5.parse()`, must be an object, and is routed to insert/update helpers.
-   - The scan cache is invalidated and the connection closes in `finally`.
-10. Otherwise it treats `path` as a plain filesystem file.
-    - It rejects high-confidence mis-dispatched read targets: a missing selector-shaped filename with empty content, or a missing semicolon-joined list of selector paths. Existing literal paths win; non-empty content is the escape hatch for a single deliberate selector-shaped filename.
-    - Plan-mode policy and path resolution run before mutation. Existing files pass the generated-file guard.
-    - ACP bridge `writeTextFile` is tried first when available; otherwise the session writethrough writes the content. LSP settings may format, synchronize, and diagnose the write.
-    - A leading shebang may add execute bits. The filesystem scan cache is invalidated.
-11. The tool returns text plus optional diagnostics, executable, resolved-path, or device-dispatch metadata.
+## 流程
+1. `WriteTool.execute()` 解包被复制的 `[path#TAG]` 参数，并从内部 URL 上剥离有效的 read 选择器，使写入与读取指向同一资源。可写 URL 上的畸形/范围选择器会被拒绝。
+2. 在 hashline 显示模式下，它会从 `content` 中剥离粘贴进来的 `[PATH#HASH]` 头和 `LINE:` 前缀。
+3. 它校验形似 URI 的目标。未知 scheme 与常见的 `xd://` 拼写错误会直接失败，而不会变成本地文件名；若要刻意创建一个形似 URI 的 POSIX 文件名，请加上 `./` 前缀。
+4. 如果 `path` 是一个内部 URL 且其处理器暴露了 `write`，工具会委托给它。`xd://` 校验 JSON 并将其分派给已挂载的工具，同时保留其结果与审批层级；`local://` 则落到会话本地文件系统路径。
+5. 接下来处理 `conflict://...`。诸如 `conflict://<id>/ours` 这类作用域读取是只读的；可写的冲突 URI 省略作用域。已注册的磁盘标记会在替换前重新校验。
+6. 它调用 `#resolveArchiveWritePath()`。候选归档文件按最长优先检查；当都不存在时，使用最短的候选归档路径来创建新容器。
+7. 归档写入调用 `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`，然后调用 `#writeArchiveEntry()`。
+   - 父目录会被递归创建。
+   - 现有条目通过 `readArchiveEntries()` 加载，目标在条目映射中被替换，随后 `writeArchive()` 序列化出一个完整的替换版本。
+   - 替换内容先写入同级的临时路径，再重命名覆盖目标。现有归档符号链接会先被解析，以便更新目标而不是替换该符号链接。
+   - ZIP 格式别名保持 ZIP。`.tar.gz`/`.tgz` 选用 tar gzip 压缩，`.tar.zst`/`.tzst` 选用 zstd；`.asar` 容器通过同一边界重写。只读格式（`.7z`、`.rar`、…）会被拒绝。
+   - `invalidateFsScanAfterWrite()` 在归档文件路径上运行。
+8. 如果不是归档，它会尝试 SQLite 候选。已存在的非 SQLite 文件会抑制 SQLite 解释。
+9. SQLite 写入调用 `enforcePlanModeWrite(..., { op: "update" })`，然后调用 `#writeSqliteRow()`。
+   - 数据库必须已存在。
+   - 它以 `{ create: false, strict: true }` 和 `PRAGMA busy_timeout = 3000` 打开 Bun SQLite。
+   - 仅含空白字符且带行键的 `content` 会删除一行。
+   - 非空 `content` 用 `Bun.JSON5.parse()` 解析，必须是对象，并被路由到插入/更新辅助函数。
+   - 扫描缓存会失效，连接在 `finally` 中关闭。
+10. 否则，它把 `path` 当作普通文件系统文件处理。
+   - 它会拒绝高置信度的误分派读取目标：缺失的形似选择器文件名且内容为空，或缺失的分号连接的选择器路径列表。已存在的字面路径优先；非空内容是单个刻意形似选择器文件名的逃生通道。
+   - 计划模式策略与路径解析在变更之前运行。已存在的文件需通过生成文件守卫。
+   - 可用时优先尝试 ACP 桥 `writeTextFile`；否则由会话透写写入内容。LSP 设置可能会对写入进行格式化、同步和诊断。
+   - 开头为 shebang 时可能会添加可执行位。文件系统扫描缓存会失效。
+11. 工具返回文本，外加可选的诊断、可执行、已解析路径或设备分派元数据。
 
-## Modes / Variants
-### Plain file path
-- Target is any path that does not resolve as an archive selector and does not resolve as an existing-or-new SQLite selector.
-- Existing files are overwritten.
-- `write.ts` does not call `fs.mkdir()` on this path; explicit parent-directory creation only exists in the archive branch, but `Bun.write()` itself creates missing parent directories for plain file writes.
+## 模式 / 变体
+### 普通文件路径
+- 目标是任何既不能解析为归档选择器、也不能解析为已存在或新建 SQLite 选择器的路径。
+- 已存在的文件会被覆盖。
+- `write.ts` 在此路径上不调用 `fs.mkdir()`；显式的父目录创建只存在于归档分支中，但 `Bun.write()` 自身会为普通文件写入创建缺失的父目录。
 
-Example:
+示例：
 
 ```text
 path: "tmp/output.txt"
 content: "hello\n"
 ```
 
-### Archive entry write
-- Selector syntax: `archive.ext:inner/path`.
-- Supported suffixes: `.tar`, `.tar.gz`, `.tgz`, `.zip`, and ZIP-format `.jar`, `.war`, `.ear`, `.apk`.
-- The inner path is normalized to `/`, strips empty and `.` segments, rejects `..`, and rejects directory targets ending in `/`.
-- Rewrites the whole archive through a temporary file and rename after replacing one entry.
-- Creates the parent directory for the archive file if needed.
+### 归档条目写入
+- 选择器语法：`archive.ext:inner/path`。
+- 支持的扩展名：`.zip` 与 ZIP 格式别名（`.jar`、`.war`、`.ear`、`.apk` 以及其他 zip 家族扩展名）、`.tar`、`.tar.gz`/`.tgz`、`.tar.zst`/`.tzst` 和 `.asar`。
+- 内部路径会规范化为 `/`，去除空段和 `.` 段，拒绝 `..`，并拒绝以 `/` 结尾的目录目标。
+- 在替换单个条目之后，通过临时文件和重命名重写整个归档。
+- 如有需要，创建归档文件的父目录。
 
-Example:
+示例：
 
 ```text
 path: "build/assets.tar.gz:css/app.css"
 content: "body { color: black; }\n"
 ```
 
-### SQLite table insert
-- Selector syntax: `db.sqlite:table`.
-- `content` must parse as a JSON5 object.
-- Empty object is allowed and becomes `INSERT INTO <table> DEFAULT VALUES`.
-- Query parameters are rejected for SQLite writes.
+### SQLite 表插入
+- 选择器语法：`db.sqlite:table`。
+- `content` 必须能解析为 JSON5 对象。
+- 允许空对象，它会变成 `INSERT INTO <table> DEFAULT VALUES`。
+- SQLite 写入会拒绝查询参数。
 
-Example:
+示例：
 
 ```text
 path: "data/app.db:users"
 content: "{name: 'Ada', active: true}"
 ```
 
-### SQLite row update / delete
-- Selector syntax: `db.sqlite:table:key`.
-- Non-empty `content` updates the row.
-- Empty or whitespace-only `content` deletes the row.
-- Row lookup uses the single-column primary key if present; otherwise it falls back to `rowid`. Composite primary keys and `WITHOUT ROWID` tables are rejected for key-based writes.
+### SQLite 行更新 / 删除
+- 选择器语法：`db.sqlite:table:key`。
+- 非空 `content` 更新该行。
+- 为空或仅含空白字符的 `content` 删除该行。
+- 行查找在存在单列主键时使用该主键；否则回退到 `rowid`。基于键的写入会拒绝复合主键和 `WITHOUT ROWID` 表。
 
-Example update:
+更新示例：
 
 ```text
 path: "data/app.sqlite:users:42"
 content: "{email: 'ada@example.com'}"
 ```
 
-Example delete:
+删除示例：
 
 ```text
 path: "data/app.sqlite:users:42"
 content: ""
 ```
 
-### Writable internal resources and tool devices
-- A registered internal handler with a `write` hook owns its resource semantics (for example, `vault://`). `local://` is instead resolved into the session-local artifact sandbox and follows the plain-file path.
-- `xd://` lists/dispatches tool devices mounted behind `write`. Read `xd://<name>` first for its generated input documentation, then pass one JSON object as `content`. The device's own schema, updates, result blocks, error flag, renderer metadata, and approval tier are preserved.
-- Unknown URI-like schemes are refused to prevent silent local-file creation. Use `./scheme://...` only when that filename is intentional.
+### 可写内部资源与工具设备
+- 带有 `write` 钩子的已注册内部处理器拥有其资源语义（例如 `vault://`）。`local://` 则会被解析进会话本地产物沙箱，并遵循普通文件路径。
+- `xd://` 列出/分派挂载在 `write` 之后的工具设备。先读取 `xd://<name>` 获取其生成的输入文档，然后传入一个 JSON 对象作为 `content`。设备自身的 schema、更新、结果块、错误标志、渲染器元数据和审批层级都会被保留。
+- 未知的形似 URI 的 scheme 会被拒绝，以防止静默创建本地文件。仅当该文件名是刻意的时才使用 `./scheme://...`。
 
-### Merge-conflict resolution
-- First read `<file>:conflicts`; this registers session-stable ids. `conflict://<N>` replaces only that recorded marker block and rejects stale/missing regions.
-- A line exactly equal to `@ours`, `@theirs`, `@base`, or `@both` expands to the recorded side (`@both` is ours then theirs). `@base` requires a diff3 base. Other content is literal.
-- `conflict://*` with ordinary content applies the same replacement/token expansion to every registered conflict. Per-id directive content such as `1: @ours\n2: @theirs` resolves only the listed ids; every non-empty directive line must use one side token and ids may not repeat.
-- Bulk processing is all-or-nothing per file, applied bottom-up. Other files can still succeed; partial cross-file success returns `isError: true`, while an all-failed pass throws. Successful ids are invalidated and failed-file ids remain registered for retry.
-- `/ours`, `/theirs`, `/base`, and `/both` URI scopes are read-only.
+### 合并冲突解决
+- 首先读取 `<file>:conflicts`；这会注册会话稳定的 id。`conflict://<N>` 只替换该已记录的标记块，并拒绝过时/缺失的区域。
+- 恰好等于 `@ours`、`@theirs`、`@base` 或 `@both` 的一行会展开为已记录的一侧（`@both` 是先 ours 后 theirs）。`@base` 需要 diff3 base。其他内容按字面处理。
+- 带普通内容的 `conflict://*` 会对每个已注册冲突应用相同的替换/token 展开。诸如 `1: @ours\n2: @theirs` 的按 id 指令内容只解决所列 id；每个非空指令行必须使用一个 side token，且 id 不得重复。
+- 批量处理按文件全有或全无，且自底向上应用。其他文件仍可成功；跨文件的部分成功返回 `isError: true`，而全部失败的一趟会抛出异常。成功的 id 会失效，失败文件的 id 仍保持注册以便重试。
+- `/ours`、`/theirs`、`/base` 和 `/both` URI 作用域是只读的。
 
 
-## Side Effects
-- Filesystem
-  - Creates or overwrites plain files.
-  - Rewrites entire archive files atomically through a temporary sibling and rename when writing an entry.
-  - Explicitly creates parent directories for archive files; the plain-file backend also supports missing parents.
-  - Mutates existing SQLite databases; never creates a new SQLite DB.
-  - Resolves conflict markers in files for `conflict://...` writes.
-  - May chmod a shebang file executable after a successful plain-file write.
-- Subprocesses / native bindings
-  - Uses Bun SQLite bindings via `bun:sqlite`.
-  - Uses the unified archive utilities: Bun Archive for tar serialization/indexing and `node:zlib`-backed framing for ZIP.
-  - May talk to configured LSP servers through `packages/coding-agent/src/lsp/index.ts`.
-- Session state
-  - Invalidates shared filesystem scan cache entries through `invalidateFsScanAfterWrite()`.
-  - Enforces plan-mode write restrictions before mutating the target.
-  - Updates file mutation/snapshot state for plain files and conflict resolutions; resolved conflict ids are invalidated.
-  - `xd://` dispatches a mounted tool and may therefore have that tool's documented side effects.
-- Background work / cancellation
-  - Marks the tool `concurrency = "exclusive"` in `WriteTool`.
-  - The write body is wrapped with `untilAborted`; LSP writethrough can schedule deferred diagnostics fetches after a timeout.
+## 副作用
+- 文件系统
+  - 创建或覆盖普通文件。
+  - 写入条目时，通过同级临时文件和重命名以原子方式重写整个归档文件。
+  - 显式创建归档文件的父目录；普通文件后端也支持缺失的父目录。
+  - 修改现有 SQLite 数据库；从不创建新的 SQLite 数据库。
+  - 为 `conflict://...` 写入解决文件中的冲突标记。
+  - 成功的普通文件写入后，可能将 shebang 文件 chmod 为可执行。
+- 子进程 / 原生绑定
+  - 通过 `bun:sqlite` 使用 Bun SQLite 绑定。
+  - 使用 `packages/utils/src/ar` 中的统一归档工具：tar 序列化，以及对压缩 tar 的 gzip/zstd 封装、对 ZIP 的由 `node:zlib` 支撑的 DEFLATE 封装，还有一个 ASAR 编码器。
+  - 可能通过 `packages/coding-agent/src/lsp/index.ts` 与已配置的 LSP 服务器通信。
+- 会话状态
+  - 通过 `invalidateFsScanAfterWrite()` 使共享文件系统扫描缓存条目失效。
+  - 在变更目标之前执行计划模式写入限制。
+  - 为普通文件和冲突解决更新文件变更/快照状态；已解决的冲突 id 会失效。
+  - `xd://` 分派一个已挂载的工具，因此可能具有该工具记录在案的副作用。
+- 后台工作 / 取消
+  - 在 `WriteTool` 中将该工具标记为 `concurrency = "exclusive"`。
+  - 写入主体被 `untilAborted` 包裹；LSP 透写可以在超时之后安排延迟的诊断获取。
 
-## Limits & Caps
-- Plain/internal file content has no tool-level byte cap beyond in-memory handling. Archive rewrites inherit archive utility caps: tar/tgz input `256 MiB`, each existing member `64 MiB`, and ZIP output must fit non-ZIP64 32-bit entry/count/offset limits.
-- Generated-file detection reads at most `CHECK_BYTE_COUNT = 1024` bytes and `HEADER_LINE_LIMIT = 40` header lines from an existing file in `packages/coding-agent/src/tools/auto-generated-guard.ts`.
-- SQLite writes set `PRAGMA busy_timeout = 3000`.
-- LSP writethrough uses a `5_000` ms operation timeout in `runLspWritethrough()` and may schedule a deferred diagnostics fetch with `AbortSignal.timeout(25_000)` in `scheduleDeferredDiagnosticsFetch()`.
-- Shebang executable handling depends on host filesystem chmod support.
+## 限制与上限
+- 普通/内部文件内容除了内存处理之外没有工具级字节上限。归档重写继承归档工具的上限：tar/tgz 输入 `256 MiB`，每个现有成员 `64 MiB`，且 ZIP 输出必须能容纳非 ZIP64 的 32 位条目/计数/偏移限制。
+- 生成文件检测在 `packages/coding-agent/src/tools/auto-generated-guard.ts` 中最多从现有文件读取 `CHECK_BYTE_COUNT = 1024` 字节和 `HEADER_LINE_LIMIT = 40` 行头部。
+- SQLite 写入设置 `PRAGMA busy_timeout = 3000`。
+- LSP 透写在 `runLspWritethrough()` 中使用 `5_000` ms 的操作超时，并可能在 `scheduleDeferredDiagnosticsFetch()` 中用 `AbortSignal.timeout(25_000)` 安排一次延迟的诊断获取。
+- shebang 可执行处理取决于宿主文件系统的 chmod 支持。
 
-## Errors
-- Invalid archive subpaths throw `ToolError` with messages such as:
+## 错误
+- 无效的归档子路径会抛出 `ToolError`，消息例如：
   - `Archive write path must target a file inside the archive`
   - `Archive write path must target a file, not a directory`
   - `Archive path cannot contain '..'`
-- SQLite path parsing throws on unsupported forms:
+- SQLite 路径解析在遇到不支持的形式时抛出：
   - `SQLite write paths do not support query parameters`
   - `SQLite write path must target a table`
   - `SQLite row writes require a non-empty row key`
-- Missing SQLite DBs surface as `SQLite database '<path>' not found`.
-- SQLite content errors include invalid JSON5, non-object payloads, unknown columns, non-scalar values, empty update objects, composite primary keys, and `WITHOUT ROWID` key lookups.
-- Existing plain files may be rejected by `assertEditableFile()` when they look generated.
-- URI-like unknown targets and malformed/missing `xd://` devices fail rather than writing local files; mounted devices surface their own schema/tool errors.
-- Empty writes to missing selector-shaped targets and semicolon-joined selector lists are rejected as likely read/write mis-dispatches.
-- Conflict scope writes are read-only; invalid/stale ids, malformed bulk directives, missing `@base`, and stale marker locations surface `ToolError`.
-- Archive read/write failures and unexpected SQLite exceptions are wrapped in `ToolError(error.message)`.
-- If no LSP server matches or LSP formatting/diagnostics times out, file writes still complete; diagnostics may be omitted.
+- 缺失的 SQLite 数据库表现为 `SQLite database '<path>' not found`。
+- SQLite 内容错误包括无效 JSON5、非对象负载、未知列、非标量值、空更新对象、复合主键，以及 `WITHOUT ROWID` 键查找。
+- 已存在的普通文件在看起来像是生成文件时，可能被 `assertEditableFile()` 拒绝。
+- 形似 URI 的未知目标以及畸形/缺失的 `xd://` 设备会失败，而不是写入本地文件；已挂载的设备会暴露自身的 schema/工具错误。
+- 对缺失的形似选择器目标的空写入，以及分号连接的选择器列表，会因疑似读/写误分派而被拒绝。
+- 冲突作用域写入是只读的；无效/过时的 id、畸形的批量指令、缺失的 `@base` 以及过时的标记位置都会暴露为 `ToolError`。
+- 归档读/写失败和意外的 SQLite 异常会被包装在 `ToolError(error.message)` 中。
+- 如果没有匹配的 LSP 服务器，或 LSP 格式化/诊断超时，文件写入仍会完成；诊断可能被省略。
 
-## Notes
-- Archive path detection runs before SQLite detection. A path that matches an archive selector is never treated as SQLite.
-- SQLite detection declines when an existing file with a `.sqlite` / `.db` suffix lacks SQLite magic bytes; the path falls back to a plain file write.
-- Archive rewriting uses the unified `readArchiveEntries()` / `writeArchive()` boundary and a temp-file rename. String members are encoded as UTF-8.
-- The prompt forbids two common anti-patterns: using `write` for routine edits that should use `edit`, and creating `*.md` / `README` files unless explicitly requested. It also forbids emojis unless requested.
-- Plain file and internal URL writes report `cleanContent.length` as “bytes”, which is UTF-16 code units in JS, not an on-disk byte measurement.
-- `stripWriteContent()` only removes hashline prefixes when the session’s file display mode has `hashLines` enabled; otherwise content is written unchanged.
+## 备注
+- 归档路径检测在 SQLite 检测之前运行。匹配归档选择器的路径绝不会被当作 SQLite。
+- 当带 `.sqlite` / `.db` 后缀的已存在文件缺少 SQLite magic bytes 时，SQLite 检测会放弃；该路径回退为普通文件写入。
+- 归档重写使用统一的 `readArchiveEntries()` / `writeArchive()` 边界以及临时文件重命名。字符串成员按 UTF-8 编码。
+- 提示词禁止两种常见反模式：对应当使用 `edit` 的常规编辑使用 `write`，以及在未被明确要求时创建 `*.md` / `README` 文件。它还禁止在未被要求时使用 emoji。
+- 普通文件和内部 URL 写入把 `cleanContent.length` 报告为「bytes」，这在 JS 中是 UTF-16 码元，而非磁盘上的字节度量。
+- 仅当会话的文件显示模式启用了 `hashLines` 时，`stripWriteContent()` 才会移除 hashline 前缀；否则内容按原样写入。
 
-- The tool has `strict = true`, `loadMode = "essential"`, and exclusive concurrency. Its renderer shows a 12-line streaming preview and a 6-line completed preview by default; `xd://` results delegate rendering to the mounted device.
+- 该工具具有 `strict = true`、`loadMode = "essential"` 和排他并发。其渲染器默认展示 12 行流式预览和 6 行完成预览；`xd://` 结果把渲染委托给已挂载的设备。

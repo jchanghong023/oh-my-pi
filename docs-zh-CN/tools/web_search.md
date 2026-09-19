@@ -33,6 +33,7 @@
   - `packages/coding-agent/src/web/search/providers/searxng.ts` — 自托管 SearXNG 适配器。
   - `packages/coding-agent/src/web/search/providers/startpage.ts` — Startpage（Google 代理）表单流抓取器。
   - `packages/coding-agent/src/web/search/providers/synthetic.ts` — Synthetic 搜索适配器。
+  - `packages/coding-agent/src/web/search/providers/ollama.ts` — Ollama 网页搜索适配器。
   - `packages/coding-agent/src/web/search/providers/tavily.ts` — Tavily 搜索适配器。
   - `packages/coding-agent/src/web/search/providers/tinyfish.ts` — TinyFish 搜索适配器。
   - `packages/coding-agent/src/web/search/providers/xai.ts` — xAI Responses 网页搜索适配器。
@@ -64,7 +65,7 @@
 
 - 如果 `response.answer` 存在，则首先输出。
 - 如果存在来源，则每个来源输出一项（仅当同时生成了答案时，才会输出 `## Sources` 标题及来源计数）：
-  - `[n] <title> (<格式化后的时效或发布日期>)`
+  - `[n] <title> (<formatted age or published date>)`
   - `    <url>`
   - 可选的摘要行，截断为 240 字符。
 - 如果存在引用，则随后是 `## Citations` 部分，包含 URL/标题以及可选的引用文本，截断为 240 字符。
@@ -74,7 +75,7 @@
 当提供方不可用或提供方尝试失败时，失败输出不会在工具边界处抛出。相反，工具返回：
 
 - `content[0].text = "Error: ..."`
-- `details.response.provider = <最后尝试的提供方> | "none"`
+- `details.response.provider = <last attempted provider> | "none"`
 - `details.error = ...`
 
 流式：无。`WebSearchTool.execute()` 将其 `AbortSignal` 转发到 `executeSearch()`，而 `executeSearch()` 把它传递给提供方。如果在回退处理过程中信号被中止，`throwIfAborted(signal)` 会重新抛出取消信号，而不是返回 `"Error: ..."` 文本结果。
@@ -108,11 +109,16 @@
   - **强制提供方**：内部调用方可以传递 `provider`；非 `auto` 值是唯一尝试的提供方，并使用 `isExplicitlyAvailable()`，而 `auto`（或省略它）会遍历配置链。此字段不在面向模型的 schema 中。
   - **配置顺序**：`setSearchProviderOrder()` 在 `providers.webSearchOrder` 中优先选取有效、首次出现的提供方 ID；未列出的提供方按内置相对顺序跟进。列出的提供方是显式选择，并通过 `isExplicitlyAvailable()` 解析，因此 Perplexity、Exa 和 Firecrawl 可以使用其未认证/无密钥路径。
   - **排除的提供方**：`setExcludedSearchProviders()` 会从自动/配置链以及 Public Web 扇出中移除提供方。通过 `packages/coding-agent/src/config/provider-globals.ts` 从 `providers.webSearchExclude` 接入。
-  - **默认自动链顺序**（23 个提供方）：`perplexity`、`gemini`、`anthropic`、`codex`、`xai`、`zai`、`exa`、`tinyfish`、`jina`、`kagi`、`tavily`、`firecrawl`、`brave`、`kimi`、`parallel`、`synthetic`、`searxng`、`startpage`、`duckduckgo`、`ecosia`、`google`、`mojeek`、`public`（位于 `packages/coding-agent/src/web/search/types.ts` 的 `SEARCH_PROVIDER_ORDER`）。`public` 仅显式可用：其 `isAvailable()` 返回 `false`，因此自动链永远不会隐式地对其进行扇出。
+  - **默认自动链顺序**（24 个提供方）：`parallel`、`perplexity`、`gemini`、`anthropic`、`codex`、`xai`、`zai`、`exa`、`tinyfish`、`jina`、`kagi`、`tavily`、`firecrawl`、`brave`、`kimi`、`synthetic`、`ollama`、`searxng`、`startpage`、`duckduckgo`、`ecosia`、`google`、`mojeek`、`public`（位于 `packages/coding-agent/src/web/search/types.ts` 的 `SEARCH_PROVIDER_ORDER`）。Parallel 在已配置时使用已认证搜索，否则使用其免凭据 MCP。`public` 仅显式可用：其 `isAvailable()` 返回 `false`，因此自动链永远不会隐式地对其进行扇出。
 - **提供方超时**：`providers.webSearchTimeoutSeconds` 提供每个提供方搜索传输的硬上限，超过后自动链前进。默认值为 `60`；无效的非正值会回退到该默认值，高于 `300` 的值会被截断；提供方特定的上游或聚合限制仍可能更短。
 - **提供方适配器**
   - **Perplexity** — `packages/coding-agent/src/web/search/providers/perplexity.ts`
     - 可用性：认证尝试顺序为 `PERPLEXITY_COOKIES` -> `agent.db` 中的 OAuth 令牌 -> 直接的 Perplexity API 密钥 -> OpenRouter 密钥 -> 匿名的 ask 端点回退。自动链要求直接的 Perplexity 认证（cookie、OAuth 或 Perplexity 凭据）；显式选择始终可用，并可使用 OpenRouter 或匿名搜索。
+    - 浏览器 SSO：运行 `/login perplexity`（或在设置向导中选择 Perplexity），然后按 Enter 或输入 `sso`。在专用浏览器窗口中完成登录，为你的组织选择 **Single sign-on (SSO)**。omp 会自动捕获并校验会话；无需扩展、DevTools、复制 cookie，也无需从日常浏览器登出。
+    - 浏览器登录需要运行 omp 的机器上具备图形会话。它使用隔离的 Chromium 配置和隐身上下文，保留沙箱与 TLS 检查，并在登录完成、被取消或达到五分钟超时后关闭浏览器。在 omp 中按 Escape 可取消。如果操作系统锁定文件不放，配置清理会沿用现有的重试并警告行为。
+    - 保存的会话使用现有的 Perplexity 订阅，包括 Enterprise 席位；浏览器 SSO 不会切换到单独计费的 API 凭据。如果 Perplexity 过期或撤销了会话，请重新登录。输入 `email` 可改用现有的邮箱验证码和身份验证器验证码流程。
+    - 旧的 `ai.perplexity.mac` 会话仍可能在登录提示之前被借用。使用 `PI_AUTH_NO_BORROW=1` 启动 omp 可跳过借用。受限钥匙串中较新的 Mac 应用会话不会被借用。
+    - SDK 宿主可以提供 `OAuthController.onBrowserSession`，按偏好顺序检查并返回第一个与 `request.cookieNames` 匹配的非空 cookie 值。回调会私下返回该值；pi-ai 会校验它而不导入浏览器自动化。没有该回调的宿主保留邮箱验证码流程。RPC 登录不会启动浏览器。
     - OAuth/cookie/匿名模式：POST 到 `https://www.perplexity.ai/rest/sse/perplexity_ask`，消费 SSE，合并部分事件，提取答案和来源 URL，设置 `authMode: "oauth"`（对于未认证回退则为 `"anonymous"`）。
     - API 密钥模式：POST 到 `https://api.perplexity.ai/chat/completions`，使用 `model: "sonar-pro"`、`search_mode: "web"`、`num_search_results`，可选的 `search_recency_filter`、`max_tokens`、`temperature`。
     - `num_search_results` 仅在 API 密钥模式下控制上游 API 的广度。`limit` 单独保留为 `num_results`，并在两种认证模式下解析后对返回的 `sources` 进行切片。
@@ -141,10 +147,11 @@
     - 忽略 `recency`、`max_tokens` 和 `temperature`。`num_search_results ?? limit` 在本地对已解析的来源进行切片。
     - 输出可能包括 `answer`、`sources`、`usage`、`model`、`requestId`。如果流中没有 `url_citation` 注释，适配器会回退到来自答案的 markdown 链接和裸 URL。
   - **xAI** — `packages/coding-agent/src/web/search/providers/xai.ts`
-    - 可用性：共享认证策略首选的 xAI OAuth，或 `xai` 凭据（如 `XAI_API_KEY`）。
+    - 可用性：`shouldPreferXAIOAuth()` 优先选择 `xai-oauth` 凭据——当设置了 `XAI_OAUTH_TOKEN`，或存在已存储的 `xai-oauth` 凭据且其来源不会被共享的 `XAI_API_KEY` 环境变量键遮蔽时为真——否则使用 `authStorage.hasAuth("xai")`（`XAI_API_KEY` 环境变量或 `agent.db` 中 `xai` 的凭据）。
     - 查询：使用 Responses API，模型为 `grok-4.5`、`tools: [{ type: "web_search", ... }]`，推理强度为 `low` 的 POST。支持自定义模型注册表端点，但官方 xAI OAuth 凭据会被拒绝用于自定义端点。
     - 最多五个 `site:` 或 `-site:` 主机映射到互斥的 `allowed_domains` / `excluded_domains` 过滤器（允许列表优先）；路径限制保留用于集中过滤。绝对日期仍作为查询提示保留，因为当前的 Responses `web_search` 工具没有日期字段。
-    - `max_tokens` 和 `temperature` 透传。`num_search_results`（或 `limit`）仅在本地对已解析的来源/引用进行上限，默认 `10`，最大 `30`；它不作为上游搜索计数参数发送。
+    - 该请求不携带 `search_parameters`（已弃用的 Live Search 字段现在返回 410），因此除查询文本中的自然语言日期提示外，`recency` 会被忽略。
+    - `max_tokens` 和 `temperature` 透传。`num_search_results`（或 `limit`）仅在本地通过 `clampNumResults(...)` 对已解析的来源/引用进行上限，默认 `10`，最大 `30`；它不作为上游搜索计数参数发送。
     - 输出可能包括 `answer`、`sources`、`citations`、`usage`、`model`、`requestId`、`authMode: "api_key"`。
   - **Z.AI** — `packages/coding-agent/src/web/search/providers/zai.ts`
     - 可用性：`zai` 的环境变量或 `agent.db` 凭据。
@@ -163,7 +170,7 @@
     - `limit` / `num_search_results`：合并为 `params.numSearchResults ?? params.limit`，限制在 `1..20`，默认 `10`。TinyFish 没有计数参数，每页最多返回 10 个结果；对于超过第一页的计数，适配器在本地切片之前获取文档化的 `page` 值（`0`，需要时再获取 `1`）。输出 `sources`、`authMode: "api_key"`。
   - **Jina** — `packages/coding-agent/src/web/search/providers/jina.ts`
     - 可用性：仅 `JINA_API_KEY`。
-    - 查询：GET 风格的 fetch 到 `https://s.jina.ai/<编码后的查询>`，使用 bearer 认证。
+    - 查询：GET 风格的 fetch 到 `https://s.jina.ai/<encoded query>`，使用 bearer 认证。
     - 忽略 `recency`、`max_tokens` 和 `temperature`。
     - `limit` / `num_search_results`：适配器在提供时将来源切片为 `params.numSearchResults ?? params.limit`；否则返回所有载荷项。
     - 输出：仅 `sources`。
@@ -180,8 +187,9 @@
     - 输出：`answer`、`sources`、`requestId`、`authMode: "api_key"`。
   - **Firecrawl** — `packages/coding-agent/src/web/search/providers/firecrawl.ts`
     - 可用性：凭据使其进入自动链；显式/配置选择始终可用，并在无凭据解析时使用无密钥模式。
-    - 查询：POST `https://api.firecrawl.dev/v2/search`，使用 `sources: [{ type: "web" }]`。Google 风格运算符被格式化为查询；`recency` 和已解析的绝对日期映射到 `tbs`。
+    - 查询：POST `https://api.firecrawl.dev/v2/search`，使用 `sources: [{ type: "web" }]`。端点由 `packages/coding-agent/src/web/firecrawl.ts` 中的共享解析器构建，它会应用 `FIRECRAWL_BASE_URL`（别名 `FIRECRAWL_API_URL`）自托管覆盖。Google 风格运算符被格式化为查询；`recency` 和已解析的绝对日期映射到 `tbs`。
     - `limit` / `num_search_results`：合并并限制在 `1..100`，默认 `10`；输出 `sources`、`requestId` 和 `authMode: "api_key" | "keyless"`。
+    - 同一模块还将 Firecrawl `/scrape` 暴露为 fetch/读取 URL 工具的 `providers.fetch` 读取器后端（需要 `FIRECRAWL_API_KEY`）。API 参考：[docs.firecrawl.dev](https://docs.firecrawl.dev)。
   - **Brave** — `packages/coding-agent/src/web/search/providers/brave.ts`
     - 可用性：仅 `BRAVE_API_KEY`。
     - 查询：GET `https://api.search.brave.com/res/v1/web/search`，使用 `count`、`extra_snippets=true`，以及 `recency` 对应的 `freshness=pd|pw|pm|py`。
@@ -193,8 +201,8 @@
     - `limit` / `num_search_results`：`params.numSearchResults ?? params.limit`，限制在 `1..20`，默认 `10`。
     - 输出：`sources`、`requestId`。
   - **Parallel** — `packages/coding-agent/src/web/search/providers/parallel.ts`、`packages/coding-agent/src/web/parallel.ts`
-    - 可用性：`parallel` 的环境变量或 `agent.db` 凭据。
-    - 查询：POST `https://api.parallel.ai/v1beta/search`，使用 `objective=query`、`search_queries=[query]`、`mode:"fast"`、`max_chars_per_result: 10000`，beta 头 `search-extract-2025-10-10`。
+    - 可用性：始终可用，且位于自动链首位；在已配置时使用已认证搜索，否则使用免凭据 MCP。
+    - 查询：已认证请求 POST `https://api.parallel.ai/v1beta/search`，使用 `objective=query`、`search_queries=[query]`、`mode:"fast"`、`max_chars_per_result: 10000`，以及 beta 头 `search-extract-2025-10-10`。没有凭据时，请求调用 `https://search.parallel.ai/mcp` 上的 `web_search`，使用 `objective`、保留运算符的 `search_queries`，以及可用时的当前会话 ID 和确切的活动模型 ID。MCP 请求将客户端标识为 `omp/<version>`。
     - 尽管名字如此，这里没有提供方扇出；当前适配器始终发送一个元素的 `search_queries` 数组。
     - `limit` 和 `num_search_results` 在派发前合并，限制在 `1..40`，默认 `10`。
     - 输出：`sources`、`requestId`。
@@ -203,6 +211,12 @@
     - 查询：POST `https://api.synthetic.new/v2/search`，使用 `{ query }`。
     - 忽略 `recency`、`max_tokens` 和 `temperature`。
     - `limit` 和 `num_search_results` 在派发前合并。
+    - 输出：仅 `sources`。
+  - **Ollama** — `packages/coding-agent/src/web/search/providers/ollama.ts`
+    - 可用性：`OLLAMA_CLOUD_API_KEY` 环境变量或 `agent.db` 中 `ollama-cloud` 的凭据。
+    - 查询：POST `https://ollama.com/api/web_search`，使用 `{ query, max_results }`、`Authorization: Bearer <key>`。
+    - 忽略 `recency`、`max_tokens` 和 `temperature`。
+    - `limit` 和 `num_search_results` 在派发前合并，限制在 `1..10`，默认 `5`。
     - 输出：仅 `sources`。
   - **SearXNG** — `packages/coding-agent/src/web/search/providers/searxng.ts`
     - 可用性：来自 `searxng.endpoint` 设置或 `SEARXNG_ENDPOINT` 环境变量的端点。
@@ -244,14 +258,14 @@
   - 许多提供方适配器接受 `AbortSignal`；`WebSearchTool.execute()` 将工具调用信号传递给 `executeSearch()`，后者将其作为 `params.signal` 转发给提供方，并在回退期间重新抛出取消信号。
 
 ## 限制与上限
-- 提供方自动顺序长度：23 个提供方（`packages/coding-agent/src/web/search/types.ts` 中的 `SEARCH_PROVIDER_ORDER`）。
+- 提供方自动顺序长度：24 个提供方（`packages/coding-agent/src/web/search/types.ts` 中的 `SEARCH_PROVIDER_ORDER`）。
 - `formatForLLM()` 将来源摘要和引用文本截断为 240 字符（`packages/coding-agent/src/web/search/index.ts`）。
 - `formatForLLM()` 最多输出 3 个搜索查询，每个截断为 120 字符（`packages/coding-agent/src/web/search/index.ts`）。
 - Brave 结果数：默认 `10`，最大 `20`（`packages/coding-agent/src/web/search/providers/brave.ts` 中的 `DEFAULT_NUM_RESULTS`、`MAX_NUM_RESULTS`）。
 - TinyFish 本地结果数：默认 `10`，最大 `20`；API 没有计数参数，每页最多返回 10 个结果，因此适配器获取文档化的页面（`page=0`，需要时再获取 `page=1`）并在本地切片（`packages/coding-agent/src/web/search/providers/tinyfish.ts`）。
 - DuckDuckGo 结果数：默认 `10`，最大 `20`（`packages/coding-agent/src/web/search/providers/duckduckgo.ts`）。
 - Startpage / Google / Ecosia / Mojeek 结果数：默认 `10`，最大 `20`（它们各自的 `providers/*.ts` 模块）。
-- Public Web 结果数：默认 `15`，最大 `30`；扇出软截止时间 `5` 秒，硬上限 `30` 秒（`packages/coding-agent/src/web/search/providers/public.ts`）。
+- Public Web 结果数：默认 `15`，最大 `30`；扇出软截止时间 `5s`，硬上限 `30s`（`packages/coding-agent/src/web/search/providers/public.ts`）。
 - Tavily 结果数：默认 `5`，最大 `20`（`packages/coding-agent/src/web/search/providers/tavily.ts`）。
 - Firecrawl 结果数：默认 `10`，最大 `100`（`packages/coding-agent/src/web/search/providers/firecrawl.ts`）。
 - Kimi 结果数：默认 `10`，最大 `20`；请求超时字段固定为 `30` 秒（`packages/coding-agent/src/web/search/providers/kimi.ts`）。

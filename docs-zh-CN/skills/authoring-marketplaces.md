@@ -41,42 +41,42 @@ my-marketplace/
 /marketplace install my-plugin@my-marketplace
 ```
 
-## marketplace.json 结构
+## marketplace.json schema
 
 目录文件位于仓库根目录下的 `.omp-plugin/marketplace.json` 或 `.claude-plugin/marketplace.json`。omp 优先使用 `.omp-plugin/` 路径，并回退到 Claude 路径；一个仓库可以同时发布两份，以从单一源码树中暴露针对不同工具的目录。
 
 ### 顶层字段
 
-| Field | Required | Description |
+| 字段 | 必需 | 描述 |
 |---|---|---|
-| `name` | yes | Marketplace name. Lowercase alphanumeric, hyphens, dots. Must start and end with alphanumeric. Max 64 chars. |
-| `owner` | yes | Object with at minimum `owner.name` (string) |
-| `owner.name` | yes | Marketplace owner name |
-| `owner.email` | no | Owner contact email |
-| `plugins` | yes | Array of plugin entries (see below) |
-| `metadata.description` | no | Short description of the marketplace |
-| `metadata.version` | no | Catalog metadata version string |
-| `metadata.pluginRoot` | no | String prepended to all relative plugin source paths |
-| extra top-level fields | no | Preserved by the parser but not used by marketplace install/runtime logic |
+| `name` | 是 | 市场名称。小写字母数字、连字符、点。必须以字母数字开头和结尾。最长 64 个字符。 |
+| `owner` | 是 | 对象，至少包含 `owner.name`（字符串） |
+| `owner.name` | 是 | 市场所有者名称 |
+| `owner.email` | 否 | 所有者联系邮箱 |
+| `plugins` | 是 | 插件条目数组（见下文） |
+| `metadata.description` | 否 | 市场的简短描述 |
+| `metadata.version` | 否 | 目录元数据版本字符串 |
+| `metadata.pluginRoot` | 否 | 前置到所有相对插件来源路径的字符串 |
+| 额外的顶层字段 | 否 | 解析器会保留，但市场安装/运行时逻辑不使用 |
 
 ### 插件条目字段
 
-| Field | Required | Description |
+| 字段 | 必需 | 描述 |
 |---|---|---|
-| `name` | yes | Plugin name (same naming rules as marketplace name) |
-| `source` | yes | Where to find the plugin — string or object (see source types below) |
-| `description` | no | Short plugin description |
-| `version` | no | Version string; falls back to `.claude-plugin/plugin.json`, `package.json`, source SHA, then `0.0.0` |
-| `author` | no | `{ name, email? }` |
-| `homepage` | no | URL |
-| `category` | no | e.g. `development`, `productivity`, `security` |
-| `tags` / `keywords` | no | Arrays of string tags/keywords |
-| `repository` | no | Repository URL |
-| `license` | no | License string |
-| `strict` | no | Boolean metadata flag; preserved but not used by install/runtime logic |
-| `commands`, `agents`, `hooks`, `mcpServers` | no | Catalog metadata preserved by the parser; runtime discovery comes from the installed plugin tree and manifests |
-| `lspServers` | no | Inline server map or path inside the plugin; installation writes `.lsp.json` |
-| `dapAdapters` | no | Inline adapter map or JSON/YAML path inside the plugin; installation writes `.dap.json`, `.dap.yaml`, or `.dap.yml` |
+| `name` | 是 | 插件名称（命名规则与市场名称相同） |
+| `source` | 是 | 在哪里找到插件 —— 字符串或对象（见下文的来源类型） |
+| `description` | 否 | 插件的简短描述 |
+| `version` | 否 | 版本字符串；依次回退到 `.claude-plugin/plugin.json`、`package.json`、来源 SHA，最后是 `0.0.0` |
+| `author` | 否 | `{ name, email? }` |
+| `homepage` | 否 | URL |
+| `category` | 否 | 例如 `development`、`productivity`、`security` |
+| `tags` / `keywords` | 否 | 字符串标签/关键词数组 |
+| `repository` | 否 | 仓库 URL |
+| `license` | 否 | 许可证字符串 |
+| `strict` | 否 | 布尔元数据标志；解析器会保留，但安装/运行时逻辑不使用 |
+| `commands`, `agents`, `hooks`, `mcpServers` | 否 | 解析器保留的目录元数据；运行时发现来自已安装的插件树和清单 |
+| `lspServers` | 否 | 内联服务器映射或插件内的路径；安装时会写入 `.lsp.json` |
+| `dapAdapters` | 否 | 内联适配器映射或插件内的 JSON/YAML 路径；安装时会写入 `.dap.json`、`.dap.yaml` 或 `.dap.yml` |
 
 ### 完整目录示例
 
@@ -190,7 +190,7 @@ GitHub 仓库的简写形式。功能上等价于 Git URL，但更简洁：
 }
 ```
 
-> Note: npm plugin sources are accepted by catalog parsing but installation rejects them with `npm plugin sources are not yet supported`. Use relative or Git-based sources today.
+> 注意：npm 插件来源会被目录解析接受，但安装时会以 `npm plugin sources are not yet supported` 拒绝。目前请使用相对路径或基于 Git 的来源。
 
 ## 插件结构
 
@@ -209,9 +209,9 @@ my-plugin/
   README.md                      ← recommended: description + usage
 ```
 
-> Note: MCP servers may instead be declared by the manifest's `mcpServers` field — either an inline server map or a path to a config file inside the plugin root (`{ "mcpServers": "./mcp-omp.json" }`). omp reads `.omp-plugin/plugin.json` first, then `.claude-plugin/plugin.json`; a manifest declaration replaces the default `.mcp.json` rather than merging with it, so one published tree can carry a per-harness MCP config.
+> 注意：MCP 服务器也可以改为通过清单的 `mcpServers` 字段声明——要么是内联的服务器映射，要么是指向插件根目录内某个配置文件的路径（`{ "mcpServers": "./mcp-omp.json" }`）。omp 会先读取 `.omp-plugin/plugin.json`，再读取 `.claude-plugin/plugin.json`；清单声明会替换默认的 `.mcp.json`，而不是与它合并，因此一个发布的源码树可以携带针对特定 harness 的 MCP 配置。
 
-> Note: extension modules declared via `package.json` `omp.extensions` **are** loaded from marketplace installs — installation symlinks the cached plugin into the scope's `node_modules` and records it in `omp-plugins.lock.json`, the same runtime surfaces used by npm-installed and `omp plugin link`ed plugins.
+> 注意：通过 `package.json` 的 `omp.extensions` 声明的扩展模块**确实**会从市场安装中加载——安装时会把缓存的插件符号链接到作用域的 `node_modules` 中，并记录到 `omp-plugins.lock.json` 里，与 npm 安装和 `omp plugin link` 的插件使用相同的运行时表面。
 
 ## 安装命令
 
@@ -270,8 +270,8 @@ omp plugin install name@marketplace-name
 
 本地路径来源也接受 `~/` 和绝对路径。
 
-## 延伸阅读
+## 进一步阅读
 
-- `docs/marketplace.md` — marketplace system internals, on-disk layout, command reference
-- `docs/skills/authoring-extensions.md` — how to author the extension modules inside plugins
-- `docs/skills/examples/mini-marketplace/` — minimal working marketplace example
+- `docs/marketplace.md` — 市场系统内部机制、磁盘布局、命令参考
+- `docs/skills/authoring-extensions.md` — 如何编写插件内的扩展模块
+- `docs/skills/examples/mini-marketplace/` — 最小可运行的市场示例

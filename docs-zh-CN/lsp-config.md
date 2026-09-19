@@ -85,12 +85,12 @@ JSON 和 YAML 均可接受。顶层对象既可以使用 `servers` 包装键，�
 | `disabled`              | `boolean`  |                 否 | 设置为 `true` 以禁用此服务器                                                                   |
 | `warmupTimeoutMs`       | `number`   |                 否 | 该服务器的启动超时（毫秒）                                                                     |
 | `isLinter`              | `boolean`  |                 否 | 标记仅用于 lint/格式化的服务器；将其排除在类型智能操作之外                                     |
-| `capabilities`          | `object`   |                 否 | 选择性启用的服务器特定功能；参见 [Capabilities](#capabilities)                                 |
+| `capabilities`          | `object`   |                 否 | 选择性启用的服务器特定功能；参见 [Capabilities](#能力)                                 |
 | `workspaceReadyTimings` | `object`   |                 否 | 高级的 rust-analyzer 工作区就绪时序覆盖；见下文                                                |
 
 对于内置服务器的覆盖，必填字段可以省略，因为它们在验证之前会被继承。一个真正的新服务器需要上述三个必填字段。`resolvedCommand` 和 `createClient` 是运行时拥有的字段，不得在配置中设置。
 
-### Capabilities
+### 能力
 
 `capabilities` 对象用于启用 OMP 按服务器支持的可选服务器特定功能：
 

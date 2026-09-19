@@ -1,6 +1,6 @@
 # Hermes 工具调用格式
 
-由 NousResearch 的 **Hermes 2 Pro**（基于 Llama-3 的开源模型）开创、并由 **Hermes 3** 系列以及社区大量微调版本延续下来的工具调用约定。其外层格式是 **ChatML**：每一轮对话都是 `<|im_start|>{role}\n{body}<|im_end|>\n`。可用工具在 system 轮中以 `<tools>…</tools>` 块的形式按 OpenAI 风格的 JSON 工具对象进行声明；模型每次调用都通过一个 `<tool_call>\n{json}\n</tool_call>` 块发出，其中 `arguments` 是一个**嵌套的 JSON 对象**（而不是字符串化的 JSON）；工具结果通过一个**专用的 `<|im_start|>tool` 轮**回传，内容是包裹 `{"name": …, "content": …}` 对象的 `<tool_response>…</tool_response>` 块——结果会携带函数名，因此每个结果对于其所调用的函数是自描述的，但与具体调用的绑定仍然依赖位置。
+由 NousResearch 的 **Hermes 2 Pro**（基于 Llama-3 的开源模型）开创、并由 **Hermes 3** 系列以及社区大量微调版本延续下来的工具调用约定。其外层格式是 **ChatML**：每一轮对话都是 `<|im_start|>{role}\n{body}<|im_end|>\n`。可用工具在 system 轮中以 `<tools>…</tools>` 块的形式按 OpenAI 风格的 JSON 工具对象进行声明；模型每次调用都通过一个 `<tool_call>\n{json}\n</tool_call>` 块发出，其中 `arguments` 是一个**嵌套的 JSON 对象**（而不是字符串化的 JSON）；工具结果通过一个**专用的 `<|im_start|>tool` 轮**回传，内容是包裹 `{"name": …, "content": …}` 对象的 `<tool_response>…</tool_response>` 块——结果会携带函数名，因此每个结果对于其所调用的函数是自描述的，但仍然受顺序约束，因为线上格式没有唯一的调用 ID。Qwen3 在采用该约定时做了两处调整（结果折叠进带裸内容的 `user` 轮，并删去了 `FunctionCall` schema 行）——见 [qwen3.md](qwen3.md)。Hermes 3 在调用之前添加了可选的 GOAP `<scratch_pad>` 推理框架；经典的 Hermes 2 Pro 函数调用规范**没有**专用的思维通道，不过 omp 扫描器也能识别来自 R1 风格微调的 `<think>…</think>`（见 omp 一节）。
 
 已根据以下来源核对：NousResearch 的 `Hermes-Function-Calling` README（已完整阅读——规范的系统提示、调用/结果格式以及下面的推理示例均直接引自该 README）、vLLM 工具调用文档（`hermes` 解析器），以及 `main` 分支 `4324de2` 提交上的 omp 实现（下面每一条 omp 相关论断都附有 `file:line` 引用）。
 
@@ -32,7 +32,7 @@ ChatML。每条消息的渲染形式为：
 
 ```text
 <|im_start|>{role}
-:{body}<|im_end|>
+{body}<|im_end|>
 ```
 
 - 角色：`system`、`user`、`assistant`、`tool`。没有独立的"通道"概念；唯一的子流是 assistant 轮开头的可选 Hermes 3 `<scratch_pad>`（或 R1 风格的 `<think>`）块。
@@ -47,7 +47,7 @@ ChatML。每条消息的渲染形式为：
 
 ```text
 <|im_start|>system
-You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. Here are the available tools: <tools> [{"type": "function", "function": {"name": "get_stock_fundamentals", "description": "Get fundamental data for a given stock symbol using yfinance API.", "parameters": {"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}}}] </tools> Use the following pydantic model json schema for each tool call you will make: {"title": "FunctionCall", "type": "object", "properties": {"name": {"title": "Name", "type": "string"}, "arguments": {"title": "Arguments", …
+You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. Here are the available tools: <tools> [{"type": "function", "function": {"name": "get_stock_fundamentals", "description": "Get fundamental data for a given stock symbol using yfinance API.", "parameters": {"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}}}] </tools> Use the following pydantic model json schema for each tool call you will make: {"title": "FunctionCall", "type": "object", "properties": {"name": {"title": "Name", "type": "string"}, "arguments": {"title": "Arguments", "type": "object"}}, "required": ["name", "arguments"]} For each function call return a json object with function name and arguments within <tool_call></tool_call> XML tags as follows:
 <tool_call>
 {"name": <function-name>, "arguments": <args-dict>}
 </tool_call><|im_end|>
@@ -125,9 +125,9 @@ The stock fundamentals data for Tesla (TSLA) are as follows:
 This information provides a snapshot of Tesla's financial position and performance based on the fundamental data obtained from the yfinance API. It shows that Tesla has a substantial market capitalization and a relatively high P/E and P/B ratio compared to other stocks in its industry. The company does not pay a dividend at the moment, which is reflected by a 'Dividend Yield' of 'None'. The Beta value indicates that Tesla's stock has a moderate level of volatility relative to the market. The 52-week high and low prices give an idea of the stock's range over the past year. This data can be useful when assessing investment opportunities and making investment decisions.<|im_end|>
 ```
 
-## 兼容 OpenAI 的 API 映射
+## OpenAI 兼容 API 映射
 
-服务引擎通过 **`hermes` 工具调用解析器**暴露该约定（vLLM：`--enable-auto-tool-choice --tool-call-parser hermes`，`Hermes2ProToolParser`——Qwen3 也使用同一个解析器，参见 [qwen3.md](qwen3.md) §兼容 OpenAI 的 API 映射和 §解析说明中已核实的流式细节）：
+服务引擎通过 **`hermes` 工具调用解析器**暴露该约定（vLLM：`--enable-auto-tool-choice --tool-call-parser hermes`，`Hermes2ProToolParser`——Qwen3 也使用同一个解析器，参见 [qwen3.md](qwen3.md) §OpenAI 兼容 API 映射和 §解析注意事项中已核实的流式细节）：
 
 - `finish_reason`：当本轮在工具调用处结束时为 `"tool_calls"`（否则为 `"stop"`）。
 - `message.role`：`"assistant"`；`message.content`：对于纯工具调用轮为 `null`（调用前的任何正文会作为 `content`）。
@@ -168,15 +168,15 @@ This information provides a snapshot of Tesla's financial position and performan
 
 渲染器始终写出：
 
-- 调用为 `<tool_call>\n{单行 JSON}\n</tool_call>`，其中的 `arguments` 是**嵌套**对象（`hermes.ts:170-172`），并行调用用换行分隔（`hermes.ts:174-176`）；
-- 结果为 `<tool_response>\n{裸结果文本}\n</tool_response>` 块，以换行作为分隔（`packages/ai/src/dialect/rendering.ts:5-7`）；
+- 调用为 `<tool_call>\n{single-line JSON}\n</tool_call>`，其中的 `arguments` 是**嵌套**对象（`hermes.ts:170-172`），并行调用用换行分隔（`hermes.ts:174-176`）；
+- 结果为 `<tool_response>\n{bare result text}\n</tool_response>` 块，以换行作为分隔（`packages/ai/src/dialect/rendering.ts:5-7`）；
 - 整段转写为 ChatML 轮，使用**专用的 `tool` 结果角色**（`hermes.ts:186-193` → `renderChatMlTranscript`，参数为 `toolResultRole: "tool"`，`rendering.ts:107-136`；轮外层在 `rendering.ts:275-277`）。连续的工具结果会合并到同一段（`rendering.ts:125-129`）；`developer` 消息按 `system` 渲染（`rendering.ts:131`）。
 
 相对于经典 Hermes 2 Pro 渲染有两处刻意的差异：结果体是**裸文本**（不是 `{"name": …, "content": …}` 包装形式——注入的格式指南会让模型看到裸形式），工具声明使用 omp 自有的 `# Tools` 目录。一次 assistant 轮先渲染思维，再渲染正文，最后渲染调用（`rendering.ts:116-123`）；存储的思维会以 `<think>\n{text}\n</think>` 形式往返转换，嵌套的块会被展开并以换行连接（`hermes.ts:182-184` → `renderDelimitedThinking`，`rendering.ts:250-273`）。
 
 ### 扫描
 
-`HermesInbandScanner`（`hermes.ts:21-168`）识别 `<tool_call>`/`</tool_call>` 和 `<think>`/`</think>`（`hermes.ts:15-18`），并在流分块之间保留部分标记后缀（`hermes.ts:19,82`；`packages/ai/src/dialect/coercion.ts:114-126`）。它在 `<tool_call>` 处生成一个 id（`ptc_…`，`hermes.ts:98`；`coercion.ts:109-112`），并在前导 JSON 中包含完整字符串 `name` 时立即发出 `toolStart`（`hermes.ts:132-142`）。它会等到 `</tool_call>` 才发出 `toolEnd`，且不流式推送参数增量；闭合时它使用共享的容错 JSON 解析器，同时也接受字符串化的 `arguments` 值（再解析一次），把非对象参数归一化为 `{}`（`hermes.ts:144-160`；`coercion.ts:134-136`）。原始块会被保留……
+`HermesInbandScanner`（`hermes.ts:21-168`）识别 `<tool_call>`/`</tool_call>` 和 `<think>`/`</think>`（`hermes.ts:15-18`），并在流分块之间保留部分标记后缀（`hermes.ts:19,82`；`packages/ai/src/dialect/coercion.ts:114-126`）。它在 `<tool_call>` 处生成一个 id（`ptc_…`，`hermes.ts:98`；`coercion.ts:109-112`），并在前导 JSON 中包含完整字符串 `name` 时立即发出 `toolStart`（`hermes.ts:132-142`）。它会等到 `</tool_call>` 才发出 `toolEnd`，且不流式推送参数增量；闭合时它使用共享的容错 JSON 解析器，同时也接受字符串化的 `arguments` 值（再解析一次），把非对象参数归一化为 `{}`（`hermes.ts:144-160`；`coercion.ts:134-136`）。原始块会在 `toolEnd` 时被保留（`hermes.ts:118-124`）。
 
 如果在已经恢复 `name` 但尚未到达 `</tool_call>` 时就遇到 EOF，则不会发出 `toolEnd`，但由 `toolStart` 创建的规范调用会以空参数存活下来，并可能在正常停止时被派发（`hermes.ts:107-109`）。一个已闭合的块如果其 `name` 无法被恢复，则会被消费而不创建调用（`hermes.ts:147`）。
 
@@ -190,13 +190,13 @@ This information provides a snapshot of Tesla's financial position and performan
 
 omp 自身的代理流程无论如何都不受影响：自有工具流始终以 `parseThinking: true` 构造其扫描器（`owned-stream.ts:200-204`），因此在 `tools.format: hermes` 下，代理循环会像其他兄弟方言一样把 `<think>` 块解析为思维事件。默认关闭的构造函数仅对直接使用扫描器的消费者有影响。当解析开启时，思维事件以增量方式流式推送，未闭合的 `<think>` 块会在 flush 时被逻辑闭合（`hermes.ts:48-75`）。
 
-## 解析说明与注意事项
+## 解析注意事项与陷阱
 
 - **参数对象 vs 字符串：** 在线协议中 `arguments` 是嵌套的 JSON 对象；OpenAI 层在返回时将其作为 JSON 字符串。读取原始流的代码必须解析对象；读取 API 的代码必须对字符串执行 `json.loads`。切勿双重编码。（omp 的扫描器为提高健壮性而容忍字符串化形式；其渲染器从不会发出这种形式。）
 - **`<tools>` 不是控制标记。** 只有 `<|im_start|>`/`<|im_end|>` 用来界定轮；其余一切都是对解码后文本的子串匹配。
 - **正则/流式解析：** vLLM 的 `hermes` 解析器以字面子串 `<tool_call>`/`</tool_call>` 为关键，并对内容进行 JSON 解码；从 `<tool_call>` 开始缓冲，先增量解析 `name`，再解析 `arguments`——完整细节见 [qwen3.md](qwen3.md) §解析说明。
 - **结果绑定：** 经典 Hermes 2 Pro 在 `tool` 轮下通过 `{"name": …, "content": …}` 嵌套把函数名作为元数据包含进来，但调用/结果绑定仍然依赖位置，因为名称不必唯一。Qwen3 也依赖顺序，并在 `user` 轮下使用裸内容。
-- **规范中不存在思维通道：** Hermes 2 Pro 的函数调用提示词没有定义思维通道；Hermes 3 的 `<scratch_pad>` GOAP 标记**不会**被 omp 的 hermes 扫描器解析（它只识别 `<tool_call>` 和 `think`，见 `hermes.ts:15-19`）——scratchpad 文本会保留在可见部分。R1 风格的 `<think>` 块会被处理（见上文的思维默认值）。
+- **规范中不存在思维通道：** Hermes 2 Pro 的函数调用提示词没有定义思维通道；Hermes 3 的 `<scratch_pad>` GOAP 标记**不会**被 omp 的 hermes 扫描器解析（它只识别 `<tool_call>` 和 `<think>`，见 `hermes.ts:15-19`）——scratchpad 文本会保留在可见部分。R1 风格的 `<think>` 块会被处理（见上文的思维默认值）。
 - **历史重渲染：** omp 会为**每一个** assistant 轮重渲染存储的 `<think>` 块（`rendering.ts:116-123`），与 Qwen3 的 chat 模板不同——Qwen3 的模板会从除最后 assistant 轮以外的所有轮中裁剪掉推理内容；在跨方言比较转写时务必牢记这种不对称。
 - **健壮性：** 该格式由提示词驱动，因此可能产生格式错误的输出（JSON 被截断、缺少 `</tool_call>`、正文混入调用块、参数被字符串化等）。omp 的扫描器在识别到块时，若外部 JSON/名称无法恢复，则不会发出调用；调用中途遇到 EOF 时，会留下一个以空参数启动的调用（见扫描一节）。
 

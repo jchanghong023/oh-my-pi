@@ -4,10 +4,11 @@
 
 > **注意：** 不要通过 `bash` 调用 `python -c`、`bun -e` 或 `node -e` 来执行临时代码。`eval` 提供保留状态、结构化的 `display()` 捕获、工具/子代理桥接、流式输出、取消以及由 artifact 支持的截断功能。
 
-## Source
+## 源码
 - 入口与动态 schema：`packages/coding-agent/src/tools/eval.ts`
 - 后端启用：`packages/coding-agent/src/tools/eval-backends.ts`
 - 模型侧提示词：`packages/coding-agent/src/prompts/tools/eval.md`
+- Code Mode 传输（Codex `code_mode_only` 会话会把非必备工具降级到 eval 桥中）：`packages/coding-agent/src/tools/eval-format/code-mode-declarations.ts`，提示词 `packages/coding-agent/src/prompts/tools/eval-code-mode.md`
 - 共享契约：`packages/coding-agent/src/eval/backend.ts`、`types.ts`、`executor-base.ts`、`kernel-base.ts`
 - 宿主桥接：`packages/coding-agent/src/eval/agent-bridge.ts`、`completion-bridge.ts`、`concurrency-bridge.ts`、`budget-bridge.ts`
 - JavaScript：`packages/coding-agent/src/eval/js/`
@@ -15,17 +16,17 @@
 - 输出/截断：`packages/coding-agent/src/session/streaming-output.ts`
 - Python 内部细节：`docs/python-repl.md`
 
-## Inputs
+## 输入
 
 params 对象即一个单元。`cells` 数组、表头解析器、语言探测、隐式回退一律不存在。增量步骤通过独立的工具调用运行；每种语言各自保持状态。
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 必填 | 描述 |
 | --- | --- | --- | --- |
-| `language` | `"py" \| "js"` | Yes | 显式的后端标记。通常线上 schema 仅包含已启用的运行时。 |
-| `code` | `string` | Yes | 单元主体，按原样执行。 |
-| `title` | `string` | No | 简短的转录标签。 |
-| `timeout` | `number` | No | 运行时工作的超时时间（秒）。默认 30；`0` 禁用单元超时。非零值受工具超时策略和 `tools.maxTimeout` 限制。 |
-| `reset` | `boolean` | No | 执行前重建该语言的保留运行时。其他语言的运行时不受影响。默认 `false`。 |
+| `language` | `"py" \| "js"` | 是 | 显式的后端标记。通常线上 schema 仅包含已启用的运行时。 |
+| `code` | `string` | 是 | 单元主体，按原样执行。 |
+| `title` | `string` | 否 | 简短的转录标签。 |
+| `timeout` | `number` | 否 | 运行时工作的超时时间（秒）。默认 30；`0` 禁用单元超时。非零值由工具超时策略（`TOOL_TIMEOUTS.eval`：1–3600 秒）和 `tools.maxTimeout` 钳制。 |
+| `reset` | `boolean` | 否 | 执行前重建该语言的保留运行时。其他语言的运行时不受影响。默认 `false`。 |
 
 跨三次调用的示例：
 
@@ -41,18 +42,18 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 {"language":"py","title":"reuse state","code":"display(sorted(data['dependencies']))"}
 ```
 
-## Backend availability
+## 后端可用性
 
 `resolveEvalBackends(...)` 将设置与环境覆盖合并：
 
-| Token | Runtime | Setting/default | Environment override | Additional prerequisite |
+| 标记 | 运行时 | 设置/默认值 | 环境变量覆盖 | 附加前提条件 |
 | --- | --- | --- | --- | --- |
 | `py` | 保留的 IPython 风格 Python 内核 | `eval.py=true` | `PI_PY` | 可用的已配置 Python 解释器/内核 |
 | `js` | 保留的 Bun worker VM | `eval.js=true` | `PI_JS` | 内置 JS 运行时 |
 
 当至少有一个运行时启用时，已禁用的运行时将从会话作用域的线上 schema 与模型提示词中移除。请求不可用的运行时将抛出 `ToolError`；该工具绝不会替换为另一种语言。`eval.tools.enabled=true`（默认）独立控制内核自定义工具与 `tools` 子代理字段是否被公布和可用。
 
-## Outputs
+## 输出
 
 `execute()` 返回一个文本内容块以及任意图像块。`onUpdate` 在运行期间流式输出当前单元的输出和详情。
 
@@ -70,11 +71,12 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 - `statusEvents`：去重后的 helper/tool 状态事件。
 - `notice`：可选的后端通知。
 - `meta`：由 `toolResult(...)` 提供的输出截断/artifact 元数据。
+- `async`：当单元被自动后台化为异步作业时出现（`{ state, jobId, type: "eval" }`）。
 - `isError`：在后端失败或取消时设置。
 
 渲染器将调用与结果内联合并，按声明的 language 进行语法高亮，并对 markdown 与 JSON 树进行专门渲染，同时显示超时/截断元数据。`session.allocateOutputArtifact?.("eval")` 为溢出的输出提供支持；`meta` 中的 `artifact://...` 可访问完整捕获内容。
 
-## Execution flow
+## 执行流程
 
 1. `EvalTool` 根据已启用的语言构建会话特定的 schema。它是 essential、strict，`approval="exec"`，在单个代理会话内 `concurrency="exclusive"`。
 2. `execute()` 将 `py/js` 映射到 `python/js`，解析可用性，并将单一输入包装为渲染器兼容的内部单元列表。
@@ -85,7 +87,17 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 7. 输出块流入支持 artifact 的 `OutputSink` 和实时尾部。丰富的 display 被分离为 JSON、图像、markdown 和状态通道。
 8. 成功、非零退出和取消被组装为上文的结果形态。即使执行失败，输出 sink 也会被终结。
 
-## Runtime behavior
+## 自动后台化
+
+当 `eval.autoBackground.enabled` 开启（默认 `false`）时，存活时间超过 `eval.autoBackground.thresholdMs`（默认 60000 ms）的单元会被转换为受管的异步作业，而不是阻塞该轮：
+
+- 工具会以前台方式等待 `resolveAutoBackgroundWaitMs(thresholdMs, clampedCellTimeoutMs)`：即阈值，并被下调到该单元自身钳制后的超时减去 1 秒缓冲，这样截止时间到期会在前台就地解析，而不是在触发前一刻被转到后台。因此提高 `timeout` 不会让前台执行超过该阈值。阈值为 `0` 时立即转入后台。
+- 转入后台时，工具返回实时输出尾部以及 `Backgrounded as job <id>; result will be delivered automatically.`，并附带 `details.async = { state: "running", jobId, type: "eval" }`。该作业的完成结果之后会像后台化的 bash 命令一样被投递。
+- 在等待期间到达的排队用户/对等消息（steer）会立即把该单元转入后台（"Backgrounded early to handle an incoming message; the cell keeps running."）。
+- 当异步作业管理器达到运行中作业容量时，工具会退化为普通前台执行，而不是失败。
+- 失败、被取消或超时的单元会被报告为失败的后台作业（出错的执行会被重新送入作业管理器的失败路径），绝不会被静默地当作成功。
+
+## 运行时行为
 
 ### JavaScript (`js`)
 
@@ -103,13 +115,13 @@ params 对象即一个单元。`cells` 数组、表头解析器、语言探测�
 - 交互式 stdin 将被拒绝，并报错 `Kernel requested stdin; interactive input is not supported.`。
 - 同步块使用默认执行器，并复制 ContextVars；Python 字节码仍会争抢 GIL。
 
-## Prelude helpers
+## 预置辅助函数
 
 所有已启用的运行时在语言允许的情况下暴露等价的 helper：
 
 - `display(value)`、`print(...)`
 - `read(path, offset?, limit?)`、`write(path, content)`、`env(...)`、`output(...)`
-- `tool.<name>(args)` 用于一次普通的会话工具调用
+- `tool.<name>(args)` 用于一次普通的会话工具调用（在两种运行时中均为异步：`await tool.read({...})`）
 - `@tool` / `tool(fn, {...})` 用于为子代理定义内核本地工具（`eval.tools.enabled`，默认开启）
 - `completion(...)`、`agent(...)`、`wait(...)`、`workpool(...)`
 - `log(message)`、`phase(title)`、`budget`
@@ -120,25 +132,25 @@ JS 的 helper 是异步的；Python 的文件 helper 是同步的，而 `tool.<n
 
 ### `completion()`
 
-一次无状态、无工具的 one-shot 模型调用：
+一次无状态、无工具的 one-shot 模型调用，立即返回一个 `CompletionHandle`：
 
-- JS：`await completion(prompt, { model?, system?, schema? })`
-- Python：使用带 `model`、`system` 和 `schema` 关键字参数的形式
+- JS：`completion(prompt, { model?, system?, schema? })`；Python：使用带 `model`、`system` 和 `schema` 关键字参数的形式。
 - `model`：`"smol"`、`"default"` 或 `"slow"` 档位；默认为当前激活/默认档位。
-- `schema`：用于合成 `respond` 工具的 JSON Schema；成功的结构化调用返回解析后的数据。
-- 未解析的档位、缺少凭据、错误/中止停止、空输出以及无效的结构化输出都会在单元内抛出。
+- `schema`：用于合成 `respond` 工具的 JSON Schema；`.wait()` 随后返回解析后的数据。
+- 未解析的档位与无效参数会让调用本身失败；缺少凭据、错误/中止停止、空输出以及无效的结构化输出则从 `.wait()` 中呈现。
+- Handle 是进程本地的，由调用方代理拥有，并在结算 30 分钟后被逐出（或在所有者会话结束时）。
 
 ### `agent()`
 
-通过 `runStructuredSubagent(...)` 运行一个子代理：
+注册一个后台子代理作业并立即返回一个 `AgentHandle`：
 
-- JS 支持首选的 `await agent(prompt, { agent?, label?, schema?, schemaMode?, isolated?, apply?, merge?, handle? })`；旧式位置参数槽位仍然实现。
-- Python 使用关键字参数（JS 之外使用 `schema_mode`）。
-- `agent` 默认为当前的 spawn policy；所选代理的 frontmatter 模型和设置始终生效（不接受每次调用的模型覆盖 — `model` 不被接受）。`schema` 会覆盖代理/会话 schema；`schemaMode`/`schema_mode` 选择 `permissive` 或 `strict`。
-- `isolated` 请求隔离。`apply` 控制是否合并捕获的变更；`merge=false` 选择 patch 模式，而常规设置控制 branch 模式。
-- `handle=true` 返回 `{ text, output, handle, id, agent }`，可选的解析后 `data`，以及隔离元数据，而不仅仅是 output/data。
-- Eval 子代理是一次性的（`keepAlive=false`），完成后会被注销/释放，并且**不共享调用方的 eval executor**（`shareEvalSession=false`）。因此它们对代码的修改不会出现在调用方的保留 VM/内核中。
-- spawn policy、已发现代理的可用性、`task.maxRecursionDepth` 闸门（默认 `2`；负值禁用上限）、硬性轮次预算、子代理失败、严格 schema 失败以及隔离-应用失败都会被强制作为单元错误抛出。
+- JS：`await agent(prompt, { agent?, label?, schema?, schemaMode?, isolated?, apply?, merge?, tools? })`；Python 使用关键字参数（`schema_mode`）。
+- 预检（spawn policy、未知 agent、`task.maxRecursionDepth`、硬性轮次预算、计划模式隔离控制、未知 `tools` 名称）会让调用同步失败；执行失败则从 `.wait()` 中呈现。
+- `agent` 默认为当前的 spawn policy；所选代理的 frontmatter 模型和设置始终生效（不接受每次调用的 `model`）。`schema` 会覆盖代理/会话 schema；`schemaMode`/`schema_mode` 选择 `permissive` 或 `strict`。
+- `isolated` 请求隔离。`apply` 控制是否整合捕获的变更；`merge=false` 选择 patch 模式，而常规设置控制 branch 模式。
+- `tools`：子代理可调用的内核定义工具名称（见下文）；每次调用都在调用方的内核内执行。
+- Handle 接口面：`.id`、`.agent`、`.handle`（`agent://<id>`）、`.status`、`.done()`、`.wait(timeout?)`、`.send(message)`、`.cancel()`、`.output()`。Python handle 可被 await；JavaScript 使用 `await handle.wait()`。
+- 该作业是由调用方代理拥有的常规异步作业：未被等待的结果会像后台化的 `task` 一样自动投递，而 `wait()` 会消费该投递，使其不被重放。Eval 子代理会保持存活（可通过 `hub`/`history://` 寻址），并且**不共享调用方的 eval executor**（`shareEvalSession=false`）。
 
 ### `wait()`
 
@@ -149,31 +161,41 @@ JS 的 helper 是异步的；Python 的文件 helper 是同步的，而 `tool.<n
 `workpool(agent=None, name=None, context=None, tools=None)` 创建由实时 `task.maxConcurrency` 限流的 keep-alive 子代理池：
 
 - `.push(*items)` 返回条目 id（`<pool>#<seq>`）。条目会交给上下文占用最低的空闲 worker，池内还有余量时新建 worker，否则以轮转方式排入忙碌 worker 的队列，并在该 worker 轮次结束时整批交接。`eval.workpool.freshAgents=true` 则在容量释放时为每个条目排队新建代理，使每个条目都有新上下文且不发生后续批量交接。
-- worker 通过 `yield({ key: <从 1 开始的编号>, data: {...} })` 或 `yield({ key, error })` 逐条提交批次条目；每次响应都会给出剩余 key，最后一个 key 会自动结束该轮。
+- worker 通过 `yield({ key: <1-based number>, data: {...} })` 或 `yield({ key, error })` 逐条提交批次条目；每次响应都会给出剩余 key，最后一个 key 会自动结束该轮。
 - 池名同时是它聚合异步作业的 id 与标签。首次完全排空即结算并关闭该池；进入下一阶段请新建具名池。聚合结果只会投递一次，内部批次作业会被消费。
 - 完全阻塞？离开 eval，用 `hub` 的 `{ op: "wait", ids: [pool.name] }` 查询；重复直到结算。没有 `pool.wait()`，因此内核仍可服务 `@tool` 调用。
 - `.status()` 报告 worker/条目数量与上下文占用；`.peek()` 返回不消费的 `{ batches, pending }` 快照；`.close()` 丢弃仍在排队的条目。池是进程本地的；重启后它们的 worker 仍是可通过 `hub` 触达的已暂挂 keep-alive 代理。
 
-## Side effects and cancellation
+### 内核定义的工具（`@tool` / `tool(fn)`）
+
+当 `eval.tools.enabled` 开启（默认开启）时，单元可以把一个函数变成其他代理可调用的工具：
+
+- Python：`@tool` / `@tool(name=..., description=...)`；JSON Schema 由类型标注（`str`、`int`、`float`、`bool`、`list[...]`、`dict[...]`、`Literal`、`Optional`、`Annotated[T, "description"]`）与默认值推断；仅限位置参数会被拒绝。异步函数会被 await。
+- JS：`tool(fn, { name?, description?, parameters? })`；`fn` 接收一个参数对象。
+- `tool.defined()` 列出名称；`tool.undefine(name)` 删除一个。重复定义会替换。
+- 消费方：`task` 条目的 `tools`、`agent(tools=...)`、`workpool(tools=...)`。宿主会针对保留的 Python 与 JS 内核解析名称（同名同时定义在两个内核中是错误），并把每个工具作为子会话的必备自定义工具暴露。调用运行在专用 runner 线程（Python）或 worker 的运行上下文（JS）中，因此即使父单元阻塞在 `wait()` 中也能为其服务。抛错的工具会把错误报告给调用方；内核继续运行。未运行的内核会返回错误结果。
+- 未知名称会让 `task`/`agent()` 调用同步失败；计划模式会完全拒绝 `tools`。
+
+## 副作用与取消
 
 - Prelude helper 可能读/写文件并调用任意已注册的工具；JS 暴露具有网络能力的 `fetch`。
-- Python 使用保留的子进程内核，通过本地 IPC 帧协议通信。JavaScript 使用 worker VM。
-- 保留的运行时在 reset、所有者清理或进程退出之前会在调用之间保持存活。
+- Python 使用保留的子进程内核，通过帧式本地 IPC 通信。JavaScript 使用一个隔离子进程，并以 Bun Worker 作为回退；如果两者都无法启动，该调用会失败，且不会在宿主线程上执行代码。
+- 保留的运行时没有心跳或空闲计时器；它们在调用之间保持存活，直到 reset、所有者清理（`EvalRunner.disposeKernels()` 会以 `kernelOwnerId` 为键调用 `disposeKernelSessionsByOwner` 与 `disposeVmContextsByOwner`，位于 `packages/coding-agent/src/session/eval-runner.ts`）或进程退出。
 - 必要时取消具有破坏性：JS 终止其 worker；被管理的内核被中断，并可能升级为关闭。reset 同样会对共享该后端会话的并发工作造成破坏。
-- eval 驱动的 `agent()` 可以运行工具和隔离工作区，但其子代会被释放，而不会为 hub 跟进而保留。
+- eval 驱动的 `agent()` 子代理会保持注册为 keep-alive 代理；所有者拆除会取消它们的作业、释放 completion handle 并关闭所有者的工作池。
 
-## Limits and errors
+## 限制与错误
 
 - 默认超时：30 秒；`0` 禁用。非零超时通过 `clampTimeout("eval", ..., tools.maxTimeout)` 进行裁剪。
 - 输出 sink 默认窗口：50 KiB（`DEFAULT_MAX_BYTES`）；实时尾部：100 KiB；截断 helper 上限为 3000 行。
 - 包含在模型可见文本中的每个 JSON display 值上限为 8000 字符；完整的结构化值保留在 `jsonOutputs` 中。
 - 转录预览默认为 10 行。
-- eval 子代理的生成遵循 `task.maxRecursionDepth`（默认 `2`；负值允许无限深度）。helper 扇出使用 `task.maxConcurrency`（默认 8，`0` 表示无界）。
+- eval 子代理的生成遵循 `task.maxRecursionDepth`（默认 `2`；负值允许无限深度）。helper 扇出使用 `task.maxConcurrency`（默认 32，`0` 表示无界）。
 - 畸形参数为 schema 错误；不可用/已禁用的后端以及缺失的会话为 `ToolError`。
 - 运行时异常会以非零退出的后端输出形式呈现。交互式 stdin 为错误。输出截断不会导致调用失败。
 - 已死的被管理保留内核可被替换，并由其 executor 重试一次。
 
-## Notes
+## 备注
 
 - 一次调用即一个单元。利用持久化分别调用，仅重跑失败的步骤。
 - 状态按语言隔离；reset Python 不会 reset JS。

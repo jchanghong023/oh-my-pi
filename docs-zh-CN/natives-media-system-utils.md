@@ -36,7 +36,7 @@
 | `countTokens(input, encoding?)`         | `count_tokens`                  | `tokens.rs`     |
 | `detectMacOSAppearance()`               | `detect_macos_appearance`       | `appearance.rs` |
 | `MacAppearanceObserver.start(cb)`       | `MacAppearanceObserver::start`  | `appearance.rs` |
-| `MacOSPowerAssertion.start(options?)`   | `MacOSPowerAssertion::start`    | `power.rs`      |
+| `PowerAssertion.start(options?)`         | `PowerAssertion::start`        | `power.rs`       |
 | `getWorkProfile(lastSeconds)`           | `get_work_profile`              | `prof.rs`       |
 | `deviceCheckGenerateToken()`            | `device_check_generate_token`   | `devicecheck.rs`|
 
@@ -95,11 +95,11 @@
 
 `deviceCheckGenerateToken()` 在原生辅助工具的一秒等待内解析为 `{ supported, tokenBase64?, error?, latencyMs }`。它在结果中报告不支持的平台/设备以及生成失败，而非要求必须存在 token。
 
-### macOS 外观与电源辅助工具
+### macOS 外观与跨平台电源辅助工具
 
 - `detectMacOSAppearance()` 返回 `"dark"`、`"light"`，在非 macOS 上返回 `null`。
 - `MacAppearanceObserver.start(callback)` 返回一个带 `stop()` 的句柄；在 macOS 上使用分布式通知加上 2 秒轮询回退，在非 macOS 上是 no-op 观察器。
-- `MacOSPowerAssertion.start(options?)` 返回一个带 `stop()` 的句柄；在 macOS 上获取一个或多个 IOKit 断言，在其他平台上是 no-op 句柄。
+- `PowerAssertion.start(options?)` 返回一个带 `stop()` 的句柄；在 macOS 上使用 IOKit，在 Linux 上使用 login1 inhibitor，在 Windows 上使用线程亲和的执行状态。不受支持的平台上会得到 no-op 句柄。
 - 电源断言选项为 `{ reason?, idle?, system?, user?, display? }`。如果所有布尔值都未设置或省略，则默认使用 `idle` 行为。
 
 ### 工作性能分析（`prof`）

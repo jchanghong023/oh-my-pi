@@ -40,7 +40,7 @@ tools:
 `mcp__<sanitized_server>_<sanitized_tool>`。工具名中冗余的 `<server>_` 前缀会被移除，
 因此服务器 `echo` 的工具 `echo_it` 会注册为 `mcp__echo_it`。超过 64 个字符的名称
 会以确定性的哈希后缀截断；请使用最终截断后的名称，而不是未截断的模式。参见
-[MCP 工具命名](./mcp-server-tool-authoring.md#naming-and-collision-domain)。
+[MCP 工具命名](./mcp-server-tool-authoring.md#命名与冲突域)。
 
 每次工具调用的解析流程：
 

@@ -25,19 +25,19 @@ omp [command] [flags] [messages...]
 `omp` 和 `omp launch` 用于启动编码会话。位置参数会成为初始消息：
 
 ```sh
-# 交互式会话
+# Interactive session
 omp
 
-# 带初始提示词的交互式会话
+# Interactive session with an initial prompt
 omp "List all .ts files in src/"
 
-# 将文件/图片附加到初始消息（加 @ 前缀）
+# Attach files/images to the initial message (prefix with @)
 omp @prompt.md @image.png "What color is the sky?"
 
-# 非交互式：处理提示词后退出（headless / print 模式）
+# Non-interactive: process the prompt and exit (headless / print mode)
 omp -p "List all .ts files in src/"
 
-# 继续上一次的会话
+# Continue the previous session
 omp --continue "What did we discuss?"
 ```
 
@@ -47,7 +47,7 @@ omp --continue "What did we discuss?"
 - 非 TTY 的 stdin 会自动作为初始提示词读取；不要添加 `-` 标记。
 - `--` 结束 flag 解析；其后的所有内容都是字面消息文本，即使看起来像 flag。
 
-### Launch flags
+### 启动标志
 
 #### 会话与工作区
 
@@ -162,16 +162,16 @@ omp --continue "What did we discuss?"
 然后退出而不进入 TUI。这是脚本化与自动化的入口点。
 
 ```sh
-# 打印答案并退出
+# Print the answer and exit
 omp -p "Summarize the changes in the last commit"
 
-# 在打印文本中包含模型的思考块
+# Include the model's thinking blocks in the printed text
 omp -p --print-thoughts "Explain your reasoning for this refactor"
 
-# 为流水线生成机器可读的输出
+# Machine-readable output for pipelines
 omp -p --mode json "List every TODO in src/" > todos.json
 
-# 通过 stdin 传入提示词
+# Pipe a prompt via stdin
 echo "review this diff" | omp -p
 ```
 
@@ -182,7 +182,7 @@ headless 运行的相关 flags：
 - `--no-title` — 跳过标题自动生成（也可用 `PI_NO_TITLE`）。
 - `--max-time <duration>` — 限制运行时长。
 
-[advisor / watchdog](./advisor-watchdog.md#headless-runs) 文档描述了在启用
+[advisor / watchdog](./advisor-watchdog.md#无头运行) 文档描述了在启用
 advisor 运行时的情况下 print 模式的处理（disposal）语义。
 
 ### 输出模式（`--mode`）
@@ -193,7 +193,7 @@ advisor 运行时的情况下 print 模式的处理（disposal）语义。
 | `json` | 结构化 JSON 事件流，供 headless/机器消费。 |
 | `rpc` | 基于 stdio 的 JSON-RPC 服务器。参见 [RPC](./rpc.md)。 |
 | `rpc-ui` | 启用了 UI 扩展事件的 RPC 传输。 |
-| `acp` | 基于 stdio 的 Agent Client Protocol 服务器。等价于 [`acp`](#子命令) 子命令；参见 [approval mode → ACP sessions](./approval-mode.md#acp-sessions)。 |
+| `acp` | 基于 stdio 的 Agent Client Protocol 服务器。等价于 [`acp`](#子命令) 子命令；参见 [approval mode → ACP sessions](./approval-mode.md#acp-会话)。 |
 
 ## 子命令
 
@@ -201,8 +201,8 @@ advisor 运行时的情况下 print 模式的处理（disposal）语义。
 
 | Command | 用途 | 另请参见 |
 | --- | --- | --- |
-| `launch` | 启动编码会话（默认命令）。 | [Launch flags](#launch-flags) |
-| `acp` | 将 Oh My Pi 作为基于 stdio 的 ACP (Agent Client Protocol) 服务器运行。 | [approval mode](./approval-mode.md#acp-sessions) |
+| `launch` | 启动编码会话（默认命令）。 | [Launch flags](#启动标志) |
+| `acp` | 将 Oh My Pi 作为基于 stdio 的 ACP (Agent Client Protocol) 服务器运行。 | [approval mode](./approval-mode.md#acp-会话) |
 | `auth-broker` | 管理 omp auth-broker（凭据保险库）。 | [auth broker / gateway](./auth-broker-gateway.md) |
 | `auth-gateway` | 运行由已配置 broker 支撑的 auth-gateway 正向代理。 | [auth broker / gateway](./auth-broker-gateway.md) |
 | `agents` | 管理内置的 task agent。 | [task agent discovery](./task-agent-discovery.md) |

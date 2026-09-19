@@ -18,7 +18,7 @@ Session 以仅追加的 entry 日志形式存储，但运行时行为基于树�
 - `src/session/session-manager.ts` — 树数据模型、遍历、叶子节点移动、分支/Session 提取
 - `src/session/session-context.ts` — `buildSessionContext` 上下文重建（已解析的 root→leaf LLM 上下文、压缩/分支摘要重放）
 - `src/session/agent-session.ts` — `/tree` 导航流程、摘要、hook/事件触发
-- `src/modes/components/tree-selector.ts` — 交互式树形 UI 行为与过滤
+- `packages/tui/src/overlays/tree-selector.ts` — 交互式树形 UI 行为与过滤
 - `src/modes/controllers/selector-controller.ts` — `/tree` 与 `/branch` 的选择器编排
 - `src/slash-commands/builtin-registry.ts` — 命令路由（`/tree`、`/branch`）
 - `src/modes/controllers/input-controller.ts` — 双击 Escape 行为以及 `app.session.tree`/`app.session.fork` 键位绑定

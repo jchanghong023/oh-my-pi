@@ -299,7 +299,7 @@ bash 执行器使用设置中的 `headBytes` 和 `maxColumns`（`resolveOutputSi
 - [`src/session/streaming-output.ts`](../packages/coding-agent/src/session/streaming-output.ts) — `OutputSink`、`TailBuffer`、截断/产物溢出以及摘要元数据。
 - [`src/tools/output-meta.ts`](../packages/coding-agent/src/tools/output-meta.ts) — 截断元数据结构 + 通知注入包装。
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts) — 会话级 `executeBash`、消息记录、abort 生命周期。
-- [`src/modes/components/bash-execution.ts`](../packages/coding-agent/src/modes/components/bash-execution.ts) — 交互式 `!` 命令执行组件。
+- [`packages/tui/src/chat/bash-execution.ts`](../packages/tui/src/chat/bash-execution.ts) — 交互式 `!` 命令执行组件。
 - [`src/modes/controllers/command-controller.ts`](../packages/coding-agent/src/modes/controllers/command-controller.ts) — 交互式 `!` 命令 UI 流/更新完成的连线。
 - [`src/modes/rpc/rpc-mode.ts`](../packages/coding-agent/src/modes/rpc/rpc-mode.ts) — RPC `bash` 和 `abort_bash` 命令面。
 - [`src/internal-urls/artifact-protocol.ts`](../packages/coding-agent/src/internal-urls/artifact-protocol.ts) — `artifact://<id>` 解析。

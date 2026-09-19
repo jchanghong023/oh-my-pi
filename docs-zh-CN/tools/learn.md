@@ -2,12 +2,12 @@
 
 > 将一条可复用的经验沉淀到长期记忆中，并可选择创建或更新托管技能。
 
-## 来源
-- Entry: `packages/coding-agent/src/tools/learn.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/learn.md`
-- Managed-skill helper: `packages/coding-agent/src/autolearn/managed-skills.ts`
-- Local memory backend: `packages/coding-agent/src/memory-backend/local-backend.ts`
-- Local lesson persistence: `packages/coding-agent/src/memories/index.ts` (`saveLearnedLesson(...)`)
+## 源码
+- 入口：`packages/coding-agent/src/tools/learn.ts`
+- 面向模型的提示词：`packages/coding-agent/src/prompts/tools/learn.md`
+- 托管技能辅助模块：`packages/coding-agent/src/autolearn/managed-skills.ts`
+- 本地记忆后端：`packages/coding-agent/src/memory-backend/local-backend.ts`
+- 本地经验持久化：`packages/coding-agent/src/memories/index.ts`（`saveLearnedLesson(...)`）
 
 ## 注册 / 可见性
 - `loadMode = "essential"` 且 `strict = true`，因此该工具保持在顶层，而不会挂载到 `xd://` 下。

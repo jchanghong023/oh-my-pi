@@ -64,7 +64,7 @@ agent/根目录位置遵循 profile、`PI_CONFIG_DIR`，以及——仅对默认
 | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | Xiaomi MiMo Token Plan 认证（SGP） | 使用 `xiaomi-token-plan-sgp` provider | |
 | `MOONSHOT_API_KEY` | Moonshot 认证 | 使用 `moonshot` provider | `KIMI_API_KEY` 可作为回退别名 |
 | `XAI_API_KEY` | xAI 认证 | 使用 xAI 模型或作为 `xai-oauth` 的回退 | |
-| `XAI_OAUTH_TOKEN` | xAI OAuth/SuperGrok 认证 | 使用 `xai-oauth` provider | 在 `xai-oauth` 中优先于 `XAI_API_KEY` |
+| `XAI_OAUTH_TOKEN` | xAI OAuth/SuperGrok 认证 | 使用 `xai-oauth` provider | 对 `xai-oauth` 优先于 `XAI_API_KEY` |
 | `OPENROUTER_API_KEY` | OpenRouter 认证 | 使用 OpenRouter 模型 | 当首选/自动 provider 为 OpenRouter 时，图像工具也会使用 |
 | `MISTRAL_API_KEY` | Mistral 认证 | 使用 Mistral 模型 | |
 | `ZAI_API_KEY` | z.ai 认证 | 使用 z.ai 模型 | z.ai 网络搜索 provider 也会使用 |
@@ -75,8 +75,8 @@ agent/根目录位置遵循 profile、`PI_CONFIG_DIR`，以及——仅对默认
 | `MINIMAX_CODE_CN_API_KEY` | MiniMax Code CN 认证 | 使用 `minimax-code-cn` provider | |
 | `OPENCODE_API_KEY` | OpenCode 认证 | 使用 `opencode-go` / `opencode-zen` 模型 | |
 | `QIANFAN_API_KEY` | Qianfan 认证 | 使用 `qianfan` provider | |
-| `QWEN_OAUTH_TOKEN` | Qwen Portal 认证 | 使用 `qwen-portal` 并采用 OAuth token | 优先于 `QWEN_PORTAL_API_KEY` |
-| `QWEN_PORTAL_API_KEY` | Qwen Portal 认证 | 使用 `qwen-portal` 并采用 API key | 在 `QWEN_OAUTH_TOKEN` 之后作为回退 |
+| `QWEN_OAUTH_TOKEN` | Qwen Portal 认证 | 使用带 OAuth token 的 `qwen-portal` | 优先于 `QWEN_PORTAL_API_KEY` |
+| `QWEN_PORTAL_API_KEY` | Qwen Portal 认证 | 使用带 API key 的 `qwen-portal` | 在 `QWEN_OAUTH_TOKEN` 之后作为回退 |
 | `ZENMUX_API_KEY` | ZenMux 认证 | 使用 `zenmux` provider | 用于 ZenMux 的 OpenAI 与 Anthropic 兼容路由 |
 | `COMMAND_CODE_API_KEY` | Command Code 认证 | 使用 `commandcode` provider | `COMMANDCODE_API_KEY` 可作为旧版别名 |
 | `CHARM_HYPER_API_KEY` | Charm Hyper 认证 | 使用 `charm-hyper` provider | `HYPER_API_KEY` 可作为回退别名 |
@@ -118,15 +118,15 @@ agent/根目录位置遵循 profile、`PI_CONFIG_DIR`，以及——仅对默认
 
 ### 认证代理 / 认证网关（远程凭证保险库）
 
-启用 broker 后，本地 SQLite 凭证存储会被绕过，所有 OAuth 刷新/访问令牌都保存在 broker 主机上。完整协议、CLI 界面与 5 分钟/15 秒使用缓存分层请参见 [`auth-broker-gateway.md`](./auth-broker-gateway.md)。
+启用代理后，本地 SQLite 凭证存储会被绕过，所有 OAuth 刷新 / 访问 token 都存放在代理主机上。完整协议、CLI 界面与 5 分钟/15 秒用量缓存分层请参见 [`auth-broker-gateway.md`](./auth-broker-gateway.md)。
 
 | 变量 | 用途 | 何时必需 | 备注 / 优先级 |
 | --- | --- | --- | --- |
-| `OMP_AUTH_BROKER_URL` | 远程 auth-broker 的基础 URL（如 `https://broker.tailnet:8765`）；选择 broker 模式 | 通过 broker 解析凭证；`omp auth-gateway serve` 同样需要它（网关本身也是 broker 客户端） | 优先于 `config.yml` 中的 `auth.broker.url`。设置此项但解析不出 token 时，`resolveAuthBrokerConfig()` 会直接报错，而不是回退到本地 SQLite。 |
-| `OMP_AUTH_BROKER_TOKEN` | 除 `/v1/healthz` 外每个 broker 端点都会发送的 Bearer token | 设置了 `OMP_AUTH_BROKER_URL`，且无法从 `auth.broker.token` 或 `<config-dir>/auth-broker.token` 获得 token | 解析顺序：本环境变量 → `auth.broker.token`（支持 `$ENV_NAME` 间接引用）→ `<config-dir>/auth-broker.token`（权限 `0600`）。`<config-dir>` 为 `~/.omp/`（遵循 `PI_CONFIG_DIR`）。 |
-| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS` | 加密的本地 broker 快照缓存的保鲜时间窗口 | broker 模式下可选 | 默认 `3600000`（1 小时）。保鲜度基于 broker 的 `snapshot.generatedAt`；`0` 会禁用缓存读写，并强制每次启动时执行旧的阻塞式拉取。 |
-| `OMP_AUTH_BROKER_SNAPSHOT_CACHE` | 加密的本地 broker 快照缓存路径 | broker 模式下可选 | 默认为 `~/.omp/cache/auth-broker-snapshot.enc`（或 XDG 缓存等价路径）。适用于测试、临时主机，或需要迁移 `0600` 缓存文件的场景。 |
-| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | 受信任 broker 客户端的进程级 OAuth 账户路由 | broker 模式下可选 | 一个 JSON 对象的路径，将 provider ID 映射为精确的 broker `identityKey` 数组。缺失的 provider 不受限制；`[]` 会隐藏该 provider 的 OAuth 账户；API key 仍然可见。启动时解析一次，输入无效时以失败关闭。这不是服务器端授权。 |
+| `OMP_AUTH_BROKER_URL` | 远程 auth-broker 的基础 URL（如 `https://broker.tailnet:8765`）；选择代理模式 | 通过代理解析凭证；`omp auth-gateway serve` 同样需要它（网关本身也是代理客户端） | 优先于 `config.yml` 中的 `auth.broker.url`。设置此项但解析不出 token 时，`resolveAuthBrokerConfig()` 会直接报错，而不是回退到本地 SQLite。 |
+| `OMP_AUTH_BROKER_TOKEN` | 除 `/v1/healthz` 外每个代理端点都会发送的 Bearer token | 设置了 `OMP_AUTH_BROKER_URL`，且无法从 `auth.broker.token` 或 `<config-dir>/auth-broker.token` 获得 token | 解析顺序：本环境变量 → `auth.broker.token`（支持 `$ENV_NAME` 间接引用）→ `<config-dir>/auth-broker.token`（权限 `0600`）。`<config-dir>` 为 `~/.omp/`（遵循 `PI_CONFIG_DIR`）。 |
+| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS` | 加密的本地代理快照缓存的保鲜窗口 | 代理模式下可选 | 默认 `3600000`（1 小时）。保鲜度基于代理的 `snapshot.generatedAt`；`0` 会禁用缓存读写，并强制每次启动时执行旧的阻塞式拉取。 |
+| `OMP_AUTH_BROKER_SNAPSHOT_CACHE` | 加密的本地代理快照缓存路径 | 代理模式下可选 | 默认为 `~/.omp/cache/auth-broker-snapshot.enc`（或 XDG 缓存等价路径）。适用于测试、临时主机，或迁移 `0600` 缓存文件的场景。 |
+| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | 受信任代理客户端的进程级 OAuth 账户路由 | 代理模式下可选 | 一个 JSON 对象的路径，将 provider ID 映射为精确的代理 `identityKey` 数组。缺失的 provider 不受限制；`[]` 会隐藏该 provider 的 OAuth 账户；API key 仍然可见。启动时解析一次，输入无效时以失败关闭。这不是服务端授权。 |
 
 网关没有专门的环境变量——它继承 `OMP_AUTH_BROKER_*`。其自身的入站 Bearer token 位于 `<config-dir>/auth-gateway.token`，通过 `omp auth-gateway token` 管理。
 
@@ -180,7 +180,7 @@ provider 的代理查找结果在进程生命周期内缓存。localhost 目标�
 
 ### Amazon Bedrock
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `AWS_REGION` | 主要区域来源 |
 | `AWS_DEFAULT_REGION` | 在 `AWS_REGION` 未设置时回退 |
@@ -202,14 +202,14 @@ provider 代码中的区域回退：`options.region` → `AWS_REGION` → `AWS_D
 | `AWS_SESSION_TOKEN` | 与 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 配对的会话 token |
 | `AWS_SHARED_CREDENTIALS_FILE`、`AWS_CONFIG_FILE` | 覆盖共享凭证/配置 INI 路径 |
 | `AWS_SDK_LOAD_CONFIG` | `1`/`true` 在没有显式 profile 时启用共享配置加载 |
-| `AWS_ROLE_SESSION_NAME` | Web Identity 角色扮演使用的会话名称 |
+| `AWS_ROLE_SESSION_NAME` | Web 身份角色代入使用的会话名称 |
 | `AWS_CONTAINER_AUTHORIZATION_TOKEN`、`AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` | ECS 容器凭证的授权 |
 | `AWS_EC2_METADATA_DISABLED` | `true` 禁用 IMDSv2 |
 | `AWS_EC2_METADATA_SERVICE_ENDPOINT`、`AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE` | 覆盖 IMDS 端点 / 选择 IPv6 回退 |
 
 ### Azure OpenAI Responses
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `AZURE_OPENAI_API_KEY` | 除非以选项形式传入 API key，否则必需 |
 | `AZURE_OPENAI_API_VERSION` | 默认 `v1` |
@@ -230,14 +230,14 @@ provider 代码中的区域回退：`options.region` → `AWS_REGION` → `AWS_D
 | `GOOGLE_VERTEX_LOCATION` | 是（除非在选项中传入） | 主要 Vertex 位置来源 |
 | `GOOGLE_CLOUD_LOCATION` | 回退 | 备选 Vertex 位置来源 |
 | `VERTEX_LOCATION` | 回退 | 备选 Vertex 位置来源 |
-| `GOOGLE_CLOUD_API_KEY` | 条件性 | 直接的 Vertex API key 认证；否则当项目和位置已设置时，ADC 回退也可完成认证 |
-| `GOOGLE_APPLICATION_CREDENTIALS` | 条件性 | 若设置，文件必须存在；否则检查 ADC 回退路径（`~/.config/gcloud/application_default_credentials.json`） |
+| `GOOGLE_CLOUD_API_KEY` | 有条件 | 直接的 Vertex API key 认证；否则当项目和位置已设置时，ADC 回退也可完成认证 |
+| `GOOGLE_APPLICATION_CREDENTIALS` | 有条件 | 若设置，文件必须存在；否则检查 ADC 回退路径（`~/.config/gcloud/application_default_credentials.json`） |
 
-`GOOGLE_CLOUD_ACCESS_TOKEN`（或兼容的 `CLOUDSDK_AUTH_ACCESS_TOKEN` 回退）提供显式的 Google OAuth 访问令牌，并绕过 ADC token 获取。
+`GOOGLE_CLOUD_ACCESS_TOKEN`（或兼容的 `CLOUDSDK_AUTH_ACCESS_TOKEN` 回退）提供显式的 Google OAuth 访问 token，并绕过 ADC token 获取。
 
 ### Kimi
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `KIMI_CODE_OAUTH_HOST` | 主要 OAuth 主机覆盖 |
 | `KIMI_OAUTH_HOST` | 回退 OAuth 主机覆盖 |
@@ -247,7 +247,7 @@ OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 
 ### OpenAI 兼容端点控制
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `OPENAI_BASE_URL` | 模型/provider 提供默认值时，OpenAI 兼容请求的基础 URL 回退 |
 | `MOONSHOT_BASE_URL` | Moonshot 聊天与模型发现端点覆盖 |
@@ -258,7 +258,7 @@ OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 
 ### Gemini CLI 与 Antigravity 兼容性
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `PI_AI_GEMINI_CLI_VERSION` | 覆盖 Gemini CLI user-agent 版本标签（未设置时为 `0.46.0`） |
 | `PI_AI_ANTIGRAVITY_VERSION` | 覆盖自动发现的 Antigravity hub user-agent 版本；未设置且发现失败时回退为 `2.8.0` |
@@ -268,7 +268,7 @@ OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 
 ### GitLab Duo
 
-| 变量 | 默认 / 行为 |
+| 变量 | 默认值 / 行为 |
 | --- | --- |
 | `GITLAB_CLIENT_ID` | OAuth 客户端 ID。若未设置，则使用捆绑的 GitLab OAuth 应用客户端 ID。 |
 | `GITLAB_REDIRECT_URI` | 向 GitLab 声明的精确 OAuth 重定向 URI。若未设置，本地回调使用 `http://localhost:8080/callback`，并以随机端口作为回退。必须使用 HTTP 或 HTTPS；回环回调必须使用 HTTP 并绑定 URI 中的主机与端口。 |
@@ -279,7 +279,7 @@ OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 | `GITLAB_DUO_WORKFLOW_TRACE` | 仅当值恰好为 `1` 时启用工作流跟踪。每个跟踪事件以每行一个 JSON 对象的形式追加；跟踪写入失败会被忽略。 |
 | `GITLAB_DUO_WORKFLOW_TRACE_FILE` | 跟踪输出路径。该值会去除首尾空白；未设置或为空白时，默认为从 provider 模块解析 `../../../../.tmp/gitlab-duo-workflow-trace.log` 得到的绝对路径（在源码检出中即 `<repo>/.tmp/gitlab-duo-workflow-trace.log`）。缺失的父目录会自动创建。 |
 
-`GITLAB_CLIENT_ID` 和 `GITLAB_REDIRECT_URI` 影响 OAuth 登录。四个路由/创建覆盖项（`GITLAB_DUO_NAMESPACE_ID`、`GITLAB_DUO_PROJECT_ID`、`GITLAB_DUO_PROJECT_PATH` 和 `GITLAB_DUO_WORKFLOW_DEFINITION`）影响 `gitlab-duo-agent` 的工作流命名空间/项目解析或工作流创建；它们不配置 OAuth。上述两个跟踪变量仅影响本地诊断输出。非回环重定向 URI 无法由本地回调监听器直接服务，因此通过粘贴代码路径完成。
+`GITLAB_CLIENT_ID` 和 `GITLAB_REDIRECT_URI` 影响 OAuth 登录。四个路由/创建覆盖项（`GITLAB_DUO_NAMESPACE_ID`、`GITLAB_DUO_PROJECT_ID`、`GITLAB_DUO_PROJECT_PATH` 和 `GITLAB_DUO_WORKFLOW_DEFINITION`）影响 `gitlab-duo-agent` 的工作流命名空间/项目解析或工作流创建；它们不配置 OAuth。上述两个跟踪变量仅影响本地诊断输出。非回环重定向 URI 无法由本地回调监听器直接提供，因此通过粘贴代码路径完成。
 
 ### OpenAI Codex responses（功能/调试控制）
 
@@ -288,7 +288,7 @@ OAuth 主机链：`KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 | `PI_CODEX_DEBUG` | `1`/`true` 启用 Codex provider 调试日志 |
 | `PI_CODEX_WEBSOCKET` | `1`/`true` 启用 WebSocket 传输偏好 |
 | `PI_CODEX_RESPONSES_LITE` | `1`/`true` 让常规推理改用 Responses Lite；`0`/`false` 强制使用标准 Responses 请求体；未设置时常规推理默认使用完整 Responses |
-| `PI_OPENAI_STATEFUL` | 覆盖平台 OpenAI Responses API 的有状态链接默认值（`previous_response_id`，强制 `store: true`）：对 api.openai.com 默认开启，其他主机默认关闭 |
+| `PI_OPENAI_STATEFUL` | 覆盖平台 OpenAI Responses API 的有状态链式默认值（`previous_response_id`，强制 `store: true`）：对 api.openai.com 默认开启，其他主机默认关闭 |
 | `PI_CODEX_ZSTD` | `0`/`false` 禁用发往官方 Codex API 的请求体 zstd 压缩（默认启用） |
 | `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS` | 正整数覆盖（默认 `300000`） |
 | `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS` | 首事件超时覆盖（默认 `300000`） |
@@ -457,7 +457,7 @@ Python 子进程过滤会拒绝常见的 API 密钥变量，并允许安全的�
 | `MNEMOPI_EMBEDDING_MODEL` | 在未提供显式覆盖时，mnemopi 记忆配置使用的嵌入模型覆盖 |
 | `PI_AUTO_QA` | 自动工具问题报告注入/记录的最高优先级布尔标志（其次查阅 `dev.autoqa` 设置）；`0`/`false` 禁用，`1`/`true` 强制开启 |
 | `PI_AUTO_QA_PUSH` | `1`/`true` 绕过同意对话框，在无头/非交互环境中强制进行工具问题推送记录 |
-| `PI_AUTO_QA_PUSH_URL` | 自动 QA grievance 推送的端点覆盖；优先于 `dev.autoqaPush.endpoint` 设置 |
+| `PI_AUTO_QA_PUSH_URL` | 自动 QA 问题报告推送的端点覆盖；优先于 `dev.autoqaPush.endpoint` 设置 |
 | `PI_BROWSER_RELAY` | 浏览器中继的 `0`/`1` 停用开关；覆盖 `browser.relay` 设置（当 Eval 的浏览器 API 需要时，中继会自动启动） |
 
 ### Hindsight 记忆后端
@@ -609,6 +609,7 @@ Python 子进程过滤会拒绝常见的 API 密钥变量，并允许安全的�
 - Provider/API 密钥以及 OAuth/bearer 凭证（所有 `*_API_KEY`、`*_TOKEN`、OAuth 访问/刷新令牌）
 - 云凭证（`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS` 路径可能暴露服务账户材料）
 - 搜索/provider 认证变量（`EXA_API_KEY`、`BRAVE_API_KEY`、`PERPLEXITY_API_KEY`、Anthropic 搜索密钥）
-- Foundry mTLS 材料（`CLAUDE_CODE_CLIENT_CERT`、`CLAUDE_CODE_CLIENT_KEY`，以及指向私有 CA 集时的 `NODE_EXTRA_CA_CERTS`）
+- Foundry mTLS 材料（`CLAUDE_CODE_CLIENT_CERT`、`CLAUDE_CODE_CLIENT_KEY`、`NODE_EXTRA_CA_CERTS` 指向私有 CA 包时）
 
-Python 运行时在派生内核子进程之前也会显式剥离许多常见的密钥变量（`packages/coding-agent/src/eval/py/runtime.ts`）。
+Python 运行时还会在派生内核子进程之前显式剥离许多常见密钥变量（`packages/coding-agent/src/eval/py/runtime.ts`）。
+

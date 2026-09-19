@@ -7,9 +7,9 @@ Vibe 模式把顶层交互会话变成一个 **导演**（director），用于�
 通过 `/vibe` 斜杠命令切换：
 
 ```text
-/vibe                 # 进入 vibe 模式
-/vibe fix the flaky test in packages/tui   # 进入并提交第一条指令
-/vibe                 # 再次运行以退出
+/vibe                 # enter vibe mode
+/vibe fix the flaky test in packages/tui   # enter and submit a first directive
+/vibe                 # run again to exit
 ```
 
 - 进入时，会激活一个父会话的 worker 作用域，安装 vibe 工具，把活跃工具集削减为 `read`、可选的父级拥有的 `todo` 以及 vibe 工具，并注入导演指令。

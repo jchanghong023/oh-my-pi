@@ -11,7 +11,7 @@
 
 - [Provider endpoint constraints](./provider-endpoint-constraints.md) — 新约束应归入何处
 - [Provider streaming internals](./provider-streaming-internals.md) — 流事件规范化
-- [Provider quirks](./provider-quirks.md) — 各 provider 特殊场景、流行为、鉴权/使用、目录处理
+- [Provider quirks](./provider-quirks.md) — 各 provider 特殊情况、流行为、认证/使用、目录处理
 - [Model and Provider Configuration](./models.md) — `models.yml` 与面向用户的 `compat` 覆盖
 
 ## 1. OpenAI 兼容标志
@@ -128,6 +128,7 @@
 | `supportsLongPromptCacheRetention` | 官方 OpenAI | 请求时发送 `prompt_cache_retention: "24h"` |
 | `strictResponsesPairing` | Azure OpenAI、Copilot Responses | 在构建 Responses input item 时强制严格的 1:1 工具调用/工具结果配对 |
 | `supportsImageDetailOriginal` | Copilot、xai-oauth 为 `false` | 输入图片上的 `detail: "original"` 与 `detail: "auto"`（对 `original` 返回 400 的 host 改用 `auto`） |
+| `supportsConfigurationUpdate` | `gpt-6-astra` 为 `true`（类规则，任意 host）；否则为 `false` | 将请求级的 `reasoning.effort` 钉住到会话基线，并将后续变更作为 `configuration_update` input item 携带；对于在该 item 类型上返回 400 的自定义代理，在 `models.yml` 中设为 `false` —— 此时变更后的强度在请求级发送，且不发出任何 item |
 | `supportsObfuscationOptOut` | 官方 OpenAI | 允许 `stream_options: { include_obfuscation: false }` |
 
 ## 2. 推理级别
@@ -202,7 +203,7 @@
 
 - **Schema**：`sanitizeSchemaForOpenAIResponses` + `adaptSchemaForStrict`。支持 function 工具、自由格式的 **custom 工具**以及原生 **computer 工具**（`model.supportsComputerUse`）。线上格式：扁平的 `{ type: "function", name, description, parameters, strict? }`。
 - **流式传输**：`response.output_item.added` → `response.function_call_arguments.delta` / `response.custom_tool_call_input.delta` → `response.output_item.done`。工具调用 id 是组合形式 `callId|itemId`（`normalizeResponsesToolCallId`）。
-- **结果**：`function_call_output` 与 `custom_tool_call_output` item 通过 `call_id`（组合 id 的 `callId` 半部分）与调用配对。其 `output` 可以是字符串，也可以是规范的 `input_text` 和 `input_image` 块数组。具备视觉能力的模型将工具结果图像保留在该数组内部，而非创建合成的用户消息；不支持图像输入的模型接收文本占位符。鉴权网关解析同样接受遗留的 `output_text`、`text` 与 `refusal` 块，将内联 data 图像 URL 解码为图像内容，并保留远程图像 URL 或 OpenAI 图像文件 ID 作为引用。文件 ID 要求上游兼容 Responses，因为其他 provider 传输无法解析它们。`input_file` 在请求消息中仍受支持但…
+- **结果**：`function_call_output` 与 `custom_tool_call_output` item 通过 `call_id`（组合 id 的 `callId` 半部分）与调用配对。其 `output` 可以是字符串，也可以是规范的 `input_text` 和 `input_image` 块数组。具备视觉能力的模型将工具结果图像保留在该数组内部，而非创建合成的用户消息；不支持图像输入的模型接收文本占位符。Auth-gateway 解析同样接受遗留的 `output_text`、`text` 与 `refusal` 块，将内联 data 图像 URL 解码为图像内容，并保留远程图像 URL 或 OpenAI 图像文件 ID 作为引用。文件 ID 要求上游兼容 Responses，因为其他 provider 传输无法解析它们。`input_file` 在请求消息中仍受支持，但在工具输出中会被拒绝，直到规范的工具结果能够无损重放其字节与引用。有状态的 `previous_response_id` 链式调用可跨轮次工作。
 
 ### Google Gemini / Vertex（`providers/google-shared.ts`、`google.ts`）
 
@@ -292,7 +293,7 @@ type ToolChoice =
 ### 模拟与回退路径
 
 1. **仅支持字符串的 host**（`supportsNamedToolChoice: false` —— LM Studio、llama.cpp、Ollama）：对象 pin 会被 host 拒绝，因此 provider 仅**展示被 pin 的工具**并发送 `tool_choice: "required"` —— 在仅提供一个工具时，`required` 等同于 pin。
-2. **Bedrock 哨兵**：参见[§3](#amazon-bedrock-providersamazon-bedrockts)。
+2. **Bedrock 哨兵**：参见[§3](#amazon-bedrockprovidersamazon-bedrockts)。
 3. **Computer pin 回退**：无原生支持时的 `{ type: "computer" }` 降级为命名 function pin。
 4. **陈旧 pin 剪枝**：在最终工具列表中缺失的强制工具（活动工具过滤、schema 隔离）会静默丢弃 `tool_choice` 而非发出无效请求。
 

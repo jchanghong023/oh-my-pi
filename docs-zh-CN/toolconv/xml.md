@@ -13,7 +13,7 @@ tools:
   format: xml
 ```
 
-`tools.format: xml` 会在本次会话中强制使用通用 XML 自有方言。`auto` **不会**将通用 XML 选作其未知系列的回退：当某个模型具有 `supportsTools: false` 时，解析器会选用已知的模型系列方言，或者在没有特定亲和性时选用 GLM。需要使用此语法时请显式指定 `xml`。参见 [`tools.format`](../settings.md#tools-and-approvals)。
+`tools.format: xml` 会在本次会话中强制使用通用 XML 自有方言。`auto` **不会**将通用 XML 选作其未知系列的回退：当某个模型具有 `supportsTools: false` 时，解析器会选用已知的模型系列方言，或者在没有特定亲和性时选用 GLM。需要使用此语法时请显式指定 `xml`。参见 [`tools.format`](../settings.md#工具和审批)。
 
 当选中后，OMP 会从 provider 请求中移除原生结构化工具，将带内工具目录和 XML 指南追加到系统提示词中，将先前的结构化调用/结果转换为文本，并将助手文本扫描回结构化工具调用事件。
 

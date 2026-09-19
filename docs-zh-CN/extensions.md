@@ -559,7 +559,7 @@ pi.on("session_start", async (_event, ctx) => {
 
 ### 会话条目角色（`message.role` 为 camelCase）
 
-当你遍历 `ctx.sessionManager.getBranch()` 时，每个持久化条目都有一个 `type`（`message`、`custom_message`、`branch_summary`、`compaction` 等；以[会话条目模型](./session.md#entry-taxonomy)为参考）。`type: "message"` 条目在 `entry.message` 下携带一个 `AgentMessage`，其 `role` 判别值是 **camelCase** — 而不是原始 LLM 线上格式或上文 `tool_call` / `tool_result` **hook** 名称所用的 snake_case：
+当你遍历 `ctx.sessionManager.getBranch()` 时，每个持久化条目都有一个 `type`（`message`、`custom_message`、`branch_summary`、`compaction` 等；以[会话条目模型](./session.md#条目分类)为参考）。`type: "message"` 条目在 `entry.message` 下携带一个 `AgentMessage`，其 `role` 判别值是 **camelCase** — 而不是原始 LLM 线上格式或上文 `tool_call` / `tool_result` **hook** 名称所用的 snake_case：
 
 | 持久化的 `entry.message.role` | 含义                                                                       |
 | ----------------------------- | -------------------------------------------------------------------------- |

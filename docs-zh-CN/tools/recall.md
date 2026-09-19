@@ -41,7 +41,7 @@ Hindsight 条目格式来自 `formatMemories(...)`：
 
 Mnemopi 条目格式来自 `formatScopedRecallWithIds(...)`：
 - 每条形如 `- <content> (id: <id>) [<source>] (<YYYY-MM-DD>) c:<score>`；当 id 不可用时显示为 `(id unavailable)`，而 source、date 与 score 在缺失时省略。
-- Mnemopi 的 recall 内容是默认上限为 500 字符的预览。被截断的预览以 `…` 结尾；在进行完整的 `memory_edit update` 之前，请使用 `read memory://<id>` 获取完整行。
+- Mnemopi 的 recall 内容是默认上限为 500 字符的预览（`packages/mnemopi/src/core/beam/recall.ts` 中的 `RECALL_CONTENT_PREVIEW_CHARS` / `RecallOptions.contentPreviewChars`；`0` 或负值限制会禁用截断——显式工具路径使用默认值）。被截断的预览以 `…` 结尾；在进行完整的 `memory_edit update` 之前，请使用 `read memory://<id>` 获取完整行。
 - 尽管内部的 recall 行包含 `truncated` 和 `full_length`，本工具返回的是格式化文本，且 `details = {}`，并不暴露这些字段。
 
 当不存在匹配项时：

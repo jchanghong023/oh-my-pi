@@ -1,321 +1,321 @@
 # lsp
 
-> 查询语言服务器，获取诊断、导航、符号、重命名、代码操作、能力以及原始请求。
+> 查询语言服务器，用于诊断、导航、符号、重命名、代码操作、能力以及原始请求。
 
-## Source
-- Entry: `packages/coding-agent/src/lsp/index.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/lsp.md`
-- Key collaborators:
-  - `packages/coding-agent/src/lsp/client.ts` — client process lifecycle and JSON-RPC
-  - `packages/coding-agent/src/lsp/config.ts` — config loading, auto-detect, server selection
-  - `packages/coding-agent/src/lsp/lspmux.ts` — optional `lspmux` command wrapping
-  - `packages/coding-agent/src/lsp/mux/daemon.ts` — broker-shared LSP transport and private-process fallback
-  - `packages/coding-agent/src/lsp/edits.ts` — apply `WorkspaceEdit` and text edits
-  - `packages/coding-agent/src/lsp/utils.ts` — URI conversion, symbol resolution, formatting, glob expansion
-  - `packages/coding-agent/src/lsp/types.ts` — tool schema and protocol types
-  - `packages/coding-agent/src/lsp/clients/index.ts` — custom linter client cache/factory
-  - `packages/coding-agent/src/lsp/clients/lsp-linter-client.ts` — LSP-backed linter adapter
-  - `packages/coding-agent/src/lsp/clients/biome-client.ts` — Biome CLI diagnostics/formatting adapter
-  - `packages/coding-agent/src/lsp/clients/swiftlint-client.ts` — SwiftLint CLI diagnostics adapter
-  - `packages/coding-agent/src/tools/index.ts` — tool registration and `lsp.enabled` gating
-  - `packages/coding-agent/src/tools/tool-timeouts.ts` — timeout defaults and clamping
-  - `packages/coding-agent/src/lsp/defaults.json` — built-in server definitions for auto-detect
+## 源码
+- 入口：`packages/coding-agent/src/lsp/index.ts`
+- 面向模型的提示词：`packages/coding-agent/src/prompts/tools/lsp.md`
+- 关键协作模块：
+  - `packages/coding-agent/src/lsp/client.ts` — 客户端进程生命周期与 JSON-RPC
+  - `packages/coding-agent/src/lsp/config.ts` — 配置加载、自动检测、服务器选择
+  - `packages/coding-agent/src/lsp/lspmux.ts` — 可选的 `lspmux` 命令包装
+  - `packages/coding-agent/src/lsp/mux/daemon.ts` — broker 共享的 LSP 传输与私有进程回退
+  - `packages/coding-agent/src/lsp/edits.ts` — 应用 `WorkspaceEdit` 与文本编辑
+  - `packages/coding-agent/src/lsp/utils.ts` — URI 转换、符号解析、格式化、glob 展开
+  - `packages/coding-agent/src/lsp/types.ts` — 工具 schema 与协议类型
+  - `packages/coding-agent/src/lsp/clients/index.ts` — 自定义 linter 客户端缓存/工厂
+  - `packages/coding-agent/src/lsp/clients/lsp-linter-client.ts` — 基于 LSP 的 linter 适配器
+  - `packages/coding-agent/src/lsp/clients/biome-client.ts` — Biome CLI 诊断/格式化适配器
+  - `packages/coding-agent/src/lsp/clients/swiftlint-client.ts` — SwiftLint CLI 诊断适配器
+  - `packages/coding-agent/src/tools/index.ts` — 工具注册与 `lsp.enabled` 门控
+  - `packages/coding-agent/src/tools/tool-timeouts.ts` — 超时默认值与钳制
+  - `packages/coding-agent/src/lsp/defaults.json` — 用于自动检测的内置服务器定义
 
-## Inputs
+## 输入
 
-| Field | Type | Required | Description |
+| 字段 | 类型 | 是否必填 | 说明 |
 | --- | --- | --- | --- |
-| `action` | string enum | Yes | One of `diagnostics`, `definition`, `references`, `hover`, `symbols`, `rename`, `rename_file`, `code_actions`, `type_definition`, `implementation`, `status`, `reload`, `capabilities`, `request`. |
-| `file` | string | No | File path; for `diagnostics` also a glob; for workspace forms use `"*"`; for `rename_file` this is the source path. |
-| `line` | number | No | 1-indexed line number for position-based actions. Defaults to `1` on the single-file action path. |
-| `symbol` | string | No | Substring used to resolve the column on `line`. Supports `name#N` occurrence selectors; `N` is 1-indexed and defaults to `1`. Required when `line` is given for `definition`/`references`/`rename` against project-aware servers. |
-| `query` | string | No | Workspace symbol query, code-action selector/filter, or LSP method name for `action=request`. |
-| `new_name` | string | No | Required for `rename` and `rename_file`. |
-| `apply` | boolean | No | For `rename`/`rename_file`, apply unless explicitly `false`. For `code_actions`, list unless explicitly `true`. |
-| `timeout` | number | No | Seconds, default `20`; `clampTimeout("lsp", ...)` applies the positive `tools.maxTimeout` cap first, then the tool's `5..300` range (so the 5-second floor still wins over a lower global cap). |
-| `payload` | string | No | JSON string for `action=request`; overrides auto-built params. |
+| `action` | string enum | 是 | `diagnostics`、`definition`、`references`、`hover`、`symbols`、`rename`、`rename_file`、`code_actions`、`type_definition`、`implementation`、`status`、`reload`、`capabilities`、`request` 之一。 |
+| `file` | string | 否 | 文件路径；对 `diagnostics` 也可以是 glob；工作区形式使用 `"*"`；对 `rename_file` 则是源路径。 |
+| `line` | number | 否 | 基于位置的操作所使用的 1 起始行号。在单文件操作路径上默认为 `1`。 |
+| `symbol` | string | 否 | 用于解析 `line` 上列位置的子串。支持 `name#N` 出现位置选择器；`N` 从 1 开始计数，默认 `1`。在面向具备项目感知的服务器执行 `definition`/`references`/`rename` 时，若给出 `line` 则此项必填。 |
+| `query` | string | 否 | 工作区符号查询、代码操作的选择器/过滤器，或 `action=request` 时的 LSP 方法名。 |
+| `new_name` | string | 否 | `rename` 与 `rename_file` 必填。 |
+| `apply` | boolean | 否 | 对 `rename`/`rename_file`，除非显式为 `false`，否则执行应用。对 `code_actions`，除非显式为 `true`，否则列出清单。 |
+| `timeout` | number | 否 | 秒，默认 `20`；`clampTimeout("lsp", ...)` 先应用正的 `tools.maxTimeout` 上限，再应用该工具的 `5..300` 范围（因此 5 秒下限仍会压过更低的全局限额）。 |
+| `payload` | string | 否 | 用于 `action=request` 的 JSON 字符串；覆盖自动构建的参数。 |
 
-## Outputs
-- Single-shot `AgentToolResult`; `content` is always one text block: `[{ type: "text", text: string }]`.
-- `details` is `LspToolDetails`: `action`, `success`, optional `serverName`, optional original `request`.
-- Empty navigation/symbol lookups such as `No definition found` are additionally marked `useless: true` so compaction may elide them; a clean diagnostics result is retained as verification evidence.
-- No streaming updates, artifact URIs, or background jobs. The inline TUI renderer merges call and result, adds action-aware formatting, and supports collapsed/expanded views.
-- The tool is discoverable rather than eagerly loaded. Read-only actions (`diagnostics`, navigation, hover, symbols, `status`, `capabilities`) request read approval; `rename`, `rename_file`, `code_actions`, `reload`, and `request` request write approval regardless of `apply`.
-- Many validation failures are returned as ordinary text results with `details.success: false`; aborts throw `ToolAbortError` instead.
+## 输出
+- 单次发送的 `AgentToolResult`；`content` 始终是一个文本块：`[{ type: "text", text: string }]`。
+- `details` 为 `LspToolDetails`：`action`、`success`、可选的 `serverName`、可选的原始 `request`。
+- 诸如 `No definition found` 这样的空导航/符号查询结果还会额外标记 `useless: true`，以便压缩时可以将其省略；干净的诊断结果会保留为验证证据。
+- 没有流式更新、artifact URI 或后台任务。内联 TUI 渲染器会合并调用与结果，添加感知 action 的格式化，并支持折叠/展开视图。
+- 该工具是可发现的，而非被预先加载。只读操作（`diagnostics`、导航、hover、symbols、`status`、`capabilities`）请求读审批；`rename`、`rename_file`、`code_actions`、`reload` 和 `request` 无论 `apply` 取值如何都请求写审批。
+- 许多校验失败会作为普通文本结果返回，并带有 `details.success: false`；中止则改为抛出 `ToolAbortError`。
 
-## Flow
-1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`. The tool is present only when both `session.enableLsp !== false` and `lsp.enabled` (default `true`) allow it. A session with `lspReadOnly` rejects every action outside `LSP_READONLY_ACTIONS`; restricted sessions default both to LSP disabled and read-only if it is explicitly re-enabled.
-2. `LspTool.execute()` in `packages/coding-agent/src/lsp/index.ts` clamps `timeout` with `clampTimeout("lsp", ...)`, including the optional global `tools.maxTimeout` ceiling, builds an `AbortSignal.timeout(...)`, and combines it with the caller signal.
-3. `getConfig()` loads and caches `LspConfig` per cwd, applies idle-timeout config via `setIdleTimeout()`, and reuses the cached config on later calls. Workspace `reload` is the explicit exception: it clears and rebuilds that cwd's config cache before reloading the newly selected servers.
-4. Config loading in `packages/coding-agent/src/lsp/config.ts` merges `defaults.json` with JSON/YAML overrides from project, project config dirs, user config dirs, plugin roots/marketplace metadata, and home; if there are no overrides it auto-detects servers from root markers plus executable discovery. See [LSP configuration](../lsp-config.md) for filenames, precedence, and server fields.
-5. Server routing uses `getServersForFile()` / `getServerForFile()` from `config.ts`: extension or basename match, then sort primary servers before linters. `index.ts` further filters custom linter clients out of navigation/refactor paths with `getLspServersForFile()` / `getLspServerForFile()`.
-6. `getOrCreateClient()` caches one client per `command:cwd`. With `lsp.shared` (default `true` in SDK sessions), it first asks the broker-managed project mux for a shared transport; failure falls back to a private `ptree.spawn()`. An external `lspmux` wrapper takes precedence over broker sharing. The client then starts its message reader, sends `initialize`, stores capabilities, and sends `initialized`.
-7. The message reader in `client.ts` parses LSP frames, resolves pending requests, caches `publishDiagnostics`, tracks `$/progress` tokens for project-load completion, answers `workspace/configuration`, and applies `workspace/applyEdit` requests through `applyWorkspaceEdit()`.
-8. File-scoped actions call `ensureFileOpen()` before requests. Column resolution uses `resolveSymbolColumn()` from `utils.ts`: read the target file, pick first non-whitespace when `symbol` is omitted, otherwise find the exact or case-insensitive match on the target line and honor `#N` occurrence selectors.
-9. Actions dispatch in `LspTool.execute()` through dedicated branches: workspace-only branches (`status`, some `diagnostics`, workspace `symbols`, workspace `reload`, `capabilities`, `request`) run before the single-file switch; all other single-file actions share one client lookup and `switch(action)`.
-10. Requests go through `sendRequest()` in `client.ts`, which allocates an incrementing JSON-RPC id, installs abort and timeout handling, sends `$/cancelRequest` on abort, and rejects on timeout or process exit.
-11. Actions that return edits either preview with `formatWorkspaceEdit()` or apply with `applyWorkspaceEdit()` from `edits.ts`; `rename_file` also performs the filesystem rename and then sends `workspace/didRenameFiles`.
-12. Non-abort failures inside the single-file action block are converted to `LSP error: ...`; many precondition failures return explicit text without throwing.
+## 流程
+1. `packages/coding-agent/src/tools/index.ts` 注册 `lsp: LspTool.createIf`。只有当 `session.enableLsp !== false` 与 `lsp.enabled`（默认 `true`）同时允许时，该工具才会存在。带 `lspReadOnly` 的会话会拒绝 `LSP_READONLY_ACTIONS` 之外的每一个 action；受限会话默认将两者设为禁用 LSP，且若显式重新启用则为只读。
+2. `packages/coding-agent/src/lsp/index.ts` 中的 `LspTool.execute()` 用 `clampTimeout("lsp", ...)` 钳制 `timeout`（包括可选的全局限额 `tools.maxTimeout`），构建 `AbortSignal.timeout(...)`，并将其与调用方的信号合并。
+3. `getConfig()` 按 cwd 加载并缓存 `LspConfig`，并在后续调用中复用该缓存配置。工作区 `reload` 是显式的例外：它先清除并重建该 cwd 的配置缓存，然后重新加载新选中的服务器。
+4. `packages/coding-agent/src/lsp/config.ts` 中的配置加载会把 `defaults.json` 与来自项目、项目配置目录、用户配置目录、插件根目录/市场元数据以及 home 的 JSON/YAML 覆盖合并；若没有任何覆盖，则从根标记加上可执行文件发现来自动检测服务器。文件名、优先级与服务器字段见 [LSP 配置](../lsp-config.md)。
+5. 服务器路由使用 `config.ts` 中的 `getServersForFile()` / `getServerForFile()`：先按扩展名或 basename 匹配，再排序使 primary 服务器位于 linter 之前。`index.ts` 还会用 `getLspServersForFile()` / `getLspServerForFile()` 把自定义 linter 客户端从导航/重构路径中过滤掉。
+6. `getOrCreateClient()` 按 `command:cwd` 缓存一个客户端。启用 `lsp.shared`（SDK 会话中默认 `true`）时，它先向 broker 管理的项目 mux 请求共享传输；失败则回退到私有的 `ptree.spawn()`。外部 `lspmux` 包装优先于 broker 共享。随后客户端启动其消息读取器、发送 `initialize`、存储能力，并发送 `initialized`。
+7. `client.ts` 中的消息读取器解析 LSP 帧、完成待处理请求、缓存 `publishDiagnostics`、跟踪 `$/progress` token 以判断项目加载是否完成、应答 `workspace/configuration`，并通过 `applyWorkspaceEdit()` 应用 `workspace/applyEdit` 请求。
+8. 文件范围的操作会在请求前调用 `ensureFileOpen()`。列解析使用 `utils.ts` 中的 `resolveSymbolColumn()`：读取目标文件，省略 `symbol` 时取第一个非空白字符，否则在目标行上查找精确匹配或大小写不敏感匹配，并遵循 `#N` 出现位置选择器。
+9. action 在 `LspTool.execute()` 中通过专门的分支分派：仅工作区分支（`status`、部分 `diagnostics`、工作区 `symbols`、工作区 `reload`、`capabilities`、`request`）先于单文件 switch 运行；其余所有单文件 action 共享一次客户端查找与 `switch(action)`。
+10. 请求经由 `client.ts` 中的 `sendRequest()` 发出：它分配递增的 JSON-RPC id、安装中止与超时处理、在中止时发送 `$/cancelRequest`，并在超时或进程退出时拒绝。
+11. 返回编辑的 action 要么用 `formatWorkspaceEdit()` 预览，要么用 `edits.ts` 中的 `applyWorkspaceEdit()` 应用；`rename_file` 还会执行文件系统重命名，然后发送 `workspace/didRenameFiles`。
+12. 单文件 action 块内的非中止失败会被转换为 `LSP error: ...`；许多前置条件失败会直接返回显式文本而不抛出。
 
-## Modes / Variants
-### Routing and workspace scope
-- `file: "*"` is only special for `diagnostics`, `symbols`, and `reload`.
-- `status` ignores `file`.
-- `capabilities` with omitted `file` or `"*"` inspects all non-custom LSP servers; with a concrete file it scopes to matching non-custom servers.
-- `request` with omitted `file` or `"*"` chooses the first available non-custom LSP server; with a concrete file it chooses that file's primary non-linter server.
-- `rename_file` sends `workspace/willRenameFiles` and `workspace/didRenameFiles` to every non-custom LSP server from `getLspServers(config)` whose `fileTypes` match the source, destination, or any enumerated rename pair — not just one file-scoped server.
-- Diagnostics are the only tool action that queries both normal LSP servers and custom linter clients (`BiomeClient`, `SwiftLintClient`, or `LspLinterClient`).
+## 模式 / 变体
+### 路由与工作区范围
+- `file: "*"` 仅对 `diagnostics`、`symbols` 和 `reload` 具有特殊含义。
+- `status` 忽略 `file`。
+- 省略 `file` 或使用 `"*"` 的 `capabilities` 会检查所有非自定义 LSP 服务器；给出具体文件时则限定到与之匹配的非自定义服务器。
+- 省略 `file` 或使用 `"*"` 的 `request` 会选择第一个可用的非自定义 LSP 服务器；给出具体文件时则选择该文件的 primary 非 linter 服务器。
+- `rename_file` 会把 `workspace/willRenameFiles` 与 `workspace/didRenameFiles` 发送给 `getLspServers(config)` 中所有 `fileTypes` 与源路径、目标路径或任一被枚举出的重命名对相匹配的非自定义 LSP 服务器——而不只是一个文件范围的服务器。
+- 诊断是唯一既查询普通 LSP 服务器又查询自定义 linter 客户端（`BiomeClient`、`SwiftLintClient` 或 `LspLinterClient`）的工具 action。
 
 ### `diagnostics`
-**Inputs**
-- Required: `file`, unless using workspace mode with `file: "*"`.
-- Optional: `timeout`.
+**输入**
+- 必填：`file`，除非使用带 `file: "*"` 的工作区模式。
+- 可选：`timeout`。
 
-**Execution**
-- `file: "*"`: `runWorkspaceDiagnostics()` selects the first matching project type in Rust → TypeScript → Go workspace/module → Python order. It runs Rust `cargo check --message-format=short`, TypeScript `npx tsc --noEmit`, Python `pyright`, or Go `go build`: `go.mod` uses `./...`, while `go.work` first reads `go work edit -json` and builds every `Use[].DiskPath/...` pattern (falling back to `./...`). Unknown projects return a supported-marker message without spawning a checker.
-- Concrete file or glob: `resolveDiagnosticTargets()` treats non-globs as one target, otherwise expands a `Bun.Glob` up to `MAX_GLOB_DIAGNOSTIC_TARGETS`.
-- Per file, every matching server runs: custom clients call `lint(file)`; real LSP servers optionally wait for project load, capture `diagnosticsVersion`, `refreshFile()`, then `waitForDiagnostics()` for fresh `publishDiagnostics` (settles on the latest publish; exact-version match accepted immediately).
-- Results are deduplicated by range+message and severity-sorted.
+**执行**
+- `file: "*"`：`runWorkspaceDiagnostics()` 按 Rust → TypeScript → Go 工作区/模块 → Python 的顺序选择第一个匹配的项目类型。它运行 Rust 的 `cargo check --message-format=short`、TypeScript 的 `npx tsc --noEmit`、Python 的 `pyright` 或 Go 的 `go build`：`go.mod` 使用 `./...`，而 `go.work` 会先读取 `go work edit -json`，再构建每一个 `Use[].DiskPath/...` 模式（回退到 `./...`）。未知项目会返回一条受支持标记的提示信息，而不会启动检查器。
+- 具体文件或 glob：`resolveDiagnosticTargets()` 把非 glob 视作单个目标，否则将 `Bun.Glob` 展开到 `MAX_GLOB_DIAGNOSTIC_TARGETS` 为止。
+- 对每个文件，所有匹配的服务器都会运行：自定义客户端调用 `lint(file)`；真正的 LSP 服务器可选地等待项目加载，捕获 `diagnosticsVersion`，执行 `refreshFile()`，然后 `waitForDiagnostics()` 以获取新的 `publishDiagnostics`（以最新一次发布为准；版本完全匹配则立即接受）。
+- 结果按 range+message 去重，并按严重程度排序。
 
-**Output text**
-- Single target with no issues: `OK`.
-- Single target with issues: `<summary>:\n<grouped diagnostics>`.
-- Batch/glob target: one section per file, plus an initial truncation warning when the glob exceeds the file cap.
-- Workspace mode: `Workspace diagnostics (<detected description>):\n<command output>`.
+**输出文本**
+- 单目标且无问题：`OK`。
+- 单目标且有问题：`<summary>:\n<grouped diagnostics>`。
+- 批量/glob 目标：每个文件一节，且当 glob 超出文件上限时先给出一条截断警告。
+- 工作区模式：`Workspace diagnostics (<detected description>):\n<command output>`。
 
 ### `definition`
-**Inputs**
-- Required: `file`.
-- Optional: `line`, `symbol`, `timeout`.
+**输入**
+- 必填：`file`。
+- 可选：`line`、`symbol`、`timeout`。
 
-**Execution**
-- Sends `textDocument/definition` with `{ textDocument, position }`.
-- Accepts `Location`, `Location[]`, `LocationLink`, or `LocationLink[]`; `normalizeLocationResult()` converts `LocationLink` to `targetSelectionRange ?? targetRange`.
-- Requires `symbol` when `line` is given on project-aware servers (the first-non-whitespace-column fallback is disabled for this action).
-- Waits for project load before the request.
+**执行**
+- 发送带 `{ textDocument, position }` 的 `textDocument/definition`。
+- 接受 `Location`、`Location[]`、`LocationLink` 或 `LocationLink[]`；`normalizeLocationResult()` 会把 `LocationLink` 转换为 `targetSelectionRange ?? targetRange`。
+- 在具备项目感知的服务器上，若给出 `line` 则必须有 `symbol`（该 action 禁用了「首个非空白列」的回退）。
+- 在请求前等待项目加载。
 
-**Output text**
-- `No definition found` or `Found N definition(s):` followed by `file:line:col` and one context line above/below each location.
+**输出文本**
+- `No definition found`，或 `Found N definition(s):` 后跟 `file:line:col`，以及每个位置上方/下方各一行上下文。
 
 ### `type_definition`
-Uses the same location normalization and output shape as `definition`, but sends `textDocument/typeDefinition` and reports `type definition(s)`. Unlike `definition`, the implementation does not require an explicit `symbol` when `line` is supplied; without one it resolves the first non-whitespace column.
+使用与 `definition` 相同的位置规范化与输出形态，但发送 `textDocument/typeDefinition` 并报告 `type definition(s)`。与 `definition` 不同，给出 `line` 时实现并不要求显式的 `symbol`；缺少它时会解析首个非空白列。
 
 ### `implementation`
-Uses the same location normalization and output shape as `definition`, but sends `textDocument/implementation` and reports `implementation(s)`. Unlike `definition`, the implementation does not require an explicit `symbol` when `line` is supplied; without one it resolves the first non-whitespace column.
+使用与 `definition` 相同的位置规范化与输出形态，但发送 `textDocument/implementation` 并报告 `implementation(s)`。与 `definition` 不同，给出 `line` 时实现并不要求显式的 `symbol`；缺少它时会解析首个非空白列。
 
 ### `references`
-**Inputs**
-- Required: `file`.
-- Optional: `line`, `symbol`, `timeout`.
+**输入**
+- 必填：`file`。
+- 可选：`line`、`symbol`、`timeout`。
 
-**Execution**
-- Sends `textDocument/references` with `includeDeclaration: true`.
-- Requires `symbol` when `line` is given on project-aware servers (the first-non-whitespace-column fallback is disabled for this action).
-- For project-aware servers, retries up to `REFERENCES_RETRY_COUNT` times when the only hit is the queried declaration; between retries it waits for project load and sleeps `REFERENCES_RETRY_DELAY_MS`.
-- First `REFERENCE_CONTEXT_LIMIT` references include surrounding context; the rest are location-only.
+**执行**
+- 发送带 `includeDeclaration: true` 的 `textDocument/references`。
+- 在具备项目感知的服务器上，若给出 `line` 则必须有 `symbol`（该 action 禁用了「首个非空白列」的回退）。
+- 对具备项目感知的服务器，当唯一的命中就是被查询的声明时，最多重试 `REFERENCES_RETRY_COUNT` 次；重试之间会等待项目加载并休眠 `REFERENCES_RETRY_DELAY_MS`。
+- 前 `REFERENCE_CONTEXT_LIMIT` 条引用会带上上下文；其余仅给出位置。
 
-**Output text**
-- `No references found` or `Found N reference(s):` with contextual entries first, then `... M additional reference(s) shown without context` when truncated.
+**输出文本**
+- `No references found`，或 `Found N reference(s):`，先列出带上下文的条目，被截断时再给出 `... M additional reference(s) shown without context`。
 
 ### `hover`
-**Inputs**
-- Required: `file`.
-- Optional: `line`, `symbol`, `timeout`.
+**输入**
+- 必填：`file`。
+- 可选：`line`、`symbol`、`timeout`。
 
-**Execution**
-- Sends `textDocument/hover`.
-- `extractHoverText()` flattens strings, markup content, marked-string objects, or arrays into plain text.
+**执行**
+- 发送 `textDocument/hover`。
+- `extractHoverText()` 会把字符串、标记内容、marked-string 对象或数组展平为纯文本。
 
-**Output text**
-- `No hover information` or the extracted hover text.
+**输出文本**
+- `No hover information`，或提取出的 hover 文本。
 
 ### `symbols`
-**Inputs**
-- Workspace mode: required `file: "*"`, plus required `query`. Omitting `file` currently returns `Error: file parameter required...` before workspace-symbol dispatch.
-- Document mode: required `file`.
-- Optional: `timeout`.
+**输入**
+- 工作区模式：必填 `file: "*"`，以及必填 `query`。当前省略 `file` 会在工作区符号分派之前返回 `Error: file parameter required...`。
+- 文档模式：必填 `file`。
+- 可选：`timeout`。
 
-**Execution**
-- Workspace mode sends `workspace/symbol` to every non-custom LSP server, post-filters matches with `filterWorkspaceSymbols()`, deduplicates with `dedupeWorkspaceSymbols()`, then truncates to `WORKSPACE_SYMBOL_LIMIT`.
-- Document mode sends `textDocument/documentSymbol` to the primary server. If the first item has `selectionRange`, it formats hierarchical `DocumentSymbol`s; otherwise it formats flat `SymbolInformation`s.
+**执行**
+- 工作区模式向每个非自定义 LSP 服务器发送 `workspace/symbol`，用 `filterWorkspaceSymbols()` 后置过滤匹配项，用 `dedupeWorkspaceSymbols()` 去重，然后截断到 `WORKSPACE_SYMBOL_LIMIT`。
+- 文档模式向 primary 服务器发送 `textDocument/documentSymbol`。若第一项带有 `selectionRange`，则格式化分层的 `DocumentSymbol`；否则格式化扁平的 `SymbolInformation`。
 
-**Output text**
-- Workspace mode: `Found N symbol(s) matching "query":` plus formatted `name @ file:line:col`, with an omission line when over the limit.
-- Document mode: `Symbols in <file>:` plus hierarchical or flat symbol lines.
+**输出文本**
+- 工作区模式：`Found N symbol(s) matching "query":` 加上格式化后的 `name @ file:line:col`，超出上限时附带一行省略说明。
+- 文档模式：`Symbols in <file>:` 加上分层或扁平的符号行。
 
 ### `rename`
-**Inputs**
-- Required: `file`, `new_name`.
-- Optional: `line`, `symbol`, `apply`, `timeout`.
+**输入**
+- 必填：`file`、`new_name`。
+- 可选：`line`、`symbol`、`apply`、`timeout`。
 
-**Execution**
-- Requires `symbol` when `line` is given on project-aware servers, then waits for project load, sends `textDocument/rename`, receives a `WorkspaceEdit`.
-- `apply !== false` applies edits immediately with `applyWorkspaceEdit()`.
-- `apply === false` renders a preview with `formatWorkspaceEdit()`.
+**执行**
+- 在具备项目感知的服务器上，若给出 `line` 则必须有 `symbol`，随后等待项目加载、发送 `textDocument/rename`、接收 `WorkspaceEdit`。
+- `apply !== false` 会立即用 `applyWorkspaceEdit()` 应用编辑。
+- `apply === false` 用 `formatWorkspaceEdit()` 渲染预览。
 
-**Output text**
-- `Rename returned no edits`, `Applied rename:` plus applied change lines, or `Rename preview:` plus summarized edits.
+**输出文本**
+- `Rename returned no edits`，或 `Applied rename:` 加上已应用的变更行，或 `Rename preview:` 加上汇总后的编辑。
 
 ### `rename_file`
-**Inputs**
-- Required: `file` source path, `new_name` destination path.
-- Optional: `apply`, `timeout`.
+**输入**
+- 必填：`file` 源路径、`new_name` 目标路径。
+- 可选：`apply`、`timeout`。
 
-**Execution**
-- Resolves absolute source and destination, rejects identical paths, missing source, existing destination, empty rename set, or directories with more than `MAX_RENAME_PAIRS` files.
-- `enumerateRenamePairs()` returns one `{oldUri,newUri}` pair for a file or walks every regular file in a directory tree.
-- Sends `workspace/willRenameFiles` with `{ files: pairs }` to every non-custom LSP server whose `fileTypes` match an affected path; collects returned `WorkspaceEdit`s and server notes.
-- Preview mode (`apply === false`) only formats those edits.
-- Apply mode coalesces the returned text edits per URI (a project-aware server's edits win on overlap; overlapping edits from other servers are discarded with a note), applies each URI once from a single snapshot, creates the destination parent directory and renames the source path on disk, sends `textDocument/didClose` for every renamed open file, deletes those `openFiles` entries, then sends `workspace/didRenameFiles`.
+**执行**
+- 解析源与目标的绝对路径，拒绝相同路径、源缺失、目标已存在、重命名集合为空，或目录中包含超过 `MAX_RENAME_PAIRS` 个文件的情况。
+- `enumerateRenamePairs()` 对单个文件返回一个 `{oldUri,newUri}` 对，对目录树则遍历其中每个常规文件。
+- 向所有 `fileTypes` 匹配受影响路径的非自定义 LSP 服务器发送带 `{ files: pairs }` 的 `workspace/willRenameFiles`；收集返回的 `WorkspaceEdit` 与服务器备注。
+- 预览模式（`apply === false`）只格式化这些编辑。
+- 应用模式按 URI 合并返回的文本编辑（在重叠处具备项目感知的服务器的编辑胜出；来自其他服务器的重叠编辑会被丢弃并附一条备注），对每个 URI 都基于同一份快照应用一次，创建目标父目录并在磁盘上重命名源路径，对每个已重命名的打开文件发送 `textDocument/didClose`，删除这些 `openFiles` 条目，然后发送 `workspace/didRenameFiles`。
 
-**Output text**
-- Preview: `Rename preview: <file-count label> → <dest>` plus per-server edit summaries and optional server notes.
-- Apply: `Renamed <file-count label> → <dest>` plus applied edit summaries, filesystem rename line, and optional server notes.
+**输出文本**
+- 预览：`Rename preview: <file-count label> → <dest>` 加上各服务器的编辑汇总与可选的服务器备注。
+- 应用：`Renamed <file-count label> → <dest>` 加上已应用的编辑汇总、文件系统重命名行，以及可选的服务器备注。
 
 ### `code_actions`
-**Inputs**
-- Required: `file`.
-- Optional: `line`, `symbol`, `query`, `apply`, `timeout`.
+**输入**
+- 必填：`file`。
+- 可选：`line`、`symbol`、`query`、`apply`、`timeout`。
 
-**Execution**
-- Reads cached diagnostics for the open URI from `client.diagnostics` and sends `textDocument/codeAction` for a zero-width range at the resolved position.
-- When `apply !== true`, `query` is passed as `context.only: [query]`; this is a server-side kind filter.
-- When `apply === true` and `query` is non-empty, it is a client-side selector: either a zero-based numeric index or a case-insensitive substring of the action title.
-- When `apply === true` but `query` is omitted, the current implementation falls through to list mode and does not apply an action.
-- Applying a `CodeAction` uses `applyCodeAction()`: optionally `codeAction/resolve`, then `applyWorkspaceEdit(edit)`, then optional `workspace/executeCommand`.
-- Applying a bare `Command` only runs `workspace/executeCommand`.
+**执行**
+- 从 `client.diagnostics` 读取该打开 URI 的缓存诊断，并针对解析位置上的零宽 range 发送 `textDocument/codeAction`。
+- 当 `apply !== true` 时，`query` 会作为 `context.only: [query]` 传入；这是服务器侧的 kind 过滤。
+- 当 `apply === true` 且 `query` 非空时，它是客户端侧的选择器：可以是零起始的数字索引，也可以是 action 标题的大小写不敏感子串。
+- 当 `apply === true` 但省略 `query` 时，当前实现会落入列表模式，不应用任何 action。
+- 应用 `CodeAction` 使用 `applyCodeAction()`：可选地 `codeAction/resolve`，然后 `applyWorkspaceEdit(edit)`，再可选地 `workspace/executeCommand`。
+- 应用裸 `Command` 只运行 `workspace/executeCommand`。
 
-**Output text**
-- List mode: `N code action(s):` plus `index: [kind] title` lines.
-- Apply mode success: `Applied "title":` plus `Workspace edit:` and/or `Executed command(s):` sections.
-- Apply mode miss: `No code action matches "query". Available actions:`.
-- Apply mode with no edit/command: `Action "title" has no workspace edit or command to apply`.
+**输出文本**
+- 列表模式：`N code action(s):` 加上 `index: [kind] title` 行。
+- 应用模式成功：`Applied "title":` 加上 `Workspace edit:` 和/或 `Executed command(s):` 小节。
+- 应用模式未命中：`No code action matches "query". Available actions:`。
+- 应用模式但无编辑/命令：`Action "title" has no workspace edit or command to apply`。
 
 ### `status`
-**Inputs**
-- None.
+**输入**
+- 无。
 
-**Execution**
-- Reads configured servers from cached `LspConfig` and cross-references `getActiveClients()` so each server is labelled `(configured, not started)` or with its live client status.
-- Calls `detectLspmux()` and appends status text when `lspmux` is installed.
+**执行**
+- 从缓存的 `LspConfig` 读取已配置的服务器，并与 `getActiveClients()` 交叉引用，从而把每个服务器标记为 `(configured, not started)` 或带上其实时客户端状态。
+- 调用 `detectLspmux()`，并在安装了 `lspmux` 时追加状态文本。
 
-**Output text**
-- `Language servers: <name (configured, not started) | name (<status>)>` plus an explanatory note line, or `No language servers configured for this project`, optionally followed by `lspmux: active (multiplexing enabled)` or `lspmux: installed but server not running`.
+**输出文本**
+- `Language servers: <name (configured, not started) | name (<status>)>` 加上一条说明性备注行；或 `No language servers configured for this project`，其后可选地跟随 `lspmux: active (multiplexing enabled)` 或 `lspmux: installed but server not running`。
 
 ### `reload`
-**Inputs**
-- Workspace mode: `file: "*"` or omitted `file`.
-- Single-file mode: required `file`.
-- Optional: `timeout`.
+**输入**
+- 工作区模式：`file: "*"` 或省略 `file`。
+- 单文件模式：必填 `file`。
+- 可选：`timeout`。
 
-**Execution**
-- Workspace mode first invalidates the per-cwd configuration cache, reloads configuration from disk, and then reloads every newly configured non-custom LSP server.
-- Single-file mode keeps the cached configuration and reloads the primary server for that file.
-- Both modes clear matching recent initialization failures before starting a server. For rust-analyzer servers, `reloadServer()` first tries the `rust-analyzer/reloadWorkspace` request (only rust-analyzer implements it; sending it to other servers such as Roslyn can crash them, so it is gated on the server binary/name). Every server then falls back to a `workspace/didChangeConfiguration` notification carrying the active client's configured settings. If that notification fails, reload tears down the client so the next request cold-starts it. For a shared-mux client, teardown first sends the mux restart notification so the shared server—not only this session's link—is replaced.
+**执行**
+- 工作区模式先使按 cwd 的配置缓存失效，从磁盘重新加载配置，然后重新加载每一个新配置的非自定义 LSP 服务器。
+- 单文件模式保留缓存配置，并重新加载该文件的 primary 服务器。
+- 两种模式都会在启动服务器前清除匹配的近期初始化失败。对 rust-analyzer 服务器，`reloadServer()` 先尝试 `rust-analyzer/reloadWorkspace` 请求（只有 rust-analyzer 实现了它；把它发给 Roslyn 等其他服务器可能导致其崩溃，因此以服务器二进制/名称为门槛）。之后每个服务器都回退到 `workspace/didChangeConfiguration` 通知，携带活动客户端已配置的设置。若该通知失败，reload 会拆除该客户端，使下一次请求冷启动它。对共享 mux 的客户端，拆除会先发送 mux restart 通知，从而替换掉共享服务器——而不只是本会话的链接。
 
-**Output text**
-- One line per server: `Reloaded <server>`, `Restarted <server>`, or `Failed to reload <server>: ...`.
+**输出文本**
+- 每个服务器一行：`Reloaded <server>`、`Restarted <server>` 或 `Failed to reload <server>: ...`。
 
 ### `capabilities`
-**Inputs**
-- Optional: `file`, `timeout`.
+**输入**
+- 可选：`file`、`timeout`。
 
-**Execution**
-- With a concrete `file`, inspects matching non-custom servers for that file.
-- With omitted `file` or `"*"`, inspects every non-custom configured server.
-- Starts servers as needed and dumps `client.serverCapabilities ?? {}` as pretty JSON.
+**执行**
+- 给出具体 `file` 时，检查该文件匹配的非自定义服务器。
+- 省略 `file` 或使用 `"*"` 时，检查每个已配置的非自定义服务器。
+- 按需启动服务器，并把 `client.serverCapabilities ?? {}` 以格式化 JSON 转储出来。
 
-**Output text**
-- Per server: `<server>:` followed by indented `capabilities: { ... }`, or `<server>: failed to start (...)`.
+**输出文本**
+- 每个服务器：`<server>:` 后跟缩进的 `capabilities: { ... }`，或 `<server>: failed to start (...)`。
 
 ### `request`
-**Inputs**
-- Required: `query` method name.
-- Optional: `file`, `line`, `symbol`, `payload`, `timeout`.
+**输入**
+- 必填：`query` 方法名。
+- 可选：`file`、`line`、`symbol`、`payload`、`timeout`。
 
-**Execution**
-- Chooses one non-custom server: file-scoped primary server, otherwise the first configured non-custom server.
-- Param building precedence:
-  1. If `payload` is present, parse JSON and use it verbatim.
-  2. Else if `file` is concrete and `line` is present, build `{ textDocument: { uri }, position: { line: line - 1, character } }` using `resolveSymbolColumn()`.
-  3. Else if `file` is concrete, build `{ textDocument: { uri } }`.
-  4. Else use `{}`.
-- Opens the file first when `file` is concrete.
+**执行**
+- 选择一个非自定义服务器：文件范围的 primary 服务器，否则取第一个已配置的非自定义服务器。
+- 参数构建优先级：
+  1. 若存在 `payload`，解析 JSON 并原样使用。
+  2. 否则若 `file` 具体且给出了 `line`，用 `resolveSymbolColumn()` 构建 `{ textDocument: { uri }, position: { line: line - 1, character } }`。
+  3. 否则若 `file` 具体，构建 `{ textDocument: { uri } }`。
+  4. 否则使用 `{}`。
+- `file` 具体时会先打开该文件。
 
-**Output text**
-- Success: `<server> ← <method>:\n<formatted result>`, where non-string results are `JSON.stringify(..., null, 2)` and nullish values become `null`.
-- Failure: `LSP error from <server> on <method>: ...` followed by `  params: <preview>` echoing the request params (truncated to 400 chars).
+**输出文本**
+- 成功：`<server> ← <method>:\n<formatted result>`，其中非字符串结果会 `JSON.stringify(..., null, 2)`，空值变为 `null`。
+- 失败：`LSP error from <server> on <method>: ...` 后跟 `  params: <preview>`，回显请求参数（截断到 400 字符）。
 
-## Side Effects
-- Filesystem
-  - Reads config files, target files, and root markers.
-  - `rename` and `code_actions` may edit/create/delete/rename files via `applyWorkspaceEdit()`.
-  - `rename_file` always renames the source path on disk in apply mode.
-  - Server-initiated `workspace/applyEdit` requests also mutate files through `applyWorkspaceEdit()`.
-- Network / IPC
-  - With `lsp.shared=true` (the default), SDK sessions try a local Unix socket or Windows named pipe to the broker-managed per-project LSP mux. If the mux cannot be reached or started, the client silently falls back to a private subprocess.
-  - Private and externally multiplexed servers communicate over local stdio JSON-RPC; the tool itself does not make remote network requests.
-- Subprocesses / native bindings
-  - Private fallback spawns language servers with `ptree.spawn()`; shared mode asks the broker to maintain one server per project.
-  - Workspace diagnostics spawns `cargo`, `npx`, `go`, or `pyright`.
-  - `BiomeClient` and `SwiftLintClient` spawn CLI tools.
-  - Optional external `lspmux` detection spawns `lspmux status`; supported servers may be wrapped through `lspmux client`.
-- Session state (transcript, memory, jobs, checkpoints, registries)
-  - Caches config per cwd in `configCache`; workspace `reload` invalidates the entry.
-  - Caches LSP clients per `command:cwd`, with `pendingRequests`, `diagnostics`, `openFiles`, `serverCapabilities`, and project-load state. The transport may represent a shared mux link rather than an owned process.
-  - Caches custom linter clients by `serverName:cwd`.
-  - Updates client `lastActivity`; optional idle-timeout cleanup is driven by `setIdleTimeout()`.
-- Background work / cancellation
-  - Every request has an abortable timeout signal.
-  - Aborting an in-flight LSP request sends `$/cancelRequest`.
-  - Background message readers persist for each live client until process exit/shutdown.
+## 副作用
+- 文件系统
+  - 读取配置文件、目标文件与根标记。
+  - `rename` 与 `code_actions` 可能通过 `applyWorkspaceEdit()` 编辑/创建/删除/重命名文件。
+  - 在应用模式下，`rename_file` 总会重命名磁盘上的源路径。
+  - 服务器发起的 `workspace/applyEdit` 请求同样会通过 `applyWorkspaceEdit()` 改动文件。
+- 网络 / IPC
+  - 当 `lsp.shared=true`（默认值）时，SDK 会话会尝试通过本地 Unix socket 或 Windows 命名管道连接 broker 管理的按项目 LSP mux。若 mux 无法连接或启动，客户端会静默回退到私有子进程。
+  - 私有服务器与外部多路复用的服务器都通过本地 stdio JSON-RPC 通信；该工具本身不发起远程网络请求。
+- 子进程 / 原生绑定
+  - 私有回退用 `ptree.spawn()` 启动语言服务器；共享模式则请 broker 为每个项目维护一个服务器。
+  - 工作区诊断会启动 `cargo`、`npx`、`go` 或 `pyright`。
+  - `BiomeClient` 与 `SwiftLintClient` 会启动 CLI 工具。
+  - 可选的外部 `lspmux` 检测会启动 `lspmux status`；受支持的服务器可以通过 `lspmux client` 包装。
+- 会话状态（转录、记忆、任务、检查点、注册表）
+  - 在 `configCache` 中按 cwd 缓存配置；工作区 `reload` 会使该条目失效。
+  - 按 `command:cwd` 缓存 LSP 客户端，包含 `pendingRequests`、`diagnostics`、`openFiles`、`serverCapabilities` 与项目加载状态。该传输可能代表的是一条共享 mux 链接，而非自己拥有的进程。
+  - 按 `serverName:cwd` 缓存自定义 linter 客户端。
+  - 更新客户端的 `lastActivity`；可选的空闲超时清理由工作区 `idleTimeoutMs` 或 `setIdleTimeout()` 驱动。
+- 后台工作 / 取消
+  - 每个请求都有可中止的超时信号。
+  - 中止进行中的 LSP 请求会发送 `$/cancelRequest`。
+  - 后台消息读取器会为每个存活的客户端持续存在，直到进程退出/关闭。
 
-## Limits & Caps
-- Tool timeout clamp: default `20`, min `5`, max `300` seconds — `TOOL_TIMEOUTS.lsp` in `packages/coding-agent/src/tools/tool-timeouts.ts`.
-- LSP request default timeout inside `sendRequest()`: `30_000ms` — `DEFAULT_REQUEST_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
-- Warmup initialize timeout default: `5_000ms` — `WARMUP_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
-- Project-load wait fallback: `15_000ms` — `PROJECT_LOAD_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
-- Idle-client sweep interval when enabled: `60_000ms` — `IDLE_CHECK_INTERVAL_MS` in `packages/coding-agent/src/lsp/client.ts`.
-- Failed initialization backoff: `3 * 60 * 1000ms` — `INIT_FAILURE_BACKOFF_MS`; a matching single-file or workspace `reload` clears this negative cache so retry is immediate.
-- Diagnostic message output cap: first `50` messages — `DIAGNOSTIC_MESSAGE_LIMIT` in `packages/coding-agent/src/lsp/index.ts`.
-- Single-file diagnostics wait: `3_000ms` — `SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS`.
-- Batch/glob diagnostics wait per file: `400ms` — `BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS`.
-- Glob diagnostic target cap: first `20` matches — `MAX_GLOB_DIAGNOSTIC_TARGETS`.
-- Workspace symbol cap: first `200` entries — `WORKSPACE_SYMBOL_LIMIT`.
-- Reference context cap: first `50` references include source context — `REFERENCE_CONTEXT_LIMIT`.
-- References retry count: `2` retries, `250ms` backoff — `REFERENCES_RETRY_COUNT`, `REFERENCES_RETRY_DELAY_MS`.
-- Directory rename cap: `1_000` file pairs — `MAX_RENAME_PAIRS`.
-- `detectLspmux()` state cache TTL: `5 * 60 * 1000ms`; liveness check timeout: `1_000ms` — `STATE_CACHE_TTL_MS`, `LIVENESS_TIMEOUT_MS` in `packages/coding-agent/src/lsp/lspmux.ts`.
-- Workspace diagnostics output cap: first `50` lines from the subprocess.
+## 限制与上限
+- 工具超时钳制：默认 `20`、最小 `5`、最大 `300` 秒 — `packages/coding-agent/src/tools/tool-timeouts.ts` 中的 `TOOL_TIMEOUTS.lsp`。
+- `sendRequest()` 内部的 LSP 请求默认超时：`30_000ms` — `packages/coding-agent/src/lsp/client.ts` 中的 `DEFAULT_REQUEST_TIMEOUT_MS`。
+- 预热初始化的默认超时：`5_000ms` — `packages/coding-agent/src/lsp/client.ts` 中的 `WARMUP_TIMEOUT_MS`。
+- 项目加载等待的回退值：`15_000ms` — `packages/coding-agent/src/lsp/client.ts` 中的 `PROJECT_LOAD_TIMEOUT_MS`。
+- 启用时的空闲客户端清扫间隔：`60_000ms` — `packages/coding-agent/src/lsp/client.ts` 中的 `IDLE_CHECK_INTERVAL_MS`。
+- 初始化失败退避：`3 * 60 * 1000ms` — `INIT_FAILURE_BACKOFF_MS`；匹配的单文件或工作区 `reload` 会清除该负缓存，使重试立即进行。
+- 诊断消息输出上限：前 `50` 条消息 — `packages/coding-agent/src/lsp/index.ts` 中的 `DIAGNOSTIC_MESSAGE_LIMIT`。
+- 单文件诊断等待：`3_000ms` — `SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS`。
+- 批量/glob 诊断每个文件的等待：`400ms` — `BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS`。
+- glob 诊断目标上限：前 `20` 个匹配 — `MAX_GLOB_DIAGNOSTIC_TARGETS`。
+- 工作区符号上限：前 `200` 个条目 — `WORKSPACE_SYMBOL_LIMIT`。
+- 引用上下文上限：前 `50` 条引用包含源码上下文 — `REFERENCE_CONTEXT_LIMIT`。
+- 引用重试次数：重试 `2` 次，退避 `250ms` — `REFERENCES_RETRY_COUNT`、`REFERENCES_RETRY_DELAY_MS`。
+- 目录重命名上限：`1_000` 个文件对 — `MAX_RENAME_PAIRS`。
+- `detectLspmux()` 状态缓存 TTL：`5 * 60 * 1000ms`；存活检查超时：`1_000ms` — `packages/coding-agent/src/lsp/lspmux.ts` 中的 `STATE_CACHE_TTL_MS`、`LIVENESS_TIMEOUT_MS`。
+- 工作区诊断输出上限：来自子进程的前 `50` 行。
 
-## Errors
-- Missing or invalid inputs are usually returned as text with `details.success: false`, not thrown:
-  - missing `file`/`query`/`new_name`
-  - invalid JSON in `payload`
-  - no matching server
-  - invalid `rename_file` source/destination conditions
-- `resolveSymbolColumn()` throws explicit errors for missing files, missing symbols, and out-of-bounds `#N` selectors; these surface as `LSP error: ...` or request-specific error text.
-- `sendRequest()` rejects on timeout with `LSP request <method> timed out after <ms>ms`.
-- Client process exit rejects all pending requests with an exit-code/stderr error assembled in `getOrCreateClient()`.
-- Single-file action failures inside the main `try` become `LSP error: <message>`.
-- `request` has its own error envelope: `LSP error from <server> on <method>: <message>`.
-- Some server failures are intentionally softened:
-  - diagnostics continue when one server fails
-  - `rename_file` suppresses `workspace/willRenameFiles` “method not found” errors and records other server errors as notes
-  - `code_actions` ignores `codeAction/resolve` failures and applies unresolved actions when possible
-- Caller aborts are not converted to text: `ToolAbortError` is rethrown. A wall-clock tool timeout without a caller abort instead throws `ToolError`: `LSP <action> timed out after <N>s on <server>. ...`.
+## 错误
+- 缺失或无效的输入通常以文本返回，并带有 `details.success: false`，而不是抛出：
+  - 缺少 `file`/`query`/`new_name`
+  - `payload` 中的 JSON 无效
+  - 没有匹配的服务器
+  - 无效的 `rename_file` 源/目标条件
+- `resolveSymbolColumn()` 对文件缺失、符号缺失以及越界的 `#N` 选择器抛出显式错误；它们会以 `LSP error: ...` 或请求特定的错误文本呈现。
+- `sendRequest()` 在超时时以 `LSP request <method> timed out after <ms>ms` 拒绝。
+- 客户端进程退出会以 `getOrCreateClient()` 中组装的退出码/stderr 错误拒绝所有待处理请求。
+- 主 `try` 内的单文件 action 失败会变为 `LSP error: <message>`。
+- `request` 有自己的错误外壳：`LSP error from <server> on <method>: <message>`。
+- 某些服务器失败被有意弱化处理：
+  - 一个服务器失败时诊断仍会继续
+  - `rename_file` 会抑制 `workspace/willRenameFiles` 的 “method not found” 错误，并把其他服务器错误记录为备注
+  - `code_actions` 会忽略 `codeAction/resolve` 的失败，并在可能时应用未解析的 action
+- 调用方中止不会被转换为文本：`ToolAbortError` 会被重新抛出。没有调用方中止的墙钟工具超时则抛出 `ToolError`：`LSP <action> timed out after <N>s on <server>. ...`。
 
-## Notes
-- `status` reports configured servers from `LspConfig` and labels each one via `getActiveClients()`: `(configured, not started)` means the binary resolves on PATH but no request has spawned it; a live client reports its status.
-- `getLspServerForFile()` excludes `createClient` adapters and linter-only servers; navigation/refactor actions never target Biome/SwiftLint custom clients.
-- `getServersForFile()` matches both file extensions and exact basenames from `fileTypes`; config can target names like `Dockerfile` if present.
-- `symbol` matching is exact first, then case-insensitive, and falls back to the Nth occurrence on the specified line only; it never scans other lines.
-- For `definition`, `references`, and `rename` against project-aware servers, omitting `symbol` while passing `line` is rejected with a `ToolError` instead of silently falling back to the first non-whitespace column.
-- `code_actions` uses `query` in two different ways: server-side `context.only` filter in list mode, client-side title/index selector when both `apply: true` and a non-empty `query` are present. Despite the model prompt requiring a selector, the implementation currently lists actions rather than applying one when `apply: true` omits `query`.
-- `rename` and `rename_file` default to apply. Preview requires `apply: false`.
-- `request` with `file: "*"` is treated the same as omitted `file`: it does not build workspace-specific params.
-- `reload` does not recreate a client immediately after killing it; the next request triggers reinitialization.
-- `workspace/applyEdit` can apply edits initiated by the server outside the direct tool action result path.
-- `detectLspmux()` can be disabled with `PI_DISABLE_LSPMUX=1`; only `rust-analyzer` is in `DEFAULT_SUPPORTED_SERVERS`.
-- Startup LSP discovery (`discoverStartupLspServers(cwd)` in `sdk.ts`) runs for `enableLsp && options.hasUI`; the background warmup additionally requires `!settings.get("lsp.lazy")`. `lsp.lazy` defaults to `true`, so by default discovered servers are surfaced with status `"available"` (gray dot in the welcome screen) and cold-start through `getOrCreateClient()` on first use (lsp tool call or edit/write on a matching file type). Print/RPC/ACP/script sessions skip discovery and warmup entirely. See `docs/sdk.md` § Startup performance.
-- `configCache` is per-process and is not automatically invalidated. Use workspace `reload` (omitted `file` or `file: "*"`) to re-read config, root markers, and plugin configuration; a concrete-file reload only reloads that server and keeps the cached configuration.
+## 备注
+- `status` 报告来自 `LspConfig` 的已配置服务器，并通过 `getActiveClients()` 给每一个打标签：`(configured, not started)` 表示该二进制能在 PATH 上解析，但尚无请求启动它；存活的客户端会报告其状态。
+- `getLspServerForFile()` 排除 `createClient` 适配器与仅作 linter 的服务器；导航/重构 action 从不针对 Biome/SwiftLint 自定义客户端。
+- `getServersForFile()` 既匹配文件扩展名，也匹配 `fileTypes` 中的精确 basename；配置可以瞄准诸如 `Dockerfile` 这样的名字（若存在）。
+- `symbol` 匹配先精确、再大小写不敏感，最后仅回退到指定行上的第 N 次出现；它从不扫描其他行。
+- 对具备项目感知的服务器上的 `definition`、`references` 与 `rename`，在传入 `line` 时省略 `symbol` 会以 `ToolError` 拒绝，而不是静默回退到首个非空白列。
+- `code_actions` 以两种不同方式使用 `query`：列表模式下作为服务器侧的 `context.only` 过滤，而当 `apply: true` 与非空 `query` 同时出现时作为客户端侧的标题/索引选择器。尽管模型提示词要求提供选择器，但当 `apply: true` 省略 `query` 时，当前实现会列出 action 而不是应用某一个。
+- `rename` 与 `rename_file` 默认执行应用。预览需要 `apply: false`。
+- 带 `file: "*"` 的 `request` 与省略 `file` 的处理相同：它不会构建工作区专属参数。
+- `reload` 在杀掉客户端后不会立即重建它；下一次请求会触发重新初始化。
+- `workspace/applyEdit` 可以应用由服务器在直接工具 action 结果路径之外发起的编辑。
+- `detectLspmux()` 可用 `PI_DISABLE_LSPMUX=1` 禁用；`DEFAULT_SUPPORTED_SERVERS` 中只有 `rust-analyzer`。
+- 启动时的 LSP 发现（`sdk.ts` 中的 `discoverStartupLspServers(cwd)`）在 `enableLsp && options.hasUI` 时运行；后台预热还额外要求 `!settings.get("lsp.lazy")`。`lsp.lazy` 默认为 `true`，因此默认情况下被发现的服务器会以状态 `"available"` 呈现（欢迎界面中的灰点），并在首次使用时（lsp 工具调用，或对匹配文件类型的 edit/write）通过 `getOrCreateClient()` 冷启动。Print/RPC/ACP/script 会话完全跳过发现与预热。参见 `docs/sdk.md` § 启动性能。
+- `configCache` 是进程级的，不会自动失效。请用工作区 `reload`（省略 `file` 或 `file: "*"`）重新读取配置、根标记与插件配置；具体文件的重载只重新加载该服务器，并保留缓存中的配置。

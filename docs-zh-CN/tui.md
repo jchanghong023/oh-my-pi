@@ -132,41 +132,22 @@ custom<T>(
 - 在 `done(result)` 时：调用 `component.dispose?.()`，如果存在覆盖层则隐藏它，对于非覆盖层流程恢复编辑器和文本，重新聚焦编辑器，解析 promise。
   因此 `done(...)` 是完成流程的必需调用。
 
-## 2) Hook/自定义工具 UI 上下文（运行时/类型不匹配）
+## 2) Hook/自定义工具 UI 上下文（`HookUIContext`）
 
-`HookUIContext.custom` 仍然被类型化为 `(tui, theme, done)`，但交互式
-控制器将工厂调用为
-`(tui, theme, keybindings, done)`。因此第三个运行时参数是
-`KeybindingsManager`，**而不是** 完成回调。一个三参数工厂
-如果调用其第三个参数将在运行时失败，并导致自定义 UI
-无法完成。
-
-在 hook/自定义工具类型与控制器对齐之前，请勿从类型声明中
-复制旧式的三参数示例。运行时安全的
-交互式代码必须从第四个位置参数获取完成回调，
-例如使用 rest 参数适配器，并应使用 `pi.hasUI`
-来守护该流程：
+当前签名（`extensibility/hooks/types.ts`）与交互式控制器及 `ExtensionUIContext.custom` 一致：
 
 ```ts
-const picked = await pi.ui.custom<string | undefined>(
-  (...runtimeArgs: unknown[]) => {
-    const done = runtimeArgs[3];
-    if (typeof done !== "function") {
-      throw new Error(
-        "Interactive custom UI completion callback is unavailable",
-      );
-    }
-    return new MyPickerComponent(
-      done as (value: string | undefined) => void,
-      signal,
-    );
-  },
-);
+custom<T>(
+  factory: (
+    tui: TUI,
+    theme: Theme,
+    keybindings: KeybindingsManager,
+    done: (result: T) => void,
+  ) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
+): Promise<T>
 ```
 
-这是针对当前实现的兼容性变通方案，并非
-稳定的四参数 hook 类型。上述 `ExtensionUIContext.custom`
-才具有受支持的四参数契约。
+把第四个参数用作 `done`。第三个参数是 `KeybindingsManager`（交互模式下使用带默认绑定的内存实例）。当 hook 也可能在无头模式下运行时，请用 `pi.hasUI` 守护仅限终端的 UI。
 
 ## 3) 自定义工具调用/结果渲染器
 
@@ -286,5 +267,5 @@ export default function extension(pi: ExtensionAPI): void {
 - `packages/coding-agent/src/extensibility/extensions/types.ts` — 扩展 UI 与渲染器契约。
 - `packages/coding-agent/src/extensibility/hooks/types.ts` — hook UI 契约（旧式 custom 签名）。
 - `packages/coding-agent/src/extensibility/custom-tools/types.ts` — 自定义工具 execute/render 契约。
-- `packages/coding-agent/src/modes/components/tool-execution.ts` — 挂载 `renderCall`/`renderResult` 组件及 partial-state 选项。
+- `packages/tui/src/chat/tool-execution.ts` — 挂载 `renderCall`/`renderResult` 组件及 partial-state 选项。
 - `packages/coding-agent/src/tools/context.ts` — 工具 UI 上下文传播（`hasUI`、`ui`）。

@@ -59,7 +59,7 @@ mnemopi:
 | `mnemopi.injectionTokenLimit` | `5000`            | 记忆提示词注入的大致 token 预算。                                                                                                                                                                                                                                                      |
 | `mnemopi.debug`               | `false`           | 启用后端失败时的调试日志。                                                                                                                                                                                                                                                             |
 | `mnemopi.noEmbeddings`        | `false`           | 将 `noEmbeddings` 传递给 `Mnemopi` 并强制仅使用 FTS 的回查。                                                                                                                                                                                                                          |
-| `mnemopi.embeddingVariant`    | `multilingual`     | 本地嵌入模型变体：`en` = `BAAI/bge-base-en-v1.5`（768d），`multilingual` = `intfloat/multilingual-e5-large`（1024d）。`mnemopi.embeddingModel` / `MNEMOPI_EMBEDDING_MODEL` 会覆盖它；更改它会在下一次可写启动时重建已存储的嵌入。                                                            |
+| `mnemopi.embeddingVariant`    | `en`               | 本地嵌入模型变体：`en` = `BAAI/bge-base-en-v1.5`（768d），`multilingual` = `intfloat/multilingual-e5-large`（1024d）。`mnemopi.embeddingModel` / `MNEMOPI_EMBEDDING_MODEL` 会覆盖它；更改它会在下一次可写启动时重建已存储的嵌入。                                                            |
 | `mnemopi.embeddingModel`      | 变体默认值        | 显式嵌入模型 id；覆盖 `mnemopi.embeddingVariant`。优先级：本设置 > `MNEMOPI_EMBEDDING_MODEL` 环境变量 > 变体默认值。                                                                                                                                                                   |
 | `mnemopi.embeddingApiUrl`     | 环境变量/默认值   | 传递给 `Mnemopi` 的 OpenAI 兼容嵌入端点。                                                                                                                                                                                                                                              |
 | `mnemopi.embeddingApiKey`     | 环境变量/默认值   | 传递给 `Mnemopi` 的嵌入 API 密钥。                                                                                                                                                                                                                                                     |
@@ -77,6 +77,14 @@ mnemopi:
 - `per-project-tagged` 写入项目本地 bank，并同时从项目本地 bank 和共享全局 bank 进行回查，重复的回查结果会合并。
 
 项目加全局的组合行为由包装器实现。`@oh-my-pi/pi-mnemopi` 包本身仍然直接暴露 bank 和构造选项，包括用于选择 bank 名称的 `bank`。除共享 bank 之外的项目本地 bank 存储为由 Mnemopi 的 `BankManager` 管理的兄弟 bank 数据库。
+
+## 回忆预览与整行读取
+
+回忆结果携带的是截断的内容预览，而不是完整的行。内容超过预览上限时会被截断并附加一个结尾的 `…`；结果还会设置 `truncated: true` 与 `full_length`（原始字符数），因此调用方无需解析该标记即可检测到截断。上限由 `RecallOptions.contentPreviewChars` 决定（默认 `500`；`0` 表示不截断）。
+
+完整行始终可以通过读取 `memory://<memory-id>` 获得：它会解析出当前活跃的 working 或 episodic 行，并在一小段 YAML frontmatter 头（`id`、`bank`、`store`、`memory_type`、时间戳、`importance`、`veracity`、`session_id`、`metadata`）之后返回其完整内容。编码智能体面向模型的提示要求在每次 `memory_edit update` 之前先做这次读取，因为 `update` 会整体替换内容，否则会丢弃被截断预览中未显示的后半部分。
+
+留存（retention）写入的是一份不含标记的 transcript 投影：当宿主在存储的 transcript 之外提供 `embedText` 覆盖时，该投影会用于嵌入、working memory 的 FTS 索引（`COALESCE(embed_text, content)`）以及重建再嵌入，因此存储的 transcript 中的留存协议标记不会污染向量与全文回忆。
 
 ## LLM 与嵌入
 

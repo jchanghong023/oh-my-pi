@@ -74,21 +74,21 @@
 
 ## JS API ↔ Rust 导出映射（与任务/取消相关）
 
-| JS-facing API                                                 | Rust export                 | Scheduler                                                      | Cancellation hookup                                                                                                                  |
-| ------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `grep(options, onMatch?)`                                     | `grep`                      | `task::blocking("grep", ct, ...)`                              | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat checks                                                             |
-| `glob(options, onMatch?)`                                     | `glob`                      | `task::blocking("glob", ct, ...)`                              | `CancelToken::new(...)` + heartbeat checks                                                                                           |
-| `fuzzyFind(options)`                                          | `fuzzy_find`                | `task::blocking("fuzzy_find", ct, ...)`                        | `CancelToken::new(...)` + heartbeat checks                                                                                           |
-| `astGrep(options)` / `astMatch(options)` / `astEdit(options)` | ast exports                 | blocking worker path                                           | timeout/signal fields are accepted by options and checked cooperatively in worker loops                                              |
-| `listWorkspace(options)`                                      | `list_workspace`            | `task::blocking("listWorkspace", ct, ...)`                     | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat checks                                                             |
-| `Shell#run(options, onChunk?)`                                | `Shell::run`                | `task::future(env, "shell.run", ...)`                          | JS `CancelToken` is converted into `pi_shell::cancel::CancelToken`; shell races it against command completion and descendant cleanup |
-| `executeShell(options, onChunk?)`                             | `execute_shell`             | `task::future(env, "shell.execute", ...)`                      | same cancellation race and 2s graceful window                                                                                        |
-| `Process#terminate(options?)`                                 | `Process::terminate`        | `task::future(env, "process.terminate", ...)`                  | optional signal cancels termination waits; grace and hard-kill timeouts are process policy rather than `CancelToken` deadlines       |
-| `Process#waitForExit(options?)`                               | `Process::wait_for_exit`    | `task::future(env, "process.wait_for_exit", ...)`              | optional signal is bridged through `CancelToken`; `timeoutMs` is the wait operation's typed `false` timeout                          |
-| `PtySession#start(...)` / `startArgv(...)`                    | PTY methods                 | `task::future(env, "pty.start", ...)` + inner `spawn_blocking` | `CancelToken` checked in sync PTY loop via `heartbeat()`                                                                             |
-| `htmlToMarkdown(html, options?)`                              | `html_to_markdown`          | `task::blocking("html_to_markdown", (), ...)`                  | none (`()` token)                                                                                                                    |
-| `encodeSixel(...)`                                            | `encode_sixel`              | synchronous native function                                    | none                                                                                                                                 |
-| `readImageFromClipboard()`                                    | `read_image_from_clipboard` | `task::blocking("clipboard.read_image", (), ...)`              | none (`()` token)                                                                                                                    |
+| 面向 JS 的 API                                               | Rust 导出                   | 调度器                                                         | 取消接入方式                                                                                                                          |
+| ------------------------------------------------------------ | --------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `grep(options, onMatch?)`                                    | `grep`                      | `task::blocking("grep", ct, ...)`                              | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat 检查                                                                |
+| `glob(options, onMatch?)`                                    | `glob`                      | `task::blocking("glob", ct, ...)`                              | `CancelToken::new(...)` + heartbeat 检查                                                                                              |
+| `fuzzyFind(options)`                                         | `fuzzy_find`                | `task::blocking("fuzzy_find", ct, ...)`                        | `CancelToken::new(...)` + heartbeat 检查                                                                                              |
+| `astGrep(options)` / `astMatch(options)` / `astEdit(options)` | ast 导出                    | 阻塞工作线程路径                                               | options 接受 timeout/signal 字段，并在工作线程循环中进行协作式检查                                                                    |
+| `listWorkspace(options)`                                     | `list_workspace`            | `task::blocking("listWorkspace", ct, ...)`                     | `CancelToken::new(options.timeoutMs, options.signal)` + heartbeat 检查                                                                |
+| `Shell#run(options, onChunk?)`                               | `Shell::run`                | `task::future(env, "shell.run", ...)`                          | JS `CancelToken` 被转换为 `pi_shell::cancel::CancelToken`；shell 将其与命令完成及下层清理进行竞速                                      |
+| `executeShell(options, onChunk?)`                            | `execute_shell`             | `task::future(env, "shell.execute", ...)`                      | 相同的取消竞速与 2 秒宽限窗口                                                                                                         |
+| `Process#terminate(options?)`                                | `Process::terminate`        | `task::future(env, "process.terminate", ...)`                  | 可选 signal 会取消终止等待；宽限与强杀超时属于进程策略而非 `CancelToken` 截止时间                                                     |
+| `Process#waitForExit(options?)`                              | `Process::wait_for_exit`    | `task::future(env, "process.wait_for_exit", ...)`              | 可选 signal 通过 `CancelToken` 桥接；`timeoutMs` 是该等待操作的类型化 `false` 超时                                                    |
+| `PtySession#start(...)` / `startArgv(...)`                   | PTY 方法                    | `task::future(env, "pty.start", ...)` + 内层 `spawn_blocking`  | 在同步 PTY 循环中通过 `heartbeat()` 检查 `CancelToken`                                                                                |
+| `htmlToMarkdown(html, options?)`                             | `html_to_markdown`          | `task::blocking("html_to_markdown", (), ...)`                  | 无（`()` token）                                                                                                                      |
+| `encodeSixel(...)`                                           | `encode_sixel`              | 同步原生函数                                                   | 无                                                                                                                                    |
+| `readImageFromClipboard()`                                   | `read_image_from_clipboard` | `task::blocking("clipboard.read_image", (), ...)`              | 无（`()` token）                                                                                                                      |
 
 `text.rs`、`tokens.rs`、`keys.rs`、大部分同步的 `ps.rs` 函数、SIXEL 编码以及同步的工具类导出都不使用 `task::blocking`/`task::future` 取消。异步的 `Process.terminate()` 与 `Process.waitForExit()` 方法会使用。
 
@@ -127,7 +127,7 @@ Aborted
 
 `heartbeat()` 必须在具有无界或大型工作集的循环中以可预测的节奏运行。
 
-观察到的模式包括：
+观察到的模式：
 
 - `glob` 与 `fuzzyFind` 将 heartbeat 回调传入 `pi-walker` 的遍历过程，并同时检查结果处理循环。
 - `grep` 在执行昂贵搜索之前与过程中进行检查，并将 token 透传给其 scan/search 工作线程。
@@ -178,7 +178,7 @@ Aborted
    - 修复：将工作拆分成带 heartbeat 边界的块；若无法拆分，则在文档中说明延迟。
 
 3. **阻塞式异步执行器**
-   - 现象：当下同步的代码直接在 future 中运行时，异步 API 会停滞。
+   - 现象：当同步密集型代码直接在 future 中运行时，异步 API 会停滞。
    - 修复：将 CPU/同步代码块迁移到 `task::blocking` 或 `tokio::task::spawn_blocking`。
 
 4. **取消语义不一致**

@@ -1,8 +1,6 @@
 # 键盘快捷键
 
 在 `omp` 会话中运行 `/hotkeys` 即可查看当前构建生效的组合键。该列表会反映从磁盘加载的所有重映射，以及扩展添加的所有绑定。
-在普通编辑器中，`Tab` 用于接受补全；`Shift+F2` 会在空闲的共享会话中切换 Main 与 Discuss 主代理。`Shift+Tab` 保留其切换计划模式的行为。
-
 
 ## 自定义键盘快捷键
 
@@ -12,8 +10,8 @@
 
 ```yaml
 app.model.cycleForward: Ctrl+P
-app.model.selectTemporary: Ctrl+T
-app.plan.toggle: Shift+Tab
+app.model.selectTemporary: Alt+P
+app.plan.toggle: Alt+Shift+P
 ```
 
 组合键名称不区分大小写，并使用与 UI 中所示相同的表示法，例如 `Ctrl+P`、`Alt+Shift+P`、`Shift+Enter` 和 `Ctrl+Backspace`。
@@ -30,15 +28,14 @@ app.history.search: []
 | --- | --- | --- |
 | `app.model.cycleForward` | `Ctrl+P` | 向前循环切换角色模型 |
 | `app.model.cycleBackward` | `Shift+Ctrl+P` | 向后循环切换角色模型 |
-| `app.model.selectTemporary` | `Ctrl+T` | 为当前会话临时挑选一个模型 |
+| `app.model.selectTemporary` | `Alt+P` | 为当前会话临时挑选一个模型 |
 | `app.model.select` | `Alt+M` | 打开模型选择器并设置角色 |
-| `app.plan.toggle` | `Shift+Tab` | 切换计划模式 |
-| `app.primaryAgent.cycle` | `Shift+F2` | 空闲时在 Main 与 Discuss 之间切换 |
+| `app.plan.toggle` | `Alt+Shift+P` | 切换计划模式 |
 | `app.history.search` | `Ctrl+R` | 搜索提示词历史 |
 | `app.tools.expand` | `Ctrl+O` | 切换工具输出的展开状态 |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O` | 显示或隐藏工具活动 |
-| `app.thinking.toggle` | `Alt+P` | 切换思考块的可见性 |
-| `app.thinking.cycle` | `Shift+F1` | 循环切换思考级别 |
+| `app.thinking.toggle` | `Ctrl+T` | 切换思考块的可见性 |
+| `app.thinking.cycle` | `Shift+Tab` | 循环切换思考级别 |
 | `app.editor.external` | `Ctrl+G` | 在 `$VISUAL` / `$EDITOR` 中编辑草稿 |
 | `app.message.followUp` | `Ctrl+Q`、`Ctrl+Enter` | 将一条后续消息排入队列 |
 | `app.message.dequeue` | `Alt+Up`、`Shift+Up` | 将已排队的消息移出队列并放回编辑器 |

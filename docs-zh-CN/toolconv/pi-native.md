@@ -12,6 +12,10 @@ OpenAI/Anthropic 兼容路由会进行翻译，可能丢失 pi 特有字段；pi
 直接发送规范类型，从而保留 service tier、cache 标记、thinking 预算、
 tool-choice 变体、图像以及工具调用 ID。
 
+### 已移除的 omp 工具调用方言
+
+历史上，"pi-native" 曾指一种带内的工具调用序列化：由 `<call:NAME …>` 块构成的 XML 方言，后来被一种以符号分隔的格式取代（v16.0.10，`f743ddc`，2026-06-19），随后被彻底删除（v16.2.2，`053da98`，2026-06-27），其选择开关（`tools.format: "pi"`、`PI_DIALECT=pi`）也一并移除。`packages/ai` 中没有任何代码会发出或解析这两种写法。关于 `<call:…>` 块或以 `§` 开头的头部即 "omp 工具调用格式" 的旧说法，描述的是一种已不存在的格式；仍然保留的带内方言服务于第三方模型家族（实时列表见 `packages/ai/src/dialect/factory.ts` 中的注册表）。
+
 ## 配置与调度
 
 模型通过以下方式启用：

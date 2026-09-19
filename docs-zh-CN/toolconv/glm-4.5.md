@@ -1,6 +1,6 @@
 # GLM-4.5 / GLM-4.6 工具调用格式
 
-智谱 AI / Z.ai **GLM-4.5** 系列（`zai-org/GLM-4.5` 355B-A32B 与 `zai-org/GLM-4.5-Air` 106B-A12B，`model_type: "glm4_moe"`）原生工具调用约定，**GLM-4.6** 字节级共享。与大多数系列使用的"标签内 JSON"约定不同，GLM 将每次工具调用作为一个 **类 XML** 块发出：`<tool_call>{name}` 后接交替出现的 `<arg_key>`/`<arg_value>` 元素对，以 `</tool_call>` 收尾。提示词是 GLM 风格的序列，以 `[gMASK]<sop>` 开头，使用 `<|system|>`、`<|user|>`、`<|assistant|>`、`<|observation|>` 作为回合标记。推理服务器通过工具解析器与推理解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 和 SGLang 均提供 `--tool-call-parser glm45 --reasoning-parser glm45`（vLLM addition…
+智谱 AI / Z.ai **GLM-4.5** 系列（`zai-org/GLM-4.5` 355B-A32B 与 `zai-org/GLM-4.5-Air` 106B-A12B，`model_type: "glm4_moe"`）原生工具调用约定，**GLM-4.6** 字节级共享。与大多数系列使用的"标签内 JSON"约定不同，GLM 将每次工具调用作为一个 **类 XML** 块发出：`<tool_call>{name}` 后接交替出现的 `<arg_key>`/`<arg_value>` 元素对，以 `</tool_call>` 收尾。提示词是 GLM 风格的序列，以 `[gMASK]<sop>` 开头，使用 `<|system|>`、`<|user|>`、`<|assistant|>`、`<|observation|>` 作为回合标记。推理服务器通过工具解析器与推理解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 和 SGLang 均提供 `--tool-call-parser glm45 --reasoning-parser glm45`（vLLM 还需要 `--enable-auto-tool-choice`）。工具调用与推理由内置的 `chat_template.jinja` 完全驱动；思考模式默认开启，通过 `chat_template_kwargs={"enable_thinking": False}` 按请求禁用。
 
 本文档已对照 HF 仓库中权威的 `chat_template.jinja`（原始抓取并**在本地用 Jinja2 渲染** —— `trim_blocks=True, lstrip_blocks=True`，transformers 的 `tojson` 过滤器 —— 以生成下面字节精确的流）、用于精确 token ID 与停止 token 的 `tokenizer_config.json` 与 `generation_config.json`、模型卡，以及 vLLM（`Glm4MoeModelToolParser`）与 SGLang（`Glm4MoeDetector`）解析器源码进行验证。HF 的 `resolve`/`blob` 网页路径会重定向到模型卡 API；字节精确源码通过 `resolve/main/...:raw` 缓存获取（模板提交 `cbb2c7cfb52fa128a9660cb1a7a78e017899e115`）。GLM-4.5 与 GLM-4.6 的 `chat_template.jinja` 完全相同（内容哈希同为 `41478957…`）。
 
@@ -11,8 +11,8 @@ Token ID 来自 `tokenizer_config.json`（`added_tokens_decoder`）。注意区�
 | Token（原文） | ID | `special` | 用途 |
 |---|---|---|---|
 | `[gMASK]` | 151331 | true | GLM 前缀 / 空填充哨兵；每个提示词的第一个 token |
-| `<sop>` | 151333 | true | "Start of piece" — 紧跟在 `[gMASK]` 之后以开启序列 |
-| `<eop>` | 151334 | true | "End of piece"（聊天模板不会发出） |
+| `<sop>` | 151333 | true | "片段开始" — 紧跟在 `[gMASK]` 之后以开启序列 |
+| `<eop>` | 151334 | true | "片段结束"（聊天模板不会发出） |
 | `<\|system\|>` | 151335 | true | 开启系统回合（以及注入的 tools 回合） |
 | `<\|user\|>` | 151336 | true | 开启用户回合（同时是 EOS id —— 见下文） |
 | `<\|assistant\|>` | 151337 | true | 开启助手回合 / 生成提示 |

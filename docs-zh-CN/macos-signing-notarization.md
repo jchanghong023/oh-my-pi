@@ -91,9 +91,9 @@ App Store Connect API 密钥是**无法**通过 CLI 创建的那一项凭据—�
 终端、argv 或 shell 历史记录中：
 
 ```sh
-scripts/ci-macos-upload-secrets.sh ~/omp-signing --dry-run   # 先校验
-scripts/ci-macos-upload-secrets.sh ~/omp-signing             # 上传全部五个
-gh secret list --repo can1357/oh-my-pi                       # 确认
+scripts/ci-macos-upload-secrets.sh ~/omp-signing --dry-run   # validate first
+scripts/ci-macos-upload-secrets.sh ~/omp-signing             # upload all five
+gh secret list --repo can1357/oh-my-pi                       # confirm
 ```
 
 每当证书续期时，请重新运行此脚本。
@@ -102,7 +102,7 @@ gh secret list --repo can1357/oh-my-pi                       # 确认
 
 ```sh
 security find-identity -v -p codesigning
-# 例如："Developer ID Application: Your Name (TEAMID1234)"
+# e.g. "Developer ID Application: Your Name (TEAMID1234)"
 ```
 
 脚本会自动选择第一个 `Developer ID Application` 身份；你无需将身份字符串或 Team ID

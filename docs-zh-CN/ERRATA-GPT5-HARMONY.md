@@ -1,71 +1,35 @@
-# ERRATA — GPT-5 Harmony-Header Leakage
+# 勘误 — GPT-5 Harmony 头部泄漏
 
-Historical research note, not a current runtime contract. The statistics below
-come from the named local stats database snapshot, not from checked-in tests or
-runtime code.
+历史研究笔记，并非当前运行时契约。下文统计来自文中指名的本地 stats 数据库快照，而非已签入的测试或运行时代码。
 
-## Current runtime mitigation
+## 当前运行时缓解措施
 
-Current behavior is implemented in
-`packages/ai/src/utils/harmony-leak.ts` and
-`packages/agent/src/agent-loop.ts`:
+当前行为实现在 `packages/ai/src/utils/harmony-leak.ts` 与 `packages/agent/src/agent-loop.ts` 中：
 
-- Requests to Harmony-dialect models escape reserved `<|...|>` spellings in
-  untrusted text, tool results, and serialized tool arguments before replay.
-- Response leak detection is enabled for every model whose provider is
-  `openai-codex`, rather than for a fixed model-ID list.
-- A bare `to=functions.NAME` marker is not sufficient. Detection requires a
-  co-signal (channel adjacency, glitch token, script mismatch, cascade,
-  fake-result framing, or a trusted trailing-parse boundary); fenced examples
-  are ignored.
-- The agent loop scans finalized visible text and thinking. On a hit it discards
-  the partial response and retries up to two times, then escalates with an
-  error. Audit callbacks receive action/signal metadata and a hash/redacted
-  preview of removed content.
-- Tool-argument detection is intentionally inert unless a caller supplies the
-  byte offset where a structurally valid tool parse ended. The main agent loop
-  does not currently supply that boundary, avoiding false aborts on legitimate
-  tool data that discusses the protocol.
-- Recovery support exists for bounded free-form `eval` input and the current
-  hashline `edit` DSL (input beginning with `@`): it truncates at the
-  contaminated line and appends `*** Abort`. Apply-patch envelopes and
-  JSON-schema edit inputs are not recovery-eligible and use abort/retry when a
-  bounded detection is available.
+- 发往 Harmony 方言模型的请求，会在重放前对不可信文本、工具结果与序列化后的工具参数中转义保留的 `<|...|>` 拼写。
+- 响应泄漏检测对所有 provider 为 `openai-codex` 的模型启用，而不是针对固定的模型 ID 列表。
+- 仅有一个裸 `to=functions.NAME` 标记并不足够。检测需要一个协同信号（通道邻接、glitch token、文字系统不匹配、级联、伪造结果框架，或可信的尾部解析边界）；围栏包裹的示例会被忽略。
+- agent 循环会扫描已定稿的可见文本与思考。一旦命中，它会丢弃该部分响应并最多重试两次，随后以错误升级。审计回调会收到动作/信号元数据，以及被移除内容的哈希/脱敏预览。
+- 除非调用方提供结构上有效的工具解析结束处的字节偏移，否则工具参数检测会被刻意置于不生效状态。主 agent 循环目前不提供该边界，从而避免对讨论该协议的合法工具数据产生误中止。
+- 对于有边界的自由形式 `eval` 输入与当前 hashline `edit` DSL（以 `@` 开头的输入）提供了恢复支持：它会在受污染的行处截断，并追加 `*** Abort`。apply-patch 封装与 JSON-schema 编辑输入不符合恢复条件，在有界检测可用时改用中止/重试。
 
-The corpus tables below describe the historical input formats present in that
-snapshot; they are not a list of the current `edit` tool's accepted syntaxes.
+下文语料库表格描述的是该快照中存在的历史输入格式；它们并不是当前 `edit` 工具所接受语法的清单。
 
-## 1. The problem
+## 1. 问题
 
-OpenAI frames tool calls in the Harmony chat protocol:
+OpenAI 在 Harmony 聊天协议中这样框定工具调用：
 
 ```
 <|start|>assistant<|channel|>commentary to=functions.<NAME><|message|>{ARGS}<|call|>
 ```
 
-`<|channel|>commentary to=functions.NAME` is the **routing header** —
-control tokens consumed by the runtime to dispatch the call. These
-tokens never appear as content under normal operation; the runtime
-strips them.
+`<|channel|>commentary to=functions.NAME` 是**路由头部**——运行时为派发调用而消费的控制词元。在正常运行中这些词元绝不会作为内容出现；运行时会将其剥除。
 
-The defect: gpt-5 models occasionally emit, **as ordinary content
-inside `{ARGS}`**, the **plain-text shadow** of these routing tokens —
-the same characters without the `<|…|>` brackets — and continue
-producing more pseudo-routing structure (channel name, body marker,
-multilingual spam, fake tool-result framing). The contamination lives
-inside the visible tool argument and is dispatched to the tool as if it
-were intended content.
+该缺陷是：gpt-5 模型偶尔会**在 `{ARGS}` 内部作为普通内容**发出这些路由词元的**纯文本影子**——即不带 `<|…|>` 括号的相同字符——并继续产出更多伪路由结构（通道名、正文标记、多语言垃圾、伪造的工具结果框架）。污染驻留在可见的工具参数内部，并被当作本意内容派发给工具。
 
-**Critical detail.** The actual `<|start|>` / `<|channel|>` /
-`<|message|>` / `<|call|>` special tokens almost never appear in tool
-args. What leaks is the bracket-less spelling — `analysis to=functions.X
-code …` — because OpenAI applies a logit mask suppressing the
-control-token IDs inside the args region. The mass that would have gone
-to those special tokens redistributes onto the un-bracketed plain-text
-representation the model also learned. This makes the leak structurally
-invisible to the routing parser and lands it in the tool input verbatim.
+**关键细节。** 真正的 `<|start|>` / `<|channel|>` / `<|message|>` / `<|call|>` 特殊词元几乎从不出现在工具参数中。泄漏出来的是不带括号的拼写——`analysis to=functions.X code …`——因为 OpenAI 在参数区域内施加了抑制控制词元 ID 的 logit 掩码。本应流向那些特殊词元的概率质量，重新分配到了模型同样学过的无括号纯文本表示上。这使得泄漏对路由解析器在结构上不可见，并逐字落入工具输入。
 
-Manifestation in tool args (real corpus example):
+在工具参数中的表现（真实语料库示例）：
 
 ```
 ~      add_function(iso, ctx, ns, "installSystemChangeObserver",
@@ -73,39 +37,37 @@ Manifestation in tool args (real corpus example):
         code above เงินไทยฟรีuser to=functions.edit code …
 ```
 
-The leading code is real and intended. Everything after the first
-non-Latin token through the next clean structural boundary is corruption.
+开头的那段代码是真实且本意如此的。从第一个非拉丁词元起、直到下一个干净的结构边界为止的一切内容都是损坏。
 
 ---
 
-## 2. Observed statistics & failure modes
+## 2. 观察到的统计与失败模式
 
-Source: `~/.omp/stats.db` (`ss_tool_calls`, `ss_assistant_msgs`), through
-2026-05-10. 1.05M tool calls scanned.
+来源：`~/.omp/stats.db`（`ss_tool_calls`、`ss_assistant_msgs`），截至 2026-05-10。共扫描 105 万次工具调用。
 
-### 2.1 Rate
+### 2.1 比率
 
-| Model         | Leaks in tool args |   Calls | per million |
+| 模型          | 工具参数中的泄漏数 |   调用次数 |   每百万 |
 | ------------- | -----------------: | ------: | ----------: |
 | gpt-5.4       |                 37 | 226,957 |         163 |
 | gpt-5.3-codex |                 17 | 112,243 |         151 |
 | gpt-5.5       |                  2 |  80,750 |          25 |
 | gpt-5.2-codex |                  0 |       — |           — |
 
-Plus 15 hits in assistant visible text / thinking blobs.
+另有 15 次命中出现在助手可见文本/思考块中。
 
-### 2.2 Tool distribution
+### 2.2 工具分布
 
-| Tool                           |   Hits |
+| 工具                           |   命中数 |
 | ------------------------------ | -----: |
 | `edit`                         |     38 |
 | `eval`                         |     11 |
 | `report_tool_issue`            |      3 |
-| `grep`/`read`/`search`/`yield` | 1 each |
+| `grep`/`read`/`search`/`yield` |   各 1 |
 
-Concentrated in tools with free-form (non-JSON-schema) argument formats.
+集中在参数格式为自由形式（非 JSON-schema）的工具中。
 
-### 2.3 Leak shape (deterministic)
+### 2.3 泄漏形态（确定性）
 
 ```
 LEAK         ::= JUNK_PREFIX MARKER CHANNEL_BODY (LEAK)?
@@ -114,127 +76,67 @@ CHANNEL_BODY ::= " code " (SPAM | reasoning_prose | fake_tool_output)*
 JUNK_PREFIX  ::= (GLITCH_TOKEN | CHANNEL_WORD | NON_LATIN_RUN | "}" | "】【")+
 ```
 
-**Cascading is common.** Of 96 marker occurrences across 71 contaminated
-records, 39 contain ≥2 markers and 7 contain ≥3 — the model emits
-multiple fake `to=functions.X code …` blocks back-to-back, often with
-fake `code_output\nCell N:\n…` framing between them. Once the
-plain-text scaffolding is in the residual stream, the prefix now _looks
-like_ a fresh tool envelope start, so the macro prior over continuations
-keeps voting for more scaffolding. Self-amplifying.
+**级联很常见。** 在 71 条受污染记录共 96 次标记出现中，39 条包含 ≥2 个标记，7 条包含 ≥3 个——模型会连续发出多个伪造的 `to=functions.X code …` 块，其间常常夹着伪造的 `code_output\nCell N:\n…` 框架。一旦纯文本脚手架进入 residual stream，前缀现在_看起来像_一个全新的工具封装起始，因此对续写的宏观先验会持续投票支持更多脚手架。自我放大。
 
-### 2.4 Glitch tokens
+### 2.4 glitch token
 
-Single-token identifiers in `o200k_base` whose embeddings appear to be
-near-init from underrepresentation in post-training. ASCII residue
-immediately before the marker in the natural corpus:
+`o200k_base` 中属于单一词元的标识符，其嵌入看起来近乎初始化，原因是在训练后阶段代表性不足。自然语料库中紧邻标记之前的 ASCII 残留：
 
-| Surface string    | Single-token | Token ID |                  Hits in corpus |
+| 表层字符串        | 单一词元 | 词元 ID |                  语料库命中数 |
 | ----------------- | :----------: | -------: | ------------------------------: |
 | `Japgolly`        |      ✅      |  199,745 |                               1 |
-| `Jsii`            |      ✅      |  114,318 | (subtoken of `Jsii_commentary`) |
-| `Jsii_commentary` |  — (3 toks)  |        — |                               2 |
-| `changedFiles`    |  — (2 toks)  |        — |                               8 |
-| `RTLU`            |  — (2 toks)  |        — |                               3 |
+| `Jsii`            |      ✅      |  114,318 | (`Jsii_commentary` 的子词元) |
+| `Jsii_commentary` |  —（3 个词元）  |        — |                               2 |
+| `changedFiles`    |  —（2 个词元）  |        — |                               8 |
+| `RTLU`            |  —（2 个词元）  |        — |                               3 |
 
-`Japgolly` is in the last 0.13% of the vocabulary — the same family of
-GitHub-corpus residue that produced `SolidGoldMagikarp` in the 2023
-GPT-2 vocabulary (Rumbelow & Watkins). `SolidGoldMagikarp` itself
-tokenizes to 5 tokens in `o200k_base` — that specific token was retired,
-but the class wasn't.
+`Japgolly` 位于词表的最后 0.13%——与 2023 年 GPT-2 词表中产生 `SolidGoldMagikarp` 的 GitHub 语料库残留属于同一族（Rumbelow & Watkins）。`SolidGoldMagikarp` 本身在 `o200k_base` 中会被切成 5 个词元——那个具体词元已被废弃，但这一类词元并没有。
 
-For the multi-token entries, the corpus-level signature is the surface
-string; the underlying glitch trigger is a sub-token (e.g. `Jsii` inside
-`Jsii_commentary`). The detector list (`G` signal) keys on the surface
-strings.
+对于多词元条目，语料库层面的特征是表层字符串；底层的 glitch 触发因素是某个子词元（例如 `Jsii_commentary` 内部的 `Jsii`）。检测器清单（`G` 信号）以表层字符串为键。
 
-Stable across unrelated sessions. Treated as a high-precision detector
-signal.
+在互不相关的会话之间保持稳定。被视为高精度检测器信号。
 
-### 2.5 Channel-word leakage
+### 2.5 通道词泄漏
 
-`analysis` (5), `assistant` (5), `commentary` (3), `user` (1) appear
-directly preceding `to=`. Always bare words; never `<|channel|>analysis`
-or any other bracketed form. Consistent with §1 — the brackets are
-masked, the words are not.
+`analysis`（5 次）、`assistant`（5 次）、`commentary`（3 次）、`user`（1 次）直接出现在 `to=` 之前。始终是裸词；从不是 `<|channel|>analysis` 或任何其他带括号形式。与 §1 一致——括号被掩码，而这些词没有。
 
-### 2.6 Non-Latin spam residue
+### 2.6 非拉丁垃圾残留
 
-96 marker hits, by script: CJK 40, Cyrillic 12, Telugu/Kannada/Malayalam
-18, Thai 8, Georgian 7, Armenian 7, Arabic 1. Recurring fragments are
-Chinese gambling SEO (`大发时时彩`, `天天中彩票`), Georgian/Abkhaz junk,
-and Thai casino spam — well-known low-quality crawl residue.
+96 次标记命中，按文字系统：CJK 40、西里尔 12、泰卢固/卡纳达/马拉雅拉姆 18、泰语 8、格鲁吉亚 7、亚美尼亚 7、阿拉伯 1。反复出现的片段是中国赌博 SEO（`大发时时彩`、`天天中彩票`）、格鲁吉亚/阿布哈兹垃圾，以及泰语赌场垃圾——众所周知的低质量抓取残留。
 
-This is the same script distribution observed in the controlled
-reproduction (§7.3), independent of the prompt's natural language.
+这与在受控复现（§7.3）中观察到的文字系统分布相同，与提示词的自然语言无关。
 
-### 2.7 Failure-mode breakdown for the `edit` tool
+### 2.7 `edit` 工具的失败模式细分
 
-The `edit` tool exists in two variants in the corpus:
+`edit` 工具在语料库中存在两个变体：
 
-| Variant                                            | Calls | Recovery                                                                                                                                             |
+| 变体                                            | 调用次数 | 恢复                                                                                                                                             |
 | -------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Patch-DSL (`[PATH#TAG]`/anchor/`SWAP DEL INS` ops) |    27 | **Recoverable** by op-truncation (§3.3)                                                                                                              |
-| JSON-schema (`{path,edits:[…]}`)                   |    11 | **Not recoverable** — contamination is escaped _inside_ JSON strings, parser accepts it cleanly, content would be written verbatim into source files |
+| Patch-DSL（`[PATH#TAG]`/anchor/`SWAP DEL INS` 操作） |    27 | 依靠操作截断（§3.3）**可恢复**                                                                                                              |
+| JSON-schema（`{path,edits:[…]}`）                   |    11 | **不可恢复**——污染被转义在 JSON 字符串_内部_，解析器会干净地接受它，内容将被逐字写入源文件 |
 
-For Patch-DSL leaks specifically:
+具体到 Patch-DSL 泄漏：
 
-- 20/27 cases: contamination on the last input line; nothing follows.
-- 7/27 cases: contamination mid-input; what follows is one of: a
-  duplicate replay of an earlier file/anchor, intended content for a
-  _different_ tool call (the model started its next call inline), or
-  pure hallucination. Post-contamination content is never trustworthy.
+- 20/27 例：污染位于输入的最后一行；其后没有任何内容。
+- 7/27 例：污染位于输入中部；其后内容是以下之一：对更早文件/锚点的重复重放、本应属于_另一个_工具调用的内容（模型内联开始了它的下一次调用），或纯粹的幻觉。污染之后的内容永远不可信。
 
-### 2.8 Mechanism (confirmed)
+### 2.8 机制（已确认）
 
-**Prior collapse from null-embedding glitch tokens, into a
-control-token-masked basin whose mass redistributes onto the
-plain-text shadow of the Harmony protocol.**
+**由空嵌入 glitch token 引发的先验坍缩，坍缩进被控制词元掩码遮蔽的吸引盆，其概率质量重新分配到 Harmony 协议的纯文本影子上。**
 
-Step by step:
+逐步说明：
 
-1. The model is mid-`{ARGS}` of a Harmony tool call. The runtime applies
-   a logit mask suppressing structural control tokens (`<|channel|>`,
-   `<|message|>`, `<|call|>`, `<|start|>`, `<|end|>`) inside the args
-   region. Without this mask, normal generation would constantly
-   hallucinate envelope-closes; with it, those token IDs have logit
-   `-∞` in args.
-2. A glitch token `g` is sampled. By construction `g` was in the BPE
-   merge corpus but barely in LM/RL training, so its **input embedding
-   `e_g` ≈ near-init noise of small norm**.
-3. At position t+1, the residual update `h_{t+1} ≈ LN(h_t + e_g + Attn +
-MLP)` is dominated by the prefix-derived terms; the just-emitted-token
-   signal is effectively absent. Generation diversity normally comes
-   from `e_x` steering the residual into different sub-regions —
-   stripped here.
-4. The next-token distribution therefore collapses onto the **conditional
-   prior over continuations of the prefix, with local conditioning
-   removed**. In a tool-calling rollout context, that prior is sharply
-   peaked on Harmony scaffolding (control tokens + routing tokens) —
-   that's what RL trained.
-5. The mask zeros the control-token IDs. Mass redistributes onto the
-   **next-best continuation**: the un-bracketed surface-form spelling of
-   the same protocol (`analysis`, `commentary`, ` to=functions.X`,
-   `code`). This spelling is unmasked because those characters are
-   ordinary tokens.
-6. Once a few tokens of plain-text scaffolding land in the residual
-   stream, the prefix now resembles a fresh envelope start. The macro
-   prior keeps voting for more scaffolding. Cascading (§2.3) follows.
-7. Multilingual spam after the marker is the same prior-collapse
-   continuation, drawn from the training neighborhood of the glitch
-   token (often ESL/auto-generated multilingual web junk — exactly the
-   crawl residue in §2.6).
+1. 模型正处于 Harmony 工具调用的 `{ARGS}` 中途。运行时施加 logit 掩码，抑制参数区域内的结构性控制词元（`<|channel|>`、`<|message|>`、`<|call|>`、`<|start|>`、`<|end|>`）。若没有该掩码，正常生成会不断幻觉出封装闭合；有了它，这些词元 ID 在参数中的 logit 为 `-∞`。
+2. 采样到一个 glitch token `g`。按构造，`g` 曾出现在 BPE 合并语料库中，但在 LM/RL 训练里极少出现，因此其**输入嵌入 `e_g` ≈ 小范数的近初始化噪声**。
+3. 在位置 t+1，残差更新 `h_{t+1} ≈ LN(h_t + e_g + Attn + MLP)` 由前缀派生项主导；刚发出的词元信号实际上缺席。生成多样性通常来自 `e_x` 将残差引导至不同子区域——此处被剥离了。
+4. 因此下一个词元的分布坍缩到**前缀续写的条件先验上，且局部条件被移除**。在工具调用 rollout 语境中，该先验在 Harmony 脚手架（控制词元 + 路由词元）上呈现出尖锐的峰值——这正是 RL 训练出来的。
+5. 掩码将控制词元 ID 归零。概率质量重新分配到**次优续写**上：同一协议的不带括号表层形式拼写（`analysis`、`commentary`、` to=functions.X`、`code`）。这种拼写未被掩码，因为这些字符是普通词元。
+6. 一旦几个纯文本脚手架词元落入 residual stream，前缀现在就像一个新的封装起始。宏观先验持续投票支持更多脚手架。级联（§2.3）随之而来。
+7. 标记之后的多语言垃圾是同一次先验坍缩的续写，取自该 glitch token 的训练邻域（往往是 ESL/自动生成的多语言网络垃圾——正是 §2.6 中的抓取残留）。
 
-**Two corollaries the corpus data demanded but only the experiment
-explained:**
+**语料库数据要求给出、但只有实验才解释清楚的两条推论：**
 
-- **The brackets never appear** (§1, §2.5). The mask is what makes the
-  leak land in plain text instead of as a real envelope-close.
-- **Counterintuitive grammar dependency** (§7.4). The leak is _worse_ in
-  formats closest to OpenAI's training distribution. Off-distribution
-  custom grammars dampen the macro-prior basin; the official
-  `*** Begin Patch` format is the strongest collapse target.
+- **括号从不出现**（§1、§2.5）。正是掩码使泄漏落在纯文本中，而不是作为真正的封装闭合出现。
+- **反直觉的语法依赖性**（§7.4）。在最接近 OpenAI 训练分布的格式中，泄漏_更严重_。分布外的自定义语法会削弱宏观先验吸引盆；官方 `*** Begin Patch` 格式是最强的坍缩目标。
 
-The 2023 SolidGoldMagikarp paper documented mechanism (1)+(2)+(4). The
-new piece is (5): when constrained decoding masks the natural collapse
-target, the mass laundered through the un-masked plain-text shadow
-becomes a structurally-invisible exfiltration channel.
+2023 年的 SolidGoldMagikarp 论文记录了机制 (1)+(2)+(4)。新增的部分是 (5)：当约束解码掩蔽了自然的坍缩目标时，经由未掩码的纯文本影子洗出的概率质量，成为了一条结构上不可见的外泄通道。

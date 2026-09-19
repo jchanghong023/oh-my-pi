@@ -25,6 +25,7 @@
 - [`packages/coding-agent/src/sdk.ts`](../packages/coding-agent/src/sdk.ts)
 - [`packages/coding-agent/src/system-prompt.ts`](../packages/coding-agent/src/system-prompt.ts)
 - [`packages/coding-agent/src/internal-urls/rule-protocol.ts`](../packages/coding-agent/src/internal-urls/rule-protocol.ts)
+- [`packages/coding-agent/src/cli/ttsr-cli.ts`](../packages/coding-agent/src/cli/ttsr-cli.ts)
 - [`packages/utils/src/frontmatter.ts`](../packages/utils/src/frontmatter.ts)
 
 ## 1. 规范的规则形态
@@ -42,6 +43,7 @@ interface Rule {
   condition?: string[];
   astCondition?: string[];
   scope?: string[];
+  agents?: string[];
   interruptMode?: "never" | "prose-only" | "tool-only" | "always";
   _source: SourceMeta;
 }
@@ -80,7 +82,7 @@ interface Rule {
 - `name` = 不含 `.md`/`.mdc` 的文件名
 - frontmatter 通过 `parseFrontmatter` 解析
 - `content` = 正文（剥离 frontmatter 后）
-- `globs`、`alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope` 和 `interruptMode` 由 `buildRuleFromMarkdown` 解析
+- `globs`、`alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope`、`agents` 和 `interruptMode` 由 `buildRuleFromMarkdown` 解析
 - 顶层的 `RULES.md` 被合成为规则名 `RULES`，并强制设为 `alwaysApply: true`
 
 两个粘性文件都使用固定名称 `RULES`。由于 native 项依次作为项目规则、用户规则、用户粘性 `RULES.md`、项目粘性 `RULES.md` 追加，最先出现的 `RULES` 项获胜。通常这意味着用户粘性内容会覆盖项目粘性内容；常规的 `rules/RULES.md` 可以同时覆盖两者。
@@ -94,7 +96,7 @@ interface Rule {
 - 项目：从 `cwd` 向仓库根目录向上遍历，加载 `<ancestor>/.agent/rules/*.{md,mdc}` 和 `<ancestor>/.agents/rules/*.{md,mdc}`
 - 用户：`~/.agent/rules/*.{md,mdc}` 和 `~/.agents/rules/*.{md,mdc}`
 
-归一化使用共享的 `buildRuleFromMarkdown` 路径：派生自文件名的名称、剥离 frontmatter 的正文，以及解析后的 `globs`、`alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope` 和 `interruptMode`。
+归一化使用共享的 `buildRuleFromMarkdown` 路径：派生自文件名的名称、剥离 frontmatter 的正文，以及解析后的 `globs`、`alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope`、`agents` 和 `interruptMode`。
 
 ### Cursor provider（`cursor.ts`）
 
@@ -108,7 +110,7 @@ interface Rule {
 - `description`：仅当为字符串时保留
 - `alwaysApply`：归一化为布尔值 — 仅当 frontmatter 中存在 `alwaysApply: true` 时为 `true`（其他情况均为 `false`）
 - `globs`：接受数组（仅限字符串元素）或单个字符串
-- `condition`/旧版 `ttsr_trigger`、`astCondition`、`scope` 和 `interruptMode` 由共享的规则辅助函数解析
+- `condition`/旧版 `ttsr_trigger`、`astCondition`、`scope`、`agents` 和 `interruptMode` 由共享的规则辅助函数解析
 - `name` 来自不含扩展名的文件名
 
 ### Windsurf provider（`windsurf.ts`）
@@ -121,7 +123,7 @@ interface Rule {
 归一化：
 
 - `globs`：字符串数组或单个字符串
-- `alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope` 和 `interruptMode` 由共享的规则辅助函数解析
+- `alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope`、`agents` 和 `interruptMode` 由共享的规则辅助函数解析
 - `name` 对于用户全局文件固定为 `global_rules`，对于项目规则则派生自文件名
 
 ### Cline provider（`cline.ts`）
@@ -134,7 +136,7 @@ interface Rule {
 归一化：
 
 - `globs`：字符串数组或单个字符串
-- `alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope` 和 `interruptMode` 由共享的规则辅助函数解析
+- `alwaysApply`、`description`、`condition`/旧版 `ttsr_trigger`、`astCondition`、`scope`、`agents` 和 `interruptMode` 由共享的规则辅助函数解析
 - `name` 对于 `.clinerules` 文件固定为 `clinerules`，对于 `.clinerules/*.md` 则派生自文件名
 
 ### GitHub provider（`github.ts`）
@@ -213,9 +215,10 @@ interface Rule {
 
 1. 丢弃 `ttsr.disabledRules` 中列出的规则。
 2. 当 `ttsr.builtinRules === false` 时，丢弃来自 `builtin-defaults` provider 的规则。
-3. 将具有非空 `condition` 或 `astCondition` 的规则注册到 `TtsrManager`；如果注册成功，该规则仅为 TTSR。
-4. 将剩余的 `alwaysApply === true` 规则放入 `alwaysApplyRules`。
-5. 将剩余的具有 `description` 的规则放入 `rulebookRules`。
+3. 丢弃 `agents` globs 与会话 agent 名称不匹配的规则（顶层会话为 `main`，否则为 agent 定义名）；没有 `agents` 的规则适用于所有 agent。
+4. 将具有非空 `condition` 或 `astCondition` 的规则注册到 `TtsrManager`；如果注册成功，该规则仅为 TTSR。
+5. 将剩余的 `alwaysApply === true` 规则放入 `alwaysApplyRules`。
+6. 将剩余的具有 `description` 的规则放入 `rulebookRules`。
 
 ### 桶的行为
 
@@ -249,6 +252,23 @@ interface Rule {
 - **完整规则内容会被自动注入系统提示**（在 rulebook 规则段之前）。
 - 该规则也可通过 `rule://<name>` 寻址以重新读取。
 
+### `agents`
+
+- 将规则限制为匹配的 agent。接受 YAML 序列、单个字符串或逗号分隔的字符串；模式为小写的 glob 模式，与 agent 定义名（`scout`、`reviewer`、`foreman-*`）进行大小写不敏感匹配。`{a, b}` glob 花括号组内逗号周围的空白会被容忍并归一化去除。
+- 字面量 `main` 匹配顶层会话；没有定义名的子代理回退为 `sub`。`main` 和 `sub` 均为保留名：自定义 agent 定义不能使用这两个名称（`parseAgentFields` 会拒绝），因此这两个哨兵名不会被真实 agent 覆盖。
+- 省略（或空列表）意味着规则适用于所有 agent — 既有行为。
+- 过滤只发生一次，在会话创建时的 `bucketRules(...)` 中、TTSR 注册之前：未匹配的规则不会加入任何桶，不会被编译进 `TtsrManager`，在该会话中也无法通过 `rule://` 寻址。
+- 子代理会接收父代理未过滤的已发现规则列表，并以自己的名称重新评估 `agents`，因此仅限 scout 的规则只在 scout 中加载，其他地方都不加载。
+
+  ```yaml
+  agents: [scout, "foreman-*"]
+  ```
+
+  ```yaml
+  # Main agent only; every subagent ignores this rule:
+  agents: main
+  ```
+
 ### `condition`、`astCondition`、`scope` 和 `interruptMode`
 
 - `condition` 是 TTSR 触发字段的正则形式；旧版 `ttsr_trigger` / `ttsrTrigger` 在解析期间作为回退输入被接受。前导的 `(?i)`、`(?m)` 或 `(?s)` 内联标志组会被转换为等价的 JavaScript `RegExp` 标志。
@@ -256,7 +276,7 @@ interface Rule {
 - `scope` 将 TTSR 匹配限制在一组允许的流 surface 范围内。它接受逗号分隔的 YAML 字符串或 YAML 序列。省略时，会监听助手正文（`text`）和所有工具参数（`tool`），但不监听 thinking。
 
   ```yaml
-  # 正文与 thinking；等效形式：
+  # Prose and thinking; equivalent forms:
   scope: "text, thinking"
   ```
 
@@ -265,14 +285,14 @@ interface Rule {
   ```
 
   ```yaml
-  # 块式 YAML 序列同样合法：
+  # A block-style YAML sequence is also valid:
   scope:
     - text
     - thinking
   ```
 
   ```yaml
-  # 仅匹配 edit/write 生成的 TypeScript 源码快照：
+  # Only TypeScript source snapshots produced by edit/write:
   scope: "tool:edit(*.ts), tool:write(*.ts)"
   ```
 

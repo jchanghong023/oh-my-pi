@@ -1,6 +1,6 @@
 # AI 工具 schema 规范化
 
-`@oh-my-pi/pi-ai` 暴露了一个统一的 schema 规范化器，供各 provider 在工具发送上线路之前消费。
+`@oh-my-pi/pi-ai` 暴露了一个统一的 schema 规范化器，供各 provider 在工具被发送到线上之前消费。
 所有 walker 都位于 `packages/ai/src/utils/schema/normalize.ts`；运行契约则是
 `packages/ai/src/utils/schema/CONSTRAINTS.md`。
 

@@ -1,6 +1,6 @@
 # Kimi K2 工具调用格式
 
-Moonshot AI **Kimi K2** 系列（`moonshotai/Kimi-K2-Instruct` 与 `-Base`，`model_type: "kimi_k2"`，1T 参数 MoE）的原生工具调用约定。它是一种基于 TikToken 分词器（16 万词表）构建的类 ChatML 信封：每一轮都形如 `<|im_{class}|>{name}<|im_middle|>{body}<|im_end|>`，工具调用则在助手轮内部、由专门的 `<|tool_calls_section_begin|>…<|tool_calls_section_end|>` 块包裹发出。所有控制 token 都是纯 ASCII 的 `<|…|>` 形式（不像 DeepSeek 那样存在全角/Unicode 变体）。推理服务器通过解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 与 SGLang 都提供 `--tool-call-parser kimi_k2`（vLLM 还需要额外加上 `--enable-auto-tool-choice`）。聊天模板（独立 `ch…
+Moonshot AI **Kimi K2** 系列（`moonshotai/Kimi-K2-Instruct` 与 `-Base`，`model_type: "kimi_k2"`，1T 参数 MoE）的原生工具调用约定。它是一种基于 TikToken 分词器（16 万词表）构建的类 ChatML 信封：每一轮都形如 `<|im_{class}|>{name}<|im_middle|>{body}<|im_end|>`，工具调用则在助手轮内部、由专门的 `<|tool_calls_section_begin|>…<|tool_calls_section_end|>` 块包裹发出。所有控制 token 都是纯 ASCII 的 `<|…|>` 形式（不像 DeepSeek 那样存在全角/Unicode 变体）。推理服务器通过解析器将原始流转换为 OpenAI 风格的 `tool_calls`：vLLM 与 SGLang 都提供 `--tool-call-parser kimi_k2`（vLLM 还需要额外加上 `--enable-auto-tool-choice`）。聊天模板（自 2025.8.11 更新起为独立的 `chat_template.jinja`）注入工具 schema 并渲染每轮的标记。
 
 本文档已根据模型卡、官方 `docs/tool_call_guidance.md` 与 `docs/deploy_guidance.md`（GitHub `MoonshotAI/Kimi-K2`）、HF 仓库的原始 `chat_template.jinja` 和 `tokenizer_config.json`（本地渲染以获取以下字节级精确流），以及 vLLM `kimi_k2` 工具解析器源码进行了核对。
 
@@ -126,7 +126,7 @@ Kimi K2 使用类 ChatML 信封。每条消息渲染为：
 **阶段 2 — 下一轮的提示词**，在追加了助手工具调用轮和工具结果轮之后（`add_generation_prompt=True`）：
 
 ```text
-<|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>What's the weather like in Beijing today? Use the tool to check.<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>get_weather<|im_middle|>## …
+<|im_system|>tool_declare<|im_middle|>[{"type":"function","function":{"name":"get_weather","description":"Get weather information. Call this tool when the user needs to get weather information","parameters":{"type":"object","required":["city"],"properties":{"city":{"type":"string","description":"City name"}}}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>What's the weather like in Beijing today? Use the tool to check.<|im_end|><|im_assistant|>assistant<|im_middle|><|tool_calls_section_begin|><|tool_call_begin|>functions.get_weather:0<|tool_call_argument_begin|>{"city": "Beijing"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>get_weather<|im_middle|>## Return of functions.get_weather:0
 {"weather": "Sunny"}<|im_end|><|im_assistant|>assistant<|im_middle|>
 ```
 
@@ -209,7 +209,7 @@ Kimi 系列模型的亲和性解析到该方言。
 `parseThinking: false` 会将这些标签及其内容保留在可见
 文本中。
 
-## 参考来源
+## 来源
 
 - 模型卡（Tool Calling 部分、OpenAI 风格示例、部署/API 说明）：https://huggingface.co/moonshotai/Kimi-K2-Instruct
 - 官方工具调用指南（标记、ID 约定、手动解析器、`extract_tool_call_info`）：https://raw.githubusercontent.com/MoonshotAI/Kimi-K2/main/docs/tool_call_guidance.md（HF 的 `resolve`/`blob` 路径会重定向到模型卡；本文已根据该 GitHub 原始文件进行核对）

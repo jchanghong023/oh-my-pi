@@ -1,59 +1,61 @@
 # Providers
 
-Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
+Provider 是 `omp` 可以把请求路由到的模型后端：Anthropic、OpenAI、Google Gemini、Groq、OpenRouter、Mistral、xAI、Ollama 这类本地引擎、托管网关、`models.yml` 中的自定义 provider，以及由扩展注册的 provider。
 
-A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
+**provider** 是账户或后端命名空间，例如 `anthropic`、`openai`、`google` 或 `ollama`。**模型** 是该 provider 下的一个具体模型，以 `provider/model-id` 的形式选择，例如 `anthropic/claude-opus-4-6`。禁用一个 provider 会把它下面的所有模型从选择中移除；如果你只想收窄个别模型，请改用模型设置。
 
-This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./lo…
+本页涵盖 provider 如何变为可用、凭据如何解析、provider/环境变量对照表、本地引擎、禁用 provider 以及自定义 provider。关于特定端点的请求、推理、工具、流、用量与重试约束，见 [provider 端点约束](./provider-endpoint-constraints.md)。关于模型选择与完整的 `models.yml` schema，见 [模型与 provider 配置](./models.md)。关于配置文件位置与合并优先级，见 [设置](./settings.md)。关于凭据存储与登录流程的深入说明，见 [密钥与凭据](./secrets.md)。关于完整的环境变量参考，见 [环境变量](./environment-variables.md)。关于本地引擎的安装，见 [本地模型](./local-models.md)。关于上下文文件发现 provider，见 [上下文文件](./context-files.md)。
 
-## How `omp` decides a provider is available
+## `omp` 如何判断 provider 是否可用
 
-At startup the model registry assembles its catalog from four sources, in order:
+启动时，模型注册表按顺序从四个来源组装其目录：
 
-1. The bundled model catalog (every built-in provider and its known models).
-2. Custom provider and model entries from `~/.omp/agent/models.yml`.
-3. Runtime-discovered models for providers that support discovery (local engines and discovery-enabled gateways).
-4. Providers and models registered by extensions.
+1. 内置的模型目录（每个内置 provider 及其已知模型）。
+2. 来自 `~/.omp/agent/models.yml` 的自定义 provider 与模型条目。
+3. 支持发现的 provider 的运行时发现模型（本地引擎与启用发现的网关）。
+4. 由扩展注册的 provider 与模型。
 
-The registry can hold a model even when it is not currently selectable. A model becomes **available** only when both conditions hold:
+即使某个模型当前不可选，注册表也可以持有它。只有同时满足以下两个条件，模型才变为**可用**：
 
-1. its provider ID is **not** in the effective `disabledProviders` list; **and**
-2. the provider is either **keyless** (an implicit local provider, or a custom provider with `auth: none`) **or** has resolvable credentials.
+1. 其 provider ID **不在**生效的 `disabledProviders` 列表中；**并且**
+2. 该 provider 要么**无需 key**（隐式的本地 provider，或带 `auth: none` 的自定义 provider），**要么**有可解析的凭据。
 
-`disabledProviders` is checked _before_ credentials. If a provider ID is disabled, no stored key, OAuth session, environment variable, `.env` entry, or `models.yml` `apiKey` will make it selectable — the provider's models are dropped from availability regardless of credentials. Removing the ID from the effective list restores them.
+`disabledProviders` 会在凭据**之前**检查。如果某个 provider ID 被禁用，任何已存储的 key、OAuth 会话、环境变量、`.env` 条目或 `models.yml` 的 `apiKey` 都无法让它变为可选——无论凭据如何，该 provider 的模型都会从可用性中被移除。把该 ID 从生效列表中移除即可恢复它们。
 
-Keyless local engines are a special case: `ollama`, `llama.cpp`, and `lm-studio` are treated as keyless when no key is configured, so their discovered models are selectable as soon as the engine answers — no login required. See [Built-in local engines](#built-in-local-engines).
+无需 key 的本地引擎是一种特殊情况：未配置 key 时，`ollama`、`llama.cpp` 和 `lm-studio` 被视为无需 key，因此它们发现的模型在引擎一有响应时就可选——无需登录。见[内置本地引擎](#内置本地引擎)。
 
 ## 凭据与优先级
 
-When a provider needs an API key, `omp` resolves it in this order (first match wins):
+当 provider 需要 API key 时，`omp` 按以下顺序解析（先匹配者胜出）：
 
-1. **Runtime override**: a key supplied for the current process, for example CLI `--api-key`. Never persisted.
-2. **`models.yml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl` or gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
-3. **Stored OAuth credential**: refreshed when needed; multiple accounts are ranked and rotated automatically. For Anthropic and ChatGPT (Codex), each organization or workspace counts as its own account: one email holding both a Team or Enterprise seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page), and rotation treats them as two accounts.
-4. **Login-sourced stored API key**: an API-key credential saved by a successful `/login`.
-5. **Provider environment variable**: including values loaded from `.env` files (see [the env-var table](#environment-variables-and-env-files)).
-6. **Other stored API key**: for example, a broker-migrated key. This is a last resort so an explicit environment variable wins.
-7. **`models.yml` fallback resolver**: keys for custom providers not otherwise registered.
+1. **运行时覆盖**：为当前进程提供的 key，例如 CLI 的 `--api-key`。永不持久化。
+2. **`models.yml` 配置 key**：固定在自定义 provider 上的 `apiKey`，会注册为配置来源的 bearer。它会刻意优先于已存储的 OAuth，这样为自定义 `baseUrl` 或网关提供的 key 会被采用，而不是转发代理会拒绝的上游 OAuth token。
+3. **已存储的 OAuth 凭据**：需要时刷新；多个账户会自动排序与轮换。对于 Anthropic 和 ChatGPT（Codex），每个组织或工作区都算作独立账户：一个邮箱如果同时持有 Team 或 Enterprise 席位与个人套餐，可以按订阅各登录一次（在浏览器同意页面上选择工作区），轮换时会把它们当作两个账户。
+4. **来自登录的已存储 API key**：一次成功的 `/login` 所保存的 API-key 凭据。
+5. **provider 环境变量**：包括从 `.env` 文件加载的值（见[环境变量表](#环境变量与-env-文件)）。
+6. **其他已存储 API key**：例如由 broker 迁移过来的 key。这是最后手段，以便显式环境变量胜出。
+7. **`models.yml` 回退解析器**：用于未以其他方式注册的自定义 provider 的 key。
 
-Stored credentials live in the auth store at `~/.omp/agent/agent.db` for local auth, or in the configured auth-broker snapshot when running in broker mode. (`PI_CODING_AGENT_DIR` relocates the `~/.omp/agent` base, and the auth store moves with it.)
+已存储的凭据在本地认证模式下位于 `~/.omp/agent/agent.db` 的 auth store 中，在 broker 模式下则位于配置的 auth-broker snapshot 中。（`PI_CODING_AGENT_DIR` 会迁移 `~/.omp/agent` 基准目录，auth store 也随之移动。）
 
-### OAuth 与 API key，以及 provider-scoped 登录
+### OAuth 与 API key，以及 provider 作用域的登录
 
-Logins are **provider-scoped**: authenticating `anthropic` does not authenticate `openai`, and each provider tracks its own credentials. A disabled provider stays disabled even with valid stored auth.
+登录是**按 provider 划分作用域的**：认证 `anthropic` 不会认证 `openai`，每个 provider 各自跟踪自己的凭据。被禁用的 provider 即使有有效的已存储认证也保持禁用。
 
-Use the interactive slash commands inside a session:
+在会话内使用交互式斜杠命令：
 
-- `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
-- `/logout` — opens the provider selector to remove stored credentials.
+- `/login` —— 打开 OAuth/key 选择器。`/login <provider>` 直接跳到某一个 provider（例如 `/login anthropic`）；对于需要粘贴回调的 OAuth 流程，运行 `/login <redirect-url>` 来完成它。
+- `/logout` —— 打开 provider 选择器以移除已存储的凭据。
 
-For headless or remote setups backed by a shared auth broker, the CLI exposes `omp auth-broker login <provider>` / `omp auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](./secrets.md) for the broker model.
+对于由共享 auth broker 支持的无头或远程环境，CLI 提供 `omp auth-broker login <provider>` / `omp auth-broker logout`（以及 `status`、`list`、`import`、`migrate`）。broker 模型见 [密钥与凭据](./secrets.md)。
 
-When a model has no credentials, `omp` tells you to run `/login` or set the provider's environment variable.
+当模型没有凭据时，`omp` 会提示你运行 `/login` 或设置该 provider 的环境变量。
+
+对于 ClinePass，设置 `CLINE_API_KEY` 或运行 `/login cline-pass` 以打开 Cline 控制台并验证新建的 API key。OMP 会从 Cline 公开的 recommended-models 端点刷新成员资格，并捆绑当前十六个模型的名单以及 Cline 提供的限制、订阅定价、模态和逐模型推理控制，以供离线启动。新的实时 id 在重新生成之前仍然可选，此时使用保守的元数据，而不是猜测出来的控制项。`omp usage` 报告五小时、每周和每月的配额窗口。免费档模型标记为 `(free)`，同一个 key 可在任何 Cline 账户上使用；订阅模型显示与 API 等价的参考定价，而实际计费或折扣用量仍以流式网关上报的成本为准。请求会模仿 Cline CLI 客户端标头和稳定的每会话 task id，Qwen 路由使用 Cline 的 prompt-cache 形态，Qwen3.7 Plus 会把思考等级映射到网关的 token 预算字段。
 
 ### 在 `models.yml` 中固定一个 key
 
-A custom provider's `apiKey` is resolved as **environment-variable-name-or-literal**: if the value names an existing environment variable, that variable's value is used; otherwise the string itself is the key. Prefixing the value with `!` runs it as a shell command and uses the trimmed stdout (see [Model and Provider Configuration](./models.md) for the full value syntax).
+自定义 provider 的 `apiKey` 按**环境变量名或字面量**解析：如果该值命名了一个已存在的环境变量，就使用该变量的值；否则该字符串本身就是 key。在值前加 `!` 会把它作为 shell 命令运行，并使用裁剪后的 stdout（完整的取值语法见 [模型与 provider 配置](./models.md)）。
 
 ```yaml
 # ~/.omp/agent/models.yml
@@ -69,103 +71,109 @@ providers:
         maxTokens: 8192
 ```
 
-If `authHeader: true` is set on a custom provider, the resolved key is injected as an `Authorization: Bearer <key>` header on every request to that provider.
+如果在自定义 provider 上设置了 `authHeader: true`，解析出的 key 会作为 `Authorization: Bearer <key>` 标头注入到对该 provider 的每个请求中。
 
 ## 环境变量与 `.env` 文件
 
-Each provider has one or more environment variables that supply a key when no stored credential exists. The table below is the verified provider → variable map; the full catalog is large, so it is split into core and additional providers. OAuth-backed providers can also accept a token variable in addition to (or instead of) an API key.
+每个 provider 都有一个或多个环境变量，用于在没有已存储凭据时提供 key。下表是经过验证的 provider → 变量对照表；完整目录很大，因此拆分为核心 provider 与其他托管 provider 两部分。由 OAuth 支持的 provider 除了 API key 之外（或代替 API key）还可以接受 token 变量。
 
 ### 核心 provider
 
-| Provider ID      | Environment variable(s)                                                                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `anthropic`      | `ANTHROPIC_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY` (Foundry mode prefers `ANTHROPIC_FOUNDRY_API_KEY` when `CLAUDE_CODE_USE_FOUNDRY=true`)         |
-| `openai`         | `OPENAI_API_KEY`                                                                                                                                 |
-| `openai-codex`   | `OPENAI_CODEX_OAUTH_TOKEN`                                                                                                                       |
-| `google`         | `GEMINI_API_KEY`                                                                                                                                 |
-| `google-vertex`  | `GOOGLE_CLOUD_API_KEY`, or Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`) |
-| `groq`           | `GROQ_API_KEY`                                                                                                                                   |
-| `openrouter`     | `OPENROUTER_API_KEY`                                                                                                                             |
-| `mistral`        | `MISTRAL_API_KEY`                                                                                                                                |
-| `xai`            | `XAI_API_KEY`                                                                                                                                    |
-| `xai-oauth`      | `XAI_OAUTH_TOKEN`, then `XAI_API_KEY`                                                                                                            |
-| `github-copilot` | `COPILOT_GITHUB_TOKEN`                                                                                                                           |
-| `cursor`         | `CURSOR_ACCESS_TOKEN`                                                                                                                            |
-| `azure`          | `AZURE_OPENAI_API_KEY`                                                                                                                           |
-| `amazon-bedrock` | `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or an ECS/IRSA credential chain                                                 |
+| Provider ID      | 环境变量                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic`      | `ANTHROPIC_OAUTH_TOKEN`，然后 `ANTHROPIC_API_KEY`（当 `CLAUDE_CODE_USE_FOUNDRY=true` 时，Foundry 模式优先使用 `ANTHROPIC_FOUNDRY_API_KEY`）       |
+| `openai`         | `OPENAI_API_KEY`                                                                                                                                  |
+| `openai-codex`   | `OPENAI_CODEX_OAUTH_TOKEN`                                                                                                                        |
+| `google`         | `GEMINI_API_KEY`                                                                                                                                  |
+| `google-vertex`  | `GOOGLE_CLOUD_API_KEY`，或 Application Default Credentials（`GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`） |
+| `groq`           | `GROQ_API_KEY`                                                                                                                                    |
+| `openrouter`     | `OPENROUTER_API_KEY`                                                                                                                              |
+| `mistral`        | `MISTRAL_API_KEY`                                                                                                                                 |
+| `xai`            | `XAI_API_KEY`                                                                                                                                     |
+| `xai-oauth`      | `XAI_OAUTH_TOKEN`，然后 `XAI_API_KEY`                                                                                                             |
+| `github-copilot` | `COPILOT_GITHUB_TOKEN`                                                                                                                            |
+| `cursor`         | `CURSOR_ACCESS_TOKEN`                                                                                                                             |
+| `azure`          | `AZURE_OPENAI_API_KEY`                                                                                                                            |
+| `amazon-bedrock` | `AWS_PROFILE`，或 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`，或 ECS/IRSA 凭据链                                                               |
 
 ### 其他托管 provider
 
-| Provider ID                      | Environment variable(s)                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------- |
-| `aiand`                          | `AIAND_API_KEY`                                                               |
-| `cerebras`                       | `CEREBRAS_API_KEY`                                                            |
-| `alibaba-token-plan`             | `ALIBABA_TOKEN_PLAN_API_KEY`, then `BAILIAN_TOKEN_PLAN_API_KEY`               |
-| `baseten`                        | `BASETEN_API_KEY`                                                             |
-| `bedrock-mantle`                 | `AWS_BEARER_TOKEN_BEDROCK`                                                    |
-| `deepinfra`                      | `DEEPINFRA_API_KEY`                                                           |
-| `deepseek`                       | `DEEPSEEK_API_KEY`                                                            |
-| `siliconflow`                    | `SILICONFLOW_API_KEY`                                                         |
-| `siliconflow-cn`                 | `SILICONFLOW_CN_API_KEY`                                                      |
-| `fireworks`                      | `FIREWORKS_API_KEY`                                                           |
-| `together`                       | `TOGETHER_API_KEY`                                                            |
-| `coreweave`                      | `COREWEAVE_API_KEY`, then `WANDB_API_KEY`                                     |
-| `nvidia`                         | `NVIDIA_API_KEY`                                                              |
-| `devin`                          | `DEVIN_API_KEY`                                                               |
-| `gmi-cloud`                      | `GMI_API_KEY`                                                                 |
-| `huggingface`                    | `HUGGINGFACE_HUB_TOKEN`, then `HF_TOKEN`                                      |
-| `moonshot`                       | `MOONSHOT_API_KEY`, then `KIMI_API_KEY`                                       |
-| `meta`                           | `MODEL_API_KEY`, then `META_API_KEY`                                          |
-| `nanogpt`                        | `NANO_GPT_API_KEY`                                                            |
-| `novita`                         | `NOVITA_API_KEY`                                                              |
-| `venice`                         | `VENICE_API_KEY`                                                              |
-| `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY` (also `VERCEL_AI_GATEWAY_API_KEY` for catalog discovery) |
-| `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                                               |
-| `litellm`                        | `LITELLM_API_KEY`; optional `LITELLM_BASE_URL` for the proxy endpoint         |
-| `kilo`                           | `KILO_API_KEY`                                                                |
-| `zai`                            | `ZAI_API_KEY`                                                                 |
-| `zenmux`                         | `ZENMUX_API_KEY`                                                              |
-| `zhipu-coding-plan`              | `ZHIPU_API_KEY`                                                               |
-| `umans`                          | `UMANS_AI_CODING_PLAN_API_KEY`                                                |
-| `qianfan`                        | `QIANFAN_API_KEY`                                                             |
-| `qwen-portal`                    | `QWEN_OAUTH_TOKEN`, then `QWEN_PORTAL_API_KEY`                                |
-| `synthetic`                      | `SYNTHETIC_API_KEY`                                                           |
-| `minimax-code`                   | `MINIMAX_CODE_API_KEY`                                                        |
-| `minimax-code-cn`                | `MINIMAX_CODE_CN_API_KEY`                                                     |
-| `minimax`                        | `MINIMAX_API_KEY`                                                             |
-| `alibaba-coding-plan`            | `ALIBABA_CODING_PLAN_API_KEY`                                                 |
-| `sakana`                         | `SAKANA_API_KEY`, then `FUGU_API_KEY`                                         |
-| `aimlapi`                        | `AIMLAPI_API_KEY`                                                             |
-| `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN`                                                                |
-| `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY`                                                            |
-| `firepass`                       | `FIREPASS_API_KEY`                                                            |
-| `wafer-serverless`               | `WAFER_SERVERLESS_API_KEY`                                                    |
-| `xiaomi`                         | `XIAOMI_API_KEY`                                                              |
-| `xiaomi-token-plan-ams`          | `XIAOMI_TOKEN_PLAN_AMS_API_KEY`                                               |
-| `xiaomi-token-plan-cn`           | `XIAOMI_TOKEN_PLAN_CN_API_KEY`                                                |
-| `xiaomi-token-plan-sgp`          | `XIAOMI_TOKEN_PLAN_SGP_API_KEY`                                               |
-| `ollama-cloud`                   | `OLLAMA_CLOUD_API_KEY`                                                        |
-| `ollama`                         | `OLLAMA_API_KEY` (optional; local discovery is keyless by default)            |
-| `lm-studio`                      | `LM_STUDIO_API_KEY` (optional; keyless by default)                            |
-| `llama.cpp`                      | `LLAMA_CPP_API_KEY` (only when the server requires auth)                      |
-| `vllm`                           | `VLLM_API_KEY` (optional for an unauthenticated local server)                 |
-| `yolo-auto`                      | `YOLO_AUTO_API_KEY`                                                            |
+| Provider ID                      | 环境变量                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------------- |
+| `aiand`                          | `AIAND_API_KEY`                                                                     |
+| `cerebras`                       | `CEREBRAS_API_KEY`                                                                  |
+| `alibaba-token-plan`             | `ALIBABA_TOKEN_PLAN_API_KEY`，然后 `BAILIAN_TOKEN_PLAN_API_KEY`                     |
+| `baseten`                        | `BASETEN_API_KEY`                                                                   |
+| `bedrock-mantle`                 | `AWS_BEARER_TOKEN_BEDROCK`                                                          |
+| `deepinfra`                      | `DEEPINFRA_API_KEY`                                                                 |
+| `deepseek`                       | `DEEPSEEK_API_KEY`                                                                  |
+| `siliconflow`                    | `SILICONFLOW_API_KEY`                                                               |
+| `siliconflow-cn`                 | `SILICONFLOW_CN_API_KEY`                                                            |
+| `fireworks`                      | `FIREWORKS_API_KEY`                                                                 |
+| `together`                       | `TOGETHER_API_KEY`                                                                  |
+| `coreweave`                      | `COREWEAVE_API_KEY`，然后 `WANDB_API_KEY`                                           |
+| `nvidia`                         | `NVIDIA_API_KEY`                                                                    |
+| `devin`                          | `DEVIN_API_KEY`                                                                     |
+| `gmi-cloud`                      | `GMI_API_KEY`                                                                       |
+| `huggingface`                    | `HUGGINGFACE_HUB_TOKEN`，然后 `HF_TOKEN`                                            |
+| `moonshot`                       | `MOONSHOT_API_KEY`，然后 `KIMI_API_KEY`                                             |
+| `meta`                           | `MODEL_API_KEY`，然后 `META_API_KEY`                                                |
+| `nanogpt`                        | `NANO_GPT_API_KEY`                                                                  |
+| `novita`                         | `NOVITA_API_KEY`                                                                    |
+| `venice`                         | `VENICE_API_KEY`                                                                    |
+| `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`（目录发现也可用 `VERCEL_AI_GATEWAY_API_KEY`）                  |
+| `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
+| `litellm`                        | `LITELLM_API_KEY`；代理端点可选用 `LITELLM_BASE_URL`                                |
+| `kilo`                           | `KILO_API_KEY`                                                                      |
+| `zai`                            | `ZAI_API_KEY`                                                                       |
+| `zenmux`                         | `ZENMUX_API_KEY`                                                                    |
+| `zhipu-coding-plan`              | `ZHIPU_API_KEY`                                                                     |
+| `umans`                          | `UMANS_AI_CODING_PLAN_API_KEY`                                                      |
+| `qianfan`                        | `QIANFAN_API_KEY`                                                                   |
+| `qwen-portal`                    | `QWEN_OAUTH_TOKEN`，然后 `QWEN_PORTAL_API_KEY`                                      |
+| `synthetic`                      | `SYNTHETIC_API_KEY`                                                                 |
+| `minimax-code`                   | `MINIMAX_CODE_API_KEY`                                                              |
+| `minimax-code-cn`                | `MINIMAX_CODE_CN_API_KEY`                                                           |
+| `minimax`                        | `MINIMAX_API_KEY`                                                                   |
+| `alibaba-coding-plan`            | `ALIBABA_CODING_PLAN_API_KEY`                                                       |
+| `sakana`                         | `SAKANA_API_KEY`，然后 `FUGU_API_KEY`                                               |
+| `aimlapi`                        | `AIMLAPI_API_KEY`                                                                   |
+| `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN`                                                                      |
+| `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY`                                                                  |
+| `cline-pass`                     | `CLINE_API_KEY`                                                                     |
+| `firepass`                       | `FIREPASS_API_KEY`                                                                  |
+| `wafer-serverless`               | `WAFER_SERVERLESS_API_KEY`                                                          |
+| `xiaomi`                         | `XIAOMI_API_KEY`                                                                    |
+| `xiaomi-token-plan-ams`          | `XIAOMI_TOKEN_PLAN_AMS_API_KEY`                                                     |
+| `xiaomi-token-plan-cn`           | `XIAOMI_TOKEN_PLAN_CN_API_KEY`                                                      |
+| `xiaomi-token-plan-sgp`          | `XIAOMI_TOKEN_PLAN_SGP_API_KEY`                                                     |
+| `ollama-cloud`                   | `OLLAMA_CLOUD_API_KEY`                                                              |
+| `ollama`                         | `OLLAMA_API_KEY`（可选；本地发现默认无需 key）                                      |
+| `lm-studio`                      | `LM_STUDIO_API_KEY`（可选；默认无需 key）                                           |
+| `llama.cpp`                      | `LLAMA_CPP_API_KEY`（仅当服务器要求认证时）                                         |
+| `vllm`                           | `VLLM_API_KEY`（未认证的本地服务器可选用）                                          |
+| `yolo-auto`                      | `YOLO_AUTO_API_KEY`                                                                 |
+| `charm-hyper`                    | `CHARM_HYPER_API_KEY`，然后 `HYPER_API_KEY`                                         |
 
-OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. See [Environment variables](./environment-variables.md) for search-tool and configuration variables not listed here.
+`/login cloudflare-ai-gateway` 会提示输入 gateway token、Cloudflare account ID 和 gateway ID，然后把三者一起存储。要使用环境变量，请设置上面列出的全部三个值。OMP 会为每个模型选择 Anthropic、OpenAI 或 Workers AI 网关路由；你不需要在 `models.yml` 中覆盖 base URL。
+
+`charm-hyper` 是 Charm 面向编码 agent 的 OpenAI 兼容推理网关。在 `https://hyper.charm.land/` 签发或管理 key；模型列表从该 provider 公开的 `/v1/models` 端点实时发现，并且 `HYPER_API_KEY` 可作为 `CHARM_HYPER_API_KEY` 的回退别名被接受。
+
+由 OAuth 支持的 provider，例如 `anthropic`、`github-copilot`、`cursor`、`ollama-cloud`、`qwen-portal`、`kimi-code`、`xai-oauth`、`wafer-serverless`、`google-gemini-cli`、`google-antigravity`、`devin` 以及 GitLab provider（`gitlab-duo`、`gitlab-duo-agent`），通常通过 `/login` 而不是环境变量来接入。也存在交互式 API-key 登录：`/login baseten`、`/login coreweave` 和 `/login sakana` 会提示输入控制台/API key（`coreweave` 还需要 `COREWEAVE_PROJECT` 来构造 `OpenAI-Project` 标头）。此处未列出的搜索工具与配置变量见 [环境变量](./environment-variables.md)。
 
 ### `.env` 发现与优先级
 
-`omp` eagerly loads `.env` files into the process environment before any provider lookup. It reads four files and, for each variable, the **first** source that defines it wins. Effective precedence, high to low:
+`omp` 会在任何 provider 查找之前，先把 `.env` 文件急切加载到进程环境中。它会读取四个文件，对每个变量而言，**第一个**定义它的来源胜出。实际生效的优先级从高到低：
 
-1. The process environment inherited by `omp` (already-set variables always win).
+1. `omp` 继承的进程环境（已设置的变量总是胜出）。
 2. `<cwd>/.env`
 3. `~/.omp/agent/.env`
 4. `~/.omp/.env`
 5. `~/.env`
 
-A variable already present in the process environment is never overwritten by a `.env` file. Among the files, a value set in `<cwd>/.env` wins over `~/.omp/agent/.env`, which wins over `~/.omp/.env`, which wins over `~/.env`. So a shell-exported `OPENAI_API_KEY` beats every `.env` file, and a project's `<cwd>/.env` beats your home `~/.env`.
+进程环境中已存在的变量永远不会被 `.env` 文件覆盖。在这些文件之间，`<cwd>/.env` 中设置的值优先于 `~/.omp/agent/.env`，后者优先于 `~/.omp/.env`，再优先于 `~/.env`。所以从 shell 导出的 `OPENAI_API_KEY` 胜过所有 `.env` 文件，而项目的 `<cwd>/.env` 胜过你主目录的 `~/.env`。
 
-Project-local `.env` is the simplest way to make one repository use a project-specific gateway, key, or local endpoint:
+项目本地的 `.env` 是让某个仓库使用项目专属网关、key 或本地端点的最简单方式：
 
 ```dotenv
 # <project>/.env
@@ -173,34 +181,34 @@ OPENROUTER_API_KEY=sk-or-...
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
 
-`.env` parsing is intentionally minimal:
+`.env` 的解析刻意保持最小化：
 
-- blank lines and lines starting with `#` are ignored;
-- keys must match `[A-Za-z_][A-Za-z0-9_]*` (shell-identifier shape) — other names are dropped;
-- values may be wrapped in single or double quotes, which are stripped;
-- values containing a NUL byte are dropped;
-- an `OMP_`-prefixed key is also mirrored to the matching `PI_`-prefixed name.
+- 空行和以 `#` 开头的行会被忽略；
+- 键必须匹配 `[A-Za-z_][A-Za-z0-9_]*`（shell 标识符形态）——其他名称会被丢弃；
+- 值可以用单引号或双引号包裹，包裹符会被剥离；
+- 包含 NUL 字节的值会被丢弃；
+- 以 `OMP_` 为前缀的键还会镜像到对应的 `PI_` 前缀名称。
 
 ## 内置本地引擎
 
-Three local engines are discovered automatically without needing a `models.yml` entry. Each uses a base URL that can be overridden by an environment variable:
+有三个本地引擎无需 `models.yml` 条目即可被自动发现。每个引擎都使用一个可被环境变量覆盖的 base URL：
 
-| Provider ID | Base URL (env override → default)                                                 | Notes                                           |
-| ----------- | --------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `ollama`    | `OLLAMA_BASE_URL`, then `OLLAMA_HOST` (normalized), else `http://127.0.0.1:11434` | Keyless by default.                             |
-| `llama.cpp` | `LLAMA_CPP_BASE_URL`, else `http://127.0.0.1:8080`                                | Keyless unless a key is stored for `llama.cpp`. |
-| `lm-studio` | `LM_STUDIO_BASE_URL`, else `http://127.0.0.1:1234/v1`                             | Keyless by default.                             |
+| Provider ID | Base URL（环境变量覆盖 → 默认值）                                                | 备注                                          |
+| ----------- | -------------------------------------------------------------------------------- | --------------------------------------------- |
+| `ollama`    | `OLLAMA_BASE_URL`，然后 `OLLAMA_HOST`（已归一化），否则 `http://127.0.0.1:11434` | 默认无需 key。                                |
+| `llama.cpp` | `LLAMA_CPP_BASE_URL`，否则 `http://127.0.0.1:8080`                               | 除非为 `llama.cpp` 存储了 key，否则无需 key。 |
+| `lm-studio` | `LM_STUDIO_BASE_URL`，否则 `http://127.0.0.1:1234/v1`                            | 默认无需 key。                                |
 
-These implicit engines are **skipped** when:
+以下情况下这些隐式引擎会被**跳过**：
 
-- a provider with the same ID is already configured in `models.yml` (your explicit config wins); or
-- the provider ID appears in the effective `disabledProviders` list.
+- `models.yml` 中已经配置了相同 ID 的 provider（你的显式配置优先）；或
+- 该 provider ID 出现在生效的 `disabledProviders` 列表中。
 
-For installing and running these engines, see [Local models](./local-models.md).
+这些引擎的安装与运行见 [本地模型](./local-models.md)。
 
 ## 禁用模型 provider
 
-Use the `disabledProviders` setting to remove a provider's models from selection:
+使用 `disabledProviders` 设置可以把某个 provider 的模型从选择中移除：
 
 ```yaml
 # ~/.omp/agent/config.yml or <project>/.omp/config.yml
@@ -211,21 +219,21 @@ disabledProviders:
   - groq
 ```
 
-Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API provider; the OAuth-backed Google providers `google-gemini-cli` and `google-antigravity` are separate IDs and must be disabled individually. Disable `ollama`, `llama.cpp`, or `lm-studio` to stop local discovery for that engine.
+Provider ID 精确匹配。禁用 `google` 会隐藏 Google Gemini API provider；由 OAuth 支持的 Google provider `google-gemini-cli` 和 `google-antigravity` 是独立的 ID，必须分别禁用。禁用 `ollama`、`llama.cpp` 或 `lm-studio` 会停止该引擎的本地发现。
 
-`disabledProviders` applies uniformly to:
+`disabledProviders` 统一适用于：
 
-- bundled catalog providers;
-- custom `models.yml` providers;
-- runtime-discovered provider models;
-- extension-registered providers;
-- implicit local engines.
+- 内置目录 provider；
+- 自定义 `models.yml` provider；
+- 运行时发现的 provider 模型；
+- 扩展注册的 provider；
+- 隐式本地引擎。
 
-Disabling a provider does not delete its stored credentials — re-enable it by removing its ID from the effective list.
+禁用一个 provider 不会删除其已存储的凭据——把它的 ID 从生效列表中移除即可重新启用它。
 
 ## 项目级别的 provider 控制
 
-Project settings live in `<project>/.omp/config.yml`. Use them when one repository must allow or hide a different provider set than your global default:
+项目设置位于 `<project>/.omp/config.yml`。当某个仓库必须允许或隐藏与全局默认不同的 provider 集合时，就可以使用它们：
 
 ```yaml
 # <project>/.omp/config.yml
@@ -234,7 +242,7 @@ disabledProviders:
   - openrouter
 ```
 
-Settings arrays are **replaced** wholesale by the higher-precedence layer, not merged or appended. If the global file disables three providers and the project file disables one, the project sees only the project list:
+设置数组会被更高优先级的层整体**替换**，而不是合并或追加。如果全局文件禁用了三个 provider 而项目文件只禁用了一个，项目内看到的就只有项目列表：
 
 ```yaml
 # ~/.omp/agent/config.yml
@@ -248,17 +256,17 @@ disabledProviders:
   - groq
 ```
 
-Effective result inside the project:
+项目内实际生效的结果：
 
 ```json
 ["groq"]
 ```
 
-The project array re-enables `anthropic`, `openai`, and `google` for sessions launched from that project. If you want a project to _add_ to the global set, repeat the global IDs in the project file. See [Settings](./settings.md) for the full precedence chain, including `--config` overlays and runtime overrides.
+项目数组会为该项目的会话重新启用 `anthropic`、`openai` 和 `google`。如果你想让项目在全局集合上_追加_，请在项目文件中重复全局的 ID。包含 `--config` 覆盖与运行时覆盖在内的完整优先级链见 [设置](./settings.md)。
 
 ## 路径作用域的 `disabledProviders`
 
-`disabledProviders` can mix plain string entries (apply everywhere) with path-scoped entries (apply only when the current working directory matches a configured path):
+`disabledProviders` 可以把普通字符串条目（处处生效）与路径作用域条目（仅当当前工作目录匹配配置的路径时才生效）混用：
 
 ```yaml
 disabledProviders:
@@ -274,38 +282,38 @@ disabledProviders:
       - openrouter
 ```
 
-- Bare string entries always apply.
-- A scoped entry applies when the current working directory **is** the configured path or sits **under** it. `~` expands to the home directory.
-- Accepted path keys: `path`, `paths`, `pathPrefix`, `pathPrefixes`.
-- Accepted value keys: `providers`, `values`, `items`.
+- 裸字符串条目始终生效。
+- 作用域条目在当前工作目录**就是**配置的路径或位于其**之下**时生效。`~` 展开为主目录。
+- 接受的路径键：`path`、`paths`、`pathPrefix`、`pathPrefixes`。
+- 接受的取值键：`providers`、`values`、`items`。
 
-For the example above:
+对于上面的示例：
 
-- `ollama` is disabled everywhere.
-- `anthropic` and `openai` are additionally disabled under `~/projects/sensitive`.
-- `openrouter` is additionally disabled under `~/work/client-a` and `~/work/client-b`.
+- `ollama` 处处被禁用。
+- `anthropic` 和 `openai` 在 `~/projects/sensitive` 下额外被禁用。
+- `openrouter` 在 `~/work/client-a` 和 `~/work/client-b` 下额外被禁用。
 
-Path scopes are resolved **after** the settings merge. Because a higher-precedence layer replaces the whole array, a project-level `disabledProviders` array drops any scoped entries that only existed in the global array. `enabledModels` is the only other setting that supports the same path-scoped form. See [Settings](./settings.md) for details.
+路径作用域在设置合并**之后**解析。由于更高优先级的层会替换整个数组，项目级的 `disabledProviders` 数组会丢弃只存在于全局数组中的作用域条目。`enabledModels` 是唯一另一个支持相同路径作用域形式的设置。详见 [设置](./settings.md)。
 
-## Provider ID 与 discovery provider ID
+## Provider ID 与发现 provider ID
 
-`disabledProviders` uses a **single shared ID namespace** that gates two different subsystems:
+`disabledProviders` 使用一个**共享的单一 ID 命名空间**，它同时管控两个不同的子系统：
 
-- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.yml` ID, …). Disabling one removes its models from selection.
-- **Discovery providers** — sources of context files, MCP servers, commands, skills, hooks, tools, prompts, and settings. Disabling one stops that source from contributing capability items.
+- **模型 provider**——本页介绍的后端（`anthropic`、`openai`、`ollama`、自定义的 `models.yml` ID……）。禁用一个会将其模型从选择中移除。
+- **发现 provider**——上下文文件、MCP 服务器、命令、skill、钩子、工具、提示词与设置的来源。禁用一个会阻止该来源贡献能力条目。
 
-| Entry type            | Examples                                                                      | Effect                                                          |
-| --------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Model provider ID     | `anthropic`, `openai`, `google`, `groq`, `openrouter`, `ollama`, `my-gateway` | Removes that provider's models from availability.               |
-| Discovery provider ID | `native`, `claude`, `codex`, `gemini`, `agents`, `github`                     | Stops that discovery source from contributing capability items. |
+| 条目类型         | 示例                                                                          | 效果                                 |
+| ---------------- | ----------------------------------------------------------------------------- | ------------------------------------ |
+| 模型 provider ID | `anthropic`, `openai`, `google`, `groq`, `openrouter`, `ollama`, `my-gateway` | 把该 provider 的模型从可用性中移除。 |
+| 发现 provider ID | `native`, `claude`, `codex`, `gemini`, `agents`, `github`                     | 阻止该发现来源贡献能力条目。         |
 
-Watch the related names. The Google Gemini **API** models use the model provider ID `google`; `gemini` is a **discovery** provider ID (the source that reads `GEMINI.md`), not the Google model provider. Use discovery IDs only when you intend to disable an entire config source. See [Context files](./context-files.md) for the discovery-provider side.
+注意这些相关的名称。Google Gemini **API** 模型使用模型 provider ID `google`；`gemini` 是**发现** provider ID（读取 `GEMINI.md` 的来源），而不是 Google 模型 provider。只有当你打算禁用整个配置来源时，才使用发现 provider 的 ID。发现 provider 一侧见 [上下文文件](./context-files.md)。
 
 ## `models.yml` 中的自定义 provider
 
-Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
+自定义 provider 位于 `~/.omp/agent/models.yml` 的 `providers:` 下。在那里定义的 provider ID 与内置 provider 参与相同的选择、凭据解析和 `disabledProviders` 规则。
 
-Minimal OpenAI-compatible provider:
+最简 OpenAI 兼容 provider：
 
 ```yaml
 providers:
@@ -320,7 +328,26 @@ providers:
         maxTokens: 8192
 ```
 
-Keyless local provider (no credentials required):
+### Zhipu BigModel 账户余额 key
+
+`/login zai` 面向全球的 Z.AI Coding Plan 端点，`/login zhipu-coding-plan` 面向国内的 Zhipu Coding Plan 端点。这两个流程都不会配置 `https://open.bigmodel.cn/api/paas/v4` 这个通用的按量付费 BigModel 端点。
+
+对于从标准 BigModel 账户余额签发的 API key，请使用自定义 provider：
+
+```yaml
+providers:
+  bigmodel:
+    baseUrl: https://open.bigmodel.cn/api/paas/v4
+    api: openai-completions
+    apiKey: BIGMODEL_API_KEY
+    models:
+      - id: glm-4.6
+        name: GLM-4.6 (BigModel)
+```
+
+在启动 `omp` 之前把 `BIGMODEL_API_KEY` 设为 `<id>.<secret>` 形式的 key，然后选择 `bigmodel/glm-4.6`。该 key 不使用 `sk-` 前缀。
+
+无需 key 的本地 provider（不需要凭据）：
 
 ```yaml
 providers:
@@ -335,7 +362,7 @@ providers:
         maxTokens: 4096
 ```
 
-Discovery-enabled provider (models fetched from the endpoint at runtime):
+启用发现的 provider（在运行时从端点获取模型）：
 
 ```yaml
 providers:
@@ -348,9 +375,9 @@ providers:
       type: proxy
 ```
 
-For the full schema, all allowed `api` values, discovery `type`s, model overrides, and equivalence settings, see [Model and Provider Configuration](./models.md).
+完整的 schema、所有允许的 `api` 取值、discovery 的 `type`、模型覆盖与等价性设置见 [模型与 provider 配置](./models.md)。
 
-To disable a custom provider, list its ID exactly:
+要禁用自定义 provider，请精确列出其 ID：
 
 ```yaml
 disabledProviders:
@@ -360,12 +387,12 @@ disabledProviders:
 
 ## 故障排查
 
-**A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). Keyless local engines only appear once the engine is actually running and responding.
+**某个 provider 的模型不可选。** 确认该 provider 有凭据（`/login <provider>`、导出的环境变量，或 `models.yml` 的 `apiKey`），并且其 ID 不在生效的 `disabledProviders` 列表中。记住这条规则：未被禁用**并且**（无需 key**或**有凭据）。无需 key 的本地引擎只有在引擎确实在运行并有响应后才会出现。
 
-**The wrong key is being used (a stale key from `.env`).** Resolution favors runtime `--api-key`, then a `models.yml` config key, stored OAuth, a key saved by `/login`, environment or `.env`, other stored API keys, and finally the `models.yml` fallback resolver. An already-set process environment variable also beats every `.env` file, and `<cwd>/.env` beats `~/.env`. If an unexpected key wins, check for an exported shell variable and the four `.env` files in precedence order, and clear the one that should not apply.
+**用错了 key（`.env` 里陈旧的 key）。** 解析顺序优先运行时 `--api-key`，然后是 `models.yml` 配置 key、已存储的 OAuth、`/login` 保存的 key、环境变量或 `.env`、其他已存储的 API key，最后是 `models.yml` 回退解析器。已设置的进程环境变量也胜过所有 `.env` 文件，并且 `<cwd>/.env` 胜过 `~/.env`。如果某个意外的 key 胜出，请检查导出的 shell 变量，并按优先级顺序检查四个 `.env` 文件，清除不应生效的那个。
 
-**A provider still appears even though I disabled it.** `disabledProviders` arrays are replaced, not merged: a project `<project>/.omp/config.yml` array fully overrides the global one. Verify the _effective_ list for the directory you are in (path-scoped entries only apply at or under their configured path), and confirm the ID is spelled exactly. Use `omp config get disabledProviders` to inspect the merged value (see [Settings](./settings.md)).
+**我已经禁用了某个 provider，但它仍然出现。** `disabledProviders` 数组是被替换而不是合并：项目的 `<project>/.omp/config.yml` 数组会完全覆盖全局数组。请核对你所在目录的_生效_列表（路径作用域条目只在配置路径处或其下生效），并确认 ID 拼写完全一致。用 `omp config get disabledProviders` 查看合并后的值（见 [设置](./settings.md)）。
 
-**A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
+**某个发现 provider 的名称对模型没有影响（或反之）。** ID 命名空间是共享的。`gemini`、`codex`、`claude`、`native` 和 `agents` 是发现来源 ID；Google 模型后端是 `google`。请确认你禁用的是正确类型的 provider。
 
-**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-…
+**自定义 `models.yml` provider 无法加载。** YAML 或 schema 错误会让注册表跳过该自定义文件。用 `omp models` 验证该文件（用 `omp models find <substr>` 限定到某一个 provider）。带自定义 `models` 的 provider 需要 `baseUrl`、认证（`apiKey`，除非 `auth: none`），以及在 provider 层级或每个模型上的 `api`。没有模型的 provider 只要定义了至少一个受支持的覆盖项（`baseUrl`、`headers`、`apiKey`、`auth: none`、`compat`、`disableStrictTools`、`remoteCompaction`、`modelOverrides` 或 `discovery`）也是有效的。发现 provider 可以省略 `models`，但需要 provider 层级的 `api`，除非 `discovery.type` 为 `proxy`。显式的 `ollama`、`lm-studio` 或 `llama.cpp` 条目会有意替换该 ID 的内置发现。见 [模型与 provider 配置](./models.md)。

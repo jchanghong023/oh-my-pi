@@ -14,7 +14,10 @@
 
 - 急切加载的根：`native/index.js` 以及生成的 `native/index.d.ts`；
 - 惰性加载的桌面包装：`native/desktop.js` / `desktop.d.ts`；
-- 惰性加载的剪贴板包装：`native/clipboard.js` / `clipboard.d.ts`。
+- 惰性加载的剪贴板包装：`native/clipboard.js` / `clipboard.d.ts`；
+- 惰性加载的 vcs 包装：`native/vcs.js` / `vcs.d.ts`（`@oh-my-pi/pi-natives/vcs`）。
+
+vcs 子路径暴露与后端无关的 `Vcs*` 仓库 API（18.0.9 引入，`VcsGitRepo.mergeBase()` 于 18.0.10 跟进）：通过 `git()` / `repo()` / `require()` / `requireGit()` 进行发现与 Git/Jujutsu 操作，返回 `VcsGitRepo` / `VcsRepo` / `VcsJjWorkspace` 句柄（引用与状态、diff、暂存、提交、分支、worktree、补丁应用、stash、cherry-pick、CLI 支撑的 push/fetch/clone，全部支持取消），此外还有 JS 侧错误辅助函数（`isVcsError`）以及构建在 `VcsRepo.watchTarget()` 之上的头变更监视器 `watch(repo, onChange)`。
 
 两个命令用途不同：
 

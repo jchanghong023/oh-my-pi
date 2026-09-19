@@ -47,13 +47,18 @@ omp --prewalk-into openai/gpt-5-mini
 
 ## 在活动会话中启用
 
-运行斜杠命令以启用 prewalk，无需重启 OMP 或在配置中开启：
+运行以下任一斜杠命令，无需重启 OMP：
 
 ```text
 /prewalk
+/prewalk restart
 ```
 
-`/prewalk` 始终以 `@smol` 角色为目标。如果 prewalk 已经启用，该命令会保持现有目标不变。完成一次交接后，请切换到其他模型并再次运行 `/prewalk` 以启用下一次一次性交接。若要在启动时选择不同的目标，请使用 `--prewalk-into`。
+`/prewalk` 会启用一次从当前模型到当前 `@smol` 分配的一次性交接。
+
+交接之后，`/prewalk restart` 会立即把会话切回当前的 `@default` 分配，并重新启用向 `@smol` 的交接。两个角色都在命令运行时解析，因此该循环与具体模型名无关，也不会改动任一角色持久化的配置。
+
+如果 prewalk 已经启用，该命令会保持现有目标不变。若要在启动时选择不同的目标，请使用 `--prewalk-into`。
 
 ## 子代理 prewalk
 

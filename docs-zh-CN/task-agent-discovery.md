@@ -38,12 +38,12 @@ Task 代理会被归一化为 `AgentDefinition`（`src/task/types.ts`）：
 - `spawns` 接受 `*`、CSV 或数组
 - 向后兼容行为：如果缺少 `spawns` 但 `tools` 包含 `task`，则 `spawns` 变为 `*`
 - `output` 按不透明 schema 数据原样透传
-- `read-summarize: false`（归一化为 `readSummarize`）强制子代理的 `read` 工具返回逐字的原始文件内容而非结构化摘要 —— `runSubprocess` 会将其作为子代理隔离设置的 `read.summarize.enabled: false` 覆盖项应用（`src/task/executor.ts`）。`scout` 和 `librarian` 内置即关闭此选项。字段缺省时默认为启用。
+- `read-summarize: false`（归一化为 `readSummarize`）强制子代理的 `read` 工具返回逐字的原始文件内容而非结构化摘要 —— `runSubprocess` 会将其作为子代理隔离设置的 `read.summarize.enabled: false` 覆盖项应用（`src/task/executor.ts`）。`scout` 内置即关闭此选项。字段缺省时默认为启用。
 - `model` 接受单个选择器、CSV 或数组。条目会在角色别名展开后按顺序依次尝试。
 - `thinking-level` / `thinking` 选择代理配置的思考强度。当 `task.enableEffort`（默认 `false`）将其暴露出来时，task 条目的粗粒度 `effort`（`lo`、`med`、`hi`）在启动时优先生效。OMP 会将该提示映射到所选模型支持的最低、中等或最高思考强度，并将其裁剪到 `task.maxEffort`（默认 `max`）。该上限在重试回退切换模型时会被持续保留。如果所选模型在不超过该上限的情况下没有可用的思考强度，则生成失败；不支持可控思考强度的模型则会回退到其正常选择器。
 - `blocking: true` 会让父会话在启用异步 task 执行时仍然等待该代理完成
 - `autoloadSkills` 指定来自父会话、需在子代理首个提示之前注入的技能名称；未知的名称会被忽略
-- `prewalk: true` 让子代理在其解析后的模型上启动，并在首次编辑/写入时交接给默认的 prewalk 目标（即 `smol` 角色），与会话级别的 `--prewalk` 完全一致；字符串值（如 `prewalk: "@smol"` 或 `prewalk: "openai/gpt-5-mini"`）用于选择自定义目标。`task.agentPrewalk` 设置项（代理名 → `"on"` / `"off"` / 模式，通过 `/agents` hub 中的 prewalk 条按代理配置）会覆盖 frontmatter。解析在 `runSubprocess`（`src/task/executor.ts`）中完成。目标不可用时跳过而不会导致生成失败。仅当解析后目标的模型身份和有效思考模式/等级在模型裁剪后与起始选择同时一致时，才跳过已解析的目标；同模型下的 effort 降…
+- `prewalk: true` 让子代理在其解析后的模型上启动，并在首次编辑/写入时交接给默认的 prewalk 目标（即 `smol` 角色），与会话级别的 `--prewalk` 完全一致；字符串值（如 `prewalk: "@smol"` 或 `prewalk: "openai/gpt-5-mini"`）用于选择自定义目标。`task.agentPrewalk` 设置项（代理名 → `"on"` / `"off"` / 模式，通过 `/agents` hub 中的 prewalk 条按代理配置）会覆盖 frontmatter。解析在 `runSubprocess`（`src/task/executor.ts`）中完成。目标不可用时跳过而不会导致生成失败。仅当解析后目标的模型身份和有效思考模式/等级在模型裁剪后与起始选择同时一致时，才跳过已解析的目标；同模型下的 effort 降级是一次真正的交接，仍会在首次编辑/写入时启用并切换。
 - `advisor: true` 会为该代理生成的会话配对一个 advisor，使用为 `advisor` 角色解析出的模型运行；字符串值（如 `advisor: "deepseek/deepseek-v4-flash"` 或 `advisor: "@smol:high"`）用于设置显式的 advisor 模型模式（可选 `:level` 后缀），该模式会作为生成会话的 `modelRoles.advisor` 应用。`task.agentAdvisor` 设置项（代理名 → `"on"` / `"off"` / 模式，通过 `/agents` hub 中的 advisor 条按代理配置）会覆盖 frontmatter。解析在 `runSubprocess`（`src/task/executor.ts`）中完成；子代理默认不启用 advisor，最终生效的开启状态会持久化在 `session_init` 中，以便冷启动恢复后仍然保留。
 
 ## 基于角色的自定义代理
@@ -86,9 +86,19 @@ modelRoles:
 
 `/model` 的 Roles 视图可以分配并持久化自定义角色映射，例如 `review`、`fast` 和 `good`。仅修改当前或默认会话的模型选择不会重新映射这些角色。
 
+## 用户标记的模型代理
+
+在编辑器中输入 `^` 可从与 `Alt+P` 会话选择器相同的范围和排序中选择模型。接受补全后，会插入一个显示其显示名的原子 chip。例如，输入 `Have ^`，选择模型，然后以 `review this change` 收尾。
+
+提交时，每个首次被提到的模型会获得一个分支内局部的伪名（`m1`、`m2`、……）。用户消息携带 `<model agent="m1" name="Display Name"/>`；任务描述会列出其 provider/模型选择器。`task`、eval `agent()` 与 `workpool()` 都接受该伪名作为其 `agent`。这些代理使用捆绑的通用任务模板，而不是专家模板，并且只面向明确指名该被标记模型的请求。
+
+伪名在 `/resume` 之后仍然保留；回退到某个模型首次被提及之前会释放它的编号。重复相同的选择器会复用其伪名。未知选择器保持字面量，`!`/`$` 本地执行草稿中的提及同样如此。标记需要空白边界：自动补全会补上尾随空格。当两个模型在同一次草稿中显示名相同时，第二个保持为字面选择器，以避免歧义展开。
+
+会话定义会追加在已发现的代理之后，因此同名既有代理会胜出。常规的生成限制与模型覆盖优先级仍然适用。合成提示词无法注册模型。
+
 ## 监控运行中的代理
 
-分派之后，按 `Alt+A` 打开 [Agent Hub](./agent-hub.md)。其实时花名册显示每个 task 代理的状态、当前活动、模型、运行时长和用量。选择某个代理即可阅读其会话记录并直接进行引导；停放中的代理也可以在同一视图中被恢复。
+分派之后，按 `Alt+A` 打开 [Agent Hub](./agent-hub.md)。其实时花名册显示每个 task 代理的状态、当前活动、模型、运行时长和用量。选择某个代理即可阅读其会话记录并直接进行引导；停放中的代理也可以在同一视图中被恢复。启用 `tui.mouse` 即可改为点击实时任务卡片和跳转列表行，或者关注编辑器上方的固定 `Subagents` 区块。
 
 ### `vibe_spawn` 的层级路由
 
@@ -114,7 +124,7 @@ modelRoles:
 
 `EMBEDDED_AGENT_DEFS` 定义了：
 
-- 来自提示文件的 `scout`、`designer`、`reviewer`、`security-reviewer` 和 `librarian`
+- 来自提示文件的 `scout`、`reviewer` 和 `security-reviewer`
 - 来自共享的 `task.md` 正文加上注入的 frontmatter 的 `task` 和 `sonic`；没有任何内置代理设置 `prewalk` —— 通用 `task` 代理的交接由 `task.prewalk` 设置（默认关闭）启用，也可通过 `/agents` / `task.agentPrewalk` / 用户代理 frontmatter 按代理单独启用
 
 加载路径：
@@ -188,7 +198,7 @@ modelRoles:
 1. 原子地重新加载当前会话持久化的全局、项目和显式覆盖设置，同时保留运行时覆盖项
 2. 从父级生成策略中解析省略的或显式的代理名称
 3. 强制执行深度、阻止自递归和父级生成策略的检查
-4. 使用 `discoverAgents(session.cwd)` 重新发现代理，并进行精确名称查找
+4. 使用 `discoverAgents(session.cwd)` 重新发现代理，追加用户标记的会话代理，并进行精确名称查找
 5. 检查 `task.disabledAgents`
 6. 解析 plan-mode 限制、输出 schema、模型策略和隔离策略
 
@@ -196,7 +206,7 @@ modelRoles:
 
 ### 描述阶段 vs 执行阶段的发现
 
-`TaskTool.create()` 在为面向模型的工具描述构建时，会按解析后的工作目录记忆化发现结果。执行阶段会重新发现代理，因此如果代理或扩展文件在会话中途发生变化，运行时集合可能与先前的描述不同。阻塞行为是在策略解析之后确定的，而不是基于过时的描述阶段代理对象。
+`TaskTool.create()` 在为面向模型的工具描述构建时，会按解析后的工作目录记忆化发现结果。每次读取描述时还会包含当前会话的用户标记模型代理。执行阶段会重新发现代理并合并这些会话代理，因此如果代理或扩展文件在会话中途发生变化，运行时集合可能与先前的描述不同。阻塞行为是在策略解析之后确定的，而不是基于过时的描述阶段代理对象。
 
 ## 模型与结构化输出的优先级
 
@@ -207,6 +217,8 @@ modelRoles:
 3. 父级当前激活的模型，然后是其配置/默认模型回退
 
 前两个来源中的角色别名会通过 `modelRoles` 展开。共享的 eval 桥也可以在设置覆盖之前提供一个调用本地的模型覆盖；task 线路 schema 并不暴露该字段。
+
+服务层级的优先级独立于模型选择：一个精确、区分大小写的 `task.agentServiceTierOverrides[agentName]` 条目会覆盖 `tier.subagent`；条目缺省时保留全局行为。`inherit` 会为下一次生成快照父会话实时的各家族层级（包括 `/fast` 的变更）。子会话会针对其最终确定的模型解析出具体值——在认证回退之后、在只有会话才能解析的模式（例如扩展注册的模型）之后——并且仅在该模型的 provider 家族支持该值时才填充该家族，因此同家族的重试回退会保留该层级，而跨家族回退绝不继承它。解析出的映射会与子会话一起持久化，即使为空也是如此，因此重启后恢复的停放代理会保留其按代理的层级，而不是重新推导 `tier.subagent`。该条目仅在 task/eval 分派时查找；通过同一执行器启动的 Vibe worker 保留 `tier.subagent`。服务层级仅存在于配置中；代理 frontmatter 与 task/eval 线路格式不暴露 tier 字段或自动 Fast 策略。
 
 运行时输出 schema 的优先级为：
 

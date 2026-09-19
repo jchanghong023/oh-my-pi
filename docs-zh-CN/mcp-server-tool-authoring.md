@@ -1,9 +1,7 @@
-# MCP server and tool authoring
-
+# MCP 服务器与工具编写
 本文档介绍 MCP 服务器定义如何在 coding-agent 中成为可调用的 `mcp__*` 工具，以及在配置无效、重复、被禁用或需要鉴权时操作者应当预期的行为。
 
-## Architecture at a glance
-
+## 体系结构一览
 ```text
 Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
   -> discovery providers normalize to canonical MCPServer
@@ -15,8 +13,7 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
   -> AgentSession.refreshMCPTools replaces live MCP tools immediately
 ```
 
-## 1) Server config model and validation
-
+## 1) 服务器配置模型与校验
 `src/mcp/types.ts` 定义了 MCP 配置编写者和运行时所用的创作形态：
 
 - `stdio`（当 `type` 缺失时的默认值）：需要 `command`，可选 `args`、`env`、`cwd`
@@ -37,17 +34,14 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 - 最多 100 个字符
 - 仅允许 `[a-zA-Z0-9_.:-]`（冒号允许带命名空间的插件服务器名称，例如 `cloudflare:cloudflare-api`）
 
-### Transport pitfalls
-
+### 传输陷阱
 - 省略 `type` 表示 stdio。如果你本意是 HTTP/SSE 但省略了 `type`，那么 `command` 就成为必需项。
 - `sse` 选择旧版协议修订版 2024-11-05 的 HTTP+SSE 传输：一个持久的 GET 流提供一个 `endpoint` 事件，其 URL 接收 JSON-RPC POST。它与 `"http"` 的 Streamable HTTP 传输是不同的。
 - 出于生态兼容性，出站 JSON-RPC 请求 ID 默认使用递增的数字。仅当服务器需要旧的 snowflake 字符串行为时才设置 `requestIdFormat: "string"`；在发现阶段，无效值会被警告并被忽略。
 - 验证是结构性的，并不检查可达性：语法合法的 URL 在连接时仍然可能失败。
 
-## 2) Discovery, normalization, and precedence
-
-### Capability-based discovery
-
+## 2) 发现、规范化与优先级
+### 基于能力的发现
 `loadAllMCPConfigs()`（`src/mcp/config.ts`）通过 `loadCapability(mcpCapability.id)` 加载规范的 `MCPServer` 项。
 
 随后，capability 层（`src/capability/index.ts`）会：
@@ -58,8 +52,7 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 
 结果：跨来源的重复服务器名称不会被合并。只会保留一个定义；低优先级的重复项被屏蔽。
 
-### `.mcp.json` and related files
-
+### `.mcp.json` 及相关文件
 `src/discovery/mcp-json.ts` 中的专用回退提供者读取项目根目录下的 `mcp.json` 和 `.mcp.json`（低优先级）。
 
 实际上，MCP 服务器也来自优先级更高的提供者（例如原生的 `.omp/...` 以及特定工具的配置目录）。编写建议如下：
@@ -68,8 +61,7 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 - 当你需要回退兼容性时，使用根目录的 `mcp.json` / `.mcp.json`。
 - 在多个来源中复用同一个服务器名称会产生优先级屏蔽，而非合并。
 
-### Normalization behavior
-
+### 规范化行为
 `convertToLegacyConfig()`（`src/mcp/config.ts`）将规范的 `MCPServer` 映射为运行时 `MCPServerConfig`。
 
 关键行为：
@@ -79,20 +71,17 @@ Config sources (.omp/.claude/.cursor/.vscode/mcp.json, mcp.json, etc.)
 - 出现在当前 profile 用户 `disabledServers` 列表中的名称始终会被抑制；`enabled === false` 的服务器会被抑制，除非同一份用户配置将其列入 `enabledServers`
 - 存在时，可选字段会被保留
 
-### Environment expansion during discovery
-
+### 发现期间的环境展开
 OMP 原生的 MCP 配置（`.omp/mcp.json`、`~/.omp/agent/mcp.json` 以及它们的 `.mcp.json` 变体）在转换为运行时配置之前，会递归展开 `${VAR}` 和 `${VAR:-default}` 占位符。它也接受 `enabled` 的布尔/字符串形式（`true`、`false`、`1`、`0`）和 `timeout` 的数字字符串。`requestIdFormat` 仅接受 `"number"` 或 `"string"`；其他值会被警告并回退到数字 ID。
 
 `src/discovery/mcp-json.ts` 中的独立回退提供者读取项目根目录下的 `mcp.json` 和 `.mcp.json`，展开相同的 `${...}` 占位符，并对 `enabled`/`timeout` 进行类型检查而不会强转字符串值。它应用相同的 `requestIdFormat` 校验。
 
 无效的 `enabled`/`timeout` 值会被忽略并发出警告，而不是使整个文件失败。
 
-## 3) Auth and runtime value resolution
-
+## 3) 认证与运行时取值解析
 `MCPManager.prepareConfig()`/`#resolveAuthConfig()`（`src/mcp/manager.ts`）是连接前的最后一遍处理。
 
-### OAuth credential injection
-
+### OAuth 凭据注入
 对于 `http`/`sse` 服务器，`auth: { type: "oauth", credentialId: "..." }`
 块是可选的。OMP 在解析时，会优先采用明确的任意或旧式 credential ID。
 托管的、profile 范围的
@@ -116,8 +105,7 @@ profile 范围的 ID 会被忽略。
 刷新或凭证解析失败会被记录；在可能的情况下，OMP
 会继续使用现有的访问令牌。
 
-### Header/env value resolution
-
+### 标头/环境变量取值解析
 在连接之前，manager 通过 `resolveConfigValue()`（`src/config/resolve-config-value.ts`）解析 stdio 的 `env` 值以及 HTTP/SSE 的 `headers` 值：
 
 - 以 `!` 开头的值 => 执行 shell 命令，使用去除首尾空白的 stdout（已缓存）
@@ -126,12 +114,10 @@ profile 范围的 ID 会被忽略。
 
 操作上的注意事项：拼写错误的 `!` 密钥命令可能悄无声息地移除该 header/env 条目，从而产生下游的 401/403 或服务器启动失败。拼写错误的环境变量名会按字面值发送，除非该字面值恰好对服务器有意义。
 
-## 4) Tool bridge: MCP -> agent-callable tools
-
+## 4) 工具桥接：MCP -> 代理可调用工具
 `src/mcp/tool-bridge.ts` 将 MCP 工具定义转换为 `CustomTool`。
 
-### Naming and collision domain
-
+### 命名与冲突域
 工具名按如下方式生成：
 
 ```text
@@ -141,7 +127,7 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 规则：
 
 - 转为小写
-- 非 `[a-z_]` 字符变为 `_`
+- 非 `[a-z0-9_]` 字符变为 `_`
 - 重复的下划线合并
 - 工具名中多余的 `<server>_` 前缀会被移除一次
 - 超过 64 个字符的名称会保留可读前缀，并附加 `_` 以及对完整未截断生成名计算 `Bun.hash()` 所得的前 8 位 base-36 字符
@@ -149,12 +135,12 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 不同的原始名称仍可能规范化为相同的标识符（例如
 `my-server` 和 `my.server` 都会规范化为类似形式）。在注册到注册表之前，`deduplicateMCPToolsByName()` 通过按字典序比较原始的 `<server-name>\0<tool-name>` 源键来选择一个确定性的胜出者。失败的源会被记录并省略，因此重连或发现顺序不会改变归属。
 
-### Schema mapping
+在开始保留数字之前，名称中带数字的服务器会生成去掉数字的名称（`context7` → `mcp__context_query_docs`）。以这类旧名称为键的用户 `tools.approval` `deny`/`prompt` 策略仍然适用于重命名后的工具（fail-closed）；旧式 `allow` 条目不会被继承，必须重新设置键。
 
+### Schema 映射
 `tool-bridge.ts` 在将每个 MCP `inputSchema` 注册为 `CustomTool` schema 之前，会先通过 `normalizeSchemaForMCP()` 对其进行处理。
 
-### Outbound argument normalization
-
+### 出站参数规范化
 在实时工具或延迟工具发送 `tools/call` 之前，bridge 按以下顺序对调用的参数进行规范化：
 
 1. 顶层的非对象值、`null` 以及数组都会变成空的参数对象。
@@ -164,8 +150,7 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 
 因此服务器作者应当基于规范化后的 payload 进行校验，而不是假设模型生成的调用中出现的每个字段都会到达服务器。
 
-### Execution mapping
-
+### 执行映射
 `MCPTool.execute()` / `DeferredMCPTool.execute()`：
 
 - 调用 MCP `tools/call`
@@ -176,8 +161,7 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 - 将剩余的抛出式传输/运行时失败映射为 `MCP error: ...`
 - 通过将 AbortError 转换为 `ToolAbortError` 来保留中止语义
 
-## 5) Operator lifecycle: add/edit/remove and live updates
-
+## 5) 运维生命周期：添加/编辑/删除与实时更新
 交互模式在 `src/modes/controllers/mcp-command-controller.ts` 中暴露 `/mcp`。
 
 支持的操作：
@@ -202,13 +186,11 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 
 `refreshMCPTools()` 会替换所有 `mcp__` 注册表条目，并立即重新激活最新的 MCP 工具集，因此变更无需重启会话即可生效。
 
-### Mode differences
+### 模式差异
+- **交互式/TUI 模式**：`/mcp` 提供应用内 UX（向导、OAuth 流程、连接状态文本、即时运行时重新绑定）。
+- **SDK/无头集成**：`discoverAndLoadMCPTools()`（`src/mcp/loader.ts`）返回已加载的工具及每个服务器的错误；不提供 `/mcp` 命令 UX。
 
-- **Interactive/TUI mode**：`/mcp` 提供应用内 UX（向导、OAuth 流程、连接状态文本、即时运行时重新绑定）。
-- **SDK/headless integration**：`discoverAndLoadMCPTools()`（`src/mcp/loader.ts`）返回已加载的工具及每个服务器的错误；不提供 `/mcp` 命令 UX。
-
-## 6) User-visible error surfaces
-
+## 6) 用户可见的错误面
 用户/操作者常见的错误字符串：
 
 - add/update 验证失败：
@@ -230,8 +212,7 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 
 发现阶段中的源 JSON 错误通常以警告/日志形式处理；config-writer 路径会抛出显式错误。
 
-## 7) Practical authoring guidance
-
+## 7) 实用编写指南
 要在本代码库中进行稳健的 MCP 编写：
 
 1. 保持服务器名称在所有 MCP-capable 配置源中全局唯一。
@@ -241,7 +222,7 @@ mcp__<sanitized_server_name>_<sanitized_tool_name>
 5. 对于远程 OAuth 服务器，合法且显式的 `credentialId` 是可选的：仅含定义的 `http`/`sse` 条目可以使用绑定到相同 URL 的当前 profile 凭证。当必须抑制按 URL 索引的回退时，请使用显式的 `Authorization` 头。
 6. 如果使用基于命令的密钥解析（`!cmd`），请确认命令输出稳定且非空。
 
-## Implementation files
+## 实现文件
 
 - [`src/mcp/types.ts`](../packages/coding-agent/src/mcp/types.ts)
 - [`src/mcp/config.ts`](../packages/coding-agent/src/mcp/config.ts)

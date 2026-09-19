@@ -39,7 +39,7 @@ DeepSeek 的标记**并不**使用 ASCII 竖线 `|`（U+007C）或 ASCII 下划�
 
 token ID 取自 DeepSeek-V3.1 的 `tokenizer.json`（`added_tokens`）；`vocab_size` 为 129280。
 `special` 列反映分词器的 `"special"` 标志（它控制 `skip_special_tokens`）；请注意角色
-/思考/工具标记的 `special` 为 `false`。
+/思考/工具标记是 `special: false`。
 
 | Token（逐字） | ID | `special` | 用途 |
 | --- | --- | --- | --- |
@@ -250,7 +250,7 @@ deepseek_v31`）：
 - **Unicode 是承重的。**必须精确匹配 `｜` = U+FF5C 和 `▁` = U+2581。ASCII
   `<|tool_calls_begin|>` 不会切分到特殊 token。`<think>`/`</think>` 使用 ASCII 尖括号；
   罕见的 `<|EOT|>` 使用 ASCII 竖线。
-- **工具/角色标记的 `special` 为 `false`。**只有 `<｜begin▁of▁sentence｜>`、
+- **工具/角色标记是 `special: false`。**只有 `<｜begin▁of▁sentence｜>`、
   `<｜end▁of▁sentence｜>`、`<｜▁pad▁｜>` 和 `<|EOT|>` 被标记为 `special: true`。因此
   以 `skip_special_tokens=True` 解码时**不会**剔除 `<｜tool▁calls▁begin｜>`、
   `<｜tool▁sep｜>`、`<｜Assistant｜>`、`</think>` 等 —— 它们仍会留在解码后的字符串中

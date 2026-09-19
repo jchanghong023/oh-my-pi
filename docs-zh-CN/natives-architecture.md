@@ -36,7 +36,8 @@
 
 - 搜索、通配符匹配、工作区扫描、AST 匹配与编辑、代码摘要、语法高亮、文本布局、Token 计数以及结构化差异；
 - shell、PTY、进程、文件锁、隔离以及工作配置原语；
-- 桌面捕获、输入与无障碍、剪贴板、音频采集与播放、实时 WebRTC、设备检测、SIXEL、snapcompact 渲染以及向量排序。
+- 桌面捕获、输入与无障碍、剪贴板、音频采集与播放、实时 WebRTC、设备检测、SIXEL、snapcompact 渲染以及向量排序；
+- PDF 检查/Markdown 转换、SVG 光栅化、macOS 拼写服务，以及进程内 Git/Jujutsu 操作。
 
 ## 加载器与分发
 
@@ -47,6 +48,7 @@
 - `darwin-x64`
 - `darwin-arm64`
 - `win32-x64`
+- `win32-arm64`
 
 x64 构建具有 `modern`（x86-64-v3/AVX2）和 `baseline`（x86-64-v2）两个变体。可通过 `PI_NATIVE_VARIANT=modern|baseline` 覆盖自动检测。自动检测在 Linux 上读取 `/proc/cpuinfo`，在 macOS 上调用 `sysctl`，或在 Windows 上通过 PowerShell 查询 `System.Runtime.Intrinsics.X86.Avx2`。其结果会通过私有的 `__PI_NATIVE_VARIANT_CACHE` 环境变量被后续的工作进程和子进程继承。非 x64 构建使用不带后缀的文件名。
 
@@ -80,10 +82,10 @@ x64 构建具有 `modern`（x86-64-v3/AVX2）和 `baseline`（x86-64-v2）两个
 
 `crates/pi-natives/src/lib.rs` 注册了当前的模块：
 
-- 平台/运行时：`appearance`、`clipboard`、`crash_handler`、`desktop`、`devicecheck`、`file_lock`、`iofs`、`power`、`prof`、`ps`、`pty`、`shell`；
-- 媒体/实时：`audio`、`live`、`sixel`、`snapcompact`；
-- 代码/数据：`ast`、`block`、`diff`、`fd`、`glob`、`glob_util`、`grep`、`highlight`、`html`、`keys`、`summary`、`text`、`tokens`、`vectors`、`workspace`；
-- 隔离/任务支持：`iso`、`task`，crate 私有的 `utils`，以及仅用于测试的 `testing`；
+- 平台/运行时：`appearance`、`clipboard`、`crash_handler`、`desktop`、`devicecheck`、`file_lock`、`iofs`、`power`、`prof`、`ps`、`pty`、`shell`、`spelling`、`tty_writer`、`vcs`；
+- 媒体/实时：`audio`、`live`、`sixel`、`snapcompact`、`svg`；
+- 代码/数据：`ast`、`block`、`diff`、`fd`、`glob`、`glob_util`、`grep`、`highlight`、`html`、`keys`、`pdf`、`summary`、`text`、`tokens`、`utok`、`vectors`、`workspace`；
+- 隔离/任务支持：`iso`、`task`，以及 N-API 边界/转换辅助（`js`、crate 私有的 `utils`、仅用于测试的 `testing`）；
 - 从 `pi_ast::language` 重新导出的语言元数据。
 
 Rust 的 `#[napi]` 函数、类、对象和枚举会生成声明表面。默认的 snake_case Rust 名称会变为 camelCase 的 JavaScript 名称。
