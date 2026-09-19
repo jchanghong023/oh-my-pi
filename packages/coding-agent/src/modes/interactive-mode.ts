@@ -255,6 +255,7 @@ import {
 	type SessionObserverChangeKind,
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+import { registerInteractiveSigintGate } from "./sigint-gate";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
@@ -923,6 +924,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Extension-registered provider factories, applied in registration order (#4919). */
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
+	#sigintUnsubscribe?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	readonly #startupChangelog: StartupChangelogSelection | undefined;
@@ -1449,6 +1451,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		// after the AgentSession constructor's `agent-session:<id>` recorder) runs
 		// FIRST and its dispose() would otherwise persist the generic "dispose".
 		this.#cleanupUnsubscribe = postmortem.register("session-teardown", reason => this.#signalTeardown!(reason));
+
+		// A real SIGINT reaching the process-level handler must not exit the
+		// TUI on the first hit: Windows console ctrl events arrive regardless
+		// of raw mode and would destroy the session on a stray broadcast.
+		// Consume the first signal with the same double-press semantics as the
+		// Ctrl+C keypress; a confirm press or a teardown-time signal falls
+		// through to the signal teardown registered above.
+		this.#sigintUnsubscribe = registerInteractiveSigintGate({
+			isShuttingDown: () => this.isShuttingDown,
+			showHint: () => this.showStatus("SIGINT received — press Ctrl+C again to exit"),
+		});
 
 		// Wire the report_tool_issue consent gate to the Yes/No dialog popup.
 		// The handler is process-global — subagent tools (which can't reach
@@ -5664,6 +5677,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
+		}
+		if (this.#sigintUnsubscribe) {
+			this.#sigintUnsubscribe();
 		}
 		// Clear the process-global consent handler so it doesn't outlive this
 		// InteractiveMode instance (e.g. test harnesses, headless re-init).

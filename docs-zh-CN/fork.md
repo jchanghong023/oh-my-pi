@@ -109,6 +109,11 @@
 * 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
 * 检索模型目录仅包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，不包含 8B 模型，两种检索模型不作为聊天模型展示。现有记忆流程只接文本向量，默认的 `Qwen3-VL-Embedding-2B` 也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
 
+### 交互界面 SIGINT 保护与诊断
+
+* 交互界面（TUI）下，进程级 SIGINT 不再首个信号即整体退出：首个信号被消费并提示「SIGINT received — press Ctrl+C again to exit」，5 秒确认窗口内再次 SIGINT、teardown 进行中的任何 SIGINT、或未注册门控时的任何 SIGINT，仍走原有信号退出路径（session_exit 记录 `sigint`，exit 130）。动机：Windows 控制台 ctrl 事件（Break 键、共享控制台被翻回 processed input、兄弟进程广播 `GenerateConsoleCtrlEvent`）会绕过 raw mode 直接以信号到达，历史上一次事件即摧毁带在跑子代理的会话。Ctrl+C 按键路径（raw mode、500ms 双击）与非交互通道（print/ACP/SDK、CI `kill -INT`）行为不变；SIGTERM/SIGHUP 不加门。
+* Windows 上每次进程级 SIGINT 会把当时的控制台诊断追加到日志目录的 `sigint-diagnostics.log`：stdin 的 console input mode（含 `ENABLE_PROCESSED_INPUT` 等标志解码）与同控制台附加进程清单（pid + 映像名，即 ctrl 事件的广播受众），用于事后归因「未按键却收到 SIGINT」。其他平台不写该文件；诊断失败被吞掉，绝不影响信号处理。
+
 ### Windows 行为修复
 
 * 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。

@@ -58,11 +58,13 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		label: "core/utils",
 		cwd: "packages/utils",
 		files: [
+			"test/console-sigint-diagnostics.test.ts",
 			"test/dirs.test.ts",
 			"test/json.test.ts",
 			"test/parse-streaming-json-throttled.test.ts",
 			"test/path-tree.test.ts",
 			"test/path.test.ts",
+			"test/postmortem-sigint-intercept.test.ts",
 			"test/stream.test.ts",
 		],
 	},
@@ -222,6 +224,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		cwd: "packages/coding-agent",
 		files: [
 			"test/modes/fullsend.test.ts",
+			"test/modes/sigint-gate.test.ts",
 			"test/slash-commands/jch-git.test.ts",
 			"test/slash-commands/magic-keywords.test.ts",
 			"test/slash-commands/team-command.test.ts",
