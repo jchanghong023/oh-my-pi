@@ -348,7 +348,12 @@ export class DocsService {
 		const sections = this.#rank(match, query, terms, filter, limit);
 		// Only the unscoped caller asks for a count, and it must cover what the page
 		// itself may serve.
-		const total = options.index === undefined ? this.#countMatches(match) : undefined;
+		const counted = options.index === undefined ? this.#countMatches(match) : undefined;
+		// `#rank` and `#countMatches` read separate snapshots: an `omp docs remove`
+		// committing between them leaves a count below the page it describes. Those
+		// sections were just served, so the stale count reads as unknown rather
+		// than contradicting them.
+		const total = counted !== undefined && counted < sections.length ? undefined : counted;
 		return { sections, total };
 	}
 

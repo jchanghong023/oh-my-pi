@@ -27,6 +27,14 @@ const TEXT_BUDGET_CHARS = 20_000;
 /** Sections one call may return; the character budget normally binds first. */
 const PAGE_SECTIONS = 200;
 
+/**
+ * Longest query served verbatim. The page header and the no-match errors echo
+ * the query, and an unbounded echo would spend the very page it asks for: the
+ * cut query is what gets searched, so the echo can never misrepresent the
+ * search.
+ */
+const MAX_QUERY_CHARS = 500;
+
 function lineRange(path: string, start: number, end: number): string {
 	return `${path}:${start}-${end}`;
 }
@@ -66,11 +74,13 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 		// `query` itself is still required, and the error names what arrived.
 		const raw = params as Record<string, unknown>;
 		const received = Object.keys(raw).filter(key => key !== "__parseError");
-		const query = typeof raw.query === "string" && raw.query.trim() ? raw.query.trim() : undefined;
-		if (!query)
+		const receivedQuery = typeof raw.query === "string" && raw.query.trim() ? raw.query.trim() : undefined;
+		if (!receivedQuery)
 			throw new ToolError(
 				`wiki requires a query. Received: ${received.length > 0 ? received.join(", ") : "nothing"}. Example: {"query":"MBIST"}`,
 			);
+		const query =
+			receivedQuery.length > MAX_QUERY_CHARS ? truncateHeading(receivedQuery, MAX_QUERY_CHARS) : receivedQuery;
 
 		const service = new DocsService({ agentDir: this.session.settings.getAgentDir(), cwd: this.session.cwd });
 		try {
@@ -80,9 +90,20 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			if (result.sections.length === 0)
 				throw new ToolError(`No section matches "${query}". Use one distinctive term rather than a sentence.`);
 
+			// `total` counts every FTS row, the structural labels included; see the
+			// footer comment for why that is not measured against `bodies`.
+			const scope =
+				result.total !== undefined
+					? `${result.total} matching section(s)`
+					: `${result.sections.length}+ matching section(s)`;
+			// The rendered page opens with a header of its own, so its cost is
+			// reserved before the first body is charged: the six placeholder digits
+			// are the widest `used` can print, and joining the header to the page
+			// costs two more.
+			const headerAllowance = `"${query}" · ${scope} · 000000/${TEXT_BUDGET_CHARS} characters`.length + 2;
 			const bodies: string[] = [];
 			const seen = new Set<string>();
-			let used = 0;
+			let used = headerAllowance;
 			let skippedForSize = 0;
 			let duplicates = 0;
 			for (const section of result.sections) {
@@ -146,10 +167,6 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			// — hits the page did reach count as served even when they render no text.
 			const beyondPage = result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
 			const hidden = skippedForSize > 0 || beyondPage > 0;
-			const scope =
-				result.total !== undefined
-					? `${result.total} matching section(s)`
-					: `${result.sections.length}+ matching section(s)`;
 			const skipped = skippedForSize > 0 ? ` (${skippedForSize} too long for what was left)` : "";
 			const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
 			const footer = hidden

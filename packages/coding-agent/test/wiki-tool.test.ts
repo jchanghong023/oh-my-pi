@@ -89,6 +89,56 @@ describe("WikiTool", () => {
 		expect(page).toContain(`carries ${shown} of 12 sections within 20000 characters`);
 	});
 
+	it("cuts a query that would outgrow the page it asks for", async () => {
+		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const page = text(await run(tool, { query: `scan ${"x".repeat(5_000)}` }));
+		// The cut query is what gets searched and echoed, so the page still
+		// answers and never carries the untruncated run.
+		expect(page).toContain("Command: scan");
+		expect(page).toContain("…");
+		expect(page).not.toContain("x".repeat(1_000));
+	});
+
+	it("cuts the query echoed by a no-match error", async () => {
+		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const error = await run(tool, { query: `zzz ${"q".repeat(5_000)}` }).then(
+			() => undefined,
+			error => error as Error,
+		);
+		expect(error?.message).toContain("No section matches");
+		expect(error?.message.length).toBeLessThan(1_000);
+	});
+
+	it("reports an unknown total when a concurrent remove outruns the count", async () => {
+		// `#rank` and `#countMatches` read separate snapshots; an `omp docs remove`
+		// committing between them leaves a count below the page it describes. The
+		// served sections exist, so the count must read as unknown, not smaller.
+		const files = Object.fromEntries(
+			Array.from({ length: 3 }, (_, index) => [`doc-${index}.md`, `# Doc ${index}\nCommand: scan\n`]),
+		);
+		const fixture = await indexedFixture(files);
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		try {
+			const db = service.storage.db;
+			const originalQuery = db.query.bind(db);
+			let armed = true;
+			db.query = ((sql: string) => {
+				if (armed && sql.startsWith("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH")) {
+					armed = false;
+					service.remove("manual");
+				}
+				return originalQuery(sql);
+			}) as typeof db.query;
+			const result = service.search("scan", { limit: 10 });
+			expect(result.sections).toHaveLength(3);
+			expect(result.total).toBeUndefined();
+		} finally {
+			service.close();
+		}
+	});
+
 	it("does not claim a cut page when the withheld hits carry no text", async () => {
 		// A document title matches once per document and occupies a page slot while
 		// rendering nothing; the readable hit below it is delivered whole. Nothing

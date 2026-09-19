@@ -16,7 +16,7 @@
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Keywords or a whole question; results are ranked by relevance. There is no query syntax to learn: `AND`/`OR`, quotes, and wildcards are treated as plain characters. |
 
-Extra keys are ignored rather than rejected (lenient argument validation); a missing or empty `query` fails with an error naming the keys that actually arrived plus a usage example.
+Extra keys are ignored rather than rejected (lenient argument validation); a missing or empty `query` fails with an error naming the keys that actually arrived plus a usage example. A `query` longer than 500 characters is truncated (with an ellipsis) before it is searched and echoed, so the echo can never outgrow the page it asks for.
 
 ## Analysis & Ranking
 - Latin words and digits match as whole words (mixed CJK+Latin like `MBIST是什么` keeps the Latin run whole); CJK runs are segmented into adjacent bigrams, with function words dropped whole so no nonexistent combinations are produced.
@@ -43,7 +43,8 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - None on disk or session state; the tool is read-only (`approval: "read"`).
 
 ## Limits & Caps
-- Page budget: ~20,000 characters; sections per call: 200.
+- Page budget: ~20,000 characters, the opening header line included; sections per call: 200.
+- Query cap: 500 characters — a longer query is truncated, then searched and echoed.
 - Indexed sections are capped at 18,000 characters at ingestion, so any hit can be returned whole.
 - Search semantics are fixed (union of terms, whole-word Latin, CJK bigrams); there are no operators, filters, or field restrictions.
 
@@ -54,5 +55,6 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - Matches carry no body text at all: `Sections matching "<query>" carry no body text.`
 
 ## Notes
+- The corpus is a snapshot taken by `omp docs init`: source files changed or added since that import are not in it. Re-import the directory to pick them up.
 - The corpus is maintained by the two index commands; the `/wiki` panel lists existing indexes and can initiate both actions, while this tool only reads.
 - Heading paths are truncated when a legacy index stored a whole document as one heading, so headers cannot spend the page budget they exist to describe.
