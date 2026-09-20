@@ -1,10 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { MAGIC_KEYWORDS, renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
-import {
-	containsMagicKeyword,
-	highlightMagicKeywords,
-	setMagicKeywords,
-} from "@oh-my-pi/pi-tui/prompt/magic-keywords";
+import { containsMagicKeyword, highlightMagicKeywords, setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 const FULLSEND_ROWS = MAGIC_KEYWORDS.filter(keyword => keyword.word === "fullsend");
