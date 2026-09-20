@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Session-starting commands now size the native file walker from the host: with `PI_WALK_WORKERS` unset and more than 8 logical cores, the process sets it to `min(cores/2, 16)` (32 cores → 16), and `--offline` processes additionally default `FS_SCAN_CACHE_TTL_MS` to 30000ms so `@` completion stops rescanning network shares on every keystroke. Explicitly set values, including `0`, always win, and no config file is written.
 - Local `build-binary` builds now embed the fork update repository, so `omp update` on a locally built binary targets fork releases instead of the official upstream distribution.
 
 ### Fixed

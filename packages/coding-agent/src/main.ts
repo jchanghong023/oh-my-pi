@@ -1670,6 +1670,14 @@ export async function disposeSessionQuietly(session: AgentSession): Promise<void
 	await session.dispose().catch(() => undefined);
 }
 
+/** Walker thread count: `cores/2` (capped at 16) when cores > 8, else undefined to keep the native default of 4. */
+export function walkerWorkersForCores(cores: number): number | undefined {
+	return cores > 8 ? Math.min(Math.floor(cores / 2), 16) : undefined;
+}
+
+/** Scan-cache TTL injected into `--offline` processes; only affects the rescan interval behind `@` completion. */
+const OFFLINE_SCAN_CACHE_TTL_MS = "30000";
+
 export async function runRootCommand(
 	parsed: Args,
 	rawArgs: string[],
@@ -1677,6 +1685,16 @@ export async function runRootCommand(
 ): Promise<void> {
 	configureStartupLogging(parsed);
 	logger.startTiming();
+	// Native filesystem tuning has to land before this process traverses anything:
+	// the walker reads both variables exactly once, on first use. Explicitly set
+	// values win, including "0".
+	const walkWorkers = walkerWorkersForCores(os.availableParallelism());
+	if (walkWorkers !== undefined && (process.env.PI_WALK_WORKERS ?? "") === "") {
+		process.env.PI_WALK_WORKERS = String(walkWorkers);
+	}
+	if (parsed.offline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
+		process.env.FS_SCAN_CACHE_TTL_MS = OFFLINE_SCAN_CACHE_TTL_MS;
+	}
 	startStartupWatchdog(parsed.logFile === true);
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
