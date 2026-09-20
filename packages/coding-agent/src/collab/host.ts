@@ -816,16 +816,20 @@ export class CollabHost {
 	}
 
 	/**
-	 * Session palette, built once per room. Both the join frame and command
-	 * dispatch await this same promise, so a guest that prompts while the
-	 * file-backed half is still loading is classified against the real palette
-	 * instead of racing it.
+	 * Session palette, built once per room. Advertises everything
+	 * {@link #dispatchGuestCommand} accepts: the ACP palette plus the TUI-only
+	 * builtins the dispatcher runs on the host screen. Both the join frame and
+	 * command dispatch await this same promise, so a guest that prompts while
+	 * the file-backed half is still loading is classified against the real
+	 * palette instead of racing it.
 	 */
 	#palette: Promise<{ commands: InternalAvailableSlashCommand[]; names: Set<string> }> | undefined;
 
 	#commandPalette(): Promise<{ commands: InternalAvailableSlashCommand[]; names: Set<string> }> {
 		return (this.#palette ??= (async () => {
-			const commands = await buildAvailableSlashCommands(this.#ctx.session);
+			const commands = await buildAvailableSlashCommands(this.#ctx.session, undefined, {
+				includeTuiOnlyBuiltins: true,
+			});
 			const names = new Set<string>();
 			for (const command of commands) {
 				names.add(command.name);
@@ -836,10 +840,11 @@ export class CollabHost {
 	}
 
 	/**
-	 * Advertise this session's slash-command palette to a joining guest: builtins,
-	 * `/skill:<name>` entries, extension commands, custom/MCP commands, and
-	 * file-based commands — the same list the host's own palette shows. Sent once
-	 * per join (a guest that wants a refreshed list rejoins).
+	 * Advertise this session's slash-command palette to a joining guest: builtins
+	 * (including the TUI-only ones {@link #dispatchGuestCommand} runs on the host
+	 * screen), `/skill:<name>` entries, extension commands, custom/MCP commands,
+	 * and file-based commands. Sent once per join (a guest that wants a refreshed
+	 * list rejoins).
 	 */
 	async #sendCommandList(toPeer: number): Promise<void> {
 		try {

@@ -34,8 +34,11 @@ interface HostHarness {
 	bash: { command: string; isExcluded: boolean }[];
 	/** `$`/`$$` submissions. */
 	python: { code: string; isExcluded: boolean }[];
+	/** TUI-only handlers the guest dispatcher reached, by command name. */
+	tui: string[];
 	nextPrompt(): Promise<{ text: string; from?: string }>;
 	nextBash(): Promise<{ command: string; isExcluded: boolean }>;
+	nextTui(): Promise<string>;
 }
 
 function messageText(content: unknown): string {
@@ -57,8 +60,10 @@ function makeHostContext(cwd: string): HostHarness {
 	const modelPrompts: string[] = [];
 	const bash: { command: string; isExcluded: boolean }[] = [];
 	const python: { code: string; isExcluded: boolean }[] = [];
+	const tui: string[] = [];
 	const promptWaiters: ((value: { text: string; from?: string }) => void)[] = [];
 	const bashWaiters: ((value: { command: string; isExcluded: boolean }) => void)[] = [];
+	const tuiWaiters: ((value: string) => void)[] = [];
 	const ctx = {
 		settings: { get: () => "" },
 		sessionManager: {
@@ -108,6 +113,13 @@ function makeHostContext(cwd: string): HostHarness {
 			python.push({ code, isExcluded });
 			return Promise.resolve();
 		},
+		// `/new` has no ACP handler: its TUI handler rotates the session on the
+		// host screen, which here means reaching this recorder.
+		handleClearCommand: () => {
+			tui.push("new");
+			for (const waiter of tuiWaiters.splice(0)) waiter("new");
+			return Promise.resolve();
+		},
 		refreshSlashCommandState: () => Promise.resolve(),
 		editor: { setText: () => {}, addToHistory: () => {} },
 		eventBus: undefined,
@@ -130,7 +142,12 @@ function makeHostContext(cwd: string): HostHarness {
 		bashWaiters.push(resolve);
 		return promise;
 	};
-	return { ctx, prompts, modelPrompts, bash, python, nextPrompt, nextBash };
+	const nextTui = (): Promise<string> => {
+		const { promise, resolve } = Promise.withResolvers<string>();
+		tuiWaiters.push(resolve);
+		return promise;
+	};
+	return { ctx, prompts, modelPrompts, bash, python, tui, nextPrompt, nextBash, nextTui };
 }
 
 /**
@@ -179,17 +196,18 @@ async function joinAsGuest(link: string, name: string): Promise<TestGuest> {
 }
 
 /** Join, then consume the welcome and the palette the host sends after it. */
-async function joinReady(link: string, name: string): Promise<TestGuest> {
+async function joinReady(link: string, name: string): Promise<TestGuest & { palette: string[] }> {
 	const guest = await joinAsGuest(link, name);
 	guestCleanups.push(() => guest.socket.close());
 	const welcome = await guest.nextFrame();
 	if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
 	const commands = await guest.nextFrame();
 	if (commands.t !== "commands") throw new Error(`expected commands, got ${commands.t}`);
+	const palette = commands.commands.map(command => command.name);
 	// Builtins come from the code-level registry, so a missing `move` means the
 	// palette build failed and dispatch fell back to permissive mode.
-	expect(commands.commands.map(command => command.name)).toContain("move");
-	return guest;
+	expect(palette).toContain("move");
+	return { ...guest, palette };
 }
 
 const guestCleanups: (() => void)[] = [];
@@ -213,6 +231,7 @@ afterEach(() => {
 	harness.modelPrompts.length = 0;
 	harness.bash.length = 0;
 	harness.python.length = 0;
+	harness.tui.length = 0;
 });
 
 afterAll(async () => {
@@ -232,6 +251,25 @@ describe("collab guest commands", () => {
 		if (reply.t !== "error") throw new Error(`expected error, got ${reply.t}`);
 		expect(reply.message).toContain("unknown command");
 		expect(reply.message).toContain("nosuchcmd");
+		expect(harness.prompts).toEqual([]);
+		expect(harness.modelPrompts).toEqual([]);
+	});
+
+	it("advertises the TUI-only builtins its dispatcher runs on the host screen", async () => {
+		const guest = await joinReady(host.link, "writer");
+
+		// These carry no ACP handler, so the ACP palette omits them; the guest
+		// dispatcher still runs them, so they must be discoverable in the menu.
+		for (const name of ["new", "resume", "fork", "exit"]) expect(guest.palette).toContain(name);
+	});
+
+	it("runs a TUI-only builtin on the host instead of rejecting it", async () => {
+		const guest = await joinReady(host.link, "writer");
+		const ran = harness.nextTui();
+
+		guest.socket.send({ t: "prompt", text: "/new" });
+
+		expect(await ran).toBe("new");
 		expect(harness.prompts).toEqual([]);
 		expect(harness.modelPrompts).toEqual([]);
 	});

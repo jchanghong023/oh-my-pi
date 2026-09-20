@@ -30,10 +30,21 @@ export interface AvailableCommandsSession {
 	sessionManager: { getCwd(): string };
 }
 
+export interface AvailableCommandsOptions {
+	/**
+	 * Advertise builtins that only implement a TUI handler. ACP omits them
+	 * because nothing there can run them; the collab host advertises exactly
+	 * what its guest dispatcher accepts, and that dispatcher falls back to the
+	 * TUI handler, which runs on the host screen.
+	 */
+	includeTuiOnlyBuiltins?: boolean;
+}
+
 export async function buildAvailableSlashCommands(
 	session: AvailableCommandsSession,
 	loadFileCommands: (cwd: string) => Promise<FileSlashCommand[]> = cwd =>
 		loadSlashCommands({ cwd, extensionRoots: session.effectiveExtensionRoots }),
+	options: AvailableCommandsOptions = {},
 ): Promise<InternalAvailableSlashCommand[]> {
 	const commands: InternalAvailableSlashCommand[] = [];
 	const seenNames = new Set<string>();
@@ -44,7 +55,7 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		if (!command.handle) continue;
+		if (!command.handle && !(options.includeTuiOnlyBuiltins && command.handleTui)) continue;
 		const hint = command.acpInputHint ?? command.inlineHint;
 		appendCommand({
 			name: command.name,
@@ -56,8 +67,8 @@ export async function buildAvailableSlashCommands(
 		});
 		// ACP dispatch resolves builtin aliases before `session.prompt()` sees the
 		// input, so a custom/file command sharing an alias would be advertised but
-		// never run. Reserve aliases here too; TUI-only builtins are skipped above,
-		// so their aliases stay available.
+		// never run. Reserve aliases here too; builtins skipped above leave their
+		// aliases to whoever else claims them.
 		for (const alias of command.aliases ?? []) seenNames.add(alias);
 	}
 
