@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `/` command completion in the composer, driven by the command palette the host advertises on join (builtins, skills, extension/custom/file commands), with `Tab`/`↑`/`↓`/`Esc` and click-to-complete.
+- Added host directory suggestions for `/move` and `/add-dir`, so a path can be picked instead of typed.
+- Added a `build:pages` build that emits the client for the `/oh-my-pi/collab/` GitHub Pages path, published with the docs site.
+
+### Changed
+
+- A host room rotation (session switch, `/new`, restart) now shows "reconnecting…" and rejoins the replacement room on the same link instead of ending the session.
+
 ## [18.2.1] - 2026-09-15
 
 ### Fixed

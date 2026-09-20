@@ -27,6 +27,7 @@
     "mock-host": "bun scripts/mock-host.ts",
     "relay": "bun scripts/local-relay.ts",
     "build": "rm -rf dist && bun build ./index.html --outdir=dist --minify --entry-naming=[hash].[ext] --chunk-naming=[hash].[ext] --asset-naming=[hash].[ext] && mv dist/*.html dist/index.html && cp -R public/. dist/",
+    "build:pages": "rm -rf dist && bun build ./index.html --outdir=dist --minify --public-path=/oh-my-pi/collab/ --entry-naming=[hash].[ext] --chunk-naming=[hash].[ext] --asset-naming=[hash].[ext] && mv dist/*.html dist/index.html && cp -R public/. dist/",
     "gen:tool-views": "bun scripts/build-tool-views.ts",
     "prepack": "bun run build",
     "test": "bun test --parallel",

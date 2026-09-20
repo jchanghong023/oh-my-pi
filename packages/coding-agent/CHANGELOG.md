@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Collab links are now long-lived: the room identity persists in `collab/identity.json` under the config root, so one link keeps working across `/new`, `/resume`, `/fork`, `/collab stop`, and omp restarts. `/collab` and `/collab view` also copy the browser deep link to the clipboard.
+- Browser collab guests can run the host's whole command surface — builtins, `/skill:<name>`, extension/custom/file commands, `!`/`!!` shell, `$`/`$$` python, and session-rotating commands such as `/new` — with `/` completion from a palette the host advertises on join; `/move` and `/add-dir` complete host directory paths, and a room rotation keeps the page reconnecting instead of ending it.
+- The fork's browser client is published with the docs site at `https://jchanghong023.github.io/oh-my-pi/collab/` and `collab.webUrl` now defaults to it, so `/collab` links open a client with those features instead of the relay-hosted upstream build (set `collab.webUrl` empty for the upstream behavior).
+
 ### Removed
 
 - Removed the fork-only Main/Discuss primary-agent mode (`Shift+F2`) along with its tool gating, prompt section, and status-bar segment; existing sessions resume as regular sessions.

@@ -33,6 +33,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import * as utils from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
@@ -187,6 +188,7 @@ async function settled(publishSpy: Mock<typeof registry.publishCollabHost>, call
 
 let tmp: string;
 let publishSpy: Mock<typeof registry.publishCollabHost>;
+let copySpy: Mock<typeof clipboard.copyToClipboard>;
 let controller: CollabController | undefined;
 const guestCleanups: (() => void)[] = [];
 const publishWaiters: (() => void)[] = [];
@@ -204,6 +206,9 @@ beforeEach(async () => {
 		}
 	};
 	globalThis.WebSocket = Capturing as unknown as typeof WebSocket;
+	// `/collab` copies the browser link to the system clipboard: never let a test
+	// touch the developer's clipboard (or spawn a platform helper).
+	copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
 	const real = registry.publishCollabHost;
 	publishSpy = spyOn(registry, "publishCollabHost").mockImplementation((source, options) => {
 		const publication = real(source, { ...options, dir: tmp });
@@ -218,6 +223,7 @@ afterEach(async () => {
 	await controller?.shutdown("test cleanup").catch(() => {});
 	uninstallInMemoryRelay();
 	publishSpy?.mockRestore();
+	copySpy?.mockRestore();
 	await fs.rm(tmp, { recursive: true, force: true });
 });
 
@@ -232,6 +238,9 @@ describe("interactive collaboration startup", () => {
 		originalProject = getProjectDir();
 		setProjectDir(tmp);
 		spyOn(utils, "getConfigRootDir").mockReturnValue(tmp);
+		// The sibling afterEach restores every mock, so reinstall the clipboard
+		// guard for each test in this block (it drives real `/collab` runs).
+		copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
 		resetSettingsForTest();
 		await initTheme();
 		activeSettings = await Settings.init({ inMemory: true, cwd: tmp });

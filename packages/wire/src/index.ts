@@ -321,6 +321,28 @@ export type CollabUiRequestDraft =
 
 export type CollabUiRequest = CollabUiRequestDraft & { reqId: number };
 
+/**
+ * One entry of the host's slash-command palette, sent to guests so the browser
+ * composer can complete `/…` input. Mirrors the host's
+ * `InternalAvailableSlashCommand` minus `source`, which only the host's own
+ * palette renders.
+ */
+export interface CollabCommandInfo {
+	name: string;
+	aliases?: string[];
+	description?: string;
+	input?: { hint?: string };
+	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
+}
+
+/** One host-filesystem directory suggestion for `/move`. */
+export interface CollabDirEntry {
+	/** Absolute path, ready to hand to `/move`. */
+	path: string;
+	/** Display label (basename with a trailing slash). */
+	label: string;
+}
+
 export type GuestFrame =
 	| {
 			t: "hello";
@@ -337,7 +359,13 @@ export type GuestFrame =
 	| { t: "ui-response"; reqId: number; value?: CollabUiResponseValue }
 	| { t: "abort" }
 	| { t: "agent-cmd"; cmd: "chat" | "kill" | "revive"; agentId: string; text?: string }
-	| { t: "fetch-transcript"; reqId: number; agentId: string; fromByte: number };
+	| { t: "fetch-transcript"; reqId: number; agentId: string; fromByte: number }
+	/**
+	 * Directory suggestions for the `/move` argument. `prefix` is matched
+	 * against the host's filesystem and never executed; only writable guests
+	 * are answered.
+	 */
+	| { t: "browse-dirs"; reqId: number; prefix: string };
 
 /** EventBus channels mirrored to guests (task subagent traffic only). */
 export type BusChannel = "task:subagent:progress" | "task:subagent:lifecycle";
@@ -376,6 +404,13 @@ export type HostFrame =
 	| { t: "ui-request-end"; reqId: number }
 	/** Targeted reply to fetch-transcript; `text` is decoded JSONL from `fromByte`, `newSize` the next offset base. */
 	| { t: "transcript"; reqId: number; text: string; newSize: number; error?: string }
+	/**
+	 * Slash-command palette for this session, sent once per join (after the
+	 * snapshot train is enqueued). Guests run any of them through `prompt`.
+	 */
+	| { t: "commands"; commands: CollabCommandInfo[] }
+	/** Targeted reply to `browse-dirs`. */
+	| { t: "dir-suggestions"; reqId: number; entries: CollabDirEntry[] }
 	| { t: "bye"; reason: string }
 	| { t: "error"; message: string };
 
@@ -393,6 +428,13 @@ export type WireFrame = GuestFrame | HostFrame;
  *   answered by the `ui-response` guest frame. Guests that predate the
  *   grammar would silently drop `ui-request` (asks hang forever on the
  *   host), so they must be rejected at hello.
+ *
+ * Later frames are additive and MUST NOT bump this: `commands`,
+ * `dir-suggestions`, and `browse-dirs` are pure additions — a peer that does
+ * not know a frame ignores it (the web client and the TUI guest both fall
+ * through to `default`), and `browse-dirs` without a host reply degrades to an
+ * empty palette client-side. Bumping would instead reject every deployed
+ * `my.omp.sh` web client at hello.
  */
 export const COLLAB_PROTO = 3;
 

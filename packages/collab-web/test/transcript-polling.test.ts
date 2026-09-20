@@ -56,10 +56,10 @@ describe("GuestClient.fetchTranscript", () => {
 		}
 	});
 
-	it("resolves null (transient) when the session ends mid-fetch", async () => {
+	it("resolves null (transient) when the host rotates the room mid-fetch", async () => {
 		const client = new GuestClient(LINK, "tester");
 		const promise = client.fetchTranscript("agent-1", 0);
-		client.applyFrameForTest({ t: "bye", reason: "host left" });
+		client.applyFrameForTest({ t: "bye", reason: "session switched" });
 		expect(await promise).toBeNull();
 	});
 

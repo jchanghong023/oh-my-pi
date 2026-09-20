@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added additive collab frames — `commands` (host-advertised slash-command palette), `browse-dirs` (guest directory request), and `dir-suggestions` — without changing `COLLAB_PROTO`; peers that do not know a frame ignore it.
+
 ## [18.2.5] - 2026-09-17
 
 ### Added

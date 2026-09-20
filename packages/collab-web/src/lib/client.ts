@@ -11,6 +11,8 @@
 import type {
 	AgentSnapshot,
 	AssistantMessage,
+	CollabCommandInfo,
+	CollabDirEntry,
 	CollabUiRequest,
 	CollabUiResponseValue,
 	HostFrame,
@@ -63,12 +65,16 @@ export interface GuestSnapshot {
 	readOnly: boolean;
 	/** Pending host-side UI request (`ask` select/editor) this guest can answer. */
 	uiRequest: CollabUiRequest | null;
+	/** Slash-command palette advertised by the host for this session. */
+	commands: readonly CollabCommandInfo[];
 	/** Capped at 50, newest last. */
 	notices: readonly Notice[];
 }
 
 const MAX_NOTICES = 50;
 const TRANSCRIPT_TIMEOUT_MS = 10_000;
+/** `/move` directory suggestions; a host that does not know `browse-dirs` never answers. */
+const DIR_SUGGEST_TIMEOUT_MS = 10_000;
 /** Mirrors the TUI guest's WELCOME_TIMEOUT_MS: a host that never answers hello ends the join. */
 const WELCOME_TIMEOUT_MS = 30_000;
 /** Mirrors the TUI guest's SNAPSHOT_PROGRESS_TIMEOUT_MS: every snapshot chunk must make progress. */
@@ -88,6 +94,11 @@ interface PendingTranscript {
 	timer: Timer;
 }
 
+interface PendingDirSuggestions {
+	resolve: (entries: readonly CollabDirEntry[] | null) => void;
+	timer: Timer;
+}
+
 export class GuestClient {
 	readonly #socket: CollabSocket;
 	readonly #name: string;
@@ -95,6 +106,7 @@ export class GuestClient {
 	readonly #writeToken: string | undefined;
 	readonly #listeners = new Set<() => void>();
 	readonly #pendingTranscripts = new Map<number, PendingTranscript>();
+	readonly #pendingDirs = new Map<number, PendingDirSuggestions>();
 	#reqSeq = 0;
 	#noticeSeq = 0;
 	#everConnected = false;
@@ -117,6 +129,7 @@ export class GuestClient {
 	#readOnly = false;
 	#uiRequest: CollabUiRequest | null = null;
 	#uiRequestQueue: CollabUiRequest[] = [];
+	#commands: readonly CollabCommandInfo[] = [];
 	#notices: readonly Notice[] = [];
 	#snapshot: GuestSnapshot;
 	/**
@@ -211,6 +224,23 @@ export class GuestClient {
 		return promise;
 	}
 
+	/**
+	 * `/move` (or `/add-dir`) directory candidates from the host filesystem.
+	 * Resolves `null` when no answer arrives (10s timeout, session end, or a
+	 * host that predates `browse-dirs`); callers treat that as "no suggestions".
+	 */
+	fetchDirSuggestions(prefix: string): Promise<readonly CollabDirEntry[] | null> {
+		const reqId = ++this.#reqSeq;
+		const { promise, resolve } = Promise.withResolvers<readonly CollabDirEntry[] | null>();
+		const timer = setTimeout(() => {
+			this.#pendingDirs.delete(reqId);
+			resolve(null);
+		}, DIR_SUGGEST_TIMEOUT_MS);
+		this.#pendingDirs.set(reqId, { resolve, timer });
+		this.#socket.send({ t: "browse-dirs", reqId, prefix });
+		return promise;
+	}
+
 	/** Test seam: apply a synthetic host frame through the real apply path. */
 	applyFrameForTest(frame: HostFrame): void {
 		this.#applyFrameSafe(frame);
@@ -240,14 +270,28 @@ export class GuestClient {
 		this.#clearSnapshotProgressTimer();
 		this.#phase = "ended";
 		this.#endedReason = reason;
+		this.#settlePendingRequests();
+		this.#clearUiRequests();
+		this.#commit();
+		this.#socket.close();
+	}
+
+	/**
+	 * Settle in-flight round trips: the room that would answer them is gone
+	 * (session end, or a rotation that closes this socket). Pollers treat the
+	 * `null` as a transient failure and retry from their last cursor.
+	 */
+	#settlePendingRequests(): void {
 		for (const [, pending] of this.#pendingTranscripts) {
 			clearTimeout(pending.timer);
 			pending.resolve(null);
 		}
 		this.#pendingTranscripts.clear();
-		this.#clearUiRequests();
-		this.#commit();
-		this.#socket.close();
+		for (const [, pending] of this.#pendingDirs) {
+			clearTimeout(pending.timer);
+			pending.resolve(null);
+		}
+		this.#pendingDirs.clear();
 	}
 
 	#clearWelcomeTimer(): void {
@@ -304,6 +348,9 @@ export class GuestClient {
 				this.#lifecycle = new Map();
 				this.#working = frame.state.isStreaming;
 				this.#readOnly = frame.readOnly === true;
+				// The palette belongs to the session, not the room: drop it until
+				// the replacement room's `commands` frame arrives.
+				this.#commands = [];
 				this.#clearUiRequests();
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
@@ -390,9 +437,27 @@ export class GuestClient {
 				}
 				break;
 			}
+			case "commands":
+				this.#commands = frame.commands;
+				break;
+			case "dir-suggestions": {
+				const pending = this.#pendingDirs.get(frame.reqId);
+				if (pending) {
+					this.#pendingDirs.delete(frame.reqId);
+					clearTimeout(pending.timer);
+					pending.resolve(frame.entries);
+				}
+				break;
+			}
 			case "bye":
-				this.#end(frame.reason);
-				return; // #end already committed
+				// The host is rotating its room (session switch, `/new`, `/fork`,
+				// restart): the relay closes this socket and the same link rejoins
+				// the replacement room. Stay in the reconnect loop and surface the
+				// reason instead of ending the page.
+				this.#pushNotice("info", frame.reason);
+				this.#phase = "reconnecting";
+				this.#settlePendingRequests();
+				break;
 			case "error":
 				if (!this.#welcomed) {
 					// Pre-welcome errors are the host's targeted reply to our
@@ -531,6 +596,7 @@ export class GuestClient {
 			working: this.#working,
 			readOnly: this.#readOnly,
 			uiRequest: this.#uiRequest,
+			commands: this.#commands,
 			notices: this.#notices,
 		};
 	}

@@ -246,12 +246,72 @@ describe("GuestClient frame apply", () => {
 		expect(client.getSnapshot().progress.get("Sub1")).toEqual(payload);
 	});
 
-	it("bye ends the session with a reason", () => {
+	it("bye keeps the page alive for the replacement room instead of ending it", () => {
 		const client = liveClient();
-		client.applyFrameForTest({ t: "bye", reason: "host left" });
+		client.applyFrameForTest({ t: "bye", reason: "session switched" });
 		const snap = client.getSnapshot();
-		expect(snap.phase).toBe("ended");
-		expect(snap.endedReason).toBe("host left");
+		// The relay closes this socket and the same link rejoins the host's new
+		// room: the page must stay in the reconnect loop, not the ended state.
+		expect(snap.phase).toBe("reconnecting");
+		expect(snap.endedReason).toBeNull();
+		expect(snap.notices.at(-1)).toMatchObject({ level: "info", message: "session switched" });
+	});
+
+	it("commands frames publish the palette the host advertised", () => {
+		const client = liveClient();
+		expect(client.getSnapshot().commands).toEqual([]);
+		const commands = [
+			{ name: "dump", description: "Return full transcript", input: { hint: "[raw]" } },
+			{ name: "skill:reviewer", aliases: ["review"] },
+		];
+		client.applyFrameForTest({ t: "commands", commands });
+		expect(client.getSnapshot().commands).toEqual(commands);
+	});
+
+	it("a reconnect welcome drops the previous room's palette until the new one arrives", () => {
+		const client = liveClient();
+		client.applyFrameForTest({ t: "commands", commands: [{ name: "dump" }] });
+		expect(client.getSnapshot().commands).toHaveLength(1);
+
+		client.applyFrameForTest(welcomeFrame());
+		expect(client.getSnapshot().commands).toEqual([]);
+	});
+
+	it("fetchDirSuggestions round-trips a browse-dirs request", async () => {
+		const sent: GuestFrame[] = [];
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation((frame: GuestFrame) => {
+			sent.push(frame);
+		});
+		try {
+			const client = liveClient();
+			const pending = client.fetchDirSuggestions("sub");
+			const request = sent[0];
+			if (request?.t !== "browse-dirs") throw new Error(`expected browse-dirs, got ${request?.t}`);
+			expect(request.prefix).toBe("sub");
+
+			client.applyFrameForTest({
+				t: "dir-suggestions",
+				reqId: request.reqId,
+				entries: [{ path: "/tmp/sub", label: "sub/" }],
+			});
+			expect(await pending).toEqual([{ path: "/tmp/sub", label: "sub/" }]);
+		} finally {
+			sendSpy.mockRestore();
+		}
+	});
+
+	it("fetchDirSuggestions resolves null when the host never answers", async () => {
+		vi.useFakeTimers();
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation(() => {});
+		try {
+			const client = liveClient();
+			const pending = client.fetchDirSuggestions("");
+			vi.advanceTimersByTime(10_000);
+			expect(await pending).toBeNull();
+		} finally {
+			sendSpy.mockRestore();
+			vi.useRealTimers();
+		}
 	});
 
 	it("error frames append notices", () => {

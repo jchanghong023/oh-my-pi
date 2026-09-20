@@ -104,6 +104,9 @@ const FILTERED_FRAME_TYPES: Record<string, true> = {
 	event: true,
 	bus: true,
 	"snapshot-chunk": true,
+	// The host advertises its command palette after every hello; the build is
+	// async, so it interleaves with the directed replies these tests assert on.
+	commands: true,
 };
 
 /**

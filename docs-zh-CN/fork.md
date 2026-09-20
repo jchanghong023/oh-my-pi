@@ -112,6 +112,18 @@
 * 交互界面（TUI）下，进程级 SIGINT 不再首个信号即整体退出：首个信号被消费并提示「SIGINT received — press Ctrl+C again to exit」，5 秒确认窗口内再次 SIGINT、teardown 进行中的任何 SIGINT、或未注册门控时的任何 SIGINT，仍走原有信号退出路径（session_exit 记录 `sigint`，exit 130）。动机：Windows 控制台 ctrl 事件（Break 键、共享控制台被翻回 processed input、兄弟进程广播 `GenerateConsoleCtrlEvent`）会绕过 raw mode 直接以信号到达，历史上一次事件即摧毁带在跑子代理的会话。Ctrl+C 按键路径（raw mode、500ms 双击）与非交互通道（print/ACP/SDK、CI `kill -INT`）行为不变；SIGTERM/SIGHUP 不加门。
 * Windows 上每次进程级 SIGINT 会把当时的控制台诊断追加到日志目录的 `sigint-diagnostics.log`：stdin 的 console input mode（含 `ENABLE_PROCESSED_INPUT` 等标志解码）与同控制台附加进程清单（pid + 映像名，即 ctrl 事件的广播受众），用于事后归因「未按键却收到 SIGINT」。其他平台不写该文件；诊断失败被吞掉，绝不影响信号处理。
 
+### Collab 长期链接与网页端命令
+
+* 房间身份（roomId、房间密钥、write token）持久化在 config root 的 `collab/identity.json`（POSIX 下 `0600`；文件含 write token，Windows 依赖 config root 的 ACL，与 guest replica 同）。同一进程内每个房间复用同一身份：`/new`、`/resume`、`/fork`、`/collab stop` 后重开、以及 omp 重启后，`/collab` 打印的同一条链接始终可用；房间仍按会话轮换（`generation` 递增、guest 重连），不引入常驻进程。文件损坏或缺失时自动重建，第二个 omp 进程托管同一身份时由 relay 以既有 4009 提示拒绝（`/collab` 报 `relay connection closed during startup: a host is already connected for this room`；`/collab list` 可看到占用该房间的会话，停掉它或直接用它的链接）。
+* `/collab`、`/collab view` 执行后自动把对应的浏览器深链接写入系统剪贴板，并在提示块末尾说明；终端链接与二维码行为不变。
+* host 在 guest 加入时（快照分片之后）下发本会话的命令清单：内置命令、`/skill:<name>`、扩展命令、自定义/MCP 命令与文件命令，与主机自身补全列表一致；清单每次 join 下发一次，运行中的技能/插件变化需重新 join 才可见。
+* fork 的网页端（含上述补全与目录选择）随中文文档站一起发布到 GitHub Pages：`https://jchanghong023.github.io/oh-my-pi/collab/`，`collab.webUrl` 默认指向它，`/collab` 的链接因此形如 `https://jchanghong023.github.io/oh-my-pi/collab/#<relay-link>`，外部浏览器（含跨网络设备）可直接使用；中继托管的 `my.omp.sh` 是上游构建，永远不会带 fork 功能。把 `collab.webUrl` 置空则回到上游行为（按 `collab.relayUrl` 推导，即 `my.omp.sh`）；本地开发该客户端时用 `collab.webUrl=http://localhost:3000`（`packages/collab-web` 的 `bun run dev`）。
+* 网页端 composer 支持 `/` 补全（`Tab` 补全、`↑`/`↓` 选择、`Esc` 关闭、鼠标点选），可执行的命令范围与清单一致：内置命令、技能、扩展/自定义/文件命令，以及 `!`/`!!`（主机 shell）与 `$`/`$$`（主机 python）；会话轮换类命令（`/new`、`/resume`、`/fork`、`/exit` 等）同样开放。清单之外的斜杠输入按未知命令回错，不再当作 prompt 交给模型。持有可写链接者因此可在主机上执行任意 shell/python 与任意会话操作，绕过 agent 策略与审批；view-only 链接仍被拒绝。
+* 命令输出（如 `/move <path>` 的 `Moved to <path>.`）以 host notice 事件下发到浏览器；需要主机交互对话框的命令（选择器等）在主机 TUI 上打开。
+* `/move`、`/add-dir` 的路径候选由 host 的文件系统搜索提供（同一 TUI 覆盖层数据源），仅限可写链接；候选只做前缀匹配与目录列举，不执行、不落盘。
+* 网页端收到 `bye`（会话轮换、`/collab stop`、重启）不再结束页面：保留链接进入自动重连（指数退避），同一 roomId 的新房间建立后自动加入；`/collab stop` 后页面持续显示重连中，直到再次 `/collab`。
+* `COLLAB_PROTO` 保持 `3`：新增帧为加性扩展，旧客户端忽略未知帧；网页端对旧 host 的目录请求 10 秒超时后按无候选处理。
+
 ### Windows 行为修复
 
 * 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
@@ -137,6 +149,7 @@
 * `task.maxConcurrency=8`
 * `mnemopi.embeddingVariant=multilingual`
 * `stt.language=zh-CN`（区域标签归一化为基语言，如 `zh-CN`→`zh`；仅对 whisper tier 生效，默认 tier parakeet/sherpa 不使用语言参数）
+* `collab.webUrl=https://jchanghong023.github.io/oh-my-pi/collab/`（fork 网页端，随文档站发布；置空回退上游按 relay 推导的行为）
 * 文件日志默认关闭；临时开启方式见“安装与运行”。
 
 ### 快捷键与状态栏

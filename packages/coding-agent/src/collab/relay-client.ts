@@ -12,7 +12,7 @@ import { open, sealSerialized } from "./crypto";
 import type { CollabFrame, RelayControlMessage } from "./protocol";
 import { packEnvelope, unpackEnvelope } from "./protocol";
 
-const RELAY_CLOSE_REASONS: Record<number, string> = {
+export const RELAY_CLOSE_REASONS: Record<number, string> = {
 	4001: "room closed",
 	4004: "no such room",
 	4009: "a host is already connected for this room",

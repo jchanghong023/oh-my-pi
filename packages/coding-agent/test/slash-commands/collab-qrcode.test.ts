@@ -9,6 +9,7 @@ import {
 	executeBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { CollabQrCodeComponent } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import { Text, visibleWidth } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
@@ -45,6 +46,9 @@ async function createRuntimeHarness(options?: { collabHost?: NonNullable<Interac
 	const showStatus = vi.fn();
 	const showError = vi.fn();
 	const present = vi.fn();
+	// `/collab` copies the browser link; the real backend would take over the
+	// developer's clipboard (and spawn a helper on some platforms).
+	const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
 	const settingsGet = vi.fn((key: string) => {
 		if (key === "collab.relayUrl") return "wss://relay.example.com";
 		if (key === "collab.webUrl") return "";
@@ -74,6 +78,7 @@ async function createRuntimeHarness(options?: { collabHost?: NonNullable<Interac
 		showStatus,
 		showError,
 		present,
+		copy,
 		runtime: { ctx } as BuiltinSlashCommandRuntime,
 	};
 }
@@ -112,6 +117,7 @@ describe("/collab slash command QR code rendering", () => {
 
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
 		expect(statusText).toContain("my.omp.sh/#started-full");
+		expect(harness.copy).toHaveBeenCalledWith("https://my.omp.sh/#started-full");
 		const presented = harness.present.mock.calls[0]?.[0] as readonly unknown[];
 
 		const component = presented[1] as CollabQrCodeComponent;
@@ -130,6 +136,7 @@ describe("/collab slash command QR code rendering", () => {
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
 		expect(statusText).toContain("my.omp.sh/#started-view");
 		expect(statusText).not.toContain("my.omp.sh/#started-full");
+		expect(harness.copy).toHaveBeenCalledWith("https://my.omp.sh/#started-view");
 		const presented = harness.present.mock.calls[0]?.[0] as readonly unknown[];
 
 		const component = presented[1] as CollabQrCodeComponent;

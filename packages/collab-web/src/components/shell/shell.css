@@ -340,6 +340,70 @@
 	border-color: var(--ring);
 }
 
+/* ---- composer completion menu ---- */
+.sh-cmd-menu {
+	display: grid;
+	gap: 2px;
+	max-height: 224px;
+	margin-bottom: 6px;
+	padding: 4px;
+	overflow-y: auto;
+	background: var(--bg-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+.sh-cmd-menu-item {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 8px;
+	font: 400 12px / 1.4 var(--font-mono);
+	color: var(--fg-muted);
+	text-align: left;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+}
+
+.sh-cmd-menu-item[aria-selected="true"] {
+	color: var(--fg);
+	background: var(--bg-overlay);
+	border-color: var(--ring);
+}
+
+.sh-cmd-menu-name {
+	flex: none;
+	color: var(--fg);
+}
+
+.sh-cmd-menu-badge {
+	flex: none;
+	padding: 0 4px;
+	font: 600 9px / 14px var(--font-ui);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--accent);
+	background: var(--accent-muted);
+	border-radius: var(--radius-sm);
+}
+
+.sh-cmd-menu-hint {
+	flex: none;
+	color: var(--fg-faint);
+}
+
+.sh-cmd-menu-desc {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-ui);
+	color: var(--fg-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .sh-composer-actions {
 	display: flex;
 	align-items: center;

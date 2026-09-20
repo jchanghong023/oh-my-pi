@@ -22,14 +22,23 @@ import type {
 	SessionEntry as WireSessionEntry,
 } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
+import { parsePythonCommandInput } from "../modes/controllers/input-controller";
+import { moveDirectorySource } from "../modes/move-directory-source";
+import { buildSkillCommandPrompt, isKnownSkillCommand } from "../modes/skill-command";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
+import { type InternalAvailableSlashCommand, buildAvailableSlashCommands } from "../slash-commands/available-commands";
+import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
+import { executeBuiltinSlashCommand } from "../slash-commands/builtin-registry";
+import { reloadTuiPluginState } from "../slash-commands/builtin-marketplace";
+import type { SlashCommandRuntime } from "../slash-commands/types";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
+import type { CollabRoomIdentity } from "./identity";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -50,7 +59,7 @@ import {
 	type CollabHostSnapshot,
 	publishCollabHost,
 } from "./registry";
-import { CollabSocket } from "./relay-client";
+import { CollabSocket, RELAY_CLOSE_REASONS } from "./relay-client";
 import {
 	COLLAB_ENTRY_OMITTED_CUSTOM_TYPE,
 	copyForReplication,
@@ -130,6 +139,13 @@ const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fe
 const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
 const MAX_PENDING_UI_REQUESTS = 64;
 /**
+ * How many times a guest command may hand residual text back before it is
+ * submitted as a plain prompt. Mirrors the TUI, which re-runs its whole submit
+ * chain on the text a builtin returns (`/force`, `/loop`), bounded here so a
+ * command that keeps echoing its own text cannot spin.
+ */
+const GUEST_COMMAND_MAX_PASSES = 4;
+/**
  * Outcome of {@link CollabHost.requestGuestUi}. `answered` carries the guest's
  * response (an `undefined` value is a genuine guest cancel); `unavailable`
  * means the collab channel went away (teardown, relay drop) or the request was
@@ -162,6 +178,13 @@ export interface CollabHostOptions {
 	 * Defaults to always ready.
 	 */
 	guestActionsReady?: () => boolean;
+	/**
+	 * Stable room id and secrets (see `collab/identity.ts`). When present every
+	 * room this process hosts reuses the same link, so guests keep the link
+	 * across session rotation and restarts; without it each room rotates its
+	 * id, key, and write token as before.
+	 */
+	identity?: CollabRoomIdentity;
 }
 
 /**
@@ -190,10 +213,14 @@ export class CollabHost {
 	readonly #generation: number;
 	readonly #guestActionsReady: () => boolean;
 	readonly #access: CollabAccess;
+	/** Stable room secrets, when the controller supplied them. */
+	readonly #identity: CollabRoomIdentity | undefined;
 	#relayConnected = false;
 	#registryPublication: CollabHostPublication | null = null;
 	/** Publication still being created; teardown awaits and withdraws it. */
 	#pendingPublication: Promise<CollabHostPublication | null> | null = null;
+	/** Last relay close reason, so a startup failure can name its cause. */
+	#relayCloseReason: string | undefined;
 	/** Set by the first teardown (explicit stop or fatal relay close); every later stop() awaits it. */
 	#teardownDone: Promise<void> | null = null;
 	/** Rejects the in-flight first-open wait when `stop()` overtakes `start()`. */
@@ -233,6 +260,7 @@ export class CollabHost {
 		this.#generation = options.generation ?? 1;
 		this.#access = options.access ?? "control";
 		this.#guestActionsReady = options.guestActionsReady ?? (() => true);
+		this.#identity = options.identity;
 		// The room mirrors the session that is active when it is created; the
 		// frame guard and the registry snapshot compare against this from then on.
 		this.#sessionId = ctx.sessionManager.getSessionId();
@@ -353,9 +381,9 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
-		const rawKey = generateRoomKey();
-		const writeToken = generateWriteToken();
-		const roomId = generateRoomId();
+		const rawKey = this.#identity?.key ?? generateRoomKey();
+		const writeToken = this.#identity?.writeToken ?? generateWriteToken();
+		const roomId = this.#identity?.roomId ?? generateRoomId();
 		this.#writeToken = writeToken;
 		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
 		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
@@ -389,6 +417,7 @@ export class CollabHost {
 		};
 		socket.onClose = (reason, willReconnect) => {
 			this.#relayConnected = false;
+			this.#relayCloseReason = reason;
 			if (this.#stopped) return;
 			if (!opened) {
 				firstOpen.reject(new Error(reason));
@@ -487,7 +516,13 @@ export class CollabHost {
 					.catch(err => logger.warn("Collab host registry withdrawal failed", { error: String(err) }));
 			}
 			if (this.#stopping) throw new CollabHostStoppedError("collab host stopped during startup");
-			throw new Error("relay connection closed during startup");
+			const reason = this.#relayCloseReason;
+			if (reason === undefined) throw new Error("relay connection closed during startup");
+			// Name the relay's reason: with one identity per config root, a 4009 here
+			// means another omp session already hosts this room — say where to find it.
+			const hint =
+				reason === RELAY_CLOSE_REASONS[4009] ? " (another omp session hosts this room; /collab list shows it)" : "";
+			throw new Error(`relay connection closed during startup: ${reason}${hint}`);
 		}
 		this.#registryPublication = publication;
 	}
@@ -678,6 +713,9 @@ export class CollabHost {
 			case "fetch-transcript":
 				void this.#handleFetchTranscript(frame.reqId, frame.agentId, frame.fromByte, fromPeer);
 				break;
+			case "browse-dirs":
+				this.#handleBrowseDirs(frame.reqId, frame.prefix, fromPeer);
+				break;
 			default:
 				logger.debug("collab host ignoring unexpected frame", { type: frame.t, fromPeer });
 		}
@@ -762,6 +800,7 @@ export class CollabHost {
 			fromPeer,
 		);
 		socket.sendBatch(this.#snapshotChunks(entries), fromPeer);
+		void this.#sendCommandList(fromPeer);
 		if (canWrite) {
 			for (const pending of this.#pendingUi.values()) {
 				this.#send({ t: "ui-request", request: pending.request }, fromPeer);
@@ -774,6 +813,55 @@ export class CollabHost {
 		);
 		this.#updateStatusSegment();
 		this.#scheduleStateBroadcast();
+	}
+
+	/**
+	 * Session palette, built once per room. Both the join frame and command
+	 * dispatch await this same promise, so a guest that prompts while the
+	 * file-backed half is still loading is classified against the real palette
+	 * instead of racing it.
+	 */
+	#palette: Promise<{ commands: InternalAvailableSlashCommand[]; names: Set<string> }> | undefined;
+
+	#commandPalette(): Promise<{ commands: InternalAvailableSlashCommand[]; names: Set<string> }> {
+		return (this.#palette ??= (async () => {
+			const commands = await buildAvailableSlashCommands(this.#ctx.session);
+			const names = new Set<string>();
+			for (const command of commands) {
+				names.add(command.name);
+				for (const alias of command.aliases ?? []) names.add(alias);
+			}
+			return { commands, names };
+		})());
+	}
+
+	/**
+	 * Advertise this session's slash-command palette to a joining guest: builtins,
+	 * `/skill:<name>` entries, extension commands, custom/MCP commands, and
+	 * file-based commands — the same list the host's own palette shows. Sent once
+	 * per join (a guest that wants a refreshed list rejoins).
+	 */
+	async #sendCommandList(toPeer: number): Promise<void> {
+		try {
+			const { commands } = await this.#commandPalette();
+			this.#send(
+				{
+					t: "commands",
+					commands: commands.map(command => ({
+						name: command.name,
+						aliases: command.aliases,
+						description: command.description,
+						input: command.input,
+						subcommands: command.subcommands,
+					})),
+				},
+				toPeer,
+			);
+		} catch (error) {
+			// A palette that cannot be built must not fail the join; the guest
+			// simply gets no completion list.
+			logger.debug("collab: command list unavailable", { error: String(error) });
+		}
 	}
 
 	/**
@@ -873,7 +961,153 @@ export class CollabHost {
 			this.#rejectReadOnly("prompting", fromPeer);
 			return;
 		}
-		const name = peer.name;
+		// Command-shaped text (slash commands, `/skill:<name>`, `!`/`$` local
+		// execution) is dispatched on the host; plain text becomes a prompt. A
+		// command-shaped typo is reported back instead of being sent to the model.
+		if (text.startsWith("/") || text.startsWith("!") || parsePythonCommandInput(text)) {
+			void this.#runGuestCommand(text, images, fromPeer);
+			return;
+		}
+		this.#submitGuestPrompt(text, images, fromPeer);
+	}
+
+	/**
+	 * Run a guest-submitted command on the host, then submit whatever text
+	 * survives as a prompt. Dispatch order matches the TUI submit path:
+	 * `/skill:<name>`, builtins, then `!`/`!!` shell, then `$`/`$$` python.
+	 */
+	async #runGuestCommand(text: string, images: ImageContent[] | undefined, fromPeer: number): Promise<void> {
+		if (this.#rejectWhileStarting("running commands", fromPeer)) return;
+		try {
+			let input = text;
+			for (let pass = 0; pass < GUEST_COMMAND_MAX_PASSES; pass++) {
+				const next = await this.#dispatchGuestCommand(input, images, fromPeer);
+				// `undefined`: a command consumed the input. `next === input`: nothing
+				// claimed it, so it is a plain prompt.
+				if (next === undefined) return;
+				if (next === input) break;
+				input = next;
+			}
+			this.#submitGuestPrompt(input, images, fromPeer);
+		} catch (error) {
+			logger.warn("collab guest command failed", { error: String(error) });
+			this.#send({ t: "error", message: `command failed: ${String(error)}` }, fromPeer);
+		}
+	}
+
+	/**
+	 * One pass of {@link #runGuestCommand}. Returns `undefined` when a command
+	 * consumed the input, otherwise the text to keep going with (the input
+	 * itself when no command matched).
+	 */
+	async #dispatchGuestCommand(
+		text: string,
+		images: ImageContent[] | undefined,
+		fromPeer: number,
+	): Promise<string | undefined> {
+		// `/skill:<name>` first: no builtin claims that prefix, and the session's
+		// `prompt` path does not expand skills.
+		if (isKnownSkillCommand(this.#ctx, text)) {
+			const built = await buildSkillCommandPrompt(this.#ctx, text, "steer", images);
+			if (built) await this.#ctx.session.promptCustomMessage(built.message, built.options);
+			return undefined;
+		}
+		if (text.startsWith("/")) {
+			// Text-mode `handle` first: its `output` reaches the browser as a
+			// notice, which is what makes `/move <path>`, `/dump`, `/model <id>`
+			// observable there. TUI-only commands (`/new`, `/resume`, pickers)
+			// then run on the host screen, where their dialogs live.
+			const acp = await executeAcpBuiltinSlashCommand(text, this.#commandRuntime());
+			if (acp !== false) return "prompt" in acp ? acp.prompt : undefined;
+			const tui = await executeBuiltinSlashCommand(text, { ctx: this.#ctx });
+			if (tui === false) {
+				// The first whitespace-delimited token is the command name: the
+				// palette lists colon-namespaced entries (`skill:reviewer`)
+				// verbatim, and `parseSlashCommand` would split those at the colon.
+				const token = text.slice(1).trim().split(/\s+/, 1)[0] ?? "";
+				if (!token) return text;
+				// Extension/custom/MCP/file commands are advertised but not
+				// builtins; the session expands them. Awaiting the same palette the
+				// join frame was built from keeps this deterministic when a guest
+				// prompts before that frame lands; a palette that cannot be built
+				// stays permissive and lets the session decide.
+				const palette = await this.#commandPalette().catch(() => undefined);
+				if (palette === undefined || palette.names.has(token)) {
+					await this.#ctx.session.prompt(text, { images });
+					return undefined;
+				}
+				this.#send({ t: "error", message: `unknown command: /${token}` }, fromPeer);
+				return undefined;
+			}
+			return typeof tui === "string" ? tui : undefined;
+		}
+		if (text.startsWith("!")) {
+			const isExcluded = text.startsWith("!!");
+			const command = (isExcluded ? text.slice(2) : text.slice(1)).trim();
+			if (!command) return text;
+			if (this.#ctx.session.isBashRunning) {
+				this.#send(
+					{ t: "error", message: "A bash command is already running. Press Esc to cancel it first." },
+					fromPeer,
+				);
+				return undefined;
+			}
+			await this.#ctx.handleBashCommand(command, isExcluded);
+			return undefined;
+		}
+		const python = parsePythonCommandInput(text);
+		if (python) {
+			if (!python.code) return text;
+			if (this.#ctx.session.isEvalRunning) {
+				this.#send(
+					{ t: "error", message: "A Python execution is already running. Press Esc to cancel it first." },
+					fromPeer,
+				);
+				return undefined;
+			}
+			await this.#ctx.handlePythonCommand(python.code, python.isExcluded);
+			return undefined;
+		}
+		return text;
+	}
+
+	/**
+	 * Directory suggestions for `/move`. `prefix` is matched against the host's
+	 * filesystem through the same source the TUI overlay uses and never
+	 * executed; the listing is host filesystem information, so only writable
+	 * peers are served.
+	 */
+	#handleBrowseDirs(reqId: number, prefix: string, fromPeer: number): void {
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("browsing directories", fromPeer);
+			return;
+		}
+		const cwd = this.#ctx.sessionManager.getCwd();
+		const entries = moveDirectorySource
+			.search(prefix, cwd, 50)
+			.map(entry => ({ path: entry.value, label: entry.label }));
+		this.#send({ t: "dir-suggestions", reqId, entries }, fromPeer);
+	}
+
+	/** Slash-command runtime for guest commands: text-mode handlers report through the session notice stream. */
+	#commandRuntime(): SlashCommandRuntime {
+		return {
+			session: this.#ctx.session,
+			sessionManager: this.#ctx.sessionManager,
+			settings: this.#ctx.settings,
+			cwd: this.#ctx.sessionManager.getCwd(),
+			output: (line: string) => {
+				this.#ctx.session.emitNotice("info", line, "collab");
+			},
+			refreshCommands: () => this.#ctx.refreshSlashCommandState(),
+			reloadPlugins: () => reloadTuiPluginState(this.#ctx),
+		};
+	}
+
+	/** Submit `text` (with any images) as a user-attributed prompt from `fromPeer`. */
+	#submitGuestPrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {
+		const name = this.#peers.get(fromPeer)?.name ?? `guest-${fromPeer}`;
 		const content: string | (TextContent | ImageContent)[] =
 			images && images.length > 0 ? [{ type: "text", text }, ...images] : text;
 		const details: CollabPromptDetails = { from: name };

@@ -135,7 +135,12 @@ function pythonCommandPrefixLength(trimmedText: string): 0 | 1 | 2 {
 	return next === 32 || next === 9 || next === 10 || next === 13 ? prefixLength : 0;
 }
 
-function parsePythonCommandInput(text: string): { code: string; isExcluded: boolean } | undefined {
+/**
+ * Parse `$ <code>` / `$$ <code>` input. Also used by the collab host, which
+ * routes guest `$`/`$$` submissions through the same local-execution path as
+ * the editor.
+ */
+export function parsePythonCommandInput(text: string): { code: string; isExcluded: boolean } | undefined {
 	const trimmed = text.trimStart();
 	const prefixLength = pythonCommandPrefixLength(trimmed);
 	if (prefixLength === 0) return undefined;

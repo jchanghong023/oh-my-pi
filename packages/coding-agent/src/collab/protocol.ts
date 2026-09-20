@@ -10,6 +10,8 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type {
 	BusChannel,
+	CollabCommandInfo,
+	CollabDirEntry,
 	CollabUiRequest,
 	GuestFrame,
 	ParsedCollabLink,
@@ -28,6 +30,8 @@ import type { AgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
 export type {
+	CollabCommandInfo,
+	CollabDirEntry,
 	CollabPromptDetails,
 	CollabUiRequest,
 	CollabUiRequestDraft,
@@ -92,6 +96,14 @@ export type CollabFrame =
 	| { t: "ui-request-end"; reqId: number }
 	/** Targeted reply to fetch-transcript; `error` marks a terminal read failure that guests must surface without hot retrying. */
 	| { t: "transcript"; reqId: number; text: string; newSize: number; error?: string }
+	/**
+	 * Slash-command palette of the host session, sent once per join (after the
+	 * snapshot train is enqueued). Guests execute an entry by sending its text
+	 * back as a `prompt` frame.
+	 */
+	| { t: "commands"; commands: CollabCommandInfo[] }
+	/** Targeted reply to `browse-dirs` (host filesystem listing for `/move`). */
+	| { t: "dir-suggestions"; reqId: number; entries: CollabDirEntry[] }
 	| { t: "bye"; reason: string }
 	| { t: "error"; message: string };
 

@@ -37,6 +37,7 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 				? "Anyone with this link can watch the session but cannot prompt the agent."
 				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
 		),
+		theme.fg("dim", "Browser link copied to clipboard."),
 	].join("\n");
 }
 
@@ -48,9 +49,18 @@ function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	}
 }
 
-function showCollabLink(ctx: InteractiveModeContext, host: CollabHost, heading: string, view = false): void {
+async function showCollabLink(
+	ctx: InteractiveModeContext,
+	host: CollabHost,
+	heading: string,
+	view = false,
+): Promise<void> {
+	const webLink = view ? host.webViewLink : host.webLink;
+	// Copy before showing: `showStatus` replaces an unchanged tail block in
+	// place, so a later status would overwrite the join hint.
+	await copyToClipboard(webLink);
 	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
-	showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
+	showCollabQrCode(ctx, webLink);
 }
 
 export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -406,7 +416,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			}
 			let heading = existing ? "Collab session restarted with control access" : "Collab session started!";
 			if (host === existing) heading = view ? "Read-only collab session active" : "Collab session active";
-			showCollabLink(ctx, host, heading, view);
+			await showCollabLink(ctx, host, heading, view);
 		},
 	},
 	{

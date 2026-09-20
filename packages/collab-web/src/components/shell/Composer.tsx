@@ -1,7 +1,9 @@
 import { SendHorizontal, Square } from "lucide-react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { GuestClient, GuestSnapshot } from "../../lib/client";
+import type { CollabDirEntry } from "@oh-my-pi/pi-wire";
+import { type CompletionItem, completionItems, directoryArgument } from "../../lib/completion";
 
 export interface ComposerProps {
 	client: GuestClient;
@@ -12,6 +14,8 @@ export interface ComposerProps {
 const LINE_PX = 20;
 const PAD_Y = 16;
 const MAX_ROWS = 8;
+/** Idle time before a `/move` prefix is sent to the host for directory suggestions. */
+const DIR_SUGGEST_DEBOUNCE_MS = 120;
 
 function autosize(el: HTMLTextAreaElement | null): void {
 	if (!el) return;
@@ -110,6 +114,9 @@ function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
 
 export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const [text, setText] = useState("");
+	const [highlight, setHighlight] = useState(0);
+	const [dismissed, setDismissed] = useState(false);
+	const [dirs, setDirs] = useState<readonly CollabDirEntry[]>([]);
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
 
@@ -120,6 +127,41 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const busy = snapshot.working;
 	const queued = snapshot.state?.queuedMessageCount ?? 0;
 	const canSend = canPrompt && text.trim().length > 0;
+
+	// `/move <prefix>` and `/add-dir <prefix>` ask the host for directory
+	// candidates; the effect cancels both the debounce and a late answer, so a
+	// stale listing can never replace a newer one.
+	const dirPrefix = directoryArgument(text)?.prefix ?? null;
+	useEffect(() => {
+		if (dirPrefix === null) {
+			setDirs([]);
+			return;
+		}
+		let cancelled = false;
+		const timer = setTimeout(() => {
+			void client.fetchDirSuggestions(dirPrefix).then(entries => {
+				if (!cancelled) setDirs(entries ?? []);
+			});
+		}, DIR_SUGGEST_DEBOUNCE_MS);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}, [client, dirPrefix]);
+
+	const items = dismissed ? [] : completionItems(text, snapshot.commands, dirs);
+	const active = items[Math.min(highlight, items.length - 1)];
+
+	// A new query invalidates both the highlight and an Escape dismissal.
+	useEffect(() => {
+		setHighlight(0);
+		setDismissed(false);
+	}, [text]);
+
+	const applyItem = useCallback((item: CompletionItem): void => {
+		setText(item.insert);
+		taRef.current?.focus();
+	}, []);
 
 	useLayoutEffect(() => {
 		autosize(taRef.current);
@@ -133,6 +175,24 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	}, [client, live, readOnly, text]);
 
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+		if (items.length > 0) {
+			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+				e.preventDefault();
+				const step = e.key === "ArrowDown" ? 1 : -1;
+				setHighlight(index => (index + step + items.length) % items.length);
+				return;
+			}
+			if (e.key === "Tab") {
+				e.preventDefault();
+				if (active) applyItem(active);
+				return;
+			}
+			if (e.key === "Escape") {
+				e.preventDefault();
+				setDismissed(true);
+				return;
+			}
+		}
 		if (shouldSubmitOnEnter(e, composingRef.current)) {
 			e.preventDefault();
 			send();
@@ -197,6 +257,30 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 
 	return (
 		<div className="sh-composer">
+			{items.length > 0 && (
+				<div className="sh-cmd-menu" role="listbox" aria-label="commands">
+					{items.map(item => (
+						<button
+							key={item.key}
+							type="button"
+							className="sh-cmd-menu-item"
+							role="option"
+							aria-selected={item === active}
+							// mousedown, not click: the textarea must keep focus so a
+							// completion can be extended by typing.
+							onMouseDown={e => {
+								e.preventDefault();
+								applyItem(item);
+							}}
+						>
+							<span className="sh-cmd-menu-name">{item.label}</span>
+							{item.badge && <span className="sh-cmd-menu-badge">{item.badge}</span>}
+							{item.hint && <span className="sh-cmd-menu-hint">{item.hint}</span>}
+							{item.description && <span className="sh-cmd-menu-desc">{item.description}</span>}
+						</button>
+					))}
+				</div>
+			)}
 			<div className="sh-composer-inner">
 				<textarea
 					ref={taRef}

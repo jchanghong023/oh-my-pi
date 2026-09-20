@@ -2362,7 +2362,7 @@ export const SETTINGS_SCHEMA = {
 
 	"collab.webUrl": {
 		type: "string",
-		default: "",
+		default: "https://jchanghong023.github.io/oh-my-pi/collab/",
 		ui: {
 			tab: "interaction",
 			group: "Collab",
