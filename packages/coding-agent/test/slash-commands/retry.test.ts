@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import {
-	ACP_BUILTIN_SLASH_COMMANDS,
+	acpBuiltinSlashCommands,
 	executeAcpBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -117,6 +117,6 @@ describe("/retry dispatch (ACP)", () => {
 	});
 
 	it("is advertised to ACP clients", () => {
-		expect(ACP_BUILTIN_SLASH_COMMANDS.find(c => c.name === "retry")).toBeDefined();
+		expect(acpBuiltinSlashCommands().find(c => c.name === "retry")).toBeDefined();
 	});
 });

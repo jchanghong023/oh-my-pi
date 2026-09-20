@@ -5,15 +5,25 @@ import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types"
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
+// `builtin-registry` and this module sit on opposite ends of the same import
+// cycle (registry → builtin-marketplace → … → index.ts → main.ts →
+// modes/rpc/rpc-mode.ts → here → registry), so the registry must not be
+// dereferenced while this module evaluates. Cycle members defer such reads to
+// function bodies (same convention as extensibility/extensions/loader.ts's
+// `import * as PiCodingAgent`), so both palettes are memoized on first use.
+let reservedNames: ReadonlySet<string> | undefined;
+
 /**
  * All names (primary + aliases) that are reserved by ACP builtins. Used to
  * filter out extension commands that would shadow a builtin or its alias at
  * dispatch time (e.g. `models` is an alias for `/model`, so an extension
  * registering `models` would appear in the palette but execute the builtin).
  */
-export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
-	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
-);
+export function acpBuiltinReservedNames(): ReadonlySet<string> {
+	return (reservedNames ??= new Set(
+		BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
+	));
+}
 
 /**
  * Whether an extension command named `name` would be captured by ACP builtin
@@ -24,29 +34,34 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
  * advertised to ACP clients.
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
-	if (ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
+	const reserved = acpBuiltinReservedNames();
+	if (reserved.has(name)) return true;
 	const colon = name.indexOf(":");
-	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
+	return colon !== -1 && reserved.has(name.slice(0, colon));
 }
+
+let advertisedCommands: AvailableCommand[] | undefined;
 
 /**
  * Commands advertised to ACP clients. Entries without a text-mode `handle`
  * (e.g. `/quit`, `/login`, dashboards) are filtered out so the client doesn't
  * see commands it cannot drive.
  */
-export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(
-	command => command.handle !== undefined,
-).map(command => {
-	// Honor mode-specific copy: ACP clients receive concise text-mode
-	// descriptions/hints when the spec sets `acpDescription` / `acpInputHint`,
-	// otherwise fall back to the unified `description` / `inlineHint`.
-	const hint = command.acpInputHint ?? command.inlineHint;
-	return {
-		name: command.name,
-		description: command.acpDescription ?? command.description,
-		input: hint ? { hint } : undefined,
-	};
-});
+export function acpBuiltinSlashCommands(): AvailableCommand[] {
+	return (advertisedCommands ??= BUILTIN_SLASH_COMMANDS_INTERNAL.filter(command => command.handle !== undefined).map(
+		command => {
+			// Honor mode-specific copy: ACP clients receive concise text-mode
+			// descriptions/hints when the spec sets `acpDescription` / `acpInputHint`,
+			// otherwise fall back to the unified `description` / `inlineHint`.
+			const hint = command.acpInputHint ?? command.inlineHint;
+			return {
+				name: command.name,
+				description: command.acpDescription ?? command.description,
+				input: hint ? { hint } : undefined,
+			};
+		},
+	));
+}
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:

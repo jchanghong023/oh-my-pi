@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { JCH_GIT_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/git";
-import { ACP_BUILTIN_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import { acpBuiltinSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
 import {
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
@@ -213,7 +213,7 @@ describe("JCH workflow slash commands", () => {
 		for (const name of ["jchfastreviewfix", "jchfixactions", "jchgitforcesync"]) {
 			expect(lookupBuiltinSlashCommand(name)).toBeUndefined();
 			expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has(name)).toBe(false);
-			expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === name)).toBe(false);
+			expect(acpBuiltinSlashCommands().some(candidate => candidate.name === name)).toBe(false);
 		}
 	});
 });
@@ -243,6 +243,6 @@ describe("JCH git slash commands", () => {
 		// the command ACP-advertised (like jchgs/jchgitpull) so clients get the
 		// refusal instead of a model dispatch.
 		expect(command?.handle).toBeTypeOf("function");
-		expect(ACP_BUILTIN_SLASH_COMMANDS.some(candidate => candidate.name === "jchgitdiscardall")).toBe(true);
+		expect(acpBuiltinSlashCommands().some(candidate => candidate.name === "jchgitdiscardall")).toBe(true);
 	});
 });

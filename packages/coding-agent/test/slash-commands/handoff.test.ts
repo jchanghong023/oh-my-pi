@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import {
-	ACP_BUILTIN_SLASH_COMMANDS,
+	acpBuiltinSlashCommands,
 	executeAcpBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
@@ -117,7 +117,7 @@ describe("/handoff dispatch (ACP)", () => {
 	});
 
 	it("is advertised with the focus hint and the ACP description", () => {
-		const advertised = ACP_BUILTIN_SLASH_COMMANDS.find(c => c.name === "handoff");
+		const advertised = acpBuiltinSlashCommands().find(c => c.name === "handoff");
 		expect(advertised?.input?.hint).toBe("[focus instructions]");
 		expect(advertised?.description).toBe("Summarize the session into a handoff document and compact in place");
 	});
