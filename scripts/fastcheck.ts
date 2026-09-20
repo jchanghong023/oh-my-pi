@@ -1,24 +1,127 @@
 #!/usr/bin/env bun
-// Fork static gate: the full TypeScript static trio (types via `check:ts`:
-// oxlint + oxfmt --check + per-package tsc) plus a plain `cargo check
-// --workspace`. Always runs both passes — unlike `bun run check:rs` (fmt
-// --check + clippy via run-rs-task), which self-skips when no Rust-affecting
-// files changed, this gate must never pass silently. The whole run is bounded
-// by a hard 60s wall-clock budget: on expiry the live phase children are
-// killed and the gate fails with TIMEOUT (a cold Rust cache can legitimately
-// blow the budget; the unbounded static pass belongs to fulltest, which reuses
-// this gate with FASTCHECK_BUDGET_MS=0).
+// Fork static gate: the full TypeScript static trio (oxlint + oxfmt --check +
+// per-package tsc) plus a plain `cargo check --workspace`. Always runs every
+// pass — unlike `bun run check:rs` (fmt --check + clippy via run-rs-task),
+// which self-skips when no Rust-affecting files changed, this gate must never
+// pass silently. It runs the same checks as upstream `check:ts`, but schedules
+// the per-package type checks through a bounded pool: `check:ts` serializes
+// them (`--sequential`), and on this 16-package workspace that serialized sweep
+// alone outruns the whole 60s budget, which starved the Rust pass completely.
+// The whole run is bounded by a hard 60s wall-clock budget: on expiry the live
+// phase children are killed and the gate fails with TIMEOUT (a cold Rust cache
+// can legitimately blow the budget; the unbounded static pass belongs to
+// fulltest, which reuses this gate with FASTCHECK_BUDGET_MS=0).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
-interface Command {
+/** One runnable gate phase: a plain command, or the pooled `check:types` sweep. */
+export interface FastcheckCommand {
+	kind: "command";
 	label: string;
 	argv: readonly string[];
 	env?: Record<string, string>;
+}
+
+/** Per-package `check:types` sweep, executed through a bounded process pool. */
+export interface FastcheckTypeChecks {
+	kind: "type-checks";
+	label: string;
+	pool: number;
+}
+
+export type FastcheckPhase = FastcheckCommand | FastcheckTypeChecks;
+
+/** Pool width for the per-package `check:types` scripts. Measured on the
+ * 16-package workspace: ~58s serialized vs 28.4s at width 4 (tsgo peaks near
+ * 2 GiB per package, so 4 also keeps the peak RSS bounded). */
+export const FASTCHECK_TYPE_CHECK_POOL = 4;
+
+export interface TypeCheckPackage {
+	/** Absolute package directory; also the `check:types` cwd. */
+	dir: string;
+	/** Package name, used in gate output. */
+	label: string;
+}
+
+/** Workspace packages under `packages/*` that declare a `check:types` script —
+ * the same scope and selection `check:ts` applies with
+ * `--filter './packages/*' --if-present check:types'`, sorted by package name
+ * like bun's filtered run. */
+export function listTypeCheckPackages(root: string = repoRoot): TypeCheckPackage[] {
+	const packagesRoot = path.join(root, "packages");
+	const packages: TypeCheckPackage[] = [];
+	for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const dir = path.join(packagesRoot, entry.name);
+		const manifestPath = path.join(dir, "package.json");
+		if (!existsSync(manifestPath)) continue;
+		let manifest: { name?: unknown; scripts?: Record<string, unknown> };
+		try {
+			manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as typeof manifest;
+		} catch {
+			continue;
+		}
+		if (typeof manifest.scripts?.["check:types"] !== "string") continue;
+		packages.push({ dir, label: typeof manifest.name === "string" ? manifest.name : entry.name });
+	}
+	packages.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+	return packages;
+}
+
+/** Run every package's own `check:types` script through the pool. The first
+ * failure stops new work but lets in-flight checks finish, so the report names
+ * everything that ran. */
+async function runTypeChecksPhase(phase: FastcheckTypeChecks): Promise<void> {
+	console.log(`\n==> ${phase.label}`);
+	const packages = listTypeCheckPackages();
+	if (packages.length === 0) throw new Error("no workspace package declares a check:types script");
+	const failures: string[] = [];
+	let nextIndex = 0;
+	const worker = async (): Promise<void> => {
+		for (;;) {
+			if (failures.length > 0) return;
+			const index = nextIndex++;
+			if (index >= packages.length) return;
+			const { dir, label } = packages[index];
+			const startedAt = performance.now();
+			const child = Bun.spawn(["bun", "run", "check:types"], {
+				cwd: dir,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				// POSIX: process-group leader so a timeout can kill the tree.
+				detached: process.platform !== "win32",
+			});
+			liveChildren.add(child);
+			let exitCode: number;
+			let stdout: string;
+			let stderr: string;
+			try {
+				[stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout as ReadableStream).text(),
+					new Response(child.stderr as ReadableStream).text(),
+					child.exited,
+				]);
+			} finally {
+				liveChildren.delete(child);
+			}
+			const seconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+			if (exitCode === 0) {
+				console.log(`  ok   ${label} (${seconds}s)`);
+				continue;
+			}
+			if (stdout !== "") process.stdout.write(stdout);
+			if (stderr !== "") process.stderr.write(stderr);
+			console.log(`  FAIL ${label} (${seconds}s, exit code ${exitCode})`);
+			failures.push(`${label} check:types failed with exit code ${exitCode}`);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(phase.pool, packages.length)) }, worker));
+	if (failures.length > 0) throw new Error(failures.join("; "));
 }
 
 /** Hard wall-clock budget for the whole gate (AGENTS.md「验证」): fastcheck is
@@ -55,10 +158,18 @@ export interface FastcheckOptions {
 	rustEnv?: Record<string, string>;
 }
 
-export function buildFastcheckPhases(options: FastcheckOptions): readonly Command[] {
+export function buildFastcheckPhases(options: FastcheckOptions): readonly FastcheckPhase[] {
 	return [
-		{ label: "static/ts (types + lint + format)", argv: ["bun", "run", "check:ts"] },
-		{ label: "static/rs (cargo check)", argv: [options.cargoBinary, "check", "--workspace"], env: options.rustEnv },
+		// Upstream `check:ts` = `check:tools` + the per-package `check:types`
+		// sweep; the gate keeps both halves but pools the sweep.
+		{ kind: "command", label: "static/ts (lint + format)", argv: ["bun", "run", "check:tools"] },
+		{ kind: "type-checks", label: "static/ts (types)", pool: FASTCHECK_TYPE_CHECK_POOL },
+		{
+			kind: "command",
+			label: "static/rs (cargo check)",
+			argv: [options.cargoBinary, "check", "--workspace"],
+			env: options.rustEnv,
+		},
 	];
 }
 
@@ -149,7 +260,7 @@ function killProcessTree(child: { pid: number }): void {
 /** Live phase children, so the budget path can kill whatever is running. */
 const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
 
-async function runCommand(command: Command): Promise<void> {
+async function runCommand(command: FastcheckCommand): Promise<void> {
 	console.log(`\n==> ${command.label}`);
 	console.log(`$ ${command.argv.map(shellQuote).join(" ")}`);
 	const child = Bun.spawn([...command.argv], {
@@ -203,7 +314,10 @@ async function main(): Promise<void> {
 		cargoBinary: await resolveCargoBinary(),
 		rustEnv: { ...windowsRustBuildEnv(), RUSTUP_TOOLCHAIN: pinnedRustChannel() },
 	});
-	for (const command of phases) await runCommand(command);
+	for (const phase of phases) {
+		if (phase.kind === "command") await runCommand(phase);
+		else await runTypeChecksPhase(phase);
+	}
 }
 
 if (import.meta.main) {
