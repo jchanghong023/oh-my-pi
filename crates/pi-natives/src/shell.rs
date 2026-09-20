@@ -681,8 +681,10 @@ mod tests {
 		// the post-cancel reader grace window. The deadline must be generous
 		// enough that `yes` has demonstrably spawned and produced before the
 		// timeout fires — a 50ms budget lost that race on cold CI runners and
-		// tail flushed an empty ring buffer.
-		const TIMEOUT_MS: u32 = 750;
+		// tail flushed an empty ring buffer, and 750ms still lost it under a
+		// saturated `cargo nextest` run on Windows (spawn latency, not the
+		// pipeline: the same test passes in ~1s when run alone).
+		const TIMEOUT_MS: u32 = 3_000;
 		let result = shell
 			.run(
 				CoreShellRunOptions {

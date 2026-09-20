@@ -11,6 +11,14 @@ import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "te
 // `getOrCreateSnapshot` tests below symlink this under a unique name and skip
 // when no bash is present.
 const REAL_BASH = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
+// The fn-env helper is a POSIX sh script handed to bash through `-c`. On
+// Windows `bash` on PATH is often the WSL launcher, which mangles that
+// argument; resolve a real POSIX bash (Git for Windows ships one) and skip when
+// there is none, like the snapshot suites below.
+const FN_ENV_BASH: string | undefined = [
+	REAL_BASH,
+	path.join(Bun.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+].find(candidate => existsSync(candidate));
 // Likewise resolve `echo` (the stand-in for the mise binary the captured
 // function invokes): macOS has no `/usr/bin/echo`, so hard-coding it makes the
 // replay fail with `No such file or directory` even though the export landed.
@@ -113,6 +121,8 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
 
 describe("shell-snapshot fn-env helper", () => {
 	it("emits export lines for env vars referenced by captured functions, skips unset and shell-internal names", async () => {
+		const bash = FN_ENV_BASH;
+		if (!bash) return;
 		const funcs = [
 			`mise () { command "$__MISE_EXE" "$@"; }`,
 			// oxlint-disable-next-line no-template-curly-in-string -- literal shell parameter expansion `${FOO_TEST_DIR}`
@@ -123,7 +133,7 @@ describe("shell-snapshot fn-env helper", () => {
 			``,
 		].join("\n");
 
-		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+		const child = Bun.spawn([bash, "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
 			env: {
 				PATH: process.env.PATH ?? "/usr/bin:/bin",
 				__MISE_EXE: "/opt/echo",
@@ -150,6 +160,8 @@ describe("shell-snapshot fn-env helper", () => {
 	});
 
 	it("never emits export lines for likely-secret env var names", async () => {
+		const bash = FN_ENV_BASH;
+		if (!bash) return;
 		const funcs = [
 			`deploy () { curl -H "Authorization: $GITHUB_TOKEN" .; }`,
 			`call_openai () { curl -H "Authorization: Bearer $OPENAI_API_KEY" .; }`,
@@ -164,7 +176,7 @@ describe("shell-snapshot fn-env helper", () => {
 			``,
 		].join("\n");
 
-		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+		const child = Bun.spawn([bash, "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
 			env: {
 				PATH: process.env.PATH ?? "/usr/bin:/bin",
 				GITHUB_TOKEN: "ghp_REDACTED",
@@ -209,8 +221,10 @@ describe("shell-snapshot fn-env helper", () => {
 	});
 
 	it("single-quote-escapes values containing apostrophes and preserves newlines", async () => {
+		const bash = FN_ENV_BASH;
+		if (!bash) return;
 		const funcs = `shout () { echo "$TRICKY_VAL $NL_VAL"; }\n`;
-		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+		const child = Bun.spawn([bash, "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
 			env: {
 				PATH: process.env.PATH ?? "/usr/bin:/bin",
 				TRICKY_VAL: "it's 'tricky'",
@@ -230,7 +244,7 @@ describe("shell-snapshot fn-env helper", () => {
 
 		// Eval the emitted lines and verify the round-trip values match.
 		const round = Bun.spawn(
-			["bash", "-c", `eval "$1"; printf '%s\\n' "$TRICKY_VAL"; printf '%s\\n' "$NL_VAL"`, "_", out],
+			[bash, "-c", `eval "$1"; printf '%s\\n' "$TRICKY_VAL"; printf '%s\\n' "$NL_VAL"`, "_", out],
 			{ stdout: "pipe", stderr: "ignore" },
 		);
 		const echoed = await readStream(round.stdout as ReadableStream<Uint8Array> | null);
