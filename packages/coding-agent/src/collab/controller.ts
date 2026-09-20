@@ -208,12 +208,6 @@ export class CollabController {
 	async #launch(access: CollabAccess, stopEpoch: number, relay?: string): Promise<CollabHost> {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
-		// One identity per process, so every room this controller starts shares
-		// one link. Read before the room is installed; a stop or shutdown that
-		// lands during the read still wins, hence the repeated checks below.
-		const identity = await (this.#identity ??= loadOrCreateCollabIdentity());
-		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
-		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		// Identity cleanup callbacks can precede awaited hooks and message replacement.
 		// Pin and expose only the session left after commit or rollback.
 		if (this.#ctx.session.isSessionTransitioning) {
@@ -229,6 +223,12 @@ export class CollabController {
 		const webUrl = this.#ctx.settings.get("collab.webUrl") || "";
 		this.#observeSessionChanges();
 		const previous = this.#host;
+		// One identity per process, so every room this controller starts shares
+		// one link. The host resolves it inside `start()`, so the room object is
+		// still installed synchronously (early dialogs are retained); a stop or
+		// shutdown landing during the read stops the room and `start()` rejects
+		// instead of connecting it.
+		const identity = (this.#identity ??= loadOrCreateCollabIdentity());
 		const host = new CollabHost(this.#ctx, {
 			instanceId: this.instanceId,
 			generation: ++this.#generation,

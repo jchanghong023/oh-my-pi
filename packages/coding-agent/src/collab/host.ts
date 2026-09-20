@@ -182,9 +182,11 @@ export interface CollabHostOptions {
 	 * Stable room id and secrets (see `collab/identity.ts`). When present every
 	 * room this process hosts reuses the same link, so guests keep the link
 	 * across session rotation and restarts; without it each room rotates its
-	 * id, key, and write token as before.
+	 * id, key, and write token as before. The controller passes the pending
+	 * read so it can install the room before the file I/O completes; this host
+	 * awaits it inside {@link CollabHost.start}.
 	 */
-	identity?: CollabRoomIdentity;
+	identity?: Promise<CollabRoomIdentity>;
 }
 
 /**
@@ -213,8 +215,8 @@ export class CollabHost {
 	readonly #generation: number;
 	readonly #guestActionsReady: () => boolean;
 	readonly #access: CollabAccess;
-	/** Stable room secrets, when the controller supplied them. */
-	readonly #identity: CollabRoomIdentity | undefined;
+	/** Stable room secrets, when the controller supplied them (pending read). */
+	readonly #identity: Promise<CollabRoomIdentity> | undefined;
 	#relayConnected = false;
 	#registryPublication: CollabHostPublication | null = null;
 	/** Publication still being created; teardown awaits and withdraws it. */
@@ -381,9 +383,24 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
-		const rawKey = this.#identity?.key ?? generateRoomKey();
-		const writeToken = this.#identity?.writeToken ?? generateWriteToken();
-		const roomId = this.#identity?.roomId ?? generateRoomId();
+		const firstOpen = Promise.withResolvers<void>();
+		// stop() may reject this before start() reaches its awaits (the identity
+		// read, the key import); mark the rejection handled so it can only surface
+		// at the awaits.
+		firstOpen.promise.catch(() => {});
+		this.#abortStart = firstOpen.reject;
+		// The controller hands over the identity read (see `collab/identity.ts`) as
+		// a pending promise so the room is installed before the file I/O settles.
+		// Race it against the abort deferred: a stop during the read must reject
+		// the start right away, exactly like a stop during the connect.
+		const aborted = new Promise<never>((_, reject) => {
+			firstOpen.promise.catch(reject);
+		});
+		const identity = this.#identity === undefined ? undefined : await Promise.race([this.#identity, aborted]);
+		if (this.ending) throw new CollabHostStoppedError("collab host stopped during startup");
+		const rawKey = identity?.key ?? generateRoomKey();
+		const writeToken = identity?.writeToken ?? generateWriteToken();
+		const roomId = identity?.roomId ?? generateRoomId();
 		this.#writeToken = writeToken;
 		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
 		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
@@ -391,11 +408,6 @@ export class CollabHost {
 		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
-		const firstOpen = Promise.withResolvers<void>();
-		// stop() may reject this before start() reaches its await (during key
-		// import); mark the rejection handled so it can only surface at the await.
-		firstOpen.promise.catch(() => {});
-		this.#abortStart = firstOpen.reject;
 		const key = await importRoomKey(rawKey);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped before connecting");
 

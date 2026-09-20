@@ -922,7 +922,10 @@ describe("CollabController", () => {
 		await expect(
 			registry.resolveCollabHostLink(controller.instanceId, "control", { dir: tmp }).then(link => link.generation),
 		).resolves.toBe(2);
-		expect(second!.webLink).not.toBe(first.webLink);
+		// Fork contract (docs-zh-CN/fork.md): every room of one process shares the
+		// persisted identity, so the successor reuses the same link — guests
+		// reconnect into the new generation instead of the link rotating with it.
+		expect(second!.webLink).toBe(first.webLink);
 	});
 
 	it("stops a manually started room on session switch when auto-start is off", async () => {
