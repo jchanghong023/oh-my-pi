@@ -99,7 +99,7 @@ describe("whitelist green set", () => {
 		expect(forkGroup?.files).toContain("test/modes/fullsend.test.ts");
 		expect(forkGroup?.files).toContain("test/slash-commands/jch-git.test.ts");
 		const tuiGroup = WHITELIST_TEST_GROUPS.find(group => group.label === "core/tui");
-		expect(tuiGroup?.files).toContain("test/magic-keywords.test.ts");
+		expect(tuiGroup?.files).toContain("test/macos-spelling.test.ts");
 	});
 });
 

@@ -1,19 +1,31 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/fullsend";
-import { containsFullsend, highlightFullsend } from "@oh-my-pi/pi-tui/prompt/fullsend";
-import { containsOrchestrate, highlightOrchestrate } from "@oh-my-pi/pi-tui/prompt/orchestrate";
-import { containsUltrathink, highlightUltrathink } from "@oh-my-pi/pi-tui/prompt/ultrathink";
-import { containsWorkflow, highlightWorkflow } from "@oh-my-pi/pi-tui/prompt/workflow";
+import { MAGIC_KEYWORDS, renderFullsendNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
+import {
+	containsMagicKeyword,
+	highlightMagicKeywords,
+	setMagicKeywords,
+} from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+
+const FULLSEND_ROWS = MAGIC_KEYWORDS.filter(keyword => keyword.word === "fullsend");
 
 beforeAll(() => {
 	initTheme();
+	// The host registers the whole table at startup (interactive-mode /
+	// startup-composer), so the fork row must be part of it.
+	setMagicKeywords(MAGIC_KEYWORDS);
+});
+
+describe("fullsend keyword registration", () => {
+	it("registers exactly one fullsend row", () => {
+		expect(FULLSEND_ROWS.map(row => row.id)).toEqual(["fullsend"]);
+	});
 });
 
 describe("fullsend keyword detection", () => {
 	it("matches standalone lowercase prose", () => {
 		for (const text of ["fullsend", "please fullsend this", "fullsend the rollout", 'say "fullsend" now']) {
-			expect(containsFullsend(text)).toBe(true);
+			expect(containsMagicKeyword(text, "fullsend")).toBe(true);
 		}
 	});
 
@@ -28,22 +40,22 @@ describe("fullsend keyword detection", () => {
 			"object.fullsend",
 			"fullsend()",
 		]) {
-			expect(containsFullsend(text)).toBe(false);
+			expect(containsMagicKeyword(text, "fullsend")).toBe(false);
 		}
 	});
 
 	it("ignores code and XML regions", () => {
-		expect(containsFullsend("use `fullsend` here")).toBe(false);
-		expect(containsFullsend("```\nfullsend\n```")).toBe(false);
-		expect(containsFullsend("<note>fullsend</note>")).toBe(false);
-		expect(containsFullsend("run `setup` then fullsend the task")).toBe(true);
+		expect(containsMagicKeyword("use `fullsend` here", "fullsend")).toBe(false);
+		expect(containsMagicKeyword("```\nfullsend\n```", "fullsend")).toBe(false);
+		expect(containsMagicKeyword("<note>fullsend</note>", "fullsend")).toBe(false);
+		expect(containsMagicKeyword("run `setup` then fullsend the task", "fullsend")).toBe(true);
 	});
 });
 
 describe("fullsend keyword highlighting", () => {
 	it("decorates standalone prose while preserving visible text", () => {
 		for (const input of ["please fullsend this", 'please "fullsend," then continue']) {
-			const decorated = highlightFullsend(input);
+			const decorated = highlightMagicKeywords(input);
 			expect(decorated).not.toBe(input);
 			expect(decorated).toContain("\x1b");
 			expect(Bun.stripANSI(decorated)).toBe(input);
@@ -52,19 +64,18 @@ describe("fullsend keyword highlighting", () => {
 
 	it("leaves excluded forms untouched", () => {
 		for (const input of ["nothing here", "Fullsend this", "fullsending", "fullsend.ts", "fullsend()"])
-			expect(highlightFullsend(input)).toBe(input);
+			expect(highlightMagicKeywords(input)).toBe(input);
 	});
 
 	it("does not cross-trigger with other magic keywords", () => {
-		for (const [contains, highlight] of [
-			[containsUltrathink, highlightUltrathink],
-			[containsOrchestrate, highlightOrchestrate],
-			[containsWorkflow, highlightWorkflow],
-		] as const) {
-			expect(contains("fullsend")).toBe(false);
-			expect(highlight("fullsend")).toBe("fullsend");
+		const otherWords = MAGIC_KEYWORDS.filter(keyword => keyword.word !== "fullsend").map(keyword => keyword.word);
+		for (const word of otherWords) expect(containsMagicKeyword("fullsend", word)).toBe(false);
+		setMagicKeywords([{ word: "fullsend", hue: [300, 360] }]);
+		try {
+			expect(highlightMagicKeywords(otherWords.join(" "))).toBe(otherWords.join(" "));
+		} finally {
+			setMagicKeywords(MAGIC_KEYWORDS);
 		}
-		expect(containsFullsend("ultrathink orchestrate workflowz")).toBe(false);
 	});
 });
 

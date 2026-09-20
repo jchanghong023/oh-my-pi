@@ -28,14 +28,15 @@ const payload = ["*** SM:EDIT src/a.ts", "*** SM:FIND", "const x = 1;", "*** SM:
 
 describe("recoverInlineSloppyEdit", () => {
 	test("lifts a stray payload out of prose into a synthetic edit tool call", () => {
-		// The sloppy payload has no closing delimiter: its body runs to the next
-		// recognized header or EOF, so the payload sits at the end of the prose
-		// to keep the surrounding sentences out of the extracted region.
-		const message = assistant([{ type: "text", text: `Fixing the constant.\n\nDone.\n\n${payload}` }], "stop");
+		// Header bodies run to EOF, so trailing prose needs the explicit `*** End Patch` boundary.
+		const message = assistant(
+			[{ type: "text", text: `Fixing the constant.\n\n${payload}\n*** End Patch\n\nDone.` }],
+			"stop",
+		);
 
 		expect(recoverInlineSloppyEdit(message)).toBe(1);
 		const text = message.content.find(block => block.type === "text");
-		expect(text?.type === "text" && text.text).toBe("Fixing the constant.\n\nDone.\n\n");
+		expect(text?.type === "text" && text.text).toBe("Fixing the constant.\n\n*** End Patch\n\nDone.");
 		const call = message.content.find(block => block.type === "toolCall");
 		expect(call?.type === "toolCall" && call.name).toBe("edit");
 		expect(call?.type === "toolCall" && call.arguments).toEqual({ input: payload });

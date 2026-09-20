@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import MODELS_JSON from "@oh-my-pi/pi-catalog/models.json" with { type: "json" };
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { buildAnthropicClientOptions, buildAnthropicHeaders } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
 	getZcodeApiModels,

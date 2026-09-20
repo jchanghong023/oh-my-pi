@@ -762,7 +762,7 @@ describe("OpenAI reasoning effort fallback retry", () => {
 		expect(attempts).toBe(1);
 	});
 
-	it("strips a rejected chat_template_kwargs.reasoning_effort, hoists the effort top-level, and remembers it", async () => {
+	it("strips a rejected chat_template_kwargs.reasoning_effort, keeps the top-level twin, and remembers it", async () => {
 		const bodies: Record<string, unknown>[] = [];
 		const fetchMock: FetchImpl = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -784,17 +784,12 @@ describe("OpenAI reasoning effort fallback retry", () => {
 
 		expect(first.stopReason).toBe("stop");
 		expect(bodies).toHaveLength(2);
-		// Local llama.cpp rides the kwargs-only `qwen-chat-template` dialect —
-		// nothing top-level on the first try; the rejected kwarg vanishes on
-		// retry while the hoisted top-level field keeps the user's effort.
-		expect(bodies[0]!.reasoning_effort).toBeUndefined();
-		expect(bodies[0]!.chat_template_kwargs).toEqual({
-			preserve_thinking: true,
-			enable_thinking: true,
-			reasoning_effort: "medium",
-		});
+		// The qwen dialect twin-emits; the rejected kwarg must vanish while the
+		// top-level field keeps the user's effort selection alive.
+		expect(bodies[0]!.reasoning_effort).toBe("medium");
+		expect(bodies[0]!.chat_template_kwargs).toEqual({ preserve_thinking: true, reasoning_effort: "medium" });
 		expect(bodies[1]!.reasoning_effort).toBe("medium");
-		expect(bodies[1]!.chat_template_kwargs).toEqual({ preserve_thinking: true, enable_thinking: true });
+		expect(bodies[1]!.chat_template_kwargs).toEqual({ preserve_thinking: true });
 
 		// Remembered per session: the next request pre-strips without a 400.
 		const second = await streamOpenAICompletions(model, testContext, {
@@ -806,7 +801,7 @@ describe("OpenAI reasoning effort fallback retry", () => {
 		expect(second.stopReason).toBe("stop");
 		expect(bodies).toHaveLength(3);
 		expect(bodies[2]!.reasoning_effort).toBe("medium");
-		expect(bodies[2]!.chat_template_kwargs).toEqual({ preserve_thinking: true, enable_thinking: true });
+		expect(bodies[2]!.chat_template_kwargs).toEqual({ preserve_thinking: true });
 	});
 
 	it("hoists the effort onto the top-level field when the kwargs-only dialect is rejected", async () => {
@@ -860,15 +855,9 @@ describe("OpenAI reasoning effort fallback retry", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(bodies).toHaveLength(2);
-		// The allowed-levels list proves the server supports the kwarg itself,
-		// so the retry remaps the value in place instead of hoisting.
-		expect(bodies[0]!.reasoning_effort).toBeUndefined();
-		expect(bodies[1]!.reasoning_effort).toBeUndefined();
-		// The kwargs must not keep the stale rejected value.
-		expect(bodies[1]!.chat_template_kwargs).toEqual({
-			preserve_thinking: true,
-			enable_thinking: true,
-			reasoning_effort: "high",
-		});
+		expect(bodies[0]!.reasoning_effort).toBe("xhigh");
+		expect(bodies[1]!.reasoning_effort).toBe("high");
+		// The kwargs twin must not keep the stale rejected value.
+		expect(bodies[1]!.chat_template_kwargs).toEqual({ preserve_thinking: true, reasoning_effort: "high" });
 	});
 });
