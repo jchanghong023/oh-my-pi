@@ -81,6 +81,8 @@ function makeHostContext(cwd: string): HostHarness {
 			subscribe: () => () => {},
 			emitNotice: () => {},
 			// Palette sources: no extension runner, no custom commands, no skills.
+			// `buildAvailableSlashCommands` reads the session's own `sessionManager`.
+			sessionManager: { getCwd: () => cwd },
 			customCommands: [],
 			skills: [],
 			setSlashCommands: () => {},
