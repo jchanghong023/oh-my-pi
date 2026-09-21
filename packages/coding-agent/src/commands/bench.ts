@@ -42,11 +42,15 @@ export default class Bench extends Command {
 		"cache-concurrency": Flags.integer({
 			description: "Concurrent cache pairs for --cache; each pair remains sequential (default: 1)",
 		}),
+		offline: Flags.boolean({
+			description: "Company environment: enable the internal lane (hides zcode-api); no public-network discovery",
+		}),
 	};
 
 	static examples = [
 		"# Compare two models across mixed challenges (chat, prefill, generation)\n  omp bench anthropic/claude-opus-4-5 openai/gpt-5.2",
 		"# Fuzzy selectors work\n  omp bench opus sonnet",
+		"# Benchmark the company internal models over the intranet\n  omp bench GLM-5.2-public DeepSeek-V4-Flash-public --offline",
 		"# Average over 3 runs each\n  omp bench opus gpt-5.2 --runs 3",
 		"# Isolate prompt-ingestion speed with a 64 KiB cache-busted input\n  omp bench opus sonnet --profile prefill --prefill-bytes 65536",
 		"# Isolate sustained decode throughput\n  omp bench opus sonnet --profile generation",
@@ -72,6 +76,7 @@ export default class Bench extends Command {
 				cachePrefixBytes: flags["cache-prefix-bytes"],
 				cachePairs: flags["cache-pairs"],
 				cacheConcurrency: flags["cache-concurrency"],
+				offline: flags.offline,
 			},
 		});
 	}

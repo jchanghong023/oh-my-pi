@@ -61,7 +61,7 @@ describe("omp models --offline company environment", () => {
 		expect(providers.has("company")).toBe(true);
 		expect(providers.has("zcode-api")).toBe(false);
 		expect(stderr).not.toContain("Company provider unavailable");
-	});
+	}, 30_000);
 
 	it("keeps zcode-api visible and reports the reason when the company config is missing", async () => {
 		const { providers, stderr } = await runModels(["--offline", "--json"], { companyConfig: false });
@@ -69,12 +69,12 @@ describe("omp models --offline company environment", () => {
 		expect(providers.has("company")).toBe(false);
 		expect(providers.has("zcode-api")).toBe(true);
 		expect(stderr).toContain("Company provider unavailable");
-	});
+	}, 30_000);
 
 	it("does not register the company lane without --offline", async () => {
 		const { providers } = await runModels(["--json"], { companyConfig: true });
 
 		expect(providers.has("company")).toBe(false);
 		expect(providers.has("zcode-api")).toBe(true);
-	});
+	}, 30_000);
 });

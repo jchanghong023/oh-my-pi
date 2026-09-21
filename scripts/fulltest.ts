@@ -223,6 +223,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		cwd: "packages/coding-agent",
 		files: [
 			"test/agent-session-magic-keywords.test.ts",
+			"test/bench-offline-company.test.ts",
 			"test/docs-cli.test.ts",
 			"test/docs-hub.test.ts",
 			"test/docs-index.test.ts",

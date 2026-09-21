@@ -115,6 +115,8 @@ export interface BenchCommandArgs {
 		cachePrefixBytes?: number;
 		cachePairs?: number;
 		cacheConcurrency?: number;
+		/** Company environment: enable the internal lane (hides zcode-api); no public discovery. */
+		offline?: boolean;
 	};
 }
 
@@ -249,7 +251,7 @@ export interface BenchSummary {
 }
 
 export interface BenchDependencies {
-	createRuntime?: () => Promise<BenchRuntime>;
+	createRuntime?: (options: { offline?: boolean }) => Promise<BenchRuntime>;
 	randomSessionId?: () => string;
 	writeStdout?: (text: string) => void;
 	writeStderr?: (text: string) => void;
@@ -937,7 +939,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 		else writeStdout(`${text}\n`);
 	};
 
-	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)();
+	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)({ offline: command.flags.offline === true });
 	try {
 		const targets = await resolveBenchTargets(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
 		if (cacheMode) assertCacheModeSupported(targets);

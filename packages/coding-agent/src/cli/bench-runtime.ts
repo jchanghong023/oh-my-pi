@@ -20,6 +20,7 @@ import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
+import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import { Settings } from "../config/settings";
@@ -65,7 +66,15 @@ export interface BenchTarget {
 }
 
 /** Open the auth vault, settings, and model registry for a benchmark run. */
-export async function createDefaultBenchRuntime(): Promise<BenchRuntime> {
+export async function createDefaultBenchRuntime(options: { offline?: boolean } = {}): Promise<BenchRuntime> {
+	const offline = options.offline === true;
+	if (offline) {
+		// Company environment: flip the lane before the registry captures company
+		// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
+		setCompanyOfflineEnabled(true);
+		const companyError = getCompanyConfigError();
+		if (companyError) process.stderr.write(`${companyError}\n`);
+	}
 	const authStorage = await discoverAuthStorage();
 	try {
 		const cwd = getProjectDir();
@@ -74,7 +83,7 @@ export async function createDefaultBenchRuntime(): Promise<BenchRuntime> {
 		await modelRegistry.hydrateCredentialScopedModelCaches();
 		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 		return {
-			modelRegistry,
+			modelRegistry: offline ? offlineBenchRegistry(modelRegistry) : modelRegistry,
 			settings,
 			close: () => authStorage.close(),
 		};
@@ -82,6 +91,22 @@ export async function createDefaultBenchRuntime(): Promise<BenchRuntime> {
 		authStorage.close();
 		throw error;
 	}
+}
+
+/**
+ * Offline runs must never reach public discovery: keep every registry method,
+ * but pin the resolver's fallback refresh to the cache-only strategy.
+ */
+function offlineBenchRegistry(registry: ModelRegistry): BenchModelRegistry {
+	return {
+		getAll: () => registry.getAll(),
+		getAvailable: () => registry.getAvailable(),
+		getApiKey: (model, sessionId) => registry.getApiKey(model, sessionId),
+		resolver: (model, sessionId) => registry.resolver(model, sessionId),
+		hasConfiguredAuth: model => registry.hasConfiguredAuth(model),
+		getDiscoverableProviders: () => registry.getDiscoverableProviders(),
+		refresh: () => registry.refresh("offline"),
+	};
 }
 
 /** Highest-priority provider variant: native/OAuth transports outrank mirrors. */
