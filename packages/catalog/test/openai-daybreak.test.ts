@@ -8,9 +8,9 @@ import type { Api, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { applyGeneratedModelPolicies } from "../scripts/generated-policies";
 
 const DAYBREAK_EFFORTS = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
-// Seed rows for runner APIs (embeddings, transcriptions) share the provider;
-// the Daybreak surface is its chat roster.
-const DAYBREAK_MODELS = seedModels<"openai-responses">("openai").filter(model => model.api === "openai-responses");
+// The openai seed also carries transcription and embedding runners; only the
+// Responses rows are Daybreak/GPT-5.6 chat models.
+const DAYBREAK_MODELS = seedModels("openai").filter(model => model.api === "openai-responses");
 
 describe("OpenAI Daybreak and GPT-5.6 models", () => {
 	test("curates the documented aliases and Cyber snapshot with standard API pricing", () => {

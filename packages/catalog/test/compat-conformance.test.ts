@@ -27,6 +27,10 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// Built-in ZCode Proxy relay: rows are built at runtime in
 	// packages/coding-agent/src/config/zcode-api-models.ts.
 	"zcode-api",
+	// SingularityAPI reserved-lane roster via singularityApiModelManagerOptions:
+	// the `deepseek-ai/*` lane ids are credential-scoped (one key sees only
+	// its reserved lanes), so no rows are frozen into models.json.
+	"singularityapi",
 	// User-configured LiteLLM proxy (models.yml provider or litellm auth flow;
 	// PROXY_OPENAI_COMPAT_PROVIDERS) that forwards upstream chat templates.
 	"litellm",
