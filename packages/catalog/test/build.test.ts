@@ -986,7 +986,7 @@ describe("OpenRouter model discovery", () => {
 		const staticModel = openrouterSpec({ compat: { openRouterRouting: routing } });
 		const options = openrouterModelManagerOptions({
 			fetch: async url =>
-				String(url).endsWith("/images/models")
+				/\/(images|videos|embeddings)\/models$/.test(String(url))
 					? Response.json({ data: [] })
 					: new Response(
 							JSON.stringify({
@@ -1037,7 +1037,7 @@ describe("OpenRouter model discovery", () => {
 	it("maps OpenRouter's advertised reasoning effort ladder, default, and mandatory state", async () => {
 		const options = openrouterModelManagerOptions({
 			fetch: async url =>
-				String(url).endsWith("/images/models")
+				/\/(images|videos|embeddings)\/models$/.test(String(url))
 					? Response.json({ data: [] })
 					: Response.json({
 							data: [
