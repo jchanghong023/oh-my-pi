@@ -42,10 +42,14 @@ export default class Models extends Command {
 			description: "Load an extra config.yml-style overlay for this run (repeatable)",
 			multiple: true,
 		}),
+		offline: Flags.boolean({
+			description: "Company environment: enable the internal lane, refresh from cache only, hide zcode-api",
+		}),
 	};
 
 	static examples = [
 		`# List available chat models, grouped by provider\n  ${APP_NAME} models`,
+		`# List the company internal models (enables the --offline company lane)\n  ${APP_NAME} models --offline`,
 		`# List models of every catalog kind\n  ${APP_NAME} models --kind all`,
 		`# List one provider's models (any provider name works)\n  ${APP_NAME} models openai-codex`,
 		`# Find models by substring\n  ${APP_NAME} models find minimax`,
@@ -66,6 +70,7 @@ export default class Models extends Command {
 				extensions: flags.extension,
 				noExtensions: flags["no-extensions"],
 				config: flags.config,
+				offline: flags.offline,
 			},
 		});
 	}

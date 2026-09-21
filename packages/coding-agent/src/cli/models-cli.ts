@@ -18,6 +18,7 @@ import { modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ConfigError } from "../config/config-file";
+import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAndLoadExtensions, ExtensionRunner, emitSessionShutdownEvent } from "../extensibility/extensions";
@@ -41,6 +42,8 @@ export interface ModelsCommandArgs {
 		noExtensions?: boolean;
 		/** Extra `config.yml` overlays to apply for this invocation. */
 		config?: string[];
+		/** Company environment: enable the internal lane, cache-only refresh, hide zcode-api. */
+		offline?: boolean;
 	};
 }
 
@@ -305,6 +308,8 @@ export interface RunModelsListingOptions {
 	disabledExtensionIds?: string[];
 	/** When true, exclude ambient factories and resolve only `additionalExtensionPaths`. */
 	disableExtensionDiscovery?: boolean;
+	/** Company environment: runtime provider discovery must stay cache-only. */
+	offline?: boolean;
 }
 
 export async function runModelsListing(options: RunModelsListingOptions): Promise<void> {
@@ -319,6 +324,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		settingsExtensions = [],
 		disabledExtensionIds = [],
 		disableExtensionDiscovery = false,
+		offline = false,
 	} = options;
 
 	const eventBus = new EventBus();
@@ -359,7 +365,9 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		}
 		extensionsResult.runtime.pendingProviderRegistrations = [];
 		// Discover runtime (extension) provider catalogs now that they are registered.
-		await modelRegistry.refreshRuntimeProviders(action === "refresh" ? "online" : "online-if-uncached");
+		await modelRegistry.refreshRuntimeProviders(
+			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",
+		);
 
 		renderProviderModels(modelRegistry, action, pattern, json, kind);
 	} finally {
@@ -384,6 +392,14 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 	}
 
 	const cwd = getProjectDir();
+	const offline = command.flags.offline === true;
+	if (offline) {
+		// Company environment: flip the lane before the registry captures company
+		// state, and surface a broken config instead of silently listing nothing.
+		setCompanyOfflineEnabled(true);
+		const companyError = getCompanyConfigError();
+		if (companyError) process.stderr.write(`${companyError}\n`);
+	}
 	const authStorage = await discoverAuthStorage();
 	try {
 		const settings = await Settings.init({ cwd, configFiles: command.flags.config });
@@ -393,7 +409,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 			process.stderr.write("Refreshing models from all providers…\n");
 		}
 		await modelRegistry.refresh(
-			action === "refresh" ? "online" : "online-if-uncached",
+			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",
 			action === "refresh" ? { refreshCommandCredentials: true } : undefined,
 		);
 
@@ -405,6 +421,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 			pattern,
 			json,
 			kind,
+			offline,
 			additionalExtensionPaths: cliExtensionPaths,
 			settingsExtensions: settings.get("extensions") ?? [],
 			disabledExtensionIds: settings.get("disabledExtensions") ?? [],

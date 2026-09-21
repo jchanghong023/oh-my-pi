@@ -228,6 +228,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/docs-index.test.ts",
 			"test/main-rebuild-scoped-models.test.ts",
 			"test/model-hub.test.ts",
+			"test/models-offline-company.test.ts",
 			"test/modes/components/docs-hub.test.ts",
 			"test/modes/fullsend.test.ts",
 			"test/modes/magic-keywords.test.ts",

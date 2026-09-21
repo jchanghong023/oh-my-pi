@@ -50,7 +50,13 @@ import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
-import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError, isCompanyLaneActive } from "./company-provider";
+import {
+	COMPANY_PROVIDER_ID,
+	getCompanyConfig,
+	getCompanyConfigError,
+	isCompanyEnvironment,
+	isCompanyLaneActive,
+} from "./company-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -915,7 +921,9 @@ export class ModelRegistry {
 	#knownStaticProviders(): string[] {
 		const providers = new Set<string>(getBundledProviders());
 		if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
-		providers.add(ZCODE_API_PROVIDER_ID);
+		// The local ZCode proxy lane disappears in the company environment: the
+		// internal company lane is the only chat catalog there (fork contract).
+		if (!isCompanyEnvironment()) providers.add(ZCODE_API_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);
@@ -1028,14 +1036,17 @@ export class ModelRegistry {
 	/**
 	 * Runtime-synthesized provider rows (company, zcode-api) must never carry
 	 * user `models:` overlays or provider model overrides: strip any rows the
-	 * composition passes touched and re-push the pristine memoized rows.
+	 * composition passes touched and re-push the pristine memoized rows. In the
+	 * company environment the zcode-api rows stay stripped (fork contract).
 	 */
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		const stripped = models.filter(
 			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
 		);
 		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) stripped.push(...getCompanyChatModels());
-		if (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID)) stripped.push(...getZcodeApiModels());
+		if (!isCompanyEnvironment() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
+			stripped.push(...getZcodeApiModels());
+		}
 		return stripped;
 	}
 

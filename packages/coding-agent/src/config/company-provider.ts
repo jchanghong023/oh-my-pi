@@ -132,6 +132,15 @@ export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
 	return companyLaneActive() ? ensureStartupSnapshot().config : undefined;
 }
 
+/**
+ * The company environment: the lane is enabled (`--offline`) and the Claude
+ * settings snapshot yielded a usable config. The local zcode-api lane is hidden
+ * there — the internal company lane is the only chat catalog in that setting.
+ */
+export function isCompanyEnvironment(): boolean {
+	return getCompanyConfig() !== undefined;
+}
+
 export function getCompanyConfigError(): string | undefined {
 	return companyLaneActive() ? ensureStartupSnapshot().error : undefined;
 }
