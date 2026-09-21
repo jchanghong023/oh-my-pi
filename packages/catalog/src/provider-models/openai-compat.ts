@@ -7442,7 +7442,9 @@ function toSingularityApiRate(value: unknown): number {
 	return parsed !== undefined && parsed >= 0 ? parsed : 0;
 }
 
-function resolveSingularityApiCost(capability: SingularityApiCapability | undefined): ModelSpec<"openai-completions">["cost"] {
+function resolveSingularityApiCost(
+	capability: SingularityApiCapability | undefined,
+): ModelSpec<"openai-completions">["cost"] {
 	const pricing = capability !== undefined && isRecord(capability.pricing) ? capability.pricing : undefined;
 	if (!pricing) return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	return {

@@ -187,7 +187,9 @@ describe("SingularityAPI provider support", () => {
 		const previousFetch = globalThis.fetch;
 		globalThis.fetch = unauthorizedFetch as typeof globalThis.fetch;
 		try {
-			await expect(login?.({ onPrompt: async () => "sapi-bogus" }) ?? Promise.reject(new Error("missing login"))).rejects.toThrow();
+			await expect(
+				login?.({ onPrompt: async () => "sapi-bogus" }) ?? Promise.reject(new Error("missing login")),
+			).rejects.toThrow();
 		} finally {
 			globalThis.fetch = previousFetch;
 		}
