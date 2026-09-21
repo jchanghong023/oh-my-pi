@@ -347,7 +347,7 @@ modelRoles:
 
 ### 让路由好用的四个开关
 
-- **自定义 provider** — 任何使用 `openai-completions`、`openai-responses`、`openai-codex-responses`、`azure-openai-responses`、`anthropic-messages`、`bedrock-converse-stream`、`google-generative-ai`、`google-gemini-cli` 或 `google-vertex` 协议的端点，都能在 `~/.omp/agent/models.yml` 中声明。
+- **自定义 provider** — 任何使用 `openai-completions`、`openai-responses`、`openai-codex-responses`、`azure-openai-responses`、`anthropic-messages`、`bedrock-converse-stream`、`google-generative-ai`、`google-gemini-cli`、`google-vertex`、`typesafe` 或 `openrouter-decisions`（后两个是 judge API）协议的端点，都能在 `~/.omp/agent/models.yml` 中声明。
 - **回退链** — 在 `retry.fallbackChains` 下按角色或按模型配置链。主 provider 抛出 429 或撞上配额墙时，链中下一项接管本轮剩余部分——冷却结束后恢复。
 - **按路径限定模型** — 给 `enabledModels` 和 `disabledProviders` 的条目加上 `path:` 前缀，就能只对某个仓库固定另一套模型，而不必改动全局配置。限定条目覆盖该路径及其下所有内容。
 - **轮换凭据** — 为同一个 provider 堆叠多个 API key，运行时按会话亲和性轮换，并对单个凭据退避。当一个 key 撑不到中午就会烧光配额时尤其有用。

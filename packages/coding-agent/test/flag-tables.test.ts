@@ -86,7 +86,7 @@ describe("--session-dir", () => {
 });
 
 describe("--tools validation", () => {
-	it("maps the legacy search alias and keeps the real find tool", () => {
+	it("maps legacy search to grep and keeps find canonical", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
 		expect(result.tools).toEqual(["grep", "find"]);

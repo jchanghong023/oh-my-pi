@@ -6,6 +6,8 @@
 
 - Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
 
+## [18.2.7] - 2026-09-21
+
 ### Breaking Changes
 
 - Removed specialized keyword modules in favor of a centralized registration system

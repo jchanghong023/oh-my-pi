@@ -291,9 +291,6 @@ mod tests {
 	/// `MERMAID_DUMP=1`.
 	#[test]
 	fn matches_golden_fixtures() {
-		// Embedded at compile time (like the utok fixtures): a runtime read via
-		// `CARGO_MANIFEST_DIR` works under cargo but not in the Bazel test
-		// sandbox, where only declared inputs exist.
 		let fixtures: Vec<Fixture> =
 			serde_json::from_str(include_str!("../../fixtures/mermaid.json")).unwrap();
 		let filter = std::env::var("MERMAID_FIXTURE").ok();

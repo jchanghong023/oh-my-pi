@@ -11,6 +11,7 @@ Drop the word `ultrathink` in your message for harder multi-step reasoning — w
 Say `orchestrate` in your message to drive a multi-phase task with parallel subagents — watch it glow as you type
 Say `workflowz` in your message to drive the task with parallel subagents in eval — watch it glow as you type
 Say `fullsend` with a task to prioritize the fastest complete, verified result without cost or token constraints
+Bulk data to classify or triage? Say `jevify` in your message — the eval kernel's `judge()` processes the batch and you read only what it flags — watch it glow as you type
 Log in to several accounts of the same provider — `/login` again — and omp load-balances across them automatically
 Run `omp auth-broker serve` once and every machine pulls live tokens over the wire — refresh keys never leave the host; `omp auth-gateway` fronts it as a drop-in proxy any OpenAI-compatible client can hit
 Press ctrl+t (or /switch) to switch provider, and ctrl+p to cycle role models smol -> slow -> etc

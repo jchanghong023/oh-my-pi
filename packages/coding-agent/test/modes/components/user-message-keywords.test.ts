@@ -3,31 +3,29 @@ import * as path from "node:path";
 import * as url from "node:url";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { MAGIC_KEYWORDS } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { chipLabel, modelChipStyle, modelMentionChipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import { imageReferenceHyperlink } from "@oh-my-pi/pi-tui/prompt/image-references";
+import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { getEditorTheme, initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { MAGIC_KEYWORDS } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { Container } from "@oh-my-pi/pi-tui";
-import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	Settings.instance.set("tui.hyperlinks", "always");
 	await initTheme(false);
-	// The host registers the keyword table at startup; bubbles paint only
-	// registered words, so the registry must be populated here too.
+	// The host registers keywords at startup; without this nothing glows.
 	setMagicKeywords(MAGIC_KEYWORDS);
 });
 
 afterAll(() => {
-	resetSettingsForTest();
-	// The registry is process-global; leave it empty for the next file in the run.
 	setMagicKeywords([]);
+	resetSettingsForTest();
 });
 
 function render(text: string): string {

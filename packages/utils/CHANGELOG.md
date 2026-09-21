@@ -7,6 +7,8 @@
 - Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
 - Fixed watchdog log paths using a UTC date while the rotating sink writes local-date filenames.
 
+## [18.2.7] - 2026-09-21
+
 ### Changed
 
 - Mermaid diagrams are now rendered with the native renderer, with output remaining unchanged.
