@@ -9,18 +9,25 @@ import { chipLabel, modelChipStyle, modelMentionChipLabel } from "@oh-my-pi/pi-t
 import { imageReferenceHyperlink } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { getEditorTheme, initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { MAGIC_KEYWORDS } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { Container } from "@oh-my-pi/pi-tui";
+import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	Settings.instance.set("tui.hyperlinks", "always");
 	await initTheme(false);
+	// The host registers the keyword table at startup; bubbles paint only
+	// registered words, so the registry must be populated here too.
+	setMagicKeywords(MAGIC_KEYWORDS);
 });
 
 afterAll(() => {
 	resetSettingsForTest();
+	// The registry is process-global; leave it empty for the next file in the run.
+	setMagicKeywords([]);
 });
 
 function render(text: string): string {

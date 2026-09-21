@@ -86,10 +86,10 @@ describe("--session-dir", () => {
 });
 
 describe("--tools validation", () => {
-	it("maps search and find to grep and glob", () => {
+	it("maps the legacy search alias and keeps the real find tool", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
-		expect(result.tools).toEqual(["grep", "glob"]);
+		expect(result.tools).toEqual(["grep", "find"]);
 	});
 
 	it("defers unknown-name validation until all session tools are discovered", () => {
