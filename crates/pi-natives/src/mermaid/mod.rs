@@ -291,9 +291,11 @@ mod tests {
 	/// `MERMAID_DUMP=1`.
 	#[test]
 	fn matches_golden_fixtures() {
-		let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/mermaid.json");
+		// Embedded at compile time (like the utok fixtures): a runtime read via
+		// `CARGO_MANIFEST_DIR` works under cargo but not in the Bazel test
+		// sandbox, where only declared inputs exist.
 		let fixtures: Vec<Fixture> =
-			serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+			serde_json::from_str(include_str!("../../fixtures/mermaid.json")).unwrap();
 		let filter = std::env::var("MERMAID_FIXTURE").ok();
 		let dump = std::env::var_os("MERMAID_DUMP").is_some();
 		let mut failures = String::new();
