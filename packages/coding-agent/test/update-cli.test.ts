@@ -1320,24 +1320,29 @@ describe("update-cli PATH conflict warning", () => {
 		expect(logs).toEqual([]);
 	});
 
-	it("treats a symlink alias resolving to the target as no conflict", async () => {
-		const dir = await makeTempDir();
-		const targetPath = path.join(dir, "bin", "omp");
-		const aliasPath = path.join(dir, "alias", "omp");
-		await fs.mkdir(path.dirname(targetPath), { recursive: true });
-		await fs.mkdir(path.dirname(aliasPath), { recursive: true });
-		await Bun.write(targetPath, "binary");
-		await fs.symlink(targetPath, aliasPath);
+	// File symlinks need developer-mode/privilege on Windows; the sibling
+	// platform adaptations gate deterministically instead of failing on EPERM.
+	it.skipIf(process.platform === "win32")(
+		"treats a symlink alias resolving to the target as no conflict",
+		async () => {
+			const dir = await makeTempDir();
+			const targetPath = path.join(dir, "bin", "omp");
+			const aliasPath = path.join(dir, "alias", "omp");
+			await fs.mkdir(path.dirname(targetPath), { recursive: true });
+			await fs.mkdir(path.dirname(aliasPath), { recursive: true });
+			await Bun.write(targetPath, "binary");
+			await fs.symlink(targetPath, aliasPath);
 
-		const logs: string[] = [];
-		vi.spyOn(console, "log").mockImplementation(message => {
-			logs.push(String(message));
-		});
+			const logs: string[] = [];
+			vi.spyOn(console, "log").mockImplementation(message => {
+				logs.push(String(message));
+			});
 
-		warnOnPathConflict(targetPath, aliasPath);
+			warnOnPathConflict(targetPath, aliasPath);
 
-		expect(logs).toEqual([]);
-	});
+			expect(logs).toEqual([]);
+		},
+	);
 
 	it("is silent when no omp is found on PATH", () => {
 		const logs: string[] = [];

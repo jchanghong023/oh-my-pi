@@ -851,7 +851,7 @@ export async function loadCliExtensionProviders(
 	modelRegistry: ModelRegistry,
 	settings: Settings,
 	cwd: string,
-	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths"> = {},
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths" | "offline"> = {},
 ): Promise<void> {
 	const eventBus = new EventBus();
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
@@ -864,7 +864,9 @@ export async function loadCliExtensionProviders(
 		modelRegistry.registerProvider(name, config, sourceId);
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
-	await modelRegistry.refreshRuntimeProviders();
+	// `offline` CLI runs (omp bench) must stay cache-only here too, matching the
+	// `omp models` path: no automatic online discovery, regardless of TTL.
+	await modelRegistry.refreshRuntimeProviders(options.offline === true ? "offline" : undefined);
 }
 
 /**
@@ -1408,7 +1410,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	});
 	await logger.time("hydrateCredentialScopedModelCaches", () => modelRegistry.hydrateCredentialScopedModelCaches());
-	if (!options.modelRegistry) {
+	if (!options.modelRegistry && !options.offline) {
 		modelRegistry.refreshInBackground();
 	}
 	// Kick off workspace tree discovery early. The native workspace scan returns
@@ -2332,7 +2334,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 			return runtimeDiscoveryPromise;
 		};
-		if (!options.hasUI || deferredModelPatterns.length > 0) {
+		if (!options.offline && (!options.hasUI || deferredModelPatterns.length > 0)) {
 			void startRuntimeDiscovery();
 		}
 

@@ -14,6 +14,7 @@ import {
 	type Skill,
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 const fixturesDir = path.resolve(import.meta.dirname, "fixtures/skills");
 const collisionFixturesDir = path.resolve(import.meta.dirname, "fixtures/skills-collision");
@@ -251,6 +252,50 @@ describe("skills", () => {
 				expect(skills.some(s => s.name === "user-agents-skill" && s.source === "agents:user")).toBe(true);
 			} finally {
 				homedirSpy.mockRestore();
+				await removeWithRetries(tempHome);
+				await removeWithRetries(tempCwd);
+			}
+		});
+
+		// Fork contract (docs-zh-CN/fork.md「Codex 用户技能」): ~/.codex/skills
+		// participates in discovery by default, and on a name collision the
+		// upstream default sources still win — .agents registers before codex and
+		// the dedup keeps the first entry. Discovery reads the global settings
+		// singleton for `skills.enableCodexUser`, so an initialized in-memory
+		// instance (fork schema default: true) is part of the setup.
+		it("discovers ~/.codex/skills by default and keeps ~/.agents/skills ahead on collision", async () => {
+			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-home-"));
+			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-cwd-"));
+			const writeSkill = async (dotDir: string, name: string, description: string) => {
+				const skillDir = path.join(tempHome, dotDir, "skills", name);
+				await fs.mkdir(skillDir, { recursive: true });
+				await fs.writeFile(
+					path.join(skillDir, "SKILL.md"),
+					["---", `description: ${description}`, "---", "", `# ${name}`].join("\n"),
+				);
+			};
+			await writeSkill(".codex", "dup-skill", "From codex user dir");
+			await writeSkill(".codex", "codex-only-skill", "Codex-exclusive skill");
+			await writeSkill(".agents", "dup-skill", "From agents user dir");
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+			resetSettingsForTest();
+			await Settings.init({ inMemory: true });
+			try {
+				const { skills } = await loadSkills({
+					enableClaudeUser: false,
+					enableClaudeProject: false,
+					enablePiUser: false,
+					enablePiProject: false,
+					// enableCodexUser and enableAgentsUser stay at their defaults: the
+					// contract is that codex discovery is on without explicit config.
+					cwd: tempCwd,
+				});
+				const dup = skills.find(s => s.name === "dup-skill");
+				expect(dup?.source).toBe("agents:user");
+				expect(skills.some(s => s.name === "codex-only-skill" && s.source === "codex:user")).toBe(true);
+			} finally {
+				homedirSpy.mockRestore();
+				resetSettingsForTest();
 				await removeWithRetries(tempHome);
 				await removeWithRetries(tempCwd);
 			}

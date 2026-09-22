@@ -49,7 +49,13 @@ type ConfigurableEditorAction = Extract<
 	| "app.clipboard.copyPrompt"
 >;
 
-const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
+/**
+ * Editor-surface mirror of the app keybinding defaults. The fork swaps two of
+ * these (`app.thinking.cycle`, `app.model.selectTemporary`); it is exported so
+ * the fork keybinding test can pin the mirror against upstream-rewrite drift —
+ * keep it in sync with `app-keybindings.ts` KEYBINDINGS.
+ */
+export const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.interrupt": ["escape"],
 	"app.clear": ["ctrl+c"],
 	"app.exit": ["ctrl+d"],

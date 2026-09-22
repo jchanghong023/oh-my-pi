@@ -246,3 +246,50 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(online.offline).toBe(false);
 	});
 });
+
+describe("buildSessionOptions prewalk target discovery", () => {
+	/** FakeRegistry with the discovery surface the prewalk target loop uses. */
+	class PrewalkRegistry extends FakeRegistry {
+		discoveryStrategies: (string | undefined)[] = [];
+		getAll(): Model<Api>[] {
+			return [];
+		}
+		hasConfiguredAuth(): boolean {
+			return false;
+		}
+		async refreshDiscoverableProviders(_providers: string[], strategy?: string): Promise<void> {
+			this.discoveryStrategies.push(strategy);
+		}
+	}
+
+	function prewalkRegistry(): PrewalkRegistry {
+		return new PrewalkRegistry([]);
+	}
+
+	// Fork contract (docs-zh-CN/fork.md「安装与运行」): an --offline process must
+	// keep every automatic discovery fallback cache-only, including prewalk
+	// target resolution.
+	it("resolves the prewalk target cache-only in an offline process", async () => {
+		const registry = prewalkRegistry();
+		await buildSessionOptions(
+			parseArgs(["--prewalk-into", "prov/b", "--offline"]),
+			[],
+			SessionManager.inMemory(),
+			registry as unknown as ModelRegistry,
+			Settings.isolated(),
+		);
+		expect(registry.discoveryStrategies).toEqual(["offline"]);
+	});
+
+	it("keeps the online prewalk target resolution on online-if-uncached", async () => {
+		const registry = prewalkRegistry();
+		await buildSessionOptions(
+			parseArgs(["--prewalk-into", "prov/b"]),
+			[],
+			SessionManager.inMemory(),
+			registry as unknown as ModelRegistry,
+			Settings.isolated(),
+		);
+		expect(registry.discoveryStrategies).toEqual(["online-if-uncached"]);
+	});
+});

@@ -81,7 +81,7 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 		const settings = await Settings.init({ cwd });
 		const modelRegistry = new ModelRegistry(authStorage);
 		await modelRegistry.hydrateCredentialScopedModelCaches();
-		await loadCliExtensionProviders(modelRegistry, settings, cwd);
+		await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 		return {
 			modelRegistry: offline ? offlineBenchRegistry(modelRegistry) : modelRegistry,
 			settings,

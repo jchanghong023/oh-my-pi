@@ -1515,7 +1515,10 @@ export async function buildSessionOptions(
 			if (!discoverableProvider) continue;
 
 			refreshedProviders.add(requestedProvider);
-			await modelRegistry.refreshDiscoverableProviders([discoverableProvider], "online-if-uncached");
+			await modelRegistry.refreshDiscoverableProviders(
+				[discoverableProvider],
+				parsed.offline ? "offline" : "online-if-uncached",
+			);
 
 			candidate = resolveCandidate(pattern);
 			lastResolution = candidate;
@@ -2216,8 +2219,8 @@ export async function runRootCommand(
 			const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
-			// every parallel arm by ~30ms.
-			modelRegistry.refreshInBackground();
+			// every parallel arm by ~30ms. Offline skips it: no automatic online discovery.
+			if (!parsedArgs.offline) modelRegistry.refreshInBackground();
 			return result;
 		};
 
