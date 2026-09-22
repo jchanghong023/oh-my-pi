@@ -25,8 +25,13 @@ describe("test runner watchdog", () => {
 				`import { runTestCommandsInParallel } from ${JSON.stringify(import.meta.resolve("./ci-test-ts.ts"))}; await runTestCommandsInParallel(${JSON.stringify(commands)}, 1);`,
 			],
 			{
-				env: { ...Bun.env, OMP_TEST_CHUNK_TIMEOUT: "1", NO_COLOR: "1" },
-				timeout: 10_000,
+				// 3s watchdog: the stalled child must boot bun and write its marker
+				// inside the budget; 1s loses the race to Windows spawn latency when
+				// the suite runs under a loaded pipeline (marker never lands, the
+				// watchdog kills a child that never started). 60s stall vs 3s kill
+				// keeps the same semantics.
+				env: { ...Bun.env, OMP_TEST_CHUNK_TIMEOUT: "3", NO_COLOR: "1" },
+				timeout: 15_000,
 				detached: true,
 				allowNonZero: true,
 			},
