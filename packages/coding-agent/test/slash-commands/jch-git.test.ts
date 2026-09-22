@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { JCH_GIT_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/git";
 import { JCH_WORKFLOW_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/workflow";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -71,8 +72,12 @@ describe("direct JCH git slash commands", () => {
 		git(work, ["config", "user.email", "omp@example.invalid"]);
 	}, 30_000);
 
-	afterEach(() => {
-		rmSync(root, { recursive: true, force: true });
+	afterEach(async () => {
+		// A just-exited git subprocess (or the AV scanner) can hold a handle in
+		// the fixture tree for a moment; a bare rmSync then throws EBUSY and
+		// fails the passing test. Same removeWithRetries treatment as the other
+		// Windows temp-fixture suites.
+		await removeWithRetries(root);
 	}, 30_000);
 
 	it("runs git pull directly", async () => {
