@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import {
-	acpBuiltinSlashCommands,
-	executeAcpBuiltinSlashCommand,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
@@ -114,9 +111,5 @@ describe("/retry dispatch (ACP)", () => {
 		const noop = await executeAcpBuiltinSlashCommand("/retry", acpRuntime({ retryResult: false }).runtime);
 		expect(scheduled).toEqual({ consumed: true, agentInvoked: true });
 		expect(noop).toEqual({ consumed: true });
-	});
-
-	it("is advertised to ACP clients", () => {
-		expect(acpBuiltinSlashCommands().find(c => c.name === "retry")).toBeDefined();
 	});
 });

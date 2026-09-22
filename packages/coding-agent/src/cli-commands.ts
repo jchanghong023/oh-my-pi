@@ -182,6 +182,16 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.sayHelp,
 	},
 	{
+		name: "clip",
+		load: () => import("./commands/clip").then(m => m.default),
+		help: commandHelp.clipHelp,
+	},
+	{
+		name: "play",
+		load: () => import("./commands/play").then(m => m.default),
+		help: commandHelp.playHelp,
+	},
+	{
 		name: "share",
 		load: () => import("./commands/share").then(m => m.default),
 		help: commandHelp.shareHelp,
