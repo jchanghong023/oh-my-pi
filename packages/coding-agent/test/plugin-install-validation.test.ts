@@ -189,7 +189,10 @@ describe("PluginManager.install load validation", () => {
 		);
 
 		expect(result.version).toBe("1.0.3");
-		expect((await Bun.file(pluginsPkgJson).json()).dependencies).toEqual({ [name]: "^1.0.3" });
+		// Prune-first contract (#12296, #12727): the stale npm edge is removed
+		// from plugins/package.json before `bun install` re-adds it. The no-op
+		// spawn mock cannot re-add it, so only the prune effect is observable.
+		expect((await Bun.file(pluginsPkgJson).json()).dependencies).toEqual({});
 	});
 
 	test("rejects and rolls back an install when the extension factory throws", async () => {
