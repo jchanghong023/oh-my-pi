@@ -80,6 +80,8 @@ describe("direct JCH git slash commands", () => {
 		await removeWithRetries(root);
 	}, 30_000);
 
+	// Real git subprocesses on a loaded host: keep the explicit budget the
+	// beforeEach hook already uses instead of bun's 5s default.
 	it("runs git pull directly", async () => {
 		writeFileSync(join(seed, "remote.txt"), "remote\n");
 		git(seed, ["add", "remote.txt"]);
@@ -99,7 +101,7 @@ describe("direct JCH git slash commands", () => {
 		expect(result).toEqual({ consumed: true });
 		expect(readFileSync(join(work, "remote.txt"), "utf8").trim()).toBe("remote");
 		expect(output.join("\n")).toContain("Updating");
-	});
+	}, 30_000);
 
 	it("fetches all remotes before showing short branch status", async () => {
 		writeFileSync(join(seed, "remote.txt"), "remote\n");
@@ -120,27 +122,31 @@ describe("direct JCH git slash commands", () => {
 		expect(result).toEqual({ consumed: true });
 		expect(output.join("\n")).toContain("[behind 1]");
 		expect(git(work, ["rev-parse", "refs/remotes/origin/main"])).toBe(git(seed, ["rev-parse", "HEAD"]));
-	});
+	}, 30_000);
 
-	it.each(["", "--ignored=false", "--ignored=true"])("fetches, resets and cleans with %s", async args => {
-		writeFileSync(join(work, "tracked.txt"), "local commit\n");
-		git(work, ["add", "tracked.txt"]);
-		git(work, ["commit", "-m", "local commit"]);
-		writeFileSync(join(work, "tracked.txt"), "dirty\n");
-		writeFileSync(join(work, "untracked.txt"), "untracked\n");
-		writeFileSync(join(work, "ignored.txt"), "ignored\n");
+	it.each(["", "--ignored=false", "--ignored=true"])(
+		"fetches, resets and cleans with %s",
+		async args => {
+			writeFileSync(join(work, "tracked.txt"), "local commit\n");
+			git(work, ["add", "tracked.txt"]);
+			git(work, ["commit", "-m", "local commit"]);
+			writeFileSync(join(work, "tracked.txt"), "dirty\n");
+			writeFileSync(join(work, "untracked.txt"), "untracked\n");
+			writeFileSync(join(work, "ignored.txt"), "ignored\n");
 
-		const { result, status, error, editor } = await runDiscardAll(args);
+			const { result, status, error, editor } = await runDiscardAll(args);
 
-		expect(result).toEqual({ consumed: true });
-		expect(editor).toBe("");
-		expect(error).toBe("");
-		expect(status).toContain("HEAD is now at");
-		expect(git(work, ["rev-parse", "HEAD"])).toBe(git(work, ["rev-parse", "@{upstream}"]));
-		expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("base");
-		expect(existsSync(join(work, "untracked.txt"))).toBe(false);
-		expect(existsSync(join(work, "ignored.txt"))).toBe(args !== "--ignored=true");
-	});
+			expect(result).toEqual({ consumed: true });
+			expect(editor).toBe("");
+			expect(error).toBe("");
+			expect(status).toContain("HEAD is now at");
+			expect(git(work, ["rev-parse", "HEAD"])).toBe(git(work, ["rev-parse", "@{upstream}"]));
+			expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("base");
+			expect(existsSync(join(work, "untracked.txt"))).toBe(false);
+			expect(existsSync(join(work, "ignored.txt"))).toBe(args !== "--ignored=true");
+		},
+		30_000,
+	);
 
 	it.each([
 		"--ignored",
