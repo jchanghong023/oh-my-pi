@@ -12,6 +12,14 @@
 
 - A host room rotation (session switch, `/new`, restart) now shows "reconnecting…" and rejoins the replacement room on the same link instead of ending the session.
 
+### Added
+
+- Added `wait` tool renderer to handle coordinated job and messaging views
+
+### Removed
+
+- Removed obsolete `hub` tool renderer
+
 ## [18.2.1] - 2026-09-15
 
 ### Fixed

@@ -55,7 +55,7 @@ import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
-import { HubTool, isIrcEnabled } from "./hub";
+import { isIrcEnabled } from "../irc/messaging";
 import { FindTool, isFindEnabled } from "./jfind";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
@@ -72,6 +72,7 @@ import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WikiTool } from "./wiki";
 import { WriteTool } from "./write";
+import { WaitTool } from "./wait";
 import { isMountableUnderXdev, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
@@ -104,21 +105,8 @@ export * from "./file-write-fallback";
 export * from "./gh";
 export * from "./glob";
 export * from "./grep";
-export * from "./hub";
 export * from "./jfind";
-export type {
-	HubOp,
-	HubPeerInfo,
-	HubListStatus,
-	HubRosterCounts,
-	JobSnapshot,
-	CancelStatus,
-	CancelOutcome,
-	AgentActivitySnapshot,
-	CoordinationDetails,
-	HubDetails,
-	HubRenderArgs,
-} from "@oh-my-pi/pi-tui/tools/hub";
+export type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "@oh-my-pi/pi-tui/tools/wait";
 export * from "./image-gen";
 export * from "./learn";
 export * from "./manage-skill";
@@ -140,6 +128,7 @@ export * from "./think";
 export * from "./todo";
 export * from "./tts";
 export * from "./vibe";
+export * from "./wait";
 export type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 export * from "./write";
 export * from "./xdev";
@@ -362,7 +351,7 @@ export interface ToolSession {
 	pendingFullWriteDescription?: boolean;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
-	/** Idle→parked→revive lifecycle owner; lets the hub kill a non-job-backed agent registration. Default: AgentLifecycleManager.global(). */
+	/** Idle→parked→revive lifecycle owner; lets explicit cancellation stop a non-job-backed agent registration. Default: AgentLifecycleManager.global(). */
 	agentLifecycle?: () => AgentLifecycleManager;
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
@@ -546,7 +535,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
-	hub: s => new HubTool(s),
+	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	write: s => new WriteTool(s),
@@ -724,9 +713,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				session.settings.get("checkpoint.enabled") &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
-		if (name === "hub") {
+		if (name === "wait") {
 			return (
-				!restrictToolNames && session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)
+				session.settings.get("async.enabled") ||
+				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
+				session.settings.get("launch.enabled")
 			);
 		}
 		if (name === "retain" || name === "recall" || name === "reflect") {

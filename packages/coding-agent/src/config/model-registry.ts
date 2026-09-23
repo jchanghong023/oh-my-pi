@@ -1492,6 +1492,21 @@ export class ModelRegistry {
 				this.#keylessProviders.add("llama.cpp");
 			}
 		}
+		if (
+			process.platform === "darwin" &&
+			process.arch === "arm64" &&
+			!configuredProviders.has("apple") &&
+			!disabledProviders.has("apple")
+		) {
+			this.#discoverableProviders.push({
+				provider: "apple",
+				api: "apple-foundation-models",
+				baseUrl: "local://apple-foundation-models",
+				discovery: { type: "apple-foundation-models" },
+				optional: true,
+			});
+			this.#keylessProviders.add("apple");
+		}
 		if (!configuredProviders.has("lm-studio") && !disabledProviders.has("lm-studio")) {
 			this.#discoverableProviders.push({
 				provider: "lm-studio",
@@ -2846,6 +2861,7 @@ export class ModelRegistry {
 		return this.authStorage.keys.get(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
+			accountIds: model.accountAccess && Object.keys(model.accountAccess),
 			signal: options?.signal,
 		});
 	}
@@ -2881,9 +2897,11 @@ export class ModelRegistry {
 		if (this.#keylessProviders.has(provider) && this.authStorage.keys.source(provider) === undefined) {
 			return kNoAuth;
 		}
+		const accountAccess = options?.modelId ? this.find(provider, options.modelId)?.accountAccess : undefined;
 		return this.authStorage.keys.get(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
+			accountIds: accountAccess && Object.keys(accountAccess),
 			forceRefresh: options?.forceRefresh,
 			signal: options?.signal,
 		});

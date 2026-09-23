@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  Fork of <a href="https://github.com/badlogic/pi-mono">Pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
+  Built by <a href="https://stencil.so">Stencil Labs</a> · Fork of <a href="https://github.com/badlogic/pi-mono">Pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
 </p>
 
 目前能力最完整的 agent 界面。由真实使用持续打磨 —— 开箱即用，且从里到外开放。
@@ -653,11 +653,12 @@ OMP 基于 [MIT License](LICENSE) 授权。
 
 © 2025 Mario Zechner
 © 2025-2026 Can Bölük
-© 2026 Stencil Labs, Inc.
+© 2026 [Stencil Labs, Inc.](https://stencil.so)
 
 _为常开的终端而生_
 
 - [omp.sh](https://omp.sh)
+- [Stencil Labs](https://stencil.so)
 - [GitHub](https://github.com/can1357/oh-my-pi)
 - [Changelog](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/CHANGELOG.md)
 - [npm](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent)
