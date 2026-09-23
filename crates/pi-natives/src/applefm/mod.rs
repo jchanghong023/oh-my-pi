@@ -47,6 +47,10 @@ pub fn apple_fm_generate(
 
 /// Cancels a generation; its stream then ends with a `cancelled` error event.
 /// Unknown or finished handles are ignored.
+// `const` only holds on non-macOS, where `platform::cancel` is a no-op; the
+// macOS implementation stores a cancel flag in an atomic and stays non-const,
+// so the lint cannot be satisfied on both platforms.
+#[allow(clippy::missing_const_for_fn, reason = "const only provable off macOS")]
 #[napi]
 pub fn apple_fm_cancel(handle: u32) {
 	platform::cancel(handle);
@@ -135,6 +139,9 @@ mod platform {
 		r#"{"type":"availability","available":false,"reason":"unsupported_platform"}"#.to_owned()
 	}
 
+	// The macOS twin genuinely fails on NUL-byte requests; keeping the shared
+	// signature keeps the napi caller cfg-free, at the cost of a stub Ok wrap.
+	#[allow(clippy::unnecessary_wraps, reason = "signature parity with the macOS platform module")]
 	pub(super) fn generate(_request: &str, on_event: ThreadsafeFunction<String>) -> Result<u32> {
 		on_event.call(
 			Ok(r#"{"type":"error","code":"unsupported_platform","message":"Apple Foundation Models requires macOS"}"#
