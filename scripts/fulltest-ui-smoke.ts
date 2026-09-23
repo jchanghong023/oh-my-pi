@@ -402,22 +402,25 @@ const stubServer = Bun.serve({
 		}
 		if (!stage) {
 			// Plain main-session turn. The LAST message decides the scripted reply:
-			// - a CANCELTEAM text request → hub cancel tool_use (the real
-			//   user-facing cancellation path for /team background jobs);
-			// - the tool-result follow-up of that hub call → closing text;
+			// - a CANCELTEAM text request → empty `write proc://<id>` tool_use (the
+			//   real user-facing cancellation path for /team background jobs);
+			// - the tool-result follow-up of that write call → closing text;
 			// - anything else → warm-up chatter.
 			const last = messages.at(-1);
 			const lastInfo = last ? messageTexts(last) : { texts: [], hasToolResult: false };
 			const wantsCancel = lastInfo.texts.some(text => text.includes("CANCELTEAM"));
 			if (wantsCancel && dispatchJobId) {
-				stubRequests.push({ model: requestModel, stage: "hub-cancel" });
-				return new Response(stubSseBody(requestModel, { op: "cancel", ids: [dispatchJobId] }, false, "hub"), {
-					status: 200,
-					headers: {
-						"content-type": "text/event-stream",
-						"request-id": `req_stub_${stubRequests.length}`,
+				stubRequests.push({ model: requestModel, stage: "proc-cancel" });
+				return new Response(
+					stubSseBody(requestModel, { path: `proc://${dispatchJobId}`, content: "" }, false, "write"),
+					{
+						status: 200,
+						headers: {
+							"content-type": "text/event-stream",
+							"request-id": `req_stub_${stubRequests.length}`,
+						},
 					},
-				});
+				);
 			}
 			const closing = lastInfo.hasToolResult;
 			stubRequests.push({ model: requestModel, stage: closing ? "main-close" : "main-chat" });
@@ -461,6 +464,9 @@ try {
 			"  members:",
 			"    - zcode-api/glm-5.2",
 			"    - zcode-api/glm-4.6",
+			"tools:",
+			"  approval:",
+			"    write: allow",
 			"marketplace:",
 			'  autoUpdate: "off"',
 			"startup:",
@@ -578,9 +584,9 @@ try {
 	// ── 5. /team cancellation propagation against a slow stub ──────────────────
 	// team.md §7 requires cancellation across concurrent subagents to be
 	// verified in the UI smoke. Drives the real user-facing path: a chat turn
-	// whose scripted reply calls the `hub` tool with op=cancel, which aborts
-	// the job's signal; the propagation must reach every in-flight subagent so
-	// no later stage (alignment/synthesis) is ever requested.
+	// whose scripted reply issues an empty `write proc://<id>` (job cancel),
+	// which aborts the job's signal; the propagation must reach every in-flight
+	// subagent so no later stage (alignment/synthesis) is ever requested.
 	console.log("ui-smoke: starting /team cancellation case…");
 	slowTeamStagesMs = 6_000;
 	const requestsBeforeCancel = stubRequests.length;
@@ -633,13 +639,13 @@ try {
 		dumpTail(cancelTui);
 		fail("/team cancel case: no proposal request reached the stub", cancelTui.session);
 	}
-	console.log("ui-smoke: proposals in flight; issuing hub cancel via a chat turn…");
+	console.log("ui-smoke: proposals in flight; issuing proc:// cancel via a chat turn…");
 	cancelTui.session.write("CANCELTEAM 请取消刚才的 /team 后台任务\r");
 	const cancelConfirmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("CANCELDONE"), 60_000);
 	if (!cancelConfirmed) {
 		dumpTail(cancelTui);
 		fail(
-			`/team cancel case: hub cancel round-trip did not complete (stub: ${stubRequests
+			`/team cancel case: proc:// cancel round-trip did not complete (stub: ${stubRequests
 				.slice(requestsBeforeCancel)
 				.map(r => r.stage)
 				.join(",")})`,
