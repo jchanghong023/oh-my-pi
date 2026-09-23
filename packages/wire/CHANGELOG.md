@@ -6,6 +6,12 @@
 
 - Added additive collab frames — `commands` (host-advertised slash-command palette), `browse-dirs` (guest directory request), and `dir-suggestions` — without changing `COLLAB_PROTO`; peers that do not know a frame ignore it.
 
+## [18.2.11] - 2026-09-23
+
+### Added
+
+- Added public API contract and authentication schemas for the Skillshare registry.
+
 ## [18.2.5] - 2026-09-17
 
 ### Added

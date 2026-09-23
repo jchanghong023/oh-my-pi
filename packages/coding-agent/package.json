@@ -1,6 +1,6 @@
 {
 	"name": "@oh-my-pi/pi-coding-agent",
-	"version": "18.2.10",
+	"version": "18.2.11",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"keywords": [
 		"agent",
@@ -237,6 +237,10 @@
 		"./extensibility/custom-commands/bundled/review": {
 			"types": "./src/extensibility/custom-commands/bundled/review/index.ts",
 			"import": "./src/extensibility/custom-commands/bundled/review/index.ts"
+		},
+		"./extensibility/custom-commands/bundled/annotate": {
+			"types": "./src/extensibility/custom-commands/bundled/annotate/index.ts",
+			"import": "./src/extensibility/custom-commands/bundled/annotate/index.ts"
 		},
 		"./extensibility/custom-tools": {
 			"types": "./src/extensibility/custom-tools/index.ts",

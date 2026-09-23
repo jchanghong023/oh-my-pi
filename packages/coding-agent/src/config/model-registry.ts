@@ -399,7 +399,7 @@ export class ModelRegistry {
 
 	#installProviderApiKey(provider: string, keyConfig: string): void {
 		this.#customProviderApiKeys.set(provider, keyConfig);
-		this.authStorage.setConfigApiKey(provider, keyConfig);
+		this.authStorage.keys.setConfig(provider, keyConfig);
 	}
 
 	/**
@@ -439,7 +439,7 @@ export class ModelRegistry {
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
-		this.authStorage.setConfigValueResolver(resolveConfigValue);
+		this.authStorage.keys.setResolver(resolveConfigValue);
 		// Load config and cache-backed layers synchronously in the constructor.
 		this.#loadModels();
 	}
@@ -795,7 +795,7 @@ export class ModelRegistry {
 		// Drop config-sourced apiKeys from AuthStorage before reload; entries
 		// removed from models.yml must actually disappear from the resolver, not
 		// linger from the previous parse. The post-load setters below repopulate.
-		this.authStorage.clearConfigApiKeys();
+		this.authStorage.keys.clearConfig();
 		// Restore runtime API keys before #loadModels — survives because
 		// #loadModels only calls .set() on #customProviderApiKeys, never reassigns it.
 		for (const [k, v] of this.#runtimeProviderApiKeys) {
@@ -974,7 +974,7 @@ export class ModelRegistry {
 		if (this.#runtimeModelModifiers.size === 0) return models;
 		let projected = models;
 		for (const [providerName, modifyModels] of this.#runtimeModelModifiers) {
-			const credential = this.authStorage.getOAuthCredential(providerName);
+			const credential = this.authStorage.credentials.getOAuth(providerName);
 			if (!credential) continue;
 			try {
 				// Clone mutable catalog data, retaining resolver functions as opaque
@@ -1196,7 +1196,7 @@ export class ModelRegistry {
 				const discoveryExpected =
 					sharedCatalogProvider ||
 					(descriptor !== undefined &&
-						(this.authStorage.hasAuth(providerId) ||
+						(this.authStorage.keys.source(providerId) !== undefined ||
 							descriptor.allowUnauthenticated === true ||
 							this.#keylessProviders.has(providerId)));
 				if (discoveryExpected) {
@@ -1488,7 +1488,7 @@ export class ModelRegistry {
 				optional: !Bun.env.LLAMA_CPP_BASE_URL,
 			});
 			// Only mark as keyless if no API key is configured
-			if (!this.authStorage.hasAuth("llama.cpp")) {
+			if (this.authStorage.keys.source("llama.cpp") === undefined) {
 				this.#keylessProviders.add("llama.cpp");
 			}
 		}
@@ -2429,7 +2429,15 @@ export class ModelRegistry {
 	}
 
 	#applyModelOverrides(models: Model<Api>[], overrides: Map<string, Map<string, ModelOverride>>): Model<Api>[] {
-		if (overrides.size === 0) return models;
+		const customWindows = new Map<string, number>();
+		for (const overlays of [this.#customModelOverlays, this.#runtimeModelOverlays]) {
+			for (const overlay of overlays) {
+				if (overlay.maxContextWindow !== undefined) {
+					customWindows.set(`${overlay.provider}\u0000${overlay.id}`, overlay.maxContextWindow);
+				}
+			}
+		}
+		if (overrides.size === 0 && customWindows.size === 0) return models;
 		let liveKeys: Set<string> | null = null;
 		const hasLiveModel = (provider: string, id: string) => {
 			liveKeys ??= new Set(models.map(m => `${m.provider}\u0000${m.id}`));
@@ -2437,11 +2445,27 @@ export class ModelRegistry {
 		};
 		return models.map(model => {
 			const providerOverrides = overrides.get(model.provider);
-			if (!providerOverrides) return model;
-			const override = resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel);
-			if (!override) return model;
-			return this.#applyModelOverrideWithClamp(model, override);
+			const override = providerOverrides
+				? resolveModelOverrideWithAliases(providerOverrides, model, hasLiveModel)
+				: undefined;
+			const overridden = override ? this.#applyModelOverrideWithClamp(model, override) : model;
+			// Resolve configuration before selecting a window. A context-only
+			// override remains fixed; an unrelated override preserves the custom pair.
+			const maximum =
+				override?.maxContextWindow ??
+				(override?.contextWindow === undefined
+					? customWindows.get(`${model.provider}\u0000${model.id}`)
+					: undefined);
+			return this.#applyConfiguredExtendedWindow(overridden, maximum, model);
 		});
+	}
+
+	#applyConfiguredExtendedWindow(model: Model<Api>, maximum: number | undefined, baseline: Model<Api>): Model<Api> {
+		if (maximum === undefined || !isExtendedContextEnabledFromSettings(this.#settings)) return model;
+		const standard = model.contextWindow;
+		if (standard === null || maximum <= standard) return model;
+		const window = clampsContextOverride(baseline) ? clampCodexContextWindow(baseline, maximum) : maximum;
+		return window === standard ? model : applyModelOverride(model, { contextWindow: window });
 	}
 
 	/**
@@ -2605,8 +2629,8 @@ export class ModelRegistry {
 					(provider === COMPANY_PROVIDER_ID
 						? getCompanyConfig() !== undefined
 						: this.#keylessProviders.has(provider) ||
-							this.authStorage.hasAuth(provider) ||
-							this.authStorage.hasKeylessPlaceholder(provider));
+							this.authStorage.keys.source(provider) !== undefined ||
+							this.authStorage.keys.keyless(provider));
 				byProvider.set(provider, available);
 			}
 			return available;
@@ -2666,7 +2690,7 @@ export class ModelRegistry {
 	 *
 	 * Cross-provider env aliases count here (`xai-oauth` can borrow `XAI_API_KEY`)
 	 * so an explicit `xai-oauth/…` selector does not fail with "No API key".
-	 * Default-model availability still uses {@link AuthStorage.hasAuth}, which
+	 * Default-model availability still uses {@link AuthStorage.keys.source}, which
 	 * ignores that alias so SuperGrok is not auto-selected from a paid key.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
@@ -2675,7 +2699,7 @@ export class ModelRegistry {
 		return (
 			keyConfig !== undefined ||
 			this.#keylessProviders.has(model.provider) ||
-			this.authStorage.hasResolvableAuth(model.provider)
+			this.authStorage.keys.source(model.provider, { env: "aliases" }) !== undefined
 		);
 	}
 
@@ -2685,14 +2709,16 @@ export class ModelRegistry {
 	 * self-resolving AWS/Vertex sentinel that only signals an ambient credential
 	 * *source* exists. Default-model auto-selection prefers concretely-authed
 	 * providers so an ambiently-available Bedrock/Vertex provider never displaces
-	 * the provider the user actually signed into. See {@link AuthStorage.hasConcreteAuth}
+	 * the provider the user actually signed into. See {@link AuthStorage.keys.source}
 	 * and issue #9967.
 	 */
 	hasConcreteAuth(provider: string): boolean {
 		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		return (
-			keyConfig !== undefined || this.#keylessProviders.has(provider) || this.authStorage.hasConcreteAuth(provider)
+			keyConfig !== undefined ||
+			this.#keylessProviders.has(provider) ||
+			this.authStorage.keys.source(provider)?.concrete === true
 		);
 	}
 
@@ -2814,10 +2840,10 @@ export class ModelRegistry {
 		options?: { signal?: AbortSignal },
 	): Promise<string | undefined> {
 		if (model.provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
-		if (this.#keylessProviders.has(model.provider) && !this.authStorage.hasAuth(model.provider)) {
+		if (this.#keylessProviders.has(model.provider) && this.authStorage.keys.source(model.provider) === undefined) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(model.provider, sessionId, {
+		return this.authStorage.keys.get(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
 			signal: options?.signal,
@@ -2852,10 +2878,10 @@ export class ModelRegistry {
 	): Promise<string | undefined> {
 		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
 		if (options?.forceRefresh) this.#invalidateProviderCommandConfigs(provider);
-		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
+		if (this.#keylessProviders.has(provider) && this.authStorage.keys.source(provider) === undefined) {
 			return kNoAuth;
 		}
-		return this.authStorage.getApiKey(provider, sessionId, {
+		return this.authStorage.keys.get(provider, sessionId, {
 			baseUrl: options?.baseUrl,
 			modelId: options?.modelId,
 			forceRefresh: options?.forceRefresh,
@@ -2888,17 +2914,17 @@ export class ModelRegistry {
 	}
 
 	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
-		if (this.#keylessProviders.has(provider) && !this.authStorage.hasAuth(provider)) {
+		if (this.#keylessProviders.has(provider) && this.authStorage.keys.source(provider) === undefined) {
 			return kNoAuth;
 		}
-		return this.authStorage.peekApiKey(provider);
+		return this.authStorage.keys.peek(provider);
 	}
 
 	/**
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
 	isUsingOAuth(model: Model<Api>): boolean {
-		return this.authStorage.hasOAuth(model.provider);
+		return this.authStorage.credentials.hasOAuth(model.provider);
 	}
 
 	#clearRuntimeProviderState(providerName: string): void {
@@ -2924,8 +2950,8 @@ export class ModelRegistry {
 			this.#providerDiscoveryStates.delete(providerName);
 		}
 		this.#invalidateProviderModelCache(providerName);
-		this.authStorage.removeConfigApiKey(providerName);
-		this.authStorage.removeRuntimeUsageProvider(providerName);
+		this.authStorage.keys.removeConfig(providerName);
+		this.authStorage.usage.removeProvider(providerName);
 	}
 
 	/**
@@ -3051,7 +3077,7 @@ export class ModelRegistry {
 		// provider lifetime. #clearRuntimeProviderState removes this override when
 		// the owning extension is unregistered or replaced.
 		if (config.usage) {
-			this.authStorage.setRuntimeUsageProvider(providerName, config.usage, config.apiKey);
+			this.authStorage.usage.setProvider(providerName, config.usage, config.apiKey);
 		}
 		if (config.apiKey) {
 			this.#installProviderApiKey(providerName, config.apiKey);

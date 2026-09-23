@@ -161,6 +161,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.joinHelp,
 	},
 	{
+		name: "login",
+		load: () => import("./commands/login").then(m => m.default),
+		help: commandHelp.loginHelp,
+	},
+	{
 		name: "models",
 		load: () => import("./commands/models").then(m => m.default),
 		help: commandHelp.modelsHelp,
@@ -215,6 +220,12 @@ export const commands: CommandEntry[] = [
 		name: "render",
 		load: () => import("./commands/render").then(m => m.default),
 		help: commandHelp.renderHelp,
+	},
+	{
+		name: "skill",
+		load: () => import("./commands/skill").then(m => m.default),
+		aliases: ["skills"],
+		help: commandHelp.skillHelp,
 	},
 	{
 		name: "ssh",

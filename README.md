@@ -167,6 +167,8 @@ _[观看录屏 ↗](https://omp.sh/clips/web.mp4)_
 
 对这次改动能否发布给出明确结论，每个问题都按 P0 到 P3 分级并标注置信度。/review 会派出专门的 reviewer 子 agent，并行扫描分支、单个 commit 或未提交的改动。你先处理阻塞发布的问题；重要的事不会淹没在一整面散文中。
 
+想自己掌舵这次审查？`/annotate code-review` 会打开 diff，让你在 reviewer 跑之前把批注钉到具体行上。`/annotate` 也接受最新回复、某条会话消息、一个文件或引用的文本，把你的批注粘进提示词。见 [`/annotate`](docs/slash-command-internals.md#12-bundled-command-note-annotate)。
+
 ### 11 · Hashline：按内容哈希编辑
 
 完美的编辑，更少的 token。模型只需指向锚点，而不用重新打出想改的那些行，于是空白字符之争和「找不到字符串」的死循环从此消失。编辑一个已过期的文件时锚点会对不上——我们会在补丁破坏任何东西之前拒绝它。同样的工作，Grok 4 Fast 的输出 token 少了 61%。
@@ -305,7 +307,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 直连 API 与网关。可按角色混用 provider。
 
-Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · Fireworks · Together · Baseten · DeepInfra · Hugging Face · NVIDIA · Meta · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Code · Charm Hyper · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless
+Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · Fireworks · Together · Baseten · DeepInfra · Hugging Face · NVIDIA · Meta · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Code · Charm Hyper · StepFun · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless
 
 ### 编码套餐
 

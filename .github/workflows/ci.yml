@@ -80,7 +80,23 @@ jobs:
          - uses: ./.github/actions/bun-install
          - name: Verify Rust license compliance (cargo-deny 0.20.2)
            run: |
-              cargo install --locked --version 0.20.2 cargo-deny
+              # Prebuilt release binary checked against digests pinned here:
+              # `cargo install` compiled cargo-deny from source on every run
+              # (~135 s), and a .sha256 fetched from the same mutable release
+              # would prove transport integrity only. Bump ver and both
+              # digests together.
+              ver=0.20.2
+              case "$(uname -m)" in
+                x86_64) arch=x86_64 sha=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f ;;
+                aarch64|arm64) arch=aarch64 sha=995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d ;;
+                *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;;
+              esac
+              name="cargo-deny-$ver-$arch-unknown-linux-musl"
+              curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$ver/$name.tar.gz"
+              echo "$sha  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+              tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+              mkdir -p "$HOME/.cargo/bin"
+              install -m 0755 "$RUNNER_TEMP/$name/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
               # Hosted runners start with an empty Cargo cache, so populate the
               # registry before cargo-deny's offline check.
               cargo fetch --locked
@@ -151,8 +167,10 @@ jobs:
               bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test ${{ matrix.shard.targets }}
 
    # Build every native addon needed by the non-macOS binaries and TS tests,
-   # one runner per target triple, then gather the pieces back into the single
-   # artifact layout consumed by native-artifacts / scripts/bazel-natives.ts.
+   # one runner per target triple, then gather the pieces back into the artifact
+   # layout consumed by native-artifacts / scripts/bazel-natives.ts: the
+   # linux-x64 pair stays in its own small artifact, everything else travels as
+   # `native-addons`.
    native_addon_build:
       name: Build native addon ${{ matrix.target_id }}
       runs-on: ubuntu-22.04
@@ -220,8 +238,8 @@ jobs:
               if-no-files-found: error
               retention-days: 1
 
-   # Gather the per-triple artifacts back into the single native-addons
-   # artifact consumed by native-artifacts and the release_binary jobs.
+   # Gather the per-triple artifacts back into the artifacts consumed by
+   # native-artifacts and the release_binary jobs.
    native_addons:
       name: Gather native addons
       needs: [native_addon_build]
@@ -233,10 +251,24 @@ jobs:
               pattern: native-addons-*
               path: tmp-gather
               merge-multiple: true
-         - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+         # Split upload: every TS test job needs only the linux-x64 pair, and
+         # downloading the rest cost ~100 s per job. The native-artifacts
+         # action fetches `native-addons` (everything else) only when a
+         # consumer asks for a non-x64 target.
+         - name: Upload linux-x64 native addon artifact
+           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: natives-linux-x64
+              path: tmp-gather/natives-linux-x64-*/*.node
+              if-no-files-found: error
+              retention-days: 1
+         - name: Upload remaining native addon artifacts
+           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
               name: native-addons
-              path: tmp-gather/natives-*/*.node
+              path: |
+                 tmp-gather/natives-*/*.node
+                 !tmp-gather/natives-linux-x64-*/*.node
               if-no-files-found: error
               retention-days: 1
 
@@ -248,7 +280,6 @@ jobs:
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -273,7 +304,6 @@ jobs:
       timeout-minutes: 20
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -291,7 +321,6 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -309,7 +338,6 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -327,7 +355,6 @@ jobs:
       timeout-minutes: 25
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -340,14 +367,19 @@ jobs:
            run: bun run ci:test:coding-agent:runtime
 
    test_coding_agent_native:
-      name: Test coding-agent native/unit (TS)
+      name: "Test coding-agent native/unit (TS) ${{ matrix.shard }}"
       runs-on: ubuntu-22.04
       needs: [native_addons]
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       timeout-minutes: 25
+      # The longest job in the workflow, so it runs as two shards. Fork CI is
+      # dispatch-only on hosted runners, so the split always applies.
+      strategy:
+         fail-fast: false
+         matrix:
+            shard: ["1/2", "2/2"]
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -372,6 +404,7 @@ jobs:
          - name: Test coding-agent native/unit bucket
            env:
               OMP_TEST_CONCURRENCY: "4"
+              OMP_TEST_SHARD: ${{ matrix.shard }}
            run: xvfb-run -a bun run ci:test:coding-agent:native
 
    test_smoke:
@@ -382,7 +415,6 @@ jobs:
       timeout-minutes: 15
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -397,7 +429,6 @@ jobs:
       if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
       steps:
          - uses: actions/checkout@v4
-         - uses: ./.github/actions/setup-system-deps
          - uses: ./.github/actions/bun-install
          - uses: ./.github/actions/native-artifacts
            with:
@@ -493,12 +524,23 @@ jobs:
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-         - name: Cache bun dependencies
-           uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+         - name: Restore bun store
+           id: bun-cache
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              restore-keys: |
+                 bun-${{ runner.os }}-
          - run: bun install --frozen-lockfile
+         # Main-only save: caches saved on a tag or branch are readable only by
+         # that ref yet count against the shared 10 GB quota (see bazel-cache).
+         - name: Save bun store
+           if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - name: Install prebuilt native addon(s)
            uses: ./.github/actions/native-artifacts
            with:
@@ -590,4 +632,3 @@ jobs:
                  THIRD-PARTY-NOTICES.txt
                  SHA256SUMS.txt
               generate_release_notes: true
-
