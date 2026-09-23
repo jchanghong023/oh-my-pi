@@ -139,7 +139,7 @@ describe("team in-process integration", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-team-integration-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		settings = Settings.isolated({ "task.maxConcurrency": 4 });
 

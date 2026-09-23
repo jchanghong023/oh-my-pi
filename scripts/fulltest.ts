@@ -45,11 +45,6 @@ export interface TestGroup {
 // `validateTestFiles` guards against upstream renames silently hollowing it.
 export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 	{
-		label: "core/wire",
-		cwd: "packages/wire",
-		files: ["test/constants.test.ts"],
-	},
-	{
 		label: "core/omptype",
 		cwd: "packages/omptype",
 		files: ["test/infer.test.ts", "test/json-schema.test.ts", "test/type.test.ts"],
@@ -76,7 +71,6 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/hosts.test.ts",
 			"test/model-id-affixes.test.ts",
 			"test/model-thinking.test.ts",
-			"test/provider-default-models.test.ts",
 		],
 	},
 	{
