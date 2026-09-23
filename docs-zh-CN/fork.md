@@ -43,7 +43,7 @@
 * `fullsend` 注入执行策略：成本和 token 用量不作为优化约束；在同等正确性、完整性与验证标准下缩短完成时间，端到端完成任务。仅做对速度或验证质量有实际收益的调用与并行，不把额外调用或花费视为目标，不扩大任务范围或权限。
 * fullsend 通知与上游其他关键词的注入形态一致；经 collab 转发的用户输入（guest 发送的提示词与关键词命令）同样注入关键词通知。
 * 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
-* 用户设置 `magicKeywords.fullsend`（默认 `true`，/config → Interaction → Magic Keywords）可关闭 fullsend 关键词注入。
+* 用户设置 `magicKeywords.fullsend`（默认 `true`，`/settings` 面板 → Interaction → Magic Keywords）可关闭 fullsend 关键词注入。
 
 ### `/team` 多模型方案讨论
 
