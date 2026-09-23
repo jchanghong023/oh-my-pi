@@ -494,12 +494,18 @@ try {
 	// Warm the session with one plain chat turn first — the realistic /team
 	// usage pattern (the report lands in an ongoing conversation) and it gives
 	// the main-agent view a settled chat region before the command runs.
+	// The greeting can land while the welcome animation still owns the input
+	// path and get dropped, so re-send until the stub round-trip is confirmed.
 	console.log("ui-smoke: /team TUI rendered; warming up with a plain chat turn…");
-	team.session.write("简单打个招呼\r");
-	const warmed = await waitFor(() => normalizePtyOutput(team.output).includes("MAINOK"), 60_000);
+	let warmed = false;
+	for (let attempt = 1; attempt <= 3 && !warmed; attempt++) {
+		if (attempt > 1) console.log(`ui-smoke: warm-up not confirmed; re-sending greeting (attempt ${attempt})…`);
+		team.session.write("简单打个招呼\r");
+		warmed = await waitFor(() => normalizePtyOutput(team.output).includes("MAINOK"), 20_000);
+	}
 	if (!warmed) {
 		dumpTail(team);
-		fail("main-session warm-up turn did not complete within 60 s", team.session);
+		fail("main-session warm-up turn did not complete within the retry budget", team.session);
 	}
 	// MAINOK matches mid-stream; wait for the turn to settle so /team is
 	// dispatched against an idle session (otherwise the report custom message
@@ -607,9 +613,14 @@ try {
 	}
 	// Warm up like the success case: on a fresh session the dispatch
 	// breadcrumb's first render can lag by seconds, and this case must issue
-	// the cancel long before the slow proposals settle.
-	cancelTui.session.write("简单打个招呼\r");
-	const cancelWarmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("MAINOK"), 60_000);
+	// the cancel long before the slow proposals settle. Re-send on the same
+	// dropped-greeting race the success case guards against.
+	let cancelWarmed = false;
+	for (let attempt = 1; attempt <= 3 && !cancelWarmed; attempt++) {
+		if (attempt > 1) console.log(`ui-smoke: cancel warm-up not confirmed; re-sending greeting (attempt ${attempt})…`);
+		cancelTui.session.write("简单打个招呼\r");
+		cancelWarmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("MAINOK"), 20_000);
+	}
 	if (!cancelWarmed) {
 		dumpTail(cancelTui);
 		fail("/team cancel case: warm-up turn did not complete", cancelTui.session);
