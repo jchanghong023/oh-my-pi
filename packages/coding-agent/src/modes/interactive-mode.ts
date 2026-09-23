@@ -6562,8 +6562,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleUsageCommand(reports);
 	}
 
-	async handleChangelogCommand(showFull = false): Promise<void> {
-		await this.#commandController.handleChangelogCommand(showFull);
+	async handleChangelogCommand(args = ""): Promise<void> {
+		await this.#commandController.handleChangelogCommand(args);
 	}
 
 	handleHotkeysCommand(): void {
