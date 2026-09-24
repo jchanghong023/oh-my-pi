@@ -70,6 +70,7 @@ describe("getLatestGitHubRelease", () => {
 				pkg: "@oh-my-pi/pi-coding-agent",
 				natives: "@oh-my-pi/pi-natives",
 			},
+			registry: "",
 		});
 	});
 });

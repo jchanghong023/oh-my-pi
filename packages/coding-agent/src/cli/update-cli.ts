@@ -1041,6 +1041,8 @@ export async function getLatestGitHubRelease(
 		version,
 		dist: "binary",
 		packages: { ...CURRENT_PACKAGES },
+		// GitHub binary installs never route through bun/npm, so no registry pin applies.
+		registry: "",
 	};
 }
 

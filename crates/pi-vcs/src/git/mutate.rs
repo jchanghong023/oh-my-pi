@@ -2642,9 +2642,12 @@ mod tests {
 				keep_changes: false,
 			})
 			.unwrap();
+		// register_worktree writes metadata with forward slashes on Windows and
+		// `worktree list` echoes that shape; compare separator-insensitively.
+		let listed = git(temp.path(), &["worktree", "list", "--porcelain"]);
 		assert!(
-			git(temp.path(), &["worktree", "list", "--porcelain"])
-				.contains(linked.to_string_lossy().as_ref())
+			listed.contains(linked.to_string_lossy().replace('\\', "/").as_str()),
+			"worktree list missing {linked:?}: {listed}"
 		);
 		assert!(repo.worktree_remove(&linked, true).unwrap());
 
