@@ -402,7 +402,7 @@ const stubServer = Bun.serve({
 		}
 		if (!stage) {
 			// Plain main-session turn. The LAST message decides the scripted reply:
-			// - a CANCELTEAM text request → empty `write proc://<id>` tool_use (the
+			// - a CANCELTEAM text request → `write proc://<id>/kill` tool_use (the
 			//   real user-facing cancellation path for /team background jobs);
 			// - the tool-result follow-up of that write call → closing text;
 			// - anything else → warm-up chatter.
@@ -412,7 +412,7 @@ const stubServer = Bun.serve({
 			if (wantsCancel && dispatchJobId) {
 				stubRequests.push({ model: requestModel, stage: "proc-cancel" });
 				return new Response(
-					stubSseBody(requestModel, { path: `proc://${dispatchJobId}`, content: "" }, false, "write"),
+					stubSseBody(requestModel, { path: `proc://${dispatchJobId}/kill`, content: "" }, false, "write"),
 					{
 						status: 200,
 						headers: {
@@ -590,7 +590,7 @@ try {
 	// ── 5. /team cancellation propagation against a slow stub ──────────────────
 	// team.md §7 requires cancellation across concurrent subagents to be
 	// verified in the UI smoke. Drives the real user-facing path: a chat turn
-	// whose scripted reply issues an empty `write proc://<id>` (job cancel),
+	// whose scripted reply issues `write proc://<id>/kill` (job cancel),
 	// which aborts the job's signal; the propagation must reach every in-flight
 	// subagent so no later stage (alignment/synthesis) is ever requested.
 	console.log("ui-smoke: starting /team cancellation case…");
