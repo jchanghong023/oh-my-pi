@@ -22,7 +22,7 @@ import {
 	truncateToWidth,
 } from "../render/render-utils";
 import type { CoordinationDetails } from "./wait";
-import { renderAgentWrite, renderProcWrite, type ProcWriteDetails } from "./proc-render";
+import { renderAgentWrite, renderProcWrite, type ProcWriteAction, type ProcWriteDetails } from "./proc-render";
 import type { FileDiagnosticsResult } from "./lsp";
 import type { OutputMeta } from "./output-meta";
 import type { RenderResultOptions, ToolActivityContext, ToolActivitySummary, ToolRenderer } from "./renderer";
@@ -36,6 +36,7 @@ import {
 } from "./xdev";
 import { isResolutionDeviceName, renderResolutionDeviceCall } from "./resolve";
 import { REPORT_ISSUE_DEVICE_NAME, renderReportIssueDeviceCall } from "./report-tool-issue";
+import { pendingFileLinkPath } from "./read";
 
 /** Details returned by the write tool for transcript rendering. */
 export interface WriteToolDetails {
@@ -318,6 +319,13 @@ export interface WriteRenderContext {
 	resolveXdevMounted?: (name: string) => XdevMountedRenderer | undefined;
 }
 
+function procWriteTarget(path: string): { id: string; action: ProcWriteAction } {
+	const target = path.slice("proc://".length);
+	if (target.endsWith("/kill")) return { id: target.slice(0, -5), action: "kill" };
+	if (target.endsWith("/mode")) return { id: target.slice(0, -5), action: "mode" };
+	return { id: target, action: "stdin" };
+}
+
 /** Render file writes and delegated tool-device calls. */
 export const writeToolRenderer = {
 	/** Compact one-line activity: device writes read as the mounted tool (`LSP · references foo`), file writes as `Write · <path>`. */
@@ -337,13 +345,8 @@ export const writeToolRenderer = {
 			};
 		}
 		if (/^proc:\/\//i.test(rawPath)) {
-			const target = rawPath.slice("proc://".length);
-			const action = target.endsWith("/mode")
-				? "mode"
-				: typeof writeArgs.content === "string" && writeArgs.content.length > 0
-					? "stdin"
-					: "cancel / stop";
-			return { label: "Process", detail: `${action} ${shortenPath(target.replace(/\/mode$/, ""))}` };
+			const { id, action } = procWriteTarget(rawPath);
+			return { label: "Process", detail: `${action} ${shortenPath(id)}` };
 		}
 		const xdev = parseXdUrl(rawPath);
 		if (xdev?.name) {
@@ -387,12 +390,11 @@ export const writeToolRenderer = {
 			);
 		}
 		if (/^proc:\/\//i.test(rawPath)) {
-			const target = rawPath.slice("proc://".length);
+			const { id, action } = procWriteTarget(rawPath);
 			return renderProcWrite(
-				target.replace(/\/mode$/, ""),
-				target.endsWith("/mode"),
+				id,
+				action,
 				typeof args.content === "string" ? args.content : undefined,
-				options.argsComplete === true,
 				undefined,
 				undefined,
 				options,
@@ -411,7 +413,11 @@ export const writeToolRenderer = {
 		const filePath = shortenPath(rawPath);
 		const lang = rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
-		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		const styledPath = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
+		// The result has not resolved its target yet. Link the containing file
+		// rather than an archive member or database row selector.
+		const pathDisplay =
+			filePath && args.content !== undefined ? fileHyperlink(pendingFileLinkPath(rawPath), styledPath) : styledPath;
 		// No status icon on the head row: it's the head of the framed block, and
 		// native-scrollback commits are prefix-only — an animated glyph would pin
 		// the commit boundary at the top, and the pending hourglass just adds
@@ -476,12 +482,11 @@ export const writeToolRenderer = {
 			);
 		}
 		if (typeof messagePath === "string" && /^proc:\/\//i.test(messagePath)) {
-			const target = messagePath.slice("proc://".length);
+			const { id, action } = procWriteTarget(messagePath);
 			return renderProcWrite(
-				target.replace(/\/mode$/, ""),
-				target.endsWith("/mode"),
+				id,
+				action,
 				typeof args?.content === "string" ? args.content : undefined,
-				true,
 				result,
 				result.details?.proc,
 				options,

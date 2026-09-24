@@ -619,7 +619,7 @@ bun dev -- --version
 | **[@oh-my-pi/omptype](packages/omptype)**                                     | 兼容 ArkType 的 schema 校验，带惰性 JIT 编译 |
 | **[@oh-my-pi/pi-utils](packages/utils)**                                      | 共享工具（日志、流、目录/环境变量/进程辅助） |
 | **[@oh-my-pi/pi-wire](packages/wire)**                                        | 协作实时会话的共享协议类型与中继常量 |
-| **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**                                  | 面向 Oh My Pi agents 的本地 SQLite 记忆引擎 |
+| **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**                                  | 面向 omp agents 的本地 SQLite 记忆引擎 |
 | **[@oh-my-pi/snapcompact](packages/snapcompact)**                             | 位图帧上下文压缩包与 SQuAD 评测套件 |
 | **[@oh-my-pi/browser-relay](packages/browser-relay)**                         | 让 Eval browser API 驱动你现有标签页的 Chrome 扩展 |
 | **[@oh-my-pi/pi-metaharness](packages/metaharness)**                          | 统一的 benchmark 运行器、Harbor 运行记录存储、REST/SSE API 与实时面板 |

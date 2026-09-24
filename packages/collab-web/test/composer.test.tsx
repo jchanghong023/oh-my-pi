@@ -29,6 +29,7 @@ function snapshot(uiRequest: GuestSnapshot["uiRequest"]): GuestSnapshot {
 		uiRequest,
 		commands: [],
 		notices: [],
+		loading: null,
 	};
 }
 

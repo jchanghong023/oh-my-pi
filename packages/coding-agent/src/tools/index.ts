@@ -73,7 +73,7 @@ import { TodoTool } from "./todo";
 import { WikiTool } from "./wiki";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
-import { isMountableUnderXdev, type XdevState } from "./xdev";
+import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
 export * from "../edit";
@@ -713,7 +713,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 				session.settings.get("checkpoint.enabled") &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
+		// Subagents never block on `wait`: owned job results re-wake their run
+		// through the executor's quiescence barrier, and parent messages steer them.
 		if (name === "wait") {
+			if ((session.taskDepth ?? 0) > 0) return false;
 			return (
 				session.settings.get("async.enabled") ||
 				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
@@ -820,12 +823,16 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			if (mountable) mountedNames.add(tool.name);
 			else kept.push(tool);
 		}
-		session.xdev = {
+		const xdevState: XdevState = {
 			tools: toolRegistry,
 			mountedNames,
 			builtInNames,
 			isActive: name => session.isToolActive?.(name) === true,
+			// Card rendering reads the same predicate as execution: mounted devices
+			// plus active top-level tools, which the `write` transport also accepts.
+			resolve: name => resolveXdevTool(xdevState, name),
 		};
+		session.xdev = xdevState;
 		tools = kept;
 	}
 	// Staged previews from deferrable tools (e.g. ast_edit) resolve through a

@@ -221,6 +221,9 @@ export async function getLogText(): Promise<string> {
  * separated by a filename header.
  */
 async function collectSameDayLogs(linesPerFile: number, logsDir = getLogsDir()): Promise<string> {
+	// Log files are named with the local day (see localDay / RotatingFileSink),
+	// so match them with the local day too — the UTC key misses the live log
+	// between local midnight and UTC midnight.
 	const today = localDay(new Date());
 	const sameDay: Array<{ name: string; mtimeMs: number }> = [];
 	try {

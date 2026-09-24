@@ -28,6 +28,15 @@ describe("report bundle logs", () => {
 		await fs.utimes(path.join(dirs.logsDir, rotatedName), 0, 0);
 		await Bun.write(path.join(dirs.logsDir, currentName), '{"pid":0,"message":"later invocation"}\n');
 		await fs.utimes(path.join(dirs.logsDir, currentName), 2, 2);
+		// When the local and UTC days differ (00:00–08:00 in UTC+8), a log named
+		// with the stale UTC key must not be collected anymore.
+		const utcToday = new Date().toISOString().slice(0, 10);
+		let staleUtcName: string | undefined;
+		if (utcToday !== today) {
+			staleUtcName = `omp.${utcToday}.4243.log`;
+			await Bun.write(path.join(dirs.logsDir, staleUtcName), '{"pid":4243,"message":"stale utc-keyed"}\n');
+			await fs.utimes(path.join(dirs.logsDir, staleUtcName), 3, 3);
+		}
 
 		const result = await createReportBundle({
 			sessionFile: undefined,
@@ -47,6 +56,7 @@ describe("report bundle logs", () => {
 		expect(logsText).toContain(currentName);
 		expect(logsText).toContain("later invocation");
 		expect(logsText.indexOf(crashedName)).toBeLessThan(logsText.indexOf(currentName));
+		if (staleUtcName) expect(logsText).not.toContain(staleUtcName);
 
 		await fs.rm(result.path, { force: true });
 	});

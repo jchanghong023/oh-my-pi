@@ -52,6 +52,7 @@ pub fn apple_fm_generate(
 // so the lint cannot be satisfied on both platforms.
 #[allow(clippy::missing_const_for_fn, reason = "const only provable off macOS")]
 #[napi]
+#[allow(clippy::missing_const_for_fn, reason = "napi macro is incompatible with const fn")]
 pub fn apple_fm_cancel(handle: u32) {
 	platform::cancel(handle);
 }
@@ -139,9 +140,7 @@ mod platform {
 		r#"{"type":"availability","available":false,"reason":"unsupported_platform"}"#.to_owned()
 	}
 
-	// The macOS twin genuinely fails on NUL-byte requests; keeping the shared
-	// signature keeps the napi caller cfg-free, at the cost of a stub Ok wrap.
-	#[allow(clippy::unnecessary_wraps, reason = "signature parity with the macOS platform module")]
+	#[allow(clippy::unnecessary_wraps, reason = "matches the fallible macOS signature")]
 	pub(super) fn generate(_request: &str, on_event: ThreadsafeFunction<String>) -> Result<u32> {
 		on_event.call(
 			Ok(r#"{"type":"error","code":"unsupported_platform","message":"Apple Foundation Models requires macOS"}"#

@@ -113,7 +113,13 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	const userPath = getMCPConfigPath("user", cwd);
 	let userConfig: MCPConfigFile;
 	try {
-		userConfig = await readMCPConfigFile(userPath);
+		const config: unknown = await readMCPConfigFile(userPath);
+		// JSON.parse also accepts bare `null`, numbers, strings, and arrays;
+		// only an object carries the server map and the lists read below.
+		if (config === null || typeof config !== "object" || Array.isArray(config)) {
+			throw new Error("user MCP config must be a JSON object");
+		}
+		userConfig = config as MCPConfigFile;
 	} catch (error) {
 		logger.warn("Ignoring unreadable user MCP config for server lists", { path: userPath, error: String(error) });
 		userConfig = { mcpServers: {} };
