@@ -4531,10 +4531,7 @@ mod tests {
 		// Fork: the built-in fd prints forward slashes on Windows too; accept
 		// either separator (the upstream branch expects `\` there).
 		let glob = read("glob.txt");
-		assert!(
-			glob == "sub\\needle.rs\n" || glob == "sub/needle.rs\n",
-			"fd glob output: {glob:?}"
-		);
+		assert!(glob == "sub\\needle.rs\n" || glob == "sub/needle.rs\n", "fd glob output: {glob:?}");
 
 		let no_match = session
 			.shell
