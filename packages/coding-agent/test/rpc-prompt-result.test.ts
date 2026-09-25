@@ -1,9 +1,6 @@
 import { describe, expect, test, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import {
-	promptRpcBuiltinResidual,
-	type RpcBuiltinResidualSession,
-} from "../src/modes/rpc/rpc-mode";
+import { promptRpcBuiltinResidual, type RpcBuiltinResidualSession } from "../src/modes/rpc/rpc-mode";
 import {
 	RpcExtensionUserMessageTracker,
 	RpcPromptResults,

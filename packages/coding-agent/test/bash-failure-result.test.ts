@@ -228,7 +228,9 @@ describe("BashTool skill:// containment failures", () => {
 		};
 	}
 
-	it("refuses a read through a symlink past the plugin boundary", async () => {
+	// A plain (non-junction) file symlink needs Windows Developer Mode or an
+	// elevated token; without it fs.symlink fails with EPERM.
+	it.skipIf(process.platform === "win32")("refuses a read through a symlink past the plugin boundary", async () => {
 		const { dir, outsideFile, skill } = await containedFixture();
 		await fs.symlink(outsideFile, path.join(skill.baseDir, "leak.md"));
 		try {

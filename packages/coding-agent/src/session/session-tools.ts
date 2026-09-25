@@ -1781,10 +1781,10 @@ export class SessionTools {
 			// Sampled before the delta: it still carries names mounted under the
 			// `xd://` state the reconcile may release.
 			const enabled = new Set(this.getEnabledToolNames());
-			const delta = await reconcile(name => this.#builtInToolNames.has(name));
+			const delta = await reconcile(name => this.#isCurrentBuiltInTool(name));
 			for (const name of delta.removed) {
 				enabled.delete(name);
-				this.#builtInToolNames.delete(name);
+				this.#forgetBuiltInTool(name);
 			}
 			for (const { name, builtIn, activate } of delta.added) {
 				this.setToolBuiltIn(name, builtIn);
