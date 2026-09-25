@@ -7,8 +7,8 @@
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.3.0`
-* **Upstream commit**：`25097b1be3d9b06dc38ca5e20fc7058ad5fd65f4`
+* **版本**：`v18.3.1`
+* **Upstream commit**：`90450145e0bf6fca0e5a01075eb69f7d8d488f53`
 * **同步日期**：2026-09-25
 
 ## 当前功能差异

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.3.1] - 2026-09-25
+
 ### Fixed
 
 - Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
@@ -11,6 +13,7 @@
 ### Fixed
 
 - Fixed rotating log files being assigned to the wrong date near local-day boundaries by ensuring dated log paths match the local day used to name the files.
+- Fixed log rotation near local-day boundaries so dated log files are consistently assigned to the correct local date.
 
 ## [18.2.7] - 2026-09-21
 
