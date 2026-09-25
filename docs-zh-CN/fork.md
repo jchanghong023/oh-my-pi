@@ -156,6 +156,7 @@
 * 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 * `composer.shape=pi` 时状态栏独立位于输入框下方。
 * `@` 文件补全在输入、删除字符时立即过滤已有候选，不等待后台目录搜索完成；网络文件系统上的新文件仍需等待扫描结果，后台搜索保持串行，避免堆积 I/O。过滤把候选清空时弹窗不吞键：Enter 照常提交草稿、Tab 走普通补全、方向键移动光标。
+* 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 
 ### 安装与运行
 
@@ -169,13 +170,16 @@
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-* 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+* 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只验证并构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 * 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 * 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 * `omp update` 按 fork build counter 判断更新，并支持 `%2B` 编码的 `+` 版本 URL。
+* `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
 * `update.channel=canary` 在 fork 二进制上不可用：启动版本检查会提示该配置并指向 `omp update --stable`；其余更新检查失败仍静默。
 * `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`）且无法自愈，只能用安装器重装后再交给 `omp update`。
-* 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64。
+* 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。发布物为 Linux x64/arm64（各含 glibc 与 musl）和 Windows x64 二进制、`omp-browser-relay-extension.zip`、`LICENSE`、`THIRD-PARTY-NOTICES.txt`、`SHA256SUMS.txt`；不构建 macOS 或 Windows arm64 二进制。
+* 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64；`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
+* Linux 安装器下载到临时文件后，先运行其 `--version` 确认能启动，再替换现有安装；新二进制无法启动时保留旧安装。Windows 安装器优先用 `curl.exe` 下载，失败或不可用时回退到兼容 Windows PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`。
 * 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
 
 ### 文档站
