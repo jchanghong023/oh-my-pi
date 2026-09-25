@@ -11,6 +11,8 @@
 import { getCompanyChatModels } from "../config/company-models";
 import { isCompanyLaneActive } from "../config/company-provider";
 import type { Settings } from "../config/settings";
+import { cfgTaskMaxConcurrency } from "../task/settings";
+import { cfgTeamMembers } from "./settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import { runTeamDiscussion } from "./orchestrator";
@@ -86,7 +88,7 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 		? getCompanyChatModels().map(model => `${model.provider}/${model.id}`)
 		: [];
 	return resolveTeamParticipants({
-		configuredMembers: settings.get("team.members") as string[],
+		configuredMembers: cfgTeamMembers.get(settings),
 		offlineLaneActive,
 		companyModelPatterns,
 		sessionModel,
@@ -164,7 +166,7 @@ export async function startTeamDiscussion(
 					sessionModelPattern,
 					runner,
 					signal,
-					maxConcurrency: settings.get("task.maxConcurrency"),
+					maxConcurrency: cfgTaskMaxConcurrency.get(settings),
 					onProgress,
 				});
 				const deliver = async (content: string): Promise<void> => {

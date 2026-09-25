@@ -16,6 +16,9 @@ import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
+import { cfgMagicKeyword, cfgMagicKeywordsEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
+
 const mockTaskTool: AgentTool = {
 	name: "task",
 	label: "Task",
@@ -87,7 +90,7 @@ describe("AgentSession magic keyword settings", () => {
 	it("does not append magic keyword notices when disabled", async () => {
 		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		created.settings.set("magicKeywords.enabled", false);
+		cfgMagicKeywordsEnabled.set(created.settings, false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this, ultrathink through it, and fullsend");
@@ -99,9 +102,9 @@ describe("AgentSession magic keyword settings", () => {
 	it("honors per-keyword notice toggles", async () => {
 		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		created.settings.set("magicKeywords.orchestrate", false);
-		created.settings.set("magicKeywords.workflow", false);
-		created.settings.set("magicKeywords.fullsend", false);
+		cfgMagicKeyword.orchestrate.set(created.settings, false);
+		cfgMagicKeyword.workflow.set(created.settings, false);
+		cfgMagicKeyword.fullsend.set(created.settings, false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please orchestrate, workflowz, and fullsend this");
@@ -203,7 +206,7 @@ describe("AgentSession magic keyword settings", () => {
 	it("updates the workflowz notice when scout is disabled during the session", async () => {
 		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		created.settings.set("task.disabledAgents", ["scout"]);
+		cfgTaskDisabledAgents.set(created.settings, ["scout"]);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this");
@@ -271,7 +274,7 @@ describe("AgentSession magic keyword settings", () => {
 	it("does not use a disabled ultrathink keyword to force auto thinking", async () => {
 		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		created.settings.set("magicKeywords.ultrathink", false);
+		cfgMagicKeyword.ultrathink.set(created.settings, false);
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
 		session.setThinkingLevel(AUTO_THINKING);

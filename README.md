@@ -505,7 +505,7 @@ await session.prompt("list .ts files");
 
 `omp --mode rpc`
 
-适合非 Node 的嵌入方，或当你需要进程隔离时使用。输入 NDJSON 命令，输出响应帧与事件帧。`--mode rpc-ui` 会把工具卡片、选择器与对话框作为 `extension_ui_request` 帧下发，宿主必须作答。
+适合非 Node 的嵌入方，或当你需要进程隔离时使用。输入 NDJSON 命令，输出响应帧与事件帧；每条 prompt 都以自己的 `prompt_result` 结束。`--mode rpc-ui` 会把工具卡片、选择器与对话框作为 `extension_ui_request` 帧下发，宿主必须作答；`--no-ui` 则让宿主即使没有任何 UI，也不会在协议上出现扩展对话框。
 
 ```
 $ omp --mode rpc --no-session

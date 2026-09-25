@@ -49,17 +49,12 @@ async function createRuntimeHarness(options?: { collabHost?: NonNullable<Interac
 	// `/collab` copies the browser link; the real backend would take over the
 	// developer's clipboard (and spawn a helper on some platforms).
 	const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
-	const settingsGet = vi.fn((key: string) => {
-		if (key === "collab.relayUrl") return "wss://relay.example.com";
-		if (key === "collab.webUrl") return "";
-		return "";
-	});
 	const ctx = {
 		editor: { setText },
 		showStatus,
 		showError,
 		present,
-		settings: { get: settingsGet },
+		settings: Settings.isolated({ "collab.relayUrl": "wss://relay.example.com", "collab.webUrl": "" }),
 		session: { registerSessionChangeCallback: () => () => {} },
 		sessionManager: { getSessionId: () => "sess-qrcode" },
 		statusLine: { setCollabStatus: () => {}, invalidate: () => {} },

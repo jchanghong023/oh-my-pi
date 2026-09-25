@@ -13,7 +13,15 @@
 
 ### Added
 
+- Added visual marker for live-steered user messages in the chat transcript
+- Added an Anthropic slow-mode badge to the status-line model segment (`low priority until HH:MM · N% left`, warning colour) via the optional `StatusLineSession.getAnthropicSlowModeLabel()` ([#13222](https://github.com/can1357/oh-my-pi/pull/13222) by [@H4vC](https://github.com/H4vC)).
+- Added UI support for marking paginated content in read-tool results
+- Added transcript rendering for `cfg://` configuration read and write tool calls
 - Added push-to-talk dictation to `Input`, including live transcription text and `cursorOverride` support.
+
+### Changed
+
+- Updated settings selector to perform full unsets when input fields are cleared
 
 ### Fixed
 

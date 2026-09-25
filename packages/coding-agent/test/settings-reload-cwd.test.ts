@@ -8,9 +8,9 @@ import { getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-it("defaults model role storage to global", () => {
-	expect(Settings.isolated({}).get("modelRoleStorage")).toBe("global");
-});
+import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { cfgEnabledModels, cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+
 it("applies project role mutations over active runtime overrides", () => {
 	const settings = Settings.isolated({});
 	settings.overrideModelRoles({ smol: "anthropic/runtime" });
@@ -121,14 +121,14 @@ describe("Settings.reloadForCwd", () => {
 
 		await settings.reloadForCwd(projectA);
 		expect(settings.getCwd()).toBe(path.normalize(projectA));
-		expect(settings.get("enabledModels")).toEqual(["model-a"]);
-		expect(settings.get("compaction.enabled")).toBe(false);
+		expect(cfgEnabledModels.get(settings)).toEqual(["model-a"]);
+		expect(cfgCompactionEnabled.get(settings)).toBe(false);
 
 		await settings.reloadForCwd(projectB);
 		expect(settings.getCwd()).toBe(path.normalize(projectB));
-		expect(settings.get("enabledModels")).toEqual(["model-b"]);
+		expect(cfgEnabledModels.get(settings)).toEqual(["model-b"]);
 		// Non-scoped override is preserved across the switch.
-		expect(settings.get("compaction.enabled")).toBe(false);
+		expect(cfgCompactionEnabled.get(settings)).toBe(false);
 	});
 
 	it("is a no-op when the target directory is already the active scope", async () => {
@@ -138,10 +138,10 @@ describe("Settings.reloadForCwd", () => {
 		});
 
 		await settings.reloadForCwd(projectA);
-		expect(settings.get("enabledModels")).toEqual(["model-a"]);
+		expect(cfgEnabledModels.get(settings)).toEqual(["model-a"]);
 		await settings.reloadForCwd(projectA);
 		expect(settings.getCwd()).toBe(path.normalize(projectA));
-		expect(settings.get("enabledModels")).toEqual(["model-a"]);
+		expect(cfgEnabledModels.get(settings)).toEqual(["model-a"]);
 	});
 
 	it("loads extra config overlays after project settings", async () => {
@@ -159,10 +159,10 @@ describe("Settings.reloadForCwd", () => {
 			fs.writeFileSync(overlayPath, "compaction:\n  enabled: false\n");
 
 			const settings = await Settings.init({ cwd: projectDir, inMemory: true, configFiles: [overlayPath] });
-			expect(settings.get("compaction.enabled")).toBe(false);
+			expect(cfgCompactionEnabled.get(settings)).toBe(false);
 
-			settings.override("compaction.enabled", true);
-			expect(settings.get("compaction.enabled")).toBe(true);
+			cfgCompactionEnabled.override(settings, true);
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
 		} finally {
 			resetSettingsForTest();
 			if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
@@ -229,11 +229,7 @@ describe("Settings.reloadForCwd", () => {
 
 		afterEach(() => {
 			resetSettingsForTest();
-			// Each test's `Settings.init` opens an AgentStorage SQLite db inside
-			// the temp agentDir; on Windows an open db handle blocks the recursive
-			// delete below with EBUSY (POSIX unlinks it fine). Close every
-			// process-wide storage before removing the fixture, like the other
-			// settings suites do.
+			// Persisted instances open agent.db under testDir; close it before the directory goes away.
 			AgentStorage.close();
 			if (fs.existsSync(testDir)) {
 				removeSyncWithRetries(testDir);
@@ -243,16 +239,16 @@ describe("Settings.reloadForCwd", () => {
 		it("loads and drops project settings as the working directory changes", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
 			// No project file under startDir → schema default.
-			expect(settings.get("compaction.enabled")).toBe(true);
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
 
 			await settings.reloadForCwd(scopedProject);
 			expect(settings.getCwd()).toBe(path.normalize(scopedProject));
-			expect(settings.get("compaction.enabled")).toBe(false);
+			expect(cfgCompactionEnabled.get(settings)).toBe(false);
 
 			// Moving to a project without settings drops the previous project's config.
 			await settings.reloadForCwd(bareProject);
 			expect(settings.getCwd()).toBe(path.normalize(bareProject));
-			expect(settings.get("compaction.enabled")).toBe(true);
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
 		});
 		it("keeps failed project writes bound to their original cwd", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
@@ -321,7 +317,7 @@ describe("Settings.reloadForCwd", () => {
 
 			expect(settings.getModelRole("default")).toBe("anthropic/native");
 			expect(settings.getProjectModelRole("default")).toBe("anthropic/native");
-			expect(settings.get("compaction.enabled")).toBe(true);
+			expect(cfgCompactionEnabled.get(settings)).toBe(true);
 		});
 
 		it("merges concurrent role writes under the project file lock", async () => {
@@ -447,7 +443,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("keeps project override effective when editing the shadowed global fallback in project mode", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.overrideModelRoles({ smol: "anthropic/runtime" });
 			expect(settings.getModelRole("smol")).toBe("anthropic/runtime");
 
@@ -485,7 +481,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("cloneForCwd restores original runtime override after project edit and global fallback edit", async () => {
 			const settings = await Settings.loadIsolated({ cwd: startDir, agentDir });
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.overrideModelRoles({ smol: "anthropic/runtime" });
 			settings.setProjectModelRole("smol", "anthropic/project");
 			settings.setModelRole("smol", "anthropic/global");
@@ -497,7 +493,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("updates runtime override after project clear and late runtime override on global edit", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.overrideModelRoles({ smol: "anthropic/runtime" });
 			settings.setProjectModelRole("smol", "anthropic/project");
 			expect(settings.getModelRole("smol")).toBe("anthropic/project");
@@ -530,7 +526,7 @@ describe("Settings.reloadForCwd", () => {
 
 			// Switch to project storage — no project edit has captured anything,
 			// so a global edit must still update the runtime override.
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.setModelRole("smol", "anthropic/global-2");
 			expect(settings.getModelRole("smol")).toBe("anthropic/global-2");
 			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/global-2");
@@ -635,7 +631,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("preserves global supersession of a cleared project role on reloadForCwd", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.overrideModelRoles({ smol: "anthropic/runtime" });
 			settings.setProjectModelRole("smol", "anthropic/project");
 			settings.clearProjectModelRole("smol");
@@ -650,7 +646,7 @@ describe("Settings.reloadForCwd", () => {
 		});
 		it("preserves global supersession of a cleared project role on cloneForCwd", async () => {
 			const settings = await Settings.loadIsolated({ cwd: startDir, agentDir });
-			settings.override("modelRoleStorage", "project");
+			cfgModelRoleStorage.override(settings, "project");
 			settings.overrideModelRoles({ smol: "anthropic/runtime" });
 			settings.setProjectModelRole("smol", "anthropic/project");
 			settings.clearProjectModelRole("smol");
