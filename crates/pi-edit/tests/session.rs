@@ -161,8 +161,32 @@ async fn create_over_invalid_utf8_reports_already_exists() {
 
 #[tokio::test]
 async fn patch_create_overwrite_preserves_generated_file_guard() {
+	// Upstream #13139 made bare `generated.*` ambiguous: without a content
+	// marker it is handwritten, so the create-overwrite goes through (upstream
+	// updated path_policy.rs but not this session-level case).
+	{
+		let ws = Workspace::new(EditMode::Patch);
+		let path = ws.cwd().join("generated.ts");
+		std::fs::write(&path, b"const value = 1;\n").unwrap();
+		let mut session = ws.session();
+		session.set_args_json(
+			&serde_json::json!({
+				"path": "generated.ts",
+				"edits": [{ "op": "create", "diff": "+new" }]
+			})
+			.to_string(),
+		);
+		session.finish();
+		let preview = session.preview();
+		let writer = DiskWriter::default();
+		session
+			.apply(ApplyRequest::default(), &writer)
+			.await
+			.expect("bare generated.ts without a marker is handwritten");
+		assert_eq!(std::fs::read(&path).unwrap(), b"new\n");
+		assert!(preview.files[0].error.is_none(), "{:?}", preview);
+	}
 	for (name, original) in [
-		("generated.ts", b"const value = 1;\n".as_slice()),
 		("source.ts", b"// @generated\nconst value = 1;\n".as_slice()),
 		("legacy.ts", b"// @generated\nname=caf\xe9\n".as_slice()),
 	] {
