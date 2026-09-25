@@ -1301,15 +1301,9 @@ mod tests {
 	}
 
 	fn repo() -> std::result::Result<(TempDir, GitRepo), Box<dyn std::error::Error>> {
-		// Hermetic git (host autocrlf etc. must not leak; nextest: one test per
-		// process so the process-wide override cannot bleed across tests).
-		// SAFETY: every thread in the test binary writes the same platform constant, so
-		// a racing read still observes a value with the intended effect; nextest
-		// (localci) runs each test in its own process.
-		unsafe {
-			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
-			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
-		}
+		// Hermetic git (host autocrlf etc. must not leak); the process-wide
+		// override is shared with the other fixtures and applied exactly once.
+		crate::git::test_support::hermetic_git_config_once();
 		let dir = tempfile::tempdir()?;
 		git(dir.path(), &["init", "-b", "main"])?;
 		git(dir.path(), &["config", "core.autocrlf", "false"])?;

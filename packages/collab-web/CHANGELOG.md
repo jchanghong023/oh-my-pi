@@ -15,15 +15,11 @@
 - Added `/` command completion in the composer, driven by the command palette the host advertises on join (builtins, skills, extension/custom/file commands), with `Tab`/`↑`/`↓`/`Esc` and click-to-complete.
 - Added host directory suggestions for `/move` and `/add-dir`, so a path can be picked instead of typed.
 - Added a `build:pages` build that emits the client for the `/oh-my-pi/collab/` GitHub Pages path, published with the docs site.
+- Added support for rendering coordinated job and messaging views through the `wait` tool.
 
 ### Changed
 
 - A host room rotation (session switch, `/new`, restart) now shows "reconnecting…" and rejoins the replacement room on the same link instead of ending the session.
-
-### Added
-
-- Added `wait` tool renderer to handle coordinated job and messaging views
-- Added support for rendering coordinated job and messaging views through the `wait` tool.
 
 ### Removed
 

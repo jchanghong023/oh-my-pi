@@ -106,6 +106,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			let used = headerAllowance;
 			let skippedForSize = 0;
 			let duplicates = 0;
+			let oversizeCarried = 0;
 			for (const section of result.sections) {
 				// Structural labels (`#### Cell`) hold nothing the header line does not
 				// already carry. Indexes built before this rule keep them, so skip here;
@@ -127,11 +128,14 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
 				if (used + cost > TEXT_BUDGET_CHARS) {
 					// The best hit must never be lost to the budget: it is carried in
-					// full even when it alone exceeds the page.
+					// full even when it alone exceeds the page. Only an index built
+					// before the ingest cap dropped can hold such a section; the
+					// footer names the overrun instead of letting it pass silently.
 					if (bodies.length > 0) {
 						skippedForSize += 1;
 						continue;
 					}
+					oversizeCarried += 1;
 				}
 				bodies.push(`${header}\n${body}`);
 				used += cost;
@@ -166,11 +170,15 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			// what it dropped for size here, plus the hits the ranked page never reached
 			// — hits the page did reach count as served even when they render no text.
 			const beyondPage = result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
-			const hidden = skippedForSize > 0 || beyondPage > 0;
+			const hidden = skippedForSize > 0 || beyondPage > 0 || oversizeCarried > 0;
 			const skipped = skippedForSize > 0 ? ` (${skippedForSize} too long for what was left)` : "";
 			const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
+			const oversized =
+				oversizeCarried > 0
+					? ` — ${oversizeCarried} hit predates the ingest cap and is carried whole past the budget`
+					: "";
 			const footer = hidden
-				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections within ${TEXT_BUDGET_CHARS} characters${skipped}${collapsed}; search again with narrower terms for the rest.`
+				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections within ${TEXT_BUDGET_CHARS} characters${skipped}${collapsed}${oversized}; search again with narrower terms for the rest.`
 				: collapsed
 					? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
 					: "";

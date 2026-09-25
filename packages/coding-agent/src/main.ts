@@ -31,7 +31,11 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { configureStartupLogging } from "./cli/startup-logging";
 import { CanaryChannelUnavailableError, compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
-import { setCompanyChatContextWindow } from "./config/company-models";
+import {
+	COMPANY_OFFLINE_CONTEXT_WINDOW,
+	COMPANY_OFFLINE_ROLE_DEFAULTS,
+	setCompanyChatContextWindow,
+} from "./config/company-models";
 import {
 	COMPANY_PROVIDER_ID,
 	getCompanyConfig,
@@ -1916,20 +1920,9 @@ export async function runRootCommand(
 			cfgStartupSetupWizard.override(settingsInstance, false);
 			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
-			setCompanyChatContextWindow(200000);
+			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 			if (getCompanyConfig()) {
-				const roleDefaults = {
-					default: "company/Qwen3.6-27B-public",
-					smol: "company/Qwen3.6-35B-A3B",
-					tiny: "company/Qwen3.6-35B-A3B",
-					commit: "company/Qwen3.6-35B-A3B",
-					task: "company/Qwen3.6-27B-public",
-					vision: "company/Qwen3.6-27B-public",
-					advisor: "company/Qwen3.6-27B-public",
-					plan: "company/GLM-5.2-public",
-					slow: "company/GLM-5.2-public",
-				};
-				for (const [role, model] of Object.entries(roleDefaults)) {
+				for (const [role, model] of Object.entries(COMPANY_OFFLINE_ROLE_DEFAULTS)) {
 					if (!settingsInstance.getModelRole(role)) {
 						settingsInstance.overrideModelRoles({ [role]: model });
 					}
@@ -1943,6 +1936,13 @@ export async function runRootCommand(
 			"modelRegistry:init",
 			() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
 		);
+		// models.yml sections under fork-reserved provider ids (company,
+		// zcode-api) are ignored by design; say so instead of dropping them
+		// silently — the same channel the company config error uses.
+		for (const warning of modelRegistry.getReservedProviderWarnings()) {
+			if (isInteractive) notifs.push({ kind: "warn", message: warning });
+			else process.stderr.write(`${warning}\n`);
+		}
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
 		}

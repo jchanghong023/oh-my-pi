@@ -978,7 +978,13 @@ describe("Mnemopi backend lifecycle", () => {
 		await state.dispose({ timeoutMs: BUDGET_MS });
 
 		expect(sleepSpy).toHaveBeenCalledTimes(1);
-		expect(sleepSpy).toHaveBeenCalledWith(expect.any(Number));
+		// The raced sleep must be bounded by the caller's budget: an
+		// Infinity/undefined timeout or a lost dispose({timeoutMs}) wiring
+		// would otherwise pass with the mocked timer.
+		const racedMs = sleepSpy.mock.calls[0]?.[0] as number;
+		expect(typeof racedMs).toBe("number");
+		expect(racedMs).toBeGreaterThan(0);
+		expect(racedMs).toBeLessThanOrEqual(BUDGET_MS);
 		expect(flushSpy).toHaveBeenCalled();
 		expect(flushCalls).toBe(1);
 		// `close()` is deferred so SQLite writes don't race a closed handle.

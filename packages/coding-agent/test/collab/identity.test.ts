@@ -61,6 +61,10 @@ describe("collab room identity", () => {
 		expect(stored.roomId).toBe(first.roomId);
 		expect(Buffer.from(stored.key, "base64url").equals(Buffer.from(first.key))).toBe(true);
 		expect(Buffer.from(stored.writeToken, "base64url").equals(Buffer.from(first.writeToken))).toBe(true);
+		if (process.platform !== "win32") {
+			// The file holds the write token: POSIX must keep it owner-only.
+			expect((await fs.stat(collabIdentityPath())).mode & 0o777).toBe(0o600);
+		}
 
 		// A later room (next session, next omp run) reads the same identity back.
 		const second = await loadOrCreateCollabIdentity();
@@ -96,6 +100,35 @@ describe("collab room identity", () => {
 		expect(stored.roomId).toBe(identity.roomId);
 		expect((await fs.readdir(path.dirname(collabIdentityPath()))).sort()).toEqual(["identity.json"]);
 		expect((await loadOrCreateCollabIdentity()).roomId).toBe(identity.roomId);
+	});
+
+	// A transient read failure (sharing violation, backup lock) must not be
+	// conflated with corruption: the file may still hold the identity every
+	// shared link depends on, and overwriting it would kill those links.
+	const canDenyReads = process.platform !== "win32" && process.getuid?.() !== 0;
+	(canDenyReads ? it : it.skip)("never overwrites an unreadable-but-present identity file", async () => {
+		const roomId = "UnreadableButValidId01";
+		const key = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+		const writeToken = Buffer.from(Array.from({ length: 16 }, (_, index) => 100 + index));
+		await fs.mkdir(path.dirname(collabIdentityPath()), { recursive: true });
+		await fs.writeFile(collabIdentityPath(), storedIdentity(roomId, key, writeToken));
+		await fs.chmod(collabIdentityPath(), 0o000);
+
+		try {
+			const identity = await loadOrCreateCollabIdentity();
+
+			// Degrades to a fresh in-memory identity without touching the file.
+			expect(identity.roomId).toMatch(ROOM_ID_RE);
+			expect(identity.roomId).not.toBe(roomId);
+			expect((await fs.readdir(path.dirname(collabIdentityPath()))).sort()).toEqual(["identity.json"]);
+
+			// The stored identity survived verbatim and is adopted once readable.
+			await fs.chmod(collabIdentityPath(), 0o600);
+			expect((await readStoredIdentity()).roomId).toBe(roomId);
+			expect((await loadOrCreateCollabIdentity()).roomId).toBe(roomId);
+		} finally {
+			await fs.chmod(collabIdentityPath(), 0o600).catch(() => {});
+		}
 	});
 
 	it("still returns a usable identity when the path is not a file", async () => {

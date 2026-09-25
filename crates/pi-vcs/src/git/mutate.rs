@@ -1793,17 +1793,12 @@ mod tests {
 	}
 
 	fn fixture() -> (TempDir, GitRepo) {
-		// Hermetic git for the whole test (nextest runs one test per process):
-		// neutralize host-global config for spawned git children and the
-		// in-process gix backend alike — a Windows host with core.autocrlf=true
-		// otherwise rewrites LF↔CRLF and breaks byte-exact assertions.
-		// SAFETY: every thread in the test binary writes the same platform constant, so
-		// a racing read still observes a value with the intended effect; nextest
-		// (localci) runs each test in its own process.
-		unsafe {
-			std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
-			std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
-		}
+		// Hermetic git for the whole test: neutralize host-global config for
+		// spawned git children (per command) and the in-process gix backend
+		// (shared once-per-process override) alike — a Windows host with
+		// core.autocrlf=true otherwise rewrites LF↔CRLF and breaks byte-exact
+		// assertions.
+		crate::git::test_support::hermetic_git_config_once();
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
 		git(temp.path(), &["config", "core.autocrlf", "false"]);

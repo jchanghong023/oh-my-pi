@@ -309,6 +309,8 @@ export class ModelRegistry {
 	// would silently revert the provider to its unprojected catalog.
 	#runtimeModelModifiers: Map<string, ModifyModelsHook> = new Map();
 	#lastModelModifierWarnings: Map<string, string> = new Map();
+	/** Current models.yml notices for fork-reserved provider ids, keyed by provider. */
+	#reservedProviderWarnings: Map<string, string> = new Map();
 	#runtimeProvidersBySource: Map<string, Set<string>> = new Map();
 	#runtimeProviderSourceByName: Map<string, string> = new Map();
 	// Runtime model managers registered by extensions via fetchDynamicModels.
@@ -1037,6 +1039,19 @@ export class ModelRegistry {
 		logger.warn("extension model projection failed; serving unprojected catalog", { provider, error });
 	}
 
+	#warnReservedProviderConfig(provider: string, detail: string): void {
+		const message = `models.yml: 'providers.${provider}' is reserved by this fork — ${detail}.`;
+		this.#reservedProviderWarnings.set(provider, message);
+		logger.warn("reserved provider id in models.yml ignored", { provider, detail });
+	}
+
+	/** Startup-visible notices for models.yml sections this fork ignores because
+	 * the provider id is reserved (company, zcode-api); empty unless models.yml
+	 * defines such sections. */
+	getReservedProviderWarnings(): string[] {
+		return [...this.#reservedProviderWarnings.values()];
+	}
+
 	/**
 	 * Runtime-synthesized provider rows (company, zcode-api) must never carry
 	 * user `models:` overlays or provider model overrides: strip any rows the
@@ -1576,8 +1591,28 @@ export class ModelRegistry {
 		const discoverableProviders: DiscoveryProviderConfig[] = [];
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
+		this.#reservedProviderWarnings.clear();
 		for (const [providerName, providerConfig] of providerEntries) {
-			if (providerName === COMPANY_PROVIDER_ID) continue;
+			if (providerName === COMPANY_PROVIDER_ID) {
+				this.#warnReservedProviderConfig(
+					providerName,
+					"this provider id belongs to the offline company lane; the whole section is ignored",
+				);
+				continue;
+			}
+			if (
+				providerName === ZCODE_API_PROVIDER_ID &&
+				((providerConfig.models?.length ?? 0) > 0 ||
+					providerConfig.baseUrl ||
+					providerConfig.headers ||
+					providerConfig.compat ||
+					providerConfig.discovery)
+			) {
+				this.#warnReservedProviderConfig(
+					providerName,
+					"only apiKey (and ZCODE_API_BASE_URL) is honored; models, baseUrl, headers, compat and discovery are ignored",
+				);
+			}
 			const commandConfigs = new Set<string>();
 			this.#collectCommandConfigValues(commandConfigs, providerConfig.apiKey, providerConfig.headers);
 			for (const modelDef of providerConfig.models ?? []) {

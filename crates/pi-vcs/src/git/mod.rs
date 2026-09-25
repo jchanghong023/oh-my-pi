@@ -29,6 +29,37 @@ use crate::{
 	types::{GitRepoInfo, LinkedWorktree},
 };
 
+/// Test-only hermetic-git helpers shared by the per-file fixtures.
+#[cfg(test)]
+pub(crate) mod test_support {
+	use std::sync::Once;
+
+	/// Neutralize host-global git config (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`
+	/// → empty device) for the in-process gix backend, once per process.
+	///
+	/// The single `Once` keeps the process environment from changing after the
+	/// first fixture: every fixture-backed test reaches its gix work only after
+	/// passing this gate, so a later fixture cannot mutate the environment under
+	/// a concurrently running `getenv` (glibc hands out pointers into the env
+	/// block, which `set_var` may reallocate). nextest (process-per-test)
+	/// trivially satisfies this; a shared multi-threaded harness (bazel runs the
+	/// whole libtest binary) relies on the gate ordering. Spawned git children
+	/// get the same pair per command via `Command::env` in each fixture's own
+	/// `git` helper.
+	pub(crate) fn hermetic_git_config_once() {
+		static HERMETIC_GIT_CONFIG: Once = Once::new();
+		HERMETIC_GIT_CONFIG.call_once(|| {
+			// SAFETY: both writes happen exactly once per process, before any
+			// fixture-backed test can reach gix; the values are platform
+			// constants every caller agrees on.
+			unsafe {
+				std::env::set_var("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
+				std::env::set_var("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" });
+			}
+		});
+	}
+}
+
 /// An opened git repository.
 ///
 /// Construction is filesystem-only; the gitoxide handle is opened lazily on

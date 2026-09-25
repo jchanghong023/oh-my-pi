@@ -194,6 +194,19 @@ export interface CollabHostOptions {
  * is still connecting (session switch, access upgrade, `/collab stop`,
  * shutdown), as opposed to a relay failure.
  */
+/**
+ * Startup failure for a relay that closed before the room was live; the
+ * duplicate-host close (relay 4009) names where the competing session is
+ * listed. With one identity per config root, two omp sessions sharing a
+ * config root race for the same room, and `/collab list` shows the winner.
+ */
+export function relayStartupCloseError(reason: string | undefined): Error {
+	if (reason === undefined) return new Error("relay connection closed during startup");
+	const hint =
+		reason === RELAY_CLOSE_REASONS[4009] ? " (another omp session hosts this room; /collab list shows it)" : "";
+	return new Error(`relay connection closed during startup: ${reason}${hint}`);
+}
+
 export class CollabHostStoppedError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -528,13 +541,7 @@ export class CollabHost {
 					.catch(err => logger.warn("Collab host registry withdrawal failed", { error: String(err) }));
 			}
 			if (this.#stopping) throw new CollabHostStoppedError("collab host stopped during startup");
-			const reason = this.#relayCloseReason;
-			if (reason === undefined) throw new Error("relay connection closed during startup");
-			// Name the relay's reason: with one identity per config root, a 4009 here
-			// means another omp session already hosts this room — say where to find it.
-			const hint =
-				reason === RELAY_CLOSE_REASONS[4009] ? " (another omp session hosts this room; /collab list shows it)" : "";
-			throw new Error(`relay connection closed during startup: ${reason}${hint}`);
+			throw relayStartupCloseError(this.#relayCloseReason);
 		}
 		this.#registryPublication = publication;
 	}

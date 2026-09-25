@@ -5,7 +5,8 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { COMPANY_PROVIDER_ID, getCompanyConfig } from "./company-provider";
 
 // Fixed metadata from the bundled public catalog; no discovery or public endpoints.
-const CHAT_MODELS: ReadonlyArray<
+// Exported for the contract test that pins the fork.md parameter table.
+export const COMPANY_CHAT_MODEL_SPECS: ReadonlyArray<
 	Pick<ModelSpec<"anthropic-messages">, "id" | "input" | "contextWindow" | "maxTokens" | "tokenizer">
 > = [
 	{
@@ -28,6 +29,27 @@ export const COMPANY_RETRIEVAL_MODELS = [
 	{ id: "Qwen3-VL-Reranker-2B", type: "reranker", input: ["text", "image"], contextWindow: 32768 },
 ] as const;
 
+/** `--offline` caps every company chat model's context at 200k tokens
+ * (process-only; `maxTokens` untouched) — fork contract. */
+export const COMPANY_OFFLINE_CONTEXT_WINDOW = 200_000;
+
+/**
+ * Model roles `--offline` fills in for this process when the company provider
+ * is usable and the role is otherwise unconfigured — fork contract; existing
+ * role config and explicit CLI model arguments always win.
+ */
+export const COMPANY_OFFLINE_ROLE_DEFAULTS: Readonly<Record<string, string>> = {
+	default: "company/Qwen3.6-27B-public",
+	smol: "company/Qwen3.6-35B-A3B",
+	tiny: "company/Qwen3.6-35B-A3B",
+	commit: "company/Qwen3.6-35B-A3B",
+	task: "company/Qwen3.6-27B-public",
+	vision: "company/Qwen3.6-27B-public",
+	advisor: "company/Qwen3.6-27B-public",
+	plan: "company/GLM-5.2-public",
+	slow: "company/GLM-5.2-public",
+};
+
 let chatModels: Model<"anthropic-messages">[] | undefined;
 const contextWindowKey = "omp.company-models.contextWindow";
 
@@ -38,13 +60,13 @@ export function setCompanyChatContextWindow(contextWindow: number): void {
 }
 
 export function getCompanyChatModelIds(): string[] {
-	return getCompanyConfig() ? CHAT_MODELS.map(model => model.id) : [];
+	return getCompanyConfig() ? COMPANY_CHAT_MODEL_SPECS.map(model => model.id) : [];
 }
 
 export function getCompanyChatModels(): Model<"anthropic-messages">[] {
 	const config = getCompanyConfig();
 	if (!config) return [];
-	return (chatModels ??= CHAT_MODELS.map(spec =>
+	return (chatModels ??= COMPANY_CHAT_MODEL_SPECS.map(spec =>
 		buildModel({
 			...spec,
 			contextWindow: (getEnvironmentData(contextWindowKey) as number | undefined) ?? spec.contextWindow,

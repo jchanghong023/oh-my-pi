@@ -35,21 +35,23 @@ export function collabIdentityPath(): string {
 
 /**
  * The room identity for this config root: read it, create it if absent, and
- * replace it when it is unreadable or corrupt.
+ * replace it when it is missing or corrupt.
  *
- * Never throws — a config root that cannot be written degrades to a fresh
- * per-process identity (today's behavior: a link that does not survive a
- * restart) rather than failing `/collab`.
+ * Never throws — a config root that cannot be written (or an identity file
+ * that cannot be read) degrades to a fresh per-process identity (today's
+ * behavior: a link that does not survive a restart) rather than failing
+ * `/collab`. An unreadable-but-present file is never overwritten: the read
+ * may have failed transiently (Windows sharing violation, backup lock), and
+ * replacing it would invalidate every link ever shared.
  */
 export async function loadOrCreateCollabIdentity(): Promise<CollabRoomIdentity> {
 	const file = collabIdentityPath();
-	const existing = await readIdentity(file);
-	if (existing) return existing;
-	const identity: CollabRoomIdentity = {
-		roomId: generateRoomId(),
-		key: generateRoomKey(),
-		writeToken: generateWriteToken(),
-	};
+	const first = await readIdentity(file);
+	if (first.status === "ok") return first.identity;
+	// Unreadable does not mean invalid — keep the file and its links intact.
+	if (first.status === "unreadable") return freshIdentity();
+	const identity = freshIdentity();
+	// Missing or corrupt: (re)create it.
 	try {
 		await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 		// Exclusive create: a second omp racing this one loses with EEXIST and
@@ -62,13 +64,23 @@ export async function loadOrCreateCollabIdentity(): Promise<CollabRoomIdentity> 
 			return identity;
 		}
 	}
-	const adopted = await readIdentity(file);
-	if (adopted) return adopted;
+	const second = await readIdentity(file);
+	if (second.status === "ok") return second.identity;
+	// Same rule as above: a file we cannot read may still be valid.
+	if (second.status === "unreadable") return identity;
 	// The file exists but does not parse as an identity (truncated write, hand
 	// edit, version bump): replace it atomically so a reader never sees a
 	// half-written file.
 	await writeIdentityAtomically(file, identity);
 	return identity;
+}
+
+function freshIdentity(): CollabRoomIdentity {
+	return {
+		roomId: generateRoomId(),
+		key: generateRoomKey(),
+		writeToken: generateWriteToken(),
+	};
 }
 
 function serializeIdentity(identity: CollabRoomIdentity): string {
@@ -110,18 +122,32 @@ function decodeSecret(value: unknown, length: number): Uint8Array | null {
 	return bytes.byteLength === length ? new Uint8Array(bytes) : null;
 }
 
-/** Read and validate the identity file; unreadable or malformed data is `null`. */
-async function readIdentity(file: string): Promise<CollabRoomIdentity | null> {
+type IdentityRead =
+	| { status: "ok"; identity: CollabRoomIdentity }
+	| { status: "missing" }
+	| { status: "corrupt" }
+	| { status: "unreadable" };
+
+/** Read and validate the identity file. `unreadable` (present but the read
+ * itself failed — sharing violation, EMFILE, permissions) is deliberately
+ * distinct from `missing`/`corrupt`: only the latter two may be rebuilt. */
+async function readIdentity(file: string): Promise<IdentityRead> {
 	let raw: string;
 	try {
 		raw = await fs.readFile(file, "utf8");
 	} catch (error) {
-		if (!isEnoent(error)) logger.warn("collab identity unreadable", { error: String(error) });
-		return null;
+		if (!isEnoent(error)) {
+			logger.warn("collab identity unreadable; keeping the file intact", { error: String(error) });
+			return { status: "unreadable" };
+		}
+		return { status: "missing" };
 	}
 	const identity = parseIdentity(raw);
-	if (!identity) logger.debug("collab identity invalid; regenerating", { file });
-	return identity;
+	if (!identity) {
+		logger.debug("collab identity invalid; regenerating", { file });
+		return { status: "corrupt" };
+	}
+	return { status: "ok", identity };
 }
 
 /** Best-effort tmp+rename replacement of a corrupt identity file. */

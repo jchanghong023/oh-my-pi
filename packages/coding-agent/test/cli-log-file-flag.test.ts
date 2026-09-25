@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { extractProfileFlags } from "@oh-my-pi/pi-coding-agent/cli/profile-bootstrap";
 
@@ -18,7 +18,13 @@ describe("temporary startup file logging", () => {
 	});
 
 	it.each(["default", "enabled", "explicit"])("honors %s transports in an isolated process", async scenario => {
-		const root = mkdtempSync(join(tmpdir(), "omp-startup-log-"));
+		// PI_CONFIG_DIR names a directory under home, so the child gets its own
+		// home too: `path.relative(homedir(), root)` on Windows returns an
+		// absolute path when tmpdir() sits on another drive, and the config
+		// root would then be joined into an invalid path.
+		const home = mkdtempSync(join(tmpdir(), "omp-startup-log-home-"));
+		const root = join(home, "omp-startup-log");
+		mkdirSync(root, { recursive: true });
 		try {
 			const script = `
 				import { setProfile, getLogsDir } from "@oh-my-pi/pi-utils/dirs";
@@ -37,7 +43,9 @@ describe("temporary startup file logging", () => {
 				cwd: resolve(import.meta.dir, "../../.."),
 				env: {
 					...process.env,
-					PI_CONFIG_DIR: relative(homedir(), root),
+					HOME: home,
+					USERPROFILE: home,
+					PI_CONFIG_DIR: "omp-startup-log",
 					OMP_PROFILE: "",
 					PI_PROFILE: "",
 					XDG_STATE_HOME: "",
@@ -67,7 +75,7 @@ describe("temporary startup file logging", () => {
 			}
 			expect(files.some(file => /config\.ya?ml$/.test(file.name))).toBe(false);
 		} finally {
-			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
 		}
 	});
 });
