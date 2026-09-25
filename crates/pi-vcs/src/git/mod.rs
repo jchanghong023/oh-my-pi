@@ -34,8 +34,9 @@ use crate::{
 pub(crate) mod test_support {
 	use std::sync::Once;
 
-	/// Neutralize host-global git config (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`
-	/// → empty device) for the in-process gix backend, once per process.
+	/// Neutralize host-global git config
+	/// (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` → empty device) for the
+	/// in-process gix backend, once per process.
 	///
 	/// The single `Once` keeps the process environment from changing after the
 	/// first fixture: every fixture-backed test reaches its gix work only after
