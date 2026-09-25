@@ -18,6 +18,7 @@ import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 // Registers the capability providers `buildAvailableSlashCommands` reads the
 // host's palette from (builtins + file commands under the session cwd).
@@ -55,7 +56,7 @@ function messageText(content: unknown): string {
 }
 
 /** Minimal InteractiveModeContext double: only the members the host and dispatch touch. */
-function makeHostContext(cwd: string): HostHarness {
+function makeHostContext(cwd: string, settings: InteractiveModeContext["settings"]): HostHarness {
 	const prompts: { text: string; from?: string }[] = [];
 	const modelPrompts: string[] = [];
 	const bash: { command: string; isExcluded: boolean }[] = [];
@@ -65,7 +66,10 @@ function makeHostContext(cwd: string): HostHarness {
 	const bashWaiters: ((value: { command: string; isExcluded: boolean }) => void)[] = [];
 	const tuiWaiters: ((value: string) => void)[] = [];
 	const ctx = {
-		settings: { get: () => "" },
+		// A real (in-memory) settings handle: the settings registry's
+		// derivations (`cfgCollabDisplayName` et al.) require a registered
+		// scope, and a bare `{ get }` stub reads as `undefined`.
+		settings,
 		sessionManager: {
 			getSessionId: () => "sess-guest-commands",
 			getCwd: () => cwd,
@@ -216,10 +220,11 @@ let harness: HostHarness;
 let host: CollabHost;
 
 beforeAll(async () => {
+	const settings = await Settings.init({ inMemory: true });
 	installInMemoryRelay();
 	tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-collab-commands-"));
 	await fs.mkdir(path.join(tmp, "subdir"));
-	harness = makeHostContext(tmp);
+	harness = makeHostContext(tmp, settings);
 	host = new CollabHost(harness.ctx);
 	// Port is irrelevant: the fake transport routes by the `role` query param.
 	await host.start("ws://localhost:8789");

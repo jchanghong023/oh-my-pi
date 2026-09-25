@@ -3925,13 +3925,6 @@ mod tests {
 			"xargs",
 			"yes",
 		];
-		// `errno` is a POSIX-only utility and is not compiled into the registry
-		// on Windows.
-		let mut expected = expected.to_vec();
-		if cfg!(unix) {
-			expected.push("errno");
-			expected.sort_unstable();
-		}
 		let mut names: Vec<&'static str> =
 			pi_builtins::utility_builtins::<brush_core::extensions::DefaultShellExtensions>()
 				.into_iter()

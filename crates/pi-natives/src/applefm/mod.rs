@@ -47,10 +47,6 @@ pub fn apple_fm_generate(
 
 /// Cancels a generation; its stream then ends with a `cancelled` error event.
 /// Unknown or finished handles are ignored.
-// `const` only holds on non-macOS, where `platform::cancel` is a no-op; the
-// macOS implementation stores a cancel flag in an atomic and stays non-const,
-// so the lint cannot be satisfied on both platforms.
-#[allow(clippy::missing_const_for_fn, reason = "const only provable off macOS")]
 #[napi]
 #[allow(clippy::missing_const_for_fn, reason = "napi macro is incompatible with const fn")]
 pub fn apple_fm_cancel(handle: u32) {
