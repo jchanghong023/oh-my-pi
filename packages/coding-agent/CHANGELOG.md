@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+### Added
+
+- Collab links are now long-lived: the room identity persists in `collab/identity.json` under the config root, so one link keeps working across `/new`, `/resume`, `/fork`, `/collab stop`, and omp restarts. `/collab` and `/collab view` also copy the browser deep link to the clipboard.
+- Browser collab guests can run the host's whole command surface — builtins, `/skill:<name>`, extension/custom/file commands, `!`/`!!` shell, `$`/`$$` python, and session-rotating commands such as `/new` — with `/` completion from a palette the host advertises on join; `/move` and `/add-dir` complete host directory paths, and a room rotation keeps the page reconnecting instead of ending it.
+- The fork's browser client is published with the docs site at `https://jchanghong023.github.io/oh-my-pi/collab/` and `collab.webUrl` now defaults to it, so `/collab` links open a client with those features instead of the relay-hosted upstream build (set `collab.webUrl` empty for the upstream behavior).
+
+### Removed
+
+- Removed the fork-only Main/Discuss primary-agent mode (`Shift+F2`) along with its tool gating, prompt section, and status-bar segment; existing sessions resume as regular sessions.
+
+### Changed
+
+- Session-starting commands now size the native file walker from the host: with `PI_WALK_WORKERS` unset and more than 8 logical cores, the process sets it to `min(cores/2, 16)` (32 cores → 16), and `--offline` processes additionally default `FS_SCAN_CACHE_TTL_MS` to 30000ms so `@` completion stops rescanning network shares on every keystroke. Explicitly set values, including `0`, always win, and no config file is written.
+- Local `build-binary` builds now embed the fork update repository, so `omp update` on a locally built binary targets fork releases instead of the official upstream distribution.
+- Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
+- `omp update` now shows binary download progress and warns when the PATH-resolved `omp` differs from the update target.
+- `omp --version` now includes the UTC release timestamp, rounded to the minute.
+- Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
+- Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
+- Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
+- The `/model` interface now shows only free models for OpenCode Zen while leaving every other provider unchanged.
+- Changed the default thinking-level shortcut to `Shift+F1` and Main/Discuss switching to `Shift+F2`.
+
+### Fixed
+
+- Fixed Windows built-in tools (rg/grep/ls/…) block-buffering captured-pipe output until tool exit: anonymous pipes are no longer misdetected as regular files, and `sed` redirected output now uses the regular-file snapshot.
+- Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
+- Fixed watchdog and debug-bundle log paths using a UTC date while the rotating sink writes local-date filenames.
+- Fixed `/team` crashing with a raw TypeError when `team.members` is not a list; it now reports a configuration example instead.
+- Fixed the docs hub keeping a stale error line after successful follow-up actions, and collab-forwarded magic-keyword prompts now receive the keyword strategy notices.
+- Marked the `musl-release` script test Linux-only and added the docs/wiki suites to the local fulltest whitelist; fulltest/fastcheck phase timeouts now kill the whole child process tree.
+- Fixed `update.channel=canary` failing silently on fork binary installs: the startup version check now shows a notice that the canary channel is unavailable and points at `omp update --stable`.
+- Fixed external Markdown document indexes dropping a section whose only content is an indented-code `#` heading line, and stopped directory imports from recursing forever through a cyclic Windows junction.
+- Fixed the TUI becoming unresponsive while streamed edit previews arrive in a burst.
+- Fork binary verification now preserves the `+fork.<build>` suffix reported by installed executables.
+
 ## [18.3.1] - 2026-09-25
 
 ### Added
@@ -124,32 +160,6 @@
 
 ### Added
 
-- Collab links are now long-lived: the room identity persists in `collab/identity.json` under the config root, so one link keeps working across `/new`, `/resume`, `/fork`, `/collab stop`, and omp restarts. `/collab` and `/collab view` also copy the browser deep link to the clipboard.
-- Browser collab guests can run the host's whole command surface — builtins, `/skill:<name>`, extension/custom/file commands, `!`/`!!` shell, `$`/`$$` python, and session-rotating commands such as `/new` — with `/` completion from a palette the host advertises on join; `/move` and `/add-dir` complete host directory paths, and a room rotation keeps the page reconnecting instead of ending it.
-- The fork's browser client is published with the docs site at `https://jchanghong023.github.io/oh-my-pi/collab/` and `collab.webUrl` now defaults to it, so `/collab` links open a client with those features instead of the relay-hosted upstream build (set `collab.webUrl` empty for the upstream behavior).
-
-### Removed
-
-- Removed the fork-only Main/Discuss primary-agent mode (`Shift+F2`) along with its tool gating, prompt section, and status-bar segment; existing sessions resume as regular sessions.
-
-### Changed
-
-- Session-starting commands now size the native file walker from the host: with `PI_WALK_WORKERS` unset and more than 8 logical cores, the process sets it to `min(cores/2, 16)` (32 cores → 16), and `--offline` processes additionally default `FS_SCAN_CACHE_TTL_MS` to 30000ms so `@` completion stops rescanning network shares on every keystroke. Explicitly set values, including `0`, always win, and no config file is written.
-- Local `build-binary` builds now embed the fork update repository, so `omp update` on a locally built binary targets fork releases instead of the official upstream distribution.
-
-### Fixed
-
-- Fixed Windows built-in tools (rg/grep/ls/…) block-buffering captured-pipe output until tool exit: anonymous pipes are no longer misdetected as regular files, and `sed` redirected output now uses the regular-file snapshot.
-- Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
-- Fixed watchdog and debug-bundle log paths using a UTC date while the rotating sink writes local-date filenames.
-- Fixed `/team` crashing with a raw TypeError when `team.members` is not a list; it now reports a configuration example instead.
-- Fixed the docs hub keeping a stale error line after successful follow-up actions, and collab-forwarded magic-keyword prompts now receive the keyword strategy notices.
-- Marked the `musl-release` script test Linux-only and added the docs/wiki suites to the local fulltest whitelist; fulltest/fastcheck phase timeouts now kill the whole child process tree.
-
-### Fixed
-### Added
-
-- `find` (and `omp find`) accepts an `omp://` docs scope: `omp://` searches every embedded harness doc and `omp://<file>.md` searches one, reporting hits as canonical `omp://` URLs that `read` opens directly, including with `:start-end` selectors ([#12758](https://github.com/can1357/oh-my-pi/pull/12758) by [@H4vC](https://github.com/H4vC)).
 - Added live benchmark results table with real-time model ranking and per-kind performance metrics
 - Added dedicated prefill throughput reporting for prefill-focused benchmarks
 - Added `/record` slash command to capture terminal sessions as replayable `.ompcast` files
@@ -324,9 +334,6 @@
 - Updated CLI byte sizes to use decimal KB units and made duration displays coarser and easier to read.
 
 ### Fixed
-
-- Fixed `update.channel=canary` failing silently on fork binary installs: the startup version check now shows a notice that the canary channel is unavailable and points at `omp update --stable`.
-- Fixed external Markdown document indexes dropping a section whose only content is an indented-code `#` heading line, and stopped directory imports from recursing forever through a cyclic Windows junction.
 
 - Fixed `edit` auto-repair waiting up to 60 seconds when the `smol` model does not respond; it now times out after 20 seconds and reports repair start and timeout details.
 - Fixed subagents leaving queued parent messages behind after tool interruptions.
@@ -1116,10 +1123,6 @@
 - Added the `retry.waitForUsageReset` setting: when a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), the session sleeps until the reset instead of failing fast past `retry.maxDelayMs`.
 - Added opt-in `bash.allowCompoundCommands` approval for conservative literal `&&` chains, with ordered per-segment rules and normal bash policy fallback for unmatched segments. The opt-in requires a positively classified POSIX-quoting shell; incompatible and unknown shells retain legacy approval. Whole-chain denies take precedence over earlier prompts.
 
-### Changed
-
-- Changed the default thinking-level shortcut to `Shift+F1` and Main/Discuss switching to `Shift+F2`.
-
 ### Fixed
 
 - Idle compaction now starts or reschedules when its enabled state, threshold, or delay changes while a session is already idle ([#10242](https://github.com/can1357/oh-my-pi/issues/10242)).
@@ -1319,7 +1322,6 @@
 
 ### Fixed
 
-- Fixed the TUI becoming unresponsive while streamed edit previews arrive in a burst.
 - Active sessions now keep memory proportional to truncated raw SSE and tool outputs instead of retaining complete oversized backing strings ([#10547](https://github.com/can1357/oh-my-pi/issues/10547)).
 - Anthropic sessions now keep tool-roster changes and warm-prefix pruning from invalidating preserved thinking or the prompt cache.
 - TypeScript code intelligence now works on TypeScript 7 projects: the built-in `typescript-native` server runs `tsc --lsp --stdio` when the resolved TypeScript install no longer ships `tsserver.js`, replacing `typescript-language-server` for that project.
@@ -1498,13 +1500,6 @@
 ### Changed
 
 - `extendedContext` now defaults to off: models with premium long-context pricing tiers (e.g. GPT-5.6 1M) stay capped at their standard-pricing window unless the setting or `/extended-context on` enables the extended window.
-- Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
-- `omp update` now shows binary download progress and warns when the PATH-resolved `omp` differs from the update target.
-- `omp --version` now includes the UTC release timestamp, rounded to the minute.
-- Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
-- Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
-- Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
-- The `/model` interface now shows only free models for OpenCode Zen while leaving every other provider unchanged.
 
 ### Fixed
 
@@ -1638,7 +1633,6 @@
 - Accelerated SHA-2 and SHA-3 checksum builtins on supported ARM64 hardware.
 - Fixed joined collaboration guests becoming inconsistent with the host after host-side compaction.
 - Fixed `hub list` and child peer rosters counting parked agents from stale root sessions; the persisted roster now scopes to the current root, retries transient filesystem faults, and renders live rows through the production subagent prompt template with a truthful omitted count.
-- Fork binary verification now preserves the `+fork.<build>` suffix reported by installed executables.
 
 ## [18.0.6] - 2026-08-26
 

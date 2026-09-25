@@ -129,14 +129,13 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const canSend = canPrompt && text.trim().length > 0;
 
 	// `/move <prefix>` and `/add-dir <prefix>` ask the host for directory
-	// candidates; the effect cancels both the debounce and a late answer, so a
-	// stale listing can never replace a newer one.
+	// candidates; the effect clears the previous listing as soon as the prefix
+	// changes and cancels both the debounce and a late answer, so a stale
+	// listing can never surface or replace a newer one.
 	const dirPrefix = directoryArgument(text)?.prefix ?? null;
 	useEffect(() => {
-		if (dirPrefix === null) {
-			setDirs([]);
-			return;
-		}
+		setDirs([]);
+		if (dirPrefix === null) return;
 		let cancelled = false;
 		const timer = setTimeout(() => {
 			void client.fetchDirSuggestions(dirPrefix).then(entries => {
