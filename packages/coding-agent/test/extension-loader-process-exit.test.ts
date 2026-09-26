@@ -42,12 +42,13 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 			stdout: "pipe",
 			stderr: "pipe",
 		});
-		// Real process signals cannot use fake timers; this only bounds a wedged child.
+		// Real process signals cannot use fake timers. Allow cold child startup
+		// under concurrent CI shards before treating a wedged probe as a failure.
 		const watchdog = setTimeout(() => {
 			try {
 				proc.kill("SIGKILL");
 			} catch {}
-		}, 2000);
+		}, 10_000);
 		try {
 			const [exitCode, stdout, stderr] = await Promise.all([
 				proc.exited,
