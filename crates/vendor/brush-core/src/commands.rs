@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	ffi::OsStr,
+	ffi::{OsStr, OsString},
 	fmt::Display,
 	io::{self, Write},
 	path::{Path, PathBuf},
@@ -94,6 +94,9 @@ impl<SE: ShellExtensions> ExecutionContext<'_, SE> {
 pub enum CommandArg {
 	/// A simple string argument.
 	String(String),
+	/// An argument that is not valid UTF-8; the original bytes must reach the
+	/// spawned process unchanged.
+	OsString(OsString),
 	/// An assignment/declaration; typically treated as a string, but will
 	/// be specially handled by a limited set of built-in commands.
 	Assignment(ast::Assignment),
@@ -103,6 +106,7 @@ impl Display for CommandArg {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Self::String(s) => f.write_str(s),
+			Self::OsString(s) => f.write_str(&s.to_string_lossy()),
 			Self::Assignment(a) => write!(f, "{a}"),
 		}
 	}
@@ -124,6 +128,12 @@ impl CommandArg {
 	pub(crate) fn quote_for_tracing(&self) -> Cow<'_, str> {
 		match self {
 			Self::String(s) => escape::quote_if_needed(s, escape::QuoteMode::SingleQuote),
+			Self::OsString(s) => escape::quote_if_needed(
+				&s.to_string_lossy(),
+				escape::QuoteMode::SingleQuote,
+			)
+			.into_owned()
+			.into(),
 			Self::Assignment(a) => {
 				let mut s = a.name.to_string();
 				let op = if a.append { "+=" } else { "=" };
@@ -388,8 +398,13 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	/// dispatching it appropriately according to the context provided.
 	#[allow(clippy::missing_panics_doc, reason = "these unwrap calls should not panic")]
 	pub async fn execute(mut self) -> Result<ExecutionSpawnResult, error::Error> {
-		// First see if it's the name of a builtin.
-		let builtin = self.shell.builtins().get(&self.command_name).cloned();
+		// String-only builtins cannot receive native bytes intact. Use the external
+		// command when an argument contains non-UTF-8 data.
+		let builtin = if self.args.iter().any(|arg| matches!(arg, CommandArg::OsString(_))) {
+			None
+		} else {
+			self.shell.builtins().get(&self.command_name).cloned()
+		};
 
 		// If we're in POSIX mode and found a special builtin (that's not disabled),
 		// then invoke it without considering functions.
@@ -683,15 +698,13 @@ pub(crate) fn execute_external_command(
 	argv0_override: Option<&str>,
 	args: &[CommandArg],
 ) -> Result<ExecutionSpawnResult, error::Error> {
-	// Filter out the args; we only want strings.
+	// Assignments are shell syntax; preserve native argument bytes for spawned processes.
 	let cmd_args = args
 		.iter()
-		.filter_map(|e| {
-			if let CommandArg::String(s) = e {
-				Some(s)
-			} else {
-				None
-			}
+		.filter_map(|arg| match arg {
+			CommandArg::String(s) => Some(OsString::from(s)),
+			CommandArg::OsString(s) => Some(s.clone()),
+			CommandArg::Assignment(_) => None,
 		})
 		.collect::<Vec<_>>();
 
@@ -717,7 +730,9 @@ pub(crate) fn execute_external_command(
 		cmd_args.as_slice(),
 		false, /* empty environment? */
 	)?;
-	let mut marker_output = prepare_output_markers(&context, executable_path, cmd_args.as_slice());
+	let marker_args = cmd_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
+	let marker_args = marker_args.iter().map(AsRef::as_ref).collect::<Vec<&str>>();
+	let mut marker_output = prepare_output_markers(&context, executable_path, &marker_args);
 
 
 	// Set up process group/session state.
@@ -842,13 +857,13 @@ pub(crate) fn execute_external_command(
 fn prepare_output_markers<SE: extensions::ShellExtensions>(
 	context: &ExecutionContext<'_, SE>,
 	executable_path: &str,
-	args: &[&String],
+	args: &[&str],
 ) -> Option<(openfiles::OpenFile, ExternalCommandOutputMarkers)> {
 	let marker = context.params.command_output_marker()?;
 	let markers = marker.markers_for_external_command(ExternalCommandInfo {
 		command_name:    context.command_name.as_str(),
 		executable_path,
-		args:            args.iter().map(|arg| arg.as_str()).collect(),
+		args:            args.to_vec(),
 	})?;
 	let mut output = context.params.try_stdout(context.shell)?;
 	if output.write_all(markers.start_marker.as_bytes()).is_err() {

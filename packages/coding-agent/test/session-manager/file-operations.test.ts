@@ -493,4 +493,41 @@ describe("SessionManager legacy session migration persistence", () => {
 			await session.close();
 		}
 	});
+
+	it("keeps the next transcript resumable after deleting the active session", async () => {
+		const session = SessionManager.create(tempDir, tempDir);
+		session.appendMessage({ role: "user", content: "deleted conversation", timestamp: 1 });
+		await session.flush();
+		const deletedFile = session.getSessionFile();
+		if (!deletedFile) throw new Error("Expected persisted session file");
+
+		try {
+			await session.dropSession(deletedFile);
+			const freshFile = await session.newSession({ drop: true });
+			if (!freshFile) throw new Error("Expected new session file");
+			expect(freshFile).not.toBe(deletedFile);
+			expect(fs.existsSync(deletedFile)).toBe(false);
+			session.appendMessage({ role: "user", content: "new conversation", timestamp: 2 });
+			await session.flush();
+
+			const entries = await loadEntriesFromFile(freshFile);
+			expect(entries[0]?.type).toBe("session");
+			expect(
+				entries.some(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "user" &&
+						entry.message.content === "new conversation",
+				),
+			).toBe(true);
+			const resumed = await SessionManager.open(freshFile, tempDir);
+			try {
+				expect(resumed.getEntries().some(entry => entry.type === "message")).toBe(true);
+			} finally {
+				await resumed.close();
+			}
+		} finally {
+			await session.close();
+		}
+	});
 });

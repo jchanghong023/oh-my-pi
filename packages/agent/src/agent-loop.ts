@@ -994,7 +994,8 @@ export function normalizeTools(tools: AgentContext["tools"], options: NormalizeT
 	const injectIntent = options.injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
-		const doInjectIntent = injectIntent && intentMode !== "omit";
+		const doInjectIntent =
+			injectIntent && intentMode !== "omit" && !schemaDefinesProperty(toolWireSchema(t), INTENT_FIELD);
 		// When the full catalog is rendered into the system prompt, ship the tool
 		// specs without their descriptions (top-level + nested schema annotations)
 		// so they are not duplicated on the wire. Strip the STABLE wire schema (the
@@ -2835,18 +2836,11 @@ async function prepareToolCallDispatch(
 		const entry: PreparedToolCall = { tool, args: toolCall.arguments as Record<string, unknown> };
 		prepared.set(toolCall.id, entry);
 		let argsForExecution = toolCall.arguments as Record<string, unknown>;
-		if (intentTracing) {
+		// A schema-owned `i` is a tool argument, never a harness intent.
+		if (intentTracing && !(tool && schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD))) {
 			const { intent, strippedArgs } = extractIntent(toolCall.arguments);
 			argsForExecution = strippedArgs;
-			// A payload in `i` would be stripped and the tool run with the leftover
-			// args. Unknown tools fall through to the not-found error; a tool that
-			// owns `i` as a real parameter has nowhere else to put the value.
-			if (
-				intent !== undefined &&
-				intent.length > MAX_INTENT_LENGTH &&
-				tool &&
-				!schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD)
-			) {
+			if (intent !== undefined && intent.length > MAX_INTENT_LENGTH && tool) {
 				entry.args = strippedArgs;
 				entry.validationErrorMessage = `\`${INTENT_FIELD}\` is a short intent label (at most ${MAX_INTENT_LENGTH} chars); the value you sent is ${intent.length} chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief \`${INTENT_FIELD}\`.`;
 				continue;

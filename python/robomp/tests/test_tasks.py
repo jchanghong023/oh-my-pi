@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from robomp import tasks
-from robomp.github_client import IssueInfo, RepoInfo
+from robomp.github_client import GitHubError, IssueInfo, RepoInfo
 
 
 async def test_triage_issue_keeps_event_loop_live_while_workspace_setup_blocks(db, settings, monkeypatch, tmp_path):
@@ -235,3 +235,75 @@ async def test_triage_issue_reopen_tears_down_finalized_workspace(db, settings, 
     row = db.get_issue("octo/widget#1")
     assert row is not None
     assert row.state == "reproducing"
+
+
+async def _github_fetch_boom(*_args, **_kwargs):
+    raise GitHubError(502, "upstream connect error")
+
+
+def _forbid_run_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The agent turn must never start when the GitHub fetch itself fails."""
+
+    async def _unreachable(**_kwargs):
+        raise AssertionError("run_task must not run when the GitHub fetch fails")
+
+    monkeypatch.setattr(tasks, "run_task", _unreachable)
+
+
+async def test_review_pr_propagates_github_fetch_error(db, settings, monkeypatch):
+    """A GitHub fetch failure must reach the queue dispatcher, not vanish as a done event.
+
+    Pre-fix, review_pr swallowed GitHubError after a warning log and returned
+    normally, so `_dispatch_and_mark` marked the delivery done and the review
+    was silently lost — the queue's `schedule_retry` path never ran.
+    """
+    _forbid_run_task(monkeypatch)
+    github = SimpleNamespace(get_repo=_github_fetch_boom)
+
+    with pytest.raises(GitHubError) as excinfo:
+        await tasks.review_pr(
+            settings=settings,
+            db=db,
+            github=github,
+            sandbox=SimpleNamespace(natives_cache=None),
+            git_transport=SimpleNamespace(),
+            payload={"pull_request": {"number": 12}, "repository": {"full_name": "octo/widget"}},
+            delivery_id="d1",
+        )
+    assert excinfo.value.status == 502
+
+
+async def test_handle_review_propagates_github_fetch_error(db, settings, monkeypatch):
+    """Same contract as review_pr: the repo/issue fetch failure must surface for retry."""
+    _forbid_run_task(monkeypatch)
+    db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12)
+    github = SimpleNamespace(get_repo=_github_fetch_boom)
+
+    with pytest.raises(GitHubError):
+        await tasks.handle_review(
+            settings=settings,
+            db=db,
+            github=github,
+            sandbox=SimpleNamespace(natives_cache=None),
+            git_transport=SimpleNamespace(),
+            payload={"pull_request": {"number": 12}, "repository": {"full_name": "octo/widget"}},
+            delivery_id="d1",
+        )
+
+
+async def test_handle_pr_conversation_propagates_github_fetch_error(db, settings, monkeypatch):
+    """Same contract as review_pr: the repo/issue fetch failure must surface for retry."""
+    _forbid_run_task(monkeypatch)
+    db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12)
+    github = SimpleNamespace(get_repo=_github_fetch_boom)
+
+    with pytest.raises(GitHubError):
+        await tasks.handle_pr_conversation(
+            settings=settings,
+            db=db,
+            github=github,
+            sandbox=SimpleNamespace(natives_cache=None),
+            git_transport=SimpleNamespace(),
+            payload={"repository": {"full_name": "octo/widget"}, "issue": {"number": 12}},
+            delivery_id="d1",
+        )

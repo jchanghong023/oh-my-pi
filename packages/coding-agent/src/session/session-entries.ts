@@ -59,6 +59,8 @@ export interface NewSessionOptions {
 	providerPromptCacheKey?: string;
 	/** Skip flushing the current session and delete it instead of saving. */
 	drop?: boolean;
+	/** Report a failed drop after the new session has been fully activated. */
+	throwOnDropFailure?: boolean;
 	/** Additional workspace directories to seed on the new session. */
 	additionalDirectories?: string[];
 	/** Directory for the new session file (and later `/new` sessions); defaults to the current session directory. */

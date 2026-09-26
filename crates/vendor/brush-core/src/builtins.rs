@@ -598,12 +598,19 @@ async fn exec_simple_builtin_impl<
 	context: commands::ExecutionContext<'_, SE>,
 	args: Vec<CommandArg>,
 ) -> Result<results::ExecutionResult, error::Error> {
-	let plain_args = args.into_iter().map(|arg| match arg {
-		CommandArg::String(s) => s,
-		CommandArg::Assignment(a) => a.to_string(),
-	});
+	let plain_args = args
+		.into_iter()
+		.map(|arg| match arg {
+			CommandArg::String(s) => Ok(s),
+			CommandArg::OsString(_) => Err(error::ErrorKind::InternalError(
+				"builtin cannot accept non-UTF-8 argument".into(),
+			)
+			.into()),
+			CommandArg::Assignment(a) => Ok(a.to_string()),
+		})
+		.collect::<Result<Vec<_>, error::Error>>()?;
 
-	T::execute(context, plain_args)
+	T::execute(context, plain_args.into_iter())
 }
 
 fn exec_builtin<T: Command + Send + Sync, SE: extensions::ShellExtensions>(
@@ -617,12 +624,19 @@ async fn exec_builtin_impl<T: Command + Send + Sync, SE: extensions::ShellExtens
 	context: commands::ExecutionContext<'_, SE>,
 	args: Vec<CommandArg>,
 ) -> Result<results::ExecutionResult, error::Error> {
-	let plain_args = args.into_iter().map(|arg| match arg {
-		CommandArg::String(s) => s,
-		CommandArg::Assignment(a) => a.to_string(),
-	});
+	let plain_args = args
+		.into_iter()
+		.map(|arg| match arg {
+			CommandArg::String(s) => Ok(s),
+			CommandArg::OsString(_) => Err(error::ErrorKind::InternalError(
+				"builtin cannot accept non-UTF-8 argument".into(),
+			)
+			.into()),
+			CommandArg::Assignment(a) => Ok(a.to_string()),
+		})
+		.collect::<Result<Vec<_>, error::Error>>()?;
 
-	let result = T::new(plain_args);
+	let result = T::new(plain_args.into_iter());
 	let command = match result {
 		Ok(command) => command,
 		Err(e) => {

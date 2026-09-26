@@ -1765,6 +1765,54 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("activates the repo tool force-included next to an explicit read list", async () => {
+		// `createTools` force-includes wiki and repo when an unrestricted explicit
+		// list contains read; the session-managed activation mirror must surface
+		// both so the model can call what the registry constructed for it.
+		const tempDir = makeTempDir();
+
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			expect(session.getToolByName("repo")).toBeDefined();
+			expect(session.getActiveToolNames()).toContain("wiki");
+			expect(session.getActiveToolNames()).toContain("repo");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("does not force-activate an inactive extension replacing repo", async () => {
+		const tempDir = makeTempDir();
+		const replacement: ExtensionFactory = pi => {
+			pi.registerTool({
+				name: "repo",
+				label: "Extension Repo",
+				description: "Inactive replacement for the built-in repo tool.",
+				parameters: type({}),
+				defaultInactive: true,
+				async execute() {
+					return { content: [{ type: "text", text: "extension repo" }] };
+				},
+			});
+		};
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [replacement],
+			toolNames: ["read"],
+		});
+		try {
+			expect(session.getToolByName("repo")?.label).toBe("Extension Repo");
+			expect(session.hasBuiltInTool("repo")).toBe(false);
+			expect(session.getActiveToolNames()).not.toContain("repo");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("resets reused yield state through the SDK extension wrapper", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession({

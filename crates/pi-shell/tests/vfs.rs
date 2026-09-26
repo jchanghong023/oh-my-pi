@@ -1,7 +1,7 @@
 //! Shell operations must await provider I/O even on a current-thread runtime.
 
 #[cfg(unix)]
-use std::os::unix::fs::symlink;
+use std::os::unix::{ffi::OsStrExt, fs::symlink};
 use std::{
 	fs,
 	io::{self, Read, Seek, SeekFrom},
@@ -254,6 +254,32 @@ async fn command_running_utilities_dispatch_builtins_that_open_urls() {
 		.expect("command-running utilities");
 	assert_eq!(u8::from(result.exit_code), 0, "{}", captured_text(&error));
 	assert_eq!(captured_text(&output), "alpha\nbeta\nbeta\nalpha\n");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn find_exec_preserves_non_utf8_filename_bytes() {
+	let directory = tempfile::tempdir().expect("isolated native directory");
+	let name = std::ffi::OsStr::from_bytes(b"non-utf8-\xff");
+	fs::write(directory.path().join(name), b"content").expect("non-UTF-8 file");
+	let mut output = tempfile::tempfile().expect("captured stdout");
+	let error = tempfile::tempfile().expect("captured stderr");
+	let mut shell = virtual_shell(directory.path()).await;
+	shell.set_working_dir(directory.path()).await.expect("native working directory");
+	let parameters = capture_parameters(&shell, &output, &error);
+	let result = shell
+		.run_string(
+			"find . -type f -exec /bin/sh -c 'printf %s \"$1\"' sh {} ';'",
+			&SourceInfo::from("non-UTF-8-find-exec"),
+			&parameters,
+		)
+		.await
+		.expect("find -exec");
+	assert_eq!(u8::from(result.exit_code), 0, "{}", captured_text(&error));
+	output.rewind().expect("rewind output");
+	let mut actual = Vec::new();
+	output.read_to_end(&mut actual).expect("read output");
+	assert_eq!(actual, Path::new(".").join(name).as_os_str().as_bytes());
 }
 
 async fn wait_for_output(path: &Path, suffix: &str) -> io::Result<()> {

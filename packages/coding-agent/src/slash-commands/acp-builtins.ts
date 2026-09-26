@@ -65,7 +65,8 @@ export function acpBuiltinSlashCommands(): AvailableCommand[] {
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:
- * - `false` when no builtin matched (or matched a TUI-only entry); the caller
+ * - `false` when no builtin matched (or matched a TUI-only entry, or the match
+ *   lacks `allowArgs` while the invocation carries arguments); the caller
  *   should forward the input as a prompt.
  * - `{ consumed: true }` when the command handled the input entirely.
  * - `{ prompt }` when the command was handled but a residual prompt should be
@@ -79,6 +80,11 @@ export async function executeAcpBuiltinSlashCommand(
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);
 	if (!command?.handle) return false;
+	// Same `allowArgs` gate as the TUI dispatcher in `builtin-registry`: specs
+	// that don't declare `allowArgs` refuse invocations carrying arguments, so
+	// the input falls through to the model instead of running a handler that
+	// would silently ignore the extra args.
+	if (parsed.args.length > 0 && !command.allowArgs) return false;
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;

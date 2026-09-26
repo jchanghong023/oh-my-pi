@@ -244,18 +244,29 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
 				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
-				// Route through the active SessionManager so the persist writer is
-				// closed before the file is deleted. Constructing a fresh
-				// FileSessionStorage and calling deleteSessionWithArtifacts leaves
-				// the active writer attached to the now-deleted path, so the next
-				// prompt would silently resurrect or corrupt the "deleted" file.
+				// Route through AgentSession.newSession({ drop: true }) — the same
+				// entry the interactive /delete flow uses — so the persist writer is
+				// closed and the file deleted, then the session is reset to a
+				// brand-new one. Deleting via SessionManager.dropSession alone
+				// leaves the manager tracking the now-deleted path, so the next
+				// prompt would silently recreate it without a session header (an
+				// unresumable transcript).
+				let deleted: boolean;
 				try {
-					await runtime.sessionManager.dropSession(sessionFile);
+					deleted = await runtime.session.newSession({ drop: true, throwOnDropFailure: true });
 				} catch (err) {
-					return usage(`Failed to delete session: ${errorMessage(err)}`, runtime);
+					const switched = runtime.sessionManager.getSessionFile() !== sessionFile;
+					return usage(
+						`Failed to delete session: ${errorMessage(err)}${switched ? " A new session is now active." : ""}`,
+						runtime,
+					);
+				}
+				if (!deleted) {
+					await runtime.output("Session delete cancelled by a session_before_switch hook; nothing was deleted.");
+					return commandConsumed();
 				}
 				await runtime.output(
-					`Session deleted: ${sessionFile}. Use ACP \`session/load\` to switch to another session.`,
+					`Session deleted: ${sessionFile}. A new session is now active; use ACP \`session/load\` to switch to another one.`,
 				);
 				return commandConsumed();
 			}

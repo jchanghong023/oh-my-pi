@@ -101,6 +101,12 @@ export class CollabSocket {
 	#closed = false;
 	/** Allows a previously joined guest to outlive room recreation races. */
 	#retryMissingRoom = false;
+	/**
+	 * True once a frame has decrypted on a live connection: this guest has occupied
+	 * the room, so a later 4004 is the host-restart window rather than a dead link.
+	 * Never cleared; only close() ends the session for good.
+	 */
+	#joinedRoomOnce = false;
 	/** Set while a transient drop is being retried; the next open is a new room. */
 	#rejoining = false;
 	/**
@@ -588,6 +594,7 @@ export class CollabSocket {
 				if (stale()) return;
 				if (this.#ws === ws) {
 					this.#retryMissingRoom = false;
+					this.#joinedRoomOnce = true;
 					this.#attempt = 0;
 				}
 				this.onFrame?.(frame, envelope.peerId);
@@ -647,7 +654,8 @@ export class CollabSocket {
 		}
 		const fatalReason = RELAY_CLOSE_REASONS[code];
 		const closeReason = fatalReason ?? (reason || `connection lost (code ${code})`);
-		const retryRoom = this.#opts.role === "guest" && (code === 4001 || (code === 4004 && this.#retryMissingRoom));
+		const tolerateMissingRoom = this.#retryMissingRoom || this.#joinedRoomOnce;
+		const retryRoom = this.#opts.role === "guest" && (code === 4001 || (code === 4004 && tolerateMissingRoom));
 		if (retryRoom) {
 			this.#retryMissingRoom = true;
 			this.#rejoining = true;

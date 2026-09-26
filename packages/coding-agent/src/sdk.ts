@@ -1172,7 +1172,7 @@ const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 /** Matches the truncation applied to per-server instructions inside `rebuildSystemPrompt`. */
 const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
-const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["wiki", "manage_skill", "learn", "context_notes", "new_context"];
+const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["wiki", "repo", "manage_skill", "learn", "context_notes", "new_context"];
 
 let sshCleanupRegistered = false;
 
@@ -1465,6 +1465,18 @@ export function createAutoLearnCaptureRunner(
 		}
 	};
 }
+
+/** Reuse the CLI singleton for its workspace; load other SDK workspaces independently. */
+async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Settings> {
+	const pending = Settings.current;
+	if (!pending) return Settings.init({ cwd, agentDir });
+	const cached = await pending;
+	if (cached.getCwd() === path.normalize(cwd) && cached.getAgentDir() === path.normalize(agentDir)) {
+		return cached;
+	}
+	return Settings.loadIsolated({ cwd, agentDir });
+}
+
 /**
  * Create an AgentSession with the specified options.
  *
@@ -1518,7 +1530,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 	const settings = await (options.settings ??
 		options.settingsManager ??
-		logger.time("settings", Settings.init, { cwd, agentDir }));
+		logger.time("settings", resolveSessionSettings, cwd, agentDir));
 	// Discovery provider toggles and process-wide setting effects (theme, request limits, …)
 	// follow the newest holder: each top-level session holds both on its settings until disposed,
 	// then hands them back to the previous holder. Subagents and helper sessions never take them,
@@ -3762,11 +3774,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		// This keeps the wiki/read pairing and auto-learn guidance consistent with the
+		// This keeps the wiki/repo/read pairing and auto-learn guidance consistent with the
 		// callable tool surface.
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
-				if (builtInToolNames.includes(name) && !explicitlyRequestedToolNames.includes(name)) {
+				if (builtInRegistryToolNames.has(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}
 			}

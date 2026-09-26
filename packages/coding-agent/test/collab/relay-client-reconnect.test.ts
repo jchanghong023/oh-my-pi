@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { seal } from "../../src/collab/crypto";
+import type { CollabFrame } from "../../src/collab/protocol";
+import { packEnvelope } from "../../src/collab/protocol";
 import {
 	CollabSocket,
 	HOST_RECLAIM_BACKOFF_MAX_MS,
@@ -37,6 +40,11 @@ class ScriptedWebSocket {
 
 	deliver(data: string): void {
 		this.onmessage?.(new MessageEvent("message", { data }));
+	}
+
+	/** Relay → client: a binary envelope, as delivered with binaryType "arraybuffer". */
+	deliverBinary(bytes: Uint8Array): void {
+		this.onmessage?.(new MessageEvent("message", { data: bytes.slice().buffer }));
 	}
 
 	open(): void {
@@ -92,6 +100,18 @@ function instance(index: number): ScriptedWebSocket {
 	return ws;
 }
 
+/** Host → guest: one sealed frame as the relay forwards it, awaited until onFrame dispatched it. */
+async function deliverFrame(
+	ws: ScriptedWebSocket,
+	key: CryptoKey,
+	frame: CollabFrame,
+	dispatched: Promise<void>,
+): Promise<void> {
+	const sealed = await seal(key, frame);
+	ws.deliverBinary(packEnvelope(1, sealed));
+	await dispatched;
+}
+
 afterEach(() => {
 	restoreNativeWebSocket();
 	vi.restoreAllMocks();
@@ -144,6 +164,77 @@ describe("CollabSocket guest room recovery", () => {
 		expect(closes).toEqual([{ reason: "no such room", willReconnect: false }]);
 		vi.advanceTimersByTime(30_000);
 		expect(ScriptedWebSocket.instances).toHaveLength(1);
+	});
+
+	it("keeps retrying a missing room for a guest that had already joined", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		installScriptedWebSocket();
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const closes: Array<{ reason: string; willReconnect: boolean }> = [];
+		const frames: CollabFrame[] = [];
+		const dispatched = Promise.withResolvers<void>();
+		const socket = guestSocket(key);
+		socket.onClose = (reason, willReconnect) => closes.push({ reason, willReconnect });
+		socket.onFrame = frame => {
+			frames.push(frame);
+			dispatched.resolve();
+		};
+
+		try {
+			socket.connect();
+			instance(0).open();
+			// Joined and receiving host traffic.
+			await deliverFrame(instance(0), key, { t: "error", message: "joined" }, dispatched.promise);
+			expect(frames).toEqual([{ t: "error", message: "joined" }]);
+
+			// The guest's own connection drops while the host restarts: the relay tore
+			// the room down, and this guest never saw the 4001 the relay sent the
+			// guests that were still connected.
+			instance(0).relayClose(1006, "Connection ended");
+			expect(closes).toEqual([{ reason: "Connection ended", willReconnect: true }]);
+
+			// The reconnect lands in the host's absence window, not on a dead link.
+			vi.advanceTimersByTime(1_000);
+			instance(1).open();
+			instance(1).relayClose(4004, "no such room");
+			expect(closes).toEqual([
+				{ reason: "Connection ended", willReconnect: true },
+				{ reason: "no such room", willReconnect: true },
+			]);
+
+			vi.advanceTimersByTime(1_000);
+			instance(2).open();
+			expect(socket.isOpen).toBe(true);
+		} finally {
+			socket.close();
+		}
+	});
+
+	it("stops reconnecting once explicitly closed", async () => {
+		vi.useFakeTimers();
+		installScriptedWebSocket();
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const closes: Array<{ reason: string; willReconnect: boolean }> = [];
+		const dispatched = Promise.withResolvers<void>();
+		const socket = guestSocket(key);
+		socket.onClose = (reason, willReconnect) => closes.push({ reason, willReconnect });
+		socket.onFrame = () => dispatched.resolve();
+
+		try {
+			socket.connect();
+			instance(0).open();
+			await deliverFrame(instance(0), key, { t: "error", message: "joined" }, dispatched.promise);
+			instance(0).relayClose(1006, "Connection ended");
+			expect(closes.at(-1)).toEqual({ reason: "Connection ended", willReconnect: true });
+
+			socket.close();
+			expect(closes.at(-1)).toEqual({ reason: "closed", willReconnect: false });
+			vi.advanceTimersByTime(30_000);
+			expect(ScriptedWebSocket.instances).toHaveLength(1);
+		} finally {
+			socket.close();
+		}
 	});
 });
 

@@ -572,13 +572,9 @@ async def review_pr(
     if pr_number <= 0 or not repo_full:
         log.info("skip: review_pr missing repo/number")
         return
-    try:
-        repo = await github.get_repo(repo_full)
-        issue = await github.get_issue(repo_full, pr_number)
-        pr = await github.get_pull_request(repo_full, pr_number)
-    except GitHubError as exc:
-        log.warning("review_pr fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
-        return
+    repo = await github.get_repo(repo_full)
+    issue = await github.get_issue(repo_full, pr_number)
+    pr = await github.get_pull_request(repo_full, pr_number)
 
     labels = {label.lower() for label in issue.labels}
     key = issue_key(repo.full_name, pr_number)
@@ -816,12 +812,8 @@ async def handle_review(
             return
         issue_number = issue_row.number
         existing_branch = issue_row.branch
-    try:
-        repo = await github.get_repo(repo_full)
-        issue = await github.get_issue(repo_full, issue_number)
-    except GitHubError as exc:
-        log.warning("review fetch failed", extra={"err": str(exc)})
-        return
+    repo = await github.get_repo(repo_full)
+    issue = await github.get_issue(repo_full, issue_number)
     clone_url = repo.clone_url
     workspace = await _run_workspace_op(
         sandbox.ensure_workspace,
@@ -951,12 +943,8 @@ async def handle_pr_conversation(
             log.warning("bare mention reply failed", extra={"err": str(exc)})
         return
     issue_number = issue_row.number if issue_row is not None else pr_number
-    try:
-        repo = await github.get_repo(repo_full)
-        issue = await github.get_issue(repo_full, issue_number)
-    except GitHubError as exc:
-        log.warning("pr-conversation fetch failed", extra={"err": str(exc)})
-        return
+    repo = await github.get_repo(repo_full)
+    issue = await github.get_issue(repo_full, issue_number)
     clone_url = repo.clone_url
     if issue_row is None:
         assert pr_info is not None

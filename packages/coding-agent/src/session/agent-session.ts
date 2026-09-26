@@ -8791,6 +8791,7 @@ export class AgentSession implements SettingsScope {
 		await this.#bash.flushPending();
 		const bashTransition = this.#bash.beginSessionTransition({ persistDetached: options?.drop !== true });
 		let sessionTransitioned = false;
+		let dropFailure: { error: unknown } | undefined;
 		try {
 			advisorRecordersDetached = true;
 			await this.#advisors.drainAndDetachRecorders();
@@ -8803,6 +8804,7 @@ export class AgentSession implements SettingsScope {
 						await this.sessionManager.dropSession(previousSessionFile);
 					} catch (err) {
 						logger.error("Failed to delete session during /delete", { err });
+						if (options.throwOnDropFailure) dropFailure = { error: err };
 					}
 				} else {
 					await this.sessionManager.flush();
@@ -8875,6 +8877,7 @@ export class AgentSession implements SettingsScope {
 				});
 			}
 
+			if (dropFailure) throw dropFailure.error;
 			return true;
 		} finally {
 			if (advisorRecordersDetached) {

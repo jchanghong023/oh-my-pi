@@ -1547,14 +1547,26 @@ describe("agentLoop with AgentMessage", () => {
 		};
 		// A tool that owns `i` as a real parameter: a long value there is not misplaced.
 		const ownedSchema = type({ value: "string", [`${INTENT_FIELD}?`]: "string" });
-		const ownedRuns: string[] = [];
+		const ownedRuns: Array<{ value: string; i?: string }> = [];
 		const ownedTool: AgentTool<typeof ownedSchema> = {
 			name: "owned",
 			label: "Owned",
 			description: "Owns i",
 			parameters: ownedSchema,
 			async execute(_toolCallId, params) {
-				ownedRuns.push(params.value);
+				ownedRuns.push(params);
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const requiredOwnedSchema = type({ value: "string", [INTENT_FIELD]: "string" });
+		const requiredOwnedRuns: Array<{ value: string; i: string }> = [];
+		const requiredOwnedTool: AgentTool<typeof requiredOwnedSchema> = {
+			name: "required-owned",
+			label: "Required owned",
+			description: "Requires i",
+			parameters: requiredOwnedSchema,
+			async execute(_toolCallId, params) {
+				requiredOwnedRuns.push(params);
 				return { content: [{ type: "text", text: "ok" }] };
 			},
 		};
@@ -1578,6 +1590,7 @@ describe("agentLoop with AgentMessage", () => {
 						call("at-limit", "write", { path: "limit.md", [INTENT_FIELD]: "x".repeat(200), content: "a" }),
 						call("over-limit", "write", { path: "over.md", [INTENT_FIELD]: "x".repeat(201), content: "b" }),
 						call("owned", "owned", { value: "kept", [INTENT_FIELD]: body }),
+						call("required-owned", "required-owned", { value: "required", [INTENT_FIELD]: "business value" }),
 						call("unknown", "nope", { [INTENT_FIELD]: body }),
 					],
 				},
@@ -1585,7 +1598,11 @@ describe("agentLoop with AgentMessage", () => {
 			],
 		});
 		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, intentTracing: true };
-		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [writeTool, ownedTool] };
+		const context: AgentContext = {
+			systemPrompt: [""],
+			messages: [],
+			tools: [writeTool, ownedTool, requiredOwnedTool],
+		};
 
 		const messages = await agentLoop([createUserMessage("run")], context, config, undefined, mock.stream).result();
 		const results = new Map(
@@ -1608,7 +1625,18 @@ describe("agentLoop with AgentMessage", () => {
 		expect(results.get("over-limit")?.isError).toBe(true);
 		expect(results.get("normal")?.isError).toBe(false);
 		expect(atLimitCall?.type === "toolCall" && atLimitCall.intent).toBe("x".repeat(200));
-		expect(ownedRuns).toEqual(["kept"]);
+		expect(ownedRuns).toEqual([{ value: "kept", [INTENT_FIELD]: body }]);
+		expect(requiredOwnedRuns).toEqual([{ value: "required", [INTENT_FIELD]: "business value" }]);
+		expect(results.get("required-owned")?.isError).toBe(false);
+		const wireTools = mock.calls[0]?.context.tools;
+		const optionalOwnedWire = wireTools?.find(tool => tool.name === "owned")?.parameters as
+			| { required?: string[] }
+			| undefined;
+		const requiredOwnedWire = wireTools?.find(tool => tool.name === "required-owned")?.parameters as
+			| { required?: string[] }
+			| undefined;
+		expect(optionalOwnedWire?.required).not.toContain(INTENT_FIELD);
+		expect(requiredOwnedWire?.required).toContain(INTENT_FIELD);
 		expect(unknownText).toContain("Tool nope not found");
 	});
 

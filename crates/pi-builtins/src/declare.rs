@@ -171,7 +171,7 @@ impl DeclareCommand {
 	) -> Result<bool, brush_core::Error> {
 		let name = match declaration {
 			brush_core::CommandArg::String(s) => s,
-			brush_core::CommandArg::Assignment(_) => {
+			brush_core::CommandArg::OsString(_) | brush_core::CommandArg::Assignment(_) => {
 				writeln!(context.stderr(), "declare: {declaration}: not found")?;
 				return Ok(false);
 			},
@@ -383,6 +383,9 @@ impl DeclareCommand {
 					name_is_array = false;
 				}
 				initial_value = None;
+			},
+			brush_core::CommandArg::OsString(_) => {
+				return Err(ErrorKind::InternalError("declaration name is not valid UTF-8".into()).into());
 			},
 			brush_core::CommandArg::Assignment(assignment) => {
 				match &assignment.name {

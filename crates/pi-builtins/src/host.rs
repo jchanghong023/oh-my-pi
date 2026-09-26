@@ -798,7 +798,10 @@ impl<SE: ShellExtensions> CommandRunner<SE> {
 		let args: Vec<CommandArg> = command
 			.argv
 			.into_iter()
-			.map(|arg| CommandArg::from(arg.to_string_lossy().into_owned()))
+			.map(|arg| match arg.into_string() {
+				Ok(text) => CommandArg::String(text),
+				Err(os) => CommandArg::OsString(os),
+			})
 			.collect();
 		let name = args.first().map(ToString::to_string).unwrap_or_default();
 		let mut simple =

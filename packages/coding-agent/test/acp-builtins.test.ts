@@ -15,6 +15,7 @@ import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plug
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { getProjectDir, removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "@oh-my-pi/pi-coding-agent/tools/browser/settings";
@@ -45,7 +46,7 @@ interface FakeAcpBuiltinSession {
 	messages: unknown[];
 	settings: Settings;
 	model: { provider: string; id: string } | undefined;
-	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
+	newSession(opts?: { drop?: boolean; throwOnDropFailure?: boolean; parentSession?: string }): Promise<boolean>;
 	switchSession(sessionPath: string): Promise<boolean>;
 	moveSession(newCwd: string, targetSessionDir?: string): Promise<void>;
 	markMovedFromEmptySessionFile(sessionFile: string): void;
@@ -116,7 +117,7 @@ function createRuntime() {
 		async redeemResetCredit(_target) {
 			return { ok: false, code: "no_credit" };
 		},
-		async newSession(_opts?: { drop?: boolean; parentSession?: string }) {
+		async newSession(_opts?: { drop?: boolean; throwOnDropFailure?: boolean; parentSession?: string }) {
 			return true;
 		},
 		async switchSession(sessionPath: string) {
@@ -497,6 +498,42 @@ describe("ACP builtin slash commands", () => {
 		expect(result).toBe(false);
 	});
 
+	// Mirrors the TUI dispatcher's allowArgs gate (builtin-registry).
+	it("refuses to dispatch commands without allowArgs when arguments are present", async () => {
+		const { output, runtime } = createRuntime();
+		// `/jobs` has a text-mode handle but no allowArgs.
+		const jobs = BUILTIN_SLASH_COMMANDS_INTERNAL.find(command => command.name === "jobs")!;
+		const handleSpy = spyOn(jobs, "handle");
+		try {
+			const result = await executeAcpBuiltinSlashCommand("/jobs extra", runtime);
+
+			expect(result).toBe(false);
+			expect(handleSpy).not.toHaveBeenCalled();
+			expect(output).toEqual([]);
+		} finally {
+			handleSpy.mockRestore();
+		}
+	});
+
+	it("dispatches commands with allowArgs when arguments are present", async () => {
+		const { output, runtime, session } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/fast on", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(session.fastMode).toBe(true);
+		expect(output).toEqual(["Fast mode enabled."]);
+	});
+
+	it("dispatches commands without allowArgs when no arguments are present", async () => {
+		const { output, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/jobs", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("background jobs");
+	});
+
 	// /jobs
 	it("jobs: shows informative message when snapshot is null", async () => {
 		const { output, runtime } = createRuntime();
@@ -709,6 +746,21 @@ describe("session lifecycle commands", () => {
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]).toContain("streaming");
+	});
+
+	it("/session delete: reports a failed drop after activating a new session", async () => {
+		const { output, session, fakeSessionManager, runtime } = createRuntime();
+		fakeSessionManager._sessionFile = "/tmp/old-session.jsonl";
+		session.newSession = async options => {
+			expect(options).toEqual({ drop: true, throwOnDropFailure: true });
+			fakeSessionManager._sessionFile = "/tmp/new-session.jsonl";
+			throw new Error("delete denied");
+		};
+		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Failed to delete session: delete denied");
+		expect(output[0]).toContain("A new session is now active.");
+		expect(output[0]).not.toContain("Session deleted:");
 	});
 
 	it("/rename: renames and calls notifyTitleChanged on success", async () => {

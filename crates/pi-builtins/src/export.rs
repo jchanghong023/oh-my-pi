@@ -69,6 +69,10 @@ impl ExportCommand {
 		decl: &brush_core::CommandArg,
 	) -> Result<ExecutionResult, brush_core::Error> {
 		match decl {
+			brush_core::CommandArg::OsString(_) => {
+				writeln!(context.stderr(), "export: {decl}: invalid variable name")?;
+				return Ok(ExecutionExitCode::InvalidUsage.into());
+			},
 			brush_core::CommandArg::String(s) => {
 				// See if this is supposed to be a function name.
 				if self.names_are_functions {
