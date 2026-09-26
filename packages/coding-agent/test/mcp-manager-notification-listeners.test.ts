@@ -259,6 +259,7 @@ describe("MCPManager notification listeners", () => {
 		const manager = new MCPManager(workDir);
 		const events: string[] = [];
 		let cbCall = 0;
+		const { promise: initialCallbackDone, resolve: markInitialCallbackDone } = Promise.withResolvers<void>();
 		const { promise: gate, resolve: releaseGate } = Promise.withResolvers<void>();
 
 		manager.setOnToolsChanged(async () => {
@@ -270,6 +271,7 @@ describe("MCPManager notification listeners", () => {
 			// triggers.
 			if (cbCall === 1) {
 				events.push("initial-cb:done");
+				markInitialCallbackDone();
 				return;
 			}
 			events.push("cb:start");
@@ -286,11 +288,9 @@ describe("MCPManager notification listeners", () => {
 		try {
 			await manager.connectServers({ alpha: serverConfig() }, {});
 			// Wait for the initial-connect background continuation to fire the
-			// callback (call #1, ungated). Once it's recorded, we know the
-			// callback is idle and the next invocation will be call #2.
-			for (let i = 0; i < 20 && !events.includes("initial-cb:done"); i++) {
-				await Bun.sleep(10);
-			}
+			// callback (call #1, ungated). Once it signals completion, we know
+			// the callback is idle and the next invocation will be call #2.
+			await initialCallbackDone;
 			expect(events).toContain("initial-cb:done");
 
 			// Simulate a post-connect `notifications/tools/list_changed` frame

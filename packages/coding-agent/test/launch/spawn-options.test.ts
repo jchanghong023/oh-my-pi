@@ -8,16 +8,16 @@ describe("resolveDaemonSpawnOptions", () => {
 				platform: "win32",
 				hostHasInheritableConsole: false,
 			}),
-		).toEqual({ detached: true, windowsHide: true });
+		).toEqual({ detached: false, windowsHide: true });
 	});
 
-	it("keeps the Windows host console visible while detaching", () => {
+	it("inherits the Windows host console instead of detaching", () => {
 		expect(
 			resolveDaemonSpawnOptions({
 				platform: "win32",
 				hostHasInheritableConsole: true,
 			}),
-		).toEqual({ detached: true, windowsHide: false });
+		).toEqual({ detached: false, windowsHide: false });
 	});
 
 	it("keeps POSIX daemons in their own session", () => {

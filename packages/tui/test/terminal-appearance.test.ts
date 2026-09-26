@@ -24,6 +24,7 @@ const originalTmux = Bun.env.TMUX;
 // These suites drive the real ProcessTerminal start()/probe pipeline, so they
 // opt out of the test-default headless suppression and restore it per case.
 let previousHeadless = false;
+const appearanceTerminalCleanups: Array<() => void> = [];
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
 	if (descriptor) {
@@ -48,9 +49,11 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
 		previousHeadless = setTerminalHeadless(false);
 		delete Bun.env.TMUX;
+		delete Bun.env.WT_SESSION;
 	});
 
 	afterEach(() => {
+		for (const cleanup of appearanceTerminalCleanups.splice(0)) cleanup();
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		setTerminalHeadless(previousHeadless);
@@ -81,6 +84,10 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		});
 
 		const terminal = new ProcessTerminal({ conpty });
+		const stop = vi.spyOn(terminal, "stop");
+		appearanceTerminalCleanups.push(() => {
+			if (stop.mock.calls.length === 0) terminal.stop();
+		});
 		terminal.start(
 			data => received.push(data),
 			() => {},

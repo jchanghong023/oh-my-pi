@@ -2164,10 +2164,11 @@ function mapOptionsForApi<TApi extends Api>(
 
 			if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
 				if (
-					maxTokensWithThinking !== undefined &&
-					maxTokensWithThinking < thinkingBudget + OUTPUT_FALLBACK_BUFFER
+					model.maxTokens !== null &&
+					model.maxTokens !== undefined &&
+					model.maxTokens < thinkingBudget + OUTPUT_FALLBACK_BUFFER
 				) {
-					thinkingBudget = maxTokensWithThinking - OUTPUT_FALLBACK_BUFFER;
+					thinkingBudget = model.maxTokens - OUTPUT_FALLBACK_BUFFER;
 				}
 				if (thinkingBudget >= ANTHROPIC_THINKING.minimal) {
 					return castApi<"anthropic-messages">({

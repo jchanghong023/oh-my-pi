@@ -179,15 +179,15 @@ describe("AnthropicSlowModeController", () => {
 				...overrides,
 			});
 
-		it("labels the window and hints until low priority is confirmed", () => {
+		it("labels the window and hints only when low priority cannot pick the work up", () => {
 			hooks().observe(graceSignal(), LANE);
 			expect(controller.statusLabel()).toStartWith("limit reached · wrapping up · resets ");
 			expect(notices).toHaveLength(1);
-			// `/slow on` cannot promise a treatment offer before the wall.
-			const key = controller.wrapUpHintKey(true);
+			// `/slow on` and the lane is still offerable: low priority carries on, no hint.
+			expect(controller.wrapUpHintKey(true)).toBeUndefined();
+			// `/slow off`: nothing continues past the allowance.
+			const key = controller.wrapUpHintKey(false);
 			expect(key).toBeDefined();
-			// `/slow off` needs the same checkpoint for this window.
-			expect(controller.wrapUpHintKey(false)).toBe(key);
 			// Later responses in the same window keep its key and stay quiet.
 			hooks().observe(graceSignal({ graceUtilization: { fiveHour: 0.6, sevenDay: 0 } }), LANE);
 			expect(controller.wrapUpHintKey(false)).toBe(key);

@@ -200,38 +200,36 @@ describe("resource links in chat markdown", () => {
 		expect(visible).not.toContain("file://");
 	});
 
-	// File symlinks require Developer Mode on Windows; the escape fixture cannot be built.
-	it.skipIf(process.platform === "win32")(
-		"leaves missing, escaping, remote, and non-link destinations unexpanded",
-		async () => {
-			await Bun.write(path.join(tempDir, "local", "report.json"), "{}");
+	it("leaves missing, escaping, remote, and non-link destinations unexpanded", async () => {
+		await Bun.write(path.join(tempDir, "local", "report.json"), "{}");
+		if (process.platform !== "win32") {
 			await Bun.write(path.join(tempDir, "outside.json"), "{}");
 			await fs.symlink(path.join(tempDir, "outside.json"), path.join(tempDir, "local", "escape.json"));
-			const text = [
-				"`[code](local://report.json)`",
-				"![image](local://report.json)",
-				"```md",
-				"[fenced](local://report.json)",
-				"```",
-				"[missing](local://missing.json)",
-				"[escape](local://escape.json)",
-				"[remote](mcp://server/resource)",
-				"[web](https://example.com/report)",
-			].join("\n\n");
-			const targets = await resolveMarkdownLinkTargets([text], {
-				localProtocolOptions: { getArtifactsDir: () => tempDir },
-			});
-			expect([...targets]).toEqual([]);
-			const output = new terminalCaps.Markdown(text, 0, 0, {
-				...getMarkdownTheme(),
-				resolveLink: href => targets.get(href),
-			})
-				.render(200)
-				.join("\n");
-			expect(output).toContain("\x1b]8;;local://missing.json\x07");
-			expect(output).toContain("\x1b]8;;https://example.com/report\x07");
-		},
-	);
+		}
+		const text = [
+			"`[code](local://report.json)`",
+			"![image](local://report.json)",
+			"```md",
+			"[fenced](local://report.json)",
+			"```",
+			"[missing](local://missing.json)",
+			...(process.platform === "win32" ? [] : ["[escape](local://escape.json)"]),
+			"[remote](mcp://server/resource)",
+			"[web](https://example.com/report)",
+		].join("\n\n");
+		const targets = await resolveMarkdownLinkTargets([text], {
+			localProtocolOptions: { getArtifactsDir: () => tempDir },
+		});
+		expect([...targets]).toEqual([]);
+		const output = new terminalCaps.Markdown(text, 0, 0, {
+			...getMarkdownTheme(),
+			resolveLink: href => targets.get(href),
+		})
+			.render(200)
+			.join("\n");
+		expect(output).toContain("\x1b]8;;local://missing.json\x07");
+		expect(output).toContain("\x1b]8;;https://example.com/report\x07");
+	});
 
 	it("pins identical local links to their calling sessions", async () => {
 		const text = "[Report](local://report.json)";

@@ -179,9 +179,9 @@ export class AnthropicSlowModeController {
 	/** Whether the low-priority lane could still pick up once the wrap-up allowance is spent. */
 	#laneCanFollow(wrapUp: WrapUpWindow, now: number): boolean {
 		if (wrapUp.zone === "seven_day") return false;
-		// A treatment offer is only known at the wall. Until then the account may
-		// be in the control group, so the model still needs a checkpoint hint.
-		return this.isActive(now) || this.availability(now).kind === "available";
+		if (this.#blocked !== undefined && now < this.#blocked.untilSec * 1000) return false;
+		if (this.#coolingOffUntilMs !== undefined && now < this.#coolingOffUntilMs) return false;
+		return this.#stoppedResetsAtSec === undefined || this.#stoppedResetsAtSec * 1000 <= now;
 	}
 
 	/**

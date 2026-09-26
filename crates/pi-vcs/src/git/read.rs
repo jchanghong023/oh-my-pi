@@ -1286,10 +1286,12 @@ mod tests {
 	/// paths, so normalize both to a verbatim-free, forward-slash form.
 	fn comparable(path: &std::path::Path) -> String {
 		let text = path.to_string_lossy().replace('\\', "/");
-		text
-			.strip_prefix("//?/")
-			.unwrap_or(&text)
-			.to_ascii_lowercase()
+		let normalized = text.strip_prefix("//?/").unwrap_or(&text);
+		if cfg!(windows) {
+			normalized.to_ascii_lowercase()
+		} else {
+			normalized.to_owned()
+		}
 	}
 
 	type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;

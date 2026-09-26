@@ -32,7 +32,7 @@ interface WirePayload {
 /** The request `streamSimple` puts on the wire; the endpoint answers 400 so nothing streams. */
 async function wirePayload(
 	model: Model<"anthropic-messages">,
-	options: { maxTokens?: number; reasoning: Effort },
+	options: { maxTokens?: number; reasoning: Effort; thinkingBudgets?: Partial<Record<Effort, number>> },
 ): Promise<WirePayload> {
 	let payload: WirePayload | undefined;
 	const fetch: FetchImpl = async (_url, init) => {
@@ -66,6 +66,16 @@ describe("Anthropic thinking leaves a capped request its output budget", () => {
 		});
 		expect(payload.thinking).toMatchObject({ type: "enabled", budget_tokens: ANTHROPIC_THINKING.high });
 		expect(payload.max_tokens).toBe(13_107 + ANTHROPIC_THINKING.high);
+	});
+
+	it("keeps a custom minimal thinking budget when the model can raise the total cap", async () => {
+		const payload = await wirePayload(anthropicModel("claude-sonnet-4-5", 8_192), {
+			maxTokens: 3_000,
+			reasoning: Effort.High,
+			thinkingBudgets: { high: ANTHROPIC_THINKING.minimal },
+		});
+		expect(payload.max_tokens).toBe(ANTHROPIC_THINKING.minimal + 4_000);
+		expect(payload.thinking).toMatchObject({ type: "enabled", budget_tokens: ANTHROPIC_THINKING.minimal });
 	});
 
 	it("shrinks an interleaved thinking budget below a smaller model output ceiling", async () => {
