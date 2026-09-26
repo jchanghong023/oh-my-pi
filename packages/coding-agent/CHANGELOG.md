@@ -27,6 +27,7 @@
 
 ### Fixed
 
+- Fixed ACP `/model <selector>` being forwarded as a prompt instead of selecting the requested model or reporting an unknown selector; the TUI `/model` picker is unchanged.
 - Fixed Windows built-in tools (rg/grep/ls/…) block-buffering captured-pipe output until tool exit: anonymous pipes are no longer misdetected as regular files, and `sed` redirected output now uses the regular-file snapshot.
 - Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
 - Fixed watchdog and debug-bundle log paths using a UTC date while the rotating sink writes local-date filenames.

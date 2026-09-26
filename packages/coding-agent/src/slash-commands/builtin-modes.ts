@@ -365,7 +365,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["models"],
 		icon: "model",
 		description: "Switch model for this session",
-		acpDescription: "Show current model selection",
+		acpDescription: "Show current model or select a model",
+		acpInputHint: "[model]",
+		acpAllowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";

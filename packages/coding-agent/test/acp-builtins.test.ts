@@ -615,12 +615,13 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).toContain("No model");
 	});
 
-	it("model: returns ACP usage message when args provided", async () => {
+	it("model: unknown selector reports ACP picker guidance", async () => {
 		const { output, runtime } = createRuntime();
 
 		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
 
 		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Unknown model: claude-3-5-sonnet");
 		expect(output[0]?.toLowerCase()).toContain("acp");
 	});
 

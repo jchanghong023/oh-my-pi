@@ -227,9 +227,16 @@ describe("createAgentSession session storage isolation", () => {
 		});
 		try {
 			session.sessionManager.appendMessage({ role: "user", content: "old conversation", timestamp: 1 });
-			await session.sessionManager.flush();
+			await session.sessionManager.ensureOnDisk();
 			const oldFile = session.sessionFile;
 			if (!oldFile) throw new Error("Expected old session file");
+			const oldEntries = await loadEntriesFromFile(oldFile);
+			expect(oldEntries).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({ role: "user", content: "old conversation" }),
+				}),
+			);
 			const dropError = new Error("delete denied");
 			spyOn(session.sessionManager, "dropSession").mockRejectedValue(dropError);
 
@@ -238,6 +245,7 @@ describe("createAgentSession session storage isolation", () => {
 			if (!newFile) throw new Error("Expected new session file");
 			expect(newFile).not.toBe(oldFile);
 			expect(fs.existsSync(oldFile)).toBe(true);
+			expect(await loadEntriesFromFile(oldFile)).toEqual(oldEntries);
 			expect((await loadEntriesFromFile(newFile))[0]?.type).toBe("session");
 		} finally {
 			await session.dispose();
