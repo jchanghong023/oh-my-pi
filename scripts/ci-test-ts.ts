@@ -468,17 +468,17 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // `JSAbortSignal::visitAdditionalChildrenInGCThread` reading a dead `reason`
 // cell), where no marker/concurrency knob applies. That residual crash is
 // handled by retrying crashed chunks in a fresh process (MAX_CHUNK_ATTEMPTS).
-// On Windows with Bun 1.4.0, disabling concurrent GC makes the local relay
-// delivery test spin indefinitely after the preceding auth/collab tests.
-// Leave both knobs at Bun's defaults on Windows; the crash retry below still
-// handles a child that exits with a runtime fault.
+// Bun 1.4.0 on Windows can also spin indefinitely in the controller suite
+// under default GC settings. Disabling concurrent GC previously hung relay
+// delivery when it shared a process with auth/collab tests; the per-file
+// Windows chunks above keep those heaps separate.
 function buildChildEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
 		GITHUB_ACTIONS: "",
 		PI_TEST_RUNTIME: "1",
-		BUN_JSC_useConcurrentGC: process.platform === "win32" ? undefined : "0",
-		BUN_JSC_numberOfGCMarkers: process.platform === "win32" ? undefined : "1",
+		BUN_JSC_useConcurrentGC: "0",
+		BUN_JSC_numberOfGCMarkers: "1",
 	};
 	// Keep test temp fixtures off the Windows system drive when another
 	// writable drive exists (see windows-test-temp.ts).
