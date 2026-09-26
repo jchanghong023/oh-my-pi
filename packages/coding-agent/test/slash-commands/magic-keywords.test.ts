@@ -4,9 +4,10 @@ import { acpBuiltinSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-command
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-magic-keywords";
 import {
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
+	executeBuiltinSlashCommand,
 	lookupBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"];
 
@@ -244,5 +245,27 @@ describe("JCH git slash commands", () => {
 		// refusal instead of a model dispatch.
 		expect(command?.handle).toBeTypeOf("function");
 		expect(acpBuiltinSlashCommands().some(candidate => candidate.name === "jchgitdiscardall")).toBe(true);
+	});
+});
+
+describe("JCH DFT explanation slash command", () => {
+	it.each([
+		["/jchdftexplain MBIST", "MBIST"],
+		["/jchdftexplain", ""],
+	])("passes the user's target through the TUI command %s", async (input, target) => {
+		let editorText = input;
+		const result = await executeBuiltinSlashCommand(input, {
+			ctx: {
+				editor: { setText: (text: string) => (editorText = text) },
+				sessionManager: { getCwd: () => process.cwd() },
+			},
+		} as unknown as TuiSlashCommandRuntime);
+
+		expect(typeof result).toBe("string");
+		if (typeof result !== "string") throw new Error("Expected a DFT explanation prompt");
+		expect(editorText).toBe("");
+		expect(result).toContain("本命令只读");
+		expect(result).toContain("没有输入时，只询问需要解释的对象");
+		expect(result).toContain(`<target>\n${target}\n</target>`);
 	});
 });
