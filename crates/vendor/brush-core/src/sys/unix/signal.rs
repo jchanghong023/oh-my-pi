@@ -71,30 +71,26 @@ pub(crate) fn mask_sigttou() -> Result<(), error::Error> {
 	Ok(())
 }
 
-pub(crate) fn poll_for_stopped_children() -> Result<bool, error::Error> {
-	let mut found_stopped = false;
-
-	loop {
-		let wait_status =
-			waitid_all(nix::sys::wait::WaitPidFlag::WUNTRACED | nix::sys::wait::WaitPidFlag::WNOHANG);
-		match wait_status {
-			Ok(nix::sys::wait::WaitStatus::Stopped(_stopped_pid, _signal)) => {
-				found_stopped = true;
-			},
-			Ok(_) => break,
-			Err(nix::errno::Errno::ECHILD) => break,
-			Err(e) => return Err(e.into()),
-		}
+pub(crate) fn poll_for_stopped_child(pid: Option<crate::sys::process::ProcessId>) -> Result<bool, error::Error> {
+	let Some(pid) = pid else { return Ok(false) };
+	let wait_status = waitid_pid(
+		nix::unistd::Pid::from_raw(pid),
+		nix::sys::wait::WaitPidFlag::WUNTRACED | nix::sys::wait::WaitPidFlag::WNOHANG,
+	);
+	match wait_status {
+		Ok(nix::sys::wait::WaitStatus::Stopped(stopped_pid, _)) =>
+			Ok(stopped_pid.as_raw() == pid),
+		Ok(_) | Err(nix::errno::Errno::ECHILD) => Ok(false),
+		Err(e) => Err(e.into()),
 	}
-
-	Ok(found_stopped)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn waitid_all(
+fn waitid_pid(
+	pid: nix::unistd::Pid,
 	flags: nix::sys::wait::WaitPidFlag,
 ) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
-	nix::sys::wait::waitid(nix::sys::wait::Id::All, flags)
+	nix::sys::wait::waitid(nix::sys::wait::Id::Pid(pid), flags)
 }
 
 //
@@ -104,7 +100,8 @@ fn waitid_all(
 //
 
 #[cfg(target_os = "macos")]
-fn waitid_all(
+fn waitid_pid(
+	pid: nix::unistd::Pid,
 	flags: nix::sys::wait::WaitPidFlag,
 ) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
 	// SAFETY:
@@ -117,7 +114,7 @@ fn waitid_all(
 	// SAFETY:
 	// Code copied from nix::sys::wait implementation of waitid for other platforms.
 	nix::errno::Errno::result(unsafe {
-		nix::libc::waitid(nix::libc::P_ALL, 0, &raw mut siginfo, flags.bits())
+		nix::libc::waitid(nix::libc::P_PID, pid.as_raw() as nix::libc::id_t, &raw mut siginfo, flags.bits())
 	})?;
 
 	siginfo_to_wait_status(siginfo)

@@ -74,6 +74,31 @@ export async function waitForSessionIdle(
 	return !session.isStreaming;
 }
 
+export async function deliverTeamReport(
+	session: Pick<AgentSession, "isStreaming" | "sendCustomMessage">,
+	signal: AbortSignal,
+	content: string,
+	details: { jobId: string; question: string },
+	rebuildChat?: () => void | Promise<void>,
+	waitOptions?: { timeoutMs?: number; pollMs?: number },
+): Promise<boolean> {
+	if (signal.aborted) return false;
+	await waitForSessionIdle(session, signal, waitOptions);
+	if (signal.aborted) return false;
+	await session.sendCustomMessage(
+		{
+			customType: TEAM_RESULT_MESSAGE_TYPE,
+			content,
+			display: true,
+			attribution: "agent",
+			details,
+		},
+		{ triggerTurn: false, deliverAs: "nextTurn" },
+	);
+	await rebuildChat?.();
+	return true;
+}
+
 function previewQuestion(question: string): string {
 	const singleLine = question.trim().replace(/\s+/g, " ");
 	if (singleLine.length <= QUESTION_PREVIEW_LENGTH) return singleLine;
@@ -169,28 +194,27 @@ export async function startTeamDiscussion(
 					maxConcurrency: cfgTaskMaxConcurrency.get(settings),
 					onProgress,
 				});
-				const deliver = async (content: string): Promise<void> => {
-					await waitForSessionIdle(session, signal);
-					await session.sendCustomMessage(
-						{
-							customType: TEAM_RESULT_MESSAGE_TYPE,
-							content,
-							display: true,
-							attribution: "agent",
-							details: { jobId, question },
-						},
-						{ triggerTurn: false, deliverAs: "nextTurn" },
-					);
-					await hooks.rebuildChat?.();
-				};
 				if (result.status === "completed") {
-					await deliver(result.reportMarkdown!);
-					return "team discussion complete";
+					const delivered = await deliverTeamReport(
+						session,
+						signal,
+						result.reportMarkdown!,
+						{ jobId, question },
+						hooks.rebuildChat,
+					);
+					return delivered ? "team discussion complete" : "team discussion cancelled";
 				}
 				if (result.status === "cancelled") {
 					return "team discussion cancelled";
 				}
-				await deliver(assembleTeamFailure(question, result.failureReason ?? "未知原因"));
+				const delivered = await deliverTeamReport(
+					session,
+					signal,
+					assembleTeamFailure(question, result.failureReason ?? "未知原因"),
+					{ jobId, question },
+					hooks.rebuildChat,
+				);
+				if (!delivered) return "team discussion cancelled";
 				throw new Error(result.failureReason ?? "team discussion failed");
 			},
 			{ ownerId: MAIN_AGENT_ID },

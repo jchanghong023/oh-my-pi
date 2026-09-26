@@ -34,6 +34,7 @@ export { TEAM_CLOSING_CONTRACT, assembleTeamFailure, assembleTeamReport } from "
 export {
 	TEAM_DISPATCH_MESSAGE_TYPE,
 	TEAM_RESULT_MESSAGE_TYPE,
+	deliverTeamReport,
 	resolveTeamParticipantsForSession,
 	startTeamDiscussion,
 	waitForSessionIdle,

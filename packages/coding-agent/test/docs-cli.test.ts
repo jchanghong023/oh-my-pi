@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { acquireFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { runDocsCommand } from "../src/cli/docs-cli";
 import { DocsService } from "../src/docs/service";
 
@@ -17,6 +18,26 @@ afterEach(async () => {
 });
 
 describe("runDocsCommand", () => {
+	it("sanitizes a user-supplied root in a top-level CLI error", async () => {
+		const cwd = await tempDir("docs-cli-error-root-");
+		const agentDir = await tempDir("docs-cli-error-agent-");
+		const target = path.join(cwd, `missing-\x1b[31mFORGED\x1b[0m`);
+		const child = Bun.spawn(
+			[process.execPath, path.join(import.meta.dir, "../src/cli.ts"), "docs", "init", target, "--name", "bad-root"],
+			{
+				env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const stderr = await new Response(child.stderr).text();
+		expect(await child.exited).toBe(1);
+		expect(stderr).toContain("Markdown root is not a directory");
+		expect(stderr).not.toContain("\x1b");
+		expect(stderr).toContain("FORGED");
+	}, 30_000);
+
 	it("imports and removes a stored index through JSON output", async () => {
 		const cwd = await tempDir("docs-cli-root-");
 		const agentDir = await tempDir("docs-cli-agent-");
@@ -91,5 +112,28 @@ describe("runDocsCommand", () => {
 		);
 		expect(code).toBe(130);
 		expect(JSON.parse(output[0] as string)).toEqual({ state: "cancelled", error: "Document indexing cancelled" });
+	});
+
+	it("returns 130 when cancelled while waiting for the import lock", async () => {
+		const cwd = await tempDir("docs-cli-lock-root-");
+		const agentDir = await tempDir("docs-cli-lock-agent-");
+		await fs.writeFile(path.join(cwd, "guide.md"), "# Guide\nText\n");
+		const lease = await acquireFileLock(path.join(agentDir, "docs.db"));
+		try {
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 20);
+			const output: string[] = [];
+			const code = await runDocsCommand(
+				{ action: "init", target: ".", name: "cancelled", json: true, cwd, signal: controller.signal },
+				{
+					createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd }),
+					stdout: text => output.push(text),
+				},
+			);
+			expect(code).toBe(130);
+			expect(JSON.parse(output[0] as string)).toEqual({ state: "cancelled", error: "Document indexing cancelled" });
+		} finally {
+			lease.release();
+		}
 	});
 });

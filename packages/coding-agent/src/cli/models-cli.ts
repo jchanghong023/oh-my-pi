@@ -18,6 +18,7 @@ import { modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ConfigError } from "../config/config-file";
+import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
 import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
@@ -399,6 +400,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 		// Company environment: flip the lane before the registry captures company
 		// state, and surface a broken config instead of silently listing nothing.
 		setCompanyOfflineEnabled(true);
+		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 		const companyError = getCompanyConfigError();
 		if (companyError) process.stderr.write(`${companyError}\n`);
 	}

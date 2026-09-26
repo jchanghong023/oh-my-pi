@@ -42,6 +42,7 @@ async function isolatedEnv(companyConfig: boolean): Promise<Record<string, strin
 interface ProbeResult {
 	providers: string[];
 	companySelector: string | null;
+	companyContextWindow: number | null;
 	zcodeSelector: string | null;
 }
 
@@ -63,6 +64,7 @@ async function probeBenchRuntime(env: Record<string, string>, offline: boolean):
 			console.log(JSON.stringify({
 				providers,
 				companySelector: await resolve("GLM-5.2-public"),
+				companyContextWindow: runtime.modelRegistry.getAll().find(model => model.provider === "company" && model.id === "GLM-5.2-public")?.contextWindow ?? null,
 				zcodeSelector: await resolve("zcode-api/glm-5.2"),
 			}));
 		} finally {
@@ -89,6 +91,7 @@ describe("omp bench --offline company environment", () => {
 		expect(probe.providers).toContain("company");
 		expect(probe.providers).not.toContain("zcode-api");
 		expect(probe.companySelector).toBe("company/GLM-5.2-public");
+		expect(probe.companyContextWindow).toBe(200_000);
 		expect(probe.zcodeSelector).toBeNull();
 	}, 30_000);
 

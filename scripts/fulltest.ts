@@ -222,6 +222,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/cli-log-file-flag.test.ts",
 			"test/cli-offline-flag.test.ts",
 			"test/collab/host-startup-close.test.ts",
+			"test/collab/guest-commands.test.ts",
 			"test/collab/identity.test.ts",
 			"test/company-models.test.ts",
 			"test/company-provider.test.ts",

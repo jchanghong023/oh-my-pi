@@ -272,8 +272,9 @@ export class DocsService {
 		// exclusive, and the lease is held for the whole build.
 		let lease: FileLockHandle;
 		try {
-			lease = await acquireFileLock(this.storage.path, IMPORT_LOCK_OPTIONS);
+			lease = await acquireFileLock(this.storage.path, { ...IMPORT_LOCK_OPTIONS, signal: options.signal });
 		} catch (error) {
+			checkCancelled(options.signal);
 			throw new Error(`Another document index build is already running for this profile: ${this.storage.path}`, {
 				cause: error,
 			});

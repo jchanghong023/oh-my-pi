@@ -29,7 +29,7 @@ afterEach(async () => {
 async function runModels(
 	args: readonly string[],
 	options: { companyConfig: boolean },
-): Promise<{ providers: Set<string>; stderr: string }> {
+): Promise<{ providers: Set<string>; companyContextWindows: number[]; stderr: string }> {
 	const home = await tempDir("omp-models-home-");
 	const claudeDir = await tempDir("omp-models-claude-");
 	if (options.companyConfig) {
@@ -50,16 +50,26 @@ async function runModels(
 	});
 	const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
 	expect(await child.exited).toBe(0);
-	const payload = JSON.parse(stdout) as { models: Array<{ provider: string }> };
-	return { providers: new Set(payload.models.map(model => model.provider)), stderr };
+	const payload = JSON.parse(stdout) as { models: Array<{ provider: string; contextWindow: number }> };
+	return {
+		providers: new Set(payload.models.map(model => model.provider)),
+		companyContextWindows: payload.models
+			.filter(model => model.provider === "company")
+			.map(model => model.contextWindow),
+		stderr,
+	};
 }
 
 describe("omp models --offline company environment", () => {
 	it("lists the company lane and hides zcode-api", async () => {
-		const { providers, stderr } = await runModels(["--offline", "--json"], { companyConfig: true });
+		const { providers, companyContextWindows, stderr } = await runModels(["--offline", "--json"], {
+			companyConfig: true,
+		});
 
 		expect(providers.has("company")).toBe(true);
 		expect(providers.has("zcode-api")).toBe(false);
+		expect(companyContextWindows.length).toBeGreaterThan(0);
+		expect(companyContextWindows.every(window => window === 200_000)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
 

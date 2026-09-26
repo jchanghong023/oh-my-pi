@@ -824,6 +824,8 @@ export class CollabHost {
 			fromPeer,
 		);
 		socket.sendBatch(this.#snapshotChunks(entries), fromPeer);
+		// Rejoining is how guests refresh commands after skills or plugins change.
+		this.#palette = undefined;
 		void this.#sendCommandList(fromPeer);
 		if (canWrite) {
 			for (const pending of this.#pendingUi.values()) {
@@ -840,7 +842,7 @@ export class CollabHost {
 	}
 
 	/**
-	 * Session palette, built once per room. Advertises everything
+	 * Session palette, rebuilt on each join. Advertises everything
 	 * {@link #dispatchGuestCommand} accepts: the ACP palette plus the TUI-only
 	 * builtins the dispatcher runs on the host screen. Both the join frame and
 	 * command dispatch await this same promise, so a guest that prompts while

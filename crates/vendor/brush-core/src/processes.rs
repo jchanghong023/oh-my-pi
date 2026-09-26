@@ -19,8 +19,7 @@ use crate::{error, openfiles::OpenFile, sys};
 /// rest of a pipeline is still spawning) is dropped by the signal registry's
 /// broadcast — no receiver exists yet — so a child that already stopped in
 /// that window would otherwise never wake the waiter. The periodic sweeps also
-/// recover a stop whose notification was consumed by a concurrent
-/// `poll_for_stopped_children` caller.
+/// recover a stop whose notification was consumed by a concurrent waiter.
 const STOPPED_CHILDREN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 struct CompletionMarker {
@@ -141,7 +140,7 @@ impl ChildProcess {
 					break Ok(ProcessWaitResult::Cancelled)
 				},
 				_ = stopped_poll.tick() => {
-					if sys::signal::poll_for_stopped_children()? {
+					if sys::signal::poll_for_stopped_child(self.pid)? {
 						break Ok(ProcessWaitResult::Stopped);
 					}
 				},
@@ -149,7 +148,7 @@ impl ChildProcess {
 					break Ok(ProcessWaitResult::Stopped)
 				},
 				_ = sigchld.recv() => {
-					if sys::signal::poll_for_stopped_children()? {
+					if sys::signal::poll_for_stopped_child(self.pid)? {
 						break Ok(ProcessWaitResult::Stopped);
 					}
 				},

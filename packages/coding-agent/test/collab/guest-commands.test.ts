@@ -19,6 +19,7 @@ import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { LoadedCustomCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 // Registers the capability providers `buildAvailableSlashCommands` reads the
 // host's palette from (builtins + file commands under the session cwd).
@@ -237,6 +238,7 @@ afterEach(() => {
 	harness.bash.length = 0;
 	harness.python.length = 0;
 	harness.tui.length = 0;
+	(harness.ctx.session.customCommands as LoadedCustomCommand[]).length = 0;
 });
 
 afterAll(async () => {
@@ -247,6 +249,20 @@ afterAll(async () => {
 });
 
 describe("collab guest commands", () => {
+	it("refreshes the palette when a guest rejoins after commands change", async () => {
+		const first = await joinReady(host.link, "writer-before");
+		expect(first.palette).not.toContain("fresh-command");
+		(harness.ctx.session.customCommands as LoadedCustomCommand[]).push({
+			command: { name: "fresh-command", description: "Added after the first join" },
+		} as LoadedCustomCommand);
+
+		const second = await joinReady(host.link, "writer-after");
+		expect(second.palette).toContain("fresh-command");
+		second.socket.send({ t: "prompt", text: "/fresh-command" });
+		for (let attempt = 0; attempt < 50 && harness.modelPrompts.length === 0; attempt++) await Bun.sleep(10);
+		expect(harness.modelPrompts).toEqual(["/fresh-command"]);
+	});
+
 	it("answers an unknown slash command with a targeted error instead of prompting the model", async () => {
 		const guest = await joinReady(host.link, "writer");
 

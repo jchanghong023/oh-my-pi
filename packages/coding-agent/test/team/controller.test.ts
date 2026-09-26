@@ -9,7 +9,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { startTeamDiscussion, waitForSessionIdle } from "@oh-my-pi/pi-coding-agent/team";
+import { deliverTeamReport, startTeamDiscussion, waitForSessionIdle } from "@oh-my-pi/pi-coding-agent/team";
 
 const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
@@ -155,5 +155,51 @@ describe("waitForSessionIdle", () => {
 		const idle = await waitForSessionIdle(session, controller.signal, { timeoutMs: 5_000, pollMs: 5 });
 		expect(idle).toBe(false);
 		expect(Date.now() - started).toBeLessThan(100);
+	});
+});
+
+describe("team report delivery", () => {
+	it("does not deliver a report after cancellation during the idle wait", async () => {
+		const controller = new AbortController();
+		const sent: string[] = [];
+		const session = {
+			isStreaming: true,
+			sendCustomMessage: async (payload: { content: string }) => {
+				sent.push(payload.content);
+				return false;
+			},
+		} as unknown as AgentSession;
+		setTimeout(() => controller.abort(), 20);
+		const delivered = await deliverTeamReport(
+			session,
+			controller.signal,
+			"finished",
+			{ jobId: "job-1", question: "question" },
+			undefined,
+			{ timeoutMs: 1_000, pollMs: 5 },
+		);
+		expect(delivered).toBe(false);
+		expect(sent).toEqual([]);
+	});
+
+	it("keeps the bounded timeout fallback for a live job", async () => {
+		const sent: string[] = [];
+		const session = {
+			isStreaming: true,
+			sendCustomMessage: async (payload: { content: string }) => {
+				sent.push(payload.content);
+				return false;
+			},
+		} as unknown as AgentSession;
+		const delivered = await deliverTeamReport(
+			session,
+			new AbortController().signal,
+			"finished",
+			{ jobId: "job-1", question: "question" },
+			undefined,
+			{ timeoutMs: 20, pollMs: 5 },
+		);
+		expect(delivered).toBe(true);
+		expect(sent).toEqual(["finished"]);
 	});
 });

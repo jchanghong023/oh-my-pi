@@ -1,4 +1,5 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reportCliUsageError } from "../cli/args";
 import { docsHelp as commandHelp } from "../cli/command-help";
@@ -64,7 +65,9 @@ export default class Docs extends Command {
 			// framework print a stack. Aborts are already mapped to exit code
 			// 130 inside runDocsCommand; anything reaching this catch is a real
 			// failure.
-			process.stderr.write(`${chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`)}\n`);
+			process.stderr.write(
+				`${chalk.red(sanitizeText(`Error: ${error instanceof Error ? error.message : String(error)}`))}\n`,
+			);
 			process.exitCode = 1;
 		} finally {
 			process.off("SIGINT", onSigint);

@@ -324,8 +324,6 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			stdout: "ignore",
 			stderr: "ignore",
 			...BROKER_SPAWN_OPTIONS,
-			// The broker must outlive the client that started it while other clients hold leases.
-			detached: true,
 		});
 		child.unref();
 	}

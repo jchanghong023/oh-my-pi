@@ -20,6 +20,7 @@ import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
+import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
 import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
@@ -72,6 +73,7 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 		// Company environment: flip the lane before the registry captures company
 		// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
 		setCompanyOfflineEnabled(true);
+		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 		const companyError = getCompanyConfigError();
 		if (companyError) process.stderr.write(`${companyError}\n`);
 	}

@@ -953,9 +953,8 @@ impl Write for StreamWriter {
 mod win {
 	use std::os::windows::io::AsRawHandle;
 
-	use windows_sys::Win32::Storage::FileSystem::{
-		BY_HANDLE_FILE_INFORMATION, FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType,
-	};
+	use windows_sys::Win32::Foundation::CompareObjectHandles;
+	use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
 
 	/// Whether `file`'s handle points at a disk file, as opposed to a pipe, a
 	/// character device (the console, the null device), or a socket.
@@ -965,24 +964,14 @@ mod win {
 		unsafe { GetFileType(file.as_raw_handle()) == FILE_TYPE_DISK }
 	}
 
-	/// The volume serial and file index of a disk file — the Windows analogue
-	/// of fstat's `dev`+`ino` pair — or `None` for any non-disk handle or
-	/// query failure.
-	pub(super) fn disk_file_id(file: &std::fs::File) -> Option<(u32, u64)> {
-		if !is_disk_file(file) {
-			return None;
+	/// Duplicated handles share one file object and its offset. Separate opens
+	/// of the same path have independent file objects and must keep their writers.
+	pub(super) fn same_disk_file_object(a: &std::fs::File, b: &std::fs::File) -> bool {
+		if !is_disk_file(a) || !is_disk_file(b) {
+			return false;
 		}
-		// SAFETY: zeroed `BY_HANDLE_FILE_INFORMATION` is a valid out buffer,
-		// and the handle stays open across the call.
-		let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-		// SAFETY: as above.
-		if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-			return None;
-		}
-		Some((
-			info.dwVolumeSerialNumber,
-			(u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-		))
+		// SAFETY: both handles remain live for the duration of the comparison.
+		unsafe { CompareObjectHandles(a.as_raw_handle(), b.as_raw_handle()) != 0 }
 	}
 }
 
@@ -1057,25 +1046,13 @@ fn same_destination(a: &OpenFile, b: &OpenFile) -> bool {
 	}
 }
 
-/// The Windows counterpart: volume serial + file index — the `dev`+`ino`
-/// analogue from fstat — identifies two handles onto one disk file, so `>f
-/// 2>&1` shares a writer and keeps exact write order.
-///
-/// Non-disk handles (the capture pipe, the console, the null device) compare
-/// as `false`: `GetFileInformationByHandle` is only meaningful for disk
-/// files, so a pipe-backed `2>&1` keeps separate writers on Windows. The
-/// probe also cannot tell one shared-offset handle from two independent
-/// opens of the same file (`>f 2>&1` vs `>f 2>f`); both merge through one
-/// writer, which interleaves the streams rather than letting independent
-/// offsets overwrite each other.
+/// The Windows counterpart compares disk file objects, preserving the shared
+/// offset of `>f 2>&1` without merging independent opens from `>f 2>f`.
+/// Non-disk handles retain separate writers.
 #[cfg(windows)]
 fn same_destination(a: &OpenFile, b: &OpenFile) -> bool {
-	fn id(file: &OpenFile) -> Option<(u32, u64)> {
-		let OpenFile::File(f) = file else { return None };
-		win::disk_file_id(f)
-	}
-	match (id(a), id(b)) {
-		(Some(a), Some(b)) => a == b,
+	match (a, b) {
+		(OpenFile::File(a), OpenFile::File(b)) => win::same_disk_file_object(a, b),
 		_ => false,
 	}
 }
@@ -2142,6 +2119,21 @@ mod testing {
 			assert!(!same_destination(&f1, &f2));
 
 			drop((reader, reader2));
+		}
+
+		#[cfg(windows)]
+		#[test]
+		fn same_destination_distinguishes_duplicate_handles_from_separate_opens() {
+			use crate::host::same_destination;
+
+			let dir = tempfile::tempdir().unwrap();
+			let path = dir.path().join("out.txt");
+			let original = std::fs::File::create(&path).unwrap();
+			let duplicate = original.try_clone().unwrap();
+			let independent = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+			let original = OpenFile::File(original);
+			assert!(same_destination(&original, &OpenFile::File(duplicate)));
+			assert!(!same_destination(&original, &OpenFile::File(independent)));
 		}
 	}
 
