@@ -21,9 +21,11 @@ pub struct PythonSymbolsResult {
 	pub parse_error: bool,
 }
 
-/// Extract definitions in source order. A syntax error invalidates the entire
-/// symbol set: callers must never retain definitions from an older parse.
-/// `heartbeat` runs before and after parsing and throughout the tree walk.
+/// Extract definitions in source order.
+///
+/// A syntax error invalidates the entire symbol set: callers must never retain
+/// definitions from an older parse. `heartbeat` runs before and after parsing
+/// and throughout the tree walk.
 pub fn extract_python_symbols(
 	code: &str,
 	mut heartbeat: impl FnMut() -> Result<()>,
