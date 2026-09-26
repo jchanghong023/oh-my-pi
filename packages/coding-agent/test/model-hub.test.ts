@@ -463,7 +463,7 @@ describe("ModelHub", () => {
 			installTestTheme();
 
 			// Initial state: scope focus (sidebar)
-			expect(footerLine(hub.render(220))).toContain("↑/↓ providers · → models");
+			expect(footerLine(hub.render(220))).toContain("Enter/→ models · ↑/↓ providers");
 
 			// Type to search
 			for (const ch of "model") hub.handleInput(ch);
@@ -589,6 +589,7 @@ describe("ModelHub", () => {
 			hub.handleInput("\n");
 			expect(normalize(hub.render(220))).toContain("Assigning reviewer");
 
+			hub.handleInput("\n"); // sidebar → model list
 			hub.handleInput("\n"); // pick the sole model for the new role
 			expect(onAssign).toHaveBeenCalledTimes(1);
 			const call = onAssign.mock.calls[0];
@@ -604,6 +605,7 @@ describe("ModelHub", () => {
 			const { hub, onAssign } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
+			hub.handleInput("\n"); // sidebar → model list
 			hub.handleInput("\n");
 			const strip = footerLine(hub.render(220));
 			expect(strip).toContain("default");
@@ -634,6 +636,7 @@ describe("ModelHub", () => {
 			const onAssign = vi.fn(() => assignment.promise);
 			const { hub } = createHub({ models: [model], scoped: true, callbacks: { onAssign } });
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // Open role strip.
 			hub.handleInput("\n"); // Assign default.
 			expect(onAssign).toHaveBeenCalledTimes(1);
@@ -657,6 +660,7 @@ describe("ModelHub", () => {
 			const onAssign = vi.fn(() => assignment.promise);
 			const { hub } = createHub({ models: [model], scoped: true, callbacks: { onAssign } });
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n");
 			hub.handleInput("\n");
 			assignment.resolve(false);
@@ -674,6 +678,7 @@ describe("ModelHub", () => {
 			const onAssign = vi.fn(() => (++assignments === 1 ? true : thinking.promise));
 			const { hub } = createHub({ models: [model], scoped: true, callbacks: { onAssign } });
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n");
 			hub.handleInput("\n");
 			hub.handleInput("\x1b[C"); // Inherit → off.
@@ -692,6 +697,7 @@ describe("ModelHub", () => {
 			const settings = Settings.isolated({ modelRoleStorage: "project" });
 			const projectHarness = createHub({ models: [model], scoped: true, settings });
 
+			projectHarness.hub.handleInput("\n"); // Sidebar → model list.
 			projectHarness.hub.handleInput("\n");
 			const projectStrip = footerLine(projectHarness.hub.render(220));
 			expect(projectStrip).toContain("project default");
@@ -700,6 +706,7 @@ describe("ModelHub", () => {
 			expect(projectHarness.onAssign.mock.calls[0]?.[4]).toBe("project");
 
 			const globalHarness = createHub({ models: [model], scoped: true, settings });
+			globalHarness.hub.handleInput("\n"); // Sidebar → model list.
 			globalHarness.hub.handleInput("\n");
 			globalHarness.hub.handleInput(DOWN);
 			globalHarness.hub.handleInput("\n");
@@ -751,12 +758,14 @@ describe("ModelHub", () => {
 
 				const projectDefault = createHub({ models: [model], scoped: true, settings });
 				expect(normalize(projectDefault.hub.render(220))).toContain("○ smol");
+				projectDefault.hub.handleInput("\n"); // Sidebar → model list.
 				projectDefault.hub.handleInput("\n");
 				projectDefault.hub.handleInput("\n");
 				expect(projectDefault.onUnassign).toHaveBeenCalledWith("default", "project");
 				expect(projectDefault.onAssign).not.toHaveBeenCalled();
 
 				const globalDefault = createHub({ models: [model], scoped: true, settings });
+				globalDefault.hub.handleInput("\n"); // Sidebar → model list.
 				globalDefault.hub.handleInput("\n");
 				globalDefault.hub.handleInput(DOWN);
 				globalDefault.hub.handleInput("\n");
@@ -764,6 +773,7 @@ describe("ModelHub", () => {
 				expect(globalDefault.onAssign).not.toHaveBeenCalled();
 
 				const projectAutoSelected = createHub({ models: [model], scoped: true, settings });
+				projectAutoSelected.hub.handleInput("\n"); // Sidebar → model list.
 				projectAutoSelected.hub.handleInput("\n");
 				projectAutoSelected.hub.handleInput(DOWN);
 				projectAutoSelected.hub.handleInput(DOWN);
@@ -772,6 +782,7 @@ describe("ModelHub", () => {
 				expect(projectAutoSelected.onAssign).not.toHaveBeenCalled();
 
 				const globalAutoSelected = createHub({ models: [model], scoped: true, settings });
+				globalAutoSelected.hub.handleInput("\n"); // Sidebar → model list.
 				globalAutoSelected.hub.handleInput("\n");
 				globalAutoSelected.hub.handleInput(DOWN);
 				globalAutoSelected.hub.handleInput(DOWN);
@@ -790,6 +801,7 @@ describe("ModelHub", () => {
 			const { hub, onAssign, onUnassign } = createHub({ models: [model], scoped: true, settings });
 			expect(normalize(hub.render(220))).toContain("○ smol");
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n");
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
@@ -872,6 +884,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n");
 			hub.handleInput("\n");
 			const thinking = footerLine(hub.render(220));
@@ -885,6 +898,7 @@ describe("ModelHub", () => {
 			const { hub, onAssign, onUnassign } = createHub({ models: [model], scoped: true, settings });
 			installTestTheme();
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // role strip
 			hub.handleInput(DOWN); // default → smol chip (down moves right)
 			hub.handleInput("\n");
@@ -931,6 +945,7 @@ describe("ModelHub", () => {
 			const { hub, onAssign, onFallbackChainChange } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n");
 			hub.handleInput(LEFT); // wraps to the trailing retry-fallback chip
 			hub.handleInput("\n");
@@ -951,6 +966,7 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [model], scoped: true });
 			installTestTheme();
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // open the role strip
 			// At full width every chip fits and no left ellipsis appears.
 			expect(footerLine(hub.render(220))).not.toContain("…");
@@ -998,6 +1014,7 @@ describe("ModelHub", () => {
 			hub.handleInput("f"); // add a fallback for the first role (default)
 			expect(normalize(hub.render(220))).toContain("Adding fallback for");
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			hub.handleInput("\n"); // pick the only model
 			expect(onFallbackChainChange).toHaveBeenCalledWith("default", ["test/model-a"]);
 			expect(onAssign).not.toHaveBeenCalled(); // no role assignment, no thinking strip
@@ -1319,7 +1336,17 @@ describe("ModelHub", () => {
 	test("focuses the scope pane initially", () => {
 		const { hub } = createHub({ models: [makeModel("test", "test-model")] });
 		const rendered = normalize(hub.render(220));
-		expect(rendered).toContain("↑/↓ providers · → models");
+		expect(rendered).toContain("Enter/→ models · ↑/↓ providers");
+	});
+
+	test("Enter on the sidebar moves focus to the model list instead of acting on a row", () => {
+		const { hub, onAssign } = createHub({ models: [makeModel("test", "test-model")], scoped: true });
+		installTestTheme();
+		hub.handleInput("\n");
+		expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
+		expect(onAssign).not.toHaveBeenCalled();
+		hub.handleInput("\n"); // now Enter acts on the focused row: opens its role strip
+		expect(footerLine(hub.render(220))).toContain("test-model →");
 	});
 
 	describe("mouse wheel", () => {
@@ -1334,6 +1361,7 @@ describe("ModelHub", () => {
 			const models = Array.from({ length: 40 }, (_, i) => makeModel("test", `model-${String(i).padStart(2, "0")}`));
 			const { hub } = createHub({ models, scoped: true });
 
+			hub.handleInput("\n"); // Sidebar → model list.
 			const before = normalize(hub.render(220)); // establishes mouse geometry
 			// Enter opens the role strip for the selected model — its footer
 			// (`<model-id> → …`) identifies the selection.
