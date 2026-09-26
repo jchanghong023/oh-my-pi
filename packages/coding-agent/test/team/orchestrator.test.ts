@@ -427,7 +427,7 @@ describe("team orchestrator", () => {
 			...script,
 			synthesis: () => ({
 				...synthesisData("A"),
-				reportMarkdown: "### 主要取舍\n方案 A 不可采用，而方案 B 可采用。",
+				reportMarkdown: "### 主要取舍\n方案 A 不可采用，方案 B 也不可采用。",
 			}),
 		});
 		expect(result.status).toBe("completed");
