@@ -159,6 +159,7 @@ const codingAgentNativeContentMarkers = [
 	"Bun.spawnSync",
 	"child_process",
 	"Bun.serve",
+	"startLocalRelay(",
 	"new Worker",
 	"Worker(",
 	"puppeteer",
