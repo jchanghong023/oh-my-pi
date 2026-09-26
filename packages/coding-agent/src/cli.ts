@@ -38,6 +38,7 @@ import {
 	LSP_MUX_WORKER_ARG,
 	STATS_ACTIVITY_WORKER_ARG,
 	TERMINAL_OUTPUT_WORKER_ARG,
+	TEXT_PREDICT_WORKER_ARG,
 } from "./cli/worker-selectors";
 import type * as JsProcessEntry from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
@@ -146,6 +147,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestIdaHost } = await import("./ida/client");
 	const { smokeTestBlobBroker } = await import("./blob-broker/daemon");
 	const { smokeTestTerminalOutputWorker } = await import("./launch/terminal-output-worker-client");
+	const { smokeTestTextPredictDaemon } = await import("./predict/client");
 	await smokeTestSyncWorker();
 	await smokeTestStatsActivityWorker();
 
@@ -173,6 +175,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestIdaHost();
 	await smokeTestBlobBroker();
 	await smokeTestTerminalOutputWorker();
+	await smokeTestTextPredictDaemon();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -298,6 +301,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === BLOB_BROKER_WORKER_ARG) {
 		const { startBlobBrokerFromEnvironment } = await import("./blob-broker/server");
 		await startBlobBrokerFromEnvironment();
+		return true;
+	}
+	if (arg === TEXT_PREDICT_WORKER_ARG) {
+		const { startTextPredictDaemonFromEnvironment } = await import("./predict/daemon");
+		await startTextPredictDaemonFromEnvironment();
 		return true;
 	}
 	return false;

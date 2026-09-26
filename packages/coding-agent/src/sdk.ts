@@ -1106,10 +1106,8 @@ export interface BuildSystemPromptOptions {
 	includeWorkspaceTree?: boolean;
 	/** Include the read-only security:// resource inventory entry. Default: false. */
 	securityEnabled?: boolean;
-	/** Include browser eval-prelude guidance. Default: false. */
-	browserEnabled?: boolean;
-	/** Include computer eval-prelude guidance and safety policy. Default: false. */
-	computerEnabled?: boolean;
+	/** Eval preludes to advertise; each contributes its `guidance` block. Default: none. */
+	evalPreludes?: readonly Pick<EvalPreludeDefinition, "name" | "guidance">[];
 }
 
 /**
@@ -1137,8 +1135,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		inlineToolDescriptors: options.inlineToolDescriptors,
 		includeWorkspaceTree: options.includeWorkspaceTree,
 		securityEnabled: options.securityEnabled,
-		browserEnabled: options.browserEnabled,
-		computerEnabled: options.computerEnabled,
+		evalPreludes: options.evalPreludes,
 		toolNames,
 		tools: promptTools,
 	});
@@ -2216,6 +2213,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			return getEnabledEvalPreludes(builtins);
 		};
 		toolSession.getEvalPreludes = getEvalPreludes;
+		// SessionTools owns the advertised snapshot; before it exists the base
+		// prompt is built from, and therefore advertises, the live set.
+		toolSession.getAdvertisedEvalPreludes = () => session?.getAdvertisedEvalPreludes() ?? getEvalPreludes();
 
 		// Wire process-wide internal URL singletons owned by their real classes.
 		// Top-level sessions install the active snapshots; subagents inherit them.
@@ -3738,8 +3738,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				memoryBackend: memoryBackend?.id,
 				securityEnabled: cfgSecurityEnabled.get(settings),
 				settingsApproval: toolSession.settingsApproval === true,
-				browserEnabled: getEvalPreludes().some(definition => definition.name === "browser"),
-				computerEnabled: getEvalPreludes().some(definition => definition.name === "computer"),
+				evalPreludes: toolSession.getAdvertisedEvalPreludes?.(),
 				model: getActiveModelString(),
 				includeModelInPrompt: cfgIncludeModelInPrompt.get(settings),
 				personality: agentKind === "sub" ? "none" : cfgPersonality.get(settings),

@@ -40,10 +40,28 @@
 
 ### Added
 
+- Added unified predictive text engine with pluggable N-gram, SmolLM2, and macOS native providers
+- Added `omp predict` CLI command for evaluating completion engine performance
+- Added cross-process prediction daemon for managing state, history ingestion, and engine fallbacks
+- Added support for dynamic eval prelude guidance via hidden session notices
+- Added a required `complexity` rationale field to the `task` tool for improved auto-thinking depth classification
+- Added the `wait` tool automatically to agents that use `task` or `bash` to improve background process coordination
+- Added a context-aware hint system for empty composers that displays suggestions based on agent activity and effort
 - Added an optional `scope` to the `retain` and `learn` tools, offered when `mnemopi.scoping` is `global` or `per-project-tagged`: `scope: "global"` stores a memory or lesson in the Mnemopi bank every project recalls instead of the current project's bank ([#13324](https://github.com/can1357/oh-my-pi/pull/13324) by [@alphastorm](https://github.com/alphastorm)).
+- Added `/btw` to the commands available from a focused subagent view; it asks about the focused agent's transcript instead of the main session's, and its answers can be copied or followed up but not branched into the main session ([#13412](https://github.com/can1357/oh-my-pi/pull/13412) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- Updated `spelling.autocomplete` to an enum-based configuration for engine selection
+- Optimized mid-session `/computer` toggles to bypass full system-prompt rebuilds
+- Updated window input policy to default to background actions and replaced the `delivery` option with a `takeover` boolean flag for opt-in activation
+- Aligned orchestrator task documentation and prompts to a Target/Change/Acceptance format
+- Migrated all hardcoded keyboard and slash-command shortcut labels to dynamic, platform-aware UI hints
+- Centralized usage tracking for slash commands and hints to a persistent, namespaced storage system
 
 ### Fixed
 
+- Preserved MCP `structuredContent` in live tool result `details`, allowing eval callers to consume server data without parsing the model-facing JSON rendering; spilled results omit the duplicate structured payload from session persistence while retaining the artifact reference ([#13397](https://github.com/can1357/oh-my-pi/issues/13397), [#13398](https://github.com/can1357/oh-my-pi/pull/13398) by [@shawnkoh](https://github.com/shawnkoh)).
 - Fixed a Collab host ending with `a host is already connected for this room` after a brief network drop: when the relay still holds the dropped connection, the host now retries every few seconds for up to 150 s and reclaims its room, and a refused retry no longer resets the guest list or drops queued updates ([#12514](https://github.com/can1357/oh-my-pi/issues/12514), [#13355](https://github.com/can1357/oh-my-pi/pull/13355) by [@alphastorm](https://github.com/alphastorm))
 - Fixed a one-shot command that stopped before completing (for example `omp config set` on a fresh Windows profile) exiting 0 with no output; it now exits 1 with a stderr line naming the command and pointing at `PI_DEBUG_STARTUP` ([#13373](https://github.com/can1357/oh-my-pi/pull/13373) by [@alphastorm](https://github.com/alphastorm))
 

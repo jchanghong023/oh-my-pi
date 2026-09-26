@@ -339,6 +339,12 @@ export interface ToolSession {
 	getEvalKernelOwnerId?: () => string | null;
 	/** Current enabled eval prelude definitions. */
 	getEvalPreludes?: () => readonly EvalPreludeDefinition[];
+	/**
+	 * Eval preludes frozen into the system prompt and eval description at the
+	 * last base rebuild. Mid-session toggles ride a hidden notice instead of
+	 * rewriting the provider cache prefix.
+	 */
+	getAdvertisedEvalPreludes?: () => readonly EvalPreludeDefinition[];
 	/** Reject new eval work once session disposal has started. */
 	assertEvalExecutionAllowed?: () => void;
 	/** Track tool-owned eval work so session disposal can await/abort it like direct session eval runs. */
@@ -773,10 +779,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgCheckpointEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
-		// Subagents never block on `wait`: owned job results re-wake their run
-		// through the executor's quiescence barrier, and parent messages steer them.
 		if (name === "wait") {
-			if ((session.taskDepth ?? 0) > 0) return false;
 			return (
 				cfgAsyncEnabled.get(session.settings) ||
 				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||

@@ -11,6 +11,7 @@ import type { Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
+import { type EvalPreludeDefinition, evalPreludeSummary } from "../eval/preludes";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { type LocalProtocolOptions } from "../internal-urls";
@@ -20,6 +21,7 @@ import { resolveMemoryBackend } from "../memory-backend/resolve";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import { invalidateToolSchemaMetadata } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { MemoryBackendStartOptions } from "../memory-backend/types";
+import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
@@ -79,6 +81,8 @@ export interface SessionToolsHost {
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	notifyCommandMetadataChanged(): void;
 	localProtocolOptions(): LocalProtocolOptions;
+	/** Live enabled eval preludes; candidates for the next base rebuild's advertised snapshot. */
+	evalPreludes(): readonly EvalPreludeDefinition[];
 	/** Publishes the current Codex Code Mode tool exposure snapshot for turn metadata; undefined clears it. */
 	setCodeModeNamespacesInfo?(info: unknown): void;
 }
@@ -210,6 +214,7 @@ export function projectMountedMCPXdevGuidance(routes: Iterable<MountedMCPToolRou
 
 const TOOL_ROSTER_NOTICE_MESSAGE_TYPE = "tool-roster-notice";
 const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
+const EVAL_PRELUDE_NOTICE_MESSAGE_TYPE = "eval-prelude-notice";
 
 /**
  * Structured payload persisted on each {@link XDEV_MOUNT_NOTICE_MESSAGE_TYPE}
@@ -226,6 +231,25 @@ interface ToolRosterNoticeDetails {
 interface XdevMountNoticeDetails {
 	added: string[];
 	removed: string[];
+}
+
+/** Prelude names added/removed by one hidden {@link EVAL_PRELUDE_NOTICE_MESSAGE_TYPE} message. */
+interface EvalPreludeNoticeDetails {
+	added: string[];
+	removed: string[];
+}
+
+/**
+ * Prompt-affecting state frozen at each base rebuild. Tools render their
+ * provider-visible text from this snapshot instead of live settings, so
+ * mid-session toggles leave the cached prefix byte-stable and ride hidden
+ * notices until the next rebuild absorbs them.
+ */
+interface PromptSurface {
+	/** Skill-URI hints in `bash`/`read` (mid-session `/skillful` toggles). */
+	skillHintVisible: boolean;
+	/** Eval preludes in the system prompt and eval description. */
+	evalPreludes: readonly EvalPreludeDefinition[];
 }
 
 interface PendingNoticePreview<T> {
@@ -309,13 +333,13 @@ export class SessionTools {
 	#basePromptXdevNames: ReadonlySet<string> = new Set();
 	#toolRegistryMutationScope = new AsyncLocalStorage<boolean>();
 	/**
-	 * Render-scoped candidate hint visibility. Rebuild frames run inside
+	 * Render-scoped candidate prompt surface. Rebuild frames run inside
 	 * `.run(candidate, …)` so tool getters read the candidate during render and
 	 * signature computation; everything outside the frame reads the committed
-	 * {@link #skillHintVisible}. Abandoned frames simply exit their scope — no
+	 * {@link #promptSurface}. Abandoned frames simply exit their scope — no
 	 * rollback write that could clobber a newer commit.
 	 */
-	#skillHintRenderScope = new AsyncLocalStorage<boolean>();
+	#promptSurfaceScope = new AsyncLocalStorage<PromptSurface>();
 	#toolRegistryMutationTail: Promise<void> = Promise.resolve();
 	#promptModelKey: string | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
@@ -354,16 +378,15 @@ export class SessionTools {
 	#skillsSettings: SkillsSettings | undefined;
 	#skillsReloadable: boolean;
 	/**
-	 * Snapshot of the skill-URI hint visibility taken at the last system-prompt
-	 * rebuild. The provider-visible system prompt is deliberately byte-stable
-	 * across mid-session `/skillful` toggles (a notice rides the next turn
-	 * instead), so the provider-side hint in `BashTool.description` and
-	 * `ReadTool.parameters` must freeze to the same state — reading the live
-	 * setting per request would mutate the provider tool prefix without the
-	 * intended prompt refresh. The setters below carry the snapshot into the
-	 * tools; the refresh lifecycle updates it.
+	 * Prompt surface committed by the last system-prompt rebuild. The
+	 * provider-visible system prompt is deliberately byte-stable across
+	 * mid-session `/skillful` and eval-prelude toggles (a notice rides the next
+	 * turn instead), so the provider-side text in `BashTool.description`,
+	 * `ReadTool.parameters`, and `EvalTool.description` must freeze to the same
+	 * state — reading live settings per request would mutate the provider tool
+	 * prefix without the intended prompt refresh. The refresh lifecycle updates it.
 	 */
-	#skillHintVisible = false;
+	#promptSurface: PromptSurface;
 	#acpPermissionDecisions = new Map<string, "allow_always" | "reject_always">();
 
 	constructor(host: SessionToolsHost, options: SessionToolsOptions) {
@@ -408,7 +431,7 @@ export class SessionTools {
 		this.#skillWarnings = options.skillWarnings ?? [];
 		this.#skillsSettings = options.skillsSettings;
 		this.#skillsReloadable = options.skillsReloadable ?? true;
-		this.#skillHintVisible = this.#deriveSkillHintVisible();
+		this.#promptSurface = this.#derivePromptSurface();
 		// Seed from the construction slate (top-level tools plus xd:// mounts).
 		// Left empty, getEnabledToolNames() falls back to live agent.state.tools,
 		// so an early reconcile (think/Code Mode after the startup model
@@ -477,21 +500,32 @@ export class SessionTools {
 	}
 
 	/**
-	 * Skill-URI hint visibility (see {@link #skillHintVisible}). Tools
-	 * read this instead of the live `skillful` setting so the provider tool
-	 * prefix stays byte-stable between system-prompt rebuilds.
+	 * Skill-URI hint visibility (see {@link #promptSurface}). Tools read this
+	 * instead of the live `skillful` setting so the provider tool prefix stays
+	 * byte-stable between system-prompt rebuilds.
 	 *
-	 * Inside a rebuild frame ({@link #skillHintRenderScope}) this returns the
+	 * Inside a rebuild frame ({@link #promptSurfaceScope}) this returns the
 	 * candidate so the rendered prompt and computed signature see the new
 	 * state; outside, the committed snapshot.
 	 */
 	get skillHintVisible(): boolean {
-		return this.#skillHintRenderScope.getStore() ?? this.#skillHintVisible;
+		return (this.#promptSurfaceScope.getStore() ?? this.#promptSurface).skillHintVisible;
 	}
 
-	/** Derives the candidate visibility from the live setting without publishing it. */
-	#deriveSkillHintVisible(): boolean {
-		return cfgSkillful.get(this.#host.settings) === true && (this.#skills?.length ?? 0) > 0;
+	/**
+	 * Eval preludes the system prompt and eval description advertise (see
+	 * {@link #promptSurface}); the candidate inside a rebuild frame.
+	 */
+	get advertisedEvalPreludes(): readonly EvalPreludeDefinition[] {
+		return (this.#promptSurfaceScope.getStore() ?? this.#promptSurface).evalPreludes;
+	}
+
+	/** Derives the candidate surface from live state without publishing it. */
+	#derivePromptSurface(): PromptSurface {
+		return {
+			skillHintVisible: cfgSkillful.get(this.#host.settings) === true && (this.#skills?.length ?? 0) > 0,
+			evalPreludes: this.#host.evalPreludes(),
+		};
 	}
 	/** Drops cached per-session ACP `allow_always`/`reject_always` decisions. */
 	clearAcpPermissionDecisions(): void {
@@ -1148,7 +1182,7 @@ export class SessionTools {
 		let rebuiltSignature: string | undefined;
 		let frozenSignature: string | undefined;
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
-		let candidateSkillHintVisible: boolean | undefined;
+		let candidateSurface: PromptSurface | undefined;
 		try {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(true);
@@ -1172,35 +1206,48 @@ export class SessionTools {
 					const tool = this.#toolRegistry.get(name);
 					return tool ? [tool] : [];
 				});
-				// Derive the candidate visibility and run both the signature
+				// Derive the candidate surface and run both the signature
 				// computation and the awaited render inside its scope: the tool
 				// getters read the candidate, so prompt, signature and provider
 				// schemas describe the same state. Nothing publishes outside this
 				// frame until the commit below.
-				const candidate = this.#deriveSkillHintVisible();
-				const signature = this.#skillHintRenderScope.run(candidate, () =>
-					this.#computeAppliedToolSignature(promptToolNames, promptTools, directToolNames, mountedSignatureTools),
-				);
+				const candidate = this.#derivePromptSurface();
+				const computeSignature = (surface: PromptSurface): string =>
+					this.#promptSurfaceScope.run(surface, () =>
+						this.#computeAppliedToolSignature(
+							promptToolNames,
+							promptTools,
+							directToolNames,
+							mountedSignatureTools,
+						),
+					);
+				// Eval-prelude toggles alone never trigger a rebuild: they ride the
+				// hidden prelude notice. The trigger keeps the committed preludes;
+				// a rebuild caused by anything else absorbs the live set.
+				const triggerSignature = computeSignature({
+					...candidate,
+					evalPreludes: this.#promptSurface.evalPreludes,
+				});
 				const freezeImplicitPromptRefresh =
 					!forcePromptRefresh &&
-					signature !== this.#lastAppliedToolSignature &&
+					triggerSignature !== this.#lastAppliedToolSignature &&
 					this.#lastAppliedToolSignature !== undefined &&
 					this.#host.model()?.thinking?.prefixBinding === true &&
 					this.#host.agent.state.messages.some(message => message.role === "assistant");
 				if (freezeImplicitPromptRefresh) {
-					frozenSignature = signature;
-					candidateSkillHintVisible = undefined;
-				} else if (forcePromptRefresh || signature !== this.#lastAppliedToolSignature) {
+					frozenSignature = triggerSignature;
+				} else if (forcePromptRefresh || triggerSignature !== this.#lastAppliedToolSignature) {
+					const signature = computeSignature(candidate);
 					const built = await untilAborted(
 						signal,
-						this.#skillHintRenderScope.run(candidate, () =>
+						this.#promptSurfaceScope.run(candidate, () =>
 							rebuildSystemPrompt(promptToolNames, this.#toolRegistry, { directToolNames }),
 						),
 					);
 					rebuiltSystemPrompt = built.systemPrompt;
 					rebuiltSignature = signature;
 					rebuiltXdevCatalogNames = built.xdevCatalogNames;
-					candidateSkillHintVisible = candidate;
+					candidateSurface = candidate;
 				}
 			}
 			signal?.throwIfAborted();
@@ -1255,9 +1302,9 @@ export class SessionTools {
 				// tracking any later frozen changes that must follow a delivered base.
 				this.#basePromptReflectsRosterDelta = true;
 				this.#pendingToolRosterDeltaAfterBase = undefined;
-				// Publish the exact visibility the prompt rendered with — never
+				// Publish the exact surface the prompt rendered with — never
 				// re-derive from live settings, which could diverge mid-flight.
-				this.#skillHintVisible = candidateSkillHintVisible ?? this.#skillHintVisible;
+				this.#promptSurface = candidateSurface ?? this.#promptSurface;
 			} else if (frozenSignature) {
 				this.#notifyToolRosterDelta(previousActiveToolNames, appliedNames);
 				this.#lastAppliedToolSignature = frozenSignature;
@@ -1463,6 +1510,53 @@ export class SessionTools {
 				removed: removed.length > 0 ? removed.join(", ") : undefined,
 			}),
 			details: { added, removed },
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		};
+	}
+
+	/**
+	 * Builds the hidden notice reconciling the eval preludes the model knows with
+	 * the live set. Delivered with the next user prompt instead of rebuilding the
+	 * system prompt, so a mid-session toggle (`/computer on`) keeps the provider
+	 * cache prefix intact.
+	 *
+	 * Known preludes are the committed base snapshot, then every prelude notice
+	 * still in context, applied in order. Deriving this from the transcript
+	 * rather than tracked state stays truthful across base rebuilds (which absorb
+	 * the live set), compaction (which drops old notices), and resume.
+	 */
+	takeEvalPreludeNotice(): CustomMessage<EvalPreludeNoticeDetails> | undefined {
+		const known = new Set(this.#promptSurface.evalPreludes.map(definition => definition.name));
+		for (const message of this.#host.agent.state.messages) {
+			if (message.role !== "custom" || message.customType !== EVAL_PRELUDE_NOTICE_MESSAGE_TYPE) continue;
+			const details = message.details;
+			if (!isRecord(details) || !Array.isArray(details.added) || !Array.isArray(details.removed)) continue;
+			for (const name of details.added) if (typeof name === "string") known.add(name);
+			for (const name of details.removed) if (typeof name === "string") known.delete(name);
+		}
+		const live = this.#host.evalPreludes();
+		const liveNames = new Set(live.map(definition => definition.name));
+		const added = live.filter(definition => !known.has(definition.name));
+		const removed = [...known].filter(name => !liveNames.has(name));
+		if (added.length === 0 && removed.length === 0) return undefined;
+		// Topic docs are served through `read`; sessions without it get them inline,
+		// matching the eval description's `inlineTopics` fallback.
+		const canRead = (this.#toolPredicateNames ?? this.getActiveToolNames()).includes("read");
+		return {
+			role: "custom",
+			customType: EVAL_PRELUDE_NOTICE_MESSAGE_TYPE,
+			content: prompt.render(evalPreludeNoticePrompt, {
+				added: added.map(definition => ({ name: definition.name, summary: evalPreludeSummary(definition) })),
+				removed,
+				canRead,
+				sections: added.flatMap(definition => [
+					...(canRead ? [] : [definition.documentation.trim()]),
+					...(definition.guidance ? [definition.guidance.trim()] : []),
+				]),
+			}),
+			details: { added: added.map(definition => definition.name), removed },
 			attribution: "agent",
 			display: false,
 			timestamp: Date.now(),
@@ -1827,12 +1921,12 @@ export class SessionTools {
 		// Derive the candidate and run the awaited render inside its scope: the
 		// tool getters read the candidate while the prompt renders, so the built
 		// prompt and the captured signature describe the same state. Nothing is
-		// published to {@link #skillHintVisible} here — an abandoned, stale or
+		// published to {@link #promptSurface} here — an abandoned, stale or
 		// throwing preparation leaves the committed snapshot untouched, and the
 		// scope frame (not a rollback write) guarantees no clobbering of a newer
 		// winner.
-		const candidate = this.#deriveSkillHintVisible();
-		const built = await this.#skillHintRenderScope.run(candidate, () =>
+		const candidate = this.#derivePromptSurface();
+		const built = await this.#promptSurfaceScope.run(candidate, () =>
 			rebuildSystemPrompt(promptToolNames, this.#toolRegistry, { directToolNames }),
 		);
 		const promptTools = promptToolNames
@@ -1842,7 +1936,7 @@ export class SessionTools {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [tool] : [];
 		});
-		const signature = this.#skillHintRenderScope.run(candidate, () =>
+		const signature = this.#promptSurfaceScope.run(candidate, () =>
 			this.#computeAppliedToolSignature(promptToolNames, promptTools, directToolNames, mountedSignatureTools),
 		);
 		return {
@@ -1856,7 +1950,7 @@ export class SessionTools {
 				// snapshot, so only carry the prompt forward.
 				if (this.#baseSystemPrompt !== previousBaseSystemPrompt) return true;
 				this.#baseSystemPrompt = built.systemPrompt;
-				this.#skillHintVisible = candidate;
+				this.#promptSurface = candidate;
 				this.#setBasePromptXdevNames(built.xdevCatalogNames);
 				this.#host.clearMemoryPromotionSnapshot();
 				if (

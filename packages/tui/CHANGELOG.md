@@ -6,6 +6,20 @@
 
 - Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
 
+### Added
+
+- Added `WordCompletionProvider` for ghost-text completion with pluggable backend routing
+- Added prose-gating logic to filter completion suggestions by context
+- Added `wordCompletionFeedback` provider hook for improved ghost-text tracking
+- Added provisional space handling for Tab completions to support seamless punctuation attachment
+
+### Changed
+
+- Replaced internal macOS-specific completion logic with a unified provider architecture
+- Updated TUI task interfaces to reflect the new `complexity` field requirement
+- Refined right-arrow acceptance behavior to skip forced trailing spaces
+- Replaced all static keyboard labels across overlays, apps, and status lines with dynamic, platform-aware key formatting
+
 ## [18.3.1] - 2026-09-25
 
 ### Breaking Changes
