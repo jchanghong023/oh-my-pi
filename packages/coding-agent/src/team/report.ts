@@ -25,9 +25,15 @@ export interface AssembleReportArgs {
 }
 
 export interface AssembleReportResult {
+	ok: true;
 	markdown: string;
 	/** True when structured tracking overrode the synthesis recommendation. */
 	droppedRecommendation: boolean;
+}
+
+export interface AssembleReportConflict {
+	ok: false;
+	error: string;
 }
 
 function proposalLabel(record: TeamProposalRecord): string {
@@ -57,8 +63,36 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
 	return !record.excludedFromOptions && record.unresolvedBlocking.length === 0 && !record.blockedAfterRoundCap;
 }
 
-export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResult {
+/** A model-authored adoption claim must not override the tracked proposal status. */
+function synthesisBodyConflict(
+	synthesis: TeamSynthesisOutput,
+	proposals: readonly TeamProposalRecord[],
+): string | undefined {
+	const body = synthesis.reportMarkdown;
+	if (body.includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
+	const statements = body.split(/(?:[。！？；;.!?，,、\r\n]|但是|但|而|却)/u);
+	for (const record of proposals) {
+		if (!record.excludedFromOptions && record.unresolvedBlocking.length === 0 && !record.blockedAfterRoundCap)
+			continue;
+		const label = `方案${record.label}`;
+		for (const statement of statements) {
+			const compact = statement.replace(/\s+/gu, "");
+			const positiveClaims = compact.replace(/(?:不(?:可采用|可以采用|推荐|建议采用)|并非首选|不是首选)/gu, "");
+			if (
+				(compact.includes(label) || compact.includes(`${record.label}方案`)) &&
+				/(?:可采用|可以采用|推荐|首选)/u.test(positiveClaims)
+			) {
+				return `综合正文建议采用已标记为“尚不可采用”的方案 ${record.label}`;
+			}
+		}
+	}
+	return undefined;
+}
+
+export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResult | AssembleReportConflict {
 	const { alignment, synthesis, proposals } = args;
+	const conflict = synthesisBodyConflict(synthesis, proposals);
+	if (conflict) return { ok: false, error: conflict };
 	const sections: string[] = [];
 
 	const choiceAffecting = alignment.interpretationDifferences.filter(difference => difference.affectsChoice);
@@ -113,6 +147,7 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 	sections.push(TEAM_CLOSING_CONTRACT);
 
 	return {
+		ok: true,
 		markdown: [`## /team 多模型讨论结果（team-result）`, "", sections.join("\n\n")].join("\n"),
 		droppedRecommendation,
 	};

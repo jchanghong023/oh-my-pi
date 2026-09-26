@@ -408,6 +408,32 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).not.toContain("【推荐】");
 	});
 
+	it("does not publish a synthesis body that recommends a blocked proposal", async () => {
+		const script = {
+			review: () => reviewData({ blocking: 1 }),
+			revision: () => revisionData(),
+		};
+		for (const body of ["### 核心方案\n**【推荐】方案 A**", "### 核心方案\n方案 A 可采用。"] as const) {
+			const { result } = await run({
+				...script,
+				synthesis: () => ({ ...synthesisData("A"), reportMarkdown: body }),
+			});
+			expect(result.status).toBe("failed");
+			expect(result.failureReason).toContain("综合结果无效");
+			expect(result.reportMarkdown).toBeUndefined();
+		}
+
+		const { result } = await run({
+			...script,
+			synthesis: () => ({
+				...synthesisData("A"),
+				reportMarkdown: "### 主要取舍\n方案 A 不可采用，而方案 B 可采用。",
+			}),
+		});
+		expect(result.status).toBe("completed");
+		expect(result.droppedRecommendation).toBe(true);
+	});
+
 	it("renders a valid recommendation with reason and preconditions", async () => {
 		const { result } = await run({ synthesis: () => synthesisData("A") });
 		expect(result.droppedRecommendation).toBeFalsy();

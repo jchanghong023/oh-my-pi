@@ -427,5 +427,11 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	}
 
 	const report = assembleTeamReport({ question, alignment, synthesis, proposals: records, participationNotes });
+	if (!report.ok) {
+		return {
+			status: "failed",
+			failureReason: `综合结果无效（${report.error}），流程未完成，不输出半成品结论`,
+		};
+	}
 	return { status: "completed", reportMarkdown: report.markdown, droppedRecommendation: report.droppedRecommendation };
 }
