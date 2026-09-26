@@ -14,6 +14,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"find",
 	"lsp",
 	"wiki",
+	"repo",
 	"checkpoint",
 	"rewind",
 	"context_notes",

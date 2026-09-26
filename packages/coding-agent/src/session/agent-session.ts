@@ -127,6 +127,7 @@ import { getEditStore } from "../edit/store";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
 import { releaseJudgmentBatches } from "../eval/judgment-batch-bridge";
 import type { EvalPreludeDefinition } from "../eval/preludes";
+import { RepoLifecycle } from "../repo/lifecycle";
 import type { PythonResult } from "../eval/py/executor";
 import { formatEvalStateContext } from "../eval/state";
 import { WorkPoolRegistry } from "../task/workpool";
@@ -721,6 +722,7 @@ export class AgentSession implements SettingsScope {
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<() => void>();
+	#repoLifecycle?: RepoLifecycle;
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -4793,6 +4795,49 @@ export class AgentSession implements SettingsScope {
 	registerSessionChangeCallback(callback: () => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
+	}
+
+	/** Attach after SDK initialization so every dispatcher (TUI, ACP, headless) observes executions. */
+	attachRepoLifecycle(lifecycle: RepoLifecycle): void {
+		this.#repoLifecycle = lifecycle;
+		lifecycle.start();
+		const unregisterSessionChange = this.registerSessionChangeCallback(() => lifecycle.onSessionChange());
+		const unsubscribeToolEvents = this.subscribe(event => {
+			if (event.type !== "tool_execution_end" || (event.toolName !== "bash" && event.toolName !== "eval")) return;
+			const details = event.result?.details;
+			// Synthetic, refused and validation-error calls did not execute. A
+			// non-zero exit or timeout did execute and could have changed files.
+			if (
+				event.isError &&
+				!details?.exitCode &&
+				!details?.timedOut &&
+				!(event.toolName === "eval" && Array.isArray(details?.cells))
+			)
+				return;
+			const kind = event.toolName;
+			lifecycle.commandExecuted(kind);
+			// A background result only schedules the command. A panel reconcile can
+			// finish before the job actually mutates the tree, so invalidate again
+			// at settlement even when its delivery was suppressed by wait/cancel.
+			const asyncJob = details?.async;
+			if (asyncJob?.state !== "running" || typeof asyncJob.jobId !== "string") return;
+			const job = this.#asyncJobManager?.getJob(asyncJob.jobId);
+			if (job?.type !== kind || (this.#agentId && job.ownerId !== this.#agentId)) return;
+			void job.promise.then(() => {
+				if (this.#repoLifecycle === lifecycle) lifecycle.commandExecuted(kind);
+			});
+		});
+		this.addDisposer(() => {
+			unsubscribeToolEvents();
+			unregisterSessionChange();
+			this.#repoLifecycle = undefined;
+			lifecycle.dispose();
+		});
+	}
+
+	/** Called by a host after an independent cwd move commits. */
+	refreshRepoLifecycle(): void {
+		this.#repoLifecycle?.onSessionChange();
 	}
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
@@ -9700,7 +9745,17 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean; useUserShell?: boolean; pty?: BashPtyOptions },
 	): Promise<BashResult> {
-		return this.#bash.executeBash(command, onChunk, options);
+		const execution = this.#bash.executeBash(command, onChunk, options);
+		return execution.then(
+			result => {
+				this.#repoLifecycle?.commandExecuted("bash");
+				return result;
+			},
+			error => {
+				this.#repoLifecycle?.commandExecuted("bash");
+				throw error;
+			},
+		);
 	}
 
 	/** Record a bash result supplied outside executeBash in the current ownership scope. */
@@ -9739,7 +9794,17 @@ export class AgentSession implements SettingsScope {
 		onChunk?: (chunk: string) => void,
 		options?: { excludeFromContext?: boolean },
 	): Promise<PythonResult> {
-		return this.#eval.executePython(code, onChunk, options);
+		const execution = this.#eval.executePython(code, onChunk, options);
+		return execution.then(
+			result => {
+				this.#repoLifecycle?.commandExecuted("eval");
+				return result;
+			},
+			error => {
+				this.#repoLifecycle?.commandExecuted("eval");
+				throw error;
+			},
+		);
 	}
 
 	assertEvalExecutionAllowed(): void {
@@ -10349,6 +10414,9 @@ export class AgentSession implements SettingsScope {
 			this.#releaseTtsrReservations(previousFollowUpMessages);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
 				this.#notifySessionChangeCallbacks();
+			}
+			if (path.resolve(previousSessionState.cwd) !== path.resolve(this.sessionManager.getCwd())) {
+				this.refreshRepoLifecycle();
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;

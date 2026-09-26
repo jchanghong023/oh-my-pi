@@ -123,7 +123,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 	{
 		label: "core/natives",
 		cwd: "packages/natives",
-		files: ["test/diff.test.ts", "test/native.test.ts", "test/vcs.test.ts"],
+		files: ["test/diff.test.ts", "test/native.test.ts", "test/python-symbols.test.ts", "test/vcs.test.ts"],
 	},
 	{
 		label: "coding-agent/session",
@@ -238,6 +238,9 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/modes/fullsend.test.ts",
 			"test/modes/magic-keywords.test.ts",
 			"test/modes/sigint-gate.test.ts",
+			"test/repo-index.test.ts",
+			"test/repo-lifecycle.test.ts",
+			"test/repo-tool.test.ts",
 			"test/slash-commands/jch-git.test.ts",
 			"test/slash-commands/magic-keywords.test.ts",
 			"test/slash-commands/team-command.test.ts",

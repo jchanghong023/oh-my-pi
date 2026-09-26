@@ -67,6 +67,7 @@ import { MemoryRecallTool } from "./memory-recall";
 import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
+import { RepoTool } from "./repo";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
@@ -145,6 +146,7 @@ export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
+export * from "./repo";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export type {
@@ -563,6 +565,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	find: s => new FindTool(s),
 	lsp: LspTool.createIf,
 	wiki: s => new WikiTool(s),
+	repo: s => new RepoTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	context_notes: ContextNotesTool.createIf,
@@ -621,8 +624,9 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
-	if (!restrictToolNames && requestedTools?.includes("read") && !requestedTools.includes("wiki")) {
-		requestedTools.push("wiki");
+	if (!restrictToolNames && requestedTools?.includes("read")) {
+		if (!requestedTools.includes("wiki")) requestedTools.push("wiki");
+		if (!requestedTools.includes("repo")) requestedTools.push("repo");
 	}
 	// createTools may be called more than once for the same ToolSession. A later
 	// explicit (or full-set) write request is a real grant and must upgrade any

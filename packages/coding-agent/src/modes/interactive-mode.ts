@@ -2353,6 +2353,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
+		this.session.refreshRepoLifecycle();
 		return true;
 	}
 
@@ -7163,6 +7164,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	showDocsDashboard(): void {
 		void this.#selectorController.showDocsDashboard();
+	}
+	showRepoDashboard(): void {
+		void this.#selectorController.showRepoDashboard();
 	}
 	showGitUi(revision?: string): void {
 		void this.#selectorController.showGitTui(revision);

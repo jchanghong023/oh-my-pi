@@ -516,6 +516,15 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "repo",
+		icon: "tree",
+		description: "Open the repository index dashboard",
+		handleTui: (_command, runtime) => {
+			runtime.ctx.showRepoDashboard();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "git",
 		icon: "branch",
 		description: "Open the git UI (split diff viewer, staging, commit composer)",

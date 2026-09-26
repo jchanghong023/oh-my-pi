@@ -11,12 +11,15 @@
 // fork's `zcode-api` lane pointed at a local stub Anthropic Messages server
 // that answers every stage marker with a schema-valid `yield` tool call, and
 // the run must reach the observable final report in the transcript.
+// A separate PTY case runs /repo against a temporary Python project and a
+// loopback model stub; unlike the model, repository indexing and tools are real.
 
 import * as fs from "node:fs/promises";
 import { rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PtySession } from "@oh-my-pi/pi-natives";
+import { runRepoSmoke } from "./repo-ui-smoke";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -62,7 +65,7 @@ interface TuiHandle {
 	exitPromise: Promise<Outcome>;
 }
 
-function startTui(argv: string[], env: Record<string, string>): TuiHandle {
+function startTui(argv: string[], env: Record<string, string>, projectCwd?: string): TuiHandle {
 	const session = new PtySession();
 	const handle: TuiHandle = {
 		session,
@@ -78,7 +81,9 @@ function startTui(argv: string[], env: Record<string, string>): TuiHandle {
 	const result = session.startArgv(
 		{
 			application: process.execPath,
-			args: ["--cwd=packages/coding-agent", "src/cli.ts", ...argv],
+			args: projectCwd
+				? ["run", "dev", "--cwd", projectCwd, ...argv]
+				: ["--cwd=packages/coding-agent", "src/cli.ts", ...argv],
 			cwd: repoRoot,
 			cols: 120,
 			rows: 30,
@@ -129,6 +134,11 @@ function normalizePtyOutput(text: string): string {
 		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
 		.replace(/\x1b[=>]/g, "")
 		.replace(/[\r\n]+/g, "");
+}
+
+if (process.argv.includes("--repo-only")) {
+	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
+	process.exit(0);
 }
 
 // ── 1. Startup render ────────────────────────────────────────────────────────
@@ -690,4 +700,6 @@ try {
 	await fs.rm(teamConfigRoot, { recursive: true, force: true }).catch(() => {});
 }
 
-console.log("ui-smoke: PASS — dev TUI renders, reacts, exits cleanly, /team runs end to end, and cancels cleanly");
+await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
+
+console.log("ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end");

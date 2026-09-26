@@ -1660,6 +1660,11 @@ export interface GlobOptions {
   maxResults?: number
   /** Respect .gitignore files (default: true). */
   gitignore?: boolean
+  /**
+   * Fail instead of silently skipping unreadable or vanished directories.
+   * Use for inventories that must report incomplete coverage.
+   */
+  strictErrors?: boolean
   /** Enable walker scan caching (default: false). */
   cache?: boolean
   /** Sort results by mtime (most recent first) before applying limit. */
@@ -2502,6 +2507,27 @@ export interface PtyStartOptions {
    * Defaults to "sh" if not provided.
    */
   shell?: string
+}
+
+export interface PythonSymbol {
+  name: string
+  qualname: string
+  kind: string
+  startLine: number
+  endLine: number
+  signature?: string
+}
+
+export declare function pythonSymbols(options: PythonSymbolsOptions): Promise<PythonSymbolsResult>
+
+export interface PythonSymbolsOptions {
+  code: string
+  signal?: unknown
+}
+
+export interface PythonSymbolsResult {
+  symbols: Array<PythonSymbol>
+  parseError: boolean
 }
 
 /**

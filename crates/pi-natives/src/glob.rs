@@ -45,6 +45,9 @@ pub struct GlobOptions<'env> {
 	pub max_results:          Option<u32>,
 	/// Respect .gitignore files (default: true).
 	pub gitignore:            Option<bool>,
+	/// Fail instead of silently skipping unreadable or vanished directories.
+	/// Use for inventories that must report incomplete coverage.
+	pub strict_errors:        Option<bool>,
 	/// Enable walker scan caching (default: false).
 	pub cache:                Option<bool>,
 	/// Sort results by mtime (most recent first) before applying limit.
@@ -83,6 +86,7 @@ struct GlobConfig {
 	use_gitignore:         bool,
 	mentions_node_modules: bool,
 	sort_by_mtime:         bool,
+	strict_errors:         bool,
 	cache:                 bool,
 }
 
@@ -207,8 +211,12 @@ fn run_glob(
 		.order(pi_walker::WalkOrder::Path)
 		.emit_root(false)
 		.depth(1, walk_depth_limit)
-		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
-		.cache(config.cache)
+		.directory_errors(if config.strict_errors {
+			pi_walker::DirectoryErrorMode::Strict
+		} else {
+			pi_walker::DirectoryErrorMode::SkipSkippable
+		})
+		.cache(config.cache && !config.strict_errors)
 		.empty_recheck(pi_walker::EmptyRecheck::Configured)
 		.filter(
 			pi_walker::WalkFilter::all()
@@ -277,6 +285,7 @@ pub fn glob(
 		max_results,
 		gitignore,
 		sort_by_mtime,
+		strict_errors,
 		cache,
 		include_node_modules,
 		timeout_ms,
@@ -304,6 +313,7 @@ pub fn glob(
 				mentions_node_modules: include_node_modules
 					.unwrap_or_else(|| pattern.contains("node_modules")),
 				sort_by_mtime: sort_by_mtime.unwrap_or(false),
+				strict_errors: strict_errors.unwrap_or(false),
 				cache: cache.unwrap_or(false),
 				pattern,
 			},
@@ -381,6 +391,7 @@ mod tests {
 				use_gitignore:         true,
 				mentions_node_modules: false,
 				sort_by_mtime:         false,
+				strict_errors:         false,
 				cache:                 false,
 			},
 			None,
@@ -425,6 +436,7 @@ mod tests {
 					use_gitignore:         true,
 					mentions_node_modules: false,
 					sort_by_mtime:         true,
+					strict_errors:         false,
 					cache:                 false,
 				},
 				None,
@@ -474,6 +486,7 @@ mod tests {
 					use_gitignore: true,
 					mentions_node_modules: false,
 					sort_by_mtime: false,
+					strict_errors: false,
 					cache: true,
 				},
 				None,

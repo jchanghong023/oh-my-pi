@@ -84,6 +84,9 @@ pub enum DirectoryErrorMode {
 	/// Deliver directory errors to [`EntryVisitor::visit_directory_error`] so
 	/// GNU-style consumers can report them and continue.
 	Visit,
+	/// Fail the walk on any directory-open error, including missing and
+	/// permission-denied directories (required by exhaustive inventories).
+	Strict,
 }
 
 /// Symbolic-link traversal policy.
@@ -3791,7 +3794,7 @@ where
 				WalkControl::SkipDescend | WalkControl::Continue => Ok(false),
 			}
 		},
-		DirectoryErrorMode::SkipSkippable => {
+		DirectoryErrorMode::SkipSkippable | DirectoryErrorMode::Strict => {
 			Err(WalkError::InvalidData { path: path.to_path_buf(), message: err.to_string() })
 		},
 	}

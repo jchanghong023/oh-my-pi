@@ -24,6 +24,7 @@ import type { ToolSession } from ".";
 import { resolveToolTier, strictestApproval, truncateForPrompt } from "./approval";
 import { parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
+import { invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
 import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 
 import { relativeSearchResultPath, resolveSearchResultPath, resolveToolSearchScope } from "./path-utils";
@@ -94,6 +95,11 @@ async function runAstEditTargets(
 			signal: options.signal,
 			filesystem: options.filesystem,
 		});
+		if (targetResult.applied && targetResult.fileChanges.length) {
+			invalidateFsScanAfterWrites(
+				targetResult.fileChanges.map(change => resolveSearchResultPath(target.basePath, change.path)),
+			);
+		}
 		totalReplacements += targetResult.totalReplacements;
 		filesSearched += targetResult.filesSearched;
 		limitReached = limitReached || targetResult.limitReached;
@@ -143,6 +149,13 @@ function runAstEditOnce(
 		failOnParseError: options.failOnParseError,
 		signal: options.signal,
 		filesystem: options.filesystem,
+	}).then(result => {
+		if (result.applied && result.fileChanges.length) {
+			invalidateFsScanAfterWrites(
+				result.fileChanges.map(change => resolveSearchResultPath(resolvedSearchPath, change.path)),
+			);
+		}
+		return result;
 	});
 }
 

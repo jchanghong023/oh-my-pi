@@ -87,6 +87,7 @@ import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { DocsHubComponent } from "../components/docs-hub";
+import { RepoHubComponent } from "../components/repo-hub";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
@@ -596,6 +597,27 @@ export class SelectorController {
 		} catch (error) {
 			// A failed open (unsupported index database, missing FTS5, unreadable
 			// path) surfaces in the status line instead of silently dying.
+			hub?.dispose();
+			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	async showRepoDashboard(): Promise<void> {
+		let closed = false;
+		let hub: RepoHubComponent | undefined;
+		let overlayHandle: OverlayHandle | undefined;
+		const done = () => {
+			if (closed) return;
+			closed = true;
+			hub?.dispose();
+			overlayHandle?.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		try {
+			hub = await RepoHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
+			overlayHandle = this.#showFullscreenMenu(hub);
+		} catch (error) {
 			hub?.dispose();
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}

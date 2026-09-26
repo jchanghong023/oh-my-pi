@@ -110,6 +110,7 @@ export const notebookToEditableText = nativeBindings.notebookToEditableText ?? m
 export const parseKey = nativeBindings.parseKey ?? missingNativeExport("parseKey");
 export const parseKittySequence = nativeBindings.parseKittySequence ?? missingNativeExport("parseKittySequence");
 export const pdfToMarkdown = nativeBindings.pdfToMarkdown ?? missingNativeExport("pdfToMarkdown");
+export const pythonSymbols = nativeBindings.pythonSymbols ?? missingNativeExport("pythonSymbols");
 export const rasterizeSvg = nativeBindings.rasterizeSvg ?? missingNativeExport("rasterizeSvg");
 export const readImageFromClipboard = nativeBindings.readImageFromClipboard ?? missingNativeExport("readImageFromClipboard");
 export const renderMermaidAscii = nativeBindings.renderMermaidAscii ?? missingNativeExport("renderMermaidAscii");
