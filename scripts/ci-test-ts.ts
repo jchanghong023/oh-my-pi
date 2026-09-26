@@ -76,12 +76,13 @@ const validModes: Record<Mode, true> = {
 // fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
 // 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
 // chunk keeps each process under the threshold.
-// Bun 1.4.0 on Windows also crashes when collab registry suites share a test
-// process, so native-bucket files each run in a fresh process there.
+// Bun 1.4.0 on Windows also wedges when runtime/collab registry suites share a
+// process: the next file can spin past the watchdog. Isolate runtime and native
+// files on that platform while retaining larger chunks elsewhere.
 const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1 },
 	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: process.platform === "win32" ? 1 : 10 },
 	native: {
 		label: "native/tooling/browser/unit bucket",
 		parallel: 1,
