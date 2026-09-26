@@ -258,7 +258,9 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(fs.existsSync(path.join(expectedDir, "stranded.jsonl"))).toBe(true);
 	});
 
-	it("migrates home-scoped sessions when the temp root is inside home", () => {
+	// The temp scope only wins over home on Windows; POSIX deliberately keeps
+	// the home scope when a custom TMPDIR sits inside the home directory.
+	it.skipIf(process.platform !== "win32")("migrates home-scoped sessions when the temp root is inside home", () => {
 		const home = path.join(testAgentDir, "home");
 		const tempRoot = path.join(home, "temp");
 		const tempCwd = path.join(tempRoot, "project");
