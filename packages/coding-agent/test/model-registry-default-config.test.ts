@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -20,6 +21,9 @@ describe("ModelRegistry default custom models config", () => {
 
 	afterEach(async () => {
 		authStorage.close();
+		// The registry's shared models.db lives in the temp agent dir; Windows
+		// keeps its file and directory handles locked until it is closed.
+		closeSharedModelCache();
 		setAgentDir(originalAgentDir);
 		if (originalAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
