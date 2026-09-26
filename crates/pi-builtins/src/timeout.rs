@@ -275,7 +275,7 @@ impl builtins::Command for TimeoutCommand {
 			// external children it degrades to SIGKILL — see `Process::wait`.
 			child_cancel.cancel();
 		}
-		let mut killed = signal.as_str() == "SIGKILL";
+		let mut killed = signal_display(signal) == "KILL";
 
 		// Wait for the command to finish, escalating to SIGKILL after
 		// `--kill-after`. Without `-k`, GNU waits indefinitely — a command

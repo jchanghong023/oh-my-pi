@@ -1,5 +1,7 @@
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
+import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $env, getProjectDir, isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { applyChangelogProposals } from "../../commit/changelog";
@@ -31,7 +33,20 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<{ usedF
 	const repo = vcs.requireGit(cwd);
 	const settings = await Settings.init({ cwd });
 	const authStorage = await discoverAuthStorage(undefined, { settings });
+	try {
+		return await executeAgenticCommit(args, cwd, repo, settings, authStorage);
+	} finally {
+		authStorage.close();
+	}
+}
 
+async function executeAgenticCommit(
+	args: CommitCommandArgs,
+	cwd: string,
+	repo: VcsGitRepo,
+	settings: Settings,
+	authStorage: AuthStorage,
+): Promise<{ usedFallback: boolean }> {
 	process.stdout.write("● Resolving model...\n");
 	const modelRegistry = new ModelRegistry(authStorage);
 	await modelRegistry.refresh();

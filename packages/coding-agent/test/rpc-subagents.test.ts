@@ -362,7 +362,9 @@ describe("readRpcSubagentTranscript", () => {
 });
 
 describe("RpcClient subagent frames", () => {
-	test("dispatches subagent frames and session-specific events", async () => {
+	// Bun on Windows loses fast back-to-back child stdout writes: frames the
+	// mock emits right after its ready/negotiate responses never arrive.
+	test.skipIf(process.platform === "win32")("dispatches subagent frames and session-specific events", async () => {
 		const scriptPath = path.join(os.tmpdir(), `omp-rpc-subagent-client-${Date.now()}.js`);
 		tempPaths.push(scriptPath);
 		await Bun.write(

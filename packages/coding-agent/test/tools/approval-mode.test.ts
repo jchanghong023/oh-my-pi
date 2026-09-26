@@ -3,11 +3,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 const BASE_SETTINGS = {
@@ -29,6 +34,8 @@ function textOf(result: { content?: ReadonlyArray<{ type: string; text?: string 
 	return "";
 }
 
+// The shared createAgentSession in beforeAll pays the model-registry/auth
+// discovery init cost once for all approval-mode contracts.
 describe("tools.approvalMode setting", () => {
 	// The per-tool approval gate (ExtensionToolWrapper) reads approvalMode / tools.approval /
 	// autoApprove exclusively from the execute-time AgentToolContext, never from the session's
@@ -37,15 +44,19 @@ describe("tools.approvalMode setting", () => {
 	// auth-storage discovery, settings init) nine times over.
 	let tempDir: string;
 	let session: AgentSession;
+	let authStorage: AuthStorage;
 
+	// createAgentSession needs a generous one-shot budget under full-suite load.
 	beforeAll(async () => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-approval-mode-${Snowflake.next()}-`));
 		const cwd = path.join(tempDir, "cwd");
 		fs.mkdirSync(cwd, { recursive: true });
 		const sessionManager = SessionManager.create(cwd, path.join(tempDir, "sessions"));
+		authStorage = await AuthStorage.create(":memory:");
 		const created = await createAgentSession({
 			cwd,
 			agentDir: tempDir,
+			authStorage,
 			sessionManager,
 			settings: Settings.isolated(BASE_SETTINGS),
 			model: getBundledModel("openai", "gpt-4o-mini"),
@@ -60,23 +71,17 @@ describe("tools.approvalMode setting", () => {
 			toolNames: ["bash"],
 		});
 		session = created.session;
-	});
+	}, 120_000);
 
 	afterAll(async () => {
 		await session.dispose();
-		// Windows can briefly hold tempdir handles after session.dispose(); retry a few times.
-		for (let attempt = 0; attempt < 5; attempt++) {
-			try {
-				removeSyncWithRetries(tempDir);
-				break;
-			} catch (err) {
-				const code = (err as NodeJS.ErrnoException).code;
-				if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM") throw err;
-				if (attempt === 4) break; // best-effort: OS will reclaim
-				await Bun.sleep(50 * (attempt + 1));
-			}
-		}
-	});
+		authStorage.close();
+		HistoryStorage.close();
+		resetSessionIndexForTests();
+		closeSharedModelCache();
+		AgentStorage.close();
+		removeSyncWithRetries(tempDir);
+	}, 15_000);
 
 	function approvalSettings(extraSettings: Record<string, unknown> = {}): Settings {
 		return Settings.isolated({ ...BASE_SETTINGS, ...extraSettings });

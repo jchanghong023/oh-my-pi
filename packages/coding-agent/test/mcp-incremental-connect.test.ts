@@ -31,15 +31,23 @@ function fixtureConfig(): MCPStdioServerConfig {
 describe("MCP incremental connectServers", () => {
 	let workDir: string;
 	let manager: MCPManager;
+	let originalStartupTimeout: string | undefined;
 
 	beforeEach(() => {
+		originalStartupTimeout = process.env.OMP_MCP_STARTUP_TIMEOUT_MS;
+		process.env.OMP_MCP_STARTUP_TIMEOUT_MS = "0";
 		workDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mcp-incremental-"));
 		manager = new MCPManager(workDir);
 	});
 
 	afterEach(async () => {
-		await manager.disconnectAll();
-		removeSyncWithRetries(workDir);
+		try {
+			await manager.disconnectAll();
+			removeSyncWithRetries(workDir);
+		} finally {
+			if (originalStartupTimeout === undefined) delete process.env.OMP_MCP_STARTUP_TIMEOUT_MS;
+			else process.env.OMP_MCP_STARTUP_TIMEOUT_MS = originalStartupTimeout;
+		}
 	});
 
 	it("keeps server A tools after incrementally connecting server B", async () => {

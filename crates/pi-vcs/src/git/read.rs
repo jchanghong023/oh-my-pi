@@ -1281,6 +1281,17 @@ mod tests {
 
 	use super::*;
 
+	/// Compare paths across Windows representations: canonicalize() yields a
+	/// verbatim `\\?\` path with backslashes, worktree records use plain drive
+	/// paths, so normalize both to a verbatim-free, forward-slash form.
+	fn comparable(path: &std::path::Path) -> String {
+		let text = path.to_string_lossy().replace('\\', "/");
+		text
+			.strip_prefix("//?/")
+			.unwrap_or(&text)
+			.to_ascii_lowercase()
+	}
+
 	type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 	fn git(cwd: &Path, args: &[&str]) -> std::result::Result<String, Box<dyn std::error::Error>> {
@@ -1631,7 +1642,7 @@ mod tests {
 		let worktrees = repo.worktrees()?;
 		assert_eq!(worktrees.len(), 2);
 		assert_eq!(worktrees[0].path, dir.path());
-		assert_eq!(worktrees[1].path, linked.canonicalize()?);
+		assert_eq!(comparable(&worktrees[1].path), comparable(&linked.canonicalize()?));
 		assert_eq!(worktrees[1].branch.as_deref(), Some("refs/heads/linked-branch"));
 		Ok(())
 	}

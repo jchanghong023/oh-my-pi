@@ -204,7 +204,8 @@ describe("listClaudePluginRoots", () => {
 			fs.mkdir(path.join(projectB, ".git"), { recursive: true }),
 			fs.mkdir(projectBSubdir, { recursive: true }),
 		]);
-		await fs.symlink(projectB, projectBAlias, "dir");
+		// A junction needs no symlink privilege on Windows.
+		await fs.symlink(projectB, projectBAlias, process.platform === "win32" ? "junction" : "dir");
 
 		const entry = (scope: "user" | "project" | "local", installPath: string, projectPath?: string) => ({
 			scope,

@@ -76,7 +76,8 @@ describe("writeFileWithFallback", () => {
 
 		await writeFileWithFallback("/denied/path.txt", "payload", denyingFile(fsError("EACCES")) as never);
 
-		expect(seen).toEqual([{ dst: "/denied/path.txt", content: "payload" }]);
+		// The fallback receives the platform-resolved absolute path.
+		expect(seen).toEqual([{ dst: path.resolve("/denied/path.txt"), content: "payload" }]);
 	});
 
 	it("names the session that issued the write, and reports none outside a tool call", async () => {
@@ -240,7 +241,7 @@ describe("writeFileWithFallback", () => {
 	// A privileged user is not constrained by mode bits, so `chmod 0o500` denies
 	// nothing and every expectation here would fail for a reason unrelated to this
 	// seam. Root is real for a Docker-based local run and for a self-hosted runner.
-	describe.skipIf(process.getuid?.() === 0)("against real kernel permissions", () => {
+	describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("against real kernel permissions", () => {
 		let root = "";
 
 		beforeEach(async () => {
@@ -489,7 +490,7 @@ describe("deleteFileWithFallback", () => {
 		expect(writeCalled).toBe(false);
 	});
 
-	describe.skipIf(process.getuid?.() === 0)("against real kernel permissions", () => {
+	describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("against real kernel permissions", () => {
 		let root = "";
 		let locked = "";
 

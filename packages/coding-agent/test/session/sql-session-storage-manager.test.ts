@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SqlSessionStorage } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
@@ -28,7 +29,7 @@ describe("SessionManager + SqlSessionStorage (SQLite)", () => {
 	it("persists appended assistant messages into SQL and reloads via open()", async () => {
 		const client = new SQL("sqlite::memory:");
 		const storage = await SqlSessionStorage.create({ client });
-		const sessionDir = "/sessions/proj";
+		const sessionDir = path.resolve("/sessions/proj");
 
 		const manager = SessionManager.create("/cwd", sessionDir, storage);
 		manager.appendMessage({
@@ -81,7 +82,7 @@ describe("SessionManager + SqlSessionStorage (SQLite)", () => {
 	it("SessionManager.list returns SQL-backed sessions for the cwd", async () => {
 		const client = new SQL("sqlite::memory:");
 		const storage = await SqlSessionStorage.create({ client });
-		const sessionDir = "/sessions/list-proj";
+		const sessionDir = path.resolve("/sessions/list-proj");
 
 		const a = SessionManager.create("/cwd", sessionDir, storage);
 		a.appendMessage({
@@ -128,13 +129,13 @@ describe("SessionManager + SqlSessionStorage (SQLite)", () => {
 	it("rejects a stale rewrite after another SQL storage appends", async () => {
 		const client = new SQL("sqlite::memory:");
 		const firstStorage = await SqlSessionStorage.create({ client });
-		const first = SessionManager.create("/cwd", "/sessions/shared", firstStorage);
+		const first = SessionManager.create("/cwd", path.resolve("/sessions/shared"), firstStorage);
 		await first.ensureOnDisk();
 		const sessionFile = first.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
 
 		const secondStorage = await SqlSessionStorage.create({ client });
-		const second = await SessionManager.open(sessionFile, "/sessions/shared", secondStorage);
+		const second = await SessionManager.open(sessionFile, path.resolve("/sessions/shared"), secondStorage);
 		second.appendMessage({ role: "user", content: "durable SQL peer turn", timestamp: Date.now() });
 		await second.close();
 

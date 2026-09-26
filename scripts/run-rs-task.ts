@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
+import { windowsTestTempOverride } from "./windows-test-temp";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -75,6 +77,51 @@ type RustTaskName = keyof typeof TASK_COMMANDS;
 const repoRoot = path.join(import.meta.dir, "..");
 const cargoBinary = await resolveCargoBinary();
 const taskName = process.argv[2];
+
+// Keep test temp fixtures off the Windows system drive when another writable
+// drive exists (see windows-test-temp.ts); cargo and its test children
+// inherit TMP/TEMP from this process.
+Object.assign(process.env, windowsTestTempOverride());
+
+// Windows: cc-rs and rustc auto-locate cl.exe/link.exe through the VS
+// registry, but the cmake crate (opusic-sys' bundled Opus) needs cmake —
+// and its Ninja generator needs ninja — on PATH (`.cargo/config.toml` forces
+// CMAKE_GENERATOR=Ninja). VS Build Tools ships both without exposing them, so
+// outside a vcvars prompt the build dies on "CMake was unable to find a build
+// program". Resolve the VS install via vswhere and append its CMake/Ninja
+// dirs, keeping any user-provided tools ahead. Mirrors
+// packages/natives/scripts/build-bindings.ts.
+if (process.platform === "win32" && (!Bun.which("cmake") || !Bun.which("ninja"))) {
+	const vcToolsComponent =
+		process.arch === "arm64"
+			? "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+			: "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
+	const vswhere = path.join(
+		process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+		"Microsoft Visual Studio",
+		"Installer",
+		"vswhere.exe",
+	);
+	let vsRoot = "";
+	try {
+		const probe = Bun.spawnSync(
+			[vswhere, "-latest", "-products", "*", "-requires", vcToolsComponent, "-property", "installationPath"],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		if (probe.exitCode === 0) vsRoot = probe.stdout.toString("utf-8").trim();
+	} catch {
+		// VS Installer is optional; let cargo report any missing build tools.
+	}
+	if (vsRoot) {
+		const cmakeExt = path.join(vsRoot, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake");
+		const extraDirs = [path.join(cmakeExt, "CMake", "bin"), path.join(cmakeExt, "Ninja")].filter(dir =>
+			fs.existsSync(dir),
+		);
+		if (extraDirs.length > 0) {
+			process.env.PATH = [process.env.PATH ?? "", ...extraDirs].filter(Boolean).join(path.delimiter);
+		}
+	}
+}
 
 if (!isRustTaskName(taskName)) {
 	console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);

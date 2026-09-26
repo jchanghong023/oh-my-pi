@@ -201,7 +201,10 @@ db.close();`,
 		// Skip the sleep so the test doesn't take 700ms+ of real time.
 		const sleepSpy = vi.spyOn(Bun, "sleep").mockResolvedValue(undefined);
 
-		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow(dbPath);
+		// The annotated message embeds the path JSON-escaped, which doubles
+		// Windows path separators.
+		const expectedPath = JSON.stringify(dbPath).slice(1, -1);
+		await expect(SqliteAuthCredentialStore.open(dbPath)).rejects.toThrow(expectedPath);
 		// open uses `maxAttempts = 4`, so the loop sleeps between attempts 0..2
 		// (three times) then throws after attempt 3 without sleeping again.
 		expect(sleepSpy).toHaveBeenCalledTimes(3);

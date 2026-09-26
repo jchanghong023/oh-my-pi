@@ -192,7 +192,13 @@ describe("SQLite tool support", () => {
 		} else {
 			Bun.env.PI_EDIT_VARIANT = originalEditVariant;
 		}
-		await removeWithRetries(tmpDir);
+		// Windows AV scans of freshly written sqlite files can hold them past
+		// the retry window; removal is best-effort and the OS reclaims the rest.
+		try {
+			await removeWithRetries(tmpDir);
+		} catch {
+			// best-effort
+		}
 	});
 
 	it("parses SQLite path candidates at the extension boundary", () => {

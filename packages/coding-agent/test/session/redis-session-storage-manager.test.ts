@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import {
 	RedisSessionStorage,
@@ -159,7 +160,7 @@ describe("SessionManager + RedisSessionStorage", () => {
 	it("persists appended assistant messages into Redis and reloads them via open()", async () => {
 		const redis = createFakeRedis();
 		const storage = await RedisSessionStorage.create({ client: redis });
-		const sessionDir = "/sessions/proj";
+		const sessionDir = path.resolve("/sessions/proj");
 
 		const manager = SessionManager.create("/cwd", sessionDir, storage);
 		manager.appendMessage({
@@ -210,7 +211,7 @@ describe("SessionManager + RedisSessionStorage", () => {
 	it("SessionManager.list returns Redis-backed sessions for the cwd", async () => {
 		const redis = createFakeRedis();
 		const storage = await RedisSessionStorage.create({ client: redis });
-		const sessionDir = "/sessions/list-proj";
+		const sessionDir = path.resolve("/sessions/list-proj");
 
 		const a = SessionManager.create("/cwd", sessionDir, storage);
 		a.appendMessage({
@@ -256,13 +257,13 @@ describe("SessionManager + RedisSessionStorage", () => {
 	it("rejects a stale rewrite after another Redis storage appends", async () => {
 		const redis = createFakeRedis();
 		const firstStorage = await RedisSessionStorage.create({ client: redis });
-		const first = SessionManager.create("/cwd", "/sessions/shared", firstStorage);
+		const first = SessionManager.create("/cwd", path.resolve("/sessions/shared"), firstStorage);
 		await first.ensureOnDisk();
 		const sessionFile = first.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
 
 		const secondStorage = await RedisSessionStorage.create({ client: redis });
-		const second = await SessionManager.open(sessionFile, "/sessions/shared", secondStorage);
+		const second = await SessionManager.open(sessionFile, path.resolve("/sessions/shared"), secondStorage);
 		second.appendMessage({ role: "user", content: "durable Redis peer turn", timestamp: Date.now() });
 		await second.close();
 

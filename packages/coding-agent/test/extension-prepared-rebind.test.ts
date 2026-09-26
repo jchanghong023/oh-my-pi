@@ -48,7 +48,13 @@ describe("prepared extension rebinding", () => {
 		expect(bindings[0]).not.toBe(bindings[1]);
 		expect(bindings[0]?.events).toBe(parentEventBus);
 		expect(bindings[1]?.events).toBe(childEventBus);
-		const [parentPwd, childPwd] = await Promise.all([bindings[0]!.exec("pwd", []), bindings[1]!.exec("pwd", [])]);
+		// `pwd` is a POSIX utility; print the cwd via the Bun binary itself on Windows.
+		const pwdCommand: [string, string[]] =
+			process.platform === "win32" ? [process.execPath, ["-e", "console.log(process.cwd())"]] : ["pwd", []];
+		const [parentPwd, childPwd] = await Promise.all([
+			bindings[0]!.exec(pwdCommand[0], pwdCommand[1]),
+			bindings[1]!.exec(pwdCommand[0], pwdCommand[1]),
+		]);
 		expect(parentPwd.stdout.trim()).toBe(await fs.realpath(parentDirectory));
 		expect(childPwd.stdout.trim()).toBe(await fs.realpath(childDirectory));
 		Reflect.deleteProperty(globalThis, counterKey);

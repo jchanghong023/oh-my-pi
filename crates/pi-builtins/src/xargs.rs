@@ -1376,9 +1376,12 @@ mod tests {
 
 	#[tokio::test]
 	async fn default_mode_honors_quotes() {
-		let (code, out, _) = run_simple(&["sh", "-c", "echo $#", "_"], "\"a b\" c\n").await;
+		// `sh` is not on the default Windows PATH, so the grouping of quoted
+		// items is observed through the printf builtin instead of
+		// `sh -c 'echo $#'`.
+		let (code, out, _) = run_simple(&["printf", "[%s]"], "\"a b\" c\n").await;
 		assert_eq!(code, 0);
-		assert_eq!(out, "2\n");
+		assert_eq!(out, "[a b][c]");
 	}
 
 	#[tokio::test]
@@ -1430,9 +1433,20 @@ mod tests {
 		assert!(err.contains("could not be run"), "got: {err:?}");
 	}
 
+	// A nonzero child status must reach xargs as exit code 255; `sh` provides
+	// it on POSIX and `cmd` on Windows, where `sh` is not on the default PATH.
+	#[cfg(unix)]
 	#[tokio::test]
 	async fn exit_255_child_yields_124() {
 		let (code, _, err) = run_simple(&["sh", "-c", "exit 255", "_"], "x\n").await;
+		assert_eq!(code, 124);
+		assert!(err.contains("255"), "got: {err:?}");
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn exit_255_child_yields_124() {
+		let (code, _, err) = run_simple(&["cmd", "/c", "exit", "255"], "x\n").await;
 		assert_eq!(code, 124);
 		assert!(err.contains("255"), "got: {err:?}");
 	}
@@ -1477,17 +1491,20 @@ mod tests {
 	#[tokio::test]
 	async fn children_run_in_host_cwd() {
 		let dir = tempfile::TempDir::new().expect("tempdir");
-		let (code, _, err) =
-			xargs_in(dir.path(), &["sh", "-c", "touch \"$1\"", "_"], "made.txt\n").await;
+		// `sh` is not on the default Windows PATH, so the child is the `touch`
+		// builtin, which still resolves its operand against the host cwd.
+		let (code, _, err) = xargs_in(dir.path(), &["touch"], "made.txt\n").await;
 		assert_eq!(code, 0, "stderr: {err:?}");
 		assert!(dir.path().join("made.txt").exists());
 	}
 
 	#[tokio::test]
 	async fn children_see_host_environment() {
+		// `sh` is not on the default Windows PATH, so the exported variable is
+		// read by the printenv builtin instead of `sh -c 'echo "$XVAR"'`.
 		let (code, out, _) = crate::host::run_script(
-			"export XVAR=hello; xargs sh -c 'echo \"$XVAR\"' _",
-			"x\n",
+			"export XVAR=hello; xargs printenv",
+			"XVAR\n",
 			&std::env::temp_dir(),
 		)
 		.await;

@@ -219,8 +219,12 @@ describe("MCPManager notification listeners", () => {
 				cbState = "ended";
 			});
 			const refreshDone = manager.refreshServerTools("alpha");
-			// Give the callback time to enter the await.
-			await Bun.sleep(20);
+			// Give the callback time to enter the await — bounded poll, since
+			// under load the tools/list round trip before the callback can
+			// take longer than a fixed sleep.
+			for (let attempt = 0; cbState === undefined && attempt < 100; attempt++) {
+				await Bun.sleep(20);
+			}
 			expect(cbState).toBe("started");
 			// refreshServerTools has NOT resolved yet — proves it's awaiting.
 			let refreshResolved = false;

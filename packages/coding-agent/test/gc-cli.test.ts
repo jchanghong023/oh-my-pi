@@ -7,6 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { withStatsSyncLock } from "@oh-my-pi/omp-stats/aggregator";
 import { type GcResult, runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import {
 	getAgentDir,
 	getBlobsDir,
@@ -17,6 +18,7 @@ import {
 	setAgentDir,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { runCli } from "../src/cli";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -52,7 +54,10 @@ afterEach(async () => {
 	process.exitCode = originalExitCode;
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
-	await fs.rm(root, { recursive: true, force: true });
+	// Settings.loadIsolated opens AgentStorage's agent.db inside the temp agent
+	// dir; Windows keeps the sqlite files locked until it is closed.
+	AgentStorage.close();
+	await removeWithRetries(root);
 });
 
 function hashFor(label: string): string {
@@ -602,7 +607,9 @@ describe("runGcCommand history checkpoint", () => {
 
 		expect(result.wal?.checkpointed).toBe(true);
 		expect(result.wal?.walBytes).toBe(0);
-		expect((await fs.stat(`${dbPath}-wal`)).size).toBe(0);
+		// Windows clean-close deletes a fully checkpointed -wal; missing is fine too.
+		const walStat = await fs.stat(`${dbPath}-wal`).catch(() => null);
+		expect(walStat?.size ?? 0).toBe(0);
 	});
 
 	test("--apply propagates WAL checkpoint failures and releases the gc lock", async () => {

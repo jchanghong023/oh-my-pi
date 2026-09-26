@@ -75,13 +75,17 @@ describe("read PDF page screenshots", () => {
 		expect(tool.approval({ path: `${pdfPath}:2-2` })).toBe("read");
 	});
 
-	it("preserves a literal filename that looks like a PDF image listing", async () => {
-		const literalPath = `${pdfPath}:`;
-		await fs.writeFile(literalPath, "literal colon path wins\n");
+	// A trailing-colon filename cannot exist on Windows (NTFS rejects it).
+	it.skipIf(process.platform === "win32")(
+		"preserves a literal filename that looks like a PDF image listing",
+		async () => {
+			const literalPath = `${pdfPath}:`;
+			await fs.writeFile(literalPath, "literal colon path wins\n");
 
-		const result = await new ReadTool(makeSession(testDir)).execute("read-literal", { path: literalPath });
-		expect(textOf(result)).toContain("literal colon path wins");
-	});
+			const result = await new ReadTool(makeSession(testDir)).execute("read-literal", { path: literalPath });
+			expect(textOf(result)).toContain("literal colon path wins");
+		},
+	);
 
 	it("routes PDF line selectors through normal document conversion", async () => {
 		const convert = vi.spyOn(markit, "convertFileWithMarkit").mockResolvedValue({

@@ -23,7 +23,8 @@ describe("getInstallId", () => {
 		originalAgentDir = getAgentDir();
 		originalConfigDir = process.env.PI_CONFIG_DIR;
 		const slug = `omp-install-id-${Snowflake.next()}`;
-		tempRoot = path.join(os.tmpdir(), slug);
+		// PI_CONFIG_DIR is relative to home; a Windows temp dir may be on another drive.
+		tempRoot = path.join(process.platform === "win32" ? os.homedir() : os.tmpdir(), slug);
 		await fs.mkdir(tempRoot, { recursive: true });
 		// Point the resolver's config root at the temp dir. Using PI_CONFIG_DIR
 		// keeps the parent equal to os.homedir() but flips the basename, so the

@@ -3,25 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { getConfigRootDir, getLogsDir, localDay, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { localDay, removeWithRetries } from "@oh-my-pi/pi-utils";
 
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalXdgStateHome = process.env.XDG_STATE_HOME;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 let cleanupRoot: string | undefined;
 
 afterEach(async () => {
-	if (originalXdgStateHome === undefined) {
-		delete process.env.XDG_STATE_HOME;
-	} else {
-		process.env.XDG_STATE_HOME = originalXdgStateHome;
-	}
-	if (originalAgentDir) {
-		setAgentDir(originalAgentDir);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
 	if (cleanupRoot) {
 		await removeWithRetries(cleanupRoot);
 		cleanupRoot = undefined;
@@ -31,12 +17,7 @@ afterEach(async () => {
 describe("report bundle logs", () => {
 	it("collects every same-day PID log, not only the current process", async () => {
 		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-report-logs-"));
-		const xdgStateHome = path.join(cleanupRoot, "state");
-		await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
-		process.env.XDG_STATE_HOME = xdgStateHome;
-		setAgentDir(fallbackAgentDir);
-
-		const logsDir = getLogsDir();
+		const logsDir = path.join(cleanupRoot, "logs");
 		await fs.mkdir(logsDir, { recursive: true });
 		// Log files are named with the local day (RotatingFileSink naming); same-day
 		// collection must match them with the local day too, not the UTC key.
@@ -60,7 +41,7 @@ describe("report bundle logs", () => {
 			await fs.utimes(path.join(logsDir, staleUtcName), 3, 3);
 		}
 
-		const result = await createReportBundle({ sessionFile: undefined });
+		const result = await createReportBundle({ sessionFile: undefined, reportsDir: cleanupRoot, logsDir });
 
 		expect(result.files).toContain("logs.txt");
 		const archive = new Bun.Archive(await Bun.file(result.path).bytes());

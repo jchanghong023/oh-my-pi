@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
 import { runCommitCommand } from "@oh-my-pi/pi-coding-agent/commit";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getProjectAgentDir, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -61,6 +63,10 @@ afterEach(async () => {
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
 	await tmp.remove();
+	// Loading settings opens AgentStorage's agent.db under agentTmp; Windows
+	// keeps the sqlite files locked until it is closed.
+	AgentStorage.close();
+	closeSharedModelCache();
 	await agentTmp.remove();
 });
 

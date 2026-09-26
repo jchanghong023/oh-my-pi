@@ -37,7 +37,21 @@ async function runGit(repo: string, args: string[]): Promise<string> {
 	if ((exitCode ?? 0) !== 0) {
 		throw new Error(stderr.trim() || stdout.trim() || `git ${args.join(" ")} failed with exit code ${exitCode ?? 0}`);
 	}
+	// Freshly initialized fixtures must be byte-exact: a host-wide
+	// `core.autocrlf=true` would smudge checkouts to CRLF and break the
+	// patch-preimage flows under test. (Ignores the nested `sparse-checkout
+	// init`, which needs no fix-up.)
+	if (args[0] === "init") await runGitConfigAutocrlfOff(repo);
 	return stdout.trim();
+}
+
+async function runGitConfigAutocrlfOff(repo: string): Promise<void> {
+	const proc = Bun.spawn(["git", "-C", repo, "config", "core.autocrlf", "false"], {
+		stderr: "pipe",
+		stdout: "pipe",
+		windowsHide: true,
+	});
+	await proc.exited;
 }
 
 async function createGitRepo(): Promise<string> {
@@ -375,7 +389,9 @@ describe("worktree isolation helpers", () => {
 				expect(delta.rootPatch).toContain("+downstream edit");
 			});
 
-			it("cleans restored stash files with literal pathspecs", async () => {
+			// The fixture writes a file literally named `:(glob)*`; `:` cannot
+			// start a path component on Windows.
+			it.skipIf(process.platform === "win32")("cleans restored stash files with literal pathspecs", async () => {
 				// Force the fallback branch: preflight would normally refuse this
 				// pop before Git can restore anything, but mode/delete edge cases can
 				// still pass preflight and fail during the actual stash pop. Git can
@@ -721,25 +737,30 @@ describe("detachGitDir", () => {
 		expect(await runGit(wt, ["rev-parse", "omp-fetched"])).toBe(taskCommit);
 	});
 
-	it.skipIf(process.getuid?.() === 0)("keeps shared git metadata intact when the index cannot be read", async () => {
-		const { wt, commonDir } = await makeLinkedWorktree();
-		const iso = await copyTree(wt);
-		const gitEntry = path.join(iso, ".git");
-		const pointerBefore = await fs.readFile(gitEntry, "utf8");
-		const indexPath = await runGit(iso, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
-		const indexMode = (await fs.stat(indexPath)).mode;
-		await fs.chmod(indexPath, 0);
-		try {
-			await expect(vcs.detachGitDir(iso, commonDir)).rejects.toMatchObject({
-				code: "Io",
-				stderr: expect.stringContaining("Permission denied"),
-			});
-		} finally {
-			await fs.chmod(indexPath, indexMode);
-		}
-		expect(await fs.readFile(gitEntry, "utf8")).toBe(pointerBefore);
-		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
-	});
+	// chmod 0 cannot make the index unreadable on Windows, so the rejection
+	// path under test never fires there.
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"keeps shared git metadata intact when the index cannot be read",
+		async () => {
+			const { wt, commonDir } = await makeLinkedWorktree();
+			const iso = await copyTree(wt);
+			const gitEntry = path.join(iso, ".git");
+			const pointerBefore = await fs.readFile(gitEntry, "utf8");
+			const indexPath = await runGit(iso, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+			const indexMode = (await fs.stat(indexPath)).mode;
+			await fs.chmod(indexPath, 0);
+			try {
+				await expect(vcs.detachGitDir(iso, commonDir)).rejects.toMatchObject({
+					code: "Io",
+					stderr: expect.stringContaining("Permission denied"),
+				});
+			} finally {
+				await fs.chmod(indexPath, indexMode);
+			}
+			expect(await fs.readFile(gitEntry, "utf8")).toBe(pointerBefore);
+			expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
+		},
+	);
 
 	it("leaves an already-independent full-copy checkout untouched", async () => {
 		const src = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-src-"));
@@ -880,7 +901,8 @@ describe("detachGitDir", () => {
 		const aliasBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-alias-"));
 		tempDirs.push(aliasBase);
 		const aliasMain = path.join(aliasBase, "main-link");
-		await fs.symlink(path.dirname(commonDir), aliasMain);
+		// A junction serves as the path alias on Windows without symlink privilege.
+		await fs.symlink(path.dirname(commonDir), aliasMain, process.platform === "win32" ? "junction" : "dir");
 		const aliasCommonDir = path.join(aliasMain, ".git");
 
 		const iso = await copyTree(wt);

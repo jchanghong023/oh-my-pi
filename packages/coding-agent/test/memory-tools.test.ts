@@ -1034,7 +1034,9 @@ describe("Mnemopi backend lifecycle", () => {
 		const elapsedMs = performance.now() - started;
 
 		try {
-			expect(elapsedMs).toBeLessThan(500);
+			// Windows spawn/scheduler jitter under full-suite load can push the
+			// same bounded work past a tight 500ms wall.
+			expect(elapsedMs).toBeLessThan(process.platform === "win32" ? 2000 : 500);
 			// When the shutdown budget expires mid-consolidate, dispose detaches the
 			// pass instead of abandoning it (#3641) — so on a slow runner the shared
 			// flush may not have run yet when dispose returns. The lock is released

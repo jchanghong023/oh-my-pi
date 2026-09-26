@@ -71,13 +71,9 @@ enum CpError {
 
 type CopyResult<T> = Result<T, CpError>;
 
-/// Renders an I/O error like `strerror`, without Rust's ` (os error N)`.
 fn strip_errno(error: &io::Error) -> String {
-	let mut message = error.to_string();
-	if let Some(position) = message.find(" (os error ") {
-		message.truncate(position);
-	}
-	message
+	// Locale-independent `strerror` wording, not the OS-rendered message.
+	crate::host::normalized_io_message(error)
 }
 
 /// `ENOTSUP`-style failure for operations a filesystem cannot perform.

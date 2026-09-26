@@ -40,6 +40,10 @@ async function readLastLines(filePath: string, n: number, maxBytes = MAX_LOG_BYT
 export interface ReportBundleOptions {
 	/** Session file path */
 	sessionFile: string | undefined;
+	/** Override report output for isolated callers such as tests. */
+	reportsDir?: string;
+	/** Override log input for isolated callers such as tests. */
+	logsDir?: string;
 	/** Settings to include */
 	settings?: Record<string, unknown>;
 	/** CPU profile (for performance reports) */
@@ -83,7 +87,7 @@ export interface DebugLogSource {
  * - work.svg: Work profile flamegraph (work report only)
  */
 export async function createReportBundle(options: ReportBundleOptions): Promise<ReportBundleResult> {
-	const reportsDir = getReportsDir();
+	const reportsDir = options.reportsDir ?? getReportsDir();
 	await fs.mkdir(reportsDir, { recursive: true });
 
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -110,7 +114,7 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 	// Recent logs (last 1000 lines) across every same-day process. PID-qualified
 	// filenames mean a report generated from a later invocation must still gather
 	// the crashed process's log, so read all of today's files, not just our own.
-	const logs = await collectSameDayLogs(1000);
+	const logs = await collectSameDayLogs(1000, options.logsDir ?? getLogsDir());
 	if (logs) {
 		data["logs.txt"] = logs;
 		files.push("logs.txt");
@@ -213,8 +217,7 @@ export async function getLogText(): Promise<string> {
  * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. Files
  * are ordered oldest-first by mtime and separated by a filename header.
  */
-async function collectSameDayLogs(linesPerFile: number): Promise<string> {
-	const logsDir = getLogsDir();
+async function collectSameDayLogs(linesPerFile: number, logsDir: string): Promise<string> {
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.

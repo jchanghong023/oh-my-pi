@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -13,8 +14,11 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as secrets from "@oh-my-pi/pi-coding-agent/secrets";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigRootDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
@@ -77,7 +81,14 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		}
 		setProfile(originalProfile);
-		fs.rmSync(configRoot, { recursive: true, force: true });
+		// Sessions under the temp config root open process-wide sqlite stores
+		// (history, session index, agent.db, models.db);
+		// Windows keeps their files locked until each is closed.
+		HistoryStorage.close();
+		resetSessionIndexForTests();
+		AgentStorage.close();
+		closeSharedModelCache();
+		removeSyncWithRetries(configRoot);
 	}
 }
 

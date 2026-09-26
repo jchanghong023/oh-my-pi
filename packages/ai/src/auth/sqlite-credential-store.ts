@@ -341,6 +341,20 @@ function extractOAuthTokenIdentifiers(token: string | undefined): string[] | und
 	}
 }
 /**
+ * Weak registry of open stores so {@link closeAllSqliteCredentialStoresForTests}
+ * can release handles the CLI leaves to process exit.
+ */
+const liveInstances = new Set<WeakRef<SqliteAuthCredentialStore>>();
+
+/** @internal Close every open store — test-only, for Windows temp-dir cleanup. */
+export function closeAllSqliteCredentialStoresForTests(): void {
+	for (const ref of liveInstances) {
+		ref.deref()?.close();
+	}
+	liveInstances.clear();
+}
+
+/**
  * Default SQLite-backed implementation of {@link AuthCredentialStore}.
  *
  * Used by the pi-ai CLI and as the default store for `AuthStorage.create()`.
@@ -387,6 +401,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#authRevision: number;
 	#localAuthRevision: number;
 	#closed = false;
+	#registryRef: WeakRef<SqliteAuthCredentialStore>;
 
 	constructor(db: Database) {
 		this.#db = db;
@@ -507,6 +522,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
 		);
+		this.#registryRef = new WeakRef(this);
+		liveInstances.add(this.#registryRef);
 	}
 
 	/** Opens credential storage with bounded busy retries and one-shot corruption recovery. */
@@ -2038,6 +2055,10 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCredentialRefreshLeaseStmt.finalize();
 		this.#renewCredentialRefreshLeaseStmt.finalize();
 		this.#releaseCredentialRefreshLeaseStmt.finalize();
-		this.#db.close();
+		// Force-close: bun's plain close() leaves the file handle open on
+		// Windows whenever any prepared statement (ours or a sharing owner's)
+		// was never finalized, which blocks temp-dir cleanup with EBUSY.
+		this.#db.close(true);
+		liveInstances.delete(this.#registryRef);
 	}
 }

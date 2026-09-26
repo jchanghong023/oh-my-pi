@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { windowsTestTempOverride } from "./windows-test-temp";
 
 type Mode =
 	| "all"
@@ -75,11 +76,17 @@ const validModes: Record<Mode, true> = {
 // fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
 // 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
 // chunk keeps each process under the threshold.
+// Bun 1.4.0 on Windows also crashes when collab registry suites share a test
+// process, so native-bucket files each run in a fresh process there.
 const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1 },
 	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
 	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+	native: {
+		label: "native/tooling/browser/unit bucket",
+		parallel: 1,
+		chunkSize: process.platform === "win32" ? 1 : 10,
+	},
 };
 
 // Smaller workspace packages stay separate from native/TUI/integration suites so
@@ -467,6 +474,9 @@ function buildChildEnv(): Record<string, string | undefined> {
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
 	};
+	// Keep test temp fixtures off the Windows system drive when another
+	// writable drive exists (see windows-test-temp.ts).
+	Object.assign(env, windowsTestTempOverride());
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
 			delete env[key];
@@ -539,9 +549,18 @@ function isCI(): boolean {
 // Defaults to the machine's available parallelism; `OMP_TEST_CONCURRENCY`
 // overrides it — a positive integer to pick an exact width (dial down on a
 // memory-constrained laptop), or `all`/`max` to launch every chunk at once.
+// On Windows the default is half the (logical) core count: each `bun test`
+// chunk is a fresh ~1GB-heap process, and wider pools push dev machines into
+// pagefile thrashing — chunks blow the watchdog and the whole system stalls.
 function testConcurrency(total: number): number {
 	const raw = Bun.env.OMP_TEST_CONCURRENCY?.trim().toLowerCase();
-	if (!raw) return Math.min(Math.max(1, os.availableParallelism()), total);
+	if (!raw) {
+		const width =
+			process.platform === "win32"
+				? Math.max(1, Math.floor(os.availableParallelism() / 2))
+				: os.availableParallelism();
+		return Math.min(width, total);
+	}
 	if (raw === "all" || raw === "max") {
 		return total;
 	}

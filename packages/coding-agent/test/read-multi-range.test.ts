@@ -63,7 +63,8 @@ describe("read tool multi-range selector", () => {
 
 		// A same-basename file elsewhere in the tree must not capture a
 		// follow-up edit, so the header retains the workspace-relative path.
-		expect(firstLine).toBe(`[${path.join("src", "nested", "numbered.txt")}#${firstLine.slice(-5, -1)}]`);
+		// Hashline headers always print `/`-separated paths.
+		expect(firstLine).toBe(`[${["src", "nested", "numbered.txt"].join("/")}#${firstLine.slice(-5, -1)}]`);
 	});
 
 	it("returns both ranges separated by an elision marker", async () => {

@@ -49,6 +49,43 @@ function prepareFake(output: string, options: { exitCode?: number; restartOnce?:
 	const signalsFile = path.join(invocationDir, "signals.txt");
 	const restartMarker = options.restartOnce ? path.join(invocationDir, "restart.txt") : undefined;
 	const target = path.join(invocationDir, "fake-tunnel");
+	if (process.platform === "win32") {
+		// Windows cannot execute a shebang script or create file symlinks; a .cmd
+		// wrapper over a Bun stub records the same argv/runs/exit behavior.
+		const script = path.join(invocationDir, "fake-tunnel.js");
+		fs.writeFileSync(
+			script,
+			[
+				"const fs = require('node:fs');",
+				`const cfg = ${JSON.stringify({
+					argsFile,
+					runsFile,
+					signalsFile,
+					restartMarker: restartMarker ?? null,
+					output,
+					exitCode: options.exitCode ?? null,
+				})};`,
+				"fs.writeFileSync(cfg.argsFile, '');",
+				"for (const arg of process.argv.slice(2)) fs.appendFileSync(cfg.argsFile, arg + '\\n');",
+				"fs.appendFileSync(cfg.runsFile, 'run\\n');",
+				"process.on('SIGINT', () => { fs.appendFileSync(cfg.signalsFile, 'SIGINT\\n'); process.exit(0); });",
+				"process.on('SIGTERM', () => { fs.appendFileSync(cfg.signalsFile, 'SIGTERM\\n'); process.exit(0); });",
+				"console.log(cfg.output);",
+				"if (cfg.restartMarker) {",
+				"  if (!fs.existsSync(cfg.restartMarker)) { fs.writeFileSync(cfg.restartMarker, 'first\\n'); process.exit(23); }",
+				"  fs.appendFileSync(cfg.restartMarker, 'restarted\\n');",
+				"}",
+				"if (cfg.exitCode !== null) process.exit(cfg.exitCode);",
+				"setInterval(() => {}, 60000);",
+				"",
+			].join("\n"),
+		);
+		for (const name of ["ssh", "devtunnel", "zrok", "bore", "cloudflared"]) {
+			fs.writeFileSync(path.join(invocationDir, `${name}.cmd`), `@"${process.execPath}" "${script}" %*\r\n`);
+		}
+		process.env.PATH = invocationDir;
+		return { argsFile, runsFile, signalsFile, restartMarker };
+	}
 	fs.writeFileSync(
 		target,
 		`#!/bin/sh\n` +
@@ -169,31 +206,36 @@ describe("tunnel URL parsers", () => {
 });
 
 describe("startExposure tunnel adapters", () => {
-	it("starts localhost.run with official SSH argv and owns its process", async () => {
-		const invocation = prepareFake('{"type":"registered","domain":"quiet-owl.lhr.life"}');
-		const active = await startExposure(exposure("localhost-run"), PORT);
-		activeExposures.push(active);
-		expect(active.baseUrl).toBe("https://quiet-owl.lhr.life");
-		expect(recordedArgs(invocation)).toEqual([
-			"-o",
-			"BatchMode=yes",
-			"-o",
-			"StrictHostKeyChecking=accept-new",
-			"-o",
-			"ServerAliveInterval=30",
-			"-o",
-			"ServerAliveCountMax=3",
-			"-o",
-			"ExitOnForwardFailure=yes",
-			"-R",
-			`80:127.0.0.1:${PORT}`,
-			"nokey@localhost.run",
-			"--",
-			"--output",
-			"json",
-		]);
-		await stopAndObserve(active, invocation);
-	});
+	// Windows terminates children via TerminateProcess, so the stub's SIGTERM
+	// trap can never be observed there.
+	it.skipIf(process.platform === "win32")(
+		"starts localhost.run with official SSH argv and owns its process",
+		async () => {
+			const invocation = prepareFake('{"type":"registered","domain":"quiet-owl.lhr.life"}');
+			const active = await startExposure(exposure("localhost-run"), PORT);
+			activeExposures.push(active);
+			expect(active.baseUrl).toBe("https://quiet-owl.lhr.life");
+			expect(recordedArgs(invocation)).toEqual([
+				"-o",
+				"BatchMode=yes",
+				"-o",
+				"StrictHostKeyChecking=accept-new",
+				"-o",
+				"ServerAliveInterval=30",
+				"-o",
+				"ServerAliveCountMax=3",
+				"-o",
+				"ExitOnForwardFailure=yes",
+				"-R",
+				`80:127.0.0.1:${PORT}`,
+				"nokey@localhost.run",
+				"--",
+				"--output",
+				"json",
+			]);
+			await stopAndObserve(active, invocation);
+		},
+	);
 
 	it("never reconnects a free Pinggy tunnel behind a different published hostname", async () => {
 		const invocation = prepareFake("Tunnel established at https://random-one.a.pinggy.link", { exitCode: 23 });
@@ -221,7 +263,9 @@ describe("startExposure tunnel adapters", () => {
 		expect(fs.readFileSync(invocation.runsFile, "utf8")).toBe("run\n");
 	});
 
-	it("uses a configured stable Pinggy base with authenticated SSH", async () => {
+	// Windows terminates children via TerminateProcess, so the stub's SIGTERM
+	// trap can never be observed there.
+	it.skipIf(process.platform === "win32")("uses a configured stable Pinggy base with authenticated SSH", async () => {
 		const invocation = prepareFake("Tunnel established at https://different-random.a.pinggy.link", {
 			restartOnce: true,
 		});
@@ -241,7 +285,9 @@ describe("startExposure tunnel adapters", () => {
 		await stopAndObserve(active, invocation);
 	});
 
-	it("starts devtunnel and zrok with public HTTP argv", async () => {
+	// Windows terminates children via TerminateProcess, so the stub's SIGTERM
+	// trap can never be observed there.
+	it.skipIf(process.platform === "win32")("starts devtunnel and zrok with public HTTP argv", async () => {
 		const devInvocation = prepareFake(`Hosting port ${PORT} at https://blue-${PORT}.use2.devtunnels.ms/`);
 		const dev = await startExposure(exposure("devtunnel"), PORT);
 		activeExposures.push(dev);
@@ -271,68 +317,78 @@ describe("startExposure tunnel adapters", () => {
 		await stopAndObserve(zrok, zrokInvocation);
 	});
 
-	it("publishes bore as HTTP and forwards server and secret as separate argv", async () => {
-		const invocation = prepareFake("INFO bore_cli::client: listening at tunnel.example.test:38912");
-		const active = await startExposure(
-			exposure("bore", {
-				options: { server: "tunnel.example.test" },
-				credentials: { secret: "fake-bore-secret" },
-			}),
-			PORT,
-		);
-		activeExposures.push(active);
-		expect(active.baseUrl).toBe("http://tunnel.example.test:38912");
-		expect(recordedArgs(invocation)).toEqual([
-			"local",
-			String(PORT),
-			"--to",
-			"tunnel.example.test",
-			"--secret",
-			"fake-bore-secret",
-		]);
-		await stopAndObserve(active, invocation);
-	});
+	// Windows terminates children via TerminateProcess, so the stub's SIGTERM
+	// trap can never be observed there.
+	it.skipIf(process.platform === "win32")(
+		"publishes bore as HTTP and forwards server and secret as separate argv",
+		async () => {
+			const invocation = prepareFake("INFO bore_cli::client: listening at tunnel.example.test:38912");
+			const active = await startExposure(
+				exposure("bore", {
+					options: { server: "tunnel.example.test" },
+					credentials: { secret: "fake-bore-secret" },
+				}),
+				PORT,
+			);
+			activeExposures.push(active);
+			expect(active.baseUrl).toBe("http://tunnel.example.test:38912");
+			expect(recordedArgs(invocation)).toEqual([
+				"local",
+				String(PORT),
+				"--to",
+				"tunnel.example.test",
+				"--secret",
+				"fake-bore-secret",
+			]);
+			await stopAndObserve(active, invocation);
+		},
+	);
 
-	it("starts named Cloudflare token and local-config modes only after registration", async () => {
-		const tokenInvocation = prepareFake("Registered tunnel connection connIndex=0 location=sjc");
-		const token = await startExposure(
-			exposure("named-cloudflared", {
-				publicBaseUrl: "https://blobs.example.test/",
-				credentials: { tunnelToken: "super-secret-token" },
-			}),
-			PORT,
-		);
-		activeExposures.push(token);
-		expect(token.baseUrl).toBe("https://blobs.example.test");
-		expect(recordedArgs(tokenInvocation)).toEqual([
-			"tunnel",
-			"--no-autoupdate",
-			"run",
-			"--token",
-			"super-secret-token",
-		]);
-		await stopAndObserve(token, tokenInvocation);
+	// Windows terminates children via TerminateProcess, so the stub's SIGTERM
+	// trap can never be observed there.
+	it.skipIf(process.platform === "win32")(
+		"starts named Cloudflare token and local-config modes only after registration",
+		async () => {
+			const tokenInvocation = prepareFake("Registered tunnel connection connIndex=0 location=sjc");
+			const token = await startExposure(
+				exposure("named-cloudflared", {
+					publicBaseUrl: "https://blobs.example.test/",
+					credentials: { tunnelToken: "super-secret-token" },
+				}),
+				PORT,
+			);
+			activeExposures.push(token);
+			expect(token.baseUrl).toBe("https://blobs.example.test");
+			expect(recordedArgs(tokenInvocation)).toEqual([
+				"tunnel",
+				"--no-autoupdate",
+				"run",
+				"--token",
+				"super-secret-token",
+			]);
+			await stopAndObserve(token, tokenInvocation);
 
-		const configInvocation = prepareFake("Connection abc123 registered with protocol quic");
-		const configured = await startExposure(
-			exposure("named-cloudflared", {
-				publicBaseUrl: "https://config.example.test",
-				options: { configFile: "/tmp/cloudflared.yml", tunnelName: "blob-tunnel" },
-			}),
-			PORT,
-		);
-		activeExposures.push(configured);
-		expect(configured.baseUrl).toBe("https://config.example.test");
-		expect(recordedArgs(configInvocation)).toEqual([
-			"tunnel",
-			"--no-autoupdate",
-			"--config",
-			"/tmp/cloudflared.yml",
-			"run",
-			"blob-tunnel",
-		]);
-		await stopAndObserve(configured, configInvocation);
-	});
+			const configInvocation = prepareFake("Connection abc123 registered with protocol quic");
+			const configured = await startExposure(
+				exposure("named-cloudflared", {
+					publicBaseUrl: "https://config.example.test",
+					options: { configFile: "/tmp/cloudflared.yml", tunnelName: "blob-tunnel" },
+				}),
+				PORT,
+			);
+			activeExposures.push(configured);
+			expect(configured.baseUrl).toBe("https://config.example.test");
+			expect(recordedArgs(configInvocation)).toEqual([
+				"tunnel",
+				"--no-autoupdate",
+				"--config",
+				"/tmp/cloudflared.yml",
+				"run",
+				"blob-tunnel",
+			]);
+			await stopAndObserve(configured, configInvocation);
+		},
+	);
 
 	it("reports invalid adapter configuration without echoing named Cloudflare tokens", async () => {
 		await expect(startExposure(exposure("bore", { options: { server: 17 } }), PORT)).rejects.toThrow(

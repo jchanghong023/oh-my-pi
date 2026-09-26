@@ -17,6 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
@@ -744,7 +745,8 @@ describe("StatusLineComponent git watcher survives atomic HEAD renames", () => {
 
 	afterAll(async () => {
 		setProjectDir(originalProjectDir);
-		await fs.rm(repoDir, { recursive: true, force: true });
+		// The git watcher can hold the repo dir a moment longer on Windows.
+		await removeWithRetries(repoDir);
 	});
 
 	// git rewrites HEAD via a lock file + atomic rename (HEAD.lock → HEAD), which

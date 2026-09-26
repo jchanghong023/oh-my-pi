@@ -814,14 +814,17 @@ fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
 	&bytes[start..]
 }
 
-/// Writes a display path, substituting `separator` for `/` when requested via
-/// `--path-separator`.
+/// Writes a display path, substituting `separator` for the platform's path
+/// separators (`/`, and `\` on Windows) when requested via `--path-separator`.
 fn write_display_bytes<W: Write>(out: &mut W, bytes: &[u8], separator: Option<u8>) -> io::Result<()> {
 	let Some(separator) = separator else {
 		return out.write_all(bytes);
 	};
 	let mut rest = bytes;
-	while let Some(pos) = rest.iter().position(|&byte| byte == b'/') {
+	while let Some(pos) = rest
+		.iter()
+		.position(|&byte| byte == b'/' || (cfg!(windows) && byte == b'\\'))
+	{
 		out.write_all(&rest[..pos])?;
 		out.write_all(&[separator])?;
 		rest = &rest[pos + 1..];
@@ -2062,7 +2065,9 @@ mod tests {
 		std::fs::write(tree.path().join("sub/file.txt"), "x\n").unwrap();
 		let (code, capture) = run_util::<Rg>(&["--files", "sub"], "", tree.path());
 		assert_eq!(code, 0, "{}", capture.err());
-		assert_eq!(capture.out(), "sub/file.txt\n");
+		// Walked paths print with the platform separator, like real ripgrep.
+		let printed = format!("sub{}file.txt\n", std::path::MAIN_SEPARATOR);
+		assert_eq!(capture.out(), printed);
 	}
 
 
@@ -2107,6 +2112,10 @@ mod tests {
 		assert!(capture.out().contains("UPPER.TXT:hit\n"));
 	}
 
+	// Decompression goes through the external `gzip` resolved from PATH, a
+	// POSIX toolchain property the default Windows PATH does not provide; the
+	// builtin then faithfully falls back to searching the raw bytes.
+	#[cfg(unix)]
 	#[test]
 	fn search_zip_decompresses_gzip() {
 		let tree = tempfile::tempdir().unwrap();

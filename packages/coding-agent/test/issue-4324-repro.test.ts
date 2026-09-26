@@ -60,7 +60,9 @@ describe("issue #4324 — worker subprocess stderr survives to the exit error", 
 	it("truncates a large stderr to the last ~16 KiB so a chatty runtime can't blow the parent up", async () => {
 		// Write well past the 16 KiB tail limit. A recognisable trailer must
 		// still land at the end so the diagnostic tail is what survives.
-		const filler = "A".repeat(64 * 1024);
+		// Windows CreateProcess caps the command line at 32 KiB, so stay just
+		// above the tail limit there instead of 64 KiB.
+		const filler = "A".repeat(process.platform === "win32" ? 20 * 1024 : 64 * 1024);
 		const trailer = "FATAL: onnxruntime session run failed\n";
 		const sub = createWorkerSubprocess<FakeWorkerOutbound>({
 			spawnCommand: stderrExitCommand(filler + trailer, 7),

@@ -55,7 +55,8 @@ test("bare workspace-member imports resolve through the workspace root manifest"
 		importer,
 	);
 
-	expect(rewritten).toContain(path.join("packages", "contracts", "src", "index.ts"));
+	// The rewritten specifier is a file URL, so the member path always uses forward slashes.
+	expect(rewritten).toContain("packages/contracts/src/index.ts");
 });
 
 test("installed node_modules copies shadow workspace members at the same level", async () => {

@@ -238,6 +238,9 @@ describe("AgentStorage model perf aggregates", () => {
 		const env = {
 			...process.env,
 			HOME: homeDir,
+			// Windows ignores HOME for the config root (os.homedir() follows
+			// USERPROFILE); without this the probe hits the real user's stats DB.
+			...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
 			OMP_PROFILE: "",
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_PROFILE: "",

@@ -1607,6 +1607,8 @@ mod tests {
 	fn init(files: &[(&str, &[u8])]) -> TempDir {
 		let temp = tempfile::tempdir().expect("tempdir");
 		git(temp.path(), &["init", "-q"]);
+		// Byte-exact patches: neutralize a host-wide `core.autocrlf=true`.
+		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Patch Test"]);
 		git(temp.path(), &["config", "user.email", "patch@example.com"]);
 		for (path, bytes) in files {

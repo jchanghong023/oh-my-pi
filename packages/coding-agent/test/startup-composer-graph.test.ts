@@ -14,7 +14,7 @@ async function importedModules(entry: string): Promise<string[]> {
 		proc.exited,
 	]);
 	expect(code, err).toBe(0);
-	return JSON.parse(out.trim().split("\n").at(-1)!);
+	return (JSON.parse(out.trim().split("\n").at(-1)!) as string[]).map(module => module.replaceAll("\\", "/"));
 }
 
 function expectGraphExcludes(modules: string[], forbidden: RegExp[]): void {

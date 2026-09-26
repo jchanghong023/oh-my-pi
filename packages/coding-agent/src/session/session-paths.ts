@@ -72,6 +72,8 @@ function getDefaultSessionDirName(cwd: string): {
 	encodedDirName: string;
 	hashedDirName: string;
 	resolvedCwd: string;
+	previousHomeDirName?: string;
+	previousHomeHashedDirName?: string;
 } {
 	const resolvedCwd = path.resolve(cwd);
 	const canonicalCwd = resolveEquivalentPath(resolvedCwd);
@@ -81,19 +83,38 @@ function getDefaultSessionDirName(cwd: string): {
 	const canonicalTempRoot = resolveEquivalentPath(tempRoot);
 	const homeRelative = path.relative(canonicalHome, canonicalCwd);
 	const tempRelative = path.relative(canonicalTempRoot, canonicalCwd);
+	const withinHome = homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative));
+	const withinTemp = tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative));
 	let encodedDirName: string;
 	let scope: "home" | "tmp" | "abs";
-	if (homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative))) {
-		encodedDirName = encodeRelativeSessionDirName("-", homeRelative);
-		scope = "home";
-	} else if (tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative))) {
+	// Windows commonly keeps its temp dir under the user profile, so the
+	// more specific temp scope wins there. On POSIX, preserve the home scope
+	// when a custom TMPDIR happens to be inside the home directory.
+	if (withinTemp && (process.platform === "win32" || !withinHome)) {
 		encodedDirName = encodeRelativeSessionDirName("-tmp", tempRelative);
 		scope = "tmp";
+	} else if (withinHome) {
+		encodedDirName = encodeRelativeSessionDirName("-", homeRelative);
+		scope = "home";
 	} else {
 		encodedDirName = encodeLegacyAbsoluteSessionDirName(canonicalCwd);
 		scope = "abs";
 	}
-	return { encodedDirName, hashedDirName: encodeHashedSessionDirName(canonicalCwd, scope), resolvedCwd };
+	return {
+		encodedDirName,
+		hashedDirName: encodeHashedSessionDirName(canonicalCwd, scope),
+		resolvedCwd,
+		// The previous home-first classification used these names when both
+		// roots contained the cwd. Migrate them before opening the new temp dir.
+		previousHomeDirName:
+			process.platform === "win32" && withinTemp && withinHome
+				? encodeRelativeSessionDirName("-", homeRelative)
+				: undefined,
+		previousHomeHashedDirName:
+			process.platform === "win32" && withinTemp && withinHome
+				? encodeHashedSessionDirName(canonicalCwd, "home")
+				: undefined,
+	};
 }
 
 /**
@@ -157,6 +178,22 @@ function migrateLegacyAbsoluteSessionDir(cwd: string, sessionDir: string, sessio
 	}
 }
 
+function migratePreviousHomeSessionDir(oldDirName: string | undefined, sessionDir: string, sessionsRoot: string): void {
+	if (!oldDirName) return;
+	const oldPath = path.join(sessionsRoot, oldDirName);
+	if (oldPath === sessionDir || !fs.existsSync(oldPath)) return;
+
+	try {
+		migrateSessionDirPath(oldPath, sessionDir);
+	} catch (error) {
+		logger.warn("Failed to migrate previous home-scoped session directory", {
+			oldPath,
+			newPath: sessionDir,
+			error: String(error),
+		});
+	}
+}
+
 /**
  * Migrate a 17.2.5-17.2.8 hashed session dir back into its legacy path-based
  * directory. The 17.2.9 revert restored the legacy names but dropped migration,
@@ -196,11 +233,18 @@ export function computeDefaultSessionDir(
 	storage: SessionStorage,
 	sessionsRoot: string = getSessionsDir(),
 ): string {
-	const { encodedDirName, hashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
-	migrateHomeSessionDirs(sessionsRoot);
+	const { encodedDirName, hashedDirName, resolvedCwd, previousHomeDirName, previousHomeHashedDirName } =
+		getDefaultSessionDirName(cwd);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
+	// The cwd-aware migrations must run before the name-pattern home sweep:
+	// with the temp dir under the profile (Windows layout), a legacy absolute
+	// name `--C--Users-…-AppData-…--` also matches the sweep's old home format
+	// and would be rewritten into the home scope instead of the canonical one.
 	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
+	migratePreviousHomeSessionDir(previousHomeDirName, sessionDir, sessionsRoot);
 	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
+	if (previousHomeHashedDirName) migrateHashedSessionDir(previousHomeHashedDirName, sessionDir, sessionsRoot);
+	migrateHomeSessionDirs(sessionsRoot);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }

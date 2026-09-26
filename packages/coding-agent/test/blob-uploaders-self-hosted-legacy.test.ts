@@ -75,53 +75,57 @@ describe("self-hosted uploader wire contracts", () => {
 		expect(fetches).toBe(0);
 	});
 
-	it("does not corrupt FTP command stdin or mis-map the remote path to its public URL", async () => {
-		const temp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ftp-uploader-"));
-		try {
-			const executable = path.join(temp, "fake-curl");
-			const argsFile = path.join(temp, "args");
-			const bodyFile = path.join(temp, "body");
-			fs.writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat > '${bodyFile}'\n`);
-			fs.chmodSync(executable, 0o755);
-			const uploader = requiredUploader(
-				createSelfHostedUploader(
-					"ftp",
-					configured(
-						{
-							protocol: "ftp",
-							host: "upload.test",
-							port: 2121,
-							path: "/folder/sub",
-							publicBaseUrl: "https://cdn.test/assets/",
-							commandBinary: executable,
-						},
-						{ username: "alice", password: "p@ss" },
+	// POSIX-only fixture: the fake curl is a #!/bin/sh script that Windows cannot execute.
+	it.skipIf(process.platform === "win32")(
+		"does not corrupt FTP command stdin or mis-map the remote path to its public URL",
+		async () => {
+			const temp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ftp-uploader-"));
+			try {
+				const executable = path.join(temp, "fake-curl");
+				const argsFile = path.join(temp, "args");
+				const bodyFile = path.join(temp, "body");
+				fs.writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat > '${bodyFile}'\n`);
+				fs.chmodSync(executable, 0o755);
+				const uploader = requiredUploader(
+					createSelfHostedUploader(
+						"ftp",
+						configured(
+							{
+								protocol: "ftp",
+								host: "upload.test",
+								port: 2121,
+								path: "/folder/sub",
+								publicBaseUrl: "https://cdn.test/assets/",
+								commandBinary: executable,
+							},
+							{ username: "alice", password: "p@ss" },
+						),
 					),
-				),
-			);
+				);
 
-			const publication = await uploader.upload(request);
-			expect(publication).toEqual({
-				url: "https://cdn.test/assets/folder/sub/a%20b.png",
-				destination: "ftp",
-				bytes: request.bytes.byteLength,
-			});
-			expect(fs.readFileSync(bodyFile, "utf8")).toBe("image-payload");
-			expect(fs.readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
-				"--fail",
-				"--silent",
-				"--show-error",
-				"--ftp-create-dirs",
-				"--upload-file",
-				"-",
-				"--user",
-				"alice:p@ss",
-				"ftp://upload.test:2121/folder/sub/a%20b.png",
-			]);
-		} finally {
-			fs.rmSync(temp, { recursive: true, force: true });
-		}
-	});
+				const publication = await uploader.upload(request);
+				expect(publication).toEqual({
+					url: "https://cdn.test/assets/folder/sub/a%20b.png",
+					destination: "ftp",
+					bytes: request.bytes.byteLength,
+				});
+				expect(fs.readFileSync(bodyFile, "utf8")).toBe("image-payload");
+				expect(fs.readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
+					"--fail",
+					"--silent",
+					"--show-error",
+					"--ftp-create-dirs",
+					"--upload-file",
+					"-",
+					"--user",
+					"alice:p@ss",
+					"ftp://upload.test:2121/folder/sub/a%20b.png",
+				]);
+			} finally {
+				fs.rmSync(temp, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("does not mis-map an encoded shared-folder path or write outside its configured subtree", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-shared-uploader-"));

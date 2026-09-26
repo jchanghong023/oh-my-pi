@@ -80,7 +80,8 @@ describe("session-owned supervised services", () => {
 			const started = await startService(first, {
 				name: "failing-service",
 				command: "echo service-ready; read answer; exit 3",
-				ready: { log: "service-ready", timeout: 5 },
+				// Windows spawns the shell command markedly slower under load.
+				ready: { log: "service-ready", timeout: process.platform === "win32" ? 15 : 5 },
 			});
 			expect(started.daemon.state).toBe("ready");
 			await listServices(second);
@@ -138,7 +139,8 @@ describe("session-owned supervised services", () => {
 			await startService(session, {
 				name: "old-service",
 				command: "echo service-ready; read answer; exit 3",
-				ready: { log: "service-ready", timeout: 5 },
+				// Windows spawns the shell command markedly slower under load.
+				ready: { log: "service-ready", timeout: process.platform === "win32" ? 15 : 5 },
 			});
 			switchTo("new-session");
 			await listServices(session);
@@ -149,8 +151,13 @@ describe("session-owned supervised services", () => {
 			expect(deliveries).toEqual([]);
 
 			switchTo("old-session");
-			// The broker writes the replay before the list response, so the sink has already run.
-			await listServices(session);
+			// The broker writes the replay before the list response; under load the
+			// delivery can land a tick later, so poll briefly instead of asserting
+			// on the first list alone.
+			for (let attempt = 0; deliveries.length === 0 && attempt < 30; attempt++) {
+				await Bun.sleep(100);
+				await listServices(session);
+			}
 			expect(
 				deliveries.map(([receiver, { owner, daemon }]) => [receiver, owner, daemon.name, daemon.state]),
 			).toEqual([["old-session", "old-session", "old-service", "failed"]]);

@@ -38,29 +38,33 @@ test("buildSessionOptions retains explicit extensions and hooks under --no-exten
 	expect(options.additionalExtensionPaths).toEqual([extensionPath, hookPath]);
 });
 
-test("trusted extension allowlists are canonical and cannot be expanded by retargeting a symlink", async () => {
-	const trustedTarget = tempDir.join("trusted-target.ts");
-	const replacementDir = tempDir.join("replacement");
-	const trustedLink = tempDir.join("trusted.ts");
-	await Bun.write(trustedTarget, "export default function () {}");
-	await Bun.write(`${replacementDir}/ambient.ts`, "export default function () {}");
-	await symlink(trustedTarget, trustedLink);
+// File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.
+test.skipIf(process.platform === "win32")(
+	"trusted extension allowlists are canonical and cannot be expanded by retargeting a symlink",
+	async () => {
+		const trustedTarget = tempDir.join("trusted-target.ts");
+		const replacementDir = tempDir.join("replacement");
+		const trustedLink = tempDir.join("trusted.ts");
+		await Bun.write(trustedTarget, "export default function () {}");
+		await Bun.write(`${replacementDir}/ambient.ts`, "export default function () {}");
+		await symlink(trustedTarget, trustedLink);
 
-	const parsed = parseArgs(["--trusted-extension", trustedLink]);
-	const settings = Settings.isolated();
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-	const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
+		const parsed = parseArgs(["--trusted-extension", trustedLink]);
+		const settings = Settings.isolated();
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
 
-	expect(options.disableExtensionDiscovery).toBe(true);
-	expect(options.additionalExtensionPaths).toEqual([realpathSync.native(trustedTarget)]);
+		expect(options.disableExtensionDiscovery).toBe(true);
+		expect(options.additionalExtensionPaths).toEqual([realpathSync.native(trustedTarget)]);
 
-	await unlink(trustedLink);
-	await symlink(replacementDir, trustedLink);
-	const result = await loadSessionExtensions(options, tempDir.path(), settings, new EventBus());
+		await unlink(trustedLink);
+		await symlink(replacementDir, trustedLink);
+		const result = await loadSessionExtensions(options, tempDir.path(), settings, new EventBus());
 
-	expect(result.errors).toEqual([]);
-	expect(result.extensions.map(extension => extension.resolvedPath)).toEqual([realpathSync.native(trustedTarget)]);
-});
+		expect(result.errors).toEqual([]);
+		expect(result.extensions.map(extension => extension.resolvedPath)).toEqual([realpathSync.native(trustedTarget)]);
+	},
+);
 
 test("buildSessionOptions rejects trusted extension directories", async () => {
 	const parsed = parseArgs(["--trusted-extension", tempDir.path()]);

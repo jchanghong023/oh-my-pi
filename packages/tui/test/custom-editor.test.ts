@@ -400,17 +400,24 @@ describe("CustomEditor bracketed path paste", () => {
 		});
 	});
 
-	it("strips `file://` URLs to the local filesystem path before loading the image", () => {
-		// macOS / Ghostty / iTerm2 sometimes forward the pasteboard's
-		// `public.file-url` representation when the user does Finder→Copy
-		// then Cmd+V. Without decoding, `loadImageInput` would try to read a
-		// literal `file:///…` path and fail.
-		expect(extractBracketedImagePastePaths(bracketedPaste("file:///Users/me/Pictures/photo.png"))).toEqual([
-			"/Users/me/Pictures/photo.png",
-		]);
-	});
+	// POSIX file URLs carry no Windows drive letter, so fileURLToPath rejects
+	// them on win32 and the raw URL is kept as-is.
+	it.skipIf(process.platform === "win32")(
+		"strips `file://` URLs to the local filesystem path before loading the image",
+		() => {
+			// macOS / Ghostty / iTerm2 sometimes forward the pasteboard's
+			// `public.file-url` representation when the user does Finder→Copy
+			// then Cmd+V. Without decoding, `loadImageInput` would try to read a
+			// literal `file:///…` path and fail.
+			expect(extractBracketedImagePastePaths(bracketedPaste("file:///Users/me/Pictures/photo.png"))).toEqual([
+				"/Users/me/Pictures/photo.png",
+			]);
+		},
+	);
 
-	it("percent-decodes spaces inside `file://` URLs", () => {
+	// POSIX file URLs carry no Windows drive letter, so fileURLToPath rejects
+	// them on win32 and the raw URL is kept as-is.
+	it.skipIf(process.platform === "win32")("percent-decodes spaces inside `file://` URLs", () => {
 		expect(extractBracketedImagePastePaths(bracketedPaste("file:///Users/me/My%20Pictures/photo.png"))).toEqual([
 			"/Users/me/My Pictures/photo.png",
 		]);
@@ -524,7 +531,9 @@ describe("extractImagePathFromText (issue #3506)", () => {
 		expect(extractImagePathFromText("   ")).toBeUndefined();
 	});
 
-	it("decodes a `file://` URL to its filesystem path", () => {
+	// POSIX file URLs carry no Windows drive letter, so fileURLToPath rejects
+	// them on win32 and the raw URL is kept as-is.
+	it.skipIf(process.platform === "win32")("decodes a `file://` URL to its filesystem path", () => {
 		expect(extractImagePathFromText("file:///Users/me/Pictures/photo.png")).toBe("/Users/me/Pictures/photo.png");
 	});
 

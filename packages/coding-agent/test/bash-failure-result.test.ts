@@ -219,7 +219,8 @@ describe("BashTool skill:// containment failures", () => {
 		};
 	}
 
-	it("refuses a read through a symlink past the plugin boundary", async () => {
+	// File symlinks require Developer Mode on Windows; the leak fixture cannot be built.
+	it.skipIf(process.platform === "win32")("refuses a read through a symlink past the plugin boundary", async () => {
 		const { dir, outsideFile, skill } = await containedFixture();
 		await fs.symlink(outsideFile, path.join(skill.baseDir, "leak.md"));
 		try {

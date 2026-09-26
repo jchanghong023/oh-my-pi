@@ -38,6 +38,34 @@ async function writePackage(files: Record<string, string>): Promise<string> {
 }
 
 describe("legacy-pi in-place module loading (issue #1674)", () => {
+	it.skipIf(process.platform !== "win32")("loads an extension from an extended-length Windows path", async () => {
+		const dir = await writePackage({ "index.ts": 'export const value = "loaded";\n' });
+		const entry = `\\\\?\\${path.join(dir, "index.ts")}`;
+		const loaded = (await loadLegacyPiModule(entry)) as { value: string };
+		expect(loaded.value).toBe("loaded");
+	});
+
+	it.skipIf(process.platform !== "win32")("reloads a Windows extension under a spaced Unicode path", async () => {
+		const dir = await writePackage({ "with space-中文/index.ts": 'export const value = "before";\n' });
+		const entry = path.join(dir, "with space-中文", "index.ts");
+		const first = (await loadLegacyPiModule(entry)) as { value: string };
+		expect(first.value).toBe("before");
+		const stat = await fs.stat(entry);
+		await fs.writeFile(entry, 'export const value = "after";\n');
+		const bumped = new Date(Math.ceil(stat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumped, bumped);
+		const second = (await loadLegacyPiModule(entry)) as { value: string };
+		expect(second.value).toBe("after");
+	});
+
+	it("loads an extension whose directory contains URL delimiters", async () => {
+		const dir = await writePackage({
+			"plugin#percent%/index.ts": 'export const value = "loaded";\n',
+		});
+		const loaded = (await loadLegacyPiModule(path.join(dir, "plugin#percent%", "index.ts"))) as { value: string };
+		expect(loaded.value).toBe("loaded");
+	});
+
 	it("resolves package patterns by prefix specificity before suffix length", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({
@@ -1425,7 +1453,8 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(rewritten).toContain('require("blocked-dep")');
 	});
 
-	it("rejects package resolutions that escape the package root", async () => {
+	// The fixture links a file symlink; Windows needs developer mode for that.
+	it.skipIf(process.platform === "win32")("rejects package resolutions that escape the package root", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "package-boundary-ext", version: "1.0.0", type: "module" }),
 			"node_modules/main-escape/package.json": JSON.stringify({

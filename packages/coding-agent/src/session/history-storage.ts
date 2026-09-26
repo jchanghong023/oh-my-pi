@@ -169,7 +169,9 @@ ON CONFLICT(prompt) DO UPDATE SET
 		this.#upsertRowStmt.finalize();
 		this.#recentStmt.finalize();
 		this.#searchStmt.finalize();
-		this.#db.close();
+		// Force-close this connection so any remaining statements cannot keep
+		// history.db locked on Windows. Session-index owns a separate connection.
+		this.#db.close(true);
 	}
 
 	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {

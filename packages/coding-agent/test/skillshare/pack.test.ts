@@ -86,13 +86,15 @@ describe("packSkill", () => {
 		expect(again.integrity).toBe(pack.integrity);
 	});
 
-	test("rejects symlinks", async () => {
+	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
+	test.skipIf(process.platform === "win32")("rejects symlinks", async () => {
 		await writeFiles({ "SKILL.md": SKILL_MD, "real.md": "real" });
 		await fs.symlink(tempDir.join("real.md"), tempDir.join("link.md"));
 		await expect(packSkill(tempDir.path())).rejects.toThrow(/symlinks are not allowed.*link\.md/);
 	});
 
-	test("enforces file count and path length limits", async () => {
+	// The 260+ character fixture path exceeds Windows MAX_PATH and fails with ENOENT.
+	test.skipIf(process.platform === "win32")("enforces file count and path length limits", async () => {
 		await writeFiles({ "SKILL.md": SKILL_MD });
 		const longDir = tempDir.join("a".repeat(100), "b".repeat(100));
 		await fs.mkdir(longDir, { recursive: true });

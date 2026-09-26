@@ -243,6 +243,8 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				// Windows os.homedir() follows USERPROFILE, not HOME.
+				...(process.platform === "win32" ? { USERPROFILE: home } : {}),
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
 				NO_COLOR: "1",

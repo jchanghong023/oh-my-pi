@@ -38,7 +38,7 @@ function sqliteFileIdentity(dbPath: string): SqliteFileIdentity {
 
 function closeFailedDatabase(db: Database | undefined, error: unknown, identity: SqliteFileIdentity): void {
 	try {
-		db?.close();
+		db?.close(true);
 	} catch (closeError) {
 		const original = error instanceof Error ? error : new Error(String(error));
 		const detail = closeError instanceof Error ? closeError.message : String(closeError);
@@ -115,7 +115,9 @@ function quarantineCorruptSqliteStore(dbPath: string, db: Database | undefined):
 			throw error;
 		}
 	}
-	db?.close();
+	// Force-close: plain close() leaves the handle open on Windows when any
+	// prepared statement is still alive, and the unlink below would EBUSY.
+	db?.close(true);
 
 	const removed: string[] = [];
 	try {

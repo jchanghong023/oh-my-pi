@@ -80,11 +80,8 @@ enum CatError {
 }
 
 fn strip_errno(error: &io::Error) -> String {
-	let mut message = error.to_string();
-	if let Some(position) = message.find(" (os error ") {
-		message.truncate(position);
-	}
-	message
+	// Locale-independent `strerror` wording, not the OS-rendered message.
+	crate::host::normalized_io_message(error)
 }
 
 type CatResult<T> = Result<T, CatError>;

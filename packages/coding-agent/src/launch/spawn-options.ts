@@ -4,14 +4,14 @@ export interface DaemonSpawnOptions {
 	windowsHide?: boolean;
 }
 
-/** Keep launch processes headless without discarding an inheritable Windows console. */
+/** Keep launch processes alive across consumers while controlling Windows console visibility. */
 export function resolveDaemonSpawnOptions(opts: {
 	platform: NodeJS.Platform;
 	hostHasInheritableConsole: boolean;
 }): DaemonSpawnOptions {
 	if (opts.platform !== "win32") return { detached: true };
 	return {
-		detached: false,
+		detached: true,
 		windowsHide: !opts.hostHasInheritableConsole,
 	};
 }

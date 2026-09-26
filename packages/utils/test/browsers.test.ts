@@ -125,7 +125,14 @@ test("install streams and extracts stored, deflated, nested, executable, and sym
 		if (process.platform !== "win32") {
 			expect((await fs.stat(path.join(installed.path, "chrome-linux64/nested/data.txt"))).mode & 0o777).toBe(0o640);
 		}
-		expect(await fs.readlink(path.join(installed.path, "chrome-linux64/chrome-link"))).toBe("chrome");
+		if (process.platform !== "win32") {
+			expect(await fs.readlink(path.join(installed.path, "chrome-linux64/chrome-link"))).toBe("chrome");
+		} else {
+			// Without the symlink privilege extraction degrades the link to a copy.
+			expect(await fs.readFile(path.join(installed.path, "chrome-linux64/chrome-link"), "utf8")).toBe(
+				"#!/bin/sh\necho synthetic chrome\n",
+			);
+		}
 		expect(progress.at(-1)?.downloadedBytes).toBe(fixture.size);
 		expect(progress.at(-1)?.totalBytes).toBe(fixture.size);
 	} finally {

@@ -156,7 +156,8 @@ describe("PluginManager.doctor version drift", () => {
 		);
 		const installedPath = path.join(pluginsNodeModules, name);
 		await fs.rm(installedPath, { recursive: true });
-		await fs.symlink(sourcePath, installedPath);
+		// A junction needs no symlink privilege on Windows.
+		await fs.symlink(sourcePath, installedPath, process.platform === "win32" ? "junction" : "dir");
 		await Bun.write(
 			path.join(pluginsDir, "package.json"),
 			JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }),

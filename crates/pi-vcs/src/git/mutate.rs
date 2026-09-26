@@ -856,7 +856,17 @@ fn run_commit_hook(
 	if !hook_is_executable(&hook) {
 		return Ok(());
 	}
-	let output = Command::new(&hook)
+	// Windows CreateProcess cannot execute a shebang script directly. Let Git
+	// invoke the hook through its own shell, as `git commit` does.
+	#[cfg(windows)]
+	let mut command = {
+		let mut command = Command::new("git");
+		command.args(["hook", "run", "--ignore-missing", name, "--"]);
+		command
+	};
+	#[cfg(not(windows))]
+	let mut command = Command::new(&hook);
+	let output = command
 		.args(args)
 		.current_dir(repository.root())
 		.env("GIT_DIR", &repository.info().git_dir)
@@ -1790,6 +1800,8 @@ mod tests {
 	fn fixture() -> (TempDir, GitRepo) {
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
+		// Byte-exact patches: neutralize a host-wide `core.autocrlf=true`.
+		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
 		fs::write(temp.path().join("a"), "one\n").unwrap();
@@ -2004,6 +2016,8 @@ mod tests {
 	fn stage_keeps_distinct_nfc_and_nfd_when_precompose_is_off() {
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
+		// Byte-exact patches: neutralize a host-wide `core.autocrlf=true`.
+		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
 		git(temp.path(), &["config", "core.precomposeunicode", "false"]);
@@ -2040,6 +2054,11 @@ mod tests {
 		fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 	}
 
+	#[cfg(windows)]
+	fn write_hook(path: &Path, body: &str, _executable: bool) {
+		fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+	}
+
 	#[test]
 	fn stage_commit_survives_unadvanced_index_mtime() {
 		// Regression: a commit right after staging on the same cached handle used
@@ -2065,7 +2084,6 @@ mod tests {
 		assert_eq!(git(temp.path(), &["show", "HEAD:a"]), "changed");
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn commit_hooks_match_git_commit_behavior() {
 		let (temp, repo) = fixture();
@@ -2105,12 +2123,16 @@ mod tests {
 			.commit_create("missing hook is skipped", &CommitOptions::default())
 			.unwrap();
 
-		fs::write(temp.path().join("b"), "one more\n").unwrap();
-		repo.stage_files(&["b".into()]).unwrap();
-		write_hook(&pre_commit, "echo should-not-run >&2\nexit 1", false);
-		repo
-			.commit_create("non-executable hook is skipped", &CommitOptions::default())
-			.unwrap();
+		#[cfg(unix)]
+		{
+			fs::write(temp.path().join("b"), "one more\n").unwrap();
+			repo.stage_files(&["b".into()]).unwrap();
+			write_hook(&pre_commit, "echo should-not-run >&2\nexit 1", false);
+			repo
+				.commit_create("non-executable hook is skipped", &CommitOptions::default())
+				.unwrap();
+		}
+		#[cfg(unix)]
 		fs::remove_file(&pre_commit).unwrap();
 		repo
 			.commit_create("subject\n\nbody\n\n", &CommitOptions {
@@ -2625,9 +2647,11 @@ mod tests {
 				keep_changes: false,
 			})
 			.unwrap();
+		// `worktree list` echoes the path as registered: the git_metadata_path
+		// spelling (forward slashes on Windows), not the raw `../` join.
 		assert!(
 			git(temp.path(), &["worktree", "list", "--porcelain"])
-				.contains(linked.to_string_lossy().as_ref())
+				.contains(git_metadata_path(&linked).as_ref())
 		);
 		assert!(repo.worktree_remove(&linked, true).unwrap());
 
@@ -2649,7 +2673,7 @@ mod tests {
 		assert_eq!(git(temp.path(), &["rev-parse", "HEAD"]), source_head);
 		assert!(
 			!git(temp.path(), &["worktree", "list", "--porcelain"])
-				.contains(linked.to_string_lossy().as_ref())
+				.contains(git_metadata_path(&linked).as_ref())
 		);
 		assert!(repo.worktree_prune().is_ok());
 		let _ = fs::remove_dir_all(linked);

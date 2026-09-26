@@ -2,8 +2,42 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { findFreeCdpPort, waitForCdp } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
-import { type ChildProcess, ptree } from "@oh-my-pi/pi-utils";
-import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import { type ChildProcess, ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { ensureChromiumExecutable, launchHeadlessBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+
+async function windowsPuppeteerAvailable(): Promise<boolean> {
+	const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-chromium-probe-"));
+	let browser: Awaited<ReturnType<typeof launchHeadlessBrowser>>["browser"] | undefined;
+	try {
+		({ browser } = await launchHeadlessBrowser({
+			headless: true,
+			args: [`--user-data-dir=${userDataDir}`],
+		}));
+		await browser.version();
+		return true;
+	} catch {
+		return false;
+	} finally {
+		await browser?.close().catch(() => undefined);
+		// Edge can hand off startup to a new process and exit 0 before Puppeteer
+		// connects. Only terminate processes using this probe's unique profile.
+		const cleanup = Bun.spawn(
+			[
+				"powershell.exe",
+				"-NoProfile",
+				"-Command",
+				"Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:OMP_CHROMIUM_TEST_PROFILE) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+			],
+			{
+				env: { ...process.env, OMP_CHROMIUM_TEST_PROFILE: userDataDir },
+				stdout: "ignore",
+				stderr: "ignore",
+			},
+		);
+		await cleanup.exited;
+		await removeWithRetries(userDataDir).catch(() => undefined);
+	}
+}
 
 /**
  * Whether the Chromium puppeteer resolves can actually execute on this host.
@@ -24,6 +58,7 @@ async function chromiumCanLaunch(): Promise<boolean> {
 		// PUPPETEER_EXECUTABLE_PATH — which `ensureChromiumExecutable()` hands
 		// back unvalidated — still skips the suites rather than failing them at
 		// launch.
+		if (process.platform === "win32") return await windowsPuppeteerAvailable();
 		if (process.platform !== "linux") return (await fs.stat(executable)).isFile();
 		return await chromiumCdpAvailable(executable);
 	} catch {

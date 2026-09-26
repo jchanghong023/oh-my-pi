@@ -179,7 +179,9 @@ export async function transactionAsync<T>(db: Database, fn: () => Promise<T>): P
 export function closeQuietly(db: Database | undefined | null): void {
 	if (db === undefined || db === null) return;
 	try {
-		db.close();
+		// Force-close: plain close() leaves the handle open on Windows while
+		// any prepared statement is still alive.
+		db.close(true);
 	} catch {
 		// Best-effort cleanup.
 	}

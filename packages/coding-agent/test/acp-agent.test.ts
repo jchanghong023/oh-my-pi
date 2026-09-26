@@ -21,9 +21,11 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import type {
 	AgentSideConnection,
 	ClientCapabilities,
@@ -469,9 +471,11 @@ afterEach(async () => {
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
 	resetSettingsForTest();
+	resetSessionIndexForTests();
+	HistoryStorage.close();
 
 	for (const root of cleanupRoots.splice(0)) {
-		await fs.promises.rm(root, { recursive: true, force: true });
+		await removeWithRetries(root);
 	}
 });
 
@@ -2539,7 +2543,7 @@ describe("ACP agent", () => {
 				inference.title.resolve(null);
 			}
 			harness.abortController.abort();
-			await Bun.sleep(0);
+			await harness.agent.dispose();
 		}
 	});
 

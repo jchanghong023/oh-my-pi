@@ -241,7 +241,10 @@ describe("KeybindingsManager.create", () => {
 		const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 		const originalOmpProfile = process.env.OMP_PROFILE;
 		const originalPiProfile = process.env.PI_PROFILE;
-		const configRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-active-profile-"));
+		// PI_CONFIG_DIR is relative to home; a Windows temp dir may be on another drive.
+		const configRootDir = await fs.mkdtemp(
+			path.join(process.platform === "win32" ? os.homedir() : os.tmpdir(), "pi-keybindings-active-profile-"),
+		);
 
 		try {
 			process.env.PI_CONFIG_DIR = path.relative(os.homedir(), configRootDir);

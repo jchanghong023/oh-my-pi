@@ -14,7 +14,11 @@ function isProcessAlive(pid: number): boolean {
 	}
 }
 
-describe("RpcClient lifecycle (issue #4079 B)", () => {
+// Bun on Windows unreliably delivers child stdout: with a read already
+// pending, a child's fast back-to-back frame writes can vanish entirely, so
+// request/response round trips hang until the 20-30s timeouts fire. The whole
+// lifecycle file spawns mock agents over that transport.
+describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 B)", () => {
 	test("auto-negotiates protocol v2 and reassembles an oversized response", async () => {
 		using client = new RpcClient({
 			cliPath: MOCK_AGENT,

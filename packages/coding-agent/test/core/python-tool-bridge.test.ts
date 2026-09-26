@@ -145,18 +145,21 @@ async def check_intent():
 asyncio.run(check_intent())
 `;
 			// Feed the script over stdin: the inlined prelude exceeds Windows spawn limits via `-c`.
-			const child = Bun.spawn([Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python"), "-"], {
-				stdin: new Response(script),
-				stdout: "pipe",
-				stderr: "pipe",
-				signal: AbortSignal.timeout(10_000),
-				env: {
-					...process.env,
-					PI_TOOL_BRIDGE_URL: info.url,
-					PI_TOOL_BRIDGE_TOKEN: info.token,
-					PI_TOOL_BRIDGE_SESSION: sessionId,
+			const child = Bun.spawn(
+				[Bun.env.PYTHON ?? (process.platform !== "win32" && $which("python3") ? "python3" : "python"), "-"],
+				{
+					stdin: new Response(script),
+					stdout: "pipe",
+					stderr: "pipe",
+					signal: AbortSignal.timeout(10_000),
+					env: {
+						...process.env,
+						PI_TOOL_BRIDGE_URL: info.url,
+						PI_TOOL_BRIDGE_TOKEN: info.token,
+						PI_TOOL_BRIDGE_SESSION: sessionId,
+					},
 				},
-			});
+			);
 			try {
 				const [exitCode, stdout, stderr] = await Promise.all([
 					child.exited,
@@ -337,18 +340,21 @@ async def check_identity():
     print(await __omp_with_call_site__("py:0", tool.read, {"path": "foo.txt"}))
 asyncio.run(check_identity())
 `;
-			const child = Bun.spawn([Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python"), "-"], {
-				stdin: new Response(script),
-				stdout: "pipe",
-				stderr: "pipe",
-				signal: AbortSignal.timeout(10_000),
-				env: {
-					...process.env,
-					PI_TOOL_BRIDGE_URL: info.url,
-					PI_TOOL_BRIDGE_TOKEN: info.token,
-					PI_TOOL_BRIDGE_SESSION: sessionId,
+			const child = Bun.spawn(
+				[Bun.env.PYTHON ?? (process.platform !== "win32" && $which("python3") ? "python3" : "python"), "-"],
+				{
+					stdin: new Response(script),
+					stdout: "pipe",
+					stderr: "pipe",
+					signal: AbortSignal.timeout(10_000),
+					env: {
+						...process.env,
+						PI_TOOL_BRIDGE_URL: info.url,
+						PI_TOOL_BRIDGE_TOKEN: info.token,
+						PI_TOOL_BRIDGE_SESSION: sessionId,
+					},
 				},
-			});
+			);
 			try {
 				const [exitCode, stdout, stderr] = await Promise.all([
 					child.exited,

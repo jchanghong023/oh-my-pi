@@ -33,7 +33,7 @@ test("failed asynchronous initialization releases and rolls back its write trans
 			await Promise.resolve();
 			db.run("INSERT INTO missing_table VALUES (1)");
 		}),
-	).rejects.toThrow(dbPath);
+	).rejects.toThrow(JSON.stringify(dbPath));
 
 	const rows = await openSqliteDatabase(dbPath, db => {
 		try {
@@ -62,7 +62,7 @@ test("corruption recovery is opt-in and the default preserves the active evidenc
 	expect(isSqliteCorruptionError(failure)).toBe(true);
 	expect(failure).toBeInstanceOf(Error);
 	if (!(failure instanceof Error)) throw new Error("Expected SQLite initialization to fail");
-	expect(failure.message).toContain(dbPath);
+	expect(failure.message).toContain(JSON.stringify(dbPath));
 	expect(await fs.promises.readFile(dbPath)).toEqual(damaged);
 	expect(await backupNames(dir.path())).toEqual([]);
 });
@@ -139,38 +139,43 @@ test("recovery preserves sidecars present at corruption detection under one priv
 	}
 });
 
-test("concurrent failed openers adopt one replacement without discarding each other's writes", async () => {
-	await using dir = await TempDir.create("@omp-sqlite-concurrent-");
-	const dbPath = dir.join("store.db");
-	const damaged = await corruptSchemaPages(dbPath);
-	const ready = Promise.withResolvers<void>();
-	let opened = 0;
-	const initialize = async (db: Database): Promise<Database> => {
-		if (++opened === 2) ready.resolve();
-		await ready.promise;
-		db.run("PRAGMA journal_mode=WAL");
-		db.run("CREATE TABLE IF NOT EXISTS recovered (value TEXT)");
-		return db;
-	};
+// Quarantine unlinks the corrupt db while a peer opener still holds it open;
+// Windows refuses to delete open files.
+test.skipIf(process.platform === "win32")(
+	"concurrent failed openers adopt one replacement without discarding each other's writes",
+	async () => {
+		await using dir = await TempDir.create("@omp-sqlite-concurrent-");
+		const dbPath = dir.join("store.db");
+		const damaged = await corruptSchemaPages(dbPath);
+		const ready = Promise.withResolvers<void>();
+		let opened = 0;
+		const initialize = async (db: Database): Promise<Database> => {
+			if (++opened === 2) ready.resolve();
+			await ready.promise;
+			db.run("PRAGMA journal_mode=WAL");
+			db.run("CREATE TABLE IF NOT EXISTS recovered (value TEXT)");
+			return db;
+		};
 
-	const handles = await Promise.all([
-		openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
-		openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
-	]);
-	try {
-		handles[0].run("INSERT INTO recovered VALUES ('first')");
-		handles[1].run("INSERT INTO recovered VALUES ('second')");
-		expect(handles[0].query<{ value: string }, []>("SELECT value FROM recovered ORDER BY value").all()).toEqual([
-			{ value: "first" },
-			{ value: "second" },
+		const handles = await Promise.all([
+			openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
+			openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
 		]);
-	} finally {
-		for (const db of handles) db.close();
-	}
-	const backups = await backupNames(dir.path());
-	expect(backups).toHaveLength(1);
-	expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
-});
+		try {
+			handles[0].run("INSERT INTO recovered VALUES ('first')");
+			handles[1].run("INSERT INTO recovered VALUES ('second')");
+			expect(handles[0].query<{ value: string }, []>("SELECT value FROM recovered ORDER BY value").all()).toEqual([
+				{ value: "first" },
+				{ value: "second" },
+			]);
+		} finally {
+			for (const db of handles) db.close();
+		}
+		const backups = await backupNames(dir.path());
+		expect(backups).toHaveLength(1);
+		expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
+	},
+);
 
 test("a second corruption failure surfaces without rotating the first backup again", async () => {
 	await using dir = await TempDir.create("@omp-sqlite-repeat-corrupt-");
@@ -181,7 +186,7 @@ test("a second corruption failure surfaces without rotating the first backup aga
 			recoverCorruption: true,
 			onCorruptionPreserved: backupPath => fs.copyFileSync(backupPath, dbPath),
 		}),
-	).rejects.toMatchObject({ code: "SQLITE_CORRUPT", message: expect.stringContaining(dbPath) });
+	).rejects.toMatchObject({ code: "SQLITE_CORRUPT", message: expect.stringContaining(JSON.stringify(dbPath)) });
 	const backups = await backupNames(dir.path());
 	expect(backups).toHaveLength(1);
 	expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
@@ -201,6 +206,6 @@ test("opt-in recovery never rotates a non-corruption SQLite failure", async () =
 	expect(isSqliteCorruptionError(failure)).toBe(false);
 	expect(failure).toBeInstanceOf(Error);
 	if (!(failure instanceof Error)) throw new Error("Expected SQLite initialization to fail");
-	expect(failure.message).toContain(dbPath);
+	expect(failure.message).toContain(JSON.stringify(dbPath));
 	expect(await backupNames(dir.path())).toEqual([]);
 });

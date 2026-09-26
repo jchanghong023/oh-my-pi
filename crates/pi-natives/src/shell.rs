@@ -762,13 +762,13 @@ mod tests {
 	async fn timeout_drains_pipeline_output_before_stopping_reader() {
 		let shell = CoreShell::new(None);
 		let (tx, rx) = flume::unbounded::<String>();
-		// `tail` runs as an in-process builtin, so cancellation kills only the
-		// external `yes`; tail then sees EOF and flushes its final 5 lines into
+		// `tail` runs as an in-process builtin, so cancellation stops the
+		// producer; tail then sees EOF and flushes its final 5 lines into
 		// the post-cancel reader grace window. The deadline must be generous
-		// enough that `yes` has demonstrably spawned and produced before the
-		// timeout fires — a 50ms budget lost that race on cold CI runners and
+		// enough that `yes` has demonstrably started and produced before the
+		// timeout fires — shorter budgets lost that race under concurrent CI load and
 		// tail flushed an empty ring buffer.
-		const TIMEOUT_MS: u32 = 750;
+		const TIMEOUT_MS: u32 = 3_000;
 		let result = shell
 			.run(
 				CoreShellRunOptions {

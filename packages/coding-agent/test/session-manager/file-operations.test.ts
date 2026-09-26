@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -252,6 +252,41 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(fs.existsSync(hashedDir)).toBe(false);
 		expect(path.dirname(sessionFile)).toBe(expectedDir);
 		expect(fs.existsSync(path.join(expectedDir, "stranded.jsonl"))).toBe(true);
+	});
+
+	it("migrates home-scoped sessions when the temp root is inside home", () => {
+		const home = path.join(testAgentDir, "home");
+		const tempRoot = path.join(home, "temp");
+		const tempCwd = path.join(tempRoot, "project");
+		fs.mkdirSync(tempCwd, { recursive: true });
+		const canonicalCwd = resolveEquivalentPath(tempCwd);
+		const canonicalHome = resolveEquivalentPath(home);
+		const homeRelative = path.relative(canonicalHome, canonicalCwd).replace(/[/\\:]/g, "-");
+		const oldHomeDir = path.join(getSessionsDir(), `-${homeRelative}`);
+		const readable = path.basename(canonicalCwd);
+		const digest = Bun.SHA256.hash(canonicalCwd.replaceAll("\\", "/"), "hex");
+		const oldHashedDir = path.join(getSessionsDir(), `home-${readable}-${digest}`);
+		for (const [dir, marker] of [
+			[oldHomeDir, "home.jsonl"],
+			[oldHashedDir, "hashed.jsonl"],
+		] as const) {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, marker), "marker\n");
+		}
+
+		const homeSpy = spyOn(os, "homedir").mockReturnValue(home);
+		const tempSpy = spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+		try {
+			const sessionDir = SessionManager.getDefaultSessionDir(tempCwd);
+			expect(path.basename(sessionDir)).toBe("-tmp-project");
+			expect(fs.existsSync(oldHomeDir)).toBe(false);
+			expect(fs.existsSync(oldHashedDir)).toBe(false);
+			expect(fs.existsSync(path.join(sessionDir, "home.jsonl"))).toBe(true);
+			expect(fs.existsSync(path.join(sessionDir, "hashed.jsonl"))).toBe(true);
+		} finally {
+			homeSpy.mockRestore();
+			tempSpy.mockRestore();
+		}
 	});
 });
 

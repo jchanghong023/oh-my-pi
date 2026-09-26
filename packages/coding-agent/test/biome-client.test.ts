@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BiomeClient } from "../src/lsp/clients/biome-client";
 import type { ServerConfig } from "../src/lsp/types";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const tempDirs: string[] = [];
 const repoRoot = path.resolve(import.meta.dir, "../../..");
@@ -29,7 +30,10 @@ function resolveRepoBiome(): string | null {
 const repoBiome = resolveRepoBiome();
 
 afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { force: true, recursive: true })));
+	// A just-killed hung Biome child can hold its dir a moment longer on Windows.
+	await Promise.all(
+		tempDirs.splice(0).map(dir => removeWithRetries(dir).catch(() => fs.rm(dir, { force: true, recursive: true }))),
+	);
 });
 
 async function makeTempDir(): Promise<string> {
@@ -43,17 +47,35 @@ async function createFakeBiomeCommand(
 	expectedInput: string,
 	formattedOutput: string,
 ): Promise<string> {
-	const command = path.join(tempDir, "biome");
 	const expectedInputPath = path.join(tempDir, "expected-input.ts");
 	const formattedOutputPath = path.join(tempDir, "formatted-output.ts");
 	await Bun.write(expectedInputPath, expectedInput);
 	await Bun.write(formattedOutputPath, formattedOutput);
+	const examplePath = path.join(tempDir, "example.ts");
+	if (process.platform === "win32") {
+		// A shell stub cannot execute on Windows; an equivalent batch script can.
+		const command = path.join(tempDir, "biome.cmd");
+		await Bun.write(
+			command,
+			[
+				"@echo off",
+				`IF NOT "%~1" == "format" EXIT /B 7`,
+				`IF NOT "%~2" == "--write" EXIT /B 8`,
+				`IF NOT "%~3" == "${examplePath}" EXIT /B 10`,
+				`FC /B "%~3" "${expectedInputPath}" >NUL || EXIT /B 9`,
+				`COPY /Y "${formattedOutputPath}" "%~3" >NUL`,
+				`EXIT /B 0`,
+			].join("\r\n"),
+		);
+		return command;
+	}
+	const command = path.join(tempDir, "biome");
 	await Bun.write(
 		command,
 		`#!/bin/sh
 test "$1" = "format" || exit 7
 test "$2" = "--write" || exit 8
-test "$3" = "${path.join(tempDir, "example.ts")}" || exit 10
+test "$3" = "${examplePath}" || exit 10
 cmp -s "$3" "${expectedInputPath}" || exit 9
 cp "${formattedOutputPath}" "$3"
 exit 0
@@ -133,9 +155,18 @@ describe("BiomeClient format", () => {
 describe("BiomeClient lint", () => {
 	test("cancels a hung Biome process when diagnostics are aborted", async () => {
 		const tempDir = await makeTempDir();
-		const command = path.join(tempDir, "biome-hang");
-		await Bun.write(command, "#!/bin/sh\nwhile :; do :; done\n");
-		await fs.chmod(command, 0o755);
+		let command: string;
+		if (process.platform === "win32") {
+			// Move the process's cwd off the temp dir before hanging: a
+			// wrapper process that survives the abort must not pin the
+			// directory under cleanup, and it exits on its own after 30s.
+			command = path.join(tempDir, "biome-hang.cmd");
+			await Bun.write(command, `@cd /d %SystemRoot% && @ping -n 30 127.0.0.1 >NUL\r\n`);
+		} else {
+			command = path.join(tempDir, "biome-hang");
+			await Bun.write(command, "#!/bin/sh\nwhile :; do :; done\n");
+			await fs.chmod(command, 0o755);
+		}
 		const targetFile = path.join(tempDir, "example.ts");
 		const started = Date.now();
 

@@ -143,25 +143,33 @@ describe("assertOwnerPrivateDir", () => {
 		return scratch;
 	};
 
-	it("accepts a real owner-private directory and normalizes loose perms in place", () => {
-		const dir = path.join(mkScratch(), "ctl");
-		fs.mkdirSync(dir, { mode: 0o755 });
-		fs.chmodSync(dir, 0o755);
-		expect(() => assertOwnerPrivateDir(dir)).not.toThrow();
-		expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
-	});
+	// POSIX mode bits are not enforced on Windows.
+	it.skipIf(process.platform === "win32")(
+		"accepts a real owner-private directory and normalizes loose perms in place",
+		() => {
+			const dir = path.join(mkScratch(), "ctl");
+			fs.mkdirSync(dir, { mode: 0o755 });
+			fs.chmodSync(dir, 0o755);
+			expect(() => assertOwnerPrivateDir(dir)).not.toThrow();
+			expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+		},
+	);
 
-	it("refuses a symlinked final component without following it (TOCTOU swap guard)", () => {
-		const root = mkScratch();
-		const victim = path.join(root, "victim");
-		fs.mkdirSync(victim, { mode: 0o700 });
-		const link = path.join(root, "ctl");
-		fs.symlinkSync(victim, link);
-		// A symlink pointing at an otherwise-valid 0700 directory must still be
-		// rejected: O_NOFOLLOW refuses the link itself, so a later re-target cannot
-		// slip a foreign directory past the guard.
-		expect(() => assertOwnerPrivateDir(link)).toThrow("is a symlink");
-	});
+	// The fixture needs an unprivileged file symlink; Windows requires developer mode.
+	it.skipIf(process.platform === "win32")(
+		"refuses a symlinked final component without following it (TOCTOU swap guard)",
+		() => {
+			const root = mkScratch();
+			const victim = path.join(root, "victim");
+			fs.mkdirSync(victim, { mode: 0o700 });
+			const link = path.join(root, "ctl");
+			fs.symlinkSync(victim, link);
+			// A symlink pointing at an otherwise-valid 0700 directory must still be
+			// rejected: O_NOFOLLOW refuses the link itself, so a later re-target cannot
+			// slip a foreign directory past the guard.
+			expect(() => assertOwnerPrivateDir(link)).toThrow("is a symlink");
+		},
+	);
 
 	it("refuses a non-directory", () => {
 		const file = path.join(mkScratch(), "ctl");

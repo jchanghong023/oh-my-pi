@@ -135,7 +135,12 @@ describe("managed-skills primitives", () => {
 			// isolated managed root; Bun.write would otherwise follow it.
 			const outside = await fs.mkdtemp(path.join(os.tmpdir(), "omp-escape-"));
 			try {
-				await fs.symlink(outside, path.join(managedRoot, "evil"));
+				// A junction needs no symlink privilege on Windows and still trips the lstat guard.
+				await fs.symlink(
+					outside,
+					path.join(managedRoot, "evil"),
+					process.platform === "win32" ? "junction" : "dir",
+				);
 				await expect(
 					writeManagedSkill({ action: "create", name: "evil", description: "d", body: "b" }),
 				).rejects.toThrow(/symlink/);
@@ -164,7 +169,8 @@ describe("managed-skills primitives", () => {
 			const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-realroot-"));
 			try {
 				await fs.mkdir(path.dirname(getManagedSkillsDir()), { recursive: true });
-				await fs.symlink(realRoot, getManagedSkillsDir());
+				// A junction needs no symlink privilege on Windows and still trips the lstat guard.
+				await fs.symlink(realRoot, getManagedSkillsDir(), process.platform === "win32" ? "junction" : "dir");
 				await expect(
 					writeManagedSkill({ action: "create", name: "demo", description: "d", body: "b" }),
 				).rejects.toThrow(/managed-skills root is a symlink/);
@@ -197,7 +203,9 @@ describe("managed-skills primitives", () => {
 			expect(String(rejected[0]?.reason)).toMatch(/already exists/);
 		});
 
-		it("refuses to update a SKILL.md that is a symlink", async () => {
+		// Windows cannot create file symlinks without privilege, so the symlinked
+		// SKILL.md guard cannot be exercised there.
+		it.skipIf(process.platform === "win32")("refuses to update a SKILL.md that is a symlink", async () => {
 			await writeManagedSkill({ action: "create", name: "linky", description: "d", body: "real" });
 			const outside = await fs.mkdtemp(path.join(os.tmpdir(), "omp-link-"));
 			const target = path.join(outside, "target.md");
@@ -243,7 +251,12 @@ describe("managed-skills primitives", () => {
 			const outside = await fs.mkdtemp(path.join(os.tmpdir(), "omp-deltarget-"));
 			await Bun.write(path.join(outside, "keep.txt"), "keep");
 			try {
-				await fs.symlink(outside, path.join(managedRoot, "linked"));
+				// A junction needs no symlink privilege on Windows and still trips the lstat guard.
+				await fs.symlink(
+					outside,
+					path.join(managedRoot, "linked"),
+					process.platform === "win32" ? "junction" : "dir",
+				);
 				await expect(deleteManagedSkill("linked")).rejects.toThrow(/symlink/);
 				// The symlink target's contents are untouched.
 				expect(await Bun.file(path.join(outside, "keep.txt")).exists()).toBe(true);

@@ -5,26 +5,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { collectMemoryStats } from "@oh-my-pi/pi-coding-agent/debug/profiler";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalXdgStateHome = process.env.XDG_STATE_HOME;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 let cleanupRoot: string | undefined;
 
 afterEach(async () => {
 	vi.restoreAllMocks();
-	if (originalXdgStateHome === undefined) {
-		delete process.env.XDG_STATE_HOME;
-	} else {
-		process.env.XDG_STATE_HOME = originalXdgStateHome;
-	}
-	if (originalAgentDir) {
-		setAgentDir(originalAgentDir);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
 	if (cleanupRoot) {
 		await removeWithRetries(cleanupRoot);
 		cleanupRoot = undefined;
@@ -38,16 +24,12 @@ async function archiveMembers(archivePath: string): Promise<string[]> {
 
 async function setupReportDirectory(): Promise<string> {
 	cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-report-"));
-	const xdgStateHome = path.join(cleanupRoot, "state");
-	await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
-	process.env.XDG_STATE_HOME = xdgStateHome;
-	setAgentDir(fallbackAgentDir);
 	return cleanupRoot;
 }
 
 describe("report bundle privacy", () => {
 	it("exports numeric memory diagnostics without live credentials or runtime type names", async () => {
-		await setupReportDirectory();
+		const root = await setupReportDirectory();
 		const credential = `sk-ant-ort01-${crypto.randomUUID()}`;
 		const heap = jsc.heapStats();
 		vi.spyOn(jsc, "heapStats").mockReturnValue({
@@ -56,7 +38,12 @@ describe("report bundle privacy", () => {
 			protectedObjectTypeCounts: { [credential]: 1 },
 		});
 
-		const result = await createReportBundle({ sessionFile: undefined, memoryStats: collectMemoryStats() });
+		const result = await createReportBundle({
+			sessionFile: undefined,
+			memoryStats: collectMemoryStats(),
+			reportsDir: root,
+			logsDir: path.join(root, "logs"),
+		});
 		const archive = new Bun.Archive(await Bun.file(result.path).bytes());
 		const members = await archive.files();
 
@@ -102,7 +89,11 @@ describe("report bundle privacy", () => {
 			'{"type":"session","secret":"private-b"}\n',
 		);
 
-		const result = await createReportBundle({ sessionFile });
+		const result = await createReportBundle({
+			sessionFile,
+			reportsDir: root,
+			logsDir: path.join(root, "logs"),
+		});
 		const members = await archiveMembers(result.path);
 		await fs.rm(result.path, { force: true });
 
