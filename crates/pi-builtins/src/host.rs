@@ -152,20 +152,22 @@ fn output_handle(file: &OpenFile) -> Option<OpenFile> {
 
 fn output_metadata(file: &OpenFile) -> Option<Metadata> {
 	match file {
-		OpenFile::File(file) => file.metadata().ok().map(Metadata::from),
+		// `Metadata::from_file` keeps the handle identity a Windows path stat
+		// drops; without it `path_is_stdout` can never match on Windows.
+		OpenFile::File(file) => Metadata::from_file(file).ok(),
 		OpenFile::Vfs(file) => file.metadata().ok(),
 		OpenFile::Stdout(stdout) => {
 			#[cfg(unix)]
 			{
 				use std::os::fd::AsFd;
 				let handle = stdout.as_fd().try_clone_to_owned().ok()?;
-				std::fs::File::from(handle).metadata().ok().map(Metadata::from)
+				Metadata::from_file(&std::fs::File::from(handle)).ok()
 			}
 			#[cfg(windows)]
 			{
 				use std::os::windows::io::AsHandle;
 				let handle = stdout.as_handle().try_clone_to_owned().ok()?;
-				std::fs::File::from(handle).metadata().ok().map(Metadata::from)
+				Metadata::from_file(&std::fs::File::from(handle)).ok()
 			}
 			#[cfg(not(any(unix, windows)))]
 			{
@@ -496,7 +498,17 @@ impl Host {
 			.get_or_init(|| self.stdout_handle.as_ref().and_then(output_metadata))
 			.as_ref()
 			.is_some_and(|stdout| {
-				stdout.is_file() && self.fs().metadata(path).is_ok_and(|candidate| stdout.same_file(&candidate))
+				if !stdout.is_file() {
+					return false;
+				}
+				// Windows path stats do not carry a file index, so compare an
+				// open handle there. On Unix, stat is sufficient and avoids
+				// blocking while probing a FIFO or other non-regular path.
+				#[cfg(windows)]
+				let candidate = self.fs().open(path).and_then(|file| file.metadata());
+				#[cfg(not(windows))]
+				let candidate = self.fs().metadata(path);
+				candidate.is_ok_and(|candidate| stdout.same_file(&candidate))
 			})
 	}
 
@@ -1261,6 +1273,69 @@ pub(crate) fn format_usage(usage: &str) -> String {
 	usage.replace('\n', "\n       ")
 }
 
+/// Maps an `io::Error` onto the GNU/coreutils diagnostic text for its kind.
+///
+/// The OS-provided message is locale-dependent (`std` renders the kernel's
+/// text), while these utilities report the C `strerror` wording everywhere.
+pub(crate) fn normalized_io_message(error: &io::Error) -> String {
+	if error.raw_os_error().is_none() {
+		return error.to_string();
+	}
+
+	use io::ErrorKind::{
+		AddrInUse, AddrNotAvailable, AlreadyExists, BrokenPipe, ConnectionAborted,
+		ConnectionRefused, ConnectionReset, Interrupted, InvalidData, InvalidInput, NotConnected,
+		NotFound, PermissionDenied, TimedOut, UnexpectedEof, WouldBlock, WriteZero,
+	};
+	match error.kind() {
+		NotFound => "No such file or directory".into(),
+		PermissionDenied => "Permission denied".into(),
+		ConnectionRefused => "Connection refused".into(),
+		ConnectionReset => "Connection reset".into(),
+		ConnectionAborted => "Connection aborted".into(),
+		NotConnected => "Not connected".into(),
+		AddrInUse => "Address in use".into(),
+		AddrNotAvailable => "Address not available".into(),
+		BrokenPipe => "Broken pipe".into(),
+		AlreadyExists => "File exists".into(),
+		WouldBlock => "Would block".into(),
+		InvalidInput => "Invalid input".into(),
+		InvalidData => "Invalid data".into(),
+		TimedOut => "Timed out".into(),
+		WriteZero => "Write zero".into(),
+		Interrupted => "Interrupted".into(),
+		UnexpectedEof => "Unexpected end of file".into(),
+		_ => error
+			.to_string()
+			.split_once(" (os error ")
+			.map_or_else(|| error.to_string(), |(message, _)| message.to_string()),
+	}
+}
+
+/// Joins a display path onto `dir` with one `/`, keeping the GNU tools'
+/// separator spelling for printed paths and diagnostics on every platform.
+/// URL directories keep their percent-encoded joining, and verbatim Windows
+/// paths reach the OS verbatim, so both keep their native joining.
+pub(crate) fn slash_join(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+	if pi_vfs::is_virtual_path(dir) {
+		return pi_vfs::join_path(dir, Path::new(name));
+	}
+	let bytes = dir.as_os_str().as_encoded_bytes();
+	let mut out = std::ffi::OsString::from(dir.as_os_str());
+	let ends_with_separator = bytes.ends_with(b"/") || (cfg!(windows) && bytes.ends_with(b"\\"));
+	// `C:child` is relative to the drive's current directory; `C:/child` is not.
+	let drive_relative = cfg!(windows) && bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+	if !bytes.is_empty() && !ends_with_separator && !drive_relative {
+		out.push(if cfg!(windows) && bytes.starts_with(b"\\\\?\\") {
+			"\\"
+		} else {
+			"/"
+		});
+	}
+	out.push(name);
+	PathBuf::from(out)
+}
+
 /// Borrows an `OsStr` as raw bytes.
 ///
 /// Unix strings are arbitrary byte sequences, so this is free there. On Windows
@@ -1670,6 +1745,11 @@ pub(crate) use matches_parser;
 mod testing {
 	//! In-memory [`Host`] construction for unit tests.
 
+	#[cfg(windows)]
+	use std::ffi::OsStr;
+	#[cfg(windows)]
+	use super::{Path, slash_join};
+
 	use parking_lot::Mutex;
 
 	use super::{
@@ -1799,6 +1879,12 @@ mod testing {
 
 		assert_eq!(host.resolve("/c/Users/Adam/file.txt"), PathBuf::from(r"C:\Users\Adam\file.txt"));
 		assert_eq!(host.resolve("/tmp/probe"), std::env::temp_dir().join("probe"));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn slash_join_preserves_drive_relative_directory() {
+		assert_eq!(slash_join(Path::new("C:"), OsStr::new("child")), PathBuf::from("C:child"));
 	}
 
 	/// Parses `argv` and runs `U` against an in-memory host, mirroring what the

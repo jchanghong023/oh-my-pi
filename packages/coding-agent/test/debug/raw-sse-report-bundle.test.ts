@@ -6,7 +6,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-test",
@@ -21,23 +21,9 @@ const model: Model<"anthropic-messages"> = buildModel({
 	maxTokens: 8_192,
 });
 
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalXdgStateHome = process.env.XDG_STATE_HOME;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 let cleanupRoot: string | undefined;
 
 afterEach(async () => {
-	if (originalXdgStateHome === undefined) {
-		delete process.env.XDG_STATE_HOME;
-	} else {
-		process.env.XDG_STATE_HOME = originalXdgStateHome;
-	}
-	if (originalAgentDir) {
-		setAgentDir(originalAgentDir);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
 	if (cleanupRoot) {
 		await removeWithRetries(cleanupRoot);
 		cleanupRoot = undefined;
@@ -47,10 +33,6 @@ afterEach(async () => {
 describe("raw SSE report bundle", () => {
 	it("includes captured raw SSE text and dropped-record disclosure", async () => {
 		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-raw-sse-report-"));
-		const xdgStateHome = path.join(cleanupRoot, "state");
-		await fs.mkdir(path.join(xdgStateHome, "omp"), { recursive: true });
-		process.env.XDG_STATE_HOME = xdgStateHome;
-		setAgentDir(fallbackAgentDir);
 
 		const buffer = new RawSseDebugBuffer();
 		buffer.recordResponse(
@@ -67,7 +49,12 @@ describe("raw SSE report bundle", () => {
 		expect(rawSseText).toContain(": omp-debug-dropped records=");
 		expect(rawSseText).toContain("event: message_delta");
 
-		const result = await createReportBundle({ sessionFile: undefined, rawSseText });
+		const result = await createReportBundle({
+			sessionFile: undefined,
+			rawSseText,
+			reportsDir: cleanupRoot,
+			logsDir: path.join(cleanupRoot, "logs"),
+		});
 
 		expect(result.files).toContain("raw-sse.txt");
 		const archive = new Bun.Archive(await Bun.file(result.path).bytes());

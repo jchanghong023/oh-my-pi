@@ -38,28 +38,33 @@ describe("executable fallback on unlinked binary", () => {
 		expect(whichSpy).not.toHaveBeenCalled();
 	});
 
-	it("prefers original absolute launcher path over generic PATH match when executable", () => {
-		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
-		const missingPath = "/opt/homebrew/Cellar/omp/18.1.8/bin/omp";
-		const originalLauncher = "/opt/homebrew/bin/omp";
-		const otherOmpInPath = "/usr/local/bin/omp";
+	// POSIX launcher fixture: drive-less absolute paths are not fully qualified
+	// on Windows, so the launcher-preference branch under test cannot fire.
+	it.skipIf(process.platform === "win32")(
+		"prefers original absolute launcher path over generic PATH match when executable",
+		() => {
+			vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);
+			const missingPath = "/opt/homebrew/Cellar/omp/18.1.8/bin/omp";
+			const originalLauncher = "/opt/homebrew/bin/omp";
+			const otherOmpInPath = "/usr/local/bin/omp";
 
-		setProcessProp("execPath", missingPath);
-		setProcessProp("argv0", originalLauncher);
+			setProcessProp("execPath", missingPath);
+			setProcessProp("argv0", originalLauncher);
 
-		vi.spyOn(utils, "$which").mockImplementation((cmd: string) => {
-			if (cmd === "omp") return otherOmpInPath;
-			return null;
-		});
-		vi.spyOn(utils, "isExecutable").mockImplementation((p: string) => {
-			return p === originalLauncher || p === otherOmpInPath;
-		});
+			vi.spyOn(utils, "$which").mockImplementation((cmd: string) => {
+				if (cmd === "omp") return otherOmpInPath;
+				return null;
+			});
+			vi.spyOn(utils, "isExecutable").mockImplementation((p: string) => {
+				return p === originalLauncher || p === otherOmpInPath;
+			});
 
-		expect(resolveCliEntryCmd()).toEqual([originalLauncher]);
-		expect(resolveWorkerSpawnCmd("__omp_worker_test")).toEqual({
-			cmd: [originalLauncher, "__omp_worker_test"],
-		});
-	});
+			expect(resolveCliEntryCmd()).toEqual([originalLauncher]);
+			expect(resolveWorkerSpawnCmd("__omp_worker_test")).toEqual({
+				cmd: [originalLauncher, "__omp_worker_test"],
+			});
+		},
+	);
 
 	it("falls back to PATH when original absolute launcher exists but is not executable", () => {
 		vi.spyOn(utils, "isCompiledBinary").mockReturnValue(true);

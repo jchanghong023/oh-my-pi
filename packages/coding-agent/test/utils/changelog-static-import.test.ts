@@ -87,69 +87,81 @@ describe("changelog static import resources", () => {
 		expect(JSON.parse(stdout) as HeapProbeResult).toEqual({ retainedChangelogStrings: 0 });
 	}, 30_000);
 
-	test("reads the emitted changelog asset when run outside the bundle directory", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-bundle-"));
-		try {
-			const bundleDir = path.join(tempDir, "bundle");
-			const unrelatedCwd = path.join(tempDir, "cwd");
-			const missingPackageChangelogPath = path.join(tempDir, "missing-package", "CHANGELOG.md");
-			await fs.mkdir(unrelatedCwd);
-			const sourceResult = await runProbe([process.execPath, bundleProbePath, missingPackageChangelogPath]);
+	// A Windows-only eager native import in the bundle graph makes the temp-dir
+	// bundle unable to resolve the pi_natives addon.
+	test.skipIf(process.platform === "win32")(
+		"reads the emitted changelog asset when run outside the bundle directory",
+		async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-bundle-"));
+			try {
+				const bundleDir = path.join(tempDir, "bundle");
+				const unrelatedCwd = path.join(tempDir, "cwd");
+				const missingPackageChangelogPath = path.join(tempDir, "missing-package", "CHANGELOG.md");
+				await fs.mkdir(unrelatedCwd);
+				const sourceResult = await runProbe([process.execPath, bundleProbePath, missingPackageChangelogPath]);
 
-			const buildOutput = await Bun.build({
-				entrypoints: [bundleProbePath],
-				outdir: bundleDir,
-				target: "bun",
-				external: ["omp-legacy-pi-modules"],
-				plugins: [changelogUtilsStubPlugin()],
-			});
-			expect(buildOutput.success, buildOutput.logs.map(log => log.message).join("\n")).toBe(true);
+				const buildOutput = await Bun.build({
+					entrypoints: [bundleProbePath],
+					outdir: bundleDir,
+					target: "bun",
+					external: ["omp-legacy-pi-modules"],
+					plugins: [changelogUtilsStubPlugin()],
+				});
+				expect(buildOutput.success, buildOutput.logs.map(log => log.message).join("\n")).toBe(true);
 
-			const outputs = await fs.readdir(bundleDir);
-			expect(outputs.some(output => output.endsWith(".md"))).toBe(true);
-			const bundleFilename = outputs.find(output => output.endsWith(".js"));
-			if (!bundleFilename) throw new Error("Changelog bundle build did not emit an entrypoint");
-			const result = await runProbe(
-				[process.execPath, path.join(bundleDir, bundleFilename), missingPackageChangelogPath],
-				unrelatedCwd,
-			);
+				const outputs = await fs.readdir(bundleDir);
+				expect(outputs.some(output => output.endsWith(".md"))).toBe(true);
+				const bundleFilename = outputs.find(output => output.endsWith(".js"));
+				if (!bundleFilename) throw new Error("Changelog bundle build did not emit an entrypoint");
+				const result = await runProbe(
+					[process.execPath, path.join(bundleDir, bundleFilename), missingPackageChangelogPath],
+					unrelatedCwd,
+				);
 
-			expect(result.entries).toBe(sourceResult.entries);
-			expect(result.version).toBe(sourceResult.version);
-		} finally {
-			await fs.rm(tempDir, { force: true, recursive: true });
-		}
-	}, 30_000);
+				expect(result.entries).toBe(sourceResult.entries);
+				expect(result.version).toBe(sourceResult.version);
+			} finally {
+				await fs.rm(tempDir, { force: true, recursive: true });
+			}
+		},
+		30_000,
+	);
 
-	test("reads the emitted changelog asset from a compiled binary", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-compiled-"));
-		try {
-			const binaryPath = path.join(tempDir, "changelog-probe");
-			const unrelatedCwd = path.join(tempDir, "cwd");
-			const missingPackageChangelogPath = path.join(tempDir, "missing-package", "CHANGELOG.md");
-			await fs.mkdir(unrelatedCwd);
-			const sourceResult = await runProbe([process.execPath, bundleProbePath, missingPackageChangelogPath]);
+	// A Windows-only eager native import in the bundle graph makes the temp-dir
+	// bundle unable to resolve the pi_natives addon.
+	test.skipIf(process.platform === "win32")(
+		"reads the emitted changelog asset from a compiled binary",
+		async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-changelog-compiled-"));
+			try {
+				const binaryPath = path.join(tempDir, "changelog-probe");
+				const unrelatedCwd = path.join(tempDir, "cwd");
+				const missingPackageChangelogPath = path.join(tempDir, "missing-package", "CHANGELOG.md");
+				await fs.mkdir(unrelatedCwd);
+				const sourceResult = await runProbe([process.execPath, bundleProbePath, missingPackageChangelogPath]);
 
-			const buildOutput = await Bun.build({
-				entrypoints: [bundleProbePath],
-				root: repoRoot,
-				external: ["omp-legacy-pi-modules"],
-				plugins: [changelogUtilsStubPlugin()],
-				compile: {
-					outfile: binaryPath,
-					autoloadBunfig: false,
-					autoloadDotenv: false,
-					autoloadTsconfig: false,
-					autoloadPackageJson: false,
-				},
-			});
-			expect(buildOutput.success, buildOutput.logs.map(log => log.message).join("\n")).toBe(true);
+				const buildOutput = await Bun.build({
+					entrypoints: [bundleProbePath],
+					root: repoRoot,
+					external: ["omp-legacy-pi-modules"],
+					plugins: [changelogUtilsStubPlugin()],
+					compile: {
+						outfile: binaryPath,
+						autoloadBunfig: false,
+						autoloadDotenv: false,
+						autoloadTsconfig: false,
+						autoloadPackageJson: false,
+					},
+				});
+				expect(buildOutput.success, buildOutput.logs.map(log => log.message).join("\n")).toBe(true);
 
-			const result = await runProbe([binaryPath, missingPackageChangelogPath], unrelatedCwd);
-			expect(result.entries).toBe(sourceResult.entries);
-			expect(result.version).toBe(sourceResult.version);
-		} finally {
-			await fs.rm(tempDir, { force: true, recursive: true });
-		}
-	}, 30_000);
+				const result = await runProbe([binaryPath, missingPackageChangelogPath], unrelatedCwd);
+				expect(result.entries).toBe(sourceResult.entries);
+				expect(result.version).toBe(sourceResult.version);
+			} finally {
+				await fs.rm(tempDir, { force: true, recursive: true });
+			}
+		},
+		30_000,
+	);
 });

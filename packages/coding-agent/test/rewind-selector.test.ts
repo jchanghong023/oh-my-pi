@@ -278,6 +278,22 @@ describe("RewindSelectorComponent", () => {
 		expect(selected).toEqual(["u2"]);
 	});
 
+	it("finds a Chinese query inside a message without spaces", () => {
+		const selected: string[] = [];
+		const selector = new RewindSelectorComponent([entry("zh", null, userMessage("打开浏览器"))], {
+			ui: { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI,
+			cwd: "/tmp",
+			requestRender: () => {},
+			onSelect: id => selected.push(id),
+			onCancel: () => {},
+		});
+		selector.render(80);
+		for (const key of ["f", ..."浏览器"]) selector.handleInput(key);
+		expect(Bun.stripANSI(selector.render(80).join("\n"))).toContain("打开浏览器");
+		selector.handleInput(ENTER);
+		expect(selected).toEqual(["zh"]);
+	});
+
 	it("Esc leaves the filter with the match kept instead of closing the selector", () => {
 		const selected: string[] = [];
 		let cancelled = false;

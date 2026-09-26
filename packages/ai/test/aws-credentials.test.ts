@@ -39,7 +39,10 @@ const ENV_KEYS = [
 ] as const;
 
 function quoteForConfig(p: string): string {
-	if (!/[\s"]/.test(p)) return p;
+	// Outside quotes the POSIX tokenizer treats backslashes as escapes, so
+	// Windows paths must always be quoted (they contain backslashes even
+	// when they contain no spaces).
+	if (!/[\s"]/.test(p) && !(process.platform === "win32" && p.includes("\\"))) return p;
 	// Wrap in double quotes; our tokenizer preserves backslashes so Windows
 	// paths survive without further escaping.
 	return `"${p.replace(/(["])/g, "\\$1")}"`;

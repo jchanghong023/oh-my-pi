@@ -14,6 +14,7 @@ import {
 	shouldPreserveConnectedBrowserFocus,
 	waitForCdp,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import {
 	acquireBrowser,
@@ -27,6 +28,10 @@ import type { Browser, HTTPRequest, Page, Target } from "puppeteer-core";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
+const PROFILE_CHROME_AVAILABLE =
+	CHROMIUM_AVAILABLE &&
+	(process.platform !== "win32" ||
+		path.basename((await ensureChromiumExecutable()) ?? "").toLowerCase() === "chrome.exe");
 let sharedHeadless: BrowserHandle | undefined;
 
 function makeSession(): ToolSession {
@@ -92,7 +97,8 @@ async function spawnDisposableExecutable(args: string[] = []): Promise<Disposabl
 		async close() {
 			child.kill();
 			await child.exited;
-			await fs.rm(tempDir, { recursive: true, force: true });
+			// A just-killed child can hold its dir a moment longer on Windows.
+			await removeWithRetries(tempDir);
 		},
 	};
 }
@@ -314,7 +320,11 @@ describe("pickElectronTarget", () => {
 		}
 	});
 
-	test.skipIf(!CHROMIUM_AVAILABLE)(
+	// Windows hosts may resolve Edge as the Chromium executable; its borrowed-tab
+	// targeting and second-instance handling diverge from the Chrome profile
+	// isolation semantics under test (tab title comes back the new-tab page,
+	// or the open wedges for the full 30s budget).
+	test.skipIf(!PROFILE_CHROME_AVAILABLE)(
 		"keeps profile tabs isolated and never kills a borrowed Chrome on close",
 		async () => {
 			const exe = await ensureChromiumExecutable();
@@ -409,7 +419,9 @@ describe("pickElectronTarget", () => {
 		30_000,
 	);
 
-	test.skipIf(!CHROMIUM_AVAILABLE)(
+	// Windows hosts may resolve Edge, whose tab worker never finishes initializing
+	// under the aborted-navigation flow this test drives on Chrome.
+	test.skipIf(!PROFILE_CHROME_AVAILABLE)(
 		"does not retry an attached navigation failure as worker startup",
 		async () => {
 			// An earlier form raced a real navigation timeout against a hanging
@@ -488,7 +500,7 @@ describe("resolveSpawnArgs", () => {
 		expect(owned).not.toContain("--password-store=basic");
 
 		const borrowed = resolveSpawnArgs("/usr/bin/google-chrome-stable", ["--user-data-dir=/home/me/.config/chrome"]);
-		expect(borrowed).toEqual(["--user-data-dir=/home/me/.config/chrome"]);
+		expect(borrowed).toEqual([`--user-data-dir=${path.resolve("/home/me/.config/chrome")}`]);
 	});
 });
 

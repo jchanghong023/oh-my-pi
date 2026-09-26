@@ -4,14 +4,16 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { AsyncJobError, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 
 async function waitForJobEviction(manager: AsyncJobManager, jobId: string): Promise<void> {
-	const deadline = Date.now() + 2_000;
+	// Generous poll budget: the singleton bucket runs 96 files in one process
+	// and scheduler.yield() can stall for seconds under full-suite load.
+	const deadline = Date.now() + 10_000;
 	while (manager.getJob(jobId)) {
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for job eviction: ${jobId}`);
 		await scheduler.yield();
 	}
 }
 
-async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitForCondition(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (!predicate()) {
 		if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");

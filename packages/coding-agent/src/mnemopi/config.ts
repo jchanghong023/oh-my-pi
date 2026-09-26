@@ -271,7 +271,9 @@ function bankOnlyHasCwd(dbPath: string, cwd: string): boolean {
 		return false;
 	} finally {
 		try {
-			db?.close();
+			// Force-close: plain close() leaves the handle open on Windows while
+			// any prepared statement is still alive.
+			db?.close(true);
 		} catch {
 			// nothing to do — read-only handle.
 		}

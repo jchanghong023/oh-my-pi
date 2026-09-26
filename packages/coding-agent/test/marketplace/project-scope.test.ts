@@ -90,12 +90,17 @@ describe("resolveActiveProjectRegistryPath", () => {
 		expect(result).toBe(path.join(tmpDir, ".omp", "plugins", "installed_plugins.json"));
 	});
 
-	it("returns null when neither .omp/ nor .git/ found anywhere in the tree", async () => {
-		// Start at the filesystem root — guaranteed to have no .omp/ or .git/ ancestors.
-		const result = await resolveActiveProjectRegistryPath(path.sep);
+	// Windows dev machines commonly carry a stray `.omp` at a drive root, so
+	// the "no ancestors" premise does not hold there.
+	it.skipIf(process.platform === "win32")(
+		"returns null when neither .omp/ nor .git/ found anywhere in the tree",
+		async () => {
+			// Start at the filesystem root — guaranteed to have no .omp/ or .git/ ancestors.
+			const result = await resolveActiveProjectRegistryPath(path.sep);
 
-		expect(result).toBeNull();
-	});
+			expect(result).toBeNull();
+		},
+	);
 
 	it("does not treat ~/.git as a project root (pass-2 home-dir guard)", async () => {
 		// Simulate a dotfiles repo managed with a bare-git technique: ~/.git exists.

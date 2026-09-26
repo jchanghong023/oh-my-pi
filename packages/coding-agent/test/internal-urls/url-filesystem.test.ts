@@ -35,19 +35,23 @@ describe("InternalUrlFilesystem local://", () => {
 		expect((await fs.stat(localRoot)).isDirectory()).toBe(true);
 	});
 
-	it("addresses entry names that need percent-encoding, as the first segment and below", async () => {
-		const name = "we?ird #%41 a@b:1";
-		const encoded = "we%3Fird%20%23%2541%20a@b:1";
-		await fs.mkdir(path.join(localRoot, name), { recursive: true });
-		await fs.writeFile(path.join(localRoot, name, name), "x");
+	// The fixture name contains `?` and `:`, which cannot appear in Windows file names.
+	it.skipIf(process.platform === "win32")(
+		"addresses entry names that need percent-encoding, as the first segment and below",
+		async () => {
+			const name = "we?ird #%41 a@b:1";
+			const encoded = "we%3Fird%20%23%2541%20a@b:1";
+			await fs.mkdir(path.join(localRoot, name), { recursive: true });
+			await fs.writeFile(path.join(localRoot, name, name), "x");
 
-		await expect(shellFs().handle({ op: ShellFsOp.Metadata, path: `local://${encoded}` })).resolves.toEqual({
-			local: path.join(localRoot, name),
-		});
-		await expect(
-			shellFs().handle({ op: ShellFsOp.RemoveFile, path: `local://${encoded}/${encoded}` }),
-		).resolves.toEqual({ local: path.join(localRoot, name, name) });
-	});
+			await expect(shellFs().handle({ op: ShellFsOp.Metadata, path: `local://${encoded}` })).resolves.toEqual({
+				local: path.join(localRoot, name),
+			});
+			await expect(
+				shellFs().handle({ op: ShellFsOp.RemoveFile, path: `local://${encoded}/${encoded}` }),
+			).resolves.toEqual({ local: path.join(localRoot, name, name) });
+		},
+	);
 
 	it("reports a missing file as ENOENT instead of creating it", async () => {
 		const response = await shellFs().handle({ op: ShellFsOp.Open, path: "local://missing.txt", open: READ });
@@ -65,37 +69,47 @@ describe("InternalUrlFilesystem local://", () => {
 		expect(response.error?.code).toBe("ENOENT");
 	});
 
-	it("follows a symlink whose literal target is a URL while readlink keeps the link itself", async () => {
-		await fs.mkdir(localRoot, { recursive: true });
-		await fs.writeFile(path.join(localRoot, "source.txt"), "source\n");
-		const link = await shellFs().handle({
-			op: ShellFsOp.Symlink,
-			path: "local://link",
-			target: "local://source.txt",
-		});
-		expect(link).toEqual({ local: path.join(localRoot, "link") });
-		// What the native side does with that redirect: the link stores the URL verbatim.
-		await fs.symlink("local://source.txt", path.join(localRoot, "link"));
+	// Windows cannot create file symlinks without privilege, and the link's
+	// literal target here is a URL string anyway.
+	it.skipIf(process.platform === "win32")(
+		"follows a symlink whose literal target is a URL while readlink keeps the link itself",
+		async () => {
+			await fs.mkdir(localRoot, { recursive: true });
+			await fs.writeFile(path.join(localRoot, "source.txt"), "source\n");
+			const link = await shellFs().handle({
+				op: ShellFsOp.Symlink,
+				path: "local://link",
+				target: "local://source.txt",
+			});
+			expect(link).toEqual({ local: path.join(localRoot, "link") });
+			// What the native side does with that redirect: the link stores the URL verbatim.
+			await fs.symlink("local://source.txt", path.join(localRoot, "link"));
 
-		await expect(shellFs().handle({ op: ShellFsOp.Open, path: "local://link", open: READ })).resolves.toEqual({
-			local: path.join(localRoot, "source.txt"),
-		});
-		await expect(shellFs().handle({ op: ShellFsOp.ReadLink, path: "local://link" })).resolves.toEqual({
-			local: path.join(localRoot, "link"),
-		});
-		await expect(shellFs().handle({ op: ShellFsOp.Canonicalize, path: "local://link" })).resolves.toEqual({
-			path: "local://source.txt",
-		});
-	});
+			await expect(shellFs().handle({ op: ShellFsOp.Open, path: "local://link", open: READ })).resolves.toEqual({
+				local: path.join(localRoot, "source.txt"),
+			});
+			await expect(shellFs().handle({ op: ShellFsOp.ReadLink, path: "local://link" })).resolves.toEqual({
+				local: path.join(localRoot, "link"),
+			});
+			await expect(shellFs().handle({ op: ShellFsOp.Canonicalize, path: "local://link" })).resolves.toEqual({
+				path: "local://source.txt",
+			});
+		},
+	);
 
-	it("applies the link target's write policy when writing through a URL symlink", async () => {
-		await fs.mkdir(localRoot, { recursive: true });
-		await fs.symlink("omp://README.md", path.join(localRoot, "doc"));
+	// Windows cannot create file symlinks without privilege, and the link's
+	// literal target here is a URL string anyway.
+	it.skipIf(process.platform === "win32")(
+		"applies the link target's write policy when writing through a URL symlink",
+		async () => {
+			await fs.mkdir(localRoot, { recursive: true });
+			await fs.symlink("omp://README.md", path.join(localRoot, "doc"));
 
-		const response = await shellFs().handle({ op: ShellFsOp.Open, path: "local://doc", open: CREATE });
+			const response = await shellFs().handle({ op: ShellFsOp.Open, path: "local://doc", open: CREATE });
 
-		expect(response.error?.code).toBe("EROFS");
-	});
+			expect(response.error?.code).toBe("EROFS");
+		},
+	);
 
 	it("backs URLs onto host paths, including would-be paths of missing entries, without creating them", async () => {
 		await fs.mkdir(path.join(localRoot, "dir"), { recursive: true });

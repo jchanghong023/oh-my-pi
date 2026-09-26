@@ -371,7 +371,8 @@ describe("MarketplaceManager", () => {
 		fs.writeFileSync(path.join(ctx.tmpDir, "package.json"), JSON.stringify({ dependencies: { foo: "9.9.9" } }));
 		const npmLink = path.join(ctx.tmpDir, "node_modules", "foo");
 		fs.mkdirSync(path.dirname(npmLink), { recursive: true });
-		fs.symlinkSync(npmPackage, npmLink, "dir");
+		// A junction needs no symlink privilege on Windows.
+		fs.symlinkSync(npmPackage, npmLink, process.platform === "win32" ? "junction" : "dir");
 
 		const marketplaceDir = buildNamedMarketplace(path.join(ctx.tmpDir, "upper-marketplace"), "upper-market", "Foo");
 		await ctx.manager.addMarketplace(marketplaceDir);
@@ -435,7 +436,7 @@ describe("MarketplaceManager", () => {
 		fs.writeFileSync(path.join(linkedPackage, "package.json"), JSON.stringify({ name: "foo", version: "1.2.3" }));
 		const linkedLink = path.join(ctx.tmpDir, "node_modules", "foo");
 		fs.mkdirSync(path.dirname(linkedLink), { recursive: true });
-		fs.symlinkSync(linkedPackage, linkedLink, "dir");
+		fs.symlinkSync(linkedPackage, linkedLink, process.platform === "win32" ? "junction" : "dir");
 		fs.writeFileSync(
 			path.join(ctx.tmpDir, "omp-plugins.lock.json"),
 			JSON.stringify({ plugins: { foo: { version: "1.2.3", enabledFeatures: null, enabled: true } }, settings: {} }),
@@ -493,7 +494,7 @@ describe("MarketplaceManager", () => {
 		fs.writeFileSync(path.join(linkedPackage, "package.json"), JSON.stringify({ name: "shared", version: "9.9.9" }));
 		const linkedLink = path.join(projectRoot, "node_modules", "shared");
 		fs.mkdirSync(path.dirname(linkedLink), { recursive: true });
-		fs.symlinkSync(linkedPackage, linkedLink, "dir");
+		fs.symlinkSync(linkedPackage, linkedLink, process.platform === "win32" ? "junction" : "dir");
 		fs.writeFileSync(
 			path.join(projectRoot, "omp-plugins.lock.json"),
 			JSON.stringify({
@@ -715,7 +716,7 @@ describe("MarketplaceManager", () => {
 		fs.mkdirSync(path.join(localPlugin, "tools"), { recursive: true });
 		const linkPath = path.join(ctx.tmpDir, "node_modules", "hello-plugin");
 		fs.rmSync(linkPath, { recursive: true, force: true });
-		fs.symlinkSync(localPlugin, linkPath, "dir");
+		fs.symlinkSync(localPlugin, linkPath, process.platform === "win32" ? "junction" : "dir");
 
 		const spies = mockPluginManagerPaths(ctx.tmpDir);
 		try {

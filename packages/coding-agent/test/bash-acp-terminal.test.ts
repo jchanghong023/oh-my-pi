@@ -6,6 +6,10 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { encodeTerminalImage } from "@oh-my-pi/pi-coding-agent/utils/terminal-graphics";
 
+// A fixed bash shell keeps the wrap assertions cross-platform; on Windows the
+// resolvable bash is Git Bash, not /bin/bash.
+const testShellPath = process.platform === "win32" ? Bun.which("bash")! : "/bin/bash";
+
 function makeSession(bridge: ClientBridge): ToolSession {
 	return {
 		cwd: os.tmpdir(),
@@ -25,7 +29,7 @@ function makeSession(bridge: ClientBridge): ToolSession {
 			"astEdit.enabled": false,
 			"grep.enabled": false,
 			"glob.enabled": false,
-			shellPath: "/bin/bash",
+			shellPath: testShellPath,
 		}),
 		getClientBridge: () => bridge,
 	} as unknown as ToolSession;
@@ -86,7 +90,7 @@ describe("BashTool ACP terminal routing", () => {
 		// `$VAR`, `$(...)`, `source`, and POSIX quoting on Windows.
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
-		expect(params.command).toBe("/bin/bash");
+		expect(params.command).toBe(testShellPath);
 		expect(params.args).toEqual(["-l", "-c", "echo hi"]);
 
 		// The first onUpdate must carry the terminalId so the editor can embed it
@@ -154,7 +158,7 @@ describe("BashTool ACP terminal routing", () => {
 
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
-		expect(params.command).toBe("/bin/bash");
+		expect(params.command).toBe(testShellPath);
 		expect(params.args).toEqual(["-l", "-c", line]);
 		// `args` must actually be present — the bug was omitting it entirely.
 		expect(params.args).toBeDefined();

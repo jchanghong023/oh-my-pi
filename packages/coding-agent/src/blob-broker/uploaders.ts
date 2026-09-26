@@ -35,7 +35,10 @@ export function splitCommandTemplate(template: string): string[] {
 			else current += ch;
 			continue;
 		}
-		if (ch === "\\" && i + 1 < template.length) {
+		// Windows command lines treat `\` as a literal path separator (cmd.exe
+		// has no backslash escapes); only `\"` still escapes so double-quoted
+		// spans can embed quotes.
+		if (ch === "\\" && i + 1 < template.length && (process.platform !== "win32" || template[i + 1] === '"')) {
 			current += template[++i];
 			started = true;
 			continue;

@@ -49,7 +49,12 @@ describe("pending write path rendering", () => {
 			uiTheme,
 		);
 		const rendered = component?.render(120).join("\n");
-		expect(rendered).toContain(`vscode://file${path.resolve(relativePath)}`);
+		// On win32 the vscode://file form takes the posix-joined absolute path with a leading slash.
+		const expectedVscodeTarget =
+			process.platform === "win32"
+				? `vscode://file/${path.resolve(relativePath).replaceAll("\\", "/")}`
+				: `vscode://file${path.resolve(relativePath)}`;
+		expect(rendered).toContain(expectedVscodeTarget);
 	});
 
 	it("links archive members, database rows, and home paths to their files", async () => {
@@ -72,7 +77,8 @@ describe("pending write path rendering", () => {
 				.join("\n")
 				.match(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/)?.[1];
 			expect(target).toBeDefined();
-			expect(decodeURIComponent(new URL(target!).pathname)).toBe(path.resolve(containingFile));
+			// fileURLToPath yields the native path (backslash-joined on win32), matching path.resolve.
+			expect(Bun.fileURLToPath(target!)).toBe(path.resolve(containingFile));
 		}
 	});
 

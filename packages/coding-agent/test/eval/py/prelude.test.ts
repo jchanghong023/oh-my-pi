@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { $which, TempDir } from "@oh-my-pi/pi-utils";
 import { PYTHON_PRELUDE } from "../../../src/eval/py/prelude";
-const pythonPath = Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python");
+const pythonPath = Bun.env.PYTHON ?? (process.platform !== "win32" && $which("python3") ? "python3" : "python");
 
 async function runPrelude(
 	code: string,

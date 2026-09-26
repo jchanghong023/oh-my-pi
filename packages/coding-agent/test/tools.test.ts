@@ -2762,6 +2762,21 @@ function b() {
 	});
 
 	describe("search tool", () => {
+		it("reports the archive member instead of its temporary extraction path", async () => {
+			const archivePath = path.join(testDir, "search-fixture.tar");
+			const peerPath = path.join(testDir, "peer.txt");
+			fs.writeFileSync(archivePath, createTarArchive([{ path: "notes.txt", content: "archive-only needle\n" }]));
+			fs.writeFileSync(peerPath, "peer needle\n");
+			const result = await searchTool.execute("grep-archive-member", {
+				pattern: "needle",
+				path: `${archivePath}:notes.txt;${peerPath}`,
+			});
+			const output = getTextOutput(result);
+			expect(output).toContain("archive-only needle");
+			expect(output).toContain("search-fixture.tar:notes.txt");
+			expect(output).not.toContain("omp-search-archive-");
+		});
+
 		it("should include filename when searching a single file", async () => {
 			const testFile = path.join(testDir, "example.txt");
 			fs.writeFileSync(testFile, "first line\nmatch line\nlast line");

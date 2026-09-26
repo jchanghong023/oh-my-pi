@@ -44,7 +44,8 @@ describe("canonicalProjectDir permission fallback", () => {
 	it("still resolves symlinks to their real target when realpath succeeds", async () => {
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-canonical-target-"));
 		const linkDir = path.join(os.tmpdir(), `omp-canonical-link-${Date.now()}-${process.pid}`);
-		await fs.symlink(targetDir, linkDir, "dir");
+		// A junction needs no symlink privilege on Windows and realpath resolves it.
+		await fs.symlink(targetDir, linkDir, process.platform === "win32" ? "junction" : "dir");
 
 		try {
 			await expect(canonicalProjectDir(linkDir)).resolves.toBe(await fs.realpath(targetDir));

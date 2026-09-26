@@ -140,14 +140,13 @@ describe("enumeratePythonRuntimes", () => {
 
 	it("resolves a relative explicit interpreter against cwd", () => {
 		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+		// `path.sep` alone is drive-relative on Windows; resolve it so the cwd
+		// is absolute on every platform.
+		const cwd = path.resolve(path.sep, "work");
 
-		const runtime = resolveExplicitPythonRuntime(
-			path.join(".venv", "bin", "python"),
-			path.join(path.sep, "work"),
-			{},
-		);
+		const runtime = resolveExplicitPythonRuntime(path.join(".venv", "bin", "python"), cwd, {});
 
-		expect(runtime.pythonPath).toBe(path.join(path.sep, "work", ".venv", "bin", "python"));
+		expect(runtime.pythonPath).toBe(path.join(cwd, ".venv", "bin", "python"));
 	});
 
 	it("throws from resolvePythonRuntime when no interpreter can be found", () => {

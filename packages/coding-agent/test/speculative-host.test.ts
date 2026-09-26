@@ -448,78 +448,86 @@ describe("CodingAgentSpeculativeExecutionHost", () => {
 		await coordinator.close("test complete");
 	});
 
-	it("refuses a speculative read whose symlink target changed after authorization", async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-"));
-		temporaryDirectories.push(directory);
-		const outside = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-outside-"));
-		temporaryDirectories.push(outside);
-		await fs.writeFile(path.join(directory, "real.txt"), "inside content");
-		await fs.writeFile(path.join(outside, "secret.txt"), "outside secret");
-		await fs.symlink(path.join(directory, "real.txt"), path.join(directory, "link.txt"));
-		const session = createSession(directory);
-		const tool = new ReadTool(session);
-		const policy = tool.speculation.finalized;
-		if (!policy) throw new Error("read tool has no finalized speculation policy");
-		const host = new CodingAgentSpeculativeExecutionHost(session.settings, session, { hasHandlers: () => false });
-		const assessment = await policy.assess({ args: { path: "link.txt" } });
-		if (!assessment.eligible || assessment.effect.kind !== "local_read") {
-			throw new Error("expected provisional admission for the link path");
-		}
-		const context: SpeculativeOperationContext = {
-			candidateId: "swapped-link",
-			source: "direct",
-			dependencies: [],
-			tool,
-			toolCall: { type: "toolCall", id: "swapped-link", name: "read", arguments: { path: "link.txt" } },
-			args: { path: "link.txt" },
-			effect: assessment.effect,
-		};
-		await expect(host.authorize(context)).resolves.toMatchObject({ allowed: true });
-		// Repoint the link outside the workspace between authorization and execution.
-		await fs.unlink(path.join(directory, "link.txt"));
-		await fs.symlink(path.join(outside, "secret.txt"), path.join(directory, "link.txt"));
-		// The pre-execution capture (which runs after the hook gate) sees the
-		// swapped target and vetoes before anything executes — and the execution
-		// layer independently refuses the escaped target.
-		await expect(host.captureEvidence(context)).resolves.toBe(false);
-		await expect(policy.execute(context, new AbortController().signal)).rejects.toThrow(
-			"Speculative read target is unavailable",
-		);
-	});
+	// File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.
+	it.skipIf(process.platform === "win32")(
+		"refuses a speculative read whose symlink target changed after authorization",
+		async () => {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-"));
+			temporaryDirectories.push(directory);
+			const outside = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-outside-"));
+			temporaryDirectories.push(outside);
+			await fs.writeFile(path.join(directory, "real.txt"), "inside content");
+			await fs.writeFile(path.join(outside, "secret.txt"), "outside secret");
+			await fs.symlink(path.join(directory, "real.txt"), path.join(directory, "link.txt"));
+			const session = createSession(directory);
+			const tool = new ReadTool(session);
+			const policy = tool.speculation.finalized;
+			if (!policy) throw new Error("read tool has no finalized speculation policy");
+			const host = new CodingAgentSpeculativeExecutionHost(session.settings, session, { hasHandlers: () => false });
+			const assessment = await policy.assess({ args: { path: "link.txt" } });
+			if (!assessment.eligible || assessment.effect.kind !== "local_read") {
+				throw new Error("expected provisional admission for the link path");
+			}
+			const context: SpeculativeOperationContext = {
+				candidateId: "swapped-link",
+				source: "direct",
+				dependencies: [],
+				tool,
+				toolCall: { type: "toolCall", id: "swapped-link", name: "read", arguments: { path: "link.txt" } },
+				args: { path: "link.txt" },
+				effect: assessment.effect,
+			};
+			await expect(host.authorize(context)).resolves.toMatchObject({ allowed: true });
+			// Repoint the link outside the workspace between authorization and execution.
+			await fs.unlink(path.join(directory, "link.txt"));
+			await fs.symlink(path.join(outside, "secret.txt"), path.join(directory, "link.txt"));
+			// The pre-execution capture (which runs after the hook gate) sees the
+			// swapped target and vetoes before anything executes — and the execution
+			// layer independently refuses the escaped target.
+			await expect(host.captureEvidence(context)).resolves.toBe(false);
+			await expect(policy.execute(context, new AbortController().signal)).rejects.toThrow(
+				"Speculative read target is unavailable",
+			);
+		},
+	);
 
-	it("vetoes a commit when the symlink target changed after execution", async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-"));
-		temporaryDirectories.push(directory);
-		await fs.writeFile(path.join(directory, "a.txt"), "content A");
-		await fs.writeFile(path.join(directory, "b.txt"), "content B");
-		await fs.symlink(path.join(directory, "a.txt"), path.join(directory, "link.txt"));
-		const session = createSession(directory);
-		const tool = new ReadTool(session);
-		const policy = tool.speculation.finalized;
-		if (!policy) throw new Error("read tool has no finalized speculation policy");
-		const host = new CodingAgentSpeculativeExecutionHost(session.settings, session, { hasHandlers: () => false });
-		const assessment = await policy.assess({ args: { path: "link.txt" } });
-		if (!assessment.eligible || assessment.effect.kind !== "local_read") {
-			throw new Error("expected provisional admission for the link path");
-		}
-		const context: SpeculativeOperationContext = {
-			candidateId: "reswapped-link",
-			source: "direct",
-			dependencies: [],
-			tool,
-			toolCall: { type: "toolCall", id: "reswapped-link", name: "read", arguments: { path: "link.txt" } },
-			args: { path: "link.txt" },
-			effect: assessment.effect,
-		};
-		await expect(host.authorize(context)).resolves.toMatchObject({ allowed: true });
-		expect(await host.captureEvidence(context)).toBe(true);
-		const physicalOutcome = await policy.execute(context, new AbortController().signal);
-		if (physicalOutcome.kind !== "result") throw new Error("expected speculative read result");
-		// Swap to another safe in-workspace file after execution: re-authorization
-		// passes its gates, but the commit must still fail — the captured result
-		// is for bytes authoritative dispatch would never read.
-		await fs.unlink(path.join(directory, "link.txt"));
-		await fs.symlink(path.join(directory, "b.txt"), path.join(directory, "link.txt"));
-		expect(await host.validate({ ...context, physicalOutcome })).toBe(false);
-	});
+	// File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.
+	it.skipIf(process.platform === "win32")(
+		"vetoes a commit when the symlink target changed after execution",
+		async () => {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-host-"));
+			temporaryDirectories.push(directory);
+			await fs.writeFile(path.join(directory, "a.txt"), "content A");
+			await fs.writeFile(path.join(directory, "b.txt"), "content B");
+			await fs.symlink(path.join(directory, "a.txt"), path.join(directory, "link.txt"));
+			const session = createSession(directory);
+			const tool = new ReadTool(session);
+			const policy = tool.speculation.finalized;
+			if (!policy) throw new Error("read tool has no finalized speculation policy");
+			const host = new CodingAgentSpeculativeExecutionHost(session.settings, session, { hasHandlers: () => false });
+			const assessment = await policy.assess({ args: { path: "link.txt" } });
+			if (!assessment.eligible || assessment.effect.kind !== "local_read") {
+				throw new Error("expected provisional admission for the link path");
+			}
+			const context: SpeculativeOperationContext = {
+				candidateId: "reswapped-link",
+				source: "direct",
+				dependencies: [],
+				tool,
+				toolCall: { type: "toolCall", id: "reswapped-link", name: "read", arguments: { path: "link.txt" } },
+				args: { path: "link.txt" },
+				effect: assessment.effect,
+			};
+			await expect(host.authorize(context)).resolves.toMatchObject({ allowed: true });
+			expect(await host.captureEvidence(context)).toBe(true);
+			const physicalOutcome = await policy.execute(context, new AbortController().signal);
+			if (physicalOutcome.kind !== "result") throw new Error("expected speculative read result");
+			// Swap to another safe in-workspace file after execution: re-authorization
+			// passes its gates, but the commit must still fail — the captured result
+			// is for bytes authoritative dispatch would never read.
+			await fs.unlink(path.join(directory, "link.txt"));
+			await fs.symlink(path.join(directory, "b.txt"), path.join(directory, "link.txt"));
+			expect(await host.validate({ ...context, physicalOutcome })).toBe(false);
+		},
+	);
 });

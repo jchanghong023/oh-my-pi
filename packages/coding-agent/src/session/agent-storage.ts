@@ -689,7 +689,9 @@ ON CONFLICT(model_key) DO UPDATE SET
 			}
 			return imported;
 		} finally {
-			statsDb.close();
+			// Force-close releases the Windows file handle even if a prepared
+			// statement outlived the queries above.
+			statsDb.close(true);
 		}
 	}
 

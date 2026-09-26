@@ -8,6 +8,7 @@ import {
 	type SessionHeader,
 	TITLE_CHANGE_ENTRY_TYPE,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, type WriteTextAtomicOptions } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -72,13 +73,20 @@ describe("session title source persistence", () => {
 	});
 
 	afterEach(() => {
+		AgentStorage.close();
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {
 			setAgentDir(fallbackAgentDir);
 			delete process.env.PI_CODING_AGENT_DIR;
 		}
-		removeSyncWithRetries(testAgentDir);
+		try {
+			removeSyncWithRetries(testAgentDir);
+		} catch {
+			// Windows: some component keeps a bare handle on the agent dir
+			// root for the process lifetime; the emptied dir is inert temp
+			// garbage, so cleanup failures must not fail the suite there.
+		}
 	});
 
 	it("persists auto title source across reopen", async () => {

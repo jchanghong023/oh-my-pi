@@ -281,7 +281,12 @@ describe("extensions discovery", () => {
 				},
 			}),
 		);
-		fs.symlinkSync(packageDir, path.join(extensionsDir, "linked-package"), "dir");
+		// A junction needs no symlink privilege on Windows.
+		fs.symlinkSync(
+			packageDir,
+			path.join(extensionsDir, "linked-package"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 
 		const result = await discoverForTest();
 
@@ -294,7 +299,11 @@ describe("extensions discovery", () => {
 		const packageDir = path.join(tempDir.path(), "linked-index-ts");
 		fs.mkdirSync(packageDir);
 		fs.writeFileSync(path.join(packageDir, "index.ts"), extensionCode);
-		fs.symlinkSync(packageDir, path.join(extensionsDir, "linked-index-ts"), "dir");
+		fs.symlinkSync(
+			packageDir,
+			path.join(extensionsDir, "linked-index-ts"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 
 		const result = await discoverForTest();
 
@@ -307,7 +316,11 @@ describe("extensions discovery", () => {
 		const packageDir = path.join(tempDir.path(), "linked-index-js");
 		fs.mkdirSync(packageDir);
 		fs.writeFileSync(path.join(packageDir, "index.js"), extensionCode);
-		fs.symlinkSync(packageDir, path.join(extensionsDir, "linked-index-js"), "dir");
+		fs.symlinkSync(
+			packageDir,
+			path.join(extensionsDir, "linked-index-js"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 
 		const result = await discoverForTest();
 
@@ -435,7 +448,11 @@ describe("extensions discovery", () => {
 		const realDir = path.join(tempDir.path(), "external", "shared-ext");
 		fs.mkdirSync(realDir, { recursive: true });
 		fs.writeFileSync(path.join(realDir, "index.ts"), extensionCode);
-		fs.symlinkSync(realDir, path.join(extensionsDir, "linked-ext"), "dir");
+		fs.symlinkSync(
+			realDir,
+			path.join(extensionsDir, "linked-ext"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 
 		const result = await discoverForTest();
 
@@ -455,7 +472,7 @@ describe("extensions discovery", () => {
 			path.join(realDir, "package.json"),
 			JSON.stringify({ name: "ctk", omp: { extensions: ["./index.ts"] } }),
 		);
-		fs.symlinkSync(realDir, path.join(extensionsDir, "ctk"), "dir");
+		fs.symlinkSync(realDir, path.join(extensionsDir, "ctk"), process.platform === "win32" ? "junction" : "dir");
 
 		const result = await discoverForTest();
 
@@ -467,7 +484,8 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].tools.has("ctk-tool")).toBe(true);
 	});
 
-	it("discovers a symlinked extension file", async () => {
+	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
+	it.skipIf(process.platform === "win32")("discovers a symlinked extension file", async () => {
 		// Symlinked *files* resolve through the native file-type filter; guards that
 		// the directory fallback does not regress the file case.
 		const realFile = path.join(tempDir.path(), "external", "shared.ts");
@@ -486,7 +504,12 @@ describe("extensions discovery", () => {
 		// A profile symlink pointing at a since-deleted shared extension. The fallback
 		// reads the (missing) target, gets [], and must yield no extension and no
 		// error rather than throwing.
-		fs.symlinkSync(path.join(tempDir.path(), "external", "gone"), path.join(extensionsDir, "broken"), "dir");
+		// A junction to a missing absolute target stays dangling on Windows.
+		fs.symlinkSync(
+			path.join(tempDir.path(), "external", "gone"),
+			path.join(extensionsDir, "broken"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 
 		const result = await discoverForTest();
 
@@ -502,7 +525,7 @@ describe("extensions discovery", () => {
 		const realDir = path.join(tempDir.path(), "external", "weird");
 		fs.mkdirSync(realDir, { recursive: true });
 		fs.writeFileSync(path.join(realDir, "index.ts"), extensionCode);
-		fs.symlinkSync(realDir, path.join(extensionsDir, "weird.ts"), "dir");
+		fs.symlinkSync(realDir, path.join(extensionsDir, "weird.ts"), process.platform === "win32" ? "junction" : "dir");
 
 		const result = await discoverForTest([], true);
 

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import { closeAllSqliteCredentialStoresForTests } from "@oh-my-pi/pi-ai";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { runSearchCommand } from "../../../src/cli/web-search-cli";
 
@@ -66,6 +69,11 @@ afterEach(async () => {
 	restoreEnv("PI_PROFILE", originalPiProfile);
 	__resetDirsFromEnvForTests();
 	if (tempAgentDir) {
+		// runSearchCommand opens agent.db, models.db, and the credential store
+		// under tempAgentDir; Windows keeps them locked until each is closed.
+		AgentStorage.close();
+		closeAllSqliteCredentialStoresForTests();
+		closeSharedModelCache();
 		await tempAgentDir.remove();
 		tempAgentDir = undefined;
 	}

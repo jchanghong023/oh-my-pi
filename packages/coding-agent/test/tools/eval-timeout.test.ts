@@ -75,7 +75,8 @@ describe("EvalTool timeout semantics", () => {
 		const result = await tool.execute("call-worker-exit", {
 			language: "js",
 			code: "process.exit(0);",
-			timeout: 1,
+			// Windows spawn+exit detection can exceed 1s under full-suite load.
+			timeout: process.platform === "win32" ? 5 : 1,
 		});
 
 		const text = result.content

@@ -364,11 +364,8 @@ fn is_within(path: &Path, base: &Path) -> bool {
 }
 
 fn io_error_message(error: &io::Error) -> String {
-	let mut message = error.to_string();
-	if let Some(index) = message.find(" (os error ") {
-		message.truncate(index);
-	}
-	message
+	// Locale-independent `strerror` wording, not the OS-rendered message.
+	crate::host::normalized_io_message(error)
 }
 
 /// Creates the `realpath` builtin registration.

@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, type CredentialDisabledEvent, getOAuthProviders } from "@oh-my-pi/pi-ai";
 import * as oauthUtils from "@oh-my-pi/pi-ai/oauth";
+import { closeSharedModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Extension, ExtensionError, ExtensionFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
@@ -11,6 +12,7 @@ import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensi
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "@oh-my-pi/pi-coding-agent/session/credential-disabled-notice";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -80,6 +82,18 @@ const initializeRunnerForTest = (runner: ExtensionRunner | undefined): void => {
 
 describe("createAgentSession credential_disabled subscription", () => {
 	const tempDirs: string[] = [];
+	// Every test opens AuthStorage directly on its temp agent.db; Windows
+	// cannot delete an open file, so track and close them all in afterEach.
+	const createdAuthStorages: AuthStorage[] = [];
+	const originalAuthStorageCreate = AuthStorage.create;
+
+	beforeEach(() => {
+		vi.spyOn(AuthStorage, "create").mockImplementation(async (...args: Parameters<typeof AuthStorage.create>) => {
+			const storage = await originalAuthStorageCreate(...args);
+			createdAuthStorages.push(storage);
+			return storage;
+		});
+	});
 
 	const makeDirs = (label: string): SessionDirs => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-credential-disabled-${label}-${Snowflake.next()}-`));
@@ -153,6 +167,10 @@ describe("createAgentSession credential_disabled subscription", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		// Release the temp agent.db handles before removing the dirs.
+		for (const storage of createdAuthStorages.splice(0)) storage.close();
+		AgentStorage.close();
+		closeSharedModelCache();
 		for (const dir of tempDirs.splice(0)) {
 			removeSyncWithRetries(dir);
 		}

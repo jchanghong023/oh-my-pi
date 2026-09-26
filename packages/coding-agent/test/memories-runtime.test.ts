@@ -35,6 +35,8 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	return { promise, resolve };
 }
 async function makeTempDir(prefix: string): Promise<string> {
+	// The memory root embeds the encoded cwd, doubling the fixture path length;
+	// keep prefixes short so consolidated outputs stay under Windows MAX_PATH.
 	const base = sharedRoot?.path() ?? os.tmpdir();
 	const dir = path.join(base, `${prefix}-${Snowflake.next()}`);
 	await fs.mkdir(dir, { recursive: true });
@@ -60,7 +62,7 @@ function createModelRegistry(model: Model): any {
 }
 
 async function createFixture(overrides?: Partial<Record<string, unknown>>): Promise<SessionFixture> {
-	const agentDir = await makeTempDir("memories-runtime-agent");
+	const agentDir = await makeTempDir("mem-rt-agent");
 	const sessionDir = path.join(agentDir, "sessions");
 	await fs.mkdir(sessionDir, { recursive: true });
 	const sessionFile = path.join(sessionDir, "current-session.jsonl");
@@ -115,7 +117,7 @@ async function settle(promise: Promise<void>, label: string, timeoutMs = 3000): 
 }
 
 beforeAll(async () => {
-	sharedRoot = await TempDir.create(`@memories-runtime-${Snowflake.next()}`);
+	sharedRoot = await TempDir.create("mem-rt");
 });
 
 afterAll(async () => {
@@ -448,7 +450,7 @@ describe("buildMemoryToolDeveloperInstructions", () => {
 	});
 
 	test("returns undefined for missing or empty summaries", async () => {
-		const agentDir = await makeTempDir("memories-runtime-instructions");
+		const agentDir = await makeTempDir("mem-rt-instr");
 		const settings = Settings.isolated({ "memory.backend": "local" });
 
 		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings)).toBeUndefined();
@@ -460,7 +462,7 @@ describe("buildMemoryToolDeveloperInstructions", () => {
 	});
 
 	test("renders payload with truncation for non-empty summary", async () => {
-		const agentDir = await makeTempDir("memories-runtime-instructions");
+		const agentDir = await makeTempDir("mem-rt-instr");
 		const settings = Settings.isolated({
 			"memory.backend": "local",
 			"memories.summaryInjectionTokenLimit": 8,

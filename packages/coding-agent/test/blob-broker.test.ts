@@ -336,7 +336,13 @@ describe("uploaders", () => {
 	it("splits command templates with quotes and substitutes after splitting", () => {
 		expect(splitCommandTemplate(`pasta -b -f {file}`)).toEqual(["pasta", "-b", "-f", "{file}"]);
 		expect(splitCommandTemplate(`up --name "two words" '{file}'`)).toEqual(["up", "--name", "two words", "{file}"]);
-		expect(splitCommandTemplate(`a\\ b c`)).toEqual(["a b", "c"]);
+		// Backslash escaping is POSIX shell semantics; on Windows `\` stays a
+		// literal path separator.
+		if (process.platform === "win32") {
+			expect(splitCommandTemplate(`a\\ b c`)).toEqual(["a\\", "b", "c"]);
+		} else {
+			expect(splitCommandTemplate(`a\\ b c`)).toEqual(["a b", "c"]);
+		}
 	});
 
 	it("extracts the last url on stdout and trims trailing punctuation", () => {
@@ -345,15 +351,24 @@ describe("uploaders", () => {
 	});
 
 	it("runs a command uploader end to end against a stub binary", async () => {
-		const stub = path.join(os.tmpdir(), `omp-test-uploader-${process.pid}.sh`);
-		await Bun.write(
-			stub,
-			`#!/bin/sh\ntest -s "$2" || exit 3\necho "uploaded $2"\necho "https://files.example/abc.$3"\n`,
-		);
-		await fs.promises.chmod(stub, 0o755);
-		cleanups.push(() => void fs.promises.rm(stub, { force: true }));
-
-		const uploader = createCommandUploader(`${stub} --x {file} {ext}`);
+		// The POSIX stub is a #!/bin/sh script; Windows runs the same logic via
+		// an inline `bun -e` stub (bun -e argv: [bun, {file}, {ext}]).
+		const template =
+			process.platform === "win32"
+				? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+						"const [file, ext] = process.argv.slice(1); if (!(await Bun.file(file).size)) process.exit(3); console.log('uploaded ' + file); console.log('https://files.example/abc.' + ext);",
+					)} {file} {ext}`
+				: await (async () => {
+						const stub = path.join(os.tmpdir(), `omp-test-uploader-${process.pid}.sh`);
+						await Bun.write(
+							stub,
+							`#!/bin/sh\ntest -s "$2" || exit 3\necho "uploaded $2"\necho "https://files.example/abc.$3"\n`,
+						);
+						await fs.promises.chmod(stub, 0o755);
+						cleanups.push(() => void fs.promises.rm(stub, { force: true }));
+						return `${stub} --x {file} {ext}`;
+					})();
+		const uploader = createCommandUploader(template);
 		const publication = await uploader.upload({
 			bytes: new Uint8Array(Buffer.from("payload")),
 			mimeType: "image/png",

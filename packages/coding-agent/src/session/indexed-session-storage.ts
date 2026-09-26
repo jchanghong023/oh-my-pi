@@ -251,14 +251,18 @@ export class IndexedSessionStorage implements SessionStorage {
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
-		const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+		// Callers and remote indexes may spell the same Windows path with either
+		// separator. Compare normalized spellings but return the stored key.
+		const normalizedDir = process.platform === "win32" ? dir.replaceAll("\\", "/") : dir;
+		const prefix = normalizedDir.endsWith("/") ? normalizedDir : `${normalizedDir}/`;
 		const out: string[] = [];
-		for (const path of this.#index.keys()) {
-			if (!path.startsWith(prefix)) continue;
-			const name = path.slice(prefix.length);
+		for (const p of this.#index.keys()) {
+			const normalizedPath = process.platform === "win32" ? p.replaceAll("\\", "/") : p;
+			if (!normalizedPath.startsWith(prefix)) continue;
+			const name = normalizedPath.slice(prefix.length);
 			if (name.includes("/") || name.includes("\\")) continue;
 			if (!matchesGlob(name, pattern)) continue;
-			out.push(path);
+			out.push(p);
 		}
 		return out;
 	}

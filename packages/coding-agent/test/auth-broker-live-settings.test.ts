@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { type AuthBrokerServerHandle, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAuthStorageSettingsSync } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -53,6 +54,9 @@ describe("auth broker settings take effect live", () => {
 			const value = savedEnv[key];
 			if (value !== undefined) process.env[key] = value;
 		}
+		// Settings.loadIsolated opens AgentStorage's agent.db under tempDir;
+		// Windows keeps the sqlite files locked until it is closed.
+		AgentStorage.close();
 		tempDir.removeSync();
 	});
 

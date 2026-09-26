@@ -37,6 +37,9 @@ async function repository() {
 	await git(root, "config", "core.autocrlf", "false");
 	await git(root, "config", "user.name", "Native Test");
 	await git(root, "config", "user.email", "native@example.test");
+	// Native patches match worktree bytes; a host `core.autocrlf=true` would
+	// smudge `git restore` output to CRLF and break the preimage comparison.
+	await git(root, "config", "core.autocrlf", "false");
 	await writeFile(join(root, "tracked.txt"), "one\ntwo\n");
 	await git(root, "add", "tracked.txt");
 	await git(root, "commit", "-m", "initial");

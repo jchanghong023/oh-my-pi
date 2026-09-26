@@ -106,7 +106,13 @@ description: Skill loaded through a symlink.
 Loaded via symbolic link.
 `,
 		);
-		fs.symlinkSync(externalSkillDir, path.join(path.dirname(skillsDir), "symlinked-skill-link"), "dir");
+		// A junction needs no privilege on Windows and still reads back as a
+		// symbolic link, so discovery-through-a-link stays exercised there.
+		fs.symlinkSync(
+			externalSkillDir,
+			path.join(path.dirname(skillsDir), "symlinked-skill-link"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
 	});
 
 	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));

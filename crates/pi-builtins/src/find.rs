@@ -5302,6 +5302,9 @@ mod tests {
 	#[test]
 	fn regex_full_match_prefers_longest_alternative() {
 		let (_dir, root) = fixture();
+		// Verbatim display paths (canonicalized roots on Windows) keep the
+		// native separator, so the alternation accepts both spellings while
+		// still requiring a full-path match.
 		let (code, capture) = run(
 			&root,
 			&[
@@ -5309,7 +5312,7 @@ mod tests {
 				"-regextype".into(),
 				"posix-extended".into(),
 				"-regex".into(),
-				r".*/c|.*/c\.rs".into(),
+				r".*[/\\]c|.*[/\\]c\.rs".into(),
 			],
 		);
 		assert_eq!(code, 0, "stderr: {}", capture.err());

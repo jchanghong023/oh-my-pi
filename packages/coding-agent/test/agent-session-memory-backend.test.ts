@@ -281,7 +281,9 @@ describe("AgentSession memory backend lifecycle", () => {
 					)
 					.all();
 			} finally {
-				db.close();
+				// Force-close: plain close() leaves the handle open on Windows while
+				// any prepared statement is still alive.
+				db.close(true);
 			}
 		};
 		expect(transcriptRows(sourceDbPath)).toEqual([]);
@@ -377,7 +379,9 @@ describe("AgentSession memory backend lifecycle", () => {
 						db.query("SELECT content FROM working_memory WHERE source = 'coding-agent-retain'").all(),
 					).toEqual([{ content: "The destination project deploys from its release branch." }]);
 				} finally {
-					db.close();
+					// Force-close: plain close() leaves the handle open on Windows while
+					// any prepared statement is still alive.
+					db.close(true);
 				}
 			} finally {
 				setProjectDir(originalProjectDir);

@@ -9,6 +9,9 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { resolveResumableSession } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { stripOuterDoubleQuotes } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 
 // -- helpers ----------------------------------------------------------------
 
@@ -83,7 +86,12 @@ describe("SessionManager.moveTo", () => {
 			setAgentDir(fallbackAgentDir);
 			delete process.env.PI_CODING_AGENT_DIR;
 		}
-		await fsp.rm(testAgentDir, { recursive: true, force: true });
+		// setSessionName journals into the process-wide history.db (history
+		// storage plus the session-index's own connection); Windows keeps the
+		// sqlite files locked until both are closed.
+		HistoryStorage.close();
+		resetSessionIndexForTests();
+		await removeWithRetries(testAgentDir);
 	});
 
 	it("moves session file and updates header cwd (baseline)", async () => {
@@ -883,7 +891,9 @@ describe("SessionManager.moveTo", () => {
 		expect(await fsp.readdir(awayArtifactsDir)).toEqual([`${id}.bash.log`]);
 	});
 
-	it("does not merge through a symlink on either side", async () => {
+	// Junctions do not surface as symlinks to lstat, so the symlink rejection
+	// path cannot be exercised without symlink privilege (Developer Mode).
+	it.skipIf(process.platform === "win32")("does not merge through a symlink on either side", async () => {
 		// A symlink where an artifacts directory should be would make the merge
 		// move files into, or out of, whatever it points at. That is a
 		// relocation failure, not a merge: the move fails and the session stays

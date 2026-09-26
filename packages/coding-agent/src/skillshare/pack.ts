@@ -346,6 +346,11 @@ export async function packSkill(dir: string): Promise<PackResult> {
 	const secrets: SecretFinding[] = [];
 	for (const file of state.files) {
 		const content = await Bun.file(file.absolute).bytes();
+		// Windows does not preserve POSIX execute bits. A shebang in scripts/
+		// still declares an executable when the package is installed on POSIX.
+		if (process.platform === "win32" && file.path.startsWith("scripts/") && content[0] === 35 && content[1] === 33) {
+			file.executable = true;
+		}
 		entries.push({ path: file.path, content, executable: file.executable });
 		scanSecrets(file.path, content, secrets);
 	}

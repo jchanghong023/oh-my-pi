@@ -260,7 +260,9 @@ impl PathPolicy {
 	}
 
 	/// Whether hashline tag recovery may rebind `authored` onto `recovered`.
-	/// Only filesystem paths rebind; URL-shaped targets never do.
+	/// Only filesystem paths rebind; URL-shaped targets never do. Both sides
+	/// compare in plain spelling: a host-supplied cwd may carry the Windows
+	/// verbatim prefix that snapshot keys never do.
 	pub fn allow_tag_path_recovery(&self, authored: &str, recovered: &Path) -> bool {
 		if !matches!(self.address(unwrap_hashline_header_path(authored)), Address::Path) {
 			return false;
@@ -714,13 +716,14 @@ mod tests {
 		assert_eq!(p.resolve("/", &urls).unwrap().absolute, tmp.path());
 		assert_eq!(p.resolve("@~/x", &urls).unwrap().absolute, tmp.path().join("home/x"));
 		assert_eq!(p.resolve(":./x", &urls).unwrap().absolute, tmp.path().join("./x"));
-		// The file URL's `/tmp/...` path maps to a POSIX root; on Windows it
-		// resolves onto the current drive instead (`C:\tmp\...`).
-		#[cfg(unix)]
-		assert_eq!(
-			p.resolve("file:///tmp/a%20b", &urls).unwrap().absolute,
+		// The decoded `/tmp/a b` is root-relative: absolute on POSIX, while on
+		// Windows a root without a drive anchors to the cwd's drive.
+		let decoded = if cfg!(windows) {
+			tmp.path().join("/tmp/a b")
+		} else {
 			PathBuf::from("/tmp/a b")
-		);
+		};
+		assert_eq!(p.resolve("file:///tmp/a%20b", &urls).unwrap().absolute, decoded);
 		// Scheme-colon names without a slash, Windows drives, and `./`-prefixed
 		// URI-shaped names are plain paths.
 		assert_eq!(p.resolve("sbx:x", &urls).unwrap().absolute, tmp.path().join("sbx:x"));

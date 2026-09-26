@@ -249,26 +249,34 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("npm");
 	});
 
-	it("uses binary update when a plain file in the npm global bin dir is the standalone binary, not an npm symlink", () => {
-		// Regression: with `npm prefix -g` pointed at the installer's default
-		// (~/.local), directory containment alone misclassified the standalone
-		// binary as npm-managed, so `npm install -g` failed with EEXIST refusing
-		// to overwrite the existing executable.
-		const method = resolveUpdateMethodForTest("/home/u/.local/bin/omp", undefined, {
-			npmBinDir: "/home/u/.local/bin",
-			ompIsRegularFile: true,
-		});
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"uses binary update when a plain file in the npm global bin dir is the standalone binary, not an npm symlink",
+		() => {
+			// Regression: with `npm prefix -g` pointed at the installer's default
+			// (~/.local), directory containment alone misclassified the standalone
+			// binary as npm-managed, so `npm install -g` failed with EEXIST refusing
+			// to overwrite the existing executable.
+			const method = resolveUpdateMethodForTest("/home/u/.local/bin/omp", undefined, {
+				npmBinDir: "/home/u/.local/bin",
+				ompIsRegularFile: true,
+			});
 
-		expect(method).toBe("binary");
-	});
+			expect(method).toBe("binary");
+		},
+	);
 
-	it("uses binary update when a plain file in the bun global bin dir is the standalone binary", () => {
-		const method = resolveUpdateMethodForTest("/home/u/.local/bin/omp", "/home/u/.local/bin", {
-			ompIsRegularFile: true,
-		});
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"uses binary update when a plain file in the bun global bin dir is the standalone binary",
+		() => {
+			const method = resolveUpdateMethodForTest("/home/u/.local/bin/omp", "/home/u/.local/bin", {
+				ompIsRegularFile: true,
+			});
 
-		expect(method).toBe("binary");
-	});
+			expect(method).toBe("binary");
+		},
+	);
 
 	it("keeps bun update for regular-file entries in the bun global bin dir on Windows, where bun writes .exe shims", () => {
 		// On Windows a bun-managed global install is a regular-file .exe
@@ -310,54 +318,63 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("npm");
 	});
 
-	it("updates the standalone binary behind a foreign npm-bin alias without replacing the alias", async () => {
-		const dir = await makeTempDir();
-		const npmBinDir = path.join(dir, ".npm-global", "bin");
-		const standalonePath = path.join(dir, ".local", "bin", "omp");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await Bun.write(standalonePath, "binary");
-		await fs.symlink(standalonePath, aliasPath);
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"updates the standalone binary behind a foreign npm-bin alias without replacing the alias",
+		async () => {
+			const dir = await makeTempDir();
+			const npmBinDir = path.join(dir, ".npm-global", "bin");
+			const standalonePath = path.join(dir, ".local", "bin", "omp");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await Bun.write(standalonePath, "binary");
+			await fs.symlink(standalonePath, aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: true,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: true,
+				npmBinDir,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: standalonePath,
-			replacesSymlink: false,
-			validateExistingTarget: true,
-		});
-		expect(await fs.readlink(aliasPath)).toBe(standalonePath);
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: standalonePath,
+				replacesSymlink: false,
+				validateExistingTarget: true,
+			});
+			expect(await fs.readlink(aliasPath)).toBe(standalonePath);
+		},
+	);
 
-	it("keeps an npm-linked checkout under npm management instead of overwriting its resolved script", async () => {
-		const dir = await makeTempDir();
-		const npmPrefix = path.join(dir, ".npm-global");
-		const npmBinDir = path.join(npmPrefix, "bin");
-		const packagePath = path.join(npmPrefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
-		const checkoutPath = path.join(dir, "checkout");
-		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(packagePath), { recursive: true });
-		await Bun.write(checkoutCli, "linked checkout");
-		await fs.symlink(checkoutPath, packagePath, "junction");
-		await fs.symlink(path.relative(npmBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"keeps an npm-linked checkout under npm management instead of overwriting its resolved script",
+		async () => {
+			const dir = await makeTempDir();
+			const npmPrefix = path.join(dir, ".npm-global");
+			const npmBinDir = path.join(npmPrefix, "bin");
+			const packagePath = path.join(npmPrefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
+			const checkoutPath = path.join(dir, "checkout");
+			const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(packagePath), { recursive: true });
+			await Bun.write(checkoutCli, "linked checkout");
+			await fs.symlink(checkoutPath, packagePath, "junction");
+			await fs.symlink(path.relative(npmBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: true,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: true,
+				npmBinDir,
+			});
 
-		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
-		expect(target).toEqual({ method: "npm", path: aliasPath });
-		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
-	});
+			expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+			expect(target).toEqual({ method: "npm", path: aliasPath });
+			expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
+		},
+	);
 
-	it("treats a Bun-bin alias into ~/.bun/custom as foreign", async () => {
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")("treats a Bun-bin alias into ~/.bun/custom as foreign", async () => {
 		const dir = await makeTempDir();
 		const bunDir = path.join(dir, ".bun");
 		const bunBinDir = path.join(bunDir, "bin");
@@ -379,34 +396,38 @@ describe("update-cli install target detection", () => {
 		});
 	});
 
-	it("resolves a foreign symlink to its real binary on a binary-only release instead of clobbering the launcher", async () => {
-		// Admin shared-install layout: a non-manager symlink in PATH points into
-		// a shared install dir. On a binary-only release the target must still be
-		// the resolved binary, not the launcher — otherwise the update writes
-		// beside a root-owned symlink (EACCES) or replaces it with a split-brain
-		// copy that shadows the shared install (#8732).
-		const dir = await makeTempDir();
-		const sharedBinDir = path.join(dir, "opt", "omp", "bin");
-		const standalonePath = path.join(sharedBinDir, "omp");
-		const launcherDir = path.join(dir, "usr", "local", "bin");
-		const launcherPath = path.join(launcherDir, "omp");
-		await fs.mkdir(sharedBinDir, { recursive: true });
-		await fs.mkdir(launcherDir, { recursive: true });
-		await Bun.write(standalonePath, "binary");
-		await fs.symlink(standalonePath, launcherPath);
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"resolves a foreign symlink to its real binary on a binary-only release instead of clobbering the launcher",
+		async () => {
+			// Admin shared-install layout: a non-manager symlink in PATH points into
+			// a shared install dir. On a binary-only release the target must still be
+			// the resolved binary, not the launcher — otherwise the update writes
+			// beside a root-owned symlink (EACCES) or replaces it with a split-brain
+			// copy that shadows the shared install (#8732).
+			const dir = await makeTempDir();
+			const sharedBinDir = path.join(dir, "opt", "omp", "bin");
+			const standalonePath = path.join(sharedBinDir, "omp");
+			const launcherDir = path.join(dir, "usr", "local", "bin");
+			const launcherPath = path.join(launcherDir, "omp");
+			await fs.mkdir(sharedBinDir, { recursive: true });
+			await fs.mkdir(launcherDir, { recursive: true });
+			await Bun.write(standalonePath, "binary");
+			await fs.symlink(standalonePath, launcherPath);
 
-		const target = resolveUpdateTargetFromPath(launcherPath, undefined, {
-			allowPackageManagers: false,
-		});
+			const target = resolveUpdateTargetFromPath(launcherPath, undefined, {
+				allowPackageManagers: false,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: standalonePath,
-			replacesSymlink: false,
-			validateExistingTarget: true,
-		});
-		expect(await fs.readlink(launcherPath)).toBe(standalonePath);
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: standalonePath,
+				replacesSymlink: false,
+				validateExistingTarget: true,
+			});
+			expect(await fs.readlink(launcherPath)).toBe(standalonePath);
+		},
+	);
 
 	it.skipIf(process.platform === "win32")(
 		"refuses to overwrite a shared shebang dispatcher behind a foreign symlink",
@@ -460,56 +481,64 @@ describe("update-cli install target detection", () => {
 		},
 	);
 
-	it("takes over a package-manager launcher in place on a binary-only release", async () => {
-		// A bun/npm-managed launcher symlinks into the manager's node_modules.
-		// A forced binary release cannot route through the manager, so the
-		// launcher is deliberately replaced in place, keeping the PATH entry live.
-		const dir = await makeTempDir();
-		const npmPrefix = path.join(dir, ".npm-global");
-		const npmBinDir = path.join(npmPrefix, "bin");
-		const managedBinary = path.join(npmPrefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent", "omp");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(managedBinary), { recursive: true });
-		await Bun.write(managedBinary, "binary");
-		await fs.symlink(managedBinary, aliasPath);
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"takes over a package-manager launcher in place on a binary-only release",
+		async () => {
+			// A bun/npm-managed launcher symlinks into the manager's node_modules.
+			// A forced binary release cannot route through the manager, so the
+			// launcher is deliberately replaced in place, keeping the PATH entry live.
+			const dir = await makeTempDir();
+			const npmPrefix = path.join(dir, ".npm-global");
+			const npmBinDir = path.join(npmPrefix, "bin");
+			const managedBinary = path.join(npmPrefix, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent", "omp");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(managedBinary), { recursive: true });
+			await Bun.write(managedBinary, "binary");
+			await fs.symlink(managedBinary, aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: false,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: false,
+				npmBinDir,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: aliasPath,
-			replacesSymlink: true,
-			validateExistingTarget: false,
-		});
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: aliasPath,
+				replacesSymlink: true,
+				validateExistingTarget: false,
+			});
+		},
+	);
 
-	it("keeps a split-root Bun-linked checkout under Bun management instead of overwriting its script", async () => {
-		const dir = await makeTempDir();
-		const bunBinDir = path.join(dir, "bun-bin");
-		const bunGlobalDir = path.join(dir, "bun-global");
-		const packagePath = path.join(bunGlobalDir, "node_modules", "@oh-my-pi", "pi-coding-agent");
-		const checkoutPath = path.join(dir, "checkout");
-		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
-		const aliasPath = path.join(bunBinDir, "omp");
-		await fs.mkdir(bunBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(packagePath), { recursive: true });
-		await Bun.write(checkoutCli, "linked checkout");
-		await fs.symlink(checkoutPath, packagePath, "junction");
-		await fs.symlink(path.relative(bunBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"keeps a split-root Bun-linked checkout under Bun management instead of overwriting its script",
+		async () => {
+			const dir = await makeTempDir();
+			const bunBinDir = path.join(dir, "bun-bin");
+			const bunGlobalDir = path.join(dir, "bun-global");
+			const packagePath = path.join(bunGlobalDir, "node_modules", "@oh-my-pi", "pi-coding-agent");
+			const checkoutPath = path.join(dir, "checkout");
+			const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+			const aliasPath = path.join(bunBinDir, "omp");
+			await fs.mkdir(bunBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(packagePath), { recursive: true });
+			await Bun.write(checkoutCli, "linked checkout");
+			await fs.symlink(checkoutPath, packagePath, "junction");
+			await fs.symlink(path.relative(bunBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
-			allowPackageManagers: true,
-			bunGlobalDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
+				allowPackageManagers: true,
+				bunGlobalDir,
+			});
 
-		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
-		expect(target).toEqual({ method: "bun", path: aliasPath });
-		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
-	});
+			expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+			expect(target).toEqual({ method: "bun", path: aliasPath });
+			expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
+		},
+	);
 
 	it("uses binary update when prioritized omp is outside bun global bin", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.local/bin/omp", "/Users/test/.bun/bin");
@@ -523,21 +552,25 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("binary");
 	});
 
-	it("uses Homebrew update when prioritized omp resolves into the Homebrew formula", async () => {
-		const dir = await makeTempDir();
-		const prefix = path.join(dir, "opt", "omp");
-		const linkedBin = path.join(dir, "bin");
-		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
-		await fs.mkdir(linkedBin, { recursive: true });
-		await Bun.write(path.join(prefix, "bin", "omp"), "binary");
-		await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"uses Homebrew update when prioritized omp resolves into the Homebrew formula",
+		async () => {
+			const dir = await makeTempDir();
+			const prefix = path.join(dir, "opt", "omp");
+			const linkedBin = path.join(dir, "bin");
+			await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
+			await fs.mkdir(linkedBin, { recursive: true });
+			await Bun.write(path.join(prefix, "bin", "omp"), "binary");
+			await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
 
-		const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
-			homebrewPrefix: prefix,
-		});
+			const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
+				homebrewPrefix: prefix,
+			});
 
-		expect(method).toBe("brew");
-	});
+			expect(method).toBe("brew");
+		},
+	);
 
 	it("uses mise update when prioritized omp is in an active mise bin path", () => {
 		const method = resolveUpdateMethodForTest(
@@ -775,13 +808,17 @@ describe("migrateRenamedInstall transaction", () => {
 		expect(logs.some(line => line.includes("could not remove the old"))).toBe(true);
 	});
 
-	it("aborts with a recovery hint when verification still fails after the restore install", async () => {
-		vi.spyOn(console, "log").mockImplementation(() => {});
-		const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, false] });
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"aborts with a recovery hint when verification still fails after the restore install",
+		async () => {
+			vi.spyOn(console, "log").mockImplementation(() => {});
+			const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, false] });
 
-		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow("curl -fsSL https://omp.sh/install");
-		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
-	});
+			await expect(migrateRenamedInstall(release, steps)).rejects.toThrow("curl -fsSL https://omp.sh/install");
+			expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
+		},
+	);
 
 	it("uses the platform-aware PowerShell reinstall hint on Windows", async () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
@@ -1090,7 +1127,7 @@ describe("update-cli release binary integrity", () => {
 		});
 
 		expect(await Bun.file(targetPath).text()).toBe(content);
-		expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+		if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 	});
 
 	it("reports HTTP status, URL, and server error body when a download fails", async () => {
@@ -1237,7 +1274,7 @@ describe("update-cli release binary integrity", () => {
 			).rejects.toThrow("digest mismatch");
 			expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
 			expect(await Bun.file(targetPath).text()).toBe(installed);
-			expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+			if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 			const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
 			expect(newResidue).toEqual([]);
 		} finally {
@@ -1647,7 +1684,8 @@ describe("update-cli script-shim takeover", () => {
 		}
 	}
 
-	it("installs omp.exe beside the shims and retires them", async () => {
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")("installs omp.exe beside the shims and retires them", async () => {
 		const dir = await makeTempDir();
 		await writeShims(dir);
 		// Real executable, no injected verifier: the takeover must verify the
@@ -1669,32 +1707,36 @@ describe("update-cli script-shim takeover", () => {
 		expect(residue).toEqual([]);
 	});
 
-	it("installs a canary prerelease binary only when the caller opts in", async () => {
-		const dir = await makeTempDir();
-		await writeShims(dir);
-		const exe = `#!/bin/sh\necho omp/${version}\n`;
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"installs a canary prerelease binary only when the caller opts in",
+		async () => {
+			const dir = await makeTempDir();
+			await writeShims(dir);
+			const exe = `#!/bin/sh\necho omp/${version}\n`;
 
-		// A canary release is published as a prerelease: without opt-in the
-		// takeover refuses the asset and leaves the shims intact.
-		await expect(
-			updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+			// A canary release is published as a prerelease: without opt-in the
+			// takeover refuses the asset and leaves the shims intact.
+			await expect(
+				updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+					binaryName,
+					fetchImpl: makeFetch(exe, true),
+					githubToken: "test-token",
+				}),
+			).rejects.toThrow("is a prerelease");
+			expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
+
+			// allowPrerelease threads through to the asset resolver, so the canary
+			// exe installs and the shims are retired.
+			await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
 				binaryName,
 				fetchImpl: makeFetch(exe, true),
+				allowPrerelease: true,
 				githubToken: "test-token",
-			}),
-		).rejects.toThrow("is a prerelease");
-		expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
-
-		// allowPrerelease threads through to the asset resolver, so the canary
-		// exe installs and the shims are retired.
-		await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
-			binaryName,
-			fetchImpl: makeFetch(exe, true),
-			allowPrerelease: true,
-			githubToken: "test-token",
-		});
-		expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
-	});
+			});
+			expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
+		},
+	);
 
 	it("drops bun's launcher metadata when the standalone binary takes the .exe over", async () => {
 		// After the takeover the launcher is no longer bun-managed. A leftover
@@ -1739,27 +1781,31 @@ describe("update-cli script-shim takeover", () => {
 		).toBe(true);
 	});
 
-	it("restores the shims and removes the exe when the exe reports the wrong version", async () => {
-		const dir = await makeTempDir();
-		await writeShims(dir);
-		// Executable runs but reports the previous version -> full rollback.
-		const exe = "#!/bin/sh\necho omp/17.2.12\n";
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"restores the shims and removes the exe when the exe reports the wrong version",
+		async () => {
+			const dir = await makeTempDir();
+			await writeShims(dir);
+			// Executable runs but reports the previous version -> full rollback.
+			const exe = "#!/bin/sh\necho omp/17.2.12\n";
 
-		await expect(
-			updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
-				binaryName,
-				fetchImpl: makeFetch(exe),
-				githubToken: "test-token",
-			}),
-		).rejects.toThrow(/still reports 17\.2\.12 \(expected 18\.0\.0\); restored previous omp launcher/);
+			await expect(
+				updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+					binaryName,
+					fetchImpl: makeFetch(exe),
+					githubToken: "test-token",
+				}),
+			).rejects.toThrow(/still reports 17\.2\.12 \(expected 18\.0\.0\); restored previous omp launcher/);
 
-		expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
-		for (const name in shims) {
-			expect(await Bun.file(path.join(dir, name)).text()).toBe(shims[name]);
-		}
-		const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".bak") || name.endsWith(".new"));
-		expect(residue).toEqual([]);
-	});
+			expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
+			for (const name in shims) {
+				expect(await Bun.file(path.join(dir, name)).text()).toBe(shims[name]);
+			}
+			const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".bak") || name.endsWith(".new"));
+			expect(residue).toEqual([]);
+		},
+	);
 
 	function renameLockingPs1(): Mock<typeof nodeFs.promises.rename> {
 		const realRename = nodeFs.promises.rename;
@@ -1771,28 +1817,32 @@ describe("update-cli script-shim takeover", () => {
 		});
 	}
 
-	it("rewrites an immovable precedence-winning shim as a forwarder to the exe", async () => {
-		const dir = await makeTempDir();
-		await writeShims(dir);
-		const exe = `#!/bin/sh\necho omp/${version}\n`;
-		const renameSpy = renameLockingPs1();
-		try {
-			await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
-				binaryName,
-				fetchImpl: makeFetch(exe),
-				githubToken: "test-token",
-			});
-		} finally {
-			renameSpy.mockRestore();
-		}
+	// POSIX-only fixtures: symlinked launchers and shell-script executables.
+	it.skipIf(process.platform === "win32")(
+		"rewrites an immovable precedence-winning shim as a forwarder to the exe",
+		async () => {
+			const dir = await makeTempDir();
+			await writeShims(dir);
+			const exe = `#!/bin/sh\necho omp/${version}\n`;
+			const renameSpy = renameLockingPs1();
+			try {
+				await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+					binaryName,
+					fetchImpl: makeFetch(exe),
+					githubToken: "test-token",
+				});
+			} finally {
+				renameSpy.mockRestore();
+			}
 
-		expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
-		expect(await Bun.file(path.join(dir, "omp")).exists()).toBe(false);
-		expect(await Bun.file(path.join(dir, "omp.cmd")).exists()).toBe(false);
-		// PowerShell resolves .ps1 before .exe: the locked shim must now exec
-		// the new binary instead of keeping its old body.
-		expect(await Bun.file(path.join(dir, "omp.ps1")).text()).toContain('& "$PSScriptRoot\\omp.exe" @args');
-	});
+			expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
+			expect(await Bun.file(path.join(dir, "omp")).exists()).toBe(false);
+			expect(await Bun.file(path.join(dir, "omp.cmd")).exists()).toBe(false);
+			// PowerShell resolves .ps1 before .exe: the locked shim must now exec
+			// the new binary instead of keeping its old body.
+			expect(await Bun.file(path.join(dir, "omp.ps1")).text()).toContain('& "$PSScriptRoot\\omp.exe" @args');
+		},
+	);
 
 	it("restores a forwarded shim's original body when verification fails", async () => {
 		const dir = await makeTempDir();

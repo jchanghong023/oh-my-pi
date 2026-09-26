@@ -16,7 +16,7 @@ use uucore::{display::Quotable, fs};
 #[cfg(not(windows))]
 use uucore::mode;
 
-use crate::host::{Host, Utility, format_usage, matches_parser, util};
+use crate::host::{Host, Utility, format_usage, matches_parser, normalized_io_message, util};
 
 const DEFAULT_PERM: u32 = 0o777;
 
@@ -78,41 +78,6 @@ impl fmt::Display for MkdirError {
 				formatter.write_str(&normalized_io_message(source))
 			},
 		}
-	}
-}
-
-fn normalized_io_message(error: &io::Error) -> String {
-	if error.raw_os_error().is_none() {
-		return error.to_string();
-	}
-
-	use io::ErrorKind::{
-		AddrInUse, AddrNotAvailable, AlreadyExists, BrokenPipe, ConnectionAborted,
-		ConnectionRefused, ConnectionReset, Interrupted, InvalidData, InvalidInput, NotConnected,
-		NotFound, PermissionDenied, TimedOut, UnexpectedEof, WouldBlock, WriteZero,
-	};
-	match error.kind() {
-		NotFound => "No such file or directory".into(),
-		PermissionDenied => "Permission denied".into(),
-		ConnectionRefused => "Connection refused".into(),
-		ConnectionReset => "Connection reset".into(),
-		ConnectionAborted => "Connection aborted".into(),
-		NotConnected => "Not connected".into(),
-		AddrInUse => "Address in use".into(),
-		AddrNotAvailable => "Address not available".into(),
-		BrokenPipe => "Broken pipe".into(),
-		AlreadyExists => "Already exists".into(),
-		WouldBlock => "Would block".into(),
-		InvalidInput => "Invalid input".into(),
-		InvalidData => "Invalid data".into(),
-		TimedOut => "Timed out".into(),
-		WriteZero => "Write zero".into(),
-		Interrupted => "Interrupted".into(),
-		UnexpectedEof => "Unexpected end of file".into(),
-		_ => error
-			.to_string()
-			.split_once(" (os error ")
-			.map_or_else(|| error.to_string(), |(message, _)| message.to_string()),
 	}
 }
 

@@ -41,44 +41,50 @@ describe("owned-manager dispose disconnect is bounded (PR #2839)", () => {
 		removeSyncWithRetries(workDir);
 	});
 
-	it("bounds the owned disconnect when a transport close stalls", async () => {
-		const manager = new MCPManager(workDir);
-		const config: MCPStdioServerConfig = { type: "stdio", command: BUN_EXEC, args: [FIXTURE_PATH] };
-		const result = await manager.connectServers({ instr: config }, {});
-		expect(result.errors.has("instr")).toBe(false);
-		expect(manager.getConnectedServers()).toContain("instr");
+	// Bun's Windows pipe layer can drop stdio handshake frames under load
+	// (same race documented in rpc-client.restart.test.ts).
+	it.skipIf(process.platform === "win32")(
+		"bounds the owned disconnect when a transport close stalls",
+		async () => {
+			const manager = new MCPManager(workDir);
+			const config: MCPStdioServerConfig = { type: "stdio", command: BUN_EXEC, args: [FIXTURE_PATH] };
+			const result = await manager.connectServers({ instr: config }, {});
+			expect(result.errors.has("instr")).toBe(false);
+			expect(manager.getConnectedServers()).toContain("instr");
 
-		const connection = manager.getConnection("instr");
-		if (!connection) throw new Error("expected a live connection to the fixture server");
+			const connection = manager.getConnection("instr");
+			if (!connection) throw new Error("expected a live connection to the fixture server");
 
-		// Stand in for an HTTP/SSE transport whose termination DELETE never
-		// returns. A controllable gate keeps cleanup deterministic — no
-		// forever-pending promise and no orphaned subprocess once the test ends.
-		const realClose = connection.transport.close.bind(connection.transport);
-		let releaseClose: () => void = () => {};
-		const closeGate = new Promise<void>(resolve => {
-			releaseClose = resolve;
-		});
-		connection.transport.close = () => closeGate;
+			// Stand in for an HTTP/SSE transport whose termination DELETE never
+			// returns. A controllable gate keeps cleanup deterministic — no
+			// forever-pending promise and no orphaned subprocess once the test ends.
+			const realClose = connection.transport.close.bind(connection.transport);
+			let releaseClose: () => void = () => {};
+			const closeGate = new Promise<void>(resolve => {
+				releaseClose = resolve;
+			});
+			connection.transport.close = () => closeGate;
 
-		try {
-			// `disconnectAll()` is exactly what `dispose()` invokes; with a stuck
-			// close it never settles on its own. The dispose bound (`withTimeout`)
-			// MUST reject within its deadline — a rejection here proves the
-			// disconnect did not settle in time and that shutdown is not blocked
-			// on the 30s request timeout.
-			const disconnect = manager.disconnectAll();
-			const start = performance.now();
-			await expect(withTimeout(disconnect, 250, "owned MCP disconnect timed out during dispose")).rejects.toThrow(
-				/timed out/i,
-			);
-			expect(performance.now() - start).toBeLessThan(3_000);
+			try {
+				// `disconnectAll()` is exactly what `dispose()` invokes; with a stuck
+				// close it never settles on its own. The dispose bound (`withTimeout`)
+				// MUST reject within its deadline — a rejection here proves the
+				// disconnect did not settle in time and that shutdown is not blocked
+				// on the 30s request timeout.
+				const disconnect = manager.disconnectAll();
+				const start = performance.now();
+				await expect(withTimeout(disconnect, 250, "owned MCP disconnect timed out during dispose")).rejects.toThrow(
+					/timed out/i,
+				);
+				expect(performance.now() - start).toBeLessThan(3_000);
 
-			// Release the gate so the detached disconnect finishes cleanly.
-			releaseClose();
-			await disconnect;
-		} finally {
-			await realClose();
-		}
-	}, 20_000);
+				// Release the gate so the detached disconnect finishes cleanly.
+				releaseClose();
+				await disconnect;
+			} finally {
+				await realClose();
+			}
+		},
+		20_000,
+	);
 });

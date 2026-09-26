@@ -10,7 +10,13 @@ const cjsProbePath = path.resolve(import.meta.dir, "fixtures", "legacy-pi-extens
 const tempDirs: TempDir[] = [];
 
 async function runProbe(cacheRoot: string, script: string = probePath, args: string[] = []): Promise<string> {
-	const env: Record<string, string | undefined> = { ...process.env, XDG_CACHE_HOME: cacheRoot };
+	const env: Record<string, string | undefined> = {
+		...process.env,
+		XDG_CACHE_HOME: cacheRoot,
+		// XDG is not honored on Windows; the explicit db override isolates the
+		// cache on every platform.
+		OMP_LEGACY_PI_EXTENSION_CACHE_DB: path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache.db"),
+	};
 	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
 		delete env[key];
 	}
@@ -120,38 +126,43 @@ test("legacy extension parse cache opens in WAL mode (#9549)", async () => {
 	}
 });
 
-test("oversized-cache eviction keeps the parse cache usable when a concurrent process holds the WAL (#9549)", async () => {
-	const tempDir = TempDir.createSync("@legacy-pi-extension-cache-evict-");
-	tempDirs.push(tempDir);
-	const cacheRoot = tempDir.path();
-	const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache.db");
-	await fs.mkdir(path.dirname(cachePath), { recursive: true });
+// The scenario unlinks cache files another process still holds open; Windows
+// refuses to delete open files, so it cannot run there.
+test.skipIf(process.platform === "win32")(
+	"oversized-cache eviction keeps the parse cache usable when a concurrent process holds the WAL (#9549)",
+	async () => {
+		const tempDir = TempDir.createSync("@legacy-pi-extension-cache-evict-");
+		tempDirs.push(tempDir);
+		const cacheRoot = tempDir.path();
+		const cachePath = path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache.db");
+		await fs.mkdir(path.dirname(cachePath), { recursive: true });
 
-	// Seed a cache whose main db file exceeds the 8 MiB eviction cap.
-	const seed = new Database(cachePath, { create: true });
-	seed.run(
-		"CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL, commonjs_syntax INTEGER NOT NULL)",
-	);
-	seed.run("PRAGMA user_version = 3");
-	seed.run("INSERT INTO extension_parse_cache VALUES ('big', 'module', ?, 0)", ["x".repeat(9 * 1024 * 1024)]);
-	seed.close();
+		// Seed a cache whose main db file exceeds the 8 MiB eviction cap.
+		const seed = new Database(cachePath, { create: true });
+		seed.run(
+			"CREATE TABLE extension_parse_cache (cache_key TEXT PRIMARY KEY, source_type TEXT NOT NULL, [references] TEXT NOT NULL, commonjs_syntax INTEGER NOT NULL)",
+		);
+		seed.run("PRAGMA user_version = 3");
+		seed.run("INSERT INTO extension_parse_cache VALUES ('big', 'module', ?, 0)", ["x".repeat(9 * 1024 * 1024)]);
+		seed.close();
 
-	// A concurrent omp process holds the cache open in WAL mode with
-	// uncheckpointed frames in its `-wal` (as a concurrently-starting omp does
-	// while writing its own parse-cache entries).
-	const concurrent = new Database(cachePath, { create: true });
-	try {
-		concurrent.run("PRAGMA busy_timeout = 5000");
-		concurrent.run("PRAGMA journal_mode=WAL");
-		const insert = concurrent.prepare("INSERT OR REPLACE INTO extension_parse_cache VALUES (?, 'module', ?, 0)");
-		for (let i = 0; i < 500; i++) insert.run(`live-${i}`, "y".repeat(4096));
+		// A concurrent omp process holds the cache open in WAL mode with
+		// uncheckpointed frames in its `-wal` (as a concurrently-starting omp does
+		// while writing its own parse-cache entries).
+		const concurrent = new Database(cachePath, { create: true });
+		try {
+			concurrent.run("PRAGMA busy_timeout = 5000");
+			concurrent.run("PRAGMA journal_mode=WAL");
+			const insert = concurrent.prepare("INSERT OR REPLACE INTO extension_parse_cache VALUES (?, 'module', ?, 0)");
+			for (let i = 0; i < 500; i++) insert.run(`live-${i}`, "y".repeat(4096));
 
-		// The probe opens the cache, sees the oversized main file, and evicts.
-		// Removing only the main db would leave the held `-wal`/`-shm`, and the
-		// fresh connection's `journal_mode=WAL` would fail with SQLITE_IOERR —
-		// disabling the parse cache. The full WAL-set eviction keeps it usable.
-		expect((await runProbe(cacheRoot, healthProbePath)).trim()).toBe("AVAILABLE");
-	} finally {
-		concurrent.close();
-	}
-});
+			// The probe opens the cache, sees the oversized main file, and evicts.
+			// Removing only the main db would leave the held `-wal`/`-shm`, and the
+			// fresh connection's `journal_mode=WAL` would fail with SQLITE_IOERR —
+			// disabling the parse cache. The full WAL-set eviction keeps it usable.
+			expect((await runProbe(cacheRoot, healthProbePath)).trim()).toBe("AVAILABLE");
+		} finally {
+			concurrent.close();
+		}
+	},
+);

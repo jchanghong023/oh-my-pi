@@ -12,7 +12,9 @@ async function corruptDatabase(dbPath: string): Promise<Uint8Array<ArrayBuffer>>
 	db.run("CREATE TABLE IF NOT EXISTS preserved (value TEXT)");
 	db.prepare("INSERT INTO preserved (value) VALUES (?)").run("salvage this data");
 	db.run("PRAGMA wal_checkpoint(TRUNCATE)");
-	db.close();
+	// Force-close: plain close() leaves the handle (and the -wal it must
+	// unlink during quarantine recovery) locked on Windows until GC.
+	db.close(true);
 
 	const damaged = await Bun.file(dbPath).bytes();
 	// Keep the SQLite header valid while corrupting the first b-tree page type.

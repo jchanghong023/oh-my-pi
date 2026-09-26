@@ -51,16 +51,21 @@ describe("bash internal URLs through the shell filesystem", () => {
 		expect(await fs.readFile(path.join(localRoot, "out.txt"), "utf-8")).toBe("hi\nmore\n");
 	});
 
-	it("follows URL symlinks and resolves backed URLs to their physical path", async () => {
-		const { text, isError } = await run(
-			"printf 'body\\n' > local://source.txt && ln -s local://source.txt local://link && cat local://link && readlink local://link && realpath local://link",
-		);
+	// `ln -s` through the URL filesystem creates a file symlink whose target is
+	// the URL string itself; Windows cannot create it without privilege.
+	it.skipIf(process.platform === "win32")(
+		"follows URL symlinks and resolves backed URLs to their physical path",
+		async () => {
+			const { text, isError } = await run(
+				"printf 'body\\n' > local://source.txt && ln -s local://source.txt local://link && cat local://link && readlink local://link && realpath local://link",
+			);
 
-		const physical = await fs.realpath(path.join(localRoot, "source.txt"));
-		expect(isError).toBeUndefined();
-		expect(text).toContain(`body\n${physical}\n${physical}`);
-		expect(await fs.readlink(path.join(localRoot, "link"))).toBe("local://source.txt");
-	});
+			const physical = await fs.realpath(path.join(localRoot, "source.txt"));
+			expect(isError).toBeUndefined();
+			expect(text).toContain(`body\n${physical}\n${physical}`);
+			expect(await fs.readlink(path.join(localRoot, "link"))).toBe("local://source.txt");
+		},
+	);
 
 	it("runs in a URL working directory with relative paths inside it", async () => {
 		await fs.mkdir(path.join(localRoot, "work"), { recursive: true });

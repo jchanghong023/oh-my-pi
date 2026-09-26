@@ -187,6 +187,7 @@ async fn patch_create_overwrite_preserves_generated_file_guard() {
 		assert!(preview.files[0].error.is_none(), "{:?}", preview);
 	}
 	for (name, original) in [
+		("zz_generated.ts", b"const value = 1;\n".as_slice()),
 		("source.ts", b"// @generated\nconst value = 1;\n".as_slice()),
 		("legacy.ts", b"// @generated\nname=caf\xe9\n".as_slice()),
 	] {

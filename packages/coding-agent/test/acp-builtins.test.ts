@@ -1000,6 +1000,7 @@ describe("wave 3 commands", () => {
 		try {
 			await fs.mkdir(repoDir, { recursive: true });
 			await git("init", "-q", "-b", "main");
+			await git("config", "core.autocrlf", "false");
 			await git("config", "user.email", "t@example.com");
 			await git("config", "user.name", "t");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
@@ -1053,6 +1054,7 @@ describe("wave 3 commands", () => {
 		try {
 			await fs.mkdir(repoDir, { recursive: true });
 			await git("init", "-q", "-b", "main");
+			await git("config", "core.autocrlf", "false");
 			await git("config", "user.email", "t@example.com");
 			await git("config", "user.name", "t");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
@@ -1108,6 +1110,7 @@ describe("wave 3 commands", () => {
 		try {
 			await fs.mkdir(repoDir, { recursive: true });
 			await git("init", "-q", "-b", "main");
+			await git("config", "core.autocrlf", "false");
 			await git("config", "user.email", "t@example.com");
 			await git("config", "user.name", "t");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");

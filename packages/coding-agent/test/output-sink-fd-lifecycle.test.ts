@@ -148,7 +148,8 @@ describe("OutputSink fd lifecycle", () => {
 		const notice = formatOutputNotice(outputMeta().truncationFromSummary(summary, { direction: "tail" }).get());
 
 		expect(summary.output).toBe("tail");
-		expect(summary.artifactError).toBe("open");
+		// Bun only surfaces a directory-backed writer failure at write time on Windows.
+		expect(summary.artifactError).toBe(process.platform === "win32" ? "write" : "open");
 		expect(summary.artifactId).toBeUndefined();
 		expect(notice).toContain("not saved completely");
 		expect(notice).not.toContain("artifact://");

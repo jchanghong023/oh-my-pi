@@ -7,7 +7,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type FetchImpl, getEnvApiKey, type ImageContent, type TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
-import { $which, ptree } from "@oh-my-pi/pi-utils";
+import { $which, ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "@oh-my-pi/pi-utils/ar";
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../sdk";
@@ -860,7 +860,9 @@ async function withTempBinaryFile<T>(
 		await Bun.write(tempPath, bytes);
 		return await readTempFile(tempPath);
 	} finally {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		// Windows keeps sqlite file locks briefly after close(); a plain rm
+		// throws EBUSY and would fail the whole render.
+		await removeWithRetries(tempDir);
 	}
 }
 

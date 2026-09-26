@@ -1281,6 +1281,19 @@ mod tests {
 
 	use super::*;
 
+	/// Compare paths across Windows representations: canonicalize() yields a
+	/// verbatim `\\?\` path with backslashes, worktree records use plain drive
+	/// paths, so normalize both to a verbatim-free, forward-slash form.
+	fn comparable(path: &std::path::Path) -> String {
+		let text = path.to_string_lossy().replace('\\', "/");
+		let normalized = text.strip_prefix("//?/").unwrap_or(&text);
+		if cfg!(windows) {
+			normalized.to_ascii_lowercase()
+		} else {
+			normalized.to_owned()
+		}
+	}
+
 	type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 	fn git(cwd: &Path, args: &[&str]) -> std::result::Result<String, Box<dyn std::error::Error>> {
@@ -1641,15 +1654,7 @@ mod tests {
 		let worktrees = repo.worktrees()?;
 		assert_eq!(worktrees.len(), 2);
 		assert_eq!(worktrees[0].path, dir.path());
-		// std canonicalize returns a `\\?\`-prefixed verbatim path on Windows;
-		// the repo reports the equivalent clean path.
-		let expected_linked = linked.canonicalize()?;
-		#[cfg(windows)]
-		let expected_linked = {
-			let cleaned = expected_linked.to_string_lossy().into_owned();
-			PathBuf::from(cleaned.strip_prefix(r"\\?\").unwrap_or(&cleaned))
-		};
-		assert_eq!(worktrees[1].path, expected_linked);
+		assert_eq!(comparable(&worktrees[1].path), comparable(&linked.canonicalize()?));
 		assert_eq!(worktrees[1].branch.as_deref(), Some("refs/heads/linked-branch"));
 		Ok(())
 	}

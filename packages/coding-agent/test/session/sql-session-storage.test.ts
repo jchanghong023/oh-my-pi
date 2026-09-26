@@ -81,6 +81,20 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		await client.end();
 	});
 
+	it.skipIf(process.platform !== "win32")("lists paths across mixed Windows separator spellings", async () => {
+		const { client, storage } = await createSqlite();
+		await storage.writeText("C:\\sessions\\one.jsonl", "one");
+		await storage.writeText("C:/sessions/two.jsonl", "two");
+		await storage.writeText("C:\\sessions\\nested\\three.jsonl", "three");
+
+		expect(storage.listFilesSync("C:/sessions", "*.jsonl").sort()).toEqual([
+			"C:/sessions/two.jsonl",
+			"C:\\sessions\\one.jsonl",
+		]);
+		expect(storage.listFilesSync("C:\\sessions", "*.jsonl")).toHaveLength(2);
+		await client.end();
+	});
+
 	it("writer.append appends to SQL after drain", async () => {
 		const { client, storage } = await createSqlite();
 		const writer = storage.openWriter("/sessions/p/session.jsonl");

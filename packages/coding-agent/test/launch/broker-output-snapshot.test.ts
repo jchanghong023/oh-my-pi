@@ -176,11 +176,13 @@ process.stdout.write("READY\\x1b[6n");
 			});
 			if (started.op !== "start") throw new Error("unexpected start result");
 
+			// ConPTY round trips are ~3s on Windows (child startup + query reply),
+			// so the exit wait needs a larger budget than the POSIX 2s.
 			const completed = await client.request({
 				op: "wait",
 				name: "terminal-query",
 				for: "exit",
-				timeoutMs: 2_000,
+				timeoutMs: process.platform === "win32" ? 15_000 : 2_000,
 			});
 			if (completed.op !== "wait") throw new Error("unexpected wait result");
 			expect(completed.timedOut).toBeFalse();

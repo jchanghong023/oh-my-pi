@@ -8,24 +8,26 @@ use crate::{error, sys, traps};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Signal {}
 
-/// Minimal signal representation for Windows.
+/// Minimal POSIX-numbered signal representation for Windows.
 #[cfg(windows)]
 #[allow(unnameable_types)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Signal {
-	/// Terminate signal.
-	Terminate,
-	/// Kill signal.
-	Kill,
+	/// Hangup signal.
+	Hangup = 1,
 	/// Interrupt signal.
-	Interrupt,
+	Interrupt = 2,
+	/// Kill signal.
+	Kill = 9,
+	/// Terminate signal.
+	Terminate = 15,
 }
 
 impl Signal {
 	/// Returns an iterator over all possible signals.
 	#[cfg(windows)]
 	pub fn iterator() -> impl Iterator<Item = Self> {
-		[Self::Terminate, Self::Kill, Self::Interrupt].into_iter()
+		[Self::Hangup, Self::Interrupt, Self::Kill, Self::Terminate].into_iter()
 	}
 
 	/// Returns an iterator over all possible signals.
@@ -38,6 +40,7 @@ impl Signal {
 	#[cfg(windows)]
 	pub const fn as_str(self) -> &'static str {
 		match self {
+			Self::Hangup => "HUP",
 			Self::Terminate => "TERM",
 			Self::Kill => "KILL",
 			Self::Interrupt => "INT",
@@ -54,6 +57,7 @@ impl Signal {
 	#[cfg(windows)]
 	pub fn from_str(s: &str) -> Result<Self, error::Error> {
 		match s.to_ascii_uppercase().as_str() {
+			"HUP" | "SIGHUP" => Ok(Self::Hangup),
 			"TERM" | "SIGTERM" => Ok(Self::Terminate),
 			"KILL" | "SIGKILL" => Ok(Self::Kill),
 			"INT" | "SIGINT" => Ok(Self::Interrupt),
@@ -72,6 +76,18 @@ impl TryFrom<i32> for Signal {
 	type Error = error::Error;
 
 	fn try_from(value: i32) -> Result<Self, Self::Error> {
+		// Windows has no signal system of its own; the shell reports POSIX
+		// signal numbers (as bash's exit statuses above 128 do), so the
+		// mapping accepts exactly the enum's numbers.
+		#[cfg(windows)]
+		match value {
+			x if x == Self::Hangup as i32 => Ok(Self::Hangup),
+			x if x == Self::Interrupt as i32 => Ok(Self::Interrupt),
+			x if x == Self::Kill as i32 => Ok(Self::Kill),
+			x if x == Self::Terminate as i32 => Ok(Self::Terminate),
+			_ => Err(error::ErrorKind::InvalidSignal(std::format!("{value}")).into()),
+		}
+		#[cfg(not(windows))]
 		Err(error::ErrorKind::InvalidSignal(std::format!("{value}")).into())
 	}
 }

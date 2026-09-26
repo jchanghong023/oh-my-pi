@@ -74,7 +74,24 @@ async function runBiome(
 			signal,
 		});
 
-		const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+		// On Windows an aborted spawn may only kill the direct child; a script
+		// wrapper's grandchild can keep the stdout pipe open forever, so the
+		// abort must resolve this run instead of waiting for pipe EOF.
+		let onAbort: (() => void) | undefined;
+		const aborted = signal
+			? new Promise<never>((_, reject) => {
+					onAbort = () => reject(signal.reason);
+					signal.addEventListener("abort", onAbort, { once: true });
+				})
+			: undefined;
+		let stdout = "";
+		let stderr = "";
+		try {
+			const texts = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+			[stdout, stderr] = aborted ? await Promise.race([texts, aborted]) : await texts;
+		} finally {
+			if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+		}
 		const exitCode = await proc.exited;
 		signal?.throwIfAborted();
 

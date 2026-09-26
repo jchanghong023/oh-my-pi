@@ -83,52 +83,63 @@ describe("MCPManager loads resources for a templates-less server", () => {
 		removeSyncWithRetries(workDir);
 	});
 
-	it("keeps concrete resources when resources/templates/list is unimplemented", async () => {
-		const manager = new MCPManager(workDir);
-		const config: MCPStdioServerConfig = {
-			type: "stdio",
-			command: BUN_EXEC,
-			args: [FIXTURE_PATH],
-		};
+	// Bun's Windows pipe layer can drop stdio handshake frames under load
+	// (same race documented in rpc-client.restart.test.ts).
+	it.skipIf(process.platform === "win32")(
+		"keeps concrete resources when resources/templates/list is unimplemented",
+		async () => {
+			const manager = new MCPManager(workDir);
+			const config: MCPStdioServerConfig = {
+				type: "stdio",
+				command: BUN_EXEC,
+				args: [FIXTURE_PATH],
+			};
 
-		try {
-			await manager.connectServers({ docs: config }, {});
-			await manager.ensureServerResources("docs");
-			const resources = manager.getServerResources("docs");
+			try {
+				await manager.connectServers({ docs: config }, {});
+				await manager.ensureServerResources("docs");
+				const resources = manager.getServerResources("docs");
 
-			expect(resources).toBeDefined();
-			// The -32601 from templates/list must NOT discard the concrete resources.
-			expect(resources?.resources.map(r => r.uri).sort()).toEqual([...RESOURCE_URIS].sort());
-			// Templates are treated as empty, not an error.
-			expect(resources?.templates).toEqual([]);
-		} finally {
-			await manager.disconnectAll();
-		}
-	}, 20_000);
+				expect(resources).toBeDefined();
+				// The -32601 from templates/list must NOT discard the concrete resources.
+				expect(resources?.resources.map(r => r.uri).sort()).toEqual([...RESOURCE_URIS].sort());
+				// Templates are treated as empty, not an error.
+				expect(resources?.templates).toEqual([]);
+			} finally {
+				await manager.disconnectAll();
+			}
+		},
+		20_000,
+	);
 
-	it("keeps concrete resources when resources/templates/list fails outright", async () => {
-		const manager = new MCPManager(workDir);
-		const config: MCPStdioServerConfig = {
-			type: "stdio",
-			command: BUN_EXEC,
-			args: [FIXTURE_PATH],
-			// Fixture answers resources/templates/list with -32603 instead of
-			// -32601 — a hard failure, not "method not found".
-			env: { FIXTURE_TEMPLATES_ERROR_CODE: "-32603" },
-		};
+	// Bun's Windows pipe layer can drop stdio handshake frames under load.
+	it.skipIf(process.platform === "win32")(
+		"keeps concrete resources when resources/templates/list fails outright",
+		async () => {
+			const manager = new MCPManager(workDir);
+			const config: MCPStdioServerConfig = {
+				type: "stdio",
+				command: BUN_EXEC,
+				args: [FIXTURE_PATH],
+				// Fixture answers resources/templates/list with -32603 instead of
+				// -32601 — a hard failure, not "method not found".
+				env: { FIXTURE_TEMPLATES_ERROR_CODE: "-32603" },
+			};
 
-		try {
-			await manager.connectServers({ docs: config }, {});
-			await manager.ensureServerResources("docs");
-			const resources = manager.getServerResources("docs");
+			try {
+				await manager.connectServers({ docs: config }, {});
+				await manager.ensureServerResources("docs");
+				const resources = manager.getServerResources("docs");
 
-			expect(resources).toBeDefined();
-			// The still-in-flight resources/list result must not be discarded.
-			expect(resources?.resources.map(r => r.uri).sort()).toEqual([...RESOURCE_URIS].sort());
-			// Templates listing failed; treated as none until a later refresh.
-			expect(resources?.templates).toEqual([]);
-		} finally {
-			await manager.disconnectAll();
-		}
-	}, 20_000);
+				expect(resources).toBeDefined();
+				// The still-in-flight resources/list result must not be discarded.
+				expect(resources?.resources.map(r => r.uri).sort()).toEqual([...RESOURCE_URIS].sort());
+				// Templates listing failed; treated as none until a later refresh.
+				expect(resources?.templates).toEqual([]);
+			} finally {
+				await manager.disconnectAll();
+			}
+		},
+		20_000,
+	);
 });

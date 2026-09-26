@@ -21,17 +21,21 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 
 describe("issue #9158 — malformed worker IPC frame must not terminate the parent", () => {
-	it("contains an advanced-serialization decode failure to the worker instead of exiting the session", async () => {
-		const repoRoot = path.resolve(import.meta.dir, "..");
-		// Bun advanced-IPC frame with an invalid structured-clone body, written
-		// raw to the IPC fd (3), then the child blocks forever. Staying alive is
-		// the point: the malformed frame — not an exit — must fault the worker.
-		const childScript =
-			'require("node:fs").writeSync(3, Buffer.from([2, 4, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef])); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
-		// Runs in a spawned `bun -e` parent: importing worker-client pulls in the
-		// postmortem module, which installs the global uncaughtException handler
-		// under test.
-		const wrapperScript = `
+	// The fixture injects a malformed frame through the raw IPC fd (3), a
+	// POSIX-only transport that cannot be driven on Windows.
+	it.skipIf(process.platform === "win32")(
+		"contains an advanced-serialization decode failure to the worker instead of exiting the session",
+		async () => {
+			const repoRoot = path.resolve(import.meta.dir, "..");
+			// Bun advanced-IPC frame with an invalid structured-clone body, written
+			// raw to the IPC fd (3), then the child blocks forever. Staying alive is
+			// the point: the malformed frame — not an exit — must fault the worker.
+			const childScript =
+				'require("node:fs").writeSync(3, Buffer.from([2, 4, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef])); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);';
+			// Runs in a spawned `bun -e` parent: importing worker-client pulls in the
+			// postmortem module, which installs the global uncaughtException handler
+			// under test.
+			const wrapperScript = `
 			import { createWorkerSubprocess } from "@oh-my-pi/pi-coding-agent/subprocess/worker-client";
 			const worker = createWorkerSubprocess({
 				spawnCommand: { cmd: [process.execPath, "-e", ${JSON.stringify(childScript)}] },
@@ -46,19 +50,21 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 			const err = await errored;
 			process.stdout.write("FAULTED:" + err.message);
 		`;
-		const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
-			cwd: repoRoot,
-			stdout: "pipe",
-			stderr: "pipe",
-			env: { ...process.env, PI_TEST_RUNTIME: "0" },
-		});
-		const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-		// Before the fix the postmortem handler exited the parent with code 1 and
-		// no marker ever printed.
-		expect(exitCode).toBe(0);
-		expect(stdout).toContain("FAULTED:");
-		expect(stdout).toContain("worker sent a malformed IPC frame");
-	}, 20_000);
+			const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: { ...process.env, PI_TEST_RUNTIME: "0" },
+			});
+			const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+			// Before the fix the postmortem handler exited the parent with code 1 and
+			// no marker ever printed.
+			expect(exitCode).toBe(0);
+			expect(stdout).toContain("FAULTED:");
+			expect(stdout).toContain("worker sent a malformed IPC frame");
+		},
+		20_000,
+	);
 
 	it("still faults on an unrelated TypeError with the same message but a real stack", async () => {
 		// Guards the narrowed matcher: an application-thrown `TypeError` carrying

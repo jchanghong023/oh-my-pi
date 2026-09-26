@@ -18,7 +18,7 @@ use brush_core::{ShellExtensions, builtins::Registration};
 use clap::{ArgAction, Parser};
 use similar::{Algorithm, DiffOp, DiffTag, capture_diff_slices};
 
-use crate::host::{Host, Utility, util};
+use crate::host::{Host, Utility, normalized_io_message as io_msg, util};
 
 /// Parsed `diff` invocation.
 #[derive(Parser)]
@@ -760,8 +760,9 @@ fn diff_dirs(
 		if host.is_cancelled() {
 			return Err("interrupted".to_string());
 		}
+		// Walked child paths print with GNU's `/` spelling on every platform.
 		let (child_name_a, child_name_b) =
-			(pi_vfs::join_path(name_a, Path::new(&name)), pi_vfs::join_path(name_b, Path::new(&name)));
+			(crate::host::slash_join(name_a, &name), crate::host::slash_join(name_b, &name));
 		// Resolve every recursively discovered display path through the host too;
 		// the process's current directory is unrelated to the shell's.
 		let child_res_a = host.resolve(&child_name_a);
@@ -882,15 +883,6 @@ fn diff_dirs(
 /// diff's heuristic for deciding between text and binary output.
 fn is_binary(bytes: &[u8]) -> bool {
 	bytes.iter().take(8192).any(|&byte| byte == 0)
-}
-
-/// Renders an I/O error without Rust's ` (os error N)` suffix.
-fn io_msg(err: &std::io::Error) -> String {
-	let msg = err.to_string();
-	match msg.find(" (os error") {
-		Some(idx) => msg[..idx].to_string(),
-		None => msg,
-	}
 }
 
 /// Creates the `diff` builtin registration.
