@@ -11,7 +11,7 @@ import {
 	ZCODE_API_PROVIDER_ID,
 } from "../src/config/zcode-api-models";
 
-// The fork contract (docs-zh-CN/fork.md) pins the zcode-api roster to the
+// The fork contract (docs-zh-CN/requirements/fork.md) pins the zcode-api roster to the
 // `zhipu-coding-plan` lane: same parameters, minus the collapsed `[1m]` alias,
 // served over the proxy's Anthropic route instead of the Zhipu OpenAI route.
 const LANE =

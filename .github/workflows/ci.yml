@@ -43,7 +43,7 @@ jobs:
            shell: bash
            run: |
               set -euo pipefail
-              fork_doc="docs-zh-CN/fork.md"
+              fork_doc="docs-zh-CN/requirements/fork.md"
               baseline_section="$(awk '/^## 当前上游基线/{flag=1; next} /^## /{flag=0} flag' "$fork_doc")"
               if [[ -z "$baseline_section" ]]; then
                 echo "Missing '当前上游基线' section in $fork_doc" >&2

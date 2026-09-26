@@ -1,7 +1,7 @@
 /**
  * `/team` — multi-model planning discussion (fork feature).
  *
- * The command name is deliberately NOT `jch*`-prefixed (docs-zh-CN/team.md
+ * The command name is deliberately NOT `jch*`-prefixed (docs-zh-CN/requirements/team.md
  * §5.1): an upstream command of the same name is an accepted collision risk
  * to be handled when it appears. It still registers through the fork's own
  * command list so it stays under fork control.

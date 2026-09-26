@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { KEYBINDINGS } from "../src/app-keybindings";
 import { DEFAULT_ACTION_KEYS } from "../src/prompt/custom-editor";
 
-// Fork contract (docs-zh-CN/fork.md「快捷键与状态栏」): the four default
+// Fork contract (docs-zh-CN/requirements/fork.md「快捷键与状态栏」): the four default
 // keybindings the fork swaps. The defaults live in hand-maintained tables that
 // an upstream rewrite can silently drift; these assertions pin both the app
 // table and the editor-surface mirror.

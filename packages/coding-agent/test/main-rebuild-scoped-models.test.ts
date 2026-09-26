@@ -266,7 +266,7 @@ describe("buildSessionOptions prewalk target discovery", () => {
 		return new PrewalkRegistry([]);
 	}
 
-	// Fork contract (docs-zh-CN/fork.md「安装与运行」): an --offline process must
+	// Fork contract (docs-zh-CN/requirements/fork.md「安装与运行」): an --offline process must
 	// keep every automatic discovery fallback cache-only, including prewalk
 	// target resolution.
 	it("resolves the prewalk target cache-only in an offline process", async () => {

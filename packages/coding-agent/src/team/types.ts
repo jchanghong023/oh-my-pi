@@ -3,7 +3,7 @@
  *
  * The command runs a code-driven five-stage orchestrator (independent
  * investigation → alignment → cross review → revision/recheck → synthesis)
- * over read-only subagents. See `docs-zh-CN/team.md` for the contract; every
+ * over read-only subagents. See `docs-zh-CN/requirements/team.md` for the contract; every
  * mechanical guarantee from that document is enforced here in code, not in
  * prompts.
  */

@@ -1,5 +1,5 @@
 /**
- * `/team` participant-resolution tests (docs-zh-CN/team.md §2.2): unconfigured
+ * `/team` participant-resolution tests (docs-zh-CN/requirements/team.md §2.2): unconfigured
  * behavior under offline/normal start, explicit configuration precedence,
  * unavailable-member errors, and the dedup(∪ session model) rule.
  */

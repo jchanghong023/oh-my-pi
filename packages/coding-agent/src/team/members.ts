@@ -1,7 +1,7 @@
 /**
  * `/team` participant resolution.
  *
- * Rules (docs-zh-CN/team.md §2.2):
+ * Rules (docs-zh-CN/requirements/team.md §2.2):
  * - `team.members` holds full model IDs; unset or empty array = "not configured".
  * - Not configured + offline process: default to the company lane's current
  *   available chat models (runtime snapshot).

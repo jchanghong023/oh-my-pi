@@ -1,5 +1,5 @@
 /**
- * `/team` in-process integration test (docs-zh-CN/team.md §6): the real
+ * `/team` in-process integration test (docs-zh-CN/requirements/team.md §6): the real
  * orchestrator drives the real `runSubprocess` executor path end to end; only
  * the model sessions are scripted — `createAgentSession` is stubbed with fake
  * sessions that answer each stage marker with schema-valid yield data. Asserts

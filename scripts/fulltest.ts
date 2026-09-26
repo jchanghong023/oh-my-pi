@@ -4,7 +4,7 @@
 // (curated whitelist — the full upstream shard suite is NOT Windows-runnable
 // and is covered by the slowtest Linux CI pipeline instead), the Rust core
 // crates via `cargo nextest` (fork scope; `pi-builtins` stays out, see
-// docs-zh-CN/fork.md), repo script tests, and the dev-TUI PTY smoke. Python
+// docs-zh-CN/requirements/fork.md), repo script tests, and the dev-TUI PTY smoke. Python
 // components (python/omp-rpc, python/robomp — upstream's optional self-hosted
 // bot service) are fork-untouched and NOT tested locally. Needs the host
 // native addon, so it always builds it first. The verdict is black and white:

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { relayStartupCloseError } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { RELAY_CLOSE_REASONS } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 
-// The 4009 duplicate-host message is the fork contract text (docs-zh-CN/fork.md
+// The 4009 duplicate-host message is the fork contract text (docs-zh-CN/requirements/fork.md
 // 「Collab 长期链接与网页端命令」): with one persistent identity per config
 // root, a second omp session hosting the same room must be told where the
 // winner is listed. Assert the exact string so code and contract cannot drift.

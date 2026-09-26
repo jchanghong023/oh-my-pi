@@ -257,7 +257,7 @@ describe("skills", () => {
 			}
 		});
 
-		// Fork contract (docs-zh-CN/fork.md「Codex 用户技能」): ~/.codex/skills
+		// Fork contract (docs-zh-CN/requirements/fork.md「Codex 用户技能」): ~/.codex/skills
 		// participates in discovery by default, and on a name collision the
 		// upstream default sources still win — .agents registers before codex and
 		// the dedup keeps the first entry. Discovery reads the global settings

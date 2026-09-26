@@ -2,7 +2,7 @@
  * `/team` default subagent runner.
  *
  * Drives the `runSubprocess` layer directly (the deliberate integration point
- * named in docs-zh-CN/team.md §7): the orchestrator never goes through the
+ * named in docs-zh-CN/requirements/team.md §7): the orchestrator never goes through the
  * main agent's task tool, every child session is pinned to the call's exact
  * model, and the read-only tool set plus `restrictToolNames` make the
  * read-only boundary a programmatic property rather than a prompt request.

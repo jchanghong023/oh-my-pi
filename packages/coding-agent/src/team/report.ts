@@ -8,7 +8,7 @@
  */
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
 
-/** Fixed closing contract, verbatim from docs-zh-CN/team.md §2.7. */
+/** Fixed closing contract, verbatim from docs-zh-CN/requirements/team.md §2.7. */
 export const TEAM_CLOSING_CONTRACT = [
 	"> 选择方案请直接回复（如“选择方案 A”）。选择仅确认该方案、其验收标准与执行前检查，不触发实施；",
 	"> 如需修改代码，请另行明确要求。若存在影响选择的“需求理解差异”，请先回答该差异并带答案重跑 `/team`，",

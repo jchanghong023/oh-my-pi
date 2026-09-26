@@ -6,7 +6,7 @@ import {
 	COMPANY_RETRIEVAL_MODELS,
 } from "../src/config/company-models";
 
-// The fork contract (docs-zh-CN/fork.md「公司内网模型」) pins the company lane
+// The fork contract (docs-zh-CN/requirements/fork.md「公司内网模型」) pins the company lane
 // to a fixed parameter table served over the internal Anthropic gateway; these
 // assertions make any drift (local edit or upstream sync) fail loudly instead
 // of silently changing what --offline sessions resolve to.

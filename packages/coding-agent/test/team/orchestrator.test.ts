@@ -1,7 +1,7 @@
 /**
  * `/team` orchestrator unit tests with a deterministic stub runner.
  *
- * Covers the mechanical guarantees from docs-zh-CN/team.md §6: stage flow and
+ * Covers the mechanical guarantees from docs-zh-CN/requirements/team.md §6: stage flow and
  * order, identical proposer inputs, reviewer rotation (incl. single-model
  * fallback), the two-round revision cap, flag-driven rechecks, anonymous
  * review prompts, the blocking gate ("尚不可采用" + recommendation override),
