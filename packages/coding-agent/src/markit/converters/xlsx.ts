@@ -43,7 +43,15 @@ interface Relationship {
 	"@_Target": string;
 }
 interface RelationshipsDoc {
-	Relationships?: { Relationship?: Relationship | Relationship[] };
+	Relationships?: { Relationship?: Relationship[] };
+}
+
+/** Keep cell text from breaking the surrounding markdown table structure. */
+function escapeMarkdownCell(value: string): string {
+	return value
+		.replaceAll(/\r\n?|\n/g, " ")
+		.replaceAll("\\", "\\\\")
+		.replaceAll("|", "\\|");
 }
 
 export class XlsxConverter implements Converter {
@@ -112,10 +120,10 @@ export class XlsxConverter implements Converter {
 			sections.push(`## ${sheetName}`);
 			const [header, ...body] = tableRows;
 			const lines: string[] = [];
-			lines.push(`| ${header.join(" | ")} |`);
+			lines.push(`| ${header.map(escapeMarkdownCell).join(" | ")} |`);
 			lines.push(`| ${header.map(() => "---").join(" | ")} |`);
 			for (const row of body) {
-				lines.push(`| ${row.join(" | ")} |`);
+				lines.push(`| ${row.map(escapeMarkdownCell).join(" | ")} |`);
 			}
 			sections.push(lines.join("\n"));
 		}

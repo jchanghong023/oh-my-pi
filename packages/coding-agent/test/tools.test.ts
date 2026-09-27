@@ -909,6 +909,31 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Cannot read binary file");
 		});
 
+		it("keeps a backslash followed by a pipe inside an XLSX markdown table cell", async () => {
+			const xlsxFile = path.join(testDir, "escaped-pipe.xlsx");
+			fs.writeFileSync(
+				xlsxFile,
+				createZipArchive([
+					{
+						path: "xl/workbook.xml",
+						content: '<workbook><sheets><sheet name="Data" r:id="rId1"/></sheets></workbook>',
+					},
+					{
+						path: "xl/_rels/workbook.xml.rels",
+						content: '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+					},
+					{
+						path: "xl/worksheets/sheet1.xml",
+						content:
+							'<worksheet><sheetData><row><c t="inlineStr"><is><t>a\\|b</t></is></c><c t="inlineStr"><is><t>other</t></is></c></row><row><c t="inlineStr"><is><t>c\\|d</t></is></c><c t="inlineStr"><is><t>ok</t></is></c></row></sheetData></worksheet>',
+					},
+				]),
+			);
+			const output = getTextOutput(await readTool.execute("test-call-xlsx-escaped-pipe", { path: xlsxFile }));
+			expect(output).toContain(String.raw`| a\\\|b | other |`);
+			expect(output).toContain(String.raw`| c\\\|d | ok |`);
+		});
+
 		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {
 			await expect(readTool.execute("test-call-bad-internal-sel", { path: "artifact://3:-100-5" })).rejects.toThrow(
 				/Invalid selector ':-100-5'/,

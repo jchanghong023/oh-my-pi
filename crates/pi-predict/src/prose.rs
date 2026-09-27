@@ -317,15 +317,23 @@ pub fn mask_non_prose(text: &str) -> Cow<'_, str> {
 /// [`mask_non_prose`]; 0 for blank text.
 pub fn prose_fraction(text: &str) -> f64 {
 	let masked = mask_non_prose(text);
+	// `mask_non_prose` substitutes masked bytes with spaces, so a masked
+	// multi-byte character fans out into several spaces and `masked.chars()` no
+	// longer aligns with `text.char_indices()`; compare per character over byte
+	// ranges instead.
+	let masked_bytes = masked.as_bytes();
 	let mut total = 0usize;
 	let mut prose = 0usize;
-	for ((_, c), m) in text.char_indices().zip(masked.chars()) {
+	for (offset, c) in text.char_indices() {
 		if is_js_space(c) {
 			continue;
 		}
 		let units = c.len_utf16();
 		total += units;
-		if m != ' ' {
+		let hidden = masked_bytes[offset..offset + c.len_utf8()]
+			.iter()
+			.all(|&byte| byte == b' ');
+		if !hidden {
 			prose += units;
 		}
 	}

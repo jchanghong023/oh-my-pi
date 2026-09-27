@@ -39,6 +39,15 @@ function convertSchema(schema: unknown): unknown {
 		return {};
 	}
 
+	// Nullable form: any schema with `nullable: true` also accepts null (RFC 8927 §2.2.8).
+	if ((schema as { nullable?: unknown }).nullable === true) {
+		const rest: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+			if (key !== "nullable") rest[key] = value;
+		}
+		return { anyOf: [convertSchema(rest), { type: "null" }] };
+	}
+
 	// Enum form: { enum: ["a", "b"] } → { enum: ["a", "b"] }
 	if (isJTDEnum(schema)) {
 		return { enum: schema.enum };
@@ -357,13 +366,34 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 }
 
 /**
+ * Convert a JTD document, mapping the root `definitions` map (RFC 8927 §2.2.1) to
+ * JSON Schema `$defs` so `{ ref: "X" }` → `{ $ref: "#/$defs/X" }` resolves; without
+ * this the refs dangle and consumers drop the whole schema as unvalidatable.
+ */
+function convertJtdDocument(schema: unknown): unknown {
+	if (!isRecord(schema) || !isRecord(schema.definitions)) {
+		return convertSchema(schema);
+	}
+	const $defs: Record<string, unknown> = {};
+	for (const [name, definition] of Object.entries(schema.definitions)) {
+		$defs[name] = convertSchema(definition);
+	}
+	const root: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(schema)) {
+		if (key !== "definitions") root[key] = value;
+	}
+	const convertedRoot = convertSchema(root) as Record<string, unknown>;
+	return { ...convertedRoot, $defs };
+}
+
+/**
  * Convert JTD schema to JSON Schema.
  * If already JSON Schema, returns as-is.
  */
 export function jtdToJsonSchema(schema: unknown): unknown {
 	if (isJTDSchema(schema)) {
 		// convertSchema is recursive; re-walking its JSON Schema output caused #1345.
-		return convertSchema(schema);
+		return convertJtdDocument(schema);
 	}
 	return normalizeJsonSchemaNode(schema);
 }

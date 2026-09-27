@@ -4,6 +4,8 @@
  * Provides tools for debugging, bug report generation, and system diagnostics.
  */
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as url from "node:url";
 import { getWorkProfile } from "@oh-my-pi/pi-natives";
 import {
@@ -240,7 +242,7 @@ export class DebugSelectorComponent extends OverlayPanel {
 			}
 
 			// Write SVG to temp file and open in browser
-			const tmpPath = `/tmp/work-profile-${Date.now()}.svg`;
+			const tmpPath = path.join(os.tmpdir(), `work-profile-${Date.now()}.svg`);
 			await Bun.write(tmpPath, workProfile.svg);
 
 			openPath(tmpPath);

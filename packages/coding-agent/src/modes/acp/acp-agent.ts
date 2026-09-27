@@ -2703,6 +2703,9 @@ export class AcpAgent implements Agent {
 
 		const result = await manager.connectServers(configs, sources);
 		if (result.errors.size > 0) {
+			// This manager is not registered on the record yet, so the session teardown
+			// path cannot see it: release any servers that did connect before failing.
+			await manager.disconnectAll().catch(() => undefined);
 			throw new Error(
 				Array.from(result.errors.entries())
 					.map(([name, message]) => `${name}: ${message}`)

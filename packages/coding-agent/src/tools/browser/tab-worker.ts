@@ -2776,13 +2776,19 @@ export class WorkerCore {
 		};
 		const start = await resolveDragPoint(from, "from");
 		let end: { x: number; y: number; handle?: ElementHandle } | undefined;
+		let pressed = false;
 		try {
 			end = await resolveDragPoint(to, "to");
 			await untilAborted(signal, () => page.mouse.move(start.x, start.y));
 			await untilAborted(signal, () => page.mouse.down());
+			pressed = true;
 			await untilAborted(signal, () => page.mouse.move(end!.x, end!.y, { steps: 12 }));
 			await untilAborted(signal, () => page.mouse.up());
+			pressed = false;
 		} finally {
+			// A drag that fails after mouse.down() must not leave the button stuck
+			// pressed; the next click's down/up pairing would be off otherwise.
+			if (pressed) await page.mouse.up().catch(() => undefined);
 			if (start.handle) await start.handle.dispose().catch(() => undefined);
 			if (end?.handle) await end.handle.dispose().catch(() => undefined);
 		}

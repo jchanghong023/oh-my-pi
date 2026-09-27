@@ -633,6 +633,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			if (!response.body) throw new AIError.BedrockApiError("Bedrock response has no body", response.status);
 
 			// Track first event for the abort/diagnostic path (currently informational).
+			let sawMessageStop = false;
 			for await (const message of decodeEventStream(response.body)) {
 				const messageType = message.headers[":message-type"];
 				const eventType = message.headers[":event-type"];
@@ -686,6 +687,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 						break;
 					}
 					case "messageStop": {
+						sawMessageStop = true;
 						const ev = payload as MessageStopEvent;
 						const responseFields = isRecord(ev.additionalModelResponseFields)
 							? ev.additionalModelResponseFields
@@ -728,6 +730,16 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			}
 
 			if (options.signal?.aborted) throw new AIError.AbortError();
+
+			// stopReason initializes to "stop"; without this guard a stream that ends
+			// cleanly before messageStop (dropped connection, truncated response) would
+			// be delivered as a complete turn.
+			if (!sawMessageStop) {
+				throw new AIError.ProviderResponseError(
+					"Bedrock stream ended without a stop reason (connection dropped or response truncated)",
+					{ provider: model.provider, kind: "incomplete-stream" },
+				);
+			}
 
 			if (output.stopReason === "error" || output.stopReason === "aborted") {
 				throw new AIError.BedrockApiError(output.errorMessage ?? "An unknown error occurred", 0);

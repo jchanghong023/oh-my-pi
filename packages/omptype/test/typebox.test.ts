@@ -80,6 +80,24 @@ describe("TypeBox adapter", () => {
 		expect(valid(minWithMultiple, 0)).toBe(false);
 	});
 
+	test("exponent-form bounds validate and survive JSON Schema emission", () => {
+		const large = Type.Integer({ minimum: 1e21, exclusiveMaximum: 1e22 });
+		expect(valid(large, 1e21)).toBe(true);
+		expect(valid(large, 1e21 - 1e6)).toBe(false);
+		expect(valid(large, 1e22)).toBe(false);
+		expect(large.toJsonSchema()).toEqual({ type: "integer", minimum: 1e21, exclusiveMaximum: 1e22 });
+
+		const small = Type.Number({ exclusiveMinimum: -1e-7, maximum: 1e-7 });
+		expect(valid(small, 0)).toBe(true);
+		expect(valid(small, -1e-7)).toBe(false);
+		expect(valid(small, 2e-7)).toBe(false);
+		expect(Type.Object({ small }).toJsonSchema()).toEqual({
+			type: "object",
+			properties: { small: { type: "number", exclusiveMinimum: -1e-7, maximum: 1e-7 } },
+			required: ["small"],
+		});
+	});
+
 	test("arrays, tuples, objects, records and intersections validate", () => {
 		const array = Type.Array(Type.Number(), { minItems: 1, maxItems: 3, uniqueItems: true });
 		expect(valid(array, [1, 2])).toBe(true);

@@ -165,8 +165,18 @@ fn grab_pipewire_frame(node: u32, fd: OwnedFd) -> Result<RgbaImage, String> {
 	let result: Rc<RefCell<Option<Result<RgbaImage, String>>>> = Rc::new(RefCell::new(None));
 	let callback_result = Rc::clone(&result);
 	let callback_loop = mainloop.clone();
+	let error_result = Rc::clone(&result);
+	let error_loop = mainloop.clone();
 	let _listener = stream
 		.add_local_listener_with_user_data(UserData { format: Default::default() })
+		.state_changed(move |_, _, _, state| {
+			// A stream that ends up in an error state never reaches `process`;
+			// without this the main loop would block forever.
+			if let pw::stream::StreamState::Error(error) = state {
+				*error_result.borrow_mut() = Some(Err(format!("PipeWire stream error: {error}")));
+				error_loop.quit();
+			}
+		})
 		.param_changed(|_, user, id, param| {
 			let Some(param) = param else {
 				return;

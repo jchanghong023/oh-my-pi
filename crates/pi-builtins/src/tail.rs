@@ -686,9 +686,12 @@ mod chunks {
 	
 			// The chunk size is `BLOCK_SIZE` for all but the last chunk
 			// (that is, the chunk closest to the beginning of the file),
-			// which contains the remainder of the bytes.
-			let block_size = if self.block_idx == self.max_blocks_to_read - 1 {
-				self.size % BLOCK_SIZE
+			// which contains the remainder of the bytes. A file whose size is
+			// an exact multiple of `BLOCK_SIZE` has remainder zero, so the last
+			// chunk is a full block rather than an empty one.
+			let remainder = self.size % BLOCK_SIZE;
+			let block_size = if self.block_idx == self.max_blocks_to_read - 1 && remainder != 0 {
+				remainder
 			} else {
 				BLOCK_SIZE
 			};

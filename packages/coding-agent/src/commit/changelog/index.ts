@@ -191,7 +191,11 @@ function applyChangelogEntries(
 	}
 	const merged = mergeEntries(base, entries);
 	const sectionLines = renderUnreleasedSections(merged);
-	return [...before, ...sectionLines, ...after].join("\n");
+	// renderUnreleasedSections pops its trailing blank line and `after` starts at the
+	// next `## ` header, so without this separator the two would concatenate and each
+	// update would eat one more blank line from the file.
+	const separator = after.length > 0 ? [""] : [];
+	return [...before, ...sectionLines, ...separator, ...after].join("\n");
 }
 
 function applyDeletions(

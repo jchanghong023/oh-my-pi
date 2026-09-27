@@ -1111,7 +1111,7 @@ impl LineFormat {
 		// openssl's tagged format does not put a space before (filename)
 
 		let par_idx = rest.iter().position(|&b| b == b'(')?;
-		let sub_case = if rest[par_idx - 1] == b' ' {
+		let sub_case = if par_idx > 0 && rest[par_idx - 1] == b' ' {
 			SubCase::Posix
 		} else {
 			SubCase::OpenSSL

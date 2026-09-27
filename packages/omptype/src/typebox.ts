@@ -273,17 +273,37 @@ function tNumber(opts?: NumberOpts, integer = false): TNumber {
 	const keyword = integer ? "number.integer" : "number";
 	// The `LO <= TYPE <= HI` range spelling requires both bounds; a min-only
 	// bound must use the postfix `TYPE >= LO` form (see parseBounded in ir.ts).
+	// Exponent-form magnitudes (String(1e21) = "1e+21") cannot be spelled in the
+	// DSL — the IR tokenizer only accepts canonical plain decimal literals — so
+	// those bounds fall back to a runtime narrow instead of a hard throw.
+	const dslCanonical = (value: number): boolean => /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(String(value));
+	const dslSafe = (!lower || dslCanonical(lower.value)) && (!upper || dslCanonical(upper.value));
 	let src: string;
-	if (lower && upper) {
-		src = `${lower.value} ${lower.exclusive ? "<" : "<="} ${keyword} ${upper.exclusive ? "<" : "<="} ${upper.value}`;
-	} else if (lower) {
-		src = `${keyword} ${lower.exclusive ? ">" : ">="} ${lower.value}`;
-	} else if (upper) {
-		src = `${keyword} ${upper.exclusive ? "<" : "<="} ${upper.value}`;
+	if (dslSafe) {
+		if (lower && upper) {
+			src = `${lower.value} ${lower.exclusive ? "<" : "<="} ${keyword} ${upper.exclusive ? "<" : "<="} ${upper.value}`;
+		} else if (lower) {
+			src = `${keyword} ${lower.exclusive ? ">" : ">="} ${lower.value}`;
+		} else if (upper) {
+			src = `${keyword} ${upper.exclusive ? "<" : "<="} ${upper.value}`;
+		} else {
+			src = keyword;
+		}
 	} else {
 		src = keyword;
 	}
 	let schema = asRuntime<number>(type.raw(src));
+	if (!dslSafe && (lower || upper)) {
+		schema = schema.narrow((value, ctx) => {
+			if (lower && (value < lower.value || (lower.exclusive && value === lower.value))) {
+				return ctx.mustBe(`${lower.exclusive ? "greater than" : "at least"} ${lower.value}`);
+			}
+			if (upper && (value > upper.value || (upper.exclusive && value === upper.value))) {
+				return ctx.mustBe(`${upper.exclusive ? "less than" : "at most"} ${upper.value}`);
+			}
+			return true;
+		});
+	}
 	if (opts?.multipleOf !== undefined) {
 		const divisor = opts.multipleOf;
 		schema = schema.narrow((value, ctx) => {
@@ -294,8 +314,19 @@ function tNumber(opts?: NumberOpts, integer = false): TNumber {
 			);
 		});
 	}
+	if (!dslSafe) {
+		// A runtime narrow does not add its bounds to the IR. Keep the same JSON
+		// Schema contract for root and embedded TypeBox schemas alike.
+		const json: Record<string, unknown> = { type: integer ? "integer" : "number" };
+		if (lower) json[lower.exclusive ? "exclusiveMinimum" : "minimum"] = lower.value;
+		if (upper) json[upper.exclusive ? "exclusiveMaximum" : "maximum"] = upper.value;
+		if (opts?.multipleOf !== undefined) json.multipleOf = opts.multipleOf;
+		schema = asRuntime<number>(type.withJsonSchema(schema, json));
+	}
 	const result = applyMeta(schema, opts);
-	return opts?.multipleOf !== undefined ? withJsonSchemaKeywords(result, { multipleOf: opts.multipleOf }) : result;
+	return opts?.multipleOf !== undefined && dslSafe
+		? withJsonSchemaKeywords(result, { multipleOf: opts.multipleOf })
+		: result;
 }
 
 function tLiteral<const V extends string | number | boolean | null>(value: V, opts?: Meta): TLiteral<V> {

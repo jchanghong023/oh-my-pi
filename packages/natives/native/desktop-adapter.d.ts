@@ -14,7 +14,13 @@ interface AdaptedDesktopSession {
 		target: string,
 		x: number,
 		y: number,
-		options?: { button?: string; count?: number; modifiers?: string[]; deliveryMode?: string },
+		options?: {
+			button?: string
+			count?: number
+			modifiers?: Array<string>
+			deliveryMode?: string
+			takeover?: boolean
+		},
 	): Promise<void>;
 	typeText(target: string, text: string, options?: { deliveryMode?: string }): Promise<void>;
 	keyChord(target: string, keys: string[], options?: { deliveryMode?: string }): Promise<void>;

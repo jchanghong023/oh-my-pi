@@ -1406,6 +1406,11 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 	const startedAt = performance.now();
 	const oldWorker = tab.worker;
 	await oldWorker.terminate().catch(() => undefined);
+	// Tool calls dispatched for the dead worker's runs execute supervisor-side;
+	// terminate() alone does not stop them.
+	for (const pending of tab.pending.values()) {
+		for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
+	}
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	const payload: WorkerInitPayload = {
@@ -1461,7 +1466,12 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 	killedTabs.set(name, reason);
 	tab.state = "dead";
 	const error = postmortem.markExpectedCleanupError(new ToolError(reason));
-	for (const pending of tab.pending.values()) pending.reject(error);
+	for (const pending of tab.pending.values()) {
+		// Session tool calls execute supervisor-side, so killing the worker does not
+		// stop them; abort them explicitly like the tab-close path does.
+		for (const ctrl of pending.toolCalls.values()) ctrl.abort(error);
+		pending.reject(error);
+	}
 	tab.pending.clear();
 	if (tab.backend === "cmux") {
 		await releaseBrowser(tab.browser, { kill: false });

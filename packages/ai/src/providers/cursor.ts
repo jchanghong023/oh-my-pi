@@ -3693,7 +3693,10 @@ export function flushOpenToolCalls(
 			clearStreamingPartialJson(block);
 		}
 		const kind = block[kStreamingBlockKind];
-		if (kind === "connect-scm" || kind === "todo" || kind === "cursor-edit") {
+		// web-fetch blocks are server-resolved too (stamped kCursorExecResolved when
+		// opened); without a pairing result here they would be stripped from every
+		// rebuilt transcript, same as connect-scm/todo were before.
+		if (kind === "connect-scm" || kind === "todo" || kind === "cursor-edit" || kind === "web-fetch") {
 			if (!(kind === "cursor-edit" && state.pairedEditToolCallIds?.has(block.id))) {
 				state.onToolResult?.({
 					role: "toolResult",
