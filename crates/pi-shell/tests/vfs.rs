@@ -265,7 +265,10 @@ async fn find_exec_preserves_non_utf8_filename_bytes() {
 	let mut output = tempfile::tempfile().expect("captured stdout");
 	let error = tempfile::tempfile().expect("captured stderr");
 	let mut shell = virtual_shell(directory.path()).await;
-	shell.set_working_dir(directory.path()).await.expect("native working directory");
+	shell
+		.set_working_dir(directory.path())
+		.await
+		.expect("native working directory");
 	let parameters = capture_parameters(&shell, &output, &error);
 	let result = shell
 		.run_string(

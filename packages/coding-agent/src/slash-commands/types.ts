@@ -120,6 +120,8 @@ export interface TuiSlashCommandRuntime {
 export interface SlashCommandSpec extends BuiltinSlashCommand {
 	/** When false, the dispatcher refuses to handle invocations that include arguments. */
 	allowArgs?: boolean;
+	/** ACP-only argument allowance when the TUI handler remains argument-free. */
+	acpAllowArgs?: boolean;
 	/**
 	 * ACP-specific override for `description`. Used by `acpBuiltinSlashCommands()`
 	 * when building `available_commands_update` payloads so the client receives
