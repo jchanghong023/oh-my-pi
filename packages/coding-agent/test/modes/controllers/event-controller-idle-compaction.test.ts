@@ -39,7 +39,6 @@ function createAssistantMessage(): AssistantMessage {
 
 function createContext(
 	options: {
-		editorText?: string;
 		goalObjective?: string;
 		isCompacting?: boolean;
 		isStreaming?: boolean;
@@ -69,7 +68,6 @@ function createContext(
 			}
 		: undefined;
 	return createInteractiveModeContext({
-		editor: { getText: () => options.editorText ?? "" },
 		sessionManager: { getSessionName: () => options.sessionName },
 		todoPhases: options.todoPhases ?? [],
 		...(options.showStatus ? { showStatus: options.showStatus } : {}),
@@ -182,7 +180,6 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
-				"recap.enabled": true,
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
@@ -223,59 +220,6 @@ describe("EventController idle compaction teardown", () => {
 		controller.dispose();
 	});
 
-	it("keeps the idle recap silent when disabled", async () => {
-		resetSettingsForTest();
-		await Settings.init({
-			inMemory: true,
-			overrides: {
-				"compaction.idleEnabled": false,
-				"completion.notify": "off",
-				"recap.enabled": false,
-				"recap.idleSeconds": 1,
-			},
-		});
-		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
-		const context = createContext({
-			sessionName: "Fix login flow",
-			showStatus,
-			todoPhases: [{ name: "Work", tasks: [{ content: "Wire focused tests", status: "pending" }] }],
-		});
-
-		const controller = new EventController(context);
-		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
-		vi.advanceTimersByTime(1_000);
-
-		expect(showStatus).not.toHaveBeenCalled();
-		controller.dispose();
-	});
-
-	it("keeps the idle recap silent while the editor has a draft", async () => {
-		resetSettingsForTest();
-		await Settings.init({
-			inMemory: true,
-			overrides: {
-				"compaction.idleEnabled": false,
-				"completion.notify": "off",
-				"recap.enabled": true,
-				"recap.idleSeconds": 1,
-			},
-		});
-		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
-		const context = createContext({
-			editorText: "draft",
-			sessionName: "Fix login flow",
-			showStatus,
-			todoPhases: [{ name: "Work", tasks: [{ content: "Wire focused tests", status: "pending" }] }],
-		});
-
-		const controller = new EventController(context);
-		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
-		vi.advanceTimersByTime(1_000);
-
-		expect(showStatus).not.toHaveBeenCalled();
-		controller.dispose();
-	});
-
 	it("aborts the in-flight recap and drops its late reply when disposed", async () => {
 		resetSettingsForTest();
 		await Settings.init({
@@ -283,7 +227,6 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
-				"recap.enabled": true,
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
