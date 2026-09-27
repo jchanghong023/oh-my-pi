@@ -184,6 +184,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		proposerFailed: false,
 		reviewFailed: false,
 		recheckFailed: false,
+		pendingRecheck: false,
 		revisionFailed: false,
 		excludedFromOptions: false,
 		blockedAfterRoundCap: false,
@@ -275,6 +276,9 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 						targetLabel: record.label,
 						proposalText: record.latestProposal!.proposal,
 						keyAssumptions: record.latestProposal!.keyAssumptions,
+						risks: record.latestProposal!.risks,
+						unknowns: record.latestProposal!.unknowns,
+						evidence: record.latestProposal!.evidence,
 						round: 1,
 						recheck: false,
 					}),
@@ -357,6 +361,9 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 						targetLabel: record.label,
 						proposalText: record.latestProposal!.proposal,
 						keyAssumptions: record.latestProposal!.keyAssumptions,
+						risks: record.latestProposal!.risks,
+						unknowns: record.latestProposal!.unknowns,
+						evidence: record.latestProposal!.evidence,
 						round,
 						recheck: true,
 						unresolvedBlocking: record.unresolvedBlocking,
@@ -367,23 +374,36 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				const recheck = recheckOutcome.ok ? parseTeamReview(recheckOutcome.data) : undefined;
 				if (!recheck) {
 					// Recheck failure cannot confirm resolution; the blocking state
-					// stands and is reported as incomplete participation.
+					// stands and is reported as incomplete participation. The revised
+					// version itself also stays unverified (pendingRecheck): it must
+					// not ride on the pre-revision review's adoptable status.
 					record.recheckFailed = true;
+					record.pendingRecheck = true;
 					trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
 				} else {
 					record.reviews.push(recheck);
+					record.pendingRecheck = false;
 					trackParticipant(`recheck-${record.label}`, "reviewer", "completed");
 				}
 			}
 			record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
-			if (record.unresolvedBlocking.length === 0) break;
+			if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck) break;
 			// Without a recheck the blocking state cannot change mechanically
 			// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
-			// revision prompt would only pad rounds.
+			// revision prompt would only pad rounds. An incomplete recheck is the
+			// one exception: the round cap still binds, and a next round's recheck
+			// can yet verify the revised version.
 			if (!needsRecheck(revision.reviewFlags)) break;
 			if (round === TEAM_MAX_REVISION_ROUNDS) {
 				record.blockedAfterRoundCap = true; // third round is refused by the loop bound
 			}
+		}
+		// A revision whose required recheck never completed has not been reviewed
+		// in its current form; "no recorded blocking findings" from the initial
+		// review is not a review of this version, so it cannot stay adoptable.
+		if (record.pendingRecheck && !record.excludedFromOptions) {
+			record.excludedFromOptions = true;
+			record.exclusionReason = "修订后必需复核未完成（复核子代理失败），当前版本未经复核确认";
 		}
 	}
 	if (signal.aborted) return { status: "cancelled" };

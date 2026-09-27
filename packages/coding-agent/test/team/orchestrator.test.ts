@@ -396,6 +396,49 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题");
 	});
 
+	it("marks a recheck-failed revision 尚不可采用 instead of riding the initial review's clean status", async () => {
+		const { result, calls } = await run({
+			// Initial review finds only important issues — no recorded blocking —
+			// so the unverified revision must not inherit an adoptable status.
+			review: ({ recheck }) => (recheck ? { __fail: "recheck boom" } : reviewData({ important: 1 })),
+			revision: () => revisionData({ changedCoreDesign: true }),
+			synthesis: () => synthesisData("A"),
+		});
+		expect(result.status).toBe("completed");
+		expect(result.reportMarkdown).toContain("修订后必需复核未完成");
+		expect(result.reportMarkdown).not.toContain("✅ 可作为选项");
+		expect(result.reportMarkdown).toContain("复核子代理失败");
+		// The unverified version must not be recommended either.
+		expect(result.droppedRecommendation).toBe(true);
+		expect(result.reportMarkdown).not.toContain("【推荐】");
+		// Both rounds are spent trying to verify the revised version: 2 revision
+		// rounds and 2 recheck attempts per proposal.
+		const revisions = calls.filter(call => parseMarker(call.task).role === "revision");
+		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
+		expect(revisions).toHaveLength(6);
+		expect(rechecks).toHaveLength(6);
+	});
+
+	it("lets a later round's successful recheck verify the revision after an earlier failure", async () => {
+		const { result, calls } = await run({
+			review: ({ recheck, round }) => {
+				if (!recheck) return reviewData({ important: 1 });
+				if (round === 1) return { __fail: "recheck boom" };
+				return reviewData();
+			},
+			revision: () => revisionData({ changedCoreDesign: true }),
+			synthesis: () => synthesisData("A"),
+		});
+		expect(result.status).toBe("completed");
+		// The round-2 recheck verified the revised version, so it is adoptable
+		// and recommendable again despite the round-1 failure.
+		expect(result.reportMarkdown).toContain("✅ 可作为选项");
+		expect(result.droppedRecommendation).toBeFalsy();
+		expect(result.reportMarkdown).toContain("【推荐】方案 A");
+		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
+		expect(rechecks).toHaveLength(6); // one failed + one successful per proposal
+	});
+
 	it("drops a recommendation that structured tracking rejects", async () => {
 		const { result } = await run({
 			review: ({ recheck }) => reviewData({ blocking: 1, priorStatus: recheck ? "unresolved" : "not-applicable" }),

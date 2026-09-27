@@ -6,7 +6,13 @@
  * deterministically. The review prompt builder deliberately takes no author
  * identity: anonymity is structural, not best-effort.
  */
-import type { TeamAlignmentOutput, TeamDisposition, TeamProposalRecord, TeamReviewOutput } from "./types";
+import type {
+	TeamAlignmentOutput,
+	TeamDisposition,
+	TeamEvidenceItem,
+	TeamProposalRecord,
+	TeamReviewOutput,
+} from "./types";
 
 function section(title: string, body: string): string {
 	const trimmed = body.trim();
@@ -68,7 +74,9 @@ export function buildAlignmentTask(args: {
 				`### 方案 ${record.label}${proposal.noViableProposal ? "（提案者声明：未形成可行方案）" : ""}\n`,
 				proposal.proposal,
 				"",
-				`关键假设：\n${bulletList(proposal.keyAssumptions.map(a => `${a.content}（${a.status}；依据：${a.basis}）`))}`,
+				`关键假设：\n${bulletList(proposal.keyAssumptions.map(a => `${a.content}（${a.status}；依据：${a.basis}；若不成立：${a.impactIfWrong}）`))}`,
+				`主要风险：\n${bulletList(proposal.risks)}`,
+				`未知项：\n${bulletList(proposal.unknowns)}`,
 				`验收建议：\n${bulletList(proposal.acceptanceCriteria)}`,
 				`歧义理解：\n${bulletList(proposal.ambiguityInterpretations.map(a => `${a.ambiguity} → 采用：${a.interpretation}`))}`,
 				`证据：\n${bulletList(proposal.evidence.map(e => `${e.claim}（${e.source}）`))}`,
@@ -110,7 +118,10 @@ export function buildReviewTask(args: {
 	alignment: TeamAlignmentOutput;
 	targetLabel: string;
 	proposalText: string;
-	keyAssumptions: readonly { content: string; basis: string; status: string }[];
+	keyAssumptions: readonly { content: string; basis: string; status: string; impactIfWrong: string }[];
+	risks: readonly string[];
+	unknowns: readonly string[];
+	evidence: readonly TeamEvidenceItem[];
 	round: number;
 	recheck: boolean;
 	unresolvedBlocking?: readonly string[];
@@ -155,8 +166,13 @@ export function buildReviewTask(args: {
 		section(`待审方案（${target}）`, args.proposalText),
 		section(
 			"该方案的关键假设",
-			bulletList(args.keyAssumptions.map(a => `${a.content}（${a.status}；依据：${a.basis}）`)),
+			bulletList(
+				args.keyAssumptions.map(a => `${a.content}（${a.status}；依据：${a.basis}；若不成立：${a.impactIfWrong}）`),
+			),
 		),
+		section("该方案的主要风险", bulletList(args.risks)),
+		section("该方案的未知项", bulletList(args.unknowns)),
+		section("该方案的证据（可回查）", bulletList(args.evidence.map(e => `${e.claim}（${e.source}）`))),
 		section(
 			"事实差异清单（供回查）",
 			bulletList(
@@ -285,6 +301,10 @@ export function buildSynthesisTask(args: {
 				`### 方案 ${record.label}${record.excludedFromOptions ? `（结构化追踪：尚不可采用 — ${record.exclusionReason ?? ""}）` : ""}\n`,
 				latest.proposal,
 				"",
+				`关键假设：\n${bulletList(latest.keyAssumptions.map(a => `${a.content}（${a.status}；若不成立：${a.impactIfWrong}）`))}`,
+				`主要风险：\n${bulletList(latest.risks)}`,
+				`未知项：\n${bulletList(latest.unknowns)}`,
+				`证据：\n${bulletList(latest.evidence.map(e => `${e.claim}（${e.source}）`))}`,
 			];
 			if (latest.noViableProposal) {
 				lines.push("提案者声明：依据不足，未形成可行方案（见正文中的缺口说明）。\n");

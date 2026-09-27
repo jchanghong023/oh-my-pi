@@ -193,6 +193,13 @@ export interface TeamProposalRecord {
 	proposerFailed: boolean;
 	reviewFailed: boolean;
 	recheckFailed: boolean;
+	/**
+	 * True when the current `latestProposal` is a revision whose required
+	 * recheck did not complete (subagent failure): that version was never
+	 * reviewed, so it must not be offered as an adoptable option until a
+	 * later round's recheck succeeds.
+	 */
+	pendingRecheck: boolean;
 	revisionFailed: boolean;
 	/** True when the proposal cannot be offered as a final option. */
 	excludedFromOptions: boolean;
