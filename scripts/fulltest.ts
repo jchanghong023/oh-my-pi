@@ -21,7 +21,9 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 
 // Fork scope for local Rust tests: the crates the fork actively maintains and
 // that pass on Windows (pi-builtins has ~21 pre-existing upstream Windows
-// failures and stays out of local verification by contract).
+// failures and stays out of local verification by contract). pi-vfs carries
+// the fork's Windows file-identity fixes and pi-predict the fork's behavior
+// changes, so their unit tests run locally too.
 export const CORE_RUST_CRATES = [
 	"pi-natives",
 	"pi-shell",
@@ -29,6 +31,8 @@ export const CORE_RUST_CRATES = [
 	"pi-ast",
 	"pi-iso",
 	"pi-vcs",
+	"pi-vfs",
+	"pi-predict",
 	"pi-walker",
 ] as const satisfies readonly string[];
 
@@ -248,10 +252,12 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/team/integration.test.ts",
 			"test/team/members.test.ts",
 			"test/team/orchestrator.test.ts",
+			"test/team/prompts.test.ts",
 			"test/team/runner.test.ts",
 			"test/team/schemas.test.ts",
 			"test/wiki-tool-availability.test.ts",
 			"test/wiki-tool.test.ts",
+			"test/zcode-api-models.test.ts",
 		],
 	},
 ];
