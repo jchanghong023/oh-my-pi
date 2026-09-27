@@ -4852,6 +4852,16 @@ export class AgentSession implements SettingsScope {
 		this.#repoLifecycle?.onSessionChange();
 	}
 
+	/**
+	 * Report that a built-in non-tool path (e.g. the JCH git slash commands)
+	 * executed and may have mutated the working tree, so the repository index
+	 * marks its coverage uncertain instead of serving pre-command content as
+	 * complete. Best-effort: sessions without an attached repo lifecycle ignore it.
+	 */
+	notifyRepoCommandExecuted(kind: "bash" | "eval" | "git", cwd?: string): void {
+		this.#repoLifecycle?.commandExecuted(kind, cwd);
+	}
+
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
 		this.#commandMetadataChangedListeners.push(listener);
 		return () => {

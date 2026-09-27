@@ -86,8 +86,12 @@ export class RepoLifecycle {
 		});
 	}
 
-	/** Arbitrary code and shell commands can mutate files; command text is never parsed for paths. */
-	commandExecuted(kind: "bash" | "eval", cwd?: string): void {
+	/**
+	 * Arbitrary code and shell commands can mutate files; command text is never
+	 * parsed for paths. `git` reports the built-in JCH git slash commands, which
+	 * run git directly and bypass the bash/eval tool pipeline.
+	 */
+	commandExecuted(kind: "bash" | "eval" | "git", cwd?: string): void {
 		this.#safely(`${kind} execution`, () => {
 			const service = this.#current();
 			if (!service?.storage.state().generation) return;

@@ -271,4 +271,118 @@ describe("direct JCH git slash commands", () => {
 		expect(result.prompt).toContain("默认不超过 20 个");
 		expect(result.prompt).toContain("packages/coding-agent");
 	});
+
+	describe("repo index notification", () => {
+		interface RepoNotification {
+			kind: string;
+			cwd?: string;
+		}
+
+		function sessionStub(): { session: object; calls: RepoNotification[] } {
+			const calls: RepoNotification[] = [];
+			return {
+				calls,
+				session: {
+					notifyRepoCommandExecuted: (kind: string, cwd?: string) => {
+						calls.push({ kind, cwd });
+					},
+				},
+			};
+		}
+
+		it("reports /jchgitpull to the repo index as a possible worktree mutation", async () => {
+			writeFileSync(join(seed, "remote.txt"), "remote\n");
+			git(seed, ["add", "remote.txt"]);
+			git(seed, ["commit", "-m", "remote update"]);
+			git(seed, ["push"]);
+
+			const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitpull");
+			if (!command?.handle) throw new Error("Missing /jchgitpull handler");
+			const { session, calls } = sessionStub();
+			const result = await command.handle({ name: command.name, args: "", text: "/jchgitpull" }, {
+				cwd: work,
+				session,
+				output: () => {},
+			} as unknown as SlashCommandRuntime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(calls).toEqual([{ kind: "git", cwd: work }]);
+		}, 30_000);
+
+		it("reports /jchgitdiscardall to the repo index once reset has started", async () => {
+			writeFileSync(join(work, "tracked.txt"), "dirty\n");
+			writeFileSync(join(work, "untracked.txt"), "untracked\n");
+			const { session, calls } = sessionStub();
+			let editor = "/jchgitdiscardall";
+			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
+				ctx: {
+					editor: {
+						setText: (text: string) => {
+							editor = text;
+						},
+					},
+					session,
+					sessionManager: { getCwd: () => work },
+					showStatus: () => {},
+					showError: () => {},
+				},
+			} as unknown as TuiSlashCommandRuntime);
+
+			expect(consumed).toBe(true);
+			expect(editor).toBe("");
+			expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("base");
+			expect(calls).toEqual([{ kind: "git", cwd: work }]);
+		}, 30_000);
+
+		it("reports a partially executed sequence whose reset step failed", async () => {
+			// fetch succeeds, `reset --hard @{upstream}` fails: the mutating step
+			// started, so the index must still be told the tree may have changed.
+			git(remote, ["config", "receive.denyDeleteCurrent", "ignore"]);
+			git(seed, ["push", "origin", "--delete", "main"]);
+			writeFileSync(join(work, "tracked.txt"), "dirty\n");
+
+			const { session, calls } = sessionStub();
+			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
+				ctx: {
+					editor: { setText: () => {} },
+					session,
+					sessionManager: { getCwd: () => work },
+					showStatus: () => {},
+					showError: () => {},
+				},
+			} as unknown as TuiSlashCommandRuntime);
+
+			expect(consumed).toBe(true);
+			expect(calls).toEqual([{ kind: "git", cwd: work }]);
+		}, 30_000);
+
+		it("does not report the read-only /jchgs", async () => {
+			const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgs");
+			if (!command?.handle) throw new Error("Missing /jchgs handler");
+			const { session, calls } = sessionStub();
+			await command.handle({ name: command.name, args: "", text: "/jchgs" }, {
+				cwd: work,
+				session,
+				output: () => {},
+			} as unknown as SlashCommandRuntime);
+			expect(calls).toEqual([]);
+		}, 30_000);
+
+		it("does not report when a failing fetch prevented any mutating step", async () => {
+			git(work, ["remote", "set-url", "origin", join(root, "missing.git")]);
+			const { session, calls } = sessionStub();
+			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
+				ctx: {
+					editor: { setText: () => {} },
+					session,
+					sessionManager: { getCwd: () => work },
+					showStatus: () => {},
+					showError: () => {},
+				},
+			} as unknown as TuiSlashCommandRuntime);
+
+			expect(consumed).toBe(true);
+			expect(calls).toEqual([]);
+		}, 30_000);
+	});
 });

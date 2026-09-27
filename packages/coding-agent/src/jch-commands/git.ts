@@ -8,6 +8,8 @@ interface GitStep {
 interface GitSequenceResult {
 	ok: boolean;
 	output: string;
+	/** True once any worktree-mutating step has started, even if it then failed. */
+	mutated: boolean;
 }
 
 function formatGitOutput(stdout: string, stderr: string): string {
@@ -30,25 +32,72 @@ async function runGit(cwd: string, args: readonly string[]) {
 
 async function runGitSequence(cwd: string, steps: readonly GitStep[]): Promise<GitSequenceResult> {
 	const output: string[] = [];
+	let mutated = false;
 	for (const step of steps) {
+		if (WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) mutated = true;
 		const result = await runGit(step.cwd ?? cwd, step.args);
 		const text = formatGitOutput(result.stdout, result.stderr);
 		if (text) output.push(text);
 		if (result.exitCode !== 0) {
 			const command = `git ${step.args.join(" ")}`;
 			output.push(`${command} failed with exit code ${result.exitCode}`);
-			return { ok: false, output: output.join("\n") };
+			return { ok: false, output: output.join("\n"), mutated };
 		}
 	}
-	return { ok: true, output: output.join("\n") || "Done." };
+	return { ok: true, output: output.join("\n") || "Done.", mutated };
+}
+
+/** Git verbs that can change tracked content or the working tree; `fetch`/`status` cannot. */
+const WORKTREE_MUTATING_GIT_VERBS = new Set([
+	"pull",
+	"merge",
+	"rebase",
+	"reset",
+	"clean",
+	"checkout",
+	"switch",
+	"restore",
+	"stash",
+	"cherry-pick",
+	"revert",
+	"apply",
+	"am",
+	"bisect",
+	"rm",
+	"mv",
+]);
+
+function stepsMayMutateWorktree(steps: readonly GitStep[]): boolean {
+	return steps.some(step => WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? ""));
+}
+
+/**
+ * The repo index hears about bash/eval tool runs through the session's tool
+ * events, but these commands run git directly. Without this report, queries
+ * keep serving pre-command content as complete coverage. Best-effort and
+ * duck-typed so tests (and hosts without a session) can pass a plain stub.
+ */
+function notifyRepoWorktreeMutation(session: unknown, cwd: string): void {
+	try {
+		(
+			session as { notifyRepoCommandExecuted?: (kind: "bash" | "eval" | "git", cwd?: string) => void } | undefined
+		)?.notifyRepoCommandExecuted?.("git", cwd);
+	} catch {
+		// The index hint must never turn a finished git command into an error.
+	}
 }
 
 async function handleGitSequence(runtime: SlashCommandRuntime, steps: readonly GitStep[]): Promise<SlashCommandResult> {
 	try {
 		const result = await runGitSequence(runtime.cwd, steps);
 		await runtime.output(result.output);
+		// A mutating step may have run even when a later step failed, so both
+		// outcomes report the possible mutation.
+		if (result.mutated) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 	} catch (error) {
 		await runtime.output(formatError(error));
+		// A throw gives no reliable progress report; report conservatively.
+		if (stepsMayMutateWorktree(steps)) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 	}
 	return { consumed: true };
 }
@@ -107,6 +156,9 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				]);
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);
+				// reset/clean change the worktree; once either has started, even a
+				// later failure must invalidate the repo index's pre-command coverage.
+				if (result.mutated) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			} catch (error) {
 				runtime.ctx.showError(formatError(error));
 			}
