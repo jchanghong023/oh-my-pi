@@ -1,5 +1,4 @@
 import type { CommandMetadata } from "@oh-my-pi/pi-utils/cli";
-import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 
 export const acpHelp = {
 	description: "Run omp as an ACP (Agent Client Protocol) server over stdio",
@@ -100,7 +99,7 @@ export const modelsHelp = { description: "List, search, and refresh available mo
 export const pluginHelp = { description: "Manage plugins (install, uninstall, list, etc.)" } satisfies CommandMetadata;
 
 export const playHelp = {
-	description: `Replay a /record session recording in the terminal (${formatKeyHint("space")} pauses, ${formatKeyHint("q")} quits)`,
+	description: "Replay a /record session recording in the terminal (space pauses, q quits)",
 } satisfies CommandMetadata;
 
 export const predictHelp = {
@@ -147,7 +146,7 @@ export const streamHelp = {
 } satisfies CommandMetadata;
 
 export const tinyModelsHelp = {
-	description: "Download tiny local models (session titles + memory)",
+	description: "Download tiny local models (session titles, memory, word completion)",
 } satisfies CommandMetadata;
 
 export const tokenHelp = { description: "Get the API key or OAuth token for a provider" } satisfies CommandMetadata;

@@ -187,6 +187,12 @@ export interface CollabHostOptions {
 	 * awaits it inside {@link CollabHost.start}.
 	 */
 	identity?: Promise<CollabRoomIdentity>;
+	/**
+	 * Called once when the relay ends the room for good after it opened —
+	 * a non-retryable close or fatal socket failure (e.g. send backlog), not
+	 * `stop()`. Teardown has already begun; the owner may start a successor.
+	 */
+	onEnded?: () => void;
 }
 
 /**
@@ -227,6 +233,7 @@ export class CollabHost {
 	readonly #instanceId: string;
 	readonly #generation: number;
 	readonly #guestActionsReady: () => boolean;
+	readonly #onEnded: (() => void) | undefined;
 	readonly #access: CollabAccess;
 	/** Stable room secrets, when the controller supplied them (pending read). */
 	readonly #identity: Promise<CollabRoomIdentity> | undefined;
@@ -276,6 +283,7 @@ export class CollabHost {
 		this.#access = options.access ?? "control";
 		this.#guestActionsReady = options.guestActionsReady ?? (() => true);
 		this.#identity = options.identity;
+		this.#onEnded = options.onEnded;
 		// The room mirrors the session that is active when it is created; the
 		// frame guard and the registry snapshot compare against this from then on.
 		this.#sessionId = ctx.sessionManager.getSessionId();
@@ -443,7 +451,7 @@ export class CollabHost {
 		socket.onClose = (reason, willReconnect) => {
 			this.#relayConnected = false;
 			this.#relayCloseReason = reason;
-			if (this.#stopped) return;
+			if (this.#stopping || this.#stopped) return;
 			if (!opened) {
 				firstOpen.reject(new Error(reason));
 				return;
@@ -453,6 +461,7 @@ export class CollabHost {
 			} else {
 				void this.#teardown();
 				this.#ctx.session.emitNotice("warning", `Collab ended: ${reason}`, "collab");
+				this.#onEnded?.();
 			}
 		};
 		socket.connect();

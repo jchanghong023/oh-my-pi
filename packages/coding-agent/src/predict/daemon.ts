@@ -5,28 +5,31 @@
  * Lazily opens one `TextPredictor` per requested engine, keeps each learning
  * engine current with `history.db` (rows past a persisted row-id cursor, on
  * open and on every `sync`), persists on a debounce and on exit, and exits
- * after an idle window. Engine state that fails to load is wiped and rebuilt
- * from the full history.
+ * after an idle window. A learning engine that starts from empty state first
+ * learns the Claude Code and Codex prompt histories (`foreign-history.ts`).
+ * `smollm` requests are answered by SmolLM and ngram together (`blend.ts`).
+ * Engine state that fails to load is wiped and rebuilt the same way.
  */
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import type { Database } from "bun:sqlite";
-import { TextPredictor } from "@oh-my-pi/pi-natives";
+import { type PredictedWord, TextPredictor } from "@oh-my-pi/pi-natives";
 import { getHistoryDbPath, isEnoent, logger, postmortem, VERSION, withFileLock } from "@oh-my-pi/pi-utils";
 import { LineParser, writeJsonLine } from "../tiny/jsonl-socket";
 import { endpointAlive } from "../tiny/worker-server";
 import { openSqliteReadConnection } from "../tools/sqlite-reader";
+import { blendPredictions } from "./blend";
+import { readForeignPrompts } from "./foreign-history";
 import {
 	TEXT_PREDICT_AGENT_DIR_ENV,
 	TEXT_PREDICT_SOCKET_ENV,
 	type TextPredictMethod,
 	type TextPredictRequest,
 	type TextPredictResponse,
-	type TextPredictTarget,
 	textPredictReadyBanner,
 } from "./protocol";
-import { ensureSmolLmWeights } from "./smollm-weights";
+import { getSmolLmModelDir, smolLmWeightsReady } from "./smollm-weights";
 
 /** Exit after this long without a request; clients restart the daemon on demand. */
 const IDLE_EXIT_MS = 15 * 60_000;
@@ -39,7 +42,8 @@ const OPEN_RETRY_MS = 60_000;
 const SHUTDOWN_BUDGET_MS = 2_000;
 const CURSOR_FILE = "cursor.json";
 
-async function readCursor(stateDir: string): Promise<number> {
+/** Persisted history cursor, or `undefined` when the engine has no persisted state yet. */
+async function readCursor(stateDir: string): Promise<number | undefined> {
 	try {
 		const raw: unknown = await Bun.file(path.join(stateDir, CURSOR_FILE)).json();
 		if (typeof raw === "object" && raw !== null && "historyId" in raw && typeof raw.historyId === "number") {
@@ -47,9 +51,18 @@ async function readCursor(stateDir: string): Promise<number> {
 		}
 		return 0;
 	} catch (error) {
-		if (isEnoent(error)) return 0;
+		if (isEnoent(error)) return undefined;
 		logger.warn("text-predict: unreadable history cursor; re-ingesting", { stateDir, error: String(error) });
 		return 0;
+	}
+}
+
+/** SmolLM was requested before its weights exist; not a load failure, so no retry backoff. */
+class SmolLmWeightsMissingError extends Error {
+	constructor() {
+		super(
+			"SmolLM weights are not downloaded yet (the editor fetches them on first use, or run `omp tiny-models download smollm`)",
+		);
 	}
 }
 
@@ -57,6 +70,8 @@ async function readCursor(stateDir: string): Promise<number> {
 class Engine {
 	/** Highest `history.id` fed to `observe`. */
 	cursor: number;
+	/** Foreign prompt histories still owed to empty state (see {@link readForeignPrompts}). */
+	#seed: boolean;
 	/** Cursor value covered by the last successful persist. */
 	#persistedCursor: number;
 	#dirty = false;
@@ -66,10 +81,11 @@ class Engine {
 		readonly method: TextPredictMethod,
 		readonly stateDir: string,
 		readonly predictor: TextPredictor,
-		cursor: number,
+		cursor: number | undefined,
 	) {
-		this.cursor = cursor;
-		this.#persistedCursor = cursor;
+		this.cursor = cursor ?? 0;
+		this.#persistedCursor = this.cursor;
+		this.#seed = cursor === undefined;
 	}
 
 	get dirty(): boolean {
@@ -80,7 +96,10 @@ class Engine {
 		this.#dirty = true;
 	}
 
-	/** Feed history rows past the cursor through `observe`, one ingestion at a time. */
+	/**
+	 * Feed history rows past the cursor through `observe`, one ingestion at a
+	 * time; empty state first learns the foreign prompt histories.
+	 */
 	ingest(historyDbPath: string): Promise<number> {
 		// `apple` only wraps the system dictionary; it learns nothing.
 		if (this.method === "apple") return Promise.resolve(0);
@@ -104,15 +123,24 @@ class Engine {
 	}
 
 	async #ingestNow(historyDbPath: string): Promise<number> {
+		let ingested = 0;
+		if (this.#seed) {
+			const prompts = await readForeignPrompts();
+			for (let at = 0; at < prompts.length; at += INGEST_BATCH) {
+				await this.predictor.observe(prompts.slice(at, at + INGEST_BATCH));
+			}
+			this.#seed = false;
+			if (prompts.length > 0) this.markDirty();
+			ingested += prompts.length;
+		}
 		let db: Database;
 		try {
 			db = await openSqliteReadConnection(historyDbPath);
 		} catch (error) {
 			// No history yet (fresh install) is not an error.
 			if (!isEnoent(error)) logger.debug("text-predict: history unavailable", { error: String(error) });
-			return 0;
+			return ingested;
 		}
-		let ingested = 0;
 		try {
 			const page = db.query<{ id: number; prompt: string }, [number, number]>(
 				"SELECT id, prompt FROM history WHERE id > ? ORDER BY id LIMIT ?",
@@ -137,8 +165,6 @@ class TextPredictDaemon {
 	#agentDir: string;
 	#historyDbPath: string;
 	#engines = new Map<TextPredictMethod, Promise<Engine>>();
-	/** Engines whose open finished, so `auto` can tell "loaded" from "still opening" without waiting. */
-	#loaded = new Map<TextPredictMethod, Engine>();
 	#failedAt = new Map<TextPredictMethod, number>();
 	#connections = new Set<net.Socket>();
 	#server: net.Server | undefined;
@@ -242,12 +268,14 @@ class TextPredictDaemon {
 					engines: [...this.#engines.keys()],
 				};
 			case "complete": {
-				const engine = await this.#target(request.method);
-				const suggestion = await engine.predictor.complete(request.before, request.prefix);
-				return { id: request.id, ok: true, op: "complete", engine: engine.method, suggestion };
+				const suggestion =
+					request.method === "smollm"
+						? await this.#blend(request.before, request.prefix)
+						: await (await this.#engine(request.method)).predictor.complete(request.before, request.prefix);
+				return { id: request.id, ok: true, op: "complete", suggestion };
 			}
 			case "feedback": {
-				const engine = await this.#target(request.method);
+				const engine = await this.#engine(request.method);
 				await engine.predictor.feedback(request.before, request.prefix, request.suggestion, request.accepted);
 				engine.markDirty();
 				this.#schedulePersist();
@@ -269,17 +297,19 @@ class TextPredictDaemon {
 	}
 
 	/**
-	 * Engine serving `target`. `auto` prefers SmolLM but never waits for it:
-	 * until SmolLM has loaded (first-use weight download, engine open) or while
-	 * it cannot load, ngram answers and SmolLM keeps opening in the background.
+	 * The `smollm` setting: SmolLM's and ngram's answers blended
+	 * ({@link blendPredictions}). Until SmolLM loads (weights still
+	 * downloading) or while it cannot, ngram answers alone through the blend.
 	 */
-	#target(target: TextPredictTarget): Promise<Engine> {
-		if (target !== "auto") return this.#engine(target);
-		const smollm = this.#loaded.get("smollm");
-		if (smollm) return Promise.resolve(smollm);
-		// Start (or retry after OPEN_RETRY_MS) the SmolLM open; its failure is logged in #engine.
-		this.#engine("smollm").catch(() => {});
-		return this.#engine("ngram");
+	async #blend(before: string, prefix: string): Promise<PredictedWord | null> {
+		const [ngram, smollm] = await Promise.all([
+			this.#engine("ngram").then(engine => engine.predictor.complete(before, prefix)),
+			this.#engine("smollm").then(
+				engine => engine.predictor.complete(before, prefix),
+				() => null,
+			),
+		]);
+		return blendPredictions(ngram, smollm);
 	}
 
 	#engine(method: TextPredictMethod): Promise<Engine> {
@@ -292,13 +322,15 @@ class TextPredictDaemon {
 		if (!pending) {
 			pending = this.#open(method);
 			this.#engines.set(method, pending);
-			pending.then(
-				engine => this.#loaded.set(method, engine),
-				error => {
-					this.#failedAt.set(method, Date.now());
-					logger.warn("text-predict: engine unavailable", { method, error: String(error) });
-				},
-			);
+			pending.catch(error => {
+				if (error instanceof SmolLmWeightsMissingError) {
+					// Checked again on the next request: the composer is fetching them.
+					this.#engines.delete(method);
+					return;
+				}
+				this.#failedAt.set(method, Date.now());
+				logger.warn("text-predict: engine unavailable", { method, error: String(error) });
+			});
 		}
 		return pending;
 	}
@@ -306,22 +338,28 @@ class TextPredictDaemon {
 	async #open(method: TextPredictMethod): Promise<Engine> {
 		const stateDir = path.join(this.#agentDir, "predict", method);
 		await fs.mkdir(stateDir, { recursive: true });
-		const modelDir = method === "smollm" ? await ensureSmolLmWeights() : undefined;
+		let modelDir: string | undefined;
+		if (method === "smollm") {
+			if (!(await smolLmWeightsReady())) throw new SmolLmWeightsMissingError();
+			modelDir = getSmolLmModelDir();
+		}
 		const startedAt = performance.now();
-		let predictor = new TextPredictor({ method, stateDir, modelDir });
-		let cursor: number;
+		// SmolLM only serves the blend, which gates on its own score.
+		const showThreshold = method === "smollm" ? 0 : undefined;
+		let predictor = new TextPredictor({ method, stateDir, modelDir, showThreshold });
+		let cursor: number | undefined;
 		try {
 			await predictor.ready();
 			cursor = await readCursor(stateDir);
 		} catch (error) {
 			// Unloadable state (corrupt, or from an incompatible engine version):
-			// start over and rebuild it from the whole history.
+			// start over and rebuild it like a fresh install.
 			logger.warn("text-predict: engine state failed to load; rebuilding", { method, error: String(error) });
 			await fs.rm(stateDir, { recursive: true, force: true });
 			await fs.mkdir(stateDir, { recursive: true });
-			predictor = new TextPredictor({ method, stateDir, modelDir });
+			predictor = new TextPredictor({ method, stateDir, modelDir, showThreshold });
 			await predictor.ready();
-			cursor = 0;
+			cursor = undefined;
 		}
 		const engine = new Engine(method, stateDir, predictor, cursor);
 		const ingested = await engine.ingest(this.#historyDbPath);

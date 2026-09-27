@@ -533,14 +533,6 @@ jobs:
               restore-keys: |
                  bun-${{ runner.os }}-
          - run: bun install --frozen-lockfile
-         # Main-only save: caches saved on a tag or branch are readable only by
-         # that ref yet count against the shared 10 GB quota (see bazel-cache).
-         - name: Save bun store
-           if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
-           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-           with:
-              path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
          - name: Install prebuilt native addon(s)
            uses: ./.github/actions/native-artifacts
            with:
@@ -583,6 +575,16 @@ jobs:
            with:
               name: omp-binary-${{ matrix.target_id }}
               path: ${{ matrix.binary_path }}
+         # Main-only save, after the build so it is off the leg's critical
+         # path: caches saved on a tag or branch are readable only by that ref
+         # yet count against the shared 10 GB quota (see bazel-cache).
+         - name: Save bun store
+           if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
+           continue-on-error: true
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
 
    release_github:
       name: Publish GitHub release
