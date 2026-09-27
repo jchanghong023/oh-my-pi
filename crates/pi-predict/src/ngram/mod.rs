@@ -157,7 +157,12 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
 	let written = std::fs::write(&temp, bytes)
 		// FlushFileBuffers needs a write handle on Windows; a read-only open
 		// returns ERROR_ACCESS_DENIED there (fsync on O_RDONLY passes on Linux).
-		.and_then(|()| std::fs::OpenOptions::new().write(true).open(&temp)?.sync_all())
+		.and_then(|()| {
+			std::fs::OpenOptions::new()
+				.write(true)
+				.open(&temp)?
+				.sync_all()
+		})
 		.and_then(|()| std::fs::rename(&temp, &target));
 	if let Err(error) = written {
 		let _ = std::fs::remove_file(&temp);

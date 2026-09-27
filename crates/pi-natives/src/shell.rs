@@ -22,7 +22,10 @@ use crate::task;
 
 /// Expand Windows 8.3 components without resolving symlinks or junctions.
 #[napi]
-#[allow(clippy::missing_const_for_fn, reason = "only const off-Windows, where the cfg-eliminated body is trivial")]
+#[allow(
+	clippy::missing_const_for_fn,
+	reason = "only const off-Windows, where the cfg-eliminated body is trivial"
+)]
 pub fn expand_windows_long_path(path: String) -> String {
 	#[cfg(windows)]
 	{
@@ -39,7 +42,10 @@ pub fn expand_windows_long_path(path: String) -> String {
 
 /// Get the existing Windows 8.3 spelling; preserve the input when unavailable.
 #[napi]
-#[allow(clippy::missing_const_for_fn, reason = "only const off-Windows, where the cfg-eliminated body is trivial")]
+#[allow(
+	clippy::missing_const_for_fn,
+	reason = "only const off-Windows, where the cfg-eliminated body is trivial"
+)]
 pub fn get_windows_short_path(path: String) -> String {
 	#[cfg(windows)]
 	{
