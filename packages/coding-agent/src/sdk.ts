@@ -198,6 +198,7 @@ import {
 	type SettingsGatedToolDelta,
 } from "./session/session-tools";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
+import { CacheWarmer } from "./session/cache-warmer";
 import { createSettingsAwareStreamFn, resolveOpenAIWebsocketPreference } from "./session/settings-stream-fn";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
@@ -307,6 +308,7 @@ import {
 	cfgInlineToolDescriptors,
 	cfgPersonality,
 	cfgProviderAppendOnlyContext,
+	cfgProvidersCacheWarming,
 	cfgProvidersKimiApiFormat,
 	cfgRetryFallbackChains,
 	cfgRetryModelFallback,
@@ -553,6 +555,13 @@ export interface CreateAgentSessionOptions {
 	thinkingLevelCeiling?: Effort;
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
 	openAIServiceTier?: ServiceTier | null;
+	/**
+	 * Enable prompt-cache warming for this session's main loop. Defaults to
+	 * `true`; one-shot and spawned sessions (task subagents, standalone
+	 * compaction, agentic commit) pass `false` so short-lived sessions never
+	 * schedule background warm requests.
+	 */
+	cacheWarming?: boolean;
 	/**
 	 * Per-family service tiers for this session, replacing the `tier.*` settings
 	 * and any persisted tier history. Called once the initial model is final —
@@ -2118,6 +2127,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agentLifecycle: options.agentRegistry ? undefined : () => AgentLifecycleManager.global(),
 			getSessionSpawns: () => options.spawns ?? "*",
 			getSessionAgents: () => session?.getSessionAgents() ?? [],
+			advertisedSessionAgents: () => session?.getAdvertisedSessionAgents() ?? [],
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
 			getActiveModel: () => agent?.state.model ?? model,
@@ -4079,6 +4089,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				preferWebsockets: streamOptions?.preferWebsockets ?? resolveOpenAIWebsocketPreference(settings),
 			});
 		};
+		// Prompt-cache warmer for the main agent loop only: replays the last
+		// request through the same primary wrapper just before the entry would
+		// expire, so idle gaps do not force a full-prefix cache re-write.
+		// Spawned/one-shot sessions opt out via `cacheWarming: false`.
+		const cacheWarmer: CacheWarmer | undefined =
+			options.cacheWarming === false
+				? undefined
+				: new CacheWarmer({
+						stream: (model, context, streamOptions) => primaryStreamFn(model, context, streamOptions),
+						getPromptTokens: () => session.lastPromptTokens(),
+						getMode: () => cfgProvidersCacheWarming.get(settings),
+						decide: event => extensionRunner.emitCacheWarmingDecision(event),
+					});
 		const codeModeState: { namespacesInfo?: unknown } = {};
 		const transformToolCallArguments = (args: Record<string, unknown>): Record<string, unknown> => {
 			let result = args;
@@ -4132,9 +4155,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					notifyFirstChatDispatch = undefined;
 					try {
 						cb();
-					} catch (err) {
+					} catch (error) {
 						logger.warn("onFirstChatDispatch hook threw", {
-							error: err instanceof Error ? err.message : String(err),
+							error: error instanceof Error ? error.message : String(error),
 						});
 					}
 				}
@@ -4143,15 +4166,23 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					agent.state.tools.some(tool => tool.name === "think") &&
 					supportsExternalThinking(streamModel);
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
-				return primaryStreamFn(streamModel, context, {
+				const merged: SimpleStreamOptions = {
 					...streamOptions,
-					anthropicCacheRefresh: true,
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
 					...(codeModeState.namespacesInfo === undefined
 						? {}
 						: { toolNamespacesInfo: codeModeState.namespacesInfo }),
+				};
+				const stream = primaryStreamFn(streamModel, context, {
+					...merged,
 					...(fallbackCreditRedemption !== undefined ? { fallbackCreditRedemption } : {}),
 				});
+				// Every request through this streamFn is this session's own main
+				// loop (side-channel, advisor, and maintenance requests use
+				// dedicated wrappers), so it owns the warmer. The replay omits the
+				// one-shot fallback-credit redemption.
+				session.startCacheWarming(streamModel, context, merged);
+				return stream;
 			},
 			cursorExecHandlers,
 			getCursorTools: () => (toolSession.xdev ? listXdevTools(toolSession.xdev) : []),
@@ -4285,6 +4316,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// streamed and parsed on the main thread.
 		session = new AgentSession({
 			codeModeState,
+			cacheWarmer,
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
 			advisorMemoryPrompt,

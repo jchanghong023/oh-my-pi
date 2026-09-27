@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows sessions started from an 8.3 short path (such as `C:\Users\ADMINI~1\project`) using the short spelling as the project directory, and home-directory paths written with 8.3 aliases not being shortened to `~` in the status line, tool labels, and errors ([#13394](https://github.com/can1357/oh-my-pi/pull/13394) by [@CoderTCY](https://github.com/CoderTCY))
+- Fixed `omp update` and other one-shot commands on Windows printing "ended before completing" and exiting 1 after they had actually completed ([#13470](https://github.com/can1357/oh-my-pi/issues/13470))
+- Fixed `omp update` on Windows printing "ended before completing: the event loop drained" and exiting 1 when no `~/.npmrc` or `~/.bunfig.toml` exists ([#13470](https://github.com/can1357/oh-my-pi/issues/13470))
+- Fixed `wait` with no owned background jobs blocking silently for up to 30 minutes while its parent or a peer kept running; it now returns after a 5-second window that grows to 5 minutes on repeated waits and names who is still running ([#13513](https://github.com/can1357/oh-my-pi/issues/13513), [#13516](https://github.com/can1357/oh-my-pi/pull/13516) by [@H4vC](https://github.com/H4vC))
+
+## [18.3.5] - 2026-09-27
+
+### Added
+
+- Added API-key-billed OpenAI Responses web search (`openai/gpt-6-luna`, then `openai/gpt-5.6-luna`), tried after every Codex entry in the default search fallback chain so ChatGPT-subscription search is exhausted before any API usage is billed ([#13467](https://github.com/can1357/oh-my-pi/pull/13467) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Added prompt-cache warming, ported from [earendil-works/pi](https://github.com/earendil-works/pi): shortly before a prompt-cache entry expires, the main agent loop replays its last request and cuts the replay off at the first generated token, so idle gaps no longer force a full-prefix cache re-write. A refresh fires only when the expected avoided-miss cost clears its cost by $0.05, and warming stops as soon as a refresh misses the cache. Controlled by `providers.cacheWarming` (`off` / `streaming` / `idle`, default `idle`); idle warming covers 5-minute entries only, and models without a declared `promptCache` lifetime are never warmed. Extensions can override each decision through the `cache_warming_decision` event ([#12699](https://github.com/can1357/oh-my-pi/pull/12699) by [@KamijoToma](https://github.com/KamijoToma)).
+
+## [18.3.4] - 2026-09-27
+
+### Breaking Changes
+
+- Replaced the `task` tool's `complexity` field with `solutionSpace`, a description of how open-ended the subtask is; `auto` thinking for spawned subagents now picks effort from it alone
+
+### Changed
+
+- `auto` thinking now picks effort for every turn by how open-ended the problem is, so large volumes of mechanical work no longer raise it
+
+### Fixed
+
+- Fixed agents looping for hours when every turn spends the whole output limit on reasoning: length-stop retries now tell the model its reasoning was discarded and to act in smaller steps, and a subagent whose length-stop recovery gives up now fails with that error instead of being re-prompted into the same loop
+- Fixed tagging a model with `^` mid-session dropping the provider prompt cache for every following turn: new `m<N>` pseudonyms now arrive as a hidden session notice instead of rewriting the `task` description, which only absorbs them at a base-prompt rebuild
+
 ## [18.3.3] - 2026-09-27
 
 ### Added
