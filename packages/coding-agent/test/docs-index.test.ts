@@ -377,6 +377,130 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
+	it("ranks a complete technical name past the scoring prefix above scattered terms", async () => {
+		const root = await tempDir("docs-late-phrase-rank-");
+		const agentDir = await tempDir("docs-late-phrase-agent-");
+		// Both sections carry both terms within the 2000-char scoring prefix; the
+		// complete name sits ~4k chars into the long section, past that prefix.
+		await fs.writeFile(
+			path.join(root, "late-exact.md"),
+			`# Notes\nstd and vector mentioned separately at first.\n${"background ".repeat(400)}\nUse std::vector here.\n`,
+		);
+		await fs.writeFile(path.join(root, "early-loose.md"), "# Notes\nstd and vector mentioned separately.\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search("std::vector", { index: "manual" }).sections;
+			expect(hits.map(hit => hit.path)).toEqual(["late-exact.md", "early-loose.md"]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("serves path, line numbers and text from one snapshot across a concurrent index swap", async () => {
+		const root = await tempDir("docs-snapshot-root-");
+		const agentDir = await tempDir("docs-snapshot-agent-");
+		await fs.writeFile(path.join(root, "evidence.md"), "# Evidence\nold-evidence needle content\n");
+		const reader = new DocsService({ agentDir, cwd: root });
+		const writer = new DocsService({ agentDir, cwd: root });
+		// Restore the raw handle before close(): the proxy below is read-only.
+		const realDb = reader.storage.db;
+		try {
+			await reader.init(".", "old-evidence");
+			const sectionId = reader.search("needle", { index: "old-evidence" }).sections[0].sectionId;
+			// The committed end-state of a concurrent remove + re-import: the old
+			// rows are gone and an unrelated section occupies the freed rowid
+			// (`sections.id` is a plain rowid and is reused after a delete).
+			const swapIndexForReimport = (): void => {
+				writer.remove("old-evidence");
+				const created = writer.storage.create({ name: "replacement", rootPath: root });
+				writer.storage.transaction(() => {
+					writer.storage.db
+						.query(
+							"INSERT INTO documents(id,index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?,?)",
+						)
+						.run(900, created.id, "policy.md", "Policy", "markdown", "deadbeef", 1, 0);
+					writer.storage.db
+						.query(
+							"INSERT INTO sections(id,index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+						)
+						.run(
+							sectionId,
+							created.id,
+							900,
+							0,
+							"Policy",
+							1,
+							1,
+							2,
+							0,
+							44,
+							"UNRELATED NEW EVIDENCE: different policy",
+						);
+					writer.storage.db
+						.query(
+							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+						)
+						.run(
+							sectionId,
+							sectionId,
+							created.id,
+							"policy.md",
+							"Policy",
+							"unrelated new evidence different policy",
+						);
+				});
+			};
+			// Interleave the swap exactly between the candidate read and the
+			// page-text read of the next search.
+			let reads = 0;
+			(reader.storage as { db: Database }).db = new Proxy(realDb, {
+				get(target, property) {
+					const value = Reflect.get(target, property, target);
+					if (typeof value !== "function") return value;
+					if (property === "query") {
+						return (sql: string) => {
+							const statement = (value as (this: Database, sqlToRun: string) => unknown).call(
+								target,
+								sql,
+							) as Record<string, unknown>;
+							return new Proxy(statement, {
+								get(stmtTarget, stmtProp) {
+									const stmtValue = Reflect.get(stmtTarget, stmtProp, stmtTarget);
+									if ((stmtProp === "all" || stmtProp === "get") && typeof stmtValue === "function") {
+										return (...bound: unknown[]) => {
+											const rows = (stmtValue as (this: unknown, ...boundArgs: unknown[]) => unknown).apply(
+												stmtTarget,
+												bound,
+											);
+											reads++;
+											if (reads === 1) swapIndexForReimport();
+											return rows;
+										};
+									}
+									return typeof stmtValue === "function"
+										? (stmtValue as (...boundArgs: unknown[]) => unknown).bind(stmtTarget)
+										: stmtValue;
+								},
+							});
+						};
+					}
+					return (value as (...args: unknown[]) => unknown).bind(target);
+				},
+			});
+			const hits = reader.search("needle", { index: "old-evidence" }).sections;
+			expect(hits).toHaveLength(1);
+			// Provenance and text must describe the same version of the section.
+			expect(hits[0].path).toBe("evidence.md");
+			expect(hits[0].text).toContain("old-evidence needle content");
+			expect(hits[0].text).not.toContain("UNRELATED NEW EVIDENCE");
+		} finally {
+			(reader.storage as { db: Database }).db = realDb;
+			reader.close();
+			writer.close();
+		}
+	});
+
 	it("prefers a topical section title over an incidental mention or inherited heading", async () => {
 		const root = await tempDir("docs-title-rank-");
 		const agentDir = await tempDir("docs-title-agent-");

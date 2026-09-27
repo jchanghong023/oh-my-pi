@@ -252,4 +252,14 @@ export class DocsStorage {
 	transaction<T>(callback: () => T): T {
 		return this.db.transaction(callback)();
 	}
+
+	/**
+	 * Run reads on one deferred-transaction snapshot. Under WAL a writer
+	 * (import/remove in another process) may commit meanwhile, but this
+	 * transaction keeps seeing its own consistent snapshot — queries that
+	 * assemble a page from several reads must not straddle a swap.
+	 */
+	read<T>(callback: () => T): T {
+		return this.db.transaction(callback).deferred();
+	}
 }

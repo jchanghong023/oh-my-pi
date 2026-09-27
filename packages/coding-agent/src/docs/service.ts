@@ -157,7 +157,10 @@ const CANDIDATE_LIMIT_MAX = 10_000;
  * Markdown characters fetched per candidate for scoring. Sections cap at 18k
  * characters (`MAX_SECTION_CHARS` in `markdown.ts`), and pulling every
  * candidate's full text dominated query time on large corpora; the page's real
- * text is loaded afterwards, by id.
+ * text is loaded afterwards, by id. Tier flags are still judged on the whole
+ * section: `scoreCandidate` loads the full text (point lookup, once per
+ * candidate thanks to the `#fill` cache) for every section longer than this
+ * prefix.
  */
 const CANDIDATE_SNIPPET_CHARS = 2_000;
 
@@ -186,14 +189,26 @@ interface RankedRow {
 }
 
 /**
- * Score one candidate row against the query's literal patterns. Pure per
- * section: the snippet is a fixed prefix of the stored Markdown and the BM25
- * rank is row-local, so a row scored in one window keeps its score in every
- * wider one and `#fill` can reuse it.
+ * Score one candidate row against the query's literal patterns. Window-stable
+ * per section: the snippet is a fixed prefix of the stored Markdown, the BM25
+ * rank is row-local, and the full text (when loaded) depends only on the
+ * section id — so a row scored in one window keeps its score in every wider
+ * one and `#fill` can reuse it.
  */
-function scoreCandidate(row: Record<string, unknown>, patterns: readonly RegExp[], phrase: RegExp): RankedRow {
-	const raw = normalizeSearchText(row.snippet as string);
-	const plain = normalizeSearchText(normalizePlainText(row.snippet as string));
+function scoreCandidate(
+	row: Record<string, unknown>,
+	patterns: readonly RegExp[],
+	phrase: RegExp,
+	loadFullText: (sectionId: number) => string | undefined,
+): RankedRow {
+	// Sections longer than the fetched prefix are re-judged on their full stored
+	// text: a phrase or complete term set past the prefix must still earn its
+	// ranking tier instead of losing it to the truncation.
+	const snippet = row.snippet as string;
+	const text =
+		(row.raw_len as number) > snippet.length ? (loadFullText(row.section_id as number) ?? snippet) : snippet;
+	const raw = normalizeSearchText(text);
+	const plain = normalizeSearchText(normalizePlainText(text));
 	const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
 	const path = normalizeSearchText(row.relative_path as string);
 	const separator = heading.lastIndexOf(" > ");
@@ -205,9 +220,7 @@ function scoreCandidate(row: Record<string, unknown>, patterns: readonly RegExp[
 	return {
 		row,
 		literalCount,
-		// Judged on the snippet, which is all this window loads; the stored
-		// section is the final word (that text is what the caller renders).
-		stub: sectionShape(`${row.snippet as string}\n`) === "stub",
+		stub: sectionShape(`${text}\n`) === "stub",
 		titlePhrase: phrase.test(title),
 		phrase: phrase.test(raw) || phrase.test(plain) || phrase.test(heading) || phrase.test(path),
 	};
@@ -374,16 +387,18 @@ export class DocsService {
 		const terms = analyzeQuery(query);
 		if (terms.length === 0) return { sections: [], total: 0 };
 		const match = compileFtsQuery(terms);
-		const sections = this.#rank(match, query, terms, filter, limit);
-		// Only the unscoped caller asks for a count, and it must cover what the page
-		// itself may serve.
-		const counted = options.index === undefined ? this.#countMatches(match) : undefined;
-		// `#rank` and `#countMatches` read separate snapshots: an `omp docs remove`
-		// committing between them leaves a count below the page it describes. Those
-		// sections were just served, so the stale count reads as unknown rather
-		// than contradicting them.
-		const total = counted !== undefined && counted < sections.length ? undefined : counted;
-		return { sections, total };
+		// One read snapshot for candidates, page texts and the count: section ids
+		// are rowids and get reused after a remove, so a query that straddled a
+		// concurrent remove+re-import could pair a surviving id with unrelated
+		// new text while keeping the old path and line numbers.
+		return this.storage.read(() => {
+			const sections = this.#rank(match, query, terms, filter, limit);
+			// Only the unscoped caller asks for a count, and it must cover what the
+			// page itself may serve.
+			const counted = options.index === undefined ? this.#countMatches(match) : undefined;
+			const total = counted !== undefined && counted < sections.length ? undefined : counted;
+			return { sections, total };
+		});
 	}
 
 	/**
@@ -431,10 +446,16 @@ export class DocsService {
 		// Every wider window re-reads the rows the narrower one already scored, so
 		// each section is scored once and reused across the whole widening chain.
 		const scored = new Map<number, RankedRow>();
-		let page = this.#fill(scored, [], patterns, phrase, limit);
+		const loadFullText = (sectionId: number): string | undefined =>
+			(
+				this.storage.db.query("SELECT raw_markdown FROM sections WHERE id=?").get(sectionId) as {
+					raw_markdown: string;
+				} | null
+			)?.raw_markdown;
+		let page = this.#fill(scored, [], patterns, phrase, loadFullText, limit);
 		for (const candidateLimit of candidateWindows(Math.min(CANDIDATE_WINDOW_MAX, limit * 3 + 50))) {
 			const candidates = this.#candidates(match, filter, candidateLimit);
-			page = this.#fill(scored, candidates, patterns, phrase, limit);
+			page = this.#fill(scored, candidates, patterns, phrase, loadFullText, limit);
 			if (page.readable >= limit || candidates.length < candidateLimit) break;
 		}
 		return this.#hits(page.entries);
@@ -448,7 +469,7 @@ export class DocsService {
 	): Array<Record<string, unknown>> {
 		return this.storage.db
 			.query(`SELECT f.rowid section_id,i.name index_name,d.relative_path,s.heading_path,s.line_start,s.line_end,
-			 substr(s.raw_markdown,1,${CANDIDATE_SNIPPET_CHARS}) snippet, bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
+			 substr(s.raw_markdown,1,${CANDIDATE_SNIPPET_CHARS}) snippet, length(s.raw_markdown) raw_len, bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
 			 FROM sections_fts f JOIN sections s ON s.id=f.rowid JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
 			 WHERE sections_fts MATCH ?${filter.sql} ORDER BY rank,s.id LIMIT ?`)
 			.all(match, ...filter.args, candidateLimit) as Array<Record<string, unknown>>;
@@ -465,6 +486,7 @@ export class DocsService {
 		candidates: Array<Record<string, unknown>>,
 		patterns: readonly RegExp[],
 		phrase: RegExp,
+		loadFullText: (sectionId: number) => string | undefined,
 		limit: number,
 	): { entries: RankedRow[]; readable: number } {
 		const ranked: RankedRow[] = [];
@@ -472,7 +494,7 @@ export class DocsService {
 			const sectionId = row.section_id as number;
 			let entry = scored.get(sectionId);
 			if (entry === undefined) {
-				entry = scoreCandidate(row, patterns, phrase);
+				entry = scoreCandidate(row, patterns, phrase, loadFullText);
 				scored.set(sectionId, entry);
 			}
 			ranked.push(entry);
