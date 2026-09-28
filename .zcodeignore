@@ -1,0 +1,125 @@
+# Dependencies
+node_modules
+.npm/
+
+# Build output
+dist/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+target/
+.xwin-cache/
+*.tsbuildinfo
+*.node
+*.b64.js
+/result
+/result-*
+
+# Environment
+.env
+.venv
+
+# Editors
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+*.kate-swp
+*~
+
+# OS
+*.tmp
+# Bun compile temp artifacts, left in cwd if a `Bun.build({ compile })` run is killed mid-write
+*.bun-build
+.DS_Store
+
+# Logs & profiling
+*.log
+tui-debug.log
+*.cpuprofile
+
+# Test & coverage
+coverage/
+.nyc_output/
+packages/ai/test/.temp-images/
+
+# Project specific
+!.omp/
+.omp/plugins/
+.pi_config/
+.opencode/
+.worktrees/
+.worktree/
+compaction-results/
+changes/
+__pycache__/
+
+# Scratch files
+syntax.jsonl
+out.jsonl
+out.html
+pi-*.html
+.close_issue.sh
+
+# Generated files
+packages/coding-agent/src/export/html/tool-views.generated.js
+packages/natives/npm/
+/runs/
+python/omp-rpc/src/omp_rpc.egg-info/
+python/omp-rpc/build/
+# parallel-agent worktrees
+.wt/
+CPU*.md
+packages/coding-agent/binaries/
+
+# robomp runtime state
+python/robomp/data/
+python/robomp/.cache/
+python/robomp/src/robomp/static/
+python/robomp/web/dist/
+python/robomp/web/verify-out/
+/verify-out/
+python/robomp/.env
+
+# Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
+packages/coding-agent/bench/boot-baseline.json
+
+# Bazel
+/bazel-bin
+/bazel-out
+/bazel-testlogs
+/bazel-pi
+/bazel-oh-my-pi
+/.bazelrc.user
+
+.parity/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
