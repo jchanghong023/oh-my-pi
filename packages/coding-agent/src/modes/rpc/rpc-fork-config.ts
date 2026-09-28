@@ -9,27 +9,48 @@
  * with `validateProviderConfiguration` gating. `test_model` fires a one-shot
  * `streamSimple` probe and attributes failures to six categories.
  */
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Model, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { YAML } from "bun";
 import { createSettingsHost } from "../../config/settings-ui";
 import { lookup } from "../../config/registry";
 import {
 	ModelsConfigFile,
 	validateProviderConfiguration,
 	type ProviderValidationConfig,
+	type ProviderValidationModel,
 } from "../../config/models-config";
 import { cfgDisabledProviders, cfgEnabledModels } from "../../config/model-settings";
 import { withActiveSettings, type Settings } from "../../config/settings";
+import { replaceFileAtomically } from "../../utils/atomic-file";
 import type { AgentSession } from "../../session/agent-session";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase, RpcForkModelTestResult } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
 
 const MASKED_CREDENTIAL = "••••••••";
+
+/** Legal models.yml `api` values — must stay aligned with ApiSchema in config/models-config-schema-bundle.ts. */
+const PROVIDER_APIS: readonly ProviderValidationConfig["api"][] = [
+	"openai-completions",
+	"openai-responses",
+	"openai-codex-responses",
+	"azure-openai-responses",
+	"anthropic-messages",
+	"bedrock-converse-stream",
+	"google-generative-ai",
+	"google-gemini-cli",
+	"google-vertex",
+	"openrouter-decisions",
+	"typesafe",
+];
+
+const PROVIDER_AUTH_MODES: readonly ProviderValidationConfig["auth"][] = ["apiKey", "none", "oauth"];
 
 export interface RpcForkSettingsEntry {
 	key: string;
@@ -50,10 +71,14 @@ function maskCredential(value: unknown): unknown {
 }
 
 export class RpcForkConfigController {
+	readonly #agentDir: string;
+
 	constructor(
 		private readonly host: RpcForkHost,
 		private readonly session: AgentSession,
+		options?: { agentDir?: string },
 	) {
+		this.#agentDir = options?.agentDir ?? getAgentDir();
 		host.registerCommand("get_settings", command => this.#getSettings(command));
 		host.registerCommand("set_settings", command => this.#setSettings(command));
 		host.registerCommand("unset_settings", command => this.#unsetSettings(command));
@@ -208,31 +233,105 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "upsert_provider", 'provider must be an object with a "name"');
 		}
 		const name = provider.name.trim();
-		const models: Array<{ id: string; api?: unknown; contextWindow?: number; maxTokens?: number }> = Array.isArray(
-			provider.models,
-		)
-			? (provider.models as Array<Record<string, unknown>>).map(model => ({
-					id: String(model.id ?? ""),
-					...(model.api !== undefined ? { api: model.api } : {}),
-					...(model.contextWindow !== undefined ? { contextWindow: Number(model.contextWindow) } : {}),
-					...(model.maxTokens !== undefined ? { maxTokens: Number(model.maxTokens) } : {}),
-				}))
-			: [];
-		void models;
-		const validationConfig: ProviderValidationConfig = {
-			baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : undefined,
-			apiKey: typeof provider.apiKey === "string" ? provider.apiKey : undefined,
-			auth: provider.auth as ProviderValidationConfig["auth"],
-			...(typeof provider.api === "string" ? { api: provider.api as ProviderValidationConfig["api"] } : {}),
-			models: models.map(model => ({
-				id: model.id,
-				...(typeof model.api === "string" ? { api: model.api as ProviderValidationConfig["api"] } : {}),
-				...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-				...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
-			})),
-		};
+		// Sanitize first, then validate and write the exact same payload: values
+		// models.yml's schema would reject on the next load must fail here instead
+		// of bricking the config (loadOrDefault silently falls back to defaults,
+		// dropping every custom provider).
+		const payload: {
+			baseUrl?: string;
+			apiKey?: string;
+			auth?: ProviderValidationConfig["auth"];
+			api?: ProviderValidationConfig["api"];
+			models?: ProviderValidationModel[];
+		} = {};
+		if (provider.baseUrl !== undefined) {
+			if (typeof provider.baseUrl !== "string") {
+				return this.host.context.error(command.id, "upsert_provider", "provider.baseUrl must be a string");
+			}
+			payload.baseUrl = provider.baseUrl;
+		}
+		if (provider.apiKey !== undefined) {
+			if (typeof provider.apiKey !== "string") {
+				return this.host.context.error(command.id, "upsert_provider", "provider.apiKey must be a string");
+			}
+			payload.apiKey = provider.apiKey;
+		}
+		if (provider.auth !== undefined) {
+			if (
+				typeof provider.auth !== "string" ||
+				!PROVIDER_AUTH_MODES.includes(provider.auth as ProviderValidationConfig["auth"])
+			) {
+				return this.host.context.error(
+					command.id,
+					"upsert_provider",
+					`provider.auth must be one of: ${PROVIDER_AUTH_MODES.join(", ")}`,
+				);
+			}
+			payload.auth = provider.auth as ProviderValidationConfig["auth"];
+		}
+		if (provider.api !== undefined) {
+			if (typeof provider.api !== "string" || !PROVIDER_APIS.includes(provider.api)) {
+				return this.host.context.error(
+					command.id,
+					"upsert_provider",
+					`provider.api must be one of: ${PROVIDER_APIS.join(", ")}`,
+				);
+			}
+			payload.api = provider.api;
+		}
+		if (provider.models !== undefined) {
+			if (!Array.isArray(provider.models)) {
+				return this.host.context.error(command.id, "upsert_provider", "provider.models must be an array");
+			}
+			payload.models = [];
+			for (const [index, entry] of provider.models.entries()) {
+				if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id) {
+					return this.host.context.error(
+						command.id,
+						"upsert_provider",
+						`provider.models[${index}] must be an object with a non-empty "id"`,
+					);
+				}
+				const model: ProviderValidationModel = { id: entry.id };
+				if (entry.api !== undefined) {
+					if (typeof entry.api !== "string" || !PROVIDER_APIS.includes(entry.api)) {
+						return this.host.context.error(
+							command.id,
+							"upsert_provider",
+							`provider.models[${index}].api must be one of: ${PROVIDER_APIS.join(", ")}`,
+						);
+					}
+					model.api = entry.api;
+				}
+				if (entry.contextWindow !== undefined) {
+					if (
+						typeof entry.contextWindow !== "number" ||
+						!Number.isFinite(entry.contextWindow) ||
+						entry.contextWindow <= 0
+					) {
+						return this.host.context.error(
+							command.id,
+							"upsert_provider",
+							`provider.models[${index}].contextWindow must be a positive number`,
+						);
+					}
+					model.contextWindow = entry.contextWindow;
+				}
+				if (entry.maxTokens !== undefined) {
+					if (typeof entry.maxTokens !== "number" || !Number.isFinite(entry.maxTokens) || entry.maxTokens <= 0) {
+						return this.host.context.error(
+							command.id,
+							"upsert_provider",
+							`provider.models[${index}].maxTokens must be a positive number`,
+						);
+					}
+					model.maxTokens = entry.maxTokens;
+				}
+				payload.models.push(model);
+			}
+		}
 		try {
-			validateProviderConfiguration(name, validationConfig, "models-config");
+			validateProviderConfiguration(name, { ...payload, models: payload.models ?? [] }, "models-config");
 		} catch (error) {
 			return this.host.context.error(
 				command.id,
@@ -240,16 +339,26 @@ export class RpcForkConfigController {
 				error instanceof Error ? error.message : String(error),
 			);
 		}
-		const config = ModelsConfigFile.loadOrDefault();
-		const providers = { ...(config.providers ?? {}) };
+		let config: Record<string, unknown>;
+		try {
+			this.#assertModelsConfigLoadable();
+			config = await this.#readModelsConfig();
+		} catch (error) {
+			return this.host.context.error(
+				command.id,
+				"upsert_provider",
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
 		providers[name] = {
 			...(isRecord(providers[name]) ? providers[name] : {}),
-			...(typeof provider.baseUrl === "string" ? { baseUrl: provider.baseUrl } : {}),
-			...(typeof provider.apiKey === "string" ? { apiKey: provider.apiKey } : {}),
-			...(provider.auth !== undefined ? { auth: provider.auth } : {}),
-			...(provider.api !== undefined ? { api: provider.api } : {}),
-			...(provider.models !== undefined ? { models: validationConfig.models } : {}),
-		} as (typeof providers)[string];
+			...(payload.baseUrl !== undefined ? { baseUrl: payload.baseUrl } : {}),
+			...(payload.apiKey !== undefined ? { apiKey: payload.apiKey } : {}),
+			...(payload.auth !== undefined ? { auth: payload.auth } : {}),
+			...(payload.api !== undefined ? { api: payload.api } : {}),
+			...(payload.models !== undefined ? { models: payload.models } : {}),
+		};
 		try {
 			await this.#writeModelsConfig({ ...config, providers });
 		} catch (error) {
@@ -265,12 +374,22 @@ export class RpcForkConfigController {
 
 	async #deleteProvider(command: RpcForkCommandBase): Promise<RpcResponse> {
 		const name = (command as { provider?: unknown }).provider;
-		if (typeof name !== "string" || !name) {
+		if (typeof name !== "string" || !name.trim()) {
 			return this.host.context.error(command.id, "delete_provider", "provider is required");
 		}
-		const config = ModelsConfigFile.loadOrDefault();
-		const providers = { ...(config.providers ?? {}) };
-		if (!Object.hasOwn(providers, name)) {
+		let config: Record<string, unknown>;
+		try {
+			this.#assertModelsConfigLoadable();
+			config = await this.#readModelsConfig();
+		} catch (error) {
+			return this.host.context.error(
+				command.id,
+				"delete_provider",
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
+		if (!Object.hasOwn(providers, name.trim())) {
 			return this.host.context.error(
 				command.id,
 				"delete_provider",
@@ -278,7 +397,7 @@ export class RpcForkConfigController {
 				"provider_not_configured",
 			);
 		}
-		delete providers[name];
+		delete providers[name.trim()];
 		try {
 			await this.#writeModelsConfig({ ...config, providers });
 		} catch (error) {
@@ -289,13 +408,53 @@ export class RpcForkConfigController {
 			);
 		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "delete_provider", { provider: name });
+		return this.host.context.success(command.id, "delete_provider", { provider: name.trim() });
+	}
+
+	/**
+	 * Refuses provider CRUD when the production models.yml exists but fails
+	 * parse/schema validation: a read-modify-write would otherwise replace the
+	 * whole file (other custom providers included) with defaults plus this
+	 * edit. Not-found passes through. Only evaluated on the production path —
+	 * an injected `agentDir` (test seam) skips this check so tests do not
+	 * couple to the host machine's real config validity.
+	 */
+	#assertModelsConfigLoadable(): void {
+		if (this.#agentDir !== getAgentDir()) return;
+		const loaded = ModelsConfigFile.tryLoad();
+		if (loaded.status === "error") {
+			throw new Error(`models.yml is invalid (${loaded.error.message}); fix it before editing providers`);
+		}
+	}
+
+	/**
+	 * models.yml read side of the read-modify-write. The `ModelsConfigFile`
+	 * singleton is bound to the real agent dir; an injected `agentDir` (test
+	 * seam) reads the injected path directly so CRUD round-trips through one
+	 * location.
+	 */
+	async #readModelsConfig(): Promise<Record<string, unknown>> {
+		if (this.#agentDir === getAgentDir()) return ModelsConfigFile.loadOrDefault();
+		try {
+			const parsed = YAML.parse(await fs.readFile(path.join(this.#agentDir, "models.yml"), "utf-8"));
+			return isRecord(parsed) ? parsed : {};
+		} catch (error) {
+			if (isEnoent(error)) return {};
+			throw error;
+		}
 	}
 
 	/** models.yml has no ConfigFile write API — read-modify-write + invalidate. */
 	async #writeModelsConfig(config: Record<string, unknown>): Promise<void> {
-		const filePath = path.join(getAgentDir(), "models.yml");
-		await fs.writeFile(filePath, stringifyYamlConfig(config), "utf-8");
+		const filePath = path.join(this.#agentDir, "models.yml");
+		const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+		try {
+			await fs.writeFile(tmpPath, stringifyYamlConfig(config), { encoding: "utf-8", mode: 0o600 });
+			await replaceFileAtomically(tmpPath, filePath);
+		} catch (error) {
+			await fs.rm(tmpPath, { force: true }).catch(() => {});
+			throw error;
+		}
 		ModelsConfigFile.invalidate();
 	}
 

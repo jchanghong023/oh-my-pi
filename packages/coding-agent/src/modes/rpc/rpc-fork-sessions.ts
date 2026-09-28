@@ -127,10 +127,10 @@ export class RpcForkSessionController {
 		if (scope !== "cwd" && scope !== "all") {
 			return this.host.context.error(command.id, "list_sessions", `Invalid scope: ${String(scope)}`);
 		}
-		const cappedLimit = Math.min(
-			Math.max(limit === undefined ? DEFAULT_LIST_LIMIT : Number(limit), 1),
-			MAX_LIST_LIMIT,
-		);
+		if (limit !== undefined && (typeof limit !== "number" || Number.isNaN(limit))) {
+			return this.host.context.error(command.id, "list_sessions", "limit must be a number");
+		}
+		const cappedLimit = Math.min(Math.max(limit === undefined ? DEFAULT_LIST_LIMIT : limit, 1), MAX_LIST_LIMIT);
 		let infos: SessionInfo[];
 		if (scope === "all") {
 			infos = await listAllSessions(this.#storage);
@@ -160,6 +160,7 @@ export class RpcForkSessionController {
 		const pinned = await loadPinnedSessionIds(this.#agentDir);
 		if (pinned.has(sessionId) !== pin) {
 			await toggleSessionPin(sessionId, this.#agentDir);
+			this.emitSessionsChanged();
 		}
 		return this.host.context.success(command.id, command.type, { pinned: pin });
 	}

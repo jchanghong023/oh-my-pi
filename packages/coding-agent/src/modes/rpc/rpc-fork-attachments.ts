@@ -12,6 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pdfToMarkdown } from "@oh-my-pi/pi-natives";
+import { escapeXmlAttribute } from "@oh-my-pi/pi-utils";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 
 export interface RpcForkAttachmentFile {
@@ -138,6 +139,9 @@ export async function resolveRpcAttachments(
 	attachments: RpcForkAttachment[],
 	cwd: string,
 ): Promise<{ images: ImageContent[]; textPrefix: string }> {
+	if (!Array.isArray(attachments)) {
+		throw new RpcAttachmentError("attachments must be an array", "attachment_unsupported");
+	}
 	if (attachments.length > MAX_ATTACHMENTS) {
 		throw new RpcAttachmentError(
 			`Too many attachments: ${attachments.length} (limit ${MAX_ATTACHMENTS})`,
@@ -153,6 +157,12 @@ export async function resolveRpcAttachments(
 				"attachment_unsupported",
 			);
 		}
+		if (attachment.kind === "file" && (typeof attachment.path !== "string" || attachment.path === "")) {
+			throw new RpcAttachmentError("File attachment requires a non-empty path", "attachment_unsupported");
+		}
+		if (attachment.kind === "data" && typeof attachment.data !== "string") {
+			throw new RpcAttachmentError("Data attachment requires base64 string data", "attachment_unsupported");
+		}
 		const declaredMime = typeof attachment.mime === "string" ? attachment.mime : undefined;
 		const ext = path.extname(attachment.kind === "file" ? attachment.path : "").toLowerCase();
 
@@ -163,8 +173,14 @@ export async function resolveRpcAttachments(
 		}
 		if (isPdfAttachment(declaredMime, ext)) {
 			const { bytes, label } = await readAttachmentBytes(attachment, cwd);
-			const converted = await pdfToMarkdown(new Uint8Array(bytes));
-			textBlocks.push(boundedTextBlock(`Attached PDF: ${label}`, converted.markdown));
+			let markdown: string;
+			try {
+				markdown = (await pdfToMarkdown(new Uint8Array(bytes))).markdown;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new RpcAttachmentError(`PDF attachment not readable: ${label} (${message})`, "attachment_unreadable");
+			}
+			textBlocks.push(boundedTextBlock(`Attached PDF: ${label}`, markdown));
 			continue;
 		}
 		if (declaredMime !== undefined && !declaredMime.startsWith("text/") && !TEXT_EXTENSIONS.has(ext)) {
@@ -185,7 +201,7 @@ export async function resolveRpcAttachments(
 function boundedTextBlock(header: string, text: string): string {
 	const clipped =
 		text.length > MAX_TEXT_ATTACHMENT_CHARS ? `${text.slice(0, MAX_TEXT_ATTACHMENT_CHARS)}\n…(truncated)` : text;
-	return `<attachment title="${header}">\n${clipped}\n</attachment>`;
+	return `<attachment title="${escapeXmlAttribute(header)}">\n${clipped}\n</attachment>`;
 }
 
 function mimeFromExt(ext: string): string {

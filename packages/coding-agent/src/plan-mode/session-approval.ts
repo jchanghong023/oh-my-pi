@@ -24,6 +24,8 @@ export interface ApprovedPlanDispatchOptions {
 	preserveContext?: boolean;
 	/** TUI hook invoked right before the synthetic prompt dispatch (overlay teardown). */
 	beforeDispatch?: () => void;
+	/** Invoked after the best-effort autosave attempt: the claimed path, or the error when it failed. */
+	onAutosave?: (result: { savedPath: string | null; error?: Error }) => void;
 }
 
 /**
@@ -33,16 +35,20 @@ export interface ApprovedPlanDispatchOptions {
  */
 export async function dispatchApprovedPlan(session: AgentSession, options: ApprovedPlanDispatchOptions): Promise<void> {
 	session.setPlanReferencePath(options.planFilePath);
+	let autosavedPath: string | null = null;
+	let autosaveError: Error | undefined;
 	try {
-		await autosaveApprovedPlan({
+		autosavedPath = await autosaveApprovedPlan({
 			settings: session.settings,
 			cwd: session.sessionManager.getCwd(),
 			title: options.title,
 			planContent: options.planContent,
 		});
-	} catch {
+	} catch (error) {
 		// Autosave is best-effort in both hosts; approval intent stands.
+		autosaveError = error instanceof Error ? error : new Error(String(error));
 	}
+	options.onAutosave?.({ savedPath: autosavedPath, ...(autosaveError ? { error: autosaveError } : {}) });
 
 	// Approved plans land in a fresh (or compacted) session whose first
 	// user-visible turn is the synthetic plan-approved prompt. Seed an auto
@@ -118,14 +124,16 @@ export async function enterPlanModeForSession(
 }
 
 /**
- * Session-level plan-mode exit: restore the captured (or current non-MCP)
- * tool set, drop the proposal handler, and clear the plan state.
+ * Session-level plan-mode exit: restore the captured tool set when a valid
+ * snapshot is supplied, drop the proposal handler, and clear the plan state.
+ * A no-op when plan mode is not enabled; a missing/invalid snapshot leaves the
+ * current tool set alone (filtering it would drop MCP tools that entered the
+ * set after plan-mode entry). Tool restoration runs before the state clear so
+ * a failed restore keeps plan mode enabled and retryable.
  */
 export async function exitPlanModeForSession(session: AgentSession, previousTools?: string[]): Promise<void> {
-	const restoreTo =
-		previousTools ??
-		session.getEnabledToolNames().filter(name => session.hasBuiltInTool(name) || !name.startsWith("mcp__"));
+	if (session.getPlanModeState()?.enabled !== true) return;
+	if (previousTools) await session.setActiveToolsByName(previousTools);
 	session.setPlanModeState(undefined);
-	await session.setActiveToolsByName(restoreTo);
 	session.setPlanProposalHandler?.(null);
 }

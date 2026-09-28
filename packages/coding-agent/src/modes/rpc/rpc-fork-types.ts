@@ -121,7 +121,7 @@ export type RpcForkResponse =
 			type: "response";
 			command: "cancel_job";
 			success: true;
-			data: { jobId: string; status: string; message?: string };
+			data: { jobId: string; status: string };
 	  }
 	| {
 			id?: string;

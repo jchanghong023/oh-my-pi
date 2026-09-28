@@ -80,7 +80,7 @@ fork 计划基于 omp 的 RPC 模式（`omp --mode rpc-ui`；协议实现位于 
 * 未协商 v3（或协商 v1/v2、非 fork 构建）的客户端 MUST 收到与现状一致的行为：不收到任何新帧，发送新命令得到现有 `Unknown command` 错误响应；工具审批退回 `extension_ui_request select("Approve","Deny")`，ask 退回逐题 select。
 * 协商失败与降级路径 MUST 有自动化测试覆盖（见第 8 节）。
 
-> 实现状态（2026-09-28）：已实现并通过验证。`ready` 公告 `[1,2,3]`、`negotiate_protocol` 接受 v3（成功数据 `{protocolVersion:3}`，v3 隐含 v2 分帧）、fork 门控分发框架落地（`packages/coding-agent/src/modes/rpc/rpc-fork-types.ts`、`rpc-fork-host.ts`，挂钩于 `rpc-mode.ts` negotiate/default/控制帧/EOF 四处）；UT+E2E 见 `packages/coding-agent/test/rpc-fork-protocol.test.ts`（v2 降级、无效版本拒绝、bypass 帧不消费均覆盖）。
+> 实现状态（2026-09-28）：已实现并通过验证。`ready` 公告 `[1,2,3]`、`negotiate_protocol` 接受 v3（成功数据 `{protocolVersion:3}`，v3 隐含 v2 分帧）、fork 门控分发框架落地（`packages/coding-agent/src/modes/rpc/rpc-fork-types.ts`、`rpc-fork-host.ts`，挂钩于 `rpc-mode.ts` negotiate/default/控制帧/EOF 四处）；UT+E2E 见 `packages/coding-agent/test/rpc-fork-protocol.test.ts`（v2 降级、无效版本拒绝、bypass 帧不消费均覆盖）。例外：5.4 明文宣布的 get_messages_page session_busy 拒绝移除为跨版本行为变更（stale_cursor 守卫保留），不适用前述 MUST。
 
 ### 4.1 工具权限审批
 
@@ -128,7 +128,7 @@ permission_response {
 * bash 命令前缀级"始终允许"（`allow_always_prefix`，前缀规则持久化）为同一审批协议的第二档能力：验收分两档（见下），第一档交付整工具级 allow_always 即可，前缀规则 MUST 在第一档交付后、第一期结束前补齐，并扩展 `tools/approval` 的策略键以支持前缀粒度。
 * 超时/断连：v3 客户端断连时挂起审批按现状 fail-closed（拒绝并报错）；不引入审批静默放行路径。
 
-> 前缀档实现状态（2026-09-28）：已实现（第一档交付同批）。`allow_always_prefix` 按请求携带的 `prefixSuggestion`（bash 首词+尾随空格）持久化到新增设置键 `tools.approvalPrefixes.<tool>`（`tools/settings.ts`），命中前缀规则的后续调用不再发帧；整工具策略键不受前缀档影响（只放行匹配前缀的命令）。UT 覆盖建议生成、规则持久化与去重、命中跳帧、未命中仍审批（`test/rpc-fork-permission.test.ts`）。
+> 前缀档实现状态（2026-09-28）：已实现（第一档交付同批）。`allow_always_prefix` 按请求携带的 `prefixSuggestion`（bash 首词+尾随空格）持久化到新增设置键 `tools.approvalPrefixes.<tool>`（`tools/settings.ts`），命中前缀规则的后续调用不再发帧；整工具策略键不受前缀档影响（只放行匹配前缀的命令）。组合命令（含 `&&`/`;`/管道/反引号/`$()`/进程替换 `<()`/`>()`/换行）不适用前缀自动放行，一律回落审批。UT 覆盖建议生成、规则持久化与去重、命中跳帧、未命中仍审批（`test/rpc-fork-permission.test.ts`）。
 
 **验收条件**：
 
@@ -139,7 +139,7 @@ permission_response {
 5. `set_approval_mode` 运行时生效，`get_state`/`config_update` 反映当前档位。
 6. 未协商 v3 的客户端全程行为与现状一致（既有审批 select 路径）。
 
-> 实现状态（2026-09-28）：第一档（整工具级 allow_always）已实现，服务端在 `packages/coding-agent/src/modes/rpc/rpc-fork-permission.ts`（经 `session.setClientBridge` 注入 ACP 权限网关，`task/executor.ts` 注入 origin 子代理委托桥）；`set_approval_mode`/`get_state.approvalMode`/`config_update.approvalMode` 同步落地。UT 覆盖审批帧结构、五选项语义、allow_always/reject_always 配置持久化、feedback 回传、子代理 origin、断连 fail-closed、v2 门控（`test/rpc-fork-permission.test.ts`）；真实模型驱动 E2E 见 `test/rpc-fork-approval-e2e.test.ts`（需 API key，本机验证环境未运行）。**前缀档（allow_always_prefix）未实现，本期结束前补齐。**
+> 实现状态（2026-09-28）：第一档（整工具级 allow_always）已实现，服务端在 `packages/coding-agent/src/modes/rpc/rpc-fork-permission.ts`（经 `session.setClientBridge` 注入 ACP 权限网关，`task/executor.ts` 注入 origin 子代理委托桥）；`set_approval_mode`/`get_state.approvalMode`/`config_update.approvalMode` 同步落地。子代理委托经「仅 RPC v3 委托注册时」为四个网关覆盖工具写入子会话本地 `prompt` 策略实现（上游无人值守 yolo overlay 保留、非桥接工具不受影响；审批决策由主会话档位权威裁定）；allow_session 授权在 set_approval_mode 切档时随网关刷新而清空。UT 覆盖审批帧结构、六选项语义（含 allow_always_prefix）、allow_always/reject_always 配置持久化、feedback 回传、子代理 origin、断连 fail-closed、v2 门控（`test/rpc-fork-permission.test.ts`）；真实模型驱动 E2E 见 `test/rpc-fork-approval-e2e.test.ts`（需 API key，本机验证环境未运行）。
 
 ### 4.2 会话与任务列表
 
@@ -253,7 +253,7 @@ ask_pause { targetId }                 // 幂等暂停倒计时；首次交互�
 * 行为：MUST 复用 `getPlanModeState/setPlanModeState`（`agent-session.ts`）与 `plan-mode/plan-files.ts`；`approve_plan` 的核心逻辑 MUST 从 `interactive-mode.ts` 计划审批处理拆为 session 层方法供 RPC 复用（TUI 行为不变）；RPC 下发 `/plan` 文本不再作为普通 prompt 发给模型（`/plan` 为 TUI-only 的现状由此终结）。
 * 验收：RPC 进入/退出 plan mode 后行为与 TUI 等价（计划文件写入、审批检测）；计划内容可读且随写更新（客户端可 watch 路径）；`approve_plan` 三种决策语义正确。
 
-> 实现状态（2026-09-28）：已实现。会话层拆分落点 `plan-mode/session-approval.ts`（`dispatchApprovedPlan`/`enterPlanModeForSession`/`exitPlanModeForSession`），TUI `#approvePlan` 尾部已改为复用 `dispatchApprovedPlan`（overlay 关闭时机经 `beforeDispatch` 保留，interactive-mode plan 相关 36 项既有测试全部通过，TUI 行为不变）；RPC 侧 `rpc-fork-plan.ts` 提供 set_plan_mode/get_plan_state/list_plans/read_plan/approve_plan，`/plan` 文本在 RPC 模式（任意协议版本）被拦截为模式切换、不再作为 prompt 发给模型。`approve_plan.model` 契约为 `provider/modelId` 选择器（经 set_model 语义解析）。UT 见 `test/rpc-fork-plan.test.ts`（进入/退出/工具增补恢复、三决策语义、`plan_not_found`/`plan_not_active` 错误码、/plan 拦截）。
+> 实现状态（2026-09-28）：已实现。会话层拆分落点 `plan-mode/session-approval.ts`（`dispatchApprovedPlan`/`enterPlanModeForSession`/`exitPlanModeForSession`），TUI `#approvePlan` 尾部已改为复用 `dispatchApprovedPlan`（overlay 关闭时机经 `beforeDispatch` 保留，interactive-mode plan 相关 36 项既有测试全部通过，TUI 行为不变）；RPC 侧 `rpc-fork-plan.ts` 提供 set_plan_mode/get_plan_state/list_plans/read_plan/approve_plan，`/plan` 文本在 RPC 模式（任意协议版本）被拦截为模式切换、不再作为 prompt 发给模型。`approve_plan.model` 契约为 `provider/modelId` 选择器（经 set_model 语义解析）。approve/refine 的执行轮经后台 ticket 派发（命令立即应答，不阻塞 abort/get_state 等普通命令）；该轮完成以一条无 `id` 的 `prompt_result` 帧报告（与命令 id 无关联），客户端依赖 agent 事件流观察执行轮。UT 见 `test/rpc-fork-plan.test.ts`（进入/退出/工具增补恢复、三决策语义、`plan_not_found`/`plan_not_active` 错误码、/plan 拦截）。
 
 ### 5.4 历史分页倒序与流式期可读
 

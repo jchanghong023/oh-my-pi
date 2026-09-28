@@ -320,17 +320,11 @@ function killProcessTree(child: { pid: number }): void {
 }
 
 async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
-	// A fresh clone has no node_modules: install before fulltest so the
-	// workspace-local binaries (oxlint, tsgo, nextest glue, …) exist.
-	console.log(`wsl-stage: installing dependencies in ${repoPath}`);
-	const install = wslRun(distro, `cd ${quote(repoPath)} && bun install --frozen-lockfile`);
-	if (install.exitCode !== 0) {
-		process.stderr.write(install.stderr);
-		process.stdout.write(install.stdout);
-		console.error(`wsl-stage: FAIL — bun install exited with code ${install.exitCode}`);
-		return install.exitCode || 1;
-	}
-	const command = `cd ${quote(repoPath)} && bun run fulltest`;
+	// A fresh clone has no node_modules, so the install is part of the timed
+	// command: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
+	// must exist before fulltest, and a hung network install has to hit the
+	// same timer/killProcessTree/pkill guards as the test run itself.
+	const command = `cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`;
 	console.log(`\n==> wsl/fulltest`);
 	console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
 	const child = Bun.spawn(
@@ -353,7 +347,7 @@ async function runWslFulltest(distro: string, repoPath: string): Promise<number>
 				"--",
 				"bash",
 				"-lc",
-				"pkill -9 -f 'fulltes[t]' || true; pkill -9 -f 'nextes[t]' || true",
+				"pkill -9 -f 'fulltes[t]' || true; pkill -9 -f 'nextes[t]' || true; pkill -9 -f 'frozen-lockfil[e]' || true",
 			],
 			{ cwd: repoRoot, stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 		);

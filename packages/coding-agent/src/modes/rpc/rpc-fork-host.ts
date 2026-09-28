@@ -19,6 +19,15 @@ export interface RpcForkContext {
 	readonly emit: (frame: object) => void;
 	readonly success: (id: string | undefined, command: string, data?: object | null) => RpcResponse;
 	readonly error: (id: string | undefined, command: string, message: string, code?: string) => RpcResponse;
+	/**
+	 * Start a fork-originated prompt turn off the RPC serial queue with the
+	 * stock prompt reporting (ticket + `prompt_result` frames, errors as error
+	 * frames). Long execution turns — plan approval, refine — must dispatch
+	 * through this so ordinary commands keep answering while the turn runs.
+	 * Optional: production hosts always provide it; bare test stubs may omit
+	 * it, in which case callers await the turn inline (blocking legacy shape).
+	 */
+	readonly dispatchForkPromptTurn?: (run: () => Promise<void>) => void;
 }
 
 export type RpcForkCommandHandler = (command: RpcForkCommandBase) => Promise<RpcResponse> | RpcResponse;

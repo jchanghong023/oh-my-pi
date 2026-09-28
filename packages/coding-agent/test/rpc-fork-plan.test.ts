@@ -7,12 +7,17 @@ import { RpcForkPlanController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-f
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
-const makeContext = (emitted: object[]): RpcForkContext => ({
+const makeContext = (emitted: object[], dispatched: Array<() => Promise<void>>): RpcForkContext => ({
 	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>
 		({ id, type: "response", command, success: false, error: message, ...(code ? { code } : {}) }) as RpcResponse,
+	// Background prompt turns (approve/refine) are queued, not awaited, so the
+	// command answers immediately; tests flush them explicitly.
+	dispatchForkPromptTurn: run => {
+		dispatched.push(run);
+	},
 });
 
 interface PlanSessionMocks {
@@ -86,11 +91,22 @@ function setupPlanSession(): { session: AgentSession; mocks: PlanSessionMocks } 
 function setup(session: AgentSession): {
 	run: (command: object) => Promise<RpcResponse>;
 	controller: RpcForkPlanController;
+	flushDispatches: () => Promise<void>;
 } {
-	const host = new RpcForkHost(makeContext([]));
+	const dispatched: Array<() => Promise<void>> = [];
+	const host = new RpcForkHost(makeContext([], dispatched));
 	host.activate();
 	const controller = new RpcForkPlanController(host, session);
-	return { run: command => host.handleCommand(command as { type: string }) as Promise<RpcResponse>, controller };
+	return {
+		run: command => host.handleCommand(command as { type: string }) as Promise<RpcResponse>,
+		controller,
+		flushDispatches: async () => {
+			while (dispatched.length > 0) {
+				const run = dispatched.shift();
+				if (run) await run();
+			}
+		},
+	};
 }
 
 describe("RpcForkPlanController (5.3)", () => {
@@ -133,6 +149,11 @@ describe("RpcForkPlanController (5.3)", () => {
 		await expect(controller.interceptSlashPlan("/plan off")).resolves.toBe(true);
 		expect(mocks.planState).toBeUndefined();
 		await expect(controller.interceptSlashPlan("explain /plan to me")).resolves.toBe(false);
+		// Only a bare single-line `/plan`/`/plan off` toggles: other arguments and
+		// multi-line prompts starting with `/plan` reach the model untouched.
+		await expect(controller.interceptSlashPlan("/plan now")).resolves.toBe(false);
+		await expect(controller.interceptSlashPlan("/plan\nreview the plan and continue")).resolves.toBe(false);
+		expect(mocks.planState).toBeUndefined();
 	});
 
 	test("read_plan and list_plans surface plan file content", async () => {
@@ -165,7 +186,7 @@ describe("RpcForkPlanController (5.3)", () => {
 		await fs.writeFile(planPath, "# Ship plan\n\n1. build");
 
 		const { session, mocks } = setupPlanSession();
-		const { run } = setup(session);
+		const { run, flushDispatches } = setup(session);
 		await run({ type: "set_plan_mode", enabled: true });
 
 		const refineMissing = await run({ type: "approve_plan", decision: "refine" });
@@ -173,6 +194,10 @@ describe("RpcForkPlanController (5.3)", () => {
 
 		const refine = await run({ id: "a1", type: "approve_plan", decision: "refine", feedback: "add tests" });
 		expect(refine).toMatchObject({ success: true, data: { decision: "refine", dispatched: true } });
+		// The command answers before the turn runs: the feedback prompt only
+		// reaches the session once the background dispatch is flushed.
+		expect(mocks.prompts).toEqual([]);
+		await flushDispatches();
 		expect(mocks.prompts.at(-1)).toBe("prompt:add tests");
 		expect(mocks.planState).toMatchObject({ enabled: true });
 
@@ -188,7 +213,10 @@ describe("RpcForkPlanController (5.3)", () => {
 		const approve = (await run({ id: "a3", type: "approve_plan", decision: "approve" })) as RpcResponse;
 		expect(approve).toMatchObject({ success: true });
 		expect((approve as { data?: { dispatched: boolean } }).data?.dispatched).toBe(true);
+		// Plan exit happens before the response; the execution turn does not.
 		expect(mocks.planState).toBeUndefined();
+		expect(mocks.prompts).toEqual(["prompt:add tests"]);
+		await flushDispatches();
 		expect(mocks.referenceSent).toBe(1);
 		expect(mocks.referencePath).toBe(planPath);
 		expect(mocks.prompts.at(-1)).toContain("Ship plan");
@@ -196,5 +224,12 @@ describe("RpcForkPlanController (5.3)", () => {
 
 		const notActive = await run({ type: "approve_plan", decision: "approve" });
 		expect(notActive).toMatchObject({ success: false, code: "plan_not_active" });
+	});
+
+	test("approve_plan: refine without plan mode is rejected as plan_not_active", async () => {
+		const { session } = setupPlanSession();
+		const { run } = setup(session);
+		const result = await run({ id: "r1", type: "approve_plan", decision: "refine", feedback: "try again" });
+		expect(result).toMatchObject({ success: false, code: "plan_not_active" });
 	});
 });

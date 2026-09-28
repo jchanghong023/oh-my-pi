@@ -21,7 +21,7 @@
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（rpc-ui 协议扩展，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 
@@ -39,7 +39,7 @@
 | 端到端冒烟（真实 CLI 公开入口） | `bun run ci:test:smoke` |
 | 安装器端到端 | `bun run ci:test:install-methods` |
 | fork 本地全量测试（当前 OS，含 UI 冒烟） | `bun run fulltest` |
-| fork 流水线验证（fulltest 后 centos7 WSL 验证 + 自动 push + 触发 + 监控 GH CI） | `bun run slowtest` |
+| fork 流水线验证（fulltest 后 Ubuntu-24.04 WSL 验证 + 自动 push + 触发 + 监控 GH CI） | `bun run slowtest` |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
 
 ## 开发约束
@@ -54,7 +54,7 @@
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
 * `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
-* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`repo-index.md` 保存代码索引需求；它们共同作为开发和冲突后重建的依据。
+* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 桌面应用协议扩展需求；它们共同作为开发和冲突后重建的依据。
 
 同步 MUST 保留 `AGENTS.md`、同步 Skill、整个需求目录和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
 
@@ -107,10 +107,10 @@
 
 ## 验证
 
-* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测；整体 60 秒墙钟硬超时，超时杀掉运行中的子进程、输出 TIMEOUT 与已耗时间并判失败——冷缓存如同步后首次 Rust 编译超时属预期失败，无时限完整静态验证由 fulltest 承担）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；TS 白名单以 2 路有界池并行（分组内测试大量派生 bash/git/ConPTY/CLI 子进程，满并发会击穿用例默认 5 秒预算），各测试执行阶段设 3 分钟硬超时（TS 白名单阶段因半宽并行放宽为 5 分钟）、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + `wsl/centos7` 阶段 + 自动 push 本地 `main` 到远端、触发 GitHub Actions CI 并持续监控直到返回，并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
-* `bun run slowtest` 在 fulltest 通过后、push 之前执行 `wsl/centos7` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 centos7 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后在其中运行 `bun run fulltest`。任一步失败、fulltest 退出码非 0 或超出 2 小时硬超时均判 slowtest 失败，不 push、不触发 CI。
+* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测；整体 60 秒墙钟硬超时，超时杀掉运行中的子进程、输出 TIMEOUT 与已耗时间并判失败——冷缓存如同步后首次 Rust 编译超时属预期失败，无时限完整静态验证由 fulltest 承担）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；TS 白名单以 2 路有界池并行（分组内测试大量派生 bash/git/ConPTY/CLI 子进程，满并发会击穿用例默认 5 秒预算），各测试执行阶段设 3 分钟硬超时（TS 白名单阶段因半宽并行放宽为 5 分钟）、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + `wsl/ubuntu-24.04` 阶段 + 自动 push 本地 `main` 到远端、触发 GitHub Actions CI 并持续监控直到返回，并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
+* `bun run slowtest` 在 fulltest 通过后、push 之前执行 `wsl/ubuntu-24.04` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 Ubuntu-24.04 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后先 `bun install --frozen-lockfile` 再运行 `bun run fulltest`。任一步失败、fulltest 退出码非 0 或超出 2 小时硬超时均判 slowtest 失败，不 push、不触发 CI。
 * `bun run fastcheck` agent 可按需自主调用，普通 TypeScript 修改后 MUST 运行；纯文档修改只做差异与格式检查。除 fastcheck 外的本地编译、类型检查、测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）以及 push、触发外部流水线，MUST 仅在用户明确要求时进行。
-* `bun run fulltest` 只运行当前操作系统对应的测试；`bun run slowtest` 除当前操作系统测试外，唯一跨平台扩展是上述 `wsl/centos7` 阶段（仅 Windows 执行），不维护其他 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
+* `bun run fulltest` 只运行当前操作系统对应的测试；`bun run slowtest` 除当前操作系统测试外，唯一跨平台扩展是上述 `wsl/ubuntu-24.04` 阶段（仅 Windows 执行），不维护其他 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
 * UI 冒烟（原 `jch-dev-ui-test` 能力，已并入 fulltest）MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
 * 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
 

@@ -167,6 +167,37 @@ describe("RpcForkJobController (5.2)", () => {
 		const cancel = await host.handleCommand({ id: "j2", type: "cancel_job", jobId: "nope" } as never);
 		expect(cancel).toMatchObject({ command: "cancel_job", success: false, code: "unknown_job" });
 	});
+
+	test("cancel_job on a settled job reports already_completed with no message field", async () => {
+		const emitted: object[] = [];
+		const host = new RpcForkHost(makeContext(emitted));
+		host.activate();
+		const job = {
+			id: "job-done",
+			type: "bash",
+			status: "completed",
+			label: "echo done",
+			startTime: Date.now() - 1_000,
+			endTime: Date.now(),
+			ownerId: "agent-1",
+		};
+		// Minimal AsyncJobManager stub covering executeCancel/buildJobResult reads.
+		const manager = {
+			getJob: (id: string) => (id === job.id ? job : undefined),
+			isJobResultConsumed: () => false,
+			consumeJobResults: () => {},
+		};
+		const session = { asyncJobManager: manager, getAgentId: () => "agent-1" } as unknown as AgentSession;
+		new RpcForkJobController(host, session);
+
+		const cancel = (await host.handleCommand({
+			id: "j3",
+			type: "cancel_job",
+			jobId: "job-done",
+		} as never)) as Extract<RpcResponse, { command: "cancel_job"; success: true }>;
+		expect(cancel.success).toBe(true);
+		expect(cancel.data).toEqual({ jobId: "job-done", status: "already_completed" });
+	});
 });
 
 describe("RpcForkSearchController (5.7)", () => {

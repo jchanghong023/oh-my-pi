@@ -876,8 +876,8 @@ class RpcClient:
         response = self._request("negotiate_protocol", protocolVersion=3)
         if not response.get("success"):
             raise RpcCommandError(
-                str(response.get("error", "fork protocol v3 negotiation failed")),
                 "negotiate_protocol",
+                str(response.get("error", "fork protocol v3 negotiation failed")),
             )
         self._protocol_version = 3
         return response

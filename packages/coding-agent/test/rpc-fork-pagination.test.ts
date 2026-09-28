@@ -46,6 +46,15 @@ describe("get_messages_page reverse pagination (5.4)", () => {
 		expect(desc).toEqual([...asc].reverse());
 	});
 
+	test("legacy asc cursor keeps forward direction even when order:'desc' is passed", () => {
+		const { messages, snapshot: snap } = setup(5);
+		const page1 = pageRpcMessages(messages, snap, { limit: 2 });
+		expect(page1.messages.map(m => (m as { content: string }).content)).toEqual(["m0", "m1"]);
+		// Legacy asc cursor: options.order must not leak in; the cursor dictates asc.
+		const page2 = pageRpcMessages(messages, snap, { cursor: page1.nextCursor, limit: 2, order: "desc" });
+		expect(page2.messages.map(m => (m as { content: string }).content)).toEqual(["m2", "m3"]);
+	});
+
 	test("before/after anchors page around an offset in the right direction", () => {
 		const { messages, snapshot: snap } = setup(6);
 		// before offset 2 → m0, m1 newest-first.

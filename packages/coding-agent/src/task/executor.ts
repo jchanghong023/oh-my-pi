@@ -34,7 +34,11 @@ import {
 } from "../config/service-tier";
 import type { CompactionThresholdPair } from "../config/compaction-threshold";
 import { Settings } from "../config/settings";
-import { createRpcSubagentPermissionBridge, getRpcSubagentPermissionDelegate } from "../modes/rpc/rpc-fork-permission";
+import {
+	createRpcSubagentPermissionBridge,
+	getRpcSubagentPermissionDelegate,
+	scopeSubagentApprovalForDelegation,
+} from "../modes/rpc/rpc-fork-permission";
 
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -4056,7 +4060,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// RPC v3 permission delegation: subagent approval requests surface on
 			// the main connection with an origin badge. The delegate only exists
 			// in fork RPC mode, so every other host keeps hasUI:false semantics.
+			// Session-local prompt policies for the four gateway-covered tools
+			// (RPC mode only) force their wrapping so approval requests route
+			// through that bridge, decided at the parent's tier.
 			if (getRpcSubagentPermissionDelegate()) {
+				scopeSubagentApprovalForDelegation(session);
 				session.setClientBridge(createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }));
 			}
 			// The SDK records a new session's initial model as the default role.
@@ -4127,6 +4135,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					);
 					// RPC v3 permission delegation on the revive path (same as fresh spawns).
 					if (getRpcSubagentPermissionDelegate()) {
+						scopeSubagentApprovalForDelegation(revived);
 						revived.setClientBridge(createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }));
 					}
 					// Re-run the executor's extension wiring on the rebuilt session.

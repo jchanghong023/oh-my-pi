@@ -93,7 +93,7 @@ import {
 	type McpConnectionFailure,
 	type McpConnectionStatusEvent,
 } from "../mcp/startup-events";
-import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
+import { type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
 import {
 	isJudgmentBatchProgress,
 	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
@@ -101,7 +101,7 @@ import {
 } from "../eval/judgment-batch-events";
 import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
-import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
+import { planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
@@ -4955,30 +4955,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			? previousPresentation.enabled
 			: [...previousPresentation.enabled, "read"];
 		await this.session.restoreNonMCPToolPresentation(executionTools, previousPresentation.mounted);
-		this.session.setPlanReferencePath(options.planFilePath);
-		try {
-			const autosaved = await autosaveApprovedPlan({
-				settings: this.session.settings,
-				cwd: this.sessionManager.getCwd(),
-				title: options.title,
-				planContent,
-			});
-			if (autosaved) {
-				const displayPath = truncateToWidth(replaceTabs(shortenPath(autosaved)), TRUNCATE_LENGTHS.CONTENT);
-				this.showStatus(`Saved plan to ${displayPath}.`);
-			}
-		} catch (error) {
-			const detail = truncateToWidth(
-				shortenEmbeddedPaths(
-					replaceTabs(error instanceof Error ? error.message : String(error))
-						.replace(/[\r\n]+/g, " ")
-						.trim(),
-				),
-				TRUNCATE_LENGTHS.CONTENT,
-			);
-			this.showWarning(`Failed to autosave plan: ${detail}`);
-		}
-
 		// Resolve the deferred plan-approval model transition. On the compact path
 		// the before-flush hook passed to handleCompactCommand already ran this (so
 		// any input queued during compaction executed on the post-compaction
@@ -5022,6 +4998,22 @@ export class InteractiveMode implements InteractiveModeContext {
 			beforeDispatch: () => {
 				this.#hidePlanReview();
 				this.ui.requestRender();
+			},
+			onAutosave: ({ savedPath, error }) => {
+				if (savedPath) {
+					const displayPath = truncateToWidth(replaceTabs(shortenPath(savedPath)), TRUNCATE_LENGTHS.CONTENT);
+					this.showStatus(`Saved plan to ${displayPath}.`);
+				} else if (error) {
+					const detail = truncateToWidth(
+						shortenEmbeddedPaths(
+							replaceTabs(error.message)
+								.replace(/[\r\n]+/g, " ")
+								.trim(),
+						),
+						TRUNCATE_LENGTHS.CONTENT,
+					);
+					this.showWarning(`Failed to autosave plan: ${detail}`);
+				}
 			},
 		});
 		return true;

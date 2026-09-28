@@ -129,6 +129,18 @@ describe("RpcForkAskBroker (4.3)", () => {
 		expect(host.handleControlFrame({ type: "ask_response", id: "nope", cancelled: true })).toBe(true);
 	});
 
+	test("malformed ask_response (non-array answers) settles undefined instead of hanging", async () => {
+		const { emitted, host, broker } = setup();
+		host.activate();
+		const ask = broker.getAskDialog()!;
+		const pending = ask(twoQuestions, { timeout: 30_000 });
+
+		await Bun.sleep(0);
+		const id = (emitted.at(-1) as Record<string, unknown>).id as string;
+		host.handleControlFrame({ type: "ask_response", id, answers: "oops" });
+		await expect(pending).resolves.toBeUndefined();
+	});
+
 	test("ask_pause idempotently cancels the countdown; server never auto-submits after pause", async () => {
 		const { emitted, host, broker } = setup();
 		host.activate();

@@ -118,6 +118,18 @@ describe("RpcForkSessionController (4.2)", () => {
 		const bad = await fx.run({ id: "l3", type: "list_sessions", scope: "galaxy" } as Record<string, unknown>);
 		expect(bad).toMatchObject({ success: false });
 
+		const badLimit = await fx.run({ id: "l4", type: "list_sessions", scope: "cwd", limit: "2abc" } as Record<
+			string,
+			unknown
+		>);
+		expect(badLimit).toMatchObject({ success: false, error: "limit must be a number" });
+
+		const objectLimit = await fx.run({ id: "l5", type: "list_sessions", scope: "cwd", limit: {} } as Record<
+			string,
+			unknown
+		>);
+		expect(objectLimit).toMatchObject({ success: false, error: "limit must be a number" });
+
 		const emitted: object[] = [];
 		const dormantHost = new RpcForkHost(makeContext(emitted));
 		new RpcForkSessionController(dormantHost, fx.session);
@@ -236,5 +248,18 @@ describe("RpcForkSessionController (4.2)", () => {
 			{ command: "list_sessions"; success: true }
 		>;
 		expect(afterUnpin.data!.sessions.find(entry => entry.sessionId === summary.sessionId)?.pinned).toBe(false);
+
+		// Actual pin-state changes nudge clients via sessions_changed...
+		const pinEmissions = () =>
+			fx.emitted.filter(frame => (frame as { type: string }).type === "sessions_changed").length;
+		const rePin = await fx.run({ id: "p7", type: "pin_session", sessionId: summary.sessionId });
+		expect(rePin).toMatchObject({ success: true, data: { pinned: true } });
+		const changedAfterToggle = pinEmissions();
+		expect(changedAfterToggle).toBeGreaterThan(0);
+
+		// ...but re-asserting the current state stays silent.
+		const noOp = await fx.run({ id: "p8", type: "pin_session", sessionId: summary.sessionId });
+		expect(noOp).toMatchObject({ success: true, data: { pinned: true } });
+		expect(pinEmissions()).toBe(changedAfterToggle);
 	});
 });

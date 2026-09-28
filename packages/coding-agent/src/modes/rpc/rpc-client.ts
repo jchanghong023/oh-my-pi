@@ -1287,16 +1287,18 @@ export class RpcClient {
 			return;
 		}
 
-		// Fork (v3) frames: only delivered after negotiateProtocolV3() so v2
-		// hosts keep the stock drop-unknown behavior.
-		if (this.#forkNegotiated && this.#forkFrameListeners.size > 0 && isRecord(data)) {
-			for (const listener of this.#forkFrameListeners) {
-				listener(data);
+		if (!isAgentSessionEvent(data)) {
+			// Fork (v3) frames: only delivered after negotiateProtocolV3() so v2
+			// hosts keep the stock drop-unknown behavior. This is the final drop
+			// point, so fork listeners only see frames no earlier branch
+			// recognized (permission_request/ask_request/queue_updated etc.).
+			if (this.#forkNegotiated && this.#forkFrameListeners.size > 0 && isRecord(data)) {
+				for (const listener of this.#forkFrameListeners) {
+					listener(data);
+				}
 			}
 			return;
 		}
-
-		if (!isAgentSessionEvent(data)) return;
 
 		for (const listener of this.#sessionEventListeners) {
 			listener(data);

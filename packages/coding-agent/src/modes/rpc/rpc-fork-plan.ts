@@ -23,11 +23,12 @@ import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
 
-const PLAN_SLASH_PATTERN = /^\/plan(?:\s+(.*))?$/is;
+const PLAN_SLASH_PATTERN = /^\/plan(?:[ \t]+(off))?[ \t]*$/i;
 
 export class RpcForkPlanController {
 	readonly #localProtocolOptions: LocalProtocolOptions;
 	#previousTools: string[] | undefined;
+	#previousToolsSession: string | undefined;
 
 	constructor(
 		private readonly host: RpcForkHost,
@@ -46,21 +47,54 @@ export class RpcForkPlanController {
 
 	/**
 	 * Intercept a `/plan` prompt text before it reaches the skill/agent
-	 * dispatch. Returns true when the text was consumed as a plan-mode toggle.
+	 * dispatch. Only text that is exactly `/plan` (or `/plan off`, optional
+	 * trailing whitespace) is consumed as a plan-mode toggle; anything else —
+	 * `/plan <other>` or a multi-line prompt — reaches the model untouched.
 	 */
 	async interceptSlashPlan(text: string): Promise<boolean> {
 		const match = PLAN_SLASH_PATTERN.exec(text.trim());
 		if (!match) return false;
-		const arg = match[1]?.trim();
+		const arg = match[1];
 		const state = this.session.getPlanModeState();
 		if (state?.enabled || arg === "off") {
-			await exitPlanModeForSession(this.session, this.#previousTools);
-			this.#previousTools = undefined;
+			await exitPlanModeForSession(this.session, this.#toolSnapshot());
+			this.#clearToolSnapshot();
 		} else {
 			const entry = await enterPlanModeForSession(this.session);
-			this.#previousTools = entry.previousTools;
+			this.#recordToolSnapshot(entry.previousTools);
 		}
 		return true;
+	}
+
+	/** Tool snapshot if it still belongs to the current session, else undefined. */
+	#toolSnapshot(): string[] | undefined {
+		return this.#previousToolsSession === this.session.sessionManager.getSessionId()
+			? this.#previousTools
+			: undefined;
+	}
+
+	#recordToolSnapshot(previousTools: string[]): void {
+		this.#previousTools = previousTools;
+		this.#previousToolsSession = this.session.sessionManager.getSessionId();
+	}
+
+	#clearToolSnapshot(): void {
+		this.#previousTools = undefined;
+		this.#previousToolsSession = undefined;
+	}
+
+	/**
+	 * Run a prompt turn through the host's background dispatch so it never
+	 * blocks the RPC serial queue; hosts without one (bare stubs) fall back to
+	 * awaiting the turn inline.
+	 */
+	async #runPromptTurn(run: () => Promise<void>): Promise<void> {
+		const dispatch = this.host.context.dispatchForkPromptTurn;
+		if (!dispatch) {
+			await run();
+			return;
+		}
+		dispatch(run);
 	}
 
 	async #setPlanMode(command: RpcForkCommandBase): Promise<RpcResponse> {
@@ -76,14 +110,14 @@ export class RpcForkPlanController {
 				});
 			}
 			const entry = await enterPlanModeForSession(this.session);
-			this.#previousTools = entry.previousTools;
+			this.#recordToolSnapshot(entry.previousTools);
 			return this.host.context.success(command.id, "set_plan_mode", {
 				enabled: true,
 				planFilePath: entry.planFilePath,
 			});
 		}
-		await exitPlanModeForSession(this.session, this.#previousTools);
-		this.#previousTools = undefined;
+		await exitPlanModeForSession(this.session, this.#toolSnapshot());
+		this.#clearToolSnapshot();
 		return this.host.context.success(command.id, "set_plan_mode", { enabled: false });
 	}
 
@@ -138,21 +172,31 @@ export class RpcForkPlanController {
 		}
 		const state = this.session.getPlanModeState();
 		if (decision === "refine") {
+			if (state?.enabled !== true) {
+				return this.host.context.error(command.id, "approve_plan", "Plan mode is not enabled", "plan_not_active");
+			}
 			if (typeof feedback !== "string" || !feedback.trim()) {
 				return this.host.context.error(command.id, "approve_plan", "refine requires feedback");
 			}
 			// TUI refine semantics: the feedback rides in as a normal user turn
-			// while plan mode stays enabled.
-			if (this.session.isStreaming) {
-				await this.session.followUp(feedback.trim());
-			} else {
-				await this.session.prompt(feedback.trim());
-			}
+			// while plan mode stays enabled. Dispatched off the RPC serial queue
+			// so the turn cannot block abort/get_state.
+			const message = feedback.trim();
+			await this.#runPromptTurn(async () => {
+				if (this.session.isStreaming) {
+					await this.session.followUp(message);
+				} else {
+					await this.session.prompt(message);
+				}
+			});
 			return this.host.context.success(command.id, "approve_plan", { decision, dispatched: true });
 		}
 		if (decision === "reject") {
-			await exitPlanModeForSession(this.session, this.#previousTools);
-			this.#previousTools = undefined;
+			if (!this.session.getPlanModeState()?.enabled) {
+				return this.host.context.error(command.id, "approve_plan", "Plan mode is not enabled", "plan_not_active");
+			}
+			await exitPlanModeForSession(this.session, this.#toolSnapshot());
+			this.#clearToolSnapshot();
 			return this.host.context.success(command.id, "approve_plan", { decision, dispatched: false });
 		}
 
@@ -193,14 +237,19 @@ export class RpcForkPlanController {
 			return this.host.context.error(command.id, "approve_plan", 'model must be a "provider/modelId" selector');
 		}
 		const title = humanizePlanTitle(path.basename(planFilePath).replace(/\.md$/i, ""));
-		await exitPlanModeForSession(this.session, this.#previousTools);
-		this.#previousTools = undefined;
-		await dispatchApprovedPlan(this.session, {
-			planFilePath,
-			title,
-			planContent,
-			preserveContext: true,
-		});
+		await exitPlanModeForSession(this.session, this.#toolSnapshot());
+		this.#clearToolSnapshot();
+		// The execution turn runs for minutes: dispatched off the RPC serial
+		// queue so ordinary commands (abort, get_state) keep answering while the
+		// approved prompt executes, and the command is answered immediately.
+		await this.#runPromptTurn(() =>
+			dispatchApprovedPlan(this.session, {
+				planFilePath,
+				title,
+				planContent,
+				preserveContext: true,
+			}),
+		);
 		return this.host.context.success(command.id, "approve_plan", { decision, dispatched: true });
 	}
 }

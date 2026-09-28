@@ -146,7 +146,7 @@ export class RpcForkAskBroker {
 
 		this.#pending.set(id, {
 			resolveResponse: response => {
-				if ("chat" in response && response.chat !== undefined) {
+				if ("chat" in response && response.chat) {
 					finish({ kind: "chat" });
 					return;
 				}
@@ -158,7 +158,11 @@ export class RpcForkAskBroker {
 					finish({ kind: "submit", results: mapAnswers(questions, response.answers) });
 					return;
 				}
-				// Malformed payload: keep waiting (mirrors extension_ui_response leniency).
+				// Malformed payload (truthiness-failed chat, missing cancelled, or a
+				// non-array answers): settle undefined like the stock
+				// extension_ui_response read sites, which converge unrecognized
+				// payloads to undefined — the ask tool then treats it as user-cancel.
+				finish(undefined);
 			},
 			pause: () => {
 				// Idempotent: once paused (or settled) later pauses are no-ops and

@@ -7,6 +7,7 @@
  * path. Output artifact paths stay on the `tool_execution_update` channel;
  * this surface never duplicates them.
  */
+import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { AgentSession } from "../../session/agent-session";
 import type { ToolSession } from "../../tools";
 import { executeCancel, snapshotJobs } from "../../async/job-control";
@@ -99,13 +100,12 @@ export class RpcForkJobController {
 		const result = await executeCancel(this.#toolSessionView(), manager, this.session.getAgentId() ?? undefined, [
 			jobId,
 		]);
-		const detail = (
-			result.details as { cancel?: Array<{ id: string; status: string; message?: string }> } | undefined
-		)?.cancel?.find(outcome => outcome.id === jobId);
+		const detail = (result.details as CoordinationDetails | undefined)?.cancelled?.find(
+			outcome => outcome.id === jobId,
+		);
 		return this.host.context.success(command.id, "cancel_job", {
 			jobId,
 			status: detail?.status ?? "cancelled",
-			...(detail?.message ? { message: detail.message } : {}),
 		});
 	}
 }

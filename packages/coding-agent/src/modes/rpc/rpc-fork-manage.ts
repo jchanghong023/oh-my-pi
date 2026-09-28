@@ -49,15 +49,21 @@ interface CachedMcpStatus {
 	error?: string;
 }
 
+/** Agent definition file names are also file names — no traversal, no frontmatter tricks. */
+const AGENT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 export class RpcForkManageController {
 	readonly #statusCache = new Map<string, CachedMcpStatus>();
 	readonly #unsubscribe: () => void;
+	readonly #agentDir: string;
 
 	constructor(
 		private readonly host: RpcForkHost,
 		private readonly session: AgentSession,
 		eventBus?: EventBus,
+		options?: { agentDir?: string },
 	) {
+		this.#agentDir = options?.agentDir ?? getAgentDir();
 		this.#unsubscribe = eventBus ? this.#subscribeMcpStatus(eventBus) : () => {};
 		host.registerCommand("list_mcp_servers", command => this.#listMcpServers(command));
 		host.registerCommand("upsert_mcp_server", command => this.#upsertMcpServer(command));
@@ -77,7 +83,7 @@ export class RpcForkManageController {
 
 	#mcpPaths(): { userPath: string; projectPath: string } {
 		return {
-			userPath: path.join(getAgentDir(), "mcp.json"),
+			userPath: path.join(this.#agentDir, "mcp.json"),
 			projectPath: path.join(this.session.sessionManager.getCwd(), ".omp", "mcp.json"),
 		};
 	}
@@ -130,6 +136,9 @@ export class RpcForkManageController {
 		if (typeof name !== "string" || !name || !isRecord(config)) {
 			return this.host.context.error(command.id, "upsert_mcp_server", "name and config are required");
 		}
+		if (scope !== "user" && scope !== "project") {
+			return this.host.context.error(command.id, "upsert_mcp_server", `Invalid scope: ${String(scope)}`);
+		}
 		const { userPath, projectPath } = this.#mcpPaths();
 		const filePath = scope === "user" ? userPath : projectPath;
 		const existing = await getMCPServer(filePath, name).catch(() => undefined);
@@ -157,6 +166,9 @@ export class RpcForkManageController {
 		const { name, scope } = command as { name?: unknown; scope?: unknown };
 		if (typeof name !== "string" || !name) {
 			return this.host.context.error(command.id, "delete_mcp_server", "name is required");
+		}
+		if (scope !== "user" && scope !== "project") {
+			return this.host.context.error(command.id, "delete_mcp_server", `Invalid scope: ${String(scope)}`);
 		}
 		const { userPath, projectPath } = this.#mcpPaths();
 		const filePath = scope === "user" ? userPath : projectPath;
@@ -291,13 +303,37 @@ export class RpcForkManageController {
 				'definition must include at least "name" and "description"',
 			);
 		}
+		// The name doubles as the definition file name, so it must not traverse
+		// out of the agents directory.
+		if (!AGENT_NAME_PATTERN.test(definition.name)) {
+			return this.host.context.error(
+				command.id,
+				"upsert_agent_definition",
+				"definition.name must match /^[A-Za-z0-9][A-Za-z0-9_-]*$/",
+			);
+		}
+		if (definition.tools !== undefined) {
+			if (!Array.isArray(definition.tools) || !definition.tools.every(tool => typeof tool === "string")) {
+				return this.host.context.error(
+					command.id,
+					"upsert_agent_definition",
+					"definition.tools must be an array of strings",
+				);
+			}
+		}
 		const projectDir = path.join(this.session.sessionManager.getCwd(), ".omp", "agents");
 		await fs.mkdir(projectDir, { recursive: true });
-		const frontmatter: string[] = [`name: ${definition.name}`, `description: ${definition.description}`];
-		if (Array.isArray(definition.tools) && definition.tools.length > 0) {
-			frontmatter.push(`tools: [${(definition.tools as string[]).map(tool => JSON.stringify(tool)).join(", ")}]`);
+		// Frontmatter values are emitted as JSON double-quoted scalars: legal YAML
+		// that cannot break out of the document regardless of description content.
+		const tools = definition.tools as string[] | undefined;
+		const frontmatter: string[] = [
+			`name: ${JSON.stringify(definition.name)}`,
+			`description: ${JSON.stringify(definition.description)}`,
+		];
+		if (tools && tools.length > 0) {
+			frontmatter.push(`tools: [${tools.map(tool => JSON.stringify(tool)).join(", ")}]`);
 		}
-		if (typeof definition.model === "string") frontmatter.push(`model: ${definition.model}`);
+		if (typeof definition.model === "string") frontmatter.push(`model: ${JSON.stringify(definition.model)}`);
 		const body = typeof definition.systemPrompt === "string" ? definition.systemPrompt : definition.description;
 		const filePath = path.join(projectDir, `${definition.name}.md`);
 		await fs.writeFile(filePath, `---\n${frontmatter.join("\n")}\n---\n\n${body}\n`, "utf-8");

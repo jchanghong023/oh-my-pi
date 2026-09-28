@@ -65,7 +65,7 @@ import {
 } from "./rpc-fork-types";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
-import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
+import { pageRpcMessages, RpcMessagesPageError } from "./rpc-messages";
 import { RpcOutputWriter } from "./rpc-output";
 import {
 	RpcExtensionUserMessageTracker,
@@ -856,6 +856,22 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		emit: frame => output(frame),
 		success: (id, command, data) => success(id, command as RpcCommand["type"], data),
 		error,
+		// Fork prompt turns (plan approve/refine) run for minutes: dispatch them
+		// off the RPC serial queue through the same ticket + prompt_result
+		// reporting as the stock prompt arm so abort/get_state keep answering.
+		dispatchForkPromptTurn: run => {
+			const ticket = promptResults.begin(undefined);
+			watchAndReportPromptResult({
+				ticket,
+				startPrompt: async () => {
+					await run();
+					return true;
+				},
+				results: promptResults,
+				onError: onPromptError(undefined, "approve_plan"),
+				extensionUserMessageTracker,
+			});
+		},
 	});
 	const forkAskBroker = new RpcForkAskBroker(forkHost, frame => output(frame));
 	const forkPermissionController = new RpcForkPermissionController(forkHost, session);

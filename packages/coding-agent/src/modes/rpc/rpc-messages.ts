@@ -45,7 +45,7 @@ interface RpcMessageCursorPayload extends RpcMessageSnapshot {
 export interface RpcMessagesPageOptions {
 	cursor?: string;
 	limit?: number;
-	/** Walk direction for a cursor-less request; cursors carry their own direction. */
+	/** Walk direction for a cursor-less request only; a provided cursor dictates its own direction. */
 	order?: "asc" | "desc";
 	/** Anchor cursor: page taken immediately before the anchor offset (exclusive), newest-first. */
 	before?: string;
@@ -131,7 +131,7 @@ export function pageRpcMessages(
 		return payload.offset;
 	};
 
-	let order: "asc" | "desc" = options.order === "desc" ? "desc" : "asc";
+	let order: "asc" | "desc" = "asc";
 	let windowStart: number;
 	let windowEnd: number;
 	if (options.before !== undefined || options.after !== undefined) {
@@ -152,7 +152,10 @@ export function pageRpcMessages(
 			if (!sameSnapshot(cursor, snapshot))
 				throw new RpcMessagesPageError(RPC_MESSAGES_PAGE_STALE_ERROR, "stale_cursor");
 			offset = cursor.offset;
-			if (cursor.order === "desc") order = "desc";
+			// Cursors carry their own direction; options.order never overrides it.
+			order = cursor.order === "desc" ? "desc" : "asc";
+		} else if (options.order === "desc") {
+			order = "desc";
 		}
 		if (order === "desc") {
 			windowEnd = offset === 0 ? messages.length : offset;

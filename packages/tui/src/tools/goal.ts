@@ -16,7 +16,7 @@ export interface Goal {
 	tokenBudget?: number;
 	tokensUsed: number;
 	timeUsedSeconds: number;
-	/** Continuation turns driven while this goal is active (0 while never continued). */
+	/** Agent turns driven while this goal is active (includes operator-initiated turns). */
 	iteration?: number;
 	createdAt: number;
 	updatedAt: number;

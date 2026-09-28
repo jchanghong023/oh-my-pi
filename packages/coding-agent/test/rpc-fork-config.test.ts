@@ -35,7 +35,7 @@ beforeAll(async () => {
 	await globalSettingsReady;
 });
 
-function setup(overrides?: Partial<Record<string, unknown>>): Fixture {
+function setup(overrides?: Partial<Record<string, unknown>>, options?: { agentDir?: string }): Fixture {
 	const emitted: object[] = [];
 	const host = new RpcForkHost(makeContext(emitted));
 	host.activate();
@@ -53,8 +53,8 @@ function setup(overrides?: Partial<Record<string, unknown>>): Fixture {
 		getAvailableModels: () => [],
 		...overrides,
 	} as unknown as AgentSession;
-	new RpcForkConfigController(host, session);
-	new RpcForkManageController(host, session);
+	new RpcForkConfigController(host, session, options);
+	new RpcForkManageController(host, session, undefined, options);
 	return {
 		host,
 		emitted,
@@ -128,15 +128,69 @@ describe("RpcForkConfigController A tier (5.6)", () => {
 	});
 
 	test("upsert_provider validates before writing; delete_provider reports unconfigured providers", async () => {
-		const fx = setup();
+		// Injected agentDir: the delete probe must not depend on (or touch) the
+		// host machine's real models.yml validity or contents.
+		await using agentDir = await TempDir.create("rpc-config-probe-agent-");
+		const fx = setup(undefined, { agentDir: path.resolve(agentDir.path()) });
 		const invalid = await fx.run({
 			type: "upsert_provider",
 			provider: { name: "acme", models: [{ id: "m1" }] }, // models require baseUrl
 		});
 		expect(invalid).toMatchObject({ success: false });
 
+		const badApi = await fx.run({ type: "upsert_provider", provider: { name: "acme", api: 42 } });
+		expect(badApi).toMatchObject({ success: false });
+
+		const badAuth = await fx.run({ type: "upsert_provider", provider: { name: "acme", auth: "magic" } });
+		expect(badAuth).toMatchObject({ success: false });
+
+		const badModel = await fx.run({
+			type: "upsert_provider",
+			provider: {
+				name: "acme",
+				baseUrl: "https://acme.example",
+				apiKey: "sk",
+				models: [{ id: "m1", contextWindow: 0 }],
+			},
+		});
+		expect(badModel).toMatchObject({ success: false });
+
 		const missing = await fx.run({ type: "delete_provider", provider: "acme" });
 		expect(missing).toMatchObject({ success: false, code: "provider_not_configured" });
+	});
+
+	test("upsert_provider round-trips providers through models.yml; delete removes them", async () => {
+		await using agentDir = await TempDir.create("rpc-config-agent-");
+		const agentPath = path.resolve(agentDir.path());
+		const fx = setup(undefined, { agentDir: agentPath });
+		const ymlPath = path.join(agentPath, "models.yml");
+
+		const upsert = await fx.run({
+			id: "up1",
+			type: "upsert_provider",
+			provider: {
+				name: "acme-rpc",
+				baseUrl: "https://acme.example/v1",
+				apiKey: "sk-test",
+				models: [{ id: "m1", api: "openai-completions", contextWindow: 8192, maxTokens: 4096 }],
+			},
+		});
+		expect(upsert).toMatchObject({ success: true, data: { provider: "acme-rpc" } });
+		expect(await fs.readFile(ymlPath, "utf-8")).toContain("acme-rpc");
+
+		const updated = await fx.run({
+			id: "up2",
+			type: "upsert_provider",
+			provider: { name: "acme-rpc", baseUrl: "https://updated.example/v1" },
+		});
+		expect(updated).toMatchObject({ success: true });
+		const text = await fs.readFile(ymlPath, "utf-8");
+		expect(text).toContain("https://updated.example/v1");
+		expect(text).toContain("sk-test"); // read-modify-write preserves the earlier apiKey
+
+		const removed = await fx.run({ id: "up3", type: "delete_provider", provider: "acme-rpc" });
+		expect(removed).toMatchObject({ success: true });
+		expect(await fs.readFile(ymlPath, "utf-8")).not.toContain("acme-rpc");
 	});
 
 	test("test_model attributes model_not_found and endpoint_not_configured without network calls", async () => {
@@ -207,13 +261,21 @@ describe("RpcForkManageController B tier (5.6)", () => {
 			sessionManager: { getCwd: () => root, getSessionId: () => "s", getArtifactsDir: () => root },
 		});
 
+		const badName = await fx.run({
+			type: "upsert_agent_definition",
+			definition: { name: "../evil", description: "path traversal" },
+		});
+		expect(badName).toMatchObject({ success: false });
+
 		const upsert = (await fx.run({
 			id: "ad1",
 			type: "upsert_agent_definition",
 			definition: { name: "rpc-probe-agent", description: "probe", systemPrompt: "Do probing.", tools: ["read"] },
 		})) as { data: Record<string, unknown> } & RpcResponse;
 		const filePath = upsert.data!.filePath as string;
-		expect(await fs.readFile(filePath, "utf-8")).toContain("name: rpc-probe-agent");
+		const fileText = await fs.readFile(filePath, "utf-8");
+		expect(fileText).toContain('name: "rpc-probe-agent"');
+		expect(fileText).toContain('description: "probe"');
 
 		const list = (await fx.run({ type: "list_agent_definitions" })) as {
 			data: Record<string, unknown>;
@@ -233,6 +295,56 @@ describe("RpcForkManageController B tier (5.6)", () => {
 		const fx = setup();
 		const unknown = await fx.run({ id: "mr", type: "mcp_reconnect", name: "definitely-not-configured" });
 		expect(unknown).toMatchObject({ success: false, code: "unknown_mcp_server" });
+	});
+
+	test("mcp servers: user-scope CRUD round-trips through the injected agent dir", async () => {
+		await using agentDir = await TempDir.create("rpc-manage-agent-");
+		await using cwdDir = await TempDir.create("rpc-manage-mcp-cwd-");
+		const root = path.resolve(cwdDir.path());
+		const fx = setup(
+			{ sessionManager: { getCwd: () => root, getSessionId: () => "s", getArtifactsDir: () => root } },
+			{ agentDir: path.resolve(agentDir.path()) },
+		);
+		const listServers = async () => {
+			const response = (await fx.run({ type: "list_mcp_servers" })) as {
+				data: Record<string, unknown>;
+			} & RpcResponse;
+			return response.data!.servers as Array<{ name: string; scope: string; disabled: boolean }>;
+		};
+
+		const badScope = await fx.run({
+			type: "upsert_mcp_server",
+			name: "probe-server",
+			config: { type: "stdio", command: "x" },
+			scope: "galaxy",
+		});
+		expect(badScope).toMatchObject({ success: false });
+
+		const upsert = await fx.run({
+			id: "mc1",
+			type: "upsert_mcp_server",
+			name: "probe-server",
+			config: { type: "stdio", command: "x" },
+			scope: "user",
+		});
+		expect(upsert).toMatchObject({ success: true, data: { name: "probe-server", scope: "user" } });
+		const listed = (await listServers()).find(server => server.name === "probe-server");
+		expect(listed).toBeDefined();
+		expect(listed).toMatchObject({ scope: "user", disabled: false });
+
+		const disabled = await fx.run({
+			id: "mc2",
+			type: "set_mcp_server_disabled",
+			name: "probe-server",
+			disabled: true,
+		});
+		expect(disabled).toMatchObject({ success: true });
+		const listedDisabled = (await listServers()).find(server => server.name === "probe-server");
+		expect(listedDisabled).toMatchObject({ disabled: true });
+
+		const removed = await fx.run({ id: "mc3", type: "delete_mcp_server", name: "probe-server", scope: "user" });
+		expect(removed).toMatchObject({ success: true });
+		expect((await listServers()).find(server => server.name === "probe-server")).toBeUndefined();
 	});
 
 	test("get_usage returns the trimmed report payload", async () => {

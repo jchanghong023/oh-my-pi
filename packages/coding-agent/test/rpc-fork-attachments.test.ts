@@ -6,6 +6,7 @@ import {
 	MAX_ATTACHMENTS,
 	RpcAttachmentError,
 	resolveRpcAttachments,
+	type RpcForkAttachment,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-attachments";
 
 const MINIMAL_PDF = Buffer.from(
@@ -101,6 +102,30 @@ describe("resolveRpcAttachments (5.5)", () => {
 		expect(await resolveRpcAttachments([{ kind: "data", mime: "text/plain", data: "aGk=" }], root)).toMatchObject({
 			images: [],
 		});
+	});
+
+	test("corrupt pdf rejects with attachment_unreadable instead of a bare error", async () => {
+		await using dir = await TempDir.create("rpc-attach-pdf-bad-");
+		const root = path.resolve(dir.path());
+		const pdfPath = path.join(root, "broken.pdf");
+		await fs.writeFile(pdfPath, "this text is definitely not a pdf");
+		await expect(resolveRpcAttachments([{ kind: "file", path: pdfPath }], root)).rejects.toMatchObject({
+			code: "attachment_unreadable",
+		});
+	});
+
+	test("malformed wire shapes reject with attachment_unsupported", async () => {
+		const root = path.resolve(import.meta.dir);
+		const notArray = "nope" as unknown as RpcForkAttachment[];
+		await expect(resolveRpcAttachments(notArray, root)).rejects.toMatchObject({
+			code: "attachment_unsupported",
+		});
+		await expect(
+			resolveRpcAttachments([{ kind: "file" } as unknown as RpcForkAttachment], root),
+		).rejects.toMatchObject({ code: "attachment_unsupported" });
+		await expect(
+			resolveRpcAttachments([{ kind: "data", mime: "text/plain", data: 42 } as unknown as RpcForkAttachment], root),
+		).rejects.toMatchObject({ code: "attachment_unsupported" });
 	});
 
 	test("RpcAttachmentError carries the wire code", () => {
