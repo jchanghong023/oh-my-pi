@@ -6696,6 +6696,7 @@ dependencies = [
  "os_pipe",
  "parking_lot",
  "parse_datetime",
+ "pi-iso",
  "pi-vfs",
  "pi-walker",
  "platform-info",
