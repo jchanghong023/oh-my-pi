@@ -218,6 +218,23 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		],
 	},
 	{
+		label: "coding-agent/rpc-fork",
+		cwd: "packages/coding-agent",
+		files: [
+			"test/rpc-fork-ask.test.ts",
+			"test/rpc-fork-approval-e2e.test.ts",
+			"test/rpc-fork-attachments.test.ts",
+			"test/rpc-fork-config.test.ts",
+			"test/rpc-fork-lifecycle.test.ts",
+			"test/rpc-fork-pagination.test.ts",
+			"test/rpc-fork-permission.test.ts",
+			"test/rpc-fork-plan.test.ts",
+			"test/rpc-fork-protocol.test.ts",
+			"test/rpc-fork-queue-jobs-search-state.test.ts",
+			"test/rpc-fork-sessions.test.ts",
+		],
+	},
+	{
 		label: "coding-agent/fork-features",
 		cwd: "packages/coding-agent",
 		files: [
