@@ -162,6 +162,9 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"thinking_level_changed",
 	"model_changed",
 	"goal_updated",
+	"config_warnings_changed",
+	"advisor_cost_changed",
+	"advisor_yielded",
 ]);
 
 function isRpcResponse(value: unknown): value is RpcResponse {
@@ -292,6 +295,8 @@ export class RpcClient {
 	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
+	#forkNegotiated = false;
+	readonly #forkFrameListeners = new Set<(frame: Record<string, unknown>) => void>();
 	#promptResultListeners = new Set<RpcPromptResultListener>();
 	#sessionSettledListeners = new Set<RpcSessionSettledListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
@@ -1054,6 +1059,36 @@ export class RpcClient {
 	 * Replace the host-owned custom tools exposed to the RPC session.
 	 * Changes take effect before the next model call.
 	 */
+	/**
+	 * Negotiate the fork protocol (v3, rpc-ui-protocol.md). After success,
+	 * unrecognized server frames are delivered to {@link onForkFrame} listeners
+	 * and {@link sendForkFrame} can emit v3 bypass frames.
+	 */
+	async negotiateProtocolV3(): Promise<void> {
+		const response = await this.#send({ type: "negotiate_protocol", protocolVersion: 3 });
+		if (!response.success) {
+			throw new RpcCommandError("Fork protocol v3 negotiation failed", "negotiate_protocol");
+		}
+		this.#forkNegotiated = true;
+	}
+
+	/** Subscribe to raw fork-protocol (v3) frames; returns an unsubscribe function. */
+	onForkFrame(listener: (frame: Record<string, unknown>) => void): () => void {
+		this.#forkFrameListeners.add(listener);
+		return () => {
+			this.#forkFrameListeners.delete(listener);
+		};
+	}
+
+	get forkNegotiated(): boolean {
+		return this.#forkNegotiated;
+	}
+
+	/** Send a v3 bypass frame (permission_response / ask_response / ask_pause). */
+	sendForkFrame(frame: Record<string, unknown>): void {
+		this.#writeFrame(frame as RpcCommand);
+	}
+
 	async setCustomTools(tools: RpcClientCustomTool[]): Promise<string[]> {
 		this.#customTools = [...tools];
 		if (!this.#process) {
@@ -1248,6 +1283,15 @@ export class RpcClient {
 		if (isRpcAvailableCommandsUpdateFrame(data)) {
 			for (const listener of this.#availableCommandsUpdateListeners) {
 				listener(data.commands);
+			}
+			return;
+		}
+
+		// Fork (v3) frames: only delivered after negotiateProtocolV3() so v2
+		// hosts keep the stock drop-unknown behavior.
+		if (this.#forkNegotiated && this.#forkFrameListeners.size > 0 && isRecord(data)) {
+			for (const listener of this.#forkFrameListeners) {
+				listener(data);
 			}
 			return;
 		}

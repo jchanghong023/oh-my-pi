@@ -25,16 +25,20 @@ interface Fixture {
 	run: (command: object) => Promise<RpcResponse>;
 }
 
-async function createFixture(sessionCount = 3): Promise<Fixture> {
+/** The caller owns the temp dirs (`await using` in the test scope) so cleanup runs after the test body. */
+async function createFixture(
+	sessionCount: number,
+	dirs: { cwd: string; sessions: string; agent: string },
+): Promise<Fixture> {
 	const emitted: object[] = [];
 	const host = new RpcForkHost(makeContext(emitted));
 	host.activate();
-	const cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
-	const sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
-	const agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+	const cwdDir = dirs.cwd;
+	const sessionsDir = dirs.sessions;
+	const agentDir = dirs.agent;
 	const sessionFiles: string[] = [];
 	for (let index = 0; index < sessionCount; index++) {
-		const manager = SessionManager.create(cwdDir.path(), sessionsDir.path());
+		const manager = SessionManager.create(cwdDir, sessionsDir);
 		await manager.ensureOnDisk();
 		manager.appendCustomEntry("step", { n: index });
 		const file = manager.getSessionFile();
@@ -47,7 +51,7 @@ async function createFixture(sessionCount = 3): Promise<Fixture> {
 		sessionFile: activeFile,
 		setSessionName: async () => true,
 	} as unknown as AgentSession;
-	const controller = new RpcForkSessionController(host, session, { agentDir: agentDir.path() });
+	const controller = new RpcForkSessionController(host, session, { agentDir });
 	void controller;
 	return {
 		host,
@@ -61,7 +65,14 @@ async function createFixture(sessionCount = 3): Promise<Fixture> {
 
 describe("RpcForkSessionController (4.2)", () => {
 	test("list_sessions cwd scope returns summaries with pinned flags and pagination cursors", async () => {
-		const fx = await createFixture(3);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(3, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		const first = (await fx.run({ id: "l1", type: "list_sessions", scope: "cwd", limit: 2 })) as Extract<
 			RpcResponse,
 			{ command: "list_sessions"; success: true }
@@ -96,7 +107,14 @@ describe("RpcForkSessionController (4.2)", () => {
 	});
 
 	test("list_sessions rejects invalid scope; v3 gating keeps inactive host silent", async () => {
-		const fx = await createFixture(1);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(1, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		const bad = await fx.run({ id: "l3", type: "list_sessions", scope: "galaxy" } as Record<string, unknown>);
 		expect(bad).toMatchObject({ success: false });
 
@@ -110,7 +128,14 @@ describe("RpcForkSessionController (4.2)", () => {
 	});
 
 	test("rename_session rewrites a non-active title, emits sessions_changed, and is reflected in listings", async () => {
-		const fx = await createFixture(2);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(2, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		const target = fx.sessionFiles[0]!;
 		const renamed = await fx.run({ id: "r1", type: "rename_session", sessionFile: target, name: "  Renamed task  " });
 		expect(renamed).toMatchObject({ command: "rename_session", success: true });
@@ -125,7 +150,14 @@ describe("RpcForkSessionController (4.2)", () => {
 	});
 
 	test("rename_session on the active session rides setSessionName; empty names rejected", async () => {
-		const fx = await createFixture(1);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(1, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		let setCalled: string | undefined;
 		(fx.session as { setSessionName: (name: string, source: string) => Promise<boolean> }).setSessionName =
 			async name => {
@@ -141,7 +173,14 @@ describe("RpcForkSessionController (4.2)", () => {
 	});
 
 	test("delete_session removes artifacts for non-active sessions and refuses the active one", async () => {
-		const fx = await createFixture(2);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(2, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		const victim = fx.sessionFiles[0]!;
 
 		const activeAttempt = await fx.run({ id: "d1", type: "delete_session", sessionFile: fx.activeFile });
@@ -160,7 +199,14 @@ describe("RpcForkSessionController (4.2)", () => {
 	});
 
 	test("pin_session/unpin_session toggle the global pin store and surface in listings", async () => {
-		const fx = await createFixture(2);
+		await using cwdDir = await TempDir.create("rpc-fork-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-fork-sessions-store-");
+		await using agentDir = await TempDir.create("rpc-fork-sessions-agent-");
+		const fx = await createFixture(2, {
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+			agent: path.resolve(agentDir.path()),
+		});
 		const target = fx.sessionFiles[0]!;
 		const pinned = (await fx.run({ id: "p1", type: "pin_session", sessionId: "does-not-exist" })) as Extract<
 			RpcResponse,

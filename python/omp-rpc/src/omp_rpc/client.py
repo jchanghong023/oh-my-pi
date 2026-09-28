@@ -866,6 +866,28 @@ class RpcClient:
             self._unknown_notification_listeners, listener
         )
 
+    def negotiate_protocol_v3(self) -> JsonObject:
+        """Negotiate the fork protocol (v3, rpc-ui-protocol.md).
+
+        After success the server enables its fork command/frame surface; use
+        ``request_raw`` for fork commands and ``on_unknown_notification`` to
+        observe fork bypass/event frames (they are not typed notifications).
+        """
+        response = self._request("negotiate_protocol", protocolVersion=3)
+        if not response.get("success"):
+            raise RpcCommandError(
+                str(response.get("error", "fork protocol v3 negotiation failed")),
+                "negotiate_protocol",
+            )
+        self._protocol_version = 3
+        return response
+
+    def send_fork_frame(self, frame: Mapping[str, JsonValue]) -> None:
+        """Write a raw v3 bypass frame (permission_response/ask_response/ask_pause)."""
+        process = self._require_process()
+        payload: JsonObject = {str(key): value for key, value in frame.items()}
+        self._write_json(process, payload)
+
     def install_headless_ui(
         self,
         *,
@@ -1085,7 +1107,7 @@ class RpcClient:
         return self.set_todos(())
 
     def get_messages(self) -> tuple[AgentMessage, ...]:
-        if self._protocol_version == 2:
+        if self._protocol_version in (2, 3):
             try:
                 messages: list[AgentMessage] = []
                 seen_cursors: set[str] = set()
