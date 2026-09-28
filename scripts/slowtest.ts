@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fork pipeline gate: run `bun run fulltest`, verify the same tree on the
-// centos7 WSL2 distro via slowtest-wsl-stage.ts (Windows-only; skipped
+// ubuntu-24.04 WSL2 distro via slowtest-wsl-stage.ts (Windows-only; skipped
 // elsewhere), push local `main` to origin, trigger the repository's GitHub
 // Actions CI (manual `workflow_dispatch`, no release), then poll the triggered
 // run until it completes and report the conclusion plus the failure-log entry
@@ -117,8 +117,8 @@ async function main(debug: boolean): Promise<number> {
 	// any sync or fulltest error — nothing downstream may run after a failure.
 	const wslStartedAt = performance.now();
 	const wslExit = await runInherit(["bun", "scripts/slowtest-wsl-stage.ts"]);
-	if (wslExit !== 0) fail(`wsl/centos7 stage failed with exit code ${wslExit}; not pushing or triggering CI`);
-	logStageDone("wsl/centos7", wslStartedAt);
+	if (wslExit !== 0) fail(`wsl/ubuntu-24.04 stage failed with exit code ${wslExit}; not pushing or triggering CI`);
+	logStageDone("wsl/ubuntu-24.04", wslStartedAt);
 
 	const headSha = runCapture(["git", "rev-parse", "HEAD"]).stdout.trim();
 	if (headSha === "") fail("could not resolve HEAD sha");
@@ -259,7 +259,7 @@ if (import.meta.main) {
 			.then(exitCode => {
 				const elapsed = ((performance.now() - startedAt) / 1000).toFixed(2);
 				if (exitCode === 0) {
-					console.log(`\nslowtest: PASS (fulltest + wsl/centos7 + pushed main + CI green)`);
+					console.log(`\nslowtest: PASS (fulltest + wsl/ubuntu-24.04 + pushed main + CI green)`);
 					console.log(`slowtest: total time ${elapsed}s`);
 				} else {
 					console.error(`\nslowtest: FAIL (CI conclusion not success)`);

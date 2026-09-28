@@ -22,13 +22,13 @@ describe("parseWslListVerbose", () => {
 		const raw = [
 			"  NAME            STATE           VERSION",
 			"  * Ubuntu-24.04    Running         2",
-			"    centos7         Stopped         2",
+			"    ubuntu-24.04         Stopped         2",
 			"    legacy          Stopped         1",
 			"",
 		].join("\r\n");
 		expect(parseWslListVerbose(raw)).toEqual([
 			{ name: "Ubuntu-24.04", state: "Running", version: "2" },
-			{ name: "centos7", state: "Stopped", version: "2" },
+			{ name: "ubuntu-24.04", state: "Stopped", version: "2" },
 			{ name: "legacy", state: "Stopped", version: "1" },
 		]);
 	});
@@ -80,8 +80,8 @@ describe("pickWslRepo", () => {
 });
 
 describe("stage constants", () => {
-	test("the distro under test is CentOS-7 with a 2-hour budget", () => {
-		expect(WSL_TEST_DISTRIBUTION).toBe("CentOS-7");
+	test("the distro under test is Ubuntu-24.04 with a 2-hour budget", () => {
+		expect(WSL_TEST_DISTRIBUTION).toBe("Ubuntu-24.04");
 		expect(WSL_STAGE_TIMEOUT_MS).toBe(2 * 60 * 60_000);
 	});
 });
