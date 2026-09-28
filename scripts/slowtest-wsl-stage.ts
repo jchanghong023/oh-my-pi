@@ -320,6 +320,16 @@ function killProcessTree(child: { pid: number }): void {
 }
 
 async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
+	// A fresh clone has no node_modules: install before fulltest so the
+	// workspace-local binaries (oxlint, tsgo, nextest glue, …) exist.
+	console.log(`wsl-stage: installing dependencies in ${repoPath}`);
+	const install = wslRun(distro, `cd ${quote(repoPath)} && bun install --frozen-lockfile`);
+	if (install.exitCode !== 0) {
+		process.stderr.write(install.stderr);
+		process.stdout.write(install.stdout);
+		console.error(`wsl-stage: FAIL — bun install exited with code ${install.exitCode}`);
+		return install.exitCode || 1;
+	}
 	const command = `cd ${quote(repoPath)} && bun run fulltest`;
 	console.log(`\n==> wsl/fulltest`);
 	console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
