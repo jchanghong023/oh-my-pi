@@ -171,6 +171,47 @@ export type RpcForkResponse =
 			command: "approve_plan";
 			success: true;
 			data: { decision: "approve" | "refine" | "reject"; dispatched: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command:
+				| "get_settings"
+				| "list_providers"
+				| "list_mcp_servers"
+				| "list_skills"
+				| "list_agent_definitions"
+				| "get_usage"
+				| "get_stats_summary";
+			success: true;
+			data: Record<string, unknown>;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command:
+				| "set_settings"
+				| "unset_settings"
+				| "upsert_provider"
+				| "delete_provider"
+				| "set_model_enabled"
+				| "upsert_mcp_server"
+				| "delete_mcp_server"
+				| "set_mcp_server_disabled"
+				| "mcp_reconnect"
+				| "set_skill_source_enabled"
+				| "set_skill_ignored"
+				| "upsert_agent_definition"
+				| "delete_agent_definition";
+			success: true;
+			data?: Record<string, unknown>;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "test_model";
+			success: true;
+			data: import("./rpc-fork-types").RpcForkModelTestResult;
 	  };
 
 // ============================================================================
@@ -182,6 +223,24 @@ export interface RpcForkQueueUpdatedFrame {
 	type: "queue_updated";
 	steeringCount: number;
 	followUpCount: number;
+}
+
+/** 5.6 A: one-shot model connectivity test result (six-way failure attribution). */
+export interface RpcForkModelTestResult {
+	ok: boolean;
+	latencyMs: number;
+	/** Failure attribution when `ok` is false. */
+	error?: {
+		category: "auth_failed" | "model_not_found" | "rate_limited" | "network" | "server" | "endpoint_not_configured";
+		message: string;
+		httpStatus?: number;
+	};
+}
+
+/** 5.6 B event: settings files changed; clients re-pull (best effort). */
+export interface RpcForkSettingsChangedFrame {
+	type: "settings_changed";
+	scope: "user" | "project";
 }
 
 /** 5.8: one extension-hook handler execution (per-hook telemetry). */

@@ -304,6 +304,8 @@ Attachment = { kind: "file", path, mime? }        // 同机文件引用（首选
 3. MCP 增删改与启停后重连生效，失败分类可渲染设置页错误行。
 4. `get_usage`/`get_stats_summary` 输出与对应 CLI（`omp usage --json`、`omp stats`）一致口径。
 
+> 实现状态（2026-09-28）：A/B 两档已实现（`rpc-fork-config.ts` + `rpc-fork-manage.ts`）。设置读写包装 `createSettingsHost`（经 `withActiveSettings` 绑定会话实例），凭据读取脱敏，项目作用域只读（错误码 `read_only_scope`——设置层仅持久化用户层，属上游既有边界）；供应商 CRUD 直接读写 `models.yml`（ConfigFile 无写 API，读改写 + `stringifyYamlConfig` + invalidate），`validateProviderConfiguration` 前置校验；`set_model_enabled` 写 `enabledModels` allowlist 键（空表 = 全放行的既有语义，首个显式 enable 开始收窄）；`test_model` 六类归因（auth_failed/model_not_found/rate_limited/network/server/endpoint_not_configured，经 `streamSimple` 实测 + `AIError` 归类）。MCP CRUD 包装 `mcp/config-writer.ts`（user/project 两路径），连接状态为 `mcp:connection-status` 事件的尽力缓存；`mcp_reconnect` 因 session 层未暴露 MCPManager 访问器而返回 `triggered:false`（连接按既有重连梯次在使用时重建）——**已知缺口**。技能启停写 `skills.enable*`/`skills.ignoredSkills`；子代理定义经 `task/discovery.ts` 读写项目 `.omp/agents/*.md`；`get_usage` 包装 `authStorage.usage`（去 raw，与 `omp usage --json` 同口径）；`get_stats_summary` 包装 `@oh-my-pi/omp-stats`（sync+rollups+dashboard）。UT 见 `test/rpc-fork-config.test.ts`（脱敏、read_only_scope、供应商校验失败、test_model 归因、技能键写入、定义文件读写、usage 裁剪、mcp_reconnect 校验）。供应商增删改后的 TUI 面板一致性与 MCP 重连生效两条验收依赖真实多会话环境，未在本机验证。
+
 ### 5.7 文件与目录搜索
 
 * 新命令：`search_paths {query, cwd?, limit?}` → `{entries: [{path, type:"file"|"dir"}]}`，默认上限 1000，匹配遵循既有忽略规则与 `fs-scan-cache` 架构。

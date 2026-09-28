@@ -47,6 +47,8 @@ import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RpcForkAskBroker } from "./rpc-fork-ask";
+import { RpcForkConfigController } from "./rpc-fork-config";
+import { RpcForkManageController } from "./rpc-fork-manage";
 import { RpcForkJobController } from "./rpc-fork-jobs";
 import { RpcForkPlanController } from "./rpc-fork-plan";
 import { RpcAttachmentError, resolveRpcAttachments, type RpcForkAttachment } from "./rpc-fork-attachments";
@@ -864,6 +866,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	new RpcForkFeedbackController(forkHost, session);
 	const forkHookTelemetry = new RpcForkHookTelemetry(forkHost, session);
 	const forkPlanController = new RpcForkPlanController(forkHost, session);
+	new RpcForkConfigController(forkHost, session);
+	new RpcForkManageController(forkHost, session, subagentEventBus);
 	// Resolves v3 `attachments` into message images + a text prelude (5.5);
 	// structured attachment failures carry their wire `code`.
 	const resolveCommandAttachments = async (
