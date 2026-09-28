@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
-// Fork pipeline gate: run `bun run fulltest`, push local `main` to origin,
-// trigger the repository's GitHub Actions CI (manual `workflow_dispatch`, no
-// release), then poll the triggered run until it completes and report the
-// conclusion plus the failure-log entry point. Only run on explicit user
-// request — this command pushes and consumes CI (AGENTS.md「验证」).
+// Fork pipeline gate: run `bun run fulltest`, verify the same tree on the
+// centos7 WSL2 distro via slowtest-wsl-stage.ts (Windows-only; skipped
+// elsewhere), push local `main` to origin, trigger the repository's GitHub
+// Actions CI (manual `workflow_dispatch`, no release), then poll the triggered
+// run until it completes and report the conclusion plus the failure-log entry
+// point. Only run on explicit user request — this command pushes and consumes
+// CI (AGENTS.md「验证」).
 
 import * as path from "node:path";
 
@@ -110,6 +112,13 @@ async function main(debug: boolean): Promise<number> {
 
 	const branch = runCapture(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
 	if (branch !== "main") fail(`slowtest pushes local main, but the current branch is '${branch}'`);
+
+	// The WSL stage pushes the current tree itself and fails the pipeline on
+	// any sync or fulltest error — nothing downstream may run after a failure.
+	const wslStartedAt = performance.now();
+	const wslExit = await runInherit(["bun", "scripts/slowtest-wsl-stage.ts"]);
+	if (wslExit !== 0) fail(`wsl/centos7 stage failed with exit code ${wslExit}; not pushing or triggering CI`);
+	logStageDone("wsl/centos7", wslStartedAt);
 
 	const headSha = runCapture(["git", "rev-parse", "HEAD"]).stdout.trim();
 	if (headSha === "") fail("could not resolve HEAD sha");
@@ -250,7 +259,7 @@ if (import.meta.main) {
 			.then(exitCode => {
 				const elapsed = ((performance.now() - startedAt) / 1000).toFixed(2);
 				if (exitCode === 0) {
-					console.log(`\nslowtest: PASS (fulltest + pushed main + CI green)`);
+					console.log(`\nslowtest: PASS (fulltest + wsl/centos7 + pushed main + CI green)`);
 					console.log(`slowtest: total time ${elapsed}s`);
 				} else {
 					console.error(`\nslowtest: FAIL (CI conclusion not success)`);
