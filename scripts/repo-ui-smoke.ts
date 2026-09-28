@@ -2,7 +2,6 @@
 // native PTY. Only the Anthropic model is simulated; SQLite, Python parsing,
 // tools, source mutations, and terminal interaction are real.
 import * as fs from "node:fs/promises";
-import { rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
@@ -111,6 +110,29 @@ function sse(model: string, call?: ToolCall, text = "REPO_SMOKE_DONE"): string {
 		["message_stop", { type: "message_stop" }],
 	] as const;
 	return frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+}
+
+/** Remove a smoke directory, tolerating Windows handle-release lag: the killed
+ * TUI child and its SQLite/git helpers can keep -shm/-wal handles open for a
+ * moment after kill(). Never throws — a cleanup failure must not crash the
+ * harness and mask the actual smoke verdict. */
+async function rmSmokeDir(target: string): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await fs.rm(target, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code ?? "";
+			const transient = code === "EBUSY" || code === "EPERM" || code === "EACCES" || code === "ENOTEMPTY";
+			if (!transient || attempt >= 8) {
+				console.error(
+					`ui-smoke: cleanup of ${target} failed after ${attempt} attempt(s): ${code || String(error)}`,
+				);
+				return;
+			}
+			await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+		}
+	}
 }
 
 export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep }: Harness): Promise<void> {
@@ -340,7 +362,10 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		current.session.write("c");
 		await visible(
 			"cancelled rebuild returned to status",
-			text => text.includes("Files: 1") && text.includes("Generation:"),
+			// Diff rendering skips the unchanged Files/Generation row, so assert
+			// on the rows the post-cancel refresh actually repaints; retention of
+			// the stable generation is verified against the service right below.
+			text => text.includes("Coverage: incomplete (unchecked)"),
 			45_000,
 			cancelledOffset,
 		);
@@ -413,7 +438,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 			} catch {}
 		}
 		server?.stop(true);
-		rmSync(configRoot, { recursive: true, force: true });
-		await fs.rm(temp, { recursive: true, force: true });
+		await rmSmokeDir(configRoot);
+		await rmSmokeDir(temp);
 	}
 }

@@ -280,6 +280,11 @@ export interface FulltestOptions {
 /** Hard budget for every test-execution phase; compile time is exempt. */
 export const TEST_PHASE_TIMEOUT_MS = 3 * 60_000;
 
+/** The whitelist pool runs half-width (see runWhitelistPhase), so it gets a
+ * wider wall-clock budget than the other test phases while still bounding
+ * hangs. */
+export const WHITELIST_PHASE_TIMEOUT_MS = 5 * 60_000;
+
 function shellQuote(value: string): string {
 	if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) return value;
 	return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -557,11 +562,16 @@ async function runWhitelistPhase(): Promise<void> {
 		cwd: group.cwd,
 		argv: ["bun", "test", ...group.files] as const,
 	}));
-	const concurrency = Math.max(1, Math.min(4, os.availableParallelism()));
+	// Half-width pool: the groups spawn subprocess-heavy tests (bash, git,
+	// ConPTY, CLI runs) whose default 5s budgets lose to process-start latency
+	// when four groups contend for CPU on Windows; two workers keep those
+	// budgets safe at the cost of a longer phase (own timeout above).
+	const concurrency = Math.max(1, Math.min(2, os.availableParallelism()));
 	console.log(`ts/whitelist: running ${plans.length} green-set groups with ${concurrency} workers`);
 	const failures = await runGroupPool(plans, {
 		label: "ts/whitelist",
 		concurrency,
+		timeoutMs: WHITELIST_PHASE_TIMEOUT_MS,
 		spawn: plan => {
 			// `bun test` never reads stdin; an inherited pipe whose write end stays
 			// open would keep stdin-EOF-waiting tests hung until their timeout.

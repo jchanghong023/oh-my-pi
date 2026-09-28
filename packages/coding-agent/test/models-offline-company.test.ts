@@ -11,6 +11,11 @@ import * as path from "node:path";
  * process-global and read once, so one process cannot serve both fixtures.
  */
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
+// Routes every outbound request at a closed loopback port so the non-offline
+// run fails its network attempts instantly instead of waiting out
+// machine-dependent DNS/connect timeouts (~10s here); provider registration,
+// the actual subject under test, is unaffected.
+const DEAD_PROXY = "http://127.0.0.1:9";
 const COMPANY_SETTINGS = JSON.stringify({
 	env: { ANTHROPIC_BASE_URL: "http://company.invalid", ANTHROPIC_AUTH_TOKEN: "fixture-token" },
 });
@@ -41,6 +46,8 @@ async function runModels(
 	env.HOME = home;
 	env.USERPROFILE = home;
 	env.CLAUDE_CONFIG_DIR = claudeDir;
+	env.HTTP_PROXY = DEAD_PROXY;
+	env.HTTPS_PROXY = DEAD_PROXY;
 
 	const child = Bun.spawn([process.execPath, CLI, "models", ...args], {
 		env,
