@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the setup wizard's "Web search" tab; the providers scene is now sign-in only, and web search is chosen through the `web` model role like other kind roles.
+
 ### Fixed
 
 - Filter known `@` file candidates immediately while slow filesystem discovery is pending, keeping typing, backspace, and completion acceptance responsive on network filesystems.
