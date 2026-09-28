@@ -101,6 +101,7 @@ permission_request {
   details: string[]           // formatApprovalDetails 生成的预览行（diff/命令摘要等，现有能力）
   input: unknown              // 工具结构化参数（有界截断），供客户端渲染 diff/命令预览
   origin?: { subagentId: string; agentType: string }   // 子代理发起时必带
+  prefixSuggestion?: string   // 4.1 前缀档（2026-09-28 契约增补）：bash 首词前缀建议（含尾随空格），供 allow_always_prefix
 }
 ```
 
@@ -109,7 +110,9 @@ permission_request {
 ```text
 permission_response {
   id: string
-  option: "allow_once" | "allow_session" | "allow_always" | "reject_once" | "reject_always"
+  option: "allow_once" | "allow_session" | "allow_always" | "allow_always_prefix" | "reject_once" | "reject_always"
+                             // allow_always_prefix 为前缀档选项（2026-09-28 契约增补）：按请求携带的
+                             // prefixSuggestion 持久化前缀规则并放行本次调用
   feedback?: string           // 拒绝理由，≤ 4096 字符，附给模型
 }
 ```
@@ -124,6 +127,8 @@ permission_response {
 * 子代理会话的审批 MUST 委托到宿主 UI：为子会话注入携带 `origin` 标注的委托 UI context（落点 `task/executor.ts` 子会话构建处），子代理审批请求在主连接上呈现并带来源徽标；委托失败按现状 fail-closed 报错。
 * bash 命令前缀级"始终允许"（`allow_always_prefix`，前缀规则持久化）为同一审批协议的第二档能力：验收分两档（见下），第一档交付整工具级 allow_always 即可，前缀规则 MUST 在第一档交付后、第一期结束前补齐，并扩展 `tools/approval` 的策略键以支持前缀粒度。
 * 超时/断连：v3 客户端断连时挂起审批按现状 fail-closed（拒绝并报错）；不引入审批静默放行路径。
+
+> 前缀档实现状态（2026-09-28）：已实现（第一档交付同批）。`allow_always_prefix` 按请求携带的 `prefixSuggestion`（bash 首词+尾随空格）持久化到新增设置键 `tools.approvalPrefixes.<tool>`（`tools/settings.ts`），命中前缀规则的后续调用不再发帧；整工具策略键不受前缀档影响（只放行匹配前缀的命令）。UT 覆盖建议生成、规则持久化与去重、命中跳帧、未命中仍审批（`test/rpc-fork-permission.test.ts`）。
 
 **验收条件**：
 
@@ -227,16 +232,20 @@ ask_pause { targetId }                 // 幂等暂停倒计时；首次交互�
 
 ### 5.1 排队消息面板
 
-* 新命令：`get_queue` → `{ steering: [{id,text,imageCount}], followUp: [...] }`；`remove_queued {queue:"steering"|"followUp", id}`；`reorder_queue {queue, ids}`（全量顺序）；`clear_queue {queue?}`。
+* 新命令：`get_queue` → `{ steering: [{id,text,imageCount}], followUp: [...] }`；`remove_queued {queue:"steering"|"followUp", entryId}`（条目 id 命名为 `entryId`，避免与命令关联 `id` 撞名——2026-09-28 契约修订）；`reorder_queue {queue, ids}`（全量顺序）；`clear_queue {queue?}`。
 * 新事件：`queue_updated { steeringCount, followUpCount }`（内容或计数变化时；客户端据此重拉）。
 * 行为：MUST 复用 session 层队列 API（`getQueuedMessages/clearQueue/replaceQueues`，`agent-session.ts`）；`reorder`/`remove` 后注入顺序相应变化；与 `get_state.queuedMessageCount`、`prompt_result(aborted)` 的暂停语义（队列暂停横幅）由客户端推导，协议不改。
 * 验收：队列增删改后 `get_queue` 与实际注入顺序一致；事件与计数不漂移；abort 后队列内容保留可查。
+
+> 实现状态（2026-09-28）：已实现（`packages/coding-agent/src/modes/rpc/rpc-fork-queue.ts`，包装 `agent.peekSteeringQueue/peekFollowUpQueue/replaceQueues`，条目 id 由 WeakMap 按消息对象稳定铸造）。UT 覆盖 get_queue 稳定 id、remove/reorder/clear 与 `queue_updated` 计数、非法 queue 名与未知条目错误码 `unknown_queue_entry`（`test/rpc-fork-queue-jobs-search-state.test.ts`）。`queue_updated` 当前仅由 fork 队列命令变更触发；abort 后队列保留为底层现成行为（`get_queue` 可查）。
 
 ### 5.2 后台任务
 
 * 新命令：`get_jobs { includeRecent?, recentLimit? }` → `{ running: [...], recent: [...] }`，每项 `{ jobId, type, label, status, startedAt, durationMs, exitCode?, resultText? }`；`cancel_job { jobId }`。
 * 行为：MUST 复用 `getAsyncJobSnapshot`（`agent-session.ts`）与 `snapshotJobs/executeCancel`（`async/job-control.ts`）；输出文件路径沿用 `tool_execution_update` 的 artifact 信息，不在本命令重复。
 * 验收：后台 bash 运行中可见并可取消；完成后进入 recent 且带 exitCode；与 `hasPendingAsyncWork`/`session_settled` 语义一致。
+
+> 实现状态（2026-09-28）：已实现（`packages/coding-agent/src/modes/rpc/rpc-fork-jobs.ts`，包装 `AsyncJobManager.getAllJobs` + `snapshotJobs`/`executeCancel`，按 owner 过滤；unknown job 错误码 `unknown_job`）。UT 覆盖无 manager 空快照与 unknown job 取消失败路径；运行中可见/取消/recent+exitCode 的全链路依赖真实后台 bash 任务，协议层由快照映射 UT 与既有 job-control 底层测试共同覆盖，端到端取消流待 key E2E 环境（见 rpc-fork-approval-e2e 同类门控）。
 
 ### 5.3 计划模式命令化
 
@@ -295,6 +304,8 @@ Attachment = { kind: "file", path, mime? }        // 同机文件引用（首选
 * 用途：输入区 `@` 面板数据源；远程 transport（TS 客户端 spawn 抽象支持 SSH）下唯一可行路径。
 * 验收：模糊查询命中文件与目录；忽略规则生效；上限与截断提示明确；空查询返回有界默认集。
 
+> 实现状态（2026-09-28）：已实现（`packages/coding-agent/src/modes/rpc/rpc-fork-search.ts`，包装 native `fuzzyFind`，hidden+gitignore+cache 与 TUI @ 面板同参；默认上限 1000、绝对路径输出、`truncated` 标志；native 不可用时错误码 `search_unavailable`）。UT 覆盖文件+目录命中、忽略规则、非法参数（`test/rpc-fork-queue-jobs-search-state.test.ts`）。
+
 ### 5.8 会话状态补全
 
 * `get_state` 增补 `goal?: { goal, state, iteration }`；`goal_updated` 事件增补 `iteration`（迭代序号，底层 `goals/state.ts` 增设计数）。后接入的客户端可从 `get_state` 拿到当前 goal 快照（现仅事件推送）。
@@ -302,6 +313,8 @@ Attachment = { kind: "file", path, mime? }        // 同机文件引用（首选
 * 新命令 `submit_feedback { messageId, rating: "up"|"down", comment? }`：落本地轻量存储（config root 下 jsonl），无任何上报；赞/踩失败可重试。
 * 客户端配套：TS 客户端事件 allowlist 补 `config_warnings_changed/advisor_cost_changed/advisor_yielded`（现被静默丢弃，属客户端侧缺陷）。
 * 验收：goal 面板可显示迭代序号与暂停/继续状态；一轮含 hook 的会话可经事件还原逐 hook 列表；feedback 落库可查。
+
+> 实现状态（2026-09-28）：已实现。`Goal.iteration` 计数（`pi-tui/tools/goal.ts` + `goals/runtime.ts` onTurnStart 递增），`get_state.goal` 快照经 `RpcForkStateController.goalSnapshot`（`rpc-fork-state.ts`），`goal_updated` 经 `Goal.iteration` 携带；`hook_executed` 经 runner 新增 `setHookExecutedListener`（`extensibility/extensions/runner.ts` 四个出口：ok/timeout/error/aborted）+ `RpcForkHookTelemetry` 源分类（user/workspace/plugin）；`submit_feedback` 落 `<configRoot>/agent/feedback.jsonl`（无上报）。UT 覆盖迭代快照、源分类与 v3 门控、feedback 落库与非法 rating（`test/rpc-fork-queue-jobs-search-state.test.ts`）；含 hook 的真实轮次事件流验证依赖扩展 hook 用例环境（extensions-runner.test.ts 回归通过）。TS 客户端 allowlist 增补随客户端同步批次落地。
 
 ## 6. P2 完整需求（待实现规划）
 

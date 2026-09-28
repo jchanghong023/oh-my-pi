@@ -6,7 +6,11 @@ import {
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgToolsApproval, cfgToolsApprovalMode } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import {
+	cfgToolsApproval,
+	cfgToolsApprovalMode,
+	cfgToolsApprovalPrefixes,
+} from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcForkCommandBase } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
@@ -204,6 +208,56 @@ describe("RpcForkPermissionController (4.1)", () => {
 		await expect(pending).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
 		// Clean the process-global delegate so later tests see an inactive surface.
 		h.host.dispose("test cleanup");
+	});
+
+	test("bash requests carry prefixSuggestion; allow_always_prefix persists the rule and skips later frames", async () => {
+		const h = setupWithBridge({ mode: "always-ask" });
+		const first = h.requestPermission({ command: "npm test" });
+		await Bun.sleep(0);
+		const frame = h.emitted[0] as Record<string, unknown>;
+		expect(frame.prefixSuggestion).toBe("npm ");
+
+		h.settleLast({ type: "permission_response", id: frame.id, option: "allow_always_prefix" });
+		await expect(first).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
+		const prefixes = cfgToolsApprovalPrefixes.get(h.settings) as Record<string, unknown>;
+		expect(prefixes.bash).toEqual(["npm "]);
+		// The whole-tool policy stays untouched: only the prefix is allowed.
+		expect(cfgToolsApproval.get(h.settings)).toEqual({});
+
+		// Matching command: prefix rule short-circuits without a frame.
+		h.emitted.length = 0;
+		await expect(h.requestPermission({ command: "npm run build" })).resolves.toMatchObject({
+			outcome: "selected",
+			optionId: "allow_once",
+		});
+		await Bun.sleep(0);
+		expect(h.emitted).toHaveLength(0);
+
+		// Non-matching command still prompts.
+		const third = h.requestPermission({ command: "curl evil" });
+		await Bun.sleep(0);
+		expect(h.emitted).toHaveLength(1);
+		const frame3 = h.emitted[0] as Record<string, unknown>;
+		h.settleLast({ type: "permission_response", id: frame3.id, option: "allow_once" });
+		await expect(third).resolves.toMatchObject({ outcome: "selected" });
+	});
+
+	test("duplicate allow_always_prefix responses do not duplicate the rule", async () => {
+		const h = setupWithBridge({ mode: "always-ask" });
+		const first = h.requestPermission({ command: "git status" });
+		await Bun.sleep(0);
+		const frame = h.emitted[0] as Record<string, unknown>;
+		h.settleLast({ type: "permission_response", id: frame.id, option: "allow_always_prefix" });
+		await expect(first).resolves.toMatchObject({ outcome: "selected" });
+		// A second tool with a fresh policy still prompts; answering the same
+		// prefix again must not append twice.
+		const second = h.requestPermission({ command: "git push" });
+		await Bun.sleep(0);
+		const frame2 = h.emitted.at(-1) as Record<string, unknown>;
+		h.settleLast({ type: "permission_response", id: frame2.id, option: "allow_always_prefix" });
+		await expect(second).resolves.toMatchObject({ outcome: "selected" });
+		const prefixes = cfgToolsApprovalPrefixes.get(h.settings) as Record<string, unknown>;
+		expect(prefixes.bash).toEqual(["git "]);
 	});
 
 	test("set_approval_mode validates and persists; get_state helper reads the live mode", async () => {

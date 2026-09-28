@@ -38,7 +38,19 @@ export type RpcForkCommand =
 	| { id?: string; type: "pin_session"; sessionId: string }
 	| { id?: string; type: "unpin_session"; sessionId: string }
 	| { id?: string; type: "rename_session"; sessionFile: string; name: string }
-	| { id?: string; type: "delete_session"; sessionFile: string };
+	| { id?: string; type: "delete_session"; sessionFile: string }
+	// 5.1 queued messages
+	| { id?: string; type: "get_queue" }
+	| { id?: string; type: "remove_queued"; queue: "steering" | "followUp"; entryId: string }
+	| { id?: string; type: "reorder_queue"; queue: "steering" | "followUp"; ids: string[] }
+	| { id?: string; type: "clear_queue"; queue?: "steering" | "followUp" }
+	// 5.2 background jobs
+	| { id?: string; type: "get_jobs"; includeRecent?: boolean; recentLimit?: number }
+	| { id?: string; type: "cancel_job"; jobId: string }
+	// 5.7 file search
+	| { id?: string; type: "search_paths"; query: string; cwd?: string; limit?: number }
+	// 5.8 session state completion
+	| { id?: string; type: "submit_feedback"; messageId: string; rating: "up" | "down"; comment?: string };
 
 /** Base shape shared by fork-extension success responses. */
 export interface RpcForkSuccessResponseBase {
@@ -73,7 +85,68 @@ export type RpcForkResponse =
 			data: { pinned: boolean };
 	  }
 	| { id?: string; type: "response"; command: "rename_session"; success: true }
-	| { id?: string; type: "response"; command: "delete_session"; success: true };
+	| { id?: string; type: "response"; command: "delete_session"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_queue";
+			success: true;
+			data: import("./rpc-fork-queue").RpcForkQueueSnapshot;
+	  }
+	| { id?: string; type: "response"; command: "remove_queued" | "reorder_queue" | "clear_queue"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_jobs";
+			success: true;
+			data: {
+				running: import("./rpc-fork-jobs").RpcForkJobRow[];
+				recent: import("./rpc-fork-jobs").RpcForkJobRow[];
+			};
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "cancel_job";
+			success: true;
+			data: { jobId: string; status: string; message?: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "search_paths";
+			success: true;
+			data: { entries: Array<{ path: string; type: "file" | "dir" }>; truncated: boolean };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "submit_feedback";
+			success: true;
+			data: { stored: true; file: string };
+	  };
+
+// ============================================================================
+// Fork bypass event frames (server → client)
+// ============================================================================
+
+/** 5.1: queue contents or counts may have changed; clients re-pull `get_queue`. */
+export interface RpcForkQueueUpdatedFrame {
+	type: "queue_updated";
+	steeringCount: number;
+	followUpCount: number;
+}
+
+/** 5.8: one extension-hook handler execution (per-hook telemetry). */
+export interface RpcForkHookExecutedFrame {
+	type: "hook_executed";
+	hookId: string;
+	event: string;
+	source: "user" | "workspace" | "plugin";
+	durationMs: number;
+	status: "ok" | "timeout" | "error" | "aborted";
+	reason?: string;
+}
 
 // ============================================================================
 // Rich ask (requirement 4.3)

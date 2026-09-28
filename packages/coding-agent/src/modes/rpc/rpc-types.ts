@@ -120,6 +120,12 @@ export interface RpcSessionState {
 	queuedMessageCount: number;
 	/** Active tool-approval tier mode (v3; mirrors `tools.approvalMode`). */
 	approvalMode?: "always-ask" | "write" | "yolo";
+	/** Current goal snapshot (v3; `iteration` also rides `goal_updated` via `Goal.iteration`). */
+	goal?: {
+		goal: import("@oh-my-pi/pi-tui/tools/goal").Goal;
+		state?: import("../../goals/state").GoalModeState;
+		iteration: number;
+	};
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork: boolean;
 	/** Same predicate as `session_settled`: idle with nothing queued or pending. */

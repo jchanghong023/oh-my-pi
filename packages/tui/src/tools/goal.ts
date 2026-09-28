@@ -16,6 +16,8 @@ export interface Goal {
 	tokenBudget?: number;
 	tokensUsed: number;
 	timeUsedSeconds: number;
+	/** Continuation turns driven while this goal is active (0 while never continued). */
+	iteration?: number;
 	createdAt: number;
 	updatedAt: number;
 }

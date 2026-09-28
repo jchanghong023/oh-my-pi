@@ -46,9 +46,13 @@ import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RpcForkAskBroker } from "./rpc-fork-ask";
+import { RpcForkJobController } from "./rpc-fork-jobs";
 import { RpcForkPermissionController } from "./rpc-fork-permission";
-import { RpcForkHost } from "./rpc-fork-host";
+import { RpcForkQueueController } from "./rpc-fork-queue";
+import { RpcForkSearchController } from "./rpc-fork-search";
 import { RpcForkSessionController } from "./rpc-fork-sessions";
+import { RpcForkFeedbackController, RpcForkHookTelemetry, RpcForkStateController } from "./rpc-fork-state";
+import { RpcForkHost } from "./rpc-fork-host";
 import {
 	isNegotiableRpcProtocolVersion,
 	RPC_FORK_PROTOCOL_VERSION,
@@ -851,6 +855,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const forkAskBroker = new RpcForkAskBroker(forkHost, frame => output(frame));
 	const forkPermissionController = new RpcForkPermissionController(forkHost, session);
 	new RpcForkSessionController(forkHost, session);
+	new RpcForkQueueController(forkHost, session);
+	new RpcForkJobController(forkHost, session);
+	new RpcForkSearchController(forkHost, session);
+	new RpcForkFeedbackController(forkHost, session);
+	const forkHookTelemetry = new RpcForkHookTelemetry(forkHost, session);
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	const promptResults = new RpcPromptResults(session, output);
@@ -1110,6 +1119,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		uiContext: headless ? undefined : rpcUiContext,
 	});
 
+	// Per-hook telemetry frames (5.8): the runner reports every handler run;
+	// the fork telemetry layer gates emission on v3 negotiation.
+	session.extensionRunner?.setHookExecutedListener(info => forkHookTelemetry.onHookExecuted(info));
+
 	// Output all agent events as JSON; prompt results follow the frame that settled them.
 	session.subscribe(event => {
 		sessionEvents.forward(event);
@@ -1364,6 +1377,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
 					approvalMode: RpcForkPermissionController.currentApprovalMode(session),
+					...RpcForkStateController.goalSnapshot(session),
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					isSettled: isRpcSessionSettled(session),
 					todoPhases: session.getTodoPhases(),

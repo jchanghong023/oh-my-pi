@@ -31,7 +31,7 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../../tools/approval";
-import { cfgToolsApproval, cfgToolsApprovalMode } from "../../tools/settings";
+import { cfgToolsApproval, cfgToolsApprovalMode, cfgToolsApprovalPrefixes } from "../../tools/settings";
 import type { Settings } from "../../config/settings";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
@@ -55,13 +55,15 @@ export interface RpcForkPermissionRequestFrame {
 	details: string[];
 	input: unknown;
 	origin?: RpcPermissionOrigin;
+	/** 4.1 prefix tier: suggested command prefix for `allow_always_prefix` (bash). */
+	prefixSuggestion?: string;
 }
 
 /** Client → server bypass frame settling a permission_request. */
 export interface RpcForkPermissionResponseFrame {
 	type: "permission_response";
 	id: string;
-	option: "allow_once" | "allow_session" | "allow_always" | "reject_once" | "reject_always";
+	option: "allow_once" | "allow_session" | "allow_always" | "allow_always_prefix" | "reject_once" | "reject_always";
 	feedback?: string;
 }
 
@@ -69,9 +71,29 @@ const PERMISSION_RESPONSE_OPTIONS = new Set([
 	"allow_once",
 	"allow_session",
 	"allow_always",
+	"allow_always_prefix",
 	"reject_once",
 	"reject_always",
 ]);
+
+/** First-token command prefix used by the `allow_always_prefix` tier (bash). */
+function bashPrefixSuggestion(args: unknown): string | undefined {
+	const command = isRecord(args) && typeof args.command === "string" ? args.command.trim() : "";
+	if (!command) return undefined;
+	const firstToken = command.split(/\s+/)[0];
+	return firstToken ? `${firstToken} ` : undefined;
+}
+
+/** True when the bash command starts with one of the persisted prefix rules. */
+function matchesApprovedPrefix(settings: Settings | undefined, toolName: string, args: unknown): boolean {
+	if (!settings) return false;
+	const command = isRecord(args) && typeof args.command === "string" ? args.command : undefined;
+	if (!command) return false;
+	const prefixes = cfgToolsApprovalPrefixes.get(settings) as Record<string, unknown>;
+	const rules = prefixes[toolName];
+	if (!Array.isArray(rules)) return false;
+	return rules.some(rule => typeof rule === "string" && rule.length > 0 && command.startsWith(rule));
+}
 
 const MAX_PERMISSION_INPUT_CHARS = 32 * 1024;
 
@@ -102,11 +124,13 @@ function selectedOutcome(
 interface PendingPermissionRequest {
 	settle: (response: PermissionResponse) => void;
 	fail: (error: Error) => void;
+	/** Echoed for `allow_always_prefix`: the suggested prefix this request carried. */
+	prefixSuggestion?: string;
 }
 
 /** Validated `permission_response` payload handed to the awaiting gate. */
 interface PermissionResponse {
-	option: "allow_once" | "allow_session" | "allow_always" | "reject_once" | "reject_always";
+	option: "allow_once" | "allow_session" | "allow_always" | "allow_always_prefix" | "reject_once" | "reject_always";
 	feedback?: string;
 }
 
@@ -138,6 +162,9 @@ async function requestRpcPermission(
 	const resolved: ResolvedApproval = resolveApproval(tool, args, approvalMode, userPolicies);
 	if (resolved.policy === "deny") throw denyError(resolved, toolName);
 	if (resolved.policy === "allow") return selectedOutcome("allow_once");
+	// Prefix tier: a persisted prefix rule auto-approves without a frame.
+	if (matchesApprovedPrefix(host.settings, toolName, args)) return selectedOutcome("allow_once");
+	const prefixSuggestion = toolName === "bash" ? bashPrefixSuggestion(args) : undefined;
 
 	const id = Snowflake.next() as string;
 	const { promise, resolve, reject } = Promise.withResolvers<PermissionResponse | undefined>();
@@ -151,10 +178,12 @@ async function requestRpcPermission(
 	};
 	const onAbort = () => finishSettle(() => resolve(undefined));
 	signal?.addEventListener("abort", onAbort, { once: true });
-	pending.set(id, {
+	const pendingRecord: PendingPermissionRequest = {
 		settle: response => finishSettle(() => resolve(response)),
 		fail: error => finishSettle(() => reject(error)),
-	});
+		...(prefixSuggestion ? { prefixSuggestion } : {}),
+	};
+	pending.set(id, pendingRecord);
 
 	const request: RpcForkPermissionRequestFrame = {
 		type: "permission_request",
@@ -166,6 +195,7 @@ async function requestRpcPermission(
 		approvalMode,
 		details: normalizeDetails(tool.formatApprovalDetails?.(args)),
 		input: boundedInput(args),
+		...(prefixSuggestion ? { prefixSuggestion } : {}),
 		...(origin ? { origin } : {}),
 	};
 	emit(request);
@@ -183,6 +213,22 @@ async function requestRpcPermission(
 			if (!host.settings) throw new ToolError(`Cannot persist tool approval: session settings unavailable`);
 			cfgToolsApproval.setEntry(host.settings, toolName, "allow");
 			return selectedOutcome("allow_always");
+		}
+		case "allow_always_prefix": {
+			// Prefix tier persists ONLY the prefix rule — the whole-tool policy
+			// stays untouched so other commands keep prompting.
+			if (!host.settings) throw new ToolError(`Cannot persist tool approval: session settings unavailable`);
+			const prefix = request.id === id ? (pendingRecord.prefixSuggestion ?? request.prefixSuggestion) : undefined;
+			if (prefix) {
+				const prefixes = cfgToolsApprovalPrefixes.get(host.settings) as Record<string, unknown>;
+				const existing = Array.isArray(prefixes[toolName])
+					? (prefixes[toolName] as unknown[]).filter((rule): rule is string => typeof rule === "string")
+					: [];
+				if (!existing.includes(prefix)) {
+					cfgToolsApprovalPrefixes.setEntry(host.settings, toolName, [...existing, prefix]);
+				}
+			}
+			return selectedOutcome("allow_once");
 		}
 		case "reject_once":
 			if (feedback) throw new ToolError(`Tool call denied by user (${toolName}): ${feedback}`);

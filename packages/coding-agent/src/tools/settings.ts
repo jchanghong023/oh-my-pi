@@ -320,6 +320,22 @@ export const cfgToolsApprovalMode = register({
 	},
 });
 
+// Fork rpc-ui 4.1 (prefix approval tier): per-tool command prefix allowlists.
+// A bash call whose command starts with one of the tool's prefixes skips the
+// permission prompt (rpc-fork-permission). Values are validated at read time.
+export const cfgToolsApprovalPrefixes = register({
+	id: "tools.approvalPrefixes",
+	type: "record",
+	default: {},
+	ui: {
+		tab: "interaction",
+		group: "Approvals",
+		label: "Tool Approval Prefix Rules",
+		description:
+			'Per-tool command prefix allowlists (e.g. bash: ["git ", "npm "]). Calls whose argument starts with a listed prefix skip the approval prompt.',
+	},
+});
+
 // Todo tool
 // Todo settings deliberately have no `protocolDefault`: protocol embedders need project-level opt-outs
 // for reminder/prelude prompt injection.
