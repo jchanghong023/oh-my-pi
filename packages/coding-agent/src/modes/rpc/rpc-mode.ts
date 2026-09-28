@@ -45,7 +45,10 @@ import { formatPersistenceDurabilityFailure, formatPersistenceFailure } from "..
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
+import { RpcForkAskBroker } from "./rpc-fork-ask";
+import { RpcForkPermissionController } from "./rpc-fork-permission";
 import { RpcForkHost } from "./rpc-fork-host";
+import { RpcForkSessionController } from "./rpc-fork-sessions";
 import {
 	isNegotiableRpcProtocolVersion,
 	RPC_FORK_PROTOCOL_VERSION,
@@ -845,6 +848,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		success: (id, command, data) => success(id, command as RpcCommand["type"], data),
 		error,
 	});
+	const forkAskBroker = new RpcForkAskBroker(forkHost, frame => output(frame));
+	const forkPermissionController = new RpcForkPermissionController(forkHost, session);
+	new RpcForkSessionController(forkHost, session);
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	const promptResults = new RpcPromptResults(session, output);
@@ -866,7 +872,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		constructor(
 			private pendingRequests: Map<string, PendingExtensionRequest>,
 			private output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
+			private forkAskBroker?: RpcForkAskBroker,
 		) {}
+
+		/**
+		 * Rich ask over the v3 protocol (rpc-fork-ask). Undefined until the client
+		 * negotiates v3, so the ask tool keeps its per-question select fallback.
+		 */
+		get askDialog(): ExtensionUIContext["askDialog"] {
+			return this.forkAskBroker?.getAskDialog();
+		}
 
 		select(
 			title: string,
@@ -899,12 +914,36 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			placeholder?: string,
 			dialogOptions?: ExtensionUIDialogOptions,
 		): Promise<string | undefined> {
+			return this.inputWithOptions(title, placeholder, dialogOptions);
+		}
+
+		/** Input dialog with the v3 `sensitive` wire flag (login secret inputs). */
+		inputSensitive(
+			title: string,
+			placeholder?: string,
+			dialogOptions?: ExtensionUIDialogOptions,
+		): Promise<string | undefined> {
+			return this.inputWithOptions(title, placeholder, dialogOptions, true);
+		}
+
+		private inputWithOptions(
+			title: string,
+			placeholder?: string,
+			dialogOptions?: ExtensionUIDialogOptions,
+			sensitive?: boolean,
+		): Promise<string | undefined> {
 			return requestRpcDialog(
 				this.pendingRequests,
 				this.output,
 				dialogOptions,
 				undefined,
-				{ method: "input", title, placeholder, timeout: dialogOptions?.timeout },
+				{
+					method: "input",
+					title,
+					placeholder,
+					timeout: dialogOptions?.timeout,
+					...(sensitive ? { sensitive: true } : {}),
+				},
 				response => parseValueDialogResponse(response, dialogOptions),
 			);
 		}
@@ -1047,7 +1086,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// Wire up UI context for tool execution (ask tool, etc.) and extensions.
 	// A single shared instance routes all responses received on stdin to the
 	// correct waiting promise regardless of which code path created the request.
-	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
+	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output, forkAskBroker);
 	setToolUIContext?.(rpcUiContext, true);
 	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
 		output(error(id, command, promptError.message));
@@ -1193,7 +1232,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
 						},
 						notifyConfigChanged: async () => {
-							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+							output({
+								type: "config_update",
+								model: session.model,
+								thinkingLevel: session.thinkingLevel,
+								approvalMode: RpcForkPermissionController.currentApprovalMode(session),
+							});
 						},
 					});
 					if (builtinResult !== false) {
@@ -1319,6 +1363,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					sessionName: session.sessionName,
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
+					approvalMode: RpcForkPermissionController.currentApprovalMode(session),
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					isSettled: isRpcSessionSettled(session),
 					todoPhases: session.getTodoPhases(),
@@ -1675,7 +1720,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (!knownProvider) {
 					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
 				}
-				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
+				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output, forkAskBroker);
 				// Track whether onAuth has fired. Providers that require interactive
 				// input before a browser URL cannot be satisfied headlessly; after
 				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
@@ -1698,9 +1743,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						},
 						onPrompt: async prompt => {
 							if (prompt.secret) {
-								throw new Error(
-									`Provider '${command.providerId}' requires secret input, ` +
-										"which is not supported in RPC mode. Use the terminal UI to log in.",
+								// v3 unlocks masked secret input over the protocol (4.3);
+								// v1/v2 keeps the stock rejection.
+								if (!forkHost.isActive) {
+									throw new Error(
+										`Provider '${command.providerId}' requires secret input, ` +
+											"which is not supported in RPC mode. Use the terminal UI to log in.",
+									);
+								}
+								return (
+									(await uiCtx.inputSensitive(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? ""
 								);
 							}
 							if (!authEmitted) {

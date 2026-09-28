@@ -1,6 +1,6 @@
 # rpc-ui 桌面应用协议扩展
 
-> **状态：规划中（第一期实现范围 P0–P1；未实现、未验证）。** 本文档是 rpc-ui 协议扩展的唯一权威需求：第 4–6 节为完整功能需求（P2 条款同为有效需求与明确待实现规划，不因当前未实现而删减验收条件），第 7 节为协议演进与上游同步约束，第 8 节为验证要求，三者对实现同等强制。桌面 App 本体的 UI 实现不在本仓库范围；本仓库的交付物是 `omp --mode rpc-ui` 的协议与服务端能力。
+> **状态：第一期实施中（批次 0 与批次 1 已合入：4.0 协商基建、4.1 权限审批第一档、4.2 会话列表、4.3 富 ask、4.4 生命周期 E2E 均已实现并按实际验证范围标注）。** 本文档是 rpc-ui 协议扩展的唯一权威需求：第 4–6 节为完整功能需求（P2 条款同为有效需求与明确待实现规划，不因当前未实现而删减验收条件），第 7 节为协议演进与上游同步约束，第 8 节为验证要求，三者对实现同等强制。桌面 App 本体的 UI 实现不在本仓库范围；本仓库的交付物是 `omp --mode rpc-ui` 的协议与服务端能力。
 
 ## 1. 背景与目标
 
@@ -134,6 +134,8 @@ permission_response {
 5. `set_approval_mode` 运行时生效，`get_state`/`config_update` 反映当前档位。
 6. 未协商 v3 的客户端全程行为与现状一致（既有审批 select 路径）。
 
+> 实现状态（2026-09-28）：第一档（整工具级 allow_always）已实现，服务端在 `packages/coding-agent/src/modes/rpc/rpc-fork-permission.ts`（经 `session.setClientBridge` 注入 ACP 权限网关，`task/executor.ts` 注入 origin 子代理委托桥）；`set_approval_mode`/`get_state.approvalMode`/`config_update.approvalMode` 同步落地。UT 覆盖审批帧结构、五选项语义、allow_always/reject_always 配置持久化、feedback 回传、子代理 origin、断连 fail-closed、v2 门控（`test/rpc-fork-permission.test.ts`）；真实模型驱动 E2E 见 `test/rpc-fork-approval-e2e.test.ts`（需 API key，本机验证环境未运行）。**前缀档（allow_always_prefix）未实现，本期结束前补齐。**
+
 ### 4.2 会话与任务列表
 
 **需求**：暴露会话枚举与任务列表操作，支撑桌面 App 侧栏任务区（列表、置顶、重命名、删除）。
@@ -166,6 +168,8 @@ delete_session { sessionFile }        // 连同 artifacts，复用 deleteSession
 2. 置顶/取消置顶后 TUI 会话选择器与 RPC 结果一致（同一存储）。
 3. 重命名非活动会话后重新 `list_sessions` 标题更新；删除后文件系统与会话索引一致，活动会话删除被拒绝。
 4. `sessions_changed` 在标题变更、会话新建/删除时触发（尽力）。
+
+> 实现状态（2026-09-28）：已实现（`packages/coding-agent/src/modes/rpc/rpc-fork-sessions.ts`，复用 `session-listing`/`session-pins`/`session-storage`）。UT 覆盖 cwd/all 列表、分页游标、置顶/取消、重命名（活动/非活动）、删除与 `active_session` 拒绝、`sessions_changed` 尽力推送、v2 门控（`test/rpc-fork-sessions.test.ts`）。`sessions_changed` 目前仅由 fork 命令自身变更触发，跨进程变化由客户端轮询兜底。
 
 ### 4.3 富 ask 答疑与倒计时
 
@@ -200,6 +204,8 @@ ask_pause { targetId }                 // 幂等暂停倒计时；首次交互�
 4. `sensitive` 输入在 login 流可用（v2 仍拒绝）。
 5. 未协商 v3 时逐题 select 降级路径与现状一致。
 
+> 实现状态（2026-09-28）：已实现（`packages/coding-agent/src/modes/rpc/rpc-fork-ask.ts`，`RpcExtensionUIContext.askDialog` 按 v3 激活动态暴露，未协商时该方法不存在、ask 工具自动走逐题 select）。UT 覆盖 ask_request 结构（timeoutMs/deadlineAt）、answers/chat/cancelled 三路径、多选空提交、Other 自定义、未知标签过滤、`ask_pause` 幂等（暂停后不再自动收尾）、到期 recommended 收尾、abort 取消帧、断连 fail-closed（`test/rpc-fork-ask.test.ts`）。`extension_ui_request` 的 `input`/`editor` 增补 `sensitive?: boolean`，login secret 输入 v3 解禁、v1/v2 保持拒绝（`rpc-mode.ts` login 臂）；`input.sensitive` 的真实 login 流 E2E 依赖外部 OAuth 提供方，未在本机验证。
+
 ### 4.4 会话进程生命周期（宿主进程池模式）
 
 **需求**：桌面 App 需要"关闭窗格（会话继续运行）"、多窗格多会话与断线恢复。第一阶段采用**宿主进程池**模式，fork 侧不新增协议。
@@ -214,6 +220,8 @@ ask_pause { targetId }                 // 幂等暂停倒计时；首次交互�
 
 1. 现有 EOF 有序退出与 `open_session` 恢复行为有 E2E 覆盖（真实 `omp --mode rpc-ui` 进程：kill 宿主 → respawn → open_session → 历史完整）。
 2. 本条不引入协议改动；回归以既有 RPC 测试为准。
+
+> 实现状态（2026-09-28）：已实现且 E2E 通过。真实 `omp --mode rpc-ui` 进程验证 EOF 有序退出（exit 0）、kill 宿主 → respawn → `open_session` 续接同一会话文件 → `get_messages` 历史一致（`test/rpc-fork-lifecycle.test.ts`）。
 
 ## 5. P1 需求（第一期·第二批）
 

@@ -28,6 +28,7 @@ export class RpcForkHost {
 	readonly #commands = new Map<string, RpcForkCommandHandler>();
 	readonly #frameHandlers: Array<(parsed: unknown) => boolean> = [];
 	readonly #disposers: Array<(reason: string) => void> = [];
+	readonly #activators: Array<() => void> = [];
 
 	constructor(readonly context: RpcForkContext) {}
 
@@ -39,6 +40,12 @@ export class RpcForkHost {
 	/** Activate the fork surface after a successful `negotiate_protocol` v3 exchange. */
 	activate(): void {
 		this.#negotiated = true;
+		for (const activator of this.#activators) activator();
+	}
+
+	/** Register a callback run once when v3 is negotiated (bridge injection etc.). */
+	registerActivation(activator: () => void): void {
+		this.#activators.push(activator);
 	}
 
 	registerCommand(type: string, handler: RpcForkCommandHandler): void {

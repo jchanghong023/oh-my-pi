@@ -118,6 +118,8 @@ export interface RpcSessionState {
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
+	/** Active tool-approval tier mode (v3; mirrors `tools.approvalMode`). */
+	approvalMode?: "always-ask" | "write" | "yolo";
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork: boolean;
 	/** Same predicate as `session_settled`: idle with nothing queued or pending. */
@@ -489,6 +491,8 @@ export type RpcExtensionUIRequest =
 			title: string;
 			placeholder?: string;
 			timeout?: number;
+			/** v3 only: render as a password/secret field (login secret inputs). */
+			sensitive?: boolean;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -497,6 +501,8 @@ export type RpcExtensionUIRequest =
 			title: string;
 			prefill?: string;
 			promptStyle?: boolean;
+			/** v3 only: render as a password/secret field. */
+			sensitive?: boolean;
 	  }
 	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string }
 	| {
