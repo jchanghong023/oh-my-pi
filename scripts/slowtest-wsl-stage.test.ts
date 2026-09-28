@@ -80,8 +80,8 @@ describe("pickWslRepo", () => {
 });
 
 describe("stage constants", () => {
-	test("the distro under test is centos7 with a 2-hour budget", () => {
-		expect(WSL_TEST_DISTRIBUTION).toBe("centos7");
+	test("the distro under test is CentOS-7 with a 2-hour budget", () => {
+		expect(WSL_TEST_DISTRIBUTION).toBe("CentOS-7");
 		expect(WSL_STAGE_TIMEOUT_MS).toBe(2 * 60 * 60_000);
 	});
 });

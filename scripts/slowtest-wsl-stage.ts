@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // slowtest stage between fulltest and the origin push: run this repo's
-// fulltest inside the `centos7` WSL2 distro, mechanically following the
+// fulltest inside the `CentOS-7` WSL2 distro, mechanically following the
 // jch-wsl-git-test methodology — source reaches the distro only via a Git
 // remote, the workspace lives under /root and runs as root, the distro tests
 // exactly the pushed commit (EXPECTED_SHA), and the WSL worktree's own
@@ -12,7 +12,7 @@ import * as path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "..");
 
 /** WSL2 distro under test; must match the registered name from `wsl --list`. */
-export const WSL_TEST_DISTRIBUTION = "centos7";
+export const WSL_TEST_DISTRIBUTION = "CentOS-7";
 
 /** The nested WSL fulltest compiles Rust from a possibly cold cache, so the
  * stage owns a far wider budget than any single test phase. */
@@ -358,7 +358,7 @@ async function runWslFulltest(distro: string, repoPath: string): Promise<number>
 			console.error(`wsl-stage: FAIL — bun run fulltest exited with code ${exitCode}`);
 			return 1;
 		}
-		console.log("wsl-stage: PASS (centos7 fulltest)");
+		console.log("wsl-stage: PASS (CentOS-7 fulltest)");
 		return 0;
 	} finally {
 		clearTimeout(timer);
