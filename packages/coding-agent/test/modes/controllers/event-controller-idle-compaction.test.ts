@@ -180,6 +180,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
@@ -227,6 +228,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
