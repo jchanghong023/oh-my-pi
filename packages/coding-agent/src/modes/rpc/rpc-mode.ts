@@ -45,6 +45,12 @@ import { formatPersistenceDurabilityFailure, formatPersistenceFailure } from "..
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
+import { RpcForkHost } from "./rpc-fork-host";
+import {
+	isNegotiableRpcProtocolVersion,
+	RPC_FORK_PROTOCOL_VERSION,
+	RPC_SUPPORTED_PROTOCOL_VERSIONS,
+} from "./rpc-fork-types";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
@@ -256,6 +262,8 @@ export interface RpcInputFrameDeps {
 	onHostToolResult: (frame: RpcHostToolResult) => void;
 	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
 	onHostUriResult: (frame: RpcHostUriResult) => void;
+	/** Fork-extension (v3) bypass frames; return true to consume. */
+	onForkControlFrame?: (parsed: unknown) => boolean;
 }
 
 /**
@@ -276,6 +284,8 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 		if (pending) pending.resolve(parsed);
 		return true;
 	}
+
+	if (deps.onForkControlFrame?.(parsed)) return true;
 
 	if (isRpcHostToolResult(parsed)) {
 		deps.onHostToolResult(parsed);
@@ -799,7 +809,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		frameEncoder.encodeFrames({
 			type: "ready",
 			protocolVersion: 1,
-			supportedProtocolVersions: [1, 2],
+			supportedProtocolVersions: RPC_SUPPORTED_PROTOCOL_VERSIONS,
 			maxFrameBytes: MAX_RPC_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 		}),
@@ -825,6 +835,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const error = (id: string | undefined, command: string, message: string, code?: string): RpcResponse => {
 		return { id, type: "response", command, success: false, error: message, ...(code ? { code } : {}) };
 	};
+
+	// Fork-extension (protocol v3) surface: negotiation-gated dispatch point.
+	// Inactive until `negotiate_protocol {protocolVersion:3}` succeeds; inactive
+	// hosts leave every frame on the stock code path unchanged.
+	const forkHost = new RpcForkHost({
+		session,
+		emit: frame => output(frame),
+		success: (id, command, data) => success(id, command as RpcCommand["type"], data),
+		error,
+	});
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	const promptResults = new RpcPromptResults(session, output);
@@ -1133,9 +1153,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 		switch (command.type) {
 			case "negotiate_protocol": {
-				if (command.protocolVersion !== 2)
+				if (!isNegotiableRpcProtocolVersion(command.protocolVersion))
 					return error(id, "negotiate_protocol", `Unsupported RPC protocol version: ${command.protocolVersion}`);
-				return success(id, "negotiate_protocol", { protocolVersion: 2 });
+				if (command.protocolVersion === RPC_FORK_PROTOCOL_VERSION) forkHost.activate();
+				return success(id, "negotiate_protocol", { protocolVersion: command.protocolVersion });
 			}
 
 			// =================================================================
@@ -1706,6 +1727,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			default: {
+				// Single fork-extension dispatch hook: active only after v3
+				// negotiation; an unhandled type keeps the stock error below.
+				const forkResponse = await forkHost.handleCommand(command);
+				if (forkResponse) return forkResponse;
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
@@ -1737,6 +1762,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		onHostToolResult: frame => hostToolBridge.handleResult(frame),
 		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
 		onHostUriResult: frame => hostUriBridge.handleResult(frame),
+		onForkControlFrame: parsed => forkHost.handleControlFrame(parsed),
 	};
 
 	const inputDispatcher = new RpcInputDispatcher({
@@ -1758,6 +1784,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.
+	forkHost.dispose("RPC client disconnected before fork request completed");
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");

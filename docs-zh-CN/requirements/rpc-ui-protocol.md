@@ -80,6 +80,8 @@ fork 计划基于 omp 的 RPC 模式（`omp --mode rpc-ui`；协议实现位于 
 * 未协商 v3（或协商 v1/v2、非 fork 构建）的客户端 MUST 收到与现状一致的行为：不收到任何新帧，发送新命令得到现有 `Unknown command` 错误响应；工具审批退回 `extension_ui_request select("Approve","Deny")`，ask 退回逐题 select。
 * 协商失败与降级路径 MUST 有自动化测试覆盖（见第 8 节）。
 
+> 实现状态（2026-09-28）：已实现并通过验证。`ready` 公告 `[1,2,3]`、`negotiate_protocol` 接受 v3（成功数据 `{protocolVersion:3}`，v3 隐含 v2 分帧）、fork 门控分发框架落地（`packages/coding-agent/src/modes/rpc/rpc-fork-types.ts`、`rpc-fork-host.ts`，挂钩于 `rpc-mode.ts` negotiate/default/控制帧/EOF 四处）；UT+E2E 见 `packages/coding-agent/test/rpc-fork-protocol.test.ts`（v2 降级、无效版本拒绝、bypass 帧不消费均覆盖）。
+
 ### 4.1 工具权限审批
 
 **需求**：rpc-ui（v3）下的工具审批从纯文本 select 升级为结构化权限协议，支撑桌面 App 的权限审批卡：预览、选项语义、拒绝理由回传、持久化、子代理来源、运行时档位切换。

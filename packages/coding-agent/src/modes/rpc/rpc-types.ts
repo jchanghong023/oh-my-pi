@@ -16,6 +16,7 @@ import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { RpcMessagesPage } from "./rpc-messages";
+import type { RpcForkCommand, RpcForkResponse } from "./rpc-fork-types";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -91,7 +92,10 @@ export type RpcCommand =
 
 	// Login
 	| { id?: string; type: "get_login_providers" }
-	| { id?: string; type: "login"; providerId: string };
+	| { id?: string; type: "login"; providerId: string }
+
+	// Fork extensions (protocol v3; handled in rpc-fork-*.ts — see docs-zh-CN/requirements/rpc-ui-protocol.md)
+	| RpcForkCommand;
 
 // ============================================================================
 // RPC State
@@ -196,7 +200,8 @@ export interface RpcOpenSessionResult {
 export interface RpcReadyFrame {
 	type: "ready";
 	protocolVersion: 1;
-	supportedProtocolVersions: [1, 2];
+	/** Fork builds announce v3 (rpc-fork-types); upstream builds announce [1, 2]. */
+	supportedProtocolVersions: [1, 2, 3];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
 }
@@ -252,7 +257,7 @@ export type RpcResponse =
 			type: "response";
 			command: "negotiate_protocol";
 			success: true;
-			data: { protocolVersion: 2 };
+			data: { protocolVersion: 2 | 3 };
 	  }
 
 	// Prompting (async - events follow)
@@ -412,6 +417,9 @@ export type RpcResponse =
 			data: { providers: Array<{ id: string; name: string; available: boolean; authenticated: boolean }> };
 	  }
 	| { id?: string; type: "response"; command: "login"; success: true; data: { providerId: string } }
+
+	// Fork extensions (protocol v3)
+	| RpcForkResponse
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };
