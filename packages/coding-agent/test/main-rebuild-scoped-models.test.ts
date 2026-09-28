@@ -254,6 +254,9 @@ describe("buildSessionOptions prewalk target discovery", () => {
 		getAll(): Model<Api>[] {
 			return [];
 		}
+		getDiscoveryProviderId(requestedId: string): string | undefined {
+			return requestedId.toLowerCase() === "prov" ? "prov" : undefined;
+		}
 		hasConfiguredAuth(): boolean {
 			return false;
 		}
