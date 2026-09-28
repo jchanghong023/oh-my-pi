@@ -50,7 +50,19 @@ export type RpcForkCommand =
 	// 5.7 file search
 	| { id?: string; type: "search_paths"; query: string; cwd?: string; limit?: number }
 	// 5.8 session state completion
-	| { id?: string; type: "submit_feedback"; messageId: string; rating: "up" | "down"; comment?: string };
+	| { id?: string; type: "submit_feedback"; messageId: string; rating: "up" | "down"; comment?: string }
+	// 5.3 plan mode
+	| { id?: string; type: "set_plan_mode"; enabled: boolean }
+	| { id?: string; type: "get_plan_state" }
+	| { id?: string; type: "list_plans" }
+	| { id?: string; type: "read_plan"; path: string }
+	| {
+			id?: string;
+			type: "approve_plan";
+			decision: "approve" | "refine" | "reject";
+			feedback?: string;
+			model?: string;
+	  };
 
 /** Base shape shared by fork-extension success responses. */
 export interface RpcForkSuccessResponseBase {
@@ -124,6 +136,41 @@ export type RpcForkResponse =
 			command: "submit_feedback";
 			success: true;
 			data: { stored: true; file: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_plan_mode";
+			success: true;
+			data: { enabled: boolean; planFilePath?: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_plan_state";
+			success: true;
+			data: { enabled: boolean; planFilePath?: string; workflow?: "parallel" | "iterative" };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_plans";
+			success: true;
+			data: { plans: Array<{ path: string; title?: string; modified?: string }> };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "read_plan";
+			success: true;
+			data: { content: string; path: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "approve_plan";
+			success: true;
+			data: { decision: "approve" | "refine" | "reject"; dispatched: boolean };
 	  };
 
 // ============================================================================

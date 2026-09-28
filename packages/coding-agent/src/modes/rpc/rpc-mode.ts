@@ -13,6 +13,7 @@
  */
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
@@ -47,6 +48,8 @@ import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./h
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RpcForkAskBroker } from "./rpc-fork-ask";
 import { RpcForkJobController } from "./rpc-fork-jobs";
+import { RpcForkPlanController } from "./rpc-fork-plan";
+import { RpcAttachmentError, resolveRpcAttachments, type RpcForkAttachment } from "./rpc-fork-attachments";
 import { RpcForkPermissionController } from "./rpc-fork-permission";
 import { RpcForkQueueController } from "./rpc-fork-queue";
 import { RpcForkSearchController } from "./rpc-fork-search";
@@ -860,6 +863,26 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	new RpcForkSearchController(forkHost, session);
 	new RpcForkFeedbackController(forkHost, session);
 	const forkHookTelemetry = new RpcForkHookTelemetry(forkHost, session);
+	const forkPlanController = new RpcForkPlanController(forkHost, session);
+	// Resolves v3 `attachments` into message images + a text prelude (5.5);
+	// structured attachment failures carry their wire `code`.
+	const resolveCommandAttachments = async (
+		id: string | undefined,
+		commandType: string,
+		attachments: RpcForkAttachment[] | undefined,
+		message: string,
+	): Promise<{ message: string; images: ImageContent[] } | { error: RpcResponse }> => {
+		if (!attachments || attachments.length === 0) return { message, images: [] };
+		try {
+			const resolved = await resolveRpcAttachments(attachments, session.sessionManager.getCwd());
+			return { message: `${resolved.textPrefix}${message}`, images: resolved.images };
+		} catch (attachmentError) {
+			if (attachmentError instanceof RpcAttachmentError) {
+				return { error: error(id, commandType, attachmentError.message, attachmentError.code) };
+			}
+			throw attachmentError;
+		}
+	};
 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	const promptResults = new RpcPromptResults(session, output);
@@ -1216,6 +1239,18 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// =================================================================
 
 			case "prompt": {
+				// `/plan` is a mode toggle, not model input: intercepted before any
+				// dispatch so the literal text never reaches the agent (5.3).
+				if (await forkPlanController.interceptSlashPlan(command.message)) {
+					return success(id, "prompt", { agentInvoked: false });
+				}
+				const promptAttachments = await resolveCommandAttachments(
+					id,
+					"prompt",
+					command.attachments,
+					command.message,
+				);
+				if ("error" in promptAttachments) return promptAttachments.error;
 				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
 				// cannot start its run ahead of the prompt's event-stream position.
 				const ticket = promptResults.begin(id);
@@ -1223,7 +1258,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					const skillResult = await dispatchRpcSkillPrompt({
 						ticket,
 						session,
-						message: command.message,
+						message: promptAttachments.message,
 						streamingBehavior: command.streamingBehavior,
 						results: promptResults,
 						onError: onPromptError(id, "prompt"),
@@ -1291,8 +1326,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					watchAndReportPromptResult({
 						ticket,
 						startPrompt: () =>
-							session.prompt(command.message, {
-								images: command.images,
+							session.prompt(promptAttachments.message, {
+								images: [...(command.images ?? []), ...promptAttachments.images],
 								streamingBehavior: command.streamingBehavior,
 							}),
 						results: promptResults,
@@ -1308,12 +1343,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "steer": {
-				await session.steer(command.message, command.images);
+				const resolved = await resolveCommandAttachments(id, "steer", command.attachments, command.message);
+				if ("error" in resolved) return resolved.error;
+				await session.steer(resolved.message, [...(command.images ?? []), ...resolved.images]);
 				return success(id, "steer");
 			}
 
 			case "follow_up": {
-				await session.followUp(command.message, command.images);
+				const resolved = await resolveCommandAttachments(id, "follow_up", command.attachments, command.message);
+				if ("error" in resolved) return resolved.error;
+				await session.followUp(resolved.message, [...(command.images ?? []), ...resolved.images]);
 				return success(id, "follow_up");
 			}
 
@@ -1323,11 +1362,19 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "abort_and_prompt": {
+				const resolved = await resolveCommandAttachments(
+					id,
+					"abort_and_prompt",
+					command.attachments,
+					command.message,
+				);
+				if ("error" in resolved) return resolved.error;
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
 				watchAndReportPromptResult({
 					ticket: promptResults.begin(id),
-					startPrompt: () => session.prompt(command.message, { images: command.images }),
+					startPrompt: () =>
+						session.prompt(resolved.message, { images: [...(command.images ?? []), ...resolved.images] }),
 					results: promptResults,
 					onError: onPromptError(id, "abort_and_prompt"),
 					extensionUserMessageTracker,
@@ -1688,8 +1735,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "get_messages_page": {
-				if (session.isStreaming || session.isCompacting)
-					return error(id, "get_messages_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
+				// 5.4: historical pages are readable during streaming/compaction —
+				// the read-only snapshot keeps `stale_cursor` as the consistency
+				// guard, so the old `session_busy` rejection is gone.
 				const messages = session.messages;
 				try {
 					return success(
@@ -1702,7 +1750,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 								leafId: session.sessionManager.getLeafId(),
 								messageCount: messages.length,
 							},
-							{ cursor: command.cursor, limit: command.limit },
+							{
+								cursor: command.cursor,
+								limit: command.limit,
+								order: command.order,
+								before: command.before,
+								after: command.after,
+							},
 						),
 					);
 				} catch (pageError) {

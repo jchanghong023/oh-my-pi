@@ -253,11 +253,15 @@ ask_pause { targetId }                 // 幂等暂停倒计时；首次交互�
 * 行为：MUST 复用 `getPlanModeState/setPlanModeState`（`agent-session.ts`）与 `plan-mode/plan-files.ts`；`approve_plan` 的核心逻辑 MUST 从 `interactive-mode.ts` 计划审批处理拆为 session 层方法供 RPC 复用（TUI 行为不变）；RPC 下发 `/plan` 文本不再作为普通 prompt 发给模型（`/plan` 为 TUI-only 的现状由此终结）。
 * 验收：RPC 进入/退出 plan mode 后行为与 TUI 等价（计划文件写入、审批检测）；计划内容可读且随写更新（客户端可 watch 路径）；`approve_plan` 三种决策语义正确。
 
+> 实现状态（2026-09-28）：已实现。会话层拆分落点 `plan-mode/session-approval.ts`（`dispatchApprovedPlan`/`enterPlanModeForSession`/`exitPlanModeForSession`），TUI `#approvePlan` 尾部已改为复用 `dispatchApprovedPlan`（overlay 关闭时机经 `beforeDispatch` 保留，interactive-mode plan 相关 36 项既有测试全部通过，TUI 行为不变）；RPC 侧 `rpc-fork-plan.ts` 提供 set_plan_mode/get_plan_state/list_plans/read_plan/approve_plan，`/plan` 文本在 RPC 模式（任意协议版本）被拦截为模式切换、不再作为 prompt 发给模型。`approve_plan.model` 契约为 `provider/modelId` 选择器（经 set_model 语义解析）。UT 见 `test/rpc-fork-plan.test.ts`（进入/退出/工具增补恢复、三决策语义、`plan_not_found`/`plan_not_active` 错误码、/plan 拦截）。
+
 ### 5.4 历史分页倒序与流式期可读
 
 * `get_messages_page` 增补 `order?: "asc"|"desc"` 与锚点游标（`before`/`after`），支持从尾部向前的倒序分页；放宽 `session_busy`：流式/压缩期间 MUST 允许读取历史页（只读快照），仅游标绑定的活跃窗口语义保持。
 * 行为：倒序页与正向页在同一会话上结果一致（顺序相反）；贴顶预取不得影响活跃流推送。
 * 验收：流式中贴顶预取成功；超大会话倒序翻页与 `get_messages` 全量结果一致；`stale_cursor` 语义保留。
+
+> 实现状态（2026-09-28）：已实现（`rpc-messages.ts` 增补 `order:"desc"` 倒序游标与 `before`/`after` 锚点游标，游标载荷携带方向；`rpc-mode.ts` 移除 `session_busy` 拒绝——流式/压缩期间允许只读快照分页，`stale_cursor` 为一致性守卫，`session_busy` 错误码从此不再产生）。UT 见 `test/rpc-fork-pagination.test.ts`（倒序全量与正向全量互为逆序、锚点方向、组合拒绝、stale_anchor、旧游标兼容）；既有 `rpc-messages.test.ts` 全部通过。
 
 ### 5.5 附件通道扩展
 
@@ -272,6 +276,8 @@ Attachment = { kind: "file", path, mime? }        // 同机文件引用（首选
 * 错误码：`attachment_too_large`、`attachment_unsupported`、`attachment_unreadable`；数量上限（8）与超限错误码 `attachment_limit`。
 * 行为：附件随用户消息持久化（会话存储沿用现有自定义消息载荷），历史回放可见；`kind:"file"` 在发送时读取一次，不建立持久附件 id（重传语义 = 重发消息，第一期不引入上传会话）。
 * 验收：PDF/文件附件端到端入会话且历史可见；超大/超限/不可读分别返回对应错误码；仅用 `images` 的旧客户端不回归。
+
+> 实现状态（2026-09-28）：已实现（`rpc-fork-attachments.ts`：图片 → `ImageContent`（与 `images` 同管线并存）、PDF → native `pdfToMarkdown` 转 markdown 文本块、文本类文件 → 有界文本块；上限 8 个（`attachment_limit`）、单附件 20 MiB（`attachment_too_large`）、不可读（`attachment_unreadable`）、不支持类型（`attachment_unsupported`）；`kind:"file"` 发送时读取一次，附件随用户消息内容持久化、历史回放可见）。接入 prompt/steer/follow_up/abort_and_prompt 四臂。UT 见 `test/rpc-fork-attachments.test.ts`（图片/PDF/文本/四类错误码）；旧客户端仅用 `images` 的路径未改动（回归以既有 rpc 测试为准）。PDF 端到端入会话依赖模型轮次，UT 覆盖转换与路由层。
 
 ### 5.6 配置与管理面（分期实施，第一期完成 A/B 两档）
 

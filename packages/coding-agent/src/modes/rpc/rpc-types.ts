@@ -17,6 +17,7 @@ import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPa
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { RpcMessagesPage } from "./rpc-messages";
 import type { RpcForkCommand, RpcForkResponse } from "./rpc-fork-types";
+import type { RpcForkAttachment } from "./rpc-fork-attachments";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -27,11 +28,24 @@ export type RpcCommand =
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
 
 	// Prompting
-	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
-	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
-	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
+	| {
+			id?: string;
+			type: "prompt";
+			message: string;
+			images?: ImageContent[];
+			attachments?: RpcForkAttachment[];
+			streamingBehavior?: "steer" | "followUp";
+	  }
+	| { id?: string; type: "steer"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
+	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
 	| { id?: string; type: "abort" }
-	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[] }
+	| {
+			id?: string;
+			type: "abort_and_prompt";
+			message: string;
+			images?: ImageContent[];
+			attachments?: RpcForkAttachment[];
+	  }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "open_session"; sessionDir: string }
 
@@ -88,7 +102,18 @@ export type RpcCommand =
 
 	// Messages
 	| { id?: string; type: "get_messages" }
-	| { id?: string; type: "get_messages_page"; cursor?: string; limit?: number }
+	| {
+			id?: string;
+			type: "get_messages_page";
+			cursor?: string;
+			limit?: number;
+			/** Walk direction when no cursor is given; cursors carry their own. */
+			order?: "asc" | "desc";
+			/** Anchor cursor: page immediately before this offset (exclusive, newest-first). */
+			before?: string;
+			/** Anchor cursor: page starting at this offset (inclusive, oldest-first). */
+			after?: string;
+	  }
 
 	// Login
 	| { id?: string; type: "get_login_providers" }
