@@ -169,6 +169,32 @@ describe("FileSessionStorage writer", () => {
 		expect(fs.readFileSync(sessionPath, "utf8")).toBe("complete\n");
 	});
 
+	it("rolls back a partial append through a reopened handle when the append handle refuses truncation", () => {
+		const sessionPath = path.join(tempDir, "append-handle-no-truncate.jsonl");
+		fs.writeFileSync(sessionPath, "complete\n");
+		const writer = storage.openWriter(sessionPath);
+		const ftruncateSync = fs.ftruncateSync;
+		// Windows refuses ftruncate on an O_APPEND handle; the reopened handle must succeed.
+		vi.spyOn(fs, "ftruncateSync")
+			.mockImplementationOnce(() => {
+				throw Object.assign(new Error("EPERM: operation not permitted, ftruncate"), { code: "EPERM" });
+			})
+			.mockImplementation((fd, len) => ftruncateSync(fd, len));
+		vi.spyOn(fs, "writeSync")
+			.mockImplementationOnce(() => {
+				fs.appendFileSync(sessionPath, "par");
+				return 3;
+			})
+			.mockImplementation(() => {
+				throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+			});
+
+		const appendSync = writer.appendSync?.bind(writer);
+		if (!appendSync) throw new Error("File writer must expose appendSync");
+		expect(() => appendSync("partial entry\n")).toThrow("ENOSPC");
+		expect(fs.readFileSync(sessionPath, "utf8")).toBe("complete\n");
+	});
+
 	it("does not truncate a replacement session when append rollback reopens the path", async () => {
 		const sessionPath = path.join(tempDir, "original.jsonl");
 		const replacementPath = path.join(tempDir, "replacement.jsonl");

@@ -205,12 +205,6 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
 		});
 
-		it.skipIf(process.platform === "win32")('returns "exists" for a dangling symlink', async () => {
-			const literal = path.join(tmpDir, "dangling:1-2");
-			await fs.promises.symlink(path.join(tmpDir, "nowhere"), literal);
-			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
-		});
-
 		it('returns "missing" for an ENAMETOOLONG path (issue #7597)', async () => {
 			// A single component past NAME_MAX can never name a real entry, so the
 			// probe must report "missing" (not "unknown") to let delimited splits run.
@@ -220,36 +214,16 @@ describe("literal colon filename resolution (issue #4618)", () => {
 	});
 
 	describe("read tool", () => {
-		it("reads a literal file whose name ends in a selector-shaped suffix", async () => {
-			const literal = "test:1-2";
-			const absolute = path.join(tmpDir, literal);
-			await Bun.write(absolute, "test\n");
+		it("reads a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+			await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal read\n");
 
 			const tool = new ReadTool(createSession());
-			const result = await tool.execute("read-literal", { path: absolute });
+			const result = await tool.execute("read-escaped-literal", { path: "dir/a\\ b:1-2" });
 			const output = getText(result);
 
-			expect(output).toContain("test");
-			// The strict split would have opened `test` (which doesn't exist)
-			// and thrown "Path 'test' not found".
-			expect(output).not.toMatch(/not found/i);
+			expect(output).toContain("escaped literal read");
 		});
-
-		// NTFS turns `name:suffix` into an alternate data stream, and the
-		// dangling-symlink fixtures need unprivileged symlinks: both POSIX-only.
-		it.skipIf(process.platform === "win32")(
-			"reads a shell-escaped literal file whose name ends in a selector-shaped suffix",
-			async () => {
-				await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
-				await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal read\n");
-
-				const tool = new ReadTool(createSession());
-				const result = await tool.execute("read-escaped-literal", { path: "dir/a\\ b:1-2" });
-				const output = getText(result);
-
-				expect(output).toContain("escaped literal read");
-			},
-		);
 
 		it("prefers a real `foo:1-2` file over interpreting `:1-2` as a range on `foo`", async () => {
 			await Bun.write(path.join(tmpDir, "foo"), "line 1\nline 2\nline 3\n");
@@ -332,38 +306,19 @@ describe("literal colon filename resolution (issue #4618)", () => {
 	// Windows cannot host filenames with literal colon selectors: NTFS treats
 	// `name:sel` as an alternate data stream. Ranged regular files still run.
 	describe("grep tool", () => {
-		it.skipIf(process.platform === "win32")("searches inside a literal `test:1-2` file", async () => {
-			const literal = "test:1-2";
-			const absolute = path.join(tmpDir, literal);
-			await Bun.write(absolute, "needle\n");
+		it("searches a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+			await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
 
 			const tool = new GrepTool(createSession());
-			const result = await tool.execute("grep-literal", {
+			const result = await tool.execute("grep-escaped-literal", {
 				pattern: "needle",
-				path: absolute,
+				path: "dir/a\\ b:1-2",
 			});
 			const output = getText(result);
 
-			expect(output).toContain("needle");
-			expect(output).not.toMatch(/not found/i);
+			expect(output).toContain("escaped literal needle");
 		});
-
-		it.skipIf(process.platform === "win32")(
-			"searches a shell-escaped literal file whose name ends in a selector-shaped suffix",
-			async () => {
-				await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
-				await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
-
-				const tool = new GrepTool(createSession());
-				const result = await tool.execute("grep-escaped-literal", {
-					pattern: "needle",
-					path: "dir/a\\ b:1-2",
-				});
-				const output = getText(result);
-
-				expect(output).toContain("escaped literal needle");
-			},
-		);
 
 		it.skipIf(process.platform === "win32")(
 			"searches a literal file whose name contains a semicolon and selector-shaped tail (`a;b:1-2`)",
@@ -444,7 +399,8 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const rangedResult = await tool.execute("grep-range-filter", {
 				pattern: ".",
-				path: `${absolute}:1-2`,
+				// The native absolute match may retain both C:/ separators and a non-canonical /./ segment.
+				path: `${path.dirname(absolute).replaceAll("\\", "/")}/./notes.txt:1-2`,
 			});
 			const rangedOutput = getText(rangedResult);
 

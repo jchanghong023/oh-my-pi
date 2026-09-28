@@ -640,10 +640,10 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
 						const resolved = resolveSearchResultPath(searchPath, match.path);
+						// Router-owned paths keep their raw form; everything else canonicalizes
+						// to a `path.resolve` key, which also normalizes the forward slashes
+						// the native search reports for absolute matches on Windows.
 						const abs = router.canHandle(resolved) ? resolved : path.resolve(resolved);
-						// On Windows the native search reports absolute match paths with
-						// `/` separators while the range keys are `path.resolve` forms, so
-						// canonicalize before the lookup or the filter silently misses.
 						const ranges = rangesByAbsPath.get(abs);
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).

@@ -87,7 +87,13 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 		let lease: ComposerLease | undefined;
 		if (!resuming) {
 			// The real CLI prepaints only an empty argv or --no-session, never a resumed session.
-			beginStartupComposer({ preferences: config, terminal, version: "18.0.4", cache: false });
+			beginStartupComposer({
+				preferences: config,
+				terminal,
+				version: "18.0.4",
+				cache: false,
+				recentSessions: async () => [],
+			});
 			await terminal.waitForRender();
 			lease = takeStartupComposerLease();
 			expect(lease).toBeDefined();

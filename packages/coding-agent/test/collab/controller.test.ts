@@ -49,6 +49,19 @@ import {
 	cfgStartupShowSplash,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
+const noRecentSessions = async () => [];
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalPiProfile = process.env.PI_PROFILE;
+const originalOmpProfile = process.env.OMP_PROFILE;
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
+
 const RELAY_URL = "ws://localhost:8788";
 const WEB_URL = "https://collab.example";
 
@@ -203,6 +216,7 @@ let capturedSockets: FakeWebSocket[] = [];
 
 beforeEach(async () => {
 	tmp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-collabctl-"));
+	utils.setAgentDir(path.join(tmp, "agent"));
 	installInMemoryRelay();
 	// Record every fake socket so a test can drive a terminal close on the host's transport.
 	capturedSockets = [];
@@ -231,6 +245,10 @@ afterEach(async () => {
 	uninstallInMemoryRelay();
 	publishSpy?.mockRestore();
 	copySpy?.mockRestore();
+	restoreEnv("PI_CODING_AGENT_DIR", originalAgentDir);
+	restoreEnv("PI_PROFILE", originalPiProfile);
+	restoreEnv("OMP_PROFILE", originalOmpProfile);
+	utils.__resetDirsFromEnvForTests();
 	await fs.rm(tmp, { recursive: true, force: true });
 });
 
@@ -367,7 +385,12 @@ describe("interactive collaboration startup", () => {
 				await render.call(this, options);
 			},
 		);
-		beginStartupComposer({ terminal: new VirtualTerminal(), version: "test", cache: false });
+		beginStartupComposer({
+			terminal: new VirtualTerminal(),
+			version: "test",
+			cache: false,
+			recentSessions: noRecentSessions,
+		});
 		spyOn(InteractiveMode.prototype, "getUserInput").mockImplementation(async function (this: InteractiveMode) {
 			mode = this;
 			await this.collabController.idle();
@@ -704,7 +727,12 @@ describe("interactive collaboration startup", () => {
 					super.stop();
 				}
 			}
-			beginStartupComposer({ terminal: new StartupTerminal(), version: "test", cache: false });
+			beginStartupComposer({
+				terminal: new StartupTerminal(),
+				version: "test",
+				cache: false,
+				recentSessions: noRecentSessions,
+			});
 			spyOn(InteractiveMode.prototype, "initHooksAndCustomTools").mockImplementation(
 				async function (this: InteractiveMode) {
 					mode = this;
