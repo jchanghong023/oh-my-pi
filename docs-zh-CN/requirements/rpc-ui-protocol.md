@@ -2,7 +2,7 @@
 
 > 目标：用本 fork 的 OMP 替换 ZCode 内部 Agent CLI，保留 ZCode 的现有核心界面与交互，并充分开放 OMP 自身的命令、技能与多代理能力。ZCode 现有功能是接入基线，不是 OMP RPC 能力上限。
 >
-> 本文件是该功能域的唯一权威需求与架构设计。接口名称表示目标契约，不表示已经实现。2026-09-29 本次仅完成源码审阅及需求、架构和接口设计，未修改运行时代码、未执行功能测试。已有实现不自动等于设计正确，也不自动等于验收通过。
+> 本文件是该功能域的唯一权威需求与架构设计。接口名称表示目标契约，不表示已经实现。2026-09-29 完成需求、架构和接口设计；同日完成 OMP 侧项目模式首轮实施（见 §17.3 实施状态），ZCode 侧接入（Z1/Z2）尚未开始。已有实现不自动等于设计正确，也不自动等于验收通过。
 
 阅读顺序：§1—§3 明确目标和边界，§4—§9 定义行为与兼容，§13—§16 给出架构、参数和事件流程，§10、§17 指导实施，§11 提供验收编号。新增设计字段不代表现有 RPC 已支持。
 
@@ -734,3 +734,23 @@ GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；
 | 慢 stdout 消费者、超大工具输出、长代理记录 | 有界队列和明确重同步/分页行为，终态不静默丢失 |
 
 阶段 A 的清单是实现产物，不是把架构决策重新留给执行者。本文已决定单项目主进程、多会话隔离、共同业务服务、原生 OMP 协议、消息与管理完成通道、持久化权威及 GUI 边界；只有字段拼写和等价现有入口映射可随当前源码调整。
+
+### 17.3 实施状态（2026-09-29，OMP 仓库首轮）
+
+OMP 侧 B1/B2/D1/E1/F 的项目模式骨架与核心接口已实施；每包状态、变更范围与验证证据如下。Z1/Z2（ZCode 仓库）未开始；GUI 真实验收（§11.2）因此整体未验证。
+
+| 包 | 状态 | 变更范围 | 验证证据 |
+| --- | --- | --- | --- |
+| A1 契约冻结 | 已实现，静态验证通过 | `modes/rpc/rpc-project-types.ts`：项目模式全部命令/响应/事件/错误码/能力契约；`rpc-types.ts` 增补 `prompt.inputMode` 与 ready 项目字段 | `bun run fastcheck`；类型为 `packages/coding-agent` check:types 的一部分 |
+| B1 项目入口与路由 | 已实现，公开入口验证通过（O01/O02/O04 的进程级部分） | `--rpc-project` CLI flag（args/flag-tables）；`main.ts` 项目分支 + `createRpcProjectSessionFactory`（每会话独立 EventBus/subagentEventBus）；`modes/rpc/rpc-project.ts` 项目宿主：ready 公告身份/能力、v3 门控、项目级与会话级命令路由、代次校验、交互帧按交互身份路由回原会话、EOF 有序退出 | `test/rpc-project-protocol.test.ts`（9 项：ready 身份、v3 门控、零会话目录、多会话生命周期、缺 sessionId 拒绝、未知命令、prompt text 模式、execute_command 严格分发、EOF 退出） |
+| B2 隔离与事件基础 | 已实现（事件归属 stamp、每会话 subagent bus、共享 host-tool/URI 桥） | `rpc-session-host.ts`（自 rpc-mode.ts 提取的单会话宿主，两种模式共用同一命令实现）；会话帧统一追加 processInstanceId/sessionId/sessionGeneration | 同上（多会话不串话的进程级验证）；O03/O14/O18 的完整矩阵未验证 |
+| D1 目录与无副作用补全 | 已实现，单元验证通过（O11 的规则部分） | `modes/rpc/rpc-project-commands.ts`：统一命令目录（零会话可用，session_required 标注）、名称/参数补全（UTF-16 替换区间、无副作用）、严格 resolve | `test/rpc-project-commands.test.ts`（8 项） |
+| D2 命令执行与交互 | 已实现（execute_command 复用 prompt inputMode=auto 严格分发；未知命令不落模型） | `rpc-project.ts` #executeCommand；`rpc-session-host.ts` prompt 分支的 inputMode 语义 | `test/rpc-project-protocol.test.ts` 第 7/8 项 |
+| C 技能服务 | 已实现，单元验证通过（O06 的目录区分部分） | `extensibility/skills.ts` 增补 `loadSkillsWithShadowed`（同名覆盖可见）；`modes/rpc/rpc-project-skills.ts`：management/effective 双视图、set_skill_enabled/copy（重写 frontmatter name 生成新身份）/delete（仅可管理目录）/reload（resetCapabilities + 会话采用报告） | `test/rpc-project-skills.test.ts`（6 项） |
+| E1 消息接入 | 已实现（会话级 prompt/abort/历史经 sessionId 路由到既有链路；text/auto 语义） | `rpc-project.ts` 会话路由 + `rpc-session-host.ts` | `test/rpc-project-protocol.test.ts` 第 7 项；O19 完整流式/停止/失败矩阵未验证（需真实模型） |
+| E2 子代理协作与恢复 | 已实现（持久目录按会话 artifacts 扫描、记录读取带归属解析与 record_too_large、control_subagent send_message/stop 复用 IRC/registry 终止） | `modes/rpc/rpc-project-subagents.ts` | 单元/E2E 覆盖待补（本轮未写专项测试文件；O20—O22 未验证） |
+| F 模型和 role | 已实现，单元验证通过（O24 全量 role、O25 落盘与修订冲突） | `modes/rpc/rpc-project-models.ts`：get_model_roles（零配置/零模型返回全部内置 role）、set_model_role（逐 role 修订、flush 落盘、来源回读）；`rpc-fork-config.ts`/`rpc-fork-manage.ts` 支持零会话 service-context 构造 | `test/rpc-project-models.test.ts`（7 项） |
+| G 兼容与收尾 | 已实现（旧单会话模式行为保留；全量既有 rpc/rpc-fork 测试回归通过） | `rpc-mode.ts` 重构为传输壳后保持全部导出与行为 | 既有 18 个 rpc*.test.ts 全绿（108 pass）；O15—O17 剩余矩阵未逐项验证 |
+| Z1/Z2 桌面接入 | 未开始 | — | — |
+
+自动化验证入口：`test/rpc-project-*.test.ts` 已加入 `scripts/fulltest.ts` 白名单（组 `coding-agent/rpc-project`）。真实模型/真实 GUI 场景（O19/O28、全部 Z 系列）仍属未验证，按 §11 分别记录，不合并为完成。

@@ -8,6 +8,12 @@
  * own read-modify-write of models.yml (ConfigFile is read-only by design)
  * with `validateProviderConfiguration` gating. `test_model` fires a one-shot
  * `streamSimple` probe and attributes failures to six categories.
+ *
+ * The controller is session-optional: it holds the narrow
+ * {@link RpcForkServiceContext} slice it actually needs, so project mode
+ * (`omp --mode rpc-ui --rpc-project`) can answer every command here with ZERO
+ * sessions loaded. Session-backed callers keep the historical constructor
+ * shape and are converted via {@link serviceContextFromSession}.
  */
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -26,8 +32,11 @@ import {
 	type ProviderValidationModel,
 } from "../../config/models-config";
 import { cfgDisabledProviders, cfgEnabledModels } from "../../config/model-settings";
+import { filterAvailableModelsByEnabledPatterns } from "../../config/model-resolver";
+import type { ModelRegistry } from "../../config/model-registry";
 import { withActiveSettings, type Settings } from "../../config/settings";
 import { replaceFileAtomically } from "../../utils/atomic-file";
+import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase, RpcForkModelTestResult } from "./rpc-fork-types";
@@ -70,15 +79,78 @@ function maskCredential(value: unknown): unknown {
 	return value;
 }
 
+/**
+ * Minimal service context the fork config/manage controllers actually need.
+ * Project mode answers `get_settings`/`set_settings`/`unset_settings`/
+ * `list_providers`/provider CRUD/`set_model_enabled`/`test_model` (and the
+ * manage tier) with zero sessions loaded, so the controllers operate on this
+ * narrow slice instead of a full {@link AgentSession}. Session-backed callers
+ * convert via {@link serviceContextFromSession}; wire behavior is identical
+ * through either path.
+ */
+export interface RpcForkServiceContext {
+	readonly settings: Settings;
+	readonly modelRegistry: ModelRegistry;
+	/** Project root; the session cwd on the session path. */
+	readonly cwd: string;
+	/** Auth storage override; defaults to `modelRegistry.authStorage`. */
+	readonly authStorage?: AuthStorage;
+	/** Agent dir for models.yml / mcp.json; defaults to `getAgentDir()`. */
+	readonly agentDir?: string;
+	/**
+	 * Session-bound availability view (`enabledModels`-filtered, exactly
+	 * `session.getAvailableModels()`). Session-backed contexts call through to
+	 * the live session; bare contexts omit it and the controllers mirror the
+	 * same filtering over the registry plus settings.
+	 */
+	readonly getAvailableModels?: () => Model[];
+	/** Owning session id (probe attribution in `test_model`); omitted contexts let the transport mint one. */
+	readonly sessionId?: string;
+}
+
+/** Narrow an {@link AgentSession} to the {@link RpcForkServiceContext} slice the controllers use. */
+export function serviceContextFromSession(session: AgentSession): RpcForkServiceContext {
+	return {
+		settings: session.settings,
+		modelRegistry: session.modelRegistry,
+		// Lazy getters keep the historical per-command read semantics: a
+		// session's cwd and id can change mid-flight (cwd switches,
+		// switchSession), and the controllers must follow, not snapshot.
+		get cwd(): string {
+			return session.sessionManager.getCwd();
+		},
+		authStorage: session.modelRegistry.authStorage,
+		getAvailableModels: () => session.getAvailableModels(),
+		get sessionId(): string | undefined {
+			return session.sessionId;
+		},
+	};
+}
+
+/**
+ * Constructor-argument normalizer: a context passes through unchanged, an
+ * {@link AgentSession} converts. Detection keys off the context's `cwd` field:
+ * AgentSession also exposes `settings`/`modelRegistry`, but it resolves its
+ * cwd through `sessionManager.getCwd()` and has no `cwd` property.
+ */
+export function asRpcForkServiceContext(source: AgentSession | RpcForkServiceContext): RpcForkServiceContext {
+	const candidate = source as Partial<RpcForkServiceContext>;
+	return typeof candidate.cwd === "string" && candidate.settings !== undefined && candidate.modelRegistry !== undefined
+		? (source as RpcForkServiceContext)
+		: serviceContextFromSession(source as AgentSession);
+}
+
 export class RpcForkConfigController {
 	readonly #agentDir: string;
+	readonly #ctx: RpcForkServiceContext;
 
 	constructor(
 		private readonly host: RpcForkHost,
-		private readonly session: AgentSession,
+		session: AgentSession | RpcForkServiceContext,
 		options?: { agentDir?: string },
 	) {
-		this.#agentDir = options?.agentDir ?? getAgentDir();
+		this.#ctx = asRpcForkServiceContext(session);
+		this.#agentDir = options?.agentDir ?? this.#ctx.agentDir ?? getAgentDir();
 		host.registerCommand("get_settings", command => this.#getSettings(command));
 		host.registerCommand("set_settings", command => this.#setSettings(command));
 		host.registerCommand("unset_settings", command => this.#unsetSettings(command));
@@ -87,6 +159,25 @@ export class RpcForkConfigController {
 		host.registerCommand("delete_provider", command => this.#deleteProvider(command));
 		host.registerCommand("set_model_enabled", command => this.#setModelEnabled(command));
 		host.registerCommand("test_model", command => this.#testModel(command));
+	}
+
+	/**
+	 * Available models for listing/probing. Session-backed contexts reuse the
+	 * session's `enabledModels`-filtered view; bare contexts mirror that
+	 * filtering directly over the registry (same semantics as
+	 * `session/model-controls getAvailableModels`).
+	 */
+	#availableModels(): Model[] {
+		const sessionView = this.#ctx.getAvailableModels;
+		if (sessionView) return sessionView();
+		const all = this.#ctx.modelRegistry.getAvailable();
+		const patterns = cfgEnabledModels.get(this.#ctx.settings);
+		if (!patterns || patterns.length === 0) return all;
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#ctx.settings);
+	}
+
+	#authStorage(): AuthStorage {
+		return this.#ctx.authStorage ?? this.#ctx.modelRegistry.authStorage;
 	}
 
 	#settingsHost(): ReturnType<typeof createSettingsHost> {
@@ -103,7 +194,7 @@ export class RpcForkConfigController {
 		if (scope !== "user" && scope !== "project") {
 			return this.host.context.error(command.id, "get_settings", `Invalid scope: ${String(scope)}`);
 		}
-		const settings = this.session.settings;
+		const settings = this.#ctx.settings;
 		const projectLayer = this.#projectLayer(settings);
 		return withActiveSettings(settings, () => {
 			const host = this.#settingsHost();
@@ -146,7 +237,7 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "set_settings", "key is required");
 		}
 		try {
-			withActiveSettings(this.session.settings, () => this.#settingsHost().set(key, value));
+			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().set(key, value));
 		} catch (error) {
 			return this.host.context.error(
 				command.id,
@@ -175,7 +266,7 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "unset_settings", "key is required");
 		}
 		try {
-			withActiveSettings(this.session.settings, () => this.#settingsHost().unset(key));
+			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().unset(key));
 		} catch (error) {
 			return this.host.context.error(
 				command.id,
@@ -192,8 +283,8 @@ export class RpcForkConfigController {
 	}
 
 	async #listProviders(command: RpcForkCommandBase): Promise<RpcResponse> {
-		await this.session.modelRegistry.awaitBackgroundRefresh();
-		const models = this.session.getAvailableModels();
+		await this.#ctx.modelRegistry.awaitBackgroundRefresh();
+		const models = this.#availableModels();
 		const byProvider = new Map<string, Array<{ id: string; contextWindow?: number }>>();
 		for (const model of models) {
 			const list = byProvider.get(model.provider) ?? [];
@@ -205,16 +296,16 @@ export class RpcForkConfigController {
 		}
 		const config = ModelsConfigFile.loadOrDefault();
 		const configured = config.providers ?? {};
-		const settings = this.session.settings;
+		const settings = this.#ctx.settings;
 		const disabled = cfgDisabledProviders.get(settings) ?? [];
 		const providers = [...new Set([...byProvider.keys(), ...Object.keys(configured)])].sort().map(provider => {
-			const discovery = this.session.modelRegistry.getProviderDiscoveryState(provider);
+			const discovery = this.#ctx.modelRegistry.getProviderDiscoveryState(provider);
 			return {
 				provider,
 				models: byProvider.get(provider) ?? [],
 				configured: Object.hasOwn(configured, provider),
 				disabled: disabled.includes(provider),
-				baseUrl: this.session.modelRegistry.getProviderBaseUrl(provider),
+				baseUrl: this.#ctx.modelRegistry.getProviderBaseUrl(provider),
 				discovery: discovery
 					? {
 							status: discovery.status,
@@ -464,7 +555,7 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "set_model_enabled", "provider, modelId, and enabled are required");
 		}
 		const pattern = `${provider}/${modelId}`;
-		const settings = this.session.settings;
+		const settings = this.#ctx.settings;
 		const current = cfgEnabledModels.get(settings) ?? [];
 		const has = current.includes(pattern);
 		if (enabled && !has) {
@@ -483,11 +574,11 @@ export class RpcForkConfigController {
 		if (typeof provider !== "string" || typeof modelId !== "string") {
 			return this.host.context.error(command.id, "test_model", "provider and modelId are required");
 		}
-		let models = this.session.getAvailableModels();
+		let models = this.#availableModels();
 		let model: Model | undefined = models.find(m => m.provider === provider && m.id === modelId);
 		if (!model) {
-			await this.session.modelRegistry.awaitBackgroundRefresh();
-			models = this.session.getAvailableModels();
+			await this.#ctx.modelRegistry.awaitBackgroundRefresh();
+			models = this.#availableModels();
 			model = models.find(m => m.provider === provider && m.id === modelId);
 		}
 		if (!model) {
@@ -497,7 +588,7 @@ export class RpcForkConfigController {
 				error: { category: "model_not_found", message: `Model not found: ${provider}/${modelId}` },
 			} satisfies RpcForkModelTestResult);
 		}
-		if (!this.session.modelRegistry.getProviderBaseUrl(provider)) {
+		if (!this.#ctx.modelRegistry.getProviderBaseUrl(provider)) {
 			return this.host.context.success(command.id, "test_model", {
 				ok: false,
 				latencyMs: 0,
@@ -506,7 +597,7 @@ export class RpcForkConfigController {
 		}
 		const startedAt = Date.now();
 		try {
-			const apiKey = await this.session.modelRegistry.authStorage.keys.get(provider);
+			const apiKey = await this.#authStorage().keys.get(provider);
 			if (!apiKey) {
 				return this.host.context.success(command.id, "test_model", {
 					ok: false,
@@ -520,7 +611,7 @@ export class RpcForkConfigController {
 					systemPrompt: ["You are a connectivity probe. Reply with the single word: ok."],
 					messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
 				},
-				{ apiKey, maxTokens: 16, sessionId: this.session.sessionId },
+				{ apiKey, maxTokens: 16, sessionId: this.#ctx.sessionId },
 			);
 			for await (const event of stream) {
 				if (event.type === "error") {

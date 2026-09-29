@@ -8,6 +8,12 @@
  * definitions read through `task/discovery.ts` and write project-scope
  * frontmatter files. Usage/statistics wrap `authStorage.usage` and the
  * `@oh-my-pi/omp-stats` aggregator (`omp usage --json` / `omp stats` parity).
+ *
+ * The controller is session-optional: it holds the narrow
+ * {@link RpcForkServiceContext} slice it actually needs (see rpc-fork-config),
+ * so project mode (`omp --mode rpc-ui --rpc-project`) can answer every command
+ * here with ZERO sessions loaded. Session-backed callers keep the historical
+ * constructor shape and are converted via {@link serviceContextFromSession}.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -38,7 +44,9 @@ import {
 } from "../../extensibility/settings";
 import type { AnySetting } from "../../config/registry";
 import { discoverAgents } from "../../task/discovery";
+import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
+import { asRpcForkServiceContext, type RpcForkServiceContext } from "./rpc-fork-config";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
@@ -56,14 +64,16 @@ export class RpcForkManageController {
 	readonly #statusCache = new Map<string, CachedMcpStatus>();
 	readonly #unsubscribe: () => void;
 	readonly #agentDir: string;
+	readonly #ctx: RpcForkServiceContext;
 
 	constructor(
 		private readonly host: RpcForkHost,
-		private readonly session: AgentSession,
+		session: AgentSession | RpcForkServiceContext,
 		eventBus?: EventBus,
 		options?: { agentDir?: string },
 	) {
-		this.#agentDir = options?.agentDir ?? getAgentDir();
+		this.#ctx = asRpcForkServiceContext(session);
+		this.#agentDir = options?.agentDir ?? this.#ctx.agentDir ?? getAgentDir();
 		this.#unsubscribe = eventBus ? this.#subscribeMcpStatus(eventBus) : () => {};
 		host.registerCommand("list_mcp_servers", command => this.#listMcpServers(command));
 		host.registerCommand("upsert_mcp_server", command => this.#upsertMcpServer(command));
@@ -81,10 +91,14 @@ export class RpcForkManageController {
 		host.registerDisposer(() => this.#unsubscribe());
 	}
 
+	#authStorage(): AuthStorage {
+		return this.#ctx.authStorage ?? this.#ctx.modelRegistry.authStorage;
+	}
+
 	#mcpPaths(): { userPath: string; projectPath: string } {
 		return {
 			userPath: path.join(this.#agentDir, "mcp.json"),
-			projectPath: path.join(this.session.sessionManager.getCwd(), ".omp", "mcp.json"),
+			projectPath: path.join(this.#ctx.cwd, ".omp", "mcp.json"),
 		};
 	}
 
@@ -236,7 +250,7 @@ export class RpcForkManageController {
 	}
 
 	async #listSkills(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const result = await loadSkills({ cwd: this.session.sessionManager.getCwd() });
+		const result = await loadSkills({ cwd: this.#ctx.cwd });
 		return this.host.context.success(command.id, "list_skills", {
 			skills: result.skills.map(skill => ({
 				name: skill.name,
@@ -264,7 +278,7 @@ export class RpcForkManageController {
 				"unsupported_source",
 			);
 		}
-		key.set(this.session.settings, enabled);
+		key.set(this.#ctx.settings, enabled);
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "set_skill_source_enabled", { source, enabled });
 	}
@@ -274,13 +288,13 @@ export class RpcForkManageController {
 		if (typeof name !== "string" || typeof ignored !== "boolean") {
 			return this.host.context.error(command.id, "set_skill_ignored", "name and ignored are required");
 		}
-		cfgSkillsIgnoredSkills.setMember(this.session.settings, name, { member: ignored });
+		cfgSkillsIgnoredSkills.setMember(this.#ctx.settings, name, { member: ignored });
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "set_skill_ignored", { name, ignored });
 	}
 
 	async #listAgentDefinitions(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const result = await discoverAgents(this.session.sessionManager.getCwd());
+		const result = await discoverAgents(this.#ctx.cwd);
 		return this.host.context.success(command.id, "list_agent_definitions", {
 			agents: result.agents.map(agent => ({
 				name: agent.name,
@@ -321,7 +335,7 @@ export class RpcForkManageController {
 				);
 			}
 		}
-		const projectDir = path.join(this.session.sessionManager.getCwd(), ".omp", "agents");
+		const projectDir = path.join(this.#ctx.cwd, ".omp", "agents");
 		await fs.mkdir(projectDir, { recursive: true });
 		// Frontmatter values are emitted as JSON double-quoted scalars: legal YAML
 		// that cannot break out of the document regardless of description content.
@@ -346,7 +360,7 @@ export class RpcForkManageController {
 		if (typeof name !== "string" || !name) {
 			return this.host.context.error(command.id, "delete_agent_definition", "name is required");
 		}
-		const result = await discoverAgents(this.session.sessionManager.getCwd());
+		const result = await discoverAgents(this.#ctx.cwd);
 		const agent = result.agents.find(candidate => candidate.name === name);
 		if (!agent?.filePath || agent.source === "bundled") {
 			return this.host.context.error(
@@ -363,7 +377,7 @@ export class RpcForkManageController {
 
 	async #getUsage(command: RpcForkCommandBase): Promise<RpcResponse> {
 		const { provider, days, history } = command as { provider?: unknown; days?: unknown; history?: unknown };
-		const authStorage = this.session.modelRegistry.authStorage;
+		const authStorage = this.#authStorage();
 		const sinceMs = typeof days === "number" && days > 0 ? Date.now() - days * 86_400_000 : undefined;
 		if (history === true) {
 			const entries = authStorage.usage.history({
@@ -374,7 +388,7 @@ export class RpcForkManageController {
 		}
 		const reports =
 			(await authStorage.usage.reports({
-				baseUrlResolver: candidate => this.session.modelRegistry.getProviderBaseUrl(candidate),
+				baseUrlResolver: candidate => this.#ctx.modelRegistry.getProviderBaseUrl(candidate),
 			})) ?? [];
 		const filtered = typeof provider === "string" ? reports.filter(report => report.provider === provider) : reports;
 		const trimmed = filtered.map(({ raw: _raw, ...rest }) => rest);

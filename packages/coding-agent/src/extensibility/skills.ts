@@ -139,6 +139,54 @@ export interface LoadSkillsOptions extends SkillsSettings {
  * Returns skills and any validation warnings.
  */
 export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadSkillsResult> {
+	return await loadSkillsWithDiscovery(options);
+}
+
+/** Result of {@link loadSkillsWithShadowed}. */
+export interface LoadSkillsWithShadowedResult extends LoadSkillsResult {
+	/**
+	 * Every discovered skill that did not make the final list: candidates that
+	 * lost to another skill with the same name (name dedup, symlink dedup,
+	 * custom-directory override, managed-skill vetoes), plus skills the
+	 * pre-dedup filters dropped (source toggles, ignore/include patterns,
+	 * `skill:<name>` disabledExtensions entries). Management catalogs use this
+	 * to surface same-name duplicates a plain load silently drops; WHY an
+	 * entry lost is the caller's to derive by re-checking its own settings.
+	 */
+	shadowed: Skill[];
+}
+
+/**
+ * Like {@link loadSkills}, but also collects the skills a plain load silently
+ * drops so management surfaces can list them. `skills` and `warnings` are
+ * identical to {@link loadSkills}.
+ */
+export async function loadSkillsWithShadowed(options: LoadSkillsOptions = {}): Promise<LoadSkillsWithShadowedResult> {
+	const shadowed: Skill[] = [];
+	const result = await loadSkillsWithDiscovery(options, shadowed);
+	return { skills: result.skills, warnings: result.warnings, shadowed };
+}
+
+/** Convert a discovered capability skill to the public {@link Skill} shape. */
+function capabilitySkillToSkill(capSkill: CapabilitySkill, options?: { sanitizeDescription?: boolean }): Skill {
+	const rawDescription = typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
+	return {
+		name: capSkill.name,
+		description: options?.sanitizeDescription ? sanitizeManagedDescription(rawDescription) : rawDescription,
+		filePath: capSkill.path,
+		baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+		source: `${capSkill._source.provider}:${capSkill.level}`,
+		...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+		hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+		_source: capSkill._source,
+	};
+}
+
+/**
+ * Shared pipeline behind {@link loadSkills} and {@link loadSkillsWithShadowed}.
+ * When `shadowed` is supplied, it collects every discovered skill that lost.
+ */
+async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed?: Skill[]): Promise<LoadSkillsResult> {
 	const {
 		cwd = getProjectDir(),
 		enabled = true,
@@ -216,11 +264,28 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const seenAuthoredSkillNames = new Set<string>();
 	const filteredSkills = result.all.filter(capSkill => {
 		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) return false;
-		if (disabledSkillNames.has(capSkill.name)) return false;
-		if (!isSourceEnabled(capSkill._source)) return false;
-		if (matchesIgnorePatterns(capSkill.name)) return false;
-		if (!matchesIncludePatterns(capSkill.name)) return false;
-		if (seenAuthoredSkillNames.has(capSkill.name)) return false;
+		if (disabledSkillNames.has(capSkill.name)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
+			return false;
+		}
+		if (!isSourceEnabled(capSkill._source)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
+			return false;
+		}
+		if (matchesIgnorePatterns(capSkill.name)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
+			return false;
+		}
+		if (!matchesIncludePatterns(capSkill.name)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
+			return false;
+		}
+		if (seenAuthoredSkillNames.has(capSkill.name)) {
+			// Same-name candidate from a lower-priority discovery: the first one
+			// won, this one is only visible to management catalogs.
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
+			return false;
+		}
 		seenAuthoredSkillNames.add(capSkill.name);
 		return true;
 	});
@@ -243,6 +308,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 
 		// Skip silently if we've already loaded this exact file (via symlink)
 		if (realPathSet.has(resolvedPath)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
 			continue;
 		}
 
@@ -252,17 +318,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				skillPath: capSkill.path,
 				message: `name collision: "${capSkill.name}" already loaded from ${existing.filePath}, skipping this one`,
 			});
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
 		} else {
-			skillMap.set(capSkill.name, {
-				name: capSkill.name,
-				description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
-				filePath: capSkill.path,
-				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-				source: `${capSkill._source.provider}:${capSkill.level}`,
-				...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-				hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-				_source: capSkill._source,
-			});
+			skillMap.set(capSkill.name, capabilitySkillToSkill(capSkill));
 			realPathSet.add(resolvedPath);
 		}
 	}
@@ -286,23 +344,29 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const allCustomSkills: Array<{ skill: Skill; path: string }> = [];
 	for (const { expandedDir, scanResult } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
-			if (disabledSkillNames.has(capSkill.name)) continue;
-			if (matchesIgnorePatterns(capSkill.name)) continue;
-			if (!matchesIncludePatterns(capSkill.name)) continue;
-			allCustomSkills.push({
-				skill: {
-					name: capSkill.name,
-					description:
-						typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
-					filePath: capSkill.path,
-					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-					source: "custom:user",
-					...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-					hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-					_source: { ...capSkill._source, providerName: "Custom" },
-				},
-				path: capSkill.path,
-			});
+			const skill: Skill = {
+				name: capSkill.name,
+				description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
+				filePath: capSkill.path,
+				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+				source: "custom:user",
+				...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+				hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+				_source: { ...capSkill._source, providerName: "Custom" },
+			};
+			if (disabledSkillNames.has(capSkill.name)) {
+				if (shadowed) shadowed.push(skill);
+				continue;
+			}
+			if (matchesIgnorePatterns(capSkill.name)) {
+				if (shadowed) shadowed.push(skill);
+				continue;
+			}
+			if (!matchesIncludePatterns(capSkill.name)) {
+				if (shadowed) shadowed.push(skill);
+				continue;
+			}
+			allCustomSkills.push({ skill, path: capSkill.path });
 		}
 		collisionWarnings.push(...(scanResult.warnings ?? []).map(message => ({ skillPath: expandedDir, message })));
 	}
@@ -320,7 +384,10 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	for (let i = 0; i < allCustomSkills.length; i++) {
 		const { skill } = allCustomSkills[i];
 		const resolvedPath = customRealPaths[i];
-		if (realPathSet.has(resolvedPath)) continue;
+		if (realPathSet.has(resolvedPath)) {
+			if (shadowed) shadowed.push(skill);
+			continue;
+		}
 
 		const existing = skillMap.get(skill.name);
 		if (existing) {
@@ -331,6 +398,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			// duplicates keep first-wins.
 			const isCustomExisting = existing.source.startsWith("custom:");
 			if (!isCustomExisting) {
+				// The displaced default-path skill is the same-name loser.
+				if (shadowed) shadowed.push(existing);
 				skillMap.set(skill.name, skill);
 				realPathSet.add(resolvedPath);
 				continue;
@@ -339,6 +408,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				skillPath: skill.filePath,
 				message: `name collision: "${skill.name}" already loaded from ${existing.filePath}, skipping this one`,
 			});
+			if (shadowed) shadowed.push(skill);
 		} else {
 			skillMap.set(skill.name, skill);
 			realPathSet.add(resolvedPath);
@@ -382,26 +452,25 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	for (let i = 0; i < managedCandidates.length; i++) {
 		const capSkill = managedCandidates[i];
 		const resolvedPath = managedRealPaths[i];
-		if (realPathSet.has(resolvedPath)) continue;
-		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
+		if (realPathSet.has(resolvedPath)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
+			continue;
+		}
+		if (enabledAuthoredNames.has(capSkill.name)) {
+			// an enabled authored skill owns this name; the managed twin loses
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
+			continue;
+		}
 		// Already claimed — e.g. by a custom-directory skill. LOAD-BEARING: custom
 		// dirs never enter `result.all`, so they are absent from `enabledAuthoredNames`
 		// above; this map check is the ONLY veto that lets a custom-dir authored skill
 		// win over a same-named managed one. The custom-dir loop (which populates
 		// skillMap, ~30 lines up) MUST run before this block — do not reorder.
-		if (skillMap.has(capSkill.name)) continue;
-		const rawDescription =
-			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
-		skillMap.set(capSkill.name, {
-			name: capSkill.name,
-			description: sanitizeManagedDescription(rawDescription),
-			filePath: capSkill.path,
-			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-			source: `${capSkill._source.provider}:${capSkill.level}`,
-			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-			_source: capSkill._source,
-		});
+		if (skillMap.has(capSkill.name)) {
+			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
+			continue;
+		}
+		skillMap.set(capSkill.name, capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
 		realPathSet.add(resolvedPath);
 	}
 

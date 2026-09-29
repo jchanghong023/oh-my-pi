@@ -118,6 +118,9 @@ import {
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager } from "./session/session-manager";
+import { computeDefaultSessionDir } from "./session/session-paths";
+import { FileSessionStorage } from "./session/session-storage";
+import type { RpcProjectCreatedSession } from "./modes/rpc/rpc-project-sessions";
 import { shouldShowStartupSplash } from "./startup-splash";
 import {
 	discoverSystemPromptOverride,
@@ -616,6 +619,95 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			}
 		}
 		return { session: nextSession, setToolUIContext };
+	};
+}
+
+export interface RpcProjectSessionFactoryOptions {
+	baseOptions: CreateAgentSessionOptions;
+	settings: Settings;
+	/** Directory every project-mode session file lives in (fixed per process). */
+	sessionDir: string;
+	authStorage: AuthStorage;
+	modelRegistry: ModelRegistry;
+	parsedArgs: Pick<Args, "apiKey" | "trustedExtensions" | "tools" | "invalidFlagValues">;
+	rawArgs: string[];
+	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
+}
+
+/**
+ * Build the per-session factory used by RPC project mode
+ * (`--mode rpc-ui --rpc-project`, rpc-ui-protocol.md §4.1). Unlike the ACP
+ * factory, MCP stays on the on-disk discovery path (project sessions own the
+ * same `.mcp.json` as the TUI) and every session gets its own EventBus AND
+ * subagent event bus so subagent frames never cross sessions.
+ */
+export function createRpcProjectSessionFactory(
+	args: RpcProjectSessionFactoryOptions,
+): () => Promise<RpcProjectCreatedSession> {
+	return async () => {
+		const cwd = args.baseOptions.cwd ?? getProjectDir();
+		const nextSettings = await args.settings.cloneForCwd(cwd);
+		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
+		const agentId = `rpcp:${nextSessionManager.getSessionId()}`;
+		const eventBus = new EventBus();
+		const subagentEventBus = new EventBus();
+		const trustedExtensions =
+			args.parsedArgs.trustedExtensions && args.parsedArgs.trustedExtensions.length > 0
+				? await loadTrustedSessionExtensions(args.baseOptions, cwd, eventBus)
+				: undefined;
+		if (trustedExtensions && trustedExtensions.errors.length > 0) {
+			throw new Error(
+				`Trusted extension failed to load: ${trustedExtensions.errors.map(item => item.error).join("; ")}`,
+			);
+		}
+		const { session, setToolUIContext } = await args.createSession({
+			...args.baseOptions,
+			cwd,
+			sessionManager: nextSessionManager,
+			settings: nextSettings,
+			authStorage: args.authStorage,
+			modelRegistry: args.modelRegistry,
+			agentId,
+			eventBus,
+			subagentEventBus,
+			preloadedExtensions: trustedExtensions,
+		});
+		if (args.parsedArgs.apiKey && !args.baseOptions.model && session.model) {
+			args.authStorage.keys.setRuntime(session.model.provider, args.parsedArgs.apiKey);
+		}
+		const runner = session.extensionRunner;
+		const reparsedArgs = applyExtensionFlags(
+			runner
+				? {
+						getFlags: () => runner.getFlags(),
+						setFlagValue: (name: string, value: boolean | string) => {
+							runner.setFlagValue(name, value);
+						},
+					}
+				: undefined,
+			args.rawArgs,
+		);
+		const effectiveArgs = reparsedArgs ?? args.parsedArgs;
+		if (effectiveArgs.invalidFlagValues.length > 0) {
+			await session.dispose();
+			throw new CliUsageError(effectiveArgs.invalidFlagValues.join("\n"));
+		}
+		const requestedTools = reparsedArgs?.tools ?? args.parsedArgs.tools;
+		if (requestedTools) {
+			try {
+				validateToolNames(requestedTools, session.getAllToolNames());
+			} catch (error) {
+				await session.dispose();
+				throw error;
+			}
+		}
+		return {
+			session,
+			setToolUIContext: (uiContext: unknown, hasUI: boolean) =>
+				setToolUIContext(uiContext as ExtensionUIContext, hasUI),
+			subagentEventBus,
+			setHost: () => {},
+		};
 	};
 }
 
@@ -1786,6 +1878,11 @@ export async function runRootCommand(
 		if (parsedArgs.invalidFlagValues.length === 0) {
 			rejectNoUiWithoutRpc(parsedArgs);
 		}
+		if (parsedArgs.rpcProject && parsedArgs.mode !== "rpc-ui") {
+			process.stderr.write(`${chalk.red("Error: --rpc-project requires --mode rpc-ui")}
+`);
+			process.exit(1);
+		}
 		const mode = parsedArgs.mode || "text";
 		// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
 		const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
@@ -2323,6 +2420,39 @@ export async function runRootCommand(
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
 			stopStartupWatchdog();
 			await runAcpMode(createAcpSession);
+		} else if (mode === "rpc-ui" && parsedArgs.rpcProject) {
+			// Project mode (rpc-ui-protocol.md §4.1): one OMP process hosting many
+			// sessions of the startup cwd. No main session exists — the project
+			// host creates/loads sessions on demand and supports zero sessions.
+			const projectCwd = sessionOptions.cwd ?? getProjectDir();
+			const projectSessionDir =
+				parsedArgs.sessionDir ?? computeDefaultSessionDir(projectCwd, new FileSessionStorage());
+			const createRpcProjectSession = createRpcProjectSessionFactory({
+				baseOptions: sessionOptions,
+				settings: settingsInstance,
+				sessionDir: projectSessionDir,
+				authStorage,
+				modelRegistry,
+				parsedArgs,
+				rawArgs,
+				createSession,
+			});
+			const runRpcProjectMode = (await import("./modes/rpc/rpc-project")).runRpcProjectMode;
+			stopStartupWatchdog();
+			// Long-lived host: apply on-disk config edits live (the single-session
+			// RPC path does the same further below; this branch never reaches it).
+			settingsInstance.startWatching();
+			postmortem.register("settings-file-watcher", () => settingsInstance.stopWatching(), { exitOnly: true });
+			await runRpcProjectMode({
+				cwd: projectCwd,
+				sessionDir: projectSessionDir,
+				settings: settingsInstance,
+				modelRegistry,
+				authStorage,
+				createSession: createRpcProjectSession,
+				headless: parsedArgs.noUi === true,
+				input: rpcInput,
+			});
 		} else {
 			// Resolve extension-registered CLI flags before creating the session so a
 			// bad `@file` fails fast WITHOUT leaving a junk session/breadcrumb

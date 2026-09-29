@@ -35,6 +35,15 @@ export type RpcCommand =
 			images?: ImageContent[];
 			attachments?: RpcForkAttachment[];
 			streamingBehavior?: "steer" | "followUp";
+			/**
+			 * How the message is dispatched. Project mode (`rpc-ui-project`) defaults to
+			 * `"text"`: the message is sent to the model as plain text even when it
+			 * starts with "/". `"auto"` routes it through strict command dispatch (skill
+			 * and builtin commands); an unknown "/..." is rejected instead of reaching
+			 * the model. The legacy single-session mode keeps its current
+			 * slash-handling behavior regardless of this field.
+			 */
+			inputMode?: "text" | "auto";
 	  }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
@@ -237,6 +246,17 @@ export interface RpcReadyFrame {
 	supportedProtocolVersions: [1, 2, 3];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
+	/**
+	 * Session topology this process hosts: single-session `rpc-ui` (the default
+	 * when omitted) or multi-session `rpc-ui-project` (project fields below).
+	 */
+	mode?: "rpc-ui" | "rpc-ui-project";
+	/** Project mode: the workspace root this process serves. */
+	projectIdentity?: { projectRoot: string };
+	/** Project mode: process instance identity announced at ready; changes across restarts. */
+	processInstanceId?: string;
+	/** Project mode: capability flags the host advertises. */
+	capabilities?: Record<string, boolean>;
 }
 
 export interface RpcChunkFrame {

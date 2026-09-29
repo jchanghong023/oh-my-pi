@@ -235,6 +235,17 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		],
 	},
 	{
+		label: "coding-agent/rpc-project",
+		cwd: "packages/coding-agent",
+		files: [
+			"test/rpc-project-commands.test.ts",
+			"test/rpc-project-models.test.ts",
+			"test/rpc-project-protocol.test.ts",
+			"test/rpc-project-sessions.test.ts",
+			"test/rpc-project-skills.test.ts",
+		],
+	},
+	{
 		label: "coding-agent/fork-features",
 		cwd: "packages/coding-agent",
 		files: [

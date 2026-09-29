@@ -86,6 +86,8 @@ export interface Args {
 	noTitle?: boolean;
 	/** `--mode rpc` only: run extensions without a UI so no `extension_ui_request` dialogs reach the host. */
 	noUi?: boolean;
+	/** `--mode rpc-ui` only: project mode — one process hosts many sessions of the startup cwd (rpc-ui-protocol.md §4.1). */
+	rpcProject?: boolean;
 	autoApprove?: boolean;
 	approvalMode?: "always-ask" | "write" | "yolo";
 	messages: string[];
@@ -298,6 +300,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noTitle = true;
 		} else if (arg === "--no-ui") {
 			result.noUi = true;
+		} else if (arg === "--rpc-project") {
+			result.rpcProject = true;
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {
