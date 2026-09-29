@@ -326,15 +326,18 @@ type SearchParams = typeof searchSchema.infer;
 /**
  * Construction-time overrides for callers that are not the model.
  *
- * The model-facing schema deliberately does not grow these: they exist for
- * wire bridges (the Cursor `pi_grep` frame) whose protocol carries an explicit
- * context width and total match cap, and which would otherwise have to drop
- * them. Unset means "use the session settings / built-in caps" — the behavior
- * every model-issued call keeps.
+ * The model-facing schema deliberately does not grow these: Cursor's native
+ * grep frames carry context widths and match caps that the shared tool cannot
+ * accept per call. Unset means "use session settings / built-in caps" for
+ * ordinary model-issued calls.
  */
 export interface GrepToolOptions {
-	/** Overrides `grep.contextBefore`/`grep.contextAfter` for every call on this instance. */
+	/** Overrides both context widths unless the corresponding direction is also supplied. */
 	context?: number;
+	/** Overrides the number of lines before each match. */
+	contextBefore?: number;
+	/** Overrides the number of lines after each match. */
+	contextAfter?: number;
 	/** Caps total surfaced matches. Applied on top of the built-in per-file and file-window caps, never above them. */
 	totalMatchLimit?: number;
 }
@@ -365,15 +368,18 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 	readonly parameters = searchSchema;
 	readonly strict = true;
 
-	readonly #contextOverride?: number;
+	readonly #contextBeforeOverride?: number;
+	readonly #contextAfterOverride?: number;
 	readonly #totalMatchLimit?: number;
 
 	constructor(
 		private readonly session: ToolSession,
 		options?: GrepToolOptions,
 	) {
-		const context = options?.context;
-		this.#contextOverride = context !== undefined ? Math.max(0, Math.floor(context)) : undefined;
+		const before = options?.contextBefore ?? options?.context;
+		const after = options?.contextAfter ?? options?.context;
+		this.#contextBeforeOverride = before !== undefined ? Math.max(0, Math.floor(before)) : undefined;
+		this.#contextAfterOverride = after !== undefined ? Math.max(0, Math.floor(after)) : undefined;
 		const total = options?.totalMatchLimit;
 		this.#totalMatchLimit = total !== undefined ? Math.max(1, Math.floor(total)) : undefined;
 	}
@@ -442,8 +448,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							`or pass a UTF-8 text member.`,
 					);
 				}
-				const normalizedContextBefore = this.#contextOverride ?? cfgGrepContextBefore.get(this.session.settings);
-				const normalizedContextAfter = this.#contextOverride ?? cfgGrepContextAfter.get(this.session.settings);
+				const normalizedContextBefore =
+					this.#contextBeforeOverride ?? cfgGrepContextBefore.get(this.session.settings);
+				const normalizedContextAfter = this.#contextAfterOverride ?? cfgGrepContextAfter.get(this.session.settings);
 				const ignoreCase = !(caseSensitive ?? true);
 				const useGitignore = gitignore ?? true;
 				const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
@@ -579,8 +586,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							totalMatches += targetResult.totalMatches;
 							filesSearched += targetResult.filesSearched;
 							for (const match of targetResult.matches) {
-								const resolved = resolveSearchResultPath(target.basePath, match.path);
-								const absolute = router.canHandle(resolved) ? resolved : path.resolve(resolved);
+								const absolute = resolveSearchResultPath(target.basePath, match.path);
 								// Overlapping targets (a directory plus a file nested
 								// inside it) surface the same physical line twice;
 								// keep the first occurrence.
@@ -639,12 +645,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
-						const resolved = resolveSearchResultPath(searchPath, match.path);
-						const abs = router.canHandle(resolved) ? resolved : path.resolve(resolved);
-						// On Windows the native search reports absolute match paths with
-						// `/` separators while the range keys are `path.resolve` forms, so
-						// canonicalize before the lookup or the filter silently misses.
-						const ranges = rangesByAbsPath.get(abs);
+						const abs = resolveSearchResultPath(searchPath, match.path);
+						// Native absolute matches can retain forward slashes on Windows; range keys use path.resolve.
+						const ranges = rangesByAbsPath.get(path.isAbsolute(match.path) ? path.resolve(abs) : abs);
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);
@@ -671,8 +674,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				}
 				if (archiveDisplayMap.size > 0) {
 					for (const match of result.matches) {
-						const resolved = resolveSearchResultPath(searchPath, match.path);
-						const display = archiveDisplayMap.get(router.canHandle(resolved) ? resolved : path.resolve(resolved));
+						const display = archiveDisplayMap.get(resolveSearchResultPath(searchPath, match.path));
 						if (display) match.path = display;
 					}
 				}

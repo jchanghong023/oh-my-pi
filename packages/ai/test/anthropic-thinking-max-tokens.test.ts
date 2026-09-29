@@ -68,6 +68,15 @@ describe("Anthropic thinking leaves a capped request its output budget", () => {
 		expect(payload.max_tokens).toBe(13_107 + ANTHROPIC_THINKING.high);
 	});
 
+	it("disables thinking when the output ceiling cannot fit its minimum budget", async () => {
+		const payload = await wirePayload(anthropicModel("claude-sonnet-4-5", 5_000), {
+			maxTokens: 3_000,
+			reasoning: Effort.High,
+		});
+		expect(payload.max_tokens).toBe(3_000);
+		expect(payload.thinking?.type).not.toBe("enabled");
+	});
+
 	it("keeps a custom minimal thinking budget when the model can raise the total cap", async () => {
 		const payload = await wirePayload(anthropicModel("claude-sonnet-4-5", 8_192), {
 			maxTokens: 3_000,
@@ -85,15 +94,6 @@ describe("Anthropic thinking leaves a capped request its output budget", () => {
 		});
 		expect(payload.max_tokens).toBe(6_000);
 		expect(payload.thinking).toMatchObject({ type: "enabled", budget_tokens: 6_000 - 4_000 });
-	});
-
-	it("disables thinking when the output ceiling cannot fit its minimum budget", async () => {
-		const payload = await wirePayload(anthropicModel("claude-sonnet-4-5", 5_000), {
-			maxTokens: 3_000,
-			reasoning: Effort.High,
-		});
-		expect(payload.max_tokens).toBe(3_000);
-		expect(payload.thinking?.type).not.toBe("enabled");
 	});
 
 	it("never raises a capped request above the model's output ceiling", async () => {
