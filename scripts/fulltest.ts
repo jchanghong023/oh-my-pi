@@ -243,6 +243,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/rpc-project-protocol.test.ts",
 			"test/rpc-project-sessions.test.ts",
 			"test/rpc-project-skills.test.ts",
+			"test/rpc-project-subagents.test.ts",
 		],
 	},
 	{
@@ -250,9 +251,11 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		cwd: "packages/coding-agent",
 		files: [
 			"test/agent-session-magic-keywords.test.ts",
+			"test/agent-session-tool-rebuild-skip.test.ts",
 			"test/bench-offline-company.test.ts",
 			"test/cli-log-file-flag.test.ts",
 			"test/cli-offline-flag.test.ts",
+			"test/cli/update-cli.test.ts",
 			"test/collab/host-startup-close.test.ts",
 			"test/collab/guest-commands.test.ts",
 			"test/collab/identity.test.ts",
@@ -261,6 +264,7 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/docs-cli.test.ts",
 			"test/docs-hub.test.ts",
 			"test/docs-index.test.ts",
+			"test/fs-tuning-env.test.ts",
 			"test/main-rebuild-scoped-models.test.ts",
 			"test/memory-tools.test.ts",
 			"test/mnemopi-company-embeddings.test.ts",
@@ -273,9 +277,11 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/repo-index.test.ts",
 			"test/repo-lifecycle.test.ts",
 			"test/repo-tool.test.ts",
+			"test/skills.test.ts",
 			"test/slash-commands/jch-git.test.ts",
 			"test/slash-commands/magic-keywords.test.ts",
 			"test/slash-commands/team-command.test.ts",
+			"test/stt-preflight.test.ts",
 			"test/team/controller.test.ts",
 			"test/team/integration.test.ts",
 			"test/team/members.test.ts",
@@ -287,6 +293,13 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/wiki-tool.test.ts",
 			"test/zcode-api-models.test.ts",
 		],
+	},
+	{
+		// Fork web-guest completion logic (fork commit fc3326e5f9): the slash
+		// palette + host directory candidates the browser composer serves.
+		label: "collab-web/fork-features",
+		cwd: "packages/collab-web",
+		files: ["test/composer.test.tsx"],
 	},
 ];
 

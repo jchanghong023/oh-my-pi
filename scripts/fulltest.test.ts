@@ -88,7 +88,7 @@ describe("whitelist green set", () => {
 			expect(group.cwd.startsWith("packages/")).toBe(true);
 			expect(group.files.length).toBeGreaterThan(0);
 			for (const file of group.files) {
-				expect(file.endsWith(".test.ts")).toBe(true);
+				expect(file.endsWith(".test.ts") || file.endsWith(".test.tsx")).toBe(true);
 				expect(file.startsWith("test/") || file.startsWith("bench/")).toBe(true);
 			}
 		}

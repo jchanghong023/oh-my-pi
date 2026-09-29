@@ -748,7 +748,7 @@ OMP 侧 B1/B2/D1/E1/F 的项目模式骨架与核心接口已实施；每包状�
 | D2 命令执行与交互 | 已实现（execute_command 复用 prompt inputMode=auto 严格分发；未知命令不落模型） | `rpc-project.ts` #executeCommand；`rpc-session-host.ts` prompt 分支的 inputMode 语义 | `test/rpc-project-protocol.test.ts` 第 7/8 项 |
 | C 技能服务 | 已实现，单元验证通过（O06 的目录区分部分） | `extensibility/skills.ts` 增补 `loadSkillsWithShadowed`（同名覆盖可见）；`modes/rpc/rpc-project-skills.ts`：management/effective 双视图、set_skill_enabled/copy（重写 frontmatter name 生成新身份）/delete（仅可管理目录）/reload（resetCapabilities + 会话采用报告） | `test/rpc-project-skills.test.ts`（6 项） |
 | E1 消息接入 | 已实现（会话级 prompt/abort/历史经 sessionId 路由到既有链路；text/auto 语义） | `rpc-project.ts` 会话路由 + `rpc-session-host.ts` | `test/rpc-project-protocol.test.ts` 第 7 项；O19 完整流式/停止/失败矩阵未验证（需真实模型） |
-| E2 子代理协作与恢复 | 已实现（持久目录按会话 artifacts 扫描、记录读取带归属解析与 record_too_large、control_subagent send_message/stop 复用 IRC/registry 终止） | `modes/rpc/rpc-project-subagents.ts` | 单元/E2E 覆盖待补（本轮未写专项测试文件；O20—O22 未验证） |
+| E2 子代理协作与恢复 | 已实现（持久目录按会话 artifacts 扫描、记录读取带归属解析与 record_too_large、control_subagent send_message/stop 复用 IRC/registry 终止） | `modes/rpc/rpc-project-subagents.ts` | 专项单元测试已补：`test/rpc-project-subagents.test.ts`（22 项，覆盖目录合并与 live 优先、终态规则、扫描排除/嵌套、分页校验、窗口读取/续读/record_too_large/reset/EOF、控制入口校验与投递映射）；O20—O22 的多会话/重启 E2E 集成仍未验证 |
 | F 模型和 role | 已实现，单元验证通过（O24 全量 role、O25 落盘与修订冲突） | `modes/rpc/rpc-project-models.ts`：get_model_roles（零配置/零模型返回全部内置 role）、set_model_role（逐 role 修订、flush 落盘、来源回读）；`rpc-fork-config.ts`/`rpc-fork-manage.ts` 支持零会话 service-context 构造 | `test/rpc-project-models.test.ts`（7 项） |
 | G 兼容与收尾 | 已实现（旧单会话模式行为保留；全量既有 rpc/rpc-fork 测试回归通过） | `rpc-mode.ts` 重构为传输壳后保持全部导出与行为 | 既有 18 个 rpc*.test.ts 全绿（108 pass）；O15—O17 剩余矩阵未逐项验证 |
 | Z1/Z2 桌面接入 | 未开始 | — | — |
