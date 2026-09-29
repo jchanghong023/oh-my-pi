@@ -253,6 +253,20 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	}
 	trackParticipant("alignment", "aligner", "completed");
 
+	// Initial review and recheck read the same question/proposal context; the
+	// fields a review sees must not drift between the two rounds.
+	const reviewTaskBase = (record: TeamProposalRecord) => ({
+		question,
+		cwd,
+		alignment,
+		targetLabel: record.label,
+		proposalText: record.latestProposal!.proposal,
+		keyAssumptions: record.latestProposal!.keyAssumptions,
+		risks: record.latestProposal!.risks,
+		unknowns: record.latestProposal!.unknowns,
+		evidence: record.latestProposal!.evidence,
+	});
+
 	// ── Stage 3 + 4: cross review, then revision/recheck rounds ─────────────
 	// Only proposals intended as final options get reviewed (§2.5); no-viable
 	// and failed proposals remain in the alignment/synthesis inputs instead.
@@ -269,19 +283,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					role: "reviewer",
 					modelPattern: reviewer.modelPattern,
 					label: `team-review-${record.label}`,
-					task: buildReviewTask({
-						question,
-						cwd,
-						alignment,
-						targetLabel: record.label,
-						proposalText: record.latestProposal!.proposal,
-						keyAssumptions: record.latestProposal!.keyAssumptions,
-						risks: record.latestProposal!.risks,
-						unknowns: record.latestProposal!.unknowns,
-						evidence: record.latestProposal!.evidence,
-						round: 1,
-						recheck: false,
-					}),
+					task: buildReviewTask({ ...reviewTaskBase(record), round: 1, recheck: false }),
 					schema: TEAM_REVIEW_SCHEMA,
 				});
 				if (signal.aborted) return;
@@ -355,15 +357,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					modelPattern: record.reviewer!.modelPattern,
 					label: `team-recheck-${record.label}-${round}`,
 					task: buildReviewTask({
-						question,
-						cwd,
-						alignment,
-						targetLabel: record.label,
-						proposalText: record.latestProposal!.proposal,
-						keyAssumptions: record.latestProposal!.keyAssumptions,
-						risks: record.latestProposal!.risks,
-						unknowns: record.latestProposal!.unknowns,
-						evidence: record.latestProposal!.evidence,
+						...reviewTaskBase(record),
 						round,
 						recheck: true,
 						unresolvedBlocking: record.unresolvedBlocking,

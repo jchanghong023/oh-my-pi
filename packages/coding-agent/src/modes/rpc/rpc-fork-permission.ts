@@ -348,32 +348,36 @@ export class RpcForkPermissionController {
 		this.#active = true;
 		this.session.setClientBridge(this.#bridge());
 		subagentDelegates.set(this.session.settings, ({ subagentId, agentType, toolCall, signal }) => {
-			if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
-			return requestRpcPermission(
-				this.#resolutionHost(),
-				this.#pending,
-				frame => this.host.context.emit(frame),
-				toolCall,
-				signal,
-				{ subagentId, agentType },
-			);
+			return this.#requestPermission(toolCall, signal, { subagentId, agentType });
 		});
 	}
 
 	#bridge(): ClientBridge {
 		return {
 			capabilities: { requestPermission: true },
-			requestPermission: (toolCall, _options, signal) => {
-				if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
-				return requestRpcPermission(
-					this.#resolutionHost(),
-					this.#pending,
-					frame => this.host.context.emit(frame),
-					toolCall,
-					signal,
-				);
-			},
+			requestPermission: (toolCall, _options, signal) => this.#requestPermission(toolCall, signal),
 		};
+	}
+
+	/**
+	 * Shared fail-closed request path for the main-session bridge and subagent
+	 * delegates: disposed owners reject, everything else settles through
+	 * `requestRpcPermission` on this controller's pending map and emit sink.
+	 */
+	#requestPermission(
+		toolCall: ClientBridgePermissionToolCall,
+		signal: AbortSignal | undefined,
+		origin?: RpcPermissionOrigin,
+	): Promise<ClientBridgePermissionOutcome> {
+		if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
+		return requestRpcPermission(
+			this.#resolutionHost(),
+			this.#pending,
+			frame => this.host.context.emit(frame),
+			toolCall,
+			signal,
+			origin,
+		);
 	}
 
 	#resolutionHost(): PermissionResolutionHost {

@@ -63,6 +63,11 @@ export class RpcProjectSkillError extends Error {
 	}
 }
 
+/** Render an unknown thrown value as the service error message. */
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 /** Collaborators the skill service needs from the project-mode host. */
 export interface RpcProjectSkillServiceDeps {
 	/** Project root; fixed by the startup cwd in project mode. */
@@ -152,7 +157,6 @@ function isWithinDir(parent: string, child: string): boolean {
 	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-/** Whether the path exists (false on any stat error). */
 /** Rewrite (or insert) the frontmatter `name` of a SKILL.md so the copy owns its new identity. */
 async function rewriteSkillFrontmatterName(skillMdPath: string, name: string): Promise<void> {
 	let content = await fs.readFile(skillMdPath, "utf8");
@@ -169,6 +173,7 @@ async function rewriteSkillFrontmatterName(skillMdPath: string, name: string): P
 	await fs.writeFile(skillMdPath, `---\nname: ${name}\ndescription: copied skill\n---\n\n${content}`);
 }
 
+/** Whether the path exists (false on any stat error). */
 async function pathExists(target: string): Promise<boolean> {
 	try {
 		await fs.stat(target);
@@ -183,7 +188,7 @@ function parseSkillIdOrThrow(skillId: string): { source: string; name: string } 
 	try {
 		return parseRpcSkillId(skillId);
 	} catch (error) {
-		throw new RpcProjectSkillError("invalid_params", error instanceof Error ? error.message : String(error));
+		throw new RpcProjectSkillError("invalid_params", errorMessage(error));
 	}
 }
 
@@ -274,7 +279,7 @@ export class RpcProjectSkillService {
 		} catch (error) {
 			throw new RpcProjectSkillError(
 				"persistence_failed",
-				`Failed to persist skill settings for ${skillId}: ${error instanceof Error ? error.message : String(error)}`,
+				`Failed to persist skill settings for ${skillId}: ${errorMessage(error)}`,
 			);
 		}
 		resetCapabilities();
@@ -331,7 +336,7 @@ export class RpcProjectSkillService {
 		} catch (error) {
 			throw new RpcProjectSkillError(
 				"execution_failed",
-				`Failed to copy ${skill.baseDir} to ${targetDir}: ${error instanceof Error ? error.message : String(error)}`,
+				`Failed to copy ${skill.baseDir} to ${targetDir}: ${errorMessage(error)}`,
 			);
 		}
 		resetCapabilities();
@@ -370,7 +375,7 @@ export class RpcProjectSkillService {
 		} catch (error) {
 			throw new RpcProjectSkillError(
 				"execution_failed",
-				`Failed to delete ${skill.baseDir}: ${error instanceof Error ? error.message : String(error)}`,
+				`Failed to delete ${skill.baseDir}: ${errorMessage(error)}`,
 			);
 		}
 		resetCapabilities();

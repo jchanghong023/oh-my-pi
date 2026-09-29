@@ -44,6 +44,11 @@ import type { RpcResponse } from "./rpc-types";
 
 const MASKED_CREDENTIAL = "••••••••";
 
+/** Render an unknown thrown value as the wire error message. */
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 /** Legal models.yml `api` values — must stay aligned with ApiSchema in config/models-config-schema-bundle.ts. */
 const PROVIDER_APIS: readonly ProviderValidationConfig["api"][] = [
 	"openai-completions",
@@ -239,11 +244,7 @@ export class RpcForkConfigController {
 		try {
 			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().set(key, value));
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"set_settings",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "set_settings", errorMessage(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "set_settings", { key });
@@ -268,11 +269,7 @@ export class RpcForkConfigController {
 		try {
 			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().unset(key));
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"unset_settings",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "unset_settings", errorMessage(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "unset_settings", { key });
@@ -424,22 +421,14 @@ export class RpcForkConfigController {
 		try {
 			validateProviderConfiguration(name, { ...payload, models: payload.models ?? [] }, "models-config");
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"upsert_provider",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
 		}
 		let config: Record<string, unknown>;
 		try {
 			this.#assertModelsConfigLoadable();
 			config = await this.#readModelsConfig();
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"upsert_provider",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
 		}
 		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
 		providers[name] = {
@@ -453,11 +442,7 @@ export class RpcForkConfigController {
 		try {
 			await this.#writeModelsConfig({ ...config, providers });
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"upsert_provider",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "upsert_provider", { provider: name });
@@ -473,11 +458,7 @@ export class RpcForkConfigController {
 			this.#assertModelsConfigLoadable();
 			config = await this.#readModelsConfig();
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"delete_provider",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "delete_provider", errorMessage(error));
 		}
 		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
 		if (!Object.hasOwn(providers, name.trim())) {
@@ -492,11 +473,7 @@ export class RpcForkConfigController {
 		try {
 			await this.#writeModelsConfig({ ...config, providers });
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"delete_provider",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "delete_provider", errorMessage(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "delete_provider", { provider: name.trim() });
@@ -638,7 +615,7 @@ export class RpcForkConfigController {
 			return this.host.context.success(command.id, "test_model", {
 				ok: false,
 				latencyMs: Date.now() - startedAt,
-				error: classifyModelTestError(error instanceof Error ? error.message : String(error)),
+				error: classifyModelTestError(errorMessage(error)),
 			} satisfies RpcForkModelTestResult);
 		}
 	}

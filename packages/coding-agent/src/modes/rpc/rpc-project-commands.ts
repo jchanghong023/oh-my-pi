@@ -37,6 +37,7 @@ import {
 	type RpcCommandAvailability,
 	type RpcProjectCommandDescriptor,
 	type RpcProjectCompletionItem,
+	type RpcProjectCompletionKind,
 	type RpcProjectCompletionResult,
 	type RpcRevision,
 } from "./rpc-project-types";
@@ -389,38 +390,35 @@ export class RpcCommandCatalogService {
 	#completeCommandName(head: string, entries: readonly RpcCommandCatalogEntry[]): RpcProjectCompletionItem[] {
 		const query = head.slice(1).toLowerCase();
 		const scored: Array<{ score: number; item: RpcProjectCompletionItem }> = [];
+		const pushCandidate = (
+			entry: RpcCommandCatalogEntry,
+			label: string,
+			score: number,
+			kind: RpcProjectCompletionKind,
+		): void => {
+			if (score <= 0) return;
+			scored.push({
+				score,
+				item: {
+					label,
+					insertText: `/${label} `,
+					replaceStart: 0,
+					replaceEnd: head.length,
+					kind,
+					...(entry.description ? { description: entry.description } : {}),
+					...(entry.inputHint ? { hint: entry.inputHint } : {}),
+				},
+			});
+		};
 		for (const entry of entries) {
-			const kind = entry.source === "skill" ? "skill" : "command";
-			const score = scoreCommandText(entry.name, query);
-			if (score > 0) {
-				scored.push({
-					score,
-					item: {
-						label: entry.name,
-						insertText: `/${entry.name} `,
-						replaceStart: 0,
-						replaceEnd: head.length,
-						kind,
-						...(entry.description ? { description: entry.description } : {}),
-						...(entry.inputHint ? { hint: entry.inputHint } : {}),
-					},
-				});
-			}
+			pushCandidate(
+				entry,
+				entry.name,
+				scoreCommandText(entry.name, query),
+				entry.source === "skill" ? "skill" : "command",
+			);
 			for (const alias of entry.aliases ?? []) {
-				const aliasScore = scoreCommandText(alias, query);
-				if (aliasScore <= 0) continue;
-				scored.push({
-					score: aliasScore,
-					item: {
-						label: alias,
-						insertText: `/${alias} `,
-						replaceStart: 0,
-						replaceEnd: head.length,
-						kind: "command",
-						...(entry.description ? { description: entry.description } : {}),
-						...(entry.inputHint ? { hint: entry.inputHint } : {}),
-					},
-				});
+				pushCandidate(entry, alias, scoreCommandText(alias, query), "command");
 			}
 		}
 		scored.sort((a, b) => b.score - a.score || a.item.label.localeCompare(b.item.label));

@@ -51,6 +51,11 @@ import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
 
+/** Render an unknown thrown value as the wire error message. */
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 interface CachedMcpStatus {
 	status: "connected" | "failed" | "reconnecting";
 	failureClass?: MCPFailureClass | "unknown";
@@ -163,16 +168,12 @@ export class RpcForkManageController {
 				await addMCPServer(filePath, name, config as unknown as MCPServerConfig);
 			}
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"upsert_mcp_server",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "upsert_mcp_server", errorMessage(error));
 		}
-		this.emitSettingsChanged(scope === "user" ? "user" : "project");
+		this.emitSettingsChanged(scope);
 		return this.host.context.success(command.id, "upsert_mcp_server", {
 			name,
-			scope: scope === "user" ? "user" : "project",
+			scope,
 		});
 	}
 
@@ -189,13 +190,9 @@ export class RpcForkManageController {
 		try {
 			await removeMCPServer(filePath, name);
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"delete_mcp_server",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "delete_mcp_server", errorMessage(error));
 		}
-		this.emitSettingsChanged(scope === "user" ? "user" : "project");
+		this.emitSettingsChanged(scope);
 		return this.host.context.success(command.id, "delete_mcp_server", { name });
 	}
 
@@ -207,11 +204,7 @@ export class RpcForkManageController {
 		try {
 			await setServerDisabled(this.#mcpPaths().userPath, name, disabled);
 		} catch (error) {
-			return this.host.context.error(
-				command.id,
-				"set_mcp_server_disabled",
-				error instanceof Error ? error.message : String(error),
-			);
+			return this.host.context.error(command.id, "set_mcp_server_disabled", errorMessage(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "set_mcp_server_disabled", { name, disabled });

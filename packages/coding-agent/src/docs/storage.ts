@@ -35,7 +35,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(section_id UNINDEXED,
 const CONTENTLESS_FTS_SQL =
 	"CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED, index_id UNINDEXED, relative_path, heading_path, body, content='', contentless_delete=1)";
 
-function normalizeFtsContent(text: string): string {
+/**
+ * Text normalization for the FTS index. Every indexing path — fresh imports
+ * (`service.ts`) and schema migrations below — must tokenize through this one
+ * function: a query-side mismatch would silently zero out matches.
+ */
+export function normalizeFts(text: string): string {
 	return text
 		.normalize("NFKC")
 		.replace(/[\u3400-\u4dbf\u4e00-\u9fff]/gu, character => ` ${character} `)
@@ -133,9 +138,9 @@ export class DocsStorage {
 								row.id,
 								row.id,
 								row.index_id,
-								row.ordinal === 0 ? normalizeFtsContent(row.relative_path) : "",
-								normalizeFtsContent(row.heading_path),
-								normalizeFtsContent(row.body),
+								row.ordinal === 0 ? normalizeFts(row.relative_path) : "",
+								normalizeFts(row.heading_path),
+								normalizeFts(row.body),
 							);
 					}
 					for (const table of ["evidence", "entity_aliases", "assertions", "relations", "entities"])

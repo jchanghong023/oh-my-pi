@@ -92,6 +92,11 @@ export type PendingExtensionRequest = {
 	reject: (error: Error) => void;
 };
 
+/** Render an unknown thrown value as the wire error message. */
+function errorMessage(value: unknown): string {
+	return value instanceof Error ? value.message : String(value);
+}
+
 /** Pending extension UI request map that can fail closed when the RPC client disconnects. */
 export class RpcPendingExtensionRequests extends Map<string, PendingExtensionRequest> {
 	#closedError: Error | undefined;
@@ -1161,11 +1166,7 @@ export class RpcSessionHost {
 							if (builtinResult.agentInvoked === true) {
 								void session.waitForIdle().then(
 									() => this.promptResults.settle(ticket),
-									(idleError: unknown) =>
-										this.promptResults.fail(
-											ticket,
-											idleError instanceof Error ? idleError.message : String(idleError),
-										),
+									(idleError: unknown) => this.promptResults.fail(ticket, errorMessage(idleError)),
 								);
 							} else {
 								// Completed synchronously: `data.agentInvoked: false` is the completion signal.
@@ -1349,7 +1350,7 @@ export class RpcSessionHost {
 						),
 					);
 				} catch (err) {
-					return this.error(id, "get_entries", err instanceof Error ? err.message : String(err), "unknown_since");
+					return this.error(id, "get_entries", errorMessage(err), "unknown_since");
 				}
 			}
 
@@ -1377,7 +1378,7 @@ export class RpcSessionHost {
 					const schemes = this.hostUriBridge.setSchemes(command.schemes);
 					return this.success(id, "set_host_uri_schemes", { schemes });
 				} catch (err) {
-					return this.error(id, "set_host_uri_schemes", err instanceof Error ? err.message : String(err));
+					return this.error(id, "set_host_uri_schemes", errorMessage(err));
 				}
 			}
 
@@ -1432,7 +1433,7 @@ export class RpcSessionHost {
 					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
 					return this.success(id, "get_subagent_messages", transcript);
 				} catch (err) {
-					return this.error(id, "get_subagent_messages", err instanceof Error ? err.message : String(err));
+					return this.error(id, "get_subagent_messages", errorMessage(err));
 				}
 			}
 
@@ -1647,7 +1648,7 @@ export class RpcSessionHost {
 					return this.error(
 						id,
 						"get_messages_page",
-						pageError instanceof Error ? pageError.message : String(pageError),
+						errorMessage(pageError),
 						pageError instanceof RpcMessagesPageError ? pageError.code : undefined,
 					);
 				}
@@ -1731,7 +1732,7 @@ export class RpcSessionHost {
 					await session.modelRegistry.refreshProvider(command.providerId, "online");
 					return this.success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
-					return this.error(id, "login", err instanceof Error ? err.message : String(err));
+					return this.error(id, "login", errorMessage(err));
 				}
 			}
 

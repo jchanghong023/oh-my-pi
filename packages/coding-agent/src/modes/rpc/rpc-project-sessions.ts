@@ -143,16 +143,25 @@ function deriveRunState(record: RpcProjectSessionRecord): RpcProjectSessionRunSt
 	return "idle";
 }
 
-/** Summary built from an in-memory record (no disk scan); `revision` is required by the wire type. */
-export function buildSessionSummary(record: RpcProjectSessionRecord, revision: RpcRevision): RpcProjectSessionSummary {
+/** Live fields any hosted record projects over a base summary (wire order preserved). */
+function liveRecordFields(
+	record: RpcProjectSessionRecord,
+): Pick<RpcProjectSessionSummary, "name" | "sessionFile" | "loadState" | "runState" | "sessionGeneration"> {
 	const session = record.session;
 	return {
-		sessionId: record.sessionId,
 		...(session.sessionName ? { name: session.sessionName } : {}),
 		...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
 		loadState: record.state,
 		runState: deriveRunState(record),
 		sessionGeneration: record.sessionGeneration,
+	};
+}
+
+/** Summary built from an in-memory record (no disk scan); `revision` is required by the wire type. */
+export function buildSessionSummary(record: RpcProjectSessionRecord, revision: RpcRevision): RpcProjectSessionSummary {
+	return {
+		sessionId: record.sessionId,
+		...liveRecordFields(record),
 		createdAt: record.createdAt,
 		revision,
 	};
@@ -178,14 +187,9 @@ function mergeListedWithRecord(
 	record: RpcProjectSessionRecord,
 	revision: RpcRevision,
 ): RpcProjectSessionSummary {
-	const session = record.session;
 	return {
 		...base,
-		...(session.sessionName ? { name: session.sessionName } : {}),
-		...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
-		loadState: record.state,
-		runState: deriveRunState(record),
-		sessionGeneration: record.sessionGeneration,
+		...liveRecordFields(record),
 		revision,
 	};
 }

@@ -257,22 +257,8 @@ class RpcProjectHost {
 		this.#configForkHost = new RpcForkHost({
 			session: undefined as unknown as AgentSession,
 			emit: frame => this.#emitProjectFrame(frame),
-			success: (id, command, data) =>
-				({
-					id,
-					type: "response" as const,
-					command,
-					success: true,
-					...(data === undefined ? {} : { data }),
-				}) as RpcResponse,
-			error: (id, command, message, code) => ({
-				id,
-				type: "response" as const,
-				command,
-				success: false,
-				error: message,
-				...(code === undefined ? {} : { code }),
-			}),
+			success: (id, command, data) => this.#successResponse(id, command, data),
+			error: (id, command, message, code) => this.#errorResponse(id, command, message, code),
 		});
 		new RpcForkConfigController(this.#configForkHost, serviceContext);
 		new RpcForkManageController(this.#configForkHost, serviceContext, undefined, { agentDir: getAgentDir() });
@@ -873,18 +859,27 @@ class RpcProjectHost {
 		return promptResponse;
 	}
 
-	async #closeSession(
-		sessionId: string,
-		cancelRunning: boolean,
-	): Promise<{ state: "unloaded"; revision: RpcRevision }> {
+	/**
+	 * Release one session's host-side bookkeeping after the container tore the
+	 * record down: best-effort host dispose, then drop the host, pending skill
+	 * refresh, and interaction-routing entries owned by this session.
+	 */
+	async #teardownSessionHost(sessionId: string, reason: string): Promise<void> {
 		const host = this.#getSessionHost(sessionId);
-		const result = await this.#container.close(sessionId, { cancelRunning });
-		if (host) await host.dispose("session_closed").catch(() => {});
+		if (host) await host.dispose(reason).catch(() => {});
 		this.#sessionHosts.delete(sessionId);
 		this.#pendingSkillRefresh.delete(sessionId);
 		for (const [interactionId, owner] of this.#interactions) {
 			if (owner === sessionId) this.#interactions.delete(interactionId);
 		}
+	}
+
+	async #closeSession(
+		sessionId: string,
+		cancelRunning: boolean,
+	): Promise<{ state: "unloaded"; revision: RpcRevision }> {
+		const result = await this.#container.close(sessionId, { cancelRunning });
+		await this.#teardownSessionHost(sessionId, "session_closed");
 		return result;
 	}
 
@@ -893,14 +888,8 @@ class RpcProjectHost {
 		cancelRunning: boolean,
 		expectedRevision: string | undefined,
 	): Promise<{ revision: RpcRevision }> {
-		const host = this.#getSessionHost(sessionId);
 		const result = await this.#container.delete(sessionId, { cancelRunning, expectedRevision });
-		if (host) await host.dispose("session_deleted").catch(() => {});
-		this.#sessionHosts.delete(sessionId);
-		this.#pendingSkillRefresh.delete(sessionId);
-		for (const [interactionId, owner] of this.#interactions) {
-			if (owner === sessionId) this.#interactions.delete(interactionId);
-		}
+		await this.#teardownSessionHost(sessionId, "session_deleted");
 		return result;
 	}
 
@@ -986,7 +975,7 @@ class RpcProjectHost {
 		throw new RpcProjectGateError(id, type, "Negotiate protocol version 3 before using project commands");
 	}
 
-	#successResponse(id: string | undefined, command: string, data?: object): RpcResponse {
+	#successResponse(id: string | undefined, command: string, data?: object | null): RpcResponse {
 		return {
 			id,
 			type: "response",

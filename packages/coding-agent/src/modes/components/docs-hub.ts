@@ -20,6 +20,11 @@ function sanitizeTerminalLine(text: string): string {
 	return sanitizeTerminalText(text).replace(/\n+/g, " ");
 }
 
+/** Failure text for panel display: message extraction plus terminal sanitization. */
+function errorLine(error: unknown): string {
+	return sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+}
+
 export class DocsHubComponent implements Component {
 	#indexes: DocsIndexSummary[] = [];
 	#selected = 0;
@@ -95,7 +100,7 @@ export class DocsHubComponent implements Component {
 			.then(() => undefined)
 			.catch(error => {
 				if (!(error instanceof Error && error.name === "AbortError")) {
-					this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+					this.#latestError = errorLine(error);
 				}
 			})
 			.finally(() => {
@@ -138,7 +143,7 @@ export class DocsHubComponent implements Component {
 			const hits = result.sections.length;
 			this.#detail = [`Section hits: ${result.total ?? (hits >= limit ? `${hits}+` : `${hits}`)}`];
 		} catch (error) {
-			this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+			this.#latestError = errorLine(error);
 		}
 		this.tui.requestRender();
 	}
@@ -158,7 +163,7 @@ export class DocsHubComponent implements Component {
 			];
 			this.#hits = [];
 		} catch (error) {
-			this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+			this.#latestError = errorLine(error);
 		}
 		this.tui.requestRender();
 	}
@@ -188,7 +193,7 @@ export class DocsHubComponent implements Component {
 						this.service.remove(name);
 						this.#latestError = undefined;
 					} catch (error) {
-						this.#latestError = sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
+						this.#latestError = errorLine(error);
 					}
 				}
 				this.#mode = "list";

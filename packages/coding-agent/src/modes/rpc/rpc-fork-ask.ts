@@ -117,12 +117,17 @@ export class RpcForkAskBroker {
 		let settled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 
-		const finish = (result: ExtensionAskDialogResult | undefined) => {
-			if (settled) return;
-			settled = true;
+		// Shared settle cleanup: stop the countdown, unsubscribe the abort
+		// listener, and drop the pending entry — whichever side settles first.
+		const cleanup = () => {
 			if (timer !== undefined) clearTimeout(timer);
 			dialogOptions?.signal?.removeEventListener("abort", onAbort);
 			this.#pending.delete(id);
+		};
+		const finish = (result: ExtensionAskDialogResult | undefined) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
 			resolve(result);
 		};
 		const onTimeout = () => {
@@ -175,9 +180,7 @@ export class RpcForkAskBroker {
 			reject: (error: Error) => {
 				if (settled) return;
 				settled = true;
-				if (timer !== undefined) clearTimeout(timer);
-				dialogOptions?.signal?.removeEventListener("abort", onAbort);
-				this.#pending.delete(id);
+				cleanup();
 				reject(error);
 			},
 		});

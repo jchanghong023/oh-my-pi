@@ -37,6 +37,10 @@ function check(signal?: AbortSignal): void {
 function escapeLike(value: string): string {
 	return value.replace(/[\\%_]/g, "\\$&");
 }
+/** A .py file whose syntax tree carries errors is indexed without symbols and reported as a parse failure. */
+function pythonParseFailure(path: string): RepoFailure {
+	return { path, kind: "parse", message: "Python syntax tree contains parse errors; symbols omitted" };
+}
 /** Map a UTF-16 offset in lowercased text back to the original source. */
 function originalOffset(text: string, loweredOffset: number): number {
 	let source = 0;
@@ -302,12 +306,7 @@ export class RepoService {
 						if (current && current.hash === result.file.hash) unchanged.add(rel);
 						else {
 							indexed = await this.#extract(result.file, signal);
-							if (rel.endsWith(".py") && indexed.symbols.length === 0)
-								failure = {
-									path: rel,
-									kind: "parse",
-									message: "Python syntax tree contains parse errors; symbols omitted",
-								};
+							if (rel.endsWith(".py") && indexed.symbols.length === 0) failure = pythonParseFailure(rel);
 						}
 					}
 					if (indexed || failure) {
@@ -433,11 +432,7 @@ export class RepoService {
 							failure:
 								result.failure ??
 								(file && row.path.endsWith(".py") && !file.symbols.length
-									? {
-											path: row.path,
-											kind: "parse",
-											message: "Python syntax tree contains parse errors; symbols omitted",
-										}
+									? pythonParseFailure(row.path)
 									: undefined),
 						});
 					}

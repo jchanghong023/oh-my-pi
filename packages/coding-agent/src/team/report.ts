@@ -54,13 +54,18 @@ function statusLine(record: TeamProposalRecord): string {
 	return "✅ 可作为选项";
 }
 
+/** §2.8 adoptability: offered as a final option, with no unresolved blocking finding and no round-cap block. */
+function isAdoptable(record: TeamProposalRecord): boolean {
+	return !record.excludedFromOptions && record.unresolvedBlocking.length === 0 && !record.blockedAfterRoundCap;
+}
+
 /** Whether the recommendation may stand: an existing, non-excluded, non-blocked proposal. */
 function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readonly TeamProposalRecord[]): boolean {
 	const label = synthesis.recommendedProposal.trim();
 	if (!label) return false;
 	const record = proposals.find(candidate => candidate.label === label);
 	if (!record) return false;
-	return !record.excludedFromOptions && record.unresolvedBlocking.length === 0 && !record.blockedAfterRoundCap;
+	return isAdoptable(record);
 }
 
 /** A model-authored adoption claim must not override the tracked proposal status. */
@@ -72,8 +77,7 @@ function synthesisBodyConflict(
 	if (body.includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	const statements = body.split(/(?:[。！？；;.!?，,、\r\n]|但是|但|而|却)/u);
 	for (const record of proposals) {
-		if (!record.excludedFromOptions && record.unresolvedBlocking.length === 0 && !record.blockedAfterRoundCap)
-			continue;
+		if (isAdoptable(record)) continue;
 		const label = `方案${record.label}`;
 		for (const statement of statements) {
 			const compact = statement.replace(/\s+/gu, "");

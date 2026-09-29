@@ -17,6 +17,11 @@ function line(text: string): string {
 	return sanitizeText(text).replaceAll("\t", "    ").replace(/\n+/g, " ");
 }
 
+/** Message text of an unknown thrown value, for the panel's `line()` renderer. */
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export class RepoHubComponent implements Component {
 	#status?: RepoStatus;
 	#error?: string;
@@ -69,9 +74,7 @@ export class RepoHubComponent implements Component {
 		} catch (error) {
 			if (!this.#disposed && version === this.#refreshVersion) {
 				this.#status = undefined;
-				this.#statusError = line(
-					`Unable to read repository index status: ${error instanceof Error ? error.message : String(error)}`,
-				);
+				this.#statusError = line(`Unable to read repository index status: ${errorText(error)}`);
 			}
 		}
 		if (!this.#disposed && version === this.#refreshVersion) this.tui.requestRender();
@@ -102,7 +105,7 @@ export class RepoHubComponent implements Component {
 		const pending = work
 			.catch(error => {
 				if (this.#operation === operation && !(error instanceof Error && error.name === "AbortError"))
-					this.#error = line(error instanceof Error ? error.message : String(error));
+					this.#error = line(errorText(error));
 			})
 			.then(async () => {
 				if (this.#operation !== operation) return;
@@ -132,7 +135,7 @@ export class RepoHubComponent implements Component {
 				await previous;
 				await this.service.remove();
 			} catch (error) {
-				this.#error = line(error instanceof Error ? error.message : String(error));
+				this.#error = line(errorText(error));
 			} finally {
 				this.#abort = undefined;
 				this.#operation = undefined;

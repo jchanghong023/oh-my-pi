@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { enumerateMarkdownFiles, normalizePlainText, readMarkdownDocument, sectionShape } from "./markdown";
-import { BUILDING_INDEX_PREFIX, DocsStorage } from "./storage";
+import { BUILDING_INDEX_PREFIX, DocsStorage, normalizeFts } from "./storage";
 import type {
 	DocsBuildResult,
 	DocsIndexSummary,
@@ -19,14 +19,6 @@ export interface DocsServiceOptions {
 export interface DocsBuildOptions {
 	signal?: AbortSignal;
 	onProgress?: (progress: DocsProgress) => void;
-}
-
-function normalizeFts(text: string): string {
-	return text
-		.normalize("NFKC")
-		.replace(/[\u3400-\u4dbf\u4e00-\u9fff]/gu, character => ` ${character} `)
-		.replace(/\s+/g, " ")
-		.trim();
 }
 
 /**
