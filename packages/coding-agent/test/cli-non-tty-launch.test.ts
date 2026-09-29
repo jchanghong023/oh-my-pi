@@ -27,6 +27,14 @@ async function launchWithoutTerminal(
 ): Promise<LaunchRun> {
 	const home = tempDir.join("home");
 	fs.mkdirSync(home, { recursive: true });
+	// Fork adaptation: the built-in keyless `zcode-api` provider is ambiently
+	// available without any credentials, so a pristine headless launch would
+	// resolve it, start a turn against the local proxy, and hang instead of
+	// reaching the "No models available" exit this suite asserts. Disable it
+	// per-fixture to restore the no-models precondition (upstream rewrites of
+	// this file lose this — reapply after syncs).
+	fs.mkdirSync(path.join(home, ".omp", "agent"), { recursive: true });
+	fs.writeFileSync(path.join(home, ".omp", "agent", "config.yml"), "disabledProviders:\n  - zcode-api\n");
 	// Isolated home and no credentials: print mode can only end at the headless
 	// "No models available" exit, which the interactive path never reaches.
 	const env: Record<string, string | undefined> = { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" };
