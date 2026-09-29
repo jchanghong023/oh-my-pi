@@ -486,3 +486,4 @@ export type RelayControlToGuest = { t: "room-closed" };
 export type RelayControlMessage = RelayControlToHost | RelayControlToGuest;
 
 export * from "./stream";
+export * from "./tsp";

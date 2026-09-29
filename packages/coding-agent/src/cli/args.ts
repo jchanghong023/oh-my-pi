@@ -84,7 +84,7 @@ export interface Args {
 	skills?: string[];
 	noRules?: boolean;
 	noTitle?: boolean;
-	/** `--mode rpc` only: run extensions without a UI so no `extension_ui_request` dialogs reach the host. */
+	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
 	/** `--mode rpc-ui` only: project mode — one process hosts many sessions of the startup cwd (rpc-ui-protocol.md §4.1). */
 	rpcProject?: boolean;

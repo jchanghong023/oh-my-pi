@@ -237,9 +237,9 @@ export class RpcInputDispatcher {
 
 /** Startup options for {@link runRpcMode}. */
 export interface RpcModeOptions {
-	/** `--mode rpc-ui`: route tool UI (ask, tool cards) over the protocol as well. */
+	/** `--mode rpc-ui`: route tool UI (e.g. ask) over the protocol, independently of headless extensions. */
 	setToolUIContext?: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-	/** `--no-ui`: extensions run with `hasUI=false`; no dialog or presentation `extension_ui_request` frames are emitted. */
+	/** `--no-ui`: extensions run with `hasUI=false` and no UI frames; tool UI and host-issued login are unaffected. */
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
