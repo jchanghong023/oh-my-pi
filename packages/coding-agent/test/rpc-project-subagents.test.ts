@@ -279,7 +279,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			const first = await directory.list(SID, { limit: 2 });
 			expect(first.items).toHaveLength(2);
 			expect(first.nextCursor).toBe("2");
-			const second = await directory.list(SID, { limit: 2, cursor: 2 });
+			const second = await directory.list(SID, { limit: 2, cursor: first.nextCursor });
 			expect(second.items).toHaveLength(1);
 			expect(second.nextCursor).toBeUndefined();
 
@@ -287,6 +287,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			await expectErrorCode(directory.list(SID, { limit: 201 }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { limit: 1.5 }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { cursor: -1 }), "invalid_params");
+			await expectErrorCode(directory.list(SID, { cursor: "invalid" }), "invalid_params");
 		}, 10_000);
 
 		test("unknown sessions reject with not_found", async () => {

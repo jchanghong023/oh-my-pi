@@ -91,7 +91,6 @@ async function withProjectRpcServer<T>(
 		for (let waited = 0; waited < 300; waited++) {
 			const responseIndex = queue.findIndex(match);
 			if (responseIndex !== -1) return queue.splice(responseIndex, 1)[0]!;
-			queue.length = 0;
 			if (readerDone) throw new Error(`RPC stream ended early: ${await stderrPromise} ${String(readerError ?? "")}`);
 			await Bun.sleep(100);
 		}
@@ -162,6 +161,93 @@ function findSession(data: unknown, sessionId: string): SessionSummaryLike | und
 }
 
 describe("rpc-ui project mode (live --rpc-project server)", () => {
+	test("bash responds, permits cross-session queries and abort, and exits on EOF", async () => {
+		await using temp = await TempDir.create("rpc-project-bash-");
+		const cwd = path.resolve(temp.path());
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent") },
+			async (send, next, _seen, controls) => {
+				await negotiateV3(send, next);
+				send({ id: "a", type: "create_session" });
+				const a = (await responseFor(next, "a")).data as SessionSummaryLike;
+				send({ id: "b", type: "create_session" });
+				const b = (await responseFor(next, "b")).data as SessionSummaryLike;
+				send({ id: "echo", type: "bash", sessionId: a.sessionId, command: "echo rpc-bash-result" });
+				const echo = await responseFor(next, "echo");
+				expect(echo.success).toBe(true);
+				expect(JSON.stringify(echo.data)).toContain("rpc-bash-result");
+				const waitForMarker = async (name: string): Promise<void> => {
+					for (let i = 0; i < 100; i++) {
+						if (await Bun.file(path.join(cwd, name)).exists()) return;
+						await Bun.sleep(50);
+					}
+					throw new Error(`Bash never reached ${name}`);
+				};
+				send({ id: "long", type: "bash", sessionId: a.sessionId, command: "echo ready > long.ready; sleep 30" });
+				await waitForMarker("long.ready");
+				send({ id: "state-b", type: "get_state", sessionId: b.sessionId });
+				expect(await Promise.race([responseFor(next, "state-b"), Bun.sleep(5_000).then(() => null)])).toMatchObject(
+					{ success: true },
+				);
+				send({ id: "cancel", type: "abort_bash", sessionId: a.sessionId });
+				expect((await responseFor(next, "cancel")).success).toBe(true);
+				await responseFor(next, "long");
+				send({ id: "eof-bash", type: "bash", sessionId: a.sessionId, command: "echo ready > eof.ready; sleep 30" });
+				await waitForMarker("eof.ready");
+				send({ id: "barrier", type: "get_state", sessionId: b.sessionId });
+				await responseFor(next, "barrier");
+				controls.closeStdin();
+				expect(await Promise.race([controls.exited, Bun.sleep(10_000).then(() => -1)])).toBe(0);
+			},
+		);
+	}, 60_000);
+
+	test("rejects legacy replacement, stale execution and invalid role scopes", async () => {
+		await using temp = await TempDir.create("rpc-project-guards-");
+		const cwd = path.resolve(temp.path());
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent") },
+			async (send, next) => {
+				await negotiateV3(send, next);
+				send({ id: "create", type: "create_session" });
+				const a = (await responseFor(next, "create")).data as SessionSummaryLike;
+				for (const type of ["new_session", "switch_session", "open_session", "branch"]) {
+					send({
+						id: type,
+						type,
+						sessionId: a.sessionId,
+						sessionPath: "unrelated.jsonl",
+						sessionDir: cwd,
+						entryId: "missing",
+					});
+					expect(await responseFor(next, type)).toMatchObject({ success: false, code: "unsupported" });
+				}
+				send({ id: "close", type: "close_session", sessionId: a.sessionId });
+				await responseFor(next, "close");
+				send({ id: "resume", type: "resume_session", sessionId: a.sessionId });
+				const b = (await responseFor(next, "resume")).data as SessionSummaryLike;
+				expect(b.sessionGeneration).not.toBe(a.sessionGeneration);
+				send({
+					id: "old",
+					type: "execute_command",
+					sessionId: a.sessionId,
+					sessionGeneration: a.sessionGeneration,
+					text: "/plan",
+				});
+				expect(await responseFor(next, "old")).toMatchObject({ success: false, code: "stale_session" });
+				send({ id: "plan-state", type: "get_plan_state", sessionId: a.sessionId });
+				expect(await responseFor(next, "plan-state")).toMatchObject({ success: true, data: { enabled: false } });
+				send({ id: "roles-before", type: "get_model_roles" });
+				const before = (await responseFor(next, "roles-before")).data;
+				for (const scope of ["project", "invalid"]) {
+					send({ id: scope, type: "set_model_role", scope, roleId: "default", selection: { kind: "auto" } });
+					expect(await responseFor(next, scope)).toMatchObject({ success: false, code: "scope_not_allowed" });
+				}
+				send({ id: "roles-after", type: "get_model_roles" });
+				expect((await responseFor(next, "roles-after")).data).toEqual(before);
+			},
+		);
+	}, 60_000);
 	test("ready announces project mode identity and capabilities", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-");

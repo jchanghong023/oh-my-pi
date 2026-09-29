@@ -268,15 +268,11 @@ type RpcSubagentPermissionDelegate = (request: {
 	signal: AbortSignal | undefined;
 }) => Promise<ClientBridgePermissionOutcome>;
 
-let activeSubagentDelegate: RpcSubagentPermissionDelegate | undefined;
+const subagentDelegates = new WeakMap<Settings, RpcSubagentPermissionDelegate>();
 
 /** Registered by the RPC fork controller on v3 activation; inert everywhere else. */
-export function getRpcSubagentPermissionDelegate(): RpcSubagentPermissionDelegate | undefined {
-	return activeSubagentDelegate;
-}
-
-function setRpcSubagentPermissionDelegate(delegate: RpcSubagentPermissionDelegate | undefined): void {
-	activeSubagentDelegate = delegate;
+export function getRpcSubagentPermissionDelegate(settings: Settings): RpcSubagentPermissionDelegate | undefined {
+	return subagentDelegates.get(settings);
 }
 
 /**
@@ -284,14 +280,13 @@ function setRpcSubagentPermissionDelegate(delegate: RpcSubagentPermissionDelegat
  * delegate is registered. Origin-tagged requests settle on the main
  * connection's permission surface.
  */
-export function createRpcSubagentPermissionBridge(origin: RpcPermissionOrigin): ClientBridge {
+export function createRpcSubagentPermissionBridge(
+	origin: RpcPermissionOrigin,
+	delegate: RpcSubagentPermissionDelegate,
+): ClientBridge {
 	return {
 		capabilities: { requestPermission: true },
 		requestPermission: (toolCall, _options, signal) => {
-			const delegate = getRpcSubagentPermissionDelegate();
-			if (!delegate) {
-				return Promise.reject(new Error("Permission delegation is not available for this session"));
-			}
 			return delegate({ subagentId: origin.subagentId, agentType: origin.agentType, toolCall, signal });
 		},
 	};
@@ -306,9 +301,14 @@ export function createRpcSubagentPermissionBridge(origin: RpcPermissionOrigin): 
  * Gated on the RPC v3 delegate; writes stay on the subagent's own settings
  * layer and never reach the parent or the global config file.
  */
-export function scopeSubagentApprovalForDelegation(session: AgentSession): void {
-	if (!getRpcSubagentPermissionDelegate()) return;
+export function scopeSubagentApprovalForDelegation(
+	session: AgentSession,
+	delegate?: RpcSubagentPermissionDelegate,
+): void {
+	if (!delegate) return;
 	if (!session.settings) return;
+	// Nested tasks inherit this same owner; disposed owners still fail closed.
+	subagentDelegates.set(session.settings, delegate);
 	for (const tool of Object.keys(PERMISSION_REQUIRED_TOOLS)) {
 		cfgToolsApproval.setEntry(session.settings, tool, "prompt");
 	}
@@ -330,6 +330,7 @@ export class RpcForkPermissionController {
 	constructor(
 		private readonly host: RpcForkHost,
 		private readonly session: AgentSession,
+		private readonly options: { projectMode?: boolean } = {},
 	) {
 		host.registerFrameHandler(parsed => this.#handleFrame(parsed));
 		host.registerDisposer(reason => this.#dispose(reason));
@@ -346,7 +347,7 @@ export class RpcForkPermissionController {
 		if (this.#active) return;
 		this.#active = true;
 		this.session.setClientBridge(this.#bridge());
-		setRpcSubagentPermissionDelegate(({ subagentId, agentType, toolCall, signal }) => {
+		subagentDelegates.set(this.session.settings, ({ subagentId, agentType, toolCall, signal }) => {
 			if (this.#disposed) return Promise.reject(new Error(DISCONNECTED_PERMISSION_ERROR));
 			return requestRpcPermission(
 				this.#resolutionHost(),
@@ -392,9 +393,10 @@ export class RpcForkPermissionController {
 			);
 		}
 		const mode = rawMode;
-		// Persists to the global config and applies in-process immediately
-		// (Settings.writeValue rebuilds merged layers synchronously).
-		cfgToolsApprovalMode.set(this.session.settings, mode);
+		// Project sessions override only their own runtime layer. The legacy
+		// single-session entry retains its persistent-default behavior.
+		if (this.options.projectMode) cfgToolsApprovalMode.override(this.session.settings, mode);
+		else cfgToolsApprovalMode.set(this.session.settings, mode);
 		// Re-inject the bridge so the gateway re-wraps active tools for the new
 		// mode (e.g. a yolo-started session switched to always-ask starts
 		// emitting permission_request frames); the setter internally runs
@@ -427,7 +429,7 @@ export class RpcForkPermissionController {
 			pending.fail(new Error(reason));
 		}
 		this.#pending.clear();
-		setRpcSubagentPermissionDelegate(undefined);
+		subagentDelegates.delete(this.session.settings);
 		this.#active = false;
 	}
 }

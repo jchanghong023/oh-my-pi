@@ -236,8 +236,7 @@ class RpcProjectHost {
 		this.#subagentDirectory = new RpcProjectSubagentDirectory({
 			resolveSessionFile: sessionId => this.#resolveSessionFile(sessionId),
 			liveSnapshots: sessionId => {
-				const record = this.#container.get(sessionId);
-				const registry = record?.host instanceof RpcSessionHost ? record.host.subagentRegistry : undefined;
+				const registry = this.#sessionHosts.get(sessionId)?.subagentRegistry;
 				return registry ? registry.getSubagents() : [];
 			},
 			sendIrcMessage: async message => IrcBus.global().send(message),
@@ -353,6 +352,7 @@ class RpcProjectHost {
 	}
 
 	readonly #sessionHosts = new Map<string, RpcSessionHost>();
+	readonly #pendingSkillRefresh = new Set<string>();
 	/** In-flight host attachments keyed by session id (concurrent create/resume coalescing). */
 	readonly #attaching = new Map<string, Promise<void>>();
 	/** sessionId → session file for not-loaded sessions (populated lazily by #prefetchSessionFile). */
@@ -436,6 +436,14 @@ class RpcProjectHost {
 	async handleSessionCommand(
 		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
 	): Promise<RpcResponse> {
+		if (["new_session", "switch_session", "open_session", "branch"].includes(command.type)) {
+			return this.#errorResponse(
+				command.id,
+				command.type,
+				"Use project session lifecycle commands; replacing a loaded session is unsupported",
+				"unsupported",
+			);
+		}
 		const sessionId = command.sessionId;
 		if (typeof sessionId !== "string" || !sessionId) {
 			return this.#errorResponse(
@@ -465,6 +473,10 @@ class RpcProjectHost {
 			);
 		}
 		// Strip the project routing fields: the session host speaks the stock shape.
+		if (command.type === "prompt" && !host.session.isStreaming && this.#pendingSkillRefresh.has(sessionId)) {
+			await host.refreshSkills();
+			this.#pendingSkillRefresh.delete(sessionId);
+		}
 		const { sessionId: _s, sessionGeneration: _g, ...stock } = command as Record<string, unknown>;
 		return host.handleCommand(stock as RpcCommand);
 	}
@@ -683,6 +695,9 @@ class RpcProjectHost {
 				if (selection === undefined) {
 					return this.#errorResponse(id, type, "set_model_role requires a valid selection", "invalid_params");
 				}
+				if (command.scope !== "user") {
+					return this.#errorResponse(id, type, 'Model roles require scope "user"', "scope_not_allowed");
+				}
 				const result = await this.#rolesService.setRole({
 					roleId: String(command.roleId ?? ""),
 					scope: "user",
@@ -740,7 +755,7 @@ class RpcProjectHost {
 				}
 				const result = await this.#subagentDirectory.list(sessionId, {
 					status: command.status === "running" || command.status === "finished" ? command.status : undefined,
-					cursor: typeof command.cursor === "number" ? command.cursor : undefined,
+					cursor: command.cursor as number | string | undefined,
 					limit: typeof command.limit === "number" ? command.limit : undefined,
 				});
 				return this.#successResponse(id, type, result);
@@ -838,18 +853,20 @@ class RpcProjectHost {
 				"invalid_params",
 			);
 		}
-		const resolution = await this.#catalogService.resolve(text);
+		const resolution = await this.#catalogService.resolve(text, host.session);
 		if (resolution.kind === "unknown") {
 			return this.#errorResponse(id, type, `Unknown command: ${text.trim().split(/\s+/)[0]}`, "invalid_params");
 		}
 		// Route through the shared strict-dispatch prompt path; the response is
 		// re-labeled for the command the client actually sent.
-		const promptResponse = await host.handleCommand({
+		const promptResponse = await this.handleSessionCommand({
 			id,
 			type: "prompt",
+			sessionId: typeof sessionId === "string" ? sessionId : undefined,
+			sessionGeneration: typeof command.sessionGeneration === "string" ? command.sessionGeneration : undefined,
 			message: text,
 			inputMode: "auto",
-		} as RpcCommand);
+		});
 		if (isRecord(promptResponse) && promptResponse.command === "prompt") {
 			return { ...promptResponse, command: type } as RpcResponse;
 		}
@@ -864,6 +881,7 @@ class RpcProjectHost {
 		const result = await this.#container.close(sessionId, { cancelRunning });
 		if (host) await host.dispose("session_closed").catch(() => {});
 		this.#sessionHosts.delete(sessionId);
+		this.#pendingSkillRefresh.delete(sessionId);
 		for (const [interactionId, owner] of this.#interactions) {
 			if (owner === sessionId) this.#interactions.delete(interactionId);
 		}
@@ -879,6 +897,7 @@ class RpcProjectHost {
 		const result = await this.#container.delete(sessionId, { cancelRunning, expectedRevision });
 		if (host) await host.dispose("session_deleted").catch(() => {});
 		this.#sessionHosts.delete(sessionId);
+		this.#pendingSkillRefresh.delete(sessionId);
 		for (const [interactionId, owner] of this.#interactions) {
 			if (owner === sessionId) this.#interactions.delete(interactionId);
 		}
@@ -891,17 +910,24 @@ class RpcProjectHost {
 		return this.#sessionFileCache.get(sessionId);
 	}
 
-	#refreshSessionsSkills(): { adopted: string[]; pending: string[] } {
+	async #refreshSessionsSkills(): Promise<{ adopted: string[]; pending: string[] }> {
 		const adopted: string[] = [];
 		const pending: string[] = [];
 		for (const [sessionId, host] of this.#sessionHosts) {
 			if (host.session.isStreaming) {
+				this.#pendingSkillRefresh.add(sessionId);
 				pending.push(sessionId);
 				continue;
 			}
-			void host.refreshSkills().then(
-				() => adopted.push(sessionId),
-				() => pending.push(sessionId),
+			await host.refreshSkills().then(
+				() => {
+					this.#pendingSkillRefresh.delete(sessionId);
+					adopted.push(sessionId);
+				},
+				() => {
+					this.#pendingSkillRefresh.add(sessionId);
+					pending.push(sessionId);
+				},
 			);
 		}
 		return { adopted, pending };
@@ -949,6 +975,7 @@ class RpcProjectHost {
 		await this.#container.disposeAll(reason);
 		for (const [, host] of this.#sessionHosts) await host.dispose(reason).catch(() => {});
 		this.#sessionHosts.clear();
+		this.#pendingSkillRefresh.clear();
 		this.#hostToolBridge.close(`${reason} before host tool execution completed`);
 		this.#hostUriBridge.clear(`${reason} before host URI request completed`);
 		this.#interactions.clear();
@@ -1030,16 +1057,24 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		}),
 	);
 
+	const backgroundTasks = new Set<Promise<void>>();
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
 		if (type === "bash") {
 			// Session-bound background command; route like any session command.
-			const response = await host.handleSessionCommand(parsed as never).catch((error: unknown): RpcResponse => {
-				const message = error instanceof Error ? error.message : String(error);
-				return errorFrame(parsed.id, type, message);
-			});
-			if (isRecord(response) && response.success === false) output(response);
+			const task = host
+				.handleSessionCommand(parsed as never)
+				.catch((error: unknown): RpcResponse => {
+					const message = error instanceof Error ? error.message : String(error);
+					return errorFrame(parsed.id, type, message);
+				})
+				.then(output);
+			backgroundTasks.add(task);
+			void task.then(
+				() => backgroundTasks.delete(task),
+				() => backgroundTasks.delete(task),
+			);
 			return;
 		}
 		let response: RpcResponse;
@@ -1092,6 +1127,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	// disposals flush persistence), then exit cleanly.
 	await tail.catch(() => {});
 	await host.dispose("RPC client disconnected");
+	await Promise.allSettled(backgroundTasks);
 	await outputWriter.close();
 	process.exit(0);
 }

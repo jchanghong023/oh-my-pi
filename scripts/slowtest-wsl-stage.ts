@@ -255,33 +255,34 @@ function locateWslRepo(distro: string, fetchUrl: string): { path: string; remote
 
 /** Fast-forward the WSL clone to EXPECTED_SHA without ever discarding local
  * state: dirty tree → stop, ahead/diverged branch → stop. */
-function syncWslRepo(
+export function syncWslRepo(
 	distro: string,
 	repo: { path: string; remoteName: string },
 	expectedSha: string,
 	branch: string,
+	runGit: typeof wslGit = wslGit,
 ): void {
-	const porcelain = wslGit(distro, repo.path, ["status", "--porcelain"]);
+	const porcelain = runGit(distro, repo.path, ["status", "--porcelain"]);
 	if (porcelain.exitCode !== 0) fail(`git status in ${repo.path} failed: ${porcelain.stderr.trim()}`);
 	if (porcelain.stdout.trim() !== "") {
 		fail(`WSL repo ${repo.path} has uncommitted changes — not touching them; resolve manually and re-run`);
 	}
-	const fetch = wslGit(distro, repo.path, ["fetch", repo.remoteName]);
+	const fetch = runGit(distro, repo.path, ["fetch", repo.remoteName]);
 	if (fetch.exitCode !== 0) fail(`git fetch ${repo.remoteName} in ${repo.path} failed: ${fetch.stderr.trim()}`);
-	const objectExists = wslGit(distro, repo.path, ["cat-file", "-e", expectedSha]);
+	const objectExists = runGit(distro, repo.path, ["cat-file", "-e", expectedSha]);
 	if (objectExists.exitCode !== 0) {
 		fail(`commit ${expectedSha.slice(0, 12)} is not reachable in ${repo.path} after fetch`);
 	}
-	const branchSha = wslGit(distro, repo.path, ["rev-parse", `refs/heads/${branch}`]);
+	const branchSha = runGit(distro, repo.path, ["rev-parse", `refs/heads/${branch}`]);
 	const branchExists = branchSha.exitCode === 0;
 	const branchTip = branchSha.stdout.trim();
 	if (!branchExists) {
-		const create = wslGit(distro, repo.path, ["checkout", "-b", branch, expectedSha]);
+		const create = runGit(distro, repo.path, ["checkout", "-b", branch, expectedSha]);
 		if (create.exitCode !== 0)
 			fail(`creating branch '${branch}' at ${expectedSha.slice(0, 12)} failed: ${create.stderr.trim()}`);
 	} else {
 		if (branchTip !== expectedSha) {
-			const ancestor = wslGit(distro, repo.path, [
+			const ancestor = runGit(distro, repo.path, [
 				"merge-base",
 				"--is-ancestor",
 				`refs/heads/${branch}`,
@@ -292,13 +293,15 @@ function syncWslRepo(
 					`WSL branch '${branch}' is ahead of or diverged from ${expectedSha.slice(0, 12)} — refusing to move it`,
 				);
 			}
-			const ff = wslGit(distro, repo.path, ["merge", "--ff-only", expectedSha]);
+		}
+		const checkout = runGit(distro, repo.path, ["checkout", branch]);
+		if (checkout.exitCode !== 0) fail(`checking out '${branch}' failed: ${checkout.stderr.trim()}`);
+		if (branchTip !== expectedSha) {
+			const ff = runGit(distro, repo.path, ["merge", "--ff-only", expectedSha]);
 			if (ff.exitCode !== 0) fail(`fast-forwarding '${branch}' failed: ${ff.stderr.trim()}`);
 		}
-		const checkout = wslGit(distro, repo.path, ["checkout", branch]);
-		if (checkout.exitCode !== 0) fail(`checking out '${branch}' failed: ${checkout.stderr.trim()}`);
 	}
-	const head = wslGit(distro, repo.path, ["rev-parse", "HEAD"]).stdout.trim();
+	const head = runGit(distro, repo.path, ["rev-parse", "HEAD"]).stdout.trim();
 	if (head !== expectedSha) fail(`WSL HEAD ${head.slice(0, 12)} != expected ${expectedSha.slice(0, 12)}`);
 	console.log(`wsl-stage: ${repo.path} synced to ${expectedSha.slice(0, 12)} (branch '${branch}')`);
 }

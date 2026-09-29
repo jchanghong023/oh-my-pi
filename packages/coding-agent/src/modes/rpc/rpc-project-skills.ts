@@ -72,7 +72,9 @@ export interface RpcProjectSkillServiceDeps {
 	/** Settings instance shared by this project (all layers already merged). */
 	readonly getSettings: () => Settings;
 	/** Refresh loaded sessions' effective skill snapshots; returns session ids adopted now vs pending. */
-	readonly refreshSessions?: () => { adopted: string[]; pending: string[] };
+	readonly refreshSessions?: () =>
+		| { adopted: string[]; pending: string[] }
+		| Promise<{ adopted: string[]; pending: string[] }>;
 	/** Outbound frame sink; hosts forward `skills_changed` / `settings_changed` frames to the client. */
 	readonly emit: (frame: object) => void;
 }
@@ -390,7 +392,7 @@ export class RpcProjectSkillService {
 		resetCapabilities();
 		const catalog = await this.#loadManagementCatalog();
 		const revision = this.#revision.bump();
-		const sessions = this.#deps.refreshSessions?.() ?? { adopted: [], pending: [] };
+		const sessions = (await this.#deps.refreshSessions?.()) ?? { adopted: [], pending: [] };
 		this.#deps.emit({ type: "skills_changed", scope, revision });
 		return {
 			revision,

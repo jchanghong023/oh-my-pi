@@ -112,7 +112,7 @@ export interface RpcCommandCatalogSession {
 
 /** Strict `execute_command` resolution verdict (see {@link RpcCommandCatalogService.resolve}). */
 export interface RpcCommandResolution {
-	readonly kind: "builtin" | "skill" | "unknown";
+	readonly kind: "builtin" | "skill" | "session" | "unknown";
 	readonly name?: string;
 	/** Canonical unified spec, present for `kind: "builtin"`. */
 	readonly spec?: SlashCommandSpec;
@@ -276,7 +276,7 @@ export class RpcCommandCatalogService {
 	 * else is `unknown`, so the executor can reject instead of letting
 	 * unrecognized input fall through to the model.
 	 */
-	async resolve(text: string): Promise<RpcCommandResolution> {
+	async resolve(text: string, sessionLike?: object): Promise<RpcCommandResolution> {
 		const parsed = parseSlashCommand(text);
 		if (parsed) {
 			const spec = lookupBuiltinSlashCommand(parsed.name);
@@ -289,14 +289,21 @@ export class RpcCommandCatalogService {
 				if (skillName) return { kind: "skill", name: `skill:${skillName}`, skillName };
 			}
 		}
+		if (sessionLike && text.startsWith("/")) {
+			const name = text.slice(1).split(/\s/, 1)[0] ?? "";
+			const snapshot = await this.#ensureSnapshot(sessionLike);
+			const entry = findEntryByInvocation(snapshot.entries, name);
+			if (entry) return { kind: "session", name: entry.name };
+		}
 		return parsed?.name ? { kind: "unknown", name: parsed.name } : { kind: "unknown" };
 	}
 
 	async #ensureSnapshot(sessionLike?: object): Promise<RpcCommandCatalogSnapshot> {
+		// Session command lists can change independently (extensions, skills,
+		// custom commands). Never reuse another session's or the project view.
+		if (sessionLike) return this.#buildSessionSnapshot(sessionLike);
 		if (!this.#snapshot) {
-			this.#snapshot = sessionLike
-				? await this.#buildSessionSnapshot(sessionLike)
-				: await this.#buildProjectSnapshot();
+			this.#snapshot = await this.#buildProjectSnapshot();
 		}
 		return this.#snapshot;
 	}

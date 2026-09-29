@@ -40,6 +40,32 @@ function restoreAgentDir(): void {
 
 afterEach(restoreAgentDir);
 
+test("reload waits for loaded-session adoption before returning its receipt", async () => {
+	await using cwd = await TempDir.create("rpc-skills-await-cwd-");
+	await using agent = await TempDir.create("rpc-skills-await-agent-");
+	const entered = Promise.withResolvers<void>();
+	const adoption = Promise.withResolvers<{ adopted: string[]; pending: string[] }>();
+	const service = new RpcProjectSkillService({
+		cwd: path.resolve(cwd.path()),
+		agentDir: path.resolve(agent.path()),
+		getSettings: () => Settings.isolated(),
+		emit: () => {},
+		refreshSessions: () => {
+			entered.resolve();
+			return adoption.promise;
+		},
+	});
+	let completed = false;
+	const pending = service.reload("project").then(result => {
+		completed = true;
+		return result;
+	});
+	await entered.promise;
+	expect(completed).toBe(false);
+	adoption.resolve({ adopted: ["A"], pending: ["B"] });
+	await expect(pending).resolves.toMatchObject({ adoptedSessions: ["A"], pendingSessions: ["B"] });
+});
+
 interface SkillFixture {
 	service: RpcProjectSkillService;
 	settings: Settings;

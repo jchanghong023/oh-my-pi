@@ -313,6 +313,7 @@ export interface RpcProjectExecuteCommandCommand extends RpcProjectCommandBase {
 	readonly type: "execute_command";
 	readonly text: string;
 	readonly sessionId?: string;
+	readonly sessionGeneration?: string;
 	readonly catalogRevision?: RpcRevision;
 }
 
@@ -466,7 +467,7 @@ export interface RpcProjectGetSubagentsCommand extends RpcProjectCommandBase {
 	/** Parent session scope; required in project mode. */
 	readonly sessionId?: string;
 	readonly status?: "running" | "finished";
-	readonly cursor?: number;
+	readonly cursor?: number | string;
 	readonly limit?: number;
 }
 

@@ -933,7 +933,7 @@ export class RpcSessionHost {
 			},
 		});
 		this.#forkAskBroker = new RpcForkAskBroker(this.forkHost, frame => this.#output(frame));
-		new RpcForkPermissionController(this.forkHost, this.session);
+		new RpcForkPermissionController(this.forkHost, this.session, { projectMode: this.#options.projectMode });
 		new RpcForkSessionController(this.forkHost, this.session);
 		new RpcForkQueueController(this.forkHost, this.session);
 		new RpcForkJobController(this.forkHost, this.session);
@@ -1177,7 +1177,15 @@ export class RpcSessionHost {
 						// Strict dispatch (project mode): an unmatched "/..." is a
 						// command the host does not know — reject it instead of
 						// silently turning it into model input.
-						if (this.#options.projectMode && command.message.startsWith("/")) {
+						if (
+							this.#options.projectMode &&
+							command.message.startsWith("/") &&
+							!(await buildAvailableSlashCommands(session)).some(
+								entry =>
+									entry.name === command.message.slice(1).split(/\s/, 1)[0] ||
+									entry.aliases?.includes(command.message.slice(1).split(/\s/, 1)[0]!),
+							)
+						) {
 							this.promptResults.discard(ticket);
 							const commandName = command.message.trim().split(/\s+/)[0]!;
 							return this.error(id, "prompt", `Unknown command: ${commandName}`, "unknown_command");
@@ -1193,6 +1201,7 @@ export class RpcSessionHost {
 							session.prompt(promptAttachments.message, {
 								images: [...(command.images ?? []), ...promptAttachments.images],
 								streamingBehavior: command.streamingBehavior,
+								expandPromptTemplates: strictCommandDispatch,
 							}),
 						results: this.promptResults,
 						onError: this.#onPromptError(id, "prompt"),

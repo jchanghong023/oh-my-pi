@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -271,8 +270,7 @@ describe("repository lifecycle coverage across session and background execution 
 		const agentDir = path.join(temp, "agent");
 		await fs.mkdir(cwd);
 		await fs.mkdir(agentDir);
-		const gate = path.join(temp, "release.fifo");
-		execFileSync("mkfifo", [gate]);
+		const gate = path.join(cwd, "release.ready");
 		await fs.writeFile(path.join(cwd, "engine.py"), "def before(): pass\n");
 		const initial = new RepoService({ cwd, agentDir });
 		try {
@@ -280,7 +278,9 @@ describe("repository lifecycle coverage across session and background execution 
 		} finally {
 			initial.close();
 		}
-		const command = `read release < '${gate}'; printf 'def after_background(): return "ASYNC_NEEDLE"\\n' > engine.py`;
+		// Keep the write gated until reconciliation completes on Windows too;
+		// a regular file needs neither POSIX FIFOs nor an external mkfifo binary.
+		const command = `while [ ! -f release.ready ]; do sleep 0.01; done; printf 'def after_background(): return "ASYNC_NEEDLE"\\n' > engine.py`;
 		let requested = false;
 		registerCustomApi("repo-async-local", () => {
 			const stream = new AssistantMessageEventStream();
@@ -353,12 +353,7 @@ describe("repository lifecycle coverage across session and background execution 
 				expect((await panel.status()).needsReconcile).toBe(true);
 				await panel.reconcile();
 				expect((await panel.status()).unchecked).toBe(false);
-				const writer = await fs.open(gate, "w");
-				try {
-					await writer.writeFile("go\n");
-				} finally {
-					await writer.close();
-				}
+				await fs.writeFile(gate, "go\n");
 				await job.promise;
 				expect(await fs.readFile(path.join(cwd, "engine.py"), "utf8")).toContain("ASYNC_NEEDLE");
 				expect((await panel.status()).needsReconcile).toBe(true);

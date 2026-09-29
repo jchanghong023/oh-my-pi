@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed project RPC session and subagent approval isolation, live subagent listing, bash responses and cancellation, stale command rejection, and scoped model-role writes.
+- Fixed project RPC literal-text prompts, registered-command execution, session-specific command catalogs, subagent pagination, and skill-refresh adoption receipts.
 - Fixed `computer.window(74)` matching every open window and `computer.window({ id: 74 })` matching none; a numeric id now resolves the same window as `"74"` ([#13649](https://github.com/can1357/oh-my-pi/pull/13649) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.4.3] - 2026-09-28

@@ -55,6 +55,47 @@ function isSessionRequired(availability: RpcProjectCommandDescriptor["availabili
 }
 
 describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
+	test("project and independent live-session catalogs cannot poison each other", async () => {
+		await using temp = await TempDir.create("rpc-catalog-isolation-");
+		const cwd = path.resolve(temp.path());
+		const service = new RpcCommandCatalogService({ cwd, getSettings: () => Settings.isolated() });
+		const session = (name: string) => ({
+			customCommands: [],
+			skills: [
+				{ name, description: name, filePath: `${cwd}/${name}/SKILL.md`, baseDir: cwd, source: "native:project" },
+			],
+			skillsSettings: { enableSkillCommands: true },
+			setSlashCommands: () => {},
+			sessionManager: { getCwd: () => cwd },
+		});
+		await service.buildCatalog();
+		expect(byName(await service.buildCatalog(session("alpha"))).get("skill:alpha")?.availability.available).toBe(
+			true,
+		);
+		const beta = byName(await service.buildCatalog(session("beta")));
+		expect(beta.has("skill:alpha")).toBe(false);
+		expect(beta.get("skill:beta")?.availability.available).toBe(true);
+		expect(byName(await service.buildCatalog()).get("model")?.availability).toEqual({
+			available: false,
+			reason: "session_required",
+		});
+	});
+
+	test("resolves registered file commands while rejecting unknown names", async () => {
+		await using temp = await TempDir.create("rpc-catalog-file-");
+		const cwd = path.resolve(temp.path());
+		await fs.mkdir(path.join(cwd, ".omp", "commands"), { recursive: true });
+		await fs.writeFile(path.join(cwd, ".omp", "commands", "probe.md"), "Probe content");
+		const service = new RpcCommandCatalogService({ cwd, getSettings: () => Settings.isolated() });
+		const session = {
+			customCommands: [],
+			skills: [],
+			setSlashCommands: () => {},
+			sessionManager: { getCwd: () => cwd },
+		};
+		expect(await service.resolve("/probe", session)).toMatchObject({ kind: "session", name: "probe" });
+		expect(await service.resolve("/missing", session)).toMatchObject({ kind: "unknown" });
+	});
 	test("buildCatalog without a session lists builtins and project skills with scope/availability split", async () => {
 		await using tempDir = await TempDir.create("rpc-catalog-project-");
 		const root = path.resolve(tempDir.path());

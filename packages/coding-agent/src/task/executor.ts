@@ -3532,6 +3532,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
+	const rpcPermissionDelegate = getRpcSubagentPermissionDelegate(settings);
 	// Per-agent advisor: the agent definition's `advisor` frontmatter or the
 	// `task.agentAdvisor` settings override (agent name → "on"/"off"/model
 	// pattern) pairs the spawned session with an advisor. Subagents default to
@@ -4063,9 +4064,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Session-local prompt policies for the four gateway-covered tools
 			// (RPC mode only) force their wrapping so approval requests route
 			// through that bridge, decided at the parent's tier.
-			if (getRpcSubagentPermissionDelegate()) {
-				scopeSubagentApprovalForDelegation(session);
-				session.setClientBridge(createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }));
+			if (rpcPermissionDelegate) {
+				scopeSubagentApprovalForDelegation(session, rpcPermissionDelegate);
+				session.setClientBridge(
+					createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }, rpcPermissionDelegate),
+				);
 			}
 			// The SDK records a new session's initial model as the default role.
 			// Pin the child's own chain so a parent default sharing that model
@@ -4134,9 +4137,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						buildSubagentSessionOptions(reopened, expectedAgentRef, true),
 					);
 					// RPC v3 permission delegation on the revive path (same as fresh spawns).
-					if (getRpcSubagentPermissionDelegate()) {
-						scopeSubagentApprovalForDelegation(revived);
-						revived.setClientBridge(createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }));
+					if (rpcPermissionDelegate) {
+						scopeSubagentApprovalForDelegation(revived, rpcPermissionDelegate);
+						revived.setClientBridge(
+							createRpcSubagentPermissionBridge(
+								{ subagentId: id, agentType: agent.name },
+								rpcPermissionDelegate,
+							),
+						);
 					}
 					// Re-run the executor's extension wiring on the rebuilt session.
 					// Skipping it leaves the runner pre-init, so a `tool_call` handler

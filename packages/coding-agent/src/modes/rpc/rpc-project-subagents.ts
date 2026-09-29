@@ -88,7 +88,7 @@ export interface RpcProjectSubagentListOptions {
 	/** Filter to live rows ("running") or durable rows ("finished"); omitted merges both. */
 	readonly status?: "running" | "finished";
 	/** Numeric offset into the merged, sorted directory (default 0). */
-	readonly cursor?: number;
+	readonly cursor?: number | string;
 	/** Page size; default 50, valid range 1..200 (out of range → invalid_params). */
 	readonly limit?: number;
 }
@@ -130,12 +130,13 @@ function normalizeListLimit(limit: number | undefined): number {
 	return limit;
 }
 
-function normalizeListCursor(cursor: number | undefined): number {
+function normalizeListCursor(cursor: number | string | undefined): number {
 	if (cursor === undefined) return 0;
-	if (typeof cursor !== "number" || !Number.isInteger(cursor) || cursor < 0) {
+	const offset = typeof cursor === "string" && /^(0|[1-9]\d*)$/.test(cursor) ? Number(cursor) : cursor;
+	if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
 		throw new RpcProjectSubagentError("invalid_params", "cursor must be a non-negative integer offset");
 	}
-	return cursor;
+	return offset;
 }
 
 function normalizeFromByte(fromByte: number | undefined): number {

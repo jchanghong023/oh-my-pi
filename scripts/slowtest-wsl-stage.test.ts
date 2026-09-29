@@ -5,6 +5,7 @@ import {
 	parseWslListVerbose,
 	pickWslRepo,
 	repoNameFromUrl,
+	syncWslRepo,
 	WSL_STAGE_TIMEOUT_MS,
 	WSL_TEST_DISTRIBUTION,
 } from "./slowtest-wsl-stage.ts";
@@ -80,6 +81,26 @@ describe("pickWslRepo", () => {
 });
 
 describe("stage constants", () => {
+	test("fast-forwards the target branch without advancing the previously active branch", () => {
+		let current = "feature";
+		const tips: Record<string, string> = { main: "old", feature: "old" };
+		syncWslRepo(
+			"Ubuntu-24.04",
+			{ path: "/root/repo", remoteName: "origin" },
+			"expected",
+			"main",
+			(_distro, _repo, args) => {
+				let stdout = "";
+				if (args[0] === "rev-parse")
+					stdout = tips[args[1] === "HEAD" ? current : args[1]!.replace("refs/heads/", "")]!;
+				if (args[0] === "checkout") current = args[1]!;
+				if (args[0] === "merge") tips[current] = args[2]!;
+				return { exitCode: 0, stdout, stderr: "" };
+			},
+		);
+		expect(current).toBe("main");
+		expect(tips).toEqual({ main: "expected", feature: "old" });
+	});
 	test("the distro under test is Ubuntu-24.04 with a 2-hour budget", () => {
 		expect(WSL_TEST_DISTRIBUTION).toBe("Ubuntu-24.04");
 		expect(WSL_STAGE_TIMEOUT_MS).toBe(2 * 60 * 60_000);

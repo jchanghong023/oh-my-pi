@@ -3,6 +3,7 @@ import {
 	RpcForkPermissionController,
 	scopeSubagentApprovalForDelegation,
 	getRpcSubagentPermissionDelegate,
+	createRpcSubagentPermissionBridge,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-permission";
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
@@ -47,6 +48,7 @@ const captured: Array<{ requestPermission: (toolCall: unknown, o: unknown, s?: A
 function setupWithBridge(options?: {
 	mode?: "always-ask" | "write" | "yolo";
 	policies?: Record<string, string>;
+	projectMode?: boolean;
 }): Harness {
 	const emitted: object[] = [];
 	const host = new RpcForkHost(makeContext(emitted));
@@ -61,7 +63,7 @@ function setupWithBridge(options?: {
 		agent: { state: { tools: [promptTool] } },
 		setClientBridge: (bridge: (typeof captured)[number]) => captured.push(bridge),
 	} as unknown as AgentSession;
-	new RpcForkPermissionController(host, session);
+	new RpcForkPermissionController(host, session, { projectMode: options?.projectMode });
 	host.activate();
 	expect(captured).toHaveLength(1);
 	return {
@@ -78,6 +80,38 @@ function setupWithBridge(options?: {
 }
 
 describe("RpcForkPermissionController (4.1)", () => {
+	test("subagent bridges keep their owner across other sessions' activation and disposal", async () => {
+		const a = setupWithBridge({ mode: "always-ask", projectMode: true });
+		const delegate = getRpcSubagentPermissionDelegate(a.settings)!;
+		const bridge = createRpcSubagentPermissionBridge({ subagentId: "a-child", agentType: "worker" }, delegate);
+		const b = setupWithBridge({ mode: "yolo", projectMode: true });
+		const call = {
+			toolCallId: "child-call",
+			toolName: "bash",
+			title: "bash",
+			status: "pending" as const,
+			rawInput: { command: "pwd" },
+		};
+		const pending = bridge.requestPermission!(call, [], undefined);
+		const frame = a.emitted.at(-1) as Record<string, unknown>;
+		expect(frame).toMatchObject({ type: "permission_request", origin: { subagentId: "a-child" } });
+		expect(b.emitted).toEqual([]);
+		b.host.dispose("close B");
+		expect(getRpcSubagentPermissionDelegate(a.settings)).toBe(delegate);
+		a.settleLast({ type: "permission_response", id: frame.id, option: "allow_once" });
+		await expect(pending).resolves.toMatchObject({ optionId: "allow_once" });
+		a.host.dispose("close A");
+		await expect(bridge.requestPermission!(call, [], undefined)).rejects.toThrow(/disconnected/);
+	});
+
+	test("project approval changes only the runtime layer", async () => {
+		const h = setupWithBridge({ mode: "write", projectMode: true });
+		await h.host.handleCommand({ type: "set_approval_mode", mode: "always-ask" } as RpcForkCommandBase);
+		expect(cfgToolsApprovalMode.get(h.settings)).toBe("always-ask");
+		cfgToolsApprovalMode.clearOverride(h.settings);
+		expect(cfgToolsApprovalMode.get(h.settings)).toBe("write");
+		h.host.dispose("test cleanup");
+	});
 	test("prompt policy emits a structured permission_request; allow_once resolves", async () => {
 		const h = setupWithBridge({ mode: "always-ask" });
 		const pending = h.requestPermission({ command: "ls -la" });
@@ -180,11 +214,11 @@ describe("RpcForkPermissionController (4.1)", () => {
 		const h = setupWithBridge({ mode: "always-ask" });
 		const pending = h.requestPermission({ command: "sleep" });
 		await Bun.sleep(0);
-		expect(getRpcSubagentPermissionDelegate()).toBeTypeOf("function");
+		expect(getRpcSubagentPermissionDelegate(h.settings)).toBeTypeOf("function");
 
 		h.host.dispose("RPC client disconnected before fork request completed");
 		await expect(pending).rejects.toThrow("RPC client disconnected before fork request completed");
-		expect(getRpcSubagentPermissionDelegate()).toBeUndefined();
+		expect(getRpcSubagentPermissionDelegate(h.settings)).toBeUndefined();
 	});
 
 	test("a bridge installed before disconnect rejects later requests fail-closed without a frame", async () => {
@@ -203,7 +237,7 @@ describe("RpcForkPermissionController (4.1)", () => {
 
 	test("subagent delegate tags origin and rides the same pending surface", async () => {
 		const h = setupWithBridge({ mode: "always-ask" });
-		const delegate = getRpcSubagentPermissionDelegate()!;
+		const delegate = getRpcSubagentPermissionDelegate(h.settings)!;
 		const pending = delegate({
 			subagentId: "sub-7",
 			agentType: "explorer",
@@ -316,7 +350,7 @@ describe("RpcForkPermissionController (4.1)", () => {
 		// behind), so scoping must be a no-op on subagent settings — the
 		// unattended yolo overlay keeps running non-bridged tools.
 		setupWithBridge({ mode: "always-ask" }).host.dispose("reset delegate");
-		expect(getRpcSubagentPermissionDelegate()).toBeUndefined();
+		expect(getRpcSubagentPermissionDelegate(Settings.isolated())).toBeUndefined();
 
 		const standaloneParent = Settings.isolated();
 		const untouched = makeSub(standaloneParent);
@@ -330,7 +364,10 @@ describe("RpcForkPermissionController (4.1)", () => {
 		const h = setupWithBridge({ mode: "write" });
 		const delegatedParent = Settings.isolated();
 		const delegated = makeSub(delegatedParent);
-		scopeSubagentApprovalForDelegation({ settings: delegated } as unknown as AgentSession);
+		scopeSubagentApprovalForDelegation(
+			{ settings: delegated } as unknown as AgentSession,
+			getRpcSubagentPermissionDelegate(h.settings),
+		);
 		const policies = cfgToolsApproval.get(delegated);
 		expect(Object.keys(policies).sort()).toEqual(["bash", "delete", "edit", "move"]);
 		expect(Object.values(policies).every(policy => policy === "prompt")).toBe(true);
