@@ -619,7 +619,7 @@ GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；
 | --- | --- | --- | --- |
 | `set_subagent_subscription` | S；level 为 off/progress/events | 当前 level、目录修订、订阅边界信息 | 以根会话覆盖其代理树；宿主合并各面板所需最高粒度；off 只停止观察，不停止代理 |
 | `get_subagents` | H；status 筛选可选；cursor/limit 可选 | SubagentSummary 列表、revision、nextCursor | 包括运行/已结束及嵌套关系；可恢复持久身份，不能仅查询活动 RPC map |
-| `get_subagent_messages` | H；subagentId；fromByte 可选（默认 0）；maxBytes 可选（默认 256 KiB，上限 1 MiB） | entries、messages、fromByte、nextByte、reset、hasMore、记录修订和事件衔接标识 | 项目模式不接受任意 sessionFile；以完整记录边界读取，单记录超限返回安全资源引用或明确 record_too_large，不截断成损坏 JSON |
+| `get_subagent_messages` | H；subagentId；fromByte 可选（默认 0）；maxBytes 可选（项目模式新增设计参数；当前接口无此参数且读取无字节上限，默认/上限值由 A1 契约冻结确定） | entries、messages、fromByte、nextByte、reset 为现有字段；hasMore 与记录修订、事件衔接标识为项目模式新增 | 项目模式不接受任意 sessionFile；以完整记录边界读取，单记录超限返回安全资源引用或明确 record_too_large，不截断成损坏 JSON |
 | `control_subagent`（缺等价入口时新增的窄控制入口） | S；subagentId、action；目标实例/轮次标识；message 仅发送动作必填 | 同步结果或 accepted+operationId；发送时返回既有投递回执，终止时返回真实状态 | 首期仅开放已核对的 send_message、stop；动作须由目录 availableActions 声明；调用现有通信/生命周期服务，不创建第二套控制逻辑 |
 
 控制入口是项目模式的目标设计，不表示上游已有同名 RPC。有等价的结构化入口则复用并在此记录最终名称；不通过模型 prompt 间接执行用户的控制按钮。只支持已有业务语义，不能用本接口绕过 Agent 可见范围、权限、已终止标记或持久恢复约束。stop 复用 OMP 的明确终止语义，不等同可继续的暂停；若现有 cancel_job 等价满足某目标则共用同一操作服务。需要额外恢复/释放动作时先按既有业务核对，再扩目录；不宣称所有历史代理都可重新启动。
