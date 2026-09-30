@@ -11,7 +11,6 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
-	collectBundledFreeSelectors,
 	type ModelHubCallbacks,
 	ModelHubComponent,
 	type ModelHubOptions,
@@ -1463,95 +1462,6 @@ describe("ModelHub", () => {
 	});
 
 	describe("provider scopes and search", () => {
-		test("shows only known-free OpenCode Zen without filtering paid models from other providers", () => {
-			const zenFree = getBundledModel("opencode-zen", "big-pickle");
-			const zenPaid = getBundledModel("opencode-zen", "claude-opus-4-8");
-			const otherPaid = {
-				...makeModel("other-provider", "other-paid"),
-				cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-			};
-			if (!zenFree || !zenPaid) {
-				throw new Error("Expected bundled Zen fixtures to be present");
-			}
-			const { hub } = createHub({ models: [zenFree, zenPaid, otherPaid], scoped: true });
-			installTestTheme();
-
-			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("opencode-zen/big-pickle");
-			expect(rendered).not.toContain("opencode-zen/claude-opus-4-8");
-			expect(rendered).toContain("other-provider/other-paid");
-		});
-
-		describe("zen visibility", () => {
-			test("All-models view shows known-free Zen, hides paid and unknown Zen, keeps other providers", () => {
-				const zenFree = getBundledModel("opencode-zen", "big-pickle");
-				const zenPaid = getBundledModel("opencode-zen", "claude-opus-4-8");
-				const zenUnknown = makeModel("opencode-zen", "zen-fake-zero");
-				const otherPaid = {
-					...makeModel("other-provider", "other-paid"),
-					cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-				};
-				if (!zenFree || !zenPaid) {
-					throw new Error("Expected bundled Zen fixtures to be present");
-				}
-				const { hub } = createHub({
-					models: [zenFree, zenPaid, zenUnknown, otherPaid],
-					scoped: true,
-				});
-				installTestTheme();
-
-				const rendered = normalize(hub.render(220));
-				// Known-free Zen bundled fixtures are visible in the All-models view.
-				expect(rendered).toContain("opencode-zen/big-pickle");
-				// Paid Zen is hidden — the hub only advertises known-free tiers,
-				// not priced ones users must consciously choose.
-				expect(rendered).not.toContain("opencode-zen/claude-opus-4-8");
-				// Unknown zero-cost Zen IDs are NOT advertised as free: gateway quirks
-				// must not collapse every newly-served model into the free tier.
-				expect(rendered).not.toContain("opencode-zen/zen-fake-zero");
-				// Unrelated providers keep their priced entries.
-				expect(rendered).toContain("other-provider/other-paid");
-			});
-
-			test("locked Zen preview lists only known-free bundled entries", () => {
-				const zenFree = getBundledModel("opencode-zen", "big-pickle");
-				const zenPaid = getBundledModel("opencode-zen", "claude-opus-4-8");
-				const zenUnknown = makeModel("opencode-zen", "zen-fake-zero");
-				if (!zenFree || !zenPaid) {
-					throw new Error("Expected bundled Zen fixtures to be present");
-				}
-				const { hub } = createHub({
-					models: [zenFree, zenPaid, zenUnknown],
-					registry: { getAvailable: () => [] },
-				});
-				installTestTheme();
-
-				// Hop to the locked Zen provider: All models → locked opencode-zen.
-				hub.handleInput(DOWN);
-				const rendered = normalize(hub.render(220));
-				expect(rendered).toContain("opencode-zen has no credentials configured");
-				expect(rendered).toContain("big-pickle");
-				expect(rendered).not.toContain("claude-opus-4-8");
-				expect(rendered).not.toContain("zen-fake-zero");
-			});
-
-			test("skips bundled and discovered OpenCode Zen models with missing cost", () => {
-				const zenNoCost = { ...makeModel("opencode-zen", "zen-no-cost"), cost: undefined } as unknown as Model;
-				const zenFree = getBundledModel("opencode-zen", "big-pickle");
-				if (!zenFree) {
-					throw new Error("Expected bundled Zen fixture to be present");
-				}
-				expect(() => collectBundledFreeSelectors([zenNoCost, zenFree])).not.toThrow();
-				expect([...collectBundledFreeSelectors([zenNoCost, zenFree])]).toEqual(["opencode-zen/big-pickle"]);
-
-				const { hub } = createHub({ models: [zenNoCost, zenFree], scoped: true });
-				installTestTheme();
-				const rendered = normalize(hub.render(220));
-				expect(rendered).not.toContain("opencode-zen/zen-no-cost");
-				expect(rendered).toContain("opencode-zen/big-pickle");
-			});
-		});
-
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
 			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");

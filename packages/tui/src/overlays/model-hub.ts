@@ -23,7 +23,6 @@ import type {
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
-import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
@@ -255,28 +254,6 @@ function providerInitials(providerId: string): string {
 
 const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
-/** Collect bundled OpenCode entries whose pricing is explicitly free. */
-export function collectBundledFreeSelectors(models: readonly Model[]): Set<string> {
-	const selectors = new Set<string>();
-	for (const model of models) {
-		if (!model.cost) continue;
-		if (model.cost.input === 0 && model.cost.output === 0) {
-			selectors.add(`${model.provider}/${model.id}`);
-		}
-	}
-	return selectors;
-}
-
-/** The hub only advertises OpenCode Zen entries whose bundled pricing is explicitly free. */
-const BUNDLED_FREE_SELECTORS = collectBundledFreeSelectors(getBundledModels("opencode-zen"));
-
-function isVisibleModel(model: Model): boolean {
-	if (model.provider !== "opencode-zen") return true;
-	if (!model.cost) return false;
-	if (model.cost.input !== 0 || model.cost.output !== 0) return false;
-	return BUNDLED_FREE_SELECTORS.has(`${model.provider}/${model.id}`);
-}
-
 const MODEL_KIND_TABS: ReadonlyArray<"all" | ModelKind> = ["all", ...MODEL_KINDS];
 const ROLE_TABS = ["all", "chat", "kind"] as const;
 type RoleTab = (typeof ROLE_TABS)[number];
@@ -503,7 +480,8 @@ export class ModelHubComponent implements Component {
 	}
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
-	#reloadRoles(allModels: ReadonlyArray<Model>, autoCandidates: ReadonlyArray<Model>): void {
+	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
+		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll("all");
 		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
@@ -532,15 +510,7 @@ export class ModelHubComponent implements Component {
 			}
 		}
 
-		// The visibility filter only governs what the browser advertises: a role
-		// explicitly pinned to a hidden model still runs that model at runtime, so
-		// resolve configured roles against the unfiltered catalog (auto-selection
-		// and the option list keep using the filtered sets).
-		const roleCatalog = allModels;
-		allModels = allModels.filter(isVisibleModel);
-		availableModels = availableModels.filter(isVisibleModel);
-
-		this.#reloadRoles(roleCatalog, availableModels);
+		this.#reloadRoles(availableModels);
 		this.#buildRolesRows();
 
 		const mruOrder = this.#settings.mruOrder;
@@ -2484,7 +2454,6 @@ export class ModelHubComponent implements Component {
 			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
-				if (!isVisibleModel(model)) continue;
 				if (lines.length >= rows) break;
 				lines.push(truncateToWidth(theme.fg("dim", `    ${model.id}`), width));
 			}

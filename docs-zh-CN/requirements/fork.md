@@ -30,11 +30,6 @@
 
 完整行为、验收条件与验证边界统一维护在[代码定位索引需求](repo-index.md)。
 
-### OpenCode Zen
-
-* `/models` 面板仅展示内置目录明确标为免费、且当前 input/output 价格均为 0 的 `opencode-zen` 模型。
-* 缺失价格或未列入内置免费目录的模型隐藏，新发现模型即使报告零价也不例外；此过滤不代表全局禁用其他模型。
-
 ### 代理行为
 
 * Todo 提示词默认以至少 3 个独立用户可见结果作为创建条件，常规检查 → 执行 → 验证算一个结果；仍保留用户明确要求、提供任务集合或中途追加指令等创建/更新条件。
@@ -87,7 +82,7 @@
 * 公司环境（`--offline` 且 Claude settings 提供可用公司配置）中该 lane 在所有入口隐藏：`omp models`、TUI `/models` 面板与模型解析都不再列出或解析 `zcode-api`，只保留公司内网模型（见下节）。判定条件是「公司配置可用」而非单纯的 `--offline` 标志——无公司配置的 `--offline` 进程（例如家用 `--offline` 搭配本机代理）仍照常可见可用。
 * 固定使用代理的 Anthropic Messages 直通路由（`/v1/messages`，与 Claude Code 同路径）：工具调用、thinking、上游错误状态原样传递，不经过 OpenAI 翻译层。不做模型发现，不写入 `models.json`（上游守护测试禁止内置目录携带回环地址），模型清单在运行时构建。
 * 模型与参数照抄国内「智谱 coding plan」lane（`zhipu-coding-plan`）：14 个 GLM（`glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.6v` / `glm-4.7` / `glm-5` / `glm-5-turbo` / `glm-5v-turbo` / `glm-5.1` / `glm-5.2` / `glm-5.2-highspeed` / `glm-5.3` / `glm-5.3-flash` / `glm-5.3-highspeed`），上下文窗口、最大输出、视觉输入、tokenizer 与价格同该 lane；`glm-5.2-highspeed[1m]` 是该 lane 的折叠别名，本 provider 无折叠表，不收录。思考档位与 coding plan 相同（多数 SKU `minimal`–`high`；`glm-5.2*` 为 `high`/`max`；`glm-5.3*` 为 `low`/`high`/`max`、默认 `max` 且不可关闭）。
-* 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。无凭据时直通不发送 `Authorization`，也不注入 `X-Api-Key`；`model.headers` 中显式给出的 `Authorization` 仍然生效。
+* 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。无凭据时直通不发送 `Authorization`、不注入 `X-Api-Key` 的行为由上游无凭据 Anthropic 端点机制（上游 PR #13043）提供，非 fork 补丁；`model.headers` 中显式给出的 `Authorization` 仍然生效。
 * 兼容规则提供 tool_result id 镜像与思考模式适配；认证面无 login 流程，不出现在 `/login`。
 * `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。命中这些不生效字段或 `models:` 定义时，启动会输出一条保留提示（不阻断启动）。
 
@@ -158,7 +153,7 @@
 * `Shift+F1`：循环切换 thinking level。
 * 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 * `composer.shape=pi` 时状态栏独立位于输入框下方。
-* `@` 文件补全在输入、删除字符时立即过滤已有候选，不等待后台目录搜索完成；网络文件系统上的新文件仍需等待扫描结果，后台搜索保持串行，避免堆积 I/O。过滤把候选清空时弹窗不吞键：Enter 照常提交草稿、Tab 走普通补全、方向键移动光标。
+* `@` 文件补全的「立即过滤已有候选、不等待后台目录搜索」与「候选清空时弹窗不吞键」行为均已由上游等价满足（上游 PR #13046 合并后归一）；fork 无独立实现补丁，仅保留一个慢搜索过滤的回归测试钉。
 * 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 
 ### 安装与运行
