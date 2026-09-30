@@ -484,6 +484,15 @@ mod tests {
 	}
 
 	#[test]
+	fn prose_fraction_stays_aligned_after_masked_multibyte_spans() {
+		// A masked multi-byte character fans out into one space per byte, so
+		// pairing the original's chars with the masked text's chars by index
+		// misreads every later character; 5 of the 9 UTF-16 units are prose.
+		let text = "`代码`之后是正文";
+		assert!((prose_fraction(text) - 5.0 / 9.0).abs() < 1e-9);
+	}
+
+	#[test]
 	fn masking_preserves_byte_offsets() {
 		let text = "é `ü` <i>ß</i> done";
 		let masked = mask_non_prose(text);
