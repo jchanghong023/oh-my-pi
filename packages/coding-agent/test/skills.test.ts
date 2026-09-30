@@ -628,6 +628,13 @@ describe("collision handling", () => {
 	/** Project with `.claude/skills/calendar` (priority 80) and `.agents/skills/calendar` (priority 70) copied from fixtures. */
 	async function projectWithProviderCopies(claudeFrom: string, agentsFrom: string | undefined) {
 		const project = await fs.mkdtemp(path.join(os.tmpdir(), "skills-provider-copies-"));
+		// mkdtemp sits under the real $HOME on dev machines; project-level
+		// discovery walks up from cwd to the repo root, so without a repo root
+		// the walk escapes into `~/.claude` / `~/.agents` and leaks the
+		// developer's real skills into these exact-list assertions (#1116 only
+		// skips ctx.home, which the isolated temp home is not). Anchor the walk
+		// at the project itself.
+		Bun.spawnSync(["git", "init", "--quiet", project]);
 		const claudeFile = path.join(project, ".claude", "skills", "calendar", "SKILL.md");
 		await fs.mkdir(path.dirname(claudeFile), { recursive: true });
 		await fs.copyFile(claudeFrom, claudeFile);
@@ -872,6 +879,9 @@ describe("collision handling", () => {
 
 	it("lets a custom-directory skill override a provider skill and keeps a taken namespaced slot suffixed", async () => {
 		const project = await fs.mkdtemp(path.join(os.tmpdir(), "skills-displaced-"));
+		// Same walk-up anchor as projectWithProviderCopies: keep project-level
+		// discovery from escaping the temp project into the real ~/.claude.
+		Bun.spawnSync(["git", "init", "--quiet", project]);
 		try {
 			// Project-level .claude/skills/calendar (provider "claude"; the dotted
 			// home makes its namespace fall back to the provider id) versus a custom
