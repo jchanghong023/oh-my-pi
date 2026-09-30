@@ -1706,7 +1706,10 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				}
 				progress.currentToolArgs = extractToolArgsPreview(startArgs);
 				progress.currentToolStartMs = now;
-				const intent = event.intent?.trim();
+				const intent = event.intent?.trim() || undefined;
+				// Per call: intent-optional tools (e.g. MCP) start without one, and
+				// `lastIntent` would otherwise label them with the previous call's.
+				progress.currentToolIntent = intent;
 				if (intent) {
 					progress.lastIntent = intent;
 				}
@@ -1726,6 +1729,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					progress.recentTools.unshift({
 						tool: progress.currentTool,
 						args: progress.currentToolArgs || "",
+						intent: progress.currentToolIntent,
 						endMs: now,
 					});
 					// Keep only last 5
@@ -1735,6 +1739,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				}
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
+				progress.currentToolIntent = undefined;
 				progress.currentToolStartMs = undefined;
 				// The finalized TaskToolDetails will be captured below into
 				// `extractedToolData.task`; drop the in-flight snapshot so the
