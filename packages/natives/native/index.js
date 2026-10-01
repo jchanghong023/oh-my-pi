@@ -115,6 +115,7 @@ export const pdfToMarkdown = nativeBindings.pdfToMarkdown ?? missingNativeExport
 export const pythonSymbols = nativeBindings.pythonSymbols ?? missingNativeExport("pythonSymbols");
 export const rasterizeSvg = nativeBindings.rasterizeSvg ?? missingNativeExport("rasterizeSvg");
 export const readImageFromClipboard = nativeBindings.readImageFromClipboard ?? missingNativeExport("readImageFromClipboard");
+export const readTextFromClipboard = nativeBindings.readTextFromClipboard ?? missingNativeExport("readTextFromClipboard");
 export const renderMermaidAscii = nativeBindings.renderMermaidAscii ?? missingNativeExport("renderMermaidAscii");
 export const renderSnapcompactPng = nativeBindings.renderSnapcompactPng ?? missingNativeExport("renderSnapcompactPng");
 export const search = nativeBindings.search ?? missingNativeExport("search");

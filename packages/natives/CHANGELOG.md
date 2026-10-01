@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `readTextFromClipboard()` to read plain clipboard text without starting a subprocess ([#13991](https://github.com/can1357/oh-my-pi/pull/13991) by [@H4vC](https://github.com/H4vC))
+
 ## [18.4.7] - 2026-10-01
 
 ### Fixed

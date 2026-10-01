@@ -13,6 +13,13 @@
 
 - RPC mode now sends a `cancel` extension UI request (with `targetId`) when omp's own dialog timeout elapses, for `select`, `confirm`, `input`, and `ask` dialogs, so hosts can close stale dialogs ([#13551](https://github.com/can1357/oh-my-pi/pull/13551) by [@andrebrait](https://github.com/andrebrait))
 
+### Fixed
+
+- Fixed `/wt` on filesystems without copy-on-write cloning (e.g. NTFS): the new worktree no longer lists unchanged files as modified under `core.autocrlf`, and staged-only edits, additions, and deletions now carry over with the right file contents instead of reverting to `HEAD` ([#13987](https://github.com/can1357/oh-my-pi/pull/13987) by [@H4vC](https://github.com/H4vC))
+- Fixed Ctrl+V on Windows taking about a second to paste text: omp no longer starts PowerShell to check for an image or read the text, and only uses it when the built-in clipboard read fails ([#13991](https://github.com/can1357/oh-my-pi/pull/13991) by [@H4vC](https://github.com/H4vC))
+- Fixed `local://` paths written with the working directory in front (`/repo/local://notes.md`) creating a literal `local:` directory in the project; `read`, `write`, and search tools now treat them as the `local://` URL ([#13977](https://github.com/can1357/oh-my-pi/pull/13977) by [@radkawar](https://github.com/radkawar))
+- Fixed `read` with a `;` list that mixes URLs and local paths (`https://…;src/a.ts:1-20`, `omp://;Makefile:1-3`) or starts with an extensionless file and a selector (`Makefile:1-3;docs/x.md`): it was fetched as one URL or sent to MCP; each entry is now read separately ([#13979](https://github.com/can1357/oh-my-pi/pull/13979) by [@radkawar](https://github.com/radkawar))
+
 ## [18.4.6] - 2026-10-01
 
 ### Added
