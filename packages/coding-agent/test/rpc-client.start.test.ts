@@ -19,8 +19,7 @@ describe("RpcClient.start", () => {
 		using client = new RpcClient({
 			command: args => {
 				received = args;
-				// `/usr/bin/false` is POSIX-only; exit 1 via the Bun binary on Windows.
-				return process.platform === "win32" ? [process.execPath, "-e", "process.exit(1)"] : ["/usr/bin/false"];
+				return [process.execPath, "--eval", "process.exit(1)"];
 			},
 			provider: "openrouter",
 			model: "example/model",

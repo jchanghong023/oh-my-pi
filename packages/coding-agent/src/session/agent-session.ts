@@ -389,6 +389,7 @@ import {
 } from "./queued-messages";
 import type { ServingModel } from "./retry-fallback-chains";
 import {
+	type AdvisorCatchupOptions,
 	type AdvisorStats,
 	type AdvisorStatusOverviewEntry,
 	SessionAdvisors,
@@ -2624,6 +2625,7 @@ export class AgentSession implements SettingsScope {
 			type: job.type,
 			status: job.status,
 			label: job.label,
+			command: job.process?.command,
 			startTime: job.startTime,
 			agentId: job.agentId,
 		}));
@@ -2632,6 +2634,7 @@ export class AgentSession implements SettingsScope {
 			type: job.type,
 			status: job.status,
 			label: job.label,
+			command: job.process?.command,
 			startTime: job.startTime,
 			endTime: job.endTime,
 			agentId: job.agentId,
@@ -5955,9 +5958,10 @@ export class AgentSession implements SettingsScope {
 	 * Wait for active advisor reviews and their emitted card events before a
 	 * headless caller disposes the session. Returns `false` and logs work disposal
 	 * will abandon when the shared deadline expires or an advisor fails;
-	 * `waitThroughRecovery` waits through a failing advisor's fallback recovery.
+	 * `waitThroughRecovery` waits through a failing advisor's fallback recovery and
+	 * `strictWithoutDeadline` waits on `strict` advisors past the deadline.
 	 */
-	waitForAdvisorCatchup(timeoutMs: number, options?: { waitThroughRecovery?: boolean }): Promise<boolean> {
+	waitForAdvisorCatchup(timeoutMs: number, options?: AdvisorCatchupOptions): Promise<boolean> {
 		return this.#advisors.waitForAdvisorCatchup(timeoutMs, options);
 	}
 
