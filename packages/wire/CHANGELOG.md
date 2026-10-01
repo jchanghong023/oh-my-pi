@@ -6,6 +6,11 @@
 
 - Added additive collab frames — `commands` (host-advertised slash-command palette), `browse-dirs` (guest directory request), and `dir-suggestions` — without changing `COLLAB_PROTO`; peers that do not know a frame ignore it.
 
+### Added
+
+- Added the TSP `scroll` op (`["scroll", id, by]`, `TspScrollBy`): keyboard scrolling of the scroller holding a node, sent to terminals whose `hello.features` lists `scroll`
+- Added the `focus` terminal event (`{ ev: "focus", sf, id }`): a click asking the program to move its keyboard focus to an `editor`/`input`, or back to a `prefs` sheet.
+
 ## [18.4.6] - 2026-10-01
 
 ### Added

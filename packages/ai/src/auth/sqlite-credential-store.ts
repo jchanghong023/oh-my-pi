@@ -88,6 +88,23 @@ type SerializedCredentialRecord = {
 	identityKey: string | null;
 };
 
+/** Persisted columns compared to skip rewriting a credential row with identical bytes. */
+type CredentialStateRow = {
+	provider: string;
+	credential_type: string;
+	data: string;
+	identity_key: string | null;
+	disabled_cause: string | null;
+};
+
+function storesSerializedCredential(row: CredentialStateRow, serialized: SerializedCredentialRecord): boolean {
+	return (
+		row.data === serialized.data &&
+		row.credential_type === serialized.credentialType &&
+		(row.identity_key ?? null) === serialized.identityKey
+	);
+}
+
 const AUTH_SCHEMA_VERSION = 8;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 const LEGACY_CODEX_BLOCK_PROVIDER_KEY = "openai-codex:oauth";
@@ -392,6 +409,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#getCredentialRefreshLeaseStmt: Statement;
 	#renewCredentialRefreshLeaseStmt: Statement;
 	#releaseCredentialRefreshLeaseStmt: Statement;
+	#getCredentialStateStmt: Statement;
+	#holdsCredentialRefreshLeaseStmt: Statement;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#insertUsageHistoryStmt: Statement;
 	#lastUsageHistoryStmt: Statement;
@@ -509,6 +528,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#releaseCredentialRefreshLeaseStmt = this.#db.prepare(
 			"DELETE FROM auth_credential_refresh_leases WHERE credential_id = ? AND owner = ?",
+		);
+		this.#getCredentialStateStmt = this.#db.prepare(
+			"SELECT provider, credential_type, data, identity_key, disabled_cause FROM auth_credentials WHERE id = ?",
+		);
+		this.#holdsCredentialRefreshLeaseStmt = this.#db.prepare(
+			"SELECT 1 FROM auth_credential_refresh_leases WHERE credential_id = ? AND owner = ? AND expires_at_ms > ?",
 		);
 		this.#insertUsageHistoryStmt = this.#db.prepare(
 			"INSERT INTO usage_history (recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1431,18 +1456,18 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/**
+	 * Rewrites a row only when its persisted bytes change: an identical write would
+	 * still bump `updated_at` and `auth_change_revision`, making every peer process
+	 * reload credentials for nothing.
+	 */
 	updateAuthCredential(id: number, credential: AuthCredential): void {
 		try {
-			const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
-			let providerRow: { provider?: string } | undefined;
-			try {
-				providerRow = providerStmt.get(id) as { provider?: string } | undefined;
-			} finally {
-				providerStmt.finalize();
-			}
-			const provider = providerRow?.provider ?? "";
+			const row = this.#getCredentialStateStmt.get(id) as CredentialStateRow | null;
+			const provider = row?.provider ?? "";
 			const serialized = serializeCredential(provider, credential);
 			if (!serialized) return;
+			if (row && storesSerializedCredential(row, serialized)) return;
 			this.#updateStmt.run(serialized.credentialType, serialized.data, serialized.identityKey, id);
 			if (provider) {
 				this.#purgeSupersededDisabledRows(provider, this.listAuthCredentials(provider));
@@ -1458,16 +1483,20 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		credential: AuthCredential,
 		lease?: CredentialRefreshLeaseFence,
 	): boolean {
-		const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
-		let providerRow: { provider?: string } | undefined;
-		try {
-			providerRow = providerStmt.get(id) as { provider?: string } | undefined;
-		} finally {
-			providerStmt.finalize();
-		}
-		const provider = providerRow?.provider ?? "";
+		const row = this.#getCredentialStateStmt.get(id) as CredentialStateRow | null;
+		const provider = row?.provider ?? "";
 		const serialized = serializeCredential(provider, credential);
 		if (!serialized) return false;
+		if (
+			row &&
+			row.disabled_cause === null &&
+			serialized.data === expectedData &&
+			storesSerializedCredential(row, serialized)
+		) {
+			// The row already holds exactly this credential: the CAS (and lease fence)
+			// matches, but rewriting identical bytes would only churn the revision.
+			return !lease || Boolean(this.#holdsCredentialRefreshLeaseStmt.get(id, lease.owner, lease.nowMs));
+		}
 		const result = lease
 			? (this.#updateIfMatchesWithLeaseStmt.run(
 					serialized.credentialType,
@@ -2055,6 +2084,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCredentialRefreshLeaseStmt.finalize();
 		this.#renewCredentialRefreshLeaseStmt.finalize();
 		this.#releaseCredentialRefreshLeaseStmt.finalize();
+		this.#getCredentialStateStmt.finalize();
+		this.#holdsCredentialRefreshLeaseStmt.finalize();
 		// Force-close: bun's plain close() leaves the file handle open on
 		// Windows whenever any prepared statement (ours or a sharing owner's)
 		// was never finalized, which blocks temp-dir cleanup with EBUSY.

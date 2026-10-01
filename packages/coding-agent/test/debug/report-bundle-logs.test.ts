@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createReportBundle } from "@oh-my-pi/pi-coding-agent/debug/report-bundle";
-import { localDay } from "@oh-my-pi/pi-utils";
+import { localDay, logger } from "@oh-my-pi/pi-utils";
 import { isolateReportBundleDirs, type ReportBundleTestDirs } from "../helpers/report-bundle-isolation";
 
 let dirs: ReportBundleTestDirs | undefined;
@@ -59,5 +59,25 @@ describe("report bundle logs", () => {
 		if (staleUtcName) expect(logsText).not.toContain(staleUtcName);
 
 		await fs.rm(result.path, { force: true });
+	});
+
+	it("includes this process's records still buffered by the batching file transport", async () => {
+		dirs = await isolateReportBundleDirs();
+
+		logger.setTransports({ console: false, file: dirs.logsDir });
+		const marker = `report-buffered-${crypto.randomUUID()}`;
+		logger.debug("report bundle buffered probe", { marker });
+
+		const result = await createReportBundle({
+			sessionFile: undefined,
+			reportsDir: dirs.reportsDir,
+			logsDir: dirs.logsDir,
+		}).finally(() => logger.setTransports({ file: true }));
+
+		const archive = new Bun.Archive(await Bun.file(result.path).bytes());
+		const logsText = (await (await archive.files()).get("logs.txt")?.text()) ?? "";
+		await fs.rm(result.path, { force: true });
+		expect(logsText).toContain(`omp.${localDay(new Date())}.${process.pid}.log`);
+		expect(logsText).toContain(marker);
 	});
 });
