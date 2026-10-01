@@ -283,6 +283,7 @@ import {
 } from "./loop-limit";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { OAuthManualInputManager } from "./oauth-manual-input";
+import { formatPersistenceNotice } from "./persistence-failure";
 import { resolveComposerHint } from "@oh-my-pi/pi-tui/prompt/composer-hints";
 import { hintUsage } from "../utils/usage-counter";
 import {
@@ -2285,6 +2286,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// before initHooksAndCustomTools/#reconcileModeFromSession/#enterPlanMode —
 		// all of which can reach setSessionName during init.
 		this.#eventBusUnsubscribers.push(
+			this.sessionManager.onPersistenceNotice(notice => this.showWarning(formatPersistenceNotice(notice))),
 			this.sessionManager.onPersistenceError(error => {
 				const detail = truncateToWidth(
 					replaceTabs(sanitizeText(error.message)).replace(/[\r\n]+/g, " "),

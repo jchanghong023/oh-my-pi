@@ -19,6 +19,9 @@
 - Fixed Ctrl+V on Windows taking about a second to paste text: omp no longer starts PowerShell to check for an image or read the text, and only uses it when the built-in clipboard read fails ([#13991](https://github.com/can1357/oh-my-pi/pull/13991) by [@H4vC](https://github.com/H4vC))
 - Fixed `local://` paths written with the working directory in front (`/repo/local://notes.md`) creating a literal `local:` directory in the project; `read`, `write`, and search tools now treat them as the `local://` URL ([#13977](https://github.com/can1357/oh-my-pi/pull/13977) by [@radkawar](https://github.com/radkawar))
 - Fixed `read` with a `;` list that mixes URLs and local paths (`https://…;src/a.ts:1-20`, `omp://;Makefile:1-3`) or starts with an extensionless file and a selector (`Makefile:1-3;docs/x.md`): it was fetched as one URL or sent to MCP; each entry is now read separately ([#13979](https://github.com/can1357/oh-my-pi/pull/13979) by [@radkawar](https://github.com/radkawar))
+- Fixed session saves rewriting every already-stored image blob on each save, which multiplied disk writes on sessions with many images ([#13989](https://github.com/can1357/oh-my-pi/pull/13989) by [@radkawar](https://github.com/radkawar))
+- Fixed omp freezing for seconds at a time and silently no longer saving the session after another omp process wrote to the same session file; omp now stops retrying, leaves the other process's file untouched, and tells you this session's further changes are not being saved to it ([#13989](https://github.com/can1357/oh-my-pi/pull/13989) by [@radkawar](https://github.com/radkawar))
+- Fixed writing to a session that another running omp process already has open giving no sign that both write to the same file; omp now warns once when it first writes to it ([#13989](https://github.com/can1357/oh-my-pi/pull/13989) by [@radkawar](https://github.com/radkawar))
 
 ## [18.4.6] - 2026-10-01
 
