@@ -50,11 +50,14 @@ export type * from "./rpc-types";
 export {
 	applyRpcQueueModeCommand,
 	dispatchRpcSkillPrompt,
+	handleRpcCancelSubagent,
 	handleRpcSessionChange,
+	handleRpcSteerSubagent,
 	openRpcSession,
 	type PendingExtensionRequest,
 	promptRpcBuiltinResidual,
 	registerRpcPersistenceSurface,
+	requestRpcAskDialog,
 	requestRpcDialog,
 	requestRpcEditor,
 	requestRpcSelect,
@@ -73,6 +76,7 @@ export {
 	type RpcSkillCommandSession,
 	type RpcSkillInvocation,
 	type RpcSubagentResetRegistry,
+	RpcWordPredictor,
 	tryRunRpcSkillCommand,
 } from "./rpc-session-host";
 
@@ -133,19 +137,37 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 }
 
 /**
+ * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
+ * (`prompt` and `steer_subagent` are also backgrounded there, but start through
+ * the serial tail.)
+ * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
+ */
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "predict_word"]);
+
+/**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * Bash commands are dispatched in the background so the caller can keep reading
- * subsequent frames while a shell command is still running. This lets a client
- * send `abort_bash` while a long-running `bash` is in flight. Response
- * correlation is preserved via each command's `id`; ordering across concurrent
- * commands is not guaranteed and clients MUST match on `id`.
+ * `bash`, `predict_word`, `prompt` and `steer_subagent` are dispatched in the
+ * background so the caller can keep reading subsequent frames while one is
+ * still settling: a `bash` command can run for a long time, and a `prompt`
+ * command's response is held until the message is admitted, which can span
+ * real wall-clock time (image normalization, a vision-model description call).
+ * `steer_subagent` likewise holds its response until the subagent accepts the
+ * message, which for a subagent between turns includes its whole
+ * pre-`agent_start` setup. Backgrounding them lets a client send `abort_bash`
+ * while a shell command runs, or `abort` (and `steer`/`follow_up`/`get_state`)
+ * while a `prompt` or `steer_subagent` is still admitting. `predict_word` is
+ * backgrounded too, so a cold prediction engine never stalls the command queue
+ * behind a keystroke.
+ * Response correlation is preserved via each command's `id`; ordering across
+ * concurrent commands is not guaranteed and clients MUST match on `id`.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
- *   background (`bash`). Otherwise a promise that resolves once the response
- *   for the command has been emitted via `output`. Errors from `handleCommand`
- *   on non-`bash` commands propagate; the caller is expected to wrap them.
+ *   background (`bash`, `predict_word`, `prompt`, `steer_subagent`). Otherwise a promise that
+ *   resolves once the response for the command has been emitted via `output`.
+ *   Errors from `handleCommand` on a command dispatched inline propagate; the
+ *   caller is expected to wrap them.
  */
 export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps): Promise<void> | undefined {
 	if (dispatchRpcControlFrame(parsed, deps)) return undefined;
@@ -155,17 +177,23 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// the union here.
 	const command = parsed as RpcCommand;
 
-	// `bash` can run for a long time. Dispatch it in the background so a
-	// subsequent `abort_bash` frame can be read and handled without waiting
-	// for the shell command to finish on its own. The response is emitted
-	// when `handleCommand` resolves; clients correlate via `command.id`.
-	if (command.type === "bash") {
+	// `bash` can run for a long time, and `prompt`'s response is held until
+	// admission (see PromptOptions.onPromptAdmitted), which can likewise span
+	// real wall-clock time; `steer_subagent` waits for the subagent to accept.
+	// Dispatch them in the background so a subsequent frame — `abort_bash` for
+	// a running `bash`, or `abort`/`steer`/`follow_up`/`get_state` for an
+	// admitting `prompt` — can be read and handled without waiting for the
+	// earlier command to finish on its own. `predict_word` is backgrounded so a
+	// cold prediction engine never stalls the command queue behind a keystroke.
+	// The response is emitted when `handleCommand` resolves; clients correlate
+	// via `command.id`.
+	if (BACKGROUND_COMMANDS.has(command.type) || command.type === "prompt" || command.type === "steer_subagent") {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
-				deps.output(deps.errorResponse(command.id, "bash", message));
+				deps.output(deps.errorResponse(command.id, command.type, message));
 			}
 		})();
 		deps.trackBackgroundTask?.(task);
@@ -177,7 +205,9 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	})();
 }
 
-/** Serializes ordinary RPC commands while allowing control frames to dispatch immediately. */
+/** Starts prompts and `steer_subagent` after earlier ordinary commands, without
+ * awaiting admission. Control frames, `bash` and `predict_word` dispatch immediately (see
+ * dispatchRpcInputFrame). */
 export class RpcInputDispatcher {
 	#tail: Promise<void> = Promise.resolve();
 	#tasks = new Set<Promise<void>>();
@@ -195,7 +225,10 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
-			if (command.type === "bash") {
+			// Bash and predict_word retain their immediate side channel. Prompts
+			// and steer_subagent start through the serial tail, but
+			// dispatchRpcInputFrame backgrounds their admission.
+			if (BACKGROUND_COMMANDS.has(command.type)) {
 				dispatchRpcInputFrame(command, this.#deps);
 				return;
 			}

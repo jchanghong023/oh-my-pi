@@ -6,6 +6,12 @@
 
 - Added additive collab frames — `commands` (host-advertised slash-command palette), `browse-dirs` (guest directory request), and `dir-suggestions` — without changing `COLLAB_PROTO`; peers that do not know a frame ignore it.
 
+## [18.4.6] - 2026-10-01
+
+### Added
+
+- Added the `TspMeterMark` component for marking a position on a meter track with a custom icon and a total value that defines the full span of the track.
+
 ## [18.4.4] - 2026-09-29
 
 ### Added
