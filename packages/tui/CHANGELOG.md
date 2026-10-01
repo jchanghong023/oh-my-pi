@@ -6,6 +6,10 @@
 
 - Exported `wordCompletionQuery()` so hosts outside the editor can apply the same prose gates as ghost-text word completion ([#13517](https://github.com/can1357/oh-my-pi/pull/13517) by [@andrebrait](https://github.com/andrebrait))
 
+### Fixed
+
+- Fixed Shift+Enter submitting the prompt and Ctrl+Enter inserting a newline in Windows Terminal 1.24 and earlier; Shift+Enter now inserts a newline and Ctrl+Enter sends a follow-up, as on other platforms ([#13975](https://github.com/can1357/oh-my-pi/pull/13975) by [@H4vC](https://github.com/H4vC))
+
 ## [18.4.8] - 2026-10-01
 
 ### Fixed
