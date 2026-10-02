@@ -26,8 +26,11 @@ const AGENT_ID = "ParkedRelease";
 const MOCK_API_SOURCE = "test/parked-subagent-session-release";
 // createAgentSession races its workspace scan against an uncancelled 5 s
 // startup deadline timer whose reaction keeps the new session reachable until
-// it fires; collection is polled past that window.
-const COLLECT_DEADLINE_MS = 8_000;
+// it fires; collection is polled past that window. CI runners under load can
+// delay the timer's reaction and the forced-GC sweeps well past 8 s, so the
+// deadline keeps a wide margin (observed CI failures at 8 s with the same
+// code passing locally and on a less loaded run).
+const COLLECT_DEADLINE_MS = 30_000;
 
 const ENV_KEYS = ["HOME", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 let savedEnv: Record<string, string | undefined> = {};
@@ -168,7 +171,7 @@ it("releases a parked keep-alive subagent's session while the agent stays reviva
 	} finally {
 		run.close();
 	}
-}, 20_000);
+}, 90_000);
 
 it("parks without retaining the run's settings overlay and revives with the settings it wrote", async () => {
 	const run = await runKeptAliveSubagent();
@@ -187,4 +190,4 @@ it("parks without retaining the run's settings overlay and revives with the sett
 	} finally {
 		run.close();
 	}
-}, 20_000);
+}, 90_000);
