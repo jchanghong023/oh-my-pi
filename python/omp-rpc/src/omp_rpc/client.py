@@ -124,6 +124,7 @@ TodoAutoClearListener = Callable[[TodoAutoClearEvent], None]
 QueueUpdateListener = Callable[[QueueUpdateEvent], None]
 ProtocolErrorListener = Callable[["RpcProtocolError"], None]
 ListenerErrorListener = Callable[["ListenerErrorEvent"], None]
+HostToolCompletedListener = Callable[["HostToolCompletedEvent"], None]
 TListener = TypeVar("TListener")
 TEventListener = TypeVar("TEventListener", bound=Callable[..., None])
 THistoryItem = TypeVar("THistoryItem")
@@ -415,6 +416,22 @@ class ListenerErrorEvent:
 
 
 @dataclass(slots=True, frozen=True)
+class HostToolCompletedEvent:
+    """A registered host tool's `execute()` returned without raising.
+
+    Emitted by `RpcClient.on_host_tool_completed` for every dispatch path —
+    top-level call, `xd://` device write, or the eval bridge — unlike
+    `tool_execution_end`, which only names the transport tool the agent
+    invoked. `tool_call_id` is the id omp dispatched with; for eval-bridged
+    calls it is synthetic and matches no `tool_execution_*` event.
+    """
+
+    tool_name: str
+    tool_call_id: str
+
+
+
+@dataclass(slots=True, frozen=True)
 class PromptTurn:
     events: tuple[RpcAgentEvent, ...]
     messages: tuple[AgentMessage, ...]
@@ -619,6 +636,7 @@ class RpcClient:
         self._session_settled_listeners: list[SessionSettledListener] = []
         self._protocol_error_listeners: list[ProtocolErrorListener] = []
         self._listener_error_listeners: list[ListenerErrorListener] = []
+        self._host_tool_completed_listeners: list[HostToolCompletedListener] = []
 
     def __enter__(self) -> RpcClient:
         return self.start()
@@ -903,6 +921,23 @@ class RpcClient:
         self, listener: ToolExecutionEndListener
     ) -> Callable[[], None]:
         return self._add_typed_event_listener("tool_execution_end", listener)
+
+    def on_host_tool_completed(
+        self, listener: HostToolCompletedListener
+    ) -> Callable[[], None]:
+        """Subscribe to successful host-tool executions, whatever the dispatch path.
+
+        Fires on the tool's worker thread after `execute()` returns and before
+        the result is sent to omp, so the listener observes the completion
+        before the agent's turn can end. Fires even when omp cancelled the
+        call meanwhile — the tool's side effects already happened. Does not
+        fire for unregistered tools, non-object arguments, invalid params,
+        a raising `execute()`, or a result that is not a string/mapping.
+        """
+        self._host_tool_completed_listeners.append(listener)
+        return lambda: self._remove_listener(
+            self._host_tool_completed_listeners, listener
+        )
 
     def on_auto_compaction_start(
         self, listener: AutoCompactionStartListener
@@ -1894,14 +1929,20 @@ class RpcClient:
                         }
                     ),
                 )
-                result = tool.execute(params, context)
+                result = self._normalize_host_tool_result(tool.execute(params, context))
+                self._dispatch_listeners(
+                    "host_tool_completed",
+                    tool_name,
+                    self._host_tool_completed_listeners,
+                    HostToolCompletedEvent(tool_name=tool_name, tool_call_id=tool_call_id),
+                )
                 if pending_call.cancel_event.is_set():
                     return
                 self._send_notification(
                     {
                         "type": "host_tool_result",
                         "id": request_id,
-                        "result": self._normalize_host_tool_result(result),
+                        "result": result,
                     }
                 )
             except Exception as exc:

@@ -17,6 +17,8 @@ from unittest import mock
 
 from omp_rpc import (
     AgentEndEvent,
+    HostTool,
+    HostToolCompletedEvent,
     OpenSessionResult,
     PromptResultEvent,
     QueueUpdateEvent,
@@ -579,6 +581,37 @@ FAKE_SERVER = textwrap.dedent(
                             "type": "host_tool_call",
                             "id": "host-call-2",
                             "toolCallId": "toolu_write_1",
+                            "toolName": "echo_host",
+                            "arguments": {"message": "hello"},
+                        }
+                    ),
+                    flush=True,
+                )
+                continue
+            if message == "needs eval host tool":
+                # The eval bridge runs session tools in-process under a
+                # synthetic call id; the only transport tool event on the wire
+                # is the enclosing `eval` call.
+                print(json.dumps({"type": "agent_start"}), flush=True)
+                host_event_tool_call_id = "toolu_eval_1"
+                host_event_tool_name = "eval"
+                print(
+                    json.dumps(
+                        {
+                            "type": "tool_execution_start",
+                            "toolCallId": "toolu_eval_1",
+                            "toolName": "eval",
+                            "args": {"language": "js", "code": "await tool.echo_host({message: 'hello'})"},
+                        }
+                    ),
+                    flush=True,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "type": "host_tool_call",
+                            "id": "host-call-3",
+                            "toolCallId": "js-echo_host-1",
                             "toolName": "echo_host",
                             "arguments": {"message": "hello"},
                         }
@@ -1435,6 +1468,62 @@ class RpcClientTests(unittest.TestCase):
             self.assertEqual([event.tool_name for event in end_events], ["echo_host"])
             self.assertEqual(end_events[0].tool_call_id, "toolu_write_1")
             self.assertEqual(end_events[0].result["content"][0]["text"], "host:hello")
+
+    def _echo_host_tool(self, execute) -> HostTool:
+        return host_tool(
+            name="echo_host",
+            description="Echo from the Python host process",
+            parameters={
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"],
+                "additionalProperties": False,
+            },
+            execute=execute,
+        )
+
+    def test_eval_bridged_host_tool_reports_completion(self) -> None:
+        """An eval-bridged host tool is observable although no event names it.
+
+        The eval bridge dispatches with a synthetic call id, so the only
+        `tool_execution_end` on the wire is the enclosing `eval`. roboomp's
+        terminal-action gate missed `submit_pr_review` and its reminders
+        re-posted the review (oh-my-pi#13583).
+        """
+        completed: list[HostToolCompletedEvent] = []
+        with self.make_client(
+            custom_tools=(self._echo_host_tool(lambda args, _ctx: f"host:{args['message']}"),)
+        ) as client:
+            client.on_host_tool_completed(completed.append)
+            turn = client.prompt_and_wait("needs eval host tool", timeout=2.0)
+
+        end_names = [
+            event.tool_name
+            for event in turn.events
+            if getattr(event, "type", None) == "tool_execution_end"
+        ]
+        self.assertEqual(end_names, ["eval"])
+        self.assertEqual(
+            completed,
+            [HostToolCompletedEvent(tool_name="echo_host", tool_call_id="js-echo_host-1")],
+        )
+
+    def test_raising_host_tool_does_not_report_completion(self) -> None:
+        def reject(_args, _ctx) -> str:
+            raise RuntimeError("rejected: 422")
+
+        completed: list[HostToolCompletedEvent] = []
+        with self.make_client(custom_tools=(self._echo_host_tool(reject),)) as client:
+            client.on_host_tool_completed(completed.append)
+            turn = client.prompt_and_wait("needs eval host tool", timeout=2.0)
+
+        end_events = [
+            event
+            for event in turn.events
+            if getattr(event, "type", None) == "tool_execution_end"
+        ]
+        self.assertTrue(end_events[0].is_error)
+        self.assertEqual(completed, [])
 
     def test_extension_ui_round_trip(self) -> None:
         with self.make_client() as client:
