@@ -21,6 +21,7 @@ import type { RpcForkCommand, RpcForkResponse } from "./rpc-fork-types";
 import type { RpcForkAttachment } from "./rpc-fork-attachments";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { BtwHistoryRecord } from "../../session/btw-history";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -163,6 +164,11 @@ export type RpcCommand =
 
 	// Fork extensions (protocol v3; handled in rpc-fork-*.ts — see docs-zh-CN/requirements/rpc-ui-protocol.md)
 	| RpcForkCommand;
+
+	// Side questions (/btw); answers stream as `btw_delta` / `btw_record` frames
+	| { id?: string; type: "btw"; question: string; recordId?: string }
+	| { id?: string; type: "btw_cancel"; recordId?: string }
+	| { id?: string; type: "get_btw_history" };
 
 // ============================================================================
 // RPC State
@@ -533,8 +539,36 @@ export type RpcResponse =
 	// Fork extensions (protocol v3)
 	| RpcForkResponse
 
+	// Side questions (/btw)
+	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: BtwHistoryRecord } }
+	| { id?: string; type: "response"; command: "btw_cancel"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_btw_history";
+			success: true;
+			data: { records: readonly BtwHistoryRecord[] };
+	  }
+
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };
+
+// ============================================================================
+// Side question (/btw) frames (stdout)
+// ============================================================================
+
+/** Text appended to the running side question's latest answer. */
+export interface RpcBtwDeltaFrame {
+	type: "btw_delta";
+	recordId: string;
+	delta: string;
+}
+
+/** Full record snapshot on every lifecycle change: started, complete, cancelled, error. */
+export interface RpcBtwRecordFrame {
+	type: "btw_record";
+	record: BtwHistoryRecord;
+}
 
 // ============================================================================
 // Subagent Events (stdout)

@@ -77,6 +77,7 @@ import { RpcForkFeedbackController, RpcForkHookTelemetry } from "./rpc-fork-stat
 import { RpcForkHost } from "./rpc-fork-host";
 import { isNegotiableRpcProtocolVersion, RPC_FORK_PROTOCOL_VERSION } from "./rpc-fork-types";
 import { RpcGoalController } from "./rpc-goal";
+import { RpcBtwController } from "./rpc-btw";
 import { pageRpcMessages, RpcMessagesPageError } from "./rpc-messages";
 import {
 	RpcExtensionUserMessageTracker,
@@ -1340,6 +1341,8 @@ export class RpcSessionHost {
 	readonly #goalController: RpcGoalController;
 	/** True while a goal continuation turn is scheduled or held: settles must report busy. */
 	readonly #goalTurnScheduled: () => boolean;
+	/** Side questions (/btw): ephemeral turns beside the transcript, with their history store. */
+	readonly #btw: RpcBtwController;
 	readonly #forkAskBroker: RpcForkAskBroker;
 	readonly #forkPlanController: RpcForkPlanController;
 	readonly #forkHookTelemetry: RpcForkHookTelemetry;
@@ -1371,6 +1374,7 @@ export class RpcSessionHost {
 		this.promptResults = new RpcPromptResults(this.session, this.#output, this.#goalTurnScheduled);
 		this.#sessionEvents = new RpcSessionEventForwarder(this.#output);
 		this.#settleWatcher = new RpcSessionSettleWatcher(this.session, this.#output, this.#goalTurnScheduled);
+		this.#btw = new RpcBtwController(this.session, this.#output);
 
 		// Fork-extension (protocol v3) surface: negotiation-gated dispatch point.
 		// Inactive until `negotiate_protocol {protocolVersion:3}` succeeds; inactive
@@ -1475,6 +1479,7 @@ export class RpcSessionHost {
 				change: () => Promise<T>,
 				{ detachesRun }: { detachesRun: boolean },
 			): Promise<T> => {
+				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: T | undefined;
 				try {
@@ -1690,6 +1695,7 @@ export class RpcSessionHost {
 				}
 				const requestedModel =
 					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
+				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof handleRpcSessionChange>> | undefined;
 				try {
@@ -1720,6 +1726,7 @@ export class RpcSessionHost {
 			case "open_session": {
 				const requestedModel = await resolveRequestedRpcModel(session, command);
 				const fileBeforeOpen = session.sessionFile;
+				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof openRpcSession>>;
 				try {
@@ -1794,6 +1801,21 @@ export class RpcSessionHost {
 					return this.error(id, "goal", goalError instanceof Error ? goalError.message : String(goalError));
 				}
 			}
+
+			// =================================================================
+			// Side questions (/btw)
+			// =================================================================
+
+			case "btw": {
+				const record = await this.#btw.ask(command.question, command.recordId);
+				return this.success(id, "btw", { record });
+			}
+
+			case "btw_cancel":
+				return this.success(id, "btw_cancel", { cancelled: this.#btw.cancel(command.recordId) });
+
+			case "get_btw_history":
+				return this.success(id, "get_btw_history", { records: await this.#btw.history() });
 
 			case "set_fast_mode": {
 				const supported = session.setFastMode(command.enabled);
@@ -2373,6 +2395,13 @@ export class RpcSessionHost {
 	async dispose(reason: string): Promise<void> {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		// The host ends regardless; report an unsaved side answer instead of skipping dispose.
+		try {
+			await this.#btw.close();
+		} catch (btwError) {
+			const message = btwError instanceof Error ? btwError.message : String(btwError);
+			this.#output({ type: "notice", level: "error", message, source: "btw-history" });
+		}
 		// Per-surface fail-closed messages, derived from the single reason so the
 		// wire-visible error text matches the legacy single-session mode exactly.
 		this.forkHost.dispose(`${reason} before fork request completed`);
