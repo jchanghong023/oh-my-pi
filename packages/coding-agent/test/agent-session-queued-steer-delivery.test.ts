@@ -957,7 +957,7 @@ describe("AgentSession queued steer delivery", () => {
 				// raw-text record must follow so the caller can still remove it by the
 				// exact "/cmd args" it originally submitted.
 				expect(session.promoteQueuedMessage("/cmd args")).toBe(true);
-				expect(session.getQueuedMessages()).toEqual({ steering: ["Expanded args"], followUp: [] });
+				expect(session.getQueuedMessages()).toEqual({ steering: ["Expanded args"], followUp: [], liveSteered: 0 });
 
 				expect(session.removeQueuedMessage("/cmd args", "steering")).toBe(true);
 				expect(session.getQueuedMessages().steering).toEqual([]);
@@ -1175,7 +1175,7 @@ describe("AgentSession queued steer delivery", () => {
 		it("wakes an idle follow-up and rejects a stale promotion without replaying it", async () => {
 			const { session, mock } = await createSession([{ content: ["delivered"] }]);
 			await session.followUp("wake me");
-			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["wake me"] });
+			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["wake me"], liveSteered: 0 });
 			const delivered = nextUserMessage(session, "wake me");
 
 			expect(session.promoteQueuedMessage("wake me")).toBe(true);

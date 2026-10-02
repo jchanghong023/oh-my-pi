@@ -163,8 +163,7 @@ export type RpcCommand =
 	  }
 
 	// Fork extensions (protocol v3; handled in rpc-fork-*.ts — see docs-zh-CN/requirements/rpc-ui-protocol.md)
-	| RpcForkCommand;
-
+	| RpcForkCommand
 	// Side questions (/btw); answers stream as `btw_delta` / `btw_record` frames
 	| { id?: string; type: "btw"; question: string; recordId?: string }
 	| { id?: string; type: "btw_cancel"; recordId?: string }

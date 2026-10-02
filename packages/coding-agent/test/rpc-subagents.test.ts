@@ -82,6 +82,8 @@ function createSessionChangeSession(options: SessionChangeStubOptions): RpcSessi
 		branch: async (_entryId: string) =>
 			options.branch ?? { selectedText: "branched text", selectedImages: [], cancelled: false },
 		fork: async (_entryId?: string) => options.fork ?? true,
+		model: undefined,
+		setModel: async () => ({ switched: true }),
 	};
 }
 
