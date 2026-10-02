@@ -564,6 +564,8 @@ flowchart TB
 | `steer` / `follow_up` | S；message；images/attachments 可选 | 入队结果及可追踪条目身份；queue_updated | 入队不是执行结束；最终消费进入正常消息记录 |
 | `abort` | S；无需业务参数 | 取消请求已受理及实际状态；原执行仍以终结事件收尾 | 沿用 OMP 对取消和后台工作的真实语义，剩余 jobs/子代理如实报告；不能把 ACK 当全部静止 |
 | `abort_and_prompt` | S；message；附件可选 | 接受及新请求的 prompt_result | 复用现有取消后发送顺序；不能取消另一会话 |
+
+输入排序与取消（上游 PR #13027 起，OMP v18.4.10 合入）：`prompt`、`steer`、`follow_up`、`abort_and_prompt` 在帧到达时编号、经输入门串行执行；`abort` 与会话轮换（new/switch/branch/open）使**更早排队的输入**在其下一步检查处取消。被取消的 `prompt` 仍收到正常 success 响应并以 `prompt_result`（`status:"aborted"`）收尾，不启动模型回合；被取消的 `steer`/`follow_up` 静默丢弃——成功响应只代表接受，不代表消息入队，客户端不能把 success 当入队成功。extension input 处理器在门内按到达顺序运行，可改写文本/图片或整条消费（消费后以 `agentInvoked:false` 本地完成）；attachments 与 images 在处理器之前合成，附件文本前缀在处理器改写之后、命令匹配（skill/斜杠）之前保持分离——斜杠/skill 匹配看到的是不带附件前缀的用户文本。附件图片随命令一起发送（builtin 残余 prompt 同样携带改写后的图片集）。
 | `get_state` | S；无需业务参数 | 当前模型、运行/队列/待交互/后台工作、revision | 保留现有字段；查询不得触发执行 |
 | `get_messages_page` | H；cursor/limit/order 可选；before/after 可选且互斥 | messages、分页定位、历史修订 | 复用字段语义；活动会话固定本次读取边界，后续追加由事件处理；不能一直用 busy 阻止读历史 |
 | `get_messages` / `get_entries` / `get_tree` | H；get_entries 的 since 可选；其他无业务参数 | 现有消息/条目/树载荷及修订 | 兼容和树视图复用；GUI 大历史首选分页，不要求无限大整包 |
@@ -642,7 +644,7 @@ GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；
 | 工具审批响应（复用现有帧） | S；原交互 ID、决定及请求要求的修订 | 消费结果，错误实例/过期审批拒绝；不能扩大原请求授权范围 |
 | `ask_response` / `ask_pause` | S；原问题 ID；响应为 answers/chat/cancelled 之一；pause 用 targetId 指向原问题 | 按原问题约束校验；倒计时暂停的业务状态归 OMP，不新增当前不存在的恢复动作 |
 | `set_plan_mode` / `get_plan_state` / `list_plans` | S；设置时 enabled，查询无业务参数 | 实际模式/计划目录、身份、定位和内容修订 |
-| `approve_plan` | S；审批 ID、计划身份、expectedRevision、decision；feedback/model 可选 | 接受与后续执行关联；过期拒绝；决定为现有 approve/refine/reject |
+| `approve_plan` | S；审批 ID、计划身份、expectedRevision、decision；feedback/model 可选 | 接受与后续执行关联（执行回合的 `prompt_result` 携带本请求 id）；过期拒绝；决定为现有 approve/refine/reject |
 | `get_settings` / `set_settings` / `unset_settings` | P 或 S；读取 scope，写入 scope、key、value、expectedRevision；unset 不带 value | 明确存储/生效作用域；现有不支持的项目写入继续返回限制，不假报成功 |
 | `list_mcp_servers` / `mcp_reconnect` | P/S；重连指定 name 及服务实际归属 | 配置与会话实际连接状态分开；有真实实现才公告重连能力 |
 | Provider、登录、宿主工具/URI、用量与其他已保留入口 | 沿用现有必要业务参数；会话相关者加 S，配置相关者明确 scope | 保留现有功能并审计回调归属；模型登录沿用 get_login_providers/login 与 UI 桥；不复制鉴权系统 |
@@ -755,4 +757,6 @@ OMP 侧 B1/B2/D1/E1/F 的项目模式骨架与核心接口已实施；每包状�
 
 自动化验证入口：`test/rpc-project-*.test.ts` 已加入 `scripts/fulltest.ts` 白名单（组 `coding-agent/rpc-project`）。真实模型/真实 GUI 场景（O19/O28、全部 Z 系列）仍属未验证，按 §11 分别记录，不合并为完成。
 
-2026-10-02 随上游 v18.4.10 合入上游 PR #13027 的用户输入排序门（`RpcUserInputGate`）并适配 fork 分层：`prompt`/`steer`/`follow_up`/`abort_and_prompt` 在帧到达时编号、经共享门串行执行，`abort` 与会话轮换使更早的排队输入在其下一步 `isCurrent` 检查处取消（取消的 `prompt` 以正常 response + `prompt_result` 收尾，不再启动模型回合）；extension input 处理器按到达顺序在门内运行（此前 RPC 链路不经过 input 处理器）；skill 命令消息可携带图片。单会话模式与项目模式（跨会话共享同一门、帧到达点 accept）均已接线；fork 的 attachments 解析、`/plan` 拦截、严格分发未知命令拒绝与 builtin 残余 prompt 行为在门内保留。本段为源码实施记录，配套行为验证未运行。
+2026-10-02 随上游 v18.4.10 合入上游 PR #13027 的用户输入排序门（`RpcUserInputGate`）并适配 fork 分层：`prompt`/`steer`/`follow_up`/`abort_and_prompt` 在帧到达时编号、经共享门串行执行，`abort` 与会话轮换使更早的排队输入在其下一步 `isCurrent` 检查处取消（取消的 `prompt` 以正常 response + `prompt_result` 收尾，不再启动模型回合）；extension input 处理器按到达顺序在门内运行（此前 RPC 链路不经过 input 处理器）；skill 命令消息可携带图片。单会话模式与项目模式（跨会话共享同一门、帧到达点 accept）均已接线。行为语义见 §14.4 的「输入排序与取消」条款；fork 的 attachments 解析与 `/plan` 拦截保留在命令入口、门**外**（同步快速路径，不产生模型输入），严格分发未知命令拒绝与 builtin 残余 prompt 行为在门内保留。已知边界：`approve_plan`/refine 的长回合经 `dispatchForkPromptTurn` 派发、不进输入门（进门会把 abort/get_state 堵在串行队列），其 `prompt_result` 以触发命令的请求 id 关联。
+
+同日合并后审查（多子代理核对上游语义、fork 行为、装配链路后）修复了移植引入的问题：项目模式路由曾解构重建命令对象导致门的 WeakMap 键失配、四类用户输入全部被静默取消（含 `execute_command` 合成 prompt 双重失配）——改为原对象透传并在合成点 accept，项目模式同时把 prompt/steer/follow_up/steer_subagent 后台化使 abort 可超车；prompt 的 `local` 与 `unknown-command` 出口补回 `discard(ticket)`（消除 ticket 泄漏）；`abort_and_prompt` 恢复模板展开默认值；附件文本前缀改为 extension 改写之后合成、斜杠/skill 匹配使用裸文本；builtin 残余 prompt 携带改写后的图片集；`approve_plan`/refine 的 `prompt_result` 带请求 id。新增回归测试：项目模式 `execute_command` 本地 builtin 正向执行、项目模式 prompt 非取消链路（`test/rpc-project-protocol.test.ts`）。

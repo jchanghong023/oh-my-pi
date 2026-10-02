@@ -1,5 +1,5 @@
 /**
- * Fork-extension plan-mode commands (requirement 5.3, rpc-ui-protocol.md).
+ * Fork-extension plan-mode commands (rpc-ui-protocol.md §14.9).
  *
  * `set_plan_mode`/`get_plan_state` wrap the session plan state (via
  * `plan-mode/session-approval.ts` for enter/exit); `list_plans`/`read_plan`
@@ -88,13 +88,13 @@ export class RpcForkPlanController {
 	 * blocks the RPC serial queue; hosts without one (bare stubs) fall back to
 	 * awaiting the turn inline.
 	 */
-	async #runPromptTurn(run: () => Promise<void>): Promise<void> {
+	async #runPromptTurn(run: () => Promise<void>, id?: string): Promise<void> {
 		const dispatch = this.host.context.dispatchForkPromptTurn;
 		if (!dispatch) {
 			await run();
 			return;
 		}
-		dispatch(run);
+		dispatch(run, id);
 	}
 
 	async #setPlanMode(command: RpcForkCommandBase): Promise<RpcResponse> {
@@ -188,7 +188,7 @@ export class RpcForkPlanController {
 				} else {
 					await this.session.prompt(message);
 				}
-			});
+			}, command.id);
 			return this.host.context.success(command.id, "approve_plan", { decision, dispatched: true });
 		}
 		if (decision === "reject") {
@@ -242,13 +242,15 @@ export class RpcForkPlanController {
 		// The execution turn runs for minutes: dispatched off the RPC serial
 		// queue so ordinary commands (abort, get_state) keep answering while the
 		// approved prompt executes, and the command is answered immediately.
-		await this.#runPromptTurn(() =>
-			dispatchApprovedPlan(this.session, {
-				planFilePath,
-				title,
-				planContent,
-				preserveContext: true,
-			}),
+		await this.#runPromptTurn(
+			() =>
+				dispatchApprovedPlan(this.session, {
+					planFilePath,
+					title,
+					planContent,
+					preserveContext: true,
+				}),
+			command.id,
 		);
 		return this.host.context.success(command.id, "approve_plan", { decision, dispatched: true });
 	}

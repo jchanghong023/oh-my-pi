@@ -564,6 +564,93 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 		});
 	}, 60_000);
 
+	// Regression (2026-10-02 merge): project-mode routing used to rebuild the
+	// frame object before handing it to the session host, so the user-input
+	// gate never recognized it and every ordered input was cancelled as stale.
+	// These two cases pin the positive paths: a routed prompt reaches the real
+	// dispatch chain (a prompt_result that is not the gate's "aborted"), and
+	// execute_command's synthetic prompt actually runs the builtin.
+	test("execute_command runs a local builtin through the shared prompt pipeline", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-");
+		await using agentDir = await TempDir.create("rpc-project-agent-");
+		const dirs: ProjectRpcServerDirs = {
+			cwd: path.resolve(cwdDir.path()),
+			sessionDir: path.resolve(sessionsDir.path()),
+			agentDir: path.resolve(agentDir.path()),
+		};
+		await withProjectRpcServer(dirs, async (send, next, seen) => {
+			await negotiateV3(send, next);
+
+			send({ id: "c-model", type: "create_session", name: "exec-builtin" });
+			const created = await responseFor(next, "c-model");
+			expect(created.success).toBe(true);
+			const createdData = created.data as SessionSummaryLike;
+
+			send({
+				id: "ex-model",
+				type: "execute_command",
+				sessionId: createdData.sessionId,
+				sessionGeneration: createdData.sessionGeneration,
+				text: "/model",
+			});
+			const executed = await responseFor(next, "ex-model");
+			// A cancelled (stale) input answers bare success with no data; a
+			// locally completed builtin reports agentInvoked: false.
+			expect(executed).toMatchObject({
+				id: "ex-model",
+				command: "execute_command",
+				success: true,
+				data: { agentInvoked: false },
+			});
+			// The builtin really ran: its headless output reached the client.
+			await Bun.sleep(1500);
+			expect(
+				seen.some(
+					frame =>
+						frame.type === "command_output" &&
+						(typeof frame.text === "string"
+							? frame.text.includes("Current model") || frame.text.includes("No model is currently selected")
+							: false),
+				),
+			).toBe(true);
+		});
+	}, 60_000);
+
+	test("project prompt reaches the real dispatch chain (not gate-cancelled)", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-");
+		await using agentDir = await TempDir.create("rpc-project-agent-");
+		const dirs: ProjectRpcServerDirs = {
+			cwd: path.resolve(cwdDir.path()),
+			sessionDir: path.resolve(sessionsDir.path()),
+			agentDir: path.resolve(agentDir.path()),
+		};
+		await withProjectRpcServer(dirs, async (send, next) => {
+			await negotiateV3(send, next);
+
+			send({ id: "c-prompt", type: "create_session", name: "prompt-direct" });
+			const created = await responseFor(next, "c-prompt");
+			expect(created.success).toBe(true);
+			const createdData = created.data as SessionSummaryLike;
+
+			// Plain text prompt: with no model available the turn fails after
+			// admission, which still proves the input was not cancelled by the
+			// ordering gate (a stale input settles with status "aborted").
+			send({
+				id: "p-direct",
+				type: "prompt",
+				sessionId: createdData.sessionId,
+				sessionGeneration: createdData.sessionGeneration,
+				message: "hello project",
+			});
+			const result = await next(
+				frame => frame.type === "prompt_result" && (frame as { id?: string }).id === "p-direct",
+			);
+			expect((result as { status?: string }).status).not.toBe("aborted");
+		});
+	}, 60_000);
+
 	test("EOF ordered exit", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-");

@@ -464,13 +464,15 @@ class RpcProjectHost {
 				"stale_session",
 			);
 		}
-		// Strip the project routing fields: the session host speaks the stock shape.
 		if (command.type === "prompt" && !host.session.isStreaming && this.#pendingSkillRefresh.has(sessionId)) {
 			await host.refreshSkills();
 			this.#pendingSkillRefresh.delete(sessionId);
 		}
-		const { sessionId: _s, sessionGeneration: _g, ...stock } = command as Record<string, unknown>;
-		return host.handleCommand(stock as RpcCommand);
+		// The frame object is passed through as-is (routing fields included):
+		// RpcUserInputGate keys acceptance on object identity, so a rebuilt
+		// "stock" copy would never match and every ordered user input would
+		// be cancelled as stale. The session host ignores the extra fields.
+		return host.handleCommand(command as RpcCommand);
 	}
 
 	/** Answer a project-level command. Zero-session-safe unless stated otherwise. */
@@ -703,8 +705,8 @@ class RpcProjectHost {
 				// With a session: delegate for the session's filtered list.
 				const sessionHost = await record();
 				if (sessionHost) {
-					const { sessionId: _s, sessionGeneration: _g, ...stock } = command;
-					return sessionHost.handleCommand(stock as RpcCommand);
+					// Identity-preserving delegation (see handleSessionCommand).
+					return sessionHost.handleCommand(command as RpcCommand);
 				}
 				await this.#options.modelRegistry.awaitBackgroundRefresh();
 				return this.#successResponse(id, type, { models: this.#options.modelRegistry.getAvailable() });
@@ -850,15 +852,20 @@ class RpcProjectHost {
 			return this.#errorResponse(id, type, `Unknown command: ${text.trim().split(/\s+/)[0]}`, "invalid_params");
 		}
 		// Route through the shared strict-dispatch prompt path; the response is
-		// re-labeled for the command the client actually sent.
-		const promptResponse = await this.handleSessionCommand({
+		// re-labeled for the command the client actually sent. The synthetic
+		// prompt is accepted into the input gate here (the execute_command
+		// frame itself is not a user-input type), so ordering — and a racing
+		// abort invalidating it — applies exactly as for a direct prompt.
+		const syntheticPrompt = {
 			id,
 			type: "prompt",
 			sessionId: typeof sessionId === "string" ? sessionId : undefined,
 			sessionGeneration: typeof command.sessionGeneration === "string" ? command.sessionGeneration : undefined,
 			message: text,
 			inputMode: "auto",
-		});
+		};
+		this.inputGate.accept(syntheticPrompt as RpcCommand);
+		const promptResponse = await this.handleSessionCommand(syntheticPrompt as never);
 		if (isRecord(promptResponse) && promptResponse.command === "prompt") {
 			return { ...promptResponse, command: type } as RpcResponse;
 		}
@@ -1053,10 +1060,16 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	);
 
 	const backgroundTasks = new Set<Promise<void>>();
+	// Long-holding commands dispatch in the background so later frames can
+	// overtake them (mirrors the single-session transport in rpc-mode.ts): a
+	// `bash` runs for a long time, a `prompt`/`steer`/`follow_up`/`steer_subagent`
+	// holds its response until admission. Backgrounding lets an `abort` (or
+	// get_state) reach the session while such a command is still settling.
+	const projectBackgroundedTypes = new Set(["bash", "predict_word", "prompt", "steer", "follow_up", "steer_subagent"]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
-		if (type === "bash") {
+		if (projectBackgroundedTypes.has(type)) {
 			// Session-bound background command; route like any session command.
 			const task = host
 				.handleSessionCommand(parsed as never)

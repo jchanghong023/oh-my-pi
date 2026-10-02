@@ -232,6 +232,8 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 			"test/rpc-fork-protocol.test.ts",
 			"test/rpc-fork-queue-jobs-search-state.test.ts",
 			"test/rpc-fork-sessions.test.ts",
+			"test/rpc-skill-image-order.test.ts",
+			"test/rpc-user-input-order.test.ts",
 		],
 	},
 	{

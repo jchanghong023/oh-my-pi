@@ -359,9 +359,10 @@ export function promptRpcBuiltinResidual(
 	prompt: string,
 	command: Pick<Extract<RpcCommand, { type: "prompt" }>, "images" | "streamingBehavior">,
 	onPromptAdmitted?: () => void,
+	images?: ImageContent[],
 ): Promise<boolean> {
 	return session.prompt(prompt, {
-		images: command.images,
+		images: images ?? command.images,
 		streamingBehavior: command.streamingBehavior,
 		onPromptAdmitted,
 	});
@@ -1317,8 +1318,8 @@ export class RpcSessionHost {
 			// Fork prompt turns (plan approve/refine) run for minutes: dispatch them
 			// off the RPC serial queue through the same ticket + prompt_result
 			// reporting as the stock prompt arm so abort/get_state keep answering.
-			dispatchForkPromptTurn: run => {
-				const ticket = this.promptResults.begin(undefined);
+			dispatchForkPromptTurn: (run, id) => {
+				const ticket = this.promptResults.begin(id);
 				watchAndReportPromptResult({
 					ticket,
 					startPrompt: async () => {
@@ -1326,7 +1327,7 @@ export class RpcSessionHost {
 						return true;
 					},
 					results: this.promptResults,
-					onError: this.#onPromptError(undefined, "approve_plan"),
+					onError: this.#onPromptError(id, "approve_plan"),
 					extensionUserMessageTracker: this.#extensionUserMessageTracker,
 				});
 			},
@@ -1492,12 +1493,7 @@ export class RpcSessionHost {
 						return this.success(id, "prompt", { agentInvoked: false });
 					}
 				}
-				const promptAttachments = await this.#resolveCommandAttachments(
-					id,
-					"prompt",
-					command.attachments,
-					command.message,
-				);
+				const promptAttachments = await this.#resolveCommandAttachments(id, "prompt", command.attachments, "");
 				if ("error" in promptAttachments) return promptAttachments.error;
 				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
 				// cannot start its run ahead of the prompt's event-stream position.
@@ -1510,10 +1506,12 @@ export class RpcSessionHost {
 						strictCommandDispatch,
 					);
 					if (outcome === "unknown-command") {
+						this.promptResults.discard(ticket);
 						const commandName = command.message.trim().split(/\s+/)[0]!;
 						return this.error(id, "prompt", `Unknown command: ${commandName}`, "unknown_command");
 					}
 					if (outcome === "local") {
+						this.promptResults.discard(ticket);
 						return this.success(id, "prompt", { agentInvoked: false });
 					}
 					if (outcome === "skill-invoked") {
@@ -1534,12 +1532,7 @@ export class RpcSessionHost {
 
 			case "steer":
 			case "follow_up": {
-				const resolved = await this.#resolveCommandAttachments(
-					id,
-					command.type,
-					command.attachments,
-					command.message,
-				);
+				const resolved = await this.#resolveCommandAttachments(id, command.type, command.attachments, "");
 				if ("error" in resolved) return resolved.error;
 				await this.#dispatchOrderedUserInput(command, undefined, resolved, false);
 				return this.success(id, command.type);
@@ -1572,12 +1565,7 @@ export class RpcSessionHost {
 			}
 
 			case "abort_and_prompt": {
-				const resolved = await this.#resolveCommandAttachments(
-					id,
-					"abort_and_prompt",
-					command.attachments,
-					command.message,
-				);
+				const resolved = await this.#resolveCommandAttachments(id, "abort_and_prompt", command.attachments, "");
 				if ("error" in resolved) return resolved.error;
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
@@ -2318,7 +2306,7 @@ export class RpcSessionHost {
 	#dispatchOrderedUserInput(
 		command: Extract<RpcCommand, { type: "prompt" | "steer" | "follow_up" | "abort_and_prompt" }>,
 		ticket: RpcPromptTicket | undefined,
-		resolved: { message: string; images: ImageContent[] },
+		attachments: { message: string; images: ImageContent[] },
 		strictCommandDispatch: boolean,
 	): Promise<"local" | "cancelled" | "admitted" | "skill-invoked" | "builtin-agent" | "unknown-command"> {
 		return this.#inputGate.enqueue(async () => {
@@ -2327,11 +2315,15 @@ export class RpcSessionHost {
 			const isCurrent = () =>
 				this.#inputGate.isCurrent(command) && !this.isShutdownRequested() && session.sessionId === sessionId;
 			if (!isCurrent()) return "cancelled";
-			let text = resolved.message;
+			// The attachment text prefix joins the model input only after the
+			// extension input handlers below, so slash/skill matching in the
+			// prompt arm sees the bare (possibly rewritten) user text.
+			const attachmentPrefix = attachments.message;
+			let text = command.message;
 			let images: ImageContent[] | undefined = command.images
-				? [...command.images, ...resolved.images]
-				: resolved.images.length > 0
-					? resolved.images
+				? [...command.images, ...attachments.images]
+				: attachments.images.length > 0
+					? attachments.images
 					: undefined;
 			const runner = session.extensionRunner;
 			if (runner?.hasHandlers("input")) {
@@ -2342,13 +2334,14 @@ export class RpcSessionHost {
 				if (result.images !== undefined) images = result.images;
 			}
 			if (!isCurrent()) return "cancelled";
-			if (!text.trim() && !images?.length) return "local";
+			if (!text.trim() && !images?.length && !attachmentPrefix.trim()) return "local";
+			const withAttachments = attachmentPrefix ? attachmentPrefix + text : text;
 			if (command.type === "steer") {
-				await session.steer(text, images);
+				await session.steer(withAttachments, images);
 				return "admitted";
 			}
 			if (command.type === "follow_up") {
-				await session.followUp(text, images);
+				await session.followUp(withAttachments, images);
 				return "admitted";
 			}
 			// Set when a builtin consumed the text and returned a residual
@@ -2373,7 +2366,7 @@ export class RpcSessionHost {
 					// Keep the legacy `{ agentInvoked: true }` response data for skill
 					// commands (fork clients read it); plain prompts answer bare.
 					if (skillResult) return "skill-invoked";
-					const builtinResult = await executeAcpBuiltinSlashCommand(command.message, {
+					const builtinResult = await executeAcpBuiltinSlashCommand(text, {
 						session,
 						sessionManager: session.sessionManager,
 						settings: session.settings,
@@ -2418,11 +2411,11 @@ export class RpcSessionHost {
 					// silently turning it into model input.
 					if (
 						this.#options.projectMode &&
-						command.message.startsWith("/") &&
+						text.startsWith("/") &&
 						!(await buildAvailableSlashCommands(session)).some(
 							entry =>
-								entry.name === command.message.slice(1).split(/\s/, 1)[0] ||
-								entry.aliases?.includes(command.message.slice(1).split(/\s/, 1)[0]!),
+								entry.name === text.slice(1).split(/\s/, 1)[0] ||
+								entry.aliases?.includes(text.slice(1).split(/\s/, 1)[0]!),
 						)
 					) {
 						return "unknown-command";
@@ -2434,11 +2427,15 @@ export class RpcSessionHost {
 				ticket,
 				startPrompt: onPromptAdmitted =>
 					builtinResidual !== undefined
-						? promptRpcBuiltinResidual(session, builtinResidual, command, onPromptAdmitted)
-						: session.prompt(text, {
+						? promptRpcBuiltinResidual(session, builtinResidual, command, onPromptAdmitted, images)
+						: session.prompt(withAttachments, {
 								images,
-								...(command.type === "prompt" ? { streamingBehavior: command.streamingBehavior } : {}),
-								expandPromptTemplates: command.type === "prompt" && strictCommandDispatch,
+								...(command.type === "prompt"
+									? {
+											streamingBehavior: command.streamingBehavior,
+											expandPromptTemplates: strictCommandDispatch,
+										}
+									: {}),
 								onPromptAdmitted,
 							}),
 				results: this.promptResults,

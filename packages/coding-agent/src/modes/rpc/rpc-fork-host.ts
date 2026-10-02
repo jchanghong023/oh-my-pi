@@ -27,7 +27,12 @@ export interface RpcForkContext {
 	 * Optional: production hosts always provide it; bare test stubs may omit
 	 * it, in which case callers await the turn inline (blocking legacy shape).
 	 */
-	readonly dispatchForkPromptTurn?: (run: () => Promise<void>) => void;
+	/**
+	 * Fork prompt turns (plan approve/refine) report their prompt_result under
+	 * the triggering command's `id` so the client can correlate the turn with
+	 * the request that started it.
+	 */
+	readonly dispatchForkPromptTurn?: (run: () => Promise<void>, id?: string) => void;
 }
 
 export type RpcForkCommandHandler = (command: RpcForkCommandBase) => Promise<RpcResponse> | RpcResponse;
