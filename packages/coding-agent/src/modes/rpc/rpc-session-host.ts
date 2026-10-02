@@ -72,9 +72,10 @@ import { RpcForkPermissionController } from "./rpc-fork-permission";
 import { RpcForkQueueController } from "./rpc-fork-queue";
 import { RpcForkSearchController } from "./rpc-fork-search";
 import { RpcForkSessionController } from "./rpc-fork-sessions";
-import { RpcForkFeedbackController, RpcForkHookTelemetry, RpcForkStateController } from "./rpc-fork-state";
+import { RpcForkFeedbackController, RpcForkHookTelemetry } from "./rpc-fork-state";
 import { RpcForkHost } from "./rpc-fork-host";
 import { isNegotiableRpcProtocolVersion, RPC_FORK_PROTOCOL_VERSION } from "./rpc-fork-types";
+import { RpcGoalController } from "./rpc-goal";
 import { pageRpcMessages, RpcMessagesPageError } from "./rpc-messages";
 import {
 	RpcExtensionUserMessageTracker,
@@ -83,7 +84,7 @@ import {
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
 import { RpcSessionEventForwarder } from "./rpc-session-events";
-import { isRpcSessionSettled, RpcSessionSettleWatcher } from "./rpc-session-settle";
+import { isRpcSessionSettled, RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import type {
 	RpcCommand,
@@ -1283,6 +1284,10 @@ export class RpcSessionHost {
 	readonly #wordPredictor = new RpcWordPredictor();
 	readonly #sessionEvents: RpcSessionEventForwarder;
 	readonly #settleWatcher: RpcSessionSettleWatcher;
+	/** Goal-mode RPC surface (upstream): ops, continuation turns, and session-change quiesce. */
+	readonly #goalController: RpcGoalController;
+	/** True while a goal continuation turn is scheduled or held: settles must report busy. */
+	readonly #goalTurnScheduled: () => boolean;
 	readonly #forkAskBroker: RpcForkAskBroker;
 	readonly #forkPlanController: RpcForkPlanController;
 	readonly #forkHookTelemetry: RpcForkHookTelemetry;
@@ -1303,9 +1308,17 @@ export class RpcSessionHost {
 		this.#inputGate = options.inputGate ?? new RpcUserInputGate();
 
 		this.#emitRpcTitles = shouldEmitRpcTitles();
-		this.promptResults = new RpcPromptResults(this.session, this.#output);
+		// A continuation abandoned while waiting leaves nothing to end the activity stretch: re-check settlement.
+		this.#goalController = new RpcGoalController(this.session, () => void this.#settleWatcher.check());
+		// A scheduled or held goal turn will start a turn: every settle report treats it as busy,
+		// and any report of "not settled" for that reason is later closed by `session_settled`.
+		this.#goalTurnScheduled = watchedScheduledTurnProbe(
+			() => this.#goalController.continuationPending,
+			() => this.#settleWatcher,
+		);
+		this.promptResults = new RpcPromptResults(this.session, this.#output, this.#goalTurnScheduled);
 		this.#sessionEvents = new RpcSessionEventForwarder(this.#output);
-		this.#settleWatcher = new RpcSessionSettleWatcher(this.session, this.#output);
+		this.#settleWatcher = new RpcSessionSettleWatcher(this.session, this.#output, this.#goalTurnScheduled);
 
 		// Fork-extension (protocol v3) surface: negotiation-gated dispatch point.
 		// Inactive until `negotiate_protocol {protocolVersion:3}` succeeds; inactive
@@ -1405,6 +1418,29 @@ export class RpcSessionHost {
 	): Promise<void> {
 		await initializeExtensions(this.session, {
 			mode: "rpc",
+			// Extension-initiated session changes get the same goal quiesce/reattach as the commands below.
+			wrapSessionChange: async <T extends { cancelled: boolean }>(
+				change: () => Promise<T>,
+				{ detachesRun }: { detachesRun: boolean },
+			): Promise<T> => {
+				await this.#goalController.beginSessionChange();
+				let result: T | undefined;
+				try {
+					result = await change();
+					return result;
+				} finally {
+					// Reattaches only if the session actually changed, then re-checks settlement.
+					// A change that throws may already have detached the run: count it as detached.
+					await this.#goalController.endSessionChange({ detachedRun: detachesRun && result?.cancelled !== true });
+					if (result && !result.cancelled) {
+						// As for the host's new/switch commands: a detached run never yields, so
+						// close the prompts it was answering. Branch and navigation leave a live
+						// run streaming to its normal yield.
+						if (detachesRun) this.promptResults.abortOpen();
+						void this.#settleWatcher.check();
+					}
+				}
+			},
 			reportSendError,
 			reportRuntimeError,
 			onShutdown: () => {
@@ -1432,10 +1468,15 @@ export class RpcSessionHost {
 		this.#unsubscribers.push(
 			this.session.subscribe(event => {
 				this.#sessionEvents.forward(event);
+				// Before the prompt-result and settle reports: a goal continuation decided at this
+				// agent_end is scheduled (and reported as pending) before either reads settlement.
+				this.#goalController.observe(event);
 				this.promptResults.observe(event);
 				this.#settleWatcher.observe(event);
 			}),
 		);
+		await this.#goalController.reconcile();
+		await this.#goalController.settled();
 
 		// Discriminates a store failure from any other dispose rejection below.
 		// The unsubscribe handle is deliberately NOT kept: the surface must stay
@@ -1560,6 +1601,7 @@ export class RpcSessionHost {
 			}
 
 			case "abort": {
+				this.#goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return this.success(id, "abort");
 			}
@@ -1567,6 +1609,7 @@ export class RpcSessionHost {
 			case "abort_and_prompt": {
 				const resolved = await this.#resolveCommandAttachments(id, "abort_and_prompt", command.attachments, "");
 				if ("error" in resolved) return resolved.error;
+				this.#goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
 				const ticket = this.promptResults.begin(id);
@@ -1587,10 +1630,21 @@ export class RpcSessionHost {
 			case "new_session":
 			case "switch_session":
 			case "branch": {
-				const result = await handleRpcSessionChange(session, command, this.subagentRegistry);
+				await this.#goalController.beginSessionChange();
+				let result: Awaited<ReturnType<typeof handleRpcSessionChange>>;
+				try {
+					result = await handleRpcSessionChange(session, command, this.subagentRegistry);
+				} finally {
+					await this.#goalController.endSessionChange({
+						detachedRun: command.type !== "branch" && result?.data.cancelled !== true,
+					});
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await this.#goalController.settled();
+				}
 				if (!result.data.cancelled) {
 					this.#inputGate.commitSessionChange(command);
-					this.promptResults.abortOpen();
+					// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
+					if (command.type !== "branch") this.promptResults.abortOpen();
 					// The detached run publishes no terminal agent_end to settle on.
 					void this.#settleWatcher.check();
 					await this.emitAvailableCommandsUpdate();
@@ -1599,10 +1653,25 @@ export class RpcSessionHost {
 			}
 
 			case "open_session": {
-				const result = await openRpcSession(session, command.sessionDir, this.subagentRegistry);
+				const fileBeforeOpen = session.sessionFile;
+				await this.#goalController.beginSessionChange();
+				let result: Awaited<ReturnType<typeof openRpcSession>>;
+				try {
+					result = await openRpcSession(session, command.sessionDir, this.subagentRegistry);
+				} finally {
+					// Opening the session that is already open leaves a live run going (see below).
+					await this.#goalController.endSessionChange({
+						detachedRun: session.sessionFile !== fileBeforeOpen,
+					});
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await this.#goalController.settled();
+				}
 				if (!result.cancelled) {
 					this.#inputGate.commitSessionChange(command);
-					this.promptResults.abortOpen();
+					// Opening the session that is already open switches nothing and leaves a live run
+					// going. Any real open (switch or new) changes the file, even when an aliased path
+					// reopens a transcript with the same id.
+					if (session.sessionFile !== fileBeforeOpen) this.promptResults.abortOpen();
 					void this.#settleWatcher.check();
 					await this.emitAvailableCommandsUpdate();
 				}
@@ -1614,6 +1683,8 @@ export class RpcSessionHost {
 			// =================================================================
 
 			case "get_state": {
+				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
+				await this.#goalController.settled();
 				const queuedMessages = session.getQueuedMessages();
 				const state: RpcSessionState = {
 					model: session.model,
@@ -1629,9 +1700,9 @@ export class RpcSessionHost {
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
 					approvalMode: RpcForkPermissionController.currentApprovalMode(session),
-					...RpcForkStateController.goalSnapshot(session),
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
-					isSettled: isRpcSessionSettled(session),
+					// A scheduled goal continuation will start a turn: not settled.
+					isSettled: isRpcSessionSettled(session, this.#goalTurnScheduled),
 					queuedMessages: { steering: [...queuedMessages.steering], followUp: [...queuedMessages.followUp] },
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
@@ -1646,8 +1717,17 @@ export class RpcSessionHost {
 						examples: tool.examples,
 					})),
 					contextUsage: session.getContextUsage(),
+					goal: session.getGoalModeState() ?? null,
 				};
 				return this.success(id, "get_state", state);
+			}
+
+			case "goal": {
+				try {
+					return this.success(id, "goal", await this.#goalController.handle(command));
+				} catch (goalError) {
+					return this.error(id, "goal", goalError instanceof Error ? goalError.message : String(goalError));
+				}
 			}
 
 			case "set_fast_mode": {

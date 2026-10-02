@@ -158,6 +158,7 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"get_branch_messages",
 	"get_last_assistant_text",
 	"set_session_name",
+	"goal",
 	"handoff",
 	"get_messages",
 	"get_messages_page",
