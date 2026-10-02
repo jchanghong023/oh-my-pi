@@ -53,7 +53,7 @@ import {
 import { RpcProjectSkillService } from "./rpc-project-skills";
 import { RpcProjectSubagentDirectory } from "./rpc-project-subagents";
 import { RpcOutputWriter } from "./rpc-output";
-import { normalizeHostToolDefinitions, RpcSessionHost, type RpcOutput } from "./rpc-session-host";
+import { normalizeHostToolDefinitions, RpcSessionHost, RpcUserInputGate, type RpcOutput } from "./rpc-session-host";
 import type { RpcCommand, RpcResponse } from "./rpc-types";
 
 /** Options for {@link runRpcProjectMode}. */
@@ -206,6 +206,9 @@ class RpcProjectHost {
 	readonly #interactions = new Map<string, string>();
 	/** Host tool definitions to re-apply to sessions created later. */
 	#pendingHostTools: unknown[] | undefined;
+	/** Shared user-input ordering gate (upstream PR #13027): accept at frame
+	 * arrival, ordered arms run inside each session host. */
+	readonly inputGate = new RpcUserInputGate();
 	#negotiatedV3 = false;
 	#disposed = false;
 
@@ -315,6 +318,7 @@ class RpcProjectHost {
 			setToolUIContext: created.setToolUIContext as (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 			projectMode: true,
 			sharedBridges: { hostToolBridge: this.#hostToolBridge, hostUriBridge: this.#hostUriBridge },
+			inputGate: this.inputGate,
 		});
 		if (this.#negotiatedV3) sessionHost.forkHost.activate();
 		await sessionHost.initializeExtensions();
@@ -1109,6 +1113,10 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		input,
 		parsed => {
 			if (host.handleControlFrame(parsed)) return;
+			// Sequence user input at frame-arrival time (upstream PR #13027):
+			// an abort arriving now invalidates earlier input still queued
+			// behind the serial tail or a session host's input gate.
+			host.inputGate.accept(parsed as RpcCommand);
 			queueSerial(parsed as Record<string, unknown>);
 		},
 		message => output(errorFrame(undefined, "parse", `Failed to parse command: ${message}`)),

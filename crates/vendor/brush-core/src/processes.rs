@@ -1,8 +1,10 @@
 //! Process management
 
 use futures::FutureExt;
-use std::io::Write;
-use std::time::Duration;
+use std::{
+	io::Write,
+	sync::Arc,
+};
 
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -10,17 +12,6 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{error, openfiles::OpenFile, sys};
-
-/// How often `ChildProcess::wait` re-checks children for stops, on top of
-/// SIGCHLD/SIGTSTP notifications.
-///
-/// The interval's first tick fires immediately. This is deliberate: a SIGCHLD
-/// that arrives before a waiter subscribes its signal listener (e.g. while the
-/// rest of a pipeline is still spawning) is dropped by the signal registry's
-/// broadcast — no receiver exists yet — so a child that already stopped in
-/// that window would otherwise never wake the waiter. The periodic sweeps also
-/// recover a stop whose notification was consumed by a concurrent waiter.
-const STOPPED_CHILDREN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 struct CompletionMarker {
 	output:            OpenFile,
@@ -43,8 +34,10 @@ pub struct ChildProcess {
 	reaped:      bool,
 	/// If available, the process ID of the child.
 	pid:         Option<sys::process::ProcessId>,
-	/// If available, the process group ID of the child.
+	/// If available, the shared process group ID of the pipeline.
 	pgid:        Option<sys::process::ProcessId>,
+	/// Every external process in this pipeline.
+	stop_pids:   Option<Arc<[sys::process::ProcessId]>>,
 	/// Windows handle duplicated from the child process for safe termination.
 	#[cfg(windows)]
 	kill_handle: Option<OwnedHandle>,
@@ -65,6 +58,7 @@ impl ChildProcess {
 			exec_future: Box::pin(child.wait_with_output()),
 			pid,
 			pgid,
+			stop_pids: None,
 			reaped: false,
 			#[cfg(windows)]
 			kill_handle,
@@ -80,6 +74,11 @@ impl ChildProcess {
 	/// Returns the process's group ID.
 	pub const fn pgid(&self) -> Option<sys::process::ProcessId> {
 		self.pgid
+	}
+
+	/// Sets the external process IDs that form this pipeline's stop scope.
+	pub(crate) fn set_stop_pids(&mut self, pids: Arc<[sys::process::ProcessId]>) {
+		self.stop_pids = Some(pids);
 	}
 
 	/// Duplicates the process handle for termination use on Windows.
@@ -99,6 +98,18 @@ impl ChildProcess {
 			Some(CompletionMarker { output, end_marker_prefix, end_marker_suffix });
 	}
 
+	/// Checks whether this process, or a stage in its pipeline, stopped.
+	fn poll_for_stop(&self) -> Result<bool, error::Error> {
+		let Some(pid) = self.pid else {
+			return Ok(false);
+		};
+		let pids = self
+			.stop_pids
+			.as_deref()
+			.unwrap_or_else(|| std::slice::from_ref(&pid));
+		sys::signal::poll_for_stopped_processes(pids, self.pgid)
+	}
+
 	/// Waits for the process to exit.
 	///
 	/// If a cancellation token is provided and triggered, the process will be killed.
@@ -110,11 +121,15 @@ impl ChildProcess {
 		let mut sigtstp = sys::signal::tstp_signal_listener()?;
 		#[allow(unused_mut, reason = "only mutated on some platforms")]
 		let mut sigchld = sys::signal::chld_signal_listener()?;
-		// The first tick completes immediately, so the loop below polls for
-		// already-stopped children once before it starts waiting on signals;
-		// see STOPPED_CHILDREN_POLL_INTERVAL for why that matters.
-		let mut stopped_poll = tokio::time::interval(STOPPED_CHILDREN_POLL_INTERVAL);
-		stopped_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+		// A SIGCHLD delivered before the subscription above never reaches
+		// `sigchld`. Pipeline stages are all spawned before the first is
+		// waited on, so this process or one in its pipeline can stop before
+		// this point. Exits need no such check: the child's exec future
+		// registered for them when it was spawned.
+		if self.poll_for_stop()? {
+			return Ok(ProcessWaitResult::Stopped);
+		}
 
 		let cancelled = async {
 			match &cancel_token {
@@ -139,16 +154,11 @@ impl ChildProcess {
 					self.write_completion_marker(130);
 					break Ok(ProcessWaitResult::Cancelled)
 				},
-				_ = stopped_poll.tick() => {
-					if sys::signal::poll_for_stopped_child(self.pid)? {
-						break Ok(ProcessWaitResult::Stopped);
-					}
-				},
 				_ = sigtstp.recv() => {
 					break Ok(ProcessWaitResult::Stopped)
 				},
 				_ = sigchld.recv() => {
-					if sys::signal::poll_for_stopped_child(self.pid)? {
+					if self.poll_for_stop()? {
 						break Ok(ProcessWaitResult::Stopped);
 					}
 				},

@@ -31,6 +31,7 @@ import {
 	type PendingExtensionRequest,
 	RpcSessionHost,
 	RpcShutdownCoordinator,
+	RpcUserInputGate,
 	type RpcOutput,
 } from "./rpc-session-host";
 import type {
@@ -76,6 +77,7 @@ export {
 	type RpcSkillCommandSession,
 	type RpcSkillInvocation,
 	type RpcSubagentResetRegistry,
+	RpcUserInputGate,
 	RpcWordPredictor,
 	tryRunRpcSkillCommand,
 } from "./rpc-session-host";
@@ -187,7 +189,13 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// cold prediction engine never stalls the command queue behind a keystroke.
 	// The response is emitted when `handleCommand` resolves; clients correlate
 	// via `command.id`.
-	if (BACKGROUND_COMMANDS.has(command.type) || command.type === "prompt" || command.type === "steer_subagent") {
+	if (
+		BACKGROUND_COMMANDS.has(command.type) ||
+		command.type === "prompt" ||
+		command.type === "steer" ||
+		command.type === "follow_up" ||
+		command.type === "steer_subagent"
+	) {
 		const task = (async () => {
 			try {
 				deps.output(await deps.handleCommand(command));
@@ -213,10 +221,16 @@ export class RpcInputDispatcher {
 	#tasks = new Set<Promise<void>>();
 	readonly #deps: RpcInputFrameDeps;
 	readonly #afterSerialCommand: (() => Promise<void>) | undefined;
+	readonly #acceptInput: ((command: RpcCommand) => void) | undefined;
 
-	constructor(options: { deps: RpcInputFrameDeps; afterSerialCommand?: () => Promise<void> }) {
+	constructor(options: {
+		deps: RpcInputFrameDeps;
+		afterSerialCommand?: () => Promise<void>;
+		acceptInput?: (command: RpcCommand) => void;
+	}) {
 		this.#deps = options.deps;
 		this.#afterSerialCommand = options.afterSerialCommand;
+		this.#acceptInput = options.acceptInput;
 	}
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
@@ -225,9 +239,13 @@ export class RpcInputDispatcher {
 			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
 
 			const command = parsed as RpcCommand;
-			// Bash and predict_word retain their immediate side channel. Prompts
-			// and steer_subagent start through the serial tail, but
-			// dispatchRpcInputFrame backgrounds their admission.
+			// Sequence user input at frame-arrival time (upstream PR #13027): an
+			// abort or session change that arrives now must invalidate earlier
+			// input still queued behind the serial tail or the input gate.
+			this.#acceptInput?.(command);
+			// Bash and predict_word retain their immediate side channel. Prompts,
+			// steer/follow_up, and steer_subagent start through the serial tail,
+			// but dispatchRpcInputFrame backgrounds their admission.
 			if (BACKGROUND_COMMANDS.has(command.type)) {
 				dispatchRpcInputFrame(command, this.#deps);
 				return;
@@ -316,12 +334,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// extension UI, host tool/URI bridges, and the command switch. Background
 	// tasks (bash dispatch, builtin runCommandInBackground) drain through the
 	// shutdown coordinator below before the process may exit.
+	// The input gate sequences user input (upstream PR #13027): accept happens
+	// at frame-arrival (dispatcher below), the ordered arm runs inside the
+	// host, and an abort or session change invalidates earlier queued input.
+	const inputGate = new RpcUserInputGate();
 	const host = new RpcSessionHost({
 		session,
 		output,
 		subagentEventBus,
 		headless,
 		setToolUIContext,
+		inputGate,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
 	});
 	await host.initializeExtensions();
@@ -402,6 +425,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const inputDispatcher = new RpcInputDispatcher({
 		deps: dispatchFrameDeps,
 		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
+		acceptInput: command => inputGate.accept(command),
 	});
 
 	// Keep the stdin reader moving: side-channel frames dispatch immediately,

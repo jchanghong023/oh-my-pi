@@ -754,3 +754,5 @@ OMP 侧 B1/B2/D1/E1/F 的项目模式骨架与核心接口已实施；每包状�
 | Z1/Z2 桌面接入 | 未开始 | — | — |
 
 自动化验证入口：`test/rpc-project-*.test.ts` 已加入 `scripts/fulltest.ts` 白名单（组 `coding-agent/rpc-project`）。真实模型/真实 GUI 场景（O19/O28、全部 Z 系列）仍属未验证，按 §11 分别记录，不合并为完成。
+
+2026-10-02 随上游 v18.4.10 合入上游 PR #13027 的用户输入排序门（`RpcUserInputGate`）并适配 fork 分层：`prompt`/`steer`/`follow_up`/`abort_and_prompt` 在帧到达时编号、经共享门串行执行，`abort` 与会话轮换使更早的排队输入在其下一步 `isCurrent` 检查处取消（取消的 `prompt` 以正常 response + `prompt_result` 收尾，不再启动模型回合）；extension input 处理器按到达顺序在门内运行（此前 RPC 链路不经过 input 处理器）；skill 命令消息可携带图片。单会话模式与项目模式（跨会话共享同一门、帧到达点 accept）均已接线；fork 的 attachments 解析、`/plan` 拦截、严格分发未知命令拒绝与 builtin 残余 prompt 行为在门内保留。本段为源码实施记录，配套行为验证未运行。
