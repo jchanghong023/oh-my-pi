@@ -42,6 +42,10 @@ export class RpcBtwController {
 	#startingTopic: string | null | undefined;
 	/** Bumped by every cancel and session change; a `btw` still starting from before gives up. */
 	#epoch = 0;
+	/** Terminal checkpoint writes still in flight. */
+	readonly #writes = new Set<Promise<void>>();
+	/** Terminal checkpoints that failed, keyed by record id (latest wins); retried before any move. */
+	readonly #unsaved = new Map<string, RunningBtw>();
 
 	constructor(
 		session: Pick<AgentSession, "model" | "runEphemeralTurn" | "sessionManager">,
@@ -64,6 +68,7 @@ export class RpcBtwController {
 		this.#startingTopic = recordId ?? null;
 		const epoch = this.#epoch;
 		try {
+			await this.#settleWrites();
 			const store = await this.#openStore(true);
 			if (epoch !== this.#epoch) throw new Error(CANCELLED_WHILE_STARTING);
 			const previous = recordId === undefined ? undefined : store.getRecords().find(r => r.id === recordId);
@@ -120,12 +125,29 @@ export class RpcBtwController {
 
 	/**
 	 * Before the session is replaced or the process exits: cancel the running or starting
-	 * question and wait for its checkpoint, so the session's history is complete.
+	 * question and land every terminal checkpoint. Throws, after one retry, when a checkpoint
+	 * still cannot be saved, so the caller keeps the session instead of losing that answer.
 	 */
 	async close(): Promise<void> {
 		this.#epoch++;
 		this.cancel();
-		await this.#store?.flush().catch(error => logger.warn("BTW history flush failed", { error: String(error) }));
+		await this.#settleWrites();
+	}
+
+	/** Await terminal checkpoints, retrying failed ones once against their original revision. */
+	async #settleWrites(): Promise<void> {
+		while (this.#writes.size > 0) await Promise.all(this.#writes);
+		for (const [id, failed] of this.#unsaved) {
+			try {
+				await failed.store.retry(failed.record);
+				this.#unsaved.delete(id);
+			} catch (error) {
+				throw new Error(
+					`/btw history could not be saved: ${toError(error).message}. Fix the storage and retry; unsaved answers remain in this session.`,
+					{ cause: error },
+				);
+			}
+		}
 	}
 
 	/**
@@ -196,10 +218,18 @@ export class RpcBtwController {
 		this.#running = undefined;
 		running.record = patchLatestBtwTurn(running.record, patch);
 		this.#output({ type: "btw_record", record: running.record });
-		running.store.upsert(running.record).catch(error => {
-			const message = `Could not save /btw history: ${toError(error).message}`;
-			logger.error(message);
-			this.#output({ type: "notice", level: "error", message, source: "btw-history" });
-		});
+		const write = running.store.upsert(running.record).then(
+			() => {
+				this.#unsaved.delete(running.record.id);
+			},
+			error => {
+				this.#unsaved.set(running.record.id, running);
+				const message = `Could not save /btw history: ${toError(error).message}`;
+				logger.error(message);
+				this.#output({ type: "notice", level: "error", message, source: "btw-history" });
+			},
+		);
+		this.#writes.add(write);
+		void write.finally(() => this.#writes.delete(write));
 	}
 }

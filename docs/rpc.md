@@ -1027,6 +1027,10 @@ Failure responses for `btw`:
 
 A checkpoint that fails after the response is reported as a
 `{ type: "notice", level: "error", source: "btw-history", message }` frame.
+The answer is kept in memory: the next `btw` and every session change retry
+it first, and while it still cannot be saved they fail with
+`/btw history could not be saved: …` and the session stays where it is. At
+shutdown the process exits anyway and reports the loss as another such notice.
 
 ## Prompt/Queue Concurrency and Ordering
 

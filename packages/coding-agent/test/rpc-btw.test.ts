@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import type { BtwHistoryRecord } from "@oh-my-pi/pi-coding-agent/session/btw-history";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { isRecord, removeWithRetries } from "@oh-my-pi/pi-utils";
 
 /** Settle a request before `expect` sees it (see rpc-goal.test.ts). */
 async function rejectionOf(request: Promise<unknown>): Promise<Error> {
@@ -157,25 +157,33 @@ describe("RPC /btw", () => {
 		expect((await rpc.getState()).isStreaming).toBe(true);
 	}, 30_000);
 
-	test("a checkpoint that fails after the response is reported as a notice", async () => {
+	test("a checkpoint that fails after the response is reported, and blocks session changes until saved", async () => {
 		const { rpc, deltas, until, settled } = await start();
 		const notices: string[] = [];
 		rpc.onSessionEvent(event => {
 			if (event.type === "notice" && event.source === "btw-history") notices.push(event.message);
 		});
+		const sessionFile = (await rpc.getState()).sessionFile!;
 		const slow = await rpc.btw("slow, then unsavable");
 		await until(() => deltas[0]);
-		const entry = path.join(
-			(await rpc.getState()).sessionFile!.replace(/\.jsonl$/, ""),
-			"btw-history",
-			`entry-${slow.id}.json`,
-		);
+		const entry = path.join(sessionFile.replace(/\.jsonl$/, ""), "btw-history", `entry-${slow.id}.json`);
+		const running = await fs.readFile(entry);
 		await fs.rm(entry);
 		await fs.mkdir(entry);
 		expect(await rpc.cancelBtw()).toBe(true);
 		await settled(slow.id);
 		await until(() => notices[0]);
 		expect(notices[0]).toContain("Could not save /btw history");
+
+		// The answer is not on disk yet: the session must not move away from it.
+		expect((await rejectionOf(rpc.newSession())).message).toContain("/btw history could not be saved");
+		expect((await rpc.getState()).sessionFile).toBe(sessionFile);
+
+		// Storage recovers: the move retries the checkpoint, then proceeds.
+		await fs.rm(entry, { recursive: true });
+		await fs.writeFile(entry, running);
+		expect((await rpc.newSession()).cancelled).toBe(false);
+		expect(await Bun.file(entry).json()).toMatchObject({ status: "cancelled", answer: "Thinking" });
 	}, 30_000);
 
 	test("over raw stdio: the response precedes the turn's frames, and EOF saves a running question", async () => {
@@ -187,7 +195,10 @@ describe("RPC /btw", () => {
 			stdout: "pipe",
 			stderr: "ignore",
 		});
-		const frames: Array<Record<string, any>> = [];
+		const frames: unknown[] = [];
+		/** The value at `keys` inside a parsed frame, or `undefined` when the shape differs. */
+		const at = (value: unknown, ...keys: string[]): unknown =>
+			keys.reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), value);
 		let waiter: (() => void) | undefined;
 		const wake = () => waiter?.();
 		const reading = (async () => {
@@ -204,7 +215,7 @@ describe("RPC /btw", () => {
 			}
 			wake();
 		})();
-		const frame = async (match: (frame: Record<string, any>) => boolean) => {
+		const frame = async (match: (frame: unknown) => boolean) => {
 			for (;;) {
 				const index = frames.findIndex(match);
 				if (index !== -1) return index;
@@ -219,21 +230,21 @@ describe("RPC /btw", () => {
 		};
 
 		send({ id: "fail", type: "btw", question: "please fail" });
-		const failed = await frame(f => f.type === "btw_record" && f.record.status === "error");
-		expect(await frame(f => f.type === "response" && f.id === "fail")).toBeLessThan(failed);
+		const failed = await frame(f => at(f, "type") === "btw_record" && at(f, "record", "status") === "error");
+		expect(await frame(f => at(f, "type") === "response" && at(f, "id") === "fail")).toBeLessThan(failed);
 
 		send({ id: "state", type: "get_state" });
-		const state = frames[await frame(f => f.type === "response" && f.id === "state")]!;
+		const state = frames[await frame(f => at(f, "type") === "response" && at(f, "id") === "state")];
 		send({ id: "slow", type: "btw", question: "slow at shutdown" });
-		const started = frames[await frame(f => f.type === "response" && f.id === "slow")]!;
-		await frame(f => f.type === "btw_delta");
+		const started = frames[await frame(f => at(f, "type") === "response" && at(f, "id") === "slow")];
+		await frame(f => at(f, "type") === "btw_delta");
 		child.stdin.end();
 		await child.exited;
 		await reading;
 		const entry = path.join(
-			state.data.sessionFile.replace(/\.jsonl$/, ""),
+			String(at(state, "data", "sessionFile")).replace(/\.jsonl$/, ""),
 			"btw-history",
-			`entry-${started.data.record.id}.json`,
+			`entry-${String(at(started, "data", "record", "id"))}.json`,
 		);
 		expect(await Bun.file(entry).json()).toMatchObject({ status: "cancelled", answer: "Thinking" });
 	}, 30_000);
