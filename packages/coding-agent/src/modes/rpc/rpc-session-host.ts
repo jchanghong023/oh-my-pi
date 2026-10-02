@@ -11,7 +11,8 @@
  */
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
@@ -240,7 +241,40 @@ export type RpcSessionChangeResult =
 	| { type: "branch"; data: { text: string; cancelled: boolean } }
 	| { type: "fork"; data: { cancelled: boolean } };
 
-export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
+export type RpcSessionChangeSession = Pick<
+	AgentSession,
+	"newSession" | "switchSession" | "branch" | "fork" | "model" | "setModel"
+>;
+
+type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
+
+/**
+ * The available model with exactly this provider and id. Models missing from
+ * the current catalog wait for in-flight background discovery first: on cold
+ * start, discovery-backed providers (proxy / ollama / etc.) populate seconds
+ * after session ready. Catalog hits skip the wait, so the RPC queue is not
+ * stalled behind unrelated discovery.
+ */
+async function findRpcModel(session: RpcModelLookupSession, provider: string, modelId: string) {
+	const find = () => session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
+	const model = find();
+	if (model) return model;
+	await session.modelRegistry.awaitBackgroundRefresh();
+	return find();
+}
+
+/** The optional `provider`/`modelId` pair of `open_session` or `switch_session`, validated like `set_model`. */
+async function resolveRequestedRpcModel(
+	session: RpcModelLookupSession,
+	command: { provider?: string; modelId?: string },
+): Promise<Model | undefined> {
+	const { provider, modelId } = command;
+	if (provider === undefined && modelId === undefined) return undefined;
+	if (provider === undefined || modelId === undefined) throw new Error("provider and modelId must be given together");
+	const model = await findRpcModel(session, provider, modelId);
+	if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+	return model;
+}
 
 export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true };
@@ -470,6 +504,7 @@ export async function handleRpcSessionChange(
 	session: RpcSessionChangeSession,
 	command: RpcSessionChangeCommand,
 	subagentRegistry?: RpcSubagentResetRegistry,
+	requestedModel?: Model,
 ): Promise<RpcSessionChangeResult> {
 	switch (command.type) {
 		case "new_session": {
@@ -480,7 +515,8 @@ export async function handleRpcSessionChange(
 		}
 
 		case "switch_session": {
-			const cancelled = !(await session.switchSession(command.sessionPath));
+			const options = requestedModel ? { model: requestedModel } : undefined;
+			const cancelled = !(await session.switchSession(command.sessionPath, options));
 			if (!cancelled) subagentRegistry?.clear();
 			return { type: "switch_session", data: { cancelled } };
 		}
@@ -504,7 +540,7 @@ export async function handleRpcSessionChange(
 
 export type RpcOpenSessionSession = Pick<
 	AgentSession,
-	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages"
+	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages" | "model" | "setModel"
 >;
 
 /**
@@ -519,6 +555,7 @@ export async function openRpcSession(
 	session: RpcOpenSessionSession,
 	sessionDir: string,
 	subagentRegistry?: RpcSubagentResetRegistry,
+	model?: Model,
 ): Promise<RpcOpenSessionResult> {
 	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
 	const dir = path.resolve(sessionDir);
@@ -529,9 +566,14 @@ export async function openRpcSession(
 		: path.dirname(current) === dir && session.messages.length === 0;
 	let cancelled = false;
 	if (!alreadyOpen) {
-		cancelled = latest ? !(await session.switchSession(latest)) : !(await session.newSession({ sessionDir: dir }));
+		cancelled = latest
+			? !(await session.switchSession(latest, model ? { model } : undefined))
+			: !(await session.newSession({ sessionDir: dir }));
 		if (!cancelled) subagentRegistry?.clear();
 	}
+	// A resumed session is bound to the model by the switch; an already-open or
+	// fresh one selects it as `set_model` would.
+	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
 	return {
 		cancelled,
 		resumed: !cancelled && latest !== null,
@@ -1646,10 +1688,12 @@ export class RpcSessionHost {
 				if (command.type === "fork" && session.isBusyForSnapshot) {
 					return this.error(id, "fork", new SessionBusyError("fork the session").message, "session_busy");
 				}
+				const requestedModel =
+					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof handleRpcSessionChange>> | undefined;
 				try {
-					result = await handleRpcSessionChange(session, command, this.subagentRegistry);
+					result = await handleRpcSessionChange(session, command, this.subagentRegistry, requestedModel);
 				} catch (err) {
 					// fork() refuses when work started while its transition awaited.
 					if (err instanceof SessionBusyError) return this.error(id, command.type, err.message, "session_busy");
@@ -1674,11 +1718,12 @@ export class RpcSessionHost {
 			}
 
 			case "open_session": {
+				const requestedModel = await resolveRequestedRpcModel(session, command);
 				const fileBeforeOpen = session.sessionFile;
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof openRpcSession>>;
 				try {
-					result = await openRpcSession(session, command.sessionDir, this.subagentRegistry);
+					result = await openRpcSession(session, command.sessionDir, this.subagentRegistry, requestedModel);
 				} finally {
 					// Opening the session that is already open leaves a live run going (see below).
 					await this.#goalController.endSessionChange({
