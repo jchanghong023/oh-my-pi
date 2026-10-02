@@ -206,6 +206,14 @@
 - Explicit `symbolPreset: unicode` now stays Unicode after a Glyph Protocol handshake instead of switching the status bar to Nerd Font icons ([#13865](https://github.com/can1357/oh-my-pi/issues/13865)).
 - Fixed rewinding (`/rewind`, `/tree`) during a running turn hiding the queued-prompt bar, making the still-pending queue look deleted and uneditable ([#13680](https://github.com/can1357/oh-my-pi/issues/13680))
 
+### Added
+
+- RPC `get_state.queuedMessages` and `queue_update` now report `liveSteered`, the number of leading steering chips live steering already sent into the streaming response, which `remove_queued_message` cannot reach ([#13798](https://github.com/can1357/oh-my-pi/issues/13798))
+
+### Fixed
+
+- Steering that live steering already sent to the model is now listed under "Sent" without the edit hint, and the dequeue key (`Alt+Up`) points at the interrupt key instead of reporting "No queued messages to restore" ([#13798](https://github.com/can1357/oh-my-pi/issues/13798))
+
 ## [18.4.4] - 2026-09-29
 
 ### Added

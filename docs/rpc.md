@@ -415,7 +415,7 @@ is re-armed.
   "queuedMessageCount": 0,
   "hasPendingAsyncWork": false,
   "isSettled": true,
-  "queuedMessages": { "steering": [], "followUp": [] },
+  "queuedMessages": { "steering": [], "followUp": [], "liveSteered": 0 },
   "todoPhases": [
     {
       "name": "Todos",
@@ -451,6 +451,11 @@ model/thinking level, session name/file, or unavailable `contextUsage`.
 `queuedMessages` holds the same displayable queue-chip text as the `queue_update`
 event below. Use this text with `remove_queued_message`, subject to its pending-queue
 boundary: live-steered input stays visible until recorded but is no longer removable.
+event below — every entry except the first `liveSteered` `steering` entries is a
+`message` value that `remove_queued_message` will match against that queue.
+Those leading entries were already sent into the streaming response by live
+steering: they stay listed until the transcript records them, and an `abort`
+before then requeues them as ordinary steering. Clients should render the pending-message queue
 Clients should render the queue from these snapshots instead of tracking chips
 independently, and treat removal responses as confirmation rather than a second
 source of truth. `queuedMessageCount` also includes advisor cards and pending
@@ -734,18 +739,22 @@ Common event types:
 ### `queue_update` event
 
 ```json
-{ "type": "queue_update", "steering": ["Use the existing parser"], "followUp": [] }
+{ "type": "queue_update", "steering": ["Use the existing parser"], "followUp": [], "liveSteered": 0 }
 ```
 
 Emitted whenever the displayable steering/follow-up queue changes: a `steer`,
-`follow_up`, or queued `prompt` adds to it; delivery into the transcript,
+`follow_up`, or queued `prompt` adds to it; live steering sending a steer into
+the streaming response moves it into the leading `liveSteered` entries;
+delivery into the transcript,
 `remove_queued_message`, an abort that drops in-flight queued messages,
 or a session switch removes from or clears it. The server coalesces this
 against the last value sent — a mutation that leaves the snapshot unchanged
 (for example, an agent-authored aside that never renders as a chip) never
-re-emits. `steering`/`followUp` mirror `get_state`'s `queuedMessages` field and
-carry the queue-chip text accepted by `remove_queued_message` while the message
-is still pending. Live-steered messages stay listed until recorded in the
+re-emits. `steering`/`followUp`/`liveSteered` mirror `get_state`'s
+`queuedMessages` field; `steering`/`followUp` carry the queue-chip text
+accepted by `remove_queued_message` while the message is still pending, and
+entries past the first `liveSteered` steering chips are the removable ones.
+Live-steered messages stay listed until recorded in the
 transcript, even after they cease to be removable. Render the queue from this
 event rather than tracking chips independently, and treat removal replies as
 confirmation of a change rather than independent queue state.

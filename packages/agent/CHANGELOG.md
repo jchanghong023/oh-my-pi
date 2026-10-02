@@ -22,6 +22,10 @@
 - Added APIs for improving agent follow-up and steering workflow management, including moving queued follow-ups into steering with a single queue-change notification.
 - Added support for trusted post-tool guidance via `afterToolCall` results, allowing additional context to be included in the next provider request, including after tool failures.
 
+### Fixed
+
+- `Agent.onQueueChange()` listeners now also fire when live steering takes a steer into the streaming response, records it, or has it withdrawn ([#13798](https://github.com/can1357/oh-my-pi/issues/13798))
+
 ## [18.4.4] - 2026-09-29
 
 ### Added

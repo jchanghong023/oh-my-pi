@@ -1706,7 +1706,6 @@ export class RpcSessionHost {
 			case "get_state": {
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await this.#goalController.settled();
-				const queuedMessages = session.getQueuedMessages();
 				const state: RpcSessionState = {
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
@@ -1724,7 +1723,7 @@ export class RpcSessionHost {
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					// A scheduled goal continuation will start a turn: not settled.
 					isSettled: isRpcSessionSettled(session, this.#goalTurnScheduled),
-					queuedMessages: { steering: [...queuedMessages.steering], followUp: [...queuedMessages.followUp] },
+					queuedMessages: session.getQueuedMessages(),
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),

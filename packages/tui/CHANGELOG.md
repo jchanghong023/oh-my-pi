@@ -136,6 +136,10 @@
 - Fixed the subagent task card showing full home paths in tool intents and arguments, while keeping search patterns literal ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
 - Fixed Enter doing nothing on a fully typed slash-command argument while its completion popup was open (e.g. `/mcp list`): it now submits instead of re-accepting the identical completion; subcommands that still need a required argument (e.g. `/mcp test`) keep inserting the subcommand so you can type it ([#13885](https://github.com/can1357/oh-my-pi/pull/13885) by [@H4vC](https://github.com/H4vC)).
 
+### Added
+
+- `QueuedMessageGroup.locked` lists a group in `QueuedMessagesBand` without the edit hint or edit control ([#13798](https://github.com/can1357/oh-my-pi/issues/13798))
+
 ## [18.4.4] - 2026-09-29
 
 ### Added
