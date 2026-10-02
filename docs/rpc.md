@@ -91,8 +91,9 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 9. Prompt completion (`{ type: "prompt_result", id?, agentInvoked, status, error?, sessionSettled }`), unless the response already completed the prompt locally; see [`prompt` payload](#prompt-payload)
 10. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
 11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-12. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
-13. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
+12. Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
+13. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+14. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
 
 Protocol v2 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
 
@@ -278,6 +279,14 @@ fast for about 30 seconds while the daemon is backed off. Treat failures as
 Send `predict_word_feedback` with the `text` and `cursor` at which a
 suggestion was shown: `accepted: true` when the user took it, `false` when
 they typed past it. Feedback tunes the engine's learned state.
+
+### Side questions
+
+- `{ id?, type: "btw", question: string, recordId?: string }` → `data: { record: BtwHistoryRecord }`
+- `{ id?, type: "btw_cancel", recordId?: string }` → `data: { cancelled: boolean }`
+- `{ id?, type: "get_btw_history" }` → `data: { records: BtwHistoryRecord[] }`
+
+See [Side questions (`/btw`)](#side-questions-btw).
 
 ## Response Schema
 
@@ -957,6 +966,57 @@ Failure responses:
 - the subagent drops or rejects the message before accepting it (for example
   an abort or a usage-limit preflight denial lands first) →
   `error: "Subagent refused the message: <reason>"`
+
+### Side questions (`/btw`)
+
+`btw` asks the TUI's `/btw` side question: one ephemeral model turn over the
+current session's context (including a turn still streaming), answered as
+text with no tool use. The question and answer are never added to the
+transcript; they are checkpointed in the session's BTW history sidecar, which
+the TUI `/btw` history reads too. With `recordId`, the question is a follow-up
+in that topic and its earlier turns are replayed as context.
+
+```ts
+type BtwStatus = "running" | "complete" | "cancelled" | "error" | "interrupted";
+interface BtwHistoryTurn { question: string; answer: string; status: BtwStatus; createdAt: number; updatedAt: number; error?: string }
+interface BtwHistoryRecord extends BtwHistoryTurn { id: string; leafId: string | null; followUps?: BtwHistoryTurn[] }
+```
+
+A record's latest turn is its last follow-up, else the record itself.
+`interrupted` marks a turn whose process died while it ran.
+
+```json
+{ "id": "req_1", "type": "btw", "question": "why does this test need a lock?" }
+{ "type": "btw_record", "record": { "id": "1596…", "question": "why does this test need a lock?", "answer": "", "status": "running", "leafId": "a1b2c3d4", … } }
+{ "id": "req_1", "type": "response", "command": "btw", "success": true, "data": { "record": { … } } }
+{ "type": "btw_delta", "recordId": "1596…", "delta": "Two workers " }
+{ "type": "btw_record", "record": { "id": "1596…", "answer": "Two workers …", "status": "complete", … } }
+```
+
+The response arrives once the question is checkpointed as running; the answer
+then streams as `btw_delta` frames, and a `btw_record` frame carries the full
+record at every lifecycle change (started, complete, cancelled, error). The
+last `btw_record` for an id wins. Side questions run beside the main agent:
+they neither wait for nor block a running prompt.
+
+One side question runs at a time per session. `btw_cancel` cancels it
+(only if it is `recordId`, when given) and answers `cancelled: false` when
+nothing matching is running. `new_session`, `switch_session`, `branch`,
+`open_session`, extension-initiated session changes and shutdown cancel a
+running question and wait for its checkpoint first. `get_btw_history` lists
+the current session's records newest first; a running record carries its
+partial answer, so a host that reconnects can rebuild its view.
+
+Failure responses for `btw`:
+
+- blank `question`
+- another side question is still running
+- `recordId` is unknown, or that topic is still running
+- no active model
+- the history cannot be saved
+
+A checkpoint that fails after the response is reported as a
+`{ type: "notice", level: "error", source: "btw-history" }` frame.
 
 ## Prompt/Queue Concurrency and Ordering
 
