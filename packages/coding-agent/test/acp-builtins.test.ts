@@ -505,11 +505,12 @@ describe("ACP builtin slash commands", () => {
 	// Mirrors the TUI dispatcher's allowArgs gate (builtin-registry).
 	it("refuses to dispatch commands without allowArgs when arguments are present", async () => {
 		const { output, runtime } = createRuntime();
-		// `/jobs` has a text-mode handle but no allowArgs.
-		const jobs = BUILTIN_SLASH_COMMANDS_INTERNAL.find(command => command.name === "jobs")!;
-		const handleSpy = spyOn(jobs, "handle");
+		// `/share` has a text-mode handle but no allowArgs. (`/jobs` gained
+		// `allowArgs: true` with /jobs [full], so it no longer exercises this gate.)
+		const share = BUILTIN_SLASH_COMMANDS_INTERNAL.find(command => command.name === "share")!;
+		const handleSpy = spyOn(share, "handle");
 		try {
-			const result = await executeAcpBuiltinSlashCommand("/jobs extra", runtime);
+			const result = await executeAcpBuiltinSlashCommand("/share extra", runtime);
 
 			expect(result).toBe(false);
 			expect(handleSpy).not.toHaveBeenCalled();
