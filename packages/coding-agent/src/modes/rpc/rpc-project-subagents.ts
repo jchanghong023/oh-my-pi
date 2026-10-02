@@ -26,7 +26,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isAdvisorTranscriptName } from "../../advisor/transcript-recorder";
-import { AgentRegistry, getAgentTombstonePath, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { getAgentTombstonePath } from "../../registry/agent-tombstone";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries, visitEntriesFromFileStream } from "../../session/session-loader";
 import type {
