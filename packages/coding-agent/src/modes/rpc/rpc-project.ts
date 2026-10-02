@@ -131,6 +131,7 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"switch_session",
 	"open_session",
 	"branch",
+	"fork",
 	"get_state",
 	"set_fast_mode",
 	"get_entries",
@@ -429,7 +430,7 @@ class RpcProjectHost {
 	async handleSessionCommand(
 		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
 	): Promise<RpcResponse> {
-		if (["new_session", "switch_session", "open_session", "branch"].includes(command.type)) {
+		if (["new_session", "switch_session", "open_session", "branch", "fork"].includes(command.type)) {
 			return this.#errorResponse(
 				command.id,
 				command.type,

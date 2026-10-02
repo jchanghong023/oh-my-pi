@@ -7550,6 +7550,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleDumpCommand();
 	}
 
+	async handleDumpAllCommand(): Promise<void> {
+		return this.#commandController.handleDumpAllCommand();
+	}
+
 	handleAdvisorDumpCommand(isRaw?: boolean) {
 		return this.#commandController.handleAdvisorDumpCommand(isRaw);
 	}

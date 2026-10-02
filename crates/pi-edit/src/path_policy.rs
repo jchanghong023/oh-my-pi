@@ -260,9 +260,7 @@ impl PathPolicy {
 	}
 
 	/// Whether hashline tag recovery may rebind `authored` onto `recovered`.
-	/// Only filesystem paths rebind; URL-shaped targets never do. Both sides
-	/// compare in plain spelling: a host-supplied cwd may carry the Windows
-	/// verbatim prefix that snapshot keys never do.
+	/// Only filesystem paths rebind; URL-shaped targets never do.
 	pub fn allow_tag_path_recovery(&self, authored: &str, recovered: &Path) -> bool {
 		if !matches!(self.address(unwrap_hashline_header_path(authored)), Address::Path) {
 			return false;
@@ -712,14 +710,13 @@ mod tests {
 		assert_eq!(p.resolve("/", &urls).unwrap().absolute, tmp.path());
 		assert_eq!(p.resolve("@~/x", &urls).unwrap().absolute, tmp.path().join("home/x"));
 		assert_eq!(p.resolve(":./x", &urls).unwrap().absolute, tmp.path().join("./x"));
-		// The decoded `/tmp/a b` is root-relative: absolute on POSIX, while on
-		// Windows a root without a drive anchors to the cwd's drive.
-		let decoded = if cfg!(windows) {
-			tmp.path().join("/tmp/a b")
-		} else {
+		// The file URL's `/tmp/...` path maps to a POSIX root; on Windows it
+		// resolves onto the current drive instead (`C:\tmp\...`).
+		#[cfg(unix)]
+		assert_eq!(
+			p.resolve("file:///tmp/a%20b", &urls).unwrap().absolute,
 			PathBuf::from("/tmp/a b")
-		};
-		assert_eq!(p.resolve("file:///tmp/a%20b", &urls).unwrap().absolute, decoded);
+		);
 		// Scheme-colon names without a slash, Windows drives, and `./`-prefixed
 		// URI-shaped names are plain paths.
 		assert_eq!(p.resolve("sbx:x", &urls).unwrap().absolute, tmp.path().join("sbx:x"));
@@ -985,6 +982,37 @@ mod tests {
 			)
 			.is_none()
 		);
+	}
+
+	// POSIX paths have no prefix component, so `\\?\C:\…` is an ordinary
+	// relative path there and the strip is correctly a no-op.
+	#[cfg(windows)]
+	#[test]
+	fn strips_verbatim_prefix_from_windows_paths() {
+		assert_eq!(
+			strip_windows_verbatim_path(PathBuf::from(r"\\?\C:\proj\a.ts")),
+			PathBuf::from(r"C:\proj\a.ts")
+		);
+		assert_eq!(
+			strip_windows_verbatim_path(PathBuf::from(r"C:\proj\a.ts")),
+			PathBuf::from(r"C:\proj\a.ts")
+		);
+	}
+
+	#[test]
+	fn allows_recovery_when_cwd_is_verbatim_and_store_key_is_cleaned() {
+		// On Windows `std::fs::canonicalize` yields the verbatim `\\?\C:\…` cwd
+		// while the hashline store key keeps the cleaned `C:\…` form; recovery
+		// between the two must not be silently rejected. On POSIX the two forms
+		// coincide, so the same assertions hold.
+		let tmp = tempfile::tempdir().unwrap();
+		let verbatim_cwd = std::fs::canonicalize(tmp.path()).unwrap();
+		let cleaned_cwd = strip_windows_verbatim_path(verbatim_cwd.clone());
+		let p = policy(&verbatim_cwd);
+		assert!(p.allow_tag_path_recovery("a.ts", &cleaned_cwd.join("a.ts")));
+		assert!(p.allow_tag_path_recovery("a.ts", &verbatim_cwd.join("a.ts")));
+		// Recovery outside the cwd stays rejected.
+		assert!(!p.allow_tag_path_recovery("a.ts", &cleaned_cwd.parent().unwrap().join("a.ts")));
 	}
 
 	#[test]

@@ -35,10 +35,10 @@ async function writeJsonl(filePath: string, records: Record<string, unknown>[]):
 	await Bun.write(filePath, `${records.map(record => JSON.stringify(record)).join("\n")}\n`);
 }
 
-// Claude Code's project-dir encoding; on Windows the drive colon must be
-// replaced too, or the encoded name is not a valid directory segment.
+// Claude Code's documented project-dir encoding: every non-alphanumeric
+// character becomes `-` (drive colons, separators, dots, underscores, spaces).
 function encodeProjectDir(cwd: string): string {
-	return cwd.replaceAll(/[/\\:]/g, "-");
+	return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 async function createClaudeFixture(): Promise<{ info: ForeignSessionInfo; store: ClaudeSessionStore }> {
@@ -104,7 +104,7 @@ describe("ClaudeSessionStore", () => {
 		const cwd = path.join(tempRoot, "my-project.dir");
 		const id = "33333333-3333-4333-8333-333333333333";
 		// No history entry, and a directory name whose "-" separators are ambiguous.
-		await writeJsonl(path.join(root, "projects", cwd.replace(/[/\\._:]/g, "-"), `${id}.jsonl`), [
+		await writeJsonl(path.join(root, "projects", encodeProjectDir(cwd), `${id}.jsonl`), [
 			{ type: "file-history-snapshot", timestamp: "2026-01-01T00:00:00.000Z" },
 			{
 				type: "user",
@@ -123,7 +123,7 @@ describe("ClaudeSessionStore", () => {
 	it("bounds cwd discovery to the transcript prefix before using the encoded fallback", async () => {
 		const root = path.join(tempRoot, ".claude");
 		const cwd = path.join(tempRoot, "late-project.dir");
-		const encoded = cwd.replace(/[/\\._:]/g, "-");
+		const encoded = encodeProjectDir(cwd);
 		const id = "55555555-5555-4555-8555-555555555555";
 		await writeJsonl(path.join(root, "projects", encoded, `${id}.jsonl`), [
 			{ type: "file-history-snapshot", snapshot: "x".repeat(128 * 1024) },
@@ -262,30 +262,33 @@ describe("ClaudeSessionStore", () => {
 		expect(sessions[0]?.created.toISOString()).toBe("2025-01-01T00:00:00.000Z");
 	});
 
-	it("defaults to CLAUDE_CONFIG_DIR and reads its colocated project registry", async () => {
-		const root = path.join(tempRoot, "relocated-claude");
-		const nativeCwd = path.join(tempRoot, "project-with-hyphen");
-		const cwd = process.platform === "win32" ? nativeCwd.replaceAll("\\", "/") : nativeCwd;
-		const id = "22222222-2222-4222-8222-333333333333";
-		const encoded = encodeProjectDir(cwd);
-		process.env.CLAUDE_CONFIG_DIR = root;
-		await Bun.write(path.join(root, ".claude.json"), JSON.stringify({ projects: { [cwd]: {} } }));
-		await writeJsonl(path.join(root, "projects", encoded, `${id}.jsonl`), [
-			{
-				type: "user",
-				uuid: "relocated-user",
-				parentUuid: null,
-				timestamp: "2025-01-01T00:00:00.000Z",
-				message: { content: "Relocated prompt" },
-			},
-		]);
+	it.each(["project-with-hyphen", "my_project.v2"])(
+		"defaults to CLAUDE_CONFIG_DIR and maps %s to its registered project path",
+		async name => {
+			const root = path.join(tempRoot, "relocated-claude");
+			const nativeCwd = path.join(tempRoot, name);
+			const cwd = process.platform === "win32" ? nativeCwd.replaceAll("\\", "/") : nativeCwd;
+			const id = "22222222-2222-4222-8222-333333333333";
+			const encoded = encodeProjectDir(cwd);
+			process.env.CLAUDE_CONFIG_DIR = root;
+			await Bun.write(path.join(root, ".claude.json"), JSON.stringify({ projects: { [cwd]: {} } }));
+			await writeJsonl(path.join(root, "projects", encoded, `${id}.jsonl`), [
+				{
+					type: "user",
+					uuid: "relocated-user",
+					parentUuid: null,
+					timestamp: "2025-01-01T00:00:00.000Z",
+					message: { content: "Relocated prompt" },
+				},
+			]);
 
-		const sessions = await new ClaudeSessionStore().list();
+			const sessions = await new ClaudeSessionStore().list();
 
-		expect(sessions).toHaveLength(1);
-		expect(sessions[0]?.cwd).toBe(cwd);
-		expect(sessions[0]?.path).toBe(path.join(root, "projects", encoded, `${id}.jsonl`));
-	});
+			expect(sessions).toHaveLength(1);
+			expect(sessions[0]?.cwd).toBe(cwd);
+			expect(sessions[0]?.path).toBe(path.join(root, "projects", encoded, `${id}.jsonl`));
+		},
+	);
 });
 
 describe("CodexSessionStore", () => {
