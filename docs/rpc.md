@@ -774,7 +774,7 @@ Extension runner errors are emitted separately as:
 
 `message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
 
-`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, builtin slash-command side channels, and session-persistence `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
+`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
 
 The optional `messageUpdates: "delta"` projects only `message_update` frames to `{ type: "message_update", messageId, message: { role }, assistantMessageEvent }`: `assistantMessageEvent.partial` is omitted, while all other event fields (including subtype, `delta`, and `contentIndex`) are preserved. `message_start`, `message_end`, and all other frames are unchanged; `message_end` still carries the full message. Block-ending events such as `text_end`, `thinking_end`, and `toolcall_end` retain their block content or tool call, so hosts must still accept chunked protocol-v2 frames for large blocks and full messages. Switching modes mid-message does not change its `messageId`. The projection applies to the session's own frames only: `subagent_event` payloads forwarded under `set_subagent_subscription` level `"events"` keep their full `message_update` snapshots.
 
@@ -993,30 +993,40 @@ A record's latest turn is its last follow-up, else the record itself.
 { "type": "btw_record", "record": { "id": "1596…", "answer": "Two workers …", "status": "complete", … } }
 ```
 
-The response arrives once the question is checkpointed as running; the answer
-then streams as `btw_delta` frames, and a `btw_record` frame carries the full
-record at every lifecycle change (started, complete, cancelled, error). The
-last `btw_record` for an id wins. Side questions run beside the main agent:
-they neither wait for nor block a running prompt.
+The `btw_record` frame for the started turn and then the response arrive once
+the question is checkpointed as running; the turn starts only after that, so
+every `btw_delta` and later `btw_record` follows the response. A `btw_record`
+frame carries the full record at every lifecycle change (started, complete,
+cancelled, error); the last one for an id wins. Side questions run beside the
+main agent: they neither wait for nor block a running prompt.
 
-One side question runs at a time per session. `btw_cancel` cancels it
-(only if it is `recordId`, when given) and answers `cancelled: false` when
-nothing matching is running. `new_session`, `switch_session`, `branch`,
-`open_session`, extension-initiated session changes and shutdown cancel a
-running question and wait for its checkpoint first. `get_btw_history` lists
-the current session's records newest first; a running record carries its
-partial answer, so a host that reconnects can rebuild its view.
+One side question runs at a time per session. `btw_cancel` bypasses the
+command queue and cancels the running question, or a `btw` still starting
+(which then fails), only if it is topic `recordId` when given. It answers
+`cancelled: false` when nothing matching is running, including for a `btw`
+still queued behind other commands. `new_session`, `switch_session`,
+`branch`, `open_session`, extension-initiated session changes and shutdown
+cancel a running question and wait for its checkpoint first, even if the
+change is then vetoed.
+
+`get_btw_history` lists the current session's records newest first; a running
+record carries its partial answer, so a host that reconnects can rebuild its
+view. While nothing runs it re-reads the history from disk, so topics the TUI
+added are listed and can take follow-ups; a topic another process is still
+answering reads as `interrupted`. The list is not paged: a history larger than
+the transport limit fails like any oversized response (protocol v2 chunks it).
 
 Failure responses for `btw`:
 
 - blank `question`
-- another side question is still running
-- `recordId` is unknown, or that topic is still running
+- another side question is still running or starting
+- `recordId` is unknown
 - no active model
-- the history cannot be saved
+- the history cannot be saved (including a topic another process still holds)
+- cancelled by `btw_cancel` or a session change before it started
 
 A checkpoint that fails after the response is reported as a
-`{ type: "notice", level: "error", source: "btw-history" }` frame.
+`{ type: "notice", level: "error", source: "btw-history", message }` frame.
 
 ## Prompt/Queue Concurrency and Ordering
 

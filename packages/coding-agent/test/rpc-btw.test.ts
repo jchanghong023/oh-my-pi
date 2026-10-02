@@ -47,7 +47,8 @@ describe("RPC /btw", () => {
 			records.push(record);
 			wake();
 		});
-		/** Resolves once `ready` returns a value; re-checked after every btw frame. */
+		rpc.onSessionEvent(wake);
+		/** Resolves once `ready` returns a value; re-checked after every btw frame and session event. */
 		const until = async <T>(ready: () => T | undefined): Promise<T> => {
 			for (;;) {
 				const value = ready();
@@ -111,6 +112,8 @@ describe("RPC /btw", () => {
 		expect(await rpc.cancelBtw(slow.id)).toBe(true);
 		expect(await settled(slow.id)).toMatchObject({ status: "cancelled", answer: "Thinking" });
 		expect(await rpc.cancelBtw()).toBe(false);
+		// The turn was really aborted, and its late chunk never reached the host.
+		expect(await Bun.file(path.join(directory!, "btw-aborted")).exists()).toBe(true);
 		expect(deltas).toEqual(["Thinking"]);
 
 		// The slot is free again; a cancelled topic accepts follow-ups.
@@ -144,5 +147,94 @@ describe("RPC /btw", () => {
 		expect((await rpc.switchSession(original)).cancelled).toBe(false);
 		const history = await rpc.getBtwHistory();
 		expect(history.map(record => [record.id, record.status])).toEqual([[slow.id, "cancelled"]]);
+	}, 30_000);
+
+	test("runs beside a streaming main turn", async () => {
+		const { rpc, settled } = await start();
+		await rpc.prompt("slow main turn");
+		const side = await rpc.btw("quick side question");
+		expect(await settled(side.id)).toMatchObject({ status: "complete" });
+		expect((await rpc.getState()).isStreaming).toBe(true);
+	}, 30_000);
+
+	test("a checkpoint that fails after the response is reported as a notice", async () => {
+		const { rpc, deltas, until, settled } = await start();
+		const notices: string[] = [];
+		rpc.onSessionEvent(event => {
+			if (event.type === "notice" && event.source === "btw-history") notices.push(event.message);
+		});
+		const slow = await rpc.btw("slow, then unsavable");
+		await until(() => deltas[0]);
+		const entry = path.join(
+			(await rpc.getState()).sessionFile!.replace(/\.jsonl$/, ""),
+			"btw-history",
+			`entry-${slow.id}.json`,
+		);
+		await fs.rm(entry);
+		await fs.mkdir(entry);
+		expect(await rpc.cancelBtw()).toBe(true);
+		await settled(slow.id);
+		await until(() => notices[0]);
+		expect(notices[0]).toContain("Could not save /btw history");
+	}, 30_000);
+
+	test("over raw stdio: the response precedes the turn's frames, and EOF saves a running question", async () => {
+		directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-btw-"));
+		const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "btw-rpc-agent.ts")], {
+			cwd: directory,
+			env: { ...process.env, PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1" },
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		const frames: Array<Record<string, any>> = [];
+		let waiter: (() => void) | undefined;
+		const wake = () => waiter?.();
+		const reading = (async () => {
+			let buffer = "";
+			for await (const chunk of child.stdout.pipeThrough(new TextDecoderStream())) {
+				buffer += chunk;
+				let newline = buffer.indexOf("\n");
+				while (newline !== -1) {
+					frames.push(JSON.parse(buffer.slice(0, newline)));
+					buffer = buffer.slice(newline + 1);
+					newline = buffer.indexOf("\n");
+				}
+				wake();
+			}
+			wake();
+		})();
+		const frame = async (match: (frame: Record<string, any>) => boolean) => {
+			for (;;) {
+				const index = frames.findIndex(match);
+				if (index !== -1) return index;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				waiter = resolve;
+				await promise;
+			}
+		};
+		const send = (command: object) => {
+			child.stdin.write(`${JSON.stringify(command)}\n`);
+			child.stdin.flush();
+		};
+
+		send({ id: "fail", type: "btw", question: "please fail" });
+		const failed = await frame(f => f.type === "btw_record" && f.record.status === "error");
+		expect(await frame(f => f.type === "response" && f.id === "fail")).toBeLessThan(failed);
+
+		send({ id: "state", type: "get_state" });
+		const state = frames[await frame(f => f.type === "response" && f.id === "state")]!;
+		send({ id: "slow", type: "btw", question: "slow at shutdown" });
+		const started = frames[await frame(f => f.type === "response" && f.id === "slow")]!;
+		await frame(f => f.type === "btw_delta");
+		child.stdin.end();
+		await child.exited;
+		await reading;
+		const entry = path.join(
+			state.data.sessionFile.replace(/\.jsonl$/, ""),
+			"btw-history",
+			`entry-${started.data.record.id}.json`,
+		);
+		expect(await Bun.file(entry).json()).toMatchObject({ status: "cancelled", answer: "Thinking" });
 	}, 30_000);
 });

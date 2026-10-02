@@ -18,12 +18,8 @@ export interface BtwTurnStart {
 }
 
 /** Start a new topic, or append a follow-up turn to `previous`. */
-export function beginBtwTurn(
-	question: string,
-	leafId: string | null,
-	previous?: BtwHistoryRecord,
-	now = Date.now(),
-): BtwTurnStart {
+export function beginBtwTurn(question: string, leafId: string | null, previous?: BtwHistoryRecord): BtwTurnStart {
+	const now = Date.now();
 	const turn: BtwHistoryTurn = { question, answer: "", status: "running", createdAt: now, updatedAt: now };
 	const record: BtwHistoryRecord = previous
 		? { ...previous, followUps: [...(previous.followUps ?? []), turn] }

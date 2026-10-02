@@ -238,7 +238,12 @@ function isRpcAvailableCommandsUpdateFrame(value: unknown): value is RpcAvailabl
 }
 
 function isRpcBtwDeltaFrame(value: unknown): value is RpcBtwDeltaFrame {
-	return isRecord(value) && value.type === "btw_delta" && typeof value.delta === "string";
+	return (
+		isRecord(value) &&
+		value.type === "btw_delta" &&
+		typeof value.recordId === "string" &&
+		typeof value.delta === "string"
+	);
 }
 
 function isRpcBtwRecordFrame(value: unknown): value is RpcBtwRecordFrame {
