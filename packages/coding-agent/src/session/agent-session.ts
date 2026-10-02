@@ -115,6 +115,7 @@ import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import { isCompanyLaneActive } from "../config/company-provider";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import {
@@ -11158,7 +11159,13 @@ export class AgentSession implements SettingsScope {
 			disabledProviderIds(this.settings),
 		);
 		if (providers.size === 0) return undefined;
-		await this.#modelRegistry.refreshDiscoverableProviders(providers, "online-if-uncached");
+		// An `--offline` process must not reach the network during a session
+		// switch either: the cache-only strategy keeps the restore chain local,
+		// and a cold cache falls through to the fail-closed restore error.
+		await this.#modelRegistry.refreshDiscoverableProviders(
+			providers,
+			isCompanyLaneActive() ? "offline" : "online-if-uncached",
+		);
 		return resolve();
 	}
 

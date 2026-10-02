@@ -466,13 +466,12 @@ model/thinking level, session name/file, or unavailable `contextUsage`.
 `dumpTools` may also include each tool's `examples` alongside its schema.
 
 `queuedMessages` holds the same displayable queue-chip text as the `queue_update`
-event below. Use this text with `remove_queued_message`, subject to its pending-queue
-boundary: live-steered input stays visible until recorded but is no longer removable.
-event below — every entry except the first `liveSteered` `steering` entries is a
+event below. Every entry except the first `liveSteered` `steering` entries is a
 `message` value that `remove_queued_message` will match against that queue.
 Those leading entries were already sent into the streaming response by live
 steering: they stay listed until the transcript records them, and an `abort`
-before then requeues them as ordinary steering. Clients should render the pending-message queue
+before then requeues them as ordinary steering. Use the removable entries' text
+with `remove_queued_message`, subject to that pending-queue boundary.
 Clients should render the queue from these snapshots instead of tracking chips
 independently, and treat removal responses as confirmation rather than a second
 source of truth. `queuedMessageCount` also includes advisor cards and pending
@@ -1023,8 +1022,10 @@ command queue and cancels the running question, or a `btw` still starting
 `cancelled: false` when nothing matching is running, including for a `btw`
 still queued behind other commands. `new_session`, `switch_session`,
 `branch`, `fork`, `open_session`, extension-initiated session changes and shutdown
-cancel a running question and wait for its checkpoint first, even if the
-change is then vetoed.
+cancel a running question and wait for its checkpoint first once the change is
+committed to running; a `fork` refused up front because the session is busy,
+or a `switch_session` whose requested model fails validation, is rejected
+before any session state moves and leaves a running question running.
 
 `get_btw_history` lists the current session's records newest first; a running
 record carries its partial answer, so a host that reconnects can rebuild its

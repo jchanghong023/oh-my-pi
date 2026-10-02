@@ -1068,9 +1068,18 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	// Long-holding commands dispatch in the background so later frames can
 	// overtake them (mirrors the single-session transport in rpc-mode.ts): a
 	// `bash` runs for a long time, a `prompt`/`steer`/`follow_up`/`steer_subagent`
-	// holds its response until admission. Backgrounding lets an `abort` (or
-	// get_state) reach the session while such a command is still settling.
-	const projectBackgroundedTypes = new Set(["bash", "predict_word", "prompt", "steer", "follow_up", "steer_subagent"]);
+	// holds its response until admission, and a `btw` awaits the whole side
+	// answer. Backgrounding lets an `abort` (or get_state, or `btw_cancel`)
+	// reach the session while such a command is still settling.
+	const projectBackgroundedTypes = new Set([
+		"bash",
+		"predict_word",
+		"prompt",
+		"steer",
+		"follow_up",
+		"steer_subagent",
+		"btw_cancel",
+	]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
