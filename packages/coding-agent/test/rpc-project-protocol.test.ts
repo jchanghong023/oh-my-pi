@@ -56,6 +56,10 @@ async function withProjectRpcServer<T>(
 				...Bun.env,
 				PI_NO_TITLE: "1",
 				PI_CODING_AGENT_DIR: dirs.agentDir,
+				// Upstream #13689: rebuilding a session fails closed when its saved
+				// model cannot be restored. The isolated agent dir has no stored
+				// credentials, so give the restore check a configured key.
+				ANTHROPIC_API_KEY: "test-key",
 			} as unknown as Record<string, string | undefined>,
 			stdin: "pipe",
 			stdout: "pipe",
