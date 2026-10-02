@@ -1005,7 +1005,7 @@ command queue and cancels the running question, or a `btw` still starting
 (which then fails), only if it is topic `recordId` when given. It answers
 `cancelled: false` when nothing matching is running, including for a `btw`
 still queued behind other commands. `new_session`, `switch_session`,
-`branch`, `open_session`, extension-initiated session changes and shutdown
+`branch`, `fork`, `open_session`, extension-initiated session changes and shutdown
 cancel a running question and wait for its checkpoint first, even if the
 change is then vetoed.
 

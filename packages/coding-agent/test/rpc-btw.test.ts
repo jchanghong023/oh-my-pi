@@ -178,6 +178,7 @@ describe("RPC /btw", () => {
 		// The answer is not on disk yet: the session must not move away from it.
 		expect((await rejectionOf(rpc.newSession())).message).toContain("/btw history could not be saved");
 		expect((await rpc.getState()).sessionFile).toBe(sessionFile);
+		expect((await rpc.getBtwHistory())[0]).toMatchObject({ status: "cancelled", answer: "Thinking" });
 
 		// Storage recovers: the move retries the checkpoint, then proceeds.
 		await fs.rm(entry, { recursive: true });

@@ -119,8 +119,12 @@ export class RpcBtwController {
 	async history(): Promise<readonly BtwHistoryRecord[]> {
 		const store = await this.#openStore(this.#running === undefined && this.#startingTopic === undefined);
 		const running = this.#running;
-		if (!running || running.store !== store) return store.getRecords();
-		return store.getRecords().map(record => (record.id === running.record.id ? running.record : record));
+		const records = new Map(store.getRecords().map(record => [record.id, record]));
+		for (const unsaved of this.#unsaved.values()) {
+			if (unsaved.store === store) records.set(unsaved.record.id, unsaved.record);
+		}
+		if (running?.store === store) records.set(running.record.id, running.record);
+		return [...records.values()].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
 	}
 
 	/**
@@ -169,6 +173,7 @@ export class RpcBtwController {
 				if (!fresh || artifactsDir === undefined) return cached;
 			} catch {
 				// A failed checkpoint was already reported as a `notice`; re-read from disk below.
+				if ([...this.#unsaved.values()].some(unsaved => unsaved.store === cached)) return cached;
 			}
 		} else if (this.#running) {
 			// Replaced outside a host command (an extension switched sessions): the old
