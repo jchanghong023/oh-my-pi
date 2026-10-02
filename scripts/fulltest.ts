@@ -249,6 +249,20 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		],
 	},
 	{
+		// Upstream goal feature joined the fork with the v18.4.10 sync: its RPC
+		// wiring was hand-ported into RpcSessionHost, --goal parsing merged into
+		// the fork-modified args chain, and goals/runtime.ts carries a fork
+		// iteration patch — these tests guard exactly those surfaces.
+		label: "coding-agent/goal",
+		cwd: "packages/coding-agent",
+		files: [
+			"test/rpc-goal.test.ts",
+			"test/cli-goal-flag.test.ts",
+			"test/goals/goal-runtime.test.ts",
+			"test/goals/goal-mode-integration.test.ts",
+		],
+	},
+	{
 		label: "coding-agent/fork-features",
 		cwd: "packages/coding-agent",
 		files: [

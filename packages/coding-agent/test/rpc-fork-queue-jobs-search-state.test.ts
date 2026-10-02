@@ -6,11 +6,7 @@ import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/mode
 import { RpcForkQueueController, type RpcForkQueueSnapshot } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-queue";
 import { RpcForkJobController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-jobs";
 import { RpcForkSearchController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-search";
-import {
-	RpcForkFeedbackController,
-	RpcForkHookTelemetry,
-	RpcForkStateController,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-state";
+import { RpcForkFeedbackController, RpcForkHookTelemetry } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-state";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
@@ -314,24 +310,5 @@ describe("RpcForkHookTelemetry + goal snapshot (5.8)", () => {
 		});
 		expect(emitted[1]).toMatchObject({ hookId: "y.ts", source: "user", status: "error", reason: "boom" });
 		expect(emitted[2]).toMatchObject({ source: "plugin", status: "timeout" });
-	});
-
-	test("goal snapshot projects the live goal mode state", () => {
-		const goal = {
-			id: "g1",
-			objective: "finish",
-			status: "active",
-			iteration: 4,
-			tokensUsed: 0,
-			timeUsedSeconds: 0,
-			createdAt: 1,
-			updatedAt: 2,
-		};
-		const session = { getGoalModeState: () => ({ enabled: true, mode: "active", goal }) } as unknown as AgentSession;
-		expect(RpcForkStateController.goalSnapshot(session)).toMatchObject({
-			goal: { goal: { id: "g1" }, iteration: 4 },
-		});
-		const none = { getGoalModeState: () => undefined } as unknown as AgentSession;
-		expect(RpcForkStateController.goalSnapshot(none)).toBeUndefined();
 	});
 });

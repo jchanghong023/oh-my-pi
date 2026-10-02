@@ -1631,7 +1631,7 @@ export class RpcSessionHost {
 			case "switch_session":
 			case "branch": {
 				await this.#goalController.beginSessionChange();
-				let result: Awaited<ReturnType<typeof handleRpcSessionChange>>;
+				let result: Awaited<ReturnType<typeof handleRpcSessionChange>> | undefined;
 				try {
 					result = await handleRpcSessionChange(session, command, this.subagentRegistry);
 				} finally {

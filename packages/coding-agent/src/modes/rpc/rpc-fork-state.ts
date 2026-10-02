@@ -1,5 +1,5 @@
 /**
- * Fork-extension session-state completion (requirement 5.8, rpc-ui-protocol.md).
+ * Fork-extension session surfaces (requirement 5.8, rpc-ui-protocol.md).
  *
  * `submit_feedback` appends a lightweight local record (config-root jsonl, no
  * upstream reporting — this fork has none). Hook telemetry (`hook_executed`
@@ -10,8 +10,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
-import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalModeState } from "../../goals/state";
 import type { AgentSession } from "../../session/agent-session";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase, RpcForkHookExecutedFrame } from "./rpc-fork-types";
@@ -23,17 +21,6 @@ export interface RpcForkFeedbackRecord {
 	messageId: string;
 	rating: "up" | "down";
 	comment?: string;
-}
-
-/** Static helpers for v3 additions to stock responses (`get_state.goal`). */
-export class RpcForkStateController {
-	static goalSnapshot(
-		session: AgentSession,
-	): { goal: { goal: Goal; state: GoalModeState; iteration: number } } | undefined {
-		const mode = session.getGoalModeState();
-		if (!mode) return undefined;
-		return { goal: { goal: mode.goal, state: mode, iteration: mode.goal.iteration ?? 0 } };
-	}
 }
 
 export class RpcForkFeedbackController {
