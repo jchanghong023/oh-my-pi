@@ -826,7 +826,7 @@ describe("AgentSession queued steer delivery", () => {
 			await session.waitForIdle();
 
 			expect(promoted).toBe(true);
-			expect(queueAfterPromotion).toEqual({ steering: [invocation], followUp: [] });
+			expect(queueAfterPromotion).toEqual({ steering: [invocation], followUp: [], liveSteered: 0 });
 			expect(promotedAgain).toBe(false);
 			const delivered = session.messages.filter(
 				(message): message is CustomMessage => message.role === "custom" && message.attribution === "user",
@@ -869,7 +869,7 @@ describe("AgentSession queued steer delivery", () => {
 			await session.waitForIdle();
 
 			expect(promoted).toBe(true);
-			expect(queued).toEqual({ steering: ["existing", "duplicate"], followUp: ["unrelated", "duplicate"] });
+			expect(queued).toEqual({ steering: ["existing", "duplicate"], followUp: ["unrelated", "duplicate"], liveSteered: 0 });
 			const delivered = session.messages.filter(message => message.role === "user");
 			expect(delivered.map(message => message.content)).toEqual(
 				["start", "existing", "duplicate", "unrelated", "duplicate"].map(text => [{ type: "text", text }]),

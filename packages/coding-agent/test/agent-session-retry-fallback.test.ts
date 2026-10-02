@@ -5358,9 +5358,7 @@ describe("AgentSession retry fallback", () => {
 			streamFn: (model, context, options) => {
 				requestCount++;
 				requestedModels.push(`${model.provider}/${model.id}`);
-				// Upstream #13747: a mid-stream socket drop with streamed progress
-				// stays on the same model for the first retry; only that retry's
-				// failure consults the fallback chain.
+				// The first mid-stream drop gets one same-model retry before fallback selection.
 				if (requestCount <= 2) return transportErrorAfterToolCallStream(model, toolCall);
 				const mock = createMockModel({ id: model.id, provider: model.provider });
 				mock.push({ content: ["Recovered on a fitting fallback"] });
