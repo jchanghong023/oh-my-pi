@@ -790,7 +790,7 @@ describe("AgentSession queued steer delivery", () => {
 			let injected = false;
 			let promoted: boolean | undefined;
 			let promotedAgain: boolean | undefined;
-			let queueAfterPromotion: { steering: readonly string[]; followUp: readonly string[] } | undefined;
+			let queueAfterPromotion: QueuedMessagesSnapshot | undefined;
 			session.agent.setOnBeforeYield(async () => {
 				if (injected) return;
 				injected = true;
@@ -869,7 +869,11 @@ describe("AgentSession queued steer delivery", () => {
 			await session.waitForIdle();
 
 			expect(promoted).toBe(true);
-			expect(queued).toEqual({ steering: ["existing", "duplicate"], followUp: ["unrelated", "duplicate"], liveSteered: 0 });
+			expect(queued).toEqual({
+				steering: ["existing", "duplicate"],
+				followUp: ["unrelated", "duplicate"],
+				liveSteered: 0,
+			});
 			const delivered = session.messages.filter(message => message.role === "user");
 			expect(delivered.map(message => message.content)).toEqual(
 				["start", "existing", "duplicate", "unrelated", "duplicate"].map(text => [{ type: "text", text }]),
