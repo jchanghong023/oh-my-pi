@@ -53,7 +53,6 @@ import {
 	cfgStartupShowSplash,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
-const noRecentSessions = async () => [];
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalPiProfile = process.env.PI_PROFILE;
 const originalOmpProfile = process.env.OMP_PROFILE;
@@ -399,7 +398,6 @@ describe("interactive collaboration startup", () => {
 			terminal: new VirtualTerminal(),
 			version: "test",
 			cache: false,
-			recentSessions: noRecentSessions,
 		});
 		spyOn(InteractiveMode.prototype, "getUserInput").mockImplementation(async function (this: InteractiveMode) {
 			mode = this;
@@ -741,7 +739,6 @@ describe("interactive collaboration startup", () => {
 				terminal: new StartupTerminal(),
 				version: "test",
 				cache: false,
-				recentSessions: noRecentSessions,
 			});
 			spyOn(InteractiveMode.prototype, "initHooksAndCustomTools").mockImplementation(
 				async function (this: InteractiveMode) {

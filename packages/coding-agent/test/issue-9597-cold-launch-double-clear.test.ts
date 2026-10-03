@@ -92,7 +92,6 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 				terminal,
 				version: "18.0.4",
 				cache: false,
-				recentSessions: async () => [],
 			});
 			await terminal.waitForRender();
 			lease = takeStartupComposerLease();

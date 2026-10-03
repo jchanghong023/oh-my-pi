@@ -8,7 +8,7 @@
 
 * **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.5.0`
-* **Upstream commit**：`bee42cb8fc20e3ad1e269a0dc30a573596efaf52`
+* **Upstream commit**：`9348320cc4a30a7195d36a1f05a6c11bcb701a17`
 * **同步日期**：2026-10-03
 
 ## 预采纳的上游 PR（上游合并后删除对应条目）
