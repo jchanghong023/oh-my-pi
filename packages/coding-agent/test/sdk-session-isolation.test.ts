@@ -7,17 +7,22 @@ import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as secrets from "@oh-my-pi/pi-coding-agent/secrets";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { cfgReadDefaultLimit } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
-import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigRootDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 
 function createTtsrRule(name: string): Rule {
@@ -78,8 +83,12 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		}
 		setProfile(originalProfile);
-		// The model registry opened the shared `<configRoot>/agent/models.db` cache while the
-		// temp root was active; release it so Windows can delete the root.
+		// Sessions under the temp config root open process-wide sqlite stores
+		// (history, session index, agent.db, models.db);
+		// Windows keeps their files locked until each is closed.
+		HistoryStorage.close();
+		resetSessionIndexForTests();
+		AgentStorage.close();
 		closeModelCache();
 		removeSyncWithRetries(configRoot);
 	}
@@ -121,6 +130,48 @@ describe("createAgentSession session storage isolation", () => {
 		}
 	});
 
+	it("loads each workspace's project settings when sessions omit explicit settings", async () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-settings-${Snowflake.next()}-`));
+		tempDirs.push(tempDir);
+		const workspaces = ["first", "second"].map(name => ({
+			cwd: path.join(tempDir, name),
+			agentDir: path.join(tempDir, `${name}-agent`),
+		}));
+		for (const [index, workspace] of workspaces.entries()) {
+			fs.mkdirSync(getProjectAgentDir(workspace.cwd), { recursive: true });
+			fs.writeFileSync(
+				path.join(getProjectAgentDir(workspace.cwd), "config.yml"),
+				`read:\n  defaultLimit: ${index === 0 ? 200 : 500}\n`,
+			);
+		}
+		resetSettingsForTest();
+		try {
+			for (const [index, workspace] of workspaces.entries()) {
+				const { session } = await createAgentSession({
+					...workspace,
+					modelRegistry: sharedModelRegistry,
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					toolNames: [],
+					enableMCP: false,
+					enableLsp: false,
+				});
+				try {
+					expect(session.settings.getCwd()).toBe(workspace.cwd);
+					expect(session.settings.getAgentDir()).toBe(workspace.agentDir);
+					expect(cfgReadDefaultLimit.get(session.settings)).toBe(index === 0 ? 200 : 500);
+				} finally {
+					await session.dispose();
+				}
+			}
+		} finally {
+			resetSettingsForTest();
+		}
+	});
+
 	it("uses the provided agentDir for the default persistent session root", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-session-isolation-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);
@@ -154,6 +205,53 @@ describe("createAgentSession session storage isolation", () => {
 			await session.dispose();
 		}
 	});
+
+	it("reports a failed drop after activating a resumable new session", async () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-drop-${Snowflake.next()}-`));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, "project");
+		fs.mkdirSync(cwd, { recursive: true });
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: path.join(tempDir, "agent"),
+			modelRegistry: sharedModelRegistry,
+			settings: Settings.isolated(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			toolNames: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+		try {
+			session.sessionManager.appendMessage({ role: "user", content: "old conversation", timestamp: 1 });
+			await session.sessionManager.ensureOnDisk();
+			const oldFile = session.sessionFile;
+			if (!oldFile) throw new Error("Expected old session file");
+			const oldEntries = await loadEntriesFromFile(oldFile);
+			expect(oldEntries).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({ role: "user", content: "old conversation" }),
+				}),
+			);
+			const dropError = new Error("delete denied");
+			spyOn(session.sessionManager, "dropSession").mockRejectedValue(dropError);
+
+			await expect(session.newSession({ drop: true, throwOnDropFailure: true })).rejects.toBe(dropError);
+			const newFile = session.sessionFile;
+			if (!newFile) throw new Error("Expected new session file");
+			expect(newFile).not.toBe(oldFile);
+			expect(fs.existsSync(oldFile)).toBe(true);
+			expect(await loadEntriesFromFile(oldFile)).toEqual(oldEntries);
+			expect((await loadEntriesFromFile(newFile))[0]?.type).toBe("session");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("keeps subagent local:// mappings from replacing the process-global override", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-local-override-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);

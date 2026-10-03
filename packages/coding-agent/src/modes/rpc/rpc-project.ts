@@ -20,6 +20,7 @@
  * - host tools and URI schemes are registered once on shared bridges and
  *   re-applied to every session (and to sessions created later).
  */
+import * as fs from "node:fs";
 import { getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -1037,7 +1038,12 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 
 	const frameEncoder = new RpcFrameEncoder();
 	const hostRef: { host?: RpcProjectHost } = {};
-	const outputWriter = new RpcOutputWriter(process.stdout, failure => {
+	// Bun on Windows writes a piped process.stdout with a blocking WriteFile on the
+	// JS thread and never reports backpressure, so a client that stops reading
+	// stdout froze the whole worker, stdin reader included. An fd write stream
+	// writes from the threadpool and reports backpressure, letting the writer spool.
+	const stdout = process.platform === "win32" ? fs.createWriteStream("", { fd: 1, autoClose: false }) : process.stdout;
+	const outputWriter = new RpcOutputWriter(stdout, failure => {
 		logger.error("RPC project output delivery failed", { error: String(failure) });
 		void hostRef.host?.dispose("RPC output delivery failed").finally(() => process.exit(1));
 	});

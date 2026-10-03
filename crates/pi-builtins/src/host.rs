@@ -2199,6 +2199,23 @@ mod testing {
 
 			drop((reader, reader2));
 		}
+
+		/// Contract: the Windows twin compares file objects — duplicated handles
+		/// share one (and its offset), separate opens of the same path do not.
+		#[cfg(windows)]
+		#[test]
+		fn same_destination_distinguishes_duplicate_handles_from_separate_opens() {
+			use crate::host::same_destination;
+
+			let dir = tempfile::tempdir().unwrap();
+			let path = dir.path().join("out.txt");
+			let original = std::fs::File::create(&path).unwrap();
+			let duplicate = original.try_clone().unwrap();
+			let independent = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+			let original = OpenFile::File(original);
+			assert!(same_destination(&original, &OpenFile::File(duplicate)));
+			assert!(!same_destination(&original, &OpenFile::File(independent)));
+		}
 	}
 
 	#[cfg(unix)]
