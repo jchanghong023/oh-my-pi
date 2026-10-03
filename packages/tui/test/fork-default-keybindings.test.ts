@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { KEYBINDINGS } from "../src/app-keybindings";
+import { COMPOSER_DEFAULTS } from "../src/prompt/composer";
 import { DEFAULT_ACTION_KEYS } from "../src/prompt/custom-editor";
 
 // Fork contract (docs-zh-CN/requirements/fork.md「快捷键与状态栏」): the four default
@@ -32,5 +33,14 @@ describe("fork default keybindings", () => {
 		expect(DEFAULT_ACTION_KEYS["app.model.selectTemporary"]).toEqual([
 			KEYBINDINGS["app.model.selectTemporary"].defaultKeys,
 		]);
+	});
+});
+
+// The fork swaps the default composer shape from "band" to "pi" (framed
+// horizontal rules). Upstream tests that assert curved-prompt visuals must pin
+// their own shape; this guard keeps the fork default from silently reverting.
+describe("fork default composer shape", () => {
+	test("composer defaults to the pi shape", () => {
+		expect(COMPOSER_DEFAULTS.composerShape).toBe("pi");
 	});
 });

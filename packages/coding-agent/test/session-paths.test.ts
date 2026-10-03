@@ -41,26 +41,27 @@ afterEach(() => {
 });
 
 describe("legacy session directory migration", () => {
-	test.skipIf(process.platform === "win32")(
-		"keeps home sessions at the same path when TMPDIR moves within home",
-		() => {
-			const homeProbe = fs.mkdtempSync(path.join(os.homedir(), ".omp-session-home-"));
-			cleanup.push(homeProbe);
-			const cwd = path.join(homeProbe, "nested", "project");
-			fs.mkdirSync(cwd, { recursive: true });
-			const sessionsRoot = makeTempDir("omp-session-root-");
-			const storage = new FileSessionStorage();
-			const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(homeProbe);
-			try {
-				const first = computeDefaultSessionDir(cwd, storage, sessionsRoot);
-				tmpdir.mockReturnValue(path.join(homeProbe, "nested"));
-				const second = computeDefaultSessionDir(cwd, storage, sessionsRoot);
-				expect(second).toBe(first);
-			} finally {
-				tmpdir.mockRestore();
-			}
-		},
-	);
+	test.skipIf(process.platform === "win32")("follows the temp root when TMPDIR nests inside home", () => {
+		const homeProbe = fs.mkdtempSync(path.join(os.homedir(), ".omp-session-home-"));
+		cleanup.push(homeProbe);
+		const cwd = path.join(homeProbe, "nested", "project");
+		fs.mkdirSync(cwd, { recursive: true });
+		const sessionsRoot = makeTempDir("omp-session-root-");
+		const storage = new FileSessionStorage();
+		const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(homeProbe);
+		try {
+			// Upstream classifies by the temp root first wherever it nests
+			// inside home (Windows' %TEMP% layout), so the encoded name
+			// tracks TMPDIR rather than staying home-relative.
+			const first = computeDefaultSessionDir(cwd, storage, sessionsRoot);
+			expect(path.basename(first)).toBe("-tmp-nested-project");
+			tmpdir.mockReturnValue(path.join(homeProbe, "nested"));
+			const second = computeDefaultSessionDir(cwd, storage, sessionsRoot);
+			expect(path.basename(second)).toBe("-tmp-project");
+		} finally {
+			tmpdir.mockRestore();
+		}
+	});
 
 	test("keeps a colliding live legacy session reachable through its path", () => {
 		const sessionsRoot = makeTempDir("omp-session-root-");
