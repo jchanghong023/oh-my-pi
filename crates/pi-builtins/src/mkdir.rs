@@ -16,7 +16,7 @@ use uucore::{display::Quotable, fs};
 #[cfg(not(windows))]
 use uucore::mode;
 
-use crate::host::{Host, Utility, format_usage, matches_parser, normalized_io_message, util};
+use crate::host::{Host, Utility, format_usage, matches_parser, strip_errno, util};
 
 const DEFAULT_PERM: u32 = 0o777;
 
@@ -75,7 +75,7 @@ impl fmt::Display for MkdirError {
 				if let Some(context) = context {
 					write!(formatter, "{context}: ")?;
 				}
-				formatter.write_str(&normalized_io_message(source))
+				formatter.write_str(&strip_errno(source))
 			},
 		}
 	}
