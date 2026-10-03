@@ -1199,8 +1199,7 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		}
 	});
 
-	// The fixture needs an unprivileged file symlink; Windows requires developer mode.
-	it.skipIf(process.platform === "win32")("refuses a download path that escapes through a symlink", async () => {
+	it("refuses a download path that escapes through a symlink", async () => {
 		// A lexical check is not containment. `out/config` is relative and
 		// `..`-free, but with `ws/out` linked outside the workspace the write
 		// lands wherever the link points — as does a write to a dangling link,
@@ -1319,7 +1318,7 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		}
 	});
 
-	// mkfifo is POSIX-only.
+	// Windows has no FIFOs (an MSYS `mkfifo` leaves a plain file the open accepts).
 	it.skipIf(process.platform === "win32")(
 		"refuses a download onto a FIFO instead of blocking on it",
 		async () => {
@@ -1891,12 +1890,13 @@ describe("CursorExecHandlers Pi frame translation", () => {
 		await handlers.piGrep({ toolCallId: "c3", args: { pattern: "x", path: ".", glob: "**/*.ts" } } as never);
 		await handlers.piGrep({ toolCallId: "c4", args: { pattern: "x", path: "src", glob: "/abs/**/*.ts" } } as never);
 
-		expect((calls[0] as { path: string }).path).toBe(path.join("src", "**", "*.ts"));
+		// `piJoinPath` joins with `node:path`; the local tools normalize separators.
+		expect((calls[0] as { path: string }).path).toBe(path.join("src", "**/*.ts"));
 		// An absent or "." path leaves the glob standing alone: a "./"-prefixed
 		// spec is a needlessly different path expression for the same scope.
 		expect((calls[1] as { path: string }).path).toBe("**/*.ts");
 		expect((calls[2] as { path: string }).path).toBe("**/*.ts");
-		// An absolute glob ignores the frame's path entirely (kept verbatim).
+		// An absolute glob ignores the frame's path entirely.
 		expect((calls[3] as { path: string }).path).toBe("/abs/**/*.ts");
 	});
 

@@ -13,6 +13,7 @@ import {
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import type { BashExecutionMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { rejectionOf } from "./helpers/rejection";
 import { e2eApiKey } from "./utilities";
 
 type MessageEndEvent = Extract<AgentEvent, { type: "message_end" }>;
@@ -313,52 +314,44 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("RPC mode", () => {
 	}, 90000);
 });
 
-// Bun on Windows unreliably delivers child stdout: RpcClient request/response
-// round trips over stdio hang until timeouts fire (see rpc-client.restart).
-describe.skipIf(process.platform === "win32")(
-	"RPC fast mode with unsupported Fireworks model and priority tier",
-	() => {
-		let client: RpcClient;
-		let sessionDir: string;
+describe("RPC fast mode with unsupported Fireworks model and priority tier", () => {
+	let client: RpcClient;
+	let sessionDir: string;
 
-		beforeEach(async () => {
-			sessionDir = path.join(os.tmpdir(), `omp-rpc-fast-mode-test-${Snowflake.next()}`);
-			await Bun.write(
-				path.join(sessionDir, "config.yml"),
-				["providers:", "  fireworksTier: priority", ""].join("\n"),
-			);
-			client = new RpcClient({
-				cliPath: path.join(import.meta.dir, "..", "src", "cli.ts"),
-				cwd: path.join(import.meta.dir, ".."),
-				env: {
-					PI_CODING_AGENT_DIR: sessionDir,
-					FIREWORKS_API_KEY: "test-fireworks-key",
-				},
-				provider: "fireworks",
-				model: "deepseek-v4-flash",
-			});
+	beforeEach(async () => {
+		sessionDir = path.join(os.tmpdir(), `omp-rpc-fast-mode-test-${Snowflake.next()}`);
+		await Bun.write(path.join(sessionDir, "config.yml"), ["providers:", "  fireworksTier: priority", ""].join("\n"));
+		client = new RpcClient({
+			cliPath: path.join(import.meta.dir, "..", "src", "cli.ts"),
+			cwd: path.join(import.meta.dir, ".."),
+			env: {
+				PI_CODING_AGENT_DIR: sessionDir,
+				FIREWORKS_API_KEY: "test-fireworks-key",
+			},
+			provider: "fireworks",
+			model: "deepseek-v4-flash",
+		});
+	});
+
+	afterEach(async () => {
+		await client.stop();
+		if (sessionDir && fs.existsSync(sessionDir)) {
+			removeSyncWithRetries(sessionDir);
+		}
+	});
+
+	test("rejects enable but disable preserves Fireworks priority activity", async () => {
+		await client.start();
+
+		expect(await rejectionOf(client.setFastMode(true))).toMatchObject({
+			message: "Fast mode is unavailable for the current model.",
 		});
 
-		afterEach(async () => {
-			await client.stop();
-			if (sessionDir && fs.existsSync(sessionDir)) {
-				removeSyncWithRetries(sessionDir);
-			}
-		});
+		const disabled = await client.setFastMode(false);
+		expect(disabled).toEqual({ enabled: false, active: true });
 
-		test("rejects enable but disable preserves Fireworks priority activity", async () => {
-			await client.start();
-
-			await expect(client.setFastMode(true)).rejects.toMatchObject({
-				message: "Fast mode is unavailable for the current model.",
-			});
-
-			const disabled = await client.setFastMode(false);
-			expect(disabled).toEqual({ enabled: false, active: true });
-
-			const state = await client.getState();
-			expect(state.fastModeEnabled).toBe(false);
-			expect(state.fastModeActive).toBe(true);
-		}, 30000);
-	},
-);
+		const state = await client.getState();
+		expect(state.fastModeEnabled).toBe(false);
+		expect(state.fastModeActive).toBe(true);
+	}, 30000);
+});

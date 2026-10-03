@@ -214,9 +214,10 @@ fn normalize_hashline_path(raw: &str, cwd: Option<&Path>) -> String {
 	let Some(cwd) = cwd else {
 		return cleaned;
 	};
-	// A root without a prefix (`/tmp/…` on Windows) is absolute to the model;
-	// `has_root` covers both spellings.
-	if !(path.is_absolute() || path.has_root()) {
+	// Shortening is lexical, so a rooted path counts even without a Windows
+	// drive prefix (`/repo/src/a.ts` under cwd `/repo`); a prefix mismatch
+	// simply fails `strip_prefix` below.
+	if !path.has_root() {
 		return cleaned;
 	}
 	let path = lexical_normalize(path);

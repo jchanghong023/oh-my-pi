@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.5.0] - 2026-10-03
+
 ### Added
 
 - Added `ReportPanel`, a read-only command report: a `/btw`-style titled box with an Esc hint in text mode (above the editor, or as a full-screen page whose body scrolls on the arrow/page/Home/End keys and the wheel), and natively a `/usage`-style sheet whose body the terminal scrolls once it is long, with a Close button ([#14136](https://github.com/can1357/oh-my-pi/pull/14136) by [@H4vC](https://github.com/H4vC)).
@@ -12,6 +14,12 @@
 ### Changed
 
 - `ContextUsageView` is now a bare report body without its own title, rules or card; `setBreakdown()` was removed ([#14136](https://github.com/can1357/oh-my-pi/pull/14136) by [@H4vC](https://github.com/H4vC)).
+
+### Fixed
+
+- Fixed tool previews on Windows showing a working directory on another drive as a raw absolute path instead of its home-shortened `~/…` form.
+- Fixed pasted drive-less `file:///…` URLs (forwarded from a macOS pasteboard or remote session) staying undecoded on Windows instead of loading as image paths.
+- Fixed an output artifact whose file cannot be opened (e.g. a directory in the way) being reported on Windows as a write failure and retried later, instead of a terminal open failure.
 
 ### Removed
 

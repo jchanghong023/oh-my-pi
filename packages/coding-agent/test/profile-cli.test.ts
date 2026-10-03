@@ -182,8 +182,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
-				// os.homedir() resolves USERPROFILE on Windows; redirect it too or
-				// the probe reads the real home and never sees the fixture .env.
+				// os.homedir() reads USERPROFILE on Windows, HOME elsewhere.
 				USERPROFILE: home,
 				PI_CONFIG_DIR: configDir,
 				PI_NO_TITLE: "1",
@@ -238,6 +237,7 @@ describe("global --profile flag", () => {
 			const childEnv: Record<string, string | undefined> = {
 				...process.env,
 				HOME: home,
+				USERPROFILE: home,
 				PI_CONFIG_DIR: ".omp-profile-cli-env-bad",
 				OMP_PROFILE: "..",
 				NO_COLOR: "1",

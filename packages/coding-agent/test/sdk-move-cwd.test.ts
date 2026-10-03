@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { closeSharedModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -31,10 +30,8 @@ describe("createAgentSession cwd after /move", () => {
 	const tempDirs: string[] = [];
 
 	afterEach(() => {
-		// Sessions open agent.db and models.db under the temp roots; Windows
-		// cannot delete open files, so release the handles first.
+		// `Settings.loadIsolated` opened `<agentDir>/agent.db`; Windows cannot delete it while open.
 		AgentStorage.close();
-		closeSharedModelCache();
 		for (const tempDir of tempDirs.splice(0)) {
 			removeSyncWithRetries(tempDir);
 		}

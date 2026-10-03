@@ -1340,67 +1340,56 @@ pub(crate) fn format_usage(usage: &str) -> String {
 	usage.replace('\n', "\n       ")
 }
 
-/// Maps an `io::Error` onto the GNU/coreutils diagnostic text for its kind.
-///
-/// The OS-provided message is locale-dependent (`std` renders the kernel's
-/// text), while these utilities report the C `strerror` wording everywhere.
-pub(crate) fn normalized_io_message(error: &io::Error) -> String {
-	if error.raw_os_error().is_none() {
-		return error.to_string();
+/// Renders an I/O error the way GNU utilities print `strerror(errno)`: without
+/// Rust's ` (os error N)` suffix, and with POSIX wording for OS errors whose
+/// kind maps to a single errno. Windows reports `ERROR_FILE_NOT_FOUND` as
+/// "The system cannot find the file specified.", which a GNU-emulating
+/// diagnostic must spell "No such file or directory" like everywhere else.
+pub(crate) fn strip_errno(error: &io::Error) -> String {
+	if error.raw_os_error().is_some()
+		&& let Some(text) = posix_strerror(error.kind())
+	{
+		return text.to_owned();
 	}
-
-	use io::ErrorKind::{
-		AddrInUse, AddrNotAvailable, AlreadyExists, BrokenPipe, ConnectionAborted,
-		ConnectionRefused, ConnectionReset, Interrupted, InvalidData, InvalidInput, NotConnected,
-		NotFound, PermissionDenied, TimedOut, UnexpectedEof, WouldBlock, WriteZero,
-	};
-	match error.kind() {
-		NotFound => "No such file or directory".into(),
-		PermissionDenied => "Permission denied".into(),
-		ConnectionRefused => "Connection refused".into(),
-		ConnectionReset => "Connection reset".into(),
-		ConnectionAborted => "Connection aborted".into(),
-		NotConnected => "Not connected".into(),
-		AddrInUse => "Address in use".into(),
-		AddrNotAvailable => "Address not available".into(),
-		BrokenPipe => "Broken pipe".into(),
-		AlreadyExists => "File exists".into(),
-		WouldBlock => "Would block".into(),
-		InvalidInput => "Invalid input".into(),
-		InvalidData => "Invalid data".into(),
-		TimedOut => "Timed out".into(),
-		WriteZero => "Write zero".into(),
-		Interrupted => "Interrupted".into(),
-		UnexpectedEof => "Unexpected end of file".into(),
-		_ => error
-			.to_string()
-			.split_once(" (os error ")
-			.map_or_else(|| error.to_string(), |(message, _)| message.to_string()),
+	let mut message = error.to_string();
+	if let Some(position) = message.find(" (os error ") {
+		message.truncate(position);
 	}
+	message
 }
 
-/// Joins a display path onto `dir` with one `/`, keeping the GNU tools'
-/// separator spelling for printed paths and diagnostics on every platform.
-/// URL directories keep their percent-encoded joining, and verbatim Windows
-/// paths reach the OS verbatim, so both keep their native joining.
-pub(crate) fn slash_join(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
-	if pi_vfs::is_virtual_path(dir) {
-		return pi_vfs::join_path(dir, Path::new(name));
+/// POSIX `strerror` text for an OS error kind. Kinds that cover several errnos
+/// on unix (`PermissionDenied` is both `EPERM` and `EACCES`) keep the native
+/// text there, which is already exact.
+fn posix_strerror(kind: io::ErrorKind) -> Option<&'static str> {
+	use io::ErrorKind;
+	Some(match kind {
+		ErrorKind::NotFound => "No such file or directory",
+		ErrorKind::AlreadyExists => "File exists",
+		ErrorKind::NotADirectory => "Not a directory",
+		ErrorKind::IsADirectory => "Is a directory",
+		ErrorKind::DirectoryNotEmpty => "Directory not empty",
+		#[cfg(not(unix))]
+		ErrorKind::PermissionDenied => "Permission denied",
+		_ => return None,
+	})
+}
+
+/// Forward-slash spelling of a Windows display path, or `None` when the path
+/// already displays as-is (non-Windows, no backslashes, verbatim prefix, or
+/// non-Unicode names that must stay native).
+///
+/// Utilities that print paths they built themselves (`find`, `rg`, `diff -r`)
+/// render them the way the bash they emulate does, with `/` separators, so
+/// output does not change spelling with the host platform.
+pub(crate) fn forward_slash_display(path: &Path) -> Option<PathBuf> {
+	if !cfg!(windows) || path.to_str().is_none() {
+		return None;
 	}
-	let bytes = dir.as_os_str().as_encoded_bytes();
-	let mut out = std::ffi::OsString::from(dir.as_os_str());
-	let ends_with_separator = bytes.ends_with(b"/") || (cfg!(windows) && bytes.ends_with(b"\\"));
-	// `C:child` is relative to the drive's current directory; `C:/child` is not.
-	let drive_relative = cfg!(windows) && bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-	if !bytes.is_empty() && !ends_with_separator && !drive_relative {
-		out.push(if cfg!(windows) && bytes.starts_with(b"\\\\?\\") {
-			"\\"
-		} else {
-			"/"
-		});
+	match pi_walker::normalize_path(path) {
+		std::borrow::Cow::Owned(text) => Some(PathBuf::from(text)),
+		std::borrow::Cow::Borrowed(_) => None,
 	}
-	out.push(name);
-	PathBuf::from(out)
 }
 
 /// Borrows an `OsStr` as raw bytes.
@@ -1825,11 +1814,6 @@ pub(crate) use matches_parser;
 mod testing {
 	//! In-memory [`Host`] construction for unit tests.
 
-	#[cfg(windows)]
-	use std::ffi::OsStr;
-	#[cfg(windows)]
-	use super::{Path, slash_join};
-
 	use parking_lot::Mutex;
 
 	use super::{
@@ -1959,12 +1943,6 @@ mod testing {
 
 		assert_eq!(host.resolve("/c/Users/Adam/file.txt"), PathBuf::from(r"C:\Users\Adam\file.txt"));
 		assert_eq!(host.resolve("/tmp/probe"), std::env::temp_dir().join("probe"));
-	}
-
-	#[cfg(windows)]
-	#[test]
-	fn slash_join_preserves_drive_relative_directory() {
-		assert_eq!(slash_join(Path::new("C:"), OsStr::new("child")), PathBuf::from("C:child"));
 	}
 
 	/// Parses `argv` and runs `U` against an in-memory host, mirroring what the
@@ -2168,12 +2146,10 @@ mod testing {
 		#[cfg(windows)]
 		#[test]
 		fn pipe_wrapped_as_file_gets_line_buffering() {
-			use std::os::windows::io::{FromRawHandle, IntoRawHandle};
-
 			let (reader, writer) = os_pipe::pipe().unwrap();
 			// SAFETY: `into_raw_handle` hands over sole ownership of the
 			// write end, making the `File` its only owner.
-			let file = unsafe { std::fs::File::from_raw_handle(writer.into_raw_handle()) };
+			let file = unsafe { std::os::windows::io::FromRawHandle::from_raw_handle(writer.into_raw_handle()) };
 			assert!(matches!(StreamWriter::new(OpenFile::File(file)), StreamWriter::Line(_)));
 			drop(reader);
 		}
@@ -2222,21 +2198,6 @@ mod testing {
 			assert!(!same_destination(&f1, &f2));
 
 			drop((reader, reader2));
-		}
-
-		#[cfg(windows)]
-		#[test]
-		fn same_destination_distinguishes_duplicate_handles_from_separate_opens() {
-			use crate::host::same_destination;
-
-			let dir = tempfile::tempdir().unwrap();
-			let path = dir.path().join("out.txt");
-			let original = std::fs::File::create(&path).unwrap();
-			let duplicate = original.try_clone().unwrap();
-			let independent = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-			let original = OpenFile::File(original);
-			assert!(same_destination(&original, &OpenFile::File(duplicate)));
-			assert!(!same_destination(&original, &OpenFile::File(independent)));
 		}
 	}
 

@@ -265,8 +265,7 @@ describe("outer startup collaboration gate", () => {
 			vi.restoreAllMocks();
 			uninstallInMemoryRelay();
 			authStorage.close();
-			// Restore the process cwd before cleanup: setProjectDir chdir'd into
-			// tempDir, and Windows refuses to delete a process's working directory.
+			// setProjectDir chdir'd into tempDir; Windows cannot delete the process cwd.
 			setProjectDir(originalProject);
 			await testSession.cleanup();
 			resetSettingsForTest();

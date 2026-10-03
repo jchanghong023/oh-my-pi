@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeSharedModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { __closeExtensionParseCacheForTests } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { __closeExtensionParseCacheForTests } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 import { getAgentDir, getPluginsDir, removeSyncWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 const currentPiCodingAgentPath = Bun.resolveSync("@oh-my-pi/pi-coding-agent", import.meta.dir);
@@ -76,9 +74,6 @@ describe("plugin extension discovery", () => {
 	});
 
 	afterEach(() => {
-		AgentStorage.close();
-		closeSharedModelCache();
-		__closeExtensionParseCacheForTests();
 		projectDir.removeSync();
 		spyOn(os, "homedir").mockRestore();
 		for (const [key, value] of originalXdg) {
@@ -87,6 +82,9 @@ describe("plugin extension discovery", () => {
 		}
 		originalXdg.clear();
 		setAgentDir(originalAgentDir);
+		// The legacy Pi parse cache db lives under the temp home's `.omp/cache`;
+		// release it so Windows can delete the directory.
+		__closeExtensionParseCacheForTests();
 		removeSyncWithRetries(tempHome);
 	});
 

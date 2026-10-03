@@ -42,13 +42,13 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 			stdout: "pipe",
 			stderr: "pipe",
 		});
-		// Real process signals cannot use fake timers. Allow cold child startup
-		// under concurrent CI shards before treating a wedged probe as a failure.
+		// Real process signals cannot use fake timers; this only bounds a wedged child.
+		// 2 s SIGKILLed healthy children (exit 137) on loaded CI runners.
 		const watchdog = setTimeout(() => {
 			try {
 				proc.kill("SIGKILL");
 			} catch {}
-		}, 10_000);
+		}, 20_000);
 		try {
 			const [exitCode, stdout, stderr] = await Promise.all([
 				proc.exited,
@@ -167,7 +167,7 @@ try {
 		expect(stderr).toBe("");
 	});
 
-	// POSIX signal exit codes (128+n) have no Windows equivalent.
+	// Windows cannot deliver a catchable SIGINT via process.kill: libuv terminates the process outright.
 	it.skipIf(process.platform === "win32")(
 		"lets host SIGINT exit once while a guarded callback remains pending",
 		async () => {
@@ -190,7 +190,7 @@ try {
 		expect(stderr).not.toContain("ExtensionExitError");
 	});
 
-	// POSIX signal exit codes (128+n) have no Windows equivalent.
+	// Windows has no SIGHUP delivery: process.kill(pid, "SIGHUP") fails with ENOSYS.
 	it.skipIf(process.platform === "win32")(
 		"exits cleanly on host SIGHUP when postmortem initialized inside a guard window (#7393)",
 		async () => {

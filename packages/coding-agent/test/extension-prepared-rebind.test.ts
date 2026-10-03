@@ -48,12 +48,11 @@ describe("prepared extension rebinding", () => {
 		expect(bindings[0]).not.toBe(bindings[1]);
 		expect(bindings[0]?.events).toBe(parentEventBus);
 		expect(bindings[1]?.events).toBe(childEventBus);
-		// `pwd` is a POSIX utility; print the cwd via the Bun binary itself on Windows.
-		const pwdCommand: [string, string[]] =
-			process.platform === "win32" ? [process.execPath, ["-e", "console.log(process.cwd())"]] : ["pwd", []];
+		// Print cwd via Bun, not `pwd`: on Windows Git-for-Windows' pwd.exe reports MSYS paths (`/tmp/...`).
+		const printCwd = ["-e", "process.stdout.write(process.cwd())"];
 		const [parentPwd, childPwd] = await Promise.all([
-			bindings[0]!.exec(pwdCommand[0], pwdCommand[1]),
-			bindings[1]!.exec(pwdCommand[0], pwdCommand[1]),
+			bindings[0]!.exec(process.execPath, printCwd),
+			bindings[1]!.exec(process.execPath, printCwd),
 		]);
 		expect(parentPwd.stdout.trim()).toBe(await fs.realpath(parentDirectory));
 		expect(childPwd.stdout.trim()).toBe(await fs.realpath(childDirectory));

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { rejectionOf } from "./helpers/rejection";
 
 const MOCK_AGENT = path.join(import.meta.dir, "fixtures", "mock-rpc-agent.ts");
 
@@ -54,7 +55,9 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 		});
 
 		await client.start();
-		await expect(client.getMessagesPage()).rejects.toThrow("Cannot page messages while the session is changing");
+		expect(await rejectionOf(client.getMessagesPage())).toMatchObject({
+			message: expect.stringContaining("Cannot page messages while the session is changing"),
+		});
 		expect((await client.getMessages()) as unknown).toEqual([
 			{ role: "assistant", content: [{ type: "text", text: "streaming snapshot" }], timestamp: 3 },
 		]);
@@ -70,9 +73,9 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 		// Direct page walks stay strict: the stale cursor is surfaced to the caller.
 		const firstPage = await client.getMessagesPage();
 		expect(firstPage.nextCursor).toBe("second-page");
-		await expect(client.getMessagesPage({ cursor: firstPage.nextCursor })).rejects.toThrow(
-			"RPC message cursor is stale",
-		);
+		expect(await rejectionOf(client.getMessagesPage({ cursor: firstPage.nextCursor }))).toMatchObject({
+			message: expect.stringContaining("RPC message cursor is stale"),
+		});
 		// The high-level drain discards the partial first page and takes the legacy snapshot.
 		expect((await client.getMessages()) as unknown).toEqual([
 			{ role: "assistant", content: [{ type: "text", text: "streaming snapshot" }], timestamp: 3 },
@@ -132,7 +135,9 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 			terminationGraceMs: 10,
 		});
 
-		await expect(client.start()).rejects.toThrow("fixture startup failed");
+		expect(await rejectionOf(client.start())).toMatchObject({
+			message: expect.stringContaining("fixture startup failed"),
+		});
 
 		// Before the fix, #process stayed set after the failed spawn so the
 		// second start() rejected with "Client already started". A successful
@@ -175,7 +180,9 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 			await client.start();
 			pid = Number(await Bun.file(pidFile).text());
 
-			await expect(client.getState()).rejects.toThrow(/Agent output reader failed/);
+			expect(await rejectionOf(client.getState())).toMatchObject({
+				message: expect.stringMatching(/Agent output reader failed/),
+			});
 			await expect(client.getState()).rejects.toThrow("Client not started");
 			expect(isProcessAlive(pid)).toBe(false);
 		} finally {
@@ -193,9 +200,9 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 		});
 		await client.start();
 
-		await expect(client.getState()).rejects.toThrow(
-			"Agent process exited with code 23. Stderr: fixture worker failed",
-		);
+		expect(await rejectionOf(client.getState())).toMatchObject({
+			message: expect.stringContaining("Agent process exited with code 23. Stderr: fixture worker failed"),
+		});
 	});
 
 	test("rejects promptAndWait when a same-id error arrives after the success ack", async () => {
@@ -204,6 +211,8 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 			env: { MOCK_RPC_LATE_PROMPT_ERROR: "1" },
 		});
 		await client.start();
-		await expect(client.promptAndWait("deleted skill")).rejects.toThrow("skill file was deleted");
+		expect(await rejectionOf(client.promptAndWait("deleted skill"))).toMatchObject({
+			message: expect.stringContaining("skill file was deleted"),
+		});
 	});
 });

@@ -161,8 +161,7 @@ describe("SearXNG web search provider", () => {
 			expect(response.answer).toBe("Forty-two\n\nLegacy answer\n\nHallo\nGuten Tag");
 			expect(response.sources[0]?.snippet).toBe("Fallback snippet");
 		} finally {
-			// Settings.init opens AgentStorage's agent.db under agentDir;
-			// Windows keeps the sqlite files locked until it is closed.
+			// Settings.init opens <agentDir>/agent.db; Windows cannot delete an open database.
 			AgentStorage.close();
 			await removeWithRetries(agentDir);
 		}
@@ -200,8 +199,6 @@ describe("SearXNG web search provider", () => {
 				`Basic ${Buffer.from("alice:s3cret", "utf-8").toString("base64")}`,
 			);
 		} finally {
-			// Settings.init opens AgentStorage's agent.db under agentDir;
-			// Windows keeps the sqlite files locked until it is closed.
 			AgentStorage.close();
 			await removeWithRetries(agentDir);
 		}
@@ -368,8 +365,6 @@ describe("SearXNG web search provider", () => {
 			expect(captured.url?.origin).toBe("https://searx-env.example.org");
 			expect(captured.headers?.get("Authorization")).toBe("Bearer env-token");
 		} finally {
-			// Settings.init opens AgentStorage's agent.db under agentDir;
-			// Windows keeps the sqlite files locked until it is closed.
 			AgentStorage.close();
 			await removeWithRetries(agentDir);
 		}
@@ -419,8 +414,6 @@ describe("SearXNG web search provider", () => {
 			const searchUrl = requested.find(url => url.pathname === "/search");
 			expect(searchUrl?.searchParams.get("engines")).toBe("duckduckgo,brave,unknown");
 		} finally {
-			// Settings.init opens AgentStorage's agent.db under agentDir;
-			// Windows keeps the sqlite files locked until it is closed.
 			AgentStorage.close();
 			await removeWithRetries(agentDir);
 		}
@@ -455,8 +448,6 @@ describe("SearXNG web search provider", () => {
 			const searchUrl = requested.find(url => url.pathname === "/search");
 			expect(searchUrl?.searchParams.get("engines")).toBe("ddg,brave");
 		} finally {
-			// Settings.init opens AgentStorage's agent.db under agentDir;
-			// Windows keeps the sqlite files locked until it is closed.
 			AgentStorage.close();
 			await removeWithRetries(agentDir);
 		}

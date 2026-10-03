@@ -1042,8 +1042,7 @@ export function formatToolWorkingDirectory(workdir: string | undefined, projectD
 		return undefined;
 	}
 	const relativePath = path.relative(resolvedProjectDir, resolvedWorkdir);
-	// path.relative returns the absolute target across Windows drive letters; such
-	// a workdir is never "within" the project and must take the shortened form.
+	// On Windows, `path.relative` across drives returns the absolute target, which is not inside the project.
 	const isWithinProject =
 		relativePath.length > 0 &&
 		!path.isAbsolute(relativePath) &&

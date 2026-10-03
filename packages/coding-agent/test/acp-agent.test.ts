@@ -20,6 +20,7 @@ import type {
 	UsageFallbackConfirmation,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
@@ -482,6 +483,8 @@ afterEach(async () => {
 	resetSessionIndexForTests();
 	HistoryStorage.close();
 
+	// Renames index titles in the process-wide `<agentDir>/history.db`; Windows cannot delete it while open.
+	resetSessionIndexForTests();
 	for (const root of cleanupRoots.splice(0)) {
 		await removeWithRetries(root);
 	}

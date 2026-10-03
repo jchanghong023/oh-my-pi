@@ -74,7 +74,7 @@ describe("read PDF page screenshots", () => {
 		expect(tool.approval({ path: `${pdfPath}:2-2` })).toBe("read");
 	});
 
-	// A trailing-colon filename cannot exist on Windows (NTFS rejects it).
+	// Windows forbids `:` in filenames.
 	it.skipIf(process.platform === "win32")(
 		"preserves a literal filename that looks like a PDF image listing",
 		async () => {

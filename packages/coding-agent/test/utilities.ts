@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { closeSharedModelCache } from "@oh-my-pi/pi-catalog";
+import { closeModelCache } from "@oh-my-pi/pi-catalog";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -131,7 +131,7 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 		authStorage.close();
 		// ModelRegistry's shared models.db and any AgentStorage agent.db under
 		// tempDir stay locked on Windows until closed.
-		closeSharedModelCache();
+		closeModelCache();
 		AgentStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);

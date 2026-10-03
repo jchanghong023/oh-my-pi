@@ -31,8 +31,7 @@ function details(result: { details?: { madeExecutable?: boolean } }): { madeExec
 	return result.details ?? {};
 }
 
-// The exec bit is not a Windows filesystem concept.
-describe.skipIf(process.platform === "win32")("write tool shebang chmod", () => {
+describe("write tool shebang chmod", () => {
 	let tmpDir: string;
 
 	beforeAll(async () => {
@@ -47,27 +46,38 @@ describe.skipIf(process.platform === "win32")("write tool shebang chmod", () => 
 		await removeWithRetries(tmpDir);
 	});
 
-	// POSIX-only: NTFS carries no execute bit, so `fs.chmod(..., 0o755)` is a
-	// no-op on Windows and the mode assertions below cannot hold there.
-	it.skipIf(process.platform === "win32")(
-		"marks files starting with #! as executable and flags the result",
-		async () => {
-			const filePath = path.join(tmpDir, "run.sh");
-			const tool = new WriteTool(createSession(tmpDir));
+	// POSIX execute bits: Windows accepts chmod but keeps no execute bits.
+	const posixIt = it.skipIf(process.platform === "win32");
 
-			const result = await tool.execute("call-1", {
-				path: filePath,
-				content: "#!/bin/sh\necho hi\n",
-			});
+	posixIt("marks files starting with #! as executable and flags the result", async () => {
+		const filePath = path.join(tmpDir, "run.sh");
+		const tool = new WriteTool(createSession(tmpDir));
 
-			const stat = await fs.stat(filePath);
-			// All three execute bits flipped on (chmod a+x semantics).
-			expect(stat.mode & 0o111).toBe(0o111);
-			// Notice remains model-facing so callers see that chmod changed the file mode.
-			expect(details(result).madeExecutable).toBe(true);
-			expect(resultText(result)).toContain("[Notice: Made executable via chmod +x]");
-		},
-	);
+		const result = await tool.execute("call-1", {
+			path: filePath,
+			content: "#!/bin/sh\necho hi\n",
+		});
+
+		const stat = await fs.stat(filePath);
+		// All three execute bits flipped on (chmod a+x semantics).
+		expect(stat.mode & 0o111).toBe(0o111);
+		// Notice remains model-facing so callers see that chmod changed the file mode.
+		expect(details(result).madeExecutable).toBe(true);
+		expect(resultText(result)).toContain("[Notice: Made executable via chmod +x]");
+	});
+
+	it.skipIf(process.platform !== "win32")("does not claim chmod +x where execute bits cannot stick", async () => {
+		const filePath = path.join(tmpDir, "run.sh");
+		const tool = new WriteTool(createSession(tmpDir));
+
+		const result = await tool.execute("call-win", {
+			path: filePath,
+			content: "#!/bin/sh\necho hi\n",
+		});
+
+		expect(details(result).madeExecutable).toBeUndefined();
+		expect(resultText(result)).not.toContain("[Notice: Made executable via chmod +x]");
+	});
 
 	it("does not chmod files without a shebang", async () => {
 		const filePath = path.join(tmpDir, "data.txt");
@@ -83,7 +93,7 @@ describe.skipIf(process.platform === "win32")("write tool shebang chmod", () => 
 		expect(details(result).madeExecutable).toBeUndefined();
 	});
 
-	it.skipIf(process.platform === "win32")("does not re-flag when file is already executable", async () => {
+	posixIt("does not re-flag when file is already executable", async () => {
 		const filePath = path.join(tmpDir, "preexec.sh");
 		await fs.writeFile(filePath, "#!/bin/sh\nold\n");
 		await fs.chmod(filePath, 0o755);

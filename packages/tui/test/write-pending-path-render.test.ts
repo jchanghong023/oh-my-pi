@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { afterEach, describe, expect, it } from "bun:test";
 import { TERMINAL, setTerminalHyperlinks } from "@oh-my-pi/pi-tui";
 import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
@@ -49,12 +50,8 @@ describe("pending write path rendering", () => {
 			uiTheme,
 		);
 		const rendered = component?.render(120).join("\n");
-		// On win32 the vscode://file form takes the posix-joined absolute path with a leading slash.
-		const expectedVscodeTarget =
-			process.platform === "win32"
-				? `vscode://file/${path.resolve(relativePath).replaceAll("\\", "/")}`
-				: `vscode://file${path.resolve(relativePath)}`;
-		expect(rendered).toContain(expectedVscodeTarget);
+		// vscode://file takes the forward-slash path (`/C:/…` on Windows).
+		expect(rendered).toContain(`vscode://file${url.pathToFileURL(path.resolve(relativePath)).pathname}`);
 	});
 
 	it("links archive members, database rows, and home paths to their files", async () => {
@@ -77,8 +74,7 @@ describe("pending write path rendering", () => {
 				.join("\n")
 				.match(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/)?.[1];
 			expect(target).toBeDefined();
-			// fileURLToPath yields the native path (backslash-joined on win32), matching path.resolve.
-			expect(Bun.fileURLToPath(target!)).toBe(path.resolve(containingFile));
+			expect(url.fileURLToPath(target!)).toBe(path.resolve(containingFile));
 		}
 	});
 

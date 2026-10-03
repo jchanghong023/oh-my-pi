@@ -8,26 +8,68 @@ use crate::{error, sys, traps};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Signal {}
 
-/// Minimal POSIX-numbered signal representation for Windows.
+/// Signal representation for Windows.
+///
+/// Windows has no signals; these exist so scripts can name them (`kill -s
+/// TERM`, `timeout -s KILL`, `trap … INT`) and so exit statuses above 128 map
+/// back to a signal (`kill -l 137` is `KILL`). Only the signals whose numbers
+/// every POSIX platform (Linux, macOS, the BSDs, Cygwin/MSYS) agrees on are
+/// listed, with those numbers as discriminants: `signal as i32` is the number
+/// a script sees.
 #[cfg(windows)]
 #[allow(unnameable_types)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(i32)]
 pub enum Signal {
-	/// Hangup signal.
+	/// Hangup.
 	Hangup = 1,
 	/// Interrupt signal.
 	Interrupt = 2,
+	/// Quit.
+	Quit = 3,
+	/// Illegal instruction.
+	Illegal = 4,
+	/// Trace/breakpoint trap.
+	Trap = 5,
+	/// Abort.
+	Abort = 6,
+	/// Floating-point exception.
+	FloatingPoint = 8,
 	/// Kill signal.
 	Kill = 9,
+	/// Segmentation fault.
+	SegmentationFault = 11,
+	/// Broken pipe.
+	Pipe = 13,
+	/// Alarm clock.
+	Alarm = 14,
 	/// Terminate signal.
 	Terminate = 15,
+}
+
+#[cfg(windows)]
+impl Signal {
+	const ALL: [Self; 12] = [
+		Self::Hangup,
+		Self::Interrupt,
+		Self::Quit,
+		Self::Illegal,
+		Self::Trap,
+		Self::Abort,
+		Self::FloatingPoint,
+		Self::Kill,
+		Self::SegmentationFault,
+		Self::Pipe,
+		Self::Alarm,
+		Self::Terminate,
+	];
 }
 
 impl Signal {
 	/// Returns an iterator over all possible signals.
 	#[cfg(windows)]
 	pub fn iterator() -> impl Iterator<Item = Self> {
-		[Self::Hangup, Self::Interrupt, Self::Kill, Self::Terminate].into_iter()
+		Self::ALL.into_iter()
 	}
 
 	/// Returns an iterator over all possible signals.
@@ -36,14 +78,23 @@ impl Signal {
 		std::iter::empty()
 	}
 
-	/// Converts the signal into its corresponding name as a `&'static str`.
+	/// Converts the signal into its corresponding name as a `&'static str`,
+	/// spelled with the `SIG` prefix like the unix implementation.
 	#[cfg(windows)]
 	pub const fn as_str(self) -> &'static str {
 		match self {
-			Self::Hangup => "HUP",
-			Self::Terminate => "TERM",
-			Self::Kill => "KILL",
-			Self::Interrupt => "INT",
+			Self::Hangup => "SIGHUP",
+			Self::Interrupt => "SIGINT",
+			Self::Quit => "SIGQUIT",
+			Self::Illegal => "SIGILL",
+			Self::Trap => "SIGTRAP",
+			Self::Abort => "SIGABRT",
+			Self::FloatingPoint => "SIGFPE",
+			Self::Kill => "SIGKILL",
+			Self::SegmentationFault => "SIGSEGV",
+			Self::Pipe => "SIGPIPE",
+			Self::Alarm => "SIGALRM",
+			Self::Terminate => "SIGTERM",
 		}
 	}
 
@@ -53,16 +104,15 @@ impl Signal {
 		""
 	}
 
-	/// Creates a `Signal` from a string representation.
+	/// Creates a `Signal` from its name, with or without the `SIG` prefix.
 	#[cfg(windows)]
 	pub fn from_str(s: &str) -> Result<Self, error::Error> {
-		match s.to_ascii_uppercase().as_str() {
-			"HUP" | "SIGHUP" => Ok(Self::Hangup),
-			"TERM" | "SIGTERM" => Ok(Self::Terminate),
-			"KILL" | "SIGKILL" => Ok(Self::Kill),
-			"INT" | "SIGINT" => Ok(Self::Interrupt),
-			_ => Err(error::ErrorKind::InvalidSignal(s.into()).into()),
-		}
+		let upper = s.to_ascii_uppercase();
+		let name = upper.strip_prefix("SIG").unwrap_or(&upper);
+		Self::ALL
+			.into_iter()
+			.find(|signal| &signal.as_str()[3..] == name)
+			.ok_or_else(|| error::ErrorKind::InvalidSignal(s.into()).into())
 	}
 
 	/// Creates a `Signal` from a string representation.
@@ -75,19 +125,16 @@ impl Signal {
 impl TryFrom<i32> for Signal {
 	type Error = error::Error;
 
+	#[cfg(windows)]
 	fn try_from(value: i32) -> Result<Self, Self::Error> {
-		// Windows has no signal system of its own; the shell reports POSIX
-		// signal numbers (as bash's exit statuses above 128 do), so the
-		// mapping accepts exactly the enum's numbers.
-		#[cfg(windows)]
-		match value {
-			x if x == Self::Hangup as i32 => Ok(Self::Hangup),
-			x if x == Self::Interrupt as i32 => Ok(Self::Interrupt),
-			x if x == Self::Kill as i32 => Ok(Self::Kill),
-			x if x == Self::Terminate as i32 => Ok(Self::Terminate),
-			_ => Err(error::ErrorKind::InvalidSignal(std::format!("{value}")).into()),
-		}
-		#[cfg(not(windows))]
+		Self::ALL
+			.into_iter()
+			.find(|signal| *signal as i32 == value)
+			.ok_or_else(|| error::ErrorKind::InvalidSignal(std::format!("{value}")).into())
+	}
+
+	#[cfg(not(windows))]
+	fn try_from(value: i32) -> Result<Self, Self::Error> {
 		Err(error::ErrorKind::InvalidSignal(std::format!("{value}")).into())
 	}
 }

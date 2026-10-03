@@ -409,13 +409,13 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	it("opens the annotation external editor from the real plan review overlay", async () => {
-		// A bun script works through both spawn routes (POSIX sh -c and the
-		// Windows cmd.exe verbatim path); a #!/bin/sh fixture cannot run there.
-		const editorScript = path.join(tempDir.path(), "annotation-editor.ts");
+		// A Bun script instead of a `#!/bin/sh` file: Windows launches $EDITOR through cmd.exe, which cannot run sh scripts.
+		const editorScriptPath = path.join(tempDir.path(), "annotation-editor.ts");
 		await Bun.write(
-			editorScript,
-			'await Bun.write(process.argv[process.argv.length - 1], "- add rollback command\\n- include smoke test\\n");\n',
+			editorScriptPath,
+			'await Bun.write(process.argv[2]!, "- add rollback command\\n- include smoke test\\n");\n',
 		);
+		const editorPath = `"${process.execPath}" "${editorScriptPath}"`;
 		const previousEditor = Bun.env.EDITOR;
 		const previousVisual = Bun.env.VISUAL;
 		const keybindings = KeybindingsManager.inMemory({
@@ -435,7 +435,7 @@ describe("InteractiveMode plan review rendering", () => {
 		vi.spyOn(mode.ui, "start").mockImplementation(() => markEditorApplied());
 
 		try {
-			Bun.env.EDITOR = [JSON.stringify(process.execPath), JSON.stringify(editorScript)].join(" ");
+			Bun.env.EDITOR = editorPath;
 			delete Bun.env.VISUAL;
 			const choice = mode.showPlanReview(
 				"# Plan\n\nIntro\n\n## Rollout\n\nSteps\n\n## Verify\n\nChecks\n",

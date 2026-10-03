@@ -81,8 +81,7 @@ export function sshControlFallbackDir(canonicalDir: string, uid: number, tmpBase
 		.update(canonicalDir)
 		.digest("hex")
 		.slice(0, 20);
-	// The control path is consumed by the POSIX ssh multiplexing master, so it
-	// keeps POSIX separators regardless of the host platform.
+	// Only ControlMaster (POSIX) platforms reach this, so the socket dir is a POSIX path.
 	return path.posix.join(tmpBase, `omp-${key}`);
 }
 

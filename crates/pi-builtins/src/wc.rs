@@ -29,25 +29,6 @@ mod count_fast {
 	use uucore::pipes::{MAX_ROOTLESS_PIPE_SIZE, pipe, splice, splice_exact};
 	
 	const BUF_SIZE: usize = 256 * 1024;
-
-/// Current file-pointer offset of a native file, without a mutable borrow
-/// (`native_file` hands out a shared one, and the size shortcut must not move
-/// the pointer it reports).
-#[cfg(windows)]
-fn native_file_position(file: &std::fs::File) -> Option<u64> {
-	use std::os::windows::io::AsRawHandle;
-	use windows_sys::Win32::Storage::FileSystem::{FILE_CURRENT, SetFilePointerEx};
-
-	let handle = file.as_raw_handle();
-	let mut position: i64 = 0;
-	// SAFETY: `handle` is owned by `file` and stays valid for the call, and the
-	// query moves the pointer by zero bytes; failure is reported in the result.
-	if unsafe { SetFilePointerEx(handle, 0, &mut position, FILE_CURRENT) } != 0 {
-		Some(position as u64)
-	} else {
-		None
-	}
-}
 	
 	/// This is a Linux-specific function to count the number of bytes using the
 	/// `splice` system call, which is faster than using `read`.
@@ -131,24 +112,28 @@ fn native_file_position(file: &std::fs::File) -> Option<u64> {
 			}
 		}
 	
-	#[cfg(windows)]
-	{
-		if let Some(file) = handle.native_file() {
-			if let Ok(metadata) = file.metadata() {
+		#[cfg(windows)]
+		{
+			use std::io::{Seek as _, SeekFrom};
+
+			if let Some(mut file) = handle.native_file()
+				&& let Ok(metadata) = file.metadata()
+			{
 				let attributes = metadata.file_attributes();
 
 				if (attributes & FILE_ATTRIBUTE_ARCHIVE) != 0
 					|| (attributes & FILE_ATTRIBUTE_NORMAL) != 0
 				{
-					// Count from the current position like the unix descriptor
-					// shortcut, not from the start of the file.
-					if let Some(current) = native_file_position(file) {
+					// Count from the current offset (`{ head -c2; wc -c; } < f`) and
+					// leave the handle at EOF, as reading it would, like the unix path.
+					if let Ok(current) = file.stream_position()
+						&& file.seek(SeekFrom::End(0)).is_ok()
+					{
 						return (metadata.file_size().saturating_sub(current) as usize, None);
 					}
 				}
 			}
 		}
-	}
 	
 		// Fall back on `read`, but without the overhead of counting words and lines.
 		let mut buf = [0_u8; BUF_SIZE];

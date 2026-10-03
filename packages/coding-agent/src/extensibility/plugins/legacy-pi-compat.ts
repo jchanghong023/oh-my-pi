@@ -623,14 +623,14 @@ export function __isExtensionParseCacheAvailableForTests(): boolean {
 }
 
 /**
- * Test seam: close the process-wide parse-cache handle. Test teardowns call
- * this so a temp agent dir holding the cache db can be removed on platforms
- * that refuse to delete open files (Windows). Reopens cold on next use.
+ * Test seam: close the process-wide extension parse cache connection so the
+ * next analysis reopens it at the then-current cache path. Tests that
+ * relocate the home/cache root must call this before deleting that root:
+ * Windows refuses to remove a directory holding an open SQLite db/WAL set.
  */
 export function __closeExtensionParseCacheForTests(): void {
-	if (extensionParseCacheDb) extensionParseCacheDb.close(true);
+	extensionParseCacheDb?.close();
 	extensionParseCacheDb = undefined;
-	extensionSourceAnalysisCache.clear();
 }
 
 function parseCachedAnalysis(row: ExtensionParseCacheRow): ExtensionSourceAnalysis | null {
@@ -1205,13 +1205,13 @@ export async function __rewriteLegacyExtensionSourceForTests(
 }
 
 /**
- * Build the import specifier for a graph-resolved absolute path. With an
- * mtime tag, emits a bare filesystem path + `?mtime=<tag>` (Bun keys query
- * strings for bare-path specifiers on every platform — verified on Windows
- * with Bun 1.4), so same-process extension reloads pick up edits to
- * package-alias (`#foo/*`) and extension-local bare deps. Without a tag, and
- * for bundled virtual specifiers, keeps the `file://` / virtual form; Bun
- * ignores queries on `file://` URLs, which is why tagged loads avoid it.
+ * Build the import specifier for a graph-resolved absolute path. Emits a bare
+ * filesystem path with an optional `?mtime=<tag>` (Bun keys query strings for
+ * bare-path specifiers on POSIX and Windows alike), so same-process extension
+ * reloads pick up edits to package-alias (`#foo/*`) and extension-local bare
+ * deps. Untagged paths keep the `file://` form; bundled virtual specifiers
+ * pass through unchanged. Bun ignores queries on `file://` URLs, so a tagged
+ * specifier must never use that form.
  */
 function toGraphImportSpecifier(resolvedPath: string, mtimeTag: string | null): string {
 	if (isBundledVirtualSpecifier(resolvedPath)) {
@@ -2636,11 +2636,9 @@ export async function loadLegacyPiModule(resolvedPath: string): Promise<unknown>
 	const pendingSources = await ensureExtensionGraphHook(entryRealPath);
 	try {
 		// Dynamic import is required: legacy extension entry paths are user/plugin supplied at runtime.
-		// Use the raw filesystem path on every platform: Bun keys the `?mtime`
-		// suffix as part of the module identity for bare-path specifiers, but
-		// never decodes percent escapes in them — and it ignores query strings
-		// on `file://` URLs — so only the raw path keeps both the cache-bust
-		// and literal `#`/`%` directory names working.
+		// Use the raw filesystem path so Bun keys the `?mtime` suffix as part of
+		// the module identity (on Windows too); Bun ignores query strings on
+		// `file://` specifiers, which would serve stale edited source.
 		const entrySpecifier = isBundledVirtualSpecifier(entryRealPath)
 			? toImportSpecifier(entryRealPath)
 			: stripWindowsExtendedLengthPathPrefix(entryRealPath);

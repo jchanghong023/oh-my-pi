@@ -7,8 +7,8 @@
 ## 当前上游基线
 
 * **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.4.12`
-* **Upstream commit**：`d19afc28611dd6fa485160659eb42a4da36022e9`
+* **版本**：`v18.5.0`
+* **Upstream commit**：`bee42cb8fc20e3ad1e269a0dc30a573596efaf52`
 * **同步日期**：2026-10-03
 
 ## 预采纳的上游 PR（上游合并后删除对应条目）
@@ -135,9 +135,8 @@
 
 ### Windows 行为修复
 
-* 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。
-* hashline 标签的路径恢复在 Windows 上与非 Windows 一致：比较前对恢复路径与工作目录都清理 `\\?\` verbatim 前缀，避免 std canonicalize 产生的 verbatim 形式 cwd 使恢复被静默拒绝。
-* 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。
+* 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。上游基线不包含该修复（Windows 分支的 `is_regular_file` 仍按变体匹配，看不到 SIGPIPE 包装后的文件），fork 在 `pi-builtins` 的 host 上维护快照判断与 Windows 句柄设备类型探测。
+* 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。上游 18.5.0 已从源头修复 SQLite 句柄（corrupt handle 追踪、错误路径转义），该重试仍作为兜底保留。
 
 ### 默认设置
 

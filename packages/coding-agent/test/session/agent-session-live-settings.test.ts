@@ -7,7 +7,6 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -27,15 +26,13 @@ import { cfgSteeringMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 describe("AgentSession live settings", () => {
 	const tempDirs: string[] = [];
 	let modelRegistry!: ModelRegistry;
-	let authStorage: AuthStorage;
 	let authDir: string;
 	let session: AgentSession | undefined;
 
 	beforeAll(async () => {
 		authDir = path.join(os.tmpdir(), `pi-live-settings-auth-${Snowflake.next()}`);
 		fs.mkdirSync(authDir, { recursive: true });
-		authStorage = await discoverAuthStorage(authDir);
-		modelRegistry = new ModelRegistry(authStorage);
+		modelRegistry = new ModelRegistry(await discoverAuthStorage(authDir));
 	});
 
 	afterEach(async () => {
@@ -45,8 +42,8 @@ describe("AgentSession live settings", () => {
 	});
 
 	afterAll(() => {
-		// agent.db under authDir stays locked on Windows until the store closes.
-		authStorage.close();
+		// The discovered auth DB lives in authDir; Windows cannot delete it while open.
+		modelRegistry.authStorage.close();
 		removeSyncWithRetries(authDir);
 	});
 

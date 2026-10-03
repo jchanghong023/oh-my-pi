@@ -77,9 +77,7 @@ describe("print mode disposes the session before terminating", () => {
 		expect(stderrLines.join("")).toContain("boom");
 	});
 
-	// Windows cannot deliver SIGTERM to itself: Bun terminates the process
-	// without invoking the JS signal handler, so the graceful-dispose path
-	// under test never runs there.
+	// Windows cannot deliver a catchable SIGTERM via process.kill: libuv terminates the process outright.
 	it.skipIf(process.platform === "win32")("disposes an active print session before SIGTERM exits", async () => {
 		using tempDir = TempDir.createSync("@omp-print-signal-");
 		const marker = tempDir.join("disposed");

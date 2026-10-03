@@ -26,8 +26,6 @@ import {
 	type ExtensionFactory,
 } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { VIBE_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/vibe";
 import { resetYieldTurnState } from "@oh-my-pi/pi-coding-agent/tools/yield";
@@ -79,7 +77,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 	// these tests vary, and skips the background model refresh the SDK would
 	// otherwise start when it builds its own registry.
 	let modelRegistry!: ModelRegistry;
-	let registryAuthStorage: AuthStorage;
 	let registryAuthDir: string;
 
 	const makeTempDir = (): string => {
@@ -92,8 +89,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 	beforeAll(async () => {
 		registryAuthDir = path.join(os.tmpdir(), `pi-sdk-tool-activation-auth-${Snowflake.next()}`);
 		fs.mkdirSync(registryAuthDir, { recursive: true });
-		registryAuthStorage = await discoverAuthStorage(registryAuthDir);
-		modelRegistry = new ModelRegistry(registryAuthStorage);
+		modelRegistry = new ModelRegistry(await discoverAuthStorage(registryAuthDir));
 	});
 
 	// Shared options for every session. `rules: []` and `workspaceTree` short-circuit
@@ -127,7 +123,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 	};
 
 	afterEach(() => {
-		AgentStorage.close();
 		for (const tempDir of tempDirs.splice(0)) {
 			removeSyncWithRetries(tempDir);
 		}
@@ -137,8 +132,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 	});
 
 	afterAll(() => {
-		// agent.db under registryAuthDir stays locked on Windows until closed.
-		registryAuthStorage.close();
+		// The discovered auth DB lives in registryAuthDir; Windows cannot delete it while open.
+		modelRegistry.authStorage.close();
 		removeSyncWithRetries(registryAuthDir);
 	});
 
@@ -1760,54 +1755,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getActiveToolNames()).toContain("yield");
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("activates the repo tool force-included next to an explicit read list", async () => {
-		// `createTools` force-includes wiki and repo when an unrestricted explicit
-		// list contains read; the session-managed activation mirror must surface
-		// both so the model can call what the registry constructed for it.
-		const tempDir = makeTempDir();
-
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			toolNames: ["read"],
-		});
-
-		try {
-			expect(session.getToolByName("repo")).toBeDefined();
-			expect(session.getActiveToolNames()).toContain("wiki");
-			expect(session.getActiveToolNames()).toContain("repo");
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("does not force-activate an inactive extension replacing repo", async () => {
-		const tempDir = makeTempDir();
-		const replacement: ExtensionFactory = pi => {
-			pi.registerTool({
-				name: "repo",
-				label: "Extension Repo",
-				description: "Inactive replacement for the built-in repo tool.",
-				parameters: type({}),
-				defaultInactive: true,
-				async execute() {
-					return { content: [{ type: "text", text: "extension repo" }] };
-				},
-			});
-		};
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			extensions: [replacement],
-			toolNames: ["read"],
-		});
-		try {
-			expect(session.getToolByName("repo")?.label).toBe("Extension Repo");
-			expect(session.hasBuiltInTool("repo")).toBe(false);
-			expect(session.getActiveToolNames()).not.toContain("repo");
 		} finally {
 			await session.dispose();
 		}

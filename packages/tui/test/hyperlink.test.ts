@@ -155,14 +155,12 @@ describe("fileHyperlink", () => {
 
 	it("uses the vscode://file form on the VS Code family, with the location after the path", () => {
 		const filePath = path.resolve("/Users/foo/bar.ts");
-		// path.resolve("/Users/foo/...") is drive-anchored on win32; the vscode://file
-		// form takes the posix-joined absolute path with a leading slash.
-		const vscodeFile =
-			process.platform === "win32" ? `vscode://file/${filePath.replaceAll("\\", "/")}` : `vscode://file${filePath}`;
-		expect(fileUriForTerminal(filePath, { line: 42, col: 7 }, "vscode")).toBe(`${vscodeFile}:42:7`);
-		expect(fileUriForTerminal(filePath, { line: 42 }, "vscode")).toBe(`${vscodeFile}:42`);
+		// vscode://file takes the forward-slash path: `/Users/foo/bar.ts`, or `/C:/Users/foo/bar.ts` on Windows.
+		const vscodePath = url.pathToFileURL(filePath).pathname;
+		expect(fileUriForTerminal(filePath, { line: 42, col: 7 }, "vscode")).toBe(`vscode://file${vscodePath}:42:7`);
+		expect(fileUriForTerminal(filePath, { line: 42 }, "vscode")).toBe(`vscode://file${vscodePath}:42`);
 		// Without a line there is nothing to navigate to, so the bare path stands.
-		expect(fileUriForTerminal(filePath, undefined, "vscode")).toBe(vscodeFile);
+		expect(fileUriForTerminal(filePath, undefined, "vscode")).toBe(`vscode://file${vscodePath}`);
 	});
 
 	it("encodes reserved path bytes in vscode://file targets without hiding the location", () => {

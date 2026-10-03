@@ -36,6 +36,9 @@ const EMPTY_ZIP_EOCD = new Uint8Array([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0,
 describe("literal colon filename resolution (issue #4618)", () => {
 	let tmpDir: string;
 	const sessionSettings = Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 });
+	// Windows forbids `:` in filenames and reads `\` as a separator, not a shell
+	// escape, so the shell-escaped literal-name cases are POSIX-only.
+	const posixIt = it.skipIf(process.platform === "win32");
 
 	beforeEach(async () => {
 		tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "literal-colon-"));
@@ -68,19 +71,14 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
 		});
 
-		// NTFS turns `name:suffix` into an alternate data stream, and the
-		// dangling-symlink fixtures need unprivileged symlinks: both POSIX-only.
-		it.skipIf(process.platform === "win32")(
-			"keeps a shell-escaped literal path intact when the resolved file exists",
-			async () => {
-				await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
-				await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal\n");
+		posixIt("keeps a shell-escaped literal path intact when the resolved file exists", async () => {
+			await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
+			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal\n");
 
-				expect(await splitPathAndSelPreferringLiteral("dir/a\\ b:1-2", tmpDir)).toEqual({
-					path: "dir/a\\ b:1-2",
-				});
-			},
-		);
+			expect(await splitPathAndSelPreferringLiteral("dir/a\\ b:1-2", tmpDir)).toEqual({
+				path: "dir/a\\ b:1-2",
+			});
+		});
 
 		it("falls back to selector interpretation when the literal path does not exist", async () => {
 			// No file created — the selector split wins because the raw path
@@ -174,18 +172,13 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
 		});
 
-		// NTFS turns `name:suffix` into an alternate data stream, and the
-		// dangling-symlink fixtures need unprivileged symlinks: both POSIX-only.
-		it.skipIf(process.platform === "win32")(
-			"keeps a literal dangling symlink intact (lstat exists even though stat fails)",
-			async () => {
-				const literal = path.join(tmpDir, "test:1-2");
-				await fs.promises.symlink(path.join(tmpDir, "missing-target"), literal);
+		it("keeps a literal dangling symlink intact (lstat exists even though stat fails)", async () => {
+			const literal = path.join(tmpDir, "test:1-2");
+			await fs.promises.symlink(path.join(tmpDir, "missing-target"), literal);
 
-				expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
-				expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
-			},
-		);
+			expect(await probeLiteralPathExists(literal, tmpDir)).toBe("exists");
+			expect(await splitPathAndSelPreferringLiteral(literal, tmpDir)).toEqual({ path: literal });
+		});
 
 		it("returns the strict split unchanged when there is no selector tail", async () => {
 			expect(await splitPathAndSelPreferringLiteral("plain.txt", tmpDir)).toEqual({
@@ -214,7 +207,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 	});
 
 	describe("read tool", () => {
-		it("reads a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+		posixIt("reads a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
 			await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
 			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal read\n");
 
@@ -303,10 +296,8 @@ describe("literal colon filename resolution (issue #4618)", () => {
 		});
 	});
 
-	// Windows cannot host filenames with literal colon selectors: NTFS treats
-	// `name:sel` as an alternate data stream. Ranged regular files still run.
 	describe("grep tool", () => {
-		it("searches a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
+		posixIt("searches a shell-escaped literal file whose name ends in a selector-shaped suffix", async () => {
 			await fs.promises.mkdir(path.join(tmpDir, "dir"), { recursive: true });
 			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
 
@@ -320,47 +311,41 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			expect(output).toContain("escaped literal needle");
 		});
 
-		it.skipIf(process.platform === "win32")(
-			"searches a literal file whose name contains a semicolon and selector-shaped tail (`a;b:1-2`)",
-			async () => {
-				// Semicolon is the delimited-path separator; without a raw-literal
-				// probe in `splitDelimitedPathEntry`, expandDelimitedPathEntries would
-				// split `a;b:1-2` into `["a", "b:1-2"]` before grep saw the literal file.
-				const literal = path.join(tmpDir, "a;b:1-2");
-				await Bun.write(literal, "delimited literal needle\n");
+		it("searches a literal file whose name contains a semicolon and selector-shaped tail (`a;b:1-2`)", async () => {
+			// Semicolon is the delimited-path separator; without a raw-literal
+			// probe in `splitDelimitedPathEntry`, expandDelimitedPathEntries would
+			// split `a;b:1-2` into `["a", "b:1-2"]` before grep saw the literal file.
+			const literal = path.join(tmpDir, "a;b:1-2");
+			await Bun.write(literal, "delimited literal needle\n");
 
-				const tool = new GrepTool(createSession());
-				const result = await tool.execute("grep-literal-semicolon-selector", {
-					pattern: "needle",
-					path: literal,
-				});
-				const output = getText(result);
+			const tool = new GrepTool(createSession());
+			const result = await tool.execute("grep-literal-semicolon-selector", {
+				pattern: "needle",
+				path: literal,
+			});
+			const output = getText(result);
 
-				expect(output).toContain("delimited literal needle");
-				expect(output).not.toMatch(/not found/i);
-			},
-		);
+			expect(output).toContain("delimited literal needle");
+			expect(output).not.toMatch(/not found/i);
+		});
 
-		it.skipIf(process.platform === "win32")(
-			"searches a literal file that looks like an archive selector (`data.zip:1-2`)",
-			async () => {
-				// The base archive exists too; grep must not rematerialize the raw
-				// literal path as archive `data.zip` plus phantom member `1-2`.
-				const baseArchive = path.join(tmpDir, "data.zip");
-				await Bun.write(baseArchive, EMPTY_ZIP_EOCD);
-				const literal = path.join(tmpDir, "data.zip:1-2");
-				await Bun.write(literal, "literal archive needle\n");
+		it("searches a literal file that looks like an archive selector (`data.zip:1-2`)", async () => {
+			// The base archive exists too; grep must not rematerialize the raw
+			// literal path as archive `data.zip` plus phantom member `1-2`.
+			const baseArchive = path.join(tmpDir, "data.zip");
+			await Bun.write(baseArchive, EMPTY_ZIP_EOCD);
+			const literal = path.join(tmpDir, "data.zip:1-2");
+			await Bun.write(literal, "literal archive needle\n");
 
-				const tool = new GrepTool(createSession());
-				const result = await tool.execute("grep-literal-zip-selector", {
-					pattern: "needle",
-					path: literal,
-				});
-				const output = getText(result);
+			const tool = new GrepTool(createSession());
+			const result = await tool.execute("grep-literal-zip-selector", {
+				pattern: "needle",
+				path: literal,
+			});
+			const output = getText(result);
 
-				expect(output).toContain("literal archive needle");
-			},
-		);
+			expect(output).toContain("literal archive needle");
+		});
 
 		it("applies line ranges to an existing file whose name contains glob characters", async () => {
 			const literal = path.join(tmpDir, "{proposal} {acme} offer.md");

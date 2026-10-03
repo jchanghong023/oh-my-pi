@@ -40,7 +40,7 @@ use uucore::{
 
 use crate::{
 	file_backup::{backup_display, backup_path, determine_backup_mode, determine_backup_suffix},
-	host::{Host, Utility, format_usage, matches_parser, util},
+	host::{Host, Utility, format_usage, matches_parser, strip_errno, util},
 	progress::stderr_draw_target,
 };
 
@@ -74,11 +74,6 @@ enum CpError {
 }
 
 type CopyResult<T> = Result<T, CpError>;
-
-fn strip_errno(error: &io::Error) -> String {
-	// Locale-independent `strerror` wording, not the OS-rendered message.
-	crate::host::normalized_io_message(error)
-}
 
 /// `ENOTSUP`-style failure for operations a filesystem cannot perform.
 fn operation_not_supported() -> io::Error {

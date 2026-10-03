@@ -129,20 +129,14 @@ describe("disposeTerminalTitleState", () => {
 	let prevHeadless = false;
 	let ttyDescriptor: PropertyDescriptor | undefined;
 	let windowsTitleMock: WindowsConsoleTitleMock | undefined;
-	let wslEnv: Array<[string, string | undefined]> = [];
+	// Under WSL the working title is a static `:` by design; hide the host's WSL markers so the spinner ticks.
+	const wslEnvKeys = ["WSL_DISTRO_NAME", "WSL_INTEROP"] as const;
+	let savedWslEnv: Record<string, string | undefined> = {};
 
 	beforeEach(() => {
 		vi.useFakeTimers();
-
-		// A WSL host renders the title statically by design (`isStaticTitleHost()`),
-		// so the spinner is never armed and every tick assertion below would read
-		// as "no writes". Neutralize the host signal the same way this file already
-		// neutralizes `isTTY` and headless mode: the animated path is what the
-		// lifecycle contracts are about, and the static-WSL rendering itself is
-		// covered by `buildTerminalTitleWithState` with an explicit platform.
-		wslEnv = (["WSL_DISTRO_NAME", "WSL_INTEROP"] as const).map(name => [name, process.env[name]]);
-		delete process.env.WSL_DISTRO_NAME;
-		delete process.env.WSL_INTEROP;
+		savedWslEnv = Object.fromEntries(wslEnvKeys.map(key => [key, Bun.env[key]]));
+		for (const key of wslEnvKeys) delete Bun.env[key];
 
 		prevHeadless = setTerminalHeadless(false);
 		ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -169,11 +163,6 @@ describe("disposeTerminalTitleState", () => {
 	afterEach(() => {
 		// A started interval must never leak between tests.
 		disposeTerminalTitleState();
-		for (const [name, value] of wslEnv) {
-			if (value === undefined) delete process.env[name];
-			else process.env[name] = value;
-		}
-		wslEnv = [];
 		stdoutSpy?.mockRestore();
 		windowsTitleMock?.restore();
 		windowsTitleMock = undefined;
@@ -182,6 +171,11 @@ describe("disposeTerminalTitleState", () => {
 		else Reflect.deleteProperty(process.stdout, "isTTY");
 		setTerminalHeadless(prevHeadless);
 		vi.useRealTimers();
+		for (const key of wslEnvKeys) {
+			const value = savedWslEnv[key];
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
 	});
 
 	it("stops the spinner so no further OSC-title write fires on a tick after dispose", () => {

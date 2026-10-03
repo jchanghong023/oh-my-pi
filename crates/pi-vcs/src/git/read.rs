@@ -1299,29 +1299,10 @@ mod tests {
 
 	use super::*;
 
-	/// Compare paths across Windows representations: canonicalize() yields a
-	/// verbatim `\\?\` path with backslashes, worktree records use plain drive
-	/// paths, so normalize both to a verbatim-free, forward-slash form.
-	fn comparable(path: &std::path::Path) -> String {
-		let text = path.to_string_lossy().replace('\\', "/");
-		let normalized = text.strip_prefix("//?/").unwrap_or(&text);
-		if cfg!(windows) {
-			normalized.to_ascii_lowercase()
-		} else {
-			normalized.to_owned()
-		}
-	}
-
 	type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 	fn git(cwd: &Path, args: &[&str]) -> std::result::Result<String, Box<dyn std::error::Error>> {
-		let output = Command::new("git")
-			.current_dir(cwd)
-			// Hermetic: host-global git config (autocrlf etc.) must not leak.
-			.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
-			.env("GIT_CONFIG_SYSTEM", if cfg!(windows) { "NUL" } else { "/dev/null" })
-			.args(args)
-			.output()?;
+		let output = Command::new("git").current_dir(cwd).args(args).output()?;
 		if !output.status.success() {
 			return Err(
 				format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr))
@@ -1332,12 +1313,8 @@ mod tests {
 	}
 
 	fn repo() -> std::result::Result<(TempDir, GitRepo), Box<dyn std::error::Error>> {
-		// Hermetic git (host autocrlf etc. must not leak); the process-wide
-		// override is shared with the other fixtures and applied exactly once.
-		crate::git::test_support::hermetic_git_config_once();
 		let dir = tempfile::tempdir()?;
 		git(dir.path(), &["init", "-b", "main"])?;
-		git(dir.path(), &["config", "core.autocrlf", "false"])?;
 		git(dir.path(), &["config", "user.name", "Test User"])?;
 		git(dir.path(), &["config", "user.email", "test@example.com"])?;
 		let repo = GitRepo::require(dir.path())?;
@@ -1672,7 +1649,9 @@ mod tests {
 		let worktrees = repo.worktrees()?;
 		assert_eq!(worktrees.len(), 2);
 		assert_eq!(worktrees[0].path, dir.path());
-		assert_eq!(comparable(&worktrees[1].path), comparable(&linked.canonicalize()?));
+		// git records the real path, with `/` separators on Windows; compare
+		// resolved locations rather than spellings.
+		assert_eq!(worktrees[1].path.canonicalize()?, linked.canonicalize()?);
 		assert_eq!(worktrees[1].branch.as_deref(), Some("refs/heads/linked-branch"));
 		Ok(())
 	}

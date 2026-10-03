@@ -16,6 +16,7 @@
  * AgentSession lives in {@link RpcSessionHost} (rpc-session-host.ts), which the
  * multi-session project mode reuses per session.
  */
+import * as fs from "node:fs";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import type { AgentSession } from "../../session/agent-session";
@@ -310,7 +311,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	process.env.PI_NOTIFICATIONS = "off";
 
 	const frameEncoder = new RpcFrameEncoder();
-	const outputWriter = new RpcOutputWriter(process.stdout, failure => {
+	// Bun on Windows writes a piped process.stdout with a blocking WriteFile on the
+	// JS thread and never reports backpressure, so a client that stops reading
+	// stdout froze the whole worker, stdin reader included. An fd write stream
+	// writes from the threadpool and reports backpressure, letting the writer spool.
+	const stdout = process.platform === "win32" ? fs.createWriteStream("", { fd: 1, autoClose: false }) : process.stdout;
+	const outputWriter = new RpcOutputWriter(stdout, failure => {
 		logger.error("RPC output delivery failed", { error: String(failure) });
 		void session.dispose().finally(() => process.exit(1));
 	});

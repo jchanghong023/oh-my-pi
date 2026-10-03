@@ -3,12 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { closeSharedModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
@@ -72,6 +71,9 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 
 	afterAll(() => {
 		authStorage.close();
+		// The model registry opened the shared `<isolatedAgentDir>/models.db` cache;
+		// release it so Windows can delete the isolated home.
+		closeModelCache();
 		setAgentDir(originalAgentDir);
 		for (const dir of [isolatedHome]) {
 			if (dir && fs.existsSync(dir)) {
@@ -95,8 +97,6 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 	});
 
 	afterEach(() => {
-		AgentStorage.close();
-		closeSharedModelCache();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);
 		}
@@ -204,11 +204,10 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			// the SDK fires that work fire-and-forget with no completion promise
 			// or event exposed to await — so fake timers cannot drive it and we
 			// poll the live prompt with a generous ceiling, exiting the instant
-			// the rebuilt prompt carries both instructions and the mounted route.
+			// the rebuilt prompt carries the instructions.
 			const deadline = Date.now() + 12_000;
-			const expectedRoute = '- "do\\u0060thing" → `xd://mcp__instr_do_thing`';
 			let prompt = session.systemPrompt.join("\n");
-			while ((!prompt.includes(SERVER_INSTRUCTIONS) || !prompt.includes(expectedRoute)) && Date.now() < deadline) {
+			while (!prompt.includes(SERVER_INSTRUCTIONS) && Date.now() < deadline) {
 				await Bun.sleep(10);
 				prompt = session.systemPrompt.join("\n");
 			}
@@ -218,7 +217,7 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			// the escaped original tool name while routing through the exact
 			// normalized name actually mounted in the live xd:// registry.
 			expect(prompt).toContain("MCP Server Instructions");
-			expect(prompt).toContain(expectedRoute);
+			expect(prompt).toContain('- "do\\u0060thing" → `xd://mcp__instr_do_thing`');
 		} finally {
 			await session.dispose();
 		}
@@ -230,7 +229,7 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			agentDir: tempDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "mcp.startupTimeoutMs": 0 }),
+			settings: Settings.isolated({}),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			skills: [],

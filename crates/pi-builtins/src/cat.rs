@@ -16,7 +16,7 @@ use uucore::{display::Quotable, fast_inc::fast_inc_one};
 use brush_core::{ShellExtensions, builtins::Registration};
 use pi_vfs::BlockingFs;
 
-use crate::host::{Host, Utility, format_usage, matches_parser, util};
+use crate::host::{Host, Utility, format_usage, matches_parser, strip_errno, util};
 
 const LINE_NUMBER_BUF_SIZE: usize = 32;
 
@@ -77,11 +77,6 @@ enum CatError {
 	NoSuchDeviceOrAddress,
 	#[error("Too many levels of symbolic links")]
 	TooManySymlinks,
-}
-
-fn strip_errno(error: &io::Error) -> String {
-	// Locale-independent `strerror` wording, not the OS-rendered message.
-	crate::host::normalized_io_message(error)
 }
 
 type CatResult<T> = Result<T, CatError>;

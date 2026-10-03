@@ -11,6 +11,7 @@ import {
 } from "../src/blob-broker/uploader-runtime";
 import { createLegacyUploader } from "../src/blob-broker/uploaders-legacy";
 import { createSelfHostedUploader } from "../src/blob-broker/uploaders-self-hosted";
+import { compileFakeExecutable } from "./helpers/fake-executable";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const request: BlobUploadRequest = {
@@ -75,57 +76,59 @@ describe("self-hosted uploader wire contracts", () => {
 		expect(fetches).toBe(0);
 	});
 
-	// POSIX-only fixture: the fake curl is a #!/bin/sh script that Windows cannot execute.
-	it.skipIf(process.platform === "win32")(
-		"does not corrupt FTP command stdin or mis-map the remote path to its public URL",
-		async () => {
-			const temp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ftp-uploader-"));
-			try {
-				const executable = path.join(temp, "fake-curl");
-				const argsFile = path.join(temp, "args");
-				const bodyFile = path.join(temp, "body");
-				fs.writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat > '${bodyFile}'\n`);
-				fs.chmodSync(executable, 0o755);
-				const uploader = requiredUploader(
-					createSelfHostedUploader(
-						"ftp",
-						configured(
-							{
-								protocol: "ftp",
-								host: "upload.test",
-								port: 2121,
-								path: "/folder/sub",
-								publicBaseUrl: "https://cdn.test/assets/",
-								commandBinary: executable,
-							},
-							{ username: "alice", password: "p@ss" },
-						),
+	it("does not corrupt FTP command stdin or mis-map the remote path to its public URL", async () => {
+		const temp = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ftp-uploader-"));
+		try {
+			const argsFile = path.join(temp, "args");
+			const bodyFile = path.join(temp, "body");
+			// Compiled on Windows: the percent-encoded upload URL cannot pass through a .cmd launcher.
+			const executable = await compileFakeExecutable(
+				temp,
+				"fake-curl",
+				`import * as fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(argsFile)}, process.argv.slice(2).map(arg => \`\${arg}\\n\`).join(""));
+fs.writeFileSync(${JSON.stringify(bodyFile)}, new Uint8Array(await Bun.stdin.arrayBuffer()));
+`,
+			);
+			const uploader = requiredUploader(
+				createSelfHostedUploader(
+					"ftp",
+					configured(
+						{
+							protocol: "ftp",
+							host: "upload.test",
+							port: 2121,
+							path: "/folder/sub",
+							publicBaseUrl: "https://cdn.test/assets/",
+							commandBinary: executable,
+						},
+						{ username: "alice", password: "p@ss" },
 					),
-				);
+				),
+			);
 
-				const publication = await uploader.upload(request);
-				expect(publication).toEqual({
-					url: "https://cdn.test/assets/folder/sub/a%20b.png",
-					destination: "ftp",
-					bytes: request.bytes.byteLength,
-				});
-				expect(fs.readFileSync(bodyFile, "utf8")).toBe("image-payload");
-				expect(fs.readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
-					"--fail",
-					"--silent",
-					"--show-error",
-					"--ftp-create-dirs",
-					"--upload-file",
-					"-",
-					"--user",
-					"alice:p@ss",
-					"ftp://upload.test:2121/folder/sub/a%20b.png",
-				]);
-			} finally {
-				fs.rmSync(temp, { recursive: true, force: true });
-			}
-		},
-	);
+			const publication = await uploader.upload(request);
+			expect(publication).toEqual({
+				url: "https://cdn.test/assets/folder/sub/a%20b.png",
+				destination: "ftp",
+				bytes: request.bytes.byteLength,
+			});
+			expect(fs.readFileSync(bodyFile, "utf8")).toBe("image-payload");
+			expect(fs.readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
+				"--fail",
+				"--silent",
+				"--show-error",
+				"--ftp-create-dirs",
+				"--upload-file",
+				"-",
+				"--user",
+				"alice:p@ss",
+				"ftp://upload.test:2121/folder/sub/a%20b.png",
+			]);
+		} finally {
+			fs.rmSync(temp, { recursive: true, force: true });
+		}
+	});
 
 	it("does not mis-map an encoded shared-folder path or write outside its configured subtree", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-shared-uploader-"));

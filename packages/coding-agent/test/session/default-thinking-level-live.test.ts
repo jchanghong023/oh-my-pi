@@ -9,7 +9,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgDefaultThinkingLevel } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -23,14 +22,12 @@ describe("defaultThinkingLevel on running sessions", () => {
 	const tempDirs: string[] = [];
 	const sessions: AgentSession[] = [];
 	let modelRegistry!: ModelRegistry;
-	let authStorage: AuthStorage;
 	let authDir: string;
 
 	beforeAll(async () => {
 		authDir = path.join(os.tmpdir(), `pi-thinking-default-auth-${Snowflake.next()}`);
 		fs.mkdirSync(authDir, { recursive: true });
-		authStorage = await discoverAuthStorage(authDir);
-		modelRegistry = new ModelRegistry(authStorage);
+		modelRegistry = new ModelRegistry(await discoverAuthStorage(authDir));
 	});
 
 	afterEach(async () => {
@@ -39,8 +36,8 @@ describe("defaultThinkingLevel on running sessions", () => {
 	});
 
 	afterAll(() => {
-		// agent.db under authDir stays locked on Windows until the store closes.
-		authStorage.close();
+		// The discovered auth DB lives in authDir; Windows cannot delete it while open.
+		modelRegistry.authStorage.close();
 		removeSyncWithRetries(authDir);
 	});
 

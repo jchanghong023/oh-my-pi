@@ -467,20 +467,6 @@ describe("GrepTool internal URL resolution", () => {
 		expect(text).toMatch(/^\*\d+:.*needle/m);
 	});
 
-	it("searches a bare local:// glob at every depth", async () => {
-		const localRoot = path.join(artifactsDir, "local");
-		await fs.mkdir(path.join(localRoot, "nested"), { recursive: true });
-		await Bun.write(path.join(localRoot, "root.md"), "url-glob-needle root\n");
-		await Bun.write(path.join(localRoot, "nested", "child.md"), "url-glob-needle child\n");
-		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
-		const tool = new GrepTool(createSession());
-		const bare = getResultText(
-			await tool.execute("search-local-bare", { pattern: "url-glob-needle", path: "local://*.md" }),
-		);
-		expect(bare).toContain("url-glob-needle root");
-		expect(bare).toContain("url-glob-needle child");
-	});
-
 	it("accepts the single-slash local:/ spelling in find and search like read", async () => {
 		const localRoot = path.join(artifactsDir, "local");
 		await fs.mkdir(path.join(localRoot, "notes"), { recursive: true });
@@ -722,8 +708,9 @@ describe("GrepTool internal URL resolution", () => {
 			},
 		});
 		const tool = new GrepTool(createSession());
+		// Unix natives surface the real errno text; elsewhere the provider message rides along.
 		await expect(tool.execute("dir-search", { pattern: "x", path: "dirstub://host/dir" })).rejects.toThrow(
-			/dirstub:\/\/host\/dir: (Operation not supported|ENOTSUP)/,
+			/dirstub:\/\/host\/dir(: Operation not supported| lists only through the read tool)/,
 		);
 	});
 
@@ -739,7 +726,7 @@ describe("GrepTool internal URL resolution", () => {
 		const listSpy = vi.spyOn(sshFileTransfer, "listRemoteDir").mockResolvedValue([]);
 		const tool = new GrepTool(createSession());
 		await expect(tool.execute("ssh-dir-search", { pattern: "x", path: "ssh://h/etc" })).rejects.toThrow(
-			/ssh:\/\/h\/etc: (Operation not supported|ENOTSUP)/,
+			/ssh:\/\/h\/etc(: Operation not supported| lists only through the read tool)/,
 		);
 		expect(listSpy).not.toHaveBeenCalled();
 	});

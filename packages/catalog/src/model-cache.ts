@@ -229,22 +229,19 @@ function initializeDb(db: Database): void {
 
 function closeSharedDb(): void {
 	if (!sharedDb) return;
-	// Force-close: bun's plain close() leaves the file handle open on Windows
-	// when a prepared statement was never finalized, blocking temp-dir
-	// cleanup with EBUSY.
-	sharedDb.close(true);
+	sharedDb.close();
 	sharedDb = null;
 	sharedDbPath = null;
 }
 
 /**
- * Closes the process-wide shared cache handle, releasing its file lock.
- * Test teardowns call this so temp agent dirs holding a `models.db` can be
- * removed on platforms that refuse to delete open files (Windows).
+ * Closes the shared handle to the default `<agent-dir>/models.db`; the next
+ * default-path access reopens it. Call before deleting an agent directory the
+ * cache was opened under — Windows cannot remove a database that is still open.
  */
-export function closeSharedModelCache(): void {
+export function closeModelCache(): void {
+	if (sharedDbPath) invalidateReadPath(sharedDbPath);
 	closeSharedDb();
-	readRowCache.clear();
 }
 
 function runModelCacheDb<T>(resolvedPath: string, shared: boolean, useDb: (db: Database) => T): T {
@@ -271,9 +268,7 @@ function runModelCacheDb<T>(resolvedPath: string, shared: boolean, useDb: (db: D
 				sharedDb = db;
 				sharedDbPath = resolvedPath;
 			} else {
-				// Force-close releases the Windows file handle even with
-				// unfinalized prepared statements (see closeSharedDb).
-				db.close(true);
+				db.close();
 			}
 			return result;
 		},

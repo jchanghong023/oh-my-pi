@@ -1,5 +1,7 @@
+import * as path from "node:path";
 import { toError } from "@oh-my-pi/pi-utils";
 import {
+	directChildKeyName,
 	SessionWriteConflictError,
 	type SessionStorage,
 	type SessionStorageStat,
@@ -243,18 +245,12 @@ export class IndexedSessionStorage implements SessionStorage {
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
-		// Callers and remote indexes may spell the same Windows path with either
-		// separator. Compare normalized spellings but return the stored key.
-		const normalizedDir = process.platform === "win32" ? dir.replaceAll("\\", "/") : dir;
-		const prefix = normalizedDir.endsWith("/") ? normalizedDir : `${normalizedDir}/`;
+		const resolvedDir = path.resolve(dir);
 		const out: string[] = [];
-		for (const p of this.#index.keys()) {
-			const normalizedPath = process.platform === "win32" ? p.replaceAll("\\", "/") : p;
-			if (!normalizedPath.startsWith(prefix)) continue;
-			const name = normalizedPath.slice(prefix.length);
-			if (name.includes("/") || name.includes("\\")) continue;
-			if (!matchesGlob(name, pattern)) continue;
-			out.push(p);
+		for (const key of this.#index.keys()) {
+			const name = directChildKeyName(resolvedDir, key);
+			if (name === undefined || !matchesGlob(name, pattern)) continue;
+			out.push(key);
 		}
 		return out;
 	}

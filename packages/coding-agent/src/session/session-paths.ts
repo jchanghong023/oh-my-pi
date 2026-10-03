@@ -68,12 +68,17 @@ function encodeHashedSessionDirName(canonicalCwd: string, scope: "home" | "tmp" 
 	return `${scope}-${readable || "project"}-${digest}`;
 }
 
+/** Whether `relative` (from `path.relative(root, target)`) stays at or inside `root`. */
+function isRelativeWithin(relative: string): boolean {
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function getDefaultSessionDirName(cwd: string): {
 	encodedDirName: string;
 	hashedDirName: string;
+	/** Home-relative name a temp-root cwd got while home was checked first; migrated forward. */
+	shadowedHomeDirName?: string;
 	resolvedCwd: string;
-	previousHomeDirName?: string;
-	previousHomeHashedDirName?: string;
 } {
 	const resolvedCwd = path.resolve(cwd);
 	const canonicalCwd = resolveEquivalentPath(resolvedCwd);
@@ -83,17 +88,17 @@ function getDefaultSessionDirName(cwd: string): {
 	const canonicalTempRoot = resolveEquivalentPath(tempRoot);
 	const homeRelative = path.relative(canonicalHome, canonicalCwd);
 	const tempRelative = path.relative(canonicalTempRoot, canonicalCwd);
-	const withinHome = homeRelative === "" || (!homeRelative.startsWith("..") && !path.isAbsolute(homeRelative));
-	const withinTemp = tempRelative === "" || (!tempRelative.startsWith("..") && !path.isAbsolute(tempRelative));
+	const inHome = isRelativeWithin(homeRelative);
 	let encodedDirName: string;
+	let shadowedHomeDirName: string | undefined;
 	let scope: "home" | "tmp" | "abs";
-	// Windows commonly keeps its temp dir under the user profile, so the
-	// more specific temp scope wins there. On POSIX, preserve the home scope
-	// when a custom TMPDIR happens to be inside the home directory.
-	if (withinTemp && (process.platform === "win32" || !withinHome)) {
+	// The temp root is checked first: it is the more specific root wherever it
+	// nests inside home (Windows' `%USERPROFILE%\AppData\Local\Temp`).
+	if (isRelativeWithin(tempRelative)) {
 		encodedDirName = encodeRelativeSessionDirName("-tmp", tempRelative);
+		if (inHome) shadowedHomeDirName = encodeRelativeSessionDirName("-", homeRelative);
 		scope = "tmp";
-	} else if (withinHome) {
+	} else if (inHome) {
 		encodedDirName = encodeRelativeSessionDirName("-", homeRelative);
 		scope = "home";
 	} else {
@@ -103,17 +108,8 @@ function getDefaultSessionDirName(cwd: string): {
 	return {
 		encodedDirName,
 		hashedDirName: encodeHashedSessionDirName(canonicalCwd, scope),
+		shadowedHomeDirName,
 		resolvedCwd,
-		// The previous home-first classification used these names when both
-		// roots contained the cwd. Migrate them before opening the new temp dir.
-		previousHomeDirName:
-			process.platform === "win32" && withinTemp && withinHome
-				? encodeRelativeSessionDirName("-", homeRelative)
-				: undefined,
-		previousHomeHashedDirName:
-			process.platform === "win32" && withinTemp && withinHome
-				? encodeHashedSessionDirName(canonicalCwd, "home")
-				: undefined,
 	};
 }
 
@@ -163,8 +159,9 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 	}
 }
 
-function migrateLegacyAbsoluteSessionDir(cwd: string, sessionDir: string, sessionsRoot: string): void {
-	const legacyDir = path.join(sessionsRoot, encodeLegacyAbsoluteSessionDirName(cwd));
+/** Move the session dir `legacyDirName` under `sessionsRoot` into `sessionDir`. Best-effort. */
+function migrateNamedSessionDir(legacyDirName: string, sessionDir: string, sessionsRoot: string): void {
+	const legacyDir = path.join(sessionsRoot, legacyDirName);
 	if (legacyDir === sessionDir || !fs.existsSync(legacyDir)) return;
 
 	try {
@@ -172,22 +169,6 @@ function migrateLegacyAbsoluteSessionDir(cwd: string, sessionDir: string, sessio
 	} catch (error) {
 		logger.warn("Failed to migrate legacy session directory", {
 			oldPath: legacyDir,
-			newPath: sessionDir,
-			error: String(error),
-		});
-	}
-}
-
-function migratePreviousHomeSessionDir(oldDirName: string | undefined, sessionDir: string, sessionsRoot: string): void {
-	if (!oldDirName) return;
-	const oldPath = path.join(sessionsRoot, oldDirName);
-	if (oldPath === sessionDir || !fs.existsSync(oldPath)) return;
-
-	try {
-		migrateSessionDirPath(oldPath, sessionDir);
-	} catch (error) {
-		logger.warn("Failed to migrate previous home-scoped session directory", {
-			oldPath,
 			newPath: sessionDir,
 			error: String(error),
 		});
@@ -233,18 +214,12 @@ export function computeDefaultSessionDir(
 	storage: SessionStorage,
 	sessionsRoot: string = getSessionsDir(),
 ): string {
-	const { encodedDirName, hashedDirName, resolvedCwd, previousHomeDirName, previousHomeHashedDirName } =
-		getDefaultSessionDirName(cwd);
-	const sessionDir = path.join(sessionsRoot, encodedDirName);
-	// The cwd-aware migrations must run before the name-pattern home sweep:
-	// with the temp dir under the profile (Windows layout), a legacy absolute
-	// name `--C--Users-…-AppData-…--` also matches the sweep's old home format
-	// and would be rewritten into the home scope instead of the canonical one.
-	migrateLegacyAbsoluteSessionDir(resolvedCwd, sessionDir, sessionsRoot);
-	migratePreviousHomeSessionDir(previousHomeDirName, sessionDir, sessionsRoot);
-	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
-	if (previousHomeHashedDirName) migrateHashedSessionDir(previousHomeHashedDirName, sessionDir, sessionsRoot);
+	const { encodedDirName, hashedDirName, shadowedHomeDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
 	migrateHomeSessionDirs(sessionsRoot);
+	const sessionDir = path.join(sessionsRoot, encodedDirName);
+	migrateNamedSessionDir(encodeLegacyAbsoluteSessionDirName(resolvedCwd), sessionDir, sessionsRoot);
+	if (shadowedHomeDirName) migrateNamedSessionDir(shadowedHomeDirName, sessionDir, sessionsRoot);
+	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }

@@ -2097,13 +2097,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// work continues so caches still warm.
 	const raceWithDeadline = async <T>(name: string, work: Promise<T>): Promise<T | undefined> => {
 		let timedOut = false;
-		const result = await Promise.race([
-			work,
-			Bun.sleep(STARTUP_SCAN_DEADLINE_MS).then(() => {
-				timedOut = true;
-				return undefined;
-			}),
-		]);
+		const deadline = Promise.withResolvers<undefined>();
+		// Cleared once the race settles: a pending timer would keep this whole startup
+		// scope (settings, session, registries) reachable for the full deadline.
+		const timer = setTimeout(() => {
+			timedOut = true;
+			deadline.resolve(undefined);
+		}, STARTUP_SCAN_DEADLINE_MS);
+		let result: T | undefined;
+		try {
+			result = await Promise.race([work, deadline.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
 		if (timedOut) {
 			logger.warn("Startup scan exceeded deadline; deferring to system prompt fallback", {
 				name,

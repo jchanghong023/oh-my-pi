@@ -94,9 +94,9 @@ describe("ProcessTerminal geometry reflow through the renderer", () => {
 		expect(harness.terminal.columns).toBe(100);
 	});
 
-	// Self-SIGHUP delivery is POSIX-only; Windows exits via postmortem.quit(129) instead
-	// (covered by the dedicated win32 test below).
-	it.skipIf(process.platform === "win32")("stops rendering and raises SIGHUP when terminal input ends", async () => {
+	it("stops rendering and raises SIGHUP when terminal input ends", async () => {
+		// SIGHUP is the POSIX exit path; Windows quits directly (covered below).
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 		harness = createProcessTerminalRenderHarness(100, 30);
 		await harness.settle();
 		const rendersBeforeDisconnect = harness.probe.widths.length;
@@ -118,12 +118,11 @@ describe("ProcessTerminal geometry reflow through the renderer", () => {
 		await harness.endInput();
 
 		expect(quit).toHaveBeenCalledWith(129, { drainStdout: false });
-		// Stale-log pruning probes old PIDs with signal 0; no real signal may be sent.
-		expect(harness.signals.filter(({ signal }) => signal !== 0)).toHaveLength(0);
+		expect(harness.signals).toHaveLength(0);
 	});
 
-	// Self-SIGHUP delivery is POSIX-only; Windows exits via postmortem.quit(129) instead.
-	it.skipIf(process.platform === "win32")("stops rendering and raises SIGHUP when terminal output fails", async () => {
+	it("stops rendering and raises SIGHUP when terminal output fails", async () => {
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 		harness = createProcessTerminalRenderHarness(100, 30);
 		await harness.settle();
 		const rendersBeforeDisconnect = harness.probe.widths.length;

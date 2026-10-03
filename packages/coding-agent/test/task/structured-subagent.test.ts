@@ -5,7 +5,6 @@ import path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { normalizeModelPatternList, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
 import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import {
@@ -13,6 +12,7 @@ import {
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import * as planHandoff from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { createEvalCustomTools } from "@oh-my-pi/pi-coding-agent/task/eval-tools";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -28,7 +28,6 @@ import {
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
@@ -278,10 +277,9 @@ describe("structured subagent primitive", () => {
 			expect(cfgRetryModelFallback.get(liveSettings)).toBe(false);
 		} finally {
 			liveSettings.cancelPendingSaves();
-			// loadIsolated opened an AgentStorage db inside the temp agentDir;
-			// Windows cannot delete a directory holding an open db handle.
+			// `Settings.loadIsolated` opened `<agentDir>/agent.db`; Windows cannot delete it while open.
 			AgentStorage.close();
-			await removeWithRetries(root);
+			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
 
@@ -335,10 +333,8 @@ describe("structured subagent primitive", () => {
 			expect(second.serviceTierOverride).toBe("none");
 		} finally {
 			liveSettings.cancelPendingSaves();
-			// loadIsolated opened an AgentStorage db inside the temp agentDir;
-			// Windows cannot delete a directory holding an open db handle.
 			AgentStorage.close();
-			await removeWithRetries(root);
+			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
 
