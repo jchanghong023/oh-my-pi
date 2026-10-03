@@ -15,7 +15,7 @@
 * `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
-* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
+* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：fork 文档站，仅含 fork 自有内容（需求目录、fork 新增文档）并托管 `collab-web` 客户端，不维护翻译（见「中文文档」一节）。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
 子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
@@ -120,6 +120,6 @@
 
 ## 中文文档
 
-* `docs-zh-CN` 以覆盖上游 `docs` 全部文档的完整翻译为目标，并包含 fork 新增文档（不是纯翻译目录）；经 VitePress 构建发布到 GitHub Pages。翻译独立同步，可能落后于代码基线。
-* 代码 review 或对比上游差异时，忽略同名文档的翻译内容，只审查新增文档，除非用户明确要求同步翻译。
-* 同步翻译时先检查上游文档的新增与删除，只维护上游最新文档的翻译副本；不因同步代码自动开展翻译。
+* `docs-zh-CN` 不维护翻译：上游 `docs` 的翻译文件已全部删除，后续同步不带入、不恢复；上游 `docs/` 的增删改不触发任何中文站维护。
+* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录、`README.upstream.md` 对照快照、fork 新增文档（首页、教程、设置参考、调研资料 `research.md`、工具参考 `tools.md`）与 VitePress 站点；站点发布到 GitHub Pages，并托管 `collab-web` 浏览器客户端（见 `fork.md`）。
+* 代码 review 或对比上游差异时，只审查 `docs-zh-CN` 内的 fork 新增文档。

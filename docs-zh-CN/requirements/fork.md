@@ -126,7 +126,7 @@
 * 房间身份（roomId、房间密钥、write token）持久化在 config root 的 `collab/identity.json`（POSIX 下 `0600`；文件含 write token，Windows 依赖 config root 的 ACL，与 guest replica 同）。同一进程内每个房间复用同一身份：`/new`、`/resume`、`/fork`、`/collab stop` 后重开、以及 omp 重启后，`/collab` 打印的同一条链接始终可用；房间仍按会话轮换（`generation` 递增、guest 重连），不引入常驻进程。文件损坏或缺失时自动重建；临时不可读（如被杀软/备份占用）时只降级为进程内新身份、绝不覆盖文件。第二个 omp 进程托管同一身份时由 relay 以既有 4009 提示拒绝（`/collab` 报 `relay connection closed during startup: a host is already connected for this room (another omp session hosts this room; /collab list shows it)`；停掉占用会话或直接用它的链接）。
 * `/collab`、`/collab view` 执行后自动把对应的浏览器深链接写入系统剪贴板，并在提示块末尾说明；终端链接与二维码行为不变。
 * host 在 guest 加入时（快照分片之后）下发本会话的命令清单：内置命令、`/skill:<name>`、扩展命令、自定义/MCP 命令与文件命令，与主机自身补全列表一致；清单每次 join 下发一次，运行中的技能/插件变化需重新 join 才可见。
-* fork 的网页端（含上述补全与目录选择）随中文文档站一起发布到 GitHub Pages：`https://jchanghong023.github.io/oh-my-pi/collab/`，`collab.webUrl` 默认指向它，`/collab` 的链接因此形如 `https://jchanghong023.github.io/oh-my-pi/collab/#<relay-link>`，外部浏览器（含跨网络设备）可直接使用；中继托管的 `my.omp.sh` 是上游构建，永远不会带 fork 功能。把 `collab.webUrl` 置空则回到上游行为（按 `collab.relayUrl` 推导，即 `my.omp.sh`）；本地开发该客户端时用 `collab.webUrl=http://localhost:3000`（`packages/collab-web` 的 `bun run dev`）。
+* fork 的网页端（含上述补全与目录选择）随 fork 文档站一起发布到 GitHub Pages：`https://jchanghong023.github.io/oh-my-pi/collab/`，`collab.webUrl` 默认指向它，`/collab` 的链接因此形如 `https://jchanghong023.github.io/oh-my-pi/collab/#<relay-link>`，外部浏览器（含跨网络设备）可直接使用；中继托管的 `my.omp.sh` 是上游构建，永远不会带 fork 功能。把 `collab.webUrl` 置空则回到上游行为（按 `collab.relayUrl` 推导，即 `my.omp.sh`）；本地开发该客户端时用 `collab.webUrl=http://localhost:3000`（`packages/collab-web` 的 `bun run dev`）。
 * 网页端 composer 支持 `/` 补全（`Tab` 补全、`↑`/`↓` 选择、`Esc` 关闭、鼠标点选），可执行的命令范围与清单一致：内置命令、技能、扩展/自定义/文件命令，以及 `!`/`!!`（主机 shell）与 `$`/`$$`（主机 python）；会话轮换类命令（`/new`、`/resume`、`/fork`、`/exit` 等）同样开放。清单之外的斜杠输入按未知命令回错，不再当作 prompt 交给模型。持有可写链接者因此可在主机上执行任意 shell/python 与任意会话操作，绕过 agent 策略与审批；view-only 链接仍被拒绝。
 * 命令输出（如 `/move <path>` 的 `Moved to <path>.`）以 host notice 事件下发到浏览器；需要主机交互对话框的命令（选择器等）在主机 TUI 上打开。
 * `/move`、`/add-dir` 的路径候选由 host 的文件系统搜索提供（同一 TUI 覆盖层数据源），仅限可写链接；候选只做大小写不敏感的子串匹配与目录列举，不执行、不落盘。
@@ -190,12 +190,12 @@
 
 ### 文档站
 
-* 仓库根 `README.md` 是上游 README 的**中文版**，正文跟随上游更新；Install / 下载段与「提示词控制」中 fork 新增的 `fullsend` 条目为有意保留的 fork 内容（下载段不采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法），其余正文与上游一致。上游英文快照保存在 `docs-zh-CN/README.upstream.md`，仅作同步对照稿源，已从中文文档站排除。
+* 仓库根 `README.md` 是上游 README 的**中文版**，正文跟随上游更新；Install / 下载段与「提示词控制」中 fork 新增的 `fullsend` 条目为有意保留的 fork 内容（下载段不采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法），其余正文与上游一致。上游英文快照保存在 `docs-zh-CN/README.upstream.md`，仅作同步对照稿源，已从文档站排除。
 * `README.md` 与维护规则、同步 Skill 和整个需求目录一样在同步时保护：上游 README 有变化时先更新快照，再把变化段落重译进中文正文；上游未变则不动。
-* 只保留中文 VitePress 文档站及 GitHub Pages 部署能力；不维护英文站点，不为上游英文 `docs` 提供构建或 `/en/` 子路径合并。
-* 中文站不是纯翻译站点：以覆盖上游全部文档的完整翻译为目标，同时收录 fork 新增文档——站点首页 `index.md`、命令与快捷键教程 `command-shortcut-tutorial.md`、`config.yml` 全量设置参考 `settings-reference.md`、知识索引研究 `dft-oh-my-pi-knowledge-research.md`、`requirements/` 中的需求文档；翻译独立同步，内容可能落后于当前代码基线。
-* 翻译页 `magic-keywords.md` 与 `settings.md` 内含 fork 专有条目（fullsend 关键词与 `/fullsend` 等四命令、`magicKeywords.fullsend` 设置行）；对照上游同步这些页面时 MUST 保留这些条目。
-* 站点构建把 `../packages`、`../crates` 前缀的仓库相对链接改写为本 fork GitHub 绝对链接，避免 Pages 上的死链。
+* 只保留 VitePress 文档站及 GitHub Pages 部署能力；不维护英文站点，不为上游英文 `docs` 提供构建或 `/en/` 子路径合并。
+* 不维护翻译：上游 `docs` 的翻译文件已全部删除，后续同步不带入、不恢复；`docs-zh-CN` 仅收录 fork 自有内容——站点首页 `index.md`、命令与快捷键教程 `command-shortcut-tutorial.md`、`config.yml` 全量设置参考 `settings-reference.md`、调研资料 `research.md`（知识索引与企业代码检索）、fork 工具文档 `tools.md`（hub、repo、wiki），以及 `requirements/` 中的需求文档。
+* 原翻译页承载的 fork 专有内容已并入保留文档：fullsend 关键词条目在根 `README.md`「提示词控制」，`magicKeywords.fullsend` 设置行与 `/fullsend` 等四条关键词斜杠命令说明在 `settings-reference.md` 的 `magicKeywords` 条目。
+* 站点构建把 `../packages`、`../crates`、`../docs` 前缀的仓库相对链接改写为本 fork GitHub 绝对链接，避免 Pages 上的死链。
 
 ## Fork 验证体系
 

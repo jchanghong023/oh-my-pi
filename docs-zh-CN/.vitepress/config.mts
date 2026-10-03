@@ -59,60 +59,9 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
   })
 
   const sections: DefaultTheme.SidebarItem[] = [
-    section('开始', [
-      '/',
-      '/command-shortcut-tutorial',
-      '/config-usage',
-      '/settings',
-      '/keybindings',
-      '/session',
-      '/session-switching-and-recent-listing',
-      '/session-tree-plan',
-      '/memory',
-      '/compaction',
-      '/handoff-generation-pipeline'
-    ]),
-    section('能力', [
-      '/lsp-config',
-      '/task-agent-discovery',
-      '/agent-hub',
-      '/advisor-watchdog',
-      '/vibe-mode',
-      '/collab',
-      '/computer-use',
-      '/notebook-tool-runtime',
-      '/python-repl'
-    ]),
-    section('模型', [
-      '/providers',
-      '/models',
-      '/local-models',
-      '/adding-a-provider',
-      '/prewalk',
-      '/provider-compat-reference',
-      '/provider-endpoint-constraints',
-      '/provider-quirks',
-      '/provider-streaming-internals'
-    ]),
-    section('自定义', [
-      '/context-files',
-      '/skills',
-      '/system-prompt-customization',
-      '/magic-keywords',
-      '/hooks',
-      '/custom-tools',
-      '/mcp-config',
-      '/mcp-server-tool-authoring',
-      '/theme',
-      '/ttsr-injection-lifecycle',
-      '/extensions',
-      '/extension-loading',
-      '/marketplace',
-      '/mcp-runtime-lifecycle',
-      '/mcp-protocol-transports'
-    ]),
-    section('编程接入', ['/sdk', '/rpc', '/omptype-guide', '/user-facing-packages'], true),
-    section('参考', ['/cli-reference', '/environment-variables', '/secrets', '/approval-mode'], true)
+    section('开始', ['/', '/command-shortcut-tutorial']),
+    section('参考', ['/settings-reference', '/research'], true),
+    section('工具参考', ['/tools'], true)
   ]
 
   const grouped = new Map<string, DocEntry[]>()
@@ -126,9 +75,7 @@ function buildSidebar(): DefaultTheme.SidebarItem[] {
 
   const groupLabels: Record<string, string> = {
     reference: '参考与内部实现',
-    skills: '扩展开发',
-    toolconv: '模型协议',
-    tools: '工具参考'
+    requirements: '需求文档'
   }
   for (const key of ['reference', ...[...grouped.keys()].filter((group) => group !== 'reference').sort()]) {
     const documents = grouped.get(key)
@@ -149,8 +96,8 @@ export default defineConfig({
   lang: 'zh-CN',
   // 上游英文快照只作同步对照稿源，不作为站点页面与搜索内容。
   srcExclude: excludedSources,
-  title: 'omp 中文文档',
-  description: 'omp 终端编码 agent 中文文档',
+  title: 'omp fork 文档',
+  description: 'omp fork 的新增文档、工具参考与需求目录',
   base: '/oh-my-pi/',
   cleanUrls: true,
   lastUpdated: true,
@@ -163,14 +110,17 @@ export default defineConfig({
         md.renderer.rules.code_inline = (...args) =>
           renderCodeInline(...args).replace('<code>', '<code v-pre>')
       }
-      // 文档里 `../packages/`、`../crates/` 开头的相对链接面向 GitHub 仓库浏览，
+      // 文档里 `../packages/`、`../crates/`、`../docs/` 开头的相对链接面向 GitHub 仓库浏览，
       // 发布到 GitHub Pages 后全部 404；渲染时改写为指向仓库源码的绝对链接。
       const renderLinkOpen = md.renderer.rules.link_open
       if (renderLinkOpen) {
         md.renderer.rules.link_open = (...args) => {
           const [tokens, idx] = args
           const href = tokens[idx].attrGet('href')
-          if (href && (href.startsWith('../packages/') || href.startsWith('../crates/'))) {
+          if (
+            href &&
+            (href.startsWith('../packages/') || href.startsWith('../crates/') || href.startsWith('../docs/'))
+          ) {
             const sourcePath = href.slice(3).replace(/\/+$/, '')
             const view = /\.[^/]+$/.test(sourcePath) ? 'blob' : 'tree'
             tokens[idx].attrSet('href', `https://github.com/jchanghong023/oh-my-pi/${view}/main/${sourcePath}`)
@@ -184,7 +134,7 @@ export default defineConfig({
     nav: [
       { text: '文档首页', link: '/' },
       { text: '快速开始', link: '/command-shortcut-tutorial' },
-      { text: 'CLI 参考', link: '/cli-reference' },
+      { text: '设置参考', link: '/settings-reference' },
       { text: '官方网站', link: 'https://omp.sh' },
       { text: 'GitHub', link: 'https://github.com/jchanghong023/oh-my-pi' }
     ],

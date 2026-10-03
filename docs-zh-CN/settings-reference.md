@@ -3,9 +3,9 @@
 本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 502 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
 
 - 每个键就是 `config.yml` 中的嵌套路径（如 `theme.dark`、`tools.approvalMode`），无缩写；键必须与 schema 完全一致：写 `theme.dark`，而不是 `theme`。
-- 优先级、存储位置、写入方式与合并规则见 [Settings（设置）](./settings.md)；配置发现与解析机制见 [Config usage（配置发现与解析）](./config-usage.md)。
+- 优先级、存储位置、写入方式与合并规则见 [Settings（设置）](../docs/settings.md)；配置发现与解析机制见 [Config usage（配置发现与解析）](../docs/config-usage.md)。
 - 运行时查看当前生效值：`omp config list`；机器可读输出：`omp config list --json`。
-- 模型与凭据、环境变量相关配置见 [Providers](./providers.md)、[Models](./models.md)、[Environment variables](./environment-variables.md)；`tools.approval`（按工具名记录审批策略）与 `bash.patterns` 的用法见 [Settings](./settings.md) 与 [Approval mode](./approval-mode.md)。
+- 模型与凭据、环境变量相关配置见 [Providers](../docs/providers.md)、[Models](../docs/models.md)、[Environment variables](../docs/environment-variables.md)；`tools.approval`（按工具名记录审批策略）与 `bash.patterns` 的用法见 [Settings](../docs/settings.md) 与 [Approval mode](../docs/approval-mode.md)。
 - 本文是 schema 的静态快照：schema 增删配置项、修改默认值或枚举后，需要按 `SETTINGS_SCHEMA` 重新生成本页。
 
 ## 图例
@@ -1515,6 +1515,7 @@
 - **类型**：`boolean`
 - **默认值**：`true`
 - **功能**：为独立的 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 关键字启用隐藏提示。
+- **关联命令**：四个魔法关键词各有关联斜杠命令——`/ultrathink [task]`、`/orchestrate [task]`、`/workflowz [task]` 与 fork 新增的 `/fullsend [task]`，均接受可选任务文本；例如 `/fullsend complete and verify the release` 会以 `fullsend complete and verify the release` 作为消息发送，不带任务文本时只发送关键词本身。
 
 - **可选值**：
   - `true`
