@@ -1396,6 +1396,9 @@ export interface NewSessionParams {
 
 export interface OpenSessionParams {
 	sessionDir: string;
+	/** With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request. */
+	provider?: string;
+	modelId?: string;
 }
 
 export interface SetFastModeParams {
@@ -1569,6 +1572,9 @@ export interface ExportHtmlResult {
 
 export interface SwitchSessionParams {
 	sessionPath: string;
+	/** With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request. */
+	provider?: string;
+	modelId?: string;
 }
 
 export interface BranchParams {

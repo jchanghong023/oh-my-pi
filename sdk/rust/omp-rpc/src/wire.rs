@@ -4874,6 +4874,11 @@ pub struct NewSessionParams {
 pub struct OpenSessionParams {
 	#[serde(rename = "sessionDir")]
 	pub session_dir: String,
+	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5109,6 +5114,11 @@ pub struct ExportHtmlResult {
 pub struct SwitchSessionParams {
 	#[serde(rename = "sessionPath")]
 	pub session_path: String,
+	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -5728,6 +5738,11 @@ impl Command for NewSessionCommand {
 pub struct OpenSessionCommand {
 	#[serde(rename = "sessionDir")]
 	pub session_dir: String,
+	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
 }
 
 impl Command for OpenSessionCommand {
@@ -6351,6 +6366,11 @@ impl Command for ExportHtmlCommand {
 pub struct SwitchSessionCommand {
 	#[serde(rename = "sessionPath")]
 	pub session_path: String,
+	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
 }
 
 impl Command for SwitchSessionCommand {

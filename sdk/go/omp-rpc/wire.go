@@ -6935,6 +6935,9 @@ func (c Commands) NewSession(ctx context.Context, p NewSessionCommand) (Cancella
 // OpenSessionCommand holds the parameters of "open_session".
 type OpenSessionCommand struct {
 	SessionDir string `json:"sessionDir"`
+	// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	Provider *string `json:"provider,omitempty"`
+	ModelID  *string `json:"modelId,omitempty"`
 }
 
 // OpenSession sends "open_session": Continue the newest non-empty session in a directory, or start a fresh one there.
@@ -7318,6 +7321,9 @@ func (c Commands) ExportHTML(ctx context.Context, p ExportHTMLCommand) (string, 
 // SwitchSessionCommand holds the parameters of "switch_session".
 type SwitchSessionCommand struct {
 	SessionPath string `json:"sessionPath"`
+	// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
+	Provider *string `json:"provider,omitempty"`
+	ModelID  *string `json:"modelId,omitempty"`
 }
 
 // SwitchSession sends "switch_session": Switch to another session file.

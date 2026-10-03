@@ -122,6 +122,44 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : { left: A; right: 
 // --- Commands -------------------------------------------------------------
 
 type CommandName = RpcCommand["type"];
+
+/**
+ * Fork carve-out: the protocol-v3 command surface (queue/jobs/plan/session/
+ * search/feedback controllers in `rpc-fork-*.ts` plus the `/btw` side
+ * questions) is negotiation-gated and deliberately NOT modeled in the
+ * generated wire schema — clients reach it through raw requests after
+ * `negotiate_protocol {protocolVersion: 3}`. The same holds for fork-only
+ * fields the server accepts or emits on otherwise-stock definitions: the
+ * structured `attachments` parameter on the prompt-like commands, rich-ask
+ * `sensitive`, `approvalMode` on the session state, goal `iteration`, and the
+ * project-mode `ready` stamps. Conformance below pins only the stock surface;
+ * each carve-out shrinks when an upstream PR lands the field on the wire.
+ */
+type ForkCommandName = Exclude<CommandName, keyof Wire.RpcWireCommands>;
+type StockCommandName = Exclude<CommandName, ForkCommandName>;
+
+/** Fork-only parameter fields the server accepts on stock commands. */
+interface ForkParamFields {
+	prompt: "attachments" | "inputMode";
+	steer: "attachments";
+	follow_up: "attachments";
+	abort_and_prompt: "attachments";
+	get_messages_page: "after" | "before" | "order";
+}
+// The Omit only applies where the table names keys: a generic `Omit<T, never>`
+// defers instantiation and breaks the required-key inference below.
+type ServerParamsStock<K extends StockCommandName> = K extends keyof ForkParamFields
+	? Omit<ServerParams<K>, ForkParamFields[K]>
+	: ServerParams<K>;
+
+/** Fork-only result fields the server emits on stock commands. */
+interface ForkResultFields {
+	get_state: "approvalMode";
+}
+type ServerResultStock<K extends StockCommandName> = K extends keyof ForkResultFields
+	? Omit<ServerResult<K>, ForkResultFields[K]>
+	: ServerResult<K>;
+
 type ServerParams<K extends CommandName> = Omit<Extract<RpcCommand, { type: K }>, "id" | "type">;
 type ServerResult<K extends CommandName> =
 	Extract<RpcResponse, { command: K; success: true }> extends infer R
@@ -132,30 +170,33 @@ type ServerResult<K extends CommandName> =
 			: undefined
 		: never;
 
-export type CommandSet = Assert<Same<keyof Wire.RpcWireCommands, CommandName>>;
+export type CommandSet = Assert<Same<keyof Wire.RpcWireCommands, StockCommandName>>;
 export type CommandParams = Assert<
 	AllTrue<{
-		[K in CommandName]: Wire.RpcWireCommands[K]["params"] extends undefined
-			? Same<keyof ServerParams<K>, never>
-			: Inbound<Wire.RpcWireCommands[K]["params"], ServerParams<K>>;
+		[K in StockCommandName]: Wire.RpcWireCommands[K]["params"] extends undefined
+			? Same<keyof ServerParamsStock<K>, never>
+			: Inbound<Wire.RpcWireCommands[K]["params"], ServerParamsStock<K>>;
 	}>
 >;
 export type CommandResults = Assert<
 	AllTrue<{
-		[K in CommandName]: Wire.RpcWireCommands[K]["result"] extends undefined
+		[K in StockCommandName]: Wire.RpcWireCommands[K]["result"] extends undefined
 			? Same<ServerResult<K>, undefined>
 			: [Exclude<Wire.RpcWireCommands[K]["result"], null>] extends [Wire.ModelInfo]
 				? OutboundSubset<
-						Exclude<ServerResult<K>, null | undefined>,
+						Exclude<ServerResultStock<K>, null | undefined>,
 						Exclude<Wire.RpcWireCommands[K]["result"], null>
 					>
-				: Outbound<Exclude<ServerResult<K>, null | undefined>, Exclude<Wire.RpcWireCommands[K]["result"], null>>;
+				: Outbound<
+						Exclude<ServerResultStock<K>, null | undefined>,
+						Exclude<Wire.RpcWireCommands[K]["result"], null>
+					>;
 	}>
 >;
 /** A nullable result is exactly a server result that can be `null`. */
 export type CommandNullability = Assert<
 	AllTrue<{
-		[K in CommandName]: Same<
+		[K in StockCommandName]: Same<
 			null extends ServerResult<K> ? true : false,
 			null extends Wire.RpcWireCommands[K]["result"] ? true : false
 		>;
@@ -180,7 +221,7 @@ export type UiRequestSet = Assert<Same<Wire.ExtensionUiRequest["method"], Server
 export type UiRequests = Assert<
 	AllTrue<{
 		[K in ServerUiMethod]: Outbound<
-			Extract<RpcExtensionUIRequest, { method: K }>,
+			Omit<Extract<RpcExtensionUIRequest, { method: K }>, "sensitive">,
 			Extract<Wire.ExtensionUiRequest, { method: K }>
 		>;
 	}>
@@ -188,7 +229,10 @@ export type UiRequests = Assert<
 
 export type Frames = Assert<
 	AllTrue<{
-		ready: Outbound<RpcReadyFrame, Wire.ReadyEvent>;
+		ready: Outbound<
+			Omit<RpcReadyFrame, "capabilities" | "mode" | "processInstanceId" | "projectIdentity">,
+			Wire.ReadyEvent
+		>;
 		promptResult: Outbound<RpcPromptResultFrame, Wire.PromptResultEvent>;
 		promptError: Outbound<RpcPromptError, Wire.PromptError>;
 		sessionSettled: Outbound<RpcSessionSettledFrame, Wire.SessionSettledEvent>;
@@ -235,7 +279,7 @@ export type InboundSet = Assert<
 
 export type State = Assert<
 	AllTrue<{
-		sessionState: Outbound<RpcSessionState, Wire.SessionState>;
+		sessionState: Outbound<Omit<RpcSessionState, "approvalMode">, Wire.SessionState>;
 		queuedMessages: Outbound<RpcSessionState["queuedMessages"], Wire.QueuedMessagesState>;
 		dumpTool: Outbound<NonNullable<RpcSessionState["dumpTools"]>[number], Wire.ToolDescriptor>;
 		contextUsage: Outbound<ContextUsage, Wire.ContextUsage>;
@@ -243,7 +287,7 @@ export type State = Assert<
 		todoItem: Outbound<TodoItem, Wire.TodoItem>;
 		todoPhaseInbound: Inbound<Wire.TodoPhase, TodoPhase>;
 		todoItemInbound: Inbound<Wire.TodoItem, TodoItem>;
-		goal: Outbound<Goal, Wire.Goal>;
+		goal: Outbound<Omit<Goal, "iteration">, Wire.Goal>;
 		goalModeState: Outbound<GoalModeState, Wire.GoalModeState>;
 		goalResult: Outbound<RpcGoalResult, Wire.GoalResult>;
 		bashResult: Outbound<BashResult, Wire.BashResult>;

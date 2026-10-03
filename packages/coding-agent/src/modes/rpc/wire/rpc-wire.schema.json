@@ -5525,6 +5525,13 @@
 			"properties": {
 				"sessionDir": {
 					"type": "string"
+				},
+				"provider": {
+					"type": "string",
+					"description": "With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request."
+				},
+				"modelId": {
+					"type": "string"
 				}
 			},
 			"required": [
@@ -6036,6 +6043,13 @@
 			"type": "object",
 			"properties": {
 				"sessionPath": {
+					"type": "string"
+				},
+				"provider": {
+					"type": "string",
+					"description": "With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request."
+				},
+				"modelId": {
 					"type": "string"
 				}
 			},
