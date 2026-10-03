@@ -1097,9 +1097,9 @@ describe("update-cli release binary integrity", () => {
 		// A trailing `%` is not a valid URI escape, so decodeURIComponent would
 		// throw URIError; the guard must surface the descriptive error instead.
 		const malformedUrl = `${url}%`;
-		expect(() => resolveReleaseBinaryAsset(releaseAsset({ browser_download_url: malformedUrl }), tag, binaryName)).toThrow(
-			"has an unexpected download URL",
-		);
+		expect(() =>
+			resolveReleaseBinaryAsset(releaseAsset({ browser_download_url: malformedUrl }), tag, binaryName),
+		).toThrow("has an unexpected download URL");
 	});
 
 	it("installs a prerelease asset only when a canary update permits it", () => {
@@ -1447,24 +1447,27 @@ describe("update-cli PATH conflict warning", () => {
 
 	// File symlinks need developer-mode/privilege on Windows; the sibling
 	// platform adaptations gate deterministically instead of failing on EPERM.
-	it.skipIf(process.platform === "win32")("treats a symlink alias resolving to the target as no conflict", async () => {
-		const dir = await makeTempDir();
-		const targetPath = path.join(dir, "bin", "omp");
-		const aliasPath = path.join(dir, "alias", "omp");
-		await fs.mkdir(path.dirname(targetPath), { recursive: true });
-		await fs.mkdir(path.dirname(aliasPath), { recursive: true });
-		await Bun.write(targetPath, "binary");
-		await fs.symlink(targetPath, aliasPath);
+	it.skipIf(process.platform === "win32")(
+		"treats a symlink alias resolving to the target as no conflict",
+		async () => {
+			const dir = await makeTempDir();
+			const targetPath = path.join(dir, "bin", "omp");
+			const aliasPath = path.join(dir, "alias", "omp");
+			await fs.mkdir(path.dirname(targetPath), { recursive: true });
+			await fs.mkdir(path.dirname(aliasPath), { recursive: true });
+			await Bun.write(targetPath, "binary");
+			await fs.symlink(targetPath, aliasPath);
 
-		const logs: string[] = [];
-		vi.spyOn(console, "log").mockImplementation(message => {
-			logs.push(String(message));
-		});
+			const logs: string[] = [];
+			vi.spyOn(console, "log").mockImplementation(message => {
+				logs.push(String(message));
+			});
 
-		warnOnPathConflict(targetPath, aliasPath);
+			warnOnPathConflict(targetPath, aliasPath);
 
-		expect(logs).toEqual([]);
-	});
+			expect(logs).toEqual([]);
+		},
+	);
 
 	it("is silent when no omp is found on PATH", () => {
 		const logs: string[] = [];
