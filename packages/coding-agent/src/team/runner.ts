@@ -28,7 +28,6 @@ import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
 import type { CreateAgentSessionOptions } from "../sdk";
-import type { Model } from "@oh-my-pi/pi-ai";
 import type { TeamRole, TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
 /**
@@ -181,9 +180,4 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 			}
 		}
 	};
-}
-
-/** Helper for callers that only know the session's model object. */
-export function modelPatternOf(model: Model): string {
-	return `${model.provider}/${model.id}`;
 }

@@ -126,6 +126,8 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"steer",
 	"follow_up",
 	"remove_queued_message",
+	"promote_queued_message",
+	"predict_word_feedback",
 	"abort",
 	"abort_and_prompt",
 	"new_session",
@@ -819,7 +821,9 @@ class RpcProjectHost {
 			default: {
 				// Config/manage fork surface (settings, providers, MCP, agent
 				// definitions, usage, stats) answered by the project-level
-				// controllers with zero sessions.
+				// controllers with zero sessions. Gated like every explicit
+				// case above: these are fork v3 business commands.
+				this.#requireV3(id, type);
 				const forkResponse = await this.#configForkHost.handleCommand(command as never);
 				if (forkResponse) return forkResponse;
 				return this.#errorResponse(id, type, `Unknown command: ${type}`);

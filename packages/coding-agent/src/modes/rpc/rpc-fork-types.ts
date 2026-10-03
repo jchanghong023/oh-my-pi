@@ -64,15 +64,6 @@ export type RpcForkCommand =
 			model?: string;
 	  };
 
-/** Base shape shared by fork-extension success responses. */
-export interface RpcForkSuccessResponseBase {
-	id?: string;
-	type: "response";
-	command: string;
-	success: true;
-	data?: unknown;
-}
-
 /** Wire union of fork-extension success responses, appended to `RpcResponse`. */
 export type RpcForkResponse =
 	| {

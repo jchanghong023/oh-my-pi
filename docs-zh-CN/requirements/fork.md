@@ -138,6 +138,28 @@
 * 内建工具（`rg`、`grep` 等）的 stdout 与 stderr 指向普通文件时按块缓冲写出，与 Unix 行为对齐：`rg 模式 > out.txt` 的输出在工具退出前对并发目录遍历不可见，避免遍历器匹配到自己正在增长的输出、把少量命中放大成 GB 级结果；`>f 2>&1` 时 stderr 与 stdout 一致，不再按行即时落盘。判断在 SIGPIPE 保护包装流之前完成（包装后无法再区分文件与管道），也不改变管道/终端下的行缓冲。上游基线不包含该修复（Windows 分支的 `is_regular_file` 仍按变体匹配，看不到 SIGPIPE 包装后的文件），fork 在 `pi-builtins` 的 host 上维护快照判断与 Windows 句柄设备类型探测。
 * 临时目录删除在 Windows 上先强制一次 GC 再重试（Bun 在 GC 阶段才释放 SQLite `db` / `-wal` / `-shm` 的文件与目录句柄），已关闭的数据库不会把删除阻塞数秒。上游 18.5.0 已从源头修复 SQLite 句柄（corrupt handle 追踪、错误路径转义），该重试仍作为兜底保留。
 
+### 上游缺陷散点修复
+
+以下改动是随日常开发沉淀的上游缺陷修复与仓库开发环境配置，不属于个人功能或默认值，但相对上游基线仍有效、对使用者有影响，在此统一记录。每次上游同步后核对：上游已包含等价修复（进入基线）时删除对应条目——保留条目只会制造假差异（同「预采纳的上游 PR」的核对方式）。
+
+* `packages/agent/src/agent-loop.ts`：工具 schema 自带 `i` 属性时按普通参数处理，不再当 harness intent 注入、剥离或按 intent 长度拒收。
+* `packages/ai/src/providers/cursor.ts`：流式 `web-fetch` 块补配对 toolResult，重建 transcript 时不被整体剥离。
+* `packages/coding-agent/src/commit/changelog/index.ts`：changelog 追加段与下一 `## ` 头之间补空行，修复每次更新吞一行空行。
+* `packages/coding-agent/src/ida/worker.py`：`pthread_sigmask` 仅 POSIX，Windows 分支跳过。
+* `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
+* `packages/coding-agent/src/markit/converters/xlsx.ts`：xlsx→markdown 单元格转义换行、`\`、`|`，防破坏表格结构。
+* `packages/coding-agent/src/mcp/oauth-discovery.ts`：发现递归深度上限（深度 ≥3 不再递归）；RFC 合法发现至多一跳，更深即是环或错配，不得无限递归。
+* `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
+* `packages/coding-agent/src/skillshare/pack.ts`：Windows 打包时 `scripts/` 下带 shebang 的文件强制 `executable`，POSIX 安装后可直接执行。
+* `packages/coding-agent/src/web/scrapers/github.ts`：issue 作者/评论者 `user:null`（已注销账号）回退显示 `ghost`。
+* `packages/coding-agent/src/cli/git-tui/state.ts`：SVG 探测正则的 `\s` 转义修复。
+* `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
+* `packages/utils/src/ar/open.ts`：归档解压 symlink 在 Windows EPERM 时降级为 junction 或文件复制。
+* `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫。
+* `crates/pi-builtins/src/tail.rs`：文件大小恰为块大小整数倍时末块大小为 0 的修复。
+* `crates/pi-natives/src/desktop/linux/wayland/capture.rs`：PipeWire 流进入 error 态时触发 `state_changed`，error 流不再使捕获主循环永久阻塞。
+* `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
+
 ### 默认设置
 
 保持以下 fork 默认值：

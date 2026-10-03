@@ -9,7 +9,6 @@
  * queued. `queue_updated` carries counts only; clients re-pull for contents.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
 import { toRestoredQueuedMessage } from "../../session/queued-messages";
 import type { RpcForkHost } from "./rpc-fork-host";
@@ -157,9 +156,4 @@ export class RpcForkQueueController {
 			this.session.agent.replaceQueues([...this.session.agent.peekSteeringQueue()], [...messages]);
 		}
 	}
-}
-
-/** Structural guard so bypass-frame consumers can recognize the event. */
-export function isRpcForkQueueUpdatedFrame(value: unknown): value is RpcForkQueueUpdatedFrame {
-	return isRecord(value) && value.type === "queue_updated";
 }

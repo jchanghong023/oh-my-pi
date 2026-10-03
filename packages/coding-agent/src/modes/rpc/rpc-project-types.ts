@@ -11,9 +11,6 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { FileEntry } from "../../session/session-entries";
-import type { RpcResponse } from "./rpc-types";
-import type { RpcForkSettingsEntry } from "./rpc-fork-config";
-import type { RpcForkModelTestResult } from "./rpc-fork-types";
 
 /** Stable identity of the single OMP process backing one project connection. */
 export interface RpcProjectIdentity {
@@ -535,47 +532,6 @@ export type RpcProjectCommand =
 	| RpcProjectGetSubagentsCommand
 	| RpcProjectGetSubagentMessagesCommand
 	| RpcProjectControlSubagentCommand;
-
-export type RpcProjectCommandType = RpcProjectCommand["type"];
-
-export type RpcProjectResponseData =
-	| { readonly command: "create_session"; readonly data: RpcProjectSessionSummary }
-	| { readonly command: "list_sessions"; readonly data: RpcProjectPage<RpcProjectSessionSummary> }
-	| { readonly command: "resume_session"; readonly data: RpcProjectSessionSummary }
-	| {
-			readonly command: "close_session";
-			readonly data: {
-				readonly sessionId: string;
-				readonly state: "unloaded" | "closing";
-				readonly revision: RpcRevision;
-			};
-	  }
-	| { readonly command: "rename_session"; readonly data: RpcProjectSessionSummary }
-	| {
-			readonly command: "delete_session";
-			readonly data: { readonly sessionId: string; readonly deleted: true; readonly revision: RpcRevision };
-	  }
-	| { readonly command: "get_model_roles"; readonly data: RpcProjectModelRolesResult }
-	| { readonly command: "set_model_role"; readonly data: RpcProjectSetModelRoleResult }
-	| { readonly command: "get_available_commands"; readonly data: RpcProjectAvailableCommandsResult }
-	| { readonly command: "complete_command"; readonly data: RpcProjectCompletionResult }
-	| { readonly command: "execute_command"; readonly data: RpcProjectExecuteCommandResult }
-	| { readonly command: "list_skills"; readonly data: RpcProjectListSkillsResult }
-	| { readonly command: "set_skill_enabled"; readonly data: RpcProjectSetSkillEnabledResult }
-	| { readonly command: "copy_skill"; readonly data: RpcProjectCopySkillResult }
-	| { readonly command: "delete_skill"; readonly data: RpcProjectDeleteSkillResult }
-	| { readonly command: "reload_skills"; readonly data: RpcProjectReloadSkillsResult }
-	| { readonly command: "get_subagents"; readonly data: RpcProjectGetSubagentsResult }
-	| { readonly command: "get_subagent_messages"; readonly data: RpcProjectSubagentMessagesResult }
-	| { readonly command: "control_subagent"; readonly data: RpcProjectControlSubagentResult }
-	| {
-			readonly command: "get_settings";
-			readonly data: { readonly scope: "user" | "project"; readonly entries: RpcForkSettingsEntry[] };
-	  }
-	| { readonly command: "test_model"; readonly data: RpcForkModelTestResult };
-
-/** Minimal structural supertype of the stock `RpcResponse` for host helpers. */
-export type RpcAnyResponse = RpcResponse;
 
 // ---------------------------------------------------------------------------
 // Event frames (server → client), project mode stamps included
