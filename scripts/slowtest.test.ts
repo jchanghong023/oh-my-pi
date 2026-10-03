@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { conclusionExitCode, parseSlowtestArgs, pickTriggeredRun, type GhRunSummary } from "./slowtest.ts";
+import {
+	conclusionExitCode,
+	parseSlowtestArgs,
+	pickTriggeredRun,
+	workflowDispatchArgv,
+	type GhRunSummary,
+} from "./slowtest.ts";
 
 const TRIGGERED_AT = Date.parse("2026-09-18T10:00:00Z");
 
@@ -39,6 +45,12 @@ describe("pickTriggeredRun", () => {
 
 	test("returns undefined when nothing matches", () => {
 		expect(pickTriggeredRun([], "a".repeat(40), TRIGGERED_AT)).toBeUndefined();
+	});
+});
+
+describe("workflowDispatchArgv", () => {
+	test("dispatches the release flavor of the CI workflow", () => {
+		expect(workflowDispatchArgv()).toEqual(["gh", "workflow", "run", "ci.yml", "-f", "publish_release=true"]);
 	});
 });
 

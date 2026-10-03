@@ -2,10 +2,11 @@
 // Fork pipeline gate: run `bun run fulltest`, verify the same tree on the
 // ubuntu-24.04 WSL2 distro via slowtest-wsl-stage.ts (Windows-only; skipped
 // elsewhere), push local `main` to origin, trigger the repository's GitHub
-// Actions CI (manual `workflow_dispatch`, no release), then poll the triggered
-// run until it completes and report the conclusion plus the failure-log entry
-// point. Only run on explicit user request — this command pushes and consumes
-// CI (AGENTS.md「验证」).
+// Actions CI (manual `workflow_dispatch` with `publish_release=true`: a green
+// run publishes the fork Release instead of only building artifacts), then
+// poll the triggered run until it completes and report the conclusion plus
+// the failure-log entry point. Only run on explicit user request — this
+// command pushes and consumes CI (AGENTS.md「验证」).
 
 import * as path from "node:path";
 
@@ -62,6 +63,12 @@ export function pickTriggeredRun(
 
 export function conclusionExitCode(conclusion: string | null): number {
 	return conclusion === "success" ? 0 : 1;
+}
+
+/** The CI stage always dispatches the release flavor: a green run creates the
+ * fork Release (+fork.N tag) rather than only building download artifacts. */
+export function workflowDispatchArgv(): string[] {
+	return ["gh", "workflow", "run", WORKFLOW_FILE, "-f", "publish_release=true"];
 }
 
 function fail(message: string): never {
@@ -130,10 +137,12 @@ async function main(debug: boolean): Promise<number> {
 	logStageDone("push", pushStartedAt);
 
 	if (Bun.which("gh") === null) fail("the GitHub CLI ('gh') is required to trigger and monitor the CI run");
-	console.log(`\nslowtest: triggering ${WORKFLOW_FILE} (workflow_dispatch, no release) for ${headSha.slice(0, 12)}`);
+	console.log(
+		`\nslowtest: triggering ${WORKFLOW_FILE} (workflow_dispatch, publish_release=true) for ${headSha.slice(0, 12)}`,
+	);
 	const triggeredAtMs = Date.now();
 	const triggerStartedAt = performance.now();
-	if ((await runInherit(["gh", "workflow", "run", WORKFLOW_FILE])) !== 0) {
+	if ((await runInherit(workflowDispatchArgv())) !== 0) {
 		fail(`gh workflow run ${WORKFLOW_FILE} failed (check 'gh auth status')`);
 	}
 
