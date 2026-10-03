@@ -1870,7 +1870,6 @@ mod tests {
 		crate::git::test_support::hermetic_git_config_once();
 		let temp = tempfile::tempdir().expect("tempdir");
 		git(temp.path(), &["init", "-q"]);
-		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Patch Test"]);
 		git(temp.path(), &["config", "user.email", "patch@example.com"]);
 		// Assertions compare exact worktree bytes and stat-sensitive status;

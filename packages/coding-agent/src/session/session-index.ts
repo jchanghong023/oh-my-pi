@@ -59,9 +59,7 @@ function closeHandle(): void {
 		handle.upsertTitle.finalize();
 		handle.selectTitle.finalize();
 		handle.insertRecap.finalize();
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		handle.db.close(true);
+		handle.db.close();
 	} catch {}
 	handle = undefined;
 }

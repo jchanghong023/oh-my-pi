@@ -500,17 +500,7 @@ impl Host {
 			.get_or_init(|| self.stdout_handle.as_ref().and_then(output_metadata))
 			.as_ref()
 			.is_some_and(|stdout| {
-				if !stdout.is_file() {
-					return false;
-				}
-				// Windows path stats do not carry a file index, so compare an
-				// open handle there. On Unix, stat is sufficient and avoids
-				// blocking while probing a FIFO or other non-regular path.
-				#[cfg(windows)]
-				let candidate = self.fs().open(path).and_then(|file| file.metadata());
-				#[cfg(not(windows))]
-				let candidate = self.fs().metadata(path);
-				candidate.is_ok_and(|candidate| stdout.same_file(&candidate))
+				stdout.is_file() && self.fs().metadata(path).is_ok_and(|candidate| stdout.same_file(&candidate))
 			})
 	}
 
@@ -2146,10 +2136,12 @@ mod testing {
 		#[cfg(windows)]
 		#[test]
 		fn pipe_wrapped_as_file_gets_line_buffering() {
+			use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+
 			let (reader, writer) = os_pipe::pipe().unwrap();
 			// SAFETY: `into_raw_handle` hands over sole ownership of the
 			// write end, making the `File` its only owner.
-			let file = unsafe { std::os::windows::io::FromRawHandle::from_raw_handle(writer.into_raw_handle()) };
+			let file = unsafe { std::fs::File::from_raw_handle(writer.into_raw_handle()) };
 			assert!(matches!(StreamWriter::new(OpenFile::File(file)), StreamWriter::Line(_)));
 			drop(reader);
 		}

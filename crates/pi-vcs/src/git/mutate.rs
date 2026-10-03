@@ -1917,7 +1917,6 @@ mod tests {
 		crate::git::test_support::hermetic_git_config_once();
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
-		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
 		// gix reads the developer's `~/.gitconfig`, where a global
@@ -2139,8 +2138,6 @@ mod tests {
 	fn stage_keeps_distinct_nfc_and_nfd_when_precompose_is_off() {
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
-		// Byte-exact patches: neutralize a host-wide `core.autocrlf=true`.
-		git(temp.path(), &["config", "core.autocrlf", "false"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
 		git(temp.path(), &["config", "core.precomposeunicode", "false"]);

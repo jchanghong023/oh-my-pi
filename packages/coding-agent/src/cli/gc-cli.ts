@@ -1035,9 +1035,7 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 		tx(sessionIds);
 		return { deleted, ftsRebuilt: deleted > 0 && hasFts };
 	} finally {
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		db.close(true);
+		db.close();
 	}
 }
 
@@ -1266,9 +1264,7 @@ function buildStatsCleanupPlans(
 			if (match) match.node.statsPaths.add(match.logicalRoot);
 		}
 	} finally {
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		db.close(true);
+		db.close();
 	}
 
 	for (const child of nodes) {
@@ -1572,9 +1568,7 @@ function reconcileStatsRowsForSessions(dbPath: string, plans: StatsCleanupPlan[]
 		tx(plans);
 		return deleted;
 	} finally {
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		db.close(true);
+		db.close();
 	}
 }
 
@@ -1778,9 +1772,7 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 		result.log = sqliteNumber(row?.log);
 		result.checkpointedFrames = sqliteNumber(row?.checkpointed);
 	} finally {
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		db.close(true);
+		db.close();
 	}
 	try {
 		result.walBytes = (await fs.stat(walPath)).size;

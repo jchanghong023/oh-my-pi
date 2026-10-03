@@ -423,7 +423,7 @@ export function invalidateAllForRepo(repo?: string): void {
 export function resetForTests(): void {
 	if (cachedDb) {
 		try {
-			cachedDb.close(true);
+			cachedDb.close();
 		} catch {
 			// Closing failures are non-fatal.
 		}

@@ -5007,22 +5007,15 @@ mod tests {
 			.expect("find");
 		let found = read("find.txt");
 		assert!(!found.trim().is_empty(), "find produced no output");
-		// Fork: the operand prefix is `.`; upstream assumes the platform
-		// separator follows, but the built-in find prints `./` on Windows too,
-		// so accept either separator.
 		for line in found.lines() {
 			assert!(
-				line.starts_with("./") || line.starts_with(".\\"),
+				line.starts_with("./"),
 				"find path is not operand-relative: {line:?} (full: {found:?})"
 			);
 		}
 		assert!(
-			found.contains("./data.txt") || found.contains(".\\data.txt"),
-			"find missed data.txt: {found:?}"
-		);
-		assert!(
-			found.contains("./sub/nested.txt") || found.contains(".\\sub\\nested.txt"),
-			"find missed nested file: {found:?}"
+			found.contains("./data.txt") && found.contains("./sub/nested.txt"),
+			"find output: {found:?}"
 		);
 		// cat: concatenate a cwd-resolved file with -n line numbering.
 		session
@@ -5159,11 +5152,7 @@ mod tests {
 		assert_eq!(exit_code(&exec), 0, "fd should match visible files");
 		let out = read("fd.txt");
 		assert!(out.contains("needle.txt"), "fd missed visible file: {out:?}");
-		// Nested paths print with the platform separator, like fd itself.
-		assert!(
-			out.contains("sub/needle.rs") || out.contains("sub\\needle.rs"),
-			"fd missed nested file: {out:?}"
-		);
+		assert!(out.contains("sub/needle.rs"), "fd missed nested file: {out:?}");
 		assert!(!out.contains(".hidden-needle.txt"), "fd searched hidden file: {out:?}");
 		assert!(!out.contains("ignored-needle.log"), "fd ignored .gitignore: {out:?}");
 		assert!(!out.contains("fdignored-needle.tmp"), "fd ignored .fdignore: {out:?}");
@@ -5271,20 +5260,12 @@ mod tests {
 		let si = SourceInfo::from("pi-natives:test");
 		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
 
-		// Fork: upstream expects the redirect target to be excluded via
-		// `path_is_stdout`, but on Windows that comparison has no identity to
-		// match on (`Metadata::from` carries no file id there), so the seeded
-		// output file self-matches. Unix keeps the full contract; Windows
-		// verifies the stdin/cwd decision through the remaining commands.
-		#[cfg(unix)]
-		{
-			session
-				.shell
-				.run_string("rg --sort path --max-count 1 from-cwd >> z-output.txt", &si, &params)
-				.await
-				.expect("rg cwd");
-			assert_eq!(read("z-output.txt"), "from-cwd\ndata.txt:from-cwd\n");
-		}
+		session
+			.shell
+			.run_string("rg --sort path --max-count 1 from-cwd >> z-output.txt", &si, &params)
+			.await
+			.expect("rg cwd");
+		assert_eq!(read("z-output.txt"), "from-cwd\ndata.txt:from-cwd\n");
 
 		session
 			.shell

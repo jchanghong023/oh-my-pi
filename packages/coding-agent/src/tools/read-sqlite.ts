@@ -212,8 +212,6 @@ export async function readSqlite(
 		}
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	} finally {
-		// Force-close: plain close() leaves the handle open on Windows while
-		// any prepared statement is still alive.
-		db?.close(true);
+		db?.close();
 	}
 }
