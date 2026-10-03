@@ -721,26 +721,7 @@ def _run_rpc_blocking(
                         # Follow-up: keep prior phases (e.g. Reproduce / Fix / PR)
                         # so the agent still sees the context, but append the
                         # follow-up phase at the end.
-                        existing = list(client.get_todos())
-                        merged = [
-                            {
-                                "id": p.id,
-                                "name": p.name,
-                                "tasks": [
-                                    {
-                                        "id": t.id,
-                                        "content": t.content,
-                                        "status": t.status,
-                                        "notes": t.notes,
-                                        "details": t.details,
-                                        "blocker": t.blocker,
-                                    }
-                                    for t in p.tasks
-                                ],
-                            }
-                            for p in existing
-                        ] + phases
-                        client.set_todos(merged)
+                        client.set_todos([*client.get_todos(), *phases])
                 except RpcError as exc:
                     log.warning("set_todos failed", extra={"err": str(exc)})
 

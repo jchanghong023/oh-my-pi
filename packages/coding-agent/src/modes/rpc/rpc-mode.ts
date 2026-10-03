@@ -27,6 +27,7 @@ import { isRpcHostUriResult } from "./host-uris";
 import { RPC_SUPPORTED_PROTOCOL_VERSIONS } from "./rpc-fork-types";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
+import type { RpcLiveSessionFactory } from "./rpc-live";
 import { RpcOutputWriter } from "./rpc-output";
 import {
 	type PendingExtensionRequest,
@@ -145,7 +146,12 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
  * the serial tail.)
  * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
-const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "predict_word", "btw_cancel"]);
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
+	"bash",
+	"predict_word",
+	"btw_cancel",
+	"live_start",
+]);
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.
@@ -161,13 +167,14 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["b
  * while a shell command runs, or `abort` (and `steer`/`follow_up`/`get_state`)
  * while a `prompt` or `steer_subagent` is still admitting. `predict_word` is
  * backgrounded too, so a cold prediction engine never stalls the command queue
- * behind a keystroke.
+ * behind a keystroke. `live_start` responds only once the realtime session is
+ * connected and recording, so it is backgrounded and `live_stop` can cancel it.
  * Response correlation is preserved via each command's `id`; ordering across
  * concurrent commands is not guaranteed and clients MUST match on `id`.
  *
  * @returns `undefined` when the frame was routed to a side-channel handler
  *   (extension UI response, host tool/URI frames) or dispatched in the
- *   background (`bash`, `predict_word`, `prompt`, `steer_subagent`). Otherwise a promise that
+ *   background (`bash`, `predict_word`, `live_start`, `prompt`, `steer_subagent`). Otherwise a promise that
  *   resolves once the response for the command has been emitted via `output`.
  *   Errors from `handleCommand` on a command dispatched inline propagate; the
  *   caller is expected to wrap them.
@@ -295,6 +302,8 @@ export interface RpcModeOptions {
 	headless?: boolean;
 	subagentEventBus?: EventBus;
 	input?: ReadableStream<Uint8Array>;
+	/** Builds `live_start` sessions; defaults to the real {@link RpcLiveBridge} controller. */
+	createLiveSession?: RpcLiveSessionFactory;
 }
 
 /**
@@ -302,7 +311,7 @@ export interface RpcModeOptions {
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
-	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput() } = options;
+	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), createLiveSession } = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -351,6 +360,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		headless,
 		setToolUIContext,
 		inputGate,
+		createLiveSession,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
 	});
 	await host.initializeExtensions();
@@ -366,6 +376,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 */
 	const disposeAndExit = async (): Promise<never> => {
 		try {
+			// Close the realtime call (microphone, socket) before the session it delegates into.
+			await host.stopLive();
 			await session.dispose();
 		} catch (error) {
 			const persistenceFailure = host.persistenceFailure;

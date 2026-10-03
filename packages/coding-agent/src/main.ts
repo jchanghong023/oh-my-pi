@@ -9,6 +9,7 @@ import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -2068,6 +2069,15 @@ export async function runRootCommand(
 			if (isInteractive) notifs.push({ kind: "warn", message: warning });
 			else process.stderr.write(`${warning}\n`);
 		}
+		// Credential-scoped catalogs (e.g. GitHub Copilot) load from their cache
+		// rows only after credentials resolve. `--model` and `enabledModels` below
+		// resolve against the registry before `createAgentSession` hydrates it, so
+		// without this a cached-only model is absent and its selector fuzzy-matches
+		// a bundled sibling (issue #14075). Local-only and never rejects; awaited
+		// right before the first catalog read so its I/O overlaps theme setup.
+		const credentialScopedCacheHydration = logger.time("hydrateCredentialScopedModelCaches", () =>
+			modelRegistry.hydrateCredentialScopedModelCaches(),
+		);
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
 		}
@@ -2144,6 +2154,7 @@ export async function runRootCommand(
 			},
 		});
 
+		await credentialScopedCacheHydration;
 		let scopedModels = await logger.time(
 			"resolveModelScope",
 			resolveScopedModels,
@@ -2391,7 +2402,12 @@ export async function runRootCommand(
 			cfgTelemetryOtlpExportEnabled.get(settingsInstance),
 		);
 		if (isTelemetryExportEnabled()) {
-			sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry);
+			// Chat telemetry reports each request's provider-computed cost. A model
+			// without a known rate card reports an unavailable reason instead of $0.
+			sessionOptions.telemetry = createTelemetryExportConfig(sessionOptions.telemetry, (providerId, modelId) => {
+				const model = modelRegistry.find(providerId, modelId);
+				return model !== undefined && getModelPricingStatus(model) !== "unknown";
+			});
 		}
 		await daemonPresencePromise;
 

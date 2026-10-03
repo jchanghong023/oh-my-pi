@@ -166,6 +166,9 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"btw",
 	"btw_cancel",
 	"get_btw_history",
+	"live_start",
+	"live_stop",
+	"live_mute",
 	"handoff",
 	"get_messages",
 	"get_messages_page",
@@ -1080,7 +1083,9 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	// `bash` runs for a long time, a `prompt`/`steer`/`follow_up`/`steer_subagent`
 	// holds its response until admission, and a `btw` awaits the whole side
 	// answer. Backgrounding lets an `abort` (or get_state, or `btw_cancel`)
-	// reach the session while such a command is still settling.
+	// reach the session while such a command is still settling. `live_start`
+	// responds only once the realtime session is connected and recording, so it
+	// is backgrounded and `live_stop` can cancel it.
 	const projectBackgroundedTypes = new Set([
 		"bash",
 		"predict_word",
@@ -1089,6 +1094,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		"follow_up",
 		"steer_subagent",
 		"btw_cancel",
+		"live_start",
 	]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");

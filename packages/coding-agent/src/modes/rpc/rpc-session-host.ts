@@ -78,6 +78,7 @@ import { RpcForkHost } from "./rpc-fork-host";
 import { isNegotiableRpcProtocolVersion, RPC_FORK_PROTOCOL_VERSION } from "./rpc-fork-types";
 import { RpcGoalController } from "./rpc-goal";
 import { RpcBtwController } from "./rpc-btw";
+import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { pageRpcMessages, RpcMessagesPageError } from "./rpc-messages";
 import {
 	RpcExtensionUserMessageTracker,
@@ -1245,6 +1246,8 @@ export interface RpcSessionHostOptions {
 	 * invalidation — single-session tests use this).
 	 */
 	readonly inputGate?: RpcUserInputGate;
+	/** Builds `live_start` sessions; defaults to the real {@link RpcLiveBridge} controller. */
+	readonly createLiveSession?: RpcLiveSessionFactory;
 }
 
 /** Run state as observed by the hosting process (project mode aggregation). */
@@ -1343,6 +1346,8 @@ export class RpcSessionHost {
 	readonly #goalTurnScheduled: () => boolean;
 	/** Side questions (/btw): ephemeral turns beside the transcript, with their history store. */
 	readonly #btw: RpcBtwController;
+	/** Live voice sessions (`live_start`/`live_stop`/`live_mute`), at most one per host. */
+	readonly #live: RpcLiveBridge;
 	readonly #forkAskBroker: RpcForkAskBroker;
 	readonly #forkPlanController: RpcForkPlanController;
 	readonly #forkHookTelemetry: RpcForkHookTelemetry;
@@ -1375,6 +1380,8 @@ export class RpcSessionHost {
 		this.#sessionEvents = new RpcSessionEventForwarder(this.#output);
 		this.#settleWatcher = new RpcSessionSettleWatcher(this.session, this.#output, this.#goalTurnScheduled);
 		this.#btw = new RpcBtwController(this.session, this.#output);
+		// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
+		this.#live = new RpcLiveBridge(this.session, this.#output, this.#options.createLiveSession);
 
 		// Fork-extension (protocol v3) surface: negotiation-gated dispatch point.
 		// Inactive until `negotiate_protocol {protocolVersion:3}` succeeds; inactive
@@ -1870,6 +1877,31 @@ export class RpcSessionHost {
 				const rpcTools = this.hostToolBridge.setTools(tools);
 				await session.refreshRpcHostTools(rpcTools);
 				return this.success(id, "set_host_tools", { toolNames: tools.map(tool => tool.name) });
+			}
+
+			case "live_start": {
+				try {
+					return this.success(
+						id,
+						"live_start",
+						await this.#live.start({ voice: command.voice, instructions: command.instructions }),
+					);
+				} catch (err) {
+					return this.error(id, "live_start", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "live_stop": {
+				await this.#live.stop();
+				return this.success(id, "live_stop");
+			}
+
+			case "live_mute": {
+				try {
+					return this.success(id, "live_mute", this.#live.setMuted(command.muted));
+				} catch (err) {
+					return this.error(id, "live_mute", err instanceof Error ? err.message : String(err));
+				}
 			}
 
 			case "set_host_uri_schemes": {
@@ -2404,6 +2436,10 @@ export class RpcSessionHost {
 		}
 		// Per-surface fail-closed messages, derived from the single reason so the
 		// wire-visible error text matches the legacy single-session mode exactly.
+		// Close the realtime call (microphone, socket) before anything else may
+		// settle; `stopLive` below re-checks it idempotently for the exit paths
+		// that never run through this dispose.
+		await this.#live.stop();
 		this.forkHost.dispose(`${reason} before fork request completed`);
 		this.pendingExtensionRequests.rejectAll(`${reason} before extension UI response completed`);
 		if (!this.#options.sharedBridges) {
@@ -2440,6 +2476,15 @@ export class RpcSessionHost {
 			return true;
 		}
 		return this.forkHost.handleControlFrame(parsed);
+	}
+
+	/**
+	 * Stops the live voice session (microphone, socket) — the realtime call
+	 * delegates into the AgentSession, so it must close before the session
+	 * disposes. Idempotent: every exit path may call it after `dispose`.
+	 */
+	stopLive(): Promise<void> {
+		return this.#live.stop();
 	}
 
 	#onPromptError(id: string | undefined, command: string): (promptError: Error) => void {
