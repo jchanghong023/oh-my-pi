@@ -18,6 +18,10 @@
 * `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：中文文档站，含 fork 新增文档与 `fork.md`。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
+子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
+
+* `python/robomp/AGENTS.md`：robomp 子树（GitHub triage/fix bot）的开发规则与命令参考，上游自带并随上游维护，fork 不修改。
+
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
