@@ -167,7 +167,7 @@
 * `composer.shape=pi`
 * `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 * `display.showTurnTime=true`
-* `task.maxConcurrency=8`
+* `task.maxConcurrency=20`
 * `mnemopi.embeddingVariant=multilingual`
 * `stt.language=zh-CN`（区域标签归一化为基语言，如 `zh-CN`→`zh`；仅对 whisper tier 生效，默认 tier parakeet/sherpa 不使用语言参数）
 * `collab.webUrl=https://jchanghong023.github.io/oh-my-pi/collab/`（fork 网页端，随文档站发布；置空回退上游按 relay 推导的行为）
