@@ -89,6 +89,9 @@ export function runBtwTurn(
 		promptText: prompt.render(btwUserPrompt, { question: args.question }),
 		history,
 		conversationKey: args.conversationKey,
+		// /btw answers are read in full and saved to history: keep the
+		// repeated-line collapse, but not the 4 KiB cap meant for one-liners.
+		replyMaxBytes: Number.POSITIVE_INFINITY,
 		onTextDelta: args.onTextDelta,
 		signal: args.signal,
 	});

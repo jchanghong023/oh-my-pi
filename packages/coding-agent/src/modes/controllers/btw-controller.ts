@@ -602,9 +602,6 @@ export class BtwController {
 				question: request.question,
 				history: request.history,
 				conversationKey: request.conversationKey,
-				// /btw answers are read in full and saved to history: keep the
-				// repeated-line collapse, but not the 4 KiB cap meant for one-liners.
-				replyMaxBytes: Number.POSITIVE_INFINITY,
 				onTextDelta: delta => {
 					const latest = getBtwLatestTurn(request.record);
 					if (latest.status !== "running") return;
