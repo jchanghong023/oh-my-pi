@@ -318,6 +318,7 @@ import type {
 	InteractiveModeInitOptions,
 	InteractiveSelectorDialogOptions,
 	RenderSessionContextOptions,
+	ShowStatusOptions,
 	SubmittedUserInput,
 } from "./types";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -2005,7 +2006,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			connectedServers: this.#orderedMcpStatusServers(this.#mcpConnectedServers),
 			failedServers: this.#orderedMcpStatusFailures(),
 		});
-		if (message) this.showStatus(message);
+		// Progress of every server connecting or failing: a toast per change
+		// is noise on a native terminal (Tern), so it stays in the ANSI transcript.
+		if (message) this.showStatus(message, { toast: false });
 	}
 
 	#trackMcpStatusServer(serverName: string): void {
@@ -7182,7 +7185,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController.clearCommandReport();
 	}
 
-	showStatus(message: string, options?: { dim?: boolean }): void {
+	showStatus(message: string, options?: ShowStatusOptions): void {
 		this.#uiHelpers.showStatus(message, options);
 	}
 
