@@ -47,6 +47,10 @@ function createCwdContext(sourceDir: string, isStreaming = false, showImages = t
 		session: {
 			isStreaming,
 			executeBash,
+			// fork: session-move failures are reported through AgentSession.emitNotice
+			// instead of ctx.showError, so the stub must provide it like the real
+			// InteractiveModeContext session does.
+			emitNotice: vi.fn(),
 			moveSession: vi.fn(async (cwd: string) => {
 				state.cwd = cwd;
 				state.artifactCwd = cwd;
@@ -332,7 +336,9 @@ describe("bash shortcut command", () => {
 			expect(state.workspaceCwd).toBe(sourceDir);
 			expect(state.artifactCwd).toBe(sourceDir);
 			expect(state.completedBtwVisible).toBe(true);
-			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("refresh failed"));
+			// fork: the refresh failure surfaces as a session notice ("Failed to
+			// switch workspace: ..."), not through ctx.showError.
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("refresh failed"));
 			expect(ctx.shutdown).not.toHaveBeenCalled();
 			await controller.handleBashCommand("pwd");
 			expect(state.executedCwds).toEqual([sourceDir]);
@@ -368,7 +374,8 @@ describe("bash shortcut command", () => {
 		expect(ctx.withBtwSessionMove).not.toHaveBeenCalled();
 		expect(state.cwd).toBe("/tmp");
 		expect(state.completedBtwVisible).toBe(true);
-		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("settings write denied"));
+		// fork: settings-save failures surface as a session notice, not ctx.showError.
+		expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("settings write denied"));
 	});
 
 	it("leaves compound cd commands outside persistent cwd migration", async () => {
@@ -519,7 +526,12 @@ describe("bash shortcut command", () => {
 			expect(state.workspaceCwd).toBe(sourceDir);
 			expect(state.completedBtwVisible).toBe(true);
 			expect(ctx.applyCwdChange).not.toHaveBeenCalled();
-			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("session transition rejected"));
+			// fork: move failures surface as a session notice ("Move failed: ..."),
+			// not through ctx.showError.
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith(
+				"error",
+				expect.stringContaining("session transition rejected"),
+			);
 			const component = present.mock.calls[0]?.[0];
 			if (!(component instanceof BashExecutionComponent)) throw new Error("Expected shell output");
 			expect(component.getOutput()).toContain("cd output");

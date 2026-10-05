@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-ai";
+import { providerEntries } from "@oh-my-pi/pi-catalog/compat/providers";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	acquireModelRoleMutation,
@@ -33,6 +34,43 @@ function bundled(selector: string) {
 	const model = getBundledModel("anthropic", id!);
 	if (!model) throw new Error(`missing bundled model ${selector}`);
 	return model;
+}
+
+/**
+ * Every env var that makes a provider credential-bearing for availability
+ * (`keys.source(provider)` → `{ kind: "env" }`). The catalog `envVars` cover
+ * all plain provider key variables (single- and multi-var pickers); the
+ * supplement covers the computed registry resolvers the catalog does not
+ * model (Anthropic foundry/oauth pick, Vertex key, the AWS IAM chain).
+ */
+const PROVIDER_CREDENTIAL_ENV_VARS = new Set([
+	...Object.values(providerEntries()).flatMap(entry => entry.envVars ?? []),
+	"ANTHROPIC_FOUNDRY_API_KEY",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"GOOGLE_CLOUD_API_KEY",
+	"AWS_ACCESS_KEY_ID",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SESSION_TOKEN",
+]);
+
+/**
+ * Temporarily remove host-exported provider credentials so a no-auth
+ * AuthStorage really sees no authed model even on machines that export real
+ * keys (e.g. `DEEPSEEK_API_KEY`). Returns a restore function; callers MUST
+ * invoke it in a `finally`.
+ */
+function withoutHostProviderCredentials(): () => void {
+	const saved: { key: string; value: string | undefined }[] = [];
+	for (const key of PROVIDER_CREDENTIAL_ENV_VARS) {
+		saved.push({ key, value: process.env[key] });
+		delete process.env[key];
+	}
+	return () => {
+		for (const { key, value } of saved) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	};
 }
 
 describe("model presets", () => {
@@ -319,6 +357,7 @@ describe("model presets", () => {
 	});
 
 	it("refuses a preset with no default and no authed model before writing", async () => {
+		const restoreEnv = withoutHostProviderCredentials();
 		const dir = TempDir.createSync("@pi-model-presets-noauth-");
 		tempDirs.push(dir);
 		const noAuth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
@@ -327,7 +366,9 @@ describe("model presets", () => {
 		// available without any credentials, so the "no authed model" precondition
 		// never holds and the empty preset is applied instead of refused. Disable
 		// it to restore the upstream precondition (upstream rewrites of this file
-		// lose this — reapply after syncs).
+		// lose this — reapply after syncs). Host-exported provider keys (e.g.
+		// DEEPSEEK_API_KEY) break the same precondition and are cleared for this
+		// test's duration — reapply that isolation too after syncs.
 		cfgDisabledProviders.set(settings, ["zcode-api"]);
 		const registry = new ModelRegistry(noAuth, path.join(dir.path(), "models.yml"), { settings });
 		try {
@@ -355,6 +396,7 @@ describe("model presets", () => {
 			expect(result.kind).toBe("unavailable");
 			expect(settings.getModelRole("default")).toBe(SONNET);
 		} finally {
+			restoreEnv();
 			noAuth.close();
 		}
 	});

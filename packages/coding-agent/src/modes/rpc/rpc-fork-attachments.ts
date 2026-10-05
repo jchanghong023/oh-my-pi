@@ -116,6 +116,22 @@ async function readAttachmentBytes(
 		return { bytes, label: `inline ${attachment.mime}` };
 	}
 	const filePath = path.resolve(cwd, attachment.path);
+	// Pre-check the on-disk size so oversized files are rejected before
+	// readFile loads them into memory; the post-read check below stays the
+	// final arbiter for stat/read races. stat failures fall through to the
+	// readFile error path so missing files keep reporting attachment_unreadable.
+	let statSize: number | undefined;
+	try {
+		statSize = (await fs.stat(filePath)).size;
+	} catch {
+		// Reported by readFile below.
+	}
+	if (statSize !== undefined && statSize > MAX_ATTACHMENT_BYTES) {
+		throw new RpcAttachmentError(
+			`Attachment exceeds the ${MAX_ATTACHMENT_BYTES} byte limit: ${filePath} (${statSize} bytes)`,
+			"attachment_too_large",
+		);
+	}
 	let bytes: Buffer;
 	try {
 		bytes = await fs.readFile(filePath);

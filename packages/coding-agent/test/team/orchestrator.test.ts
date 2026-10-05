@@ -280,6 +280,29 @@ describe("team visible participant settlement", () => {
 			),
 		).toBe(true);
 	});
+
+	it("announces done only after the assembled report is confirmed valid", async () => {
+		// A synthesis body conflicting with structured tracking fails the run
+		// after the synthesis call already succeeded; the progress stream must
+		// not have claimed 讨论完成 for a run that ends failed.
+		const conflictedUpdates: TeamProgressUpdate[] = [];
+		const conflicted = await run(
+			{
+				review: () => reviewData({ blocking: 1 }),
+				revision: () => revisionData(),
+				synthesis: () => ({ ...synthesisData("A"), reportMarkdown: "### 核心方案\n**【推荐】方案 A**" }),
+			},
+			{ onProgress: update => conflictedUpdates.push(update) },
+		);
+		expect(conflicted.result.status).toBe("failed");
+		expect(conflictedUpdates.some(update => update.stage === "done")).toBe(false);
+
+		// Control: a valid run still announces done exactly once.
+		const completedUpdates: TeamProgressUpdate[] = [];
+		const completed = await run({}, { onProgress: update => completedUpdates.push(update) });
+		expect(completed.result.status).toBe("completed");
+		expect(completedUpdates.filter(update => update.stage === "done")).toHaveLength(1);
+	});
 });
 
 describe("team reviewer rotation", () => {
@@ -420,7 +443,13 @@ describe("team orchestrator", () => {
 		expect(revisions).toHaveLength(3);
 		expect(rechecks).toHaveLength(3);
 		// Rechecks run on the rotation-assigned reviewer model (same as initial).
-		expect(rechecks.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
+		// Stage 4 processes the proposals concurrently, so compare per-target.
+		expect(
+			rechecks
+				.map(call => ({ target: parseMarker(call.task).target!, pattern: call.modelPattern }))
+				.sort((a, b) => a.target.localeCompare(b.target))
+				.map(entry => entry.pattern),
+		).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
 		// Blocking resolved: report has no 尚不可采用 entries.
 		expect(result.reportMarkdown).not.toContain("尚不可采用 — 未解决阻断问题");
 		expect(reviewCalls).toBe(6);
@@ -499,6 +528,12 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).toContain("【推荐】方案 A");
 		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
 		expect(rechecks).toHaveLength(6); // one failed + one successful per proposal
+		// The round-1 recheck failure is no longer a fact about the final state:
+		// neither the report nor the synthesis input may carry the stale note.
+		expect(result.reportMarkdown).not.toContain("复核子代理失败，阻断问题是否解决未能确认");
+		const synthesisTask = calls.find(call => call.role === "synthesizer")!.task;
+		expect(synthesisTask).not.toContain("参与不完整");
+		expect(synthesisTask).not.toContain("复核失败");
 	});
 
 	it("drops a recommendation that structured tracking rejects", async () => {
@@ -537,6 +572,54 @@ describe("team orchestrator", () => {
 		});
 		expect(result.status).toBe("completed");
 		expect(result.droppedRecommendation).toBe(true);
+	});
+
+	it("accepts conditional adoption statements about blocked proposals (§2.7 未采纳方向)", async () => {
+		const script = {
+			review: () => reviewData({ blocking: 1 }),
+			revision: () => revisionData(),
+		};
+		// Explaining *when* a blocked proposal could become adoptable is expected
+		// synthesis content and must not be mistaken for a tracking override.
+		for (const body of [
+			"### 未采纳方向\n方案 A 在阻断问题 1 解决后即可采用。方案 B 可作为选项。",
+			"### 未采纳方向\n方案 A 待阻断问题 1 修复后即可采用。",
+			"### 未采纳方向\n方案 A 若前提满足即可采用。",
+			"### 未采纳方向\n方案 A 阻断问题解除之后可推荐。",
+			"### 未采纳方向\n若干问题确认后方可采用方案 A。",
+		] as const) {
+			const { result } = await run({
+				...script,
+				synthesis: () => ({ ...synthesisData(), reportMarkdown: body }),
+			});
+			expect(result.status).toBe("completed");
+		}
+		// An unconditional adoption claim still invalidates the run.
+		const unconditional = await run({
+			...script,
+			synthesis: () => ({ ...synthesisData(), reportMarkdown: "### 核心方案\n方案 A 可采用。" }),
+		});
+		expect(unconditional.result.status).toBe("failed");
+		// “推荐解决方案 A” reads as "recommend solution A" (no posteriority
+		// marker follows 解决), so it must not be stripped as a conditional
+		// clause either.
+		const solutionPhrase = await run({
+			...script,
+			synthesis: () => ({
+				...synthesisData(),
+				reportMarkdown: "### 核心方案\n推荐解决方案 A。",
+			}),
+		});
+		expect(solutionPhrase.result.status).toBe("failed");
+		const backendClaim = await run({
+			...script,
+			synthesis: () => ({
+				...synthesisData(),
+				reportMarkdown: "### 核心方案\n方案 A 已解决后端问题可以采用。",
+			}),
+		});
+		expect(backendClaim.result.status).toBe("failed");
+		expect(backendClaim.result.reportMarkdown).toBeUndefined();
 	});
 
 	it("renders a valid recommendation with reason and preconditions", async () => {

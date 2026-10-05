@@ -538,10 +538,7 @@ export class RpcProjectSkillService {
 			throw new RpcProjectSkillError("invalid_params", "Invalid skill cursor");
 		}
 		if (decoded[0] !== scope || decoded[1] !== snapshot) {
-			throw new RpcProjectSkillError(
-				"revision_conflict",
-				"Skill cursor belongs to a different view or changed snapshot",
-			);
+			throw new RpcProjectSkillError("stale_cursor", "Skill cursor belongs to a different view or changed snapshot");
 		}
 		return decoded[2];
 	}

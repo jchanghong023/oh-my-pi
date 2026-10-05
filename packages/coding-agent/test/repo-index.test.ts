@@ -4,7 +4,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { RepoService } from "../src/repo/service";
+import { maxPendingSeq, RepoService } from "../src/repo/service";
 import type { RepoQueryResult, RepoTextHit } from "../src/repo/types";
 
 const dirs: string[] = [];
@@ -225,6 +225,30 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		service.markChanged([path.join(root, "src/new.py")]);
 		await service.search("shared-pagination-needle");
 		await expect(service.search("shared-pagination-needle", { cursor: first.cursor })).rejects.toThrow();
+	});
+
+	it("clamps page limits to the documented default of 20 and maximum of 50, flooring finite fractional values", async () => {
+		const files = Object.fromEntries(
+			Array.from({ length: 60 }, (_, i) => [
+				`src/cl${String(i).padStart(2, "0")}.py`,
+				`# clamp-pagination-needle ${i}\n`,
+			]),
+		);
+		const { service } = await fixture(files);
+		await service.build();
+		const query = "clamp-pagination-needle";
+		const sizes = async (options: Parameters<RepoService["search"]>[1]) =>
+			(await service.search(query, options)).hits.length;
+		expect(await sizes(undefined)).toBe(20);
+		expect(await sizes({})).toBe(20);
+		expect(await sizes({ limit: 500 })).toBe(50);
+		expect(await sizes({ limit: 7.9 })).toBe(7);
+		// Non-finite limits fall back to the default page size.
+		expect(await sizes({ limit: Number.NaN })).toBe(20);
+		expect(await sizes({ limit: Number.POSITIVE_INFINITY })).toBe(20);
+		// Finite limits below one are clamped up to a single hit per page.
+		expect(await sizes({ limit: 0 })).toBe(1);
+		expect(await sizes({ limit: -3 })).toBe(1);
 	});
 
 	it("indexes Python module, decorated and async declarations, nested scopes, same names and CRLF line locations", async () => {
@@ -606,6 +630,15 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect((await service.status()).pendingPaths).not.toContain("known.py");
 		await service.reconcile();
 		expect((await service.status()).needsReconcile).toBe(false);
+	});
+
+	it("aggregates pending seq maxima beyond the engine spread-argument limit", () => {
+		const rows = Array.from({ length: 1_000_000 }, (_, i) => ({ seq: i % 997 }));
+		rows[rows.length - 1]!.seq = Number.MAX_SAFE_INTEGER;
+		// Guard: this fixture exceeds the engine's spread limit, where the previous
+		// Math.max(...rows.map(row => row.seq)) in #flush raised RangeError on every search.
+		expect(() => Math.max(...rows.map(row => row.seq))).toThrow(RangeError);
+		expect(maxPendingSeq(rows)).toBe(Number.MAX_SAFE_INTEGER);
 	});
 
 	it("cancellation and failure leave the earlier generation usable, including mid-build and failed rebuild", async () => {

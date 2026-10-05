@@ -147,7 +147,9 @@ export function fastcheckBudgetMsFromEnv(): number {
 	const raw = process.env.FASTCHECK_BUDGET_MS;
 	if (raw === undefined) return FASTCHECK_TIMEOUT_MS;
 	const budgetMs = Number(raw);
-	if (!Number.isInteger(budgetMs) || budgetMs < 0) {
+	// Number("") === 0, so an empty (or blank) override would otherwise pass as
+	// fulltest's unbounded budget instead of failing loudly.
+	if (raw.trim() === "" || !Number.isInteger(budgetMs) || budgetMs < 0) {
 		throw new Error(`FASTCHECK_BUDGET_MS must be a non-negative integer of milliseconds, got: ${raw}`);
 	}
 	return budgetMs;

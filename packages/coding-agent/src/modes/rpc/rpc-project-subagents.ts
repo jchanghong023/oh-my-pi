@@ -22,12 +22,25 @@
  * subscribes to (`setStatus(id, "aborted")` → `monitor.requestAbort`), and
  * `send_message` goes through the injected IRC send. No second control logic
  * is created. This file never writes to the protocol channel (stdout).
+ *
+ * Session-scoped ref resolution (§13.2): agent ids are unique only within one
+ * parent session's artifacts scope, while AgentRegistry/IrcBus are
+ * process-global and keep only the latest ref per bare id — a same-id spawn in
+ * another session of this project silently overwrites ours. `stop`/`send`
+ * therefore resolve the target through the registry only while that entry
+ * still points at this session's transcript; a superseded generation is
+ * recovered from the refs captured at registration time. Stop emits the
+ * owning ref's registry event so the executor cancels its run; send uses its
+ * OWN live AgentSession (`session.deliverIrcMessage()`), never a bare-id
+ * global lookup that now names another session's
+ * agent. Two sessions' same-id subagents stay independently controllable.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { normalizePathForComparison, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { normalizePathForComparison, pathIsWithin, Snowflake } from "@oh-my-pi/pi-utils";
+import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { isAdvisorTranscriptName } from "../../advisor/transcript-recorder";
-import { AgentRegistry } from "../../registry/agent-registry";
+import { type AgentRef, AgentRegistry, type RegistryEvent } from "../../registry/agent-registry";
 import { getAgentTombstonePath } from "../../registry/agent-tombstone";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries, visitEntriesFromFileStream } from "../../session/session-loader";
@@ -118,6 +131,15 @@ function subagentErrorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** Whether `ref` is a subagent ref whose durable identity is exactly `transcript`. */
+function isSubRefOnTranscript(ref: AgentRef | undefined, transcript: string): boolean {
+	return (
+		ref?.kind === "sub" &&
+		ref.sessionFile !== null &&
+		normalizePathForComparison(ref.sessionFile) === normalizePathForComparison(transcript)
+	);
+}
+
 /** Whether `filePath` resolves strictly inside `dir` (separator-aware prefix, not raw text). */
 function isInsideDir(filePath: string, dir: string): boolean {
 	return normalizePathForComparison(filePath) !== normalizePathForComparison(dir) && pathIsWithin(dir, filePath);
@@ -152,7 +174,7 @@ function normalizeListCursor(cursor: string | undefined, scope: string, snapshot
 	}
 	if (decoded[0] !== scope || decoded[1] !== snapshot) {
 		throw new RpcProjectSubagentError(
-			"revision_conflict",
+			"stale_cursor",
 			"Subagent cursor belongs to another filter or changed snapshot",
 		);
 	}
@@ -452,9 +474,67 @@ export class RpcProjectSubagentDirectory {
 	readonly #revision = new RpcRevisionSource("sub-r0");
 	/** Last observed merged catalog shape per session; a change bumps the shared revision. */
 	readonly #catalogKeys = new Map<string, string>();
+	/**
+	 * Sub refs captured from `registered` events, per id, oldest generation
+	 * first. The process-global registry keeps only the latest ref per id, so
+	 * this is the only surviving handle to a generation another session's
+	 * same-id spawn superseded (§13.2); a ref the registry still owns resolves
+	 * through the registry first and never needs this table.
+	 */
+	readonly #capturedSubagentRefs = new Map<string, AgentRef[]>();
+	#unsubscribeRegistry: (() => void) | undefined;
 
 	constructor(deps: RpcProjectSubagentDirectoryDeps) {
 		this.#deps = deps;
+		this.#unsubscribeRegistry = AgentRegistry.global().onChange(event => this.#trackSubagentRef(event));
+	}
+
+	/** Drop the registry subscription and the superseded-generation table (host teardown). */
+	dispose(): void {
+		this.#unsubscribeRegistry?.();
+		this.#unsubscribeRegistry = undefined;
+		this.#capturedSubagentRefs.clear();
+	}
+
+	#trackSubagentRef(event: RegistryEvent): void {
+		const ref = event.ref;
+		if (ref.kind !== "sub") return;
+		if (event.type === "registered") {
+			const generations = this.#capturedSubagentRefs.get(ref.id);
+			if (!generations) {
+				this.#capturedSubagentRefs.set(ref.id, [ref]);
+				return;
+			}
+			if (generations.includes(ref)) return;
+			generations.push(ref);
+			return;
+		}
+		if (event.type !== "removed") return;
+		const generations = this.#capturedSubagentRefs.get(ref.id);
+		if (!generations) return;
+		const index = generations.indexOf(ref);
+		if (index !== -1) generations.splice(index, 1);
+		if (generations.length === 0) this.#capturedSubagentRefs.delete(ref.id);
+	}
+
+	/**
+	 * Resolve the registry ref this session OWNS for `subagentId`'s transcript
+	 * (§13.2). The process-global entry is consulted first and returned only
+	 * while it still points at this transcript — identical to single-session
+	 * behavior. When another session's same-id spawn overwrote it, the
+	 * superseded generation captured at registration time is recovered instead
+	 * (latest generation first). `undefined` means no generation of this id
+	 * ever lived on this transcript.
+	 */
+	#resolveControlRef(subagentId: string, transcript: string): AgentRef | undefined {
+		const global = AgentRegistry.global().get(subagentId);
+		if (isSubRefOnTranscript(global, transcript)) return global;
+		const generations = this.#capturedSubagentRefs.get(subagentId);
+		if (!generations) return undefined;
+		for (let index = generations.length - 1; index >= 0; index--) {
+			if (isSubRefOnTranscript(generations[index], transcript)) return generations[index];
+		}
+		return undefined;
 	}
 
 	get revision(): RpcRevision {
@@ -698,27 +778,45 @@ export class RpcProjectSubagentDirectory {
 		// `status_changed` → `aborted` and calls `monitor.requestAbort("signal")`
 		// (task/executor.ts), so flipping the registry status IS the existing
 		// abort path — no second control logic is created here.
-		const ref = AgentRegistry.global().get(subagentId);
-		if (!ref) throw new RpcProjectSubagentError("unsupported", "No stop path configured for this subagent");
-		if (
-			ref.kind !== "sub" ||
-			ref.status !== "running" ||
-			!ref.sessionFile ||
-			normalizePathForComparison(ref.sessionFile) !== normalizePathForComparison(transcript)
-		) {
+		const registry = AgentRegistry.global();
+		const global = registry.get(subagentId);
+		const ref = this.#resolveControlRef(subagentId, transcript);
+		if (!ref) {
+			throw new RpcProjectSubagentError(
+				global ? "scope_not_allowed" : "unsupported",
+				global
+					? "Agent does not belong to this session's running transcript"
+					: "No stop path configured for this subagent",
+			);
+		}
+		if (ref.status !== "running") {
 			throw new RpcProjectSubagentError(
 				"scope_not_allowed",
 				"Agent does not belong to this session's running transcript",
 			);
 		}
-		let accepted: boolean;
+		if (ref === global) {
+			let accepted: boolean;
+			try {
+				accepted = registry.setStatus(subagentId, "aborted", ref);
+			} catch (error) {
+				throw new RpcProjectSubagentError("execution_failed", subagentErrorText(error));
+			}
+			if (!accepted) throw new RpcProjectSubagentError("execution_failed", `Agent not stoppable: ${subagentId}`);
+			return { subagentId, action: "stop", status: "stopping", detail: "abort requested via agent registry" };
+		}
+		// §13.2 superseded generation: another session's same-id spawn replaced
+		// the registry entry. Emit status_changed for the captured ref itself:
+		// its executor still subscribes by ref identity and cancels the entire
+		// run, including yield reminders, without touching the new generation.
 		try {
-			accepted = AgentRegistry.global().setStatus(subagentId, "aborted", ref);
+			if (!registry.abortRef(ref)) {
+				throw new Error(`Agent not stoppable: ${subagentId}`);
+			}
 		} catch (error) {
 			throw new RpcProjectSubagentError("execution_failed", subagentErrorText(error));
 		}
-		if (!accepted) throw new RpcProjectSubagentError("execution_failed", `Agent not stoppable: ${subagentId}`);
-		return { subagentId, action: "stop", status: "stopping", detail: "abort requested via agent registry" };
+		return { subagentId, action: "stop", status: "stopping", detail: "abort requested via owning registry ref" };
 	}
 
 	async #sendMessage(
@@ -736,17 +834,46 @@ export class RpcProjectSubagentDirectory {
 			throw new RpcProjectSubagentError("session_not_loaded", "Messaging requires the owning loaded session");
 		const send = this.#deps.sendIrcMessage;
 		if (!send) throw new RpcProjectSubagentError("unsupported", "send_message is not configured on this host");
-		const ref = AgentRegistry.global().get(subagentId);
-		if (
-			!ref ||
-			ref.kind !== "sub" ||
-			!ref.sessionFile ||
-			normalizePathForComparison(ref.sessionFile) !== normalizePathForComparison(transcript)
-		) {
+		const global = AgentRegistry.global().get(subagentId);
+		const ref = this.#resolveControlRef(subagentId, transcript);
+		if (!ref) {
 			throw new RpcProjectSubagentError("scope_not_allowed", "Agent does not belong to this session's transcript");
 		}
 		if (ref.status !== "running" && ref.status !== "parked") {
 			throw new RpcProjectSubagentError("busy", `Agent ${subagentId} cannot receive messages while ${ref.status}`);
+		}
+		if (ref !== global) {
+			// §13.2 superseded generation: the bus resolves recipients by bare id
+			// through the process-global registry, which now names another
+			// session's agent. Deliver through this generation's OWN live session
+			// instead — the exact live hand-off IrcBus performs for a live
+			// recipient (`session.deliverIrcMessage`).
+			const session = ref.session;
+			if (!session) {
+				throw new RpcProjectSubagentError("execution_failed", `Agent "${subagentId}" has no live session.`);
+			}
+			const ircMessage: IrcMessage = {
+				id: Snowflake.next(),
+				from: sender,
+				to: subagentId,
+				body: message,
+				ts: Date.now(),
+			};
+			let outcome: "injected" | "woken";
+			try {
+				outcome = await session.deliverIrcMessage(ircMessage);
+			} catch (error) {
+				throw new RpcProjectSubagentError("execution_failed", subagentErrorText(error));
+			}
+			return {
+				subagentId,
+				action: "send_message",
+				status: "sent",
+				// Delivery ≠ processing (§14.8): the receipt reports how the message
+				// reached the recipient, not what they did with it.
+				detail: `outcome: ${outcome} (delivered; processing not implied)`,
+				receipts: [{ to: subagentId, outcome }],
+			};
 		}
 		let receipt: { to: string; outcome: string; error?: string };
 		try {

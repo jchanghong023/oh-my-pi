@@ -18,6 +18,7 @@ import {
 	type RpcProjectSubagentDirectoryDeps,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-subagents";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcProjectErrorCode } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-types";
 import type { RpcSubagentSnapshot } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
@@ -107,6 +108,25 @@ function snapshot(id: string, index: number, overrides: Partial<RpcSubagentSnaps
 		lastUpdate: Date.parse(iso(30)),
 		...overrides,
 	};
+}
+
+/** Calls recorded against one fake subagent AgentSession. */
+interface SubagentSessionLog {
+	aborts: string[];
+	deliveries: Array<{ from: string; to: string; body: string }>;
+}
+
+/** Minimal live-session fake: only the abort/deliverIrcMessage surface `control` uses. */
+function fakeSubagentSession(name: string, log: SubagentSessionLog): AgentSession {
+	return {
+		abort: async (options?: { reason?: string }) => {
+			log.aborts.push(`${name}:${options?.reason ?? ""}`);
+		},
+		deliverIrcMessage: async (message: { from: string; to: string; body: string }) => {
+			log.deliveries.push({ from: message.from, to: message.to, body: message.body });
+			return "injected" as const;
+		},
+	} as unknown as AgentSession;
 }
 
 /** Directory deps bound to one session tree and a mutable live-snapshot set. */
@@ -289,6 +309,25 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			await expectErrorCode(directory.list(SID, { limit: 1.5 }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { cursor: -1 as never }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { cursor: "invalid" }), "invalid_params");
+		}, 10_000);
+
+		test("a cursor from a changed snapshot or another filter rejects with stale_cursor", async () => {
+			const tree = await createSessionTree("rpc-sub-list-stale-");
+			await writeConversationalTranscript(tree.artifactsDir, "A");
+			await writeConversationalTranscript(tree.artifactsDir, "B");
+			const directory = makeDirectory(tree);
+			const first = await directory.list(SID, { limit: 1 });
+			expect(first.nextCursor).toBeDefined();
+			// The snapshot changed between pages: a third durable row appeared.
+			await writeConversationalTranscript(tree.artifactsDir, "C");
+			await expectErrorCode(directory.list(SID, { limit: 1, cursor: first.nextCursor }), "stale_cursor");
+			// A cursor bound to another filter is stale too, never silently reinterpreted.
+			const runningFirst = await makeDirectory(tree, [snapshot("Live-0", 0), snapshot("Live-1", 1)]).list(SID, {
+				status: "running",
+				limit: 1,
+			});
+			expect(runningFirst.nextCursor).toBeDefined();
+			await expectErrorCode(directory.list(SID, { limit: 1, cursor: runningFirst.nextCursor }), "stale_cursor");
 		}, 10_000);
 
 		test("unknown sessions reject with not_found", async () => {
@@ -498,6 +537,124 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			expect(AgentRegistry.global().get("InProject")?.status).toBe("aborted");
 
 			await expectErrorCode(directory.control(SID, "Foreign", "stop"), "scope_not_allowed");
+		}, 10_000);
+
+		test("two concurrent sessions with the same subagent id control their own generation (§13.2/§17.2 O20)", async () => {
+			// Two sessions of one project process, each with its OWN artifacts tree
+			// and a live subagent registered under the SAME id — the later spawn
+			// overwrites the process-global registry entry exactly as in production.
+			const treeA = await createSessionTree("rpc-sub-collide-a-");
+			const treeB = await createSessionTree("rpc-sub-collide-b-");
+			const transcriptA = await writeConversationalTranscript(treeA.artifactsDir, "task-1");
+			const transcriptB = await writeConversationalTranscript(treeB.artifactsDir, "task-1");
+			const logA: SubagentSessionLog = { aborts: [], deliveries: [] };
+			const logB: SubagentSessionLog = { aborts: [], deliveries: [] };
+			const sentByBus: Array<{ from: string; to: string; body: string }> = [];
+			const trees = new Map<string, SessionTree>([
+				["sess-a", treeA],
+				["sess-b", treeB],
+			]);
+			const live = new Map<string, RpcSubagentSnapshot[]>([
+				["sess-a", [snapshot("task-1", 0, { sessionFile: transcriptA })]],
+				["sess-b", [snapshot("task-1", 0, { sessionFile: transcriptB })]],
+			]);
+			// The directory captures generations from `registered` events, so it must
+			// exist before the spawns; only then do the two same-id refs register.
+			const directory = new RpcProjectSubagentDirectory({
+				resolveSessionFile: sessionId => trees.get(sessionId)?.sessionFile,
+				senderId: sessionId => (sessionId === "sess-a" ? "main-a" : "main-b"),
+				liveSnapshots: sessionId => live.get(sessionId) ?? [],
+				sendIrcMessage: async message => {
+					sentByBus.push({ from: message.from, to: message.to, body: message.body });
+					return { to: message.to, outcome: "woken" };
+				},
+			});
+			const refA = AgentRegistry.global().register({
+				id: "task-1",
+				displayName: "task-1",
+				kind: "sub",
+				session: fakeSubagentSession("a", logA),
+				sessionFile: transcriptA,
+				status: "running",
+			});
+			AgentRegistry.global().register({
+				id: "task-1",
+				displayName: "task-1",
+				kind: "sub",
+				session: fakeSubagentSession("b", logB),
+				sessionFile: transcriptB,
+				status: "running",
+			});
+
+			// send_message: session A's generation was superseded, so delivery goes
+			// to its OWN live session; session B still owns the global entry and
+			// uses the bus. Neither leg reaches the other session's agent.
+			const sendA = await directory.control("sess-a", "task-1", "send_message", "hello A");
+			expect(sendA.status).toBe("sent");
+			expect(sendA.receipts).toEqual([{ to: "task-1", outcome: "injected" }]);
+			expect(logA.deliveries).toEqual([{ from: "main-a", to: "task-1", body: "hello A" }]);
+			const sendB = await directory.control("sess-b", "task-1", "send_message", "hello B");
+			expect(sendB.receipts).toEqual([{ to: "task-1", outcome: "woken" }]);
+			expect(sentByBus).toEqual([{ from: "main-b", to: "task-1", body: "hello B" }]);
+			expect(logA.deliveries).toHaveLength(1);
+
+			// The executor observes ref identity, including a superseded generation.
+			const cancellation = new AbortController();
+			const unsubscribe = AgentRegistry.global().onChange(event => {
+				if (event.type === "status_changed" && event.ref === refA && event.ref.status === "aborted") {
+					cancellation.abort();
+				}
+			});
+			const stopA = await directory.control("sess-a", "task-1", "stop");
+			unsubscribe();
+			expect(stopA.status).toBe("stopping");
+			expect(cancellation.signal.aborted).toBe(true);
+			expect(refA.status).toBe("aborted");
+			expect(logA.aborts).toEqual([]);
+			expect(logB.aborts).toEqual([]);
+			expect(AgentRegistry.global().get("task-1")?.status).toBe("running");
+			const stopB = await directory.control("sess-b", "task-1", "stop");
+			expect(stopB.status).toBe("stopping");
+			expect(logB.aborts).toEqual([]);
+			expect(AgentRegistry.global().get("task-1")?.status).toBe("aborted");
+		}, 10_000);
+
+		test("retains control of live same-id generations beyond eight sessions", async () => {
+			const trees = new Map<string, SessionTree>();
+			const live = new Map<string, RpcSubagentSnapshot[]>();
+			const directory = new RpcProjectSubagentDirectory({
+				resolveSessionFile: sessionId => trees.get(sessionId)?.sessionFile,
+				senderId: sessionId => sessionId,
+				liveSnapshots: sessionId => live.get(sessionId) ?? [],
+				sendIrcMessage: async message => ({ to: message.to, outcome: "injected" }),
+			});
+			try {
+				const logs: SubagentSessionLog[] = [];
+				for (let index = 0; index < 9; index++) {
+					const id = `sess-${index}`;
+					const tree = await createSessionTree("rpc-sub-many-collisions-");
+					const transcript = await writeConversationalTranscript(tree.artifactsDir, "task-1");
+					trees.set(id, tree);
+					live.set(id, [snapshot("task-1", 0, { sessionFile: transcript })]);
+					const log: SubagentSessionLog = { aborts: [], deliveries: [] };
+					logs.push(log);
+					AgentRegistry.global().register({
+						id: "task-1",
+						displayName: "task-1",
+						kind: "sub",
+						status: "running",
+						session: fakeSubagentSession(id, log),
+						sessionFile: transcript,
+					});
+				}
+				expect((await directory.control("sess-0", "task-1", "send_message", "oldest")).status).toBe("sent");
+				expect(logs[0]!.deliveries).toEqual([{ from: "sess-0", to: "task-1", body: "oldest" }]);
+				expect(logs.slice(1).every(log => log.deliveries.length === 0)).toBe(true);
+				expect((await directory.control("sess-0", "task-1", "stop")).status).toBe("stopping");
+				expect(AgentRegistry.global().get("task-1")?.status).toBe("running");
+			} finally {
+				directory.dispose();
+			}
 		}, 10_000);
 
 		test("send_message validates input and configuration", async () => {

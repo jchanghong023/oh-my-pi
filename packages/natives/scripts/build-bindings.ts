@@ -111,17 +111,24 @@ async function installBinary(src: string, dest: string): Promise<void> {
 		// Atomic rename - works even if dest is loaded on Linux/macOS (old inode stays valid)
 		await fs.rename(tempPath, dest);
 	} catch {
-		// On Windows, loaded DLLs cannot be overwritten via rename
-		// Try delete-then-rename as fallback
+		// On Windows, loaded DLLs cannot be overwritten or deleted, but they can
+		// be renamed: move the loaded image aside so the new addon takes its
+		// place. The holding process keeps running on the renamed image, and
+		// cleanupStaleTemps reclaims the .old. file on a later build.
 		try {
-			await fs.unlink(dest);
-		} catch (unlinkErr) {
-			if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") {
-				await fs.unlink(tempPath).catch(() => {});
-				const isWindows = process.platform === "win32";
-				throw new Error(
-					`Cannot replace ${path.basename(dest)}${isWindows ? " (file may be in use - close any running processes)" : ""}: ${(unlinkErr as Error).message}`,
-				);
+			await fs.rename(dest, `${dest}.old.${process.pid}`);
+		} catch {
+			// Delete-then-rename as fallback (dest not held by a live loader)
+			try {
+				await fs.unlink(dest);
+			} catch (unlinkErr) {
+				if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") {
+					await fs.unlink(tempPath).catch(() => {});
+					const isWindows = process.platform === "win32";
+					throw new Error(
+						`Cannot replace ${path.basename(dest)}${isWindows ? " (file may be in use - close any running processes)" : ""}: ${(unlinkErr as Error).message}`,
+					);
+				}
 			}
 		}
 		try {

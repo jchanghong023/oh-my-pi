@@ -42,9 +42,9 @@ export type RpcForkCommand =
 	| { id?: string; type: "delete_session"; sessionFile: string }
 	// 5.1 queued messages
 	| { id?: string; type: "get_queue" }
-	| { id?: string; type: "remove_queued"; queue: "steering" | "followUp"; entryId: string }
-	| { id?: string; type: "reorder_queue"; queue: "steering" | "followUp"; ids: string[] }
-	| { id?: string; type: "clear_queue"; queue?: "steering" | "followUp" }
+	| { id?: string; type: "remove_queued"; queue: "steering" | "followUp"; entryId: string; expectedRevision?: number }
+	| { id?: string; type: "reorder_queue"; queue: "steering" | "followUp"; ids: string[]; expectedRevision?: number }
+	| { id?: string; type: "clear_queue"; queue?: "steering" | "followUp"; expectedRevision?: number }
 	// 5.2 background jobs
 	| { id?: string; type: "get_jobs"; includeRecent?: boolean; recentLimit?: number }
 	| { id?: string; type: "cancel_job"; jobId: string }
@@ -166,7 +166,9 @@ export type RpcForkResponse =
 			success: true;
 			data: import("./rpc-fork-queue").RpcForkQueueSnapshot;
 	  }
-	| { id?: string; type: "response"; command: "remove_queued" | "reorder_queue" | "clear_queue"; success: true }
+	| { id?: string; type: "response"; command: "remove_queued"; success: true; data: { revision: number } }
+	| { id?: string; type: "response"; command: "reorder_queue"; success: true; data: { revision: number } }
+	| { id?: string; type: "response"; command: "clear_queue"; success: true; data: { revision: number } }
 	| {
 			id?: string;
 			type: "response";

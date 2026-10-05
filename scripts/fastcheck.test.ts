@@ -98,6 +98,12 @@ describe("budget override", () => {
 	test("malformed values fail loudly instead of silently re-budgeting", () => {
 		process.env.FASTCHECK_BUDGET_MS = "60s";
 		expect(() => fastcheckBudgetMsFromEnv()).toThrow("FASTCHECK_BUDGET_MS");
+		// Number("") === 0, so an empty or blank override must fail loudly rather
+		// than silently smuggle in the unbounded budget.
+		for (const blank of ["", "   "]) {
+			process.env.FASTCHECK_BUDGET_MS = blank;
+			expect(() => fastcheckBudgetMsFromEnv()).toThrow("FASTCHECK_BUDGET_MS");
+		}
 	});
 });
 

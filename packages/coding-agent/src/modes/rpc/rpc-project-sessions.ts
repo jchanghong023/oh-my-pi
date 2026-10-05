@@ -332,7 +332,7 @@ export class RpcProjectSessionContainer {
 		return entry;
 	}
 
-	/** Teardown gate: no double close/delete, and running work rejects unless cancelled. */
+	/** Identity check: a record whose session lost its stable id/cwd is latched "closing" and refuses teardown. */
 	#assertStableIdentity(record: RpcProjectSessionRecord): void {
 		if (
 			record.session.sessionManager.getSessionId() !== record.sessionId ||
@@ -348,9 +348,20 @@ export class RpcProjectSessionContainer {
 		}
 	}
 
+	/**
+	 * Teardown gate: no concurrent double close/delete, and running work
+	 * rejects unless cancelled. A record left in "closing" by a FAILED teardown
+	 * attempt (idle, not busy) may re-enter close/delete: every release step is
+	 * idempotent (`RpcSessionHost.dispose` latches, `session.dispose` retains
+	 * shutdown preparation and retries the final close), and this retry
+	 * channel is what keeps a cleanup failure from bricking the session with a
+	 * permanent busy (rpc-ui-protocol.md §14.3: report the real remaining state).
+	 * Only "loading" records and in-flight (`busy`) teardowns are refused here;
+	 * identity-latched "closing" records still throw at {@link #assertStableIdentity}.
+	 */
 	#assertTeardownAllowed(record: RpcProjectSessionRecord, cancelRunning: boolean): void {
 		this.#assertStableIdentity(record);
-		if (record.state !== "loaded") {
+		if (record.state === "loading") {
 			throw new RpcProjectSessionError("busy", `Session ${record.sessionId} is ${record.state}`);
 		}
 		if (record.busy) {
@@ -373,7 +384,11 @@ export class RpcProjectSessionContainer {
 		}
 	}
 
-	/** Release all resources even when one cleanup step fails; never report a failed close as unloaded. */
+	/**
+	 * Release all resources even when one cleanup step fails; never report a failed close as unloaded.
+	 * A failed attempt leaves the record idle in "closing" (the truthful remaining
+	 * state) so close/delete can retry the teardown instead of dead-ending on busy.
+	 */
 	async #closeRecord(
 		record: RpcProjectSessionRecord,
 		options: { cancelRunning: boolean; reason: string; force?: boolean },
@@ -680,8 +695,10 @@ export class RpcProjectSessionContainer {
 
 	/**
 	 * Unload one session instance (history stays on disk). Running work rejects
-	 * with busy unless `cancelRunning`; a double close rejects with busy. On
-	 * success the record is gone and the revision has bumped.
+	 * with busy unless `cancelRunning`; a concurrent double close rejects with
+	 * busy, while a close whose cleanup FAILED keeps the record retryable (it
+	 * stays "closing" until a retry finishes the teardown). On success the
+	 * record is gone and the revision has bumped.
 	 */
 	async close(sessionId: string, options: { cancelRunning?: boolean } = {}): Promise<RpcProjectSessionCloseResult> {
 		const record = this.#records.get(sessionId);

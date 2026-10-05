@@ -188,3 +188,146 @@ test("an abort accepted after a session change keeps its own boundary when the c
 	expect(gate.isCurrent(between)).toBe(false);
 	expect(gate.isCurrent(after)).toBe(true);
 });
+
+test("a re-entrant enqueue reached across an await inside the running section runs inline", async () => {
+	const gate = new RpcUserInputGate();
+	const order: string[] = [];
+	await gate.enqueue(async () => {
+		order.push("outer-start");
+		await gate.enqueue(async () => {
+			order.push("inline-start");
+			await Promise.resolve();
+			order.push("inline-end");
+		});
+		order.push("outer-end");
+	});
+	expect(order).toEqual(["outer-start", "inline-start", "inline-end", "outer-end"]);
+});
+
+test("an enqueue from an unrelated context while a section is suspended across an await queues behind it", async () => {
+	const gate = new RpcUserInputGate();
+	const order: string[] = [];
+	const resume = Promise.withResolvers<void>();
+	const section = gate.enqueue(async () => {
+		order.push("outer-start");
+		await resume.promise;
+		order.push("outer-end");
+	});
+	await flush();
+	expect(order).toEqual(["outer-start"]);
+	// A context the section never ran in: must not borrow the suspended
+	// section's re-entrancy, so its enqueue queues behind the whole section.
+	const unrelated = (async () => {
+		await Promise.resolve();
+		await gate.enqueue(async () => {
+			order.push("unrelated");
+		});
+	})();
+	await flush();
+	expect(order).toEqual(["outer-start"]);
+	resume.resolve();
+	await section;
+	await unrelated;
+	expect(order).toEqual(["outer-start", "outer-end", "unrelated"]);
+});
+
+test("an enqueue on another gate instance never runs inline, even from within a running section", async () => {
+	const gate = new RpcUserInputGate();
+	const other = new RpcUserInputGate();
+	const order: string[] = [];
+	const release = Promise.withResolvers<void>();
+	const otherFirst = other.enqueue(async () => {
+		order.push("other-first-start");
+		await release.promise;
+		order.push("other-first-end");
+	});
+	const section = gate.enqueue(async () => {
+		order.push("section");
+		const queued = other.enqueue(async () => {
+			order.push("other-from-section");
+		});
+		order.push("section-end");
+		await queued;
+	});
+	await flush();
+	// The other gate's first section is suspended: the enqueue from this
+	// section must have queued on it, not run inline inside this section.
+	expect(order).toEqual(["other-first-start", "section", "section-end"]);
+	release.resolve();
+	await otherFirst;
+	await section;
+	expect(order).toEqual(["other-first-start", "section", "section-end", "other-first-end", "other-from-section"]);
+});
+
+test("a timer a section scheduled enqueues behind later sections when it fires after that section ended", async () => {
+	const gate = new RpcUserInputGate();
+	const order: string[] = [];
+	const fired = Promise.withResolvers<void>();
+	const secondStarted = Promise.withResolvers<void>();
+	const resumeSecond = Promise.withResolvers<void>();
+	let timerWork: Promise<void> | undefined;
+	await gate.enqueue(async () => {
+		order.push("first-start");
+		setTimeout(() => {
+			order.push("timer-callback");
+			timerWork = gate.enqueue(async () => {
+				order.push("timer-work");
+			});
+			order.push("timer-callback-end");
+			fired.resolve();
+		}, 0);
+		order.push("first-end");
+	});
+	const second = gate.enqueue(async () => {
+		order.push("second-start");
+		secondStarted.resolve();
+		await resumeSecond.promise;
+		order.push("second-end");
+	});
+	await secondStarted.promise;
+	// The timer can only fire as a macrotask now: its scheduling section has
+	// ended and a different section is running, so it must queue, not inline
+	// (inline would place "timer-work" before "timer-callback-end").
+	await fired.promise;
+	expect(order).toEqual(["first-start", "first-end", "second-start", "timer-callback", "timer-callback-end"]);
+	resumeSecond.resolve();
+	await second;
+	await timerWork;
+	expect(order).toEqual([
+		"first-start",
+		"first-end",
+		"second-start",
+		"timer-callback",
+		"timer-callback-end",
+		"second-end",
+		"timer-work",
+	]);
+});
+
+test("rejecting sections and rejected inline work leave the gate's queue usable", async () => {
+	const gate = new RpcUserInputGate();
+	const order: string[] = [];
+	const rejecting = gate.enqueue(async () => {
+		order.push("rejecting");
+		throw new Error("section boom");
+	});
+	await expect(rejecting).rejects.toThrow("section boom");
+	const afterRejecting = gate.enqueue(async () => {
+		order.push("after-rejecting");
+	});
+	await afterRejecting;
+	expect(order).toEqual(["rejecting", "after-rejecting"]);
+	const inlineRejecting = gate.enqueue(async () => {
+		order.push("inline-host-start");
+		await gate.enqueue(async () => {
+			throw new Error("inline boom");
+		});
+		order.push("unreachable");
+	});
+	await expect(inlineRejecting).rejects.toThrow("inline boom");
+	const afterInline = gate.enqueue(async () => {
+		order.push("after-inline");
+	});
+	await afterInline;
+	expect(order).toEqual(["rejecting", "after-rejecting", "inline-host-start", "after-inline"]);
+});

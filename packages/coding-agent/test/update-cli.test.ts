@@ -1358,7 +1358,7 @@ describe("update-cli release binary integrity", () => {
 		expect(await Bun.file(targetPath).text()).toBe(published);
 	});
 
-	it("names the missing tag and the npm mismatch when no published release can replace it", async () => {
+	it("names the missing tag and the advertised version when no published release can replace it", async () => {
 		const dir = await makeTempDir();
 		const targetPath = path.join(dir, binaryName);
 		const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
@@ -1375,7 +1375,7 @@ describe("update-cli release binary integrity", () => {
 
 		await expect(
 			updateViaBinaryAt(targetPath, "999.9.9", { binaryName, fetchImpl, githubToken: "test-token" }),
-		).rejects.toThrow("npm advertises 999.9.9 but GitHub release v999.9.9 is not published");
+		).rejects.toThrow("Update check advertised 999.9.9 but GitHub release v999.9.9 is not published");
 		expect(await Bun.file(targetPath).exists()).toBe(false);
 	});
 
@@ -1386,6 +1386,20 @@ describe("update-cli release binary integrity", () => {
 		expect(selectFallbackBinaryAsset(releases, binaryName, "999.0.0", { allowPrerelease: true })?.version).toBe(
 			"999.9.9",
 		);
+	});
+
+	it("orders same-baseline fork tags by build counter", () => {
+		// `+fork.N` is SemVer build metadata, so precedence alone compares
+		// 999.9.9+fork.35 and 999.9.9+fork.36 as equal: the filter skipped newer
+		// same-baseline builds and the sort fell back to listing order.
+		const releases = [
+			publishedRelease("999.9.9+fork.35", "older fork binary"),
+			publishedRelease("999.9.9+fork.36", "newest fork binary"),
+		];
+
+		expect(selectFallbackBinaryAsset(releases, binaryName, "999.9.9+fork.34")?.version).toBe("999.9.9+fork.36");
+		expect(selectFallbackBinaryAsset(releases, binaryName, "999.9.9+fork.35")?.version).toBe("999.9.9+fork.36");
+		expect(selectFallbackBinaryAsset(releases, binaryName, "999.9.9+fork.36")).toBeUndefined();
 	});
 
 	it("reports download progress through the response stream on a TTY", async () => {

@@ -341,10 +341,10 @@ export function selectFallbackBinaryAsset(
 		if (!isRecord(release)) continue;
 		const tag = release.tag_name;
 		if (typeof tag !== "string" || !/^v\d/.test(tag)) continue;
-		if (compareVersions(tag.slice(1), minVersion) <= 0) continue;
+		if (compareUpdateVersions(tag.slice(1), minVersion) <= 0) continue;
 		candidates.push({ tag, release });
 	}
-	candidates.sort((a, b) => compareVersions(b.tag.slice(1), a.tag.slice(1)));
+	candidates.sort((a, b) => compareUpdateVersions(b.tag.slice(1), a.tag.slice(1)));
 	for (const { tag, release } of candidates) {
 		try {
 			return resolveReleaseBinaryAsset(release, tag, binaryName, options);
@@ -420,7 +420,7 @@ async function getReleaseBinaryAsset(
 	const fallback = selectFallbackBinaryAsset(await listing.json(), binaryName, VERSION, { allowPrerelease });
 	if (!fallback) {
 		throw new Error(
-			`npm advertises ${expectedVersion} but GitHub release ${tag} is not published, and no newer published release ships ${binaryName}; retry once the release finishes publishing, or reinstall with: ${installerHint()}`,
+			`Update check advertised ${expectedVersion} but GitHub release ${tag} is not published, and no newer published release ships ${binaryName}; retry once the release finishes publishing, or reinstall with: ${installerHint()}`,
 		);
 	}
 	console.log(

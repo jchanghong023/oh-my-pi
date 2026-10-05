@@ -67,6 +67,22 @@ function compactNumber(value: number): string {
 	return formatNumber(value).toLowerCase();
 }
 
+/** Fails fast unless the plan-review promise settles to `undefined` (the cancel
+ *  value shared by the overlay's onCancel and programmatic dismissal) within the
+ *  grace window — a never-settling promise fails the test instead of hanging it. */
+async function expectSettlesCancelled(choice: Promise<string | undefined>): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<"unsettled">(resolve => {
+		timer = setTimeout(() => resolve("unsettled"), 500);
+	});
+	try {
+		const outcome = await Promise.race([choice, timeout]);
+		expect(outcome).toBeUndefined();
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 describe("InteractiveMode plan review rendering", () => {
 	// Per-test, mutated by tests (planMode flags, spies, model roles, dispose/recreate).
 	let tempDir: TempDir;
@@ -485,6 +501,88 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(mode.ui.getFocused()).toBe(mode.editor);
 		expect(mode.errorBannerContainer.render(80).join("\n")).toContain("Codex rate limit reached");
 		await expect(choice).resolves.toBeUndefined();
+	});
+
+	it("settles the pending plan-review promise when a session switch hides the overlay", async () => {
+		// Regression: prepareSessionSwitch (collab guest /clear, extension
+		// newSession/branch/switchSession) used to drop #planReviewCancel without
+		// calling it, so the promise returned by showPlanReview — and the
+		// handlePlanApproval chain awaiting it — stayed pending forever after the
+		// overlay vanished.
+		const choice = mode.showPlanReview("# Plan\n\nReady for approval.", "Plan mode - next step", ["Approve"]);
+
+		expect(mode.ui.hasOverlay()).toBe(true);
+
+		await mode.prepareSessionSwitch();
+
+		expect(mode.ui.hasOverlay()).toBe(false);
+		await expectSettlesCancelled(choice);
+	});
+
+	it("settles the superseded plan-review promise when a new review opens", async () => {
+		// showPlanReview supersedes any live review via #hidePlanReview; the
+		// replaced promise must settle (to undefined, not dangle) so the earlier
+		// handlePlanApproval chain can finish.
+		const first = mode.showPlanReview("# First plan\n\nbody", "Plan mode - next step", ["Approve"]);
+
+		const second = mode.showPlanReview("# Second plan\n\nbody", "Plan mode - next step", ["Approve"]);
+
+		await expectSettlesCancelled(first);
+
+		// Dismiss the now-live second overlay through the same hide path.
+		await mode.prepareSessionSwitch();
+		await expectSettlesCancelled(second);
+	});
+
+	it("a superseded approval chain leaves the replacement review overlay open", async () => {
+		// XR9 regression: two concurrent handlePlanApproval dispatches (e.g. a
+		// second xd://propose write landing while the overlay is up). Review A's
+		// promise is cancelled by the supersede and its continuation resumes with
+		// `undefined`; the fall-through closePlanReview must NOT hide the NEW
+		// review B that replaced it. Constructed with the real showPlanReview
+		// (the supersede path under test) and a mocked ui.showOverlay handing out
+		// a distinct handle per review; each handle's hide spy records who closed
+		// what.
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nConcurrent proposals.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+
+		const handles: Array<{ hide: ReturnType<typeof vi.fn> }> = [];
+		const firstShown = Promise.withResolvers<void>();
+		const secondShown = Promise.withResolvers<void>();
+		vi.spyOn(mode.ui, "showOverlay").mockImplementation(() => {
+			const handle = { hide: vi.fn() };
+			handles.push(handle);
+			if (handles.length === 1) firstShown.resolve();
+			else secondShown.resolve();
+			return handle as never;
+		});
+
+		const approvalA = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		await firstShown.promise;
+		const approvalB = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		await secondShown.promise;
+
+		// The supersede settled review A's promise with `undefined`; its chain —
+		// including the fall-through closePlanReview — runs to completion.
+		await approvalA;
+
+		// A's own overlay was hidden exactly once, by the supersede itself.
+		expect(handles[0]!.hide).toHaveBeenCalledTimes(1);
+		// The replacement review B was not closed by A's exit (the bug closed it).
+		expect(handles[1]!.hide).not.toHaveBeenCalled();
+
+		// B's review is still pending; settle it through the normal dismiss path.
+		await mode.prepareSessionSwitch();
+		await approvalB;
+		expect(handles[1]!.hide).toHaveBeenCalledTimes(1);
 	});
 
 	it("copies the overlay's current edited plan markdown from the real plan review overlay", async () => {
@@ -1784,6 +1882,41 @@ describe("InteractiveMode plan review rendering", () => {
 		// with the plan in its first turn.
 		expect(markSentSpy).not.toHaveBeenCalled();
 		// And — the contract — the plan-approved synthetic prompt was NOT dispatched.
+		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(false);
+	});
+
+	it("Approve and compact context: cancelled outcome still autosaves the approved plan", async () => {
+		// Upstream saved the durable plans-dir copy ahead of the cancel guard;
+		// the fork's `dispatchApprovedPlan` extraction moved that autosave past
+		// the early return, so cancelling the compaction dropped the copy while
+		// the in-session plan reference survived. The save must land even when
+		// the operator aborts the compaction.
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nCancel mid-compact, keep the copy.");
+
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		cfgPlanAutosave.set(session.settings, true);
+		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
+		vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("cancelled");
+		const statusSpy = vi.spyOn(mode, "showStatus");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "CANCELSAVE",
+		});
+
+		// The durable copy landed in the plans dir despite the cancelled compaction.
+		const saved = path.join(tempDir.path(), ".omp", "plans", "CANCELSAVE_PLAN.md");
+		expect(await Bun.file(saved).text()).toBe("# Plan\n\nCancel mid-compact, keep the copy.");
+		expect(statusSpy).toHaveBeenCalledWith(expect.stringContaining("Saved plan to"));
+		// And the cancel contract still holds: no synthetic plan-approved dispatch.
 		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(false);
 	});
 

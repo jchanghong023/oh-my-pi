@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -130,5 +130,46 @@ describe("resolveRpcAttachments (5.5)", () => {
 
 	test("RpcAttachmentError carries the wire code", () => {
 		expect(new RpcAttachmentError("x", "attachment_limit").code).toBe("attachment_limit");
+	});
+
+	test("oversized file attachments reject via stat pre-check without reading the file", async () => {
+		await using dir = await TempDir.create("rpc-attach-big-");
+		const root = path.resolve(dir.path());
+		const limit = 20 * 1024 * 1024;
+		const bigPath = path.join(root, "big.log");
+		await fs.writeFile(bigPath, Buffer.alloc(limit + 1, 120));
+		const size = (await fs.stat(bigPath)).size;
+
+		const realReadFile = fs.readFile;
+		const readFileCalls: unknown[] = [];
+		const wrappedReadFile = ((...args: unknown[]) => {
+			readFileCalls.push(args[0]);
+			return realReadFile(...(args as Parameters<typeof realReadFile>));
+		}) as typeof fs.readFile;
+		mock.module("node:fs/promises", () => ({ ...fs, readFile: wrappedReadFile }));
+		try {
+			let error: unknown;
+			try {
+				await resolveRpcAttachments([{ kind: "file", path: bigPath }], root);
+			} catch (caught) {
+				error = caught;
+			}
+			expect(error).toBeInstanceOf(RpcAttachmentError);
+			expect((error as RpcAttachmentError).code).toBe("attachment_too_large");
+			expect((error as RpcAttachmentError).message).toBe(
+				`Attachment exceeds the ${limit} byte limit: ${bigPath} (${size} bytes)`,
+			);
+			expect(readFileCalls).toHaveLength(0);
+		} finally {
+			// bun:test module mocks persist for the process (mock.restore() does not
+			// undo mock.module), so hand the real readFile back before moving on.
+			mock.module("node:fs/promises", () => ({ ...fs, readFile: realReadFile }));
+		}
+
+		// The under-limit path keeps reading files through the restored module.
+		const smallPath = path.join(root, "small.txt");
+		await fs.writeFile(smallPath, "still readable");
+		const { textPrefix } = await resolveRpcAttachments([{ kind: "file", path: smallPath }], root);
+		expect(textPrefix).toContain("still readable");
 	});
 });

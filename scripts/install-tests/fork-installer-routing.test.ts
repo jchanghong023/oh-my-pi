@@ -242,7 +242,7 @@ describe.skipIf(!windowsPowerShell)("Windows fork installer replacement", () => 
 			`$ErrorActionPreference = "Stop"
 function New-FixtureBinary([string]$Path, [string]$Version) {
     $typeName = "Fixture" + [Guid]::NewGuid().ToString("N")
-    Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { if (args.Length > 0 && args[0] == \\"--version\\") System.Console.WriteLine(\\"omp/$Version\\"); else System.Threading.Thread.Sleep(60000); } }" -OutputAssembly $Path -OutputType ConsoleApplication
+    Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { if (args.Length > 0 && args[0] == ""--version"") System.Console.WriteLine(""omp/$Version""); else System.Threading.Thread.Sleep(60000); } }" -OutputAssembly $Path -OutputType ConsoleApplication
 }
 $install = $env:PI_INSTALL_DIR
 New-Item -ItemType Directory -Path $install | Out-Null
@@ -312,8 +312,13 @@ try {
 				TEST_ROOT: dir,
 				TEST_MODE: mode,
 				TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+				// Pin x64 without touching PROCESSOR_ARCHITEW6432: Bun.spawn on
+				// Windows never delivers that variable to the child, and an empty
+				// value additionally drops PROCESSOR_ARCHITECTURE, which would make
+				// install.ps1 fail its architecture detection. A 64-bit host process
+				// has no PROCESSOR_ARCHITEW6432 anyway, so install.ps1 reads the
+				// pinned PROCESSOR_ARCHITECTURE.
 				PROCESSOR_ARCHITECTURE: "AMD64",
-				PROCESSOR_ARCHITEW6432: "",
 			},
 			stdout: "pipe",
 			stderr: "pipe",

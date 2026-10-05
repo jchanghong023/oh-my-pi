@@ -68,6 +68,24 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
 	return isAdoptable(record);
 }
 
+/**
+ * Conditional adoption clauses (§2.7 未采纳方向): explaining *when* a blocked
+ * proposal could become adoptable — "在阻断问题 b 解决后即可采用" — is expected
+ * synthesis content, not a tracking override. A clause is stripped only when
+ * its adoption verb is explicitly guarded: either a conditional connective
+ * leads into it, or a resolution verb is followed by an explicit posteriority
+ * marker (后/之后/之时). The posteriority requirement keeps "…解决方案 A 可采用"
+ * (解决方案 reads as "adopt solution A", not resolution + 后) unstripped, so an
+ * unconditional recommendation still conflicts.
+ */
+const CONDITIONAL_ADOPTION_CLAUSE = new RegExp(
+	[
+		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以)?(?:采用|推荐|首选)",
+		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|推荐|首选)",
+	].join("|"),
+	"gu",
+);
+
 /** A model-authored adoption claim must not override the tracked proposal status. */
 function synthesisBodyConflict(
 	synthesis: TeamSynthesisOutput,
@@ -81,7 +99,9 @@ function synthesisBodyConflict(
 		const label = `方案${record.label}`;
 		for (const statement of statements) {
 			const compact = statement.replace(/\s+/gu, "");
-			const positiveClaims = compact.replace(/(?:不(?:可采用|可以采用|推荐|建议采用)|并非首选|不是首选)/gu, "");
+			const positiveClaims = compact
+				.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
+				.replace(/(?:不(?:可采用|可以采用|推荐|建议采用)|并非首选|不是首选)/gu, "");
 			if (
 				(compact.includes(label) || compact.includes(`${record.label}方案`)) &&
 				/(?:可采用|可以采用|推荐|首选)/u.test(positiveClaims)

@@ -145,6 +145,159 @@ describe("RpcForkQueueController (5.1)", () => {
 		expect(bad).toMatchObject({ success: false });
 	});
 
+	test("clear_queue guards the snapshot with expectedRevision and reports the new revision", async () => {
+		const fx = setupQueue();
+		fx.setQueues([userMessage("a")], [userMessage("b")]);
+		const listed = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const staleRevision = (listed.data as RpcForkQueueSnapshot).revision;
+
+		// A stale revision must not drop entries enqueued after the caller read the queue.
+		fx.setQueues([userMessage("a"), userMessage("late")], [userMessage("b")]);
+		const conflicted = await fx.run({
+			id: "c2",
+			type: "clear_queue",
+			queue: "steering",
+			expectedRevision: staleRevision,
+		});
+		expect(conflicted).toMatchObject({ command: "clear_queue", success: false, code: "revision_conflict" });
+		expect(fx.current.steering).toHaveLength(2);
+
+		// A matching revision clears and reports the post-clear revision.
+		const fresh = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const currentRevision = (fresh.data as RpcForkQueueSnapshot).revision;
+		const cleared = (await fx.run({
+			id: "c3",
+			type: "clear_queue",
+			queue: "steering",
+			expectedRevision: currentRevision,
+		})) as Extract<RpcResponse, { command: "clear_queue"; success: true }>;
+		expect(cleared.success).toBe(true);
+		expect(cleared.data.revision).toBeGreaterThan(currentRevision);
+		const after = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		expect((after.data as RpcForkQueueSnapshot).revision).toBe(cleared.data.revision);
+		expect(fx.current.steering).toHaveLength(0);
+
+		// Omitting expectedRevision keeps the legacy unconditional clear.
+		const legacy = await fx.run({ type: "clear_queue" });
+		expect(legacy).toMatchObject({ command: "clear_queue", success: true });
+		expect(fx.current.followUp).toHaveLength(0);
+	});
+
+	test("remove_queued guards the snapshot with expectedRevision and reports the new revision", async () => {
+		const fx = setupQueue();
+		const a = userMessage("a");
+		const late = userMessage("late");
+		fx.setQueues([a], [userMessage("b")]);
+		const listed = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const staleRevision = (listed.data as RpcForkQueueSnapshot).revision;
+		const staleId = (listed.data as RpcForkQueueSnapshot).steering.map(entry => entry.id)[0];
+
+		// A still-valid id must not remove after the queue changed post-read.
+		fx.setQueues([a, late], [userMessage("b")]);
+		const conflicted = await fx.run({
+			id: "r2",
+			type: "remove_queued",
+			queue: "steering",
+			entryId: staleId,
+			expectedRevision: staleRevision,
+		});
+		expect(conflicted).toMatchObject({ command: "remove_queued", success: false, code: "revision_conflict" });
+		expect(fx.current.steering).toHaveLength(2);
+
+		// A matching revision removes the entry and reports the post-remove revision.
+		const fresh = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const freshIds = (fresh.data as RpcForkQueueSnapshot).steering.map(entry => entry.id);
+		const currentRevision = (fresh.data as RpcForkQueueSnapshot).revision;
+		const removed = (await fx.run({
+			id: "r3",
+			type: "remove_queued",
+			queue: "steering",
+			entryId: freshIds[0],
+			expectedRevision: currentRevision,
+		})) as Extract<RpcResponse, { command: "remove_queued"; success: true }>;
+		expect(removed.success).toBe(true);
+		expect(removed.data.revision).toBeGreaterThan(currentRevision);
+		const after = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		expect((after.data as RpcForkQueueSnapshot).revision).toBe(removed.data.revision);
+		expect(fx.current.steering.map(message => (message as { content: string }).content)).toEqual(["late"]);
+
+		// Omitting expectedRevision keeps the legacy id-based remove.
+		const legacy = await fx.run({ type: "remove_queued", queue: "steering", entryId: freshIds[1] });
+		expect(legacy).toMatchObject({ command: "remove_queued", success: true });
+		expect(fx.current.steering).toHaveLength(0);
+	});
+
+	test("reorder_queue guards the snapshot with expectedRevision and reports the new revision", async () => {
+		const fx = setupQueue();
+		const a = userMessage("a");
+		const b = userMessage("b");
+		fx.setQueues([a, b], []);
+		const listed = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const staleRevision = (listed.data as RpcForkQueueSnapshot).revision;
+		const ids = (listed.data as RpcForkQueueSnapshot).steering.map(entry => entry.id);
+
+		// A still-valid permutation must not reorder after the queue changed elsewhere.
+		fx.setQueues([a, b], [userMessage("late")]);
+		const conflicted = await fx.run({
+			id: "o2",
+			type: "reorder_queue",
+			queue: "steering",
+			ids: [ids[1], ids[0]],
+			expectedRevision: staleRevision,
+		});
+		expect(conflicted).toMatchObject({ command: "reorder_queue", success: false, code: "revision_conflict" });
+		expect(fx.current.steering.map(message => (message as { content: string }).content)).toEqual(["a", "b"]);
+
+		// A matching revision reorders and reports the post-reorder revision.
+		const fresh = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		const freshIds = (fresh.data as RpcForkQueueSnapshot).steering.map(entry => entry.id);
+		const currentRevision = (fresh.data as RpcForkQueueSnapshot).revision;
+		const reordered = (await fx.run({
+			id: "o3",
+			type: "reorder_queue",
+			queue: "steering",
+			ids: [freshIds[1], freshIds[0]],
+			expectedRevision: currentRevision,
+		})) as Extract<RpcResponse, { command: "reorder_queue"; success: true }>;
+		expect(reordered.success).toBe(true);
+		expect(reordered.data.revision).toBeGreaterThan(currentRevision);
+		const after = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		expect((after.data as RpcForkQueueSnapshot).revision).toBe(reordered.data.revision);
+		expect(fx.current.steering.map(message => (message as { content: string }).content)).toEqual(["b", "a"]);
+
+		// Omitting expectedRevision keeps the legacy set-checked reorder.
+		const legacy = await fx.run({ type: "reorder_queue", queue: "steering", ids: [freshIds[0], freshIds[1]] });
+		expect(legacy).toMatchObject({ command: "reorder_queue", success: true });
+		expect(fx.current.steering.map(message => (message as { content: string }).content)).toEqual(["a", "b"]);
+	});
+
 	test("user queue edits move/remove hidden companions without deleting runtime context", async () => {
 		const fx = setupQueue();
 		const a = userMessage("a");

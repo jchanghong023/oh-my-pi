@@ -109,7 +109,7 @@ import {
 } from "../eval/judgment-batch-events";
 import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
-import { planSaveFileName } from "../plan-mode/plan-autosave";
+import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
@@ -1556,6 +1556,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Re-renders the open jobs sheet so output tails and pids stay live. */
 	#jobsSheetTimer: NodeJS.Timeout | undefined;
 	#planReviewCancel: (() => void) | undefined;
+	/** Identity of the live plan review; bumped by every showPlanReview call. */
+	#planReviewGeneration = 0;
 	/** Serializable review annotations keyed by the resolved plan file path. */
 	#planReviewAnnotationState = new Map<string, PlanReviewAnnotationState>();
 	/** Annotation state held until the associated queued refinement actually starts. */
@@ -5252,6 +5254,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
 		this.#hidePlanReview();
+		// Supersede identity: each review gets a fresh generation so the awaiting
+		// handlePlanApproval chain can tell its own (possibly cancelled) review
+		// apart from a newer replacement that took over the overlay.
+		this.#planReviewGeneration += 1;
 		const { promise, resolve } = Promise.withResolvers<string | undefined>();
 		let settled = false;
 		const finish = (choice: string | undefined): void => {
@@ -5296,17 +5302,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		return promise;
 	}
 
+	// Hides the review overlay AND settles any still-pending review promise with
+	// `undefined` — the same value the overlay's own cancel path produces — so
+	// awaiters (handlePlanApproval) never hang when the overlay disappears
+	// without an operator pick (superseded by a new review, or hidden by a
+	// session switch via prepareSessionSwitch).
 	#hidePlanReview(): void {
+		const cancel = this.#planReviewCancel;
 		this.#planReviewCancel = undefined;
+		cancel?.();
 		this.#planReviewOverlayHandle?.hide();
 		this.#planReviewOverlayHandle = undefined;
 		this.#planReviewOverlay = undefined;
 	}
 
 	#dismissPlanReview(): void {
-		const cancel = this.#planReviewCancel;
-		this.#planReviewCancel = undefined;
-		cancel?.();
 		this.#hidePlanReview();
 	}
 
@@ -5668,6 +5678,36 @@ export class InteractiveMode implements InteractiveModeContext {
 			// prompt. `markPlanReferenceSent` stays unset so
 			// `AgentSession.#buildPlanReferenceMessage` injects the plan reference
 			// on the operator's next `prompt()` call.
+			// The durable plans-dir copy is written BEFORE bailing: upstream saved
+			// the approved plan ahead of this cancel guard, and moving the dispatch
+			// tail (including the autosave) into `dispatchApprovedPlan` below had
+			// shifted the save past this early return — a cancelled compaction
+			// dropped the copy. Same best-effort semantics as the dispatch path
+			// (re-pinning the reference path is idempotent; it was already set
+			// before compaction).
+			this.session.setPlanReferencePath(options.planFilePath);
+			try {
+				const autosaved = await autosaveApprovedPlan({
+					settings: this.session.settings,
+					cwd: this.sessionManager.getCwd(),
+					title: options.title,
+					planContent,
+				});
+				if (autosaved) {
+					const displayPath = truncateToWidth(replaceTabs(shortenPath(autosaved)), TRUNCATE_LENGTHS.CONTENT);
+					this.showStatus(`Saved plan to ${displayPath}.`);
+				}
+			} catch (error) {
+				const detail = truncateToWidth(
+					shortenEmbeddedPaths(
+						replaceTabs(error instanceof Error ? error.message : String(error))
+							.replace(/[\r\n]+/g, " ")
+							.trim(),
+					),
+					TRUNCATE_LENGTHS.CONTENT,
+				);
+				this.showWarning(`Failed to autosave plan: ${detail}`);
+			}
 			this.showWarning(
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
@@ -6453,7 +6493,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		let feedback = "";
 		const annotationStateKey = this.#resolvePlanFilePath(planFilePath);
 
-		const choice = await this.showPlanReview(
+		const review = this.showPlanReview(
 			planContent,
 			"Plan mode - next step",
 			[
@@ -6482,7 +6522,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
+		// showPlanReview runs synchronously up to returning its promise, so this
+		// reads the generation of exactly the review this chain awaits.
+		const awaitedReviewGeneration = this.#planReviewGeneration;
+		const choice = await review;
 		const closePlanReview = (): void => {
+			// A superseded review settles with `undefined` (the cancel value), and
+			// its continuation resumes after the replacement is already live.
+			// Closing unconditionally here would hide the NEW review — only close
+			// when the live review is still the one this invocation awaited;
+			// otherwise this chain exits silently (superseded semantics).
+			if (this.#planReviewGeneration !== awaitedReviewGeneration) return;
 			this.#hidePlanReview();
 			this.ui.requestRender();
 		};

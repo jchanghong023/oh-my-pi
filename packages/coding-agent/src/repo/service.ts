@@ -41,6 +41,12 @@ function escapeLike(value: string): string {
 function pythonParseFailure(path: string): RepoFailure {
 	return { path, kind: "parse", message: "Python syntax tree contains parse errors; symbols omitted" };
 }
+/** Pending rows can outnumber the engine's spread-argument limit, so accumulate the maximum without spreading. */
+export function maxPendingSeq(rows: Array<{ seq: number }>): number {
+	let max = rows[0]!.seq;
+	for (const row of rows) if (row.seq > max) max = row.seq;
+	return max;
+}
 /** Map a UTF-16 offset in lowercased text back to the original source. */
 function originalOffset(text: string, loweredOffset: number): number {
 	let source = 0;
@@ -453,7 +459,7 @@ export class RepoService {
 					}
 					this.storage.clearPending(
 						paths.map(row => row.path),
-						Math.max(...paths.map(row => row.seq)),
+						maxPendingSeq(paths),
 					);
 					if (prepared.some(item => !item.unchanged)) {
 						this.storage.db.query("UPDATE state SET generation=? WHERE id=1").run(randomUUID());

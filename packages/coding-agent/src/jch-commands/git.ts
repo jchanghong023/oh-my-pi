@@ -139,8 +139,16 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return { consumed: true };
 			}
 			runtime.ctx.editor.setText("");
+			// Declared before the try so the catch can conservatively report a
+			// possible worktree mutation on a throw; `clean` joins once its
+			// repo-wide cwd is resolved.
+			const steps: GitStep[] = [
+				{ args: ["fetch", "--all", "--prune"] },
+				{ args: ["reset", "--hard", "@{upstream}"] },
+			];
+			let cwd: string | undefined;
 			try {
-				const cwd = runtime.ctx.sessionManager.getCwd();
+				cwd = runtime.ctx.sessionManager.getCwd();
 				// `clean` only sweeps below its cwd while the reset is repo-wide;
 				// resolve the toplevel so a session opened in a subdirectory still
 				// discards untracked files across the whole worktree.
@@ -149,11 +157,8 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					runtime.ctx.showError(formatGitOutput(toplevel.stdout, toplevel.stderr));
 					return { consumed: true };
 				}
-				const result = await runGitSequence(cwd, [
-					{ args: ["fetch", "--all", "--prune"] },
-					{ args: ["reset", "--hard", "@{upstream}"] },
-					{ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"], cwd: toplevel.stdout.trim() },
-				]);
+				steps.push({ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"], cwd: toplevel.stdout.trim() });
+				const result = await runGitSequence(cwd, steps);
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);
 				// reset/clean change the worktree; once either has started, even a
@@ -161,6 +166,9 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				if (result.mutated) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			} catch (error) {
 				runtime.ctx.showError(formatError(error));
+				// A throw gives no reliable progress report; report conservatively.
+				if (cwd !== undefined && stepsMayMutateWorktree(steps))
+					notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			}
 			return { consumed: true };
 		},

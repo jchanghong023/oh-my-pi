@@ -403,10 +403,16 @@ export function parseFulltestArgs(args: readonly string[]): { debug: boolean } |
 async function resolveCargoBinary(): Promise<string> {
 	// Same guard as run-rs-task: on macOS hosts Homebrew's `rustup-init`
 	// shadows the rustup proxies, so ask rustup for the toolchain's cargo.
-	const result = await $`rustup which cargo`.cwd(repoRoot).quiet().nothrow();
-	if (result.exitCode === 0) {
-		const resolved = result.stdout.toString().trim();
-		if (resolved !== "") return resolved;
+	// nothrow() only spares non-zero exits — rustup missing from PATH fails
+	// the spawn itself, so catch that and fall back like fastcheck's resolver.
+	try {
+		const result = await $`rustup which cargo`.cwd(repoRoot).quiet().nothrow();
+		if (result.exitCode === 0) {
+			const resolved = result.stdout.toString().trim();
+			if (resolved !== "") return resolved;
+		}
+	} catch {
+		// rustup unavailable — plain cargo is the fallback.
 	}
 	return "cargo";
 }

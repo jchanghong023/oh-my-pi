@@ -318,97 +318,110 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	}
 
 	emitProgress("revision", "阶段四：修订与复核");
-	for (const record of reviewed) {
-		if (signal.aborted) return { status: "cancelled" };
-		const hasFindings = record.reviews[0]!.findings.length > 0;
-		if (!hasFindings) continue; // nothing to revise; no padding rounds
-		for (let round = 1; round <= TEAM_MAX_REVISION_ROUNDS; round++) {
-			if (signal.aborted) return { status: "cancelled" };
-			record.roundsUsed = round;
-			trackParticipant(`revision-${record.label}`, "reviser", "running");
-			emitProgress("revision", `阶段四：修订与复核（${record.label} 第 ${round} 轮）`);
-			const revisionOutcome = await runCall({
-				role: "reviser",
-				modelPattern: record.participant.modelPattern,
-				label: `team-revision-${record.label}-${round}`,
-				task: buildRevisionTask({
-					question,
-					cwd,
-					targetLabel: record.label,
-					round,
-					alignment,
-					proposal: record.latestProposal!,
-					review: record.reviews.at(-1)!,
-					unresolvedBlocking: record.unresolvedBlocking,
-				}),
-				schema: TEAM_REVISION_SCHEMA,
-			});
-			if (signal.aborted) return { status: "cancelled" };
-			const revision = revisionOutcome.ok ? parseTeamRevision(revisionOutcome.data) : undefined;
-			if (!revision) {
-				record.revisionFailed = true;
-				trackParticipant(`revision-${record.label}`, "reviser", "failed");
-				emitProgress("revision", `阶段四：修订与复核（${record.label} 修订失败）`);
-				break; // conservative: unresolved state stands as-is
-			}
-			record.revision = revision;
-			if (revision.revisedProposal.trim())
-				record.latestProposal = { ...record.latestProposal!, proposal: revision.revisedProposal };
-			trackParticipant(`revision-${record.label}`, "reviser", "completed");
-			emitProgress("revision", `阶段四：修订与复核（${record.label} 修订完成）`);
-
-			if (needsRecheck(revision.reviewFlags)) {
-				trackParticipant(`recheck-${record.label}`, "reviewer", "running");
-				const recheckOutcome = await runCall({
-					role: "reviewer",
-					modelPattern: record.reviewer!.modelPattern,
-					label: `team-recheck-${record.label}-${round}`,
-					task: buildReviewTask({
-						...reviewTaskBase(record),
+	// No cross-record coupling: each per-proposal loop reads and writes only
+	// its own record, so the loops fan out concurrently exactly like stages 1
+	// and 3, under the same semaphore (§5.4 bounds concurrency; §2.5 orders no
+	// per-proposal revision sequence against another). Progress lines may
+	// interleave; each is still emitted whole.
+	await Promise.all(
+		reviewed.map(async record => {
+			if (signal.aborted) return;
+			const hasFindings = record.reviews[0]!.findings.length > 0;
+			if (!hasFindings) return; // nothing to revise; no padding rounds
+			for (let round = 1; round <= TEAM_MAX_REVISION_ROUNDS; round++) {
+				if (signal.aborted) return;
+				record.roundsUsed = round;
+				trackParticipant(`revision-${record.label}`, "reviser", "running");
+				emitProgress("revision", `阶段四：修订与复核（${record.label} 第 ${round} 轮）`);
+				const revisionOutcome = await runCall({
+					role: "reviser",
+					modelPattern: record.participant.modelPattern,
+					label: `team-revision-${record.label}-${round}`,
+					task: buildRevisionTask({
+						question,
+						cwd,
+						targetLabel: record.label,
 						round,
-						recheck: true,
+						alignment,
+						proposal: record.latestProposal!,
+						review: record.reviews.at(-1)!,
 						unresolvedBlocking: record.unresolvedBlocking,
 					}),
-					schema: TEAM_REVIEW_SCHEMA,
+					schema: TEAM_REVISION_SCHEMA,
 				});
-				if (signal.aborted) return { status: "cancelled" };
-				const recheck = recheckOutcome.ok ? parseTeamReview(recheckOutcome.data) : undefined;
-				if (!recheck) {
-					// Recheck failure cannot confirm resolution; the blocking state
-					// stands and is reported as incomplete participation. The revised
-					// version itself also stays unverified (pendingRecheck): it must
-					// not ride on the pre-revision review's adoptable status.
-					record.recheckFailed = true;
-					record.pendingRecheck = true;
-					trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
-					emitProgress("revision", `阶段四：修订与复核（${record.label} 复核失败）`);
-				} else {
-					record.reviews.push(recheck);
-					record.pendingRecheck = false;
-					trackParticipant(`recheck-${record.label}`, "reviewer", "completed");
-					emitProgress("revision", `阶段四：修订与复核（${record.label} 复核完成）`);
+				if (signal.aborted) return;
+				const revision = revisionOutcome.ok ? parseTeamRevision(revisionOutcome.data) : undefined;
+				if (!revision) {
+					record.revisionFailed = true;
+					trackParticipant(`revision-${record.label}`, "reviser", "failed");
+					emitProgress("revision", `阶段四：修订与复核（${record.label} 修订失败）`);
+					break; // conservative: unresolved state stands as-is
+				}
+				record.revision = revision;
+				if (revision.revisedProposal.trim())
+					record.latestProposal = { ...record.latestProposal!, proposal: revision.revisedProposal };
+				trackParticipant(`revision-${record.label}`, "reviser", "completed");
+				emitProgress("revision", `阶段四：修订与复核（${record.label} 修订完成）`);
+
+				if (needsRecheck(revision.reviewFlags)) {
+					trackParticipant(`recheck-${record.label}`, "reviewer", "running");
+					const recheckOutcome = await runCall({
+						role: "reviewer",
+						modelPattern: record.reviewer!.modelPattern,
+						label: `team-recheck-${record.label}-${round}`,
+						task: buildReviewTask({
+							...reviewTaskBase(record),
+							round,
+							recheck: true,
+							unresolvedBlocking: record.unresolvedBlocking,
+						}),
+						schema: TEAM_REVIEW_SCHEMA,
+					});
+					if (signal.aborted) return;
+					const recheck = recheckOutcome.ok ? parseTeamReview(recheckOutcome.data) : undefined;
+					if (!recheck) {
+						// Recheck failure cannot confirm resolution; the blocking state
+						// stands and is reported as incomplete participation. The revised
+						// version itself also stays unverified (pendingRecheck): it must
+						// not ride on the pre-revision review's adoptable status.
+						record.recheckFailed = true;
+						record.pendingRecheck = true;
+						trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
+						emitProgress("revision", `阶段四：修订与复核（${record.label} 复核失败）`);
+					} else {
+						record.reviews.push(recheck);
+						record.pendingRecheck = false;
+						// The latest recheck verified the revised version (§2.5 恢复路径),
+						// so the earlier failure is no longer a fact about the run's final
+						// state: stale "复核失败" notes must not survive into the final
+						// report or the synthesis inputs. Gate semantics ride on
+						// pendingRecheck/excludedFromOptions and are untouched.
+						record.recheckFailed = false;
+						trackParticipant(`recheck-${record.label}`, "reviewer", "completed");
+						emitProgress("revision", `阶段四：修订与复核（${record.label} 复核完成）`);
+					}
+				}
+				record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
+				if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck) break;
+				// Without a recheck the blocking state cannot change mechanically
+				// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
+				// revision prompt would only pad rounds. An incomplete recheck is the
+				// one exception: the round cap still binds, and a next round's recheck
+				// can yet verify the revised version.
+				if (!needsRecheck(revision.reviewFlags)) break;
+				if (round === TEAM_MAX_REVISION_ROUNDS) {
+					record.blockedAfterRoundCap = true; // third round is refused by the loop bound
 				}
 			}
-			record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
-			if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck) break;
-			// Without a recheck the blocking state cannot change mechanically
-			// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
-			// revision prompt would only pad rounds. An incomplete recheck is the
-			// one exception: the round cap still binds, and a next round's recheck
-			// can yet verify the revised version.
-			if (!needsRecheck(revision.reviewFlags)) break;
-			if (round === TEAM_MAX_REVISION_ROUNDS) {
-				record.blockedAfterRoundCap = true; // third round is refused by the loop bound
+			// A revision whose required recheck never completed has not been reviewed
+			// in its current form; "no recorded blocking findings" from the initial
+			// review is not a review of this version, so it cannot stay adoptable.
+			if (record.pendingRecheck && !record.excludedFromOptions) {
+				record.excludedFromOptions = true;
+				record.exclusionReason = "修订后必需复核未完成（复核子代理失败），当前版本未经复核确认";
 			}
-		}
-		// A revision whose required recheck never completed has not been reviewed
-		// in its current form; "no recorded blocking findings" from the initial
-		// review is not a review of this version, so it cannot stay adoptable.
-		if (record.pendingRecheck && !record.excludedFromOptions) {
-			record.excludedFromOptions = true;
-			record.exclusionReason = "修订后必需复核未完成（复核子代理失败），当前版本未经复核确认";
-		}
-	}
+		}),
+	);
 	if (signal.aborted) return { status: "cancelled" };
 
 	// ── Stage 5: synthesis (session model) ──────────────────────────────────
@@ -433,7 +446,6 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		};
 	}
 	trackParticipant("synthesis", "synthesizer", "completed");
-	emitProgress("done", "讨论完成");
 
 	const participationNotes: string[] = [];
 	for (const record of records) {
@@ -456,5 +468,9 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 			failureReason: `综合结果无效（${report.error}），流程未完成，不输出半成品结论`,
 		};
 	}
+	// "done" is announced only after the assembled report is confirmed valid:
+	// a synthesis-body conflict fails the run below, and a failed run must not
+	// have already told the user the discussion completed.
+	emitProgress("done", "讨论完成");
 	return { status: "completed", reportMarkdown: report.markdown, droppedRecommendation: report.droppedRecommendation };
 }

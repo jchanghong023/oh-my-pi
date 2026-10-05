@@ -2735,6 +2735,7 @@ export function createDisabledModelMatcher(
 		return cached.matches;
 	const selectors: string[] = [];
 	const globs: Bun.Glob[] = [];
+	const providerGlobs: Bun.Glob[] = [];
 	for (const pattern of patterns) {
 		if (
 			!(pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) ||
@@ -2754,6 +2755,9 @@ export function createDisabledModelMatcher(
 			return allModelsDisabled;
 		}
 		globs.push(new Bun.Glob(base.toLowerCase()));
+		// Provider-wide selectors also cover ids containing path separators,
+		// such as Bedrock profile ARNs. Model-specific selectors stay literal.
+		if (base.endsWith("/*")) providerGlobs.push(new Bun.Glob(base.slice(0, -2).toLowerCase()));
 	}
 	const keys = selectors.length > 0 ? new Set<string>() : undefined;
 	if (keys) {
@@ -2763,13 +2767,17 @@ export function createDisabledModelMatcher(
 		}
 	}
 	const matches: DisabledModelMatcher = model => {
-		const fullId = `${model.provider}/${model.id}`.toLowerCase();
-		if (keys?.has(fullId)) return true;
-		const id = model.id.toLowerCase();
-		for (const glob of globs) {
-			if (glob.match(fullId) || glob.match(id)) return true;
-		}
-		return false;
+		const matchIdentity = (candidate: Pick<Model<Api>, "provider" | "id">): boolean => {
+			const fullId = `${candidate.provider}/${candidate.id}`.toLowerCase();
+			if (keys?.has(fullId)) return true;
+			const id = candidate.id.toLowerCase();
+			for (const glob of globs) {
+				if (glob.match(fullId) || glob.match(id)) return true;
+			}
+			return false;
+		};
+		if (matchIdentity(model)) return true;
+		return providerGlobs.some(glob => glob.match(model.provider.toLowerCase()));
 	};
 	modelExclusionMatchers.set(catalog, { patterns, settings, revision, preferences, matches });
 	return matches;

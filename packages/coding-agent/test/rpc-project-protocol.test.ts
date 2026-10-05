@@ -768,6 +768,79 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 		}, 60_000);
 	}
 
+	test("failed final closes can be retried through close_session and delete_session", async () => {
+		await using temp = await TempDir.create("rpc-project-close-retry-");
+		const cwd = path.resolve(temp.path());
+		const extensionPath = path.join(cwd, "fail-close-once.ts");
+		const managerModule = path.resolve(import.meta.dir, "../src/session/session-manager.ts");
+		await Bun.write(
+			extensionPath,
+			`import { SessionManager } from ${JSON.stringify(managerModule)};
+export default function() {
+	const marker = Symbol.for("rpc-project-test.fail-close-once");
+	if (SessionManager.prototype[marker]) return;
+	SessionManager.prototype[marker] = true;
+	const close = SessionManager.prototype.close;
+	const failed = new WeakSet();
+	SessionManager.prototype.close = async function() {
+		if (!failed.has(this)) {
+			failed.add(this);
+			throw new Error("temporary transcript close failure");
+		}
+		return close.call(this);
+	};
+}`,
+		);
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent"), extensionPath },
+			async (send, next, _seen, controls) => {
+				await negotiateV3(send, next);
+				for (const action of ["close_session", "delete_session"] as const) {
+					send({ id: `create-${action}`, type: "create_session", name: `retry-${action}` });
+					const created = await responseFor(next, `create-${action}`);
+					expect(created.success).toBe(true);
+					const session = LoadedSummary.assert(created.data);
+					send({ id: `fail-${action}`, type: "close_session", sessionId: session.sessionId });
+					expect(await responseFor(next, `fail-${action}`)).toMatchObject({ success: false });
+					send({ id: `list-${action}`, type: "list_sessions" });
+					const directory = (await responseFor(next, `list-${action}`)).data as {
+						sessions: SessionSummaryLike[];
+						revision: string;
+					};
+					expect(findSession(directory, session.sessionId)?.loadState).toBe("closing");
+					controls.sendRaw({
+						id: `stale-${action}`,
+						type: action,
+						sessionId: session.sessionId,
+						sessionGeneration: "stale-generation",
+						expectedRevision: directory.revision,
+					});
+					expect(await responseFor(next, `stale-${action}`)).toMatchObject({
+						success: false,
+						code: "stale_session",
+					});
+					send({
+						id: `retry-${action}`,
+						type: action,
+						sessionId: session.sessionId,
+						expectedRevision: directory.revision,
+					});
+					expect(await responseFor(next, `retry-${action}`)).toMatchObject({
+						success: true,
+						data: action === "close_session" ? { state: "unloaded" } : { deleted: true },
+					});
+					send({ id: `after-${action}`, type: "list_sessions" });
+					const after = (await responseFor(next, `after-${action}`)).data;
+					if (action === "close_session") {
+						expect(findSession(after, session.sessionId)?.loadState).toBe("not_loaded");
+					} else {
+						expect(findSession(after, session.sessionId)).toBeUndefined();
+					}
+				}
+			},
+		);
+	}, 60_000);
+
 	test("generation is mandatory and pure management-panel actions do not create an actor", async () => {
 		await using temp = await TempDir.create("rpc-project-generation-");
 		const cwd = path.resolve(temp.path());

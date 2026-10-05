@@ -10,6 +10,7 @@
  * transport, the process lifetime, and the AgentSession itself.
  */
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
@@ -1293,17 +1294,34 @@ const SESSION_CHANGE_TYPES: Record<string, true> = {
  * sequence number at frame-arrival time; an abort raises `#validFrom` so
  * earlier still-queued input dies at its next `isCurrent` check, and a session
  * change commits its sequence once it succeeds. `enqueue` serializes the
- * gated arms without blocking the stdin reader. Re-entrant `enqueue` calls
- * (a dispatch wrapped inside an already-ordered section, e.g. project-mode
+ * gated arms without blocking the stdin reader. Re-entrant `enqueue` calls —
+ * a dispatch wrapped inside an already-ordered section, e.g. project-mode
  * `execute_command` resolving its catalog before handing a synthetic prompt to
- * the same gate) run inline so the whole section keeps one arrival order.
+ * the same gate — run inline so the whole section keeps one arrival order.
+ * Re-entrancy follows the running section's dynamic extent only: the store
+ * names the gate and the section token actually running on it, and `enqueue`
+ * inlines only while that exact section is still running — so an unrelated
+ * frame whose enqueue happens while a section is suspended across an `await`,
+ * a callback the section scheduled that outlives it, and any other gate
+ * instance all queue in arrival order instead.
  */
+
+/** Identity of the running gate section: inline re-entrancy matches this exact pair. */
+interface GateSectionScope {
+	readonly gate: RpcUserInputGate;
+	readonly section: number;
+}
+
+const gateSectionScope = new AsyncLocalStorage<GateSectionScope>();
+
 export class RpcUserInputGate {
 	#tail: Promise<void> = Promise.resolve();
 	#sequence = 0;
 	#validFrom = 0;
-	#depth = 0;
 	#acceptedAt = new WeakMap<object, number>();
+	/** Monotonic token handed to each queued section; `#runningSection` holds the live one. */
+	#sectionCounter = 0;
+	#runningSection = 0;
 
 	accept(command: RpcCommand): void {
 		const isAbort = command.type === "abort" || command.type === "abort_and_prompt";
@@ -1330,31 +1348,42 @@ export class RpcUserInputGate {
 	}
 
 	enqueue<T>(work: () => Promise<T>): Promise<T> {
-		if (this.#depth > 0) return work();
-		// Depth flips only when the queued section actually starts, so a busy
-		// gate never lets a later frame's enqueue run inline ahead of it.
-		const begin = (): void => {
-			this.#depth = 1;
-		};
+		// Only enqueues reached from within the currently running section's own
+		// async subtree (across its awaits), on this same gate, run inline; a
+		// busy gate still forces every independently dispatched frame to queue
+		// behind it in arrival order, and contexts that merely carry a settled
+		// section's store (timers it scheduled, other gate instances) queue too.
+		const scope = gateSectionScope.getStore();
+		if (scope && scope.gate === this && scope.section === this.#runningSection) return work();
+		const section = ++this.#sectionCounter;
 		const run = this.#tail.then(
-			() => {
-				begin();
-				return work();
-			},
-			() => {
-				begin();
-				return work();
-			},
+			() => this.#runSection(section, work),
+			() => this.#runSection(section, work),
 		);
 		this.#tail = run.then(
-			() => {
-				this.#depth = 0;
-			},
-			() => {
-				this.#depth = 0;
-			},
+			() => {},
+			() => {},
 		);
 		return run;
+	}
+
+	/**
+	 * Runs one queued section under its scope token. The token is live only
+	 * from the section's actual start until its work settles — the cleanup runs
+	 * before the tail chain advances — which is exactly what enqueue's inline
+	 * check matches against.
+	 */
+	#runSection<T>(section: number, work: () => Promise<T>): Promise<T> {
+		this.#runningSection = section;
+		try {
+			return gateSectionScope.run({ gate: this, section }, work).finally(() => {
+				if (this.#runningSection === section) this.#runningSection = 0;
+			});
+		} catch (error) {
+			// work() itself threw synchronously: no promise will run the finally.
+			if (this.#runningSection === section) this.#runningSection = 0;
+			throw error;
+		}
 	}
 }
 

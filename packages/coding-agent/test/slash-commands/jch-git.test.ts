@@ -354,6 +354,30 @@ describe("direct JCH git slash commands", () => {
 			expect(calls).toEqual([{ kind: "git", cwd: work }]);
 		}, 30_000);
 
+		it("reports conservatively when the TUI sequence throws", async () => {
+			// A cwd that cannot be spawned in makes the first git subprocess
+			// throw; the catch must still tell the repo index the tree may have
+			// changed, mirroring handleGitSequence's conservative report.
+			const gone = join(root, "gone");
+			const { session, calls } = sessionStub();
+			let error = "";
+			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
+				ctx: {
+					editor: { setText: () => {} },
+					session,
+					sessionManager: { getCwd: () => gone },
+					showStatus: () => {},
+					showError: (text: string) => {
+						error = text;
+					},
+				},
+			} as unknown as TuiSlashCommandRuntime);
+
+			expect(consumed).toBe(true);
+			expect(error).not.toBe("");
+			expect(calls).toEqual([{ kind: "git", cwd: gone }]);
+		}, 30_000);
+
 		it("does not report the read-only /jchgs", async () => {
 			const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgs");
 			if (!command?.handle) throw new Error("Missing /jchgs handler");

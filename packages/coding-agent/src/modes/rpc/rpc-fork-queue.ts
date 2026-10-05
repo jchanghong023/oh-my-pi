@@ -105,7 +105,36 @@ export class RpcForkQueueController {
 	}
 
 	async #removeQueued(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { queue: queueName, entryId } = command as { queue?: unknown; entryId?: unknown };
+		const {
+			queue: queueName,
+			entryId,
+			expectedRevision,
+		} = command as {
+			queue?: unknown;
+			entryId?: unknown;
+			expectedRevision?: unknown;
+		};
+		// An id-based remove alone cannot tell that the queue changed after the
+		// caller read it (§14.9: 不误删已消费条目). Clients that tracked the
+		// revision opt into conflict detection; omission keeps the legacy
+		// id-based behavior.
+		if (expectedRevision !== undefined) {
+			if (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+				return this.host.context.error(
+					command.id,
+					"remove_queued",
+					"expectedRevision must be a non-negative integer",
+				);
+			}
+			if (expectedRevision !== this.#revision) {
+				return this.host.context.error(
+					command.id,
+					"remove_queued",
+					`Queue changed since revision ${expectedRevision} (now ${this.#revision}); read it again`,
+					"revision_conflict",
+				);
+			}
+		}
 		if (queueName !== "steering" && queueName !== "followUp") {
 			return this.host.context.error(command.id, "remove_queued", `Invalid queue: ${String(queueName)}`);
 		}
@@ -125,11 +154,39 @@ export class RpcForkQueueController {
 		const remaining = [...current];
 		remaining.splice(group.start, group.end - group.start);
 		this.#applyQueue(queueName, remaining);
-		return this.host.context.success(command.id, "remove_queued");
+		return this.host.context.success(command.id, "remove_queued", { revision: this.#revision });
 	}
 
 	async #reorderQueue(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { queue: queueName, ids } = command as { queue?: unknown; ids?: unknown };
+		const {
+			queue: queueName,
+			ids,
+			expectedRevision,
+		} = command as {
+			queue?: unknown;
+			ids?: unknown;
+			expectedRevision?: unknown;
+		};
+		// A valid-looking permutation can still be a stale overwrite (§14.9:
+		// 拒绝陈旧覆盖). Clients that tracked the revision opt into conflict
+		// detection; omission keeps the legacy set-checked behavior.
+		if (expectedRevision !== undefined) {
+			if (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+				return this.host.context.error(
+					command.id,
+					"reorder_queue",
+					"expectedRevision must be a non-negative integer",
+				);
+			}
+			if (expectedRevision !== this.#revision) {
+				return this.host.context.error(
+					command.id,
+					"reorder_queue",
+					`Queue changed since revision ${expectedRevision} (now ${this.#revision}); read it again`,
+					"revision_conflict",
+				);
+			}
+		}
 		if (queueName !== "steering" && queueName !== "followUp") {
 			return this.host.context.error(command.id, "reorder_queue", `Invalid queue: ${String(queueName)}`);
 		}
@@ -161,7 +218,7 @@ export class RpcForkQueueController {
 		}
 		reordered.push(...current.slice(offset));
 		this.#applyQueue(queueName, reordered);
-		return this.host.context.success(command.id, "reorder_queue");
+		return this.host.context.success(command.id, "reorder_queue", { revision: this.#revision });
 	}
 
 	async #clearQueue(command: RpcForkCommandBase): Promise<RpcResponse> {

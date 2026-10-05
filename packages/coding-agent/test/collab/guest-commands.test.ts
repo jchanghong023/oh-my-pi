@@ -419,7 +419,9 @@ describe("collab guest commands", () => {
 		harness.state.isStreaming = true;
 		guest.socket.send({ t: "prompt", text: "/during-turn" });
 		await guest.socket.flush();
-		await setImmediate();
+		// Host-side frame decryption is asynchronous: a single setImmediate does
+		// not cover it, so poll for the steered submission like the palette test.
+		for (let attempt = 0; attempt < 50 && harness.modelPrompts.length === 0; attempt++) await Bun.sleep(10);
 		expect(harness.modelPrompts).toEqual(["/during-turn"]);
 		expect(harness.modelPromptOptions[0]).toMatchObject({ streamingBehavior: "steer", throwOnDrop: true });
 	});

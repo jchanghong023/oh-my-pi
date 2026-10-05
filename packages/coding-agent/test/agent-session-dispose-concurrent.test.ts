@@ -203,6 +203,25 @@ describe("AgentSession concurrent disposal", () => {
 		expect(closeAt).toBeGreaterThan(order.indexOf("mnemopi:end"));
 	});
 
+	it("retries a failed final close without repeating subsystem shutdown", async () => {
+		const owned = new AsyncJobManager({ maxRunningJobs: 1 });
+		const shutdown = vi.spyOn(owned, "dispose");
+		const current = createSession(owned);
+		const close = vi
+			.spyOn(current.sessionManager, "close")
+			.mockRejectedValueOnce(new Error("temporary final close failure"))
+			.mockResolvedValue(undefined);
+		current.agent.appendMessage({ role: "user", content: "retain until persisted", timestamp: Date.now() });
+		const first = current.dispose();
+		expect(current.dispose()).toBe(first);
+		await expect(first).rejects.toThrow("temporary final close failure");
+		expect(current.agent.state.messages).toHaveLength(1);
+		await current.dispose();
+		expect(close).toHaveBeenCalledTimes(2);
+		expect(shutdown).toHaveBeenCalledTimes(1);
+		expect(current.agent.state.messages).toEqual([]);
+	});
+
 	it("bounds post-prompt work that ignores abort", async () => {
 		vi.useFakeTimers();
 		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});

@@ -372,6 +372,118 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 		expect((err as RpcProjectSessionError).code).toBe("not_found");
 	}, 15_000);
 
+	test("a failed close keeps the record retryable and a retry unloads it", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
+		await using fx = await createSessionFixture({
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+		});
+		const record = await fx.container.create();
+		fx.state.bundles.at(-1)!.setHost!(makeHost());
+		const sessionFile = record.session.sessionFile!;
+		let disposeAttempts = 0;
+		const session = fx.state.bundles.at(-1)!.session as unknown as { dispose: () => Promise<void> };
+		const originalDispose = session.dispose.bind(session);
+		session.dispose = async () => {
+			disposeAttempts++;
+			if (disposeAttempts === 1) throw new Error("simulated persistence flush failure");
+			await originalDispose();
+		};
+
+		// First close fails with the REAL cleanup error (never a fake unloaded).
+		const first = await failure(fx.container.close(record.sessionId));
+		expect(first).toBeInstanceOf(Error);
+		expect((first as Error).message).toBe("simulated persistence flush failure");
+
+		// The record stays in "closing" but idle — the truthful remaining state,
+		// visible in the directory, and not bricked with a permanent busy.
+		const stuck = fx.container.get(record.sessionId);
+		expect(stuck).toBe(record);
+		expect(record.state).toBe("closing");
+		expect(record.busy).toBe(false);
+		const midList = await fx.container.list();
+		const midRow = midList.sessions.find(summary => summary.sessionId === record.sessionId)!;
+		expect(midRow.loadState).toBe("closing");
+		expect(midRow.runState).toBe("closing");
+
+		// The retry re-enters the teardown, finishes it and unloads the session.
+		const retried = await fx.container.close(record.sessionId);
+		expect(retried.state).toBe("unloaded");
+		expect(disposeAttempts).toBe(2);
+		expect(fx.container.get(record.sessionId)).toBeUndefined();
+		expect(existsSync(sessionFile)).toBe(true); // history survives on disk
+		const after = await fx.container.list({ loadState: "not_loaded" });
+		expect(after.sessions.map(summary => summary.sessionId)).toContain(record.sessionId);
+
+		// After the successful retry the record is gone for good.
+		const second = await failure(fx.container.close(record.sessionId));
+		expect(second).toBeInstanceOf(RpcProjectSessionError);
+		expect((second as RpcProjectSessionError).code).toBe("not_found");
+	}, 15_000);
+
+	test("delete recovers a session whose close cleanup failed", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
+		await using fx = await createSessionFixture({
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+		});
+		const record = await fx.container.create();
+		fx.state.bundles.at(-1)!.setHost!(makeHost());
+		const sessionFile = record.session.sessionFile!;
+		let disposeAttempts = 0;
+		const session = fx.state.bundles.at(-1)!.session as unknown as { dispose: () => Promise<void> };
+		const originalDispose = session.dispose.bind(session);
+		session.dispose = async () => {
+			disposeAttempts++;
+			if (disposeAttempts === 1) throw new Error("simulated persistence flush failure");
+			await originalDispose();
+		};
+
+		const failed = await failure(fx.container.close(record.sessionId));
+		expect((failed as Error).message).toBe("simulated persistence flush failure");
+		expect(record.state).toBe("closing");
+
+		// delete re-enters the pending teardown (cancelRunning drives the abort),
+		// then removes the file: the session is fully recoverable after a failed close.
+		const deleted = await fx.container.delete(record.sessionId, { cancelRunning: true });
+		expect(fx.container.revision).toBe(deleted.revision);
+		expect(disposeAttempts).toBe(2);
+		expect(fx.state.abortCalls).toBe(1);
+		expect(fx.container.get(record.sessionId)).toBeUndefined();
+		expect(existsSync(sessionFile)).toBe(false);
+		const listed = await fx.container.list();
+		expect(listed.sessions.find(summary => summary.sessionId === record.sessionId)).toBeUndefined();
+	}, 15_000);
+
+	test("an in-flight teardown still rejects a concurrent close with busy", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
+		await using fx = await createSessionFixture({
+			cwd: path.resolve(cwdDir.path()),
+			sessions: path.resolve(sessionsDir.path()),
+		});
+		const record = await fx.container.create();
+		fx.state.bundles.at(-1)!.setHost!(makeHost());
+		let resolveDispose!: () => void;
+		const session = fx.state.bundles.at(-1)!.session as unknown as { dispose: () => Promise<void> };
+		session.dispose = () =>
+			new Promise<void>(resolve => {
+				resolveDispose = resolve;
+			});
+
+		const inFlight = fx.container.close(record.sessionId);
+		const concurrent = await failure(fx.container.close(record.sessionId));
+		expect(concurrent).toBeInstanceOf(RpcProjectSessionError);
+		expect((concurrent as RpcProjectSessionError).code).toBe("busy");
+		expect((concurrent as Error).message).toContain("already in progress");
+
+		resolveDispose();
+		await inFlight;
+		expect(fx.container.get(record.sessionId)).toBeUndefined();
+	}, 15_000);
+
 	test("rename of a not-loaded session rewrites the saved title and re-lists under the new name", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");

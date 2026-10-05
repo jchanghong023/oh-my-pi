@@ -98,7 +98,11 @@ export class RepoLifecycle {
 			service.markUncertain(`${kind} execution may have modified repository files; reconcile to verify coverage`);
 			// Commands may run outside the session's working directory. The scope is
 			// still marked uncertain; Git hints are merely candidates, not proof.
-			if (cwd && (!path.isAbsolute(cwd) || path.relative(service.root, cwd).startsWith(".."))) return;
+			// win32 path.relative across drive letters returns an absolute path.
+			if (cwd) {
+				const rel = path.relative(service.root, cwd);
+				if (!path.isAbsolute(cwd) || path.isAbsolute(rel) || rel.startsWith("..")) return;
+			}
 			this.#discover(service);
 		});
 	}

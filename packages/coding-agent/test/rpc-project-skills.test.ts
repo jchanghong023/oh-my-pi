@@ -197,6 +197,19 @@ describe("RpcProjectSkillService", () => {
 		expect(disabledPaths(fx.settings)).not.toContain(normalizePathForComparison(project.filePath));
 	});
 
+	test("a page cursor from a changed snapshot rejects with stale_cursor", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("project", "page-one");
+		await fx.writeSkill("project", "page-two");
+		const first = await fx.service.list({ view: "management", limit: 1 });
+		expect(first.nextCursor).toBeDefined();
+		// The catalog changed between pages: a third skill appeared.
+		await fx.writeSkill("project", "page-three");
+		await expect(fx.service.list({ view: "management", limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({
+			code: "stale_cursor",
+		});
+	});
+
 	test("missing/stale revisions, project settings writes, and in-memory success are rejected", async () => {
 		const fx = await fixture();
 		const base = await fx.writeSkill("project", "cas");

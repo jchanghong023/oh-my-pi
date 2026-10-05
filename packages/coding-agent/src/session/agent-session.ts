@@ -5270,15 +5270,24 @@ export class AgentSession implements SettingsScope {
 	 * Remove all listeners, flush pending writes, and disconnect from agent.
 	 * Call this when completely done with the session.
 	 *
-	 * Idempotent: concurrent or repeated calls share one settled promise. The
+	 * Idempotent: concurrent calls and completed disposal share one promise.
+	 * A failed final transcript close is retryable; shutdown preparation runs once. The
 	 * keypress `InteractiveMode.shutdown()` path and the postmortem
 	 * `SIGTERM`/`SIGHUP`/`uncaughtException` callback can both target this
 	 * method, so a second invocation must never re-emit `session_shutdown` or
 	 * double-drain the owned `AsyncJobManager` (issue #4080).
 	 */
 	#disposeCall?: Promise<void>;
+	#disposePreparationCall?: Promise<boolean>;
 	dispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
-		if (!this.#disposeCall) this.#disposeCall = this.#doDispose(options);
+		if (!this.#disposeCall) {
+			this.#disposeCall = this.#doDispose(options).catch(error => {
+				// Retain one-time shutdown preparation, but allow a failed final
+				// transcript close to retry after its filesystem error is resolved.
+				this.#disposeCall = undefined;
+				throw error;
+			});
+		}
 		return this.#disposeCall;
 	}
 
@@ -5410,6 +5419,25 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
+		this.#disposePreparationCall ??= this.#prepareDispose(options);
+		const drained = await this.#disposePreparationCall;
+		await this.sessionManager.close();
+		// Retain conversation memory until persistence succeeds, then release it
+		// even when a parked ref continues to retain this session object.
+		this.#releaseRetainedSessionMemory();
+		if (!drained) {
+			// An event handler that outlived the drain deadline may repopulate
+			// memory. The sealed writer rejects its writes; clear memory again
+			// once the handler finishes.
+			void (async () => {
+				await this.agent.waitForIdle();
+				await this.#drainInFlightEventHandlers();
+				this.#releaseRetainedSessionMemory();
+			})().catch(error => logger.warn("Deferred dispose finalization failed", { error: String(error) }));
+		}
+	}
+
+	async #prepareDispose(options: AgentSessionDisposeOptions): Promise<boolean> {
 		this.beginDispose();
 		// Stop cache warming before the drain windows below: an armed tick firing
 		// mid-dispose would issue a paid warm request and persist usage into the
@@ -5532,31 +5560,7 @@ export class AgentSession implements SettingsScope {
 		// already durable, and close() (scheduled post-seal) still flushes and
 		// closes the writer.
 		this.sessionManager.seal();
-		await this.sessionManager.close();
-
-		// Release retained conversation memory. dispose() is terminal, and every
-		// revival path reopens the transcript from disk (AgentLifecycleManager
-		// reviver / persisted-revive / `history://`), so the in-memory copy is
-		// dead weight from here on. Dropping it lets a parked subagent's session
-		// graph shed its heavy payloads even while the lifecycle adoption record's
-		// reviver closure still references the session object. Fixes #8003.
-		this.#releaseRetainedSessionMemory();
-
-		// The deadline does not cancel the drain: a handler parked in a slow
-		// extension hook resumes afterwards and would repopulate exactly the
-		// state released above. Its disk writes are already dead — the release
-		// SEALED the session manager (a revival may reopen the same JSONL
-		// through a new manager the moment dispose returns, and this manager
-		// must never race that writer) — so re-run only the in-memory reset
-		// once the pipeline genuinely settles. The extension runner bounds hook
-		// runtime, so this deferred pass is not unbounded.
-		if (!drained) {
-			void (async () => {
-				await this.agent.waitForIdle();
-				await this.#drainInFlightEventHandlers();
-				this.#releaseRetainedSessionMemory();
-			})().catch(error => logger.warn("Deferred dispose finalization failed", { error: String(error) }));
-		}
+		return drained;
 	}
 
 	/** Drop the in-memory conversation state after the terminal dispose flush. */

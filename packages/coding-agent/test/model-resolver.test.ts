@@ -2828,6 +2828,19 @@ describe("disabledModels exclusion policy", () => {
 		expect(await resolveAllowedModels(bedrock, settings)).toEqual([]);
 	});
 
+	test("keeps inference profiles when their unrelated transport template is excluded", async () => {
+		const template = createBedrockDefaultModel();
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+		const registry = { getAvailable: () => [template] };
+		for (const excluded of [`${template.provider}/${template.id}`, `${template.provider}/anthropic.*`]) {
+			const settings = Settings.isolated({ enabledModels: [profileArn], disabledModels: [excluded] });
+			expect((await resolveAllowedModels(registry, settings)).map(model => model.id)).toEqual([profileArn]);
+			expect(
+				(await resolveModelScope([profileArn], registry, undefined, settings)).map(entry => entry.model.id),
+			).toEqual([profileArn]);
+		}
+	});
+
 	test("applies path-scoped exclusions when cwd changes", async () => {
 		const first = path.resolve("disabled-model-scope-a");
 		const second = path.resolve("disabled-model-scope-b");

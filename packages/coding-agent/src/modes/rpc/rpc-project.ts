@@ -914,7 +914,7 @@ class RpcProjectHost {
 				const sessionId = command.sessionId;
 				if (typeof sessionId !== "string")
 					return this.#errorResponse(id, type, "close_session requires sessionId", "invalid_params");
-				await this.#requireLoadedSession(command);
+				await this.#requireLoadedSession(command, true);
 				this.#checkOptional(command, "cancelRunning", "boolean");
 				const result = await this.#closeSession(sessionId, command.cancelRunning === true);
 				return this.#successResponse(id, type, { sessionId, state: result.state, revision: result.revision });
@@ -942,7 +942,7 @@ class RpcProjectHost {
 					return this.#errorResponse(id, type, "delete_session requires sessionId", "invalid_params");
 				this.#requireRevision(command);
 				this.#checkOptional(command, "cancelRunning", "boolean");
-				if (this.#container.get(sessionId)) await this.#requireLoadedSession(command);
+				if (this.#container.get(sessionId)) await this.#requireLoadedSession(command, true);
 				const result = await this.#deleteSession(
 					sessionId,
 					command.cancelRunning === true,
@@ -1510,6 +1510,8 @@ class RpcProjectHost {
 	async dispose(reason: string): Promise<void> {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		// Release the subagent directory's registry-capture wiring (§13.2).
+		this.#subagentDirectory.dispose();
 		// Fail pending startup/control waits before container abort/flush awaits them.
 		const hostDisposals = [...this.#sessionHosts.values()].map(host => host.dispose(reason));
 		await this.#container.disposeAll(reason);
@@ -1560,13 +1562,16 @@ class RpcProjectHost {
 		throw Object.assign(new Error("Session identity changed"), { code: "stale_session" });
 	}
 
-	async #requireLoadedSession(command: Record<string, unknown>): Promise<RpcProjectSessionRecord> {
+	async #requireLoadedSession(
+		command: Record<string, unknown>,
+		allowClosing = false,
+	): Promise<RpcProjectSessionRecord> {
 		if (typeof command.sessionId !== "string" || !command.sessionId) {
 			throw Object.assign(new Error("This command requires sessionId"), { code: "invalid_params" });
 		}
 		const known = this.#container.get(command.sessionId);
 		if (known) this.#assertRecordIdentity(known);
-		const record = this.#container.getLoaded(command.sessionId);
+		const record = allowClosing && known?.state === "closing" ? known : this.#container.getLoaded(command.sessionId);
 		if (!record || !this.#getSessionHost(record.sessionId)) {
 			const saved = await this.#container.findSessionFileById(command.sessionId);
 			throw Object.assign(new Error(`Session not loaded: ${command.sessionId}`), {
