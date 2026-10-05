@@ -84,6 +84,13 @@
 * 仅适用于技能：`~/.codex` 下的 MCP、hooks、commands、AGENTS.md 等其它能力仍按上游规则保持 opt-in。
 * 技能是否进入系统提示词列表仍由自身 `disable-model-invocation` / `hide` 决定；不可由模型调用的技能只通过 `/skill:<name>` 与 `skill://<name>` 使用。
 
+### Codex 压缩默认模型
+
+* 压缩候选链（主模型自身、model role 兜底、最大上下文兜底，含 advisor 上下文维护的同名解析）里凡落到 `openai-codex` provider 的候选一律替换为 `openai-codex/gpt-6-luna` 后再参与认证与 remote 资格过滤；luna 不在可用模型中（未认证/被禁用）时保留原候选，不阻断压缩回退。服务器压缩（Responses V2 流式）因此也在 luna 上执行；preserve 数据的 provider 仍是 `openai-codex`，与主模型同 provider，原生回放不受影响。
+* 显式配置的 `compactionModel`（models.json `modelOverrides`）不被替换：用户显式指定优先于本默认值。
+* 以 `gpt-6-luna` 为压缩模型时，压缩请求的推理档位固定为 `low`（本地摘要、handoff、短摘要与 V2 流式服务器压缩共用同一生效点 `resolveCompactionEffort`），不继承会话当前档位——包括 high/max、未设置时的 high 默认与显式 Off。
+* 仅约束压缩链路：主模型选择、主模型推理档位及其他 provider 的压缩行为不变；luna 作为主模型正常使用时档位不受影响（钉制只在压缩调用生效）。
+
 ### ZCode 本地代理（zcode-api）
 
 * 内置 provider `zcode-api`，默认指向本机 ZCode Proxy（`http://127.0.0.1:8080`；环境变量 `ZCODE_API_BASE_URL` 以完整的 `http://主机:端口` 基地址覆盖；Anthropic 传输会自行去掉末尾斜杠与多余的 `/v1`），无登录、无配置即在模型面板与 `omp models` 中可见可用；`disabledProviders` 仍可禁用。
