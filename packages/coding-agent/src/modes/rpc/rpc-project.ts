@@ -22,12 +22,16 @@
  */
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { Usage } from "@oh-my-pi/pi-ai";
 import { getAgentDir, isRecord, logger, normalizePathForComparison, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getRoleInfo } from "../../config/model-roles";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
+import type { SessionStats } from "../../session/agent-session-types";
+import { getLatestCompactionEntry } from "../../session/session-context";
 import type { MCPManager } from "../../mcp";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import { IrcBus } from "../../irc/bus";
@@ -131,6 +135,7 @@ const SESSION_HISTORY_COMMANDS = new Set([
 	"get_tree",
 	"get_branch_messages",
 	"get_last_assistant_text",
+	"get_session_stats",
 ]);
 
 /** Commands routed to a session host; must carry `sessionId` in project mode. */
@@ -288,6 +293,22 @@ class RpcProjectHost {
 			getSettings: () => options.settings,
 			getModelRegistry: () => options.modelRegistry,
 			emit: frame => this.#emitProjectFrame(frame),
+			// Loaded sessions own Settings clones (cloneForCwd at creation); a
+			// persisted user role must reach them deterministically instead of
+			// racing the shared instance's watcher debounce (O26: 保存后后续
+			// 角色解析采用其有效配置).
+			reloadSessionSettings: async () => {
+				for (const [, host] of this.#sessionHosts) {
+					try {
+						await host.session.settings.reloadFromDisk();
+					} catch (error) {
+						logger.warn("RPC model role session settings reload failed", {
+							sessionId: host.session.sessionId,
+							error: String(error),
+						});
+					}
+				}
+			},
 		});
 		this.#subagentDirectory = new RpcProjectSubagentDirectory({
 			resolveSessionFile: sessionId => this.#resolveSessionFile(sessionId),
@@ -1252,89 +1273,109 @@ class RpcProjectHost {
 		this.#checkOptional(command, "catalogRevision", "string");
 		const record = command.sessionId === undefined ? undefined : await this.#requireLoadedSession(command);
 		const host = record ? this.#getSessionHost(record.sessionId)! : undefined;
-		const resolution = await this.#catalogService.resolve(text.trimStart(), host?.session);
-		if (command.catalogRevision !== undefined && command.catalogRevision !== this.#catalogService.revision) {
-			return this.#errorResponse(id, type, "Command catalog changed; query it again", "revision_conflict");
-		}
-		if (resolution.kind === "unknown") {
-			return this.#errorResponse(id, type, `Unknown command: ${text.trim().split(/\s+/)[0]}`, "invalid_params");
-		}
-		const name = resolution.name;
-		const args =
-			text
-				.trimStart()
-				.match(/^\/\S+\s*([\s\S]*)$/)?.[1]
-				?.trim() ?? "";
-		if (resolution.kind === "builtin") {
-			if (name === "new") {
-				const { summary } = await this.createSession({});
-				return this.#successResponse(id, type, {
-					hostAction: { kind: "focus_session", payload: { session: summary } },
-				});
+		// Catalog resolution is async; without holding the session's input gate a
+		// later-arriving plain prompt enters the ordered arm first and this
+		// command's synthetic prompt overtakes it in reverse arrival order
+		// (§14.4). The gate is re-entrant for the synthetic prompt dispatched
+		// below, so the whole section keeps one arrival order.
+		const runOrdered = async (): Promise<RpcResponse> => {
+			const resolution = await this.#catalogService.resolve(text.trimStart(), host?.session);
+			if (command.catalogRevision !== undefined && command.catalogRevision !== this.#catalogService.revision) {
+				return this.#errorResponse(id, type, "Command catalog changed; query it again", "revision_conflict");
 			}
-			if (name === "resume") {
-				if (!args) return this.#successResponse(id, type, { hostAction: { kind: "select_session" } });
-				const { summary } = await this.resumeSession(args);
-				return this.#successResponse(id, type, {
-					hostAction: { kind: "focus_session", payload: { session: summary } },
-				});
+			if (resolution.kind === "unknown") {
+				return this.#errorResponse(id, type, `Unknown command: ${text.trim().split(/\s+/)[0]}`, "invalid_params");
 			}
-			const hostAction = name && RPC_PROJECT_HOST_ACTIONS.get(name);
-			if (hostAction && (!args || !resolution.spec?.handle || name === "move")) {
-				const catalog = await this.#catalogService.buildCatalog(host?.session);
-				if (catalog.find(entry => entry.name === name)?.scope === "session" && !record) {
-					return this.#errorResponse(id, type, "This action requires a loaded session", "invalid_params");
-				}
-				if (name === "move" && !args) return this.#errorResponse(id, type, "Usage: /move <path>", "invalid_params");
-				return this.#successResponse(id, type, {
-					hostAction: {
-						kind: hostAction,
-						payload: {
-							...(record ? { sessionId: record.sessionId, sessionGeneration: record.sessionGeneration } : {}),
-							...(name === "move" ? { projectRoot: resolveToCwd(args, this.#options.cwd) } : { args }),
-							...(name === "skills" ? { panel: "skills" } : {}),
-						},
-					},
-				});
-			}
-			if (name === "wt")
-				return this.#errorResponse(id, type, "Worktree moves require a different project process", "unsupported");
-			if (name === "login") {
-				if (!record) return this.#errorResponse(id, type, "Login requires a loaded session", "invalid_params");
-				if (!args)
+			const name = resolution.name;
+			const args =
+				text
+					.trimStart()
+					.match(/^\/\S+\s*([\s\S]*)$/)?.[1]
+					?.trim() ?? "";
+			if (resolution.kind === "builtin") {
+				if (name === "new") {
+					const { summary } = await this.createSession({});
 					return this.#successResponse(id, type, {
-						hostAction: { kind: "select_login_provider", payload: { sessionId: record.sessionId } },
+						hostAction: { kind: "focus_session", payload: { session: summary } },
 					});
-				const response = await this.handleSessionCommand({
-					id,
-					type: "login",
-					providerId: args,
-					sessionId: record.sessionId,
-					sessionGeneration: record.sessionGeneration,
-				});
-				return response.success
-					? this.#successResponse(id, type, { completed: true, agentInvoked: false })
-					: { ...response, command: type };
+				}
+				if (name === "resume") {
+					if (!args) return this.#successResponse(id, type, { hostAction: { kind: "select_session" } });
+					const { summary } = await this.resumeSession(args);
+					return this.#successResponse(id, type, {
+						hostAction: { kind: "focus_session", payload: { session: summary } },
+					});
+				}
+				const hostAction = name && RPC_PROJECT_HOST_ACTIONS.get(name);
+				if (hostAction && (!args || !resolution.spec?.handle || name === "move")) {
+					const catalog = await this.#catalogService.buildCatalog(host?.session);
+					if (catalog.find(entry => entry.name === name)?.scope === "session" && !record) {
+						return this.#errorResponse(id, type, "This action requires a loaded session", "invalid_params");
+					}
+					if (name === "move" && !args)
+						return this.#errorResponse(id, type, "Usage: /move <path>", "invalid_params");
+					return this.#successResponse(id, type, {
+						hostAction: {
+							kind: hostAction,
+							payload: {
+								...(record ? { sessionId: record.sessionId, sessionGeneration: record.sessionGeneration } : {}),
+								...(name === "move" ? { projectRoot: resolveToCwd(args, this.#options.cwd) } : { args }),
+								...(name === "skills" ? { panel: "skills" } : {}),
+							},
+						},
+					});
+				}
+				if (name === "wt")
+					return this.#errorResponse(
+						id,
+						type,
+						"Worktree moves require a different project process",
+						"unsupported",
+					);
+				if (name === "login") {
+					if (!record) return this.#errorResponse(id, type, "Login requires a loaded session", "invalid_params");
+					if (!args)
+						return this.#successResponse(id, type, {
+							hostAction: { kind: "select_login_provider", payload: { sessionId: record.sessionId } },
+						});
+					const response = await this.handleSessionCommand({
+						id,
+						type: "login",
+						providerId: args,
+						sessionId: record.sessionId,
+						sessionGeneration: record.sessionGeneration,
+					});
+					return response.success
+						? this.#successResponse(id, type, { completed: true, agentInvoked: false })
+						: { ...response, command: type };
+				}
+				if (!resolution.spec?.handle)
+					return this.#errorResponse(
+						id,
+						type,
+						"This business command has no RPC-capable OMP handler",
+						"unsupported",
+					);
 			}
-			if (!resolution.spec?.handle)
-				return this.#errorResponse(id, type, "This business command has no RPC-capable OMP handler", "unsupported");
-		}
-		if (!record || !host)
-			return this.#errorResponse(id, type, "This command requires a loaded session", "invalid_params");
-		// Reuse the exact prompt accepted at frame arrival. An unaccepted frame
-		// stays unaccepted so the shared gate cancels it, rather than reordering it.
-		const syntheticPrompt = this.#commandInputs.get(command) ?? {
-			id,
-			type: "prompt",
-			sessionId: record.sessionId,
-			sessionGeneration: record.sessionGeneration,
-			message: text,
-			inputMode: "auto",
+			if (!record || !host)
+				return this.#errorResponse(id, type, "This command requires a loaded session", "invalid_params");
+			// Reuse the exact prompt accepted at frame arrival. An unaccepted frame
+			// stays unaccepted so the shared gate cancels it, rather than reordering it.
+			const syntheticPrompt = this.#commandInputs.get(command) ?? {
+				id,
+				type: "prompt",
+				sessionId: record.sessionId,
+				sessionGeneration: record.sessionGeneration,
+				message: text,
+				inputMode: "auto",
+			};
+			const response = await this.handleSessionCommand(syntheticPrompt as never);
+			return response.success
+				? this.#successResponse(id, type, "data" in response ? response.data : undefined)
+				: this.#errorResponse(id, type, response.error, response.code);
 		};
-		const response = await this.handleSessionCommand(syntheticPrompt as never);
-		return response.success
-			? this.#successResponse(id, type, "data" in response ? response.data : undefined)
-			: this.#errorResponse(id, type, response.error, response.code);
+		if (!record || !host) return runOrdered();
+		return this.#inputGates.get(record.sessionId)!.enqueue(runOrdered);
 	}
 
 	/**
@@ -1629,6 +1670,40 @@ class RpcProjectHost {
 				};
 				break;
 			}
+			case "get_session_stats": {
+				// History-range query (§14.4): message-derived totals only, no
+				// running container. Model-usage entries outside the active
+				// transcript window mirror the live tracker's window rule.
+				const branch = manager.getBranch();
+				const latestCompaction = getLatestCompactionEntry(branch);
+				const compactionIndex = latestCompaction ? branch.lastIndexOf(latestCompaction) : -1;
+				const resetIndex = branch.reduce(
+					(latest, entry, index) => (entry.type === "reset_boundary" ? index : latest),
+					-1,
+				);
+				let startIndex = 0;
+				if (resetIndex > compactionIndex) startIndex = resetIndex + 1;
+				else if (latestCompaction) {
+					const firstKeptIndex = branch.findIndex(entry => entry.id === latestCompaction.firstKeptEntryId);
+					startIndex = firstKeptIndex >= 0 ? firstKeptIndex : compactionIndex + 1;
+					while (
+						startIndex > 0 &&
+						!["message", "custom_message", "branch_summary", "compaction", "reset_boundary"].includes(
+							branch[startIndex - 1]!.type,
+						)
+					)
+						startIndex--;
+				}
+				const modelUsage = branch
+					.slice(startIndex)
+					.filter(
+						(entry): entry is Extract<(typeof branch)[number], { type: "model_usage" }> =>
+							entry.type === "model_usage",
+					)
+					.map(entry => entry.usage);
+				data = savedSessionStats(sessionId, file, messages, modelUsage);
+				break;
+			}
 			default:
 				return this.#errorResponse(command.id, command.type, "Unsupported historical query", "unsupported");
 		}
@@ -1672,6 +1747,111 @@ class RpcProjectGateError extends Error {
 		super(message);
 		this.name = "RpcProjectGateError";
 	}
+}
+
+/**
+ * Message-derived {@link SessionStats} for a saved, not-loaded session
+ * (§14.4: `get_session_stats` is an H-range query and must not instantiate a
+ * running container). Mirrors the SessionStatsTracker message loop; the live
+ * `contextUsage` estimate has no persisted equivalent and stays absent.
+ */
+function savedSessionStats(
+	sessionId: string,
+	sessionFile: string,
+	messages: readonly AgentMessage[],
+	modelUsage: readonly Usage[],
+): SessionStats {
+	let userMessages = 0;
+	let assistantMessages = 0;
+	let toolResults = 0;
+	let toolCalls = 0;
+	let input = 0;
+	let output = 0;
+	let reasoning = 0;
+	let cacheRead = 0;
+	let cacheWrite = 0;
+	let totalTokens = 0;
+	let cost = 0;
+	let premiumRequests = 0;
+	let creditCost = 0;
+	let committedCreditCost = 0;
+	let committedAcuCost = 0;
+	let hasCredits = false;
+	const routedModels: Record<string, number> = {};
+	const addUsage = (usage: Usage): void => {
+		input += usage.input;
+		output += usage.output;
+		reasoning += usage.reasoningTokens ?? 0;
+		cacheRead += usage.cacheRead;
+		cacheWrite += usage.cacheWrite;
+		totalTokens += usage.totalTokens;
+		premiumRequests += usage.premiumRequests ?? 0;
+		cost += usage.cost.total;
+		const credits = usage.credits;
+		if (credits !== undefined) {
+			hasCredits = true;
+			creditCost += credits.cost ?? 0;
+			committedCreditCost += credits.committedCost ?? 0;
+			committedAcuCost += credits.acuCost ?? 0;
+		}
+	};
+	const taskUsage = (details: unknown): Usage | undefined => {
+		if (!isRecord(details)) return undefined;
+		const usage = Reflect.get(details, "usage");
+		return isRecord(usage) &&
+			isRecord(usage.cost) &&
+			typeof usage.input === "number" &&
+			typeof usage.totalTokens === "number" &&
+			typeof usage.cost.total === "number"
+			? (usage as unknown as Usage)
+			: undefined;
+	};
+	for (const message of messages) {
+		if (message.role === "user") {
+			userMessages++;
+		} else if (message.role === "toolResult") {
+			toolResults++;
+			if (message.toolName === "task") {
+				const usage = taskUsage(message.details);
+				if (usage) addUsage(usage);
+			}
+		} else if (message.role === "assistant") {
+			assistantMessages++;
+			for (const content of message.content) {
+				if (content.type === "toolCall") toolCalls++;
+			}
+			if (message.usage) {
+				addUsage(message.usage);
+				if (message.upstreamModel !== undefined) {
+					routedModels[message.upstreamModel] = (routedModels[message.upstreamModel] ?? 0) + 1;
+				}
+			}
+		}
+	}
+	for (const usage of modelUsage) addUsage(usage);
+	return {
+		sessionFile,
+		sessionId,
+		userMessages,
+		assistantMessages,
+		toolCalls,
+		toolResults,
+		totalMessages: messages.length,
+		tokens: {
+			input,
+			output,
+			reasoning,
+			cacheRead,
+			cacheWrite,
+			total: totalTokens,
+		},
+		cost,
+		premiumRequests,
+		...(hasCredits
+			? { credits: { cost: creditCost, committedCost: committedCreditCost, acuCost: committedAcuCost } }
+			: {}),
+		...(Object.keys(routedModels).length > 0 ? { routedModels } : {}),
+	};
 }
 
 /**

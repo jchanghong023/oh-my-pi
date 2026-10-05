@@ -32,19 +32,22 @@ export function isRpcHostUriResult(value: unknown): value is RpcHostUriResult {
 }
 
 /**
- * One handler instance per host-registered scheme. Delegates reads and (when
- * the scheme was registered as writable) writes to the bridge, which serializes
- * them over the RPC transport.
+ * One handler instance per host-registered scheme, shared by every bridge that
+ * registered the scheme on the same router. Reads and writes are routed to the
+ * bridge of the CALLING session (rpc-ui-protocol.md §5.2/§13.2): in project
+ * mode every session registers the same project-wide scheme set, and a global
+ * last-writer handler would stamp another session's identity onto the request.
+ * Callers without a session identity fall back to the first owner.
  */
 class RpcHostUriProtocolHandler implements ProtocolHandler {
 	readonly scheme: string;
 	readonly spec: SchemeSpec;
 	readonly write?: (url: InternalUrl, content: string, context?: WriteContext) => Promise<void>;
-	readonly #bridge: RpcHostUriBridge;
+	readonly #ownership: RpcHostUriSchemeOwnership;
 
-	constructor(definition: RpcHostUriSchemeDefinition, bridge: RpcHostUriBridge) {
+	constructor(definition: RpcHostUriSchemeDefinition, ownership: RpcHostUriSchemeOwnership) {
 		this.scheme = definition.scheme;
-		this.#bridge = bridge;
+		this.#ownership = ownership;
 		const writable = definition.writable === true;
 		this.spec = {
 			backing: "remote",
@@ -53,33 +56,83 @@ class RpcHostUriProtocolHandler implements ProtocolHandler {
 			write: writable ? { via: "handler", payload: "text", scope: "workspace", tier: () => "write" } : undefined,
 		};
 		if (writable) {
-			this.write = (url, content, context) => this.#bridge.requestWrite(this.scheme, url, content, context);
+			this.write = (url, content, context) =>
+				this.#bridgeFor(context).requestWrite(this.scheme, url, content, context);
 		}
 	}
 
 	resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		return this.#bridge.requestRead(this.scheme, url, context);
+		return this.#bridgeFor(context).requestRead(this.scheme, url, context);
 	}
+
+	/** The bridge owning the calling session, else the first registered owner. */
+	#bridgeFor(context: { sessionId?: unknown; session?: unknown } | undefined) {
+		let callerSessionId = context?.sessionId;
+		if (typeof callerSessionId !== "string") {
+			const getSessionId = (context?.session as { getSessionId?: unknown } | undefined)?.getSessionId;
+			callerSessionId = typeof getSessionId === "function" ? getSessionId.call(context?.session) : undefined;
+		}
+		if (typeof callerSessionId === "string") {
+			const owner = this.#ownership.bridges.find(bridge => bridge.ownerSessionId === callerSessionId);
+			if (owner) return owner;
+		}
+		const fallback = this.#ownership.bridges[0];
+		if (!fallback) throw new Error(`Host URI scheme is not available: ${this.scheme}://`);
+		return fallback;
+	}
+}
+
+/** Per-router scheme ownership: the definition plus every bridge still holding it. */
+interface RpcHostUriSchemeOwnership {
+	definition: RpcHostUriSchemeDefinition;
+	bridges: RpcHostUriBridge[];
+}
+
+/** Scheme ownership tables keyed by router instance (the process router is shared across RPC sessions). */
+const schemeOwnerships = new WeakMap<InternalUrlRouter, Map<string, RpcHostUriSchemeOwnership>>();
+
+function ownershipsFor(router: InternalUrlRouter): Map<string, RpcHostUriSchemeOwnership> {
+	let table = schemeOwnerships.get(router);
+	if (!table) {
+		table = new Map();
+		schemeOwnerships.set(router, table);
+	}
+	return table;
+}
+
+function sameRegistration(
+	a: RpcHostUriSchemeDefinition | undefined,
+	b: RpcHostUriSchemeDefinition | undefined,
+): boolean {
+	return a?.scheme === b?.scheme && a?.writable === b?.writable && a?.immutable === b?.immutable;
 }
 
 /**
  * Bidirectional bridge that lets the RPC host own a set of URI schemes.
  *
- * The host registers schemes via `set_host_uri_schemes`; the bridge installs
- * a `RpcHostUriProtocolHandler` per scheme into the process-global
- * {@link InternalUrlRouter}. Reads land on the read tool through the existing
- * router; writes are intercepted by the write tool and dispatched through
- * `requestWrite`.
+ * The host registers schemes via `set_host_uri_schemes`; in project mode every
+ * session's bridge registers the same set into the process-global
+ * {@link InternalUrlRouter}. The router keeps ONE handler per scheme, owned by
+ * the shared ownership table above: requests carry the calling session's
+ * identity, and a session detaching only releases its own share — the scheme
+ * stays registered while any other session still holds it.
  */
 export class RpcHostUriBridge {
 	#output: RpcHostUriOutput;
 	#router: InternalUrlRouter;
+	/** Session this bridge stamps host_uri_request frames for; undefined for unscoped bridges (tests). */
+	readonly ownerSessionId: string | undefined;
 	#definitions = new Map<string, RpcHostUriSchemeDefinition>();
 	#pending = new Map<string, PendingUriRequest>();
 
-	constructor(output: RpcHostUriOutput, router: InternalUrlRouter = InternalUrlRouter.instance()) {
+	constructor(
+		output: RpcHostUriOutput,
+		router: InternalUrlRouter = InternalUrlRouter.instance(),
+		ownerSessionId?: string,
+	) {
 		this.#output = output;
 		this.#router = router;
+		this.ownerSessionId = ownerSessionId;
 	}
 
 	getSchemes(): string[] {
@@ -87,9 +140,9 @@ export class RpcHostUriBridge {
 	}
 
 	/**
-	 * Replace the registered set of host URI schemes. Previously registered
-	 * schemes that no longer appear in the new set are unregistered from the
-	 * router; surviving and new schemes get fresh handler instances.
+	 * Replace the registered set of host URI schemes held by THIS bridge. Other
+	 * bridges' shares are untouched; the router registration lives until the
+	 * last holder drops the scheme.
 	 */
 	setSchemes(schemes: RpcHostUriSchemeDefinition[]): string[] {
 		const normalized = new Map<string, RpcHostUriSchemeDefinition>();
@@ -114,26 +167,46 @@ export class RpcHostUriBridge {
 			});
 		}
 
+		const ownerships = ownershipsFor(this.#router);
 		for (const previous of this.#definitions.keys()) {
-			if (!normalized.has(previous)) {
-				this.#router.unregister(previous);
-			}
+			if (normalized.has(previous)) continue;
+			this.#releaseOwnership(ownerships, previous);
 		}
 		for (const definition of normalized.values()) {
-			this.#router.register(new RpcHostUriProtocolHandler(definition, this));
+			const existing = ownerships.get(definition.scheme);
+			if (!sameRegistration(existing?.definition, definition)) {
+				// New scheme, or the write/immutable contract changed: publish the
+				// handler this definition implies (the router enforces write.via).
+				// Existing holders keep their share under the new contract.
+				ownerships.set(definition.scheme, { definition, bridges: existing?.bridges ?? [] });
+				this.#router.register(new RpcHostUriProtocolHandler(definition, ownerships.get(definition.scheme)!));
+			}
+			const ownership = ownerships.get(definition.scheme)!;
+			if (!ownership.bridges.includes(this)) ownership.bridges.push(this);
 		}
 		this.#definitions = normalized;
 		return Array.from(normalized.keys());
 	}
 
+	/** Drop this bridge's share of `scheme`; unregister from the router when the last holder left. */
+	#releaseOwnership(ownerships: Map<string, RpcHostUriSchemeOwnership>, scheme: string): void {
+		const ownership = ownerships.get(scheme);
+		if (!ownership) return;
+		ownership.bridges = ownership.bridges.filter(bridge => bridge !== this);
+		if (ownership.bridges.length === 0) {
+			ownerships.delete(scheme);
+			this.#router.unregister(scheme);
+		}
+	}
+
 	/**
-	 * Unregister every host scheme from the router and reject any in-flight
-	 * requests. Called on RPC shutdown to keep the global router clean for
-	 * subsequent sessions in the same process (used by tests).
+	 * Release every scheme this bridge holds and reject any in-flight requests.
+	 * Other bridges holding the same scheme keep the router registration alive.
 	 */
 	clear(message: string = "Host URI bridge shut down"): void {
+		const ownerships = ownershipsFor(this.#router);
 		for (const scheme of this.#definitions.keys()) {
-			this.#router.unregister(scheme);
+			this.#releaseOwnership(ownerships, scheme);
 		}
 		this.#definitions.clear();
 		this.rejectAllPending(message);

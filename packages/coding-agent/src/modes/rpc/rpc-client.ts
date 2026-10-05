@@ -104,14 +104,34 @@ export interface RpcClientOptions {
 
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
+/**
+ * Project-mode envelope stamped on outbound frames (rpc-ui-protocol.md
+ * §15.1). Frame listeners receive it so parallel sessions can be attributed;
+ * absent in single-session mode.
+ */
+export type RpcFrameSessionScope = {
+	sessionId?: string;
+	sessionGeneration?: string;
+	processInstanceId?: string;
+};
+
 export type RpcEventListener = (event: AgentEvent) => void;
 export type RpcSessionEventListener = (event: AgentSessionEvent) => void;
-export type RpcSubagentLifecycleListener = (payload: RpcSubagentLifecycleFrame["payload"]) => void;
-export type RpcSubagentProgressListener = (payload: RpcSubagentProgressFrame["payload"]) => void;
-export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"]) => void;
+export type RpcSubagentLifecycleListener = (
+	payload: RpcSubagentLifecycleFrame["payload"],
+	frame: RpcSubagentLifecycleFrame & RpcFrameSessionScope,
+) => void;
+export type RpcSubagentProgressListener = (
+	payload: RpcSubagentProgressFrame["payload"],
+	frame: RpcSubagentProgressFrame & RpcFrameSessionScope,
+) => void;
+export type RpcSubagentEventListener = (
+	payload: RpcSubagentEventFrame["payload"],
+	frame: RpcSubagentEventFrame & RpcFrameSessionScope,
+) => void;
 export type RpcAvailableCommandsUpdateListener = (commands: RpcAvailableSlashCommand[]) => void;
 export type RpcPromptResultListener = (result: RpcPromptResultFrame) => void;
-export type RpcSessionSettledListener = () => void;
+export type RpcSessionSettledListener = (frame: RpcSessionSettledFrame & RpcFrameSessionScope) => void;
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
@@ -1401,7 +1421,8 @@ export class RpcClient {
 	 */
 	async waitForSettled(timeout = 60000): Promise<void> {
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
-		const unsubscribe = this.onSessionSettled(resolve);
+		const settle = (): void => resolve();
+		const unsubscribe = this.onSessionSettled(settle);
 		let timeoutId: NodeJS.Timeout | undefined;
 		try {
 			// Subscribed before asking, so a settle between the two cannot be missed.
@@ -1516,21 +1537,21 @@ export class RpcClient {
 
 		if (isRpcSubagentLifecycleFrame(data)) {
 			for (const listener of this.#subagentLifecycleListeners) {
-				listener(data.payload);
+				listener(data.payload, data);
 			}
 			return;
 		}
 
 		if (isRpcSubagentProgressFrame(data)) {
 			for (const listener of this.#subagentProgressListeners) {
-				listener(data.payload);
+				listener(data.payload, data);
 			}
 			return;
 		}
 
 		if (isRpcSubagentEventFrame(data)) {
 			for (const listener of this.#subagentEventListeners) {
-				listener(data.payload);
+				listener(data.payload, data);
 			}
 			return;
 		}
@@ -1544,7 +1565,7 @@ export class RpcClient {
 
 		if (isRpcSessionSettledFrame(data)) {
 			for (const listener of this.#sessionSettledListeners) {
-				listener();
+				listener(data);
 			}
 			return;
 		}
@@ -1653,6 +1674,12 @@ export class RpcClient {
 
 	async #handleHostToolCall(request: RpcHostToolCallRequest): Promise<void> {
 		const tool = this.#customTools.find(candidate => candidate.name === request.toolName);
+		// Project mode stamps the call with the owning session; echo it back so
+		// the project host accepts the result instead of rejecting stale_session.
+		const sessionScope = {
+			...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
+			...(typeof request.sessionGeneration === "string" ? { sessionGeneration: request.sessionGeneration } : {}),
+		};
 		if (!tool) {
 			this.#writeFrame({
 				type: "host_tool_result",
@@ -1662,6 +1689,7 @@ export class RpcClient {
 					details: {},
 				},
 				isError: true,
+				...sessionScope,
 			} satisfies RpcHostToolResult);
 			return;
 		}
@@ -1675,6 +1703,7 @@ export class RpcClient {
 				type: "host_tool_update",
 				id: request.id,
 				partialResult: normalizeToolResult(partialResult),
+				...sessionScope,
 			} satisfies RpcHostToolUpdate);
 		};
 
@@ -1689,6 +1718,7 @@ export class RpcClient {
 				type: "host_tool_result",
 				id: request.id,
 				result: normalizeToolResult(result),
+				...sessionScope,
 			} satisfies RpcHostToolResult);
 		} catch (error) {
 			if (controller.signal.aborted) return;
@@ -1700,6 +1730,7 @@ export class RpcClient {
 					details: {},
 				},
 				isError: true,
+				...sessionScope,
 			} satisfies RpcHostToolResult);
 		} finally {
 			this.#pendingHostToolCalls.delete(request.id);

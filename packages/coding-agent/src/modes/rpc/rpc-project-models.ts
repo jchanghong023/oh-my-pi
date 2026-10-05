@@ -55,6 +55,13 @@ export interface RpcProjectModelRoleServiceDeps {
 	readonly getModelRegistry: () => ModelRegistry;
 	/** Outbound frame sink; hosts forward `settings_changed` frames to the client. */
 	readonly emit: (frame: object) => void;
+	/**
+	 * Reload the persisted config layers of every loaded session's own
+	 * Settings clone after a role save. Sessions snapshot the global layer via
+	 * `cloneForCwd` at creation, so without this their role resolution
+	 * (`/switch @role`, subagent role picks) keeps the pre-save value (O26).
+	 */
+	readonly reloadSessionSettings?: () => Promise<void>;
 }
 
 /** Options for {@link RpcProjectModelRoleService.listRoles}. */
@@ -209,6 +216,9 @@ export class RpcProjectModelRoleService {
 				`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+		// Sessions hold cloneForCwd snapshots of the global layer: reload their
+		// persisted layers so post-save role resolution adopts the new value.
+		await this.#deps.reloadSessionSettings?.();
 
 		const revision = this.#rolesRevision.bump();
 		this.#deps.emit({ type: "settings_changed", scope: "user" });

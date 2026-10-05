@@ -291,6 +291,8 @@ export interface RpcForkQueueUpdatedFrame {
 	type: "queue_updated";
 	steeringCount: number;
 	followUpCount: number;
+	/** Queue revision after the change; `clear_queue` compares it via expectedRevision. */
+	revision: number;
 }
 
 /** 5.6 A: one-shot model connectivity test result (six-way failure attribution). */

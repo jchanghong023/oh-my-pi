@@ -315,12 +315,17 @@ export async function runRpcSkillCommand(
 	prebuilt?: BuiltSkillPromptMessage,
 	onPromptAdmitted?: () => void,
 	images?: ImageContent[],
+	attachmentsText?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
+	// Resolved attachment bodies travel with the skill command (§14.4): the
+	// prefix stays out of the slash/skill MATCHING text but must still reach
+	// the model message and transcript, or uploaded material silently vanishes.
+	const messageText = attachmentsText ? attachmentsText + built.message : built.message;
 	return session.promptCustomMessage(
 		{
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: images?.length ? [{ type: "text", text: built.message }, ...images] : built.message,
+			content: images?.length ? [{ type: "text", text: messageText }, ...images] : messageText,
 			display: true,
 			details: built.details,
 			attribution: "user",
@@ -342,6 +347,8 @@ export async function dispatchRpcSkillPrompt(input: {
 	ticket: RpcPromptTicket;
 	session: RpcSkillCommandSession;
 	message: string;
+	/** Resolved attachment text prefix; prepended to the skill message, never the matching text. */
+	attachmentsText?: string;
 	streamingBehavior: "steer" | "followUp" | undefined;
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
@@ -370,6 +377,7 @@ export async function dispatchRpcSkillPrompt(input: {
 				built,
 				onPromptAdmitted,
 				input.images,
+				input.attachmentsText ?? "",
 			),
 		results: input.results,
 		onError: input.onError,
@@ -1285,12 +1293,16 @@ const SESSION_CHANGE_TYPES: Record<string, true> = {
  * sequence number at frame-arrival time; an abort raises `#validFrom` so
  * earlier still-queued input dies at its next `isCurrent` check, and a session
  * change commits its sequence once it succeeds. `enqueue` serializes the
- * gated arms without blocking the stdin reader.
+ * gated arms without blocking the stdin reader. Re-entrant `enqueue` calls
+ * (a dispatch wrapped inside an already-ordered section, e.g. project-mode
+ * `execute_command` resolving its catalog before handing a synthetic prompt to
+ * the same gate) run inline so the whole section keeps one arrival order.
  */
 export class RpcUserInputGate {
 	#tail: Promise<void> = Promise.resolve();
 	#sequence = 0;
 	#validFrom = 0;
+	#depth = 0;
 	#acceptedAt = new WeakMap<object, number>();
 
 	accept(command: RpcCommand): void {
@@ -1318,10 +1330,29 @@ export class RpcUserInputGate {
 	}
 
 	enqueue<T>(work: () => Promise<T>): Promise<T> {
-		const run = this.#tail.then(work, work);
+		if (this.#depth > 0) return work();
+		// Depth flips only when the queued section actually starts, so a busy
+		// gate never lets a later frame's enqueue run inline ahead of it.
+		const begin = (): void => {
+			this.#depth = 1;
+		};
+		const run = this.#tail.then(
+			() => {
+				begin();
+				return work();
+			},
+			() => {
+				begin();
+				return work();
+			},
+		);
 		this.#tail = run.then(
-			() => {},
-			() => {},
+			() => {
+				this.#depth = 0;
+			},
+			() => {
+				this.#depth = 0;
+			},
 		);
 		return run;
 	}
@@ -1434,7 +1465,8 @@ export class RpcSessionHost {
 
 		this.pendingExtensionRequests = new RpcPendingExtensionRequests();
 		this.hostToolBridge = options.sharedBridges?.hostToolBridge ?? new RpcHostToolBridge(this.#output);
-		this.hostUriBridge = options.sharedBridges?.hostUriBridge ?? new RpcHostUriBridge(this.#output);
+		this.hostUriBridge =
+			options.sharedBridges?.hostUriBridge ?? new RpcHostUriBridge(this.#output, undefined, this.session.sessionId);
 		this.subagentRegistry = options.subagentEventBus
 			? new RpcSubagentRegistry(options.subagentEventBus, this.#output)
 			: undefined;
@@ -1603,25 +1635,15 @@ export class RpcSessionHost {
 				// dispatch chain. The legacy single-session mode keeps that chain
 				// (and its unknown-slash fallback to the model) unconditionally.
 				const strictCommandDispatch = !this.#options.projectMode || command.inputMode === "auto";
-				if (strictCommandDispatch) {
-					// `/plan` is a mode toggle, not model input: intercepted before any
-					// dispatch so the literal text never reaches the agent (5.3).
-					if (await this.#forkPlanController.interceptSlashPlan(command.message)) {
-						return this.success(id, "prompt", { agentInvoked: false });
-					}
-				}
-				const promptAttachments = await this.#resolveCommandAttachments(id, "prompt", command.attachments, "");
-				if ("error" in promptAttachments) return promptAttachments.error;
 				// Taken before any dispatch so a builtin that schedules a turn (e.g. `/retry`)
 				// cannot start its run ahead of the prompt's event-stream position.
 				const ticket = this.promptResults.begin(id);
 				try {
-					const outcome = await this.#dispatchOrderedUserInput(
-						command,
-						ticket,
-						promptAttachments,
-						strictCommandDispatch,
-					);
+					const outcome = await this.#dispatchOrderedUserInput(command, ticket, strictCommandDispatch);
+					if (typeof outcome === "object") {
+						this.promptResults.discard(ticket);
+						return outcome.setupError;
+					}
 					if (outcome === "unknown-command") {
 						this.promptResults.discard(ticket);
 						const commandName = command.message.trim().split(/\s+/)[0]!;
@@ -1649,9 +1671,8 @@ export class RpcSessionHost {
 
 			case "steer":
 			case "follow_up": {
-				const resolved = await this.#resolveCommandAttachments(id, command.type, command.attachments, "");
-				if ("error" in resolved) return resolved.error;
-				await this.#dispatchOrderedUserInput(command, undefined, resolved, false);
+				const outcome = await this.#dispatchOrderedUserInput(command, undefined, false);
+				if (typeof outcome === "object") return outcome.setupError;
 				return this.success(id, command.type);
 			}
 
@@ -1683,15 +1704,19 @@ export class RpcSessionHost {
 			}
 
 			case "abort_and_prompt": {
-				const resolved = await this.#resolveCommandAttachments(id, "abort_and_prompt", command.attachments, "");
-				if ("error" in resolved) return resolved.error;
 				this.#goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				// After the abort so the aborted run's terminal agent_end cannot settle this prompt.
 				const ticket = this.promptResults.begin(id);
-				void this.#dispatchOrderedUserInput(command, ticket, resolved, false).then(
+				void this.#dispatchOrderedUserInput(command, ticket, false).then(
 					outcome => {
-						if (outcome === "cancelled") this.promptResults.settle(ticket);
+						if (typeof outcome === "object") {
+							this.#output(outcome.setupError);
+							this.promptResults.fail(
+								ticket,
+								(outcome.setupError as Extract<RpcResponse, { success: false }>).error,
+							);
+						} else if (outcome === "cancelled") this.promptResults.settle(ticket);
 						else if (outcome === "local") this.promptResults.completeLocal(ticket);
 					},
 					(cause: unknown) => {
@@ -2552,20 +2577,39 @@ export class RpcSessionHost {
 	 * `follow_up`, and `abort_and_prompt` run serially through the host's
 	 * {@link RpcUserInputGate}, and every step re-checks `isCurrent` so an
 	 * abort or session change that arrived while this input was queued cancels
-	 * it before any agent work starts. Extension input handlers run inside the
-	 * gate, in arrival order.
+	 * it before any agent work starts. Everything async that precedes dispatch
+	 * — the `/plan` toggle interception and attachment resolution — runs inside
+	 * the gate so a later-arriving plain prompt can never enter the gate first
+	 * (§14.4 arrival order). Extension input handlers run inside the gate, in
+	 * arrival order.
 	 */
 	#dispatchOrderedUserInput(
 		command: Extract<RpcCommand, { type: "prompt" | "steer" | "follow_up" | "abort_and_prompt" }>,
 		ticket: RpcPromptTicket | undefined,
-		attachments: { message: string; images: ImageContent[] },
 		strictCommandDispatch: boolean,
-	): Promise<"local" | "cancelled" | "admitted" | "skill-invoked" | "builtin-agent" | "unknown-command"> {
+	): Promise<
+		| "local"
+		| "cancelled"
+		| "admitted"
+		| "skill-invoked"
+		| "builtin-agent"
+		| "unknown-command"
+		| { setupError: RpcResponse }
+	> {
 		return this.#inputGate.enqueue(async () => {
 			const session = this.session;
 			const sessionId = session.sessionId;
 			const isCurrent = () =>
 				this.#inputGate.isCurrent(command) && !this.isShutdownRequested() && session.sessionId === sessionId;
+			if (!isCurrent()) return "cancelled";
+			if (command.type === "prompt" && strictCommandDispatch) {
+				// `/plan` is a mode toggle, not model input: intercepted before any
+				// dispatch so the literal text never reaches the agent (5.3).
+				if (await this.#forkPlanController.interceptSlashPlan(command.message)) return "local";
+				if (!isCurrent()) return "cancelled";
+			}
+			const attachments = await this.#resolveCommandAttachments(command.id, command.type, command.attachments, "");
+			if ("error" in attachments) return { setupError: attachments.error };
 			if (!isCurrent()) return "cancelled";
 			// The attachment text prefix joins the model input only after the
 			// extension input handlers below, so slash/skill matching in the
@@ -2607,6 +2651,7 @@ export class RpcSessionHost {
 						ticket,
 						session,
 						message: text,
+						attachmentsText: attachmentPrefix,
 						streamingBehavior: command.streamingBehavior,
 						results: this.promptResults,
 						onError: this.#onPromptError(command.id, "prompt"),

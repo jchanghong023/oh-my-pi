@@ -248,7 +248,7 @@ export type Frames = Assert<
 		liveLevels: Outbound<RpcLiveLevelsFrame, Wire.LiveLevelsEvent>;
 		liveTranscript: Outbound<RpcLiveTranscriptFrame, Wire.LiveTranscriptEvent>;
 		liveEnd: Outbound<RpcLiveEndFrame, Wire.LiveEndEvent>;
-		hostToolCall: Outbound<RpcHostToolCallRequest, Wire.HostToolCallRequest>;
+		hostToolCall: Outbound<Omit<RpcHostToolCallRequest, "sessionId" | "sessionGeneration">, Wire.HostToolCallRequest>;
 		hostToolCancel: Outbound<RpcHostToolCancelRequest, Wire.HostToolCancelRequest>;
 		hostUriRequest: Outbound<RpcHostUriRequest, Wire.HostUriRequest>;
 		hostUriCancel: Outbound<RpcHostUriCancelRequest, Wire.HostUriCancelRequest>;
@@ -257,8 +257,8 @@ export type Frames = Assert<
 		askAnswer: Inbound<Wire.AskAnswer, Extract<RpcExtensionUIResponse, { answers: unknown }>["answers"][number]>;
 		hostToolDefinition: Inbound<Wire.HostToolDefinition, RpcHostToolDefinition>;
 		hostUriScheme: Inbound<Wire.HostUriSchemeDefinition, RpcHostUriSchemeDefinition>;
-		hostToolUpdate: Inbound<Wire.HostToolUpdate, RpcHostToolUpdate>;
-		hostToolResult: Inbound<Wire.HostToolResult, RpcHostToolResult>;
+		hostToolUpdate: Inbound<Wire.HostToolUpdate, Omit<RpcHostToolUpdate, "sessionId" | "sessionGeneration">>;
+		hostToolResult: Inbound<Wire.HostToolResult, Omit<RpcHostToolResult, "sessionId" | "sessionGeneration">>;
 		hostToolPayload: Inbound<Wire.HostToolResultPayload, RpcHostToolResult["result"]>;
 		hostUriResult: Inbound<Wire.HostUriResult, RpcHostUriResult>;
 		uiValue: Inbound<Wire.ValueUiResponse, Extract<RpcExtensionUIResponse, { value: unknown }>>;

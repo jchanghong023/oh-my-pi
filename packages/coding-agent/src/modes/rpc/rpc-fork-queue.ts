@@ -32,11 +32,15 @@ export interface RpcForkQueuedEntry {
 export interface RpcForkQueueSnapshot {
 	steering: RpcForkQueuedEntry[];
 	followUp: RpcForkQueuedEntry[];
+	/** Bumped on every queue change (enqueue/consume/clear); write commands compare it via expectedRevision. */
+	revision: number;
 }
 
 export class RpcForkQueueController {
 	readonly #ids = new WeakMap<AgentMessage, string>();
 	#nextId = 1;
+	/** Monotonic queue revision; bumped on every observed queue change. */
+	#revision = 0;
 
 	constructor(
 		private readonly host: RpcForkHost,
@@ -46,7 +50,10 @@ export class RpcForkQueueController {
 		host.registerCommand("remove_queued", command => this.#removeQueued(command));
 		host.registerCommand("reorder_queue", command => this.#reorderQueue(command));
 		host.registerCommand("clear_queue", command => this.#clearQueue(command));
-		const unsubscribe = session.agent.onQueueChange(() => this.emitQueueUpdated());
+		const unsubscribe = session.agent.onQueueChange(() => {
+			this.#revision++;
+			this.emitQueueUpdated();
+		});
 		host.registerDisposer(() => unsubscribe());
 	}
 
@@ -79,6 +86,7 @@ export class RpcForkQueueController {
 		if (!this.host.isActive) return;
 		this.host.context.emit({
 			type: "queue_updated",
+			revision: this.#revision,
 			...this.#counts(),
 		} satisfies RpcForkQueueUpdatedFrame);
 	}
@@ -91,6 +99,7 @@ export class RpcForkQueueController {
 			followUp: this.#queue("followUp")
 				.filter(isUserAuthoredQueuedMessage)
 				.map(message => this.#entryFor(message)),
+			revision: this.#revision,
 		};
 		return this.host.context.success(command.id, "get_queue", data);
 	}
@@ -156,7 +165,28 @@ export class RpcForkQueueController {
 	}
 
 	async #clearQueue(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const queueName = (command as { queue?: unknown }).queue;
+		const { queue: queueName, expectedRevision } = command as { queue?: unknown; expectedRevision?: unknown };
+		// A snapshot-less clear would also drop messages enqueued after the
+		// caller read the queue (§14.9: 新入队竞争明确冲突). Clients that tracked
+		// the revision opt into conflict detection; omission keeps the legacy
+		// single-session behavior.
+		if (expectedRevision !== undefined) {
+			if (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+				return this.host.context.error(
+					command.id,
+					"clear_queue",
+					"expectedRevision must be a non-negative integer",
+				);
+			}
+			if (expectedRevision !== this.#revision) {
+				return this.host.context.error(
+					command.id,
+					"clear_queue",
+					`Queue changed since revision ${expectedRevision} (now ${this.#revision}); read it again`,
+					"revision_conflict",
+				);
+			}
+		}
 		if (queueName === undefined) {
 			this.#clearUserQueue("steering");
 			this.#clearUserQueue("followUp");
@@ -165,7 +195,7 @@ export class RpcForkQueueController {
 		} else {
 			return this.host.context.error(command.id, "clear_queue", `Invalid queue: ${String(queueName)}`);
 		}
-		return this.host.context.success(command.id, "clear_queue");
+		return this.host.context.success(command.id, "clear_queue", { revision: this.#revision });
 	}
 
 	#userGroups(messages: readonly AgentMessage[]): Array<{ id: string; start: number; end: number }> {

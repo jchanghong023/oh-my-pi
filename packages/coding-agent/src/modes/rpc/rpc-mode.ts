@@ -363,8 +363,16 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		createLiveSession,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
 	});
-	await host.initializeExtensions();
-	await host.start();
+	// Startup awaits can span client interaction: a `session_start` extension
+	// hook may emit an extension_ui_request and wait for the host's answer.
+	// Those answers arrive on stdin, so the reader must be running before the
+	// awaits — run startup concurrently and gate ordinary commands on it, while
+	// control frames (extension_ui_response, host tool/URI results) dispatch
+	// immediately through the bridges the constructor already built.
+	const startup = (async () => {
+		await host.initializeExtensions();
+		await host.start();
+	})();
 
 	/**
 	 * Dispose the session, then end the process. A store failure still latched
@@ -429,7 +437,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 
 	const dispatchFrameDeps: RpcInputFrameDeps = {
-		handleCommand: command => host.handleCommand(command),
+		handleCommand: command => startup.then(() => host.handleCommand(command)),
 		output,
 		errorResponse: (id, command, message) => host.error(id, command, message),
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
@@ -452,11 +460,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// line-by-line by readRpcInputFrames so a single malformed line is reported
 	// as an error frame and the loop keeps running instead of throwing out of
 	// the reader and killing the whole process (issue #5194).
-	await readRpcInputFrames(
+	const readerDone = readRpcInputFrames(
 		input ?? Bun.stdin.stream(),
 		parsed => inputDispatcher.dispatch(parsed),
 		message => output(host.error(undefined, "parse", message)),
 	);
+	// Startup failures still reject runRpcMode exactly as before; the reader
+	// above is what lets the client answer a startup-time interaction at all.
+	await startup;
+	await readerDone;
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.

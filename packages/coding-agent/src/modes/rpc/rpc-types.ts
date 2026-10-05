@@ -785,6 +785,9 @@ export interface RpcHostToolCallRequest {
 	toolCallId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	/** Project mode: owning session stamp the host echoes back on result/update frames. */
+	sessionId?: string;
+	sessionGeneration?: string;
 }
 
 /** Emitted by the RPC server when a pending host tool call should be aborted. */
@@ -799,6 +802,9 @@ export interface RpcHostToolUpdate {
 	type: "host_tool_update";
 	id: string;
 	partialResult: AgentToolResult<unknown>;
+	/** Project mode: echoed from the `host_tool_call` frame so the project host accepts it. */
+	sessionId?: string;
+	sessionGeneration?: string;
 }
 
 /** Sent by the host to complete a pending tool call. */
@@ -807,6 +813,9 @@ export interface RpcHostToolResult {
 	id: string;
 	result: AgentToolResult<unknown>;
 	isError?: boolean;
+	/** Project mode: echoed from the `host_tool_call` frame so the project host accepts it. */
+	sessionId?: string;
+	sessionGeneration?: string;
 }
 
 // ============================================================================

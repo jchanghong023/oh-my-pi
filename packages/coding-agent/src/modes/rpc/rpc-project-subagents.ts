@@ -300,13 +300,32 @@ interface FinishedSubagentRow {
 }
 
 /**
- * Build one durable summary row. Terminal-status rule — durable facts only;
- * `"failed"` cannot be distinguished cheaply from disk and is never claimed by
- * this catalog:
+ * Terminal status persisted by the RPC registry beside the transcript
+ * (`<transcript>.jsonl.status`, written on every terminal lifecycle frame —
+ * the same convention as the kill tombstone). Absent for runs that predate
+ * the marker or whose process died mid-run.
+ */
+async function readTerminalStatusMarker(transcriptPath: string): Promise<RpcProjectSubagentStatus | undefined> {
+	try {
+		const value = (await Bun.file(`${transcriptPath}.status`).text()).trim();
+		return value === "completed" || value === "failed" || value === "aborted" || value === "parked"
+			? value
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Build one durable summary row. Terminal-status rule — durable facts only:
  *   - tombstone (`<id>.jsonl.tombstone`)     → "aborted" (explicit kill marker)
  *   - registry ref on this exact transcript  → "aborted"/"parked" (live-process fact)
+ *   - `<id>.jsonl.status` marker             → the registry-persisted terminal
+ *     status (a failed run also writes its output `.md`, so the marker is the
+ *     only durable fact separating "failed" from "completed")
  *   - header-only head (`incomplete`)        → "interrupted" (nothing ever ran)
- *   - `<id>.md` output artifact exists       → "completed" (executor wrote the result)
+ *   - `<id>.md` output artifact exists       → "completed" (legacy fallback for
+ *     marker-less runs: executor wrote a result)
  *   - anything else                          → "interrupted" — a run that crashed
  *     without leaving a completion fact is reported interrupted per §14.8,
  *     never silently completed.
@@ -322,8 +341,9 @@ async function buildFinishedSubagentRow(
 		stat = undefined;
 	}
 	const metadata = stat ? await readDurableSubagentMetadata(record.transcriptPath) : undefined;
-	const [tombstoned, hasOutput] = await Promise.all([
+	const [tombstoned, statusMarker, hasOutput] = await Promise.all([
 		Bun.file(getAgentTombstonePath(record.transcriptPath)).exists(),
+		readTerminalStatusMarker(record.transcriptPath),
 		Bun.file(`${record.transcriptPath.slice(0, -JSONL_SUFFIX.length)}.md`).exists(),
 	]);
 	const ref = AgentRegistry.global().get(record.id);
@@ -339,6 +359,7 @@ async function buildFinishedSubagentRow(
 	else if (registryStatus === "aborted") status = "aborted";
 	else if (registryStatus === "parked") status = "parked";
 	else if (registryStatus === "running") status = "running";
+	else if (statusMarker !== undefined) status = statusMarker;
 	else if (!metadata || metadata.incomplete) status = "interrupted";
 	else if (hasOutput) status = "completed";
 	else status = "interrupted";

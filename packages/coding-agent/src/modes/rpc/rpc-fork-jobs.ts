@@ -10,7 +10,7 @@
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { AgentSession } from "../../session/agent-session";
 import type { ToolSession } from "../../tools";
-import { executeCancel, snapshotJobs } from "../../async/job-control";
+import { cancelAgentRegistration, executeCancel, snapshotJobs } from "../../async/job-control";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
@@ -97,15 +97,41 @@ export class RpcForkJobController {
 		if (!job || job.ownerId !== (this.session.getAgentId() ?? undefined)) {
 			return this.host.context.error(command.id, "cancel_job", `Unknown job: ${jobId}`, "unknown_job");
 		}
+		const resultFields = (snapshot: { exitCode?: number; resultText?: string; errorText?: string }) => ({
+			...(snapshot.exitCode !== undefined ? { exitCode: snapshot.exitCode } : {}),
+			...(snapshot.resultText !== undefined ? { resultText: snapshot.resultText } : {}),
+			...(snapshot.errorText !== undefined ? { errorText: snapshot.errorText } : {}),
+		});
+		if (job.status !== "running") {
+			// Already settled: the cancel report must not consume the result —
+			// the parent agent's queued injection and later get_jobs queries
+			// still owe it. Report the durable outcome without marking it
+			// delivered; the zombie-registration kill still runs for task rows.
+			const outcome = await cancelAgentRegistration(
+				this.#toolSessionView(),
+				this.session.getAgentId() ?? undefined,
+				jobId,
+			);
+			const [snapshot] = snapshotJobs(this.#toolSessionView(), [job], { includeResults: true });
+			return this.host.context.success(command.id, "cancel_job", {
+				jobId,
+				status: outcome.status === "cancelled" ? "cancelled" : "already_completed",
+				...resultFields(snapshot),
+			});
+		}
 		const result = await executeCancel(this.#toolSessionView(), manager, this.session.getAgentId() ?? undefined, [
 			jobId,
 		]);
 		const detail = (result.details as CoordinationDetails | undefined)?.cancelled?.find(
 			outcome => outcome.id === jobId,
 		);
+		// The cancel report consumed the row; surface the final body so the
+		// client is not left with a bare "cancelled" and no recoverable output.
+		const snapshot = (result.details as CoordinationDetails | undefined)?.jobs?.find(row => row.id === jobId);
 		return this.host.context.success(command.id, "cancel_job", {
 			jobId,
 			status: detail?.status ?? "cancelled",
+			...resultFields(snapshot ?? {}),
 		});
 	}
 }
