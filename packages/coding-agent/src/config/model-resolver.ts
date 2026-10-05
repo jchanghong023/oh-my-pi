@@ -1910,12 +1910,15 @@ export async function resolveModelScope(
 	const isExcluded = exclusions
 		? createDisabledModelMatcher(catalog, exclusions, settings, preferences)
 		: noDisabledModels;
-	const availableModels = exclusions
-		? filterAvailableModelsByDisabledPatterns(catalog, exclusions, settings, preferences)
-		: catalog;
+	// Resolve positive selectors before exclusions, including literal pins whose
+	// excluded row would otherwise fuzzy-match a surviving sibling.
+	const availableModels = modelInclusionCatalogs.get(catalog) ?? catalog;
+	const availableKeys = new Set(catalog.map(formatModelString));
+	const registryExclusions = new Set(availableModels.map(formatModelString).filter(key => !availableKeys.has(key)));
 	const context = buildPreferenceContext(availableModels, preferences);
 	const scopedModels: ScopedModel[] = [];
 	const addScopedModel = (model: Model<Api>, thinkingLevel: ThinkingLevel | undefined, explicit: boolean) => {
+		if (registryExclusions.has(formatModelString(model))) return;
 		if (isExcluded !== noDisabledModels && isExcluded(model)) return;
 		if (scopedModels.some(sm => modelsAreEqual(sm.model, model))) return;
 		scopedModels.push({
@@ -2075,8 +2078,11 @@ export function filterAvailableModelsByEnabledPatterns(
 	if (!settings) return matchAvailableModelsByPatterns(available, patterns);
 	const exclusions = cfgDisabledModels.get(settings);
 	const catalog = modelExclusionCatalogs.get(available) ?? available;
-	const eligible = filterAvailableModelsByDisabledPatterns(available, exclusions, settings);
-	const included = matchAvailableModelsByPatterns(eligible, patterns, settings);
+	const included = matchAvailableModelsByPatterns(
+		modelInclusionCatalogs.get(available) ?? available,
+		patterns,
+		settings,
+	);
 	return filterAvailableModelsByDisabledPatterns(included, exclusions, settings, undefined, catalog);
 }
 function findExactCliModel(
@@ -2651,6 +2657,9 @@ const noDisabledModels: DisabledModelMatcher = () => false;
 const allModelsDisabled: DisabledModelMatcher = () => true;
 // A filtered subset must not retarget a fuzzy exclusion to its next survivor.
 const modelExclusionCatalogs = new WeakMap<Model<Api>[], Model<Api>[]>();
+// Authenticated candidates before negative filtering, distinct from the full
+// catalog used to interpret exclusions (which may include unauthenticated rows).
+const modelInclusionCatalogs = new WeakMap<Model<Api>[], Model<Api>[]>();
 const modelExclusionMatchers = new WeakMap<
 	Model<Api>[],
 	{
@@ -2789,5 +2798,6 @@ export function filterAvailableModelsByDisabledPatterns(
 		}
 	}
 	modelExclusionCatalogs.set(result, catalog);
+	modelInclusionCatalogs.set(result, modelInclusionCatalogs.get(available) ?? available);
 	return result;
 }

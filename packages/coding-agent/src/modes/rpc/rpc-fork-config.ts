@@ -705,7 +705,7 @@ export class RpcForkConfigController {
 			} else {
 				if (negative.includes(pattern)) nextNegative = negative.filter(value => value !== pattern);
 				// Resolve persisted path-scoped arrays without staging mutations on the live settings.
-				const prospective = settings.overlay({
+				const prospective = settings.previewUserSettings({
 					[cfgEnabledModels.id]: positive,
 					[cfgDisabledModels.id]: nextNegative,
 				});
@@ -728,6 +728,22 @@ export class RpcForkConfigController {
 					!filterAvailableModelsByEnabledPatterns(catalog, patterns, prospective).some(isTarget)
 				) {
 					nextPositive = [...positive, pattern];
+					const expanded = settings.previewUserSettings({
+						[cfgEnabledModels.id]: nextPositive,
+						[cfgDisabledModels.id]: nextNegative,
+					});
+					if (
+						!filterAvailableModelsByEnabledPatterns(catalog, cfgEnabledModels.get(expanded), expanded).some(
+							isTarget,
+						)
+					) {
+						return this.host.context.error(
+							command.id,
+							"set_model_enabled",
+							`${pattern} remains outside the effective enabledModels scope`,
+							"unsupported",
+						);
+					}
 				}
 			}
 			const mutations: { settingId: string; value: unknown; expectedValue: unknown }[] = [

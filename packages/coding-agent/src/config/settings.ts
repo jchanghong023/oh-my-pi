@@ -606,6 +606,7 @@ export class Settings {
 	#overrides: RawSettings = {};
 	/** Settings whose runtime override is a soft-pinned default ({@link pinDefaultValue}). */
 	#softPins = new Set<AnySetting>();
+	#defaultModelRoles: Readonly<Record<string, string>> = {};
 	/** Merged view (global + project + overrides) */
 	#merged: RawSettings = {};
 	/** Monotonic revision of merged layers and cwd-scoped resolution. */
@@ -778,6 +779,7 @@ export class Settings {
 		const child = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir, overrides });
 		child.#storage = this.#storage;
 		child.#parent = this;
+		child.#defaultModelRoles = this.#defaultModelRoles;
 		inheritWarnings(child, this);
 		child.#rebuildMerged();
 		// The parent holds only a weak reference, so a discarded child is collected without an
@@ -1276,6 +1278,7 @@ export class Settings {
 		}
 		cloned.#global = structuredClone(this.#global);
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
+		cloned.#defaultModelRoles = this.#defaultModelRoles;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
 		const layers = { ...cloned.#ownLayers(), overrides: this.#buildOriginalOverrides() };
@@ -1537,6 +1540,37 @@ export class Settings {
 	/** Compare and persist one user-layer field without staging or changing runtime overrides. */
 	async saveUserSetting(settingId: string, value: unknown, expectedValue: unknown): Promise<void> {
 		return this.saveUserSettings([{ settingId, value, expectedValue }]);
+	}
+
+	/** Preview user-layer edits while retaining project, --config and runtime precedence. */
+	previewUserSettings(values: Readonly<Record<string, unknown>>): Settings {
+		const preview = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir });
+		preview.#parent = this.#parent?.previewUserSettings(values);
+		preview.#global = structuredClone(this.#global);
+		preview.#project = this.#project;
+		preview.#configOverlay = this.#configOverlay;
+		preview.#overrides = this.#overrides;
+		preview.#defaultModelRoles = this.#defaultModelRoles;
+		if (!this.#parent) {
+			for (const [id, value] of Object.entries(values)) {
+				const setting = lookupSetting(id);
+				if (!setting) throw new Error(`Unknown setting: ${id}`);
+				const normalized =
+					value === undefined
+						? undefined
+						: setting.definition.normalize
+							? setting.definition.normalize(value)
+							: value;
+				if (normalized === undefined) deleteByPath(preview.#global, setting.segments);
+				else {
+					setting.assertWritable(normalized);
+					setByPath(preview.#global, setting.segments, normalized);
+				}
+			}
+		}
+		preview.#rebuildMerged();
+		preview.#validateAll();
+		return preview;
 	}
 
 	/** Compare all touched user fields under one lock and publish them in one atomic write. */
@@ -1934,8 +1968,16 @@ export class Settings {
 	 */
 	getModelRole(role: ModelRole | string): string | undefined {
 		const roles: unknown = cfgModelRoles.get(this);
-		if (!isRecord(roles)) return undefined;
-		return modelRoleValueFromUnknown(roles[role]);
+		return (isRecord(roles) ? modelRoleValueFromUnknown(roles[role]) : undefined) ?? this.#defaultModelRoles[role];
+	}
+
+	/** Process defaults yield to every configured role, including after reload and cwd changes. */
+	setModelRoleDefaults(roles: ReadOnlyDict<string>): void {
+		const defaults: Record<string, string> = {};
+		for (const [role, model] of Object.entries(roles)) {
+			if (model) defaults[role] = model;
+		}
+		this.#defaultModelRoles = defaults;
 	}
 	/**
 	 * Get a model role from only the global settings layer (an {@link overlay}'s own, else its parent's).
@@ -2016,9 +2058,9 @@ export class Settings {
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
 		const roles: unknown = cfgModelRoles.get(this);
-		if (!isRecord(roles)) return {};
+		if (!isRecord(roles)) return { ...this.#defaultModelRoles };
 
-		const normalized: Record<string, string> = {};
+		const normalized: Record<string, string> = { ...this.#defaultModelRoles };
 		for (const role in roles) {
 			if (!Object.hasOwn(roles, role)) continue;
 			const modelId = modelRoleValueFromUnknown(roles[role]);

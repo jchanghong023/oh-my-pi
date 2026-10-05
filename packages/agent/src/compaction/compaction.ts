@@ -1712,7 +1712,8 @@ export async function compact(
 				{ systemPrompt: remoteSystemPrompt, messages, tools: summaryOptions.tools },
 				{
 					reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
-					forceReasoningOff: summaryOptions.thinkingLevel === ThinkingLevel.Off,
+					forceReasoningOff:
+						summaryOptions.thinkingLevel === ThinkingLevel.Off && !isForkCodexCompactionModel(model),
 					responsesLite: model.useResponsesLite,
 					sessionId: summaryOptions.sessionId,
 					promptCacheKey: summaryOptions.promptCacheKey,

@@ -1732,7 +1732,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
 	// / session would silently miss credential_disabled events.
 	const modelRegistry =
-		options.modelRegistry ??
+		options.modelRegistry?.withSettings(settings) ??
 		new ModelRegistry(
 			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir, { settings, cwd })),
 			path.join(agentDir, "models.yml"),

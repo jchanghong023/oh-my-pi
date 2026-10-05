@@ -8,6 +8,7 @@ import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 import { cfgEditModelVariants } from "@oh-my-pi/pi-coding-agent/edit/settings";
+import { cfgDisabledModels, cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgProvidersMaxInFlightRequests, cfgTemperature } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -44,6 +45,36 @@ describe("Settings layer refresh", () => {
 		fs.mkdirSync(getProjectAgentDir(project), { recursive: true });
 		fs.writeFileSync(path.join(getProjectAgentDir(project), "settings.json"), JSON.stringify(settings));
 	}
+
+	it("process role defaults yield to destination projects and later disk edits", async () => {
+		await writeConfig({});
+		writeProjectSettings(scopedProject, { modelRoles: { smol: "company/DeepSeek-V4-Flash-public" } });
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		settings.setModelRoleDefaults({ smol: "company/Qwen3.6-35B-A3B", plan: "company/GLM-5.2-public" });
+		const target = await settings.cloneForCwd(scopedProject);
+		expect(target.getModelRole("smol")).toBe("company/DeepSeek-V4-Flash-public");
+		expect(target.getModelRoles().smol).toBe("company/DeepSeek-V4-Flash-public");
+		expect(target.getModelRole("plan")).toBe("company/GLM-5.2-public");
+		const bare = await target.cloneForCwd(bareProject);
+		expect(bare.getModelRole("smol")).toBe("company/Qwen3.6-35B-A3B");
+		await writeConfig({ modelRoles: { smol: "company/MiniMax-M2.7" } });
+		await settings.reloadFromDisk();
+		expect(settings.getModelRole("smol")).toBe("company/MiniMax-M2.7");
+		expect(settings.getModelRoleProvenance("smol")).toBe("global");
+	});
+
+	it("user model-switch previews preserve effective project and runtime restrictions", async () => {
+		await writeConfig({ disabledModels: ["zcode-api/glm-5.2"] });
+		writeProjectSettings(scopedProject, { disabledModels: ["zcode-api/*"], enabledModels: ["company/*"] });
+		const settings = await Settings.init({ cwd: scopedProject, agentDir });
+		const preview = settings.previewUserSettings({ disabledModels: [], enabledModels: ["zcode-api/glm-5.2"] });
+		expect(cfgDisabledModels.get(preview)).toEqual(["zcode-api/*"]);
+		expect(cfgEnabledModels.get(preview)).toEqual(["company/*"]);
+		expect(settings.getUserSettingValue("disabledModels")).toEqual(["zcode-api/glm-5.2"]);
+		const child = settings.overlay({ disabledModels: ["*"] });
+		expect(cfgDisabledModels.get(child.previewUserSettings({ disabledModels: [] }))).toEqual(["*"]);
+		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({ disabledModels: ["zcode-api/glm-5.2"] });
+	});
 
 	it("rejects an on-disk value that fails validation and keeps the previous layers", async () => {
 		await writeConfig({ providers: { maxInFlightRequests: { openai: 2 } } });

@@ -2062,11 +2062,7 @@ export async function runRootCommand(
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
 			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 			if (getCompanyConfig()) {
-				for (const [role, model] of Object.entries(COMPANY_OFFLINE_ROLE_DEFAULTS)) {
-					if (!settingsInstance.getModelRole(role)) {
-						settingsInstance.overrideModelRoles({ [role]: model });
-					}
-				}
+				settingsInstance.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
 			}
 		}
 

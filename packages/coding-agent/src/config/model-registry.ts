@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
 import type { AuthApiKeyOptions } from "@oh-my-pi/pi-ai/auth-storage";
@@ -346,6 +347,39 @@ export class ModelRegistry {
 	#ignoreLocalModelConfig: boolean;
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
+	#availabilitySettings = new AsyncLocalStorage<Settings>();
+	#settingsViews = new WeakMap<Settings, ModelRegistry>();
+
+	get #effectiveAvailabilitySettings(): Settings | undefined {
+		return this.#availabilitySettings.getStore() ?? this.#settings;
+	}
+
+	/** Share catalogs and credentials while enforcing each session's live exclusions. */
+	withSettings(instance: Settings): ModelRegistry {
+		if (instance === this.#settings) return this;
+		const cached = this.#settingsViews.get(instance);
+		if (cached) return cached;
+		const methods = new Map<PropertyKey, unknown>();
+		const view = new Proxy(this, {
+			get: (target, prop) => {
+				const value = Reflect.get(target, prop, target);
+				if (typeof value !== "function" || prop === "constructor") return value;
+				if (methods.has(prop)) return methods.get(prop);
+				const bound = (...args: unknown[]) => {
+					const result = this.#availabilitySettings.run(instance, () => Reflect.apply(value, target, args));
+					// Resolvers execute later, outside the call that created them.
+					return prop === "resolver" && typeof result === "function"
+						? (...resolverArgs: unknown[]) =>
+								this.#availabilitySettings.run(instance, () => Reflect.apply(result, target, resolverArgs))
+						: result;
+				};
+				methods.set(prop, bound);
+				return bound;
+			},
+		});
+		this.#settingsViews.set(instance, view);
+		return view;
+	}
 
 	#captureCatalogMetrics(models: readonly Model<Api>[], replace: boolean): void {
 		if (replace) {
@@ -2794,7 +2828,7 @@ export class ModelRegistry {
 	 * full bundled catalog (thousands of models, ~50 providers).
 	 */
 	#createProviderAvailabilityCheck(): (provider: string) => boolean {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
 		const byProvider = new Map<string, boolean>();
 		return provider => {
 			let available = byProvider.get(provider);
@@ -2987,7 +3021,7 @@ export class ModelRegistry {
 	/** Whether settings disable `provider` (`disabledProviders`). */
 	#isProviderDisabled(provider: string): boolean {
 		try {
-			return cfgDisabledProviders.get(this.#settings ?? settings).includes(provider);
+			return cfgDisabledProviders.get(this.#effectiveAvailabilitySettings ?? settings).includes(provider);
 		} catch {
 			return false;
 		}
@@ -2996,7 +3030,7 @@ export class ModelRegistry {
 	/** Whether a model identity is permitted by the current hard provider/model exclusions. */
 	isModelEnabled(model: Pick<Model<Api>, "provider" | "id">): boolean {
 		if (this.#isProviderDisabled(model.provider)) return false;
-		const effectiveSettings = this.#settings ?? settings;
+		const effectiveSettings = this.#effectiveAvailabilitySettings ?? settings;
 		let patterns: string[];
 		try {
 			patterns = cfgDisabledModels.get(effectiveSettings);
@@ -3009,7 +3043,7 @@ export class ModelRegistry {
 	}
 
 	#filterDisabledModels(models: Model<Api>[]): Model<Api>[] {
-		const effectiveSettings = this.#settings ?? settings;
+		const effectiveSettings = this.#effectiveAvailabilitySettings ?? settings;
 		let patterns: string[];
 		try {
 			patterns = cfgDisabledModels.get(effectiveSettings);

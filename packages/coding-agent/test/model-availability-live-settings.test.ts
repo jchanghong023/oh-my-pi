@@ -10,7 +10,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgDisabledModels, cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 
 function bundled(provider: GeneratedProvider, id: string): Model<Api> {
 	const model = getBundledModel(provider, id);
@@ -73,6 +73,30 @@ describe("disabledProviders takes effect live", () => {
 		const cycled = await live.cycleModel();
 		expect(cycled?.model.id).toBe(opus.id);
 		expect((await live.cycleModel())?.model.id).toBe(sonnet.id);
+	});
+
+	it("shared registry views keep session exclusions isolated through asynchronous credentials", async () => {
+		const model = bundled("anthropic", "claude-sonnet-4-5");
+		const startup = Settings.isolated();
+		const target = startup.overlay({ disabledModels: [`${model.provider}/${model.id}`] });
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings: startup });
+		const scoped = registry.withSettings(target);
+		const resolver = scoped.resolver(model);
+		expect(scoped.find(model.provider, model.id)).toBeUndefined();
+		expect(scoped.getAvailableForProviders(new Set([model.provider])).some(row => row.id === model.id)).toBe(false);
+		const [rootKey, scopedKey, resolvedKey] = await Promise.all([
+			registry.getApiKey(model),
+			scoped.getApiKey(model),
+			resolver({ lastChance: false, error: undefined }),
+		]);
+		expect(rootKey).toBe("test-key");
+		expect(scopedKey).toBeUndefined();
+		expect(resolvedKey).toBeUndefined();
+		cfgDisabledModels.override(target, []);
+		expect(await scoped.getApiKey(model)).toBe("test-key");
+		cfgDisabledModels.override(startup, ["*"]);
+		expect(await registry.getApiKey(model)).toBeUndefined();
+		expect(await scoped.getApiKey(model)).toBe("test-key");
 	});
 
 	it("re-seeds implicit discovery for a provider re-enabled mid-session", async () => {

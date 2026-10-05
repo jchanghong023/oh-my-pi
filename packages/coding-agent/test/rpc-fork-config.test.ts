@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { YAML } from "bun";
-import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import { RpcForkConfigController, classifyModelTestError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-config";
 import { RpcForkManageController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-manage";
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
@@ -75,6 +75,36 @@ function setup(overrides?: Partial<Record<string, unknown>>, options?: { agentDi
 }
 
 describe("RpcForkConfigController A tier (5.6)", () => {
+	test("enabling a model reports a conflict when a project exclusion still applies", async () => {
+		await using dir = await TempDir.create("rpc-model-project-exclusion-");
+		const cwd = dir.join("project");
+		const agentDir = dir.join("agent");
+		await fs.mkdir(getProjectAgentDir(cwd), { recursive: true });
+		await fs.mkdir(agentDir, { recursive: true });
+		await fs.writeFile(
+			path.join(getProjectAgentDir(cwd), "config.yml"),
+			YAML.stringify({ disabledModels: ["zcode-api/*"] }),
+		);
+		const settings = await Settings.loadReadOnly({ cwd, agentDir });
+		const fx = setup({
+			settings,
+			modelRegistry: {
+				awaitBackgroundRefresh: async () => {},
+				getAll: () => [{ provider: "zcode-api", id: "glm-5.2" }],
+			},
+		});
+		const response = await fx.run({
+			type: "set_model_enabled",
+			provider: "zcode-api",
+			modelId: "glm-5.2",
+			enabled: true,
+		});
+		expect(response).toMatchObject({ success: false, code: "unsupported" });
+		if (response.success) throw new Error("Project exclusion was ignored");
+		expect(response.error).toContain("remains excluded");
+		expect(settings.getUserSettingValue("disabledModels")).toBeUndefined();
+	});
+
 	test("get_settings returns masked schema entries; project scope filters to configured keys", async () => {
 		const fx = setup();
 		const user = (await fx.run({ id: "g1", type: "get_settings", scope: "user" })) as {

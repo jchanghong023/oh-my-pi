@@ -2763,6 +2763,23 @@ describe("disabledModels exclusion policy", () => {
 		expect(result.error).toContain("disabled");
 	});
 
+	test("disabling a sole positive pin never retargets it to a fuzzy sibling", async () => {
+		const pinned = models[0];
+		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
+		const catalog = [pinned, sibling];
+		const pin = `${pinned.provider}/${pinned.id}`;
+		for (const selector of [pin, pinned.id]) {
+			const settings = Settings.isolated({ enabledModels: [selector], disabledModels: [pin] });
+			const available = filterAvailableModelsByDisabledPatterns(catalog, [pin], settings);
+			expect(filterAvailableModelsByEnabledPatterns(available, [selector], settings)).toEqual([]);
+			expect(await resolveAllowedModels({ getAvailable: () => available }, settings)).toEqual([]);
+			expect(await resolveModelScope([selector], { getAvailable: () => available })).toEqual([]);
+			expect(await resolveModelScope([selector], { getAvailable: () => available }, undefined, settings)).toEqual(
+				[],
+			);
+		}
+	});
+
 	test("uses the same role and literal colon-bearing selector grammar", () => {
 		const settings = Settings.isolated({ modelRoles: { fable: `${blocked}:high` } });
 		expect(

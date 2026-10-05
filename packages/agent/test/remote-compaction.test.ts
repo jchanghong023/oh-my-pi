@@ -1481,6 +1481,32 @@ describe("Responses Lite remote compaction", () => {
 		},
 	);
 
+	test.each([false, true])(
+		"luna V2 compaction sends low even when the live session is Off (Lite: %s)",
+		async responsesLite => {
+			const model = makeCodexLiteModel({ id: "gpt-6-luna", useResponsesLite: responsesLite });
+			const preparation: CompactionPreparation = {
+				firstKeptEntryId: "kept-1",
+				messagesToSummarize: [{ role: "user", content: "Summarize this request", timestamp: 1 }],
+				turnPrefixMessages: [],
+				recentMessages: [],
+				isSplitTurn: false,
+				tokensBefore: 100_000,
+				fileOps: createFileOps(),
+				settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteStreamingV2Enabled: true },
+			};
+			let captured: CapturedLiteExchange | undefined;
+			await compact(preparation, model, CODEX_RESIDENCY_TOKEN, undefined, undefined, {
+				thinkingLevel: ThinkingLevel.Off,
+				fetch: async (_input, init) => {
+					captured = captureStreamLite(init);
+					return sseResponse(compactionV2Events("enc-luna-low"));
+				},
+			});
+			expect(captured?.body.reasoning?.effort).toBe("low");
+		},
+	);
+
 	test("V2 compaction isolates its Lite WebSocket from the full Responses session", async () => {
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const webSocket = installCodexCompactionWebSocket({
