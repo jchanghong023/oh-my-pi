@@ -9,6 +9,7 @@
  * home per direction while implementations stay in dedicated fork modules.
  */
 
+import type { ProviderValidationConfig } from "../../config/models-config";
 /** Fork protocol version; implies v2 chunked framing. */
 export const RPC_FORK_PROTOCOL_VERSION = 3;
 
@@ -27,8 +28,8 @@ export interface RpcForkCommandBase {
 }
 
 /**
- * Wire union of fork-extension commands, appended to `RpcCommand`. Grows as
- * requirement sections land.
+ * Wire union of every command registered by the fork config/manage/session
+ * controllers, appended to `RpcCommand`.
  */
 export type RpcForkCommand =
 	// 4.1 tool permission approval
@@ -62,7 +63,76 @@ export type RpcForkCommand =
 			decision: "approve" | "refine" | "reject";
 			feedback?: string;
 			model?: string;
-	  };
+			/** Project mode: identity returned by the actual pending plan proposal. */
+			approvalId?: string;
+			/** Project mode: content revision returned by `get_plan_state`. */
+			expectedRevision?: string;
+	  }
+	// 5.6 configuration and management
+	| { id?: string; type: "get_settings"; scope: "user" | "project" }
+	| {
+			id?: string;
+			type: "set_settings";
+			scope: "user" | "project";
+			key: string;
+			value: unknown;
+			expectedRevision?: string;
+	  }
+	| { id?: string; type: "unset_settings"; scope: "user" | "project"; key: string; expectedRevision?: string }
+	| { id?: string; type: "list_providers" }
+	| {
+			id?: string;
+			type: "upsert_provider";
+			provider: Pick<ProviderValidationConfig, "api" | "baseUrl" | "apiKey" | "auth"> & {
+				name: string;
+				models?: Array<{
+					id: string;
+					api?: ProviderValidationConfig["api"];
+					contextWindow?: number;
+					maxTokens?: number;
+				}>;
+			};
+	  }
+	| { id?: string; type: "delete_provider"; provider: string }
+	| { id?: string; type: "set_model_enabled"; provider: string; modelId: string; enabled: boolean }
+	| { id?: string; type: "test_model"; provider: string; modelId: string }
+	| { id?: string; type: "list_mcp_servers" }
+	| {
+			id?: string;
+			type: "upsert_mcp_server";
+			name: string;
+			config: Record<string, unknown>;
+			scope: "user" | "project";
+	  }
+	| { id?: string; type: "delete_mcp_server"; name: string; scope: "user" | "project" }
+	| { id?: string; type: "set_mcp_server_disabled"; name: string; disabled: boolean }
+	| { id?: string; type: "mcp_reconnect"; name: string }
+	| { id?: string; type: "list_skills" }
+	| {
+			id?: string;
+			type: "set_skill_source_enabled";
+			source: string;
+			enabled: boolean;
+			scope?: "user" | "project";
+			expectedRevision?: string;
+	  }
+	| {
+			id?: string;
+			type: "set_skill_ignored";
+			name: string;
+			ignored: boolean;
+			scope?: "user" | "project";
+			expectedRevision?: string;
+	  }
+	| { id?: string; type: "list_agent_definitions" }
+	| {
+			id?: string;
+			type: "upsert_agent_definition";
+			definition: { name: string; description: string; tools?: string[]; model?: string; systemPrompt?: string };
+	  }
+	| { id?: string; type: "delete_agent_definition"; name: string }
+	| { id?: string; type: "get_usage"; provider?: string; days?: number; history?: boolean }
+	| { id?: string; type: "get_stats_summary"; range?: string };
 
 /** Wire union of fork-extension success responses, appended to `RpcResponse`. */
 export type RpcForkResponse =
@@ -140,7 +210,14 @@ export type RpcForkResponse =
 			type: "response";
 			command: "get_plan_state";
 			success: true;
-			data: { enabled: boolean; planFilePath?: string; workflow?: "parallel" | "iterative" };
+			data: {
+				enabled: boolean;
+				planFilePath?: string;
+				workflow?: "parallel" | "iterative";
+				pendingApproval?: boolean;
+				approvalId?: string;
+				revision?: string;
+			};
 	  }
 	| {
 			id?: string;

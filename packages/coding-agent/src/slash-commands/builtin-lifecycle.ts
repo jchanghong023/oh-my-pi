@@ -1,4 +1,5 @@
 import { clearSubmittedText } from "./helpers/draft";
+import { formatResetContextResult, resetContextForCommand } from "./helpers/clear";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CompactionCancelledError } from "@oh-my-pi/pi-agent-core/compaction";
@@ -209,6 +210,15 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Clear the conversation context in place, keeping the session",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? "Clear: unavailable while streaming" : "Clear: drop context, keep session",
+		handle: async (_command, runtime) => {
+			const result = await resetContextForCommand(runtime.session);
+			await runtime.output(
+				result
+					? formatResetContextResult(result)
+					: "Wait for the current response to finish or abort it before resetting the context.",
+			);
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleResetContextCommand();

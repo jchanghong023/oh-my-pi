@@ -8,7 +8,6 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[], dispatched: Array<() => Promise<void>>): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>
@@ -22,6 +21,8 @@ const makeContext = (emitted: object[], dispatched: Array<() => Promise<void>>):
 
 interface PlanSessionMocks {
 	activeTools: string[];
+	sessionId: string;
+	sessionGeneration: number;
 	planState: { enabled: boolean; planFilePath: string; workflow?: string } | undefined;
 	prompts: string[];
 	proposalHandler: ((title: string) => unknown) | null;
@@ -33,6 +34,8 @@ interface PlanSessionMocks {
 function setupPlanSession(): { session: AgentSession; mocks: PlanSessionMocks } {
 	const mocks: PlanSessionMocks = {
 		activeTools: ["read", "edit", "bash"],
+		sessionId: "plan-sess",
+		sessionGeneration: 0,
 		planState: undefined,
 		prompts: [],
 		proposalHandler: null,
@@ -42,6 +45,8 @@ function setupPlanSession(): { session: AgentSession; mocks: PlanSessionMocks } 
 	};
 	const session = {
 		getEnabledToolNames: () => mocks.activeTools,
+		getBaseWithMountedToolNames: () => mocks.activeTools,
+		getRawMountedXdevToolNames: () => [],
 		hasBuiltInTool: (name: string) => name === "read" || name === "edit" || name === "write",
 		setActiveToolsByName: async (names: string[]) => {
 			mocks.activeTools = [...names];
@@ -63,6 +68,13 @@ function setupPlanSession(): { session: AgentSession; mocks: PlanSessionMocks } 
 			mocks.proposalHandler = handler;
 		},
 		preparePlanForReview: async (title: string) => ({ details: { tool: "xd://propose", title } }),
+		get sessionId() {
+			return mocks.sessionId;
+		},
+		get sessionGeneration() {
+			return mocks.sessionGeneration;
+		},
+		isDisposed: false,
 		sendPlanModeContext: async () => {},
 		isStreaming: false,
 		followUp: async (message: string) => {
@@ -81,23 +93,28 @@ function setupPlanSession(): { session: AgentSession; mocks: PlanSessionMocks } 
 				mocks.modeChanges.push({ mode, ...data });
 			},
 			getArtifactsDir: () => process.cwd(),
-			getSessionId: () => "plan-sess",
+			getSessionId: () => mocks.sessionId,
 		},
 		getAvailableModels: () => [],
 	} as unknown as AgentSession;
 	return { session, mocks };
 }
 
-function setup(session: AgentSession): {
+function setup(
+	session: AgentSession,
+	options: { projectMode?: boolean } = {},
+): {
 	run: (command: object) => Promise<RpcResponse>;
+	host: RpcForkHost;
 	controller: RpcForkPlanController;
 	flushDispatches: () => Promise<void>;
 } {
 	const dispatched: Array<() => Promise<void>> = [];
 	const host = new RpcForkHost(makeContext([], dispatched));
 	host.activate();
-	const controller = new RpcForkPlanController(host, session);
+	const controller = new RpcForkPlanController(host, session, options);
 	return {
+		host,
 		run: command => host.handleCommand(command as { type: string }) as Promise<RpcResponse>,
 		controller,
 		flushDispatches: async () => {
@@ -225,6 +242,90 @@ describe("RpcForkPlanController (5.3)", () => {
 		const notActive = await run({ type: "approve_plan", decision: "approve" });
 		expect(notActive).toMatchObject({ success: false, code: "plan_not_active" });
 	});
+
+	test("project approval requires a real proposal, rejects stale content, and executes exactly once", async () => {
+		await using dir = await TempDir.create("rpc-project-plan-");
+		const planPath = path.join(path.resolve(dir.path()), "ship-plan.md");
+		await fs.writeFile(planPath, "# Original\n\n1. initial step");
+		const { session, mocks } = setupPlanSession();
+		session.preparePlanForReview = async title => ({
+			content: [{ type: "text", text: "Ready" }],
+			details: { title, planFilePath: planPath, planExists: true },
+		});
+		const { host, run, flushDispatches } = setup(session, { projectMode: true });
+		await run({ type: "set_plan_mode", enabled: true });
+		expect(await run({ type: "get_plan_state" })).toMatchObject({ data: { pendingApproval: false } });
+		expect(await run({ type: "approve_plan", decision: "approve" })).toMatchObject({ code: "plan_not_pending" });
+		if (!mocks.proposalHandler) throw new Error("Plan proposal handler was not installed");
+		await mocks.proposalHandler("Ship");
+		expect(host.hasPendingRequests).toBe(true);
+		const first = (await run({ type: "get_plan_state" })) as Extract<
+			RpcResponse,
+			{ command: "get_plan_state"; success: true }
+		>;
+		expect(first.data).toMatchObject({ pendingApproval: true, planFilePath: planPath });
+
+		await fs.writeFile(planPath, "# Revised\n\n1. reviewed step");
+		expect(
+			await run({
+				type: "approve_plan",
+				decision: "approve",
+				approvalId: first.data.approvalId,
+				expectedRevision: first.data.revision,
+			}),
+		).toMatchObject({ success: false, code: "plan_approval_conflict" });
+		expect(mocks.prompts).toEqual([]);
+		expect(mocks.planState?.enabled).toBe(true);
+		const current = (await run({ type: "get_plan_state" })) as Extract<
+			RpcResponse,
+			{ command: "get_plan_state"; success: true }
+		>;
+		expect(current.data.revision).not.toBe(first.data.revision);
+		const command = {
+			type: "approve_plan",
+			decision: "approve",
+			approvalId: current.data.approvalId,
+			expectedRevision: current.data.revision,
+		};
+		const decisions = await Promise.all([run({ ...command, id: "first" }), run({ ...command, id: "duplicate" })]);
+		expect(decisions.filter(response => response.success)).toHaveLength(1);
+		expect(decisions.filter(response => !response.success)).toMatchObject([{ code: "plan_approval_conflict" }]);
+		await flushDispatches();
+		expect(mocks.prompts).toHaveLength(1);
+		expect(mocks.prompts[0]).toContain("reviewed step");
+		expect(host.hasPendingRequests).toBe(false);
+		expect(await run(command)).toMatchObject({ success: false, code: "plan_not_pending" });
+	});
+
+	test.each(["new-session", "aba"] as const)(
+		"approved dispatch cannot reach a replacement session after a delayed name write (%s)",
+		async transition => {
+			await using dir = await TempDir.create("rpc-plan-stale-");
+			const planPath = path.join(path.resolve(dir.path()), "stale-plan.md");
+			await fs.writeFile(planPath, "# Stale\n\n1. old session only");
+			const { session, mocks } = setupPlanSession();
+			mocks.referencePath = planPath;
+			const started = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			session.sessionManager.setSessionName = async () => {
+				started.resolve();
+				await released.promise;
+				return true;
+			};
+			const { run, flushDispatches } = setup(session);
+			await run({ type: "set_plan_mode", enabled: true });
+			expect(await run({ type: "approve_plan", decision: "approve" })).toMatchObject({ success: true });
+			const running = flushDispatches();
+			const outcome = running.catch(error => error);
+			await started.promise;
+			mocks.sessionGeneration++;
+			if (transition === "new-session") mocks.sessionId = "replacement";
+			released.resolve();
+			expect(await outcome).toMatchObject({ code: "session_changed" });
+			expect(mocks.referenceSent).toBe(0);
+			expect(mocks.prompts).toEqual([]);
+		},
+	);
 
 	test("approve_plan: refine without plan mode is rejected as plan_not_active", async () => {
 		const { session } = setupPlanSession();

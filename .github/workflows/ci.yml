@@ -1,4 +1,5 @@
 name: CI
+run-name: "${{ inputs.slowtest_run_id && format('CI (slowtest {0})', inputs.slowtest_run_id) || 'CI' }}"
 
 on:
    workflow_dispatch:
@@ -7,6 +8,10 @@ on:
             description: "Create a GitHub Release and tag"
             type: boolean
             default: false
+         slowtest_run_id:
+            description: "Correlation ID supplied by slowtest"
+            type: string
+            default: ""
 
 concurrency:
    group: "${{ github.workflow }}-${{ github.ref }}"

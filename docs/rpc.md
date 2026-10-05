@@ -11,6 +11,8 @@ Primary implementation:
 
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`
 - `packages/coding-agent/src/modes/rpc/rpc-types.ts`
+- `packages/coding-agent/src/modes/rpc/rpc-fork-types.ts` — fork v3 extensions
+- `packages/coding-agent/src/modes/rpc/rpc-project-types.ts` / `rpc-project.ts` — explicit project host
 - `packages/coding-agent/src/session/agent-session.ts`
 - `packages/coding-agent/src/session/agent-session-events.ts`
 - `packages/agent/src/agent.ts`
@@ -43,13 +45,13 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
 {
   "type": "ready",
   "protocolVersion": 1,
-  "supportedProtocolVersions": [1, 2],
+  "supportedProtocolVersions": [1, 2, 3],
   "maxFrameBytes": 1048576,
   "maxReassembledFrameBytes": 67108864
 }
 ```
 
-Clients that support protocol v2 SHOULD immediately send:
+Clients that support this fork's v3 SHOULD negotiate `3` when advertised; otherwise v2-capable clients SHOULD immediately send:
 
 ```json
 { "id": "protocol-1", "type": "negotiate_protocol", "protocolVersion": 2 }
@@ -68,11 +70,11 @@ After the success response, oversized stdout objects use an uninterrupted sequen
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript and Python `RpcClient` implementations and the Rust and Go clients negotiate v2 automatically when the ready frame advertises it.
+Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript and Python clients prefer v3 when this fork advertises it (otherwise v2), validate the negotiated response, and use the same chunk decoder for v2/v3. The Rust and Go clients negotiate v2.
 
-For an oversized `agent_end` in either version, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
+For an oversized `agent_end` in chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
 
-Legacy clients may ignore the added ready fields and remain on v1. In v1, an oversized response becomes `success: false` with `error: "RPC response exceeded the transport limit"`; oversized events may have strings, arrays, or object fields elided. If a v2 logical frame exceeds 64 MiB after terminal-frame compaction, responses receive the same overflow error, other events produce `rpc_frame_error`, and `agent_end` falls back to an empty `messages` array plus `messageCount`. Large history APIs should use pagination rather than depending on arbitrarily large logical frames.
+Legacy clients may ignore the added ready fields and remain on v1. In v1, an oversized response becomes `success: false` with `error: "RPC response exceeded the transport limit"`; oversized events may have strings, arrays, or object fields elided. If a v2/v3 logical frame exceeds 64 MiB after terminal-frame compaction, responses receive the same overflow error, other events produce `rpc_frame_error`, and `agent_end` falls back to an empty `messages` array plus `messageCount`. Large history APIs should use pagination rather than depending on arbitrarily large logical frames.
 
 Output goes directly to stdout while the reader keeps up. Under backpressure, the server spills pending bytes to a private temporary file and drains it in 64 KiB blocks, preserving frame order. This limits queued output memory at the cost of disk I/O and temporary disk usage, which can grow until the reader catches up. The file is removed when the backlog drains or the process shuts down. Output or spool failures are logged, dispose the session, and exit with code `1`.
 
@@ -96,7 +98,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 14. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
 15. Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
 
-Protocol v2 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
+Protocols v2/v3 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
 
 ### Inbound frame categories (stdin)
 
@@ -107,7 +109,7 @@ Protocol v2 may wrap oversized logical frames from these categories in `rpc_chun
 
 ## Request/Response Correlation
 
-All commands accept optional `id?: string`.
+Single-session commands accept optional `id?: string`. Project mode requires a nonempty id and rejects a duplicate while the prior request with that id is still in flight.
 
 - If provided, normal command responses echo the same `id`.
 - `RpcClient` relies on this for pending-request resolution.
@@ -119,9 +121,49 @@ Important edge behavior from runtime:
 - Ordinary `prompt` handling acknowledges after the message is admitted (queued, given an idle turn slot, or routed to an extension command), not before native `input` handlers or image preparation finish, and without waiting for the agent run. `abort_and_prompt` first awaits the abort, then acknowledges. A failure before admission is the command's error response. A failure after admission can still emit a later error response with the same `id`.
 - An accepted `prompt` or `abort_and_prompt` completes exactly once: either its success response carries `data.agentInvoked: false` (finished locally), or a later `prompt_result` frame with the same `id` reports how its work ended. `prompt_result` is always written after the response for that `id`.
 
+## Fork v3 and project mode
+
+Fork business commands/events are opt-in: negotiate `{"type":"negotiate_protocol","protocolVersion":3,"id":"protocol-1"}` before using them. V3 retains v2 lossless chunk framing. Clients remaining on v1/v2 do not receive fork-only frames.
+
+```bash
+omp --mode rpc-ui --rpc-project
+```
+
+Project mode fixes the project root to startup cwd and permits zero loaded sessions. Its `ready` frame adds `mode: "rpc-ui-project"`, `projectIdentity`, `processInstanceId` and capability flags. It accepts only v3 negotiation; confirm both the mode and capabilities rather than assuming the protocol version implies a project host.
+
+- Loaded-session commands carry `sessionId` and the `sessionGeneration` returned by loading that instance. Missing generations fail with `invalid_params`; old ones fail with `stale_session`. Historical queries may read an unloaded session without creating a running instance.
+- Session responses, events and host interactions include process/session ownership. Each session has its own input gate, command queue, tool/URI callback bridge and interaction state; shared host-tool/URI catalogs do not authorize cross-session results.
+- Use the project lifecycle (`create_session`, `resume_session`, `close_session`) rather than legacy commands that replace one active session. A busy or incomplete close is not reported as closed. Project `branch` / `fork` create an independent manager and host, preserving the source id/generation/path/transcript/input gate and inheriting its current model and configured thinking.
+- `get_available_commands` / `complete_command` are catalog operations. `execute_command` uses strict command resolution: unknown commands and invalid builtin arguments do not become model prompts. Discovery is not proof that every terminal-only command has a GUI execution path.
+- `list_skills` separates management from an explicitly loaded session's effective snapshot. Concrete skill ids are opaque path-plus-source identities, not name-derived `native:user/name` keys. Management rows set `effective: false` without claiming a session has adopted them; effective-view revisions hash adopted content, not newer disk bytes. Per-resource content/config CAS revisions differ from the catalog revision. Concrete enabling/disabling uses `skills.disabledPaths`, distinct from source toggles or ignored names; persistent toggle writes require `scope: "user"` and report actual `adoptedSessions` / `pendingSessions`.
+- `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes. `set_model_role` currently writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides.
+- Directory cursors are opaque, revision/filter-bound strings. Reusing them after resource changes fails with `stale_cursor`; restart instead of combining generations.
+- Session rename/delete, role writes and concrete skill toggle/copy/delete require the resource's `expectedRevision`, not a global catalog revision.
+- Only no-argument `/skills` returns `hostAction.kind: "open_panel"` with `payload.panel: "skills"`, empty args and optional session ownership. Search/install/installed/update arguments execute the shared business handler with that session's cwd and registry URL, then refresh skills/catalog after changes. Script-bearing installs require a real confirmation UI; absent capability never silently approves or pretends to cancel. Opening a panel is not CRUD completion.
+- `/clear` shares the in-place TUI/ACP/RPC reset: abort and await active compaction, preserve id/title/cwd/file, and clear the rendered TUI transcript/scrollback. It is not `/new`; `/fresh` still preserves conversation while resetting provider stream state.
+- `/logout` uses real provider/account selection and removes the selected stored row only after cancellation/session ownership checks. It reports remaining auth sources; a headless/no-op selector is not a substitute.
+- RPC `/model` uses a temporary setter instead of persisting the default role; ACP/TUI's existing default setter remains unchanged.
+
+The canonical project command/response types are `rpc-project-types.ts`; the maintained requirements and complete OMP/GUI acceptance matrix are [rpc-ui project requirements](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
+
+The maintained TypeScript client negotiates v3 when advertised and exposes `requestFork<T>(type, payload)` for fork commands. It requires confirmed v3, correlates the response, returns `response.data`, and preserves the server's error message/code on failure. Python exposes `negotiate_protocol_v3()` and `send_fork_frame()`; the latter similarly refuses use before v3 confirmation. V3 also enables chunk framing when a host advertises only `[1, 3]`.
+
+Fork model configuration applies positive `enabledModels` inclusion first, then negative `disabledModels` exclusion. `enabledModels: []` includes all otherwise eligible models; `disabledModels: []` excludes none, and `["*"]` excludes all, including slash-bearing ids. Other globs keep path grammar: `provider/**` spans nested ids; `provider/*` is one level. An exact catalog `provider/id` takes literal precedence even with `*`, `?` or `[` in the id. `set_model_enabled(false)` uses an exact exclusion, so disabling the last/all models remains representable. Explicit pins, saved selections, roles, cycling and credential lookup cannot bypass exclusions; re-enabling one model must not silently widen a hand-authored wildcard. The registry retains the full inventory for management.
+
+Provider CRUD preserves untouched raw `models.yml` entries, including runtime-ignored reserved sections. Canonical-file OS locking covers a fresh read, validation, modification and atomic commit; no model/network work is held inside that transaction. `upsert_provider` rejects the runtime-owned company provider; zcode-api accepts only `apiKey`, not endpoint/transport/model overrides.
+
+`get_settings` with `scope: "user"` lists all registered fields, including those without a `/settings` widget; `scope: "project"` lists only fields explicitly configured in the project layer. Each entry exposes the layered panel `value` (not environment-variable overrides), a separate optional `userValue`, and an opaque user-field `revision`; credential value/userValue/defaultValue are masked. Project set/unset and skill-source/ignored-name writes currently require user scope plus `expectedRevision` and use per-field disk CAS. Same-field external changes return `stale_revision` without overwriting them; revision-controlled successful writes return the committed revision (settings writes also return the safe user value). Legacy single-session writes without a revision retain their prior panel behavior.
+
+### Fork queue and plan controls
+
+`get_queue` returns the user-editable pending steering/follow-up entries. `remove_queued`, `reorder_queue` and `clear_queue` use entry identities; hidden companions remain grouped with their visible user message. `queue_updated` follows actual enqueue, consume and restore operations, not only RPC edits. Input already sent into a live response is not editable pending input; the upstream `queue_update` / `get_state.queuedMessages` snapshots below separately expose its `liveSteered` count.
+
+`set_plan_mode`, `get_plan_state` and `list_plans` use the real plan-mode service. In project mode, a pending `xd://propose` review makes `get_plan_state` return `pendingApproval`, `approvalId`, `revision` and the actual proposed `planFilePath` (not an assumed `PLAN.md`); `approve_plan` requires that `approvalId` and `expectedRevision` for every `approve` / `refine` / `reject` decision. Content or proposal changes fail with `plan_approval_conflict`; no pending review fails with `plan_not_pending`. Legacy single-session tokens remain optional for compatibility. Agent-invoking decisions finish through `prompt_result` carrying the original request id, not through the acknowledgement alone.
+
+
 ## Command Schema (canonical)
 
-`RpcCommand` is defined in `packages/coding-agent/src/modes/rpc/rpc-types.ts`:
+The upstream-compatible commands below are defined in `packages/coding-agent/src/modes/rpc/rpc-types.ts`; fork unions are appended from the dedicated type modules above.
 
 ### Prompting
 
@@ -137,7 +179,7 @@ Important edge behavior from runtime:
 
 ### Protocol
 
-- `{ id?, type: "negotiate_protocol", protocolVersion: 2 }`
+- `{ id?, type: "negotiate_protocol", protocolVersion: 2 | 3 }` (project mode requires `3`)
 
 ### State
 
@@ -1033,7 +1075,7 @@ record carries its partial answer, so a host that reconnects can rebuild its
 view. While nothing runs it re-reads the history from disk, so topics the TUI
 added are listed and can take follow-ups; a topic another process is still
 answering reads as `interrupted`. The list is not paged: a history larger than
-the transport limit fails like any oversized response (protocol v2 chunks it).
+the transport limit fails like any oversized response (protocol v2/v3 chunks it).
 
 Failure responses for `btw`:
 
@@ -1491,9 +1533,9 @@ stdin:
 
 ### Wire schema and generated clients
 
-`packages/coding-agent/src/modes/rpc/wire` describes every command (parameters,
-success `data`, nullability, timeouts), every unsolicited frame, and every shared
-type as omptype schemas. `bun run gen:rpc` emits:
+`packages/coding-agent/src/modes/rpc/wire` describes the upstream-compatible
+commands (parameters, success `data`, nullability, timeouts), unsolicited frames,
+and shared types as omptype schemas. Fork v3/project unions remain in their dedicated TypeScript modules. `bun run gen:rpc` emits:
 
 - `rpc-wire.schema.json`: a JSON Schema 2020-12 bundle plus an `x-rpc` section:
   the command table, the stdout frame union (`serverFrame`: responses, host
@@ -1524,10 +1566,10 @@ generated types: they negotiate v2 and reassemble chunks, page message history,
 wait for a prompt's `prompt_result` (`prompt_and_wait` / `PromptAndWait`), and serve
 host-owned tools and URI schemes. Their READMEs cover the APIs.
 
-`packages/coding-agent/test/rpc-wire` fails when a committed output is stale, and
-type-checks the generated TypeScript against `rpc-types.ts` and the internal types
-behind it: a new command, command parameter, event, event field, or enum value on
-the server breaks `bun check` until the schema covers it.
+`packages/coding-agent/test/rpc-wire` detects stale committed outputs and
+type-checks the generated TypeScript against the upstream-compatible server
+surface. Explicit fork commands and fork-only parameter/result fields are
+excluded from that conformance comparison; they need the fork/project protocol tests.
 
 ### TypeScript helper
 
@@ -1536,13 +1578,13 @@ the server breaks `bun check` until the schema covers it.
 Current helper characteristics:
 
 - Spawns `bun <cliPath> --mode rpc` by default (`cliPath` defaults to `dist/cli.js`). A `command` argv prefix receives generated agent arguments; a command builder returns complete argv. A custom `spawn` transport takes precedence.
-- Correlates responses by generated `req_<n>` ids, negotiates v2, reassembles chunks, and pages message history
+- Correlates responses by generated `req_<n>` ids, prefers v3 when advertised (otherwise v2), validates negotiation, reassembles chunks, and pages message history
 - Dispatches recognized core `AgentEvent` types through `onEvent()` and recognized session events through `onSessionEvent()`; the raw server stream can include additional event types
 - Exposes `onPromptResult()`, `onSessionSettled()`, command-availability and subagent listeners, plus extension UI requests
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
+- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use `requestFork<T>(type, payload)` for unwrapped fork business commands after v3 confirmation. Host-URI registration and delta-only message updates remain raw transport surfaces.
 
 ### Python package
 
@@ -1557,4 +1599,4 @@ with RpcClient(provider="anthropic", model="claude-sonnet-4-5") as client:
     print(turn.require_assistant_text())
 ```
 
-By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its command methods and `on_<frame type>` listeners are generated from the wire schema, so it wraps every command above; the `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and `rpc-types.ts` remain the canonical wire contract. Use raw protocol frames when a client library does not wrap the surface you need.
+By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v3/v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork/project unions; `send_fork_frame` requires negotiated v3. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.

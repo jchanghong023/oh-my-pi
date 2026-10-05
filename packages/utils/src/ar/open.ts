@@ -179,15 +179,13 @@ export async function extractArchive(
 		if (outputPath !== extractRoot && !outputPath.startsWith(extractRoot + path.sep)) {
 			throw new ArchiveError(`Archive entry escapes extraction dir: ${entry.path}`);
 		}
-		if (entry.isDirectory) {
-			if (entry.storage?.type !== "link") {
-				await fs.mkdir(outputPath, { recursive: true });
-				count++;
-			}
-			continue;
-		}
 		if (entry.storage?.type === "link") {
 			links.push({ path: entry.path, target: entry.storage.targetPath });
+			continue;
+		}
+		if (entry.isDirectory) {
+			await fs.mkdir(outputPath, { recursive: true });
+			count++;
 			continue;
 		}
 		files.push({ path: entry.path, mode: entry.mode });
@@ -218,20 +216,23 @@ export async function extractArchive(
 		}
 		await fs.mkdir(path.dirname(outputPath), { recursive: true });
 		const relativeTarget = path.relative(path.dirname(outputPath), resolvedTarget) || ".";
+		const linkType = process.platform === "win32" && archive.getNode(link.path)?.isDirectory ? "dir" : "file";
 		try {
-			await fs.symlink(relativeTarget, outputPath);
+			await fs.symlink(relativeTarget, outputPath, linkType);
 		} catch (error) {
 			if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
 			// Windows without the symlink privilege: degrade to a directory
 			// junction or a file copy so extraction still yields usable
 			// content instead of failing the whole archive.
-			const targetStat = await fs.stat(resolvedTarget).catch(() => undefined);
-			if (targetStat?.isDirectory()) {
+			if (linkType === "dir") {
 				await fs.symlink(resolvedTarget, outputPath, "junction");
-			} else if (targetStat?.isFile()) {
-				await fs.copyFile(resolvedTarget, outputPath);
 			} else {
-				throw error;
+				// Resolve through the archive, not the extraction order: this
+				// link may target another link that has not materialized yet.
+				const extracted = await archive.readFile(link.path);
+				await Bun.write(outputPath, extracted.bytes);
+				const permissions = (extracted.mode ?? 0) & 0o777;
+				if (permissions) await fs.chmod(outputPath, permissions);
 			}
 		}
 		count++;

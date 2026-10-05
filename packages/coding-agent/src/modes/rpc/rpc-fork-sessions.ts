@@ -86,12 +86,6 @@ function toSummary(info: SessionInfo, pinned: ReadonlySet<string>): RpcForkSessi
 	};
 }
 
-function withError(code: string, message: string): Error {
-	const error = new Error(message);
-	(error as Error & { code?: string }).code = code;
-	return error;
-}
-
 export class RpcForkSessionController {
 	readonly #storage = new FileSessionStorage();
 	readonly #agentDir: string | undefined;

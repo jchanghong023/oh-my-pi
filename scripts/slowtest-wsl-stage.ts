@@ -322,12 +322,28 @@ function killProcessTree(child: { pid: number }): void {
 	Bun.spawnSync(["taskkill.exe", "/PID", String(child.pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" });
 }
 
+/** Kill only descendants carrying this invocation's inherited ownership token,
+ * including fulltest phases that create their own process groups. */
+export function wslStageCleanupCommand(stageId: string): string {
+	return [
+		"for file in /proc/[0-9]*/environ; do",
+		'  [ -r "$file" ] || continue',
+		`  if tr '\\0' '\\n' < "$file" 2>/dev/null | grep -Fxq -- ${quote(`OMP_WSL_STAGE_ID=${stageId}`)}; then`,
+		'    pid="${file#/proc/}"',
+		'    pid="${pid%/environ}"',
+		'    kill -KILL "$pid" 2>/dev/null || true',
+		"  fi",
+		"done",
+	].join("\n");
+}
+
 async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
 	// A fresh clone has no node_modules, so the install is part of the timed
 	// command: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
 	// must exist before fulltest, and a hung network install has to hit the
-	// same timer/killProcessTree/pkill guards as the test run itself.
-	const command = `cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`;
+	// same invocation-scoped cancellation boundary as the test run itself.
+	const stageId = crypto.randomUUID();
+	const command = `OMP_WSL_STAGE_ID=${quote(stageId)} bash -lc ${quote(`cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`)}`;
 	console.log(`\n==> wsl/fulltest`);
 	console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
 	const child = Bun.spawn(
@@ -337,23 +353,13 @@ async function runWslFulltest(distro: string, repoPath: string): Promise<number>
 	let timedOut = false;
 	const timer = setTimeout(() => {
 		timedOut = true;
-		killProcessTree(child);
-		// taskkill stops the Windows-side wsl.exe; the bracket trick keeps the
-		// pattern from matching this pkill's own command line. Best effort.
+		// Detached test phases are not children of the Windows-side wsl.exe.
+		// Scope Linux cleanup to this run, never other fulltest/nextest installs.
 		Bun.spawnSync(
-			[
-				"wsl.exe",
-				"--distribution",
-				distro,
-				"--user",
-				"root",
-				"--",
-				"bash",
-				"-lc",
-				"pkill -9 -f 'fulltes[t]' || true; pkill -9 -f 'nextes[t]' || true; pkill -9 -f 'frozen-lockfil[e]' || true",
-			],
+			["wsl.exe", "--distribution", distro, "--user", "root", "--", "bash", "-lc", wslStageCleanupCommand(stageId)],
 			{ cwd: repoRoot, stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 		);
+		killProcessTree(child);
 	}, WSL_STAGE_TIMEOUT_MS);
 	try {
 		const exitCode = await child.exited;

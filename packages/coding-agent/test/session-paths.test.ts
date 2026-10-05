@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("legacy session directory migration", () => {
-	test.skipIf(process.platform === "win32")("follows the temp root when TMPDIR nests inside home", () => {
+	test("follows the temp root when TMPDIR nests inside home", () => {
 		const homeProbe = fs.mkdtempSync(path.join(os.homedir(), ".omp-session-home-"));
 		cleanup.push(homeProbe);
 		const cwd = path.join(homeProbe, "nested", "project");

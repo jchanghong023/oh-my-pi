@@ -8,9 +8,11 @@
  */
 import type {
 	TeamAlignmentOutput,
+	TeamAmbiguityInterpretation,
 	TeamDisposition,
 	TeamEvidenceItem,
 	TeamProposalRecord,
+	TeamProposalOutput,
 	TeamReviewOutput,
 } from "./types";
 
@@ -78,7 +80,7 @@ export function buildAlignmentTask(args: {
 				`主要风险：\n${bulletList(proposal.risks)}`,
 				`未知项：\n${bulletList(proposal.unknowns)}`,
 				`验收建议：\n${bulletList(proposal.acceptanceCriteria)}`,
-				`歧义理解：\n${bulletList(proposal.ambiguityInterpretations.map(a => `${a.ambiguity} → 采用：${a.interpretation}`))}`,
+				`歧义理解：\n${bulletList(proposal.ambiguityInterpretations.map(a => `${a.ambiguity} → 采用：${a.interpretation}；影响：${a.impact}`))}`,
 				`证据：\n${bulletList(proposal.evidence.map(e => `${e.claim}（${e.source}）`))}`,
 			].join("\n");
 		})
@@ -122,6 +124,7 @@ export function buildReviewTask(args: {
 	risks: readonly string[];
 	unknowns: readonly string[];
 	evidence: readonly TeamEvidenceItem[];
+	ambiguityInterpretations: readonly TeamAmbiguityInterpretation[];
 	round: number;
 	recheck: boolean;
 	unresolvedBlocking?: readonly string[];
@@ -174,6 +177,12 @@ export function buildReviewTask(args: {
 		section("该方案的未知项", bulletList(args.unknowns)),
 		section("该方案的证据（可回查）", bulletList(args.evidence.map(e => `${e.claim}（${e.source}）`))),
 		section(
+			"该方案的需求歧义理解",
+			bulletList(
+				args.ambiguityInterpretations.map(a => `${a.ambiguity} → 采用：${a.interpretation}；影响：${a.impact}`),
+			),
+		),
+		section(
 			"事实差异清单（供回查）",
 			bulletList(
 				args.alignment.factDifferences.map(d => `${d.topic}：${d.contradiction}（回查：${d.sourceToCheck}）`),
@@ -193,7 +202,8 @@ export function buildRevisionTask(args: {
 	cwd: string;
 	targetLabel: string;
 	round: number;
-	proposalText: string;
+	alignment: TeamAlignmentOutput;
+	proposal: TeamProposalOutput;
 	review: TeamReviewOutput;
 	unresolvedBlocking: readonly string[];
 }): string {
@@ -212,7 +222,26 @@ export function buildRevisionTask(args: {
 		`# 多模型方案讨论 · 阶段四：修订与回应（第 ${args.round} 轮）`,
 		"",
 		commonContext(args.question, args.cwd),
-		section(`你的方案（方案 ${args.targetLabel}，当前版）`, args.proposalText),
+		section(
+			"统一的需求理解与共同验收标准",
+			`${args.alignment.unifiedUnderstanding}\n\n验收标准：\n${bulletList(args.alignment.acceptanceCriteria)}`,
+		),
+		section(`你的方案（方案 ${args.targetLabel}，当前版）`, args.proposal.proposal),
+		section(
+			"方案的结构化依据与约束",
+			JSON.stringify(
+				{
+					keyAssumptions: args.proposal.keyAssumptions,
+					risks: args.proposal.risks,
+					unknowns: args.proposal.unknowns,
+					acceptanceCriteria: args.proposal.acceptanceCriteria,
+					ambiguityInterpretations: args.proposal.ambiguityInterpretations,
+					evidence: args.proposal.evidence,
+				},
+				null,
+				2,
+			),
+		),
 		section("审查意见（逐项回应）", findings),
 		args.unresolvedBlocking.length > 0 ? section("此前仍未解决的阻断问题", bulletList(args.unresolvedBlocking)) : "",
 		[
@@ -301,10 +330,12 @@ export function buildSynthesisTask(args: {
 				`### 方案 ${record.label}${record.excludedFromOptions ? `（结构化追踪：尚不可采用 — ${record.exclusionReason ?? ""}）` : ""}\n`,
 				latest.proposal,
 				"",
-				`关键假设：\n${bulletList(latest.keyAssumptions.map(a => `${a.content}（${a.status}；若不成立：${a.impactIfWrong}）`))}`,
+				`关键假设：\n${bulletList(latest.keyAssumptions.map(a => `${a.content}（${a.status}；依据：${a.basis}；若不成立：${a.impactIfWrong}）`))}`,
 				`主要风险：\n${bulletList(latest.risks)}`,
 				`未知项：\n${bulletList(latest.unknowns)}`,
 				`证据：\n${bulletList(latest.evidence.map(e => `${e.claim}（${e.source}）`))}`,
+				`验收建议：\n${bulletList(latest.acceptanceCriteria)}`,
+				`歧义理解：\n${bulletList(latest.ambiguityInterpretations.map(a => `${a.ambiguity} → 采用：${a.interpretation}；影响：${a.impact}`))}`,
 			];
 			if (latest.noViableProposal) {
 				lines.push("提案者声明：依据不足，未形成可行方案（见正文中的缺口说明）。\n");
@@ -357,7 +388,7 @@ export function buildSynthesisTask(args: {
 			bulletList(
 				args.alignment.interpretationDifferences.map(
 					d =>
-						`${d.ambiguity}${d.affectsChoice ? "（实质影响选择）" : ""}：${d.interpretations.map(i => i.view).join(" / ")}`,
+						`${d.ambiguity}${d.affectsChoice ? "（实质影响选择）" : ""}：${d.interpretations.map(i => `${i.view}（影响：${i.impact}）`).join(" / ")}`,
 				),
 			),
 		),

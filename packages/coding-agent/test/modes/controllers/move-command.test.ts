@@ -36,7 +36,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		return moved;
 	});
 	const ctx = {
-		session: { isStreaming: false, moveSession },
+		session: { isStreaming: false, moveSession, emitNotice: vi.fn() },
 		sessionManager: {
 			getCwd: () => state.cwd,
 			captureState,
@@ -71,6 +71,19 @@ describe("CommandController /move", () => {
 	});
 
 	afterEach(() => vi.restoreAllMocks());
+
+	it("publishes a worktree warning before attempting any relocation while streaming", async () => {
+		const { ctx, withBtwSessionMove } = createMoveContext("source");
+		Object.defineProperty(ctx.session, "isStreaming", { value: true });
+		await new CommandController(ctx).handleWorktreeCommand("feature");
+
+		expect(ctx.session.emitNotice).toHaveBeenCalledWith("warning", expect.any(String));
+		expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+		expect(ctx.showWarning).not.toHaveBeenCalled();
+		expect(ctx.settings.flush).not.toHaveBeenCalled();
+		expect(withBtwSessionMove).not.toHaveBeenCalled();
+		expect(ctx.session.moveSession).not.toHaveBeenCalled();
+	});
 
 	it("does not create a checkout when the BTW gate rejects a worktree command", async () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-gate-"));
@@ -131,10 +144,11 @@ describe("CommandController /move", () => {
 				await relocated.promise;
 				state.cwd = cwd;
 			};
+			const cleanupError = new Error("source cleanup refused");
 			const cleanup = vi.spyOn(sessionWorktree, "cleanSourceCheckoutIfConfigured").mockImplementation(async () => {
 				expect(held).toBe(true);
 				expect(state.cwd).toBe(target);
-				return { cleaned: false };
+				return { cleaned: false, errorMessage: cleanupError.message };
 			});
 			command = new CommandController(ctx).handleWorktreeCommand("feature");
 			await creating.promise;
@@ -152,6 +166,9 @@ describe("CommandController /move", () => {
 			expect(state.cwd).toBe(target);
 			expect(ctx.present).toHaveBeenCalled();
 			expect(ctx.statusContainer.children).toHaveLength(0);
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("warning", expect.stringContaining(cleanupError.message));
+			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+			expect(ctx.showWarning).not.toHaveBeenCalled();
 		} finally {
 			created.resolve();
 			relocated.resolve();
@@ -172,7 +189,9 @@ describe("CommandController /move", () => {
 			expect(state.completedBtwVisible).toBe(true);
 			expect(ctx.session.moveSession).not.toHaveBeenCalled();
 			expect(ctx.statusContainer.children).toHaveLength(0);
-			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("Branch already exists"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("Branch already exists"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {
 			await fs.rm(sourceDir, { recursive: true, force: true });
 		}
@@ -249,6 +268,8 @@ describe("CommandController /move", () => {
 			await controller.handleMoveCommand(targetDir);
 
 			expect(shutdown).toHaveBeenCalledTimes(1);
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("rollback denied"));
+			expect(ctx.showError).not.toHaveBeenCalled();
 			expect(ctx.present).not.toHaveBeenCalled();
 		} finally {
 			await fs.rm(sourceDir, { recursive: true, force: true });
@@ -293,7 +314,9 @@ describe("CommandController /move", () => {
 
 			await controller.handleMoveCommand(targetDir);
 
-			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("disk full"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+			expect(ctx.showError).not.toHaveBeenCalled();
 			expect(ctx.showHookConfirm).not.toHaveBeenCalled();
 			expect(mkdir).not.toHaveBeenCalled();
 			expect(await fs.readdir(sourceDir)).toEqual([]);
@@ -349,6 +372,17 @@ describe("CommandController /move", () => {
 				expect(state.movedTo).toBeUndefined();
 				expect(state.completedBtwVisible).toBe(true);
 				expect(ctx.present).not.toHaveBeenCalled();
+				if (rejection === "cancelled picker" || rejection === "declined creation") {
+					expect(ctx.session.emitNotice).not.toHaveBeenCalled();
+				} else {
+					expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+					expect(ctx.session.emitNotice).toHaveBeenCalledWith(
+						rejection === "streaming" ? "warning" : "error",
+						expect.any(String),
+					);
+				}
+				expect(ctx.showError).not.toHaveBeenCalled();
+				expect(ctx.showWarning).not.toHaveBeenCalled();
 				await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
 			} finally {
 				await fs.rm(sourceDir, { recursive: true, force: true });
@@ -502,7 +536,9 @@ describe("CommandController /move", () => {
 			expect(state.movedTo).toBeUndefined();
 			expect(ctx.applyCwdChange).not.toHaveBeenCalled();
 			expect(ctx.present).not.toHaveBeenCalled();
-			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("session move denied"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("session move denied"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
+			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {
 			await fs.rm(sourceDir, { recursive: true, force: true });
 			await fs.rm(targetDir, { recursive: true, force: true });

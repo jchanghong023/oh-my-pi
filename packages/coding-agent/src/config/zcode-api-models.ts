@@ -15,112 +15,14 @@
  * `glm-5.2-highspeed` in that lane's provider-scoped variant table, which
  * this provider does not have.
  */
-import type { Model, ModelSpec } from "@oh-my-pi/pi-ai/types";
+import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 
 export const ZCODE_API_PROVIDER_ID = "zcode-api";
 
 /** Default endpoint of the local ZCode Proxy (its `server.port` default). */
 export const ZCODE_API_DEFAULT_BASE_URL = "http://127.0.0.1:8080";
-
-const FREE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-
-const CHAT_MODELS: ReadonlyArray<
-	Pick<ModelSpec<"anthropic-messages">, "id" | "name" | "input" | "contextWindow" | "maxTokens" | "tokenizer" | "cost">
-> = [
-	{ id: "glm-4.5", name: "GLM-4.5", input: ["text"], contextWindow: 131_072, maxTokens: 98_304, cost: FREE },
-	{ id: "glm-4.5-air", name: "GLM-4.5-Air", input: ["text"], contextWindow: 131_072, maxTokens: 98_304, cost: FREE },
-	{ id: "glm-4.6", name: "GLM-4.6", input: ["text"], contextWindow: 202_752, maxTokens: 131_072, cost: FREE },
-	{
-		id: "glm-4.6v",
-		name: "GLM-4.6V",
-		input: ["text", "image"],
-		contextWindow: 128_000,
-		maxTokens: 32_768,
-		cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
-	},
-	{ id: "glm-4.7", name: "GLM-4.7", input: ["text"], contextWindow: 204_800, maxTokens: 131_072, cost: FREE },
-	{
-		id: "glm-5",
-		name: "GLM-5",
-		input: ["text"],
-		contextWindow: 204_800,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5-turbo",
-		name: "GLM-5-Turbo",
-		input: ["text"],
-		contextWindow: 200_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5v-turbo",
-		name: "GLM-5V-Turbo",
-		input: ["text", "image"],
-		contextWindow: 200_000,
-		maxTokens: 131_072,
-		cost: FREE,
-	},
-	{
-		id: "glm-5.1",
-		name: "GLM-5.1",
-		input: ["text"],
-		contextWindow: 200_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5.2",
-		name: "GLM-5.2",
-		input: ["text"],
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5.2-highspeed",
-		name: "GLM-5.2 Highspeed",
-		input: ["text"],
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5.3",
-		name: "GLM-5.3",
-		input: ["text"],
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5.3-flash",
-		name: "GLM-5.3-Flash",
-		input: ["text", "image"],
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-	{
-		id: "glm-5.3-highspeed",
-		name: "GLM-5.3 Highspeed",
-		input: ["text"],
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-		tokenizer: "glm5",
-		cost: FREE,
-	},
-];
 
 /** Resolves the proxy endpoint; `ZCODE_API_BASE_URL` overrides the loopback default. */
 export function resolveZcodeApiBaseUrl(): string {
@@ -143,13 +45,10 @@ export function getZcodeApiModels(): Model<"anthropic-messages">[] {
 	const baseUrl = resolveZcodeApiBaseUrl();
 	if (cachedModels && cachedBaseUrl === baseUrl) return cachedModels;
 	cachedBaseUrl = baseUrl;
-	cachedModels = CHAT_MODELS.map(spec =>
+	cachedModels = seedModels<"anthropic-messages">(ZCODE_API_PROVIDER_ID).map(spec =>
 		buildModel({
 			...spec,
-			provider: ZCODE_API_PROVIDER_ID,
-			api: "anthropic-messages",
 			baseUrl,
-			reasoning: true,
 		}),
 	);
 	return cachedModels;

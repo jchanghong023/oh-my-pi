@@ -7,7 +7,6 @@ const startupDelayMs = Number(Bun.env.DELAY_STARTUP ?? 0);
 const callDelayMs = Number(Bun.env.DELAY_CALL ?? 0);
 
 async function serve(): Promise<void> {
-	if (startupDelayMs > 0) await Bun.sleep(startupDelayMs);
 	const lines = readline.createInterface({ input: process.stdin });
 	for await (const line of lines) {
 		let request: unknown;
@@ -22,6 +21,10 @@ async function serve(): Promise<void> {
 		let result: object;
 		switch (method) {
 			case "initialize":
+				// Delay the response, not reader setup: the async iterator must
+				// already buffer early pipe frames. This child deliberately uses
+				// real time to exercise the parent's process readiness deadline.
+				if (startupDelayMs > 0) await Bun.sleep(startupDelayMs);
 				result = {
 					protocolVersion: "2025-03-26",
 					capabilities: { tools: {} },

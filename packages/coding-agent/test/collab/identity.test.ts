@@ -26,6 +26,10 @@ async function readStoredIdentity(): Promise<StoredIdentity> {
 	return JSON.parse(await fs.readFile(collabIdentityPath(), "utf8")) as StoredIdentity;
 }
 
+async function identityFiles(): Promise<string[]> {
+	return (await fs.readdir(path.dirname(collabIdentityPath()))).filter(name => name !== "identity.json.lock").sort();
+}
+
 /** Persisted form of a known identity, as another process would have written it. */
 function storedIdentity(roomId: string, key: Uint8Array, writeToken: Uint8Array): string {
 	return JSON.stringify({
@@ -86,7 +90,7 @@ describe("collab room identity", () => {
 		expect(Buffer.from(identity.key).equals(key)).toBe(true);
 		expect(Buffer.from(identity.writeToken).equals(writeToken)).toBe(true);
 		// Untouched: no rewrite, no temp file left behind.
-		expect((await fs.readdir(path.dirname(collabIdentityPath()))).sort()).toEqual(["identity.json"]);
+		expect(await identityFiles()).toEqual(["identity.json"]);
 	});
 
 	it("replaces a corrupt identity and keeps serving the replacement", async () => {
@@ -98,8 +102,46 @@ describe("collab room identity", () => {
 		expect(identity.roomId).toMatch(ROOM_ID_RE);
 		const stored = await readStoredIdentity();
 		expect(stored.roomId).toBe(identity.roomId);
-		expect((await fs.readdir(path.dirname(collabIdentityPath()))).sort()).toEqual(["identity.json"]);
+		expect(await identityFiles()).toEqual(["identity.json"]);
 		expect((await loadOrCreateCollabIdentity()).roomId).toBe(identity.roomId);
+	});
+
+	for (const initiallyCorrupt of [false, true]) {
+		it(`concurrent starts adopt one durable identity when it is ${initiallyCorrupt ? "corrupt" : "missing"}`, async () => {
+			if (initiallyCorrupt) {
+				await fs.mkdir(path.dirname(collabIdentityPath()), { recursive: true });
+				await fs.writeFile(collabIdentityPath(), "{");
+			}
+			const identities = await Promise.all(Array.from({ length: 12 }, () => loadOrCreateCollabIdentity()));
+			const stored = await readStoredIdentity();
+			expect(new Set(identities.map(identity => identity.roomId))).toEqual(new Set([stored.roomId]));
+			for (const identity of identities) {
+				expect(Buffer.from(identity.key).toString("base64url")).toBe(stored.key);
+				expect(Buffer.from(identity.writeToken).toString("base64url")).toBe(stored.writeToken);
+			}
+			expect(await identityFiles()).toEqual(["identity.json"]);
+		});
+	}
+
+	it("never writes room secrets into a predictable pre-existing staging file", async () => {
+		await fs.mkdir(path.dirname(collabIdentityPath()), { recursive: true });
+		await fs.writeFile(collabIdentityPath(), "{");
+		const oldStaging = `${collabIdentityPath()}.tmp-${process.pid}`;
+		await fs.writeFile(oldStaging, "leave this file alone", { mode: 0o644 });
+
+		const identity = await loadOrCreateCollabIdentity();
+
+		expect(await fs.readFile(oldStaging, "utf8")).toBe("leave this file alone");
+		expect((await readStoredIdentity()).roomId).toBe(identity.roomId);
+	});
+
+	(process.platform === "win32" ? it.skip : it)("hardens permissions on an existing valid identity", async () => {
+		await loadOrCreateCollabIdentity();
+		const stored = await readStoredIdentity();
+		await fs.chmod(collabIdentityPath(), 0o644);
+
+		expect((await loadOrCreateCollabIdentity()).roomId).toBe(stored.roomId);
+		expect((await fs.stat(collabIdentityPath())).mode & 0o777).toBe(0o600);
 	});
 
 	// A transient read failure (sharing violation, backup lock) must not be
@@ -120,7 +162,7 @@ describe("collab room identity", () => {
 			// Degrades to a fresh in-memory identity without touching the file.
 			expect(identity.roomId).toMatch(ROOM_ID_RE);
 			expect(identity.roomId).not.toBe(roomId);
-			expect((await fs.readdir(path.dirname(collabIdentityPath()))).sort()).toEqual(["identity.json"]);
+			expect(await identityFiles()).toEqual(["identity.json"]);
 
 			// The stored identity survived verbatim and is adopted once readable.
 			await fs.chmod(collabIdentityPath(), 0o600);

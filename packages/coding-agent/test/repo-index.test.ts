@@ -48,6 +48,35 @@ afterEach(async () => {
 });
 
 describe("repository index with real SQLite and native Python parsing", () => {
+	it.skipIf(process.platform === "win32")(
+		"preserves literal backslash filenames through build and known-path edits",
+		async () => {
+			const literal = "src\\literal.py";
+			const nested = "src/literal.py";
+			const { root, service } = await fixture({
+				[literal]: "def literal_before(): return 'backslashbeforebeacon'\n",
+				[nested]: "def nested_file(): return 'directorybeacon'\n",
+			});
+			await service.build();
+			expect((await service.search("backslashbeforebeacon")).hits.map(hit => hit.path)).toEqual([literal]);
+			expect((await service.symbol("literal_before")).hits.map(hit => hit.path)).toEqual([literal]);
+			expect((await service.search("directorybeacon")).hits.map(hit => hit.path)).toEqual([nested]);
+			expect((await service.status()).failures).toEqual([]);
+
+			await put(root, literal, "def literal_after(): return 'backslashafterbeacon'\n");
+			service.markChanged([path.join(root, literal)]);
+			expect((await service.search("backslashafterbeacon")).hits.map(hit => hit.path)).toEqual([literal]);
+			expect((await service.symbol("literal_before")).hits).toEqual([]);
+			expect((await service.symbol("literal_after")).hits.map(hit => hit.path)).toEqual([literal]);
+			expect((await service.search("directorybeacon")).hits.map(hit => hit.path)).toEqual([nested]);
+
+			await fs.rm(path.join(root, literal));
+			service.markChanged([path.join(root, literal)]);
+			expect((await service.search("backslashafterbeacon")).hits).toEqual([]);
+			expect((await service.search("directorybeacon")).hits.map(hit => hit.path)).toEqual([nested]);
+		},
+	);
+
 	it("distinguishes missing index, no matches, and indexed hits with exact source lines", async () => {
 		const { service } = await fixture({
 			"src/engine.py": "# café\r\nERR_TIMEOUT = '超时\u{1f680}'\r\nvalue = ERR_TIMEOUT\r\n",
@@ -130,6 +159,19 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			expect.objectContaining({ path: "src/nested.py", qualname: "Té.Café", startLine: 2 }),
 		]);
 		expect((await service.symbol("caf_")).hits).toEqual([]);
+	});
+
+	it("keeps module locations within addressable source lines instead of counting a final newline twice", async () => {
+		const { service } = await fixture({
+			"pkg/terminated.py": "# comment\r\nVALUE = 1\r\n",
+			"pkg/unterminated.py": "# comment\nVALUE = 1",
+		});
+		await service.build();
+		for (const file of ["terminated", "unterminated"]) {
+			expect((await service.symbol(`pkg.${file}`)).hits).toEqual([
+				expect.objectContaining({ path: `pkg/${file}.py`, kind: "module", startLine: 1, endLine: 2 }),
+			]);
+		}
 	});
 
 	it("filters by path and category without conflating tests, config and source", async () => {
@@ -284,6 +326,24 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		const remaining = (await service.search("added_marker")).hits;
 		expect(remaining.map(hit => hit.path)).toEqual(["renamed.py"]);
 		expect(remaining[0]?.snippet).toContain("replacement_marker");
+	});
+
+	it("discovers both rename paths without decoding a filename as a porcelain status prefix", async () => {
+		const oldPath = "ab old.py";
+		const newPath = "xy new.py";
+		const { root, agentDir, service } = await fixture({ [oldPath]: "def renamed_target(): return 'RENAMEBEACON'\n" });
+		await $`git init -q`.cwd(root).quiet();
+		await $`git add -- ${oldPath}`.cwd(root).quiet();
+		await $`git -c user.name=IndexTest -c user.email=index@example.test commit -qm initial`.cwd(root).quiet();
+		const gitService = new RepoService({ cwd: root, agentDir });
+		services.push(gitService);
+		await service.build();
+		await $`git mv -- ${oldPath} ${newPath}`.cwd(root).quiet();
+		await gitService.discoverChanges();
+		expect((await gitService.status()).pendingPaths).toEqual([oldPath, newPath]);
+		expect((await gitService.search("RENAMEBEACON")).hits.map(hit => hit.path)).toEqual([newPath]);
+		expect((await gitService.symbol("renamed_target")).hits.map(hit => hit.path)).toEqual([newPath]);
+		expect((await gitService.status()).pendingCount).toBe(0);
 	});
 
 	it("does not import a known changed path beneath an ignored ancestor during incremental or full reconciliation", async () => {

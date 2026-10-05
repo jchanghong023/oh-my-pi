@@ -1,9 +1,8 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import MODELS_JSON from "@oh-my-pi/pi-catalog/models.json" with { type: "json" };
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { buildAnthropicClientOptions, buildAnthropicHeaders } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
 	getZcodeApiModels,
 	resolveZcodeApiBaseUrl,
@@ -14,36 +13,37 @@ import {
 // The fork contract (docs-zh-CN/requirements/fork.md) pins the zcode-api roster to the
 // `zhipu-coding-plan` lane: same parameters, minus the collapsed `[1m]` alias,
 // served over the proxy's Anthropic route instead of the Zhipu OpenAI route.
-const LANE =
-	(MODELS_JSON as unknown as Record<string, Record<string, ModelSpec<"openai-completions">>>)["zhipu-coding-plan"] ??
-	{};
+const LANE = new Map(getBundledModels("zhipu-coding-plan").map(model => [model.id, model]));
 
 // The roster asserts the loopback default, so a host-level override must not
 // leak in; the two endpoint tests set and restore the variable themselves.
-const hostBaseUrl = Bun.env.ZCODE_API_BASE_URL;
+let hostBaseUrl: string | undefined;
 beforeEach(() => {
+	hostBaseUrl = Bun.env.ZCODE_API_BASE_URL;
 	delete Bun.env.ZCODE_API_BASE_URL;
 });
-afterAll(() => {
-	if (hostBaseUrl !== undefined) Bun.env.ZCODE_API_BASE_URL = hostBaseUrl;
+afterEach(() => {
+	if (hostBaseUrl === undefined) delete Bun.env.ZCODE_API_BASE_URL;
+	else Bun.env.ZCODE_API_BASE_URL = hostBaseUrl;
 });
 
 describe("zcode-api runtime provider roster", () => {
 	test("mirrors the zhipu-coding-plan lane except the collapsed [1m] alias", () => {
 		const models = getZcodeApiModels();
-		const laneIds = Object.keys(LANE).filter(id => id !== "glm-5.2-highspeed[1m]");
+		const laneIds = [...LANE.keys()].filter(id => id !== "glm-5.2-highspeed[1m]");
 		expect(models.map(model => model.id).sort()).toEqual(laneIds.sort());
 		for (const model of models) {
-			const lane = LANE[model.id];
+			const lane = LANE.get(model.id);
 			expect(lane, `lane row for ${model.id}`).toBeDefined();
+			if (!lane) throw new Error(`Missing lane row: ${model.id}`);
 			expect(model.provider).toBe(ZCODE_API_PROVIDER_ID);
 			expect(model.api).toBe("anthropic-messages");
 			expect(model.baseUrl).toBe(ZCODE_API_DEFAULT_BASE_URL);
 			expect(model.reasoning).toBe(true);
-			expect(model.contextWindow).toBe(lane?.contextWindow);
-			expect(model.maxTokens).toBe(lane?.maxTokens);
-			expect(model.input).toEqual(lane?.input);
-			expect(model.cost).toEqual(lane?.cost);
+			expect(model.contextWindow).toBe(lane.contextWindow);
+			expect(model.maxTokens).toBe(lane.maxTokens);
+			expect(model.input).toEqual(lane.input);
+			expect(model.cost).toEqual(lane.cost);
 			// Rows without an explicit tokenizer resolve one at build time, so
 			// only the lane's explicit values are comparable.
 			if (lane?.tokenizer) expect(model.tokenizer).toBe(lane.tokenizer);
@@ -53,7 +53,7 @@ describe("zcode-api runtime provider roster", () => {
 	test("thinking effort tiers match the coding-plan lane", () => {
 		const byId = new Map(getZcodeApiModels().map(model => [model.id, model]));
 		for (const [id, model] of byId) {
-			const laneThinking = LANE[id]?.thinking;
+			const laneThinking = LANE.get(id)?.thinking;
 			if (!laneThinking) continue;
 			expect(model.thinking?.efforts, id).toEqual(laneThinking.efforts);
 			if (laneThinking.defaultLevel !== undefined)
@@ -99,16 +99,20 @@ describe("zcode-api endpoint resolution", () => {
 		}
 	});
 
-	test("rows are memoized per endpoint and rebuilt when the endpoint changes", () => {
+	test("uses each resolved endpoint in the client without retaining earlier routing", () => {
 		const saved = Bun.env.ZCODE_API_BASE_URL;
 		try {
 			Bun.env.ZCODE_API_BASE_URL = "http://proxy-a.invalid:8080";
 			const first = getZcodeApiModels();
 			expect(first[0]?.baseUrl).toBe("http://proxy-a.invalid:8080");
-			expect(getZcodeApiModels()).toBe(first);
+			expect(buildAnthropicClientOptions({ model: first[0]!, apiKey: NO_AUTH_SENTINEL }).baseURL).toBe(
+				"http://proxy-a.invalid:8080",
+			);
 			Bun.env.ZCODE_API_BASE_URL = "http://proxy-b.invalid:8080";
 			const second = getZcodeApiModels();
-			expect(second).not.toBe(first);
+			expect(buildAnthropicClientOptions({ model: second[0]!, apiKey: NO_AUTH_SENTINEL }).baseURL).toBe(
+				"http://proxy-b.invalid:8080",
+			);
 			expect(second[0]?.baseUrl).toBe("http://proxy-b.invalid:8080");
 		} finally {
 			if (saved === undefined) delete Bun.env.ZCODE_API_BASE_URL;

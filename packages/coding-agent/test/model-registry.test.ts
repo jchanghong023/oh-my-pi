@@ -2587,6 +2587,39 @@ describe("ModelRegistry", () => {
 			},
 		);
 
+		test("applies a policy change arriving during an awaited rebuild", async () => {
+			const testSettings = Settings.isolated();
+			cfgExtendedContext.set(testSettings, true);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { settings: testSettings });
+			const reached = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const refresh = registry.refresh.bind(registry);
+			let held = false;
+			registry.refresh = async strategy => {
+				await refresh(strategy);
+				if (!held && strategy === "offline") {
+					held = true;
+					reached.resolve();
+					await release.promise;
+				}
+			};
+			cfgExtendedContext.set(testSettings, false);
+			const first = registry.reapplyModelPolicies();
+			try {
+				await reached.promise;
+				expect(registry.find("openai-codex", "gpt-6-astra")?.contextWindow).toBe(272_000);
+				cfgExtendedContext.set(testSettings, true);
+				const second = registry.reapplyModelPolicies();
+				release.resolve();
+				await Promise.all([first, second]);
+				expect(registry.find("openai-codex", "gpt-6-astra")?.contextWindow).toBe(922_000);
+			} finally {
+				release.resolve();
+				await first;
+				registry.refresh = refresh;
+			}
+		});
+
 		test("clamps a cached Astra row already carrying the applied override", async () => {
 			writeRawModelsJson({
 				"openai-codex": { modelOverrides: { "gpt-6-astra": { contextWindow: 2_000_000 } } },

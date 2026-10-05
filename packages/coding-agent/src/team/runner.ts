@@ -92,7 +92,7 @@ function sanitizeAgentId(value: string): string {
 }
 
 export function modelMatches(resolved: string | undefined, pattern: string): boolean {
-	if (!resolved) return true;
+	if (!resolved) return false;
 	if (resolved === pattern) return true;
 	// Selectors may carry thinking-suffix annotations after the model id, and
 	// routing-qualified ids carry `@upstream` after the base id.

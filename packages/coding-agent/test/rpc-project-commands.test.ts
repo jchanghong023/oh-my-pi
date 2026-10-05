@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgSkills } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { RpcCommandCatalogService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-commands";
 import type { RpcProjectCommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-types";
 
@@ -64,7 +65,7 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			skills: [
 				{ name, description: name, filePath: `${cwd}/${name}/SKILL.md`, baseDir: cwd, source: "native:project" },
 			],
-			skillsSettings: { enableSkillCommands: true },
+			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 			setSlashCommands: () => {},
 			sessionManager: { getCwd: () => cwd },
 		});
@@ -114,8 +115,8 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 		// Every descriptor carries the full wire shape with omp execution.
 		for (const command of commands) {
 			expect(typeof command.name).toBe("string");
-			expect(["builtin", "skill"]).toContain(command.source);
-			expect(command.execution).toBe("omp");
+			expect(["builtin", "skill", "template", "custom"]).toContain(command.source);
+			expect(["omp", "host_action"]).toContain(command.execution);
 			expect(["project", "session"]).toContain(command.scope);
 			expect(typeof command.availability.available).toBe("boolean");
 		}
@@ -260,10 +261,8 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 		expect(builtin.name).toBe("model");
 		expect(builtin.spec?.name).toBe("model");
 
-		// Skill resolution is prefix-based: the named skill does not need to
-		// exist for execute_command to route it to the skill dispatcher.
-		const skill = await service.resolve("/skill:my-skill");
-		expect(skill).toMatchObject({ kind: "skill", name: "skill:my-skill", skillName: "my-skill" });
+		// Unknown skills must not manufacture a business entry.
+		expect(await service.resolve("/skill:my-skill")).toMatchObject({ kind: "unknown" });
 
 		const unknown = await service.resolve("/nosuchcommand");
 		expect(unknown).toMatchObject({ kind: "unknown", name: "nosuchcommand" });
@@ -293,9 +292,10 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			getSettings: () => Settings.isolated(),
 		});
 
+		await service.buildCatalog();
 		const initial = service.revision;
 		await service.buildCatalog();
-		expect(service.revision).toBe(initial); // rebuilds keep the revision stable
+		expect(service.revision).toBe(initial);
 
 		service.invalidate();
 		const first = service.revision;

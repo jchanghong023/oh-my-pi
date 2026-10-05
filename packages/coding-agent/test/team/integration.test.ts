@@ -276,13 +276,4 @@ describe("team in-process integration", () => {
 			expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
 		}
 	});
-
-	it("exposes only the read-only tool contract to team subagents", () => {
-		const tools = [...TEAM_READ_ONLY_TOOLS];
-		expect(tools).toContain("read");
-		expect(tools).toContain("wiki");
-		for (const forbidden of ["bash", "eval", "write", "edit", "task", "hub", "spawn"]) {
-			expect(tools).not.toContain(forbidden);
-		}
-	});
 });

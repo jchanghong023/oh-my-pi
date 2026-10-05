@@ -8,6 +8,10 @@ import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
 import type { SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { CacheWarmer, getPromptCacheTtlMs } from "../src/session/cache-warmer";
+import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
+import { cfgDisabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resolveSessionModelSelector } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 
 const originalAgentDir = getAgentDir();
 const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
@@ -33,6 +37,66 @@ describe("ModelRegistry default custom models config", () => {
 		if (originalAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
 		await tempDir.remove().catch(() => {});
+	});
+
+	test("excludes the last available model from lookup, listing, restoration, and request credentials", async () => {
+		const provider = "disabled-model-fixture";
+		const id = "last-model";
+		writeModelsYaml("models.yml", {
+			provider,
+			modelId: id,
+			modelName: "Last model",
+			baseUrl: "http://127.0.0.1:8081/v1",
+		});
+		const settings = Settings.isolated({});
+		const registry = new ModelRegistry(authStorage, undefined, { settings });
+		authStorage.keys.setRuntime(provider, "fixture-model-key");
+		const model = registry.find(provider, id)!;
+		const resolver = registry.resolver(model, "fixture-session");
+		expect(registry.getAvailableForProviders(new Set([provider]))).toHaveLength(1);
+		expect(await resolveApiKeyOnce(resolver)).toBe("fixture-model-key");
+
+		cfgDisabledModels.set(settings, [`${provider}/${id}`]);
+		expect(registry.getAll().some(candidate => candidate.provider === provider && candidate.id === id)).toBe(true);
+		expect(registry.getAvailableForProviders(new Set([provider]))).toEqual([]);
+		expect(registry.find(provider, id)).toBeUndefined();
+		expect(resolveSessionModelSelector(registry, `${provider}/${id}`)).toBeUndefined();
+		expect(registry.hasConfiguredAuth(model)).toBe(false);
+		expect(registry.isModelEnabled(model)).toBe(false);
+		expect(await registry.getApiKey(model)).toBeUndefined();
+		expect(await registry.getApiKeyWithCredentialForProvider(provider, undefined, { modelId: id })).toBeUndefined();
+		expect(await resolveApiKeyOnce(resolver)).toBeUndefined();
+
+		cfgDisabledModels.set(settings, []);
+		expect(registry.find(provider, id)?.id).toBe(id);
+		expect(registry.getAvailableForProviders(new Set([provider]))).toHaveLength(1);
+		expect(await resolveApiKeyOnce(resolver)).toBe("fixture-model-key");
+
+		cfgDisabledModels.set(settings, ["*"]);
+		expect(registry.getAvailable("all")).toEqual([]);
+		expect(registry.hasConfiguredAuth({ ...model, id: "unregistered-model" })).toBe(false);
+		expect(await registry.getApiKey({ ...model, id: "unregistered-model" })).toBeUndefined();
+	});
+
+	test("re-resolves model exclusion cache for path-scoped settings", async () => {
+		const provider = "scoped-disabled-fixture";
+		const id = "scoped-model";
+		writeModelsYaml("models.yml", {
+			provider,
+			modelId: id,
+			modelName: "Scoped model",
+			baseUrl: "http://127.0.0.1:8081/v1",
+		});
+		const first = path.join(tempDir.path(), "first");
+		const second = path.join(tempDir.path(), "second");
+		const settings = Settings.isolated({
+			disabledModels: [{ paths: [first], models: [`${provider}/${id}`] }],
+		});
+		const registry = new ModelRegistry(authStorage, undefined, { settings });
+		await settings.reloadForCwd(first);
+		expect(registry.getAvailableForProviders(new Set([provider]))).toEqual([]);
+		await settings.reloadForCwd(second);
+		expect(registry.getAvailableForProviders(new Set([provider]))).toHaveLength(1);
 	});
 
 	test("loads custom provider models from default models.yaml when models.yml is absent", () => {

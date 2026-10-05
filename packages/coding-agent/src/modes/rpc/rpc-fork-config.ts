@@ -21,20 +21,27 @@ import * as path from "node:path";
 import { type Model, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getAgentDir, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import { YAML } from "bun";
+import { orderedSettings } from "../../config/all-settings";
+import { COMPANY_PROVIDER_ID } from "../../config/company-provider";
 import { createSettingsHost } from "../../config/settings-ui";
-import { lookup } from "../../config/registry";
+import { lookup, settingValuesEqual } from "../../config/registry";
 import {
 	ModelsConfigFile,
 	validateProviderConfiguration,
 	type ProviderValidationConfig,
 	type ProviderValidationModel,
 } from "../../config/models-config";
-import { cfgDisabledProviders, cfgEnabledModels } from "../../config/model-settings";
-import { filterAvailableModelsByEnabledPatterns } from "../../config/model-resolver";
+import { cfgDisabledModels, cfgDisabledProviders, cfgEnabledModels } from "../../config/model-settings";
+import {
+	filterAvailableModelsByDisabledPatterns,
+	filterAvailableModelsByEnabledPatterns,
+} from "../../config/model-resolver";
 import type { ModelRegistry } from "../../config/model-registry";
-import { withActiveSettings, type Settings } from "../../config/settings";
+import { UserSettingConflictError, withActiveSettings, type Settings } from "../../config/settings";
+import { ZCODE_API_PROVIDER_ID } from "../../config/zcode-api-models";
 import { replaceFileAtomically } from "../../utils/atomic-file";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
@@ -70,6 +77,10 @@ export interface RpcForkSettingsEntry {
 	key: string;
 	type: string;
 	value: unknown;
+	/** Persisted user-layer value, masked for credentials; omitted when unset. */
+	userValue?: unknown;
+	/** Opaque revision of the raw user field used by revision-controlled writes. */
+	revision: string;
 	defaultValue: unknown;
 	credential: boolean;
 	/** Where the effective value comes from (env/runtime/overlay/project/global/default). */
@@ -82,6 +93,80 @@ function maskCredential(value: unknown): unknown {
 	if (typeof value === "string" && value.length > 0) return MASKED_CREDENTIAL;
 	if (value !== undefined && value !== null) return MASKED_CREDENTIAL;
 	return value;
+}
+
+interface RpcUserSettingSnapshot {
+	readonly key: string;
+	readonly revision: string;
+	readonly value: unknown;
+}
+
+interface RpcUserSettingsRevisions {
+	readonly current: Map<string, RpcUserSettingSnapshot>;
+	readonly previous: Map<string, RpcUserSettingSnapshot>;
+}
+
+const userSettingsRevisions = new WeakMap<Settings, RpcUserSettingsRevisions>();
+const MAX_PREVIOUS_USER_SETTING_REVISIONS = 128;
+
+/** Internal, unredacted CAS snapshot; wire projections must mask credential values. */
+export function getRpcUserSettingSnapshot(settings: Settings, key: string): RpcUserSettingSnapshot {
+	let revisions = userSettingsRevisions.get(settings);
+	if (!revisions) {
+		revisions = { current: new Map(), previous: new Map() };
+		userSettingsRevisions.set(settings, revisions);
+	}
+	const value = settings.getUserSettingValue(key);
+	const previous = revisions.current.get(key);
+	if (previous && settingValuesEqual(previous.value, value)) return previous;
+	if (previous) {
+		revisions.previous.set(previous.revision, previous);
+		if (revisions.previous.size > MAX_PREVIOUS_USER_SETTING_REVISIONS) {
+			const oldest = revisions.previous.keys().next().value;
+			if (oldest !== undefined) revisions.previous.delete(oldest);
+		}
+	}
+	const snapshot = { key, value, revision: randomUUID() };
+	revisions.current.set(key, snapshot);
+	return snapshot;
+}
+
+function expectedRpcUserSettingSnapshot(settings: Settings, key: string, revision: unknown): RpcUserSettingSnapshot {
+	const revisions = userSettingsRevisions.get(settings);
+	const current = revisions?.current.get(key);
+	const snapshot =
+		current?.revision === revision
+			? current
+			: typeof revision === "string"
+				? revisions?.previous.get(revision)
+				: undefined;
+	if (!snapshot || snapshot.key !== key) {
+		throw Object.assign(new Error(`User setting "${key}" revision is stale or unknown`), { code: "stale_revision" });
+	}
+	return snapshot;
+}
+
+/** Persist against the exact published user field, never effective/runtime/project values. */
+export async function saveRpcUserSetting(
+	settings: Settings,
+	key: string,
+	value: unknown,
+	expectedRevision: unknown,
+): Promise<string> {
+	const snapshot = expectedRpcUserSettingSnapshot(settings, key, expectedRevision);
+	try {
+		await settings.saveUserSetting(key, value, snapshot.value);
+	} catch (error) {
+		if (error instanceof UserSettingConflictError) {
+			throw Object.assign(error, { code: "stale_revision" });
+		}
+		throw error;
+	}
+	return getRpcUserSettingSnapshot(settings, key).revision;
+}
+
+function settingsErrorCode(error: unknown): string | undefined {
+	return isRecord(error) && typeof error.code === "string" ? error.code : undefined;
 }
 
 /**
@@ -176,13 +261,8 @@ export class RpcForkConfigController {
 		const sessionView = this.#ctx.getAvailableModels;
 		if (sessionView) return sessionView();
 		const all = this.#ctx.modelRegistry.getAvailable();
-		const patterns = cfgEnabledModels.get(this.#ctx.settings);
-		if (!patterns || patterns.length === 0) return all;
+		const patterns = cfgEnabledModels.get(this.#ctx.settings) ?? [];
 		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#ctx.settings);
-	}
-
-	#authStorage(): AuthStorage {
-		return this.#ctx.authStorage ?? this.#ctx.modelRegistry.authStorage;
 	}
 
 	#settingsHost(): ReturnType<typeof createSettingsHost> {
@@ -202,31 +282,45 @@ export class RpcForkConfigController {
 		const settings = this.#ctx.settings;
 		const projectLayer = this.#projectLayer(settings);
 		return withActiveSettings(settings, () => {
-			const host = this.#settingsHost();
 			const entries: RpcForkSettingsEntry[] = [];
-			for (const entry of host.entries) {
-				if (entry.condition && !entry.condition()) continue;
-				const raw = host.get(entry.path);
-				const value = entry.credential ? maskCredential(raw) : raw;
-				const projectConfigured = Object.hasOwn(projectLayer, entry.path);
+			for (const setting of orderedSettings()) {
+				let projectValue: unknown = projectLayer;
+				let projectConfigured = true;
+				for (const segment of setting.segments) {
+					if (!isRecord(projectValue) || !Object.hasOwn(projectValue, segment)) {
+						projectConfigured = false;
+						break;
+					}
+					projectValue = projectValue[segment];
+				}
 				if (scope === "project" && !projectConfigured) continue;
-				const setting = lookup(entry.path);
-				entries.push({
-					key: entry.path,
-					type: entry.type,
-					value,
-					defaultValue: entry.defaultValue,
-					credential: entry.credential === true,
-					...(setting ? { provenance: settings.getProvenance(setting) } : {}),
+				const snapshot = getRpcUserSettingSnapshot(settings, setting.id);
+				const credential = setting.isCredential;
+				const raw = setting.layered(settings);
+				const entry = {
+					key: setting.id,
+					type: setting.type,
+					value: credential ? maskCredential(raw) : raw,
+					userValue: credential ? maskCredential(snapshot.value) : snapshot.value,
+					revision: snapshot.revision,
+					defaultValue: credential ? maskCredential(setting.default) : setting.default,
+					credential,
+					provenance: settings.getProvenance(setting),
 					projectConfigured,
-				});
+				};
+				entries.push(entry);
 			}
 			return this.host.context.success(command.id, "get_settings", { scope, entries });
 		});
 	}
 
 	async #setSettings(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { scope, key, value } = command as { scope?: unknown; key?: unknown; value?: unknown };
+		const { scope, key, value, expectedRevision } = command as {
+			scope?: unknown;
+			key?: unknown;
+			value?: unknown;
+			expectedRevision?: unknown;
+		};
 		if (scope !== "user" && scope !== "project") {
 			return this.host.context.error(command.id, "set_settings", `Invalid scope: ${String(scope)}`);
 		}
@@ -242,16 +336,33 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "set_settings", "key is required");
 		}
 		try {
-			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().set(key, value));
+			if (expectedRevision === undefined) {
+				withActiveSettings(this.#ctx.settings, () => this.#settingsHost().set(key, value));
+			} else {
+				await saveRpcUserSetting(this.#ctx.settings, key, value, expectedRevision);
+			}
 		} catch (error) {
-			return this.host.context.error(command.id, "set_settings", errorMessage(error));
+			return this.host.context.error(command.id, "set_settings", errorMessage(error), settingsErrorCode(error));
 		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "set_settings", { key });
+		const snapshot = expectedRevision === undefined ? undefined : getRpcUserSettingSnapshot(this.#ctx.settings, key);
+		return this.host.context.success(command.id, "set_settings", {
+			key,
+			...(snapshot
+				? {
+						revision: snapshot.revision,
+						userValue: lookup(key)?.isCredential ? maskCredential(snapshot.value) : snapshot.value,
+					}
+				: {}),
+		});
 	}
 
 	async #unsetSettings(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { scope, key } = command as { scope?: unknown; key?: unknown };
+		const { scope, key, expectedRevision } = command as {
+			scope?: unknown;
+			key?: unknown;
+			expectedRevision?: unknown;
+		};
 		if (scope !== "user" && scope !== "project") {
 			return this.host.context.error(command.id, "unset_settings", `Invalid scope: ${String(scope)}`);
 		}
@@ -267,12 +378,25 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "unset_settings", "key is required");
 		}
 		try {
-			withActiveSettings(this.#ctx.settings, () => this.#settingsHost().unset(key));
+			if (expectedRevision === undefined) {
+				withActiveSettings(this.#ctx.settings, () => this.#settingsHost().unset(key));
+			} else {
+				await saveRpcUserSetting(this.#ctx.settings, key, undefined, expectedRevision);
+			}
 		} catch (error) {
-			return this.host.context.error(command.id, "unset_settings", errorMessage(error));
+			return this.host.context.error(command.id, "unset_settings", errorMessage(error), settingsErrorCode(error));
 		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "unset_settings", { key });
+		const snapshot = expectedRevision === undefined ? undefined : getRpcUserSettingSnapshot(this.#ctx.settings, key);
+		return this.host.context.success(command.id, "unset_settings", {
+			key,
+			...(snapshot
+				? {
+						revision: snapshot.revision,
+						userValue: lookup(key)?.isCredential ? maskCredential(snapshot.value) : snapshot.value,
+					}
+				: {}),
+		});
 	}
 
 	emitSettingsChanged(scope: "user" | "project"): void {
@@ -291,8 +415,8 @@ export class RpcForkConfigController {
 			});
 			byProvider.set(model.provider, list);
 		}
-		const config = ModelsConfigFile.loadOrDefault();
-		const configured = config.providers ?? {};
+		const config = await this.#readModelsConfig();
+		const configured = isRecord(config.providers) ? config.providers : {};
 		const settings = this.#ctx.settings;
 		const disabled = cfgDisabledProviders.get(settings) ?? [];
 		const providers = [...new Set([...byProvider.keys(), ...Object.keys(configured)])].sort().map(provider => {
@@ -321,6 +445,22 @@ export class RpcForkConfigController {
 			return this.host.context.error(command.id, "upsert_provider", 'provider must be an object with a "name"');
 		}
 		const name = provider.name.trim();
+		if (name === COMPANY_PROVIDER_ID) {
+			return this.host.context.error(
+				command.id,
+				"upsert_provider",
+				"Company provider configuration comes from the startup Claude settings, not models.yml",
+				"unsupported",
+			);
+		}
+		if (name === ZCODE_API_PROVIDER_ID && Object.keys(provider).some(key => key !== "name" && key !== "apiKey")) {
+			return this.host.context.error(
+				command.id,
+				"upsert_provider",
+				"zcode-api accepts only apiKey in models.yml; its endpoint, transport, and models are runtime-owned",
+				"unsupported",
+			);
+		}
 		// Sanitize first, then validate and write the exact same payload: values
 		// models.yml's schema would reject on the next load must fail here instead
 		// of bricking the config (loadOrDefault silently falls back to defaults,
@@ -423,24 +563,19 @@ export class RpcForkConfigController {
 		} catch (error) {
 			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
 		}
-		let config: Record<string, unknown>;
 		try {
-			this.#assertModelsConfigLoadable();
-			config = await this.#readModelsConfig();
-		} catch (error) {
-			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
-		}
-		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
-		providers[name] = {
-			...(isRecord(providers[name]) ? providers[name] : {}),
-			...(payload.baseUrl !== undefined ? { baseUrl: payload.baseUrl } : {}),
-			...(payload.apiKey !== undefined ? { apiKey: payload.apiKey } : {}),
-			...(payload.auth !== undefined ? { auth: payload.auth } : {}),
-			...(payload.api !== undefined ? { api: payload.api } : {}),
-			...(payload.models !== undefined ? { models: payload.models } : {}),
-		};
-		try {
-			await this.#writeModelsConfig({ ...config, providers });
+			await this.#updateModelsConfig(config => {
+				const providers = { ...(isRecord(config.providers) ? config.providers : undefined) };
+				providers[name] = {
+					...(isRecord(providers[name]) ? providers[name] : {}),
+					...(payload.baseUrl !== undefined ? { baseUrl: payload.baseUrl } : {}),
+					...(payload.apiKey !== undefined ? { apiKey: payload.apiKey } : {}),
+					...(payload.auth !== undefined ? { auth: payload.auth } : {}),
+					...(payload.api !== undefined ? { api: payload.api } : {}),
+					...(payload.models !== undefined ? { models: payload.models } : {}),
+				};
+				config.providers = providers;
+			});
 		} catch (error) {
 			return this.host.context.error(command.id, "upsert_provider", errorMessage(error));
 		}
@@ -453,30 +588,43 @@ export class RpcForkConfigController {
 		if (typeof name !== "string" || !name.trim()) {
 			return this.host.context.error(command.id, "delete_provider", "provider is required");
 		}
-		let config: Record<string, unknown>;
 		try {
-			this.#assertModelsConfigLoadable();
-			config = await this.#readModelsConfig();
+			await this.#updateModelsConfig(config => {
+				const providers = { ...(isRecord(config.providers) ? config.providers : undefined) };
+				if (!Object.hasOwn(providers, name.trim())) {
+					throw Object.assign(new Error(`Provider not configured in models.yml: ${name}`), {
+						code: "provider_not_configured",
+					});
+				}
+				delete providers[name.trim()];
+				config.providers = providers;
+			});
 		} catch (error) {
-			return this.host.context.error(command.id, "delete_provider", errorMessage(error));
-		}
-		const providers = { ...((config.providers as Record<string, unknown> | undefined) ?? {}) };
-		if (!Object.hasOwn(providers, name.trim())) {
-			return this.host.context.error(
-				command.id,
-				"delete_provider",
-				`Provider not configured in models.yml: ${name}`,
-				"provider_not_configured",
-			);
-		}
-		delete providers[name.trim()];
-		try {
-			await this.#writeModelsConfig({ ...config, providers });
-		} catch (error) {
-			return this.host.context.error(command.id, "delete_provider", errorMessage(error));
+			return this.host.context.error(command.id, "delete_provider", errorMessage(error), settingsErrorCode(error));
 		}
 		this.emitSettingsChanged("user");
 		return this.host.context.success(command.id, "delete_provider", { provider: name.trim() });
+	}
+
+	/** Lock only the config transaction, including fresh reads, across project processes. */
+	async #updateModelsConfig(update: (config: Record<string, unknown>) => void): Promise<void> {
+		await fs.mkdir(this.#agentDir, { recursive: true, mode: 0o700 });
+		const modelsPath = path.join(await fs.realpath(this.#agentDir), "models.yml");
+		let writePath = modelsPath;
+		try {
+			writePath = await fs.realpath(modelsPath);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		await withFileLock(writePath, async () => {
+			ModelsConfigFile.invalidate();
+			this.#assertModelsConfigLoadable();
+			const config = await this.#readModelsConfig(writePath);
+			update(config);
+			await this.#writeModelsConfig(config, writePath);
+		});
+		await this.#ctx.modelRegistry.awaitBackgroundRefresh();
+		await this.#ctx.modelRegistry.reapplyModelPolicies();
 	}
 
 	/**
@@ -496,16 +644,18 @@ export class RpcForkConfigController {
 	}
 
 	/**
-	 * models.yml read side of the read-modify-write. The `ModelsConfigFile`
-	 * singleton is bound to the real agent dir; an injected `agentDir` (test
-	 * seam) reads the injected path directly so CRUD round-trips through one
-	 * location.
+	 * Preserve the persisted YAML, not the runtime-normalized view: loading
+	 * strips ignored reserved-provider fields that unrelated CRUD must not erase.
 	 */
-	async #readModelsConfig(): Promise<Record<string, unknown>> {
-		if (this.#agentDir === getAgentDir()) return ModelsConfigFile.loadOrDefault();
+	async #readModelsConfig(filePath = path.join(this.#agentDir, "models.yml")): Promise<Record<string, unknown>> {
 		try {
-			const parsed = YAML.parse(await fs.readFile(path.join(this.#agentDir, "models.yml"), "utf-8"));
-			return isRecord(parsed) ? parsed : {};
+			const parsed = YAML.parse(await fs.readFile(filePath, "utf-8"));
+			if (parsed == null) return {};
+			if (!isRecord(parsed)) throw new Error("models.yml must contain a mapping");
+			if (parsed.providers !== undefined && !isRecord(parsed.providers)) {
+				throw new Error("models.yml providers must contain a mapping");
+			}
+			return parsed;
 		} catch (error) {
 			if (isEnoent(error)) return {};
 			throw error;
@@ -513,8 +663,7 @@ export class RpcForkConfigController {
 	}
 
 	/** models.yml has no ConfigFile write API — read-modify-write + invalidate. */
-	async #writeModelsConfig(config: Record<string, unknown>): Promise<void> {
-		const filePath = path.join(this.#agentDir, "models.yml");
+	async #writeModelsConfig(config: Record<string, unknown>, filePath: string): Promise<void> {
 		const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 		try {
 			await fs.writeFile(tmpPath, stringifyYamlConfig(config), { encoding: "utf-8", mode: 0o600 });
@@ -533,17 +682,86 @@ export class RpcForkConfigController {
 		}
 		const pattern = `${provider}/${modelId}`;
 		const settings = this.#ctx.settings;
-		const current = cfgEnabledModels.get(settings) ?? [];
-		const has = current.includes(pattern);
-		if (enabled && !has) {
-			// `enabledModels` is an allowlist: an empty list means "everything",
-			// so the first explicit enable starts restricting the catalog.
-			cfgEnabledModels.setMember(settings, pattern, { member: true });
-		} else if (!enabled && has) {
-			cfgEnabledModels.setMember(settings, pattern, { member: false });
+		try {
+			await this.#ctx.modelRegistry.awaitBackgroundRefresh();
+			const catalog = this.#ctx.modelRegistry.getAll("all");
+			const isTarget = (model: Model): boolean => model.provider === provider && model.id === modelId;
+			if (!catalog.some(isTarget)) {
+				return this.host.context.error(
+					command.id,
+					"set_model_enabled",
+					`Model not found: ${pattern}`,
+					"model_not_found",
+				);
+			}
+			const positiveSnapshot = getRpcUserSettingSnapshot(settings, cfgEnabledModels.id);
+			const negativeSnapshot = getRpcUserSettingSnapshot(settings, cfgDisabledModels.id);
+			const positive = Array.isArray(positiveSnapshot.value) ? positiveSnapshot.value : [];
+			const negative = Array.isArray(negativeSnapshot.value) ? negativeSnapshot.value : [];
+			let nextPositive = positive;
+			let nextNegative = negative;
+			if (!enabled) {
+				if (!negative.includes(pattern)) nextNegative = [...negative, pattern];
+			} else {
+				if (negative.includes(pattern)) nextNegative = negative.filter(value => value !== pattern);
+				// Resolve persisted path-scoped arrays without staging mutations on the live settings.
+				const prospective = settings.overlay({
+					[cfgEnabledModels.id]: positive,
+					[cfgDisabledModels.id]: nextNegative,
+				});
+				const remaining = filterAvailableModelsByDisabledPatterns(
+					catalog,
+					cfgDisabledModels.get(prospective),
+					prospective,
+				);
+				if (!remaining.some(isTarget)) {
+					return this.host.context.error(
+						command.id,
+						"set_model_enabled",
+						`${pattern} remains excluded by another disabledModels rule; update that rule explicitly`,
+						"unsupported",
+					);
+				}
+				const patterns = cfgEnabledModels.get(prospective);
+				if (
+					patterns.length > 0 &&
+					!filterAvailableModelsByEnabledPatterns(catalog, patterns, prospective).some(isTarget)
+				) {
+					nextPositive = [...positive, pattern];
+				}
+			}
+			const mutations: { settingId: string; value: unknown; expectedValue: unknown }[] = [
+				{
+					settingId: cfgDisabledModels.id,
+					value: nextNegative === negative ? negativeSnapshot.value : nextNegative,
+					expectedValue: negativeSnapshot.value,
+				},
+			];
+			if (enabled) {
+				mutations.push({
+					settingId: cfgEnabledModels.id,
+					value: nextPositive === positive ? positiveSnapshot.value : nextPositive,
+					expectedValue: positiveSnapshot.value,
+				});
+			}
+			await settings.saveUserSettings(mutations);
+		} catch (error) {
+			return this.host.context.error(
+				command.id,
+				"set_model_enabled",
+				errorMessage(error),
+				error instanceof UserSettingConflictError ? "stale_revision" : settingsErrorCode(error),
+			);
 		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "set_model_enabled", { pattern, enabled });
+		return this.host.context.success(command.id, "set_model_enabled", {
+			pattern,
+			enabled,
+			revisions: {
+				enabledModels: getRpcUserSettingSnapshot(settings, cfgEnabledModels.id).revision,
+				disabledModels: getRpcUserSettingSnapshot(settings, cfgDisabledModels.id).revision,
+			},
+		});
 	}
 
 	async #testModel(command: RpcForkCommandBase): Promise<RpcResponse> {
@@ -574,7 +792,7 @@ export class RpcForkConfigController {
 		}
 		const startedAt = Date.now();
 		try {
-			const apiKey = await this.#authStorage().keys.get(provider);
+			const apiKey = await this.#ctx.modelRegistry.getApiKey(model, this.#ctx.sessionId);
 			if (!apiKey) {
 				return this.host.context.success(command.id, "test_model", {
 					ok: false,

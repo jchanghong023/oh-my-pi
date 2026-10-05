@@ -37,7 +37,7 @@
 
 安装本 fork 通过 [`jchanghong023/oh-my-pi` releases](https://github.com/jchanghong023/oh-my-pi/releases) 发布的最新二进制。以下命令直接使用 fork 的 GitHub release 资产，不会安装上游的 npm、Homebrew、Nix 或 `omp.sh` 构建。
 
-**Linux glibc (x64 · arm64)**
+**Linux（x64 · arm64，自动区分 glibc / musl）**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh -s -- --binary
@@ -53,7 +53,9 @@ curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts
 
 fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build-number>`。工作区包版本仍与上游兼容，因为本 fork 不向 npm 发布包。
 
-Linux musl 二进制（x64 · arm64）由本 fork 发布。macOS 二进制目前不由本 fork 发布。
+Alpine / musl 的预编译二进制动态链接 `libstdc++` / `libgcc`，请先运行 `apk add libstdc++ libgcc`。macOS 与 Windows arm64 不在本 fork 的二进制发布范围；Linux 安装器会在 macOS 联网前拒绝安装。
+
+安装器在替换前验证下载的 `omp --version` 与所选 Release 完全一致，失败保留旧安装。运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
 
 
 

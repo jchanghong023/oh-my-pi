@@ -197,8 +197,9 @@ function scoreCandidate(
 	// text: a phrase or complete term set past the prefix must still earn its
 	// ranking tier instead of losing it to the truncation.
 	const snippet = row.snippet as string;
+	// SQLite length/substr count Unicode scalars; JS string length counts UTF-16 units.
 	const text =
-		(row.raw_len as number) > snippet.length ? (loadFullText(row.section_id as number) ?? snippet) : snippet;
+		(row.raw_len as number) > CANDIDATE_SNIPPET_CHARS ? (loadFullText(row.section_id as number) ?? snippet) : snippet;
 	const raw = normalizeSearchText(text);
 	const plain = normalizeSearchText(normalizePlainText(text));
 	const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
@@ -387,8 +388,7 @@ export class DocsService {
 			const sections = this.#rank(match, query, terms, filter, limit);
 			// Only the unscoped caller asks for a count, and it must cover what the
 			// page itself may serve.
-			const counted = options.index === undefined ? this.#countMatches(match) : undefined;
-			const total = counted !== undefined && counted < sections.length ? undefined : counted;
+			const total = options.index === undefined ? this.#countMatches(match) : undefined;
 			return { sections, total };
 		});
 	}
@@ -413,10 +413,6 @@ export class DocsService {
 		const row = this.storage.db
 			.query("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH ?")
 			.get(match) as { n: number } | null;
-		// A concurrent import can commit hidden rows between the probe above and this
-		// count's snapshot; they would inflate the total with hits the page never
-		// serves, so pay the join and recount instead of trusting the fast number.
-		if (probeBuilding.get(hidden)) return countHiddenExcluded();
 		return row?.n ?? 0;
 	}
 
@@ -535,34 +531,5 @@ export class DocsService {
 			.all(...ids) as Array<{ id: number; raw_markdown: string }>;
 		for (const row of rows) texts.set(row.id, row.raw_markdown);
 		return texts;
-	}
-
-	read(options: { sectionId: number; index?: string }): {
-		sectionId: number;
-		index: string;
-		path: string;
-		headingPath: string;
-		lineStart: number;
-		lineEnd: number;
-		rawMarkdown: string;
-	} {
-		const filter = indexFilter(options.index);
-		const row = this.storage.db
-			.query(
-				`SELECT s.id,i.name index_name,d.relative_path,s.heading_path,s.line_start,s.line_end,s.raw_markdown
-			 FROM sections s JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
-			 WHERE s.id=?${filter.sql}`,
-			)
-			.get(options.sectionId, ...filter.args) as Record<string, unknown> | null;
-		if (!row) throw new Error(`Unknown section: ${options.sectionId}`);
-		return {
-			sectionId: row.id as number,
-			index: row.index_name as string,
-			path: row.relative_path as string,
-			headingPath: row.heading_path as string,
-			lineStart: row.line_start as number,
-			lineEnd: row.line_end as number,
-			rawMarkdown: row.raw_markdown as string,
-		};
 	}
 }

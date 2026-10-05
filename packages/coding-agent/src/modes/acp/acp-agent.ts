@@ -957,6 +957,10 @@ export class AcpAgent implements Agent {
 			settings: record.session.settings,
 			cwd: record.session.sessionManager.getCwd(),
 			signal: promptTurn?.abortController.signal,
+			ui:
+				this.#clientCapabilities?.elicitation?.form != null
+					? createAcpExtensionUiContext(this.#connection, () => record.session.sessionId, this.#clientCapabilities)
+					: undefined,
 			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
 			reloadPlugins: () => this.#reloadPluginState(record),

@@ -76,9 +76,9 @@ function buildFixtureBytes(): Uint8Array {
 			);
 		`);
 
-		const insertUser = db.prepare("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)");
-		const insertSlug = db.prepare("INSERT INTO slugs (slug, title) VALUES (?, ?)");
-		const insertNote = db.prepare("INSERT INTO notes (body) VALUES (?)");
+		const insertUser = db.query("INSERT INTO users (name, email, status, created) VALUES (?, ?, ?, ?)");
+		const insertSlug = db.query("INSERT INTO slugs (slug, title) VALUES (?, ?)");
+		const insertNote = db.query("INSERT INTO notes (body) VALUES (?)");
 		const seed = db.transaction(() => {
 			insertUser.run("Alice", "alice@example.com", "active", 1);
 			insertUser.run("Bob", "bob@example.com", "inactive", 2);
@@ -94,33 +94,33 @@ function buildFixtureBytes(): Uint8Array {
 			insertNote.run("Second note");
 			insertNote.run("Third; note");
 
-			db.prepare("INSERT INTO composite (team_id, user_id, value) VALUES (?, ?, ?)").run(1, 2, "pair");
-			db.prepare("INSERT INTO wide_rows (id, payload) VALUES (?, ?)").run(1, "x".repeat(320));
+			db.query("INSERT INTO composite (team_id, user_id, value) VALUES (?, ?, ?)").run(1, 2, "pair");
+			db.query("INSERT INTO wide_rows (id, payload) VALUES (?, ?)").run(1, "x".repeat(320));
 		});
 		seed();
 
 		return db.serialize();
 	} finally {
-		db.close();
+		db.close(true);
 	}
 }
 
 function readUserEmail(dbPath: string, id: number): string | null {
 	const db = new Database(dbPath, { readonly: true });
 	try {
-		const row = db.prepare<{ email: string }, [number]>("SELECT email FROM users WHERE id = ?").get(id);
+		const row = db.query<{ email: string }, [number]>("SELECT email FROM users WHERE id = ?").get(id);
 		return row?.email ?? null;
 	} finally {
-		db.close();
+		db.close(true);
 	}
 }
 
 function readUserCount(dbPath: string): number {
 	const db = new Database(dbPath, { readonly: true });
 	try {
-		return db.prepare<{ count: number }, []>("SELECT COUNT(*) AS count FROM users").get()?.count ?? 0;
+		return db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM users").get()?.count ?? 0;
 	} finally {
-		db.close();
+		db.close(true);
 	}
 }
 
@@ -128,10 +128,10 @@ function readUserByEmail(dbPath: string, email: string): { name: string; email: 
 	const db = new Database(dbPath, { readonly: true });
 	try {
 		return db
-			.prepare<{ name: string; email: string }, [string]>("SELECT name, email FROM users WHERE email = ?")
+			.query<{ name: string; email: string }, [string]>("SELECT name, email FROM users WHERE email = ?")
 			.get(email);
 	} finally {
-		db.close();
+		db.close(true);
 	}
 }
 
@@ -159,10 +159,10 @@ describe("SQLite tool support", () => {
 		try {
 			db.run("PRAGMA journal_mode = WAL");
 			db.run("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
-			db.prepare("INSERT INTO entries (value) VALUES (?)").run("persisted");
+			db.query("INSERT INTO entries (value) VALUES (?)").run("persisted");
 			db.run("PRAGMA wal_checkpoint(TRUNCATE)");
 		} finally {
-			db.close();
+			db.close(true);
 		}
 		await fs.copyFile(`${dbPath}.source`, dbPath);
 		return dbPath;
@@ -192,13 +192,7 @@ describe("SQLite tool support", () => {
 		} else {
 			Bun.env.PI_EDIT_VARIANT = originalEditVariant;
 		}
-		// Windows AV scans of freshly written sqlite files can hold them past
-		// the retry window; removal is best-effort and the OS reclaims the rest.
-		try {
-			await removeWithRetries(tmpDir);
-		} catch {
-			// best-effort
-		}
+		await removeWithRetries(tmpDir);
 	});
 
 	it("parses SQLite path candidates at the extension boundary", () => {
@@ -366,7 +360,7 @@ describe("SQLite tool support", () => {
 		const db = new Database(capDbPath);
 		try {
 			db.run("CREATE TABLE big (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
-			const insert = db.prepare("INSERT INTO big (value) VALUES (?)");
+			const insert = db.query("INSERT INTO big (value) VALUES (?)");
 			const fill = db.transaction(() => {
 				for (let i = 1; i <= 1200; i++) {
 					insert.run(`val_${i}_end`);
@@ -374,7 +368,7 @@ describe("SQLite tool support", () => {
 			});
 			fill();
 		} finally {
-			db.close();
+			db.close(true);
 		}
 
 		const result = await readTool.execute("sqlite-raw-row-cap", { path: `${capDbPath}?q=SELECT * FROM big` });

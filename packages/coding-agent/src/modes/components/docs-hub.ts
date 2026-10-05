@@ -2,7 +2,7 @@ import { type Component, Input, matchesKey, type TUI, truncateToWidth } from "@o
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import { DocsService } from "../../docs/service";
-import type { DocsIndexSummary, DocsProgress, DocsSearchResult } from "../../docs/types";
+import type { DocsIndexSummary, DocsProgress, DocsSearchResult, DocsSectionHit } from "../../docs/types";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { DocsAddWizard, type DocsAddWizardResult } from "./docs-add-wizard";
 
@@ -10,7 +10,7 @@ export interface DocsHubCallbacks {
 	onCancel: () => void;
 }
 type HubMode = "list" | "search" | "detail" | "confirm-remove" | "confirm-cancel-close";
-type SearchHit = { id: number; label: string };
+type SearchHit = { section: DocsSectionHit; label: string };
 
 function sanitizeTerminalText(text: string): string {
 	return sanitizeText(text).replaceAll("\t", "    ");
@@ -135,7 +135,7 @@ export class DocsHubComponent implements Component {
 			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit });
 			this.#latestError = undefined;
 			this.#hits = result.sections.map(hit => ({
-				id: hit.sectionId,
+				section: hit,
 				label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
 			}));
 			this.#hitIndex = 0;
@@ -152,14 +152,14 @@ export class DocsHubComponent implements Component {
 		const hit = this.#hits[this.#hitIndex];
 		if (!hit) return;
 		try {
-			const value = this.service.read({ sectionId: hit.id, index: this.#selectedIndex()?.name });
+			const value = hit.section;
 			this.#latestError = undefined;
 			this.#detail = [
 				sanitizeTerminalLine(
 					`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
 				),
 				"",
-				sanitizeTerminalText(value.rawMarkdown),
+				sanitizeTerminalText(value.text),
 			];
 			this.#hits = [];
 		} catch (error) {

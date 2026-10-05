@@ -7339,7 +7339,7 @@ impl InPlace {
 			stdout: stdout.clone(),
 			stdout_is_regular_file,
 			fs:              context.paths.fs().clone(),
-			output:          OutputBuffer::new(Box::new(stdout.clone()), line_buffered),
+			output:          OutputBuffer::new(Box::new(stdout), line_buffered),
 			in_place:        context.in_place,
 			in_place_suffix: context.in_place_suffix,
 			follow_symlinks: context.follow_symlinks,

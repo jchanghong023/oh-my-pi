@@ -348,6 +348,23 @@ describe("overflow: path survives before model", () => {
 	});
 });
 
+describe("overflow: embedded context fallback", () => {
+	it("keeps context usage visible when the box gauge cannot fit labels beside the last segment", () => {
+		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("context"), statusLineHost));
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi", "context_pct", "context_total"],
+			rightSegments: [],
+			contextLine: "embedded",
+			sessionAccent: false,
+		});
+		const width = 8;
+		const content = stripAnsi([component.getTopBorder(width).content, ...component.render(width)].join("\n"));
+		expect(content).toContain("0%");
+		expect(component.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
+	});
+});
+
 describe("overflow: box alignment under non-standalone render", () => {
 	it("aligns every overflow row to the editor content width via leftInset", () => {
 		const tmpDir = fs.mkdtempSync(
@@ -355,7 +372,9 @@ describe("overflow: box alignment under non-standalone render", () => {
 		);
 		setProjectDir(tmpDir);
 		try {
-			const component = new StatusLineComponent(createStatusLineSession("align", "x".repeat(100)), statusLineHost);
+			const component = statusLines.track(
+				new StatusLineComponent(createStatusLineSession("align", "x".repeat(100)), statusLineHost),
+			);
 			component.updateSettings({
 				preset: "custom",
 				leftSegments: ["pi"],
@@ -393,9 +412,8 @@ describe("overflow: box alignment under non-standalone render", () => {
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-overflow-cjk-宽字符目录名-"));
 		setProjectDir(tmpDir);
 		try {
-			const component = new StatusLineComponent(
-				createStatusLineSession("会话名-セッション-🙂", "列".repeat(60)),
-				statusLineHost,
+			const component = statusLines.track(
+				new StatusLineComponent(createStatusLineSession("会话名-セッション-🙂", "列".repeat(60)), statusLineHost),
 			);
 			component.updateSettings({
 				preset: "custom",
@@ -423,7 +441,7 @@ describe("overflow: box alignment under non-standalone render", () => {
 	});
 
 	it("reopens text color before plain overflow parts and after separators", () => {
-		const component = new StatusLineComponent(createStatusLineSession("ansi"), statusLineHost);
+		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("ansi"), statusLineHost));
 		component.updateSettings({
 			preset: "custom",
 			leftSegments: ["pi"],
@@ -452,9 +470,8 @@ describe("overflow: box alignment under non-standalone render", () => {
 
 describe("overflow: automatic row wrapping", () => {
 	it("preserves every visible full-preset segment while adapting to width", () => {
-		const component = new StatusLineComponent(
-			createStatusLineSession("session-marker", "model-marker"),
-			statusLineHost,
+		const component = statusLines.track(
+			new StatusLineComponent(createStatusLineSession("session-marker", "model-marker"), statusLineHost),
 		);
 		component.updateSettings({
 			preset: "full",

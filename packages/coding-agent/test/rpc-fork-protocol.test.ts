@@ -30,7 +30,6 @@ describe("fork protocol constants (4.0)", () => {
 });
 
 const makeForkContext = (overrides?: Partial<RpcForkContext>): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: () => {},
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message) => ({ id, type: "response", command, success: false, error: message }) as RpcResponse,
@@ -38,7 +37,7 @@ const makeForkContext = (overrides?: Partial<RpcForkContext>): RpcForkContext =>
 });
 
 describe("RpcForkHost gating (4.0)", () => {
-	test("inactive host never dispatches commands, frames, or disposers", async () => {
+	test("inactive host gates commands and frames but still disposes captured resources", async () => {
 		const host = new RpcForkHost(makeForkContext());
 		let commandRan = false;
 		let disposerReason: string | undefined;
@@ -55,7 +54,7 @@ describe("RpcForkHost gating (4.0)", () => {
 		expect(host.handleControlFrame({ type: "permission_response", id: "x" })).toBe(false);
 		host.dispose("client gone");
 		expect(commandRan).toBe(false);
-		expect(disposerReason).toBeUndefined();
+		expect(disposerReason).toBe("client gone");
 	});
 
 	test("activated host dispatches registered commands and consumes frames", async () => {

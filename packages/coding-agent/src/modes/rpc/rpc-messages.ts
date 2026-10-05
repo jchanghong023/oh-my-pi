@@ -27,6 +27,8 @@ export interface RpcMessageSnapshot {
 	sessionId: string;
 	leafId: string | null;
 	messageCount: number;
+	/** Optional content revision for snapshots whose leaf and length can stay unchanged. */
+	revision?: string;
 }
 
 export interface RpcMessagesPage {
@@ -75,7 +77,7 @@ function decodeCursor(cursor: string): RpcMessageCursorPayload {
 		throw new Error("Invalid RPC message cursor");
 	}
 	if (!isRecord(value)) throw new Error("Invalid RPC message cursor");
-	const { version, sessionId, leafId, messageCount, offset, order } = value;
+	const { version, sessionId, leafId, messageCount, offset, order, revision } = value;
 	if (
 		version !== 1 ||
 		typeof sessionId !== "string" ||
@@ -89,17 +91,27 @@ function decodeCursor(cursor: string): RpcMessageCursorPayload {
 		!Number.isSafeInteger(offset) ||
 		offset < 0 ||
 		offset > messageCount ||
-		!(order === undefined || order === "desc")
+		!(order === undefined || order === "desc") ||
+		!(revision === undefined || (typeof revision === "string" && revision.length > 0 && revision.length <= 256))
 	)
 		throw new Error("Invalid RPC message cursor");
-	return { version, sessionId, leafId, messageCount, offset, ...(order === "desc" ? { order: "desc" as const } : {}) };
+	return {
+		version,
+		sessionId,
+		leafId,
+		messageCount,
+		offset,
+		...(order === "desc" ? { order: "desc" as const } : {}),
+		...(revision === undefined ? {} : { revision }),
+	};
 }
 
 function sameSnapshot(cursor: RpcMessageCursorPayload, snapshot: RpcMessageSnapshot): boolean {
 	return (
 		cursor.sessionId === snapshot.sessionId &&
 		cursor.leafId === snapshot.leafId &&
-		cursor.messageCount === snapshot.messageCount
+		cursor.messageCount === snapshot.messageCount &&
+		cursor.revision === snapshot.revision
 	);
 }
 
@@ -119,6 +131,8 @@ export function pageRpcMessages(
 	const limit = options.limit ?? DEFAULT_RPC_MESSAGE_PAGE_LIMIT;
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RPC_MESSAGE_PAGE_LIMIT)
 		throw new Error(`RPC message page limit must be between 1 and ${MAX_RPC_MESSAGE_PAGE_LIMIT}`);
+	if (options.order !== undefined && options.order !== "asc" && options.order !== "desc")
+		throw new Error("RPC message page order must be asc or desc");
 	if (options.before !== undefined && options.after !== undefined)
 		throw new Error("RPC message page accepts only one of before/after");
 	if ((options.before !== undefined || options.after !== undefined) && options.cursor !== undefined)
@@ -158,7 +172,7 @@ export function pageRpcMessages(
 			order = "desc";
 		}
 		if (order === "desc") {
-			windowEnd = offset === 0 ? messages.length : offset;
+			windowEnd = options.cursor === undefined ? messages.length : offset;
 			windowStart = Math.max(0, windowEnd - limit);
 		} else {
 			windowStart = offset;

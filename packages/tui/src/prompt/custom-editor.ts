@@ -12,7 +12,7 @@ import { addKeyAliases, canonicalKeyId, getKeybindings } from "../keybindings";
 import { type KeyId, parseKey, parseKittySequence } from "../keys";
 import { SpaceHoldGesture } from "../space-hold";
 import { type Component, TUI } from "../tui";
-import type { AppKeybinding } from "../app-keybindings";
+import { KEYBINDINGS, type AppKeybinding } from "../app-keybindings";
 import { formatKeyHint } from "../key-hint-format";
 import { MAIN_AGENT_ID } from "../overlays/agent-hub-types";
 import { compact, keyed, node, row, span } from "../native/describe";
@@ -109,29 +109,28 @@ type ConfigurableEditorAction = Extract<
 	| "app.clipboard.copyPrompt"
 >;
 
-/**
- * Editor-surface mirror of the app keybinding defaults. The fork swaps two of
- * these (`app.thinking.cycle`, `app.model.selectTemporary`); it is exported so
- * the fork keybinding test can pin the mirror against upstream-rewrite drift —
- * keep it in sync with `app-keybindings.ts` KEYBINDINGS.
- */
-export const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
-	"app.interrupt": ["escape"],
-	"app.clear": ["ctrl+c"],
-	"app.exit": ["ctrl+d"],
-	"app.suspend": ["ctrl+z"],
-	"app.display.reset": ["alt+l"],
-	"app.thinking.cycle": ["shift+f1"],
-	"app.model.cycleForward": ["ctrl+p"],
-	"app.model.cycleBackward": ["shift+ctrl+p"],
-	"app.model.select": ["alt+m"],
-	"app.model.selectTemporary": ["ctrl+t"],
-	"app.message.dequeue": ["alt+up", "shift+up"],
-	"app.retry": ["f5", "alt+r"],
-	"app.clipboard.pasteImage": ["ctrl+v"],
-	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
-	"app.clipboard.copyPrompt": ["alt+shift+c"],
-};
+const CONFIGURABLE_EDITOR_ACTIONS: readonly ConfigurableEditorAction[] = [
+	"app.interrupt",
+	"app.clear",
+	"app.exit",
+	"app.suspend",
+	"app.display.reset",
+	"app.thinking.cycle",
+	"app.model.cycleForward",
+	"app.model.cycleBackward",
+	"app.model.select",
+	"app.model.selectTemporary",
+	"app.message.dequeue",
+	"app.retry",
+	"app.clipboard.pasteImage",
+	"app.clipboard.pasteTextRaw",
+	"app.clipboard.copyPrompt",
+];
+
+const DEFAULT_ACTION_KEYS = CONFIGURABLE_EDITOR_ACTIONS.map((action): [ConfigurableEditorAction, KeyId[]] => {
+	const keys = KEYBINDINGS[action].defaultKeys;
+	return [action, typeof keys === "string" ? [keys] : [...keys]];
+});
 
 function buildMatchKeys(keys: readonly KeyId[]): Set<string> {
 	const matchKeys = new Set<string>();
@@ -1353,13 +1352,10 @@ export class CustomEditor extends Editor {
 	 *  drained in FIFO order once the paste count returns to zero. */
 	#pendingInput: (string | Extract<NativeUiEvent, { type: "send" }>)[] = [];
 	#actionKeys = new Map<ConfigurableEditorAction, KeyId[]>(
-		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [action as ConfigurableEditorAction, [...keys]]),
+		DEFAULT_ACTION_KEYS.map(([action, keys]) => [action, [...keys]]),
 	);
 	#actionMatchKeys = new Map<ConfigurableEditorAction, Set<string>>(
-		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [
-			action as ConfigurableEditorAction,
-			buildMatchKeys(keys),
-		]),
+		DEFAULT_ACTION_KEYS.map(([action, keys]) => [action, buildMatchKeys(keys)]),
 	);
 	/** Union of every action's match keys: one probe in `handleInput` decides
 	 *  whether the per-action interception chain can match at all. */

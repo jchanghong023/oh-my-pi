@@ -1,134 +1,68 @@
 # Fork 工具参考
 
-> 本页合并 fork 新增的三个 Agent 工具文档：`hub`、`repo` 与 `wiki`。
+> 本页说明当前代理/进程协调入口，以及 fork 新增的 `repo`、`wiki` 只读查询工具。协调使用 `task`、`bash`、内部 URI 与 `wait`，不存在单独的 `hub` 工具。
 
 ---
 
-## hub
+## 进程与代理协调
 
-> 统一的代理协调界面：基于进程全局邮箱总线的对等消息传递、后台作业控制，以及对共享长时进程的监督。
+### 创建、查询与通信
 
-由原有的 `irc`、`job` 和 `launch` 工具合并而成；每组操作族保留其原有行为和渲染方式。
+| 操作 | 当前入口 | 边界 |
+| --- | --- | --- |
+| 创建子代理 | `task` 的 `tasks[]` | 任务结果自动投递；没有 `resume` 参数 |
+| 查询代理结果 | `read`：`agent://<id>` | 未提交时显示状态/进度；嵌套 ID 用点分隔，结果字段用 `/key/index` JSON 路径 |
+| 读取代理记录 | `read`：`history://<id>` | 只读会话记录；裸 `history://` 列已注册代理，不列未注册的持久顶层会话 |
+| 向代理发送消息 | `write`：`agent://<id>`，`content` 为正文 | 非阻塞；直接消息可唤醒暂挂代理；只能使用目录中真实身份 |
+| 广播 | `write`：`agent://all` | 仅广播；不把它当作结果读取或逐个恢复入口 |
+| 查看后台工作 | `read`：`proc://` / `proc://<id>` | 列作业/服务，或取状态与输出；不是启动入口 |
 
-### 源码
-- 入口：`packages/coding-agent/src/tools/hub/index.ts`（schema、`HubTool`、统一的 `wait`、渲染器分发）
-- 消息传递部分：`packages/coding-agent/src/tools/hub/messaging.ts`
-- 作业部分：`packages/coding-agent/src/tools/hub/jobs.ts`
-- 启动部分：`packages/coding-agent/src/tools/hub/launch.ts`
-- 共享类型：`packages/coding-agent/src/tools/hub/types.ts`
-- 面向模型的提示词：`packages/coding-agent/src/prompts/tools/hub.md`
-- 关键协作模块：
-  - `packages/coding-agent/src/irc/bus.ts` — 进程全局 `IrcBus`：每代理邮箱、投递、等待者匹配。
-  - `packages/coding-agent/src/registry/agent-registry.ts` — 进程全局代理目录与状态。
-  - `packages/coding-agent/src/registry/agent-lifecycle.ts` — 直接发送时对被暂挂接收者的唤醒。
-  - `packages/coding-agent/src/session/agent-session.ts` — `deliverIrcMessage(...)`：接收者侧注入与唤醒轮次。
-  - `packages/coding-agent/src/async/job-manager.ts` — 作业注册表、取消、投递抑制、自适应等待阶梯。
-  - `packages/coding-agent/src/launch/client.ts` / `broker.ts` / `presence.ts` / `protocol.ts` — 进程监督 broker。
-  - `packages/coding-agent/src/config/settings-schema.ts` — `irc.timeoutMs`（等待型发送）、`launch.enabled`。
+消息是真实旁注与后续轮次，运行中的代理会非中断性接收。收到消息、完成结果和后台通知后继续处理，不靠反复读取制造轮询。
 
-### 输入
+### 有限命令与长时服务
 
-| 字段 | 类型 | 是否必填 | 说明 |
-| --- | --- | --- | --- |
-| `op` | `"send" \| "wait" \| "inbox" \| "list" \| "jobs" \| "cancel" \| "start" \| "ps" \| "logs" \| "stop" \| "restart" \| "describe"` | 是 | 操作。 |
-| `to` | `string` | `send`（对等） | 接收方代理 id，或用于广播的 `"all"`。与 `name` 互斥。 |
-| `message` | `string` | `send`（对等） | 消息正文。修剪后为空会被拒绝。 |
-| `replyTo` | `string` | 否 | `send`：正在回复的消息 id。 |
-| `await` | `boolean` | 否 | 对等 `send`：投递后阻塞，直到该对等方发来的下一条消息到达。与 `to: "all"` 一起使用时无效。 |
-| `from` | `string` | 否 | `wait`：只接受来自此代理 id 的消息（纯消息等待）。 |
-| `ids` | `string[]` | 否 | `wait`：要监视的作业 id（省略 = 所有运行中作业）；`cancel`：要终止的作业 id（必填）。 |
-| `peek` | `boolean` | 否 | `inbox`：把消息留在进程全局总线邮箱中。请注意，当前实现仍会把已缓冲在活跃接收方会话上的消息抽取到本次结果中。 |
-| `name` | `string` | 进程操作 | 稳定的项目作用域启动名称（1-48 个字符）。在 `send`/`wait` 上，它会把该操作路由到进程 broker。 |
-| `application`, `args`, `env`, `cwd`, `pty`, `ready`, `restart`, `persist`, `detached` | — | `start` | 启动规格，与原有 `launch` 工具一致。 |
-| `lines`, `head`, `grep`, `follow`, `cursor` | — | `logs` | 日志窗口控制，未做改动。 |
-| `for`, `pattern` | — | `wait`（name） | 进程生命周期条件 / 输出正则。 |
-| `text`, `enter`, `keys`, `signal` | — | `send`（name） | 进程 stdin / 终端按键 / 信号。 |
-| `timeout` | `number` | 否 | `logs`/`stop`/带 `name` 的 `wait`：秒；默认 30（stop：5）。 |
+有限命令由 `bash` 执行；`async: true` 可推迟有限任务的结果，但仍保留默认命令截止时间。长任务需要明确的 `timeout`（`0` 禁用截止时间）。
 
-### 操作族与调度
-- **消息传递** — `send`（带 `to`）、`inbox`、`list`，以及带 `from` 的 `wait`。即发即忘的发送会返回投递回执（`injected`/`woken`/`revived`/`failed`）；直接发送可以唤醒被暂挂的代理，而广播只针对可见的活跃对等方，不会唤醒每一个被暂挂的代理。`await: true` 会在投递后等待一条回复。当异步执行被禁用时，忙碌的接收方可能会自动回复，而不是让等待中的发送者悬置。
-- **作业** — `wait`（裸调用或带 `ids`）、`cancel`、`jobs`。按所有者作用域的可见性、watch/unwatch 投递抑制、返回的完成结果上的 `acknowledgeDeliveries`、等待期间每 500 ms 的 `onUpdate` 快照，以及自适应等待窗口。`jobs` 是原有的作业列表快照，再加上没有运行中作业条目的运行中子代理列表。
-- **进程** — `start`、`ps`、`logs`、`stop`、`restart`、`describe`，以及携带 `name` 时的 `send`/`wait`。与原有 `launch` 工具的行为完全一致；`ps` 是 broker 的 `list`。参见下方的启动各节。
-
-同时带有 `to` 和 `name` 的 `send` 会因歧义被拒绝。`wait` 按目标路由：`name` → 进程等待；否则为统一的协调等待。
-
-### 统一的 `wait`
-一个阻塞原语。它解析作业分支（显式的 `ids`、按所有者作用域且被静默过滤，或调用者拥有的每一个运行中作业），并在会话能够向对等方发送消息时停放一个总线等待者，然后对以下各项竞速：
-- 每个被监视的运行中作业的 `job.promise`，
-- 第一条匹配的传入消息（给出 `from` 时按它过滤），
-- 自适应等待窗口（`manager.nextPollWaitMs(owner)`），
-- 工具调用中止信号。
-
-结果：
-- 消息胜出（即便是同时冲线：被总线等待者消费的消息绝不会丢失）→ 该消息会与原有 `irc wait` 完全一样地返回（`details.waited`），作业则继续运行；它们的结果仍会自行投递。
-- 作业完成或窗口耗尽 → 与原有 `job` 轮询完全一样的作业快照（`details.jobs`、`## Completed` / `## Still Running` 小节）。全部仍在运行的快照会被标记为 `useless`，并渲染为可被取代的等待帧，由下一次 `hub` 调用顶掉。
-- 没有作业分支：带对等方存活检测的纯消息等待（受同一个自适应窗口约束）；如果也没有运行中的对等方，则立即返回 `No running background jobs to wait for.`（若存在无作业的运行中代理列表，则一并返回）。
-- 显式 `ids` 未匹配到任何可见项 → `No matching jobs found for IDs: ...`，并带每个 id 的代理提示（`history://<id>`），绝不挂起。
-- 已缓冲在会话上的消息会在开始监视任何内容之前满足该等待。
-
-阶梯记账（`nextPollWaitMs` / `recordPollWaitEnd`）只在真正阻塞的路径上运行；立即返回不会改动梯级。
-
-### 输出
-- 消息传递与作业结果：单个文本块加上 `details: CoordinationDetails` — `{ op, from?, to?, receipts?, waited?, inbox?, peers?, jobs?, cancelled?, agents? }`。除作业操作的详情现在携带 `op`（`"wait" | "cancel" | "jobs"`）之外，形态与原有工具一致。
-- 进程结果：`details: LaunchToolDetails` — `{ op, daemon?, daemons?, cursor?, timedOut?, state?, terminalRows?, matched?, spec? }`，与原有 `launch` 工具一致（内部 `ps` 存储的是 broker 操作 `list`）。
-- 流式：监视作业的等待每 500 ms 发出带最新快照的 `onUpdate`；其他一切都是单次返回。
-
-### 可用性
-- 该工具始终注册（`loadMode: "essential"`）。
-- 消息传递操作需要 `AgentRegistry` 和调用方代理 id；否则返回 `Peer messaging is unavailable in this session.`（`isIrcEnabled` 仍控制对等代理列表的提示词小节：对每个子代理以及任何仍能生成子代理的会话都为 true）。
-- 作业操作需要 `session.asyncJobManager`；否则返回 `Async execution is disabled; no background jobs are available.`
-- 进程操作需要 `launch.enabled`；否则返回 `Process supervision is disabled (launch.enabled=false).`
-
-### 审批
-`hubApproval`（按调用）：`start`、`stop`、`restart` 以及发往进程的 `send` 是 `exec`；其余一切 — 消息传递、作业控制、`ps`/`logs`/`describe`/`wait` — 都是 `read`。
-
-### 启动与就绪（进程）
-`application` 和 `args` 是彼此独立的字段，因此调用方不需要 shell 引号：
+长时服务使用 `bash` 的唯一 `name`，不是旧的 `application`/`args` 或 `hub start`：
 
 ```json
 {
-  "op": "start",
+  "command": "bun run dev",
   "name": "web",
-  "application": "bun",
-  "args": ["run", "dev"],
   "ready": { "log": "Local:.*http", "port": 5173, "timeout": 30 }
 }
 ```
 
-默认值：`cwd` = 会话目录、`args: []`、`env: {}`、`pty: true`、`restart: "no"`、`persist: false`、`detached: false`，就绪超时 30 秒。`detached: true` 隐含 `persist`、强制 `pty: false`，并禁用 stdin。`ready.log` 是针对捕获输出的正则；`ready.port` 在 `ready.host`（默认 `127.0.0.1`）上探测 TCP；两者同时存在时，两者都必须通过。就绪超时会让进程继续运行并报告其状态。
+命名服务不同时传 `async` 或命令 `timeout`；`pty` 默认 `true`。`ready` 必须配合 `name`，至少给日志正则或端口；同时给两者时都需通过。端口探测默认主机 `127.0.0.1`，就绪等待默认 30 秒。就绪超时不等于进程退出，需读取其真实状态。
 
-名称在一个项目目录内稳定且唯一。活跃名称必须先停止或重启；启动一个已完成的名称会创建新的启动并轮转其先前的输出日志。
+### 服务输入、停止与生命周期
 
-### 日志、输入、信号（进程）
 ```json
-{"op":"logs","name":"web","grep":"error|warn","lines":50}
-{"op":"logs","name":"web","follow":true,"cursor":1842,"timeout":30}
-{"op":"send","name":"debugger","text":"breakpoint set --name main"}
-{"op":"send","name":"debugger","keys":["CTRL_C"]}
+{"path":"proc://web"}
+{"path":"proc://web","content":"help"}
+{"path":"proc://web","content":""}
+{"path":"proc://web/kill"}
+{"path":"proc://web/mode","content":"persist"}
 ```
-每条 logs 结果都会返回一个字节游标；`follow: true` 会等待，直到输出推进到超过该游标、进程退出或超时耗尽。broker 保留一份 25 MiB 的当前日志外加一份轮转日志。按键：`ENTER`、`TAB`、`ESCAPE`、`CTRL_C`、`CTRL_D`、方向键。信号：`SIGINT`、`SIGTERM`、`SIGHUP`、`SIGQUIT`、`SIGKILL`。输入在所有项目客户端之间是同一个共享流。
 
-### 跨实例生命周期（进程）
-与原有 `launch` 工具一致：第一个进程操作会在 `~/.omp/run/daemons/<project-hash>/` 下的私有 socket 上启动一个分离的 broker；项目中的每个 omp 实例共享名称、日志与状态。最后一个 omp 进程退出后，broker 会停止非持久化进程并退出。`persist: true` 选择不参与最后一个客户端的清理；重启策略（`no`/`on-failure`/`always`）使用有界指数退避，最长 30 秒。
+第一行给 `read`，其余给 `write`。写服务根 URI 发送 stdin，空字符串表示 Enter；作业或代理根 URI 不提供 stdin。`/kill` 取消作业/代理或停止服务，不需要 `content`。`/mode` 仅用于服务，值为 `persist`、`session` 或 `detached`；代理消息仍使用 `agent://`，不要写 `proc://` 冒充通信。
 
-### 限制与上限
-- 邮箱：每个代理 100 条消息（`MAILBOX_CAP`）；超出上限时丢弃最旧的消息。
-- 等待型发送：`irc.timeoutMs` 默认 `120_000`；`0` 表示禁用；负数/非有限值回退到默认值。
-- 消息/作业 `wait` 窗口：自适应阶梯 `[5s, 10s, 30s, 1m, 5m]`，每次背靠背等待上升一个梯级（按所有者），60 秒未等待后重置回最低梯级；没有按调用或设置的覆盖。
-- 作业保留 5 分钟；管理器最大运行数的回退值 15；`async.maxJobs` 限制在 1..100。
-- 启动名称 1-48 个字符；`ready.port` 1..65535；`logs`/`wait`/`stop` 超时上限为一小时。
+服务名称是项目作用域的共享身份，多个 omp 实例看到同一进程和输入流。模式决定客户端结束后是否保留服务；停止和更改模式是实际生命周期操作，不是只读查看。
 
-### 错误
-- 大多数校验/可用性失败都是带 `isError: true` 的文本结果：消息传递不可用、缺少 `to`/`message`、向自己发送（`Cannot send a message to yourself.`）、`await` 配合 `to:"all"`、同一次发送同时带 `to`+`name`、`cancel` 缺少 `ids`，以及 launch 被禁用。异步被禁用时的 `jobs`/`cancel` 响应是个例外：它返回 `Async execution is disabled; no background jobs are available.` 以及空作业列表，且不带 `isError` 标志。
-- 启动校验（缺少 `name`/`application`、`ready.port` 非法、不支持的键）会抛出 `ToolError`，与之前完全一致。
-- `wait` 超时是正常结果（`waited: null` 或被标记为 `useless` 的全运行快照），绝不是错误。
-- 每个接收方的投递失败会以 `failed` 回执呈现；只有当什么也没投递成功时，`send` 才是 `isError`。
+### `wait` 的所有权
 
-### 备注
-- IRC 总线、代理注册表、作业管理器和启动 broker 都是未改动的子系统；合并的只是工具界面。
-- 运行中的接收方仍会以非中断性旁注的形式收到消息注入（`irc:incoming` 自定义消息、`prompts/system/irc-incoming.md`）；回复是真实的轮次。
-- 向被暂挂的代理发送消息会唤醒它 — 这是唯一的恢复原语；task 工具没有 `resume` 参数。
-- TUI 渲染按各部分保留：消息卡片（`IRC ➤ / ⟵` 头）、作业等待帧（可被取代的微光行）和启动帧的渲染与合并前的工具逐字节一致；`hub` 渲染器只负责分发。
+`wait` 的业务参数是空对象 `{}`。它只阻塞调用方启动的后台作业与服务：首个完成、消息、工具中断或 30 分钟安全上限都会使其返回，未完成结果仍会按正常路径自动投递。
+
+没有自己启动且仍运行的工作，也没有待交付完成结果时，调用失败并说明无对象可等待；不能仅因为另一个代理还在运行就等待它。已有可做的工作时继续执行，不用 `wait` 停放在阶段边界。旧的 `ids`、`from`、`await`、按调用超时与自适应等待阶梯不是当前工具参数。
+
+### 源码与可用性
+
+- `packages/coding-agent/src/tools/wait.ts`：所有权、消息与完成通知竞速。
+- `packages/coding-agent/src/internal-urls/agent-protocol.ts`、`history-protocol.ts`：结果、通信与只读记录。
+- `packages/coding-agent/src/internal-urls/proc-protocol.ts`：作业/服务状态与写操作。
+- `packages/coding-agent/src/prompts/tools/bash.md`、`prompts/internal-urls/proc.md`：命令和命名服务契约。
+- `launch.enabled=false` 禁用服务监督，不会伪造可用服务；代理通信需要注册目录及发送者身份，后台作业能力依当前会话设置。
+
 ---
 
 ## repo
@@ -140,6 +74,7 @@
 - 索引根目录是规范化后的 Git 工作树根目录；非 Git 目录则使用规范化后的会话工作目录。每个根目录在用户的 agent 目录下有独立的 SQLite 索引（`repo/<根目录的 SHA-256>.db`），不同工作树、非 Git 目录之间不共用。`/repo` 在首次建立索引前显示实际根目录；不会自动首次建库，也没有 `omp repo` CLI 命令组。
 - 在交互式 TUI 中打开 `/repo`：`b` 建立尚不存在的索引（按 `y` 确认），`u` 对已有索引执行全量范围核对并更新，`r` 重建（按 `y` 确认），`d` 只删除索引（按 `y` 确认），`c` 取消正在运行的索引操作，`Esc` 关闭面板。操作期间按 `Esc` 会询问是否取消并关闭；删除期间则询问是否在删除完成后关闭。确认界面按 `n` 或 `Esc` 可放弃。面板显示进度、失败项、覆盖状态与上次完整核对时间。
 - 枚举遵守现有文件搜索的忽略规则。符号链接、超过 2 MiB 的文件、二进制或非 UTF-8 文件以及不可读文件会被排除或报告。索引保存文件正文、路径、分类和 Python 模块／类／函数／方法的快照，而不是实时源码。全量核对会重新枚举并读取整个范围，可发现未跟踪文件以及大小和修改时间不变的内容变化。更新或重建失败／取消时，已有的可用代仍保留；删除索引不删除源码。
+- 已保存路径以 `/` 表示实际目录分隔，POSIX 文件名中的字面反斜杠必须原样保留，不转成虚构目录；已知路径更新复用全量枚举的 glob 忽略规则，重命名同时核对旧、新原始路径。
 
 ### 输入
 
@@ -157,6 +92,7 @@
 ### 匹配与结果
 
 - 正文检索优先排列完整标识符／原文匹配（词边界完整匹配优先于子串），原句未命中时也可通过拆分出的词元召回文件。短于三个 Unicode 码点的查询回退到索引正文子串检索。标点和引号不是正则表达式操作符，也没有需要学习的查询语法；大小写匹配使用 JavaScript 的 Unicode `toLowerCase()`，而非依地区设置变化的规则。符号检索按 Python 名称和限定名称的子串匹配，精确名称优先。结果给出相对路径、分类、原始行号范围，以及有长度上限的正文片段或符号类型／名称／限定名称／签名。
+- Python 符号保留完整的多行／带装饰器签名（仍受结果字段预算限制）；模块范围止于实际最后一行，不因末尾换行多出虚构 EOF 行；解析失败不得残留上一内容的旧符号。
 - 每次返回一页结果，并附覆盖状态和警告。出现 `Next cursor` 时可继续翻页；令牌绑定索引代，更新后若令牌过期须从第一页重查。无效或不匹配的令牌会报错，不会悄悄跳页。单个字段（包括路径、片段和签名）可能截断；`Fields truncated` 标明受影响字段，被截断的路径不一定能用于定位。
 - `status` 返回索引是否存在、代号、文件／符号数量、已知待处理路径、失败／排除项、不确定状态与上次完整核对时间，但不检查所有源码。处理已知路径和核对完整范围是不同的操作：`search`／`symbol` 在检索前先处理已知修改路径，`u` 则重新枚举、核对整棵目录。覆盖状态区分完整／不完整、已核对／未核对；成功的工具编辑可自动更新已知路径，外部命令或未观测到的修改仍可能使完整范围处于未核对状态，需在面板按 `u` 核对。Python 解析错误时保留已索引的正文，删除过期符号并报告失败。索引缺失、零命中、覆盖不完整和错误是不同状态；命中或未命中均不能证明当前源码内容或全局不存在。
 
@@ -200,8 +136,8 @@
 - 单次返回结果；`content[0].text` 是由命中章节拼成的一页 Markdown。
 - 每个命中先渲染一行页头 `[n] <relative path>:<start>-<end> · <heading path> · sectionId=<id>`，随后是该章节的完整文本。
 - 页面开头给出命中总数，页脚报告有多少章节因体积被跳过、有多少重复命中被折叠。
-- 单页最多约 20,000 字符（在该语料上约合 10–12k token）与 200 个章节；最佳命中总是完整保留，即使它单独就超出预算。
-- 跨文档逐字重复的章节（长于约 200 字符）只出现一次；后续副本折叠为指针行。`#### Cell` 之类的结构标签会被跳过。标题即内容的章节以 "(heading only …)" 形式返回。
+- 正常页预算约 20,000 字符（在该语料上约合 10–12k token）与 200 个章节；最佳命中总是完整保留，正文或定位头超出可用预算时页脚说明 20,000 字符是目标而非硬上限。
+- 跨文档逐字重复的章节（长于约 200 字符）只出现一次；后续副本折叠为指针行。`#### Cell` 之类的结构标签会被跳过。标题即内容时，只有定位头已完整携带内容才省略正文，否则在 "(heading only)" 下保留完整索引 Markdown。
 - 该工具不流式输出更新。
 
 ### 流程
@@ -226,6 +162,6 @@
 - 匹配项完全不带正文文本：`Sections matching "<query>" carry no body text.`
 
 ### 备注
-- 语料是 `omp docs init` 导入时的一份快照：自那次导入之后被修改或新增的源文件不在其中。重新导入该目录即可纳入。
+- 语料是 `omp docs init` 导入时的一份快照：自那次导入之后被修改或新增的源文件不在其中。导入要求有效 UTF-8，支持 BOM 与 CRLF 并保留正确的原始字节/行定位；重新导入该目录即可纳入变动。
 - 语料由两个索引命令维护；`/wiki` 面板会列出已有索引并可发起这两个动作，而本工具只读。
-- 当旧版索引把整篇文档存成单个标题时，标题路径会被截断，因此页头不会消耗掉它们本应用来描述内容的页面预算。
+- 旧版索引的超长标题路径会被截断，这只限制定位头，不截断标题即正文的内容。`/wiki` 面板打开选择时的检索结果快照，不拿旧 sectionId 在重建后的代次重新定位。

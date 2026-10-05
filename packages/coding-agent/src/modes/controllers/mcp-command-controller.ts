@@ -389,7 +389,7 @@ type MCPSearchParsed = {
  * `#handleList()`) pass them in and skip the redundant re-read.
  */
 export async function collectMcpServerNames(
-	ctx: InteractiveModeContext,
+	ctx: Pick<InteractiveModeContext, "mcpManager">,
 	preloaded?: { userConfig: MCPConfigFile; projectConfig: MCPConfigFile },
 	includeDisabledOnly = true,
 	includeDisabledConfigured = true,

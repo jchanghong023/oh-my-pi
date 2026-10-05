@@ -47,7 +47,7 @@ import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
 import { cfgDefaultThinkingLevel, cfgProvidersFireworksTier } from "./settings";
-import { cfgDisabledProviders, cfgEnabledModels } from "../config/model-settings";
+import { cfgEnabledModels } from "../config/model-settings";
 
 /** Capabilities borrowed from the owning AgentSession. */
 export interface ModelControlsHost {
@@ -141,11 +141,9 @@ export class ModelControls {
 		return this.#autoResolvedLevel;
 	}
 
-	/** Models explicitly scoped to the session's cycle command, minus currently disabled providers. */
+	/** Models explicitly scoped to cycling, after current hard provider/model exclusions. */
 	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
-		const disabledProviders = cfgDisabledProviders.get(this.#host.settings);
-		if (disabledProviders.length === 0) return this.#scopedModels;
-		return this.#scopedModels.filter(scoped => !disabledProviders.includes(scoped.model.provider));
+		return this.#scopedModels.filter(scoped => this.#host.modelRegistry.isModelEnabled(scoped.model));
 	}
 
 	/**
@@ -309,7 +307,7 @@ export class ModelControls {
 	 * @returns The new model info, or undefined if only one model available
 	 */
 	async cycleModel(direction: "forward" | "backward" = "forward"): Promise<ModelCycleResult | undefined> {
-		if (this.scopedModels.length > 0) {
+		if (this.#scopedModels.length > 0) {
 			return this.#cycleScopedModel(direction);
 		}
 		return this.#cycleAvailableModel(direction);
@@ -487,13 +485,12 @@ export class ModelControls {
 	}
 
 	/**
-	 * Get all available models with valid API keys, filtered by `enabledModels` when configured.
+	 * Get authenticated models after configured positive selection and hard exclusions.
 	 * See {@link filterAvailableModelsByEnabledPatterns} for supported pattern forms and limitations.
 	 */
 	getAvailableModels(): Model[] {
 		const all = this.#host.modelRegistry.getAvailable();
 		const patterns = cfgEnabledModels.get(this.#host.settings);
-		if (!patterns || patterns.length === 0) return all;
 		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#host.settings);
 	}
 

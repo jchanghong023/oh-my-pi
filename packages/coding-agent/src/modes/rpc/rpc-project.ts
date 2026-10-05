@@ -21,22 +21,26 @@
  *   re-applied to every session (and to sessions created later).
  */
 import * as fs from "node:fs";
-import { getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { createHash, randomUUID } from "node:crypto";
+import { getAgentDir, isRecord, logger, normalizePathForComparison, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { ModelRegistry } from "../../config/model-registry";
+import { getRoleInfo } from "../../config/model-roles";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
+import type { MCPManager } from "../../mcp";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import { IrcBus } from "../../irc/bus";
-import { RpcHostToolBridge } from "./host-tools";
-import { RpcHostUriBridge } from "./host-uris";
+import { resolveToCwd } from "../../tools/path-utils";
+import { SessionManager } from "../../session/session-manager";
+import { selectRpcEntries } from "./rpc-compat";
+import { pageRpcMessages } from "./rpc-messages";
 import { RpcForkHost } from "./rpc-fork-host";
-import { RPC_SUPPORTED_PROTOCOL_VERSIONS, isNegotiableRpcProtocolVersion } from "./rpc-fork-types";
 import { RpcForkConfigController, type RpcForkServiceContext } from "./rpc-fork-config";
 import { RpcForkManageController } from "./rpc-fork-manage";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
-import { RpcCommandCatalogService } from "./rpc-project-commands";
+import { RPC_PROJECT_HOST_ACTIONS, RpcCommandCatalogService } from "./rpc-project-commands";
 import { RpcProjectModelRoleService } from "./rpc-project-models";
 import {
 	RPC_PROJECT_CAPABILITIES,
@@ -68,7 +72,7 @@ export interface RpcProjectModeOptions {
 	readonly modelRegistry: ModelRegistry;
 	readonly authStorage?: AuthStorage;
 	/** Factory creating one fresh AgentSession wired to this project. */
-	readonly createSession: () => Promise<RpcProjectCreatedSession>;
+	readonly createSession: (sessionManager?: SessionManager) => Promise<RpcProjectCreatedSession>;
 	readonly headless?: boolean;
 	readonly input?: ReadableStream<Uint8Array>;
 }
@@ -120,6 +124,16 @@ const PROJECT_LEVEL_COMMANDS = new Set<string>([
 	"control_subagent",
 ]);
 
+/** Read-only historical operations do not require or implicitly create a loaded session. */
+const SESSION_HISTORY_COMMANDS = new Set([
+	"get_messages",
+	"get_messages_page",
+	"get_entries",
+	"get_tree",
+	"get_branch_messages",
+	"get_last_assistant_text",
+]);
+
 /** Commands routed to a session host; must carry `sessionId` in project mode. */
 const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"prompt",
@@ -128,6 +142,10 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"remove_queued_message",
 	"promote_queued_message",
 	"predict_word_feedback",
+	"predict_word",
+	"set_ask_dialog",
+	"cancel_subagent",
+	"steer_subagent",
 	"abort",
 	"abort_and_prompt",
 	"new_session",
@@ -192,7 +210,13 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 ]);
 
 /** Side-channel frames whose id routes back to the issuing session. */
-const INTERACTION_REQUEST_TYPES = new Set(["extension_ui_request", "permission_request", "ask_request"]);
+const INTERACTION_REQUEST_TYPES = new Set([
+	"extension_ui_request",
+	"permission_request",
+	"ask_request",
+	"host_tool_call",
+	"host_uri_request",
+]);
 const INTERACTION_RESPONSE_TYPES = new Set([
 	"extension_ui_response",
 	"permission_response",
@@ -210,23 +234,25 @@ class RpcProjectHost {
 	readonly #skillsService: RpcProjectSkillService;
 	readonly #rolesService: RpcProjectModelRoleService;
 	readonly #subagentDirectory: RpcProjectSubagentDirectory;
-	readonly #hostToolBridge: RpcHostToolBridge;
-	readonly #hostUriBridge: RpcHostUriBridge;
+	#pendingHostUriSchemes: unknown[] | undefined;
 	readonly #configForkHost: RpcForkHost;
-	/** interaction/permission/ask request id → owning sessionId. */
-	readonly #interactions = new Map<string, string>();
+	/** Interaction identity → exact owning instance; never a global current session. */
+	readonly #interactions = new Map<string, { sessionId: string; sessionGeneration: string }>();
 	/** Host tool definitions to re-apply to sessions created later. */
 	#pendingHostTools: unknown[] | undefined;
-	/** Shared user-input ordering gate (upstream PR #13027): accept at frame
-	 * arrival, ordered arms run inside each session host. */
-	readonly inputGate = new RpcUserInputGate();
+	/** Input ordering and cancellation belong to one loaded session instance. */
+	readonly #inputGates = new Map<string, RpcUserInputGate>();
+	readonly #commandInputs = new WeakMap<object, RpcCommand & { sessionId?: string; sessionGeneration?: string }>();
+	readonly #mcpManagers = new Map<string, MCPManager>();
+	readonly #metadataUnsubscribers = new Map<string, () => void>();
+	readonly #staleSessions = new Set<string>();
 	#negotiatedV3 = false;
 	#disposed = false;
 
 	constructor(options: RpcProjectModeOptions, output: RpcOutput) {
 		this.#options = options;
 		this.#output = output;
-		this.#processInstanceId = `omp-${Date.now().toString(36)}-${process.pid.toString(36)}`;
+		this.#processInstanceId = `omp-${randomUUID()}`;
 		this.#container = new RpcProjectSessionContainer({
 			cwd: options.cwd,
 			sessionDir: options.sessionDir,
@@ -236,13 +262,28 @@ class RpcProjectHost {
 		this.#catalogService = new RpcCommandCatalogService({
 			cwd: options.cwd,
 			getSettings: () => options.settings,
+			getMcpManager: session => this.#mcpManagers.get((session as AgentSession).sessionId),
 		});
 		this.#skillsService = new RpcProjectSkillService({
 			cwd: options.cwd,
 			agentDir: getAgentDir(),
 			getSettings: () => options.settings,
 			refreshSessions: () => this.#refreshSessionsSkills(),
-			emit: frame => this.#emitProjectFrame(frame),
+			isSkillInUse: filePath =>
+				[...this.#sessionHosts.values()].some(
+					host =>
+						(host.session.isBusyForSnapshot ||
+							host.session.hasAdmittedSubmission ||
+							host.isWaitingInteraction()) &&
+						host.session.skills.some(
+							skill => normalizePathForComparison(skill.filePath) === normalizePathForComparison(filePath),
+						),
+				),
+			emit: frame => {
+				this.#emitProjectFrame(frame);
+				this.#catalogService.invalidate();
+				this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
+			},
 		});
 		this.#rolesService = new RpcProjectModelRoleService({
 			getSettings: () => options.settings,
@@ -256,10 +297,10 @@ class RpcProjectHost {
 				return registry ? registry.getSubagents() : [];
 			},
 			sendIrcMessage: async message => IrcBus.global().send(message),
-			projectSessionDir: options.sessionDir,
+			senderId: sessionId => this.#container.getLoaded(sessionId)?.session.getAgentId(),
 		});
-		this.#hostToolBridge = new RpcHostToolBridge(frame => output(frame));
-		this.#hostUriBridge = new RpcHostUriBridge(frame => output(frame));
+		// Host tool/URI definitions are project-wide; their request bridges are
+		// session-owned so calls and cancellation retain instance attribution.
 		// Project-level fork host answering config/manage commands at zero
 		// sessions. Its context carries a service projection, never a real
 		// AgentSession: nothing registered here touches context.session.
@@ -271,7 +312,6 @@ class RpcProjectHost {
 			agentDir: getAgentDir(),
 		};
 		this.#configForkHost = new RpcForkHost({
-			session: undefined as unknown as AgentSession,
 			emit: frame => this.#emitProjectFrame(frame),
 			success: (id, command, data) => this.#successResponse(id, command, data),
 			error: (id, command, message, code) => this.#errorResponse(id, command, message, code),
@@ -298,18 +338,52 @@ class RpcProjectHost {
 		for (const [, sessionHost] of this.#sessionHosts) sessionHost.forkHost.activate();
 	}
 
+	acceptInput(command: RpcCommand & { sessionId?: string; sessionGeneration?: string }): void {
+		if (!this.#negotiatedV3 || typeof command.sessionId !== "string") return;
+		const record = this.#container.getLoaded(command.sessionId);
+		if (!record || command.sessionGeneration !== record.sessionGeneration) return;
+		let input = command;
+		if (command.type === ("execute_command" as string)) {
+			const raw = command as unknown as Record<string, unknown>;
+			input = {
+				id: command.id,
+				type: "prompt",
+				message: typeof raw.text === "string" ? raw.text : "",
+				inputMode: "auto",
+				sessionId: record.sessionId,
+				sessionGeneration: record.sessionGeneration,
+			};
+			this.#commandInputs.set(command, input);
+		}
+		this.#inputGates.get(record.sessionId)?.accept(input);
+	}
+
 	/** Emit a project-level frame (no session stamp). */
 	#emitProjectFrame(frame: object): void {
-		if (this.#disposed) return;
+		if (this.#disposed || (!this.#negotiatedV3 && (!isRecord(frame) || frame.type !== "response"))) return;
 		this.#output({ ...(frame as Record<string, unknown>), processInstanceId: this.#processInstanceId });
 	}
 
 	/** Build + start the per-session host, wiring project stamps and shared bridges. */
 	async #attachSessionHost(record: RpcProjectSessionRecord, created: RpcProjectCreatedSession): Promise<void> {
+		const inputGate = new RpcUserInputGate();
+		this.#inputGates.set(record.sessionId, inputGate);
+		if (created.mcpManager) this.#mcpManagers.set(record.sessionId, created.mcpManager);
 		const sessionOutput: RpcOutput = frame => {
+			if (!this.#negotiatedV3) return;
 			if (isRecord(frame)) {
+				if (this.#sessionHosts.get(record.sessionId)?.session !== record.session) return;
+				const terminal = frame.type === "prompt_result" || frame.type === "notice" || frame.type === "response";
+				try {
+					this.#assertRecordIdentity(record);
+				} catch {
+					if (!terminal) return;
+				}
 				if (INTERACTION_REQUEST_TYPES.has(String(frame.type)) && typeof frame.id === "string" && frame.id) {
-					this.#interactions.set(frame.id, record.sessionId);
+					this.#interactions.set(frame.id, {
+						sessionId: record.sessionId,
+						sessionGeneration: record.sessionGeneration,
+					});
 				}
 				this.#output({
 					...frame,
@@ -317,6 +391,18 @@ class RpcProjectHost {
 					sessionId: record.sessionId,
 					sessionGeneration: record.sessionGeneration,
 				});
+				if (
+					[
+						"agent_start",
+						"agent_end",
+						"message_end",
+						"model_changed",
+						"thinking_level_changed",
+						"prompt_result",
+					].includes(String(frame.type)) ||
+					INTERACTION_REQUEST_TYPES.has(String(frame.type))
+				)
+					this.#container.notifyChanged();
 				return;
 			}
 			this.#output(frame);
@@ -328,30 +414,60 @@ class RpcProjectHost {
 			headless: this.#options.headless,
 			setToolUIContext: created.setToolUIContext as (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 			projectMode: true,
-			sharedBridges: { hostToolBridge: this.#hostToolBridge, hostUriBridge: this.#hostUriBridge },
-			inputGate: this.inputGate,
-		});
-		if (this.#negotiatedV3) sessionHost.forkHost.activate();
-		await sessionHost.initializeExtensions();
-		await sessionHost.start();
-		if (this.#pendingHostTools) {
-			try {
-				const tools = normalizeHostToolDefinitions(this.#pendingHostTools as never);
-				const rpcTools = this.#hostToolBridge.setTools(tools);
-				await record.session.refreshRpcHostTools(rpcTools);
-			} catch (error) {
-				console.error(`[rpc-project] failed to apply host tools to session ${record.sessionId}:`, error);
-			}
-		}
-		created.setHost({
-			get isStreaming() {
-				return record.session.isStreaming;
-			},
-			hasPendingAsyncWork: () => record.session.hasPendingAsyncWork(),
-			isWaitingInteraction: () => sessionHost.isWaitingInteraction(),
-			dispose: reason => sessionHost.dispose(reason),
+			inputGate,
 		});
 		this.#sessionHosts.set(record.sessionId, sessionHost);
+		try {
+			// Bind real teardown ownership before startup can await client interaction.
+			created.setHost?.({
+				get isStreaming() {
+					return record.session.isStreaming;
+				},
+				hasPendingAsyncWork: () => record.session.isBusyForSnapshot || record.session.hasAdmittedSubmission,
+				isWaitingInteraction: () => sessionHost.isWaitingInteraction(),
+				dispose: reason => sessionHost.dispose(reason),
+			});
+			if (this.#negotiatedV3) sessionHost.forkHost.activate();
+			this.#metadataUnsubscribers.set(
+				record.sessionId,
+				record.session.subscribeCommandMetadataChanged(() => {
+					if (
+						this.#disposed ||
+						this.#container.get(record.sessionId) !== record ||
+						this.#staleSessions.has(record.sessionId)
+					)
+						return;
+					this.#catalogService.invalidate();
+					this.#emitProjectFrame({
+						type: "command_catalog_changed",
+						revision: this.#catalogService.revision,
+						sessionId: record.sessionId,
+						sessionGeneration: record.sessionGeneration,
+					});
+				}),
+			);
+			if (this.#pendingHostTools) {
+				const tools = normalizeHostToolDefinitions(this.#pendingHostTools as never);
+				const rpcTools = sessionHost.hostToolBridge.setTools(tools);
+				await record.session.refreshRpcHostTools(rpcTools);
+				this.#assertRecordIdentity(record);
+			}
+			if (this.#pendingHostUriSchemes) sessionHost.hostUriBridge.setSchemes(this.#pendingHostUriSchemes as never);
+			await sessionHost.initializeExtensions();
+			this.#assertRecordIdentity(record);
+			await sessionHost.start();
+			this.#assertRecordIdentity(record);
+		} catch (error) {
+			await sessionHost.dispose("session_attachment_failed").catch(cleanup => {
+				logger.error("RPC attachment cleanup failed", { sessionId: record.sessionId, error: String(cleanup) });
+			});
+			this.#metadataUnsubscribers.get(record.sessionId)?.();
+			this.#metadataUnsubscribers.delete(record.sessionId);
+			this.#sessionHosts.delete(record.sessionId);
+			this.#inputGates.delete(record.sessionId);
+			this.#mcpManagers.delete(record.sessionId);
+			throw error;
+		}
 	}
 
 	readonly #sessionHosts = new Map<string, RpcSessionHost>();
@@ -363,13 +479,30 @@ class RpcProjectHost {
 
 	/** Attach the session host exactly once per session id. */
 	async #ensureAttached(record: RpcProjectSessionRecord, created?: RpcProjectCreatedSession): Promise<void> {
-		if (this.#sessionHosts.has(record.sessionId)) return;
 		const pending = this.#attaching.get(record.sessionId);
 		if (pending) return pending;
-		if (!created) return;
-		const task = this.#attachSessionHost(record, created).finally(() => {
-			this.#attaching.delete(record.sessionId);
-		});
+		if (this.#sessionHosts.has(record.sessionId)) return;
+		if (!created) throw Object.assign(new Error("Session host is not attached"), { code: "busy" });
+		record.state = "loading";
+		record.busy = true;
+		const task = this.#attachSessionHost(record, created)
+			.then(() => {
+				if (this.#disposed || this.#container.get(record.sessionId) !== record) {
+					throw Object.assign(new Error("Session attachment was cancelled"), { code: "busy" });
+				}
+				record.state = "loaded";
+			})
+			.catch(error => {
+				// Rollback can close the failed construction; no attached host is
+				// left, and this record is never returned as a loaded instance.
+				if (this.#container.get(record.sessionId) === record && !this.#staleSessions.has(record.sessionId))
+					record.state = "loaded";
+				throw error;
+			})
+			.finally(() => {
+				record.busy = false;
+				this.#attaching.delete(record.sessionId);
+			});
 		this.#attaching.set(record.sessionId, task);
 		await task;
 	}
@@ -378,7 +511,7 @@ class RpcProjectHost {
 	async #prefetchSessionFile(sessionId: string): Promise<boolean> {
 		const loaded = this.#container.get(sessionId);
 		if (loaded) return true;
-		if (this.#sessionFileCache.has(sessionId)) return true;
+		this.#sessionFileCache.delete(sessionId);
 		const file = await this.#container.findSessionFileById(sessionId);
 		if (!file) return false;
 		this.#sessionFileCache.set(sessionId, file);
@@ -394,28 +527,33 @@ class RpcProjectHost {
 		record: RpcProjectSessionRecord;
 		summary: RpcProjectSessionSummary;
 	}> {
-		const created = await this.#options.createSession();
-		let record: RpcProjectSessionRecord;
-		try {
-			record = await this.#container.adoptCreated(created, options);
-		} catch (error) {
-			await created.session.dispose().catch(() => {});
-			throw error;
+		if (options.name !== undefined && !options.name.trim()) {
+			throw Object.assign(new Error("Session name cannot be empty"), { code: "invalid_params" });
 		}
-		if (options.model) {
-			// Temporary per-session model choice: never persisted (R6).
+		const match =
+			options.model &&
+			this.#options.modelRegistry
+				.getAvailable("all")
+				.find(model => model.provider === options.model?.provider && model.id === options.model?.modelId);
+		if (options.model && !match)
+			throw Object.assign(new Error("Requested model is unavailable"), { code: "invalid_params" });
+		const created = await this.#options.createSession();
+		if (match) {
 			try {
-				const models = record.session.getAvailableModels();
-				const match = models.find(
-					model => model.provider === options.model?.provider && model.id === options.model?.modelId,
-				);
-				if (match) await record.session.setModelTemporary(match);
-			} catch {
-				// Invalid model for this session: creation still succeeds; the
-				// first prompt will surface the model error honestly.
+				await created.session.setModelTemporary(match);
+			} catch (error) {
+				await created.session.dispose();
+				throw error;
 			}
 		}
-		await this.#ensureAttached(record, created);
+		const record = await this.#container.adoptCreated(created, options);
+		try {
+			await this.#ensureAttached(record, created);
+		} catch (error) {
+			await this.#container.delete(record.sessionId, { cancelRunning: true });
+			throw error;
+		}
+		this.#assertRecordIdentity(record);
 		const summary = this.#container.buildSummary(record);
 		return { record, summary };
 	}
@@ -426,20 +564,186 @@ class RpcProjectHost {
 	): Promise<{ record: RpcProjectSessionRecord; summary: RpcProjectSessionSummary }> {
 		const existing = this.#container.get(sessionId);
 		if (existing && this.#sessionHosts.has(sessionId)) {
+			await this.#ensureAttached(existing);
+			if (existing.state !== "loaded" || existing.busy)
+				throw Object.assign(new Error("Session lifecycle is busy"), { code: "busy" });
+			this.#assertRecordIdentity(existing);
 			return { record: existing, summary: this.#container.buildSummary(existing) };
 		}
-		const { record, created } = await this.#container.resumeWithFactory(sessionId, () =>
-			this.#options.createSession(),
-		);
-		await this.#ensureAttached(record, created);
+		const { record, created } = await this.#container.resumeWithFactory(sessionId, async () => {
+			const file = await this.#container.findSessionFileById(sessionId);
+			if (!file) throw Object.assign(new Error("Session no longer exists"), { code: "not_found" });
+			const manager = await SessionManager.open(file, this.#options.sessionDir, undefined, {
+				suppressBreadcrumb: true,
+				throwIfMissing: true,
+				initialCwd: this.#options.cwd,
+			});
+			if (
+				manager.getSessionId() !== sessionId ||
+				normalizePathForComparison(manager.getCwd()) !== normalizePathForComparison(this.#options.cwd)
+			) {
+				throw Object.assign(new Error("Session identity/project changed"), { code: "scope_not_allowed" });
+			}
+			return this.#options.createSession(manager);
+		});
+		try {
+			await this.#ensureAttached(record, created);
+		} catch (error) {
+			if (this.#container.get(record.sessionId) === record && record.state === "loaded") {
+				await this.#container.close(record.sessionId, { cancelRunning: true });
+			}
+			throw error;
+		}
+		this.#assertRecordIdentity(record);
 		return { record, summary: this.#container.buildSummary(record) };
 	}
 
 	/** Route a session-level command: strip project fields, check generation, delegate. */
+	async #createIndependentBranch(
+		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
+	): Promise<RpcResponse> {
+		const source = await this.#requireLoadedSession(command as unknown as Record<string, unknown>);
+		const host = this.#getSessionHost(source.sessionId)!;
+		const reason = command.type === "fork" ? "fork" : "branch";
+		const entryId = "entryId" in command ? command.entryId : undefined;
+		const selected = typeof entryId === "string" ? source.session.sessionManager.getEntry(entryId) : undefined;
+		if (reason === "branch" && (selected?.type !== "message" || selected.message.role !== "user")) {
+			return this.#errorResponse(command.id, command.type, "branch requires a valid user entryId", "invalid_params");
+		}
+		if (
+			reason === "fork" &&
+			entryId !== undefined &&
+			(typeof entryId !== "string" || !entryId || selected?.type !== "message")
+		) {
+			return this.#errorResponse(command.id, command.type, "fork entryId must identify a message", "invalid_params");
+		}
+		const assertIdle = (): void => {
+			this.#assertRecordIdentity(source);
+			if (
+				source.session.isBusyForSnapshot ||
+				source.session.hasAdmittedSubmission ||
+				source.session.hasPendingAsyncWork() ||
+				host.getRunState() !== "idle"
+			) {
+				throw Object.assign(new Error("A branch snapshot requires an idle source session"), { code: "busy" });
+			}
+		};
+		assertIdle();
+		const content =
+			selected?.type === "message" && selected.message.role === "user" ? selected.message.content : undefined;
+		const selectedText =
+			typeof content === "string"
+				? content
+				: (content
+						?.filter(part => part.type === "text")
+						.map(part => part.text)
+						.join("") ?? "");
+		const selectedImages = Array.isArray(content) ? content.filter(part => part.type === "image") : [];
+		const sourceFile = source.session.sessionFile;
+		if (!sourceFile)
+			return this.#errorResponse(command.id, command.type, "Source session is not persisted", "persistence_failed");
+		source.busy = true;
+		let manager: SessionManager | undefined;
+		let created: RpcProjectCreatedSession | undefined;
+		let transferred = false;
+		let record: RpcProjectSessionRecord | undefined;
+		try {
+			const hook = await source.session.extensionRunner?.emit({
+				type: "session_before_branch",
+				reason,
+				entryId: typeof entryId === "string" ? entryId : (source.session.sessionManager.getLeafId() ?? ""),
+			});
+			this.#assertRecordIdentity(source);
+			if (isRecord(hook) && hook.cancel === true) {
+				return this.#successResponse(command.id, command.type, { cancelled: true, selectedText, selectedImages });
+			}
+			await source.session.sessionManager.flush();
+			assertIdle();
+			if (reason === "fork" && entryId === undefined) {
+				manager = await SessionManager.forkFrom(
+					sourceFile,
+					this.#options.cwd,
+					this.#options.sessionDir,
+					undefined,
+					{
+						copyArtifacts: true,
+						requireStableSessionIdentity: true,
+					},
+				);
+				assertIdle();
+			} else {
+				const leafId = reason === "fork" ? source.session.getForkLeafId(entryId as string) : selected!.parentId;
+				if (leafId === null) {
+					manager = SessionManager.create(this.#options.cwd, this.#options.sessionDir);
+					manager.requireStableSessionIdentity();
+					await manager.newSession({ parentSession: sourceFile });
+					assertIdle();
+				} else {
+					// This reader owns no source writer. Mutate it only onto the
+					// new snapshot, never branch the original live manager.
+					manager = await SessionManager.open(sourceFile, this.#options.sessionDir, undefined, {
+						suppressBreadcrumb: true,
+						throwIfMissing: true,
+						initialCwd: this.#options.cwd,
+					});
+					assertIdle();
+					if (manager.getSessionId() !== source.sessionId)
+						throw Object.assign(new Error("Source changed while reading"), { code: "stale_session" });
+					manager.requireStableSessionIdentity();
+					manager.createBranchedSession(leafId, { copyArtifacts: true });
+				}
+			}
+			this.#assertRecordIdentity(source);
+			manager.requireStableSessionIdentity();
+			// Branching keeps the current runtime model, even when the selected
+			// historical prefix predates its last model-change entry.
+			if (source.session.model) manager.appendModelChange(source.session.model.provider, source.session.model.id);
+			manager.appendThinkingLevelChange(source.session.thinkingLevel, source.session.configuredThinkingLevel());
+			created = await this.#options.createSession(manager);
+			this.#assertRecordIdentity(source);
+			if (isRecord(hook) && hook.skipConversationRestore === true) {
+				created.session.agent.replaceMessages(source.session.agent.state.messages);
+			}
+			transferred = true;
+			record = await this.#container.adoptCreated(created);
+			await this.#ensureAttached(record, created);
+			this.#assertRecordIdentity(source);
+			this.#assertRecordIdentity(record);
+			await record.session.extensionRunner?.emit({
+				type: "session_branch",
+				reason,
+				previousSessionFile: sourceFile,
+			});
+			this.#assertRecordIdentity(source);
+			this.#assertRecordIdentity(record);
+			return this.#successResponse(command.id, command.type, {
+				...this.#container.buildSummary(record),
+				cancelled: false,
+				selectedText,
+				selectedImages,
+			});
+		} catch (error) {
+			if (created && !transferred) await created.session.dispose();
+			else if (!created && manager && manager.getSessionId() !== source.sessionId) await manager.close();
+			if (manager && manager.getSessionId() !== source.sessionId) {
+				await this.#container
+					.delete(record?.sessionId ?? manager.getSessionId(), { cancelRunning: true })
+					.catch(cleanup => {
+						logger.error("RPC branch rollback failed", { error: String(cleanup) });
+					});
+			}
+			throw error;
+		} finally {
+			source.busy = false;
+		}
+	}
+
 	async handleSessionCommand(
 		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
 	): Promise<RpcResponse> {
-		if (["new_session", "switch_session", "open_session", "branch", "fork"].includes(command.type)) {
+		this.#requireV3(command.id, command.type);
+		if (command.type === "branch" || command.type === "fork") return this.#createIndependentBranch(command);
+		if (["new_session", "switch_session", "open_session", "set_session_name"].includes(command.type)) {
 			return this.#errorResponse(
 				command.id,
 				command.type,
@@ -457,17 +761,38 @@ class RpcProjectHost {
 			);
 		}
 		const record = this.#container.get(sessionId);
+		if (record) this.#assertRecordIdentity(record);
+		if (SESSION_HISTORY_COMMANDS.has(command.type)) {
+			if (record?.state === "loaded" && this.#getSessionHost(sessionId)) {
+				return this.#getSessionHost(sessionId)!.handleCommand(command as RpcCommand);
+			}
+			return this.#readSavedHistory(command);
+		}
 		if (!record) {
-			return this.#errorResponse(command.id, command.type, `Unknown session: ${sessionId}`, "not_found");
+			const saved = await this.#container.findSessionFileById(sessionId);
+			return this.#errorResponse(
+				command.id,
+				command.type,
+				saved ? `Session not loaded: ${sessionId}` : `Unknown session: ${sessionId}`,
+				saved ? "session_not_loaded" : "not_found",
+			);
 		}
 		const host = this.#getSessionHost(sessionId);
 		if (!host) {
 			return this.#errorResponse(command.id, command.type, `Session not loaded: ${sessionId}`, "session_not_loaded");
 		}
-		if (record.state !== "loaded") {
+		if (record.state !== "loaded" || record.busy) {
 			return this.#errorResponse(command.id, command.type, `Session is ${record.state}: ${sessionId}`, "busy");
 		}
-		if (command.sessionGeneration !== undefined && command.sessionGeneration !== record.sessionGeneration) {
+		if (typeof command.sessionGeneration !== "string" || !command.sessionGeneration) {
+			return this.#errorResponse(
+				command.id,
+				command.type,
+				"This command requires sessionGeneration",
+				"invalid_params",
+			);
+		}
+		if (command.sessionGeneration !== record.sessionGeneration) {
 			return this.#errorResponse(
 				command.id,
 				command.type,
@@ -475,15 +800,31 @@ class RpcProjectHost {
 				"stale_session",
 			);
 		}
-		if (command.type === "prompt" && !host.session.isStreaming && this.#pendingSkillRefresh.has(sessionId)) {
-			await host.refreshSkills();
-			this.#pendingSkillRefresh.delete(sessionId);
+		if (
+			command.type === "prompt" &&
+			this.#pendingSkillRefresh.has(sessionId) &&
+			this.#canRefreshSkills(record, host)
+		) {
+			record.busy = true;
+			try {
+				await host.refreshSkills();
+				this.#assertRecordIdentity(record);
+				this.#pendingSkillRefresh.delete(sessionId);
+			} finally {
+				record.busy = false;
+			}
 		}
 		// The frame object is passed through as-is (routing fields included):
 		// RpcUserInputGate keys acceptance on object identity, so a rebuilt
 		// "stock" copy would never match and every ordered user input would
 		// be cancelled as stale. The session host ignores the extra fields.
-		return host.handleCommand(command as RpcCommand);
+		const response = await host.handleCommand(command as RpcCommand);
+		const cancelledInput =
+			host.isShutdownRequested() &&
+			["prompt", "abort_and_prompt", "steer", "follow_up"].includes(command.type) &&
+			record.session.sessionManager.getSessionId() === record.sessionId;
+		if (!cancelledInput) this.#assertRecordIdentity(record);
+		return response;
 	}
 
 	/** Answer a project-level command. Zero-session-safe unless stated otherwise. */
@@ -491,18 +832,17 @@ class RpcProjectHost {
 		const type = String(command.type);
 		const id = typeof command.id === "string" ? command.id : undefined;
 		const record = async (): Promise<RpcSessionHost | undefined> => {
-			const sessionId = command.sessionId;
-			if (typeof sessionId !== "string") return undefined;
-			return this.#getSessionHost(sessionId);
+			if (command.sessionId === undefined) return undefined;
+			const rec = await this.#requireLoadedSession(command);
+			return this.#getSessionHost(rec.sessionId);
 		};
 		switch (type) {
 			case "negotiate_protocol": {
-				const version = command.protocolVersion;
-				if (typeof version !== "number" || !isNegotiableRpcProtocolVersion(version)) {
-					return this.#errorResponse(id, type, `Unsupported RPC protocol version: ${String(version)}`);
+				if (command.protocolVersion !== 3) {
+					return this.#errorResponse(id, type, "Project mode requires protocol version 3", "unsupported");
 				}
-				if (version === 3) this.activateV3();
-				return this.#successResponse(id, type, { protocolVersion: version });
+				this.activateV3();
+				return this.#successResponse(id, type, { protocolVersion: 3, capabilities: RPC_PROJECT_CAPABILITIES });
 			}
 			case "create_session": {
 				this.#requireV3(id, type);
@@ -519,8 +859,17 @@ class RpcProjectHost {
 			}
 			case "list_sessions": {
 				this.#requireV3(id, type);
+				this.#checkOptional(command, "cursor", "string");
+				this.#checkOptional(command, "limit", "number");
+				if (
+					command.loadState !== undefined &&
+					command.loadState !== "loaded" &&
+					command.loadState !== "not_loaded"
+				) {
+					return this.#errorResponse(id, type, "Invalid loadState", "invalid_params");
+				}
 				const page = await this.#container.list({
-					cursor: typeof command.cursor === "number" ? command.cursor : undefined,
+					cursor: typeof command.cursor === "string" ? command.cursor : undefined,
 					limit: typeof command.limit === "number" ? command.limit : undefined,
 					loadState:
 						command.loadState === "loaded" || command.loadState === "not_loaded" ? command.loadState : undefined,
@@ -540,6 +889,8 @@ class RpcProjectHost {
 				const sessionId = command.sessionId;
 				if (typeof sessionId !== "string")
 					return this.#errorResponse(id, type, "close_session requires sessionId", "invalid_params");
+				await this.#requireLoadedSession(command);
+				this.#checkOptional(command, "cancelRunning", "boolean");
 				const result = await this.#closeSession(sessionId, command.cancelRunning === true);
 				return this.#successResponse(id, type, { sessionId, state: result.state, revision: result.revision });
 			}
@@ -551,6 +902,7 @@ class RpcProjectHost {
 					return this.#errorResponse(id, type, "rename_session requires sessionId", "invalid_params");
 				if (typeof name !== "string")
 					return this.#errorResponse(id, type, "rename_session requires name", "invalid_params");
+				this.#requireRevision(command);
 				const { summary } = await this.#container.rename(
 					sessionId,
 					name,
@@ -563,6 +915,9 @@ class RpcProjectHost {
 				const sessionId = command.sessionId;
 				if (typeof sessionId !== "string")
 					return this.#errorResponse(id, type, "delete_session requires sessionId", "invalid_params");
+				this.#requireRevision(command);
+				this.#checkOptional(command, "cancelRunning", "boolean");
+				if (this.#container.get(sessionId)) await this.#requireLoadedSession(command);
 				const result = await this.#deleteSession(
 					sessionId,
 					command.cancelRunning === true,
@@ -601,10 +956,24 @@ class RpcProjectHost {
 			case "list_skills": {
 				this.#requireV3(id, type);
 				const sessionHost = await record();
+				if (command.view !== "management" && command.view !== "effective") {
+					return this.#errorResponse(
+						id,
+						type,
+						"list_skills requires view management or effective",
+						"invalid_params",
+					);
+				}
+				if (command.view === "effective" && !sessionHost) {
+					return this.#errorResponse(id, type, "Effective skills require a loaded session", "invalid_params");
+				}
+				this.#checkOptional(command, "cursor", "string");
+				this.#checkOptional(command, "limit", "number");
 				const result = await this.#skillsService.list({
-					view: command.view === "effective" ? "effective" : "management",
+					view: command.view,
+					sessionId: sessionHost?.session.sessionId,
 					sessionSkills: sessionHost?.session.skills,
-					cursor: typeof command.cursor === "number" ? command.cursor : undefined,
+					cursor: command.cursor as string | undefined,
 					limit: typeof command.limit === "number" ? command.limit : undefined,
 				});
 				return this.#successResponse(id, type, result);
@@ -632,7 +1001,10 @@ class RpcProjectHost {
 			}
 			case "reload_skills": {
 				this.#requireV3(id, type);
-				const result = await this.#skillsService.reload(command.scope === "project" ? "project" : "user");
+				if (command.scope !== "project" && command.scope !== "user") {
+					return this.#errorResponse(id, type, "reload_skills requires scope user or project", "invalid_params");
+				}
+				const result = await this.#skillsService.reload(command.scope);
 				this.#catalogService.invalidate();
 				this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
 				return this.#successResponse(id, type, result);
@@ -640,9 +1012,21 @@ class RpcProjectHost {
 			case "set_skill_source_enabled":
 			case "set_skill_ignored": {
 				this.#requireV3(id, type);
+				this.#requireRevision(command);
+				if (command.scope !== "user")
+					return this.#errorResponse(
+						id,
+						type,
+						"Only user-scoped skill configuration writes are supported",
+						"scope_not_allowed",
+					);
 				const response = await this.#configForkHost.handleCommand(command as never);
 				if (response) {
-					this.#catalogService.invalidate();
+					if (response.success) {
+						this.#catalogService.invalidate();
+						this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
+						await this.#refreshSessionsSkills();
+					}
 					return response;
 				}
 				return this.#errorResponse(id, type, `Unknown command: ${type}`);
@@ -653,13 +1037,13 @@ class RpcProjectHost {
 				let sessionInfo:
 					| { sessionId: string; sessionGeneration: string; model?: { provider: string; modelId: string } }
 					| undefined;
-				if (typeof sessionId === "string") {
-					const rec = this.#container.get(sessionId);
-					const host = this.#getSessionHost(sessionId);
-					if (rec && host) {
+				if (sessionId !== undefined) {
+					const rec = await this.#requireLoadedSession(command);
+					const host = this.#getSessionHost(rec.sessionId);
+					if (host) {
 						const model = host.session.model;
 						sessionInfo = {
-							sessionId,
+							sessionId: rec.sessionId,
 							sessionGeneration: rec.sessionGeneration,
 							model: model ? { provider: model.provider, modelId: model.id } : undefined,
 						};
@@ -670,6 +1054,9 @@ class RpcProjectHost {
 			}
 			case "set_model_role": {
 				this.#requireV3(id, type);
+				if (command.scope !== "user")
+					return this.#errorResponse(id, type, 'Model roles require scope "user"', "scope_not_allowed");
+				this.#requireRevision(command);
 				const selectionRaw = command.selection;
 				type RoleSelection =
 					| { kind: "auto" }
@@ -685,6 +1072,7 @@ class RpcProjectHost {
 						typeof selectionRaw.model.provider === "string" &&
 						typeof selectionRaw.model.modelId === "string"
 					) {
+						this.#checkOptional(selectionRaw.model, "thinkingLevel", "string");
 						selection = {
 							kind: "model",
 							model: {
@@ -700,47 +1088,52 @@ class RpcProjectHost {
 				if (selection === undefined) {
 					return this.#errorResponse(id, type, "set_model_role requires a valid selection", "invalid_params");
 				}
-				if (command.scope !== "user") {
-					return this.#errorResponse(id, type, 'Model roles require scope "user"', "scope_not_allowed");
+				if (typeof command.roleId !== "string" || !command.roleId) {
+					return this.#errorResponse(id, type, "roleId is required", "invalid_params");
 				}
 				const result = await this.#rolesService.setRole({
-					roleId: String(command.roleId ?? ""),
+					roleId: command.roleId,
 					scope: "user",
 					selection,
-					expectedRevision: typeof command.expectedRevision === "string" ? command.expectedRevision : undefined,
+					expectedRevision: command.expectedRevision as string,
 				});
 				return this.#successResponse(id, type, result);
 			}
 			case "get_available_models": {
 				this.#requireV3(id, type);
-				// With a session: delegate for the session's filtered list.
 				const sessionHost = await record();
-				if (sessionHost) {
-					// Identity-preserving delegation (see handleSessionCommand).
-					return sessionHost.handleCommand(command as RpcCommand);
-				}
 				await this.#options.modelRegistry.awaitBackgroundRefresh();
-				return this.#successResponse(id, type, { models: this.#options.modelRegistry.getAvailable() });
+				let models = sessionHost
+					? sessionHost.session.getAvailableModels()
+					: this.#options.modelRegistry.getAvailable("all");
+				if (command.roleId !== undefined) {
+					if (
+						typeof command.roleId !== "string" ||
+						!command.roleId ||
+						!(await this.#rolesService.listRoles()).roles.some(role => role.roleId === command.roleId)
+					) {
+						return this.#errorResponse(id, type, "Unknown roleId", "invalid_params");
+					}
+					models = models.filter(getRoleInfo(command.roleId, this.#options.settings).accepts);
+				}
+				return this.#successResponse(id, type, { models });
 			}
 			case "set_host_tools": {
 				this.#requireV3(id, type);
 				const tools = Array.isArray(command.tools) ? command.tools : [];
 				const normalized = normalizeHostToolDefinitions(tools as never);
 				this.#pendingHostTools = tools;
-				const rpcTools = this.#hostToolBridge.setTools(normalized);
-				for (const [sessionId, host] of this.#sessionHosts) {
-					try {
-						await host.session.refreshRpcHostTools(rpcTools);
-					} catch (error) {
-						console.error(`[rpc-project] failed to apply host tools to session ${sessionId}:`, error);
-					}
+				for (const [, host] of this.#sessionHosts) {
+					const rpcTools = host.hostToolBridge.setTools(normalized);
+					await host.session.refreshRpcHostTools(rpcTools);
 				}
 				return this.#successResponse(id, type, { toolNames: normalized.map(tool => tool.name) });
 			}
 			case "set_host_uri_schemes": {
 				this.#requireV3(id, type);
 				const schemes = Array.isArray(command.schemes) ? command.schemes : [];
-				this.#hostUriBridge.setSchemes(schemes as never);
+				this.#pendingHostUriSchemes = schemes;
+				for (const [, host] of this.#sessionHosts) host.hostUriBridge.setSchemes(schemes as never);
 				return this.#successResponse(id, type, {
 					schemes: schemes.map(scheme => (isRecord(scheme) ? String(scheme.scheme) : String(scheme))),
 				});
@@ -748,6 +1141,12 @@ class RpcProjectHost {
 			case "get_subagents": {
 				this.#requireV3(id, type);
 				const sessionId = command.sessionId;
+				this.#checkOptional(command, "status", "string");
+				this.#checkOptional(command, "cursor", "string");
+				this.#checkOptional(command, "limit", "number");
+				if (command.status !== undefined && command.status !== "running" && command.status !== "finished") {
+					return this.#errorResponse(id, type, "Invalid subagent status", "invalid_params");
+				}
 				if (typeof sessionId !== "string")
 					return this.#errorResponse(
 						id,
@@ -760,7 +1159,7 @@ class RpcProjectHost {
 				}
 				const result = await this.#subagentDirectory.list(sessionId, {
 					status: command.status === "running" || command.status === "finished" ? command.status : undefined,
-					cursor: command.cursor as number | string | undefined,
+					cursor: command.cursor as string | undefined,
 					limit: typeof command.limit === "number" ? command.limit : undefined,
 				});
 				return this.#successResponse(id, type, result);
@@ -769,6 +1168,8 @@ class RpcProjectHost {
 				this.#requireV3(id, type);
 				const sessionId = command.sessionId;
 				const subagentId = command.subagentId;
+				this.#checkOptional(command, "fromByte", "number");
+				this.#checkOptional(command, "maxBytes", "number");
 				if (typeof sessionId !== "string" || typeof subagentId !== "string") {
 					return this.#errorResponse(
 						id,
@@ -802,17 +1203,7 @@ class RpcProjectHost {
 				if (action !== "send_message" && action !== "stop") {
 					return this.#errorResponse(id, type, `Unsupported control action: ${String(action)}`, "invalid_params");
 				}
-				const rec = this.#container.get(sessionId);
-				if (
-					rec &&
-					typeof command.sessionGeneration === "string" &&
-					command.sessionGeneration !== rec.sessionGeneration
-				) {
-					return this.#errorResponse(id, type, "Session generation mismatch", "stale_session");
-				}
-				if (!(await this.#prefetchSessionFile(sessionId))) {
-					return this.#errorResponse(id, type, `Unknown session: ${sessionId}`, "not_found");
-				}
+				await this.#requireLoadedSession(command);
 				const result = await this.#subagentDirectory.control(
 					sessionId,
 					subagentId,
@@ -827,6 +1218,16 @@ class RpcProjectHost {
 				// controllers with zero sessions. Gated like every explicit
 				// case above: these are fork v3 business commands.
 				this.#requireV3(id, type);
+				if (type === "set_settings" || type === "unset_settings") {
+					this.#requireRevision(command);
+					if (command.scope !== "user")
+						return this.#errorResponse(
+							id,
+							type,
+							"Only user-scoped settings writes are supported",
+							"scope_not_allowed",
+						);
+				}
 				const forkResponse = await this.#configForkHost.handleCommand(command as never);
 				if (forkResponse) return forkResponse;
 				return this.#errorResponse(id, type, `Unknown command: ${type}`);
@@ -835,6 +1236,7 @@ class RpcProjectHost {
 	}
 
 	#skillMutationInput(command: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+		this.#requireRevision(command);
 		const input: Record<string, unknown> = {};
 		for (const key of keys) if (key in command) input[key] = command[key];
 		return input;
@@ -850,39 +1252,92 @@ class RpcProjectHost {
 		if (typeof text !== "string" || !text.trim()) {
 			return this.#errorResponse(id, type, "execute_command requires non-empty text", "invalid_params");
 		}
-		const sessionId = command.sessionId;
-		const host = typeof sessionId === "string" ? this.#getSessionHost(sessionId) : undefined;
-		if (!host) {
-			return this.#errorResponse(
-				id,
-				type,
-				"execute_command requires the sessionId of a loaded session",
-				"invalid_params",
-			);
+		this.#checkOptional(command, "catalogRevision", "string");
+		const record = command.sessionId === undefined ? undefined : await this.#requireLoadedSession(command);
+		const host = record ? this.#getSessionHost(record.sessionId)! : undefined;
+		const resolution = await this.#catalogService.resolve(text.trimStart(), host?.session);
+		if (command.catalogRevision !== undefined && command.catalogRevision !== this.#catalogService.revision) {
+			return this.#errorResponse(id, type, "Command catalog changed; query it again", "revision_conflict");
 		}
-		const resolution = await this.#catalogService.resolve(text, host.session);
 		if (resolution.kind === "unknown") {
 			return this.#errorResponse(id, type, `Unknown command: ${text.trim().split(/\s+/)[0]}`, "invalid_params");
 		}
-		// Route through the shared strict-dispatch prompt path; the response is
-		// re-labeled for the command the client actually sent. The synthetic
-		// prompt is accepted into the input gate here (the execute_command
-		// frame itself is not a user-input type), so ordering — and a racing
-		// abort invalidating it — applies exactly as for a direct prompt.
-		const syntheticPrompt = {
+		const name = resolution.name;
+		const args =
+			text
+				.trimStart()
+				.match(/^\/\S+\s*([\s\S]*)$/)?.[1]
+				?.trim() ?? "";
+		if (resolution.kind === "builtin") {
+			if (name === "new") {
+				const { summary } = await this.createSession({});
+				return this.#successResponse(id, type, {
+					hostAction: { kind: "focus_session", payload: { session: summary } },
+				});
+			}
+			if (name === "resume") {
+				if (!args) return this.#successResponse(id, type, { hostAction: { kind: "select_session" } });
+				const { summary } = await this.resumeSession(args);
+				return this.#successResponse(id, type, {
+					hostAction: { kind: "focus_session", payload: { session: summary } },
+				});
+			}
+			const hostAction = name && RPC_PROJECT_HOST_ACTIONS.get(name);
+			if (hostAction && (!args || !resolution.spec?.handle || name === "move")) {
+				const catalog = await this.#catalogService.buildCatalog(host?.session);
+				if (catalog.find(entry => entry.name === name)?.scope === "session" && !record) {
+					return this.#errorResponse(id, type, "This action requires a loaded session", "invalid_params");
+				}
+				if (name === "move" && !args) return this.#errorResponse(id, type, "Usage: /move <path>", "invalid_params");
+				return this.#successResponse(id, type, {
+					hostAction: {
+						kind: hostAction,
+						payload: {
+							...(record ? { sessionId: record.sessionId, sessionGeneration: record.sessionGeneration } : {}),
+							...(name === "move" ? { projectRoot: resolveToCwd(args, this.#options.cwd) } : { args }),
+							...(name === "skills" ? { panel: "skills" } : {}),
+						},
+					},
+				});
+			}
+			if (name === "wt")
+				return this.#errorResponse(id, type, "Worktree moves require a different project process", "unsupported");
+			if (name === "login") {
+				if (!record) return this.#errorResponse(id, type, "Login requires a loaded session", "invalid_params");
+				if (!args)
+					return this.#successResponse(id, type, {
+						hostAction: { kind: "select_login_provider", payload: { sessionId: record.sessionId } },
+					});
+				const response = await this.handleSessionCommand({
+					id,
+					type: "login",
+					providerId: args,
+					sessionId: record.sessionId,
+					sessionGeneration: record.sessionGeneration,
+				});
+				return response.success
+					? this.#successResponse(id, type, { completed: true, agentInvoked: false })
+					: { ...response, command: type };
+			}
+			if (!resolution.spec?.handle)
+				return this.#errorResponse(id, type, "This business command has no RPC-capable OMP handler", "unsupported");
+		}
+		if (!record || !host)
+			return this.#errorResponse(id, type, "This command requires a loaded session", "invalid_params");
+		// Reuse the exact prompt accepted at frame arrival. An unaccepted frame
+		// stays unaccepted so the shared gate cancels it, rather than reordering it.
+		const syntheticPrompt = this.#commandInputs.get(command) ?? {
 			id,
 			type: "prompt",
-			sessionId: typeof sessionId === "string" ? sessionId : undefined,
-			sessionGeneration: typeof command.sessionGeneration === "string" ? command.sessionGeneration : undefined,
+			sessionId: record.sessionId,
+			sessionGeneration: record.sessionGeneration,
 			message: text,
 			inputMode: "auto",
 		};
-		this.inputGate.accept(syntheticPrompt as RpcCommand);
-		const promptResponse = await this.handleSessionCommand(syntheticPrompt as never);
-		if (isRecord(promptResponse) && promptResponse.command === "prompt") {
-			return { ...promptResponse, command: type } as RpcResponse;
-		}
-		return promptResponse;
+		const response = await this.handleSessionCommand(syntheticPrompt as never);
+		return response.success
+			? this.#successResponse(id, type, "data" in response ? response.data : undefined)
+			: this.#errorResponse(id, type, response.error, response.code);
 	}
 
 	/**
@@ -892,11 +1347,16 @@ class RpcProjectHost {
 	 */
 	async #teardownSessionHost(sessionId: string, reason: string): Promise<void> {
 		const host = this.#getSessionHost(sessionId);
-		if (host) await host.dispose(reason).catch(() => {});
+		if (host) await host.dispose(reason);
+		this.#metadataUnsubscribers.get(sessionId)?.();
+		this.#metadataUnsubscribers.delete(sessionId);
+		this.#mcpManagers.delete(sessionId);
+		this.#staleSessions.delete(sessionId);
 		this.#sessionHosts.delete(sessionId);
 		this.#pendingSkillRefresh.delete(sessionId);
+		this.#inputGates.delete(sessionId);
 		for (const [interactionId, owner] of this.#interactions) {
-			if (owner === sessionId) this.#interactions.delete(interactionId);
+			if (owner.sessionId === sessionId) this.#interactions.delete(interactionId);
 		}
 	}
 
@@ -914,9 +1374,15 @@ class RpcProjectHost {
 		cancelRunning: boolean,
 		expectedRevision: string | undefined,
 	): Promise<{ revision: RpcRevision }> {
-		const result = await this.#container.delete(sessionId, { cancelRunning, expectedRevision });
-		await this.#teardownSessionHost(sessionId, "session_deleted");
-		return result;
+		try {
+			const result = await this.#container.delete(sessionId, { cancelRunning, expectedRevision });
+			await this.#teardownSessionHost(sessionId, "session_deleted");
+			this.#sessionFileCache.delete(sessionId);
+			return result;
+		} catch (error) {
+			if (!this.#container.get(sessionId)) await this.#teardownSessionHost(sessionId, "session_closed");
+			throw error;
+		}
 	}
 
 	#resolveSessionFile(sessionId: string): string | undefined {
@@ -925,25 +1391,40 @@ class RpcProjectHost {
 		return this.#sessionFileCache.get(sessionId);
 	}
 
+	#canRefreshSkills(record: RpcProjectSessionRecord, host: RpcSessionHost): boolean {
+		return (
+			record.state === "loaded" &&
+			!record.busy &&
+			!host.session.isBusyForSnapshot &&
+			!host.session.hasAdmittedSubmission &&
+			!host.isWaitingInteraction()
+		);
+	}
+
 	async #refreshSessionsSkills(): Promise<{ adopted: string[]; pending: string[] }> {
 		const adopted: string[] = [];
 		const pending: string[] = [];
 		for (const [sessionId, host] of this.#sessionHosts) {
-			if (host.session.isStreaming) {
+			const record = this.#container.get(sessionId);
+			if (!record || !this.#canRefreshSkills(record, host) || this.#staleSessions.has(sessionId)) {
 				this.#pendingSkillRefresh.add(sessionId);
 				pending.push(sessionId);
 				continue;
 			}
-			await host.refreshSkills().then(
-				() => {
-					this.#pendingSkillRefresh.delete(sessionId);
-					adopted.push(sessionId);
-				},
-				() => {
-					this.#pendingSkillRefresh.add(sessionId);
-					pending.push(sessionId);
-				},
-			);
+			record.busy = true;
+			try {
+				this.#assertRecordIdentity(record);
+				await host.refreshSkills();
+				this.#assertRecordIdentity(record);
+				this.#pendingSkillRefresh.delete(sessionId);
+				adopted.push(sessionId);
+			} catch (error) {
+				logger.warn("RPC skill adoption deferred", { sessionId, error: String(error) });
+				this.#pendingSkillRefresh.add(sessionId);
+				pending.push(sessionId);
+			} finally {
+				record.busy = false;
+			}
 		}
 		return { adopted, pending };
 	}
@@ -952,33 +1433,37 @@ class RpcProjectHost {
 	handleControlFrame(parsed: unknown): boolean {
 		if (!isRecord(parsed)) return false;
 		const type = String(parsed.type);
-		if (type === "host_tool_result") {
-			this.#hostToolBridge.handleResult(parsed as never);
-			return true;
-		}
-		if (type === "host_tool_update") {
-			this.#hostToolBridge.handleUpdate(parsed as never);
-			return true;
-		}
-		if (type === "host_uri_result") {
-			this.#hostUriBridge.handleResult(parsed as never);
-			return true;
-		}
-		if (INTERACTION_RESPONSE_TYPES.has(type)) {
-			const targetId =
-				typeof parsed.id === "string"
-					? parsed.id
-					: typeof parsed.targetId === "string"
-						? parsed.targetId
-						: undefined;
-			if (!targetId) return false;
-			const sessionId = this.#interactions.get(targetId);
-			const host = sessionId ? this.#getSessionHost(sessionId) : undefined;
-			if (!host) {
-				console.error(`[rpc-project] dropping ${type} for unknown interaction ${targetId}`);
+		if (
+			INTERACTION_RESPONSE_TYPES.has(type) ||
+			["host_tool_result", "host_tool_update", "host_uri_result"].includes(type)
+		) {
+			const targetId = type === "ask_pause" ? parsed.targetId : parsed.id;
+			const owner = typeof targetId === "string" ? this.#interactions.get(targetId) : undefined;
+			const record = owner ? this.#container.getLoaded(owner.sessionId) : undefined;
+			const host = owner ? this.#getSessionHost(owner.sessionId) : undefined;
+			if (
+				!owner ||
+				!record ||
+				!host ||
+				record.sessionGeneration !== owner.sessionGeneration ||
+				parsed.sessionId !== owner.sessionId ||
+				parsed.sessionGeneration !== owner.sessionGeneration
+			) {
+				this.#emitProjectFrame(
+					this.#errorResponse(
+						typeof parsed.id === "string" ? parsed.id : undefined,
+						type,
+						"Unknown, stale, or wrong-session interaction",
+						"stale_session",
+					),
+				);
 				return true;
 			}
-			return host.handleControlFrame(parsed);
+			const handled = host.handleControlFrame(parsed);
+			if (handled && type !== "ask_pause" && type !== "host_tool_update")
+				this.#interactions.delete(targetId as string);
+			if (handled) this.#container.notifyChanged();
+			return handled;
 		}
 		return false;
 	}
@@ -987,13 +1472,170 @@ class RpcProjectHost {
 	async dispose(reason: string): Promise<void> {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		// Fail pending startup/control waits before container abort/flush awaits them.
+		const hostDisposals = [...this.#sessionHosts.values()].map(host => host.dispose(reason));
 		await this.#container.disposeAll(reason);
-		for (const [, host] of this.#sessionHosts) await host.dispose(reason).catch(() => {});
+		await Promise.allSettled([...hostDisposals, ...this.#attaching.values()]);
+		for (const unsubscribe of this.#metadataUnsubscribers.values()) unsubscribe();
+		this.#metadataUnsubscribers.clear();
+		this.#mcpManagers.clear();
+		this.#staleSessions.clear();
 		this.#sessionHosts.clear();
 		this.#pendingSkillRefresh.clear();
-		this.#hostToolBridge.close(`${reason} before host tool execution completed`);
-		this.#hostUriBridge.clear(`${reason} before host URI request completed`);
+		this.#inputGates.clear();
+		this.#sessionFileCache.clear();
 		this.#interactions.clear();
+	}
+
+	#assertRecordIdentity(record: RpcProjectSessionRecord): void {
+		if (this.#disposed) throw Object.assign(new Error("Project is disposing"), { code: "busy" });
+		const current = this.#container.get(record.sessionId);
+		if (
+			current === record &&
+			record.session.sessionManager.getSessionId() === record.sessionId &&
+			normalizePathForComparison(record.session.sessionManager.getCwd()) ===
+				normalizePathForComparison(this.#options.cwd) &&
+			!this.#staleSessions.has(record.sessionId)
+		)
+			return;
+		if (current === record && !this.#staleSessions.has(record.sessionId)) {
+			this.#staleSessions.add(record.sessionId);
+			record.state = "closing";
+			this.#inputGates.get(record.sessionId)?.accept({ type: "abort" });
+			this.#emitProjectFrame({
+				type: "notice",
+				level: "error",
+				source: "session-identity",
+				code: "stale_session",
+				terminal: true,
+				message: `Session ${record.sessionId} lost its original identity; this instance is unavailable`,
+				sessionId: record.sessionId,
+				sessionGeneration: record.sessionGeneration,
+			});
+			this.#container.notifyChanged();
+			void this.#getSessionHost(record.sessionId)
+				?.dispose("stale_session")
+				.catch(error => {
+					logger.error("RPC stale host cleanup failed", { sessionId: record.sessionId, error: String(error) });
+				});
+		}
+		throw Object.assign(new Error("Session identity changed"), { code: "stale_session" });
+	}
+
+	async #requireLoadedSession(command: Record<string, unknown>): Promise<RpcProjectSessionRecord> {
+		if (typeof command.sessionId !== "string" || !command.sessionId) {
+			throw Object.assign(new Error("This command requires sessionId"), { code: "invalid_params" });
+		}
+		const known = this.#container.get(command.sessionId);
+		if (known) this.#assertRecordIdentity(known);
+		const record = this.#container.getLoaded(command.sessionId);
+		if (!record || !this.#getSessionHost(record.sessionId)) {
+			const saved = await this.#container.findSessionFileById(command.sessionId);
+			throw Object.assign(new Error(`Session not loaded: ${command.sessionId}`), {
+				code: saved ? "session_not_loaded" : "not_found",
+			});
+		}
+		if (record.busy) throw Object.assign(new Error("Session lifecycle transition is in progress"), { code: "busy" });
+		if (typeof command.sessionGeneration !== "string" || !command.sessionGeneration) {
+			throw Object.assign(new Error("This command requires sessionGeneration"), { code: "invalid_params" });
+		}
+		if (command.sessionGeneration !== record.sessionGeneration) {
+			throw Object.assign(new Error("Session generation mismatch"), { code: "stale_session" });
+		}
+		return record;
+	}
+
+	#checkOptional(command: Record<string, unknown>, key: string, type: string): void {
+		if (command[key] !== undefined && typeof command[key] !== type) {
+			throw Object.assign(new Error(`${key} must be a ${type}`), { code: "invalid_params" });
+		}
+	}
+
+	#requireRevision(command: Record<string, unknown>): void {
+		if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
+			throw Object.assign(new Error("This write requires expectedRevision"), { code: "invalid_params" });
+		}
+	}
+
+	async #readSavedHistory(command: RpcCommand & { sessionId?: string }): Promise<RpcResponse> {
+		const sessionId = command.sessionId!;
+		const file = await this.#container.findSessionFileById(sessionId);
+		if (!file) return this.#errorResponse(command.id, command.type, "Unknown session", "not_found");
+		// Opening acquires neither a writer nor a lease; never close/flush this
+		// read-only projection (those operations can persist a migration).
+		const manager = await SessionManager.open(file, this.#options.sessionDir, undefined, {
+			suppressBreadcrumb: true,
+			throwIfMissing: true,
+			initialCwd: this.#options.cwd,
+		});
+		const header = manager.getHeader();
+		if (
+			manager.getSessionId() !== sessionId ||
+			!header ||
+			normalizePathForComparison(header.cwd) !== normalizePathForComparison(this.#options.cwd)
+		) {
+			return this.#errorResponse(command.id, command.type, "Session identity/project changed", "scope_not_allowed");
+		}
+		const messages = manager.buildSessionContext().messages;
+		const revision = `history-${createHash("sha256")
+			.update(JSON.stringify([sessionId, manager.getLeafId(), manager.getEntries()]))
+			.digest("hex")}`;
+		let data: object;
+		switch (command.type) {
+			case "get_messages":
+				data = { messages };
+				break;
+			case "get_messages_page":
+				data = pageRpcMessages(
+					messages,
+					{
+						sessionId,
+						leafId: manager.getLeafId(),
+						messageCount: messages.length,
+						revision: createHash("sha256").update(JSON.stringify(messages)).digest("hex"),
+					},
+					command,
+				);
+				break;
+			case "get_entries":
+				data = selectRpcEntries(manager.getEntries(), manager.getLeafId(), command.since);
+				break;
+			case "get_tree":
+				data = { tree: manager.getTree(), leafId: manager.getLeafId() };
+				break;
+			case "get_branch_messages":
+				data = {
+					messages: manager.getEntries().flatMap(entry => {
+						if (entry.type !== "message" || entry.message.role !== "user") return [];
+						const content = entry.message.content;
+						const text =
+							typeof content === "string"
+								? content
+								: content
+										.filter(part => part.type === "text")
+										.map(part => part.text)
+										.join("");
+						return text ? [{ entryId: entry.id, text }] : [];
+					}),
+				};
+				break;
+			case "get_last_assistant_text": {
+				const message = messages.findLast(message => message.role === "assistant");
+				data = {
+					text:
+						message?.role === "assistant"
+							? message.content
+									.filter(part => part.type === "text")
+									.map(part => part.text)
+									.join("")
+							: undefined,
+				};
+				break;
+			}
+			default:
+				return this.#errorResponse(command.id, command.type, "Unsupported historical query", "unsupported");
+		}
+		return this.#successResponse(command.id, command.type, { ...data, revision });
 	}
 
 	#requireV3(id: string | undefined, type: string): void {
@@ -1018,7 +1660,7 @@ class RpcProjectHost {
 			command,
 			success: false,
 			error: message,
-			...(code === undefined ? {} : { code }),
+			...(code === undefined ? {} : { code: code === "stale_revision" ? "revision_conflict" : code }),
 		} as RpcResponse;
 	}
 }
@@ -1040,11 +1682,13 @@ class RpcProjectGateError extends Error {
  * Returns only on process exit (stdin EOF or fatal output failure).
  */
 export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise<never> {
+	options = { ...options, cwd: resolveEquivalentPath(options.cwd) };
 	const input = options.input ?? claimRpcInput();
 	process.env.PI_NOTIFICATIONS = "off";
 
 	const frameEncoder = new RpcFrameEncoder();
 	const hostRef: { host?: RpcProjectHost } = {};
+	const inFlight = new Map<string, { acknowledged: boolean; terminal: boolean }>();
 	// Bun on Windows writes a piped process.stdout with a blocking WriteFile on the
 	// JS thread and never reports backpressure, so a client that stops reading
 	// stdout froze the whole worker, stdin reader included. An fd write stream
@@ -1055,7 +1699,16 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		void hostRef.host?.dispose("RPC output delivery failed").finally(() => process.exit(1));
 	});
 	const output: RpcOutput = obj => {
-		outputWriter.write(frameEncoder.encodeFrames(obj));
+		if (isRecord(obj) && obj.type === "prompt_result" && typeof obj.id === "string") {
+			const request = inFlight.get(obj.id);
+			if (request) {
+				request.terminal = true;
+				if (request.acknowledged) inFlight.delete(obj.id);
+			}
+		}
+		const stamped =
+			isRecord(obj) && hostRef.host ? { ...obj, processInstanceId: hostRef.host.processInstanceId } : obj;
+		outputWriter.write(frameEncoder.encodeFrames(stamped));
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
 			frameEncoder.setProtocolVersion(2);
 	};
@@ -1067,7 +1720,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		frameEncoder.encodeFrames({
 			type: "ready",
 			protocolVersion: 1,
-			supportedProtocolVersions: RPC_SUPPORTED_PROTOCOL_VERSIONS,
+			supportedProtocolVersions: [3],
 			maxFrameBytes: MAX_RPC_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 			mode: "rpc-ui-project",
@@ -1078,43 +1731,25 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	);
 
 	const backgroundTasks = new Set<Promise<void>>();
-	// Long-holding commands dispatch in the background so later frames can
-	// overtake them (mirrors the single-session transport in rpc-mode.ts): a
-	// `bash` runs for a long time, a `prompt`/`steer`/`follow_up`/`steer_subagent`
-	// holds its response until admission, and a `btw` awaits the whole side
-	// answer. Backgrounding lets an `abort` (or get_state, or `btw_cancel`)
-	// reach the session while such a command is still settling. `live_start`
-	// responds only once the realtime session is connected and recording, so it
-	// is backgrounded and `live_stop` can cancel it.
+	// Only a session's own state transitions serialize. Admission, model calls,
+	// shell and side answers do not hold its queue, and never another session's.
 	const projectBackgroundedTypes = new Set([
 		"bash",
 		"predict_word",
 		"prompt",
 		"steer",
 		"follow_up",
+		"abort_and_prompt",
 		"steer_subagent",
+		"btw",
 		"btw_cancel",
 		"live_start",
+		"execute_command",
 	]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
-		if (projectBackgroundedTypes.has(type)) {
-			// Session-bound background command; route like any session command.
-			const task = host
-				.handleSessionCommand(parsed as never)
-				.catch((error: unknown): RpcResponse => {
-					const message = error instanceof Error ? error.message : String(error);
-					return errorFrame(parsed.id, type, message);
-				})
-				.then(output);
-			backgroundTasks.add(task);
-			void task.then(
-				() => backgroundTasks.delete(task),
-				() => backgroundTasks.delete(task),
-			);
-			return;
-		}
+		const sessionGeneration = typeof parsed.sessionGeneration === "string" ? parsed.sessionGeneration : undefined;
 		let response: RpcResponse;
 		try {
 			if (PROJECT_LEVEL_COMMANDS.has(type)) {
@@ -1122,14 +1757,40 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 			} else if (SESSION_LEVEL_COMMANDS.has(type)) {
 				response = await host.handleSessionCommand(parsed as never);
 			} else {
-				response = errorFrame(parsed.id, type, `Unknown command: ${type}`);
+				response = errorFrame(parsed.id, type, `Unknown command: ${type}`, "unsupported");
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const code = error instanceof RpcProjectGateError ? "unsupported" : projectErrorCodeOf(error);
+			const code =
+				error instanceof RpcProjectGateError ? "unsupported" : (projectErrorCodeOf(error) ?? "execution_failed");
 			response = errorFrame(parsed.id, type, message, code);
 		}
-		output(response);
+		output({
+			...response,
+			...(typeof parsed.sessionId === "string" ? { sessionId: parsed.sessionId } : {}),
+			...(SESSION_HISTORY_COMMANDS.has(type) || type === "resume_session" || type === "rename_session"
+				? typeof parsed.sessionId === "string" && response.success && host.container.getLoaded(parsed.sessionId)
+					? { sessionGeneration: host.container.getLoaded(parsed.sessionId)!.sessionGeneration }
+					: {}
+				: sessionGeneration
+					? { sessionGeneration }
+					: {}),
+		});
+		if (typeof parsed.id === "string") {
+			const request = inFlight.get(parsed.id);
+			if (request) {
+				request.acknowledged = true;
+				const data: Record<string, unknown> | undefined =
+					"data" in response && isRecord(response.data) ? response.data : undefined;
+				const invokesAgent =
+					response.success &&
+					(type === "prompt" ||
+						type === "abort_and_prompt" ||
+						(type === "execute_command" && data?.agentInvoked === true)) &&
+					data?.agentInvoked !== false;
+				if (!invokesAgent || request.terminal) inFlight.delete(parsed.id);
+			}
+		}
 	};
 
 	const errorFrame = (id: unknown, command: string, message: string, code?: string): RpcResponse =>
@@ -1142,32 +1803,73 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 			...(code === undefined ? {} : { code }),
 		}) as RpcResponse;
 
-	// Serial command queue; control frames overtake (they resolve pending
-	// interactions that a running command may be waiting on).
-	let tail: Promise<void> = Promise.resolve();
-	const queueSerial = (parsed: Record<string, unknown>): void => {
-		tail = tail.then(
-			() => dispatch(parsed),
-			() => dispatch(parsed),
+	const serialTails = new Map<string, Promise<void>>();
+	let disconnected = false;
+	const track = (task: Promise<void>): void => {
+		backgroundTasks.add(task);
+		void task.then(
+			() => backgroundTasks.delete(task),
+			() => backgroundTasks.delete(task),
 		);
+	};
+	const queueSerial = (parsed: Record<string, unknown>): void => {
+		const key = typeof parsed.sessionId === "string" ? parsed.sessionId : "project";
+		const previous = serialTails.get(key) ?? Promise.resolve();
+		const start = (): Promise<void> => {
+			if (disconnected) {
+				inFlight.delete(String(parsed.id));
+				return Promise.resolve();
+			}
+			if (projectBackgroundedTypes.has(String(parsed.type))) {
+				track(dispatch(parsed));
+				return Promise.resolve();
+			}
+			return dispatch(parsed);
+		};
+		const next = previous.then(start, start);
+		serialTails.set(key, next);
+		track(next);
+		const clear = (): void => {
+			if (serialTails.get(key) === next) serialTails.delete(key);
+		};
+		void next.then(clear, clear);
 	};
 
 	await readRpcInputFrames(
 		input,
 		parsed => {
 			if (host.handleControlFrame(parsed)) return;
-			// Sequence user input at frame-arrival time (upstream PR #13027):
-			// an abort arriving now invalidates earlier input still queued
-			// behind the serial tail or a session host's input gate.
-			host.inputGate.accept(parsed as RpcCommand);
-			queueSerial(parsed as Record<string, unknown>);
+			if (
+				!isRecord(parsed) ||
+				typeof parsed.type !== "string" ||
+				!parsed.type ||
+				typeof parsed.id !== "string" ||
+				!parsed.id
+			) {
+				output(
+					errorFrame(
+						isRecord(parsed) ? parsed.id : undefined,
+						isRecord(parsed) ? String(parsed.type ?? "parse") : "parse",
+						"Project requests require non-empty string id and type",
+						"invalid_params",
+					),
+				);
+				return;
+			}
+			if (inFlight.has(parsed.id)) {
+				output(errorFrame(parsed.id, parsed.type, "Request id is already in flight", "invalid_params"));
+				return;
+			}
+			inFlight.set(parsed.id, { acknowledged: false, terminal: false });
+			host.acceptInput(parsed as never);
+			queueSerial(parsed);
 		},
 		message => output(errorFrame(undefined, "parse", `Failed to parse command: ${message}`)),
 	);
 
 	// stdin closed — the project host is gone. Dispose every session (their
 	// disposals flush persistence), then exit cleanly.
-	await tail.catch(() => {});
+	disconnected = true;
 	await host.dispose("RPC client disconnected");
 	await Promise.allSettled(backgroundTasks);
 	await outputWriter.close();

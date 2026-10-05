@@ -90,6 +90,7 @@ function toTimeoutResult(question: ExtensionAskDialogQuestion): ExtensionAskDial
 
 export class RpcForkAskBroker {
 	readonly #pending = new Map<string, PendingAskRequest>();
+	#closedError: Error | undefined;
 
 	constructor(
 		private readonly host: RpcForkHost,
@@ -97,6 +98,11 @@ export class RpcForkAskBroker {
 	) {
 		host.registerFrameHandler(parsed => this.#handleFrame(parsed));
 		host.registerDisposer(reason => this.#dispose(reason));
+		host.registerPendingRequestSource(() => this.hasPendingRequests);
+	}
+
+	get hasPendingRequests(): boolean {
+		return this.#pending.size > 0;
 	}
 
 	/** Value for `RpcExtensionUIContext.askDialog`; undefined until v3 is negotiated. */
@@ -109,13 +115,14 @@ export class RpcForkAskBroker {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined> {
+		if (this.#closedError) throw this.#closedError;
 		if (dialogOptions?.signal?.aborted) return undefined;
 
 		const id = Snowflake.next() as string;
 		const timeoutMs = dialogOptions?.timeout;
 		const { promise, resolve, reject } = Promise.withResolvers<ExtensionAskDialogResult | undefined>();
 		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
+		let timer: NodeJS.Timeout | undefined;
 
 		// Shared settle cleanup: stop the countdown, unsubscribe the abort
 		// listener, and drop the pending entry — whichever side settles first.
@@ -134,6 +141,12 @@ export class RpcForkAskBroker {
 			// Countdown expiry keeps the TUI/ACP semantics: unanswered questions
 			// auto-answer recommended and the tool result reports timedOut.
 			dialogOptions?.onTimeout?.();
+			this.output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "cancel",
+				targetId: id,
+			});
 			finish({ kind: "submit", results: questions.map(toTimeoutResult) });
 		};
 		const onAbort = () => {
@@ -211,6 +224,7 @@ export class RpcForkAskBroker {
 	}
 
 	#dispose(reason: string): void {
+		this.#closedError ??= new Error(reason);
 		for (const pending of this.#pending.values()) {
 			pending.reject(new Error(reason));
 		}

@@ -40,7 +40,7 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 			"dim",
 			view
 				? "Anyone with this link can watch the session but cannot prompt the agent."
-				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
+				: "Anyone with this link can control the session and run shell/Python commands on this host. Read-only link: /collab view",
 		),
 		theme.fg("dim", "Browser link copied to clipboard."),
 	].join("\n");

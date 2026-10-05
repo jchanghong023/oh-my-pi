@@ -105,6 +105,7 @@ import {
 	Snowflake,
 	stringProperty,
 	toError,
+	untilAborted,
 	withTimeout,
 	withFileLock,
 } from "@oh-my-pi/pi-utils";
@@ -836,12 +837,12 @@ export class AgentSession implements SettingsScope {
 	 * this undefined and **MUST NOT** dispose the global instance on teardown.
 	 */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
+	readonly #releaseOwnedAsyncJobManager: (() => Promise<boolean | void>) | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
-	 * This differs from `#ownedAsyncJobManager`: subagents can inherit a parent
-	 * manager for their own owner id, while secondary top-level sessions are left
-	 * undefined to avoid reading the primary's jobs.
+	 * Subagents and secondary roots inherit the shared manager, but job access
+	 * and cancellation are filtered by this session's owner id.
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
@@ -959,6 +960,7 @@ export class AgentSession implements SettingsScope {
 	readonly #streamingEditGuard: StreamingEditGuard;
 	readonly #loopGuards: LoopGuards;
 	#promptInFlightCount = 0;
+	#promptInFlightSettled: PromiseWithResolvers<void> | undefined;
 	#abortInProgress = false;
 	/** Submissions accepted by prompt()/promptCustomMessage()/sendCustomMessage() that have not
 	 *  yet dispatched a turn, queued, or bailed. Preprocessing (manual-compaction wait, slash
@@ -1070,6 +1072,9 @@ export class AgentSession implements SettingsScope {
 		if (onSettled) this.#inFlightSettledCallbacks.push(onSettled);
 		this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
 		if (this.#promptInFlightCount !== 0) return;
+		const settled = this.#promptInFlightSettled;
+		this.#promptInFlightSettled = undefined;
+		settled?.resolve();
 		this.yieldQueue.requestIdleFlush();
 		this.#releasePowerAssertion();
 		this.#flushPendingAgentEnd();
@@ -1370,6 +1375,9 @@ export class AgentSession implements SettingsScope {
 
 	#resetInFlight(): void {
 		this.#promptInFlightCount = 0;
+		const settled = this.#promptInFlightSettled;
+		this.#promptInFlightSettled = undefined;
+		settled?.resolve();
 		this.yieldQueue.requestIdleFlush();
 		this.#releasePowerAssertion();
 		this.#flushPendingAgentEnd();
@@ -1572,6 +1580,7 @@ export class AgentSession implements SettingsScope {
 			inheritedAgents: config.inheritedSessionAgents,
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
+		this.#releaseOwnedAsyncJobManager = config.releaseOwnedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
@@ -1856,6 +1865,7 @@ export class AgentSession implements SettingsScope {
 			clientBridge: () => this.#clientBridge,
 			agentKind: () => this.#agentKind,
 			isDisposed: () => this.#isDisposed,
+			sessionGeneration: () => this.#sessionGeneration,
 			isStreaming: () => this.isStreaming,
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
@@ -5211,6 +5221,11 @@ export class AgentSession implements SettingsScope {
 		return this.#isDisposed;
 	}
 
+	/** Identity epoch; successful switches change it even when returning to the same session. */
+	get sessionGeneration(): number {
+		return this.#sessionGeneration;
+	}
+
 	markMovedFromEmptySessionFile(sessionFile: string): void {
 		this.#movedFromEmptySessionFile = path.resolve(sessionFile);
 	}
@@ -5283,13 +5298,15 @@ export class AgentSession implements SettingsScope {
 		if (!manager) return;
 
 		try {
-			const drained = await manager.dispose({ timeoutMs: 3_000 });
+			const drained = this.#releaseOwnedAsyncJobManager
+				? await this.#releaseOwnedAsyncJobManager()
+				: await manager.dispose({ timeoutMs: 3_000 });
 			const deliveryState = manager.getDeliveryState();
 			if (drained === false && deliveryState) {
 				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 			}
 		} finally {
-			if (AsyncJobManager.instance() === manager) {
+			if (!this.#releaseOwnedAsyncJobManager && AsyncJobManager.instance() === manager) {
 				AsyncJobManager.setInstance(undefined);
 			}
 		}
@@ -5868,13 +5885,17 @@ export class AgentSession implements SettingsScope {
 	 */
 	async waitForIdle(): Promise<void> {
 		while (true) {
+			if (this.#promptInFlightCount > 0) {
+				this.#promptInFlightSettled ??= Promise.withResolvers<void>();
+				await this.#promptInFlightSettled.promise;
+			}
 			await this.agent.waitForIdle();
 			await this.#advisors.waitForPendingCardEvents();
 			// Core subscribers run asynchronously. Retry recovery can still be
 			// rewriting entries before it publishes auto_retry_end.
 			await this.#drainInFlightEventHandlers();
 			await this.#waitForPostPromptRecovery();
-			if (!this.agent.state.isStreaming && this.#inFlightEventHandlers.size === 0) return;
+			if (!this.isStreaming && this.#inFlightEventHandlers.size === 0) return;
 		}
 	}
 	/**
@@ -8417,6 +8438,48 @@ export class AgentSession implements SettingsScope {
 		return this.#admitSubmission(() => this.#sendCustomMessage(message, options));
 	}
 
+	/** Append a displayable context message and drain persistence without starting a model turn. */
+	async appendCustomMessage<T = unknown>(
+		message: CustomMessagePayload<T>,
+		options?: { signal?: AbortSignal },
+	): Promise<void> {
+		return this.#admitSubmission(async () => {
+			const generation = this.#sessionGeneration;
+			const manager = this.sessionManager;
+			const sessionId = manager.getSessionId();
+			const assertCurrent = (): void => {
+				options?.signal?.throwIfAborted();
+				if (this.#isDisposed || generation !== this.#sessionGeneration || manager.getSessionId() !== sessionId) {
+					throw new Error("Session changed before the custom message was committed.");
+				}
+			};
+			assertCurrent();
+			const payload = normalizeCustomMessagePayload<T>(message);
+			const appMessage: CustomMessage<T> = { role: "custom", ...payload, timestamp: Date.now() };
+			const normalized = await this.#normalizeAgentMessageImages(appMessage);
+			for (;;) {
+				assertCurrent();
+				if (!this.isStreaming) break;
+				await untilAborted(options?.signal, () => this.waitForIdle());
+			}
+			manager.appendCustomMessageEntry(
+				normalized.customType,
+				normalized.content,
+				normalized.display,
+				normalized.details,
+				normalized.attribution,
+			);
+			this.agent.appendMessage(normalized);
+			await manager.flush();
+			assertCurrent();
+			if (normalized.display === true) {
+				await this.#emitSessionEvent({ type: "message_start", message: normalized }, { detachExtensions: true });
+				assertCurrent();
+				await this.#emitSessionEvent({ type: "message_end", message: normalized }, { detachExtensions: true });
+			}
+		});
+	}
+
 	async #sendCustomMessage<T = unknown>(
 		message: CustomMessagePayload<T>,
 		options?: {
@@ -8477,6 +8540,7 @@ export class AgentSession implements SettingsScope {
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
+		if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 		if (this.isStreaming) {
 			// Queued into a turn the agent owns: that turn holds the session. Busy only
 			// from another prompt's setup claims nothing (that prompt decides).
@@ -9438,7 +9502,7 @@ export class AgentSession implements SettingsScope {
 	 * transcript message, inclusive, plus the artifacts, and the transition runs like
 	 * {@link branch} (`session_before_branch`/`session_branch` hooks with reason `"fork"`,
 	 * agent messages rebuilt from the cut). A cut inside an assistant tool-call batch is
-	 * extended through the batch's recorded tool results (see {@link #resolveForkLeaf}), and
+	 * extended through the batch's recorded tool results (see {@link getForkLeafId}), and
 	 * the hook's `entryId` is that last kept entry. An entry fork always requires an idle
 	 * session; `options.requireIdle` applies the same rule to the whole-session fork.
 	 * Either refusal throws {@link SessionBusyError} before any session state is discarded.
@@ -9449,10 +9513,7 @@ export class AgentSession implements SettingsScope {
 		this.#assertVibeSessionTransitionAllowed("fork the session");
 		const requireIdleFor = entryId !== undefined || options?.requireIdle ? "fork the session" : undefined;
 		if (entryId !== undefined) {
-			if (this.sessionManager.getEntry(entryId)?.type !== "message") {
-				throw new Error(`Invalid entry ID for forking: ${entryId}`);
-			}
-			const leafId = this.#resolveForkLeaf(entryId);
+			const leafId = this.getForkLeafId(entryId);
 			// Await inside the `using` scope so the transition stays open until it settles.
 			// Kept tool results may cite `artifact://N`, so the fork carries the artifacts too.
 			return await this.#branchIntoNewSession("fork", leafId, leafId, {
@@ -9542,7 +9603,10 @@ export class AgentSession implements SettingsScope {
 	 * tool calls whose results exist in the source session. Non-message entries between
 	 * results (labels, custom entries) are kept only when a later result follows them.
 	 */
-	#resolveForkLeaf(entryId: string): string {
+	getForkLeafId(entryId: string): string {
+		if (this.sessionManager.getEntry(entryId)?.type !== "message") {
+			throw new Error(`Invalid entry ID for forking: ${entryId}`);
+		}
 		const answered = new Set<string>();
 		let batch: AssistantMessage | undefined;
 		const path = this.sessionManager.getBranch(entryId);

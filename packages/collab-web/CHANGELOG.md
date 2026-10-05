@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed guest command discovery/completion and stale host-question state across room and session transitions.
+- Fixed encrypted guest error reporting and read-only restrictions for host filesystem completions.
+
 ## [18.4.10] - 2026-10-02
 
 ### Fixed

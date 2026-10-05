@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -9,25 +9,40 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 /** Sentinel thrown by the stubbed session factory, so startup stops at session creation. */
 const STOP = new Error("stop after session options");
 
-let savedWalkWorkers: string | undefined;
-let savedScanTtl: string | undefined;
+const CHILD_FLAG = "--fs-tuning-child";
 
-beforeEach(() => {
-	savedWalkWorkers = process.env.PI_WALK_WORKERS;
-	savedScanTtl = process.env.FS_SCAN_CACHE_TTL_MS;
-	delete process.env.PI_WALK_WORKERS;
-	delete process.env.FS_SCAN_CACHE_TTL_MS;
-});
+interface FsTuningEnv {
+	walkWorkers?: string;
+	scanTtl?: string;
+}
 
-afterEach(() => {
-	if (savedWalkWorkers === undefined) delete process.env.PI_WALK_WORKERS;
-	else process.env.PI_WALK_WORKERS = savedWalkWorkers;
-	if (savedScanTtl === undefined) delete process.env.FS_SCAN_CACHE_TTL_MS;
-	else process.env.FS_SCAN_CACHE_TTL_MS = savedScanTtl;
-});
+/** Startup also mutates provider/worker globals; keep those out of the test runner. */
+async function startWith(argv: string[], overrides: Record<string, string> = {}): Promise<FsTuningEnv> {
+	using tempDir = TempDir.createSync("@omp-fs-tuning-child-");
+	const child = Bun.spawn([process.execPath, "run", import.meta.path, CHILD_FLAG, JSON.stringify(argv)], {
+		env: {
+			...process.env,
+			PI_CODING_AGENT_DIR: tempDir.path(),
+			PI_WALK_WORKERS: undefined,
+			FS_SCAN_CACHE_TTL_MS: undefined,
+			...overrides,
+		},
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(code, stderr).toBe(0);
+	return JSON.parse(stdout) as FsTuningEnv;
+}
 
 /** Run the real `runRootCommand` profile the launch command uses, with auth/settings/session stubbed. */
-async function startWith(argv: string[]): Promise<void> {
+async function startInProcess(argv: string[]): Promise<FsTuningEnv> {
 	using tempDir = TempDir.createSync("@omp-fs-tuning-");
 	const authStorage = await AuthStorage.create(":memory:");
 	const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
@@ -52,40 +67,46 @@ async function startWith(argv: string[]): Promise<void> {
 	} finally {
 		authStorage.close();
 	}
+	return { walkWorkers: process.env.PI_WALK_WORKERS, scanTtl: process.env.FS_SCAN_CACHE_TTL_MS };
 }
 
+if (process.argv.includes(CHILD_FLAG)) {
+	const snapshot = await startInProcess(JSON.parse(process.argv.at(-1)!));
+	await Bun.write(Bun.stdout, JSON.stringify(snapshot));
+	process.exit(0);
+}
 describe("runRootCommand — fork filesystem tuning", () => {
 	it("sets PI_WALK_WORKERS from the logical core count when the variable is unset", async () => {
-		await startWith(["--print", "hi"]);
+		const snapshot = await startWith(["--print", "hi"]);
 
 		const expected = walkerWorkersForCores(os.availableParallelism());
 		if (expected === undefined) {
-			expect(process.env.PI_WALK_WORKERS).toBeUndefined();
+			expect(snapshot.walkWorkers).toBeUndefined();
 		} else {
-			expect(process.env.PI_WALK_WORKERS).toBe(String(expected));
+			expect(snapshot.walkWorkers).toBe(String(expected));
 		}
 	});
 
 	it("sets FS_SCAN_CACHE_TTL_MS for an --offline process", async () => {
-		await startWith(["--offline", "--print", "hi"]);
+		const snapshot = await startWith(["--offline", "--print", "hi"]);
 
-		expect(process.env.FS_SCAN_CACHE_TTL_MS).toBe("30000");
+		expect(snapshot.scanTtl).toBe("30000");
 	});
 
 	it("leaves FS_SCAN_CACHE_TTL_MS alone without --offline", async () => {
-		await startWith(["--print", "hi"]);
+		const snapshot = await startWith(["--print", "hi"]);
 
-		expect(process.env.FS_SCAN_CACHE_TTL_MS).toBeUndefined();
+		expect(snapshot.scanTtl).toBeUndefined();
 	});
 
 	it('keeps explicitly configured values, including the "0" opt-outs', async () => {
-		process.env.PI_WALK_WORKERS = "0";
-		process.env.FS_SCAN_CACHE_TTL_MS = "7";
+		const snapshot = await startWith(["--offline", "--print", "hi"], {
+			PI_WALK_WORKERS: "0",
+			FS_SCAN_CACHE_TTL_MS: "7",
+		});
 
-		await startWith(["--offline", "--print", "hi"]);
-
-		expect(process.env.PI_WALK_WORKERS).toBe("0");
-		expect(process.env.FS_SCAN_CACHE_TTL_MS).toBe("7");
+		expect(snapshot.walkWorkers).toBe("0");
+		expect(snapshot.scanTtl).toBe("7");
 	});
 });
 

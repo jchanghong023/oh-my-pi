@@ -21,10 +21,9 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { MAX_THINKING_SUFFIX_OPTIONS, parseThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, isKindRole } from "../../config/model-roles";
-import { cfgCycleOrder, cfgModelRoleStorage } from "../../config/model-settings";
+import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
 import type { ModelRegistry } from "../../config/model-registry";
-import { withActiveSettings, type Settings, type SettingProvenance } from "../../config/settings";
+import { ModelRoleConflictError, type Settings, type SettingProvenance } from "../../config/settings";
 import { formatRoleModelValue, resolveRoleModelFull } from "../../session/role-models";
 import { RpcRevisionSource } from "./rpc-project-types";
 import type {
@@ -78,8 +77,8 @@ export interface RpcProjectModelRoleSetOptions {
 	/** Wire contract allows `"user"` only; other runtime values reject with unsupported/scope_not_allowed. */
 	readonly scope: "user";
 	readonly selection: RpcModelRoleSelection;
-	/** When provided, must match the current catalog revision (revision_conflict otherwise). */
-	readonly expectedRevision?: RpcRevision;
+	/** Required revision of this user role slot, not the role catalog. */
+	readonly expectedRevision: RpcRevision;
 }
 
 /** Map settings provenance onto the descriptor source union. `getModelRoleProvenance` never returns `"env"`. */
@@ -117,6 +116,7 @@ function unresolvedRoleReason(explicitValue: string | undefined, warning: string
 export class RpcProjectModelRoleService {
 	readonly #deps: RpcProjectModelRoleServiceDeps;
 	readonly #rolesRevision = new RpcRevisionSource("roles-r0");
+	readonly #roleWrites = new Map<string, Promise<unknown>>();
 
 	constructor(deps: RpcProjectModelRoleServiceDeps) {
 		this.#deps = deps;
@@ -139,9 +139,7 @@ export class RpcProjectModelRoleService {
 		const settings = this.#deps.getSettings();
 		const availableModels = this.#deps.getModelRegistry().getAvailable("all");
 		const revision = this.#rolesRevision.current;
-		const roles = this.#catalogRoleIds(settings).map(role =>
-			this.#buildDescriptor(role, settings, availableModels, revision),
-		);
+		const roles = this.#catalogRoleIds(settings).map(role => this.#buildDescriptor(role, settings, availableModels));
 		return {
 			roles,
 			revision,
@@ -161,6 +159,20 @@ export class RpcProjectModelRoleService {
 	 * `expectedRevision` rejects with `revision_conflict`.
 	 */
 	async setRole(command: RpcProjectModelRoleSetOptions): Promise<RpcProjectSetModelRoleResult> {
+		const previous = this.#roleWrites.get(command.roleId) ?? Promise.resolve();
+		const write = previous.then(
+			() => this.#setRole(command),
+			() => this.#setRole(command),
+		);
+		this.#roleWrites.set(command.roleId, write);
+		try {
+			return await write;
+		} finally {
+			if (this.#roleWrites.get(command.roleId) === write) this.#roleWrites.delete(command.roleId);
+		}
+	}
+
+	async #setRole(command: RpcProjectModelRoleSetOptions): Promise<RpcProjectSetModelRoleResult> {
 		const settings = this.#deps.getSettings();
 		const registry = this.#deps.getModelRegistry();
 		const { roleId, selection } = command;
@@ -173,39 +185,25 @@ export class RpcProjectModelRoleService {
 		// frame value is untyped at runtime and needs distinct error codes.
 		const scope: unknown = command.scope;
 		if (scope !== "user") {
-			if (scope === "project" && !this.#projectScopeWritable(settings, roleId)) {
-				throw new RpcProjectModelRoleError(
-					"unsupported",
-					"Project writes not enabled: modelRoleStorage is global and the role has no project value",
-				);
-			}
-			throw new RpcProjectModelRoleError(
-				"scope_not_allowed",
-				`Unsupported scope for model roles: ${String(scope)} (only "user" writes are persisted)`,
-			);
+			throw new RpcProjectModelRoleError("scope_not_allowed", "Model roles support only user writes");
+		}
+		if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
+			throw new RpcProjectModelRoleError("invalid_params", "expectedRevision is required");
 		}
 
-		if (command.expectedRevision !== undefined && command.expectedRevision !== this.#rolesRevision.current) {
-			throw new RpcProjectModelRoleError(
-				"revision_conflict",
-				`Expected role-catalog revision ${command.expectedRevision} but current is ${this.#rolesRevision.current}`,
-			);
-		}
-
-		if (this.#isInternalRole(roleId, settings)) {
-			throw new RpcProjectModelRoleError(
-				"unsupported",
-				`Role ${roleId} is internal and not configurable (see the catalog's nonConfigurableReason)`,
-			);
+		const expectedValue = settings.getGlobalModelRole(roleId);
+		const currentRevision = this.#roleRevision(roleId, expectedValue);
+		if (command.expectedRevision !== undefined && command.expectedRevision !== currentRevision) {
+			throw new RpcProjectModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
 		}
 
 		const value = this.#formatSelection(settings, registry, roleId, selection);
 		try {
-			await withActiveSettings(settings, async () => {
-				settings.setModelRole(roleId, value);
-				await settings.flush();
-			});
+			await settings.saveUserModelRole(roleId, value, expectedValue);
 		} catch (error) {
+			if (error instanceof ModelRoleConflictError) {
+				throw new RpcProjectModelRoleError("revision_conflict", error.message);
+			}
 			throw new RpcProjectModelRoleError(
 				"persistence_failed",
 				`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -216,74 +214,47 @@ export class RpcProjectModelRoleService {
 		this.#deps.emit({ type: "settings_changed", scope: "user" });
 		// Fresh post-save read: provenance naturally reports a higher layer
 		// (runtime/overlay/project) when one still owns the effective value.
-		const role = this.#buildDescriptor(roleId, settings, registry.getAvailable("all"), revision);
+		const role = this.#buildDescriptor(roleId, settings, registry.getAvailable("all"));
 		const effectiveNote = this.#effectiveNote(role, selection);
 		return { role, revision, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
 	}
 
 	/** Catalog ids: `getKnownRoleIds` order first, then leftover merged `modelRoles` keys (deduped). */
 	#catalogRoleIds(settings: Settings): string[] {
-		const roles = [...getKnownRoleIds(settings)];
-		const seen = new Set<string>(roles);
+		const roles = [...MODEL_ROLE_IDS, ...getKnownRoleIds(settings)];
+		const uniqueRoles = [...new Set(roles)];
+		const seen = new Set<string>(uniqueRoles);
 		for (const role in settings.getModelRoles()) {
 			if (seen.has(role)) continue;
 			seen.add(role);
-			roles.push(role);
+			uniqueRoles.push(role);
 		}
-		return roles;
+		return uniqueRoles;
 	}
 
-	/**
-	 * Internal-role rule (R6/§14.7): a role is non-configurable ONLY when it is
-	 * a kind-section role the TUI hides (`getRoleInfo(...).hidden`) that is
-	 * neither explicitly configured nor part of the model cycle — i.e. pure
-	 * internal machinery with no user-facing selector. Everything else stays
-	 * editable by design: hidden roles must still be LISTED (with
-	 * `hidden: true`) so the GUI can explain them, hidden chat/custom roles
-	 * remain configurable, and any role with an explicit value or cycle-order
-	 * membership can be edited or cleared. Unknown custom roles default to
-	 * configurable (deliberately generous).
-	 */
-	#isInternalRole(role: string, settings: Settings): boolean {
-		if (!isKindRole(role)) return false;
-		if (settings.getModelRole(role) !== undefined) return false;
-		if (cfgCycleOrder.get(settings).includes(role)) return false;
-		return getRoleInfo(role, settings).hidden === true;
-	}
-
-	/** Project scope is only writable when project storage is on or a project value exists. */
-	#projectScopeWritable(settings: Settings, role: string): boolean {
-		return cfgModelRoleStorage.get(settings) === "project" || settings.getProjectModelRole(role) !== undefined;
-	}
-
-	/** Writable scopes for one role: user always; project only when a project layer is declared/present. */
-	#writableScopes(settings: Settings, role: string): ("user" | "project")[] {
-		return this.#projectScopeWritable(settings, role) ? ["user", "project"] : ["user"];
+	#roleRevision(role: string, value: string | undefined): RpcRevision {
+		return `role-${Bun.hash(JSON.stringify([role, value ?? null])).toString(36)}`;
 	}
 
 	/** Build one catalog row from live settings; `revision` is the catalog revision at read time. */
-	#buildDescriptor(
-		role: string,
-		settings: Settings,
-		availableModels: Model[],
-		revision: RpcRevision,
-	): RpcProjectRoleDescriptor {
+	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): RpcProjectRoleDescriptor {
 		const info = getRoleInfo(role, settings);
 		const explicitValue = settings.getModelRole(role);
 		// Zero-session resolution: without a live session there is no
 		// session-current model, so the `default` role resolves purely from
 		// configuration (sessions report their actual model via `sessionModel`).
 		const resolved = resolveRoleModelFull(settings, role, availableModels, undefined);
-		const internal = this.#isInternalRole(role, settings);
 		return {
 			roleId: role,
 			name: info.name,
 			...(info.tag ? { description: info.tag } : {}),
-			configurable: !internal,
-			...(internal
-				? { nonConfigurableReason: "Internal kind role: hidden from the model selector with no explicit value" }
-				: {}),
+			configurable: true,
 			...(explicitValue !== undefined ? { explicitValue } : {}),
+			userValue: settings.getGlobalModelRole(role) ?? null,
+			projectValue: settings.getProjectModelRole(role) ?? null,
+			candidateModels: availableModels
+				.filter(info.accepts)
+				.map(model => ({ provider: model.provider, modelId: model.id })),
 			...(resolved.model
 				? {
 						effectiveModel: {
@@ -294,10 +265,10 @@ export class RpcProjectModelRoleService {
 					}
 				: { unresolvedReason: unresolvedRoleReason(explicitValue, resolved.warning) }),
 			source: roleDescriptorSource(settings.getModelRoleProvenance(role)),
-			writableScopes: this.#writableScopes(settings, role),
+			writableScopes: ["user"],
 			hidden: info.hidden === true,
 			section: info.section,
-			revision,
+			revision: this.#roleRevision(role, settings.getGlobalModelRole(role)),
 		};
 	}
 
@@ -313,8 +284,10 @@ export class RpcProjectModelRoleService {
 		roleId: string,
 		selection: RpcModelRoleSelection,
 	): string | undefined {
-		// Loose null check: a missing wire value behaves like an explicit clear.
-		if (selection == null) return undefined;
+		if (selection === null) return undefined;
+		if (!selection || (selection.kind !== "auto" && selection.kind !== "model")) {
+			throw new RpcProjectModelRoleError("invalid_params", "A valid selection is required");
+		}
 		if (selection.kind === "auto") return DEFAULT_MODEL_ROLE_ALIAS;
 		const { provider, modelId, thinkingLevel } = selection.model;
 		const available = registry.getAvailable("all");

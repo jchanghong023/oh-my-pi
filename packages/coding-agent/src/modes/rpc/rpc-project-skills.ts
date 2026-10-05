@@ -18,14 +18,15 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, normalizePathForComparison, pathIsWithin, Snowflake } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import type { AnySetting } from "../../config/registry";
-import { withActiveSettings, type Settings } from "../../config/settings";
+import { UserSettingConflictError, type Settings } from "../../config/settings";
 import { compareSkillOrder } from "../../discovery/helpers";
 import {
 	cfgDisabledExtensions,
 	cfgSkills,
+	cfgSkillsDisabledPaths,
 	cfgSkillsEnableAgentsProject,
 	cfgSkillsEnableAgentsUser,
 	cfgSkillsEnableClaudeProject,
@@ -33,13 +34,11 @@ import {
 	cfgSkillsEnableCodexUser,
 	cfgSkillsEnablePiProject,
 	cfgSkillsEnablePiUser,
-	cfgSkillsIgnoredSkills,
 	type SkillsSettings,
 } from "../../extensibility/settings";
 import { loadSkills, loadSkillsWithShadowed, type Skill, type SkillWarning } from "../../extensibility/skills";
 import {
 	formatRpcSkillId,
-	parseRpcSkillId,
 	RpcRevisionSource,
 	type RpcProjectCopySkillResult,
 	type RpcProjectDeleteSkillResult,
@@ -77,6 +76,8 @@ export interface RpcProjectSkillServiceDeps {
 	/** Settings instance shared by this project (all layers already merged). */
 	readonly getSettings: () => Settings;
 	/** Refresh loaded sessions' effective skill snapshots; returns session ids adopted now vs pending. */
+	/** True while a loaded execution owns this skill's resources. */
+	readonly isSkillInUse?: (filePath: string) => boolean;
 	readonly refreshSessions?: () =>
 		| { adopted: string[]; pending: string[] }
 		| Promise<{ adopted: string[]; pending: string[] }>;
@@ -88,11 +89,13 @@ export interface RpcProjectSkillServiceDeps {
 export interface RpcProjectListSkillsOptions {
 	/** `management`: full catalog incl. disabled/ignored/shadowed rows; `effective`: the session view. */
 	readonly view: "management" | "effective";
+	/** Binds effective-view cursors to their owning loaded session. */
+	readonly sessionId?: string;
 	/** Loaded session's live skill snapshot; preferred over a fresh load for the effective view. */
 	readonly sessionSkills?: readonly Skill[];
 	/** Explicit skills settings for the effective view; derived from the injected Settings when omitted. */
 	readonly skillsSettings?: SkillsSettings;
-	readonly cursor?: number;
+	readonly cursor?: string;
 	readonly limit?: number;
 }
 
@@ -100,9 +103,9 @@ export interface RpcProjectListSkillsOptions {
 export interface RpcProjectSetSkillEnabledInput {
 	readonly skillId: string;
 	readonly enabled: boolean;
-	readonly scope: "user" | "project";
-	/** When provided, must match the current catalog revision (revision_conflict otherwise). */
-	readonly expectedRevision?: RpcRevision;
+	readonly scope: "user";
+	/** Required revision of this concrete resource, not the skill catalog. */
+	readonly expectedRevision: RpcRevision;
 }
 
 /** Input for {@link RpcProjectSkillService.copy} (`copy_skill`). */
@@ -110,15 +113,15 @@ export interface RpcProjectCopySkillInput {
 	readonly skillId: string;
 	readonly targetScope: "user" | "project";
 	readonly targetName: string;
-	/** When provided, must match the current catalog revision (revision_conflict otherwise). */
-	readonly expectedRevision?: RpcRevision;
+	/** Required revision of the source resource. */
+	readonly expectedRevision: RpcRevision;
 }
 
 /** Input for {@link RpcProjectSkillService.delete} (`delete_skill`). */
 export interface RpcProjectDeleteSkillInput {
 	readonly skillId: string;
-	/** When provided, must match the current catalog revision (revision_conflict otherwise). */
-	readonly expectedRevision?: RpcRevision;
+	/** Required revision of this concrete resource. */
+	readonly expectedRevision: RpcRevision;
 }
 
 /**
@@ -146,60 +149,45 @@ const MAX_PAGE_LIMIT = 200;
 /** Skill directory names are also file names — no traversal, no separator tricks. */
 const TARGET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Whether `child` is at or below `parent`, tolerating Windows drive-letter casing. */
+/** Resource operations require a strict descendant, never the skills root itself. */
 function isWithinDir(parent: string, child: string): boolean {
-	const parentPath = path.resolve(parent);
-	const childPath = path.resolve(child);
-	const relative = path.relative(
-		process.platform === "win32" ? parentPath.toLowerCase() : parentPath,
-		process.platform === "win32" ? childPath.toLowerCase() : childPath,
-	);
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+	return normalizePathForComparison(parent) !== normalizePathForComparison(child) && pathIsWithin(parent, child);
 }
 
 /** Rewrite (or insert) the frontmatter `name` of a SKILL.md so the copy owns its new identity. */
-async function rewriteSkillFrontmatterName(skillMdPath: string, name: string): Promise<void> {
-	let content = await fs.readFile(skillMdPath, "utf8");
-	if (content.startsWith("---\n")) {
-		const end = content.indexOf("\n---", 4);
-		if (end !== -1) {
-			const frontmatter = content.slice(0, end);
-			if (/^name:/m.test(frontmatter)) content = content.replace(/^name:.*$/m, `name: ${name}`);
-			else content = `---\nname: ${name}\n${content.slice(4)}`;
-			await fs.writeFile(skillMdPath, content);
-			return;
-		}
+async function rewriteSkillFrontmatterName(skillMdPath: string, name: string, description: string): Promise<void> {
+	const content = await Bun.file(skillMdPath).text();
+	const frontmatter = /^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/.exec(content);
+	if (frontmatter) {
+		const body = frontmatter[2]!;
+		const newline = frontmatter[1]!.endsWith("\r\n") ? "\r\n" : "\n";
+		const updated = /^name:/m.test(body)
+			? body.replace(/^name:[^\r\n]*/m, `name: ${name}`)
+			: `name: ${name}${newline}${body}`;
+		await Bun.write(
+			skillMdPath,
+			`${frontmatter[1]}${updated}${frontmatter[3]}${content.slice(frontmatter[0].length)}`,
+		);
+		return;
 	}
-	await fs.writeFile(skillMdPath, `---\nname: ${name}\ndescription: copied skill\n---\n\n${content}`);
+	await Bun.write(skillMdPath, `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${content}`);
 }
 
-/** Whether the path exists (false on any stat error). */
 async function pathExists(target: string): Promise<boolean> {
 	try {
-		await fs.stat(target);
+		await fs.lstat(target);
 		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Parse a `skillId`, mapping malformed input to `invalid_params`. */
-function parseSkillIdOrThrow(skillId: string): { source: string; name: string } {
-	try {
-		return parseRpcSkillId(skillId);
 	} catch (error) {
-		throw new RpcProjectSkillError("invalid_params", errorMessage(error));
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
 	}
 }
 
-/**
- * Unified skill catalog + management service for RPC project mode. One
- * revision covers the whole catalog; it bumps after every mutation and reload,
- * and `expectedRevision` on the mutation inputs gates against stale clients.
- */
+/** Unified resource-backed catalog; content/config revisions guard each concrete skill. */
 export class RpcProjectSkillService {
 	readonly #deps: RpcProjectSkillServiceDeps;
 	readonly #revision = new RpcRevisionSource("skills-r0");
+	readonly #catalogKeys = new Map<string, string>();
 
 	constructor(deps: RpcProjectSkillServiceDeps) {
 		this.#deps = deps;
@@ -214,29 +202,31 @@ export class RpcProjectSkillService {
 	// list_skills
 	// ─────────────────────────────────────────────────────────────────────────
 
-	/**
-	 * `list_skills`: offset-paginated skill rows. The `effective` view prefers
-	 * the caller's live session snapshot (falling back to a live-settings
-	 * load); the `management` view re-discovers everything, including
-	 * disabled, ignored and shadowed rows, and classifies each row's state
-	 * against the live settings and the effective set.
-	 */
+	/** Lists a fresh management catalog or an actual loaded-session snapshot. */
 	async list(options: RpcProjectListSkillsOptions): Promise<RpcProjectListSkillsResult> {
 		if (options.view !== "management" && options.view !== "effective") {
 			throw new RpcProjectSkillError("invalid_params", `Invalid view: ${String(options.view)}`);
 		}
-		const { cursor, limit } = this.#pagination(options.cursor, options.limit);
+		const limit = this.#pageLimit(options.limit);
 		const warnings: string[] = [];
 		const rows =
-			options.view === "effective"
-				? await this.#effectiveRows(options, warnings)
-				: await this.#managementRows(warnings);
+			options.view === "effective" ? await this.#effectiveRows(options) : await this.#managementRows(warnings);
 		rows.sort((a, b) => compareSkillOrder(a.name, a.filePath, b.name, b.filePath));
-		const items = rows.slice(cursor, cursor + limit);
+		const scope = JSON.stringify([this.#deps.cwd, options.view, options.sessionId ?? null]);
+		const catalogKey = Bun.hash(JSON.stringify(rows)).toString(36);
+		const previous = this.#catalogKeys.get(scope);
+		if (previous !== undefined && previous !== catalogKey) this.#revision.bump();
+		this.#catalogKeys.set(scope, catalogKey);
+		const offset = this.#pageOffset(options.cursor, scope, catalogKey);
+		const items = rows.slice(offset, offset + limit);
 		return {
 			items,
 			revision: this.#revision.current,
-			...(cursor + limit < rows.length ? { nextCursor: String(cursor + limit) } : {}),
+			...(offset + limit < rows.length
+				? {
+						nextCursor: Buffer.from(JSON.stringify([scope, catalogKey, offset + limit])).toString("base64url"),
+					}
+				: {}),
 			warnings,
 		};
 	}
@@ -245,13 +235,7 @@ export class RpcProjectSkillService {
 	// set_skill_enabled / copy_skill / delete_skill / reload_skills
 	// ─────────────────────────────────────────────────────────────────────────
 
-	/**
-	 * `set_skill_enabled`: disabling adds the name to `skills.ignoredSkills`;
-	 * enabling removes it and re-opens a source the toggle had closed (when a
-	 * settings key controls that source). The effective state is re-derived
-	 * after the write so `effective`/`pendingReason` report the real outcome —
-	 * a shadowed name or a still-disabled source stays pending.
-	 */
+	/** A concrete user toggle never changes source switches or name-pattern ignores. */
 	async setEnabled(command: RpcProjectSetSkillEnabledInput): Promise<RpcProjectSetSkillEnabledResult> {
 		const { skillId, enabled, scope } = command;
 		if (typeof skillId !== "string" || !skillId) {
@@ -260,34 +244,41 @@ export class RpcProjectSkillService {
 		if (typeof enabled !== "boolean") {
 			throw new RpcProjectSkillError("invalid_params", `Invalid enabled: ${String(enabled)}`);
 		}
-		if (scope !== "user" && scope !== "project") {
-			throw new RpcProjectSkillError("invalid_params", `Invalid scope: ${String(scope)}`);
+		if (scope !== "user") {
+			throw new RpcProjectSkillError("scope_not_allowed", "Concrete skill settings support only user writes");
 		}
-		this.#assertRevision(command.expectedRevision);
-		const { source, name } = parseSkillIdOrThrow(skillId);
 		const settings = this.#deps.getSettings();
-		const skill = await this.#findSkill(source, name);
+		const skill = await this.#findSkill(skillId);
+		const canonical = normalizePathForComparison(skill.filePath);
+		const rawDisabledPaths = settings.getUserSettingValue("skills.disabledPaths");
+		const expectedDisabled =
+			Array.isArray(rawDisabledPaths) &&
+			rawDisabledPaths.some(
+				filePath => typeof filePath === "string" && normalizePathForComparison(filePath) === canonical,
+			);
+		await this.#assertRevision(command.expectedRevision, skill);
+		const contentDigest = skill.contentRevision;
+		if (contentDigest === undefined) throw new RpcProjectSkillError("unsupported", "Skill has no content revision");
 		try {
-			await withActiveSettings(settings, async () => {
-				cfgSkillsIgnoredSkills.setMember(settings, name, { member: !enabled });
-				if (enabled) {
-					const key = SKILL_SOURCE_SETTING_KEYS[source];
-					if (key !== undefined && key.get(settings) === false) key.set(settings, true);
-				}
-				await settings.flush();
-			});
+			await settings.saveUserSkillEnabled(skill.filePath, enabled, expectedDisabled, contentDigest);
 		} catch (error) {
+			if (error instanceof UserSettingConflictError) {
+				throw new RpcProjectSkillError("revision_conflict", `Skill ${skill.name} changed; read it again`);
+			}
+			if (error instanceof RpcProjectSkillError) throw error;
 			throw new RpcProjectSkillError(
 				"persistence_failed",
 				`Failed to persist skill settings for ${skillId}: ${errorMessage(error)}`,
 			);
 		}
 		resetCapabilities();
-		const revision = this.#revision.bump();
-		this.#deps.emit({ type: "skills_changed", scope, revision });
+		const catalogRevision = this.#revision.bump();
+		const revision = await this.#resourceRevision(skill);
+		this.#deps.emit({ type: "skills_changed", scope, revision: catalogRevision });
 		this.#deps.emit({ type: "settings_changed", scope: "user" });
-		// Fresh post-save classification: the row may still be shadowed by a
-		// same-name skill or filtered by a glob the ignore-list removal missed.
+		const sessions = (await this.#deps.refreshSessions?.()) ?? { adopted: [], pending: [] };
+		// A source switch, include filter, ignored pattern or higher-precedence
+		// same-name resource can still keep this concrete skill out of the effective set.
 		const { classify } = await this.#managementContext();
 		const { state } = classify(skill);
 		return {
@@ -296,6 +287,8 @@ export class RpcProjectSkillService {
 			effective: state === "enabled",
 			...(state !== "enabled" ? { pendingReason: state } : {}),
 			revision,
+			adoptedSessions: sessions.adopted,
+			pendingSessions: sessions.pending,
 		};
 	}
 
@@ -316,9 +309,8 @@ export class RpcProjectSkillService {
 		if (!TARGET_NAME_PATTERN.test(trimmedName)) {
 			throw new RpcProjectSkillError("invalid_params", `Invalid targetName: ${String(targetName)}`);
 		}
-		this.#assertRevision(command.expectedRevision);
-		const { source, name } = parseSkillIdOrThrow(skillId);
-		const skill = await this.#findSkill(source, name);
+		const skill = await this.#findSkill(skillId);
+		const observedRevision = await this.#assertRevision(command.expectedRevision, skill);
 		const targetDir = path.join(
 			targetScope === "user" ? this.#userSkillsDir() : this.#projectSkillsDir(),
 			trimmedName,
@@ -326,14 +318,30 @@ export class RpcProjectSkillService {
 		if (await pathExists(targetDir)) {
 			throw new RpcProjectSkillError("invalid_params", `target exists: ${targetDir}`);
 		}
+		let reserved = false;
 		try {
 			await fs.mkdir(path.dirname(targetDir), { recursive: true });
-			await fs.cp(skill.baseDir, targetDir, { recursive: true });
-			// Rewrite the frontmatter name so the copy surfaces under its new
-			// identity instead of being deduped away as a same-name shadow of the
-			// source (§6.2: a copy is a NEW skill identity).
-			await rewriteSkillFrontmatterName(path.join(targetDir, "SKILL.md"), trimmedName);
+			// Reserve an empty target exclusively; commit SKILL.md last so
+			// discovery cannot publish a partially copied resource tree.
+			await fs.mkdir(targetDir);
+			reserved = true;
+			const sourceSkillFile = normalizePathForComparison(skill.filePath);
+			await fs.cp(skill.baseDir, targetDir, {
+				recursive: true,
+				errorOnExist: true,
+				force: false,
+				filter: entry => normalizePathForComparison(entry) !== sourceSkillFile,
+			});
+			const stagedSkill = path.join(targetDir, `.SKILL-${Snowflake.next()}`);
+			await fs.copyFile(skill.filePath, stagedSkill);
+			await rewriteSkillFrontmatterName(stagedSkill, trimmedName, skill.description);
+			await this.#assertRevision(observedRevision, skill);
+			await fs.rename(stagedSkill, path.join(targetDir, "SKILL.md"));
 		} catch (error) {
+			if (reserved) await fs.rm(targetDir, { recursive: true, force: true });
+			if (error instanceof RpcProjectSkillError) throw error;
+			if ((error as NodeJS.ErrnoException).code === "EEXIST")
+				throw new RpcProjectSkillError("invalid_params", `target exists: ${targetDir}`);
 			throw new RpcProjectSkillError(
 				"execution_failed",
 				`Failed to copy ${skill.baseDir} to ${targetDir}: ${errorMessage(error)}`,
@@ -342,11 +350,17 @@ export class RpcProjectSkillService {
 		resetCapabilities();
 		const revision = this.#revision.bump();
 		this.#deps.emit({ type: "skills_changed", scope: targetScope, revision });
+		await this.#deps.refreshSessions?.();
+		const newSkillId = formatRpcSkillId(
+			targetScope === "user" ? "native:user" : "native:project",
+			normalizePathForComparison(path.join(targetDir, "SKILL.md")),
+		);
+		const copiedSkill = await this.#findSkill(newSkillId);
 		return {
-			skillId: formatRpcSkillId(targetScope === "user" ? "native:user" : "native:project", trimmedName),
+			skillId: newSkillId,
 			name: trimmedName,
 			location: targetDir,
-			revision,
+			revision: await this.#resourceRevision(copiedSkill),
 		};
 	}
 
@@ -360,15 +374,17 @@ export class RpcProjectSkillService {
 		if (typeof skillId !== "string" || !skillId) {
 			throw new RpcProjectSkillError("invalid_params", "skillId is required");
 		}
-		this.#assertRevision(command.expectedRevision);
-		const { source, name } = parseSkillIdOrThrow(skillId);
-		const skill = await this.#findSkill(source, name);
+		const skill = await this.#findSkill(skillId);
+		await this.#assertRevision(command.expectedRevision, skill);
 		const scope = this.#deleteScope(skill);
 		if (scope === undefined) {
 			throw new RpcProjectSkillError(
 				"unsupported",
 				`Skill ${skillId} is not in a user/project skills directory; remove it through its package manager`,
 			);
+		}
+		if (this.#deps.isSkillInUse?.(skill.filePath)) {
+			throw new RpcProjectSkillError("busy", `Skill ${skillId} is in use by an active session`);
 		}
 		try {
 			await fs.rm(skill.baseDir, { recursive: true, force: false });
@@ -381,6 +397,7 @@ export class RpcProjectSkillService {
 		resetCapabilities();
 		const revision = this.#revision.bump();
 		this.#deps.emit({ type: "skills_changed", scope, revision });
+		await this.#deps.refreshSessions?.();
 		return { deleted: true, revision };
 	}
 
@@ -407,32 +424,17 @@ export class RpcProjectSkillService {
 		};
 	}
 
-	/** No-op; kept for symmetry with the other project-mode services. */
-	dispose(): void {}
-
 	// ─────────────────────────────────────────────────────────────────────────
 	// Views and classification
 	// ─────────────────────────────────────────────────────────────────────────
 
 	/** Effective rows: every skill the session (or a live-settings load) actually uses. */
-	async #effectiveRows(options: RpcProjectListSkillsOptions, warnings: string[]): Promise<RpcProjectSkillSummary[]> {
-		let skills: readonly Skill[];
-		if (options.sessionSkills !== undefined) {
-			// The loaded session's live snapshot is the truth for this view; a
-			// disk scan must never impersonate the session's effective state.
-			skills = options.sessionSkills;
-		} else {
-			const settings = this.#deps.getSettings();
-			const skillsSettings = options.skillsSettings ?? cfgSkills.get(settings);
-			const result = await loadSkills({
-				cwd: this.#deps.cwd,
-				...skillsSettings,
-				disabledExtensions: cfgDisabledExtensions.get(settings),
-			});
-			skills = result.skills;
-			warnings.push(...result.warnings.map(warning => `${warning.skillPath}: ${warning.message}`));
+	async #effectiveRows(options: RpcProjectListSkillsOptions): Promise<RpcProjectSkillSummary[]> {
+		if (options.sessionSkills === undefined) {
+			throw new RpcProjectSkillError("invalid_params", "Effective view requires a loaded session snapshot");
 		}
-		return skills.map(skill => this.#buildSummary(skill, "enabled"));
+		const skills = options.sessionSkills;
+		return Promise.all(skills.map(skill => this.#buildSummary(skill, "enabled", undefined, true)));
 	}
 
 	/** Management rows: discovered winners plus every shadowed/filtered row, each classified. */
@@ -442,11 +444,11 @@ export class RpcProjectSkillService {
 		const rows: RpcProjectSkillSummary[] = [];
 		const seen = new Set<string>();
 		for (const skill of [...catalog.skills, ...catalog.shadowed]) {
-			const skillId = formatRpcSkillId(skill.source, skill.name);
+			const skillId = formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath));
 			if (seen.has(skillId)) continue;
 			seen.add(skillId);
 			const { state, shadowedBy } = classify(skill);
-			rows.push(this.#buildSummary(skill, state, shadowedBy));
+			rows.push(await this.#buildSummary(skill, state, shadowedBy));
 		}
 		return rows;
 	}
@@ -459,7 +461,9 @@ export class RpcProjectSkillService {
 		const settings = this.#deps.getSettings();
 		const catalog = await this.#loadManagementCatalog();
 		const effective = await this.#loadEffectiveSkills(catalog.skillsSettings);
-		const effectiveIds = new Set(effective.skills.map(skill => formatRpcSkillId(skill.source, skill.name)));
+		const effectiveIds = new Set(
+			effective.skills.map(skill => formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath))),
+		);
 		const ignoredPatterns = catalog.skillsSettings.ignoredSkills ?? [];
 		const disabledNames = new Set(
 			cfgDisabledExtensions
@@ -467,9 +471,13 @@ export class RpcProjectSkillService {
 				.filter(id => id.startsWith("skill:"))
 				.map(id => id.slice(6)),
 		);
-		const shadowedIds = new Set(catalog.shadowed.map(skill => formatRpcSkillId(skill.source, skill.name)));
+		const shadowedIds = new Set(
+			catalog.shadowed.map(skill => formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath))),
+		);
+		const disabledPaths = new Set(cfgSkillsDisabledPaths.get(settings).map(normalizePathForComparison));
 		const classify = (skill: Skill): { state: RpcSkillState; shadowedBy?: string } => {
-			const skillId = formatRpcSkillId(skill.source, skill.name);
+			const skillId = formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath));
+			if (disabledPaths.has(normalizePathForComparison(skill.filePath))) return { state: "disabled" };
 			if (effectiveIds.has(skillId)) return { state: "enabled" };
 			// Why-is-it-not-effective precedence mirrors loadSkills' own gate
 			// order: `skill:<name>` disabledExtensions entry, source toggle,
@@ -481,7 +489,9 @@ export class RpcProjectSkillService {
 				const winner = effective.skills.find(candidate => candidate.name === skill.name);
 				return {
 					state: "shadowed",
-					...(winner !== undefined ? { shadowedBy: formatRpcSkillId(winner.source, winner.name) } : {}),
+					...(winner !== undefined
+						? { shadowedBy: formatRpcSkillId(winner.source, normalizePathForComparison(winner.filePath)) }
+						: {}),
 				};
 			}
 			// Not effective without a row-specific reason: the master
@@ -508,6 +518,7 @@ export class RpcProjectSkillService {
 	}> {
 		const settings = this.#deps.getSettings();
 		const skillsSettings = cfgSkills.get(settings);
+		resetCapabilities();
 		const result = await loadSkillsWithShadowed({
 			cwd: this.#deps.cwd,
 			...skillsSettings,
@@ -520,16 +531,17 @@ export class RpcProjectSkillService {
 			enableAgentsUser: true,
 			enableAgentsProject: true,
 			ignoredSkills: [],
+			disabledPaths: [],
 			includeSkills: [],
 			disabledExtensions: cfgDisabledExtensions.get(settings),
 		});
 		return { skills: result.skills, shadowed: result.shadowed, warnings: result.warnings, skillsSettings };
 	}
 
-	/** Effective load with the live settings — what a freshly built session would use. */
+	/** Prospective configured set, used only for management-state classification. */
 	async #loadEffectiveSkills(skillsSettings: SkillsSettings): Promise<{ skills: Skill[]; warnings: SkillWarning[] }> {
 		const settings = this.#deps.getSettings();
-		return await loadSkills({
+		return loadSkills({
 			cwd: this.#deps.cwd,
 			...skillsSettings,
 			disabledExtensions: cfgDisabledExtensions.get(settings),
@@ -537,18 +549,14 @@ export class RpcProjectSkillService {
 	}
 
 	/** Locate a skill (winners and shadowed alike) in a fresh management discovery. */
-	async #findSkill(source: string, name: string): Promise<Skill> {
+	async #findSkill(skillId: string): Promise<Skill> {
+		if (typeof skillId !== "string" || !skillId)
+			throw new RpcProjectSkillError("invalid_params", "skillId is required");
 		const catalog = await this.#loadManagementCatalog();
-		return this.#skillFromCatalog(catalog, source, name);
-	}
-
-	#skillFromCatalog(catalog: { skills: Skill[]; shadowed: Skill[] }, source: string, name: string): Skill {
 		const match = [...catalog.skills, ...catalog.shadowed].find(
-			skill => skill.source === source && skill.name === name,
+			skill => formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath)) === skillId,
 		);
-		if (match === undefined) {
-			throw new RpcProjectSkillError("not_found", `Unknown skill: ${formatRpcSkillId(source, name)}`);
-		}
+		if (!match) throw new RpcProjectSkillError("not_found", `Unknown skill: ${skillId}`);
 		return match;
 	}
 
@@ -556,23 +564,29 @@ export class RpcProjectSkillService {
 	// Row building and small helpers
 	// ─────────────────────────────────────────────────────────────────────────
 
-	#buildSummary(skill: Skill, state: RpcSkillState, shadowedBy?: string): RpcProjectSkillSummary {
+	async #buildSummary(
+		skill: Skill,
+		state: RpcSkillState,
+		shadowedBy?: string,
+		adopted = false,
+	): Promise<RpcProjectSkillSummary> {
 		const actions: RpcProjectSkillSummary["actions"][number][] = ["copy"];
 		if (state === "enabled") actions.push("disable");
-		else if (state === "ignored") actions.push("enable");
+		else actions.push("enable");
 		if (this.#deleteScope(skill) !== undefined) actions.push("delete");
 		return {
-			skillId: formatRpcSkillId(skill.source, skill.name),
+			skillId: formatRpcSkillId(skill.source, normalizePathForComparison(skill.filePath)),
 			name: skill.name,
 			description: skill.description,
 			source: skill.source,
 			scope: this.#scopeForSource(skill.source),
+			writableScopes: ["user"],
 			filePath: skill.filePath,
 			hidden: skill.hide === true,
 			state,
-			effective: state === "enabled",
+			effective: adopted,
 			...(shadowedBy !== undefined ? { shadowedBy } : {}),
-			revision: this.#revision.current,
+			revision: await this.#resourceRevision(skill, true),
 			actions,
 		};
 	}
@@ -597,8 +611,8 @@ export class RpcProjectSkillService {
 
 	/** Which writable skills directory the skill lives in, if any (drives `delete` eligibility). */
 	#deleteScope(skill: Skill): "user" | "project" | undefined {
-		if (isWithinDir(this.#userSkillsDir(), skill.baseDir)) return "user";
-		if (isWithinDir(this.#projectSkillsDir(), skill.baseDir)) return "project";
+		if (skill.source === "native:user" && isWithinDir(this.#userSkillsDir(), skill.baseDir)) return "user";
+		if (skill.source === "native:project" && isWithinDir(this.#projectSkillsDir(), skill.baseDir)) return "project";
 		return undefined;
 	}
 
@@ -608,27 +622,75 @@ export class RpcProjectSkillService {
 		return key !== undefined && key.get(settings) === false;
 	}
 
-	/** Offset pagination: cursor defaults to 0, limit to 50 and clamps into [1, 200]. */
-	#pagination(cursor: number | undefined, limit: number | undefined): { cursor: number; limit: number } {
-		if (cursor !== undefined && (!Number.isInteger(cursor) || cursor < 0)) {
-			throw new RpcProjectSkillError("invalid_params", `Invalid cursor: ${String(cursor)}`);
+	#pageLimit(limit: number | undefined): number {
+		if (
+			limit !== undefined &&
+			(typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT)
+		) {
+			throw new RpcProjectSkillError("invalid_params", `limit must be an integer between 1 and ${MAX_PAGE_LIMIT}`);
 		}
-		if (limit !== undefined && !Number.isFinite(limit)) {
-			throw new RpcProjectSkillError("invalid_params", `Invalid limit: ${String(limit)}`);
-		}
-		return {
-			cursor: cursor ?? 0,
-			limit: Math.min(Math.max(Math.trunc(limit ?? DEFAULT_PAGE_LIMIT), 1), MAX_PAGE_LIMIT),
-		};
+		return limit ?? DEFAULT_PAGE_LIMIT;
 	}
 
-	/** `expectedRevision` guard for the mutation inputs (no-op when omitted). */
-	#assertRevision(expectedRevision: RpcRevision | undefined): void {
-		if (expectedRevision !== undefined && expectedRevision !== this.#revision.current) {
+	#pageOffset(cursor: string | undefined, scope: string, snapshot: string): number {
+		if (cursor === undefined) return 0;
+		let decoded: unknown;
+		try {
+			if (typeof cursor !== "string" || !cursor) throw new Error("empty cursor");
+			decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+		} catch {
+			throw new RpcProjectSkillError("invalid_params", "Invalid skill cursor");
+		}
+		if (
+			!Array.isArray(decoded) ||
+			decoded.length !== 3 ||
+			typeof decoded[0] !== "string" ||
+			typeof decoded[1] !== "string" ||
+			!Number.isSafeInteger(decoded[2]) ||
+			decoded[2] < 0
+		) {
+			throw new RpcProjectSkillError("invalid_params", "Invalid skill cursor");
+		}
+		if (decoded[0] !== scope || decoded[1] !== snapshot) {
 			throw new RpcProjectSkillError(
 				"revision_conflict",
-				`Expected skill-catalog revision ${expectedRevision} but current is ${this.#revision.current}`,
+				"Skill cursor belongs to a different view or changed snapshot",
 			);
 		}
+		return decoded[2];
+	}
+
+	async #resourceRevision(skill: Skill, adopted = false): Promise<RpcRevision> {
+		const settings = this.#deps.getSettings();
+		const options = cfgSkills.get(settings);
+		const content = adopted
+			? skill.contentRevision
+			: Bun.hash(await Bun.file(skill.filePath).arrayBuffer()).toString(36);
+		if (content === undefined)
+			throw new RpcProjectSkillError("unsupported", "Effective snapshot has no adopted content revision");
+		const config = {
+			enabled: options.enabled,
+			sourceDisabled: this.#isSourceDisabled(skill.source, settings),
+			disabled: options.disabledPaths.some(
+				filePath => normalizePathForComparison(filePath) === normalizePathForComparison(skill.filePath),
+			),
+			ignored: options.ignoredSkills.filter(pattern => new Bun.Glob(pattern).match(skill.name)),
+			included:
+				options.includeSkills.length === 0 ||
+				options.includeSkills.some(pattern => new Bun.Glob(pattern).match(skill.name)),
+			extensionDisabled: cfgDisabledExtensions.get(settings).includes(`skill:${skill.name}`),
+		};
+		return `skill-${Bun.hash(JSON.stringify([content, config])).toString(36)}`;
+	}
+
+	async #assertRevision(expectedRevision: RpcRevision | undefined, skill: Skill): Promise<RpcRevision> {
+		if (typeof expectedRevision !== "string" || !expectedRevision) {
+			throw new RpcProjectSkillError("invalid_params", "expectedRevision is required");
+		}
+		const current = await this.#resourceRevision(skill);
+		if (expectedRevision !== undefined && expectedRevision !== current) {
+			throw new RpcProjectSkillError("revision_conflict", `Skill ${skill.name} changed; read it again`);
+		}
+		return current;
 	}
 }

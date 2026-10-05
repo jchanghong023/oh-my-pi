@@ -21,7 +21,7 @@ import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
 import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
-import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
+import { getCompanyConfigError, isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
 import { Settings } from "../config/settings";
@@ -66,13 +66,13 @@ export interface BenchTarget {
 	thinking: ResolvedThinkingLevel | undefined;
 }
 
-/** Open the auth vault, settings, and model registry for a benchmark run. */
+/** Open the benchmark runtime; an omitted offline option inherits the host process lane. */
 export async function createDefaultBenchRuntime(options: { offline?: boolean } = {}): Promise<BenchRuntime> {
-	const offline = options.offline === true;
+	const offline = options.offline ?? isCompanyLaneActive();
+	setCompanyOfflineEnabled(offline);
 	if (offline) {
 		// Company environment: flip the lane before the registry captures company
 		// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
-		setCompanyOfflineEnabled(true);
 		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 		const companyError = getCompanyConfigError();
 		if (companyError) process.stderr.write(`${companyError}\n`);
@@ -81,7 +81,8 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 	const settings = await Settings.init({ cwd });
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 		await modelRegistry.hydrateCredentialScopedModelCaches();
 		await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 		return {

@@ -11,7 +11,7 @@
 import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
@@ -39,12 +39,12 @@ import type {
  * directory when `directory` is set. The path may not exist; with `create`, a
  * missing plugin-skill target is only returned when writing it stays in the plugin root.
  */
-async function skillTargetPath(
+async function resolveSkillTarget(
 	url: InternalUrl,
 	skills: readonly Skill[],
 	directory: boolean,
 	create = false,
-): Promise<string> {
+): Promise<{ targetPath: string; content?: string }> {
 	const skillName = url.rawHost || url.hostname;
 	if (!skillName) {
 		throw new Error("skill:// URL requires a skill name: skill://<name>");
@@ -81,14 +81,18 @@ async function skillTargetPath(
 			throw new Error("Path traversal is not allowed");
 		}
 	}
+	const content =
+		!directory && normalizePathForComparison(resolvedPath) === normalizePathForComparison(skill.filePath)
+			? skill.content
+			: undefined;
 	// Agent Plugin skills (§4.1): every target, including the bare instruction
 	// file and base directory, must canonically resolve within the plugin root.
 	// Symlinks may target other files inside the same package.
-	if (!skill.containRoot) return resolvedPath;
+	if (!skill.containRoot) return { targetPath: resolvedPath, content };
 	const escape = `skill:// path resolves outside the plugin root: ${url.href}`;
 	const contained = await resolveContainedPath(skill.containRoot, resolvedPath);
 	if (contained.status === "outside") throw new UrlContainmentError(escape);
-	if (contained.status === "ok") return contained.realPath;
+	if (contained.status === "ok") return { targetPath: contained.realPath, content };
 	if (create) {
 		try {
 			await ensureCreatableWithinRoot(resolvedPath, skill.containRoot, "skill", url.href);
@@ -97,7 +101,7 @@ async function skillTargetPath(
 			throw error instanceof UrlContainmentError ? new UrlContainmentError(escape) : error;
 		}
 	}
-	return resolvedPath;
+	return { targetPath: resolvedPath, content };
 }
 
 /**
@@ -119,7 +123,18 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		const targetPath = await skillTargetPath(url, context?.skills ?? getActiveSkills(), false);
+		const target = await resolveSkillTarget(url, context?.skills ?? getActiveSkills(), false);
+		const { targetPath } = target;
+		if (target.content !== undefined) {
+			return {
+				url: url.href,
+				content: target.content,
+				contentType: contentTypeForPath(targetPath),
+				size: Buffer.byteLength(target.content, "utf-8"),
+				sourcePath: targetPath,
+				notes: [],
+			};
+		}
 
 		let stats: fsTypes.Stats;
 		try {
@@ -155,8 +170,15 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext, options?: LocateOptions): Promise<string | null> {
 		const skills = context?.skills ?? getActiveSkills();
-		const targetPath = await skillTargetPath(url, skills, options?.directory === true, options?.create === true);
+		const { targetPath, content } = await resolveSkillTarget(
+			url,
+			skills,
+			options?.directory === true,
+			options?.create === true,
+		);
 		if (options?.create) return targetPath;
+		// File-backed reads must not bypass the adopted instruction snapshot.
+		if (content !== undefined) return null;
 		try {
 			await fs.stat(targetPath);
 			return targetPath;

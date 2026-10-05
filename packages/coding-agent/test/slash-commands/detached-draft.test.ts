@@ -1,12 +1,14 @@
 import { describe, expect, it, type Mock, vi } from "bun:test";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 
 interface Harness {
 	ctx: InteractiveModeContext;
 	toggleRecording: Mock<() => Promise<void>>;
 	showError: Mock<(message: string) => void>;
+	emitNotice: Mock<AgentSession["emitNotice"]>;
 	editorText(): string;
 }
 
@@ -14,6 +16,7 @@ function createHarness(draft: string): Harness {
 	let text = draft;
 	const toggleRecording = vi.fn(async () => {});
 	const showError = vi.fn((_message: string) => {});
+	const emitNotice = vi.fn<AgentSession["emitNotice"]>((_level, _message) => {});
 	const ctx = createInteractiveModeContext({
 		editor: {
 			getText: () => text,
@@ -23,13 +26,20 @@ function createHarness(draft: string): Harness {
 		},
 		toggleRecording,
 		showError,
+		session: { emitNotice },
 	});
-	return { ctx, toggleRecording, showError, editorText: () => text };
+	return { ctx, toggleRecording, showError, emitNotice, editorText: () => text };
 }
 
 const COMMANDS: ReadonlyArray<readonly [string, (h: Harness) => void]> = [
 	["/record", h => expect(h.toggleRecording).toHaveBeenCalledTimes(1)],
-	["/skills search", h => expect(h.showError).toHaveBeenCalledWith("Usage: /skills search <query>")],
+	[
+		"/skills search",
+		h => {
+			expect(h.emitNotice).toHaveBeenCalledWith("error", "Usage: /skills search <query>");
+			expect(h.showError).not.toHaveBeenCalled();
+		},
+	],
 ];
 
 describe("builtin commands and detached drafts", () => {

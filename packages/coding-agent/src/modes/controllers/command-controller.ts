@@ -72,6 +72,7 @@ import {
 	formatCodexUsageReportLabel,
 	limitMatchesActiveAccount,
 } from "../../slash-commands/helpers/active-oauth-account";
+import { formatResetContextResult, resetContextForCommand } from "../../slash-commands/helpers/clear";
 import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
 import { formatCompactQuota } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { outputMeta } from "../../tools/output-meta";
@@ -212,7 +213,8 @@ export class CommandController {
 		initialError?: unknown,
 	): Promise<void> {
 		if (initialError !== undefined) {
-			this.ctx.showError(
+			this.ctx.session.emitNotice(
+				"error",
 				`Failed to switch workspace: ${initialError instanceof Error ? initialError.message : String(initialError)}`,
 			);
 		}
@@ -226,13 +228,15 @@ export class CommandController {
 				realigned = await this.ctx.applyCwdChange(actual);
 			} catch {}
 			if (!realigned) {
-				this.ctx.showError(
+				this.ctx.session.emitNotice(
+					"error",
 					`Failed to roll back move: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)} (failed to re-align workspace to ${actual})`,
 				);
 				await this.ctx.shutdown();
 				return;
 			}
-			this.ctx.showError(
+			this.ctx.session.emitNotice(
+				"error",
 				`Failed to roll back move: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)} (workspace remains at ${actual})`,
 			);
 			return;
@@ -250,11 +254,17 @@ export class CommandController {
 			realigned = await this.ctx.applyCwdChange(actual);
 		} catch {}
 		if (!realigned) {
-			this.ctx.showError(`Failed to restore source workspace after rollback: workspace remains at ${actual}`);
+			this.ctx.session.emitNotice(
+				"error",
+				`Failed to restore source workspace after rollback: workspace remains at ${actual}`,
+			);
 			await this.ctx.shutdown();
 			return;
 		}
-		this.ctx.showError(`Failed to restore source workspace after rollback: workspace remains at ${actual}`);
+		this.ctx.session.emitNotice(
+			"error",
+			`Failed to restore source workspace after rollback: workspace remains at ${actual}`,
+		);
 	}
 
 	openInBrowser(urlOrPath: string): void {
@@ -1235,15 +1245,12 @@ export class CommandController {
 	}
 
 	async handleResetContextCommand(): Promise<void> {
-		if (this.ctx.session.isCompacting) {
-			this.ctx.session.abortCompaction();
-			while (this.ctx.session.isCompacting) {
-				await Bun.sleep(10);
-			}
-		}
-		const result = await this.ctx.session.resetSessionContext();
+		const result = await resetContextForCommand(this.ctx.session);
 		if (!result) {
-			this.ctx.showWarning("Wait for the current response to finish or abort it before resetting the context.");
+			this.ctx.session.emitNotice(
+				"warning",
+				"Wait for the current response to finish or abort it before resetting the context.",
+			);
 			return;
 		}
 		// Drop the rendered transcript so the UI matches the now-empty model
@@ -1253,15 +1260,7 @@ export class CommandController {
 		this.ctx.resetTranscript();
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorBorderColor();
-		const noun = result.droppedCount === 1 ? "message" : "messages";
-		this.ctx.present([
-			new Spacer(1),
-			new Text(
-				`${theme.fg("accent", `${theme.status.success} Context reset — ${result.droppedCount} ${noun} dropped; session continues.`)}`,
-				1,
-				1,
-			),
-		]);
+		this.ctx.session.emitNotice("info", formatResetContextResult(result));
 		this.ctx.ui.requestRender(true, { clearScrollback: true });
 	}
 
@@ -1325,7 +1324,7 @@ export class CommandController {
 	 */
 	async handleMoveCommand(targetPath?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning("Wait for the current response to finish or abort it before moving.");
+			this.ctx.session.emitNotice("warning", "Wait for the current response to finish or abort it before moving.");
 			return;
 		}
 
@@ -1344,7 +1343,7 @@ export class CommandController {
 
 		const unquoted = stripOuterDoubleQuotes(input);
 		if (!unquoted) {
-			this.ctx.showError("Usage: /move <path>");
+			this.ctx.session.emitNotice("error", "Usage: /move <path>");
 			return;
 		}
 
@@ -1368,7 +1367,10 @@ export class CommandController {
 				parentExists = false;
 			}
 			if (!parentExists) {
-				this.ctx.showError(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`);
+				this.ctx.session.emitNotice(
+					"error",
+					`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`,
+				);
 				return;
 			}
 		}
@@ -1382,7 +1384,10 @@ export class CommandController {
 				try {
 					await fs.mkdir(resolvedPath, { recursive: true });
 				} catch (err) {
-					this.ctx.showError(`Failed to create directory: ${err instanceof Error ? err.message : String(err)}`);
+					this.ctx.session.emitNotice(
+						"error",
+						`Failed to create directory: ${err instanceof Error ? err.message : String(err)}`,
+					);
 					return false;
 				}
 			}
@@ -1403,7 +1408,10 @@ export class CommandController {
 	 */
 	async handleWorktreeCommand(branch?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning("Wait for the current response to finish or abort it before creating a worktree.");
+			this.ctx.session.emitNotice(
+				"warning",
+				"Wait for the current response to finish or abort it before creating a worktree.",
+			);
 			return;
 		}
 		await this.#withSessionMove(async () => {
@@ -1423,7 +1431,10 @@ export class CommandController {
 			try {
 				worktree = await createSessionWorktree(cwd, this.ctx.settings, branchName);
 			} catch (err) {
-				this.ctx.showError(`Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`);
+				this.ctx.session.emitNotice(
+					"error",
+					`Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
 				return false;
 			} finally {
 				loader.stop();
@@ -1438,7 +1449,10 @@ export class CommandController {
 			if (!(await this.#relocateSession(worktree.path))) return false;
 			const cleanup = await cleanSourceCheckoutIfConfigured(cwd, this.ctx.settings);
 			if (cleanup.errorMessage !== undefined) {
-				this.ctx.showWarning(`Worktree created, but cleaning source checkout failed: ${cleanup.errorMessage}`);
+				this.ctx.session.emitNotice(
+					"warning",
+					`Worktree created, but cleaning source checkout failed: ${cleanup.errorMessage}`,
+				);
 			}
 			this.ctx.present([
 				new Spacer(1),
@@ -1457,7 +1471,10 @@ export class CommandController {
 		try {
 			await this.ctx.settings.flush();
 		} catch (err) {
-			this.ctx.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
+			this.ctx.session.emitNotice(
+				"error",
+				`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`,
+			);
 			return false;
 		}
 
@@ -1472,7 +1489,7 @@ export class CommandController {
 		try {
 			await this.ctx.session.moveSession(resolvedPath);
 		} catch (err) {
-			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
+			this.ctx.session.emitNotice("error", `Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
 		let applied = false;

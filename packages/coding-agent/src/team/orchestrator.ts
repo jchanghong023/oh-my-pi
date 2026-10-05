@@ -208,6 +208,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				record.excludedFromOptions = true;
 				record.exclusionReason = outcome.ok ? "提案输出不符合结构化要求" : `提案子代理失败：${outcome.error}`;
 				trackParticipant(record.label, "proposer", "failed");
+				emitProgress("investigation", `阶段一：独立调查（${record.label} 失败）`);
 				return;
 			}
 			record.originalProposal = proposal;
@@ -265,6 +266,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		risks: record.latestProposal!.risks,
 		unknowns: record.latestProposal!.unknowns,
 		evidence: record.latestProposal!.evidence,
+		ambiguityInterpretations: record.latestProposal!.ambiguityInterpretations,
 	});
 
 	// ── Stage 3 + 4: cross review, then revision/recheck rounds ─────────────
@@ -295,12 +297,14 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 						? "审查输出不符合结构化要求，未经审查不可作为最终选项"
 						: `审查子代理失败：${reviewOutcome.error}`;
 					trackParticipant(`review-${record.label}`, "reviewer", "failed");
+					emitProgress("review", `阶段三：交叉审查（${record.label} 失败）`);
 					return;
 				}
 				record.reviews.push(review);
 				record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
 				reviewed.push(record);
 				trackParticipant(`review-${record.label}`, "reviewer", "completed");
+				emitProgress("review", `阶段三：交叉审查（${record.label} 完成）`);
 			}),
 		);
 		if (signal.aborted) return { status: "cancelled" };
@@ -332,7 +336,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					cwd,
 					targetLabel: record.label,
 					round,
-					proposalText: record.latestProposal!.proposal,
+					alignment,
+					proposal: record.latestProposal!,
 					review: record.reviews.at(-1)!,
 					unresolvedBlocking: record.unresolvedBlocking,
 				}),
@@ -343,12 +348,14 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 			if (!revision) {
 				record.revisionFailed = true;
 				trackParticipant(`revision-${record.label}`, "reviser", "failed");
+				emitProgress("revision", `阶段四：修订与复核（${record.label} 修订失败）`);
 				break; // conservative: unresolved state stands as-is
 			}
 			record.revision = revision;
 			if (revision.revisedProposal.trim())
 				record.latestProposal = { ...record.latestProposal!, proposal: revision.revisedProposal };
 			trackParticipant(`revision-${record.label}`, "reviser", "completed");
+			emitProgress("revision", `阶段四：修订与复核（${record.label} 修订完成）`);
 
 			if (needsRecheck(revision.reviewFlags)) {
 				trackParticipant(`recheck-${record.label}`, "reviewer", "running");
@@ -374,10 +381,12 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					record.recheckFailed = true;
 					record.pendingRecheck = true;
 					trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
+					emitProgress("revision", `阶段四：修订与复核（${record.label} 复核失败）`);
 				} else {
 					record.reviews.push(recheck);
 					record.pendingRecheck = false;
 					trackParticipant(`recheck-${record.label}`, "reviewer", "completed");
+					emitProgress("revision", `阶段四：修订与复核（${record.label} 复核完成）`);
 				}
 			}
 			record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import {
 	compareUpdateVersions,
@@ -41,6 +44,12 @@ describe("compareUpdateVersions", () => {
 		expect(compareUpdateVersions("18.0.6+fork.122", "18.0.6+fork.123")).toBeLessThan(0);
 		expect(compareUpdateVersions("18.0.7+fork.1", "18.0.6+fork.999")).toBeGreaterThan(0);
 	});
+
+	it("offers a same-baseline fork release to a local binary without a build counter", () => {
+		expect(compareUpdateVersions("18.6.2+fork.123", "18.6.2")).toBeGreaterThan(0);
+		expect(compareUpdateVersions("18.6.2", "18.6.2+fork.123")).toBeLessThan(0);
+		expect(compareUpdateVersions("18.6.2+other.123", "18.6.2")).toBe(0);
+	});
 });
 
 describe("getLatestGitHubRelease", () => {
@@ -72,6 +81,44 @@ describe("getLatestGitHubRelease", () => {
 			},
 			registry: "",
 		});
+	});
+
+	it("uses gh login credentials when checking the latest release without environment tokens", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-gh-"));
+		const previous = { PATH: Bun.env.PATH, GITHUB_TOKEN: Bun.env.GITHUB_TOKEN, GH_TOKEN: Bun.env.GH_TOKEN };
+		try {
+			const ghPath = path.join(directory, process.platform === "win32" ? "gh.cmd" : "gh");
+			await fs.writeFile(
+				ghPath,
+				process.platform === "win32"
+					? "@echo off\r\necho fixture-gh-token\r\n"
+					: "#!/bin/sh\nprintf '%s\\n' fixture-gh-token\n",
+				{ mode: 0o755 },
+			);
+			// Never fall through to the developer's real gh login if the fixture
+			// cannot launch on this platform.
+			Bun.env.PATH = directory;
+			Bun.env.GITHUB_TOKEN = "";
+			Bun.env.GH_TOKEN = "";
+			let authorization: string | null = null;
+			vi.spyOn(globalThis, "fetch").mockImplementation(
+				Object.assign(
+					async (_input: FetchInput, init?: FetchInit) => {
+						authorization = new Headers(init?.headers).get("Authorization");
+						return Response.json({ tag_name: "v18.6.2+fork.125" });
+					},
+					{ preconnect: globalThis.fetch.preconnect },
+				),
+			);
+			await getLatestGitHubRelease("jchanghong023/oh-my-pi");
+			expect<string | null>(authorization).toBe("Bearer fixture-gh-token");
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) delete Bun.env[key];
+				else Bun.env[key] = value;
+			}
+			await fs.rm(directory, { recursive: true, force: true });
+		}
 	});
 });
 

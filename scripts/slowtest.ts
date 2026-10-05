@@ -24,6 +24,7 @@ export interface GhRunSummary {
 	conclusion: string | null;
 	headSha: string;
 	createdAt: string;
+	displayTitle: string;
 	url: string;
 }
 
@@ -49,12 +50,14 @@ export function pickTriggeredRun(
 	runs: readonly GhRunSummary[],
 	headSha: string,
 	triggeredAtMs: number,
+	runId: string,
 ): GhRunSummary | undefined {
 	const slackMs = 60_000;
 	return runs
 		.filter(
 			run =>
 				run.headSha === headSha &&
+				run.displayTitle === `CI (slowtest ${runId})` &&
 				Number.isFinite(Date.parse(run.createdAt)) &&
 				Date.parse(run.createdAt) >= triggeredAtMs - slackMs,
 		)
@@ -67,8 +70,19 @@ export function conclusionExitCode(conclusion: string | null): number {
 
 /** The CI stage always dispatches the release flavor: a green run creates the
  * fork Release (+fork.N tag) rather than only building download artifacts. */
-export function workflowDispatchArgv(): string[] {
-	return ["gh", "workflow", "run", WORKFLOW_FILE, "-f", "publish_release=true"];
+export function workflowDispatchArgv(runId: string): string[] {
+	return [
+		"gh",
+		"workflow",
+		"run",
+		WORKFLOW_FILE,
+		"--ref",
+		"main",
+		"-f",
+		"publish_release=true",
+		"-f",
+		`slowtest_run_id=${runId}`,
+	];
 }
 
 function fail(message: string): never {
@@ -120,6 +134,10 @@ async function main(debug: boolean): Promise<number> {
 	const branch = runCapture(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
 	if (branch !== "main") fail(`slowtest pushes local main, but the current branch is '${branch}'`);
 
+	const status = runCapture(["git", "status", "--porcelain"]);
+	if (status.exitCode !== 0 || status.stdout.trim() !== "") {
+		fail("the working tree must be clean; CI must validate the same committed tree as fulltest");
+	}
 	// The WSL stage pushes the current tree itself and fails the pipeline on
 	// any sync or fulltest error — nothing downstream may run after a failure.
 	const wslStartedAt = performance.now();
@@ -141,12 +159,13 @@ async function main(debug: boolean): Promise<number> {
 		`\nslowtest: triggering ${WORKFLOW_FILE} (workflow_dispatch, publish_release=true) for ${headSha.slice(0, 12)}`,
 	);
 	const triggeredAtMs = Date.now();
+	const runId = crypto.randomUUID();
 	const triggerStartedAt = performance.now();
-	if ((await runInherit(workflowDispatchArgv())) !== 0) {
+	if ((await runInherit(workflowDispatchArgv(runId))) !== 0) {
 		fail(`gh workflow run ${WORKFLOW_FILE} failed (check 'gh auth status')`);
 	}
 
-	const run = await waitForTriggeredRun(headSha, triggeredAtMs);
+	const run = await waitForTriggeredRun(headSha, triggeredAtMs, runId);
 	if (run === undefined) {
 		fail(`no ${WORKFLOW_FILE} run for ${headSha.slice(0, 12)} appeared within ${RUN_APPEAR_TIMEOUT_MS / 1000} s`);
 	}
@@ -156,7 +175,11 @@ async function main(debug: boolean): Promise<number> {
 	return await monitorRun(run);
 }
 
-async function waitForTriggeredRun(headSha: string, triggeredAtMs: number): Promise<GhRunSummary | undefined> {
+async function waitForTriggeredRun(
+	headSha: string,
+	triggeredAtMs: number,
+	runId: string,
+): Promise<GhRunSummary | undefined> {
 	const deadline = Date.now() + RUN_APPEAR_TIMEOUT_MS;
 	while (Date.now() < deadline) {
 		const listed = ghJson(
@@ -171,12 +194,12 @@ async function waitForTriggeredRun(headSha: string, triggeredAtMs: number): Prom
 				"--limit",
 				"10",
 				"--json",
-				"databaseId,status,conclusion,headSha,createdAt,url",
+				"databaseId,status,conclusion,headSha,createdAt,url,displayTitle",
 			],
 			"gh run list",
 		);
 		if (listed !== undefined) {
-			const match = pickTriggeredRun(listed as GhRunSummary[], headSha, triggeredAtMs);
+			const match = pickTriggeredRun(listed as GhRunSummary[], headSha, triggeredAtMs, runId);
 			if (match !== undefined) return match;
 		}
 		await sleep(RUN_APPEAR_POLL_MS);

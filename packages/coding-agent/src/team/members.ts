@@ -55,20 +55,28 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 		return { ok: false, error: "/team 需要一个当前会话模型（主代理），但当前会话未选择模型。" };
 	}
 
-	let entries = input.configuredMembers.map(entry => entry.trim()).filter(entry => entry.length > 0);
+	let entries = input.configuredMembers.map(entry => entry.trim());
+	const emptyIndex = entries.findIndex(entry => entry.length === 0);
+	if (emptyIndex !== -1) {
+		return { ok: false, error: `team.members[${emptyIndex}] 为空；显式配置的参与模型不能为空。` };
+	}
 	let source: "configured" | "company-default" = "configured";
 	if (entries.length === 0) {
 		if (!input.offlineLaneActive || input.companyModelPatterns.length === 0) {
 			return { ok: false, error: CONFIG_EXAMPLE };
 		}
-		entries = [...input.companyModelPatterns];
+		const availablePatterns = new Set<string>();
+		for (const model of input.availableModels) availablePatterns.add(modelKey(model));
+		entries = input.companyModelPatterns.filter(pattern => availablePatterns.has(pattern));
+		if (entries.length === 0) return { ok: false, error: CONFIG_EXAMPLE };
 		source = "company-default";
 	}
 
+	const availableModels = [...input.availableModels];
 	const seen = new Set<string>();
 	const participants: TeamParticipant[] = [];
 	const resolveEntry = (entry: string, isSessionModel: boolean): string | undefined => {
-		const model = resolveModelFromString(entry, [...input.availableModels]);
+		const model = resolveModelFromString(entry, availableModels);
 		if (!model) return entry;
 		const key = modelKey(model);
 		if (seen.has(key)) return undefined;

@@ -27,10 +27,13 @@ import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { FakeWebSocket, installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 const RELAY_URL = "ws://localhost:8788";
@@ -165,6 +168,115 @@ afterEach(async () => {
 });
 
 describe("collab host registry lifecycle (#6099)", () => {
+	it.each(["extension", "custom"] as const)(
+		"surfaces a consumed %s command failure to guests without replacing the local error listener",
+		async kind => {
+			const auth = await AuthStorage.create(":memory:");
+			const models = new ModelRegistry(auth);
+			const manager = SessionManager.inMemory(tmp);
+			const runtime = new ExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					if (kind === "extension") {
+						pi.registerCommand("audit-fail", {
+							handler: async () => {
+								throw new Error("deliberate command failure");
+							},
+						});
+					}
+				},
+				tmp,
+				new EventBus(),
+				runtime,
+				"audit-command",
+			);
+			const runner = new ExtensionRunner([extension], runtime, tmp, manager, models);
+			const localErrors: string[] = [];
+			const unsubscribeLocal = runner.onError(error => localErrors.push(error.error));
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Test model missing");
+			const agent = new Agent({
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				streamFn: createMockModel({ responses: [] }).stream,
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager: manager,
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: models,
+				extensionRunner: runner,
+				customCommands:
+					kind === "custom"
+						? [
+								{
+									path: "audit-fail.ts",
+									resolvedPath: path.join(tmp, "audit-fail.ts"),
+									source: "project",
+									command: {
+										name: "audit-fail",
+										description: "Deliberately reject a command",
+										execute: () => {
+											throw new Error("deliberate command failure");
+										},
+									},
+								},
+							]
+						: [],
+			});
+			try {
+				const { ctx } = makeHostContext();
+				host = new CollabHost({ ...ctx, session, sessionManager: manager });
+				await host.start(RELAY_URL, WEB_URL);
+				const parsed = parseCollabLink(host.link);
+				if ("error" in parsed || !parsed.writeToken) throw new Error("missing writable test link");
+				const guest = new CollabSocket({
+					wsUrl: parsed.wsUrl,
+					role: "guest",
+					key: await importRoomKey(parsed.key),
+				});
+				guestCleanups.push(() => guest.close());
+				const ready = Promise.withResolvers<void>();
+				const failed = Promise.withResolvers<void>();
+				const fence = Promise.withResolvers<void>();
+				const errors: string[] = [];
+				guest.onFrame = frame => {
+					if (frame.t === "commands") ready.resolve();
+					if (frame.t === "error") {
+						errors.push(frame.message);
+						failed.resolve();
+					}
+					if (frame.t === "event" && frame.event.type === "notice" && frame.event.message === "error fence") {
+						fence.resolve();
+					}
+				};
+				guest.onOpen = () =>
+					guest.send({
+						t: "hello",
+						proto: COLLAB_PROTO,
+						name: "writer",
+						writeToken: Buffer.from(parsed.writeToken!).toString("base64url"),
+					});
+				guest.connect();
+				await ready.promise;
+				guest.send({ t: "prompt", text: "/audit-fail" });
+				await failed.promise;
+				session.emitNotice("info", "error fence", "test");
+				await fence.promise;
+				expect(errors).toEqual([
+					`${kind === "custom" ? "custom-command" : "command"}:audit-fail: deliberate command failure`,
+				]);
+				expect(localErrors).toEqual(["deliberate command failure"]);
+				expect(
+					manager.getEntries().some(entry => entry.type === "message" || entry.type === "custom_message"),
+				).toBe(false);
+			} finally {
+				await host?.stop("test cleanup");
+				unsubscribeLocal();
+				await session.dispose();
+				auth.close();
+			}
+		},
+	);
 	it.each(["navigateTree", "fork"] as const)(
 		"notifies the submitting guest when %s discards an admitted prompt",
 		async transition => {

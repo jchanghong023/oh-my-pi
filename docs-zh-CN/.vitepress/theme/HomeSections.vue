@@ -15,72 +15,51 @@ interface DocumentationSection {
 
 const sections: DocumentationSection[] = [
   {
-    eyebrow: '开始',
-    title: '先完成一次真实任务',
-    description: '从安装、配置与交互开始，再理解会话如何保存和延续。',
+    eyebrow: '上手',
+    title: '使用这个 fork',
+    description: '安装入口见仓库 README；在这里查询命令、快捷键和当前配置。',
     links: [
       { label: '命令与快捷键教程', path: '/command-shortcut-tutorial' },
-      { label: '配置', path: '/config-usage' },
-      { label: '设置', path: '/settings' },
-      { label: '会话', path: '/session' },
-      { label: '记忆', path: '/memory' }
+      { label: '全部设置参考', path: '/settings-reference' },
+      { label: 'Fork 功能与默认值', path: '/requirements/fork' }
     ]
   },
   {
-    eyebrow: '能力',
-    title: '把 IDE 能力接入 Agent',
-    description: '使用代码智能、专业子 agent 与协作模式完成复杂工作。',
+    eyebrow: '检索',
+    title: '定位代码与知识',
+    description: '了解仓库索引、外部 Markdown 知识库和只读查询工具的边界。',
     links: [
-      { label: '代码智能', path: '/lsp-config' },
-      { label: '子 Agent', path: '/task-agent-discovery' },
-      { label: 'Vibe mode', path: '/vibe-mode' },
-      { label: 'Collab', path: '/collab' },
-      { label: '计算机控制', path: '/computer-use' }
+      { label: '代码定位索引需求', path: '/requirements/repo-index' },
+      { label: '工具参考', path: '/tools' }
     ]
   },
   {
-    eyebrow: '模型',
-    title: '为每类工作选择模型',
-    description: '连接 provider、本地模型与兼容端点，并配置模型路由。',
+    eyebrow: '协作',
+    title: '协作与多模型讨论',
+    description: '查询浏览器协作、子代理通信与多模型方案讨论的行为契约。',
     links: [
-      { label: 'Provider', path: '/providers' },
-      { label: '模型', path: '/models' },
-      { label: '本地模型', path: '/local-models' },
-      { label: '添加 Provider', path: '/adding-a-provider' },
-      { label: 'Prewalk', path: '/prewalk' }
+      { label: '协作功能', path: '/requirements/fork#collab-长期链接与网页端命令' },
+      { label: '多模型方案讨论', path: '/requirements/team' },
+      { label: '进程与代理协调', path: '/tools#进程与代理协调' }
     ]
   },
   {
-    eyebrow: '自定义',
-    title: '让 omp 适配你的项目',
-    description: '通过上下文、skills、hooks、工具与 MCP 固化项目工作流。',
+    eyebrow: '集成',
+    title: '接入桌面客户端',
+    description: '区分 OMP 项目运行服务的接口、待接入的 GUI 和真实验收条件。',
     links: [
-      { label: '上下文文件', path: '/context-files' },
-      { label: 'Skills', path: '/skills' },
-      { label: 'Hooks', path: '/hooks' },
-      { label: '自定义工具', path: '/custom-tools' },
-      { label: 'MCP', path: '/mcp-config' }
+      { label: 'rpc-ui 协议与项目运行服务', path: '/requirements/rpc-ui-protocol' },
+      { label: '需求目录', path: '/requirements/README' }
     ]
   },
   {
-    eyebrow: '编程接入',
-    title: '嵌入应用与自动化系统',
-    description: '通过 SDK、RPC 与类型系统接入非交互式工作流。',
+    eyebrow: '依据',
+    title: '查询设计与上游基线',
+    description: '研究资料用于取证；需求目录才是 fork 行为的权威来源。',
     links: [
-      { label: 'SDK', path: '/sdk' },
-      { label: 'RPC', path: '/rpc' },
-      { label: 'Omptype', path: '/omptype-guide' }
-    ]
-  },
-  {
-    eyebrow: '参考',
-    title: '查找精确接口与约束',
-    description: '按需查询 CLI、环境变量、认证与工具审批行为。',
-    links: [
-      { label: 'CLI 参考', path: '/cli-reference' },
-      { label: '环境变量', path: '/environment-variables' },
-      { label: '密钥与认证', path: '/secrets' },
-      { label: '工具审批', path: '/approval-mode' }
+      { label: '研究资料', path: '/research' },
+      { label: '上游 README 对照快照', path: 'https://github.com/jchanghong023/oh-my-pi/blob/main/docs-zh-CN/README.upstream.md' },
+      { label: '需求目录', path: '/requirements/README' }
     ]
   }
 ]
@@ -89,9 +68,9 @@ const sections: DocumentationSection[] = [
 <template>
   <section class="docs-home-sections" aria-labelledby="browse-documentation">
     <div class="docs-home-heading">
-      <p class="docs-home-kicker">官方文档结构</p>
+      <p class="docs-home-kicker">Fork 自有文档</p>
       <h2 id="browse-documentation">按任务找到下一步</h2>
-      <p>目录顺序与 omp.sh/docs 保持一致：先上手，再深入能力、模型、自定义、编程接入与参考。</p>
+      <p>这里维护 fork 的教程、参考与需求，不重复翻译上游 docs；上游通用能力请查看仓库中的原始文档。</p>
     </div>
 
     <div class="docs-home-grid">
@@ -101,7 +80,7 @@ const sections: DocumentationSection[] = [
         <p class="docs-home-card-description">{{ section.description }}</p>
         <ul>
           <li v-for="link in section.links" :key="link.path">
-            <a :href="withBase(link.path)">
+            <a :href="link.path.startsWith('https://') ? link.path : withBase(link.path)">
               <span>{{ link.label }}</span>
               <span aria-hidden="true">→</span>
             </a>

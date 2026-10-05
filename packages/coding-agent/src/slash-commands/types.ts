@@ -1,5 +1,7 @@
+import type { Model } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
 import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
@@ -64,6 +66,10 @@ export interface SlashCommandRuntime {
 	cwd: string;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
+	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */
+	ui?: Pick<ExtensionUIContext, "select" | "confirm">;
+	/** Host model-selection policy; RPC supplies its temporary session setter. */
+	setModel?: (model: Model) => Promise<void>;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */
 	output: (text: string) => Promise<void> | void;
 	/** Re-advertise the available command list (no-op outside ACP). */

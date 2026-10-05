@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed fork RPC project command resolution, settings compare-and-swap, agent-definition metadata preservation, live provider refresh, and root-session isolation for subagent outputs.
+- Fixed fork command behavior for context clearing, logout, skill management, queue updates, plan approval, and host UI cancellation.
+- Fixed fork model exclusions, company provider discovery, offline configuration and team discussion shutdown.
+- Fixed docs search snapshots, UTF-8/BOM/CRLF provenance, long headings and wiki size reporting; corrected repo rename/path identities and Python source ranges.
+- Fixed Biome cancellation while descendant processes still hold output pipes and Windows batch launchers closing those pipes.
+
 ## [18.6.2] - 2026-10-04
 
 ### Fixed

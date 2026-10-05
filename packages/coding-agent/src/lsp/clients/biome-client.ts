@@ -3,7 +3,7 @@
  * Uses Biome's CLI with JSON output instead of LSP (which has stale diagnostics issues).
  */
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, ptree } from "@oh-my-pi/pi-utils";
 import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../../lsp/types";
 
 // =============================================================================
@@ -66,38 +66,34 @@ async function runBiome(
 	const command = resolvedCommand ?? "biome";
 
 	try {
-		const proc = Bun.spawn([command, ...args], {
+		signal?.throwIfAborted();
+		using proc = ptree.spawn([command, ...args], {
 			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-			signal,
+			detached: true,
+			stderr: "full",
 		});
+		// wait() uses the retained stderr bytes. Cancel the unused tee branch
+		// instead of buffering a second copy of the entire diagnostic report.
+		void proc.stderr?.cancel().catch(() => {});
+		void proc.exitedCleanly.catch(() => {}); // wait() reports exit errors after draining both pipes.
 
-		// On Windows an aborted spawn may only kill the direct child; a script
-		// wrapper's grandchild can keep the stdout pipe open forever, so the
-		// abort must resolve this run instead of waiting for pipe EOF.
-		let onAbort: (() => void) | undefined;
-		const aborted = signal
-			? new Promise<never>((_, reject) => {
-					onAbort = () => reject(signal.reason);
-					signal.addEventListener("abort", onAbort, { once: true });
-				})
-			: undefined;
-		let stdout = "";
-		let stderr = "";
+		// A wrapper can exit while descendants retain its pipes, or a process
+		// can close its pipes and stay alive. Own cancellation through the full
+		// wait(), and terminate the tree rather than just the wrapper process.
+		const onAbort = signal ? () => proc.kill(new ptree.AbortError(signal.reason, "<cancelled>"), -1) : undefined;
+		if (onAbort && signal) {
+			signal.addEventListener("abort", onAbort, { once: true });
+			if (signal.aborted) onAbort();
+		}
 		try {
-			const texts = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-			[stdout, stderr] = aborted ? await Promise.race([texts, aborted]) : await texts;
+			const result = await proc.wait({ allowNonZero: true, stderr: "full" });
+			signal?.throwIfAborted();
+			return { stdout: result.stdout, stderr: result.stderr, success: result.ok };
 		} finally {
 			if (onAbort && signal) signal.removeEventListener("abort", onAbort);
 		}
-		const exitCode = await proc.exited;
-		signal?.throwIfAborted();
-
-		return { stdout, stderr, success: exitCode === 0 };
 	} catch (err) {
-		if (signal?.aborted) throw err;
+		if (signal?.aborted) throw signal.reason;
 		return { stdout: "", stderr: String(err), success: false };
 	}
 }

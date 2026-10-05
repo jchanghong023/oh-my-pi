@@ -598,19 +598,19 @@ async fn exec_simple_builtin_impl<
 	context: commands::ExecutionContext<'_, SE>,
 	args: Vec<CommandArg>,
 ) -> Result<results::ExecutionResult, error::Error> {
-	let plain_args = args
-		.into_iter()
-		.map(|arg| match arg {
-			CommandArg::String(s) => Ok(s),
-			CommandArg::OsString(_) => Err(error::ErrorKind::InternalError(
-				"builtin cannot accept non-UTF-8 argument".into(),
-			)
-			.into()),
-			CommandArg::Assignment(a) => Ok(a.to_string()),
-		})
-		.collect::<Result<Vec<_>, error::Error>>()?;
+	if args.iter().any(|arg| matches!(arg, CommandArg::OsString(_))) {
+		return Err(error::ErrorKind::InternalError(
+			"builtin cannot accept non-UTF-8 argument".into(),
+		)
+		.into());
+	}
+	let plain_args = args.into_iter().filter_map(|arg| match arg {
+		CommandArg::String(s) => Some(s),
+		CommandArg::Assignment(a) => Some(a.to_string()),
+		CommandArg::OsString(_) => None,
+	});
 
-	T::execute(context, plain_args.into_iter())
+	T::execute(context, plain_args)
 }
 
 fn exec_builtin<T: Command + Send + Sync, SE: extensions::ShellExtensions>(
@@ -624,19 +624,19 @@ async fn exec_builtin_impl<T: Command + Send + Sync, SE: extensions::ShellExtens
 	context: commands::ExecutionContext<'_, SE>,
 	args: Vec<CommandArg>,
 ) -> Result<results::ExecutionResult, error::Error> {
-	let plain_args = args
-		.into_iter()
-		.map(|arg| match arg {
-			CommandArg::String(s) => Ok(s),
-			CommandArg::OsString(_) => Err(error::ErrorKind::InternalError(
-				"builtin cannot accept non-UTF-8 argument".into(),
-			)
-			.into()),
-			CommandArg::Assignment(a) => Ok(a.to_string()),
-		})
-		.collect::<Result<Vec<_>, error::Error>>()?;
+	if args.iter().any(|arg| matches!(arg, CommandArg::OsString(_))) {
+		return Err(error::ErrorKind::InternalError(
+			"builtin cannot accept non-UTF-8 argument".into(),
+		)
+		.into());
+	}
+	let plain_args = args.into_iter().filter_map(|arg| match arg {
+		CommandArg::String(s) => Some(s),
+		CommandArg::Assignment(a) => Some(a.to_string()),
+		CommandArg::OsString(_) => None,
+	});
 
-	let result = T::new(plain_args.into_iter());
+	let result = T::new(plain_args);
 	let command = match result {
 		Ok(command) => command,
 		Err(e) => {

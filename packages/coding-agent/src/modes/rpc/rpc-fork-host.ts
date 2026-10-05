@@ -8,13 +8,11 @@
  * modules (permission approval, session listing, rich ask, ...) register their
  * handlers here instead of extending the upstream command switch.
  */
-import type { AgentSession } from "../../session/agent-session";
 import type { RpcResponse } from "./rpc-types";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 
 /** Capabilities fork feature modules use to answer commands and emit frames. */
 export interface RpcForkContext {
-	readonly session: AgentSession;
 	/** Emit an outbound protocol frame (fork bypass events, requests) on stdout. */
 	readonly emit: (frame: object) => void;
 	readonly success: (id: string | undefined, command: string, data?: object | null) => RpcResponse;
@@ -39,20 +37,32 @@ export type RpcForkCommandHandler = (command: RpcForkCommandBase) => Promise<Rpc
 
 export class RpcForkHost {
 	#negotiated = false;
+	#disposed = false;
 	readonly #commands = new Map<string, RpcForkCommandHandler>();
 	readonly #frameHandlers: Array<(parsed: unknown) => boolean> = [];
 	readonly #disposers: Array<(reason: string) => void> = [];
 	readonly #activators: Array<() => void> = [];
+	readonly #pendingRequestSources: Array<() => boolean> = [];
 
 	constructor(readonly context: RpcForkContext) {}
 
 	/** True once the client negotiated the fork protocol version. */
 	get isActive(): boolean {
-		return this.#negotiated;
+		return this.#negotiated && !this.#disposed;
+	}
+
+	/** True while an owned fork approval or question is awaiting the client. */
+	get hasPendingRequests(): boolean {
+		return this.#pendingRequestSources.some(source => source());
+	}
+
+	registerPendingRequestSource(source: () => boolean): void {
+		this.#pendingRequestSources.push(source);
 	}
 
 	/** Activate the fork surface after a successful `negotiate_protocol` v3 exchange. */
 	activate(): void {
+		if (this.#negotiated || this.#disposed) return;
 		this.#negotiated = true;
 		for (const activator of this.#activators) activator();
 	}
@@ -71,7 +81,7 @@ export class RpcForkHost {
 		this.#frameHandlers.push(handler);
 	}
 
-	/** Register fail-closed cleanup executed when the client disconnects after v3 negotiation. */
+	/** Register cleanup executed on disconnect, including resources acquired before negotiation. */
 	registerDisposer(disposer: (reason: string) => void): void {
 		this.#disposers.push(disposer);
 	}
@@ -82,6 +92,9 @@ export class RpcForkHost {
 	 * (stock `Unknown command` error).
 	 */
 	async handleCommand(command: RpcForkCommandBase): Promise<RpcResponse | undefined> {
+		if (this.#disposed) {
+			return this.context.error(command.id, command.type, "RPC session has been disposed", "session_disposed");
+		}
 		if (!this.#negotiated) return undefined;
 		const handler = this.#commands.get(command.type);
 		if (!handler) return undefined;
@@ -90,16 +103,17 @@ export class RpcForkHost {
 
 	/** Dispatch an inbound bypass frame; unconsumed frames keep stock behavior. */
 	handleControlFrame(parsed: unknown): boolean {
-		if (!this.#negotiated) return false;
+		if (!this.isActive) return false;
 		for (const handler of this.#frameHandlers) {
 			if (handler(parsed)) return true;
 		}
 		return false;
 	}
 
-	/** Fail closed every pending fork request; called on the stdin-EOF path. */
+	/** Release every owned resource and fail pending requests closed once. */
 	dispose(reason: string): void {
-		if (!this.#negotiated) return;
+		if (this.#disposed) return;
+		this.#disposed = true;
 		for (const disposer of this.#disposers) disposer(reason);
 	}
 }

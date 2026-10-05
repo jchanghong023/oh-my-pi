@@ -16,7 +16,6 @@ import {
 
 const cleanupDirs: string[] = [];
 const openPublications: CollabHostPublication[] = [];
-const openServers: { server: net.Server; sockets: Set<net.Socket> }[] = [];
 
 afterEach(async () => {
 	for (const pub of openPublications.splice(0)) {
@@ -25,13 +24,6 @@ afterEach(async () => {
 		} catch {
 			// best-effort
 		}
-	}
-	for (const { server, sockets } of openServers.splice(0)) {
-		// Hung fixture sockets must not keep server.close() waiting forever.
-		for (const socket of sockets) socket.destroy();
-		const closed = Promise.withResolvers<void>();
-		server.close(() => closed.resolve());
-		await closed.promise;
 	}
 	for (const dir of cleanupDirs.splice(0)) {
 		await fs.rm(dir, { recursive: true, force: true });

@@ -113,6 +113,7 @@ describe("/collab slash command QR code rendering", () => {
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
 		expect(statusText).toContain("my.omp.sh/#started-full");
 		expect(harness.copy).toHaveBeenCalledWith("https://my.omp.sh/#started-full");
+		expect(statusText).toContain("control the session and run shell/Python commands on this host");
 		const presented = harness.present.mock.calls[0]?.[0] as readonly unknown[];
 
 		const component = presented[1] as CollabQrCodeComponent;

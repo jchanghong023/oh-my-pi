@@ -94,6 +94,10 @@ installed_binary_matches() {
     target="${INSTALL_DIR}/omp"
     [ -x "$target" ] || return 1
     installed_output=$("$target" --version 2>/dev/null) || return 1
+    case "$installed_output" in
+        omp/*) ;;
+        *) return 1 ;;
+    esac
     installed_version=${installed_output#omp/}
     installed_version=${installed_version%% *}
     [ "$installed_version" = "${1#v}" ]
@@ -186,6 +190,10 @@ install_binary() {
     fi
 
     BINARY="omp-${PLATFORM}-${ARCH}"
+    if [ -d "${INSTALL_DIR}/omp" ]; then
+        echo "Refusing to replace a directory at ${INSTALL_DIR}/omp" >&2
+        exit 1
+    fi
     # Get release tag
     if [ -n "$REF" ]; then
         echo "Fetching release $REF..."
@@ -221,7 +229,7 @@ install_binary() {
     # Download to a same-directory temp file first so a failed download keeps
     # the old install working. rename(2) atomically replaces the directory entry
     # while any running Linux process safely retains the old inode.
-    TMP_BINARY="${INSTALL_DIR}/.omp.tmp.$$"
+    TMP_BINARY="$(mktemp "${INSTALL_DIR}/.omp.tmp.XXXXXX")"
     trap 'rm -f "$TMP_BINARY"' EXIT
     # Download binary. --progress-bar shows a live bar with speed on a TTY;
     # without -s, curl also prints the concrete failure reason (HTTP status or
@@ -268,6 +276,16 @@ install_binary() {
                 echo "    (install the libstdc++ and libgcc runtime packages for your distro)"
             fi
         fi
+        exit 1
+    fi
+    case "$SMOKE_OUTPUT" in
+        omp/*) SMOKE_VERSION=${SMOKE_OUTPUT#omp/} ;;
+        *) SMOKE_VERSION="" ;;
+    esac
+    SMOKE_VERSION=${SMOKE_VERSION%% *}
+    if [ "$SMOKE_VERSION" != "${LATEST#v}" ]; then
+        echo "Downloaded binary reports an unexpected version: $SMOKE_OUTPUT" >&2
+        echo "Expected: ${LATEST#v}; existing install was not changed." >&2
         exit 1
     fi
 

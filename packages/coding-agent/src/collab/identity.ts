@@ -12,8 +12,9 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getConfigRootDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, isEnoent, logger, withFileLock } from "@oh-my-pi/pi-utils";
 import { ROOM_KEY_BYTES, WRITE_TOKEN_BYTES } from "@oh-my-pi/pi-wire";
+import { replaceFileAtomically } from "../utils/atomic-file";
 import { generateRoomKey, generateWriteToken } from "./crypto";
 import { generateRoomId } from "./protocol";
 
@@ -51,28 +52,22 @@ export async function loadOrCreateCollabIdentity(): Promise<CollabRoomIdentity> 
 	// Unreadable does not mean invalid — keep the file and its links intact.
 	if (first.status === "unreadable") return freshIdentity();
 	const identity = freshIdentity();
-	// Missing or corrupt: (re)create it.
+	// Recheck under the process-safe lease: another omp may have published the
+	// identity while we waited. Stage both first creation and corruption recovery
+	// so no reader can mistake an in-progress write for a corrupt identity.
 	try {
 		await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-		// Exclusive create: a second omp racing this one loses with EEXIST and
-		// adopts the winner's identity instead of overwriting it.
-		await fs.writeFile(file, serializeIdentity(identity), { flag: "wx", mode: 0o600 });
-		return identity;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException | null)?.code !== "EEXIST") {
-			logger.warn("collab identity could not be persisted", { error: String(error) });
+		return await withFileLock(file, async () => {
+			const current = await readIdentity(file);
+			if (current.status === "ok") return current.identity;
+			if (current.status === "unreadable") return identity;
+			await writeIdentityAtomically(file, identity);
 			return identity;
-		}
+		});
+	} catch (error) {
+		logger.warn("collab identity could not be persisted", { error: String(error) });
+		return identity;
 	}
-	const second = await readIdentity(file);
-	if (second.status === "ok") return second.identity;
-	// Same rule as above: a file we cannot read may still be valid.
-	if (second.status === "unreadable") return identity;
-	// The file exists but does not parse as an identity (truncated write, hand
-	// edit, version bump): replace it atomically so a reader never sees a
-	// half-written file.
-	await writeIdentityAtomically(file, identity);
-	return identity;
 }
 
 function freshIdentity(): CollabRoomIdentity {
@@ -135,6 +130,7 @@ async function readIdentity(file: string): Promise<IdentityRead> {
 	let raw: string;
 	try {
 		raw = await fs.readFile(file, "utf8");
+		if (process.platform !== "win32") await fs.chmod(file, 0o600);
 	} catch (error) {
 		if (!isEnoent(error)) {
 			logger.warn("collab identity unreadable; keeping the file intact", { error: String(error) });
@@ -150,14 +146,19 @@ async function readIdentity(file: string): Promise<IdentityRead> {
 	return { status: "ok", identity };
 }
 
-/** Best-effort tmp+rename replacement of a corrupt identity file. */
+/** Publish a complete owner-only identity while the identity lease is held. */
 async function writeIdentityAtomically(file: string, identity: CollabRoomIdentity): Promise<void> {
-	const tmp = `${file}.tmp-${process.pid}`;
+	const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	const staged = await fs.open(tmp, "wx", 0o600);
 	try {
-		await fs.writeFile(tmp, serializeIdentity(identity), { mode: 0o600 });
-		await fs.rename(tmp, file);
-	} catch (error) {
-		logger.warn("collab identity could not be replaced", { error: String(error) });
+		try {
+			await staged.writeFile(serializeIdentity(identity), "utf8");
+			await staged.sync();
+		} finally {
+			await staged.close();
+		}
+		await replaceFileAtomically(tmp, file);
+	} finally {
 		await fs.rm(tmp, { force: true }).catch(() => {});
 	}
 }

@@ -69,7 +69,7 @@ Logins are **provider-scoped**: authenticating `anthropic` does not authenticate
 Use the interactive slash commands inside a session:
 
 - `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
-- `/logout` — opens the provider selector to remove stored credentials.
+- `/logout` — opens the provider/account selectors; `/logout <provider>` goes directly to that provider's stored accounts. Native and protocol-backed dialogs use the same exact stored-row removal. Cancelling or changing the session while selecting does not remove a credential. Other stored accounts, environment or config credentials can still authenticate the provider; the result warns when auth remains. Protocol execution requires a real selection UI, not an automatic headless choice.
 
 Outside a session, `omp login [<provider>]` runs the same login from the terminal, including extension-registered providers: it prints the auth URL (and opens it in your browser), reads any prompts from stdin, and saves to the same store sessions use — local `agent.db`, or the configured auth broker. Without a provider it shows a numbered picker. Successful login refreshes that provider's model catalog online so newly unlocked models are visible.
 

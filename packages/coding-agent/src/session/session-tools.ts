@@ -72,6 +72,7 @@ export interface SessionToolsHost {
 	clientBridge(): ClientBridge | undefined;
 	agentKind(): "main" | "sub";
 	isDisposed(): boolean;
+	sessionGeneration(): number;
 	isStreaming(): boolean;
 	queuedMessageCount(): number;
 	planModeEnabled(): boolean;
@@ -344,7 +345,7 @@ export class SessionTools {
 	 * prompt carries no catalog (no mounts, or a custom prompt that omits the section).
 	 */
 	#basePromptXdevNames: ReadonlySet<string> = new Set();
-	#toolRegistryMutationScope = new AsyncLocalStorage<boolean>();
+	#toolRegistryMutationScope = new AsyncLocalStorage<{ generation: number; sessionId: string }>();
 	/**
 	 * Render-scoped candidate prompt surface. Rebuild frames run inside
 	 * `.run(candidate, …)` so tool getters read the candidate during render and
@@ -730,17 +731,41 @@ export class SessionTools {
 
 	/** Serializes every registry and presentation mutation for this session. */
 	runToolRegistryMutation<T>(mutation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-		if (this.#toolRegistryMutationScope.getStore()) return untilAborted(signal, mutation);
-		const serialized = this.#toolRegistryMutationTail.then(() => {
-			signal?.throwIfAborted();
-			return this.#toolRegistryMutationScope.run(true, mutation);
-		});
+		if (this.#toolRegistryMutationScope.getStore()) {
+			this.#assertCurrentToolMutation();
+			return untilAborted(signal, mutation);
+		}
+		const owner = {
+			generation: this.#host.sessionGeneration(),
+			sessionId: this.#host.sessionManager.getSessionId(),
+		};
+		const serialized = this.#toolRegistryMutationTail.then(() =>
+			this.#toolRegistryMutationScope.run(owner, async () => {
+				signal?.throwIfAborted();
+				this.#assertCurrentToolMutation();
+				const result = await mutation();
+				this.#assertCurrentToolMutation();
+				return result;
+			}),
+		);
 		const operation = untilAborted(signal, serialized);
 		this.#toolRegistryMutationTail = serialized.then(
 			() => undefined,
 			() => undefined,
 		);
 		return operation;
+	}
+
+	#assertCurrentToolMutation(): void {
+		const owner = this.#toolRegistryMutationScope.getStore();
+		if (
+			this.#host.isDisposed() ||
+			(owner &&
+				(owner.generation !== this.#host.sessionGeneration() ||
+					owner.sessionId !== this.#host.sessionManager.getSessionId()))
+		) {
+			throw new Error("Session changed during the tool registry mutation.");
+		}
 	}
 
 	/** Names of every registered tool. */
@@ -1054,7 +1079,6 @@ export class SessionTools {
 		signal?.throwIfAborted();
 		const previousBaseActiveToolNames = this.#baseActiveToolNames;
 		toolNames = normalizeToolNames(toolNames);
-		this.#baseActiveToolNames = toolNames;
 		const codeMode = resolveCodeMode({
 			provider: this.#host.model()?.provider ?? "",
 			toolMode: this.#host.model()?.toolMode,
@@ -1089,6 +1113,7 @@ export class SessionTools {
 			const goalRegistration = this.#ensureGoalRegistered?.();
 			if (goalRegistration) await untilAborted(signal, goalRegistration);
 		}
+		this.#assertCurrentToolMutation();
 		const selectedTools = toolNames.flatMap(name => {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [{ name, tool }] : [];
@@ -1206,6 +1231,7 @@ export class SessionTools {
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
 		let candidateSurface: PromptSurface | undefined;
 		try {
+			this.#baseActiveToolNames = toolNames;
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(true);
 			if (this.#rebuildSystemPrompt) {
@@ -1275,6 +1301,7 @@ export class SessionTools {
 				}
 			}
 			signal?.throwIfAborted();
+			this.#assertCurrentToolMutation();
 		} catch (error) {
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(false);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(false);
@@ -1744,25 +1771,26 @@ export class SessionTools {
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
 	async refreshSkills(): Promise<void> {
-		resetCapabilities();
-		if (this.#skillsReloadable) {
-			const skillsSettings = cfgSkills.get(this.#host.settings);
-			const discovered = await loadSkills({
-				...skillsSettings,
-				cwd: this.#host.sessionManager.getCwd(),
-				disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
-				extensionRoots: this.#host.effectiveExtensionRoots(),
-			});
-			this.#skills = discovered.skills;
-			this.#skillWarnings = discovered.warnings;
-			this.#skillsSettings = skillsSettings;
-
-			if (this.#host.agentKind() === "main") {
-				setActiveSkills(this.#skills);
+		return this.runToolRegistryMutation(async () => {
+			resetCapabilities();
+			if (this.#skillsReloadable) {
+				const skillsSettings = cfgSkills.get(this.#host.settings);
+				const discovered = await loadSkills({
+					...skillsSettings,
+					cwd: this.#host.sessionManager.getCwd(),
+					disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
+					extensionRoots: this.#host.effectiveExtensionRoots(),
+				});
+				this.#assertCurrentToolMutation();
+				this.#skills = discovered.skills;
+				this.#skillWarnings = discovered.warnings;
+				this.#skillsSettings = skillsSettings;
+				if (this.#host.agentKind() === "main") setActiveSkills(this.#skills);
 			}
-		}
-		await this.refreshBaseSystemPrompt();
-		this.#host.notifyCommandMetadataChanged();
+			await this.refreshBaseSystemPrompt();
+			this.#assertCurrentToolMutation();
+			this.#host.notifyCommandMetadataChanged();
+		});
 	}
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
@@ -1963,6 +1991,7 @@ export class SessionTools {
 	refreshBaseSystemPrompt(commitIf?: () => boolean): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
 			const prepared = await this.#prepareBaseSystemPrompt();
+			this.#assertCurrentToolMutation();
 			if (commitIf && !commitIf()) return;
 			prepared?.commit?.();
 		});
@@ -1970,6 +1999,13 @@ export class SessionTools {
 
 	async #prepareBaseSystemPrompt(isCurrent?: () => boolean): Promise<SystemPromptPreparation | undefined> {
 		if (this.#host.isDisposed() || !this.#rebuildSystemPrompt || isCurrent?.() === false) return;
+		const generation = this.#host.sessionGeneration();
+		const sessionId = this.#host.sessionManager.getSessionId();
+		const stillCurrent = (): boolean =>
+			!this.#host.isDisposed() &&
+			generation === this.#host.sessionGeneration() &&
+			sessionId === this.#host.sessionManager.getSessionId() &&
+			isCurrent?.() !== false;
 		// Local alias: closures below cannot observe the field narrowing.
 		const rebuildSystemPrompt = this.#rebuildSystemPrompt;
 		const activeToolNames = this.getActiveToolNames();
@@ -1990,6 +2026,8 @@ export class SessionTools {
 		const built = await this.#promptSurfaceScope.run(candidate, () =>
 			rebuildSystemPrompt(promptToolNames, this.#toolRegistry, { directToolNames }),
 		);
+		this.#assertCurrentToolMutation();
+		if (!stillCurrent()) return;
 		const promptTools = promptToolNames
 			.map(name => this.#toolRegistry.get(name))
 			.filter((tool): tool is AgentTool => tool != null);
@@ -2005,7 +2043,7 @@ export class SessionTools {
 			commit: () => {
 				// Publish only to a live, current session whose base this
 				// preparation still owns.
-				if (this.#host.isDisposed() || isCurrent?.() === false) return false;
+				if (!stillCurrent()) return false;
 				// A handler may have rebuilt policy while this preparation was
 				// awaiting its final commit: its own lifecycle published its own
 				// snapshot, so only carry the prompt forward.

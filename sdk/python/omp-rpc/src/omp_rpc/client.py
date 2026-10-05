@@ -840,16 +840,16 @@ class RpcClient(WireClient):
         observe fork bypass/event frames (they are not typed notifications).
         """
         response = self._request("negotiate_protocol", protocolVersion=3)
-        if not response.get("success"):
-            raise RpcCommandError(
-                "negotiate_protocol",
-                str(response.get("error", "fork protocol v3 negotiation failed")),
-            )
+        if response.get("protocolVersion") != 3:
+            raise RpcProtocolError("Fork protocol v3 negotiation failed")
         self._protocol_version = 3
+        self._protocol_v2_enabled = True
         return response
 
     def send_fork_frame(self, frame: Mapping[str, JsonValue]) -> None:
         """Write a raw v3 bypass frame (permission_response/ask_response/ask_pause)."""
+        if self._protocol_version != 3:
+            raise RpcProtocolError("Fork protocol v3 has not been negotiated")
         process = self._require_process()
         payload: JsonObject = {str(key): value for key, value in frame.items()}
         self._write_json(process, payload)
@@ -1497,8 +1497,11 @@ class RpcClient(WireClient):
 
         if not bool(response.get("success", False)):
             raw_code = response.get("code")
+            raw_command = response.get("command")
             raise RpcCommandError(
-                command=str(response.get("command", command_type)),
+                command=raw_command
+                if isinstance(raw_command, str) and raw_command != "error"
+                else command_type,
                 error=str(response.get("error", "")),
                 code=raw_code if isinstance(raw_code, str) else None,
             )

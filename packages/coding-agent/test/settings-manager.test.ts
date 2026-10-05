@@ -162,8 +162,11 @@ describe("Settings", () => {
 		it("keeps cloned defaults independent across settings instances", () => {
 			const first = cfgCompaction.get(Settings.isolated());
 			const second = cfgCompaction.get(Settings.isolated());
-			expect(first).not.toBe(second);
-			expect(first.methodOrder).not.toBe(second.methodOrder);
+			const expected = structuredClone(second);
+			first.methodOrder = [...first.methodOrder].reverse();
+			first.enabled = !first.enabled;
+			expect(second).toEqual(expected);
+			expect(cfgCompaction.get(Settings.isolated())).toEqual(expected);
 		});
 
 		it("bumps the effective revision when cwd re-resolves scoped arrays", async () => {

@@ -32,8 +32,9 @@ import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/message
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
 import { type InternalAvailableSlashCommand, buildAvailableSlashCommands } from "../slash-commands/available-commands";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
-import { executeBuiltinSlashCommand } from "../slash-commands/builtin-registry";
+import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../slash-commands/builtin-registry";
 import { reloadTuiPluginState } from "../slash-commands/builtin-marketplace";
+import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import type { SlashCommandRuntime } from "../slash-commands/types";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
@@ -139,10 +140,9 @@ const TRANSCRIPT_ENTRY_TOO_LARGE_ERROR = `transcript entry exceeds transcript fe
 const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
 const MAX_PENDING_UI_REQUESTS = 64;
 /**
- * How many times a guest command may hand residual text back before it is
- * submitted as a plain prompt. Mirrors the TUI, which re-runs its whole submit
- * chain on the text a builtin returns (`/force`, `/loop`), bounded here so a
- * command that keeps echoing its own text cannot spin.
+ * How many command expansions a guest input may traverse. Mirrors the TUI,
+ * which re-runs its submit chain on residual text (`/force`, `/loop`); an
+ * expansion cycle is reported as an error, never forwarded to the model.
  */
 const GUEST_COMMAND_MAX_PASSES = 4;
 /**
@@ -426,10 +426,10 @@ export class CollabHost {
 		// a pending promise so the room is installed before the file I/O settles.
 		// Race it against the abort deferred: a stop during the read must reject
 		// the start right away, exactly like a stop during the connect.
-		const aborted = new Promise<never>((_, reject) => {
-			firstOpen.promise.catch(reject);
-		});
-		const identity = this.#identity === undefined ? undefined : await Promise.race([this.#identity, aborted]);
+		const aborted = Promise.withResolvers<never>();
+		aborted.promise.catch(() => {});
+		firstOpen.promise.catch(aborted.reject);
+		const identity = this.#identity === undefined ? undefined : await Promise.race([this.#identity, aborted.promise]);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped during startup");
 		const rawKey = identity?.key ?? generateRoomKey();
 		const writeToken = identity?.writeToken ?? generateWriteToken();
@@ -467,7 +467,7 @@ export class CollabHost {
 			if (!opened) {
 				// A close the socket would retry (unreachable relay, dropped handshake)
 				// means the relay is unavailable; a fatal one means it refused the room.
-				firstOpen.reject(willReconnect ? new CollabRelayUnavailableError(reason) : new Error(reason));
+				firstOpen.reject(willReconnect ? new CollabRelayUnavailableError(reason) : relayStartupCloseError(reason));
 				return;
 			}
 			if (willReconnect) {
@@ -504,10 +504,22 @@ export class CollabHost {
 		// the link is visible (auto-start installs the room before this
 		// resolves), and anything that happens after its welcome snapshot must
 		// reach it; the local registry work below is independent of that.
-		this.#unsubscribe = this.#ctx.session.subscribe(event => {
+		const unsubscribeSession = this.#ctx.session.subscribe(event => {
 			if (isWireAgentEvent(event)) this.#send({ t: "event", event: shrinkReplicatedEvent(event) });
 			this.#onEventForState(event);
 		});
+		// Command handlers consume their failures through the extension runner,
+		// so prompt() cannot throw them back to the submitting guest. Mirror that
+		// error channel without emitting a second notice into the host's TUI.
+		const unsubscribeCommandErrors = this.#ctx.session.extensionRunner?.onError(error => {
+			if (error.event === "command") {
+				this.#send({ t: "error", message: `${error.extensionPath}: ${error.error}` });
+			}
+		});
+		this.#unsubscribe = () => {
+			unsubscribeSession();
+			unsubscribeCommandErrors?.();
+		};
 		// Subagent frames publish on the session tree's observability bus at
 		// any spawn depth; mirroring from it is what lets nested agents reach
 		// guests at all. Embedders on the previous constructor signature only
@@ -795,6 +807,16 @@ export class CollabHost {
 		return true;
 	}
 
+	/** Recheck a deferred command against the room and writable peer that submitted it. */
+	#canRunGuestCommand(fromPeer: number): boolean {
+		if (!this.#guestTrafficAllowed() || !this.#socket?.isServing(fromPeer)) return false;
+		if (!this.#peers.get(fromPeer)?.canWrite) {
+			this.#rejectReadOnly("running commands", fromPeer);
+			return false;
+		}
+		return !this.#rejectWhileStarting("running commands", fromPeer);
+	}
+
 	#handleHello(name: string, proto: number, writeToken: string | undefined, fromPeer: number): void {
 		if (this.#ctx.session.isSessionTransitioning) {
 			this.#send({ t: "error", message: "Session transition in progress; join again when it completes" }, fromPeer);
@@ -1031,18 +1053,22 @@ export class CollabHost {
 	 * `/skill:<name>`, builtins, then `!`/`!!` shell, then `$`/`$$` python.
 	 */
 	async #runGuestCommand(text: string, images: ImageContent[] | undefined, fromPeer: number): Promise<void> {
-		if (this.#rejectWhileStarting("running commands", fromPeer)) return;
+		if (!this.#canRunGuestCommand(fromPeer)) return;
 		try {
 			let input = text;
 			for (let pass = 0; pass < GUEST_COMMAND_MAX_PASSES; pass++) {
+				if (!this.#canRunGuestCommand(fromPeer)) return;
 				const next = await this.#dispatchGuestCommand(input, images, fromPeer);
 				// `undefined`: a command consumed the input. `next === input`: nothing
 				// claimed it, so it is a plain prompt.
 				if (next === undefined) return;
-				if (next === input) break;
+				if (next === input) {
+					if (this.#canRunGuestCommand(fromPeer)) this.#submitGuestPrompt(input, images, fromPeer);
+					return;
+				}
 				input = next;
 			}
-			this.#submitGuestPrompt(input, images, fromPeer);
+			throw new Error("command expansion exceeded the guest command limit");
 		} catch (error) {
 			logger.warn("collab guest command failed", { error: String(error) });
 			this.#send({ t: "error", message: `command failed: ${String(error)}` }, fromPeer);
@@ -1063,37 +1089,55 @@ export class CollabHost {
 		// `prompt` path does not expand skills.
 		if (isKnownSkillCommand(this.#ctx, text)) {
 			const built = await buildSkillCommandPrompt(this.#ctx, text, "steer", images);
-			if (built) await this.#ctx.session.promptCustomMessage(built.message, built.options);
+			if (built && this.#canRunGuestCommand(fromPeer)) {
+				await this.#ctx.session.promptCustomMessage(built.message, built.options);
+			}
 			return undefined;
 		}
 		if (text.startsWith("/")) {
-			// Text-mode `handle` first: its `output` reaches the browser as a
-			// notice, which is what makes `/move <path>`, `/dump`, `/model <id>`
-			// observable there. TUI-only commands (`/new`, `/resume`, pickers)
-			// then run on the host screen, where their dialogs live.
-			const acp = await executeAcpBuiltinSlashCommand(text, this.#commandRuntime());
-			if (acp !== false) return "prompt" in acp ? acp.prompt : undefined;
-			const tui = await executeBuiltinSlashCommand(text, { ctx: this.#ctx });
-			if (tui === false) {
-				// The first whitespace-delimited token is the command name: the
-				// palette lists colon-namespaced entries (`skill:reviewer`)
-				// verbatim, and `parseSlashCommand` would split those at the colon.
-				const token = text.slice(1).trim().split(/\s+/, 1)[0] ?? "";
-				if (!token) return text;
-				// Extension/custom/MCP/file commands are advertised but not
-				// builtins; the session expands them. Awaiting the same palette the
-				// join frame was built from keeps this deterministic when a guest
-				// prompts before that frame lands; a palette that cannot be built
-				// stays permissive and lets the session decide.
-				const palette = await this.#commandPalette().catch(() => undefined);
-				if (palette === undefined || palette.names.has(token)) {
-					await this.#ctx.session.prompt(text, { images });
-					return undefined;
+			const parsed = parseSlashCommand(text);
+			const builtin = parsed ? lookupBuiltinSlashCommand(parsed.name) : undefined;
+			const interactiveMove = builtin?.name === "move" || builtin?.name === "wt";
+			const opensPicker =
+				!parsed?.args &&
+				(builtin?.name === "model" ||
+					builtin?.name === "switch" ||
+					(builtin?.name === "effort" && this.#ctx.session.model?.reasoning));
+			// Relocation and transcript clearing need the interactive state/UI
+			// pipeline. Authentication and selectors keep their provider/account
+			// overlays on the host; other text-mode output becomes browser notices.
+			if (interactiveMove || opensPicker || builtin?.name === "clear" || builtin?.name === "logout") {
+				const oldCwd = this.#ctx.sessionManager.getCwd();
+				await executeBuiltinSlashCommand(text, { ctx: this.#ctx, input: { images }, draftDetached: true });
+				if (interactiveMove && this.#guestTrafficAllowed() && this.#ctx.sessionManager.getCwd() !== oldCwd) {
+					this.#ctx.session.emitNotice("info", `Moved to ${this.#ctx.sessionManager.getCwd()}.`, "collab");
 				}
-				this.#send({ t: "error", message: `unknown command: /${token}` }, fromPeer);
 				return undefined;
 			}
-			return typeof tui === "string" ? tui : undefined;
+			const acp = await executeAcpBuiltinSlashCommand(text, this.#commandRuntime());
+			if (acp !== false) return "prompt" in acp ? acp.prompt : undefined;
+			if (!this.#canRunGuestCommand(fromPeer)) return undefined;
+			const tui = await executeBuiltinSlashCommand(text, { ctx: this.#ctx, input: { images }, draftDetached: true });
+			if (tui !== false) return typeof tui === "string" ? tui : undefined;
+			if (builtin) {
+				this.#send({ t: "error", message: `invalid arguments for /${builtin.name}` }, fromPeer);
+				return undefined;
+			}
+			// Skill/extension colon-names stay literal; builtin colon syntax was
+			// already classified through the shared parser above.
+			const token = text.slice(1).trim().split(/\s+/, 1)[0] ?? "";
+			if (token) {
+				// Do not turn a missing palette into permission to send an unknown
+				// slash command to the model. A failed build is a command error.
+				const palette = await this.#commandPalette();
+				if (!this.#canRunGuestCommand(fromPeer)) return undefined;
+				if (palette.names.has(token)) {
+					await this.#ctx.session.prompt(text, { images, streamingBehavior: "steer", throwOnDrop: true });
+					return undefined;
+				}
+			}
+			this.#send({ t: "error", message: `unknown command: /${token}` }, fromPeer);
+			return undefined;
 		}
 		if (text.startsWith("!")) {
 			const isExcluded = text.startsWith("!!");
@@ -1153,6 +1197,10 @@ export class CollabHost {
 			cwd: this.#ctx.sessionManager.getCwd(),
 			output: (line: string) => {
 				this.#ctx.session.emitNotice("info", line, "collab");
+			},
+			ui: {
+				select: (title, options, dialogOptions) => this.#ctx.showHookSelector(title, options, dialogOptions),
+				confirm: (title, message) => this.#ctx.showHookConfirm(title, message),
 			},
 			refreshCommands: () => this.#ctx.refreshSlashCommandState(),
 			reloadPlugins: () => reloadTuiPluginState(this.#ctx),

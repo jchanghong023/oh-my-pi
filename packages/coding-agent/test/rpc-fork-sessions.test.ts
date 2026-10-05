@@ -9,7 +9,6 @@ import type { RpcForkCommandBase } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>

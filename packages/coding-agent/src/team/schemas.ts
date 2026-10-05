@@ -12,6 +12,7 @@
  * chars and the review narrative at 1500 chars by `maxLength` in the schemas
  * and by {@link enforceTextBudget} in the parsers.
  */
+import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import type {
 	TeamAlignmentOutput,
 	TeamAssumption,
@@ -34,6 +35,15 @@ export const TEAM_PROPOSAL_BUDGET = 4000;
 export const TEAM_REVIEW_BUDGET = 1500;
 export const TEAM_REVISION_BUDGET = 4000;
 export const TEAM_SYNTHESIS_BUDGET = 12000;
+
+const PROPOSAL_TEXT_BUDGETS = { proposal: TEAM_PROPOSAL_BUDGET } as const;
+const REVIEW_TEXT_BUDGETS = { reviewSummary: TEAM_REVIEW_BUDGET } as const;
+const REVISION_TEXT_BUDGETS = {
+	revisedProposal: TEAM_REVISION_BUDGET,
+	revisionSummary: TEAM_REVIEW_BUDGET,
+} as const;
+const ALIGNMENT_TEXT_BUDGETS = { unifiedUnderstanding: 3000 } as const;
+const SYNTHESIS_TEXT_BUDGETS = { reportMarkdown: TEAM_SYNTHESIS_BUDGET } as const;
 
 const TRUNCATION_MARKER = "…（超出输出预算，已截断）";
 
@@ -251,6 +261,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function validateTeamPayload(
+	value: unknown,
+	schema: JsonSchema,
+	textBudgets: Readonly<Record<string, number>>,
+): Record<string, unknown> | undefined {
+	if (!isRecord(value)) return undefined;
+	let data = value;
+	for (const field in textBudgets) {
+		const text = value[field];
+		if (typeof text !== "string") continue;
+		const normalized = enforceTextBudget(text.trim(), textBudgets[field]);
+		if (normalized === text) continue;
+		if (data === value) data = { ...value };
+		data[field] = normalized;
+	}
+	return validateJsonSchemaValue(schema, data).success ? data : undefined;
+}
+
 function asString(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value : fallback;
 }
@@ -292,8 +320,9 @@ function parseEvidence(value: Record<string, unknown>): TeamEvidenceItem {
 }
 
 /** Parse + shape-check + budget-enforce a proposal payload. Returns undefined when the shape is unusable. */
-export function parseTeamProposal(data: unknown): TeamProposalOutput | undefined {
-	if (!isRecord(data)) return undefined;
+export function parseTeamProposal(value: unknown): TeamProposalOutput | undefined {
+	const data = validateTeamPayload(value, TEAM_PROPOSAL_SCHEMA, PROPOSAL_TEXT_BUDGETS);
+	if (!data) return undefined;
 	const proposal = asString(data.proposal).trim();
 	if (!proposal && !asBoolean(data.noViableProposal)) return undefined;
 	return {
@@ -308,27 +337,26 @@ export function parseTeamProposal(data: unknown): TeamProposalOutput | undefined
 	};
 }
 
-export function parseTeamReview(data: unknown): TeamReviewOutput | undefined {
-	if (!isRecord(data)) return undefined;
-	const findings = asObjectArray(data.findings, 10)
-		.map((value): TeamFinding => {
-			const severity = asString(value.severity);
-			return {
-				severity: severity === "blocking" || severity === "important" ? severity : "minor",
-				issue: asString(value.issue),
-				impact: asString(value.impact),
-				evidence: asString(value.evidence),
-				targetAspect: asString(value.targetAspect),
-			};
-		})
-		.filter(finding => finding.issue.trim().length > 0);
+export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
+	const data = validateTeamPayload(value, TEAM_REVIEW_SCHEMA, REVIEW_TEXT_BUDGETS);
+	if (!data) return undefined;
+	const findingValues = asObjectArray(data.findings, 10);
+	if (findingValues.some(finding => !asString(finding.issue).trim())) return undefined;
+	const findings = findingValues.map((value): TeamFinding => {
+		const severity = asString(value.severity);
+		return {
+			severity: severity === "blocking" || severity === "important" ? severity : "minor",
+			issue: asString(value.issue),
+			impact: asString(value.impact),
+			evidence: asString(value.evidence),
+			targetAspect: asString(value.targetAspect),
+		};
+	});
 	const summary = enforceTextBudget(asString(data.reviewSummary).trim(), TEAM_REVIEW_BUDGET);
 	const noSubstantiveIssues = asBoolean(data.noSubstantiveIssues) && findings.length === 0;
-	// §2.5: a review must carry findings, explicitly record "no substantive
-	// issues", or say something in its summary. An all-empty payload is not a
-	// review — passing it through would mark an unexamined proposal as
-	// reviewed (§2.8: failure must not read as "no issues found").
-	if (findings.length === 0 && !noSubstantiveIssues && !summary) return undefined;
+	// A narrative alone cannot stand in for structured findings or an explicit
+	// no-issues verdict: otherwise an incomplete review can pass the adoption gate.
+	if (findings.length === 0 && !noSubstantiveIssues) return undefined;
 	const status = asString(data.priorBlockingStatus);
 	return {
 		noSubstantiveIssues,
@@ -341,8 +369,9 @@ export function parseTeamReview(data: unknown): TeamReviewOutput | undefined {
 	};
 }
 
-export function parseTeamRevision(data: unknown): TeamRevisionOutput | undefined {
-	if (!isRecord(data)) return undefined;
+export function parseTeamRevision(value: unknown): TeamRevisionOutput | undefined {
+	const data = validateTeamPayload(value, TEAM_REVISION_SCHEMA, REVISION_TEXT_BUDGETS);
+	if (!data || !asString(data.revisedProposal).trim()) return undefined;
 	const flags = isRecord(data.reviewFlags) ? data.reviewFlags : {};
 	const parseFlag = (value: unknown) => asBoolean(value, false);
 	const responses = asObjectArray(data.responses, 10)
@@ -390,8 +419,9 @@ function parseInterpretationDifference(value: Record<string, unknown>): TeamInte
 	};
 }
 
-export function parseTeamAlignment(data: unknown): TeamAlignmentOutput | undefined {
-	if (!isRecord(data)) return undefined;
+export function parseTeamAlignment(value: unknown): TeamAlignmentOutput | undefined {
+	const data = validateTeamPayload(value, TEAM_ALIGNMENT_SCHEMA, ALIGNMENT_TEXT_BUDGETS);
+	if (!data) return undefined;
 	const unified = asString(data.unifiedUnderstanding).trim();
 	if (!unified) return undefined;
 	return {
@@ -402,8 +432,9 @@ export function parseTeamAlignment(data: unknown): TeamAlignmentOutput | undefin
 	};
 }
 
-export function parseTeamSynthesis(data: unknown): TeamSynthesisOutput | undefined {
-	if (!isRecord(data)) return undefined;
+export function parseTeamSynthesis(value: unknown): TeamSynthesisOutput | undefined {
+	const data = validateTeamPayload(value, TEAM_SYNTHESIS_SCHEMA, SYNTHESIS_TEXT_BUDGETS);
+	if (!data) return undefined;
 	const reportMarkdown = asString(data.reportMarkdown).trim();
 	if (!reportMarkdown) return undefined;
 	return {

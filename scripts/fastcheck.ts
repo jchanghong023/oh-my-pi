@@ -14,7 +14,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { $ } from "bun";
+import type { Subprocess } from "bun";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -62,8 +62,8 @@ export function listTypeCheckPackages(root: string = repoRoot): TypeCheckPackage
 		let manifest: { name?: unknown; scripts?: Record<string, unknown> };
 		try {
 			manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as typeof manifest;
-		} catch {
-			continue;
+		} catch (error) {
+			throw new Error(`Cannot read workspace manifest ${manifestPath}`, { cause: error });
 		}
 		if (typeof manifest.scripts?.["check:types"] !== "string") continue;
 		packages.push({ dir, label: typeof manifest.name === "string" ? manifest.name : entry.name });
@@ -83,7 +83,7 @@ async function runTypeChecksPhase(phase: FastcheckTypeChecks): Promise<void> {
 	let nextIndex = 0;
 	const worker = async (): Promise<void> => {
 		for (;;) {
-			if (failures.length > 0) return;
+			if (budgetFailure || failures.length > 0) return;
 			const index = nextIndex++;
 			if (index >= packages.length) return;
 			const { dir, label } = packages[index];
@@ -191,14 +191,31 @@ function shellQuote(value: string): string {
 }
 
 async function resolveCargoBinary(): Promise<string> {
-	// On macOS hosts Homebrew's `rustup-init` shadows the rustup proxies, so ask
-	// rustup for the toolchain's cargo directly (same guard as run-rs-task).
-	const result = await $`rustup which cargo`.cwd(repoRoot).quiet().nothrow();
-	if (result.exitCode === 0) {
-		const resolved = result.stdout.toString().trim();
-		if (resolved !== "") return resolved;
+	assertWithinBudget();
+	let child: Subprocess<"ignore", "pipe", "pipe">;
+	try {
+		child = Bun.spawn(["rustup", "which", "cargo"], {
+			cwd: repoRoot,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			detached: process.platform !== "win32",
+		});
+	} catch {
+		return "cargo";
 	}
-	return "cargo";
+	liveChildren.add(child);
+	try {
+		const [stdout, , exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		assertWithinBudget();
+		return exitCode === 0 && stdout.trim() !== "" ? stdout.trim() : "cargo";
+	} finally {
+		liveChildren.delete(child);
+	}
 }
 
 /**
@@ -209,7 +226,7 @@ async function resolveCargoBinary(): Promise<string> {
  * CMake/Ninja dirs — the same augmentation packages/natives scripts apply.
  * Other platforms return undefined (inherit env).
  */
-function windowsRustBuildEnv(): Record<string, string> | undefined {
+async function windowsRustBuildEnv(): Promise<Record<string, string> | undefined> {
 	if (process.platform !== "win32" || (Bun.which("cmake") && Bun.which("ninja"))) return undefined;
 	const vcToolsComponent =
 		process.arch === "arm64"
@@ -221,11 +238,25 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 		"Installer",
 		"vswhere.exe",
 	);
-	const probe = Bun.spawnSync(
+	if (!existsSync(vswhere)) return undefined;
+	assertWithinBudget();
+	const probe = Bun.spawn(
 		[vswhere, "-latest", "-products", "*", "-requires", vcToolsComponent, "-property", "installationPath"],
-		{ stdout: "pipe", stderr: "pipe" },
+		{ stdin: "ignore", stdout: "pipe", stderr: "pipe" },
 	);
-	const vsRoot = probe.exitCode === 0 ? probe.stdout.toString("utf-8").trim() : "";
+	liveChildren.add(probe);
+	let vsRoot: string;
+	try {
+		const [stdout, , exitCode] = await Promise.all([
+			new Response(probe.stdout).text(),
+			new Response(probe.stderr).text(),
+			probe.exited,
+		]);
+		assertWithinBudget();
+		vsRoot = exitCode === 0 ? stdout.trim() : "";
+	} finally {
+		liveChildren.delete(probe);
+	}
 	if (!vsRoot) return undefined;
 	const cmakeExt = path.join(vsRoot, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake");
 	const extraDirs = [path.join(cmakeExt, "CMake", "bin"), path.join(cmakeExt, "Ninja")].filter(dir => existsSync(dir));
@@ -258,9 +289,15 @@ function killProcessTree(child: { pid: number }): void {
 }
 
 /** Live phase children, so the budget path can kill whatever is running. */
-const liveChildren = new Set<ReturnType<typeof Bun.spawn>>();
+const liveChildren = new Set<{ pid: number }>();
+let budgetFailure: FastcheckTimeoutError | undefined;
+
+function assertWithinBudget(): void {
+	if (budgetFailure) throw budgetFailure;
+}
 
 async function runCommand(command: FastcheckCommand): Promise<void> {
+	assertWithinBudget();
 	console.log(`\n==> ${command.label}`);
 	console.log(`$ ${command.argv.map(shellQuote).join(" ")}`);
 	const child = Bun.spawn([...command.argv], {
@@ -286,35 +323,33 @@ async function runCommand(command: FastcheckCommand): Promise<void> {
  * children and surface a timeout failure. A zero budget runs unbounded. */
 async function enforceBudget<T>(startedAtMs: number, budgetMs: number, work: () => Promise<T>): Promise<T> {
 	if (budgetMs === 0) return await work();
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = Promise.withResolvers<never>();
+	const timer = setTimeout(
+		() => {
+			budgetFailure = new FastcheckTimeoutError(budgetMs, performance.now() - startedAtMs);
+			for (const child of liveChildren) {
+				try {
+					killProcessTree(child);
+				} catch {}
+			}
+			timeout.reject(budgetFailure);
+		},
+		Math.max(0, budgetMs - (performance.now() - startedAtMs)),
+	);
 	try {
-		return await Promise.race([
-			work(),
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() => {
-						for (const child of liveChildren) {
-							try {
-								killProcessTree(child);
-							} catch {}
-						}
-						reject(new FastcheckTimeoutError(budgetMs, performance.now() - startedAtMs));
-					},
-					Math.max(0, budgetMs - (performance.now() - startedAtMs)),
-				);
-			}),
-		]);
+		return await Promise.race([work(), timeout.promise]);
 	} finally {
-		if (timer !== undefined) clearTimeout(timer);
+		clearTimeout(timer);
 	}
 }
 
 async function main(): Promise<void> {
 	const phases = buildFastcheckPhases({
 		cargoBinary: await resolveCargoBinary(),
-		rustEnv: { ...windowsRustBuildEnv(), RUSTUP_TOOLCHAIN: pinnedRustChannel() },
+		rustEnv: { ...(await windowsRustBuildEnv()), RUSTUP_TOOLCHAIN: pinnedRustChannel() },
 	});
 	for (const phase of phases) {
+		assertWithinBudget();
 		if (phase.kind === "command") await runCommand(phase);
 		else await runTypeChecksPhase(phase);
 	}

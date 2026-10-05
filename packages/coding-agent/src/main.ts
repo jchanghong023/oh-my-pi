@@ -188,7 +188,7 @@ import {
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
 } from "./session/settings";
-import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
+import { cfgDisabledModels, cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
@@ -636,7 +636,7 @@ export interface RpcProjectSessionFactoryOptions {
 	sessionDir: string;
 	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
-	parsedArgs: Pick<Args, "apiKey" | "trustedExtensions" | "tools" | "invalidFlagValues">;
+	parsedArgs: Pick<Args, "apiKey" | "trustedExtensions" | "tools" | "invalidFlagValues" | "model" | "thinking">;
 	rawArgs: string[];
 	createSession: (options: CreateAgentSessionOptions) => Promise<CreateAgentSessionResult>;
 }
@@ -650,11 +650,12 @@ export interface RpcProjectSessionFactoryOptions {
  */
 export function createRpcProjectSessionFactory(
 	args: RpcProjectSessionFactoryOptions,
-): () => Promise<RpcProjectCreatedSession> {
-	return async () => {
-		const cwd = args.baseOptions.cwd ?? getProjectDir();
+): (sessionManager?: SessionManager) => Promise<RpcProjectCreatedSession> {
+	return async providedSessionManager => {
+		const cwd = providedSessionManager?.getCwd() ?? args.baseOptions.cwd ?? getProjectDir();
 		const nextSettings = await args.settings.cloneForCwd(cwd);
-		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
+		const nextSessionManager = providedSessionManager ?? SessionManager.create(cwd, args.sessionDir);
+		nextSessionManager.requireStableSessionIdentity();
 		const agentId = `rpcp:${nextSessionManager.getSessionId()}`;
 		const eventBus = new EventBus();
 		const subagentEventBus = new EventBus();
@@ -667,14 +668,22 @@ export function createRpcProjectSessionFactory(
 				`Trusted extension failed to load: ${trustedExtensions.errors.map(item => item.error).join("; ")}`,
 			);
 		}
-		const { session, setToolUIContext } = await args.createSession({
+		const { session, setToolUIContext, mcpManager } = await args.createSession({
 			...args.baseOptions,
+			model: !providedSessionManager && args.parsedArgs.model !== undefined ? args.baseOptions.model : undefined,
+			modelPattern:
+				!providedSessionManager && args.parsedArgs.model !== undefined ? args.baseOptions.modelPattern : undefined,
+			thinkingLevel:
+				!providedSessionManager && args.parsedArgs.thinking !== undefined
+					? args.baseOptions.thinkingLevel
+					: undefined,
 			cwd,
 			sessionManager: nextSessionManager,
 			settings: nextSettings,
 			authStorage: args.authStorage,
 			modelRegistry: args.modelRegistry,
 			agentId,
+			agentOutputPrefix: `Session${nextSessionManager.getSessionId()}`,
 			eventBus,
 			subagentEventBus,
 			preloadedExtensions: trustedExtensions,
@@ -713,7 +722,7 @@ export function createRpcProjectSessionFactory(
 			setToolUIContext: (uiContext: unknown, hasUI: boolean) =>
 				setToolUIContext(uiContext as ExtensionUIContext, hasUI),
 			subagentEventBus,
-			setHost: () => {},
+			mcpManager,
 		};
 	};
 }
@@ -1197,7 +1206,11 @@ export async function rebuildScopedModelsAfterDiscovery(
 }
 
 /** Settings the scoped model list follows (see {@link watchScopedModelSettings}). */
-const cfgScopedModelInputs = combine({ enabledModels: cfgEnabledModels, disabledProviders: cfgDisabledProviders });
+const cfgScopedModelInputs = combine({
+	enabledModels: cfgEnabledModels,
+	disabledModels: cfgDisabledModels,
+	disabledProviders: cfgDisabledProviders,
+});
 
 /**
  * Keep the Ctrl+P / scoped `/models` list in step with live settings: an
@@ -1214,7 +1227,8 @@ export function watchScopedModelSettings(
 ): void {
 	const stop = cfgScopedModelInputs.listen(activeSettings, async (next, previous) => {
 		const providersChanged = !Bun.deepEquals(next.disabledProviders, previous.disabledProviders);
-		if (parsed.models && !providersChanged) return;
+		const modelsChanged = !Bun.deepEquals(next.disabledModels, previous.disabledModels);
+		if (parsed.models && !providersChanged && !modelsChanged) return;
 		if (providersChanged) await modelRegistry.reapplyModelPolicies();
 		if (session.isDisposed) return;
 		const patterns = parsed.models ?? cfgEnabledModels.get(activeSettings);
@@ -1545,11 +1559,11 @@ export async function buildSessionOptions(
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
-		if (resolved.disabledProvider !== undefined) {
+		if (resolved.disabledProvider !== undefined || resolved.disabledModel !== undefined) {
 			// Deferring a disabled pin to post-extension resolution would let it
 			// through, so refuse here (issue #13079).
 			process.stderr.write(
-				`${chalk.red(resolved.error ?? `Provider "${resolved.disabledProvider}" is disabled.`)}\n`,
+				`${chalk.red(resolved.error ?? `Model "${resolved.disabledModel ?? resolved.disabledProvider}" is disabled.`)}\n`,
 			);
 			process.exit(1);
 		}

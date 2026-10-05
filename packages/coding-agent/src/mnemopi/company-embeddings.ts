@@ -20,7 +20,7 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 	const model = cfgMnemopiEmbeddingModel.get(settings)?.trim();
 	if (
 		cfgMnemopiEmbeddingApiUrl.get(settings)?.trim() ||
-		cfgMnemopiEmbeddingApiKey.get(settings)?.trim() ||
+		settings.isConfigured(cfgMnemopiEmbeddingApiKey) ||
 		Bun.env.MNEMOPI_EMBEDDING_API_URL ||
 		Bun.env.MNEMOPI_EMBEDDING_API_KEY
 	)

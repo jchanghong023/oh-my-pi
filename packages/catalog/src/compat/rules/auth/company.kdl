@@ -1,0 +1,5 @@
+// Fork intranet authentication is supplied by the startup Claude settings
+// snapshot. No environment-key discovery or interactive login flow.
+auth "company" {
+	name "Company (Intranet)"
+}

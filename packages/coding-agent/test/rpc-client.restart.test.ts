@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import { type RpcAgentProcess, RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import {
+	MAX_RPC_FRAME_BYTES,
+	MAX_RPC_REASSEMBLED_BYTES,
+	RpcFrameEncoder,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame";
 import { rejectionOf } from "./helpers/rejection";
 
 const MOCK_AGENT = path.join(import.meta.dir, "fixtures", "mock-rpc-agent.ts");
@@ -215,4 +220,122 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 			message: expect.stringContaining("skill file was deleted"),
 		});
 	});
+});
+
+function createForkTransport(options?: { negotiatedVersion?: number; negotiationError?: boolean }) {
+	const encoder = new RpcFrameEncoder();
+	const exited = Promise.withResolvers<number>();
+	const sent: Array<Record<string, unknown>> = [];
+	let output: ReadableStreamDefaultController<Uint8Array>;
+	let closed = false;
+	const emit = (frame: object) => {
+		for (const line of encoder.encodeFrames(frame)) output.enqueue(new TextEncoder().encode(line));
+	};
+	const process: RpcAgentProcess = {
+		stdin: {
+			write(data) {
+				const command = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
+				sent.push(command);
+				if (command.type === "negotiate_protocol") {
+					if (options?.negotiationError) {
+						emit({
+							id: command.id,
+							type: "response",
+							success: false,
+							command: "error",
+							error: "fork not supported",
+							code: "unsupported",
+						});
+					} else {
+						emit({
+							id: command.id,
+							type: "response",
+							success: true,
+							command: command.type,
+							data: { protocolVersion: options?.negotiatedVersion ?? 3 },
+						});
+						encoder.setProtocolVersion(2);
+					}
+				} else if (command.type === "get_queue") {
+					emit({
+						id: command.id,
+						type: "response",
+						success: true,
+						command: command.type,
+						data: { payload: "😀".repeat(270_000) },
+					});
+				} else {
+					emit({
+						id: command.id,
+						type: "response",
+						success: false,
+						error: "raw command was denied",
+						code: "permission_denied",
+					});
+				}
+			},
+		},
+		stdout: new ReadableStream<Uint8Array>({
+			start(controller) {
+				output = controller;
+				emit({
+					type: "ready",
+					supportedProtocolVersions: [1, 3],
+					maxFrameBytes: MAX_RPC_FRAME_BYTES,
+					maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+				});
+			},
+		}),
+		peekStderr: () => "",
+		kill() {
+			if (closed) return;
+			closed = true;
+			output.close();
+			exited.resolve(0);
+		},
+		exited: exited.promise,
+	};
+	return { client: new RpcClient({ spawn: () => process }), sent };
+}
+
+describe("RpcClient fork response transport", () => {
+	test("v3-only negotiation enables chunk decoding and response-correlated raw commands", async () => {
+		const { client, sent } = createForkTransport();
+		try {
+			await client.start();
+			await expect(client.requestFork("get_queue")).rejects.toThrow("has not been negotiated");
+			expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
+			await client.negotiateProtocolV3();
+			expect(sent[0]).toMatchObject({ type: "negotiate_protocol", protocolVersion: 3 });
+			expect(await client.requestFork<{ payload: string }>("get_queue")).toEqual({ payload: "😀".repeat(270_000) });
+			await expect(
+				client.requestFork("set_settings", { scope: "user", key: "theme.dark", value: "titanium" }),
+			).rejects.toMatchObject({
+				command: "set_settings",
+				code: "permission_denied",
+				message: "raw command was denied",
+			});
+		} finally {
+			await client.stop();
+		}
+	});
+
+	test.each([{ negotiatedVersion: 2 }, { negotiationError: true }])(
+		"invalid v3 acknowledgements never open the fork gate (%o)",
+		async options => {
+			const { client } = createForkTransport(options);
+			try {
+				await client.start();
+				await expect(client.negotiateProtocolV3()).rejects.toMatchObject({
+					command: "negotiate_protocol",
+					...(options.negotiationError ? { code: "unsupported", message: "fork not supported" } : {}),
+				});
+				expect(client.forkNegotiated).toBe(false);
+				await expect(client.requestFork("get_queue")).rejects.toThrow("has not been negotiated");
+				expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
+			} finally {
+				await client.stop();
+			}
+		},
+	);
 });

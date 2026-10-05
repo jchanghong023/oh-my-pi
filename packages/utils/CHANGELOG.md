@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
+
 ## [18.5.1] - 2026-10-03
 
 ### Added

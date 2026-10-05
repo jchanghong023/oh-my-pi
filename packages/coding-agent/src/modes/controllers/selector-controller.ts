@@ -2,7 +2,7 @@ import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-p
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, PASTE_CODE_LOGIN_PROVIDERS as PasteCodeLoginProviders, UsageReport } from "@oh-my-pi/pi-ai";
 import type { getOAuthProviders as GetOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthProvider, OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
@@ -66,7 +66,7 @@ import type { SessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { loadPinnedSessionIds } from "../../session/session-pins";
 import { FileSessionStorage } from "../../session/session-storage";
-import { toLogoutAccounts } from "../../slash-commands/helpers/logout";
+import { formatLogoutCommandResult, logoutProviderForCommand } from "../../slash-commands/helpers/logout";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
@@ -207,18 +207,6 @@ export class SelectorController {
 	 */
 	async #acquireDefaultRoleMutation(): Promise<() => void> {
 		return acquireModelRoleMutation();
-	}
-
-	async #refreshOAuthProviderAuthState(): Promise<void> {
-		const { getOAuthProviders } = loadProviderAuthUi();
-		const oauthProviders = getOAuthProviders();
-		await Promise.all(
-			oauthProviders.map(provider =>
-				this.ctx.session.modelRegistry
-					.getApiKeyForProvider(provider.id, this.ctx.session.sessionId)
-					.catch(() => undefined),
-			),
-		);
 	}
 
 	/**
@@ -1972,120 +1960,36 @@ export class SelectorController {
 		}
 	}
 
-	async #handleCredentialLogout(providerId: string, account: LogoutAccount): Promise<void> {
-		try {
-			const authStorage = this.ctx.session.modelRegistry.authStorage;
-			const removed = await authStorage.credentials.removeById(providerId, account.credentialId);
-			if (!removed) {
-				this.ctx.showError(`Logout skipped: ${account.label} is no longer stored for ${providerId}.`);
-				return;
-			}
-
-			// Provider-scoped online refresh so the removed credential's stale
-			// endpoint/deployment models are invalidated deterministically; the
-			// default all-provider `online-if-uncached` would reuse the fresh
-			// authoritative cache row and keep showing models the credential
-			// unlocked (#5780). Other providers are left untouched.
-			await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
-			const block = new TranscriptBlock();
-			block.addChild(
-				new Text(
-					theme.fg(
-						"success",
-						`${theme.status.success} Successfully logged out ${account.label} from ${providerId}`,
-					),
-					1,
-					0,
-				),
-			);
-			block.addChild(new Text(theme.fg("dim", `Credential removed from ${getAgentDbPath()}`), 1, 0));
-			const remainingSource = authStorage.keys.describe(providerId, this.ctx.session.sessionId);
-			if (remainingSource) {
-				block.addChild(
-					new Text(theme.fg("warning", `${providerId} is still authenticated via ${remainingSource}`), 1, 0),
-				);
-			}
-			this.ctx.present(block);
-		} catch (error: unknown) {
-			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
-		}
-	}
-
-	async #showOAuthLogoutAccountSelector(providerId: string): Promise<void> {
-		const authStorage = this.ctx.session.modelRegistry.authStorage;
-		try {
-			await authStorage.credentials.reload();
-		} catch (error: unknown) {
-			this.ctx.showError(
-				`Could not load stored credentials: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			return;
-		}
-		const { getOAuthProviders, LogoutAccountSelectorComponent } = loadProviderAuthUi();
-		const provider = getOAuthProviders().find(candidate => candidate.id === providerId);
-		const accounts = toLogoutAccounts(providerId, authStorage.credentials.list(providerId), {
-			activeIdentity: authStorage.oauth.identity(providerId, this.ctx.session.sessionId),
-			activeApiKey: authStorage.keys.source(providerId)?.kind === "api_key",
-		});
-		if (accounts.length === 0) {
-			const source = authStorage.keys.describe(providerId, this.ctx.session.sessionId);
-			const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
-			this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
-			return;
-		}
-
-		this.showSelector(done => {
-			const selector = new LogoutAccountSelectorComponent(
-				provider?.name ?? providerId,
-				accounts,
-				account => {
-					done();
-					void this.#handleCredentialLogout(providerId, account);
-				},
-				() => {
-					done();
-					this.ctx.ui.requestRender();
-				},
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
-		if (providerId) {
-			if (mode === "login") {
-				await this.#handleOAuthLogin(providerId);
-			} else {
-				await this.#showOAuthLogoutAccountSelector(providerId);
+		if (mode === "logout") {
+			const session = this.ctx.session;
+			try {
+				const result = await logoutProviderForCommand(session, providerId, {
+					selectProvider: () => this.#selectLogoutProvider(),
+					selectAccount: (provider, accounts) => this.#selectLogoutAccount(provider, accounts),
+				});
+				const feedback = formatLogoutCommandResult(result);
+				if (feedback) session.emitNotice(feedback.level, feedback.message);
+			} catch (error) {
+				session.emitNotice("error", `Logout failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
-
-		const { getOAuthProviders, OAuthSelectorComponent } = loadProviderAuthUi();
-		if (mode === "logout") {
-			await this.#refreshOAuthProviderAuthState();
-			const oauthProviders = getOAuthProviders();
-			const loggedInProviders = oauthProviders.filter(provider =>
-				this.ctx.session.modelRegistry.authStorage.credentials.has(provider.id),
-			);
-			if (loggedInProviders.length === 0) {
-				this.ctx.showStatus("No stored provider credentials to log out. Remove env or config auth at its source.");
-				return;
-			}
+		if (providerId) {
+			await this.#handleOAuthLogin(providerId);
+			return;
 		}
+
+		const { OAuthSelectorComponent } = loadProviderAuthUi();
 
 		this.showSelector(done => {
 			const selector = new OAuthSelectorComponent(
-				mode,
+				"login",
 				this.ctx.session.modelRegistry.authStorage,
 				async (selectedProviderId: string) => {
 					selector.stopValidation();
 					done();
-					if (mode === "login") {
-						await this.#handleOAuthLogin(selectedProviderId);
-					} else {
-						await this.#showOAuthLogoutAccountSelector(selectedProviderId);
-					}
+					await this.#handleOAuthLogin(selectedProviderId);
 				},
 				() => {
 					selector.stopValidation();
@@ -2093,7 +1997,7 @@ export class SelectorController {
 					this.ctx.ui.requestRender();
 				},
 				{
-					disabledProviders: cfgDisabledProviders.get(settings),
+					disabledProviders: cfgDisabledProviders.get(this.ctx.settings),
 					validateAuth: async (selectedProviderId: string) => {
 						const apiKey = await this.ctx.session.modelRegistry.getApiKeyForProvider(
 							selectedProviderId,
@@ -2336,5 +2240,59 @@ export class SelectorController {
 		} else {
 			showReadyHub();
 		}
+	}
+
+	#selectLogoutProvider(): Promise<string | undefined> {
+		const { OAuthSelectorComponent } = loadProviderAuthUi();
+		const { promise, resolve } = Promise.withResolvers<string | undefined>();
+		this.showSelector(done => {
+			const selector = new OAuthSelectorComponent(
+				"logout",
+				this.ctx.session.modelRegistry.authStorage,
+				selectedProviderId => {
+					selector.stopValidation();
+					done();
+					resolve(selectedProviderId);
+				},
+				() => {
+					selector.stopValidation();
+					done();
+					this.ctx.ui.requestRender();
+					resolve(undefined);
+				},
+				{
+					validateAuth: async selectedProviderId =>
+						!!(await this.ctx.session.modelRegistry.getApiKeyForProvider(
+							selectedProviderId,
+							this.ctx.session.sessionId,
+						)),
+					requestRender: () => this.ctx.ui.requestRender(),
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+		return promise;
+	}
+
+	#selectLogoutAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined> {
+		const { LogoutAccountSelectorComponent } = loadProviderAuthUi();
+		const { promise, resolve } = Promise.withResolvers<number | undefined>();
+		this.showSelector(done => {
+			const selector = new LogoutAccountSelectorComponent(
+				provider.name,
+				accounts,
+				account => {
+					done();
+					resolve(account.credentialId);
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+					resolve(undefined);
+				},
+			);
+			return { component: selector, focus: selector };
+		});
+		return promise;
 	}
 }

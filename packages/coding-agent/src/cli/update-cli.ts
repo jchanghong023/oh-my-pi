@@ -233,9 +233,8 @@ export function shouldForceBinaryUpdate(
 export function compareUpdateVersions(left: string, right: string): number {
 	const precedence = compareVersions(left, right);
 	if (precedence !== 0) return precedence;
-	const leftRun = /\+fork\.(\d+)$/.exec(left)?.[1];
-	const rightRun = /\+fork\.(\d+)$/.exec(right)?.[1];
-	if (leftRun === undefined || rightRun === undefined) return 0;
+	const leftRun = /\+fork\.(\d+)$/.exec(left)?.[1] ?? "0";
+	const rightRun = /\+fork\.(\d+)$/.exec(right)?.[1] ?? "0";
 	return Number(leftRun) - Number(rightRun);
 }
 
@@ -1113,7 +1112,7 @@ export async function getLatestGitHubRelease(
 			Accept: "application/vnd.github+json",
 			"X-GitHub-Api-Version": "2022-11-28",
 		};
-		const githubToken = $env.GITHUB_TOKEN || $env.GH_TOKEN;
+		const githubToken = await resolveGitHubToken();
 		if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
 		response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
 			headers,

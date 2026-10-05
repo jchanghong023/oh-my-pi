@@ -509,11 +509,14 @@ function hasNonContextSegment(segments: readonly StatusLineSegmentId[]): boolean
 	return false;
 }
 
-function removeContextSegments(parts: string[], segments: StatusLineSegmentId[]): void {
+function removeContextSegments(parts: string[], segments: StatusLineSegmentId[], removed: string[]): void {
 	let writeIndex = 0;
 	for (let readIndex = 0; readIndex < segments.length; readIndex++) {
 		const segment = segments[readIndex];
-		if (isContextSegment(segment)) continue;
+		if (isContextSegment(segment)) {
+			removed.push(parts[readIndex]);
+			continue;
+		}
 		parts[writeIndex] = parts[readIndex];
 		segments[writeIndex] = segment;
 		writeIndex++;
@@ -2816,9 +2819,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			ctx.contextWindow > 0 &&
 			(hasContextSegment(leftSegIds) || hasContextSegment(rightSegIds)) &&
 			(hasNonContextSegment(leftSegIds) || hasNonContextSegment(rightSegIds));
+		let embeddedContextParts: string[] | undefined;
 		if (embedContext) {
-			removeContextSegments(leftParts, leftSegIds);
-			removeContextSegments(rightParts, rightSegIds);
+			embeddedContextParts = [];
+			removeContextSegments(leftParts, leftSegIds, embeddedContextParts);
+			removeContextSegments(rightParts, rightSegIds, embeddedContextParts);
 		}
 
 		if (layout !== "plain-left") {
@@ -2989,6 +2994,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const leftGroup = renderGroup(left, "left");
 		const rightGroup = renderGroup(right, "right");
 		let main = "";
+		let contextLabelsVisible = false;
 		if (leftGroup || rightGroup) {
 			if (topFillWidth === 0 || (plain && (left.length === 0 || right.length === 0))) {
 				main = leftGroup + (leftGroup && rightGroup ? " " : "") + rightGroup;
@@ -3004,6 +3010,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 					// labels don't fall back to a context chip until the session is titled.
 					main =
 						leftGroup + this.#buildContextGaugeFill(gapWidth, ctx, effectiveSettings, embedContext) + rightGroup;
+					contextLabelsVisible = embedContext && gapWidth >= embeddedContextWidth;
 				}
 			}
 		}
@@ -3011,6 +3018,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const retainedLeft = new Set(leftSourceIndices);
 		const overflowParts = originalLeft.filter((_, index) => !retainedLeft.has(index));
 		overflowParts.push(...originalRight.slice(right.length));
+		if (embeddedContextParts && !contextLabelsVisible) overflowParts.push(...embeddedContextParts);
 		return { content: main, overflowParts };
 	}
 

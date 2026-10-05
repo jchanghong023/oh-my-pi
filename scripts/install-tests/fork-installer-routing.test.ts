@@ -49,7 +49,7 @@ case "$*" in
   *)
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "-o" ]; then
-        printf '%s\\n' '#!/bin/sh' 'echo "omp test"' > "$2"
+        printf '%s\\n' '#!/bin/sh' "echo \\"\${TEST_BINARY_PREFIX-omp/}\${TEST_BINARY_VERSION:-18.0.9+fork.125}\\"" > "$2"
         exit 0
       fi
       shift
@@ -76,7 +76,7 @@ esac
 async function runInstallerWithFixture(
 	args: string[],
 	fixture: InstallerFixture,
-): Promise<{ exitCode: number; stdout: string; commands: string }> {
+): Promise<{ exitCode: number; stdout: string; stderr: string; commands: string }> {
 	const proc = Bun.spawn(["sh", "scripts/install.sh", ...args], {
 		cwd: repoRoot,
 		env: fixture.env,
@@ -89,11 +89,12 @@ async function runInstallerWithFixture(
 		new Response(proc.stderr).text(),
 	]);
 	const commands = await Bun.file(fixture.log).text();
-	if (stderr) throw new Error(stderr);
-	return { exitCode, stdout, commands };
+	return { exitCode, stdout, stderr, commands };
 }
 
-async function runInstaller(args: string[]): Promise<{ exitCode: number; stdout: string; commands: string }> {
+async function runInstaller(
+	args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string; commands: string }> {
 	return runInstallerWithFixture(args, await createFixture());
 }
 
@@ -139,89 +140,219 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		}
 	});
 
-	test("atomically replaces Linux targets without stopping running sessions", async () => {
+	test.skipIf(process.platform !== "linux")(
+		"atomically replaces Linux targets without stopping running sessions",
+		async () => {
+			const fixture = await createFixture();
+			await fs.mkdir(fixture.installDir, { recursive: true });
+			const target = path.join(fixture.installDir, "omp");
+			const sleepBinary = Bun.which("sleep");
+			if (!sleepBinary) throw new Error("sleep executable is required for the Linux installer fixture");
+			await fs.copyFile(sleepBinary, target);
+			await fs.chmod(target, 0o755);
+			const running = Bun.spawn([target, "60"], { stdout: "ignore", stderr: "ignore" });
+			try {
+				const result = await runInstallerWithFixture([], fixture);
+				expect(result.exitCode, result.stdout).toBe(0);
+				expect(result.stdout).toContain("continue using the old inode and old version");
+				expect(result.stdout).toContain("Exit and restart those sessions");
+				expect(() => process.kill(running.pid, 0)).not.toThrow();
+
+				const installed = Bun.spawn([target, "--version"], { stdout: "pipe", stderr: "pipe" });
+				const [installedExit, installedOutput] = await Promise.all([
+					installed.exited,
+					new Response(installed.stdout).text(),
+				]);
+				expect(installedExit).toBe(0);
+				expect(installedOutput.trim()).toBe("omp/18.0.9+fork.125");
+			} finally {
+				running.kill();
+				await running.exited;
+			}
+		},
+	);
+
+	test("rejects a directory at the executable path without moving its contents", async () => {
+		const fixture = await createFixture();
+		const target = path.join(fixture.installDir, "omp");
+		await fs.mkdir(target, { recursive: true });
+		await fs.writeFile(path.join(target, "keep.txt"), "unrelated");
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("Refusing to replace a directory");
+		expect(await Bun.file(path.join(target, "keep.txt")).text()).toBe("unrelated");
+		expect(result.commands).not.toContain("api.github.com");
+	});
+
+	test.each([
+		["wrong version", "omp/", "18.0.9+fork.124"],
+		["missing omp prefix", "", "18.0.9+fork.125"],
+	])("a %s download leaves the previous install untouched", async (_case, prefix, version) => {
 		const fixture = await createFixture();
 		await fs.mkdir(fixture.installDir, { recursive: true });
 		const target = path.join(fixture.installDir, "omp");
-		const sleepBinary = Bun.which("sleep");
-		if (!sleepBinary) throw new Error("sleep executable is required for the Linux installer fixture");
-		await fs.copyFile(sleepBinary, target);
-		await fs.chmod(target, 0o755);
-		const running = Bun.spawn([target, "60"], { stdout: "ignore", stderr: "ignore" });
-		try {
-			const result = await runInstallerWithFixture([], fixture);
-			expect(result.exitCode, result.stdout).toBe(0);
-			expect(result.stdout).toContain("continue using the old inode and old version");
-			expect(result.stdout).toContain("Exit and restart those sessions");
-			expect(() => process.kill(running.pid, 0)).not.toThrow();
+		const oldBinary = '#!/bin/sh\necho "omp/18.0.8+fork.124"\n';
+		await writeExecutable(fixture.installDir, "omp", oldBinary);
+		fixture.env.TEST_BINARY_PREFIX = prefix;
+		fixture.env.TEST_BINARY_VERSION = version;
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("unexpected version");
+		expect(await Bun.file(target).text()).toBe(oldBinary);
+		expect((await fs.readdir(fixture.installDir)).filter(file => file.startsWith(".omp.tmp."))).toEqual([]);
+	});
 
-			const installed = Bun.spawn([target, "--version"], { stdout: "pipe", stderr: "pipe" });
-			const [installedExit, installedOutput] = await Promise.all([
-				installed.exited,
-				new Response(installed.stdout).text(),
-			]);
-			expect(installedExit).toBe(0);
-			expect(installedOutput.trim()).toBe("omp test");
-		} finally {
-			running.kill();
-			await running.exited;
-		}
+	test("an installed program reporting the bare release number is not mistaken for omp", async () => {
+		const fixture = await createFixture();
+		await fs.mkdir(fixture.installDir, { recursive: true });
+		await writeExecutable(fixture.installDir, "omp", '#!/bin/sh\necho "18.0.9+fork.125"\n');
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.commands).toContain("/releases/download/");
+	});
+
+	test("an already-installed release skips binary download and still gives a PATH hint", async () => {
+		const fixture = await createFixture();
+		await fs.mkdir(fixture.installDir, { recursive: true });
+		await writeExecutable(
+			fixture.installDir,
+			"omp",
+			'#!/bin/sh\necho "omp/18.0.9+fork.125 (built 2026-10-04T00:00Z)"\n',
+		);
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("already installed");
+		expect(result.stdout).toContain(`Add ${fixture.installDir} to your PATH`);
+		expect(result.commands).not.toContain("/releases/download/");
 	});
 });
 
-// The text assertions below only read the installer sources, so they need no
-// POSIX fixtures and run on every platform.
-describe("fork installer routing (install.ps1 text)", () => {
-	test("limits the Windows installer and release asset to x64", async () => {
-		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		expect(script).toContain('"AMD64" { "x64" }');
-		expect(script).toContain("Unsupported Windows architecture");
-		expect(script).toContain('$BinaryName = "omp-windows-x64.exe"');
-		expect(script).not.toContain('"omp-windows-$NativeArchitecture.exe"');
-	});
+const windowsPowerShell = process.platform === "win32" ? Bun.which("powershell.exe") : null;
 
-	test("relaxes the error preference around Windows installer native calls", async () => {
-		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		// Windows PowerShell 5.1 turns a native executable's stderr lines into a
-		// terminating NativeCommandError while $ErrorActionPreference is "Stop",
-		// which would abort the install before the Invoke-WebRequest fallback.
-		expect(script).toContain('$ErrorActionPreference = "Continue"');
-		for (const line of script.split("\n")) {
-			if (!/(^|\s)&\s+\$/.test(line)) continue;
-			if (line.includes("& $Command")) continue; // the Invoke-Native helper itself
-			expect(line).toContain("Invoke-Native {");
-		}
-	});
+// Execute the installer functions in an isolated PowerShell process. Only HTTP
+// and user-PATH persistence are replaced; binary probes, live-image rename and
+// rollback use real files and processes. No network or real omp install is used.
+describe.skipIf(!windowsPowerShell)("Windows fork installer replacement", () => {
+	async function scenario(mode: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-installer-"));
+		tempDirs.push(dir);
+		const harness = path.join(dir, "scenario.ps1");
+		await Bun.write(
+			harness,
+			`$ErrorActionPreference = "Stop"
+function New-FixtureBinary([string]$Path, [string]$Version) {
+    $typeName = "Fixture" + [Guid]::NewGuid().ToString("N")
+    Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { if (args.Length > 0 && args[0] == \\"--version\\") System.Console.WriteLine(\\"omp/$Version\\"); else System.Threading.Thread.Sleep(60000); } }" -OutputAssembly $Path -OutputType ConsoleApplication
+}
+$install = $env:PI_INSTALL_DIR
+New-Item -ItemType Directory -Path $install | Out-Null
+$old = Join-Path $install "omp.exe"
+$download = Join-Path $env:TEST_ROOT "download.exe"
+if ($env:TEST_MODE -eq "directory") {
+    New-Item -ItemType Directory -Path $old | Out-Null
+    Set-Content -LiteralPath (Join-Path $old "keep.txt") -Value "unrelated"
+} else {
+    New-FixtureBinary $old "18.0.8+fork.124"
+}
+if ($env:TEST_MODE -eq "invalid") {
+    New-FixtureBinary $download "18.0.9+fork.124"
+} else {
+    New-FixtureBinary $download "18.0.9+fork.125"
+}
+function Invoke-RestMethod { return @{ tag_name = "v18.0.9+fork.125" } }
+function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
+    Copy-Item -LiteralPath $download -Destination $OutFile
+}
+function Get-Command([string]$Name) {
+    if ($Name -eq "curl.exe") { return $null }
+    Microsoft.PowerShell.Core\\Get-Command $Name
+}
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw $parseErrors[0] }
+$lastStatement = $ast.EndBlock.Statements[-1]
+$source = [System.IO.File]::ReadAllText($env:TEST_INSTALLER)
+. ([scriptblock]::Create($source.Substring(0, $lastStatement.Extent.StartOffset))) -Binary
+function Set-InstallEnvironment { return $false }
+if ($env:TEST_MODE -eq "rollback") {
+    function Move-Item([string]$LiteralPath, [string]$Destination) {
+        if ([System.IO.Path]::GetFileName($LiteralPath).StartsWith(".omp.tmp.")) { throw "fixture swap blocked" }
+        Microsoft.PowerShell.Management\\Move-Item -LiteralPath $LiteralPath -Destination $Destination
+    }
+}
+$running = $null
+try {
+    if ($env:TEST_MODE -eq "running") {
+        $running = Start-Process -FilePath $old -PassThru
+    }
+    $failed = $false
+    try { Install-Binary } catch { $failed = $true; Write-Host $_.Exception.Message }
+    if ($env:TEST_MODE -eq "directory") {
+        Write-Host "RESULT failed=$failed retained=$((Get-Content -LiteralPath (Join-Path $old 'keep.txt')).Trim())"
+    } else {
+        $version = (& $old --version | Select-Object -First 1)
+        Write-Host "RESULT failed=$failed version=$version"
+    }
+    if ($running) {
+        $running.Refresh()
+        Write-Host "RESULT running=$(-not $running.HasExited)"
+    }
+    Write-Host "RESULT temps=$(@(Get-ChildItem -LiteralPath $install -Filter '.omp.tmp.*').Count)"
+} finally {
+    if ($running -and -not $running.HasExited) { $running.Kill(); $running.WaitForExit() }
+}
+`,
+		);
+		const child = Bun.spawn([windowsPowerShell!, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", harness], {
+			cwd: repoRoot,
+			env: {
+				...process.env,
+				PI_INSTALL_DIR: path.join(dir, "install"),
+				TEST_ROOT: dir,
+				TEST_MODE: mode,
+				TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+				PROCESSOR_ARCHITECTURE: "AMD64",
+				PROCESSOR_ARCHITEW6432: "",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		return { exitCode, stdout, stderr };
+	}
 
-	test("does not expose a PowerShell source installation path", async () => {
-		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		expect(script).not.toContain("[switch]$Source");
-		expect(script).not.toContain("Install-ViaBun");
-		expect(script).not.toContain("git clone");
-		expect(script).not.toContain("bun install -g");
-	});
+	test("rejects a wrong-version binary before changing the installed executable", async () => {
+		const result = await scenario("invalid");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
+		expect(result.stdout).toContain("RESULT temps=0");
+	}, 30_000);
 
-	test("uses a unique same-directory Windows temp path for every attempt", async () => {
-		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		expect(script).toContain('Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe"');
-		expect(script).toContain("-f $PID, [System.Guid]::NewGuid()");
-		expect(script).not.toContain('$TmpPath = "$OutPath.tmp"');
-	});
+	test("rolls back the old executable when moving the verified download fails", async () => {
+		const result = await scenario("rollback");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("fixture swap blocked");
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
+		expect(result.stdout).toContain("RESULT temps=0");
+	}, 30_000);
 
-	test("stops only Windows omp processes running from the install target before moving", async () => {
-		const script = await Bun.file(path.join(repoRoot, "scripts/install.ps1")).text();
-		expect(script).toContain('Get-Process -Name "omp"');
-		expect(script).toContain("[System.IO.Path]::GetFullPath($TargetPath)");
-		expect(script).toContain("[System.IO.Path]::GetFullPath($processPath)");
-		expect(script).toContain("[System.StringComparer]::OrdinalIgnoreCase.Equals");
-		expect(script).toContain("$matching | Stop-Process -Force");
-		expect(script).toContain("executable paths are unavailable");
+	test("rejects a directory at the executable path without moving its contents", async () => {
+		const result = await scenario("directory");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("Refusing to replace a directory");
+		expect(result.stdout).toContain("RESULT failed=True retained=unrelated");
+		expect(result.stdout).toContain("RESULT temps=0");
+	}, 30_000);
 
-		const stopIndex = script.indexOf("        Stop-RunningOmp -TargetPath $OutPath");
-		const removeIndex = script.indexOf("            Remove-Item -LiteralPath $OutPath -Force", stopIndex);
-		const moveIndex = script.indexOf("        Move-Item -LiteralPath $TmpPath -Destination $OutPath", removeIndex);
-		expect(stopIndex).toBeGreaterThan(-1);
-		expect(removeIndex).toBeGreaterThan(stopIndex);
-		expect(moveIndex).toBeGreaterThan(removeIndex);
-	});
+	test("replaces a running executable without stopping its session", async () => {
+		const result = await scenario("running");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("RESULT failed=False version=omp/18.0.9+fork.125");
+		expect(result.stdout).toContain("RESULT running=True");
+	}, 30_000);
 });

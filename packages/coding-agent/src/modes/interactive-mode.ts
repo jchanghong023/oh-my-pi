@@ -114,7 +114,6 @@ import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
-import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -2728,7 +2727,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			setProjectDir(newCwd);
 		} catch (error) {
-			this.showError(
+			this.session.emitNotice(
+				"error",
 				`Cannot change working directory to ${newCwd}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return false;
@@ -2779,14 +2779,16 @@ export class InteractiveMode implements InteractiveModeContext {
 					await this.refreshTitleSystemPrompt(actual);
 					await this.session.refreshSkillsAndCommands();
 				} catch {}
-				this.showError(
+				this.session.emitNotice(
+					"error",
 					`Failed to switch to ${newCwd} (${error instanceof Error ? error.message : String(error)}), and restoring the previous workspace failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
 				);
 				throw new Error(
 					`Failed to restore workspace after failed switch to ${newCwd}: ${restoreError instanceof Error ? restoreError.message : String(restoreError)} (workspace may be inconsistent at ${actual})`,
 				);
 			}
-			this.showError(
+			this.session.emitNotice(
+				"error",
 				`Cannot change working directory to ${newCwd}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return false;
@@ -4898,8 +4900,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModePaused = false;
 
 		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
-		const previousTools = this.session.getEnabledToolNames();
-		const previousMountedTools = this.session.getMountedXdevToolNames();
+		const previousTools = this.session.getBaseWithMountedToolNames();
+		const previousMountedTools = this.session.getRawMountedXdevToolNames();
 		// `plan-mode-active.md` instructs the agent to draft the plan file with
 		// `write` and refine it with `edit`, and plan approval itself is a `write`
 		// to `xd://propose`. Both must be in the active set or the agent falls
@@ -5572,8 +5574,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		},
 	): Promise<boolean> {
 		const previousPresentation = this.#planModePreviousToolPresentation ?? {
-			enabled: this.session.getEnabledToolNames().filter(name => !isMCPToolName(name)),
-			mounted: this.session.getMountedXdevToolNames().filter(name => !isMCPToolName(name)),
+			enabled: this.session.getBaseWithMountedToolNames().filter(name => !isMCPToolName(name)),
+			mounted: this.session.getRawMountedXdevToolNames().filter(name => !isMCPToolName(name)),
 		};
 
 		// Mark the pending abort caused by the plan-mode → compaction transition as
@@ -7571,7 +7573,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#vibeSessionTransitionBlocked(): boolean {
 		if (!this.vibeModeEnabled) return false;
-		this.showWarning("Exit vibe mode first.");
+		this.session.emitNotice("warning", "Exit vibe mode first.");
 		return true;
 	}
 

@@ -1,3 +1,5 @@
+import { getOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import type { AgentSession } from "../../session/agent-session";
 import type { OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
 
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
@@ -98,4 +100,110 @@ export function toLogoutAccounts(
 			if (left.active !== right.active) return left.active ? -1 : 1;
 			return left.label.localeCompare(right.label) || left.credentialId - right.credentialId;
 		});
+}
+
+export interface LogoutCommandUI {
+	selectProvider(providers: readonly OAuthProviderInfo[]): Promise<string | undefined>;
+	selectAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined>;
+}
+
+export type LogoutCommandResult =
+	| { status: "cancelled" }
+	| { status: "skipped"; level: "info" | "warning" | "error"; message: string }
+	| { status: "removed"; account: LogoutAccount; remainingSource?: string };
+
+/** One logout operation, shared by the native selectors and protocol-backed dialogs. */
+export async function logoutProviderForCommand(
+	session: Pick<AgentSession, "modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed">,
+	providerId: string | undefined,
+	ui: LogoutCommandUI,
+	signal?: AbortSignal,
+): Promise<LogoutCommandResult> {
+	const providers = getOAuthProviders();
+	let provider = providerId ? providers.find(candidate => candidate.id === providerId) : undefined;
+	if (providerId && !provider) {
+		return { status: "skipped", level: "warning", message: `Unknown OAuth provider: ${providerId}` };
+	}
+	const modelRegistry = session.modelRegistry;
+	const sessionId = session.sessionId;
+	const generation = session.sessionGeneration;
+	const authStorage = modelRegistry.authStorage;
+	await authStorage.credentials.reload();
+	if (!provider) {
+		const storedProviders = providers.filter(candidate => authStorage.credentials.has(candidate.id));
+		if (storedProviders.length === 0) {
+			return {
+				status: "skipped",
+				level: "info",
+				message: "No stored provider credentials to log out. Remove env or config auth at its source.",
+			};
+		}
+		const selectedProviderId = await ui.selectProvider(storedProviders);
+		if (selectedProviderId === undefined) return { status: "cancelled" };
+		provider = storedProviders.find(candidate => candidate.id === selectedProviderId);
+		if (!provider) {
+			return { status: "skipped", level: "error", message: "The selected logout provider is no longer available." };
+		}
+	}
+	const accounts = toLogoutAccounts(provider.id, authStorage.credentials.list(provider.id), {
+		activeIdentity: authStorage.oauth.identity(provider.id, session.sessionId),
+		activeApiKey: authStorage.keys.source(provider.id)?.kind === "api_key",
+	});
+	if (accounts.length === 0) {
+		const source = authStorage.keys.describe(provider.id, session.sessionId);
+		const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+		return {
+			status: "skipped",
+			level: "error",
+			message: `Logout skipped: no stored credentials for ${provider.id}.${suffix}`,
+		};
+	}
+	const selectedCredentialId = await ui.selectAccount(provider, accounts);
+	if (selectedCredentialId === undefined) return { status: "cancelled" };
+	const account = accounts.find(candidate => candidate.credentialId === selectedCredentialId);
+	if (!account) {
+		return { status: "skipped", level: "error", message: "The selected logout account is no longer available." };
+	}
+	signal?.throwIfAborted();
+	if (
+		session.isDisposed ||
+		session.sessionGeneration !== generation ||
+		session.sessionId !== sessionId ||
+		session.modelRegistry !== modelRegistry
+	) {
+		return {
+			status: "skipped",
+			level: "error",
+			message: "Logout cancelled: the session changed during account selection.",
+		};
+	}
+	const removed = await authStorage.credentials.removeById(provider.id, account.credentialId);
+	if (!removed) {
+		return {
+			status: "skipped",
+			level: "error",
+			message: `Logout skipped: ${account.label} is no longer stored for ${provider.id}.`,
+		};
+	}
+	await modelRegistry.refreshProvider(provider.id, "online");
+	return {
+		status: "removed",
+		account,
+		remainingSource: authStorage.keys.describe(provider.id, sessionId),
+	};
+}
+
+export function formatLogoutCommandResult(
+	result: LogoutCommandResult,
+): { level: "info" | "warning" | "error"; message: string } | undefined {
+	if (result.status === "cancelled") return undefined;
+	if (result.status === "skipped") return result;
+	const lines = [
+		`Successfully logged out ${result.account.label} from ${result.account.provider}`,
+		"Credential removed from stored auth.",
+	];
+	if (result.remainingSource) {
+		lines.push(`${result.account.provider} is still authenticated via ${result.remainingSource}`);
+	}
+	return { level: result.remainingSource ? "warning" : "info", message: lines.join("\n") };
 }

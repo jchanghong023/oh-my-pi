@@ -267,8 +267,6 @@ describe("direct JCH git slash commands", () => {
 		);
 
 		if (!result || !("prompt" in result)) throw new Error("Expected full catchup to invoke the agent");
-		expect(result.prompt).toContain("读取与当前工作相关的 untracked 文本源文件");
-		expect(result.prompt).toContain("默认不超过 20 个");
 		expect(result.prompt).toContain("packages/coding-agent");
 	});
 

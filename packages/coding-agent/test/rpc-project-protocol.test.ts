@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { type } from "@oh-my-pi/omptype";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 // Requirements §4/§13—§15 (rpc-ui-protocol.md): project-mode E2E against the
 // real public entry (`omp --mode rpc-ui --rpc-project`, project root fixed by
@@ -11,17 +13,21 @@ import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 // prompt is aborted immediately and its session closed with cancelRunning.
 
 type RpcFrame = Record<string, unknown>;
+const LoadedSummary = type({ sessionId: "string", sessionGeneration: "string", loadState: "string" });
+const SessionDirectory = type({ sessions: "unknown[]" });
 
 interface ProjectRpcServerDirs {
 	/** Project root: the spawn cwd; fixed for the process lifetime. */
 	readonly cwd: string;
 	readonly sessionDir: string;
 	readonly agentDir: string;
+	readonly extensionPath?: string;
 }
 
 interface ServerControls {
 	readonly closeStdin: () => void;
 	readonly exited: Promise<number>;
+	readonly sendRaw: (frame: object) => void;
 }
 
 async function withProjectRpcServer<T>(
@@ -40,7 +46,7 @@ async function withProjectRpcServer<T>(
 			"--mode",
 			"rpc-ui",
 			"--rpc-project",
-			"--no-extensions",
+			...(dirs.extensionPath ? ["--trusted-extension", dirs.extensionPath] : ["--no-extensions"]),
 			"--no-skills",
 			"--no-tools",
 			"--session-dir",
@@ -70,6 +76,7 @@ async function withProjectRpcServer<T>(
 	/** Every parsed frame in arrival order (survives next()'s queue pruning). */
 	const seen: RpcFrame[] = [];
 	const queue: RpcFrame[] = [];
+	const generations = new Map<string, string>();
 	let readerDone = false;
 	let readerError: unknown;
 	const lines = readJsonl<unknown>(child.stdout as ReadableStream<Uint8Array>);
@@ -77,6 +84,15 @@ async function withProjectRpcServer<T>(
 		try {
 			for await (const line of lines) {
 				if (isRecord(line)) {
+					if (
+						line.type === "response" &&
+						line.success === true &&
+						isRecord(line.data) &&
+						typeof line.data.sessionId === "string" &&
+						typeof line.data.sessionGeneration === "string"
+					) {
+						generations.set(line.data.sessionId, line.data.sessionGeneration);
+					}
 					seen.push(line);
 					queue.push(line);
 				}
@@ -87,8 +103,17 @@ async function withProjectRpcServer<T>(
 			readerDone = true;
 		}
 	})();
-	const send = (frame: object): void => {
+	const sendRaw = (frame: object): void => {
 		child.stdin.write(`${JSON.stringify(frame)}\n`);
+	};
+	const send = (frame: object): void => {
+		const fields = frame as RpcFrame;
+		const generation = typeof fields.sessionId === "string" ? generations.get(fields.sessionId) : undefined;
+		sendRaw(
+			generation && !Object.hasOwn(fields, "sessionGeneration")
+				? { ...fields, sessionGeneration: generation }
+				: fields,
+		);
 	};
 	const next = async (predicate?: (frame: RpcFrame) => boolean): Promise<RpcFrame> => {
 		const match = predicate ?? (frame => frame.type === "response");
@@ -105,6 +130,7 @@ async function withProjectRpcServer<T>(
 			child.stdin.end();
 		},
 		exited: child.exited,
+		sendRaw,
 	};
 	try {
 		await child.stdin.flush?.();
@@ -215,7 +241,7 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 				await negotiateV3(send, next);
 				send({ id: "create", type: "create_session" });
 				const a = (await responseFor(next, "create")).data as SessionSummaryLike;
-				for (const type of ["new_session", "switch_session", "open_session", "branch"]) {
+				for (const type of ["new_session", "switch_session", "open_session", "set_session_name"]) {
 					send({
 						id: type,
 						type,
@@ -226,6 +252,8 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 					});
 					expect(await responseFor(next, type)).toMatchObject({ success: false, code: "unsupported" });
 				}
+				send({ id: "invalid-branch", type: "branch", sessionId: a.sessionId, entryId: "missing" });
+				expect(await responseFor(next, "invalid-branch")).toMatchObject({ success: false, code: "invalid_params" });
 				send({ id: "close", type: "close_session", sessionId: a.sessionId });
 				await responseFor(next, "close");
 				send({ id: "resume", type: "resume_session", sessionId: a.sessionId });
@@ -272,7 +300,7 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			expect(String(ready.processInstanceId).length).toBeGreaterThan(0);
 			expect((ready.capabilities as Record<string, unknown>).multiSession).toBe(true);
 			expect(ready.protocolVersion).toBe(1);
-			expect(ready.supportedProtocolVersions).toEqual([1, 2, 3]);
+			expect(ready.supportedProtocolVersions).toEqual([3]);
 		});
 	}, 60_000);
 
@@ -638,20 +666,19 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			expect(created.success).toBe(true);
 			const createdData = created.data as SessionSummaryLike;
 
-			// Plain text prompt: with no model available the turn fails after
-			// admission, which still proves the input was not cancelled by the
-			// ordering gate (a stale input settles with status "aborted").
+			// A local builtin proves real prompt admission without awaiting or
+			// depending on any external provider response.
 			send({
 				id: "p-direct",
 				type: "prompt",
 				sessionId: createdData.sessionId,
 				sessionGeneration: createdData.sessionGeneration,
-				message: "hello project",
+				message: "/model",
 			});
-			const result = await next(
-				frame => frame.type === "prompt_result" && (frame as { id?: string }).id === "p-direct",
-			);
-			expect((result as { status?: string }).status).not.toBe("aborted");
+			expect(await responseFor(next, "p-direct")).toMatchObject({
+				success: true,
+				data: { completed: true, agentInvoked: false },
+			});
 		});
 	}, 60_000);
 
@@ -671,6 +698,144 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			controls.closeStdin();
 			const exitCode = await Promise.race([controls.exited, Bun.sleep(30_000).then(() => -1)]);
 			expect(exitCode).toBe(0);
+		});
+	}, 60_000);
+
+	for (const termination of ["close", "eof"] as const) {
+		test(`${termination} cancels a real paused extension-input admission without invoking the agent`, async () => {
+			await using temp = await TempDir.create("rpc-project-paused-input-");
+			const cwd = path.resolve(temp.path());
+			const extensionPath = path.join(cwd, "pause.ts");
+			await Bun.write(
+				extensionPath,
+				`export default function(omp) {
+				omp.on("input", async (event, ctx) => {
+					if (event.text === "paused input") await ctx.ui.confirm("Paused admission", "Continue?");
+					return { action: "continue" };
+				});
+			}`,
+			);
+			await withProjectRpcServer(
+				{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent"), extensionPath },
+				async (send, next, seen, controls) => {
+					await negotiateV3(send, next);
+					send({ id: "create-paused", type: "create_session" });
+					const response = await responseFor(next, "create-paused");
+					expect(response.success).toBe(true);
+					const session = response.data as SessionSummaryLike;
+					send({
+						id: "held-input",
+						type: "prompt",
+						sessionId: session.sessionId,
+						message: "paused input",
+						inputMode: "text",
+					});
+					await next(
+						frame =>
+							frame.type === "extension_ui_request" &&
+							frame.method === "confirm" &&
+							frame.title === "Paused admission",
+					);
+					if (termination === "close") {
+						send({
+							id: "close-paused",
+							type: "close_session",
+							sessionId: session.sessionId,
+							cancelRunning: true,
+						});
+						expect(await responseFor(next, "close-paused")).toMatchObject({
+							success: true,
+							data: { state: "unloaded" },
+						});
+					} else {
+						controls.closeStdin();
+					}
+					expect(await responseFor(next, "held-input")).toMatchObject({ success: true });
+					expect(await next(frame => frame.type === "prompt_result" && frame.id === "held-input")).toMatchObject({
+						status: "aborted",
+						sessionId: session.sessionId,
+						sessionGeneration: session.sessionGeneration,
+					});
+					expect(seen.some(frame => frame.type === "agent_start" && frame.sessionId === session.sessionId)).toBe(
+						false,
+					);
+					if (termination === "eof") expect(await controls.exited).toBe(0);
+				},
+			);
+		}, 60_000);
+	}
+
+	test("generation is mandatory and pure management-panel actions do not create an actor", async () => {
+		await using temp = await TempDir.create("rpc-project-generation-");
+		const cwd = path.resolve(temp.path());
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent") },
+			async (send, next, _seen, controls) => {
+				await negotiateV3(send, next);
+				send({ id: "panel", type: "execute_command", text: "/skills" });
+				expect(await responseFor(next, "panel")).toMatchObject({
+					success: true,
+					data: { hostAction: { kind: "open_panel", payload: { panel: "skills" } } },
+				});
+				send({ id: "empty", type: "list_sessions" });
+				expect(await responseFor(next, "empty")).toMatchObject({ success: true, data: { sessions: [] } });
+				send({ id: "create-gen", type: "create_session" });
+				const created = (await responseFor(next, "create-gen")).data as SessionSummaryLike;
+				controls.sendRaw({ id: "missing-generation", type: "get_state", sessionId: created.sessionId });
+				expect(await responseFor(next, "missing-generation")).toMatchObject({
+					success: false,
+					code: "invalid_params",
+				});
+			},
+		);
+	}, 60_000);
+
+	test("branch, partial fork, and full fork create independent roots without changing the original transcript", async () => {
+		await using temp = await TempDir.create("rpc-project-branch-");
+		const cwd = path.resolve(temp.path());
+		const sessionDir = path.join(cwd, "sessions");
+		const manager = SessionManager.create(cwd, sessionDir);
+		await manager.ensureOnDisk();
+		manager.appendModelChange("anthropic", "claude-sonnet-4-5");
+		manager.appendMessage({ role: "user", content: "before branch", timestamp: Date.now() });
+		const selectedEntry = manager.appendMessage({ role: "user", content: "branch origin", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "original continues", timestamp: Date.now() });
+		const originalId = manager.getSessionId();
+		const originalFile = manager.getSessionFile()!;
+		await manager.close();
+		await withProjectRpcServer({ cwd, sessionDir, agentDir: path.join(cwd, "agent") }, async (send, next) => {
+			await negotiateV3(send, next);
+			send({ id: "original", type: "resume_session", sessionId: originalId });
+			const original = await responseFor(next, "original");
+			expect(original.success).toBe(true);
+			const originalData = LoadedSummary.assert(original.data);
+			const generation = originalData.sessionGeneration;
+			const originalBytes = await Bun.file(originalFile).text();
+			for (const [id, commandType, entryId] of [
+				["branch-copy", "branch", selectedEntry],
+				["partial-copy", "fork", selectedEntry],
+				["full-copy", "fork", undefined],
+			] as const) {
+				send({ id, type: commandType, entryId, sessionId: originalId, sessionGeneration: generation });
+				const response = await responseFor(next, id);
+				expect(response.success).toBe(true);
+				const child = LoadedSummary.assert(response.data);
+				expect(child.sessionId).not.toBe(originalId);
+				expect(child.loadState).toBe("loaded");
+				expect(child.sessionGeneration).not.toBe(generation);
+				send({ id: `${id}-history`, type: "get_messages_page", sessionId: child.sessionId });
+				const history = JSON.stringify((await responseFor(next, `${id}-history`)).data);
+				expect(history).toContain("before branch");
+				expect(history.includes("branch origin")).toBe(commandType === "fork");
+				expect(history.includes("original continues")).toBe(entryId === undefined);
+				expect(await Bun.file(originalFile).text()).toBe(originalBytes);
+			}
+			send({ id: "original-state", type: "get_state", sessionId: originalId, sessionGeneration: generation });
+			expect(await responseFor(next, "original-state")).toMatchObject({ success: true });
+			send({ id: "directory", type: "list_sessions", loadState: "loaded" });
+			const directoryResponse = await responseFor(next, "directory");
+			const directoryData = SessionDirectory.assert(directoryResponse.data);
+			expect(directoryData.sessions).toHaveLength(4);
 		});
 	}, 60_000);
 });

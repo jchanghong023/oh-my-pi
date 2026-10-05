@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { YAML } from "bun";
+import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import { RpcForkConfigController, classifyModelTestError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-config";
 import { RpcForkManageController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-manage";
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
@@ -10,8 +13,13 @@ import { cfgSkillsEnableClaudeUser, cfgSkillsIgnoredSkills } from "@oh-my-pi/pi-
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
+async function readProviderRows(file: string): Promise<Record<string, unknown>> {
+	const parsed = YAML.parse(await fs.readFile(file, "utf-8"));
+	if (!isRecord(parsed) || !isRecord(parsed.providers)) throw new Error("Invalid provider fixture document");
+	return parsed.providers;
+}
+
 const makeContext = (emitted: object[]): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>
@@ -41,11 +49,13 @@ function setup(overrides?: Partial<Record<string, unknown>>, options?: { agentDi
 	host.activate();
 	const settings = Settings.isolated();
 	const session = {
+		sessionId: "s",
 		settings,
 		sessionManager: { getCwd: () => process.cwd(), getSessionId: () => "s", getArtifactsDir: () => process.cwd() },
 		modelRegistry: {
 			authStorage: { keys: { get: async () => undefined }, usage: {} },
 			awaitBackgroundRefresh: async () => {},
+			reapplyModelPolicies: async () => {},
 			getAvailableModels: () => [],
 			getProviderBaseUrl: () => undefined,
 			getProviderDiscoveryState: () => undefined,
@@ -193,6 +203,90 @@ describe("RpcForkConfigController A tier (5.6)", () => {
 		expect(await fs.readFile(ymlPath, "utf-8")).not.toContain("acme-rpc");
 	});
 
+	test("provider edits preserve unrelated raw policy fields and reject ineffective reserved-provider mutations", async () => {
+		await using agentDir = await TempDir.create("rpc-config-policy-");
+		const agentPath = path.resolve(agentDir.path());
+		const ymlPath = path.join(agentPath, "models.yml");
+		const company = { baseUrl: "https://ignored.example", apiKey: "retain-company", models: [{ id: "retain" }] };
+		const zcode = { baseUrl: "https://ignored-zcode.example", apiKey: "old-zcode", auth: "none" };
+		await fs.writeFile(ymlPath, JSON.stringify({ providers: { company, "zcode-api": zcode } }));
+		const fx = setup(undefined, { agentDir: agentPath });
+		expect(
+			await fx.run({
+				type: "upsert_provider",
+				provider: { name: "rpc-policy-probe", baseUrl: "http://127.0.0.1", api: "anthropic-messages" },
+			}),
+		).toMatchObject({ success: true });
+		const stored = await readProviderRows(ymlPath);
+		expect(stored.company).toEqual(company);
+		expect(stored["zcode-api"]).toEqual(zcode);
+		const beforeRejectedEdits = await fs.readFile(ymlPath, "utf-8");
+		expect(
+			await fx.run({ type: "upsert_provider", provider: { name: "company", apiKey: "ineffective" } }),
+		).toMatchObject({ success: false, code: "unsupported" });
+		expect(
+			await fx.run({
+				type: "upsert_provider",
+				provider: { name: "zcode-api", baseUrl: "https://ineffective.example" },
+			}),
+		).toMatchObject({ success: false, code: "unsupported" });
+		expect(await fs.readFile(ymlPath, "utf-8")).toBe(beforeRejectedEdits);
+		expect(
+			await fx.run({ type: "upsert_provider", provider: { name: "zcode-api", apiKey: "new-zcode" } }),
+		).toMatchObject({ success: true });
+		expect((await readProviderRows(ymlPath))["zcode-api"]).toEqual({
+			...zcode,
+			apiKey: "new-zcode",
+		});
+	});
+
+	test("concurrent provider mutations merge distinct rows under the shared config lock", async () => {
+		await using agentDir = await TempDir.create("rpc-config-concurrent-");
+		const agentPath = path.resolve(agentDir.path());
+		const ymlPath = path.join(agentPath, "models.yml");
+		const first = setup(undefined, { agentDir: agentPath });
+		const second = setup(undefined, { agentDir: agentPath });
+		const edits = await Promise.all(
+			Array.from({ length: 8 }, (_, index) =>
+				(index % 2 === 0 ? first : second).run({
+					type: "upsert_provider",
+					provider: { name: `concurrent-${index}`, baseUrl: `https://provider-${index}.example/v1` },
+				}),
+			),
+		);
+		expect(edits.every(response => response.success)).toBe(true);
+		const rows = await readProviderRows(ymlPath);
+		expect(Object.keys(rows).sort()).toEqual(Array.from({ length: 8 }, (_, index) => `concurrent-${index}`));
+		expect(
+			await Promise.all([
+				first.run({ type: "delete_provider", provider: "concurrent-0" }),
+				second.run({
+					type: "upsert_provider",
+					provider: { name: "concurrent-1", apiKey: "retained-update" },
+				}),
+			]),
+		).toEqual([expect.objectContaining({ success: true }), expect.objectContaining({ success: true })]);
+		const finalRows = await readProviderRows(ymlPath);
+		expect(finalRows["concurrent-0"]).toBeUndefined();
+		expect(finalRows["concurrent-1"]).toMatchObject({
+			baseUrl: "https://provider-1.example/v1",
+			apiKey: "retained-update",
+		});
+	});
+
+	test("provider CRUD fails closed on a non-mapping YAML document", async () => {
+		await using agentDir = await TempDir.create("rpc-config-invalid-root-");
+		const agentPath = path.resolve(agentDir.path());
+		const ymlPath = path.join(agentPath, "models.yml");
+		await fs.writeFile(ymlPath, "- retain this document\n");
+		const fx = setup(undefined, { agentDir: agentPath });
+		expect(
+			await fx.run({ type: "upsert_provider", provider: { name: "probe", baseUrl: "http://127.0.0.1" } }),
+		).toMatchObject({ success: false });
+		expect(await fx.run({ type: "delete_provider", provider: "probe" })).toMatchObject({ success: false });
+		expect(await fs.readFile(ymlPath, "utf-8")).toBe("- retain this document\n");
+	});
+
 	test("test_model attributes model_not_found and endpoint_not_configured without network calls", async () => {
 		const fx = setup();
 		const notFound = (await fx.run({ id: "t1", type: "test_model", provider: "acme", modelId: "m1" })) as Extract<
@@ -219,6 +313,65 @@ describe("RpcForkConfigController A tier (5.6)", () => {
 		})) as Extract<RpcResponse, { command: "test_model"; success: true }>;
 		expect(noEndpoint.data!.error!.category).toBe("endpoint_not_configured");
 	});
+
+	test.each(["resolved-model-key", NO_AUTH_SENTINEL])(
+		"test_model uses the registry credential cascade and resolved headers (%s)",
+		async credential => {
+			const received: Headers[] = [];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					received.push(new Headers(request.headers));
+					return Response.json(
+						{ type: "error", error: { type: "authentication_error", message: "HTTP 401 probe observed" } },
+						{ status: 401 },
+					);
+				},
+			});
+			const model = {
+				...buildModel({
+					id: "rpc-auth-probe",
+					name: "RPC auth probe",
+					api: "anthropic-messages",
+					provider: "rpc-auth-probe",
+					baseUrl: server.url.href,
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 8192,
+					maxTokens: 128,
+				}),
+				resolveHeaders: async () => ({ "x-rpc-probe": "resolved-header" }),
+			};
+			const resolved: Array<{ model: typeof model; sessionId: string | undefined }> = [];
+			const fx = setup({
+				getAvailableModels: () => [model],
+				modelRegistry: {
+					authStorage: { keys: { get: async () => undefined } },
+					getProviderBaseUrl: () => server.url.href,
+					getApiKey: async (candidate: typeof model, sessionId: string | undefined) => {
+						resolved.push({ model: candidate, sessionId });
+						return credential;
+					},
+				},
+			});
+			try {
+				const response = await fx.run({ type: "test_model", provider: model.provider, modelId: model.id });
+				expect(response).toMatchObject({ success: true, data: { ok: false, error: { category: "auth_failed" } } });
+				expect(resolved).toEqual([{ model, sessionId: "s" }]);
+				expect(received).toHaveLength(1);
+				expect(received[0]!.get("x-rpc-probe")).toBe("resolved-header");
+				expect(received[0]!.get("authorization")).toBe(
+					credential === NO_AUTH_SENTINEL ? null : `Bearer ${credential}`,
+				);
+				if (credential === NO_AUTH_SENTINEL) expect(received[0]!.get("x-api-key")).toBeNull();
+			} finally {
+				await fx.host.dispose("test cleanup");
+				server.stop(true);
+			}
+		},
+	);
 
 	test("classifyModelTestError maps statuses, flags, and transport failures", () => {
 		expect(classifyModelTestError("HTTP 401 Unauthorized")!.category).toBe("auth_failed");

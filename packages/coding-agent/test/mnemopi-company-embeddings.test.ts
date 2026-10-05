@@ -16,6 +16,7 @@ interface ProbeResult {
 	defaultsToken: unknown;
 	explicitApiUrl: unknown;
 	explicitApiKey: unknown;
+	explicitEmptyApiKey: unknown;
 	envApiUrl: unknown;
 	envApiKey: unknown;
 	envModelForeign: unknown;
@@ -28,6 +29,10 @@ interface ProbeResult {
 	wiredToken: unknown;
 	wiredExplicitUrl: unknown;
 	wiredExplicitToken: unknown;
+	wiredEmptyApiKey: unknown;
+	endpoint: string;
+	requests: Array<{ url: string; authorization: string | null; model: string; input: string[] }>;
+	vectors: number[][] | null;
 }
 
 // Separate process: the company snapshot is captured eagerly per process from
@@ -54,15 +59,38 @@ function runEmbeddingProbe(): ProbeResult {
 				process.execPath,
 				"--eval",
 				`
-				const { setCompanyOfflineEnabled, getCompanyConfig } = await import(${JSON.stringify(companyProviderModulePath)});
-				const { getCompanyEmbeddingDefaults } = await import(${JSON.stringify(embeddingsModulePath)});
-				const { Settings } = await import(${JSON.stringify(settingsModulePath)});
-
+				const requests = [];
+				const server = Bun.serve({
+					hostname: "127.0.0.1", port: 0,
+					async fetch(request) {
+						const body = await request.json();
+						requests.push({ url: request.url, authorization: request.headers.get("authorization"),
+							model: body.model, input: body.input });
+						return Response.json({ data: [{ embedding: [0.25, 0.75] }] });
+					},
+				});
+				const endpoint = server.url.origin;
+				const nativeFetch = globalThis.fetch;
+				globalThis.fetch = async (input, init) => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (!url.startsWith(endpoint + "/")) throw new Error("embedding fixture forbids public network");
+					return nativeFetch(input, init);
+				};
+				// Loading follows fixture creation; the process snapshot must capture this exact endpoint.
+				const { writeFileSync } = await import("node:fs");
+				writeFileSync(${JSON.stringify(join(claudeConfigDir, "settings.json"))}, JSON.stringify({
+					env: { ANTHROPIC_BASE_URL: endpoint + "/gateway/v1/", ANTHROPIC_AUTH_TOKEN: "fixture-secret" },
+				}));
 				// A developer machine may export MNEMOPI_EMBEDDING_*; the baseline
 				// branches below require a clean slate.
 				delete process.env.MNEMOPI_EMBEDDING_MODEL;
 				delete process.env.MNEMOPI_EMBEDDING_API_URL;
 				delete process.env.MNEMOPI_EMBEDDING_API_KEY;
+				// Import after transport isolation so every dependency sees the guarded fetch.
+				const { setCompanyOfflineEnabled, getCompanyConfig } = await import(${JSON.stringify(companyProviderModulePath)});
+				const { getCompanyEmbeddingDefaults } = await import(${JSON.stringify(embeddingsModulePath)});
+				const { Settings } = await import(${JSON.stringify(settingsModulePath)});
+
 
 				const tokenOf = async defaults => {
 					if (!defaults || !defaults.embeddingApiKey) return null;
@@ -83,6 +111,9 @@ function runEmbeddingProbe(): ProbeResult {
 				);
 				const explicitApiKey = getCompanyEmbeddingDefaults(
 					Settings.isolated({ "mnemopi.embeddingApiKey": "explicit-key" }),
+				);
+				const explicitEmptyApiKey = getCompanyEmbeddingDefaults(
+					Settings.isolated({ "mnemopi.embeddingApiKey": "" }),
 				);
 
 				process.env.MNEMOPI_EMBEDDING_API_URL = "http://env.invalid/embed";
@@ -120,6 +151,28 @@ function runEmbeddingProbe(): ProbeResult {
 					}),
 					${JSON.stringify(home)},
 				);
+				const wiredEmptyApiKey = loadMnemopiConfig(
+					Settings.isolated({
+						"mnemopi.scoping": "global",
+						"mnemopi.embeddingApiKey": "",
+					}),
+					${JSON.stringify(home)},
+				);
+				const { embed } = await import(${JSON.stringify(join(import.meta.dir, "../../mnemopi/src/core/embeddings.ts"))});
+				const { withMnemopiRuntimeOptions } = await import(${JSON.stringify(join(import.meta.dir, "../../mnemopi/src/core/runtime-options.ts"))});
+				const vectors = await withMnemopiRuntimeOptions({ embeddings: {
+					disabled: false, model: wired.providerOptions.embeddingModel,
+					apiUrl: wired.providerOptions.embeddingApiUrl, apiKey: wired.providerOptions.embeddingApiKey,
+				} }, () => embed(["company embedding fixture"]));
+				const explicitNoAuth = loadMnemopiConfig(Settings.isolated({
+					"mnemopi.scoping": "global", "mnemopi.embeddingApiUrl": endpoint + "/explicit/v1",
+					"mnemopi.embeddingApiKey": "", "mnemopi.embeddingModel": "explicit-embedding-model",
+				}), ${JSON.stringify(home)});
+				await withMnemopiRuntimeOptions({ embeddings: {
+					disabled: false, model: explicitNoAuth.providerOptions.embeddingModel,
+					apiUrl: explicitNoAuth.providerOptions.embeddingApiUrl, apiKey: explicitNoAuth.providerOptions.embeddingApiKey,
+				} }, () => embed(["explicit embedding fixture"]));
+				server.stop(true);
 
 				console.log(JSON.stringify({
 					noCompanyLane,
@@ -129,6 +182,7 @@ function runEmbeddingProbe(): ProbeResult {
 					defaultsToken: await tokenOf(defaults),
 					explicitApiUrl,
 					explicitApiKey,
+					explicitEmptyApiKey,
 					envApiUrl,
 					envApiKey,
 					envModelForeign,
@@ -143,11 +197,25 @@ function runEmbeddingProbe(): ProbeResult {
 					wiredExplicitToken: wiredExplicitUrl.providerOptions.embeddingApiKey === undefined
 						? null
 						: await tokenOf(wiredExplicitUrl.providerOptions),
+					wiredEmptyApiKey: wiredEmptyApiKey.providerOptions.embeddingApiKey,
+					endpoint,
+					requests,
+					vectors: vectors?.map(vector => Array.from(vector)) ?? null,
 				}));
 				`,
 			],
 			{
-				env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: claudeConfigDir },
+				env: {
+					...process.env,
+					HOME: home,
+					USERPROFILE: home,
+					CLAUDE_CONFIG_DIR: claudeConfigDir,
+					PI_CODING_AGENT_DIR: join(home, "agent"),
+					PI_CONFIG_DIR: ".omp",
+					XDG_DATA_HOME: undefined,
+					XDG_STATE_HOME: undefined,
+					XDG_CACHE_HOME: undefined,
+				},
 				stdout: "pipe",
 				stderr: "pipe",
 			},
@@ -167,13 +235,14 @@ describe("company embedding defaults priority", () => {
 
 		// Default: company retrieval model at the company gateway, company token.
 		expect(result.defaultsModel).toBe("Qwen3-VL-Embedding-2B");
-		expect(result.defaultsUrl).toBe("http://internal.invalid/gateway/v1");
+		expect(result.defaultsUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.defaultsToken).toBe("fixture-secret");
 
 		// Every explicit embedding setup wins and receives no company defaults —
 		// in particular the company token must never target another URL.
 		expect(result.explicitApiUrl).toBeUndefined();
 		expect(result.explicitApiKey).toBeUndefined();
+		expect(result.explicitEmptyApiKey).toBeUndefined();
 		expect(result.envApiUrl).toBeUndefined();
 		expect(result.envApiKey).toBeUndefined();
 		expect(result.envModelForeign).toBeUndefined();
@@ -188,9 +257,25 @@ describe("company embedding defaults priority", () => {
 		// Wiring: the resolved mnemonic config carries the company defaults, and
 		// an explicit URL keeps the explicit value with no company credentials.
 		expect(result.wiredModel).toBe("Qwen3-VL-Embedding-2B");
-		expect(result.wiredUrl).toBe("http://internal.invalid/gateway/v1");
+		expect(result.wiredUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.wiredToken).toBe("fixture-secret");
 		expect(result.wiredExplicitUrl).toBe("http://other.invalid/embed");
 		expect(result.wiredExplicitToken).toBeNull();
-	});
+		expect(result.wiredEmptyApiKey).toBe("");
+		expect(result.vectors).toEqual([[0.25, 0.75]]);
+		expect(result.requests).toEqual([
+			{
+				url: `${result.endpoint}/gateway/v1/embeddings`,
+				authorization: "Bearer fixture-secret",
+				model: "Qwen3-VL-Embedding-2B",
+				input: ["company embedding fixture"],
+			},
+			{
+				url: `${result.endpoint}/explicit/v1/embeddings`,
+				authorization: null,
+				model: "explicit-embedding-model",
+				input: ["explicit embedding fixture"],
+			},
+		]);
+	}, 30_000);
 });

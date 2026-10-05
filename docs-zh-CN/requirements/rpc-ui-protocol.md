@@ -171,11 +171,15 @@ ZCode 的渲染器刷新不关闭宿主持有的项目进程连接。真正的 s
 
 旧 `new_session/open_session/switch_session` 不得在项目模式隐式替换全局对象。项目客户端使用上述生命周期入口；若保留旧入口别名，必须指向明确目标，无法明确映射时返回不支持。分支能力如已有可复用，其结果作为独立会话返回，不新增进程。
 
+项目模式的 branch/fork 创建独立 SessionManager 与运行宿主；源会话身份、加载代次、文件路径、历史和输入门不被切换或失效。新会话继承当前运行模型与配置思考值，而不是选中历史前缀里的旧模型。
+
 ### 5.2 运行隔离
 
 每个会话独立持有消息、执行状态、模型选择、取消信号、待审批、待答问题、队列、任务归属和技能有效视图。A 等待模型、工具或用户时，B 仍可执行、查询和取消；不得用覆盖整个模型回合的全进程锁串行化会话。
 
 项目配置、只读目录或连接池可以共享，但不能共享包含隐式当前会话的可变上下文。重点审查技能全局快照、cwd、设置、扩展 UI、权限桥、监听器和任务管理；可复用 ACP 的生命周期基础，不复制执行引擎。
+
+同一持久会话的子代理转录和产物归该根会话所有；不同根会话即使复用同一个局部子代理名，输出目录和发现结果也必须隔离，不得覆盖或读入另一会话的产物。
 
 共享同一项目文件系统是预期行为；本期不提供自动 worktree 或文件副作用隔离。显式卸载必须清理监听器、交互、计时器及会话拥有的资源；不误关其他会话仍依赖的共享资源。自动内存淘汰不是首期前置条件。
 
@@ -233,6 +237,9 @@ ZCode 的“通用目录”是产品概念，由调用层映射到 OMP 支持的
 
 - 有 Agent 业务语义的命令：必须通过 OMP 执行，不能以“原来是 TUI-only”为由隐藏。
 - 仅打开面板、复制或启动编辑器的命令：返回宿主动作，由 ZCode 承接。
+- 仅无参数 `/skills` 返回宿主动作 `kind: "open_panel"`，payload 指定 `panel: "skills"`、空 args 和可选会话归属；ZCode 打开面板，不启动模型回合。带 search/install/installed/update 等业务参数时执行真实共用命令处理器，使用本会话 cwd 与 registry URL，成功变更后刷新技能和命令目录；包含脚本的安装必须走真实确认 UI，无能力时明确失败，不能自动批准、虚假取消或用打开面板替代业务。具体技能启停、复制、删除仍走结构化管理 API。
+- `/clear` 复用 TUI/ACP/RPC 原位上下文重置，先中止并等待活动 compaction，保留会话 id、标题、cwd 和文件；TUI 同时清理转录及滚屏，不能实现成 `/new`，也不能以 `/fresh` 的 provider-only 重置替代。
+- `/logout` 使用真实 provider/account 选择与精确存储行删除；提交前校验会话归属与取消状态，取消/过期选择不删除凭据，仍有环境、配置或其他账号凭据时如实提示。协议宿主须提供实际 UI，不能用 headless/no-op 自动选择。
 - 确实依赖终端、或已有明确安全/维护入口限制的命令：说明限制及替代方式；不得把未完成移植冒充固有限制。
 
 `/new` 创建独立会话并返回身份；`/resume` 列举或加载会话，选择动作交宿主；`/quit` 不因关闭当前视图而误杀整个项目所有会话。改变项目根的命令由 ZCode 管理项目进程，不能原地篡改现有项目的 cwd。`/plan` 使用现有计划业务服务。fork 自有命令同样纳入覆盖清单。
@@ -332,7 +339,7 @@ RPC `set_model` 调用 `session.setModel(model)`；底层仅在显式 `persist` 
 
 ## 9. 兼容与迁移
 
-当前 fork 已有 v3 协商、权限、富 ask、目录、队列、jobs、计划、分页、附件和多类管理扩展，但 RPC 仍绑定单个 `AgentSession`。这只是静态审阅的基线；项目服务、统一命令执行和上述完整技能契约仍待实现。
+当前 fork 有 v3 协商、权限、富 ask、目录、队列、jobs、计划、分页、附件和多类管理扩展，并有显式项目宿主与独立会话运行实例。项目服务的当前实现边界集中记录于 §17.3；接口存在或目录可发现不等于全部命令业务与 GUI 已完成验收。
 
 默认旧单会话入口保留 v1/v2/v3 已公布行为和分帧；未协商 v3 不接收 fork 业务帧。项目模式通过显式启动与能力声明采用新作用域契约，不悄悄给旧客户端增加必填字段。
 
@@ -552,7 +559,7 @@ flowchart TB
 | `close_session`（新增） | S；cancelRunning 可选，默认 false | unloaded、历史可读性、目录修订 | 忙且未授权取消则拒绝；清理未完不返回 unloaded |
 | `rename_session`（扩展） | H；name、expectedRevision | 更新后的摘要与修订 | 不加载历史；空/非法名称及冲突拒绝；已加载视图同步 |
 | `delete_session`（扩展） | H；expectedRevision；cancelRunning 可选，默认 false；已加载时附 generation | deleted、删除范围及目录修订 | 历史删除与关联记录按 OMP 存储策略处理，列出未清理资源；失败不假报全部删除 |
-| `branch`（复用） | S；entryId | 新会话摘要、generation | 复用 OMP 分支语义；原会话保留，新会话仍在本项目进程 |
+| `branch` / `fork`（复用） | S；branch 要求 entryId；fork 的 entryId 可选 | 新会话摘要、generation | 复用 OMP 分支语义；创建独立管理器/宿主并继承当前模型及配置思考值，原会话及输入门保留，新会话仍在本项目进程 |
 
 项目进程关闭由宿主结束连接并走 EOF 清理，不新增与已有退出机制重复的 RPC。旧 `new_session/open_session/switch_session/set_session_name` 的项目模式别名只允许明确映射，无法映射则拒绝；旧单会话行为不变。
 
@@ -593,7 +600,7 @@ flowchart TB
 | 接口 | 范围与输入 | 成功结果 | 关键校验 |
 | --- | --- | --- | --- |
 | `list_skills` | P 或 S；view 为 management/effective；effective 必须有 S；cursor/limit 可选 | SkillSummary 列表、revision、nextCursor、warnings | management 包含禁用/覆盖项；effective 使用实际会话快照 |
-| `set_skill_enabled` | P；skillId、enabled、scope、expectedRevision | 保存后资源/配置修订、effective、pendingSessions | scope 为已声明可写范围；启用失败原因包含来源关闭/同名覆盖等 |
+| `set_skill_enabled` | P；skillId、enabled、scope、expectedRevision | 保存后资源/配置修订、effective、adoptedSessions、pendingSessions | 当前具体开关仅 scope=user；启用失败原因包含来源关闭/同名覆盖等；保存不等于待采用会话已刷新 |
 | `copy_skill` | P；skillId、targetScope、targetName、expectedRevision | 新 skillId、定位、revision | 完整复制必要资源；目标存在则拒绝；源版本变化拒绝 |
 | `delete_skill` | P；skillId、expectedRevision | deleted、目录修订、残留说明（如有） | 可管理资源且未被本轮使用；包资源应指向所属卸载流程 |
 | `reload_skills` | P；scope 为 user/project；来源定位可选 | 目录修订、warnings、已采用/待采用的会话 | 外部变动与 RPC 修改走同一刷新路径 |
@@ -601,6 +608,8 @@ flowchart TB
 | `set_skill_ignored` | P；name、ignored、scope、expectedRevision | 忽略配置及有效结果 | 按名称规则作用，明确可能影响同名多来源 |
 
 上表写入 default scope 不隐含推断，GUI 从目录的可写范围选择。安装/更新/卸载经 execute_command 共用现有包管理服务，输入参数遵守该命令目录的语法；若后续结构化按钮必需，添加薄包装及明确包身份，不让 GUI 自行删除安装目录。
+
+具体技能开关以规范化 `SKILL.md` 路径身份持久化到 `skills.disabledPaths`，不能写成名称 glob，也不能切换整个来源。skillId 是具体路径与 source 绑定的不透明身份，不是可由名称拼出的 native:user/name；每个资源有独立内容/相关配置 CAS 修订，不能用全局目录 revision 代替。当前 RPC 声明的可写范围为 user；同名不同来源分别绑定实际路径。management 行的 effective=false 不表示配置禁用，只表示未声称某加载会话已采用；effective 视图要求显式已加载会话并读取其真实快照，修订哈希取已采用的 contentRevision，不用后来磁盘字节冒充旧会话内容。写响应的可用性与 adopted/pending 会话状态分开，持久保存不等于所有会话已刷新。项目作用域写入仍按目录能力和后续验收要求开放，不因当前 user-only 实现删去目标契约。
 
 ### 14.7 模型与角色
 
@@ -614,6 +623,14 @@ flowchart TB
 | `set_thinking_level` / `get_available_thinking_levels` | S；前者 level，后者无业务参数 | 生效级别 / 该模型支持的级别 | 跟随当前模型的合法范围；不通过 GUI 硬编码所有模型相同能力 |
 
 GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；每次响应更新修订后再提交下一次，不让旧响应覆盖最新选择。不同 role 可并发。文件保存失败时必须重新读取/回滚运行配置到可解释状态，返回实际持久值及运行值；不能留下“失败但界面以为成功”的状态。
+
+当前持久 role 写入仅公告 user 范围：逐 role 修订绑定用户层显式值，写入通过磁盘 compare-and-swap 后才返回 persisted。外部同 role 修改返回 revision_conflict；项目覆盖及运行覆盖不能因保存用户默认值而被清掉。RoleDescriptor 分别返回 userValue、projectValue、候选约束与 writableScopes，GUI 不从 effective 值反推出持久默认值。项目范围写入目标不因本期范围限制被删除。
+
+RPC `/model` 与项目模式 `set_model` 使用会话临时 setter，不写 default role；明确保存默认值仍走 role 写入接口。ACP/TUI 现有默认 setter 的语义不因共用命令移植被改变。
+
+模型名单先应用 `enabledModels` 正向选择（空数组表示允许所有符合其他条件的模型），再应用 `disabledModels` 排除；排除优先，空数组表示不排除，`["*"]` 排除全部，含 id 内有 `/` 的模型。普通 glob 遵循路径语法：`provider/**` 跨多层 id，`provider/*` 仅单层；精确命中真实目录条目的 `provider/id` 按字面身份优先，即使 id 含 `*`、`?`、`[`。两者使用现有模型选择模式和路径作用域，排除不得被显式 model pin、保存的模型、role、cycle 或凭据获取绕过；registry 保留完整目录供开关管理。`set_model_enabled(false)` 以具体 `provider/id` 写排除，必须能禁用最后一个或全部模型，不得把 `enabledModels=[]` 误作“全部禁用”。启用只解除目标的具体排除；若手写宽泛排除或其他禁用规则仍覆盖目标，应真实返回冲突，不能偷偷放宽其他模型。
+
+Provider CRUD 保存原始 `models.yml` 中未修改的段，不把运行时忽略的 company/zcode 配置过滤后写回造成数据丢失；按规范化实际文件路径加 OS 文件锁，在锁内重新读取、校验、修改和原子提交，防止并发修改不同 provider 丢失更新，锁内不执行模型/网络长操作。company 的配置来自启动 Claude 设置，`upsert_provider` 对该保留 id 明确 unsupported；zcode-api 只允许写 apiKey，固定端点、transport 与模型目录属于 runtime，不能通过 RPC 覆盖。
 
 ### 14.8 子代理目录、详细事件与已有控制能力
 
@@ -645,11 +662,15 @@ GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；
 | `ask_response` / `ask_pause` | S；原问题 ID；响应为 answers/chat/cancelled 之一；pause 用 targetId 指向原问题 | 按原问题约束校验；倒计时暂停的业务状态归 OMP，不新增当前不存在的恢复动作 |
 | `set_plan_mode` / `get_plan_state` / `list_plans` | S；设置时 enabled，查询无业务参数 | 实际模式/计划目录、身份、定位和内容修订 |
 | `approve_plan` | S；审批 ID、计划身份、expectedRevision、decision；feedback/model 可选 | 接受与后续执行关联（执行回合的 `prompt_result` 携带本请求 id）；过期拒绝；决定为现有 approve/refine/reject |
-| `get_settings` / `set_settings` / `unset_settings` | P 或 S；读取 scope，写入 scope、key、value、expectedRevision；unset 不带 value | 明确存储/生效作用域；现有不支持的项目写入继续返回限制，不假报成功 |
+| `get_settings` / `set_settings` / `unset_settings` | P 或 S；读取 scope，写入 scope、key、value、expectedRevision；unset 不带 value | 读取完整注册字段及用户层修订，凭据脱敏；项目模式写入当前仅 user 且修订必填，逐字段磁盘 CAS；短写返回提交后的值/修订，不能复用旧 token；项目持久写入按已声明能力开放，不假报成功 |
 | `list_mcp_servers` / `mcp_reconnect` | P/S；重连指定 name 及服务实际归属 | 配置与会话实际连接状态分开；有真实实现才公告重连能力 |
 | Provider、登录、宿主工具/URI、用量与其他已保留入口 | 沿用现有必要业务参数；会话相关者加 S，配置相关者明确 scope | 保留现有功能并审计回调归属；模型登录沿用 get_login_providers/login 与 UI 桥；不复制鉴权系统 |
 
+Agent 定义管理只修改明确允许写入的项目 `.omp/agents` 文件；删除不能移除用户层或外部来源的定义。局部更新保留未修改的 frontmatter 字段及正文，`tools: []` 是显式空工具集合，不得当成未提供。
+
 最后一行不是允许遗漏接口：阶段 A 必须交付注册入口全量作用域清单，逐项给出复用/扩展/旧模式保留状态；不在本期新增这些产品的管理接口。已从本期删除的接口仍按 §3.2、§9 处理。
+
+`get_settings(scope=user)` 覆盖全部注册字段，不只 `/settings` 控件；`scope=project` 仅列项目层显式配置字段，嵌套 dotted key 必须逐段判断。每项的 `value` 是配置面板层叠值（不含环境变量），`userValue` 是独立用户层值、未设置时省略；`revision` 绑定用户字段。凭据的 value/userValue/defaultValue 都脱敏。项目模式的 set/unset、skill source 开关与 ignored-name 写入要求显式 user scope 与 expectedRevision，同字段外部变更返回 stale_revision，禁止覆盖；无关字段合并，不能因保存用户默认值清掉项目/运行覆盖。旧单会话省略修订时保留原面板兼容路径，不把该兼容行为当作项目模式的并发保证。
 
 ## 15. 事件、操作完成与一致性设计
 
@@ -737,32 +758,25 @@ GUI 连续修改同一 role 时按该 role 排队/合并尚未发送的选择；
 
 阶段 A 的清单是实现产物，不是把架构决策重新留给执行者。本文已决定单项目主进程、多会话隔离、共同业务服务、原生 OMP 协议、消息与管理完成通道、持久化权威及 GUI 边界；只有字段拼写和等价现有入口映射可随当前源码调整。
 
-### 17.3 实施状态（2026-09-29，OMP 仓库首轮）
+### 17.3 当前实现边界与验证状态
 
-OMP 侧 B1/B2/D1/E1/F 的项目模式骨架与核心接口已实施；每包状态、变更范围与验证证据如下。Z1/Z2（ZCode 仓库）未开始；GUI 真实验收（§11.2）因此整体未验证。
+本节描述当前 OMP 源码入口，不是验收通过记录。需求与 O/Z 验收仍以以上条款为准；下表列出验证入口与仍需独立验收的矩阵，不能把测试文件存在、接口类型齐全或命令可发现算作验收完成。ZCode 仓库接入状态与真实 GUI 验收需由对应仓库提供证据。
 
-| 包 | 状态 | 变更范围 | 验证证据 |
-| --- | --- | --- | --- |
-| A1 契约冻结 | 已实现，静态验证通过 | `modes/rpc/rpc-project-types.ts`：项目模式全部命令/响应/事件/错误码/能力契约；`rpc-types.ts` 增补 `prompt.inputMode` 与 ready 项目字段 | `bun run fastcheck`；类型为 `packages/coding-agent` check:types 的一部分 |
-| B1 项目入口与路由 | 已实现，公开入口验证通过（O01/O02/O04 的进程级部分） | `--rpc-project` CLI flag（args/flag-tables）；`main.ts` 项目分支 + `createRpcProjectSessionFactory`（每会话独立 EventBus/subagentEventBus）；`modes/rpc/rpc-project.ts` 项目宿主：ready 公告身份/能力、v3 门控、项目级与会话级命令路由、代次校验、交互帧按交互身份路由回原会话、EOF 有序退出 | `test/rpc-project-protocol.test.ts`（9 项：ready 身份、v3 门控、零会话目录、多会话生命周期、缺 sessionId 拒绝、未知命令、prompt text 模式、execute_command 严格分发、EOF 退出） |
-| B2 隔离与事件基础 | 已实现（事件归属 stamp、每会话 subagent bus、共享 host-tool/URI 桥） | `rpc-session-host.ts`（自 rpc-mode.ts 提取的单会话宿主，两种模式共用同一命令实现）；会话帧统一追加 processInstanceId/sessionId/sessionGeneration | 同上（多会话不串话的进程级验证）；O03/O14/O18 的完整矩阵未验证 |
-| D1 目录与无副作用补全 | 已实现，单元验证通过（O11 的规则部分） | `modes/rpc/rpc-project-commands.ts`：统一命令目录（零会话可用，session_required 标注）、名称/参数补全（UTF-16 替换区间、无副作用）、严格 resolve | `test/rpc-project-commands.test.ts`（8 项） |
-| D2 命令执行与交互 | 已实现（execute_command 复用 prompt inputMode=auto 严格分发；未知命令不落模型） | `rpc-project.ts` #executeCommand；`rpc-session-host.ts` prompt 分支的 inputMode 语义 | `test/rpc-project-protocol.test.ts` 第 7/8 项 |
-| C 技能服务 | 已实现，单元验证通过（O06 的目录区分部分） | `extensibility/skills.ts` 增补 `loadSkillsWithShadowed`（同名覆盖可见）；`modes/rpc/rpc-project-skills.ts`：management/effective 双视图、set_skill_enabled/copy（重写 frontmatter name 生成新身份）/delete（仅可管理目录）/reload（resetCapabilities + 会话采用报告） | `test/rpc-project-skills.test.ts`（6 项） |
-| E1 消息接入 | 已实现（会话级 prompt/abort/历史经 sessionId 路由到既有链路；text/auto 语义） | `rpc-project.ts` 会话路由 + `rpc-session-host.ts` | `test/rpc-project-protocol.test.ts` 第 7 项；O19 完整流式/停止/失败矩阵未验证（需真实模型） |
-| E2 子代理协作与恢复 | 已实现（持久目录按会话 artifacts 扫描、记录读取带归属解析与 record_too_large、control_subagent send_message/stop 复用 IRC/registry 终止） | `modes/rpc/rpc-project-subagents.ts` | 专项单元测试已补：`test/rpc-project-subagents.test.ts`（22 项，覆盖目录合并与 live 优先、终态规则、扫描排除/嵌套、分页校验、窗口读取/续读/record_too_large/reset/EOF、控制入口校验与投递映射）；O20—O22 的多会话/重启 E2E 集成仍未验证 |
-| F 模型和 role | 已实现，单元验证通过（O24 全量 role、O25 落盘与修订冲突） | `modes/rpc/rpc-project-models.ts`：get_model_roles（零配置/零模型返回全部内置 role）、set_model_role（逐 role 修订、flush 落盘、来源回读）；`rpc-fork-config.ts`/`rpc-fork-manage.ts` 支持零会话 service-context 构造 | `test/rpc-project-models.test.ts`（7 项） |
-| G 兼容与收尾 | 已实现（旧单会话模式行为保留；全量既有 rpc/rpc-fork 测试回归通过） | `rpc-mode.ts` 重构为传输壳后保持全部导出与行为 | 既有 18 个 rpc*.test.ts 全绿（108 pass）；O15—O17 剩余矩阵未逐项验证 |
-| Z1/Z2 桌面接入 | 未开始 | — | — |
+| 包 | 当前 OMP 入口及边界 | 验证入口/尚需验收 |
+| --- | --- | --- |
+| A1/B1 项目入口与契约 | `rpc-project-types.ts`、CLI `--mode rpc-ui --rpc-project`、`rpc-project.ts`：ready 公告项目/进程身份与能力；项目模式只协商 v3，请求 id 非空且拒绝在途重复 id | `test/rpc-project-protocol.test.ts`；O01/O02/O04 完整竞争矩阵 |
+| B2 会话隔离 | 每会话独立 `RpcSessionHost`、输入排序门、命令队列、EventBus 与 subagentEventBus；共享的是 host-tool/URI 定义目录，不是回调桥实例；会话帧带 processInstanceId/sessionId/sessionGeneration | 多会话工具、URI、审批、UI 与关闭隔离；O03/O14/O18 |
+| D1 命令目录与补全 | `rpc-project-commands.ts`：零会话目录、可用范围、UTF-16 替换区间、无副作用补全与严格 resolve；目录可发现不表示所有 TUI 专属业务已移植 | `test/rpc-project-commands.test.ts`、逐项命令业务覆盖表；O11/O12 |
+| D2/E1 消息与命令执行 | `rpc-project.ts` 与 `rpc-session-host.ts`：普通 text 输入不解析命令；auto/execute_command 严格分发，未知命令与参数错误不能落模型；本地完成、模型 prompt_result、管理终态分开 | 协议测试与完整成功/失败/取消矩阵；O19 和真实模型场景未验证 |
+| C 技能 | `rpc-project-skills.ts`、公共 skills 加载器：management/effective 双视图、路径绑定身份/修订、`skills.disabledPaths` 具体开关、复制/删除/刷新及会话采用状态；当前持久写入只公告 user 范围 | `test/rpc-project-skills.test.ts`；同名多来源、修改竞争、运行中采用与项目范围目标 |
+| E2 子代理 | `rpc-project-subagents.ts`：按所属会话扫描持久目录，完整记录边界续读、reset/EOF/record_too_large，send_message/stop 复用实际通信与生命周期服务 | `test/rpc-project-subagents.test.ts`；O20—O22 多会话/重启真实链路 |
+| F 模型与 role | `rpc-project-models.ts`：零配置仍返回全部 role；userValue/projectValue 与有效覆盖分离；候选约束、逐 role 用户层修订、磁盘 CAS 持久化，冲突不假报成功 | `test/rpc-project-models.test.ts` 与 Settings 持久化测试；O24/O25 及项目范围目标 |
+| G 队列与计划 | `rpc-fork-queue.ts` 的队列事件来自真实入队/消费/恢复，get_queue 只暴露可编辑的 pending 用户消息；`rpc-fork-plan.ts` 以实际 proposal 生成 approvalId/内容修订，项目 approve/refine/reject 要求匹配，过期返回 plan_approval_conflict，无待审批返回 plan_not_pending | 队列/计划控制器与协议测试；O14—O17 并发和过期交互矩阵 |
+| G 生命周期与旧模式 | 单会话继续 v1/v2/v3 兼容；项目历史查询不为未加载会话创建运行实例，目录游标是不透明且绑定修订/筛选的字符串；加载实例相关 S 请求要求代次，关闭后交互失效 | 兼容、游标失效、关闭/EOF 清理与持久化失败矩阵 |
+| Z1/Z2 桌面接入 | OMP 不替 ZCode 生成第二套模型调用、Agent 或插件业务；桌面连接与面板由 ZCode 实现 | Z 系列与 §11.2 全部真实 GUI 场景未验证 |
 
-自动化验证入口：`test/rpc-project-*.test.ts` 已加入 `scripts/fulltest.ts` 白名单（组 `coding-agent/rpc-project`）。真实模型/真实 GUI 场景（O19/O28、全部 Z 系列）仍属未验证，按 §11 分别记录，不合并为完成。
+用户输入排序与取消在各会话自己的输入门内保持到达顺序；abort、目录查询和另一会话的输入不因该门等待而阻塞。附件和技能分发保留原消息身份及图片，计划 approve/refine 的执行以原请求 id 的 prompt_result 收尾。
 
-2026-10-02 随上游 v18.4.10 合入上游 PR #13027 的用户输入排序门（`RpcUserInputGate`）并适配 fork 分层：`prompt`/`steer`/`follow_up`/`abort_and_prompt` 在帧到达时编号、经共享门串行执行，`abort` 与会话轮换使更早的排队输入在其下一步 `isCurrent` 检查处取消（取消的 `prompt` 以正常 response + `prompt_result` 收尾，不再启动模型回合）；extension input 处理器按到达顺序在门内运行（此前 RPC 链路不经过 input 处理器）；skill 命令消息可携带图片。单会话模式与项目模式（跨会话共享同一门、帧到达点 accept）均已接线。行为语义见 §14.4 的「输入排序与取消」条款；fork 的 attachments 解析与 `/plan` 拦截保留在命令入口、门**外**（同步快速路径，不产生模型输入），严格分发未知命令拒绝与 builtin 残余 prompt 行为在门内保留。已知边界：`approve_plan`/refine 的长回合经 `dispatchForkPromptTurn` 派发、不进输入门（进门会把 abort/get_state 堵在串行队列），其 `prompt_result` 以触发命令的请求 id 关联。
+goal 沿用 `RpcGoalController` 的实际执行/停止/会话轮换链路，`get_state.goal` 使用上游 `GoalModeState | null`；iteration 由 Goal 与 goal_updated 事件提供。单会话 fork 使用 requireIdle 的实际会话 fork；项目模式使用项目会话生命周期入口，不以旧替换命令偷换实例身份。live_start/live_stop/live_mute 经每会话 `RpcLiveBridge`，stop 与 dispose 在会话释放前关闭麦克风/socket，不能影响另一会话。
 
-同日合并后审查（多子代理核对上游语义、fork 行为、装配链路后）修复了移植引入的问题：项目模式路由曾解构重建命令对象导致门的 WeakMap 键失配、四类用户输入全部被静默取消（含 `execute_command` 合成 prompt 双重失配）——改为原对象透传并在合成点 accept，项目模式同时把 prompt/steer/follow_up/steer_subagent 后台化使 abort 可超车；prompt 的 `local` 与 `unknown-command` 出口补回 `discard(ticket)`（消除 ticket 泄漏）；`abort_and_prompt` 恢复模板展开默认值；附件文本前缀改为 extension 改写之后合成、斜杠/skill 匹配使用裸文本；builtin 残余 prompt 携带改写后的图片集；`approve_plan`/refine 的 `prompt_result` 带请求 id。新增回归测试：项目模式 `execute_command` 本地 builtin 正向执行、项目模式 prompt 非取消链路（`test/rpc-project-protocol.test.ts`）。
-
-同日随上游 `d256f2bbb366` 合入 goal 模式与 RPC continuation（上游 PR #13952/#13879）：单会话与项目模式（`goal` 已入 SESSION_LEVEL_COMMANDS，按 sessionId 路由）均接线上游 `RpcGoalController`——构造与事件观察（`observe` 先于 prompt 结果与 settle 报告）、`reconcile()`/`settled()`、`abort`/`abort_and_prompt` 的 `stopForHostAbort()`、`new`/`switch`/`branch` 与 `open_session` 的会话变更门控（begin/endSessionChange，`detachedRun` 分别按命令类型与 sessionFile 变化判定）、extension 发起的会话变更经上游 `wrapSessionChange` 钩子同样包裹。`get_state` 的 `isSettled` 携带 scheduled-turn 探针，并输出上游形态的 `goal: GoalModeState | null`。fork v3 原有 `get_state.goal` 快照扩展（`{goal, state, iteration}` 可选对象）**由上游形态等价满足**：顶层 `state`/`iteration` 字段不再存在（iteration 经 `Goal` 本体与 `goal_updated` 事件透出），无 goal 时为显式 `null` 而非键缺省；fork 的 `RpcForkStateController.goalSnapshot` 静态助手与对应单元测试已删除。验证：`test/rpc-goal.test.ts`（真实 RPC 子进程全生命周期）、`test/cli-goal-flag.test.ts`、`test/goals/goal-runtime.test.ts`、`test/goals/goal-mode-integration.test.ts` 随本次同步加入 fulltest 白名单组 `coding-agent/goal`。
-
-2026-10-02 随上游 v18.4.12 合入 RPC `fork` 会话变更命令（快照式 fork，`requireIdle`）：单会话模式接线进 `RpcSessionHost`（类型三处、`SESSION_CHANGE_TYPES`、`handleRpcSessionChange` 的 fork 分支——`session.fork(entryId, {requireIdle: true})` 成功后清空子代理注册表；分发处 fork 先做 `isBusyForSnapshot` 快速拒绝并在 goal 门控内捕获 `SessionBusyError` 返回 `session_busy`，`detachedRun` 与 `abortOpen` 均排除 fork——fork 在进程内切文件、不分离运行中的回合）；项目模式将 `fork` 加入会话级路由集与 `handleSessionCommand` 拒绝列表（与其他替换已加载会话的命令同语义，提示走项目会话生命周期命令）。`rpc-client.ts` 的 `fork(entryId?)` 方法由上游自带合入。
-
-2026-10-04 随上游 v18.6.0 合入 RPC live voice（上游 Live Voice Sub-Protocol）：上游在旧 `runRpcMode` 单体上新增 `RpcLiveBridge`（`rpc-live.ts`）、`live_start`/`live_stop`/`live_mute` 三命令与 `live_*` 流式帧；fork 分层下的接线为——`RpcSessionHost` 构造 `RpcLiveBridge`（options 透传 `RpcModeOptions.createLiveSession` 测试注入）并在 `handleCommand` 承载三命令 case，`dispose` 与新幂等方法 `stopLive()` 保证麦克风/socket 在 session dispose 前关闭（单会话 `disposeAndExit` 与 stdin-EOF 路径均覆盖）；传输壳 `rpc-mode.ts` 仅 `live_start` 进 BACKGROUND_COMMANDS（`live_stop` 可超车取消）；项目模式把三命令加入会话级路由集、`live_start` 进后台化集。上游随本次把 Python 客户端重组为 `sdk/python/omp-rpc`（wire schema 生成类型），预采纳 PR #13802 的 `liveSteered` 计数经 wire DSL（`QueuedMessagesState`/`QueueUpdateEvent`，缺省解码 0）重新生成各语言工件。
+自动化入口为 `test/rpc-project-*.test.ts`、既有 rpc/rpc-fork 控制器与协议测试，以及 `scripts/fulltest.ts` 的 rpc-project 组。TypeScript/Python 客户端可协商 v3 并复用 v2 分帧（包括 ready 只公告 `[1,3]`）；TS `requestFork<T>` 对 fork 命令要求已确认 v3、按 id 关联并返回 data，保留服务端错误文本/code；Python `send_fork_frame` 同样在 v3 前拒绝使用。fork 业务仍不加入上游 wire schema。真实模型、多会话异步宿主、资源清理、崩溃恢复和 GUI 接入必须按 §11 与 §17.2 单独记录执行结果，当前不标记任何未运行项为通过。

@@ -191,11 +191,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		removeSyncWithRetries(testAgentDir);
 	});
 
-	// These three assume os.tmpdir() sits outside the home directory (Linux
-	// /tmp), so the home-first classifier yields a `-tmp` name. Windows %TEMP%
-	// lives under the profile, which the upstream classifier treats as
-	// home-relative by design.
-	it.skipIf(process.platform === "win32")("stores temp-root cwd sessions under -tmp-prefixed directories", () => {
+	it("stores temp-root cwd sessions under -tmp-prefixed directories", () => {
 		const tempCwd = path.join(testAgentDir, `temp-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -206,7 +202,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(path.dirname(sessionFile)).toBe(path.join(getSessionsDir(), expectedTempSessionDirName(tempCwd)));
 	});
 
-	it.skipIf(process.platform === "win32")("migrates legacy temp-root absolute session dirs to -tmp prefixes", () => {
+	it("migrates legacy temp-root absolute session dirs to -tmp prefixes", () => {
 		const tempCwd = path.join(testAgentDir, `legacy-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -225,7 +221,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(fs.existsSync(path.join(expectedDir, "carried.jsonl"))).toBe(true);
 	});
 
-	it.skipIf(process.platform === "win32")("migrates hashed-scheme session dirs back into legacy names", () => {
+	it("migrates hashed-scheme session dirs back into legacy names", () => {
 		const tempCwd = path.join(testAgentDir, `hashed-cwd-${Snowflake.next()}`);
 		fs.mkdirSync(tempCwd, { recursive: true });
 
@@ -252,9 +248,7 @@ describe("SessionManager temp cwd session dirs", () => {
 		expect(fs.existsSync(path.join(expectedDir, "stranded.jsonl"))).toBe(true);
 	});
 
-	// The temp scope only wins over home on Windows; POSIX deliberately keeps
-	// the home scope when a custom TMPDIR sits inside the home directory.
-	it.skipIf(process.platform !== "win32")("migrates home-scoped sessions when the temp root is inside home", () => {
+	it("migrates home-scoped sessions when the temp root is inside home", () => {
 		const home = path.join(testAgentDir, "home");
 		const tempRoot = path.join(home, "temp");
 		const tempCwd = path.join(tempRoot, "project");

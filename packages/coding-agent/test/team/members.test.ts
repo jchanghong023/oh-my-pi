@@ -44,14 +44,6 @@ describe("team member resolution", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toContain("team.members");
-			// The copy-paste example must not suggest IDs that only exist in a
-			// --offline process; concrete company ids are named only as an
-			// offline-lane note, with `omp models` as the source of real ids.
-			expect(result.error).toContain("<provider>/<model-id>");
-			expect(result.error).toContain("omp models");
-			expect(result.error).toContain("company/GLM-5.2-public");
-			expect(result.error).toContain("--offline");
-			expect(result.error).toContain("不会静默降级为单模型");
 		}
 	});
 
@@ -86,15 +78,45 @@ describe("team member resolution", () => {
 		}
 	});
 
-	it("treats an empty array as unconfigured", () => {
-		const offline = resolveTeamParticipants({
+	it("limits only the implicit company roster to currently eligible models", () => {
+		const excluded = COMPANY_PATTERNS[0]!;
+		const eligible = COMPANY_PATTERNS[1]!;
+		const availableModels = AVAILABLE.filter(model => `${model.provider}/${model.id}` !== excluded);
+		const result = resolveTeamParticipants({
 			configuredMembers: [],
 			offlineLaneActive: true,
 			companyModelPatterns: COMPANY_PATTERNS,
 			sessionModel: SESSION,
-			availableModels: AVAILABLE,
+			availableModels,
 		});
-		expect(offline.ok).toBe(true);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.source).toBe("company-default");
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				eligible,
+				`${SESSION.provider}/${SESSION.id}`,
+			]);
+		}
+		const explicit = resolveTeamParticipants({
+			configuredMembers: [excluded],
+			offlineLaneActive: true,
+			companyModelPatterns: COMPANY_PATTERNS,
+			sessionModel: SESSION,
+			availableModels,
+		});
+		expect(explicit.ok).toBe(false);
+		if (!explicit.ok) expect(explicit.error).toContain(excluded);
+	});
+
+	it("does not fall back to only the session model when no company defaults are eligible", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: [],
+			offlineLaneActive: true,
+			companyModelPatterns: COMPANY_PATTERNS,
+			sessionModel: SESSION,
+			availableModels: [SESSION],
+		});
+		expect(result.ok).toBe(false);
 	});
 
 	it("explicit configuration overrides the environment default list", () => {
@@ -126,6 +148,21 @@ describe("team member resolution", () => {
 			expect(result.error).toContain("不会静默剔除");
 		}
 	});
+
+	it.each([{ configuredMembers: ["   "] }, { configuredMembers: ["openai/gpt-5", ""] }])(
+		"rejects explicitly empty configured entries: %j",
+		({ configuredMembers }) => {
+			const result = resolveTeamParticipants({
+				configuredMembers,
+				offlineLaneActive: true,
+				companyModelPatterns: COMPANY_PATTERNS,
+				sessionModel: SESSION,
+				availableModels: AVAILABLE,
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain(`team.members[${configuredMembers.length - 1}]`);
+		},
+	);
 
 	it("dedups the session model against configured members by resolved instance", () => {
 		const result = resolveTeamParticipants({

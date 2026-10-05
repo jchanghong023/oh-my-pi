@@ -49,6 +49,25 @@ describe("Markdown parsing", () => {
 		);
 	});
 
+	it("preserves a UTF-8 BOM and CRLF bytes while recognizing the initial heading", () => {
+		const text = "\uFEFF# 标题\r\n正文\r\n## 下一节\r\n后续\r\n";
+		const bytes = new TextEncoder().encode(text);
+		const parsed = parseMarkdown(bytes);
+		expect(parsed.title).toBe("标题");
+		expect(parsed.sections.map(section => section.rawMarkdown).join("")).toBe(text);
+		expect(parsed.sections.map(section => [section.lineStart, section.lineEnd])).toEqual([
+			[1, 2],
+			[3, 4],
+		]);
+		for (const section of parsed.sections) {
+			const original = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+				bytes.subarray(section.byteStart, section.byteEnd),
+			);
+			expect(original).toBe(section.rawMarkdown);
+		}
+		expect(parsed.sections.at(-1)?.byteEnd).toBe(bytes.length);
+	});
+
 	it("drops skipped-level gaps from stored heading paths but keeps level fallback", () => {
 		const skipped = parseMarkdown(new TextEncoder().encode("# A\n\n#### B\n\nDeep needle\n"));
 		expect(skipped.sections.map(section => section.headingPath)).toEqual([["A"], ["A", "B"]]);
@@ -158,8 +177,33 @@ describe("Markdown parsing", () => {
 		expect(sectionShape("\t# word\n")).toBe("content");
 		expect(sectionShape("Word\n    ---\n")).toBe("content");
 	});
+
+	it("classifies CRLF Setext headings like LF headings without retaining structural labels", () => {
+		expect(sectionShape("Cell\r\n----\r\n")).toBe("stub");
+		expect(sectionShape("需求条款\r\n----\r\n")).toBe("heading-only");
+		const parsed = parseMarkdown(new TextEncoder().encode("# Doc\r\nCell\r\n----\r\n需求条款\r\n====\r\n"));
+		expect(parsed.sections.map(section => section.rawMarkdown)).toEqual(["# Doc\r\n", "需求条款\r\n====\r\n"]);
+	});
 });
 describe("DocsService indexing contract", () => {
+	it("rejects invalid UTF-8 without publishing silently replaced text or a partial import", async () => {
+		const root = await tempDir("docs-utf8-root-");
+		const agentDir = await tempDir("docs-utf8-agent-");
+		await fs.writeFile(path.join(root, "a.md"), "# Guide\nvalid corpus needle\n");
+		await fs.writeFile(path.join(root, "b.md"), new Uint8Array([0x23, 0x20, 0xff, 0x0a]));
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await expect(service.init(".", "manual")).rejects.toThrow('Unable to parse Markdown "b.md"');
+			expect(service.list()).toEqual([]);
+			expect(service.search("needle").sections).toEqual([]);
+			await fs.rm(path.join(root, "b.md"));
+			await service.init(".", "manual");
+			expect(service.search("needle").sections[0].text).toBe("# Guide\nvalid corpus needle\n");
+		} finally {
+			service.close();
+		}
+	});
+
 	it("publishes only complete imports and discards cancellation or read failures", async () => {
 		const root = await tempDir("docs-atomic-root-");
 		const agentDir = await tempDir("docs-atomic-agent-");
@@ -195,9 +239,7 @@ describe("DocsService indexing contract", () => {
 			const imported = await service.init(".", "manual");
 			expect(imported.index.documentCount).toBe(1);
 			await expect(service.init(".", "manual")).rejects.toThrow("already exists");
-			expect(service.read({ sectionId: service.search("Alpha").sections[0].sectionId }).rawMarkdown).toBe(
-				"# A\nAlpha\n",
-			);
+			expect(service.search("Alpha").sections[0].text).toBe("# A\nAlpha\n");
 			service.remove("manual");
 			expect(service.search("Alpha").sections).toEqual([]);
 			await service.init(".", "again");
@@ -260,11 +302,11 @@ describe("DocsService indexing contract", () => {
 				[11, "fulltext"],
 			] as const) {
 				expect(service.search("Alpha 中文", { index: name }).sections.map(hit => hit.sectionId)).toEqual([id]);
-				expect(service.read({ sectionId: id, index: name })).toMatchObject({
+				expect(service.search("Alpha 中文", { index: name }).sections[0]).toMatchObject({
 					path: `${name}.md`,
 					lineStart: 1,
 					lineEnd: 2,
-					rawMarkdown: `# Guide\r\nAlpha 中文 ${name}\r\n`,
+					text: `# Guide\r\nAlpha 中文 ${name}\r\n`,
 				});
 			}
 			expect(service.storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -275,7 +317,9 @@ describe("DocsService indexing contract", () => {
 		}
 		const reopened = new DocsService({ agentDir });
 		try {
-			expect(reopened.read({ sectionId: 11 }).rawMarkdown).toBe("# Guide\r\nAlpha 中文 fulltext\r\n");
+			expect(reopened.search("Alpha", { index: "fulltext" }).sections[0].text).toBe(
+				"# Guide\r\nAlpha 中文 fulltext\r\n",
+			);
 		} finally {
 			reopened.close();
 		}
@@ -305,12 +349,8 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "case");
 			const hits = service.search("Alpha", { index: "case" }).sections;
 			expect(hits.map(hit => hit.path).sort()).toEqual(["A.md", "a.md"]);
-			expect(service.read({ sectionId: hits.find(hit => hit.path === "A.md")!.sectionId }).rawMarkdown).toContain(
-				"Alpha one",
-			);
-			expect(service.read({ sectionId: hits.find(hit => hit.path === "a.md")!.sectionId }).rawMarkdown).toContain(
-				"Alpha two",
-			);
+			expect(hits.find(hit => hit.path === "A.md")!.text).toContain("Alpha one");
+			expect(hits.find(hit => hit.path === "a.md")!.text).toContain("Alpha two");
 		} finally {
 			service.close();
 		}
@@ -349,7 +389,7 @@ describe("DocsService indexing contract", () => {
 			// Scattered characters (`缓慢…存储`) no longer satisfy the word, and the
 			// unbroken spelling outranks the punctuation-split one.
 			expect(hits.map(hit => hit.path)).toEqual(["exact.md", "punctuated.md"]);
-			expect(service.read({ sectionId: hits[0].sectionId }).rawMarkdown).toContain("缓**存**配置");
+			expect(hits[0].text).toContain("缓**存**配置");
 		} finally {
 			service.close();
 		}
@@ -392,6 +432,22 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "manual");
 			const hits = service.search("std::vector", { index: "manual" }).sections;
 			expect(hits.map(hit => hit.path)).toEqual(["late-exact.md", "early-loose.md"]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("scores the full section when astral text makes the SQLite prefix longer in UTF-16 units", async () => {
+		const root = await tempDir("docs-astral-phrase-root-");
+		const agentDir = await tempDir("docs-astral-phrase-agent-");
+		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n${"\u{1d11e}".repeat(2_500)}\nUse std::vector here.\n`);
+		await fs.writeFile(path.join(root, "loose.md"), "# Notes\nvector std\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search("std::vector").sections;
+			expect(hits.map(hit => hit.path)).toEqual(["exact.md", "loose.md"]);
+			expect(hits[0].text).toContain("Use std::vector here.");
 		} finally {
 			service.close();
 		}
@@ -488,7 +544,9 @@ describe("DocsService indexing contract", () => {
 					return (value as (...args: unknown[]) => unknown).bind(target);
 				},
 			});
-			const hits = reader.search("needle", { index: "old-evidence" }).sections;
+			const result = reader.search("needle");
+			const hits = result.sections;
+			expect(result.total).toBe(1);
 			expect(hits).toHaveLength(1);
 			// Provenance and text must describe the same version of the section.
 			expect(hits[0].path).toBe("evidence.md");

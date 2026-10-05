@@ -786,6 +786,8 @@ export interface CreateAgentSessionOptions {
 	expectedAgentRef?: AgentRef | null;
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
+	/** Child output namespace for independent top-level roots; does not change agent kind. */
+	agentOutputPrefix?: string;
 	/**
 	 * Registry id of the spawning agent, recorded as this subagent's parent in
 	 * the agent registry. Distinct from `parentTaskPrefix`, which is this agent's
@@ -1614,6 +1616,30 @@ export function createAutoLearnCaptureRunner(
 	};
 }
 
+const managedAsyncJobManagerOwners = new Map<AsyncJobManager, number>();
+
+function retainAsyncJobManager(manager: AsyncJobManager): (() => Promise<boolean | void>) | undefined {
+	const owners = managedAsyncJobManagerOwners.get(manager);
+	if (owners === undefined) return undefined;
+	managedAsyncJobManagerOwners.set(manager, owners + 1);
+	let released = false;
+	return async () => {
+		if (released) return;
+		released = true;
+		const remaining = managedAsyncJobManagerOwners.get(manager)! - 1;
+		if (remaining > 0) {
+			managedAsyncJobManagerOwners.set(manager, remaining);
+			return;
+		}
+		managedAsyncJobManagerOwners.delete(manager);
+		try {
+			return await manager.dispose({ timeoutMs: 3_000 });
+		} finally {
+			if (AsyncJobManager.instance() === manager) AsyncJobManager.setInstance(undefined);
+		}
+	};
+}
+
 /** Reuse the CLI singleton for its workspace; load other SDK workspaces independently. */
 async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Settings> {
 	const pending = Settings.current;
@@ -2141,14 +2167,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const restrictToolNames = options.restrictToolNames === true;
 	const enableLsp = options.enableLsp ?? !restrictToolNames;
 	const lspReadOnly = options.lspReadOnly ?? restrictToolNames;
-	// Only the first top-level session in a process owns an AsyncJobManager.
-	// Subagents inherit the parent's manager via `AsyncJobManager.instance()`
-	// (set below), and any additional top-level session spun up in-process
-	// (e.g. the agent-creation architect in `agents-hub-deps.ts`) must share
-	// the live singleton — otherwise its dispose path would clobber the
-	// owning session's manager and break the `task`/`bash` async paths
-	// (issue #1923). The `instance()` guard means later sessions also skip
-	// constructing an orphaned manager that nothing would ever route to.
+	// Top-level sessions share one owner-routed manager. Each holds a lease,
+	// so closing the session that created it cannot cancel another root's work.
+	// Subagents inherit it without extending the top-level lifetime.
 	// Delivery is owner-routed: every AgentSession registers its own sink
 	// (see session/async-job-delivery.ts), so the manager takes no default
 	// onJobComplete here.
@@ -2160,7 +2181,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				})
 			: undefined;
 
-	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
+	if (asyncJobManager) {
+		managedAsyncJobManagerOwners.set(asyncJobManager, 0);
+		AsyncJobManager.setInstance(asyncJobManager);
+	}
+	const scopedAsyncJobManager = asyncJobManager ?? AsyncJobManager.instance();
+	const releaseAsyncJobManager =
+		!options.parentTaskPrefix && scopedAsyncJobManager ? retainAsyncJobManager(scopedAsyncJobManager) : undefined;
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
@@ -2415,7 +2442,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
 			// addressable and `rule://` reports "Available: none".
 			setActiveRules([...rulebookRules, ...alwaysApplyRules, ...ttsrManager.getRules()]);
-			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {
 			getArtifactsDir,
@@ -2428,7 +2454,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		toolSession.localProtocolOptions = localProtocolOptions;
 		toolSession.agentOutputManager = new AgentOutputManager(
 			getArtifactsDir,
-			options.parentTaskPrefix ? { parentPrefix: options.parentTaskPrefix } : undefined,
+			options.parentTaskPrefix || options.agentOutputPrefix
+				? { parentPrefix: options.parentTaskPrefix ?? options.agentOutputPrefix }
+				: undefined,
 		);
 
 		// Create built-in tools (already wrapped with meta notice formatting)
@@ -2825,7 +2853,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// is unreachable, so a match on one likewise must not count: otherwise
 					// a disabled first selector suppresses the discovery refresh an enabled
 					// later selector still needs.
-					return resolved.model !== undefined && !disabledProviders.has(resolved.model.provider);
+					return resolved.model !== undefined && modelRegistry.isModelEnabled(resolved.model);
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
@@ -2836,10 +2864,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					modelRegistry.refresh("online-if-uncached"),
 				);
 			}
-			const allEnabledModels =
-				disabledProviders.size === 0
-					? modelRegistry.getAll()
-					: modelRegistry.getAll().filter(candidate => !disabledProviders.has(candidate.provider));
+			const allEnabledModels = modelRegistry.getAll().filter(candidate => modelRegistry.isModelEnabled(candidate));
 			const availableModels =
 				disabledProviders.size === 0
 					? modelRegistry.getAvailable()
@@ -4523,11 +4548,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			autoApprove: options.autoApprove,
 			scoutAllowedBySpawnPolicy: isScoutSpawnable(undefined, options.spawns ?? "*"),
 			evalKernelOwnerId,
-			// Defined only for top-level sessions (creation is gated above).
-			// AgentSession uses this to decide whether it may dispose the global
-			// AsyncJobManager on teardown; subagents inherit the parent's and
-			// **MUST NOT** tear it down.
-			ownedAsyncJobManager: asyncJobManager,
+			// SDK roots own a lease; directly constructed sessions may own a manager outright.
+			ownedAsyncJobManager: releaseAsyncJobManager ? scopedAsyncJobManager : undefined,
+			releaseOwnedAsyncJobManager: releaseAsyncJobManager,
 			asyncJobManager: scopedAsyncJobManager,
 			scopedModels: options.scopedModels,
 			inheritedSessionAgents: options.inheritedSessionAgents,
@@ -4946,29 +4969,42 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const originalDispose = session.dispose.bind(session);
 			session.dispose = async () => {
 				try {
-					// Reject new session work (eval starts) the moment disposal
-					// begins — the lifecycle await below opens an async gap before
-					// AgentSession.dispose() would otherwise set its guards.
-					session.beginDispose();
-					if (agentKind === "main") {
-						// Top-level teardown owns the global agent lifecycle: park timers,
-						// adopted subagent sessions, revivers. Tear it down while shared
-						// resources (kernels, MCP, LSP) are still live. Subagent disposal
-						// must NOT touch the global lifecycle.
-						const vibeRegistry = VibeSessionRegistry.global();
-						const vibeParentSession = {
-							getAgentId: () => resolvedAgentId,
-							getSessionId: () => sessionManager.getSessionId(),
-							getSessionFile: () => sessionManager.getSessionFile() ?? null,
-							sessionManager,
-							asyncJobManager: scopedAsyncJobManager,
-							settings,
-							getActiveModelString,
-						};
-						await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
-						await AgentLifecycleManager.global().dispose();
+					try {
+						// Reject new session work (eval starts) the moment disposal
+						// begins — the lifecycle await below opens an async gap before
+						// AgentSession.dispose() would otherwise set its guards.
+						session.beginDispose();
+						if (agentKind === "main") {
+							// Release this root's descendants without tearing down another root's lifecycle.
+							const vibeRegistry = VibeSessionRegistry.global();
+							const vibeParentSession = {
+								getAgentId: () => resolvedAgentId,
+								getSessionId: () => sessionManager.getSessionId(),
+								getSessionFile: () => sessionManager.getSessionFile() ?? null,
+								sessionManager,
+								asyncJobManager: scopedAsyncJobManager,
+								settings,
+								getActiveModelString,
+							};
+							await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
+							if (agentRegistry === AgentRegistry.global() && registeredAgentRef) {
+								const lifecycle = AgentLifecycleManager.global();
+								await lifecycle.releaseDescendants(registeredAgentRef);
+								const otherRoots = agentRegistry
+									.list()
+									.some(
+										ref =>
+											ref !== registeredAgentRef &&
+											ref.kind === "main" &&
+											ref.session &&
+											!ref.session.isDisposed,
+									);
+								if (!otherRoots) await lifecycle.dispose();
+							}
+						}
+					} finally {
+						await originalDispose();
 					}
-					await originalDispose();
 				} finally {
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled();
@@ -5317,12 +5353,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
-				if (asyncJobManager) {
-					if (AsyncJobManager.instance() === asyncJobManager) {
-						AsyncJobManager.setInstance(undefined);
-					}
-					await asyncJobManager.dispose({ timeoutMs: 3_000 });
-				}
+				await releaseAsyncJobManager?.();
 				await releaseComputerSessionsForOwner(evalKernelOwnerId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 				await disposeVmContextsByOwner(evalKernelOwnerId);

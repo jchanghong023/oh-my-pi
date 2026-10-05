@@ -890,9 +890,7 @@ describe("SessionManager.moveTo", () => {
 		expect(await fsp.readdir(awayArtifactsDir)).toEqual([`${id}.bash.log`]);
 	});
 
-	// Junctions do not surface as symlinks to lstat, so the symlink rejection
-	// path cannot be exercised without symlink privilege (Developer Mode).
-	it.skipIf(process.platform === "win32")("does not merge through a symlink on either side", async () => {
+	it("does not merge through a symlink on either side", async () => {
 		// A symlink where an artifacts directory should be would make the merge
 		// move files into, or out of, whatever it points at. That is a
 		// relocation failure, not a merge: the move fails and the session stays
@@ -906,7 +904,7 @@ describe("SessionManager.moveTo", () => {
 
 		// Destination is a symlink.
 		await fsp.rmdir(homeArtifactsDir);
-		await fsp.symlink(elsewhere, homeArtifactsDir);
+		await fsp.symlink(elsewhere, homeArtifactsDir, process.platform === "win32" ? "junction" : "dir");
 		await expect(session.moveTo(cwdA)).rejects.toThrow();
 		expect(await fsp.readdir(elsewhere)).toEqual(["unrelated.md"]);
 		expect(session.getSessionFile()).toBe(awaySessionFile);
@@ -917,7 +915,7 @@ describe("SessionManager.moveTo", () => {
 		await fsp.mkdir(homeArtifactsDir);
 		await fsp.writeFile(path.join(homeArtifactsDir, "stale.md"), "already here");
 		await fsp.rename(awayArtifactsDir, path.join(testAgentDir, "moved-away"));
-		await fsp.symlink(elsewhere, awayArtifactsDir);
+		await fsp.symlink(elsewhere, awayArtifactsDir, process.platform === "win32" ? "junction" : "dir");
 		await expect(session.moveTo(cwdA)).rejects.toThrow();
 		expect(await fsp.readdir(elsewhere)).toEqual(["unrelated.md"]);
 		expect(await fsp.readdir(homeArtifactsDir)).toEqual(["stale.md"]);

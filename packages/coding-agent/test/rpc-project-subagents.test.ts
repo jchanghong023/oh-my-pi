@@ -117,6 +117,7 @@ function makeDirectory(
 ): RpcProjectSubagentDirectory {
 	return new RpcProjectSubagentDirectory({
 		resolveSessionFile: sessionId => (sessionId === SID ? tree.sessionFile : undefined),
+		senderId: () => "rpcp:test-main",
 		liveSnapshots: sessionId => (sessionId === SID ? live : []),
 		...overrides,
 	});
@@ -278,7 +279,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 
 			const first = await directory.list(SID, { limit: 2 });
 			expect(first.items).toHaveLength(2);
-			expect(first.nextCursor).toBe("2");
+			expect(typeof first.nextCursor).toBe("string");
 			const second = await directory.list(SID, { limit: 2, cursor: first.nextCursor });
 			expect(second.items).toHaveLength(1);
 			expect(second.nextCursor).toBeUndefined();
@@ -286,7 +287,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			await expectErrorCode(directory.list(SID, { limit: 0 }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { limit: 201 }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { limit: 1.5 }), "invalid_params");
-			await expectErrorCode(directory.list(SID, { cursor: -1 }), "invalid_params");
+			await expectErrorCode(directory.list(SID, { cursor: -1 as never }), "invalid_params");
 			await expectErrorCode(directory.list(SID, { cursor: "invalid" }), "invalid_params");
 		}, 10_000);
 
@@ -396,7 +397,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			expect(second.hasMore).toBe(false);
 		}, 10_000);
 
-		test("a live snapshot's transcript path wins over the artifacts scan", async () => {
+		test("a foreign live snapshot transcript is rejected instead of overriding the owned artifacts", async () => {
 			const tree = await createSessionTree("rpc-sub-msg-live-");
 			const elsewhere = await TempDir.create("rpc-sub-msg-live-elsewhere-");
 			tempDirs.push(elsewhere);
@@ -405,10 +406,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			await writeConversationalTranscript(tree.artifactsDir, "Routed");
 			const directory = makeDirectory(tree, [snapshot("Routed", 0, { sessionFile: liveTranscript })]);
 
-			const result = await directory.messages(SID, "Routed");
-
-			expect(result.sessionFile).toBe(liveTranscript);
-			expect(result.messages).toHaveLength(1);
+			await expectErrorCode(directory.messages(SID, "Routed"), "scope_not_allowed");
 		}, 10_000);
 
 		test("unknown sessions and subagents reject; malformed windows reject", async () => {
@@ -434,8 +432,9 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 
 		test("stop routes through the injected cancel hook", async () => {
 			const tree = await createSessionTree("rpc-sub-stop-hook-");
+			const transcript = await writeConversationalTranscript(tree.artifactsDir, "Live");
 			const cancelled: Array<[string, string]> = [];
-			const directory = makeDirectory(tree, [snapshot("Live", 0)], {
+			const directory = makeDirectory(tree, [snapshot("Live", 0, { sessionFile: transcript })], {
 				cancelSubagent: async (sessionId, subagentId) => {
 					cancelled.push([sessionId, subagentId]);
 					return true;
@@ -451,12 +450,13 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 
 		test("a refused or throwing cancel hook surfaces execution_failed", async () => {
 			const tree = await createSessionTree("rpc-sub-stop-refused-");
-			const refused = makeDirectory(tree, [snapshot("Live", 0)], {
+			const transcript = await writeConversationalTranscript(tree.artifactsDir, "Live");
+			const refused = makeDirectory(tree, [snapshot("Live", 0, { sessionFile: transcript })], {
 				cancelSubagent: async () => false,
 			});
 			await expectErrorCode(refused.control(SID, "Live", "stop"), "execution_failed");
 
-			const throwing = makeDirectory(tree, [snapshot("Live", 0)], {
+			const throwing = makeDirectory(tree, [snapshot("Live", 0, { sessionFile: transcript })], {
 				cancelSubagent: async () => {
 					throw new Error("boom");
 				},
@@ -488,9 +488,10 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 				sessionFile: path.join(foreignRoot, "other-project.jsonl"),
 				status: "running",
 			});
-			const directory = makeDirectory(tree, [snapshot("InProject", 0), snapshot("Foreign", 1)], {
-				projectSessionDir: tree.root,
-			});
+			const directory = makeDirectory(tree, [
+				snapshot("InProject", 0, { sessionFile: inProject }),
+				snapshot("Foreign", 1, { sessionFile: path.join(foreignRoot, "other-project.jsonl") }),
+			]);
 
 			const result = await directory.control(SID, "InProject", "stop");
 			expect(result.status).toBe("stopping");
@@ -501,6 +502,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 
 		test("send_message validates input and configuration", async () => {
 			const tree = await createSessionTree("rpc-sub-send-validate-");
+			await writeConversationalTranscript(tree.artifactsDir, "Any");
 			const directory = makeDirectory(tree);
 
 			await expectErrorCode(directory.control(SID, "Any", "send_message", ""), "invalid_params");
@@ -523,8 +525,18 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 		test("send_message fixes the sender identity, guards scope and maps receipt outcomes", async () => {
 			const tree = await createSessionTree("rpc-sub-send-delivery-");
 			const sent: Array<{ from: string; to: string; body: string }> = [];
+			for (const id of ["Parked", "Broken"]) {
+				const transcript = await writeConversationalTranscript(tree.artifactsDir, id);
+				AgentRegistry.global().register({
+					id,
+					displayName: id,
+					kind: "sub",
+					session: null,
+					sessionFile: transcript,
+					status: "parked",
+				});
+			}
 			const directory = makeDirectory(tree, [], {
-				projectSessionDir: tree.root,
 				sendIrcMessage: async message => {
 					sent.push(message);
 					return message.to === "Broken"
@@ -536,7 +548,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 			const result = await directory.control(SID, "Parked", "send_message", "status?");
 
 			// The sender identity is fixed server-side; the GUI never impersonates.
-			expect(sent).toEqual([{ from: "Main", to: "Parked", body: "status?" }]);
+			expect(sent).toEqual([{ from: "rpcp:test-main", to: "Parked", body: "status?" }]);
 			expect(result.status).toBe("sent");
 			expect(result.receipts).toEqual([{ to: "Parked", outcome: "woken" }]);
 			expect(result.detail).toContain("processing not implied");
@@ -552,7 +564,7 @@ describe("RpcProjectSubagentDirectory (R5, rpc-ui-protocol.md §14.8)", () => {
 				sessionFile: path.join(tree.root, "..", "elsewhere.jsonl"),
 				status: "parked",
 			});
-			await expectErrorCode(directory.control(SID, "Outside", "send_message", "hi"), "scope_not_allowed");
+			await expectErrorCode(directory.control(SID, "Outside", "send_message", "hi"), "not_found");
 		}, 10_000);
 	});
 });

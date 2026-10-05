@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -7,12 +8,11 @@ import { RpcForkQueueController, type RpcForkQueueSnapshot } from "@oh-my-pi/pi-
 import { RpcForkJobController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-jobs";
 import { RpcForkSearchController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-search";
 import { RpcForkFeedbackController, RpcForkHookTelemetry } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-state";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>
@@ -24,36 +24,33 @@ const userMessage = (text: string): AgentMessage =>
 
 interface QueueFixture {
 	host: RpcForkHost;
+	agent: Agent;
 	emitted: object[];
 	run: (command: object) => Promise<RpcResponse>;
 	setQueues: (steering: AgentMessage[], followUp: AgentMessage[]) => void;
 	current: { steering: AgentMessage[]; followUp: AgentMessage[] };
 }
 
-function setupQueue(): QueueFixture {
+function setupQueue(activate = true, agent = new Agent()): QueueFixture {
 	const emitted: object[] = [];
 	const host = new RpcForkHost(makeContext(emitted));
-	host.activate();
-	const current: { steering: AgentMessage[]; followUp: AgentMessage[] } = { steering: [], followUp: [] };
-	const session = {
-		agent: {
-			peekSteeringQueue: () => current.steering,
-			peekFollowUpQueue: () => current.followUp,
-			replaceQueues: (steering: AgentMessage[], followUp: AgentMessage[]) => {
-				current.steering = [...steering];
-				current.followUp = [...followUp];
-			},
+	if (activate) host.activate();
+	const current = {
+		get steering(): AgentMessage[] {
+			return [...agent.peekSteeringQueue()];
 		},
-	} as unknown as AgentSession;
+		get followUp(): AgentMessage[] {
+			return [...agent.peekFollowUpQueue()];
+		},
+	};
+	const session = { agent } as unknown as AgentSession;
 	new RpcForkQueueController(host, session);
 	return {
 		host,
+		agent,
 		emitted,
 		run: command => host.handleCommand(command as { type: string }) as Promise<RpcResponse>,
-		setQueues: (steering, followUp) => {
-			current.steering = steering;
-			current.followUp = followUp;
-		},
+		setQueues: (steering, followUp) => agent.replaceQueues(steering, followUp),
 		current,
 	};
 }
@@ -146,6 +143,95 @@ describe("RpcForkQueueController (5.1)", () => {
 
 		const bad = await fx.run({ type: "clear_queue", queue: " sideways " });
 		expect(bad).toMatchObject({ success: false });
+	});
+
+	test("user queue edits move/remove hidden companions without deleting runtime context", async () => {
+		const fx = setupQueue();
+		const a = userMessage("a");
+		const b = userMessage("b");
+		const companion = (text: string): AgentMessage => ({
+			role: "custom",
+			customType: "fullsend-notice",
+			content: text,
+			display: false,
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		const beforeA = companion("for a");
+		const beforeB = companion("for b");
+		const advisor: AgentMessage = {
+			role: "custom",
+			customType: "advisor",
+			content: "runtime advice",
+			display: true,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		fx.setQueues([beforeA, a, advisor, beforeB, b], []);
+		const listed = (await fx.run({ type: "get_queue" })) as Extract<
+			RpcResponse,
+			{ command: "get_queue"; success: true }
+		>;
+		expect(listed.data.steering.map(entry => entry.text)).toEqual(["a", "b"]);
+		const ids = listed.data.steering.map(entry => entry.id);
+		await fx.run({ type: "reorder_queue", queue: "steering", ids: [ids[1], ids[0]] });
+		expect(fx.current.steering).toEqual([beforeB, b, advisor, beforeA, a]);
+		await fx.run({ type: "remove_queued", queue: "steering", entryId: ids[1] });
+		expect(fx.current.steering).toEqual([advisor, beforeA, a]);
+		await fx.run({ type: "clear_queue", queue: "steering" });
+		expect(fx.current.steering).toEqual([advisor]);
+		expect(fx.emitted.at(-1)).toMatchObject({ type: "queue_updated", steeringCount: 0, followUpCount: 0 });
+	});
+
+	test("runtime enqueue and consumption invalidate v3 snapshots, but not before negotiation or after disposal", () => {
+		const fx = setupQueue(false);
+		fx.agent.followUp(userMessage("queued before negotiation"));
+		expect(fx.emitted).toEqual([]);
+		fx.host.activate();
+		fx.agent.steer(userMessage("runtime steering"));
+		expect(fx.emitted.at(-1)).toMatchObject({ type: "queue_updated", steeringCount: 1, followUpCount: 1 });
+		fx.agent.clearFollowUpQueue();
+		expect(fx.emitted.at(-1)).toMatchObject({ type: "queue_updated", steeringCount: 1, followUpCount: 0 });
+		const emittedCount = fx.emitted.length;
+		fx.host.dispose("done");
+		fx.agent.clearSteeringQueue();
+		expect(fx.emitted).toHaveLength(emittedCount);
+	});
+
+	test("editing steering does not cancel a follow-up batch whose preparation is in flight", async () => {
+		const model = createMockModel({ responses: [{ content: ["first turn"] }, { content: ["follow-up delivered"] }] });
+		const agent = new Agent({ initialState: { model: model.model }, streamFn: model.stream });
+		const fx = setupQueue(true, agent);
+		const started = Promise.withResolvers<AbortSignal>();
+		const release = Promise.withResolvers<void>();
+		agent.prepareQueuedMessages = async (_messages, signal) => {
+			started.resolve(signal);
+			await release.promise;
+			return { commit: () => [] };
+		};
+		agent.followUp(userMessage("claimed follow-up"));
+		const running = agent.prompt("opening turn");
+		try {
+			const preparationSignal = await started.promise;
+			expect(await fx.run({ type: "clear_queue", queue: "steering" })).toMatchObject({ success: true });
+			expect(preparationSignal.aborted).toBe(false);
+			release.resolve();
+			await running;
+			expect(
+				agent.state.messages.filter(message => message.role === "user" && message.content === "claimed follow-up"),
+			).toHaveLength(1);
+			expect(
+				agent.state.messages.some(
+					message =>
+						message.role === "assistant" &&
+						message.content.some(block => block.type === "text" && block.text === "follow-up delivered"),
+				),
+			).toBe(true);
+		} finally {
+			release.resolve();
+			await running;
+			fx.host.dispose("done");
+		}
 	});
 });
 

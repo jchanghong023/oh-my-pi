@@ -307,3 +307,29 @@ async def test_handle_pr_conversation_propagates_github_fetch_error(db, settings
             payload={"repository": {"full_name": "octo/widget"}, "issue": {"number": 12}},
             delivery_id="d1",
         )
+
+
+@pytest.mark.parametrize("handler", [tasks.handle_review, tasks.handle_pr_conversation])
+@pytest.mark.parametrize("branchless_mapping", [False, True])
+async def test_pr_comment_handlers_propagate_mapping_metadata_fetch_error(
+    handler, branchless_mapping, db, settings, monkeypatch
+):
+    _forbid_run_task(monkeypatch)
+    if branchless_mapping:
+        db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", pr_number=12)
+    github = SimpleNamespace(get_pull_request=_github_fetch_boom)
+    with pytest.raises(GitHubError) as excinfo:
+        await handler(
+            settings=settings,
+            db=db,
+            github=github,
+            sandbox=SimpleNamespace(natives_cache=None),
+            git_transport=SimpleNamespace(),
+            payload={
+                "repository": {"full_name": "octo/widget"},
+                "pull_request": {"number": 12},
+                "issue": {"number": 12},
+            },
+            delivery_id="d1",
+        )
+    assert excinfo.value.status == 502

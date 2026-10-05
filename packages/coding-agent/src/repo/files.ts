@@ -56,7 +56,7 @@ export async function enumerateFiles(root: string, signal?: AbortSignal, databas
 		signal,
 	});
 	const ownDb = databasePath && relativePath(root, databasePath);
-	return [...new Set(found.matches.map(match => match.path.replaceAll("\\", "/")))]
+	return [...new Set(found.matches.map(match => match.path))]
 		.filter(rel => !ownDb || (rel !== ownDb && rel !== `${ownDb}-wal` && rel !== `${ownDb}-shm`))
 		.sort();
 }
@@ -64,7 +64,9 @@ export async function enumerateFiles(root: string, signal?: AbortSignal, databas
 /** Check from the repository root so ancestor .gitignore rules remain effective. */
 export async function indexedCandidate(root: string, rel: string, signal?: AbortSignal): Promise<boolean> {
 	const matches = await glob({
-		pattern: rel.replace(/[*?[\]{}]/g, char => `[${char}]`),
+		// Native patterns alias backslashes to separators. Wildcard a literal
+		// Unix backslash, then verify the raw returned path below.
+		pattern: rel.replace(/[*?[\]{}\\]/g, char => (char === "\\" ? "?" : `[${char}]`)),
 		path: root,
 		fileType: FileType.File,
 		recursive: false,
@@ -74,7 +76,7 @@ export async function indexedCandidate(root: string, rel: string, signal?: Abort
 		strictErrors: true,
 		signal,
 	});
-	return matches.matches.some(match => match.path.replaceAll("\\", "/") === rel);
+	return matches.matches.some(match => match.path === rel);
 }
 
 export type FileRead = {

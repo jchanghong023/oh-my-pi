@@ -4,7 +4,7 @@
 
 ## 项目概况
 
-* `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`python/omp-rpc`）与 VitePress 文档站。
+* `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`sdk/python/omp-rpc`）与 VitePress 文档站。
 * 本仓库完全由 AI Agent 实现和维护：改动是否正确不能依赖用户手工读代码或人工回归来保证，MUST 依靠可复现的自动化验证，以及本文件（开发与维护规则）、`docs-zh-CN/requirements/fork.md`（需求契约）中的明确约定。
 
 ## 主要入口
@@ -112,7 +112,7 @@
 ## 验证
 
 * fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测；整体 60 秒墙钟硬超时，超时杀掉运行中的子进程、输出 TIMEOUT 与已耗时间并判失败——冷缓存如同步后首次 Rust 编译超时属预期失败，无时限完整静态验证由 fulltest 承担）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；TS 白名单以 2 路有界池并行（分组内测试大量派生 bash/git/ConPTY/CLI 子进程，满并发会击穿用例默认 5 秒预算），各测试执行阶段设 3 分钟硬超时（TS 白名单阶段因半宽并行放宽为 5 分钟）、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + `wsl/ubuntu-24.04` 阶段 + 自动 push 本地 `main` 到远端、以 `publish_release=true` 触发 GitHub Actions CI 并持续监控直到返回（CI 全绿即创建 fork Release），并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
-* `bun run slowtest` 在 fulltest 通过后、push 之前执行 `wsl/ubuntu-24.04` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 Ubuntu-24.04 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后先 `bun install --frozen-lockfile` 再运行 `bun run fulltest`。任一步失败、fulltest 退出码非 0 或超出 2 小时硬超时均判 slowtest 失败，不 push、不触发 CI。
+* `bun run slowtest` 在 fulltest 通过后、主 push / CI 触发前执行 `wsl/ubuntu-24.04` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）先推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 Ubuntu-24.04 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后先 `bun install --frozen-lockfile` 再运行 `bun run fulltest`。任一步失败、fulltest 退出码非 0 或超出 2 小时硬超时均判 slowtest 失败，不继续主 push、不触发 CI，但 WSL 获取提交所需的前置推送可能已经发生，不自动回滚远端。超时只清理继承本次 OMP_WSL_STAGE_ID 的 Linux 进程及所属 Windows 进程树，不按名称清理无关任务。CI 使用唯一 slowtest_run_id 与 HEAD SHA 关联此次运行，不能用同提交的其他运行代替。
 * `bun run fastcheck` agent 可按需自主调用，普通 TypeScript 修改后 MUST 运行；纯文档修改只做差异与格式检查。除 fastcheck 外的本地编译、类型检查、测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）以及 push、触发外部流水线，MUST 仅在用户明确要求时进行。
 * `bun run fulltest` 只运行当前操作系统对应的测试；`bun run slowtest` 除当前操作系统测试外，唯一跨平台扩展是上述 `wsl/ubuntu-24.04` 阶段（仅 Windows 执行），不维护其他 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
 * UI 冒烟（原 `jch-dev-ui-test` 能力，已并入 fulltest）MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。

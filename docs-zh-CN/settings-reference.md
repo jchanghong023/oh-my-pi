@@ -1,12 +1,12 @@
 # 设置参考（全部配置项）
 
-本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/settings-schema.ts` 中的 `SETTINGS_SCHEMA`（共 502 项），与 `/settings` 面板和 `omp config list` 使用同一份 schema。
+本页列出可以出现在 `config.yml` 中的**全部**配置项：类型、默认值、功能说明与可选值；每个配置项一个条目，可选值每个一行。内容来自 `packages/coding-agent/src/config/all-settings.ts` 汇集的各域 `register` 定义（共 535 项），与 `/settings` 面板和 `omp config list` 使用同一份注册表；无 UI 元数据或无法映射为面板控件的项仍可直接配置。
 
 - 每个键就是 `config.yml` 中的嵌套路径（如 `theme.dark`、`tools.approvalMode`），无缩写；键必须与 schema 完全一致：写 `theme.dark`，而不是 `theme`。
 - 优先级、存储位置、写入方式与合并规则见 [Settings（设置）](../docs/settings.md)；配置发现与解析机制见 [Config usage（配置发现与解析）](../docs/config-usage.md)。
 - 运行时查看当前生效值：`omp config list`；机器可读输出：`omp config list --json`。
 - 模型与凭据、环境变量相关配置见 [Providers](../docs/providers.md)、[Models](../docs/models.md)、[Environment variables](../docs/environment-variables.md)；`tools.approval`（按工具名记录审批策略）与 `bash.patterns` 的用法见 [Settings](../docs/settings.md) 与 [Approval mode](../docs/approval-mode.md)。
-- 本文是 schema 的静态快照：schema 增删配置项、修改默认值或枚举后，需要按 `SETTINGS_SCHEMA` 重新生成本页。
+- 本文是 schema 的静态快照：schema 增删配置项、修改默认值或枚举后，需要按各域注册定义重新生成本页。
 
 ## 图例
 
@@ -14,13 +14,13 @@
 - **默认值**：`—（未设默认值）` 表示该键在 schema 中没有默认值，`config.yml` 未配置时读到的值为 `undefined`。
 - **作用**：一句话说明该配置项配置/控制什么功能（开关、参数、顺序、UI 行为、后端选择等）。
 - **可选值**：每个条目都有该行。enum 的每个可选值一行；boolean 为 `true`/`false`（每行一个）；`string`/`number`/`array`/`record` 标注「无固定枚举」（自由输入，由运行时或对应功能校验）；个别设置的选项由运行时动态提供（如已安装的主题/扩展列表）。
-- **凭据**：敏感字段；`omp config list` 的人类可读输出中会被脱敏为 `********`。
-- **条件**：该设置仅在所列条件成立时生效（如依赖开关开启）。
+- **凭据**：敏感字段；`omp config list` 的人类可读输出脱敏为 `********`，JSON 输出对已配置凭据省略 value 并标记 redacted；显式 `get` 是单值读取。
+- **条件**：`/settings` 面板仅在所列条件成立时显示该项，不表示配置值被自动清除。
 - **有序**：数组中的顺序有意义（如回退顺序），合并时不做追加合并。
 
 ## 无 UI 面板的配置项
 
-以下配置项不在 `/settings` 面板中展示，但可以直接写入 `config.yml`（部分由设置向导、命令行或运行时功能读取）。共 125 项。
+以下配置项不在 `/settings` 面板中展示，但可以直接写入 `config.yml`（部分由设置向导、命令行或运行时功能读取）。共 169 项。
 
 
 
@@ -72,12 +72,21 @@
 
 ### `enabledModels`
 
-- **作用**：在模型选择器中显示并允许使用的模型白名单（推断）。
+- **作用**：模型正向选择名单；空数组表示不按此名单限制模型，并不是“全部禁用”。
 - **类型**：`array`
 - **默认值**：`[]`
-- **功能**：无说明
+- **功能**：非空时先按模型选择模式筛入候选，再由 `disabledModels` 排除；其他 provider/可用性限制仍生效。支持精确 `provider/id`、模型/Provider 模式、现有角色别名与思考后缀的选择规则；支持按路径作用域的 `models` 列表。
 
-- **可选值**：任意字符串数组（无固定枚举）
+- **可选值**：模型选择字符串数组或现有路径作用域配置（无固定枚举）
+
+### `disabledModels`
+
+- **作用**：模型负向排除名单；在 `enabledModels` 正向选择之后生效，排除优先。
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：空数组不排除任何模型；`["*"]` 排除全部，含 id 中带 `/` 的模型。普通 glob 沿用路径匹配：`provider/**` 跨多层 id，`provider/*` 只匹配一层；精确命中真实目录条目的 `provider/id` 优先按字面身份解释，即使 id 含 `*`、`?`、`[`。沿用模型选择模式与 `models` 路径作用域；显式模型 pin、已保存模型、role、cycle 和凭据获取都不能绕过排除，完整目录仍保留供管理。RPC `set_model_enabled(false)` 以具体排除表达禁用，最后一个模型同样可禁用；启用只解除目标的具体排除，手写宽泛排除仍覆盖目标时真实返回冲突而不放宽其他模型。
+
+- **可选值**：模型选择字符串数组或现有路径作用域配置（无固定枚举）
 
 ### `enabledProviders`
 
@@ -147,7 +156,7 @@
 
 - **作用**：状态行左侧按顺序展示的段（id 列表）。
 - **类型**：`array`
-- **默认值**：`[]`
+- **默认值**：`["vim","model","mode","path","git","pr"]`
 - **功能**：无说明
 
 - **可选值**：任意字符串数组（无固定枚举）
@@ -156,7 +165,7 @@
 
 - **作用**：状态行右侧按顺序展示的段（id 列表）。
 - **类型**：`array`
-- **默认值**：`[]`
+- **默认值**：`["session_name","token_total","cost","context_pct"]`
 - **功能**：无说明
 
 - **可选值**：任意字符串数组（无固定枚举）
@@ -680,15 +689,6 @@
 
 - **可选值**：任意数字（无固定枚举）
 
-### `hindsight.mentalModelRefreshIntervalMs`
-
-- **作用**：Hindsight 心智模型后台刷新间隔（毫秒）。
-- **类型**：`number`
-- **默认值**：`300000`
-- **功能**：无说明
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `hindsight.mentalModelMaxRenderChars`
 
 - **作用**：Hindsight 心智模型渲染的最大字符数。
@@ -702,10 +702,10 @@
 
 - **作用**：把常见 shell 命令重定向到专用工具的正则规则列表。
 - **类型**：`array`
-- **默认值**：`[{"pattern":"^\\s*(cat|head|tail|less|more)\\s+","tool":"read","message":"Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files."},{"pattern":"^\\s*(grep|rg|ripgrep|ag|ack)\\s+","tool":"grep","message":"Use the `grep` tool instead of grep/rg. It respects .gitignore and provides structured output."},{"pattern":"^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)","tool":"glob","message":"Use the `glob` tool instead of find/fd. It respects .gitignore and is faster for glob patterns."},{"pattern":"^\\s*sed\\s+(-i|--in-place)","tool":"edit","message":"Use the `edit` tool instead of sed -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*perl\\s+.*-[pn]?i","tool":"edit","message":"Use the `edit` tool instead of perl -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*awk\\s+.*-i\\s+inplace","tool":"edit","message":"Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*(echo|printf|cat\\s*<<)\\s+(?:(?:[^\"'>]|\"[^\"]*\"|'[^']*')|(?<!\\|)>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))*(?<!\\|)>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]","tool":"write","message":"Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation."},{"pattern":"^\\s*nohup\\s+|(?<!&)\\&\\s*$","tool":"hub","message":"Use the `hub` tool (`op:\"start\"`) instead of nohup or background shell syntax so the process stays observable and managed."},{"pattern":"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))","tool":"hub","message":"Use the `hub` tool (`op:\"start\"`) for services, watchers, and debuggers so other omp instances can observe and control them."},{"pattern":"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?\\S+|cargo\\s+watch|watchexec|pytest|vitest|jest|tsc)(?:.|\\n)*(?:--watch|-w)(?:\\s|$)","tool":"hub","message":"Use the `hub` tool (`op:\"start\"`) for watch mode so its output, input, and lifecycle stay managed."}]`
+- **默认值**：``[{"pattern":"^\\s*(cat|head|tail|less|more)\\s+","tool":"read","message":"Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files."},{"pattern":"^\\s*(grep|rg|ripgrep|ag|ack)\\s+","tool":"grep","message":"Use the `grep` tool instead of grep/rg. It respects .gitignore and provides structured output."},{"pattern":"^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)","tool":"glob","message":"Use the `glob` tool instead of find/fd. It respects .gitignore and is faster for glob patterns."},{"pattern":"^\\s*sed\\s+(-i|--in-place)","tool":"edit","message":"Use the `edit` tool instead of sed -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*perl\\s+.*-[pn]?i","tool":"edit","message":"Use the `edit` tool instead of perl -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*awk\\s+.*-i\\s+inplace","tool":"edit","message":"Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*(echo|printf|cat\\s*<<)\\s+(?:(?:[^\"'>]|\"[^\"]*\"|'[^']*')|(?<!\\|)>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))*(?<!\\|)>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]","tool":"write","message":"Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation."},{"pattern":"^\\s*nohup\\s+|(?<!&)\\&\\s*$","tool":"bash","message":"Use `bash` with `name` instead of nohup or background shell syntax so the service stays observable and managed."},{"pattern":"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))","tool":"bash","message":"Use `bash` with `name` for services, watchers, and debuggers; inspect with `read proc://<name>`."},{"pattern":"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?\\S+|cargo\\s+watch|watchexec|pytest|vitest|jest|tsc)(?:.|\\n)*(?:--watch|-w)(?:\\s|$)","tool":"bash","message":"Use `bash` with `name` for watch mode so its output, input, and lifecycle stay managed."}]``
 - **功能**：无说明
 
-- **可选值**：任意字符串数组（无固定枚举）
+- **可选值**：JSON 规则对象数组（无固定枚举）；每项含 pattern、tool、message。
 
 ### `shellMinimizer.settingsPath`
 
@@ -1201,10 +1201,411 @@
 - **可选值**：任意数字（无固定枚举）
 
 
+### `images.urls.ttlHours` — Image URL Lifetime (hours)
+
+- **作用**：本地图片链接在最后一次发送后的存活小时数（0 表示随代理常驻）
+- **类型**：`number`
+- **默认值**：`72`
+- **功能**：Serving window for locally hosted image URLs, measured from the last time a conversation sent them; resuming a conversation re-arms the window at the same link. 0 keeps links alive while the broker runs
+
+- **可选值**：任意数字（无固定枚举）
+
+### `images.urls.sshRemotePort` — Image URL SSH Remote Port
+
+- **作用**：SSH 反向转发中远端 Web 服务对外监听的端口
+- **类型**：`number`
+- **默认值**：`8787`
+- **功能**：Remote listen port of the ssh reverse forward that your web server proxies to
+
+- **可选值**：任意数字（无固定枚举）
+
+### `model.toolCallLoopGuard.threshold` — Tool-Call Loop Threshold
+
+- **作用**：触发工具调用循环纠正所需的连续相同调用次数
+- **类型**：`number`
+- **默认值**：`5`
+- **功能**：Consecutive identical tool calls required before the corrective steer is injected
+
+- **可选值**：任意数字（无固定枚举）
+
+### `model.toolCallLoopGuard.exemptTools` — Tool-Call Loop Exempt Tools
+
+- **作用**：豁免于跨回合工具调用循环检测的工具名清单
+- **类型**：`array`
+- **默认值**：`["wait"]`
+- **功能**：Tool names that may repeat consecutively without triggering the cross-turn loop guard
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `retry.maxDelayMs` — Max Retry Delay
+
+- **作用**：两次重试之间的最大等待毫秒数（0 表示不设上限，依赖配额恢复）
+- **类型**：`number`
+- **默认值**：`300000`
+- **功能**：Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets.
+
+- **可选值**：任意数字（无固定枚举）
+
+### `providers.openai-codex.codeModeDirectTools` — Codex Code Mode Direct Tools
+
+- **作用**：Codex Code Mode 模式下补充暴露给模型直接调用的工具列表
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：Codex Code Mode 的额外直接工具。标准直接工具为 eval、ask、todo、yield、think、checkpoint 和 rewind。
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `providers.ollama-cloud.maxConcurrency` — Ollama Cloud Max Concurrency
+
+- **作用**：单进程内 Ollama Cloud 子代理运行的最大并发数（0 表示不限）
+- **类型**：`number`
+- **默认值**：`3`
+- **功能**：每个进程的最大并发 Ollama Cloud 子代理运行数；`0` 表示禁用该 provider 的专属限制。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `codexResets.minBlockedMinutes` — Codex Auto-Redeem Min Block
+
+- **作用**：自动消耗 reset 所需的最小剩余封禁时间（避免短等待消耗稀缺额度）
+- **类型**：`number`
+- **默认值**：`60`
+- **功能**：仅当自然解除封禁（已耗尽 5h/weekly 窗口中最近的重置）至少在这么多分钟后才自动消费（不要为省下短暂的等待而花掉稀缺的 credit）。调高（如 360）可忽略仅 5h 窗口的封禁。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `codexResets.keepCredits` — Codex Auto-Redeem Reserve
+
+- **作用**：自动消耗 reset 时保底保留的额度数量（即将过期的额度不受此限）
+- **类型**：`number`
+- **默认值**：`0`
+- **功能**：自动消费后保留的已保存重置数不低于此值（0 表示最后一个 credit 也可能自动消费）。即将过期的 credit 豁免——保留会过期的 credit 一无所获。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `codexResets.salvageHorizonHours` — Codex Reset Salvage Horizon
+
+- **作用**：在 reset 即将过期前多少小时自动消耗以救回额度（0 关闭该逻辑）
+- **类型**：`number`
+- **默认值**：`12`
+- **功能**：当已保存的 Codex 重置将在这么多小时内过期，且任一聊天窗口（5h 或 weekly）有可观的用量可恢复时，自动消费该重置（0 禁用过期回收）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `exa.searchDelayMs` — Exa Search Delay
+
+- **作用**：Exa 搜索请求之间的最小间隔毫秒数（0 关闭节流）
+- **类型**：`number`
+- **默认值**：`1000`
+- **功能**：Exa Web 搜索请求之间的最小间隔（毫秒）；设为 0 禁用节流。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `computer.maxWidth` — Computer Screenshot Width
+
+- **作用**：桌面截图的最大拼接宽度（像素）
+- **类型**：`number`
+- **默认值**：`3840`
+- **功能**：合成截图的最大宽度（像素）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `computer.maxHeight` — Computer Screenshot Height
+
+- **作用**：桌面截图的最大拼接高度（像素）
+- **类型**：`number`
+- **默认值**：`2400`
+- **功能**：合成截图的最大高度（像素）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `github.cache.softTtlSec` — GitHub Cache Soft TTL
+
+- **作用**：GitHub 视图缓存的软有效期（秒）
+- **类型**：`number`
+- **默认值**：`300`
+- **功能**：在该时间窗口内，缓存的 issue/PR 视图行直接返回（秒；默认 5 分钟）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `github.cache.hardTtlSec` — GitHub Cache Hard TTL
+
+- **作用**：GitHub 视图缓存的硬过期时间（秒）
+- **类型**：`number`
+- **默认值**：`604800`
+- **功能**：超过 soft TTL 后直接返回缓存行并在后台刷新；超过 hard TTL 后丢弃（秒；默认 7 天）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `tools.xdevInlineDevices` — xd:// Inline Devices
+
+- **作用**：在 Built-ins 模式下额外内联哪些动态设备（glob 匹配）
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：当 xd:// Prompt Docs 为 Built-ins Only 时，将名称匹配这些 glob 模式的动态设备内联（例如 `mcp__context_mode_*`）。Catalog Only 忽略该设置。
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `mcp.notificationDebounceMs` — MCP Notification Debounce
+
+- **作用**：MCP 资源更新注入会话前的去抖窗口（毫秒）
+- **类型**：`number`
+- **默认值**：`500`
+- **功能**：MCP 资源更新在注入对话前的去抖窗口（毫秒）。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `extensionHandlers.toolCallTimeoutMs` — Tool Call Handler Timeout (ms)
+
+- **作用**：扩展 tool_call 处理器的有效工作超时（毫秒）
+- **类型**：`number`
+- **默认值**：`30000`
+- **功能**：扩展 `tool_call` handler 的有效正有限工作超时；非法值回落到 30000ms，等待 OMP 自有对话框的时间不计入。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `workspace.additionalDirectories` — Additional Workspace Dirs
+
+- **作用**：每个会话额外包含的工作区根目录列表（多根工作区），由 /add-dir 与 /remove-dir 命令维护
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：为每个会话添加额外的 workspace 目录作为附加根（多根 workspace）。通过 `/add-dir` 和 `/remove-dir` 在线管理。路径相对于 cwd 解析；推荐使用绝对路径。代理会被告知这些根存在，并可对其执行 read/grep/glob。
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `ttsr.disabledRules` — Disabled Rules
+
+- **作用**：完全忽略的规则名列表（同时作用于内置默认与用户自定义规则）
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：完全忽略的规则名（对内建默认规则与用户自定义规则均生效）。
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+
+### `read.summarize.minBodyLines` — Read Summary Body Lines
+
+- **作用**：多行函数体或字面量达到此长度才在摘要中被折叠
+- **类型**：`number`
+- **默认值**：`4`
+- **功能**：read 摘要折叠多行函数体或字面量前所需的最小行数。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `read.summarize.minCommentLines` — Read Summary Comment Lines
+
+- **作用**：多行块注释达到此长度才在摘要中被折叠
+- **类型**：`number`
+- **默认值**：`6`
+- **功能**：read 摘要折叠多行块注释前所需的最小行数。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `read.summarize.minTotalLines` — Read Summary Minimum File Length
+
+- **作用**：小于此行数的文件直接逐行返回，不做结构化摘要
+- **类型**：`number`
+- **默认值**：`100`
+- **功能**：总行数少于该值的文件按原文读取，不进行结构化摘要。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `read.summarize.unfoldUntil` — Read Summary Unfold Target
+
+- **作用**：BFS 展开可折叠段落直到摘要至少达到该行数（0 表示仅保留最外层省略）
+- **类型**：`number`
+- **默认值**：`50`
+- **功能**：BFS 展开可省略的区段，直至摘要至少达到该可见行数。设为 0 时仅保留最外层省略。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `read.summarize.unfoldLimit` — Read Summary Unfold Ceiling
+
+- **作用**：BFS 展开时单次展开可见行数的硬上限（超出则跳过该段）
+- **类型**：`number`
+- **默认值**：`100`
+- **功能**：BFS 展开过程中摘要大小的硬上限。某次展开若将导致可见行数超过该值则跳过（该区段保持折叠），并继续展开其余区段。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `bash.patterns` — Bash Approval Patterns
+
+- **作用**：bash 命令的有序审批规则列表（仅支持 `*` 通配符）
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：有序的 bash 命令审批规则数组；每项包含 `match` 与 `approval` 字段，仅支持 `*` 通配符。
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `bash.direnvLoadTimeoutMs` — direnv Load Timeout (ms)
+
+- **作用**：等待首次 `direnv export` 的最长时间（毫秒），超时则无 env 启动
+- **类型**：`number`
+- **默认值**：`30000`
+- **功能**：等待首次 `direnv export` 的最长毫秒数（冷启动的 devenv shell 可能较慢）；超时后会话将在不带 direnv 环境的情况下运行。
+
+- **可选值**：任意数字（无固定枚举）
+
+### `goal.continuationModes` — Goal Continuation Modes
+
+- **作用**：允许目标在会话轮次之间自动延续的运行模式列表
+- **类型**：`array`
+- **默认值**：`["interactive"]`
+- **功能**：允许活动目标在轮次之间自动延续的运行模式
+
+- **可选值**：任意字符串数组（无固定枚举）
+
+### `task.agentIdleTtlMs` — Agent Idle TTL
+
+- **作用**：空闲子代理在内存中保留多长时间后落盘 park（收到消息自动唤醒）
+- **类型**：`number`
+- **默认值**：`420000`
+- **功能**：空闲子代理在内存中保持存活多久后被 park 到磁盘（毫秒）。parked 代理在被发消息或恢复时会自动唤醒。`0` 让空闲代理一直保持存活直到退出
+
+- **可选值**：任意数字（无固定枚举）
+
+### `providers.anthropic.slowMode`
+
+- **作用**：Claude 订阅慢速通道：auto 在五小时限额耗尽且提供商允许时自动使用低优先级；off 关闭。通过 Anthropic 模型下的 /slow on|off 控制，不在 /settings 展示。
+- **类型**：`enum`
+- **默认值**：`"off"`
+- **功能**：Claude 订阅慢速通道：auto 在五小时限额耗尽且提供商允许时自动使用低优先级；off 关闭。通过 Anthropic 模型下的 /slow on|off 控制，不在 /settings 展示。
+
+- **可选值**：
+  - `off`
+  - `auto`
+
+### `claudeResets.minBlockedMinutes` — Claude Auto-Redeem Min Block
+
+- **作用**：距离覆盖窗口自然解除阻塞至少还有多少分钟时才自动消耗重置；五小时重置不能用于周限额或模型专属阻塞。
+- **类型**：`number`
+- **默认值**：`60`
+- **功能**：距离覆盖窗口自然解除阻塞至少还有多少分钟时才自动消耗重置；五小时重置不能用于周限额或模型专属阻塞。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `claudeResets.keepCredits` — Claude Auto-Redeem Reserve
+
+- **作用**：自动消耗及到期抢救后至少保留的 Claude 重置额度；0 允许用掉最后一个符合条件的额度。
+- **类型**：`number`
+- **默认值**：`0`
+- **功能**：自动消耗及到期抢救后至少保留的 Claude 重置额度；0 允许用掉最后一个符合条件的额度。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `claudeResets.salvageHorizonHours` — Claude Reset Salvage Horizon
+
+- **作用**：Cedar 重置在多少小时内即将到期时允许抢救使用；仍需覆盖窗口存在可恢复用量并满足服务端限制，0 禁用。
+- **类型**：`number`
+- **默认值**：`12`
+- **功能**：Cedar 重置在多少小时内即将到期时允许抢救使用；仍需覆盖窗口存在可恢复用量并满足服务端限制，0 禁用。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `auth.accountPolicies`
+
+- **作用**：按 provider 和 account 身份匹配的账号策略数组；account 可含 email/accountId/projectId/orgId，priority 调整优先级，reservePct 指定保护的剩余额度百分比。
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：按 provider 和 account 身份匹配的账号策略数组；account 可含 email/accountId/projectId/orgId，priority 调整优先级，reservePct 指定保护的剩余额度百分比。
+
+- **可选值**：JSON 数组（无固定枚举，由对应功能校验）
+
+### `modelPresets`
+
+- **作用**：命名模型预设对象，由 /modelpreset 与模型面板管理，不在 /settings 展示。
+- **类型**：`record`
+- **默认值**：`{}`
+- **功能**：命名模型预设对象，由 /modelpreset 与模型面板管理，不在 /settings 展示。
+
+- **可选值**：JSON 对象（无固定枚举，由对应功能校验）
+
+### `edit.modelVariants`
+
+- **作用**：不区分大小写的模型选择器子串到 edit 模式的映射；未知 edit 模式条目被忽略，PI_EDIT_VARIANT 显式设置优先。
+- **类型**：`record`
+- **默认值**：`{}`
+- **功能**：不区分大小写的模型选择器子串到 edit 模式的映射；未知 edit 模式条目被忽略，PI_EDIT_VARIANT 显式设置优先。
+
+- **可选值**：JSON 对象（无固定枚举，由对应功能校验）
+
+### `task.agentCompactionThresholdOverrides`
+
+- **作用**：精确子代理名称到压缩阈值的映射；正整数为 token 数，"80%" 形式为百分比，null 清除低优先级层继承值。
+- **类型**：`record`
+- **默认值**：`{}`
+- **功能**：精确子代理名称到压缩阈值的映射；正整数为 token 数，"80%" 形式为百分比，null 清除低优先级层继承值。
+
+- **可选值**：JSON 对象（无固定枚举，由对应功能校验）
+
+### `team.members`
+
+- **作用**：/team 参与模型的完整 ID 数组；空值表示未配置，offline 使用公司 lane 快照，否则返回配置错误。讨论与最终交付契约见 requirements/team.md。
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：/team 参与模型的完整 ID 数组；空值表示未配置，offline 使用公司 lane 快照，否则返回配置错误。讨论与最终交付契约见 requirements/team.md。
+
+- **可选值**：JSON 数组（无固定枚举，由对应功能校验）
+
+### `skills.disabledPaths`
+
+- **作用**：禁用具体技能的规范化 SKILL.md 路径数组；按文件身份匹配，不等同来源开关或按名称忽略。同名不同来源可独立开关。
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：禁用具体技能的规范化 SKILL.md 路径数组；按文件身份匹配，不等同来源开关或按名称忽略。同名不同来源可独立开关。
+
+- **可选值**：JSON 数组（无固定枚举，由对应功能校验）
+
+### `mcp.startupTimeoutMs` — MCP Startup Window
+
+- **作用**：初始 MCP 工具发现的等待毫秒数；0 等待全部连接稳定，不是关闭 MCP。
+- **类型**：`number`
+- **默认值**：`250`
+- **功能**：初始 MCP 工具发现的等待毫秒数；0 等待全部连接稳定，不是关闭 MCP。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `stream.redactPatterns` — Extra Redaction Patterns
+
+- **作用**：直播各行额外脱敏的正则表达式数组，叠加环境变量、secrets.yml 与内置凭据模式。
+- **类型**：`array`
+- **默认值**：`[]`
+- **功能**：直播各行额外脱敏的正则表达式数组，叠加环境变量、secrets.yml 与内置凭据模式。
+
+- **可选值**：JSON 数组（无固定枚举，由对应功能校验）
+
+### `gc.stale`
+
+- **作用**：显式允许 gc 清理用户可见的陈旧调试报告与 collab 副本；默认 omp gc --apply 不清理这类文件。
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：显式允许 gc 清理用户可见的陈旧调试报告与 collab 副本；默认 omp gc --apply 不清理这类文件。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `gc.staleRetainNewest`
+
+- **作用**：陈旧文件清理阶段保留的最新条目数。
+- **类型**：`number`
+- **默认值**：`20`
+- **功能**：陈旧文件清理阶段保留的最新条目数。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `gc.staleRetainDays`
+
+- **作用**：陈旧文件清理阶段保留的最近天数。
+- **类型**：`number`
+- **默认值**：`30`
+- **功能**：陈旧文件清理阶段保留的最近天数。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
 ## Interaction（交互）
 
 
-共 49 项。
+共 55 项。
 
 
 ### `autoResume` — Auto Resume
@@ -1350,17 +1751,19 @@
   - `true`
   - `false`
 
-### `spelling.autocomplete` — Word Autocomplete (macOS)
+### `spelling.autocomplete` — Word Autocomplete
 
-- **作用**：是否在编辑时提供 macOS 字典的 Tab 接受式补全
-- **类型**：`boolean`
-- **默认值**：`true`
-- **功能**：在编辑框中显示 macOS 词典的单词补全提示，按 Tab 接受。
-- **条件**：`macOS` 为真时适用
+- **作用**：编辑框内联单词预测引擎；auto 使用无需下载的 n-gram。
+- **类型**：`enum`
+- **默认值**：`"auto"`
+- **功能**：Tab 接受并加空格，Right 接受不加空格；smollm 首次使用下载本地权重，apple 仅 macOS 提供。
 
 - **可选值**：
-  - `true`
-  - `false`
+  - `off`
+  - `auto`
+  - `ngram`
+  - `smollm`
+  - `apple`
 
 ### `spelling.autocorrect` — Autocorrect (macOS)
 
@@ -1648,7 +2051,7 @@
 
 - **作用**：`/collab` 链接打开的浏览器 UI 地址
 - **类型**：`string`
-- **默认值**：`""`
+- **默认值**：`"https://jchanghong023.github.io/oh-my-pi/collab/"`
 - **功能**：`/collab` 链接使用的浏览器 UI；为空时从 `collab.relayUrl` 推导；显式 `http://` 仅限 localhost。
 
 - **可选值**：任意字符串（无固定枚举）
@@ -1703,18 +2106,6 @@
   - `true`
   - `false`
 
-### `stt.modelName` — Speech Model
-
-- **作用**：本地语音转文字所用的模型（Parakeet/Whisper 各级）
-- **类型**：`enum`
-- **默认值**：`"parakeet"`
-- **功能**：本机端侧语音模型。Parakeet TDT v3（sherpa-onnx）是 SoTA 默认；Whisper base/small/large-v3-turbo 档位（transformers.js）以体积换取多语言覆盖。首次使用时下载。
-- **可选值**：
-  - `fast` — Whisper base，多语言。最小最快、精度最低。适合低资源机器。
-  - `balanced` — Whisper small，多语言。比 Fast 更准，CPU/内存占用仍较轻。
-  - `turbo` — Whisper large-v3-turbo，99 种语言。语言覆盖最广，下载大且较慢。
-  - `parakeet` — NVIDIA Parakeet TDT 0.6B v3，25 种语言。Open ASR Leaderboard 榜首——精度最佳、解码远快于其他。默认。
-
 ### `stt.submitTrigger` — Speech-to-Text Submit Trigger
 
 - **作用**：语音听写自动提交的触发条件（永不/松开/句末/说 submit）
@@ -1759,10 +2150,82 @@
   - `smart` — Mechanical 模式 + 用小模型对纯文本停止进行分类
 
 
+### `input.bareExitOnEmptySession` — Bare Exit on Empty Session
+
+- **作用**：首次消息前，单独提交 exit、quit 或 q（大小写不限）时退出，不调用模型。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：首次消息前，单独提交 exit、quit 或 q（大小写不限）时退出，不调用模型。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `input.bareSlashCommands` — Bare Slash Commands
+
+- **作用**：单独提交不带斜杠的命令名时执行相应命令；已有消息的会话需连续两次 Enter 确认。
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：单独提交不带斜杠的命令名时执行相应命令；已有消息的会话需连续两次 Enter 确认。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tools.approvalPrefixes` — Tool Approval Prefix Rules
+
+- **作用**：逐工具命令前缀白名单，例如 {"bash":["git ","npm "]}；参数以允许前缀开头的调用跳过审批提示。
+- **类型**：`record`
+- **默认值**：`{}`
+- **功能**：逐工具命令前缀白名单，例如 {"bash":["git ","npm "]}；参数以允许前缀开头的调用跳过审批提示。
+
+- **可选值**：JSON 对象（无固定枚举，由对应功能校验）
+
+### `skills.registryUrl` — Skill Registry
+
+- **作用**：omp skill 安装、搜索、发布技能使用的 Skillshare registry 地址（https://host[:port]）。
+- **类型**：`string`
+- **默认值**：`"https://skills.omp.sh"`
+- **功能**：omp skill 安装、搜索、发布技能使用的 Skillshare registry 地址（https://host[:port]）。
+
+- **可选值**：任意字符串（无固定枚举，由对应功能校验）
+
+### `collab.autoStart` — Auto Start
+
+- **作用**：交互会话启动时自动托管并登记房间；view 只限制 registry 发出的链接为只读，不撤销已分发的控制 token，control 登记可控制链接。
+- **类型**：`enum`
+- **默认值**：`"off"`
+- **功能**：交互会话启动时自动托管并登记房间；view 只限制 registry 发出的链接为只读，不撤销已分发的控制 token，control 登记可控制链接。
+
+- **可选值**：
+  - `off`
+  - `view`
+  - `control`
+
+### `stream.serverUrl` — Stream Server
+
+- **作用**：omp stream 使用的直播服务地址；观众路径使用 Stencil 用户名。
+- **类型**：`string`
+- **默认值**：`"https://live.omp.sh"`
+- **功能**：omp stream 使用的直播服务地址；观众路径使用 Stencil 用户名。
+
+- **可选值**：任意字符串（无固定枚举，由对应功能校验）
+
+### `magicKeywords.jevify` — Jevify Keyword
+
+- **作用**：独立 jevify 关键词是否附加隐藏的批量 judge 分类提示；不新增同名斜杠命令。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：独立 jevify 关键词是否附加隐藏的批量 judge 分类提示；不新增同名斜杠命令。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ## Model（模型）
 
 
-共 55 项。
+共 52 项。
 
 
 ### `advisor.enabled` — Enable Advisor
@@ -1792,12 +2255,13 @@
 - **作用**：顾问落后 N 轮时暂停主代理以等待追平的回退深度
 - **类型**：`enum`
 - **默认值**：`"off"`
-- **功能**：Pause the main agent for up to 30 seconds if the advisor falls behind by this many turns. Off disables catch-up delays.
+- **功能**：Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits.
 - **可选值**：
   - `off`
   - `1`
   - `3`
   - `5`
+  - `strict`
 - **条件**：`advisorEnabled` 为真时适用
 
 ### `advisor.immuneTurns` — Advisor Immune Turns
@@ -1925,7 +2389,7 @@
 
 - **作用**：command 后端使用的外部上传命令模板（占位符替换文件名/扩展名）
 - **类型**：`string`
-- **默认值**：`—（未设默认值）`
+- **默认值**：—（未设默认值）
 - **功能**：Argv template for the command backend; {file} is the image path, {mime}/{ext} optional. The last URL printed on stdout is used (e.g. pasta -b -f {file})
 
 - **可选值**：任意字符串（无固定枚举）
@@ -1934,19 +2398,10 @@
 
 - **作用**：本地图片服务对外可访问的基础 URL（直连或 SSH 反向转发所需）
 - **类型**：`string`
-- **默认值**：`—（未设默认值）`
+- **默认值**：—（未设默认值）
 - **功能**：Externally reachable base URL fronting the blob server (required for ssh, optional for direct)
 
 - **可选值**：任意字符串（无固定枚举）
-
-### `images.urls.ttlHours` — Image URL Lifetime (hours)
-
-- **作用**：本地图片链接在最后一次发送后的存活小时数（0 表示随代理常驻）
-- **类型**：`number`
-- **默认值**：`72`
-- **功能**：Serving window for locally hosted image URLs, measured from the last time a conversation sent them; resuming a conversation re-arms the window at the same link. 0 keeps links alive while the broker runs
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `images.urls.bindHost` — Image URL Bind Host
 
@@ -1961,19 +2416,10 @@
 
 - **作用**：SSH 反向端口转发所使用的 user@host 目标
 - **类型**：`string`
-- **默认值**：`—（未设默认值）`
+- **默认值**：—（未设默认值）
 - **功能**：user@host destination for the ssh reverse forward
 
 - **可选值**：任意字符串（无固定枚举）
-
-### `images.urls.sshRemotePort` — Image URL SSH Remote Port
-
-- **作用**：SSH 反向转发中远端 Web 服务对外监听的端口
-- **类型**：`number`
-- **默认值**：`8787`
-- **功能**：Remote listen port of the ssh reverse forward that your web server proxies to
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `defaultThinkingLevel` — Thinking Level
 
@@ -2077,24 +2523,6 @@
 - **可选值**：
   - `true`
   - `false`
-
-### `model.toolCallLoopGuard.threshold` — Tool-Call Loop Threshold
-
-- **作用**：触发工具调用循环纠正所需的连续相同调用次数
-- **类型**：`number`
-- **默认值**：`5`
-- **功能**：Consecutive identical tool calls required before the corrective steer is injected
-
-- **可选值**：任意数字（无固定枚举）
-
-### `model.toolCallLoopGuard.exemptTools` — Tool-Call Loop Exempt Tools
-
-- **作用**：豁免于跨回合工具调用循环检测的工具名清单
-- **类型**：`array`
-- **默认值**：`["hub"]`
-- **功能**：Tool names that may repeat consecutively without triggering the cross-turn loop guard
-
-- **可选值**：任意字符串数组（无固定枚举）
 
 ### `inlineToolDescriptors` — Inline Tool Descriptors
 
@@ -2256,6 +2684,7 @@
   - `flex`
   - `scale`
   - `priority`
+  - `ultrafast`
 
 ### `tier.anthropic` — Service Tier — Anthropic
 
@@ -2292,6 +2721,7 @@
   - `flex`
   - `scale`
   - `priority`
+  - `ultrafast`
 
 ### `tier.advisor` — Service Tier — Advisor
 
@@ -2307,6 +2737,7 @@
   - `flex`
   - `scale`
   - `priority`
+  - `ultrafast`
 - **条件**：`advisorEnabled` 为真时适用
 
 ### `retry.maxRetries` — Retry Attempts
@@ -2321,15 +2752,6 @@
   - `3` — 3 retries
   - `5` — 5 retries
   - `10` — 10 retries
-
-### `retry.maxDelayMs` — Max Retry Delay
-
-- **作用**：两次重试之间的最大等待毫秒数（0 表示不设上限，依赖配额恢复）
-- **类型**：`number`
-- **默认值**：`300000`
-- **功能**：Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets.
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `retry.waitForUsageReset` — Wait For Usage Reset
 
@@ -2420,21 +2842,6 @@
   - `true`
   - `false`
 
-### `providers.autoThinkingModel` — Auto Thinking Model
-
-- **作用**：`auto` 思考档位所用的难度分类器（在线 TINY 角色或本地小模型）
-- **类型**：`enum`
-- **默认值**：`"online"`
-- **功能**：Difficulty classifier for the `auto` thinking level: online (the TINY role from /models, else smol) by default, or a local on-device model
-- **可选值**：
-  - `online`
-  - `qwen3-1.7b`
-  - `llama3.2:3b`
-  - `gemma-3-1b`
-  - `qwen2.5-1.5b`
-  - `lfm2-1.2b`
-- **条件**：`autoThinkingActive` 为真时适用
-
 ### `providers.autoThinkingMaxEffort` — Auto Thinking Ceiling
 
 - **作用**：`auto` 分类器可解析到的最高推理档位上限
@@ -2447,10 +2854,44 @@
 - **条件**：`autoThinkingActive` 为真时适用
 
 
+### `advisor.reviewMode` — Advisor Review Mode
+
+- **作用**：没有 WATCHDOG.yml roster 时的顾问评审节奏：turn 逐主代理回合，agent-end 只在最终交付时评审。
+- **类型**：`enum`
+- **默认值**：`"turn"`
+- **功能**：没有 WATCHDOG.yml roster 时的顾问评审节奏：turn 逐主代理回合，agent-end 只在最终交付时评审。
+
+- **可选值**：
+  - `turn`
+  - `agent-end`
+- **条件**：/settings 面板显示依赖 `advisorEnabled`
+
+### `advisor.reviewInterval` — Advisor Review Interval
+
+- **作用**：没有 WATCHDOG.yml roster 时，每 N 个合格更新安排一次顾问评审；跳过的更新随下一次评审发送。
+- **类型**：`number`
+- **默认值**：`1`
+- **功能**：没有 WATCHDOG.yml roster 时，每 N 个合格更新安排一次顾问评审；跳过的更新随下一次评审发送。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+- **条件**：/settings 面板显示依赖 `advisorEnabled`
+
+### `advisor.evictStaleResults` — Advisor Evict Stale Results
+
+- **作用**：评审前把顾问较早轮次的 read/grep/glob 输出替换为短占位，保留最近一次评审。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：评审前把顾问较早轮次的 read/grep/glob 输出替换为短占位，保留最近一次评审。
+
+- **可选值**：
+  - `true`
+  - `false`
+- **条件**：/settings 面板显示依赖 `advisorEnabled`
+
 ## Providers（提供方）
 
 
-共 39 项。
+共 29 项。
 
 
 ### `providers.maxInFlightRequests` — Max In-Flight Requests
@@ -2473,15 +2914,6 @@
   - `on` — 始终将 Codex `code_mode_only` 模型路由到 eval
   - `auto` — 跟随模型目录标志决定是否启用
 
-### `providers.openai-codex.codeModeDirectTools` — Codex Code Mode Direct Tools
-
-- **作用**：Codex Code Mode 模式下补充暴露给模型直接调用的工具列表
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：Codex Code Mode 的额外直接工具。标准直接工具为 eval、ask、todo、yield、think、checkpoint 和 rewind。
-
-- **可选值**：任意字符串数组（无固定枚举）
-
 ### `secrets.enabled` — Hide Secrets
 
 - **作用**：对已配置的密钥做混淆、并对发往 AI provider 的凭据形 token 进行脱敏
@@ -2492,78 +2924,6 @@
 - **可选值**：
   - `true`
   - `false`
-
-### `providers.ollama-cloud.maxConcurrency` — Ollama Cloud Max Concurrency
-
-- **作用**：单进程内 Ollama Cloud 子代理运行的最大并发数（0 表示不限）
-- **类型**：`number`
-- **默认值**：`3`
-- **功能**：每个进程的最大并发 Ollama Cloud 子代理运行数；`0` 表示禁用该 provider 的专属限制。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `providers.webSearchOrder` — Web Search Provider Order
-
-- **作用**：web_search 工具的 provider 优先级排序（未列出的仍按默认顺序回退）
-- **类型**：`array`
-- **默认值**：`[]`
-- **有序**：是（顺序有意义）
-- **功能**：`web_search` 工具的优先 provider；未列出的 provider 之后保持其默认顺序。
-- **可选值**：
-  - `perplexity` — 配置了凭据时使用；显式选择时回退到匿名搜索
-  - `gemini` — 通过 Gemini 的 Google Search grounding（使用 `google-gemini-cli` 或 `google-antigravity` OAuth）
-  - `anthropic` — Claude 原生 `web_search` 工具（使用 Anthropic OAuth 或 `ANTHROPIC_API_KEY`）
-  - `codex` — OpenAI 原生 `web_search`（通过 `/login openai-codex` 使用 ChatGPT OAuth）
-  - `xai` — 通过 xAI Responses API 的 Grok Web 搜索（通过 `/login xai-oauth` 使用 SuperGrok/X Premium+ OAuth，或 `XAI_API_KEY`）
-  - `zai` — 调用 Z.AI `webSearchPrime` MCP
-  - `exa` — 通过 `/login exa` 或 `EXA_API_KEY`；支持通过 MCP 的显式无 key 回退
-  - `tinyfish` — 需要 `TINYFISH_API_KEY`
-  - `jina` — 需要 `JINA_API_KEY`
-  - `kagi` — 需要 `KAGI_API_KEY` 及 Kagi Search API beta 访问权限
-  - `tavily` — 需要 `TAVILY_API_KEY`
-  - `firecrawl` — 设置 `FIRECRAWL_API_KEY` 时使用 Firecrawl API；否则回退到无 key 模式
-  - `brave` — 需要 `BRAVE_API_KEY`
-  - `kimi` — Kimi Code 搜索（需要通过 `KIMI_SEARCH_API_KEY`/`MOONSHOT_SEARCH_API_KEY` 或 `/login kimi-code` 提供的 Kimi Code Console key；不是 `MOONSHOT_API_KEY`）
-  - `parallel` — 需要 `PARALLEL_API_KEY`
-  - `synthetic` — 需要 `SYNTHETIC_API_KEY`
-  - `searxng` — 需要 `SEARXNG_ENDPOINT` 或 `searxng.endpoint`
-  - `startpage` — 无凭据抓取 Startpage（Google 支持）的结果；可能遇到机器人校验
-  - `duckduckgo` — 无凭据尽力回退；在数据中心/共享出口 IP 上可能遇到机器人校验
-  - `ecosia` — 无凭据、基于浏览器的 Ecosia（Google 支持）结果抓取
-  - `google` — 无凭据、基于浏览器的回退；较慢且可能遇到机器人校验
-  - `mojeek` — 无凭据、基于浏览器的 Mojeek 独立索引抓取
-  - `public` — 并行查询所有无凭据引擎并合并去重结果
-
-### `providers.webSearchExclude` — Excluded Web Search Providers
-
-- **作用**：web_search 永远不使用的 provider 黑名单（含回退路径也禁用）
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：`web_search` 永不使用的 provider，即使作为回退也不行。
-- **可选值**：
-  - `perplexity` — 配置了凭据时使用；显式选择时回退到匿名搜索
-  - `gemini` — 通过 Gemini 的 Google Search grounding（使用 `google-gemini-cli` 或 `google-antigravity` OAuth）
-  - `anthropic` — Claude 原生 `web_search` 工具（使用 Anthropic OAuth 或 `ANTHROPIC_API_KEY`）
-  - `codex` — OpenAI 原生 `web_search`（通过 `/login openai-codex` 使用 ChatGPT OAuth）
-  - `xai` — 通过 xAI Responses API 的 Grok Web 搜索（通过 `/login xai-oauth` 使用 SuperGrok/X Premium+ OAuth，或 `XAI_API_KEY`）
-  - `zai` — 调用 Z.AI `webSearchPrime` MCP
-  - `exa` — 通过 `/login exa` 或 `EXA_API_KEY`；支持通过 MCP 的显式无 key 回退
-  - `tinyfish` — 需要 `TINYFISH_API_KEY`
-  - `jina` — 需要 `JINA_API_KEY`
-  - `kagi` — 需要 `KAGI_API_KEY` 及 Kagi Search API beta 访问权限
-  - `tavily` — 需要 `TAVILY_API_KEY`
-  - `firecrawl` — 设置 `FIRECRAWL_API_KEY` 时使用 Firecrawl API；否则回退到无 key 模式
-  - `brave` — 需要 `BRAVE_API_KEY`
-  - `kimi` — Kimi Code 搜索（需要通过 `KIMI_SEARCH_API_KEY`/`MOONSHOT_SEARCH_API_KEY` 或 `/login kimi-code` 提供的 Kimi Code Console key；不是 `MOONSHOT_API_KEY`）
-  - `parallel` — 需要 `PARALLEL_API_KEY`
-  - `synthetic` — 需要 `SYNTHETIC_API_KEY`
-  - `searxng` — 需要 `SEARXNG_ENDPOINT` 或 `searxng.endpoint`
-  - `startpage` — 无凭据抓取 Startpage（Google 支持）的结果；可能遇到机器人校验
-  - `duckduckgo` — 无凭据尽力回退；在数据中心/共享出口 IP 上可能遇到机器人校验
-  - `ecosia` — 无凭据、基于浏览器的 Ecosia（Google 支持）结果抓取
-  - `google` — 无凭据、基于浏览器的回退；较慢且可能遇到机器人校验
-  - `mojeek` — 无凭据、基于浏览器的 Mojeek 独立索引抓取
-  - `public` — 并行查询所有无凭据引擎并合并去重结果
 
 ### `providers.webSearchTimeoutSeconds` — Web Search Timeout
 
@@ -2578,15 +2938,6 @@
   - `180` — 3 minutes
   - `300` — 5 minutes
 
-### `providers.webSearchGeminiModel` — Gemini web_search model
-
-- **作用**：Gemini Google Search grounding 调用的模型 ID（默认 gemini-2.5-flash）
-- **类型**：`string`
-- **默认值**：—（未设默认值）
-- **功能**：用于 Gemini Google Search grounding 的模型 ID。默认 `gemini-2.5-flash`。
-
-- **可选值**：任意字符串（无固定枚举）
-
 ### `providers.antigravityEndpoint` — Antigravity Endpoint Mode
 
 - **作用**：google-antigravity provider 的端点路由策略（生产/沙箱/自动故障转移）
@@ -2597,22 +2948,6 @@
   - `auto` — 尝试 production 端点，遇到 5xx/429 时回退到 sandbox
   - `production` — 仅强制使用 production 端点
   - `sandbox` — 仅强制使用 sandbox 端点
-
-### `providers.imageOrder` — Image Provider Order
-
-- **作用**：图像生成 provider 的优先级排序
-- **类型**：`array`
-- **默认值**：`[]`
-- **有序**：是（顺序有意义）
-- **功能**：图像生成的优先 provider；未列出的 provider 跟随当前会话的 provider 及内置顺序。
-- **可选值**：
-  - `openai` — `OPENAI_API_KEY`（`gpt-image-2`）或当前 GPT 模型；回退到已连接的 Codex 订阅
-  - `openai-codex` — 使用已连接的 Codex / ChatGPT 订阅，无需 `OPENAI_API_KEY`
-  - `antigravity` — 需要 `google-antigravity` OAuth
-  - `xai` — 需要 xAI Grok OAuth 或 `XAI_API_KEY`
-  - `gemini` — 需要 `GEMINI_API_KEY`
-  - `openrouter` — 需要 `OPENROUTER_API_KEY`
-  - `deepinfra` — 需要 `DEEPINFRA_API_KEY`
 
 ### `providers.fireworksTier` — Fireworks Tier
 
@@ -2640,27 +2975,6 @@
   - `sol` — Sol
   - `spruce` — Spruce
   - `vale` — Vale
-
-### `providers.tts` — Text-to-Speech Provider
-
-- **作用**：tts 工具的后端选择（本地 Kokoro / xAI Grok Voice / DeepInfra）
-- **类型**：`enum`
-- **默认值**：`"auto"`
-- **功能**：`tts` 工具的后端：本地端侧神经 TTS（Kokoro-82M）、xAI Grok Voice 或 DeepInfra speech。
-- **可选值**：
-  - `auto` — 优先使用本地端侧 TTS；当存在凭据时将 `.mp3` 输出路由到 xAI
-  - `local` — 端侧神经 TTS（Kokoro-82M）；输出为 WAV/PCM16
-  - `xai` — 需要 xAI Grok OAuth 或 `XAI_API_KEY`；MP3 或 WAV
-  - `deepinfra` — 需要 `DEEPINFRA_API_KEY`；MP3 或 WAV
-
-### `tts.localModel` — Local TTS Model
-
-- **作用**：本地 TTS 后端使用的神经语音模型（当前为 Kokoro-82M）
-- **类型**：`enum`
-- **默认值**：`"kokoro"`
-- **功能**：本地 TTS 后端使用的端侧神经 TTS 模型（Kokoro-82M）。
-- **可选值**：
-  - `kokoro` — Kokoro-82M 神经 TTS——端侧 SOTA 质量，多语音，完全本地
 
 ### `tts.localVoice` — Local TTS Voice
 
@@ -2735,18 +3049,6 @@
   - `bm_george` — George (British male)
   - `bm_fable` — Fable (British male)
 
-### `providers.tinyModel` — Tiny Model
-
-- **作用**：用于生成会话标题的 TINY 模型（在线角色或本地端侧模型）
-- **类型**：`enum`
-- **默认值**：`"online"`
-- **功能**：会话标题模型：默认 `online`（来自 `/models` 的 TINY 角色，否则 `@smol`），或本地端侧模型。
-- **可选值**：
-  - `online` — 在线标题生成：TINY 模型角色（在 `/models` 中设置）若已分配则使用它，否则使用在线回退（commit 角色，然后 `@smol`）。不下载本地模型、不做端侧推理
-  - `lfm2.5-230m` — 推荐的本地模型；最快的 LFM2.5 选项，缓存约 214 MB
-  - `lfm2.5-350m` — 更大的 LFM2.5 选项，缓存约 292 MB；倾向于简洁标题
-  - `falcon-h1-90m` — 最小选项，缓存约 147 MB；复杂提示下保真度较低
-
 ### `providers.tinyModelDevice` — Tiny Model Device
 
 - **作用**：本地 tiny 模型推理的后端（ONNX 执行提供者 / MLX）
@@ -2791,21 +3093,6 @@
   - `q1` — q1
   - `q1f16` — q1f16
   - `auto` — auto
-
-### `providers.unexpectedStopModel` — Unexpected Stop Model
-
-- **作用**：Smart 模式下判定异常停止所用的分类器模型（在线或本地端侧）
-- **类型**：`enum`
-- **默认值**：`"online"`
-- **条件**：`unexpectedStopSmart` 为真时适用
-- **功能**：Smart 异常停止检测的分类器：默认 `online`（来自 `/models` 的 TINY 角色，否则 smol），或本地端侧模型。
-- **可选值**：
-  - `online` — 使用在线模型：来自 `/models` 的 TINY 角色（若已设置），否则 `@smol`。无本地模型下载或端侧推理
-  - `qwen3-1.7b` — 本地推理已禁用：`onnxruntime-node` 无法运行该 ONNX 导出的 RotaryEmbedding 缓存更新
-  - `llama3.2:3b` — 更大的 Llama 3.2 选项，可用于本地内存/分类器任务；质量潜力更高，但磁盘/RAM/延迟成本更高
-  - `gemma-3-1b` — 整合/去重最佳；占用更小，但提取时会泄漏一些闲聊
-  - `qwen2.5-1.5b` — 提取粒度最佳（原子事实）；整合能力较弱
-  - `lfm2-1.2b` — 加载最快；全面的全能选手，提取标签略噪
 
 ### `providers.kimiApiFormat` — Kimi API Format
 
@@ -2906,33 +3193,6 @@
   - `yes` — Yes：不经提示直接消费符合资格的已保存重置
   - `no` — No：不运行已保存重置的自动消费检查
 
-### `codexResets.minBlockedMinutes` — Codex Auto-Redeem Min Block
-
-- **作用**：自动消耗 reset 所需的最小剩余封禁时间（避免短等待消耗稀缺额度）
-- **类型**：`number`
-- **默认值**：`60`
-- **功能**：仅当自然解除封禁（已耗尽 5h/weekly 窗口中最近的重置）至少在这么多分钟后才自动消费（不要为省下短暂的等待而花掉稀缺的 credit）。调高（如 360）可忽略仅 5h 窗口的封禁。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `codexResets.keepCredits` — Codex Auto-Redeem Reserve
-
-- **作用**：自动消耗 reset 时保底保留的额度数量（即将过期的额度不受此限）
-- **类型**：`number`
-- **默认值**：`0`
-- **功能**：自动消费后保留的已保存重置数不低于此值（0 表示最后一个 credit 也可能自动消费）。即将过期的 credit 豁免——保留会过期的 credit 一无所获。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `codexResets.salvageHorizonHours` — Codex Reset Salvage Horizon
-
-- **作用**：在 reset 即将过期前多少小时自动消耗以救回额度（0 关闭该逻辑）
-- **类型**：`number`
-- **默认值**：`12`
-- **功能**：当已保存的 Codex 重置将在这么多小时内过期，且任一聊天窗口（5h 或 weekly）有可观的用量可恢复时，自动消费该重置（0 禁用过期回收）。
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `provider.appendOnlyContext` — Append-Only Context
 
 - **作用**：开启 append-only 消息日志以最大化 provider 前缀缓存命中（DeepSeek/Xiaomi/Anthropic 等）
@@ -2955,15 +3215,6 @@
   - `true`
   - `false`
 
-### `exa.searchDelayMs` — Exa Search Delay
-
-- **作用**：Exa 搜索请求之间的最小间隔毫秒数（0 关闭节流）
-- **类型**：`number`
-- **默认值**：`1000`
-- **功能**：Exa Web 搜索请求之间的最小间隔（毫秒）；设为 0 禁用节流。
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `searxng.endpoint` — SearXNG Endpoint
 
 - **作用**：自托管 SearXNG 实例的 Base URL（用于 web 搜索）
@@ -2974,10 +3225,56 @@
 - **可选值**：任意字符串（无固定枚举）
 
 
+### `providers.openaiLiveSteering` — OpenAI Live Steering
+
+- **作用**：GPT-6 经 Codex WebSocket 流式响应时，将新输入直接送入该响应，不必等待下一工具边界。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：GPT-6 经 Codex WebSocket 流式响应时，将新输入直接送入该响应，不必等待下一工具边界。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `providers.cacheWarming` — Cache Warming
+
+- **作用**：提示缓存过期前，以单 token 输出预算重新发送上一请求；streaming 只保护长工具执行，idle 也在收益高于成本时刷新回合间的五分钟缓存。
+- **类型**：`enum`
+- **默认值**：`"idle"`
+- **功能**：提示缓存过期前，以单 token 输出预算重新发送上一请求；streaming 只保护长工具执行，idle 也在收益高于成本时刷新回合间的五分钟缓存。
+
+- **可选值**：
+  - `off`
+  - `streaming`
+  - `idle`
+
+### `claudeResets.autoRedeem` — Claude Auto-Redeem Resets
+
+- **作用**：自动使用符合条件的 Claude Cedar/Juniper 重置额度；unset 首次消耗前询问，yes 自动消耗，no 禁用限额恢复和到期抢救。Juniper 仅可恢复单独的五小时阻塞。
+- **类型**：`enum`
+- **默认值**：`"unset"`
+- **功能**：自动使用符合条件的 Claude Cedar/Juniper 重置额度；unset 首次消耗前询问，yes 自动消耗，no 禁用限额恢复和到期抢救。Juniper 仅可恢复单独的五小时阻塞。
+
+- **可选值**：
+  - `unset`
+  - `yes`
+  - `no`
+
+### `telemetry.otlpExportEnabled` — OTLP Telemetry Export
+
+- **作用**：是否允许向 OTEL_* 端点导出 traces/logs/metrics；修改下次启动生效。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：是否允许向 OTEL_* 端点导出 traces/logs/metrics；修改下次启动生效。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ## Appearance（外观）
 
 
-共 36 项。
+共 39 项。
 
 
 ### `theme.dark` — Dark Theme
@@ -3382,10 +3679,45 @@
   - `false`
 
 
+### `composer.tokenRate` — Generation Rate
+
+- **作用**：在工作状态行显示实时生成 tok/s：先按流式增量估算，每条消息完成后按提供商计费输出校正。
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：在工作状态行显示实时生成 tok/s：先按流式增量估算，每条消息完成后按提供商计费输出校正。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `tui.titleSpinner` — Terminal Title Spinner
+
+- **作用**：终端标题工作状态旋转符的字形方案；line 使用 ASCII，适合没有盲文字形的字体。
+- **类型**：`enum`
+- **默认值**：`"braille"`
+- **功能**：终端标题工作状态旋转符的字形方案；line 使用 ASCII，适合没有盲文字形的字体。
+
+- **可选值**：
+  - `braille`
+  - `pulse`
+  - `dots`
+  - `line`
+
+### `display.subagentLivePreview` — Subagent Live Preview
+
+- **作用**：在固定子代理行下显示其当前或最近一次工具调用。
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：在固定子代理行下显示其当前或最近一次工具调用。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ## Tools（工具）
 
 
-共 62 项。
+共 63 项。
 
 
 ### `tools.artifactSpillThreshold` — Artifact Spill Threshold (KB)
@@ -3665,24 +3997,6 @@
 
 - **可选值**：任意字符串（无固定枚举）
 
-### `computer.maxWidth` — Computer Screenshot Width
-
-- **作用**：桌面截图的最大拼接宽度（像素）
-- **类型**：`number`
-- **默认值**：`3840`
-- **功能**：合成截图的最大宽度（像素）。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `computer.maxHeight` — Computer Screenshot Height
-
-- **作用**：桌面截图的最大拼接高度（像素）
-- **类型**：`number`
-- **默认值**：`2400`
-- **功能**：合成截图的最大高度（像素）。
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `checkpoint.enabled` — Checkpoint/Rewind
 
 - **作用**：是否启用上下文检查点与回退工具
@@ -3737,24 +4051,6 @@
 - **可选值**：
   - `true`
   - `false`
-
-### `github.cache.softTtlSec` — GitHub Cache Soft TTL
-
-- **作用**：GitHub 视图缓存的软有效期（秒）
-- **类型**：`number`
-- **默认值**：`300`
-- **功能**：在该时间窗口内，缓存的 issue/PR 视图行直接返回（秒；默认 5 分钟）。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `github.cache.hardTtlSec` — GitHub Cache Hard TTL
-
-- **作用**：GitHub 视图缓存的硬过期时间（秒）
-- **类型**：`number`
-- **默认值**：`604800`
-- **功能**：超过 soft TTL 后直接返回缓存行并在后台刷新；超过 hard TTL 后丢弃（秒；默认 7 天）。
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `web_search.enabled` — Web Search
 
@@ -3955,33 +4251,6 @@
   - `true`
   - `false`
 
-### `async.pollWaitDuration` — Max Poll Time
-
-- **作用**：hub wait 单次轮询后台任务的最长等待策略
-- **类型**：`enum`
-- **默认值**：`"smart"`
-- **功能**：`hub` wait 监听后台任务后返回当前状态前的等待时长。固定值表示每次都等待该时长。`smart` 自适应：起始 5s，并在连续等待时逐步延长（最多 5m），约一分钟无等待后重置为 5s。
-- **可选值**：
-  - `5s`
-  - `10s`
-  - `30s`
-  - `1m`
-  - `5m`
-  - `smart` — Default — adaptive 5s→5m, resets when you stop polling
-
-### `irc.timeoutMs` — IRC Timeout
-
-- **作用**：hub 消息等待与 send await 的默认超时（毫秒）
-- **类型**：`number`
-- **默认值**：`120000`
-- **功能**：hub 消息等待（含 `send await:true`）的默认超时（毫秒）；0 表示禁用超时。
-- **可选值**：
-  - `0` — Disabled
-  - `30000` — 30 seconds
-  - `60000` — 1 minute
-  - `120000` — 2 minutes
-  - `300000` — 5 minutes
-
 ### `tools.xdev` — xd:// Tools
 
 - **作用**：是否将不常用工具挂载到 xd:// 设备而非顶层暴露
@@ -3997,21 +4266,12 @@
 
 - **作用**：系统提示中内联哪些 xd:// 设备文档与 schema
 - **类型**：`enum`
-- **默认值**：`"builtins"`
-- **功能**：选择在 system prompt 中内联哪些挂载设备的文档和 schema。Built-ins 保留核心工具内联，MCP 与扩展工具按需获取。
+- **默认值**：`"catalog"`
+- **功能**：inline 内联所有设备文档；builtins 内联内置设备；默认 catalog 仅列设备目录，文档与 schema 按需读取。
 - **可选值**：
   - `inline` — Inline docs and schemas for every mounted device.
   - `builtins` — Inline built-in docs; fetch MCP and extension docs on demand.
   - `catalog` — List every device; fetch all docs on demand.
-
-### `tools.xdevInlineDevices` — xd:// Inline Devices
-
-- **作用**：在 Built-ins 模式下额外内联哪些动态设备（glob 匹配）
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：当 xd:// Prompt Docs 为 Built-ins Only 时，将名称匹配这些 glob 模式的动态设备内联（例如 `mcp__context_mode_*`）。Catalog Only 忽略该设置。
-
-- **可选值**：任意字符串数组（无固定枚举）
 
 ### `mcp.enableProjectConfig` — MCP Project Config
 
@@ -4046,15 +4306,6 @@
   - `true`
   - `false`
 
-### `mcp.notificationDebounceMs` — MCP Notification Debounce
-
-- **作用**：MCP 资源更新注入会话前的去抖窗口（毫秒）
-- **类型**：`number`
-- **默认值**：`500`
-- **功能**：MCP 资源更新在注入对话前的去抖窗口（毫秒）。
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `tasks.todoClearDelay` — Todo Auto-Clear Delay
 
 - **作用**：已完成或放弃的 todo 从面板移除前的延迟（秒）
@@ -4069,15 +4320,6 @@
   - `1800`
   - `3600`
   - `-1` — Never
-
-### `extensionHandlers.toolCallTimeoutMs` — Tool Call Handler Timeout (ms)
-
-- **作用**：扩展 tool_call 处理器的有效工作超时（毫秒）
-- **类型**：`number`
-- **默认值**：`30000`
-- **功能**：扩展 `tool_call` handler 的有效正有限工作超时；非法值回落到 30000ms，等待 OMP 自有对话框的时间不计入。
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `dev.autoqa` — Auto QA
 
@@ -4100,20 +4342,112 @@
 - **可选值**：任意字符串（无固定枚举）
 
 
+### `tools.artifactMaxBytes` — Artifact File Cap (MB)
+
+- **作用**：流式 bash、Python 和 JavaScript eval 输出 artifact 的大小上限，单位 MB（不是字段名暗示的字节）。超限时保留开头最多 3 MB 与最新尾部，中间标记截断；0 无上限。
+- **类型**：`number`
+- **默认值**：`16`
+- **功能**：流式 bash、Python 和 JavaScript eval 输出 artifact 的大小上限，单位 MB（不是字段名暗示的字节）。超限时保留开头最多 3 MB 与最新尾部，中间标记截断；0 无上限。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `find.enabled` — Find (semantic grep)
+
+- **作用**：自然语言文件/行范围检索工具开关；auto 仅在 judge 角色解析为原生 TypeSafe jev 模型时启用。它不是文件名 glob。
+- **类型**：`enum`
+- **默认值**：`"auto"`
+- **功能**：自然语言文件/行范围检索工具开关；auto 仅在 judge 角色解析为原生 TypeSafe jev 模型时启用。它不是文件名 glob。
+
+- **可选值**：
+  - `auto`
+  - `on`
+  - `off`
+
+### `ratchet.enabled` — Ratchet
+
+- **作用**：是否启用 ratchet eval/hillclimb prelude；/ratchet 可在当前会话开启。
+- **类型**：`boolean`
+- **默认值**：`false`
+- **功能**：是否启用 ratchet eval/hillclimb prelude；/ratchet 可在当前会话开启。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `archive.enabled` — Archive
+
+- **作用**：是否启用只读 archive eval prelude，查询提示历史、最近项目、会话与回顾。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：是否启用只读 archive eval prelude，查询提示历史、最近项目、会话与回顾。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `browser.tern` — Tern Browser
+
+- **作用**：在可用 Tern pane 中优先以原生 WebView 画中画打开标签页，否则回退 Chromium；显式 app、relay、CDP 地址优先，PI_BROWSER_TERN 可覆盖。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：在可用 Tern pane 中优先以原生 WebView 画中画打开标签页，否则回退 Chromium；显式 app、relay、CDP 地址优先，PI_BROWSER_TERN 可覆盖。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `ida.enabled` — IDA Pro
+
+- **作用**：发现 IDA 安装时，用 IDA Pro idalib 打开 read 读取的可执行文件并提供 ida 工具；没有安装时不生效。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：发现 IDA 安装时，用 IDA Pro idalib 打开 read 读取的可执行文件并提供 ida 工具；没有安装时不生效。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `ida.python` — IDA Python
+
+- **作用**：能导入 ida_domain 与 idapro 的 Python 解释器；空字符串自动发现。
+- **类型**：`string`
+- **默认值**：`""`
+- **功能**：能导入 ida_domain 与 idapro 的 Python 解释器；空字符串自动发现。
+
+- **可选值**：任意字符串（无固定枚举，由对应功能校验）
+
+### `ida.installDir` — IDA Install Dir
+
+- **作用**：含 libidalib 的 IDA 目录，导出为 IDADIR；空字符串依 IDADIR、ida-config.json 和标准路径自动发现。
+- **类型**：`string`
+- **默认值**：`""`
+- **功能**：含 libidalib 的 IDA 目录，导出为 IDADIR；空字符串依 IDADIR、ida-config.json 和标准路径自动发现。
+
+- **可选值**：任意字符串（无固定枚举，由对应功能校验）
+
+### `ida.maxOpen` — IDA Max Open Databases
+
+- **作用**：每项目同时打开的 IDA 数据库上限；超限保存并关闭最久未用的空闲数据库。
+- **类型**：`number`
+- **默认值**：`4`
+- **功能**：每项目同时打开的 IDA 数据库上限；超限保存并关闭最久未用的空闲数据库。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
+### `ida.idleCloseSec` — IDA Idle Close Timeout
+
+- **作用**：空闲超过多少秒后保存并关闭 IDA 数据库，0 永不自动关闭；重开会重置 exec 命名空间。
+- **类型**：`number`
+- **默认值**：`900`
+- **功能**：空闲超过多少秒后保存并关闭 IDA 数据库，0 永不自动关闭；重开会重置 exec 命名空间。
+
+- **可选值**：任意数字（无固定枚举，由对应功能校验）
+
 ## Context（上下文）
 
 
-共 29 项。
+共 28 项。
 
-
-### `workspace.additionalDirectories` — Additional Workspace Dirs
-
-- **作用**：每个会话额外包含的工作区根目录列表（多根工作区），由 /add-dir 与 /remove-dir 命令维护
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：为每个会话添加额外的 workspace 目录作为附加根（多根 workspace）。通过 `/add-dir` 和 `/remove-dir` 在线管理。路径相对于 cwd 解析；推荐使用绝对路径。代理会被告知这些根存在，并可对其执行 read/grep/glob。
-
-- **可选值**：任意字符串数组（无固定枚举）
 
 ### `contextPromotion.enabled` — Auto-Promote Context
 
@@ -4426,10 +4760,10 @@
 - **默认值**：`"always"`
 - **功能**：何时进行中途中断，何时在完成后注入警告。
 - **可选值**：
-  - `always` — 在 prose 和 tool 流上都中断
-  - `prose-only` — 仅在 reply/thinking 匹配时中断
-  - `tool-only` — 仅在工具调用参数匹配时中断
-  - `never` — 从不中断；在完成后注入警告
+  - `never`
+  - `prose-only`
+  - `tool-only`
+  - `always`
 
 ### `ttsr.repeatMode` — TTSR Repeat Mode
 
@@ -4465,20 +4799,22 @@
   - `true`
   - `false`
 
-### `ttsr.disabledRules` — Disabled Rules
+### `ttsr.judge` — Judged Rules
 
-- **作用**：完全忽略的规则名列表（同时作用于内置默认与用户自定义规则）
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：完全忽略的规则名（对内建默认规则与用户自定义规则均生效）。
+- **作用**：由 judge 模型对已完成的回答、推理和工具调用评估 question 规则；yes 注入警告，auto 仅在 judge 解析为原生 TypeSafe jev 模型时启用。
+- **类型**：`enum`
+- **默认值**：`"auto"`
+- **功能**：由 judge 模型对已完成的回答、推理和工具调用评估 question 规则；yes 注入警告，auto 仅在 judge 解析为原生 TypeSafe jev 模型时启用。
 
-- **可选值**：任意字符串数组（无固定枚举）
-
+- **可选值**：
+  - `auto`
+  - `on`
+  - `off`
 
 ## Memory（记忆）
 
 
-共 31 项。
+共 30 项。
 
 
 ### `memory.backend` — Memory Backend
@@ -4818,26 +5154,10 @@
   - `true`
   - `false`
 
-### `providers.memoryModel` — Memory Model
-
-- **作用**：Mnemopi 用于事实抽取与整合的 LLM（在线 tiny 或本地小型模型）
-- **类型**：`enum`
-- **默认值**：`"online"`
-- **条件**：`mnemopiActive` 为真时适用
-- **功能**：用于事实抽取与合并的 Mnemopi LLM：默认 online（来自 /models 的 TINY 角色，否则为 smol/remote），或本地端侧模型。
-- **可选值**：
-  - `online` — 使用在线模型：若设置了 /models 中的 TINY 角色则使用之，否则使用 @smol。不下载本地模型，不在端侧推理
-  - `qwen3-1.7b` — 本地推理已禁用：onnxruntime-node 无法运行此 ONNX 导出的 RotaryEmbedding 缓存更新
-  - `llama3.2:3b` — 用于本地记忆/分类任务的更大 Llama 3.2 选项；质量潜力更高，但磁盘/内存/延迟成本也更高
-  - `gemma-3-1b` — 合并/去重效果最佳；占用更轻，但抽取时会泄漏少量闲聊内容
-  - `qwen2.5-1.5b` — 抽取粒度最佳（原子事实）；合并能力较弱
-  - `lfm2-1.2b` — 加载最快；综合表现稳定，抽取标签略噪
-
-
 ## Files（文件）
 
 
-共 27 项。
+共 22 项。
 
 
 ### `edit.mode` — Edit Mode
@@ -4902,7 +5222,7 @@
 
 - **作用**：拒绝锚定在历史 read/search 未完整展示过的行上的编辑
 - **类型**：`boolean`
-- **默认值**：`false`
+- **默认值**：`true`
 - **功能**：拒绝锚定在先前 read/search 未完整显示过的行上的编辑。
 
 - **可选值**：
@@ -4999,51 +5319,6 @@
   - `true`
   - `false`
 
-### `read.summarize.minBodyLines` — Read Summary Body Lines
-
-- **作用**：多行函数体或字面量达到此长度才在摘要中被折叠
-- **类型**：`number`
-- **默认值**：`4`
-- **功能**：read 摘要折叠多行函数体或字面量前所需的最小行数。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `read.summarize.minCommentLines` — Read Summary Comment Lines
-
-- **作用**：多行块注释达到此长度才在摘要中被折叠
-- **类型**：`number`
-- **默认值**：`6`
-- **功能**：read 摘要折叠多行块注释前所需的最小行数。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `read.summarize.minTotalLines` — Read Summary Minimum File Length
-
-- **作用**：小于此行数的文件直接逐行返回，不做结构化摘要
-- **类型**：`number`
-- **默认值**：`100`
-- **功能**：总行数少于该值的文件按原文读取，不进行结构化摘要。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `read.summarize.unfoldUntil` — Read Summary Unfold Target
-
-- **作用**：BFS 展开可折叠段落直到摘要至少达到该行数（0 表示仅保留最外层省略）
-- **类型**：`number`
-- **默认值**：`50`
-- **功能**：BFS 展开可省略的区段，直至摘要至少达到该可见行数。设为 0 时仅保留最外层省略。
-
-- **可选值**：任意数字（无固定枚举）
-
-### `read.summarize.unfoldLimit` — Read Summary Unfold Ceiling
-
-- **作用**：BFS 展开时单次展开可见行数的硬上限（超出则跳过该段）
-- **类型**：`number`
-- **默认值**：`100`
-- **功能**：BFS 展开过程中摘要大小的硬上限。某次展开若将导致可见行数超过该值则跳过（该区段保持折叠），并继续展开其余区段。
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `read.toolResultPreview` — Inline Read Previews
 
 - **作用**：是否把 read 工具结果以内联预览形式直接渲染在对话流中
@@ -5136,7 +5411,7 @@
 ## Shell（终端）
 
 
-共 16 项。
+共 15 项。
 
 
 ### `bash.enabled` — Bash
@@ -5160,15 +5435,6 @@
 - **可选值**：
   - `true`
   - `false`
-
-### `bash.patterns` — Bash Approval Patterns
-
-- **作用**：bash 命令的有序审批规则列表（仅支持 `*` 通配符）
-- **类型**：`array`
-- **默认值**：`[]`
-- **功能**：有序的 bash 命令审批规则数组；每项包含 `match` 与 `approval` 字段，仅支持 `*` 通配符。
-
-- **可选值**：任意字符串数组（无固定枚举）
 
 ### `bash.allowCompoundCommands` — Allow Compound Commands
 
@@ -5201,15 +5467,6 @@
 - **可选值**：
   - `auto` — 自动检测并加载
   - `off` — 关闭自动加载
-
-### `bash.direnvLoadTimeoutMs` — direnv Load Timeout (ms)
-
-- **作用**：等待首次 `direnv export` 的最长时间（毫秒），超时则无 env 启动
-- **类型**：`number`
-- **默认值**：`30000`
-- **功能**：等待首次 `direnv export` 的最长毫秒数（冷启动的 devenv shell 可能较慢）；超时后会话将在不带 direnv 环境的情况下运行。
-
-- **可选值**：任意数字（无固定枚举）
 
 ### `shellMinimizer.enabled` — Shell Minimizer
 
@@ -5306,6 +5563,17 @@
 
 - **可选值**：任意字符串（无固定枚举）
 
+### `eval.autoProvision` — Eval Environment Provisioning
+
+- **作用**：首次安装包时自动创建托管 JavaScript eval 包环境。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：首次安装包时自动创建托管 JavaScript eval 包环境。
+
+- **可选值**：
+  - `true`
+  - `false`
+
 ## Tasks（任务）
 
 
@@ -5379,15 +5647,6 @@
 - **可选值**：
   - `true`
   - `false`
-
-### `goal.continuationModes` — Goal Continuation Modes
-
-- **作用**：允许目标在会话轮次之间自动延续的运行模式列表
-- **类型**：`array`
-- **默认值**：`["interactive"]`
-- **功能**：允许活动目标在轮次之间自动延续的运行模式
-
-- **可选值**：任意字符串数组（无固定枚举）
 
 ### `title.refreshOnReplan` — Refresh Title on Replan
 
@@ -5578,15 +5837,6 @@
   - `1800000` — 30 minutes
   - `3600000` — 1 hour
 
-### `task.agentIdleTtlMs` — Agent Idle TTL
-
-- **作用**：空闲子代理在内存中保留多长时间后落盘 park（收到消息自动唤醒）
-- **类型**：`number`
-- **默认值**：`420000`
-- **功能**：空闲子代理在内存中保持存活多久后被 park 到磁盘（毫秒）。parked 代理在被发消息或恢复时会自动唤醒。`0` 让空闲代理一直保持存活直到退出
-
-- **可选值**：任意数字（无固定枚举）
-
 ### `task.softRequestBudget` — Soft Subagent Request Budget
 
 - **作用**：每个子代理的软性请求次数上限（超出注入收尾提醒，达 1.5× 强制 yield）
@@ -5695,5 +5945,26 @@
 ---
 
 
+### `task.speculativeLaunch` — Speculative Task Launch
 
-> 维护：本页由 `SETTINGS_SCHEMA` 渲染生成。新增/修改配置项、默认值或枚举后，请按相同流程重新生成并核对条目数。
+- **作用**：流式 tasks[] 单项完成即提前启动子代理；最终调用校验失败、被阻止或参数改变时中止已启动代理。要求 task 自动审批且没有扩展工具生命周期处理器。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：流式 tasks[] 单项完成即提前启动子代理；最终调用校验失败、被阻止或参数改变时中止已启动代理。要求 task 自动审批且没有扩展工具生命周期处理器。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+### `task.completionProbe` — Subagent Completion Probe
+
+- **作用**：交互主代理发起的子代理定期通过缓存旁路估计完成度；print、RPC、ACP 与 SDK 不探测。
+- **类型**：`boolean`
+- **默认值**：`true`
+- **功能**：交互主代理发起的子代理定期通过缓存旁路估计完成度；print、RPC、ACP 与 SDK 不探测。
+
+- **可选值**：
+  - `true`
+  - `false`
+
+> 维护：本页是各域 register 定义的静态快照；修改配置键、类型、默认值或枚举后，重新渲染并核对全部条目及面板可见性。

@@ -11,6 +11,7 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { FileEntry } from "../../session/session-entries";
+import type { RpcSubagentSnapshot } from "./rpc-types";
 
 /** Stable identity of the single OMP process backing one project connection. */
 export interface RpcProjectIdentity {
@@ -141,11 +142,13 @@ export interface RpcProjectPage<T> {
 export interface RpcProjectCommandBase {
 	readonly id: string;
 	readonly type: string;
+	/** Required whenever sessionId identifies a loaded instance. */
+	readonly sessionGeneration?: string;
 }
 
 export interface RpcProjectSessionCommandBase extends RpcProjectCommandBase {
 	readonly sessionId: string;
-	readonly sessionGeneration?: string;
+	readonly sessionGeneration: string;
 }
 
 /** `create_session`: open a new session in this project (rpc-ui-protocol.md §14.3). */
@@ -170,9 +173,8 @@ export interface RpcProjectResumeSessionCommand extends RpcProjectCommandBase {
 }
 
 /** `close_session`: unload the instance, keep history. */
-export interface RpcProjectCloseSessionCommand extends RpcProjectCommandBase {
+export interface RpcProjectCloseSessionCommand extends RpcProjectSessionCommandBase {
 	readonly type: "close_session";
-	readonly sessionId: string;
 	readonly cancelRunning?: boolean;
 }
 
@@ -181,14 +183,15 @@ export interface RpcProjectRenameSessionCommand extends RpcProjectCommandBase {
 	readonly type: "rename_session";
 	readonly sessionId: string;
 	readonly name: string;
-	readonly expectedRevision?: RpcRevision;
+	readonly expectedRevision: RpcRevision;
 }
 
 /** `delete_session`: remove history; refuses while busy unless cancelled. */
 export interface RpcProjectDeleteSessionCommand extends RpcProjectCommandBase {
 	readonly type: "delete_session";
 	readonly sessionId: string;
-	readonly expectedRevision?: RpcRevision;
+	readonly sessionGeneration?: string;
+	readonly expectedRevision: RpcRevision;
 	readonly cancelRunning?: boolean;
 }
 
@@ -205,7 +208,7 @@ export interface RpcProjectSetModelRoleCommand extends RpcProjectCommandBase {
 	readonly roleId: string;
 	readonly scope: "user";
 	readonly selection: RpcModelRoleSelection;
-	readonly expectedRevision?: RpcRevision;
+	readonly expectedRevision: RpcRevision;
 }
 
 /** One role row of the catalog. */
@@ -218,6 +221,10 @@ export interface RpcProjectRoleDescriptor {
 	readonly nonConfigurableReason?: string;
 	/** Explicit configured value for the scope, `undefined` = not configured. */
 	readonly explicitValue?: string;
+	/** Explicit persisted layers, distinct from runtime/project-effective selection. */
+	readonly userValue: string | null;
+	readonly projectValue: string | null;
+	readonly candidateModels: readonly RpcModelRef[];
 	/** Resolved effective model identity, when it resolves. */
 	readonly effectiveModel?: RpcModelRef;
 	readonly unresolvedReason?: string;
@@ -332,15 +339,9 @@ export interface RpcProjectExecuteCommandResult {
 // Skill catalog & management (rpc-ui-protocol.md §14.6)
 // ---------------------------------------------------------------------------
 
-/** `skillId` encodes both the concrete source and the name: `"<source>/<name>"`. */
-export function formatRpcSkillId(source: string, name: string): string {
-	return `${source}/${name}`;
-}
-
-export function parseRpcSkillId(skillId: string): { source: string; name: string } {
-	const slash = skillId.indexOf("/");
-	if (slash <= 0 || slash >= skillId.length - 1) throw new Error(`Invalid skillId: ${skillId}`);
-	return { source: skillId.slice(0, slash), name: skillId.slice(slash + 1) };
+/** Opaque source + canonical concrete SKILL.md identity; names/aliases may change independently. */
+export function formatRpcSkillId(source: string, canonicalFilePath: string): string {
+	return `${source}/${Buffer.from(canonicalFilePath, "utf8").toString("base64url")}`;
 }
 
 export type RpcSkillState = "enabled" | "disabled" | "ignored" | "source_disabled" | "shadowed";
@@ -353,6 +354,7 @@ export interface RpcProjectSkillSummary {
 	readonly source: string;
 	/** `"user" | "project" | "builtin" | "package" | "custom"`-style scope label. */
 	readonly scope: string;
+	readonly writableScopes: readonly ("user" | "project")[];
 	readonly filePath: string;
 	readonly hidden: boolean;
 	/** Effective-vs-management state; management view may list non-active rows. */
@@ -371,7 +373,7 @@ export interface RpcProjectListSkillsCommand extends RpcProjectCommandBase {
 	/** `management`: full catalog incl. disabled/ignored/shadowed; `effective`: session view. */
 	readonly view: "management" | "effective";
 	readonly sessionId?: string;
-	readonly cursor?: number;
+	readonly cursor?: string;
 	readonly limit?: number;
 }
 
@@ -383,8 +385,8 @@ export interface RpcProjectSetSkillEnabledCommand extends RpcProjectCommandBase 
 	readonly type: "set_skill_enabled";
 	readonly skillId: string;
 	readonly enabled: boolean;
-	readonly scope: "user" | "project";
-	readonly expectedRevision?: RpcRevision;
+	readonly scope: "user";
+	readonly expectedRevision: RpcRevision;
 }
 
 export interface RpcProjectSetSkillEnabledResult {
@@ -394,6 +396,8 @@ export interface RpcProjectSetSkillEnabledResult {
 	/** Why the toggle did not take effect (source disabled, shadowed, …). */
 	readonly pendingReason?: string;
 	readonly revision: RpcRevision;
+	readonly adoptedSessions: readonly string[];
+	readonly pendingSessions: readonly string[];
 }
 
 export interface RpcProjectCopySkillCommand extends RpcProjectCommandBase {
@@ -401,7 +405,7 @@ export interface RpcProjectCopySkillCommand extends RpcProjectCommandBase {
 	readonly skillId: string;
 	readonly targetScope: "user" | "project";
 	readonly targetName: string;
-	readonly expectedRevision?: RpcRevision;
+	readonly expectedRevision: RpcRevision;
 }
 
 export interface RpcProjectCopySkillResult {
@@ -414,7 +418,7 @@ export interface RpcProjectCopySkillResult {
 export interface RpcProjectDeleteSkillCommand extends RpcProjectCommandBase {
 	readonly type: "delete_skill";
 	readonly skillId: string;
-	readonly expectedRevision?: RpcRevision;
+	readonly expectedRevision: RpcRevision;
 }
 
 export interface RpcProjectDeleteSkillResult {
@@ -446,9 +450,13 @@ export type RpcProjectSubagentStatus = "running" | "completed" | "failed" | "abo
 export interface RpcProjectSubagentSummary {
 	readonly subagentId: string;
 	readonly name: string;
+	readonly sessionId: string;
+	readonly parentAgentId?: string;
 	readonly agentSource?: string;
 	readonly description?: string;
 	readonly task?: string;
+	readonly assignment?: string;
+	readonly progress?: RpcSubagentSnapshot["progress"];
 	readonly status: RpcProjectSubagentStatus;
 	/** Whether the persisted transcript is readable right now. */
 	readonly recordReadable: boolean;
@@ -464,7 +472,7 @@ export interface RpcProjectGetSubagentsCommand extends RpcProjectCommandBase {
 	/** Parent session scope; required in project mode. */
 	readonly sessionId?: string;
 	readonly status?: "running" | "finished";
-	readonly cursor?: number | string;
+	readonly cursor?: string;
 	readonly limit?: number;
 }
 

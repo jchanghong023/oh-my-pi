@@ -620,8 +620,27 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 }
 
 /**
+ * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+ * compaction never runs on an `openai-codex` model other than `gpt-6-luna`, and
+ * luna always compacts at a fixed `low` effort. The coding-agent compaction
+ * candidate chain substitutes every other `openai-codex` candidate with this
+ * model; this module pins its effort.
+ */
+export const FORK_CODEX_COMPACTION_MODEL = {
+	provider: "openai-codex",
+	id: "gpt-6-luna",
+} as const;
+
+function isForkCodexCompactionModel(model: Model): boolean {
+	return model.provider === FORK_CODEX_COMPACTION_MODEL.provider && model.id === FORK_CODEX_COMPACTION_MODEL.id;
+}
+
+/**
  * Resolves the reasoning effort to send on a compaction LLM call.
  *
+ * - Fork contract: `openai-codex/gpt-6-luna` always compacts at `low` — the
+ *   session dial (high/max, the unset `high` default, or `Off`) must not leak
+ *   into its summarization calls.
  * - Explicit `Off` → `undefined` (omit reasoning entirely; the user said no thinking).
  * - `undefined` / `Inherit` → historical `Effort.High` default → clamped per model
  *   (preserves current behavior for users who never touched the dial).
@@ -635,6 +654,7 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
  * `requireSupportedEffort` throw.
  */
 function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined): Effort | undefined {
+	if (isForkCodexCompactionModel(model)) return clampThinkingLevelForModel(model, Effort.Low) ?? Effort.Low;
 	if (level === ThinkingLevel.Off) return undefined;
 	const requested: Effort =
 		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);

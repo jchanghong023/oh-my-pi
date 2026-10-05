@@ -19,7 +19,12 @@ import {
 	runTeamDiscussion,
 	TEAM_MAX_REVISION_ROUNDS,
 } from "@oh-my-pi/pi-coding-agent/team";
-import type { TeamParticipant, TeamSubagentCall, TeamSubagentRunner } from "@oh-my-pi/pi-coding-agent/team";
+import type {
+	TeamParticipant,
+	TeamProgressUpdate,
+	TeamSubagentCall,
+	TeamSubagentRunner,
+} from "@oh-my-pi/pi-coding-agent/team";
 
 function participantOf(model: Model, index: number, isSessionModel = false): TeamParticipant {
 	return { index, modelPattern: `${model.provider}/${model.id}`, model, isSessionModel };
@@ -205,7 +210,12 @@ function participants3(): TeamParticipant[] {
 
 async function run(
 	script: Script,
-	options?: { participants?: TeamParticipant[]; maxConcurrency?: number; signal?: AbortSignal },
+	options?: {
+		participants?: TeamParticipant[];
+		maxConcurrency?: number;
+		signal?: AbortSignal;
+		onProgress?: (update: TeamProgressUpdate) => void;
+	},
 ) {
 	const { runner, calls } = createScriptedRunner(script);
 	const result = await runTeamDiscussion({
@@ -216,9 +226,61 @@ async function run(
 		runner,
 		signal: options?.signal ?? new AbortController().signal,
 		maxConcurrency: options?.maxConcurrency ?? 8,
+		onProgress: options?.onProgress,
 	});
 	return { result, calls };
 }
+
+describe("team malformed-output gates", () => {
+	it("does not synthesize when all reviewers omit the structured verdict", async () => {
+		const { result, calls } = await run({ review: () => ({ reviewSummary: "Looks fine" }) });
+		expect(result.status).toBe("failed");
+		expect(calls.some(call => call.role === "synthesizer")).toBe(false);
+	});
+
+	it("does not install a revision whose recheck flags are missing", async () => {
+		const { result, calls } = await run({
+			review: () => reviewData({ blocking: 1 }),
+			revision: () => ({ ...revisionData(), revisedProposal: "invalid-revision-marker-43d", reviewFlags: {} }),
+			synthesis: () => synthesisData("A"),
+		});
+		expect(result.status).toBe("completed");
+		expect(result.droppedRecommendation).toBe(true);
+		expect(calls.filter(call => call.role === "reviser")).toHaveLength(3);
+		expect(calls.filter(call => call.role === "reviewer")).toHaveLength(3);
+		const synthesis = calls.find(call => call.role === "synthesizer");
+		expect(synthesis?.task).not.toContain("invalid-revision-marker-43d");
+	});
+});
+
+describe("team visible participant settlement", () => {
+	it("publishes proposer and reviewer failure in their own stage rather than waiting for the next stage", async () => {
+		const updates: TeamProgressUpdate[] = [];
+		await run(
+			{
+				proposal: call => (call.label.endsWith("A") ? { __fail: "unavailable" } : proposalData(call.label.at(-1)!)),
+				review: ({ target }) => (target === "C" ? { __fail: "review failed" } : reviewData()),
+			},
+			{ onProgress: update => updates.push(update) },
+		);
+		expect(
+			updates.some(
+				update =>
+					update.stage === "investigation" &&
+					update.participants.some(participant => participant.label === "A" && participant.state === "failed"),
+			),
+		).toBe(true);
+		expect(
+			updates.some(
+				update =>
+					update.stage === "review" &&
+					update.participants.some(
+						participant => participant.label === "review-C" && participant.state === "failed",
+					),
+			),
+		).toBe(true);
+	});
+});
 
 describe("team reviewer rotation", () => {
 	it("assigns the next different model in proposer order, wrapping around", () => {

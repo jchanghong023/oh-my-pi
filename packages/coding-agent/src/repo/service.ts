@@ -5,7 +5,7 @@ import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { pythonSymbols } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
-import { sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import { countNewlines, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
 import {
 	enumerateFiles,
 	indexedCandidate,
@@ -184,14 +184,16 @@ export class RepoService {
 			const output = await git.statusPorcelain({ untracked: "all", nulTerminated: true });
 			if (!stillCurrent()) return;
 			const paths: string[] = [];
-			for (const entry of output.split("\0")) {
-				if (!entry) continue;
-				if (entry.startsWith("  ")) {
-					paths.push(entry.slice(3));
-					continue;
+			const entries = output.split("\0");
+			for (let i = 0; i < entries.length; i++) {
+				const entry = entries[i];
+				if (entry.length < 4 || entry[2] !== " ") continue;
+				paths.push(entry.slice(3));
+				// Rename/copy sources are raw filenames, not another status record.
+				if (/[RC]/.test(entry.slice(0, 2))) {
+					const original = entries[++i];
+					if (original) paths.push(original);
 				}
-				if (entry.length >= 3 && entry[2] === " ") paths.push(entry.slice(3));
-				else paths.push(entry);
 			}
 			this.markChanged(paths);
 		} catch (error) {
@@ -247,7 +249,7 @@ export class RepoService {
 				qualname: moduleName,
 				kind: "module",
 				startLine: 1,
-				endLine: Math.max(1, file.text.split("\n").length),
+				endLine: Math.max(1, countNewlines(file.text) + (file.text.endsWith("\n") ? 0 : 1)),
 			},
 		];
 		const parsed = await pythonSymbols({ code: file.text, signal });
@@ -587,17 +589,18 @@ export class RepoService {
 			}
 			sql += " ORDER BY f.path LIMIT ?";
 			params.push(MAX_CANDIDATES + 1);
-			const rows = this.storage.db.query(sql).all(...params) as Array<{
+			const rows = this.storage.db.query(sql).iterate(...params) as Iterable<{
 				path: string;
 				category: RepoTextHit["category"];
 				text: string;
 			}>;
-			if (rows.length > MAX_CANDIDATES)
-				throw new Error("Repository query exceeds candidate limit; narrow path or query");
 			const foldedNeedle = needle.toLowerCase();
 			const foldedTokens = tokens.slice(1).map(token => token.toLowerCase());
 			const hits: Array<{ hit: RepoTextHit; score: number }> = [];
+			let candidates = 0;
 			for (const row of rows) {
+				if (++candidates > MAX_CANDIDATES)
+					throw new Error("Repository query exceeds candidate limit; narrow path or query");
 				const folded = row.text.toLowerCase();
 				const full = folded.indexOf(foldedNeedle);
 				let index = full;
@@ -643,7 +646,7 @@ export class RepoService {
 			const status = this.#statusSnapshot();
 			if (!status.exists || !name.trim()) return this.#page("symbol", name, options, status, []);
 			let sql =
-				"SELECT f.path,f.category,s.name,s.qualname,s.kind,s.start_line startLine,s.end_line endLine,s.signature FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.generation=? AND (instr(s.name_folded, ?) > 0 OR instr(s.qualname_folded, ?) > 0)";
+				"SELECT s.id symbolId,f.path,f.category,s.name,s.qualname,s.kind,s.start_line startLine,s.end_line endLine FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.generation=? AND (instr(s.name_folded, ?) > 0 OR instr(s.qualname_folded, ?) > 0)";
 			const lowered = name.toLowerCase();
 			const params: (string | number)[] = [status.generation!, lowered, lowered];
 			if (options.path) {
@@ -656,7 +659,7 @@ export class RepoService {
 			}
 			sql += " ORDER BY f.path,s.start_line,s.id LIMIT ?";
 			params.push(MAX_CANDIDATES + 1);
-			const hits = this.storage.db.query(sql).all(...params) as RepoSymbolHit[];
+			const hits = this.storage.db.query(sql).all(...params) as Array<RepoSymbolHit & { symbolId: number }>;
 			if (hits.length > MAX_CANDIDATES)
 				throw new Error("Repository symbol query exceeds candidate limit; narrow path or name");
 			hits.sort(
@@ -667,7 +670,19 @@ export class RepoService {
 					a.startLine - b.startLine ||
 					a.qualname.localeCompare(b.qualname, "en"),
 			);
-			return this.#page("symbol", name, options, status, hits);
+			const page = this.#page("symbol", name, options, status, hits);
+			if (page.hits.length === 0) return { ...page, hits: [] };
+			// A signature can span most of a 2 MiB file. Load only this bounded page,
+			// not every matching declaration, while retaining the same read snapshot.
+			const ids = page.hits.map(hit => hit.symbolId);
+			const signatures = this.storage.db
+				.query(`SELECT id,signature FROM symbols WHERE id IN (${ids.map(() => "?").join(",")})`)
+				.all(...ids) as Array<{ id: number; signature: string | null }>;
+			const byId = new Map(signatures.map(row => [row.id, row.signature]));
+			return {
+				...page,
+				hits: page.hits.map(({ symbolId, ...hit }) => ({ ...hit, signature: byId.get(symbolId) ?? undefined })),
+			};
 		});
 	}
 

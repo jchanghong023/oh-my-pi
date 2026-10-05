@@ -714,8 +714,8 @@ pub(crate) fn execute_external_command(
 	let cmd_args = args
 		.iter()
 		.filter_map(|arg| match arg {
-			CommandArg::String(s) => Some(OsString::from(s)),
-			CommandArg::OsString(s) => Some(s.clone()),
+			CommandArg::String(s) => Some(OsStr::new(s)),
+			CommandArg::OsString(s) => Some(s.as_os_str()),
 			CommandArg::Assignment(_) => None,
 		})
 		.collect::<Vec<_>>();
@@ -742,9 +742,13 @@ pub(crate) fn execute_external_command(
 		cmd_args.as_slice(),
 		false, /* empty environment? */
 	)?;
-	let marker_args = cmd_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
-	let marker_args = marker_args.iter().map(AsRef::as_ref).collect::<Vec<&str>>();
-	let mut marker_output = prepare_output_markers(&context, executable_path, &marker_args);
+	let mut marker_output = if context.params.command_output_marker().is_some() {
+		let marker_args = cmd_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
+		let marker_args = marker_args.iter().map(AsRef::as_ref).collect::<Vec<&str>>();
+		prepare_output_markers(&context, executable_path, &marker_args)
+	} else {
+		None
+	};
 
 
 	// Set up process group/session state.

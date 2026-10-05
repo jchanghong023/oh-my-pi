@@ -26,7 +26,7 @@ This document describes operator-visible behavior for session export, sharing, c
 | `/share`                                | Slash command (TUI/headless) | No                                            | No                                                                                         | Encrypted share link (gist or share server); temp HTML only for TUI custom handlers |
 | `/new`                                  | Interactive slash command    | Yes (starts an empty conversation)            | Switches identity and materializes a new header in persistent mode                         | None                                                                                |
 | `/fresh`                                | Slash command (TUI/headless) | Yes (provider-facing in-memory id/state only) | No; keeps current session file/header                                                      | None                                                                                |
-| `/clear`                                | Interactive slash command    | Yes (clears live/model conversation context)  | Retains identity/file/history; a lazy session still follows the normal persistence gate    | Appends `reset_boundary`                                                            |
+| `/clear`                                | TUI/ACP/RPC slash command    | Yes (clears live/model conversation context)  | Retains identity/file/history; a lazy session still follows the normal persistence gate    | Appends `reset_boundary`                                                            |
 | `/delete`                               | Interactive slash command    | Yes (starts an empty conversation)            | Attempts to delete the current persisted session and artifacts, then switches to a new one | None                                                                                |
 | `/fork`                                 | Interactive slash command    | Yes (active session identity changes)         | Creates new session file and switches current session to it (persistent mode only)         | Copies artifact directory to new session namespace when present                     |
 | `--fork <id\|path>`                     | CLI startup                  | Yes after session creation                    | Creates a new session fork from the selected source into current cwd/session dir           | Copies source artifacts recursively by default                                      |
@@ -243,10 +243,11 @@ while giving the provider stream state a clean slate.
 
 ## Clear
 
-Interactive `/clear` clears the current conversation context in place. It is
-available only in the TUI and is rejected while a response is streaming or a
+`/clear` clears the current conversation context in place through shared
+TUI/ACP/RPC business logic. It does not reset while a response is streaming or a
 foreground bash/Python execution is running. If compaction is active, the
-command aborts it and waits for it to stop before resetting.
+command aborts it and waits for it to stop before resetting; it does not create
+a new session or alter its id, title, cwd or transcript file.
 
 `AgentSession.resetSessionContext()`:
 

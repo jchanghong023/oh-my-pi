@@ -213,7 +213,7 @@ omp --continue                        # 继续上一次会话
 
 ### 魔法关键词与斜杠命令（fork 增强）
 
-消息以 `fullsend`、`ultrathink`、`orchestrate`、`workflowz` 开头会附加对应的隐藏提示；同名斜杠命令 `/fullsend`、`/ultrathink`、`/orchestrate`、`/workflowz` 都接受可选任务文本，例如 `/fullsend 完成并验证发布`。开关与语义见[设置参考](./settings-reference.md)的 `magicKeywords` 条目。
+提示词正文中独立出现小写 `fullsend`、`ultrathink`、`orchestrate`、`workflowz` 或 `jevify` 会按对应开关附加隐藏提示，不要求在消息开头；代码块、行内代码与 XML/HTML 区域不触发。同名斜杠命令 `/fullsend`、`/ultrathink`、`/orchestrate`、`/workflowz` 都接受可选任务文本，例如 `/fullsend 完成并验证发布`；`jevify` 是关键词而非新增同名斜杠命令。开关与语义见[设置参考](./settings-reference.md)的 `magicKeywords` 条目。
 
 ### Vim 模式（默认关闭）
 

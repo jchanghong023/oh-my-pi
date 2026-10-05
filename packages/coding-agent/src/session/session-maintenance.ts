@@ -27,6 +27,7 @@ import {
 	DEFAULT_SHAKE_CONFIG,
 	type CompactionSettings as EngineCompactionSettings,
 	effectiveReserveTokens,
+	FORK_CODEX_COMPACTION_MODEL,
 	invalidateMessageCache,
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
@@ -164,6 +165,31 @@ function canUseLiveProviderNativeCompaction(
 		candidate.provider === liveModel.provider &&
 		(candidate.api !== "anthropic-messages" || (candidate.api === liveModel.api && candidate.id === liveModel.id)) &&
 		shouldUseProviderNativeCompaction(candidate, settings)
+	);
+}
+
+/**
+ * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+ * replace an `openai-codex` compaction candidate with `gpt-6-luna`, so
+ * compaction on the Codex lane always runs on the cheap fast model at its
+ * pinned `low` effort (see `FORK_CODEX_COMPACTION_MODEL`). Non-codex models
+ * and luna itself pass through; luna missing from `availableModels` keeps the
+ * original candidate so compaction still has a chain to walk.
+ */
+export function substituteForkCodexCompactionModel(
+	model: Model | undefined,
+	availableModels: readonly Model[],
+): Model | undefined {
+	if (!model) return model;
+	if (model.provider !== FORK_CODEX_COMPACTION_MODEL.provider || model.id === FORK_CODEX_COMPACTION_MODEL.id) {
+		return model;
+	}
+	return (
+		availableModels.find(
+			candidate =>
+				candidate.provider === FORK_CODEX_COMPACTION_MODEL.provider &&
+				candidate.id === FORK_CODEX_COMPACTION_MODEL.id,
+		) ?? model
 	);
 }
 
@@ -3360,19 +3386,25 @@ export class SessionMaintenance {
 		};
 
 		if (preferredModel) {
+			// Explicit `compactionModel` configuration outranks the fork default —
+			// a user-named target is never substituted (see
+			// substituteForkCodexCompactionModel).
 			addCandidate(resolveCompactionConfiguredTarget(preferredModel, availableModels));
 		}
-		addCandidate(preferredModel ?? undefined);
+		addCandidate(substituteForkCodexCompactionModel(preferredModel ?? undefined, availableModels));
 		for (const role of CHAT_MODEL_ROLE_IDS) {
 			addCandidate(
-				resolveRoleModelFull(this.#host.settings, role, availableModels, preferredModel ?? undefined).model,
+				substituteForkCodexCompactionModel(
+					resolveRoleModelFull(this.#host.settings, role, availableModels, preferredModel ?? undefined).model,
+					availableModels,
+				),
 			);
 		}
 
 		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 		for (const model of sortedByContext) {
 			if (!seen.has(`${model.provider}/${model.id}`)) {
-				addCandidate(model);
+				addCandidate(substituteForkCodexCompactionModel(model, availableModels));
 				break;
 			}
 		}

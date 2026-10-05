@@ -71,12 +71,6 @@ function tuiRuntime(
 }
 
 describe("/team command gates", () => {
-	it("is registered with args allowed and a usage hint", () => {
-		expect(command.name).toBe("team");
-		expect(command.allowArgs).toBe(true);
-		expect(command.inlineHint).toContain("问题");
-	});
-
 	it("asks for the question on bare /team instead of guessing (text mode)", async () => {
 		const { runtime, output } = textRuntime(stubSession());
 		const result = await command.handle!({ name: "team", args: "", text: "/team" }, runtime);

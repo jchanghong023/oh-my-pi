@@ -32,7 +32,7 @@ interface FactoryState {
 	abortCalls: number;
 }
 
-interface SessionFixture {
+interface SessionFixture extends AsyncDisposable {
 	container: RpcProjectSessionContainer;
 	revisions: string[];
 	state: FactoryState;
@@ -76,20 +76,29 @@ async function createSessionFixture(dirs: SessionDirs): Promise<SessionFixture> 
 	};
 	const createSession = async (): Promise<RpcProjectCreatedSession> => {
 		state.factoryCalls++;
-		const manager = SessionManager.create(dirs.cwd, dirs.sessions);
+		let manager = SessionManager.create(dirs.cwd, dirs.sessions);
 		const fake = {
-			sessionId: manager.getSessionId(),
-			sessionFile: manager.getSessionFile(),
+			get sessionId() {
+				return manager.getSessionId();
+			},
+			get sessionFile() {
+				return manager.getSessionFile();
+			},
 			sessionName: undefined as string | undefined,
-			sessionManager: manager,
+			get sessionManager() {
+				return manager;
+			},
 			setSessionName: async (name: string, source: string) => {
 				state.setSessionNameCalls.push({ name, source });
 				fake.sessionName = name;
+				await manager.setSessionName(name, source as "user");
+				await manager.flush();
 				return true;
 			},
 			switchSession: async (sessionFile: string) => {
 				state.switchCalls.push(sessionFile);
-				fake.sessionFile = sessionFile;
+				await manager.close();
+				manager = await SessionManager.open(sessionFile, dirs.sessions);
 				return true;
 			},
 			dispose: async () => {
@@ -117,6 +126,7 @@ async function createSessionFixture(dirs: SessionDirs): Promise<SessionFixture> 
 		onChanged: revision => revisions.push(revision),
 	});
 	return {
+		[Symbol.asyncDispose]: () => container.disposeAll("test fixture cleanup"),
 		container,
 		revisions,
 		state,
@@ -140,7 +150,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("create adopts the factory session, persists it on disk and bumps the revision", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -170,7 +180,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("create with a name applies setSessionName(user); blank names are rejected", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -189,7 +199,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("resume loads a saved session by id, coalesces concurrent loads and is idempotent", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -223,7 +233,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("resume of an unknown session id rejects with not_found", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -239,7 +249,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("list merges disk and loaded sessions (in-memory wins) and validates pagination limits", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -278,7 +288,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 		// Offset pagination walks every session exactly once.
 		const pageOne = await fx.container.list({ limit: 2 });
 		expect(pageOne.sessions).toHaveLength(2);
-		expect(pageOne.nextCursor).toBe(2);
+		expect(typeof pageOne.nextCursor).toBe("string");
 		const pageTwo = await fx.container.list({ cursor: pageOne.nextCursor, limit: 2 });
 		expect(pageTwo.sessions).toHaveLength(1);
 		expect(pageTwo.nextCursor).toBeUndefined();
@@ -297,13 +307,13 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("close rejects a busy session and unloads it when cancelRunning is set", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
 		const record = await fx.container.create();
 		const bundle = fx.state.bundles.at(-1)!;
-		bundle.setHost(makeHost({ isStreaming: true }));
+		bundle.setHost!(makeHost({ isStreaming: true }));
 
 		// The attached host feeds the run state shown in the directory.
 		const streaming = await fx.container.list({ loadState: "loaded" });
@@ -337,7 +347,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("delete removes loaded and saved-only sessions together with their files", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});
@@ -365,7 +375,7 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 	test("rename of a not-loaded session rewrites the saved title and re-lists under the new name", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
-		const fx = await createSessionFixture({
+		await using fx = await createSessionFixture({
 			cwd: path.resolve(cwdDir.path()),
 			sessions: path.resolve(sessionsDir.path()),
 		});

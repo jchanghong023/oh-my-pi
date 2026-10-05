@@ -144,6 +144,8 @@ describe("composer slash completion", () => {
 
 	it("stops completing once the command's arguments start", () => {
 		expect(completionItems("/dump raw", commands, [])).toEqual([]);
+		expect(completionItems("/dump\traw", commands, [])).toEqual([]);
+		expect(completionItems("/dump\nraw", commands, [])).toEqual([]);
 	});
 
 	it("offers host directories for /move and completes to the absolute path", () => {
@@ -154,6 +156,18 @@ describe("composer slash completion", () => {
 		const items = completionItems("/move su", commands, dirs);
 		expect(items.map(item => item.label)).toEqual(["sub/"]);
 		expect(items[0]).toMatchObject({ insert: "/move /tmp/sub", description: "/tmp/sub" });
+	});
+
+	it("preserves spaces in host directory arguments and completion paths", () => {
+		const prefix = "C:\\Work projects\\su";
+		const path = "C:\\Work projects\\sub";
+		expect(directoryArgument(`/move ${prefix}`)).toEqual({ command: "move", prefix });
+		expect(directoryArgument("/add-dir\t/tmp/space dir")).toEqual({
+			command: "add-dir",
+			prefix: "/tmp/space dir",
+		});
+		expect(completionItems(`/move ${prefix}`, commands, [{ path, label: "sub/" }])[0]?.insert).toBe(`/move ${path}`);
+		expect(directoryArgument("/move /tmp\nanother line")).toBeNull();
 	});
 
 	it("keeps other commands' arguments out of the directory source", () => {

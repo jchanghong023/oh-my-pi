@@ -9,6 +9,7 @@ on:
       - 'packages/collab-web/**'
       - 'packages/wire/**'
       - 'packages/utils/**'
+      - 'package.json'
       - 'bun.lock'
       - '.github/workflows/docs-pages.yml'
   workflow_dispatch:

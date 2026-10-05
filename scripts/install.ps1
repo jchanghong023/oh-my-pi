@@ -64,86 +64,7 @@ function Invoke-Native {
     }
 }
 
-function Find-BashShell {
-    # Check Git Bash first (most common on Windows)
-    $gitBash = "C:\Program Files\Git\bin\bash.exe"
-    if (Test-Path $gitBash) {
-        return $gitBash
-    }
-
-    # Check bash.exe on PATH (Cygwin, MSYS2, WSL)
-    try {
-        $bashCmd = Get-Command bash.exe -ErrorAction Stop
-        return $bashCmd.Source
-    } catch {
-        return $null
-    }
-}
-
-function Configure-BashShell {
-    try {
-        $settingsDir = Join-Path $env:USERPROFILE ".omp\agent"
-        $settingsFile = Join-Path $settingsDir "settings.json"
-
-        # Check if settings.json already has a shellPath configured
-        if (Test-Path $settingsFile) {
-            try {
-                $existingSettings = Get-Content $settingsFile -Raw | ConvertFrom-Json
-                if ($existingSettings.shellPath) {
-                    Write-Host "Bash shell already configured: $($existingSettings.shellPath)" -ForegroundColor Cyan
-                    return
-                }
-            } catch {
-                # Invalid JSON, we'll overwrite it
-            }
-        }
-
-        $bashPath = Find-BashShell
-
-        if ($bashPath) {
-            Write-Host "Found bash shell: $bashPath" -ForegroundColor Cyan
-
-            # Create settings directory if needed
-            if (-not (Test-Path $settingsDir)) {
-                New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
-            }
-
-            # Read existing settings or create new. ConvertFrom-Json -AsHashtable
-            # requires PowerShell 6+; build the hashtable manually so Windows
-            # PowerShell 5.1 merges instead of clobbering existing settings.
-            $settings = @{}
-            if (Test-Path $settingsFile) {
-                try {
-                    $parsed = Get-Content $settingsFile -Raw | ConvertFrom-Json
-                    foreach ($prop in $parsed.PSObject.Properties) {
-                        $settings[$prop.Name] = $prop.Value
-                    }
-                } catch {
-                    $settings = @{}
-                }
-            }
-
-            # Set shellPath
-            $settings["shellPath"] = $bashPath
-
-            # Write settings
-            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsFile -Encoding UTF8
-            Write-Host "[OK] Configured shell path in $settingsFile" -ForegroundColor Green
-        } else {
-            Write-Host ""
-            Write-Host "No bash shell found - OMP will use its built-in shell." -ForegroundColor Cyan
-            Write-Host "  For shell snapshots and interactive terminals, install Git for Windows:" -ForegroundColor Cyan
-            Write-Host "    https://git-scm.com/download/win" -ForegroundColor Cyan
-            Write-Host "  Or set a custom path in:" -ForegroundColor Cyan
-            Write-Host "    $settingsFile" -ForegroundColor Cyan
-            Write-Host '    { "shellPath": "C:\\path\\to\\bash.exe" }' -ForegroundColor Cyan
-        }
-    } catch {
-        Write-Host "[WARN] Could not configure bash shell: $_" -ForegroundColor Yellow
-    }
-}
-
-# PATH and shell configuration shared by the install and repair paths.
+# PATH configuration shared by the install and repair paths.
 function Set-InstallEnvironment {
     # Add to PATH if not already there
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -163,7 +84,6 @@ function Set-InstallEnvironment {
         }
     }
 
-    Configure-BashShell
     return $needsRestart
 }
 
@@ -246,6 +166,10 @@ function Test-InstalledBinaryVersion {
 }
 
 function Install-Binary {
+    $OutPath = Join-Path $InstallDir "omp.exe"
+    if (Test-Path -LiteralPath $OutPath -PathType Container) {
+        throw "Refusing to replace a directory at $OutPath"
+    }
     if ($Ref) {
         Write-Host "Fetching release $Ref..."
         try {
@@ -264,7 +188,6 @@ function Install-Binary {
     }
     Write-Host "Using version: $Latest"
 
-    $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-InstalledBinaryVersion -TargetPath $OutPath -ReleaseTag $Latest) {
         Write-Host "omp $Latest is already installed at $OutPath"
         if (Set-InstallEnvironment) {
@@ -311,6 +234,10 @@ function Install-Binary {
                 $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
                 throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
             }
+        }
+
+        if (-not (Test-InstalledBinaryVersion -TargetPath $TmpPath -ReleaseTag $Latest)) {
+            throw "The downloaded omp binary cannot start or does not report $Latest; the existing install was not changed."
         }
 
         $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))

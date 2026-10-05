@@ -5,7 +5,6 @@ import type { ExtensionAskDialogQuestion } from "@oh-my-pi/pi-coding-agent/exten
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message) => ({ id, type: "response", command, success: false, error: message }) as RpcResponse,
@@ -188,7 +187,12 @@ describe("RpcForkAskBroker (4.3)", () => {
 				},
 			],
 		});
-		expect(emitted.length).toBe(1);
+		expect(emitted.at(-1)).toMatchObject({
+			type: "extension_ui_request",
+			method: "cancel",
+			targetId: (emitted[0] as Record<string, unknown>).id,
+		});
+		expect(host.hasPendingRequests).toBe(false);
 	});
 
 	test("abort resolves undefined and emits a cancel frame targeting the ask id", async () => {
@@ -204,6 +208,25 @@ describe("RpcForkAskBroker (4.3)", () => {
 		await expect(pending).resolves.toBeUndefined();
 		const cancel = emitted.at(-1) as Record<string, unknown>;
 		expect(cancel).toMatchObject({ type: "extension_ui_request", method: "cancel", targetId: id });
+	});
+	test("pre-aborted requests emit nothing, and captured dialog functions fail after disconnect", async () => {
+		const { emitted, host, broker } = setup();
+		host.activate();
+		const ask = broker.getAskDialog()!;
+		const controller = new AbortController();
+		controller.abort();
+		await expect(ask(twoQuestions, { signal: controller.signal })).resolves.toBeUndefined();
+		expect(emitted).toEqual([]);
+		expect(host.hasPendingRequests).toBe(false);
+
+		const pending = ask(twoQuestions);
+		expect(host.hasPendingRequests).toBe(true);
+		const failure = pending.catch(error => error);
+		host.dispose("closed");
+		expect(await failure).toBeInstanceOf(Error);
+		expect(host.hasPendingRequests).toBe(false);
+		await expect(ask(twoQuestions)).rejects.toThrow("closed");
+		expect(emitted).toHaveLength(1);
 	});
 
 	test("client disconnect fails pending asks (fail-closed)", async () => {

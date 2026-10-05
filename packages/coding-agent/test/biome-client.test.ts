@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Process } from "@oh-my-pi/pi-natives";
+import type { Subprocess } from "bun";
 import { BiomeClient } from "../src/lsp/clients/biome-client";
 import type { ServerConfig } from "../src/lsp/types";
 import { writeFakeExecutable } from "./helpers/fake-executable";
@@ -144,6 +146,63 @@ describe("BiomeClient lint", () => {
 
 		expect(rejected).toBe(true);
 		expect(Date.now() - started).toBeLessThan(2_000);
+	}, 5_000);
+
+	test("still cancels after both output pipes reach EOF while the process stays alive", async () => {
+		const tempDir = await makeTempDir();
+		vi.useFakeTimers();
+		const exit = Promise.withResolvers<number>();
+		const waitingForExit = Promise.withResolvers<void>();
+		let exitCode: number | null = null;
+		const terminate = vi.fn(async () => {
+			exitCode = 0;
+			exit.resolve(0);
+			return true;
+		});
+		const nativeFromPid = Process.fromPid.bind(Process);
+		const fromPid = spyOn(Process, "fromPid").mockImplementation(pid =>
+			pid === -1 ? ({ terminate } as unknown as Process) : nativeFromPid(pid),
+		);
+		const spawn = spyOn(Bun, "spawn").mockReturnValue({
+			pid: -1,
+			get exitCode() {
+				return exitCode;
+			},
+			killed: false,
+			stdout: new ReadableStream<Uint8Array>({ start: controller => controller.close() }),
+			stderr: new ReadableStream<Uint8Array>({ start: controller => controller.close() }),
+			get exited() {
+				waitingForExit.resolve();
+				return exit.promise;
+			},
+		} as unknown as Subprocess);
+		const controller = new AbortController();
+		const reason = new Error("diagnostics cancelled");
+		const lint = new BiomeClient(biomeConfig("biome"), tempDir).lint(
+			path.join(tempDir, "example.ts"),
+			controller.signal,
+		);
+		const outcome = lint.then(
+			() => undefined,
+			error => error,
+		);
+		const deadline = Promise.withResolvers<undefined>();
+		const timer = setTimeout(() => deadline.resolve(undefined), 1_000);
+		try {
+			await waitingForExit.promise;
+			controller.abort(reason);
+			for (let flush = 0; flush < 32; flush++) await Promise.resolve();
+			vi.advanceTimersByTime(1_000);
+			expect(await Promise.race([outcome, deadline.promise])).toBe(reason);
+			expect(terminate).toHaveBeenCalledTimes(1);
+		} finally {
+			clearTimeout(timer);
+			exit.resolve(0);
+			await outcome;
+			spawn.mockRestore();
+			fromPid.mockRestore();
+			vi.useRealTimers();
+		}
 	}, 5_000);
 
 	test.skipIf(repoBiome === null)("surfaces Biome 2.x --reporter=json diagnostics", async () => {

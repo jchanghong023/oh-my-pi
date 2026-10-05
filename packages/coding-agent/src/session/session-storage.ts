@@ -28,6 +28,8 @@ export interface SessionStorageStat {
 	size: number;
 	mtimeMs: number;
 	mtime: Date;
+	/** File identity-change evidence; unavailable for backends without filesystem metadata. */
+	ctimeMs?: number;
 }
 
 export interface SessionStorageWriter {
@@ -874,7 +876,7 @@ export class FileSessionStorage implements SessionStorage {
 
 	statSync(path: string): SessionStorageStat {
 		const stats = fs.statSync(path);
-		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime };
+		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime, ctimeMs: stats.ctimeMs };
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {

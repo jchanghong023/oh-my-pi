@@ -45,12 +45,14 @@ const statusLines = new StatusLineTestComponents();
  * set fits (or overflows) identically from any cwd.
  */
 const originalProjectDir = getProjectDir();
-const fixtureProjectDir = path.join(os.tmpdir(), "omp-status-line-context-cache-fixture-project-root");
+let fixtureRoot: string | undefined;
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme();
+	fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-context-cache-"));
+	const fixtureProjectDir = path.join(fixtureRoot, "omp-status-line-context-cache-fixture-project-root");
 	fs.mkdirSync(fixtureProjectDir, { recursive: true });
 	setProjectDir(fixtureProjectDir);
 });
@@ -59,7 +61,7 @@ afterAll(() => {
 	statusLines.dispose();
 	resetSettingsForTest();
 	setProjectDir(originalProjectDir);
-	fs.rmSync(fixtureProjectDir, { recursive: true, force: true });
+	if (fixtureRoot) fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 interface Fake {

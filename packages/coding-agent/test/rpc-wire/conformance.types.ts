@@ -17,6 +17,7 @@ import type { AssistantMessageEvent, ImageContent, Model, Usage } from "@oh-my-p
 import type { BashResult } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import type { RpcForkCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type {
 	RpcAgentSessionEventFrame,
@@ -124,18 +125,18 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : { left: A; right: 
 type CommandName = RpcCommand["type"];
 
 /**
- * Fork carve-out: the protocol-v3 command surface (queue/jobs/plan/session/
- * search/feedback controllers in `rpc-fork-*.ts` plus the `/btw` side
- * questions) is negotiation-gated and deliberately NOT modeled in the
- * generated wire schema — clients reach it through raw requests after
- * `negotiate_protocol {protocolVersion: 3}`. The same holds for fork-only
+ * Fork carve-out: the protocol-v3 command surface in `rpc-fork-*.ts` is
+ * negotiation-gated and deliberately not modeled in the generated wire
+ * schema; clients use raw requests after negotiating v3. The pre-adopted
+ * upstream `/btw` commands are available on every protocol version but
+ * likewise remain outside the generated schema. The same holds for fork-only
  * fields the server accepts or emits on otherwise-stock definitions: the
  * structured `attachments` parameter on the prompt-like commands, rich-ask
  * `sensitive`, `approvalMode` on the session state, goal `iteration`, and the
  * project-mode `ready` stamps. Conformance below pins only the stock surface;
  * each carve-out shrinks when an upstream PR lands the field on the wire.
  */
-type ForkCommandName = Exclude<CommandName, keyof Wire.RpcWireCommands>;
+type ForkCommandName = RpcForkCommand["type"] | "btw" | "btw_cancel" | "get_btw_history";
 type StockCommandName = Exclude<CommandName, ForkCommandName>;
 
 /** Fork-only parameter fields the server accepts on stock commands. */

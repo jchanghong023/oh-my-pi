@@ -182,6 +182,8 @@ export class ChildProcess<In extends InMask = InMask> {
 	#exitReasonPending?: Exception;
 	#stderrDone: Promise<void>;
 	#exited: Promise<number>;
+	#stdoutDone = false;
+	#stdoutSettled: PromiseWithResolvers<void> | undefined;
 	#openPipeReaders = 1;
 	// Pipe reads race this cutoff only when attachTimeout() configures a
 	// command deadline. Untimed commands preserve complete EOF-based capture.
@@ -457,8 +459,11 @@ export class ChildProcess<In extends InMask = InMask> {
 			}
 		} catch {
 			// A cancelled or failed read keeps whatever was already collected.
+		} finally {
+			this.#openPipeReaders--;
+			reader.releaseLock();
+			this.#markStdoutDone();
 		}
-		this.#openPipeReaders--;
 		return out + dec.decode();
 	}
 
@@ -486,6 +491,7 @@ export class ChildProcess<In extends InMask = InMask> {
 		} finally {
 			this.#openPipeReaders--;
 			reader.releaseLock();
+			this.#markStdoutDone();
 		}
 
 		const bytes = new Uint8Array(length);
@@ -495,6 +501,13 @@ export class ChildProcess<In extends InMask = InMask> {
 			offset += chunk.byteLength;
 		}
 		return bytes;
+	}
+
+	#markStdoutDone(): void {
+		this.#stdoutDone = true;
+		const settled = this.#stdoutSettled;
+		this.#stdoutSettled = undefined;
+		settled?.resolve();
 	}
 
 	async #readOutputBytes(waitForCleanExit = false): Promise<Uint8Array<ArrayBuffer>> {
@@ -572,7 +585,10 @@ export class ChildProcess<In extends InMask = InMask> {
 		const onAbort = () => this.kill(new AbortError(signal.reason, "<cancelled>"));
 		if (signal.aborted) return void onAbort();
 		signal.addEventListener("abort", onAbort, { once: true });
-		this.#exited.catch(() => {}).finally(() => signal.removeEventListener("abort", onAbort));
+		const stdoutDone = this.#stdoutDone ? undefined : (this.#stdoutSettled ??= Promise.withResolvers<void>()).promise;
+		void Promise.allSettled([this.#exited, this.#stderrDone, stdoutDone]).then(() =>
+			signal.removeEventListener("abort", onAbort),
+		);
 	}
 
 	#clearTimeout(): void {

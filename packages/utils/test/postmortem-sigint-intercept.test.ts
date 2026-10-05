@@ -41,11 +41,6 @@ if (process.argv.includes(exitFlag)) {
 
 if (![exitFlag, consumeFlag, throwFlag, unsubscribeFlag].some(flag => process.argv.includes(flag))) {
 	describe("postmortem SIGINT interceptor dispatch", () => {
-		it("exports the interceptor registration and dispatch surface", () => {
-			expect(typeof postmortem.interceptSigint).toBe("function");
-			expect(typeof postmortem.handleSigint).toBe("function");
-		});
-
 		it("runs the signal teardown with reason sigint and exits 130 without an interceptor", async () => {
 			const child = Bun.spawn([process.execPath, "run", import.meta.path, exitFlag], {
 				stdin: "ignore",

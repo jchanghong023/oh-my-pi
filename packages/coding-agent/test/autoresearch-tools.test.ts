@@ -177,13 +177,7 @@ describe("init_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		// Windows can hold freshly written sqlite files (AV scan queue) well
-		// past close(); removal is best-effort and the OS reclaims the rest.
-		try {
-			await dbOverride.remove();
-		} catch {
-			// best-effort
-		}
+		await dbOverride.remove();
 	});
 
 	it("opens a new session and persists scope and metric metadata", async () => {
@@ -362,13 +356,7 @@ describe("run_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		// Windows can hold freshly written sqlite files (AV scan queue) well
-		// past close(); removal is best-effort and the OS reclaims the rest.
-		try {
-			await dbOverride.remove();
-		} catch {
-			// best-effort
-		}
+		await dbOverride.remove();
 	});
 
 	it("rejects when no session is active", async () => {
@@ -459,13 +447,7 @@ describe("log_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		// Windows can hold freshly written sqlite files (AV scan queue) well
-		// past close(); removal is best-effort and the OS reclaims the rest.
-		try {
-			await dbOverride.remove();
-		} catch {
-			// best-effort
-		}
+		await dbOverride.remove();
 	});
 
 	async function setupRun(dir: string, runtime = createSessionRuntime()) {

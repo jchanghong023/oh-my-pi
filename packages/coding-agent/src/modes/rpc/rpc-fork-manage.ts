@@ -17,7 +17,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import type { EventBus } from "../../utils/event-bus";
 import {
 	addMCPServer,
@@ -46,7 +47,7 @@ import type { AnySetting } from "../../config/registry";
 import { discoverAgents } from "../../task/discovery";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
-import { asRpcForkServiceContext, type RpcForkServiceContext } from "./rpc-fork-config";
+import { asRpcForkServiceContext, saveRpcUserSetting, type RpcForkServiceContext } from "./rpc-fork-config";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
@@ -227,15 +228,14 @@ export class RpcForkManageController {
 				"unknown_mcp_server",
 			);
 		}
-		// The session-owned MCPManager is not reachable from the RPC layer, so an
-		// immediate reconnect cannot be forced here; connections re-establish on
-		// their next use (the manager's own reconnect ladder) or in new sessions.
-		this.#statusCache.set(name, { status: "reconnecting" });
-		return this.host.context.success(command.id, "mcp_reconnect", {
-			name,
-			triggered: false,
-			detail: "Reconnect deferred: the connection re-establishes on next use or in a new session",
-		});
+		// This surface has no reconnect service: report unsupported without
+		// overwriting the last observed connection state.
+		return this.host.context.error(
+			command.id,
+			"mcp_reconnect",
+			"Immediate MCP reconnect is not supported; use the connection's normal retry or a new session",
+			"unsupported",
+		);
 	}
 
 	emitSettingsChanged(scope: "user" | "project"): void {
@@ -257,12 +257,24 @@ export class RpcForkManageController {
 	}
 
 	async #setSkillSourceEnabled(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { source, enabled } = command as { source?: unknown; enabled?: unknown };
+		const { source, enabled, scope, expectedRevision } = command as {
+			source?: unknown;
+			enabled?: unknown;
+			scope?: unknown;
+			expectedRevision?: unknown;
+		};
 		if (typeof source !== "string" || typeof enabled !== "boolean") {
 			return this.host.context.error(command.id, "set_skill_source_enabled", "source and enabled are required");
 		}
-		const [provider, level] = source.split(":", 2);
-		const key = SKILL_SOURCE_KEYS[`${provider ?? ""}:${level === "project" ? "project" : "user"}`];
+		if (scope !== undefined && scope !== "user") {
+			return this.host.context.error(
+				command.id,
+				"set_skill_source_enabled",
+				"Only user scope is writable",
+				"read_only_scope",
+			);
+		}
+		const key = Object.hasOwn(SKILL_SOURCE_KEYS, source) ? SKILL_SOURCE_KEYS[source] : undefined;
 		if (!key) {
 			return this.host.context.error(
 				command.id,
@@ -271,19 +283,72 @@ export class RpcForkManageController {
 				"unsupported_source",
 			);
 		}
-		key.set(this.#ctx.settings, enabled);
+		let revision: string | undefined;
+		try {
+			if (expectedRevision === undefined) key.set(this.#ctx.settings, enabled);
+			else revision = await saveRpcUserSetting(this.#ctx.settings, key.id, enabled, expectedRevision);
+		} catch (error) {
+			return this.host.context.error(
+				command.id,
+				"set_skill_source_enabled",
+				errorMessage(error),
+				isRecord(error) && typeof error.code === "string" ? error.code : undefined,
+			);
+		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "set_skill_source_enabled", { source, enabled });
+		return this.host.context.success(command.id, "set_skill_source_enabled", {
+			source,
+			enabled,
+			...(revision ? { revision } : {}),
+		});
 	}
 
 	async #setSkillIgnored(command: RpcForkCommandBase): Promise<RpcResponse> {
-		const { name, ignored } = command as { name?: unknown; ignored?: unknown };
+		const { name, ignored, scope, expectedRevision } = command as {
+			name?: unknown;
+			ignored?: unknown;
+			scope?: unknown;
+			expectedRevision?: unknown;
+		};
 		if (typeof name !== "string" || typeof ignored !== "boolean") {
 			return this.host.context.error(command.id, "set_skill_ignored", "name and ignored are required");
 		}
-		cfgSkillsIgnoredSkills.setMember(this.#ctx.settings, name, { member: ignored });
+		if (scope !== undefined && scope !== "user") {
+			return this.host.context.error(
+				command.id,
+				"set_skill_ignored",
+				"Only user scope is writable",
+				"read_only_scope",
+			);
+		}
+		let revision: string | undefined;
+		try {
+			if (expectedRevision === undefined) {
+				cfgSkillsIgnoredSkills.setMember(this.#ctx.settings, name, { member: ignored });
+			} else {
+				const raw = this.#ctx.settings.getUserSettingValue(cfgSkillsIgnoredSkills.id);
+				const current = Array.isArray(raw) ? raw : [];
+				const next = ignored
+					? current.includes(name)
+						? current
+						: [...current, name]
+					: current.filter(value => value !== name);
+				revision = await saveRpcUserSetting(this.#ctx.settings, cfgSkillsIgnoredSkills.id, next, expectedRevision);
+			}
+		} catch (error) {
+			return this.host.context.error(
+				command.id,
+				"set_skill_ignored",
+				errorMessage(error),
+				isRecord(error) && typeof error.code === "string" ? error.code : undefined,
+			);
+		}
 		this.emitSettingsChanged("user");
-		return this.host.context.success(command.id, "set_skill_ignored", { name, ignored });
+		return this.host.context.success(command.id, "set_skill_ignored", {
+			name,
+			ignored,
+			...(revision ? { revision } : {}),
+		});
 	}
 
 	async #listAgentDefinitions(command: RpcForkCommandBase): Promise<RpcResponse> {
@@ -330,20 +395,28 @@ export class RpcForkManageController {
 		}
 		const projectDir = path.join(this.#ctx.cwd, ".omp", "agents");
 		await fs.mkdir(projectDir, { recursive: true });
-		// Frontmatter values are emitted as JSON double-quoted scalars: legal YAML
-		// that cannot break out of the document regardless of description content.
-		const tools = definition.tools as string[] | undefined;
-		const frontmatter: string[] = [
-			`name: ${JSON.stringify(definition.name)}`,
-			`description: ${JSON.stringify(definition.description)}`,
-		];
-		if (tools && tools.length > 0) {
-			frontmatter.push(`tools: [${tools.map(tool => JSON.stringify(tool)).join(", ")}]`);
-		}
-		if (typeof definition.model === "string") frontmatter.push(`model: ${JSON.stringify(definition.model)}`);
-		const body = typeof definition.systemPrompt === "string" ? definition.systemPrompt : definition.description;
 		const filePath = path.join(projectDir, `${definition.name}.md`);
-		await fs.writeFile(filePath, `---\n${frontmatter.join("\n")}\n---\n\n${body}\n`, "utf-8");
+		let frontmatter: Record<string, unknown> = {};
+		let body = definition.description;
+		try {
+			const parsed = parseFrontmatter(await fs.readFile(filePath, "utf-8"), {
+				location: filePath,
+				level: "fatal",
+				normalize: false,
+				repair: false,
+				rawKeys: true,
+			});
+			frontmatter = parsed.frontmatter;
+			body = parsed.body;
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		frontmatter.name = definition.name;
+		frontmatter.description = definition.description;
+		if (definition.tools !== undefined) frontmatter.tools = definition.tools;
+		if (typeof definition.model === "string") frontmatter.model = definition.model;
+		if (typeof definition.systemPrompt === "string") body = definition.systemPrompt;
+		await fs.writeFile(filePath, `---\n${stringifyYamlConfig(frontmatter).trimEnd()}\n---\n${body}`, "utf-8");
 		this.emitSettingsChanged("project");
 		return this.host.context.success(command.id, "upsert_agent_definition", { name: definition.name, filePath });
 	}
@@ -355,7 +428,8 @@ export class RpcForkManageController {
 		}
 		const result = await discoverAgents(this.#ctx.cwd);
 		const agent = result.agents.find(candidate => candidate.name === name);
-		if (!agent?.filePath || agent.source === "bundled") {
+		const projectDir = path.resolve(this.#ctx.cwd, ".omp", "agents");
+		if (!agent?.filePath || agent.source !== "project" || path.dirname(path.resolve(agent.filePath)) !== projectDir) {
 			return this.host.context.error(
 				command.id,
 				"delete_agent_definition",

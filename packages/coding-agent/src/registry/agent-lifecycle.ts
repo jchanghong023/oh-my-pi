@@ -503,6 +503,39 @@ export class AgentLifecycleManager {
 		return true;
 	}
 
+	/** Release a root's current descendants, fenced against replacement of the root ref. */
+	async releaseDescendants(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+		if (this.#registry.get(root.id) !== root) return;
+		const refs = this.#registry.list();
+		const descendants = new Set([root.id]);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const ref of refs) {
+				if (ref.parentId && descendants.has(ref.parentId) && !descendants.has(ref.id)) {
+					descendants.add(ref.id);
+					changed = true;
+				}
+			}
+		}
+		await Promise.all(
+			refs
+				.filter(ref => ref !== root && descendants.has(ref.id))
+				.map(async ref => {
+					const release = this.release(ref.id, ref).then(() => {});
+					try {
+						await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
+					} catch (error) {
+						if (Date.now() >= deadlineAt) trackLateCleanup(release, { id: ref.id, resource: "adopted-agent" });
+						logger.warn("Agent cleanup exceeded its deadline", {
+							id: ref.id,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}),
+		);
+	}
+
 	/** Teardown everything; disposing the global manager makes its next owner a fresh instance. */
 	async dispose(deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
 		this.#unsubscribe?.();

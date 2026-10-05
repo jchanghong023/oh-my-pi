@@ -78,7 +78,7 @@ function sourceKind(relativePath: string): string {
 }
 
 function splitLines(bytes: Uint8Array): MarkdownSourceLine[] {
-	const text = new TextDecoder().decode(bytes);
+	const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 	const lines: MarkdownSourceLine[] = [];
 	let charStart = 0;
 	let byteStart = 0;
@@ -115,8 +115,9 @@ function parseHeading(
 
 export function normalizePlainText(markdown: string): string {
 	return markdown
+		.replace(/^\uFEFF/u, "")
 		.replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
-		.replace(/^ {0,3}(=+|-+)[ \t]*$/gm, "")
+		.replace(/^ {0,3}(=+|-+)[ \t]*\r?$/gm, "")
 		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
 		.replace(/[*~`]+/g, "")
@@ -128,12 +129,12 @@ export function normalizePlainText(markdown: string): string {
 // spaces of indentation, so an indented-code `# word` line (4+ spaces, or a
 // tab) counts as content rather than as a heading.
 const HEADING_LINE = /^ {0,3}#{1,6}[ \t].*$/gmu;
-const SETEXT_LINE = /^ {0,3}(?:=+|-+)[ \t]*$/gmu;
+const SETEXT_LINE = /^ {0,3}(?:=+|-+)[ \t]*\r?$/gmu;
 const HEADING_MARKER = /^ {0,3}#{1,6}[ \t]?/gmu;
 // A setext heading's text line together with its underline — the ATX strips
 // cover only `#` lines, so this pair is what keeps setext heading-only
 // sections from being misread as content.
-const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/gmu;
+const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*\r?$/gmu;
 
 /**
  * What a stored section holds. Converter output (docx/pptx/xlsx) emits its
@@ -144,9 +145,10 @@ const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*$/gmu;
  * requirement in the heading itself.
  */
 export function sectionShape(markdown: string): "stub" | "heading-only" | "content" {
-	if (markdown.replace(SETEXT_HEADING_PAIR, "").replace(HEADING_LINE, "").replace(SETEXT_LINE, "").trim().length > 0)
+	const source = markdown.replace(/^\uFEFF/u, "");
+	if (source.replace(SETEXT_HEADING_PAIR, "").replace(HEADING_LINE, "").replace(SETEXT_LINE, "").trim().length > 0)
 		return "content";
-	const heading = markdown.replace(HEADING_MARKER, "").replace(SETEXT_LINE, "").trim();
+	const heading = source.replace(HEADING_MARKER, "").replace(SETEXT_LINE, "").trim();
 	if (heading.length === 0) return "stub";
 	return /[\s\u3400-\u4dbf\u4e00-\u9fff]/u.test(heading) ? "heading-only" : "stub";
 }
@@ -235,11 +237,12 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 	};
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
-		const fenceMatch = parseFence(line.text);
+		const sourceLine = index === 0 ? line.text.replace(/^\uFEFF/u, "") : line.text;
+		const fenceMatch = parseFence(sourceLine);
 		// A fence delimiter line can never begin a heading: an ATX line cannot
 		// start with backticks or tildes, and a setext text line must be a
 		// paragraph line, which a fence opener is not.
-		const heading = parseHeading(line.text, lines[index + 1]?.text, fence !== undefined || fenceMatch !== undefined);
+		const heading = parseHeading(sourceLine, lines[index + 1]?.text, fence !== undefined || fenceMatch !== undefined);
 		if (heading) {
 			finish();
 			headingPath = headingPath.slice(0, heading.level - 1);
@@ -341,7 +344,15 @@ export async function readMarkdownDocument(rootPath: string, relativePath: strin
 	} finally {
 		await handle.close();
 	}
-	const parsed = parseMarkdown(bytes);
+	let parsed: { title?: string; sections: MarkdownSection[] };
+	try {
+		parsed = parseMarkdown(bytes);
+	} catch (error) {
+		throw new Error(
+			`Unable to parse Markdown ${JSON.stringify(relativePath)}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
+	}
 	const digest = createHash("sha256").update(bytes).digest("hex");
 	return {
 		relativePath: relative.split(path.sep).join("/"),

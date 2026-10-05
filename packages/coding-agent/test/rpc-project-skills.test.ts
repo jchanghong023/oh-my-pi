@@ -1,361 +1,324 @@
-// Unit tests for the fork RPC project-mode skill catalog + management service
-// (requirement R1, rpc-ui-protocol.md §6/§14.6): the management/effective
-// list_skills views, set_skill_enabled write-through into skills.ignoredSkills,
-// copy_skill / delete_skill against real skill directories, and reload_skills
-// cache refresh — all against real SKILL.md files in temp dirs and an isolated
-// in-memory Settings instance (the process-global settings singleton is
-// initialized in memory so nothing here touches the developer's real config).
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	CONFIG_DIR_NAME,
+	getConfigRootDir,
+	normalizePathForComparison,
+	setAgentDir,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgSkillsIgnoredSkills } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
-import { RpcProjectSkillError, RpcProjectSkillService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-skills";
+import {
+	cfgSkills,
+	cfgSkillsIgnoredSkills,
+	cfgSkillsEnablePiProject,
+} from "@oh-my-pi/pi-coding-agent/extensibility/settings";
+import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { RpcProjectSkillService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-skills";
+import type { RpcProjectSkillSummary } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-types";
 
-let globalSettingsReady: Promise<unknown> | undefined;
-
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const directories: TempDir[] = [];
+const settingsInstances: Settings[] = [];
 beforeAll(async () => {
-	// Settings is a process-global singleton; initialize it in memory (never
-	// touches the user's real configuration). Matches rpc-fork-config.test.ts.
-	globalSettingsReady ??= Settings.init({ inMemory: true });
-	await globalSettingsReady;
+	await Settings.init({ inMemory: true });
 });
-
-// User-level native skills are discovered through the process-global agent dir
-// (getAgentDir()), not the service's injected agentDir, so each test redirects
-// it at its own temp agent dir and the original is restored afterwards
-// (same pattern as agent-session-rules-reload.test.ts).
-const originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
-
-function restoreAgentDir(): void {
-	if (originalAgentDirEnv) {
-		setAgentDir(originalAgentDirEnv);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
+afterEach(async () => {
+	for (const settings of settingsInstances.splice(0)) settings.cancelPendingSaves();
+	AgentStorage.close();
+	for (const directory of directories.splice(0)) await directory.remove();
+	setAgentDir(originalAgentDir ?? path.join(getConfigRootDir(), "agent"));
+	if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+});
+function disabledPaths(settings: Settings): string[] {
+	const value = settings.getUserSettingValue("skills.disabledPaths");
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string").map(normalizePathForComparison)
+		: [];
 }
 
-afterEach(restoreAgentDir);
-
-test("reload waits for loaded-session adoption before returning its receipt", async () => {
-	await using cwd = await TempDir.create("rpc-skills-await-cwd-");
-	await using agent = await TempDir.create("rpc-skills-await-agent-");
-	const entered = Promise.withResolvers<void>();
-	const adoption = Promise.withResolvers<{ adopted: string[]; pending: string[] }>();
-	const service = new RpcProjectSkillService({
-		cwd: path.resolve(cwd.path()),
-		agentDir: path.resolve(agent.path()),
-		getSettings: () => Settings.isolated(),
-		emit: () => {},
-		refreshSessions: () => {
-			entered.resolve();
-			return adoption.promise;
-		},
-	});
-	let completed = false;
-	const pending = service.reload("project").then(result => {
-		completed = true;
-		return result;
-	});
-	await entered.promise;
-	expect(completed).toBe(false);
-	adoption.resolve({ adopted: ["A"], pending: ["B"] });
-	await expect(pending).resolves.toMatchObject({ adoptedSessions: ["A"], pendingSessions: ["B"] });
-});
-
-interface SkillFixture {
-	service: RpcProjectSkillService;
-	settings: Settings;
-	emitted: object[];
-	refreshCalls: () => number;
-}
-
-function setupService(dirs: { cwd: string; agentDir: string }): SkillFixture {
-	const emitted: object[] = [];
-	const settings = Settings.isolated();
+async function fixture() {
+	const directory = await TempDir.create("rpc-project-skills-");
+	directories.push(directory);
+	const cwd = path.resolve(directory.path());
+	const agentDir = path.join(cwd, "agent");
+	await fs.mkdir(agentDir, { recursive: true });
+	setAgentDir(agentDir);
+	const settings = await Settings.loadIsolated({ cwd, agentDir });
+	settingsInstances.push(settings);
+	const emitted: Record<string, unknown>[] = [];
 	let refreshCalls = 0;
 	const service = new RpcProjectSkillService({
-		cwd: dirs.cwd,
-		agentDir: dirs.agentDir,
+		cwd,
+		agentDir,
 		getSettings: () => settings,
+		emit: frame => emitted.push(frame as Record<string, unknown>),
 		refreshSessions: () => {
 			refreshCalls++;
 			return { adopted: ["session-adopted"], pending: ["session-pending"] };
 		},
-		emit: frame => emitted.push(frame),
 	});
-	return { service, settings, emitted, refreshCalls: () => refreshCalls };
+	const writeSkill = async (
+		scope: "user" | "project" | "claude",
+		name: string,
+		description = `${name} description`,
+	) => {
+		const baseDir = path.join(
+			scope === "user" ? agentDir : cwd,
+			scope === "user" ? "skills" : scope === "claude" ? ".claude/skills" : `${CONFIG_DIR_NAME}/skills`,
+			name,
+		);
+		await fs.mkdir(baseDir, { recursive: true });
+		await fs.writeFile(
+			path.join(baseDir, "SKILL.md"),
+			`---\nname: ${name}\ndescription: ${description}\n---\n\nBody for ${name}.\n`,
+		);
+		return baseDir;
+	};
+	const row = async (name: string, source?: string): Promise<RpcProjectSkillSummary> => {
+		const rows = (await service.list({ view: "management" })).items;
+		const match = rows.find(item => item.name === name && (source === undefined || item.source === source));
+		if (!match) throw new Error(`Missing skill ${name} (${source ?? "any source"})`);
+		return match;
+	};
+	return { cwd, agentDir, settings, service, emitted, writeSkill, row, refreshCalls: () => refreshCalls };
 }
 
-/** Write `<skillsRoot>/<name>/SKILL.md` with the standard frontmatter; returns the skill directory. */
-async function writeSkill(skillsRoot: string, name: string, description: string): Promise<string> {
-	const baseDir = path.join(skillsRoot, name);
-	await fs.mkdir(baseDir, { recursive: true });
-	await fs.writeFile(
-		path.join(baseDir, "SKILL.md"),
-		`---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nSkill body for ${name}.\n`,
-	);
-	return baseDir;
-}
-
-/** Capture a rejection (or undefined on unexpected success) for code assertions. */
-async function failure(promise: Promise<unknown>): Promise<unknown> {
-	return promise.then(
-		() => undefined,
-		error => error,
-	);
-}
-
-describe("RpcProjectSkillService (R1, rpc-ui-protocol.md §6/§14.6)", () => {
-	test("list management view returns native user and project skills with stable skillIds", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		const userSkills = path.join(agentDir, "skills");
-		const projectSkills = path.join(cwd, CONFIG_DIR_NAME, "skills");
-		await writeSkill(userSkills, "mgmt-user-probe", "User-scope management probe skill.");
-		await writeSkill(projectSkills, "mgmt-project-probe", "Project-scope management probe skill.");
-
-		const result = await fx.service.list({ view: "management" });
-
-		const user = result.items.find(item => item.skillId === "native:user/mgmt-user-probe");
-		expect(user).toBeDefined();
+describe("RpcProjectSkillService", () => {
+	test("management includes real user/project resources without fabricating session effectiveness", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("user", "user-probe");
+		await fx.writeSkill("project", "project-probe");
+		const user = await fx.row("user-probe");
+		const project = await fx.row("project-probe");
 		expect(user).toMatchObject({
-			name: "mgmt-user-probe",
-			description: "User-scope management probe skill.",
 			source: "native:user",
 			scope: "user",
 			state: "enabled",
-			effective: true,
-			revision: fx.service.revision,
-		});
-		expect(path.resolve(user!.filePath)).toBe(path.join(userSkills, "mgmt-user-probe", "SKILL.md"));
-		expect(user!.actions).toContain("delete");
-
-		const project = result.items.find(item => item.skillId === "native:project/mgmt-project-probe");
-		expect(project).toBeDefined();
-		expect(project).toMatchObject({
-			name: "mgmt-project-probe",
-			source: "native:project",
-			scope: "project",
-			state: "enabled",
-			effective: true,
-		});
-		expect(path.resolve(project!.filePath)).toBe(path.join(projectSkills, "mgmt-project-probe", "SKILL.md"));
-
-		expect(Array.isArray(result.warnings)).toBe(true);
-	}, 15_000);
-
-	test("list effective view with default skills settings reports the enabled set", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		await writeSkill(path.join(agentDir, "skills"), "eff-user-probe", "User-scope effective probe skill.");
-		await writeSkill(
-			path.join(cwd, CONFIG_DIR_NAME, "skills"),
-			"eff-project-probe",
-			"Project-scope effective probe skill.",
-		);
-
-		const result = await fx.service.list({ view: "effective" });
-
-		const user = result.items.find(item => item.skillId === "native:user/eff-user-probe");
-		expect(user).toMatchObject({ state: "enabled", effective: true, scope: "user" });
-		const project = result.items.find(item => item.skillId === "native:project/eff-project-probe");
-		expect(project).toMatchObject({ state: "enabled", effective: true, scope: "project" });
-		// The effective view reports exactly what a fresh session would load — never a fabricated row.
-		expect(result.items.every(item => item.effective)).toBe(true);
-	}, 15_000);
-
-	test("set_skill_enabled toggles skills.ignoredSkills, emits skills_changed and bumps the revision", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		await writeSkill(path.join(cwd, CONFIG_DIR_NAME, "skills"), "toggle-probe", "Toggle probe skill.");
-		const before = fx.service.revision;
-
-		const disabled = await fx.service.setEnabled({
-			skillId: "native:project/toggle-probe",
-			enabled: false,
-			scope: "project",
-		});
-
-		expect(disabled).toMatchObject({
-			skillId: "native:project/toggle-probe",
-			enabled: false,
 			effective: false,
-			pendingReason: "ignored",
+			writableScopes: ["user"],
 		});
-		expect(cfgSkillsIgnoredSkills.get(fx.settings)).toEqual(["toggle-probe"]);
-		expect(disabled.revision).not.toBe(before);
-		expect(fx.service.revision).toBe(disabled.revision);
-		const skillsChanged = fx.emitted.find(frame => (frame as { type: string }).type === "skills_changed");
-		expect(skillsChanged).toMatchObject({ scope: "project", revision: disabled.revision });
-		expect(fx.emitted.find(frame => (frame as { type: string }).type === "settings_changed")).toMatchObject({
-			scope: "user",
-		});
+		expect(project).toMatchObject({ source: "native:project", scope: "project", state: "enabled", effective: false });
+		expect(user.skillId).not.toBe(project.skillId);
+		expect(user.actions).toContain("delete");
+		expect(user.revision).not.toBe(fx.service.revision);
+	});
 
-		// The management view still lists the ignored row, classified as ignored.
-		const management = await fx.service.list({ view: "management" });
-		expect(management.items.find(item => item.skillId === "native:project/toggle-probe")).toMatchObject({
-			state: "ignored",
-			effective: false,
-		});
-
-		const enabled = await fx.service.setEnabled({
-			skillId: "native:project/toggle-probe",
-			enabled: true,
-			scope: "project",
-		});
-		expect(enabled).toMatchObject({ enabled: true, effective: true });
-		expect(enabled.pendingReason).toBeUndefined();
-		expect(cfgSkillsIgnoredSkills.get(fx.settings)).toEqual([]);
-	}, 15_000);
-
-	test("copy_skill copies the skill directory into the target scope and refuses occupied targets", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		const userSkills = path.join(agentDir, "skills");
-		await writeSkill(path.join(cwd, CONFIG_DIR_NAME, "skills"), "copy-probe", "Copy probe skill.");
-		const before = fx.service.revision;
-
-		const copied = await fx.service.copy({
-			skillId: "native:project/copy-probe",
-			targetScope: "user",
-			targetName: "copy-probe-user",
-		});
-
-		expect(copied).toMatchObject({ skillId: "native:user/copy-probe-user", name: "copy-probe-user" });
-		expect(path.resolve(copied.location)).toBe(path.join(userSkills, "copy-probe-user"));
-		expect(await Bun.file(path.join(copied.location, "SKILL.md")).exists()).toBe(true);
-		const copiedBody = await fs.readFile(path.join(copied.location, "SKILL.md"), "utf-8");
-		expect(copiedBody).toContain("Skill body for copy-probe.");
-		expect(copied.revision).not.toBe(before);
-		expect(fx.emitted.find(frame => (frame as { type: string }).type === "skills_changed")).toMatchObject({
-			scope: "user",
-			revision: copied.revision,
-		});
-
-		// The copy is discoverable as a user-scope native skill.
-		const listed = await fx.service.list({ view: "management" });
-		expect(listed.items.find(item => item.skillId === "native:user/copy-probe-user")).toBeDefined();
-
-		// An occupied target name is rejected.
-		const clash = await failure(
-			fx.service.copy({
-				skillId: "native:project/copy-probe",
-				targetScope: "user",
-				targetName: "copy-probe-user",
-			}),
-		);
-		expect(clash).toBeInstanceOf(RpcProjectSkillError);
-		expect((clash as RpcProjectSkillError).code).toBe("invalid_params");
-
-		// Traversal-shaped target names never reach the filesystem.
-		const traversal = await failure(
-			fx.service.copy({
-				skillId: "native:project/copy-probe",
-				targetScope: "user",
-				targetName: "../escape",
-			}),
-		);
-		expect(traversal).toBeInstanceOf(RpcProjectSkillError);
-		expect((traversal as RpcProjectSkillError).code).toBe("invalid_params");
-	}, 15_000);
-
-	test("delete_skill removes user-scope skills and refuses non-managed sources", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		const userSkills = path.join(agentDir, "skills");
-		await writeSkill(userSkills, "del-probe", "Delete probe skill.");
-		await writeSkill(path.join(cwd, ".claude", "skills"), "foreign-probe", "Foreign probe skill.");
-		const before = fx.service.revision;
-
-		const deleted = await fx.service.delete({ skillId: "native:user/del-probe" });
-
-		expect(deleted.revision).not.toBe(before);
-		expect(await Bun.file(path.join(userSkills, "del-probe", "SKILL.md")).exists()).toBe(false);
-		expect(fx.emitted.find(frame => (frame as { type: string }).type === "skills_changed")).toMatchObject({
-			scope: "user",
-			revision: deleted.revision,
-		});
-
-		const listed = await fx.service.list({ view: "management" });
-		expect(listed.items.find(item => item.skillId === "native:user/del-probe")).toBeUndefined();
-
-		// A Claude project skill is not in a user/project native skills directory;
-		// removal must go through its own package management (§14.6).
-		const foreign = listed.items.find(item => item.skillId === "claude:project/foreign-probe");
-		expect(foreign).toBeDefined();
-		const refused = await failure(fx.service.delete({ skillId: "claude:project/foreign-probe" }));
-		expect(refused).toBeInstanceOf(RpcProjectSkillError);
-		expect((refused as RpcProjectSkillError).code).toBe("unsupported");
-		expect(await Bun.file(path.join(cwd, ".claude", "skills", "foreign-probe", "SKILL.md")).exists()).toBe(true);
-	}, 15_000);
-
-	test("reload_skills refreshes external edits, bumps the revision and reports session adoption", async () => {
-		await using cwdTemp = await TempDir.create("rpc-project-skills-cwd-");
-		await using agentTemp = await TempDir.create("rpc-project-skills-agent-");
-		const cwd = path.resolve(cwdTemp.path());
-		const agentDir = path.resolve(agentTemp.path());
-		setAgentDir(agentDir);
-		const fx = setupService({ cwd, agentDir });
-		const projectSkills = path.join(cwd, CONFIG_DIR_NAME, "skills");
-		const baseDir = await writeSkill(projectSkills, "reload-probe", "Reload probe before edit.");
-
-		const first = await fx.service.list({ view: "management" });
-		expect(first.items.find(item => item.skillId === "native:project/reload-probe")?.description).toBe(
-			"Reload probe before edit.",
-		);
-
-		// External edit to the same SKILL.md: the capability content cache still
-		// holds the old body, so only a reload makes the edit visible again.
+	test("effective rows require a session and retain its adopted content version after disk edits", async () => {
+		const fx = await fixture();
+		const baseDir = await fx.writeSkill("project", "snapshot", "Original description");
+		const snapshot = await loadSkills({ cwd: fx.cwd, ...cfgSkills.get(fx.settings) });
+		const options = {
+			view: "effective" as const,
+			sessionId: "A",
+			sessionGeneration: "g-A",
+			sessionSkills: snapshot.skills,
+		};
+		const first = (await fx.service.list(options)).items.find(item => item.name === "snapshot")!;
+		expect(first).toMatchObject({ effective: true, state: "enabled", description: "Original description" });
 		await fs.writeFile(
 			path.join(baseDir, "SKILL.md"),
-			`---\nname: reload-probe\ndescription: Reload probe after edit.\n---\n\nSkill body for reload-probe.\n`,
+			"---\nname: snapshot\ndescription: Changed description\n---\n\nChanged body.\n",
 		);
+		const retained = (await fx.service.list(options)).items.find(item => item.name === "snapshot")!;
+		expect(retained.revision).toBe(first.revision);
+		expect(retained.description).toBe("Original description");
+		expect((await fx.row("snapshot")).revision).not.toBe(first.revision);
+		await expect(fx.service.list({ view: "effective" })).rejects.toMatchObject({ code: "invalid_params" });
+	});
 
-		const before = fx.service.revision;
-		const result = await fx.service.reload("user");
-
-		expect(result.revision).not.toBe(before);
-		expect(fx.service.revision).toBe(result.revision);
-		expect(result.adoptedSessions).toEqual(["session-adopted"]);
-		expect(result.pendingSessions).toEqual(["session-pending"]);
-		expect(fx.refreshCalls()).toBe(1);
-		expect(Array.isArray(result.warnings)).toBe(true);
-		expect(fx.emitted.find(frame => (frame as { type: string }).type === "skills_changed")).toMatchObject({
+	test("concrete toggles persist user path flags, report adoption, and never rewrite name ignores", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("project", "toggle");
+		const original = await fx.row("toggle");
+		const disabled = await fx.service.setEnabled({
+			skillId: original.skillId,
+			expectedRevision: original.revision,
+			enabled: false,
 			scope: "user",
-			revision: result.revision,
 		});
+		expect(disabled).toMatchObject({
+			enabled: false,
+			effective: false,
+			adoptedSessions: ["session-adopted"],
+			pendingSessions: ["session-pending"],
+		});
+		expect(cfgSkillsIgnoredSkills.get(fx.settings)).toEqual([]);
+		expect(disabledPaths(fx.settings)).toContain(normalizePathForComparison(original.filePath));
+		const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+		settingsInstances.push(reloaded);
+		expect(disabledPaths(reloaded)).toContain(normalizePathForComparison(original.filePath));
+		expect(fx.emitted.some(frame => frame.type === "settings_changed" && frame.scope === "user")).toBe(true);
+		const current = await fx.row("toggle");
+		const enabled = await fx.service.setEnabled({
+			skillId: current.skillId,
+			expectedRevision: current.revision,
+			enabled: true,
+			scope: "user",
+		});
+		expect(enabled).toMatchObject({ enabled: true, effective: true });
+		expect(disabledPaths(fx.settings)).not.toContain(normalizePathForComparison(original.filePath));
+	});
 
-		const fresh = await fx.service.list({ view: "management" });
-		expect(fresh.items.find(item => item.skillId === "native:project/reload-probe")?.description).toBe(
-			"Reload probe after edit.",
+	test("toggles preserve source switches and glob policies instead of implicitly reopening them", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("project", "blocked");
+		cfgSkillsIgnoredSkills.set(fx.settings, ["block*"]);
+		cfgSkillsEnablePiProject.set(fx.settings, false);
+		const row = await fx.row("blocked");
+		const result = await fx.service.setEnabled({
+			skillId: row.skillId,
+			expectedRevision: row.revision,
+			enabled: true,
+			scope: "user",
+		});
+		expect(result).toMatchObject({ enabled: true, effective: false, pendingReason: "source_disabled" });
+		expect(cfgSkillsEnablePiProject.get(fx.settings)).toBe(false);
+		expect(cfgSkillsIgnoredSkills.get(fx.settings)).toEqual(["block*"]);
+	});
+
+	test("same-name shadowed resources have distinct identities and independent concrete flags", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("user", "same-name");
+		await fx.writeSkill("project", "same-name");
+		const user = await fx.row("same-name", "native:user");
+		const project = await fx.row("same-name", "native:project");
+		expect(user.skillId).not.toBe(project.skillId);
+		await fx.service.setEnabled({
+			skillId: user.skillId,
+			expectedRevision: user.revision,
+			enabled: false,
+			scope: "user",
+		});
+		expect((await fx.row("same-name", "native:project")).revision).toBe(project.revision);
+		expect(disabledPaths(fx.settings)).toContain(normalizePathForComparison(user.filePath));
+		expect(disabledPaths(fx.settings)).not.toContain(normalizePathForComparison(project.filePath));
+	});
+
+	test("missing/stale revisions, project settings writes, and in-memory success are rejected", async () => {
+		const fx = await fixture();
+		const base = await fx.writeSkill("project", "cas");
+		const row = await fx.row("cas");
+		await expect(
+			fx.service.setEnabled({ skillId: row.skillId, enabled: false, scope: "user" } as never),
+		).rejects.toMatchObject({ code: "invalid_params" });
+		await expect(
+			fx.service.setEnabled({
+				skillId: row.skillId,
+				expectedRevision: row.revision,
+				enabled: false,
+				scope: "project" as never,
+			}),
+		).rejects.toMatchObject({ code: "scope_not_allowed" });
+		await fs.appendFile(path.join(base, "SKILL.md"), "External change.\n");
+		await expect(
+			fx.service.setEnabled({ skillId: row.skillId, expectedRevision: row.revision, enabled: false, scope: "user" }),
+		).rejects.toMatchObject({ code: "revision_conflict" });
+		const memory = new RpcProjectSkillService({
+			cwd: fx.cwd,
+			agentDir: fx.agentDir,
+			getSettings: () => Settings.isolated(),
+			emit: () => {},
+		});
+		const fresh = (await memory.list({ view: "management" })).items.find(item => item.name === "cas")!;
+		await expect(
+			memory.setEnabled({ skillId: fresh.skillId, expectedRevision: fresh.revision, enabled: false, scope: "user" }),
+		).rejects.toMatchObject({ code: "persistence_failed" });
+	});
+
+	test("disjoint concrete flags survive concurrent user writes", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("project", "one");
+		await fx.writeSkill("project", "two");
+		const one = await fx.row("one");
+		const two = await fx.row("two");
+		await Promise.all(
+			[one, two].map(row =>
+				fx.service.setEnabled({
+					skillId: row.skillId,
+					expectedRevision: row.revision,
+					enabled: false,
+					scope: "user",
+				}),
+			),
 		);
+		const loaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+		settingsInstances.push(loaded);
+		expect(disabledPaths(loaded)).toEqual(
+			expect.arrayContaining([one.filePath, two.filePath].map(normalizePathForComparison)),
+		);
+	});
 
-		const badScope = await failure(fx.service.reload("galaxy" as never));
-		expect(badScope).toBeInstanceOf(RpcProjectSkillError);
-		expect((badScope as RpcProjectSkillError).code).toBe("invalid_params");
-	}, 15_000);
+	test("copy preserves body, rewrites the name, refuses occupied/traversal targets, and returns a real row", async () => {
+		const fx = await fixture();
+		await fx.writeSkill("project", "copy-probe");
+		const source = await fx.row("copy-probe");
+		const input = {
+			skillId: source.skillId,
+			expectedRevision: source.revision,
+			targetScope: "user" as const,
+			targetName: "copy-user",
+		};
+		const copied = await fx.service.copy(input);
+		expect(copied.name).toBe("copy-user");
+		const body = await fs.readFile(path.join(copied.location, "SKILL.md"), "utf8");
+		expect(body).toContain("Body for copy-probe.");
+		expect(body).toMatch(/^name: ["']?copy-user["']?$/m);
+		expect((await fx.row("copy-user")).skillId).toBe(copied.skillId);
+		await expect(fx.service.copy(input)).rejects.toMatchObject({ code: "invalid_params" });
+		await expect(fx.service.copy({ ...input, targetName: "../escape" })).rejects.toMatchObject({
+			code: "invalid_params",
+		});
+	});
+
+	test("delete removes managed files and refuses foreign resource ownership", async () => {
+		const fx = await fixture();
+		const base = await fx.writeSkill("user", "delete-probe");
+		await fx.writeSkill("claude", "foreign-probe");
+		const row = await fx.row("delete-probe");
+		await fx.service.delete({ skillId: row.skillId, expectedRevision: row.revision });
+		expect(await Bun.file(path.join(base, "SKILL.md")).exists()).toBe(false);
+		const foreign = await fx.row("foreign-probe");
+		await expect(
+			fx.service.delete({ skillId: foreign.skillId, expectedRevision: foreign.revision }),
+		).rejects.toMatchObject({ code: "unsupported" });
+	});
+
+	test("reload observes external metadata and waits for the real adoption callback", async () => {
+		const fx = await fixture();
+		const base = await fx.writeSkill("project", "reload", "Before reload");
+		expect((await fx.row("reload")).description).toBe("Before reload");
+		await fs.writeFile(
+			path.join(base, "SKILL.md"),
+			"---\nname: reload\ndescription: After reload\n---\n\nNew body.\n",
+		);
+		const receipt = await fx.service.reload("user");
+		expect(receipt).toMatchObject({ adoptedSessions: ["session-adopted"], pendingSessions: ["session-pending"] });
+		expect(fx.refreshCalls()).toBe(1);
+		expect((await fx.row("reload")).description).toBe("After reload");
+		const entered = Promise.withResolvers<void>();
+		const released = Promise.withResolvers<{ adopted: string[]; pending: string[] }>();
+		const waiting = new RpcProjectSkillService({
+			cwd: fx.cwd,
+			agentDir: fx.agentDir,
+			getSettings: () => fx.settings,
+			emit: () => {},
+			refreshSessions: () => {
+				entered.resolve();
+				return released.promise;
+			},
+		});
+		let completed = false;
+		const pending = waiting.reload("project").then(result => {
+			completed = true;
+			return result;
+		});
+		await entered.promise;
+		expect(completed).toBe(false);
+		released.resolve({ adopted: ["A"], pending: ["B"] });
+		await expect(pending).resolves.toMatchObject({ adoptedSessions: ["A"], pendingSessions: ["B"] });
+		await expect(fx.service.reload("galaxy" as never)).rejects.toMatchObject({ code: "invalid_params" });
+	});
 });

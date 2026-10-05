@@ -25,8 +25,9 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { normalizePathForComparison, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { isAdvisorTranscriptName } from "../../advisor/transcript-recorder";
-import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { getAgentTombstonePath } from "../../registry/agent-tombstone";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries, visitEntriesFromFileStream } from "../../session/session-loader";
@@ -52,7 +53,6 @@ const METADATA_MAX_RECORDS = 64;
 /** Bounded transcript-metadata concurrency (mirrors registerPersistedSubagents). */
 const METADATA_READ_CONCURRENCY = 4;
 const OVERSIZED_RECORD_SCAN_STEP = 256 * 1024;
-const OVERSIZED_RECORD_SCAN_CAP = 8 * 1024 * 1024;
 
 const RUNNING_ACTIONS: readonly ("send_message" | "stop")[] = ["send_message", "stop"];
 const PARKED_ACTIONS: readonly ("send_message" | "stop")[] = ["send_message"];
@@ -81,15 +81,15 @@ export interface RpcProjectSubagentDirectoryDeps {
 		to: string;
 		body: string;
 	}) => Promise<{ to: string; outcome: string; error?: string }>;
-	/** Project session dir, used to validate registry refs belong to this project before sending. */
-	readonly projectSessionDir?: string;
+	/** Loaded owning main agent's actual session-scoped registry id. */
+	readonly senderId: (sessionId: string) => string | undefined;
 }
 
 export interface RpcProjectSubagentListOptions {
 	/** Filter to live rows ("running") or durable rows ("finished"); omitted merges both. */
 	readonly status?: "running" | "finished";
-	/** Numeric offset into the merged, sorted directory (default 0). */
-	readonly cursor?: number | string;
+	/** Opaque cursor bound to this parent, status filter and observed snapshot. */
+	readonly cursor?: string;
 	/** Page size; default 50, valid range 1..200 (out of range → invalid_params). */
 	readonly limit?: number;
 }
@@ -120,7 +120,7 @@ function subagentErrorText(error: unknown): string {
 
 /** Whether `filePath` resolves strictly inside `dir` (separator-aware prefix, not raw text). */
 function isInsideDir(filePath: string, dir: string): boolean {
-	return path.resolve(filePath).startsWith(`${path.resolve(dir)}${path.sep}`);
+	return normalizePathForComparison(filePath) !== normalizePathForComparison(dir) && pathIsWithin(dir, filePath);
 }
 
 function normalizeListLimit(limit: number | undefined): number {
@@ -131,13 +131,32 @@ function normalizeListLimit(limit: number | undefined): number {
 	return limit;
 }
 
-function normalizeListCursor(cursor: number | string | undefined): number {
+function normalizeListCursor(cursor: string | undefined, scope: string, snapshot: string): number {
 	if (cursor === undefined) return 0;
-	const offset = typeof cursor === "string" && /^(0|[1-9]\d*)$/.test(cursor) ? Number(cursor) : cursor;
-	if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
-		throw new RpcProjectSubagentError("invalid_params", "cursor must be a non-negative integer offset");
+	let decoded: unknown;
+	try {
+		if (typeof cursor !== "string" || !cursor) throw new Error("empty cursor");
+		decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+	} catch {
+		throw new RpcProjectSubagentError("invalid_params", "Invalid subagent cursor");
 	}
-	return offset;
+	if (
+		!Array.isArray(decoded) ||
+		decoded.length !== 3 ||
+		typeof decoded[0] !== "string" ||
+		typeof decoded[1] !== "string" ||
+		!Number.isSafeInteger(decoded[2]) ||
+		decoded[2] < 0
+	) {
+		throw new RpcProjectSubagentError("invalid_params", "Invalid subagent cursor");
+	}
+	if (decoded[0] !== scope || decoded[1] !== snapshot) {
+		throw new RpcProjectSubagentError(
+			"revision_conflict",
+			"Subagent cursor belongs to another filter or changed snapshot",
+		);
+	}
+	return decoded[2];
 }
 
 function normalizeFromByte(fromByte: number | undefined): number {
@@ -292,7 +311,10 @@ interface FinishedSubagentRow {
  *     without leaving a completion fact is reported interrupted per §14.8,
  *     never silently completed.
  */
-async function buildFinishedSubagentRow(record: SubagentTranscriptRecord): Promise<FinishedSubagentRow> {
+async function buildFinishedSubagentRow(
+	record: SubagentTranscriptRecord,
+	sessionId: string,
+): Promise<FinishedSubagentRow> {
 	let stat: fs.Stats | undefined;
 	try {
 		stat = await fs.promises.stat(record.transcriptPath);
@@ -306,16 +328,24 @@ async function buildFinishedSubagentRow(record: SubagentTranscriptRecord): Promi
 	]);
 	const ref = AgentRegistry.global().get(record.id);
 	// Registry corroboration only when the live ref points at exactly this transcript.
-	const registryStatus = ref?.kind === "sub" && ref.sessionFile === record.transcriptPath ? ref.status : undefined;
+	const registryStatus =
+		ref?.kind === "sub" &&
+		ref.sessionFile &&
+		normalizePathForComparison(ref.sessionFile) === normalizePathForComparison(record.transcriptPath)
+			? ref.status
+			: undefined;
 	let status: RpcProjectSubagentStatus;
 	if (tombstoned) status = "aborted";
 	else if (registryStatus === "aborted") status = "aborted";
 	else if (registryStatus === "parked") status = "parked";
+	else if (registryStatus === "running") status = "running";
 	else if (!metadata || metadata.incomplete) status = "interrupted";
 	else if (hasOutput) status = "completed";
 	else status = "interrupted";
 	const summary: RpcProjectSubagentSummary = {
 		subagentId: record.id,
+		sessionId,
+		...(registryStatus && ref?.parentId ? { parentAgentId: ref.parentId } : {}),
 		name: metadata?.agent ?? record.id,
 		...(metadata?.activity !== undefined ? { description: metadata.activity } : {}),
 		status,
@@ -324,7 +354,7 @@ async function buildFinishedSubagentRow(record: SubagentTranscriptRecord): Promi
 		...(stat !== undefined ? { lastUpdate: new Date(stat.mtimeMs).toISOString() } : {}),
 		// Parked rows can still receive IRC sends (the bus revives them); other
 		// terminal rows expose nothing — no revival through this API.
-		availableActions: status === "parked" ? PARKED_ACTIONS : [],
+		availableActions: status === "parked" ? PARKED_ACTIONS : status === "running" ? RUNNING_ACTIONS : [],
 	};
 	return { summary, createdAt: metadata?.createdAt ?? stat?.birthtimeMs ?? stat?.mtimeMs ?? 0 };
 }
@@ -332,6 +362,7 @@ async function buildFinishedSubagentRow(record: SubagentTranscriptRecord): Promi
 async function buildFinishedSubagentRows(
 	records: readonly SubagentTranscriptRecord[],
 	liveIds: ReadonlySet<string>,
+	sessionId: string,
 ): Promise<FinishedSubagentRow[]> {
 	const rows: FinishedSubagentRow[] = [];
 	let next = 0;
@@ -341,19 +372,22 @@ async function buildFinishedSubagentRows(
 			if (!record) return;
 			// A live snapshot with the same id wins over the durable row.
 			if (liveIds.has(record.id)) continue;
-			rows.push(await buildFinishedSubagentRow(record));
+			rows.push(await buildFinishedSubagentRow(record, sessionId));
 		}
 	});
 	await Promise.all(workers);
 	return rows.sort((a, b) => b.createdAt - a.createdAt || a.summary.subagentId.localeCompare(b.summary.subagentId));
 }
 
-function runningSummaryOf(snapshot: RpcSubagentSnapshot): RpcProjectSubagentSummary {
+function runningSummaryOf(snapshot: RpcSubagentSnapshot, sessionId: string): RpcProjectSubagentSummary {
 	return {
 		subagentId: snapshot.id,
+		sessionId,
 		name: snapshot.agent,
 		agentSource: snapshot.agentSource,
 		...(snapshot.description !== undefined ? { description: snapshot.description } : {}),
+		...(snapshot.assignment !== undefined ? { assignment: snapshot.assignment } : {}),
+		...(snapshot.progress !== undefined ? { progress: snapshot.progress } : {}),
 		...(snapshot.task !== undefined ? { task: snapshot.task } : {}),
 		// The live registry only retains non-terminal snapshots, so every live row is running.
 		status: "running",
@@ -377,11 +411,10 @@ async function measureOversizedRecord(file: Bun.BunFile, startByte: number, size
 	let offset = startByte;
 	for (;;) {
 		const end = Math.min(size, offset + OVERSIZED_RECORD_SCAN_STEP);
-		const text = await file.slice(offset, end).text();
-		const newline = text.indexOf("\n");
-		if (newline >= 0) return offset + Buffer.byteLength(text.slice(0, newline + 1), "utf8") - startByte;
+		const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+		const newline = bytes.indexOf(10);
+		if (newline >= 0) return offset + newline + 1 - startByte;
 		if (end >= size) return size - startByte;
-		if (end - startByte >= OVERSIZED_RECORD_SCAN_CAP) return end - startByte;
 		offset = end;
 	}
 }
@@ -421,43 +454,78 @@ export class RpcProjectSubagentDirectory {
 	 */
 	async list(sessionId: string, options: RpcProjectSubagentListOptions = {}): Promise<RpcProjectGetSubagentsResult> {
 		const limit = normalizeListLimit(options.limit);
-		const offset = normalizeListCursor(options.cursor);
+		if (options.status !== undefined && options.status !== "running" && options.status !== "finished") {
+			throw new RpcProjectSubagentError("invalid_params", "status must be running or finished");
+		}
 		const sessionFile = this.#resolveSessionFile(sessionId);
 		const live = [...this.#deps.liveSnapshots(sessionId)].sort(
 			(a, b) => a.index - b.index || a.id.localeCompare(b.id),
 		);
 		const liveIds = new Set(live.map(snapshot => snapshot.id));
 		const runningRows: RpcProjectSubagentSummary[] =
-			options.status === "finished" ? [] : live.map(snapshot => runningSummaryOf(snapshot));
+			options.status === "finished"
+				? []
+				: await Promise.all(
+						live.map(async snapshot => {
+							const transcript = snapshot.sessionFile;
+							if (transcript && !isInsideDir(transcript, artifactsDirForSessionFile(sessionFile))) {
+								throw new RpcProjectSubagentError(
+									"scope_not_allowed",
+									"Live subagent transcript belongs to another session",
+								);
+							}
+							const row = runningSummaryOf(snapshot, sessionId);
+							const ref = AgentRegistry.global().get(snapshot.id);
+							return {
+								...row,
+								sessionId,
+								recordReadable: !!transcript && (await Bun.file(transcript).exists()),
+								...(ref?.sessionFile &&
+								transcript &&
+								normalizePathForComparison(ref.sessionFile) === normalizePathForComparison(transcript) &&
+								ref.parentId
+									? { parentAgentId: ref.parentId }
+									: {}),
+							};
+						}),
+					);
 		let finishedRows: FinishedSubagentRow[] = [];
 		if (options.status !== "running") {
 			const records = await scanSubagentTranscripts(artifactsDirForSessionFile(sessionFile));
-			finishedRows = await buildFinishedSubagentRows(records, liveIds);
-			// Revision maintenance needs the merged shape, so only scans (which see
-			// both halves) refresh it; the running-only fast path leaves it untouched.
-			const catalogKey = [
-				live.map(snapshot => `${snapshot.id}:running`).join("|"),
-				finishedRows.map(row => `${row.summary.subagentId}:${row.summary.status}`).join("|"),
-			].join(";");
-			if (this.#catalogKeys.get(sessionId) !== catalogKey) {
-				this.#catalogKeys.set(sessionId, catalogKey);
-				this.#revision.bump();
-			}
+			finishedRows = await buildFinishedSubagentRows(records, liveIds, sessionId);
 		}
-		const items = [...runningRows, ...finishedRows.map(row => row.summary)];
+		const items = [...runningRows, ...finishedRows.map(row => ({ ...row.summary, sessionId }))];
+		const scope = JSON.stringify([sessionId, normalizePathForComparison(sessionFile), options.status ?? null]);
+		const catalogKey = Bun.hash(JSON.stringify(items)).toString(36);
+		const previous = this.#catalogKeys.get(scope);
+		if (previous !== undefined && previous !== catalogKey) this.#revision.bump();
+		this.#catalogKeys.set(scope, catalogKey);
+		const offset = normalizeListCursor(options.cursor, scope, catalogKey);
 		const page = items.slice(offset, offset + limit);
 		const nextOffset = offset + limit;
 		return {
 			items: page,
 			revision: this.#revision.current,
-			...(nextOffset < items.length ? { nextCursor: String(nextOffset) } : {}),
+			...(nextOffset < items.length
+				? {
+						nextCursor: Buffer.from(JSON.stringify([scope, catalogKey, nextOffset])).toString("base64url"),
+					}
+				: {}),
 		};
 	}
 
 	/** Resolve a subagent id to its transcript: live snapshot first, then this session's artifacts tree. */
 	async #resolveTranscriptPath(sessionId: string, subagentId: string, sessionFile: string): Promise<string> {
 		const live = this.#deps.liveSnapshots(sessionId).find(snapshot => snapshot.id === subagentId);
-		if (live?.sessionFile) return live.sessionFile;
+		if (live?.sessionFile) {
+			if (!isInsideDir(live.sessionFile, artifactsDirForSessionFile(sessionFile))) {
+				throw new RpcProjectSubagentError(
+					"scope_not_allowed",
+					"Live subagent transcript belongs to another session",
+				);
+			}
+			return live.sessionFile;
+		}
 		const records = await scanSubagentTranscripts(artifactsDirForSessionFile(sessionFile));
 		const record = records.find(candidate => candidate.id === subagentId);
 		if (!record) throw new RpcProjectSubagentError("not_found", `Unknown subagent: ${subagentId}`);
@@ -497,6 +565,15 @@ export class RpcProjectSubagentDirectory {
 			fromByte = 0;
 			reset = true;
 		}
+		if (fromByte > 0 && fromByte < size) {
+			const boundary = new Uint8Array(
+				await Bun.file(transcriptPath)
+					.slice(fromByte - 1, fromByte)
+					.arrayBuffer(),
+			);
+			if (boundary[0] !== 10)
+				throw new RpcProjectSubagentError("invalid_params", "fromByte must be a returned record boundary");
+		}
 		if (fromByte >= size) {
 			return {
 				subagentId,
@@ -510,12 +587,12 @@ export class RpcProjectSubagentDirectory {
 			};
 		}
 		const file = Bun.file(transcriptPath);
-		const chunk = await file.slice(fromByte, fromByte + maxBytes).text();
-		const lastNewline = chunk.lastIndexOf("\n");
+		const bytes = new Uint8Array(await file.slice(fromByte, fromByte + maxBytes).arrayBuffer());
+		const lastNewline = bytes.lastIndexOf(10);
 		if (lastNewline >= 0) {
-			const completeText = chunk.slice(0, lastNewline + 1);
+			const completeText = Buffer.from(bytes.buffer, bytes.byteOffset, lastNewline + 1).toString("utf8");
 			const entries = parseSessionEntries(completeText);
-			const nextByte = fromByte + Buffer.byteLength(completeText, "utf8");
+			const nextByte = fromByte + lastNewline + 1;
 			return {
 				subagentId,
 				sessionFile: transcriptPath,
@@ -527,11 +604,12 @@ export class RpcProjectSubagentDirectory {
 				messages: entries.filter(isSessionMessageEntry).map(entry => entry.message),
 			};
 		}
-		if (fromByte + Buffer.byteLength(chunk, "utf8") >= size) {
+		if (fromByte + bytes.length >= size) {
 			// EOF: the final record simply lacks its trailing newline. Terminate it
 			// (the stream loader's LF-append remedy) so the parser completes it and
 			// the cursor advances to EOF instead of re-reading this window forever.
-			const byteLength = Buffer.byteLength(chunk, "utf8");
+			const byteLength = bytes.length;
+			const chunk = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("utf8");
 			const entries = chunk.length > 0 ? parseSessionEntries(`${chunk}\n`) : [];
 			return {
 				subagentId,
@@ -583,6 +661,8 @@ export class RpcProjectSubagentDirectory {
 		if (!this.#deps.liveSnapshots(sessionId).some(snapshot => snapshot.id === subagentId)) {
 			throw new RpcProjectSubagentError("not_found", `Only running subagents are stoppable: ${subagentId}`);
 		}
+		const sessionFile = this.#resolveSessionFile(sessionId);
+		const transcript = await this.#resolveTranscriptPath(sessionId, subagentId, sessionFile);
 		if (this.#deps.cancelSubagent) {
 			let accepted: boolean;
 			try {
@@ -600,18 +680,19 @@ export class RpcProjectSubagentDirectory {
 		const ref = AgentRegistry.global().get(subagentId);
 		if (!ref) throw new RpcProjectSubagentError("unsupported", "No stop path configured for this subagent");
 		if (
-			this.#deps.projectSessionDir &&
-			ref.sessionFile &&
-			!isInsideDir(ref.sessionFile, this.#deps.projectSessionDir)
+			ref.kind !== "sub" ||
+			ref.status !== "running" ||
+			!ref.sessionFile ||
+			normalizePathForComparison(ref.sessionFile) !== normalizePathForComparison(transcript)
 		) {
 			throw new RpcProjectSubagentError(
 				"scope_not_allowed",
-				`Agent "${subagentId}" does not belong to this project`,
+				"Agent does not belong to this session's running transcript",
 			);
 		}
 		let accepted: boolean;
 		try {
-			accepted = AgentRegistry.global().setStatus(subagentId, "aborted");
+			accepted = AgentRegistry.global().setStatus(subagentId, "aborted", ref);
 		} catch (error) {
 			throw new RpcProjectSubagentError("execution_failed", subagentErrorText(error));
 		}
@@ -627,25 +708,28 @@ export class RpcProjectSubagentDirectory {
 		if (typeof message !== "string" || message.length === 0) {
 			throw new RpcProjectSubagentError("invalid_params", "send_message requires a non-empty message");
 		}
-		this.#resolveSessionFile(sessionId);
+		const sessionFile = this.#resolveSessionFile(sessionId);
+		const transcript = await this.#resolveTranscriptPath(sessionId, subagentId, sessionFile);
+		const sender = this.#deps.senderId(sessionId);
+		if (!sender)
+			throw new RpcProjectSubagentError("session_not_loaded", "Messaging requires the owning loaded session");
 		const send = this.#deps.sendIrcMessage;
 		if (!send) throw new RpcProjectSubagentError("unsupported", "send_message is not configured on this host");
-		// Ownership: a registry ref pointing outside this project's session dir is
-		// a cross-project/cross-session target and is rejected outright.
 		const ref = AgentRegistry.global().get(subagentId);
 		if (
-			ref?.sessionFile &&
-			this.#deps.projectSessionDir &&
-			!isInsideDir(ref.sessionFile, this.#deps.projectSessionDir)
+			!ref ||
+			ref.kind !== "sub" ||
+			!ref.sessionFile ||
+			normalizePathForComparison(ref.sessionFile) !== normalizePathForComparison(transcript)
 		) {
-			throw new RpcProjectSubagentError(
-				"scope_not_allowed",
-				`Agent "${subagentId}" does not belong to this project`,
-			);
+			throw new RpcProjectSubagentError("scope_not_allowed", "Agent does not belong to this session's transcript");
+		}
+		if (ref.status !== "running" && ref.status !== "parked") {
+			throw new RpcProjectSubagentError("busy", `Agent ${subagentId} cannot receive messages while ${ref.status}`);
 		}
 		let receipt: { to: string; outcome: string; error?: string };
 		try {
-			receipt = await send({ from: MAIN_AGENT_ID, to: subagentId, body: message });
+			receipt = await send({ from: sender, to: subagentId, body: message });
 		} catch (error) {
 			throw new RpcProjectSubagentError("execution_failed", subagentErrorText(error));
 		}

@@ -1,46 +1,57 @@
-import { describe, expect, test } from "bun:test";
-import { KEYBINDINGS } from "../src/app-keybindings";
-import { COMPOSER_DEFAULTS } from "../src/prompt/composer";
-import { DEFAULT_ACTION_KEYS } from "../src/prompt/custom-editor";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { KeybindingsManager } from "../src/app-keybindings";
+import { getKeybindings, setKeybindings } from "../src/keybindings";
+import { CustomEditor } from "../src/prompt/custom-editor";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 
-// Fork contract (docs-zh-CN/requirements/fork.md「快捷键与状态栏」): the four default
-// keybindings the fork swaps. The defaults live in hand-maintained tables that
-// an upstream rewrite can silently drift; these assertions pin both the app
-// table and the editor-surface mirror.
-describe("fork default keybindings", () => {
-	test("shift+tab toggles plan mode", () => {
-		expect(KEYBINDINGS["app.plan.toggle"].defaultKeys).toBe("shift+tab");
-	});
-
-	test("ctrl+t selects a temporary model", () => {
-		expect(KEYBINDINGS["app.model.selectTemporary"].defaultKeys).toBe("ctrl+t");
-	});
-
-	test("alt+p toggles thinking blocks", () => {
-		expect(KEYBINDINGS["app.thinking.toggle"].defaultKeys).toBe("alt+p");
-	});
-
-	test("shift+f1 cycles thinking level", () => {
-		expect(KEYBINDINGS["app.thinking.cycle"].defaultKeys).toBe("shift+f1");
-	});
-
-	test("the editor mirror carries the fork values for the editor-surface keys", () => {
-		expect(DEFAULT_ACTION_KEYS["app.thinking.cycle"]).toEqual(["shift+f1"]);
-		expect(DEFAULT_ACTION_KEYS["app.model.selectTemporary"]).toEqual(["ctrl+t"]);
-		// The mirror is hand-maintained next to KEYBINDINGS; keep both tables
-		// locked to the same values so an update to one cannot forget the other.
-		expect(DEFAULT_ACTION_KEYS["app.thinking.cycle"]).toEqual([KEYBINDINGS["app.thinking.cycle"].defaultKeys]);
-		expect(DEFAULT_ACTION_KEYS["app.model.selectTemporary"]).toEqual([
-			KEYBINDINGS["app.model.selectTemporary"].defaultKeys,
-		]);
-	});
+beforeAll(async () => {
+	await initTheme();
 });
 
-// The fork swaps the default composer shape from "band" to "pi" (framed
-// horizontal rules). Upstream tests that assert curved-prompt visuals must pin
-// their own shape; this guard keeps the fork default from silently reverting.
-describe("fork default composer shape", () => {
-	test("composer defaults to the pi shape", () => {
-		expect(COMPOSER_DEFAULTS.composerShape).toBe("pi");
+describe("fork editor shortcut dispatch", () => {
+	test("plan, thinking visibility, thinking effort and temporary model chords remain independent", () => {
+		const previous = getKeybindings();
+		const manager = new KeybindingsManager();
+		setKeybindings(manager);
+		try {
+			const editor = new CustomEditor(getEditorTheme());
+			const actions: string[] = [];
+			editor.onCycleThinkingLevel = () => actions.push("effort");
+			editor.onSelectModelTemporary = () => actions.push("model");
+			for (const key of manager.getKeys("app.plan.toggle"))
+				editor.setCustomKeyHandler(key, () => actions.push("plan"));
+			for (const key of manager.getKeys("app.thinking.toggle"))
+				editor.setCustomKeyHandler(key, () => actions.push("visibility"));
+			editor.setText("unfinished task");
+			editor.handleInput("\x1b[Z");
+			editor.handleInput("\x1bp");
+			editor.handleInput("\x1b[1;2P");
+			editor.handleInput("\x14");
+			expect(actions).toEqual(["plan", "visibility", "effort", "model"]);
+			expect(editor.getText()).toBe("unfinished task");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
+	test("explicit overrides replace editor shortcuts and an empty binding disables them", () => {
+		const previous = getKeybindings();
+		const manager = new KeybindingsManager({ "app.thinking.cycle": "f2", "app.model.selectTemporary": [] });
+		setKeybindings(manager);
+		try {
+			const editor = new CustomEditor(getEditorTheme());
+			const actions: string[] = [];
+			editor.onCycleThinkingLevel = () => actions.push("effort");
+			editor.onSelectModelTemporary = () => actions.push("model");
+			editor.setActionKeys("app.thinking.cycle", manager.getKeys("app.thinking.cycle"));
+			editor.setActionKeys("app.model.selectTemporary", manager.getKeys("app.model.selectTemporary"));
+			editor.handleInput("\x1b[1;2P");
+			editor.handleInput("\x14");
+			expect(actions).toEqual([]);
+			editor.handleInput("\x1bOQ");
+			expect(actions).toEqual(["effort"]);
+		} finally {
+			setKeybindings(previous);
+		}
 	});
 });

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { setImmediate } from "node:timers/promises";
 import type {
 	AgentSnapshot,
 	AssistantMessage,
@@ -11,7 +12,8 @@ import type {
 	WireMessage,
 } from "@oh-my-pi/pi-wire";
 import { GuestClient } from "../src/lib/client";
-import { COLLAB_PROTO, encodeBase64Url } from "../src/lib/link";
+import { open, seal } from "../src/lib/codec";
+import { COLLAB_PROTO, encodeBase64Url, packEnvelope, unpackEnvelope } from "../src/lib/link";
 import { CollabSocket } from "../src/lib/socket";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
@@ -99,16 +101,16 @@ describe("GuestClient frame apply", () => {
 			const firstEntry = messageEntry("e1", { role: "user", content: "hi", timestamp: 1 });
 			const client = new GuestClient(LINK, "tester");
 			client.applyFrameForTest(welcomeFrame(2));
-			expect(client.getSnapshot().phase).toBe("connecting");
+			expect(client.getSnapshot().phase).toBe("waiting");
 
 			vi.advanceTimersByTime(29_999);
-			expect(client.getSnapshot().phase).toBe("connecting");
+			expect(client.getSnapshot().phase).toBe("waiting");
 			client.applyFrameForTest(snapshotChunk([firstEntry], false));
 			expect(client.getSnapshot().entries).toEqual([]);
-			expect(client.getSnapshot().phase).toBe("connecting");
+			expect(client.getSnapshot().phase).toBe("waiting");
 
 			vi.advanceTimersByTime(29_999);
-			expect(client.getSnapshot().phase).toBe("connecting");
+			expect(client.getSnapshot().phase).toBe("waiting");
 			vi.advanceTimersByTime(1);
 			const snap = client.getSnapshot();
 			expect(snap.phase).toBe("ended");
@@ -377,6 +379,69 @@ describe("GuestClient frame apply", () => {
 		}
 	});
 
+	it("never requests host directories through a view link or while disconnected", async () => {
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation(() => {});
+		try {
+			const viewer = new GuestClient(LINK, "viewer");
+			viewer.applyFrameForTest(welcomeFrame(0, true));
+			expect(await viewer.fetchDirSuggestions("")).toBeNull();
+			viewer.sendPrompt("unauthorized");
+			viewer.sendAbort();
+			viewer.sendAgentCmd("kill", "main");
+			viewer.sendUiResponse(1, "unauthorized");
+			const writer = liveClient();
+			writer.applyFrameForTest({ t: "bye", reason: "rotated" });
+			expect(await writer.fetchDirSuggestions("")).toBeNull();
+			expect(sendSpy).not.toHaveBeenCalled();
+		} finally {
+			sendSpy.mockRestore();
+		}
+	});
+
+	it("settles directory requests when the page is explicitly closed", async () => {
+		const client = liveClient();
+		const pending = client.fetchDirSuggestions("sub");
+		client.close();
+		expect(await pending).toBeNull();
+		expect(client.getSnapshot().phase).toBe("ended");
+	});
+
+	it("a bye during a partial snapshot clears its timer, palette and old dialogs", () => {
+		vi.useFakeTimers();
+		try {
+			const client = liveClient();
+			client.applyFrameForTest(welcomeFrame(2));
+			client.applyFrameForTest({ t: "commands", commands: [{ name: "old-command" }] });
+			client.applyFrameForTest({ t: "ui-request", request: { reqId: 1, kind: "editor", title: "Old dialog" } });
+			client.applyFrameForTest({ t: "bye", reason: "rotated" });
+			expect(client.getSnapshot()).toMatchObject({
+				phase: "reconnecting",
+				uiRequest: null,
+				commands: [],
+				loading: null,
+			});
+			vi.advanceTimersByTime(30_000);
+			expect(client.getSnapshot().phase).toBe("reconnecting");
+			client.close();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("disables prompting while a replacement welcome is still downloading", () => {
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation(() => {});
+		const client = liveClient();
+		try {
+			client.applyFrameForTest(welcomeFrame(2));
+			client.sendPrompt("during resync");
+			expect(client.getSnapshot().phase).toBe("waiting");
+			expect(sendSpy).not.toHaveBeenCalled();
+		} finally {
+			client.close();
+			sendSpy.mockRestore();
+		}
+	});
+
 	it("error frames append notices", () => {
 		const client = liveClient();
 		client.applyFrameForTest({ t: "error", message: "boom" });
@@ -459,6 +524,37 @@ describe("GuestClient frame apply", () => {
 		expect(client.getSnapshot().uiRequest).toBeNull();
 	});
 
+	it("resends update one active or queued dialog instead of asking the same question twice", () => {
+		const client = liveClient();
+		const first = { reqId: 1, kind: "editor" as const, title: "First", prefill: "draft" };
+		const second = { reqId: 2, kind: "select" as const, title: "Second", options: ["Yes"] };
+		for (const request of [first, first, second, { ...second, options: ["No"] }]) {
+			client.applyFrameForTest({ t: "ui-request", request });
+		}
+		client.applyFrameForTest({ t: "ui-request-end", reqId: 1 });
+		expect(client.getSnapshot().uiRequest).toEqual({ ...second, options: ["No"] });
+		client.applyFrameForTest({ t: "ui-request-end", reqId: 2 });
+		expect(client.getSnapshot().uiRequest).toBeNull();
+	});
+
+	it("does not send cancelled or old-room UI responses to a replacement host", () => {
+		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation(() => {});
+		try {
+			const client = liveClient();
+			client.applyFrameForTest({ t: "ui-request", request: { reqId: 1, kind: "editor", title: "Old" } });
+			client.applyFrameForTest({ t: "ui-request-end", reqId: 1 });
+			client.sendUiResponse(1, "late");
+			client.applyFrameForTest({ t: "bye", reason: "rotated" });
+			client.sendUiResponse(1, "late");
+			client.sendPrompt("stale");
+			client.sendAgentCmd("kill", "main");
+			client.sendAbort();
+			expect(sendSpy).not.toHaveBeenCalled();
+		} finally {
+			sendSpy.mockRestore();
+		}
+	});
+
 	it("snapshot reference is stable between frames and replaced per frame", () => {
 		const client = liveClient();
 		const before = client.getSnapshot();
@@ -488,5 +584,152 @@ describe("GuestClient frame apply", () => {
 		const after = client.getSnapshot();
 		expect(after.entries).not.toBe(before.entries);
 		expect(after.entries).toHaveLength(before.entries.length + 1);
+	});
+});
+
+describe("browser connection generation fences", () => {
+	const nativeWebSocket = globalThis.WebSocket;
+	const clients: GuestClient[] = [];
+	const sockets: CollabSocket[] = [];
+	class TestWebSocket {
+		static readonly CONNECTING = 0;
+		static readonly OPEN = 1;
+		static readonly CLOSING = 2;
+		static readonly CLOSED = 3;
+		static instances: TestWebSocket[] = [];
+		readyState = TestWebSocket.CONNECTING;
+		binaryType = "arraybuffer";
+		onopen: ((event: Event) => void) | null = null;
+		onmessage: ((event: MessageEvent) => void) | null = null;
+		onclose: ((event: CloseEvent) => void) | null = null;
+		onerror: ((event: Event) => void) | null = null;
+		sent: Uint8Array[] = [];
+		received = Promise.withResolvers<Uint8Array>();
+
+		constructor(readonly url: string) {
+			TestWebSocket.instances.push(this);
+		}
+		open(): void {
+			this.readyState = TestWebSocket.OPEN;
+			this.onopen?.(new Event("open"));
+		}
+		send(bytes: Uint8Array): void {
+			this.sent.push(bytes);
+			this.received.resolve(bytes);
+		}
+		deliver(bytes: Uint8Array): void {
+			this.onmessage?.(new MessageEvent("message", { data: bytes.slice().buffer }));
+		}
+		close(code = 1000, reason = "closed"): void {
+			this.readyState = TestWebSocket.CLOSED;
+			this.onclose?.(new CloseEvent("close", { code, reason }));
+		}
+	}
+
+	beforeEach(() => {
+		TestWebSocket.instances = [];
+		globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+	});
+	afterEach(() => {
+		for (const client of clients.splice(0)) client.close();
+		for (const socket of sockets.splice(0)) socket.close();
+		globalThis.WebSocket = nativeWebSocket;
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it("settles old-room round trips and dialogs after an unexpected transport drop", async () => {
+		vi.useFakeTimers();
+		const client = new GuestClient(LINK, "writer");
+		clients.push(client);
+		client.connect();
+		TestWebSocket.instances[0]!.open();
+		client.applyFrameForTest(welcomeFrame());
+		client.applyFrameForTest({ t: "commands", commands: [{ name: "old" }] });
+		client.applyFrameForTest({ t: "ui-request", request: { reqId: 1, kind: "editor", title: "Old" } });
+		const dirs = client.fetchDirSuggestions("sub");
+		const transcript = client.fetchTranscript("subagent", 0);
+		TestWebSocket.instances[0]!.close(1006, "network drop");
+		expect(await dirs).toBeNull();
+		expect(await transcript).toBeNull();
+		expect(client.getSnapshot()).toMatchObject({ phase: "reconnecting", uiRequest: null, commands: [] });
+	});
+
+	it("drops a dialog response still being sealed when its connection is replaced", async () => {
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+		const encryption = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (algorithm, key, data) => {
+			entered.resolve();
+			await release.promise;
+			return encrypt(algorithm, key, data);
+		});
+		const socket = new CollabSocket({ wsUrl: "ws://localhost/r/roomroomroom1234", role: "guest", key });
+		sockets.push(socket);
+		try {
+			socket.connect();
+			const old = TestWebSocket.instances[0]!;
+			old.open();
+			socket.send({ t: "ui-response", reqId: 1, value: "old answer" });
+			await entered.promise;
+			socket.close();
+			socket.connect();
+			const replacement = TestWebSocket.instances[1]!;
+			replacement.open();
+			socket.send({ t: "hello", name: "writer", proto: COLLAB_PROTO });
+			release.resolve();
+			const envelope = await replacement.received.promise;
+			const unpacked = unpackEnvelope(envelope);
+			if (!unpacked) throw new Error("encrypted browser send is missing its envelope");
+			const frame = await open(key, unpacked.payload);
+			expect(frame).toMatchObject({ t: "hello" });
+			await setImmediate();
+			expect(old.sent).toEqual([]);
+			expect(replacement.sent).toHaveLength(1);
+		} finally {
+			release.resolve();
+			encryption.mockRestore();
+		}
+	});
+
+	it("ignores a late decryption failure from the dropped socket instead of ending the new one", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const bytes = packEnvelope(1, await seal(key, welcomeFrame()));
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+		let first = true;
+		const decryption = vi.spyOn(crypto.subtle, "decrypt").mockImplementation(async (algorithm, key, data) => {
+			if (!first) return decrypt(algorithm, key, data);
+			first = false;
+			entered.resolve();
+			await release.promise;
+			throw new Error("old corrupted frame");
+		});
+		const socket = new CollabSocket({ wsUrl: "ws://localhost/r/roomroomroom1234", role: "guest", key });
+		sockets.push(socket);
+		const welcome = Promise.withResolvers<HostFrame>();
+		socket.onFrame = frame => welcome.resolve(frame);
+		try {
+			socket.connect();
+			const old = TestWebSocket.instances[0]!;
+			old.open();
+			old.deliver(bytes);
+			await entered.promise;
+			old.close(1006, "dropped");
+			vi.advanceTimersByTime(1_000);
+			const replacement = TestWebSocket.instances[1]!;
+			replacement.open();
+			release.resolve();
+			replacement.deliver(bytes);
+			expect((await welcome.promise).t).toBe("welcome");
+			expect(socket.isOpen).toBe(true);
+		} finally {
+			release.resolve();
+			decryption.mockRestore();
+		}
 	});
 });

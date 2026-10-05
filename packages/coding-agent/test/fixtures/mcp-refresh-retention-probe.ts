@@ -49,6 +49,7 @@ const host: SessionToolsHost = {
 	clientBridge: () => undefined,
 	agentKind: () => "main",
 	isDisposed: () => false,
+	sessionGeneration: () => 0,
 	isStreaming: () => false,
 	queuedMessageCount: () => 0,
 	planModeEnabled: () => false,

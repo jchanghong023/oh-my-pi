@@ -64,6 +64,12 @@ function getGrokBuildModel(): Model {
 	return model;
 }
 
+function getForkCodexLunaModel(): Model {
+	const model = getBundledModel("openai-codex", "gpt-6-luna");
+	if (!model) throw new Error("Expected built-in openai-codex/gpt-6-luna to exist");
+	return model;
+}
+
 const messages: AgentMessage[] = [
 	{ role: "user", content: "start work", timestamp: 1 },
 	createAssistantMessage([{ type: "text", text: "started" }]),
@@ -147,6 +153,86 @@ describe("compaction thinking-level resolution (regression)", () => {
 		const call = spy.mock.calls[0];
 		if (!call) throw new Error("expected completeSimple call");
 		expect(call[2]?.reasoning).toBe(ai.Effort.High);
+	});
+});
+
+// ============================================================================
+// Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+// `openai-codex/gpt-6-luna` is the pinned Codex compaction model and its
+// compaction effort is fixed at `low` on every summarization path. The session
+// dial — high/max, the unset high default, and even Off — must not leak into
+// luna's compaction calls (the pin lives in `resolveCompactionEffort`).
+// ============================================================================
+
+describe("fork pins openai-codex/gpt-6-luna compaction effort at low", () => {
+	test("undefined thinkingLevel on luna → reasoning=low", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
+		await generateHandoff(messages, getForkCodexLunaModel(), "test-key", {
+			systemPrompt: ["sp"],
+			tools: [],
+		});
+		const call = spy.mock.calls[0];
+		if (!call) throw new Error("expected completeSimple call");
+		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
+	});
+
+	test("ThinkingLevel.High on luna → reasoning=low (session dial not inherited)", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
+		await generateHandoff(messages, getForkCodexLunaModel(), "test-key", {
+			systemPrompt: ["sp"],
+			tools: [],
+			thinkingLevel: ThinkingLevel.High,
+		});
+		const call = spy.mock.calls[0];
+		if (!call) throw new Error("expected completeSimple call");
+		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
+	});
+
+	test("ThinkingLevel.Max on luna → reasoning=low", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
+		await generateHandoff(messages, getForkCodexLunaModel(), "test-key", {
+			systemPrompt: ["sp"],
+			tools: [],
+			thinkingLevel: ThinkingLevel.Max,
+		});
+		const call = spy.mock.calls[0];
+		if (!call) throw new Error("expected completeSimple call");
+		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
+	});
+
+	test("ThinkingLevel.Off on luna → reasoning=low (fork pin outranks Off)", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
+		await generateHandoff(messages, getForkCodexLunaModel(), "test-key", {
+			systemPrompt: ["sp"],
+			tools: [],
+			thinkingLevel: ThinkingLevel.Off,
+		});
+		const call = spy.mock.calls[0];
+		if (!call) throw new Error("expected completeSimple call");
+		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
+	});
+
+	test("compact() fan-out on luna → every summarizer call gets reasoning=low", async () => {
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "summary" }]));
+
+		await compact(makePreparation(), getForkCodexLunaModel(), "test-key", undefined, undefined, {
+			thinkingLevel: ThinkingLevel.High,
+		});
+
+		expect(spy).toHaveBeenCalledTimes(3);
+		for (const [, , opts] of spy.mock.calls) {
+			expect(opts?.reasoning).toBe(ai.Effort.Low);
+		}
 	});
 });
 

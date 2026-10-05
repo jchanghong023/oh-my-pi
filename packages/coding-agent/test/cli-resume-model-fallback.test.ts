@@ -96,6 +96,10 @@ describe("headless startup resume", () => {
 						env: {
 							PATH: process.env.PATH,
 							HOME: tempDir.join("home"),
+							USERPROFILE: tempDir.join("home"),
+							CLAUDE_CONFIG_DIR: tempDir.join("home", ".claude"),
+							PI_CODING_AGENT_DIR: agentDir,
+							SystemRoot: process.env.SystemRoot,
 							TMPDIR: process.env.TMPDIR,
 							NO_COLOR: "1",
 						},
@@ -254,7 +258,16 @@ describe("headless runtime session switch", () => {
 			[process.execPath, cliEntry, "--no-title", "--no-lsp", "--no-extensions", "--no-tools", "--mode", "rpc"],
 			{
 				cwd,
-				env: { PATH: process.env.PATH, HOME: path.join(cwd, "home"), TMPDIR: process.env.TMPDIR, NO_COLOR: "1" },
+				env: {
+					PATH: process.env.PATH,
+					HOME: path.join(cwd, "home"),
+					USERPROFILE: path.join(cwd, "home"),
+					CLAUDE_CONFIG_DIR: path.join(cwd, "home", ".claude"),
+					PI_CODING_AGENT_DIR: agentDir,
+					SystemRoot: process.env.SystemRoot,
+					TMPDIR: process.env.TMPDIR,
+					NO_COLOR: "1",
+				},
 				stdin: "pipe",
 				stdout: "pipe",
 				stderr: "pipe",

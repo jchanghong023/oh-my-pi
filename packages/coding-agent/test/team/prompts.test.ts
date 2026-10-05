@@ -11,6 +11,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	buildAlignmentTask,
 	buildReviewTask,
+	buildRevisionTask,
 	buildSynthesisTask,
 	type TeamAlignmentOutput,
 	type TeamProposalOutput,
@@ -23,6 +24,10 @@ const MARKERS = {
 	risk: "RISK-MARKER-7f3a",
 	unknown: "UNKNOWN-MARKER-91c",
 	impact: "IMPACT-MARKER-4b2",
+	basis: "ASSUMPTION-SOURCE-MARKER-12a",
+	ambiguity: "AMBIGUITY-MARKER-91f",
+	interpretation: "INTERPRETATION-MARKER-41c",
+	ambiguityImpact: "AMBIGUITY-IMPACT-MARKER-91a",
 	evidenceClaim: "EVIDENCE-CLAIM-MARKER-6d1",
 	evidenceSource: "EVIDENCE-SOURCE-MARKER-55e",
 } as const;
@@ -31,11 +36,15 @@ function markerRecord(): TeamProposalRecord {
 	const latest: TeamProposalOutput = {
 		proposal: "方案正文：扩展现有模块。",
 		noViableProposal: false,
-		keyAssumptions: [{ content: "假设甲", basis: "wiki", status: "unverified", impactIfWrong: MARKERS.impact }],
+		keyAssumptions: [
+			{ content: "假设甲", basis: MARKERS.basis, status: "unverified", impactIfWrong: MARKERS.impact },
+		],
 		risks: [MARKERS.risk],
 		unknowns: [MARKERS.unknown],
 		acceptanceCriteria: ["现有测试全绿"],
-		ambiguityInterpretations: [],
+		ambiguityInterpretations: [
+			{ ambiguity: MARKERS.ambiguity, interpretation: MARKERS.interpretation, impact: MARKERS.ambiguityImpact },
+		],
 		evidence: [{ claim: MARKERS.evidenceClaim, source: MARKERS.evidenceSource }],
 	};
 	return {
@@ -81,12 +90,33 @@ describe("team prompt handoff", () => {
 			risks: latest.risks,
 			unknowns: latest.unknowns,
 			evidence: latest.evidence,
+			ambiguityInterpretations: latest.ambiguityInterpretations,
 			round: 1,
 			recheck: false,
 		});
 		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
 		// Structured fields must not smuggle author identity into the review.
 		expect(task).not.toContain("provider/model-x");
+	});
+
+	it("gives the isolated reviser the common acceptance criteria and complete proposal evidence", () => {
+		const task = buildRevisionTask({
+			question: "如何实现 X？",
+			cwd: "/tmp/repo",
+			alignment,
+			targetLabel: "A",
+			round: 1,
+			proposal: markerRecord().latestProposal!,
+			review: {
+				noSubstantiveIssues: false,
+				reviewSummary: "审查",
+				findings: [],
+				priorBlockingStatus: "not-applicable",
+			},
+			unresolvedBlocking: [],
+		});
+		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
+		for (const criterion of alignment.acceptanceCriteria) expect(task).toContain(criterion);
 	});
 
 	it("passes them into the synthesis prompt", () => {

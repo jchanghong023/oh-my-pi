@@ -6,6 +6,7 @@ import {
 	pickWslRepo,
 	repoNameFromUrl,
 	syncWslRepo,
+	wslStageCleanupCommand,
 	WSL_STAGE_TIMEOUT_MS,
 	WSL_TEST_DISTRIBUTION,
 } from "./slowtest-wsl-stage.ts";
@@ -112,4 +113,38 @@ describe("repoNameFromUrl", () => {
 		expect(repoNameFromUrl("https://github.com/jchanghong023/oh-my-pi.git")).toBe("oh-my-pi");
 		expect(repoNameFromUrl("git@github.com:jchanghong023/oh-my-pi.git")).toBe("oh-my-pi");
 	});
+});
+
+describe.skipIf(process.platform !== "linux")("WSL stage cancellation scope", () => {
+	test("stops its detached job without killing another identical job", async () => {
+		const stageId = crypto.randomUUID();
+		const argv = [process.execPath, "-e", 'process.stdin.resume(); console.log("ready")'];
+		const owned = Bun.spawn(argv, {
+			env: { ...process.env, OMP_WSL_STAGE_ID: stageId },
+			detached: true,
+			stdout: "pipe",
+			stdin: "pipe",
+			stderr: "ignore",
+		});
+		const unrelated = Bun.spawn(argv, {
+			env: { ...process.env, OMP_WSL_STAGE_ID: crypto.randomUUID() },
+			stdout: "pipe",
+			stdin: "pipe",
+			stderr: "ignore",
+		});
+		try {
+			await Promise.all([owned.stdout.getReader().read(), unrelated.stdout.getReader().read()]);
+			const cleanup = Bun.spawn(["sh", "-c", wslStageCleanupCommand(stageId)], {
+				stdout: "ignore",
+				stderr: "ignore",
+			});
+			expect(await cleanup.exited).toBe(0);
+			expect(await owned.exited).not.toBe(0);
+			expect(unrelated.exitCode).toBeNull();
+		} finally {
+			owned.kill();
+			unrelated.kill();
+			await Promise.all([owned.exited, unrelated.exited]);
+		}
+	}, 10_000);
 });

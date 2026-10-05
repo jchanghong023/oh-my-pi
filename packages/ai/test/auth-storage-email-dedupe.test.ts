@@ -118,21 +118,14 @@ describe("AuthStorage openai-codex email dedupe", () => {
 	});
 
 	afterEach(async () => {
-		// AuthStorage owns its own module pool; Windows keeps the db locked
-		// until both it and the credential store are closed. Under full-suite
-		// load the release can outlast the retry window, so removal is
-		// best-effort and the OS reclaims the rest.
+		// Release the pool and its owning store before removing the fixture.
 		authStorage?.close();
 		authStorage = null;
 		store?.close();
 		store = null;
 		dbPath = "";
 		if (tempDir) {
-			try {
-				await removeWithRetries(tempDir);
-			} catch {
-				// best-effort
-			}
+			await removeWithRetries(tempDir);
 			tempDir = "";
 		}
 	});

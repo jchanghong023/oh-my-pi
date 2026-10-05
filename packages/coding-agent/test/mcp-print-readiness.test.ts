@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { callTool } from "@oh-my-pi/pi-coding-agent/mcp/client";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
@@ -13,9 +13,18 @@ const FIXTURE = path.join(import.meta.dir, "fixtures", "readiness-mcp.ts");
 const SLOW_START_MS = 1_100;
 const expectedTools = ["mcp__instant_marker", "mcp__slowcall_marker", "mcp__slowstart_marker"];
 const managers: MCPManager[] = [];
-const originalTimeout = Bun.env.OMP_MCP_TIMEOUT_MS;
-const originalStartup = Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
-const originalStrict = Bun.env.OMP_MCP_REQUIRE_READY;
+let originalTimeout: string | undefined;
+let originalStartup: string | undefined;
+let originalStrict: string | undefined;
+
+beforeEach(() => {
+	originalTimeout = Bun.env.OMP_MCP_TIMEOUT_MS;
+	originalStartup = Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
+	originalStrict = Bun.env.OMP_MCP_REQUIRE_READY;
+	delete Bun.env.OMP_MCP_TIMEOUT_MS;
+	delete Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS;
+	delete Bun.env.OMP_MCP_REQUIRE_READY;
+});
 
 afterEach(async () => {
 	await Promise.all(managers.splice(0).map(manager => manager.disconnectAll()));
@@ -39,15 +48,9 @@ function server(name: string, startupMs = 0, callMs = 0): MCPStdioServerConfig {
 async function startServers(): Promise<{ manager: MCPManager; elapsedMs: number }> {
 	const manager = new MCPManager(import.meta.dir);
 	managers.push(manager);
+	await manager.connectServers({ instant: server("instant"), slowcall: server("slowcall", 0, 320) }, {}, undefined, 0);
 	const start = Date.now();
-	await manager.connectServers(
-		{
-			instant: server("instant"),
-			slowcall: server("slowcall", 0, 320),
-			slowstart: server("slowstart", SLOW_START_MS),
-		},
-		{},
-	);
+	await manager.connectServers({ slowstart: server("slowstart", SLOW_START_MS) }, {});
 	return { manager, elapsedMs: Date.now() - start };
 }
 
@@ -87,39 +90,32 @@ function printSession(manager: MCPManager, refreshGate?: Promise<void>, onRefres
 }
 
 describe("headless MCP readiness", () => {
-	// Bun's Windows pipe layer can drop stdio handshake frames under load
-	// (same race documented in rpc-client.restart.test.ts).
-	it.skipIf(process.platform === "win32")(
-		"offers all three tools to the first print prompt, independent of a slow tools/call",
-		async () => {
-			const { manager } = await startServers();
-			const slowConnection = manager.getConnection("slowcall");
-			if (!slowConnection) throw new Error("slowcall did not complete its handshake");
-			const slowCall = callTool(slowConnection, "slowcall_marker");
-			const refreshStarted = Promise.withResolvers<void>();
-			const refreshGate = Promise.withResolvers<void>();
-			const capture = printSession(manager, refreshGate.promise, refreshStarted.resolve);
-			Bun.env.OMP_MCP_TIMEOUT_MS = "2500";
-			delete Bun.env.OMP_MCP_REQUIRE_READY;
-			const run = runPrintMode(capture.session, { mode: "text", initialMessage: "use tools", mcpManager: manager });
-			await refreshStarted.promise;
-			expect(capture.prompted()).toBeUndefined();
-			refreshGate.resolve();
-			const code = await run;
-			expect(code).toBe(0);
-			expect(capture.prompted()).toEqual(expectedTools);
-			expect(await slowCall).toMatchObject({ content: [{ text: "MARKER_OK::slowcall" }] });
-			expect(capture.disposed()).toBe(true);
-		},
-		4_000,
-	);
+	it("offers all three tools to the first print prompt, independent of a slow tools/call", async () => {
+		const { manager } = await startServers();
+		const slowConnection = manager.getConnection("slowcall");
+		if (!slowConnection) throw new Error("slowcall did not complete its handshake");
+		const slowCall = callTool(slowConnection, "slowcall_marker");
+		const refreshStarted = Promise.withResolvers<void>();
+		const refreshGate = Promise.withResolvers<void>();
+		const capture = printSession(manager, refreshGate.promise, refreshStarted.resolve);
+		Bun.env.OMP_MCP_TIMEOUT_MS = "2500";
+		delete Bun.env.OMP_MCP_REQUIRE_READY;
+		const run = runPrintMode(capture.session, { mode: "text", initialMessage: "use tools", mcpManager: manager });
+		await refreshStarted.promise;
+		expect(capture.prompted()).toBeUndefined();
+		refreshGate.resolve();
+		const code = await run;
+		expect(code).toBe(0);
+		expect(capture.prompted()).toEqual(expectedTools);
+		expect(await slowCall).toMatchObject({ content: [{ text: "MARKER_OK::slowcall" }] });
+		expect(capture.disposed()).toBe(true);
+	}, 4_000);
 
 	it("names slowstart on stderr and skips the turn with exit 1 when strict readiness is required", async () => {
 		const { manager } = await startServers();
 		const capture = printSession(manager);
-		// Still below SLOW_START_MS; Windows child spawn needs more headroom
-		// under load so instant/slowcall stay inside the window.
-		const windowMs = process.platform === "win32" ? 800 : 100;
+		// The other servers are already ready; only slowstart remains pending.
+		const windowMs = 100;
 		Bun.env.OMP_MCP_TIMEOUT_MS = String(windowMs);
 		Bun.env.OMP_MCP_REQUIRE_READY = "1";
 		const output: string[] = [];
@@ -143,8 +139,7 @@ describe("headless MCP readiness", () => {
 	it("warns but still prompts with available tools when strict mode is disabled", async () => {
 		const { manager } = await startServers();
 		const capture = printSession(manager);
-		// Still below SLOW_START_MS; Windows child spawn needs more headroom.
-		const windowMs = process.platform === "win32" ? 800 : 80;
+		const windowMs = 80;
 		Bun.env.OMP_MCP_TIMEOUT_MS = String(windowMs);
 		delete Bun.env.OMP_MCP_REQUIRE_READY;
 		const output: string[] = [];
@@ -196,34 +191,29 @@ describe("headless MCP readiness", () => {
 		expect(manager.getTools().map(tool => tool.name)).not.toContain("mcp__slowstart_marker");
 	}, 3_000);
 
-	// Bun's Windows pipe layer can drop stdio handshake frames under load.
-	it.skipIf(process.platform === "win32")(
-		"waits through a timed-out handshake's reconnect before reporting readiness",
-		async () => {
-			using tempDir = TempDir.createSync("@omp-mcp-reconnect-readiness-");
-			const manager = new MCPManager(tempDir.path());
-			managers.push(manager);
-			Bun.env.OMP_MCP_TIMEOUT_MS = "200";
-			await manager.connectServers(
-				{
-					recover: {
-						type: "stdio",
-						command: process.execPath,
-						args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), tempDir.join("first-launch")],
-					},
+	it("waits through a timed-out handshake's reconnect before reporting readiness", async () => {
+		using tempDir = TempDir.createSync("@omp-mcp-reconnect-readiness-");
+		const manager = new MCPManager(tempDir.path());
+		managers.push(manager);
+		Bun.env.OMP_MCP_TIMEOUT_MS = "1000";
+		await manager.connectServers(
+			{
+				recover: {
+					type: "stdio",
+					command: process.execPath,
+					args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), tempDir.join("first-launch")],
 				},
-				{},
-			);
-			try {
-				const status = await manager.waitForStartup(2_000);
-				expect(status).toEqual({ connected: ["recover"], pending: [], failed: [] });
-				expect(manager.getTools().map(tool => tool.name)).toContain("mcp__recover_late_tool");
-			} finally {
-				await manager.disconnectAll();
-			}
-		},
-		3_000,
-	);
+			},
+			{},
+		);
+		try {
+			const status = await manager.waitForStartup(2_000);
+			expect(status).toEqual({ connected: ["recover"], pending: [], failed: [] });
+			expect(manager.getTools().map(tool => tool.name)).toContain("mcp__recover_late_tool");
+		} finally {
+			await manager.disconnectAll();
+		}
+	}, 3_000);
 
 	it("lets the environment startup window override a shorter setting during discovery", async () => {
 		Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS = "1500";

@@ -52,12 +52,7 @@ import { DEFAULT_USAGE_REQUEST_TIMEOUT_MS, UsageCache } from "./auth/usage-cache
 import type { UsageLogger } from "./usage";
 import { defaultRankingStrategy, defaultUsageProvider } from "./usage/registry";
 
-export {
-	closeAllSqliteCredentialStoresForTests,
-	isSqliteBusyError,
-	isSqliteCorruptionError,
-	SqliteAuthCredentialStore,
-} from "./auth/sqlite-credential-store";
+export { isSqliteBusyError, isSqliteCorruptionError, SqliteAuthCredentialStore } from "./auth/sqlite-credential-store";
 export * from "./auth/store";
 export * from "./auth/types";
 

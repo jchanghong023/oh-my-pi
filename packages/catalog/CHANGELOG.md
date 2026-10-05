@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added the generated company provider authentication policy so credentialless company endpoints remain selectable.
+
 ## [18.6.2] - 2026-10-04
 
 ### Fixed

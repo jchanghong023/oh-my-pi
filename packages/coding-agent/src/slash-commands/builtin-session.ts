@@ -15,6 +15,7 @@ import { buildContextReportText } from "./helpers/context-report";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
+import { formatLogoutCommandResult, logoutProviderForCommand } from "./helpers/logout";
 import { markdownFenceFor } from "../utils/markdown-fence";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { describeRedeemOutcome, toResetUsageAccounts } from "./helpers/reset-usage";
@@ -704,21 +705,54 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Logout from OAuth provider",
 		inlineHint: "[provider]",
 		allowArgs: true,
-		handleTui: (command, runtime) => {
-			const providerId = command.args.trim();
-			if (providerId) {
-				const matchedProvider = getOAuthProviders().find(provider => provider.id === providerId);
-				if (!matchedProvider) {
-					runtime.ctx.showWarning(`Unknown OAuth provider: ${providerId}`);
-					clearSubmittedText(runtime);
-					return;
-				}
-				void runtime.ctx.showOAuthSelector("logout", matchedProvider.id);
-				clearSubmittedText(runtime);
-				return;
+		handle: async (command, runtime) => {
+			try {
+				const result = await logoutProviderForCommand(
+					runtime.session,
+					command.args.trim() || undefined,
+					{
+						selectProvider: async providers => {
+							if (!runtime.ui) throw new Error("Logout requires a provider/account selection UI.");
+							const options = providers.map(provider => ({ label: `${provider.name} (${provider.id})` }));
+							const selected = await runtime.ui.select(
+								"Select provider to logout",
+								options,
+								runtime.signal ? { signal: runtime.signal } : undefined,
+							);
+							if (selected === undefined) return undefined;
+							const index = options.findIndex(option => option.label === selected);
+							if (index < 0) throw new Error("Invalid logout provider selection.");
+							return providers[index]!.id;
+						},
+						selectAccount: async (provider, accounts) => {
+							if (!runtime.ui) throw new Error("Logout requires a provider/account selection UI.");
+							const options = accounts.map(account => ({
+								label: `${account.label} [#${account.credentialId}]`,
+								description: `${account.detail}${account.active ? "; active" : ""}`,
+							}));
+							const selected = await runtime.ui.select(
+								`Select ${provider.name} account to log out`,
+								options,
+								runtime.signal ? { signal: runtime.signal } : undefined,
+							);
+							if (selected === undefined) return undefined;
+							const index = options.findIndex(option => option.label === selected);
+							if (index < 0) throw new Error("Invalid logout account selection.");
+							return accounts[index]!.credentialId;
+						},
+					},
+					runtime.signal,
+				);
+				const feedback = formatLogoutCommandResult(result);
+				if (feedback) await runtime.output(feedback.message);
+			} catch (error) {
+				await runtime.output(`Logout failed: ${errorMessage(error)}`);
 			}
-			void runtime.ctx.showOAuthSelector("logout");
+			return commandConsumed();
+		},
+		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
+			void runtime.ctx.showOAuthSelector("logout", command.args.trim() || undefined);
 		},
 	},
 	{

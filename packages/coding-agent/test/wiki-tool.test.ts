@@ -89,6 +89,30 @@ describe("WikiTool", () => {
 		expect(page).toContain(`carries ${shown} of 12 sections within 20000 characters`);
 	});
 
+	it("carries a fresh best hit whole when its locator exceeds the page budget", async () => {
+		const root = await tempDir("docs-tool-long-locator-");
+		const agent = await tempDir("docs-tool-agent-");
+		const relative = `${Array.from({ length: 20 }, (_, index) => `folder-${index}-${"x".repeat(90)}`).join("/")}/guide.md`;
+		const filename = path.join(root, relative);
+		const body = `# Requirements\nneedle ${"x".repeat(17_950)}\n`;
+		await fs.mkdir(path.dirname(filename), { recursive: true });
+		await fs.writeFile(filename, body);
+		const service = new DocsService({ agentDir: agent, cwd: root });
+		try {
+			await service.init(".", "manual");
+		} finally {
+			service.close();
+		}
+
+		const page = text(await run(new WikiTool(session(agent, root)), { query: "needle" }));
+		expect(page).toContain(`${relative}:1-2`);
+		expect(page).toContain(body);
+		expect(page.length).toBeGreaterThan(20_000);
+		expect(page).toContain("carried whole");
+		expect(page).not.toContain("predates the ingest cap");
+		expect(page).not.toContain("search again");
+	});
+
 	it("cuts a query that would outgrow the page it asks for", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
@@ -109,34 +133,6 @@ describe("WikiTool", () => {
 		);
 		expect(error?.message).toContain("No section matches");
 		expect(error?.message.length).toBeLessThan(1_000);
-	});
-
-	it("reports an unknown total when a concurrent remove outruns the count", async () => {
-		// `#rank` and `#countMatches` read separate snapshots; an `omp docs remove`
-		// committing between them leaves a count below the page it describes. The
-		// served sections exist, so the count must read as unknown, not smaller.
-		const files = Object.fromEntries(
-			Array.from({ length: 3 }, (_, index) => [`doc-${index}.md`, `# Doc ${index}\nCommand: scan\n`]),
-		);
-		const fixture = await indexedFixture(files);
-		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
-		try {
-			const db = service.storage.db;
-			const originalQuery = db.query.bind(db);
-			let armed = true;
-			db.query = ((sql: string) => {
-				if (armed && sql.startsWith("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH")) {
-					armed = false;
-					service.remove("manual");
-				}
-				return originalQuery(sql);
-			}) as typeof db.query;
-			const result = service.search("scan", { limit: 10 });
-			expect(result.sections).toHaveLength(3);
-			expect(result.total).toBeUndefined();
-		} finally {
-			service.close();
-		}
 	});
 
 	it("does not claim a cut page when the withheld hits carry no text", async () => {
@@ -192,6 +188,17 @@ describe("WikiTool", () => {
 		// The converter's structural label is indexed nowhere, so the query finds
 		// nothing at all rather than a page of `#### Cell` noise.
 		await expect(run(tool, { query: "Cell" })).rejects.toThrow("No section matches");
+	});
+
+	it("returns the full heading-only requirement when its label is truncated", async () => {
+		const requirement = `支持 ${"完整需求 ".repeat(100)}TAIL_REQUIREMENT_BEACON`;
+		const markdown = `## ${requirement}\n`;
+		const fixture = await indexedFixture({ "long-requirement.md": markdown });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const page = text(await run(tool, { query: "TAIL_REQUIREMENT_BEACON" }));
+		expect(page).toContain("long-requirement.md:1-1");
+		expect(page).toContain(markdown);
+		expect(page.length).toBeLessThan(20_000);
 	});
 
 	it("answers from the known terms when part of the query matches nothing", async () => {

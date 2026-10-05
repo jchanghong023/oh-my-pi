@@ -18,7 +18,6 @@ import type { RpcForkCommandBase } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc
 import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
-	session: {} as RpcForkContext["session"],
 	emit: frame => emitted.push(frame),
 	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
 	error: (id, command, message, code) =>
@@ -219,6 +218,34 @@ describe("RpcForkPermissionController (4.1)", () => {
 		h.host.dispose("RPC client disconnected before fork request completed");
 		await expect(pending).rejects.toThrow("RPC client disconnected before fork request completed");
 		expect(getRpcSubagentPermissionDelegate(h.settings)).toBeUndefined();
+	});
+	test("abort closes the pending approval on both the runtime and client surfaces", async () => {
+		const h = setupWithBridge({ mode: "always-ask" });
+		const bridge = captured[0]!;
+		const call = {
+			toolCallId: "cancelled-call",
+			toolName: "bash",
+			title: "bash",
+			status: "pending",
+			rawInput: { command: "sleep" },
+		};
+		const controller = new AbortController();
+		const pending = bridge.requestPermission(call, [], controller.signal);
+		const request = h.emitted.at(-1) as Record<string, unknown>;
+		expect(h.host.hasPendingRequests).toBe(true);
+		controller.abort();
+		await expect(pending).resolves.toEqual({ outcome: "cancelled" });
+		expect(h.host.hasPendingRequests).toBe(false);
+		expect(h.emitted.at(-1)).toMatchObject({
+			type: "extension_ui_request",
+			method: "cancel",
+			targetId: request.id,
+		});
+
+		h.emitted.length = 0;
+		await expect(bridge.requestPermission(call, [], controller.signal)).resolves.toEqual({ outcome: "cancelled" });
+		expect(h.emitted).toEqual([]);
+		h.host.dispose("cleanup");
 	});
 
 	test("a bridge installed before disconnect rejects later requests fail-closed without a frame", async () => {

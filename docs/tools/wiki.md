@@ -29,8 +29,8 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - Single-shot result; `content[0].text` is one page of Markdown built from the matched sections.
 - Each hit renders a header line `[n] <relative path>:<start>-<end> · <heading path> · sectionId=<id>` followed by the section's full text.
 - The page opens with the total hit count and closes with a footer reporting how many sections were skipped for size and how many duplicate hits were collapsed.
-- A page carries at most ~20,000 characters (≈10–12k tokens on this corpus) and 200 sections; the best hit is always carried in full even when it alone exceeds the budget.
-- Cross-document verbatim duplicate sections (longer than ~200 characters) appear once; later copies collapse to a pointer line. Structural labels such as `#### Cell` are skipped. Sections whose heading is the content return as "(heading only …)".
+- A normal page carries at most ~20,000 characters (≈10–12k tokens on this corpus) and 200 sections; the best hit is always carried in full even when its body or locating header exceeds the available budget. An oversized page reports the 20,000-character target instead of claiming a hard cap.
+- Cross-document verbatim duplicate sections (longer than ~200 characters) appear once; later copies collapse to a pointer line. Structural labels such as `#### Cell` are skipped. Heading-only sections omit their body only when the locating header already contains their full content; otherwise the complete indexed Markdown follows "(heading only)".
 - The tool does not stream updates.
 
 ## Flow
@@ -55,6 +55,6 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - Matches carry no body text at all: `Sections matching "<query>" carry no body text.`
 
 ## Notes
-- The corpus is a snapshot taken by `omp docs init`: source files changed or added since that import are not in it. Re-import the directory to pick them up.
+- The corpus is a snapshot taken by `omp docs init`: source files changed or added since that import are not in it. Imports require valid UTF-8; UTF-8 BOM and CRLF files retain correct byte and line provenance. Re-import the directory to pick up changes.
 - The corpus is maintained by the two index commands; the `/wiki` panel lists existing indexes and can initiate both actions, while this tool only reads.
-- Heading paths are truncated when a legacy index stored a whole document as one heading, so headers cannot spend the page budget they exist to describe.
+- Heading paths are truncated when a legacy index stored a whole document as one heading. This bounds the locator, not the section body: long heading-only content still returns in full. The `/wiki` panel opens the selected search-result snapshot rather than resolving its old `sectionId` in a later index generation.

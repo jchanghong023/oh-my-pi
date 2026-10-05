@@ -26,7 +26,7 @@ export interface CompletionItem {
 
 /** Commands whose first argument is a host directory. */
 const DIRECTORY_ARGUMENT_COMMANDS: Record<string, true> = { move: true, "add-dir": true };
-const DIRECTORY_ARGUMENT_RE = /^\/([^\s]+)\s+(\S*)$/;
+const DIRECTORY_ARGUMENT_RE = /^\/([^\s]+)[ \t]+([^\r\n]*)$/;
 const MAX_ITEMS = 8;
 
 /**
@@ -60,9 +60,8 @@ export function completionItems(
 			insert: `/${directory.command} ${entry.path}`,
 		}));
 	}
-	// Only the command name completes; once a space follows, arguments are the
-	// guest's own text.
-	if (!text.startsWith("/") || text.includes(" ")) return [];
+	// Only the command name completes; whitespace starts the arguments.
+	if (!text.startsWith("/") || /\s/.test(text)) return [];
 	const query = text.toLowerCase();
 	return commands
 		.filter(

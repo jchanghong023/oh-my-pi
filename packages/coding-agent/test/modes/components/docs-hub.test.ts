@@ -74,4 +74,43 @@ describe("DocsHubComponent shared interaction contract", () => {
 			]);
 		}
 	});
+
+	it("opens the searched snapshot after another client removes and reimports the same index name", async () => {
+		await initTheme();
+		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-snapshot-profile-"));
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-snapshot-source-"));
+		const writer = new DocsService({ agentDir: profileDir, cwd: sourceDir });
+		let hub: DocsHubComponent | undefined;
+		try {
+			await fs.writeFile(path.join(sourceDir, "old.md"), "# Original\noriginal snapshot needle\n");
+			await writer.init(".", "handbook");
+			const originalId = writer.search("needle").sections[0].sectionId;
+			const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });
+			hub = await DocsHubComponent.create({ requestRender: () => {} } as unknown as TUI, sourceDir, settings, {
+				onCancel: vi.fn(),
+			});
+			hub.handleInput("/");
+			typeText(hub, "needle");
+			hub.handleInput("\n");
+			expect(text(hub)).toContain("old.md:1-2");
+
+			writer.remove("handbook");
+			await fs.rm(path.join(sourceDir, "old.md"));
+			await fs.writeFile(path.join(sourceDir, "new.md"), "# Replacement\nunrelated replacement policy\n");
+			await writer.init(".", "handbook");
+			expect(writer.search("replacement").sections[0].sectionId).toBe(originalId);
+
+			hub.handleInput("\n");
+			expect(text(hub)).toContain("old.md:1-2");
+			expect(text(hub)).toContain("original snapshot needle");
+			expect(text(hub)).not.toContain("unrelated replacement policy");
+		} finally {
+			hub?.dispose();
+			writer.close();
+			await Promise.all([
+				fs.rm(profileDir, { recursive: true, force: true }),
+				fs.rm(sourceDir, { recursive: true, force: true }),
+			]);
+		}
+	});
 });

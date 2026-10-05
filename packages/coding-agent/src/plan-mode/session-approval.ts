@@ -28,12 +28,30 @@ export interface ApprovedPlanDispatchOptions {
 	onAutosave?: (result: { savedPath: string | null; error?: Error }) => void;
 }
 
+function captureSessionGuard(session: AgentSession): () => void {
+	const sessionId = session.sessionId;
+	const generation = session.sessionGeneration;
+	const manager = session.sessionManager;
+	return () => {
+		if (
+			session.isDisposed ||
+			session.sessionId !== sessionId ||
+			session.sessionGeneration !== generation ||
+			session.sessionManager !== manager
+		) {
+			throw Object.assign(new Error("Session changed during plan mode operation"), { code: "session_changed" });
+		}
+	};
+}
+
 /**
  * Shared tail of every plan approval: record the plan reference, autosave the
  * approved plan, seed an auto session name, and dispatch the synthetic
  * plan-approved prompt (queued as a follow-up when a run is live).
  */
 export async function dispatchApprovedPlan(session: AgentSession, options: ApprovedPlanDispatchOptions): Promise<void> {
+	const assertCurrentSession = captureSessionGuard(session);
+	assertCurrentSession();
 	session.setPlanReferencePath(options.planFilePath);
 	let autosavedPath: string | null = null;
 	let autosaveError: Error | undefined;
@@ -48,6 +66,7 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 		// Autosave is best-effort in both hosts; approval intent stands.
 		autosaveError = error instanceof Error ? error : new Error(String(error));
 	}
+	assertCurrentSession();
 	options.onAutosave?.({ savedPath: autosavedPath, ...(autosaveError ? { error: autosaveError } : {}) });
 
 	// Approved plans land in a fresh (or compacted) session whose first
@@ -58,6 +77,7 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 	if (seededName && !session.sessionManager.getSessionName()) {
 		await session.sessionManager.setSessionName(seededName, "auto");
 	}
+	assertCurrentSession();
 
 	// Fires only on the dispatch path so the synthetic plan-approved prompt is
 	// the source of the reference injection.
@@ -68,6 +88,7 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 		contextPreserved: options.preserveContext === true,
 	});
 	options.beforeDispatch?.();
+	assertCurrentSession();
 	// A user turn queued during compaction was already fired before we got
 	// here; preserve it and queue the hidden execution directive behind it as
 	// a synthetic follow-up (same AgentBusyError fallback as the TUI path).
@@ -78,6 +99,7 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 			await session.prompt(planModePrompt, { synthetic: true });
 		} catch (error) {
 			if (!(error instanceof AgentBusyError)) throw error;
+			assertCurrentSession();
 			await session.followUp(planModePrompt, undefined, { synthetic: true });
 		}
 	}
@@ -100,7 +122,9 @@ export async function enterPlanModeForSession(
 	options?: { planFilePath?: string; workflow?: "parallel" | "iterative" },
 ): Promise<PlanModeSessionEntry> {
 	const planFilePath = options?.planFilePath ?? (session.getPlanReferencePath() || "local://PLAN.md");
-	const previousTools = session.getEnabledToolNames();
+	const assertCurrentSession = captureSessionGuard(session);
+	assertCurrentSession();
+	const previousTools = session.getBaseWithMountedToolNames();
 	const previousPlanModeState = session.getPlanModeState();
 	// Plan mode state must land before the tool partition (mirrors the TUI).
 	session.setPlanModeState({
@@ -111,13 +135,16 @@ export async function enterPlanModeForSession(
 	try {
 		const augmentations = session.hasBuiltInTool("write") ? ["write"] : [];
 		await session.setActiveToolsByName([...new Set([...previousTools, ...augmentations])]);
+		assertCurrentSession();
 	} catch (error) {
+		assertCurrentSession();
 		session.setPlanModeState(previousPlanModeState);
 		throw error;
 	}
 	session.setPlanProposalHandler?.(title => session.preparePlanForReview(title));
 	if (session.isStreaming) {
 		await session.sendPlanModeContext({ deliverAs: "steer" });
+		assertCurrentSession();
 	}
 	session.sessionManager.appendModeChange("plan", { planFilePath });
 	return { planFilePath, previousTools };
@@ -133,7 +160,10 @@ export async function enterPlanModeForSession(
  */
 export async function exitPlanModeForSession(session: AgentSession, previousTools?: string[]): Promise<void> {
 	if (session.getPlanModeState()?.enabled !== true) return;
+	const assertCurrentSession = captureSessionGuard(session);
+	assertCurrentSession();
 	if (previousTools) await session.setActiveToolsByName(previousTools);
+	assertCurrentSession();
 	session.setPlanModeState(undefined);
 	session.setPlanProposalHandler?.(null);
 }

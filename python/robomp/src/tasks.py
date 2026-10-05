@@ -229,11 +229,7 @@ async def _resolve_issue_row_for_pr(
     issue_row = db.find_issue_by_pr(repo_full, pr_number)
     pr_info: PullRequestInfo | None = None
     if issue_row is None or issue_row.branch is None:
-        try:
-            pr_info = await github.get_pull_request(repo_full, pr_number)
-        except GitHubError as exc:
-            log.warning("PR metadata fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
-            return issue_row, None
+        pr_info = await github.get_pull_request(repo_full, pr_number)
 
     if issue_row is None and pr_info is not None and pr_info.head_ref:
         issue_row = db.find_issue_by_branch(repo_full, pr_info.head_ref)

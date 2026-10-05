@@ -16,6 +16,7 @@ import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
@@ -330,6 +331,7 @@ export class RpcClient {
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
 	#forkNegotiated = false;
+	#chunkedFramesEnabled = false;
 	readonly #forkFrameListeners = new Set<(frame: Record<string, unknown>) => void>();
 	#btwDeltaListeners = new Set<(frame: RpcBtwDeltaFrame) => void>();
 	#btwRecordListeners = new Set<(record: BtwHistoryRecord) => void>();
@@ -340,8 +342,14 @@ export class RpcClient {
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	/** Same-id failures that arrive after the success ack removed the pending request. */
 	#promptErrorWaiters = new Map<string, (error: Error) => void>();
-	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
-		new Map();
+	#pendingRequests = new Map<
+		string,
+		{
+			command: string;
+			resolve: (response: RpcResponse) => void;
+			reject: (error: Error) => void;
+		}
+	>();
 	#customTools: RpcClientCustomTool[] = [];
 	#pendingHostToolCalls = new Map<string, { controller: AbortController }>();
 	#requestId = 0;
@@ -371,6 +379,8 @@ export class RpcClient {
 		// short-circuit the new stdout reader (issue #4079).
 		this.#abortController = new AbortController();
 		this.#protocolVersion = 1;
+		this.#forkNegotiated = false;
+		this.#chunkedFramesEnabled = false;
 
 		const cliPath = this.options.cliPath ?? "dist/cli.js";
 		const args = ["--mode", "rpc"];
@@ -405,13 +415,14 @@ export class RpcClient {
 		const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
 		let readySettled = false;
 		let protocolV2Supported = false;
-		let protocolV2Enabled = false;
 		const frameDecoder = new RpcFrameDecoder();
 
 		const reapAfterOutputFailure = async (error: Error) => {
 			if (this.#process !== child) return;
 
 			this.#process = null;
+			this.#forkNegotiated = false;
+			this.#chunkedFramesEnabled = false;
 			this.#abortController.abort(error);
 			const pendingRequests = Array.from(this.#pendingRequests.values());
 			this.#pendingRequests.clear();
@@ -437,7 +448,7 @@ export class RpcClient {
 					readyResolve();
 					continue;
 				}
-				if (isRecord(line) && line.type === "rpc_chunk" && !protocolV2Enabled)
+				if (isRecord(line) && line.type === "rpc_chunk" && !this.#chunkedFramesEnabled)
 					throw new Error("RPC chunk received before protocol negotiation");
 				const decoded = frameDecoder.push(line);
 				if (decoded) this.#handleLine(decoded);
@@ -509,7 +520,7 @@ export class RpcClient {
 		try {
 			await readyPromise;
 			if (protocolV2Supported) {
-				protocolV2Enabled = true;
+				this.#chunkedFramesEnabled = true;
 				const response = await this.#send({ type: "negotiate_protocol", protocolVersion: 2 });
 				if (
 					!response.success ||
@@ -549,6 +560,8 @@ export class RpcClient {
 		}
 		this.#abortController.abort(error);
 		this.#process = null;
+		this.#forkNegotiated = false;
+		this.#chunkedFramesEnabled = false;
 		for (const request of this.#pendingRequests.values()) request.reject(error);
 		this.#pendingRequests.clear();
 		for (const pendingCall of this.#pendingHostToolCalls.values()) {
@@ -1269,10 +1282,18 @@ export class RpcClient {
 	 */
 	async negotiateProtocolV3(): Promise<void> {
 		const response = await this.#send({ type: "negotiate_protocol", protocolVersion: 3 });
-		if (!response.success) {
+		if (
+			!response.success ||
+			response.command !== "negotiate_protocol" ||
+			!isRecord(response.data) ||
+			response.data.protocolVersion !== 3
+		) {
+			this.#getData(response);
 			throw new RpcCommandError("Fork protocol v3 negotiation failed", "negotiate_protocol");
 		}
 		this.#forkNegotiated = true;
+		this.#protocolVersion = 2;
+		this.#chunkedFramesEnabled = true;
 	}
 
 	/** Subscribe to raw fork-protocol (v3) frames; returns an unsubscribe function. */
@@ -1289,7 +1310,15 @@ export class RpcClient {
 
 	/** Send a v3 bypass frame (permission_response / ask_response / ask_pause). */
 	sendForkFrame(frame: Record<string, unknown>): void {
+		if (!this.#forkNegotiated) throw new Error("Fork protocol v3 has not been negotiated");
 		this.#writeFrame(frame as RpcCommand);
+	}
+
+	/** Send a response-correlated raw v3 command; rejects with the server's error and code. */
+	async requestFork<T = unknown>(type: string, payload: Record<string, unknown> = {}): Promise<T> {
+		if (!this.#forkNegotiated) throw new Error("Fork protocol v3 has not been negotiated");
+		const response = await this.#send({ ...payload, type });
+		return this.#getData<T>(response);
 	}
 
 	async setCustomTools(tools: RpcClientCustomTool[]): Promise<string[]> {
@@ -1427,6 +1456,28 @@ export class RpcClient {
 	// =========================================================================
 
 	#handleLine(data: unknown): void {
+		if (
+			isRecord(data) &&
+			data.type === "response" &&
+			typeof data.id === "string" &&
+			data.success === false &&
+			typeof data.error === "string" &&
+			(data.command === undefined || data.command === "error")
+		) {
+			const pending = this.#pendingRequests.get(data.id);
+			const code = typeof data.code === "string" ? data.code : undefined;
+			if (pending) {
+				this.#pendingRequests.delete(data.id);
+				pending.reject(new RpcCommandError(data.error, pending.command, code));
+				return;
+			}
+			const rejectLate = this.#promptErrorWaiters.get(data.id);
+			if (rejectLate) {
+				this.#promptErrorWaiters.delete(data.id);
+				rejectLate(new RpcCommandError(data.error, "prompt", code));
+				return;
+			}
+		}
 		// Check if it's a response to a pending request
 		if (isRpcResponse(data)) {
 			const id = data.id;
@@ -1547,7 +1598,11 @@ export class RpcClient {
 		}
 	}
 
-	#send(command: RpcCommandBody, timeoutMs = 30_000, id = `req_${++this.#requestId}`): Promise<RpcResponse> {
+	#send(
+		command: RpcCommandBody | RpcForkCommandBase,
+		timeoutMs = 30_000,
+		id = `req_${++this.#requestId}`,
+	): Promise<RpcResponse> {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}
@@ -1564,6 +1619,7 @@ export class RpcClient {
 		});
 
 		this.#pendingRequests.set(id, {
+			command: command.type,
 			resolve: response => {
 				if (settled) return;
 				settled = true;

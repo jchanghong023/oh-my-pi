@@ -21,41 +21,39 @@ describe("MCPManager connection status events", () => {
 		removeSyncWithRetries(workDir);
 	});
 
-	// Bun's Windows pipe layer can drop stdio handshake frames under load
-	// (same race documented in rpc-client.restart.test.ts).
-	it.skipIf(process.platform === "win32")(
-		"emits connecting, connected, and failed updates for startup status",
-		async () => {
-			const manager = new MCPManager(workDir);
-			const events: McpConnectionStatusEvent[] = [];
-			const success: MCPServerConfig = {
-				type: "stdio",
-				command: BUN_EXEC,
-				args: [FIXTURE_PATH],
-			};
-			const invalid: MCPServerConfig = { type: "stdio", command: "" };
+	it("emits connecting, connected, and failed updates for startup status", async () => {
+		const manager = new MCPManager(workDir);
+		const events: McpConnectionStatusEvent[] = [];
+		const success: MCPServerConfig = {
+			type: "stdio",
+			command: BUN_EXEC,
+			args: [FIXTURE_PATH],
+		};
+		const invalid: MCPServerConfig = { type: "stdio", command: "" };
 
-			try {
-				const result = await manager.connectServers({ alpha: success, broken: invalid }, {}, event =>
-					events.push(event),
-				);
+		try {
+			const result = await manager.connectServers(
+				{ alpha: success, broken: invalid },
+				{},
+				event => events.push(event),
+				0,
+			);
 
-				expect(result.connectedServers).toContain("alpha");
-				expect(result.errors.get("broken")).toBe('Server "broken": stdio server requires "command" field');
-				expect(events).toEqual([
-					{ type: "connecting", serverNames: ["alpha", "broken"] },
-					{
-						type: "failed",
-						serverName: "broken",
-						error: 'Server "broken": stdio server requires "command" field',
-					},
-					{ type: "connected", serverName: "alpha" },
-				]);
-			} finally {
-				await manager.disconnectAll();
-			}
-		},
-	);
+			expect(result.connectedServers).toContain("alpha");
+			expect(result.errors.get("broken")).toBe('Server "broken": stdio server requires "command" field');
+			expect(events).toEqual([
+				{ type: "connecting", serverNames: ["alpha", "broken"] },
+				{
+					type: "failed",
+					serverName: "broken",
+					error: 'Server "broken": stdio server requires "command" field',
+				},
+				{ type: "connected", serverName: "alpha" },
+			]);
+		} finally {
+			await manager.disconnectAll();
+		}
+	});
 
 	it("includes the originating config path for an invalid discovered server", async () => {
 		const manager = new MCPManager(workDir);

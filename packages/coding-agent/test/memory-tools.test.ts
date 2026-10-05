@@ -1102,7 +1102,7 @@ describe("Mnemopi backend lifecycle", () => {
 		registeredMnemopiState = undefined;
 	});
 
-	it("dispose({ timeoutMs }) returns within the budget when consolidate stalls (#3641)", async () => {
+	it("dispose({ timeoutMs }) races its budget without closing active consolidation (#3641)", async () => {
 		const state = registerMnemopiState();
 		const retainMemory = state.getScopedRetainTarget().memory;
 		// Hold flushExtractions hostage longer than any reasonable shutdown budget
@@ -1123,29 +1123,25 @@ describe("Mnemopi backend lifecycle", () => {
 		const BUDGET_MS = 20;
 		// Drive the timeout signal deterministically. Under parallel CI, event-loop
 		// scheduling can delay a real timer far beyond its requested duration.
+		vi.spyOn(performance, "now").mockReturnValue(0);
 		const sleepSpy = vi.spyOn(Bun, "sleep").mockResolvedValue(undefined);
-		await state.dispose({ timeoutMs: BUDGET_MS });
+		try {
+			await state.dispose({ timeoutMs: BUDGET_MS });
 
-		expect(sleepSpy).toHaveBeenCalledTimes(1);
-		// The raced sleep must be bounded by the caller's budget: an
-		// Infinity/undefined timeout or a lost dispose({timeoutMs}) wiring
-		// would otherwise pass with the mocked timer.
-		const racedMs = sleepSpy.mock.calls[0]?.[0] as number;
-		expect(typeof racedMs).toBe("number");
-		expect(racedMs).toBeGreaterThan(0);
-		expect(racedMs).toBeLessThanOrEqual(BUDGET_MS);
-		expect(flushSpy).toHaveBeenCalled();
-		expect(flushCalls).toBe(1);
-		// `close()` is deferred so SQLite writes don't race a closed handle.
-		expect(closeSpy).not.toHaveBeenCalled();
-
-		// Release the stall and confirm the deferred close runs once consolidate
-		// settles — i.e. the SQLite handle still ends up released eventually.
-		flushStall.resolve();
-		await closeDone.promise;
+			expect(sleepSpy).toHaveBeenCalledTimes(1);
+			// A frozen monotonic clock reaches the timer branch even under CPU contention.
+			expect(sleepSpy.mock.calls[0]?.[0]).toBe(BUDGET_MS);
+			expect(flushSpy).toHaveBeenCalled();
+			expect(flushCalls).toBe(1);
+			// `close()` is deferred so SQLite writes don't race a closed handle.
+			expect(closeSpy).not.toHaveBeenCalled();
+		} finally {
+			// Assertions must not leave the stalled pass and its SQLite handles alive.
+			flushStall.resolve();
+			await closeDone.promise;
+			registeredMnemopiState = undefined;
+		}
 		expect(closeSpy).toHaveBeenCalledTimes(1);
-
-		registeredMnemopiState = undefined;
 	});
 
 	it("bounds synchronous SQLite lock waits on every owned bank during final retention (#7351)", async () => {

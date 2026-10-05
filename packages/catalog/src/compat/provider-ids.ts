@@ -18,6 +18,7 @@ export type KnownProvider =
 	| "cline-pass"
 	| "cloudflare-ai-gateway"
 	| "commandcode"
+	| "company"
 	| "coreweave"
 	| "cursor"
 	| "deepinfra"
@@ -84,5 +85,6 @@ export type KnownProvider =
 	| "xiaomi-token-plan-sgp"
 	| "yolo-auto"
 	| "zai"
+	| "zcode-api"
 	| "zenmux"
 	| "zhipu-coding-plan";

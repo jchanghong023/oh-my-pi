@@ -49,33 +49,28 @@ export interface StartTeamDiscussionResult {
 
 const QUESTION_PREVIEW_LENGTH = 80;
 
-/** How long the final report may wait for a streaming turn to end. */
-const DELIVERY_IDLE_TIMEOUT_MS = 10 * 60_000;
 const DELIVERY_IDLE_POLL_MS = 250;
 
 /**
- * `deliverAs: "nextTurn"` persists only when the session is idle; during a
- * streaming turn it parks in a volatile in-memory queue that a conversation
- * reset or process exit drops — unrecoverable for `/team`, whose job-manager
- * delivery was already acknowledged at dispatch. Wait (bounded) for the turn
- * to end so the report lands in the transcript immediately; past the bound,
- * fall back to the queue rather than holding the job open forever.
+ * Wait until the final report can land in the persisted transcript, or until
+ * the owning job is cancelled. An explicit timeout reports failure; it must
+ * never turn a finished report into a volatile next-turn queue entry.
  */
 export async function waitForSessionIdle(
 	session: Pick<AgentSession, "isStreaming">,
 	signal: AbortSignal,
 	options?: { timeoutMs?: number; pollMs?: number },
 ): Promise<boolean> {
-	const deadline = Date.now() + (options?.timeoutMs ?? DELIVERY_IDLE_TIMEOUT_MS);
+	const deadline = Date.now() + (options?.timeoutMs ?? Number.POSITIVE_INFINITY);
 	const pollMs = options?.pollMs ?? DELIVERY_IDLE_POLL_MS;
 	while (session.isStreaming && !signal.aborted && Date.now() < deadline) {
 		await Bun.sleep(pollMs);
 	}
-	return !session.isStreaming;
+	return !signal.aborted && !session.isStreaming;
 }
 
 export async function deliverTeamReport(
-	session: Pick<AgentSession, "isStreaming" | "sendCustomMessage">,
+	session: Pick<AgentSession, "isStreaming" | "appendCustomMessage">,
 	signal: AbortSignal,
 	content: string,
 	details: { jobId: string; question: string },
@@ -83,18 +78,23 @@ export async function deliverTeamReport(
 	waitOptions?: { timeoutMs?: number; pollMs?: number },
 ): Promise<boolean> {
 	if (signal.aborted) return false;
-	await waitForSessionIdle(session, signal, waitOptions);
+	if (!(await waitForSessionIdle(session, signal, waitOptions))) return false;
 	if (signal.aborted) return false;
-	await session.sendCustomMessage(
-		{
-			customType: TEAM_RESULT_MESSAGE_TYPE,
-			content,
-			display: true,
-			attribution: "agent",
-			details,
-		},
-		{ triggerTurn: false, deliverAs: "nextTurn" },
-	);
+	try {
+		await session.appendCustomMessage(
+			{
+				customType: TEAM_RESULT_MESSAGE_TYPE,
+				content,
+				display: true,
+				attribution: "agent",
+				details,
+			},
+			{ signal },
+		);
+	} catch (error) {
+		if (signal.aborted) return false;
+		throw error;
+	}
 	await rebuildChat?.();
 	return true;
 }
@@ -184,6 +184,10 @@ export async function startTeamDiscussion(
 					void reportProgress(update.text, { stage: update.stage, participants: update.participants });
 					hooks.showStatus?.(update.text);
 				};
+				const onReportPersisted = (): void | Promise<void> => {
+					manager.acknowledgeDeliveries([jobId]);
+					return hooks.rebuildChat?.();
+				};
 				const result = await runTeamDiscussion({
 					question,
 					cwd,
@@ -200,7 +204,7 @@ export async function startTeamDiscussion(
 						signal,
 						result.reportMarkdown!,
 						{ jobId, question },
-						hooks.rebuildChat,
+						onReportPersisted,
 					);
 					return delivered ? "team discussion complete" : "team discussion cancelled";
 				}
@@ -212,7 +216,7 @@ export async function startTeamDiscussion(
 					signal,
 					assembleTeamFailure(question, result.failureReason ?? "未知原因"),
 					{ jobId, question },
-					hooks.rebuildChat,
+					onReportPersisted,
 				);
 				if (!delivered) return "team discussion cancelled";
 				throw new Error(result.failureReason ?? "team discussion failed");
@@ -231,10 +235,6 @@ export async function startTeamDiscussion(
 		report(message);
 		return { started: false, message };
 	}
-	// The user-facing report lands in the transcript directly; suppress the
-	// job manager's model-facing result delivery so no agent turn is triggered.
-	manager.acknowledgeDeliveries([jobId]);
-
 	const dispatchNotice = [
 		`/team 多模型讨论已启动（任务 ${jobId}，${participants.length} 个参与模型）。`,
 		"阶段进度见状态提示，子代理明细可在 Agent Hub 查看；取消经后台任务取消入口（hub cancel）执行。",

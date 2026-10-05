@@ -11,11 +11,6 @@ import * as path from "node:path";
  * process-global and read once, so one process cannot serve both fixtures.
  */
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
-// Routes every outbound request at a closed loopback port so the non-offline
-// run fails its network attempts instantly instead of waiting out
-// machine-dependent DNS/connect timeouts (~10s here); provider registration,
-// the actual subject under test, is unaffected.
-const DEAD_PROXY = "http://127.0.0.1:9";
 const COMPANY_SETTINGS = JSON.stringify({
 	env: { ANTHROPIC_BASE_URL: "http://company.invalid", ANTHROPIC_AUTH_TOKEN: "fixture-token" },
 });
@@ -33,23 +28,94 @@ afterEach(async () => {
 
 async function runModels(
 	args: readonly string[],
-	options: { companyConfig: boolean },
-): Promise<{ providers: Set<string>; companyContextWindows: number[]; stderr: string }> {
+	options: {
+		companyConfig: boolean;
+		modelsConfig?: unknown;
+		malformedCompanyConfig?: boolean;
+		extensionCache?: "cold" | "warm";
+	},
+): Promise<{
+	providers: Set<string>;
+	selectors: string[];
+	companyContextWindows: number[];
+	companyMaxTokens: number[];
+	stderr: string;
+}> {
 	const home = await tempDir("omp-models-home-");
 	const claudeDir = await tempDir("omp-models-claude-");
 	if (options.companyConfig) {
-		await fs.writeFile(path.join(claudeDir, "settings.json"), COMPANY_SETTINGS);
+		await fs.writeFile(
+			path.join(claudeDir, "settings.json"),
+			options.malformedCompanyConfig ? "{ invalid fixture JSON" : COMPANY_SETTINGS,
+		);
 	}
-	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	delete env.OMP_PROFILE;
-	delete env.PI_PROFILE;
-	env.HOME = home;
-	env.USERPROFILE = home;
-	env.CLAUDE_CONFIG_DIR = claudeDir;
-	env.HTTP_PROXY = DEAD_PROXY;
-	env.HTTPS_PROXY = DEAD_PROXY;
+	const agentDir = path.join(home, "agent");
+	await fs.mkdir(agentDir);
+	if (options.modelsConfig !== undefined) {
+		await fs.writeFile(path.join(agentDir, "models.yml"), JSON.stringify(options.modelsConfig));
+	}
+	const guard = path.join(home, "network-guard.ts");
+	await fs.writeFile(
+		guard,
+		`globalThis.fetch = async () => {
+			process.stderr.write("UNEXPECTED_NETWORK_FETCH\\n");
+			throw new Error("model CLI fixture forbids network");
+		};`,
+	);
+	const env: Record<string, string> = {
+		PATH: process.env.PATH ?? "",
+		SystemRoot: process.env.SystemRoot ?? "",
+		HOME: home,
+		USERPROFILE: home,
+		CLAUDE_CONFIG_DIR: claudeDir,
+		PI_CODING_AGENT_DIR: agentDir,
+		PI_CONFIG_DIR: ".omp",
+		NO_COLOR: "1",
+	};
+	const extensionArgs: string[] = [];
+	if (options.extensionCache) {
+		const extensionFile = path.join(home, "offline-extension.ts");
+		await fs.writeFile(
+			extensionFile,
+			`
+			export default function (pi) {
+				pi.registerProvider("offline-extension", {
+					api: "anthropic-messages", baseUrl: "https://extension.invalid", apiKey: "extension-fixture-key",
+					fetchDynamicModels: async () => {
+						process.stderr.write("UNEXPECTED_EXTENSION_DISCOVERY\\n");
+						throw new Error("offline extension catalog must use cache only");
+					},
+				});
+			}
+		`,
+		);
+		extensionArgs.push("--extension", extensionFile);
+		if (options.extensionCache === "warm") {
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"--eval",
+					`
+				// Absolute imports keep the cache writer isolated from the working directory.
+				const { buildModel } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/build.ts"))});
+				const { writeModelCache, closeModelCache } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/model-cache.ts"))});
+				writeModelCache("offline-extension", Date.now() - 48 * 60 * 60 * 1000, [buildModel({
+					provider: "offline-extension", id: "cached-model", name: "Cached model",
+					api: "anthropic-messages", baseUrl: "https://extension.invalid", reasoning: false,
+					input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 10000, maxTokens: 1000,
+				})], true, "", ${JSON.stringify(path.join(agentDir, "models.db"))});
+				closeModelCache();
+			`,
+				],
+				{ cwd: home, env, stdout: "pipe", stderr: "pipe" },
+			);
+			expect(child.exitCode, child.stderr.toString()).toBe(0);
+		}
+	}
 
-	const child = Bun.spawn([process.execPath, CLI, "models", ...args], {
+	const child = Bun.spawn([process.execPath, "--preload", guard, CLI, "models", ...args, ...extensionArgs], {
+		cwd: home,
 		env,
 		stdin: "ignore",
 		stdout: "pipe",
@@ -57,26 +123,35 @@ async function runModels(
 	});
 	const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
 	expect(await child.exited).toBe(0);
-	const payload = JSON.parse(stdout) as { models: Array<{ provider: string; contextWindow: number }> };
+	if (args.includes("--offline")) {
+		expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
+		expect(stderr).not.toContain("UNEXPECTED_EXTENSION_DISCOVERY");
+	}
+	const payload = JSON.parse(stdout) as {
+		models: Array<{ provider: string; selector: string; contextWindow: number; maxTokens: number }>;
+	};
 	return {
 		providers: new Set(payload.models.map(model => model.provider)),
+		selectors: payload.models.map(model => model.selector),
 		companyContextWindows: payload.models
 			.filter(model => model.provider === "company")
 			.map(model => model.contextWindow),
+		companyMaxTokens: payload.models.filter(model => model.provider === "company").map(model => model.maxTokens),
 		stderr,
 	};
 }
 
 describe("omp models --offline company environment", () => {
 	it("lists the company lane and hides zcode-api", async () => {
-		const { providers, companyContextWindows, stderr } = await runModels(["--offline", "--json"], {
+		const { providers, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--offline", "--json"], {
 			companyConfig: true,
 		});
 
 		expect(providers.has("company")).toBe(true);
 		expect(providers.has("zcode-api")).toBe(false);
-		expect(companyContextWindows.length).toBeGreaterThan(0);
+		expect(companyContextWindows).toHaveLength(6);
 		expect(companyContextWindows.every(window => window === 200_000)).toBe(true);
+		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
 
@@ -93,5 +168,71 @@ describe("omp models --offline company environment", () => {
 
 		expect(providers.has("company")).toBe(false);
 		expect(providers.has("zcode-api")).toBe(true);
+	}, 30_000);
+
+	for (const action of ["ls", "list", "refresh", "company"]) {
+		it(`keeps ${action} cache-only with an offline flag after the positionals`, async () => {
+			const { providers, companyContextWindows } = await runModels([action, "--json", "--offline"], {
+				companyConfig: true,
+			});
+			expect(providers.has("company")).toBe(true);
+			expect(providers.has("zcode-api")).toBe(false);
+			expect(companyContextWindows).toHaveLength(6);
+		}, 30_000);
+	}
+
+	it("filters explicit find selectors without fetching a hidden or missing provider", async () => {
+		const { providers } = await runModels(["find", "zcode-api/*", "--offline", "--json"], {
+			companyConfig: true,
+		});
+		expect([...providers]).toEqual([]);
+	}, 30_000);
+
+	it("reports malformed company configuration and keeps the local fallback", async () => {
+		const { providers, stderr } = await runModels(["refresh", "--offline", "--json"], {
+			companyConfig: true,
+			malformedCompanyConfig: true,
+		});
+		expect(providers.has("company")).toBe(false);
+		expect(providers.has("zcode-api")).toBe(true);
+		expect(stderr).toContain("not valid JSON");
+	}, 30_000);
+
+	it("surfaces ignored reserved policy at the public command without leaking credentials", async () => {
+		const { providers, stderr } = await runModels(["refresh", "--offline", "--json"], {
+			companyConfig: true,
+			modelsConfig: {
+				providers: {
+					company: { models: false, apiKey: "ignored-company-key" },
+					"zcode-api": { apiKey: "proxy-fixture-key", discovery: false, models: false },
+				},
+			},
+		});
+		expect(providers.has("company")).toBe(true);
+		expect(stderr).toContain("whole section is ignored");
+		expect(stderr).toContain("only apiKey");
+		expect(stderr).not.toContain("ignored-company-key");
+		expect(stderr).not.toContain("proxy-fixture-key");
+	}, 30_000);
+
+	for (const extensionCache of ["cold", "warm"] as const) {
+		for (const action of ["ls", "refresh"]) {
+			it(`uses ${extensionCache} extension cache for offline ${action} without invoking discovery`, async () => {
+				const { providers, selectors } = await runModels([action, "--offline", "--json"], {
+					companyConfig: true,
+					extensionCache,
+				});
+				expect(providers.has("offline-extension")).toBe(extensionCache === "warm");
+				expect(selectors.includes("offline-extension/cached-model")).toBe(extensionCache === "warm");
+			}, 30_000);
+		}
+	}
+
+	it("keeps an extension selector miss cache-only", async () => {
+		const { selectors } = await runModels(["find", "offline-extension/missing", "--offline", "--json"], {
+			companyConfig: true,
+			extensionCache: "warm",
+		});
+		expect(selectors).toEqual([]);
 	}, 30_000);
 });

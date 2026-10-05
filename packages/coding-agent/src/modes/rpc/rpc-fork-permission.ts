@@ -172,6 +172,7 @@ async function requestRpcPermission(
 	signal: AbortSignal | undefined,
 	origin?: RpcPermissionOrigin,
 ): Promise<ClientBridgePermissionOutcome> {
+	if (signal?.aborted) return { outcome: "cancelled" };
 	const toolName = toolCall.toolName;
 	const tool = host.tools.find(candidate => candidate.name === toolName) ?? ({ name: toolName } as AgentTool);
 	const args = toolCall.rawInput;
@@ -195,7 +196,11 @@ async function requestRpcPermission(
 		pending.delete(id);
 		settle();
 	};
-	const onAbort = () => finishSettle(() => resolve(undefined));
+	const onAbort = () =>
+		finishSettle(() => {
+			emit({ type: "extension_ui_request", id: Snowflake.next() as string, method: "cancel", targetId: id });
+			resolve(undefined);
+		});
 	signal?.addEventListener("abort", onAbort, { once: true });
 	const pendingRecord: PendingPermissionRequest = {
 		settle: response => finishSettle(() => resolve(response)),
@@ -336,6 +341,11 @@ export class RpcForkPermissionController {
 		host.registerDisposer(reason => this.#dispose(reason));
 		host.registerActivation(() => this.#activate());
 		host.registerCommand("set_approval_mode", command => this.#setApprovalMode(command));
+		host.registerPendingRequestSource(() => this.hasPendingRequests);
+	}
+
+	get hasPendingRequests(): boolean {
+		return this.#pending.size > 0;
 	}
 
 	/** Current tier mode as reported by `get_state` (live settings, yolo default parity). */

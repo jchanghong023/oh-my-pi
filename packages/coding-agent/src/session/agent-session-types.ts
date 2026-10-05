@@ -315,8 +315,10 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
-	/** Async job manager owned and disposed by this session. */
+	/** Async job manager whose ownership is released when this session closes. */
 	ownedAsyncJobManager?: AsyncJobManager;
+	/** Release a shared SDK ownership lease instead of disposing the manager outright. */
+	releaseOwnedAsyncJobManager?: () => Promise<boolean | void>;
 	/** Async job manager visible to this session. */
 	asyncJobManager?: AsyncJobManager;
 	/** Registry identity used for IRC routing. */

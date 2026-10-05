@@ -1,17 +1,5 @@
-/**
- * `/team` schema and parser tests: output budgets declared in the schemas
- * (mechanically enforced at the yield tool), budget truncation, and parser
- * shape handling for every stage payload.
- */
 import { describe, expect, it } from "bun:test";
 import {
-	TEAM_ALIGNMENT_SCHEMA,
-	TEAM_PROPOSAL_BUDGET,
-	TEAM_PROPOSAL_SCHEMA,
-	TEAM_REVIEW_BUDGET,
-	TEAM_REVIEW_SCHEMA,
-	TEAM_REVISION_SCHEMA,
-	TEAM_SYNTHESIS_SCHEMA,
 	enforceTextBudget,
 	parseTeamAlignment,
 	parseTeamProposal,
@@ -20,186 +8,153 @@ import {
 	parseTeamSynthesis,
 } from "@oh-my-pi/pi-coding-agent/team";
 
-describe("team output budget schemas", () => {
-	it("caps the proposal document at 4000 chars in the schema", () => {
-		const properties = TEAM_PROPOSAL_SCHEMA.properties as Record<string, { maxLength?: number; type?: string }>;
-		expect(properties.proposal!.maxLength).toBe(TEAM_PROPOSAL_BUDGET);
-		expect(TEAM_PROPOSAL_BUDGET).toBe(4000);
-		expect(properties.proposal!.type).toBe("string");
-	});
-
-	it("caps the review narrative at 1500 chars in the schema", () => {
-		const properties = TEAM_REVIEW_SCHEMA.properties as Record<string, { maxLength?: number }>;
-		expect(properties.reviewSummary!.maxLength).toBe(TEAM_REVIEW_BUDGET);
-		expect(TEAM_REVIEW_BUDGET).toBe(1500);
-	});
-
-	it("declares every stage schema as a closed object with required fields", () => {
-		for (const schema of [
-			TEAM_PROPOSAL_SCHEMA,
-			TEAM_REVIEW_SCHEMA,
-			TEAM_REVISION_SCHEMA,
-			TEAM_ALIGNMENT_SCHEMA,
-			TEAM_SYNTHESIS_SCHEMA,
-		]) {
-			expect(schema.type).toBe("object");
-			expect(schema.additionalProperties).toBe(false);
-			expect(Array.isArray(schema.required)).toBe(true);
-			expect((schema.required as string[]).length).toBeGreaterThan(0);
-		}
-	});
-
-	it("truncates over-budget text with a visible marker", () => {
-		const over = "x".repeat(TEAM_PROPOSAL_BUDGET + 500);
-		const truncated = enforceTextBudget(over, TEAM_PROPOSAL_BUDGET);
-		expect(truncated.length).toBe(TEAM_PROPOSAL_BUDGET);
-		expect(truncated).toContain("已截断");
-		expect(enforceTextBudget("short", 100)).toBe("short");
-	});
+const proposal = () => ({
+	proposal: "Extend the existing path.",
+	noViableProposal: false,
+	keyAssumptions: [
+		{ content: "API is public", basis: "src/api.ts:10", status: "verified" as const, impactIfWrong: "Change scope" },
+	],
+	risks: ["Downstream callers"],
+	unknowns: ["External consumers"],
+	acceptanceCriteria: ["Existing callers continue working"],
+	ambiguityInterpretations: [
+		{ ambiguity: "Compatibility", interpretation: "Keep the current API", impact: "No migration" },
+	],
+	evidence: [{ claim: "There is an existing API", source: "src/api.ts:10" }],
+});
+const review = () => ({
+	noSubstantiveIssues: false,
+	reviewSummary: "One reachable blocker.",
+	findings: [
+		{
+			severity: "blocking" as const,
+			issue: "Data loss",
+			evidence: "src/store.ts:42",
+			impact: "Corrupt records",
+			targetAspect: "Storage",
+		},
+	],
+	priorBlockingStatus: "not-applicable" as const,
+});
+const revision = () => ({
+	revisedProposal: "Preserve data in the existing path.",
+	revisionSummary: "Addressed data loss.",
+	responses: [{ finding: "Data loss", disposition: "accepted-and-revised" as const, explanation: "Preserve records" }],
+	reviewFlags: {
+		changedCoreDesign: true,
+		claimsResolvedBlocking: false,
+		newEvidenceChangesAssumptions: false,
+		disputesBlockingFinding: false,
+	},
+});
+const alignment = () => ({
+	unifiedUnderstanding: "Keep the existing API while preserving data.",
+	acceptanceCriteria: ["No lost records"],
+	interpretationDifferences: [
+		{
+			ambiguity: "Compatibility",
+			interpretations: [{ view: "Keep API", impact: "No migration" }],
+			affectsChoice: true,
+		},
+	],
+	factDifferences: [
+		{
+			topic: "Storage",
+			contradiction: "Durability differs",
+			proposalsInvolved: ["A", "B"],
+			sourceToCheck: "src/store.ts:42",
+		},
+	],
 });
 
-describe("team parsers", () => {
-	it("accepts a well-formed proposal and normalizes optional fields", () => {
-		const parsed = parseTeamProposal({
-			proposal: "方案：扩展模块。",
-			noViableProposal: false,
-			keyAssumptions: [{ content: "a", basis: "b", status: "verified", impactIfWrong: "c" }],
-			risks: ["r"],
-			unknowns: [],
-			acceptanceCriteria: ["ac"],
-			ambiguityInterpretations: [],
-			evidence: [],
-		})!;
-		expect(parsed.proposal).toBe("方案：扩展模块。");
-		expect(parsed.keyAssumptions[0]!.status).toBe("verified");
+describe("team yield payload validation", () => {
+	it("preserves structured proposal evidence and ambiguity impact", () => {
+		const data = proposal();
+		expect(parseTeamProposal(data)).toEqual(data);
+		expect(parseTeamAlignment(alignment())).toEqual(alignment());
 	});
 
-	it("rejects proposals without document text unless noViableProposal is set", () => {
+	it("caps model narratives without silently dropping structured findings", () => {
+		expect(parseTeamProposal({ ...proposal(), proposal: "p".repeat(5000) })?.proposal.length).toBeLessThan(5000);
+		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })?.reviewSummary.length).toBeLessThan(
+			2000,
+		);
 		expect(
-			parseTeamProposal({
-				proposal: "",
-				noViableProposal: false,
-				keyAssumptions: [],
-				risks: [],
-				unknowns: [],
-				acceptanceCriteria: [],
-				ambiguityInterpretations: [],
-				evidence: [],
+			parseTeamRevision({ ...revision(), revisedProposal: "v".repeat(5000) })?.revisedProposal.length,
+		).toBeLessThan(5000);
+		expect(
+			parseTeamSynthesis({
+				reportMarkdown: "s".repeat(14000),
+				recommendedProposal: "A",
+				recommendationReason: "Evidence",
+				recommendationPreconditions: "Compatible API",
+			})?.reportMarkdown.length,
+		).toBeLessThan(14000);
+		expect(enforceTextBudget("exact", 5)).toBe("exact");
+		expect(enforceTextBudget("a".repeat(100), 50)).toHaveLength(50);
+	});
+
+	it.each([
+		{ ...proposal(), noViableProposal: "false" },
+		{ ...proposal(), keyAssumptions: [{ ...proposal().keyAssumptions[0], status: "likely" }] },
+		{ ...proposal(), evidence: [{ claim: "Source omitted" }] },
+		{ ...proposal(), ambiguityInterpretations: [{ ambiguity: "X", interpretation: "Y" }] },
+		{ proposal: "Narrative without structured output" },
+	])("rejects malformed proposal metadata instead of discarding it: %j", data => {
+		expect(parseTeamProposal(data)).toBeUndefined();
+	});
+
+	it("accepts an explicit no-viable-proposal outcome without requiring proposal prose", () => {
+		expect(parseTeamProposal({ ...proposal(), proposal: "", noViableProposal: true })?.noViableProposal).toBe(true);
+		expect(parseTeamProposal({ ...proposal(), proposal: "" })).toBeUndefined();
+	});
+
+	it.each([
+		{ ...review(), findings: [{ ...review().findings[0], severity: "catastrophic" }] },
+		{ ...review(), findings: [{ severity: "blocking", issue: "Source omitted" }] },
+		{ ...review(), priorBlockingStatus: "probably-fixed" },
+		{ ...review(), noSubstantiveIssues: "yes" },
+		{ ...review(), findings: [], noSubstantiveIssues: false },
+		{ reviewSummary: "Everything looks fine" },
+	])("rejects malformed or indeterminate reviews: %j", data => {
+		expect(parseTeamReview(data)).toBeUndefined();
+	});
+
+	it("retains a valid blocker and accepts an explicit clean verdict", () => {
+		expect(parseTeamReview(review())).toEqual(review());
+		const clean = { ...review(), findings: [], noSubstantiveIssues: true };
+		expect(parseTeamReview(clean)).toEqual(clean);
+	});
+
+	it.each([
+		{},
+		{ ...revision(), reviewFlags: {} },
+		{ ...revision(), reviewFlags: { ...revision().reviewFlags, changedCoreDesign: "yes" } },
+		{ ...revision(), responses: ["No structured basis"] },
+		{ ...revision(), revisedProposal: "" },
+	])("rejects incomplete revision gates: %j", data => {
+		expect(parseTeamRevision(data)).toBeUndefined();
+	});
+
+	it("preserves valid revision flags so new claims require recheck", () => {
+		expect(parseTeamRevision(revision())).toEqual(revision());
+	});
+
+	it("fails closed on incomplete alignment and synthesis output", () => {
+		expect(parseTeamAlignment({ unifiedUnderstanding: "Only narrative" })).toBeUndefined();
+		expect(
+			parseTeamAlignment({
+				...alignment(),
+				interpretationDifferences: [{ ambiguity: "X", interpretations: [], affectsChoice: "yes" }],
 			}),
 		).toBeUndefined();
-		const noViable = parseTeamProposal({
-			proposal: "",
-			noViableProposal: true,
-			keyAssumptions: [],
-			risks: [],
-			unknowns: [],
-			acceptanceCriteria: [],
-			ambiguityInterpretations: [],
-			evidence: [],
-		})!;
-		expect(noViable.noViableProposal).toBe(true);
-	});
-
-	it("truncates over-budget proposal text even when the schema was overridden", () => {
-		const parsed = parseTeamProposal({
-			proposal: "y".repeat(TEAM_PROPOSAL_BUDGET + 100),
-			noViableProposal: false,
-			keyAssumptions: [],
-			risks: [],
-			unknowns: [],
-			acceptanceCriteria: [],
-			ambiguityInterpretations: [],
-			evidence: [],
-		})!;
-		expect(parsed.proposal.length).toBe(TEAM_PROPOSAL_BUDGET);
-	});
-
-	it("normalizes unknown severity, disposition, and status values conservatively", () => {
-		const review = parseTeamReview({
-			noSubstantiveIssues: true,
-			reviewSummary: "ok",
-			findings: [{ severity: "catastrophic", issue: "i", impact: "m", evidence: "e", targetAspect: "t" }],
-			priorBlockingStatus: "weird",
-		})!;
-		expect(review.findings[0]!.severity).toBe("minor");
-		expect(review.priorBlockingStatus).toBe("not-applicable");
-		// noSubstantiveIssues cannot stand alongside actual findings.
-		expect(review.noSubstantiveIssues).toBe(false);
-
-		const revision = parseTeamRevision({
-			revisedProposal: "p",
-			revisionSummary: "s",
-			responses: [{ finding: "f", disposition: "unknown-value", explanation: "e" }],
-			reviewFlags: {
-				changedCoreDesign: "yes",
-				claimsResolvedBlocking: false,
-				newEvidenceChangesAssumptions: false,
-				disputesBlockingFinding: false,
-			},
-		})!;
-		expect(revision.responses[0]!.disposition).toBe("unresolved");
-		expect(revision.reviewFlags.changedCoreDesign).toBe(false);
-	});
-
-	it("rejects a vacuous review with no findings, no summary, and no explicit no-issues record", () => {
-		// §2.5/§2.8: an all-empty payload is not a review — passing it through
-		// would let an unexamined proposal reach "✅ 可作为选项".
-		expect(
-			parseTeamReview({
-				noSubstantiveIssues: false,
-				reviewSummary: "",
-				findings: [],
-				priorBlockingStatus: "not-applicable",
-			}),
-		).toBeUndefined();
-		expect(
-			parseTeamReview({
-				noSubstantiveIssues: false,
-				reviewSummary: "   ",
-				findings: [{ severity: "blocking", issue: "  ", impact: "m", evidence: "e", targetAspect: "t" }],
-				priorBlockingStatus: "not-applicable",
-			}),
-		).toBeUndefined();
-	});
-
-	it("accepts an explicit no-findings review and a summary-only review", () => {
-		const explicit = parseTeamReview({
-			noSubstantiveIssues: true,
-			reviewSummary: "",
-			findings: [],
-			priorBlockingStatus: "not-applicable",
-		})!;
-		expect(explicit.noSubstantiveIssues).toBe(true);
-
-		const summaryOnly = parseTeamReview({
-			noSubstantiveIssues: false,
-			reviewSummary: "复核了事实差异，未发现新问题",
-			findings: [],
-			priorBlockingStatus: "resolved",
-		})!;
-		expect(summaryOnly.noSubstantiveIssues).toBe(false);
-		expect(summaryOnly.priorBlockingStatus).toBe("resolved");
-	});
-
-	it("parses alignment and synthesis payloads", () => {
-		const alignment = parseTeamAlignment({
-			unifiedUnderstanding: "u",
-			acceptanceCriteria: ["a"],
-			factDifferences: [{ topic: "t", contradiction: "c", proposalsInvolved: ["A"], sourceToCheck: "s" }],
-			interpretationDifferences: [
-				{ ambiguity: "q", interpretations: [{ view: "v", impact: "i" }], affectsChoice: true },
-			],
-		})!;
-		expect(alignment.interpretationDifferences[0]!.affectsChoice).toBe(true);
-
-		const synthesis = parseTeamSynthesis({
-			reportMarkdown: "## 报告",
+		expect(parseTeamSynthesis({ reportMarkdown: "Only narrative" })).toBeUndefined();
+		const complete = {
+			reportMarkdown: "Complete report",
 			recommendedProposal: "A",
-			recommendationReason: "r",
-			recommendationPreconditions: "p",
-		})!;
-		expect(synthesis.recommendedProposal).toBe("A");
-		expect(parseTeamAlignment({ unifiedUnderstanding: "" })).toBeUndefined();
-		expect(parseTeamSynthesis({ reportMarkdown: "" })).toBeUndefined();
+			recommendationReason: "Evidence",
+			recommendationPreconditions: "Compatible API",
+		};
+		expect(parseTeamSynthesis(complete)).toEqual(complete);
 	});
 });

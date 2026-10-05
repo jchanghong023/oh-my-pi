@@ -24,6 +24,7 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
+	normalizePathForComparison,
 	MAIN_CONFIG_FILENAMES,
 	procmgr,
 } from "@oh-my-pi/pi-utils";
@@ -453,6 +454,20 @@ function modelRoleValueFromUnknown(value: unknown): string | undefined {
 
 	const entries = stringArrayFromUnknown(value);
 	return entries.length === value.length ? entries.join(",") : undefined;
+}
+
+export class ModelRoleConflictError extends Error {
+	constructor(role: string) {
+		super(`Model role "${role}" changed since it was read.`);
+		this.name = "ModelRoleConflictError";
+	}
+}
+
+export class UserSettingConflictError extends Error {
+	constructor(settingId: string) {
+		super(`User setting "${settingId}" changed since it was read.`);
+		this.name = "UserSettingConflictError";
+	}
 }
 
 /** Receives the setting whose effective value changed (see {@link Settings.onEffectiveChange}). */
@@ -1511,6 +1526,150 @@ export class Settings {
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
 	}
 
+	/** Raw persisted user-layer value, excluding project, overlay and runtime precedence. */
+	getUserSettingValue(settingId: string): unknown {
+		if (this.#parent) return this.#parent.getUserSettingValue(settingId);
+		const setting = lookupSetting(settingId);
+		if (!setting) throw new Error(`Unknown setting: ${settingId}`);
+		return structuredClone(getByPath(this.#global, setting.segments));
+	}
+
+	/** Compare and persist one user-layer field without staging or changing runtime overrides. */
+	async saveUserSetting(settingId: string, value: unknown, expectedValue: unknown): Promise<void> {
+		return this.saveUserSettings([{ settingId, value, expectedValue }]);
+	}
+
+	/** Compare all touched user fields under one lock and publish them in one atomic write. */
+	async saveUserSettings(
+		mutations: readonly { settingId: string; value: unknown; expectedValue: unknown }[],
+	): Promise<void> {
+		if (this.#parent) return this.#parent.saveUserSettings(mutations);
+		if (mutations.length === 0) return;
+		const keys = new Set<string>();
+		const changes = mutations.map(({ settingId, value, expectedValue }) => {
+			const setting = lookupSetting(settingId);
+			if (!setting) throw new Error(`Unknown setting: ${settingId}`);
+			if (keys.has(settingId)) throw new Error(`Duplicate setting mutation: ${settingId}`);
+			keys.add(settingId);
+			const normalized =
+				value === undefined
+					? undefined
+					: setting.definition.normalize
+						? setting.definition.normalize(value)
+						: value;
+			if (normalized !== undefined) setting.assertWritable(normalized);
+			return { setting, normalized, expectedValue };
+		});
+		if (!this.#persist || this.#savesCancelled) throw new Error("User setting persistence is unavailable.");
+		await this.flush();
+		const configPath = this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		await fs.promises.mkdir(this.#agentDir, { recursive: true });
+		await this.#withYamlWriteLock(configPath, async writePath => {
+			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
+			const current = loaded.settings ?? {};
+			for (const { setting, expectedValue } of changes) {
+				if (
+					!settingValuesEqual(getByPath(current, setting.segments), expectedValue) ||
+					this.#hasPendingUserSetting(setting.segments)
+				) {
+					this.#adoptSavedGlobal(current, configPath);
+					throw new UserSettingConflictError(setting.id);
+				}
+			}
+			let changed = false;
+			for (const { setting, normalized } of changes) {
+				if (settingValuesEqual(getByPath(current, setting.segments), normalized)) continue;
+				if (normalized === undefined) deleteByPath(current, setting.segments);
+				else setByPath(current, setting.segments, normalized);
+				changed = true;
+			}
+			if (changed) {
+				this.#validateAll(
+					this.#mergeOverParent(this.#mergeOwnLayers({ ...this.#ownLayers(), global: current })),
+					this.#cwd,
+				);
+				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));
+				this.#persistedMutationGeneration++;
+			}
+			this.#configPath = configPath;
+			this.#adoptSavedGlobal(current, configPath);
+		});
+	}
+
+	/** Merge one concrete skill's enable state; unrelated SKILL.md members do not conflict. */
+	async saveUserSkillEnabled(
+		filePath: string,
+		enabled: boolean,
+		expectedDisabled: boolean,
+		expectedContentDigest?: string,
+	): Promise<void> {
+		if (this.#parent)
+			return this.#parent.saveUserSkillEnabled(filePath, enabled, expectedDisabled, expectedContentDigest);
+		if (!this.#persist || this.#savesCancelled) throw new Error("User setting persistence is unavailable.");
+		const canonical = normalizePathForComparison(filePath);
+		const segments = ["skills", "disabledPaths"];
+		await this.flush();
+		const configPath = this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		await fs.promises.mkdir(this.#agentDir, { recursive: true });
+		await this.#withYamlWriteLock(configPath, async writePath => {
+			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
+			const current = loaded.settings ?? {};
+			const rawPaths = getByPath(current, segments);
+			if (rawPaths !== undefined && (!Array.isArray(rawPaths) || rawPaths.some(item => typeof item !== "string"))) {
+				throw new Error("skills.disabledPaths must be an array of SKILL.md paths.");
+			}
+			const paths: string[] = rawPaths ?? [];
+			const disabled = paths.some(item => normalizePathForComparison(item) === canonical);
+			if (disabled !== expectedDisabled || this.#hasPendingUserSetting(segments)) {
+				this.#adoptSavedGlobal(current, configPath);
+				throw new UserSettingConflictError("skills.disabledPaths");
+			}
+			if (expectedContentDigest !== undefined) {
+				let digest: string;
+				try {
+					digest = Bun.hash(await Bun.file(filePath).arrayBuffer()).toString(36);
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+					throw new UserSettingConflictError("skills.disabledPaths");
+				}
+				if (digest !== expectedContentDigest) throw new UserSettingConflictError("skills.disabledPaths");
+			}
+			if (disabled === enabled) {
+				const next = paths.filter(item => normalizePathForComparison(item) !== canonical);
+				if (!enabled) next.push(canonical);
+				setByPath(current, segments, next);
+				this.#validateAll(
+					this.#mergeOverParent(this.#mergeOwnLayers({ ...this.#ownLayers(), global: current })),
+					this.#cwd,
+				);
+				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));
+				this.#persistedMutationGeneration++;
+			}
+			this.#configPath = configPath;
+			this.#adoptSavedGlobal(current, configPath);
+		});
+	}
+
+	#hasPendingUserSetting(segments: readonly string[]): boolean {
+		if (
+			segments[0] === "modelRoles" &&
+			(segments.length === 1
+				? this.#modifiedGlobalModelRoles.size > 0
+				: this.#modifiedGlobalModelRoles.has(segments[1]))
+		) {
+			return true;
+		}
+		for (const pending of this.#modified.values()) {
+			if (
+				pending.every((segment, index) => segments[index] === segment) ||
+				segments.every((segment, index) => pending[index] === segment)
+			) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Raw project settings layer (`.claude/settings.yml`, `.omp/config.yml`,
 	 * etc.), deep-cloned. Companion to {@link getGlobalSettings} for the legacy
@@ -1707,6 +1866,38 @@ export class Settings {
 		}
 		this.#savedRuntimeModelRoleOverrides.delete(role);
 		this.#updateRuntimeModelRoleOverride(role, modelId);
+	}
+
+	/** Persist one user role with compare-and-set semantics, preserving higher-precedence overrides. */
+	async saveUserModelRole(
+		role: ModelRole | string,
+		modelId: string | undefined,
+		expectedValue: string | undefined,
+	): Promise<void> {
+		if (this.#parent) return this.#parent.saveUserModelRole(role, modelId, expectedValue);
+		if (!this.#persist || this.#savesCancelled) {
+			throw new Error("User model role persistence is unavailable.");
+		}
+		await this.flush();
+		const configPath = this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		await fs.promises.mkdir(this.#agentDir, { recursive: true });
+		await this.#withYamlWriteLock(configPath, async writePath => {
+			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
+			const current = loaded.settings ?? {};
+			const currentValue = modelRoleValueFromUnknown(getByPath(current, ["modelRoles", role]));
+			if (currentValue !== expectedValue || this.#hasPendingUserSetting(["modelRoles", role])) {
+				this.#adoptSavedGlobal(current, configPath);
+				throw new ModelRoleConflictError(role);
+			}
+			if (modelId !== currentValue) {
+				if (modelId === undefined) deleteByPath(current, ["modelRoles", role]);
+				else setByPath(current, ["modelRoles", role], modelId);
+				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));
+				this.#persistedMutationGeneration++;
+			}
+			this.#configPath = configPath;
+			this.#adoptSavedGlobal(current, configPath);
+		});
 	}
 
 	/**

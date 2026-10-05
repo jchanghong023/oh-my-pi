@@ -92,4 +92,38 @@ describe("get_messages_page reverse pagination (5.4)", () => {
 		const next = pageRpcMessages(messages, snap, { cursor: page.nextCursor!, limit: 2 });
 		expect(next.messages.map(m => (m as { content: string }).content)).toEqual(["m1", "m2"]);
 	});
+	test("an explicit exhausted reverse cursor never wraps to the history tail", () => {
+		const { messages, snapshot: snap } = setup(3);
+		const cursor = Buffer.from(JSON.stringify({ version: 1, ...snap, offset: 0, order: "desc" })).toString(
+			"base64url",
+		);
+		const page = pageRpcMessages(messages, snap, { cursor });
+		expect(page.messages).toEqual([]);
+		expect(page.nextCursor).toBeUndefined();
+	});
+
+	test("invalid walk directions are rejected rather than silently read forward", () => {
+		const { messages, snapshot: snap } = setup(3);
+		expect(() => pageRpcMessages(messages, snap, { order: "backwards" as "asc" })).toThrow(
+			"order must be asc or desc",
+		);
+	});
+
+	test("same-leaf, same-length content changes invalidate revision-bound cursors and anchors", () => {
+		const { messages, snapshot: snap } = setup(4);
+		const original = { ...snap, revision: "original-bytes" };
+		const page = pageRpcMessages(messages, original, { limit: 1 });
+		const revised = { ...snap, revision: "revised-bytes" };
+		for (const options of [{ cursor: page.nextCursor }, { before: page.nextCursor }, { after: page.nextCursor }]) {
+			try {
+				pageRpcMessages(messages, revised, options);
+				throw new Error("Expected a stale cursor");
+			} catch (error) {
+				expect(error).toMatchObject({ code: "stale_cursor" });
+			}
+		}
+		expect(pageRpcMessages(messages, original, { cursor: page.nextCursor, limit: 1 }).messages).toEqual([
+			messages[1]!,
+		]);
+	});
 });

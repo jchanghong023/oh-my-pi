@@ -2,15 +2,21 @@
  * Fork-extension queued-message panel (requirement 5.1, rpc-ui-protocol.md).
  *
  * Wraps the session-level queue APIs (`agent.peekSteeringQueue` /
- * `peekFollowUpQueue` / `agent.replaceQueues`) with stable client-facing ids.
+ * `peekFollowUpQueue` / `agent.replaceQueue`) with stable client-facing ids.
  * Queued entries are bare `AgentMessage`s in the agent core; ids are minted
  * lazily per message object (WeakMap) so they stay stable across
  * `get_queue`/`reorder_queue` round-trips for as long as the entry stays
  * queued. `queue_updated` carries counts only; clients re-pull for contents.
+ * The panel exposes user-authored entries; hidden companions move with their
+ * owning user entry, while runtime/advisor messages remain outside the panel.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "../../session/agent-session";
-import { toRestoredQueuedMessage } from "../../session/queued-messages";
+import {
+	isHiddenUserCompanion,
+	isUserAuthoredQueuedMessage,
+	toRestoredQueuedMessage,
+} from "../../session/queued-messages";
 import type { RpcForkHost } from "./rpc-fork-host";
 import type { RpcForkCommandBase, RpcForkQueueUpdatedFrame } from "./rpc-fork-types";
 import type { RpcResponse } from "./rpc-types";
@@ -40,6 +46,8 @@ export class RpcForkQueueController {
 		host.registerCommand("remove_queued", command => this.#removeQueued(command));
 		host.registerCommand("reorder_queue", command => this.#reorderQueue(command));
 		host.registerCommand("clear_queue", command => this.#clearQueue(command));
+		const unsubscribe = session.agent.onQueueChange(() => this.emitQueueUpdated());
+		host.registerDisposer(() => unsubscribe());
 	}
 
 	#idFor(message: AgentMessage): string {
@@ -62,12 +70,13 @@ export class RpcForkQueueController {
 
 	#counts(): { steeringCount: number; followUpCount: number } {
 		return {
-			steeringCount: this.session.agent.peekSteeringQueue().length,
-			followUpCount: this.session.agent.peekFollowUpQueue().length,
+			steeringCount: this.#queue("steering").filter(isUserAuthoredQueuedMessage).length,
+			followUpCount: this.#queue("followUp").filter(isUserAuthoredQueuedMessage).length,
 		};
 	}
 
 	emitQueueUpdated(): void {
+		if (!this.host.isActive) return;
 		this.host.context.emit({
 			type: "queue_updated",
 			...this.#counts(),
@@ -76,8 +85,12 @@ export class RpcForkQueueController {
 
 	async #getQueue(command: RpcForkCommandBase): Promise<RpcResponse> {
 		const data: RpcForkQueueSnapshot = {
-			steering: this.#queue("steering").map(message => this.#entryFor(message)),
-			followUp: this.#queue("followUp").map(message => this.#entryFor(message)),
+			steering: this.#queue("steering")
+				.filter(isUserAuthoredQueuedMessage)
+				.map(message => this.#entryFor(message)),
+			followUp: this.#queue("followUp")
+				.filter(isUserAuthoredQueuedMessage)
+				.map(message => this.#entryFor(message)),
 		};
 		return this.host.context.success(command.id, "get_queue", data);
 	}
@@ -90,8 +103,9 @@ export class RpcForkQueueController {
 		if (typeof entryId !== "string" || !entryId) {
 			return this.host.context.error(command.id, "remove_queued", "entryId is required");
 		}
-		const remaining = this.#queue(queueName).filter(message => this.#idFor(message) !== entryId);
-		if (remaining.length === this.#queue(queueName).length) {
+		const current = this.#queue(queueName);
+		const group = this.#userGroups(current).find(candidate => candidate.id === entryId);
+		if (!group) {
 			return this.host.context.error(
 				command.id,
 				"remove_queued",
@@ -99,8 +113,9 @@ export class RpcForkQueueController {
 				"unknown_queue_entry",
 			);
 		}
+		const remaining = [...current];
+		remaining.splice(group.start, group.end - group.start);
 		this.#applyQueue(queueName, remaining);
-		this.emitQueueUpdated();
 		return this.host.context.success(command.id, "remove_queued");
 	}
 
@@ -112,11 +127,12 @@ export class RpcForkQueueController {
 		if (!Array.isArray(ids) || ids.some(id => typeof id !== "string")) {
 			return this.host.context.error(command.id, "reorder_queue", "ids must be an array of queued message ids");
 		}
-		const current = [...this.#queue(queueName)];
-		const byId = new Map(current.map(message => [this.#idFor(message), message] as const));
+		const current = this.#queue(queueName);
+		const groups = this.#userGroups(current);
+		const byId = new Map(groups.map(group => [group.id, current.slice(group.start, group.end)]));
 		const wanted = ids as string[];
 		if (
-			wanted.length !== current.length ||
+			wanted.length !== groups.length ||
 			new Set(wanted).size !== wanted.length ||
 			wanted.some(id => !byId.has(id))
 		) {
@@ -127,33 +143,55 @@ export class RpcForkQueueController {
 				"unknown_queue_entry",
 			);
 		}
-		this.#applyQueue(
-			queueName,
-			wanted.map(id => byId.get(id)!),
-		);
-		this.emitQueueUpdated();
+		const reordered: AgentMessage[] = [];
+		let offset = 0;
+		for (let index = 0; index < groups.length; index++) {
+			const group = groups[index];
+			reordered.push(...current.slice(offset, group.start), ...byId.get(wanted[index])!);
+			offset = group.end;
+		}
+		reordered.push(...current.slice(offset));
+		this.#applyQueue(queueName, reordered);
 		return this.host.context.success(command.id, "reorder_queue");
 	}
 
 	async #clearQueue(command: RpcForkCommandBase): Promise<RpcResponse> {
 		const queueName = (command as { queue?: unknown }).queue;
 		if (queueName === undefined) {
-			this.#applyQueue("steering", []);
-			this.#applyQueue("followUp", []);
+			this.#clearUserQueue("steering");
+			this.#clearUserQueue("followUp");
 		} else if (queueName === "steering" || queueName === "followUp") {
-			this.#applyQueue(queueName, []);
+			this.#clearUserQueue(queueName);
 		} else {
 			return this.host.context.error(command.id, "clear_queue", `Invalid queue: ${String(queueName)}`);
 		}
-		this.emitQueueUpdated();
 		return this.host.context.success(command.id, "clear_queue");
 	}
 
-	#applyQueue(queueName: RpcForkQueueName, messages: readonly AgentMessage[]): void {
-		if (queueName === "steering") {
-			this.session.agent.replaceQueues([...messages], [...this.session.agent.peekFollowUpQueue()]);
-		} else {
-			this.session.agent.replaceQueues([...this.session.agent.peekSteeringQueue()], [...messages]);
+	#userGroups(messages: readonly AgentMessage[]): Array<{ id: string; start: number; end: number }> {
+		const groups: Array<{ id: string; start: number; end: number }> = [];
+		for (let index = 0; index < messages.length; index++) {
+			const message = messages[index];
+			if (!isUserAuthoredQueuedMessage(message)) continue;
+			let start = index;
+			while (start > 0 && isHiddenUserCompanion(messages[start - 1])) start--;
+			groups.push({ id: this.#idFor(message), start, end: index + 1 });
 		}
+		return groups;
+	}
+
+	#clearUserQueue(queueName: RpcForkQueueName): void {
+		const current = this.#queue(queueName);
+		const groups = this.#userGroups(current);
+		const remaining = [...current];
+		for (let index = groups.length - 1; index >= 0; index--) {
+			const group = groups[index];
+			remaining.splice(group.start, group.end - group.start);
+		}
+		this.#applyQueue(queueName, remaining);
+	}
+
+	#applyQueue(queueName: RpcForkQueueName, messages: readonly AgentMessage[]): void {
+		this.session.agent.replaceQueue(queueName, messages);
 	}
 }

@@ -41,6 +41,10 @@ export interface Skill {
 	path: string;
 	/** Skill content (markdown) */
 	content: string;
+	/** Exact discovered file text, retained for snapshot-bound skill invocation. */
+	fileContent?: string;
+	/** Digest of the discovered UTF-8 file, not a later filesystem observation. */
+	contentRevision?: string;
 	/** Parsed frontmatter */
 	frontmatter?: SkillFrontmatter;
 	/**

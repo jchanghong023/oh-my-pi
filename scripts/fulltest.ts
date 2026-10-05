@@ -5,8 +5,8 @@
 // and is covered by the slowtest Linux CI pipeline instead), the Rust core
 // crates via `cargo nextest` (fork scope; `pi-builtins` stays out, see
 // docs-zh-CN/requirements/fork.md), repo script tests, and the dev-TUI PTY smoke. Python
-// components (sdk/python/omp-rpc, python/robomp — upstream's optional self-hosted
-// bot service) are fork-untouched and NOT tested locally. Needs the host
+// components (sdk/python/omp-rpc and python/robomp) are NOT tested locally.
+// Needs the host
 // native addon, so it always builds it first. The verdict is black and white:
 // no failure exemptions, no baselines. End-to-end smoke and installer E2E are
 // NOT local phases; the slowtest pipeline covers them. Only run on explicit
@@ -428,6 +428,7 @@ function windowsRustBuildEnv(): Record<string, string> | undefined {
 		"Installer",
 		"vswhere.exe",
 	);
+	if (!existsSync(vswhere)) return undefined;
 	const probe = Bun.spawnSync(
 		[vswhere, "-latest", "-products", "*", "-requires", vcToolsComponent, "-property", "installationPath"],
 		{ stdout: "pipe", stderr: "pipe" },

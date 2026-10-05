@@ -399,10 +399,10 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 	const cwd = getProjectDir();
 	const offline = command.flags.offline === true;
+	setCompanyOfflineEnabled(offline);
 	if (offline) {
 		// Company environment: flip the lane before the registry captures company
 		// state, and surface a broken config instead of silently listing nothing.
-		setCompanyOfflineEnabled(true);
 		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 		const companyError = getCompanyConfigError();
 		if (companyError) process.stderr.write(`${companyError}\n`);
@@ -410,7 +410,8 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 	const settings = await Settings.init({ cwd, configFiles: command.flags.config });
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 
 		if (action === "refresh" && !json && process.stderr.isTTY) {
 			process.stderr.write("Refreshing models from all providers…\n");

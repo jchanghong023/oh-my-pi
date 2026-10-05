@@ -9,9 +9,9 @@ import { modelMatches } from "@oh-my-pi/pi-coding-agent/team";
 describe("team modelMatches", () => {
 	const pattern = "openrouter/foo";
 
-	it("accepts an exact match and an unknown resolved model", () => {
-		expect(modelMatches(pattern, pattern)).toBe(true);
-		expect(modelMatches(undefined, pattern)).toBe(true);
+	it("rejects an unknown model instead of treating an unpinned child as a participant", () => {
+		expect(modelMatches(undefined, pattern)).toBe(false);
+		expect(modelMatches("", pattern)).toBe(false);
 	});
 
 	it("accepts thinking-suffix and routing annotations after the base id", () => {

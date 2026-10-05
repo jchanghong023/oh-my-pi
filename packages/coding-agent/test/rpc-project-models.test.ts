@@ -1,71 +1,34 @@
-// Unit coverage for RpcProjectModelRoleService (rpc-project-models.ts, R6):
-// the zero-session model-role catalog (O24: zero models never hide roles),
-// user-scope persistence with registry validation, revision conflicts, and
-// the settings_changed fan-out. The wire-level flow is covered end-to-end by
-// rpc-project-protocol.test.ts.
-
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { RpcProjectModelRoleService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-models";
 
-let globalSettingsReady: Promise<unknown> | undefined;
-
-beforeAll(async () => {
-	// Role persistence and settings access route through the process-global
-	// settings singleton; tests initialize it in memory (never touches the
-	// user's real config). Same memoized shape as rpc-fork-config.test.ts.
-	globalSettingsReady ??= Settings.init({ inMemory: true });
-	await globalSettingsReady;
+beforeAll(() => Settings.init({ inMemory: true }));
+const temporaryDirectories: TempDir[] = [];
+const isolatedSettings: Settings[] = [];
+afterEach(async () => {
+	for (const settings of isolatedSettings.splice(0)) settings.cancelPendingSaves();
+	AgentStorage.close();
+	for (const directory of temporaryDirectories.splice(0)) await directory.remove();
 });
 
-/**
- * Minimal Model-like fixture: role resolution and the service only read
- * provider/id (plus `kind` through the role acceptance predicate, where an
- * omitted kind falls back to "chat").
- */
 interface FakeModel {
 	provider: string;
 	id: string;
 	name: string;
 	kind?: string;
 }
-
 const CHAT_MODEL: FakeModel = { provider: "p", id: "m", name: "Probe Chat Model" };
+const OTHER_CHAT_MODEL: FakeModel = { provider: "p", id: "m2", name: "Other Chat Model" };
 const IMAGE_MODEL: FakeModel = { provider: "p", id: "img", name: "Probe Image Model", kind: "image" };
 
-/** The 15 built-in role ids every catalog must list (MODEL_ROLES keys). */
-const BUILTIN_ROLE_IDS = [
-	"default",
-	"smol",
-	"slow",
-	"vision",
-	"plan",
-	"commit",
-	"tiny",
-	"memory",
-	"task",
-	"advisor",
-	"image",
-	"web",
-	"speech",
-	"dictation",
-	"judge",
-];
-
-interface Fixture {
-	service: RpcProjectModelRoleService;
-	settings: Settings;
-	emitted: object[];
-}
-
-/** Fresh isolated settings plus a registry-backed service per test. */
-function setup(models: FakeModel[] = []): Fixture {
-	const settings = Settings.isolated();
+function serviceFor(settings: Settings, models: FakeModel[]) {
 	const emitted: object[] = [];
-	// The service calls getAvailable("all") for resolution and validation;
-	// `find` only reaches the shared formatting helper when a stored value
-	// carries an explicit thinking suffix.
 	const registry = {
 		getAvailable: () => models,
 		find: (provider: string, id: string) => models.find(model => model.provider === provider && model.id === id),
@@ -75,169 +38,238 @@ function setup(models: FakeModel[] = []): Fixture {
 		getModelRegistry: () => registry,
 		emit: frame => emitted.push(frame),
 	});
-	return { service, settings, emitted };
+	return { service, emitted };
 }
 
-describe("RpcProjectModelRoleService (rpc-project-models, R6)", () => {
-	test("listRoles lists every built-in role even with empty settings and zero models (O24)", async () => {
-		const { service } = setup();
+async function setup(models: FakeModel[] = [], projectValue?: string) {
+	const root = await TempDir.create("@rpc-role-disk-");
+	temporaryDirectories.push(root);
+	const cwd = root.join("project");
+	const agentDir = root.join("agent");
+	await fs.mkdir(cwd, { recursive: true });
+	await fs.mkdir(agentDir, { recursive: true });
+	const configFile = path.join(agentDir, "config.yml");
+	await fs.writeFile(configFile, "modelRoles: {}\n");
+	if (projectValue) {
+		await fs.mkdir(path.join(cwd, ".omp"));
+		await fs.writeFile(path.join(cwd, ".omp", "config.yml"), `modelRoles:\n  default: ${projectValue}\n`);
+	}
+	const settings = await Settings.loadIsolated({ cwd, agentDir });
+	isolatedSettings.push(settings);
+	return { ...serviceFor(settings, models), settings, cwd, agentDir, configFile };
+}
+
+async function roleRevision(service: RpcProjectModelRoleService, roleId: string) {
+	return (await service.listRoles()).roles.find(role => role.roleId === roleId)!.revision;
+}
+
+async function writeInAnotherProcess(cwd: string, agentDir: string, role: string, value: string) {
+	const settingsModule = path.resolve(import.meta.dir, "../src/config/settings.ts");
+	const script = `import { Settings } from ${JSON.stringify(settingsModule)}; const s = await Settings.loadIsolated(${JSON.stringify({ cwd, agentDir })}); await s.saveUserModelRole(${JSON.stringify(role)}, ${JSON.stringify(value)}, undefined); s.cancelPendingSaves();`;
+	const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+	const [exitCode, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stderr).text(),
+		new Response(child.stdout).text(),
+	]);
+	expect(stderr).not.toContain("error:");
+	expect(exitCode).toBe(0);
+}
+
+describe("RpcProjectModelRoleService", () => {
+	test("empty accounts/settings still expose all built-in roles and user-only write capabilities", async () => {
+		const { service } = await setup();
 		const result = await service.listRoles();
-
-		expect(result.roles.map(role => role.roleId).sort()).toEqual([...BUILTIN_ROLE_IDS].sort());
-		expect(result.roles).toHaveLength(BUILTIN_ROLE_IDS.length);
-		expect(result.revision).toBe(service.revision);
-
+		expect(result.roles.map(role => role.roleId).sort()).toEqual([...MODEL_ROLE_IDS].sort());
 		for (const role of result.roles) {
 			expect(role.configurable).toBe(true);
 			expect(role.source).toBe("default");
+			expect(role.userValue).toBeNull();
+			expect(role.projectValue).toBeNull();
 			expect(role.explicitValue).toBeUndefined();
 			expect(role.effectiveModel).toBeUndefined();
-			expect(role.unresolvedReason).toBe("not_configured");
+			expect(role.candidateModels).toEqual([]);
 			expect(role.writableScopes).toEqual(["user"]);
-			expect(role.hidden).toBe(false);
-			expect(role.revision).toBe(result.revision);
-			expect(["chat", "kind"]).toContain(role.section);
+			expect(role.revision).toStartWith("role-");
 		}
+	});
 
-		const byId = new Map(result.roles.map(role => [role.roleId, role]));
-		expect(byId.get("default")).toMatchObject({ name: "Default", section: "chat" });
-		expect(byId.get("image")).toMatchObject({ name: "Image generation", section: "kind" });
-	}, 10_000);
-
-	test("setRole persists a registry-backed selection to user scope and emits settings_changed", async () => {
-		const { service, settings, emitted } = setup([CHAT_MODEL]);
-		const result = await service.setRole({
+	test("reports persisted only after an actual user config write", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		const result = await fx.service.setRole({
 			roleId: "default",
 			scope: "user",
 			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+			expectedRevision: await roleRevision(fx.service, "default"),
 		});
-
 		expect(result.persisted).toBe(true);
-		expect(result.revision).toBe(service.revision);
-		expect(settings.getModelRole("default")).toContain("p/m");
-
-		const role = result.role;
-		expect(role.roleId).toBe("default");
-		expect(role.explicitValue).toContain("p/m");
-		expect(role.source).toBe("global");
-		expect(role.effectiveModel).toEqual({ provider: "p", modelId: "m" });
-		expect(result.effectiveNote).toBeUndefined(); // the saved value simply took effect
-
-		expect(emitted.at(-1)).toMatchObject({ type: "settings_changed", scope: "user" });
-	}, 10_000);
-
-	test("setRole rejects models missing from the registry or unfitting for the role", async () => {
-		const { service, settings } = setup([CHAT_MODEL]);
-		await expect(
-			service.setRole({
-				roleId: "default",
-				scope: "user",
-				selection: { kind: "model", model: { provider: "p", modelId: "missing" } },
-			}),
-		).rejects.toMatchObject({ name: "RpcProjectModelRoleError", code: "invalid_params" });
-
-		// Present in the registry but rejected by the role's acceptance
-		// predicate: an image-kind model cannot serve the chat "default" role.
-		const image = setup([IMAGE_MODEL]);
-		await expect(
-			image.service.setRole({
-				roleId: "default",
-				scope: "user",
-				selection: { kind: "model", model: { provider: "p", modelId: "img" } },
-			}),
-		).rejects.toMatchObject({ code: "invalid_params" });
-
-		// Neither rejection persisted anything.
-		expect(settings.getModelRole("default")).toBeUndefined();
-		expect(image.settings.getModelRole("default")).toBeUndefined();
-	}, 10_000);
-
-	test("setRole with a null selection clears the explicit user value", async () => {
-		const { service, settings, emitted } = setup([CHAT_MODEL]);
-		await service.setRole({
-			roleId: "smol",
-			scope: "user",
-			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+		expect(await Bun.file(fx.configFile).text()).toContain("p/m");
+		const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+		isolatedSettings.push(reloaded);
+		expect(reloaded.getGlobalModelRole("default")).toBe("p/m");
+		expect(result.role).toMatchObject({
+			userValue: "p/m",
+			source: "global",
+			effectiveModel: { provider: "p", modelId: "m" },
 		});
-		expect(settings.getModelRole("smol")).toContain("p/m");
+		expect(result.effectiveNote).toBeUndefined();
+		expect(fx.emitted.at(-1)).toMatchObject({ type: "settings_changed", scope: "user" });
+	});
 
-		const cleared = await service.setRole({ roleId: "smol", scope: "user", selection: null });
+	test("model validation, role acceptance and scope checks write nothing", async () => {
+		const fx = await setup([CHAT_MODEL, IMAGE_MODEL]);
+		for (const modelId of ["missing", "img"]) {
+			await expect(
+				fx.service.setRole({
+					roleId: "default",
+					scope: "user",
+					selection: { kind: "model", model: { provider: "p", modelId } },
+					expectedRevision: await roleRevision(fx.service, "default"),
+				}),
+			).rejects.toMatchObject({ code: "invalid_params" });
+		}
+		await expect(
+			fx.service.setRole({
+				roleId: "default",
+				scope: "project" as never,
+				selection: null,
+				expectedRevision: await roleRevision(fx.service, "default"),
+			}),
+		).rejects.toMatchObject({ code: "scope_not_allowed" });
+		await expect(
+			fx.service.setRole({
+				roleId: "missing-role",
+				scope: "user",
+				selection: null,
+				expectedRevision: await roleRevision(fx.service, "default"),
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		expect(fx.settings.getGlobalModelRole("default")).toBeUndefined();
+		expect((await fx.service.listRoles()).roles.find(role => role.roleId === "image")!.candidateModels).toEqual([
+			{ provider: "p", modelId: "img" },
+		]);
+	});
+
+	test("null clears only the user role and preserves higher-precedence project/runtime values", async () => {
+		const fx = await setup([CHAT_MODEL, OTHER_CHAT_MODEL], "p/m2");
+		fx.settings.overrideModelRoles({ default: "p/m" });
+		const saved = await fx.service.setRole({
+			roleId: "default",
+			scope: "user",
+			selection: { kind: "model", model: { provider: "p", modelId: "m2" } },
+			expectedRevision: await roleRevision(fx.service, "default"),
+		});
+		expect(saved.role).toMatchObject({
+			userValue: "p/m2",
+			projectValue: "p/m2",
+			explicitValue: "p/m",
+			source: "runtime",
+		});
+		expect(saved.effectiveNote).toContain("runtime");
+		const cleared = await fx.service.setRole({
+			roleId: "default",
+			scope: "user",
+			selection: null,
+			expectedRevision: saved.role.revision,
+		});
 		expect(cleared.persisted).toBe(true);
-		expect(settings.getModelRole("smol")).toBeUndefined();
-		expect(cleared.role.source).toBe("default");
-		expect(cleared.role.explicitValue).toBeUndefined();
-		expect(cleared.role.unresolvedReason).toBe("not_configured");
-		expect(emitted.filter(frame => (frame as { type: string }).type === "settings_changed")).toHaveLength(2);
-	}, 10_000);
+		expect(cleared.role).toMatchObject({
+			userValue: null,
+			projectValue: "p/m2",
+			explicitValue: "p/m",
+			source: "runtime",
+		});
+		expect(fx.settings.getModelRole("default")).toBe("p/m");
+		expect(fx.settings.getProjectModelRole("default")).toBe("p/m2");
+	});
 
-	test("expectedRevision guards writes: stale values conflict, the current revision passes", async () => {
-		const { service, settings } = setup([CHAT_MODEL]);
-		const initial = service.revision;
+	test("revisions are per role and same-role requests serialize their CAS", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		const defaultRevision = await roleRevision(fx.service, "default");
+		const smolRevision = await roleRevision(fx.service, "smol");
+		const results = await Promise.allSettled([
+			fx.service.setRole({
+				roleId: "default",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: defaultRevision,
+			}),
+			fx.service.setRole({ roleId: "default", scope: "user", selection: null, expectedRevision: defaultRevision }),
+			fx.service.setRole({
+				roleId: "smol",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: smolRevision,
+			}),
+		]);
+		expect(results[0]!.status).toBe("fulfilled");
+		expect(results[1]).toMatchObject({ status: "rejected", reason: { code: "revision_conflict" } });
+		expect(results[2]!.status).toBe("fulfilled");
+		expect(fx.settings.getGlobalModelRole("default")).toBe("p/m");
+		expect(fx.settings.getGlobalModelRole("smol")).toBe("p/m");
+	});
 
-		// Reads never bump the catalog revision (it is the service's own
-		// revision source, not the settings revision).
-		const read = await service.listRoles();
-		expect(read.revision).toBe(initial);
+	test("cross-process same-role stale writes fail, rather than claiming a skipped save persisted", async () => {
+		const fx = await setup([CHAT_MODEL, OTHER_CHAT_MODEL]);
+		const revision = await roleRevision(fx.service, "default");
+		await writeInAnotherProcess(fx.cwd, fx.agentDir, "default", "p/m2");
+		await expect(
+			fx.service.setRole({
+				roleId: "default",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: revision,
+			}),
+		).rejects.toMatchObject({ code: "revision_conflict" });
+		expect(fx.settings.getGlobalModelRole("default")).toBe("p/m2");
+		expect(fx.emitted).toEqual([]);
+		expect(await Bun.file(fx.configFile).text()).toContain("p/m2");
+	});
 
+	test("a cross-process different-role write is preserved", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		const revision = await roleRevision(fx.service, "default");
+		await writeInAnotherProcess(fx.cwd, fx.agentDir, "smol", "p/m");
+		await fx.service.setRole({
+			roleId: "default",
+			scope: "user",
+			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+			expectedRevision: revision,
+		});
+		expect(fx.settings.getGlobalModelRole("smol")).toBe("p/m");
+		expect(fx.settings.getGlobalModelRole("default")).toBe("p/m");
+	});
+
+	test("real disk errors do not stage a role or emit a saved notification", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		const revision = await roleRevision(fx.service, "default");
+		await fs.unlink(fx.configFile);
+		await fs.mkdir(fx.configFile);
+		await expect(
+			fx.service.setRole({
+				roleId: "default",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: revision,
+			}),
+		).rejects.toMatchObject({ code: "persistence_failed" });
+		expect(fx.settings.getGlobalModelRole("default")).toBeUndefined();
+		expect(fx.emitted).toEqual([]);
+		expect((await fs.stat(fx.configFile)).isDirectory()).toBe(true);
+	});
+
+	test("in-memory settings cannot falsely claim a persisted write", async () => {
+		const settings = Settings.isolated();
+		const { service, emitted } = serviceFor(settings, [CHAT_MODEL]);
 		await expect(
 			service.setRole({
 				roleId: "default",
 				scope: "user",
 				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-				expectedRevision: "stale-revision",
+				expectedRevision: await roleRevision(service, "default"),
 			}),
-		).rejects.toMatchObject({ code: "revision_conflict" });
-		expect(settings.getModelRole("default")).toBeUndefined(); // the conflict wrote nothing
-
-		const ok = await service.setRole({
-			roleId: "default",
-			scope: "user",
-			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-			expectedRevision: initial,
-		});
-		expect(ok.persisted).toBe(true);
-		expect(ok.revision).not.toBe(initial);
-
-		// The pre-write revision is stale after the successful write.
-		await expect(
-			service.setRole({ roleId: "default", scope: "user", selection: null, expectedRevision: initial }),
-		).rejects.toMatchObject({ code: "revision_conflict" });
-		expect(settings.getModelRole("default")).toContain("p/m");
-	}, 10_000);
-
-	test("setRole rejects unknown role ids with not_found", async () => {
-		const { service, settings } = setup([CHAT_MODEL]);
-		await expect(
-			service.setRole({
-				roleId: "definitely-not-a-role",
-				scope: "user",
-				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-			}),
-		).rejects.toMatchObject({ name: "RpcProjectModelRoleError", code: "not_found" });
-		expect(settings.getModelRoles()).toEqual({});
-	}, 10_000);
-
-	test("listRoles reflects persisted explicit values with global provenance", async () => {
-		const { service } = setup([CHAT_MODEL]);
-		await service.setRole({
-			roleId: "default",
-			scope: "user",
-			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-		});
-
-		const result = await service.listRoles();
-		const row = result.roles.find(role => role.roleId === "default");
-		expect(row).toBeDefined();
-		expect(row!.configurable).toBe(true);
-		expect(row!.explicitValue).toContain("p/m");
-		expect(row!.source).toBe("global");
-		expect(row!.effectiveModel).toEqual({ provider: "p", modelId: "m" });
-		expect(row!.unresolvedReason).toBeUndefined();
-
-		// Sibling roles stay unconfigured.
-		const smol = result.roles.find(role => role.roleId === "smol");
-		expect(smol!.explicitValue).toBeUndefined();
-		expect(smol!.unresolvedReason).toBe("not_configured");
-		expect(smol!.source).toBe("default");
-	}, 10_000);
+		).rejects.toMatchObject({ code: "persistence_failed" });
+		expect(settings.getGlobalModelRole("default")).toBeUndefined();
+		expect(emitted).toEqual([]);
+	});
 });

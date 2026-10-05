@@ -12,8 +12,13 @@
  * writes to the protocol channel (stdout).
  */
 import * as path from "node:path";
+import { logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
+import type { EventBus } from "../../utils/event-bus";
 import type { AgentSession } from "../../session/agent-session";
+import type { MCPManager } from "../../mcp";
 import { listSessions, type SessionInfo } from "../../session/session-listing";
+import { parseSessionContent } from "../../session/session-loader";
+import { overlayTitleSlotContent } from "../../session/session-title-slot";
 import { FileSessionStorage } from "../../session/session-storage";
 import {
 	RpcRevisionSource,
@@ -54,9 +59,11 @@ export interface RpcProjectCreatedSession {
 	/** Per-session UI-context setter returned by createAgentSession. */
 	readonly setToolUIContext: (uiContext: unknown, hasUI: boolean) => void;
 	/** The session-scoped subagent event bus this session was created with. */
-	readonly subagentEventBus?: import("../../utils/event-bus").EventBus;
+	readonly subagentEventBus?: EventBus;
+	/** Actual session-owned MCP discovery/lifecycle manager, when MCP is enabled. */
+	readonly mcpManager?: MCPManager;
 	/** Attach the session host AFTER construction (set via setHost). */
-	setHost(host: RpcProjectSessionHostLike): void;
+	setHost?(host: RpcProjectSessionHostLike): void;
 }
 
 /** Creates one fresh, empty AgentSession wired to this project (host layer provides the implementation). */
@@ -94,8 +101,8 @@ export interface RpcProjectSessionCreateOptions {
 }
 
 export interface RpcProjectSessionListOptions {
-	/** Numeric offset into the merged, sorted directory (default 0). */
-	readonly cursor?: number;
+	/** Opaque continuation bound to this project's filtered directory snapshot. */
+	readonly cursor?: string;
 	/** Page size; default 50, valid range 1..200 (out of range → invalid_params). */
 	readonly limit?: number;
 	readonly loadState?: "loaded" | "not_loaded";
@@ -104,7 +111,7 @@ export interface RpcProjectSessionListOptions {
 export interface RpcProjectSessionListResult {
 	readonly sessions: RpcProjectSessionSummary[];
 	readonly revision: RpcRevision;
-	readonly nextCursor?: number;
+	readonly nextCursor?: string;
 }
 
 export interface RpcProjectSessionCloseResult {
@@ -138,8 +145,8 @@ function deriveRunState(record: RpcProjectSessionRecord): RpcProjectSessionRunSt
 	if (record.state === "closing") return "closing";
 	const host = record.host;
 	if (!host) return "idle";
-	if (host.isStreaming) return "streaming";
 	if (host.isWaitingInteraction()) return "waiting_interaction";
+	if (host.isStreaming || host.hasPendingAsyncWork()) return "streaming";
 	return "idle";
 }
 
@@ -209,12 +216,21 @@ function normalizeListLimit(limit: number | undefined): number {
 	return limit;
 }
 
-function normalizeListCursor(cursor: number | undefined): number {
-	if (cursor === undefined) return 0;
-	if (typeof cursor !== "number" || !Number.isInteger(cursor) || cursor < 0) {
-		throw new RpcProjectSessionError("invalid_params", "cursor must be a non-negative integer offset");
-	}
-	return cursor;
+function listCursor(cursor: string | undefined): { revision: string; filter: string; offset: number } | undefined {
+	if (cursor === undefined) return undefined;
+	try {
+		const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+		if (
+			typeof value.revision === "string" &&
+			typeof value.filter === "string" &&
+			typeof value.offset === "number" &&
+			Number.isSafeInteger(value.offset) &&
+			value.offset >= 0
+		) {
+			return { revision: value.revision, filter: value.filter, offset: value.offset };
+		}
+	} catch {}
+	throw new RpcProjectSessionError("invalid_params", "Invalid session directory cursor");
 }
 
 /** Internal mutable view of a record's host slot (readonly on the public interface). */
@@ -230,9 +246,14 @@ export class RpcProjectSessionContainer {
 	readonly #storage: FileSessionStorage;
 	readonly #records = new Map<string, RpcProjectSessionRecord>();
 	/** Concurrent resume coalescing (requirement O04): one load per session id. */
-	readonly #resuming = new Map<string, Promise<RpcProjectSessionRecord>>();
+	readonly #resuming = new Map<
+		string,
+		Promise<{ record: RpcProjectSessionRecord; created: RpcProjectCreatedSession }>
+	>();
 	readonly #revisions = new RpcRevisionSource();
 	#generationCounter = 0;
+	#disposed = false;
+	#catalogKey: string | undefined;
 
 	constructor(options: RpcProjectSessionContainerOptions) {
 		this.#options = options;
@@ -246,13 +267,28 @@ export class RpcProjectSessionContainer {
 
 	/** Bump the revision and notify the host (`sessions_changed`), isolating listener failures. */
 	#bump(): RpcRevision {
+		this.#catalogKey = undefined;
 		const revision = this.#revisions.bump();
 		try {
 			this.#options.onChanged?.(revision);
 		} catch (err) {
-			console.error("[rpc-project-sessions] sessions-changed listener failed", err);
+			logger.error("RPC sessions changed listener failed", { error: String(err) });
 		}
 		return revision;
+	}
+	notifyChanged(): void {
+		this.#bump();
+	}
+
+	#resourceRevision(sessionId: string, file: string | undefined): RpcRevision {
+		const stat = file && this.#storage.existsSync(file) ? this.#storage.statSync(file) : undefined;
+		return `session-${Bun.hash(JSON.stringify([sessionId, stat?.size, stat?.mtimeMs, stat?.ctimeMs])).toString(36)}`;
+	}
+
+	#assertResourceRevision(sessionId: string, file: string | undefined, expected: RpcRevision | undefined): void {
+		if (expected !== undefined && this.#resourceRevision(sessionId, file) !== expected) {
+			throw new RpcProjectSessionError("revision_conflict", `Session ${sessionId} changed; read it again`);
+		}
 	}
 
 	#nextGeneration(): string {
@@ -267,11 +303,11 @@ export class RpcProjectSessionContainer {
 		try {
 			const attach = created.setHost;
 			created.setHost = (host: RpcProjectSessionHostLike): void => {
-				attach.call(created, host);
+				attach?.call(created, host);
 				(record as WritableRecordHost).host = host;
 			};
 		} catch (err) {
-			console.error(`[rpc-project-sessions] failed to intercept setHost for session ${record.sessionId}`, err);
+			throw new RpcProjectSessionError("execution_failed", `Failed to attach session host: ${errorText(err)}`);
 		}
 	}
 
@@ -279,7 +315,7 @@ export class RpcProjectSessionContainer {
 		try {
 			await session.dispose();
 		} catch (err) {
-			console.error(`[rpc-project-sessions] session dispose failed during ${context}`, err);
+			logger.error("RPC session rollback disposal failed", { context, error: String(err) });
 		}
 	}
 
@@ -287,6 +323,9 @@ export class RpcProjectSessionContainer {
 	async #locateListed(sessionId: string): Promise<SessionInfo> {
 		const entries = await listSessions(this.#options.sessionDir, this.#storage);
 		const entry = entries.find(candidate => candidate.id === sessionId);
+		if (entry && normalizePathForComparison(entry.cwd) !== normalizePathForComparison(this.#options.cwd)) {
+			throw new RpcProjectSessionError("scope_not_allowed", `Session ${sessionId} belongs to another project`);
+		}
 		if (!entry) {
 			throw new RpcProjectSessionError("not_found", `Session ${sessionId} not found in ${this.#options.sessionDir}`);
 		}
@@ -294,7 +333,26 @@ export class RpcProjectSessionContainer {
 	}
 
 	/** Teardown gate: no double close/delete, and running work rejects unless cancelled. */
+	#assertStableIdentity(record: RpcProjectSessionRecord): void {
+		if (
+			record.session.sessionManager.getSessionId() !== record.sessionId ||
+			normalizePathForComparison(record.session.sessionManager.getCwd()) !==
+				normalizePathForComparison(this.#options.cwd)
+		) {
+			record.state = "closing";
+			this.#bump();
+			throw new RpcProjectSessionError(
+				"stale_session",
+				`Session ${record.sessionId} no longer owns its original identity`,
+			);
+		}
+	}
+
 	#assertTeardownAllowed(record: RpcProjectSessionRecord, cancelRunning: boolean): void {
+		this.#assertStableIdentity(record);
+		if (record.state !== "loaded") {
+			throw new RpcProjectSessionError("busy", `Session ${record.sessionId} is ${record.state}`);
+		}
 		if (record.busy) {
 			throw new RpcProjectSessionError(
 				"busy",
@@ -302,8 +360,12 @@ export class RpcProjectSessionContainer {
 			);
 		}
 		const host = record.host;
-		if (!cancelRunning && host && (host.isStreaming || host.hasPendingAsyncWork())) {
-			const running = host.isStreaming ? "streaming" : "finishing pending async work";
+		if (!cancelRunning && host && (host.isStreaming || host.hasPendingAsyncWork() || host.isWaitingInteraction())) {
+			const running = host.isWaitingInteraction()
+				? "waiting for interaction"
+				: host.isStreaming
+					? "streaming"
+					: "finishing pending async work";
 			throw new RpcProjectSessionError(
 				"busy",
 				`Session ${record.sessionId} is ${running}; retry with cancelRunning`,
@@ -311,34 +373,34 @@ export class RpcProjectSessionContainer {
 		}
 	}
 
-	/**
-	 * Tear one record down (abort first when cancelling, then host release, then
-	 * session dispose) and remove it from the directory. Callers enforce the
-	 * busy gate. On failure the record is restored (not removed) and rethrown.
-	 */
+	/** Release all resources even when one cleanup step fails; never report a failed close as unloaded. */
 	async #closeRecord(
 		record: RpcProjectSessionRecord,
-		options: { cancelRunning: boolean; reason: string },
+		options: { cancelRunning: boolean; reason: string; force?: boolean },
 	): Promise<void> {
-		const previousState = record.state;
+		if (!options.force) this.#assertStableIdentity(record);
 		record.busy = true;
-		try {
-			if (options.cancelRunning) {
-				try {
-					await record.session.abort();
-				} catch {
-					// Best-effort cancel: teardown proceeds regardless.
-				}
+		record.state = "closing";
+		this.#bump();
+		const errors: unknown[] = [];
+		const release = async (operation: () => Promise<void> | void): Promise<void> => {
+			try {
+				await operation();
+				if (!options.force) this.#assertStableIdentity(record);
+			} catch (error) {
+				errors.push(error);
 			}
-			record.state = "closing";
-			await record.host?.dispose(options.reason);
-			await record.session.dispose();
-		} catch (err) {
-			record.state = previousState;
-			throw err;
+		};
+		try {
+			// Fail host waits before abort: the active turn can be waiting for them.
+			await release(() => record.host?.dispose(options.reason));
+			if (options.cancelRunning) await release(() => record.session.abort());
+			await release(() => record.session.dispose());
 		} finally {
 			record.busy = false;
 		}
+		if (errors.length === 1) throw errors[0];
+		if (errors.length > 1) throw new AggregateError(errors, `Session ${record.sessionId} cleanup failed`);
 		this.#records.delete(record.sessionId);
 	}
 
@@ -348,6 +410,9 @@ export class RpcProjectSessionContainer {
 	 * not applied here — model selection is the caller's business.
 	 */
 	async create(options: RpcProjectSessionCreateOptions = {}): Promise<RpcProjectSessionRecord> {
+		if (options.name !== undefined && !options.name.trim()) {
+			throw new RpcProjectSessionError("invalid_params", "Session name cannot be empty");
+		}
 		return this.adoptCreated(await this.#options.createSession(), options);
 	}
 
@@ -361,9 +426,15 @@ export class RpcProjectSessionContainer {
 		created: RpcProjectCreatedSession,
 		options: RpcProjectSessionCreateOptions = {},
 	): Promise<RpcProjectSessionRecord> {
+		if (this.#disposed) {
+			await created.session.dispose();
+			throw new RpcProjectSessionError("busy", "Project is disposing");
+		}
 		if (options.name !== undefined && !options.name.trim()) {
+			await created.session.dispose();
 			throw new RpcProjectSessionError("invalid_params", "Session name cannot be empty");
 		}
+		created.session.sessionManager.requireStableSessionIdentity();
 		const record: RpcProjectSessionRecord = {
 			sessionId: created.session.sessionId,
 			sessionGeneration: this.#nextGeneration(),
@@ -371,20 +442,28 @@ export class RpcProjectSessionContainer {
 			createdAt: new Date().toISOString(),
 			state: "loading",
 		};
+		if (this.#records.has(record.sessionId)) {
+			if (this.#records.get(record.sessionId)?.session !== created.session) {
+				await this.#disposeSessionQuietly(created.session, "duplicate create rollback");
+			}
+			throw new RpcProjectSessionError("stale_session", `Session ${record.sessionId} is already loaded`);
+		}
 		this.#records.set(record.sessionId, record);
-		this.#wireHostAttachment(created, record);
 		try {
+			this.#wireHostAttachment(created, record);
 			try {
 				await created.session.sessionManager.ensureOnDisk();
 			} catch (err) {
 				throw new RpcProjectSessionError("persistence_failed", `Failed to persist new session: ${errorText(err)}`);
 			}
+			this.#assertStableIdentity(record);
 			if (options.name !== undefined) {
 				const applied = await created.session.setSessionName(options.name, "user");
 				if (!applied) {
 					throw new RpcProjectSessionError("invalid_params", "Session name cannot be empty");
 				}
 			}
+			this.#assertStableIdentity(record);
 		} catch (err) {
 			this.#records.delete(record.sessionId);
 			await this.#disposeSessionQuietly(created.session, "create rollback");
@@ -409,40 +488,42 @@ export class RpcProjectSessionContainer {
 	/**
 	 * Like {@link resume}, but the host layer supplies the factory call so the
 	 * returned `created` handle (UI-context setter, subagent bus) can be used
-	 * to attach the session host. The coalescing promise resolves `{ record }`
-	 * without `created` for callers that found the instance already loading.
+	 * to attach the session host. Concurrent callers share the same created handle.
 	 */
 	async resumeWithFactory(
 		sessionId: string,
 		factory: () => Promise<RpcProjectCreatedSession>,
 	): Promise<{ record: RpcProjectSessionRecord; created?: RpcProjectCreatedSession }> {
-		const existing = this.#records.get(sessionId);
-		if (existing) return { record: existing };
 		const pending = this.#resuming.get(sessionId);
-		if (pending) return { record: await pending };
+		if (pending) return pending;
+		const existing = this.#records.get(sessionId);
+		if (existing) {
+			if (existing.state !== "loaded" || existing.busy)
+				throw new RpcProjectSessionError("busy", "Session lifecycle transition is in progress");
+			this.#assertStableIdentity(existing);
+			return { record: existing };
+		}
+		if (this.#disposed) throw new RpcProjectSessionError("busy", "Project is disposing");
 		const load = this.#resumeOnce(sessionId, factory);
 		this.#resuming.set(sessionId, load);
 		try {
-			const record = await load;
-			return { record, created: this.#lastCreated.get(sessionId) };
+			return await load;
 		} finally {
 			this.#resuming.delete(sessionId);
-			this.#lastCreated.delete(sessionId);
 		}
 	}
-
-	/** created bundles produced by #resumeOnce, keyed by session id for the coalesced caller. */
-	readonly #lastCreated = new Map<string, RpcProjectCreatedSession>();
 
 	async #resumeOnce(
 		sessionId: string,
 		factory: () => Promise<RpcProjectCreatedSession>,
-	): Promise<RpcProjectSessionRecord> {
-		const known = this.#records.get(sessionId);
-		if (known) return known;
+	): Promise<{ record: RpcProjectSessionRecord; created: RpcProjectCreatedSession }> {
 		const entry = await this.#locateListed(sessionId);
 		const created = await factory();
-		this.#lastCreated.set(sessionId, created);
+		created.session.sessionManager.requireStableSessionIdentity();
+		if (this.#disposed) {
+			await created.session.dispose();
+			throw new RpcProjectSessionError("busy", "Project is disposing");
+		}
 		// The record carries the TARGET stable id; switchSession makes the fresh
 		// instance adopt it (and its history) from the saved file.
 		const record: RpcProjectSessionRecord = {
@@ -453,12 +534,18 @@ export class RpcProjectSessionContainer {
 			state: "loading",
 		};
 		this.#records.set(sessionId, record);
-		this.#wireHostAttachment(created, record);
 		try {
-			const switched = await created.session.switchSession(entry.path);
+			this.#wireHostAttachment(created, record);
+			const alreadyLoaded =
+				created.session.sessionId === sessionId &&
+				created.session.sessionFile !== undefined &&
+				normalizePathForComparison(created.session.sessionFile) === normalizePathForComparison(entry.path);
+			const switched = alreadyLoaded || (await created.session.switchSession(entry.path));
 			if (!switched) {
 				throw new RpcProjectSessionError("execution_failed", `Resume of session ${sessionId} was cancelled`);
 			}
+			created.session.sessionManager.requireStableSessionIdentity();
+			this.#assertStableIdentity(record);
 		} catch (err) {
 			this.#records.delete(sessionId);
 			await this.#disposeSessionQuietly(created.session, "resume rollback");
@@ -476,7 +563,7 @@ export class RpcProjectSessionContainer {
 		}
 		record.state = "loaded";
 		this.#bump();
-		return record;
+		return { record, created };
 	}
 
 	/**
@@ -487,16 +574,26 @@ export class RpcProjectSessionContainer {
 	 */
 	async list(options: RpcProjectSessionListOptions = {}): Promise<RpcProjectSessionListResult> {
 		const limit = normalizeListLimit(options.limit);
-		const offset = normalizeListCursor(options.cursor);
-		const revision = this.revision;
-		const listed = await listSessions(this.#options.sessionDir, this.#storage);
+		const cursor = listCursor(options.cursor);
+		const filter = `${normalizePathForComparison(this.#options.cwd)}:${options.loadState ?? "all"}`;
+		let revision = this.revision;
+		const listed = (await listSessions(this.#options.sessionDir, this.#storage)).filter(
+			entry => entry.cwd && normalizePathForComparison(entry.cwd) === normalizePathForComparison(this.#options.cwd),
+		);
 		const byId = new Map<string, RpcProjectSessionSummary>();
-		for (const entry of listed) byId.set(entry.id, summaryFromListed(entry, revision));
+		for (const entry of listed)
+			byId.set(entry.id, summaryFromListed(entry, this.#resourceRevision(entry.id, entry.path)));
 		for (const record of this.#records.values()) {
 			const base = byId.get(record.sessionId);
 			byId.set(
 				record.sessionId,
-				base ? mergeListedWithRecord(base, record, revision) : buildSessionSummary(record, revision),
+				base
+					? mergeListedWithRecord(
+							base,
+							record,
+							this.#resourceRevision(record.sessionId, record.session.sessionFile),
+						)
+					: this.buildSummary(record),
 			);
 		}
 		let sessions = Array.from(byId.values());
@@ -509,12 +606,26 @@ export class RpcProjectSessionContainer {
 			const loadState = options.loadState;
 			sessions = sessions.filter(summary => summary.loadState === loadState);
 		}
+		const catalogKey = JSON.stringify(sessions);
+		if (this.#catalogKey !== undefined && this.#catalogKey !== catalogKey) revision = this.#bump();
+		this.#catalogKey = catalogKey;
+		const snapshotRevision = `sessions-${Bun.hash(catalogKey).toString(36)}`;
+		if (cursor && (cursor.revision !== snapshotRevision || cursor.filter !== filter)) {
+			throw new RpcProjectSessionError("stale_cursor", "Session directory changed; start a new page");
+		}
+		const offset = cursor?.offset ?? 0;
 		const page = sessions.slice(offset, offset + limit);
 		const nextOffset = offset + page.length;
 		return {
 			sessions: page,
 			revision,
-			...(nextOffset < sessions.length ? { nextCursor: nextOffset } : {}),
+			...(nextOffset < sessions.length
+				? {
+						nextCursor: Buffer.from(
+							JSON.stringify({ revision: snapshotRevision, filter, offset: nextOffset }),
+						).toString("base64url"),
+					}
+				: {}),
 		};
 	}
 
@@ -525,7 +636,8 @@ export class RpcProjectSessionContainer {
 
 	/** Directory summary of a hosted record at the current revision. */
 	buildSummary(record: RpcProjectSessionRecord): RpcProjectSessionSummary {
-		return buildSessionSummary(record, this.revision);
+		this.#assertStableIdentity(record);
+		return buildSessionSummary(record, this.#resourceRevision(record.sessionId, record.session.sessionFile));
 	}
 
 	/** Every hosted record (any state), snapshot copy. */
@@ -536,11 +648,18 @@ export class RpcProjectSessionContainer {
 	/** Session file for a stable id: live record first, then a directory scan; undefined when unknown. */
 	async findSessionFileById(sessionId: string): Promise<string | undefined> {
 		const loaded = this.#records.get(sessionId);
-		if (loaded?.session.sessionFile) return loaded.session.sessionFile;
+		if (
+			loaded?.session.sessionFile &&
+			loaded.session.sessionManager.getSessionId() === sessionId &&
+			normalizePathForComparison(loaded.session.sessionManager.getCwd()) ===
+				normalizePathForComparison(this.#options.cwd)
+		)
+			return loaded.session.sessionFile;
 		try {
 			return (await this.#locateListed(sessionId)).path;
-		} catch {
-			return undefined;
+		} catch (error) {
+			if (error instanceof RpcProjectSessionError && error.code === "not_found") return undefined;
+			throw error;
 		}
 	}
 
@@ -576,12 +695,7 @@ export class RpcProjectSessionContainer {
 		return { state: "unloaded", revision };
 	}
 
-	/**
-	 * Rename by stable id, loaded or not. `expectedRevision` (when given) is
-	 * compared against the current container revision; mismatch →
-	 * revision_conflict. Loaded sessions ride `setSessionName("user")`; saved
-	 * ones get an in-place title-slot rewrite.
-	 */
+	/** Rename one resource with a per-session revision, without loading saved history. */
 	async rename(
 		sessionId: string,
 		name: string,
@@ -591,29 +705,64 @@ export class RpcProjectSessionContainer {
 		if (!trimmed) {
 			throw new RpcProjectSessionError("invalid_params", "Session name cannot be empty");
 		}
-		if (expectedRevision !== undefined && expectedRevision !== this.revision) {
-			throw new RpcProjectSessionError(
-				"revision_conflict",
-				`Expected revision ${expectedRevision} but directory is at ${this.revision}`,
-			);
-		}
+		const targetFile = await this.findSessionFileById(sessionId);
+		if (!targetFile) throw new RpcProjectSessionError("not_found", `Session ${sessionId} not found`);
+		this.#assertResourceRevision(sessionId, targetFile, expectedRevision);
 		const record = this.#records.get(sessionId);
+		if (record && (record.state !== "loaded" || record.busy))
+			throw new RpcProjectSessionError("busy", "Session lifecycle transition is in progress");
 		if (record) {
-			const applied = await record.session.setSessionName(trimmed, "user");
+			this.#assertStableIdentity(record);
+			record.busy = true;
+			let applied: boolean;
+			try {
+				applied = await record.session.setSessionName(trimmed, "user");
+				this.#assertStableIdentity(record);
+			} finally {
+				record.busy = false;
+			}
 			if (!applied) {
 				throw new RpcProjectSessionError("invalid_params", "Session name cannot be empty");
 			}
 			const revision = this.#bump();
-			return { summary: buildSessionSummary(record, revision), revision };
+			return { summary: this.buildSummary(record), revision };
 		}
 		const entry = await this.#locateListed(sessionId);
-		await this.#storage.updateSessionTitle(entry.path, {
-			title: trimmed,
-			source: "user",
-			updatedAt: new Date().toISOString(),
-		});
+		const observedRevision = this.#resourceRevision(sessionId, entry.path);
+		this.#assertResourceRevision(sessionId, entry.path, expectedRevision);
+		const content = await this.#storage.readText(entry.path);
+		this.#assertResourceRevision(sessionId, entry.path, observedRevision);
+		const header = parseSessionContent(content).entries.find(entry => entry.type === "session");
+		if (
+			header?.type !== "session" ||
+			header.id !== sessionId ||
+			normalizePathForComparison(header.cwd) !== normalizePathForComparison(this.#options.cwd)
+		) {
+			throw new RpcProjectSessionError("scope_not_allowed", "Session identity/project changed during rename");
+		}
+		let committed = true;
+		await this.#storage.writeTextAtomic(
+			entry.path,
+			overlayTitleSlotContent(content, {
+				title: trimmed,
+				source: "user",
+				updatedAt: new Date().toISOString(),
+			}),
+			{
+				expectedSize: Buffer.byteLength(content, "utf8"),
+				commitGuard: () => {
+					committed =
+						this.#resourceRevision(sessionId, entry.path) === observedRevision &&
+						this.#storage.readTextSync(entry.path) === content;
+					return committed;
+				},
+			},
+		);
+		if (!committed)
+			throw new RpcProjectSessionError("revision_conflict", `Session ${sessionId} changed during rename`);
 		const revision = this.#bump();
-		return { summary: { ...summaryFromListed(entry, revision), name: trimmed }, revision };
+		const updated = await this.#locateListed(sessionId);
+		return { summary: summaryFromListed(updated, this.#resourceRevision(sessionId, updated.path)), revision };
 	}
 
 	/**
@@ -626,41 +775,49 @@ export class RpcProjectSessionContainer {
 		sessionId: string,
 		options: { cancelRunning?: boolean; expectedRevision?: RpcRevision } = {},
 	): Promise<RpcProjectSessionDeleteResult> {
-		if (options.expectedRevision !== undefined && options.expectedRevision !== this.revision) {
-			throw new RpcProjectSessionError(
-				"revision_conflict",
-				`Expected revision ${options.expectedRevision} but directory is at ${this.revision}`,
-			);
-		}
+		const targetFile = await this.findSessionFileById(sessionId);
+		if (!targetFile) throw new RpcProjectSessionError("not_found", `Session ${sessionId} not found`);
+		this.#assertResourceRevision(sessionId, targetFile, options.expectedRevision);
+		const authorizedRevision = this.#resourceRevision(sessionId, targetFile);
 		const record = this.#records.get(sessionId);
 		if (record) {
 			this.#assertTeardownAllowed(record, options.cancelRunning === true);
-			const sessionFile = record.session.sessionFile;
-			await this.close(sessionId, { cancelRunning: true });
-			let target = sessionFile;
-			if (!target) {
-				const listed = await this.#locateListed(sessionId).catch(() => undefined);
-				target = listed?.path;
-			}
-			if (target) {
-				await this.#storage.deleteSessionWithArtifacts(target);
-			}
+			await this.close(sessionId, { cancelRunning: options.cancelRunning === true });
+			await this.#deletePersisted(sessionId, targetFile);
 			return { revision: this.#bump() };
 		}
-		const entry = await this.#locateListed(sessionId);
-		await this.#storage.deleteSessionWithArtifacts(entry.path);
+		await this.#deletePersisted(sessionId, targetFile, authorizedRevision);
 		return { revision: this.#bump() };
+	}
+
+	async #deletePersisted(sessionId: string, target: string, authorizedRevision?: RpcRevision): Promise<void> {
+		const remove = this.#storage.deleteSessionWithArtifactsIf;
+		if (!remove) throw new RpcProjectSessionError("unsupported", "Storage does not support guarded session deletion");
+		const revision = authorizedRevision ?? this.#resourceRevision(sessionId, target);
+		const deleted = await remove.call(this.#storage, target, content => {
+			const header = parseSessionContent(content).entries.find(entry => entry.type === "session");
+			return (
+				header?.type === "session" &&
+				header.id === sessionId &&
+				normalizePathForComparison(header.cwd) === normalizePathForComparison(this.#options.cwd) &&
+				this.#resourceRevision(sessionId, target) === revision
+			);
+		});
+		if (!deleted)
+			throw new RpcProjectSessionError("revision_conflict", `Session ${sessionId} changed before deletion`);
 	}
 
 	/** Best-effort shutdown: close every hosted record with cancellation, swallowing individual failures. */
 	async disposeAll(reason: string): Promise<void> {
+		this.#disposed = true;
+		await Promise.allSettled(this.#resuming.values());
 		let closed = 0;
 		for (const record of Array.from(this.#records.values())) {
 			try {
-				await this.#closeRecord(record, { cancelRunning: true, reason });
+				await this.#closeRecord(record, { cancelRunning: true, reason, force: true });
 				closed++;
 			} catch (err) {
-				console.error(`[rpc-project-sessions] disposeAll failed for session ${record.sessionId}`, err);
+				logger.error("RPC project session disposal failed", { sessionId: record.sessionId, error: String(err) });
 			}
 		}
 		if (closed > 0) this.#bump();

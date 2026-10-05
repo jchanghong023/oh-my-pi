@@ -16,6 +16,21 @@ import { getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { expandTilde } from "../tools/path-utils";
 import type { SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
+type EffortCompletionRuntime = {
+	ctx: {
+		session: Pick<
+			TuiSlashCommandRuntime["ctx"]["session"],
+			"configuredThinkingLevel" | "getAvailableEffortSelectors"
+		>;
+	};
+};
+type ModelCompletionRuntime = {
+	ctx: Pick<TuiSlashCommandRuntime["ctx"], "settings"> & {
+		session: Pick<TuiSlashCommandRuntime["ctx"]["session"], "modelRegistry" | "scopedModels">;
+	};
+};
+type McpCompletionRuntime = { ctx: Pick<TuiSlashCommandRuntime["ctx"], "mcpManager"> };
+
 /**
  * Build getArgumentCompletions from declarative subcommand definitions.
  * Returns subcommand names filtered by prefix in the dropdown.
@@ -45,7 +60,7 @@ export function buildArgumentCompletions(subcommands: SubcommandDef[]): (prefix:
  * with no reasoning dial — there is nothing to pick.
  */
 export function buildEffortArgumentCompletions(
-	runtime: TuiSlashCommandRuntime,
+	runtime: EffortCompletionRuntime,
 ): (argumentPrefix: string) => AutocompleteItem[] | null {
 	return (argumentPrefix: string) => {
 		if (argumentPrefix.includes(" ")) return null;
@@ -70,7 +85,7 @@ export function buildEffortArgumentCompletions(
  * Build getInlineHint for `/effort <level>` from the same live list as the
  * dropdown, so the ghost text never completes a tier the active model lacks.
  */
-export function buildEffortInlineHint(runtime: TuiSlashCommandRuntime): (argumentText: string) => string | null {
+export function buildEffortInlineHint(runtime: EffortCompletionRuntime): (argumentText: string) => string | null {
 	return (argumentText: string) => {
 		const prefix = argumentText.trimStart().toLowerCase();
 		if (prefix.length === 0 || prefix.includes(" ")) return null;
@@ -121,7 +136,8 @@ const MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> =
  */
 export function buildMcpArgumentCompletions(
 	subcommands: SubcommandDef[],
-	runtime: TuiSlashCommandRuntime,
+	runtime: McpCompletionRuntime,
+	cwd?: string,
 ): (argumentPrefix: string) => Promise<AutocompleteItem[] | null> {
 	const genericCompletions = buildArgumentCompletions(subcommands);
 	return async (argumentPrefix: string) => {
@@ -133,14 +149,19 @@ export function buildMcpArgumentCompletions(
 		if (MCP_SERVER_NAME_SUBCOMMANDS[lowerSubcommand] !== true) return null;
 		const namePrefix = argumentPrefix.slice(spaceIndex + 1).toLowerCase();
 		if (lowerSubcommand === "remove") {
-			return await buildMcpRemoveCompletions(rawSubcommand, namePrefix);
+			return await buildMcpRemoveCompletions(rawSubcommand, namePrefix, cwd ?? getProjectDir());
 		}
 
 		let serverNames: string[];
 		try {
+			const root = cwd ?? getProjectDir();
+			const [userConfig, projectConfig] = await Promise.all([
+				readMCPConfigFile(getMCPConfigPath("user", root)),
+				readMCPConfigFile(getMCPConfigPath("project", root)),
+			]);
 			serverNames = await collectMcpServerNames(
 				runtime.ctx,
-				undefined,
+				{ userConfig, projectConfig },
 				MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS[lowerSubcommand] === true,
 				MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS[lowerSubcommand] === true,
 			);
@@ -168,8 +189,8 @@ export function buildMcpArgumentCompletions(
 async function buildMcpRemoveCompletions(
 	rawSubcommand: string,
 	namePrefix: string,
+	cwd: string,
 ): Promise<AutocompleteItem[] | null> {
-	const cwd = getProjectDir();
 	let projectNames: string[];
 	let userNames: string[];
 	try {
@@ -252,7 +273,7 @@ export function buildStaticInlineHint(hint: string): (argumentText: string) => s
  * completion.
  */
 export function buildModelSelectorCompletions(
-	runtime: TuiSlashCommandRuntime,
+	runtime: ModelCompletionRuntime,
 ): (argumentPrefix: string) => AutocompleteItem[] | null {
 	let rankModels: ModelMentionCandidateSource | undefined;
 	return (argumentPrefix: string) => {
@@ -290,11 +311,13 @@ export function buildModelSelectorCompletions(
  * current project directory. Used by /move so users can Tab-complete the
  * destination directory.
  */
-export function buildDirectoryArgumentCompletions(): (prefix: string) => Promise<AutocompleteItem[] | null> {
+export function buildDirectoryArgumentCompletions(
+	projectCwd?: string,
+): (prefix: string) => Promise<AutocompleteItem[] | null> {
 	return async (argumentPrefix: string) => {
 		const prefix = argumentPrefix.trim();
 
-		const cwd = getProjectDir();
+		const cwd = projectCwd ?? getProjectDir();
 		const expandedPrefix = expandTilde(prefix);
 		const isAbsolute = path.isAbsolute(expandedPrefix);
 

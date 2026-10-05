@@ -116,8 +116,13 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const [text, setText] = useState("");
 	const [highlight, setHighlight] = useState(0);
 	const [dismissed, setDismissed] = useState(false);
-	const [dirs, setDirs] = useState<readonly CollabDirEntry[]>([]);
+	const [dirs, setDirs] = useState<{
+		prefix: string;
+		sessionId: string | undefined;
+		entries: readonly CollabDirEntry[];
+	} | null>(null);
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
+	const menuRef = useRef<HTMLDivElement | null>(null);
 	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
 
 	const live = snapshot.phase === "live";
@@ -127,6 +132,8 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	const busy = snapshot.working;
 	const queued = snapshot.state?.queuedMessageCount ?? 0;
 	const canSend = canPrompt && text.trim().length > 0;
+	const canComplete = canPrompt && !uiRequest;
+	const sessionId = snapshot.header?.id;
 
 	// `/move <prefix>` and `/add-dir <prefix>` ask the host for directory
 	// candidates; the effect clears the previous listing as soon as the prefix
@@ -134,21 +141,22 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	// listing can never surface or replace a newer one.
 	const dirPrefix = directoryArgument(text)?.prefix ?? null;
 	useEffect(() => {
-		setDirs([]);
-		if (dirPrefix === null) return;
+		setDirs(null);
+		if (dirPrefix === null || !canComplete) return;
 		let cancelled = false;
 		const timer = setTimeout(() => {
 			void client.fetchDirSuggestions(dirPrefix).then(entries => {
-				if (!cancelled) setDirs(entries ?? []);
+				if (!cancelled) setDirs({ prefix: dirPrefix, sessionId, entries: entries ?? [] });
 			});
 		}, DIR_SUGGEST_DEBOUNCE_MS);
 		return () => {
 			cancelled = true;
 			clearTimeout(timer);
 		};
-	}, [client, dirPrefix]);
+	}, [client, dirPrefix, canComplete, sessionId]);
 
-	const items = dismissed ? [] : completionItems(text, snapshot.commands, dirs);
+	const currentDirs = dirs !== null && dirs.prefix === dirPrefix && dirs.sessionId === sessionId ? dirs.entries : [];
+	const items = dismissed || !canComplete ? [] : completionItems(text, snapshot.commands, currentDirs);
 	const active = items[Math.min(highlight, items.length - 1)];
 
 	// A new query invalidates both the highlight and an Escape dismissal.
@@ -166,6 +174,10 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 		autosize(taRef.current);
 	}, [text, uiRequest?.reqId]);
 
+	useEffect(() => {
+		menuRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+	}, [active?.key]);
+
 	const send = useCallback((): void => {
 		const trimmed = text.trim();
 		if (!trimmed || !live || readOnly) return;
@@ -174,6 +186,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	}, [client, live, readOnly, text]);
 
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+		if (e.nativeEvent.isComposing || composingRef.current) return;
 		if (items.length > 0) {
 			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 				e.preventDefault();
@@ -181,7 +194,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 				setHighlight(index => (index + step + items.length) % items.length);
 				return;
 			}
-			if (e.key === "Tab") {
+			if (e.key === "Tab" && !e.shiftKey) {
 				e.preventDefault();
 				if (active) applyItem(active);
 				return;
@@ -257,7 +270,7 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 	return (
 		<div className="sh-composer">
 			{items.length > 0 && (
-				<div className="sh-cmd-menu" role="listbox" aria-label="commands">
+				<div ref={menuRef} className="sh-cmd-menu" role="listbox" aria-label="commands">
 					{items.map(item => (
 						<button
 							key={item.key}
@@ -265,12 +278,11 @@ export function Composer({ client, snapshot }: ComposerProps): ReactNode {
 							className="sh-cmd-menu-item"
 							role="option"
 							aria-selected={item === active}
-							// mousedown, not click: the textarea must keep focus so a
-							// completion can be extended by typing.
+							// Keep the textarea focused without skipping touch or keyboard clicks.
 							onMouseDown={e => {
-								e.preventDefault();
-								applyItem(item);
+								if (e.button === 0) e.preventDefault();
 							}}
+							onClick={() => applyItem(item)}
 						>
 							<span className="sh-cmd-menu-name">{item.label}</span>
 							{item.badge && <span className="sh-cmd-menu-badge">{item.badge}</span>}

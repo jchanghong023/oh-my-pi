@@ -206,6 +206,7 @@ const teamConfigRoot = path.join(os.homedir(), TEAM_CONFIG_DIR_NAME);
 interface StubRequestLog {
 	model: string;
 	stage: string;
+	recheck?: boolean;
 }
 
 /** Plain-text SSE frames for main-session turns (no stage marker). */
@@ -252,25 +253,32 @@ function stubPlainTextBody(requestModel: string, text: string): string {
 	return frames.join("");
 }
 
-function stagePayload(stage: string): Record<string, unknown> {
+const STUB_BLOCKING_ISSUE = "新增必填 options 参数会破坏不传该参数的旧调用。";
+
+function stagePayload(stage: string, recheck: boolean): Record<string, unknown> {
 	switch (stage) {
 		case "proposal":
 			return {
-				proposal: "方案：扩展现有模块并保持旧接口不变；改动集中在单一模块内。",
+				proposal: "在现有模块的导出接口上新增必填 options 参数，以配置新功能。",
 				noViableProposal: false,
 				keyAssumptions: [
-					{ content: "旧接口稳定", basis: "src/module.ts", status: "unverified", impactIfWrong: "需要适配层" },
+					{
+						content: "旧调用不传 options",
+						basis: "保持旧接口的验收要求",
+						status: "unverified",
+						impactIfWrong: "兼容策略需要调整",
+					},
 				],
-				risks: ["回归风险"],
+				risks: ["新增必填参数可能破坏旧调用"],
 				unknowns: [],
 				acceptanceCriteria: ["现有测试全绿", "旧接口行为不变"],
 				ambiguityInterpretations: [{ ambiguity: "并发要求", interpretation: "单线程即可", impact: "吞吐上限" }],
-				evidence: [{ claim: "模块存在", source: "src/module.ts" }],
+				evidence: [{ claim: "新功能通过必填 options 参数配置", source: "本次 smoke 的原始提案正文" }],
 			};
 		case "alignment":
 			return {
-				unifiedUnderstanding: "统一理解：扩展模块且不破坏旧接口。",
-				acceptanceCriteria: ["功能可用", "旧接口不破坏"],
+				unifiedUnderstanding: "统一理解：增加可配置的新功能，同时保持旧调用不传 options 时的原有行为。",
+				acceptanceCriteria: ["功能可用", "旧调用无需补传参数且行为不变"],
 				factDifferences: [],
 				interpretationDifferences: [
 					{
@@ -281,19 +289,52 @@ function stagePayload(stage: string): Record<string, unknown> {
 				],
 			};
 		case "review":
+			return recheck
+				? {
+						noSubstantiveIssues: true,
+						reviewSummary: "修订将 options 改为可选，未传时保留旧行为；此前阻断已解决，未发现新问题。",
+						findings: [],
+						priorBlockingStatus: "resolved",
+					}
+				: {
+						noSubstantiveIssues: false,
+						reviewSummary: "必填新增参数违反旧调用无需修改的验收要求。",
+						findings: [
+							{
+								severity: "blocking",
+								issue: STUB_BLOCKING_ISSUE,
+								impact: "既有调用缺少新参数，无法保持原接口行为。",
+								evidence: "原始提案要求 options 必填；验收要求旧调用无需补传参数。",
+								targetAspect: "接口兼容性",
+							},
+						],
+						priorBlockingStatus: "not-applicable",
+					};
+		case "revision":
 			return {
-				noSubstantiveIssues: true,
-				reviewSummary: "未发现实质问题。",
-				findings: [],
-				priorBlockingStatus: "not-applicable",
+				revisedProposal: "options 改为可选；未传时执行原有逻辑，显式传入时启用新功能。",
+				revisionSummary: "保持旧调用兼容，通过可选参数开放新功能。",
+				responses: [
+					{
+						finding: STUB_BLOCKING_ISSUE,
+						disposition: "accepted-and-revised",
+						explanation: "移除新增参数的必填要求，缺省分支完整保留原有行为。",
+					},
+				],
+				reviewFlags: {
+					changedCoreDesign: true,
+					claimsResolvedBlocking: true,
+					newEvidenceChangesAssumptions: false,
+					disputesBlockingFinding: false,
+				},
 			};
 		case "synthesis":
 			return {
 				reportMarkdown:
-					"### 需求与验收标准\n扩展模块，旧接口不破坏。\n\n### 核心方案\n方案 A：模块内扩展。\n\n### 关键依据\nsrc/module.ts。",
+					"### 需求与验收标准\n增加新功能，旧调用无需修改。\n\n### 核心方案\n方案 A：可选 options 参数，未传时保留旧行为。\n\n### 关键依据\n原始提案、修订记录与新审查者确认的阻断已解决结论。",
 				recommendedProposal: "A",
 				recommendationReason: "满足全部验收标准且改动最小",
-				recommendationPreconditions: "旧接口稳定",
+				recommendationPreconditions: "旧调用保留缺省路径，修订后的接口必须经过兼容性验证",
 			};
 		default:
 			throw new Error(`stub: unhandled stage ${stage}`);
@@ -402,10 +443,14 @@ const stubServer = Bun.serve({
 		const messages = Array.isArray(body.messages) ? body.messages : [];
 		let stage: string | undefined;
 		let dispatchJobId: string | undefined;
+		let recheck = false;
 		for (const message of messages) {
 			for (const text of messageTexts(message).texts) {
-				const match = /\[team-stage:([a-z]+)/.exec(text);
-				if (match) stage = match[1]!;
+				const match = /\[team-stage:([a-z]+)([^\]]*)\]/.exec(text);
+				if (match) {
+					stage = match[1]!;
+					recheck = /\brecheck\b/.test(match[2]!);
+				}
 				const dispatchMatch = /\[team-dispatch (bg_\w+)\]/.exec(text);
 				if (dispatchMatch) dispatchJobId = dispatchMatch[1];
 			}
@@ -445,10 +490,10 @@ const stubServer = Bun.serve({
 				},
 			);
 		}
-		stubRequests.push({ model: requestModel, stage });
+		stubRequests.push({ model: requestModel, stage, recheck });
 		if (slowTeamStagesMs > 0) await sleep(slowTeamStagesMs);
 		const withThinking = Boolean(body.thinking);
-		return new Response(stubSseBody(requestModel, { data: stagePayload(stage) }, withThinking), {
+		return new Response(stubSseBody(requestModel, { data: stagePayload(stage, recheck) }, withThinking), {
 			status: 200,
 			headers: { "content-type": "text/event-stream", "request-id": `req_stub_${stubRequests.length}` },
 		});
@@ -517,9 +562,9 @@ try {
 		dumpTail(team);
 		fail("main-session warm-up turn did not complete within the retry budget", team.session);
 	}
-	// MAINOK matches mid-stream; wait for the turn to settle so /team is
-	// dispatched against an idle session (otherwise the report custom message
-	// queues as a hidden next-turn message instead of appending immediately).
+	// MAINOK matches mid-stream; let the warm-up turn settle before dispatch.
+	// The final report itself waits for idle and is durably appended without
+	// starting another model turn or entering a volatile next-turn queue.
 	let settledBytes = team.totalBytes;
 	let settled = false;
 	for (let attempt = 0; attempt < 40; attempt++) {
@@ -577,10 +622,14 @@ try {
 		stageCounts.set(request.stage, (stageCounts.get(request.stage) ?? 0) + 1);
 	}
 	console.log(`ui-smoke: /team report rendered; stub stages: ${JSON.stringify([...stageCounts])}`);
+	const initialReviewCount = stubRequests.filter(request => request.stage === "review" && !request.recheck).length;
+	const recheckCount = stubRequests.filter(request => request.stage === "review" && request.recheck).length;
 	if (
 		(stageCounts.get("proposal") ?? 0) < 2 ||
 		(stageCounts.get("alignment") ?? 0) < 1 ||
-		(stageCounts.get("review") ?? 0) < 2 ||
+		initialReviewCount < 2 ||
+		(stageCounts.get("revision") ?? 0) < 2 ||
+		recheckCount < 2 ||
 		(stageCounts.get("synthesis") ?? 0) < 1
 	) {
 		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session);
@@ -678,7 +727,13 @@ try {
 	await sleep(12_000);
 	const lateStages = stubRequests
 		.slice(requestsBeforeCancel)
-		.filter(request => request.stage === "alignment" || request.stage === "review" || request.stage === "synthesis");
+		.filter(
+			request =>
+				request.stage === "alignment" ||
+				request.stage === "review" ||
+				request.stage === "revision" ||
+				request.stage === "synthesis",
+		);
 	if (lateStages.length > 0) {
 		fail(
 			`/team cancel case: stages ran after cancellation (${lateStages.map(r => r.stage).join(",")})`,

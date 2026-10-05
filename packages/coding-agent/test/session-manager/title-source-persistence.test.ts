@@ -81,13 +81,7 @@ describe("session title source persistence", () => {
 			setAgentDir(fallbackAgentDir);
 			delete process.env.PI_CODING_AGENT_DIR;
 		}
-		try {
-			removeSyncWithRetries(testAgentDir);
-		} catch {
-			// Windows: some component keeps a bare handle on the agent dir
-			// root for the process lifetime; the emptied dir is inert temp
-			// garbage, so cleanup failures must not fail the suite there.
-		}
+		removeSyncWithRetries(testAgentDir);
 	});
 
 	it("persists auto title source across reopen", async () => {
@@ -140,6 +134,7 @@ describe("session title source persistence", () => {
 		const reopened = await SessionManager.open(file);
 		expect(reopened.getSessionName()).toBe("Legacy title");
 		expect(reopened.titleSource).toBe("user");
+		await reopened.close();
 	});
 
 	it("renames slotted sessions by updating the fixed title slot and appending an audit entry", async () => {

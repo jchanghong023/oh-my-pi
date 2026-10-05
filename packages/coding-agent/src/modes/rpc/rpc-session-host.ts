@@ -9,6 +9,7 @@
  * event forwarding for exactly one session; the caller owns the frame
  * transport, the process lifetime, and the AgentSession itself.
  */
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
@@ -877,7 +878,10 @@ export function requestRpcDialog<T>(
 				reject(err);
 			}
 		},
-		reject,
+		reject: error => {
+			cleanup();
+			reject(error);
+		},
 	});
 	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 	return promise;
@@ -1342,8 +1346,9 @@ export class RpcSessionHost {
 	readonly #settleWatcher: RpcSessionSettleWatcher;
 	/** Goal-mode RPC surface (upstream): ops, continuation turns, and session-change quiesce. */
 	readonly #goalController: RpcGoalController;
-	/** True while a goal continuation turn is scheduled or held: settles must report busy. */
+	/** Scheduled goal or fork prompt turns keep settlement busy until admission. */
 	readonly #goalTurnScheduled: () => boolean;
+	#forkPromptTurns = 0;
 	/** Side questions (/btw): ephemeral turns beside the transcript, with their history store. */
 	readonly #btw: RpcBtwController;
 	/** Live voice sessions (`live_start`/`live_stop`/`live_mute`), at most one per host. */
@@ -1373,7 +1378,7 @@ export class RpcSessionHost {
 		// A scheduled or held goal turn will start a turn: every settle report treats it as busy,
 		// and any report of "not settled" for that reason is later closed by `session_settled`.
 		this.#goalTurnScheduled = watchedScheduledTurnProbe(
-			() => this.#goalController.continuationPending,
+			() => this.#goalController.continuationPending || this.#forkPromptTurns > 0,
 			() => this.#settleWatcher,
 		);
 		this.promptResults = new RpcPromptResults(this.session, this.#output, this.#goalTurnScheduled);
@@ -1387,7 +1392,6 @@ export class RpcSessionHost {
 		// Inactive until `negotiate_protocol {protocolVersion:3}` succeeds; inactive
 		// hosts leave every frame on the stock code path unchanged.
 		this.forkHost = new RpcForkHost({
-			session: this.session,
 			emit: frame => this.#output(frame),
 			success: (id, command, data) => this.success(id, command as RpcCommand["type"], data),
 			error: (id, command, message, code) => this.error(id, command, message, code),
@@ -1396,11 +1400,17 @@ export class RpcSessionHost {
 			// reporting as the stock prompt arm so abort/get_state keep answering.
 			dispatchForkPromptTurn: (run, id) => {
 				const ticket = this.promptResults.begin(id);
+				this.#forkPromptTurns++;
 				watchAndReportPromptResult({
 					ticket,
 					startPrompt: async () => {
-						await run();
-						return true;
+						try {
+							await run();
+							return true;
+						} finally {
+							this.#forkPromptTurns--;
+							void this.#settleWatcher.check();
+						}
 					},
 					results: this.promptResults,
 					onError: this.#onPromptError(id, "approve_plan"),
@@ -1416,7 +1426,9 @@ export class RpcSessionHost {
 		new RpcForkSearchController(this.forkHost, this.session);
 		new RpcForkFeedbackController(this.forkHost, this.session);
 		this.#forkHookTelemetry = new RpcForkHookTelemetry(this.forkHost, this.session);
-		this.#forkPlanController = new RpcForkPlanController(this.forkHost, this.session);
+		this.#forkPlanController = new RpcForkPlanController(this.forkHost, this.session, {
+			projectMode: this.#options.projectMode,
+		});
 		new RpcForkConfigController(this.forkHost, this.session);
 		new RpcForkManageController(this.forkHost, this.session, options.subagentEventBus);
 
@@ -2213,6 +2225,7 @@ export class RpcSessionHost {
 								sessionId: session.sessionId,
 								leafId: session.sessionManager.getLeafId(),
 								messageCount: messages.length,
+								revision: createHash("sha256").update(JSON.stringify(messages)).digest("hex"),
 							},
 							{
 								cursor: command.cursor,
@@ -2380,18 +2393,25 @@ export class RpcSessionHost {
 	}
 
 	/**
-	 * True while the session is waiting on a host interaction the protocol must
-	 * answer (an extension UI dialog). The fork ask/permission brokers keep
-	 * their pending maps private, so this covers the surface the host owns.
+	 * True while the session is awaiting an extension dialog, fork question,
+	 * or tool permission decision from the client.
 	 */
 	isWaitingInteraction(): boolean {
-		return this.pendingExtensionRequests.size > 0;
+		return this.pendingExtensionRequests.size > 0 || this.forkHost.hasPendingRequests;
 	}
 
 	getRunState(): RpcSessionHostRunState {
 		if (this.#disposed) return "closing";
-		if (this.session.isStreaming) return "streaming";
 		if (this.isWaitingInteraction()) return "waiting_interaction";
+		if (
+			this.session.isStreaming ||
+			this.session.isBusyForSnapshot ||
+			this.session.hasAdmittedSubmission ||
+			this.session.isSessionTransitioning ||
+			this.#goalTurnScheduled()
+		) {
+			return "streaming";
+		}
 		return "idle";
 	}
 
@@ -2401,7 +2421,7 @@ export class RpcSessionHost {
 	 * `isShutdownRequested` option).
 	 */
 	isShutdownRequested(): boolean {
-		return this.#shutdownState.requested || (this.#options.isShutdownRequested?.() ?? false);
+		return this.#disposed || this.#shutdownState.requested || (this.#options.isShutdownRequested?.() ?? false);
 	}
 
 	/**
@@ -2427,6 +2447,14 @@ export class RpcSessionHost {
 	async dispose(reason: string): Promise<void> {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		this.#inputGate.accept({ type: "abort" });
+		this.forkHost.dispose(`${reason} before fork request completed`);
+		this.pendingExtensionRequests.rejectAll(`${reason} before extension UI response completed`);
+		if (!this.#options.sharedBridges) {
+			this.hostToolBridge.close(`${reason} before host tool execution completed`);
+			this.hostUriBridge.clear(`${reason} before host URI request completed`);
+		}
+		this.#goalController.stopForHostAbort();
 		// The host ends regardless; report an unsaved side answer instead of skipping dispose.
 		try {
 			await this.#btw.close();
@@ -2439,26 +2467,23 @@ export class RpcSessionHost {
 		// Close the realtime call (microphone, socket) before anything else may
 		// settle; `stopLive` below re-checks it idempotently for the exit paths
 		// that never run through this dispose.
-		await this.#live.stop();
-		this.forkHost.dispose(`${reason} before fork request completed`);
-		this.pendingExtensionRequests.rejectAll(`${reason} before extension UI response completed`);
-		if (!this.#options.sharedBridges) {
-			this.hostToolBridge.close(`${reason} before host tool execution completed`);
-			this.hostUriBridge.clear(`${reason} before host URI request completed`);
-		}
-		this.subagentRegistry?.dispose();
-		for (const unsubscribe of this.#unsubscribers) {
-			try {
-				unsubscribe();
-			} catch {
-				// Best-effort listener teardown.
-			}
-		}
-		this.#unsubscribers = [];
 		try {
-			this.session.extensionRunner?.setHookExecutedListener(undefined);
-		} catch {
-			// Best-effort hook listener teardown.
+			await this.#live.stop();
+		} finally {
+			this.subagentRegistry?.dispose();
+			for (const unsubscribe of this.#unsubscribers) {
+				try {
+					unsubscribe();
+				} catch {
+					// Best-effort listener teardown.
+				}
+			}
+			this.#unsubscribers = [];
+			try {
+				this.session.extensionRunner?.setHookExecutedListener(undefined);
+			} catch {
+				// Best-effort hook listener teardown.
+			}
 		}
 	}
 
@@ -2488,7 +2513,15 @@ export class RpcSessionHost {
 	}
 
 	#onPromptError(id: string | undefined, command: string): (promptError: Error) => void {
-		return promptError => this.#output(this.error(id, command, promptError.message));
+		return promptError =>
+			this.#output(
+				this.error(
+					id,
+					command,
+					promptError.message,
+					isRecord(promptError) && typeof promptError.code === "string" ? promptError.code : undefined,
+				),
+			);
 	}
 
 	/**
@@ -2590,6 +2623,8 @@ export class RpcSessionHost {
 						sessionManager: session.sessionManager,
 						settings: session.settings,
 						cwd: session.sessionManager.getCwd(),
+						ui: this.#uiContext,
+						setModel: model => session.setModelTemporary(model),
 						output: commandOutput => this.#output({ type: "command_output", text: commandOutput }),
 						refreshCommands: () => this.emitAvailableCommandsUpdate(),
 						reloadPlugins: () => this.#reloadPluginState(),

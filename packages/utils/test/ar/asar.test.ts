@@ -1,10 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { encodeAsar, readAsar, sniffAsar } from "../../src/ar/asar";
 import { ArchiveError } from "../../src/ar/error";
 import { DEFAULT_ARCHIVE_LIMITS } from "../../src/ar/limits";
+import { extractArchive } from "../../src/ar/open";
 import { memoryByteSource } from "../../src/ar/source";
 import type { ArchiveIndexEntry } from "../../src/ar/types";
 import { arFixture } from "./fixtures";
@@ -133,6 +134,39 @@ test("maps links and executable flags and verifies integrity", async () => {
 	const changed = await readAsar(memoryByteSource(bytes), { limits: DEFAULT_ARCHIVE_LIMITS });
 	await expect(readMember(findEntry(changed, "bin"))).rejects.toThrow("failed SHA256 integrity verification");
 });
+
+test.each(process.platform === "win32" ? [false, true] : [false])(
+	"extracts chained file and directory links regardless of entry order (symlink privilege denied: %s)",
+	async denySymlinkPrivilege => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-asar-links-"));
+		TEMP_ROOTS.push(root);
+		const payload = encoder.encode("linked payload");
+		const bytes = headerFixture(
+			{
+				folder: { files: { "target.txt": { size: payload.byteLength, offset: "0" } } },
+				directory: { link: "folder" },
+				second: { link: "folder/target.txt" },
+				first: { link: "second" },
+			},
+			payload,
+		);
+		const symlink = fs.symlink.bind(fs);
+		const symlinkSpy = denySymlinkPrivilege
+			? vi.spyOn(fs, "symlink").mockImplementation(async (target, linkPath, type) => {
+					if (type === "junction") return symlink(target, linkPath, type);
+					throw Object.assign(new Error("Symlink privilege denied"), { code: "EPERM" });
+				})
+			: undefined;
+		try {
+			await extractArchive({ bytes, format: "asar" }, root);
+			expect(await fs.readFile(path.join(root, "first"), "utf8")).toBe("linked payload");
+			expect(await fs.readFile(path.join(root, "second"), "utf8")).toBe("linked payload");
+			expect(await fs.readFile(path.join(root, "directory", "target.txt"), "utf8")).toBe("linked payload");
+		} finally {
+			symlinkSpy?.mockRestore();
+		}
+	},
+);
 
 test("rejects traversal, malformed records, truncation, and non-zero Pickle padding", async () => {
 	for (const bytes of [

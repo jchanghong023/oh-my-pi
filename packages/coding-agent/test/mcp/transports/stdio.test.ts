@@ -247,7 +247,7 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 			[
 				"import { writeFileSync } from 'node:fs';",
 				"process.on('SIGTERM', () => {});",
-				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid) + '\\n');`,
 				"setInterval(() => {}, 60_000);",
 			].join("\n"),
 		);
@@ -273,14 +273,15 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 			// file, with no in-process signal this test can `await` directly.
 			let grandchildPid: number | undefined;
 			let lastRaw: string | undefined;
-			// Only a pid with a live process behind it counts: the writer
-			// truncates before writing, so a read racing that window can parse
-			// an empty or partial number that names no process.
+			// The terminating newline proves the writer published a complete
+			// pid, rather than a prefix that names an unrelated live process.
 			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
 				try {
 					lastRaw = await fs.readFile(grandchildPidPath, "utf8");
-					const parsed = Number.parseInt(lastRaw, 10);
-					if (processExists(parsed)) grandchildPid = parsed;
+					const parsed = Number(lastRaw);
+					if (/^[1-9]\d*\n$/.test(lastRaw) && Number.isSafeInteger(parsed) && processExists(parsed)) {
+						grandchildPid = parsed;
+					}
 				} catch {
 					// Not written yet.
 				}
@@ -330,7 +331,7 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 			[
 				"import { writeFileSync } from 'node:fs';",
 				"process.on('SIGTERM', () => {});",
-				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid) + '\\n');`,
 				"setInterval(() => {}, 60_000);",
 			].join("\n"),
 		);
@@ -354,14 +355,14 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 		try {
 			let grandchildPid: number | undefined;
 			let lastRaw: string | undefined;
-			// Only a pid with a live process behind it counts: the writer
-			// truncates before writing, so a read racing that window can parse
-			// an empty or partial number that names no process.
+			// Accept only a newline-terminated pid, never a partial write.
 			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
 				try {
 					lastRaw = await fs.readFile(grandchildPidPath, "utf8");
-					const parsed = Number.parseInt(lastRaw, 10);
-					if (processExists(parsed)) grandchildPid = parsed;
+					const parsed = Number(lastRaw);
+					if (/^[1-9]\d*\n$/.test(lastRaw) && Number.isSafeInteger(parsed) && processExists(parsed)) {
+						grandchildPid = parsed;
+					}
 				} catch {
 					// Not written yet.
 				}

@@ -47,7 +47,11 @@ import {
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
-import { resolveProviderModelReference } from "../config/model-resolver";
+import {
+	createDisabledModelMatcher,
+	filterAvailableModelsByDisabledPatterns,
+	resolveProviderModelReference,
+} from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
@@ -134,11 +138,16 @@ export {
 	type ProviderDiscoveryStatus,
 } from "./model-provider-discovery";
 
-import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
+import {
+	hasIgnoredModelProviderPolicy,
+	ModelsConfigFile,
+	type ProviderValidationModel,
+	validateProviderConfiguration,
+} from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { type Settings, settings } from "./settings";
 
-import { cfgDisabledProviders } from "./model-settings";
+import { cfgDisabledModels, cfgDisabledProviders } from "./model-settings";
 import { cfgExtendedContext } from "../session/context-settings";
 
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
@@ -308,6 +317,7 @@ export class ModelRegistry {
 		Map<ModelRefreshStrategy, Promise<ConfiguredModelDiscoveryResult>>
 	> = new Map();
 	#policyReapply?: Promise<void>;
+	#policyReapplyRequested = false;
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -514,17 +524,21 @@ export class ModelRegistry {
 	 * `extendedContext`). Forces the static reload past the models.yml mtime
 	 * gate, then restores runtime-discovered models from the SQLite cache —
 	 * offline, a settings flip must never hit the network. Concurrent calls
-	 * coalesce onto one rebuild.
+	 * share a drain that also applies changes arriving during an awaited refresh.
 	 */
 	reapplyModelPolicies(): Promise<void> {
+		this.#policyReapplyRequested = true;
 		this.#policyReapply ??= this.#runPolicyReapply();
 		return this.#policyReapply;
 	}
 
 	async #runPolicyReapply(): Promise<void> {
 		try {
-			this.#lastStaticLoadMtime = null;
-			await this.refresh("offline");
+			while (this.#policyReapplyRequested) {
+				this.#policyReapplyRequested = false;
+				this.#lastStaticLoadMtime = null;
+				await this.refresh("offline");
+			}
 		} finally {
 			this.#policyReapply = undefined;
 		}
@@ -918,11 +932,11 @@ export class ModelRegistry {
 			configuredProviders = new Set<string>(),
 			error: configError,
 		} = logger.time("modelRegistry:loadCustomModels", () => this.#loadCustomModels());
-		const companyError = getCompanyConfigError();
+		const companyError = this.#ignoreLocalModelConfig ? undefined : getCompanyConfigError();
 		this.#configError = configError;
 		// The company provider only registers in --offline processes; inactive
 		// lanes leave no discovery state, so the provider is simply absent.
-		if (isCompanyLaneActive()) {
+		if (!this.#ignoreLocalModelConfig && isCompanyLaneActive()) {
 			this.#providerDiscoveryStates.set(COMPANY_PROVIDER_ID, {
 				provider: COMPANY_PROVIDER_ID,
 				status: companyError ? "unavailable" : "ok",
@@ -934,7 +948,9 @@ export class ModelRegistry {
 			});
 		}
 		this.#keylessProviders = keylessProviders;
-		this.#discoverableProviders = discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
+		this.#discoverableProviders = this.#ignoreLocalModelConfig
+			? discoverableProviders
+			: discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = overrides;
 		this.#modelOverrides = modelOverrides;
@@ -970,10 +986,11 @@ export class ModelRegistry {
 
 	#knownStaticProviders(): string[] {
 		const providers = new Set<string>(getBundledProviders());
-		if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
-		// The local ZCode proxy lane disappears in the company environment: the
-		// internal company lane is the only chat catalog there (fork contract).
-		if (!isCompanyEnvironment()) providers.add(ZCODE_API_PROVIDER_ID);
+		if (!this.#ignoreLocalModelConfig) {
+			if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
+			// The local proxy lane disappears when usable offline company config exists.
+			if (!isCompanyEnvironment()) providers.add(ZCODE_API_PROVIDER_ID);
+		}
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);
@@ -1103,6 +1120,7 @@ export class ModelRegistry {
 	 * company environment the zcode-api rows stay stripped (fork contract).
 	 */
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
+		if (this.#ignoreLocalModelConfig) return models;
 		const stripped = models.filter(
 			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
 		);
@@ -1617,10 +1635,11 @@ export class ModelRegistry {
 		// Built-in `zcode-api` (local ZCode Proxy) is credential-free by design:
 		// request auth resolves to the no-auth sentinel and the model rows are
 		// static, so it needs neither discovery nor a stored key.
-		this.#keylessProviders.add(ZCODE_API_PROVIDER_ID);
+		if (!this.#ignoreLocalModelConfig) this.#keylessProviders.add(ZCODE_API_PROVIDER_ID);
 	}
 
 	#loadCustomModels(): CustomModelsResult {
+		this.#reservedProviderWarnings.clear();
 		// Gateway mode: serve bundled + broker-discovered catalog metadata only.
 		// Local models.yml provider overrides (baseUrl/apiKey/headers/transport),
 		// custom models, custom discovery, and config API keys are all client-side
@@ -1670,7 +1689,6 @@ export class ModelRegistry {
 		const discoverableProviders: DiscoveryProviderConfig[] = [];
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
-		this.#reservedProviderWarnings.clear();
 		for (const [providerName, providerConfig] of providerEntries) {
 			if (providerName === COMPANY_PROVIDER_ID) {
 				this.#warnReservedProviderConfig(
@@ -1679,18 +1697,20 @@ export class ModelRegistry {
 				);
 				continue;
 			}
-			if (
-				providerName === ZCODE_API_PROVIDER_ID &&
-				((providerConfig.models?.length ?? 0) > 0 ||
-					providerConfig.baseUrl ||
-					providerConfig.headers ||
-					providerConfig.compat ||
-					providerConfig.discovery)
-			) {
-				this.#warnReservedProviderConfig(
-					providerName,
-					"only apiKey (and ZCODE_API_BASE_URL) is honored; models, baseUrl, headers, compat and discovery are ignored",
-				);
+			if (providerName === ZCODE_API_PROVIDER_ID) {
+				if (hasIgnoredModelProviderPolicy(providerConfig)) {
+					this.#warnReservedProviderConfig(
+						providerName,
+						"only apiKey (and ZCODE_API_BASE_URL) is honored; all other fields are ignored",
+					);
+				}
+				if (providerConfig.apiKey) {
+					this.#installProviderApiKey(providerName, providerConfig.apiKey);
+					if (isCommandConfigValue(providerConfig.apiKey)) {
+						this.#commandConfigsByProvider.set(providerName, new Set([providerConfig.apiKey]));
+					}
+				}
+				continue;
 			}
 			const commandConfigs = new Set<string>();
 			this.#collectCommandConfigValues(commandConfigs, providerConfig.apiKey, providerConfig.headers);
@@ -1710,21 +1730,17 @@ export class ModelRegistry {
 			}
 			const baseUrlScope = baseUrlApis.size > 0 ? [...baseUrlApis] : undefined;
 			// Always set overrides when baseUrl/headers/apiKey/authHeader/compat/disableStrictTools/guardrail*/transport are present.
-			// zcode-api is excluded: its runtime-synthesized rows bypass user
-			// overrides, so a provider-level entry could only leak baseUrl or
-			// headers through secondary readers; the apiKey below still applies.
 			if (
-				providerName !== ZCODE_API_PROVIDER_ID &&
-				(providerConfig.baseUrl ||
-					providerConfig.headers ||
-					providerConfig.apiKey ||
-					providerConfig.authHeader !== undefined ||
-					providerConfig.compat ||
-					providerConfig.disableStrictTools ||
-					providerConfig.guardrailIdentifier ||
-					providerConfig.requestMetadata ||
-					providerConfig.remoteCompaction ||
-					providerConfig.transport)
+				providerConfig.baseUrl ||
+				providerConfig.headers ||
+				providerConfig.apiKey ||
+				providerConfig.authHeader !== undefined ||
+				providerConfig.compat ||
+				providerConfig.disableStrictTools ||
+				providerConfig.guardrailIdentifier ||
+				providerConfig.requestMetadata ||
+				providerConfig.remoteCompaction ||
+				providerConfig.transport
 			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				overrides.set(providerName, {
@@ -1754,14 +1770,7 @@ export class ModelRegistry {
 				keylessProviders.add(providerName);
 			}
 
-			// zcode-api is excluded: its rows are synthesized at runtime and never
-			// discovered, so a user-level `discovery` block could only fire a probe
-			// whose results #withRuntimeSyntheticModels would discard anyway.
-			if (
-				providerName !== ZCODE_API_PROVIDER_ID &&
-				providerConfig.discovery &&
-				(providerConfig.api || providerConfig.discovery.type === "proxy")
-			) {
+			if (providerConfig.discovery && (providerConfig.api || providerConfig.discovery.type === "proxy")) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				discoverableProviders.push({
 					provider: providerName,
@@ -2715,6 +2724,7 @@ export class ModelRegistry {
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {
 		const models: CustomModelOverlay[] = [];
 		for (const [providerName, providerConfig] of Object.entries(config.providers ?? {})) {
+			if (providerName === COMPANY_PROVIDER_ID || providerName === ZCODE_API_PROVIDER_ID) continue;
 			const modelDefs = providerConfig.models ?? [];
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 			if (providerConfig.apiKey) {
@@ -2797,7 +2807,7 @@ export class ModelRegistry {
 				// by `#keylessProviders`.
 				available =
 					!disabledProviders.has(provider) &&
-					(provider === COMPANY_PROVIDER_ID
+					(provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig
 						? getCompanyConfig() !== undefined
 						: this.#keylessProviders.has(provider) ||
 							this.authStorage.keys.source(provider) !== undefined ||
@@ -2818,11 +2828,13 @@ export class ModelRegistry {
 		const requested = new Set([...providers].map(provider => provider.trim().toLowerCase()).filter(Boolean));
 		const isProviderAvailable = this.#createProviderAvailabilityCheck();
 		if (this.#hasFullSnapshot) {
-			return this.#models.filter(
-				model =>
-					requested.has(model.provider.toLowerCase()) &&
-					isProviderAvailable(model.provider) &&
-					(kind === "all" || modelKind(model) === kind),
+			return this.#filterDisabledModels(
+				this.#models.filter(
+					model =>
+						requested.has(model.provider.toLowerCase()) &&
+						isProviderAvailable(model.provider) &&
+						(kind === "all" || modelKind(model) === kind),
+				),
 			);
 		}
 		const availableProviders = new Set(
@@ -2831,7 +2843,7 @@ export class ModelRegistry {
 			),
 		);
 		const models = this.#composeStaticModels(availableProviders);
-		return kind === "all" ? models : models.filter(model => modelKind(model) === kind);
+		return this.#filterDisabledModels(kind === "all" ? models : models.filter(model => modelKind(model) === kind));
 	}
 
 	/**
@@ -2865,7 +2877,9 @@ export class ModelRegistry {
 	 * ignores that alias so SuperGrok is not auto-selected from a paid key.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		if (model.provider === COMPANY_PROVIDER_ID) return getCompanyConfig() !== undefined;
+		if (!this.isModelEnabled(model)) return false;
+		if (model.provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig)
+			return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
 			keyConfig !== undefined ||
@@ -2885,7 +2899,7 @@ export class ModelRegistry {
 	 * and issue #9967.
 	 */
 	hasConcreteAuth(provider: string): boolean {
-		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig() !== undefined;
+		if (provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(provider);
 		return (
 			keyConfig !== undefined ||
@@ -2960,19 +2974,56 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Find a model by provider and ID. A provider disabled in settings has no
-	 * models to find: every caller that falls back to a literal lookup when
-	 * availability-filtered resolution misses (retry fallback candidates,
-	 * advisors, restored and CLI models) would otherwise reach it anyway.
+	 * Find a model by provider and ID. A provider or model disabled in settings
+	 * has no model to find: literal-lookup fallbacks for restored sessions,
+	 * advisors, retries, and CLI pins must honor the same hard exclusions.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
 		if (this.#isProviderDisabled(provider)) return undefined;
-		return resolveProviderModelReference(provider, modelId, this.#modelsForProviderLookup(provider));
+		const model = resolveProviderModelReference(provider, modelId, this.#modelsForProviderLookup(provider));
+		return model && this.isModelEnabled(model) ? model : undefined;
 	}
 
 	/** Whether settings disable `provider` (`disabledProviders`). */
 	#isProviderDisabled(provider: string): boolean {
-		return getDisabledProviderIdsFromSettings(this.#settings).has(provider);
+		try {
+			return cfgDisabledProviders.get(this.#settings ?? settings).includes(provider);
+		} catch {
+			return false;
+		}
+	}
+
+	/** Whether a model identity is permitted by the current hard provider/model exclusions. */
+	isModelEnabled(model: Pick<Model<Api>, "provider" | "id">): boolean {
+		if (this.#isProviderDisabled(model.provider)) return false;
+		const effectiveSettings = this.#settings ?? settings;
+		let patterns: string[];
+		try {
+			patterns = cfgDisabledModels.get(effectiveSettings);
+		} catch {
+			// SDK embedding can probe a registry before the process settings singleton exists.
+			return true;
+		}
+		if (patterns.length === 0) return true;
+		return !createDisabledModelMatcher(this.getAll("all"), patterns, effectiveSettings)(model);
+	}
+
+	#filterDisabledModels(models: Model<Api>[]): Model<Api>[] {
+		const effectiveSettings = this.#settings ?? settings;
+		let patterns: string[];
+		try {
+			patterns = cfgDisabledModels.get(effectiveSettings);
+		} catch {
+			return models;
+		}
+		if (patterns.length === 0) return models;
+		return filterAvailableModelsByDisabledPatterns(
+			models,
+			patterns,
+			effectiveSettings,
+			undefined,
+			this.getAll("all"),
+		);
 	}
 
 	/**
@@ -3011,7 +3062,7 @@ export class ModelRegistry {
 	 * Catalog inspection never executes command-backed values.
 	 */
 	async getProviderHeaders(provider: string): Promise<Record<string, string> | undefined> {
-		if (provider === COMPANY_PROVIDER_ID) return undefined;
+		if (provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) return undefined;
 		const resolver = createConfigHeaderResolver([
 			this.#providerOverrides.get(provider)?.headers,
 			this.#runtimeProviderOverrides.get(provider)?.headers,
@@ -3038,10 +3089,9 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: { signal?: AbortSignal },
 	): Promise<string | undefined> {
-		// A disabled provider gets no credential, so no request reaches it however
-		// its model was obtained.
-		if (this.#isProviderDisabled(model.provider)) return undefined;
-		if (model.provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
+		// Hard exclusions forbid a request however the caller obtained its model.
+		if (!this.isModelEnabled(model)) return undefined;
+		if (model.provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) return getCompanyConfig()?.token;
 		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
 		}
@@ -3079,7 +3129,6 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<string | undefined> {
-		if (provider === COMPANY_PROVIDER_ID) return getCompanyConfig()?.token;
 		return (await this.getApiKeyWithCredentialForProvider(provider, sessionId, options))?.apiKey;
 	}
 
@@ -3088,7 +3137,16 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<ResolvedApiKey | undefined> {
-		if (this.#isProviderDisabled(provider)) return undefined;
+		if (
+			options?.modelId !== undefined
+				? !this.isModelEnabled({ provider, id: options.modelId })
+				: this.#isProviderDisabled(provider)
+		)
+			return undefined;
+		if (provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) {
+			const apiKey = getCompanyConfig()?.token;
+			return apiKey === undefined ? undefined : { apiKey };
+		}
 		if (options?.forceRefresh) this.#invalidateProviderCommandConfigs(provider);
 		if (this.#isKeylessProvider(provider)) {
 			return { apiKey: kNoAuth };
@@ -3114,10 +3172,14 @@ export class ModelRegistry {
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
 	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
 	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
-		if ((typeof target === "string" ? target : target.provider) === COMPANY_PROVIDER_ID) {
-			return () => getCompanyConfig()?.token;
-		}
 		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
+		if (
+			(typeof target === "string" ? target : target.provider) === COMPANY_PROVIDER_ID &&
+			!this.#ignoreLocalModelConfig
+		) {
+			const modelId = typeof target === "string" ? options?.modelId : target.id;
+			return () => this.getApiKeyForProvider(COMPANY_PROVIDER_ID, options?.sessionId, { modelId });
+		}
 		if (typeof target === "string") {
 			return createApiKeyResolver(this, target, options);
 		}

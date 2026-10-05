@@ -29,6 +29,8 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// Built-in ZCode Proxy relay: rows are built at runtime in
 	// packages/coding-agent/src/config/zcode-api-models.ts.
 	"zcode-api",
+	// Offline company gateway: runtime-only seeds get their URL from the startup snapshot.
+	"company",
 	// Both SingularityAPI rosters are live and credential-scoped (one key sees
 	// only its own product's models — the pay-as-you-go catalog or the reserved
 	// lanes), so no rows are frozen into models.json.

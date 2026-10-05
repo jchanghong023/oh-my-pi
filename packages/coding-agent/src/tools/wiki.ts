@@ -2,7 +2,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { sectionShape, truncateHeading } from "../docs/markdown";
+import { normalizePlainText, sectionShape, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
 import type { DocsSectionHit } from "../docs/types";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
@@ -118,19 +118,20 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				// re-exports). Repeating it spends the page on nothing new, so a later
 				// copy is reduced to a pointer at the first one.
 				const alreadyShown = section.text.length > 200 && seen.has(section.text);
+				const headingOnlyInHeader = shape === "heading-only" && header.includes(normalizePlainText(section.text));
 				const body =
 					shape === "heading-only"
-						? "(heading only — the title above is the content)"
+						? headingOnlyInHeader
+							? "(heading only — the title above is the content)"
+							: `(heading only)\n${section.text}`
 						: alreadyShown
 							? "(identical text to an earlier hit on this page)"
 							: section.text;
 				// Headers are context too, so the whole rendered page counts.
 				const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
 				if (used + cost > TEXT_BUDGET_CHARS) {
-					// The best hit must never be lost to the budget: it is carried in
-					// full even when it alone exceeds the page. Only an index built
-					// before the ingest cap dropped can hold such a section; the
-					// footer names the overrun instead of letting it pass silently.
+					// Keep the best hit whole even when a legacy section or a long
+					// locator makes its rendered cost exceed the page budget.
 					if (bodies.length > 0) {
 						skippedForSize += 1;
 						continue;
@@ -175,10 +176,15 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
 			const oversized =
 				oversizeCarried > 0
-					? ` — ${oversizeCarried} hit predates the ingest cap and is carried whole past the budget`
+					? ` — ${oversizeCarried} hit exceeds the available page budget and is carried whole`
 					: "";
+			const budget =
+				oversizeCarried > 0
+					? `with a ${TEXT_BUDGET_CHARS}-character target`
+					: `within ${TEXT_BUDGET_CHARS} characters`;
+			const rest = skippedForSize > 0 || beyondPage > 0 ? "; search again with narrower terms for the rest." : ".";
 			const footer = hidden
-				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections within ${TEXT_BUDGET_CHARS} characters${skipped}${collapsed}${oversized}; search again with narrower terms for the rest.`
+				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections ${budget}${skipped}${collapsed}${oversized}${rest}`
 				: collapsed
 					? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
 					: "";

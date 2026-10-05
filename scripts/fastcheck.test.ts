@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
@@ -7,7 +7,6 @@ import {
 	fastcheckBudgetMsFromEnv,
 	FASTCHECK_TIMEOUT_MS,
 	FASTCHECK_TYPE_CHECK_POOL,
-	FastcheckTimeoutError,
 	listTypeCheckPackages,
 } from "./fastcheck.ts";
 
@@ -60,20 +59,16 @@ describe("type-check package discovery", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
-});
 
-describe("wall-clock budget", () => {
-	test("the budget is the hard 60s cap from the verification contract", () => {
-		expect(FASTCHECK_TIMEOUT_MS).toBe(60_000);
-	});
-
-	test("timeout failures are distinguishable from ordinary phase failures", () => {
-		expect(new FastcheckTimeoutError(FASTCHECK_TIMEOUT_MS, 61_234)).toBeInstanceOf(FastcheckTimeoutError);
-		expect(new Error("static/rs (cargo check) failed with exit code 101")).not.toBeInstanceOf(FastcheckTimeoutError);
-	});
-
-	test("the timeout error reports the budget it blew", () => {
-		expect(new FastcheckTimeoutError(60_000, 61_234).message).toContain("60s wall-clock budget");
+	test("a corrupt package manifest fails the gate instead of hiding its type check", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "fastcheck-corrupt-package-"));
+		try {
+			mkdirSync(path.join(root, "packages", "broken"), { recursive: true });
+			writeFileSync(path.join(root, "packages", "broken", "package.json"), "{");
+			expect(() => listTypeCheckPackages(root)).toThrow("Cannot read workspace manifest");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -104,4 +99,60 @@ describe("budget override", () => {
 		process.env.FASTCHECK_BUDGET_MS = "60s";
 		expect(() => fastcheckBudgetMsFromEnv()).toThrow("FASTCHECK_BUDGET_MS");
 	});
+});
+
+describe.skipIf(process.platform === "win32")("fastcheck CLI timeout", () => {
+	test.each(["rustup", "types"])(
+		"kills a stalled %s stage and never starts later work",
+		async stage => {
+			const root = mkdtempSync(path.join(tmpdir(), "fastcheck-timeout-"));
+			try {
+				const scripts = path.join(root, "scripts");
+				const bin = path.join(root, "bin");
+				const log = path.join(root, "commands.log");
+				mkdirSync(scripts);
+				mkdirSync(bin);
+				copyFileSync(path.join(import.meta.dir, "fastcheck.ts"), path.join(scripts, "fastcheck.ts"));
+				writeFileSync(path.join(root, "rust-toolchain.toml"), '[toolchain]\nchannel = "fixture"\n');
+				writeFileSync(log, "");
+				for (let i = 0; i < 8; i++) {
+					const dir = path.join(root, "packages", `p${i}`);
+					mkdirSync(dir, { recursive: true });
+					writeFileSync(
+						path.join(dir, "package.json"),
+						JSON.stringify({ name: `p${i}`, scripts: { "check:types": "fixture" } }),
+					);
+				}
+				const fixtures = {
+					rustup:
+						stage === "rustup"
+							? '#!/bin/sh\nprintf "rustup\\n" >> "$TEST_LOG"\nexec sleep 60\n'
+							: "#!/bin/sh\necho cargo\n",
+					bun: '#!/bin/sh\nif [ "$2" = "check:types" ]; then printf "types\\n" >> "$TEST_LOG"; exec sleep 60; fi\n',
+					cargo: '#!/bin/sh\nprintf "cargo\\n" >> "$TEST_LOG"\n',
+				};
+				for (const [name, content] of Object.entries(fixtures)) {
+					writeFileSync(path.join(bin, name), content);
+					chmodSync(path.join(bin, name), 0o755);
+				}
+				const child = Bun.spawn([process.execPath, path.join(scripts, "fastcheck.ts")], {
+					env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TEST_LOG: log, FASTCHECK_BUDGET_MS: "1000" },
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(exitCode, stdout + stderr).toBe(1);
+				expect(stderr).toContain("fastcheck: TIMEOUT");
+				const started = readFileSync(log, "utf-8").trim().split("\n");
+				expect(started).toEqual(stage === "rustup" ? ["rustup"] : ["types", "types", "types", "types"]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+		10_000,
+	);
 });
