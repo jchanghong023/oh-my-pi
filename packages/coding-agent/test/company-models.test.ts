@@ -31,7 +31,7 @@ interface CompanyProbe {
 	ignoredPolicyError: unknown;
 	ignoredPolicyWarnings: string[];
 	ignoredProxyKey: string;
-	invalidProxyKeyError: string;
+	invalidProxyKeyError: unknown;
 	gatewayResolverKey: string;
 	gatewayProxyId: string;
 	requests: number;
@@ -242,6 +242,6 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.ignoredPolicyError).toBeUndefined();
 		expect(result.ignoredPolicyWarnings).toHaveLength(2);
 		expect(result.ignoredProxyKey).toBe("retained-proxy-key");
-		expect(result.invalidProxyKeyError).toContain("apiKey");
+		expect(JSON.stringify(result.invalidProxyKeyError)).toContain("apiKey");
 	}, 30_000);
 });

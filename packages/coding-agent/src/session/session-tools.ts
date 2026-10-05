@@ -758,11 +758,12 @@ export class SessionTools {
 
 	#assertCurrentToolMutation(): void {
 		const owner = this.#toolRegistryMutationScope.getStore();
+		// Disposal is not a session-identity change: the disposed callers below
+		// roll mutations back silently, so only generation/sessionId drift throws.
 		if (
-			this.#host.isDisposed() ||
-			(owner &&
-				(owner.generation !== this.#host.sessionGeneration() ||
-					owner.sessionId !== this.#host.sessionManager.getSessionId()))
+			owner &&
+			(owner.generation !== this.#host.sessionGeneration() ||
+				owner.sessionId !== this.#host.sessionManager.getSessionId())
 		) {
 			throw new Error("Session changed during the tool registry mutation.");
 		}

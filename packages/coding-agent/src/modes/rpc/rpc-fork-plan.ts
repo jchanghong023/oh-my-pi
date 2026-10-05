@@ -68,7 +68,13 @@ export class RpcForkPlanController {
 			this.#pendingApproval = undefined;
 			this.session.setPlanProposalHandler(null);
 		});
-		if (this.session.getPlanModeState()?.enabled) this.#installProposalHandler();
+		if (this.session.getPlanModeState()?.enabled && this.host.isActive) this.#installProposalHandler();
+		// The fork proposal handler requires an active v3 host; without one the
+		// session default handler must stay installed so `/plan` keeps its
+		// pre-v3 behavior for v1/v2 clients (§9, interception is any-version).
+		this.host.registerActivation(() => {
+			if (this.session.getPlanModeState()?.enabled) this.#installProposalHandler();
+		});
 	}
 
 	/**
@@ -103,7 +109,7 @@ export class RpcForkPlanController {
 		this.#previousTools = previousTools;
 		this.#previousToolsSession = this.session.sessionManager.getSessionId();
 		this.#pendingApproval = undefined;
-		this.#installProposalHandler();
+		if (this.host.isActive) this.#installProposalHandler();
 	}
 
 	#clearToolSnapshot(): void {

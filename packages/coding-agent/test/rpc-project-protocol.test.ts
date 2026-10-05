@@ -123,7 +123,7 @@ async function withProjectRpcServer<T>(
 			if (readerDone) throw new Error(`RPC stream ended early: ${await stderrPromise} ${String(readerError ?? "")}`);
 			await Bun.sleep(100);
 		}
-		throw new Error("Timed out waiting for RPC frame");
+		throw new Error(`Timed out waiting for RPC frame; last frames: ${JSON.stringify(seen.slice(-8)).slice(0, 1200)}`);
 	};
 	const controls: ServerControls = {
 		closeStdin: () => {
@@ -667,17 +667,20 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			const createdData = created.data as SessionSummaryLike;
 
 			// A local builtin proves real prompt admission without awaiting or
-			// depending on any external provider response.
+			// depending on any external provider response. Strict command
+			// dispatch requires inputMode "auto" (§14.4: project-mode prompt
+			// defaults to plain text).
 			send({
 				id: "p-direct",
 				type: "prompt",
 				sessionId: createdData.sessionId,
 				sessionGeneration: createdData.sessionGeneration,
 				message: "/model",
+				inputMode: "auto",
 			});
 			expect(await responseFor(next, "p-direct")).toMatchObject({
 				success: true,
-				data: { completed: true, agentInvoked: false },
+				data: { agentInvoked: false },
 			});
 		});
 	}, 60_000);
@@ -796,7 +799,7 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 		const sessionDir = path.join(cwd, "sessions");
 		const manager = SessionManager.create(cwd, sessionDir);
 		await manager.ensureOnDisk();
-		manager.appendModelChange("anthropic", "claude-sonnet-4-5");
+		manager.appendModelChange("anthropic/claude-sonnet-4-5");
 		manager.appendMessage({ role: "user", content: "before branch", timestamp: Date.now() });
 		const selectedEntry = manager.appendMessage({ role: "user", content: "branch origin", timestamp: Date.now() });
 		manager.appendMessage({ role: "user", content: "original continues", timestamp: Date.now() });

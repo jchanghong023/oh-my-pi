@@ -243,15 +243,21 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 				requests.push(body);
 				const turn = requests.length;
 				const tools = Array.isArray(body.tools) ? body.tools : [];
-				const write = tools.find(tool => isRecord(tool) && tool.name === "write");
-				if (turn <= 2 && !write) return new Response("Plan write tool was not enabled", { status: 400 });
+				// Builtins travel under their native `_`-prefixed wire name
+				// (`_write`); accept either so the check follows the request.
+				const writeTool = tools.find(
+					(tool): tool is Record<string, unknown> =>
+						isRecord(tool) && (tool.name === "write" || tool.name === "_write"),
+				);
+				if (turn <= 2 && !writeTool) return new Response("Plan write tool was not enabled", { status: 400 });
+				const writeWireName = writeTool ? (writeTool.name as string) : "write";
 				const toolInput =
 					turn === 1
 						? { path: "local://rpc-audit-plan.md", content: originalPlan }
 						: { path: "xd://propose", content: "rpc-audit" };
 				const toolCall = turn <= 2;
 				const block = toolCall
-					? { type: "tool_use", id: `rpc_audit_tool_${turn}`, name: "write", input: {} }
+					? { type: "tool_use", id: `rpc_audit_tool_${turn}`, name: writeWireName, input: {} }
 					: { type: "text", text: "" };
 				const events = [
 					{
@@ -343,8 +349,10 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 				model: modelId,
 			});
 			const ready = await handler.next(frame => frame.type === "ready");
-			expect(ready).toMatchObject({ mode: "rpc-ui-project", processInstanceId: expect.any(String) });
+			// Snapshot reused primitives before toMatchObject: bun's expect.any
+			// matchers overwrite the asserted fields on the received object.
 			const processStamp = { processInstanceId: ready.processInstanceId };
+			expect(ready).toMatchObject({ mode: "rpc-ui-project", processInstanceId: expect.any(String) });
 			const activeHandler = handler;
 			const command = async (id: string, type: string, data: Record<string, unknown> = {}) => {
 				activeHandler.send({ ...processStamp, ...data, id, type });
@@ -372,6 +380,7 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 			const ignored = entries.find(entry => entry.key === "skills.ignoredSkills");
 			const theme = entries.find(entry => entry.key === "theme.dark");
 			if (!source || !ignored || !theme) throw new Error("get_settings omitted registered user fields");
+			const sourceRevision = source.revision;
 			expect(source).toMatchObject({ userValue: false, revision: expect.any(String) });
 			const externallyEdited = await readFixtureYaml(settingsPath);
 			externallyEdited.skills.enableClaudeUser = true;
@@ -381,7 +390,7 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 					source: "claude:user",
 					enabled: false,
 					scope: "user",
-					expectedRevision: source.revision,
+					expectedRevision: sourceRevision,
 				}),
 			).toMatchObject({ success: false, code: "stale_revision" });
 			expect((await readFixtureYaml(settingsPath)).skills.enableClaudeUser).toBe(true);
@@ -497,12 +506,12 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 			expect(await fs.readFile(settingsPath, "utf-8")).toBe(beforeBroadEnable);
 			await saveModelField("restore-negative-models", "disabledModels", []);
 			const created = await command("create", "create_session", { name: "RPC plan audit" });
+			if (!isRecord(created.data)) throw new Error("create_session omitted its summary");
+			const stamp = { sessionId: created.data.sessionId, sessionGeneration: created.data.sessionGeneration };
 			expect(created).toMatchObject({
 				success: true,
 				data: { sessionId: expect.any(String), sessionGeneration: expect.any(String) },
 			});
-			if (!isRecord(created.data)) throw new Error("create_session omitted its summary");
-			const stamp = { sessionId: created.data.sessionId, sessionGeneration: created.data.sessionGeneration };
 			expect(await command("plan-on", "set_plan_mode", { ...stamp, enabled: true })).toMatchObject({
 				success: true,
 			});
@@ -521,8 +530,14 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 			expect(await handler.next(frame => frame.type === "prompt_result" && frame.id === "draft")).toMatchObject({
 				status: "completed",
 			});
-			expect(requests).toHaveLength(3);
+			// Draft takes 4 requests: write the plan, propose, a text-only wrap-up
+			// turn, and the capped plan-mode decision reminder that wrap-up turn
+			// provokes (upstream plan-mode convergence, not an extra proposal).
+			expect(requests).toHaveLength(4);
 			const pending = await command("pending", "get_plan_state", stamp);
+			if (!isRecord(pending.data)) throw new Error("Plan approval state is missing");
+			const pendingApprovalId = pending.data.approvalId;
+			const pendingRevision = pending.data.revision;
 			expect(pending).toMatchObject({
 				success: true,
 				data: {
@@ -532,7 +547,6 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 					planFilePath: "local://rpc-audit-plan.md",
 				},
 			});
-			if (!isRecord(pending.data)) throw new Error("Plan approval state is missing");
 			const listed = await command("waiting", "list_sessions");
 			if (!isRecord(listed.data) || !Array.isArray(listed.data.sessions))
 				throw new Error("Session directory is missing");
@@ -551,14 +565,14 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 				await command("stale", "approve_plan", {
 					...stamp,
 					decision: "approve",
-					approvalId: pending.data.approvalId,
-					expectedRevision: pending.data.revision,
+					approvalId: pendingApprovalId,
+					expectedRevision: pendingRevision,
 				}),
 			).toMatchObject({ success: false, code: "plan_approval_conflict" });
-			expect(requests).toHaveLength(3);
+			expect(requests).toHaveLength(4);
 			const refreshed = await command("refreshed", "get_plan_state", stamp);
 			if (!isRecord(refreshed.data)) throw new Error("Refreshed approval state is missing");
-			expect(refreshed.data.revision).not.toBe(pending.data.revision);
+			expect(refreshed.data.revision).not.toBe(pendingRevision);
 			const approval = {
 				...stamp,
 				decision: "approve",
@@ -575,8 +589,8 @@ describe("rpc-ui project plan approval E2E (O15, local provider)", () => {
 			expect(await handler.next(frame => frame.type === "prompt_result" && frame.id === "approve")).toMatchObject({
 				status: "completed",
 			});
-			expect(requests).toHaveLength(4);
-			expect(JSON.stringify(requests[3]!.messages)).toContain("Execute the revised bytes exactly once.");
+			expect(requests).toHaveLength(5);
+			expect(JSON.stringify(requests[4]!.messages)).toContain("Execute the revised bytes exactly once.");
 			expect(await command("consumed", "get_plan_state", stamp)).toMatchObject({
 				success: true,
 				data: { enabled: false, pendingApproval: false },

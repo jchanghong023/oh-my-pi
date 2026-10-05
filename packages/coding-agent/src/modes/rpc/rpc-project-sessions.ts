@@ -381,7 +381,6 @@ export class RpcProjectSessionContainer {
 		if (!options.force) this.#assertStableIdentity(record);
 		record.busy = true;
 		record.state = "closing";
-		this.#bump();
 		const errors: unknown[] = [];
 		const release = async (operation: () => Promise<void> | void): Promise<void> => {
 			try {

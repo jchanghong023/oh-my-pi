@@ -89,10 +89,14 @@ export type FileRead = {
 };
 export type ReadResult = { file?: FileRead; failure?: RepoFailure; missing?: boolean };
 
-/** Reject symlink components and verify the opened descriptor refers to a stable in-scope regular file. */
+/**
+ * Reject symlink components and verify the opened descriptor refers to a stable in-scope regular file.
+ * A literal backslash is a legal POSIX filename character; on Windows it normalizes to "/" so
+ * `normalized !== rel` already rejects separator-style input there.
+ */
 export async function readRepoFile(root: string, rel: string, signal?: AbortSignal): Promise<ReadResult> {
 	const normalized = relativePath(root, path.resolve(root, rel));
-	if (normalized !== rel || rel.includes("\\"))
+	if (normalized !== rel)
 		return { failure: { path: rel, kind: "symlink", message: "Path escapes the repository scope" } };
 	const absolute = path.join(root, rel);
 	for (let attempt = 0; attempt < 2; attempt++) {

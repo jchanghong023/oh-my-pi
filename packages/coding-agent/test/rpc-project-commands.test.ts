@@ -238,11 +238,13 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			getSettings: () => Settings.isolated(),
 		});
 
-		// Cursor 5 sits inside "/plan": the command item replaces [0, 5).
+		// Cursor 5 sits inside "/plan": the command item replaces [0, 5) and
+		// keeps the typed token's trailing text intact — no extra space is
+		// appended when content already follows the replaced token.
 		const result = await service.complete({ text: "/plan review", cursor: 5 });
 		expect(result.items.some(item => item.label === "plan" && item.kind === "command")).toBe(true);
 		expect(result.items.find(item => item.label === "plan")).toMatchObject({
-			insertText: "/plan ",
+			insertText: "/plan",
 			replaceStart: 0,
 			replaceEnd: 5,
 			kind: "command",

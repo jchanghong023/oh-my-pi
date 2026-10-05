@@ -91,7 +91,6 @@ const PROJECT_LEVEL_COMMANDS = new Set<string>([
 	"execute_command",
 	"list_skills",
 	"set_skill_enabled",
-	"copy_skill",
 	"delete_skill",
 	"reload_skills",
 	"set_skill_source_enabled",
@@ -697,7 +696,8 @@ class RpcProjectHost {
 			manager.requireStableSessionIdentity();
 			// Branching keeps the current runtime model, even when the selected
 			// historical prefix predates its last model-change entry.
-			if (source.session.model) manager.appendModelChange(source.session.model.provider, source.session.model.id);
+			if (source.session.model)
+				manager.appendModelChange(`${source.session.model.provider}/${source.session.model.id}`);
 			manager.appendThinkingLevelChange(source.session.thinkingLevel, source.session.configuredThinkingLevel());
 			created = await this.#options.createSession(manager);
 			this.#assertRecordIdentity(source);
@@ -982,13 +982,6 @@ class RpcProjectHost {
 				this.#requireV3(id, type);
 				const result = await this.#skillsService.setEnabled(
 					this.#skillMutationInput(command, ["skillId", "enabled", "scope", "expectedRevision"]) as never,
-				);
-				return this.#successResponse(id, type, result);
-			}
-			case "copy_skill": {
-				this.#requireV3(id, type);
-				const result = await this.#skillsService.copy(
-					this.#skillMutationInput(command, ["skillId", "targetScope", "targetName", "expectedRevision"]) as never,
 				);
 				return this.#successResponse(id, type, result);
 			}
@@ -1660,7 +1653,7 @@ class RpcProjectHost {
 			command,
 			success: false,
 			error: message,
-			...(code === undefined ? {} : { code: code === "stale_revision" ? "revision_conflict" : code }),
+			...(code === undefined ? {} : { code }),
 		} as RpcResponse;
 	}
 }
@@ -1888,6 +1881,7 @@ function projectErrorCodeOf(error: unknown): RpcProjectErrorCode | undefined {
 			"unsupported",
 			"scope_not_allowed",
 			"revision_conflict",
+			"stale_revision",
 			"stale_cursor",
 			"permission_denied",
 			"persistence_failed",

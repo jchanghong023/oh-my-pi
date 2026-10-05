@@ -8,17 +8,17 @@
  * impersonate that with a raw disk scan, while `management` re-runs discovery
  * through `loadSkillsWithShadowed` with the per-source toggles forced on and
  * the name filters bypassed, so disabled, ignored and same-name shadowed
- * skills stay visible for the GUI to re-enable, copy or delete.
+ * skills stay visible for the GUI to re-enable or delete.
  *
  * Mutations write through the injected Settings instance (ignored names,
- * source toggles) or the real user/project skill directories (copy, delete),
+ * source toggles) or the real user/project skill directories (delete),
  * bump the single catalog revision, and fan out `skills_changed` /
  * `settings_changed` frames. Package/builtin/plugin skills are never deleted
  * here — they point back at their own package management (§14.6).
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, normalizePathForComparison, pathIsWithin, Snowflake } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, normalizePathForComparison, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import type { AnySetting } from "../../config/registry";
 import { UserSettingConflictError, type Settings } from "../../config/settings";
@@ -40,7 +40,6 @@ import { loadSkills, loadSkillsWithShadowed, type Skill, type SkillWarning } fro
 import {
 	formatRpcSkillId,
 	RpcRevisionSource,
-	type RpcProjectCopySkillResult,
 	type RpcProjectDeleteSkillResult,
 	type RpcProjectErrorCode,
 	type RpcProjectListSkillsResult,
@@ -108,15 +107,6 @@ export interface RpcProjectSetSkillEnabledInput {
 	readonly expectedRevision: RpcRevision;
 }
 
-/** Input for {@link RpcProjectSkillService.copy} (`copy_skill`). */
-export interface RpcProjectCopySkillInput {
-	readonly skillId: string;
-	readonly targetScope: "user" | "project";
-	readonly targetName: string;
-	/** Required revision of the source resource. */
-	readonly expectedRevision: RpcRevision;
-}
-
 /** Input for {@link RpcProjectSkillService.delete} (`delete_skill`). */
 export interface RpcProjectDeleteSkillInput {
 	readonly skillId: string;
@@ -146,41 +136,9 @@ const SKILL_SOURCE_SETTING_KEYS: Record<string, AnySetting | undefined> = {
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 200;
 
-/** Skill directory names are also file names — no traversal, no separator tricks. */
-const TARGET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
 /** Resource operations require a strict descendant, never the skills root itself. */
 function isWithinDir(parent: string, child: string): boolean {
 	return normalizePathForComparison(parent) !== normalizePathForComparison(child) && pathIsWithin(parent, child);
-}
-
-/** Rewrite (or insert) the frontmatter `name` of a SKILL.md so the copy owns its new identity. */
-async function rewriteSkillFrontmatterName(skillMdPath: string, name: string, description: string): Promise<void> {
-	const content = await Bun.file(skillMdPath).text();
-	const frontmatter = /^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/.exec(content);
-	if (frontmatter) {
-		const body = frontmatter[2]!;
-		const newline = frontmatter[1]!.endsWith("\r\n") ? "\r\n" : "\n";
-		const updated = /^name:/m.test(body)
-			? body.replace(/^name:[^\r\n]*/m, `name: ${name}`)
-			: `name: ${name}${newline}${body}`;
-		await Bun.write(
-			skillMdPath,
-			`${frontmatter[1]}${updated}${frontmatter[3]}${content.slice(frontmatter[0].length)}`,
-		);
-		return;
-	}
-	await Bun.write(skillMdPath, `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${content}`);
-}
-
-async function pathExists(target: string): Promise<boolean> {
-	try {
-		await fs.lstat(target);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
 }
 
 /** Unified resource-backed catalog; content/config revisions guard each concrete skill. */
@@ -232,7 +190,7 @@ export class RpcProjectSkillService {
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// set_skill_enabled / copy_skill / delete_skill / reload_skills
+	// set_skill_enabled / delete_skill / reload_skills
 	// ─────────────────────────────────────────────────────────────────────────
 
 	/** A concrete user toggle never changes source switches or name-pattern ignores. */
@@ -289,78 +247,6 @@ export class RpcProjectSkillService {
 			revision,
 			adoptedSessions: sessions.adopted,
 			pendingSessions: sessions.pending,
-		};
-	}
-
-	/**
-	 * `copy_skill`: recursively copies the skill's directory into the user or
-	 * project skills directory under `targetName`. An existing target rejects
-	 * with `invalid_params`; filesystem failures reject with `execution_failed`.
-	 */
-	async copy(command: RpcProjectCopySkillInput): Promise<RpcProjectCopySkillResult> {
-		const { skillId, targetScope, targetName } = command;
-		if (typeof skillId !== "string" || !skillId) {
-			throw new RpcProjectSkillError("invalid_params", "skillId is required");
-		}
-		if (targetScope !== "user" && targetScope !== "project") {
-			throw new RpcProjectSkillError("invalid_params", `Invalid targetScope: ${String(targetScope)}`);
-		}
-		const trimmedName = typeof targetName === "string" ? targetName.trim() : "";
-		if (!TARGET_NAME_PATTERN.test(trimmedName)) {
-			throw new RpcProjectSkillError("invalid_params", `Invalid targetName: ${String(targetName)}`);
-		}
-		const skill = await this.#findSkill(skillId);
-		const observedRevision = await this.#assertRevision(command.expectedRevision, skill);
-		const targetDir = path.join(
-			targetScope === "user" ? this.#userSkillsDir() : this.#projectSkillsDir(),
-			trimmedName,
-		);
-		if (await pathExists(targetDir)) {
-			throw new RpcProjectSkillError("invalid_params", `target exists: ${targetDir}`);
-		}
-		let reserved = false;
-		try {
-			await fs.mkdir(path.dirname(targetDir), { recursive: true });
-			// Reserve an empty target exclusively; commit SKILL.md last so
-			// discovery cannot publish a partially copied resource tree.
-			await fs.mkdir(targetDir);
-			reserved = true;
-			const sourceSkillFile = normalizePathForComparison(skill.filePath);
-			await fs.cp(skill.baseDir, targetDir, {
-				recursive: true,
-				errorOnExist: true,
-				force: false,
-				filter: entry => normalizePathForComparison(entry) !== sourceSkillFile,
-			});
-			const stagedSkill = path.join(targetDir, `.SKILL-${Snowflake.next()}`);
-			await fs.copyFile(skill.filePath, stagedSkill);
-			await rewriteSkillFrontmatterName(stagedSkill, trimmedName, skill.description);
-			await this.#assertRevision(observedRevision, skill);
-			await fs.rename(stagedSkill, path.join(targetDir, "SKILL.md"));
-		} catch (error) {
-			if (reserved) await fs.rm(targetDir, { recursive: true, force: true });
-			if (error instanceof RpcProjectSkillError) throw error;
-			if ((error as NodeJS.ErrnoException).code === "EEXIST")
-				throw new RpcProjectSkillError("invalid_params", `target exists: ${targetDir}`);
-			throw new RpcProjectSkillError(
-				"execution_failed",
-				`Failed to copy ${skill.baseDir} to ${targetDir}: ${errorMessage(error)}`,
-			);
-		}
-		resetCapabilities();
-		const revision = this.#revision.bump();
-		this.#deps.emit({ type: "skills_changed", scope: targetScope, revision });
-		await this.#deps.refreshSessions?.();
-		const newSkillId = formatRpcSkillId(
-			targetScope === "user" ? "native:user" : "native:project",
-			normalizePathForComparison(path.join(targetDir, "SKILL.md")),
-		);
-		const copiedSkill = await this.#findSkill(newSkillId);
-		return {
-			skillId: newSkillId,
-			name: trimmedName,
-			location: targetDir,
-			revision: await this.#resourceRevision(copiedSkill),
 		};
 	}
 

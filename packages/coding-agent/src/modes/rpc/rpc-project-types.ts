@@ -61,6 +61,7 @@ export type RpcProjectErrorCode =
 	| "unsupported"
 	| "scope_not_allowed"
 	| "revision_conflict"
+	| "stale_revision"
 	| "stale_cursor"
 	| "permission_denied"
 	| "persistence_failed"
@@ -400,21 +401,6 @@ export interface RpcProjectSetSkillEnabledResult {
 	readonly pendingSessions: readonly string[];
 }
 
-export interface RpcProjectCopySkillCommand extends RpcProjectCommandBase {
-	readonly type: "copy_skill";
-	readonly skillId: string;
-	readonly targetScope: "user" | "project";
-	readonly targetName: string;
-	readonly expectedRevision: RpcRevision;
-}
-
-export interface RpcProjectCopySkillResult {
-	readonly skillId: string;
-	readonly name: string;
-	readonly location: string;
-	readonly revision: RpcRevision;
-}
-
 export interface RpcProjectDeleteSkillCommand extends RpcProjectCommandBase {
 	readonly type: "delete_skill";
 	readonly skillId: string;
@@ -534,7 +520,6 @@ export type RpcProjectCommand =
 	| RpcProjectExecuteCommandCommand
 	| RpcProjectListSkillsCommand
 	| RpcProjectSetSkillEnabledCommand
-	| RpcProjectCopySkillCommand
 	| RpcProjectDeleteSkillCommand
 	| RpcProjectReloadSkillsCommand
 	| RpcProjectGetSubagentsCommand

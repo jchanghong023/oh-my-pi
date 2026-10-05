@@ -74,15 +74,16 @@ describe("JCH scope parsing through the public ACP dispatcher", () => {
 		expect(output[0]?.length).toBeGreaterThan(0);
 	});
 
-	it.each(["/jchfuncreviewfix repo", "/jchfuncreview uncommitted", "/jchverify uncommitted"])(
-		"accepts the explicit no-target scope %s",
-		async input => {
-			const { runtime } = textRuntime();
-			const result = await executeAcpBuiltinSlashCommand(input, runtime);
-			if (!result || !("prompt" in result)) throw new Error("Expected a residual model prompt");
-			expect(result.prompt).toContain(input.split(" ")[1]!);
-		},
-	);
+	it.each([
+		["/jchfuncreviewfix repo", "当前整个代码仓库（以工作区现状为准，包括未提交内容）。"],
+		["/jchfuncreview uncommitted", "当前工作区的全部未提交修改（包括 staged、unstaged 和 untracked 内容）。"],
+		["/jchverify uncommitted", "当前工作区的全部未提交修改（包括 staged、unstaged 和 untracked 内容）。"],
+	])("accepts the explicit no-target scope %s", async (input, scopeText) => {
+		const { runtime } = textRuntime();
+		const result = await executeAcpBuiltinSlashCommand(input, runtime);
+		if (!result || !("prompt" in result)) throw new Error("Expected a residual model prompt");
+		expect(result.prompt).toContain(scopeText);
+	});
 });
 
 describe("public command inventory", () => {

@@ -427,8 +427,8 @@ describe("RpcForkManageController B tier (5.6)", () => {
 		})) as { data: Record<string, unknown> } & RpcResponse;
 		const filePath = upsert.data!.filePath as string;
 		const fileText = await fs.readFile(filePath, "utf-8");
-		expect(fileText).toContain('name: "rpc-probe-agent"');
-		expect(fileText).toContain('description: "probe"');
+		expect(fileText).toContain("name: rpc-probe-agent");
+		expect(fileText).toContain("description: probe");
 
 		const list = (await fx.run({ type: "list_agent_definitions" })) as {
 			data: Record<string, unknown>;

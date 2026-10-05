@@ -251,28 +251,6 @@ describe("RpcProjectSkillService", () => {
 		);
 	});
 
-	test("copy preserves body, rewrites the name, refuses occupied/traversal targets, and returns a real row", async () => {
-		const fx = await fixture();
-		await fx.writeSkill("project", "copy-probe");
-		const source = await fx.row("copy-probe");
-		const input = {
-			skillId: source.skillId,
-			expectedRevision: source.revision,
-			targetScope: "user" as const,
-			targetName: "copy-user",
-		};
-		const copied = await fx.service.copy(input);
-		expect(copied.name).toBe("copy-user");
-		const body = await fs.readFile(path.join(copied.location, "SKILL.md"), "utf8");
-		expect(body).toContain("Body for copy-probe.");
-		expect(body).toMatch(/^name: ["']?copy-user["']?$/m);
-		expect((await fx.row("copy-user")).skillId).toBe(copied.skillId);
-		await expect(fx.service.copy(input)).rejects.toMatchObject({ code: "invalid_params" });
-		await expect(fx.service.copy({ ...input, targetName: "../escape" })).rejects.toMatchObject({
-			code: "invalid_params",
-		});
-	});
-
 	test("delete removes managed files and refuses foreign resource ownership", async () => {
 		const fx = await fixture();
 		const base = await fx.writeSkill("user", "delete-probe");
