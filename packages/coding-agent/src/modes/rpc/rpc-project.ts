@@ -371,8 +371,12 @@ class RpcProjectHost {
 		const sessionOutput: RpcOutput = frame => {
 			if (!this.#negotiatedV3) return;
 			if (isRecord(frame)) {
-				if (this.#sessionHosts.get(record.sessionId)?.session !== record.session) return;
 				const terminal = frame.type === "prompt_result" || frame.type === "notice" || frame.type === "response";
+				// Terminal frames are debts owed for accepted work: a prompt_result is
+				// emitted from a deferred macrotask, and close/EOF teardown can
+				// unregister this record's host before that fires — dropping it would
+				// leave the client waiting on a result that was already settled.
+				if (!terminal && this.#sessionHosts.get(record.sessionId)?.session !== record.session) return;
 				try {
 					this.#assertRecordIdentity(record);
 				} catch {
@@ -1865,6 +1869,12 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	disconnected = true;
 	await host.dispose("RPC client disconnected");
 	await Promise.allSettled(backgroundTasks);
+	// prompt_result reports are deferred to setImmediate so they land after
+	// their command's response; every immediate scheduled by the settled tasks
+	// above runs before this one resolves (FIFO), so their frames reach the
+	// writer before close() seals it — otherwise process.exit(0) below would
+	// drop results the client is still owed.
+	await new Promise<void>(resolve => setImmediate(resolve));
 	await outputWriter.close();
 	process.exit(0);
 }
