@@ -9,6 +9,7 @@ import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
 import { type SttStreamHandle, sttClient } from "./asr-client";
 import { downloadSttModel, isSttModelCached } from "./downloader";
+import { normalizeSttLanguage } from "./language";
 import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
 import { encodePcm16Wav } from "./wav";
@@ -306,7 +307,7 @@ export class STTController {
 		let failed = false;
 		let finalText = "";
 		try {
-			const language = cfgSttLanguage.get(this.#settings);
+			const language = normalizeSttLanguage(cfgSttLanguage.get(this.#settings));
 			const result = await transcribeAudio(
 				model,
 				{

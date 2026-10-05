@@ -1651,6 +1651,7 @@ export async function buildSessionOptions(
 		// instead of an unrelated fallback. The fire-and-forget rebuild then
 		// activates the scoped list once discovery settles (issue #9220).
 		options.modelPattern = parsed.models;
+		options.modelPatternSource = "scope";
 	}
 
 	if (parsed.noPrewalk && (parsed.prewalk || parsed.prewalkInto !== undefined)) {

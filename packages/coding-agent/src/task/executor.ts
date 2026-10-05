@@ -13,6 +13,7 @@ import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, un
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import { isCompanyLaneActive } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
@@ -3997,7 +3998,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				);
 			}
 			checkAbort();
-			if (!registryFromParent) {
+			if (!registryFromParent && !isCompanyLaneActive()) {
 				modelRegistry.refreshInBackground();
 			} else {
 				logger.debug("runSubagent: reusing parent modelRegistry; skipping refresh");

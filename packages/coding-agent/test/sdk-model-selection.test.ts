@@ -9,6 +9,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
+import * as companyProvider from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { getModelMatchPreferences, resolveModelScope } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -152,6 +153,72 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
 			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test.each(["scope", "explicit"] as const)(
+		"offline deferred %s keeps its discovery policy after extension registration",
+		async source => {
+			const settings = Settings.isolated({ prewalk: { enabled: false } });
+			const modelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(tempDir, "models.yml"), { settings });
+			const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
+			const extension: ExtensionFactory = pi => {
+				pi.registerProvider("offline-pattern-provider", {
+					...dynamicOnlyProviderConfig,
+					fetchDynamicModels: fetchModels,
+				});
+			};
+			const cliOptions = await buildCliSessionOptions(
+				parseArgs(["--offline", source === "scope" ? "--models" : "--model", "offline-pattern-provider/*"]),
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			);
+			const { session, modelFallbackMessage } = await createAgentSession({
+				...buildSessionOptions([]),
+				...cliOptions,
+				settings,
+				modelRegistry,
+				extensions: [extension],
+			});
+			try {
+				if (source === "scope") {
+					expect(fetchModels).not.toHaveBeenCalled();
+					expect(modelFallbackMessage).toContain("not found");
+					expect(session.model).toBeUndefined();
+				} else {
+					expect(fetchModels).toHaveBeenCalledTimes(1);
+					expect(session.model?.provider).toBe("offline-pattern-provider");
+					expect(session.model?.id).toBe("cached-runtime-model");
+				}
+			} finally {
+				await session.dispose();
+			}
+		},
+	);
+
+	test("headless sessions inherit process offline mode without a caller option", async () => {
+		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
+		const extension: ExtensionFactory = pi => {
+			pi.registerProvider("offline-child-provider", {
+				...dynamicOnlyProviderConfig,
+				fetchDynamicModels: fetchModels,
+			});
+		};
+		const { session } = await createAgentSession({
+			...buildSessionOptions("runtime-provider/runtime-model"),
+			modelPattern: undefined,
+			model: getBundledModel("anthropic", "claude-sonnet-4-5"),
+			hasUI: false,
+			extensions: [providerExtension, extension],
+		});
+		try {
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
+			expect(fetchModels).not.toHaveBeenCalled();
 		} finally {
 			await session.dispose();
 		}

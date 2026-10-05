@@ -28,6 +28,8 @@ import { resolveTinyModelDevicePreference, type TinyModelDevice, tinyModelDevice
 import { resolveTinyModelDtypeOverride, type TinyModelDtype } from "../tiny/dtype";
 import type { SttTransport, SttWorkerInbound } from "./asr-protocol";
 import { type EndpointerEvent, StreamEndpointer } from "./endpointer";
+import { normalizeSttLanguage } from "./language";
+export { normalizeSttLanguage } from "./language";
 import {
 	getSttModelSpec,
 	type SherpaSttModelSpec,
@@ -395,20 +397,6 @@ async function loadModel(modelKey: SttModelKey, transport: SttTransport, request
 	);
 	models.set(modelKey, loaded);
 	return loaded;
-}
-
-/**
- * Reduce a BCP-47 tag to the base language subtag the ASR engines expect
- * (`zh-CN`/`zh_TW` → `zh`, `en-US` → `en`). The fork's default
- * `stt.language=zh-CN` is a regional tag, which Whisper's
- * `whisper_language_to_code` rejects outright. Anything that is not a
- * well-formed tag (language names, `<|zh|>`, unknown strings, empty) is passed
- * through unchanged, leaving validation to the engine.
- */
-export function normalizeSttLanguage(language: string | undefined): string | undefined {
-	const match = /^([A-Za-z]{2,3})(?:[-_][A-Za-z0-9]{2,8})*$/.exec(language ?? "");
-	if (!match) return language;
-	return match[1].toLowerCase();
 }
 
 async function decodeSegment(

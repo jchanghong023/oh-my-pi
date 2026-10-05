@@ -60,6 +60,7 @@ import {
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
+import { isCompanyLaneActive } from "./config/company-provider";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -561,6 +562,8 @@ export interface CreateAgentSessionOptions {
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
+	/** A deferred CLI model scope uses automatic, cache-only discovery in offline processes. */
+	modelPatternSource?: "explicit" | "scope";
 	/** Authenticated fallback selector for deferred subagent model patterns. */
 	modelPatternAuthFallback?: string;
 	/** Role name used to install retry fallbacks after deferred subagent patterns resolve. */
@@ -572,7 +575,8 @@ export interface CreateAgentSessionOptions {
 	 * (session-restore retry, default-role resolution) use the cache-only
 	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
 	 * catalog degrades to the default role instead of reaching the network.
-	 * Explicit `modelPattern` resolution keeps its normal cache-aware strategy.
+	 * Explicit `modelPattern` resolution keeps its normal cache-aware strategy;
+	 * patterns marked as a CLI scope remain cache-only.
 	 */
 	offline?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
@@ -1683,6 +1687,9 @@ async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Se
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	// CLI offline mode applies to every session constructed in this process,
+	// including task spawns and revived sessions that omit the SDK option.
+	if (isCompanyLaneActive()) options = { ...options, offline: true };
 	registerLocalInferenceApi();
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
@@ -2736,8 +2743,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// because they await it below; normal UI startup receives a one-shot
 		// starter in CreateAgentSessionResult and calls it after mode.init paints.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
+		const deferredDiscoveryStrategy =
+			options.offline && options.modelPatternSource === "scope" ? "offline" : "online-if-uncached";
 		const startRuntimeDiscovery = (): Promise<void> => {
-			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders().catch(error => {
+			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(deferredDiscoveryStrategy).catch(error => {
 				logger.warn("runtime provider discovery failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -2858,10 +2867,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
 				// Explicit `--model` patterns keep the cache-aware online strategy even
-				// in an offline process: explicit model resolution preserves its normal
-				// behavior (an intranet discovery proxy must stay resolvable).
+				// in an offline process; deferred CLI scopes remain cache-only.
 				await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
-					modelRegistry.refresh("online-if-uncached"),
+					modelRegistry.refresh(deferredDiscoveryStrategy),
 				);
 			}
 			const allEnabledModels = modelRegistry.getAll().filter(candidate => modelRegistry.isModelEnabled(candidate));

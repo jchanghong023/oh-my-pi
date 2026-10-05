@@ -9,7 +9,7 @@ import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-import { cfgSttLanguage, cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -67,7 +67,6 @@ describe("STTController cloud transcription", () => {
 	it("buffers microphone PCM into a valid mono 16-bit WAV and commits the cloud transcript", async () => {
 		const model = getBundledModel("openai", "whisper-1");
 		settings.setModelRole("dictation", "openai/whisper-1");
-		cfgSttLanguage.set(settings, "en");
 		const registry = registryFor(model);
 		const transcribe = vi.spyOn(transcription, "transcribeAudio").mockResolvedValue({
 			text: "cloud transcript",
@@ -97,7 +96,7 @@ describe("STTController cloud transcription", () => {
 			mimeType: "audio/wav",
 			fileName: "dictation.wav",
 			responseFormat: "json",
-			language: "en",
+			language: "zh",
 		});
 		expect(registry.resolver).toHaveBeenCalledWith(model, "session-1");
 		expect(callOptions.signal).toBeInstanceOf(AbortSignal);
