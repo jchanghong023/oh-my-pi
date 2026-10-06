@@ -2,7 +2,7 @@
 
 本仓库是个人自己使用的 fork 维护仓库：持续同步上游最新 `main`，保留个人功能和默认值，不以对外发布为目标。
 
-本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。本文现有功能条款保留为需求基线，本次整理未运行功能验证，历史验证描述不代表当前验收通过。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
+本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。本次已重新确认需求范围；实现尚未按新需求调整，本次未执行功能验证，历史验证描述不代表当前验收通过。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
 
 ## 项目定位与使用场景
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 上游默认 TUI | 直接使用 OMP 原生终端交互入口，跟进上游能力，并带有本 fork 的个人默认值 | 本文「默认设置」「快捷键与状态栏」「安装与运行」 |
 | 公司无互联网环境 | 通过 `--offline` 使用本地资源和公司内部模型服务，日常启动与核心任务不依赖公网 | 本文「公司内网模型（仅 `--offline`）」「安装与运行」 |
-| ZCode 界面 | 使用 ZCode 的界面框架与风格，以本 fork 的 OMP 替换其 Agent 核心，复用同一套 OMP 执行能力与状态 | [rpc-ui 最小核心接入](rpc-ui-protocol.md) |
+| ZCode 界面 | 使用 ZCode 的界面框架与风格，以本 fork 的 OMP 替换其 Agent 核心，复用同一套 OMP 执行能力与状态 | [ZCode 接入](rpc-ui-protocol.md) |
 
 - **零配置文件**：默认使用不要求用户手工创建、填写或修改 OMP 配置文件；所需默认值由内置行为、场景启动参数和已有环境信息提供。模型服务可达及必要认证仍是使用前提；公司环境复用既有 Claude Code 配置的具体约定见下文，不要求另配一份 OMP 凭据。
 - 用户仍可主动调整偏好并由程序持久化，例如通过 ZCode 保存 role；可选设置不能成为默认使用的必经步骤。零配置不禁止程序保存会话、缓存或用户主动选择。
@@ -58,9 +58,9 @@
 
 完整行为与验收条件统一维护在[多模型方案讨论需求](team.md)，此处不重复条款。
 
-### rpc-ui 协议与项目运行服务
+### ZCode 接入
 
-目标是用本 fork 的 OMP 替换 ZCode 内部 Agent CLI。2026-10-06 访谈后收缩为最小核心：普通消息链路（含审批/ask 交互与插话）、`--mode rpc-ui --rpc-project` 项目多会话、命令与技能调用（目录自动来自注册表+动态补全+严格执行）、会话临时切模型（不写配置）、role 持久配置（全目录+自动保存）。上游原生单会话 rpc-ui 行为不变。子代理过程查看、技能结构化管理、队列/计划/设置等管理面、SDK 同步与逐命令覆盖义务均已取消；取消清单与处置见[rpc-ui 协议：最小核心接入](rpc-ui-protocol.md)。
+完整功能、权限边界与验收要求统一维护在 [ZCode 接入需求](rpc-ui-protocol.md)。
 
 ### JCH 命令
 
@@ -127,13 +127,10 @@
 
 ### 上游缺陷散点修复
 
-以下改动是随日常开发沉淀的上游缺陷修复与仓库开发环境配置，不属于个人功能或默认值，但相对上游基线仍有效、对使用者有影响，在此统一记录。每次上游同步后核对：上游已包含等价修复（进入基线）时删除对应条目——保留条目只会制造假差异。
+基础设施修复只在已确认使用场景确实依赖时保留；不因历史上修复过就形成独立维护义务。以下剩余补丁是待核对必要性的现状线索，不代表已确认必须保留，也不能在未核实依赖前直接认定可删除。上游已包含等价修复后，移除重复实现及 fork 额外保留的回归测试，fork 测试聚焦仍有效的本地差异。
 
-- `packages/ai/src/providers/cursor.ts`：流式 `web-fetch` 块补配对 toolResult，重建 transcript 时不被整体剥离（PR #14266 待上游合并）。
-- `packages/coding-agent/src/ida/worker.py`：`pthread_sigmask` 仅 POSIX，Windows 分支跳过。
 - `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
 - `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
-- `packages/coding-agent/src/skillshare/pack.ts`：Windows 打包时 `scripts/` 下带 shebang 的文件强制 `executable`，POSIX 安装后可直接执行。
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：归档解压 symlink 在 Windows EPERM 时降级为 junction 或文件复制（PR #14267 待上游合并）。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
@@ -150,7 +147,6 @@
 - `display.showTurnTime=true`
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`（本地 Whisper 与云端转录的区域标签均归一化为基语言，如 `zh-CN`→`zh`；默认 tier parakeet/sherpa 不使用语言参数）
-- 文件日志默认关闭；临时开启方式见“安装与运行”。
 
 ### 快捷键与状态栏
 
@@ -160,12 +156,11 @@
 - `Shift+F1`：循环切换 thinking level。
 - 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 - `composer.shape=pi` 时状态栏独立位于输入框下方。
-- `@` 文件补全的「立即过滤已有候选、不等待后台目录搜索」与「候选清空时弹窗不吞键」行为均已由上游等价满足（上游 PR #13046 合并后归一）；fork 无独立实现补丁，仅保留一个慢搜索过滤的回归测试钉。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 
 ### 安装与运行
 
-- `omp --log-file` 仅为本次启动启用现有轮转文件日志，写入当前 profile 的默认日志目录；例如 `omp --profile work --log-file`。不启用控制台日志、不写持久配置；未传参数时默认不写文件，也不覆盖已有显式日志配置。
+- 日志行为跟随上游默认，不维护 fork 专用日志策略或启动参数。
 - 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。
 - `--offline` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - `omp --offline` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些覆盖不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
@@ -187,25 +182,17 @@
 - 两个平台的安装器都下载到安装目录中的唯一临时文件，先确认可启动且 `omp --version` 与所选 Release 完全一致，再替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。Windows 优先 `curl.exe`，失败或不可用时回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`，只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。
 - 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
 
-- 模型启用范围先应用 `enabledModels` 正向选择（`[]` 不限制），再应用 `disabledModels` 负向排除（默认 `[]` 不排除，`["*"]` 全排除）；两者复用模型选择及路径作用域规则，排除优先且不被显式 pin、已保存选择、role、cycle 或 `/team` 绕过。具体模型开关以 `provider/id` 排除表达，禁用最后一个或全部模型仍可持久化，不能把空正向名单误解为“全部禁用”。 合成模型（Bedrock 推理配置文件 ARN、OpenRouter 路由变体）在 CLI、role、显式 scope 与临时切换中遵循相同的正向模式和硬排除语义；`*` 与对应 provider 的 `/*` 包含这些模型。plan 退出还原进入前已活动的模型时，不因正向选择集变化拒绝还原，凭据与硬排除仍生效。prewalk 启动解析应用同一选择策略；交接失败时告警并解除交接状态，不中断顾问审查及上下文维护。
+- 模型筛选、可用性、角色解析和显式选择统一采用上游规则；各 fork 功能复用这些规则，不维护 fork 专有的模型硬排除契约。
 
 ## Fork 验证体系
 
-三级命令为 fork 专属验证入口，名称与职责全新设计；旧入口 `jch-localci`、`jch-dev-ui-test` 废弃，能力并入新体系：
+保留 `fastcheck`、`fulltest`、`slowtest` 三个入口，采用尽量简薄的编排，优先复用上游检查、测试运行器与 CI。
 
-- `bun run fastcheck`：静态检查 = TS 三件套（check:tools 的 lint/格式 + 每个声明 check:types 的 workspace 包）+ Rust 静态检查（cargo check），只查不测、不打包发布；cargo check 仍可生成并复用编译元数据与缓存。整体设 60 秒墙钟硬超时，覆盖 Rust/Windows 工具链探测和各检查：超时杀掉运行中的子进程，停止排队工作，输出 TIMEOUT 与已耗时间并判失败。首个检查失败也停止启动后续包，已运行包完成后汇总；损坏的 workspace manifest 明确报错，不静默省略。冷缓存超时属预期失败，无时限完整静态验证由 fulltest 以 FASTCHECK_BUDGET_MS=0 复用同一静态门承担。脚本自身测试在 test:scripts 与 CI workspace 作业中引用；普通 TypeScript 修改后的授权规则见 AGENTS.md。
-- `bun run fulltest`（仅限用户明确要求）：fastcheck 全部静态检查（以无预算模式复用同一静态门，冷缓存不因 60 秒预算在第一阶段中止）+ 当前操作系统的 fork 绿色测试集合 + 构建当前宿主平台 native addon。TS 阶段运行 fork 维护的白名单测试组（清单在 `scripts/fulltest.ts`：core 各包关键组、coding-agent 关键组与 fork 功能测试），结果非黑即白，不设失败豁免或失败基线；上游全量 TS 分片不在本地跑（大量用例假设 POSIX 文件系统/权限语义，Windows 上不可运行），由 slowtest 触发的 Linux CI 流水线全量覆盖。Rust（先以 `cargo test --no-run` 编译、再以 `cargo nextest` 运行；Windows 自动把 VS Build Tools 的 CMake/Ninja 注入 PATH，`.cargo/config.toml` 固定 Ninja 生成器）、脚本测试、UI 冒烟（原 `jch-dev-ui-test` 并入：PTY 启动 `bun run dev` TUI，断言全屏渲染/交互/Ctrl+D 退出，仅使用本地构建的 native addon；基础用例启动参数固定 `--offline --profile localci-ui`，不触发向导与外网请求；`/team` 用例使用 `--profile localci-ui-team --model zcode-api/glm-5.2`（不带 `--offline`），经环境变量把 zcode-api 基地址指向本地 stub server，仅 localhost 通信、不访问外网；`--debug` 可转储 TUI 原始输出）。每个测试执行阶段（TS 白名单、Rust 测试运行、脚本测试、UI 冒烟）设硬超时（默认 3 分钟；TS 白名单阶段放宽为 5 分钟——该阶段以 2 路有界池并行，分组内测试大量派生 bash/git/ConPTY/CLI 子进程，满并发会击穿用例默认 5 秒预算，半宽并行的代价是更长的阶段墙钟时间），编译时间不计入，超时即杀掉子进程、停止尚未启动的后续测试组，并判 fulltest 失败。Python 组件（`sdk/python/omp-rpc`、`python/robomp`，后者有 fork 的最小 GitHub 错误传播修复；上游 v18.6.0 已把 `python/omp-rpc` 迁至 `sdk/python/omp-rpc` 并改用 wire schema 生成类型）不在本地验证范围，`bun run test:py` 入口保留供手动使用。只运行当前操作系统对应的测试，不维护 WSL2/双平台测试运行能力。端到端冒烟与安装器 E2E 不在本地跑，由 slowtest 的流水线覆盖。
-- `bun run slowtest`（仅限用户明确要求）：fulltest 全部内容 + `wsl/ubuntu-24.04` 阶段 + 把干净的本地 main push 到远端，手动 workflow_dispatch 固定 publish_release=true，持续监控这次 CI 到结束（全绿才创建 fork Release/tag）。每次触发带唯一 slowtest_run_id，按对应 displayTitle、HEAD SHA 和触发时间定位，不把同提交的其他 push/手动运行冒充本次结果；逐阶段及总耗时均输出。WSL 阶段仅 Windows 运行，按仓库分支实际 upstream（或唯一远端）先推送 EXPECTED_SHA 并用 ls-remote 确认可取，再在 Ubuntu-24.04 root 的 /root 按 remote 身份定位或 clone 仓库；脏树、领先/分叉、非 Linux bun/git 路径均失败，不清理、不强推、不 reset，只创建分支或快进到 EXPECTED_SHA。先 bun install --frozen-lockfile，再 bun run fulltest，安装也计入两小时预算；超时仅清理继承本次 OMP_WSL_STAGE_ID 的 Linux 进程与所属 Windows 进程树，不按进程名全局 pkill。阶段失败不继续主 push 或触发 CI；用于 WSL 获取提交的前置推送可能已经发生，不自动回滚远端。
+- `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
+- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。
+- `slowtest` 保留本机验证、Ubuntu-24.04 WSL 验证、自动推送、触发和监控 CI、成功后发布个人 Release 的流程。WSL 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。
+- 不设置 fork 自定义的测试阶段和 WSL 阶段时限，采用上游运行器和 CI 的超时机制；取消操作仍须正确处理本次任务拥有的资源。
+- fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。
+- 测试适配只维护已保留功能及支持平台所必需的部分，不再将历史测试补丁清单作为独立产品需求。
 
-同步时需维护的活跃适配与测试契约如下；这是当前约束，不是失败基线或本次验证通过记录。上游包含等价实现后移除重复适配，不用 blanket skip 隐藏跨平台缺陷：
-
-- **进程与资源所有权**：MCP stdio pidfile 只接受活进程 pid；通用状态、资源、工具归属、初始恢复和 print-ready 用例不得整类跳过 Windows。测试所有者关闭自己的 AgentStorage、AuthStorage、SQLite 与子进程，再做有界瞬时占用重试；禁止以全局 registry 关闭其他用例的资源。取消/超时须终止所属进程树、排空输出并保留原取消原因。
-- **会话目录与文件系统安全**：所有平台先分类 temp，再分类 home；temp 命名、历史 hashed-home 迁移和 home 内嵌 TMPDIR 都有跨平台断言。artifact merge 与 speculative retarget 的 Windows 目录链接使用 junction，不能因普通文件符号链接的权限限制而跳过目录逃逸防护。路径 fixture 使用真实临时目录和规范化完整路径，不假定 `/workspace`、`/tmp/work`、`/sessions` 在 Windows 与 POSIX 同义。
-- **档案与原始路径**：TAR 目录别名、ASAR 链式链接及 Windows EPERM 回退仍须真实提取、检查归属与结果，不能把整个档案分支跳过；POSIX 非 UTF-8 argv 由 `CommandArg::OsString` 保留字节，字符串接口的内建命令无法处理时转同名外部程序，找不到则明确失败。
-- **真实平台差异**：保留仅适用于 POSIX 的 uid/umask/chmod/信号与文件符号链接用例门控；Windows `timeout` 的信号映射不冒充 kill(2)。oauth_callback 在无头/SSH/WSL 无 GUI 环境遇到 Unsupported 时可按该前置条件跳过，不免除其余鉴权测试。shell snapshot 的 fn-env helper 解析真实 POSIX Bash（REAL_BASH 或 Git for Windows Bash），不存在才跳过，不拿 WSL 启动器当同一种 Bash。VFS rename-over-open/follow-symlink 等用例按真实句柄语义处理；console 诊断用实际附加/分离的子控制台，不靠虚构共享控制台前提。
-- **Rust shell 与宿主**：`is_regular_file` 需导入 `pi-builtins` 测试宿主。jobspec 强杀用例维持 600 秒内部预算与 Bazel long 级别，两个管道进程按 ready 文件依次自停；SIGCHLD 丢弃竞态采用上游的订阅后 stop 预检和管道范围轮询，不恢复旧 fork 周期轮询。Windows 悬挂 UTF-8 EOF 用例显式选择 UTF-8 构造器；pipeline timeout 输出用 READY 握手后再取消；snapcompact 断言遵守 64px 最小画布高度。
-- **Git 与输出形态**：测试隔离 GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM、固定 core.autocrlf=false；worktree 比较规范化 verbatim 前缀、平台分隔符及 Windows 大小写，metadata list 期望使用注册形态路径。root 下权限拒绝用例用真实可预测的文件系统错误而非 chmod 000。find/fd/rg 输出断言区分平台路径分隔符，不把 stdout 身份缺失的重定向行为当作同一种 Unix 实现。
-- **配置与启动 fixture**：profile-cli 隔离 USERPROFILE；bash-failure-result 使用内存 Settings。cli-non-tty-launch 和“无可用模型”preset 用例显式禁用 keyless zcode-api，防止测试发出非预期真实请求；欢迎首帧 fixture 固定 band，fork 的 pi 默认值另有断言。spinner 生命周期用例中和 WSL_DISTRO_NAME/WSL_INTEROP，静态 WSL 标题另行覆盖；注册表路径按 `/` 比较。
-- **RPC 与命令注册**：ACP 面板与 reserved-name 集合惰性构建，避免 builtin-registry 导入环在求值期读取未初始化注册表；allowArgs 拒绝探针使用确实不允许参数的命令。getAgentTombstonePath 从 registry/agent-tombstone.ts 导入。wire conformance 仅比较上游面：fork 命令按差集排除，ForkParamFields/ForkResultFields 只对表内命令 Omit 专有键，避免无条件泛型 Omit<T, never> 破坏必需键推断；fork ready/UI/Goal 字段按明确字段裁剪。不能把 fork-only 面偷偷写入上游生成 schema，字段进入上游后缩小豁免表。
-- **协作与发布**：update-cli 的文件 symlink alias 用例只在支持该权限的平台运行；安装器另以实际可执行 fixture 覆盖精确版本、目录拒绝、运行中映像与 Windows 回滚。musl-release 的工具链用例门控 Linux，并按真实 omp/version 格式探测。
-- **静态与看门狗**：fastcheck 的 TS 相位必须与上游 check:ts 同构（check:tools + 每个声明 check:types 的 workspace 包），4 路池只改变调度、不缩小范围；manifest 读取失败、首失败及预算超时不能静默省略后续工作后宣称通过。ci-test-ts watchdog fixture 给进程启动预留 3 秒，停滞仍由实际看门狗终止。fork 本地 Rust 白名单包含 pi-builtins：其 Windows 门控测试（如 timeout 的 Windows 信号语义）只有本地 Windows fulltest 能编译执行，slowtest CI 为 Linux 不覆盖；全量 Linux 覆盖仍归 slowtest CI；不保留未经本次运行证实的失败数量。
+本节定义目标，现有脚本与 `AGENTS.md` 中的运行细则尚未按新需求调整；本次仅重建需求文档，不代表验证编排已完成简化。
