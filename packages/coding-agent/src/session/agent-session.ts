@@ -231,7 +231,7 @@ import {
 	releaseTabsForOwner,
 } from "../tools/browser/tab-supervisor";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
-import { releaseComputerSessionsForOwner } from "../tools/computer/supervisor";
+import { releaseComputerSessionsForOwner, revokeComputerControlForOwner } from "../tools/computer/supervisor";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import {
 	buildResolveReminderMessage,
@@ -3202,6 +3202,10 @@ export class AgentSession implements SettingsScope {
 	 * the recovery wait always sees the in-flight handler and blocks until it — and
 	 * everything it schedules — settles. */
 	#dispatchAgentEvent = async (event: AgentEvent): Promise<void> => {
+		// Revoke before the first await: delayed end-of-turn maintenance must
+		// never revoke a foreground-control grant acquired by a later prompt.
+		const computerControlRevocation =
+			event.type === "agent_end" ? revokeComputerControlForOwner(this.#eval.getKernelOwnerId()) : undefined;
 		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
 			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
 			if (!alreadyTerminated) {
@@ -3220,6 +3224,7 @@ export class AgentSession implements SettingsScope {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#trackPostPromptTask(promise);
 		try {
+			await computerControlRevocation;
 			await this.#processAgentEvent(event);
 		} catch (error) {
 			// Post-turn maintenance (compaction, pruning rewrites, hooks) threw before
@@ -9382,9 +9387,10 @@ export class AgentSession implements SettingsScope {
 			}
 			this.abortBash();
 			this.abortEval();
+			const computerControlRevocation = revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
 			const postPromptDrain = this.#cancelPostPromptTasks();
 			this.agent.abort(options?.reason);
-			await postPromptDrain;
+			await Promise.all([postPromptDrain, computerControlRevocation]);
 			await this.agent.waitForIdle();
 			// `/compact` disconnects the agent subscription until its finally block.
 			// Do not let abort-and-replace callers start a new prompt before that cleanup

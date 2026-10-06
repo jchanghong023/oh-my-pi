@@ -163,19 +163,9 @@ impl X11Capture {
 				is_primary:   true,
 			});
 		}
-		let mut selected = match &self.selector {
-			DisplaySelector::All => displays,
-			DisplaySelector::Id(wanted) => displays
-				.into_iter()
-				.filter(|display| display.id == *wanted || display.name == *wanted)
-				.collect(),
-		};
-		if selected.is_empty() {
-			return Err(DesktopError::capture_failed("configured X11 display was not found"));
-		}
-		let min_x = selected.iter().map(|display| display.x).min().unwrap_or(0);
-		let min_y = selected.iter().map(|display| display.y).min().unwrap_or(0);
-		for display in &mut selected {
+		let min_x = displays.iter().map(|display| display.x).min().unwrap_or(0);
+		let min_y = displays.iter().map(|display| display.y).min().unwrap_or(0);
+		for display in &mut displays {
 			display.pixel_x = u32::try_from(display.x - min_x).map_err(|_| {
 				DesktopError::capture_failed("X11 monitor layout exceeds composite coordinate space")
 			})?;
@@ -183,7 +173,7 @@ impl X11Capture {
 				DesktopError::capture_failed("X11 monitor layout exceeds composite coordinate space")
 			})?;
 		}
-		Ok(selected)
+		Ok(displays)
 	}
 
 	pub(crate) fn windows(&self) -> CoreResult<Vec<DesktopWindow>> {
@@ -283,10 +273,35 @@ impl X11Capture {
 		Ok(windows)
 	}
 
-	pub(crate) fn capture(&self, target: &Target) -> CoreResult<(RgbaImage, FrameGeometry)> {
+	pub(crate) fn capture(
+		&self,
+		target: &Target,
+		selector: Option<&DisplaySelector>,
+	) -> CoreResult<(RgbaImage, FrameGeometry)> {
 		match target {
-			Target::Desktop => {
-				let displays = self.displays()?;
+			Target::Desktop | Target::Display(_) => {
+				let explicit = target.display_selector();
+				let selector = selector.or(explicit.as_ref()).unwrap_or(&self.selector);
+				let focused = if matches!(selector, DisplaySelector::Active) {
+					self.windows()?.into_iter().find(|window| window.focused)
+				} else {
+					None
+				};
+				let mut displays = selector.select(self.displays()?, focused.as_ref())?;
+				let min_x = displays.iter().map(|display| display.x).min().unwrap_or(0);
+				let min_y = displays.iter().map(|display| display.y).min().unwrap_or(0);
+				for display in &mut displays {
+					display.pixel_x = u32::try_from(display.x - min_x).map_err(|_| {
+						DesktopError::capture_failed(
+							"X11 monitor layout exceeds composite coordinate space",
+						)
+					})?;
+					display.pixel_y = u32::try_from(display.y - min_y).map_err(|_| {
+						DesktopError::capture_failed(
+							"X11 monitor layout exceeds composite coordinate space",
+						)
+					})?;
+				}
 				let width = displays
 					.iter()
 					.map(|display| display.pixel_x.saturating_add(display.pixel_width))

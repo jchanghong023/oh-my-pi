@@ -36,6 +36,11 @@ impl Win32Ax {
 		Self { automation_initialized: false }
 	}
 
+	/// Uses the COM apartment already initialized and owned by the caller.
+	pub(super) const fn new_initialized() -> Self {
+		Self { automation_initialized: true }
+	}
+
 	fn automation(&mut self) -> CoreResult<UIAutomation> {
 		if self.automation_initialized {
 			UIAutomation::new_direct().map_err(ax_error)
@@ -65,7 +70,7 @@ impl Win32Ax {
 
 	/// Top-level window hosting `element`, found through the nearest ancestor
 	/// that owns a native window; `None` for the desktop itself.
-	fn host_root(&mut self, element: &UIElement) -> Option<HWND> {
+	pub(super) fn host_root(&mut self, element: &UIElement) -> Option<HWND> {
 		let walker = self.walker().ok()?;
 		let mut current = element.clone();
 		for _ in 0..64 {

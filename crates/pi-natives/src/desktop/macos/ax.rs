@@ -1,3 +1,4 @@
+pub(crate) mod menus;
 mod popup;
 
 use std::{
