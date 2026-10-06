@@ -2780,6 +2780,129 @@ describe("disabledModels exclusion policy", () => {
 		}
 	});
 
+	test("does not retarget disabled exact bare CLI ids but preserves fuzzy and cross-provider matches", () => {
+		const pinned = models[0];
+		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
+		const pin = `${pinned.provider}/${pinned.id}`;
+		const settings = Settings.isolated({ disabledModels: [pin] });
+		const catalog = [pinned, sibling];
+		const available = filterAvailableModelsByDisabledPatterns(catalog, [pin], settings);
+		const scopedRegistry = { getAll: () => catalog, getAvailable: () => available };
+
+		const exact = resolveCliModel({ cliModel: pinned.id, modelRegistry: scopedRegistry, settings });
+		expect(exact.model).toBeUndefined();
+		expect(exact.disabledModel).toBe(pin);
+
+		const fuzzy = resolveCliModel({ cliModel: "highspeed", modelRegistry: scopedRegistry, settings });
+		expect(fuzzy.model?.id).toBe(sibling.id);
+
+		const otherProvider = buildModel({
+			...pinned,
+			provider: "openai",
+			baseUrl: "https://api.openai.com",
+			name: "OpenAI duplicate id",
+		});
+		const duplicateCatalog = [pinned, otherProvider];
+		const duplicateAvailable = filterAvailableModelsByDisabledPatterns(duplicateCatalog, [pin], settings);
+		const duplicate = resolveCliModel({
+			cliModel: pinned.id,
+			modelRegistry: { getAll: () => duplicateCatalog, getAvailable: () => duplicateAvailable },
+			settings,
+		});
+		expect(duplicate.model?.provider).toBe("openai");
+	});
+
+	test("positive enabledModels constrain CLI, role and explicit scope selectors", async () => {
+		const settings = Settings.isolated({ enabledModels: ["openai/gpt-4o"] });
+		const cli = resolveCliModel({ cliModel: blocked, modelRegistry: registry, settings });
+		expect(cli.model).toBeUndefined();
+		expect(cli.error).toContain("enabledModels");
+		expect(resolveModelRoleValue(blocked, models, { settings }).model).toBeUndefined();
+		expect(await resolveModelScope([blocked], registry, undefined, settings)).toEqual([]);
+	});
+
+	test("synthetic selectors honor positive patterns consistently across CLI, roles and scopes", async () => {
+		const bedrock = createBedrockDefaultModel();
+		const arn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+		const cases = [
+			{ catalog: [bedrock], selector: `amazon-bedrock/${arn}` },
+			{
+				catalog: [buildModel({ ...mockOpenRouterModels[0], id: "qwen/qwen3-coder" })],
+				selector: "openrouter/qwen/qwen3-coder:nitro",
+			},
+		];
+		for (const { catalog, selector } of cases) {
+			const registry = { getAll: () => catalog, getAvailable: () => catalog };
+			const provider = catalog[0].provider;
+			for (const enabledModels of [["*"], [`${provider}/*`], [selector]]) {
+				const settings = Settings.isolated({ enabledModels });
+				settings.setModelRole("default", selector);
+				const cli = resolveCliModel({ cliModel: selector, modelRegistry: registry, settings });
+				expect(cli.error).toBeUndefined();
+				expect(cli.model && `${cli.model.provider}/${cli.model.id}`).toBe(selector);
+				const role = resolveModelRoleValue("@default", catalog, { settings });
+				expect(role.model && `${role.model.provider}/${role.model.id}`).toBe(selector);
+				const scope = await resolveModelScope([selector], registry, undefined, settings);
+				expect(scope.map(entry => `${entry.model.provider}/${entry.model.id}`)).toEqual([selector]);
+			}
+			for (const settings of [
+				Settings.isolated({ enabledModels: ["openai/gpt-4o"] }),
+				Settings.isolated({ enabledModels: ["*"], disabledModels: [selector] }),
+				Settings.isolated({ enabledModels: ["*"], disabledModels: [`${provider}/*`] }),
+			]) {
+				expect(resolveCliModel({ cliModel: selector, modelRegistry: registry, settings }).model).toBeUndefined();
+				expect(resolveModelRoleValue(selector, catalog, { settings }).model).toBeUndefined();
+				expect(await resolveModelScope([selector], registry, undefined, settings)).toEqual([]);
+			}
+		}
+	});
+
+	test("enabledModels-excluded literal CLI pin carries the no-defer refusal flag", () => {
+		// main.ts defers an unresolved `--model provider/model` (no `:`) to
+		// post-extension resolution, and that deferred pool ignores enabledModels,
+		// so the refusal must set disabledModel to exit instead of deferring.
+		const settings = Settings.isolated({ enabledModels: ["openai/gpt-4o"] });
+
+		const literal = resolveCliModel({ cliModel: blocked, modelRegistry: registry, settings });
+		expect(literal.model).toBeUndefined();
+		expect(literal.disabledModel).toBe(blocked);
+		expect(literal.disabledProvider).toBeUndefined();
+		expect(literal.error).toContain("enabledModels");
+
+		// Control: the `:high` suffix form keeps refusing with the same error.
+		const suffixed = resolveCliModel({ cliModel: `${blocked}:high`, modelRegistry: registry, settings });
+		expect(suffixed.model).toBeUndefined();
+		expect(suffixed.error).toContain("enabledModels");
+
+		// Control: the `--provider`/`--model` pair keeps refusing with the same error.
+		const providerPair = resolveCliModel({
+			cliProvider: "anthropic",
+			cliModel: "claude-sonnet-4-5",
+			modelRegistry: registry,
+			settings,
+		});
+		expect(providerPair.model).toBeUndefined();
+		expect(providerPair.error).toContain("enabledModels");
+
+		// Control: a genuinely missing model reports an error without the
+		// refusal flag, so CLI resolution still defers it to extensions.
+		const missing = resolveCliModel({ cliModel: "ghost-provider/ghost-model", modelRegistry: registry, settings });
+		expect(missing.model).toBeUndefined();
+		expect(missing.disabledModel).toBeUndefined();
+		expect(missing.disabledProvider).toBeUndefined();
+		expect(missing.error).toBeTruthy();
+	});
+
+	test("disabled exact role models do not fuzzy-fallback to a sibling", () => {
+		const pinned = models[0];
+		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
+		const catalog = [pinned, sibling];
+		const pin = `${pinned.provider}/${pinned.id}`;
+		const settings = Settings.isolated({ modelRoles: { fable: pin }, disabledModels: [pin] });
+		const available = [...filterAvailableModelsByDisabledPatterns(catalog, [pin], settings)];
+		expect(resolveModelRoleValue("@fable", available, { settings }).model).toBeUndefined();
+	});
+
 	test("uses the same role and literal colon-bearing selector grammar", () => {
 		const settings = Settings.isolated({ modelRoles: { fable: `${blocked}:high` } });
 		expect(

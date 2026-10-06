@@ -3700,11 +3700,10 @@ mod tests {
 		// brush-core's stopped-children poll consumes every pending WUNTRACED
 		// notification in one `waitid(All)` sweep, so simultaneous stops let a
 		// concurrent waiter steal a notification; sequencing the stops keeps
-		// at most one in flight. (The foreground wait itself no longer depends
-		// on this: `ChildProcess::wait` re-polls stopped children on a fixed
-		// interval, recovering the case where a child's SIGCHLD was dropped by
-		// the signal registry before the waiter subscribed — the lost-wakeup
-		// hang seen twice in CI on 2026-09-19.)
+		// at most one in flight. Separately, `ChildProcess::wait` polls for
+		// stopped children immediately after subscribing to SIGCHLD, recovering
+		// a stop whose notification was dropped before subscription — the
+		// lost-wakeup hang seen twice in CI on 2026-09-19.
 		let second_script = "trap 'exit 43' TERM; while [ ! -f \"$3\" ]; do sleep 0.01; done; echo \
 		                     $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while :; do sleep 0.05; done";
 		let command = format!(

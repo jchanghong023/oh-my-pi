@@ -20,7 +20,6 @@ import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPa
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { RpcMessagesPage } from "./rpc-messages";
-import type { RpcForkAttachment } from "./rpc-fork-attachments";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
@@ -42,7 +41,6 @@ export type RpcCommand =
 			type: "prompt";
 			message: string;
 			images?: ImageContent[];
-			attachments?: RpcForkAttachment[];
 			streamingBehavior?: "steer" | "followUp";
 			/**
 			 * How the message is dispatched. Project mode (`rpc-ui-project`) defaults to
@@ -54,17 +52,16 @@ export type RpcCommand =
 			 */
 			inputMode?: "text" | "auto";
 	  }
-	| { id?: string; type: "steer"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
-	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[]; attachments?: RpcForkAttachment[] }
 	| { id?: string; type: "remove_queued_message"; message: string; queue: "steering" | "followUp" }
 	| { id?: string; type: "promote_queued_message"; message: string }
+	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
+	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort" }
 	| {
 			id?: string;
 			type: "abort_and_prompt";
 			message: string;
 			images?: ImageContent[];
-			attachments?: RpcForkAttachment[];
 	  }
 	| { id?: string; type: "abort_and_restore_queue" }
 	| { id?: string; type: "new_session"; parentSession?: string }
@@ -348,8 +345,8 @@ export interface RpcAbortAndRestoreQueueResult {
 export interface RpcReadyFrame {
 	type: "ready";
 	protocolVersion: 1;
-	/** Fork builds announce v3 (rpc-fork-types); upstream builds announce [1, 2]. */
-	supportedProtocolVersions: [1, 2, 3];
+	/** Upstream stock announces [1, 2]; fork single-session [1, 2, 3]; project mode [3]. */
+	supportedProtocolVersions: [1, 2] | [1, 2, 3] | [3];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
 	/**

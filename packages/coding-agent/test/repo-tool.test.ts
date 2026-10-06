@@ -62,6 +62,20 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		expect(missing.details).toMatchObject({ action: "search", queryStatus: "missing" });
 		expect(missing.details?.status.exists).toBe(false);
 		expect(missing.details).toMatchObject({ hits: [], truncated: false, fieldTruncations: {} });
+		const status = await execute(tool, { action: "status" });
+		expect(status.details).toMatchObject({ action: "status", status: { exists: false } });
+		const missingSymbol = await execute(tool, { action: "symbol", query: "engine_timeout" });
+		expect(missingSymbol.details).toMatchObject({ action: "symbol", queryStatus: "missing", hits: [] });
+		await expect(
+			execute(tool, { action: "search", query: "ERR_TIMEOUT", cursor: "not-base64-json" }),
+		).rejects.toThrow(/Invalid repository index cursor/);
+		const staleCursor = Buffer.from(
+			JSON.stringify({ generation: "old", identity: "0".repeat(64), offset: 0 }),
+		).toString("base64url");
+		await expect(execute(tool, { action: "search", query: "ERR_TIMEOUT", cursor: staleCursor })).rejects.toThrow(
+			/Stale repository index cursor/,
+		);
+		expect(await fs.readdir(agentDir)).toEqual([]);
 		await build(cwd, agentDir);
 		const nohit = await execute(tool, { action: "search", query: "NO_SUCH_IDENTIFIER" });
 		expect(nohit.details).toMatchObject({ action: "search", queryStatus: "ok", hits: [] });

@@ -414,7 +414,9 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 
 		if (action === "refresh" && !json && process.stderr.isTTY) {
-			process.stderr.write("Refreshing models from all providers…\n");
+			process.stderr.write(
+				offline ? "Refreshing models from local cache…\n" : "Refreshing models from all providers…\n",
+			);
 		}
 		await modelRegistry.refresh(
 			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",

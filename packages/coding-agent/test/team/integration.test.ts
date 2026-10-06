@@ -257,11 +257,12 @@ describe("team in-process integration", () => {
 		expect(byStage("proposal")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
 		expect(byStage("alignment")).toEqual([PATTERN_SESSION]);
 		expect(byStage("synthesis")).toEqual([PATTERN_SESSION]);
-		// Rotation: proposal A (session model) reviewed by the other model; the
-		// session model never reviews, so proposal B falls back to its own
-		// model's fresh subagent (sole eligible reviewer). Rechecks reuse the
-		// same rotation.
-		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER]);
+		// Rotation: each proposal is reviewed by the next different model in
+		// proposer order — proposal A (session model) by the other model, and
+		// proposal B wraps around to the session-model participant, which
+		// reviews through a fresh reviewer subprocess. Rechecks reuse the same
+		// rotation.
+		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER, PATTERN_SESSION, PATTERN_SESSION]);
 		// Reviser is the proposal's own model: B (other), A (session).
 		expect(byStage("revision")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
 

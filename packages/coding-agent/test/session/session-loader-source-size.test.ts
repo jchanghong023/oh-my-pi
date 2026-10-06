@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -30,6 +31,18 @@ describe("loadSessionFile sourceSize", () => {
 		try {
 			const storage = new FileSessionStorage();
 			const loaded = await loadSessionFile(`${dir.path()}/missing.jsonl`, storage);
+			expect(loaded.sourceSize).toBeNull();
+			expect(loaded.entries).toEqual([]);
+		} finally {
+			await dir.remove();
+		}
+	});
+	it.skipIf(process.platform !== "win32")("does not probe the filesystem for non-file storage", async () => {
+		const dir = TempDir.createSync("loader-source-size");
+		try {
+			const blocker = path.join(dir.path(), "blocker");
+			new FileSessionStorage().writeTextSync(blocker, "file");
+			const loaded = await loadSessionFile(path.join(blocker, "missing.jsonl"), new MemorySessionStorage());
 			expect(loaded.sourceSize).toBeNull();
 			expect(loaded.entries).toEqual([]);
 		} finally {

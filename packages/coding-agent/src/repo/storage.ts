@@ -131,6 +131,7 @@ export class RepoStorage {
 			renameSync(staged.path, this.path);
 			restored = new Database(this.path, { strict: true });
 			restored.run("PRAGMA busy_timeout=5000");
+			restored.run("PRAGMA foreign_keys=ON");
 			restored.run("PRAGMA journal_mode=WAL");
 		} catch (error) {
 			restored?.close();

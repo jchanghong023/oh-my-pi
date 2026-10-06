@@ -218,14 +218,6 @@ export class RpcSubagentRegistry {
 		this.#rememberTranscriptSession(payload.id, sessionFile);
 		if (isTerminalLifecycleStatus(payload.status)) {
 			this.#subagents.delete(payload.id);
-			// Durable terminal-status marker beside the transcript (same
-			// convention as the kill tombstone): a failed run also writes its
-			// output `.md`, so the durable catalog cannot infer failure from
-			// artifacts after a restart. Best-effort — catalog reads fall back
-			// to the artifact heuristic when the marker is missing.
-			if (sessionFile) {
-				void fs.writeFile(`${sessionFile}.status`, `${payload.status}\n`, "utf8").catch(() => {});
-			}
 		} else {
 			this.#subagents.set(payload.id, snapshot);
 		}

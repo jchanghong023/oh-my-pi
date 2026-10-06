@@ -321,20 +321,19 @@ describe("team reviewer rotation", () => {
 		const participants = participants3();
 		expect(assignReviewerParticipant(participants, 0)).toBe(participants[1]);
 		expect(assignReviewerParticipant(participants, 1)).toBe(participants[2]);
-		// Wraps past the session-model participant (index 0) to model B.
-		expect(assignReviewerParticipant(participants, 2)).toBe(participants[1]);
+		// Wraps to the session-model participant, which runs as a fresh reviewer subprocess.
+		expect(assignReviewerParticipant(participants, 2)).toBe(participants[0]);
 	});
 
-	it("never assigns the session-model participant as reviewer", () => {
+	it("uses the session-model participant as a reviewer subprocess when it is next and different", () => {
 		const session = participantOf(MODEL_A, 0, true);
 		const b = participantOf(MODEL_B, 1);
 		const c = participantOf(MODEL_C, 2);
 		expect(assignReviewerParticipant([session, b, c], 0)).toBe(b);
 		expect(assignReviewerParticipant([session, b, c], 1)).toBe(c);
-		expect(assignReviewerParticipant([session, b, c], 2)).toBe(b);
-		// With only the session model besides the proposer, the proposer model's
-		// own fresh subagent reviews (§2.5 same-model fallback).
-		expect(assignReviewerParticipant([session, b], 1)).toBe(b);
+		expect(assignReviewerParticipant([session, b, c], 2)).toBe(session);
+		// With two distinct models, B is reviewed by a fresh child using session model A.
+		expect(assignReviewerParticipant([session, b], 1)).toBe(session);
 	});
 
 	it("skips same-model participants", () => {
@@ -396,10 +395,9 @@ describe("team orchestrator", () => {
 		expect(proposalTasks).toHaveLength(3);
 		for (const task of proposalTasks.slice(1)) expect(task).toBe(proposalTasks[0]);
 
-		// Rotation: proposal A reviewed by model B, B→C, C→B (the session model
-		// never reviews, so C wraps past it).
+		// Rotation: proposal A→B, B→C, C→session model A through a fresh subprocess.
 		const reviewCalls = calls.filter(call => parseMarker(call.task).role === "review");
-		expect(reviewCalls.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
+		expect(reviewCalls.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_A]);
 		// Review prompts are anonymous: no author model name appears.
 		const authorPatterns = [PATTERN_A, PATTERN_B, PATTERN_C, MODEL_A.id, MODEL_B.id, MODEL_C.id];
 		for (const call of reviewCalls) {
@@ -460,7 +458,7 @@ describe("team orchestrator", () => {
 				.map(call => ({ target: parseMarker(call.task).target!, pattern: call.modelPattern }))
 				.sort((a, b) => a.target.localeCompare(b.target))
 				.map(entry => entry.pattern),
-		).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
+		).toEqual([PATTERN_B, PATTERN_C, PATTERN_A]);
 		// Blocking resolved: report has no 尚不可采用 entries.
 		expect(result.reportMarkdown).not.toContain("尚不可采用 — 未解决阻断问题");
 		expect(reviewCalls).toBe(6);
@@ -496,6 +494,17 @@ describe("team orchestrator", () => {
 		const revisions = calls.filter(call => parseMarker(call.task).role === "revision");
 		expect(revisions).toHaveLength(3);
 		expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题");
+	});
+
+	it("marks the two-round cap when round two leaves a blocking finding unresolved", async () => {
+		const { result, calls } = await run({
+			review: ({ recheck }) =>
+				recheck ? reviewData({ blocking: 1, priorStatus: "unresolved" }) : reviewData({ blocking: 1 }),
+			revision: ({ round }) => revisionData(round === 1 ? { claimsResolvedBlocking: true } : {}),
+		});
+		const revisions = calls.filter(call => parseMarker(call.task).role === "revision");
+		expect(revisions).toHaveLength(6);
+		expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题（两轮修订后仍未解决）");
 	});
 
 	it("marks a recheck-failed revision 尚不可采用 instead of riding the initial review's clean status", async () => {

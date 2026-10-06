@@ -17,7 +17,11 @@ import {
 	saveModelPreset,
 } from "@oh-my-pi/pi-coding-agent/config/model-presets";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { cfgDisabledProviders, cfgModelPresets } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import {
+	cfgDisabledProviders,
+	cfgEnabledModels,
+	cfgModelPresets,
+} from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -311,6 +315,20 @@ describe("model presets", () => {
 		expect(result.kind).toBe("unavailable");
 		expect(settings.getModelRole("slow")).toBe(SONNET_46);
 		expect(settings.getModelRole("default")).toBe(SONNET);
+	});
+
+	it("refuses a preset default excluded by enabledModels without changing saved roles", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("default", SONNET);
+		cfgEnabledModels.set(settings, [OPUS]);
+		cfgModelPresets.setEntry(settings, "blocked", { modelRoles: { default: SONNET } });
+		const session = createSession(settings);
+
+		const result = await applyModelPreset(settings, session, "blocked");
+
+		expect(result.kind).toBe("unavailable");
+		expect(settings.getModelRole("default")).toBe(SONNET);
+		expect(session.model?.id).toBe("claude-sonnet-4-5");
 	});
 
 	it("reports a same-name project preset instead of a false deletion", async () => {

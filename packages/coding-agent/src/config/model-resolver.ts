@@ -509,7 +509,7 @@ export interface ModelMatchPreferences {
 }
 
 export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable">;
-type CliModelRegistry = Pick<ModelRegistry, "getAll" | "getAvailable">;
+type CliModelRegistry = Pick<ModelRegistry, "getAll" | "getAvailable"> & Partial<Pick<ModelRegistry, "isModelEnabled">>;
 type InitialModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "hasConcreteAuth">;
 type RestorableModelRegistry = Pick<ModelRegistry, "getAvailable" | "find" | "getApiKey" | "hasConcreteAuth">;
 
@@ -1483,15 +1483,95 @@ export interface ResolvedModelRoleValue {
 	warning: string | undefined;
 }
 
+interface ResolveModelRoleValueOptions {
+	settings?: Settings;
+	roleLookup?: ModelRoleLookup;
+	matchPreferences?: ModelMatchPreferences;
+	allowInvalidThinkingSelectorFallback?: boolean;
+	/** Resolve against the passed pool only, skipping the settings-based
+	 * disabled/exclusion/enabled filters. Reserved for the CLI
+	 * refusal-explanation path, which re-resolves the unfiltered inventory
+	 * to name what the selector wanted; never used to route a request. */
+	ignorePolicyFilters?: boolean;
+}
+
 export function resolveModelRoleValue(
 	roleValue: string | undefined,
 	availableModels: Model<Api>[],
-	options?: {
-		settings?: Settings;
-		roleLookup?: ModelRoleLookup;
-		matchPreferences?: ModelMatchPreferences;
-		allowInvalidThinkingSelectorFallback?: boolean;
-	},
+	options?: ResolveModelRoleValueOptions,
+): ResolvedModelRoleValue {
+	if (options?.ignorePolicyFilters) {
+		return resolveModelRoleValueUnscoped(roleValue, availableModels, options);
+	}
+	const settings = options?.settings;
+	const enabledPatterns = settings ? cfgEnabledModels.get(settings) : undefined;
+	const allowedModels = enabledPatterns?.length
+		? matchAvailableModelsByPatterns(
+				availableModels,
+				enabledPatterns,
+				settings,
+				mergeModelMatchPreferences(settings, options?.matchPreferences),
+			)
+		: availableModels;
+	const isIncluded = createEnabledModelMatcher(
+		availableModels,
+		enabledPatterns ?? [],
+		settings,
+		options?.matchPreferences,
+	);
+	const inclusionCatalog = modelInclusionCatalogs.get(availableModels) ?? availableModels;
+	const catalog = modelExclusionCatalogs.get(availableModels) ?? inclusionCatalog;
+	const inclusionKeys = new Set(inclusionCatalog.map(formatModelString));
+	const availableKeys = new Set(availableModels.map(formatModelString));
+	const disabledProviders = settings ? cfgDisabledProviders.get(settings) : undefined;
+	const exclusions = settings ? cfgDisabledModels.get(settings) : undefined;
+	const isExcluded = exclusions?.length
+		? createDisabledModelMatcher(catalog, exclusions, settings, options?.matchPreferences)
+		: noDisabledModels;
+	const selectableModels =
+		disabledProviders?.length || exclusions?.length
+			? allowedModels.filter(model => !disabledProviders?.includes(model.provider) && !isExcluded(model))
+			: allowedModels;
+	const rolePatterns = roleValue
+		? resolveConfiguredModelPatterns(roleValue.trim(), options?.roleLookup ?? settings)
+		: undefined;
+	const blockedPatterns = new Set<string>();
+	for (const pattern of rolePatterns ?? []) {
+		const exactModels = findExactScopedModelCandidates(pattern, catalog);
+		if (exactModels.length === 0 && isExplicitQualifiedModelSelector(pattern)) {
+			const resolved = parseModelPatternWithContext(
+				pattern,
+				catalog,
+				buildPreferenceContext(catalog, options?.matchPreferences),
+			);
+			if (resolved.model) exactModels.push(resolved.model);
+		}
+		const hasSelectableExact = exactModels.some(model => {
+			const key = formatModelString(model);
+			return (
+				!disabledProviders?.includes(model.provider) &&
+				!isExcluded(model) &&
+				(!catalog.some(row => modelsAreEqual(row, model)) || (inclusionKeys.has(key) && availableKeys.has(key))) &&
+				isIncluded(model)
+			);
+		});
+		if (
+			!hasSelectableExact &&
+			(exactModels.length > 0 ||
+				isExplicitlyDisabledModelSelector(pattern, exclusions ?? [], disabledProviders ?? []) ||
+				(enabledPatterns?.length && isExplicitQualifiedModelSelector(pattern)))
+		) {
+			blockedPatterns.add(pattern);
+		}
+	}
+	return resolveModelRoleValueUnscoped(roleValue, selectableModels, options, blockedPatterns);
+}
+
+function resolveModelRoleValueUnscoped(
+	roleValue: string | undefined,
+	availableModels: Model<Api>[],
+	options?: ResolveModelRoleValueOptions,
+	blockedPatterns?: ReadonlySet<string>,
 ): ResolvedModelRoleValue {
 	if (!roleValue) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
@@ -1514,6 +1594,7 @@ export function resolveModelRoleValue(
 	// rebuilding it per pattern inside parseModelPattern.
 	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
 	for (const [patternIndex, effectivePattern] of effectivePatterns.entries()) {
+		if (blockedPatterns?.has(effectivePattern)) continue;
 		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext, options);
 		if (resolved.model) {
 			return {
@@ -1915,10 +1996,13 @@ export async function resolveModelScope(
 	const availableModels = modelInclusionCatalogs.get(catalog) ?? catalog;
 	const availableKeys = new Set(catalog.map(formatModelString));
 	const registryExclusions = new Set(availableModels.map(formatModelString).filter(key => !availableKeys.has(key)));
+	const enabledPatterns = settings ? cfgEnabledModels.get(settings) : undefined;
+	const isIncluded = createEnabledModelMatcher(availableModels, enabledPatterns ?? [], settings, preferences);
 	const context = buildPreferenceContext(availableModels, preferences);
 	const scopedModels: ScopedModel[] = [];
 	const addScopedModel = (model: Model<Api>, thinkingLevel: ThinkingLevel | undefined, explicit: boolean) => {
 		if (registryExclusions.has(formatModelString(model))) return;
+		if (!isIncluded(model)) return;
 		if (isExcluded !== noDisabledModels && isExcluded(model)) return;
 		if (scopedModels.some(sm => modelsAreEqual(sm.model, model))) return;
 		scopedModels.push({
@@ -2137,7 +2221,10 @@ export interface ResolveCliModelResult {
 	 * instead of deferring it to a later resolution pass.
 	 */
 	disabledProvider?: string;
-	/** Exact model refused by `disabledModels`; callers must not defer or substitute it. */
+	/**
+	 * Exact model refused by `disabledModels` or left out by `enabledModels`;
+	 * callers must not defer or substitute it.
+	 */
 	disabledModel?: string;
 }
 
@@ -2187,8 +2274,29 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 	};
 	const disabled = disabledProviderIds(settings);
 	const exclusions = settings ? cfgDisabledModels.get(settings) : undefined;
-	if (disabled.size === 0 && !exclusions?.length) return resolveCliModelInScope(scoped, scope);
+	const enabledPatterns = settings ? cfgEnabledModels.get(settings) : undefined;
+	if (
+		disabled.size === 0 &&
+		!exclusions?.length &&
+		!enabledPatterns?.length &&
+		modelRegistry.isModelEnabled === undefined
+	)
+		return resolveCliModelInScope(scoped, scope);
 	const isExcluded = exclusions ? createDisabledModelMatcher(scope.all, exclusions, settings) : noDisabledModels;
+	const includedCatalog =
+		enabledPatterns && enabledPatterns.length > 0
+			? filterAvailableModelsByEnabledPatterns(scope.all, enabledPatterns, settings)
+			: scope.all;
+	const isIncluded = createEnabledModelMatcher(scope.all, enabledPatterns ?? [], settings);
+	const isSelectableModel = (model: Model<Api>) =>
+		!disabled.has(model.provider) &&
+		!isExcluded(model) &&
+		(modelRegistry.isModelEnabled?.(model) ?? true) &&
+		isIncluded(model);
+	const selectionScope: CliModelScope = {
+		all: includedCatalog.filter(isSelectableModel),
+		available: scope.available.filter(isSelectableModel),
+	};
 	const trimmed = cliModel.trim();
 	const suffix = splitThinkingSuffix(trimmed, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	const literal = cliProvider
@@ -2205,13 +2313,95 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 			disabledModel: reference,
 		};
 	}
-	const enabled = resolveCliModelInScope(scoped, {
-		all: scope.all.filter(model => !disabled.has(model.provider) && !isExcluded(model)),
-		available: scope.available.filter(model => !disabled.has(model.provider) && !isExcluded(model)),
-	});
-	if (enabled.model && !isExcluded(enabled.model)) return enabled;
+	if (literal && !disabled.has(literal.provider) && modelRegistry.isModelEnabled?.(literal) === false) {
+		const reference = formatModelString(literal);
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: undefined,
+			error: `Model "${reference}" is unavailable under the current model settings.`,
+		};
+	}
+	let explicitLiteral = literal;
+	if (cliProvider) {
+		const prefix = `${cliProvider}/`;
+		const providerPattern = trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+			? trimmed.slice(prefix.length)
+			: trimmed;
+		explicitLiteral =
+			findLiteralScopedModel(`${cliProvider}/${providerPattern}`, scope.all) ??
+			(suffix.level !== undefined ? findLiteralScopedModel(`${cliProvider}/${suffix.base}`, scope.all) : undefined);
+	}
+	if (
+		explicitLiteral &&
+		!isIncluded(explicitLiteral) &&
+		!disabled.has(explicitLiteral.provider) &&
+		!isExcluded(explicitLiteral)
+	) {
+		const reference = formatModelString(explicitLiteral);
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: undefined,
+			error: `Model "${reference}" is not enabled by enabledModels.`,
+			// Deferring this pin to post-extension resolution would re-select the
+			// same excluded model (the deferred pool does not apply enabledModels),
+			// so refuse it outright like a disabledModels exclusion.
+			disabledModel: reference,
+		};
+	}
+	if (!cliProvider && !literal) {
+		// Preserve exact bare-id precedence from the authenticated catalog before
+		// exclusions, but let another provider's same-id model survive.
+		const inclusionCatalog = modelInclusionCatalogs.get(scope.available) ?? scope.available;
+		const exactBareModels = inclusionCatalog.filter(model => model.id.toLowerCase() === trimmed.toLowerCase());
+		const bareCandidates =
+			exactBareModels.length > 0 || suffix.level === undefined
+				? exactBareModels
+				: inclusionCatalog.filter(model => model.id.toLowerCase() === suffix.base.toLowerCase());
+		const selectable = bareCandidates.some(isSelectableModel);
+		if (!selectable) {
+			const blocked = bareCandidates.find(model => !disabled.has(model.provider) && isExcluded(model));
+			if (blocked) {
+				const reference = formatModelString(blocked);
+				return {
+					model: undefined,
+					selector: undefined,
+					warning: undefined,
+					error: `Model "${reference}" is disabled. Adjust disabledModels to use "${trimmed}".`,
+					disabledModel: reference,
+				};
+			}
+			const unavailable = bareCandidates.find(
+				model => !disabled.has(model.provider) && modelRegistry.isModelEnabled?.(model) === false,
+			);
+			if (unavailable) {
+				const reference = formatModelString(unavailable);
+				return {
+					model: undefined,
+					selector: undefined,
+					warning: undefined,
+					error: `Model "${reference}" is unavailable under the current model settings.`,
+				};
+			}
+			const outsideScope = bareCandidates.find(
+				model => !isIncluded(model) && !disabled.has(model.provider) && !isExcluded(model),
+			);
+			if (outsideScope) {
+				const reference = formatModelString(outsideScope);
+				return {
+					model: undefined,
+					selector: undefined,
+					warning: undefined,
+					error: `Model "${reference}" is not enabled by enabledModels.`,
+				};
+			}
+		}
+	}
+	const enabled = resolveCliModelInScope(scoped, selectionScope);
+	if (enabled.model && isSelectableModel(enabled.model)) return enabled;
 	// Re-resolve the inventory only to explain a refusal, never to route a request.
-	const blockedModel = enabled.model ?? resolveCliModelInScope(scoped, scope).model;
+	const blockedModel = enabled.model ?? resolveCliModelInScope(scoped, scope, true).model;
 	const blockedProvider = cliProvider
 		? scope.all.find(model => model.provider.toLowerCase() === cliProvider.toLowerCase())?.provider
 		: blockedModel?.provider;
@@ -2236,12 +2426,35 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 			disabledModel: reference,
 		};
 	}
+	if (blockedModel && modelRegistry.isModelEnabled?.(blockedModel) === false && !disabled.has(blockedModel.provider)) {
+		const reference = formatModelString(blockedModel);
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: enabled.warning,
+			error: `Model "${reference}" is unavailable under the current model settings.`,
+		};
+	}
+	if (blockedModel && !isIncluded(blockedModel) && !disabled.has(blockedModel.provider) && !isExcluded(blockedModel)) {
+		const reference = formatModelString(blockedModel);
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: enabled.warning,
+			error: `Model "${reference}" is not enabled by enabledModels.`,
+			disabledModel: reference,
+		};
+	}
 	return enabled;
 }
 
 function resolveCliModelInScope(
 	options: CliModelOptions & { cliModel: string },
 	scope: CliModelScope,
+	/** Refusal-explanation mode: the caller re-resolves the unfiltered
+	 * inventory to report what the selector wanted, so role resolution must
+	 * not re-apply the settings-based policy filters. */
+	explainRefusal = false,
 ): ResolveCliModelResult {
 	const { cliProvider, cliModel, settings, preferences } = options;
 	const { all: allModels, available: availableModels } = scope;
@@ -2320,16 +2533,11 @@ function resolveCliModelInScope(
 			);
 			const configuredRole = getModelRoleAlias(roleAlias, settings);
 			configuredPatterns = resolveConfiguredModelPatterns([roleSelector], settings);
-			const availableResolved = resolveModelRoleValue(roleSelector, availableModels, {
-				settings,
-				matchPreferences: preferences,
-			});
+			const roleValueOptions = { settings, matchPreferences: preferences, ignorePolicyFilters: explainRefusal };
+			const availableResolved = resolveModelRoleValue(roleSelector, availableModels, roleValueOptions);
 			const resolved = availableResolved.model
 				? availableResolved
-				: resolveModelRoleValue(roleSelector, allModels, {
-						settings,
-						matchPreferences: preferences,
-					});
+				: resolveModelRoleValue(roleSelector, allModels, roleValueOptions);
 			if (resolved.model) {
 				return {
 					model: resolved.model,
@@ -2681,6 +2889,64 @@ function findLiteralScopedModel(pattern: string, catalog: Model<Api>[]): Model<A
 	);
 }
 
+function findExactScopedModelCandidates(pattern: string, catalog: Model<Api>[]): Model<Api>[] {
+	const exactScoped = findLiteralScopedModel(pattern, catalog);
+	if (exactScoped) return [exactScoped];
+	const exactBare = catalog.filter(model => model.id.toLowerCase() === pattern.toLowerCase());
+	if (exactBare.length > 0) return exactBare;
+	const suffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	if (suffix.level === undefined) return [];
+	const exactSuffixScoped = findLiteralScopedModel(suffix.base, catalog);
+	if (exactSuffixScoped) return [exactSuffixScoped];
+	return catalog.filter(model => model.id.toLowerCase() === suffix.base.toLowerCase());
+}
+function isExplicitQualifiedModelSelector(pattern: string): boolean {
+	return pattern.indexOf("/") > 0 && !pattern.includes("*") && !pattern.includes("?") && !pattern.includes("[");
+}
+
+function isExplicitlyDisabledModelSelector(
+	pattern: string,
+	exclusions: readonly string[],
+	disabledProviders: readonly string[],
+): boolean {
+	const normalized = pattern.trim().toLowerCase();
+	const suffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base.toLowerCase();
+	const slash = suffix.indexOf("/");
+	const provider = slash > 0 ? suffix.slice(0, slash) : undefined;
+	const id = slash > 0 ? suffix.slice(slash + 1) : suffix;
+	if (provider && disabledProviders.some(disabled => disabled.toLowerCase() === provider)) return true;
+	for (const exclusion of exclusions) {
+		const excluded = exclusion.trim().toLowerCase();
+		if (excluded === normalized || excluded === suffix) return true;
+		const excludedSlash = excluded.indexOf("/");
+		const excludedProvider = excludedSlash > 0 ? excluded.slice(0, excludedSlash) : undefined;
+		const excludedId = excludedSlash > 0 ? excluded.slice(excludedSlash + 1) : excluded;
+		if (excludedId === id && (!provider || !excludedProvider || excludedProvider === provider)) return true;
+	}
+	return false;
+}
+
+/** Match positive selectors against catalog rows and on-demand synthetic models. */
+export function createEnabledModelMatcher(
+	catalog: Model<Api>[],
+	patterns: readonly string[],
+	settings?: Settings,
+	preferences?: ModelMatchPreferences,
+): DisabledModelMatcher {
+	if (patterns.length === 0) return allModelsDisabled;
+	catalog = modelInclusionCatalogs.get(catalog) ?? catalog;
+	const keys = new Set(
+		matchAvailableModelsByPatterns(catalog, patterns, settings, preferences).map(formatModelString),
+	);
+	const globs = patterns.filter(
+		pattern =>
+			(pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) &&
+			!findLiteralScopedModel(pattern, catalog),
+	);
+	const matchesGlob = createDisabledModelMatcher(catalog, globs, settings, preferences);
+	return model => keys.has(`${model.provider}/${model.id}`) || matchesGlob(model);
+}
+
 function matchAvailableModelsByPatterns(
 	available: Model<Api>[],
 	patterns: readonly string[],
@@ -2702,7 +2968,10 @@ function matchAvailableModelsByPatterns(
 			continue;
 		}
 		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
-			const { model } = resolveModelRoleValue(pattern, available, { settings, matchPreferences: preferences });
+			const { model } = resolveModelRoleValueUnscoped(pattern, available, {
+				settings,
+				matchPreferences: preferences,
+			});
 			if (model) matches.push(model);
 			continue;
 		}

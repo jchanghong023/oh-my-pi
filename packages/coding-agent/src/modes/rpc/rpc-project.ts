@@ -292,7 +292,25 @@ class RpcProjectHost {
 				} catch {
 					if (!terminal) return;
 				}
-				if (INTERACTION_REQUEST_TYPES[String(frame.type)] === true && typeof frame.id === "string" && frame.id) {
+				const isExtensionUICancel = frame.type === "extension_ui_request" && frame.method === "cancel";
+				if (isExtensionUICancel && typeof frame.targetId === "string") {
+					this.#interactions.delete(frame.targetId);
+				}
+				// A cancelled host tool/URI call was already rejected on its own
+				// bridge; drop the route so a late result reports stale_session
+				// instead of reaching a bridge with no pending entry.
+				if (
+					(frame.type === "host_tool_cancel" || frame.type === "host_uri_cancel") &&
+					typeof frame.targetId === "string"
+				) {
+					this.#interactions.delete(frame.targetId);
+				}
+				if (
+					INTERACTION_REQUEST_TYPES[String(frame.type)] === true &&
+					!isExtensionUICancel &&
+					typeof frame.id === "string" &&
+					frame.id
+				) {
 					this.#interactions.set(frame.id, {
 						sessionId: record.sessionId,
 						sessionGeneration: record.sessionGeneration,
@@ -499,156 +517,17 @@ class RpcProjectHost {
 	}
 
 	/** Route a session-level command: strip project fields, check generation, delegate. */
-	async #createIndependentBranch(
-		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
-	): Promise<RpcResponse> {
-		const source = await this.#requireLoadedSession(command as unknown as Record<string, unknown>);
-		const host = this.#getSessionHost(source.sessionId)!;
-		const reason = command.type === "fork" ? "fork" : "branch";
-		const entryId = "entryId" in command ? command.entryId : undefined;
-		const selected = typeof entryId === "string" ? source.session.sessionManager.getEntry(entryId) : undefined;
-		if (reason === "branch" && (selected?.type !== "message" || selected.message.role !== "user")) {
-			return this.#errorResponse(command.id, command.type, "branch requires a valid user entryId", "invalid_params");
-		}
-		if (
-			reason === "fork" &&
-			entryId !== undefined &&
-			(typeof entryId !== "string" || !entryId || selected?.type !== "message")
-		) {
-			return this.#errorResponse(command.id, command.type, "fork entryId must identify a message", "invalid_params");
-		}
-		const assertIdle = (): void => {
-			this.#assertRecordIdentity(source);
-			if (
-				source.session.isBusyForSnapshot ||
-				source.session.hasAdmittedSubmission ||
-				source.session.hasPendingAsyncWork() ||
-				host.getRunState() !== "idle"
-			) {
-				throw Object.assign(new Error("A branch snapshot requires an idle source session"), { code: "busy" });
-			}
-		};
-		assertIdle();
-		const content =
-			selected?.type === "message" && selected.message.role === "user" ? selected.message.content : undefined;
-		const selectedText =
-			typeof content === "string"
-				? content
-				: (content
-						?.filter(part => part.type === "text")
-						.map(part => part.text)
-						.join("") ?? "");
-		const selectedImages = Array.isArray(content) ? content.filter(part => part.type === "image") : [];
-		const sourceFile = source.session.sessionFile;
-		if (!sourceFile)
-			return this.#errorResponse(command.id, command.type, "Source session is not persisted", "persistence_failed");
-		source.busy = true;
-		let manager: SessionManager | undefined;
-		let created: RpcProjectCreatedSession | undefined;
-		let transferred = false;
-		let record: RpcProjectSessionRecord | undefined;
-		try {
-			const hook = await source.session.extensionRunner?.emit({
-				type: "session_before_branch",
-				reason,
-				entryId: typeof entryId === "string" ? entryId : (source.session.sessionManager.getLeafId() ?? ""),
-			});
-			this.#assertRecordIdentity(source);
-			if (isRecord(hook) && hook.cancel === true) {
-				return this.#successResponse(command.id, command.type, { cancelled: true, selectedText, selectedImages });
-			}
-			await source.session.sessionManager.flush();
-			assertIdle();
-			if (reason === "fork" && entryId === undefined) {
-				manager = await SessionManager.forkFrom(
-					sourceFile,
-					this.#options.cwd,
-					this.#options.sessionDir,
-					undefined,
-					{
-						copyArtifacts: true,
-						requireStableSessionIdentity: true,
-					},
-				);
-				assertIdle();
-			} else {
-				const leafId = reason === "fork" ? source.session.getForkLeafId(entryId as string) : selected!.parentId;
-				if (leafId === null) {
-					manager = SessionManager.create(this.#options.cwd, this.#options.sessionDir);
-					manager.requireStableSessionIdentity();
-					await manager.newSession({ parentSession: sourceFile });
-					assertIdle();
-				} else {
-					// This reader owns no source writer. Mutate it only onto the
-					// new snapshot, never branch the original live manager.
-					manager = await SessionManager.open(sourceFile, this.#options.sessionDir, undefined, {
-						suppressBreadcrumb: true,
-						throwIfMissing: true,
-						initialCwd: this.#options.cwd,
-					});
-					assertIdle();
-					if (manager.getSessionId() !== source.sessionId)
-						throw Object.assign(new Error("Source changed while reading"), { code: "stale_session" });
-					manager.requireStableSessionIdentity();
-					manager.createBranchedSession(leafId, { copyArtifacts: true });
-				}
-			}
-			this.#assertRecordIdentity(source);
-			manager.requireStableSessionIdentity();
-			// Branching keeps the current runtime model, even when the selected
-			// historical prefix predates its last model-change entry.
-			if (source.session.model)
-				manager.appendModelChange(`${source.session.model.provider}/${source.session.model.id}`);
-			manager.appendThinkingLevelChange(source.session.thinkingLevel, source.session.configuredThinkingLevel());
-			created = await this.#options.createSession(manager);
-			this.#assertRecordIdentity(source);
-			if (isRecord(hook) && hook.skipConversationRestore === true) {
-				created.session.agent.replaceMessages(source.session.agent.state.messages);
-			}
-			transferred = true;
-			record = await this.#container.adoptCreated(created);
-			await this.#ensureAttached(record, created);
-			this.#assertRecordIdentity(source);
-			this.#assertRecordIdentity(record);
-			await record.session.extensionRunner?.emit({
-				type: "session_branch",
-				reason,
-				previousSessionFile: sourceFile,
-			});
-			this.#assertRecordIdentity(source);
-			this.#assertRecordIdentity(record);
-			return this.#successResponse(command.id, command.type, {
-				...this.#container.buildSummary(record),
-				cancelled: false,
-				selectedText,
-				selectedImages,
-			});
-		} catch (error) {
-			if (created && !transferred) await created.session.dispose();
-			else if (!created && manager && manager.getSessionId() !== source.sessionId) await manager.close();
-			if (manager && manager.getSessionId() !== source.sessionId) {
-				await this.#container
-					.delete(record?.sessionId ?? manager.getSessionId(), { cancelRunning: true })
-					.catch(cleanup => {
-						logger.error("RPC branch rollback failed", { error: String(cleanup) });
-					});
-			}
-			throw error;
-		} finally {
-			source.busy = false;
-		}
-	}
-
 	async handleSessionCommand(
 		command: RpcCommand & { sessionId?: string; sessionGeneration?: string },
 	): Promise<RpcResponse> {
 		this.#requireV3(command.id, command.type);
-		if (command.type === "branch" || command.type === "fork") return this.#createIndependentBranch(command);
-		if (["new_session", "switch_session", "open_session", "set_session_name"].includes(command.type)) {
+		if (
+			["new_session", "switch_session", "open_session", "set_session_name", "branch", "fork"].includes(command.type)
+		) {
 			return this.#errorResponse(
 				command.id,
 				command.type,
-				"Use project session lifecycle commands; replacing a loaded session is unsupported",
+				"This session lifecycle operation is unsupported in project mode; use project session lifecycle commands",
 				"unsupported",
 			);
 		}
@@ -1118,7 +997,9 @@ class RpcProjectHost {
 			) {
 				this.#emitProjectFrame(
 					this.#errorResponse(
-						typeof parsed.id === "string" ? parsed.id : undefined,
+						// Correlate by the interaction the client answered (for
+						// ask_pause that is targetId, for the rest parsed.id).
+						typeof targetId === "string" ? targetId : undefined,
 						type,
 						"Unknown, stale, or wrong-session interaction",
 						"stale_session",

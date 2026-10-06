@@ -250,6 +250,8 @@ export class RpcProjectSessionContainer {
 		string,
 		Promise<{ record: RpcProjectSessionRecord; created: RpcProjectCreatedSession }>
 	>();
+	/** IDs whose persisted histories are being deleted; blocks concurrent restores. */
+	readonly #deleting = new Set<string>();
 	readonly #revisions = new RpcRevisionSource();
 	#generationCounter = 0;
 	#disposed = false;
@@ -508,6 +510,9 @@ export class RpcProjectSessionContainer {
 		sessionId: string,
 		factory: () => Promise<RpcProjectCreatedSession>,
 	): Promise<{ record: RpcProjectSessionRecord; created?: RpcProjectCreatedSession }> {
+		if (this.#deleting.has(sessionId)) {
+			throw new RpcProjectSessionError("busy", `Session ${sessionId} is being deleted`);
+		}
 		const pending = this.#resuming.get(sessionId);
 		if (pending) return pending;
 		const existing = this.#records.get(sessionId);
@@ -795,19 +800,30 @@ export class RpcProjectSessionContainer {
 		sessionId: string,
 		options: { cancelRunning?: boolean; expectedRevision?: RpcRevision } = {},
 	): Promise<RpcProjectSessionDeleteResult> {
-		const targetFile = await this.findSessionFileById(sessionId);
-		if (!targetFile) throw new RpcProjectSessionError("not_found", `Session ${sessionId} not found`);
-		this.#assertResourceRevision(sessionId, targetFile, options.expectedRevision);
-		const authorizedRevision = this.#resourceRevision(sessionId, targetFile);
-		const record = this.#records.get(sessionId);
-		if (record) {
-			this.#assertTeardownAllowed(record, options.cancelRunning === true);
-			await this.close(sessionId, { cancelRunning: options.cancelRunning === true });
-			await this.#deletePersisted(sessionId, targetFile);
-			return { revision: this.#bump() };
+		if (this.#deleting.has(sessionId)) {
+			throw new RpcProjectSessionError("busy", `Session ${sessionId} is already being deleted`);
 		}
-		await this.#deletePersisted(sessionId, targetFile, authorizedRevision);
-		return { revision: this.#bump() };
+		if (this.#resuming.has(sessionId)) {
+			throw new RpcProjectSessionError("busy", `Session ${sessionId} is being restored`);
+		}
+		this.#deleting.add(sessionId);
+		try {
+			const targetFile = await this.findSessionFileById(sessionId);
+			if (!targetFile) throw new RpcProjectSessionError("not_found", `Session ${sessionId} not found`);
+			this.#assertResourceRevision(sessionId, targetFile, options.expectedRevision);
+			const authorizedRevision = this.#resourceRevision(sessionId, targetFile);
+			const record = this.#records.get(sessionId);
+			if (record) {
+				this.#assertTeardownAllowed(record, options.cancelRunning === true);
+				await this.close(sessionId, { cancelRunning: options.cancelRunning === true });
+				await this.#deletePersisted(sessionId, targetFile);
+				return { revision: this.#bump() };
+			}
+			await this.#deletePersisted(sessionId, targetFile, authorizedRevision);
+			return { revision: this.#bump() };
+		} finally {
+			this.#deleting.delete(sessionId);
+		}
 	}
 
 	async #deletePersisted(sessionId: string, target: string, authorizedRevision?: RpcRevision): Promise<void> {

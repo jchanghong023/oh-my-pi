@@ -153,7 +153,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 			if (bodies.length === 0) {
 				for (const section of result.sections) {
 					const header = sectionHeader(bodies.length + 1, section);
-					if (used + header.length > TEXT_BUDGET_CHARS) break;
+					if (used + header.length + 2 > TEXT_BUDGET_CHARS) break;
 					bodies.push(header);
 					used += header.length + 2;
 				}

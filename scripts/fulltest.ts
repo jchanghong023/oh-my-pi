@@ -3,8 +3,9 @@
 // entries: the fastcheck static gate, the fork-maintained green TS test set
 // (curated whitelist — the full upstream shard suite is NOT Windows-runnable
 // and is covered by the slowtest Linux CI pipeline instead), the Rust core
-// crates via `cargo nextest` (fork scope; `pi-builtins` stays out, see
-// docs-zh-CN/requirements/fork.md), repo script tests, and the dev-TUI PTY smoke. Python
+// crates via `cargo nextest` (fork scope; includes `pi-builtins` so its
+// Windows-gated timeout tests run locally), repo script tests, and the
+// dev-TUI PTY smoke. Python
 // components (sdk/python/omp-rpc and python/robomp) are NOT tested locally.
 // Needs the host
 // native addon, so it always builds it first. The verdict is black and white:
@@ -20,10 +21,13 @@ import { $ } from "bun";
 const repoRoot = path.resolve(import.meta.dir, "..");
 
 // Fork scope for local Rust tests: the crates the fork actively maintains and
-// that pass on Windows (pi-builtins has ~21 pre-existing upstream Windows
-// failures and stays out of local verification by contract). pi-vfs carries
-// the fork's Windows file-identity fixes and pi-predict the fork's behavior
-// changes, so their unit tests run locally too.
+// that pass on Windows. pi-vfs carries the fork's Windows file-identity fixes
+// and pi-predict the fork's behavior changes, so their unit tests run locally
+// too. pi-builtins' former ~21 Windows failures were the timeout bugs fixed
+// in e2ff8d56fa (killed semantics, number=0 fallback), and its
+// #[cfg(windows)] tests have no other execution path — the CI remote job is
+// temporarily disabled and Linux never compiles windows-gated tests — so it
+// runs in this local gate as well.
 export const CORE_RUST_CRATES = [
 	"pi-natives",
 	"pi-shell",
@@ -34,6 +38,7 @@ export const CORE_RUST_CRATES = [
 	"pi-vfs",
 	"pi-predict",
 	"pi-walker",
+	"pi-builtins",
 ] as const satisfies readonly string[];
 
 export interface TestGroup {
@@ -244,9 +249,9 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 	},
 	{
 		// Upstream goal feature joined the fork with the v18.4.10 sync: its RPC
-		// wiring was hand-ported into RpcSessionHost, --goal parsing merged into
-		// the fork-modified args chain, and goals/runtime.ts carries a fork
-		// iteration patch — these tests guard exactly those surfaces.
+		// wiring was hand-ported into RpcSessionHost — these tests guard that
+		// surface and pin goals/runtime.ts behavior (the old fork iteration
+		// patch there was dropped once upstream covered it equivalently).
 		label: "coding-agent/goal",
 		cwd: "packages/coding-agent",
 		files: [
@@ -303,9 +308,11 @@ export const WHITELIST_TEST_GROUPS: readonly TestGroup[] = [
 		],
 	},
 	{
-		// Fork web-guest completion logic (fork commit fc3326e5f9): the slash
-		// palette + host directory candidates the browser composer serves.
-		label: "collab-web/fork-features",
+		// Upstream package: packages/collab-web is upstream-identical again
+		// (d0274c896e reverted the fork web-guest completion logic), so this
+		// group re-runs upstream's own composer tests locally to cover
+		// upstream changes on the current OS.
+		label: "collab-web/composer",
 		cwd: "packages/collab-web",
 		files: ["test/composer.test.tsx"],
 	},

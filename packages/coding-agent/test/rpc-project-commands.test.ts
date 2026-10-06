@@ -10,7 +10,10 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgSkills } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
-import { RpcCommandCatalogService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-commands";
+import {
+	getRpcProjectHostAction,
+	RpcCommandCatalogService,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-commands";
 import type { RpcProjectCommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-types";
 
 let globalSettingsReady: Promise<unknown> | undefined;
@@ -155,6 +158,9 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			description: "Probe skill for RPC catalog tests",
 		});
 	}, 15_000);
+	test("does not expose the canceled live agent hub host action", () => {
+		expect(getRpcProjectHostAction("hub")).toBeUndefined();
+	});
 
 	test("complete completes command names with slash-prefixed replacement ranges", async () => {
 		await using tempDir = await TempDir.create("rpc-catalog-name-");
@@ -218,6 +224,60 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 		expect(plan.items).toEqual([]);
 		const unknown = await service.complete({ text: "/nosuchcmd ar", cursor: 13 });
 		expect(unknown.items).toEqual([]);
+	}, 15_000);
+	test("complete uses ACP-only arguments for model selector completion", async () => {
+		await using tempDir = await TempDir.create("rpc-catalog-model-args-");
+		const cwd = path.resolve(tempDir.path());
+		const settings = Settings.isolated();
+		settings.setModelRole("smol", "anthropic/claude-haiku-4-5");
+		const service = new RpcCommandCatalogService({ cwd, getSettings: () => settings });
+		const session = {
+			customCommands: [],
+			skills: [],
+			skillsSettings: { enableSkillCommands: true },
+			settings,
+			setSlashCommands: () => {},
+			sessionManager: { getCwd: () => cwd },
+		};
+
+		const result = await service.complete({ text: "/model @sm", cursor: 10, sessionLike: session });
+		expect(result.items).toContainEqual(
+			expect.objectContaining({
+				label: "@smol",
+				insertText: "@smol ",
+				replaceStart: 7,
+				replaceEnd: 10,
+				kind: "argument",
+			}),
+		);
+	}, 15_000);
+
+	test("resolve rejects skill commands when the session disables them", async () => {
+		await using tempDir = await TempDir.create("rpc-catalog-disabled-skill-");
+		const cwd = path.resolve(tempDir.path());
+		const service = new RpcCommandCatalogService({ cwd, getSettings: () => Settings.isolated() });
+		const session = {
+			customCommands: [],
+			skills: [{ name: "disabled-skill" }],
+			skillsSettings: { enableSkillCommands: false },
+			setSlashCommands: () => {},
+			sessionManager: { getCwd: () => cwd },
+		};
+
+		expect(await service.resolve("/skill:disabled-skill", session)).toMatchObject({ kind: "unknown" });
+	}, 15_000);
+	// Hidden skills are still explicitly invokable with `/skill:<name>`.
+	test("session-free catalog includes hidden skill commands", async () => {
+		await using tempDir = await TempDir.create("rpc-catalog-hidden-skill-");
+		const cwd = path.resolve(tempDir.path());
+		await fs.mkdir(path.join(cwd, ".omp", "skills", "hidden-probe"), { recursive: true });
+		await fs.writeFile(
+			path.join(cwd, ".omp", "skills", "hidden-probe", "SKILL.md"),
+			"---\nname: hidden-probe\ndescription: Hidden probe\nhide: true\n---\n\nHidden skill body.\n",
+		);
+		const service = new RpcCommandCatalogService({ cwd, getSettings: () => Settings.isolated() });
+
+		expect(byName(await service.buildCatalog()).has("skill:hidden-probe")).toBe(true);
 	}, 15_000);
 
 	test("complete validates the cursor and throws invalid_params otherwise", async () => {

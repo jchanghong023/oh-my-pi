@@ -1694,7 +1694,7 @@ export async function buildSessionOptions(
 			modelRegistry,
 			modelMatchPreferences,
 			disabledProviders,
-			{ deferUnregistered: true, offline: parsed.offline === true },
+			{ deferUnregistered: true, offline: parsed.offline === true, settings },
 		);
 		if (selection.deferred) {
 			// Preserve role fallback order until extensions have registered their providers.

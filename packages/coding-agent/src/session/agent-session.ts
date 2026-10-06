@@ -5059,13 +5059,15 @@ export class AgentSession implements SettingsScope {
 		const unsubscribeToolEvents = this.subscribe(event => {
 			if (event.type !== "tool_execution_end" || (event.toolName !== "bash" && event.toolName !== "eval")) return;
 			const details = event.result?.details;
-			// Synthetic, refused and validation-error calls did not execute. A
-			// non-zero exit or timeout did execute and could have changed files.
+			// Refused and validation-error calls did not execute. A non-zero exit,
+			// timeout, or interrupt after tool execution started may have mutated files.
+			const interruptedAfterStart = details?.__interrupted === true && details?.execution === "started";
 			if (
 				event.isError &&
 				!details?.exitCode &&
 				!details?.timedOut &&
-				!(event.toolName === "eval" && Array.isArray(details?.cells))
+				!(event.toolName === "eval" && Array.isArray(details?.cells)) &&
+				!interruptedAfterStart
 			)
 				return;
 			const kind = event.toolName;
@@ -9579,7 +9581,7 @@ export class AgentSession implements SettingsScope {
 	 * transcript message, inclusive, plus the artifacts, and the transition runs like
 	 * {@link branch} (`session_before_branch`/`session_branch` hooks with reason `"fork"`,
 	 * agent messages rebuilt from the cut). A cut inside an assistant tool-call batch is
-	 * extended through the batch's recorded tool results (see {@link getForkLeafId}), and
+	 * extended through the batch's recorded tool results (see {@link #resolveForkLeaf}), and
 	 * the hook's `entryId` is that last kept entry. An entry fork always requires an idle
 	 * session; `options.requireIdle` applies the same rule to the whole-session fork.
 	 * Either refusal throws {@link SessionBusyError} before any session state is discarded.
@@ -9590,7 +9592,10 @@ export class AgentSession implements SettingsScope {
 		this.#assertVibeSessionTransitionAllowed("fork the session");
 		const requireIdleFor = entryId !== undefined || options?.requireIdle ? "fork the session" : undefined;
 		if (entryId !== undefined) {
-			const leafId = this.getForkLeafId(entryId);
+			if (this.sessionManager.getEntry(entryId)?.type !== "message") {
+				throw new Error(`Invalid entry ID for forking: ${entryId}`);
+			}
+			const leafId = this.#resolveForkLeaf(entryId);
 			// Await inside the `using` scope so the transition stays open until it settles.
 			// Kept tool results may cite `artifact://N`, so the fork carries the artifacts too.
 			return await this.#branchIntoNewSession("fork", leafId, leafId, {
@@ -9680,10 +9685,7 @@ export class AgentSession implements SettingsScope {
 	 * tool calls whose results exist in the source session. Non-message entries between
 	 * results (labels, custom entries) are kept only when a later result follows them.
 	 */
-	getForkLeafId(entryId: string): string {
-		if (this.sessionManager.getEntry(entryId)?.type !== "message") {
-			throw new Error(`Invalid entry ID for forking: ${entryId}`);
-		}
+	#resolveForkLeaf(entryId: string): string {
 		const answered = new Set<string>();
 		let batch: AssistantMessage | undefined;
 		const path = this.sessionManager.getBranch(entryId);
@@ -9757,7 +9759,7 @@ export class AgentSession implements SettingsScope {
 	setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
+		options?: { ephemeral?: boolean; restore?: boolean },
 	): Promise<void> {
 		return this.#models.setModelTemporary(model, thinkingLevel, options);
 	}

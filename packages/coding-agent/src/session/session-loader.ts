@@ -476,7 +476,7 @@ export async function loadSessionFile(
 		if (isEnoent(err)) {
 			// Keep the ENOTDIR rejection POSIX produces so a path-component
 			// error is not masked as a missing session.
-			if (hasFileAsPathComponent(filePath)) {
+			if (storage instanceof FileSessionStorage && hasFileAsPathComponent(filePath)) {
 				const notDir = new Error(`ENOTDIR: not a directory, open '${filePath}'`) as Error & { code?: string };
 				notDir.code = "ENOTDIR";
 				throw notDir;

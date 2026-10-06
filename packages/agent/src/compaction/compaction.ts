@@ -622,10 +622,9 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 
 /**
  * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
- * compaction never runs on an `openai-codex` model other than `gpt-6-luna`, and
- * luna always compacts at a fixed `low` effort. The coding-agent compaction
- * candidate chain substitutes every other `openai-codex` candidate with this
- * model; this module pins its effort.
+ * automatically selected `openai-codex` compaction candidates are redirected
+ * to `gpt-6-luna` when available; explicit `compactionModel` overrides are
+ * left alone. This module pins compaction requests using luna to `low`.
  */
 export const FORK_CODEX_COMPACTION_MODEL = {
 	provider: "openai-codex",

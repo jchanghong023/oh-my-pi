@@ -64,11 +64,10 @@ import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { formatPersistenceFailure, formatPersistenceNotice } from "../persistence-failure";
 import { type ExtensionSendAction, initializeExtensions } from "../runtime-init";
 import { cfgSpellingAutocomplete } from "../settings";
-import { RpcHostToolBridge } from "./host-tools";
-import { RpcHostUriBridge } from "./host-uris";
+import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
+import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcForkAskBroker } from "./rpc-fork-ask";
-import { RpcAttachmentError, resolveRpcAttachments, type RpcForkAttachment } from "./rpc-fork-attachments";
 import { RpcForkPermissionController } from "./rpc-fork-permission";
 import { RpcForkHost } from "./rpc-fork-host";
 import { isNegotiableRpcProtocolVersion, RPC_FORK_PROTOCOL_VERSION } from "./rpc-fork-types";
@@ -312,17 +311,12 @@ export async function runRpcSkillCommand(
 	prebuilt?: BuiltSkillPromptMessage,
 	onPromptAdmitted?: () => void,
 	images?: ImageContent[],
-	attachmentsText?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
-	// Resolved attachment bodies travel with the skill command: the
-	// prefix stays out of the slash/skill MATCHING text but must still reach
-	// the model message and transcript, or uploaded material silently vanishes.
-	const messageText = attachmentsText ? attachmentsText + built.message : built.message;
 	return session.promptCustomMessage(
 		{
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: images?.length ? [{ type: "text", text: messageText }, ...images] : messageText,
+			content: images?.length ? [{ type: "text", text: built.message }, ...images] : built.message,
 			display: true,
 			details: built.details,
 			attribution: "user",
@@ -344,8 +338,6 @@ export async function dispatchRpcSkillPrompt(input: {
 	ticket: RpcPromptTicket;
 	session: RpcSkillCommandSession;
 	message: string;
-	/** Resolved attachment text prefix; prepended to the skill message, never the matching text. */
-	attachmentsText?: string;
 	streamingBehavior: "steer" | "followUp" | undefined;
 	results: RpcPromptResults;
 	onError: (error: Error) => void;
@@ -374,7 +366,6 @@ export async function dispatchRpcSkillPrompt(input: {
 				built,
 				onPromptAdmitted,
 				input.images,
-				input.attachmentsText ?? "",
 			),
 		results: input.results,
 		onError: input.onError,
@@ -1702,10 +1693,6 @@ export class RpcSessionHost {
 				const ticket = this.promptResults.begin(id);
 				try {
 					const outcome = await this.#dispatchOrderedUserInput(command, ticket, strictCommandDispatch);
-					if (typeof outcome === "object") {
-						this.promptResults.discard(ticket);
-						return outcome.setupError;
-					}
 					if (outcome === "unknown-command") {
 						this.promptResults.discard(ticket);
 						const commandName = command.message.trim().split(/\s+/)[0]!;
@@ -1733,8 +1720,7 @@ export class RpcSessionHost {
 
 			case "steer":
 			case "follow_up": {
-				const outcome = await this.#dispatchOrderedUserInput(command, undefined, false);
-				if (typeof outcome === "object") return outcome.setupError;
+				await this.#dispatchOrderedUserInput(command, undefined, false);
 				return this.success(id, command.type);
 			}
 
@@ -1784,13 +1770,7 @@ export class RpcSessionHost {
 				const ticket = this.promptResults.begin(id);
 				void this.#dispatchOrderedUserInput(command, ticket, false).then(
 					outcome => {
-						if (typeof outcome === "object") {
-							this.#output(outcome.setupError);
-							this.promptResults.fail(
-								ticket,
-								(outcome.setupError as Extract<RpcResponse, { success: false }>).error,
-							);
-						} else if (outcome === "cancelled") this.promptResults.settle(ticket);
+						if (outcome === "cancelled") this.promptResults.settle(ticket);
 						else if (outcome === "local") this.promptResults.completeLocal(ticket);
 					},
 					(cause: unknown) => {
@@ -2575,15 +2555,29 @@ export class RpcSessionHost {
 
 	/**
 	 * Route a side-channel (overtaking) frame into this session: extension UI
-	 * responses resolve against the pending map, everything else goes to the
-	 * fork host's control-frame handlers. Returns true when consumed. The
-	 * project host calls this for frames whose interaction id maps to this
-	 * session; host tool/URI results never arrive here (shared bridges).
+	 * responses resolve against the pending map, host tool/URI results and
+	 * updates feed this host's bridges (the project host routes them here by
+	 * the interaction's session ownership), everything else goes to the fork
+	 * host's control-frame handlers. Returns true when consumed; host tool/URI
+	 * frames are consumed even when their id is no longer pending on the
+	 * bridge, matching the single-session control-frame dispatch.
 	 */
 	handleControlFrame(parsed: unknown): boolean {
 		if (isRecord(parsed) && parsed.type === "extension_ui_response" && typeof parsed.id === "string") {
 			const pending = this.pendingExtensionRequests.get(parsed.id);
 			if (pending) pending.resolve(parsed as RpcExtensionUIResponse);
+			return true;
+		}
+		if (isRpcHostToolResult(parsed)) {
+			this.hostToolBridge.handleResult(parsed);
+			return true;
+		}
+		if (isRpcHostToolUpdate(parsed)) {
+			this.hostToolBridge.handleUpdate(parsed);
+			return true;
+		}
+		if (isRpcHostUriResult(parsed)) {
+			this.hostUriBridge.handleResult(parsed);
 			return true;
 		}
 		return this.forkHost.handleControlFrame(parsed);
@@ -2625,71 +2619,28 @@ export class RpcSessionHost {
 	}
 
 	/**
-	 * Resolves v3 `attachments` into message images + a text prelude (5.5);
-	 * structured attachment failures carry their wire `code`.
-	 */
-	async #resolveCommandAttachments(
-		id: string | undefined,
-		commandType: string,
-		attachments: RpcForkAttachment[] | undefined,
-		message: string,
-	): Promise<{ message: string; images: ImageContent[] } | { error: RpcResponse }> {
-		if (!attachments || attachments.length === 0) return { message, images: [] };
-		try {
-			const resolved = await resolveRpcAttachments(attachments, this.session.sessionManager.getCwd());
-			return { message: `${resolved.textPrefix}${message}`, images: resolved.images };
-		} catch (attachmentError) {
-			if (attachmentError instanceof RpcAttachmentError) {
-				return { error: this.error(id, commandType, attachmentError.message, attachmentError.code) };
-			}
-			throw attachmentError;
-		}
-	}
-
-	/**
-	 * Ordered user-input arm (upstream PR #13027, adapted to the fork's
-	 * attachments and strict-dispatch extensions): `prompt`, `steer`,
-	 * `follow_up`, and `abort_and_prompt` run serially through the host's
-	 * {@link RpcUserInputGate}, and every step re-checks `isCurrent` so an
-	 * abort or session change that arrived while this input was queued cancels
-	 * it before any agent work starts. Everything async that precedes dispatch
-	 * — the `/plan` toggle interception and attachment resolution — runs inside
-	 * the gate so a later-arriving plain prompt can never enter the gate first
-	 *. Extension input handlers run inside the gate, in
-	 * arrival order.
+	 * Ordered user-input arm (upstream PR #13027, adapted to project strict
+	 * dispatch): `prompt`, `steer`, `follow_up`, and `abort_and_prompt` run
+	 * serially through the host's {@link RpcUserInputGate}, and every step
+	 * re-checks `isCurrent` so an abort or session change that arrived while
+	 * this input was queued cancels it before any agent work starts. Everything
+	 * async that precedes dispatch runs inside the gate so a later-arriving
+	 * plain prompt can never enter the gate first. Extension input handlers run
+	 * inside the gate, in arrival order.
 	 */
 	#dispatchOrderedUserInput(
 		command: Extract<RpcCommand, { type: "prompt" | "steer" | "follow_up" | "abort_and_prompt" }>,
 		ticket: RpcPromptTicket | undefined,
 		strictCommandDispatch: boolean,
-	): Promise<
-		| "local"
-		| "cancelled"
-		| "admitted"
-		| "skill-invoked"
-		| "builtin-agent"
-		| "unknown-command"
-		| { setupError: RpcResponse }
-	> {
+	): Promise<"local" | "cancelled" | "admitted" | "skill-invoked" | "builtin-agent" | "unknown-command"> {
 		return this.#inputGate.enqueue(async () => {
 			const session = this.session;
 			const sessionId = session.sessionId;
 			const isCurrent = () =>
 				this.#inputGate.isCurrent(command) && !this.isShutdownRequested() && session.sessionId === sessionId;
 			if (!isCurrent()) return "cancelled";
-			const attachments = await this.#resolveCommandAttachments(command.id, command.type, command.attachments, "");
-			if ("error" in attachments) return { setupError: attachments.error };
-			if (!isCurrent()) return "cancelled";
-			// The attachment text prefix joins the model input only after the
-			// extension input handlers below, so slash/skill matching in the
-			// prompt arm sees the bare (possibly rewritten) user text.
-			const attachmentPrefix = attachments.message;
 			let text = command.message;
-			let images: ImageContent[] | undefined = command.images
-				? [...command.images, ...attachments.images]
-				: attachments.images.length > 0
-					? attachments.images
-					: undefined;
+			let images: ImageContent[] | undefined = command.images ? [...command.images] : undefined;
 			const runner = session.extensionRunner;
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, images, "rpc");
@@ -2699,14 +2650,13 @@ export class RpcSessionHost {
 				if (result.images !== undefined) images = result.images;
 			}
 			if (!isCurrent()) return "cancelled";
-			if (!text.trim() && !images?.length && !attachmentPrefix.trim()) return "local";
-			const withAttachments = attachmentPrefix ? attachmentPrefix + text : text;
+			if (!text.trim() && !images?.length) return "local";
 			if (command.type === "steer") {
-				await session.steer(withAttachments, images);
+				await session.steer(text, images);
 				return "admitted";
 			}
 			if (command.type === "follow_up") {
-				await session.followUp(withAttachments, images);
+				await session.followUp(text, images);
 				return "admitted";
 			}
 			// Set when a builtin consumed the text and returned a residual
@@ -2720,7 +2670,6 @@ export class RpcSessionHost {
 						ticket,
 						session,
 						message: text,
-						attachmentsText: attachmentPrefix,
 						streamingBehavior: command.streamingBehavior,
 						results: this.promptResults,
 						onError: this.#onPromptError(command.id, "prompt"),
@@ -2795,7 +2744,7 @@ export class RpcSessionHost {
 				startPrompt: onPromptAdmitted =>
 					builtinResidual !== undefined
 						? promptRpcBuiltinResidual(session, builtinResidual, command, onPromptAdmitted, images)
-						: session.prompt(withAttachments, {
+						: session.prompt(text, {
 								images,
 								...(command.type === "prompt"
 									? {

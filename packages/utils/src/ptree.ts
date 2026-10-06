@@ -184,6 +184,8 @@ export class ChildProcess<In extends InMask = InMask> {
 	#exited: Promise<number>;
 	#stdoutDone = false;
 	#stdoutSettled: PromiseWithResolvers<void> | undefined;
+	#stdoutStream: ReadableStream<Uint8Array> | undefined;
+	#stdoutExposed = false;
 	#openPipeReaders = 1;
 	// Pipe reads race this cutoff only when attachTimeout() configures a
 	// command deadline. Untimed commands preserve complete EOF-based capture.
@@ -313,7 +315,8 @@ export class ChildProcess<In extends InMask = InMask> {
 
 	/** Raw stdout stream. Must be consumed to prevent pipe deadlock. */
 	get stdout() {
-		return this.proc.stdout;
+		this.#stdoutExposed = true;
+		return this.#stdoutStream ?? this.proc.stdout;
 	}
 
 	/** Optional stderr stream (only when requested in spawn options). */
@@ -429,7 +432,7 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	async text(): Promise<string> {
-		const p = this.#readStream(this.proc.stdout);
+		const p = this.#readStream(this.stdout);
 		if (this.#nothrow) return p;
 		const [text] = await Promise.all([p, this.exitedCleanly]);
 		await this.#throwIfAborted();
@@ -468,7 +471,7 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	async #readBytes(): Promise<Uint8Array<ArrayBuffer>> {
-		const reader = this.proc.stdout.getReader();
+		const reader = this.stdout.getReader();
 		this.#openPipeReaders++;
 		const chunks: Uint8Array[] = [];
 		let length = 0;
@@ -501,6 +504,62 @@ export class ChildProcess<In extends InMask = InMask> {
 			offset += chunk.byteLength;
 		}
 		return bytes;
+	}
+
+	#trackStdout(): boolean {
+		if (this.#stdoutStream || this.#stdoutDone) return true;
+		// Do not lock a stream reference already exposed to a caller.
+		if (this.#stdoutExposed || this.proc.stdout.locked) return false;
+
+		const reader = this.proc.stdout.getReader();
+		let finished = false;
+		// A reader that has never issued a read cannot tell an open pipe from a
+		// closed one, so the wrapper only counts as evidence that the group's
+		// stdout pipe still has live writers once a consumer actually pulls.
+		let pulled = false;
+		const trackPull = () => {
+			if (pulled) return;
+			pulled = true;
+			this.#openPipeReaders++;
+		};
+		const finish = () => {
+			if (finished) return;
+			finished = true;
+			if (pulled) this.#openPipeReaders--;
+			try {
+				reader.releaseLock();
+			} finally {
+				this.#markStdoutDone();
+			}
+		};
+		this.#stdoutStream = new ReadableStream<Uint8Array>(
+			{
+				async pull(controller) {
+					trackPull();
+					try {
+						const chunk = await reader.read();
+						if (chunk.done) {
+							finish();
+							if (controller.desiredSize !== null) controller.close();
+						} else {
+							controller.enqueue(chunk.value);
+						}
+					} catch (error) {
+						finish();
+						if (controller.desiredSize !== null) controller.error(error);
+					}
+				},
+				async cancel(reason) {
+					try {
+						await reader.cancel(reason);
+					} finally {
+						finish();
+					}
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		return true;
 	}
 
 	#markStdoutDone(): void {
@@ -543,7 +602,9 @@ export class ChildProcess<In extends InMask = InMask> {
 			throw new Error('Full stderr capture must be requested when spawning the process (pass stderr: "full")');
 		}
 
-		const stdoutP = this.#readStream(this.proc.stdout);
+		// Read through the exposed stream: a timeout/abort tracker may already
+		// hold the only reader on the raw proc.stdout.
+		const stdoutP = this.#readStream(this.stdout);
 		const stderrP =
 			stderrMode === "full" && stderrChunks
 				? this.#stderrDone.then(() => new TextDecoder().decode(Buffer.concat(stderrChunks)))
@@ -584,8 +645,12 @@ export class ChildProcess<In extends InMask = InMask> {
 	attachSignal(signal: AbortSignal): void {
 		const onAbort = () => this.kill(new AbortError(signal.reason, "<cancelled>"));
 		if (signal.aborted) return void onAbort();
+		const stdoutTracked = this.#trackStdout();
 		signal.addEventListener("abort", onAbort, { once: true });
-		const stdoutDone = this.#stdoutDone ? undefined : (this.#stdoutSettled ??= Promise.withResolvers<void>()).promise;
+		const stdoutDone =
+			this.#stdoutDone || !stdoutTracked
+				? undefined
+				: (this.#stdoutSettled ??= Promise.withResolvers<void>()).promise;
 		void Promise.allSettled([this.#exited, this.#stderrDone, stdoutDone]).then(() =>
 			signal.removeEventListener("abort", onAbort),
 		);
@@ -599,6 +664,7 @@ export class ChildProcess<In extends InMask = InMask> {
 
 	attachTimeout(ms: number): void {
 		if (ms <= 0 || this.proc.killed) return;
+		this.#trackStdout();
 		this.#exited.catch(() => {});
 		// One unref'd deadline controls both termination and pipe collection.
 		// A clean command clears it in wait(), so fast invocations do not hold

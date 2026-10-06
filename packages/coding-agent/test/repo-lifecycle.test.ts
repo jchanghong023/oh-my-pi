@@ -178,6 +178,42 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			} finally {
 				afterShell.close();
 			}
+			session.agent.emitExternalEvent({
+				type: "tool_execution_end",
+				toolCallId: "interrupted-bash-before-start",
+				toolName: "bash",
+				isError: true,
+				result: {
+					content: [{ type: "text", text: "interrupted before start" }],
+					details: { __interrupted: true, source: "interrupt_skipped", execution: "not_started" },
+				},
+			});
+			await session.waitForIdle();
+			const beforeStart = new RepoService({ cwd, agentDir });
+			try {
+				expect((await beforeStart.status()).unchecked).toBe(false);
+				expect((await beforeStart.status()).needsReconcile).toBe(false);
+			} finally {
+				beforeStart.close();
+			}
+			session.agent.emitExternalEvent({
+				type: "tool_execution_end",
+				toolCallId: "interrupted-bash",
+				toolName: "bash",
+				isError: true,
+				result: {
+					content: [{ type: "text", text: "interrupted after start" }],
+					details: { __interrupted: true, source: "interrupt_skipped", execution: "started" },
+				},
+			});
+			await session.waitForIdle();
+			const afterInterrupted = new RepoService({ cwd, agentDir });
+			try {
+				expect((await afterInterrupted.status()).unchecked).toBe(true);
+				expect((await afterInterrupted.status()).needsReconcile).toBe(true);
+			} finally {
+				afterInterrupted.close();
+			}
 			expect(await session.newSession()).toBe(true);
 			const afterSessionChange = new RepoService({ cwd, agentDir });
 			try {

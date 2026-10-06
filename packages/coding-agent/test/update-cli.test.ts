@@ -1241,6 +1241,7 @@ describe("update-cli release binary integrity", () => {
 		await fs.chmod(targetPath, 0o755);
 
 		const metadataAuthorizations: Array<string | null> = [];
+		const assetAuthorizations: Array<string | null> = [];
 		const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const requestUrl = String(input);
 			if (requestUrl.startsWith("https://api.github.com/")) {
@@ -1254,7 +1255,10 @@ describe("update-cli release binary integrity", () => {
 					),
 				);
 			}
-			if (requestUrl === url) return new Response(altered);
+			if (requestUrl === url) {
+				assetAuthorizations.push(new Headers(init?.headers).get("Authorization"));
+				return new Response(altered);
+			}
 			throw new Error(`Unexpected request: ${requestUrl}`);
 		};
 
@@ -1268,6 +1272,7 @@ describe("update-cli release binary integrity", () => {
 				}),
 			).rejects.toThrow("digest mismatch");
 			expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
+			expect(assetAuthorizations).toEqual(["Bearer test-token"]);
 			expect(await Bun.file(targetPath).text()).toBe(installed);
 			if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 			const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));

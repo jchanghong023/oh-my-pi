@@ -390,16 +390,15 @@ const RELEASE_LISTING_PAGE_SIZE = 30;
 async function getReleaseBinaryAsset(
 	expectedVersion: string,
 	binaryName: string,
+	githubToken: string | undefined,
 	fetchImpl: Fetch = fetch,
-	githubToken?: string,
 	allowPrerelease = false,
 ): Promise<ReleaseBinaryAsset> {
 	const tag = `v${expectedVersion}`;
-	const token = githubToken ?? (await resolveGitHubToken());
 	const response = await fetchReleaseMetadata(
 		`${GITHUB_API}/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`,
 		fetchImpl,
-		token,
+		githubToken,
 	);
 	if (response.ok) {
 		return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
@@ -412,7 +411,7 @@ async function getReleaseBinaryAsset(
 	const listing = await fetchReleaseMetadata(
 		`${GITHUB_API}/repos/${REPO}/releases?per_page=${RELEASE_LISTING_PAGE_SIZE}`,
 		fetchImpl,
-		token,
+		githubToken,
 	);
 	if (!listing.ok) {
 		throw new Error(
@@ -512,6 +511,30 @@ async function responseBodyDetail(response: Response): Promise<string> {
 	} catch {
 		return "";
 	}
+}
+/**
+ * Add credentials only to the trusted GitHub release download origin. Fetch's
+ * redirect handling strips Authorization when a redirect crosses origins, so
+ * a signed asset CDN never receives the GitHub token.
+ */
+function withGitHubAssetAuthorization(fetchImpl: Fetch, token: string | undefined): Fetch {
+	if (!token) return fetchImpl;
+	return (input, init) => {
+		const requestUrl = input instanceof Request ? input.url : String(input);
+		let url: URL;
+		try {
+			url = new URL(requestUrl);
+		} catch {
+			return fetchImpl(input, init);
+		}
+		if (url.origin !== "https://github.com") return fetchImpl(input, init);
+		const headers = new Headers(input instanceof Request ? input.headers : undefined);
+		if (init?.headers) {
+			new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+		}
+		headers.set("Authorization", `Bearer ${token}`);
+		return fetchImpl(input, { ...init, headers });
+	};
 }
 /**
  * Warn when the shell resolves `omp` from PATH to a different file than the
@@ -2192,11 +2215,12 @@ export async function updateViaBinaryAt(
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${targetPath}.${attempt}.new`;
 	const backupPath = `${targetPath}.${attempt}.bak`;
+	const githubToken = options.githubToken ?? (await resolveGitHubToken());
 	const asset = await getReleaseBinaryAsset(
 		expectedVersion,
 		binaryName,
+		githubToken,
 		options.fetchImpl,
-		options.githubToken,
 		options.allowPrerelease,
 	);
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
@@ -2205,7 +2229,7 @@ export async function updateViaBinaryAt(
 		targetPath: tempPath,
 		expectedSize: asset.size,
 		expectedDigest: asset.digest,
-		fetchImpl: options.fetchImpl,
+		fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
 	});
 	console.log(chalk.dim(`Verified ${asset.digest}`));
 
@@ -2289,11 +2313,12 @@ export async function updateViaShimTakeover(
 	// `updateViaBinaryAt` keeps the check, where the target is a resolved install.
 	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 	const tempPath = `${exePath}.${attempt}.new`;
+	const githubToken = options.githubToken ?? (await resolveGitHubToken());
 	const asset = await getReleaseBinaryAsset(
 		expectedVersion,
 		binaryName,
+		githubToken,
 		options.fetchImpl,
-		options.githubToken,
 		options.allowPrerelease,
 	);
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
@@ -2302,7 +2327,7 @@ export async function updateViaShimTakeover(
 		targetPath: tempPath,
 		expectedSize: asset.size,
 		expectedDigest: asset.digest,
-		fetchImpl: options.fetchImpl,
+		fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
 	});
 	console.log(chalk.dim(`Verified ${asset.digest}`));
 	const forwarded: Array<{ launcher: string; original: string }> = [];

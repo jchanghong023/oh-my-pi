@@ -64,7 +64,7 @@ function makeHost(overrides: Partial<RpcProjectSessionHostLike> = {}): RpcProjec
  * actually calls) backed by a REAL SessionManager, so persistence —
  * ensureOnDisk, JSONL files, title slots — is genuine.
  */
-async function createSessionFixture(dirs: SessionDirs): Promise<SessionFixture> {
+async function createSessionFixture(dirs: SessionDirs, beforeFactory?: () => Promise<void>): Promise<SessionFixture> {
 	const revisions: string[] = [];
 	const state: FactoryState = {
 		bundles: [],
@@ -76,6 +76,7 @@ async function createSessionFixture(dirs: SessionDirs): Promise<SessionFixture> 
 	};
 	const createSession = async (): Promise<RpcProjectCreatedSession> => {
 		state.factoryCalls++;
+		await beforeFactory?.();
 		let manager = SessionManager.create(dirs.cwd, dirs.sessions);
 		const fake = {
 			get sessionId() {
@@ -228,6 +229,44 @@ describe("RpcProjectSessionContainer (R3, rpc-ui-protocol.md §5/§14.3)", () =>
 		expect(fx.state.factoryCalls).toBe(2);
 		expect(fx.state.switchCalls).toEqual([savedA.sessionFile, savedB.sessionFile]);
 		expect(fx.container.getLoaded(savedB.sessionId)).toBe(other);
+	}, 15_000);
+
+	test("delete and resume are mutually excluded during lifecycle transitions", async () => {
+		await using cwdDir = await TempDir.create("rpc-project-sessions-cwd-");
+		await using sessionsDir = await TempDir.create("rpc-project-sessions-store-");
+		const factoryStarted = Promise.withResolvers<void>();
+		const releaseFactory = Promise.withResolvers<void>();
+		await using fx = await createSessionFixture(
+			{
+				cwd: path.resolve(cwdDir.path()),
+				sessions: path.resolve(sessionsDir.path()),
+			},
+			async () => {
+				factoryStarted.resolve();
+				await releaseFactory.promise;
+			},
+		);
+		const saved = await fx.seedSession("delete-during-resume");
+
+		const restoring = fx.container.resume(saved.sessionId);
+		await factoryStarted.promise;
+		const deletion = await failure(fx.container.delete(saved.sessionId));
+		releaseFactory.resolve();
+
+		const restored = await restoring;
+		expect(deletion).toBeInstanceOf(RpcProjectSessionError);
+		expect((deletion as RpcProjectSessionError).code).toBe("busy");
+		expect(restored.sessionId).toBe(saved.sessionId);
+		expect(fx.container.getLoaded(saved.sessionId)).toBe(restored);
+		expect(existsSync(saved.sessionFile)).toBe(true);
+		const deleting = fx.container.delete(saved.sessionId);
+		const restoreDuringDelete = await failure(fx.container.resume(saved.sessionId));
+		expect(restoreDuringDelete).toBeInstanceOf(RpcProjectSessionError);
+		expect((restoreDuringDelete as RpcProjectSessionError).code).toBe("busy");
+		await deleting;
+		expect(fx.state.factoryCalls).toBe(1);
+		expect(fx.container.getLoaded(saved.sessionId)).toBeUndefined();
+		expect(existsSync(saved.sessionFile)).toBe(false);
 	}, 15_000);
 
 	test("resume of an unknown session id rejects with not_found", async () => {

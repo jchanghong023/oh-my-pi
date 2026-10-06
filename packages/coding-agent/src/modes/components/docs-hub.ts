@@ -168,17 +168,6 @@ export class DocsHubComponent implements Component {
 		this.tui.requestRender();
 	}
 
-	#showInfo(): void {
-		const index = this.#selectedIndex();
-		if (!index) return;
-		this.#detail = [
-			index.name,
-			`root=${index.rootPath}`,
-			`documents=${index.documentCount} sections=${index.sectionCount}`,
-		].map(sanitizeTerminalLine);
-		this.#mode = "detail";
-	}
-
 	handleInput(data: string): void {
 		if (this.#wizard) {
 			this.#wizard.handleInput(data);
@@ -243,8 +232,7 @@ export class DocsHubComponent implements Component {
 		} else if (data === "/") {
 			this.#mode = "search";
 			this.#search = new Input();
-		} else if (data === "i") this.#showInfo();
-		else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
+		} else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (data === "c" && this.#abort) this.#abort.abort();
 		// In detail mode without a hit list the arrows must not move the hidden
 		// list selection that `d` and scoped `/` searches act on.
@@ -258,7 +246,7 @@ export class DocsHubComponent implements Component {
 		if (this.#wizard) return this.#wizard.render(width);
 		const lines = [
 			theme.bold(theme.fg("accent", "Document indexes")),
-			theme.fg("dim", "n new  / search  i info  d delete  c cancel  Esc close"),
+			theme.fg("dim", "n new  / search  d delete  c cancel  Esc close"),
 		];
 		if (this.#mode === "confirm-remove")
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));

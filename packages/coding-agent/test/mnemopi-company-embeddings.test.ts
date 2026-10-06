@@ -19,6 +19,12 @@ interface ProbeResult {
 	explicitEmptyApiKey: unknown;
 	envApiUrl: unknown;
 	envApiKey: unknown;
+	genericEnvDefaults: unknown;
+	genericEnvModel: unknown;
+	genericEnvUrl: unknown;
+	genericEnvKey: unknown;
+	genericKeysWithoutApiRoute: unknown;
+	forcedApiRouting: unknown;
 	envModelForeign: unknown;
 	configuredVariant: unknown;
 	configuredModelForeign: unknown;
@@ -81,11 +87,15 @@ function runEmbeddingProbe(): ProbeResult {
 				writeFileSync(${JSON.stringify(join(claudeConfigDir, "settings.json"))}, JSON.stringify({
 					env: { ANTHROPIC_BASE_URL: endpoint + "/gateway/v1/", ANTHROPIC_AUTH_TOKEN: "fixture-secret" },
 				}));
-				// A developer machine may export MNEMOPI_EMBEDDING_*; the baseline
+				// A developer machine may export embedding settings; baseline
 				// branches below require a clean slate.
 				delete process.env.MNEMOPI_EMBEDDING_MODEL;
 				delete process.env.MNEMOPI_EMBEDDING_API_URL;
 				delete process.env.MNEMOPI_EMBEDDING_API_KEY;
+				delete process.env.MNEMOPI_EMBEDDINGS_VIA_API;
+				delete process.env.OPENROUTER_BASE_URL;
+				delete process.env.OPENROUTER_API_KEY;
+				delete process.env.OPENAI_API_KEY;
 				// Import after transport isolation so every dependency sees the guarded fetch.
 				const { setCompanyOfflineEnabled, getCompanyConfig } = await import(${JSON.stringify(companyProviderModulePath)});
 				const { getCompanyEmbeddingDefaults } = await import(${JSON.stringify(embeddingsModulePath)});
@@ -125,6 +135,16 @@ function runEmbeddingProbe(): ProbeResult {
 				process.env.MNEMOPI_EMBEDDING_MODEL = "openai/text-embedding-3-small";
 				const envModelForeign = getCompanyEmbeddingDefaults(Settings.isolated({}));
 				delete process.env.MNEMOPI_EMBEDDING_MODEL;
+				process.env.OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+				process.env.OPENROUTER_API_KEY = "shared-openrouter-key";
+				process.env.OPENAI_API_KEY = "shared-openai-key";
+				const genericKeysWithoutApiRoute = getCompanyEmbeddingDefaults(Settings.isolated({}));
+				delete process.env.OPENROUTER_BASE_URL;
+				delete process.env.OPENROUTER_API_KEY;
+				delete process.env.OPENAI_API_KEY;
+				process.env.MNEMOPI_EMBEDDINGS_VIA_API = "true";
+				const forcedApiRouting = getCompanyEmbeddingDefaults(Settings.isolated({}));
+				delete process.env.MNEMOPI_EMBEDDINGS_VIA_API;
 
 				// Only an explicitly configured variant keeps its user choice; the
 				// schema default (multilingual, absent here) yields to the company lane.
@@ -164,6 +184,20 @@ function runEmbeddingProbe(): ProbeResult {
 					disabled: false, model: wired.providerOptions.embeddingModel,
 					apiUrl: wired.providerOptions.embeddingApiUrl, apiKey: wired.providerOptions.embeddingApiKey,
 				} }, () => embed(["company embedding fixture"]));
+				process.env.OPENROUTER_BASE_URL = endpoint + "/generic/v1";
+				process.env.OPENROUTER_API_KEY = "explicit-openrouter-key";
+				const genericEnvDefaults = getCompanyEmbeddingDefaults(Settings.isolated({}));
+				const genericEnv = loadMnemopiConfig(
+					Settings.isolated({ "mnemopi.scoping": "global" }),
+					${JSON.stringify(home)},
+				);
+				await withMnemopiRuntimeOptions({ embeddings: {
+					disabled: false, model: genericEnv.providerOptions.embeddingModel,
+					apiUrl: genericEnv.providerOptions.embeddingApiUrl, apiKey: genericEnv.providerOptions.embeddingApiKey,
+				} }, () => embed(["generic env embedding fixture"]));
+				delete process.env.OPENROUTER_BASE_URL;
+				delete process.env.OPENROUTER_API_KEY;
+
 				const explicitNoAuth = loadMnemopiConfig(Settings.isolated({
 					"mnemopi.scoping": "global", "mnemopi.embeddingApiUrl": endpoint + "/explicit/v1",
 					"mnemopi.embeddingApiKey": "", "mnemopi.embeddingModel": "explicit-embedding-model",
@@ -184,6 +218,12 @@ function runEmbeddingProbe(): ProbeResult {
 					explicitApiKey,
 					explicitEmptyApiKey,
 					envApiUrl,
+					genericKeysWithoutApiRoute,
+					forcedApiRouting,
+					genericEnvDefaults,
+					genericEnvModel: genericEnv.providerOptions.embeddingModel,
+					genericEnvUrl: genericEnv.providerOptions.embeddingApiUrl,
+					genericEnvKey: genericEnv.providerOptions.embeddingApiKey,
 					envApiKey,
 					envModelForeign,
 					configuredVariant,
@@ -245,6 +285,13 @@ describe("company embedding defaults priority", () => {
 		expect(result.explicitEmptyApiKey).toBeUndefined();
 		expect(result.envApiUrl).toBeUndefined();
 		expect(result.envApiKey).toBeUndefined();
+		expect(result.genericKeysWithoutApiRoute).not.toBeUndefined();
+		expect(result.forcedApiRouting).toBeUndefined();
+		expect(result.genericEnvDefaults).toBeUndefined();
+		expect(result.genericEnvModel).toBe("intfloat/multilingual-e5-large");
+		expect(result.genericEnvUrl).toBeUndefined();
+		expect(result.genericEnvKey).toBeUndefined();
+
 		expect(result.envModelForeign).toBeUndefined();
 		expect(result.configuredVariant).toBeUndefined();
 		expect(result.configuredModelForeign).toBeUndefined();
@@ -269,6 +316,12 @@ describe("company embedding defaults priority", () => {
 				authorization: "Bearer fixture-secret",
 				model: "Qwen3-VL-Embedding-2B",
 				input: ["company embedding fixture"],
+			},
+			{
+				url: `${result.endpoint}/generic/v1/embeddings`,
+				authorization: "Bearer explicit-openrouter-key",
+				model: "intfloat/multilingual-e5-large",
+				input: ["generic env embedding fixture"],
 			},
 			{
 				url: `${result.endpoint}/explicit/v1/embeddings`,

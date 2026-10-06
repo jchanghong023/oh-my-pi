@@ -132,18 +132,16 @@ type CommandName = RpcCommand["type"];
 /**
  * Negotiated protocol-v3 interaction frames are outside the generated stock
  * command schema. Conformance below pins stock commands while accounting for
- * fork-only fields on stock commands: `attachments` / `inputMode` on prompt
- * commands, rich-ask `sensitive`, and project-mode `ready` stamps. Each
- * carve-out shrinks when the corresponding field lands upstream.
+ * fork-only fields on stock commands: `inputMode` on `prompt`,
+ * `get_messages_page` paging fields, rich-ask `sensitive`, and project-mode
+ * `ready` stamps. Each carve-out shrinks when the corresponding field lands
+ * upstream.
  */
 type StockCommandName = CommandName;
 
 /** Fork-only parameter fields the server accepts on stock commands. */
 interface ForkParamFields {
-	prompt: "attachments" | "inputMode";
-	steer: "attachments";
-	follow_up: "attachments";
-	abort_and_prompt: "attachments";
+	prompt: "inputMode";
 	get_messages_page: "after" | "before" | "order";
 }
 // The Omit only applies where the table names keys: a generic `Omit<T, never>`

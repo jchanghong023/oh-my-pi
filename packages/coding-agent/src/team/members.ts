@@ -13,7 +13,7 @@
  *   resolved concrete model instance.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
-import { resolveModelFromString } from "../config/model-resolver";
+import { resolveModelFromString, resolveProviderModelReference } from "../config/model-resolver";
 import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
@@ -31,7 +31,7 @@ export type TeamMembersResult =
 	| { ok: false; error: string };
 
 const CONFIG_EXAMPLE = [
-	"team.members 未配置，且当前进程没有可用的 company 模型 lane，无法组建多模型团队。",
+	"team.members 未配置，且当前进程没有可用的 company 模型 lane（--offline 下默认 company 名单也可能被 enabledModels/disabledModels 过滤为空），无法组建多模型团队。",
 	"",
 	"在 settings（config.yml）中配置参与模型（完整 ID；可用 ID 以 `omp models` 输出为准），格式例如：",
 	"",
@@ -105,7 +105,11 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 	const seen = new Set<string>();
 	const participants: TeamParticipant[] = [];
 	const resolveEntry = (entry: string, isSessionModel: boolean): string | undefined => {
-		const model = resolveModelFromString(entry, availableModels);
+		const separator = entry.indexOf("/");
+		const model =
+			separator > 0
+				? resolveProviderModelReference(entry.slice(0, separator), entry.slice(separator + 1), availableModels)
+				: undefined;
 		if (!model) return entry;
 		const key = modelKey(model);
 		if (seen.has(key)) return undefined;
@@ -178,8 +182,10 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 		};
 	}
 	// Whether the session model came from the configured list or joined as the
-	// extra proposer, the matching participant is flagged: reviewer rotation
-	// excludes it (§2.2) and the report labels it 会话模型.
+	// extra proposer, the matching participant is flagged: the session agent
+	// itself never reviews — §2.5 rotation prefers a different model, and when
+	// none participates a fresh same-model subagent reviews instead — and the
+	// report labels it 会话模型.
 	const sessionParticipant = participants.find(participant => participant.modelPattern === sessionKey);
 	if (!sessionParticipant) {
 		return {

@@ -66,7 +66,7 @@ export default class Docs extends Command {
 			// 130 inside runDocsCommand; anything reaching this catch is a real
 			// failure.
 			process.stderr.write(
-				`${chalk.red(sanitizeText(`Error: ${error instanceof Error ? error.message : String(error)}`))}\n`,
+				`${chalk.red(sanitizeText(`Error: ${error instanceof Error ? error.message : String(error)}`.replace(/[\r\n\t]+/g, " ")))}\n`,
 			);
 			process.exitCode = 1;
 		} finally {

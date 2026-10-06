@@ -107,6 +107,56 @@ describe("AgentSession prewalk", () => {
 		return { content: [{ type: "toolCall", id, name, arguments: {} }], stopReason: "toolUse" };
 	}
 
+	it("disarms a rejected handoff and lets the run and subsequent turns complete", async () => {
+		const primary = modelOrThrow("claude-sonnet-4-5");
+		const target = modelOrThrow("claude-sonnet-4-6");
+		const mock = createMockModel({
+			responses: [
+				toolCall("w1", "write"),
+				{ content: ["first done"] },
+				toolCall("w2", "write"),
+				{ content: ["second done"] },
+			],
+		});
+		const calls: string[] = [];
+		const notices: string[] = [];
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [writeTool as AgentTool], messages: [] },
+			convertToLlm,
+			streamFn: (model, context, options) => {
+				calls.push(model.id);
+				return mock.stream(model, context, options);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				enabledModels: [`${primary.provider}/${primary.id}`],
+				"compaction.enabled": false,
+			}),
+			modelRegistry,
+			toolRegistry,
+			prewalk: { target },
+		});
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+		});
+		await session.prompt("first task");
+		expect(session.getPrewalkState()).toBeUndefined();
+		await session.prompt("second task");
+		expect(calls).toEqual([primary.id, primary.id, primary.id, primary.id]);
+		expect(notices.filter(message => message.includes("handoff failed"))).toHaveLength(1);
+		expect(
+			session.messages.some(
+				message =>
+					message.role === "assistant" &&
+					message.content.some(block => block.type === "text" && block.text === "second done"),
+			),
+		).toBe(true);
+	});
+
 	it("prewalks at the first edit/write after the todo gate opens; bash and todo don't trigger", async () => {
 		const primary = modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");

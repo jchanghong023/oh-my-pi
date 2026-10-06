@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
+- Fixed process-tree cleanup when callers consume stdout or a command is canceled or fails.
 
 ## [18.5.1] - 2026-10-03
 
@@ -110,8 +111,6 @@
 
 ### Fixed
 
-- Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
-- Fixed watchdog log paths using a UTC date while the rotating sink writes local-date filenames.
 - Fixed log rotation near local-day boundaries so dated log files are consistently assigned to the correct local date.
 
 ## [18.2.7] - 2026-09-21

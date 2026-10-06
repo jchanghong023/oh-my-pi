@@ -1,9 +1,13 @@
+import { statSync } from "node:fs";
+
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { prompt, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import { isEnoent, prompt, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
-import { RepoService } from "../repo/service";
+import { REPO_EXCLUSIONS } from "../repo/files";
+import { resolveRepoRoot, RepoService } from "../repo/service";
+import { repoIndexPath } from "../repo/storage";
 import type { RepoQueryResult, RepoStatus, RepoSymbolHit, RepoTextHit } from "../repo/types";
 import repoDescription from "../prompts/tools/repo.md" with { type: "text" };
 import type { ToolSession } from ".";
@@ -176,6 +180,59 @@ function renderQuery(
 	return lines.join("\n");
 }
 
+function missingStatus(root: string): RepoStatus {
+	return {
+		root,
+		exists: false,
+		generation: null,
+		fileCount: 0,
+		symbolCount: 0,
+		failures: [],
+		failureCount: 0,
+		failuresTruncated: false,
+		pendingPaths: [],
+		pendingCount: 0,
+		pendingTruncated: false,
+		needsReconcile: false,
+		uncertainReasons: [],
+		uncertainCount: 0,
+		uncertaintyTruncated: false,
+		unchecked: true,
+		lastFullCheck: null,
+		incomplete: true,
+		exclusions: REPO_EXCLUSIONS,
+	};
+}
+
+function repositoryIndexExists(databasePath: string): boolean {
+	try {
+		statSync(databasePath);
+		return true;
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+}
+
+function missingQueryResult<T>(root: string, coverage: RepoStatus): RepoQueryResult<T> {
+	return { root, generation: null, status: "missing", hits: [], truncated: false, warnings: [], coverage };
+}
+
+/** A missing index cannot issue cursors; keep malformed and stale tokens as query errors. */
+function validateMissingCursor(value: string | undefined): void {
+	if (!value) return;
+	let cursor: unknown;
+	try {
+		cursor = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+	} catch {
+		throw new Error("Invalid repository index cursor");
+	}
+	if (!cursor || typeof cursor !== "object" || !("generation" in cursor))
+		throw new Error("Invalid repository index cursor");
+	if (cursor.generation !== null) throw new Error("Stale repository index cursor; restart the search");
+	throw new Error("Invalid repository index cursor");
+}
+
 export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 	readonly name = "repo";
 	readonly approval = "read" as const;
@@ -201,11 +258,15 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 			);
 		if (params.query && params.query.length > 500)
 			throw new ToolError("Repository query exceeds 500 characters; narrow it.");
-		const service = new RepoService({ agentDir: this.session.settings.getAgentDir(), cwd: this.session.cwd });
+		const agentDir = this.session.settings.getAgentDir();
+		const root = resolveRepoRoot(this.session.cwd);
+		const service = repositoryIndexExists(repoIndexPath(agentDir, root))
+			? new RepoService({ agentDir, cwd: this.session.cwd, root })
+			: undefined;
 		try {
 			if (params.action === "status") {
 				const clipped: FieldTruncations = {};
-				const status = boundedStatus(await service.status(), clipped);
+				const status = boundedStatus(service ? await service.status() : missingStatus(root), clipped);
 				const lines = coverage(status);
 				const summary = fieldTruncationLine(clipped);
 				if (summary) lines.push(summary);
@@ -221,8 +282,14 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 				cursor: params.cursor,
 				signal,
 			};
+			if (!service) {
+				signal?.throwIfAborted();
+				validateMissingCursor(params.cursor);
+			}
 			if (params.action === "search") {
-				const result = await service.search(query, options);
+				const result = service
+					? await service.search(query, options)
+					: missingQueryResult<RepoTextHit>(root, missingStatus(root));
 				const clipped: FieldTruncations = {};
 				const coverage = boundedStatus(result.coverage, clipped);
 				const hits = result.hits.map(hit => boundedHit(hit, clipped));
@@ -240,7 +307,9 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 					.text(renderQuery("search", query, { ...result, coverage, hits, warnings }, clipped))
 					.done();
 			}
-			const result = await service.symbol(query, options);
+			const result = service
+				? await service.symbol(query, options)
+				: missingQueryResult<RepoSymbolHit>(root, missingStatus(root));
 			const clipped: FieldTruncations = {};
 			const symbolCoverage = boundedStatus(result.coverage, clipped);
 			const hits = result.hits.map(hit => boundedHit(hit, clipped));
@@ -258,7 +327,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 				.text(renderQuery("symbol", query, { ...result, coverage: symbolCoverage, hits, warnings }, clipped))
 				.done();
 		} finally {
-			service.close();
+			service?.close();
 		}
 	}
 }

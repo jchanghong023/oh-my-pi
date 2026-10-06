@@ -38,6 +38,26 @@ describe("runDocsCommand", () => {
 		expect(stderr).toContain("FORGED");
 	}, 30_000);
 
+	it("keeps a newline-bearing root on one CLI diagnostic line", async () => {
+		const cwd = await tempDir("docs-cli-newline-root-");
+		const agentDir = await tempDir("docs-cli-newline-agent-");
+		const target = path.join(cwd, "missing-\nFORGED");
+		const child = Bun.spawn(
+			[process.execPath, path.join(import.meta.dir, "../src/cli.ts"), "docs", "init", target, "--name", "bad-root"],
+			{
+				env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const stderr = await new Response(child.stderr).text();
+		expect(await child.exited).toBe(1);
+		expect(stderr).toContain("Markdown root is not a directory");
+		expect(stderr).not.toContain("\nFORGED");
+		expect(stderr).toContain("FORGED");
+	});
+
 	it("imports and removes a stored index through JSON output", async () => {
 		const cwd = await tempDir("docs-cli-root-");
 		const agentDir = await tempDir("docs-cli-agent-");

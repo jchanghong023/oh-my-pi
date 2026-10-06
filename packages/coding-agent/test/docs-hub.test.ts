@@ -60,20 +60,17 @@ afterEach(async () => {
 // Windows filenames cannot contain control characters (\r, \t, ESC…), so the
 // attack-path fixture cannot be created there; the sanitization surface is POSIX-only.
 describe.skipIf(process.platform === "win32")("DocsHub terminal text safety", () => {
-	it("sanitizes list, detail, stored Markdown, and error text", async () => {
+	it("sanitizes listed indexes, search details, stored Markdown, and error text", async () => {
 		const { hub } = await fixture();
 		try {
 			const list = hub.render(200).join("\n");
 			expectControlSequencesNeutralized(list);
 			expect(list).not.toContain("\nFORGED");
+			expect(list).toContain("docs=1 sections=1");
+			expect(list).toContain("root-");
 
-			hub.handleInput("i");
-			const info = hub.render(200).join("\n");
-			expectControlSequencesNeutralized(info);
-			expect(info).not.toContain("\nFORGED");
-
-			hub.handleInput("\x1b");
 			hub.handleInput("/");
+
 			hub.handleInput("needle");
 			hub.handleInput("\r");
 			hub.handleInput("\r");

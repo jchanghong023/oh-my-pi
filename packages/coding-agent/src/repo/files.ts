@@ -90,23 +90,32 @@ export type FileRead = {
 export type ReadResult = { file?: FileRead; failure?: RepoFailure; missing?: boolean };
 
 /**
+ * Bun's realpath aliases `\` to a path separator on Unix: for a name that
+ * literally contains a backslash it either fails with ENOENT or — worse —
+ * silently resolves to the slashed sibling path when one exists. lstat is
+ * unaffected by that aliasing, so lstat every component from the entry up to
+ * (but excluding) `root`: when none is a symlink the honest resolution is the
+ * path as addressed; only actual symlinks need realpath's resolution, whose
+ * resolved target then fails the caller's in-scope comparison.
+ */
+async function realpathTolerant(root: string, absolute: string): Promise<string> {
+	let component = absolute;
+	for (;;) {
+		if ((await lstat(component)).isSymbolicLink()) return realpath(absolute);
+		const parent = path.dirname(component);
+		// Stop below `root` (matching the caller's component scan); the
+		// self-parent guard ends the walk at the filesystem root should `root`
+		// never be reached lexically.
+		if (parent === component || parent === root) return absolute;
+		component = parent;
+	}
+}
+
+/**
  * Reject symlink components and verify the opened descriptor refers to a stable in-scope regular file.
  * A literal backslash is a legal POSIX filename character; on Windows it normalizes to "/" so
  * `normalized !== rel` already rejects separator-style input there.
  */
-/**
- * Bun's realpath aliases `\` to a path separator on Unix: for a name that
- * literally contains a backslash it either fails with ENOENT or — worse —
- * silently resolves to the slashed sibling path when one exists. Callers have
- * already lstat'ed every path component, so when the entry itself is not a
- * symlink the honest resolution is the path as addressed; only actual
- * symlinks need realpath's resolution.
- */
-async function realpathTolerant(absolute: string): Promise<string> {
-	if (!(await lstat(absolute)).isSymbolicLink()) return absolute;
-	return realpath(absolute);
-}
-
 export async function readRepoFile(root: string, rel: string, signal?: AbortSignal): Promise<ReadResult> {
 	const normalized = relativePath(root, path.resolve(root, rel));
 	if (normalized !== rel)
@@ -122,7 +131,7 @@ export async function readRepoFile(root: string, rel: string, signal?: AbortSign
 				if ((await lstat(component)).isSymbolicLink())
 					return { failure: { path: rel, kind: "symlink", message: "Symbolic links are excluded" } };
 			}
-			if (relativePath(root, await realpathTolerant(absolute)) !== rel)
+			if (relativePath(root, await realpathTolerant(root, absolute)) !== rel)
 				return { failure: { path: rel, kind: "symlink", message: "Path resolves outside repository" } };
 			const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 			opened = true;
@@ -163,7 +172,7 @@ export async function readRepoFile(root: string, rel: string, signal?: AbortSign
 					current.mtimeMs !== after.mtimeMs ||
 					current.ctimeMs !== after.ctimeMs ||
 					length !== after.size ||
-					relativePath(root, await realpathTolerant(absolute)) !== rel
+					relativePath(root, await realpathTolerant(root, absolute)) !== rel
 				)
 					continue;
 				const content = bytes.subarray(0, length);

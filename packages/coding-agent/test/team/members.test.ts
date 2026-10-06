@@ -149,6 +149,21 @@ describe("team member resolution", () => {
 		}
 	});
 
+	it.each(["company/GLM-5.2", "GLM-5.2-public"])(
+		"rejects configured entries that are not full provider/model IDs (%s)",
+		entry => {
+			const result = resolveTeamParticipants({
+				configuredMembers: [entry],
+				offlineLaneActive: true,
+				companyModelPatterns: COMPANY_PATTERNS,
+				sessionModel: SESSION,
+				availableModels: AVAILABLE,
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain(`team.members 中的模型不可用：${entry}`);
+		},
+	);
+
 	it.each([{ configuredMembers: ["   "] }, { configuredMembers: ["openai/gpt-5", ""] }])(
 		"rejects explicitly empty configured entries: %j",
 		({ configuredMembers }) => {
@@ -201,8 +216,9 @@ describe("team member resolution", () => {
 				"anthropic/claude-sonnet-4-5",
 				"company/GLM-5.2-public",
 			]);
-			// The session-model participant is flagged however it joined:
-			// reviewer rotation excludes it (§2.2).
+			// The session-model participant is flagged however it joined: the
+			// session agent itself does not review, though a fresh same-model
+			// subagent may (§2.5).
 			expect(result.participants[0]!.isSessionModel).toBe(true);
 			expect(result.participants[1]!.isSessionModel).toBe(false);
 		}

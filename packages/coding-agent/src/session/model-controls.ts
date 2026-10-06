@@ -19,6 +19,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../auto-thinking/classifier";
 import type { ModelRegistry } from "../config/model-registry";
 import {
+	createEnabledModelMatcher,
 	filterAvailableModelsByEnabledPatterns,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
@@ -141,9 +142,16 @@ export class ModelControls {
 		return this.#autoResolvedLevel;
 	}
 
-	/** Models explicitly scoped to cycling, after current hard provider/model exclusions. */
+	/** Models in the explicit cycle scope that remain selectable under current settings. */
 	get scopedModels(): ReadonlyArray<{ model: Model; thinkingLevel?: ThinkingLevel }> {
-		return this.#scopedModels.filter(scoped => this.#host.modelRegistry.isModelEnabled(scoped.model));
+		const hardEnabled = this.#scopedModels.filter(scoped => this.#host.modelRegistry.isModelEnabled(scoped.model));
+		if (cfgEnabledModels.get(this.#host.settings).length === 0) return hardEnabled;
+		const isIncluded = createEnabledModelMatcher(
+			this.#host.modelRegistry.getAll(),
+			cfgEnabledModels.get(this.#host.settings),
+			this.#host.settings,
+		);
+		return hardEnabled.filter(scoped => isIncluded(scoped.model));
 	}
 
 	/**
@@ -233,6 +241,7 @@ export class ModelControls {
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
+		this.#assertModelSelectable(model);
 
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
 
@@ -272,12 +281,15 @@ export class ModelControls {
 	async setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
+		options?: { ephemeral?: boolean; restore?: boolean },
 	): Promise<void> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
+		// Plan teardown restores a previously active model even if the positive
+		// selection changed since entry. Credentials and hard exclusions still apply.
+		if (!options?.restore) this.#assertModelSelectable(model);
 
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
 
@@ -324,7 +336,7 @@ export class ModelControls {
 	 * still guard on `models.length`).
 	 */
 	getRoleModelCycle(roleOrder: readonly string[]): RoleModelCycle | undefined {
-		const availableModels = this.#host.modelRegistry.getAvailable();
+		const availableModels = this.getAvailableModels();
 		if (availableModels.length === 0) return undefined;
 
 		const currentModel = this.#model;
@@ -456,7 +468,7 @@ export class ModelControls {
 
 	async #cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
-		const availableModels = this.#host.modelRegistry.getAvailable();
+		const availableModels = this.getAvailableModels();
 		if (availableModels.length <= 1) return undefined;
 
 		const currentModel = this.#model;
@@ -492,6 +504,18 @@ export class ModelControls {
 		const all = this.#host.modelRegistry.getAvailable();
 		const patterns = cfgEnabledModels.get(this.#host.settings);
 		return filterAvailableModelsByEnabledPatterns(all, patterns, this.#host.settings);
+	}
+
+	/** Reject models outside the session's effective selectable set. */
+	#assertModelSelectable(model: Model): void {
+		const isIncluded = createEnabledModelMatcher(
+			this.#host.modelRegistry.getAll(),
+			cfgEnabledModels.get(this.#host.settings),
+			this.#host.settings,
+		);
+		if (!this.#host.modelRegistry.isModelEnabled(model) || !isIncluded(model)) {
+			throw new Error(`Model ${model.provider}/${model.id} is not enabled by the current model settings`);
+		}
 	}
 
 	// =========================================================================

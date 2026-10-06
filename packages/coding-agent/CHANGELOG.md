@@ -4,17 +4,31 @@
 
 ### Fixed
 
+- Kept synthetic model selectors usable with enabled model patterns, restored plan mode's previous model, and disarmed failed prewalk handoffs without interrupting turn-end maintenance.
 - Fixed disabled model exclusions during plan-yolo role selection and limited automatic wiki/repo attachment to explicit tool lists containing read.
 - Fixed team review outputs exceeding the combined 1500-character budget and restored native npm update support for all upstream platforms.
 - Fixed fork RPC project command resolution, settings compare-and-swap, agent-definition metadata preservation, live provider refresh, and root-session isolation for subagent outputs.
+- Fixed project-RPC cancellation so late calls using canceled request IDs return `stale_session` instead of reaching the canceled session.
+- Fixed project-RPC `/model` completion and discovery of session-enabled skills, including hidden skills that remain directly invocable.
 - Fixed fork command behavior for context clearing, logout, skill management, queue updates, plan approval, and host UI cancellation.
+- Fixed Windows session-loader size diagnostics so in-memory and SQLite sessions are not confused with same-named files on disk.
+- Marked repo indexes unverified after interrupted bash/eval commands and deferred JCH Git invalidations until a worktree-changing step starts.
 - Fixed fork model exclusions, company provider discovery, offline configuration and team discussion shutdown.
-- Fixed docs search snapshots, UTF-8/BOM/CRLF provenance, long headings and wiki size reporting; corrected repo rename/path identities and Python source ranges.
+- Made role, CLI, and in-session model selection honor enabled/disabled scopes without retargeting an exact disabled model ID.
+- Fixed team reviewer-to-model assignment and prevented failed follow-up reviews or revisions from clearing unresolved blockers.
+- Restricted configured `/team` members to exact provider/model IDs; offline defaults respect model enable/disable settings, and progress is reported outside the TUI.
+- Fixed company embedding defaults to defer to explicit endpoints without sending company credentials to them.
+- Fixed docs search snapshots, body-based phrase/all-term ranking, UTF-8/BOM/CRLF provenance, long headings, and wiki page-budget reporting; corrected repo rename/path identities and Python source ranges.
+- Kept `omp docs` error diagnostics on one line even when a path contains newlines.
+- Prevented repo queries without an index from writing database state and restored file-deletion cascades after recovery.
+- Fixed updater authentication for GitHub release metadata and assets using the configured token.
 - Fixed Biome cancellation while descendant processes still hold output pipes and Windows batch launchers closing those pipes.
 
 ### Removed
 
-- Removed undocumented fork RPC management surfaces, prefix-based automatic approvals, unused skill-management APIs and hook telemetry while preserving standard approval interactions and upstream single-session RPC behavior.
+- Removed the persistent collab room identity (`collab/identity.json`) and the fork-hosted browser client: room id and secrets rotate with every session again, so a shared link dies at the next `/new`/`resume`/`fork`/`/collab stop`, and `collab.webUrl` defaults back to empty (derived from `collab.relayUrl`).
+- Removed out-of-contract project-RPC `/hub`, branch/fork, file/data attachments, and session-level plan controls; stock messages/images and TUI plan approvals remain.
+- Removed prefix-based automatic approvals, unused skill-management APIs and hook telemetry, and the redundant wiki-index info action; standard approvals and stock RPC behavior remain.
 
 ### Breaking Changes
 

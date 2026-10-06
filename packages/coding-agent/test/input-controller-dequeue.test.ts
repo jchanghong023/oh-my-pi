@@ -13,8 +13,6 @@
  *     in the queue (does not call `clearQueue`);
  *   - the restored text is merged ahead of the existing draft;
  *   - an empty queue reports "No queued messages to restore";
- *   - live-steered input the band still lists (#13798) is not restored; the
- *     status names the interrupt key that can take it back instead;
  *   - when the agent queues are empty, the compaction queue is the fallback and
  *     only its last entry is popped.
  */
@@ -45,10 +43,6 @@ function makeCtx(
 	const clearQueue = mock(() => ({ steering: [] as RestoredQueuedMessage[], followUp: queue.splice(0) }));
 	const session = {
 		popLastQueuedMessage: () => queue.pop(),
-		getQueuedMessages: () => ({
-			steering: queue.map(m => m.text),
-			followUp: [],
-		}),
 		clearQueue,
 	};
 
@@ -66,7 +60,6 @@ function makeCtx(
 		},
 		locallySubmittedUserSignatures: new Set<string>(),
 		updatePendingMessagesDisplay: () => {},
-		keybindings: { getKeys: (action: string) => (action === "app.interrupt" ? ["escape"] : []) },
 		showStatus: (msg: string) => {
 			statuses.push(msg);
 		},

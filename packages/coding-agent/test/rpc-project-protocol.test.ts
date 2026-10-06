@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { isRecord, readJsonl, readLines, TempDir } from "@oh-my-pi/pi-utils";
 import { type } from "@oh-my-pi/omptype";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
@@ -9,8 +9,10 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 // the startup cwd): ready identity, the v3 gate, zero-session catalogs, the
 // multi-session lifecycle over one process, prompt text mode, strict
 // execute_command and EOF ordered exit. Sessions persist (no --no-session)
-// into isolated temp dirs; no model turn is ever awaited — the one accepted
-// prompt is aborted immediately and its session closed with cancelRunning.
+// into isolated temp dirs; no real model is contacted — the host-tool round
+// trip runs against the scripted loopback model fixture
+// (test/rpc-wire/fake-openai-server.ts), and every other accepted prompt is
+// aborted immediately with its session closed cancelRunning.
 
 type RpcFrame = Record<string, unknown>;
 const LoadedSummary = type({ sessionId: "string", sessionGeneration: "string", loadState: "string" });
@@ -254,7 +256,7 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 					expect(await responseFor(next, type)).toMatchObject({ success: false, code: "unsupported" });
 				}
 				send({ id: "invalid-branch", type: "branch", sessionId: a.sessionId, entryId: "missing" });
-				expect(await responseFor(next, "invalid-branch")).toMatchObject({ success: false, code: "invalid_params" });
+				expect(await responseFor(next, "invalid-branch")).toMatchObject({ success: false, code: "unsupported" });
 				send({ id: "close", type: "close_session", sessionId: a.sessionId });
 				await responseFor(next, "close");
 				send({ id: "resume", type: "resume_session", sessionId: a.sessionId });
@@ -831,6 +833,67 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 		}, 60_000);
 	}
 
+	test("extension UI cancellation drops both original and cancel interaction routes", async () => {
+		await using temp = await TempDir.create("rpc-project-cancel-ui-");
+		const cwd = path.resolve(temp.path());
+		const extensionPath = path.join(cwd, "cancel-ui.ts");
+		await Bun.write(
+			extensionPath,
+			`export default function(omp) {
+				omp.on("input", async (event, ctx) => {
+					if (event.text === "cancel interaction") {
+						await ctx.ui.confirm("Expiring dialog", "This dialog times out.", { timeout: 100 });
+						return { handled: true };
+					}
+				});
+			}`,
+		);
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent"), extensionPath },
+			async (send, next) => {
+				await negotiateV3(send, next);
+				send({ id: "create-cancel-ui", type: "create_session" });
+				const session = (await responseFor(next, "create-cancel-ui")).data as SessionSummaryLike;
+				send({
+					id: "cancel-ui-prompt",
+					type: "prompt",
+					sessionId: session.sessionId,
+					message: "cancel interaction",
+					inputMode: "text",
+				});
+				const request = await next(
+					frame =>
+						frame.type === "extension_ui_request" &&
+						frame.method === "confirm" &&
+						frame.title === "Expiring dialog",
+				);
+				const originalId = request.id as string;
+				expect(typeof request.id).toBe("string");
+				const cancel = await next(
+					frame =>
+						frame.type === "extension_ui_request" && frame.method === "cancel" && frame.targetId === originalId,
+				);
+				const cancelId = cancel.id as string;
+				expect(typeof cancel.id).toBe("string");
+				expect(cancelId).not.toBe(originalId);
+				expect(await responseFor(next, "cancel-ui-prompt")).toMatchObject({ success: true });
+
+				for (const interactionId of [originalId, cancelId]) {
+					send({
+						type: "extension_ui_response",
+						id: interactionId,
+						sessionId: session.sessionId,
+						cancelled: true,
+					});
+					expect(await responseFor(next, interactionId)).toMatchObject({
+						success: false,
+						code: "stale_session",
+					});
+				}
+			},
+		);
+	}, 60_000);
+
 	test("failed final closes can be retried through close_session and delete_session", async () => {
 		await using temp = await TempDir.create("rpc-project-close-retry-");
 		const cwd = path.resolve(temp.path());
@@ -941,7 +1004,7 @@ export default function() {
 		);
 	}, 60_000);
 
-	test("branch, partial fork, and full fork create independent roots without changing the original transcript", async () => {
+	test("project mode rejects stock branch/fork commands without changing session identity or history", async () => {
 		await using temp = await TempDir.create("rpc-project-branch-");
 		const cwd = path.resolve(temp.path());
 		const sessionDir = path.join(cwd, "sessions");
@@ -963,30 +1026,153 @@ export default function() {
 			const generation = originalData.sessionGeneration;
 			const originalBytes = await Bun.file(originalFile).text();
 			for (const [id, commandType, entryId] of [
-				["branch-copy", "branch", selectedEntry],
-				["partial-copy", "fork", selectedEntry],
-				["full-copy", "fork", undefined],
+				["branch", "branch", selectedEntry],
+				["partial-fork", "fork", selectedEntry],
+				["full-fork", "fork", undefined],
 			] as const) {
-				send({ id, type: commandType, entryId, sessionId: originalId, sessionGeneration: generation });
-				const response = await responseFor(next, id);
-				expect(response.success).toBe(true);
-				const child = LoadedSummary.assert(response.data);
-				expect(child.sessionId).not.toBe(originalId);
-				expect(child.loadState).toBe("loaded");
-				expect(child.sessionGeneration).not.toBe(generation);
-				send({ id: `${id}-history`, type: "get_messages_page", sessionId: child.sessionId });
-				const history = JSON.stringify((await responseFor(next, `${id}-history`)).data);
-				expect(history).toContain("before branch");
-				expect(history.includes("branch origin")).toBe(commandType === "fork");
-				expect(history.includes("original continues")).toBe(entryId === undefined);
-				expect(await Bun.file(originalFile).text()).toBe(originalBytes);
+				send({
+					id,
+					type: commandType,
+					...(entryId ? { entryId } : {}),
+					sessionId: originalId,
+					sessionGeneration: generation,
+				});
+				expect(await responseFor(next, id)).toMatchObject({ success: false, code: "unsupported" });
+				send({ id: `${id}-state`, type: "get_state", sessionId: originalId, sessionGeneration: generation });
+				expect(await responseFor(next, `${id}-state`)).toMatchObject({ success: true });
 			}
-			send({ id: "original-state", type: "get_state", sessionId: originalId, sessionGeneration: generation });
-			expect(await responseFor(next, "original-state")).toMatchObject({ success: true });
+			send({ id: "original-history", type: "get_messages_page", sessionId: originalId });
+			const history = JSON.stringify((await responseFor(next, "original-history")).data);
+			expect(history).toContain("before branch");
+			expect(history).toContain("branch origin");
+			expect(history).toContain("original continues");
+			expect(await Bun.file(originalFile).text()).toBe(originalBytes);
 			send({ id: "directory", type: "list_sessions", loadState: "loaded" });
 			const directoryResponse = await responseFor(next, "directory");
 			const directoryData = SessionDirectory.assert(directoryResponse.data);
-			expect(directoryData.sessions).toHaveLength(4);
+			expect(directoryData.sessions).toHaveLength(1);
+			expect(directoryData.sessions[0]).toMatchObject({ sessionId: originalId, loadState: "loaded" });
 		});
+	}, 60_000);
+
+	// Regression: project mode used to route host_tool_result/host_tool_update/
+	// host_uri_result frames into a handler that only knew extension UI and fork
+	// ask/permission frames, so they fell through to "Unknown command" — the
+	// pending host tool call never settled and the model turn hung. This case
+	// drives the full round trip through the scripted loopback model: tool call
+	// → client update + result → follow-up model turn quoting the tool output.
+	test("host tool results routed to the session complete the model turn", async () => {
+		await using temp = await TempDir.create("rpc-project-host-tools-");
+		const cwd = path.resolve(temp.path());
+		const agentDir = path.join(cwd, "agent");
+		const model = Bun.spawn(["bun", path.join(import.meta.dir, "rpc-wire", "fake-openai-server.ts"), agentDir], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			// The fixture writes <agentDir>/models.yml (provider `fake`) and
+			// prints READY once that file is on disk.
+			const decoder = new TextDecoder();
+			await (async () => {
+				for await (const line of readLines(model.stdout as ReadableStream<Uint8Array>)) {
+					if (decoder.decode(line).trim().startsWith("READY ")) return;
+				}
+				throw new Error(`fake model server exited early: ${await new Response(model.stderr).text()}`);
+			})();
+			await withProjectRpcServer({ cwd, sessionDir: path.join(cwd, "sessions"), agentDir }, async (send, next) => {
+				await negotiateV3(send, next);
+				send({ id: "ht-create", type: "create_session", name: "host-tools" });
+				const session = LoadedSummary.assert((await responseFor(next, "ht-create")).data);
+				send({
+					id: "ht-tools",
+					type: "set_host_tools",
+					tools: [
+						{
+							name: "echo_host",
+							description: "Echo a message back from the host",
+							parameters: {
+								type: "object",
+								properties: { message: { type: "string" } },
+								required: ["message"],
+								additionalProperties: false,
+							},
+							loadMode: "essential",
+						},
+					],
+				});
+				expect(await responseFor(next, "ht-tools")).toMatchObject({
+					success: true,
+					data: { toolNames: ["echo_host"] },
+				});
+				send({
+					id: "ht-model",
+					type: "set_model",
+					sessionId: session.sessionId,
+					provider: "fake",
+					modelId: "fake-model",
+				});
+				expect(await responseFor(next, "ht-model")).toMatchObject({ success: true });
+				send({
+					id: "ht-prompt",
+					type: "prompt",
+					sessionId: session.sessionId,
+					message: "please use echo_host",
+					inputMode: "text",
+				});
+				const call = await next(frame => frame.type === "host_tool_call" && frame.toolName === "echo_host");
+				expect(call.sessionId).toBe(session.sessionId);
+				expect(typeof call.sessionGeneration).toBe("string");
+				expect(call.arguments).toEqual({ message: "hello" });
+				// An update must not retire the interaction route; the result settles it.
+				send({
+					type: "host_tool_update",
+					id: call.id as string,
+					sessionId: session.sessionId,
+					partialResult: { content: [{ type: "text", text: "working" }] },
+				});
+				send({
+					type: "host_tool_result",
+					id: call.id as string,
+					sessionId: session.sessionId,
+					result: { content: [{ type: "text", text: "host:hello" }] },
+				});
+				expect(await next(frame => frame.type === "prompt_result" && frame.id === "ht-prompt")).toMatchObject({
+					status: "completed",
+					agentInvoked: true,
+				});
+				// The result reached the model: the scripted follow-up quotes it.
+				send({ id: "ht-text", type: "get_last_assistant_text", sessionId: session.sessionId });
+				const lastText = await responseFor(next, "ht-text");
+				expect(JSON.stringify(lastText.data)).toContain("tool said: host:hello");
+			});
+		} finally {
+			model.stdin.end();
+			model.kill();
+			await model.exited.catch(() => {});
+		}
+	}, 60_000);
+
+	// Regression: the stale-interaction error used to correlate by the inbound
+	// frame's `id`, which ask_pause does not carry (only targetId), so the
+	// client could never match the error to the paused interaction.
+	test("stale interaction error responses correlate by the answered interaction id", async () => {
+		await using temp = await TempDir.create("rpc-project-stale-ask-");
+		const cwd = path.resolve(temp.path());
+		await withProjectRpcServer(
+			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent") },
+			async (send, next) => {
+				await negotiateV3(send, next);
+				send({ id: "st-create", type: "create_session" });
+				const session = LoadedSummary.assert((await responseFor(next, "st-create")).data);
+				send({ type: "ask_pause", targetId: "ask-unknown-1", sessionId: session.sessionId });
+				expect(await responseFor(next, "ask-unknown-1")).toMatchObject({
+					id: "ask-unknown-1",
+					command: "ask_pause",
+					success: false,
+					code: "stale_session",
+				});
+			},
+		);
 	}, 60_000);
 });

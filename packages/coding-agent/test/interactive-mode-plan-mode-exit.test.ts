@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Agent, type StreamFn } from "@oh-my-pi/pi-agent-core";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -110,5 +111,20 @@ describe("InteractiveMode plan mode exit", () => {
 		expect(session.isStreaming).toBe(false);
 		expect(session.getPlanModeState()).toBeUndefined();
 		expect(abortReason).toBe(USER_INTERRUPT_LABEL);
+	});
+
+	it("exits plan mode and restores the previous model outside enabledModels", async () => {
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const previous = session.model;
+		if (!previous) throw new Error("Expected active model");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		cfgEnabledModels.set(session.settings, ["anthropic/claude-opus-4-5"]);
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(true);
+		expect(session.model?.id).toBe("claude-opus-4-5");
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(false);
+		expect(session.getPlanModeState()).toBeUndefined();
+		expect(session.model?.id).toBe(previous.id);
 	});
 });

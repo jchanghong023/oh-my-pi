@@ -10,7 +10,11 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-import { cfgDisabledModels, cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import {
+	cfgDisabledModels,
+	cfgDisabledProviders,
+	cfgEnabledModels,
+} from "@oh-my-pi/pi-coding-agent/config/model-settings";
 
 function bundled(provider: GeneratedProvider, id: string): Model<Api> {
 	const model = getBundledModel(provider, id);
@@ -75,6 +79,73 @@ describe("disabledProviders takes effect live", () => {
 		expect((await live.cycleModel())?.model.id).toBe(sonnet.id);
 	});
 
+	it("intersects explicit cycle scopes and rejects models outside enabledModels", async () => {
+		const sonnet = bundled("anthropic", "claude-sonnet-4-5");
+		const opus = bundled("anthropic", "claude-opus-4-5");
+		const gpt = bundled("openai", "gpt-5");
+		const settings = Settings.isolated();
+		cfgEnabledModels.set(settings, [`${gpt.provider}/${gpt.id}`]);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const live = startSession(settings, modelRegistry, [sonnet, gpt, opus]);
+
+		expect(live.getAvailableModels().map(model => `${model.provider}/${model.id}`)).toEqual([
+			`${gpt.provider}/${gpt.id}`,
+		]);
+		expect(live.scopedModels.map(entry => `${entry.model.provider}/${entry.model.id}`)).toEqual([
+			`${gpt.provider}/${gpt.id}`,
+		]);
+		live.setScopedModels([sonnet, opus].map(model => ({ model })));
+		expect(live.scopedModels).toEqual([]);
+		await expect(live.cycleModel()).resolves.toBeUndefined();
+		await expect(live.setModel(sonnet)).rejects.toThrow("not enabled");
+		await expect(live.setModelTemporary(sonnet)).rejects.toThrow("not enabled");
+	});
+
+	it("restricts unscoped and role cycling to enabledModels", async () => {
+		const sonnet = bundled("anthropic", "claude-sonnet-4-5");
+		const gpt = bundled("openai", "gpt-5");
+		const settings = Settings.isolated();
+		cfgEnabledModels.set(settings, [`${gpt.provider}/${gpt.id}`]);
+		settings.setModelRole("default", `${sonnet.provider}/${sonnet.id}`);
+		settings.setModelRole("slow", `${gpt.provider}/${gpt.id}`);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const live = startSession(settings, modelRegistry, [sonnet]);
+		live.setScopedModels([]);
+
+		expect(live.getAvailableModels().map(model => `${model.provider}/${model.id}`)).toEqual([
+			`${gpt.provider}/${gpt.id}`,
+		]);
+		await expect(live.cycleModel()).resolves.toBeUndefined();
+		expect(live.getRoleModelCycle(["default", "slow"])?.models.map(entry => entry.role)).toEqual(["slow"]);
+	});
+
+	it("restores a previously active model outside the positive selection without allowing ordinary switches", async () => {
+		const sonnet = bundled("anthropic", "claude-sonnet-4-5");
+		const gpt = bundled("openai", "gpt-5");
+		const settings = Settings.isolated({ enabledModels: [`${gpt.provider}/${gpt.id}`] });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const live = startSession(settings, modelRegistry, [sonnet, gpt]);
+		await live.setModelTemporary(gpt);
+		await expect(live.setModelTemporary(sonnet)).rejects.toThrow("not enabled");
+		await live.setModelTemporary(sonnet, undefined, { restore: true });
+		expect(live.model?.id).toBe(sonnet.id);
+		cfgDisabledModels.set(settings, [`${gpt.provider}/${gpt.id}`]);
+		await expect(live.setModelTemporary(gpt, undefined, { restore: true })).rejects.toThrow();
+		expect(live.model?.id).toBe(sonnet.id);
+	});
+
+	it("allows authenticated synthetic models in temporary switches and explicit cycles", async () => {
+		const base = bundled("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0");
+		const synthetic = { ...base, id: "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company" };
+		authStorage.keys.setRuntime("amazon-bedrock", "test-key");
+		const settings = Settings.isolated({ enabledModels: ["amazon-bedrock/*"] });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const live = startSession(settings, modelRegistry, [base, synthetic]);
+		expect(live.scopedModels.map(entry => entry.model.id)).toContain(synthetic.id);
+		await live.setModelTemporary(synthetic);
+		expect(live.model?.id).toBe(synthetic.id);
+	});
+
 	it("shared registry views keep session exclusions isolated through asynchronous credentials", async () => {
 		const model = bundled("anthropic", "claude-sonnet-4-5");
 		const startup = Settings.isolated();
@@ -97,6 +168,42 @@ describe("disabledProviders takes effect live", () => {
 		cfgDisabledModels.override(startup, ["*"]);
 		expect(await registry.getApiKey(model)).toBeUndefined();
 		expect(await scoped.getApiKey(model)).toBe("test-key");
+	});
+
+	it("uses the current settings view for provider visibility and refresh", async () => {
+		const modelsPath = path.join(tempDir.path(), "models.json");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					ollama: {
+						baseUrl: "http://127.0.0.1:11434",
+						api: "openai-completions",
+						auth: "none",
+						discovery: { type: "ollama" },
+					},
+				},
+			}),
+		);
+		const requests: string[] = [];
+		const startup = Settings.isolated();
+		const target = startup.overlay({ disabledProviders: ["ollama"] });
+		const registry = new ModelRegistry(authStorage, modelsPath, {
+			settings: startup,
+			fetch: async input => {
+				requests.push(String(input));
+				return Response.json({ models: [] });
+			},
+		});
+		const scoped = registry.withSettings(target);
+
+		expect(registry.getDiscoverableProviders()).toContain("ollama");
+		expect(scoped.getDiscoverableProviders()).not.toContain("ollama");
+		await scoped.refreshProvider("ollama", "online");
+		expect(requests).toEqual([]);
+
+		await registry.refreshProvider("ollama", "online");
+		expect(requests).toContain("http://127.0.0.1:11434/api/tags");
 	});
 
 	it("re-seeds implicit discovery for a provider re-enabled mid-session", async () => {

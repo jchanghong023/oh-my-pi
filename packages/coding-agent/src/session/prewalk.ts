@@ -206,8 +206,18 @@ export class PrewalkCoordinator {
 			this.#disarmNoop(prewalk);
 			return;
 		}
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
-		this.#clearPrewalkState();
+		try {
+			await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		} catch (error) {
+			this.#host.emitNotice(
+				"warning",
+				`Prewalk: handoff failed: ${error instanceof Error ? error.message : String(error)}`,
+				"prewalk",
+			);
+			return;
+		} finally {
+			this.#clearPrewalkState();
+		}
 		this.#host.emitNotice(
 			"info",
 			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,

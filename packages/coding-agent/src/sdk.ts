@@ -1108,10 +1108,12 @@ export async function resolvePrewalkTarget(
 		deferUnregistered = false,
 		beforeRefresh,
 		offline = false,
-	}: { deferUnregistered?: boolean; beforeRefresh?: () => Promise<void>; offline?: boolean } = {},
+		settings,
+	}: { deferUnregistered?: boolean; beforeRefresh?: () => Promise<void>; offline?: boolean; settings?: Settings } = {},
 ): Promise<{ prewalk?: Prewalk; warnings: string[]; deferred: boolean }> {
 	let refreshedProviders: Set<string> | undefined;
-	const resolveCandidate = (pattern: string) => resolveCliModel({ cliModel: pattern, modelRegistry, preferences });
+	const resolveCandidate = (pattern: string) =>
+		resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings });
 	let authenticated: ResolveCliModelResult | undefined;
 	let firstUnauthenticated: ResolveCliModelResult | undefined;
 	let lastResolution: ResolveCliModelResult | undefined;
@@ -1124,6 +1126,7 @@ export async function resolvePrewalkTarget(
 		disabledProvider = undefined;
 		let candidate = resolveCandidate(pattern);
 		lastResolution = candidate;
+		if (candidate.disabledModel || candidate.disabledProvider) continue;
 		if (candidate.model && disabledProviders.has(candidate.model.provider)) {
 			disabledProvider = candidate.model.provider;
 			continue;
@@ -3250,6 +3253,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				{
 					beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined,
 					offline: options.offline === true,
+					settings,
 				},
 			);
 			prewalk = selection.prewalk;
@@ -4797,7 +4801,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 
 				const enabled = session.getEnabledToolNames();
-				const currentlyExposed = session.getEnabledToolNames().includes(name);
 				const alreadyEnabled = enabled.includes(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
 				// Raw mounts: the presentation snapshot pairs the unprojected base
@@ -4814,7 +4817,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						// Skip only when the tool is exposed neither at the top level
 						// nor as an `xd://` device; a re-registration turning
 						// defaultInactive must still remove it from the presentation.
-						if (!alreadyEnabled && !currentlyExposed) return;
+						if (!alreadyEnabled) return;
 						await session.setActiveToolPresentation(
 							enabled.filter(enabledName => enabledName !== name),
 							mounted.filter(mountedName => mountedName !== name),

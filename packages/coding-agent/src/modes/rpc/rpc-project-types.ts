@@ -118,13 +118,6 @@ export class RpcRevisionSource {
 	}
 }
 
-/** Cursor-paginated result envelope. */
-export interface RpcProjectPage<T> {
-	readonly items: T[];
-	readonly revision: RpcRevision;
-	readonly nextCursor?: string;
-}
-
 // ---------------------------------------------------------------------------
 // Commands (client → server). `id` is required in project mode; session-level
 // commands additionally carry `sessionId` (+ `sessionGeneration` when the
@@ -341,38 +334,3 @@ export type RpcProjectCommand =
 	| RpcProjectSetModelRoleCommand
 	| RpcProjectCompleteCommandCommand
 	| RpcProjectExecuteCommandCommand;
-
-// ---------------------------------------------------------------------------
-// Event frames (server → client), project mode stamps included
-// ---------------------------------------------------------------------------
-
-/** Fields stamped onto every project-mode frame (rpc-ui-protocol.md). */
-export interface RpcProjectFrameStamp {
-	readonly processInstanceId: string;
-	readonly sessionId?: string;
-	readonly sessionGeneration?: string;
-}
-
-export interface RpcProjectSessionsChangedFrame extends RpcProjectFrameStamp {
-	readonly type: "sessions_changed";
-	readonly revision: RpcRevision;
-}
-
-export interface RpcProjectCatalogChangedFrame extends RpcProjectFrameStamp {
-	readonly type: "command_catalog_changed";
-	readonly revision: RpcRevision;
-}
-
-/** Terminal frame for accepted async management operations. */
-export interface RpcProjectOperationResultFrame extends RpcProjectFrameStamp {
-	readonly type: "operation_result";
-	readonly operationId: string;
-	readonly requestId?: string;
-	readonly status: "completed" | "failed" | "cancelled";
-	readonly error?: string;
-}
-
-export type RpcProjectEventFrame =
-	| RpcProjectSessionsChangedFrame
-	| RpcProjectCatalogChangedFrame
-	| RpcProjectOperationResultFrame;

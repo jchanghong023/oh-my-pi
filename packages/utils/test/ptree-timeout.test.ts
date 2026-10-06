@@ -60,6 +60,58 @@ describe("ptree timeout", () => {
 		}
 	});
 
+	it("does not take the dead-leader kill path when stdout was never consumed", async () => {
+		// The root exits before the deadline and leaves no pipe holders behind.
+		// attachTimeout() creates the tracker wrapper, but the caller never
+		// reads stdout, so an unread reader must not count as evidence that the
+		// group is still alive. The deadline must then kill nothing, and the
+		// dead-leader branches' distinguishing side effect — installing the
+		// TimeoutError as the exit reason of an already-cleanly-exited root —
+		// must not appear. This pins the counter semantics without depending on
+		// PID reuse or on which platform-specific branch kill() would take.
+		using child = spawn([process.execPath, "-e", "process.exit(0)"], {
+			timeout: 1_000,
+			...(process.platform === "win32" ? {} : { detached: true }),
+		});
+
+		expect(await child.exited).toBe(0);
+		// Let the 1 s deadline fire well after the root exited.
+		await Bun.sleep(1_100);
+
+		expect(child.exitReason).toBeUndefined();
+	});
+
+	it("releases abort listeners after externally consumed stdout closes", async () => {
+		const controller = new AbortController();
+		const removeAbortListener = spyOn(controller.signal, "removeEventListener");
+		// The detached child holds the OS pipe past root exit; fake timers cannot control it.
+		const script = `
+			Bun.spawn([process.execPath, "-e", "await Bun.sleep(250)"], {
+				stdin: "ignore",
+				stdout: "inherit",
+				stderr: "ignore",
+				detached: true,
+			});
+			await Bun.write(Bun.stdout, "root\\n");
+			process.exit(0);
+		`;
+		using child = spawn([process.execPath, "-e", script], { signal: controller.signal });
+
+		try {
+			const output = new Response(child.stdout).text();
+			await child.exited;
+			expect(removeAbortListener).not.toHaveBeenCalledWith("abort", expect.any(Function));
+			expect(await output).toBe("root\n");
+
+			const nextTurn = Promise.withResolvers<void>();
+			setImmediate(nextTurn.resolve);
+			await nextTurn.promise;
+			expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+		} finally {
+			controller.abort("test cleanup");
+		}
+	});
+
 	it.skipIf(process.platform !== "linux")(
 		"kills descendants adopted while an AbortSignal races the timeout sweep",
 		async () => {

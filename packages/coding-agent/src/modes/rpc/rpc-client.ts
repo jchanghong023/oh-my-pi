@@ -106,9 +106,9 @@ export interface RpcClientOptions {
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
 /**
- * Project-mode envelope stamped on outbound frames (rpc-ui-protocol.md
- * rpc-ui-protocol.md). Frame listeners receive it so parallel sessions can be attributed;
- * absent in single-session mode.
+ * Project-mode envelope stamped on outbound frames (`rpc-ui-protocol.md`).
+ * Frame listeners receive it so parallel sessions can be attributed; absent in
+ * single-session mode.
  */
 export type RpcFrameSessionScope = {
 	sessionId?: string;

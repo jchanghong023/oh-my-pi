@@ -1158,7 +1158,9 @@ export class ModelRegistry {
 		const stripped = models.filter(
 			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
 		);
-		if (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID)) stripped.push(...getCompanyChatModels());
+		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
+			stripped.push(...getCompanyChatModels());
+		}
 		if (!isCompanyEnvironment() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
 			stripped.push(...getZcodeApiModels());
 		}
@@ -1858,7 +1860,7 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
 		const selectedDiscoverableProviders = (
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
@@ -2320,7 +2322,7 @@ export class ModelRegistry {
 				},
 			},
 		];
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
 		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(descriptor => {
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
@@ -2955,7 +2957,7 @@ export class ModelRegistry {
 	}
 
 	getDiscoverableProviders(): string[] {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
 		return this.#discoverableProviders
 			.filter(provider => !disabledProviders.has(provider.provider))
 			.map(provider => provider.provider);
@@ -2985,7 +2987,7 @@ export class ModelRegistry {
 	hasProvider(providerId: string): boolean {
 		const providerModels = this.#hasFullSnapshot ? this.#models : this.#composeStaticModels(new Set([providerId]));
 		if (providerModels.some(model => model.provider === providerId)) return true;
-		if (getDisabledProviderIdsFromSettings(this.#settings).has(providerId)) return false;
+		if (getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings).has(providerId)) return false;
 		return (
 			this.#discoverableProviders.some(provider => provider.provider === providerId) ||
 			this.#runtimeModelManagers.has(providerId)

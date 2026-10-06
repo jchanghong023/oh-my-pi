@@ -187,17 +187,6 @@ export class AgentRegistry {
 		if (!this.#matchesExpected(ref, expected)) {
 			return this.#rejectStatusUpdate(id, status, "session-ownership-changed");
 		}
-		return this.#setRefStatus(ref, status);
-	}
-
-	/** Cancel a captured live generation without touching a newer same-id ref. */
-	abortRef(ref: AgentRef): boolean {
-		if (ref.kind !== "sub" || ref.status !== "running" || !ref.session) return false;
-		return this.#setRefStatus(ref, "aborted");
-	}
-
-	#setRefStatus(ref: AgentRef, status: AgentStatus): boolean {
-		const id = ref.id;
 		// `aborted` is terminal: delayed progress/revival work from the killed
 		// generation must never transition the tombstone back to a live status.
 		if (ref.status === "aborted") {

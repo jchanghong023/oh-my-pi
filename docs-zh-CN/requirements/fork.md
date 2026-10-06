@@ -121,6 +121,7 @@
    | `Qwen3.8-27B`              | 文本、图片 |   262,144 |   81,920 |
 
 - Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-VL-Embedding-2B`，复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址、凭据，以及显式设置的 `mnemopi.embeddingVariant` 仍优先（只有它的 schema 默认值会让位给公司模型）；不会将公司 Token 发送给显式配置的其他地址。
+- company 嵌入默认值同样让位于通用 API 路由：company lane 激活时，若 `OPENROUTER_BASE_URL` 指向非 openrouter 主机（自定义通用网关），或 `MNEMOPI_EMBEDDINGS_VIA_API` 为真值（显式要求向量走 API），向量改按通用 API 配置解析（模型、地址、密钥），不注入公司 URL 与 Token；仅有共享的通用 API 密钥而无自定义网关地址时不构成让位条件。
 - 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
 - 检索模型目录仅包含 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，不包含 8B 模型，两种检索模型不作为聊天模型展示。现有记忆流程只接文本向量，默认的 `Qwen3-VL-Embedding-2B` 也只传文本，图片向量与远端 Reranker 尚未接入检索流程。
 
@@ -187,7 +188,7 @@
 - 两个平台的安装器都下载到安装目录中的唯一临时文件，先确认可启动且 `omp --version` 与所选 Release 完全一致，再替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。Windows 优先 `curl.exe`，失败或不可用时回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`，只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。
 - 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。强杀回退中若换入再次失败、或换入失败后回滚也失败，保留已下载的 `.omp.tmp.*` 文件作为安装目录内可恢复的二进制（重跑安装器即可恢复）。
 
-- 模型启用范围先应用 `enabledModels` 正向选择（`[]` 不限制），再应用 `disabledModels` 负向排除（默认 `[]` 不排除，`["*"]` 全排除）；两者复用模型选择及路径作用域规则，排除优先且不被显式 pin、已保存选择、role、cycle 或 `/team` 绕过。具体模型开关以 `provider/id` 排除表达，禁用最后一个或全部模型仍可持久化，不能把空正向名单误解为“全部禁用”。
+- 模型启用范围先应用 `enabledModels` 正向选择（`[]` 不限制），再应用 `disabledModels` 负向排除（默认 `[]` 不排除，`["*"]` 全排除）；两者复用模型选择及路径作用域规则，排除优先且不被显式 pin、已保存选择、role、cycle 或 `/team` 绕过。具体模型开关以 `provider/id` 排除表达，禁用最后一个或全部模型仍可持久化，不能把空正向名单误解为“全部禁用”。 合成模型（Bedrock 推理配置文件 ARN、OpenRouter 路由变体）在 CLI、role、显式 scope 与临时切换中遵循相同的正向模式和硬排除语义；`*` 与对应 provider 的 `/*` 包含这些模型。plan 退出还原进入前已活动的模型时，不因正向选择集变化拒绝还原，凭据与硬排除仍生效。prewalk 启动解析应用同一选择策略；交接失败时告警并解除交接状态，不中断顾问审查及上下文维护。
 
 ## Fork 验证体系
 
@@ -208,4 +209,4 @@
 - **配置与启动 fixture**：profile-cli 隔离 USERPROFILE；bash-failure-result 使用内存 Settings。cli-non-tty-launch 和“无可用模型”preset 用例显式禁用 keyless zcode-api，防止测试发出非预期真实请求；欢迎首帧 fixture 固定 band，fork 的 pi 默认值另有断言。spinner 生命周期用例中和 WSL_DISTRO_NAME/WSL_INTEROP，静态 WSL 标题另行覆盖；注册表路径按 `/` 比较。
 - **RPC 与命令注册**：ACP 面板与 reserved-name 集合惰性构建，避免 builtin-registry 导入环在求值期读取未初始化注册表；allowArgs 拒绝探针使用确实不允许参数的命令。getAgentTombstonePath 从 registry/agent-tombstone.ts 导入。wire conformance 仅比较上游面：fork 命令按差集排除，ForkParamFields/ForkResultFields 只对表内命令 Omit 专有键，避免无条件泛型 Omit<T, never> 破坏必需键推断；fork ready/UI/Goal 字段按明确字段裁剪。不能把 fork-only 面偷偷写入上游生成 schema，字段进入上游后缩小豁免表。
 - **协作与发布**：update-cli 的文件 symlink alias 用例只在支持该权限的平台运行；安装器另以实际可执行 fixture 覆盖精确版本、目录拒绝、运行中映像与 Windows 回滚。musl-release 的工具链用例门控 Linux，并按真实 omp/version 格式探测。
-- **静态与看门狗**：fastcheck 的 TS 相位必须与上游 check:ts 同构（check:tools + 每个声明 check:types 的 workspace 包），4 路池只改变调度、不缩小范围；manifest 读取失败、首失败及预算超时不能静默省略后续工作后宣称通过。ci-test-ts watchdog fixture 给进程启动预留 3 秒，停滞仍由实际看门狗终止。fork 本地 Rust 白名单不含 pi-builtins，全量 Linux 覆盖归 slowtest CI；不保留未经本次运行证实的失败数量。
+- **静态与看门狗**：fastcheck 的 TS 相位必须与上游 check:ts 同构（check:tools + 每个声明 check:types 的 workspace 包），4 路池只改变调度、不缩小范围；manifest 读取失败、首失败及预算超时不能静默省略后续工作后宣称通过。ci-test-ts watchdog fixture 给进程启动预留 3 秒，停滞仍由实际看门狗终止。fork 本地 Rust 白名单包含 pi-builtins：其 Windows 门控测试（如 timeout 的 Windows 信号语义）只有本地 Windows fulltest 能编译执行，slowtest CI 为 Linux 不覆盖；全量 Linux 覆盖仍归 slowtest CI；不保留未经本次运行证实的失败数量。

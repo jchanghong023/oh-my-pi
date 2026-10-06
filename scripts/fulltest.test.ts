@@ -43,8 +43,10 @@ describe("fulltest phase plan", () => {
 	test("Rust phase targets exactly the fork core crates via nextest", () => {
 		const rust = buildFulltestPhases(options).find(phase => phase.label === "rust/core");
 		expect(rust?.argv).toEqual(["cargo", "nextest", "run", ...CORE_RUST_CRATES.flatMap(crate => ["-p", crate])]);
-		// pi-builtins stays out of local verification by contract.
-		expect(CORE_RUST_CRATES).not.toContain("pi-builtins");
+		// pi-builtins runs in this local gate so its Windows-gated timeout
+		// tests have an execution path (CI remote job disabled, Linux skips
+		// windows-gated tests).
+		expect(CORE_RUST_CRATES).toContain("pi-builtins");
 	});
 
 	test("--debug only reaches the UI smoke phase", () => {

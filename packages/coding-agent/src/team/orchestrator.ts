@@ -4,9 +4,9 @@
  * Every guarantee from docs-zh-CN/requirements/team.md is mechanical here:
  * - independent investigation: identical inputs fanned out in parallel under
  *   the `task.maxConcurrency` semaphore, no shared digest;
- * - reviewer rotation to the next different non-session model (the session
- *   model never reviews; the proposer model's own fresh subagent reviews only
- *   when it is the sole eligible reviewer);
+ * - reviewer rotation to the next different participant model; the session
+ *   model can review through a fresh child subprocess, but the session agent
+ *   itself never reviews;
  * - revision rounds counted in code, third round refused;
  * - recheck reviews triggered by structured flags only;
  * - unresolved blocking findings tracked in code and rendered as
@@ -64,10 +64,11 @@ export interface TeamOrchestratorOptions {
 }
 
 /**
- * Rotation rule (§2.5 + §2.2): the reviewer for proposal i is the next
- * non-session participant with a *different* model in proposer order. The
- * session model runs alignment/synthesis and never reviews; with no other
- * eligible model the proposer model's own fresh subagent reviews.
+ * Rotation rule (§2.5 + §2.2): use the next participant in proposer order
+ * with a *different* model. The runner creates a fresh reviewer subprocess,
+ * so a child using the session model is distinct from the session agent itself;
+ * when no different model participates, the proposer's own fresh subagent
+ * reviews.
  */
 export function assignReviewerParticipant(
 	participants: readonly TeamParticipant[],
@@ -78,7 +79,6 @@ export function assignReviewerParticipant(
 	const count = participants.length;
 	for (let offset = 1; offset < count; offset++) {
 		const candidate = participants[(proposalIndex + offset) % count];
-		if (candidate.isSessionModel) continue;
 		if (candidate.modelPattern !== proposer.modelPattern) return candidate;
 	}
 	return proposer;
@@ -409,9 +409,11 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				// one exception: the round cap still binds, and a next round's recheck
 				// can yet verify the revised version.
 				if (!needsRecheck(revision.reviewFlags)) break;
-				if (round === TEAM_MAX_REVISION_ROUNDS) {
-					record.blockedAfterRoundCap = true; // third round is refused by the loop bound
-				}
+			}
+			// Once both allowed rounds are used, unresolved blockers stay gated even
+			// when round two did not request another recheck or its reviser failed.
+			if (record.roundsUsed === TEAM_MAX_REVISION_ROUNDS && record.unresolvedBlocking.length > 0) {
+				record.blockedAfterRoundCap = true;
 			}
 			// A revision whose required recheck never completed has not been reviewed
 			// in its current form; "no recorded blocking findings" from the initial
@@ -461,7 +463,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		participationNotes.push("存在未标注回查来源的事实差异，相应约束未核实。");
 	}
 
-	const report = assembleTeamReport({ question, alignment, synthesis, proposals: records, participationNotes });
+	const report = assembleTeamReport({ alignment, synthesis, proposals: records, participationNotes });
 	if (!report.ok) {
 		return {
 			status: "failed",

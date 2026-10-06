@@ -81,7 +81,6 @@ const RPC_PROJECT_HOST_ACTIONS: Readonly<Record<string, string | undefined>> = {
 	wiki: "open_wiki",
 	repo: "open_repository",
 	git: "open_git",
-	hub: "open_agent_hub",
 	tree: "select_session_branch",
 	branch: "select_branch_message",
 	fork: "select_fork_message",
@@ -118,8 +117,6 @@ export interface RpcCommandCatalogEntry {
 	readonly source: "builtin" | "skill" | "extension" | "custom" | "mcp_prompt" | "file";
 	/** true when execution requires a loaded session */
 	readonly requiresSession: boolean;
-	/** builtin has a non-TUI business handler (handle or handleTui) */
-	readonly executable: boolean;
 }
 
 /** Session-like input the catalog accepts (passed through verbatim). */
@@ -318,8 +315,12 @@ export class RpcCommandCatalogService {
 			const token = text.slice(1).split(/\s/, 1)[0] ?? "";
 			if (token.startsWith("skill:")) {
 				const skillName = token.slice("skill:".length);
-				const skills = (sessionLike as Partial<Pick<AgentSession, "skills">> | undefined)?.skills;
-				if (skillName && skills?.some(skill => getSkillSlashCommandName(skill) === token)) {
+				const session = sessionLike as Partial<Pick<AgentSession, "skills" | "skillsSettings">> | undefined;
+				if (
+					skillName &&
+					session?.skillsSettings?.enableSkillCommands &&
+					session.skills?.some(skill => getSkillSlashCommandName(skill) === token)
+				) {
 					return { kind: "skill", name: token, skillName };
 				}
 			}
@@ -386,11 +387,6 @@ export class RpcCommandCatalogService {
 				...(spec.subcommands?.length ? { subcommands: spec.subcommands } : {}),
 				source: "builtin",
 				requiresSession,
-				executable: Boolean(
-					spec.handle ||
-					getRpcProjectHostAction(spec.name) !== undefined ||
-					PROJECT_ROUTED_BUSINESS[spec.name] === true,
-				),
 			};
 			entries.push(entry);
 			descriptors.push(
@@ -409,7 +405,6 @@ export class RpcCommandCatalogService {
 				inputHint: "arguments",
 				source: "skill",
 				requiresSession: true,
-				executable: true,
 			};
 			entries.push(entry);
 			descriptors.push(descriptorFor(entry, "omp", "session", SESSION_REQUIRED));
@@ -422,7 +417,7 @@ export class RpcCommandCatalogService {
 		const skillsSettings = this.#skillsSettings();
 		if (skillsSettings.enableSkillCommands === false) return [];
 		const { skills } = await loadSkills({ ...skillsSettings, cwd: this.#cwd });
-		return skills.filter(skill => !skill.hide);
+		return skills;
 	}
 
 	#skillsSettings(): SkillsSettings {
@@ -487,7 +482,8 @@ export class RpcCommandCatalogService {
 		const name = invocation[1]!;
 		if (!findEntryByInvocation(entries, name)) return [];
 		const builtin = findTuiBuiltin(name);
-		if (!builtin || builtin.allowArgs !== true) return [];
+		const spec = lookupBuiltinSlashCommand(name);
+		if (!builtin || !spec || (spec.acpAllowArgs ?? spec.allowArgs) !== true) return [];
 		const argumentStart = invocation[0].length;
 		const prefix = head.slice(argumentStart);
 		const session = sessionLike as AgentSession | undefined;
@@ -553,12 +549,8 @@ export class RpcCommandCatalogService {
 	}
 }
 
-/**
- * Catalog row from a live `InternalAvailableSlashCommand`, cross-referencing
- * the builtin registry for handler presence.
- */
+/** Catalog row from a live `InternalAvailableSlashCommand`. */
 function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandCatalogEntry {
-	const spec = command.source === "builtin" ? lookupBuiltinSlashCommand(command.name) : undefined;
 	return {
 		name: command.name,
 		...(command.aliases?.length ? { aliases: [...command.aliases] } : {}),
@@ -567,12 +559,5 @@ function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandC
 		...(command.subcommands?.length ? { subcommands: command.subcommands } : {}),
 		source: command.source,
 		requiresSession: command.source === "builtin" ? PROJECT_SCOPED_BUILTIN_NAMES[command.name] !== true : true,
-		executable: spec
-			? Boolean(
-					spec.handle ||
-					getRpcProjectHostAction(spec.name) !== undefined ||
-					PROJECT_ROUTED_BUSINESS[spec.name] === true,
-				)
-			: true,
 	};
 }

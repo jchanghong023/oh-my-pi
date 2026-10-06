@@ -56,14 +56,6 @@ export interface RpcForkPermissionRequestFrame {
 	origin?: RpcPermissionOrigin;
 }
 
-/** Client → server bypass frame settling a permission_request. */
-export interface RpcForkPermissionResponseFrame {
-	type: "permission_response";
-	id: string;
-	option: "allow_once" | "allow_session" | "allow_always" | "reject_once" | "reject_always";
-	feedback?: string;
-}
-
 const PERMISSION_RESPONSE_OPTIONS: Readonly<Record<string, true>> = {
 	allow_once: true,
 	allow_session: true,

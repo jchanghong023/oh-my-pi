@@ -541,9 +541,10 @@ mod tests {
 		assert_eq!(args.duration, "-1");
 	}
 
-	// Unix signal table: Windows exposes none of the kill(2) spellings, so the
-	// parse/display contract only holds where the table exists.
-	#[cfg(unix)]
+	// The parse/display contract holds on both platforms: the vendored
+	// brush-core Windows signal stub provides a spelling table with the same
+	// names and numbers as Unix (from_str and TryFrom<i32> cover TERM/KILL/INT
+	// and friends), so this assertion set is isomorphic on Unix and Windows.
 	#[test]
 	fn signal_spellings_parse_and_display_without_prefix() {
 		// Failure mode: rejecting a signal spelling GNU accepts.

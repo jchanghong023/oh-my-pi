@@ -7,9 +7,16 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import * as companyModels from "@oh-my-pi/pi-coding-agent/config/company-models";
+import * as companyProvider from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { deliverTeamReport, startTeamDiscussion, waitForSessionIdle } from "@oh-my-pi/pi-coding-agent/team";
+import {
+	deliverTeamReport,
+	resolveTeamParticipantsForSession,
+	startTeamDiscussion,
+	waitForSessionIdle,
+} from "@oh-my-pi/pi-coding-agent/team";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -61,6 +68,58 @@ function stubSession(jobManager: JobManagerStub, sentMessages: { customType: str
 function teamSettings(): Settings {
 	return Settings.isolated({ "team.members": [MODEL_PATTERN] });
 }
+
+function companyModel(id: string): Model {
+	return { ...MODEL, provider: "company", id, name: id };
+}
+
+describe("effective team defaults", () => {
+	it("filters offline company defaults by enabledModels and disabledModels but keeps explicit members out of scope", () => {
+		const allowed = companyModel("GLM-5.2-public");
+		const outOfScope = companyModel("Qwen3.6-27B-public");
+		const disabled = companyModel("MiniMax-M2.7");
+		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		vi.spyOn(companyModels, "getCompanyChatModels").mockReturnValue([allowed, outOfScope, disabled] as never);
+		const session = {
+			model: MODEL,
+			modelRegistry: {
+				getAvailable: () => [MODEL, allowed, outOfScope, disabled],
+			},
+		} as unknown as AgentSession;
+		const enabledPattern = `${allowed.provider}/${allowed.id}`;
+		const outOfScopePattern = `${outOfScope.provider}/${outOfScope.id}`;
+		const disabledPattern = `${disabled.provider}/${disabled.id}`;
+		const implicit = resolveTeamParticipantsForSession(
+			session,
+			Settings.isolated({
+				"team.members": [],
+				enabledModels: [enabledPattern],
+				disabledModels: [disabledPattern],
+			}),
+		);
+		expect(implicit.ok).toBe(true);
+		if (implicit.ok) {
+			expect(implicit.source).toBe("company-default");
+			expect(implicit.participants.map(participant => participant.modelPattern)).toEqual([
+				enabledPattern,
+				MODEL_PATTERN,
+			]);
+		}
+
+		const explicit = resolveTeamParticipantsForSession(
+			session,
+			Settings.isolated({ "team.members": [outOfScopePattern], enabledModels: [enabledPattern] }),
+		);
+		expect(explicit.ok).toBe(true);
+		if (explicit.ok) {
+			expect(explicit.source).toBe("configured");
+			expect(explicit.participants.map(participant => participant.modelPattern)).toEqual([
+				outOfScopePattern,
+				MODEL_PATTERN,
+			]);
+		}
+	});
+});
 
 describe("team controller dispatch", () => {
 	it("turns a job-manager registration failure into an actionable message", async () => {

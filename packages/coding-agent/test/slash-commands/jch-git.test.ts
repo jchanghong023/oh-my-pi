@@ -354,10 +354,9 @@ describe("direct JCH git slash commands", () => {
 			expect(calls).toEqual([{ kind: "git", cwd: work }]);
 		}, 30_000);
 
-		it("reports conservatively when the TUI sequence throws", async () => {
-			// A cwd that cannot be spawned in makes the first git subprocess
-			// throw; the catch must still tell the repo index the tree may have
-			// changed, mirroring handleGitSequence's conservative report.
+		it("does not report when Git cannot start before a mutating step", async () => {
+			// The invalid cwd prevents even the read-only rev-parse subprocess from
+			// starting, so no worktree-mutating Git process has started.
 			const gone = join(root, "gone");
 			const { session, calls } = sessionStub();
 			let error = "";
@@ -375,7 +374,7 @@ describe("direct JCH git slash commands", () => {
 
 			expect(consumed).toBe(true);
 			expect(error).not.toBe("");
-			expect(calls).toEqual([{ kind: "git", cwd: gone }]);
+			expect(calls).toEqual([]);
 		}, 30_000);
 
 		it("does not report the read-only /jchgs", async () => {

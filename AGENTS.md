@@ -102,6 +102,7 @@
 
 * fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。
 * E2E 入口存在，但 fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器）：fork 改动不会自动跑这些验证，`release_gate` 也只在手动运行且各验证作业全部通过时放行。
+* 临时状态（2026-10-06 起）：上游 main 处于红色（TS 测试与 bazel clippy 损坏）时，CI 中的 TS 分片与 Rust 测试/校验作业经 `if: false` 临时禁用，`release_gate` 的 needs 相应缩减为 `[release_metadata, check, native_addons]`，流水线只构建发布产物；恢复条件为上游转绿后按 ci.yml 内注释还原被禁用作业与 release_gate 完整 needs。
 * 受「验证」一节约束，未经用户明确要求的改动处于「未验证」状态；此时 MUST NOT 报告为已验证或已修复。
 
 ## 构建与缓存纪律

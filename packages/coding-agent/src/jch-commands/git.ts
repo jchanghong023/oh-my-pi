@@ -20,8 +20,9 @@ function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-async function runGit(cwd: string, args: readonly string[]) {
+async function runGit(cwd: string, args: readonly string[], onStart?: () => void) {
 	const process = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	onStart?.();
 	const [exitCode, stdout, stderr] = await Promise.all([
 		process.exited,
 		new Response(process.stdout).text(),
@@ -33,18 +34,23 @@ async function runGit(cwd: string, args: readonly string[]) {
 async function runGitSequence(cwd: string, steps: readonly GitStep[]): Promise<GitSequenceResult> {
 	const output: string[] = [];
 	let mutated = false;
-	for (const step of steps) {
-		if (WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) mutated = true;
-		const result = await runGit(step.cwd ?? cwd, step.args);
-		const text = formatGitOutput(result.stdout, result.stderr);
-		if (text) output.push(text);
-		if (result.exitCode !== 0) {
-			const command = `git ${step.args.join(" ")}`;
-			output.push(`${command} failed with exit code ${result.exitCode}`);
-			return { ok: false, output: output.join("\n"), mutated };
+	try {
+		for (const step of steps) {
+			const result = await runGit(step.cwd ?? cwd, step.args, () => {
+				if (WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) mutated = true;
+			});
+			const text = formatGitOutput(result.stdout, result.stderr);
+			if (text) output.push(text);
+			if (result.exitCode !== 0) {
+				const command = `git ${step.args.join(" ")}`;
+				output.push(`${command} failed with exit code ${result.exitCode}`);
+				return { ok: false, output: output.join("\n"), mutated };
+			}
 		}
+		return { ok: true, output: output.join("\n") || "Done.", mutated };
+	} catch (error) {
+		return { ok: false, output: formatError(error), mutated };
 	}
-	return { ok: true, output: output.join("\n") || "Done.", mutated };
 }
 
 /** Git verbs that can change tracked content or the working tree; `fetch`/`status` cannot. */
@@ -67,9 +73,7 @@ const WORKTREE_MUTATING_GIT_VERBS = new Set([
 	"mv",
 ]);
 
-function stepsMayMutateWorktree(steps: readonly GitStep[]): boolean {
-	return steps.some(step => WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? ""));
-}
+// Git mutation notifications are based on process start, not planned commands.
 
 /**
  * The repo index hears about bash/eval tool runs through the session's tool
@@ -88,16 +92,14 @@ function notifyRepoWorktreeMutation(session: unknown, cwd: string): void {
 }
 
 async function handleGitSequence(runtime: SlashCommandRuntime, steps: readonly GitStep[]): Promise<SlashCommandResult> {
+	let result: GitSequenceResult | undefined;
 	try {
-		const result = await runGitSequence(runtime.cwd, steps);
+		result = await runGitSequence(runtime.cwd, steps);
 		await runtime.output(result.output);
-		// A mutating step may have run even when a later step failed, so both
-		// outcomes report the possible mutation.
 		if (result.mutated) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 	} catch (error) {
+		if (result?.mutated) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 		await runtime.output(formatError(error));
-		// A throw gives no reliable progress report; report conservatively.
-		if (stepsMayMutateWorktree(steps)) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 	}
 	return { consumed: true };
 }
@@ -139,14 +141,13 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return { consumed: true };
 			}
 			runtime.ctx.editor.setText("");
-			// Declared before the try so the catch can conservatively report a
-			// possible worktree mutation on a throw; `clean` joins once its
-			// repo-wide cwd is resolved.
+			// Keep discard steps in order; `clean` joins after its repo-wide cwd is resolved.
 			const steps: GitStep[] = [
 				{ args: ["fetch", "--all", "--prune"] },
 				{ args: ["reset", "--hard", "@{upstream}"] },
 			];
 			let cwd: string | undefined;
+			let result: GitSequenceResult | undefined;
 			try {
 				cwd = runtime.ctx.sessionManager.getCwd();
 				// `clean` only sweeps below its cwd while the reset is repo-wide;
@@ -158,17 +159,13 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					return { consumed: true };
 				}
 				steps.push({ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"], cwd: toplevel.stdout.trim() });
-				const result = await runGitSequence(cwd, steps);
+				result = await runGitSequence(cwd, steps);
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);
-				// reset/clean change the worktree; once either has started, even a
-				// later failure must invalidate the repo index's pre-command coverage.
 				if (result.mutated) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			} catch (error) {
+				if (result?.mutated && cwd !== undefined) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 				runtime.ctx.showError(formatError(error));
-				// A throw gives no reliable progress report; report conservatively.
-				if (cwd !== undefined && stepsMayMutateWorktree(steps))
-					notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			}
 			return { consumed: true };
 		},

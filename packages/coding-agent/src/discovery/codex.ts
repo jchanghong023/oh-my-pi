@@ -61,7 +61,7 @@ function getUserCodexDir(ctx: LoadContext, capabilityToggle = false): string | n
 	return path.join(ctx.home, SOURCE_PATHS.codex.userBase);
 }
 
-/** Legacy `skills.enableCodexUser` toggle; off by default and without initialized settings. */
+/** Legacy per-capability toggle; enabled by default once settings initialize, otherwise off. */
 function readCodexUserSkillsToggle(): boolean {
 	try {
 		return cfgSkillsEnableCodexUser.get(activeSettings) === true;

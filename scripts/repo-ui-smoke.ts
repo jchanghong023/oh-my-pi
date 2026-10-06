@@ -345,9 +345,12 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		}
 		await fs.mkdir(path.join(project, "bulk"));
 		await Promise.all(
-			Array.from({ length: 320 }, (_, index) =>
+			// Large corpus on purpose: the cancel below must land mid-rebuild
+			// even when a loaded fulltest run delays PTY delivery and output
+			// polling by seconds.
+			Array.from({ length: 1500 }, (_, index) =>
 				fs.writeFile(
-					path.join(project, "bulk", `${String(index).padStart(3, "0")}.py`),
+					path.join(project, "bulk", `${String(index).padStart(4, "0")}.py`),
 					`def pending_${index}(): return 'bulk'\n`,
 				),
 			),

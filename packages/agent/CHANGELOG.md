@@ -71,9 +71,6 @@
 - Added APIs for improving agent follow-up and steering workflow management, including moving queued follow-ups into steering with a single queue-change notification.
 - Added support for trusted post-tool guidance via `afterToolCall` results, allowing additional context to be included in the next provider request, including after tool failures.
 
-### Fixed
-
-
 ## [18.4.4] - 2026-09-29
 
 ### Added

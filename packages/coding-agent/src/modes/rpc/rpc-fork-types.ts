@@ -62,9 +62,3 @@ export type RpcForkAskResponseFrame =
 	| { type: "ask_response"; id: string; answers: RpcForkAskAnswer[] }
 	| { type: "ask_response"; id: string; chat: string | boolean }
 	| { type: "ask_response"; id: string; cancelled: true };
-
-/** Client → server bypass frame: idempotent countdown pause (first one wins). */
-export interface RpcForkAskPauseFrame {
-	type: "ask_pause";
-	targetId: string;
-}

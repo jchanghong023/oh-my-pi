@@ -139,8 +139,7 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 	/** ACP-only argument allowance when the TUI handler remains argument-free. */
 	acpAllowArgs?: boolean;
 	/**
-	 * ACP-specific override for `description`. Used by `acpBuiltinSlashCommands()`
-	 * when building `available_commands_update` payloads so the client receives
+	 * ACP-specific override for `description`: text/ACP contexts get
 	 * mode-appropriate copy (e.g. `/dump` advertises "Return full transcript as
 	 * plain text" in ACP rather than the TUI's clipboard-centric copy).
 	 */

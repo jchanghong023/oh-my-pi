@@ -203,19 +203,21 @@ function scoreCandidate(
 	const raw = normalizeSearchText(text);
 	const plain = normalizeSearchText(normalizePlainText(text));
 	const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
-	const path = normalizeSearchText(row.relative_path as string);
 	const separator = heading.lastIndexOf(" > ");
 	const title = separator < 0 ? heading : heading.slice(separator + 3);
 	let literalCount = 0;
+	// The title is ranked separately; body phrase and all-term tiers are judged
+	// only against this section's complete stored text, never its parent heading
+	// path or filename.
 	for (const term of patterns) {
-		if (term.test(raw) || term.test(plain) || term.test(heading) || term.test(path)) literalCount++;
+		if (term.test(raw) || term.test(plain)) literalCount++;
 	}
 	return {
 		row,
 		literalCount,
 		stub: sectionShape(`${text}\n`) === "stub",
 		titlePhrase: phrase.test(title),
-		phrase: phrase.test(raw) || phrase.test(plain) || phrase.test(heading) || phrase.test(path),
+		phrase: phrase.test(raw) || phrase.test(plain),
 	};
 }
 
@@ -440,13 +442,14 @@ export class DocsService {
 					raw_markdown: string;
 				} | null
 			)?.raw_markdown;
-		let page = this.#fill(scored, [], patterns, phrase, loadFullText, limit);
+		let entries: RankedRow[] = [];
 		for (const candidateLimit of candidateWindows(Math.min(CANDIDATE_WINDOW_MAX, limit * 3 + 50))) {
 			const candidates = this.#candidates(match, filter, candidateLimit);
-			page = this.#fill(scored, candidates, patterns, phrase, loadFullText, limit);
+			const page = this.#fill(scored, candidates, patterns, phrase, loadFullText, limit);
+			entries = page.entries;
 			if (page.readable >= limit || candidates.length < candidateLimit) break;
 		}
-		return this.#hits(page.entries);
+		return this.#hits(entries);
 	}
 
 	/** Candidate rows for one compiled FTS expression, best BM25 first. */

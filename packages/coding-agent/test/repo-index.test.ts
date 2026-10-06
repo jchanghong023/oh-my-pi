@@ -761,6 +761,17 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect((await reopened.search("recoverybeacon")).hits.map(hit => hit.path)).toEqual(["src/repair.py"]);
 		expect((await reopened.symbol("repair_target")).hits.map(hit => hit.path)).toEqual(["src/repair.py"]);
 		expect((await reopened.search("secondbeacon")).hits.map(hit => hit.path)).toEqual(["src/secondary.py"]);
+		// The restored connection must keep foreign keys on: a later deletion
+		// relies on the files→symbols cascade, and orphaned symbol rows would
+		// outlive their deleted file.
+		await fs.rm(path.join(root, "src/secondary.py"));
+		reopened.markChanged([path.join(root, "src/secondary.py")]);
+		expect((await reopened.symbol("secondary_target")).hits).toEqual([]);
+		expect(
+			reopened.storage.db
+				.query("SELECT COUNT(*) AS n FROM symbols WHERE file_id NOT IN (SELECT id FROM files)")
+				.get(),
+		).toEqual({ n: 0 });
 	});
 
 	it("removes a corrupt index without changing sources or rebuilding implicitly", async () => {

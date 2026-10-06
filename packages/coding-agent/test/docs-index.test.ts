@@ -417,6 +417,28 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
+	it("keeps path and inherited-heading matches out of the full-body term tier", async () => {
+		const root = await tempDir("docs-metadata-rank-");
+		const agentDir = await tempDir("docs-metadata-agent-");
+		await fs.writeFile(path.join(root, "body-all.md"), "# Notes\npathparent appears first; needle appears later.\n");
+		await fs.mkdir(path.join(root, "needle"), { recursive: true });
+		await fs.writeFile(path.join(root, "needle", "path.md"), "# PathParent\nlocal body\n");
+		await fs.writeFile(path.join(root, "inherited.md"), "# PathParent\n## Local\nneedle here\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search("pathparent needle", { index: "manual" }).sections;
+			const bodyIndex = hits.findIndex(hit => hit.path === "body-all.md");
+			expect(bodyIndex).toBeGreaterThanOrEqual(0);
+			expect(bodyIndex).toBeLessThan(hits.findIndex(hit => hit.path === "needle/path.md"));
+			expect(bodyIndex).toBeLessThan(
+				hits.findIndex(hit => hit.path === "inherited.md" && hit.headingPath.endsWith("Local")),
+			);
+		} finally {
+			service.close();
+		}
+	});
+
 	it("ranks a complete technical name past the scoring prefix above scattered terms", async () => {
 		const root = await tempDir("docs-late-phrase-rank-");
 		const agentDir = await tempDir("docs-late-phrase-agent-");

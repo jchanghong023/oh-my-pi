@@ -8,6 +8,8 @@
  * the Agent Hub); the final report lands as one markdown message in the
  * transcript via `sendCustomMessage`, never as a model-facing delivery.
  */
+import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
+import { cfgEnabledModels } from "../config/model-settings";
 import { getCompanyChatModels } from "../config/company-models";
 import { isCompanyLaneActive } from "../config/company-provider";
 import type { Settings } from "../config/settings";
@@ -109,15 +111,27 @@ function previewQuestion(question: string): string {
 export function resolveTeamParticipantsForSession(session: AgentSession, settings: Settings) {
 	const sessionModel = session.model;
 	const offlineLaneActive = isCompanyLaneActive();
-	const companyModelPatterns = offlineLaneActive
-		? getCompanyChatModels().map(model => `${model.provider}/${model.id}`)
-		: [];
+	const configuredMembers = cfgTeamMembers.get(settings);
+	const availableModels = session.modelRegistry.getAvailable();
+	const companyModelPatterns: string[] = [];
+	if (offlineLaneActive && configuredMembers.length === 0) {
+		const effectiveAvailable = filterAvailableModelsByEnabledPatterns(
+			availableModels,
+			cfgEnabledModels.get(settings),
+			settings,
+		);
+		const effectiveKeys = new Set(effectiveAvailable.map(model => `${model.provider}/${model.id}`));
+		for (const model of getCompanyChatModels()) {
+			const pattern = `${model.provider}/${model.id}`;
+			if (effectiveKeys.has(pattern)) companyModelPatterns.push(pattern);
+		}
+	}
 	return resolveTeamParticipants({
-		configuredMembers: cfgTeamMembers.get(settings),
+		configuredMembers,
 		offlineLaneActive,
 		companyModelPatterns,
 		sessionModel,
-		availableModels: session.modelRegistry.getAvailable(),
+		availableModels,
 	});
 }
 
@@ -183,6 +197,7 @@ export async function startTeamDiscussion(
 				const onProgress = (update: TeamProgressUpdate): void => {
 					void reportProgress(update.text, { stage: update.stage, participants: update.participants });
 					hooks.showStatus?.(update.text);
+					void hooks.output?.(update.text);
 				};
 				const onReportPersisted = (): void | Promise<void> => {
 					manager.acknowledgeDeliveries([jobId]);
