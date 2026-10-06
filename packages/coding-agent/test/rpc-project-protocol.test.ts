@@ -184,6 +184,7 @@ interface SessionSummaryLike {
 	readonly name?: string;
 	readonly loadState: string;
 	readonly sessionGeneration?: string;
+	readonly revision?: string;
 }
 
 function findSession(data: unknown, sessionId: string): SessionSummaryLike | undefined {
@@ -807,13 +808,19 @@ export default function() {
 						sessions: SessionSummaryLike[];
 						revision: string;
 					};
-					expect(findSession(directory, session.sessionId)?.loadState).toBe("closing");
+					// delete_session's expectedRevision is the per-session resource
+					// revision (rpc-ui-protocol.md: 目录修订不替代对象修订), not the
+					// directory revision.
+					const listed = findSession(directory, session.sessionId);
+					expect(listed?.loadState).toBe("closing");
+					const resourceRevision = listed?.revision;
+					expect(resourceRevision).toBeTruthy();
 					controls.sendRaw({
 						id: `stale-${action}`,
 						type: action,
 						sessionId: session.sessionId,
 						sessionGeneration: "stale-generation",
-						expectedRevision: directory.revision,
+						expectedRevision: resourceRevision,
 					});
 					expect(await responseFor(next, `stale-${action}`)).toMatchObject({
 						success: false,
@@ -823,7 +830,7 @@ export default function() {
 						id: `retry-${action}`,
 						type: action,
 						sessionId: session.sessionId,
-						expectedRevision: directory.revision,
+						expectedRevision: resourceRevision,
 					});
 					expect(await responseFor(next, `retry-${action}`)).toMatchObject({
 						success: true,
