@@ -19,6 +19,8 @@ const RELAY_CLOSE_REASONS: Record<number, string> = {
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
+/** Max enveloped frames buffered while a reconnect is pending; overflow is dropped. */
+const MAX_PENDING_SENDS = 256;
 
 export interface CollabSocketOptions {
 	/** wss://host[:port]/r/<roomId> — no query string. */
@@ -44,16 +46,12 @@ export class CollabSocket {
 	#closed = false;
 	/** Allows a previously joined guest to outlive room recreation races. */
 	#retryMissingRoom = false;
-	/**
-	 * True once a frame has decrypted on a live connection: this guest has occupied
-	 * the room, so a later 4004 is the host-restart window rather than a dead link.
-	 * Never cleared; only close() ends the session for good.
-	 */
-	#joinedRoomOnce = false;
 	/** Serializes seal() so frames hit the wire in send() order. */
 	#sendChain: Promise<void> = Promise.resolve();
 	/** Serializes open() so frames are delivered in arrival order. */
 	#recvChain: Promise<void> = Promise.resolve();
+	/** Envelopes sealed while disconnected, flushed on the next open. */
+	#pendingSends: Uint8Array<ArrayBuffer>[] = [];
 
 	constructor(opts: CollabSocketOptions) {
 		this.#opts = opts;
@@ -72,19 +70,18 @@ export class CollabSocket {
 	}
 
 	send(frame: GuestFrame, targetPeer = 0): void {
-		// A prompt or dialog response belongs to the connection it was submitted
-		// on. Never replay it into the replacement room, even if sealing outlives
-		// a disconnect (the new host may reuse a dialog's request ID).
-		const ws = this.#ws;
-		if (!ws || this.#closed || ws.readyState !== WebSocket.OPEN) return;
 		this.#sendChain = this.#sendChain
 			.then(async () => {
-				if (this.#closed || this.#ws !== ws) return;
-				const key = await this.#opts.key;
-				if (this.#closed || this.#ws !== ws) return;
-				const sealed = await seal(key, frame);
-				if (this.#closed || this.#ws !== ws || ws.readyState !== WebSocket.OPEN) return;
-				ws.send(packEnvelope(targetPeer, sealed));
+				if (this.#closed) return;
+				const sealed = await seal(await this.#opts.key, frame);
+				const envelope = packEnvelope(targetPeer, sealed);
+				const ws = this.#ws;
+				if (ws && ws.readyState === WebSocket.OPEN) {
+					ws.send(envelope);
+					return;
+				}
+				if (this.#pendingSends.length >= MAX_PENDING_SENDS) return;
+				this.#pendingSends.push(envelope);
 			})
 			.catch(() => {
 				// dropped frame; the socket-level close path reports actionable failures
@@ -98,6 +95,7 @@ export class CollabSocket {
 		const wasClosed = this.#closed;
 		this.#closed = true;
 		this.#retryMissingRoom = false;
+		this.#pendingSends.length = 0;
 		const ws = this.#ws;
 		this.#ws = null;
 		if (ws) {
@@ -117,6 +115,8 @@ export class CollabSocket {
 		ws.onopen = () => {
 			if (this.#ws !== ws) return;
 			if (!this.#retryMissingRoom) this.#attempt = 0;
+			for (const envelope of this.#pendingSends) ws.send(envelope);
+			this.#pendingSends.length = 0;
 			this.onOpen?.();
 		};
 		ws.onmessage = (event: MessageEvent) => {
@@ -159,12 +159,11 @@ export class CollabSocket {
 				try {
 					frame = (await open(await this.#opts.key, envelope.payload)) as HostFrame;
 				} catch {
-					if (this.#ws === ws) this.#failFatal("bad key or corrupted frame");
+					this.#failFatal("bad key or corrupted frame");
 					return;
 				}
 				if (this.#ws !== ws) return;
 				this.#retryMissingRoom = false;
-				this.#joinedRoomOnce = true;
 				this.#attempt = 0;
 				this.onFrame?.(frame, envelope.peerId);
 			})
@@ -177,8 +176,7 @@ export class CollabSocket {
 		if (this.#closed) return;
 		const fatalReason = RELAY_CLOSE_REASONS[code];
 		const closeReason = fatalReason ?? (reason || `connection lost (code ${code})`);
-		const tolerateMissingRoom = this.#retryMissingRoom || this.#joinedRoomOnce;
-		const retryRoom = this.#opts.role === "guest" && (code === 4001 || (code === 4004 && tolerateMissingRoom));
+		const retryRoom = this.#opts.role === "guest" && (code === 4001 || (code === 4004 && this.#retryMissingRoom));
 		if (retryRoom) {
 			this.#retryMissingRoom = true;
 			this.onClose?.(closeReason, true);
@@ -187,6 +185,7 @@ export class CollabSocket {
 		}
 		if (fatalReason !== undefined) {
 			this.#closed = true;
+			this.#pendingSends.length = 0;
 			this.onClose?.(fatalReason, false);
 			return;
 		}
@@ -199,6 +198,7 @@ export class CollabSocket {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#clearRetry();
+		this.#pendingSends.length = 0;
 		const ws = this.#ws;
 		this.#ws = null;
 		if (ws) {

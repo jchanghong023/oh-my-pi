@@ -115,7 +115,7 @@ function looksLikeSvg(bytes: Uint8Array, filePath: string): boolean {
 	if (extension === ".svg" || extension === ".svgz") return true;
 	if (isProbablyBinaryHeader(bytes)) return false;
 	try {
-		return /<svg(?:\s|>)/i.test(new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true }));
+		return /<svg(?:\\s|>)/i.test(new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true }));
 	} catch {
 		return false;
 	}

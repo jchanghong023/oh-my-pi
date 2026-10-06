@@ -24,7 +24,7 @@ import type { PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-tem
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { tryRunRpcSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { cfgMagicKeyword, cfgMagicKeywordsEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { AgentSession, type QueuedMessagesSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, type CustomMessage, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -332,35 +332,32 @@ describe("AgentSession queued steer delivery", () => {
 		expect(session.getQueuedMessages().steering).toEqual([]);
 	});
 
-	it.each(["ultrathink", "fullsend"] as const)(
-		"dequeuing a %s prompt mid-stream restores the text and drops its companion notice",
-		async keyword => {
-			const { session } = await createSession([{ content: ["host answer"] }]);
-			let queuedShape: string[] | undefined;
-			let clearedSteering: unknown;
-			let hasQueuedAfterClear: boolean | undefined;
-			let injected = false;
-			session.agent.setOnBeforeYield(async () => {
-				if (injected) return;
-				injected = true;
-				// Real path: a magic-keyword prompt steered mid-stream enqueues the hidden
-				// notice immediately before the user message.
-				await session.prompt(`${keyword} fix it`, { streamingBehavior: "steer" });
-				queuedShape = session.agent.peekSteeringQueue().map(m => (m.role === "custom" ? m.customType : m.role));
-				// Alt+Up restore mid-flight: only the user's text returns; the companion
-				// notice must not be left orphaned in the queue.
-				const cleared = session.clearQueue();
-				clearedSteering = cleared.steering;
-				hasQueuedAfterClear = session.agent.hasQueuedMessages();
-			});
+	it("dequeuing an ultrathink prompt mid-stream restores the text and drops its companion notice", async () => {
+		const { session } = await createSession([{ content: ["host answer"] }]);
+		let queuedShape: string[] | undefined;
+		let clearedSteering: unknown;
+		let hasQueuedAfterClear: boolean | undefined;
+		let injected = false;
+		session.agent.setOnBeforeYield(async () => {
+			if (injected) return;
+			injected = true;
+			// Real path: a magic-keyword prompt steered mid-stream enqueues the hidden
+			// notice immediately before the user message.
+			await session.prompt("ultrathink fix it", { streamingBehavior: "steer" });
+			queuedShape = session.agent.peekSteeringQueue().map(m => (m.role === "custom" ? m.customType : m.role));
+			// Alt+Up restore mid-flight: only the user's text returns; the companion
+			// notice must not be left orphaned in the queue.
+			const cleared = session.clearQueue();
+			clearedSteering = cleared.steering;
+			hasQueuedAfterClear = session.agent.hasQueuedMessages();
+		});
 
-			await session.prompt("hello");
+		await session.prompt("hello");
 
-			expect(queuedShape).toEqual([`${keyword}-notice`, "user"]);
-			expect(clearedSteering).toEqual([{ text: `${keyword} fix it`, images: undefined }]);
-			expect(hasQueuedAfterClear).toBe(false);
-		},
-	);
+		expect(queuedShape).toEqual(["ultrathink-notice", "user"]);
+		expect(clearedSteering).toEqual([{ text: "ultrathink fix it", images: undefined }]);
+		expect(hasQueuedAfterClear).toBe(false);
+	});
 
 	it("keeps the attachment of a keyword prompt steered mid-stream", async () => {
 		const { session } = await createSession([{ content: ["host answer"] }]);
@@ -496,7 +493,7 @@ describe("AgentSession queued steer delivery", () => {
 		const skillPath = path.join(tempDir, "SKILL.md");
 		await Bun.write(skillPath, "---\nname: reviewer\ndescription: Review code\n---\n\nReview the supplied code.\n");
 		const invocation = "/skill:reviewer  focus on risks\nand correctness";
-		let queued: QueuedMessagesSnapshot | undefined;
+		let queued: { steering: readonly string[]; followUp: readonly string[] } | undefined;
 		let injected = false;
 		session.agent.setOnBeforeYield(async () => {
 			if (injected) return;
@@ -523,7 +520,7 @@ describe("AgentSession queued steer delivery", () => {
 		await session.prompt("start");
 		await session.waitForIdle();
 
-		expect(queued).toEqual({ steering: [invocation], followUp: [], liveSteered: 0 });
+		expect(queued).toEqual({ steering: [invocation], followUp: [] });
 		const delivered = session.messages.filter(
 			(message): message is CustomMessage => message.role === "custom" && message.customType === "skill-prompt",
 		);
@@ -728,7 +725,7 @@ describe("AgentSession queued steer delivery", () => {
 
 			expect(session.removeQueuedMessage("/review raw", "followUp")).toBe(true);
 			expect(session.removeQueuedMessage("/review expanded", "followUp")).toBe(true);
-			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["keep"], liveSteered: 0 });
+			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["keep"] });
 		});
 
 		it("removes a queued file-based slash command by its raw /cmd invocation", async () => {
@@ -812,7 +809,7 @@ describe("AgentSession queued steer delivery", () => {
 			let injected = false;
 			let promoted: boolean | undefined;
 			let promotedAgain: boolean | undefined;
-			let queueAfterPromotion: QueuedMessagesSnapshot | undefined;
+			let queueAfterPromotion: { steering: readonly string[]; followUp: readonly string[] } | undefined;
 			session.agent.setOnBeforeYield(async () => {
 				if (injected) return;
 				injected = true;
@@ -848,7 +845,7 @@ describe("AgentSession queued steer delivery", () => {
 			await session.waitForIdle();
 
 			expect(promoted).toBe(true);
-			expect(queueAfterPromotion).toEqual({ steering: [invocation], followUp: [], liveSteered: 0 });
+			expect(queueAfterPromotion).toEqual({ steering: [invocation], followUp: [] });
 			expect(promotedAgain).toBe(false);
 			const delivered = session.messages.filter(
 				(message): message is CustomMessage => message.role === "custom" && message.attribution === "user",
@@ -891,11 +888,7 @@ describe("AgentSession queued steer delivery", () => {
 			await session.waitForIdle();
 
 			expect(promoted).toBe(true);
-			expect(queued).toEqual({
-				steering: ["existing", "duplicate"],
-				followUp: ["unrelated", "duplicate"],
-				liveSteered: 0,
-			});
+			expect(queued).toEqual({ steering: ["existing", "duplicate"], followUp: ["unrelated", "duplicate"] });
 			const delivered = session.messages.filter(message => message.role === "user");
 			expect(delivered.map(message => message.content)).toEqual(
 				["start", "existing", "duplicate", "unrelated", "duplicate"].map(text => [{ type: "text", text }]),
@@ -983,7 +976,7 @@ describe("AgentSession queued steer delivery", () => {
 				// raw-text record must follow so the caller can still remove it by the
 				// exact "/cmd args" it originally submitted.
 				expect(session.promoteQueuedMessage("/cmd args")).toBe(true);
-				expect(session.getQueuedMessages()).toEqual({ steering: ["Expanded args"], followUp: [], liveSteered: 0 });
+				expect(session.getQueuedMessages()).toEqual({ steering: ["Expanded args"], followUp: [] });
 
 				expect(session.removeQueuedMessage("/cmd args", "steering")).toBe(true);
 				expect(session.getQueuedMessages().steering).toEqual([]);
@@ -1201,7 +1194,7 @@ describe("AgentSession queued steer delivery", () => {
 		it("wakes an idle follow-up and rejects a stale promotion without replaying it", async () => {
 			const { session, mock } = await createSession([{ content: ["delivered"] }]);
 			await session.followUp("wake me");
-			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["wake me"], liveSteered: 0 });
+			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["wake me"] });
 			const delivered = nextUserMessage(session, "wake me");
 
 			expect(session.promoteQueuedMessage("wake me")).toBe(true);

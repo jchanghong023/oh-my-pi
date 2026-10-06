@@ -7,7 +7,6 @@
  */
 
 import * as fs from "node:fs";
-import { appendSigintConsoleDiagnostics } from "./console-sigint-diagnostics";
 import { APP_NAME } from "./dirs";
 import * as logger from "./logger";
 import { restoreTerminalStderr } from "./stderr-guard";
@@ -561,53 +560,12 @@ export async function fatal(error: unknown): Promise<never> {
 	return exitAfterFatal(output, "Fatal error", err, Reason.UNHANDLED_REJECTION);
 }
 
-/** Interceptors consulted by the global SIGINT handler before the signal teardown. */
-const sigintInterceptors = new Set<() => boolean>();
-
-/**
- * Register an interceptor consulted before a SIGINT runs the signal teardown
- * and exits. A consuming interceptor owns the signal and keeps the process
- * running — the intended consumer is the interactive TUI's double-press gate,
- * which consumes a first signal and only lets a repeat within its confirm
- * window (or a signal arriving during teardown) fall through to the exit path.
- * Non-interactive hosts register nothing and keep the immediate-exit signal
- * semantics. Returns an unregister function.
- */
-export function interceptSigint(interceptor: () => boolean): () => void {
-	sigintInterceptors.add(interceptor);
-	return () => sigintInterceptors.delete(interceptor);
-}
-
-/**
- * SIGINT dispatch shared by the process signal handler and tests: record
- * Windows console diagnostics, hand the signal to a consuming interceptor,
- * then run the signal teardown and exit 130. Interceptors that throw are
- * contained (mirroring {@link interceptUnhandledRejections}) and treated as
- * non-consuming so a broken gate can never make the process unkillable.
- */
-export async function handleSigint(options: { diagnostics?: boolean } = {}): Promise<void> {
-	if (options.diagnostics !== false) appendSigintConsoleDiagnostics();
-	for (const interceptor of sigintInterceptors) {
-		try {
-			if (interceptor()) return;
-		} catch (interceptorErr) {
-			// The logger is silent unless transports are enabled (long-running
-			// services opt in); this containment diagnostic must stay observable
-			// on stderr in the default configuration too, right before exit(130).
-			process.stderr.write(
-				`SIGINT interceptor threw; continuing with signal teardown: ${
-					interceptorErr instanceof Error ? interceptorErr.message : String(interceptorErr)
-				}\n`,
-			);
-		}
-	}
-	await runCleanup(Reason.SIGINT);
-	exitProcess(130); // 128 + SIGINT (2)
-}
-
 if (Bun.isMainThread) {
 	process
-		.on("SIGINT", () => handleSigint())
+		.on("SIGINT", async () => {
+			await runCleanup(Reason.SIGINT);
+			exitProcess(130); // 128 + SIGINT (2)
+		})
 		.on("SIGUSR1", async () => {
 			if (inspectorOpened) return;
 			inspectorOpened = true;

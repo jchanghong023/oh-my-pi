@@ -505,9 +505,6 @@ async function joinRawGuest(
 		event: true,
 		bus: true,
 		"snapshot-chunk": true,
-		// Advertised after every hello; its async build interleaves with the
-		// directed replies this harness asserts on.
-		commands: true,
 	};
 	socket.onFrame = frame => {
 		if (filtered[frame.t]) return;

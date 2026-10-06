@@ -16,7 +16,6 @@ import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/displa
 import type { InteractiveModeContext } from "../modes/types";
 import { TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { CollabHost, CollabHostStoppedError, CollabRelayUnavailableError } from "./host";
-import { type CollabRoomIdentity, loadOrCreateCollabIdentity } from "./identity";
 import type { CollabAccess } from "./registry";
 
 import { cfgCollabAutoStart, cfgCollabRelayUrl, cfgCollabWebUrl } from "./settings";
@@ -54,12 +53,6 @@ export class CollabController {
 	#unsubscribeSessionChange: (() => void) | undefined;
 	/** Guests may drive the session only once interactive startup has finished. */
 	#startupComplete = false;
-	/**
-	 * Room secrets shared by every room this process hosts (see
-	 * `collab/identity.ts`), resolved once: a link must keep working for the
-	 * lifetime of the process even if the file is deleted underneath it.
-	 */
-	#identity: Promise<CollabRoomIdentity> | undefined;
 	#shutdown = false;
 	#shutdownWake: PromiseWithResolvers<void> | undefined;
 	/**
@@ -245,17 +238,10 @@ export class CollabController {
 		const webUrl = cfgCollabWebUrl.get(this.#ctx.settings) || "";
 		this.#observeSessionChanges();
 		const previous = this.#host;
-		// One identity per process, so every room this controller starts shares
-		// one link. The host resolves it inside `start()`, so the room object is
-		// still installed synchronously (early dialogs are retained); a stop or
-		// shutdown landing during the read stops the room and `start()` rejects
-		// instead of connecting it.
-		const identity = (this.#identity ??= loadOrCreateCollabIdentity());
 		const host: CollabHost = new CollabHost(this.#ctx, {
 			instanceId: this.instanceId,
 			generation: ++this.#generation,
 			access,
-			identity,
 			guestActionsReady: () => this.#startupComplete && !this.#ctx.session.isSessionTransitioning,
 			onEnded: () => this.#onHostEnded(host),
 		});

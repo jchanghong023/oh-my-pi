@@ -3993,7 +3993,7 @@ impl Utility for Ls {
 			.matches
 			.get_many::<OsString>(options::PATHS)
 			.map_or_else(|| vec![Path::new(".")], |v| v.map(Path::new).collect());
-		match list(locs, &config, host.stdout_writer()) {
+		match list(locs, &config, host.stdout_clone()) {
 			Ok(()) => runtime.status.get(),
 			Err(err) => {
 				host.error(&err, 1);
@@ -4963,7 +4963,7 @@ struct ListState<'a> {
 }
 
 #[allow(clippy::cognitive_complexity)]
-pub fn list(locs: Vec<&Path>, config: &Config, stdout: StreamWriter) -> std::io::Result<()> {
+pub fn list(locs: Vec<&Path>, config: &Config, stdout: OpenFile) -> std::io::Result<()> {
 	let fs = config.runtime.fs();
 	let mut files = Vec::<PathData>::new();
 	let mut dirs = Vec::<PathData>::new();
@@ -4972,11 +4972,7 @@ pub fn list(locs: Vec<&Path>, config: &Config, stdout: StreamWriter) -> std::io:
 	let now = SystemTime::now();
 
 	let mut state = ListState {
-		// The caller's writer already applied the destination-aware block/line
-		// policy from the pre-SIGPIPE-guard snapshot (`Host::stdout_writer`);
-		// rebuilding one here would classify the wrapped stream on Windows and
-		// downgrade a redirected file to line buffering.
-		out: stdout,
+		out: StreamWriter::new(stdout),
 		style_manager: config
 			.color
 			.as_ref()

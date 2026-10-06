@@ -331,8 +331,6 @@ export class SessionTools {
 	#lastAppliedToolSignature: string | undefined;
 	/** Full enabled set, including tools demoted from the model-visible surface. */
 	#enabledToolNames = new Set<string>();
-	/** Complete requested slate from the last toolset apply. */
-	#baseActiveToolNames: string[] = [];
 	/** Names currently exposed through tool-session `isToolActive` predicates. */
 	#toolPredicateNames: readonly string[] | undefined;
 	/** Wire-name snapshot for the direct Code Mode tools last applied successfully. */
@@ -456,7 +454,6 @@ export class SessionTools {
 		// no tools and the prompt rebuild without `read` empties the skill list.
 		for (const tool of host.agent.state.tools) this.#enabledToolNames.add(tool.name);
 		for (const name of this.#xdev?.mountedNames ?? []) this.#enabledToolNames.add(name);
-		this.#baseActiveToolNames = [...this.#enabledToolNames];
 		this.#promptModelKey = this.#currentPromptModelKey();
 	}
 
@@ -584,18 +581,6 @@ export class SessionTools {
 	getActiveToolNames(): string[] {
 		return this.#host.agent.state.tools.map(t => t.name);
 	}
-	/** Complete requested set from the last toolset apply. */
-	getBaseActiveToolNames(): string[] {
-		return [...this.#baseActiveToolNames];
-	}
-	/**
-	 * Base slate plus live `xd://` mounts: toolset removal and rollback paths
-	 * reapply from this union so devices an extension mounted out-of-band
-	 * survive instead of being unmounted by an unrelated change.
-	 */
-	getBaseWithMountedToolNames(): string[] {
-		return [...new Set([...this.#baseActiveToolNames, ...(this.#xdev?.mountedNames ?? [])])];
-	}
 	/** Enabled top-level, `xd://`, and Code Mode bridge tool names. */
 	getEnabledToolNames(): string[] {
 		// Union live xd:// mounts so devices mounted out-of-band (plugins writing
@@ -608,11 +593,6 @@ export class SessionTools {
 
 	/** Names currently presented as `xd://` devices. */
 	getMountedXdevToolNames(): string[] {
-		return [...(this.#xdev?.mountedNames ?? [])];
-	}
-
-	/** Live `xd://` mounts, unfiltered for presentation snapshots. */
-	getRawMountedXdevToolNames(): string[] {
 		return [...(this.#xdev?.mountedNames ?? [])];
 	}
 
@@ -856,7 +836,7 @@ export class SessionTools {
 		return this.runToolRegistryMutation(async () => {
 			const removed = new Set(this.#installedVibeToolNames);
 			this.#uninstallVibeTools();
-			const nextEnabled = this.getBaseWithMountedToolNames().filter(name => !removed.has(name));
+			const nextEnabled = this.getEnabledToolNames().filter(name => !removed.has(name));
 			await this.#applyActiveToolsByName(nextEnabled);
 		});
 	}
@@ -946,7 +926,7 @@ export class SessionTools {
 		// Sample inside the lock: an unlocked sample can race a queued apply and
 		// re-commit a stale slate.
 		return this.runToolRegistryMutation(async () => {
-			await this.#applyActiveToolsByName(this.getBaseWithMountedToolNames());
+			await this.#applyActiveToolsByName(this.getEnabledToolNames());
 		});
 	}
 
@@ -1089,7 +1069,6 @@ export class SessionTools {
 
 	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
-		const previousBaseActiveToolNames = this.#baseActiveToolNames;
 		toolNames = normalizeToolNames(toolNames);
 		const codeMode = resolveCodeMode({
 			provider: this.#host.model()?.provider ?? "",
@@ -1243,7 +1222,6 @@ export class SessionTools {
 		let rebuiltXdevCatalogNames: readonly string[] | undefined;
 		let candidateSurface: PromptSurface | undefined;
 		try {
-			this.#baseActiveToolNames = toolNames;
 			if (restrictDeviceOnlyWrite) this.#setDeviceOnlyWrite?.(true);
 			if (upgradeDeviceOnlyWrite) this.#setPendingFullWriteDescription?.(true);
 			if (this.#rebuildSystemPrompt) {
@@ -1322,7 +1300,6 @@ export class SessionTools {
 			this.#setActiveToolNames?.(previousToolPredicateNames ?? previousActiveToolNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			this.#codeModeDirectToolNames = previousCodeModeDirectToolNames;
-			this.#baseActiveToolNames = previousBaseActiveToolNames;
 			throw error;
 		}
 
@@ -1334,7 +1311,6 @@ export class SessionTools {
 			this.#setActiveToolNames?.(previousToolPredicateNames ?? previousActiveToolNames);
 			this.#enabledToolNames = previousEnabledToolNames;
 			this.#codeModeDirectToolNames = previousCodeModeDirectToolNames;
-			this.#baseActiveToolNames = previousBaseActiveToolNames;
 			return;
 		}
 
@@ -1906,7 +1882,7 @@ export class SessionTools {
 	replaceMemoryTools(tools: AgentTool[]): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
 			const removed = new Set<string>(MEMORY_BACKEND_TOOL_NAMES.filter(name => this.#isCurrentBuiltInTool(name)));
-			const nextActive = this.getBaseWithMountedToolNames().filter(name => !removed.has(name));
+			const nextActive = this.getEnabledToolNames().filter(name => !removed.has(name));
 			for (const name of removed) {
 				this.#toolRegistry.delete(name);
 				this.#forgetBuiltInTool(name);
@@ -1940,7 +1916,7 @@ export class SessionTools {
 
 	#setThinkToolActive(enabled: boolean): Promise<boolean> {
 		return this.runToolRegistryMutation(async () => {
-			const active = this.getBaseWithMountedToolNames();
+			const active = this.getEnabledToolNames();
 			if (!enabled) {
 				if (active.includes("think")) {
 					await this.#applyActiveToolsByName(active.filter(name => name !== "think"));
@@ -2259,7 +2235,7 @@ export class SessionTools {
 			if (isMCPToolName(name)) previousMcpTools.set(name, tool);
 		}
 		const previousMcpManagerToolNames = new Set(this.#mcpManagerToolNames);
-		const previousActiveMcpToolNames = this.getBaseWithMountedToolNames().filter(isMCPToolName);
+		const previousActiveMcpToolNames = this.getEnabledToolNames().filter(isMCPToolName);
 		const restorePreviousMcpTools = () => {
 			for (const name of this.#toolRegistry.keys()) {
 				if (isMCPToolName(name)) this.#toolRegistry.delete(name);
@@ -2334,7 +2310,7 @@ export class SessionTools {
 		}
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
-		const previousActiveToolNames = this.getBaseWithMountedToolNames();
+		const previousActiveToolNames = this.getEnabledToolNames();
 		const previousRpcHostTools = new Map(
 			[...previousRpcHostToolNames].flatMap(name => {
 				const tool = this.#toolRegistry.get(name);

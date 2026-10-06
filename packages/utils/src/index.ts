@@ -2,7 +2,6 @@ export { once, untilAborted } from "./abortable";
 export * from "./async";
 export * from "./binary";
 export * from "./color";
-export { appendSigintConsoleDiagnostics, SIGINT_CONSOLE_DIAGNOSTICS_FILE } from "./console-sigint-diagnostics";
 export * from "./dirs";
 export * from "./env";
 export * from "./executable";

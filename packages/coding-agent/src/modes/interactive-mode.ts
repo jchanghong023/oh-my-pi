@@ -291,7 +291,6 @@ import {
 	type SessionObserverChangeKind,
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
-import { registerInteractiveSigintGate } from "./sigint-gate";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
@@ -1511,7 +1510,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Extension-registered provider factories, applied in registration order (#4919). */
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
-	#sigintUnsubscribe?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	readonly #startupChangelog: StartupChangelogSelection | undefined;
@@ -2070,28 +2068,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// runs callbacks in REVERSE registration order — this callback (registered
 		// after the AgentSession constructor's `agent-session:<id>` recorder) runs
 		// FIRST and its dispose() would otherwise persist the generic "dispose".
-		this.#cleanupUnsubscribe = postmortem.register("session-teardown", reason => {
-			// Arm the shutdown flag on the signal path too: while this teardown
-			// runs (and can get stuck), the SIGINT gate's `isShuttingDown()` must
-			// report true so a follow-up signal falls through to the hard-abort
-			// instead of being consumed as a fresh first press once the 5s
-			// confirm window lapses (sigint-gate.ts). The keypress paths set the
-			// flag themselves; #handleTeardownError's reset only applies to
-			// those retryable keypress teardowns.
-			this.#isShuttingDown = true;
-			return this.#signalTeardown!(reason);
-		});
-
-		// A real SIGINT reaching the process-level handler must not exit the
-		// TUI on the first hit: Windows console ctrl events arrive regardless
-		// of raw mode and would destroy the session on a stray broadcast.
-		// Consume the first signal with the same double-press semantics as the
-		// Ctrl+C keypress; a confirm press or a teardown-time signal falls
-		// through to the signal teardown registered above.
-		this.#sigintUnsubscribe = registerInteractiveSigintGate({
-			isShuttingDown: () => this.isShuttingDown,
-			showHint: () => this.showStatus("SIGINT received — press Ctrl+C again to exit"),
-		});
+		this.#cleanupUnsubscribe = postmortem.register("session-teardown", reason => this.#signalTeardown!(reason));
 
 		// Wire the report_tool_issue consent gate to the Yes/No dialog popup.
 		// The handler is process-global — subagent tools (which can't reach
@@ -4913,8 +4890,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.planModePaused = false;
 
 		const planFilePath = options?.planFilePath ?? (await this.#getPlanFilePath());
-		const previousTools = this.session.getBaseWithMountedToolNames();
-		const previousMountedTools = this.session.getRawMountedXdevToolNames();
+		const previousTools = this.session.getEnabledToolNames();
+		const previousMountedTools = this.session.getMountedXdevToolNames();
 		// `plan-mode-active.md` instructs the agent to draft the plan file with
 		// `write` and refine it with `edit`, and plan approval itself is a `write`
 		// to `xd://propose`. Both must be in the active set or the agent falls
@@ -5595,8 +5572,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		},
 	): Promise<boolean> {
 		const previousPresentation = this.#planModePreviousToolPresentation ?? {
-			enabled: this.session.getBaseWithMountedToolNames().filter(name => !isMCPToolName(name)),
-			mounted: this.session.getRawMountedXdevToolNames().filter(name => !isMCPToolName(name)),
+			enabled: this.session.getEnabledToolNames().filter(name => !isMCPToolName(name)),
+			mounted: this.session.getMountedXdevToolNames().filter(name => !isMCPToolName(name)),
 		};
 
 		// Mark the pending abort caused by the plan-mode → compaction transition as
@@ -6794,9 +6771,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
-		}
-		if (this.#sigintUnsubscribe) {
-			this.#sigintUnsubscribe();
 		}
 		// Clear the process-global consent handler so it doesn't outlive this
 		// InteractiveMode instance (e.g. test harnesses, headless re-init).

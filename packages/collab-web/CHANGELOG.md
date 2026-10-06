@@ -2,11 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed guest command discovery/completion and stale host-question state across room and session transitions.
-- Fixed encrypted guest error reporting and read-only restrictions for host filesystem completions.
-
 ## [18.4.10] - 2026-10-02
 
 ### Fixed
@@ -36,14 +31,7 @@
 
 ### Added
 
-- Added `/` command completion in the composer, driven by the command palette the host advertises on join (builtins, skills, extension/custom/file commands), with `Tab`/`↑`/`↓`/`Esc` and click-to-complete.
-- Added host directory suggestions for `/move` and `/add-dir`, so a path can be picked instead of typed.
-- Added a `build:pages` build that emits the client for the `/oh-my-pi/collab/` GitHub Pages path, published with the docs site.
 - Added support for rendering coordinated job and messaging views through the `wait` tool.
-
-### Changed
-
-- A host room rotation (session switch, `/new`, restart) now shows "reconnecting…" and rejoins the replacement room on the same link instead of ending the session.
 
 ### Removed
 

@@ -258,7 +258,7 @@ import { resumeCommand } from "../utils/resume-command";
 import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { VibeModeState } from "../vibe/state";
-import type { AgentSessionEvent, AgentSessionEventListener, QueuedMessagesSnapshot } from "./agent-session-events";
+import type { AgentSessionEvent, AgentSessionEventListener } from "./agent-session-events";
 import type {
 	AgentSessionConfig,
 	AgentSessionDisposeOptions,
@@ -6043,24 +6043,10 @@ export class AgentSession implements SettingsScope {
 	getEnabledToolNames(): string[] {
 		return this.#tools.getEnabledToolNames();
 	}
-	/** Complete requested tool slate, as last passed to a toolset apply. */
-	getBaseActiveToolNames(): string[] {
-		return this.#tools.getBaseActiveToolNames();
-	}
-
-	/** Base slate plus live `xd://` mounts, used by removal and rollback paths. */
-	getBaseWithMountedToolNames(): string[] {
-		return this.#tools.getBaseWithMountedToolNames();
-	}
 
 	/** Names of dynamic tools mounted under `xd://`. */
 	getMountedXdevToolNames(): string[] {
 		return this.#tools.getMountedXdevToolNames();
-	}
-
-	/** Live `xd://` mounts, unfiltered for presentation snapshots. */
-	getRawMountedXdevToolNames(): string[] {
-		return this.#tools.getRawMountedXdevToolNames();
 	}
 
 	/** Whether the edit tool is registered in this session. */
@@ -8846,16 +8832,13 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Chip texts for the queue display. Steering live steering took for the streaming response
-	 *  stays listed until the transcript records it, when the model actually switches to it
-	 *  (see {@link QueuedMessagesSnapshot.liveSteered}). */
-	getQueuedMessages(): QueuedMessagesSnapshot {
-		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isUserAuthoredQueuedMessage);
+	 *  stays listed until the transcript records it, when the model actually switches to it. */
+	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[] } {
 		return {
-			steering: [...liveSteered, ...this.agent.peekSteeringQueue().filter(isUserAuthoredQueuedMessage)].map(
-				queueChipText,
-			),
+			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
+				.filter(isUserAuthoredQueuedMessage)
+				.map(queueChipText),
 			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage).map(queueChipText),
-			liveSteered: liveSteered.length,
 		};
 	}
 
@@ -8864,26 +8847,20 @@ export class AgentSession implements SettingsScope {
 	 *  externally observable transitions RPC/ACP/TUI subscribers actually care
 	 *  about, so a mutation that leaves the displayable queue unchanged (e.g. an
 	 *  agent-authored aside, or a claim/restore round-trip) never re-emits. */
-	#lastEmittedQueueSnapshot: QueuedMessagesSnapshot | undefined;
+	#lastEmittedQueueSnapshot: { steering: readonly string[]; followUp: readonly string[] } | undefined;
 
 	#emitQueueUpdateIfChanged(): void {
 		const snapshot = this.getQueuedMessages();
 		const last = this.#lastEmittedQueueSnapshot;
 		const unchanged =
 			last !== undefined &&
-			last.liveSteered === snapshot.liveSteered &&
 			last.steering.length === snapshot.steering.length &&
 			last.followUp.length === snapshot.followUp.length &&
 			last.steering.every((text, i) => text === snapshot.steering[i]) &&
 			last.followUp.every((text, i) => text === snapshot.followUp[i]);
 		if (unchanged) return;
 		this.#lastEmittedQueueSnapshot = snapshot;
-		this.#emit({
-			type: "queue_update",
-			steering: [...snapshot.steering],
-			followUp: [...snapshot.followUp],
-			liveSteered: snapshot.liveSteered,
-		});
+		this.#emit({ type: "queue_update", steering: [...snapshot.steering], followUp: [...snapshot.followUp] });
 	}
 
 	/**

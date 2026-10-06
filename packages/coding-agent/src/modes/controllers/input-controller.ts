@@ -1626,13 +1626,7 @@ export class InputController {
 	handleDequeue(): void {
 		const popped = this.#popLastQueuedMessage();
 		if (!popped) {
-			// Live-steered input is still listed ("Sent") but the model already has it;
-			// the interrupt path (`restoreQueuedMessagesToEditor({ abort: true })`) withdraws it.
-			this.ctx.showStatus(
-				this.ctx.session.getQueuedMessages().liveSteered > 0
-					? `Sent steering can't be edited; press ${appKey(this.ctx.keybindings, "app.interrupt")} to interrupt and restore it`
-					: "No queued messages to restore",
-			);
+			this.ctx.showStatus("No queued messages to restore");
 			return;
 		}
 		// Drop only the popped message's local-submission signature; the messages

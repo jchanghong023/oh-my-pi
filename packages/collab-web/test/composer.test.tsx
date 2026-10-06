@@ -1,11 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { KeyboardEvent } from "react";
-import type { CollabCommandInfo } from "@oh-my-pi/pi-wire";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { GuestSnapshot } from "../src/lib/client";
 import { GuestClient } from "../src/lib/client";
 import { Composer, shouldSubmitOnEnter } from "../src/components/shell/Composer";
-import { completionItems, directoryArgument } from "../src/lib/completion";
 import { encodeBase64Url } from "../src/lib/link";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
@@ -27,7 +25,6 @@ function snapshot(uiRequest: GuestSnapshot["uiRequest"]): GuestSnapshot {
 		working: true,
 		readOnly: false,
 		uiRequest,
-		commands: [],
 		notices: [],
 		loading: null,
 	};
@@ -55,10 +52,7 @@ describe("Composer host UI requests", () => {
 
 	it("renders a submit field for custom ask responses", () => {
 		const html = renderToStaticMarkup(
-			<Composer
-				client={client}
-				snapshot={snapshot({ reqId: 2, kind: "editor", title: "Other", prefill: "draft" })}
-			/>,
+			<Composer client={client} snapshot={snapshot({ reqId: 2, kind: "editor", title: "Other", prefill: "draft" })} />,
 		);
 
 		expect(html).toContain("Other");
@@ -115,63 +109,5 @@ describe("shouldSubmitOnEnter IME guard", () => {
 
 	it("ignores non-Enter keys", () => {
 		expect(shouldSubmitOnEnter(keydown("a"), false)).toBe(false);
-	});
-});
-
-describe("composer slash completion", () => {
-	// The Composer renders exactly these items and applies `insert` on Tab and
-	// on click, so the menu contents and the completed text are this function's
-	// observable contract.
-	const commands: CollabCommandInfo[] = [
-		{ name: "dump", description: "Return full transcript", input: { hint: "[raw]" } },
-		{ name: "model", aliases: ["models"], description: "Switch model" },
-		{ name: "skill:reviewer", description: "Review the current diff" },
-	];
-
-	it("offers matching commands for a slash prefix and completes with a trailing space", () => {
-		const items = completionItems("/du", commands, []);
-
-		expect(items.map(item => item.label)).toEqual(["/dump"]);
-		expect(items[0]).toMatchObject({ insert: "/dump ", hint: "[raw]", description: "Return full transcript" });
-	});
-
-	it("matches aliases and badges skill commands", () => {
-		expect(completionItems("/mod", commands, []).map(item => item.label)).toEqual(["/model"]);
-		expect(completionItems("/skill", commands, []).map(item => [item.label, item.badge])).toEqual([
-			["/skill:reviewer", "skill"],
-		]);
-	});
-
-	it("stops completing once the command's arguments start", () => {
-		expect(completionItems("/dump raw", commands, [])).toEqual([]);
-		expect(completionItems("/dump\traw", commands, [])).toEqual([]);
-		expect(completionItems("/dump\nraw", commands, [])).toEqual([]);
-	});
-
-	it("offers host directories for /move and completes to the absolute path", () => {
-		const dirs = [{ path: "/tmp/sub", label: "sub/" }];
-
-		expect(directoryArgument("/move su")).toEqual({ command: "move", prefix: "su" });
-		expect(directoryArgument("/add-dir ")).toEqual({ command: "add-dir", prefix: "" });
-		const items = completionItems("/move su", commands, dirs);
-		expect(items.map(item => item.label)).toEqual(["sub/"]);
-		expect(items[0]).toMatchObject({ insert: "/move /tmp/sub", description: "/tmp/sub" });
-	});
-
-	it("preserves spaces in host directory arguments and completion paths", () => {
-		const prefix = "C:\\Work projects\\su";
-		const path = "C:\\Work projects\\sub";
-		expect(directoryArgument(`/move ${prefix}`)).toEqual({ command: "move", prefix });
-		expect(directoryArgument("/add-dir\t/tmp/space dir")).toEqual({
-			command: "add-dir",
-			prefix: "/tmp/space dir",
-		});
-		expect(completionItems(`/move ${prefix}`, commands, [{ path, label: "sub/" }])[0]?.insert).toBe(`/move ${path}`);
-		expect(directoryArgument("/move /tmp\nanother line")).toBeNull();
-	});
-
-	it("keeps other commands' arguments out of the directory source", () => {
-		expect(directoryArgument("/dump /tmp")).toBeNull();
-		expect(completionItems("/dump /tmp", commands, [{ path: "/tmp", label: "tmp/" }])).toEqual([]);
 	});
 });

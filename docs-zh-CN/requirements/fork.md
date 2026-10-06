@@ -11,12 +11,6 @@
 - **Upstream commit**：`4ade1a1aa303fd896de4225a390a4d583fc227d6`
 - **同步日期**：2026-10-06
 
-## 预采纳的上游 PR（上游合并后删除对应条目）
-
-以下条目是上游尚未合并的开放 PR，本 fork 已提前合入。每次上游同步后核对：PR 已被上游合并（进入基线）时删除对应条目——此时同步流程会自然带入同一改动，保留条目只会制造假差异。
-
-- **#13802**（live-steered 队列条目标记为已发送）：`QueuedMessagesSnapshot` 新增 `liveSteered` 计数，`get_state.queuedMessages` 与 `queue_update` 透传；TUI 队列带把已发送条目渲染为锁定的 Sent 组。RPC 快照接线移植进 `RpcSessionHost`（`rpc-mode.ts` 保持传输壳）；fork 侧 `queuedMessages` 文案段（rpc.md）保留 fork 版并融入 `liveSteered` 语义。上游 v18.6.0 把 Python 客户端重组为 `sdk/python/omp-rpc` 并改用机器可读 wire schema 生成各语言类型（生成入口 `bun run gen:rpc`），fork 将 `liveSteered` 补进 wire DSL（`QueuedMessagesState`/`QueueUpdateEvent`，旧服务器省略时解码为 0）并随同步重新生成全部工件。合入提交 `52316aa576`。（2026-10-06：fork 不再预采纳 #14110 `/btw` RPC 侧问——随 rpc-ui 最小核心收缩整体删除，TUI `/btw` 为上游功能不受影响；上游将来合并该 PR 时由 rpc-ui 需求文档重新裁定。）
-
 ## 当前功能差异
 
 ### Markdown 文档索引

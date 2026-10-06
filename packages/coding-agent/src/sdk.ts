@@ -4794,14 +4794,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					return;
 				}
 
-				const enabled = session.getBaseActiveToolNames();
+				const enabled = session.getEnabledToolNames();
 				const currentlyExposed = session.getEnabledToolNames().includes(name);
 				const alreadyEnabled = enabled.includes(name);
 				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
 				// Raw mounts: the presentation snapshot pairs the unprojected base
 				// slate with the unprojected mount set so the existing top-level /
 				// `xd://` partition survives the re-registration.
-				const mounted = session.getRawMountedXdevToolNames();
+				const mounted = session.getMountedXdevToolNames();
 				const wasBuiltIn = builtInRegistryToolNames.has(name);
 				toolRegistry.set(name, liveTool);
 				builtInRegistryToolNames.delete(name);

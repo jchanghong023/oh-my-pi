@@ -107,7 +107,6 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		xdev?: XdevState;
 		lazyWrite?: boolean;
 		deviceOnlyWrite?: boolean;
-		ensureGoalRegistered?: () => Promise<boolean>;
 		/** Scripted mock model responses; enables driving `session.prompt()`. */
 		responses?: MockResponseSource;
 		/** Persisted history seeded into the agent, e.g. to model a resumed session. */
@@ -185,7 +184,6 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 				if (!toolRegistry.has("write")) toolRegistry.set("write", writeTool);
 				return true;
 			},
-			ensureGoalRegistered: options.ensureGoalRegistered,
 			setActiveToolNames: names => {
 				activeToolNames.clear();
 				for (const name of names) activeToolNames.add(name);
@@ -224,25 +222,6 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			isToolActive: name => activeToolNames.has(name),
 		};
 	}
-
-	it("keeps the committed tool slate after a lazy registration fails", async () => {
-		const { session } = newSession(async toolNames => `tools:${toolNames.join(",")}`, {
-			ensureGoalRegistered: async () => {
-				throw new Error("goal registration failed");
-			},
-		});
-		const previous = session.getBaseActiveToolNames();
-		await expect(session.setActiveToolsByName(["goal"])).rejects.toThrow("goal registration failed");
-
-		await session.refreshMCPTools([
-			createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Updated search"),
-		]);
-
-		expect(session.getBaseActiveToolNames()).toEqual(previous);
-		expect(session.getEnabledToolNames()).toContain("read");
-		const result = await session.getToolForEvalBridge("read")!.execute("read-after-rollback", { value: "value" });
-		expect(result.content).toEqual([{ type: "text", text: "read executed" }]);
-	});
 
 	it("skips rebuild when an MCP refresh produces an identical tool set", async () => {
 		let rebuildCount = 0;

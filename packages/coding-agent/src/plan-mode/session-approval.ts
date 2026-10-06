@@ -124,7 +124,7 @@ export async function enterPlanModeForSession(
 	const planFilePath = options?.planFilePath ?? (session.getPlanReferencePath() || "local://PLAN.md");
 	const assertCurrentSession = captureSessionGuard(session);
 	assertCurrentSession();
-	const previousTools = session.getBaseWithMountedToolNames();
+	const previousTools = session.getEnabledToolNames();
 	const previousPlanModeState = session.getPlanModeState();
 	// Plan mode state must land before the tool partition (mirrors the TUI).
 	session.setPlanModeState({

@@ -4,7 +4,7 @@
 
 ## 项目概况
 
-* `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`sdk/python/omp-rpc`）与 VitePress 文档站。
+* `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`sdk/python/omp-rpc`）组件。
 * 本仓库完全由 AI Agent 实现和维护：改动是否正确不能依赖用户手工读代码或人工回归来保证，MUST 依靠可复现的自动化验证，以及本文件（开发与维护规则）、`docs-zh-CN/requirements/fork.md`（需求契约）中的明确约定。
 
 ## 主要入口
@@ -15,7 +15,7 @@
 * `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
-* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：fork 文档站，仅含 fork 自有内容（需求目录、fork 新增文档）并托管 `collab-web` 客户端，不维护翻译（见「中文文档」一节）。
+* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：仅含 fork 自有内容（需求目录与 `README.upstream.md` 对照快照），不维护翻译，不维护文档站点（见「中文文档」一节）。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
 子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
@@ -121,5 +121,5 @@
 ## 中文文档
 
 * `docs-zh-CN` 不维护翻译：上游 `docs` 的翻译文件已全部删除，后续同步不带入、不恢复；上游 `docs/` 的增删改不触发任何中文站维护。
-* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录、`README.upstream.md` 对照快照、fork 新增文档（首页、教程、设置参考、调研资料 `research.md`、工具参考 `tools.md`）与 VitePress 站点；站点发布到 GitHub Pages，并托管 `collab-web` 浏览器客户端（见 `fork.md`）。
+* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录与 `README.upstream.md` 对照快照。fork 不维护文档站点（VitePress 站点、GitHub Pages 发布与 `collab-web` 托管已于 2026-10-06 需求访谈后取消，见 `fork.md`）。
 * 代码 review 或对比上游差异时，只审查 `docs-zh-CN` 内的 fork 新增文档。

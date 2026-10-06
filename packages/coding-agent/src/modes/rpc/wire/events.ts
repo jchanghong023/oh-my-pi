@@ -153,18 +153,7 @@ export const eventDefs = {
 		"Goal mode changed, by a host `goal` command or the agent's `goal` tool.",
 	),
 	QueueUpdateEvent: doc(
-		{
-			type: "'queue_update'",
-			steering: "string[]",
-			followUp: "string[]",
-			liveSteered: absentAs(
-				doc(
-					"number.integer",
-					"Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them.",
-				),
-				0,
-			),
-		},
+		{ type: "'queue_update'", steering: "string[]", followUp: "string[]" },
 		"Coalesced snapshot of the displayable steering/follow-up queue, sent whenever it changes.",
 	),
 

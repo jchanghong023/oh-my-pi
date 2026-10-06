@@ -40,17 +40,7 @@ export const stateDefs = {
 	TodoPhase: { name: "string", tasks: "TodoItem[]" },
 	ContextUsage: { tokens: "number.integer", contextWindow: "number.integer", percent: "number" },
 	QueuedMessagesState: doc(
-		{
-			steering: "string[]",
-			followUp: "string[]",
-			liveSteered: absentAs(
-				doc(
-					"number.integer",
-					"Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them.",
-				),
-				0,
-			),
-		},
+		{ steering: "string[]", followUp: "string[]" },
 		"Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`.",
 	),
 	ToolDescriptor: { name: "string", description: "string", "parameters?": "unknown", "examples?": "unknown[]" },

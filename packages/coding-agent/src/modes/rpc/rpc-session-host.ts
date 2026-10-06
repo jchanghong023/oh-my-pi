@@ -1816,7 +1816,10 @@ export class RpcSessionHost {
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					// A scheduled goal continuation will start a turn: not settled.
 					isSettled: isRpcSessionSettled(session, this.#goalTurnScheduled),
-					queuedMessages: session.getQueuedMessages(),
+					queuedMessages: (() => {
+						const queued = session.getQueuedMessages();
+						return { steering: [...queued.steering], followUp: [...queued.followUp] };
+					})(),
 					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),

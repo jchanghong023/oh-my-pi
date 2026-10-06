@@ -21,7 +21,7 @@ export const cfgCollabRelayUrl = register({
 export const cfgCollabWebUrl = register({
 	id: "collab.webUrl",
 	type: "string",
-	default: "https://jchanghong023.github.io/oh-my-pi/collab/",
+	default: "",
 	ui: {
 		tab: "interaction",
 		group: "Collab",

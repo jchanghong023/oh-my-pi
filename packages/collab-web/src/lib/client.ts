@@ -11,8 +11,6 @@
 import type {
 	AgentSnapshot,
 	AssistantMessage,
-	CollabCommandInfo,
-	CollabDirEntry,
 	CollabUiRequest,
 	CollabUiResponseValue,
 	HostFrame,
@@ -65,8 +63,6 @@ export interface GuestSnapshot {
 	readOnly: boolean;
 	/** Pending host-side UI request (`ask` select/editor) this guest can answer. */
 	uiRequest: CollabUiRequest | null;
-	/** Slash-command palette advertised by the host for this session. */
-	commands: readonly CollabCommandInfo[];
 	/** Capped at 50, newest last. */
 	notices: readonly Notice[];
 	/** Snapshot download progress between `welcome` and its final chunk, else null. */
@@ -75,8 +71,6 @@ export interface GuestSnapshot {
 
 const MAX_NOTICES = 50;
 const TRANSCRIPT_TIMEOUT_MS = 10_000;
-/** `/move` directory suggestions; a host that does not know `browse-dirs` never answers. */
-const DIR_SUGGEST_TIMEOUT_MS = 10_000;
 /** Mirrors the TUI guest's WELCOME_TIMEOUT_MS: a host that never answers hello ends the join. */
 const WELCOME_TIMEOUT_MS = 30_000;
 /** Mirrors the TUI guest's SNAPSHOT_PROGRESS_TIMEOUT_MS: every snapshot chunk must make progress. */
@@ -96,11 +90,6 @@ interface PendingTranscript {
 	timer: Timer;
 }
 
-interface PendingDirSuggestions {
-	resolve: (entries: readonly CollabDirEntry[] | null) => void;
-	timer: Timer;
-}
-
 export class GuestClient {
 	readonly #socket: CollabSocket;
 	readonly #name: string;
@@ -108,7 +97,6 @@ export class GuestClient {
 	readonly #writeToken: string | undefined;
 	readonly #listeners = new Set<() => void>();
 	readonly #pendingTranscripts = new Map<number, PendingTranscript>();
-	readonly #pendingDirs = new Map<number, PendingDirSuggestions>();
 	#reqSeq = 0;
 	#noticeSeq = 0;
 	#everConnected = false;
@@ -136,7 +124,6 @@ export class GuestClient {
 	#readOnly = false;
 	#uiRequest: CollabUiRequest | null = null;
 	#uiRequestQueue: CollabUiRequest[] = [];
-	#commands: readonly CollabCommandInfo[] = [];
 	#notices: readonly Notice[] = [];
 	#snapshot: GuestSnapshot;
 	/**
@@ -168,11 +155,18 @@ export class GuestClient {
 			this.#commit();
 		}
 		this.#socket.connect();
-		if (!this.#welcomed && this.#welcomeTimer === null) this.#armWelcomeTimer();
+		if (!this.#welcomed && this.#welcomeTimer === null) {
+			this.#welcomeTimer = setTimeout(() => {
+				this.#welcomeTimer = null;
+				if (!this.#welcomed) this.#end("timed out waiting for the host's welcome");
+			}, WELCOME_TIMEOUT_MS);
+		}
 	}
 
 	close(): void {
-		this.#end("closed");
+		this.#clearWelcomeTimer();
+		this.#clearSnapshotProgressTimer();
+		this.#socket.close();
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -188,13 +182,10 @@ export class GuestClient {
 	}
 
 	sendPrompt(text: string): void {
-		if (this.#phase !== "live" || this.#readOnly) return;
 		this.#socket.send({ t: "prompt", text });
 	}
 
 	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {
-		if (this.#phase !== "live" || this.#readOnly) return;
-		if (this.#uiRequest?.reqId !== reqId && !this.#uiRequestQueue.some(request => request.reqId === reqId)) return;
 		this.#socket.send({ t: "ui-response", reqId, value });
 		if (this.#uiRequest?.reqId === reqId) {
 			this.#showNextUiRequest();
@@ -203,12 +194,10 @@ export class GuestClient {
 	}
 
 	sendAbort(): void {
-		if (this.#phase !== "live" || this.#readOnly) return;
 		this.#socket.send({ t: "abort" });
 	}
 
 	sendAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text?: string): void {
-		if (this.#phase !== "live" || this.#readOnly) return;
 		this.#socket.send({ t: "agent-cmd", cmd, agentId, text });
 	}
 
@@ -229,32 +218,12 @@ export class GuestClient {
 		return promise;
 	}
 
-	/**
-	 * `/move` (or `/add-dir`) directory candidates from the host filesystem.
-	 * Resolves `null` when no answer arrives (10s timeout, session end, or a
-	 * host that predates `browse-dirs`); callers treat that as "no suggestions".
-	 */
-	fetchDirSuggestions(prefix: string): Promise<readonly CollabDirEntry[] | null> {
-		if (this.#phase !== "live" || this.#readOnly) return Promise.resolve(null);
-		const reqId = ++this.#reqSeq;
-		const { promise, resolve } = Promise.withResolvers<readonly CollabDirEntry[] | null>();
-		const timer = setTimeout(() => {
-			this.#pendingDirs.delete(reqId);
-			resolve(null);
-		}, DIR_SUGGEST_TIMEOUT_MS);
-		this.#pendingDirs.set(reqId, { resolve, timer });
-		this.#socket.send({ t: "browse-dirs", reqId, prefix });
-		return promise;
-	}
-
 	/** Test seam: apply a synthetic host frame through the real apply path. */
 	applyFrameForTest(frame: HostFrame): void {
 		this.#applyFrameSafe(frame);
 	}
 
 	#handleOpen(): void {
-		this.#welcomed = false;
-		this.#armWelcomeTimer();
 		this.#socket.send({ t: "hello", proto: COLLAB_PROTO, name: this.#name, writeToken: this.#writeToken });
 		this.#phase = this.#everConnected ? "reconnecting" : "waiting";
 		this.#everConnected = true;
@@ -262,17 +231,12 @@ export class GuestClient {
 	}
 
 	#handleClose(reason: string, willReconnect: boolean): void {
-		this.#clearWelcomeTimer();
 		this.#clearSnapshotProgressTimer();
 		if (this.#phase === "ended") return;
 		if (willReconnect) {
 			this.#phase = "reconnecting";
 			// The next welcome restarts the snapshot; drop the partial one.
 			this.#pendingSnapshot = null;
-			this.#welcomed = false;
-			this.#settlePendingRequests();
-			this.#clearUiRequests();
-			this.#commands = [];
 			this.#commit();
 			return;
 		}
@@ -286,38 +250,14 @@ export class GuestClient {
 		this.#phase = "ended";
 		this.#endedReason = reason;
 		this.#pendingSnapshot = null;
-		this.#welcomed = false;
-		this.#commands = [];
-		this.#settlePendingRequests();
-		this.#clearUiRequests();
-		this.#commit();
-		this.#socket.close();
-	}
-
-	/**
-	 * Settle in-flight round trips: the room that would answer them is gone
-	 * (session end, or a rotation that closes this socket). Pollers treat the
-	 * `null` as a transient failure and retry from their last cursor.
-	 */
-	#settlePendingRequests(): void {
 		for (const [, pending] of this.#pendingTranscripts) {
 			clearTimeout(pending.timer);
 			pending.resolve(null);
 		}
 		this.#pendingTranscripts.clear();
-		for (const [, pending] of this.#pendingDirs) {
-			clearTimeout(pending.timer);
-			pending.resolve(null);
-		}
-		this.#pendingDirs.clear();
-	}
-
-	#armWelcomeTimer(): void {
-		this.#clearWelcomeTimer();
-		this.#welcomeTimer = setTimeout(() => {
-			this.#welcomeTimer = null;
-			if (!this.#welcomed) this.#end("timed out waiting for the host's welcome");
-		}, WELCOME_TIMEOUT_MS);
+		this.#clearUiRequests();
+		this.#commit();
+		this.#socket.close();
 	}
 
 	#clearWelcomeTimer(): void {
@@ -360,7 +300,6 @@ export class GuestClient {
 	#applyFrame(frame: HostFrame): void {
 		switch (frame.t) {
 			case "welcome":
-				this.#settlePendingRequests();
 				// A fresh welcome (first join or reconnect) restarts the snapshot.
 				// Entries already on screen stay until the new snapshot replaces
 				// them once complete, so a resync never blanks the transcript.
@@ -381,9 +320,6 @@ export class GuestClient {
 				this.#lifecycle = new Map();
 				this.#working = frame.state.isStreaming;
 				this.#readOnly = frame.readOnly === true;
-				// The palette belongs to the session, not the room: drop it until
-				// the replacement room's `commands` frame arrives.
-				this.#commands = [];
 				this.#clearUiRequests();
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
@@ -391,7 +327,6 @@ export class GuestClient {
 					this.#clearSnapshotProgressTimer();
 					this.#phase = "live";
 				} else {
-					this.#phase = "waiting";
 					this.#armSnapshotProgressTimer();
 				}
 				this.#endedReason = null;
@@ -464,21 +399,10 @@ export class GuestClient {
 					this.#lifecycle = new Map(this.#lifecycle).set(payload.id, payload);
 				}
 				break;
-			case "ui-request": {
-				if (!this.#welcomed || this.#readOnly) return;
-				if (this.#uiRequest?.reqId === frame.request.reqId) {
-					this.#uiRequest = frame.request;
-				} else if (this.#uiRequestQueue.some(request => request.reqId === frame.request.reqId)) {
-					this.#uiRequestQueue = this.#uiRequestQueue.map(request =>
-						request.reqId === frame.request.reqId ? frame.request : request,
-					);
-				} else if (this.#uiRequest) {
-					this.#uiRequestQueue = [...this.#uiRequestQueue, frame.request];
-				} else {
-					this.#uiRequest = frame.request;
-				}
+			case "ui-request":
+				if (this.#uiRequest) this.#uiRequestQueue = [...this.#uiRequestQueue, frame.request];
+				else this.#uiRequest = frame.request;
 				break;
-			}
 			case "ui-request-end":
 				if (this.#uiRequest?.reqId === frame.reqId) this.#showNextUiRequest();
 				else this.#uiRequestQueue = this.#uiRequestQueue.filter(request => request.reqId !== frame.reqId);
@@ -496,34 +420,9 @@ export class GuestClient {
 				}
 				break;
 			}
-			case "commands":
-				if (!this.#welcomed) return;
-				this.#commands = frame.commands;
-				break;
-			case "dir-suggestions": {
-				const pending = this.#pendingDirs.get(frame.reqId);
-				if (pending) {
-					this.#pendingDirs.delete(frame.reqId);
-					clearTimeout(pending.timer);
-					pending.resolve(frame.entries);
-				}
-				break;
-			}
 			case "bye":
-				// The host is rotating its room (session switch, `/new`, `/fork`,
-				// restart): the relay closes this socket and the same link rejoins
-				// the replacement room. Stay in the reconnect loop and surface the
-				// reason instead of ending the page.
-				this.#pushNotice("info", frame.reason);
-				this.#phase = "reconnecting";
-				this.#welcomed = false;
-				this.#clearWelcomeTimer();
-				this.#clearSnapshotProgressTimer();
-				this.#pendingSnapshot = null;
-				this.#clearUiRequests();
-				this.#commands = [];
-				this.#settlePendingRequests();
-				break;
+				this.#end(frame.reason);
+				return; // #end already committed
 			case "error":
 				if (!this.#welcomed) {
 					// Pre-welcome errors are the host's targeted reply to our
@@ -662,7 +561,6 @@ export class GuestClient {
 			working: this.#working,
 			readOnly: this.#readOnly,
 			uiRequest: this.#uiRequest,
-			commands: this.#commands,
 			notices: this.#notices,
 			loading: this.#pendingSnapshot && {
 				received: this.#pendingSnapshot.entries.length,

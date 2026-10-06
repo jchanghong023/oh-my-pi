@@ -425,18 +425,9 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
-	opts?: {
-		fetch?: FetchImpl;
-		protectedResource?: string;
-		protectedScopes?: string;
-		signal?: AbortSignal;
-		depth?: number;
-	},
+	opts?: { fetch?: FetchImpl; protectedResource?: string; protectedScopes?: string; signal?: AbortSignal },
 ): Promise<OAuthEndpoints | null> {
 	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
-	// RFC-legal discovery is at most resource → authorization-server (one hop);
-	// anything deeper is a cycle or misconfiguration, which must not recurse forever.
-	const depth = opts?.depth ?? 0;
 	const issuerWellKnownPaths = [
 		"/.well-known/oauth-authorization-server",
 		"/.well-known/openid-configuration",
@@ -594,7 +585,7 @@ export async function discoverOAuthEndpoints(
 									: protectedResource;
 
 							for (const discoveredAuthServer of authServers) {
-								if (visitedAuthServers.has(discoveredAuthServer) || depth >= 3) {
+								if (visitedAuthServers.has(discoveredAuthServer)) {
 									continue;
 								}
 								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer, undefined, {
@@ -602,7 +593,6 @@ export async function discoverOAuthEndpoints(
 									protectedResource: discoveredProtectedResource,
 									protectedScopes: readMetadataScopes(metadata) ?? protectedScopes,
 									signal: opts?.signal,
-									depth: depth + 1,
 								});
 								if (discovered) return discovered;
 							}
