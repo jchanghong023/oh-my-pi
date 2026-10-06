@@ -649,6 +649,19 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
 	return scanSessionDirReadOnly(sessionDir, storage, true);
 }
 
+/**
+ * Drop the cached scan results for `file` so the next listing re-reads it
+ * regardless of stat identity. Needed after same-size rewrites published via
+ * temp-file rename: the fixed-width title slot keeps `size` unchanged and the
+ * renamed file can carry the same coarse filesystem timestamp as the previous
+ * write, so the `mtimeMs`+`size` cache key alone cannot detect the change.
+ */
+export function invalidateSessionScan(file: string, storage: SessionStorage): void {
+	const cache = getSessionScanCache(storage);
+	cache.delete(`s\0${file}`);
+	cache.delete(`h\0${file}`);
+}
+
 /** List all sessions across all project directories (newest first). */
 export async function listAllSessions(
 	storage: SessionStorage = new FileSessionStorage(),

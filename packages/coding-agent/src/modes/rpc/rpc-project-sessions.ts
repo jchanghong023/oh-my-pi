@@ -16,7 +16,7 @@ import { logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import type { EventBus } from "../../utils/event-bus";
 import type { AgentSession } from "../../session/agent-session";
 import type { MCPManager } from "../../mcp";
-import { listSessions, type SessionInfo } from "../../session/session-listing";
+import { invalidateSessionScan, listSessions, type SessionInfo } from "../../session/session-listing";
 import { parseSessionContent } from "../../session/session-loader";
 import { overlayTitleSlotContent } from "../../session/session-title-slot";
 import { FileSessionStorage } from "../../session/session-storage";
@@ -776,6 +776,10 @@ export class RpcProjectSessionContainer {
 		);
 		if (!committed)
 			throw new RpcProjectSessionError("revision_conflict", `Session ${sessionId} changed during rename`);
+		// The title slot keeps the file size unchanged and a temp-file rename can
+		// carry the same coarse filesystem timestamp as the pre-rename scan, so
+		// the listing cache would keep serving the pre-rename summary.
+		invalidateSessionScan(entry.path, this.#storage);
 		const revision = this.#bump();
 		const updated = await this.#locateListed(sessionId);
 		return { summary: summaryFromListed(updated, this.#resourceRevision(sessionId, updated.path)), revision };
