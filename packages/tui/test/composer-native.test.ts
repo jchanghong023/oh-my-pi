@@ -264,6 +264,101 @@ describe("native queued messages", () => {
 		const single = new QueuedMessagesBand([{ label: "Steering", messages: ["only"] }], "alt+up", onEdit);
 		expect(byRole(single.describe(), "omp.queue.count")).toBeUndefined();
 	});
+});
+
+describe("native autocomplete list", () => {
+	it("marks the typed prefix, names the icon and shows live state as the value", () => {
+		const list = new SelectList(
+			[
+				{
+					value: "model",
+					label: "model",
+					icon: "\uec19",
+					iconName: "model",
+					description: "Model: demo/demo",
+					nativeDetail: "Select model",
+					state: "demo/demo",
+				},
+				{ value: "move", label: "move", description: "Move the session" },
+			],
+			8,
+			getSelectListTheme(),
+		);
+		list.setNativeMark("mo");
+		const described = list.describe(cx);
+		const listNode = nodes(described).find(n => n.k === "list")!;
+		expect(listNode.p).toMatchObject({ selected: "model" });
+		expect(listNode.p !== undefined && "filter" in listNode.p ? listNode.p.filter : undefined).toBeUndefined();
+		const [model, move] = (listNode.c ?? []).filter(isNode);
+		expect(model!.p).toMatchObject({
+			icon: "model",
+			label: [{ t: "mo", s: "mark" }, { t: "del" }],
+			detail: [{ t: "Select model", s: "muted" }],
+			value: [{ t: "demo/demo", s: "muted" }],
+		});
+		expect(move!.p).toMatchObject({ label: [{ t: "mo", s: "mark" }, { t: "ve" }] });
+	});
+});
+
+describe("native composer without a status strip", () => {
+	it("docks no status bar; the composer carries model, effort, context and usage", () => {
+		setNativeRendering(true);
+		const composer = new Composer({
+			terminal: new VirtualTerminal(80, 24),
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+			status: {
+				statusLine: {
+					settings: {
+						preset: "custom",
+						leftSegments: ["model", "path", "git", "hostname"],
+						rightSegments: ["context_pct", "cost"],
+					},
+					gitEnabled: false,
+					autoThinking: false,
+					fastMode: false,
+					usingSubscription: false,
+					autoCompactEnabled: false,
+					compactionBoundaries: null,
+				},
+			},
+		});
+		composer.start();
+		try {
+			composer.editor.composerState = () => ({ running: false, thinking: "high" });
+			const { dock } = composer.describeSurface();
+			expect(dock).toEqual([composer.editor]);
+			const described = composer.editor.describe(cx);
+			expect(nodes(described).some(n => n.p !== undefined && "role" in n.p && n.p.role === "omp.status")).toBe(
+				false,
+			);
+
+			// The context hairline leads the composer; the bar closes it.
+			const [first] = (described.c ?? []).filter(isNode);
+			expect(first).toMatchObject({
+				k: "meter",
+				p: { role: "omp.composer.context", style: "bar", actions: { click: "status.context" } },
+			});
+			const bar = byRole(described, "omp.composer.bar")!;
+			expect(
+				(bar.c ?? []).filter(isNode).map(n => (n.p !== undefined && "role" in n.p ? n.p.role : undefined)),
+			).toEqual([
+				"omp.composer.model",
+				"omp.composer.effort",
+				"omp.composer.extras",
+				"omp.composer.usage",
+				"omp.composer.send",
+			]);
+			const model = byRole(bar, "omp.composer.model")!;
+			expect(model.p).toMatchObject({ actions: { click: "status.model" } });
+			expect(nodes(model).map(n => n.k)).toEqual(["row", "icon", "text", "icon"]);
+			// Path and branch belong to Tern's pane header; the rest stays as a fact.
+			const extras = byRole(bar, "omp.composer.extras")!;
+			expect((extras.c ?? []).filter(isNode).map(n => n.key)).toEqual(["hostname"]);
+			expect(byRole(bar, "omp.composer.usage")?.p).toMatchObject({ actions: { click: "status.cost" } });
+		} finally {
+			composer.stop();
+		}
+	});
 
 	it("sends the model chip's click to the status line's model action", () => {
 		const line = createStartupStatusLine({
