@@ -2565,11 +2565,7 @@ export class RpcSessionHost {
 		// that never run through this dispose.
 		try {
 			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
-			await this.#btw.close().catch(btwError => {
-				const message = toError(btwError).message;
-				logger.error(message);
-				this.#output({ type: "notice", level: "error", message, source: "btw-history" });
-			});
+			await this.closeBtw();
 			await this.#live.stop();
 		} finally {
 			this.subagentRegistry?.dispose();
@@ -2612,6 +2608,20 @@ export class RpcSessionHost {
 	 */
 	stopLive(): Promise<void> {
 		return this.#live.stop();
+	}
+
+	/**
+	 * Flushes the running side question's checkpoint; a failure is reported as a
+	 * `notice` frame instead of skipping it. Idempotent: every process-exit path
+	 * (`dispose`, the shutdown coordinator's `disposeAndExit`) must close the
+	 * side question before the session it checkpoints into disposes.
+	 */
+	closeBtw(): Promise<void> {
+		return this.#btw.close().catch(btwError => {
+			const message = toError(btwError).message;
+			logger.error(message);
+			this.#output({ type: "notice", level: "error", message, source: "btw-history" });
+		});
 	}
 
 	#onPromptError(id: string | undefined, command: string): (promptError: Error) => void {

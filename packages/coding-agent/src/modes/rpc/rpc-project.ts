@@ -1605,10 +1605,12 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		"steer_subagent",
 		"live_start",
 		"execute_command",
-		// Synchronous like the single-session BACKGROUND_COMMANDS: must overtake a
-		// `btw` still starting or a long serial command on the same session.
-		"btw_cancel",
 	]);
+	// Synchronous like the single-session BACKGROUND_COMMANDS: `btw_cancel` must
+	// overtake a `btw` still starting or a long serial command on the same
+	// session, which queueSerial's backgrounded set cannot do (those still wait
+	// for earlier queued work) — it bypasses the queue entirely instead.
+	const projectOvertakeTypes = new Set(["btw_cancel"]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
@@ -1676,6 +1678,12 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		);
 	};
 	const queueSerial = (parsed: Record<string, unknown>): void => {
+		// Overtaking frames never join the queue: they must pass a still-starting
+		// `btw` or a long serial command on the same session.
+		if (projectOvertakeTypes.has(String(parsed.type))) {
+			track(dispatch(parsed));
+			return;
+		}
 		const key = typeof parsed.sessionId === "string" ? parsed.sessionId : "project";
 		const previous = serialTails.get(key) ?? Promise.resolve();
 		const start = (): Promise<void> => {

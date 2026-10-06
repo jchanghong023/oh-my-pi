@@ -388,6 +388,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 */
 	const disposeAndExit = async (): Promise<never> => {
 		try {
+			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
+			// Runs on every exit path: this one (extension pi.shutdown()) never goes through
+			// host.dispose, which the stdin-EOF path uses.
+			await host.closeBtw();
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			await host.stopLive();
 			await session.dispose();
