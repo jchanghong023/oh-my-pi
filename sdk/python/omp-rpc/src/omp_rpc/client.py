@@ -57,27 +57,8 @@ UiRequestListener = Callable[[ExtensionUiRequest], None]
 ProtocolErrorListener = Callable[["RpcProtocolError"], None]
 ListenerErrorListener = Callable[["ListenerErrorEvent"], None]
 HostToolCompletedListener = Callable[["HostToolCompletedEvent"], None]
-ProjectFrameListener = Callable[["ProjectFrameEvent"], None]
 TListener = TypeVar("TListener")
 THistoryItem = TypeVar("THistoryItem")
-
-
-@dataclass(slots=True, frozen=True)
-class ProjectFrameEvent:
-    """Raw frame plus the project-mode session envelope typed decoders drop.
-
-    Project-mode servers stamp outbound frames with ``processInstanceId`` /
-    ``sessionId`` / ``sessionGeneration`` (rpc-ui-protocol.md §15.1). The
-    generated notification decoders model the upstream wire only, so consumers
-    that must attribute frames across parallel sessions subscribe here and read
-    the scope fields directly.
-    """
-
-    frame_type: str
-    payload: JsonObject
-    session_id: str | None
-    session_generation: str | None
-    notification: RpcNotification | None = None
 
 _ASYNC_COMMANDS = frozenset({"prompt", "abort_and_prompt"})
 _DEFAULT_ERROR_HISTORY_LIMIT = 128
@@ -583,7 +564,6 @@ class RpcClient(WireClient):
 
         self._notification_listeners: list[NotificationListener] = []
         self._event_listeners: list[AgentEventListener] = []
-        self._project_frame_listeners: list[ProjectFrameListener] = []
         # Frame `type` → listeners registered through the generated `on_<type>` methods.
         self._typed_listeners: dict[str, list[Callable[..., None]]] = {}
         self._protocol_error_listeners: list[ProtocolErrorListener] = []
@@ -838,17 +818,6 @@ class RpcClient(WireClient):
         self._notification_listeners.append(listener)
         return lambda: self._remove_listener(self._notification_listeners, listener)
 
-    def on_project_frame(self, listener: ProjectFrameListener) -> Callable[[], None]:
-        """Subscribe to frames carrying the project-mode session envelope.
-
-        Fired for every decoded frame stamped with ``sessionId`` /
-        ``sessionGeneration`` (subagent_lifecycle/progress/event,
-        session_settled, prompt_result, agent events, ...) so multi-session
-        consumers can attribute them; single-session servers emit none.
-        """
-        self._project_frame_listeners.append(listener)
-        return lambda: self._remove_listener(self._project_frame_listeners, listener)
-
     def on_protocol_error(self, listener: ProtocolErrorListener) -> Callable[[], None]:
         self._protocol_error_listeners.append(listener)
         return lambda: self._remove_listener(self._protocol_error_listeners, listener)
@@ -862,32 +831,6 @@ class RpcClient(WireClient):
     ) -> Callable[[], None]:
         """Subscribe to frames this client does not model or could not parse."""
         return self._listen("unknown", listener)
-
-    def negotiate_protocol_v3(self) -> JsonObject:
-        """Negotiate the fork protocol (v3, rpc-ui-protocol.md).
-
-        After success the server enables its fork command/frame surface; use
-        ``request_raw`` for fork commands and ``on_unknown_notification`` to
-        observe fork bypass/event frames (they are not typed notifications).
-        """
-        response = self._request("negotiate_protocol", protocolVersion=3)
-        if response.get("protocolVersion") != 3:
-            raise RpcProtocolError(
-                {"command": "negotiate_protocol", "error": "Fork protocol v3 negotiation failed"}
-            )
-        self._protocol_version = 3
-        self._protocol_v2_enabled = True
-        return response
-
-    def send_fork_frame(self, frame: Mapping[str, JsonValue]) -> None:
-        """Write a raw v3 bypass frame (permission_response/ask_response/ask_pause)."""
-        if self._protocol_version != 3:
-            raise RpcProtocolError(
-                {"command": "send_fork_frame", "error": "Fork protocol v3 has not been negotiated"}
-            )
-        process = self._require_process()
-        payload: JsonObject = {str(key): value for key, value in frame.items()}
-        self._write_json(process, payload)
 
     def _listen(
         self, frame_type: str, listener: Callable[..., None]
@@ -1031,7 +974,7 @@ class RpcClient(WireClient):
         return self.set_todos(())
 
     def get_messages(self) -> tuple[AgentMessage, ...]:
-        if self._protocol_version in (2, 3):
+        if self._protocol_version == 2:
             try:
                 messages: list[AgentMessage] = []
                 seen_cursors: set[str] = set()
@@ -1532,11 +1475,8 @@ class RpcClient(WireClient):
 
         if not bool(response.get("success", False)):
             raw_code = response.get("code")
-            raw_command = response.get("command")
             raise RpcCommandError(
-                command=raw_command
-                if isinstance(raw_command, str) and raw_command != "error"
-                else command_type,
+                command=str(response.get("command", command_type)),
                 error=str(response.get("error", "")),
                 code=raw_code if isinstance(raw_code, str) else None,
             )
@@ -1581,23 +1521,6 @@ class RpcClient(WireClient):
         if tool_name is not None:
             payload["toolName"] = tool_name
 
-    @staticmethod
-    def _session_scope(payload: Mapping[str, object]) -> dict[str, str]:
-        """Project-mode session stamp to echo back on host replies.
-
-        Project-mode servers stamp ``host_tool_call`` / ``host_uri_request``
-        frames with the owning session; replies without the same stamp are
-        rejected as ``stale_session`` by the project host.
-        """
-        scope: dict[str, str] = {}
-        session_id = payload.get("sessionId")
-        session_generation = payload.get("sessionGeneration")
-        if isinstance(session_id, str):
-            scope["sessionId"] = session_id
-        if isinstance(session_generation, str):
-            scope["sessionGeneration"] = session_generation
-        return scope
-
     def _handle_host_tool_call(self, payload: JsonObject) -> None:
         request_id = payload.get("id")
         tool_name = payload.get("toolName")
@@ -1609,7 +1532,6 @@ class RpcClient(WireClient):
             or not isinstance(tool_call_id, str)
         ):
             return
-        scope = self._session_scope(payload)
         # Remember the dispatch so tool_execution_* events for this call id can
         # be renamed from the transport tool to the host tool that ran; see
         # _normalize_host_tool_event.
@@ -1629,7 +1551,6 @@ class RpcClient(WireClient):
                         "details": {},
                     },
                     "isError": True,
-                    **scope,
                 }
             )
             return
@@ -1657,7 +1578,6 @@ class RpcClient(WireClient):
                         "details": {},
                     },
                     "isError": True,
-                    **scope,
                 }
             )
             return
@@ -1676,7 +1596,6 @@ class RpcClient(WireClient):
                             "type": "host_tool_update",
                             "id": request_id,
                             "partialResult": result,
-                            **scope,
                         }
                     ),
                 )
@@ -1694,7 +1613,6 @@ class RpcClient(WireClient):
                         "type": "host_tool_result",
                         "id": request_id,
                         "result": result,
-                        **scope,
                     }
                 )
             except Exception as exc:
@@ -1709,7 +1627,6 @@ class RpcClient(WireClient):
                             "details": {},
                         },
                         "isError": True,
-                        **scope,
                     }
                 )
             finally:
@@ -1727,16 +1644,13 @@ class RpcClient(WireClient):
         if pending_call is not None:
             pending_call.cancel_event.set()
 
-    def _send_host_uri_error(
-        self, request_id: str, message: str, scope: Mapping[str, str] | None = None
-    ) -> None:
+    def _send_host_uri_error(self, request_id: str, message: str) -> None:
         self._send_notification(
             {
                 "type": "host_uri_result",
                 "id": request_id,
                 "error": message,
                 "isError": True,
-                **(scope or {}),
             }
         )
 
@@ -1750,10 +1664,9 @@ class RpcClient(WireClient):
             or not isinstance(url, str)
         ):
             return
-        scope = self._session_scope(payload)
         if operation not in ("read", "write"):
             self._send_host_uri_error(
-                request_id, f"Unsupported host URI operation: {operation}", scope
+                request_id, f"Unsupported host URI operation: {operation}"
             )
             return
 
@@ -1762,7 +1675,7 @@ class RpcClient(WireClient):
 
             parsed = urlparse(url)
         except ValueError:
-            self._send_host_uri_error(request_id, f"Could not parse host URI: {url}", scope)
+            self._send_host_uri_error(request_id, f"Could not parse host URI: {url}")
             return
         scheme = (parsed.scheme or "").lower()
         uri = next(
@@ -1771,7 +1684,7 @@ class RpcClient(WireClient):
         )
         if uri is None:
             self._send_host_uri_error(
-                request_id, f'Host URI scheme "{scheme}://" is not registered', scope
+                request_id, f'Host URI scheme "{scheme}://" is not registered'
             )
             return
 
@@ -1779,7 +1692,6 @@ class RpcClient(WireClient):
             self._send_host_uri_error(
                 request_id,
                 f'Host URI scheme "{scheme}://" was not registered with a write handler',
-                scope,
             )
             return
 
@@ -1803,7 +1715,6 @@ class RpcClient(WireClient):
                             "type": "host_uri_result",
                             "id": request_id,
                             **result_fields,
-                            **scope,
                         }
                     )
                 else:
@@ -1814,12 +1725,12 @@ class RpcClient(WireClient):
                     if pending.cancel_event.is_set():
                         return
                     self._send_notification(
-                        {"type": "host_uri_result", "id": request_id, **scope}
+                        {"type": "host_uri_result", "id": request_id}
                     )
             except Exception as exc:
                 if pending.cancel_event.is_set():
                     return
-                self._send_host_uri_error(request_id, str(exc), scope)
+                self._send_host_uri_error(request_id, str(exc))
             finally:
                 self._pending_host_uri_requests.pop(request_id, None)
 
@@ -2068,27 +1979,6 @@ class RpcClient(WireClient):
                     self._notification_listeners,
                     notification,
                 )
-
-                if self._project_frame_listeners:
-                    session_id = payload.get("sessionId")
-                    session_generation = payload.get("sessionGeneration")
-                    if isinstance(session_id, str) or isinstance(session_generation, str):
-                        self._dispatch_listeners(
-                            "project_frame",
-                            notification.type,
-                            self._project_frame_listeners,
-                            ProjectFrameEvent(
-                                frame_type=notification.type,
-                                payload=payload,
-                                session_id=session_id if isinstance(session_id, str) else None,
-                                session_generation=(
-                                    session_generation
-                                    if isinstance(session_generation, str)
-                                    else None
-                                ),
-                                notification=notification,
-                            ),
-                        )
 
                 # Client state first, so a listener observes it already updated.
                 if isinstance(notification, ReadyEvent):

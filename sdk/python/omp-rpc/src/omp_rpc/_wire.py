@@ -562,8 +562,6 @@ class QueuedMessagesState:
     """Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`."""
     steering: tuple[str, ...]
     follow_up: tuple[str, ...]
-    live_steered: int = 0
-    """Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1094,8 +1092,6 @@ class QueueUpdateEvent:
     type: Literal["queue_update"] = "queue_update"
     steering: tuple[str, ...]
     follow_up: tuple[str, ...]
-    live_steered: int = 0
-    """Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1728,7 +1724,6 @@ def parse_queued_messages_state(value: object, path: str = "QueuedMessagesState"
     return QueuedMessagesState(
         steering=required(payload, "steering", array(decode_str), path),
         follow_up=required(payload, "followUp", array(decode_str), path),
-        live_steered=defaulted(payload, "liveSteered", decode_int, path, 0),
     )
 
 
@@ -2346,7 +2341,6 @@ def parse_queue_update_event(value: object, path: str = "QueueUpdateEvent") -> Q
     return QueueUpdateEvent(
         steering=required(payload, "steering", array(decode_str), path),
         follow_up=required(payload, "followUp", array(decode_str), path),
-        live_steered=defaulted(payload, "liveSteered", decode_int, path, 0),
     )
 
 

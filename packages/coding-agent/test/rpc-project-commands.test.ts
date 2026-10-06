@@ -18,7 +18,7 @@ let globalSettingsReady: Promise<unknown> | undefined;
 beforeAll(async () => {
 	// Skill discovery and settings access route through the process-global
 	// settings singleton; tests initialize it in memory (never touches the
-	// user's real config). Same memoized shape as rpc-fork-config.test.ts.
+	// user's real config).
 	globalSettingsReady ??= Settings.init({ inMemory: true });
 	await globalSettingsReady;
 });

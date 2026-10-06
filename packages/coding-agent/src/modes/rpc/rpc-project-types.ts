@@ -9,9 +9,6 @@
  * sessions loaded. Wire framing, negotiation and the single-session legacy
  * mode are unchanged; these types extend the v3 fork contract only.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { FileEntry } from "../../session/session-entries";
-import type { RpcSubagentSnapshot } from "./rpc-types";
 
 /** Stable identity of the single OMP process backing one project connection. */
 export interface RpcProjectIdentity {
@@ -25,9 +22,6 @@ export interface RpcProjectCapabilities {
 	readonly multiSession: true;
 	readonly commandCompletion: true;
 	readonly executeCommand: true;
-	readonly skillManagement: true;
-	readonly subagentHistory: true;
-	readonly subagentControl: true;
 	readonly modelRoleConfig: true;
 }
 
@@ -36,9 +30,6 @@ export const RPC_PROJECT_CAPABILITIES: RpcProjectCapabilities = {
 	multiSession: true,
 	commandCompletion: true,
 	executeCommand: true,
-	skillManagement: true,
-	subagentHistory: true,
-	subagentControl: true,
 	modelRoleConfig: true,
 };
 
@@ -336,174 +327,6 @@ export interface RpcProjectExecuteCommandResult {
 	readonly error?: { readonly message: string; readonly code?: string };
 }
 
-// ---------------------------------------------------------------------------
-// Skill catalog & management (rpc-ui-protocol.md §14.6)
-// ---------------------------------------------------------------------------
-
-/** Opaque source + canonical concrete SKILL.md identity; names/aliases may change independently. */
-export function formatRpcSkillId(source: string, canonicalFilePath: string): string {
-	return `${source}/${Buffer.from(canonicalFilePath, "utf8").toString("base64url")}`;
-}
-
-export type RpcSkillState = "enabled" | "disabled" | "ignored" | "source_disabled" | "shadowed";
-
-export interface RpcProjectSkillSummary {
-	readonly skillId: string;
-	readonly name: string;
-	readonly description: string;
-	/** `"<provider>:<level>"`, e.g. `"native:user"`. */
-	readonly source: string;
-	/** `"user" | "project" | "builtin" | "package" | "custom"`-style scope label. */
-	readonly scope: string;
-	readonly writableScopes: readonly ("user" | "project")[];
-	readonly filePath: string;
-	readonly hidden: boolean;
-	/** Effective-vs-management state; management view may list non-active rows. */
-	readonly state: RpcSkillState;
-	/** True in the effective view (the version a session would actually use). */
-	readonly effective: boolean;
-	/** When shadowed by a same-name skill from a higher-priority source. */
-	readonly shadowedBy?: string;
-	readonly revision: RpcRevision;
-	/** Management actions valid for this row. */
-	readonly actions: readonly ("enable" | "disable" | "copy" | "delete")[];
-}
-
-export interface RpcProjectListSkillsCommand extends RpcProjectCommandBase {
-	readonly type: "list_skills";
-	/** `management`: full catalog incl. disabled/ignored/shadowed; `effective`: session view. */
-	readonly view: "management" | "effective";
-	readonly sessionId?: string;
-	readonly cursor?: string;
-	readonly limit?: number;
-}
-
-export interface RpcProjectListSkillsResult extends RpcProjectPage<RpcProjectSkillSummary> {
-	readonly warnings: readonly string[];
-}
-
-export interface RpcProjectSetSkillEnabledCommand extends RpcProjectCommandBase {
-	readonly type: "set_skill_enabled";
-	readonly skillId: string;
-	readonly enabled: boolean;
-	readonly scope: "user";
-	readonly expectedRevision: RpcRevision;
-}
-
-export interface RpcProjectSetSkillEnabledResult {
-	readonly skillId: string;
-	readonly enabled: boolean;
-	readonly effective: boolean;
-	/** Why the toggle did not take effect (source disabled, shadowed, …). */
-	readonly pendingReason?: string;
-	readonly revision: RpcRevision;
-	readonly adoptedSessions: readonly string[];
-	readonly pendingSessions: readonly string[];
-}
-
-export interface RpcProjectDeleteSkillCommand extends RpcProjectCommandBase {
-	readonly type: "delete_skill";
-	readonly skillId: string;
-	readonly expectedRevision: RpcRevision;
-}
-
-export interface RpcProjectDeleteSkillResult {
-	readonly deleted: true;
-	readonly remainingPaths?: readonly string[];
-	readonly revision: RpcRevision;
-}
-
-export interface RpcProjectReloadSkillsCommand extends RpcProjectCommandBase {
-	readonly type: "reload_skills";
-	readonly scope: "user" | "project";
-}
-
-export interface RpcProjectReloadSkillsResult {
-	readonly revision: RpcRevision;
-	readonly warnings: readonly string[];
-	/** Sessions that already adopted the new catalog. */
-	readonly adoptedSessions: readonly string[];
-	/** Loaded sessions that keep their current snapshot until a safe boundary. */
-	readonly pendingSessions: readonly string[];
-}
-
-// ---------------------------------------------------------------------------
-// Subagent history catalog & control (rpc-ui-protocol.md §14.8)
-// ---------------------------------------------------------------------------
-
-export type RpcProjectSubagentStatus = "running" | "completed" | "failed" | "aborted" | "parked" | "interrupted";
-
-export interface RpcProjectSubagentSummary {
-	readonly subagentId: string;
-	readonly name: string;
-	readonly sessionId: string;
-	readonly parentAgentId?: string;
-	readonly agentSource?: string;
-	readonly description?: string;
-	readonly task?: string;
-	readonly assignment?: string;
-	readonly progress?: RpcSubagentSnapshot["progress"];
-	readonly status: RpcProjectSubagentStatus;
-	/** Whether the persisted transcript is readable right now. */
-	readonly recordReadable: boolean;
-	readonly sessionFile?: string;
-	readonly parentToolCallId?: string;
-	readonly index?: number;
-	readonly lastUpdate?: string;
-	readonly availableActions: readonly ("send_message" | "stop")[];
-}
-
-export interface RpcProjectGetSubagentsCommand extends RpcProjectCommandBase {
-	readonly type: "get_subagents";
-	/** Parent session scope; required in project mode. */
-	readonly sessionId?: string;
-	readonly status?: "running" | "finished";
-	readonly cursor?: string;
-	readonly limit?: number;
-}
-
-export interface RpcProjectGetSubagentsResult extends RpcProjectPage<RpcProjectSubagentSummary> {}
-
-export interface RpcProjectGetSubagentMessagesCommand extends RpcProjectCommandBase {
-	readonly type: "get_subagent_messages";
-	readonly sessionId: string;
-	readonly subagentId: string;
-	readonly fromByte?: number;
-	readonly maxBytes?: number;
-}
-
-export interface RpcProjectSubagentMessagesResult {
-	readonly subagentId: string;
-	readonly sessionFile: string;
-	readonly fromByte: number;
-	readonly nextByte: number;
-	readonly reset: boolean;
-	readonly hasMore: boolean;
-	readonly entries: FileEntry[];
-	readonly messages: AgentMessage[];
-	/** Present when a single record exceeds `maxBytes` and cannot be returned whole. */
-	readonly recordTooLarge?: { readonly byteLength: number };
-}
-
-export interface RpcProjectControlSubagentCommand extends RpcProjectSessionCommandBase {
-	readonly type: "control_subagent";
-	readonly subagentId: string;
-	readonly action: "send_message" | "stop";
-	/** Required for `send_message`. */
-	readonly message?: string;
-}
-
-export interface RpcProjectControlSubagentResult {
-	readonly subagentId: string;
-	readonly action: "send_message" | "stop";
-	/** Synchronous result, or `accepted` for a tracked async operation. */
-	readonly status: "sent" | "queued" | "stopped" | "stopping" | "accepted";
-	readonly detail?: string;
-	/** IRC delivery receipts for `send_message`, when produced. */
-	readonly receipts?: readonly { readonly to: string; readonly outcome: string; readonly error?: string }[];
-}
-
-// ---------------------------------------------------------------------------
 // Project command union and typed response payloads
 // ---------------------------------------------------------------------------
 
@@ -517,14 +340,7 @@ export type RpcProjectCommand =
 	| RpcProjectGetModelRolesCommand
 	| RpcProjectSetModelRoleCommand
 	| RpcProjectCompleteCommandCommand
-	| RpcProjectExecuteCommandCommand
-	| RpcProjectListSkillsCommand
-	| RpcProjectSetSkillEnabledCommand
-	| RpcProjectDeleteSkillCommand
-	| RpcProjectReloadSkillsCommand
-	| RpcProjectGetSubagentsCommand
-	| RpcProjectGetSubagentMessagesCommand
-	| RpcProjectControlSubagentCommand;
+	| RpcProjectExecuteCommandCommand;
 
 // ---------------------------------------------------------------------------
 // Event frames (server → client), project mode stamps included
@@ -539,12 +355,6 @@ export interface RpcProjectFrameStamp {
 
 export interface RpcProjectSessionsChangedFrame extends RpcProjectFrameStamp {
 	readonly type: "sessions_changed";
-	readonly revision: RpcRevision;
-}
-
-export interface RpcProjectSkillsChangedFrame extends RpcProjectFrameStamp {
-	readonly type: "skills_changed";
-	readonly scope: "user" | "project";
 	readonly revision: RpcRevision;
 }
 
@@ -564,6 +374,5 @@ export interface RpcProjectOperationResultFrame extends RpcProjectFrameStamp {
 
 export type RpcProjectEventFrame =
 	| RpcProjectSessionsChangedFrame
-	| RpcProjectSkillsChangedFrame
 	| RpcProjectCatalogChangedFrame
 	| RpcProjectOperationResultFrame;

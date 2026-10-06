@@ -256,7 +256,7 @@ function createForkTransport(options?: { negotiatedVersion?: number; negotiation
 						});
 						encoder.setProtocolVersion(2);
 					}
-				} else if (command.type === "get_queue") {
+				} else if (command.type === "set_approval_mode") {
 					emit({
 						id: command.id,
 						type: "response",
@@ -303,11 +303,13 @@ describe("RpcClient fork response transport", () => {
 		const { client, sent } = createForkTransport();
 		try {
 			await client.start();
-			await expect(client.requestFork("get_queue")).rejects.toThrow("has not been negotiated");
+			await expect(client.requestFork("set_approval_mode")).rejects.toThrow("has not been negotiated");
 			expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
 			await client.negotiateProtocolV3();
 			expect(sent[0]).toMatchObject({ type: "negotiate_protocol", protocolVersion: 3 });
-			expect(await client.requestFork<{ payload: string }>("get_queue")).toEqual({ payload: "😀".repeat(270_000) });
+			expect(await client.requestFork<{ payload: string }>("set_approval_mode")).toEqual({
+				payload: "😀".repeat(270_000),
+			});
 			await expect(
 				client.requestFork("set_settings", { scope: "user", key: "theme.dark", value: "titanium" }),
 			).rejects.toMatchObject({
@@ -331,7 +333,7 @@ describe("RpcClient fork response transport", () => {
 					...(options.negotiationError ? { code: "unsupported", message: "fork not supported" } : {}),
 				});
 				expect(client.forkNegotiated).toBe(false);
-				await expect(client.requestFork("get_queue")).rejects.toThrow("has not been negotiated");
+				await expect(client.requestFork("set_approval_mode")).rejects.toThrow("has not been negotiated");
 				expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
 			} finally {
 				await client.stop();

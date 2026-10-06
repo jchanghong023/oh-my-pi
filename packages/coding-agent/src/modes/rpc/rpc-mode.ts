@@ -146,12 +146,7 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
  * the serial tail.)
  * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
-const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
-	"bash",
-	"predict_word",
-	"btw_cancel",
-	"live_start",
-]);
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "predict_word", "live_start"]);
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.

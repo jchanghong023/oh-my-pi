@@ -369,11 +369,6 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 				true,
 			);
 
-			send({ id: "skills", type: "list_skills", view: "management" });
-			const skills = await responseFor(next, "skills");
-			expect(skills).toMatchObject({ id: "skills", command: "list_skills", success: true });
-			expect(Array.isArray((skills.data as { items: unknown[] }).items)).toBe(true);
-
 			// None of the queries above created a session.
 			send({ id: "list-empty", type: "list_sessions" });
 			const listed = await responseFor(next, "list-empty");

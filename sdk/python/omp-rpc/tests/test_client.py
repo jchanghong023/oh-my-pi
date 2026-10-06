@@ -31,7 +31,6 @@ from omp_rpc import (
     RpcCommandError,
     RpcConcurrencyError,
     RpcError,
-    RpcProtocolError,
     RpcTimeoutError,
     SubagentLifecycleEvent,
     host_tool,
@@ -773,7 +772,7 @@ V2_MESSAGES_SERVER = textwrap.dedent(
             {
                 "type": "ready",
                 "protocolVersion": 1,
-                "supportedProtocolVersions": [1, 3] if os.environ.get("V3_ONLY") else [1, 2, 3],
+                "supportedProtocolVersions": [1, 2],
                 "maxFrameBytes": 1024 * 1024,
                 "maxReassembledFrameBytes": 64 * 1024 * 1024,
             }
@@ -790,16 +789,9 @@ V2_MESSAGES_SERVER = textwrap.dedent(
                 {
                     "id": request_id,
                     "type": "response",
-                    **(
-                        {"command": os.environ.get("V3_NEG_COMMAND", command_type)}
-                        if os.environ.get("V3_NEG_COMMAND") != "missing"
-                        else {}
-                    ),
-                    "success": not (os.environ.get("V3_NEG_REJECT") and command["protocolVersion"] == 3),
-                    "error": "fork protocol is unsupported",
-                    "data": {
-                        "protocolVersion": int(os.environ.get("V3_NEG_VERSION", command["protocolVersion"]))
-                    },
+                    "command": command_type,
+                    "success": True,
+                    "data": {"protocolVersion": 2},
                 }
             )
         elif command_type == "get_messages_page":
@@ -1866,37 +1858,6 @@ class RpcClientTests(unittest.TestCase):
             client.abort_and_prompt("say hello")
             client.wait_for_idle(timeout=2.0)
             self.assertEqual(client.get_last_assistant_text(), "pong")
-
-    def test_protocol_v3_negotiation_returns_data_and_enables_chunk_reassembly(self) -> None:
-        with self.make_client(server=V2_MESSAGES_SERVER, env={"V3_ONLY": "1"}) as client:
-            result = client.negotiate_protocol_v3()
-            messages = client.get_messages()
-
-        self.assertEqual(result, {"protocolVersion": 3})
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(len(messages[0]["content"][0]["text"]), 1024 * 1024)
-
-    def test_protocol_v3_rejects_downgrade_and_keeps_bypass_frames_gated(self) -> None:
-        with self.make_client(
-            server=V2_MESSAGES_SERVER, env={"V3_NEG_VERSION": "2"}
-        ) as client:
-            with self.assertRaisesRegex(RpcProtocolError, "v3 negotiation failed"):
-                client.negotiate_protocol_v3()
-            with self.assertRaisesRegex(RpcProtocolError, "has not been negotiated"):
-                client.send_fork_frame({"type": "ask_pause", "targetId": "old"})
-            self.assertEqual(len(client.get_messages()), 1)
-
-    def test_protocol_v3_preserves_the_server_rejection(self) -> None:
-        for raw_command in ("negotiate_protocol", "error", "missing"):
-            with self.subTest(command=raw_command), self.make_client(
-                server=V2_MESSAGES_SERVER,
-                env={"V3_NEG_REJECT": "1", "V3_NEG_COMMAND": raw_command, "V3_ONLY": "1"},
-            ) as client:
-                with self.assertRaisesRegex(RpcCommandError, "fork protocol is unsupported") as error:
-                    client.negotiate_protocol_v3()
-                self.assertEqual(error.exception.command, "negotiate_protocol")
-                with self.assertRaisesRegex(RpcProtocolError, "has not been negotiated"):
-                    client.send_fork_frame({"type": "ask_response", "id": "old", "cancelled": True})
 
     def test_protocol_v2_reassembles_chunked_message_pages(self) -> None:
         with self.make_client(server=V2_MESSAGES_SERVER) as client:

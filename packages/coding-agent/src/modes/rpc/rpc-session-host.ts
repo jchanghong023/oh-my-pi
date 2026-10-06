@@ -66,20 +66,11 @@ import { cfgSpellingAutocomplete } from "../settings";
 import { RpcHostToolBridge } from "./host-tools";
 import { RpcHostUriBridge } from "./host-uris";
 import { RpcForkAskBroker } from "./rpc-fork-ask";
-import { RpcForkConfigController } from "./rpc-fork-config";
-import { RpcForkManageController } from "./rpc-fork-manage";
-import { RpcForkJobController } from "./rpc-fork-jobs";
-import { RpcForkPlanController } from "./rpc-fork-plan";
 import { RpcAttachmentError, resolveRpcAttachments, type RpcForkAttachment } from "./rpc-fork-attachments";
 import { RpcForkPermissionController } from "./rpc-fork-permission";
-import { RpcForkQueueController } from "./rpc-fork-queue";
-import { RpcForkSearchController } from "./rpc-fork-search";
-import { RpcForkSessionController } from "./rpc-fork-sessions";
-import { RpcForkFeedbackController, RpcForkHookTelemetry } from "./rpc-fork-state";
 import { RpcForkHost } from "./rpc-fork-host";
 import { isNegotiableRpcProtocolVersion, RPC_FORK_PROTOCOL_VERSION } from "./rpc-fork-types";
 import { RpcGoalController } from "./rpc-goal";
-import { RpcBtwController } from "./rpc-btw";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { pageRpcMessages, RpcMessagesPageError } from "./rpc-messages";
 import {
@@ -1409,13 +1400,9 @@ export class RpcSessionHost {
 	/** Scheduled goal or fork prompt turns keep settlement busy until admission. */
 	readonly #goalTurnScheduled: () => boolean;
 	#forkPromptTurns = 0;
-	/** Side questions (/btw): ephemeral turns beside the transcript, with their history store. */
-	readonly #btw: RpcBtwController;
 	/** Live voice sessions (`live_start`/`live_stop`/`live_mute`), at most one per host. */
 	readonly #live: RpcLiveBridge;
 	readonly #forkAskBroker: RpcForkAskBroker;
-	readonly #forkPlanController: RpcForkPlanController;
-	readonly #forkHookTelemetry: RpcForkHookTelemetry;
 	readonly #uiContext: RpcExtensionUIContext;
 	readonly #emitRpcTitles: boolean;
 	/** Shutdown request flag (wrapped in object to allow mutation with const). */
@@ -1444,7 +1431,6 @@ export class RpcSessionHost {
 		this.promptResults = new RpcPromptResults(this.session, this.#output, this.#goalTurnScheduled);
 		this.#sessionEvents = new RpcSessionEventForwarder(this.#output);
 		this.#settleWatcher = new RpcSessionSettleWatcher(this.session, this.#output, this.#goalTurnScheduled);
-		this.#btw = new RpcBtwController(this.session, this.#output);
 		// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 		this.#live = new RpcLiveBridge(this.session, this.#output, this.#options.createLiveSession);
 
@@ -1480,17 +1466,6 @@ export class RpcSessionHost {
 		});
 		this.#forkAskBroker = new RpcForkAskBroker(this.forkHost, frame => this.#output(frame));
 		new RpcForkPermissionController(this.forkHost, this.session, { projectMode: this.#options.projectMode });
-		new RpcForkSessionController(this.forkHost, this.session);
-		new RpcForkQueueController(this.forkHost, this.session);
-		new RpcForkJobController(this.forkHost, this.session);
-		new RpcForkSearchController(this.forkHost, this.session);
-		new RpcForkFeedbackController(this.forkHost, this.session);
-		this.#forkHookTelemetry = new RpcForkHookTelemetry(this.forkHost, this.session);
-		this.#forkPlanController = new RpcForkPlanController(this.forkHost, this.session, {
-			projectMode: this.#options.projectMode,
-		});
-		new RpcForkConfigController(this.forkHost, this.session);
-		new RpcForkManageController(this.forkHost, this.session, options.subagentEventBus);
 
 		this.pendingExtensionRequests = new RpcPendingExtensionRequests();
 		this.hostToolBridge = options.sharedBridges?.hostToolBridge ?? new RpcHostToolBridge(this.#output);
@@ -1559,7 +1534,6 @@ export class RpcSessionHost {
 				change: () => Promise<T>,
 				{ detachesRun }: { detachesRun: boolean },
 			): Promise<T> => {
-				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: T | undefined;
 				try {
@@ -1597,10 +1571,6 @@ export class RpcSessionHost {
 	 * startup order). Teardown handles are kept for {@link dispose}.
 	 */
 	async start(): Promise<void> {
-		// Per-hook telemetry frames (5.8): the runner reports every handler run;
-		// the fork telemetry layer gates emission on v3 negotiation.
-		this.session.extensionRunner?.setHookExecutedListener(info => this.#forkHookTelemetry.onHookExecuted(info));
-
 		// Output all agent events as JSON; prompt results follow the frame that settled them.
 		this.#unsubscribers.push(
 			this.session.subscribe(event => {
@@ -1768,7 +1738,6 @@ export class RpcSessionHost {
 				}
 				const requestedModel =
 					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
-				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof handleRpcSessionChange>> | undefined;
 				try {
@@ -1799,7 +1768,6 @@ export class RpcSessionHost {
 			case "open_session": {
 				const requestedModel = await resolveRequestedRpcModel(session, command);
 				const fileBeforeOpen = session.sessionFile;
-				await this.#btw.close();
 				await this.#goalController.beginSessionChange();
 				let result: Awaited<ReturnType<typeof openRpcSession>>;
 				try {
@@ -1874,21 +1842,6 @@ export class RpcSessionHost {
 					return this.error(id, "goal", goalError instanceof Error ? goalError.message : String(goalError));
 				}
 			}
-
-			// =================================================================
-			// Side questions (/btw)
-			// =================================================================
-
-			case "btw": {
-				const record = await this.#btw.ask(command.question, command.recordId);
-				return this.success(id, "btw", { record });
-			}
-
-			case "btw_cancel":
-				return this.success(id, "btw_cancel", { cancelled: this.#btw.cancel(command.recordId) });
-
-			case "get_btw_history":
-				return this.success(id, "get_btw_history", { records: await this.#btw.history() });
 
 			case "set_fast_mode": {
 				const supported = session.setFastMode(command.enabled);
@@ -2497,13 +2450,6 @@ export class RpcSessionHost {
 			this.hostUriBridge.clear(`${reason} before host URI request completed`);
 		}
 		this.#goalController.stopForHostAbort();
-		// The host ends regardless; report an unsaved side answer instead of skipping dispose.
-		try {
-			await this.#btw.close();
-		} catch (btwError) {
-			const message = btwError instanceof Error ? btwError.message : String(btwError);
-			this.#output({ type: "notice", level: "error", message, source: "btw-history" });
-		}
 		// Per-surface fail-closed messages, derived from the single reason so the
 		// wire-visible error text matches the legacy single-session mode exactly.
 		// Close the realtime call (microphone, socket) before anything else may
@@ -2619,12 +2565,6 @@ export class RpcSessionHost {
 			const isCurrent = () =>
 				this.#inputGate.isCurrent(command) && !this.isShutdownRequested() && session.sessionId === sessionId;
 			if (!isCurrent()) return "cancelled";
-			if (command.type === "prompt" && strictCommandDispatch) {
-				// `/plan` is a mode toggle, not model input: intercepted before any
-				// dispatch so the literal text never reaches the agent (5.3).
-				if (await this.#forkPlanController.interceptSlashPlan(command.message)) return "local";
-				if (!isCurrent()) return "cancelled";
-			}
 			const attachments = await this.#resolveCommandAttachments(command.id, command.type, command.attachments, "");
 			if ("error" in attachments) return { setupError: attachments.error };
 			if (!isCurrent()) return "cancelled";

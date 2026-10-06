@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { getAgentDir, isRecord, logger, normalizePathForComparison, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, normalizePathForComparison, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getRoleInfo } from "../../config/model-roles";
@@ -34,14 +34,10 @@ import type { SessionStats } from "../../session/agent-session-types";
 import { getLatestCompactionEntry } from "../../session/session-context";
 import type { MCPManager } from "../../mcp";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
-import { IrcBus } from "../../irc/bus";
 import { resolveToCwd } from "../../tools/path-utils";
 import { SessionManager } from "../../session/session-manager";
 import { selectRpcEntries } from "./rpc-compat";
 import { pageRpcMessages } from "./rpc-messages";
-import { RpcForkHost } from "./rpc-fork-host";
-import { RpcForkConfigController, type RpcForkServiceContext } from "./rpc-fork-config";
-import { RpcForkManageController } from "./rpc-fork-manage";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { RPC_PROJECT_HOST_ACTIONS, RpcCommandCatalogService } from "./rpc-project-commands";
@@ -59,8 +55,6 @@ import {
 	type RpcProjectCreatedSession,
 	type RpcProjectSessionRecord,
 } from "./rpc-project-sessions";
-import { RpcProjectSkillService } from "./rpc-project-skills";
-import { RpcProjectSubagentDirectory } from "./rpc-project-subagents";
 import { RpcOutputWriter } from "./rpc-output";
 import { normalizeHostToolDefinitions, RpcSessionHost, RpcUserInputGate, type RpcOutput } from "./rpc-session-host";
 import type { RpcCommand, RpcResponse } from "./rpc-types";
@@ -93,38 +87,11 @@ const PROJECT_LEVEL_COMMANDS = new Set<string>([
 	"get_available_commands",
 	"complete_command",
 	"execute_command",
-	"list_skills",
-	"set_skill_enabled",
-	"delete_skill",
-	"reload_skills",
-	"set_skill_source_enabled",
-	"set_skill_ignored",
 	"get_model_roles",
 	"set_model_role",
-	"get_settings",
-	"set_settings",
-	"unset_settings",
-	"list_providers",
-	"upsert_provider",
-	"delete_provider",
-	"set_model_enabled",
-	"test_model",
-	"list_mcp_servers",
-	"upsert_mcp_server",
-	"delete_mcp_server",
-	"set_mcp_server_disabled",
-	"mcp_reconnect",
-	"list_agent_definitions",
-	"upsert_agent_definition",
-	"delete_agent_definition",
-	"get_usage",
-	"get_stats_summary",
 	"get_available_models",
 	"set_host_tools",
 	"set_host_uri_schemes",
-	"get_subagents",
-	"get_subagent_messages",
-	"control_subagent",
 ]);
 
 /** Read-only historical operations do not require or implicitly create a loaded session. */
@@ -185,9 +152,6 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"get_last_assistant_text",
 	"set_session_name",
 	"goal",
-	"btw",
-	"btw_cancel",
-	"get_btw_history",
 	"live_start",
 	"live_stop",
 	"live_mute",
@@ -198,19 +162,6 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"login",
 	// Fork (v3) commands that operate on the caller's session.
 	"set_approval_mode",
-	"get_queue",
-	"remove_queued",
-	"reorder_queue",
-	"clear_queue",
-	"get_jobs",
-	"cancel_job",
-	"search_paths",
-	"submit_feedback",
-	"read_plan",
-	"set_plan_mode",
-	"get_plan_state",
-	"list_plans",
-	"approve_plan",
 ]);
 
 /** Side-channel frames whose id routes back to the issuing session. */
@@ -235,11 +186,8 @@ class RpcProjectHost {
 	readonly #processInstanceId: string;
 	readonly #container: RpcProjectSessionContainer;
 	readonly #catalogService: RpcCommandCatalogService;
-	readonly #skillsService: RpcProjectSkillService;
 	readonly #rolesService: RpcProjectModelRoleService;
-	readonly #subagentDirectory: RpcProjectSubagentDirectory;
 	#pendingHostUriSchemes: unknown[] | undefined;
-	readonly #configForkHost: RpcForkHost;
 	/** Interaction identity → exact owning instance; never a global current session. */
 	readonly #interactions = new Map<string, { sessionId: string; sessionGeneration: string }>();
 	/** Host tool definitions to re-apply to sessions created later. */
@@ -268,27 +216,6 @@ class RpcProjectHost {
 			getSettings: () => options.settings,
 			getMcpManager: session => this.#mcpManagers.get((session as AgentSession).sessionId),
 		});
-		this.#skillsService = new RpcProjectSkillService({
-			cwd: options.cwd,
-			agentDir: getAgentDir(),
-			getSettings: () => options.settings,
-			refreshSessions: () => this.#refreshSessionsSkills(),
-			isSkillInUse: filePath =>
-				[...this.#sessionHosts.values()].some(
-					host =>
-						(host.session.isBusyForSnapshot ||
-							host.session.hasAdmittedSubmission ||
-							host.isWaitingInteraction()) &&
-						host.session.skills.some(
-							skill => normalizePathForComparison(skill.filePath) === normalizePathForComparison(filePath),
-						),
-				),
-			emit: frame => {
-				this.#emitProjectFrame(frame);
-				this.#catalogService.invalidate();
-				this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
-			},
-		});
 		this.#rolesService = new RpcProjectModelRoleService({
 			getSettings: () => options.settings,
 			getModelRegistry: () => options.modelRegistry,
@@ -310,35 +237,6 @@ class RpcProjectHost {
 				}
 			},
 		});
-		this.#subagentDirectory = new RpcProjectSubagentDirectory({
-			resolveSessionFile: sessionId => this.#resolveSessionFile(sessionId),
-			liveSnapshots: sessionId => {
-				const registry = this.#sessionHosts.get(sessionId)?.subagentRegistry;
-				return registry ? registry.getSubagents() : [];
-			},
-			sendIrcMessage: async message => IrcBus.global().send(message),
-			senderId: sessionId => this.#container.getLoaded(sessionId)?.session.getAgentId(),
-		});
-		// Host tool/URI definitions are project-wide; their request bridges are
-		// session-owned so calls and cancellation retain instance attribution.
-		// Project-level fork host answering config/manage commands at zero
-		// sessions. Its context carries a service projection, never a real
-		// AgentSession: nothing registered here touches context.session.
-		const serviceContext: RpcForkServiceContext = {
-			settings: options.settings,
-			modelRegistry: options.modelRegistry,
-			authStorage: options.authStorage,
-			cwd: options.cwd,
-			agentDir: getAgentDir(),
-		};
-		this.#configForkHost = new RpcForkHost({
-			emit: frame => this.#emitProjectFrame(frame),
-			success: (id, command, data) => this.#successResponse(id, command, data),
-			error: (id, command, message, code) => this.#errorResponse(id, command, message, code),
-		});
-		new RpcForkConfigController(this.#configForkHost, serviceContext);
-		new RpcForkManageController(this.#configForkHost, serviceContext, undefined, { agentDir: getAgentDir() });
-		this.#configForkHost.activate();
 	}
 
 	get processInstanceId(): string {
@@ -978,77 +876,6 @@ class RpcProjectHost {
 				this.#requireV3(id, type);
 				return this.#executeCommand(command, id, type);
 			}
-			case "list_skills": {
-				this.#requireV3(id, type);
-				const sessionHost = await record();
-				if (command.view !== "management" && command.view !== "effective") {
-					return this.#errorResponse(
-						id,
-						type,
-						"list_skills requires view management or effective",
-						"invalid_params",
-					);
-				}
-				if (command.view === "effective" && !sessionHost) {
-					return this.#errorResponse(id, type, "Effective skills require a loaded session", "invalid_params");
-				}
-				this.#checkOptional(command, "cursor", "string");
-				this.#checkOptional(command, "limit", "number");
-				const result = await this.#skillsService.list({
-					view: command.view,
-					sessionId: sessionHost?.session.sessionId,
-					sessionSkills: sessionHost?.session.skills,
-					cursor: command.cursor as string | undefined,
-					limit: typeof command.limit === "number" ? command.limit : undefined,
-				});
-				return this.#successResponse(id, type, result);
-			}
-			case "set_skill_enabled": {
-				this.#requireV3(id, type);
-				const result = await this.#skillsService.setEnabled(
-					this.#skillMutationInput(command, ["skillId", "enabled", "scope", "expectedRevision"]) as never,
-				);
-				return this.#successResponse(id, type, result);
-			}
-			case "delete_skill": {
-				this.#requireV3(id, type);
-				const result = await this.#skillsService.delete(
-					this.#skillMutationInput(command, ["skillId", "expectedRevision"]) as never,
-				);
-				return this.#successResponse(id, type, result);
-			}
-			case "reload_skills": {
-				this.#requireV3(id, type);
-				if (command.scope !== "project" && command.scope !== "user") {
-					return this.#errorResponse(id, type, "reload_skills requires scope user or project", "invalid_params");
-				}
-				const result = await this.#skillsService.reload(command.scope);
-				this.#catalogService.invalidate();
-				this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
-				return this.#successResponse(id, type, result);
-			}
-			case "set_skill_source_enabled":
-			case "set_skill_ignored": {
-				this.#requireV3(id, type);
-				this.#requireRevision(command);
-				if (command.scope !== "user")
-					return this.#errorResponse(
-						id,
-						type,
-						"Only user-scoped skill configuration writes are supported",
-						"scope_not_allowed",
-					);
-				const response = await this.#configForkHost.handleCommand(command as never);
-				if (response) {
-					if (response.success) {
-						this.#catalogService.invalidate();
-						this.#emitProjectFrame({ type: "command_catalog_changed", revision: this.#catalogService.revision });
-						await this.#refreshSessionsSkills();
-					}
-					return response;
-				}
-				return this.#errorResponse(id, type, `Unknown command: ${type}`);
-			}
 			case "get_model_roles": {
 				this.#requireV3(id, type);
 				const sessionId = command.sessionId;
@@ -1156,108 +983,10 @@ class RpcProjectHost {
 					schemes: schemes.map(scheme => (isRecord(scheme) ? String(scheme.scheme) : String(scheme))),
 				});
 			}
-			case "get_subagents": {
-				this.#requireV3(id, type);
-				const sessionId = command.sessionId;
-				this.#checkOptional(command, "status", "string");
-				this.#checkOptional(command, "cursor", "string");
-				this.#checkOptional(command, "limit", "number");
-				if (command.status !== undefined && command.status !== "running" && command.status !== "finished") {
-					return this.#errorResponse(id, type, "Invalid subagent status", "invalid_params");
-				}
-				if (typeof sessionId !== "string")
-					return this.#errorResponse(
-						id,
-						type,
-						"get_subagents requires sessionId in project mode",
-						"invalid_params",
-					);
-				if (!(await this.#prefetchSessionFile(sessionId))) {
-					return this.#errorResponse(id, type, `Unknown session: ${sessionId}`, "not_found");
-				}
-				const result = await this.#subagentDirectory.list(sessionId, {
-					status: command.status === "running" || command.status === "finished" ? command.status : undefined,
-					cursor: command.cursor as string | undefined,
-					limit: typeof command.limit === "number" ? command.limit : undefined,
-				});
-				return this.#successResponse(id, type, result);
-			}
-			case "get_subagent_messages": {
-				this.#requireV3(id, type);
-				const sessionId = command.sessionId;
-				const subagentId = command.subagentId;
-				this.#checkOptional(command, "fromByte", "number");
-				this.#checkOptional(command, "maxBytes", "number");
-				if (typeof sessionId !== "string" || typeof subagentId !== "string") {
-					return this.#errorResponse(
-						id,
-						type,
-						"get_subagent_messages requires sessionId and subagentId",
-						"invalid_params",
-					);
-				}
-				if (!(await this.#prefetchSessionFile(sessionId))) {
-					return this.#errorResponse(id, type, `Unknown session: ${sessionId}`, "not_found");
-				}
-				const result = await this.#subagentDirectory.messages(sessionId, subagentId, {
-					fromByte: typeof command.fromByte === "number" ? command.fromByte : undefined,
-					maxBytes: typeof command.maxBytes === "number" ? command.maxBytes : undefined,
-				});
-				return this.#successResponse(id, type, result);
-			}
-			case "control_subagent": {
-				this.#requireV3(id, type);
-				const sessionId = command.sessionId;
-				const subagentId = command.subagentId;
-				const action = command.action;
-				if (typeof sessionId !== "string" || typeof subagentId !== "string") {
-					return this.#errorResponse(
-						id,
-						type,
-						"control_subagent requires sessionId and subagentId",
-						"invalid_params",
-					);
-				}
-				if (action !== "send_message" && action !== "stop") {
-					return this.#errorResponse(id, type, `Unsupported control action: ${String(action)}`, "invalid_params");
-				}
-				await this.#requireLoadedSession(command);
-				const result = await this.#subagentDirectory.control(
-					sessionId,
-					subagentId,
-					action,
-					typeof command.message === "string" ? command.message : undefined,
-				);
-				return this.#successResponse(id, type, result);
-			}
 			default: {
-				// Config/manage fork surface (settings, providers, MCP, agent
-				// definitions, usage, stats) answered by the project-level
-				// controllers with zero sessions. Gated like every explicit
-				// case above: these are fork v3 business commands.
-				this.#requireV3(id, type);
-				if (type === "set_settings" || type === "unset_settings") {
-					this.#requireRevision(command);
-					if (command.scope !== "user")
-						return this.#errorResponse(
-							id,
-							type,
-							"Only user-scoped settings writes are supported",
-							"scope_not_allowed",
-						);
-				}
-				const forkResponse = await this.#configForkHost.handleCommand(command as never);
-				if (forkResponse) return forkResponse;
 				return this.#errorResponse(id, type, `Unknown command: ${type}`);
 			}
 		}
-	}
-
-	#skillMutationInput(command: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-		this.#requireRevision(command);
-		const input: Record<string, unknown> = {};
-		for (const key of keys) if (key in command) input[key] = command[key];
-		return input;
 	}
 
 	/**
@@ -1439,34 +1168,6 @@ class RpcProjectHost {
 		);
 	}
 
-	async #refreshSessionsSkills(): Promise<{ adopted: string[]; pending: string[] }> {
-		const adopted: string[] = [];
-		const pending: string[] = [];
-		for (const [sessionId, host] of this.#sessionHosts) {
-			const record = this.#container.get(sessionId);
-			if (!record || !this.#canRefreshSkills(record, host) || this.#staleSessions.has(sessionId)) {
-				this.#pendingSkillRefresh.add(sessionId);
-				pending.push(sessionId);
-				continue;
-			}
-			record.busy = true;
-			try {
-				this.#assertRecordIdentity(record);
-				await host.refreshSkills();
-				this.#assertRecordIdentity(record);
-				this.#pendingSkillRefresh.delete(sessionId);
-				adopted.push(sessionId);
-			} catch (error) {
-				logger.warn("RPC skill adoption deferred", { sessionId, error: String(error) });
-				this.#pendingSkillRefresh.add(sessionId);
-				pending.push(sessionId);
-			} finally {
-				record.busy = false;
-			}
-		}
-		return { adopted, pending };
-	}
-
 	/** Route a side-channel frame to the session that issued the request. */
 	handleControlFrame(parsed: unknown): boolean {
 		if (!isRecord(parsed)) return false;
@@ -1510,8 +1211,6 @@ class RpcProjectHost {
 	async dispose(reason: string): Promise<void> {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		// Release the subagent directory's registry-capture wiring (§13.2).
-		this.#subagentDirectory.dispose();
 		// Fail pending startup/control waits before container abort/flush awaits them.
 		const hostDisposals = [...this.#sessionHosts.values()].map(host => host.dispose(reason));
 		await this.#container.disposeAll(reason);
@@ -1923,8 +1622,6 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		"follow_up",
 		"abort_and_prompt",
 		"steer_subagent",
-		"btw",
-		"btw_cancel",
 		"live_start",
 		"execute_command",
 	]);
