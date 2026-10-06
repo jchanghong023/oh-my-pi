@@ -2075,19 +2075,7 @@ export class RpcSessionHost {
 			// =================================================================
 
 			case "set_model": {
-				let models = session.getAvailableModels();
-				let model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					// Model not in the current catalog. Wait for in-flight
-					// background discovery before declaring it missing: on cold
-					// start, discovery-backed providers (proxy / ollama / etc.)
-					// populate seconds after session ready. Models already in
-					// the bundled catalog skip this await entirely so the RPC
-					// queue is not stalled behind unrelated discovery.
-					await session.modelRegistry.awaitBackgroundRefresh();
-					models = session.getAvailableModels();
-					model = models.find(m => m.provider === command.provider && m.id === command.modelId);
-				}
+				const model = await findRpcModel(session, command.provider, command.modelId);
 				if (!model) {
 					return this.error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
 				}

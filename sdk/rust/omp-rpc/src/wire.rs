@@ -4874,7 +4874,6 @@ pub struct NewSessionParams {
 pub struct OpenSessionParams {
 	#[serde(rename = "sessionDir")]
 	pub session_dir: String,
-	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
@@ -5114,7 +5113,6 @@ pub struct ExportHtmlResult {
 pub struct SwitchSessionParams {
 	#[serde(rename = "sessionPath")]
 	pub session_path: String,
-	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
@@ -5733,12 +5731,11 @@ impl Command for NewSessionCommand {
 	}
 }
 
-/// Continue the newest non-empty session in a directory, or start a fresh one there.
+/// Continue the newest non-empty session in a directory, or start a fresh one there. Give provider and modelId together to override the saved model; otherwise an unavailable saved model fails the request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenSessionCommand {
 	#[serde(rename = "sessionDir")]
 	pub session_dir: String,
-	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
@@ -6361,12 +6358,11 @@ impl Command for ExportHtmlCommand {
 	}
 }
 
-/// Switch to another session file.
+/// Switch to another session file. Give provider and modelId together to override the saved model; otherwise an unavailable saved model fails the request and keeps the current session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwitchSessionCommand {
 	#[serde(rename = "sessionPath")]
 	pub session_path: String,
-	/// With `modelId`, use this model instead of the session's saved one; a saved model that cannot be restored fails the request.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub provider: Option<String>,
 	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]

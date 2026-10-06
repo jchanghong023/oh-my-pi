@@ -551,6 +551,40 @@ describe("pickElectronTarget", () => {
 		},
 		30_000,
 	);
+
+	test("names the refused CDP websocket instead of reporting [object ErrorEvent]", async () => {
+		// `/json/version` answers, but its debugger websocket refuses the upgrade.
+		const cdp = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: (request, server) =>
+				new URL(request.url).pathname === "/json/version"
+					? Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${server.port}/devtools/browser/gone` })
+					: new Response("gone", { status: 404 }),
+		});
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		try {
+			const error = await rejectionOf(
+				prelude.invoke(
+					{
+						action: "open",
+						name: `refused-${crypto.randomUUID()}`,
+						app: { cdp_url: `http://127.0.0.1:${cdp.port}` },
+					},
+					{ session, toolCallId: "refused-websocket" },
+				),
+			);
+			expect(error).toBeInstanceOf(Error);
+			expect(error).toMatchObject({
+				message: expect.stringContaining(
+					`WebSocket connection to 'ws://127.0.0.1:${cdp.port}/devtools/browser/gone'`,
+				),
+			});
+		} finally {
+			cdp.stop(true);
+		}
+	});
 });
 
 describe("resolveSpawnArgs", () => {

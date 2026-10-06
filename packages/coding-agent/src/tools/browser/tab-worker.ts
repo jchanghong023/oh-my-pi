@@ -159,10 +159,12 @@ import {
 	diffAriaSnapshot,
 } from "./snapshot-plus";
 import {
+	ClickRefusedError,
 	clickAt,
 	clickElement,
 	clickQueryHandlerText,
 	fillViaHandle,
+	focusTextEntryTarget,
 	highlightElement,
 	type HighlightOptions,
 	type InteractionHandle,
@@ -171,6 +173,7 @@ import {
 	mouseDown,
 	mouseMove,
 	mouseUp,
+	pressKey,
 	setElementChecked,
 	type ScrollOptions,
 	uploadFilesToElement,
@@ -331,7 +334,7 @@ interface TabApi {
 	click(selector: string): Promise<void>;
 	type(selector: string, text: string): Promise<void>;
 	fill(selector: string, value: string): Promise<void>;
-	press(key: KeyInput, opts?: { selector?: string }): Promise<void>;
+	press(key: string, opts?: { selector?: string }): Promise<void>;
 	scroll(deltaX: number, deltaY: number, opts?: ScrollOptions): Promise<void>;
 	drag(from: DragTarget, to: DragTarget): Promise<void>;
 	waitFor(selector: string, opts?: { timeout?: number }): Promise<ActionableHandle>;
@@ -566,13 +569,23 @@ async function runGuardedHandleAction<T>(
 	} catch (error) {
 		if (!signal.aborted) throw error;
 		state.invalidatedBy = label;
-		void pending.catch(() => undefined);
+		let actionError: unknown;
 		await withTimeout(
-			Promise.all([handle.dispose().catch(() => undefined), invalidate?.().catch(() => undefined)]),
+			Promise.all([
+				pending.then(
+					() => undefined,
+					(err: unknown) => {
+						actionError = err;
+					},
+				),
+				handle.dispose().catch(() => undefined),
+				invalidate?.().catch(() => undefined),
+			]),
 			HANDLE_ACTION_INVALIDATION_TIMEOUT_MS,
 			`Timed out invalidating ${label}`,
 		).catch(() => undefined);
-		throw error;
+		// A click still refused when the deadline hit carries the reason on its own abort error.
+		throw actionError instanceof ClickRefusedError ? actionError : error;
 	}
 }
 
@@ -672,6 +685,16 @@ export function toActionableHandle(
 		for (const method of GUARDED_HANDLE_METHODS) {
 			const original = methods[method];
 			if (typeof original === "function") interactive[method] = original.bind(enriched);
+		}
+		// Puppeteer's `ElementHandle.press` takes a single key name; focus and press
+		// through `pressKey` so combos and the macOS editing commands work on handles too.
+		const focus = interactive.focus;
+		if (focus) {
+			const press: ElementHandle["press"] = async (key, options) => {
+				await focus();
+				await pressKey(enriched.frame.page(), key, options);
+			};
+			interactive.press = press as RawHandleMethod;
 		}
 		originals = { interactive, type: enriched.type.bind(enriched) };
 		enriched[RAW_HANDLE_METHODS] = originals;
@@ -784,12 +807,7 @@ async function typeViaHandle(
 	options: Readonly<KeyboardTypeOptions> | undefined,
 	signal: AbortSignal,
 ): Promise<void> {
-	await untilAborted(signal, () =>
-		handle.evaluate(el => {
-			const node = el as unknown as { focus?: () => void };
-			node.focus?.();
-		}),
-	);
+	await focusTextEntryTarget(handle, "type into", signal);
 	for (const character of text) {
 		throwIfAborted(signal);
 		await untilAborted(signal, () => handle.frame.page().keyboard.type(character, options));
@@ -1684,6 +1702,15 @@ export class WorkerCore {
 		// the finally (stops the watchdog's polling once the op settles either way).
 		const earlyAc = new AbortController();
 		try {
+			// A download this op starts before a pending `waitForDownload()` has enabled
+			// tracking would bypass it, so hold the op until tracking applies — within
+			// the op's own deadline, so a stalled enable surfaces as this op's timeout.
+			const arming = this.#downloads?.arming;
+			if (arming)
+				await untilAborted(
+					opSignal,
+					arming.catch(() => undefined),
+				);
 			if (!watchdog) return await fn(opSignal);
 			const racedSignal = AbortSignal.any([opSignal, earlyAc.signal]);
 			return await Promise.race([
@@ -1700,7 +1727,13 @@ export class WorkerCore {
 				!cellSignal.aborted &&
 				(opTimeout?.aborted || (err instanceof Error && err.name === "TimeoutError"))
 			) {
-				const hint = selector ? await this.#selectorTimeoutHint(selector) : "";
+				const refusal = err instanceof ClickRefusedError ? err.refusal : undefined;
+				const count = selector ? await this.#selectorMatchCount(selector) : undefined;
+				const hint = refusal
+					? `; the element never became clickable (last check: ${refusal}${count === undefined ? "" : `; selector matches ${count} element(s)`})`
+					: count === undefined
+						? ""
+						: formatSelectorMatchHint(count);
 				throw markBrowserRunRejection(
 					new ToolError(`${label} timed out after ${perOpTimeoutMs}ms${hint}`),
 					active.rejectionOwner,
@@ -1748,22 +1781,21 @@ export class WorkerCore {
 	}
 
 	/**
-	 * Best-effort match-count probe for a timed-out selector op. Never throws;
-	 * empty string when the probe fails, stalls, or the selector is an aria-ref.
+	 * Best-effort match count for a timed-out selector op. Never throws;
+	 * undefined when the probe fails, stalls, or the selector is an aria-ref.
 	 */
-	async #selectorTimeoutHint(selector: string): Promise<string> {
-		if (parseAriaRefSelector(selector) !== null) return "";
+	async #selectorMatchCount(selector: string): Promise<number | undefined> {
+		if (parseAriaRefSelector(selector) !== null) return undefined;
 		try {
 			const handles = await Promise.race([
 				this.#requirePage().$$(normalizeSelector(selector)),
 				Bun.sleep(1_000).then(() => null),
 			]);
-			if (!handles) return "";
-			const count = handles.length;
+			if (!handles) return undefined;
 			for (const handle of handles) void handle.dispose().catch(() => undefined);
-			return formatSelectorMatchHint(count);
+			return handles.length;
 		} catch {
-			return "";
+			return undefined;
 		}
 	}
 
@@ -1877,24 +1909,25 @@ export class WorkerCore {
 					return content;
 				}),
 			click: selector =>
-				op(`tab.click(${JSON.stringify(selector)})`, actionOpMs, async sig => {
-					const label = `tab.click(${JSON.stringify(selector)})`;
-					const resolved = normalizeSelector(selector);
-					if (resolved.startsWith("text/") && parseAriaRefSelector(selector) === null) {
-						await clickQueryHandlerText(page, resolved, label, actionOpMs, sig);
-						return;
-					}
-					const handle =
-						parseAriaRefSelector(selector) !== null
-							? await this.#resolveAriaRef(selector)
-							: ((await untilAborted(sig, () => page.$(resolved))) as ElementHandle | null);
-					if (!handle) throw new ToolError(`${label} matched no visible element`);
-					try {
-						await clickElement(handle, label, sig);
-					} finally {
-						void handle.dispose().catch(() => undefined);
-					}
-				}),
+				op(
+					`tab.click(${JSON.stringify(selector)})`,
+					actionOpMs,
+					async sig => {
+						const label = `tab.click(${JSON.stringify(selector)})`;
+						const resolved = normalizeSelector(selector);
+						if (resolved.startsWith("text/") && parseAriaRefSelector(selector) === null) {
+							await clickQueryHandlerText(page, resolved, label, actionOpMs, sig);
+							return;
+						}
+						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
+						try {
+							await clickElement(handle, label, sig);
+						} finally {
+							void handle.dispose().catch(() => undefined);
+						}
+					},
+					{ selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
+				),
 			type: (selector, text) =>
 				op(
 					`tab.type(${JSON.stringify(selector)})`,
@@ -1902,6 +1935,7 @@ export class WorkerCore {
 					async sig => {
 						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
 						try {
+							await focusTextEntryTarget(handle, "type into", sig);
 							await untilAborted(sig, () => handle.type(text, { delay: 0 }));
 						} finally {
 							await handle.dispose().catch(() => undefined);
@@ -1937,7 +1971,7 @@ export class WorkerCore {
 							}
 						} else await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
 					}
-					await untilAborted(sig, () => page.keyboard.press(key));
+					await untilAborted(sig, () => pressKey(page, key));
 				}),
 			scroll: (deltaX, deltaY, opts) =>
 				op("tab.scroll()", actionOpMs, async sig => {

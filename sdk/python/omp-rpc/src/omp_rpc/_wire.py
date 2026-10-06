@@ -2920,7 +2920,7 @@ class WireClient:
         return parse_cancellation_result(self._command("new_session", params), "new_session")
 
     def open_session(self, session_dir: str | Path, *, provider: str | None = None, model_id: str | None = None) -> OpenSessionResult:
-        """Continue the newest non-empty session in a directory, or start a fresh one there."""
+        """Continue the newest non-empty session in a directory, or start a fresh one there. Give provider and modelId together to override the saved model; otherwise an unavailable saved model fails the request."""
         params: dict[str, object] = {}
         params["sessionDir"] = str(session_dir)
         if provider is not None:
@@ -3142,7 +3142,7 @@ class WireClient:
         return Path(required(expect_object(self._command("export_html", params), "export_html"), "path", decode_str, "export_html"))
 
     def switch_session(self, session_path: str | Path, *, provider: str | None = None, model_id: str | None = None) -> CancellationResult:
-        """Switch to another session file."""
+        """Switch to another session file. Give provider and modelId together to override the saved model; otherwise an unavailable saved model fails the request and keeps the current session."""
         params: dict[str, object] = {}
         params["sessionPath"] = str(session_path)
         if provider is not None:

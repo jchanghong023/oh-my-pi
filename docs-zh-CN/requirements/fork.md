@@ -8,15 +8,14 @@
 
 * **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.6.2`
-* **Upstream commit**：`1c0993c3d12e70042169a951663bb2702e2c0a9e`
-* **同步日期**：2026-10-04
+* **Upstream commit**：`bb0c9b7a420dc37f145625c3f69c4d31905fa22e`
+* **同步日期**：2026-10-06
 
 ## 预采纳的上游 PR（上游合并后删除对应条目）
 
 以下条目是上游尚未合并的开放 PR，本 fork 已提前合入。每次上游同步后核对：PR 已被上游合并（进入基线）时删除对应条目——此时同步流程会自然带入同一改动，保留条目只会制造假差异。
 
 * **#13802**（live-steered 队列条目标记为已发送）：`QueuedMessagesSnapshot` 新增 `liveSteered` 计数，`get_state.queuedMessages` 与 `queue_update` 透传；TUI 队列带把已发送条目渲染为锁定的 Sent 组。RPC 快照接线移植进 `RpcSessionHost`（`rpc-mode.ts` 保持传输壳）；fork 侧 `queuedMessages` 文案段（rpc.md）保留 fork 版并融入 `liveSteered` 语义。上游 v18.6.0 把 Python 客户端重组为 `sdk/python/omp-rpc` 并改用机器可读 wire schema 生成各语言类型（生成入口 `bun run gen:rpc`），fork 将 `liveSteered` 补进 wire DSL（`QueuedMessagesState`/`QueueUpdateEvent`，旧服务器省略时解码为 0）并随同步重新生成全部工件。合入提交 `52316aa576`。
-* **#13689**（恢复会话的保存模型不可用时 fail closed）：启动 `--continue`/`--resume` 与运行时 `switchSession` 在无法恢复保存模型时对无 UI 路径报错 `Could not restore model <provider/id>`（TUI 保持警告后切换）；RPC `open_session`/`switch_session` 新增可选 `provider`/`modelId` 绑定对（按 `set_model` 校验，`findRpcModel` 等待在途发现）。RPC 接线（`resolveRequestedRpcModel`、`handleRpcSessionChange`/`openRpcSession` 的 model 参数）移植进 `RpcSessionHost`。Python 客户端随上游 v18.6.0 重组为 `sdk/python/omp-rpc`（wire schema 生成）后，fork 侧补丁为：wire DSL 给 `open_session`/`switch_session` 声明可选 `provider`/`modelId`（`bun run gen:rpc` 重新生成各语言工件），手写 `client.py` 另维护 fork v3 入口（`negotiate_protocol_v3`、`send_fork_frame`、`get_messages` 的 v3 分页分支）。合入提交 `bfa4d40847`。
 * **#14110**（RPC hosts 的 `/btw` 侧问）：`btw`/`btw_cancel`/`get_btw_history` 三命令 + `btw_delta`/`btw_record` 流式帧，问答不进 transcript、存 `btw-history` sidecar；`btw_cancel` 进 BACKGROUND_COMMANDS 可超车串行队列，会话变更与 dispose 前强制 close。全套接线（`RpcBtwController`、三命令 case、dispose 通知）移植进 `RpcSessionHost`，`rpc-client.ts` 的 `btw`/`cancelBtw`/`getBtwHistory` 方法由上游自带合入，项目模式已路由三命令。合入提交 `ec11e7c411`。
 
 ## 当前功能差异

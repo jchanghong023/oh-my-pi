@@ -326,6 +326,7 @@ import {
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
+import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
@@ -408,7 +409,13 @@ import {
 	SessionMaintenance,
 	type SessionMaintenanceHost,
 } from "./session-maintenance";
-import { cleanupEmptyMoveSession, copySessionArtifacts, type SessionManager } from "./session-manager";
+import {
+	cleanupEmptyMoveSession,
+	copySessionArtifacts,
+	extractSessionInit,
+	type PersistedSessionInit,
+	type SessionManager,
+} from "./session-manager";
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
@@ -986,6 +993,8 @@ export class AgentSession implements SettingsScope {
 	 *  enqueue and fold/resume normally across an in-session interrupt, only a session identity
 	 *  change should drop them. */
 	#sessionGeneration = 0;
+	/** Latest `session_init` of the transcript the model calls ran on; `init` is null when it has none. */
+	#sessionInit: { sessionFile: string | undefined; init: PersistedSessionInit | null } | undefined;
 	/** Settles when switchSession commits or restores its previous generation on rollback.
 	 *  newSession never rolls its generation back, so it does not delay stale aside/SDK calls. */
 	#sessionGenerationSettled: Promise<void> | undefined;
@@ -1927,6 +1936,7 @@ export class AgentSession implements SettingsScope {
 			cancel: toolCallId => this.#ttsr.cancelBridgedToolCall(toolCallId),
 		});
 		this.agent.setOnBeforeYield(() => this.#ttsr.settleJudgments());
+		this.agent.setOnModelCallSystemPrompt(prompt => this.#recordModelCallSystemPrompt(prompt));
 		this.#obfuscator = config.obfuscator;
 		const providerBoundaryHost: SessionProviderBoundaryHost = {
 			agent: this.agent,
@@ -2166,6 +2176,35 @@ export class AgentSession implements SettingsScope {
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: () => this.buildDisplaySessionContext(),
 			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
+			buildLiveProviderContext: async (summarized, retained, signal) => {
+				// compact() rebuilds the previous summary message; send the live
+				// agent's own one. Conversion caches and the shared date/cwd reminder
+				// key on message identity, so a copy would re-root the reminder state
+				// the live turns depend on and re-render the bytes they sent.
+				const liveSummary = this.agent.state.messages[0];
+				const first = summarized[0];
+				const history =
+					first?.role === "compactionSummary" &&
+					liveSummary?.role === "compactionSummary" &&
+					liveSummary.timestamp === first.timestamp
+						? [liveSummary, ...summarized.slice(1)]
+						: summarized;
+				// Transform the whole history as the live turn does, then cut it:
+				// provider transforms (inline imaging, image budgets) decide per
+				// request, so a separately transformed prefix can differ.
+				const prefixLength = (await this.convertMessagesToLlm(history, signal)).length;
+				const live = await this.agent.buildSideRequestContext(
+					await this.convertMessagesToLlm([...history, ...retained], signal),
+				);
+				// Date/cwd reminder controls are the only messages the transforms
+				// insert: count past them, and leave out any at the cut, so the kept
+				// turns follow the summarized range directly.
+				let cut = 0;
+				for (let counted = 0; cut < live.messages.length && counted < prefixLength; cut++) {
+					if (!isDateCwdReminderControl(live.messages[cut]!)) counted++;
+				}
+				return { ...live, messages: live.messages.slice(0, cut) };
+			},
 			obfuscateTextForProvider: text => this.#obfuscateTextForProvider(text),
 			obfuscatePreparationForProvider: preparation => this.#obfuscatePreparationForProvider(preparation),
 			closeCodexProviderSessionsForHistoryRewrite: () => this.#closeCodexProviderSessionsForHistoryRewrite(),
@@ -5952,6 +5991,39 @@ export class AgentSession implements SettingsScope {
 		return this.agent.state.systemPrompt;
 	}
 
+	/**
+	 * Keeps a subagent transcript's latest `session_init` on the base prompt and work-pool yield items
+	 * its model calls are built from, appending a newer one when either changes: signed thinking is
+	 * bound to the system prompt and tools, so cold revival must replay them. A per-turn override is
+	 * stored as the base its hook was given, since the revived turn re-runs the hook. Transcripts
+	 * without a `session_init` are left alone.
+	 */
+	#recordModelCallSystemPrompt(prompt: string[]): void {
+		const sessionFile = this.sessionManager.getSessionFile();
+		let cached = this.#sessionInit;
+		if (!cached || cached.sessionFile !== sessionFile) {
+			cached = { sessionFile, init: extractSessionInit(this.sessionManager.getEntries()) };
+			this.#sessionInit = cached;
+		}
+		const { init } = cached;
+		if (!init) return;
+		const base = this.#tools.baseOfSystemPrompt(prompt);
+		const items = this.#workPoolYieldItems;
+		const persistedItems = init.workPoolYieldItems ?? [];
+		if (
+			base.length === init.systemPrompt.length &&
+			base.every((block, index) => block === init.systemPrompt[index]) &&
+			items.length === persistedItems.length &&
+			items.every(
+				(item, index) => item.id === persistedItems[index]?.id && item.index === persistedItems[index]?.index,
+			)
+		) {
+			return;
+		}
+		cached.init = { ...init, systemPrompt: base, workPoolYieldItems: items.length > 0 ? [...items] : undefined };
+		this.sessionManager.appendSessionInit(cached.init);
+	}
+
 	/** Marks streamed text as committed or buffered for turn-recovery replay decisions. */
 	setTextOutputCommitted(committed: boolean): void {
 		this.#textOutputCommitted = committed;
@@ -7515,7 +7587,7 @@ export class AgentSession implements SettingsScope {
 					if (!isCurrent() || !overrideIsCurrent()) return undefined;
 					if (basePreparation.commit?.() === false) return undefined;
 					if (result?.systemPrompt !== undefined) {
-						this.#tools.setTurnSystemPromptOverride(result.systemPrompt);
+						this.#tools.setTurnSystemPromptOverride(result.systemPrompt, basePreparation.systemPrompt);
 					} else {
 						this.#tools.clearTurnSystemPromptOverride();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
@@ -9033,6 +9105,13 @@ export class AgentSession implements SettingsScope {
 			// Record what this rebuild published for future rollbacks: the live set
 			// as of success. Then drain any wake parked while pooled.
 			this.#lastPublishedWorkPoolYieldItems = this.#workPoolYieldItems.map(item => ({ ...item }));
+			// Persist the contract now: a batch-end clear makes no model call, and a
+			// cold revival must not restore the finished batch's items. Only once a
+			// model call has resolved this transcript's session_init; before that,
+			// the executor has not written it yet.
+			if (this.#sessionInit?.init && this.#sessionInit.sessionFile === this.sessionManager.getSessionFile()) {
+				this.#recordModelCallSystemPrompt(this.#tools.baseSystemPrompt);
+			}
 			// A deferred wake may be parked while pooled; now that the fresh
 			// contract is published, let it wake (or stay parked when pooled).
 			this.#resumeStrandedIrcAsides();
@@ -10855,7 +10934,9 @@ export class AgentSession implements SettingsScope {
 	 *
 	 * When none of the target session's saved models can be restored, the switch
 	 * throws `Could not restore model <provider/id>` and the current session stays
-	 * active. A session created with `allowSessionModelFallback` (and
+	 * active; as with a rejected cwd change, `session_before_switch` has already
+	 * run and any in-flight turn has already been aborted (the target's models are
+	 * only known once its file is loaded). A session created with `allowSessionModelFallback` (and
 	 * `retry.modelFallback` on) instead keeps its current model and reports a
 	 * warning. Reloading the current session keeps the current model.
 	 * @returns true if switch completed, false if cancelled by hook or cwd change
@@ -10977,6 +11058,9 @@ export class AgentSession implements SettingsScope {
 				// still observe message_end, then mute before swapping files.
 				await this.#advisors.drainAndDetachRecorders();
 			}
+			// The file may be reloaded at the same path with a different latest contract (or the
+			// switch rolled back via restoreState); re-read it on the next model call either way.
+			this.#sessionInit = undefined;
 			await this.sessionManager.setSessionFile(sessionPath);
 			this.#bash.markSessionTransition(bashTransition);
 			const newCwd = this.sessionManager.getCwd();
@@ -11067,9 +11151,13 @@ export class AgentSession implements SettingsScope {
 				} else {
 					this.agent.setModel(targetModel);
 				}
-				const targetModelString = `${targetModel.provider}/${targetModel.id}`;
-				if (explicitModel && targetModelString !== targetModelStrings[0]) {
-					this.sessionManager.appendModelChange(targetModelString);
+				// Saved selectors may carry a thinking suffix; compare resolved models.
+				const savedModel =
+					targetModelStrings.length > 0
+						? resolveSessionModelSelector(this.#modelRegistry, targetModelStrings[0])?.model
+						: undefined;
+				if (explicitModel && !(savedModel && modelsAreEqual(savedModel, targetModel))) {
+					this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`);
 				}
 			}
 

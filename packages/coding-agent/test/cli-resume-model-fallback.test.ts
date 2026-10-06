@@ -5,7 +5,7 @@ import { readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 const cliEntry = path.resolve(import.meta.dir, "../src/cli.ts");
 
 describe("headless startup resume", () => {
-	test.each(["print", "rpc", "rpc-ui"])(
+	test.each(["print", "json", "rpc", "rpc-ui"])(
 		"does not send a saved transcript to the settings default in %s mode",
 		async mode => {
 			using tempDir = TempDir.createSync("@omp-resume-model-");
@@ -96,6 +96,7 @@ describe("headless startup resume", () => {
 						env: {
 							PATH: process.env.PATH,
 							HOME: tempDir.join("home"),
+							// os.homedir() reads USERPROFILE on Windows.
 							USERPROFILE: tempDir.join("home"),
 							CLAUDE_CONFIG_DIR: tempDir.join("home", ".claude"),
 							PI_CODING_AGENT_DIR: agentDir,

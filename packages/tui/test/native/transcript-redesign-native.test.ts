@@ -159,6 +159,24 @@ describe("native transcript redesign", () => {
 		expect(actions).toEqual([{ act: "copy", text: "Fix the build" }, { act: "rewind" }]);
 	});
 
+	it("shows a user message's time on the terminal's clock", async () => {
+		setTranscriptActionHandler(() => {});
+		const at = new Date(2026, 0, 1, 18, 5).getTime();
+		for (const [hour12, shown] of [
+			[false, /^18:05$/],
+			[true, /^0?6:05\s?PM$/],
+		] as const) {
+			harness = await TspHarness.start(undefined, { hour12 });
+			harness.tui.addChild(new UserMessageComponent("Fix the build", { timestamp: at }));
+			await harness.render();
+			const time = harness.find(node => node.p?.role === "omp.user.time");
+			expect(texts(time)).toMatch(shown);
+			expect(String(prop(time, "title"))).toContain(hour12 ? "PM" : "18:05");
+			harness.stop();
+			harness = undefined;
+		}
+	});
+
 	it("shows a status notice as a toast that re-shows when its text changes", async () => {
 		const notice = new StatusNotice("Thinking blocks: hidden");
 		harness = await TspHarness.start();

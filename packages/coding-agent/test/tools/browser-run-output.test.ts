@@ -72,6 +72,7 @@ describe("browser handle enrichment — fill()", () => {
 					focus: () => {
 						node.focused = true;
 					},
+					matches: () => false,
 				});
 			},
 			type: async (text: string) => {
@@ -82,7 +83,7 @@ describe("browser handle enrichment — fill()", () => {
 
 		await toActionableHandle(stub).fill("fresh");
 
-		expect(calls).toEqual(["evaluate", "type"]);
+		expect(calls).toEqual(["evaluate", "evaluate", "type"]);
 		expect(node.focused).toBe(true);
 		expect(node.value).toBe("fresh");
 	});
@@ -167,7 +168,7 @@ describe("browser handle enrichment — guarded actions", () => {
 		const stub = {
 			type: async () => {},
 			evaluate: async (fn: (el: unknown) => unknown) => {
-				fn({ focus: () => {} });
+				fn({ focus: () => {}, matches: () => false });
 			},
 			frame: {
 				page: () => ({
@@ -247,6 +248,7 @@ describe("browser handle enrichment — guarded actions", () => {
 					focus: () => {
 						node.focused = true;
 					},
+					matches: () => false,
 				});
 			},
 			type: async () => {},

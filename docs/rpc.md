@@ -394,7 +394,7 @@ Wait on `prompt_result` to present a turn's answer; wait on `session_settled` (o
 
 A successful `open_session` also marks still-open RPC prompt tickets aborted, even for an already-open directory; in that no-op case the underlying turn continues streaming. `cancelled: true` leaves the active session and prompt tickets unchanged.
 
-A resumed session restores its saved model, as `--continue` does. When none of its saved models can be restored (for example, after a model id rename or with no credentials for the provider), `open_session` fails with `Could not restore model <provider/id>` rather than send the transcript to another model. The previous session stays active, and the process keeps serving. `switch_session` fails the same way.
+A resumed session restores its saved model, as `--continue` does. When none of its saved models can be restored (for example, after a model id rename or with no credentials for the provider), `open_session` fails with `Could not restore model <provider/id>` rather than send the transcript to another model. The previous session stays active, and the process keeps serving, but a turn that was running in it has been aborted, as with any session switch. `switch_session` fails the same way.
 
 To bind with a specific model instead, pass `provider` and `modelId` together, as in `set_model`. Like `--model` at startup, they replace the saved model and skip its check. An unknown pair fails with `Model not found: <provider>/<modelId>` before any session change. A resumed session records the model when it differs from the saved one, and an already-open or fresh session selects it as `set_model` does. `switch_session` accepts the same pair.
 

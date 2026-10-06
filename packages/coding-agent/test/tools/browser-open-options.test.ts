@@ -188,6 +188,54 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser open options", () => {
 		}
 	});
 
+	it("reports where a download was saved when another tab set a different downloads directory", async () => {
+		const payload = new TextEncoder().encode("download payload\n");
+		const server = Bun.serve({
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/file") {
+					return new Response(payload, {
+						headers: {
+							"content-type": "application/octet-stream",
+							"content-disposition": 'attachment; filename="fixture.bin"',
+						},
+					});
+				}
+				return new Response('<a id="download" href="/file">download</a>', {
+					headers: { "content-type": "text/html" },
+				});
+			},
+		});
+		const first = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
+		const second = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-download-test-"));
+		tempDirs.push(first, second);
+		try {
+			const invoke = browserHost();
+			const name = `download-${crypto.randomUUID()}`;
+			await invoke({ action: "open", name, url: server.url.href, downloads: first });
+			await invoke({
+				action: "open",
+				name: `download-${crypto.randomUUID()}`,
+				url: server.url.href,
+				downloads: second,
+			});
+			const download = returnedValue(
+				await invoke({
+					action: "run",
+					name,
+					code: [
+						"const pending = tab.waitForDownload({ timeout: 5000 });",
+						"await tab.evaluate(() => document.querySelector('#download').click());",
+						"return await pending;",
+					].join("\n"),
+				}),
+			) as { path: string };
+			expect(new Uint8Array(await Bun.file(download.path).arrayBuffer())).toEqual(payload);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	it("waits for a completed download and records its bytes", async () => {
 		const payload = new TextEncoder().encode("download payload\n");
 		const server = Bun.serve({
@@ -231,6 +279,48 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser open options", () => {
 			expect(
 				returnedValue(await invoke({ action: "call", name, chain: [{ method: "downloads", args: [] }] })),
 			).toEqual([download]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("tracks a download started right after waitForDownload on a tab opened without a downloads directory", async () => {
+		const payload = new TextEncoder().encode("download payload\n");
+		const server = Bun.serve({
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/file") {
+					return new Response(payload, {
+						headers: {
+							"content-type": "application/octet-stream",
+							"content-disposition": 'attachment; filename="fixture.bin"',
+						},
+					});
+				}
+				return new Response('<a id="download" href="/file">download</a>', {
+					headers: { "content-type": "text/html" },
+				});
+			},
+		});
+		try {
+			const invoke = browserHost();
+			const name = `download-${crypto.randomUUID()}`;
+			await invoke({ action: "open", name, url: server.url.href });
+			const download = returnedValue(
+				await invoke({
+					action: "run",
+					name,
+					code: [
+						"const pending = tab.waitForDownload({ timeout: 3000 });",
+						"await tab.evaluate(() => document.querySelector('#download').click());",
+						"return await pending;",
+					].join("\n"),
+				}),
+			) as { path: string; bytes: number };
+			tempDirs.push(path.dirname(download.path));
+			expect(path.dirname(download.path)).toStartWith(path.join(os.tmpdir(), "omp-downloads-"));
+			expect(download.bytes).toBe(payload.byteLength);
+			expect(new Uint8Array(await Bun.file(download.path).arrayBuffer())).toEqual(payload);
 		} finally {
 			server.stop(true);
 		}
