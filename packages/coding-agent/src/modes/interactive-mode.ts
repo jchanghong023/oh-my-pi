@@ -5703,8 +5703,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		// The dispatch tail (plan-reference bookkeeping, autosave, auto-naming,
-		// and the synthetic plan-approved prompt) is shared with the RPC
-		// `approve_plan` command via plan-mode/session-approval.ts. The review
+		// and the synthetic plan-approved prompt) lives in
+		// plan-mode/session-approval.ts. The review
 		// overlay closes right before the dispatch — after the async title write,
 		// immediately before the execution turn is queued (issues #5688, PR
 		// #5689 review) — preserved here through the `beforeDispatch` hook.

@@ -1,9 +1,9 @@
 /**
- * Session-layer plan approval (requirement 5.3, rpc-ui-protocol.md).
+ * Session-layer plan approval for the interactive TUI flow.
  *
  * The dispatch tail of the TUI plan-approval flow (`interactive-mode.ts`
- * `#approvePlan`) lives here so the RPC `approve_plan` command and the
- * interactive TUI share one implementation. TUI-specific concerns (context
+ * `#approvePlan`) lives in this module so sessions and tests can exercise it
+ * without the interactive mode. TUI-specific concerns (context
  * clearing, compaction, tool-presentation capture, overlay management, model
  * transitions) stay in the interactive mode; this module owns only the
  * session-visible steps: plan reference bookkeeping, autosave, auto-naming,

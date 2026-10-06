@@ -5,7 +5,7 @@
  * startup cwd) hosts multiple sessions in one process: every session-scoped
  * command carries `sessionId` (+ `sessionGeneration` for loaded sessions), all
  * outbound frames are stamped with the process instance id, and project-level
- * catalogs (commands, skills, model roles, subagents) are queryable with zero
+ * catalogs (commands, model roles) are queryable with zero
  * sessions loaded. Wire framing, negotiation and the single-session legacy
  * mode are unchanged; these types extend the v3 fork contract only.
  */
