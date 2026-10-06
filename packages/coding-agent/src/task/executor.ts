@@ -3041,12 +3041,14 @@ function extractIrcRecordText(content: string | ReadonlyArray<{ type: string; te
 }
 
 /**
- * Bracket a kept-alive subagent's autonomous IRC wake turns with a task run
- * monitor so RPC/collab subscribers see the same `subagent_lifecycle` /
- * `subagent_progress` frames a first run emits. Shared by the live executor
- * reviver and the persisted cold-revive path so a resumed process's parked
- * subagents are not blind spots. The observer runs after the session has
- * flushed its post-prompt settle (see {@link AgentSession.setIrcWakeTurnObserver}).
+ * Bracket a kept-alive subagent's undriven turns — autonomous IRC wakes and
+ * user prompts from focused-session steering — with a task run monitor so
+ * RPC/collab subscribers see the same `subagent_lifecycle` /
+ * `subagent_progress` frames a first run emits, and an accepted yield rewrites
+ * the artifact like a first run's. Shared by the live executor reviver and the
+ * persisted cold-revive path so a resumed process's parked subagents are not
+ * blind spots. The observer runs after the session has flushed its post-prompt
+ * settle (see {@link AgentSession.setIrcWakeTurnObserver}).
  *
  * The turn's output reaches the parent as an async job when the parent's
  * message woke the turn or the turn yielded, and the other waking peers via
@@ -3074,7 +3076,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						if (typeof body === "string") return body;
 						return extractIrcRecordText(record.content);
 					}
-					if (record.role === "user") return extractIrcRecordText(record.content);
+					// User prompts: typed text, or the synthetic `.`/`c` continue directive.
+					if (record.role === "user" || record.role === "developer") return extractIrcRecordText(record.content);
 					return "";
 				})
 				.filter(Boolean)

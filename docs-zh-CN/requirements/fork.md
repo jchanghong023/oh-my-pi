@@ -22,9 +22,9 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.6.2`
-- **Upstream commit**：`3f000c524cf82279f804ffd7526280cc9a5f25fe`
-- **同步日期**：2026-10-06
+* **版本**：`v18.7.0`
+- **Upstream commit**：`e0fc1cf4ea354b445a359b37fa5eb58deaa85598`
+- **同步日期**：2026-10-07
 
 ## 当前功能差异
 
@@ -137,7 +137,6 @@
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：归档解压 symlink 在 Windows EPERM 时降级为 junction 或文件复制（PR #14267 待上游合并）。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
-- `crates/pi-builtins/src/tail.rs`：文件大小恰为块大小整数倍时末块大小为 0 的修复（PR #14264 待上游合并）。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
 ### 默认设置

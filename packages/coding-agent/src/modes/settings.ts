@@ -147,19 +147,6 @@ export const cfgComposerTokenRate = register({
 	},
 });
 
-export const cfgComposerThinkingInModel = register({
-	id: "composer.thinkingInModel",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "appearance",
-		group: "Composer",
-		label: "Thinking Level in Model Chip",
-		description:
-			"The native composer shows the thinking level as the model chip's icon instead of a separate chip; click the icon to cycle it",
-	},
-});
-
 // Status line
 export const cfgStatusLinePreset = register({
 	id: "statusLine.preset",
@@ -270,7 +257,7 @@ export const cfgStatusLineCompactThinkingLevel = register({
 		group: "Status Line",
 		label: "Compact Thinking Level",
 		description:
-			"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix.",
+			"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix; in Tern's composer, as the model chip's icon instead of a separate chip (click the icon to cycle it).",
 	},
 });
 
@@ -435,6 +422,46 @@ export const cfgTuiRenderMermaid = register({
 		group: "Display",
 		label: "Render Mermaid Diagrams",
 		description: "Render Mermaid fenced code blocks as ASCII diagrams",
+	},
+});
+
+export const cfgTuiRenderSvg = register({
+	id: "tui.renderSvg",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Render SVG Figures",
+		description:
+			"Invite the agent to draw diagrams and charts as SVG, rendered inline as images on terminals that show graphics",
+	},
+});
+
+export const cfgTuiAutoGraph = register({
+	id: "tui.autoGraph",
+	type: "enum",
+	values: ["smart", "always", "off"] as const,
+	default: "always",
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Auto-Graph Tables",
+		description:
+			"Draw a chart under numeric tables in the agent's answers, in your theme's colors, on terminals that show graphics",
+		options: [
+			{
+				value: "smart",
+				label: "Smart",
+				description: "The judge model picks the chart kind and columns for tables with several numeric columns",
+			},
+			{
+				value: "always",
+				label: "Always",
+				description: "Chart every table that reads as numeric, using the built-in best guess",
+			},
+			{ value: "off", label: "Off", description: "Leave tables as tables" },
+		],
 	},
 });
 

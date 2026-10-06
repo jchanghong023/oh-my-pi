@@ -548,7 +548,9 @@ impl Libei {
 			} else {
 				None
 			};
-		let keyboard = if !key_codes.is_empty() {
+		let keyboard = if key_codes.is_empty() {
+			None
+		} else {
 			let keyboard = self
 				.devices
 				.iter()
@@ -569,8 +571,6 @@ impl Libei {
 					DesktopError::input_failed("libei keyboard interface is unavailable")
 				})?,
 			))
-		} else {
-			None
 		};
 		let serial = self.serial();
 		let mut time = Self::timestamp()?;
@@ -836,35 +836,28 @@ fn read_keymap(keymap: &Keymap) -> Option<KeyboardLayout> {
 /// Resolves only through the active XKB group. Falling back to a key from a
 /// different group would emit the wrong glyph because libei cannot request a
 /// portable compositor group switch, so printable misses are reported.
+/// Control characters and ASCII on a US group map to fixed evdev keys first;
+/// the keymap would resolve `'\n'` to `<LNFD>` instead of Enter.
 fn char_stroke(layout: Option<&mut KeyboardLayout>, character: char) -> CoreResult<KeyStroke> {
-	if let Some(layout) = layout {
-		if character.is_ascii()
-			&& layout.can_use_us_ascii_fast_path()
-			&& let Some((keycode, shift)) = evdev_char(character)
-		{
-			return Ok(KeyStroke { keycode, modifiers: if shift { vec![42] } else { Vec::new() } });
-		}
-		if let Some(stroke) = layout.resolve_char(character) {
-			return Ok(stroke);
-		}
-		if character.is_control()
-			&& let Some((keycode, shift)) = evdev_char(character)
-		{
-			return Ok(KeyStroke { keycode, modifiers: if shift { vec![42] } else { Vec::new() } });
-		}
-		return Err(DesktopError::input_failed(format!(
-			"libei cannot type character {character:?} in active XKB group {}",
-			layout.active_group()
-		)));
-	}
-	if character.is_control()
-		&& let Some((keycode, shift)) = evdev_char(character)
-	{
+	let fixed_key = character.is_control()
+		|| (character.is_ascii()
+			&& layout
+				.as_deref()
+				.is_some_and(KeyboardLayout::can_use_us_ascii_fast_path));
+	if fixed_key && let Some((keycode, shift)) = evdev_char(character) {
 		return Ok(KeyStroke { keycode, modifiers: if shift { vec![42] } else { Vec::new() } });
 	}
-	Err(DesktopError::input_failed(format!(
-		"libei cannot type character {character:?}: no usable XKB keymap was announced"
-	)))
+	let Some(layout) = layout else {
+		return Err(DesktopError::input_failed(format!(
+			"libei cannot type character {character:?}: no usable XKB keymap was announced"
+		)));
+	};
+	layout.resolve_char(character).ok_or_else(|| {
+		DesktopError::input_failed(format!(
+			"libei cannot type character {character:?} in active XKB group {}",
+			layout.active_group()
+		))
+	})
 }
 
 fn evdev_keycode(key: KeyName) -> CoreResult<u32> {
@@ -961,15 +954,24 @@ fn evdev_char(character: char) -> Option<(u32, bool)> {
 		|| matches!(
 			character,
 			'_' | '+'
-				| '{' | '}'
-				| '|' | ':'
-				| '"' | '~'
-				| '<' | '>'
-				| '?' | '!'
-				| '@' | '#'
-				| '$' | '%'
-				| '^' | '&'
-				| '*' | '('
+				| '{'
+				| '}'
+				| '|'
+				| ':'
+				| '"'
+				| '~'
+				| '<'
+				| '>'
+				| '?'
+				| '!'
+				| '@'
+				| '#'
+				| '$'
+				| '%'
+				| '^'
+				| '&'
+				| '*'
+				| '('
 				| ')'
 		);
 	Some((code, shift))
@@ -1048,6 +1050,13 @@ mod tests {
 		assert!(char_stroke(None, 'a').is_err());
 		assert!(char_stroke(None, '@').is_err());
 		assert_eq!(char_stroke(None, '\n').unwrap().keycode, 28);
+	}
+
+	#[test]
+	fn newline_presses_enter_even_when_the_keymap_has_a_linefeed_key() {
+		let mut layout = KeyboardLayout::compile(include_str!("testdata/fr.xkb"))
+			.expect("French fixture must compile");
+		assert_eq!(char_stroke(Some(&mut layout), '\n').unwrap().keycode, 28);
 	}
 
 	#[test]

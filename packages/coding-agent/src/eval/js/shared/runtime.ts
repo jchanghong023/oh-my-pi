@@ -6,8 +6,10 @@ import * as path from "node:path";
 import { Writable } from "node:stream";
 import * as util from "node:util";
 
-import { isRecord } from "@oh-my-pi/pi-utils";
+// Subpath imports only: the computer worker's readiness graph includes this runtime and must not
+// load pi_natives (verified under `--no-addons`); the `@oh-my-pi/pi-utils` barrel loads it eagerly.
 import * as logger from "@oh-my-pi/pi-utils/logger";
+import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
 
 import { evalImageMetadata } from "../../types";
 import type { EvalPreludeSource } from "../worker-protocol";

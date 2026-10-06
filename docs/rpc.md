@@ -277,11 +277,21 @@ The bundled TypeScript `RpcClient.getMessages()` and Python `RpcClient.get_messa
 
 - `{ id?, type: "get_login_providers" }`
 - `{ id?, type: "login", providerId: string }`
+- `{ id?, type: "get_logout_accounts", providerId: string }` → `data: { accounts: LogoutAccount[] }`
+- `{ id?, type: "logout", providerId: string, credentialId: number }` → `data: { remainingSource?: string }`
 
 Login forwards ordinary OAuth input prompts only after the provider emits an
 authorization URL. Prompts marked `secret: true` are always rejected with a
 failed `login` response directing the user to the terminal UI; no ordinary
 `input` request is emitted. RPC does not negotiate secret-input support.
+
+Logout works per stored credential, as `/logout` does in the TUI, because one
+provider can hold several accounts. `get_logout_accounts` lists them (`credentialId`,
+`provider`, `label`, `detail`, `type`, and `active` for credentials the session may
+be using), active first. `logout` removes one and refreshes that provider's models;
+it fails when the credential is no longer stored. `remainingSource` names the source
+that still authenticates the provider: another stored credential, an environment
+variable, or a config key.
 
 ### Word prediction
 
@@ -1659,7 +1669,7 @@ Current helper characteristics:
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)`; these helpers do not imply project-mode support for provider management. Host-URI registration and delta-only message updates remain raw transport surfaces.
+ Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts()` / `logout(...)`; these helpers do not imply project-mode support for provider management. Host-URI registration and delta-only message updates remain raw transport surfaces.
 
 ### Python package
 

@@ -1,9 +1,10 @@
 //! Installed Windows applications, independent of capture and input access.
 //!
-//! ShellExecute's show state is advisory: an application or shortcut target can
-//! activate itself despite SW_SHOWNOACTIVATE. Protected processes and shell/DDE
-//! handoffs may not expose a verifiable running PID. Packaged applications come
-//! from AppsFolder metadata and are matched to processes by their actual AUMID.
+//! `ShellExecute`'s show state is advisory: an application or shortcut target
+//! can activate itself despite `SW_SHOWNOACTIVATE`. Protected processes and
+//! shell/DDE handoffs may not expose a verifiable running PID. Packaged
+//! applications come from `AppsFolder` metadata and are matched to processes by
+//! their actual AUMID.
 
 use std::{
 	collections::{HashMap, HashSet},
@@ -259,7 +260,7 @@ impl ShortcutReader {
 			// Corrupt, removed and non-filesystem shortcuts are not applications.
 			return Ok(None);
 		}
-		let mut target = [0u16; 32768];
+		let mut target = vec![0u16; 32768];
 		// SAFETY: the output slice is writable; find-data is optional. GetPath
 		// reads stored target metadata. We deliberately do not call Resolve,
 		// which can search for moved targets or display shell UI.
@@ -338,15 +339,17 @@ fn shortcuts(
 					));
 				},
 			};
-			// Junctions/reparse directories can lead out of the menu or form cycles.
+			// Junctions/reparse directories can lead out of the menu or form
+			// cycles.
 			if metadata.is_dir() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
 				pending.push(path);
-			} else if metadata.is_file() && has_extension(&path, "lnk") {
-				if let Some(target) = reader.target(&path)? {
-					let mut app = describe_path(&path)?;
-					set_running(&mut app, &target, processes);
-					apps.push(app);
-				}
+			} else if metadata.is_file()
+				&& has_extension(&path, "lnk")
+				&& let Some(target) = reader.target(&path)?
+			{
+				let mut app = describe_path(&path)?;
+				set_running(&mut app, &target, processes);
+				apps.push(app);
 			}
 		}
 	}
@@ -421,8 +424,10 @@ fn registered_applications(apps: &mut Vec<Application>) -> CoreResult<()> {
 				}
 				let wide: Vec<u16> = value
 					.bytes
-					.chunks_exact(2)
-					.map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+					.as_chunks::<2>()
+					.0
+					.iter()
+					.map(|pair| u16::from_le_bytes(*pair))
 					.collect();
 				let Ok(value_text) = String::from_utf16(&wide) else {
 					continue;
@@ -465,6 +470,8 @@ fn take_shell_string(pointer: PWSTR) -> CoreResult<String> {
 	}
 	// SAFETY: shell string results are terminated CoTaskMem allocations.
 	let value = unsafe { pointer.to_string() };
+	// SAFETY: the pointer was allocated by the shell with CoTaskMemAlloc, is
+	// non-null, and is not used after this free.
 	unsafe { CoTaskMemFree(pointer.0.cast()) };
 	value.map_err(|_| {
 		DesktopError::invalid_target("Windows application metadata is not valid Unicode")
@@ -500,6 +507,8 @@ fn packaged_applications(
 			hresult_error("read registered application properties", error.code().0)
 		})?;
 		// Desktop shell items need not have an AppUserModel ID.
+		// SAFETY: item2 is a live shell item; the returned string is consumed by
+		// take_shell_string.
 		let identity = match unsafe { item2.GetString(&PKEY_AppUserModel_ID) } {
 			Ok(value) => take_shell_string(value)?,
 			Err(error) if matches!(error.code().0 as u32, 0x8007_0005 | 0x8003_0005) => {
@@ -554,7 +563,9 @@ fn open_packaged(mut app: Application, activate: bool) -> CoreResult<Application
 					hresult_error("create packaged application activation manager", error.code().0)
 				})?;
 		// ActivateApplication explicitly activates; its output is the actual
-		// contract-handling application's PID, not Explorer's or a shell broker's.
+		// contract-handling application's PID, not Explorer's or a shell
+		// broker's. SAFETY: identity is a NUL-terminated UTF-16 string
+		// outliving the call; null arguments are permitted.
 		let pid = unsafe {
 			manager.ActivateApplication(PCWSTR(identity.as_ptr()), PCWSTR::null(), AO_NOERRORUI)
 		}
@@ -568,12 +579,15 @@ fn open_packaged(mut app: Application, activate: bool) -> CoreResult<Application
 	// ActivateApplication has no normal no-activate option. Invoke the actual
 	// registered shell item instead, passing the native advisory noactivate show
 	// state. Packaged activation/brokers can still ignore that request.
+	// SAFETY: the caller's apartment is initialized and identity is a
+	// NUL-terminated UTF-16 string outliving the call.
 	let item: IShellItem = unsafe {
 		SHCreateItemInKnownFolder(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, PCWSTR(identity.as_ptr()))
 	}
 	.map_err(|error| {
 		hresult_error(&format!("locate packaged application {}", app.id), error.code().0)
 	})?;
+	// SAFETY: item is a live shell item; the returned PIDL is freed below.
 	let item_id = unsafe { SHGetIDListFromObject(&item) }
 		.map_err(|error| hresult_error("read packaged application shell identity", error.code().0))?;
 	let mut execute = SHELLEXECUTEINFOW {
@@ -584,9 +598,12 @@ fn open_packaged(mut app: Application, activate: bool) -> CoreResult<Application
 		..Default::default()
 	};
 	// SAFETY: the PIDL remains alive throughout the shell call. NOASYNC is
-	// advisory/ignored for namespace items, so process appearance can lag return.
+	// advisory/ignored for namespace items, so process appearance can lag
+	// return.
 	let success = unsafe { ShellExecuteExW(&mut execute) } != 0;
 	let error = (!success).then(io::Error::last_os_error);
+	// SAFETY: item_id was CoTaskMem-allocated by SHGetIDListFromObject and the
+	// shell call that borrowed it has returned.
 	unsafe { CoTaskMemFree(item_id.cast()) };
 	if let Some(error) = error {
 		return Err(io_error(&format!("open packaged application {}", app.id), error));
@@ -611,7 +628,7 @@ fn running_processes() -> HashMap<String, u32> {
 	let snapshot = OwnedHandle(snapshot);
 	let mut entry =
 		PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-	let mut image = [0u16; 32768];
+	let mut image = vec![0u16; 32768];
 	let mut identity = [0u16; APPLICATION_USER_MODEL_ID_MAX_LENGTH as usize + 1];
 	// SAFETY: entry has the required size and the snapshot remains owned here.
 	let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
@@ -626,29 +643,27 @@ fn running_processes() -> HashMap<String, u32> {
 			// writable. Unpackaged/protected processes simply have no AUMID.
 			if unsafe {
 				GetApplicationUserModelId(process.0, &mut identity_length, identity.as_mut_ptr())
-			} == 0 && identity_length > 1
+			} == 0
+				&& identity_length > 1
 				&& identity_length as usize <= identity.len()
+				&& let Ok(id) = String::from_utf16(&identity[..identity_length as usize - 1])
 			{
-				if let Ok(id) = String::from_utf16(&identity[..identity_length as usize - 1]) {
-					running
-						.entry(format!("aumid:{id}"))
-						.and_modify(|pid: &mut u32| *pid = (*pid).min(entry.th32ProcessID))
-						.or_insert(entry.th32ProcessID);
-				}
+				running
+					.entry(format!("aumid:{id}"))
+					.and_modify(|pid: &mut u32| *pid = (*pid).min(entry.th32ProcessID))
+					.or_insert(entry.th32ProcessID);
 			}
 			let mut length = image.len() as u32;
 			// SAFETY: the process handle and writable output buffer are valid.
 			if unsafe { QueryFullProcessImageNameW(process.0, 0, image.as_mut_ptr(), &mut length) }
 				!= 0
+				&& let Ok(path) = String::from_utf16(&image[..length as usize])
+				&& let Ok(path) = path_string(Path::new(&path))
 			{
-				if let Ok(path) = String::from_utf16(&image[..length as usize]) {
-					if let Ok(path) = path_string(Path::new(&path)) {
-						running
-							.entry(path_key(&path))
-							.and_modify(|pid: &mut u32| *pid = (*pid).min(entry.th32ProcessID))
-							.or_insert(entry.th32ProcessID);
-					}
-				}
+				running
+					.entry(path_key(&path))
+					.and_modify(|pid: &mut u32| *pid = (*pid).min(entry.th32ProcessID))
+					.or_insert(entry.th32ProcessID);
 			}
 		}
 		// SAFETY: same initialized entry and live snapshot as above.
@@ -734,23 +749,22 @@ pub(super) fn open(mut app: Application, activate: bool) -> CoreResult<Applicati
 		// SAFETY: ShellExecuteEx supplied an owned process handle. A zero wait
 		// tests liveness without blocking or assuming a launcher remains alive.
 		if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_TIMEOUT {
-			let mut image = [0u16; 32768];
+			let mut image = vec![0u16; 32768];
 			let mut length = image.len() as u32;
 			// A shell process handle can describe a broker. Only expose its PID
 			// when its image is the actual registered executable/link target.
+			// SAFETY: the owned process handle and writable output buffer are
+			// valid.
 			if unsafe { QueryFullProcessImageNameW(process.0, 0, image.as_mut_ptr(), &mut length) }
 				!= 0
+				&& let Ok(image) = String::from_utf16(&image[..length as usize])
+				&& path_string(Path::new(&image))
+					.is_ok_and(|image| path_key(&image) == path_key(&target))
 			{
-				if let Ok(image) = String::from_utf16(&image[..length as usize]) {
-					if path_string(Path::new(&image))
-						.is_ok_and(|image| path_key(&image) == path_key(&target))
-					{
-						// SAFETY: this is the verified target's process handle.
-						let pid = unsafe { GetProcessId(process.0) };
-						app.pid = (pid != 0).then_some(pid);
-						app.running = true;
-					}
-				}
+				// SAFETY: this is the verified target's process handle.
+				let pid = unsafe { GetProcessId(process.0) };
+				app.pid = (pid != 0).then_some(pid);
+				app.running = true;
 			}
 		}
 	}

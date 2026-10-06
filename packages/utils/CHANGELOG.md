@@ -7,6 +7,12 @@
 - Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
 - Fixed process-tree cleanup when callers consume stdout or a command is canceled or fails.
 
+## [18.6.3] - 2026-10-06
+
+### Breaking Changes
+
+- Replaced the `cursorPosition` option of `TerminalQueryResponder` with `hostCursorHandshake`, which leaves only the PTY host's own session-start cursor query unanswered instead of every cursor-position query
+
 ## [18.5.1] - 2026-10-03
 
 ### Added

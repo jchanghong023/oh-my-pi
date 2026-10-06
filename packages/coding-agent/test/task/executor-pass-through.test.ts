@@ -810,6 +810,16 @@ describe("runSubprocess follows the parent's MCP manager", () => {
 	let workDir: string;
 	let manager: MCPManager;
 
+	/**
+	 * Connects and awaits the initial tool loads. `connectServers` alone returns after
+	 * its startup window (250 ms by default), which a loaded runner outlasts while the
+	 * stdio fixture spawns, leaving the server's tools unregistered.
+	 */
+	const connectReady = async (configs: Record<string, MCPStdioServerConfig>): Promise<void> => {
+		await manager.connectServers(configs, {});
+		expect(await manager.waitForStartup(0)).toEqual({ connected: Object.keys(configs), pending: [], failed: [] });
+	};
+
 	beforeEach(() => {
 		workDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-subagent-mcp-follow-"));
 		manager = new MCPManager(workDir);
@@ -855,7 +865,7 @@ describe("runSubprocess follows the parent's MCP manager", () => {
 	}
 
 	it("rebinds a live subagent's MCP tools when the parent adds a server and reloads mid-run", async () => {
-		await manager.connectServers({ alpha: fixtureConfig() }, {});
+		await connectReady({ alpha: fixtureConfig() });
 		const child = followingChild(async ({ refreshedWith }) => {
 			// `/mcp add bravo` then `/mcp reload` in the parent while the child runs.
 			await manager.disconnectAll();
@@ -886,7 +896,7 @@ describe("runSubprocess follows the parent's MCP manager", () => {
 		});
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
 			// The server finishes connecting after proxies were minted but before bind.
-			await manager.connectServers({ alpha: fixtureConfig() }, {});
+			await connectReady({ alpha: fixtureConfig() });
 			return createSessionResult(child.session);
 		});
 
@@ -908,7 +918,7 @@ describe("runSubprocess follows the parent's MCP manager", () => {
 			execute: async () => ({ content: [{ type: "text", text: "kernel" }] }),
 		};
 		const siblingProxy = `mcp__alpha_${manyToolName(1)}`;
-		await manager.connectServers({ alpha: fixtureConfig() }, {});
+		await connectReady({ alpha: fixtureConfig() });
 		const child = followingChild(async ({ refreshedWith }) => {
 			await manager.disconnectAll();
 			await manager.connectServers({ alpha: fixtureConfig() }, {});

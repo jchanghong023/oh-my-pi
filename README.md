@@ -561,6 +561,17 @@ omp 是 [Mario Zechner](https://github.com/mariozechner) 的 [pi-mono](https://g
 - 内置实用能力（tools、sessions、branching、subagents、extensibility）
 - 让高级行为可配置，而不是隐藏起来
 
+### 项目输入与信任
+
+打开一个仓库时，按设计会加载它的项目输入：设置、扩展、hooks、tools、命令、skills、规则以及项目 MCP 配置。如果某次调用要排除项目的 `.mcp.json`，传入 `--config <file>` 指向一个使用嵌套键的 YAML overlay（单行的 `mcp.enableProjectConfig: false` 会被忽略）：
+
+```yaml
+mcp:
+  enableProjectConfig: false
+```
+
+用 `--no-extensions` 跳过环境扩展发现；或用 `--trusted-extension /absolute/path/to/file.ts` 给出精确的扩展白名单。`--no-tools` 会禁用内置工具，但项目 tool 模块仍是独立的发现面。这些旗标只收窄输入，不改变仓库信任模型。
+
 ---
 
 ## 开发

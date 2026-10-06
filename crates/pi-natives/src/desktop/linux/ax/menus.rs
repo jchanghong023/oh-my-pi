@@ -11,7 +11,7 @@ fn failure(message: impl std::fmt::Display) -> DesktopError {
 	DesktopError::ax_failed(format!("AT-SPI menu: {message}"))
 }
 
-fn menu_role(role: Role) -> bool {
+const fn menu_role(role: Role) -> bool {
 	matches!(role, Role::Menu | Role::MenuItem | Role::CheckMenuItem | Role::RadioMenuItem)
 }
 
@@ -30,7 +30,6 @@ mod tests {
 
 	#[test]
 	fn non_menu_controls_are_not_commands() {
-		// atspi-common 0.14 exposes AT-SPI role 43 (push button) as `Button`.
 		assert!(!menu_role(Role::Button));
 		assert!(!menu_role(Role::Frame));
 		assert!(!menu_role(Role::MenuBar));
@@ -261,7 +260,8 @@ impl AtSpiAx {
 		let root = Self::object(&root).clone();
 		let (item, object) = self.rt.block_on(self.resolve_menu(&root, path))?;
 		require_command(&item)?;
-		// Recheck the resolver and ancestor chain after discovery, before dispatch.
+		// Recheck the resolver and ancestor chain after discovery, before
+		// dispatch.
 		if Self::object(&self.window_root(window)?) != &root {
 			return Err(failure("target frame changed during menu discovery"));
 		}

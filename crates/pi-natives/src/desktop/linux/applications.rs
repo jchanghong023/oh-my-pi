@@ -52,10 +52,9 @@ fn data_roots() -> Vec<PathBuf> {
 		.map(PathBuf::from)
 		.filter(|path| path.is_absolute())
 		.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+		&& home.is_absolute()
 	{
-		if home.is_absolute() {
-			roots.push(home.join("applications"));
-		}
+		roots.push(home.join("applications"));
 	}
 	let directories = env::var_os("XDG_DATA_DIRS")
 		.filter(|value| !value.is_empty())
@@ -181,12 +180,10 @@ fn read_entry(path: &Path, id: String) -> CoreResult<Entry> {
 			found_entry |= in_entry;
 			continue;
 		}
-		if in_entry {
-			if let Some((key, value)) = line.split_once('=') {
-				let key = key.trim().to_owned();
-				if values.insert(key, value.trim().to_owned()).is_some() {
-					return Err(invalid("duplicate desktop-entry key"));
-				}
+		if in_entry && let Some((key, value)) = line.split_once('=') {
+			let key = key.trim().to_owned();
+			if values.insert(key, value.trim().to_owned()).is_some() {
+				return Err(invalid("duplicate desktop-entry key"));
 			}
 		}
 	}
@@ -311,10 +308,18 @@ fn exec_argv(raw: &str, name: &str, icon: Option<&str>, path: &Path) -> CoreResu
 					&& matches!(
 						character,
 						'\''
-							| '>' | '<' | '~'
-							| '|' | '&' | ';'
-							| '$' | '*' | '?'
-							| '#' | '(' | ')'
+							| '>'
+							| '<'
+							| '~'
+							| '|'
+							| '&'
+							| ';'
+							| '$'
+							| '*'
+							| '?'
+							| '#'
+							| '('
+							| ')'
 							| '`'
 					) =>
 			{
@@ -542,6 +547,7 @@ fn processes() -> HashMap<PathBuf, Vec<u32>> {
 	processes
 }
 
+#[allow(clippy::unnecessary_wraps, reason = "matches the fallible macOS and Windows signatures")]
 pub(super) fn list() -> CoreResult<Vec<Application>> {
 	let processes = processes();
 	let bus = BusConnection::session().ok();
@@ -871,7 +877,8 @@ impl Activation {
 		loop {
 			if self
 				.property(self.root, self.active, AtomEnum::WINDOW)?
-				.first() == Some(&window)
+				.first()
+				== Some(&window)
 			{
 				return Ok(());
 			}

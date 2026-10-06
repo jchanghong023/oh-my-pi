@@ -83,10 +83,11 @@ impl Target {
 		// SAFETY: the output process ID is writable and Windows validates HWND.
 		let thread = unsafe { GetWindowThreadProcessId(self.hwnd, &mut pid) };
 		// SAFETY: IsWindow only inspects the opaque handle.
+		let live = unsafe { IsWindow(self.hwnd) } != 0;
 		if thread == 0
 			|| thread != self.thread
 			|| pid != self.pid
-			|| unsafe { IsWindow(self.hwnd) } == 0
+			|| !live
 			|| window::root(self.hwnd) != self.hwnd
 		{
 			return Err(DesktopError::window_not_found("the exact menu target no longer exists"));
@@ -276,12 +277,13 @@ fn native_resolve(root: HMENU, path: &[String]) -> CoreResult<NativeNode> {
 	Err(failed("a menu command path is required"))
 }
 
-/// WM_COMMAND encodes the command ID in LOWORD(wParam). Menus opting into
-/// MNS_NOTIFYBYPOS instead require WM_MENUCOMMAND(position, containing HMENU).
+/// `WM_COMMAND` encodes the command ID in `LOWORD(wParam)`. Menus opting into
+/// `MNS_NOTIFYBYPOS` instead require `WM_MENUCOMMAND(position, containing
+/// HMENU)`.
 fn native_message(id: u32, position: u32, style: u32) -> CoreResult<(u32, usize)> {
 	if style & MNS_NOTIFYBYPOS != 0 {
 		Ok((WM_MENUCOMMAND, position as usize))
-	} else if id <= u32::from(u16::MAX) {
+	} else if u16::try_from(id).is_ok() {
 		Ok((WM_COMMAND, id as usize))
 	} else {
 		Err(failed("menu command ID cannot be represented by WM_COMMAND; no command was dispatched"))
@@ -366,7 +368,8 @@ struct ComApartment;
 
 impl ComApartment {
 	fn new() -> CoreResult<Self> {
-		// SAFETY: this initializes only the calling thread, with no reserved data.
+		// SAFETY: this initializes only the calling thread, with no reserved
+		// data.
 		let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
 		if result < 0 {
 			return Err(failed(format!(

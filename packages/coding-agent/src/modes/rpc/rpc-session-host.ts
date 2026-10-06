@@ -57,6 +57,7 @@ import {
 	buildAvailableSlashCommands,
 	type InternalAvailableSlashCommand,
 } from "../../slash-commands/available-commands";
+import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
@@ -2397,6 +2398,39 @@ export class RpcSessionHost {
 				} catch (err: unknown) {
 					return this.error(id, "login", errorMessage(err));
 				}
+			}
+
+			case "get_logout_accounts": {
+				// An absent provider would list every provider's credentials.
+				if (typeof command.providerId !== "string") {
+					return this.error(id, "get_logout_accounts", "providerId must be a string");
+				}
+				const accounts = await listLogoutAccounts(
+					session.modelRegistry.authStorage,
+					command.providerId,
+					session.sessionId,
+				);
+				return this.success(id, "get_logout_accounts", { accounts });
+			}
+
+			case "logout": {
+				if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId)) {
+					return this.error(id, "logout", "providerId must be a string and credentialId an integer");
+				}
+				const { removed, remainingSource } = await logoutCredential(
+					session.modelRegistry,
+					command.providerId,
+					command.credentialId,
+					session.sessionId,
+				);
+				if (!removed) {
+					return this.error(
+						id,
+						"logout",
+						`Credential ${command.credentialId} is not stored for ${command.providerId}`,
+					);
+				}
+				return this.success(id, "logout", { remainingSource });
 			}
 
 			// =================================================================
