@@ -34,7 +34,7 @@ export function isRpcHostUriResult(value: unknown): value is RpcHostUriResult {
 /**
  * One handler instance per host-registered scheme, shared by every bridge that
  * registered the scheme on the same router. Reads and writes are routed to the
- * bridge of the CALLING session (rpc-ui-protocol.md §5.2/§13.2): in project
+ * bridge of the CALLING session (rpc-ui-protocol.md): in project
  * mode every session registers the same project-wide scheme set, and a global
  * last-writer handler would stamp another session's identity onto the request.
  * Callers without a session identity fall back to the first owner.

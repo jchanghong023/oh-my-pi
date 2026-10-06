@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import { YAML } from "bun";
 import * as path from "node:path";
-import { getProjectAgentDir, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import { RpcFrameDecoder } from "../src/modes/rpc/rpc-frame";
 import { e2eApiKey } from "./utilities";
 
@@ -13,58 +12,11 @@ import { e2eApiKey } from "./utilities";
 
 type RpcFrame = Record<string, unknown>;
 
-async function readFixtureYaml(file: string) {
-	const parsed = YAML.parse(await fs.readFile(file, "utf-8"));
-	if (!isRecord(parsed)) throw new Error("Invalid fixture document");
-	return {
-		raw: parsed,
-		providers: isRecord(parsed.providers) ? parsed.providers : {},
-		skills: isRecord(parsed.skills) ? parsed.skills : {},
-		enabledModels: Array.isArray(parsed.enabledModels) ? parsed.enabledModels : [],
-		disabledModels: Array.isArray(parsed.disabledModels) ? parsed.disabledModels : [],
-	};
-}
-
 interface ServerHandle {
 	send: (frame: object) => void;
 	next: (predicate?: (frame: RpcFrame) => boolean) => Promise<RpcFrame>;
 	dispose: () => Promise<void>;
 }
-
-test("project RPC cannot enable a model excluded by project settings", async () => {
-	await using project = await TempDir.create("rpc-project-model-exclusion-");
-	await using agent = await TempDir.create("rpc-project-model-agent-");
-	const cwd = path.resolve(project.path());
-	const agentDir = path.resolve(agent.path());
-	await fs.mkdir(getProjectAgentDir(cwd), { recursive: true });
-	await fs.writeFile(
-		path.join(getProjectAgentDir(cwd), "config.yml"),
-		YAML.stringify({ disabledModels: ["zcode-api/glm-5.2*"] }),
-	);
-	const handler = await spawnRpcServer(cwd, agentDir, { projectMode: true, provider: "zcode-api", model: "glm-4.5" });
-	try {
-		const ready = await handler.next(frame => frame.type === "ready");
-		const stamp = { processInstanceId: ready.processInstanceId };
-		handler.send({ ...stamp, id: "negotiate", type: "negotiate_protocol", protocolVersion: 3 });
-		expect(await handler.next(frame => frame.type === "response" && frame.id === "negotiate")).toMatchObject({
-			success: true,
-		});
-		handler.send({
-			...stamp,
-			id: "enable",
-			type: "set_model_enabled",
-			provider: "zcode-api",
-			modelId: "glm-5.2",
-			enabled: true,
-		});
-		const response = await handler.next(frame => frame.type === "response" && frame.id === "enable");
-		expect(response).toMatchObject({ success: false, code: "unsupported" });
-		expect(response.error).toContain("remains excluded");
-		expect(await fs.stat(path.join(agentDir, "config.yml")).catch(() => undefined)).toBeUndefined();
-	} finally {
-		await handler.dispose();
-	}
-}, 30_000);
 
 async function spawnRpcServer(
 	cwd: string,

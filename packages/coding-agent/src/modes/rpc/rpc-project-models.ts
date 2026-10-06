@@ -1,6 +1,6 @@
 /**
  * Fork RPC project-mode model-role catalog and persistence service
- * (requirement R6, rpc-ui-protocol.md §8.3/§14.7).
+ * (rpc-ui-protocol.md).
  *
  * Serves the full configurable role catalog (`get_model_roles`) and the
  * per-role scoped write path (`set_model_role`) with ZERO loaded sessions:
@@ -36,7 +36,7 @@ import type {
 	RpcRevision,
 } from "./rpc-project-types";
 
-/** Typed failure surfaced by the role service; `code` maps to RpcProjectErrorCode (rpc-ui-protocol.md §14.1). */
+/** Typed failure surfaced by the role service; `code` maps to RpcProjectErrorCode (rpc-ui-protocol.md). */
 export class RpcProjectModelRoleError extends Error {
 	readonly code: RpcProjectErrorCode;
 
@@ -69,7 +69,7 @@ export interface RpcProjectModelRoleListOptions {
 	/**
 	 * Loaded-session passthrough echoed as `sessionModel` so the GUI can show
 	 * the session's actual model next to the persisted catalog
-	 * (rpc-ui-protocol.md §14.7). The service itself needs no session.
+	 * (rpc-ui-protocol.md). The service itself needs no session.
 	 */
 	readonly sessionInfo?: {
 		readonly sessionId: string;
@@ -135,7 +135,7 @@ export class RpcProjectModelRoleService {
 	}
 
 	/**
-	 * Full role catalog (rpc-ui-protocol.md §14.7): every known role with its
+	 * Full role catalog (rpc-ui-protocol.md): every known role with its
 	 * name, configurability, explicit configured value, best-effort resolved
 	 * model (or unresolved reason), provenance, writable scopes, and revision.
 	 * Resolution runs against the full registry pool (`getAvailable("all")`)
@@ -155,7 +155,7 @@ export class RpcProjectModelRoleService {
 	}
 
 	/**
-	 * Persist one role selection (rpc-ui-protocol.md §14.7). Only user scope is
+	 * Persist one role selection (rpc-ui-protocol.md). Only user scope is
 	 * writable through this entry point: the value is formatted with the shared
 	 * role formatting helper, validated against the registry and the role's
 	 * acceptance predicate, written via `setModelRole`, and awaited through

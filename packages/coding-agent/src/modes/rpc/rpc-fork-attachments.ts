@@ -1,5 +1,5 @@
 /**
- * Fork-extension attachment channel (rpc-ui-protocol.md §14.4).
+ * Fork-extension attachment channel (rpc-ui-protocol.md).
  *
  * Resolves `attachments` on the prompt family into message content at send
  * time: images become `ImageContent` (same pipeline as the stock `images`

@@ -103,7 +103,7 @@ export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reaso
 
 /**
  * Project-mode envelope stamped on outbound frames (rpc-ui-protocol.md
- * §15.1). Frame listeners receive it so parallel sessions can be attributed;
+ * rpc-ui-protocol.md). Frame listeners receive it so parallel sessions can be attributed;
  * absent in single-session mode.
  */
 export type RpcFrameSessionScope = {

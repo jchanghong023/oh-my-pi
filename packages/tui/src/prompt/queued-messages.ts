@@ -12,8 +12,6 @@ import { theme } from "../theme/theme";
 export interface QueuedMessageGroup {
 	readonly label: string;
 	readonly messages: readonly string[];
-	/** Already handed to the model: listed without the dequeue/edit affordance. */
-	readonly locked?: boolean;
 }
 
 /**
@@ -21,8 +19,7 @@ export interface QueuedMessageGroup {
  * per group, numbered dim rows and the dequeue hint. Natively (§8.1): a
  * stack of pills, each `corner-down-right` · the text · `⌥↑ Edit`, the total
  * count in the first pill when more than one waits; the edit control sends
- * `queue.edit`, answered like the dequeue key. Locked groups get neither the
- * hint nor the edit control.
+ * `queue.edit`, answered like the dequeue key.
  */
 export class QueuedMessagesBand extends Container {
 	readonly #native: NativeNode;
@@ -43,9 +40,7 @@ export class QueuedMessagesBand extends Container {
 			}
 		}
 		const editKey = formatKeyHint(dequeueKey);
-		if (groups.some(group => !group.locked && group.messages.length > 0)) {
-			this.addChild(new TruncatedText(theme.fg("dim", `  ${theme.tree.hook} ${editKey} to edit`), 1, 0));
-		}
+		this.addChild(new TruncatedText(theme.fg("dim", `  ${theme.tree.hook} ${editKey} to edit`), 1, 0));
 
 		const count = groups.reduce((sum, group) => sum + group.messages.length, 0);
 		const pills: NativeNode[] = [];
@@ -68,22 +63,20 @@ export class QueuedMessagesBand extends Container {
 				if (pills.length === 0 && count > 1) {
 					children.push(node("badge", { text: `${count}`, role: "omp.queue.count" }, undefined, "count"));
 				}
-				if (!group.locked) {
-					children.push(
-						node(
-							"row",
-							{
-								role: "omp.queue.edit",
-								gap: "xs",
-								align: "center",
-								title: `Edit  ${editKey}`,
-								actions: { click: "queue.edit" },
-							},
-							[kbd(dequeueKey), text("Edit")],
-							"edit",
-						),
-					);
-				}
+				children.push(
+					node(
+						"row",
+						{
+							role: "omp.queue.edit",
+							gap: "xs",
+							align: "center",
+							title: `Edit  ${editKey}`,
+							actions: { click: "queue.edit" },
+						},
+						[kbd(dequeueKey), text("Edit")],
+						"edit",
+					),
+				);
 				pills.push(
 					node(
 						"row",

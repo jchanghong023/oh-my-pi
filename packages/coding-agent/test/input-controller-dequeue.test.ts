@@ -20,7 +20,6 @@
  */
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -34,7 +33,6 @@ function makeCtx(
 		queue?: RestoredQueuedMessage[];
 		compaction?: CompactionQueuedMessage[];
 		draft?: string;
-		liveSteered?: string[];
 	} = {},
 ) {
 	const queue = [...(opts.queue ?? [])];
@@ -48,9 +46,8 @@ function makeCtx(
 	const session = {
 		popLastQueuedMessage: () => queue.pop(),
 		getQueuedMessages: () => ({
-			steering: [...(opts.liveSteered ?? []), ...queue.map(m => m.text)],
+			steering: queue.map(m => m.text),
 			followUp: [],
-			liveSteered: opts.liveSteered?.length ?? 0,
 		}),
 		clearQueue,
 	};
@@ -109,15 +106,6 @@ describe("InputController.handleDequeue (Alt+Up)", () => {
 		new InputController(ctx).handleDequeue();
 		expect(statuses).toEqual(["No queued messages to restore"]);
 		expect(getText()).toBe("");
-	});
-
-	test("live-steered input is not restored and points at the interrupt key (#13798)", () => {
-		const { ctx, statuses, getText } = makeCtx({ liveSteered: ["use tabs"] });
-		new InputController(ctx).handleDequeue();
-		expect(getText()).toBe("");
-		expect(statuses).toHaveLength(1);
-		expect(statuses[0]).not.toBe("No queued messages to restore");
-		expect(statuses[0]).toContain(formatKeyHint("escape"));
 	});
 
 	test("falls back to the compaction queue and pops only its last entry", () => {

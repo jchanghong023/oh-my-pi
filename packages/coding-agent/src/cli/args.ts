@@ -88,7 +88,7 @@ export interface Args {
 	noTitle?: boolean;
 	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
-	/** `--mode rpc-ui` only: project mode — one process hosts many sessions of the startup cwd (rpc-ui-protocol.md §4.1). */
+	/** `--mode rpc-ui` only: project mode — one process hosts many sessions of the startup cwd (rpc-ui-protocol.md §2.2). */
 	rpcProject?: boolean;
 	autoApprove?: boolean;
 	approvalMode?: "always-ask" | "write" | "yolo";

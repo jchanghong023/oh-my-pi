@@ -127,16 +127,14 @@ type CommandName = RpcCommand["type"];
 /**
  * Fork carve-out: the protocol-v3 command surface in `rpc-fork-*.ts` is
  * negotiation-gated and deliberately not modeled in the generated wire
- * schema; clients use raw requests after negotiating v3. The pre-adopted
- * upstream `/btw` commands are available on every protocol version but
- * likewise remain outside the generated schema. The same holds for fork-only
+ * schema; clients use raw requests after negotiating v3. The same holds for fork-only
  * fields the server accepts or emits on otherwise-stock definitions: the
  * structured `attachments` parameter on the prompt-like commands, rich-ask
  * `sensitive`, `approvalMode` on the session state, goal `iteration`, and the
  * project-mode `ready` stamps. Conformance below pins only the stock surface;
  * each carve-out shrinks when an upstream PR lands the field on the wire.
  */
-type ForkCommandName = RpcForkCommand["type"] | "btw" | "btw_cancel" | "get_btw_history";
+type ForkCommandName = RpcForkCommand["type"];
 type StockCommandName = Exclude<CommandName, ForkCommandName>;
 
 /** Fork-only parameter fields the server accepts on stock commands. */

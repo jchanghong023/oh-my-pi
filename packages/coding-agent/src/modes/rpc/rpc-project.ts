@@ -1,5 +1,5 @@
 /**
- * RPC project mode (rpc-ui-protocol.md §4/§13/§14): one OMP process hosting
+ * RPC project mode (rpc-ui-protocol.md): one OMP process hosting
  * MANY sessions for one project (`omp --mode rpc-ui --rpc-project`, project
  * root fixed by the startup cwd).
  *
@@ -75,7 +75,7 @@ export interface RpcProjectModeOptions {
 	readonly input?: ReadableStream<Uint8Array>;
 }
 
-/** Project-level commands answered without a session (rpc-ui-protocol.md §14.9). */
+/** Project-level commands answered without a session (rpc-ui-protocol.md). */
 const PROJECT_LEVEL_COMMANDS = new Set<string>([
 	"negotiate_protocol",
 	"create_session",
@@ -393,7 +393,6 @@ class RpcProjectHost {
 	}
 
 	readonly #sessionHosts = new Map<string, RpcSessionHost>();
-	readonly #pendingSkillRefresh = new Set<string>();
 	/** In-flight host attachments keyed by session id (concurrent create/resume coalescing). */
 	readonly #attaching = new Map<string, Promise<void>>();
 	/** sessionId → session file for not-loaded sessions (populated lazily by #prefetchSessionFile). */
@@ -723,20 +722,6 @@ class RpcProjectHost {
 				"stale_session",
 			);
 		}
-		if (
-			command.type === "prompt" &&
-			this.#pendingSkillRefresh.has(sessionId) &&
-			this.#canRefreshSkills(record, host)
-		) {
-			record.busy = true;
-			try {
-				await host.refreshSkills();
-				this.#assertRecordIdentity(record);
-				this.#pendingSkillRefresh.delete(sessionId);
-			} finally {
-				record.busy = false;
-			}
-		}
 		// The frame object is passed through as-is (routing fields included):
 		// RpcUserInputGate keys acceptance on object identity, so a rebuilt
 		// "stock" copy would never match and every ordered user input would
@@ -1005,7 +990,7 @@ class RpcProjectHost {
 		// Catalog resolution is async; without holding the session's input gate a
 		// later-arriving plain prompt enters the ordered arm first and this
 		// command's synthetic prompt overtakes it in reverse arrival order
-		// (§14.4). The gate is re-entrant for the synthetic prompt dispatched
+		//. The gate is re-entrant for the synthetic prompt dispatched
 		// below, so the whole section keeps one arrival order.
 		const runOrdered = async (): Promise<RpcResponse> => {
 			const resolution = await this.#catalogService.resolve(text.trimStart(), host?.session);
@@ -1120,7 +1105,6 @@ class RpcProjectHost {
 		this.#mcpManagers.delete(sessionId);
 		this.#staleSessions.delete(sessionId);
 		this.#sessionHosts.delete(sessionId);
-		this.#pendingSkillRefresh.delete(sessionId);
 		this.#inputGates.delete(sessionId);
 		for (const [interactionId, owner] of this.#interactions) {
 			if (owner.sessionId === sessionId) this.#interactions.delete(interactionId);
@@ -1156,16 +1140,6 @@ class RpcProjectHost {
 		const loaded = this.#container.get(sessionId);
 		if (loaded?.session.sessionFile) return loaded.session.sessionFile;
 		return this.#sessionFileCache.get(sessionId);
-	}
-
-	#canRefreshSkills(record: RpcProjectSessionRecord, host: RpcSessionHost): boolean {
-		return (
-			record.state === "loaded" &&
-			!record.busy &&
-			!host.session.isBusyForSnapshot &&
-			!host.session.hasAdmittedSubmission &&
-			!host.isWaitingInteraction()
-		);
 	}
 
 	/** Route a side-channel frame to the session that issued the request. */
@@ -1220,7 +1194,6 @@ class RpcProjectHost {
 		this.#mcpManagers.clear();
 		this.#staleSessions.clear();
 		this.#sessionHosts.clear();
-		this.#pendingSkillRefresh.clear();
 		this.#inputGates.clear();
 		this.#sessionFileCache.clear();
 		this.#interactions.clear();
@@ -1375,7 +1348,7 @@ class RpcProjectHost {
 				break;
 			}
 			case "get_session_stats": {
-				// History-range query (§14.4): message-derived totals only, no
+				// History-range query: message-derived totals only, no
 				// running container. Model-usage entries outside the active
 				// transcript window mirror the live tracker's window rule.
 				const branch = manager.getBranch();
@@ -1455,7 +1428,7 @@ class RpcProjectGateError extends Error {
 
 /**
  * Message-derived {@link SessionStats} for a saved, not-loaded session
- * (§14.4: `get_session_stats` is an H-range query and must not instantiate a
+ * (`get_session_stats` is an H-range query and must not instantiate a
  * running container). Mirrors the SessionStatsTracker message loop; the live
  * `contextUsage` estimate has no persisted equivalent and stays absent.
  */

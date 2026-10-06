@@ -1,6 +1,6 @@
 /**
  * Unified command catalog + dynamic completion engine for RPC project mode
- * (requirement R2, rpc-ui-protocol.md §7 / §14.5).
+ * (rpc-ui-protocol.md).
  *
  * `RpcCommandCatalogService` owns the project-level `/command` catalog:
  * `buildCatalog` snapshots descriptors — a live session listing via

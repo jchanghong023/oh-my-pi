@@ -1,5 +1,5 @@
 /**
- * Fork RPC project-mode protocol contract (rpc-ui-protocol.md §13—§15).
+ * Fork RPC project-mode protocol contract (rpc-ui-protocol.md).
  *
  * Project mode (`omp --mode rpc-ui --rpc-project`, project root fixed by the
  * startup cwd) hosts multiple sessions in one process: every session-scoped
@@ -16,7 +16,7 @@ export interface RpcProjectIdentity {
 	readonly projectRoot: string;
 }
 
-/** Capabilities announced in `ready` for project mode (rpc-ui-protocol.md §14.2). */
+/** Capabilities announced in `ready` for project mode (rpc-ui-protocol.md). */
 export interface RpcProjectCapabilities {
 	readonly projectMode: true;
 	readonly multiSession: true;
@@ -42,7 +42,7 @@ export interface RpcProjectReadyInfo {
 	readonly capabilities: RpcProjectCapabilities;
 }
 
-/** Error codes project mode must distinguish (rpc-ui-protocol.md §14.1). */
+/** Error codes project mode must distinguish (rpc-ui-protocol.md). */
 export type RpcProjectErrorCode =
 	| "invalid_params"
 	| "not_found"
@@ -81,7 +81,7 @@ export type RpcProjectSessionLoadState = "not_loaded" | "loading" | "loaded" | "
 /** Best-effort run state for a loaded session. */
 export type RpcProjectSessionRunState = "idle" | "streaming" | "waiting_interaction" | "closing";
 
-/** Project session directory entry (rpc-ui-protocol.md §14.1 SessionSummary). */
+/** Project session directory entry (rpc-ui-protocol.md). */
 export interface RpcProjectSessionSummary {
 	readonly sessionId: string;
 	readonly name?: string;
@@ -143,7 +143,7 @@ export interface RpcProjectSessionCommandBase extends RpcProjectCommandBase {
 	readonly sessionGeneration: string;
 }
 
-/** `create_session`: open a new session in this project (rpc-ui-protocol.md §14.3). */
+/** `create_session`: open a new session in this project (rpc-ui-protocol.md). */
 export interface RpcProjectCreateSessionCommand extends RpcProjectCommandBase {
 	readonly type: "create_session";
 	readonly name?: string;
@@ -187,7 +187,7 @@ export interface RpcProjectDeleteSessionCommand extends RpcProjectCommandBase {
 	readonly cancelRunning?: boolean;
 }
 
-/** `get_model_roles`: full configurable role catalog (rpc-ui-protocol.md §14.7). */
+/** `get_model_roles`: full configurable role catalog (rpc-ui-protocol.md). */
 export interface RpcProjectGetModelRolesCommand extends RpcProjectCommandBase {
 	readonly type: "get_model_roles";
 	/** Optional loaded session; adds that session's temporary override info. */
@@ -249,7 +249,7 @@ export interface RpcProjectSetModelRoleResult {
 }
 
 // ---------------------------------------------------------------------------
-// Command catalog, completion, execution (rpc-ui-protocol.md §14.5)
+// Command catalog, completion, execution (rpc-ui-protocol.md)
 // ---------------------------------------------------------------------------
 
 /** Why a catalog command is currently unavailable. */
@@ -313,7 +313,7 @@ export interface RpcProjectExecuteCommandCommand extends RpcProjectCommandBase {
 	readonly catalogRevision?: RpcRevision;
 }
 
-/** Exactly one of the three completion channels is used (§14.5). */
+/** Exactly one of the three completion channels is used. */
 export interface RpcProjectExecuteCommandResult {
 	/** Local completion: the command fully ran without a model turn. */
 	readonly completed?: boolean;
@@ -346,7 +346,7 @@ export type RpcProjectCommand =
 // Event frames (server → client), project mode stamps included
 // ---------------------------------------------------------------------------
 
-/** Fields stamped onto every project-mode frame (rpc-ui-protocol.md §15.1). */
+/** Fields stamped onto every project-mode frame (rpc-ui-protocol.md). */
 export interface RpcProjectFrameStamp {
 	readonly processInstanceId: string;
 	readonly sessionId?: string;
@@ -363,7 +363,7 @@ export interface RpcProjectCatalogChangedFrame extends RpcProjectFrameStamp {
 	readonly revision: RpcRevision;
 }
 
-/** Terminal frame for accepted async management operations (§15.1). */
+/** Terminal frame for accepted async management operations. */
 export interface RpcProjectOperationResultFrame extends RpcProjectFrameStamp {
 	readonly type: "operation_result";
 	readonly operationId: string;

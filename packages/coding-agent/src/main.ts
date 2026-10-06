@@ -643,7 +643,7 @@ export interface RpcProjectSessionFactoryOptions {
 
 /**
  * Build the per-session factory used by RPC project mode
- * (`--mode rpc-ui --rpc-project`, rpc-ui-protocol.md §4.1). Unlike the ACP
+ * (`--mode rpc-ui --rpc-project`, rpc-ui-protocol.md §2.2). Unlike the ACP
  * factory, MCP stays on the on-disk discovery path (project sessions own the
  * same `.mcp.json` as the TUI) and every session gets its own EventBus AND
  * subagent event bus so subagent frames never cross sessions.
@@ -2479,7 +2479,7 @@ export async function runRootCommand(
 			logger.endTiming();
 			await runAcpMode(createAcpSession);
 		} else if (mode === "rpc-ui" && parsedArgs.rpcProject) {
-			// Project mode (rpc-ui-protocol.md §4.1): one OMP process hosting many
+			// Project mode (rpc-ui-protocol.md §2.2): one OMP process hosting many
 			// sessions of the startup cwd. No main session exists — the project
 			// host creates/loads sessions on demand and supports zero sessions.
 			const projectCwd = sessionOptions.cwd ?? getProjectDir();

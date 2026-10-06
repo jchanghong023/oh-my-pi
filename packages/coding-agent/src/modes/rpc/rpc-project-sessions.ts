@@ -1,5 +1,5 @@
 /**
- * Fork RPC project-mode multi-session container (requirement R3, rpc-ui-protocol.md §5/§14.3).
+ * Fork RPC project-mode multi-session container (rpc-ui-protocol.md).
  *
  * Owns every {@link AgentSession} instance hosted by one rpc-ui-project
  * process: creation (factory-injected so the host layer keeps prompt/tool/UI
@@ -28,7 +28,7 @@ import {
 	type RpcRevision,
 } from "./rpc-project-types";
 
-/** Typed failure surfaced by the container; `code` maps to RpcProjectErrorCode (rpc-ui-protocol.md §14.1). */
+/** Typed failure surfaced by the container; `code` maps to RpcProjectErrorCode (rpc-ui-protocol.md). */
 export class RpcProjectSessionError extends Error {
 	readonly code: RpcProjectErrorCode;
 
@@ -355,7 +355,7 @@ export class RpcProjectSessionContainer {
 	 * idempotent (`RpcSessionHost.dispose` latches, `session.dispose` retains
 	 * shutdown preparation and retries the final close), and this retry
 	 * channel is what keeps a cleanup failure from bricking the session with a
-	 * permanent busy (rpc-ui-protocol.md §14.3: report the real remaining state).
+	 * permanent busy (rpc-ui-protocol.md).
 	 * Only "loading" records and in-flight (`busy`) teardowns are refused here;
 	 * identity-latched "closing" records still throw at {@link #assertStableIdentity}.
 	 */

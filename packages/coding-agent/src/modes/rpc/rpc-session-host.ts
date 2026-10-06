@@ -310,7 +310,7 @@ export async function runRpcSkillCommand(
 	attachmentsText?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
-	// Resolved attachment bodies travel with the skill command (§14.4): the
+	// Resolved attachment bodies travel with the skill command: the
 	// prefix stays out of the slash/skill MATCHING text but must still reach
 	// the model message and transcript, or uploaded material silently vanishes.
 	const messageText = attachmentsText ? attachmentsText + built.message : built.message;
@@ -1397,9 +1397,8 @@ export class RpcSessionHost {
 	readonly #settleWatcher: RpcSessionSettleWatcher;
 	/** Goal-mode RPC surface (upstream): ops, continuation turns, and session-change quiesce. */
 	readonly #goalController: RpcGoalController;
-	/** Scheduled goal or fork prompt turns keep settlement busy until admission. */
+	/** Scheduled goal turns keep settlement busy until admission. */
 	readonly #goalTurnScheduled: () => boolean;
-	#forkPromptTurns = 0;
 	/** Live voice sessions (`live_start`/`live_stop`/`live_mute`), at most one per host. */
 	readonly #live: RpcLiveBridge;
 	readonly #forkAskBroker: RpcForkAskBroker;
@@ -1425,7 +1424,7 @@ export class RpcSessionHost {
 		// A scheduled or held goal turn will start a turn: every settle report treats it as busy,
 		// and any report of "not settled" for that reason is later closed by `session_settled`.
 		this.#goalTurnScheduled = watchedScheduledTurnProbe(
-			() => this.#goalController.continuationPending || this.#forkPromptTurns > 0,
+			() => this.#goalController.continuationPending,
 			() => this.#settleWatcher,
 		);
 		this.promptResults = new RpcPromptResults(this.session, this.#output, this.#goalTurnScheduled);
@@ -1441,28 +1440,6 @@ export class RpcSessionHost {
 			emit: frame => this.#output(frame),
 			success: (id, command, data) => this.success(id, command as RpcCommand["type"], data),
 			error: (id, command, message, code) => this.error(id, command, message, code),
-			// Fork prompt turns (plan approve/refine) run for minutes: dispatch them
-			// off the RPC serial queue through the same ticket + prompt_result
-			// reporting as the stock prompt arm so abort/get_state keep answering.
-			dispatchForkPromptTurn: (run, id) => {
-				const ticket = this.promptResults.begin(id);
-				this.#forkPromptTurns++;
-				watchAndReportPromptResult({
-					ticket,
-					startPrompt: async () => {
-						try {
-							await run();
-							return true;
-						} finally {
-							this.#forkPromptTurns--;
-							void this.#settleWatcher.check();
-						}
-					},
-					results: this.promptResults,
-					onError: this.#onPromptError(id, "approve_plan"),
-					extensionUserMessageTracker: this.#extensionUserMessageTracker,
-				});
-			},
 		});
 		this.#forkAskBroker = new RpcForkAskBroker(this.forkHost, frame => this.#output(frame));
 		new RpcForkPermissionController(this.forkHost, this.session, { projectMode: this.#options.projectMode });
@@ -1628,7 +1605,7 @@ export class RpcSessionHost {
 			// =================================================================
 
 			case "prompt": {
-				// Project mode (§14.4/O32): `inputMode` defaults to "text" — the
+				// Project mode: `inputMode` defaults to "text" — the
 				// message is plain model input even when it starts with "/" — and
 				// only `inputMode: "auto"` routes through the strict command
 				// dispatch chain. The legacy single-session mode keeps that chain
@@ -2384,12 +2361,6 @@ export class RpcSessionHost {
 		this.#output({ type: "available_commands_update", commands: await this.getAvailableCommands() });
 	}
 
-	/** Refresh the session's skill list, then republish the available commands. */
-	async refreshSkills(): Promise<void> {
-		await this.session.refreshSkills();
-		await this.emitAvailableCommandsUpdate();
-	}
-
 	/**
 	 * True while the session is awaiting an extension dialog, fork question,
 	 * or tool permission decision from the client.
@@ -2546,7 +2517,7 @@ export class RpcSessionHost {
 	 * it before any agent work starts. Everything async that precedes dispatch
 	 * — the `/plan` toggle interception and attachment resolution — runs inside
 	 * the gate so a later-arriving plain prompt can never enter the gate first
-	 * (§14.4 arrival order). Extension input handlers run inside the gate, in
+	 *. Extension input handlers run inside the gate, in
 	 * arrival order.
 	 */
 	#dispatchOrderedUserInput(

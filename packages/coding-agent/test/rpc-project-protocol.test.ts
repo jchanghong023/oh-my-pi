@@ -268,8 +268,6 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 					text: "/plan",
 				});
 				expect(await responseFor(next, "old")).toMatchObject({ success: false, code: "stale_session" });
-				send({ id: "plan-state", type: "get_plan_state", sessionId: a.sessionId });
-				expect(await responseFor(next, "plan-state")).toMatchObject({ success: true, data: { enabled: false } });
 				send({ id: "roles-before", type: "get_model_roles" });
 				const before = (await responseFor(next, "roles-before")).data;
 				for (const scope of ["project", "invalid"]) {

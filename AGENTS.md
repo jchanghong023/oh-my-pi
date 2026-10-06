@@ -25,7 +25,7 @@
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（rpc-ui 协议扩展与项目运行服务，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts` 与 `rpc-project-*.ts`（rpc-ui 协议扩展与项目运行服务，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 
@@ -121,5 +121,5 @@
 ## 中文文档
 
 * `docs-zh-CN` 不维护翻译：上游 `docs` 的翻译文件已全部删除，后续同步不带入、不恢复；上游 `docs/` 的增删改不触发任何中文站维护。
-* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录与 `README.upstream.md` 对照快照。fork 不维护文档站点（VitePress 站点、GitHub Pages 发布与 `collab-web` 托管已于 2026-10-06 需求访谈后取消，见 `fork.md`）。
+* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录与 `README.upstream.md` 对照快照。fork 不维护文档站点（VitePress 站点、GitHub Pages 发布与 `collab-web` 托管已于 2026-10-06 需求访谈后取消）。
 * 代码 review 或对比上游差异时，只审查 `docs-zh-CN` 内的 fork 新增文档。

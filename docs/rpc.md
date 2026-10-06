@@ -70,7 +70,7 @@ After the success response, oversized stdout objects use an uninterrupted sequen
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript and Python clients prefer v3 when this fork advertises it (otherwise v2), validate the negotiated response, and use the same chunk decoder for v2/v3. The Rust and Go clients negotiate v2.
+Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript client offers an explicit `negotiateProtocolV3()` (v2 is negotiated automatically) and uses the same chunk decoder for v2/v3. The Python, Rust and Go clients negotiate v2.
 
 For an oversized `agent_end` in chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
 
@@ -93,7 +93,6 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 9. Prompt completion (`{ type: "prompt_result", id?, agentInvoked, status, error?, sessionSettled }`), unless the response already completed the prompt locally; see [`prompt` payload](#prompt-payload)
 10.   Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
 11.   Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-12.   Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
 13.   Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
 14.   Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
 15.   Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
@@ -146,7 +145,7 @@ Project mode fixes the project root to startup cwd and permits zero loaded sessi
 
 The canonical project command/response types are `rpc-project-types.ts`; the maintained requirements and complete OMP/GUI acceptance matrix are [rpc-ui project requirements](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
 
-The maintained TypeScript client negotiates v3 when advertised and exposes `requestFork<T>(type, payload)` for fork commands. It requires confirmed v3, correlates the response, returns `response.data`, and preserves the server's error message/code on failure. Python exposes `negotiate_protocol_v3()` and `send_fork_frame()`; the latter similarly refuses use before v3 confirmation. V3 also enables chunk framing when a host advertises only `[1, 3]`.
+The maintained TypeScript client exposes `negotiateProtocolV3()` plus `requestFork<T>(type, payload)` for fork commands. `requestFork` requires confirmed v3, correlates the response, returns `response.data`, and preserves the server's error message/code on failure. V3 also enables chunk framing when a host advertises only `[1, 3]`.
 
 Fork model configuration applies positive `enabledModels` inclusion first, then negative `disabledModels` exclusion. `enabledModels: []` includes all otherwise eligible models; `disabledModels: []` excludes none, and `["*"]` excludes all, including slash-bearing ids. Other globs keep path grammar: `provider/**` spans nested ids; `provider/*` is one level. An exact catalog `provider/id` takes literal precedence even with `*`, `?` or `[` in the id. Explicit pins, saved selections, roles, cycling and credential lookup cannot bypass exclusions; re-enabling one model must not silently widen a hand-authored wildcard. The registry retains the full inventory for management.
 
@@ -307,14 +306,6 @@ fast for about 30 seconds while the daemon is backed off. Treat failures as
 Send `predict_word_feedback` with the `text` and `cursor` at which a
 suggestion was shown: `accepted: true` when the user took it, `false` when
 they typed past it. Feedback tunes the engine's learned state.
-
-### Side questions
-
-- `{ id?, type: "btw", question: string, recordId?: string }` → `data: { record: BtwHistoryRecord }`
-- `{ id?, type: "btw_cancel", recordId?: string }` → `data: { cancelled: boolean }`
-- `{ id?, type: "get_btw_history" }` → `data: { records: BtwHistoryRecord[] }`
-
-See [Side questions (`/btw`)](#side-questions-btw).
 
 ## Response Schema
 
@@ -801,10 +792,6 @@ is still pending. Live-steered messages stay listed until recorded in the
 transcript, even after they cease to be removable. Render the queue from this
 event rather than tracking chips independently, and treat removal replies as
 confirmation of a change rather than independent queue state.
-Live-steered messages stay listed until recorded in the
-transcript, even after they cease to be removable. Render the queue from this
-event rather than tracking chips independently, and treat removal replies as
-confirmation of a change rather than independent queue state.
 
 Extension runner errors are emitted separately as:
 
@@ -821,7 +808,7 @@ Extension runner errors are emitted separately as:
 
 `message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
 
-`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
+`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, builtin slash-command side channels, and session-persistence `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
 
 The optional `messageUpdates: "delta"` projects only `message_update` frames to `{ type: "message_update", messageId, message: { role }, assistantMessageEvent }`: `assistantMessageEvent.partial` is omitted, while all other event fields (including subtype, `delta`, and `contentIndex`) are preserved. `message_start`, `message_end`, and all other frames are unchanged; `message_end` still carries the full message. Block-ending events such as `text_end`, `thinking_end`, and `toolcall_end` retain their block content or tool call, so hosts must still accept chunked protocol-v2 frames for large blocks and full messages. Switching modes mid-message does not change its `messageId`. The projection applies to the session's own frames only: `subagent_event` payloads forwarded under `set_subagent_subscription` level `"events"` keep their full `message_update` snapshots.
 
@@ -1530,4 +1517,4 @@ with RpcClient(provider="anthropic", model="claude-sonnet-4-5") as client:
     print(turn.require_assistant_text())
 ```
 
-By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v3/v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork/project unions; `send_fork_frame` requires negotiated v3. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.
+By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v3/v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork/project unions; fork commands require an explicit `negotiateProtocolV3()` first. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.
