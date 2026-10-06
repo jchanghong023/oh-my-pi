@@ -148,7 +148,6 @@
 - `composer.shape=pi`
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 - `display.showTurnTime=true`
-- `task.maxConcurrency=20`
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`（本地 Whisper 与云端转录的区域标签均归一化为基语言，如 `zh-CN`→`zh`；默认 tier parakeet/sherpa 不使用语言参数）
 - 文件日志默认关闭；临时开启方式见“安装与运行”。

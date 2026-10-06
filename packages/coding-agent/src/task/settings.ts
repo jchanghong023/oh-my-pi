@@ -236,7 +236,7 @@ export const cfgTaskMaxConcurrency = register({
 	id: "task.maxConcurrency",
 	protocolDefault: ["rpc", "acp"],
 	type: "number",
-	default: 20,
+	default: 32,
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
@@ -249,7 +249,6 @@ export const cfgTaskMaxConcurrency = register({
 			{ value: "4", label: "4 tasks" },
 			{ value: "8", label: "8 tasks" },
 			{ value: "16", label: "16 tasks" },
-			{ value: "20", label: "20 tasks" },
 			{ value: "32", label: "32 tasks" },
 			{ value: "64", label: "64 tasks" },
 		],
