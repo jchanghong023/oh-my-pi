@@ -1325,7 +1325,7 @@ interface BrowserTabHelpers {
 	evaluate<R, TArgs extends unknown[]>(fn: string | ((...args: TArgs) => R | Promise<R>), ...args: TArgs): Promise<R>;
 	/** Scroll the matching element into view. */
 	scrollIntoView(selector: string): Promise<void>;
-	/** Select values in the matching `<select>` element. */
+	/** Select options in the matching `<select>` element by value, then visible label; throws, leaving it unchanged, when a value matches no option. */
 	select(selector: string, ...values: string[]): Promise<string[]>;
 	/** Upload files through a matching file input, chooser trigger, or drop zone. */
 	uploadFile(selector: string, ...filePaths: string[]): Promise<void>;
@@ -1488,8 +1488,8 @@ interface BrowserFrame {
 
 /** An element handle returned by `BrowserTab.id` or `BrowserTab.ref`. */
 interface BrowserElement {
-	/** Click this element. */
-	click(): Promise<void>;
+	/** Click this element; `button` picks another mouse button (`"right"` for the page's own context menu), `count: 2` double-clicks. */
+	click(options?: { button?: BrowserMouseButton; count?: number }): Promise<void>;
 	/** Double-click this element. */
 	dblclick(): Promise<void>;
 	/** Set this checkbox, radio, or ARIA switch. */
@@ -1508,7 +1508,7 @@ interface BrowserElement {
 	hover(): Promise<void>;
 	/** Focus this element. */
 	focus(): Promise<void>;
-	/** Select values when this element is a `<select>`. */
+	/** Select options by value, then visible label, when this element is a `<select>`; throws, leaving it unchanged, when a value matches no option. */
 	select(...values: string[]): Promise<string[]>;
 	/** Upload files when this element is a file input. */
 	uploadFile(...filePaths: string[]): Promise<void>;

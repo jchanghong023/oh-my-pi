@@ -5,9 +5,11 @@ import * as path from "node:path";
 import { postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
 import type {
+	Accessibility,
 	Browser,
 	CDPSession,
 	ElementHandle,
+	Frame,
 	HTTPResponse,
 	JSHandle,
 	KeyboardTypeOptions,
@@ -60,6 +62,7 @@ import {
 	loadPuppeteerInWorker,
 	loadedKnownDevices,
 	loadedNetworkConditions,
+	readPageViewport,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableExtractOptions, type ReadableFormat } from "./readable";
 import { assertTabPressArgs } from "./tab-arguments";
@@ -162,6 +165,7 @@ import {
 	ClickRefusedError,
 	clickAt,
 	clickElement,
+	composedContains,
 	clickQueryHandlerText,
 	fillViaHandle,
 	focusTextEntryTarget,
@@ -174,6 +178,7 @@ import {
 	mouseMove,
 	mouseUp,
 	pressKey,
+	selectElementOptions,
 	setElementChecked,
 	type ScrollOptions,
 	uploadFilesToElement,
@@ -205,7 +210,7 @@ import {
 	listFrames,
 	resolveFrame,
 } from "./frames";
-import { pushState, reloadPage, traverseHistory, type NavigationWaitUntil } from "./navigation";
+import { navigateMainFrame, pushState, reloadPage, traverseHistory, type NavigationWaitUntil } from "./navigation";
 
 import { cloneSafe, RunOutput } from "./run-output";
 import type {
@@ -225,6 +230,10 @@ declare module "puppeteer-core" {
 	interface Frame {
 		/** Puppeteer's main JavaScript realm, retained by our pinned runtime patch. */
 		mainRealm(): Realm;
+		/** This frame's accessibility tree (`@internal` upstream, stripped from published types). */
+		readonly accessibility: Accessibility;
+		/** Loader of the document the frame shows; changes on every navigation (`@internal` upstream). */
+		readonly _loaderId: string;
 	}
 	interface Realm {
 		/** Re-home a DOM handle into this realm (`@internal` upstream, stripped from published types). */
@@ -294,6 +303,8 @@ const SCROLL_ACK_TIMEOUT_MS = 2_000;
 const REQUEST_INTERCEPTION_CLEANUP_TIMEOUT_MS = 500;
 /** Bound cleanup window after a timed-out raw handle action. */
 const HANDLE_ACTION_INVALIDATION_TIMEOUT_MS = 500;
+/** Bound on reading every iframe in one observation; a frame whose renderer is stuck in script never answers. */
+const FRAME_SNAPSHOT_TIMEOUT_MS = 5_000;
 
 /** Queue a wheel event without treating a delayed renderer acknowledgement as dispatch failure. */
 export async function dispatchScroll(
@@ -674,6 +685,7 @@ export function toActionableHandle(
 		enriched.dblclick = () => clickElement(enriched, "handle.dblclick()", undefined, { clickCount: 2 });
 		enriched.check = () => setElementChecked(enriched, true, "handle.check()");
 		enriched.uncheck = () => setElementChecked(enriched, false, "handle.uncheck()");
+		enriched.select = (...values) => selectElementOptions(enriched, values, "handle.select()");
 		enriched.highlight = options => highlightElement(enriched, options);
 		const controller = new AbortController();
 		return enrichElementQueries(enriched, (_label, fn) => fn(controller.signal));
@@ -786,6 +798,17 @@ export function toActionableHandle(
 				invalidate,
 			),
 		);
+	enriched.select = (...values) =>
+		guard<string[]>("handle.select()", signal =>
+			runGuardedHandleAction(
+				enriched,
+				originals,
+				"handle.select()",
+				signal,
+				() => selectElementOptions(enriched, values, "handle.select()", signal),
+				invalidate,
+			),
+		);
 	enriched.highlight = (options?: HighlightOptions) =>
 		guard<void>("handle.highlight()", signal =>
 			runGuardedHandleAction(
@@ -835,6 +858,9 @@ function redactUrlCredentials(url: string): string {
 
 class RequestInterceptionCleanupError extends ToolError {}
 
+/** `tab.goto` outlasted its budget; the page stays on what loaded. */
+class NavigationTimeoutError extends ToolError {}
+
 interface RunPageScope {
 	page: Page;
 	cleanup(): Promise<void>;
@@ -844,17 +870,20 @@ interface RunPageScope {
  * Expose the tab page while retaining every event handler created by this run.
  * The facade removes only run-owned listeners, preserving worker-level routing,
  * request logging, dialogs, and console capture. Raw interception is restored
- * to the tab's persistent route/allowlist state after the run.
+ * to the tab's persistent route/allowlist state after a run that changed it.
  */
 function createRunPageScope(page: Page, restoreInterception: () => Promise<void>): RunPageScope {
 	const handlers = new Map<unknown, unknown[]>();
 	const on = page.on;
 	const off = page.off;
 	const once = page.once;
+	const setRequestInterception = page.setRequestInterception;
 	const onDescriptor = Object.getOwnPropertyDescriptor(page, "on");
 	const offDescriptor = Object.getOwnPropertyDescriptor(page, "off");
 	const onceDescriptor = Object.getOwnPropertyDescriptor(page, "once");
 	const removeAllDescriptor = Object.getOwnPropertyDescriptor(page, "removeAllListeners");
+	const interceptionDescriptor = Object.getOwnPropertyDescriptor(page, "setRequestInterception");
+	let interceptionChanged = false;
 
 	const remember = (type: unknown, handler: unknown): void => {
 		const owned = handlers.get(type);
@@ -919,6 +948,13 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 				return page;
 			},
 		},
+		setRequestInterception: {
+			configurable: true,
+			value: (value: boolean): Promise<void> => {
+				interceptionChanged = true;
+				return Reflect.apply(setRequestInterception, page, [value]);
+			},
+		},
 	});
 
 	return {
@@ -932,10 +968,13 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			else Reflect.deleteProperty(page, "once");
 			if (removeAllDescriptor) Object.defineProperty(page, "removeAllListeners", removeAllDescriptor);
 			else Reflect.deleteProperty(page, "removeAllListeners");
+			if (interceptionDescriptor) Object.defineProperty(page, "setRequestInterception", interceptionDescriptor);
+			else Reflect.deleteProperty(page, "setRequestInterception");
 			for (const [type, owned] of handlers) {
 				for (const handler of owned) Reflect.apply(off, page, [type, handler]);
 			}
 			handlers.clear();
+			if (!interceptionChanged) return;
 			try {
 				await withTimeout(
 					restoreInterception(),
@@ -956,6 +995,7 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 
 function errorPayload(error: unknown): RunErrorPayload {
 	const recoverTab = error instanceof RequestInterceptionCleanupError || undefined;
+	const navigationTimeout = error instanceof NavigationTimeoutError || undefined;
 	if (error instanceof ToolAbortError) {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: true };
 	}
@@ -967,6 +1007,7 @@ function errorPayload(error: unknown): RunErrorPayload {
 			isToolError: true,
 			isAbort: false,
 			recoverTab,
+			navigationTimeout,
 		};
 	}
 	if (error instanceof Error) {
@@ -1028,6 +1069,68 @@ async function createTrackedHeadlessPage(browser: Browser, reportTarget: (target
 	const page = await target.page();
 	if (!page) throw new ToolError(`Created headless target ${targetId} did not expose a page`);
 	return page;
+}
+
+/**
+ * Frames that missed an observation deadline, mapped to the document they showed then. Observe skips
+ * them until they navigate, so a frame stuck in script costs only the first observation its wait.
+ */
+const unresponsiveFrames = new WeakMap<Frame, string>();
+
+function frameDocumentKey(frame: Frame): string {
+	return `${frame._loaderId} ${frame.url()}`;
+}
+
+/**
+ * Accessibility snapshots of `frames` and their descendants, in frame-tree order. A frame that does
+ * not answer by `deadline` is left out with its descendants, and skipped by later observations until
+ * it navigates, so one dead iframe never costs the page its observation. With `root`, only frames
+ * inside it are read.
+ */
+async function snapshotFrames(
+	frames: Frame[],
+	options: { interestingOnly: boolean; root: ElementHandle | null; deadline: number; signal?: AbortSignal },
+): Promise<SerializedAXNode[]> {
+	const snapshots = await Promise.all(
+		frames.map(async frame => {
+			if (unresponsiveFrames.get(frame) === frameDocumentKey(frame)) return [];
+			const timeout = new Error(`Frame ${frame.url()} did not answer`);
+			let snapshot: SerializedAXNode | null;
+			try {
+				snapshot = await withTimeout(
+					snapshotFrame(frame, options),
+					Math.max(0, options.deadline - Date.now()),
+					timeout,
+					options.signal,
+				);
+			} catch (error) {
+				if (options.signal?.aborted) throw error;
+				if (error === timeout) unresponsiveFrames.set(frame, frameDocumentKey(frame));
+				return [];
+			}
+			if (!snapshot) return [];
+			return [snapshot, ...(await snapshotFrames(frame.childFrames(), { ...options, root: null }))];
+		}),
+	);
+	return snapshots.flat();
+}
+
+async function snapshotFrame(
+	frame: Frame,
+	options: { interestingOnly: boolean; root: ElementHandle | null },
+): Promise<SerializedAXNode | null> {
+	if (options.root) {
+		const owner = await frame.frameElement();
+		if (!owner) return null;
+		const scoped = await options.root.realm.adoptHandle(owner).finally(() => owner.dispose().catch(() => undefined));
+		try {
+			// The owner may sit in a web component's shadow root under `root`, where `Node.contains` stops.
+			if (!(await options.root.evaluate(composedContains, scoped))) return null;
+		} finally {
+			await scoped.dispose().catch(() => undefined);
+		}
+	}
+	return await frame.accessibility.snapshot({ interestingOnly: options.interestingOnly });
 }
 
 function collectInteractiveObservationAncestors(node: SerializedAXNode, ancestors: Set<SerializedAXNode>): boolean {
@@ -1168,6 +1271,8 @@ export class WorkerCore {
 	#browser?: Browser;
 	#page?: Page;
 	#targetId?: string;
+	/** Last viewport read from the page; reported while a dialog or failure blocks a fresh read. */
+	#lastViewport?: ReadyInfo["viewport"];
 	#elementCache = new Map<number, ElementHandle>();
 	#elementCounter = 0;
 	#active: ActiveRun | null = null;
@@ -1300,8 +1405,7 @@ export class WorkerCore {
 
 			// Realm setup is done: puppeteer loaded and browser connected. Sent before
 			// page acquisition so the supervisor's cold-start budget bounds only the
-			// realm setup; page creation and the first navigation run under the ready
-			// wait.
+			// realm setup; page creation runs under the ready wait.
 			this.#transport.send({ type: "setup" });
 			if (payload.mode === "headless") {
 				// Create the target directly so its id is reportable before
@@ -1353,14 +1457,6 @@ export class WorkerCore {
 			this.#tracing = new BrowserTracingController(this.#page);
 			this.#network = new BrowserNetworkManager(this.#page, payload.allowedDomains);
 			await this.#network.start();
-			if (payload.url) {
-				await this.#page.goto(payload.url, {
-					// Default to "load" because dev servers with HMR/WS never reach networkidle.
-					waitUntil: payload.waitUntil ?? "load",
-					timeout: payload.timeoutMs,
-				});
-			}
-			this.#targetId = await targetIdForPage(this.#page);
 			this.#transport.send({ type: "ready", info: await this.#currentReadyInfo() });
 		} catch (error) {
 			// A failed headless init leaves the worker's page orphaned in the shared
@@ -1444,9 +1540,16 @@ export class WorkerCore {
 		return {
 			url: redactUrlCredentials(page.url()),
 			title: dialogPending ? undefined : await page.title().catch(() => undefined),
-			viewport: page.viewport() ?? DEFAULT_VIEWPORT,
+			viewport: dialogPending
+				? (page.viewport() ?? this.#lastViewport ?? DEFAULT_VIEWPORT)
+				: await this.#viewport().catch(() => this.#lastViewport ?? DEFAULT_VIEWPORT),
 			targetId,
 		};
+	}
+
+	async #viewport(signal?: AbortSignal): Promise<ReadyInfo["viewport"]> {
+		this.#lastViewport = await readPageViewport(this.#requirePage(), signal);
+		return this.#lastViewport;
 	}
 
 	/** Apply an automatic dialog policy selected while opening the tab. */
@@ -1506,6 +1609,7 @@ export class WorkerCore {
 		let completed = false;
 		let returnValue: unknown;
 		let failure: { error: unknown } | undefined;
+		let recoverTab = false;
 		let runPage: RunPageScope | undefined;
 		try {
 			throwIfAborted(signal);
@@ -1602,7 +1706,15 @@ export class WorkerCore {
 			try {
 				await runPage?.cleanup();
 			} catch (error) {
-				failure = { error };
+				// A finished run keeps its result; the supervisor still recycles the tab.
+				if (completed && active.floatingRejections.length === 0) {
+					recoverTab = true;
+					this.#log("warn", "Browser tab state could not be restored after a completed run", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				} else {
+					failure = { error };
+				}
 			}
 			failure = this.#foldFloatingRejections(active, failure);
 			if (this.#active?.id === msg.id) this.#active = null;
@@ -1617,7 +1729,12 @@ export class WorkerCore {
 				type: "result",
 				id: msg.id,
 				ok: true,
-				payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
+				payload: {
+					displays: output.finish(),
+					returnValue: cloneSafe(returnValue),
+					screenshots,
+					recoverTab: recoverTab || undefined,
+				},
 			});
 		}
 	}
@@ -1846,15 +1963,15 @@ export class WorkerCore {
 						// Default to "load" because dev servers with HMR/WS never reach networkidle.
 						// budgetBound (not the full cell) so a hung navigation fails named and
 						// catchable inside the run instead of dying with the whole cell.
-						await untilAborted(sig, () =>
-							page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: budgetBound }),
+						await navigateMainFrame(page, opts?.waitUntil ?? "load", budgetBound, sig, options =>
+							page.goto(url, options),
 						);
 					} catch (err) {
 						if (err instanceof Error && err.name === "TimeoutError") {
 							// Abandon the hung navigation NOW — a still-pending load stalls every
 							// later op on this page and cascades into more opaque timeouts.
 							await this.#stopLoading();
-							throw new ToolError(
+							throw new NavigationTimeoutError(
 								`tab.goto(${JSON.stringify(url)}) timed out after ${budgetBound}ms; pending navigation stopped — retry with a longer tool timeout or waitUntil:"domcontentloaded"`,
 							);
 						}
@@ -2492,23 +2609,32 @@ export class WorkerCore {
 			}
 		}
 		let snapshot: SerializedAXNode | null;
+		let frameSnapshots: SerializedAXNode[];
 		try {
 			snapshot = (await untilAborted(options.signal, () =>
 				page.accessibility.snapshot({ interestingOnly: !includeAll, root: root ?? undefined }),
 			)) as SerializedAXNode | null;
+			frameSnapshots = await snapshotFrames(page.mainFrame().childFrames(), {
+				interestingOnly: !includeAll,
+				root,
+				deadline: Date.now() + FRAME_SNAPSHOT_TIMEOUT_MS,
+				signal: options.signal,
+			});
 		} finally {
 			await root?.dispose().catch(() => undefined);
 		}
 		if (!snapshot) throw new ToolError("Accessibility snapshot unavailable");
 		const entries: ObservationEntry[] = [];
 		const interactiveAncestors = new Set<SerializedAXNode>();
-		if (options.compact) collectInteractiveObservationAncestors(snapshot, interactiveAncestors);
-		await collectObservationEntries(this, snapshot, entries, {
-			includeAll,
-			viewportOnly,
-			compact: options.compact ?? false,
-			interactiveAncestors,
-		});
+		for (const tree of [snapshot, ...frameSnapshots]) {
+			if (options.compact) collectInteractiveObservationAncestors(tree, interactiveAncestors);
+			await collectObservationEntries(this, tree, entries, {
+				includeAll,
+				viewportOnly,
+				compact: options.compact ?? false,
+				interactiveAncestors,
+			});
+		}
 		const scroll = (await untilAborted(options.signal, () =>
 			page.evaluate(() => {
 				const win = globalThis as unknown as {
@@ -2532,7 +2658,7 @@ export class WorkerCore {
 		return {
 			url: page.url(),
 			title: (await untilAborted(options.signal, () => page.title())) as string,
-			viewport: page.viewport() ?? DEFAULT_VIEWPORT,
+			viewport: await this.#viewport(options.signal),
 			scroll,
 			elements: entries,
 		};
@@ -2757,41 +2883,7 @@ export class WorkerCore {
 	async #select(selector: string, values: string[], timeoutMs: number, signal: AbortSignal): Promise<string[]> {
 		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
-			return (await untilAborted(signal, () =>
-				handle.evaluate((el, vals) => {
-					interface SelectOption {
-						value: string;
-						selected: boolean;
-					}
-					interface SelectLike {
-						tagName: string;
-						options: ArrayLike<SelectOption>;
-						dispatchEvent: (event: unknown) => boolean;
-					}
-					const select = el as unknown as SelectLike;
-					if (select?.tagName !== "SELECT") throw new Error("tab.select() requires a <select> element");
-					const EventCtor = (
-						globalThis as unknown as { Event: new (type: string, init?: { bubbles: boolean }) => unknown }
-					).Event;
-					const wanted = new Set(vals as string[]);
-					// Assign the full selection first, then read back: on a single
-					// <select>, un-selecting the current option mid-loop leaves the
-					// browser reporting it selected until another option takes over,
-					// which double-counted the old value in the returned list.
-					for (let i = 0; i < select.options.length; i++) {
-						const opt = select.options[i] as SelectOption;
-						opt.selected = wanted.has(opt.value);
-					}
-					const selected: string[] = [];
-					for (let i = 0; i < select.options.length; i++) {
-						const opt = select.options[i] as SelectOption;
-						if (opt.selected) selected.push(opt.value);
-					}
-					select.dispatchEvent(new EventCtor("input", { bubbles: true }));
-					select.dispatchEvent(new EventCtor("change", { bubbles: true }));
-					return selected;
-				}, values),
-			)) as string[];
+			return await selectElementOptions(handle, values, "tab.select()", signal);
 		} finally {
 			await handle.dispose().catch(() => undefined);
 		}

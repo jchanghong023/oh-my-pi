@@ -219,6 +219,19 @@ export const cfgHideThinkingBlock = register({
 	},
 });
 
+export const cfgExpandThinkingBlocks = register({
+	id: "expandThinkingBlocks",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "model",
+		group: "Thinking",
+		label: "Expand Thinking Blocks",
+		description: "Keep finished thinking blocks expanded instead of collapsing them when the turn ends",
+		condition: "nativeRendering",
+	},
+});
+
 export const cfgProseOnlyThinking = register({
 	id: "proseOnlyThinking",
 	type: "boolean",

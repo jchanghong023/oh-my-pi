@@ -26,6 +26,7 @@ import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import {
 	abortReasonText,
 	agentLoop,
@@ -832,19 +833,22 @@ export class Agent {
 
 	/**
 	 * Tokenizer for the active model. The instance is replaced whenever the
-	 * active model's encoding changes (see {@link setModel}), so callers must
-	 * not cache it across model switches.
+	 * active model's encoding or snapcompact frame pricing changes (see
+	 * {@link setModel}), so callers must not cache it across model switches.
 	 */
 	get tokenizer(): Tokenizer {
 		return this.#tokenizer;
 	}
 
 	/**
-	 * Swap the tokenizer only when the encoding actually changes, so the warm
-	 * per-message memo survives same-encoding model switches.
+	 * Swap the tokenizer only when the encoding or frame pricing actually
+	 * changes, so the warm per-message memo survives same-pricing model switches.
 	 */
 	#syncTokenizer(model: Model | null | undefined): void {
-		if (tokenizerEncodingForModel(model) !== this.#tokenizer.encoding) {
+		if (
+			tokenizerEncodingForModel(model) !== this.#tokenizer.encoding ||
+			snapcompact.frameBillingKey(snapcompact.frameBilling(model ?? undefined)) !== this.#tokenizer.frameBillingKey
+		) {
 			this.#tokenizer = new Tokenizer(model);
 		}
 	}

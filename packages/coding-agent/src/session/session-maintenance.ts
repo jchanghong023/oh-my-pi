@@ -1362,14 +1362,15 @@ export class SessionMaintenance {
 					if (!shape) {
 						throw new Error("snapcompact shape was not resolved before rendering.");
 					}
-					snapcompactResult = await snapcompact.compact(preparation, {
+					const rendered = await this.#renderSnapcompactArchive(preparation, {
 						convertToLlm,
 						model: this.#model,
 						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
 						includeThinking: snapcompactIncludeThinking,
 					});
-					const framePayloadBytes = this.#snapcompactFramePayloadBytes(snapcompactResult);
+					snapcompactResult = rendered.result;
+					const framePayloadBytes = rendered.framePayloadBytes;
 					if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
 						logger.warn("Snapcompact exceeded the per-request frame payload budget", {
 							model: this.#model?.id,
@@ -3584,9 +3585,10 @@ export class SessionMaintenance {
 
 	/**
 	 * Cap on snapcompact frames the post-compaction context can carry without
-	 * busting the model window. Mirrors the per-frame token charge used by the
-	 * projection ({@link snapcompact.FRAME_TOKEN_ESTIMATE}, the conservative
-	 * high-res Anthropic ceiling), so picking `maxFrames` from this helper makes
+	 * busting the model window. Charges each frame at least the per-frame price
+	 * the tokenizer will bill ({@link snapcompact.FRAME_TOKEN_ESTIMATE}, the
+	 * conservative high-res Anthropic ceiling, or the shape's own higher price),
+	 * so picking `maxFrames` from this helper makes
 	 * {@link #projectSnapcompactContextTokens} succeed by construction.
 	 *
 	 * Skip vs. cap use different reserves on purpose. The **skip** decision
@@ -3616,10 +3618,11 @@ export class SessionMaintenance {
 	 */
 	#computeSnapcompactMaxFrames(preparation: CompactionPreparation, settings: EngineCompactionSettings): number {
 		const ctxWindow = this.#model?.contextWindow ?? 0;
+		const shape = snapcompact.resolveShape(this.#model, cfgSnapcompactShape.get(this.#host.settings));
 		if (ctxWindow <= 0) {
 			return Math.min(
 				snapcompact.MAX_FRAMES_DEFAULT,
-				snapcompact.maxFramesForDataBudget(),
+				snapcompact.maxFramesForDataBudget(shape),
 				snapcompact.providerFrameBudget(this.#model?.provider),
 			);
 		}
@@ -3637,7 +3640,7 @@ export class SessionMaintenance {
 		if (baseTokens >= totalBudget) return 0;
 		// Cap reserve mirrors what `countMessage(summaryMessage)` will charge
 		// when frames > 0: `countTokens(summaryTemplate ‖ textHead ‖ textTail)`
-		// plus `numFrames × FRAME_TOKEN_ESTIMATE`. Resolve the shape this
+		// plus each frame at the reading model's frame price. Resolve the shape this
 		// snapcompact pass will actually use (matches the `shape` argument
 		// passed to `snapcompact.compact` in the auto and manual paths) so the
 		// text-edge cost reflects the live frame geometry rather than a fixed
@@ -3656,17 +3659,20 @@ export class SessionMaintenance {
 		//   drift on denser content (e.g. dense JSON / tool-result blobs).
 		// - Summary template (intro + FILES section + grid notes) bills
 		//   ~2k tokens for typical sessions.
-		const shape = snapcompact.resolveShape(this.#model, cfgSnapcompactShape.get(this.#host.settings));
 		const edgeCap = snapcompact.geometry(shape).capacity;
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;
 		const capReserve = textEdgeTokens + SUMMARY_TEMPLATE_TOKENS;
 		const frameBudget = totalBudget - baseTokens - capReserve;
-		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
+		// Size at the conservative ceiling, or at the shape's own frame price when a
+		// forced large shape (2576px `5x8-*` on OpenAI) bills more, so the tokenizer's
+		// per-frame charge never exceeds what this cap assumed.
+		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		if (frameBudget < frameCost) return 1;
 		return Math.min(
-			Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE),
+			Math.floor(frameBudget / frameCost),
 			snapcompact.MAX_FRAMES_DEFAULT,
-			snapcompact.maxFramesForDataBudget(),
+			snapcompact.maxFramesForDataBudget(shape),
 			snapcompact.providerFrameBudget(this.#model?.provider),
 		);
 	}
@@ -3674,6 +3680,33 @@ export class SessionMaintenance {
 	#snapcompactFramePayloadBytes(result: snapcompact.CompactionResult): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		return archive ? snapcompact.frameDataBytes(archive.frames) : 0;
+	}
+
+	/**
+	 * Render the snapcompact archive within {@link snapcompact.FRAME_DATA_BYTES_BUDGET}.
+	 * The frame cap from {@link #computeSnapcompactMaxFrames} sizes bytes from a per-shape
+	 * estimate, and denser frames (CJK prose drawn with fallback glyphs) run heavier, so
+	 * an over-budget render is redone once at the frame count its measured bytes fit:
+	 * `frames × budget / payload`. The caller still rejects a re-render that stays over.
+	 */
+	async #renderSnapcompactArchive(
+		preparation: CompactionPreparation,
+		options: snapcompact.Options<AgentMessage>,
+	): Promise<{ result: snapcompact.CompactionResult; framePayloadBytes: number }> {
+		const result = await snapcompact.compact(preparation, options);
+		const framePayloadBytes = this.#snapcompactFramePayloadBytes(result);
+		if (framePayloadBytes <= snapcompact.FRAME_DATA_BYTES_BUDGET) return { result, framePayloadBytes };
+		const frames = snapcompact.getPreservedArchive(result.preserveData)?.frames.length ?? 0;
+		const maxFrames = Math.floor((frames * snapcompact.FRAME_DATA_BYTES_BUDGET) / framePayloadBytes);
+		if (maxFrames < 1) return { result, framePayloadBytes };
+		logger.debug("Snapcompact re-rendering under the per-request frame payload budget", {
+			model: this.#model?.id,
+			frames,
+			framePayloadBytes,
+			maxFrames,
+		});
+		const smaller = await snapcompact.compact(preparation, { ...options, maxFrames });
+		return { result: smaller, framePayloadBytes: this.#snapcompactFramePayloadBytes(smaller) };
 	}
 
 	#deadEndRemedies(defaultRemedies: string, implicatedFrames: number): string {
@@ -3738,7 +3771,6 @@ export class SessionMaintenance {
 		const blocks = archive
 			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET })
 			: undefined;
-		const projectionOptions = { excludeEncryptedReasoning: true } as const;
 		if (!leaf) {
 			const summaryMessage = createCompactionSummaryMessage(
 				args.summary,
@@ -3750,7 +3782,7 @@ export class SessionMaintenance {
 					blocks,
 				},
 			);
-			return nonMessageTokens + this.#tokenizer.countMessages(convertToLlm([summaryMessage]), projectionOptions);
+			return nonMessageTokens + this.#countProjectedMessages([summaryMessage]);
 		}
 		const pending: CompactionEntry = {
 			type: "compaction",
@@ -3767,10 +3799,10 @@ export class SessionMaintenance {
 			providerReplayThroughEntryId: args.providerReplayThroughEntryId,
 		};
 		const rebuilt = buildSessionContext([...branch, pending]);
-		const rebuiltMessages = convertToLlm(rebuilt.messages);
+		const rebuiltTokens = this.#countProjectedMessages(rebuilt.messages);
 		const providerPayload = getOpenAiRemoteCompactionPayload(pending);
 		if (!providerPayload) {
-			return nonMessageTokens + this.#tokenizer.countMessages(rebuiltMessages, projectionOptions);
+			return nonMessageTokens + rebuiltTokens;
 		}
 
 		const summaryMessage = createCompactionSummaryMessage(args.summary, args.tokensBefore, new Date().toISOString(), {
@@ -3779,13 +3811,27 @@ export class SessionMaintenance {
 			method: args.method,
 			blocks,
 		});
-		const summaryTokens = this.#tokenizer.countMessages(convertToLlm([summaryMessage]), projectionOptions);
+		const summaryTokens = this.#countProjectedMessages([summaryMessage]);
 		const nativeHistoryTokens = countResponsesHistoryTokens(providerPayload.items, this.#tokenizer);
+		return nonMessageTokens + rebuiltTokens - summaryTokens + nativeHistoryTokens;
+	}
+
+	/**
+	 * Count a rebuilt context the way {@link #estimateStoredContextTokens} will once it is committed:
+	 * a summary carrying frames is counted as itself so each frame gets the active model's frame
+	 * price, not the generic image estimate `convertToLlm` would give it.
+	 */
+	#countProjectedMessages(messages: AgentMessage[]): number {
+		const options = { excludeEncryptedReasoning: true } as const;
+		const archives: AgentMessage[] = [];
+		const rest: AgentMessage[] = [];
+		for (const message of messages) {
+			const hasFrames =
+				message.role === "compactionSummary" && (message.blocks !== undefined || message.images !== undefined);
+			(hasFrames ? archives : rest).push(message);
+		}
 		return (
-			nonMessageTokens +
-			this.#tokenizer.countMessages(rebuiltMessages, projectionOptions) -
-			summaryTokens +
-			nativeHistoryTokens
+			this.#tokenizer.countMessages(archives, options) + this.#tokenizer.countMessages(convertToLlm(rest), options)
 		);
 	}
 
@@ -4004,10 +4050,11 @@ export class SessionMaintenance {
 	 */
 	#computeSnapcompactRescueMaxFrames(settings: EngineCompactionSettings, keptTailTokens: number): number {
 		const ctxWindow = this.#model?.contextWindow ?? 0;
+		const shape = snapcompact.resolveShape(this.#model, cfgSnapcompactShape.get(this.#host.settings));
 		if (ctxWindow <= 0) {
 			return Math.min(
 				snapcompact.MAX_FRAMES_DEFAULT,
-				snapcompact.maxFramesForDataBudget(),
+				snapcompact.maxFramesForDataBudget(shape),
 				snapcompact.providerFrameBudget(this.#model?.provider),
 			);
 		}
@@ -4018,20 +4065,20 @@ export class SessionMaintenance {
 			this.#tokenizer,
 			this.#host.settings.revision,
 		);
-		const shape = snapcompact.resolveShape(this.#model, cfgSnapcompactShape.get(this.#host.settings));
 		const edgeCap = snapcompact.geometry(shape).capacity;
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;
 		const frameBudget = recoveryBandTokens - baseTokens - keptTailTokens - textEdgeTokens - SUMMARY_TEMPLATE_TOKENS;
-		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 0;
+		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		if (frameBudget < frameCost) return 0;
 		// Same hard caps as #computeSnapcompactMaxFrames: a threshold-derived
 		// count above the per-request payload or provider image budget would
 		// "shrink" a huge archive to a frame count the rebuilt prompt can never
 		// attach anyway.
 		return Math.min(
-			Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE),
+			Math.floor(frameBudget / frameCost),
 			snapcompact.MAX_FRAMES_DEFAULT,
-			snapcompact.maxFramesForDataBudget(),
+			snapcompact.maxFramesForDataBudget(shape),
 			snapcompact.providerFrameBudget(this.#model?.provider),
 		);
 	}
@@ -4656,8 +4703,8 @@ export class SessionMaintenance {
 			let details: unknown;
 
 			// Snapcompact runs locally first. The post-compaction context = kept-recent
-			// + a summary message carrying the imaged archive at FRAME_TOKEN_ESTIMATE
-			// per frame; #computeSnapcompactMaxFrames sizes the frame cap from the
+			// + a summary message carrying the imaged archive at the reading model's
+			// frame price; #computeSnapcompactMaxFrames sizes the frame cap from the
 			// live window so we don't run snapcompact just to overflow every threshold
 			// tick. Any local blocker (unsupported snapcompact glyphs, kept-history too
 			// large, post-render overflow) advances automatic maintenance to the next
@@ -4699,14 +4746,15 @@ export class SessionMaintenance {
 						snapcompactBlocker =
 							"snapcompact: kept history alone exceeds the context budget; trying the next preferred compaction method.";
 					} else {
-						snapcompactResult = await snapcompact.compact(preparation, {
+						const rendered = await this.#renderSnapcompactArchive(preparation, {
 							convertToLlm,
 							model: this.#model,
 							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
 							includeThinking: snapcompactIncludeThinking,
 						});
-						const framePayloadBytes = this.#snapcompactFramePayloadBytes(snapcompactResult);
+						snapcompactResult = rendered.result;
+						const framePayloadBytes = rendered.framePayloadBytes;
 						if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
 							logger.warn("Snapcompact exceeded the per-request frame payload budget", {
 								model: this.#model?.id,

@@ -392,6 +392,8 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	},
 	"web-search-model": { key: "webSearchModel", set: "catalog", shape: "scalar" },
 	"hosted-image": { key: "hostedImage", set: "catalog", shape: "scalar", values: [true, false] },
+	/** How the model line bills an input image; shape and formulas in `./image-tokenization`. */
+	"image-tokenization": { key: "imageTokenization", set: "catalog", shape: "object" },
 	"image-model": { key: "imageModel", set: "catalog", shape: "scalar" },
 	"limits-patch": { key: "limitsPatch", set: "catalog", shape: "object" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },

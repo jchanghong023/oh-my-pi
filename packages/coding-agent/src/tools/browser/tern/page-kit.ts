@@ -1100,11 +1100,17 @@ const kit = {
 		if (el.localName !== "select") throw new Error("tab.select() requires a <select> element");
 		const options = Array.from(el.options);
 		const wanted = new Set();
+		const missing = [];
 		for (const value of values.map(String)) {
 			const option =
 				options.find(candidate => candidate.value === value) ||
 				options.find(candidate => candidate.label === value || normalizeSpace(candidate.text) === value);
 			if (option) wanted.add(option);
+			else missing.push(value);
+		}
+		// A value that matches nothing leaves the select untouched rather than blanking it.
+		if (missing.length > 0) {
+			throw new Error("No <select> option matches " + missing.map(value => JSON.stringify(value)).join(", "));
 		}
 		if (el.multiple) {
 			for (const option of options) option.selected = wanted.has(option);

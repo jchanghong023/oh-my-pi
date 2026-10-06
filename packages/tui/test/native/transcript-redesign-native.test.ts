@@ -116,6 +116,33 @@ describe("native transcript redesign", () => {
 		expect(harness.errors).toEqual([]);
 	});
 
+	it("opens settled thoughts when expandThinkingBlocks turns on, keeping a hand-folded one folded", async () => {
+		const message: AssistantMessage = {
+			...failed(""),
+			stopReason: "stop",
+			errorMessage: undefined,
+			content: [{ type: "thinking", thinking: "Weighing it carefully" }],
+		};
+		const component = new AssistantMessageComponent(message);
+		harness = await TspHarness.start();
+		harness.tui.addChild(component);
+		const thought = () => harness!.find(node => node.k === "section" && node.p?.role === "omp.thinking");
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: true });
+
+		component.setExpandThinkingBlocks(true);
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+
+		component.handleNativeEvent({ type: "toggle", key: "k0", collapsed: true });
+		component.setExpandThinkingBlocks(false);
+		component.setExpandThinkingBlocks(true);
+		component.updateContent(message);
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: true });
+		expect(harness.errors).toEqual([]);
+	});
+
 	it("shows hidden thinking only while it streams, and nothing once it settles", async () => {
 		const component = new AssistantMessageComponent(undefined, true);
 		harness = await TspHarness.start();

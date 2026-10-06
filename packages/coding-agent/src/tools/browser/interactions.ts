@@ -145,6 +145,105 @@ function requireFiniteNumber(value: number, label: string): void {
 }
 
 /**
+ * Page function (self-contained; serialisable via `.toString()`): whether `descendant` is `ancestor` or
+ * sits inside it, crossing the shadow-root boundaries `Node.contains` stops at.
+ */
+export function composedContains(ancestor: unknown, descendant: unknown): boolean {
+	for (let current = descendant as PageElement | null; current;) {
+		if (current === ancestor) return true;
+		const root: PageRoot = current.getRootNode();
+		current = current.parentElement ?? root.host ?? null;
+	}
+	return false;
+}
+
+interface ClickFlags {
+	viaLabel: boolean;
+	transparent: boolean;
+}
+
+/** Page half of {@link isClickActionable}; `contains` is {@link composedContains}, bound in by `clickActionableInPage`. */
+function checkClickActionable(
+	el: unknown,
+	{ viaLabel, transparent }: ClickFlags,
+	contains: typeof composedContains,
+): ActionabilityResult {
+	const element = el as unknown as PageElement;
+	const page = globalThis as unknown as PageGlobals;
+	// A node the page replaced (e.g. a re-render) has no computed style; say so rather than misread it.
+	if (!element.isConnected) {
+		return { ok: false as const, reason: "detached (the page replaced this element; look it up again)" };
+	}
+	const style = page.getComputedStyle(element);
+	if (style.display === "none") return { ok: false as const, reason: "display:none" };
+	if (style.visibility === "hidden" || style.visibility === "collapse") {
+		return { ok: false as const, reason: `visibility:${style.visibility}` };
+	}
+	if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
+	if (!transparent && Number(style.opacity) === 0) return { ok: false as const, reason: "opacity:0" };
+	const rect = element.getBoundingClientRect();
+	if (rect.width < 1 || rect.height < 1) return { ok: false as const, reason: "zero-size" };
+	// A wrapped link's box centre can fall between its lines, on the parent; aim at its first visible line.
+	const fragments = Array.from(element.getClientRects());
+	const box =
+		fragments.length === 0
+			? rect
+			: fragments.find(
+					r =>
+						Math.min(page.innerWidth, r.right) - Math.max(0, r.left) >= 1 &&
+						Math.min(page.innerHeight, r.bottom) - Math.max(0, r.top) >= 1,
+				);
+	if (!box) return { ok: false as const, reason: "off-viewport" };
+	const left = Math.max(0, Math.min(page.innerWidth, box.left));
+	const right = Math.max(0, Math.min(page.innerWidth, box.right));
+	const top = Math.max(0, Math.min(page.innerHeight, box.top));
+	const bottom = Math.max(0, Math.min(page.innerHeight, box.bottom));
+	if (right - left < 1 || bottom - top < 1) return { ok: false as const, reason: "off-viewport" };
+	const x = Math.floor((left + right) / 2);
+	const y = Math.floor((top + bottom) / 2);
+	let topElement = page.document.elementFromPoint(x, y);
+	for (let depth = 0; topElement?.shadowRoot && depth < 16; depth++) {
+		const nested = topElement.shadowRoot.elementFromPoint(x, y);
+		if (!nested || nested === topElement) break;
+		topElement = nested;
+	}
+	if (!topElement) return { ok: false as const, reason: "elementFromPoint-null" };
+	// A label forwards a click to its control unless the hit is other interactive content inside it.
+	const interactiveContent =
+		'a[href], area[href], button, details, embed, iframe, input:not([type="hidden"]), label, select, textarea, summary, audio[controls], video[controls], [contenteditable=""], [contenteditable="true"]';
+	const hit: PageElement = topElement;
+	const forwardedBy = (owner: PageElement): boolean => {
+		let current: PageElement | null = hit;
+		while (current && current !== owner) {
+			if (current.matches(interactiveContent)) return false;
+			current = current.parentElement ?? current.getRootNode().host ?? null;
+		}
+		return current === owner;
+	};
+	const onTarget =
+		contains(element, topElement) ||
+		contains(topElement, element) ||
+		(viaLabel && Array.from(element.labels ?? []).some(forwardedBy));
+	if (!onTarget) {
+		const tag = topElement.tagName.toLowerCase();
+		const id = topElement.id ? `#${topElement.id}` : "";
+		const classes = Array.from(topElement.classList)
+			.slice(0, 2)
+			.map(name => `.${name}`)
+			.join("");
+		return { ok: false as const, reason: "covered", coveredBy: `<${tag}${id}${classes}>` };
+	}
+	return { ok: true as const, x: x - rect.left, y: y - rect.top };
+}
+
+/** {@link checkClickActionable} with {@link composedContains} bound in, as one self-contained page function. */
+const clickActionableInPage = new Function(
+	"el",
+	"flags",
+	`return (${checkClickActionable.toString()})(el, flags, ${composedContains.toString()});`,
+) as (el: unknown, flags: ClickFlags) => ActionabilityResult;
+
+/**
  * Return a visible point relative to the element's box, or explain why it cannot receive a click.
  * A left click on one of the control's own `<label>`s counts as on-target, since the label forwards it.
  */
@@ -153,85 +252,11 @@ export async function isClickActionable(
 	signal?: AbortSignal,
 	options: Pick<ElementClickOptions, "button" | "transparent"> = {},
 ): Promise<ActionabilityResult> {
-	const flags = { viaLabel: (options.button ?? "left") === "left", transparent: options.transparent === true };
-	return (await untilAborted(signal, () =>
-		handle.evaluate((el, { viaLabel, transparent }) => {
-			const element = el as unknown as PageElement;
-			const page = globalThis as unknown as PageGlobals;
-			// A node the page replaced (e.g. a re-render) has no computed style; say so rather than misread it.
-			if (!element.isConnected) {
-				return { ok: false as const, reason: "detached (the page replaced this element; look it up again)" };
-			}
-			const style = page.getComputedStyle(element);
-			if (style.display === "none") return { ok: false as const, reason: "display:none" };
-			if (style.visibility === "hidden" || style.visibility === "collapse") {
-				return { ok: false as const, reason: `visibility:${style.visibility}` };
-			}
-			if (style.pointerEvents === "none") return { ok: false as const, reason: "pointer-events:none" };
-			if (!transparent && Number(style.opacity) === 0) return { ok: false as const, reason: "opacity:0" };
-			const rect = element.getBoundingClientRect();
-			if (rect.width < 1 || rect.height < 1) return { ok: false as const, reason: "zero-size" };
-			// A wrapped link's box centre can fall between its lines, on the parent; aim at its first visible line.
-			const fragments = Array.from(element.getClientRects());
-			const box =
-				fragments.length === 0
-					? rect
-					: fragments.find(
-							r =>
-								Math.min(page.innerWidth, r.right) - Math.max(0, r.left) >= 1 &&
-								Math.min(page.innerHeight, r.bottom) - Math.max(0, r.top) >= 1,
-						);
-			if (!box) return { ok: false as const, reason: "off-viewport" };
-			const left = Math.max(0, Math.min(page.innerWidth, box.left));
-			const right = Math.max(0, Math.min(page.innerWidth, box.right));
-			const top = Math.max(0, Math.min(page.innerHeight, box.top));
-			const bottom = Math.max(0, Math.min(page.innerHeight, box.bottom));
-			if (right - left < 1 || bottom - top < 1) return { ok: false as const, reason: "off-viewport" };
-			const x = Math.floor((left + right) / 2);
-			const y = Math.floor((top + bottom) / 2);
-			let topElement = page.document.elementFromPoint(x, y);
-			for (let depth = 0; topElement?.shadowRoot && depth < 16; depth++) {
-				const nested = topElement.shadowRoot.elementFromPoint(x, y);
-				if (!nested || nested === topElement) break;
-				topElement = nested;
-			}
-			if (!topElement) return { ok: false as const, reason: "elementFromPoint-null" };
-			const composedContains = (ancestor: PageElement, descendant: PageElement): boolean => {
-				for (let current: PageElement | null = descendant, depth = 0; current && depth < 64; depth++) {
-					if (current === ancestor) return true;
-					const root: PageRoot = current.getRootNode();
-					current = current.parentElement ?? root.host ?? null;
-				}
-				return false;
-			};
-			// A label forwards a click to its control unless the hit is other interactive content inside it.
-			const interactiveContent =
-				'a[href], area[href], button, details, embed, iframe, input:not([type="hidden"]), label, select, textarea, summary, audio[controls], video[controls], [contenteditable=""], [contenteditable="true"]';
-			const hit: PageElement = topElement;
-			const forwardedBy = (owner: PageElement): boolean => {
-				let current: PageElement | null = hit;
-				while (current && current !== owner) {
-					if (current.matches(interactiveContent)) return false;
-					current = current.parentElement ?? current.getRootNode().host ?? null;
-				}
-				return current === owner;
-			};
-			const onTarget =
-				composedContains(element, topElement) ||
-				composedContains(topElement, element) ||
-				(viaLabel && Array.from(element.labels ?? []).some(forwardedBy));
-			if (!onTarget) {
-				const tag = topElement.tagName.toLowerCase();
-				const id = topElement.id ? `#${topElement.id}` : "";
-				const classes = Array.from(topElement.classList)
-					.slice(0, 2)
-					.map(name => `.${name}`)
-					.join("");
-				return { ok: false as const, reason: "covered", coveredBy: `<${tag}${id}${classes}>` };
-			}
-			return { ok: true as const, x: x - rect.left, y: y - rect.top };
-		}, flags),
-	)) as ActionabilityResult;
+	const flags: ClickFlags = {
+		viaLabel: (options.button ?? "left") === "left",
+		transparent: options.transparent === true,
+	};
+	return await untilAborted(signal, () => handle.evaluate(clickActionableInPage, flags));
 }
 
 async function actionableClickPoint(
@@ -532,6 +557,74 @@ export async function highlightElement(
 			}, id)
 			.catch(() => undefined);
 	}
+}
+
+/**
+ * Select `<select>` options by value, then by visible label, and return the values this call
+ * selected. An exact value match always wins over a label, so value-based calls keep their
+ * meaning. A single `<select>` takes the first matching value. A value that matches no option
+ * throws before the select is touched, so a typo never commits the browser's default option.
+ */
+export async function selectElementOptions(
+	handle: ElementHandle,
+	values: string[],
+	label: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	const outcome = (await untilAborted(signal, () =>
+		handle.evaluate((el, vals) => {
+			interface SelectOption {
+				value: string;
+				label: string;
+				text: string;
+				index: number;
+				selected: boolean;
+			}
+			interface SelectLike {
+				tagName: string;
+				multiple: boolean;
+				selectedIndex: number;
+				options: ArrayLike<SelectOption>;
+				dispatchEvent: (event: unknown) => boolean;
+			}
+			const select = el as unknown as SelectLike;
+			if (select?.tagName !== "SELECT") return null;
+			const page = globalThis as unknown as PageGlobals;
+			const options = Array.from(select.options);
+			const wanted: SelectOption[] = [];
+			const missing: string[] = [];
+			for (const value of vals as string[]) {
+				const option =
+					options.find(candidate => candidate.value === value) ??
+					options.find(
+						candidate => candidate.label === value || candidate.text.replace(/\s+/g, " ").trim() === value,
+					);
+				if (option) wanted.push(option);
+				else missing.push(value);
+			}
+			if (missing.length > 0) return { missing };
+			let selected: string[];
+			if (wanted.length === 0) {
+				for (const option of options) option.selected = false;
+				selected = [];
+			} else if (select.multiple) {
+				for (const option of options) option.selected = wanted.includes(option);
+				selected = options.filter(option => option.selected).map(option => option.value);
+			} else {
+				select.selectedIndex = wanted[0]!.index;
+				selected = [wanted[0]!.value];
+			}
+			select.dispatchEvent(new page.Event("input", { bubbles: true }));
+			select.dispatchEvent(new page.Event("change", { bubbles: true }));
+			return { selected };
+		}, values),
+	)) as { missing: string[] } | { selected: string[] } | null;
+	if (!outcome) throw new ToolError(`${label} requires a <select> element`);
+	if ("missing" in outcome)
+		throw new ToolError(
+			`No <select> option matches ${outcome.missing.map(value => JSON.stringify(value)).join(", ")}`,
+		);
+	return outcome.selected;
 }
 
 /** Upload files through an input, native chooser trigger, or synthetic drop-zone event sequence. */
