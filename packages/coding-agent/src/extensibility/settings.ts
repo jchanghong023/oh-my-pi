@@ -74,13 +74,6 @@ export const cfgSkillsIgnoredSkills = register({
 	default: EMPTY_STRING_ARRAY,
 });
 
-/** Concrete SKILL.md identities disabled independently of source and name-level filters. */
-export const cfgSkillsDisabledPaths = register({
-	id: "skills.disabledPaths",
-	type: "array",
-	default: EMPTY_STRING_ARRAY,
-});
-
 export const cfgSkillsIncludeSkills = register({
 	id: "skills.includeSkills",
 	type: "array",
@@ -100,7 +93,6 @@ export const cfgSkills = combine({
 	enableAgentsProject: cfgSkillsEnableAgentsProject,
 	customDirectories: cfgSkillsCustomDirectories,
 	ignoredSkills: cfgSkillsIgnoredSkills,
-	disabledPaths: cfgSkillsDisabledPaths,
 	includeSkills: cfgSkillsIncludeSkills,
 });
 

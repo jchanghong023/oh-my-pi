@@ -2,12 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { RpcForkAskBroker } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-ask";
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
 import type { ExtensionAskDialogQuestion } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
 	emit: frame => emitted.push(frame),
-	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
-	error: (id, command, message) => ({ id, type: "response", command, success: false, error: message }) as RpcResponse,
 });
 
 const twoQuestions: ExtensionAskDialogQuestion[] = [

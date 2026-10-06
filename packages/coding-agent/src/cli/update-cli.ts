@@ -50,16 +50,18 @@ const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 const NATIVES_PACKAGE = "@oh-my-pi/pi-natives";
 
 /**
- * Platform tags the release pipeline publishes as
- * `@oh-my-pi/pi-natives-<tag>` leaves. Mirrors `SUPPORTED_PLATFORMS` in
- * `packages/natives/native/loader-state.js` and `LEAF_TARGETS` in
- * `packages/natives/scripts/gen-npm-packages.ts`; kept here as the local
- * source of truth so the update path stays free of cross-package imports.
+ * Platform tags published as `@oh-my-pi/pi-natives-<tag>` npm leaves. Mirrors
+ * `SUPPORTED_PLATFORMS` in `packages/natives/native/loader-state.js` and
+ * `LEAF_TARGETS` in `packages/natives/scripts/gen-npm-packages.ts`; kept here
+ * as the local source of truth so the update path stays free of cross-package imports.
  */
 const SUPPORTED_NATIVE_TAGS: Readonly<Record<string, true>> = {
 	"linux-x64": true,
 	"linux-arm64": true,
+	"darwin-x64": true,
+	"darwin-arm64": true,
 	"win32-x64": true,
+	"win32-arm64": true,
 };
 
 function currentNativeTag(): string {

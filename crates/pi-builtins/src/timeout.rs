@@ -275,7 +275,7 @@ impl builtins::Command for TimeoutCommand {
 			// external children it degrades to SIGKILL — see `Process::wait`.
 			child_cancel.cancel();
 		}
-		let mut killed = signal_display(signal) == "KILL";
+		let mut killed = !cfg!(windows) && signal_display(signal) == "KILL";
 
 		// Wait for the command to finish, escalating to SIGKILL after
 		// `--kill-after`. Without `-k`, GNU waits indefinitely — a command
@@ -333,10 +333,10 @@ impl builtins::Command for TimeoutCommand {
 			}
 			// Cancel-fallback path (in-process operand): the inner shell's own
 			// cancellation check races the operand's result, so its status is
-			// unreliable. Report death by the delivered signal (128+N, or 137
-			// after escalation) deterministically, matching GNU for a command
-			// taken down by the timeout signal.
-			let number = i32::try_from(signal).unwrap_or(15);
+			// unreliable. Report death by the configured signal deterministically
+			// (128+N on POSIX, 128 on Windows where signals cannot be delivered),
+			// matching GNU for a command taken down by the timeout signal.
+			let number = if cfg!(windows) { 0 } else { i32::try_from(signal).unwrap_or(15) };
 			let code = if killed {
 				EXIT_KILLED
 			} else {
@@ -576,9 +576,9 @@ mod tests {
 		// for a command killed by the timeout signal.
 		let result = run_with_deadline("timeout --preserve-status 0.010 slow-test").await;
 
-		// Unix: death by the configured TERM signal is 128+15. Windows has no
-		// signal semantics, so the delivered signal number is 0 and the same
-		// deterministic mapping yields 128.
+		// Unix: death by the configured TERM signal is 128+15. Windows cannot
+		// deliver POSIX signals, so its timeout status uses the zero-signal
+		// fallback rather than reporting TERM as if kill(2) succeeded.
 		#[cfg(unix)]
 		assert_eq!(u8::from(result.exit_code), 143);
 		#[cfg(windows)]
@@ -595,6 +595,13 @@ mod tests {
 		let result = run_with_deadline("timeout -s KILL 0.010 slow-test").await;
 
 		assert_eq!(u8::from(result.exit_code), 137);
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn unavailable_kill_signal_does_not_report_sigkill_status() {
+		let result = run_with_deadline("timeout -s KILL 0.010 slow-test").await;
+		assert_eq!(u8::from(result.exit_code), 124);
 	}
 
 	#[tokio::test]

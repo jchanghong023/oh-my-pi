@@ -31,56 +31,39 @@ describe("fork protocol constants (4.0)", () => {
 
 const makeForkContext = (overrides?: Partial<RpcForkContext>): RpcForkContext => ({
 	emit: () => {},
-	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
-	error: (id, command, message) => ({ id, type: "response", command, success: false, error: message }) as RpcResponse,
 	...overrides,
 });
 
 describe("RpcForkHost gating (4.0)", () => {
-	test("inactive host gates commands and frames but still disposes captured resources", async () => {
+	test("inactive host gates frames but still disposes captured resources", () => {
 		const host = new RpcForkHost(makeForkContext());
-		let commandRan = false;
+		let frameHandled = false;
 		let disposerReason: string | undefined;
-		host.registerCommand("fork_probe", () => {
-			commandRan = true;
-			return { type: "response", command: "fork_probe", success: true } as RpcResponse;
+		host.registerFrameHandler(() => {
+			frameHandled = true;
+			return true;
 		});
 		host.registerDisposer(reason => {
 			disposerReason = reason;
 		});
 
 		expect(host.isActive).toBe(false);
-		await expect(host.handleCommand({ type: "fork_probe" })).resolves.toBeUndefined();
 		expect(host.handleControlFrame({ type: "permission_response", id: "x" })).toBe(false);
 		host.dispose("client gone");
-		expect(commandRan).toBe(false);
+		expect(frameHandled).toBe(false);
 		expect(disposerReason).toBe("client gone");
 	});
 
-	test("activated host dispatches registered commands and consumes frames", async () => {
-		const ctx = makeForkContext();
-		const activeHost = new RpcForkHost(ctx);
-		activeHost.registerCommand("fork_probe", command => {
-			return activeHost.context.success(command.id, "fork_probe", { echoed: command.type });
-		});
-		let frameConsumed = false;
-		activeHost.registerFrameHandler(parsed => {
-			frameConsumed = isRecord(parsed) && parsed.type === "permission_response";
-			return frameConsumed;
-		});
+	test("activated host dispatches registered interaction frames", () => {
+		const activeHost = new RpcForkHost(makeForkContext());
+		activeHost.registerFrameHandler(parsed => isRecord(parsed) && parsed.type === "permission_response");
 		const disposals: string[] = [];
 		activeHost.registerDisposer(reason => disposals.push(reason));
 
 		activeHost.activate();
 		expect(activeHost.isActive).toBe(true);
-
-		const response = await activeHost.handleCommand({ id: "r1", type: "fork_probe" });
-		expect(response).toMatchObject({ command: "fork_probe", success: true, data: { echoed: "fork_probe" } });
-		await expect(activeHost.handleCommand({ type: "fork_unknown" })).resolves.toBeUndefined();
 		expect(activeHost.handleControlFrame({ type: "permission_response", id: "p1" })).toBe(true);
-		expect(frameConsumed).toBe(true);
 		expect(activeHost.handleControlFrame({ type: "ask_response", id: "a1" })).toBe(false);
-
 		activeHost.dispose("client gone");
 		expect(disposals).toEqual(["client gone"]);
 	});

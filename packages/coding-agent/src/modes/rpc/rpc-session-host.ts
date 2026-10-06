@@ -1525,11 +1525,9 @@ export class RpcSessionHost {
 		// hosts leave every frame on the stock code path unchanged.
 		this.forkHost = new RpcForkHost({
 			emit: frame => this.#output(frame),
-			success: (id, command, data) => this.success(id, command as RpcCommand["type"], data),
-			error: (id, command, message, code) => this.error(id, command, message, code),
 		});
 		this.#forkAskBroker = new RpcForkAskBroker(this.forkHost, frame => this.#output(frame));
-		new RpcForkPermissionController(this.forkHost, this.session, { projectMode: this.#options.projectMode });
+		new RpcForkPermissionController(this.forkHost, this.session);
 
 		this.pendingExtensionRequests = new RpcPendingExtensionRequests();
 		this.hostToolBridge = options.sharedBridges?.hostToolBridge ?? new RpcHostToolBridge(this.#output);
@@ -1892,7 +1890,6 @@ export class RpcSessionHost {
 					sessionName: session.sessionName,
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					queuedMessageCount: session.queuedMessageCount,
-					approvalMode: RpcForkPermissionController.currentApprovalMode(session),
 					hasPendingAsyncWork: session.hasPendingAsyncWork(),
 					// A scheduled goal continuation will start a turn: not settled.
 					isSettled: isRpcSessionSettled(session, this.#goalTurnScheduled),
@@ -2477,10 +2474,6 @@ export class RpcSessionHost {
 			}
 
 			default: {
-				// Single fork-extension dispatch hook: active only after v3
-				// negotiation; an unhandled type keeps the stock error below.
-				const forkResponse = await this.forkHost.handleCommand(command);
-				if (forkResponse) return forkResponse;
 				const unknownCommand = command as { type: string };
 				return this.error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
@@ -2577,11 +2570,6 @@ export class RpcSessionHost {
 				}
 			}
 			this.#unsubscribers = [];
-			try {
-				this.session.extensionRunner?.setHookExecutedListener(undefined);
-			} catch {
-				// Best-effort hook listener teardown.
-			}
 		}
 	}
 
@@ -2767,7 +2755,6 @@ export class RpcSessionHost {
 								type: "config_update",
 								model: session.model,
 								thinkingLevel: session.thinkingLevel,
-								approvalMode: RpcForkPermissionController.currentApprovalMode(session),
 							});
 						},
 					});

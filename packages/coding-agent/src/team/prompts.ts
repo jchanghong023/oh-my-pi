@@ -192,6 +192,10 @@ export function buildReviewTask(args: {
 			? section("此前未解决的阻断问题", bulletList(args.unresolvedBlocking))
 			: "",
 		task.join("\n"),
+		[
+			"## 输出预算\n",
+			"- `reviewSummary` 与全部 `findings` 文本字段合计 MUST ≤ 1500 字；这是总预算，不是逐字段预算。\n",
+		].join("\n"),
 	]
 		.filter(block => block.length > 0)
 		.join("\n");

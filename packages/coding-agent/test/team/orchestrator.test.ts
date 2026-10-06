@@ -238,6 +238,17 @@ describe("team malformed-output gates", () => {
 		expect(calls.some(call => call.role === "synthesizer")).toBe(false);
 	});
 
+	it("rejects a review whose summary plus findings exceed the total text budget", async () => {
+		const oversizedReview = {
+			...reviewData({ blocking: 1 }),
+			reviewSummary: "x".repeat(1500),
+		};
+		const { result, calls } = await run({ review: () => oversizedReview });
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("全部审查子代理失败");
+		expect(calls.some(call => call.role === "synthesizer")).toBe(false);
+	});
+
 	it("does not install a revision whose recheck flags are missing", async () => {
 		const { result, calls } = await run({
 			review: () => reviewData({ blocking: 1 }),

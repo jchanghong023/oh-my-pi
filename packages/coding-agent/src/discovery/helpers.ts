@@ -493,8 +493,6 @@ export async function scanSkillsFromDir(
 				name,
 				path: skillPath,
 				content: body,
-				fileContent: content,
-				contentRevision: Bun.hash(content).toString(36),
 				frontmatter: frontmatter as SkillFrontmatter,
 				level,
 				_source: createSourceMeta(providerId, skillPath, level, options.origin, options.pluginName),

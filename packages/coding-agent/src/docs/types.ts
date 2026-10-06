@@ -30,7 +30,6 @@ export interface MarkdownSection {
 
 export interface MarkdownDocument {
 	relativePath: string;
-	absolutePath: string;
 	title: string;
 	sourceKind: string;
 	sha256: string;

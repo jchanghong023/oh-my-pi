@@ -355,10 +355,35 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			send({ id: "catalog", type: "get_available_commands" });
 			const catalog = await responseFor(next, "catalog");
 			expect(catalog).toMatchObject({ id: "catalog", command: "get_available_commands", success: true });
-			const commands = (catalog.data as { commands: unknown[] }).commands;
-			expect(Array.isArray(commands)).toBe(true);
+			const catalogData = catalog.data;
+			expect(isRecord(catalogData) && Array.isArray(catalogData.commands)).toBe(true);
+			if (
+				!isRecord(catalogData) ||
+				!Array.isArray(catalogData.commands) ||
+				typeof catalogData.revision !== "string"
+			) {
+				throw new Error("Malformed command catalog response");
+			}
+			const commands = catalogData.commands;
 			expect(commands.length).toBeGreaterThan(0);
-			expect(typeof (catalog.data as { revision: unknown }).revision).toBe("string");
+			for (const name of ["login", "settings", "setup", "skills"]) {
+				const command = commands.find(entry => isRecord(entry) && entry.name === name);
+				if (!isRecord(command)) throw new Error(`Missing catalog command: ${name}`);
+				const availability = command.availability;
+				if (!isRecord(availability)) throw new Error(`Missing availability for catalog command: ${name}`);
+				expect(command.name).toBe(name);
+				expect(command.execution).toBe("omp");
+				expect(availability.available).toBe(false);
+				expect(typeof availability.reason).toBe("string");
+			}
+			const skills = commands.find(entry => isRecord(entry) && entry.name === "skills");
+			if (!isRecord(skills)) throw new Error("Missing catalog command: skills");
+			expect(skills).toMatchObject({
+				name: "skills",
+				execution: "omp",
+				scope: "session",
+				availability: { available: false, reason: "session_required" },
+			});
 
 			send({ id: "roles", type: "get_model_roles" });
 			const roles = await responseFor(next, "roles");
@@ -471,7 +496,7 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 		});
 	}, 60_000);
 
-	test("unknown command rejected", async () => {
+	test("unknown and removed management commands are rejected", async () => {
 		await using cwdDir = await TempDir.create("rpc-project-cwd-");
 		await using sessionsDir = await TempDir.create("rpc-project-sessions-");
 		await using agentDir = await TempDir.create("rpc-project-agent-");
@@ -481,16 +506,39 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 			agentDir: path.resolve(agentDir.path()),
 		};
 		await withProjectRpcServer(dirs, async (send, next) => {
-			await next(frame => frame.type === "ready");
+			await negotiateV3(send, next);
 
-			send({ id: "u-1", type: "definitely_not_a_command" });
+			const unknownType = "definitely_not_a_command";
+			send({ id: "u-1", type: unknownType });
 			const unknown = await responseFor(next, "u-1");
 			expect(unknown).toMatchObject({
 				id: "u-1",
-				command: "definitely_not_a_command",
+				command: unknownType,
 				success: false,
 			});
 			expect(String(unknown.error)).toContain("Unknown command");
+
+			const removedManagementCommands = [
+				"remove_queued_message",
+				"promote_queued_message",
+				"abort_and_restore_queue",
+				"cancel_subagent",
+				"steer_subagent",
+				"set_subagent_subscription",
+				"get_subagents",
+				"get_subagent_messages",
+				"get_session_stats",
+				"get_login_providers",
+				"login",
+				"set_approval_mode",
+			];
+			for (const [index, type] of removedManagementCommands.entries()) {
+				const id = `removed-${index}`;
+				send({ id, type });
+				const rejected = await responseFor(next, id);
+				expect(rejected).toMatchObject({ id, command: type, success: false });
+				expect(String(rejected.error)).toContain("Unknown command");
+			}
 		});
 	}, 60_000);
 
@@ -629,6 +677,19 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 				success: true,
 				data: { agentInvoked: false },
 			});
+			send({
+				id: "ex-skills",
+				type: "execute_command",
+				sessionId: createdData.sessionId,
+				sessionGeneration: createdData.sessionGeneration,
+				text: "/skills",
+			});
+			expect(await responseFor(next, "ex-skills")).toMatchObject({
+				id: "ex-skills",
+				command: "execute_command",
+				success: true,
+				data: { agentInvoked: false },
+			});
 			// The builtin really ran: its headless output reached the client.
 			await Bun.sleep(1500);
 			expect(
@@ -638,6 +699,14 @@ describe("rpc-ui project mode (live --rpc-project server)", () => {
 						(typeof frame.text === "string"
 							? frame.text.includes("Current model") || frame.text.includes("No model is currently selected")
 							: false),
+				),
+			).toBe(true);
+			expect(
+				seen.some(
+					frame =>
+						frame.type === "command_output" &&
+						typeof frame.text === "string" &&
+						frame.text.includes("Skill registry"),
 				),
 			).toBe(true);
 		});
@@ -841,18 +910,24 @@ export default function() {
 		);
 	}, 60_000);
 
-	test("generation is mandatory and pure management-panel actions do not create an actor", async () => {
+	test("unsupported management commands stay discoverable and do not create an actor", async () => {
 		await using temp = await TempDir.create("rpc-project-generation-");
 		const cwd = path.resolve(temp.path());
 		await withProjectRpcServer(
 			{ cwd, sessionDir: path.join(cwd, "sessions"), agentDir: path.join(cwd, "agent") },
 			async (send, next, _seen, controls) => {
 				await negotiateV3(send, next);
-				send({ id: "panel", type: "execute_command", text: "/skills" });
-				expect(await responseFor(next, "panel")).toMatchObject({
-					success: true,
-					data: { hostAction: { kind: "open_panel", payload: { panel: "skills" } } },
-				});
+				for (const name of ["login", "settings", "setup"]) {
+					const id = `unsupported-${name}`;
+					send({ id, type: "execute_command", text: `/${name}` });
+					const response = await responseFor(next, id);
+					expect(response).toMatchObject({ success: false, code: "unsupported" });
+					expect(String(response.error)).not.toContain("Unknown command");
+				}
+				send({ id: "skills-no-session", type: "execute_command", text: "/skills" });
+				const skillsNoSession = await responseFor(next, "skills-no-session");
+				expect(skillsNoSession).toMatchObject({ success: false, code: "invalid_params" });
+				expect(String(skillsNoSession.error)).toContain("requires a loaded session");
 				send({ id: "empty", type: "list_sessions" });
 				expect(await responseFor(next, "empty")).toMatchObject({ success: true, data: { sessions: [] } });
 				send({ id: "create-gen", type: "create_session" });

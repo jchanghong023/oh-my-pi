@@ -256,22 +256,8 @@ function createForkTransport(options?: { negotiatedVersion?: number; negotiation
 						});
 						encoder.setProtocolVersion(2);
 					}
-				} else if (command.type === "set_approval_mode") {
-					emit({
-						id: command.id,
-						type: "response",
-						success: true,
-						command: command.type,
-						data: { payload: "😀".repeat(270_000) },
-					});
-				} else {
-					emit({
-						id: command.id,
-						type: "response",
-						success: false,
-						error: "raw command was denied",
-						code: "permission_denied",
-					});
+				} else if (command.type === "ask_pause") {
+					// Fork side-channel frames are one-way and have no response.
 				}
 			},
 		},
@@ -298,25 +284,18 @@ function createForkTransport(options?: { negotiatedVersion?: number; negotiation
 	return { client: new RpcClient({ spawn: () => process }), sent };
 }
 
-describe("RpcClient fork response transport", () => {
-	test("v3-only negotiation enables chunk decoding and response-correlated raw commands", async () => {
+describe("RpcClient fork protocol v3 transport", () => {
+	test("v3-only negotiation enables fork control frames", async () => {
 		const { client, sent } = createForkTransport();
 		try {
 			await client.start();
-			await expect(client.requestFork("set_approval_mode")).rejects.toThrow("has not been negotiated");
-			expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
+			expect(() => client.sendForkFrame({ type: "ask_pause", targetId: "ask-1" })).toThrow(
+				"has not been negotiated",
+			);
 			await client.negotiateProtocolV3();
 			expect(sent[0]).toMatchObject({ type: "negotiate_protocol", protocolVersion: 3 });
-			expect(await client.requestFork<{ payload: string }>("set_approval_mode")).toEqual({
-				payload: "😀".repeat(270_000),
-			});
-			await expect(
-				client.requestFork("set_settings", { scope: "user", key: "theme.dark", value: "titanium" }),
-			).rejects.toMatchObject({
-				command: "set_settings",
-				code: "permission_denied",
-				message: "raw command was denied",
-			});
+			client.sendForkFrame({ type: "ask_pause", targetId: "ask-1" });
+			expect(sent[1]).toMatchObject({ type: "ask_pause", targetId: "ask-1" });
 		} finally {
 			await client.stop();
 		}
@@ -333,7 +312,6 @@ describe("RpcClient fork response transport", () => {
 					...(options.negotiationError ? { code: "unsupported", message: "fork not supported" } : {}),
 				});
 				expect(client.forkNegotiated).toBe(false);
-				await expect(client.requestFork("set_approval_mode")).rejects.toThrow("has not been negotiated");
 				expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
 			} finally {
 				await client.stop();

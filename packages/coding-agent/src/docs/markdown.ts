@@ -356,7 +356,6 @@ export async function readMarkdownDocument(rootPath: string, relativePath: strin
 	const digest = createHash("sha256").update(bytes).digest("hex");
 	return {
 		relativePath: relative.split(path.sep).join("/"),
-		absolutePath,
 		title: parsed.title ?? path.basename(relativePath, path.extname(relativePath)),
 		sourceKind: sourceKind(relativePath),
 		sha256: digest,

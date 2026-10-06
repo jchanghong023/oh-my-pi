@@ -76,9 +76,11 @@ describe("team yield payload validation", () => {
 
 	it("caps model narratives without silently dropping structured findings", () => {
 		expect(parseTeamProposal({ ...proposal(), proposal: "p".repeat(5000) })?.proposal.length).toBeLessThan(5000);
-		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })?.reviewSummary.length).toBeLessThan(
-			2000,
-		);
+		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })).toBeUndefined();
+		expect(
+			parseTeamReview({ ...review(), findings: [], noSubstantiveIssues: true, reviewSummary: "r".repeat(2000) })
+				?.reviewSummary.length,
+		).toBeLessThan(2000);
 		expect(
 			parseTeamRevision({ ...revision(), revisedProposal: "v".repeat(5000) })?.revisedProposal.length,
 		).toBeLessThan(5000);

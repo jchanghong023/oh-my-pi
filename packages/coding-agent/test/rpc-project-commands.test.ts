@@ -70,9 +70,14 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			sessionManager: { getCwd: () => cwd },
 		});
 		await service.buildCatalog();
-		expect(byName(await service.buildCatalog(session("alpha"))).get("skill:alpha")?.availability.available).toBe(
-			true,
-		);
+		const alpha = byName(await service.buildCatalog(session("alpha")));
+		expect(alpha.get("skill:alpha")?.availability.available).toBe(true);
+		expect(alpha.get("skills")).toMatchObject({
+			source: "builtin",
+			execution: "omp",
+			scope: "session",
+			availability: { available: true },
+		});
 		const beta = byName(await service.buildCatalog(session("beta")));
 		expect(beta.has("skill:alpha")).toBe(false);
 		expect(beta.get("skill:beta")?.availability.available).toBe(true);
@@ -121,8 +126,8 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 			expect(typeof command.availability.available).toBe("boolean");
 		}
 
-		// Session-bound builtins report session_required until a session exists.
-		for (const name of ["model", "plan"]) {
+		// Session-bound builtins remain discoverable but require a session.
+		for (const name of ["model", "plan", "skills"]) {
 			expect(map.get(name)).toMatchObject({
 				source: "builtin",
 				scope: "session",
@@ -133,7 +138,7 @@ describe("RpcCommandCatalogService (rpc-project-commands, R2)", () => {
 		// Project-scoped builtins are project scope and either available or
 		// carry a handler-based reason (tui_only/unsupported), never
 		// session_required.
-		for (const name of ["settings", "skills", "new"]) {
+		for (const name of ["settings", "new"]) {
 			const command = map.get(name);
 			expect(command).toBeDefined();
 			expect(command!.source).toBe("builtin");

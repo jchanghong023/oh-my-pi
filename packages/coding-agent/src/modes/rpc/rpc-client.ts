@@ -16,7 +16,6 @@ import type { BtwHistoryRecord } from "../../session/btw-history";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
-import type { RpcForkCommandBase } from "./rpc-fork-types";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import {
 	RPC_MESSAGES_PAGE_BUSY_ERROR,
@@ -1358,13 +1357,6 @@ export class RpcClient {
 		this.#writeFrame(frame as RpcCommand);
 	}
 
-	/** Send a response-correlated raw v3 command; rejects with the server's error and code. */
-	async requestFork<T = unknown>(type: string, payload: Record<string, unknown> = {}): Promise<T> {
-		if (!this.#forkNegotiated) throw new Error("Fork protocol v3 has not been negotiated");
-		const response = await this.#send({ ...payload, type });
-		return this.#getData<T>(response);
-	}
-
 	async setCustomTools(tools: RpcClientCustomTool[]): Promise<string[]> {
 		this.#customTools = [...tools];
 		if (!this.#process) {
@@ -1643,11 +1635,7 @@ export class RpcClient {
 		}
 	}
 
-	#send(
-		command: RpcCommandBody | RpcForkCommandBase,
-		timeoutMs = 30_000,
-		id = `req_${++this.#requestId}`,
-	): Promise<RpcResponse> {
+	#send(command: RpcCommandBody, timeoutMs = 30_000, id = `req_${++this.#requestId}`): Promise<RpcResponse> {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}

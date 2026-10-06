@@ -856,23 +856,17 @@ describe("update-cli bun install command", () => {
 		// file and aborted at validateLoadedBindings with `The .node file on
 		// disk is from a different release than this loader`. See
 		// https://github.com/can1357/oh-my-pi/issues/1824.
-		for (const tag of ["linux-x64", "linux-arm64", "win32-x64"]) {
+		for (const tag of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"]) {
 			const args = buildBunInstallArgs("15.9.0", tag);
 			expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
 			expect(args).toContain(`@oh-my-pi/pi-natives-${tag}@15.9.0`);
 		}
 	});
 
-	it("omits leaves for macOS, Windows ARM64, and unknown platform tags", () => {
-		// The fork release pipeline publishes natives leaves for linux-x64,
-		// linux-arm64 and win32-x64 only; requesting an unpublished leaf would
-		// abort with EBADPLATFORM and hide the real diagnostic from
-		// `loadNative`'s aggregated error.
-		for (const tag of ["darwin-x64", "darwin-arm64", "win32-arm64", "linux-arm"]) {
-			const args = buildBunInstallArgs("15.9.0", tag);
-			expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
-			expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
-		}
+	it("omits the leaf for an unknown platform tag", () => {
+		const args = buildBunInstallArgs("15.9.0", "linux-arm");
+		expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
+		expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
 	});
 
 	it("derives global node_modules from supported Bun locations with the explicit global directory taking precedence", () => {

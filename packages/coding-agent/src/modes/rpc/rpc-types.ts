@@ -20,7 +20,6 @@ import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPa
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { RpcMessagesPage } from "./rpc-messages";
-import type { RpcForkCommand, RpcForkResponse } from "./rpc-fork-types";
 import type { RpcForkAttachment } from "./rpc-fork-attachments";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
@@ -174,10 +173,7 @@ export type RpcCommand =
 	// Side questions (/btw); answers stream as `btw_delta` / `btw_record` frames
 	| { id?: string; type: "btw"; question: string; recordId?: string }
 	| { id?: string; type: "btw_cancel"; recordId?: string }
-	| { id?: string; type: "get_btw_history" }
-
-	// Fork extensions (protocol v3; handled in rpc-fork-*.ts — see docs-zh-CN/requirements/rpc-ui-protocol.md)
-	| RpcForkCommand;
+	| { id?: string; type: "get_btw_history" };
 
 // ============================================================================
 // RPC State
@@ -211,8 +207,6 @@ export interface RpcSessionState {
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
-	/** Active tool-approval tier mode (v3; mirrors `tools.approvalMode`). */
-	approvalMode?: "always-ask" | "write" | "yolo";
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork: boolean;
 	/** Same predicate as `session_settled`: idle with nothing queued or pending. */
@@ -637,9 +631,6 @@ export type RpcResponse =
 			success: true;
 			data: { records: readonly BtwHistoryRecord[] };
 	  }
-
-	// Fork extensions (protocol v3)
-	| RpcForkResponse
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
 	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };

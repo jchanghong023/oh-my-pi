@@ -21,7 +21,6 @@ import {
 	isEnotempty,
 	isFsError,
 	logger,
-	normalizePathForComparison,
 	pathIsWithin,
 	stringifyJson,
 	toError,
@@ -3846,7 +3845,6 @@ export class SessionManager {
 			resetInheritedCost?: boolean;
 			repairInterruptedTail?: boolean;
 			requireStableSessionIdentity?: boolean;
-			expectedSourceIdentity?: { sessionId: string; cwd: string };
 		},
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
@@ -3865,15 +3863,6 @@ export class SessionManager {
 		}
 		migrateToCurrentVersion(sourceEntries);
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
-		if (
-			options?.expectedSourceIdentity &&
-			(sourceHeader?.id !== options.expectedSourceIdentity.sessionId ||
-				typeof sourceHeader.cwd !== "string" ||
-				normalizePathForComparison(sourceHeader.cwd) !==
-					normalizePathForComparison(options.expectedSourceIdentity.cwd))
-		) {
-			throw new Error(`Fork source identity changed: ${sourcePath}`);
-		}
 		await resolveBlobRefsInEntries(sourceEntries, manager.#blobs);
 
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];

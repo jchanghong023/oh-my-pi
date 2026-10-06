@@ -1,12 +1,10 @@
 /**
  * Fork-extension RPC protocol surface (protocol v3).
  *
- * Everything in the `rpc-fork-*` modules is fork-only (contract:
- * docs-zh-CN/requirements/rpc-ui-protocol.md). Upstream clients stay on v1/v2
- * and never receive fork frames; a client only sees this surface after it
- * negotiates `negotiate_protocol {protocolVersion:3}`. `rpc-types.ts` appends
- * the command/response unions declared here, so the wire contract has a single
- * home per direction while implementations stay in dedicated fork modules.
+ * This module owns the fork-only protocol-v3 side-channel frame types used by
+ * `rpc-fork-*` modules. Upstream clients stay on v1/v2 and never receive these
+ * frames; a client sees this surface only after it negotiates
+ * `negotiate_protocol {protocolVersion:3}`.
  */
 
 /** Fork protocol version; implies v2 chunked framing. */
@@ -19,29 +17,6 @@ export const RPC_SUPPORTED_PROTOCOL_VERSIONS: [1, 2, 3] = [1, 2, RPC_FORK_PROTOC
 export function isNegotiableRpcProtocolVersion(version: number): version is 2 | 3 {
 	return version === 2 || version === RPC_FORK_PROTOCOL_VERSION;
 }
-
-/** Base shape shared by every fork-extension command. */
-export interface RpcForkCommandBase {
-	id?: string;
-	type: string;
-}
-
-/**
- * Wire union of every command registered by the kept fork controllers,
- * appended to `RpcCommand`.
- */
-export type RpcForkCommand =
-	// 4.1 tool permission approval
-	{ id?: string; type: "set_approval_mode"; mode: "always-ask" | "write" | "yolo" };
-
-/** Wire union of fork-extension success responses, appended to `RpcResponse`. */
-export type RpcForkResponse = {
-	id?: string;
-	type: "response";
-	command: "set_approval_mode";
-	success: true;
-	data: { approvalMode: "always-ask" | "write" | "yolo" };
-};
 
 // ============================================================================
 // Rich ask (requirement 4.3)

@@ -495,15 +495,6 @@ export const TOP_LEVEL_AGENT: ExtensionAgentIdentity = Object.freeze({
 
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
-	#hookExecutedListener:
-		| ((info: {
-				extensionPath: string;
-				event: string;
-				durationMs: number;
-				status: "ok" | "timeout" | "error" | "aborted";
-				reason?: string;
-		  }) => void)
-		| undefined;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
@@ -1034,25 +1025,6 @@ export class ExtensionRunner {
 		await this.#toolApprovalPreviewWaiter?.(toolCallId);
 	}
 
-	/**
-	 * Per-hook telemetry listener (fork rpc-ui 5.8): invoked after every
-	 * extension handler run with its outcome and wall duration. Off by default;
-	 * the RPC fork surface installs it after initialization.
-	 */
-	setHookExecutedListener(
-		listener:
-			| ((info: {
-					extensionPath: string;
-					event: string;
-					durationMs: number;
-					status: "ok" | "timeout" | "error" | "aborted";
-					reason?: string;
-			  }) => void)
-			| undefined,
-	): void {
-		this.#hookExecutedListener = listener;
-	}
-
 	getUIContext(): ExtensionUIContext {
 		return this.#uiContext;
 	}
@@ -1246,10 +1218,10 @@ export class ExtensionRunner {
 		"ctrl+o": true,
 		"ctrl+t": true,
 		"ctrl+g": true,
-		// Default chord for `app.message.followUp` (Windows Terminal can't deliver Ctrl+Enter; #1903).
-		"ctrl+q": true,
 		"alt+m": true,
 		"alt+p": true,
+		// Default chord for `app.message.followUp` (Windows Terminal can't deliver Ctrl+Enter; #1903).
+		"ctrl+q": true,
 		"shift+tab": true,
 		"shift+ctrl+p": true,
 		// Fork default chord for `app.thinking.cycle`.
@@ -1536,20 +1508,6 @@ export class ExtensionRunner {
 		const signals = [outerSignal, sessionStopSignal].filter((s): s is AbortSignal => s !== undefined);
 		const signal = signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals);
 		if (signal?.aborted) return undefined;
-		const hookStartedAt = performance.now();
-		const reportHook = (status: "ok" | "timeout" | "error" | "aborted", reason?: string) => {
-			try {
-				this.#hookExecutedListener?.({
-					extensionPath: ext.path,
-					event: event.type,
-					durationMs: performance.now() - hookStartedAt,
-					status,
-					...(reason ? { reason } : {}),
-				});
-			} catch {
-				// Telemetry must never break hook dispatch.
-			}
-		};
 		const registrationScope: ToolRegistrationScope = { pending: new Set(), closed: false };
 		let handlerResult: R | typeof EXTENSION_HANDLER_TIMEOUT | typeof EXTENSION_HANDLER_ABORTED | undefined;
 		let handlerFailure: { error: unknown } | undefined;
@@ -1589,10 +1547,7 @@ export class ExtensionRunner {
 		} finally {
 			registrationScope.closed = true;
 		}
-		if (handlerResult === EXTENSION_HANDLER_ABORTED) {
-			reportHook("aborted");
-			return undefined;
-		}
+		if (handlerResult === EXTENSION_HANDLER_ABORTED) return undefined;
 		if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 			const error = `handler timed out after ${timeoutMs}ms`;
 			logger.warn("Extension handler timed out", {
@@ -1605,7 +1560,6 @@ export class ExtensionRunner {
 				event: event.type,
 				error,
 			});
-			reportHook("timeout", error);
 			return onFailure?.("timeout", error);
 		}
 		if (handlerFailure) {
@@ -1618,10 +1572,8 @@ export class ExtensionRunner {
 				error: message,
 				stack,
 			});
-			reportHook("error", message);
 			return onFailure?.("error", message);
 		}
-		reportHook("ok");
 		return handlerResult as R | undefined;
 	}
 

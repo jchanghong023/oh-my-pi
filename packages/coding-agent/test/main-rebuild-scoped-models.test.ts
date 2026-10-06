@@ -245,6 +245,29 @@ describe("buildSessionOptions --models scope selection", () => {
 		);
 		expect(online.offline).toBe(false);
 	});
+
+	it("refuses a disabled literal target resolved from --plan-yolo-into", async () => {
+		const target = model("disabled");
+		const modelRegistry = {
+			getAll: () => [target],
+			getAvailable: () => [target],
+			hasConfiguredAuth: () => true,
+		} as unknown as ModelRegistry;
+		const settings = Settings.isolated({
+			modelRoles: { smol: "prov/disabled" },
+			disabledModels: ["prov/disabled"],
+		});
+
+		await expect(
+			buildSessionOptions(
+				parseArgs(["--plan-yolo", "--plan-yolo-into", "@smol", "--no-prewalk"]),
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			),
+		).rejects.toThrow(/Model "prov\/disabled" is disabled/);
+	});
 });
 
 describe("buildSessionOptions prewalk target discovery", () => {

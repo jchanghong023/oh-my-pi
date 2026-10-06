@@ -6,11 +6,11 @@
  * provider-side tool schema and the post-mortem validator both enforce them.
  * The hand-rolled parsers double as the orchestrator's trust boundary — data
  * that bypassed the yield validation (schema override after retries) is still
- * shape-checked and budget-truncated here before any stage consumes it.
+ * shape-checked here; proposal text budgets are truncated and aggregate review
+ * text over budget is rejected before any stage consumes it.
  *
- * Output budgets are mechanical: the proposal document is capped at 4000
- * chars and the review narrative at 1500 chars by `maxLength` in the schemas
- * and by {@link enforceTextBudget} in the parsers.
+ * Proposal and review-summary fields have schema `maxLength` caps. The parser
+ * also enforces the 1500-character total across a review summary and findings.
  */
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import type {
@@ -151,7 +151,7 @@ const findingSchema = obj(
 export const TEAM_REVIEW_SCHEMA = obj(
 	{
 		noSubstantiveIssues: bool("未发现实质问题时为 true；不必凑问题数量"),
-		reviewSummary: str(TEAM_REVIEW_BUDGET, "审查意见全文，≤ 1500 字"),
+		reviewSummary: str(TEAM_REVIEW_BUDGET, "审查摘要；与全部 findings 文字合计 ≤ 1500 字"),
 		findings: { type: "array", maxItems: 10, description: "发现的问题；无实质问题时为空数组", items: findingSchema },
 		priorBlockingStatus: enumOf(
 			["resolved", "partially-resolved", "unresolved", "not-applicable"] as const,
@@ -353,6 +353,18 @@ export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
 		};
 	});
 	const summary = enforceTextBudget(asString(data.reviewSummary).trim(), TEAM_REVIEW_BUDGET);
+	const reviewTextLength =
+		summary.length +
+		findings.reduce(
+			(total, finding) =>
+				total +
+				finding.issue.length +
+				finding.impact.length +
+				finding.evidence.length +
+				finding.targetAspect.length,
+			0,
+		);
+	if (reviewTextLength > TEAM_REVIEW_BUDGET) return undefined;
 	const noSubstantiveIssues = asBoolean(data.noSubstantiveIssues) && findings.length === 0;
 	// A narrative alone cannot stand in for structured findings or an explicit
 	// no-issues verdict: otherwise an incomplete review can pass the adoption gate.

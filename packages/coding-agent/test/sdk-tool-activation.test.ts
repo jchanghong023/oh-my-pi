@@ -2182,6 +2182,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(activeToolNames).toEqual(
 				expect.arrayContaining(["read", "yield", "generate_image", "learn", "manage_skill", "write"]),
 			);
+			expect(activeToolNames).toContain("wiki");
+			expect(activeToolNames).toContain("repo");
 			// Explicit and force-included tools stay top-level. Ambient custom and
 			// extension capabilities mount through the device-only write transport.
 			const mountedNames = normal.getXdevToolEntries().map(entry => entry.name);
@@ -2204,6 +2206,23 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			);
 		} finally {
 			await normal.dispose();
+		}
+	});
+
+	it("does not add wiki and repo to explicit tool lists without read", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["bash"],
+		});
+
+		try {
+			const activeToolNames = session.getActiveToolNames();
+			expect(activeToolNames).toContain("bash");
+			expect(activeToolNames).not.toContain("wiki");
+			expect(activeToolNames).not.toContain("repo");
+		} finally {
+			await session.dispose();
 		}
 	});
 

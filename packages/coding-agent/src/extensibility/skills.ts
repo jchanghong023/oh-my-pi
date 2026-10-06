@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir, normalizePathForComparison, parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import { getProjectDir, parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -34,10 +34,6 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	source: string;
-	/** Exact file text adopted by discovery; omitted for caller-supplied path-only descriptors. */
-	content?: string;
-	/** Digest of the adopted file contents. */
-	contentRevision?: string;
 	/**
 	 * When `true`, the skill is loaded and reachable via `skill://<name>` and
 	 * (when enabled) `/skill:<name>`, but is excluded from the rendered system
@@ -265,8 +261,6 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			filePath: capSkill.path,
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: options.source,
-			content: capSkill.fileContent,
-			contentRevision: capSkill.contentRevision,
 			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 			_source: capSkill._source,
@@ -293,58 +287,6 @@ export interface LoadSkillsOptions extends SkillsSettings {
  * Returns skills and any validation warnings.
  */
 export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadSkillsResult> {
-	return await loadSkillsWithDiscovery(options);
-}
-
-/** Result of {@link loadSkillsWithShadowed}. */
-export interface LoadSkillsWithShadowedResult extends LoadSkillsResult {
-	/**
-	 * Every discovered skill that did not make the final list: skills the
-	 * filters dropped (source toggles, ignore patterns, `skill:<name>`
-	 * disabledExtensions entries), identical copies collapsed into a surviving
-	 * same-name registration, symlink duplicates, admission vetoes, and
-	 * admitted skills whose final name fails the include patterns. Same-name
-	 * losers that upstream namespaces (`<ns>/<name>`) stay in `skills`, so they
-	 * are not shadowed. Management catalogs use this to surface duplicates a
-	 * plain load silently drops; WHY an entry lost is the caller's to derive by
-	 * re-checking its own settings.
-	 */
-	shadowed: Skill[];
-}
-
-/**
- * Like {@link loadSkills}, but also collects the skills a plain load silently
- * drops so management surfaces can list them. `skills` and `warnings` are
- * identical to {@link loadSkills}.
- */
-export async function loadSkillsWithShadowed(options: LoadSkillsOptions = {}): Promise<LoadSkillsWithShadowedResult> {
-	const shadowed: Skill[] = [];
-	const result = await loadSkillsWithDiscovery(options, shadowed);
-	return { skills: result.skills, warnings: result.warnings, shadowed };
-}
-
-/** Convert a discovered capability skill to the public {@link Skill} shape. */
-function capabilitySkillToSkill(capSkill: CapabilitySkill, options?: { sanitizeDescription?: boolean }): Skill {
-	const rawDescription = typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
-	return {
-		name: capSkill.name,
-		description: options?.sanitizeDescription ? sanitizeManagedDescription(rawDescription) : rawDescription,
-		filePath: capSkill.path,
-		baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-		source: `${capSkill._source.provider}:${capSkill.level}`,
-		content: capSkill.fileContent,
-		contentRevision: capSkill.contentRevision,
-		...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-		hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-		_source: capSkill._source,
-	};
-}
-
-/**
- * Shared pipeline behind {@link loadSkills} and {@link loadSkillsWithShadowed}.
- * When `shadowed` is supplied, it collects every discovered skill that lost.
- */
-async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed?: Skill[]): Promise<LoadSkillsResult> {
 	const {
 		cwd = getProjectDir(),
 		enabled = true,
@@ -358,7 +300,6 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 		customDirectories = [],
 		ignoredSkills = [],
 		includeSkills = [],
-		disabledPaths = [],
 		disabledExtensions = [],
 		extensionRoots,
 	} = options;
@@ -419,10 +360,6 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	const disabledSkillNames = new Set(
 		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
 	);
-	const disabledPathKeys = new Set(disabledPaths.map(normalizePathForComparison));
-	const isDisabledResolvedPath = (resolvedPath: string): boolean =>
-		disabledPathKeys.size > 0 &&
-		disabledPathKeys.has(process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath);
 	// Select authored skills from the pre-dedup superset. `loadCapability`
 	// dedupes before source toggles, so a disabled high-priority provider must
 	// not hide an enabled lower-priority provider with the same skill name.
@@ -432,19 +369,9 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	// patterns are matched against the final name the user actually sees.
 	const filteredSkills = result.all.filter(capSkill => {
 		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) return false;
-		if (disabledSkillNames.has(capSkill.name)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
-			return false;
-		}
-		if (!isSourceEnabled(capSkill._source)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
-			return false;
-		}
-		if (matchesIgnorePatterns(capSkill.name)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
-			return false;
-		}
-		return true;
+		if (disabledSkillNames.has(capSkill.name)) return false;
+		if (!isSourceEnabled(capSkill._source)) return false;
+		return !matchesIgnorePatterns(capSkill.name);
 	});
 
 	/**
@@ -479,10 +406,6 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 		if (disabledSkillNames.has(name) || matchesIgnorePatterns(name)) return undefined;
 
 		for (const droppedName of dropped) {
-			// Identical copy collapses into the surviving bare name; the dropped
-			// registration never reaches the final list, so it is shadowed.
-			const droppedSkill = skillMap.get(droppedName);
-			if (droppedSkill && shadowed) shadowed.push(droppedSkill);
 			skillMap.delete(droppedName);
 			admitted.delete(droppedName);
 			// The alias no longer exists: retract the warning that advertised it.
@@ -524,14 +447,9 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	for (let i = 0; i < filteredSkills.length; i++) {
 		const capSkill = filteredSkills[i];
 		const resolvedPath = realPaths[i];
-		if (isDisabledResolvedPath(resolvedPath)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
-			continue;
-		}
 
 		// Skip silently if we've already loaded this exact file (via symlink)
 		if (realPathSet.has(resolvedPath)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill));
 			continue;
 		}
 
@@ -541,17 +459,12 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 			filePath: capSkill.path,
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: `${capSkill._source.provider}:${capSkill.level}`,
-			content: capSkill.fileContent,
-			contentRevision: capSkill.contentRevision,
 			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 			_source: capSkill._source,
 		};
-		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined) {
+		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined)
 			realPathSet.add(resolvedPath);
-		} else if (shadowed) {
-			shadowed.push(skill);
-		}
 	}
 
 	const customDirectoryResults = await Promise.all(
@@ -579,28 +492,20 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	}> = [];
 	for (const { expandedDir, scanResult } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
-			const skill: Skill = {
-				name: capSkill.name,
-				description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
-				filePath: capSkill.path,
-				baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-				source: "custom:user",
-				content: capSkill.fileContent,
-				contentRevision: capSkill.contentRevision,
-				...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-				hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-				_source: { ...capSkill._source, providerName: "Custom" },
-			};
-			if (disabledSkillNames.has(capSkill.name)) {
-				if (shadowed) shadowed.push(skill);
-				continue;
-			}
-			if (matchesIgnorePatterns(capSkill.name)) {
-				if (shadowed) shadowed.push(skill);
-				continue;
-			}
+			if (disabledSkillNames.has(capSkill.name)) continue;
+			if (matchesIgnorePatterns(capSkill.name)) continue;
 			allCustomSkills.push({
-				skill,
+				skill: {
+					name: capSkill.name,
+					description:
+						typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
+					filePath: capSkill.path,
+					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+					source: "custom:user",
+					...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+					hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+					_source: { ...capSkill._source, providerName: "Custom" },
+				},
 				path: capSkill.path,
 				body: capSkill.content,
 				frontmatter: capSkill.frontmatter,
@@ -623,19 +528,8 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	for (let i = 0; i < allCustomSkills.length; i++) {
 		const { skill, body, frontmatter, namespace } = allCustomSkills[i];
 		const resolvedPath = customRealPaths[i];
-		if (isDisabledResolvedPath(resolvedPath)) {
-			if (shadowed) shadowed.push(skill);
-			continue;
-		}
-		if (realPathSet.has(resolvedPath)) {
-			if (shadowed) shadowed.push(skill);
-			continue;
-		}
-		if (admit(skill, body, frontmatter, namespace) !== undefined) {
-			realPathSet.add(resolvedPath);
-		} else if (shadowed) {
-			shadowed.push(skill);
-		}
+		if (realPathSet.has(resolvedPath)) continue;
+		if (admit(skill, body, frontmatter, namespace) !== undefined) realPathSet.add(resolvedPath);
 	}
 
 	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
@@ -657,7 +551,11 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	// Managed defers to these even when capability dedup hid an enabled authored
 	// skill behind a disabled higher-priority one, so managed never masks it.
 	const enabledAuthoredNames = new Set(
-		filteredSkills.filter((_, index) => !isDisabledResolvedPath(realPaths[index])).map(capSkill => capSkill.name),
+		result.all
+			.filter(
+				capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID && isSourceEnabled(capSkill._source),
+			)
+			.map(capSkill => capSkill.name),
 	);
 	const managedRealPaths = await Promise.all(
 		managedCandidates.map(async capSkill => {
@@ -671,39 +569,30 @@ async function loadSkillsWithDiscovery(options: LoadSkillsOptions = {}, shadowed
 	for (let i = 0; i < managedCandidates.length; i++) {
 		const capSkill = managedCandidates[i];
 		const resolvedPath = managedRealPaths[i];
-		if (isDisabledResolvedPath(resolvedPath)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
-			continue;
-		}
-		if (realPathSet.has(resolvedPath)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
-			continue;
-		}
-		if (enabledAuthoredNames.has(capSkill.name)) {
-			// an enabled authored skill owns this name; the managed twin loses
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
-			continue;
-		}
+		if (realPathSet.has(resolvedPath)) continue;
+		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
 		// Already claimed — e.g. by a custom-directory skill. LOAD-BEARING: custom
 		// dirs never enter `result.all`, so they are absent from `enabledAuthoredNames`
 		// above; this map check is the ONLY veto that lets a custom-dir authored skill
 		// win over a same-named managed one. The custom-dir loop (which populates
 		// skillMap, ~30 lines up) MUST run before this block — do not reorder.
-		if (skillMap.has(capSkill.name)) {
-			if (shadowed) shadowed.push(capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
-			continue;
-		}
-		skillMap.set(capSkill.name, capabilitySkillToSkill(capSkill, { sanitizeDescription: true }));
+		if (skillMap.has(capSkill.name)) continue;
+		const rawDescription =
+			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
+		skillMap.set(capSkill.name, {
+			name: capSkill.name,
+			description: sanitizeManagedDescription(rawDescription),
+			filePath: capSkill.path,
+			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+			source: `${capSkill._source.provider}:${capSkill.level}`,
+			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			_source: capSkill._source,
+		});
 		realPathSet.add(resolvedPath);
 	}
 
-	const skills = Array.from(skillMap.values()).filter(skill => {
-		if (matchesIncludePatterns(skill.name)) return true;
-		// Include patterns match final names at the end of the pipeline; an
-		// admitted skill excluded here still never reaches the final list.
-		if (shadowed) shadowed.push(skill);
-		return false;
-	});
+	const skills = Array.from(skillMap.values()).filter(skill => matchesIncludePatterns(skill.name));
 	// Deterministic ordering for prompt stability (case-insensitive, then exact name, then path).
 	skills.sort((a, b) => compareSkillOrder(a.name, a.filePath, b.name, b.filePath));
 	return {
@@ -780,11 +669,11 @@ export type SkillInvocationKind = "user" | "autoload";
 export type SkillPromptInput = Pick<ParsedSkillInvocation, "args"> & Partial<Pick<ParsedSkillInvocation, "prompt">>;
 
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath" | "baseDir" | "content">,
+	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
 	input: SkillPromptInput,
 	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
-	const content = skill.content ?? (await Bun.file(skill.filePath).text());
+	const content = await Bun.file(skill.filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.
 	const body = parseFrontmatter(content, { source: skill.filePath, repair: false, level: "off" }).body.trim();

@@ -210,10 +210,6 @@ export class GoalRuntime {
 			if (this.#wallClock.activeGoalId !== state.goal.id) {
 				this.#wallClock = { lastAccountedAt: this.#now(), activeGoalId: state.goal.id };
 			}
-			// Fork rpc-ui 5.8: iteration counter — one per agent turn driven while
-			// the goal is active. Mutated in place so `get_state` snapshots and the
-			// next `goal_updated` emission observe it without a dedicated event.
-			state.goal.iteration = (state.goal.iteration ?? 0) + 1;
 		}
 	}
 

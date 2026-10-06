@@ -20,8 +20,6 @@ export interface Goal {
 	tokenBudget?: number;
 	tokensUsed: number;
 	timeUsedSeconds: number;
-	/** Agent turns driven while this goal is active (includes operator-initiated turns). */
-	iteration?: number;
 	createdAt: number;
 	updatedAt: number;
 }

@@ -4002,7 +4002,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// This keeps the wiki/repo/read pairing and auto-learn guidance consistent with the
 		// callable tool surface.
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
+			const readToolRequested = explicitlyRequestedToolNames.includes("read");
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
+				if ((name === "wiki" || name === "repo") && !readToolRequested) continue;
 				if (builtInRegistryToolNames.has(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}

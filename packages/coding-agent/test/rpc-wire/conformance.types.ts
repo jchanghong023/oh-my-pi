@@ -17,7 +17,6 @@ import type { AssistantMessageEvent, ImageContent, Model, Usage } from "@oh-my-p
 import type { BashResult } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
-import type { RpcForkCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -131,17 +130,13 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : { left: A; right: 
 type CommandName = RpcCommand["type"];
 
 /**
- * Fork carve-out: the protocol-v3 command surface in `rpc-fork-*.ts` is
- * negotiation-gated and deliberately not modeled in the generated wire
- * schema; clients use raw requests after negotiating v3. The same holds for fork-only
- * fields the server accepts or emits on otherwise-stock definitions: the
- * structured `attachments` parameter on the prompt-like commands, rich-ask
- * `sensitive`, `approvalMode` on the session state, goal `iteration`, and the
- * project-mode `ready` stamps. Conformance below pins only the stock surface;
- * each carve-out shrinks when an upstream PR lands the field on the wire.
+ * Negotiated protocol-v3 interaction frames are outside the generated stock
+ * command schema. Conformance below pins stock commands while accounting for
+ * fork-only fields on stock commands: `attachments` / `inputMode` on prompt
+ * commands, rich-ask `sensitive`, and project-mode `ready` stamps. Each
+ * carve-out shrinks when the corresponding field lands upstream.
  */
-type ForkCommandName = RpcForkCommand["type"];
-type StockCommandName = Exclude<CommandName, ForkCommandName>;
+type StockCommandName = CommandName;
 
 /** Fork-only parameter fields the server accepts on stock commands. */
 interface ForkParamFields {
@@ -156,14 +151,6 @@ interface ForkParamFields {
 type ServerParamsStock<K extends StockCommandName> = K extends keyof ForkParamFields
 	? Omit<ServerParams<K>, ForkParamFields[K]>
 	: ServerParams<K>;
-
-/** Fork-only result fields the server emits on stock commands. */
-interface ForkResultFields {
-	get_state: "approvalMode";
-}
-type ServerResultStock<K extends StockCommandName> = K extends keyof ForkResultFields
-	? Omit<ServerResult<K>, ForkResultFields[K]>
-	: ServerResult<K>;
 
 type ServerParams<K extends CommandName> = Omit<Extract<RpcCommand, { type: K }>, "id" | "type">;
 type ServerResult<K extends CommandName> =
@@ -189,13 +176,10 @@ export type CommandResults = Assert<
 			? Same<ServerResult<K>, undefined>
 			: [Exclude<Wire.RpcWireCommands[K]["result"], null>] extends [Wire.ModelInfo]
 				? OutboundSubset<
-						Exclude<ServerResultStock<K>, null | undefined>,
+						Exclude<ServerResult<K>, null | undefined>,
 						Exclude<Wire.RpcWireCommands[K]["result"], null>
 					>
-				: Outbound<
-						Exclude<ServerResultStock<K>, null | undefined>,
-						Exclude<Wire.RpcWireCommands[K]["result"], null>
-					>;
+				: Outbound<Exclude<ServerResult<K>, null | undefined>, Exclude<Wire.RpcWireCommands[K]["result"], null>>;
 	}>
 >;
 /** A nullable result is exactly a server result that can be `null`. */
@@ -286,7 +270,7 @@ export type InboundSet = Assert<
 
 export type State = Assert<
 	AllTrue<{
-		sessionState: Outbound<Omit<RpcSessionState, "approvalMode">, Wire.SessionState>;
+		sessionState: Outbound<RpcSessionState, Wire.SessionState>;
 		queuedMessages: Outbound<RpcSessionState["queuedMessages"], Wire.QueuedMessagesState>;
 		dumpTool: Outbound<NonNullable<RpcSessionState["dumpTools"]>[number], Wire.ToolDescriptor>;
 		contextUsage: Outbound<ContextUsage, Wire.ContextUsage>;
@@ -294,7 +278,7 @@ export type State = Assert<
 		todoItem: Outbound<TodoItem, Wire.TodoItem>;
 		todoPhaseInbound: Inbound<Wire.TodoPhase, TodoPhase>;
 		todoItemInbound: Inbound<Wire.TodoItem, TodoItem>;
-		goal: Outbound<Omit<Goal, "iteration">, Wire.Goal>;
+		goal: Outbound<Goal, Wire.Goal>;
 		goalModeState: Outbound<GoalModeState, Wire.GoalModeState>;
 		goalResult: Outbound<RpcGoalResult, Wire.GoalResult>;
 		usageLimitLowPriority: Outbound<Extract<UsageLimitState, { stage: "low_priority" }>, Wire.UsageLimitLowPriority>;

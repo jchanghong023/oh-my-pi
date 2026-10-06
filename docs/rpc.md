@@ -139,14 +139,14 @@ Project mode fixes the project root to startup cwd and permits zero loaded sessi
 - `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes. `set_model_role` currently writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides.
 - Directory cursors are opaque, revision/filter-bound strings. Reusing them after resource changes fails with `stale_cursor`; restart instead of combining generations.
 - Session rename/delete and role writes require the resource's `expectedRevision`, not a global catalog revision.
-- Only no-argument `/skills` returns `hostAction.kind: "open_panel"` with `payload.panel: "skills"`, empty args and optional session ownership. Search/install/installed/update arguments execute the shared business handler with that session's cwd and registry URL, then refresh skills/catalog after changes. Script-bearing installs require a real confirmation UI; absent capability never silently approves or pretends to cancel. Opening a panel is not CRUD completion.
+- The fork does not provide a structured skills-management panel. `/skills` remains discoverable but requires a loaded session; with one, it uses the shared skills handler rather than returning a host panel action.
 - `/clear` shares the in-place TUI/ACP/RPC reset: abort and await active compaction, preserve id/title/cwd/file, and clear the rendered TUI transcript/scrollback. It is not `/new`; `/fresh` still preserves conversation while resetting provider stream state.
 - `/logout` uses real provider/account selection and removes the selected stored row only after cancellation/session ownership checks. It reports remaining auth sources; a headless/no-op selector is not a substitute.
 - RPC `/model` uses a temporary setter instead of persisting the default role; ACP/TUI's existing default setter remains unchanged.
 
 The canonical project command/response types are `rpc-project-types.ts`; the maintained requirements and complete OMP/GUI acceptance matrix are [rpc-ui project requirements](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
 
-The maintained TypeScript client exposes `negotiateProtocolV3()` plus `requestFork<T>(type, payload)` for fork commands. `requestFork` requires confirmed v3, correlates the response, returns `response.data`, and preserves the server's error message/code on failure. V3 also enables chunk framing when a host advertises only `[1, 3]`.
+The TypeScript client exposes `negotiateProtocolV3()` for opt-in fork interaction frames. V3 also enables chunk framing when a host advertises only `[1, 3]`; there is no separate generic fork-command request API.
 
 Fork model configuration applies positive `enabledModels` inclusion first, then negative `disabledModels` exclusion. `enabledModels: []` includes all otherwise eligible models; `disabledModels: []` excludes none, and `["*"]` excludes all, including slash-bearing ids. Other globs keep path grammar: `provider/**` spans nested ids; `provider/*` is one level. An exact catalog `provider/id` takes literal precedence even with `*`, `?` or `[` in the id. Explicit pins, saved selections, roles, cycling and credential lookup cannot bypass exclusions; re-enabling one model must not silently widen a hand-authored wildcard. The registry retains the full inventory for management.
 
@@ -1659,7 +1659,7 @@ Current helper characteristics:
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)`; use `requestFork<T>(type, payload)` for unwrapped fork business commands after v3 confirmation. Host-URI registration and delta-only message updates remain raw transport surfaces.
+- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)`; these helpers do not imply project-mode support for provider management. Host-URI registration and delta-only message updates remain raw transport surfaces.
 
 ### Python package
 

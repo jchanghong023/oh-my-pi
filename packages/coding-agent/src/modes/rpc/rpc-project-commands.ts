@@ -57,47 +57,45 @@ const UNSUPPORTED: RpcCommandAvailability = { available: false, reason: "unsuppo
 const SESSION_REQUIRED: RpcCommandAvailability = { available: false, reason: "session_required" };
 
 /** Commands implemented by project orchestration, rather than a TUI runtime. */
-const PROJECT_SCOPED_BUILTIN_NAMES = new Set([
-	"new",
-	"resume",
-	"settings",
-	"skills",
-	"setup",
-	"hotkeys",
-	"wiki",
-	"repo",
-	"git",
-	"exit",
-	"quit",
-	"restart",
-	"record",
-	"move",
-]);
+const PROJECT_SCOPED_BUILTIN_NAMES: Readonly<Record<string, true>> = {
+	new: true,
+	resume: true,
+	settings: true,
+	setup: true,
+	hotkeys: true,
+	wiki: true,
+	repo: true,
+	git: true,
+	exit: true,
+	quit: true,
+	restart: true,
+	record: true,
+	move: true,
+};
 
 /** Pure presentation/project-switch actions; business handlers are never replaced by these. */
-export const RPC_PROJECT_HOST_ACTIONS: ReadonlyMap<string, string> = new Map([
-	["settings", "open_settings"],
-	["setup", "open_provider_setup"],
-	["hotkeys", "show_shortcuts"],
-	["extensions", "open_extensions"],
-	["agents", "open_agents"],
-	["wiki", "open_wiki"],
-	["repo", "open_repository"],
-	["git", "open_git"],
-	["hub", "open_agent_hub"],
-	["tree", "select_session_branch"],
-	["branch", "select_branch_message"],
-	["fork", "select_fork_message"],
-	["debug", "open_debug_tools"],
-	["exit", "close_view"],
-	["quit", "close_view"],
-	["restart", "restart_project"],
-	["record", "toggle_recording"],
-	["move", "open_project"],
-	["skills", "open_panel"],
-]);
-
-const PROJECT_ROUTED_BUSINESS = new Set(["new", "resume", "login"]);
+const RPC_PROJECT_HOST_ACTIONS: Readonly<Record<string, string | undefined>> = {
+	hotkeys: "show_shortcuts",
+	extensions: "open_extensions",
+	agents: "open_agents",
+	wiki: "open_wiki",
+	repo: "open_repository",
+	git: "open_git",
+	hub: "open_agent_hub",
+	tree: "select_session_branch",
+	branch: "select_branch_message",
+	fork: "select_fork_message",
+	debug: "open_debug_tools",
+	exit: "close_view",
+	quit: "close_view",
+	restart: "restart_project",
+	record: "toggle_recording",
+	move: "open_project",
+};
+export function getRpcProjectHostAction(name: string): string | undefined {
+	return Object.hasOwn(RPC_PROJECT_HOST_ACTIONS, name) ? RPC_PROJECT_HOST_ACTIONS[name] : undefined;
+}
+const PROJECT_ROUTED_BUSINESS: Readonly<Record<string, true>> = { new: true, resume: true };
 
 /** Wire-error failure carrying the project-mode `invalid_params` code. */
 export class RpcCommandCatalogError extends Error {
@@ -175,7 +173,10 @@ export function scoreCommandText(text: string, query: string): number {
  */
 function builtinSessionAvailability(spec: SlashCommandSpec | undefined): RpcCommandAvailability {
 	if (spec?.name === "wt") return { available: false, reason: "project_root_fixed" };
-	if (spec?.handle || (spec && (RPC_PROJECT_HOST_ACTIONS.has(spec.name) || PROJECT_ROUTED_BUSINESS.has(spec.name))))
+	if (
+		spec?.handle ||
+		(spec && (getRpcProjectHostAction(spec.name) !== undefined || PROJECT_ROUTED_BUSINESS[spec.name] === true))
+	)
 		return AVAILABLE;
 	if (spec?.handleTui) return UNAVAILABLE_BUSINESS;
 	return UNSUPPORTED;
@@ -356,7 +357,7 @@ export class RpcCommandCatalogService {
 				descriptorFor(
 					entry,
 					command.source === "builtin" &&
-						RPC_PROJECT_HOST_ACTIONS.has(command.name) &&
+						getRpcProjectHostAction(command.name) !== undefined &&
 						!lookupBuiltinSlashCommand(command.name)?.handle
 						? "host_action"
 						: "omp",
@@ -375,7 +376,7 @@ export class RpcCommandCatalogService {
 		const entries: RpcCommandCatalogEntry[] = [];
 		const descriptors: RpcProjectCommandDescriptor[] = [];
 		for (const spec of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-			const requiresSession = !PROJECT_SCOPED_BUILTIN_NAMES.has(spec.name);
+			const requiresSession = PROJECT_SCOPED_BUILTIN_NAMES[spec.name] !== true;
 			const hint = spec.acpInputHint ?? spec.inlineHint;
 			const entry: RpcCommandCatalogEntry = {
 				name: spec.name,
@@ -386,14 +387,16 @@ export class RpcCommandCatalogService {
 				source: "builtin",
 				requiresSession,
 				executable: Boolean(
-					spec.handle || RPC_PROJECT_HOST_ACTIONS.has(spec.name) || PROJECT_ROUTED_BUSINESS.has(spec.name),
+					spec.handle ||
+					getRpcProjectHostAction(spec.name) !== undefined ||
+					PROJECT_ROUTED_BUSINESS[spec.name] === true,
 				),
 			};
 			entries.push(entry);
 			descriptors.push(
 				descriptorFor(
 					entry,
-					RPC_PROJECT_HOST_ACTIONS.has(spec.name) && !spec.handle ? "host_action" : "omp",
+					getRpcProjectHostAction(spec.name) !== undefined && !spec.handle ? "host_action" : "omp",
 					requiresSession ? "session" : "project",
 					requiresSession ? SESSION_REQUIRED : builtinSessionAvailability(spec),
 				),
@@ -563,9 +566,13 @@ function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandC
 		...(command.input?.hint ? { inputHint: command.input.hint } : {}),
 		...(command.subcommands?.length ? { subcommands: command.subcommands } : {}),
 		source: command.source,
-		requiresSession: command.source === "builtin" ? !PROJECT_SCOPED_BUILTIN_NAMES.has(command.name) : true,
+		requiresSession: command.source === "builtin" ? PROJECT_SCOPED_BUILTIN_NAMES[command.name] !== true : true,
 		executable: spec
-			? Boolean(spec.handle || RPC_PROJECT_HOST_ACTIONS.has(spec.name) || PROJECT_ROUTED_BUSINESS.has(spec.name))
+			? Boolean(
+					spec.handle ||
+					getRpcProjectHostAction(spec.name) !== undefined ||
+					PROJECT_ROUTED_BUSINESS[spec.name] === true,
+				)
 			: true,
 	};
 }

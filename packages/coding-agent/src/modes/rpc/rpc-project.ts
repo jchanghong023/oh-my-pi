@@ -22,16 +22,12 @@
  */
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { Usage } from "@oh-my-pi/pi-ai";
 import { isRecord, logger, normalizePathForComparison, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getRoleInfo } from "../../config/model-roles";
 import type { AuthStorage } from "../../session/auth-storage";
 import type { AgentSession } from "../../session/agent-session";
-import type { SessionStats } from "../../session/agent-session-types";
-import { getLatestCompactionEntry } from "../../session/session-context";
 import type { MCPManager } from "../../mcp";
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import { resolveToCwd } from "../../tools/path-utils";
@@ -40,7 +36,7 @@ import { selectRpcEntries } from "./rpc-compat";
 import { pageRpcMessages } from "./rpc-messages";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
-import { RPC_PROJECT_HOST_ACTIONS, RpcCommandCatalogService } from "./rpc-project-commands";
+import { getRpcProjectHostAction, RpcCommandCatalogService } from "./rpc-project-commands";
 import { RpcProjectModelRoleService } from "./rpc-project-models";
 import {
 	RPC_PROJECT_CAPABILITIES,
@@ -76,113 +72,101 @@ export interface RpcProjectModeOptions {
 }
 
 /** Project-level commands answered without a session (rpc-ui-protocol.md). */
-const PROJECT_LEVEL_COMMANDS = new Set<string>([
-	"negotiate_protocol",
-	"create_session",
-	"list_sessions",
-	"resume_session",
-	"close_session",
-	"rename_session",
-	"delete_session",
-	"get_available_commands",
-	"complete_command",
-	"execute_command",
-	"get_model_roles",
-	"set_model_role",
-	"get_available_models",
-	"set_host_tools",
-	"set_host_uri_schemes",
-]);
+const PROJECT_LEVEL_COMMANDS: Readonly<Record<string, true>> = {
+	negotiate_protocol: true,
+	create_session: true,
+	list_sessions: true,
+	resume_session: true,
+	close_session: true,
+	rename_session: true,
+	delete_session: true,
+	get_available_commands: true,
+	complete_command: true,
+	execute_command: true,
+	get_model_roles: true,
+	set_model_role: true,
+	get_available_models: true,
+	set_host_tools: true,
+	set_host_uri_schemes: true,
+};
 
 /** Read-only historical operations do not require or implicitly create a loaded session. */
-const SESSION_HISTORY_COMMANDS = new Set([
-	"get_messages",
-	"get_messages_page",
-	"get_entries",
-	"get_tree",
-	"get_branch_messages",
-	"get_last_assistant_text",
-	"get_session_stats",
-]);
+const SESSION_HISTORY_COMMANDS: Readonly<Record<string, true>> = {
+	get_messages: true,
+	get_messages_page: true,
+	get_entries: true,
+	get_tree: true,
+	get_branch_messages: true,
+	get_last_assistant_text: true,
+};
 
 /** Commands routed to a session host; must carry `sessionId` in project mode. */
-const SESSION_LEVEL_COMMANDS = new Set<string>([
-	"prompt",
-	"steer",
-	"follow_up",
-	"remove_queued_message",
-	"promote_queued_message",
-	"predict_word_feedback",
-	"predict_word",
-	"set_ask_dialog",
-	"cancel_subagent",
-	"steer_subagent",
-	"abort",
-	"abort_and_prompt",
-	"abort_and_restore_queue",
-	"new_session",
-	"switch_session",
-	"open_session",
-	"branch",
-	"fork",
-	"get_state",
-	"set_fast_mode",
-	"set_slow_mode",
-	"get_entries",
-	"get_tree",
-	"set_todos",
-	"set_subagent_subscription",
-	"set_event_filter",
-	"set_model",
-	"cycle_model",
-	"set_thinking_level",
-	"cycle_thinking_level",
-	"get_available_thinking_levels",
-	"set_steering_mode",
-	"set_follow_up_mode",
-	"set_interrupt_mode",
-	"compact",
-	"set_auto_compaction",
-	"set_cache_warming",
-	"set_auto_retry",
-	"abort_retry",
-	"bash",
-	"abort_bash",
-	"get_session_stats",
-	"export_html",
-	"get_branch_messages",
-	"get_last_assistant_text",
-	"set_session_name",
-	"btw",
-	"btw_cancel",
-	"get_btw_history",
-	"goal",
-	"live_start",
-	"live_stop",
-	"live_mute",
-	"handoff",
-	"get_messages",
-	"get_messages_page",
-	"get_login_providers",
-	"login",
-	// Fork (v3) commands that operate on the caller's session.
-	"set_approval_mode",
-]);
+const SESSION_LEVEL_COMMANDS: Readonly<Record<string, true>> = {
+	prompt: true,
+	steer: true,
+	follow_up: true,
+	predict_word_feedback: true,
+	predict_word: true,
+	set_ask_dialog: true,
+	abort: true,
+	abort_and_prompt: true,
+	new_session: true,
+	switch_session: true,
+	open_session: true,
+	branch: true,
+	fork: true,
+	get_state: true,
+	set_fast_mode: true,
+	set_slow_mode: true,
+	get_entries: true,
+	get_tree: true,
+	set_todos: true,
+	set_event_filter: true,
+	set_model: true,
+	cycle_model: true,
+	set_thinking_level: true,
+	cycle_thinking_level: true,
+	get_available_thinking_levels: true,
+	set_steering_mode: true,
+	set_follow_up_mode: true,
+	set_interrupt_mode: true,
+	compact: true,
+	set_auto_compaction: true,
+	set_cache_warming: true,
+	set_auto_retry: true,
+	abort_retry: true,
+	bash: true,
+	abort_bash: true,
+	export_html: true,
+	get_branch_messages: true,
+	get_last_assistant_text: true,
+	set_session_name: true,
+	btw: true,
+	btw_cancel: true,
+	get_btw_history: true,
+	goal: true,
+	live_start: true,
+	live_stop: true,
+	live_mute: true,
+	handoff: true,
+	get_messages: true,
+	get_messages_page: true,
+};
 
 /** Side-channel frames whose id routes back to the issuing session. */
-const INTERACTION_REQUEST_TYPES = new Set([
-	"extension_ui_request",
-	"permission_request",
-	"ask_request",
-	"host_tool_call",
-	"host_uri_request",
-]);
-const INTERACTION_RESPONSE_TYPES = new Set([
-	"extension_ui_response",
-	"permission_response",
-	"ask_response",
-	"ask_pause",
-]);
+const INTERACTION_REQUEST_TYPES: Readonly<Record<string, true>> = {
+	extension_ui_request: true,
+	permission_request: true,
+	ask_request: true,
+	host_tool_call: true,
+	host_uri_request: true,
+};
+const INTERACTION_RESPONSE_TYPES: Readonly<Record<string, true>> = {
+	extension_ui_response: true,
+	permission_response: true,
+	ask_response: true,
+	ask_pause: true,
+};
 
 /** Project host wiring shared by the transport and every session. */
 class RpcProjectHost {
@@ -308,7 +292,7 @@ class RpcProjectHost {
 				} catch {
 					if (!terminal) return;
 				}
-				if (INTERACTION_REQUEST_TYPES.has(String(frame.type)) && typeof frame.id === "string" && frame.id) {
+				if (INTERACTION_REQUEST_TYPES[String(frame.type)] === true && typeof frame.id === "string" && frame.id) {
 					this.#interactions.set(frame.id, {
 						sessionId: record.sessionId,
 						sessionGeneration: record.sessionGeneration,
@@ -329,7 +313,7 @@ class RpcProjectHost {
 						"thinking_level_changed",
 						"prompt_result",
 					].includes(String(frame.type)) ||
-					INTERACTION_REQUEST_TYPES.has(String(frame.type))
+					INTERACTION_REQUEST_TYPES[String(frame.type)] === true
 				)
 					this.#container.notifyChanged();
 				return;
@@ -403,8 +387,6 @@ class RpcProjectHost {
 	readonly #sessionHosts = new Map<string, RpcSessionHost>();
 	/** In-flight host attachments keyed by session id (concurrent create/resume coalescing). */
 	readonly #attaching = new Map<string, Promise<void>>();
-	/** sessionId → session file for not-loaded sessions (populated lazily by #prefetchSessionFile). */
-	readonly #sessionFileCache = new Map<string, string>();
 
 	/** Attach the session host exactly once per session id. */
 	async #ensureAttached(record: RpcProjectSessionRecord, created?: RpcProjectCreatedSession): Promise<void> {
@@ -434,17 +416,6 @@ class RpcProjectHost {
 			});
 		this.#attaching.set(record.sessionId, task);
 		await task;
-	}
-
-	/** Resolve (and cache) a session's main file, loaded or saved; false when unknown. */
-	async #prefetchSessionFile(sessionId: string): Promise<boolean> {
-		const loaded = this.#container.get(sessionId);
-		if (loaded) return true;
-		this.#sessionFileCache.delete(sessionId);
-		const file = await this.#container.findSessionFileById(sessionId);
-		if (!file) return false;
-		this.#sessionFileCache.set(sessionId, file);
-		return true;
 	}
 
 	#getSessionHost(sessionId: string): RpcSessionHost | undefined {
@@ -692,7 +663,7 @@ class RpcProjectHost {
 		}
 		const record = this.#container.get(sessionId);
 		if (record) this.#assertRecordIdentity(record);
-		if (SESSION_HISTORY_COMMANDS.has(command.type)) {
+		if (SESSION_HISTORY_COMMANDS[command.type] === true) {
 			if (record?.state === "loaded" && this.#getSessionHost(sessionId)) {
 				return this.#getSessionHost(sessionId)!.handleCommand(command as RpcCommand);
 			}
@@ -1028,7 +999,7 @@ class RpcProjectHost {
 						hostAction: { kind: "focus_session", payload: { session: summary } },
 					});
 				}
-				const hostAction = name && RPC_PROJECT_HOST_ACTIONS.get(name);
+				const hostAction = name && getRpcProjectHostAction(name);
 				if (hostAction && (!args || !resolution.spec?.handle || name === "move")) {
 					const catalog = await this.#catalogService.buildCatalog(host?.session);
 					if (catalog.find(entry => entry.name === name)?.scope === "session" && !record) {
@@ -1042,7 +1013,6 @@ class RpcProjectHost {
 							payload: {
 								...(record ? { sessionId: record.sessionId, sessionGeneration: record.sessionGeneration } : {}),
 								...(name === "move" ? { projectRoot: resolveToCwd(args, this.#options.cwd) } : { args }),
-								...(name === "skills" ? { panel: "skills" } : {}),
 							},
 						},
 					});
@@ -1054,23 +1024,6 @@ class RpcProjectHost {
 						"Worktree moves require a different project process",
 						"unsupported",
 					);
-				if (name === "login") {
-					if (!record) return this.#errorResponse(id, type, "Login requires a loaded session", "invalid_params");
-					if (!args)
-						return this.#successResponse(id, type, {
-							hostAction: { kind: "select_login_provider", payload: { sessionId: record.sessionId } },
-						});
-					const response = await this.handleSessionCommand({
-						id,
-						type: "login",
-						providerId: args,
-						sessionId: record.sessionId,
-						sessionGeneration: record.sessionGeneration,
-					});
-					return response.success
-						? this.#successResponse(id, type, { completed: true, agentInvoked: false })
-						: { ...response, command: type };
-				}
 				if (!resolution.spec?.handle)
 					return this.#errorResponse(
 						id,
@@ -1136,7 +1089,6 @@ class RpcProjectHost {
 		try {
 			const result = await this.#container.delete(sessionId, { cancelRunning, expectedRevision });
 			await this.#teardownSessionHost(sessionId, "session_deleted");
-			this.#sessionFileCache.delete(sessionId);
 			return result;
 		} catch (error) {
 			if (!this.#container.get(sessionId)) await this.#teardownSessionHost(sessionId, "session_closed");
@@ -1144,18 +1096,12 @@ class RpcProjectHost {
 		}
 	}
 
-	#resolveSessionFile(sessionId: string): string | undefined {
-		const loaded = this.#container.get(sessionId);
-		if (loaded?.session.sessionFile) return loaded.session.sessionFile;
-		return this.#sessionFileCache.get(sessionId);
-	}
-
 	/** Route a side-channel frame to the session that issued the request. */
 	handleControlFrame(parsed: unknown): boolean {
 		if (!isRecord(parsed)) return false;
 		const type = String(parsed.type);
 		if (
-			INTERACTION_RESPONSE_TYPES.has(type) ||
+			INTERACTION_RESPONSE_TYPES[type] === true ||
 			["host_tool_result", "host_tool_update", "host_uri_result"].includes(type)
 		) {
 			const targetId = type === "ask_pause" ? parsed.targetId : parsed.id;
@@ -1203,7 +1149,6 @@ class RpcProjectHost {
 		this.#staleSessions.clear();
 		this.#sessionHosts.clear();
 		this.#inputGates.clear();
-		this.#sessionFileCache.clear();
 		this.#interactions.clear();
 	}
 
@@ -1355,40 +1300,6 @@ class RpcProjectHost {
 				};
 				break;
 			}
-			case "get_session_stats": {
-				// History-range query: message-derived totals only, no
-				// running container. Model-usage entries outside the active
-				// transcript window mirror the live tracker's window rule.
-				const branch = manager.getBranch();
-				const latestCompaction = getLatestCompactionEntry(branch);
-				const compactionIndex = latestCompaction ? branch.lastIndexOf(latestCompaction) : -1;
-				const resetIndex = branch.reduce(
-					(latest, entry, index) => (entry.type === "reset_boundary" ? index : latest),
-					-1,
-				);
-				let startIndex = 0;
-				if (resetIndex > compactionIndex) startIndex = resetIndex + 1;
-				else if (latestCompaction) {
-					const firstKeptIndex = branch.findIndex(entry => entry.id === latestCompaction.firstKeptEntryId);
-					startIndex = firstKeptIndex >= 0 ? firstKeptIndex : compactionIndex + 1;
-					while (
-						startIndex > 0 &&
-						!["message", "custom_message", "branch_summary", "compaction", "reset_boundary"].includes(
-							branch[startIndex - 1]!.type,
-						)
-					)
-						startIndex--;
-				}
-				const modelUsage = branch
-					.slice(startIndex)
-					.filter(
-						(entry): entry is Extract<(typeof branch)[number], { type: "model_usage" }> =>
-							entry.type === "model_usage",
-					)
-					.map(entry => entry.usage);
-				data = savedSessionStats(sessionId, file, messages, modelUsage);
-				break;
-			}
 			default:
 				return this.#errorResponse(command.id, command.type, "Unsupported historical query", "unsupported");
 		}
@@ -1432,111 +1343,6 @@ class RpcProjectGateError extends Error {
 		super(message);
 		this.name = "RpcProjectGateError";
 	}
-}
-
-/**
- * Message-derived {@link SessionStats} for a saved, not-loaded session
- * (`get_session_stats` is an H-range query and must not instantiate a
- * running container). Mirrors the SessionStatsTracker message loop; the live
- * `contextUsage` estimate has no persisted equivalent and stays absent.
- */
-function savedSessionStats(
-	sessionId: string,
-	sessionFile: string,
-	messages: readonly AgentMessage[],
-	modelUsage: readonly Usage[],
-): SessionStats {
-	let userMessages = 0;
-	let assistantMessages = 0;
-	let toolResults = 0;
-	let toolCalls = 0;
-	let input = 0;
-	let output = 0;
-	let reasoning = 0;
-	let cacheRead = 0;
-	let cacheWrite = 0;
-	let totalTokens = 0;
-	let cost = 0;
-	let premiumRequests = 0;
-	let creditCost = 0;
-	let committedCreditCost = 0;
-	let committedAcuCost = 0;
-	let hasCredits = false;
-	const routedModels: Record<string, number> = {};
-	const addUsage = (usage: Usage): void => {
-		input += usage.input;
-		output += usage.output;
-		reasoning += usage.reasoningTokens ?? 0;
-		cacheRead += usage.cacheRead;
-		cacheWrite += usage.cacheWrite;
-		totalTokens += usage.totalTokens;
-		premiumRequests += usage.premiumRequests ?? 0;
-		cost += usage.cost.total;
-		const credits = usage.credits;
-		if (credits !== undefined) {
-			hasCredits = true;
-			creditCost += credits.cost ?? 0;
-			committedCreditCost += credits.committedCost ?? 0;
-			committedAcuCost += credits.acuCost ?? 0;
-		}
-	};
-	const taskUsage = (details: unknown): Usage | undefined => {
-		if (!isRecord(details)) return undefined;
-		const usage = Reflect.get(details, "usage");
-		return isRecord(usage) &&
-			isRecord(usage.cost) &&
-			typeof usage.input === "number" &&
-			typeof usage.totalTokens === "number" &&
-			typeof usage.cost.total === "number"
-			? (usage as unknown as Usage)
-			: undefined;
-	};
-	for (const message of messages) {
-		if (message.role === "user") {
-			userMessages++;
-		} else if (message.role === "toolResult") {
-			toolResults++;
-			if (message.toolName === "task") {
-				const usage = taskUsage(message.details);
-				if (usage) addUsage(usage);
-			}
-		} else if (message.role === "assistant") {
-			assistantMessages++;
-			for (const content of message.content) {
-				if (content.type === "toolCall") toolCalls++;
-			}
-			if (message.usage) {
-				addUsage(message.usage);
-				if (message.upstreamModel !== undefined) {
-					routedModels[message.upstreamModel] = (routedModels[message.upstreamModel] ?? 0) + 1;
-				}
-			}
-		}
-	}
-	for (const usage of modelUsage) addUsage(usage);
-	return {
-		sessionFile,
-		sessionId,
-		userMessages,
-		assistantMessages,
-		toolCalls,
-		toolResults,
-		totalMessages: messages.length,
-		tokens: {
-			input,
-			output,
-			reasoning,
-			cacheRead,
-			cacheWrite,
-			total: totalTokens,
-		},
-		cost,
-		premiumRequests,
-		...(hasCredits
-			? { credits: { cost: creditCost, committedCost: committedCreditCost, acuCost: committedAcuCost } }
-			: {}),
-		...(Object.keys(routedModels).length > 0 ? { routedModels } : {}),
-	};
 }
 
 /**
@@ -1595,31 +1401,30 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	const backgroundTasks = new Set<Promise<void>>();
 	// Only a session's own state transitions serialize. Admission, model calls,
 	// shell and side answers do not hold its queue, and never another session's.
-	const projectBackgroundedTypes = new Set([
-		"bash",
-		"predict_word",
-		"prompt",
-		"steer",
-		"follow_up",
-		"abort_and_prompt",
-		"steer_subagent",
-		"live_start",
-		"execute_command",
-	]);
+	const projectBackgroundedTypes: Readonly<Record<string, true>> = {
+		bash: true,
+		predict_word: true,
+		prompt: true,
+		steer: true,
+		follow_up: true,
+		abort_and_prompt: true,
+		live_start: true,
+		execute_command: true,
+	};
 	// Synchronous like the single-session BACKGROUND_COMMANDS: `btw_cancel` must
 	// overtake a `btw` still starting or a long serial command on the same
-	// session, which queueSerial's backgrounded set cannot do (those still wait
+	// session, which queueSerial's backgrounded commands cannot do (those still wait
 	// for earlier queued work) — it bypasses the queue entirely instead.
-	const projectOvertakeTypes = new Set(["btw_cancel"]);
+	const projectOvertakeTypes: Readonly<Record<string, true>> = { btw_cancel: true };
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");
 		if (!type) return;
 		const sessionGeneration = typeof parsed.sessionGeneration === "string" ? parsed.sessionGeneration : undefined;
 		let response: RpcResponse;
 		try {
-			if (PROJECT_LEVEL_COMMANDS.has(type)) {
+			if (PROJECT_LEVEL_COMMANDS[type] === true) {
 				response = await host.handleProjectCommand(parsed);
-			} else if (SESSION_LEVEL_COMMANDS.has(type)) {
+			} else if (SESSION_LEVEL_COMMANDS[type] === true) {
 				response = await host.handleSessionCommand(parsed as never);
 			} else {
 				response = errorFrame(parsed.id, type, `Unknown command: ${type}`, "unsupported");
@@ -1633,7 +1438,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		output({
 			...response,
 			...(typeof parsed.sessionId === "string" ? { sessionId: parsed.sessionId } : {}),
-			...(SESSION_HISTORY_COMMANDS.has(type) || type === "resume_session" || type === "rename_session"
+			...(SESSION_HISTORY_COMMANDS[type] === true || type === "resume_session" || type === "rename_session"
 				? typeof parsed.sessionId === "string" && response.success && host.container.getLoaded(parsed.sessionId)
 					? { sessionGeneration: host.container.getLoaded(parsed.sessionId)!.sessionGeneration }
 					: {}
@@ -1680,7 +1485,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 	const queueSerial = (parsed: Record<string, unknown>): void => {
 		// Overtaking frames never join the queue: they must pass a still-starting
 		// `btw` or a long serial command on the same session.
-		if (projectOvertakeTypes.has(String(parsed.type))) {
+		if (projectOvertakeTypes[String(parsed.type)] === true) {
 			track(dispatch(parsed));
 			return;
 		}
@@ -1691,7 +1496,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 				inFlight.delete(String(parsed.id));
 				return Promise.resolve();
 			}
-			if (projectBackgroundedTypes.has(String(parsed.type))) {
+			if (projectBackgroundedTypes[String(parsed.type)] === true) {
 				track(dispatch(parsed));
 				return Promise.resolve();
 			}

@@ -63,16 +63,14 @@ describe("Settings layer refresh", () => {
 		expect(settings.getModelRoleProvenance("smol")).toBe("global");
 	});
 
-	it("user model-switch previews preserve effective project and runtime restrictions", async () => {
+	it("project and runtime model restrictions override global settings", async () => {
 		await writeConfig({ disabledModels: ["zcode-api/glm-5.2"] });
 		writeProjectSettings(scopedProject, { disabledModels: ["zcode-api/*"], enabledModels: ["company/*"] });
 		const settings = await Settings.init({ cwd: scopedProject, agentDir });
-		const preview = settings.previewUserSettings({ disabledModels: [], enabledModels: ["zcode-api/glm-5.2"] });
-		expect(cfgDisabledModels.get(preview)).toEqual(["zcode-api/*"]);
-		expect(cfgEnabledModels.get(preview)).toEqual(["company/*"]);
-		expect(settings.getUserSettingValue("disabledModels")).toEqual(["zcode-api/glm-5.2"]);
+		expect(cfgDisabledModels.get(settings)).toEqual(["zcode-api/*"]);
+		expect(cfgEnabledModels.get(settings)).toEqual(["company/*"]);
 		const child = settings.overlay({ disabledModels: ["*"] });
-		expect(cfgDisabledModels.get(child.previewUserSettings({ disabledModels: [] }))).toEqual(["*"]);
+		expect(cfgDisabledModels.get(child)).toEqual(["*"]);
 		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({ disabledModels: ["zcode-api/glm-5.2"] });
 	});
 

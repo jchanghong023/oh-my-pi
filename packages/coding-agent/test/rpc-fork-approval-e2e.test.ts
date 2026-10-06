@@ -18,41 +18,23 @@ interface ServerHandle {
 	dispose: () => Promise<void>;
 }
 
-async function spawnRpcServer(
-	cwd: string,
-	agentDir: string,
-	options?: { projectMode?: boolean; provider?: string; model?: string },
-): Promise<ServerHandle> {
-	const env = options?.projectMode
-		? {
-				PATH: Bun.env.PATH,
-				SystemRoot: Bun.env.SystemRoot,
-				TEMP: Bun.env.TEMP,
-				TMP: Bun.env.TMP,
-				HOME: agentDir,
-				USERPROFILE: agentDir,
-				CLAUDE_CONFIG_DIR: path.join(agentDir, "claude"),
-				OMP_AUTH_BROKER_URL: "",
-				OMP_AUTH_BROKER_TOKEN: "",
-			}
-		: Bun.env;
+async function spawnRpcServer(cwd: string, agentDir: string): Promise<ServerHandle> {
 	const child = Bun.spawn(
 		[
 			"bun",
 			path.join(import.meta.dir, "..", "src", "cli.ts"),
 			"--mode",
 			"rpc-ui",
-			...(options?.projectMode ? ["--rpc-project"] : []),
 			"--no-extensions",
 			"--no-skills",
 			"--provider",
-			options?.provider ?? "anthropic",
+			"anthropic",
 			"--model",
-			options?.model ?? "claude-sonnet-4-5",
+			"claude-sonnet-4-5",
 		],
 		{
 			cwd,
-			env: { ...env, PI_NO_TITLE: "1", PI_CODING_AGENT_DIR: agentDir } as unknown as Record<
+			env: { ...Bun.env, PI_NO_TITLE: "1", PI_CODING_AGENT_DIR: agentDir } as unknown as Record<
 				string,
 				string | undefined
 			>,
@@ -126,6 +108,9 @@ async function negotiate(handler: ServerHandle): Promise<void> {
 	handler.send({ id: "neg", type: "negotiate_protocol", protocolVersion: 3 });
 	await expect(handler.next()).resolves.toMatchObject({ data: { protocolVersion: 3 } });
 }
+async function writeApprovalSettings(agentDir: string): Promise<void> {
+	await fs.writeFile(path.join(agentDir, "config.yml"), "tools:\n  approvalMode: always-ask\n");
+}
 
 const isPermissionRequest = (frame: RpcFrame): boolean =>
 	frame.type === "permission_request" && isRecord(frame) && typeof frame.id === "string";
@@ -134,15 +119,11 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("rpc-ui approval E2E (4.1, live
 	test("always-ask bash call raises permission_request; allow_once completes the turn", async () => {
 		await using cwdDir = await TempDir.create("rpc-approval-cwd-");
 		await using agentDir = await TempDir.create("rpc-approval-agent-");
-		const handler = await spawnRpcServer(path.resolve(cwdDir.path()), path.resolve(agentDir.path()));
+		const agentDirPath = path.resolve(agentDir.path());
+		await writeApprovalSettings(agentDirPath);
+		const handler = await spawnRpcServer(path.resolve(cwdDir.path()), agentDirPath);
 		try {
 			await negotiate(handler);
-			handler.send({ id: "am", type: "set_approval_mode", mode: "always-ask" });
-			await expect(handler.next()).resolves.toMatchObject({
-				command: "set_approval_mode",
-				success: true,
-				data: { approvalMode: "always-ask" },
-			});
 
 			handler.send({
 				id: "p1",
@@ -168,12 +149,11 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("rpc-ui approval E2E (4.1, live
 		await using agentDir = await TempDir.create("rpc-allow-always-agent-");
 		const absCwd = path.resolve(cwdDir.path());
 		const absAgent = path.resolve(agentDir.path());
+		await writeApprovalSettings(absAgent);
 		const runBashTurn = async (expectPermission: boolean) => {
 			const handler = await spawnRpcServer(absCwd, absAgent);
 			try {
 				await negotiate(handler);
-				handler.send({ id: "am", type: "set_approval_mode", mode: "always-ask" });
-				await handler.next();
 				handler.send({
 					id: "p1",
 					type: "prompt",
