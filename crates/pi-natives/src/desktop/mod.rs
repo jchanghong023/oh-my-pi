@@ -14,7 +14,10 @@ mod win32;
 use std::{
 	collections::HashMap,
 	panic::AssertUnwindSafe,
-	sync::Arc,
+	sync::{
+		Arc,
+		atomic::{AtomicUsize, Ordering},
+	},
 	thread::{self, JoinHandle},
 	time::Duration,
 };
@@ -226,11 +229,16 @@ struct Worker {
 	backend:      CoreResult<Box<dyn Backend>>,
 	registry:     AxRegistry,
 	frames:       HashMap<String, FrameGeometry>,
-	capabilities: Arc<Mutex<DesktopCapabilities>>,
+	/// Latest capabilities the worker computed, shared with the session so the
+	/// getter can answer while an operation holds the worker.
+	capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
 }
 
 impl Worker {
-	fn new(selector: DisplaySelector, capabilities: Arc<Mutex<DesktopCapabilities>>) -> Self {
+	fn new(
+		selector: DisplaySelector,
+		capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
+	) -> Self {
 		let backend = create_backend(selector);
 		Self { backend, registry: AxRegistry::default(), frames: HashMap::new(), capabilities }
 	}
@@ -293,7 +301,7 @@ impl Worker {
 					Ok(backend) => backend.capabilities(),
 					Err(_) => DesktopCapabilities::unavailable(),
 				};
-				*self.capabilities.lock() = caps.clone();
+				*self.capabilities.lock() = Some(caps.clone());
 				Ok(Response::Capabilities(caps))
 			},
 			Request::ListDisplays { .. } => Ok(Response::Displays(self.backend()?.displays()?)),
@@ -328,8 +336,10 @@ impl Worker {
 				let displays = geometry.display_metadata(&source);
 				let png = encode_png(image)?;
 				self.frames.insert(target.key().to_string(), geometry);
+				// Refreshing here keeps the snapshot current for getter reads that
+				// land while a later operation holds the worker.
 				let capabilities = self.backend()?.capabilities();
-				*self.capabilities.lock() = capabilities.clone();
+				*self.capabilities.lock() = Some(capabilities.clone());
 				Ok(Response::Capture(DesktopCapture {
 					data: Uint8Array::from(png),
 					width,
@@ -458,7 +468,7 @@ impl Worker {
 			Request::AxNode { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
 				let props = self.ax()?.props(&h)?;
-				Ok(Response::Node(Some(axnode(reference.clone(), props))))
+				Ok(Response::Node(Some(ax::node_to_napi(reference.clone(), props))))
 			},
 			Request::AxAttributes { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
@@ -558,28 +568,6 @@ impl Worker {
 	}
 }
 
-fn axnode(reference: String, props: ax::AxProps) -> AxNode {
-	let (x, y, width, height) = props
-		.bounds
-		.map_or((None, None, None, None), |b| (Some(b.x), Some(b.y), Some(b.width), Some(b.height)));
-	AxNode {
-		ref_: reference,
-		role: props.role,
-		native_role: props.native_role,
-		title: props.title,
-		value: props.value,
-		description: props.description,
-		enabled: props.enabled,
-		focused: props.focused,
-		x,
-		y,
-		width,
-		height,
-		actions: (!props.actions.is_empty()).then_some(props.actions),
-		child_count: props.child_count,
-	}
-}
-
 #[cfg(target_os = "macos")]
 fn create_backend(selector: DisplaySelector) -> CoreResult<Box<dyn Backend>> {
 	Ok(Box::new(macos::MacosBackend::new(selector)?))
@@ -606,7 +594,9 @@ struct Lifecycle {
 struct SessionCore {
 	selector:     DisplaySelector,
 	lifecycle:    Mutex<Lifecycle>,
-	capabilities: Arc<Mutex<DesktopCapabilities>>,
+	capabilities: Arc<Mutex<Option<DesktopCapabilities>>>,
+	/// `call`s sent to the worker that have not returned yet.
+	in_flight:    AtomicUsize,
 }
 impl SessionCore {
 	fn new(selector: DisplaySelector) -> Arc<Self> {
@@ -618,7 +608,8 @@ impl SessionCore {
 				join:   None,
 				closed: false,
 			}),
-			capabilities: Arc::new(Mutex::new(DesktopCapabilities::unavailable())),
+			capabilities: Arc::default(),
+			in_flight: AtomicUsize::new(0),
 		})
 	}
 
@@ -662,13 +653,18 @@ impl SessionCore {
 
 	fn call(&self, make: impl FnOnce(Reply) -> Request) -> CoreResult<Response> {
 		let (txr, rxr) = flume::bounded(1);
-		self
-			.ensure_started()?
+		let tx = self.ensure_started()?;
+		self.in_flight.fetch_add(1, Ordering::AcqRel);
+		let response = tx
 			.send(make(txr))
-			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))?;
-		rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
-			DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
-		})?
+			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
+			.and_then(|()| {
+				rxr.recv_timeout(OPERATION_TIMEOUT).map_err(|e| {
+					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
+				})
+			});
+		self.in_flight.fetch_sub(1, Ordering::AcqRel);
+		response?
 	}
 
 	fn close(&self) -> CoreResult<()> {
@@ -727,11 +723,25 @@ impl DesktopSession {
 		Ok(Self { core: SessionCore::new(DisplaySelector::parse(options.and_then(|o| o.display))) })
 	}
 
+	/// Asks the worker when it is idle, so permissions are read live. While
+	/// another operation holds the worker, answers from the snapshot of the
+	/// latest capabilities read or capture instead of blocking the JS thread
+	/// behind it.
 	#[napi(getter)]
 	pub fn capabilities(&self) -> DesktopCapabilities {
+		if self.core.in_flight.load(Ordering::Acquire) > 0
+			&& let Some(snapshot) = self.core.capabilities.lock().clone()
+		{
+			return snapshot;
+		}
 		match self.core.call(|reply| Request::Capabilities { reply }) {
 			Ok(Response::Capabilities(c)) => c,
-			_ => self.core.capabilities.lock().clone(),
+			_ => self
+				.core
+				.capabilities
+				.lock()
+				.clone()
+				.unwrap_or_else(DesktopCapabilities::unavailable),
 		}
 	}
 
@@ -1247,7 +1257,7 @@ mod capture_tests {
 			backend:      Ok(Box::new(backend)),
 			registry:     AxRegistry::default(),
 			frames:       HashMap::new(),
-			capabilities: Arc::new(Mutex::new(DesktopCapabilities::unavailable())),
+			capabilities: Arc::default(),
 		}
 	}
 
@@ -1259,10 +1269,13 @@ mod capture_tests {
 	}
 
 	fn click_reference(worker: &mut Worker, origin: &str) -> CoreResult<Response> {
-		let generation = worker.registry.current_generation(origin);
-		let reference = worker
-			.registry
-			.register(origin, generation, AxHandle::Test(1));
+		let (backend, registry) = (&mut worker.backend, &mut worker.registry);
+		let ax = backend
+			.as_mut()
+			.map_err(|error| error.clone())?
+			.ax()
+			.ok_or_else(DesktopError::ax_unsupported)?;
+		let reference = register_node(ax, registry, origin, AxHandle::Test(1))?.ref_;
 		let (reply, _rx) = flume::bounded(1);
 		worker.process(&Request::AxClick {
 			reference,

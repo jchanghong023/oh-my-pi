@@ -150,7 +150,9 @@ impl MacInput {
 				let (pid, wid) = window_identity(&window)?;
 				match mode {
 					DeliveryMode::Background => {
-						if keys.iter().copied().any(is_modifier) && process::is_screen_sharing(pid) {
+						if keys.iter().copied().any(KeyName::is_modifier)
+							&& process::is_screen_sharing(pid)
+						{
 							return Err(screen_sharing_refusal(
 								&window,
 								"modifier flags on routed chords",
@@ -817,6 +819,9 @@ fn key_chord(
 	let mut active = Modifiers::default();
 	let mut pressed = 0;
 	let mut result = Ok(());
+	// The attempted key counts as pressed before it posts: a failed post may
+	// still have reached the target, and its release clears its modifier flag
+	// before the held keys' releases carry `active` (unlike `hold_keys`).
 	for &key in keys {
 		update_modifier(&mut active, key, true);
 		pressed += 1;
@@ -848,10 +853,6 @@ fn post_key(
 		.map_err(|()| DesktopError::input_failed("failed to create a Quartz keyboard event"))?;
 	event.set_flags(flags);
 	post(&event)
-}
-
-const fn is_modifier(key: KeyName) -> bool {
-	matches!(key, KeyName::Ctrl | KeyName::Alt | KeyName::Shift | KeyName::Meta)
 }
 
 const fn update_modifier(modifiers: &mut Modifiers, key: KeyName, down: bool) {
@@ -1521,6 +1522,33 @@ mod tests {
 			(CGEventType::KeyDown as u32, 36, true),
 			(CGEventType::KeyUp as u32, 36, true),
 			(CGEventType::FlagsChanged as u32, 59, false),
+		]);
+	}
+
+	#[test]
+	fn failed_modifier_press_leaves_no_flag_on_cleanup_releases() {
+		let source = source().expect("Quartz event source");
+		let mut events = Vec::new();
+		let result = key_chord(&source, &[KeyName::Ctrl, KeyName::Shift, KeyName::Enter], |event| {
+			let kind = event.get_type();
+			let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+			let flags = event.get_flags();
+			let shift = flags.contains(CGEventFlags::CGEventFlagShift);
+			events.push((kind as u32, code, flags.contains(CGEventFlags::CGEventFlagControl), shift));
+			if code == 56 && shift {
+				Err(DesktopError::input_failed("focus changed"))
+			} else {
+				Ok(())
+			}
+		});
+		assert!(result.is_err());
+		// Shift's failed press is released first, so no later release still
+		// carries its flag.
+		assert_eq!(events, vec![
+			(CGEventType::FlagsChanged as u32, 59, true, false),
+			(CGEventType::FlagsChanged as u32, 56, true, true),
+			(CGEventType::FlagsChanged as u32, 56, true, false),
+			(CGEventType::FlagsChanged as u32, 59, false, false),
 		]);
 	}
 

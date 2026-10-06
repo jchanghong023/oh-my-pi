@@ -1,13 +1,13 @@
 use std::{collections::HashSet, ffi::c_void};
 
-use image::{RgbaImage, imageops};
+use image::{Rgba, RgbaImage};
 use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use xcap::{Monitor, Window};
 
 use super::{
 	super::{
 		error::{CoreResult, DesktopError},
-		frame::FrameGeometry,
+		frame::{FrameGeometry, compose},
 		types::{DesktopDisplay, DesktopWindow, DisplaySelector, Target},
 	},
 	geometry::PhysicalLayout,
@@ -169,35 +169,35 @@ pub(super) fn windows() -> CoreResult<Vec<DesktopWindow>> {
 fn capture_desktop(selector: &DisplaySelector) -> CoreResult<(RgbaImage, FrameGeometry)> {
 	let mut snapshots = monitor_snapshots(selector)?;
 	let (width, height) = lay_out(&mut snapshots)?;
-	let mut composite = RgbaImage::new(width, height);
-	for snapshot in &snapshots {
-		let image = snapshot.monitor.capture_image().map_err(|error| {
-			DesktopError::capture_failed(format!(
-				"capture of display '{}' failed: {error}",
-				snapshot.display.id
-			))
-		})?;
-		if image.width() == 0 || image.height() == 0 {
-			return Err(DesktopError::capture_failed(format!(
-				"capture of display '{}' returned an empty image",
-				snapshot.display.id
-			)));
-		}
-		if image.width() != snapshot.display.pixel_width
-			|| image.height() != snapshot.display.pixel_height
-		{
-			return Err(DesktopError::capture_failed(format!(
-				"display '{}' geometry changed during capture; capture again before coordinate input",
-				snapshot.display.id,
-			)));
-		}
-		imageops::overlay(
-			&mut composite,
-			&image,
-			i64::from(snapshot.display.pixel_x),
-			i64::from(snapshot.display.pixel_y),
-		);
-	}
+	let composite = compose(
+		width,
+		height,
+		Rgba([0; 4]),
+		snapshots.iter().map(|snapshot| {
+			let image = snapshot.monitor.capture_image().map_err(|error| {
+				DesktopError::capture_failed(format!(
+					"capture of display '{}' failed: {error}",
+					snapshot.display.id
+				))
+			})?;
+			if image.width() == 0 || image.height() == 0 {
+				return Err(DesktopError::capture_failed(format!(
+					"capture of display '{}' returned an empty image",
+					snapshot.display.id
+				)));
+			}
+			if image.width() != snapshot.display.pixel_width
+				|| image.height() != snapshot.display.pixel_height
+			{
+				return Err(DesktopError::capture_failed(format!(
+					"display '{}' geometry changed during capture; capture again before coordinate \
+					 input",
+					snapshot.display.id,
+				)));
+			}
+			Ok((image, snapshot.display.pixel_x, snapshot.display.pixel_y))
+		}),
+	)?;
 	let display_data = snapshots
 		.into_iter()
 		.map(|item| item.display)

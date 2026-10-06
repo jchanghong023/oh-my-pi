@@ -6,7 +6,7 @@ use super::{
 	super::{
 		backend::{DeliveryMode, Modifiers, MouseButton, PointerEvent},
 		error::{CoreResult, DesktopError},
-		keys::KeyName,
+		keys::{KeyDirection, KeyName, hold_keys},
 		types::Target,
 	},
 	ax::Win32Ax,
@@ -68,32 +68,20 @@ fn modifier_keys(modifiers: Modifiers) -> impl Iterator<Item = KeyName> {
 	.flatten()
 }
 
+fn emit_global_key(input: &mut Enigo, key: KeyName, direction: KeyDirection) -> CoreResult<()> {
+	let direction = match direction {
+		KeyDirection::Press => Direction::Press,
+		KeyDirection::Release => Direction::Release,
+	};
+	input.key(key.to_enigo(), direction).map_err(enigo_error)
+}
+
 fn with_global_modifiers(
 	input: &mut Enigo,
 	modifiers: Modifiers,
 	operation: impl FnOnce(&mut Enigo) -> CoreResult<()>,
 ) -> CoreResult<()> {
-	let keys = modifier_keys(modifiers).collect::<Vec<_>>();
-	let mut held: Vec<KeyName> = Vec::with_capacity(keys.len());
-	for key in keys {
-		if let Err(error) = input.key(key.to_enigo(), Direction::Press) {
-			for held_key in held.into_iter().rev() {
-				let _ = input.key(held_key.to_enigo(), Direction::Release);
-			}
-			return Err(enigo_error(error));
-		}
-		held.push(key);
-	}
-	let operation_result = operation(input);
-	let mut release_result = Ok(());
-	for key in held.into_iter().rev() {
-		if let Err(error) = input.key(key.to_enigo(), Direction::Release)
-			&& release_result.is_ok()
-		{
-			release_result = Err(enigo_error(error));
-		}
-	}
-	operation_result.and(release_result)
+	hold_keys(input, modifier_keys(modifiers), emit_global_key, operation, Result::and)
 }
 
 fn scroll_steps(delta: f64) -> i32 {
@@ -158,30 +146,12 @@ fn global_pointer(input: &mut Enigo, event: PointerEvent) -> CoreResult<()> {
 }
 
 fn global_key_chord(input: &mut Enigo, keys: &[KeyName]) -> CoreResult<()> {
-	if keys.len() == 1 {
+	if let [key] = keys {
 		return input
-			.key(keys[0].to_enigo(), Direction::Click)
+			.key(key.to_enigo(), Direction::Click)
 			.map_err(enigo_error);
 	}
-	let mut held: Vec<KeyName> = Vec::with_capacity(keys.len());
-	for &key in keys {
-		if let Err(error) = input.key(key.to_enigo(), Direction::Press) {
-			for held_key in held.into_iter().rev() {
-				let _ = input.key(held_key.to_enigo(), Direction::Release);
-			}
-			return Err(enigo_error(error));
-		}
-		held.push(key);
-	}
-	let mut result = Ok(());
-	for key in held.into_iter().rev() {
-		if let Err(error) = input.key(key.to_enigo(), Direction::Release)
-			&& result.is_ok()
-		{
-			result = Err(enigo_error(error));
-		}
-	}
-	result
+	hold_keys(input, keys.iter().copied(), emit_global_key, |_| Ok(()), Result::and)
 }
 
 mod background {
@@ -208,7 +178,10 @@ mod background {
 		},
 	};
 
-	use super::{CoreResult, DesktopError, KeyName, Modifiers, MouseButton, PointerEvent};
+	use super::{
+		CoreResult, DesktopError, KeyDirection, KeyName, Modifiers, MouseButton, PointerEvent,
+		hold_keys,
+	};
 	use crate::desktop::win32::{
 		ax::Win32Ax,
 		delivery::{
@@ -687,23 +660,13 @@ mod background {
 		operation: impl FnOnce() -> CoreResult<()>,
 	) -> CoreResult<()> {
 		let mut emitter = KeyEmitter { hwnd, alt_depth: 0 };
-		let mut held = Vec::with_capacity(4);
-		for key in super::modifier_keys(modifiers) {
-			if let Err(error) = emitter.key(key, true) {
-				let mut cleanup = Ok(());
-				for held_key in held.into_iter().rev() {
-					cleanup = super::completed(cleanup, emitter.key(held_key, false));
-				}
-				return super::completed(Err(error), cleanup);
-			}
-			held.push(key);
-		}
-		let operation_result = operation();
-		let mut release_result = Ok(());
-		for key in held.into_iter().rev() {
-			release_result = super::completed(release_result, emitter.key(key, false));
-		}
-		super::completed(operation_result, release_result)
+		hold_keys(
+			&mut emitter,
+			super::modifier_keys(modifiers),
+			|emitter, key, direction| emitter.key(key, direction == KeyDirection::Press),
+			|_| operation(),
+			super::completed,
+		)
 	}
 
 	pub(super) fn key_chord(id: &str, keys: &[KeyName]) -> CoreResult<()> {
@@ -716,23 +679,16 @@ mod background {
 		ensure_delivery(id, root, kind)?;
 		let mut emitter = KeyEmitter::focused(root)?;
 		ensure_delivery(id, emitter.hwnd, kind)?;
-		let mut held = Vec::with_capacity(keys.len());
-		for &key in keys {
-			if let Err(error) = emitter.key(key, true) {
-				let mut cleanup = Ok(());
-				for held_key in held.into_iter().rev() {
-					cleanup = super::completed(cleanup, emitter.key(held_key, false));
-				}
-				return super::completed(Err(error), cleanup);
-			}
-			held.push(key);
-		}
-		thread::sleep(KEY_GAP);
-		let mut result = Ok(());
-		for key in held.into_iter().rev() {
-			result = super::completed(result, emitter.key(key, false));
-		}
-		result
+		hold_keys(
+			&mut emitter,
+			keys.iter().copied(),
+			|emitter, key, direction| emitter.key(key, direction == KeyDirection::Press),
+			|_| {
+				thread::sleep(KEY_GAP);
+				Ok(())
+			},
+			super::completed,
+		)
 	}
 
 	pub(super) fn type_text(id: &str, text: &str) -> CoreResult<()> {

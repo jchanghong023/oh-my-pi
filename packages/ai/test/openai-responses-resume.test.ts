@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import {
+	configureProviderStoreResponses,
 	pollOpenAIResponsesResultForCompletion,
 	streamOpenAIResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-responses";
@@ -150,6 +151,19 @@ const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 
 // Poll sleeps and transient-retry backoff go through the injectable wait seam.
 const noWait = async (): Promise<void> => {};
 
+/** Run `fn` with PI_MUSE_STORE_RESPONSES set to `value` (unset when undefined), then restore it. */
+async function withStoreEnv(value: string | undefined, fn: () => Promise<void>): Promise<void> {
+	const previous = process.env.PI_MUSE_STORE_RESPONSES;
+	if (value === undefined) delete process.env.PI_MUSE_STORE_RESPONSES;
+	else process.env.PI_MUSE_STORE_RESPONSES = value;
+	try {
+		await fn();
+	} finally {
+		if (previous === undefined) delete process.env.PI_MUSE_STORE_RESPONSES;
+		else process.env.PI_MUSE_STORE_RESPONSES = previous;
+	}
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -157,8 +171,8 @@ afterEach(() => {
 describe("openai-responses socket-drop resume", () => {
 	it("adopts the stored result on the bundled muse-code model instead of replaying the turn", async () => {
 		// The run keeps going server-side after the socket dies: an in-flight 404
-		// first, then the finished result. The shipped model stores results on its
-		// first request, and the turn adopts the result with one POST.
+		// first, then the finished result. With storage opted in, the shipped model
+		// stores results on its first request, and the turn adopts the result with one POST.
 		const scenario = dropScenario("resp_resume1", [
 			() => new Response("{}", { status: 404 }),
 			() => new Response(JSON.stringify(completedResult("resp_resume1")), { status: 200 }),
@@ -167,6 +181,7 @@ describe("openai-responses socket-drop resume", () => {
 			fetch: scenario.fetchImpl,
 			apiKey: "test-key",
 			providerRetryWait: noWait,
+			storeResponses: true,
 		}).result();
 
 		expect(scenario.postBodies[0]).toMatchObject({ store: true });
@@ -196,6 +211,7 @@ describe("openai-responses socket-drop resume", () => {
 			fetch: scenario.fetchImpl,
 			apiKey: "test-key",
 			providerRetryWait: noWait,
+			storeResponses: true,
 		});
 		const events: AssistantMessageEvent[] = [];
 		for await (const event of stream) events.push(event);
@@ -221,6 +237,7 @@ describe("openai-responses socket-drop resume", () => {
 			fetch: scenario.fetchImpl,
 			apiKey: "test-key",
 			providerRetryWait: noWait,
+			storeResponses: true,
 		}).result();
 
 		expect(scenario.gets).toEqual([]);
@@ -234,6 +251,7 @@ describe("openai-responses socket-drop resume", () => {
 			fetch: scenario.fetchImpl,
 			apiKey: "test-key",
 			providerRetryWait: noWait,
+			storeResponses: true,
 		}).result();
 
 		expect(result.stopReason).toBe("error");
@@ -277,6 +295,7 @@ describe("openai-responses socket-drop resume", () => {
 			fetch: scenario.fetchImpl,
 			apiKey: "test-key",
 			providerRetryWait: noWait,
+			storeResponses: true,
 		}).result();
 
 		expect(result.stopReason).toBe("stop");
@@ -306,38 +325,45 @@ describe("openai-responses socket-drop resume", () => {
 		expect(scenario.gets).toEqual([]);
 	});
 
-	it("does not store or poll when the storage opt-out is set", async () => {
-		// Privacy opt-out: PI_MUSE_STORE_RESPONSES=0 disables `store: true` and
-		// the resume poll together, so the drop fails fast with no GETs.
-		const previous = process.env.PI_MUSE_STORE_RESPONSES;
-		process.env.PI_MUSE_STORE_RESPONSES = "0";
+	it.each([
+		["stays off by default", undefined, undefined, undefined, false],
+		["follows the host default when the request leaves it unset", undefined, true, undefined, true],
+		["lets PI_MUSE_STORE_RESPONSES=0 override the host default", "0", true, undefined, false],
+		["follows PI_MUSE_STORE_RESPONSES=1 when the option is unset", "1", undefined, undefined, true],
+		["lets the option override PI_MUSE_STORE_RESPONSES", "1", undefined, false, false],
+	] as const)("storage %s", async (_label, env, hostDefault, storeResponses, stored) => {
+		// Privacy: storage is opt-in. Off sends `store: false` and skips the resume
+		// poll, so the drop fails fast with no GETs; on adopts the stored result.
+		configureProviderStoreResponses(hostDefault === undefined ? undefined : { "muse-code": hostDefault });
 		try {
-			const scenario = dropScenario("resp_resume8", [
-				() => new Response(JSON.stringify(completedResult("resp_resume8")), { status: 200 }),
-			]);
-			const result = await streamOpenAIResponses(bundledModel("muse-code"), context, {
-				fetch: scenario.fetchImpl,
-				apiKey: "test-key",
-				providerRetryWait: noWait,
-			}).result();
+			await withStoreEnv(env, async () => {
+				const scenario = dropScenario("resp_resume8", [
+					() => new Response(JSON.stringify(completedResult("resp_resume8")), { status: 200 }),
+				]);
+				const result = await streamOpenAIResponses(bundledModel("muse-code"), context, {
+					fetch: scenario.fetchImpl,
+					apiKey: "test-key",
+					providerRetryWait: noWait,
+					storeResponses,
+				}).result();
 
-			expect(scenario.postBodies[0]).toMatchObject({ store: false });
-			expect(result.stopReason).toBe("error");
-			expect(scenario.gets).toEqual([]);
+				expect(scenario.postBodies[0]).toMatchObject({ store: stored });
+				expect(result.stopReason).toBe(stored ? "stop" : "error");
+				expect(scenario.gets.length > 0).toBe(stored);
+			});
 		} finally {
-			if (previous === undefined) delete process.env.PI_MUSE_STORE_RESPONSES;
-			else process.env.PI_MUSE_STORE_RESPONSES = previous;
+			configureProviderStoreResponses(undefined);
 		}
 	});
 
-	it("keeps the storage opt-out across chained stateful turns and the strict-tools fallback", async () => {
+	it("keeps storage off across chained stateful turns and the strict-tools fallback", async () => {
 		// Chaining (`previous_response_id`) forces `store: true`, and the strict-tools
-		// fallback re-applies it. The privacy opt-out must win on every request,
-		// even when the caller explicitly asks for stateful turns. A storing host
-		// with strict tool schemas (custom providers can set `store-responses`)
+		// fallback re-applies it. Storage left off (the default) must win on every
+		// request, even when the caller explicitly asks for stateful turns. A storing
+		// host with strict tool schemas (custom providers can set `store-responses`)
 		// exercises the fallback; the shipped muse-code row disables strict mode.
 		const previous = process.env.PI_MUSE_STORE_RESPONSES;
-		process.env.PI_MUSE_STORE_RESPONSES = "0";
+		delete process.env.PI_MUSE_STORE_RESPONSES;
 		try {
 			const postBodies: Array<Record<string, unknown>> = [];
 			let rejectStrict = true;

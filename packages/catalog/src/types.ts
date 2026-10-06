@@ -1006,11 +1006,11 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	/** Optional chaining override; unset falls back to officialEndpoint at request time. */
 	statefulResponses?: boolean;
 	/**
-	 * Whether the host stores Responses results server-side (`store: true`).
+	 * Whether the host can store Responses results server-side (`store: true`).
 	 * Rule-owned: hosts that keep generating after a client disconnect so a
-	 * dropped stream can resume via `GET /responses/{id}`. Privacy note:
-	 * stored runs retain prompts and outputs on the provider; set
-	 * `PI_MUSE_STORE_RESPONSES=0` to opt out (disables store and resume).
+	 * dropped stream can resume via `GET /responses/{id}`. Storage is opt-in
+	 * per request (`storeResponses` stream option, else
+	 * `PI_MUSE_STORE_RESPONSES`); stored runs retain prompts and outputs on the provider.
 	 */
 	storeResponses: boolean;
 	streamIdleTimeoutMs?: number;

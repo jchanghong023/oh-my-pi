@@ -11,7 +11,7 @@ use xcap::{Monitor, Window};
 use super::{
 	super::{
 		error::{CoreResult, DesktopError},
-		frame::{FrameGeometry, MAX_COMPOSITE_PIXELS},
+		frame::{FrameGeometry, MAX_COMPOSITE_PIXELS, compose},
 		types::{DesktopDisplay, DesktopWindow, DisplaySelector, Target},
 	},
 	ax,
@@ -253,36 +253,36 @@ impl MacCapture {
 				"composite {target_width}x{target_height} exceeds the native safety limit",
 			)));
 		}
-		let mut composite = RgbaImage::from_pixel(target_width, target_height, Rgba([0, 0, 0, 255]));
 		let mut metadata = Vec::with_capacity(regions.len());
-		for (mut display, image) in regions {
-			let offset_x = u32::try_from(i64::from(display.x) - min_x)
-				.map_err(|_| DesktopError::capture_failed("display x offset overflow"))?;
-			let offset_y = u32::try_from(i64::from(display.y) - min_y)
-				.map_err(|_| DesktopError::capture_failed("display y offset overflow"))?;
-			display.pixel_x = scaled_edge(offset_x, render_scale);
-			display.pixel_y = scaled_edge(offset_y, render_scale);
-			display.pixel_width = scaled_edge(display.width, render_scale).max(1);
-			display.pixel_height = scaled_edge(display.height, render_scale).max(1);
-			let rendered =
-				if image.width() == display.pixel_width && image.height() == display.pixel_height {
-					image
-				} else {
-					image::imageops::resize(
-						&image,
-						display.pixel_width,
-						display.pixel_height,
-						FilterType::Triangle,
-					)
-				};
-			image::imageops::replace(
-				&mut composite,
-				&rendered,
-				i64::from(display.pixel_x),
-				i64::from(display.pixel_y),
-			);
-			metadata.push(display);
-		}
+		let composite = compose(
+			target_width,
+			target_height,
+			Rgba([0, 0, 0, 255]),
+			regions.into_iter().map(|(mut display, image)| {
+				let offset_x = u32::try_from(i64::from(display.x) - min_x)
+					.map_err(|_| DesktopError::capture_failed("display x offset overflow"))?;
+				let offset_y = u32::try_from(i64::from(display.y) - min_y)
+					.map_err(|_| DesktopError::capture_failed("display y offset overflow"))?;
+				display.pixel_x = scaled_edge(offset_x, render_scale);
+				display.pixel_y = scaled_edge(offset_y, render_scale);
+				display.pixel_width = scaled_edge(display.width, render_scale).max(1);
+				display.pixel_height = scaled_edge(display.height, render_scale).max(1);
+				let rendered =
+					if image.width() == display.pixel_width && image.height() == display.pixel_height {
+						image
+					} else {
+						image::imageops::resize(
+							&image,
+							display.pixel_width,
+							display.pixel_height,
+							FilterType::Triangle,
+						)
+					};
+				let placement = (rendered, display.pixel_x, display.pixel_y);
+				metadata.push(display);
+				Ok(placement)
+			}),
+		)?;
 		let geometry = FrameGeometry::for_displays(&metadata);
 		Ok((composite, geometry))
 	}

@@ -99,8 +99,8 @@ function createHost() {
 		}),
 	};
 	const prelude = createBrowserPrelude(session);
-	return (parameters: unknown) =>
-		prelude.invoke(parameters, { session, toolCallId: "browser-nav-frames-dialogs-test" });
+	return (parameters: unknown, signal?: AbortSignal) =>
+		prelude.invoke(parameters, { session, toolCallId: "browser-nav-frames-dialogs-test", signal });
 }
 
 function valueOf(result: { details?: unknown }): unknown {
@@ -512,5 +512,123 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser navigation, frames, dialogs, and t
 			url: `${baseUrl}/two`,
 			persist: false,
 		});
+	}, 30_000);
+
+	test("stops the page load when a run is cancelled mid-goto", async () => {
+		const requested = Promise.withResolvers<AbortSignal>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch(request) {
+				requested.resolve(request.signal);
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled", url: `${baseUrl}/one` });
+			const cancel = new AbortController();
+			const run = invoke(
+				{ action: "run", name: "cancelled", code: `await tab.goto("http://127.0.0.1:${slow.port}/slow");` },
+				cancel.signal,
+			);
+			const request = await requested.promise;
+			cancel.abort();
+			// The cancel itself, not a cleanup failure from a page still loading.
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			// Chrome drops the request once the load is stopped; a load left running keeps waiting.
+			const dropped = new Promise<string>(resolve => {
+				if (request.aborted) resolve("stopped");
+				request.addEventListener("abort", () => resolve("stopped"));
+			});
+			expect(await Promise.race([dropped, Bun.sleep(5_000).then(() => "still loading")])).toBe("stopped");
+		} finally {
+			slow.stop(true);
+		}
+	}, 30_000);
+
+	test("leaves the page's in-flight fetches alone when a run that is not navigating is cancelled", async () => {
+		const pending = Promise.withResolvers<AbortSignal>();
+		const waiting = Promise.withResolvers<void>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/pending") pending.resolve(request.signal);
+				else waiting.resolve();
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled-wait", url: `${baseUrl}/one` });
+			await invoke({
+				action: "run",
+				name: "cancelled-wait",
+				code: `await page.evaluate(url => { fetch(url, { mode: "no-cors" }).catch(() => {}); }, "http://127.0.0.1:${slow.port}/pending");`,
+			});
+			const request = await pending.promise;
+			const cancel = new AbortController();
+			const run = invoke(
+				{
+					action: "run",
+					name: "cancelled-wait",
+					code: `await page.evaluate(url => { fetch(url, { mode: "no-cors" }).catch(() => {}); }, "http://127.0.0.1:${slow.port}/waiting");
+						await wait(60_000);`,
+				},
+				cancel.signal,
+			);
+			await waiting.promise;
+			cancel.abort();
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			const dropped = new Promise<string>(resolve => {
+				if (request.aborted) resolve("dropped");
+				request.addEventListener("abort", () => resolve("dropped"));
+			});
+			// Proving the fetch survives needs real time: nothing signals "Chrome did not cancel it".
+			expect(await Promise.race([dropped, Bun.sleep(1_000).then(() => "pending")])).toBe("pending");
+		} finally {
+			slow.stop(true);
+		}
+	}, 30_000);
+
+	test("does not call a cancelled run's page listeners for the requests the cancel stops", async () => {
+		const requested = Promise.withResolvers<void>();
+		const slow = Bun.serve({
+			port: 0,
+			idleTimeout: 0,
+			fetch() {
+				requested.resolve();
+				return new Promise<Response>(() => {});
+			},
+		});
+		try {
+			const invoke = createHost();
+			await invoke({ action: "open", name: "cancelled-listener", url: `${baseUrl}/one` });
+			const cancel = new AbortController();
+			const run = invoke(
+				{
+					action: "run",
+					name: "cancelled-listener",
+					code: `page.on("requestfailed", () => {
+							globalThis.failedCalls = (globalThis.failedCalls ?? 0) + 1;
+							page.url();
+						});
+						await tab.goto("http://127.0.0.1:${slow.port}/slow");`,
+				},
+				cancel.signal,
+			);
+			await requested.promise;
+			cancel.abort();
+			expect(await run.catch((error: unknown) => error)).toMatchObject({ message: "Operation aborted" });
+			const after = await invoke({
+				action: "run",
+				name: "cancelled-listener",
+				code: "return { url: page.url(), failedCalls: globalThis.failedCalls ?? 0 };",
+			});
+			expect(valueOf(after)).toEqual({ url: `${baseUrl}/one`, failedCalls: 0 });
+		} finally {
+			slow.stop(true);
+		}
 	}, 30_000);
 });

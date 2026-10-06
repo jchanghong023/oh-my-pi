@@ -15,6 +15,7 @@ import type {
 	KeyboardTypeOptions,
 	KeyInput,
 	Page,
+	Protocol,
 	Realm,
 	SerializedAXNode,
 	Target,
@@ -232,16 +233,29 @@ declare module "puppeteer-core" {
 		mainRealm(): Realm;
 		/** This frame's accessibility tree (`@internal` upstream, stripped from published types). */
 		readonly accessibility: Accessibility;
-		/** Loader of the document the frame shows; changes on every navigation (`@internal` upstream). */
+		/**
+		 * Loader of the document the frame shows (`@internal` upstream). Changes on every navigation that
+		 * loads a document; a back/forward cache restore keeps the previous document's value.
+		 */
 		readonly _loaderId: string;
+		/** CDP session that drives this frame (`@internal` upstream, stripped from published types). */
+		readonly client: CDPSession;
 	}
 	interface Realm {
 		/** Re-home a DOM handle into this realm (`@internal` upstream, stripped from published types). */
 		adoptHandle<T extends JSHandle>(handle: T): Promise<T>;
+		/** Resolve a CDP backend node id in this realm (`@internal` upstream, stripped from published types). */
+		adoptBackendNode(backendNodeId: number): Promise<JSHandle>;
 	}
 	interface JSHandle {
 		/** Realm that created this handle (`@internal` upstream, stripped from published types). */
 		readonly realm: Realm;
+	}
+	interface SerializedAXNode {
+		/** DOM node behind this AX node (`@internal` upstream, stripped from published types). */
+		readonly backendNodeId?: number;
+		/** Loader of the frame's document when the snapshot was taken (`@internal` upstream, stripped from published types). */
+		readonly loaderId: string;
 	}
 }
 
@@ -863,7 +877,10 @@ class NavigationTimeoutError extends ToolError {}
 
 interface RunPageScope {
 	page: Page;
-	cleanup(): Promise<void>;
+	/** Restore the page's own listener methods and remove every handler this run registered. */
+	detach(): void;
+	/** Return request interception to the tab's persistent route/allowlist state. */
+	restoreInterception(): Promise<void>;
 }
 
 /**
@@ -959,7 +976,7 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 
 	return {
 		page,
-		async cleanup() {
+		detach() {
 			if (onDescriptor) Object.defineProperty(page, "on", onDescriptor);
 			else Reflect.deleteProperty(page, "on");
 			if (offDescriptor) Object.defineProperty(page, "off", offDescriptor);
@@ -974,6 +991,8 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 				for (const handler of owned) Reflect.apply(off, page, [type, handler]);
 			}
 			handlers.clear();
+		},
+		async restoreInterception() {
 			if (!interceptionChanged) return;
 			try {
 				await withTimeout(
@@ -1081,18 +1100,24 @@ function frameDocumentKey(frame: Frame): string {
 	return `${frame._loaderId} ${frame.url()}`;
 }
 
+/** One frame's accessibility tree; ids observed in it resolve in that frame. */
+interface FrameSnapshot {
+	frame: Frame;
+	snapshot: SerializedAXNode;
+}
+
 /**
- * Accessibility snapshots of `frames` and their descendants, in frame-tree order. A frame that does
- * not answer by `deadline` is left out with its descendants, and skipped by later observations until
- * it navigates, so one dead iframe never costs the page its observation. With `root`, only frames
- * inside it are read.
+ * Accessibility snapshots of `frames` and their descendants, each with its frame, in frame-tree
+ * order. A frame that does not answer by `deadline` is left out with its descendants, and skipped
+ * by later observations until it navigates, so one dead iframe never costs the page its
+ * observation. With `root`, only frames inside it are read.
  */
 async function snapshotFrames(
 	frames: Frame[],
 	options: { interestingOnly: boolean; root: ElementHandle | null; deadline: number; signal?: AbortSignal },
-): Promise<SerializedAXNode[]> {
+): Promise<FrameSnapshot[]> {
 	const snapshots = await Promise.all(
-		frames.map(async frame => {
+		frames.map(async (frame): Promise<FrameSnapshot[]> => {
 			if (unresponsiveFrames.get(frame) === frameDocumentKey(frame)) return [];
 			const timeout = new Error(`Frame ${frame.url()} did not answer`);
 			let snapshot: SerializedAXNode | null;
@@ -1109,7 +1134,7 @@ async function snapshotFrames(
 				return [];
 			}
 			if (!snapshot) return [];
-			return [snapshot, ...(await snapshotFrames(frame.childFrames(), { ...options, root: null }))];
+			return [{ frame, snapshot }, ...(await snapshotFrames(frame.childFrames(), { ...options, root: null }))];
 		}),
 	);
 	return snapshots.flat();
@@ -1143,8 +1168,59 @@ function collectInteractiveObservationAncestors(node: SerializedAXNode, ancestor
 	return found;
 }
 
+/** Where an observed element lives; `tab.id(n)` resolves it to a handle on first use. */
+interface ObservedElement {
+	frame: Frame;
+	backendNodeId: number;
+	/**
+	 * Loader of the document `frame` showed when observed. Backend node ids are unique only within
+	 * one renderer process, so once the frame shows another document the id may name an unrelated node.
+	 */
+	loaderId: string;
+}
+
+/** Whether the frame has loaded another document since `element` was observed. */
+function isObservedDocumentGone(element: ObservedElement): boolean {
+	return element.frame._loaderId !== element.loaderId;
+}
+
+/**
+ * Resolve an observed element to a handle in its frame's main world, or null when the node is
+ * gone, has left the document, or the frame no longer shows the document it was observed in (any
+ * resolution failure counts as gone). Text nodes resolve to their parent.
+ */
+async function resolveObservedElement(observed: ObservedElement): Promise<ElementHandle | null> {
+	if (isObservedDocumentGone(observed)) return null;
+	let node: JSHandle;
+	try {
+		node = await observed.frame.mainRealm().adoptBackendNode(observed.backendNodeId);
+	} catch {
+		return null;
+	}
+	try {
+		const resolved = await node.evaluateHandle(value => {
+			const candidate = value as unknown as { nodeType: number; parentElement: Element | null };
+			const element = (candidate.nodeType === 3 ? candidate.parentElement : value) as unknown as Element | null;
+			if (!element?.isConnected) return null;
+			// The document itself (the root `includeAll` lists) has no owner document.
+			const owner: unknown = candidate.nodeType === 9 ? value : element.ownerDocument;
+			return owner === document ? element : null;
+		});
+		const element = resolved.asElement();
+		// The frame may have committed another document while the node resolved.
+		if (element && !isObservedDocumentGone(observed)) return element as ElementHandle;
+		await resolved.dispose().catch(() => undefined);
+		return null;
+	} catch {
+		return null;
+	} finally {
+		await node.dispose().catch(() => undefined);
+	}
+}
+
 async function collectObservationEntries(
 	core: WorkerCore,
+	frame: Frame,
 	node: SerializedAXNode,
 	entries: ObservationEntry[],
 	options: {
@@ -1158,48 +1234,47 @@ async function collectObservationEntries(
 		(node.role === "generic" || node.role === "none" || node.role === "group") &&
 		!node.name &&
 		!options.interactiveAncestors.has(node);
-	if ((options.includeAll || isInteractiveNode(node)) && !(options.compact && emptyStructural)) {
-		const handle = await node.elementHandle();
-		if (handle) {
-			let inViewport = true;
-			if (options.viewportOnly) {
-				try {
-					inViewport = await handle.isIntersectingViewport();
-				} catch {
-					inViewport = false;
-				}
-			}
-			if (inViewport) {
-				const id = core.nextElementId();
-				const states: string[] = [];
-				if (node.disabled) states.push("disabled");
-				if (node.checked !== undefined) states.push(`checked=${String(node.checked)}`);
-				if (node.pressed !== undefined) states.push(`pressed=${String(node.pressed)}`);
-				if (node.selected !== undefined) states.push(`selected=${String(node.selected)}`);
-				if (node.expanded !== undefined) states.push(`expanded=${String(node.expanded)}`);
-				if (node.required) states.push("required");
-				if (node.readonly) states.push("readonly");
-				if (node.multiselectable) states.push("multiselectable");
-				if (node.multiline) states.push("multiline");
-				if (node.modal) states.push("modal");
-				if (node.focused) states.push("focused");
-				core.cacheElement(id, handle as ElementHandle);
-				entries.push({
-					id,
-					role: node.role,
-					name: node.name,
-					value: node.value,
-					description: node.description,
-					keyshortcuts: node.keyshortcuts,
-					states,
-				});
-			} else {
-				await handle.dispose();
-			}
+	if (
+		node.backendNodeId !== undefined &&
+		(options.includeAll || isInteractiveNode(node)) &&
+		!(options.compact && emptyStructural)
+	) {
+		const observed: ObservedElement = { frame, backendNodeId: node.backendNodeId, loaderId: node.loaderId };
+		let handle: ElementHandle | null = null;
+		let inViewport = true;
+		if (options.viewportOnly) {
+			handle = await resolveObservedElement(observed);
+			inViewport = (await handle?.isIntersectingViewport().catch(() => false)) ?? false;
+		}
+		if (inViewport) {
+			const id = core.observeElement(observed, handle ?? undefined);
+			const states: string[] = [];
+			if (node.disabled) states.push("disabled");
+			if (node.checked !== undefined) states.push(`checked=${String(node.checked)}`);
+			if (node.pressed !== undefined) states.push(`pressed=${String(node.pressed)}`);
+			if (node.selected !== undefined) states.push(`selected=${String(node.selected)}`);
+			if (node.expanded !== undefined) states.push(`expanded=${String(node.expanded)}`);
+			if (node.required) states.push("required");
+			if (node.readonly) states.push("readonly");
+			if (node.multiselectable) states.push("multiselectable");
+			if (node.multiline) states.push("multiline");
+			if (node.modal) states.push("modal");
+			if (node.focused) states.push("focused");
+			entries.push({
+				id,
+				role: node.role,
+				name: node.name,
+				value: node.value,
+				description: node.description,
+				keyshortcuts: node.keyshortcuts,
+				states,
+			});
+		} else {
+			await handle?.dispose().catch(() => undefined);
 		}
 	}
 	for (const child of node.children ?? []) {
-		await collectObservationEntries(core, child, entries, options);
+		await collectObservationEntries(core, frame, child, entries, options);
 	}
 }
 
@@ -1274,6 +1349,7 @@ export class WorkerCore {
 	/** Last viewport read from the page; reported while a dialog or failure blocks a fresh read. */
 	#lastViewport?: ReadyInfo["viewport"];
 	#elementCache = new Map<number, ElementHandle>();
+	#observedElements = new Map<number, ObservedElement>();
 	#elementCounter = 0;
 	#active: ActiveRun | null = null;
 	#runtime: JsRuntime | null = null;
@@ -1293,6 +1369,13 @@ export class WorkerCore {
 	#screenshotHistory = new Map<string, ScreenshotHistory>();
 	#webmcp?: WebMcpController;
 	readonly #recording = new RecordingController();
+	/**
+	 * A back/forward cache restore brings a document back without loading it, so the frame keeps the
+	 * loader id of the document it replaced and the ids observed there would still pass as current.
+	 */
+	readonly #onFrameNavigated = (event: Protocol.Page.FrameNavigatedEvent): void => {
+		if (event.type === "BackForwardCacheRestore") this.#clearElementCache();
+	};
 
 	constructor(transport: Transport, isolated: boolean) {
 		this.#transport = transport;
@@ -1357,13 +1440,12 @@ export class WorkerCore {
 		return failure;
 	}
 
-	nextElementId(): number {
+	/** Number an observed element; keeps `handle` when the observation already resolved it. */
+	observeElement(element: ObservedElement, handle?: ElementHandle): number {
 		this.#elementCounter += 1;
+		this.#observedElements.set(this.#elementCounter, element);
+		if (handle) this.#elementCache.set(this.#elementCounter, handle);
 		return this.#elementCounter;
-	}
-
-	cacheElement(id: number, handle: ElementHandle): void {
-		this.#elementCache.set(id, handle);
 	}
 
 	async #handleMessage(msg: WorkerInbound): Promise<void> {
@@ -1431,6 +1513,7 @@ export class WorkerCore {
 				this.#observeDialogs();
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 			}
+			this.#page.mainFrame().client.on("Page.frameNavigated", this.#onFrameNavigated);
 			if (payload.mode === "headless" || payload.emulateFocus) {
 				// Background Chromium tabs stop producing frames, stalling rAF,
 				// IntersectionObserver, and input acknowledgements. Keep owned tabs
@@ -1703,8 +1786,16 @@ export class WorkerCore {
 		} finally {
 			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
 			await Bun.sleep(0);
+			// Detach first: the stop below fails the cancelled requests, and run handlers that see
+			// those events would touch the aborted run's facade.
+			runPage?.detach();
+			// A cancelled run abandons its main-frame navigation: left loading, it still replaces the
+			// page later and holds up any interception restore below. Stopping is gated on
+			// that navigation because Page.stopLoading also cancels every fetch and subresource
+			// load in flight. A run that merely ended keeps an unawaited goto going.
+			if (ac.signal.aborted && this.#network?.hasPendingMainFrameNavigation()) await this.#stopLoading();
 			try {
-				await runPage?.cleanup();
+				await runPage?.restoreInterception();
 			} catch (error) {
 				// A finished run keeps its result; the supervisor still recycles the tab.
 				if (completed && active.floatingRejections.length === 0) {
@@ -2609,7 +2700,7 @@ export class WorkerCore {
 			}
 		}
 		let snapshot: SerializedAXNode | null;
-		let frameSnapshots: SerializedAXNode[];
+		let frameSnapshots: FrameSnapshot[];
 		try {
 			snapshot = (await untilAborted(options.signal, () =>
 				page.accessibility.snapshot({ interestingOnly: !includeAll, root: root ?? undefined }),
@@ -2626,9 +2717,10 @@ export class WorkerCore {
 		if (!snapshot) throw new ToolError("Accessibility snapshot unavailable");
 		const entries: ObservationEntry[] = [];
 		const interactiveAncestors = new Set<SerializedAXNode>();
-		for (const tree of [snapshot, ...frameSnapshots]) {
-			if (options.compact) collectInteractiveObservationAncestors(tree, interactiveAncestors);
-			await collectObservationEntries(this, tree, entries, {
+		const trees: FrameSnapshot[] = [{ frame: page.mainFrame(), snapshot }, ...frameSnapshots];
+		for (const tree of trees) {
+			if (options.compact) collectInteractiveObservationAncestors(tree.snapshot, interactiveAncestors);
+			await collectObservationEntries(this, tree.frame, tree.snapshot, entries, {
 				includeAll,
 				viewportOnly,
 				compact: options.compact ?? false,
@@ -2948,8 +3040,29 @@ export class WorkerCore {
 	}
 
 	async #resolveCachedHandle(id: number): Promise<ElementHandle> {
+		const element = this.#observedElements.get(id);
+		if (!element) throw new ToolError(`Unknown element id ${id}. Run tab.observe() to refresh the element list.`);
+		if (isObservedDocumentGone(element)) {
+			this.#clearElementCache();
+			throw new ToolError(`Element id ${id} is stale. Run tab.observe() again.`);
+		}
 		const handle = this.#elementCache.get(id);
-		if (!handle) throw new ToolError(`Unknown element id ${id}. Run tab.observe() to refresh the element list.`);
+		if (!handle) {
+			const resolved = await resolveObservedElement(element);
+			// An observe() during the await renumbers ids, so the id may now name another element.
+			if (!resolved || this.#observedElements.get(id) !== element) {
+				await resolved?.dispose().catch(() => undefined);
+				if (this.#observedElements.get(id) === element) this.#clearElementCache();
+				throw new ToolError(`Element id ${id} is stale. Run tab.observe() again.`);
+			}
+			const cached = this.#elementCache.get(id);
+			if (cached) {
+				await resolved.dispose().catch(() => undefined);
+				return cached;
+			}
+			this.#elementCache.set(id, resolved);
+			return resolved;
+		}
 		try {
 			const isConnected = (await handle.evaluate(el => el.isConnected)) as boolean;
 			if (!isConnected) {
@@ -2987,6 +3100,7 @@ export class WorkerCore {
 		)) as ElementHandle;
 	}
 	#clearElementCache(): void {
+		this.#observedElements.clear();
 		if (this.#elementCache.size === 0) {
 			this.#elementCounter = 0;
 			return;

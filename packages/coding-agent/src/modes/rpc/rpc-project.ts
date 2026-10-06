@@ -119,6 +119,7 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"steer_subagent",
 	"abort",
 	"abort_and_prompt",
+	"abort_and_restore_queue",
 	"new_session",
 	"switch_session",
 	"open_session",
@@ -126,6 +127,7 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"fork",
 	"get_state",
 	"set_fast_mode",
+	"set_slow_mode",
 	"get_entries",
 	"get_tree",
 	"set_todos",
@@ -151,6 +153,9 @@ const SESSION_LEVEL_COMMANDS = new Set<string>([
 	"get_branch_messages",
 	"get_last_assistant_text",
 	"set_session_name",
+	"btw",
+	"btw_cancel",
+	"get_btw_history",
 	"goal",
 	"live_start",
 	"live_stop",
@@ -200,10 +205,12 @@ class RpcProjectHost {
 	readonly #staleSessions = new Set<string>();
 	#negotiatedV3 = false;
 	#disposed = false;
+	readonly #maxResponseBytes: () => number;
 
-	constructor(options: RpcProjectModeOptions, output: RpcOutput) {
+	constructor(options: RpcProjectModeOptions, output: RpcOutput, maxResponseBytes?: () => number) {
 		this.#options = options;
 		this.#output = output;
+		this.#maxResponseBytes = maxResponseBytes ?? (() => MAX_RPC_FRAME_BYTES - 1);
 		this.#processInstanceId = `omp-${randomUUID()}`;
 		this.#container = new RpcProjectSessionContainer({
 			cwd: options.cwd,
@@ -337,6 +344,7 @@ class RpcProjectHost {
 			setToolUIContext: created.setToolUIContext as (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 			projectMode: true,
 			inputGate,
+			maxResponseBytes: this.#maxResponseBytes,
 		});
 		this.#sessionHosts.set(record.sessionId, sessionHost);
 		try {
@@ -1567,7 +1575,7 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 			frameEncoder.setProtocolVersion(2);
 	};
 
-	const host = new RpcProjectHost(options, output);
+	const host = new RpcProjectHost(options, output, () => frameEncoder.maxResponseBytes);
 	hostRef.host = host;
 
 	outputWriter.write(
@@ -1597,6 +1605,9 @@ export async function runRpcProjectMode(options: RpcProjectModeOptions): Promise
 		"steer_subagent",
 		"live_start",
 		"execute_command",
+		// Synchronous like the single-session BACKGROUND_COMMANDS: must overtake a
+		// `btw` still starting or a long serial command on the same session.
+		"btw_cancel",
 	]);
 	const dispatch = async (parsed: Record<string, unknown>): Promise<void> => {
 		const type = String(parsed.type ?? "");

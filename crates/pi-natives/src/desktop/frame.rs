@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage, imageops::FilterType};
 
 use super::{
 	error::{CoreResult, DesktopError},
@@ -184,6 +184,50 @@ impl FrameGeometry {
 	}
 }
 
+/// Places each `(image, pixel_x, pixel_y)` tile onto a `width`×`height`
+/// canvas filled with `background`, clipping tiles at the canvas edge.
+///
+/// A lone tile that already covers the canvas is the composite itself, so the
+/// common single-display capture skips a second full-frame allocation and copy.
+/// Tiles are pulled one at a time so multi-display captures hold at most one
+/// display image beside the canvas.
+pub fn compose<I>(width: u32, height: u32, background: Rgba<u8>, tiles: I) -> CoreResult<RgbaImage>
+where
+	I: IntoIterator<Item = CoreResult<(RgbaImage, u32, u32)>>,
+	I::IntoIter: ExactSizeIterator,
+{
+	let mut tiles = tiles.into_iter();
+	let first = if tiles.len() == 1 {
+		let (image, x, y) = tiles.next().expect("length checked above")?;
+		if x == 0 && y == 0 && image.width() == width && image.height() == height {
+			return Ok(image);
+		}
+		Some((image, x, y))
+	} else {
+		None
+	};
+	// `RgbaImage::new` takes zeroed memory straight from the allocator.
+	let mut canvas = if background.0 == [0; 4] {
+		RgbaImage::new(width, height)
+	} else {
+		RgbaImage::from_pixel(width, height, background)
+	};
+	let canvas_stride = width as usize * 4;
+	for tile in first.map(Ok).into_iter().chain(tiles) {
+		let (image, x, y) = tile?;
+		let row_bytes = image.width().min(width.saturating_sub(x)) as usize * 4;
+		if row_bytes == 0 {
+			continue;
+		}
+		let left = x as usize * 4;
+		let destination = canvas.chunks_exact_mut(canvas_stride).skip(y as usize);
+		for (target, source) in destination.zip(image.chunks_exact(image.width() as usize * 4)) {
+			target[left..left + row_bytes].copy_from_slice(&source[..row_bytes]);
+		}
+	}
+	Ok(canvas)
+}
+
 pub fn apply_capture_caps(
 	mut image: RgbaImage,
 	geometry: &mut FrameGeometry,
@@ -285,5 +329,23 @@ mod tests {
 		.unwrap();
 		assert_eq!((image.width(), image.height()), (400, 300));
 		assert_eq!(f.map_point(200.0, 100.0, None).unwrap(), (300.0, 150.0));
+	}
+	#[test]
+	fn compose_places_and_clips_tiles() {
+		let tile = |w, h, v| RgbaImage::from_pixel(w, h, Rgba([v, v, v, 255]));
+		let sole = tile(3, 2, 7);
+		let pointer = sole.as_raw().as_ptr();
+		let same = compose(3, 2, Rgba([0; 4]), [Ok((sole, 0, 0))]).unwrap();
+		assert_eq!(same.as_raw().as_ptr(), pointer);
+
+		let canvas = compose(4, 2, Rgba([0, 0, 0, 255]), [
+			Ok((tile(2, 2, 1), 0, 0)),
+			Ok((tile(3, 3, 2), 3, 1)),
+		])
+		.unwrap();
+		let mut reference = RgbaImage::from_pixel(4, 2, Rgba([0, 0, 0, 255]));
+		image::imageops::replace(&mut reference, &tile(2, 2, 1), 0, 0);
+		image::imageops::replace(&mut reference, &tile(3, 3, 2), 3, 1);
+		assert_eq!(canvas, reference);
 	}
 }

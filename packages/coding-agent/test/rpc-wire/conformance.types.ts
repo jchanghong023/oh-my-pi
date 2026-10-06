@@ -20,10 +20,13 @@ import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal
 import type { RpcForkCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type {
+	RpcAbortAndRestoreQueueResult,
 	RpcAgentSessionEventFrame,
 	RpcAskDialogQuestion,
 	RpcAvailableCommandsUpdateFrame,
 	RpcAvailableSlashCommand,
+	RpcBtwDeltaFrame,
+	RpcBtwRecordFrame,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -54,7 +57,10 @@ import type {
 	RpcSubagentSnapshot,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type * as Wire from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
+import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { BtwHistoryRecord, BtwHistoryTurn } from "@oh-my-pi/pi-coding-agent/session/btw-history";
+import type { UsageLimitState } from "@oh-my-pi/pi-coding-agent/session/usage-limit";
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -246,6 +252,8 @@ export type Frames = Assert<
 		liveLevels: Outbound<RpcLiveLevelsFrame, Wire.LiveLevelsEvent>;
 		liveTranscript: Outbound<RpcLiveTranscriptFrame, Wire.LiveTranscriptEvent>;
 		liveEnd: Outbound<RpcLiveEndFrame, Wire.LiveEndEvent>;
+		btwDelta: Outbound<RpcBtwDeltaFrame, Wire.BtwDeltaEvent>;
+		btwRecord: Outbound<RpcBtwRecordFrame, Wire.BtwRecordEvent>;
 		hostToolCall: Outbound<Omit<RpcHostToolCallRequest, "sessionId" | "sessionGeneration">, Wire.HostToolCallRequest>;
 		hostToolCancel: Outbound<RpcHostToolCancelRequest, Wire.HostToolCancelRequest>;
 		hostUriRequest: Outbound<RpcHostUriRequest, Wire.HostUriRequest>;
@@ -289,6 +297,9 @@ export type State = Assert<
 		goal: Outbound<Omit<Goal, "iteration">, Wire.Goal>;
 		goalModeState: Outbound<GoalModeState, Wire.GoalModeState>;
 		goalResult: Outbound<RpcGoalResult, Wire.GoalResult>;
+		usageLimitLowPriority: Outbound<Extract<UsageLimitState, { stage: "low_priority" }>, Wire.UsageLimitLowPriority>;
+		usageLimitWrapUp: Outbound<Extract<UsageLimitState, { stage: "wrap_up" }>, Wire.UsageLimitWrapUp>;
+		usageLimitStages: Same<UsageLimitState["stage"], Wire.UsageLimitState["stage"]>;
 		bashResult: Outbound<BashResult, Wire.BashResult>;
 		compactionResult: Outbound<CompactionResult, Wire.CompactionResult>;
 		sessionStats: Outbound<SessionStats, Wire.SessionStats>;
@@ -296,10 +307,15 @@ export type State = Assert<
 		sessionCredits: Outbound<NonNullable<SessionStats["credits"]>, Wire.SessionCredits>;
 		messagesPage: Outbound<RpcMessagesPage, Wire.MessagesPage>;
 		openSession: Outbound<RpcOpenSessionResult, Wire.OpenSessionResult>;
+		abortAndRestoreQueue: Outbound<RpcAbortAndRestoreQueueResult, Wire.AbortAndRestoreQueueResult>;
+		restoredQueuedMessage: Outbound<RestoredQueuedMessage, Wire.RestoredQueuedMessage>;
 		slashCommand: Outbound<RpcAvailableSlashCommand, Wire.AvailableSlashCommand>;
 		slashSubcommand: Outbound<NonNullable<RpcAvailableSlashCommand["subcommands"]>[number], Wire.SlashSubcommand>;
 		subagentSnapshot: Outbound<RpcSubagentSnapshot, Wire.SubagentSnapshot>;
 		subagentMessages: Outbound<RpcSubagentMessagesResult, Wire.SubagentMessages>;
+		btwHistoryRecord: Outbound<BtwHistoryRecord, Wire.BtwHistoryRecord>;
+		btwHistoryTurn: Outbound<BtwHistoryTurn, Wire.BtwHistoryTurn>;
+		btwStatuses: Same<BtwHistoryTurn["status"], Wire.BtwStatus>;
 		model: OutboundSubset<Model, Wire.ModelInfo>;
 		modelCost: OutboundSubset<Model["cost"], Wire.ModelCost>;
 		thinkingConfig: OutboundSubset<NonNullable<Model["thinking"]>, Wire.ThinkingConfig>;

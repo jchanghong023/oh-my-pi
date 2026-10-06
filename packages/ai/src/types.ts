@@ -550,6 +550,16 @@ export interface StreamOptions {
 	 */
 	statefulResponses?: boolean;
 	/**
+	 * Store this request's result server-side on hosts that support it
+	 * (`compat.storeResponses`, e.g. Muse Code), so a stream that drops
+	 * mid-turn resumes from `GET /responses/{id}` instead of re-running the
+	 * turn. Privacy: stored runs retain prompts and outputs on the provider.
+	 * Unset falls back to `PI_MUSE_STORE_RESPONSES`, then the host's
+	 * `configureProviderStoreResponses` default, else off. Ignored on hosts
+	 * without the capability.
+	 */
+	storeResponses?: boolean;
+	/**
 	 * Disable native reasoning when the caller supplies an external scratchpad.
 	 * OpenAI Responses emits `reasoning: { effort: "none" }`; Anthropic and
 	 * Google transports use their native thinking-off controls.

@@ -452,24 +452,47 @@ function getOpenAIResponsesProviderSessionState(
 	return created;
 }
 
+/** Host per-provider storage defaults; see {@link configureProviderStoreResponses}. */
+let configuredProviderStoreResponses: Readonly<Record<string, boolean>> = {};
+
 /**
- * Whether requests to this host store their results server-side. Rule-owned
- * (`store-responses`): hosts that finish runs after a client disconnect store
- * results so a dropped stream can be resumed. Privacy: stored runs retain
- * prompts and outputs on the provider; `PI_MUSE_STORE_RESPONSES=0` opts out of
- * storage, resume, and the `previous_response_id` chaining that needs storage.
+ * Set the process-wide storage default per provider id, used when a request
+ * leaves `storeResponses` unset. Hosts call this from their settings so every
+ * request follows the setting, including direct `streamSimple`/`completeSimple`
+ * side calls that do not pass per-request options. `PI_MUSE_STORE_RESPONSES`
+ * still overrides it.
  */
-function storesResponsesServerSide(model: Model<"openai-responses">): boolean {
-	return model.compat.storeResponses === true && $flag("PI_MUSE_STORE_RESPONSES", true);
+export function configureProviderStoreResponses(byProvider: Readonly<Record<string, boolean>> | undefined): void {
+	configuredProviderStoreResponses = byProvider ?? {};
+}
+
+/**
+ * Whether this request stores its result server-side. Only hosts whose rule
+ * sets `store-responses` (they finish runs after a client disconnect, so a
+ * dropped stream can be resumed) are eligible, and storage is opt-in:
+ * `options.storeResponses`, then `PI_MUSE_STORE_RESPONSES`, then the host
+ * default ({@link configureProviderStoreResponses}), else off. Privacy: stored
+ * runs retain prompts and outputs on the provider. Off also disables resume and
+ * the `previous_response_id` chaining that needs storage.
+ */
+function storesResponsesServerSide(
+	model: Model<"openai-responses">,
+	options: OpenAIResponsesOptions | undefined,
+): boolean {
+	if (model.compat.storeResponses !== true) return false;
+	return (
+		options?.storeResponses ??
+		$flag("PI_MUSE_STORE_RESPONSES", configuredProviderStoreResponses[model.provider] ?? false)
+	);
 }
 
 function isOpenAIResponsesStatefulEnabled(
 	options: OpenAIResponsesOptions | undefined,
 	model: Model<"openai-responses">,
 ): boolean {
-	// Chaining forces `store: true`, so a storing host whose storage was opted
-	// out must never chain — not even when the caller asks for it.
-	if (model.compat.storeResponses === true && !storesResponsesServerSide(model)) return false;
+	// Chaining forces `store: true`, so a storing host whose storage is off
+	// must never chain — not even when the caller asks for it.
+	if (model.compat.storeResponses === true && !storesResponsesServerSide(model, options)) return false;
 	if (options?.statefulResponses === false) return false;
 	if (options?.statefulResponses === true) return true;
 	// Default ON only against the official OpenAI API: chaining forces
@@ -1065,7 +1088,7 @@ const streamOpenAIResponsesOnce = (
 							// forces `store: true` on official OpenAI too, where a dropped run
 							// is not known to finish server-side and polling would only park
 							// a turn that used to fail fast.
-							storeEnabled: storesResponsesServerSide(model),
+							storeEnabled: storesResponsesServerSide(model, options),
 							partialContent: output.content,
 							failure: streamFailure,
 						})
@@ -1576,7 +1599,7 @@ export function buildParams(
 		// Gateway routing: OpenRouter-only Responses wire field for sticky upstream
 		// routing + observability grouping; no equivalent on direct OpenAI.
 		session_id: model.compat.isOpenRouterHost ? getOpenRouterResponsesSessionId(options) : undefined,
-		store: storesResponsesServerSide(model),
+		store: storesResponsesServerSide(model, options),
 		stream_options: model.compat.supportsObfuscationOptOut ? { include_obfuscation: false } : undefined,
 	};
 	if (options?.include?.length) params.include = Array.from(new Set(options.include));

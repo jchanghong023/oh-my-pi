@@ -67,6 +67,8 @@ export {
 	resolveRpcSkillInvocation,
 	type RpcBuiltinResidualSession,
 	runRpcSkillCommand,
+	fitAbortAndRestoreQueueResponse,
+	fitRemoveQueuedMessageResponse,
 	type RpcOpenSessionSession,
 	type RpcOutput,
 	RpcPendingExtensionRequests,
@@ -143,10 +145,16 @@ export function dispatchRpcControlFrame(parsed: unknown, deps: RpcInputFrameDeps
 /**
  * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
  * (`prompt` and `steer_subagent` are also backgrounded there, but start through
- * the serial tail.)
+ * the serial tail.) `btw_cancel` is synchronous and must overtake a `btw` still
+ * starting or a long serial command.
  * A Set, not a Record: `type` is untrusted input and must not hit prototype keys.
  */
-const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>(["bash", "predict_word", "live_start"]);
+const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
+	"bash",
+	"predict_word",
+	"live_start",
+	"btw_cancel",
+]);
 
 /**
  * Dispatch a single parsed frame from the RPC input stream.
@@ -356,6 +364,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		setToolUIContext,
 		inputGate,
 		createLiveSession,
+		maxResponseBytes: () => frameEncoder.maxResponseBytes,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
 	});
 	// Startup awaits can span client interaction: a `session_start` extension

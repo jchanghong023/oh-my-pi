@@ -18,7 +18,7 @@
 
 ### Fixed
 
-- Muse Code now stores Responses results on Meta's side (`store-responses`), so a turn whose connection drops can be recovered instead of re-run. Set `PI_MUSE_STORE_RESPONSES=0` to opt out of server-side storage ([#14293](https://github.com/can1357/oh-my-pi/pull/14293) by [@abilliontokens](https://github.com/abilliontokens)).
+- Muse Code can now store Responses results on Meta's side (`store-responses`), so a turn whose connection drops can be recovered instead of re-run. Storage is opt-in via the omp setting `providers.muse-code.storeResponses` or `PI_MUSE_STORE_RESPONSES=1` ([#14293](https://github.com/can1357/oh-my-pi/pull/14293) and [#14534](https://github.com/can1357/oh-my-pi/pull/14534) by [@abilliontokens](https://github.com/abilliontokens)).
 
 ## [18.6.2] - 2026-10-04
 
