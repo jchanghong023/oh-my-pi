@@ -256,7 +256,7 @@ import { extractFileMentions, generateFileMentionMessages } from "../utils/file-
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { TokenRateMeter } from "../utils/token-rate";
 import { resumeCommand } from "../utils/resume-command";
-import { parseCardTitleReply } from "../utils/title-card";
+import { parseCardTitleReply, splitCardTitle } from "../utils/title-card";
 import { generateSessionTitle, nerdGlyphsActive } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { VibeModeState } from "../vibe/state";
@@ -403,7 +403,7 @@ import type { CacheWarmer, CacheWarmingMode, CacheWarmingStatus } from "./cache-
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { formatSessionDumpText, formatSubagentDumpText, type SessionDumpArchive } from "./session-dump-format";
 import { collectSubSessions, type SubSession } from "./sub-sessions";
-import type { BranchSummaryEntry, NewSessionOptions, SessionTitleCard } from "./session-entries";
+import type { BranchSummaryEntry, NewSessionOptions } from "./session-entries";
 import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
 import {
 	COMPACTION_CHECK_NONE,
@@ -667,7 +667,6 @@ type SetSessionNameWithTrigger = (
 	name: string,
 	source?: SessionTitleSource,
 	trigger?: SessionNameTrigger,
-	card?: SessionTitleCard,
 ) => Promise<boolean>;
 
 /** A first-message title armed to fork the main reply. */
@@ -9336,8 +9335,8 @@ export class AgentSession implements SettingsScope {
 	 * of the reply this message starts: at the reply's first non-thinking block,
 	 * the title request runs as an ephemeral side turn on the same model, system
 	 * prompt, tools and prompt-cache key, so it reads the whole prefix from cache
-	 * and sees the model's own reading of the task, and asks for a card index
-	 * (icon and code, unless `title.icons` is `boring`) with the title. The title
+	 * and sees the model's own reading of the task, and asks for a card (icon and
+	 * code, unless `title.icons` is `boring`) to head the title. The title
 	 * model ({@link generateTitle}) takes over when the fork cannot run, fails,
 	 * times out or declines, and is the only path under `tiny`.
 	 *
@@ -9478,32 +9477,33 @@ export class AgentSession implements SettingsScope {
 		if (this.sessionManager.getSessionId() !== sessionId || this.sessionName) return;
 		this.#titleGenerationInFlightFor = sessionId;
 		const started = performance.now();
-		const icons = cfgTitleIcons.get(this.settings);
+		// Ask only for the icons the title can show: an emoji without Nerd Fonts, no card when boring.
+		const configuredIcons = cfgTitleIcons.get(this.settings);
+		const icons = configuredIcons === "nf+emoji" && !nerdGlyphsActive() ? "emoji" : configuredIcons;
 		this.runEphemeralTurn({
-			// Ask only for the icons the title can show: an emoji without Nerd Fonts, no card when boring.
 			promptText: prompt.render(titleForkPrompt, {
 				card: icons !== "boring",
-				nerdFonts: icons === "nf+emoji" && nerdGlyphsActive(),
+				nerdFonts: icons === "nf+emoji",
 			}),
 			signal: AbortSignal.any([fork.signal, AbortSignal.timeout(TITLE_FORK_TIMEOUT_MS)]),
 		})
 			.then(
 				async ({ replyText, assistantMessage }) => {
-					const parsed = parseCardTitleReply(replyText, fork.input);
+					const title = parseCardTitleReply(replyText, icons, fork.input);
 					logger.debug("title-generator: fork reply", {
 						sessionId,
 						ms: Math.round(performance.now() - started),
 						usage: assistantMessage.usage,
 						reply: replyText.slice(0, 300),
-						title: parsed?.title,
+						title,
 					});
 					if (this.#titleGenerationInFlightFor === sessionId) this.#titleGenerationInFlightFor = undefined;
-					if (fork.signal.aborted || !parsed) {
+					if (fork.signal.aborted || !title) {
 						this.#fallBackFromTitleFork(fork);
 						return;
 					}
 					if (this.sessionManager.getSessionId() !== sessionId || this.sessionName) return;
-					await this.sessionManager.setSessionName(parsed.title, "auto", undefined, parsed.card);
+					await this.sessionManager.setSessionName(title, "auto");
 					this.#deferredTitle = undefined;
 				},
 				(err: unknown) => {
@@ -9645,11 +9645,16 @@ export class AgentSession implements SettingsScope {
 		if (this.sessionManager.getSessionId() !== sessionId) return;
 		if (!cfgTitleRefreshOnReplan.get(this.settings)) return;
 		if (this.sessionManager.titleSource === "user") return;
-		// A replan refines the same task: the session keeps its card index (the
-		// title model names no card), so a card terminal's index stays stable.
-		const card = this.sessionManager.getSessionTitleCard();
+		// A replan refines the same task: the title keeps its card (the title
+		// model names none), so a card terminal's index stays stable.
+		const card = splitCardTitle(this.sessionManager.getSessionName() ?? "");
 		const setSessionName = this.sessionManager.setSessionName as SetSessionNameWithTrigger;
-		await setSessionName.call(this.sessionManager, title, "auto", "replan", card);
+		await setSessionName.call(
+			this.sessionManager,
+			card ? `${card.icon} ${card.code}: ${title}` : title,
+			"auto",
+			"replan",
+		);
 	}
 
 	/** Currently-applied {@link TITLE_SYSTEM.md} override, or undefined when the
@@ -11856,9 +11861,8 @@ export class AgentSession implements SettingsScope {
 				if (!leafId) {
 					const title = this.sessionManager.getSessionName();
 					const titleSource = this.sessionManager.titleSource;
-					const titleCard = this.sessionManager.getSessionTitleCard();
 					await this.sessionManager.newSession({ parentSession: previousSessionFile });
-					if (title) await this.sessionManager.setSessionName(title, titleSource, undefined, titleCard);
+					if (title) await this.sessionManager.setSessionName(title, titleSource);
 				} else {
 					this.sessionManager.createBranchedSession(leafId, { copyArtifacts: options?.copyArtifacts });
 				}
