@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- fulltest now verifies only the modules and crates the fork diff touches: each changed TS module runs its whole suite and each changed crate its own tests, while untouched modules, consumer closures, and Python components stay out of the gate; shared-config, deleted-module, and unresolvable-scope inputs still select everything, vendored crate changes test their consumers, and `--dry-run` prints the selected plan.
+
 ### Breaking Changes
 
 - Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.

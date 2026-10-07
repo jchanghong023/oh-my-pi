@@ -11,6 +11,7 @@ type Mode =
 	| "local-ts"
 	| "workspace"
 	| "native"
+	| "affected"
 	| "coding-agent-singleton"
 	| "coding-agent-ui"
 	| "coding-agent-runtime"
@@ -55,6 +56,7 @@ const validModes: Record<Mode, true> = {
 	"local-ts": true,
 	workspace: true,
 	native: true,
+	affected: true,
 	"coding-agent-singleton": true,
 	"coding-agent-ui": true,
 	"coding-agent-runtime": true,
@@ -230,17 +232,34 @@ function rustTestCommand(): TestCommand {
 		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
 	};
 }
+const testFilePattern = /(?:^|[._-])(?:test|spec)\.[cm]?[jt]sx?$/i;
+const excludedTestDiscoveryDirectories: Record<string, true> = {
+	".git": true,
+	".hg": true,
+	".svn": true,
+	node_modules: true,
+	fixtures: true,
+	__fixtures__: true,
+};
+const packageOutputDirectories: Record<string, true> = { dist: true, build: true, out: true, coverage: true };
 
 async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+		if (
+			entry.isDirectory() &&
+			(excludedTestDiscoveryDirectories[entry.name.toLowerCase()] ||
+				(root === baseDir && packageOutputDirectories[entry.name.toLowerCase()]))
+		) {
+			continue;
+		}
 		const filePath = path.join(root, entry.name);
 		if (entry.isDirectory()) {
 			files.push(...(await collectTestsUnder(filePath, baseDir)));
 			continue;
 		}
-		if (!entry.isFile() || !entry.name.endsWith(".test.ts")) {
+		if (!entry.isFile() || !testFilePattern.test(entry.name)) {
 			continue;
 		}
 		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
@@ -290,7 +309,7 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> {
 	codingAgentTestPartitionPromise ??= (async () => {
 		const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
-		const testFiles = (await collectTestsUnder(path.join(codingAgentDir, "test"), codingAgentDir)).sort();
+		const testFiles = (await collectTestsUnder(codingAgentDir, codingAgentDir)).sort();
 		const partition: CodingAgentTestPartition = {
 			singleton: [],
 			ui: [],
@@ -331,8 +350,115 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 	return commands;
 }
 
-async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
+interface RootPackageManifest {
+	workspaces?: string[] | { packages?: string[] };
+}
+
+async function parseAffectedPackages(argv: string[]): Promise<string[]> {
+	const packageArgs = argv.filter(arg => arg === "--packages" || arg.startsWith("--packages="));
+	if (packageArgs.length !== 1 || !packageArgs[0].startsWith("--packages=")) {
+		throw new Error("affected mode requires exactly one --packages=<JSON string array>");
+	}
+
+	let requested: unknown;
+	try {
+		requested = JSON.parse(packageArgs[0].slice("--packages=".length));
+	} catch {
+		throw new Error("--packages must contain a JSON string array");
+	}
+	if (!Array.isArray(requested) || !(requested as unknown[]).every((pkg): pkg is string => typeof pkg === "string")) {
+		throw new Error("--packages must contain a JSON string array");
+	}
+
+	const rootManifest = (await Bun.file(path.join(repoRoot, "package.json")).json()) as RootPackageManifest;
+	const workspacePatterns = Array.isArray(rootManifest.workspaces)
+		? rootManifest.workspaces
+		: (rootManifest.workspaces?.packages ?? []);
+	const realRepoRoot = await fs.realpath(repoRoot);
+	const selected: string[] = [];
+	const seen = new Set<string>();
+
+	for (const pkg of requested as string[]) {
+		if (
+			!pkg ||
+			pkg.includes("\\") ||
+			pkg.endsWith("/") ||
+			path.posix.isAbsolute(pkg) ||
+			path.win32.parse(pkg).root !== "" ||
+			path.posix.normalize(pkg) !== pkg
+		) {
+			throw new Error(`Invalid workspace package path ${JSON.stringify(pkg)}`);
+		}
+		if (seen.has(pkg)) {
+			throw new Error(`Duplicate workspace package ${JSON.stringify(pkg)}`);
+		}
+		seen.add(pkg);
+
+		const included = workspacePatterns.some(pattern => !pattern.startsWith("!") && new Bun.Glob(pattern).match(pkg));
+		const excluded = workspacePatterns.some(
+			pattern => pattern.startsWith("!") && new Bun.Glob(pattern.slice(1)).match(pkg),
+		);
+		if (!included || excluded) {
+			throw new Error(`${JSON.stringify(pkg)} is not a package.json workspace directory`);
+		}
+
+		const packageRoot = path.join(repoRoot, ...pkg.split("/"));
+		const packageManifestPath = path.join(packageRoot, "package.json");
+		try {
+			if (!(await fs.stat(packageManifestPath)).isFile()) {
+				throw new Error("missing package.json");
+			}
+			const realPackageRoot = await fs.realpath(packageRoot);
+			const relative = path.relative(realRepoRoot, realPackageRoot);
+			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+				throw new Error("outside repository");
+			}
+		} catch {
+			throw new Error(`${JSON.stringify(pkg)} is not an existing workspace package`);
+		}
+		selected.push(pkg);
+	}
+	return selected;
+}
+
+async function affectedTestCommands(packages: string[]): Promise<TestCommand[]> {
+	if (packages.length === 0) {
+		console.log("No affected workspace packages selected; nothing to run.");
+		return [];
+	}
+
+	const commands: TestCommand[] = [];
+	for (const pkg of packages) {
+		if (pkg === "packages/coding-agent") {
+			const partition = await getCodingAgentTestPartition();
+			const testCount = Object.values(partition).reduce((count, files) => count + files.length, 0);
+			if (testCount === 0) {
+				console.log(`==> ${pkg}: skipped (no tests found)`);
+				continue;
+			}
+			commands.push(...(await commandsForMode("coding-agent-heavy")));
+			continue;
+		}
+
+		const packageRoot = path.join(repoRoot, ...pkg.split("/"));
+		const tests = await collectTestsUnder(packageRoot, packageRoot);
+		if (tests.length === 0) {
+			console.log(`==> ${pkg}: skipped (no tests found)`);
+			continue;
+		}
+		commands.push(
+			workspaceTestCommand(pkg, fastWorkspacePackages.includes(pkg) ? 8 : 4, {
+				extraArgs: [...onlyFailuresArgs, ...tests],
+			}),
+		);
+	}
+	return commands;
+}
+
+async function commandsForMode(mode: Mode, affectedPackages: string[] = []): Promise<TestCommand[]> {
 	switch (mode) {
+		case "affected":
+			return await affectedTestCommands(affectedPackages);
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
 		case "native":
@@ -971,7 +1097,14 @@ if (import.meta.main) {
 		);
 	}
 
-	const requestedCommands = selectShard(await commandsForMode(requestedMode as Mode), Bun.env.OMP_TEST_SHARD);
+	const hasPackagesArgument = args.some(arg => arg === "--packages" || arg.startsWith("--packages="));
+	if (requestedMode !== "affected" && hasPackagesArgument) {
+		throw new Error("--packages is only valid with affected mode");
+	}
+	const affectedPackages = requestedMode === "affected" ? await parseAffectedPackages(args) : [];
+	const allCommands = await commandsForMode(requestedMode as Mode, affectedPackages);
+	const requestedCommands =
+		requestedMode === "affected" ? allCommands : selectShard(allCommands, Bun.env.OMP_TEST_SHARD);
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
 	// explicitly opt into bounded process concurrency. Local runs fan out by
