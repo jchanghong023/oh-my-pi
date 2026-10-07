@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { ptree, TempDir } from "@oh-my-pi/pi-utils";
-import { selectShard } from "./ci-test-ts";
+import { selectShard, testTimeoutMs } from "./ci-test-ts";
+
+describe("shared per-test budget", () => {
+	test("converts valid second overrides to Bun's millisecond budget", () => {
+		expect(testTimeoutMs(" 2.5 ")).toBe(2500);
+		expect(testTimeoutMs("1")).toBe(1000);
+	});
+
+	test("invalid overrides preserve the upstream hang ceiling", () => {
+		for (const override of ["", "0", "-1", "0.5", "Infinity", "invalid"]) {
+			expect(testTimeoutMs(override)).toBe(30_000);
+		}
+	});
+});
 
 describe("test runner watchdog", () => {
 	// Parent fake timers cannot drive the real watchdog inside the isolated runner process.

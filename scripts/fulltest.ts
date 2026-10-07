@@ -15,6 +15,7 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
+import { testTimeoutMs } from "./ci-test-ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -196,7 +197,7 @@ async function runForkTestsPhase(): Promise<void> {
 			await runPhase(
 				{
 					label: `ts/fork ${batch.cwd} (${files.length} files${suffix})`,
-					argv: ["bun", "test", ...files],
+					argv: ["bun", "test", `--timeout=${testTimeoutMs()}`, ...files],
 				},
 				path.join(repoRoot, batch.cwd),
 			);

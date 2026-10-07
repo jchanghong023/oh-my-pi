@@ -605,8 +605,8 @@ function budgetedParallel(requested: number, poolWidth: number): number {
 // so keep a ceiling — just one loose enough to only fire on a real hang. The
 // per-chunk watchdog (chunkTimeoutMs) remains the backstop for a wedged process.
 // Override with OMP_TEST_TIMEOUT (seconds); per-test `it(name, fn, ms)` still wins.
-function testTimeoutMs(): number {
-	const raw = Number(Bun.env.OMP_TEST_TIMEOUT?.trim());
+export function testTimeoutMs(override: string | undefined = Bun.env.OMP_TEST_TIMEOUT): number {
+	const raw = Number(override?.trim());
 	if (Number.isFinite(raw) && raw >= 1) return raw * 1000;
 	return 30_000;
 }
