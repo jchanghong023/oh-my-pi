@@ -42,11 +42,6 @@ import {
 } from "../config/service-tier";
 import type { CompactionThresholdPair } from "../config/compaction-threshold";
 import { type OverlayLayers, Settings } from "../config/settings";
-import {
-	createRpcSubagentPermissionBridge,
-	getRpcSubagentPermissionDelegate,
-	scopeSubagentApprovalForDelegation,
-} from "../modes/rpc/rpc-fork-permission";
 
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -3756,10 +3751,6 @@ interface WarmReviveCapture {
 	/** Todos are parent-owned and stripped from subagents, except under prewalk (its todo gate needs them). */
 	keepTodo: boolean;
 	wake: IrcWakeTurnMonitorOptions;
-	/** Fork RPC v3 permission delegate captured at spawn; undefined outside fork RPC mode. */
-	permissionDelegate: ReturnType<typeof getRpcSubagentPermissionDelegate>;
-	/** Agent name for the revived subagent's permission-origin badge. */
-	agentName: string;
 }
 
 /** Keeps `capture.settings` current with `session`'s overlay writes until the session is disposed. */
@@ -3813,18 +3804,6 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		}
 		mcpFollower?.bind(revived);
 		trackSubagentSettings(revived, capture);
-		// RPC v3 permission delegation on the revive path (same as fresh spawns):
-		// subagent approval requests surface on the main connection with an
-		// origin badge, decided at the parent's tier.
-		if (capture.permissionDelegate) {
-			scopeSubagentApprovalForDelegation(revived, capture.permissionDelegate);
-			revived.setClientBridge(
-				createRpcSubagentPermissionBridge(
-					{ subagentId: id, agentType: capture.agentName },
-					capture.permissionDelegate,
-				),
-			);
-		}
 		// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
 		// runner pre-init, so a `tool_call` handler touching a runtime action trips the
 		// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
@@ -3897,7 +3876,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const settings = options.settings ?? Settings.isolated();
-	const rpcPermissionDelegate = getRpcSubagentPermissionDelegate(settings);
 	// Per-agent advisor: the agent definition's `advisor` frontmatter or the
 	// `task.agentAdvisor` settings override (agent name → "on"/"off"/model
 	// pattern) pairs the spawned session with an advisor. Subagents default to
@@ -4397,18 +4375,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				void sessionPromise?.then(created => created.session.dispose()).catch(() => {});
 				throw err;
 			}
-			// RPC v3 permission delegation: subagent approval requests surface on
-			// the main connection with an origin badge. The delegate only exists
-			// in fork RPC mode, so every other host keeps hasUI:false semantics.
-			// Session-local prompt policies for the four gateway-covered tools
-			// (RPC mode only) force their wrapping so approval requests route
-			// through that bridge, decided at the parent's tier.
-			if (rpcPermissionDelegate) {
-				scopeSubagentApprovalForDelegation(session, rpcPermissionDelegate);
-				session.setClientBridge(
-					createRpcSubagentPermissionBridge({ subagentId: id, agentType: agent.name }, rpcPermissionDelegate),
-				);
-			}
 			mcpFollower?.bind(session);
 			// The SDK records a new session's initial model as the default role.
 			// Pin the child's own chain so a parent default sharing that model
@@ -4456,8 +4422,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					parentArtifactManager: options.parentArtifactManager,
 					keepTodo: prewalk !== undefined,
 					wake: wakeOptions,
-					permissionDelegate: rpcPermissionDelegate,
-					agentName: agent.name,
 				};
 				trackSubagentSettings(session, reviveCapture);
 				reviveSession = createWarmSubagentReviver(reviveCapture);

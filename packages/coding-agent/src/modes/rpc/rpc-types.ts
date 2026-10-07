@@ -37,33 +37,13 @@ export type RpcCommand =
 	| { id?: string; type: "negotiate_protocol"; protocolVersion: number }
 
 	// Prompting
-	| {
-			id?: string;
-			type: "prompt";
-			message: string;
-			images?: ImageContent[];
-			streamingBehavior?: "steer" | "followUp";
-			/**
-			 * How the message is dispatched. Project mode (`rpc-ui-project`) defaults to
-			 * `"text"`: the message is sent to the model as plain text even when it
-			 * starts with "/". `"auto"` routes it through strict command dispatch (skill
-			 * and builtin commands); an unknown "/..." is rejected instead of reaching
-			 * the model. The legacy single-session mode keeps its current
-			 * slash-handling behavior regardless of this field.
-			 */
-			inputMode?: "text" | "auto";
-	  }
-	| { id?: string; type: "remove_queued_message"; message: string; queue: "steering" | "followUp" }
-	| { id?: string; type: "promote_queued_message"; message: string }
+	| { id?: string; type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
+	| { id?: string; type: "remove_queued_message"; message: string; queue: "steering" | "followUp" }
+	| { id?: string; type: "promote_queued_message"; message: string }
 	| { id?: string; type: "abort" }
-	| {
-			id?: string;
-			type: "abort_and_prompt";
-			message: string;
-			images?: ImageContent[];
-	  }
+	| { id?: string; type: "abort_and_prompt"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort_and_restore_queue" }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "open_session"; sessionDir: string; provider?: string; modelId?: string }
@@ -140,18 +120,7 @@ export type RpcCommand =
 
 	// Messages
 	| { id?: string; type: "get_messages" }
-	| {
-			id?: string;
-			type: "get_messages_page";
-			cursor?: string;
-			limit?: number;
-			/** Walk direction when no cursor is given; cursors carry their own. */
-			order?: "asc" | "desc";
-			/** Anchor cursor: page immediately before this offset (exclusive, newest-first). */
-			before?: string;
-			/** Anchor cursor: page starting at this offset (inclusive, oldest-first). */
-			after?: string;
-	  }
+	| { id?: string; type: "get_messages_page"; cursor?: string; limit?: number }
 
 	// Login
 	| { id?: string; type: "get_login_providers" }
@@ -348,21 +317,9 @@ export interface RpcAbortAndRestoreQueueResult {
 export interface RpcReadyFrame {
 	type: "ready";
 	protocolVersion: 1;
-	/** Upstream stock announces [1, 2]; fork single-session [1, 2, 3]; project mode [3]. */
-	supportedProtocolVersions: [1, 2] | [1, 2, 3] | [3];
+	supportedProtocolVersions: [1, 2];
 	maxFrameBytes: number;
 	maxReassembledFrameBytes: number;
-	/**
-	 * Session topology this process hosts: single-session `rpc-ui` (the default
-	 * when omitted) or multi-session `rpc-ui-project` (project fields below).
-	 */
-	mode?: "rpc-ui" | "rpc-ui-project";
-	/** Project mode: the workspace root this process serves. */
-	projectIdentity?: { projectRoot: string };
-	/** Project mode: process instance identity announced at ready; changes across restarts. */
-	processInstanceId?: string;
-	/** Project mode: capability flags the host advertises. */
-	capabilities?: Record<string, boolean>;
 }
 
 export interface RpcChunkFrame {
@@ -416,7 +373,7 @@ export type RpcResponse =
 			type: "response";
 			command: "negotiate_protocol";
 			success: true;
-			data: { protocolVersion: 2 | 3 };
+			data: { protocolVersion: 2 };
 	  }
 
 	// Prompting (async - events follow)
@@ -750,8 +707,6 @@ export type RpcExtensionUIRequest =
 			title: string;
 			placeholder?: string;
 			timeout?: number;
-			/** v3 only: render as a password/secret field (login secret inputs). */
-			sensitive?: boolean;
 	  }
 	| {
 			type: "extension_ui_request";
@@ -760,8 +715,6 @@ export type RpcExtensionUIRequest =
 			title: string;
 			prefill?: string;
 			promptStyle?: boolean;
-			/** v3 only: render as a password/secret field. */
-			sensitive?: boolean;
 	  }
 	/** Emitted only after the host opts in with `set_ask_dialog`. */
 	| {
@@ -833,9 +786,6 @@ export interface RpcHostToolCallRequest {
 	toolCallId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
-	/** Project mode: owning session stamp the host echoes back on result/update frames. */
-	sessionId?: string;
-	sessionGeneration?: string;
 }
 
 /** Emitted by the RPC server when a pending host tool call should be aborted. */
@@ -850,9 +800,6 @@ export interface RpcHostToolUpdate {
 	type: "host_tool_update";
 	id: string;
 	partialResult: AgentToolResult<unknown>;
-	/** Project mode: echoed from the `host_tool_call` frame so the project host accepts it. */
-	sessionId?: string;
-	sessionGeneration?: string;
 }
 
 /** Sent by the host to complete a pending tool call. */
@@ -861,9 +808,6 @@ export interface RpcHostToolResult {
 	id: string;
 	result: AgentToolResult<unknown>;
 	isError?: boolean;
-	/** Project mode: echoed from the `host_tool_call` frame so the project host accepts it. */
-	sessionId?: string;
-	sessionGeneration?: string;
 }
 
 // ============================================================================

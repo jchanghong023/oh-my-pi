@@ -14,10 +14,6 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 /** WSL2 distro under test; must match the registered name from `wsl --list`. */
 export const WSL_TEST_DISTRIBUTION = "Ubuntu-24.04";
 
-/** The nested WSL fulltest compiles Rust from a possibly cold cache, so the
- * stage owns a far wider budget than any single test phase. */
-export const WSL_STAGE_TIMEOUT_MS = 2 * 60 * 60_000;
-
 export interface WslDistro {
 	name: string;
 	state: string;
@@ -318,64 +314,26 @@ function checkWslToolchain(distro: string): void {
 	}
 }
 
-function killProcessTree(child: { pid: number }): void {
-	Bun.spawnSync(["taskkill.exe", "/PID", String(child.pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" });
-}
-
-/** Kill only descendants carrying this invocation's inherited ownership token,
- * including fulltest phases that create their own process groups. */
-export function wslStageCleanupCommand(stageId: string): string {
-	return [
-		"for file in /proc/[0-9]*/environ; do",
-		'  [ -r "$file" ] || continue',
-		`  if tr '\\0' '\\n' < "$file" 2>/dev/null | grep -Fxq -- ${quote(`OMP_WSL_STAGE_ID=${stageId}`)}; then`,
-		'    pid="${file#/proc/}"',
-		'    pid="${pid%/environ}"',
-		'    kill -KILL "$pid" 2>/dev/null || true',
-		"  fi",
-		"done",
-	].join("\n");
-}
-
 async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
-	// A fresh clone has no node_modules, so the install is part of the timed
-	// command: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
-	// must exist before fulltest, and a hung network install has to hit the
-	// same invocation-scoped cancellation boundary as the test run itself.
-	const stageId = crypto.randomUUID();
-	const command = `OMP_WSL_STAGE_ID=${quote(stageId)} bash -lc ${quote(`cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`)}`;
+	// A fresh clone has no node_modules, so the install runs in the same
+	// invocation: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
+	// must exist before fulltest. No fork-side time budget: the nested run owns
+	// its own failure reporting and a hung run is stopped by the operator, never
+	// silently by a timer here.
+	const command = `bash -lc ${quote(`cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`)}`;
 	console.log(`\n==> wsl/fulltest`);
 	console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
 	const child = Bun.spawn(
 		["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-lc", command],
 		{ cwd: repoRoot, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
 	);
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		// Detached test phases are not children of the Windows-side wsl.exe.
-		// Scope Linux cleanup to this run, never other fulltest/nextest installs.
-		Bun.spawnSync(
-			["wsl.exe", "--distribution", distro, "--user", "root", "--", "bash", "-lc", wslStageCleanupCommand(stageId)],
-			{ cwd: repoRoot, stdin: "ignore", stdout: "ignore", stderr: "ignore" },
-		);
-		killProcessTree(child);
-	}, WSL_STAGE_TIMEOUT_MS);
-	try {
-		const exitCode = await child.exited;
-		if (timedOut) {
-			console.error(`wsl-stage: FAIL — exceeded the ${WSL_STAGE_TIMEOUT_MS / 60_000}-minute budget`);
-			return 1;
-		}
-		if (exitCode !== 0) {
-			console.error(`wsl-stage: FAIL — bun run fulltest exited with code ${exitCode}`);
-			return 1;
-		}
-		console.log("wsl-stage: PASS (Ubuntu-24.04 fulltest)");
-		return 0;
-	} finally {
-		clearTimeout(timer);
+	const exitCode = await child.exited;
+	if (exitCode !== 0) {
+		console.error(`wsl-stage: FAIL — bun run fulltest exited with code ${exitCode}`);
+		return 1;
 	}
+	console.log("wsl-stage: PASS (Ubuntu-24.04 fulltest)");
+	return 0;
 }
 
 async function main(): Promise<number> {

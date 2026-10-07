@@ -43,6 +43,7 @@ import Update from "@oh-my-pi/pi-coding-agent/commands/update";
 import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { canCreateSymlinks } from "./helpers/symlink-privilege";
 
 const miseBinary = Bun.env.MISE_BIN ?? $which("mise");
 
@@ -335,54 +336,60 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("npm");
 	});
 
-	it("updates the standalone binary behind a foreign npm-bin alias without replacing the alias", async () => {
-		const dir = await makeTempDir();
-		const npmBinDir = path.join(dir, ".npm-global", "bin");
-		const standalonePath = path.join(dir, ".local", "bin", "omp");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await Bun.write(standalonePath, "binary");
-		await fs.symlink(standalonePath, aliasPath);
+	it.skipIf(!canCreateSymlinks())(
+		"updates the standalone binary behind a foreign npm-bin alias without replacing the alias",
+		async () => {
+			const dir = await makeTempDir();
+			const npmBinDir = path.join(dir, ".npm-global", "bin");
+			const standalonePath = path.join(dir, ".local", "bin", "omp");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await Bun.write(standalonePath, "binary");
+			await fs.symlink(standalonePath, aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: true,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: true,
+				npmBinDir,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: standalonePath,
-			replacesSymlink: false,
-			validateExistingTarget: true,
-		});
-		expect(await fs.readlink(aliasPath)).toBe(standalonePath);
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: standalonePath,
+				replacesSymlink: false,
+				validateExistingTarget: true,
+			});
+			expect(await fs.readlink(aliasPath)).toBe(standalonePath);
+		},
+	);
 
-	it("keeps an npm-linked checkout under npm management instead of overwriting its resolved script", async () => {
-		const dir = await makeTempDir();
-		const npmPrefix = path.join(dir, ".npm-global");
-		const { binDir: npmBinDir, nodeModulesDir } = npmGlobalLayout(npmPrefix);
-		const packagePath = path.join(nodeModulesDir, "@oh-my-pi", "pi-coding-agent");
-		const checkoutPath = path.join(dir, "checkout");
-		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(packagePath), { recursive: true });
-		await Bun.write(checkoutCli, "linked checkout");
-		await fs.symlink(checkoutPath, packagePath, "junction");
-		await fs.symlink(path.relative(npmBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+	it.skipIf(!canCreateSymlinks())(
+		"keeps an npm-linked checkout under npm management instead of overwriting its resolved script",
+		async () => {
+			const dir = await makeTempDir();
+			const npmPrefix = path.join(dir, ".npm-global");
+			const { binDir: npmBinDir, nodeModulesDir } = npmGlobalLayout(npmPrefix);
+			const packagePath = path.join(nodeModulesDir, "@oh-my-pi", "pi-coding-agent");
+			const checkoutPath = path.join(dir, "checkout");
+			const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(packagePath), { recursive: true });
+			await Bun.write(checkoutCli, "linked checkout");
+			await fs.symlink(checkoutPath, packagePath, "junction");
+			await fs.symlink(path.relative(npmBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: true,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: true,
+				npmBinDir,
+			});
 
-		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
-		expect(target).toEqual({ method: "npm", path: aliasPath });
-		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
-	});
+			expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+			expect(target).toEqual({ method: "npm", path: aliasPath });
+			expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
+		},
+	);
 
-	it("treats a Bun-bin alias into ~/.bun/custom as foreign", async () => {
+	it.skipIf(!canCreateSymlinks())("treats a Bun-bin alias into ~/.bun/custom as foreign", async () => {
 		const dir = await makeTempDir();
 		const bunDir = path.join(dir, ".bun");
 		const bunBinDir = path.join(bunDir, "bin");
@@ -404,34 +411,37 @@ describe("update-cli install target detection", () => {
 		});
 	});
 
-	it("resolves a foreign symlink to its real binary on a binary-only release instead of clobbering the launcher", async () => {
-		// Admin shared-install layout: a non-manager symlink in PATH points into
-		// a shared install dir. On a binary-only release the target must still be
-		// the resolved binary, not the launcher — otherwise the update writes
-		// beside a root-owned symlink (EACCES) or replaces it with a split-brain
-		// copy that shadows the shared install (#8732).
-		const dir = await makeTempDir();
-		const sharedBinDir = path.join(dir, "opt", "omp", "bin");
-		const standalonePath = path.join(sharedBinDir, "omp");
-		const launcherDir = path.join(dir, "usr", "local", "bin");
-		const launcherPath = path.join(launcherDir, "omp");
-		await fs.mkdir(sharedBinDir, { recursive: true });
-		await fs.mkdir(launcherDir, { recursive: true });
-		await Bun.write(standalonePath, "binary");
-		await fs.symlink(standalonePath, launcherPath);
+	it.skipIf(!canCreateSymlinks())(
+		"resolves a foreign symlink to its real binary on a binary-only release instead of clobbering the launcher",
+		async () => {
+			// Admin shared-install layout: a non-manager symlink in PATH points into
+			// a shared install dir. On a binary-only release the target must still be
+			// the resolved binary, not the launcher — otherwise the update writes
+			// beside a root-owned symlink (EACCES) or replaces it with a split-brain
+			// copy that shadows the shared install (#8732).
+			const dir = await makeTempDir();
+			const sharedBinDir = path.join(dir, "opt", "omp", "bin");
+			const standalonePath = path.join(sharedBinDir, "omp");
+			const launcherDir = path.join(dir, "usr", "local", "bin");
+			const launcherPath = path.join(launcherDir, "omp");
+			await fs.mkdir(sharedBinDir, { recursive: true });
+			await fs.mkdir(launcherDir, { recursive: true });
+			await Bun.write(standalonePath, "binary");
+			await fs.symlink(standalonePath, launcherPath);
 
-		const target = resolveUpdateTargetFromPath(launcherPath, undefined, {
-			allowPackageManagers: false,
-		});
+			const target = resolveUpdateTargetFromPath(launcherPath, undefined, {
+				allowPackageManagers: false,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: standalonePath,
-			replacesSymlink: false,
-			validateExistingTarget: true,
-		});
-		expect(await fs.readlink(launcherPath)).toBe(standalonePath);
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: standalonePath,
+				replacesSymlink: false,
+				validateExistingTarget: true,
+			});
+			expect(await fs.readlink(launcherPath)).toBe(standalonePath);
+		},
+	);
 
 	it.skipIf(process.platform === "win32")(
 		"refuses to overwrite a shared shebang dispatcher behind a foreign symlink",
@@ -488,56 +498,62 @@ describe("update-cli install target detection", () => {
 		},
 	);
 
-	it("takes over a package-manager launcher in place on a binary-only release", async () => {
-		// A bun/npm-managed launcher symlinks into the manager's node_modules.
-		// A forced binary release cannot route through the manager, so the
-		// launcher is deliberately replaced in place, keeping the PATH entry live.
-		const dir = await makeTempDir();
-		const npmPrefix = path.join(dir, ".npm-global");
-		const { binDir: npmBinDir, nodeModulesDir } = npmGlobalLayout(npmPrefix);
-		const managedBinary = path.join(nodeModulesDir, "@oh-my-pi", "pi-coding-agent", "omp");
-		const aliasPath = path.join(npmBinDir, "omp");
-		await fs.mkdir(npmBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(managedBinary), { recursive: true });
-		await Bun.write(managedBinary, "binary");
-		await fs.symlink(managedBinary, aliasPath);
+	it.skipIf(!canCreateSymlinks())(
+		"takes over a package-manager launcher in place on a binary-only release",
+		async () => {
+			// A bun/npm-managed launcher symlinks into the manager's node_modules.
+			// A forced binary release cannot route through the manager, so the
+			// launcher is deliberately replaced in place, keeping the PATH entry live.
+			const dir = await makeTempDir();
+			const npmPrefix = path.join(dir, ".npm-global");
+			const { binDir: npmBinDir, nodeModulesDir } = npmGlobalLayout(npmPrefix);
+			const managedBinary = path.join(nodeModulesDir, "@oh-my-pi", "pi-coding-agent", "omp");
+			const aliasPath = path.join(npmBinDir, "omp");
+			await fs.mkdir(npmBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(managedBinary), { recursive: true });
+			await Bun.write(managedBinary, "binary");
+			await fs.symlink(managedBinary, aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
-			allowPackageManagers: false,
-			npmBinDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, undefined, {
+				allowPackageManagers: false,
+				npmBinDir,
+			});
 
-		expect(target).toEqual({
-			method: "binary",
-			path: aliasPath,
-			replacesSymlink: true,
-			validateExistingTarget: false,
-		});
-	});
+			expect(target).toEqual({
+				method: "binary",
+				path: aliasPath,
+				replacesSymlink: true,
+				validateExistingTarget: false,
+			});
+		},
+	);
 
-	it("keeps a split-root Bun-linked checkout under Bun management instead of overwriting its script", async () => {
-		const dir = await makeTempDir();
-		const bunBinDir = path.join(dir, "bun-bin");
-		const bunGlobalDir = path.join(dir, "bun-global");
-		const packagePath = path.join(bunGlobalDir, "node_modules", "@oh-my-pi", "pi-coding-agent");
-		const checkoutPath = path.join(dir, "checkout");
-		const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
-		const aliasPath = path.join(bunBinDir, "omp");
-		await fs.mkdir(bunBinDir, { recursive: true });
-		await fs.mkdir(path.dirname(packagePath), { recursive: true });
-		await Bun.write(checkoutCli, "linked checkout");
-		await fs.symlink(checkoutPath, packagePath, "junction");
-		await fs.symlink(path.relative(bunBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
+	it.skipIf(!canCreateSymlinks())(
+		"keeps a split-root Bun-linked checkout under Bun management instead of overwriting its script",
+		async () => {
+			const dir = await makeTempDir();
+			const bunBinDir = path.join(dir, "bun-bin");
+			const bunGlobalDir = path.join(dir, "bun-global");
+			const packagePath = path.join(bunGlobalDir, "node_modules", "@oh-my-pi", "pi-coding-agent");
+			const checkoutPath = path.join(dir, "checkout");
+			const checkoutCli = path.join(checkoutPath, "dist", "cli.js");
+			const aliasPath = path.join(bunBinDir, "omp");
+			await fs.mkdir(bunBinDir, { recursive: true });
+			await fs.mkdir(path.dirname(packagePath), { recursive: true });
+			await Bun.write(checkoutCli, "linked checkout");
+			await fs.symlink(checkoutPath, packagePath, "junction");
+			await fs.symlink(path.relative(bunBinDir, path.join(packagePath, "dist", "cli.js")), aliasPath);
 
-		const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
-			allowPackageManagers: true,
-			bunGlobalDir,
-		});
+			const target = resolveUpdateTargetFromPath(aliasPath, bunBinDir, {
+				allowPackageManagers: true,
+				bunGlobalDir,
+			});
 
-		expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
-		expect(target).toEqual({ method: "bun", path: aliasPath });
-		expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
-	});
+			expect(await fs.realpath(aliasPath)).toBe(checkoutCli);
+			expect(target).toEqual({ method: "bun", path: aliasPath });
+			expect(await Bun.file(checkoutCli).text()).toBe("linked checkout");
+		},
+	);
 
 	it("uses binary update when prioritized omp is outside bun global bin", () => {
 		const method = resolveUpdateMethodForTest("/Users/test/.local/bin/omp", "/Users/test/.bun/bin");
@@ -551,21 +567,24 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("binary");
 	});
 
-	it("uses Homebrew update when prioritized omp resolves into the Homebrew formula", async () => {
-		const dir = await makeTempDir();
-		const prefix = path.join(dir, "opt", "omp");
-		const linkedBin = path.join(dir, "bin");
-		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
-		await fs.mkdir(linkedBin, { recursive: true });
-		await Bun.write(path.join(prefix, "bin", "omp"), "binary");
-		await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
+	it.skipIf(!canCreateSymlinks())(
+		"uses Homebrew update when prioritized omp resolves into the Homebrew formula",
+		async () => {
+			const dir = await makeTempDir();
+			const prefix = path.join(dir, "opt", "omp");
+			const linkedBin = path.join(dir, "bin");
+			await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
+			await fs.mkdir(linkedBin, { recursive: true });
+			await Bun.write(path.join(prefix, "bin", "omp"), "binary");
+			await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
 
-		const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
-			homebrewPrefix: prefix,
-		});
+			const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
+				homebrewPrefix: prefix,
+			});
 
-		expect(method).toBe("brew");
-	});
+			expect(method).toBe("brew");
+		},
+	);
 
 	it("uses mise update when prioritized omp is in an active mise bin path", () => {
 		const method = resolveUpdateMethodForTest(

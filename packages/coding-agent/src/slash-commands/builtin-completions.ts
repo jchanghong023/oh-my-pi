@@ -26,7 +26,10 @@ type EffortCompletionRuntime = {
 };
 type ModelCompletionRuntime = {
 	ctx: Pick<TuiSlashCommandRuntime["ctx"], "settings"> & {
-		session: Pick<TuiSlashCommandRuntime["ctx"]["session"], "modelRegistry" | "scopedModels">;
+		session: Pick<
+			TuiSlashCommandRuntime["ctx"]["session"],
+			"modelRegistry" | "scopedModels" | "effectiveServiceTier"
+		>;
 	};
 };
 type McpCompletionRuntime = { ctx: Pick<TuiSlashCommandRuntime["ctx"], "mcpManager"> };

@@ -44,7 +44,6 @@ export const launchHelp = {
 		}),
 		"append-system-prompt": Flags.string({ description: "Append text or file contents to the system prompt" }),
 		"allow-home": Flags.boolean({ description: "Allow starting in ~ without auto-switching to a temp dir" }),
-		"log-file": Flags.boolean({ description: "Enable rotating file logs in the current profile for this run only" }),
 		offline: Flags.boolean({
 			description:
 				"Run without public network access for this launch: disable Web Search, Browser, and URL fetch tools and tell the model the environment is offline",

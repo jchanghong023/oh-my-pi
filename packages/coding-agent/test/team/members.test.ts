@@ -254,8 +254,8 @@ describe("team member resolution", () => {
 	});
 
 	it("errors cleanly instead of throwing when the session model only fuzzy-matches a different model", () => {
-		// Renamed/retired id, prefix sibling, or disabledModels exclusion after
-		// startup: the session model itself is not available, but the selector
+		// Renamed/retired id or prefix sibling: the session model itself is not
+		// available, but the selector
 		// engine binds its key to a near model (§2.2: a different concrete
 		// model, not "同一模型的不同名称"). /team must error naming the session
 		// model — never a fuzzy stand-in, and never a TypeError from the

@@ -29,7 +29,6 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
-	logFile?: boolean;
 	/** Restrict this launch to local resources: disable Web Search, Browser, and URL fetch tools for the process and tell the model there is no public network. */
 	offline?: boolean;
 	provider?: string;
@@ -88,8 +87,6 @@ export interface Args {
 	noTitle?: boolean;
 	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
-	/** `--mode rpc-ui` only: project mode — one process hosts many sessions of the startup cwd (rpc-ui-protocol.md §2.2). */
-	rpcProject?: boolean;
 	autoApprove?: boolean;
 	approvalMode?: "always-ask" | "write" | "yolo";
 	messages: string[];
@@ -303,8 +300,6 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.version = true;
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
-		} else if (arg === "--log-file") {
-			result.logFile = true;
 		} else if (arg === "--offline") {
 			result.offline = true;
 		} else if (arg === "--profile" && i + 1 < args.length) {
@@ -357,8 +352,6 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noTitle = true;
 		} else if (arg === "--no-ui") {
 			result.noUi = true;
-		} else if (arg === "--rpc-project") {
-			result.rpcProject = true;
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {

@@ -53,7 +53,7 @@ async function runScenario(
 				...process.env,
 				HOME: primaryDir,
 				// os.homedir() on Windows reads USERPROFILE, not HOME: without
-				// this the file-logging scenarios write into the real profile.
+				// this the default-file scenario logs into the real profile.
 				USERPROFILE: primaryDir,
 				PI_CONFIG_DIR: ".omp",
 				OMP_PROFILE: "",
@@ -234,12 +234,13 @@ describe("central logger file level and batching", () => {
 });
 
 describe("central logger transport lifecycle", () => {
-	test("defaults to no local transports without creating a logs directory", async () => {
-		const result = await runScenario("default-disabled");
+	test("defaults to file-only without touching stdout or stderr", async () => {
+		const result = await runScenario("default-file");
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
 		const defaultLogsDir = path.join(result.primaryDir, ".omp", "logs");
-		await expect(fs.readdir(defaultLogsDir)).rejects.toMatchObject({ code: "ENOENT" });
+		const log = await readSingleLog(defaultLogsDir);
+		expect(log.text).toBe(expectedLine(result.pid, "info", "mode-default", { mode: "default" }));
 	});
 
 	test("emits file-only, console-only, and dual modes exactly once", async () => {

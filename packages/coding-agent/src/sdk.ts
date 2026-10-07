@@ -1139,7 +1139,6 @@ export async function resolvePrewalkTarget(
 		disabledProvider = undefined;
 		let candidate = resolveCandidate(pattern);
 		lastResolution = candidate;
-		if (candidate.disabledModel || candidate.disabledProvider) continue;
 		if (candidate.model && disabledProviders.has(candidate.model.provider)) {
 			disabledProvider = candidate.model.provider;
 			continue;
@@ -1764,7 +1763,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
 	// / session would silently miss credential_disabled events.
 	const modelRegistry =
-		options.modelRegistry?.withSettings(settings) ??
+		options.modelRegistry ??
 		new ModelRegistry(
 			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir, { settings, cwd })),
 			path.join(agentDir, "models.yml"),
@@ -2890,7 +2889,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// is unreachable, so a match on one likewise must not count: otherwise
 					// a disabled first selector suppresses the discovery refresh an enabled
 					// later selector still needs.
-					return resolved.model !== undefined && modelRegistry.isModelEnabled(resolved.model);
+					return resolved.model !== undefined;
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
@@ -2900,7 +2899,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					modelRegistry.refresh(deferredDiscoveryStrategy),
 				);
 			}
-			const allEnabledModels = modelRegistry.getAll().filter(candidate => modelRegistry.isModelEnabled(candidate));
+			const allEnabledModels =
+				disabledProviders.size === 0
+					? modelRegistry.getAll()
+					: modelRegistry.getAll().filter(candidate => !disabledProviders.has(candidate.provider));
 			const availableModels =
 				disabledProviders.size === 0
 					? modelRegistry.getAvailable()

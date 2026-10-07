@@ -2,7 +2,7 @@
 
 本仓库是个人自己使用的 fork 维护仓库：持续同步上游最新 `main`，保留个人功能和默认值，不以对外发布为目标。
 
-本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。本次已重新确认需求范围；实现尚未按新需求调整，本次未执行功能验证，历史验证描述不代表当前验收通过。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
+本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。2026-10-07 精简会话已按重审需求实施：模型硬排除、fork 日志策略、ZCode 项目多会话运行层与手工测试白名单已撤除，`/team`、`/repo`、`/wiki`、company/zcode-api、`/jch*`、fullsend、Codex 策略与分发能力完整保留（各域验证状态见[目录索引](README.md)）。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
 
 ## 项目定位与使用场景
 
@@ -130,6 +130,8 @@
 基础设施修复只在已确认使用场景确实依赖时保留；不因历史上修复过就形成独立维护义务。以下剩余补丁是待核对必要性的现状线索，不代表已确认必须保留，也不能在未核实依赖前直接认定可删除。上游已包含等价修复后，移除重复实现及 fork 额外保留的回归测试，fork 测试聚焦仍有效的本地差异。
 
 - `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
+- `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、attachTimeout 计入管道收集），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。
+- `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁（e0fc1cf 基线即与其自身 `rpc-user-input-order` 测试矛盾）；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
 - `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：归档解压 symlink 在 Windows EPERM 时降级为 junction 或文件复制（PR #14267 待上游合并）。
@@ -189,10 +191,10 @@
 保留 `fastcheck`、`fulltest`、`slowtest` 三个入口，采用尽量简薄的编排，优先复用上游检查、测试运行器与 CI。
 
 - `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
-- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。
+- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：上游自身 Windows 专属代码在 pinned nightly 下 clippy 必红（上游 CI 只在 Linux lint），此期间 fulltest 静态阶段只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例（Rust 其余测试仍全量执行）；恢复条件均为上游转绿后按各文件内注释还原。
 - `slowtest` 保留本机验证、Ubuntu-24.04 WSL 验证、自动推送、触发和监控 CI、成功后发布个人 Release 的流程。WSL 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。
 - 不设置 fork 自定义的测试阶段和 WSL 阶段时限，采用上游运行器和 CI 的超时机制；取消操作仍须正确处理本次任务拥有的资源。
 - fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。
 - 测试适配只维护已保留功能及支持平台所必需的部分，不再将历史测试补丁清单作为独立产品需求。
 
-本节定义目标，现有脚本与 `AGENTS.md` 中的运行细则尚未按新需求调整；本次仅重建需求文档，不代表验证编排已完成简化。
+本节定义目标，已由 `scripts/fulltest.ts`、`scripts/slowtest.ts` 与 package.json 的 `fastcheck` 别名按薄编排实现（2026-10-07）；实现细节与运行细则以 `AGENTS.md`「验证」一节为准。

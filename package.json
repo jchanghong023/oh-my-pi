@@ -89,7 +89,7 @@
 		"check": "bun run --parallel check:ts check:rs",
 		"check:ts": "bun run check:tools && bun run --filter './packages/*' --sequential --if-present check:types",
 		"check:tools": "oxlint . && oxfmt --check 'packages/*/src/**/*.{ts,tsx}' 'packages/*/{test,bench,examples,scripts}/**/*.ts' 'packages/*/*.ts' 'scripts/**/*.ts'",
-		"fastcheck": "bun scripts/fastcheck.ts",
+		"fastcheck": "bun run check:ts && bun run check:rs",
 		"fulltest": "bun scripts/fulltest.ts",
 		"slowtest": "bun scripts/slowtest.ts",
 		"check:rs": "bun scripts/run-rs-task.ts check:rs",

@@ -106,34 +106,14 @@ export interface RpcClientOptions {
 
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
-/**
- * Project-mode envelope stamped on outbound frames (`rpc-ui-protocol.md`).
- * Frame listeners receive it so parallel sessions can be attributed; absent in
- * single-session mode.
- */
-export type RpcFrameSessionScope = {
-	sessionId?: string;
-	sessionGeneration?: string;
-	processInstanceId?: string;
-};
-
 export type RpcEventListener = (event: AgentEvent) => void;
 export type RpcSessionEventListener = (event: AgentSessionEvent) => void;
-export type RpcSubagentLifecycleListener = (
-	payload: RpcSubagentLifecycleFrame["payload"],
-	frame: RpcSubagentLifecycleFrame & RpcFrameSessionScope,
-) => void;
-export type RpcSubagentProgressListener = (
-	payload: RpcSubagentProgressFrame["payload"],
-	frame: RpcSubagentProgressFrame & RpcFrameSessionScope,
-) => void;
-export type RpcSubagentEventListener = (
-	payload: RpcSubagentEventFrame["payload"],
-	frame: RpcSubagentEventFrame & RpcFrameSessionScope,
-) => void;
+export type RpcSubagentLifecycleListener = (payload: RpcSubagentLifecycleFrame["payload"]) => void;
+export type RpcSubagentProgressListener = (payload: RpcSubagentProgressFrame["payload"]) => void;
+export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"]) => void;
 export type RpcAvailableCommandsUpdateListener = (commands: RpcAvailableSlashCommand[]) => void;
 export type RpcPromptResultListener = (result: RpcPromptResultFrame) => void;
-export type RpcSessionSettledListener = (frame: RpcSessionSettledFrame & RpcFrameSessionScope) => void;
+export type RpcSessionSettledListener = () => void;
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
@@ -194,9 +174,6 @@ const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
 	"thinking_level_changed",
 	"model_changed",
 	"goal_updated",
-	"config_warnings_changed",
-	"advisor_cost_changed",
-	"advisor_yielded",
 	"queue_update",
 ]);
 
@@ -352,9 +329,6 @@ export class RpcClient {
 	#subagentProgressListeners = new Set<RpcSubagentProgressListener>();
 	#subagentEventListeners = new Set<RpcSubagentEventListener>();
 	#availableCommandsUpdateListeners = new Set<RpcAvailableCommandsUpdateListener>();
-	#forkNegotiated = false;
-	#chunkedFramesEnabled = false;
-	readonly #forkFrameListeners = new Set<(frame: Record<string, unknown>) => void>();
 	#btwDeltaListeners = new Set<(frame: RpcBtwDeltaFrame) => void>();
 	#btwRecordListeners = new Set<(record: BtwHistoryRecord) => void>();
 	#promptResultListeners = new Set<RpcPromptResultListener>();
@@ -364,14 +338,8 @@ export class RpcClient {
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	/** Same-id failures that arrive after the success ack removed the pending request. */
 	#promptErrorWaiters = new Map<string, (error: Error) => void>();
-	#pendingRequests = new Map<
-		string,
-		{
-			command: string;
-			resolve: (response: RpcResponse) => void;
-			reject: (error: Error) => void;
-		}
-	>();
+	#pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
+		new Map();
 	#customTools: RpcClientCustomTool[] = [];
 	#pendingHostToolCalls = new Map<string, { controller: AbortController }>();
 	#requestId = 0;
@@ -401,8 +369,6 @@ export class RpcClient {
 		// short-circuit the new stdout reader (issue #4079).
 		this.#abortController = new AbortController();
 		this.#protocolVersion = 1;
-		this.#forkNegotiated = false;
-		this.#chunkedFramesEnabled = false;
 
 		const cliPath = this.options.cliPath ?? "dist/cli.js";
 		const args = ["--mode", "rpc"];
@@ -437,14 +403,13 @@ export class RpcClient {
 		const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
 		let readySettled = false;
 		let protocolV2Supported = false;
+		let protocolV2Enabled = false;
 		const frameDecoder = new RpcFrameDecoder();
 
 		const reapAfterOutputFailure = async (error: Error) => {
 			if (this.#process !== child) return;
 
 			this.#process = null;
-			this.#forkNegotiated = false;
-			this.#chunkedFramesEnabled = false;
 			this.#abortController.abort(error);
 			const pendingRequests = Array.from(this.#pendingRequests.values());
 			this.#pendingRequests.clear();
@@ -470,7 +435,7 @@ export class RpcClient {
 					readyResolve();
 					continue;
 				}
-				if (isRecord(line) && line.type === "rpc_chunk" && !this.#chunkedFramesEnabled)
+				if (isRecord(line) && line.type === "rpc_chunk" && !protocolV2Enabled)
 					throw new Error("RPC chunk received before protocol negotiation");
 				const decoded = frameDecoder.push(line);
 				if (decoded) this.#handleLine(decoded);
@@ -542,7 +507,7 @@ export class RpcClient {
 		try {
 			await readyPromise;
 			if (protocolV2Supported) {
-				this.#chunkedFramesEnabled = true;
+				protocolV2Enabled = true;
 				const response = await this.#send({ type: "negotiate_protocol", protocolVersion: 2 });
 				if (
 					!response.success ||
@@ -582,8 +547,6 @@ export class RpcClient {
 		}
 		this.#abortController.abort(error);
 		this.#process = null;
-		this.#forkNegotiated = false;
-		this.#chunkedFramesEnabled = false;
 		for (const request of this.#pendingRequests.values()) request.reject(error);
 		this.#pendingRequests.clear();
 		for (const pendingCall of this.#pendingHostToolCalls.values()) {
@@ -1334,45 +1297,6 @@ export class RpcClient {
 	 * Replace the host-owned custom tools exposed to the RPC session.
 	 * Changes take effect before the next model call.
 	 */
-	/**
-	 * Negotiate the fork protocol (v3, rpc-ui-protocol.md). After success,
-	 * unrecognized server frames are delivered to {@link onForkFrame} listeners
-	 * and {@link sendForkFrame} can emit v3 bypass frames.
-	 */
-	async negotiateProtocolV3(): Promise<void> {
-		const response = await this.#send({ type: "negotiate_protocol", protocolVersion: 3 });
-		if (
-			!response.success ||
-			response.command !== "negotiate_protocol" ||
-			!isRecord(response.data) ||
-			response.data.protocolVersion !== 3
-		) {
-			this.#getData(response);
-			throw new RpcCommandError("Fork protocol v3 negotiation failed", "negotiate_protocol");
-		}
-		this.#forkNegotiated = true;
-		this.#protocolVersion = 2;
-		this.#chunkedFramesEnabled = true;
-	}
-
-	/** Subscribe to raw fork-protocol (v3) frames; returns an unsubscribe function. */
-	onForkFrame(listener: (frame: Record<string, unknown>) => void): () => void {
-		this.#forkFrameListeners.add(listener);
-		return () => {
-			this.#forkFrameListeners.delete(listener);
-		};
-	}
-
-	get forkNegotiated(): boolean {
-		return this.#forkNegotiated;
-	}
-
-	/** Send a v3 bypass frame (permission_response / ask_response / ask_pause). */
-	sendForkFrame(frame: Record<string, unknown>): void {
-		if (!this.#forkNegotiated) throw new Error("Fork protocol v3 has not been negotiated");
-		this.#writeFrame(frame as RpcCommand);
-	}
-
 	async setCustomTools(tools: RpcClientCustomTool[]): Promise<string[]> {
 		this.#customTools = [...tools];
 		if (!this.#process) {
@@ -1453,8 +1377,7 @@ export class RpcClient {
 	 */
 	async waitForSettled(timeout = 60000): Promise<void> {
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
-		const settle = (): void => resolve();
-		const unsubscribe = this.onSessionSettled(settle);
+		const unsubscribe = this.onSessionSettled(resolve);
 		let timeoutId: NodeJS.Timeout | undefined;
 		try {
 			// Subscribed before asking, so a settle between the two cannot be missed.
@@ -1509,28 +1432,6 @@ export class RpcClient {
 	// =========================================================================
 
 	#handleLine(data: unknown): void {
-		if (
-			isRecord(data) &&
-			data.type === "response" &&
-			typeof data.id === "string" &&
-			data.success === false &&
-			typeof data.error === "string" &&
-			(data.command === undefined || data.command === "error")
-		) {
-			const pending = this.#pendingRequests.get(data.id);
-			const code = typeof data.code === "string" ? data.code : undefined;
-			if (pending) {
-				this.#pendingRequests.delete(data.id);
-				pending.reject(new RpcCommandError(data.error, pending.command, code));
-				return;
-			}
-			const rejectLate = this.#promptErrorWaiters.get(data.id);
-			if (rejectLate) {
-				this.#promptErrorWaiters.delete(data.id);
-				rejectLate(new RpcCommandError(data.error, "prompt", code));
-				return;
-			}
-		}
 		// Check if it's a response to a pending request
 		if (isRpcResponse(data)) {
 			const id = data.id;
@@ -1569,21 +1470,21 @@ export class RpcClient {
 
 		if (isRpcSubagentLifecycleFrame(data)) {
 			for (const listener of this.#subagentLifecycleListeners) {
-				listener(data.payload, data);
+				listener(data.payload);
 			}
 			return;
 		}
 
 		if (isRpcSubagentProgressFrame(data)) {
 			for (const listener of this.#subagentProgressListeners) {
-				listener(data.payload, data);
+				listener(data.payload);
 			}
 			return;
 		}
 
 		if (isRpcSubagentEventFrame(data)) {
 			for (const listener of this.#subagentEventListeners) {
-				listener(data.payload, data);
+				listener(data.payload);
 			}
 			return;
 		}
@@ -1597,7 +1498,7 @@ export class RpcClient {
 
 		if (isRpcSessionSettledFrame(data)) {
 			for (const listener of this.#sessionSettledListeners) {
-				listener(data);
+				listener();
 			}
 			return;
 		}
@@ -1627,18 +1528,7 @@ export class RpcClient {
 			return;
 		}
 
-		if (!isAgentSessionEvent(data)) {
-			// Fork (v3) frames: only delivered after negotiateProtocolV3() so v2
-			// hosts keep the stock drop-unknown behavior. This is the final drop
-			// point, so fork listeners only see frames no earlier branch
-			// recognized (permission_request/ask_request/queue_updated etc.).
-			if (this.#forkNegotiated && this.#forkFrameListeners.size > 0 && isRecord(data)) {
-				for (const listener of this.#forkFrameListeners) {
-					listener(data);
-				}
-			}
-			return;
-		}
+		if (!isAgentSessionEvent(data)) return;
 
 		for (const listener of this.#sessionEventListeners) {
 			listener(data);
@@ -1668,7 +1558,6 @@ export class RpcClient {
 		});
 
 		this.#pendingRequests.set(id, {
-			command: command.type,
 			resolve: response => {
 				if (settled) return;
 				settled = true;
@@ -1702,12 +1591,6 @@ export class RpcClient {
 
 	async #handleHostToolCall(request: RpcHostToolCallRequest): Promise<void> {
 		const tool = this.#customTools.find(candidate => candidate.name === request.toolName);
-		// Project mode stamps the call with the owning session; echo it back so
-		// the project host accepts the result instead of rejecting stale_session.
-		const sessionScope = {
-			...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
-			...(typeof request.sessionGeneration === "string" ? { sessionGeneration: request.sessionGeneration } : {}),
-		};
 		if (!tool) {
 			this.#writeFrame({
 				type: "host_tool_result",
@@ -1717,7 +1600,6 @@ export class RpcClient {
 					details: {},
 				},
 				isError: true,
-				...sessionScope,
 			} satisfies RpcHostToolResult);
 			return;
 		}
@@ -1731,7 +1613,6 @@ export class RpcClient {
 				type: "host_tool_update",
 				id: request.id,
 				partialResult: normalizeToolResult(partialResult),
-				...sessionScope,
 			} satisfies RpcHostToolUpdate);
 		};
 
@@ -1746,7 +1627,6 @@ export class RpcClient {
 				type: "host_tool_result",
 				id: request.id,
 				result: normalizeToolResult(result),
-				...sessionScope,
 			} satisfies RpcHostToolResult);
 		} catch (error) {
 			if (controller.signal.aborted) return;
@@ -1758,7 +1638,6 @@ export class RpcClient {
 					details: {},
 				},
 				isError: true,
-				...sessionScope,
 			} satisfies RpcHostToolResult);
 		} finally {
 			this.#pendingHostToolCalls.delete(request.id);

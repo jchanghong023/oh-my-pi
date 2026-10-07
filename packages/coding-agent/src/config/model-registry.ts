@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
 import type { AuthApiKeyOptions } from "@oh-my-pi/pi-ai/auth-storage";
@@ -48,11 +47,7 @@ import {
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
-import {
-	createDisabledModelMatcher,
-	filterAvailableModelsByDisabledPatterns,
-	resolveProviderModelReference,
-} from "../config/model-resolver";
+import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
@@ -149,7 +144,7 @@ import {
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { type Settings, settings } from "./settings";
 
-import { cfgDisabledModels, cfgDisabledProviders } from "./model-settings";
+import { cfgDisabledProviders } from "./model-settings";
 import { cfgExtendedContext } from "../session/context-settings";
 
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
@@ -350,39 +345,6 @@ export class ModelRegistry {
 	#ignoreLocalModelConfig: boolean;
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
-	#availabilitySettings = new AsyncLocalStorage<Settings>();
-	#settingsViews = new WeakMap<Settings, ModelRegistry>();
-
-	get #effectiveAvailabilitySettings(): Settings | undefined {
-		return this.#availabilitySettings.getStore() ?? this.#settings;
-	}
-
-	/** Share catalogs and credentials while enforcing each session's live exclusions. */
-	withSettings(instance: Settings): ModelRegistry {
-		if (instance === this.#settings) return this;
-		const cached = this.#settingsViews.get(instance);
-		if (cached) return cached;
-		const methods = new Map<PropertyKey, unknown>();
-		const view = new Proxy(this, {
-			get: (target, prop) => {
-				const value = Reflect.get(target, prop, target);
-				if (typeof value !== "function" || prop === "constructor") return value;
-				if (methods.has(prop)) return methods.get(prop);
-				const bound = (...args: unknown[]) => {
-					const result = this.#availabilitySettings.run(instance, () => Reflect.apply(value, target, args));
-					// Resolvers execute later, outside the call that created them.
-					return prop === "resolver" && typeof result === "function"
-						? (...resolverArgs: unknown[]) =>
-								this.#availabilitySettings.run(instance, () => Reflect.apply(result, target, resolverArgs))
-						: result;
-				};
-				methods.set(prop, bound);
-				return bound;
-			},
-		});
-		this.#settingsViews.set(instance, view);
-		return view;
-	}
 
 	#captureCatalogMetrics(models: readonly Model<Api>[], replace: boolean): void {
 		if (replace) {
@@ -561,7 +523,8 @@ export class ModelRegistry {
 	 * `extendedContext`). Forces the static reload past the models.yml mtime
 	 * gate, then restores runtime-discovered models from the SQLite cache —
 	 * offline, a settings flip must never hit the network. Concurrent calls
-	 * share a drain that also applies changes arriving during an awaited refresh.
+	 * share a drain that also applies changes arriving during an awaited
+	 * refresh (fork fix: upstream's simple coalesce silently dropped those).
 	 */
 	reapplyModelPolicies(): Promise<void> {
 		this.#policyReapplyRequested = true;
@@ -1863,7 +1826,7 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const selectedDiscoverableProviders = (
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
@@ -2325,7 +2288,7 @@ export class ModelRegistry {
 				},
 			},
 		];
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(descriptor => {
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
@@ -2851,7 +2814,7 @@ export class ModelRegistry {
 	 * full bundled catalog (thousands of models, ~50 providers).
 	 */
 	#createProviderAvailabilityCheck(): (provider: string) => boolean {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const byProvider = new Map<string, boolean>();
 		return provider => {
 			let available = byProvider.get(provider);
@@ -2885,13 +2848,11 @@ export class ModelRegistry {
 		const requested = new Set([...providers].map(provider => provider.trim().toLowerCase()).filter(Boolean));
 		const isProviderAvailable = this.#createProviderAvailabilityCheck();
 		if (this.#hasFullSnapshot) {
-			return this.#filterDisabledModels(
-				this.#models.filter(
-					model =>
-						requested.has(model.provider.toLowerCase()) &&
-						isProviderAvailable(model.provider) &&
-						(kind === "all" || modelKind(model) === kind),
-				),
+			return this.#models.filter(
+				model =>
+					requested.has(model.provider.toLowerCase()) &&
+					isProviderAvailable(model.provider) &&
+					(kind === "all" || modelKind(model) === kind),
 			);
 		}
 		const availableProviders = new Set(
@@ -2900,7 +2861,7 @@ export class ModelRegistry {
 			),
 		);
 		const models = this.#composeStaticModels(availableProviders);
-		return this.#filterDisabledModels(kind === "all" ? models : models.filter(model => modelKind(model) === kind));
+		return kind === "all" ? models : models.filter(model => modelKind(model) === kind);
 	}
 
 	/**
@@ -2934,7 +2895,6 @@ export class ModelRegistry {
 	 * ignores that alias so SuperGrok is not auto-selected from a paid key.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		if (!this.isModelEnabled(model)) return false;
 		if (model.provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig)
 			return getCompanyConfig() !== undefined;
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
@@ -2978,7 +2938,7 @@ export class ModelRegistry {
 	}
 
 	getDiscoverableProviders(): string[] {
-		const disabledProviders = getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings);
+		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		return this.#discoverableProviders
 			.filter(provider => !disabledProviders.has(provider.provider))
 			.map(provider => provider.provider);
@@ -3008,7 +2968,7 @@ export class ModelRegistry {
 	hasProvider(providerId: string): boolean {
 		const providerModels = this.#hasFullSnapshot ? this.#models : this.#composeStaticModels(new Set([providerId]));
 		if (providerModels.some(model => model.provider === providerId)) return true;
-		if (getDisabledProviderIdsFromSettings(this.#effectiveAvailabilitySettings).has(providerId)) return false;
+		if (getDisabledProviderIdsFromSettings(this.#settings).has(providerId)) return false;
 		return (
 			this.#discoverableProviders.some(provider => provider.provider === providerId) ||
 			this.#runtimeModelManagers.has(providerId)
@@ -3031,56 +2991,19 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Find a model by provider and ID. A provider or model disabled in settings
-	 * has no model to find: literal-lookup fallbacks for restored sessions,
-	 * advisors, retries, and CLI pins must honor the same hard exclusions.
+	 * Find a model by provider and ID. A provider disabled in settings has no
+	 * models to find: every caller that falls back to a literal lookup when
+	 * availability-filtered resolution misses (retry fallback candidates,
+	 * advisors, restored and CLI models) would otherwise reach it anyway.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
 		if (this.#isProviderDisabled(provider)) return undefined;
-		const model = resolveProviderModelReference(provider, modelId, this.#modelsForProviderLookup(provider));
-		return model && this.isModelEnabled(model) ? model : undefined;
+		return resolveProviderModelReference(provider, modelId, this.#modelsForProviderLookup(provider));
 	}
 
 	/** Whether settings disable `provider` (`disabledProviders`). */
 	#isProviderDisabled(provider: string): boolean {
-		try {
-			return cfgDisabledProviders.get(this.#effectiveAvailabilitySettings ?? settings).includes(provider);
-		} catch {
-			return false;
-		}
-	}
-
-	/** Whether a model identity is permitted by the current hard provider/model exclusions. */
-	isModelEnabled(model: Pick<Model<Api>, "provider" | "id">): boolean {
-		if (this.#isProviderDisabled(model.provider)) return false;
-		const effectiveSettings = this.#effectiveAvailabilitySettings ?? settings;
-		let patterns: string[];
-		try {
-			patterns = cfgDisabledModels.get(effectiveSettings);
-		} catch {
-			// SDK embedding can probe a registry before the process settings singleton exists.
-			return true;
-		}
-		if (patterns.length === 0) return true;
-		return !createDisabledModelMatcher(this.getAll("all"), patterns, effectiveSettings)(model);
-	}
-
-	#filterDisabledModels(models: Model<Api>[]): Model<Api>[] {
-		const effectiveSettings = this.#effectiveAvailabilitySettings ?? settings;
-		let patterns: string[];
-		try {
-			patterns = cfgDisabledModels.get(effectiveSettings);
-		} catch {
-			return models;
-		}
-		if (patterns.length === 0) return models;
-		return filterAvailableModelsByDisabledPatterns(
-			models,
-			patterns,
-			effectiveSettings,
-			undefined,
-			this.getAll("all"),
-		);
+		return getDisabledProviderIdsFromSettings(this.#settings).has(provider);
 	}
 
 	/**
@@ -3146,8 +3069,9 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: { signal?: AbortSignal },
 	): Promise<string | undefined> {
-		// Hard exclusions forbid a request however the caller obtained its model.
-		if (!this.isModelEnabled(model)) return undefined;
+		// A disabled provider gets no credential, so no request reaches it however
+		// its model was obtained.
+		if (this.#isProviderDisabled(model.provider)) return undefined;
 		if (model.provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) return getCompanyConfig()?.token;
 		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
@@ -3194,12 +3118,7 @@ export class ModelRegistry {
 		sessionId?: string,
 		options?: AuthApiKeyOptions,
 	): Promise<ResolvedApiKey | undefined> {
-		if (
-			options?.modelId !== undefined
-				? !this.isModelEnabled({ provider, id: options.modelId })
-				: this.#isProviderDisabled(provider)
-		)
-			return undefined;
+		if (this.#isProviderDisabled(provider)) return undefined;
 		if (provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) {
 			const apiKey = getCompanyConfig()?.token;
 			return apiKey === undefined ? undefined : { apiKey };

@@ -74,27 +74,24 @@ function companyModel(id: string): Model {
 }
 
 describe("effective team defaults", () => {
-	it("filters offline company defaults by enabledModels and disabledModels but keeps explicit members out of scope", () => {
+	it("filters offline company defaults by enabledModels but keeps explicit members out of scope", () => {
 		const allowed = companyModel("GLM-5.2-public");
 		const outOfScope = companyModel("Qwen3.6-27B-public");
-		const disabled = companyModel("MiniMax-M2.7");
 		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
-		vi.spyOn(companyModels, "getCompanyChatModels").mockReturnValue([allowed, outOfScope, disabled] as never);
+		vi.spyOn(companyModels, "getCompanyChatModels").mockReturnValue([allowed, outOfScope] as never);
 		const session = {
 			model: MODEL,
 			modelRegistry: {
-				getAvailable: () => [MODEL, allowed, outOfScope, disabled],
+				getAvailable: () => [MODEL, allowed, outOfScope],
 			},
 		} as unknown as AgentSession;
 		const enabledPattern = `${allowed.provider}/${allowed.id}`;
 		const outOfScopePattern = `${outOfScope.provider}/${outOfScope.id}`;
-		const disabledPattern = `${disabled.provider}/${disabled.id}`;
 		const implicit = resolveTeamParticipantsForSession(
 			session,
 			Settings.isolated({
 				"team.members": [],
 				enabledModels: [enabledPattern],
-				disabledModels: [disabledPattern],
 			}),
 		);
 		expect(implicit.ok).toBe(true);

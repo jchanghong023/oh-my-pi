@@ -109,7 +109,7 @@ switch (scenario) {
 		logger.debug("debug-only-second", { ordinal: 2 });
 		disableTransports();
 		break;
-	case "default-disabled":
+	case "default-file":
 		logger.info("mode-default", { mode: "default" });
 		disableTransports();
 		break;

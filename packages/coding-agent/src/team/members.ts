@@ -31,7 +31,7 @@ export type TeamMembersResult =
 	| { ok: false; error: string };
 
 const CONFIG_EXAMPLE = [
-	"team.members 未配置，且当前进程没有可用的 company 模型 lane（--offline 下默认 company 名单也可能被 enabledModels/disabledModels 过滤为空），无法组建多模型团队。",
+	"team.members 未配置，且当前进程没有可用的 company 模型 lane（--offline 下默认 company 名单也可能被 enabledModels 过滤为空），无法组建多模型团队。",
 	"",
 	"在 settings（config.yml）中配置参与模型（完整 ID；可用 ID 以 `omp models` 输出为准），格式例如：",
 	"",
@@ -142,7 +142,7 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 	// It must join as itself: the orchestrator pins alignment/synthesis to its
 	// exact pattern, and §2.2 requires a named error when the session model is
 	// unavailable or disabled — a fuzzy sibling (renamed id, prefix variant,
-	// near-match left by a disabledModels exclusion) is a different concrete
+	// near-match among the available models) is a different concrete
 	// model and must not silently stand in for it.
 	const sessionKey = modelKey(sessionModel);
 	if (!availableModels.some(model => modelKey(model) === sessionKey)) {

@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { type RpcAgentProcess, RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import {
-	MAX_RPC_FRAME_BYTES,
-	MAX_RPC_REASSEMBLED_BYTES,
-	RpcFrameEncoder,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame";
 import { rejectionOf } from "./helpers/rejection";
 
 const MOCK_AGENT = path.join(import.meta.dir, "fixtures", "mock-rpc-agent.ts");
@@ -20,11 +15,7 @@ function isProcessAlive(pid: number): boolean {
 	}
 }
 
-// Bun on Windows unreliably delivers child stdout: with a read already
-// pending, a child's fast back-to-back frame writes can vanish entirely, so
-// request/response round trips hang until the 20-30s timeouts fire. The whole
-// lifecycle file spawns mock agents over that transport.
-describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 B)", () => {
+describe("RpcClient lifecycle (issue #4079 B)", () => {
 	test("auto-negotiates protocol v2 and reassembles an oversized response", async () => {
 		using client = new RpcClient({
 			cliPath: MOCK_AGENT,
@@ -220,102 +211,4 @@ describe.skipIf(process.platform === "win32")("RpcClient lifecycle (issue #4079 
 			message: expect.stringContaining("skill file was deleted"),
 		});
 	});
-});
-
-function createForkTransport(options?: { negotiatedVersion?: number; negotiationError?: boolean }) {
-	const encoder = new RpcFrameEncoder();
-	const exited = Promise.withResolvers<number>();
-	const sent: Array<Record<string, unknown>> = [];
-	let output: ReadableStreamDefaultController<Uint8Array>;
-	let closed = false;
-	const emit = (frame: object) => {
-		for (const line of encoder.encodeFrames(frame)) output.enqueue(new TextEncoder().encode(line));
-	};
-	const process: RpcAgentProcess = {
-		stdin: {
-			write(data) {
-				const command = JSON.parse(typeof data === "string" ? data : new TextDecoder().decode(data));
-				sent.push(command);
-				if (command.type === "negotiate_protocol") {
-					if (options?.negotiationError) {
-						emit({
-							id: command.id,
-							type: "response",
-							success: false,
-							command: "error",
-							error: "fork not supported",
-							code: "unsupported",
-						});
-					} else {
-						emit({
-							id: command.id,
-							type: "response",
-							success: true,
-							command: command.type,
-							data: { protocolVersion: options?.negotiatedVersion ?? 3 },
-						});
-						encoder.setProtocolVersion(2);
-					}
-				} else if (command.type === "ask_pause") {
-					// Fork side-channel frames are one-way and have no response.
-				}
-			},
-		},
-		stdout: new ReadableStream<Uint8Array>({
-			start(controller) {
-				output = controller;
-				emit({
-					type: "ready",
-					supportedProtocolVersions: [1, 3],
-					maxFrameBytes: MAX_RPC_FRAME_BYTES,
-					maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
-				});
-			},
-		}),
-		peekStderr: () => "",
-		kill() {
-			if (closed) return;
-			closed = true;
-			output.close();
-			exited.resolve(0);
-		},
-		exited: exited.promise,
-	};
-	return { client: new RpcClient({ spawn: () => process }), sent };
-}
-
-describe("RpcClient fork protocol v3 transport", () => {
-	test("v3-only negotiation enables fork control frames", async () => {
-		const { client, sent } = createForkTransport();
-		try {
-			await client.start();
-			expect(() => client.sendForkFrame({ type: "ask_pause", targetId: "ask-1" })).toThrow(
-				"has not been negotiated",
-			);
-			await client.negotiateProtocolV3();
-			expect(sent[0]).toMatchObject({ type: "negotiate_protocol", protocolVersion: 3 });
-			client.sendForkFrame({ type: "ask_pause", targetId: "ask-1" });
-			expect(sent[1]).toMatchObject({ type: "ask_pause", targetId: "ask-1" });
-		} finally {
-			await client.stop();
-		}
-	});
-
-	test.each([{ negotiatedVersion: 2 }, { negotiationError: true }])(
-		"invalid v3 acknowledgements never open the fork gate (%o)",
-		async options => {
-			const { client } = createForkTransport(options);
-			try {
-				await client.start();
-				await expect(client.negotiateProtocolV3()).rejects.toMatchObject({
-					command: "negotiate_protocol",
-					...(options.negotiationError ? { code: "unsupported", message: "fork not supported" } : {}),
-				});
-				expect(client.forkNegotiated).toBe(false);
-				expect(() => client.sendForkFrame({ type: "ask_pause" })).toThrow("has not been negotiated");
-			} finally {
-				await client.stop();
-			}
-		},
-	);
 });

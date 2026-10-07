@@ -224,33 +224,6 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("a shared registry cannot restore a default forbidden in the destination cwd", async () => {
-		const destination = path.join(tempDir, "destination");
-		const startup = Settings.isolated({
-			modelRoles: { default: "runtime-provider/runtime-model" },
-			disabledModels: [{ paths: [destination], models: ["runtime-provider/runtime-model"] }],
-		});
-		await startup.reloadForCwd(tempDir);
-		const registry = new ModelRegistry(fixtureAuthStorage, path.join(tempDir, "models.yml"), { settings: startup });
-		const target = await startup.cloneForCwd(destination);
-		const { session } = await createAgentSession({
-			...buildSessionOptions([]),
-			cwd: destination,
-			settings: target,
-			modelRegistry: registry,
-			offline: true,
-		});
-		try {
-			expect(session.model?.id).not.toBe("runtime-model");
-			const blocked = registry.find("runtime-provider", "runtime-model");
-			if (!blocked) throw new Error("Startup registry lost the registered model");
-			expect(await session.modelRegistry.getApiKey(blocked)).toBeUndefined();
-			expect(await registry.getApiKey(blocked)).toBe("RUNTIME_KEY");
-		} finally {
-			await session.dispose();
-		}
-	});
-
 	test("lets a child task spawn a model agent inherited from its parent", async () => {
 		const bundledTask = getBundledAgent("task");
 		if (!bundledTask) throw new Error("Expected bundled task agent");

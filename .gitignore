@@ -11,6 +11,8 @@ target/
 .xwin-cache/
 *.tsbuildinfo
 *.node
+# addon binary backups left by atomic replacement during native builds
+*.node.old.*
 *.b64.js
 /result
 /result-*

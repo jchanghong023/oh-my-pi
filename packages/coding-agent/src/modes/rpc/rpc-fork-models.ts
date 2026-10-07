@@ -1,22 +1,20 @@
 /**
- * Fork RPC project-mode model-role catalog and persistence service
- * (rpc-ui-protocol.md).
+ * Fork RPC model-role catalog and persistence service (rpc-ui-protocol.md).
  *
  * Serves the full configurable role catalog (`get_model_roles`) and the
- * per-role scoped write path (`set_model_role`) with ZERO loaded sessions:
- * role discovery, resolution, and provenance come straight from the shared
- * {@link Settings} instance and the process-wide {@link ModelRegistry},
- * never from a live AgentSession. Every role OMP knows — built-in (hidden
- * ones included), custom roles from `modelTags`/`cycleOrder`, and any
+ * per-role scoped write path (`set_model_role`). Role discovery, resolution,
+ * and provenance come straight from the shared {@link Settings} instance and
+ * the process-wide {@link ModelRegistry}: every role OMP knows — built-in
+ * (hidden ones included), custom roles from `modelTags`/`cycleOrder`, and any
  * remaining key of the merged `modelRoles` record — is listed even when
- * nothing is configured and no model is available (requirement O24): roles
- * without a resolvable target carry `unresolvedReason` instead of
- * disappearing. Writes reuse the existing role persistence machinery
- * (`setModelRole` + `flush`) so user config, project layers, and runtime
- * overrides keep their documented precedence, and the returned descriptor
- * reports the post-save truth (a saved-but-overridden value shows the
- * overriding source). The service never touches the protocol channel; hosts
- * pass an `emit` callback for the `settings_changed` fan-out.
+ * nothing is configured and no model is available; roles without a resolvable
+ * target carry `unresolvedReason` instead of disappearing. Writes reuse the
+ * existing role persistence machinery (`setModelRole` + `flush`) so user
+ * config, project layers, and runtime overrides keep their documented
+ * precedence, and the returned descriptor reports the post-save truth (a
+ * saved-but-overridden value shows the overriding source). The service never
+ * touches the protocol channel; the host passes an `emit` callback for the
+ * `settings_changed` fan-out.
  */
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -25,71 +23,65 @@ import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS 
 import type { ModelRegistry } from "../../config/model-registry";
 import { ModelRoleConflictError, type Settings, type SettingProvenance } from "../../config/settings";
 import { formatRoleModelValue, resolveRoleModelFull } from "../../session/role-models";
-import { RpcRevisionSource } from "./rpc-project-types";
 import type {
+	RpcForkErrorCode,
 	RpcModelRef,
+	RpcModelRoleDescriptor,
 	RpcModelRoleSelection,
-	RpcProjectErrorCode,
-	RpcProjectModelRolesResult,
-	RpcProjectRoleDescriptor,
-	RpcProjectSetModelRoleResult,
-	RpcRevision,
-} from "./rpc-project-types";
+	RpcModelRolesResult,
+	RpcSetModelRoleResult,
+} from "./rpc-fork-types";
 
-/** Typed failure surfaced by the role service; `code` maps to RpcProjectErrorCode (rpc-ui-protocol.md). */
-export class RpcProjectModelRoleError extends Error {
-	readonly code: RpcProjectErrorCode;
+/** Typed failure surfaced by the role service. */
+export class RpcModelRoleError extends Error {
+	readonly code: RpcForkErrorCode;
 
-	constructor(code: RpcProjectErrorCode, message: string) {
+	constructor(code: RpcForkErrorCode, message: string) {
 		super(message);
-		this.name = "RpcProjectModelRoleError";
+		this.name = "RpcModelRoleError";
 		this.code = code;
 	}
 }
 
-/** Collaborators the role service needs from the project-mode host. */
-export interface RpcProjectModelRoleServiceDeps {
-	/** Settings instance shared by this project (all layers already merged). */
+/** Collaborators the role service needs from the RPC host. */
+export interface RpcModelRoleServiceDeps {
+	/** Settings instance shared by this process (all layers already merged). */
 	readonly getSettings: () => Settings;
 	/** Process-wide model registry backing availability and selector formatting. */
 	readonly getModelRegistry: () => ModelRegistry;
-	/** Outbound frame sink; hosts forward `settings_changed` frames to the client. */
+	/** Outbound frame sink; the host forwards `settings_changed` frames to the client. */
 	readonly emit: (frame: object) => void;
 	/**
-	 * Reload the persisted config layers of every loaded session's own
-	 * Settings clone after a role save. Sessions snapshot the global layer via
+	 * Reload the persisted config layers of the hosted session's own Settings
+	 * clone after a role save. Sessions snapshot the global layer via
 	 * `cloneForCwd` at creation, so without this their role resolution
-	 * (`/switch @role`, subagent role picks) keeps the pre-save value (O26).
+	 * (`/switch @role`, subagent role picks) keeps the pre-save value.
 	 */
 	readonly reloadSessionSettings?: () => Promise<void>;
 }
 
-/** Options for {@link RpcProjectModelRoleService.listRoles}. */
-export interface RpcProjectModelRoleListOptions {
+/** Options for {@link RpcModelRoleService.listRoles}. */
+export interface RpcModelRoleListOptions {
 	/**
-	 * Loaded-session passthrough echoed as `sessionModel` so the GUI can show
-	 * the session's actual model next to the persisted catalog
-	 * (rpc-ui-protocol.md). The service itself needs no session.
+	 * Live-session passthrough echoed as `sessionModel` so the GUI can show the
+	 * session's actual model next to the persisted catalog. The service itself
+	 * needs no session.
 	 */
-	readonly sessionInfo?: {
-		readonly sessionId: string;
-		readonly sessionGeneration: string;
-		readonly model?: RpcModelRef;
-	};
+	readonly sessionModel?: RpcModelRef;
 }
 
-/** Options for {@link RpcProjectModelRoleService.setRole}. */
-export interface RpcProjectModelRoleSetOptions {
+/** Options for {@link RpcModelRoleService.setRole}. */
+export interface RpcModelRoleSetOptions {
 	readonly roleId: string;
-	/** Wire contract allows `"user"` only; other runtime values reject with unsupported/scope_not_allowed. */
+	/** Wire contract allows `"user"` only; other runtime values reject with scope_not_allowed. */
 	readonly scope: "user";
 	readonly selection: RpcModelRoleSelection;
 	/** Required revision of this user role slot, not the role catalog. */
-	readonly expectedRevision: RpcRevision;
+	readonly expectedRevision: string;
 }
 
 /** Map settings provenance onto the descriptor source union. `getModelRoleProvenance` never returns `"env"`. */
-function roleDescriptorSource(provenance: SettingProvenance): RpcProjectRoleDescriptor["source"] {
+function roleDescriptorSource(provenance: SettingProvenance): RpcModelRoleDescriptor["source"] {
 	switch (provenance) {
 		case "runtime":
 		case "overlay":
@@ -106,7 +98,7 @@ function roleDescriptorSource(provenance: SettingProvenance): RpcProjectRoleDesc
  * `not_configured` when nothing is configured; `auto` for the explicit
  * auto-policy marker (the `*` selector `setRole` persists for auto
  * selections); `no_matching_model` when a configured selector has no match
- * among the currently available models (including an empty catalog, R6/O24).
+ * among the currently available models (including an empty catalog).
  */
 function unresolvedRoleReason(explicitValue: string | undefined, warning: string | undefined): string {
 	if (warning) return warning;
@@ -116,56 +108,47 @@ function unresolvedRoleReason(explicitValue: string | undefined, warning: string
 }
 
 /**
- * Model-role catalog + per-role persistence for project mode. All reads are
- * zero-session by construction; the single catalog revision bumps after every
- * successful write so clients can detect stale `expectedRevision` attempts.
+ * Model-role catalog + per-role persistence for the fork RPC surface. All
+ * reads need no session by construction; the per-role revision detects stale
+ * `expectedRevision` attempts (concurrent GUI edits).
  */
-export class RpcProjectModelRoleService {
-	readonly #deps: RpcProjectModelRoleServiceDeps;
-	readonly #rolesRevision = new RpcRevisionSource("roles-r0");
+export class RpcModelRoleService {
+	readonly #deps: RpcModelRoleServiceDeps;
 	readonly #roleWrites = new Map<string, Promise<unknown>>();
 
-	constructor(deps: RpcProjectModelRoleServiceDeps) {
+	constructor(deps: RpcModelRoleServiceDeps) {
 		this.#deps = deps;
 	}
 
-	/** Current catalog revision; changes after every successful role write. */
-	get revision(): RpcRevision {
-		return this.#rolesRevision.current;
-	}
-
 	/**
-	 * Full role catalog (rpc-ui-protocol.md): every known role with its
-	 * name, configurability, explicit configured value, best-effort resolved
-	 * model (or unresolved reason), provenance, writable scopes, and revision.
-	 * Resolution runs against the full registry pool (`getAvailable("all")`)
-	 * so kind-section roles (image/speech/…) resolve too; an empty pool lists
-	 * every role with an `unresolvedReason` instead of hiding rows (O24).
+	 * Full role catalog: every known role with its name, configurability,
+	 * explicit configured value, best-effort resolved model (or unresolved
+	 * reason), provenance, writable scopes, and revision. Resolution runs
+	 * against the full registry pool (`getAvailable("all")`) so kind-section
+	 * roles (image/speech/…) resolve too; an empty pool lists every role with
+	 * an `unresolvedReason` instead of hiding rows.
 	 */
-	async listRoles(options: RpcProjectModelRoleListOptions = {}): Promise<RpcProjectModelRolesResult> {
+	async listRoles(options: RpcModelRoleListOptions = {}): Promise<RpcModelRolesResult> {
 		const settings = this.#deps.getSettings();
 		const availableModels = this.#deps.getModelRegistry().getAvailable("all");
-		const revision = this.#rolesRevision.current;
 		const roles = this.#catalogRoleIds(settings).map(role => this.#buildDescriptor(role, settings, availableModels));
 		return {
 			roles,
-			revision,
-			...(options.sessionInfo ? { sessionModel: { ...options.sessionInfo } } : {}),
+			...(options.sessionModel ? { sessionModel: { model: options.sessionModel } } : {}),
 		};
 	}
 
 	/**
-	 * Persist one role selection (rpc-ui-protocol.md). Only user scope is
-	 * writable through this entry point: the value is formatted with the shared
-	 * role formatting helper, validated against the registry and the role's
-	 * acceptance predicate, written via `setModelRole`, and awaited through
-	 * `flush` before `persisted: true` is reported. `null` clears the explicit
-	 * value (OMP's fallback semantics apply); `{ kind: "auto" }` persists the
-	 * `*` auto marker. Project-scope writes reject (`unsupported` when project
-	 * writes are not enabled at all, `scope_not_allowed` otherwise); a stale
-	 * `expectedRevision` rejects with `revision_conflict`.
+	 * Persist one role selection. Only user scope is writable through this
+	 * entry point: the value is formatted with the shared role formatting
+	 * helper, validated against the registry and the role's acceptance
+	 * predicate, written via `setModelRole`, and awaited through `flush`
+	 * before `persisted: true` is reported. `null` clears the explicit value
+	 * (OMP's fallback semantics apply); `{ kind: "auto" }` persists the `*`
+	 * auto marker. A stale `expectedRevision` rejects with
+	 * `revision_conflict`.
 	 */
-	async setRole(command: RpcProjectModelRoleSetOptions): Promise<RpcProjectSetModelRoleResult> {
+	async setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
 		const previous = this.#roleWrites.get(command.roleId) ?? Promise.resolve();
 		const write = previous.then(
 			() => this.#setRole(command),
@@ -179,29 +162,29 @@ export class RpcProjectModelRoleService {
 		}
 	}
 
-	async #setRole(command: RpcProjectModelRoleSetOptions): Promise<RpcProjectSetModelRoleResult> {
+	async #setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
 		const settings = this.#deps.getSettings();
 		const registry = this.#deps.getModelRegistry();
 		const { roleId, selection } = command;
 
 		if (typeof roleId !== "string" || !this.#catalogRoleIds(settings).includes(roleId)) {
-			throw new RpcProjectModelRoleError("not_found", `Unknown model role: ${String(roleId)}`);
+			throw new RpcModelRoleError("not_found", `Unknown model role: ${String(roleId)}`);
 		}
 
 		// Wire-level scope guard: the declared type is "user", but the raw
-		// frame value is untyped at runtime and needs distinct error codes.
+		// frame value is untyped at runtime and needs a distinct error code.
 		const scope: unknown = command.scope;
 		if (scope !== "user") {
-			throw new RpcProjectModelRoleError("scope_not_allowed", "Model roles support only user writes");
+			throw new RpcModelRoleError("scope_not_allowed", "Model roles support only user writes");
 		}
 		if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
-			throw new RpcProjectModelRoleError("invalid_params", "expectedRevision is required");
+			throw new RpcModelRoleError("invalid_params", "expectedRevision is required");
 		}
 
 		const expectedValue = settings.getGlobalModelRole(roleId);
 		const currentRevision = this.#roleRevision(roleId, expectedValue);
 		if (command.expectedRevision !== undefined && command.expectedRevision !== currentRevision) {
-			throw new RpcProjectModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
+			throw new RpcModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
 		}
 
 		const value = this.#formatSelection(settings, registry, roleId, selection);
@@ -209,9 +192,9 @@ export class RpcProjectModelRoleService {
 			await settings.saveUserModelRole(roleId, value, expectedValue);
 		} catch (error) {
 			if (error instanceof ModelRoleConflictError) {
-				throw new RpcProjectModelRoleError("revision_conflict", error.message);
+				throw new RpcModelRoleError("revision_conflict", error.message);
 			}
-			throw new RpcProjectModelRoleError(
+			throw new RpcModelRoleError(
 				"persistence_failed",
 				`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
 			);
@@ -219,14 +202,12 @@ export class RpcProjectModelRoleService {
 		// Sessions hold cloneForCwd snapshots of the global layer: reload their
 		// persisted layers so post-save role resolution adopts the new value.
 		await this.#deps.reloadSessionSettings?.();
-
-		const revision = this.#rolesRevision.bump();
 		this.#deps.emit({ type: "settings_changed", scope: "user" });
 		// Fresh post-save read: provenance naturally reports a higher layer
 		// (runtime/overlay/project) when one still owns the effective value.
 		const role = this.#buildDescriptor(roleId, settings, registry.getAvailable("all"));
 		const effectiveNote = this.#effectiveNote(role, selection);
-		return { role, revision, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
+		return { role, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
 	}
 
 	/** Catalog ids: `getKnownRoleIds` order first, then leftover merged `modelRoles` keys (deduped). */
@@ -242,12 +223,12 @@ export class RpcProjectModelRoleService {
 		return uniqueRoles;
 	}
 
-	#roleRevision(role: string, value: string | undefined): RpcRevision {
+	#roleRevision(role: string, value: string | undefined): string {
 		return `role-${Bun.hash(JSON.stringify([role, value ?? null])).toString(36)}`;
 	}
 
-	/** Build one catalog row from live settings; `revision` is the catalog revision at read time. */
-	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): RpcProjectRoleDescriptor {
+	/** Build one catalog row from live settings. */
+	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): RpcModelRoleDescriptor {
 		const info = getRoleInfo(role, settings);
 		const explicitValue = settings.getModelRole(role);
 		// Zero-session resolution: without a live session there is no
@@ -296,20 +277,17 @@ export class RpcProjectModelRoleService {
 	): string | undefined {
 		if (selection === null) return undefined;
 		if (!selection || (selection.kind !== "auto" && selection.kind !== "model")) {
-			throw new RpcProjectModelRoleError("invalid_params", "A valid selection is required");
+			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
 		}
 		if (selection.kind === "auto") return DEFAULT_MODEL_ROLE_ALIAS;
 		const { provider, modelId, thinkingLevel } = selection.model;
 		const available = registry.getAvailable("all");
 		const model = available.find(candidate => candidate.provider === provider && candidate.id === modelId);
 		if (!model) {
-			throw new RpcProjectModelRoleError(
-				"invalid_params",
-				`Model not available: ${String(provider)}/${String(modelId)}`,
-			);
+			throw new RpcModelRoleError("invalid_params", `Model not available: ${String(provider)}/${String(modelId)}`);
 		}
 		if (!getRoleInfo(roleId, settings).accepts(model)) {
-			throw new RpcProjectModelRoleError(
+			throw new RpcModelRoleError(
 				"invalid_params",
 				`Model ${model.provider}/${model.id} does not fit role ${roleId}`,
 			);
@@ -317,7 +295,7 @@ export class RpcProjectModelRoleService {
 		const level =
 			thinkingLevel === undefined ? undefined : parseThinkingSuffix(thinkingLevel, MAX_THINKING_SUFFIX_OPTIONS);
 		if (thinkingLevel !== undefined && level === undefined) {
-			throw new RpcProjectModelRoleError("invalid_params", `Invalid thinking level: ${String(thinkingLevel)}`);
+			throw new RpcModelRoleError("invalid_params", `Invalid thinking level: ${String(thinkingLevel)}`);
 		}
 		// `formatRoleModelValue` types its override as ThinkingLevel but only
 		// forwards it to `formatModelSelectorValue`, which also accepts the
@@ -332,7 +310,7 @@ export class RpcProjectModelRoleService {
 	 * intentionally has no fixed concrete model (auto policy / no current
 	 * match). Absent when the saved value simply took effect.
 	 */
-	#effectiveNote(role: RpcProjectRoleDescriptor, selection: RpcModelRoleSelection): string | undefined {
+	#effectiveNote(role: RpcModelRoleDescriptor, selection: RpcModelRoleSelection): string | undefined {
 		const action = selection == null ? "Cleared the user config value" : "Saved to user config";
 		if (role.source === "runtime" || role.source === "overlay" || role.source === "project") {
 			return `${action}; effective source: ${role.source} (the user value applies once that layer changes)`;

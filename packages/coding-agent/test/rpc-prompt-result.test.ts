@@ -1,6 +1,5 @@
-import { describe, expect, test, vi } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { promptRpcBuiltinResidual, type RpcBuiltinResidualSession } from "../src/modes/rpc/rpc-mode";
 import {
 	RpcExtensionUserMessageTracker,
 	RpcPromptResults,
@@ -552,29 +551,4 @@ describe("initializeExtensions invokingTask rejection safety", () => {
 
 		expect(unhandled).toEqual([]);
 	});
-});
-
-describe("RPC builtin residual prompt routing", () => {
-	test.each(["steer", "followUp"] as const)(
-		"forwards %s while streaming instead of rejecting the residual prompt as busy",
-		async streamingBehavior => {
-			const prompt = vi.fn(
-				async (_message: string, options?: { streamingBehavior?: "steer" | "followUp" }): Promise<boolean> => {
-					if (!options?.streamingBehavior) throw new Error("AgentBusyError");
-					return true;
-				},
-			);
-			const session = { prompt } as unknown as RpcBuiltinResidualSession;
-
-			await expect(
-				promptRpcBuiltinResidual(session, "fullsend inspect the active task", {
-					streamingBehavior,
-				}),
-			).resolves.toBe(true);
-			expect(prompt).toHaveBeenCalledWith("fullsend inspect the active task", {
-				images: undefined,
-				streamingBehavior,
-			});
-		},
-	);
 });

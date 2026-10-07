@@ -33,7 +33,7 @@ test("failed asynchronous initialization releases and rolls back its write trans
 			await Promise.resolve();
 			db.run("INSERT INTO missing_table VALUES (1)");
 		}),
-	).rejects.toThrow(JSON.stringify(dbPath));
+	).rejects.toThrow(dbPath);
 
 	const rows = await openSqliteDatabase(dbPath, db => {
 		try {
@@ -62,7 +62,7 @@ test("corruption recovery is opt-in and the default preserves the active evidenc
 	expect(isSqliteCorruptionError(failure)).toBe(true);
 	expect(failure).toBeInstanceOf(Error);
 	if (!(failure instanceof Error)) throw new Error("Expected SQLite initialization to fail");
-	expect(failure.message).toContain(JSON.stringify(dbPath));
+	expect(failure.message).toContain(dbPath);
 	expect(await fs.promises.readFile(dbPath)).toEqual(damaged);
 	expect(await backupNames(dir.path())).toEqual([]);
 });
@@ -186,7 +186,7 @@ test("a second corruption failure surfaces without rotating the first backup aga
 			recoverCorruption: true,
 			onCorruptionPreserved: backupPath => fs.copyFileSync(backupPath, dbPath),
 		}),
-	).rejects.toMatchObject({ code: "SQLITE_CORRUPT", message: expect.stringContaining(JSON.stringify(dbPath)) });
+	).rejects.toMatchObject({ code: "SQLITE_CORRUPT", message: expect.stringContaining(dbPath) });
 	const backups = await backupNames(dir.path());
 	expect(backups).toHaveLength(1);
 	expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
@@ -206,7 +206,7 @@ test("opt-in recovery never rotates a non-corruption SQLite failure", async () =
 	expect(isSqliteCorruptionError(failure)).toBe(false);
 	expect(failure).toBeInstanceOf(Error);
 	if (!(failure instanceof Error)) throw new Error("Expected SQLite initialization to fail");
-	expect(failure.message).toContain(JSON.stringify(dbPath));
+	expect(failure.message).toContain(dbPath);
 	expect(await backupNames(dir.path())).toEqual([]);
 });
 

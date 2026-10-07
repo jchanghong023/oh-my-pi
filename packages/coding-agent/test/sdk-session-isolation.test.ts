@@ -125,6 +125,14 @@ describe("createAgentSession session storage isolation", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		LocalProtocolHandler.resetOverrideForTests();
+		// Sessions under per-test agentDirs open process-wide sqlite stores
+		// (history, session index, agent.db, models.db); Windows keeps their
+		// files locked until each is closed, which would EBUSY the temp-dir
+		// cleanup below. Same shutdown as withTempConfigRoot's finally.
+		HistoryStorage.close();
+		resetSessionIndexForTests();
+		AgentStorage.close();
+		closeModelCache();
 		for (const tempDir of tempDirs.splice(0)) {
 			removeSyncWithRetries(tempDir);
 		}
@@ -149,6 +157,11 @@ describe("createAgentSession session storage isolation", () => {
 			for (const [index, workspace] of workspaces.entries()) {
 				const { session } = await createAgentSession({
 					...workspace,
+					// Same shared store as the sibling cases: skips the per-call
+					// discoverAuthStorage() SQLite open inside each workspace's
+					// agentDir, whose handle outlives dispose on Windows and
+					// locks the temp dir against afterEach cleanup.
+					authStorage: sharedAuthStorage,
 					modelRegistry: sharedModelRegistry,
 					disableExtensionDiscovery: true,
 					skills: [],

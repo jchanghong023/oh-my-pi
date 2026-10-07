@@ -1,9 +1,10 @@
 /**
  * Centralized logger for omp.
  *
- * Default: no local file or console output. Long-running headless services
- * (the auth broker, etc.) call {@link setTransports} to enable console output
- * so a process supervisor (pm2, journald, k8s) captures the logs.
+ * Default: rotating `~/.omp/logs/omp.<DATE>.<PID>.log`, no console output (writing
+ * to stdout/stderr would corrupt the TUI). Long-running headless services
+ * (the auth broker, etc.) call {@link setTransports} to swap in a console
+ * transport so a process supervisor (pm2, journald, k8s) captures the logs.
  *
  * Each entry includes `process.pid` so concurrent omp instances stay
  * traceable. The file is created on the first record written. Records are
@@ -328,9 +329,9 @@ export function flush(): void {
 
 /**
  * Desired transport configuration, applied when local logging is initialized.
- * Default: file OFF, console OFF.
+ * Default: file ON (TUI-safe), console OFF.
  */
-let transportOpts: { console?: boolean; file?: boolean | string } = { file: false };
+let transportOpts: { console?: boolean; file?: boolean | string } = { file: true };
 
 interface LocalTransports {
 	readonly file: RotatingFileSink | undefined;

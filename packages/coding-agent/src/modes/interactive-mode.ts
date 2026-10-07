@@ -1518,7 +1518,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#previousGoalContinuationActivity: string | undefined;
 	#goalSuppressNextContinuation = false;
 	#planModePreviousModelState: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
-	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel; restore?: boolean } | undefined;
+	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
 	/** Whether #pendingModelSwitch was queued by the live plan-role reconciler. */
 	#pendingPlanModelSwitch = false;
 	#planModeHasEntered = false;
@@ -4710,7 +4710,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingPlanModelSwitch = false;
 		if (!pending) return;
 		try {
-			await this.session.setModelTemporary(pending.model, pending.thinkingLevel, { restore: pending.restore });
+			await this.session.setModelTemporary(pending.model, pending.thinkingLevel);
 		} catch (error) {
 			this.showWarning(
 				`Failed to switch model after streaming: ${error instanceof Error ? error.message : String(error)}`,
@@ -4959,11 +4959,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingModelSwitch = {
 				model: prev.model,
 				thinkingLevel: prev.thinkingLevel,
-				restore: true,
 			};
 			this.#pendingPlanModelSwitch = false;
 		} else {
-			await this.session.setModelTemporary(prev.model, prev.thinkingLevel, { restore: true });
+			await this.session.setModelTemporary(prev.model, prev.thinkingLevel);
 		}
 	}
 

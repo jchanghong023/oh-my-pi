@@ -1,15 +1,13 @@
 /**
- * Unified command catalog + dynamic completion engine for RPC project mode
+ * Command catalog + dynamic completion engine for the fork RPC surface
  * (rpc-ui-protocol.md).
  *
- * `RpcCommandCatalogService` owns the project-level `/command` catalog:
- * `buildCatalog` snapshots descriptors — a live session listing via
- * `buildAvailableSlashCommands` when a session-like object is supplied, a
- * project-scoped static view (builtin registry + discovered skills) otherwise
- * — `complete` produces side-effect-free command-name and argument
- * completions, and `resolve` gives `execute_command` a strict
- * builtin/skill/unknown verdict so unknown commands never fall through to the
- * model.
+ * `RpcForkCommandCatalogService` snapshots the live session's `/command`
+ * catalog via `buildAvailableSlashCommands` (descriptors carry an execution
+ * verdict so terminal-only commands report themselves instead of failing at
+ * dispatch), `complete` produces side-effect-free command-name and argument
+ * completions, and `resolve` classifies a command line as builtin / skill /
+ * unknown so a client can decide how to dispatch it.
  *
  * Argument completions come from the runtime-free static materialization in
  * `builtin-registry.ts` (`BUILTIN_SLASH_COMMANDS`), so completion never
@@ -17,7 +15,6 @@
  * the only state this service mutates is its own catalog cache and revision.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
-import type { Settings } from "../../config/settings";
 import type { AgentSession } from "../../session/agent-session";
 import type { MCPManager } from "../../mcp";
 import {
@@ -26,15 +23,13 @@ import {
 	buildMcpArgumentCompletions,
 	buildModelSelectorCompletions,
 } from "../../slash-commands/builtin-completions";
-import { cfgSkills, type SkillsSettings } from "../../extensibility/settings";
-import { getSkillSlashCommandName, loadSkills, type Skill } from "../../extensibility/skills";
+import { getSkillSlashCommandName } from "../../extensibility/skills";
 import {
 	buildAvailableSlashCommands,
 	type InternalAvailableSlashCommand,
 } from "../../slash-commands/available-commands";
 import {
 	BUILTIN_SLASH_COMMANDS,
-	BUILTIN_SLASH_COMMANDS_INTERNAL,
 	lookupBuiltinSlashCommand,
 	type TuiBuiltinSlashCommand,
 } from "../../slash-commands/builtin-registry";
@@ -43,60 +38,18 @@ import type { SlashCommandSpec } from "../../slash-commands/types";
 import {
 	RpcRevisionSource,
 	type RpcCommandAvailability,
-	type RpcProjectCommandDescriptor,
-	type RpcProjectCompletionItem,
-	type RpcProjectCompletionKind,
-	type RpcProjectCompletionResult,
-	type RpcRevision,
-} from "./rpc-project-types";
+	type RpcCommandDescriptor,
+	type RpcCompleteCommandResult,
+	type RpcCompletionItem,
+	type RpcCompletionKind,
+} from "./rpc-fork-types";
 
 /** Reusable availability verdicts (frozen shapes, compared by reason string). */
 const AVAILABLE: RpcCommandAvailability = { available: true };
-const UNAVAILABLE_BUSINESS: RpcCommandAvailability = { available: false, reason: "omp_handler_unavailable" };
+const TUI_ONLY: RpcCommandAvailability = { available: false, reason: "tui_only" };
 const UNSUPPORTED: RpcCommandAvailability = { available: false, reason: "unsupported" };
-const SESSION_REQUIRED: RpcCommandAvailability = { available: false, reason: "session_required" };
 
-/** Commands implemented by project orchestration, rather than a TUI runtime. */
-const PROJECT_SCOPED_BUILTIN_NAMES: Readonly<Record<string, true>> = {
-	new: true,
-	resume: true,
-	settings: true,
-	setup: true,
-	hotkeys: true,
-	wiki: true,
-	repo: true,
-	git: true,
-	exit: true,
-	quit: true,
-	restart: true,
-	record: true,
-	move: true,
-};
-
-/** Pure presentation/project-switch actions; business handlers are never replaced by these. */
-const RPC_PROJECT_HOST_ACTIONS: Readonly<Record<string, string | undefined>> = {
-	hotkeys: "show_shortcuts",
-	extensions: "open_extensions",
-	agents: "open_agents",
-	wiki: "open_wiki",
-	repo: "open_repository",
-	git: "open_git",
-	tree: "select_session_branch",
-	branch: "select_branch_message",
-	fork: "select_fork_message",
-	debug: "open_debug_tools",
-	exit: "close_view",
-	quit: "close_view",
-	restart: "restart_project",
-	record: "toggle_recording",
-	move: "open_project",
-};
-export function getRpcProjectHostAction(name: string): string | undefined {
-	return Object.hasOwn(RPC_PROJECT_HOST_ACTIONS, name) ? RPC_PROJECT_HOST_ACTIONS[name] : undefined;
-}
-const PROJECT_ROUTED_BUSINESS: Readonly<Record<string, true>> = { new: true, resume: true };
-
-/** Wire-error failure carrying the project-mode `invalid_params` code. */
+/** Wire-error failure carrying an `invalid_params` code. */
 export class RpcCommandCatalogError extends Error {
 	constructor(
 		message: string,
@@ -108,26 +61,20 @@ export class RpcCommandCatalogError extends Error {
 }
 
 /** Internal catalog row: descriptor fields plus execution-relevant facts. */
-export interface RpcCommandCatalogEntry {
+interface RpcCommandCatalogEntry {
 	readonly name: string;
 	readonly aliases?: readonly string[];
 	readonly description?: string;
 	readonly inputHint?: string;
 	readonly subcommands?: readonly { name: string; description?: string; usage?: string }[];
 	readonly source: "builtin" | "skill" | "extension" | "custom" | "mcp_prompt" | "file";
-	/** true when execution requires a loaded session */
-	readonly requiresSession: boolean;
+	/** true when only a TUI runtime can run it. */
+	readonly tuiOnly: boolean;
 }
 
-/** Session-like input the catalog accepts (passed through verbatim). */
-export interface RpcCommandCatalogSession {
-	/** buildAvailableSlashCommands-compatible session-like object (optional). */
-	readonly session?: object;
-}
-
-/** Strict `execute_command` resolution verdict (see {@link RpcCommandCatalogService.resolve}). */
+/** Strict resolution verdict (see {@link RpcForkCommandCatalogService.resolve}). */
 export interface RpcCommandResolution {
-	readonly kind: "builtin" | "skill" | "session" | "unknown";
+	readonly kind: "builtin" | "skill" | "unknown";
 	readonly name?: string;
 	/** Canonical unified spec, present for `kind: "builtin"`. */
 	readonly spec?: SlashCommandSpec;
@@ -136,18 +83,16 @@ export interface RpcCommandResolution {
 }
 
 export interface RpcCommandCatalogOptions {
-	/** Project root the catalog is scoped to (the fixed startup cwd). */
+	/** Project root the catalog is scoped to (the startup cwd). */
 	readonly cwd: string;
-	/** Live settings access; `undefined` falls back to setting defaults. */
-	readonly getSettings: () => Settings | undefined;
-	/** Actual owning runtime manager; absent in zero-session or MCP-disabled catalogs. */
+	/** Actual owning runtime manager; absent when MCP is disabled. */
 	readonly getMcpManager?: (session: object) => MCPManager | undefined;
 }
 
 /** Cached catalog snapshot: completion rows plus the wire descriptors. */
 interface RpcCommandCatalogSnapshot {
 	readonly entries: readonly RpcCommandCatalogEntry[];
-	readonly descriptors: RpcProjectCommandDescriptor[];
+	readonly descriptors: RpcCommandDescriptor[];
 }
 
 /**
@@ -164,18 +109,12 @@ export function scoreCommandText(text: string, query: string): number {
 }
 
 /**
- * Builtin availability when a session listing is present: RPC can route
- * `handle`; `handleTui`-only commands are TUI business; a handler-less spec
- * cannot run anywhere.
+ * Builtin availability: RPC can route `handle`; `handleTui`-only commands are
+ * terminal business; a handler-less spec cannot run anywhere.
  */
-function builtinSessionAvailability(spec: SlashCommandSpec | undefined): RpcCommandAvailability {
-	if (spec?.name === "wt") return { available: false, reason: "project_root_fixed" };
-	if (
-		spec?.handle ||
-		(spec && (getRpcProjectHostAction(spec.name) !== undefined || PROJECT_ROUTED_BUSINESS[spec.name] === true))
-	)
-		return AVAILABLE;
-	if (spec?.handleTui) return UNAVAILABLE_BUSINESS;
+function builtinAvailability(spec: SlashCommandSpec | undefined): RpcCommandAvailability {
+	if (spec?.handle) return AVAILABLE;
+	if (spec?.handleTui) return TUI_ONLY;
 	return UNSUPPORTED;
 }
 
@@ -195,12 +134,7 @@ function findEntryByInvocation(
 }
 
 /** Project the internal entry onto the wire descriptor shape. */
-function descriptorFor(
-	entry: RpcCommandCatalogEntry,
-	execution: "omp" | "host_action",
-	scope: "project" | "session",
-	availability: RpcCommandAvailability,
-): RpcProjectCommandDescriptor {
+function descriptorFor(entry: RpcCommandCatalogEntry, availability: RpcCommandAvailability): RpcCommandDescriptor {
 	return {
 		name: entry.name,
 		...(entry.aliases?.length ? { aliases: entry.aliases } : {}),
@@ -208,58 +142,51 @@ function descriptorFor(
 		...(entry.inputHint ? { inputHint: entry.inputHint } : {}),
 		...(entry.subcommands?.length ? { subcommands: entry.subcommands } : {}),
 		source: entry.source,
-		execution,
-		scope,
+		execution: entry.tuiOnly ? "tui" : "omp",
 		availability,
 	};
 }
 
 /**
- * Unified `/command` catalog for one RPC project host: descriptor snapshots
- * (`get_available_commands`), dynamic zero-side-effect completion
- * (`complete_command`), and strict resolution for `execute_command`.
+ * Unified `/command` catalog for one RPC session: descriptor snapshots
+ * (`get_available_commands` under v3), dynamic zero-side-effect completion
+ * (`complete_command`), and strict resolution for clients that dispatch
+ * commands themselves.
  *
  * The catalog is cached until {@link invalidate} is called (settings changes,
  * plugin reloads, skill mutations); every rebuild is observable through the
  * monotonic {@link revision}.
  */
-export class RpcCommandCatalogService {
+export class RpcForkCommandCatalogService {
 	readonly #cwd: string;
-	readonly #getSettings: () => Settings | undefined;
 	readonly #getMcpManager: ((session: object) => MCPManager | undefined) | undefined;
-	#projectKey: string | undefined;
-	#sessionKeys = new WeakMap<object, string>();
+	#sessionKey: string | undefined;
 	readonly #revisions = new RpcRevisionSource("cmd-r0");
 
 	constructor(options: RpcCommandCatalogOptions) {
 		this.#cwd = options.cwd;
-		this.#getSettings = options.getSettings;
 		this.#getMcpManager = options.getMcpManager;
 	}
 
 	/** Current catalog revision; bumped by {@link invalidate}, stable across rebuilds. */
-	get revision(): RpcRevision {
+	get revision(): string {
 		return this.#revisions.current;
 	}
 
 	/** Drop the cached catalog and announce a new revision (`command_catalog_changed`). */
 	invalidate(): void {
-		this.#projectKey = undefined;
-		this.#sessionKeys = new WeakMap();
+		this.#sessionKey = undefined;
 		this.#revisions.bump();
 	}
 
 	/**
-	 * Snapshot the catalog as wire descriptors. With a session-like object the
-	 * live `buildAvailableSlashCommands` listing is projected (execution "omp",
-	 * scope "session"; handler-less builtins stay listed but report
-	 * `tui_only`/`unsupported`). Without one, the static project view lists
-	 * every builtin — `PROJECT_SCOPED_BUILTIN_NAMES` are project-scoped, the
-	 * rest report `session_required` — plus `/skill:<name>` rows from
-	 * `loadSkills`, gated by `skills.enableSkillCommands` (default true).
+	 * Snapshot the catalog as wire descriptors from the session's live
+	 * `buildAvailableSlashCommands` listing (handler-less builtins stay listed
+	 * but report `tui_only`/`unsupported`).
 	 */
-	async buildCatalog(sessionLike?: RpcCommandCatalogSession["session"]): Promise<RpcProjectCommandDescriptor[]> {
-		const snapshot = await this.#ensureSnapshot(sessionLike);
+	async buildCatalog(session?: object): Promise<RpcCommandDescriptor[]> {
+		if (!session) return [];
+		const snapshot = await this.#ensureSnapshot(session);
 		return snapshot.descriptors;
 	}
 
@@ -272,12 +199,8 @@ export class RpcCommandCatalogService {
 	 * `skill`); `/name arg…` completes builtin arguments through the static
 	 * `BUILTIN_SLASH_COMMANDS` materialization, which never needs a runtime.
 	 */
-	async complete(options: {
-		text: string;
-		cursor: number;
-		sessionLike?: RpcCommandCatalogSession["session"];
-	}): Promise<RpcProjectCompletionResult> {
-		const { text, cursor, sessionLike } = options;
+	async complete(options: { text: string; cursor: number; session?: object }): Promise<RpcCompleteCommandResult> {
+		const { text, cursor, session } = options;
 		if (typeof text !== "string") {
 			throw new RpcCommandCatalogError("text must be a string", "invalid_params");
 		}
@@ -289,20 +212,20 @@ export class RpcCommandCatalogService {
 		}
 		const head = text.slice(0, cursor);
 		if (!head.startsWith("/")) return { items: [], revision: this.revision };
-		const snapshot = await this.#ensureSnapshot(sessionLike);
+		const snapshot = session ? await this.#ensureSnapshot(session) : { entries: [] as RpcCommandCatalogEntry[] };
 		const items = /\s/.test(head.slice(1))
-			? await this.#completeArguments(head, text, snapshot.entries, cursor, sessionLike)
+			? await this.#completeArguments(head, text, snapshot.entries, cursor, session)
 			: this.#completeCommandName(head, text, snapshot.entries);
 		return { items, revision: this.revision };
 	}
 
 	/**
-	 * Strict resolution for `execute_command`: builtin lookup by name AND
-	 * alias wins; a leading `/skill:<name>` token resolves as a skill; anything
-	 * else is `unknown`, so the executor can reject instead of letting
-	 * unrecognized input fall through to the model.
+	 * Strict resolution: builtin lookup by name AND alias wins; a leading
+	 * `/skill:<name>` token resolves as a skill; anything else is `unknown`,
+	 * so the caller can decide how to dispatch instead of letting
+	 * unrecognized input silently fall through to the model.
 	 */
-	async resolve(text: string, sessionLike?: object): Promise<RpcCommandResolution> {
+	async resolve(text: string, session?: object): Promise<RpcCommandResolution> {
 		const parsed = parseSlashCommand(text);
 		if (parsed) {
 			const spec = lookupBuiltinSlashCommand(parsed.name);
@@ -315,32 +238,24 @@ export class RpcCommandCatalogService {
 			const token = text.slice(1).split(/\s/, 1)[0] ?? "";
 			if (token.startsWith("skill:")) {
 				const skillName = token.slice("skill:".length);
-				const session = sessionLike as Partial<Pick<AgentSession, "skills" | "skillsSettings">> | undefined;
+				const sessionLike = session as Partial<Pick<AgentSession, "skills" | "skillsSettings">> | undefined;
 				if (
 					skillName &&
-					session?.skillsSettings?.enableSkillCommands &&
-					session.skills?.some(skill => getSkillSlashCommandName(skill) === token)
+					sessionLike?.skillsSettings?.enableSkillCommands &&
+					sessionLike.skills?.some(skill => getSkillSlashCommandName(skill) === token)
 				) {
 					return { kind: "skill", name: token, skillName };
 				}
 			}
 		}
-		if (sessionLike && text.startsWith("/")) {
-			const name = text.slice(1).split(/\s/, 1)[0] ?? "";
-			const snapshot = await this.#ensureSnapshot(sessionLike);
-			const entry = findEntryByInvocation(snapshot.entries, name);
-			if (entry) return { kind: "session", name: entry.name };
-		}
 		return parsed?.name ? { kind: "unknown", name: parsed.name } : { kind: "unknown" };
 	}
 
-	async #ensureSnapshot(sessionLike?: object): Promise<RpcCommandCatalogSnapshot> {
-		const snapshot = sessionLike ? await this.#buildSessionSnapshot(sessionLike) : await this.#buildProjectSnapshot();
+	async #ensureSnapshot(sessionLike: object): Promise<RpcCommandCatalogSnapshot> {
+		const snapshot = await this.#buildSessionSnapshot(sessionLike);
 		const key = JSON.stringify(snapshot.descriptors);
-		const previous = sessionLike ? this.#sessionKeys.get(sessionLike) : this.#projectKey;
-		if (previous !== undefined && previous !== key) this.#revisions.bump();
-		if (sessionLike) this.#sessionKeys.set(sessionLike, key);
-		else this.#projectKey = key;
+		if (this.#sessionKey !== undefined && this.#sessionKey !== key) this.#revisions.bump();
+		this.#sessionKey = key;
 		return snapshot;
 	}
 
@@ -350,95 +265,30 @@ export class RpcCommandCatalogService {
 			includeTuiOnlyBuiltins: true,
 		});
 		const entries: RpcCommandCatalogEntry[] = [];
-		const descriptors: RpcProjectCommandDescriptor[] = [];
+		const descriptors: RpcCommandDescriptor[] = [];
 		for (const command of available) {
 			const entry = entryFromAvailable(command);
 			entries.push(entry);
 			descriptors.push(
 				descriptorFor(
 					entry,
-					command.source === "builtin" &&
-						getRpcProjectHostAction(command.name) !== undefined &&
-						!lookupBuiltinSlashCommand(command.name)?.handle
-						? "host_action"
-						: "omp",
-					entry.requiresSession ? "session" : "project",
-					command.source === "builtin"
-						? builtinSessionAvailability(lookupBuiltinSlashCommand(command.name))
-						: AVAILABLE,
+					command.source === "builtin" ? builtinAvailability(lookupBuiltinSlashCommand(command.name)) : AVAILABLE,
 				),
 			);
 		}
 		return { entries, descriptors };
-	}
-
-	/** Session-free catalog: full builtin registry (project/session scoped) plus skill commands. */
-	async #buildProjectSnapshot(): Promise<RpcCommandCatalogSnapshot> {
-		const entries: RpcCommandCatalogEntry[] = [];
-		const descriptors: RpcProjectCommandDescriptor[] = [];
-		for (const spec of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-			const requiresSession = PROJECT_SCOPED_BUILTIN_NAMES[spec.name] !== true;
-			const hint = spec.acpInputHint ?? spec.inlineHint;
-			const entry: RpcCommandCatalogEntry = {
-				name: spec.name,
-				...(spec.aliases?.length ? { aliases: spec.aliases } : {}),
-				description: spec.description,
-				...(hint ? { inputHint: hint } : {}),
-				...(spec.subcommands?.length ? { subcommands: spec.subcommands } : {}),
-				source: "builtin",
-				requiresSession,
-			};
-			entries.push(entry);
-			descriptors.push(
-				descriptorFor(
-					entry,
-					getRpcProjectHostAction(spec.name) !== undefined && !spec.handle ? "host_action" : "omp",
-					requiresSession ? "session" : "project",
-					requiresSession ? SESSION_REQUIRED : builtinSessionAvailability(spec),
-				),
-			);
-		}
-		for (const skill of await this.#loadSkillCommands()) {
-			const entry: RpcCommandCatalogEntry = {
-				name: getSkillSlashCommandName(skill),
-				description: skill.description || `Run ${skill.name} skill`,
-				inputHint: "arguments",
-				source: "skill",
-				requiresSession: true,
-			};
-			entries.push(entry);
-			descriptors.push(descriptorFor(entry, "omp", "session", SESSION_REQUIRED));
-		}
-		return { entries, descriptors };
-	}
-
-	/** Skills as `/skill:<name>` commands; empty when skills or skill commands are disabled. */
-	async #loadSkillCommands(): Promise<Skill[]> {
-		const skillsSettings = this.#skillsSettings();
-		if (skillsSettings.enableSkillCommands === false) return [];
-		const { skills } = await loadSkills({ ...skillsSettings, cwd: this.#cwd });
-		return skills;
-	}
-
-	#skillsSettings(): SkillsSettings {
-		const settings = this.#getSettings();
-		return settings ? cfgSkills.get(settings) : {};
 	}
 
 	/** Command-NAME completion over catalog names, aliases, and skill rows. */
-	#completeCommandName(
-		head: string,
-		text: string,
-		entries: readonly RpcCommandCatalogEntry[],
-	): RpcProjectCompletionItem[] {
+	#completeCommandName(head: string, text: string, entries: readonly RpcCommandCatalogEntry[]): RpcCompletionItem[] {
 		const query = head.slice(1).toLowerCase();
 		const tokenEnd = text.search(/\s/) < 0 ? text.length : text.search(/\s/);
-		const scored: Array<{ score: number; item: RpcProjectCompletionItem }> = [];
+		const scored: Array<{ score: number; item: RpcCompletionItem }> = [];
 		const pushCandidate = (
 			entry: RpcCommandCatalogEntry,
 			label: string,
 			score: number,
-			kind: RpcProjectCompletionKind,
+			kind: RpcCompletionKind,
 		): void => {
 			if (score <= 0) return;
 			scored.push({
@@ -476,7 +326,7 @@ export class RpcCommandCatalogService {
 		entries: readonly RpcCommandCatalogEntry[],
 		cursor: number,
 		sessionLike: object | undefined,
-	): Promise<RpcProjectCompletionItem[]> {
+	): Promise<RpcCompletionItem[]> {
 		const invocation = /^\/([^\s]+)\s+/.exec(head);
 		if (!invocation) return [];
 		const name = invocation[1]!;
@@ -551,6 +401,7 @@ export class RpcCommandCatalogService {
 
 /** Catalog row from a live `InternalAvailableSlashCommand`. */
 function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandCatalogEntry {
+	const spec = command.source === "builtin" ? lookupBuiltinSlashCommand(command.name) : undefined;
 	return {
 		name: command.name,
 		...(command.aliases?.length ? { aliases: [...command.aliases] } : {}),
@@ -558,6 +409,6 @@ function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandC
 		...(command.input?.hint ? { inputHint: command.input.hint } : {}),
 		...(command.subcommands?.length ? { subcommands: command.subcommands } : {}),
 		source: command.source,
-		requiresSession: command.source === "builtin" ? PROJECT_SCOPED_BUILTIN_NAMES[command.name] !== true : true,
+		tuiOnly: spec !== undefined && !spec.handle && spec.handleTui !== undefined,
 	};
 }

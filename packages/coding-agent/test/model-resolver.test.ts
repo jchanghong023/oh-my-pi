@@ -1,5 +1,4 @@
 import { describe, expect, test, vi } from "bun:test";
-import * as path from "node:path";
 import { type Api, Effort, type Model, type ModelSpec } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -10,7 +9,6 @@ import {
 	expandRoleAlias,
 	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
-	filterAvailableModelsByDisabledPatterns,
 	formatModelStringWithRouting,
 	parseModelPattern,
 	pickDefaultAvailableModel,
@@ -24,7 +22,6 @@ import {
 	resolveModelFromSettings,
 	resolveModelFromString,
 	resolveModelOverride,
-	resolveModelOverrideWithAuthFallback,
 	resolveModelRoleValue,
 	resolveModelScope,
 	resolveRoleChain,
@@ -33,7 +30,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { DEFAULT_MODEL_ROLE_ALIAS, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgDisabledModels, cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [
@@ -2745,276 +2741,6 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].provider).toBe("openai");
 		expect(result[0].id).toBe("gpt-5.5");
-	});
-});
-
-describe("disabledModels exclusion policy", () => {
-	const models = mockModels as Model<Api>[];
-	const registry = { getAvailable: () => models, getAll: () => models };
-	const blocked = "anthropic/claude-sonnet-4-5";
-
-	test("keeps empty enabledModels unrestricted except for explicit exclusions", async () => {
-		const settings = Settings.isolated({ enabledModels: [], disabledModels: [blocked] });
-		expect(filterAvailableModelsByEnabledPatterns(models, [], settings).map(model => model.provider)).toEqual([
-			"openai",
-		]);
-		expect((await resolveAllowedModels(registry, settings)).map(model => model.provider)).toEqual(["openai"]);
-	});
-
-	test("represents disabled-all and disabling the sole positively enabled model", async () => {
-		for (const settings of [
-			Settings.isolated({ disabledModels: ["*"] }),
-			Settings.isolated({ enabledModels: [blocked], disabledModels: [blocked] }),
-		]) {
-			expect(filterAvailableModelsByEnabledPatterns(models, cfgEnabledModels.get(settings), settings)).toEqual([]);
-			expect(await resolveAllowedModels(registry, settings)).toEqual([]);
-		}
-	});
-
-	test("exclusions override wildcard inclusions and explicit scope pins", async () => {
-		const settings = Settings.isolated({ enabledModels: ["*"], disabledModels: [blocked] });
-		expect(filterAvailableModelsByEnabledPatterns(models, ["*"], settings).map(model => model.provider)).toEqual([
-			"openai",
-		]);
-		expect(await resolveModelScope([blocked], registry, undefined, settings)).toEqual([]);
-		const result = resolveCliModel({ cliModel: blocked, modelRegistry: registry, settings });
-		expect(result.model).toBeUndefined();
-		expect(result.disabledModel).toBe(blocked);
-		expect(result.error).toContain("disabled");
-	});
-
-	test("disabling a sole positive pin never retargets it to a fuzzy sibling", async () => {
-		const pinned = models[0];
-		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
-		const catalog = [pinned, sibling];
-		const pin = `${pinned.provider}/${pinned.id}`;
-		for (const selector of [pin, pinned.id]) {
-			const settings = Settings.isolated({ enabledModels: [selector], disabledModels: [pin] });
-			const available = filterAvailableModelsByDisabledPatterns(catalog, [pin], settings);
-			expect(filterAvailableModelsByEnabledPatterns(available, [selector], settings)).toEqual([]);
-			expect(await resolveAllowedModels({ getAvailable: () => available }, settings)).toEqual([]);
-			expect(await resolveModelScope([selector], { getAvailable: () => available })).toEqual([]);
-			expect(await resolveModelScope([selector], { getAvailable: () => available }, undefined, settings)).toEqual(
-				[],
-			);
-		}
-	});
-
-	test("does not retarget disabled exact bare CLI ids but preserves fuzzy and cross-provider matches", () => {
-		const pinned = models[0];
-		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
-		const pin = `${pinned.provider}/${pinned.id}`;
-		const settings = Settings.isolated({ disabledModels: [pin] });
-		const catalog = [pinned, sibling];
-		const available = filterAvailableModelsByDisabledPatterns(catalog, [pin], settings);
-		const scopedRegistry = { getAll: () => catalog, getAvailable: () => available };
-
-		const exact = resolveCliModel({ cliModel: pinned.id, modelRegistry: scopedRegistry, settings });
-		expect(exact.model).toBeUndefined();
-		expect(exact.disabledModel).toBe(pin);
-
-		const fuzzy = resolveCliModel({ cliModel: "highspeed", modelRegistry: scopedRegistry, settings });
-		expect(fuzzy.model?.id).toBe(sibling.id);
-
-		const otherProvider = buildModel({
-			...pinned,
-			provider: "openai",
-			baseUrl: "https://api.openai.com",
-			name: "OpenAI duplicate id",
-		});
-		const duplicateCatalog = [pinned, otherProvider];
-		const duplicateAvailable = filterAvailableModelsByDisabledPatterns(duplicateCatalog, [pin], settings);
-		const duplicate = resolveCliModel({
-			cliModel: pinned.id,
-			modelRegistry: { getAll: () => duplicateCatalog, getAvailable: () => duplicateAvailable },
-			settings,
-		});
-		expect(duplicate.model?.provider).toBe("openai");
-	});
-
-	test("positive enabledModels constrain CLI, role and explicit scope selectors", async () => {
-		const settings = Settings.isolated({ enabledModels: ["openai/gpt-4o"] });
-		const cli = resolveCliModel({ cliModel: blocked, modelRegistry: registry, settings });
-		expect(cli.model).toBeUndefined();
-		expect(cli.error).toContain("enabledModels");
-		expect(resolveModelRoleValue(blocked, models, { settings }).model).toBeUndefined();
-		expect(await resolveModelScope([blocked], registry, undefined, settings)).toEqual([]);
-	});
-
-	test("synthetic selectors honor positive patterns consistently across CLI, roles and scopes", async () => {
-		const bedrock = createBedrockDefaultModel();
-		const arn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
-		const cases = [
-			{ catalog: [bedrock], selector: `amazon-bedrock/${arn}` },
-			{
-				catalog: [buildModel({ ...mockOpenRouterModels[0], id: "qwen/qwen3-coder" })],
-				selector: "openrouter/qwen/qwen3-coder:nitro",
-			},
-		];
-		for (const { catalog, selector } of cases) {
-			const registry = { getAll: () => catalog, getAvailable: () => catalog };
-			const provider = catalog[0].provider;
-			for (const enabledModels of [["*"], [`${provider}/*`], [selector]]) {
-				const settings = Settings.isolated({ enabledModels });
-				settings.setModelRole("default", selector);
-				const cli = resolveCliModel({ cliModel: selector, modelRegistry: registry, settings });
-				expect(cli.error).toBeUndefined();
-				expect(cli.model && `${cli.model.provider}/${cli.model.id}`).toBe(selector);
-				const role = resolveModelRoleValue("@default", catalog, { settings });
-				expect(role.model && `${role.model.provider}/${role.model.id}`).toBe(selector);
-				const scope = await resolveModelScope([selector], registry, undefined, settings);
-				expect(scope.map(entry => `${entry.model.provider}/${entry.model.id}`)).toEqual([selector]);
-			}
-			for (const settings of [
-				Settings.isolated({ enabledModels: ["openai/gpt-4o"] }),
-				Settings.isolated({ enabledModels: ["*"], disabledModels: [selector] }),
-				Settings.isolated({ enabledModels: ["*"], disabledModels: [`${provider}/*`] }),
-			]) {
-				expect(resolveCliModel({ cliModel: selector, modelRegistry: registry, settings }).model).toBeUndefined();
-				expect(resolveModelRoleValue(selector, catalog, { settings }).model).toBeUndefined();
-				expect(await resolveModelScope([selector], registry, undefined, settings)).toEqual([]);
-			}
-		}
-	});
-
-	test("enabledModels-excluded literal CLI pin carries the no-defer refusal flag", () => {
-		// main.ts defers an unresolved `--model provider/model` (no `:`) to
-		// post-extension resolution, and that deferred pool ignores enabledModels,
-		// so the refusal must set disabledModel to exit instead of deferring.
-		const settings = Settings.isolated({ enabledModels: ["openai/gpt-4o"] });
-
-		const literal = resolveCliModel({ cliModel: blocked, modelRegistry: registry, settings });
-		expect(literal.model).toBeUndefined();
-		expect(literal.disabledModel).toBe(blocked);
-		expect(literal.disabledProvider).toBeUndefined();
-		expect(literal.error).toContain("enabledModels");
-
-		// Control: the `:high` suffix form keeps refusing with the same error.
-		const suffixed = resolveCliModel({ cliModel: `${blocked}:high`, modelRegistry: registry, settings });
-		expect(suffixed.model).toBeUndefined();
-		expect(suffixed.error).toContain("enabledModels");
-
-		// Control: the `--provider`/`--model` pair keeps refusing with the same error.
-		const providerPair = resolveCliModel({
-			cliProvider: "anthropic",
-			cliModel: "claude-sonnet-4-5",
-			modelRegistry: registry,
-			settings,
-		});
-		expect(providerPair.model).toBeUndefined();
-		expect(providerPair.error).toContain("enabledModels");
-
-		// Control: a genuinely missing model reports an error without the
-		// refusal flag, so CLI resolution still defers it to extensions.
-		const missing = resolveCliModel({ cliModel: "ghost-provider/ghost-model", modelRegistry: registry, settings });
-		expect(missing.model).toBeUndefined();
-		expect(missing.disabledModel).toBeUndefined();
-		expect(missing.disabledProvider).toBeUndefined();
-		expect(missing.error).toBeTruthy();
-	});
-
-	test("disabled exact role models do not fuzzy-fallback to a sibling", () => {
-		const pinned = models[0];
-		const sibling = buildModel({ ...pinned, id: `${pinned.id}-highspeed`, name: "Highspeed sibling" });
-		const catalog = [pinned, sibling];
-		const pin = `${pinned.provider}/${pinned.id}`;
-		const settings = Settings.isolated({ modelRoles: { fable: pin }, disabledModels: [pin] });
-		const available = [...filterAvailableModelsByDisabledPatterns(catalog, [pin], settings)];
-		expect(resolveModelRoleValue("@fable", available, { settings }).model).toBeUndefined();
-	});
-
-	test("uses the same role and literal colon-bearing selector grammar", () => {
-		const settings = Settings.isolated({ modelRoles: { fable: `${blocked}:high` } });
-		expect(
-			filterAvailableModelsByDisabledPatterns(models, ["@fable"], settings).map(model => model.provider),
-		).toEqual(["openai"]);
-		const literalMax = mockMaxSuffixModels.find(model => model.id === "coding-router:max");
-		expect(literalMax).toBeDefined();
-		expect(filterAvailableModelsByDisabledPatterns(mockMaxSuffixModels, ["nanogpt/*:max"])).not.toContain(
-			literalMax!,
-		);
-	});
-
-	test("global match-all includes slash-bearing vendor ids for inclusion and exclusion", () => {
-		const catalog = [...models, ...mockOpenRouterModels];
-		expect(filterAvailableModelsByEnabledPatterns(catalog, ["*"])).toHaveLength(catalog.length);
-		expect(filterAvailableModelsByDisabledPatterns(catalog, ["*"])).toEqual([]);
-	});
-
-	test("treats actual catalog row ids with glob characters as literal pins", async () => {
-		const literal = buildModel({ ...models[0], id: "literal[fast]*", name: "Literal glob-character id" });
-		const neighbor = buildModel({ ...models[0], id: "literalfast-more", name: "Neighbor" });
-		const catalog = [literal, neighbor];
-		const pin = `${literal.provider}/${literal.id}`;
-		expect(filterAvailableModelsByDisabledPatterns(catalog, [pin])).toEqual([neighbor]);
-		expect(filterAvailableModelsByEnabledPatterns(catalog, [pin])).toEqual([literal]);
-		expect((await resolveModelScope([pin], { getAvailable: () => catalog })).map(entry => entry.model)).toEqual([
-			literal,
-		]);
-	});
-
-	test("does not rematch a fuzzy exclusion onto another survivor", () => {
-		const settings = Settings.isolated({ disabledModels: ["claude"] });
-		const sonnet = models.find(model => model.provider === "anthropic")!;
-		const haiku = buildModel({ ...sonnet, id: "claude-haiku-4-5", name: "Claude Haiku 4.5" });
-		const once = filterAvailableModelsByEnabledPatterns([sonnet, haiku], [], settings);
-		expect(once).toHaveLength(1);
-		expect(filterAvailableModelsByEnabledPatterns(once, [], settings)).toEqual(once);
-	});
-
-	test("excludes synthetic inference profiles with provider globs", async () => {
-		const bedrock = { getAvailable: () => [createBedrockDefaultModel()] };
-		const settings = Settings.isolated({
-			enabledModels: ["arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48"],
-			disabledModels: ["amazon-bedrock/*"],
-		});
-		expect(await resolveAllowedModels(bedrock, settings)).toEqual([]);
-	});
-
-	test("keeps inference profiles when their unrelated transport template is excluded", async () => {
-		const template = createBedrockDefaultModel();
-		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
-		const registry = { getAvailable: () => [template] };
-		for (const excluded of [`${template.provider}/${template.id}`, `${template.provider}/anthropic.*`]) {
-			const settings = Settings.isolated({ enabledModels: [profileArn], disabledModels: [excluded] });
-			expect((await resolveAllowedModels(registry, settings)).map(model => model.id)).toEqual([profileArn]);
-			expect(
-				(await resolveModelScope([profileArn], registry, undefined, settings)).map(entry => entry.model.id),
-			).toEqual([profileArn]);
-		}
-	});
-
-	test("applies path-scoped exclusions when cwd changes", async () => {
-		const first = path.resolve("disabled-model-scope-a");
-		const second = path.resolve("disabled-model-scope-b");
-		const settings = Settings.isolated({
-			disabledModels: [{ paths: [first], models: [blocked] }],
-		});
-		await settings.reloadForCwd(first);
-		expect(cfgDisabledModels.get(settings)).toEqual([blocked]);
-		expect((await resolveAllowedModels(registry, settings)).map(model => model.provider)).toEqual(["openai"]);
-		await settings.reloadForCwd(second);
-		expect(cfgDisabledModels.get(settings)).toEqual([]);
-		expect(await resolveAllowedModels(registry, settings)).toEqual(models);
-	});
-
-	test("skips excluded subagent primary models without probing their keys", async () => {
-		const keyCalls: string[] = [];
-		const settings = Settings.isolated({ disabledModels: [blocked] });
-		const result = await resolveModelOverrideWithAuthFallback(
-			[blocked, "openai/gpt-4o"],
-			blocked,
-			{
-				getAvailable: () => models,
-				async getApiKey(model) {
-					keyCalls.push(`${model.provider}/${model.id}`);
-					return "fixture-key";
-				},
-			},
-			settings,
-		);
-		expect(result.model?.provider).toBe("openai");
-		expect(keyCalls).toEqual(["openai/gpt-4o"]);
 	});
 });
 

@@ -127,7 +127,7 @@ async function runInherit(argv: readonly string[]): Promise<number> {
 
 async function main(debug: boolean): Promise<number> {
 	const fulltestStartedAt = performance.now();
-	const fulltestExit = await runInherit(["bun", "scripts/fulltest.ts", ...(debug ? ["--debug"] : [])]);
+	const fulltestExit = await runInherit(["bun", "run", "fulltest", ...(debug ? ["--debug"] : [])]);
 	if (fulltestExit !== 0) fail(`fulltest failed with exit code ${fulltestExit}; not pushing or triggering CI`);
 	logStageDone("fulltest", fulltestStartedAt);
 

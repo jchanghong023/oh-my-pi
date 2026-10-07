@@ -316,7 +316,7 @@ jobs:
               # uname/ldd/curl as POSIX sh scripts and splices a colon-delimited
               # PATH, so it needs a POSIX toolchain and cannot run on Windows).
               # The fork-only script tests are hermetic, so run them directly.
-              bun test scripts/ci-test-ts.test.ts scripts/release.test.ts scripts/fastcheck.test.ts scripts/install-tests/fork-installer-routing.test.ts
+              bun test scripts/ci-test-ts.test.ts scripts/release.test.ts scripts/install-tests/fork-installer-routing.test.ts
 
    test_coding_agent_singleton:
       name: Test coding-agent singleton/global-state (TS)

@@ -12,7 +12,6 @@ Primary implementation:
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`
 - `packages/coding-agent/src/modes/rpc/rpc-types.ts`
 - `packages/coding-agent/src/modes/rpc/rpc-fork-types.ts` — fork v3 extensions
-- `packages/coding-agent/src/modes/rpc/rpc-project-types.ts` / `rpc-project.ts` — explicit project host
 - `packages/coding-agent/src/session/agent-session.ts`
 - `packages/coding-agent/src/session/agent-session-events.ts`
 - `packages/agent/src/agent.ts`
@@ -70,7 +69,7 @@ After the success response, oversized stdout objects use an uninterrupted sequen
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript client offers an explicit `negotiateProtocolV3()` (v2 is negotiated automatically) and uses the same chunk decoder for v2/v3. The Python, Rust and Go clients negotiate v2.
+Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript client negotiates v2 automatically and uses the same chunk decoder for v2/v3. The Python, Rust and Go clients negotiate v2.
 
 For an oversized `agent_end` in chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
 
@@ -109,7 +108,7 @@ Protocols v2/v3 may wrap oversized logical frames from these categories in `rpc_
 
 ## Request/Response Correlation
 
-Single-session commands accept optional `id?: string`. Project mode requires a nonempty id and rejects a duplicate while the prior request with that id is still in flight.
+Single-session commands accept optional `id?: string`.
 
 - If provided, normal command responses echo the same `id`.
 - `RpcClient` relies on this for pending-request resolution.
@@ -121,34 +120,19 @@ Important edge behavior from runtime:
 - Ordinary `prompt` handling acknowledges after the message is admitted (queued, given an idle turn slot, or routed to an extension command), not before native `input` handlers or image preparation finish, and without waiting for the agent run. `abort_and_prompt` first awaits the abort, then acknowledges. A failure before admission is the command's error response. A failure after admission can still emit a later error response with the same `id`.
 - An accepted `prompt` or `abort_and_prompt` completes exactly once: either its success response carries `data.agentInvoked: false` (finished locally), or a later `prompt_result` frame with the same `id` reports how its work ended. `prompt_result` is always written after the response for that `id`.
 
-## Fork v3 and project mode
+## Fork v3 surface
 
-Fork business commands/events are opt-in: negotiate `{"type":"negotiate_protocol","protocolVersion":3,"id":"protocol-1"}` before using them. V3 retains v2 lossless chunk framing. Clients remaining on v1/v2 do not receive fork-only frames.
+Fork business commands are opt-in: negotiate `{"type":"negotiate_protocol","protocolVersion":3,"id":"protocol-1"}` before using them. V3 retains v2 lossless chunk framing and responds with the fork capability flags (`commandCompletion`, `modelRoleConfig`, `sessionDirectory`). Clients remaining on v1/v2 do not receive fork-only behavior. ZCode embeds one OMP process per session over the regular single-session host (`omp --mode rpc-ui`); there is no separate project host.
 
-```bash
-omp --mode rpc-ui --rpc-project
-```
-
-Project mode fixes the project root to startup cwd and permits zero loaded sessions. Its `ready` frame adds `mode: "rpc-ui-project"`, `projectIdentity`, `processInstanceId` and capability flags. It accepts only v3 negotiation; confirm both the mode and capabilities rather than assuming the protocol version implies a project host.
-
-- Loaded-session commands carry `sessionId` and the `sessionGeneration` returned by loading that instance. Missing generations fail with `invalid_params`; old ones fail with `stale_session`. Historical queries may read an unloaded session without creating a running instance.
-- Session responses, events and host interactions include process/session ownership. Each session has its own input gate, command queue, tool/URI callback bridge and interaction state; shared host-tool/URI catalogs do not authorize cross-session results.
-- Use the project lifecycle (`create_session`, `resume_session`, `close_session`) rather than legacy commands that replace one active session. A busy or incomplete close is not reported as closed. Project mode does not support `branch` / `fork`: both fail with `code: "unsupported"` without changing session identity or history. Branching/forking remains a single-session capability (see [Session](#session)).
-- `get_available_commands` / `complete_command` are catalog operations. `execute_command` uses strict command resolution: unknown commands and invalid builtin arguments do not become model prompts. Discovery is not proof that every terminal-only command has a GUI execution path.
-
-- `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes. `set_model_role` currently writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides.
-- Directory cursors are opaque, revision/filter-bound strings. Reusing them after resource changes fails with `stale_cursor`; restart instead of combining generations.
+- After v3, `get_available_commands` returns rich catalog descriptors — name, aliases, description, input hint, subcommands, source, an `execution` verdict (`omp` vs `tui`), and an `availability` reason so terminal-only commands report themselves instead of failing at dispatch — plus a catalog `revision`. Command and skill invocation stays on the upstream `prompt` pipeline.
+- `complete_command` (`{ id, type: "complete_command", text, cursor }`) is zero-side-effect completion over that catalog: `/prefix` completes command names and aliases, `/name arg…` completes builtin arguments. Responses carry the revision actually used.
+- `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes; `sessionModel` echoes the hosted session's current model when one exists. `set_model_role` writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides. A successful save emits a `settings_changed { scope: "user" }` frame and reloads the hosted session's settings so its role resolution adopts the new value.
+- `list_sessions` lists the startup cwd's saved-session directory (the hosted session is flagged `current` once it has persisted). `rename_session` renames the hosted session through its live API or a saved entry through a revision-guarded title-slot rewrite. `delete_session` removes a saved session with its artifacts under the same revision guard; the session this process hosts must be closed (its process ended) first and refuses with `unsupported`.
 - Session rename/delete and role writes require the resource's `expectedRevision`, not a global catalog revision.
-- The fork does not provide a structured skills-management panel. `/skills` remains discoverable but requires a loaded session; with one, it uses the shared skills handler rather than returning a host panel action.
 - `/clear` shares the in-place TUI/ACP/RPC reset: abort and await active compaction, preserve id/title/cwd/file, and clear the rendered TUI transcript/scrollback. It is not `/new`; `/fresh` still preserves conversation while resetting provider stream state.
 - `/logout` uses real provider/account selection and removes the selected stored row only after cancellation/session ownership checks. It reports remaining auth sources; a headless/no-op selector is not a substitute.
-- RPC `/model` uses a temporary setter instead of persisting the default role; ACP/TUI's existing default setter remains unchanged.
 
-The canonical project command/response types are `rpc-project-types.ts`; the maintained requirements and complete OMP/GUI acceptance matrix are [rpc-ui project requirements](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
-
-The TypeScript client exposes `negotiateProtocolV3()` for opt-in fork interaction frames. V3 also enables chunk framing on a host that does not advertise `2`: the project host advertises only `[3]` (the fork single-session host advertises `[1, 2, 3]`, where the client negotiates v2 automatically); there is no separate generic fork-command request API.
-
-Fork model configuration applies positive `enabledModels` inclusion first, then negative `disabledModels` exclusion. `enabledModels: []` includes all otherwise eligible models; `disabledModels: []` excludes none, and `["*"]` excludes all, including slash-bearing ids. Other globs keep path grammar: `provider/**` spans nested ids; `provider/*` is one level. An exact catalog `provider/id` takes literal precedence even with `*`, `?` or `[` in the id. Explicit pins, saved selections, roles, cycling and credential lookup cannot bypass exclusions; re-enabling one model must not silently widen a hand-authored wildcard. The registry retains the full inventory for management.
+The canonical fork command/response types are `rpc-fork-types.ts` (services: `rpc-fork-commands.ts`, `rpc-fork-models.ts`, `rpc-fork-sessions.ts`); the maintained requirements are [ZCode 接入需求](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
 
 ### Prompting
 
@@ -165,7 +149,7 @@ Fork model configuration applies positive `enabledModels` inclusion first, then 
 
 ### Protocol
 
-- `{ id?, type: "negotiate_protocol", protocolVersion: 2 | 3 }` (project mode requires `3`)
+- `{ id?, type: "negotiate_protocol", protocolVersion: 2 | 3 }`
 
 ### State
 
@@ -1620,7 +1604,7 @@ stdin:
 
 `packages/coding-agent/src/modes/rpc/wire` describes the upstream-compatible
 commands (parameters, success `data`, nullability, timeouts), unsolicited frames,
-and shared types as omptype schemas. Fork v3/project unions remain in their dedicated TypeScript modules. `bun run gen:rpc` emits:
+and shared types as omptype schemas. Fork v3 unions remain in their dedicated TypeScript module. `bun run gen:rpc` emits:
 
 - `rpc-wire.schema.json`: a JSON Schema 2020-12 bundle plus an `x-rpc` section:
   the command table, the stdout frame union (`serverFrame`: responses, host
@@ -1654,7 +1638,7 @@ host-owned tools and URI schemes. Their READMEs cover the APIs.
 `packages/coding-agent/test/rpc-wire` detects stale committed outputs and
 type-checks the generated TypeScript against the upstream-compatible server
 surface. Explicit fork commands and fork-only parameter/result fields are
-excluded from that conformance comparison; they need the fork/project protocol tests.
+excluded from that conformance comparison; they need the fork protocol tests.
 
 ### TypeScript helper
 
@@ -1669,7 +1653,7 @@ Current helper characteristics:
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts()` / `logout(...)`; these helpers do not imply project-mode support for provider management. Host-URI registration and delta-only message updates remain raw transport surfaces.
+ Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts()` / `logout(...)`; these helpers cover only the single-session host surface. Host-URI registration and delta-only message updates remain raw transport surfaces.
 
 ### Python package
 
@@ -1684,4 +1668,4 @@ with RpcClient(provider="anthropic", model="claude-sonnet-4-5") as client:
     print(turn.require_assistant_text())
 ```
 
-By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v3/v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork/project unions; fork commands require an explicit `negotiateProtocolV3()` first. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.
+By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork unions; fork commands are sent as raw frames after a v3 `negotiate_protocol`. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.

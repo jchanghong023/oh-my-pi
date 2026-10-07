@@ -667,17 +667,13 @@ def _send(frame):
         _proto.flush()
         return
     # Defer SIGINT while writing so a late interrupt cannot truncate a frame; it is
-    # delivered after unblocking and swallowed by the idle loop. pthread_sigmask is
-    # POSIX-only; Windows has no signal mask to manage.
-    has_sigmask = hasattr(signal, "pthread_sigmask")
-    if has_sigmask:
-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    # delivered after unblocking and swallowed by the idle loop.
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
     try:
         _proto.write(data)
         _proto.flush()
     finally:
-        if has_sigmask:
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
 
 
 # Windows cannot deliver SIGINT to one child process (the supervisor's kill terminates it), so

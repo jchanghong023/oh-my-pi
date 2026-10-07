@@ -25,7 +25,7 @@
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts` 与 `rpc-project-*.ts`（rpc-ui 协议扩展与项目运行服务，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 
@@ -35,7 +35,7 @@
 | 运行 CLI（源码） | `bun run dev` |
 | 类型检查 + lint（workspace 门禁） | `bun run check:ts` |
 | 仅静态检查（oxlint / oxfmt） | `bun run check:tools` |
-| fork 静态检查（TS 类型检查 + lint + 格式、cargo check） | `bun run fastcheck` |
+| fork 静态检查（委托上游 `check:ts` + `check:rs`：TS 类型检查、lint、格式、cargo check） | `bun run fastcheck` |
 | TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
 | Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
 | Python 测试 | `bun run test:py` |
@@ -98,11 +98,11 @@
 * 状态 MUST 区分「已实现」「验证通过」「验证失败」「未验证」；环境、依赖或权限不足时说明未验证范围，NEVER 声称功能已验收。
 * 缺少 UT 或 E2E 时 MUST 如实写明缺口与后续要求，不编造命令、不降低标准；纯文档等非功能性变更按实际影响验证，不强制运行无关的完整测试。
 
-现状与缺口（2026-09-16 依据仓库内容整理，编写本文档时未运行任何检查）：
+现状与缺口（2026-10-07 依据仓库内容整理；当日精简会话运行的验证以各功能域记录为准）：
 
-* fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。
+* fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`rpc-fork-*`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。fork TS 测试由 fulltest 按 `upstream` 基线差异动态发现，无需手工维护清单。
 * E2E 入口存在，但 fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器）：fork 改动不会自动跑这些验证，`release_gate` 也只在手动运行且各验证作业全部通过时放行。
-* 临时状态（2026-10-06 起）：上游 main 处于红色（TS 测试与 bazel clippy 损坏）时，CI 中的 TS 分片与 Rust 测试/校验作业经 `if: false` 临时禁用，`release_gate` 的 needs 相应缩减为 `[release_metadata, check, native_addons]`，流水线只构建发布产物；恢复条件为上游转绿后按 ci.yml 内注释还原被禁用作业与 release_gate 完整 needs。
+* 临时状态（2026-10-06 起）：上游 main 处于红色（TS 测试与 bazel clippy 损坏）时，CI 中的 TS 分片与 Rust 测试/校验作业经 `if: false` 临时禁用，`release_gate` 的 needs 相应缩减为 `[release_metadata, check, native_addons]`，流水线只构建发布产物；恢复条件为上游转绿后按 ci.yml 内注释还原被禁用作业与 release_gate 完整 needs。同一上游红色状态波及本地静态门禁（2026-10-07 确认）：上游自身 Windows 专属代码 `crates/pi-vfs/src/native/windows.rs` 在 pinned nightly 下违反 `clippy::map_unwrap_or`（`-D warnings` 必红；上游 CI 只在 Linux lint，扫描不到该文件），因此 fulltest 静态阶段临时只跑 `bun run check:ts`、不含 `check:rs` 的 fmt/clippy 半边；`fastcheck` 别名本身不变（本地无 Rust 改动时 run-rs-task 自跳过 clippy）。同一上游红色状态还有第二个 Windows 表现（2026-10-07 确认）：上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（LineReader 在外部 `set_len(0)` 后读出 0 行，上游 CI 只在 Linux 测试、从不执行该场景），`test:rs` 的 nextest 调用在 Windows 上带过滤表达式排除该单个用例（见 `scripts/run-rs-task.ts` 内注释），Linux 门禁不受影响。恢复条件均为上游转绿后按各文件内注释还原。上游 `rpc-mode.ts` 的 `RpcUserInputGate` 在 e0fc1cf 基线同样与其自身测试矛盾（重入 enqueue 死锁），fork 以最小修复保留在原文件内。
 * 受「验证」一节约束，未经用户明确要求的改动处于「未验证」状态；此时 MUST NOT 报告为已验证或已修复。
 
 ## 构建与缓存纪律
@@ -113,8 +113,8 @@
 
 ## 验证
 
-* fork 验证入口为三级：`bun run fastcheck`（静态检查：TS 类型检查、lint、格式 + `cargo check`，只查不测；整体 60 秒墙钟硬超时，超时杀掉运行中的子进程、输出 TIMEOUT 与已耗时间并判失败——冷缓存如同步后首次 Rust 编译超时属预期失败，无时限完整静态验证由 fulltest 承担）、`bun run fulltest`（fastcheck 全部静态检查 + 当前操作系统的 fork 绿色测试集合：TS 白名单（清单在 `scripts/fulltest.ts`，结果非黑即白、不设豁免）、Rust `cargo nextest` 核心 crate、脚本测试、UI 冒烟，不含 Python 组件；TS 白名单以 2 路有界池并行（分组内测试大量派生 bash/git/ConPTY/CLI 子进程，满并发会击穿用例默认 5 秒预算），各测试执行阶段设 3 分钟硬超时（TS 白名单阶段因半宽并行放宽为 5 分钟）、编译不计入；需要时先构建当前宿主平台 native addon；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + `wsl/ubuntu-24.04` 阶段 + 自动 push 本地 `main` 到远端、以 `publish_release=true` 触发 GitHub Actions CI 并持续监控直到返回（CI 全绿即创建 fork Release），并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
-* `bun run slowtest` 在 fulltest 通过后、主 push / CI 触发前执行 `wsl/ubuntu-24.04` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）先推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 Ubuntu-24.04 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后先 `bun install --frozen-lockfile` 再运行 `bun run fulltest`。任一步失败、fulltest 退出码非 0 或超出 2 小时硬超时均判 slowtest 失败，不继续主 push、不触发 CI，但 WSL 获取提交所需的前置推送可能已经发生，不自动回滚远端。超时只清理继承本次 OMP_WSL_STAGE_ID 的 Linux 进程及所属 Windows 进程树，不按名称清理无关任务。CI 使用唯一 slowtest_run_id 与 HEAD SHA 关联此次运行，不能用同提交的其他运行代替。
+* fork 验证入口为三级，编排尽量薄并优先复用上游检查与测试入口：`bun run fastcheck`（package.json 别名，即 `bun run check:ts && bun run check:rs`：TS 类型检查、lint、格式 + Rust fmt/clippy 检查，只查不测，不设 fork 侧整体时限，以实际检查结果判定成败）、`bun run fulltest`（`scripts/fulltest.ts`：静态检查（临时只跑上游 `check:ts`，不含 `check:rs` 的 fmt/clippy 半边，原因与恢复条件见「现状与缺口」临时状态条目）+ 当前宿主平台 native addon 构建 + fork 自有 TS 测试 + Rust workspace 测试（委托上游 `test:rs`，以 `CI=1` 关闭其本地自跳过）+ 脚本测试 + UI 冒烟，不含 Python 组件。fork TS 测试按「相对 `upstream` 分支基线有差异的 `packages/*/test` 文件」动态发现（新 fork 测试自动纳入、恢复上游的文件自动退出），不维护上游测试白名单；结果非黑即白、不设豁免，也不设 fork 侧阶段时限——子进程各自拥有 `bun test` 用例级预算；上游全量 TS 分片由 slowtest 的 Linux CI 覆盖）、`bun run slowtest`（fulltest 全部内容 + `wsl/ubuntu-24.04` 阶段 + 自动 push 本地 `main` 到远端、以 `publish_release=true` 触发 GitHub Actions CI 并持续监控直到返回（CI 全绿即创建 fork Release），并输出各阶段耗时；端到端冒烟与安装器 E2E 由该流水线覆盖）。
+* `bun run slowtest` 在 fulltest 通过后、主 push / CI 触发前执行 `wsl/ubuntu-24.04` 阶段（`scripts/slowtest-wsl-stage.ts`，仅 Windows 执行，其他平台自动跳过）：按 jch-wsl-git-test Skill 的方式机械化执行——Windows 工作区必须干净（脏即失败），按仓库实际 upstream（或唯一远端）先推送当前 HEAD 并确认远端可取（EXPECTED_SHA）；在 Ubuntu-24.04 WSL2 发行版以 root 于 /root 按 remote 身份定位（必要时经 Git 远端 clone）本仓库，WSL 工作区有未提交改动或本地分支领先/分叉即失败（不清理、不强推、不 reset），仅允许创建分支或快进到 EXPECTED_SHA 并校验 HEAD 一致；确认 bun/git 解析为发行版自身 Linux 路径（非 /mnt/ 挂载）后先 `bun install --frozen-lockfile` 再运行 `bun run fulltest`。任一步失败或 fulltest 退出码非 0 均判 slowtest 失败，不继续主 push、不触发 CI，但 WSL 获取提交所需的前置推送可能已经发生，不自动回滚远端。阶段不设 fork 侧硬时限，挂起的运行由操作者中止。CI 使用唯一 slowtest_run_id 与 HEAD SHA 关联此次运行，不能用同提交的其他运行代替。
 * `bun run fastcheck` agent 可按需自主调用，普通 TypeScript 修改后 MUST 运行；纯文档修改只做差异与格式检查。除 fastcheck 外的本地编译、类型检查、测试（含 `bun test`、`bun run test`、`test:*`、`ci:test:*`、`bun run check`、`check:types`、`bun run build`、cargo / bazel / nix 等）以及 push、触发外部流水线，MUST 仅在用户明确要求时进行。
 * `bun run fulltest` 只运行当前操作系统对应的测试；`bun run slowtest` 除当前操作系统测试外，唯一跨平台扩展是上述 `wsl/ubuntu-24.04` 阶段（仅 Windows 执行），不维护其他 WSL2/双平台运行能力；Rust 核心测试走 `cargo nextest`，Windows 自动注入 VS Build Tools 的 CMake/Ninja。
 * UI 冒烟（原 `jch-dev-ui-test` 能力，已并入 fulltest）MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。

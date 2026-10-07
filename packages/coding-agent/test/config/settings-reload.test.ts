@@ -8,7 +8,6 @@ import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 import { cfgEditModelVariants } from "@oh-my-pi/pi-coding-agent/edit/settings";
-import { cfgDisabledModels, cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgProvidersMaxInFlightRequests, cfgTemperature } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -61,17 +60,6 @@ describe("Settings layer refresh", () => {
 		await settings.reloadFromDisk();
 		expect(settings.getModelRole("smol")).toBe("company/MiniMax-M2.7");
 		expect(settings.getModelRoleProvenance("smol")).toBe("global");
-	});
-
-	it("project and runtime model restrictions override global settings", async () => {
-		await writeConfig({ disabledModels: ["zcode-api/glm-5.2"] });
-		writeProjectSettings(scopedProject, { disabledModels: ["zcode-api/*"], enabledModels: ["company/*"] });
-		const settings = await Settings.init({ cwd: scopedProject, agentDir });
-		expect(cfgDisabledModels.get(settings)).toEqual(["zcode-api/*"]);
-		expect(cfgEnabledModels.get(settings)).toEqual(["company/*"]);
-		const child = settings.overlay({ disabledModels: ["*"] });
-		expect(cfgDisabledModels.get(child)).toEqual(["*"]);
-		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({ disabledModels: ["zcode-api/glm-5.2"] });
 	});
 
 	it("rejects an on-disk value that fails validation and keeps the previous layers", async () => {

@@ -111,21 +111,6 @@ describe("issue #11820 prewalk into a models.yml discovery provider target", () 
 		expect(requestedUrls).not.toContain(`${unrelatedBaseUrl}/models`);
 	});
 
-	test("does not arm or defer an explicit target excluded by enabledModels", async () => {
-		const modelRegistry = registry();
-		const settings = Settings.isolated({ enabledModels: ["anthropic/claude-opus-4-5"] });
-		const options = await buildSessionOptions(
-			parseArgs(["--offline", "--prewalk-into", "anthropic/claude-sonnet-4-5"]),
-			[],
-			SessionManager.inMemory(),
-			modelRegistry,
-			settings,
-		);
-		expect(options.prewalk).toBeUndefined();
-		expect(options.deferredPrewalk).toBeUndefined();
-		expect(requestedUrls).toEqual([]);
-	});
-
 	test("arms prewalk for an explicit --prewalk-into discovery selector", async () => {
 		const modelRegistry = registry();
 		const settings = Settings.isolated();

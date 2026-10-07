@@ -6,7 +6,7 @@ import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { RpcProjectModelRoleService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-project-models";
+import { RpcModelRoleService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-models";
 
 beforeAll(() => Settings.init({ inMemory: true }));
 const temporaryDirectories: TempDir[] = [];
@@ -33,7 +33,7 @@ function serviceFor(settings: Settings, models: FakeModel[]) {
 		getAvailable: () => models,
 		find: (provider: string, id: string) => models.find(model => model.provider === provider && model.id === id),
 	} as unknown as ModelRegistry;
-	const service = new RpcProjectModelRoleService({
+	const service = new RpcModelRoleService({
 		getSettings: () => settings,
 		getModelRegistry: () => registry,
 		emit: frame => emitted.push(frame),
@@ -59,7 +59,7 @@ async function setup(models: FakeModel[] = [], projectValue?: string) {
 	return { ...serviceFor(settings, models), settings, cwd, agentDir, configFile };
 }
 
-async function roleRevision(service: RpcProjectModelRoleService, roleId: string) {
+async function roleRevision(service: RpcModelRoleService, roleId: string) {
 	return (await service.listRoles()).roles.find(role => role.roleId === roleId)!.revision;
 }
 
@@ -76,7 +76,7 @@ async function writeInAnotherProcess(cwd: string, agentDir: string, role: string
 	expect(exitCode).toBe(0);
 }
 
-describe("RpcProjectModelRoleService", () => {
+describe("RpcModelRoleService", () => {
 	test("empty accounts/settings still expose all built-in roles and user-only write capabilities", async () => {
 		const { service } = await setup();
 		const result = await service.listRoles();
