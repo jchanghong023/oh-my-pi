@@ -119,14 +119,13 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				// copy is reduced to a pointer at the first one.
 				const alreadyShown = section.text.length > 200 && seen.has(section.text);
 				const headingOnlyInHeader = shape === "heading-only" && header.includes(normalizePlainText(section.text));
-				const body =
-					shape === "heading-only"
+				const body = alreadyShown
+					? "(identical text to an earlier hit on this page)"
+					: shape === "heading-only"
 						? headingOnlyInHeader
 							? "(heading only — the title above is the content)"
 							: `(heading only)\n${section.text}`
-						: alreadyShown
-							? "(identical text to an earlier hit on this page)"
-							: section.text;
+						: section.text;
 				// Headers are context too, so the whole rendered page counts.
 				const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
 				if (used + cost > TEXT_BUDGET_CHARS) {
@@ -141,10 +140,9 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				bodies.push(`${header}\n${body}`);
 				used += cost;
 				// Only text this page actually carries counts as shown: a section dropped
-				// for size was never delivered, and a pointer to it would be a lie. The
-				// heading-only body never renders the pointer, so it is not a collapse.
+				// for size was never delivered, and a pointer to it would be a lie.
 				seen.add(section.text);
-				duplicates += alreadyShown && shape !== "heading-only" ? 1 : 0;
+				duplicates += alreadyShown ? 1 : 0;
 			}
 			// Every match is a stub: the document's first section is indexed on purpose
 			// (its row is the only one carrying the relative path), and a name search

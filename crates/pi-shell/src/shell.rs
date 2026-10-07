@@ -5558,8 +5558,8 @@ mod tests {
 
 	/// The find display/match surface must use the operand-relative path while
 	/// filesystem actions still target the real (resolved) path: `-path` and
-	/// `-printf %p` see `./...`, while `-delete` removes the correct file.
-	#[cfg_attr(windows, ignore = "POSIX-shaped: `./`-style -path/-printf output and `-exec sh -c`")]
+	/// `-printf %p` see `./...` on every platform, while `-delete` removes the
+	/// correct file.
 	#[tokio::test(flavor = "multi_thread")]
 	async fn uutils_find_display_and_actions_split_paths() {
 		let tmp = std::env::temp_dir().join(format!("pi-find-split-{}", std::process::id()));
@@ -5583,6 +5583,8 @@ mod tests {
 		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
 		let si = SourceInfo::from("pi-natives:test");
 		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+		let relative_keep = "./keep.log";
+		let relative_drop = "./sub/drop.tmp";
 
 		// -path matches against the operand-relative path.
 		session
@@ -5590,7 +5592,11 @@ mod tests {
 			.run_string("find . -path './sub/*' > p.txt", &si, &params)
 			.await
 			.expect("path");
-		assert_eq!(read("p.txt"), "./sub/drop.tmp\n", "-path should match the operand-relative path");
+		assert_eq!(
+			read("p.txt"),
+			format!("{relative_drop}\n"),
+			"-path should match the operand-relative path"
+		);
 
 		// -printf %p emits the operand-relative path.
 		session
@@ -5598,7 +5604,11 @@ mod tests {
 			.run_string("find . -name keep.log -printf '%p\\n' > pf.txt", &si, &params)
 			.await
 			.expect("printf");
-		assert_eq!(read("pf.txt"), "./keep.log\n", "-printf %p should be operand-relative");
+		assert_eq!(
+			read("pf.txt"),
+			format!("{relative_keep}\n"),
+			"-printf %p should be operand-relative"
+		);
 
 		// -delete operates on the real (resolved) path, removing the right file.
 		let del = session
@@ -5611,40 +5621,44 @@ mod tests {
 		assert!(tmp.join("keep.log").exists(), "-delete must not touch unmatched files");
 
 		// -exec substitutes the operand-relative path and runs in the shell cwd,
-		// so the relative `{}` resolves and the child's redirect lands in the
-		// cwd.
+		// so the relative operand resolves and the redirect lands in the cwd.
+		#[cfg(unix)]
+		let exec_command = "find . -name keep.log -exec sh -c 'printf %s \"$1\" > ex.txt' sh {} ';'";
+		#[cfg(windows)]
+		let exec_command = "find . -name keep.log -exec cmd.exe /d /s /c 'echo {} > ex.txt' ';'";
 		session
 			.shell
-			.run_string(
-				"find . -name keep.log -exec sh -c 'printf %s \"$1\" > ex.txt' sh {} ';'",
-				&si,
-				&params,
-			)
+			.run_string(exec_command, &si, &params)
 			.await
 			.expect("exec");
+		// cmd's `echo` keeps the space preceding `>`, so the file carries a
+		// trailing space after the operand-relative path.
 		assert_eq!(
-			read("ex.txt"),
-			"./keep.log",
+			read("ex.txt").lines().next().expect("exec output"),
+			format!("{relative_keep} "),
 			"-exec {{}} should be operand-relative and run in the shell cwd"
 		);
 
-		// -exec children must write through the scope streams — an inherited
-		// process stdout would bypass the shell redirect and spam the host
-		// TUI's terminal — and must see the shell's exported environment.
+		// -exec children must write through the scope streams and inherit the
+		// shell's exported environment, rather than bypassing the shell redirect.
+		#[cfg(unix)]
+		let capture_command = "export PI_EXEC_ENV=zed; find . -name keep.log -exec sh -c 'echo \
+		                       \"$PI_EXEC_ENV $1\"' sh {} ';' > cap.txt";
+		#[cfg(windows)]
+		let capture_command = "export PI_EXEC_ENV=zed; find . -name keep.log -exec cmd.exe /d /s /c \
+		                       'echo %PI_EXEC_ENV% {}' ';' > cap.txt";
 		session
 			.shell
-			.run_string(
-				"export PI_EXEC_ENV=zed; find . -name keep.log -exec sh -c 'echo \"$PI_EXEC_ENV $1\"' \
-				 sh {} ';' > cap.txt",
-				&si,
-				&params,
-			)
+			.run_string(capture_command, &si, &params)
 			.await
 			.expect("exec capture");
 		assert_eq!(
-			read("cap.txt"),
-			"zed ./keep.log\n",
-			"-exec child stdout must flow through the shell redirect with the shell's exported env"
+			read("cap.txt")
+				.lines()
+				.next()
+				.expect("captured child output"),
+			format!("zed {relative_keep}"),
+			"-exec child stdout must flow through the shell redirect and see its exported env"
 		);
 
 		let _ = std::fs::remove_dir_all(&tmp);

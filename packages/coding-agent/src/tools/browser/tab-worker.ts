@@ -2959,8 +2959,8 @@ export class WorkerCore {
 		try {
 			end = await resolveDragPoint(to, "to");
 			await untilAborted(signal, () => page.mouse.move(start.x, start.y));
-			await untilAborted(signal, () => page.mouse.down());
 			pressed = true;
+			await untilAborted(signal, () => page.mouse.down());
 			await untilAborted(signal, () => page.mouse.move(end!.x, end!.y, { steps: 12 }));
 			await untilAborted(signal, () => page.mouse.up());
 			pressed = false;

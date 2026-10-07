@@ -1660,11 +1660,8 @@ function retainAsyncJobManager(manager: AsyncJobManager): (() => Promise<boolean
 			return;
 		}
 		managedAsyncJobManagerOwners.delete(manager);
-		try {
-			return await manager.dispose({ timeoutMs: 3_000 });
-		} finally {
-			if (AsyncJobManager.instance() === manager) AsyncJobManager.setInstance(undefined);
-		}
+		if (AsyncJobManager.instance() === manager) AsyncJobManager.setInstance(undefined);
+		return manager.dispose({ timeoutMs: 3_000 });
 	};
 }
 
@@ -5038,14 +5035,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							if (agentRegistry === AgentRegistry.global() && registeredAgentRef) {
 								const lifecycle = AgentLifecycleManager.global();
 								await lifecycle.releaseDescendants(registeredAgentRef);
+								// A just-registered main root is still initializing until its session attaches.
+								// Its running ref must keep another root from disposing the global lifecycle.
 								const otherRoots = agentRegistry
 									.list()
 									.some(
 										ref =>
 											ref !== registeredAgentRef &&
 											ref.kind === "main" &&
-											ref.session &&
-											!ref.session.isDisposed,
+											(ref.session ? !ref.session.isDisposed : ref.status === "running"),
 									);
 								if (!otherRoots) await lifecycle.dispose();
 							}

@@ -163,6 +163,32 @@ describe("WikiTool", () => {
 		expect(page).not.toContain("search again with narrower terms");
 	});
 
+	it("collapses repeated long heading-only sections without exceeding the page budget", async () => {
+		const section = `## ${"重复要求 ".repeat(60)}LONG_HEADING_DUPLICATE_BEACON\n`;
+		const fixture = await indexedFixture({ "a.md": section, "b.md": section });
+		const page = text(
+			await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "LONG_HEADING_DUPLICATE_BEACON" }),
+		);
+
+		expect(page).toContain("2 matching section(s)");
+		expect(page.split(section).length - 1).toBe(1);
+		expect(page).toContain("(identical text to an earlier hit on this page)");
+		expect(page).toContain("1 repeated hit(s) collapsed to a pointer");
+		expect(page.length).toBeLessThan(20_000);
+	});
+
+	it("keeps short repeated heading-only sections rather than folding them", async () => {
+		const section = "## 支持多层级任务\n";
+		const fixture = await indexedFixture({ "a.md": section, "b.md": section });
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "支持多层级任务" }));
+
+		expect(page).toContain("2 matching section(s)");
+		expect(page).toContain("a.md:1-1");
+		expect(page).toContain("b.md:1-1");
+		expect(page).not.toContain("(identical text to an earlier hit on this page)");
+		expect(page).not.toContain("repeated hit(s) collapsed to a pointer");
+	});
+
 	it("delivers a long section whole inside one page", async () => {
 		// ~17.2k characters: the largest a stored section can be (the parser caps at
 		// 18k so that every hit fits the 20000-character page), delivered unabridged.

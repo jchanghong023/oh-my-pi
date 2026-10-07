@@ -425,13 +425,19 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	/// dispatching it appropriately according to the context provided.
 	#[allow(clippy::missing_panics_doc, reason = "these unwrap calls should not panic")]
 	pub async fn execute(mut self) -> Result<ExecutionSpawnResult, error::Error> {
-		// String-only builtins cannot receive native bytes intact. Use the external
-		// command when an argument contains non-UTF-8 data.
-		let builtin = if self.args.iter().any(|arg| matches!(arg, CommandArg::OsString(_))) {
-			None
-		} else {
-			self.shell.builtins().get(&self.command_name).cloned()
-		};
+		// Builtins registered to consume raw CommandArg values keep native
+		// arguments so they can handle them themselves. All others accept only
+		// UTF-8 strings and must fall through to external commands to preserve
+		// the original argument bytes.
+		let builtin = self.shell.builtins().get(&self.command_name).cloned();
+		let builtin = builtin.filter(|registration| {
+			registration.declaration_builtin
+				|| !self
+					.args
+					.iter()
+					.skip(1)
+					.any(|arg| matches!(arg, CommandArg::OsString(_)))
+		});
 
 		// If we're in POSIX mode and found a special builtin (that's not disabled),
 		// then invoke it without considering functions.

@@ -1,6 +1,6 @@
 # `/team` 多模型方案规划命令
 
-> **状态：已实现（2026-09-18），本次整理未运行验证。** 本文档是 `/team` 的唯一权威需求与设计契约：第 2 节为行为需求，第 5 节为实现与集成约束，第 6 节为验证要求，三者对实现同等强制。`fork.md` 仅提供链接；“已实现”不代表已通过本次验收。
+> **状态：已实现；本轮模板实现调整未运行测试，验收待执行。** 本文档是 `/team` 的唯一权威需求与设计契约：第 2 节为行为需求，第 5 节为实现与集成约束，第 6 节为验证要求，三者对实现同等强制。`fork.md` 仅提供链接；“已实现”不代表已通过本轮验收。
 
 ## 1. 背景与用户目标
 
@@ -375,4 +375,4 @@
 
 ## 8. 验证状态
 
-现有入口包括 `packages/coding-agent/test/team/` 下的 UT 与进程内集成测试、`packages/coding-agent/test/slash-commands/team-command.test.ts`，以及 `scripts/fulltest-ui-smoke.ts` 的真实 TUI + 本地 stub HTTP 用例。本次只核对入口与文档，未执行这些测试；stub 不验证公司网关与真实模型行为，第 6 节要求的公司环境运行结果本次未核验。
+现有入口包括 `packages/coding-agent/test/team/` 下的 UT 与进程内集成测试、`packages/coding-agent/test/slash-commands/team-command.test.ts`，以及 `scripts/fulltest-ui-smoke.ts` 的真实 TUI + 本地 stub HTTP 用例。本轮模板实现调整后未运行这些测试；stub 不验证公司网关与真实模型行为，第 6 节要求的公司环境运行结果本轮未核验。

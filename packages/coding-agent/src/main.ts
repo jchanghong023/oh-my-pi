@@ -42,6 +42,7 @@ import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker"
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { CanaryChannelUnavailableError, compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
+import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
 import {
 	COMPANY_OFFLINE_CONTEXT_WINDOW,
 	COMPANY_OFFLINE_ROLE_DEFAULTS,
@@ -1336,10 +1337,10 @@ export function applyResolvedSystemPromptInputs(
 	// --offline: append the offline-environment notice after any resolved append
 	// prompt so it reaches the model in every session built from this launch.
 	if (parsed.offline) {
-		const offlineNotice = "当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。";
+		const offlineNoticeText = offlineNoticePrompt.trim();
 		options.appendSystemPrompt = options.appendSystemPrompt
-			? `${options.appendSystemPrompt}\n\n${offlineNotice}`
-			: offlineNotice;
+			? `${options.appendSystemPrompt}\n\n${offlineNoticeText}`
+			: offlineNoticeText;
 	}
 }
 

@@ -240,9 +240,19 @@ impl DeclareCommand {
 			return self.try_display_declaration(context, declaration, verb);
 		}
 
-		// Extract the variable name and the initial value being assigned (if any).
-		let (name, assigned_index, initial_value, name_is_array) =
-			Self::declaration_to_name_and_value(declaration)?;
+		// Extract the variable name and initial value. Native byte arguments are
+		// not valid variable names, but still belong to this builtin so it can
+		// report the same user-facing diagnostic as other invalid names.
+		let Some((name, assigned_index, initial_value, name_is_array)) =
+			Self::declaration_to_name_and_value(declaration)?
+		else {
+			writeln!(
+				context.stderr(),
+				"{}: {declaration}: not a valid variable name",
+				context.command_name
+			)?;
+			return Ok(false);
+		};
 
 		// Special-case: `local -`
 		if name == "-" && matches!(verb, DeclareVerb::Local) {
@@ -347,7 +357,10 @@ impl DeclareCommand {
 
 	fn declaration_to_name_and_value(
 		declaration: &brush_core::CommandArg,
-	) -> Result<(String, Option<String>, Option<ShellValueLiteral>, bool), brush_core::Error> {
+	) -> Result<
+		Option<(String, Option<String>, Option<ShellValueLiteral>, bool)>,
+		brush_core::Error,
+	> {
 		let name;
 		let assigned_index;
 		let initial_value;
@@ -385,7 +398,7 @@ impl DeclareCommand {
 				initial_value = None;
 			},
 			brush_core::CommandArg::OsString(_) => {
-				return Err(ErrorKind::InternalError("declaration name is not valid UTF-8".into()).into());
+				return Ok(None);
 			},
 			brush_core::CommandArg::Assignment(assignment) => {
 				match &assignment.name {
@@ -428,7 +441,7 @@ impl DeclareCommand {
 			},
 		}
 
-		Ok((name, assigned_index, initial_value, name_is_array))
+		Ok(Some((name, assigned_index, initial_value, name_is_array)))
 	}
 
 	fn display_matching_env_declarations(

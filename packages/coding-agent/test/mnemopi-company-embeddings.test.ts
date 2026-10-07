@@ -30,6 +30,9 @@ interface ProbeResult {
 	configuredModelForeign: unknown;
 	configuredModelCompany: unknown;
 	configuredModelCompanyModel: unknown;
+	configuredModelCompanyConfigModel: unknown;
+	configuredModelCompanyConfigUrl: unknown;
+	configuredModelCompanyConfigToken: unknown;
 	wiredModel: unknown;
 	wiredUrl: unknown;
 	wiredToken: unknown;
@@ -163,6 +166,13 @@ function runEmbeddingProbe(): ProbeResult {
 				// the spread in mnemopi/config.ts would otherwise keep the priority
 				// function green while the real startup path loses the contract.
 				const { loadMnemopiConfig } = await import(${JSON.stringify(mnemopiConfigModulePath)});
+				const configuredModelCompanyConfig = loadMnemopiConfig(
+					Settings.isolated({
+						"mnemopi.scoping": "global",
+						"mnemopi.embeddingModel": "Qwen3-VL-Embedding-2B",
+					}),
+					${JSON.stringify(home)},
+				);
 				const wired = loadMnemopiConfig(Settings.isolated({ "mnemopi.scoping": "global" }), ${JSON.stringify(home)});
 				const wiredExplicitUrl = loadMnemopiConfig(
 					Settings.isolated({
@@ -229,6 +239,9 @@ function runEmbeddingProbe(): ProbeResult {
 					configuredVariant,
 					configuredModelForeign,
 					configuredModelCompany,
+					configuredModelCompanyConfigModel: configuredModelCompanyConfig.providerOptions.embeddingModel,
+					configuredModelCompanyConfigUrl: configuredModelCompanyConfig.providerOptions.embeddingApiUrl,
+					configuredModelCompanyConfigToken: await tokenOf(configuredModelCompanyConfig.providerOptions),
 					configuredModelCompanyModel: configuredModelCompany?.embeddingModel,
 					wiredModel: wired.providerOptions.embeddingModel,
 					wiredUrl: wired.providerOptions.embeddingApiUrl,
@@ -296,10 +309,13 @@ describe("company embedding defaults priority", () => {
 		expect(result.configuredVariant).toBeUndefined();
 		expect(result.configuredModelForeign).toBeUndefined();
 
-		// An explicit model inside the company retrieval catalog still rides the
-		// company lane with that model.
-		expect(result.configuredModelCompany).not.toBeNull();
-		expect(result.configuredModelCompanyModel).toBe("Qwen3-VL-Embedding-2B");
+		// An explicit model remains authoritative even when its id matches the company model;
+		// only the effective model id is kept, never the company endpoint or token.
+		expect(result.configuredModelCompany).toBeUndefined();
+		expect(result.configuredModelCompanyModel).toBeUndefined();
+		expect(result.configuredModelCompanyConfigModel).toBe("Qwen3-VL-Embedding-2B");
+		expect(result.configuredModelCompanyConfigUrl).toBeUndefined();
+		expect(result.configuredModelCompanyConfigToken).toBeNull();
 
 		// Wiring: the resolved mnemonic config carries the company defaults, and
 		// an explicit URL keeps the explicit value with no company credentials.

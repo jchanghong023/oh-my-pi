@@ -170,8 +170,9 @@ export interface ExecResult {
  * ChildProcess wraps a managed subprocess, capturing stderr tail, providing
  * cross-platform kill/detach logic plus AbortSignal integration.
  *
- * Stdout is exposed directly from the underlying Bun subprocess; consumers
- * must read it (via text(), wait(), etc.) to prevent pipe deadlock.
+ * Stdout is exposed lazily. When lifecycle tracking is attached, a wrapper lets
+ * consumed stdout participate in EOF tracking; consumers must still read it
+ * (via text(), wait(), etc.) to prevent pipe deadlock.
  * Stderr is eagerly drained into an internal buffer.
  */
 export class ChildProcess<In extends InMask = InMask> {
@@ -308,7 +309,7 @@ export class ChildProcess<In extends InMask = InMask> {
 		return this.proc.stdin;
 	}
 
-	/** Raw stdout stream. Must be consumed to prevent pipe deadlock. */
+	/** Stdout stream, wrapped when lifecycle tracking is active. */
 	get stdout() {
 		this.#stdoutExposed = true;
 		return this.#stdoutStream ?? this.proc.stdout;

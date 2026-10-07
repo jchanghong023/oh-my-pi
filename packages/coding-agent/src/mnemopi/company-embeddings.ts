@@ -17,8 +17,7 @@ const cachedCompanyToken: ApiKeyResolver = () => getCompanyConfig()?.token;
 export function getCompanyEmbeddingDefaults(settings: Settings): Partial<MnemopiProviderOptions> | undefined {
 	const config = getCompanyConfig();
 	if (!config) return undefined;
-	// An explicit embedding setup remains authoritative; never send company credentials to its URL.
-	// `mnemopi.embeddingModel` already folds the MNEMOPI_EMBEDDING_MODEL env fallback into its value.
+	// Explicit vector configuration remains authoritative; never send company credentials to its URL.
 	const model = cfgMnemopiEmbeddingModel.get(settings)?.trim();
 	const genericApiUrl = Bun.env.OPENROUTER_BASE_URL;
 	const genericUrlRoutesToApi =
@@ -26,6 +25,7 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 	// Generic API keys are shared with other providers; only a custom generic URL or
 	// Mnemopi's explicit API-routing flag makes them embedding configuration here.
 	if (
+		Boolean(model) ||
 		cfgMnemopiEmbeddingApiUrl.get(settings)?.trim() ||
 		settings.isConfigured(cfgMnemopiEmbeddingApiKey) ||
 		Bun.env.MNEMOPI_EMBEDDING_API_URL ||
@@ -37,11 +37,8 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 	// An explicitly configured variant is a user-chosen local model too; only the
 	// schema default yields to the company lane.
 	if (settings.isConfigured(cfgMnemopiEmbeddingVariant)) return undefined;
-	if (model && !COMPANY_RETRIEVAL_MODELS.some(entry => entry.type === "embedding" && entry.id === model)) {
-		return undefined;
-	}
 	return {
-		embeddingModel: model || COMPANY_RETRIEVAL_MODELS[0].id,
+		embeddingModel: COMPANY_RETRIEVAL_MODELS[0].id,
 		embeddingApiUrl: config.embeddingBaseUrl,
 		embeddingApiKey: cachedCompanyToken,
 	};

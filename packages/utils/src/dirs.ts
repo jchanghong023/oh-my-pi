@@ -832,13 +832,8 @@ export function getJudgmentCacheDbPath(): string {
 	return dirs.rootSubdir(path.join("cache", "judgment-cache.db"), "cache");
 }
 
-/** Get the legacy Pi extension parse cache database path (~/.omp/cache/legacy-pi-extension-cache.db).
- * Honors the `OMP_LEGACY_PI_EXTENSION_CACHE_DB` env var when set so tests can
- * isolate the cache file (XDG_CACHE_HOME is only honored on POSIX).
- */
+/** Get the legacy Pi extension parse cache database path (~/.omp/cache/legacy-pi-extension-cache.db). */
 export function getLegacyPiExtensionCacheDbPath(): string {
-	const override = process.env.OMP_LEGACY_PI_EXTENSION_CACHE_DB;
-	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "legacy-pi-extension-cache.db"), "cache");
 }
 

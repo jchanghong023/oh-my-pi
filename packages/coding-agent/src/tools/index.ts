@@ -147,6 +147,7 @@ export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
 export * from "./repo";
+export * from "./wiki";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export type {

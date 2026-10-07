@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
+
 ### Fixed
 
 - Kept synthetic model selectors usable with enabled model patterns, restored plan mode's previous model, and disarmed failed prewalk handoffs without interrupting turn-end maintenance.
@@ -13,16 +17,22 @@
 - Fixed fork command behavior for context clearing, logout, skill management, queue updates, plan approval, and host UI cancellation.
 - Fixed Windows session-loader size diagnostics so in-memory and SQLite sessions are not confused with same-named files on disk.
 - Marked repo indexes unverified after interrupted bash/eval commands and deferred JCH Git invalidations until a worktree-changing step starts.
-- Fixed fork model exclusions, company provider discovery, offline configuration and team discussion shutdown.
+- Fixed fork model exclusions, company provider discovery, offline configuration (including task-subagent network restrictions) and team discussion shutdown.
 - Made role, CLI, and in-session model selection honor enabled/disabled scopes without retargeting an exact disabled model ID.
 - Fixed team reviewer-to-model assignment and prevented failed follow-up reviews or revisions from clearing unresolved blockers.
 - Restricted configured `/team` members to exact provider/model IDs; offline defaults respect model enable/disable settings, and progress is reported outside the TUI.
-- Fixed company embedding defaults to defer to explicit endpoints without sending company credentials to them.
-- Fixed docs search snapshots, body-based phrase/all-term ranking, UTF-8/BOM/CRLF provenance, long headings, and wiki page-budget reporting; corrected repo rename/path identities and Python source ranges.
+- Fixed company embedding defaults to defer to explicitly configured models and endpoints without sending company credentials to them.
+- Fixed docs search snapshots, body-based phrase/all-term ranking, UTF-8/BOM/CRLF provenance, long headings, and wiki page-budget reporting; corrected repo rename/path identities and Python source ranges, and fixed quoted-query ranking and duplicate heading-only results.
 - Kept `omp docs` error diagnostics on one line even when a path contains newlines.
 - Prevented repo queries without an index from writing database state and restored file-deletion cascades after recovery.
+- Fixed repo index scope selection so Git projects use their root while non-Git projects, including pure JJ, use the current directory.
+- Fixed RPC command scoring and malformed role-selection errors; enforced revision checks on session rename, cleared v3-only gates after v2 fallback, and preserved host-issued dialogs with `--no-ui`.
+- Fixed JTD structured-output conversion for arbitrary definition names and correctly escaped references.
+- Fixed shell builtin dispatch so xargs preserves invalid raw-byte variable names for accurate declare/export diagnostics.
 - Fixed updater authentication for GitHub release metadata and assets using the configured token.
 - Fixed Biome cancellation while descendant processes still hold output pipes and Windows batch launchers closing those pipes.
+- Released browser mouse capture and settled supervisor calls when drag cancellation or worker teardown interrupts browser operations.
+- Preserved malformed `zcode-api` provider values for schema validation instead of silently normalizing them.
 
 ### Removed
 
@@ -33,6 +43,7 @@
 ### Added
 
 - Files the write tool creates now preview the way the matching code blocks in replies do, building up while the write streams: `.svg` as an image and Mermaid (`.mmd`, `.mermaid`) as a diagram under the write card, and in Tern also 3D models (`.obj`, `.ply`, `.wrl`, `.x3dv`, `.stl`, `.gltf`, `.usda`); in Tern an SVG write now draws like an SVG figure in a reply
+- Exported `WikiTool` and its parameter type from the public tools barrel.
 
 ### Changed
 

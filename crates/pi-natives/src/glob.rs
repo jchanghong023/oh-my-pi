@@ -268,8 +268,8 @@ fn run_glob(
 ///
 /// # Errors
 /// Returns an error when the search path cannot be resolved, the path is not a
-/// directory, the glob pattern is invalid, or cancellation/timeout is
-/// triggered.
+/// directory, the glob pattern is invalid, a traversed directory cannot be
+/// opened with `strictErrors` enabled, or cancellation/timeout is triggered.
 #[napi]
 pub fn glob<'env>(
 	env: &'env Env,

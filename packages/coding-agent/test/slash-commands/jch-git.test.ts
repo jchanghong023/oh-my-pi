@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -307,29 +307,56 @@ describe("direct JCH git slash commands", () => {
 			expect(calls).toEqual([{ kind: "git", cwd: work }]);
 		}, 30_000);
 
-		it("reports /jchgitdiscardall to the repo index once reset has started", async () => {
+		it("reports /jchgitdiscardall as soon as reset starts, before the sequence finishes", async () => {
 			writeFileSync(join(work, "tracked.txt"), "dirty\n");
 			writeFileSync(join(work, "untracked.txt"), "untracked\n");
 			const { session, calls } = sessionStub();
+			const resetStarted = Promise.withResolvers<void>();
+			const resetExit = Promise.withResolvers<number>();
+			const nativeSpawn: typeof Bun.spawn = Bun.spawn.bind(Bun);
+			const spawn = spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+				const [command] = args;
+				if (Array.isArray(command) && command[0] === "git" && command[1] === "reset") {
+					resetStarted.resolve();
+					return {
+						stdout: new ReadableStream<Uint8Array>({ start: controller => controller.close() }),
+						stderr: new ReadableStream<Uint8Array>({ start: controller => controller.close() }),
+						exited: resetExit.promise,
+					} as never;
+				}
+				return nativeSpawn(...args);
+			}) as typeof Bun.spawn);
 			let editor = "/jchgitdiscardall";
-			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
-				ctx: {
-					editor: {
-						setText: (text: string) => {
-							editor = text;
+			let commandFinished = false;
+			let command: Promise<string | boolean> | undefined;
+			try {
+				command = executeBuiltinSlashCommand("/jchgitdiscardall", {
+					ctx: {
+						editor: {
+							setText: (text: string) => {
+								editor = text;
+							},
 						},
+						session,
+						sessionManager: { getCwd: () => work },
+						showStatus: () => {},
+						showError: () => {},
 					},
-					session,
-					sessionManager: { getCwd: () => work },
-					showStatus: () => {},
-					showError: () => {},
-				},
-			} as unknown as TuiSlashCommandRuntime);
+				} as unknown as TuiSlashCommandRuntime);
+				void command.then(() => {
+					commandFinished = true;
+				});
 
-			expect(consumed).toBe(true);
+				await resetStarted.promise;
+
+				expect(commandFinished).toBe(false);
+				expect(calls).toEqual([{ kind: "git", cwd: work }]);
+			} finally {
+				resetExit.resolve(0);
+				spawn.mockRestore();
+				if (command) await command;
+			}
 			expect(editor).toBe("");
-			expect(readFileSync(join(work, "tracked.txt"), "utf8").trim()).toBe("base");
-			expect(calls).toEqual([{ kind: "git", cwd: work }]);
 		}, 30_000);
 
 		it("reports a partially executed sequence whose reset step failed", async () => {

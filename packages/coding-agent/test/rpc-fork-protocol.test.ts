@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 
 // Fork-surface E2E against the real public entry (`omp --mode rpc-ui`, one
 // OMP process per session): the ready frame announces protocol v3, v2 clients
@@ -34,6 +35,7 @@ async function withForkRpcServer<T>(
 			"--mode",
 			"rpc-ui",
 			"--no-extensions",
+			"--no-ui",
 			"--no-skills",
 			"--no-tools",
 			"--session-dir",
@@ -49,8 +51,8 @@ async function withForkRpcServer<T>(
 				...Bun.env,
 				PI_NO_TITLE: "1",
 				PI_CODING_AGENT_DIR: dirs.agentDir,
-				// The isolated agent dir has no stored credentials; give the
-				// restore check and role validation a configured key.
+				// Keep model resolution configured for the restore check and role validation.
+				// A persisted test credential below drives the host-owned logout dialog.
 				ANTHROPIC_API_KEY: "test-key",
 			} as unknown as Record<string, string | undefined>,
 			stdin: "pipe",
@@ -117,6 +119,12 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			await fs.mkdir(dir, { recursive: true });
 		}
 		await fs.writeFile(path.join(agentDir, "config.yml"), "modelRoles: {}\n");
+		const authStorage = await AuthStorage.create(getAgentDbPath(agentDir));
+		try {
+			await authStorage.credentials.set("anthropic", { type: "api_key", key: "stored-for-rpc-dialog-test" });
+		} finally {
+			authStorage.close();
+		}
 		// One saved session of this project, pre-written so the directory has an
 		// entry before the hosted session persists anything.
 		const now = new Date().toISOString();
@@ -195,6 +203,22 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			});
 			const set2 = await next(frame => frame.type === "response" && frame.id === "set2");
 			expect(set2).toMatchObject({ success: false, code: "revision_conflict" });
+			// Builtin command dialogs are host-owned RPC UI, still available when
+			// extension UI is disabled by --no-ui.
+			controls.send({ id: "logout", type: "prompt", message: "/logout anthropic" });
+			const logoutDialog = await next(
+				frame =>
+					(frame.type === "extension_ui_request" && frame.method === "select") || frame.type === "command_output",
+			);
+			expect(logoutDialog).toMatchObject({
+				type: "extension_ui_request",
+				method: "select",
+				title: expect.stringContaining("Anthropic"),
+			});
+			expect(logoutDialog.options).toEqual([expect.stringContaining("API key")]);
+			controls.send({ type: "extension_ui_response", id: logoutDialog.id as string, cancelled: true });
+			const logout = await next(frame => frame.type === "response" && frame.id === "logout");
+			expect(logout).toMatchObject({ command: "prompt", success: true });
 
 			// Session directory: a saved session of this project is listed, can be
 			// renamed with its revision, and deleted. The hosted session itself
@@ -227,6 +251,17 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			});
 			const del1 = await next(frame => frame.type === "response" && frame.id === "del1");
 			expect(del1).toMatchObject({ success: true, data: { deleted: true } });
+			// Renegotiating down to v2 revokes the v3-only command surface.
+			controls.send({ id: "n2-again", type: "negotiate_protocol", protocolVersion: 2 });
+			expect(await next(frame => frame.type === "response" && frame.id === "n2-again")).toMatchObject({
+				success: true,
+				data: { protocolVersion: 2 },
+			});
+			controls.send({ id: "cc-after-downgrade", type: "complete_command", text: "/mo", cursor: 3 });
+			expect(await next(frame => frame.type === "response" && frame.id === "cc-after-downgrade")).toMatchObject({
+				success: false,
+				error: expect.stringContaining("Unknown command"),
+			});
 
 			// Unknown commands still report the stock error.
 			controls.send({ id: "wat", type: "definitely_not_a_thing" });

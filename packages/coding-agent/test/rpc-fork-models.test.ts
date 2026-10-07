@@ -128,6 +128,23 @@ describe("RpcModelRoleService", () => {
 				}),
 			).rejects.toMatchObject({ code: "invalid_params" });
 		}
+		const malformedSelections: unknown[] = [
+			undefined,
+			"model",
+			{ kind: "model" },
+			{ kind: "model", model: {} },
+			{ kind: "model", model: { provider: "p", modelId: "m", thinkingLevel: 1 } },
+		];
+		for (const selection of malformedSelections) {
+			await expect(
+				fx.service.setRole({
+					roleId: "default",
+					scope: "user",
+					selection: selection as never,
+					expectedRevision: await roleRevision(fx.service, "default"),
+				}),
+			).rejects.toMatchObject({ code: "invalid_params" });
+		}
 		await expect(
 			fx.service.setRole({
 				roleId: "default",

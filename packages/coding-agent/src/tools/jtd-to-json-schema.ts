@@ -130,7 +130,10 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
-		return { $ref: `#/$defs/${schema.ref}` };
+		// `$defs` keys keep raw names and the in-repo $ref resolvers only decode
+		// `~0`/`~1` pointer tokens, so the name must not be percent-encoded.
+		const name = schema.ref.replace(/~/g, "~0").replace(/\//g, "~1");
+		return { $ref: `#/$defs/${name}` };
 	}
 
 	// Empty form: {} → {} (accepts anything)
@@ -367,10 +370,9 @@ function convertJtdDocument(schema: unknown): unknown {
 	if (!isRecord(schema) || !isRecord(schema.definitions)) {
 		return convertSchema(schema);
 	}
-	const $defs: Record<string, unknown> = {};
-	for (const [name, definition] of Object.entries(schema.definitions)) {
-		$defs[name] = convertSchema(definition);
-	}
+	const $defs = Object.fromEntries(
+		Object.entries(schema.definitions).map(([name, definition]) => [name, convertSchema(definition)]),
+	);
 	const root: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(schema)) {
 		if (key !== "definitions") root[key] = value;

@@ -1892,6 +1892,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					sessionManager: session.sessionManager,
 					settings: session.settings,
 					cwd: session.sessionManager.getCwd(),
+					ui: rpcUiContext,
 					output: commandOutput => output({ type: "command_output", text: commandOutput }),
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
@@ -1946,8 +1947,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "negotiate_protocol": {
 				if (!isNegotiableRpcProtocolVersion(command.protocolVersion))
 					return error(id, "negotiate_protocol", `Unsupported RPC protocol version: ${command.protocolVersion}`);
-				if (command.protocolVersion === RPC_FORK_PROTOCOL_VERSION) {
-					forkNegotiated = true;
+				forkNegotiated = command.protocolVersion === RPC_FORK_PROTOCOL_VERSION;
+				if (forkNegotiated) {
 					return success(id, "negotiate_protocol", {
 						protocolVersion: RPC_FORK_PROTOCOL_VERSION,
 						capabilities: RPC_FORK_CAPABILITIES,

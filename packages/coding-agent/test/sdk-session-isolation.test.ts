@@ -485,6 +485,182 @@ describe("createAgentSession session storage isolation", () => {
 		);
 		expect(suspend.mock.invocationCallOrder[0]).toBeLessThan(lifecycleDispose.mock.invocationCallOrder[0]);
 	});
+	it("creates a fresh async-job manager while the final owner is disposing", async () => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-manager-lease-${Snowflake.next()}-`));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, "project");
+		fs.mkdirSync(cwd, { recursive: true });
+		let firstSession: AgentSession | undefined;
+		let secondSession: AgentSession | undefined;
+		let releaseDispose: (() => void) | undefined;
+		let disposingFirst: Promise<void> | undefined;
+		try {
+			const first = await createAgentSession({
+				cwd,
+				agentDir: path.join(tempDir, "first-agent"),
+				agentId: `manager-root-a-${Snowflake.next()}`,
+				modelRegistry: sharedModelRegistry,
+				settings: Settings.isolated(),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				toolNames: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			firstSession = first.session;
+			const manager = first.session.asyncJobManager;
+			if (!manager) throw new Error("Expected an owned async-job manager");
+			const disposeStarted = Promise.withResolvers<void>();
+			const disposeGate = Promise.withResolvers<void>();
+			releaseDispose = () => disposeGate.resolve();
+			const originalDispose = manager.dispose.bind(manager);
+			spyOn(manager, "dispose").mockImplementation(async options => {
+				disposeStarted.resolve();
+				await disposeGate.promise;
+				return originalDispose(options);
+			});
+
+			disposingFirst = first.session.dispose();
+			await disposeStarted.promise;
+			const second = await createAgentSession({
+				cwd,
+				agentDir: path.join(tempDir, "second-agent"),
+				agentId: `manager-root-b-${Snowflake.next()}`,
+				modelRegistry: sharedModelRegistry,
+				settings: Settings.isolated(),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				toolNames: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			secondSession = second.session;
+
+			expect(second.session.asyncJobManager).not.toBe(manager);
+
+			releaseDispose();
+			await disposingFirst;
+		} finally {
+			releaseDispose?.();
+			await disposingFirst?.catch(() => {});
+			await secondSession?.dispose();
+			await firstSession?.dispose();
+			AgentLifecycleManager.resetGlobalForTests();
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("keeps the lifecycle manager while another main root is initializing", async () => {
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-root-lifecycle-${Snowflake.next()}-`));
+		tempDirs.push(tempDir);
+		const cwd = path.join(tempDir, "project");
+		fs.mkdirSync(cwd, { recursive: true });
+		let session: AgentSession | undefined;
+		let cleanupPendingRoot: (() => void) | undefined;
+		let disposeLifecycle: (() => Promise<void>) | undefined;
+		try {
+			const created = await createAgentSession({
+				cwd,
+				agentDir: path.join(tempDir, "agent"),
+				modelRegistry: sharedModelRegistry,
+				settings: Settings.isolated(),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			session = created.session;
+			const lifecycle = AgentLifecycleManager.global();
+			disposeLifecycle = () => lifecycle.dispose();
+			const registry = AgentRegistry.global();
+			const rootId = `initializing-main-${Snowflake.next()}`;
+			const initializingRoot = registry.register({
+				id: rootId,
+				displayName: "initializing root",
+				kind: "main",
+				session: null,
+				status: "running",
+			});
+			cleanupPendingRoot = () => registry.unregister(rootId, initializingRoot);
+
+			await created.session.dispose();
+
+			expect(AgentLifecycleManager.global()).toBe(lifecycle);
+			expect(registry.get(rootId)).toBe(initializingRoot);
+		} finally {
+			await session?.dispose();
+			cleanupPendingRoot?.();
+			await disposeLifecycle?.();
+			AgentLifecycleManager.resetGlobalForTests();
+			AgentRegistry.resetGlobalForTests();
+		}
+	});
+
+	it("does not retain the lifecycle manager for parked or aborted roots", async () => {
+		for (const status of ["parked", "aborted"] as const) {
+			AgentLifecycleManager.resetGlobalForTests();
+			AgentRegistry.resetGlobalForTests();
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-terminal-root-${Snowflake.next()}-`));
+			tempDirs.push(tempDir);
+			const cwd = path.join(tempDir, "project");
+			fs.mkdirSync(cwd, { recursive: true });
+			let session: AgentSession | undefined;
+			let cleanupTerminalRoot: (() => void) | undefined;
+			let disposeLifecycle: (() => Promise<void>) | undefined;
+			try {
+				const created = await createAgentSession({
+					cwd,
+					agentDir: path.join(tempDir, "agent"),
+					modelRegistry: sharedModelRegistry,
+					settings: Settings.isolated(),
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableMCP: false,
+					enableLsp: false,
+				});
+				session = created.session;
+				const lifecycle = AgentLifecycleManager.global();
+				disposeLifecycle = () => lifecycle.dispose();
+				const registry = AgentRegistry.global();
+				const rootId = `${status}-main-${Snowflake.next()}`;
+				const terminalRoot = registry.register({
+					id: rootId,
+					displayName: `${status} root`,
+					kind: "main",
+					session: null,
+					status,
+				});
+				cleanupTerminalRoot = () => registry.unregister(rootId, terminalRoot);
+
+				await created.session.dispose();
+
+				expect(registry.get(rootId)).toBe(terminalRoot);
+				expect(AgentLifecycleManager.global()).not.toBe(lifecycle);
+			} finally {
+				await session?.dispose();
+				cleanupTerminalRoot?.();
+				await disposeLifecycle?.();
+				AgentLifecycleManager.resetGlobalForTests();
+				AgentRegistry.resetGlobalForTests();
+			}
+		}
+	});
 
 	it("wires the discovered TTSR manager into the created session", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-ttsr-${Snowflake.next()}-`));

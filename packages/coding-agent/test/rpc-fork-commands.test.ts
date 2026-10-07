@@ -92,6 +92,8 @@ describe("RpcForkCommandCatalogService", () => {
 		expect(result.items[0]!.replaceStart).toBe(0);
 		expect(result.items[0]!.replaceEnd).toBe(3);
 		expect(scoreCommandText("model", "model")).toBe(1000);
+		expect(scoreCommandText("Model", "MO")).toBe(900);
+		expect(scoreCommandText("Model", "ODE")).toBe(700);
 		expect(scoreCommandText("model", "mo")).toBe(900);
 		expect(scoreCommandText("model", "ode")).toBe(700);
 		expect(scoreCommandText("model", "zzz")).toBe(0);

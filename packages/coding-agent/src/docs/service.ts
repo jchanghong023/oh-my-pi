@@ -427,7 +427,7 @@ export class DocsService {
 		limit: number,
 	): DocsSectionHit[] {
 		const patterns = terms.map(literalPattern);
-		const phrase = literalPattern(normalizeSearchText(query).replace(/^[`"']+|[`"']+$/gu, ""));
+		const phrase = literalPattern(normalizeSearchText(query));
 		// Stubs are indexed on purpose — a document's first section carries the
 		// relative path — so they must not hold page slots meant for readable text.
 		// The window is cut from the top, so a query that matches nothing but

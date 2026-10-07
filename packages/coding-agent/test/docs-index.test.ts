@@ -600,6 +600,21 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
+	it("treats quotes as ordinary query characters for literal-phrase ranking", async () => {
+		const root = await tempDir("docs-quoted-rank-");
+		const agentDir = await tempDir("docs-quoted-agent-");
+		await fs.writeFile(path.join(root, "quoted.md"), `# Notes\n"foo"\n${"background ".repeat(300)}`);
+		await fs.writeFile(path.join(root, "plain.md"), "# Notes\nfoo\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const hits = service.search('"foo"', { index: "manual" }).sections;
+			expect(hits.map(hit => hit.path)).toEqual(["quoted.md", "plain.md"]);
+		} finally {
+			service.close();
+		}
+	});
+
 	it("reranks beyond the requested result window and keeps index isolation", async () => {
 		const root = await tempDir("docs-candidates-rank-");
 		const agentDir = await tempDir("docs-candidates-agent-");

@@ -13,9 +13,6 @@ async function runProbe(cacheRoot: string, script: string = probePath, args: str
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		XDG_CACHE_HOME: cacheRoot,
-		// XDG is not honored on Windows; the explicit db override isolates the
-		// cache on every platform.
-		OMP_LEGACY_PI_EXTENSION_CACHE_DB: path.join(cacheRoot, "omp", "cache", "legacy-pi-extension-cache.db"),
 	};
 	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
 		delete env[key];

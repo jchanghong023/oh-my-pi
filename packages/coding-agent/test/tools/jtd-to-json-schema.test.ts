@@ -37,6 +37,32 @@ describe("jtdToJsonSchema", () => {
 		expect(isJTDSchema({ type: "int32" })).toBe(true);
 	});
 
+	it("resolves root definitions with arbitrary names", () => {
+		const converted = jtdToJsonSchema({
+			definitions: Object.fromEntries([
+				["__proto__", { type: "string" }],
+				["foo/bar~baz", { type: "int32" }],
+				["my type", { type: "boolean" }],
+			]),
+			properties: {
+				prototypeName: { ref: "__proto__" },
+				pointerName: { ref: "foo/bar~baz" },
+				spacedName: { ref: "my type" },
+			},
+		}) as {
+			$defs: Record<string, unknown>;
+			properties: Record<string, { $ref: string }>;
+		};
+
+		expect(Object.hasOwn(converted.$defs, "__proto__")).toBe(true);
+		expect(converted.$defs["__proto__"]).toEqual({ type: "string" });
+		expect(converted.$defs["foo/bar~baz"]).toEqual({ type: "integer" });
+		expect(converted.$defs["my type"]).toEqual({ type: "boolean" });
+		expect(converted.properties.prototypeName.$ref).toBe("#/$defs/__proto__");
+		expect(converted.properties.pointerName.$ref).toBe("#/$defs/foo~1bar~0baz");
+		expect(converted.properties.spacedName.$ref).toBe("#/$defs/my type");
+	});
+
 	it("normalizes nested JTD fragments inside JSON Schema nodes", () => {
 		const converted = jtdToJsonSchema({
 			type: "object",

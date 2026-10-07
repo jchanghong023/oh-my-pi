@@ -1492,6 +1492,9 @@ function getBinaryName(): string {
 		case "linux":
 			os = isMuslLinux() ? "linux-musl" : "linux";
 			break;
+		case "darwin":
+			os = "darwin";
+			break;
 		case "win32":
 			os = "windows";
 			break;

@@ -854,7 +854,6 @@ export class SessionManager {
 	readonly #persist: boolean;
 	readonly #storage: SessionStorage;
 	readonly #blobs: BlobStore;
-	#stableSessionIdentityRequired = false;
 
 	#sessionId = "";
 	#sessionName: string | undefined;
@@ -1201,11 +1200,6 @@ export class SessionManager {
 		return contested;
 	}
 
-	/** Project routing must never silently adopt a fresh identity after a persistence conflict. */
-	requireStableSessionIdentity(): void {
-		this.#stableSessionIdentityRequired = true;
-	}
-
 	/**
 	 * Leave `#sessionFile` untouched and continue as a fresh session in a
 	 * sibling file. It gets a new session id whose header points back through
@@ -1221,16 +1215,6 @@ export class SessionManager {
 	 */
 	#moveOffSessionFile(reason: SessionPersistenceNotice["reason"]): string {
 		const from = this.#sessionFile as string;
-		if (this.#stableSessionIdentityRequired) {
-			let actualSize: number | null;
-			try {
-				actualSize = this.#storage.statSync(from).size;
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
-				actualSize = null;
-			}
-			throw new SessionWriteConflictError(from, this.#expectedDiskSize, actualSize);
-		}
 		const previousSessionId = this.#sessionId;
 		const timestamp = nowIso();
 		this.#sessionId = mintSessionId();
@@ -3947,12 +3931,10 @@ export class SessionManager {
 			sessionFile?: string;
 			resetInheritedCost?: boolean;
 			repairInterruptedTail?: boolean;
-			requireStableSessionIdentity?: boolean;
 		},
 	): Promise<SessionManager> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
-		if (options?.requireStableSessionIdentity) manager.requireStableSessionIdentity();
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 
 		// A missing source must fail instead of forking an empty parentless session:

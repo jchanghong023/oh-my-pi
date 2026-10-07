@@ -102,9 +102,10 @@ interface RpcCommandCatalogSnapshot {
  */
 export function scoreCommandText(text: string, query: string): number {
 	const lower = text.toLowerCase();
-	if (lower === query) return 1000;
-	if (lower.startsWith(query)) return 900;
-	if (lower.includes(query)) return 700;
+	const lowerQuery = query.toLowerCase();
+	if (lower === lowerQuery) return 1000;
+	if (lower.startsWith(lowerQuery)) return 900;
+	if (lower.includes(lowerQuery)) return 700;
 	return 0;
 }
 

@@ -156,7 +156,11 @@ const getReservedModelsConfigSchema = once(() => {
 		if (hasZcode) {
 			// The credential is real input: keep it in the original provider schema
 			// so invalid types and empty keys still fail instead of becoming keyless.
-			providers["zcode-api"] = isRecord(zcode) && Object.hasOwn(zcode, "apiKey") ? { apiKey: zcode.apiKey } : {};
+			providers["zcode-api"] = isRecord(zcode)
+				? Object.hasOwn(zcode, "apiKey")
+					? { apiKey: zcode.apiKey }
+					: {}
+				: zcode;
 		}
 		const checked = schema({ ...input, providers });
 		if (!(checked instanceof OmpErrors) && ignoredZcodePolicy) {

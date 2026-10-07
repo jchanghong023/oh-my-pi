@@ -4,11 +4,14 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { $which } from "@oh-my-pi/pi-utils";
 import { maxPendingSeq, RepoService } from "../src/repo/service";
 import type { RepoQueryResult, RepoTextHit } from "../src/repo/types";
 
 const dirs: string[] = [];
 const services: RepoService[] = [];
+const jjBinary = $which("jj");
 
 async function fixture(files: Record<string, string> = {}) {
 	const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-index-test-"));
@@ -612,6 +615,28 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect(
 			new Set([(await service.status()).root, (await sibling.status()).root, (await standalone.status()).root]).size,
 		).toBe(3);
+	});
+
+	it.skipIf(!jjBinary)("uses the current cwd inside a pure JJ workspace, not the JJ workspace root", async () => {
+		if (!jjBinary) throw new Error("jj skip guard failed");
+		const { root, agentDir, service } = await fixture({
+			"identity.py": "def root_scope(): return 1\n",
+			"nested/identity.py": "def nested_scope(): return 2\n",
+		});
+		await $`${jjBinary} init`.cwd(root).quiet();
+		const nested = path.join(root, "nested");
+		expect(vcs.repo(nested)?.kind()).toBe("jj");
+
+		const nestedService = new RepoService({ cwd: nested, agentDir });
+		services.push(nestedService);
+		expect(service.root).toBe(root);
+		expect(nestedService.root).toBe(nested);
+
+		await service.build();
+		expect((await nestedService.status()).exists).toBe(false);
+		await nestedService.build();
+		expect((await service.symbol("nested_scope")).hits.map(hit => hit.path)).toEqual(["nested/identity.py"]);
+		expect((await nestedService.symbol("nested_scope")).hits.map(hit => hit.path)).toEqual(["identity.py"]);
 	});
 
 	it("reports pending and uncertain coverage without triggering a build from status", async () => {

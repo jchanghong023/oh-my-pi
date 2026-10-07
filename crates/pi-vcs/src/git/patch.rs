@@ -1920,9 +1920,9 @@ mod tests {
 	}
 
 	fn init(files: &[(&str, &[u8])]) -> TempDir {
-		// Hermetic git (host autocrlf etc. must not leak); the process-wide
-		// override is shared with the other fixtures and applied exactly once.
-		crate::git::test_support::hermetic_git_config_once();
+		// The git helper isolates spawned commands from host-global/system
+		// config; the local core.autocrlf setting pins gix's byte-exact
+		// checkout behavior.
 		let temp = tempfile::tempdir().expect("tempdir");
 		git(temp.path(), &["init", "-q"]);
 		git(temp.path(), &["config", "user.name", "Patch Test"]);

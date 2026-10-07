@@ -1615,12 +1615,12 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 	// must not restart the recycle's init budget.
 	const startedAt = performance.now();
 	const oldWorker = tab.worker;
-	await oldWorker.terminate().catch(() => undefined);
 	// Tool calls dispatched for the dead worker's runs execute supervisor-side;
-	// terminate() alone does not stop them.
+	// terminate() alone does not stop them, so abort before waiting for worker shutdown.
 	for (const pending of tab.pending.values()) {
 		for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
 	}
+	await oldWorker.terminate().catch(() => undefined);
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
 	const payload: WorkerInitPayload = {

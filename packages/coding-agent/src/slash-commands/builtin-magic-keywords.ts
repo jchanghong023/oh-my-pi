@@ -1,15 +1,16 @@
 import type { SlashCommandSpec } from "./types";
+import { MAGIC_KEYWORDS } from "../modes/magic-keywords";
 
-const MAGIC_KEYWORDS = ["ultrathink", "orchestrate", "workflowz", "fullsend"] as const;
-
-export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = MAGIC_KEYWORDS.map(keyword => ({
-	name: keyword,
-	description: `Send the ${keyword} magic keyword`,
+export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = MAGIC_KEYWORDS.filter(
+	keyword => "slashCommand" in keyword,
+).map(keyword => ({
+	name: keyword.word,
+	description: `Send the ${keyword.word} magic keyword`,
 	allowArgs: true,
 	inlineHint: "[task]",
 	acpInputHint: "[task]",
 	handle: command => {
 		const args = command.args.trim();
-		return { prompt: args ? `${keyword} ${args}` : keyword };
+		return { prompt: args ? `${keyword.word} ${args}` : keyword.word };
 	},
 }));

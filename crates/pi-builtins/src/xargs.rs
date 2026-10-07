@@ -1581,25 +1581,42 @@ mod tests {
 	#[tokio::test]
 	async fn children_run_in_host_cwd() {
 		let dir = tempfile::TempDir::new().expect("tempdir");
-		// `sh` is not on the default Windows PATH, so the child is the `touch`
-		// builtin, which still resolves its operand against the host cwd.
-		let (code, _, err) = xargs_in(dir.path(), &["touch"], "made.txt\n").await;
+		#[cfg(unix)]
+		let (code, _, err) =
+			xargs_in(dir.path(), &["sh", "-c", "touch \"$1\"", "_"], "made.txt\n").await;
+		#[cfg(windows)]
+		let (code, _, err) = xargs_in(
+			dir.path(),
+			&["-I", "{}", "cmd.exe", "/d", "/s", "/c", "type nul > {}"],
+			"made.txt\n",
+		)
+		.await;
 		assert_eq!(code, 0, "stderr: {err:?}");
 		assert!(dir.path().join("made.txt").exists());
 	}
 
 	#[tokio::test]
 	async fn children_see_host_environment() {
-		// `sh` is not on the default Windows PATH, so the exported variable is
-		// read by the printenv builtin instead of `sh -c 'echo "$XVAR"'`.
+		#[cfg(unix)]
 		let (code, out, _) = crate::host::run_script(
-			"export XVAR=hello; xargs printenv",
-			"XVAR\n",
+			"export XVAR=hello; xargs sh -c 'echo \"$XVAR\"' _",
+			"x\n",
+			&std::env::temp_dir(),
+		)
+		.await;
+		#[cfg(windows)]
+		let (code, out, _) = crate::host::run_script(
+			"export XVAR=hello; xargs -I '{}' cmd.exe /d /s /c 'echo %XVAR% & rem {}'",
+			"ignored\n",
 			&std::env::temp_dir(),
 		)
 		.await;
 		assert_eq!(code, 0);
+		#[cfg(unix)]
 		assert_eq!(out, "hello\n");
+		// cmd's `echo` keeps the space preceding `&`.
+		#[cfg(windows)]
+		assert_eq!(out, "hello \r\n");
 	}
 
 	/// Contract: a command runs like a child process, so builtins that change

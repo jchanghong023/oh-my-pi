@@ -31,13 +31,22 @@ async function runGit(cwd: string, args: readonly string[], onStart?: () => void
 	return { exitCode, stdout, stderr };
 }
 
-async function runGitSequence(cwd: string, steps: readonly GitStep[]): Promise<GitSequenceResult> {
+async function runGitSequence(
+	cwd: string,
+	steps: readonly GitStep[],
+	onMutationStart?: () => void,
+): Promise<GitSequenceResult> {
 	const output: string[] = [];
 	let mutated = false;
+	let mutationNotified = false;
 	try {
 		for (const step of steps) {
 			const result = await runGit(step.cwd ?? cwd, step.args, () => {
-				if (WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) mutated = true;
+				if (!WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) return;
+				mutated = true;
+				if (mutationNotified) return;
+				mutationNotified = true;
+				onMutationStart?.();
 			});
 			const text = formatGitOutput(result.stdout, result.stderr);
 			if (text) output.push(text);
@@ -92,13 +101,12 @@ function notifyRepoWorktreeMutation(session: unknown, cwd: string): void {
 }
 
 async function handleGitSequence(runtime: SlashCommandRuntime, steps: readonly GitStep[]): Promise<SlashCommandResult> {
-	let result: GitSequenceResult | undefined;
 	try {
-		result = await runGitSequence(runtime.cwd, steps);
+		const result = await runGitSequence(runtime.cwd, steps, () =>
+			notifyRepoWorktreeMutation(runtime.session, runtime.cwd),
+		);
 		await runtime.output(result.output);
-		if (result.mutated) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 	} catch (error) {
-		if (result?.mutated) notifyRepoWorktreeMutation(runtime.session, runtime.cwd);
 		await runtime.output(formatError(error));
 	}
 	return { consumed: true };
@@ -146,10 +154,8 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				{ args: ["fetch", "--all", "--prune"] },
 				{ args: ["reset", "--hard", "@{upstream}"] },
 			];
-			let cwd: string | undefined;
-			let result: GitSequenceResult | undefined;
 			try {
-				cwd = runtime.ctx.sessionManager.getCwd();
+				const cwd = runtime.ctx.sessionManager.getCwd();
 				// `clean` only sweeps below its cwd while the reset is repo-wide;
 				// resolve the toplevel so a session opened in a subdirectory still
 				// discards untracked files across the whole worktree.
@@ -159,12 +165,10 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					return { consumed: true };
 				}
 				steps.push({ args: ["clean", args === "--ignored=true" ? "-xdf" : "-df"], cwd: toplevel.stdout.trim() });
-				result = await runGitSequence(cwd, steps);
+				const result = await runGitSequence(cwd, steps, () => notifyRepoWorktreeMutation(runtime.ctx.session, cwd));
 				if (result.ok) runtime.ctx.showStatus(result.output);
 				else runtime.ctx.showError(result.output);
-				if (result.mutated) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 			} catch (error) {
-				if (result?.mutated && cwd !== undefined) notifyRepoWorktreeMutation(runtime.ctx.session, cwd);
 				runtime.ctx.showError(formatError(error));
 			}
 			return { consumed: true };

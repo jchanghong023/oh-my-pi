@@ -19,16 +19,12 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import type { Rule } from "../capability/rule";
 import type { Skill } from "../extensibility/skills";
 import type { WorkspaceTree } from "../workspace-tree";
-import alignerPrompt from "../prompts/team/aligner.md" with { type: "text" };
-import proposerPrompt from "../prompts/team/proposer.md" with { type: "text" };
-import reviewerPrompt from "../prompts/team/reviewer.md" with { type: "text" };
-import reviserPrompt from "../prompts/team/reviser.md" with { type: "text" };
-import synthesizerPrompt from "../prompts/team/synthesizer.md" with { type: "text" };
+import { TEAM_ROLE_SYSTEM_PROMPTS } from "./prompts";
 import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
 import type { CreateAgentSessionOptions } from "../sdk";
-import type { TeamRole, TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
+import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
 /**
  * The read-only tool set for every `/team` subagent. `wiki` is listed
@@ -37,14 +33,6 @@ import type { TeamRole, TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunne
  * path. No bash/eval/write/edit/task/hub entry can appear here.
  */
 export const TEAM_READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "glob", "wiki", "ast_grep"];
-
-const ROLE_SYSTEM_PROMPTS: Record<TeamRole, string> = {
-	proposer: proposerPrompt,
-	reviewer: reviewerPrompt,
-	reviser: reviserPrompt,
-	aligner: alignerPrompt,
-	synthesizer: synthesizerPrompt,
-};
 
 /** Everything the runner needs from the dispatching session, as plain values. */
 export interface TeamRunnerDeps {
@@ -112,7 +100,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 			const agent: AgentDefinition = {
 				name: `team-${call.role}`,
 				description: `Team discussion ${call.role} (${call.label})`,
-				systemPrompt: ROLE_SYSTEM_PROMPTS[call.role],
+				systemPrompt: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
 				tools: [...TEAM_READ_ONLY_TOOLS],
 				readSummarize: false,
 				source: "bundled",

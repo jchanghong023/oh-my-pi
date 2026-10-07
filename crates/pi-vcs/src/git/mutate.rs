@@ -978,17 +978,17 @@ fn hook_is_executable(path: &Path) -> bool {
 	let Ok(metadata) = fs::metadata(path) else {
 		return false;
 	};
-	if !metadata.is_file() {
-		return false;
-	}
 	#[cfg(unix)]
 	{
+		if !metadata.is_file() {
+			return false;
+		}
 		use std::os::unix::fs::PermissionsExt;
 		metadata.permissions().mode() & 0o111 != 0
 	}
 	#[cfg(not(unix))]
 	{
-		true
+		metadata.is_file()
 	}
 }
 
@@ -1966,18 +1966,15 @@ mod tests {
 	}
 
 	fn fixture() -> (TempDir, GitRepo) {
-		// Hermetic git for the whole test: neutralize host-global config for
-		// spawned git children (per command) and the in-process gix backend
-		// (shared once-per-process override) alike — a Windows host with
-		// core.autocrlf=true otherwise rewrites LF↔CRLF and breaks byte-exact
-		// assertions.
-		crate::git::test_support::hermetic_git_config_once();
+		// The local core.autocrlf setting pins gix's byte-exact checkout
+		// behavior; the git helper isolates spawned commands from
+		// host-global/system config.
 		let temp = tempfile::tempdir().unwrap();
 		git(temp.path(), &["init", "-q", "-b", "main"]);
 		git(temp.path(), &["config", "user.name", "Test"]);
 		git(temp.path(), &["config", "user.email", "test@example.com"]);
-		// gix reads the developer's `~/.gitconfig`, where a global
-		// `core.hooksPath` would redirect hook lookup away from this fixture.
+		// Keep hook lookup inside this fixture for Git subprocesses spawned by
+		// the implementation.
 		git(temp.path(), &["config", "core.hooksPath", ".git/hooks"]);
 		// Assertions compare exact worktree bytes; Git for Windows' system
 		// `core.autocrlf=true` would check them out as CRLF. Tests covering
@@ -2648,7 +2645,6 @@ mod tests {
 		assert!(!temp.path().join("untracked.txt").exists(), "`.` selects everything like git");
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn detach_git_dir_does_not_mutate_when_index_snapshot_fails() {
 		let (temp, repo) = fixture();
@@ -2674,7 +2670,11 @@ mod tests {
 		fs::rename(&index_backup, &index_path).unwrap();
 		assert!(matches!(
 			&result,
-			Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::IsADirectory
+			Err(Error::Io(err))
+				if matches!(
+					err.kind(),
+					std::io::ErrorKind::IsADirectory | std::io::ErrorKind::PermissionDenied
+				)
 		));
 		assert_eq!(fs::read(linked.join(".git")).unwrap(), pointer_before);
 		assert_eq!(git(temp.path(), &["rev-parse", "HEAD"]), git(&linked, &["rev-parse", "HEAD"]));

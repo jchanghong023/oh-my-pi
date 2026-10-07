@@ -42,6 +42,8 @@ export interface MagicKeyword {
 	description: string;
 	/** Tools that must all be enabled for the notice to apply; the notice is skipped otherwise. */
 	requires: readonly string[];
+	/** Whether this keyword also has a built-in slash command. */
+	slashCommand?: true;
 	/** Render the hidden notice queued ahead of the user message. */
 	notice: (context: MagicKeywordContext) => string;
 }
@@ -75,6 +77,7 @@ export const MAGIC_KEYWORDS = [
 	{
 		id: "ultrathink",
 		word: "ultrathink",
+		slashCommand: true,
 		hue: [0, 330],
 		label: "Ultrathink Keyword",
 		description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
@@ -84,6 +87,7 @@ export const MAGIC_KEYWORDS = [
 	{
 		id: "orchestrate",
 		word: "orchestrate",
+		slashCommand: true,
 		hue: [150, 280],
 		label: "Orchestrate Keyword",
 		description: "Let standalone orchestrate append its hidden multi-agent orchestration notice",
@@ -94,6 +98,7 @@ export const MAGIC_KEYWORDS = [
 	{
 		id: "workflow",
 		word: "workflowz",
+		slashCommand: true,
 		hue: [30, 150],
 		label: "Workflow Keyword",
 		description: "Let standalone workflowz append its hidden eval workflow notice",
@@ -113,6 +118,7 @@ export const MAGIC_KEYWORDS = [
 	{
 		id: "fullsend",
 		word: "fullsend",
+		slashCommand: true,
 		hue: [300, 360],
 		label: "Fullsend Keyword",
 		description: "Let standalone fullsend prioritize fastest verified execution without cost or token constraints",

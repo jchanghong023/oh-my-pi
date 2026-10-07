@@ -276,11 +276,33 @@ export class RpcModelRoleService {
 		selection: RpcModelRoleSelection,
 	): string | undefined {
 		if (selection === null) return undefined;
-		if (!selection || (selection.kind !== "auto" && selection.kind !== "model")) {
+		if (typeof selection !== "object" || Array.isArray(selection) || !("kind" in selection)) {
 			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
 		}
 		if (selection.kind === "auto") return DEFAULT_MODEL_ROLE_ALIAS;
-		const { provider, modelId, thinkingLevel } = selection.model;
+		if (selection.kind !== "model" || !("model" in selection)) {
+			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
+		}
+		const modelSelection = selection.model;
+		if (
+			!modelSelection ||
+			typeof modelSelection !== "object" ||
+			Array.isArray(modelSelection) ||
+			!("provider" in modelSelection) ||
+			!("modelId" in modelSelection)
+		) {
+			throw new RpcModelRoleError("invalid_params", "A model selection is required");
+		}
+		const provider = modelSelection.provider;
+		const modelId = modelSelection.modelId;
+		const thinkingLevel = "thinkingLevel" in modelSelection ? modelSelection.thinkingLevel : undefined;
+		if (
+			typeof provider !== "string" ||
+			typeof modelId !== "string" ||
+			(thinkingLevel !== undefined && typeof thinkingLevel !== "string")
+		) {
+			throw new RpcModelRoleError("invalid_params", "Model selection fields are invalid");
+		}
 		const available = registry.getAvailable("all");
 		const model = available.find(candidate => candidate.provider === provider && candidate.id === modelId);
 		if (!model) {

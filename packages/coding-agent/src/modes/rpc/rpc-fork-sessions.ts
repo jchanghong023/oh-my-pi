@@ -104,6 +104,16 @@ export class RpcSessionDirectoryService {
 
 		const current = this.#currentSession();
 		if (current && current.sessionManager.getSessionId() === sessionId) {
+			if (expectedRevision !== undefined) {
+				let sessionFile: string | undefined;
+				const sessionManager = current.sessionManager;
+				if ("getSessionFile" in sessionManager && typeof sessionManager.getSessionFile === "function") {
+					const candidate = sessionManager.getSessionFile();
+					if (typeof candidate === "string") sessionFile = candidate;
+				}
+				sessionFile ??= (await this.#findListed(sessionId))?.path;
+				this.#assertRevision(sessionId, sessionFile, expectedRevision);
+			}
 			if (current.isStreaming) {
 				throw new RpcSessionDirectoryError("execution_failed", "Session is streaming; retry after the turn ends");
 			}

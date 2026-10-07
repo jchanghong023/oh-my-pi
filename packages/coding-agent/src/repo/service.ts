@@ -81,7 +81,8 @@ export function resolveRepoRoot(cwd: string): string {
 	const canonical = realpathSync(cwd);
 	let repoRoot: string | null = null;
 	try {
-		repoRoot = vcs.repo(canonical)?.root() ?? null;
+		const repo = vcs.repo(canonical);
+		if (repo?.kind() === "git") repoRoot = repo.root();
 	} catch {
 		/* Non-VCS directories are valid. */
 	}
