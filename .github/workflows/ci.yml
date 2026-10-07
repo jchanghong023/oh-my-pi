@@ -76,7 +76,6 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               echo "Building fork version $version from upstream baseline $baseline_tag"
 
-
    # Cross-build the native addons required by the Linux and Windows binaries.
    # Keep the artifact layout consumed by native-artifacts / scripts/bazel-natives.ts.
    native_addon_build:
@@ -86,19 +85,19 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { target_id: linux-arm64, target: natives-linux-arm64, save_cache: false }
-               - { target_id: linux-musl-arm64, target: natives-linux-musl-arm64, save_cache: false }
-               - { target_id: linux-musl-x64-baseline, target: natives-linux-musl-x64-baseline, save_cache: false }
-               - { target_id: linux-x64-baseline, target: natives-linux-x64-baseline, save_cache: true }
-               - { target_id: linux-x64-modern, target: natives-linux-x64-modern, save_cache: false }
-               - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline, save_cache: false }
+               - { target_id: linux-arm64, target: natives-linux-arm64 }
+               - { target_id: linux-musl-arm64, target: natives-linux-musl-arm64 }
+               - { target_id: linux-musl-x64-baseline, target: natives-linux-musl-x64-baseline }
+               - { target_id: linux-x64-baseline, target: natives-linux-x64-baseline }
+               - { target_id: linux-x64-modern, target: natives-linux-x64-modern }
+               - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline }
       steps:
          - uses: actions/checkout@v4
 
          - id: cache
            uses: ./.github/actions/bazel-cache
            with:
-              scope: linux
+              scope: ${{ matrix.target_id }}
          - name: Build native addon
            run: |
               set -eo pipefail
@@ -116,18 +115,18 @@ jobs:
               summary=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/bazel-build.log" | grep -E '[0-9]+ processes:' | tail -1 || true)
               echo "::notice title=Bazel build summary::${summary:-no process summary found}"
 
-         # Only the linux-x64-baseline leg saves the disk cache: concurrent
-         # actions/cache saves of the same key fail (key already exists).
-         # Every leg restores the shared archive; content addressing keeps it
-         # complete even though each leg contributes different blobs.
+         # Each leg saves its own complete target cache; distinct keys avoid
+         # concurrent saves colliding or leaving cross-target builds uncached.
          - name: Save bazel disk cache
-           if: steps.cache.outputs.save-needed == 'true' && matrix.save_cache
+           if: steps.cache.outputs.save-needed == 'true'
            uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               # Must mirror the restore path list in the bazel-cache action.
               path: |
                  ~/.cache/omp-bazel-disk
                  ~/.cache/omp-bazel-repo
+                 ~/.cargo/registry
+                 ~/.cargo/git
               key: ${{ steps.cache.outputs.cache-key }}
 
          # Stage outputs underneath a natives-<target> directory so this

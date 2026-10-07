@@ -1,58 +1,52 @@
-name: "Compose bazel cache config"
+name: "Restore Bazel build cache"
 description: >
-   Emits a bazelrc fragment wiring the cluster remote cache. Every Bazel job
-   runs on omp-kata, where the pod env carries the bazel-remote credentials;
-   elsewhere (no credentials) the fragment carries only --config=ci and the
-   build runs uncached.
+   Restores GitHub-hosted Bazel action and dependency caches and emits a
+   bazelrc fragment using them. No external cache server or credentials required.
+
+inputs:
+   scope:
+      description: Native target identifier, isolating each matrix leg's cache
+      required: true
 
 outputs:
    rc:
       description: Path to the generated bazelrc fragment
       value: ${{ steps.compose.outputs.rc }}
+   cache-key:
+      description: Primary key to save after a successful build
+      value: ${{ steps.restore.outputs.cache-primary-key }}
+   save-needed:
+      description: Whether this build needs to save a new cache entry
+      value: ${{ steps.restore.outputs.cache-hit != 'true' }}
 
 runs:
    using: composite
    steps:
+      - name: Restore Bazel action and dependency caches
+        id: restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        env:
+           CACHE_PREFIX: omp-bazel-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('.bazelversion', '.bazelrc', 'rust-toolchain.toml', 'Cargo.toml', 'Cargo.lock', 'MODULE.bazel', 'MODULE.bazel.lock', 'BUILD.bazel', 'bazel/**') }}
+        with:
+           path: |
+              ~/.cache/omp-bazel-disk
+              ~/.cache/omp-bazel-repo
+              ~/.cargo/registry
+              ~/.cargo/git
+           key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('crates/**') }}
+           restore-keys: |
+              ${{ env.CACHE_PREFIX }}-
+
       - name: Compose cache config
         id: compose
         shell: bash
         run: |
            set -euo pipefail
-           if [ -n "${BAZEL_REMOTE_USER:-}" ] || [ -n "${BAZEL_REMOTE_PASSWORD:-}" ]; then
-             if [ -z "${BAZEL_REMOTE_USER:-}" ] || [ -z "${BAZEL_REMOTE_PASSWORD:-}" ]; then
-               echo "::error::BAZEL_REMOTE_USER and BAZEL_REMOTE_PASSWORD must both be set"
-               exit 1
-             fi
-             remote=true
-           else
-             remote=false
-             echo "::notice title=Bazel cache::No cluster remote-cache credentials on this runner; building uncached."
-           fi
-
            rc="$RUNNER_TEMP/bazel-cache.rc"
-           if [ "$remote" = "true" ]; then
-             # Mask the derived credential BEFORE writing the rc: config=ci
-             # enables --announce_rc, which prints --remote_header verbatim.
-             # Mask lines inside the redirected block below would land in the
-             # rc file itself and mask nothing.
-             raw_auth="${BAZEL_REMOTE_USER}:${BAZEL_REMOTE_PASSWORD}"
-             auth="$(printf %s "$raw_auth" | base64 | tr -d '\n')"
-             echo "::add-mask::$raw_auth"
-             echo "::add-mask::$auth"
-             {
-               # The PVC mount lives outside $HOME. Pods are single-job and
-               # use RUNNER_TEMP for Bazel's output root.
-               echo "startup --output_user_root=$RUNNER_TEMP/bazel-root"
-               echo "common --config=ci"
-               echo "common --repository_cache=/opt/bazel-repo-cache"
-               echo "common --repo_env=OMP_XWIN_CACHE_DIR=/opt/bazel-repo-cache/xwin"
-               echo "common --config=cache-rw"
-               echo "common --remote_cache=grpcs://bazel-remote.bazel-cache.svc.cluster.local:9092"
-               echo "common --tls_certificate=infra/bazel-remote/ca.crt"
-               echo "common --remote_header='authorization=Basic ${auth}'"
-               echo "common --remote_download_toplevel"
-             } > "$rc"
-           else
-             echo "common --config=ci" > "$rc"
-           fi
+           {
+             echo "common --config=ci"
+             echo "common --disk_cache=$HOME/.cache/omp-bazel-disk"
+             echo "common --repository_cache=$HOME/.cache/omp-bazel-repo"
+             echo "common --repo_env=OMP_XWIN_CACHE_DIR=$HOME/.cache/omp-bazel-repo/xwin"
+           } > "$rc"
            echo "rc=$rc" >> "$GITHUB_OUTPUT"
