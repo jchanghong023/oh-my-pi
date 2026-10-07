@@ -6073,7 +6073,6 @@ mod tests {
 		}
 	}
 
-	#[cfg(unix)]
 	fn shell_test_lock() -> &'static TokioMutex<()> {
 		static LOCK: std::sync::OnceLock<TokioMutex<()>> = std::sync::OnceLock::new();
 		LOCK.get_or_init(|| TokioMutex::new(()))
