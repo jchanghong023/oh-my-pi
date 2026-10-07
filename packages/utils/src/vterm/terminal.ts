@@ -605,7 +605,8 @@ export class Terminal {
 
 	#shiftCells(line: BufferLine, column: number, count: number): void {
 		// Inserting more than a row's worth only pushes everything past the edge.
-		const blanks = new Array<CellData>(Math.min(count, this.cols)).fill(sharedBlankCell(this.#attrs));
+		const blank = sharedBlankCell(this.#attrs);
+		const blanks = Array.from({ length: Math.min(count, this.cols) }, () => blank);
 		line.cells.splice(column, 0, ...blanks);
 		line.cells.length = this.cols;
 	}

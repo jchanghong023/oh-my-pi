@@ -1223,7 +1223,11 @@ export class CommandController {
 		if (this.ctx.focusedAgentId) await this.ctx.unfocusSession();
 		this.ctx.eventController.resetTranscriptAnchors();
 		this.ctx.resetObserverRegistry();
-		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
+		setSessionTerminalTitle(
+			this.ctx.sessionManager.getSessionName(),
+			this.ctx.sessionManager.getCwd(),
+			this.ctx.sessionManager.getSessionTitleCard(),
+		);
 
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.resetActiveTime();
