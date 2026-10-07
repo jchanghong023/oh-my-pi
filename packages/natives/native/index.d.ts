@@ -1817,8 +1817,8 @@ export declare function getWorkProfile(lastSeconds: number): WorkProfile
  *
  * # Errors
  * Returns an error when the search path cannot be resolved, the path is not a
- * directory, the glob pattern is invalid, or cancellation/timeout is
- * triggered.
+ * directory, the glob pattern is invalid, a traversed directory cannot be
+ * opened with `strictErrors` enabled, or cancellation/timeout is triggered.
  */
 export declare function glob(options: GlobOptions, onMatch?: ((error: Error | null, match: GlobMatch) => void) | undefined | null): Promise<GlobResult>
 

@@ -1,63 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ptree, TempDir } from "@oh-my-pi/pi-utils";
-import * as path from "node:path";
 import { selectShard } from "./ci-test-ts";
-
-async function affectedDryRun(packages: string[]) {
-	return ptree.exec(
-		[
-			process.execPath,
-			path.join(import.meta.dir, "ci-test-ts.ts"),
-			"affected",
-			`--packages=${JSON.stringify(packages)}`,
-			"--dry-run",
-		],
-		{
-			env: { ...Bun.env, OMP_TEST_SHARD: "malformed", NO_COLOR: "1" },
-			timeout: 30_000,
-			allowNonZero: true,
-		},
-	);
-}
-
-describe("affected test plans", () => {
-	test("keeps coding-agent source-colocated suites and ignores shard selection", async () => {
-		const result = await affectedDryRun(["packages/coding-agent"]);
-
-		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain("test/title-card.test.ts");
-		expect(result.stdout).toContain("src/edit/auto-repair.test.ts");
-		expect(result.stdout).not.toContain("packages/utils");
-	});
-
-	test("discovers extension variants and nested suites despite narrower package scripts", async () => {
-		const stats = await affectedDryRun(["packages/stats"]);
-		expect(stats.exitCode).toBe(0);
-		expect(stats.stdout).toContain("test/client-query.test.tsx");
-		expect(stats.stdout).not.toContain("packages/ai");
-
-		const tui = await affectedDryRun(["packages/tui"]);
-		expect(tui.exitCode).toBe(0);
-		expect(tui.stdout).toContain("test/custom-editor.test.ts");
-		expect(tui.stdout).toContain("test/native/encode.test.ts");
-	});
-
-	test("reports an empty workspace package as skipped", async () => {
-		const result = await affectedDryRun(["packages/wire"]);
-
-		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain("packages/wire: skipped (no tests found)");
-		expect(result.stdout).not.toContain("$ bun test");
-	});
-
-	test("rejects a directory outside the declared workspace", async () => {
-		const result = await affectedDryRun(["scripts"]);
-
-		expect(result.exitCode).not.toBe(0);
-		expect(`${result.stdout}\n${result.stderr}`).toContain("not a package.json workspace directory");
-		expect(result.stdout).not.toContain("$ bun test");
-	});
-});
 
 describe("test runner watchdog", () => {
 	// Parent fake timers cannot drive the real watchdog inside the isolated runner process.

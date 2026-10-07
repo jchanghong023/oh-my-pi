@@ -1,10 +1,20 @@
 #!/usr/bin/env bun
-// Full local verification of the modules the fork diff touches: each selected
-// module runs its whole suite through the existing runners; untouched modules
-// are not test targets (no consumer closure).
+// Fork full local verification. Thin orchestration over upstream entries: the
+// upstream TS static gate (check:ts; see the phase comment for why the clippy
+// half of check:rs is temporarily excluded), the host native addon build, the
+// fork's own TS tests
+// (discovered from the diff against the upstream baseline — no hand-maintained
+// whitelist of upstream tests; the full upstream suite is POSIX-oriented and is
+// covered by the slowtest Linux pipeline), the Rust workspace suite through the
+// upstream `test:rs` runner, repo script tests, and the dev-TUI PTY smoke.
+// Python components are not tested locally. The verdict is black and white: no
+// failure exemptions. E2E smoke and installer E2E are slowtest-pipeline
+// stages. No fork-side stage timeouts: children own their own budgets
+// (`bun test` per-test limits, the CI-side runner). Only run on explicit user
+// request (AGENTS.md「验证」).
 
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { $ } from "bun";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -17,150 +27,52 @@ export interface FulltestCommand {
 
 export interface FulltestOptions {
 	debug: boolean;
-	dryRun: boolean;
 }
 
-export interface WorkspaceModule {
-	directory: string;
-	name: string;
-	dependencies: readonly string[];
-}
-
-export interface FulltestScope {
-	packages: string[];
-	rust: boolean;
-	scripts: boolean;
-	native: boolean;
-	ui: boolean;
-}
-
-function isDocumentation(file: string): boolean {
-	return (
-		/^(?:docs|docs-zh-CN)\//.test(file) ||
-		/^(?:(?:packages\/[^/]+|crates\/(?:vendor\/)?[^/]+)\/)?(?:README(?:\.[^/]*)?|CHANGELOG(?:\.[^/]*)?|LICENSE(?:\.[^/]*)?|AGENTS\.md)$/i.test(
-			file,
-		) ||
-		/^(?:packages\/[^/]+|crates\/(?:vendor\/)?[^/]+)\/docs\//.test(file)
-	);
-}
-
-/** Select the suites of modules with changed files, not changed test files.
- * Deleted paths still count; consumer modules without changes are not selected. */
-export function resolveAffectedTestScope(
-	changedPaths: readonly string[],
-	modules: readonly WorkspaceModule[],
-	rootDependenciesChanged = true,
-): FulltestScope {
-	const changed = changedPaths.map(file => file.replaceAll("\\", "/")).filter(file => !isDocumentation(file));
-	const globalTs =
-		(rootDependenciesChanged && changed.includes("package.json")) ||
-		changed.some(file => /^(?:bun\.lockb?$|bunfig\.toml$|tsconfig[^/]*\.json$|patches\/)/.test(file));
-	const rust = changed.some(file =>
-		/^(?:crates\/|Cargo\.(?:toml|lock)$|\.cargo\/|\.config\/nextest\.toml$|rust-toolchain(?:\.toml)?$|\.?rustfmt\.toml$|\.?clippy\.toml$)/.test(
-			file,
-		),
-	);
-	const selected = new Set(
-		modules
-			.filter(module => globalTs || changed.some(file => file.startsWith(`${module.directory}/`)))
-			.map(module => module.directory),
-	);
-	// Rust changes rebuild the addon the natives binding ships; its suite is the
-	// binding layer's test surface even when its TS files are unchanged.
-	if (rust) selected.add("packages/natives");
-	// Removed modules cannot supply their current manifest/dependency identity.
-	// Conservatively include every module rather than silently dropping them.
-	if (
-		changed.some(
-			file => /^packages\/[^/]+\//.test(file) && !modules.some(module => file.startsWith(`${module.directory}/`)),
-		)
-	) {
-		for (const module of modules) selected.add(module.directory);
-	}
-	const packages = modules
-		.filter(module => selected.has(module.directory))
-		.map(module => module.directory)
-		.sort();
-	const scripts =
-		globalTs ||
-		changed.some(
-			file => file === "package.json" || file.startsWith("scripts/") || /^install\.(?:sh|ps1)$/.test(file),
-		);
-	// Native is a prerequisite, not an extra test target. Check forward
-	// dependencies too: a changed CLI still needs its unchanged native addon.
-	const prerequisites = new Set(packages);
-	let grew = true;
-	while (grew) {
-		grew = false;
-		for (const module of modules) {
-			if (!prerequisites.has(module.directory)) continue;
-			for (const dependency of modules) {
-				if (module.dependencies.includes(dependency.name) && !prerequisites.has(dependency.directory)) {
-					prerequisites.add(dependency.directory);
-					grew = true;
-				}
-			}
-		}
-	}
-	return {
-		packages,
-		rust,
-		scripts,
-		native: rust || scripts || prerequisites.has("packages/natives"),
-		ui:
-			selected.has("packages/coding-agent") ||
-			selected.has("packages/tui") ||
-			changed.includes("scripts/fulltest-ui-smoke.ts"),
-	};
-}
-
+/** Phases in contract order; `ts/fork` is driven by {@link runForkTestsPhase}
+ * (the placeholder keeps it visible in the plan). The Rust phase tests only
+ * the crates the fork diff touches (test:rs --affected over
+ * `changedPaths`); everything upstream in the workspace stays out of the
+ * local gate except what a changed crate drags in. */
 export function buildFulltestPhases(
 	options: FulltestOptions,
-	scope: FulltestScope,
 	changedPaths: readonly string[],
 ): readonly FulltestCommand[] {
-	// Keep the existing upstream-red exception: no check:rs clippy/fmt half
-	// until upstream's Windows-only clippy failures are fixed.
-	const phases: FulltestCommand[] = [{ label: "static/check:ts", argv: ["bun", "run", "check:ts"] }];
-	if (scope.native) phases.push({ label: "build/native", argv: ["bun", "run", "build:native"] });
-	if (scope.packages.length)
-		phases.push({
-			label: "ts/affected",
-			argv: [
-				"bun",
-				"scripts/ci-test-ts.ts",
-				"affected",
-				`--packages=${JSON.stringify(scope.packages)}`,
-				...(options.dryRun ? ["--dry-run"] : []),
-			],
-		});
-	if (scope.rust)
-		phases.push({
+	return [
+		// TS static only (check:ts). The clippy/fmt half of check:rs is excluded
+		// while upstream's own Windows-only code fails it on the pinned nightly
+		// (pi-vfs/src/native/windows.rs, clippy::map_unwrap_or under -D warnings;
+		// upstream CI only lints on Linux and never sees the file). Restore the
+		// static phase to `["bun", "run", "fastcheck"], env: { CI: "1" }` once
+		// upstream turns green. CI=1 on the Rust phase below disables run-rs-task's
+		// "skip when no Rust files changed" local-dev shortcut: fulltest is a
+		// deliberate gate over a possibly clean tree.
+		{ label: "static/check:ts", argv: ["bun", "run", "check:ts"] },
+		{ label: "build/native", argv: ["bun", "run", "build:native"] },
+		{ label: "ts/fork", argv: ["(fork-diff-set)"] },
+		{
 			label: "rust/affected",
-			argv: ["bun", "run", "test:rs", "--affected", ...(options.dryRun ? ["--dry-run"] : [])],
+			argv: ["bun", "run", "test:rs", "--affected"],
 			env: { CI: "1", OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths) },
-		});
-	if (scope.scripts) phases.push({ label: "scripts", argv: ["bun", "run", "test:scripts"] });
-	if (scope.ui)
-		phases.push({
+		},
+		{ label: "scripts", argv: ["bun", "run", "test:scripts"] },
+		{
 			label: "ui/smoke",
 			argv: ["bun", "scripts/fulltest-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
-		});
-	return phases;
+		},
+	];
 }
 
 function printUsage(): void {
-	console.log("Usage: bun run fulltest [--debug] [--dry-run]");
-	console.log("  --debug    dump raw TUI output during the UI smoke phase");
-	console.log("  --dry-run  show affected modules and commands without building or testing");
+	console.log("Usage: bun run fulltest [--debug]");
+	console.log("  --debug  forward to the UI smoke phase (dump raw TUI output)");
 }
 
-export function parseFulltestArgs(args: readonly string[]): FulltestOptions | null {
-	if (args.some(arg => arg !== "--debug" && arg !== "--dry-run")) {
-		printUsage();
-		return null;
-	}
-	return { debug: args.includes("--debug"), dryRun: args.includes("--dry-run") };
+export function parseFulltestArgs(args: readonly string[]): { debug: boolean } | null {
+	if (args.length === 0) return { debug: false };
+	if (args.every(arg => arg === "--debug")) return { debug: true };
+	printUsage();
+	return null;
 }
 
 function shellQuote(value: string): string {
@@ -168,12 +80,11 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-async function runPhase(command: FulltestCommand, dryRun: boolean): Promise<void> {
+async function runPhase(command: FulltestCommand, cwd: string = repoRoot): Promise<void> {
 	console.log(`\n==> ${command.label}`);
-	console.log(command.argv.map(shellQuote).join(" "));
-	if (dryRun && command.label !== "ts/affected" && command.label !== "rust/affected") return;
+	console.log(`(cd ${path.relative(repoRoot, cwd) || "."} && ${command.argv.map(shellQuote).join(" ")})`);
 	const child = Bun.spawn([...command.argv], {
-		cwd: repoRoot,
+		cwd,
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
@@ -183,81 +94,132 @@ async function runPhase(command: FulltestCommand, dryRun: boolean): Promise<void
 	if (exitCode !== 0) throw new Error(`${command.label} failed with exit code ${exitCode}`);
 }
 
+/**
+ * One package's fork test batch: the package directory plus the test files
+ * (relative to it) that differ from the upstream baseline.
+ */
+export interface ForkTestBatch {
+	readonly cwd: string;
+	readonly files: readonly string[];
+}
+
+/**
+ * Discover the fork's TS tests: every test file under a package `test/`
+ * directory — or colocated under `src/`, where upstream also keeps a few —
+ * that differs from the upstream baseline ref (`git diff --name-only` against
+ * it plus `git ls-files --others`, so uncommitted and not-yet-staged files
+ * both count). New fork tests join automatically; reverted files (identical
+ * to upstream again) drop out automatically.
+ */
+export function resolveForkTestBatches(
+	changedPaths: readonly string[],
+	exists: (file: string) => boolean,
+): ForkTestBatch[] {
+	const testFiles = changedPaths
+		.filter(changed => /^packages\/[^/]+\/(test|src)\/.+\.test\.(ts|tsx)$/.test(changed))
+		.filter(exists)
+		.sort();
+	const byPackage = new Map<string, string[]>();
+	for (const file of testFiles) {
+		const separator = file.indexOf("/", "packages/".length);
+		const packageName = file.slice("packages/".length, separator);
+		const relative = file.slice(separator + 1);
+		const batch = byPackage.get(packageName) ?? [];
+		batch.push(relative);
+		byPackage.set(packageName, batch);
+	}
+	return [...byPackage.entries()].map(([packageName, files]) => ({ cwd: `packages/${packageName}`, files }));
+}
+
 async function resolveUpstreamBaselineRef(): Promise<string> {
+	// Prefer the local mirror branch; fall back to the remote-tracking ref so a
+	// fresh clone (e.g. the slowtest WSL stage) can discover fork tests without
+	// a prior local sync — `rev-parse --verify` does not DWIM to `origin/<name>`.
 	for (const candidate of ["upstream", "origin/upstream"]) {
 		const result = await $`git rev-parse --verify ${candidate}`.cwd(repoRoot).quiet().nothrow();
 		if (result.exitCode === 0 && result.stdout.toString().trim() !== "") return candidate;
 	}
 	throw new Error(
-		"fulltest needs the upstream baseline (local `upstream` branch or `origin/upstream`) to select affected modules.",
+		"fulltest needs the upstream baseline (local `upstream` branch or `origin/upstream`) to discover fork tests; run the upstream sync once or create the branch.",
 	);
 }
 
-async function discoverChanges(baseline: string): Promise<string[]> {
-	// NUL separation preserves spaces, non-ASCII names and embedded newlines;
-	// --no-renames reports both sides, so moving code affects both modules.
-	const diff = await $`git diff --name-only --no-renames -z ${baseline}`.cwd(repoRoot).quiet().nothrow();
-	if (diff.exitCode !== 0) throw new Error(`git diff against ${baseline} failed: ${diff.stderr.toString().trim()}`);
-	const untracked = await $`git ls-files --others --exclude-standard -z`.cwd(repoRoot).quiet().nothrow();
-	if (untracked.exitCode !== 0) throw new Error(`git ls-files --others failed: ${untracked.stderr.toString().trim()}`);
-	return [
-		...new Set([...diff.stdout.toString().split("\0"), ...untracked.stdout.toString().split("\0")].filter(Boolean)),
-	].sort();
+/** Max test files per `bun test` process. A single process accumulating the
+ * whole fork suite keeps native handles (browser child processes, PTYs,
+ * SQLite) alive across files and inflates their per-test budgets; bounded
+ * chunks restore isolation without maintaining any per-file list. */
+const TEST_CHUNK_SIZE = 40;
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+	return chunks;
 }
 
-async function discoverWorkspaceModules(): Promise<WorkspaceModule[]> {
-	const root = await Bun.file(path.join(repoRoot, "package.json")).json();
-	const modules: WorkspaceModule[] = [];
-	for (const pattern of root.workspaces.packages as string[]) {
-		for await (const file of new Bun.Glob(`${pattern}/package.json`).scan({ cwd: repoRoot, onlyFiles: true })) {
-			const manifest = await Bun.file(path.join(repoRoot, file)).json();
-			modules.push({
-				directory: path.posix.dirname(file.replaceAll("\\", "/")),
-				name: manifest.name,
-				dependencies: Object.keys({
-					...manifest.dependencies,
-					...manifest.devDependencies,
-					...manifest.optionalDependencies,
-					...manifest.peerDependencies,
-				}),
-			});
+/** Fork-diff paths against the upstream baseline: tracked changes plus
+ * untracked files, as repo-root-relative forward-slash paths. Drives both the
+ * fork TS test discovery and the affected Rust crate selection. */
+async function discoverForkChangedPaths(): Promise<string[]> {
+	const baseline = await resolveUpstreamBaselineRef();
+	// core.quotepath=off keeps paths literal: quoted C-escaped names would not
+	// match the discovery regex and the gate would silently skip them.
+	const diff = await $`git -c core.quotepath=off diff --name-only ${baseline}`.cwd(repoRoot).quiet().nothrow();
+	if (diff.exitCode !== 0) {
+		throw new Error(`git diff against ${baseline} failed: ${diff.stderr.toString().trim()}`);
+	}
+	// `git diff` never lists untracked files; not-yet-staged new fork tests must
+	// join the discovered set too, or the gate would silently skip them.
+	const untracked = await $`git -c core.quotepath=off ls-files --others --exclude-standard`
+		.cwd(repoRoot)
+		.quiet()
+		.nothrow();
+	if (untracked.exitCode !== 0) {
+		throw new Error(`git ls-files --others failed: ${untracked.stderr.toString().trim()}`);
+	}
+	return [...diff.stdout.toString().split(/\r?\n/), ...untracked.stdout.toString().split(/\r?\n/)].filter(Boolean);
+}
+
+/** Run every fork test batch in bounded chunks, one `bun test` process per
+ * chunk (sequential: the tests spawn subprocess-heavy fixtures and per-test
+ * budgets lose to CPU contention). Any non-zero exit fails the phase. */
+async function runForkTestsPhase(): Promise<void> {
+	const changedPaths = await discoverForkChangedPaths();
+	// Resolve existence against the repo root regardless of the caller's cwd.
+	const batches = resolveForkTestBatches(changedPaths, file => existsSync(path.join(repoRoot, file)));
+	if (batches.length === 0) {
+		throw new Error(
+			"No fork test files discovered against the upstream baseline; refusing to run an empty test phase",
+		);
+	}
+	const total = batches.reduce((count, batch) => count + batch.files.length, 0);
+	console.log(`\n==> ts/fork (${total} fork test files across ${batches.length} packages)`);
+	for (const batch of batches) {
+		const chunks = chunk(batch.files, TEST_CHUNK_SIZE);
+		for (const [index, files] of chunks.entries()) {
+			const suffix = chunks.length > 1 ? ` chunk ${index + 1}/${chunks.length}` : "";
+			await runPhase(
+				{
+					label: `ts/fork ${batch.cwd} (${files.length} files${suffix})`,
+					argv: ["bun", "test", ...files],
+				},
+				path.join(repoRoot, batch.cwd),
+			);
 		}
 	}
-	return modules;
 }
 
-async function rootDependencyConfigurationChanged(baseline: string): Promise<boolean> {
-	const previous = await $`git show ${`${baseline}:package.json`}`.cwd(repoRoot).quiet().nothrow();
-	if (previous.exitCode !== 0) return true;
-	const current = await Bun.file(path.join(repoRoot, "package.json")).json();
-	const old = JSON.parse(previous.stdout.toString());
-	return [
-		"dependencies",
-		"devDependencies",
-		"optionalDependencies",
-		"peerDependencies",
-		"workspaces",
-		"overrides",
-		"patchedDependencies",
-	].some(key => !isDeepStrictEqual(current[key], old[key]));
-}
-
-async function main(options: FulltestOptions): Promise<void> {
+async function main(debug: boolean): Promise<void> {
 	const platformSupported = (process.platform === "linux" || process.platform === "win32") && process.arch === "x64";
-	if (!platformSupported)
+	if (!platformSupported) {
 		throw new Error(`fulltest supports Windows x64 and Linux x64 (found ${process.platform}-${process.arch})`);
-	const baseline = await resolveUpstreamBaselineRef();
-	const changedPaths = await discoverChanges(baseline);
-	const rootDependenciesChanged = changedPaths.includes("package.json")
-		? await rootDependencyConfigurationChanged(baseline)
-		: false;
-	const scope = resolveAffectedTestScope(changedPaths, await discoverWorkspaceModules(), rootDependenciesChanged);
-	console.log(`fulltest: baseline=${baseline}; ${changedPaths.length} changed paths`);
-	console.log(
-		`fulltest: TS modules=${scope.packages.join(", ") || "none"}; Rust=${scope.rust ? "affected crates" : "skip"}; scripts=${scope.scripts ? "all" : "skip"}; UI=${scope.ui ? "smoke" : "skip"}`,
-	);
-	const phases = buildFulltestPhases(options, scope, changedPaths);
-	for (const phase of phases) await runPhase(phase, options.dryRun);
+	}
+	const changedPaths = await discoverForkChangedPaths();
+	const phases = buildFulltestPhases({ debug }, changedPaths);
+	console.log(`fulltest: ${phases.length} phases${debug ? " (ui-smoke debug dump on)" : ""}`);
+	for (const phase of phases) {
+		if (phase.label === "ts/fork") await runForkTestsPhase();
+		else await runPhase(phase);
+	}
 }
 
 if (import.meta.main) {
@@ -266,9 +228,9 @@ if (import.meta.main) {
 		process.exitCode = 2;
 	} else {
 		const startedAt = performance.now();
-		main(parsed)
+		main(parsed.debug)
 			.then(() => {
-				console.log(`\nfulltest: ${parsed.dryRun ? "DRY RUN (no builds or tests executed)" : "PASS"}`);
+				console.log(`\nfulltest: PASS`);
 				console.log(`fulltest: total time ${((performance.now() - startedAt) / 1000).toFixed(2)}s`);
 			})
 			.catch(error => {

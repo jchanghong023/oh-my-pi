@@ -4,7 +4,7 @@
 
 ### Changed
 
-- fulltest now verifies only the modules and crates the fork diff touches: each changed TS module runs its whole suite and each changed crate its own tests, while untouched modules, consumer closures, and Python components stay out of the gate; shared-config, deleted-module, and unresolvable-scope inputs still select everything, vendored crate changes test their consumers, and `--dry-run` prints the selected plan.
+- fulltest now tests Rust at crate granularity: only crates with changed files run their tests via `test:rs --affected` (vendored crate changes test their consumers through a Cargo.lock closure; shared-config, parse-failure, and deleted-crate inputs fall back to the full workspace). The TS gate stays at fork-diff test files, so POSIX-oriented upstream suites are never expanded locally.
 
 ### Breaking Changes
 
