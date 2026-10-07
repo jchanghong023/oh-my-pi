@@ -5631,8 +5631,16 @@ mod tests {
 			.run_string(exec_command, &si, &params)
 			.await
 			.expect("exec");
-		// cmd's `echo` keeps the space preceding `>`, so the file carries a
-		// trailing space after the operand-relative path.
+		// cmd's `echo` keeps the space preceding `>`, so the Windows file
+		// carries a trailing space after the operand-relative path; the Unix
+		// `printf %s` writes the operand verbatim.
+		#[cfg(unix)]
+		assert_eq!(
+			read("ex.txt").lines().next().expect("exec output"),
+			relative_keep,
+			"-exec {{}} should be operand-relative and run in the shell cwd"
+		);
+		#[cfg(windows)]
 		assert_eq!(
 			read("ex.txt").lines().next().expect("exec output"),
 			format!("{relative_keep} "),
