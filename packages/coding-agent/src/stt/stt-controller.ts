@@ -12,7 +12,7 @@ import { downloadSttModel, isSttModelCached } from "./downloader";
 import { normalizeSttLanguage } from "./language";
 import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
-import { encodePcm16Wav } from "./wav";
+import { encodePcm16Wav, floatToPcm16 } from "./wav";
 
 import { cfgSttLanguage, cfgSttSubmitTrigger } from "./settings";
 
@@ -74,7 +74,8 @@ export class STTController {
 
 	// Buffered cloud capture.
 	#cloudModel: Model<Api> | null = null;
-	#cloudAudio: Float32Array[] = [];
+	/** Captured cloud-dictation audio, converted to 16-bit PCM on arrival (half the Float32 footprint). */
+	#cloudAudio: Int16Array[] = [];
 
 	/** Creates a controller; tests may replace the hardware capture boundary. */
 	constructor();
@@ -268,7 +269,7 @@ export class STTController {
 					options.showWarning(error.message);
 					return;
 				}
-				if (samples.length > 0) this.#cloudAudio.push(samples.slice());
+				if (samples.length > 0) this.#cloudAudio.push(floatToPcm16(samples));
 			});
 		} catch (err) {
 			this.#streamAbort?.abort();
