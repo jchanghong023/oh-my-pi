@@ -38,6 +38,30 @@ describe("dereferenceJsonSchema", () => {
 		});
 	});
 
+	it("inlines escaped and empty definition names before stripping definitions", () => {
+		for (const keyword of ["$defs", "definitions"]) {
+			const schema = {
+				type: "object",
+				properties: {
+					escaped: { $ref: `#/${keyword}/foo~1bar~0baz~01` },
+					empty: { $ref: `#/${keyword}/` },
+				},
+				[keyword]: {
+					"foo/bar~baz~1": { type: "string" },
+					"": { type: "integer" },
+				},
+			};
+
+			expect(dereferenceJsonSchema(schema)).toEqual({
+				type: "object",
+				properties: {
+					escaped: { type: "string" },
+					empty: { type: "integer" },
+				},
+			});
+		}
+	});
+
 	it("inlines $ref from definitions (legacy keyword)", () => {
 		const schema = {
 			type: "object",

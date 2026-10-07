@@ -3467,6 +3467,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		};
 	}
 
+	/** Wrapped box status rows, rendered below the editor's border. */
+	renderTopBorderOverflowLines(width: number, overflowWidth = width, previewTitle?: string): readonly string[] {
+		return this.#renderStatusLines(width, "box", previewTitle, overflowWidth).overflow;
+	}
+
 	/** Flush-left soft-capped powerline band (the band composer's top row). */
 	getBandTopBorder(width: number, previewTitle?: string): { content: string; width: number; revision: number } {
 		const statusLine = this.#buildStatusLine(width, "band", previewTitle);
@@ -3899,7 +3904,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				const statusWidth = this.#topBorderWidthProvider?.(width) ?? width;
 				const leftInset = Math.max(0, Math.floor((width - statusWidth) / 2));
 				const overflowWidth = Math.max(0, width - leftInset);
-				const overflow = this.#renderStatusLines(statusWidth, "box", undefined, overflowWidth).overflow;
+				const overflow = this.renderTopBorderOverflowLines(statusWidth, overflowWidth);
 				for (const row of overflow) {
 					lines.push(`${" ".repeat(leftInset)}${row}`);
 				}

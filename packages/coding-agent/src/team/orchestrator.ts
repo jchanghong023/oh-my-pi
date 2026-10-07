@@ -235,8 +235,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	}
 
 	// ── Stage 2: alignment (session model) ──────────────────────────────────
-	emitProgress("alignment", "阶段二：对齐与比较");
 	trackParticipant("alignment", "aligner", "running");
+	emitProgress("alignment", "阶段二：对齐与比较");
 	const alignmentOutcome = await runCall({
 		role: "aligner",
 		modelPattern: options.sessionModelPattern,
@@ -247,6 +247,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	if (signal.aborted) return { status: "cancelled" };
 	const alignment = alignmentOutcome.ok ? parseTeamAlignment(alignmentOutcome.data) : undefined;
 	if (!alignment) {
+		trackParticipant("alignment", "aligner", "failed");
+		emitProgress("alignment", "阶段二：对齐与比较（对齐子调用失败）");
 		return {
 			status: "failed",
 			failureReason: `对齐子调用失败（${alignmentOutcome.error ?? "输出不符合结构化要求"}），流程未完成，不输出半成品结论`,
@@ -427,8 +429,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	if (signal.aborted) return { status: "cancelled" };
 
 	// ── Stage 5: synthesis (session model) ──────────────────────────────────
-	emitProgress("synthesis", "阶段五：汇总方案");
 	trackParticipant("synthesis", "synthesizer", "running");
+	emitProgress("synthesis", "阶段五：汇总方案");
 	const synthesisOutcome = await runCall({
 		role: "synthesizer",
 		modelPattern: options.sessionModelPattern,
@@ -442,6 +444,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	if (signal.aborted) return { status: "cancelled" };
 	const synthesis = synthesisOutcome.ok ? parseTeamSynthesis(synthesisOutcome.data) : undefined;
 	if (!synthesis) {
+		trackParticipant("synthesis", "synthesizer", "failed");
+		emitProgress("synthesis", "阶段五：汇总方案（综合子调用失败）");
 		return {
 			status: "failed",
 			failureReason: `综合子调用失败（${synthesisOutcome.error ?? "输出不符合结构化要求"}），流程未完成，不输出半成品结论`,

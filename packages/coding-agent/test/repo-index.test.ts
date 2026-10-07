@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -121,6 +121,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 
 	it("ranks literal identifiers ahead of split-token recall and handles case, short, Chinese and quoted punctuation", async () => {
 		const { service } = await fixture({
+			"src/astral.txt": "𐐀ERR_TIMEOUT𐐀\n",
 			"src/exact.py": "ERR_TIMEOUT = '失败:重试'\n",
 			"src/split.py": "ERR = 'TIMEOUT while processing'\n",
 			"src/other.py": "print('retry stage')\n",
@@ -780,6 +781,18 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			}),
 		).rejects.toThrow("recovery interrupted after staging one file");
 		await expect(reopened.status()).rejects.toThrow(/recover/i);
+		const rename = fsSync.renameSync;
+		const deniedBackup = vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
+			if (String(to).startsWith(`${databasePath}.backup-`)) throw new Error("recovery backup rename denied");
+			return rename(from, to);
+		});
+		try {
+			await expect(reopened.recover()).rejects.toThrow("recovery backup rename denied");
+			expect(await Bun.file(databasePath).text()).toBe("not a SQLite database");
+			await expect(reopened.status()).rejects.toThrow(/recover/i);
+		} finally {
+			deniedBackup.mockRestore();
+		}
 		const recovered = await reopened.recover();
 		expect(recovered.exists).toBe(true);
 		expect(recovered.fileCount).toBe(2);

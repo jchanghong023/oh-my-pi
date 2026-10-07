@@ -12,7 +12,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -129,10 +128,8 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	const cleanup = async () => {
 		await session.dispose();
 		authStorage.close();
-		// ModelRegistry's shared models.db and any AgentStorage agent.db under
-		// tempDir stay locked on Windows until closed.
+		// ModelRegistry's shared models.db stays locked on Windows until closed.
 		closeModelCache();
-		AgentStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);
 		}

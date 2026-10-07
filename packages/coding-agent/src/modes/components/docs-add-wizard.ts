@@ -1,4 +1,5 @@
 import { type Component, Input, matchesKey, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 
 export interface DocsAddWizardResult {
@@ -72,8 +73,8 @@ export class DocsAddWizard implements Component {
 		];
 		if (step === "confirm") {
 			lines.push(
-				`Name: ${this.#values.name}`,
-				`Directory: ${this.#values.directory}`,
+				`Name: ${sanitizeText(this.#values.name)}`,
+				`Directory: ${sanitizeText(this.#values.directory)}`,
 				"",
 				theme.fg("dim", "Enter create  Esc back"),
 			);

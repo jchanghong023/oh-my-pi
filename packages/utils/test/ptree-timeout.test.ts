@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -60,7 +60,7 @@ describe("ptree timeout", () => {
 		}
 	});
 
-	it("does not take the dead-leader kill path when stdout was never consumed", async () => {
+	it("avoids dead-leader kills and releases abort listeners when stdout was never consumed", async () => {
 		// The root exits before the deadline and leaves no pipe holders behind.
 		// attachTimeout() creates the tracker wrapper, but the caller never
 		// reads stdout, so an unread reader must not count as evidence that the
@@ -69,16 +69,33 @@ describe("ptree timeout", () => {
 		// TimeoutError as the exit reason of an already-cleanly-exited root —
 		// must not appear. This pins the counter semantics without depending on
 		// PID reuse or on which platform-specific branch kill() would take.
-		using child = spawn([process.execPath, "-e", "process.exit(0)"], {
-			timeout: 1_000,
-			...(process.platform === "win32" ? {} : { detached: true }),
-		});
+		const controller = new AbortController();
+		const listenerRemoved = Promise.withResolvers<void>();
+		const nativeRemoveListener = controller.signal.removeEventListener.bind(controller.signal);
+		const removeAbortListener = spyOn(controller.signal, "removeEventListener").mockImplementation(
+			(type, listener, options) => {
+				nativeRemoveListener(type, listener, options);
+				if (type === "abort") listenerRemoved.resolve();
+			},
+		);
+		vi.useFakeTimers();
+		try {
+			using child = spawn([process.execPath, "-e", "process.exit(0)"], {
+				timeout: 1_000,
+				signal: controller.signal,
+				...(process.platform === "win32" ? {} : { detached: true }),
+			});
+			expect(await child.exited).toBe(0);
+			await listenerRemoved.promise;
+			vi.advanceTimersByTime(1_100);
 
-		expect(await child.exited).toBe(0);
-		// Let the 1 s deadline fire well after the root exited.
-		await Bun.sleep(1_100);
-
-		expect(child.exitReason).toBeUndefined();
+			expect(child.exitReason).toBeUndefined();
+			expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+		} finally {
+			removeAbortListener.mockRestore();
+			vi.useRealTimers();
+			controller.abort("test cleanup");
+		}
 	});
 
 	it("releases abort listeners after externally consumed stdout closes", async () => {

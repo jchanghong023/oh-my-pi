@@ -74,14 +74,15 @@ describe("RpcForkCommandCatalogService", () => {
 		expect(await service.buildCatalog()).toEqual([]);
 	});
 
-	test("name completion ranks exact, prefix, substring and drops non-matches", async () => {
+	test("name and directory completion honor cursor ranges and the session's current project", async () => {
 		await using temp = await TempDir.create("rpc-fork-complete-name-");
 		const cwd = path.resolve(temp.path());
+		let currentCwd = cwd;
 		const service = new RpcForkCommandCatalogService({ cwd });
 		const session = {
 			customCommands: [],
 			setSlashCommands: () => {},
-			sessionManager: { getCwd: () => cwd },
+			sessionManager: { getCwd: () => currentCwd },
 			skills: [],
 			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 		};
@@ -100,6 +101,23 @@ describe("RpcForkCommandCatalogService", () => {
 		// Non-command text and invalid cursors.
 		expect((await service.complete({ text: "hello", cursor: 5, session })).items).toEqual([]);
 		expect(() => service.complete({ text: "/mo", cursor: 99, session })).toThrow(RpcCommandCatalogError);
+		await fs.mkdir(path.join(cwd, "startup-only"));
+		const movedCwd = path.join(cwd, "moved");
+		await fs.mkdir(path.join(movedCwd, "destination-only"), { recursive: true });
+		const beforeMove = await service.complete({ text: "/move ", cursor: 6, session });
+		expect(beforeMove.items.some(item => item.label === "startup-only/")).toBe(true);
+		currentCwd = movedCwd;
+		const afterMove = await service.complete({ text: "/move dest", cursor: 10, session });
+		expect(afterMove.items).toContainEqual({
+			label: "destination-only/",
+			insertText: "destination-only/",
+			replaceStart: 6,
+			replaceEnd: 10,
+			kind: "argument",
+		});
+		expect((await service.complete({ text: "/move ", cursor: 6, session })).items.map(item => item.label)).toEqual([
+			"destination-only/",
+		]);
 	});
 
 	test("strict resolution distinguishes builtins, skills, and unknown input", async () => {

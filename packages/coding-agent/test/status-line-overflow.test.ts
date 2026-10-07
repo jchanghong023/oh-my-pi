@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
+import { renderComposerShapePreview } from "@oh-my-pi/pi-tui/overlays/composer-shape-preview";
 import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/segments";
 import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -494,5 +495,11 @@ describe("overflow: automatic row wrapping", () => {
 		expect(narrowPlain).toContain("model-marker");
 		expect(narrowPlain).toContain("0%");
 		expect(narrowPlain).toContain("session-marker");
+
+		const boxPreview = renderComposerShapePreview("box", 24, component);
+		const boxPreviewPlain = stripAnsi(boxPreview.join("\n"));
+		expect(boxPreviewPlain).toContain("model-marker");
+		expect(boxPreviewPlain).toContain("session-marker");
+		expect(boxPreview.every(line => visibleWidth(line) <= 24)).toBe(true);
 	});
 });

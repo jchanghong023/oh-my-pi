@@ -58,10 +58,16 @@ describe("resolveCompactionModelCandidates (fork contract)", () => {
 	const luna = requireModel("openai-codex", "gpt-6-luna");
 	const sonnet = requireModel("anthropic", "claude-sonnet-4-5");
 
-	test("codex main model → first candidate is luna; no other codex model enters the chain", () => {
-		const candidates = makeMaintenance(sol).resolveCompactionModelCandidates(sol, [sol, luna, sonnet]);
-		expect(candidates[0]).toBe(luna);
-		expect(candidates.some(c => c.provider === "openai-codex" && c.id !== "gpt-6-luna")).toBe(false);
+	test("already-selected luna does not block the next distinct largest-context fallback", () => {
+		const largestSol: Model = { ...sol, contextWindow: 300_000 };
+		const fallbackSonnet: Model = { ...sonnet, contextWindow: 250_000 };
+		const smallerLuna: Model = { ...luna, contextWindow: 200_000 };
+		const candidates = makeMaintenance(largestSol).resolveCompactionModelCandidates(largestSol, [
+			largestSol,
+			smallerLuna,
+			fallbackSonnet,
+		]);
+		expect(candidates).toEqual([smallerLuna, fallbackSonnet]);
 	});
 
 	test("explicitly configured compactionModel target is never substituted", () => {

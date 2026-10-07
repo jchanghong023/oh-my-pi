@@ -81,9 +81,7 @@ function startTui(argv: string[], env: Record<string, string>, projectCwd?: stri
 	const result = session.startArgv(
 		{
 			application: process.execPath,
-			args: projectCwd
-				? ["run", "dev", "--cwd", projectCwd, ...argv]
-				: ["--cwd=packages/coding-agent", "src/cli.ts", ...argv],
+			args: ["run", "dev", ...(projectCwd ? ["--cwd", projectCwd] : []), ...argv],
 			cwd: repoRoot,
 			cols: 120,
 			rows: 30,
@@ -143,7 +141,15 @@ if (process.argv.includes("--repo-only")) {
 
 // ── 1. Startup render ────────────────────────────────────────────────────────
 console.log("ui-smoke: waiting for the full-screen interface to render…");
-const main = startTui(["--offline", "--profile", "localci-ui"], {});
+const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
+stubServerCleanup.run = () => {
+	try {
+		rmSync(baseConfigRoot, { recursive: true, force: true });
+	} catch {}
+};
+const main = startTui(["--offline", "--profile", "localci-ui"], {
+	PI_CONFIG_DIR: path.basename(baseConfigRoot),
+});
 const rendered = await waitFor(() => {
 	// The TUI repaints in place: hides the cursor, positions it absolutely,
 	// and paints the status line (whose "π" brand segment is present under
@@ -191,6 +197,8 @@ main.session.write("\x04");
 	}
 }
 console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
+await fs.rm(baseConfigRoot, { recursive: true, force: true });
+stubServerCleanup.run = undefined;
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
 // The `/team` case runs a real TUI (no --offline) whose session model and
@@ -200,8 +208,8 @@ console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cle
 // stage data, so the full five-stage orchestrator runs for real and the final
 // report must land in the transcript.
 const TEAM_PROFILE = "localci-ui-team";
-const TEAM_CONFIG_DIR_NAME = ".omp-fulltest-team-smoke";
-const teamConfigRoot = path.join(os.homedir(), TEAM_CONFIG_DIR_NAME);
+const teamConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-team-smoke-"));
+const TEAM_CONFIG_DIR_NAME = path.basename(teamConfigRoot);
 
 interface StubRequestLog {
 	model: string;

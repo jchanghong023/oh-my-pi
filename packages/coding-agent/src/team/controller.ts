@@ -97,6 +97,7 @@ export async function deliverTeamReport(
 		if (signal.aborted) return false;
 		throw error;
 	}
+	if (signal.aborted) return false;
 	await rebuildChat?.();
 	return true;
 }

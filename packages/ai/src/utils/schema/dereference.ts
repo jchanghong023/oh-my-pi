@@ -17,14 +17,15 @@ import { isJsonObject, type JsonObject } from "./types";
  */
 function resolveLocalRef(ref: string, root: JsonObject): JsonObject | undefined {
 	// Only handle local refs: #/$defs/Name or #/definitions/Name
-	const match = /^#\/(\$defs|definitions)\/(.+)$/.exec(ref);
+	const match = /^#\/(\$defs|definitions)\/(.*)$/.exec(ref);
 	if (!match) return undefined;
 
 	const [, defsKey, name] = match;
 	const defs = root[defsKey!];
 	if (!isJsonObject(defs)) return undefined;
 
-	const resolved = defs[name!];
+	const decodedName = name!.replace(/~1/g, "/").replace(/~0/g, "~");
+	const resolved = defs[decodedName];
 	return isJsonObject(resolved) ? resolved : undefined;
 }
 

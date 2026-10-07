@@ -118,8 +118,11 @@ async function installBinary(src: string, dest: string): Promise<void> {
 		// be renamed: move the loaded image aside so the new addon takes its
 		// place. The holding process keeps running on the renamed image, and
 		// cleanupStaleTemps reclaims the .old. file on a later build.
+		const backupPath = `${dest}.old.${process.pid}`;
+		let renamedAside = false;
 		try {
-			await fs.rename(dest, `${dest}.old.${process.pid}`);
+			await fs.rename(dest, backupPath);
+			renamedAside = true;
 		} catch {
 			// Delete-then-rename as fallback (dest not held by a live loader)
 			try {
@@ -137,6 +140,16 @@ async function installBinary(src: string, dest: string): Promise<void> {
 		try {
 			await fs.rename(tempPath, dest);
 		} catch (finalErr) {
+			if (renamedAside) {
+				try {
+					await fs.rename(backupPath, dest);
+				} catch (rollbackErr) {
+					throw new Error(
+						`Failed to install ${path.basename(dest)} and restore the previous addon: ${(rollbackErr as Error).message}. Recovery files retained at ${backupPath} and ${tempPath}.`,
+						{ cause: finalErr },
+					);
+				}
+			}
 			await fs.unlink(tempPath).catch(() => {});
 			throw new Error(`Failed to install ${path.basename(dest)}: ${(finalErr as Error).message}`);
 		}

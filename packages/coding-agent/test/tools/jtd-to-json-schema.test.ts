@@ -63,6 +63,26 @@ describe("jtdToJsonSchema", () => {
 		expect(converted.properties.spacedName.$ref).toBe("#/$defs/my type");
 	});
 
+	it("converts definitions for a shared primitive root without dangling refs", () => {
+		const input = {
+			type: "string",
+			nullable: true,
+			definitions: {
+				text: { type: "string" },
+				alias: { ref: "text" },
+			},
+		};
+
+		expect(isJTDSchema(input)).toBe(true);
+		expect(jtdToJsonSchema(input)).toEqual({
+			anyOf: [{ type: "string" }, { type: "null" }],
+			$defs: {
+				text: { type: "string" },
+				alias: { $ref: "#/$defs/text" },
+			},
+		});
+	});
+
 	it("normalizes nested JTD fragments inside JSON Schema nodes", () => {
 		const converted = jtdToJsonSchema({
 			type: "object",

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed schema references to definition names containing `/` or `~`, including an empty definition name.
+
 ## [18.8.3] - 2026-10-07
 
 ### Added

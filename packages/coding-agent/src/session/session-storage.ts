@@ -1053,19 +1053,18 @@ export class FileSessionStorage implements SessionStorage {
 			this.#discardTemp(tempPath, fpath);
 			throw toError(err);
 		}
-		// Guard-check + rename MUST NOT be separated by an await. A concurrent
-		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
-		// publish a fresh body between the check and the rename, and this stale
-		// staged body would overwrite it. Sync rename closes that window.
-		if (options?.commitGuard && !options.commitGuard()) {
-			this.#discardTemp(tempPath, fpath);
-			return;
-		}
 		try {
 			// The publish lock spans the freshness check through the rename (and
 			// its EPERM fallback): a cooperating appender or rewrite cannot
 			// interleave, and appenders re-open a replaced path before writing.
 			this.#withPublishLock(fpath, () => {
+				// Validate the guarded snapshot only after acquiring the publish
+				// lock: another process may change even a same-size body while
+				// this writer waits for the lock.
+				if (options?.commitGuard && !options.commitGuard()) {
+					this.#discardTemp(tempPath, fpath);
+					return;
+				}
 				this.#assertExpectedSize(fpath, options?.expectedSize);
 				try {
 					this.renameSync(tempPath, fpath);
@@ -1110,37 +1109,22 @@ export class FileSessionStorage implements SessionStorage {
 		renameError: unknown,
 		commitGuard?: () => boolean,
 	): void {
+		// Keep the original path available to guards that validate its content.
+		// The publish lock spans this check and both fallback renames.
+		if (commitGuard && !commitGuard()) {
+			this.#discardTemp(tempPath, targetPath);
+			return;
+		}
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, `${path.basename(targetPath)}.${Snowflake.next()}.bak`);
 		try {
 			this.renameSync(targetPath, backupPath);
 		} catch (moveAsideError) {
 			if (isEnoent(moveAsideError)) {
-				if (commitGuard && !commitGuard()) {
-					this.#discardTemp(tempPath, targetPath);
-					return;
-				}
 				this.renameSync(tempPath, targetPath);
 				return;
 			}
 			throw toError(renameError);
-		}
-		if (commitGuard && !commitGuard()) {
-			// A concurrent synchronous rewrite published a fresh body between the
-			// move-aside and this point. Restore the moved-aside file so we do
-			// not overwrite it with our staged (stale) body, and drop the temp
-			// so `writeTextAtomic`'s "discard on abandon" contract holds.
-			try {
-				this.renameSync(backupPath, targetPath);
-			} catch (restoreErr) {
-				logger.warn("Failed to restore backup after commitGuard rejection", {
-					sessionFile: targetPath,
-					backupPath,
-					error: toError(restoreErr).message,
-				});
-			}
-			this.#discardTemp(tempPath, targetPath);
-			return;
 		}
 		try {
 			this.renameSync(tempPath, targetPath);

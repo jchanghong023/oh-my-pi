@@ -1497,11 +1497,23 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 		},
 	});
-	const sessionDirectory = new RpcSessionDirectoryService({
-		cwd: session.sessionManager.getCwd(),
-		sessionDir: session.sessionManager.getSessionDir(),
+	let sessionDirectoryCwd = session.sessionManager.getCwd();
+	let sessionDirectoryDir = session.sessionManager.getSessionDir();
+	let sessionDirectory = new RpcSessionDirectoryService({
+		cwd: sessionDirectoryCwd,
+		sessionDir: sessionDirectoryDir,
 		getSession: () => session,
 	});
+	const getSessionDirectory = (): RpcSessionDirectoryService => {
+		const cwd = session.sessionManager.getCwd();
+		const sessionDir = session.sessionManager.getSessionDir();
+		if (cwd !== sessionDirectoryCwd || sessionDir !== sessionDirectoryDir) {
+			sessionDirectoryCwd = cwd;
+			sessionDirectoryDir = sessionDir;
+			sessionDirectory = new RpcSessionDirectoryService({ cwd, sessionDir, getSession: () => session });
+		}
+		return sessionDirectory;
+	};
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -2797,7 +2809,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						}
 						case "list_sessions": {
 							try {
-								return forkSuccess({ sessions: await sessionDirectory.list() });
+								return forkSuccess({ sessions: await getSessionDirectory().list() });
 							} catch (cause) {
 								return forkError(cause);
 							}
@@ -2810,7 +2822,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 									return error(id, "rename_session", "rename_session requires sessionId", "invalid_params");
 								if (typeof name !== "string")
 									return error(id, "rename_session", "rename_session requires name", "invalid_params");
-								const summary = await sessionDirectory.rename(
+								const summary = await getSessionDirectory().rename(
 									sessionId,
 									name,
 									typeof forkCommand.expectedRevision === "string" ? forkCommand.expectedRevision : undefined,
@@ -2825,7 +2837,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 								const sessionId = forkCommand.sessionId;
 								if (typeof sessionId !== "string")
 									return error(id, "delete_session", "delete_session requires sessionId", "invalid_params");
-								await sessionDirectory.delete(
+								await getSessionDirectory().delete(
 									sessionId,
 									typeof forkCommand.expectedRevision === "string" ? forkCommand.expectedRevision : undefined,
 								);

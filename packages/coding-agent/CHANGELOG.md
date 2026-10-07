@@ -12,12 +12,24 @@
 
 ### Fixed
 
+- Preserved the existing repo index when a rebuild cannot create its backup, and corrected identifier-boundary ranking for supplementary Unicode characters.
+- Rejected init-only `--name` options on `omp docs remove` and sanitized document-import confirmation labels without changing the selected paths or names.
+- Kept repeated `/team` discussions' results separate, stopped delivery acknowledgements after cancellation, and reported running and failed participants.
+- Made RPC command completion and saved-session listing, renaming, and deletion follow the session's current directory after `/move`.
+- Fixed structured-output schemas whose root references a shared primitive, enum, or empty definition.
+- Preserved explicitly cleared model roles against process defaults and retained valid user settings when saving a role after malformed YAML.
+- Kept distinct compaction fallback models available after Codex-to-Luna substitution.
+- Prevented concurrent saved-session rewrites from overwriting newer changes on Windows and allowed publication when the target does not yet exist.
+- Stopped in-flight browser supervisor tool calls before recovering a failed supervisor run.
+- Kept automatic offline model discovery cache-only and restored retry-fallback validation after the first interactive paint.
+- Made affected-Rust test selection handle unusual filenames and cross-crate renames, falling back to the non-vendored workspace when selection fails.
+- Kept UI smoke runs on `bun run dev` with isolated configuration roots instead of modifying the user's profile.
+
 - Kept synthetic model selectors usable with enabled model patterns, restored plan mode's previous model, and disarmed failed prewalk handoffs without interrupting turn-end maintenance.
 - Fixed disabled model exclusions during plan-yolo role selection and limited automatic wiki/repo attachment to explicit tool lists containing read.
 - Fixed team review outputs exceeding the combined 1500-character budget and restored native npm update support for all upstream platforms.
-- Fixed fork RPC project command resolution, settings compare-and-swap, agent-definition metadata preservation, live provider refresh, and root-session isolation for subagent outputs.
-- Fixed project-RPC cancellation so late calls using canceled request IDs return `stale_session` instead of reaching the canceled session.
-- Fixed project-RPC `/model` completion and discovery of session-enabled skills, including hidden skills that remain directly invocable.
+- Fixed settings compare-and-swap, agent-definition metadata preservation, and live provider refresh.
+- Fixed RPC `/model` completion and discovery of session-enabled skills, including hidden skills that remain directly invocable.
 - Fixed fork command behavior for context clearing, logout, skill management, queue updates, plan approval, and host UI cancellation.
 - Fixed Windows session-loader size diagnostics so in-memory and SQLite sessions are not confused with same-named files on disk.
 - Marked repo indexes unverified after interrupted bash/eval commands and deferred JCH Git invalidations until a worktree-changing step starts.

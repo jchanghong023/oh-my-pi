@@ -180,7 +180,7 @@ describe("FileSessionStorage.writeTextAtomic commitGuard cleanup", () => {
 			commitGuard: () => {
 				guardCalls += 1;
 				// First call (before primary rename): pass so we hit EPERM.
-				// Second call (inside EPERM fallback, after move-aside): reject.
+				// Second call (inside EPERM fallback, before move-aside): reject.
 				return guardCalls === 1;
 			},
 		});
@@ -188,7 +188,7 @@ describe("FileSessionStorage.writeTextAtomic commitGuard cleanup", () => {
 		expect(epermAttempted).toBe(true);
 		expect(guardCalls).toBe(2);
 		expect(await listTempFiles()).toEqual([]);
-		// Backup was restored, so target still holds the seed content.
+		// Guard rejection leaves the target untouched with the seed content.
 		expect(await Bun.file(target).text()).toBe("seed\n");
 		const backups = (await fsp.readdir(sessionDir)).filter(name => name.endsWith(".bak"));
 		expect(backups).toEqual([]);

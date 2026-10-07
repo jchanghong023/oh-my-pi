@@ -26,13 +26,13 @@ function workspace(packages: { name: string; path: string; dependencies?: string
 	};
 }
 
-async function runRustTaskRunner(args: string[]) {
+async function runRustTaskRunner(args: string[], changedPaths: string[] = []) {
 	const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "run-rs-task.ts"), ...args], {
 		cwd: path.join(import.meta.dir, ".."),
 		env: {
 			...process.env,
 			CI: "1",
-			OMP_FULLTEST_CHANGED_PATHS: "[]",
+			OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths),
 			PATH: "",
 			Path: "",
 		},
@@ -199,6 +199,17 @@ describe("Rust affected test scope", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("Rust affected test crates: none");
 		expect(result.stdout).toContain("Rust test commands: none");
+	});
+
+	it("falls back to workspace tests when Cargo metadata cannot resolve the affected scope", async () => {
+		const result = await runRustTaskRunner(["test:rs", "--affected", "--dry-run"], ["crates/pi-shell/src/lib.rs"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toContain("Selecting the full Rust workspace");
+		expect(result.stdout).toContain("cargo nextest run --workspace");
+		expect(result.stdout).toContain("cargo test --doc --workspace");
+		expect(result.stdout).toContain("--exclude brush-core");
+		expect(result.stdout).toContain("--exclude napi");
 	});
 
 	it("rejects unknown and misplaced Rust runner arguments", async () => {

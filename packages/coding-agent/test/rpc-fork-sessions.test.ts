@@ -2,12 +2,12 @@
 // per-cwd saved-session listing, guarded rename (title-slot surgery with
 // revision checks), and guarded delete, over a real session directory.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
-import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { FileSessionStorage, tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import {
 	RpcSessionDirectoryError,
 	RpcSessionDirectoryService,
@@ -77,12 +77,28 @@ describe("RpcSessionDirectoryService", () => {
 		expect(sessions.find(session => session.sessionId === "s-own-2")?.current).toBe(false);
 	});
 
-	test("rename of a saved session rewrites the title slot with revision guards", async () => {
+	test("rename survives an EPERM replacement and guards stale revisions", async () => {
 		const fx = await setup();
 		await writeSession(fx.sessionDir, "s-save", fx.cwd, "Old");
+		const storage = new FileSessionStorage();
+		const service = new RpcSessionDirectoryService({ cwd: fx.cwd, sessionDir: fx.sessionDir, storage });
+		const renameSync = storage.renameSync.bind(storage);
+		let blocked = false;
+		const replacement = spyOn(storage, "renameSync").mockImplementation((source, target) => {
+			if (!blocked && source.endsWith(".tmp")) {
+				blocked = true;
+				throw Object.assign(new Error("replacement blocked"), { code: "EPERM" });
+			}
+			renameSync(source, target);
+		});
 		const [entry] = await fx.service.list();
-		const renamed = await fx.service.rename("s-save", "New name", entry!.revision);
-		expect(renamed).toMatchObject({ sessionId: "s-save", name: "New name", current: false });
+		try {
+			const renamed = await service.rename("s-save", "New name", entry!.revision);
+			expect(renamed).toMatchObject({ sessionId: "s-save", name: "New name", current: false });
+		} finally {
+			replacement.mockRestore();
+		}
+		expect(blocked).toBe(true);
 		expect((await fx.service.list())[0]!.name).toBe("New name");
 
 		await expect(fx.service.rename("s-save", "Stale", entry!.revision)).rejects.toMatchObject({

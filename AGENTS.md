@@ -35,7 +35,7 @@
 | 运行 CLI（源码） | `bun run dev` |
 | 类型检查 + lint（workspace 门禁） | `bun run check:ts` |
 | 仅静态检查（oxlint / oxfmt） | `bun run check:tools` |
-| fork 静态检查（委托上游 `check:ts` + `check:rs`：TS 类型检查、lint、格式、cargo check） | `bun run fastcheck` |
+| fork 静态检查（委托上游 `check:ts` + `check:rs`：TS 类型检查、lint、格式、Rust fmt/clippy） | `bun run fastcheck` |
 | TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
 | Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
 | Python 测试 | `bun run test:py` |

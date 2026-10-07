@@ -225,11 +225,6 @@ TUI/ACP/RPC business logic. They use the executing session's cwd and
 Script-bearing installation requires actual confirmation through the host UI:
 missing UI capability is an error, not silent approval or cancellation.
 
-In RPC project mode, only no-argument `/skills` asks the GUI to open its skills
-panel. Business arguments run the shared handler instead; opening a panel does
-not mean an install or update completed.
-
-
 ## Skills vs AGENTS.md, commands, tools, hooks
 
 ### Skills vs AGENTS.md

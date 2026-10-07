@@ -332,7 +332,7 @@ describe("team report delivery", () => {
 		expect(acknowledge).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not acknowledge a cancelled durable append", async () => {
+	it("does not acknowledge cancellation while a durable append resolves", async () => {
 		const controller = new AbortController();
 		const appending = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -345,7 +345,7 @@ describe("team report delivery", () => {
 			) => {
 				appending.resolve();
 				await release.promise;
-				options?.signal?.throwIfAborted();
+				expect(options?.signal?.aborted).toBe(true);
 			},
 		};
 		const delivery = deliverTeamReport(

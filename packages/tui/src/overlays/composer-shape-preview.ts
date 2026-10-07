@@ -42,6 +42,8 @@ export interface ComposerPreviewStatusSource {
 	 * single first row.
 	 */
 	renderBottomBarLines?(width: number, groups: "left" | "full", previewTitle?: string): readonly string[];
+	/** Wrapped box status rows below the editor's border. */
+	renderTopBorderOverflowLines?(width: number, overflowWidth?: number, previewTitle?: string): readonly string[];
 }
 
 export interface ComposerShapePreviewOptions {
@@ -114,6 +116,15 @@ export function renderComposerShapePreview(
 	);
 	const bottom = style.renderBottom(ctx);
 	if (bottom !== undefined) lines.push(bottom);
+
+	if (style.statusAttachment === "top-border" && status?.renderTopBorderOverflowLines) {
+		const rows = status.renderTopBorderOverflowLines(
+			Math.max(1, previewWidth - chromeWidth * 2),
+			previewWidth - chromeWidth,
+			PREVIEW_TITLE,
+		);
+		for (const row of rows) lines.push(`${padding(chromeWidth)}${row}`);
+	}
 
 	if (style.bottomBar !== "none" && status) {
 		// Prefer the line-aware renderer so a narrow preview keeps the segments

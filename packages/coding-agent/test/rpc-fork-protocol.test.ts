@@ -86,7 +86,7 @@ async function withForkRpcServer<T>(
 			const index = predicate ? queue.findIndex(predicate) : queue.length > 0 ? 0 : -1;
 			if (index >= 0) return queue.splice(index, 1)[0]!;
 			if (readerDone) throw readerError ?? new Error(`RPC stream ended; last stderr: ${await stderrPromise}`);
-			if (Date.now() > deadline) throw new Error(`Timed out waiting for frame; last stderr: ${await stderrPromise}`);
+			if (Date.now() > deadline) throw new Error("Timed out waiting for RPC frame");
 			await Bun.sleep(50);
 		}
 	};
@@ -118,6 +118,8 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 		for (const dir of [cwd, sessionDir, agentDir]) {
 			await fs.mkdir(dir, { recursive: true });
 		}
+		const movedCwd = path.join(cwd, "moved");
+		await fs.mkdir(path.join(movedCwd, "destination-only"), { recursive: true });
 		await fs.writeFile(path.join(agentDir, "config.yml"), "modelRoles: {}\n");
 		const authStorage = await AuthStorage.create(getAgentDbPath(agentDir));
 		try {
@@ -251,6 +253,55 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			});
 			const del1 = await next(frame => frame.type === "response" && frame.id === "del1");
 			expect(del1).toMatchObject({ success: true, data: { deleted: true } });
+			// /move changes both the live cwd and its saved-session directory.
+			controls.send({ id: "move", type: "prompt", message: `/move ${movedCwd}` });
+			expect(await next(frame => frame.type === "response" && frame.id === "move")).toMatchObject({
+				success: true,
+				data: { agentInvoked: false },
+			});
+			controls.send({ id: "moved-completion", type: "complete_command", text: "/move dest", cursor: 10 });
+			const movedCompletion = await next(frame => frame.type === "response" && frame.id === "moved-completion");
+			expect(movedCompletion).toMatchObject({
+				success: true,
+				data: { items: [{ label: "destination-only/", insertText: "destination-only/" }] },
+			});
+			controls.send({ id: "moved-state", type: "get_state" });
+			const movedState = await next(frame => frame.type === "response" && frame.id === "moved-state");
+			if (
+				!isRecord(movedState.data) ||
+				typeof movedState.data.sessionId !== "string" ||
+				typeof movedState.data.sessionFile !== "string"
+			) {
+				throw new Error("Moved session state lacks its identity or file");
+			}
+			const movedSessionId = movedState.data.sessionId;
+			await fs.writeFile(
+				path.join(path.dirname(movedState.data.sessionFile), "moved-saved.jsonl"),
+				`${serializeTitleSlot({ title: "Moved saved session", source: "user", updatedAt: now })}${JSON.stringify({ ...savedHeader, id: "moved-saved", cwd: movedCwd })}\n`,
+			);
+			controls.send({
+				id: "moved-rename",
+				type: "rename_session",
+				sessionId: movedSessionId,
+				name: "Moved live session",
+			});
+			expect(await next(frame => frame.type === "response" && frame.id === "moved-rename")).toMatchObject({
+				success: true,
+				data: { sessionId: movedSessionId, name: "Moved live session", current: true },
+			});
+			controls.send({ id: "moved-list", type: "list_sessions" });
+			const movedList = await next(frame => frame.type === "response" && frame.id === "moved-list");
+			if (!isRecord(movedList.data) || !Array.isArray(movedList.data.sessions)) {
+				throw new Error("Moved session listing lacks its sessions");
+			}
+			expect(movedList.data.sessions).toContainEqual(
+				expect.objectContaining({ sessionId: "moved-saved", name: "Moved saved session", current: false }),
+			);
+			controls.send({ id: "moved-delete", type: "delete_session", sessionId: movedSessionId });
+			expect(await next(frame => frame.type === "response" && frame.id === "moved-delete")).toMatchObject({
+				success: false,
+				code: "unsupported",
+			});
 			// Renegotiating down to v2 revokes the v3-only command surface.
 			controls.send({ id: "n2-again", type: "negotiate_protocol", protocolVersion: 2 });
 			expect(await next(frame => frame.type === "response" && frame.id === "n2-again")).toMatchObject({

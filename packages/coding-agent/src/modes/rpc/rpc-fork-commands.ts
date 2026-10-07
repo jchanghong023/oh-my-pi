@@ -333,6 +333,7 @@ export class RpcForkCommandCatalogService {
 		const argumentStart = invocation[0].length;
 		const prefix = head.slice(argumentStart);
 		const session = sessionLike as AgentSession | undefined;
+		const cwd = session?.sessionManager.getCwd() ?? this.#cwd;
 		let complete = builtin.getArgumentCompletions;
 		if (builtin.name === "mcp") {
 			complete = buildMcpArgumentCompletions(
@@ -340,10 +341,10 @@ export class RpcForkCommandCatalogService {
 				{
 					ctx: { mcpManager: sessionLike ? this.#getMcpManager?.(sessionLike) : undefined },
 				},
-				this.#cwd,
+				cwd,
 			);
 		} else if (builtin.name === "move") {
-			complete = buildDirectoryArgumentCompletions(this.#cwd);
+			complete = buildDirectoryArgumentCompletions(cwd);
 		} else if (session && builtin.name === "effort") {
 			complete = buildEffortArgumentCompletions({ ctx: { session } });
 		} else if (session && (builtin.name === "switch" || builtin.name === "model")) {

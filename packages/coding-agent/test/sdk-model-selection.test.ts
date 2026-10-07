@@ -209,7 +209,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 				fetchDynamicModels: fetchModels,
 			});
 		};
-		const { session } = await createAgentSession({
+		const { session, startBackgroundModelDiscovery } = await createAgentSession({
 			...buildSessionOptions("runtime-provider/runtime-model"),
 			modelPattern: undefined,
 			model: getBundledModel("anthropic", "claude-sonnet-4-5"),
@@ -218,6 +218,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 		try {
 			expect(session.model?.id).toBe("claude-sonnet-4-5");
+			expect(fetchModels).not.toHaveBeenCalled();
+			await startBackgroundModelDiscovery?.();
 			expect(fetchModels).not.toHaveBeenCalled();
 		} finally {
 			await session.dispose();

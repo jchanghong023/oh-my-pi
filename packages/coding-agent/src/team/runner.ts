@@ -91,7 +91,11 @@ export function modelMatches(resolved: string | undefined, pattern: string): boo
 
 /** Build the default runner bound to the dispatching session's dependencies. */
 export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunner {
-	const outputManager = new AgentOutputManager(() => deps.artifactsDir);
+	// Each discussion owns a namespace: separate managers can otherwise allocate
+	// the same stage IDs before either concurrent run has written its artifacts.
+	const outputManager = new AgentOutputManager(() => deps.artifactsDir, {
+		parentPrefix: `team-${Snowflake.next()}`,
+	});
 	return async (call: TeamSubagentCall, signal: AbortSignal): Promise<TeamSubagentOutcome> => {
 		if (signal.aborted) return { ok: false, error: "cancelled before start" };
 		const lease = await leaseArtifacts(deps);

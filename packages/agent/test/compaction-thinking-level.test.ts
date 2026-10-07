@@ -6,6 +6,7 @@ import {
 	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 	generateHandoff,
+	generateHandoffFromContext,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
@@ -178,18 +179,23 @@ describe("fork pins openai-codex/gpt-6-luna compaction effort at low", () => {
 		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
 	});
 
-	test("ThinkingLevel.High on luna → reasoning=low (session dial not inherited)", async () => {
+	test("luna handoff overrides mirrored reasoning-off flags with low effort", async () => {
 		const spy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "handoff" }]));
-		await generateHandoff(messages, getForkCodexLunaModel(), "test-key", {
-			systemPrompt: ["sp"],
-			tools: [],
-			thinkingLevel: ThinkingLevel.High,
-		});
+		await generateHandoffFromContext(
+			{ systemPrompt: ["sp"], messages: [{ role: "user", content: "start work", timestamp: 1 }], tools: [] },
+			getForkCodexLunaModel(),
+			{
+				streamOptions: { apiKey: "test-key", disableReasoning: true, forceReasoningOff: true },
+				thinkingLevel: ThinkingLevel.High,
+			},
+		);
 		const call = spy.mock.calls[0];
 		if (!call) throw new Error("expected completeSimple call");
 		expect(call[2]?.reasoning).toBe(ai.Effort.Low);
+		expect(call[2]?.disableReasoning).toBe(false);
+		expect(call[2]?.forceReasoningOff).toBe(false);
 	});
 
 	test("ThinkingLevel.Max on luna → reasoning=low", async () => {

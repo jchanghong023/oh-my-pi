@@ -317,6 +317,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const { borderColor, statusLine } = options.status;
 			if (borderColor) this.editor.borderColor = text => `${borderColor.prefix}${text}${borderColor.suffix}`;
 			this.#startupStatus = createStartupStatusLine(statusLine);
+			this.#startupStatus.setTopBorderWidthProvider(terminalWidth =>
+				this.editor.getTopBorderAvailableWidth(terminalWidth),
+			);
 			this.#statusHost.setComponent(this.#startupStatus);
 			this.#startupStatus.attachToEditor(this.editor, getComposerStyle(this.#preferences.composerShape));
 		}

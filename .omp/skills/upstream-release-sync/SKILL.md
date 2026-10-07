@@ -14,7 +14,7 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * 只查询固定上游 ref 与 fork 的远端 `upstream`，NEVER 使用 Release、tag、`origin/main`、其他远程分支或配置型 `upstream/main` 作为来源。
 * 只允许推送 fork 的 `upstream`；NEVER 推送 `main` 或 tag，不创建 PR、不打包、不发布。
 * 维护原则与文档职责见 `AGENTS.md`；当前功能契约以 `docs-zh-CN/requirements/` 中对应文档为准（清单见该目录 `README.md`，上游基线仍在 `fork.md`），本流程不另建差异清单。
-* 根 `README.md`（中文版）与 `docs-zh-CN/README.upstream.md`（上游英文快照）按第 3 节处理：其他文档 NEVER 被上游覆盖，README 正文则必须跟随上游。
+* 根 `README.md`（中文版）与 `docs-zh-CN/README.upstream.md`（上游英文快照）按第 3 节处理；`AGENTS.md`、本 Skill 与整个需求目录 NEVER 被上游覆盖，其他上游文档正常同步并保留仍有效的 fork 改动。
 
 ## 0. 快速门禁
 
@@ -45,12 +45,12 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 ## 3. 更新记录、验证与提交
 
 * 提交前更新 `fork.md`：保留 `can1357/oh-my-pi@main`、目标 package version（来自 `packages/coding-agent/package.json`）、完整 `Upstream commit`、UTC 同步日期及当前功能差异。不要追加历史、Integration 字段或第二份清单。
-* README 同步（并入同一集成提交）：用本次 fetch 的上游版本与 `docs-zh-CN/README.upstream.md` 比较，先更新该快照，再把变化段落重译进根 `README.md`；Install / 下载段保持 fork 原文并照其翻译。上游 README 未变则两者都不动；merge 或恢复过程改动了 `README.md` 时，提交前按快照复核正文。
+* README 同步（并入同一集成提交）：用本次 fetch 的上游版本与 `docs-zh-CN/README.upstream.md` 比较，先更新该快照，再把变化段落重译进根 `README.md`；Install / 下载段保持 fork 原文并照其翻译，「提示词控制」保留 fork 新增的 `fullsend` 条目，其余正文跟随快照。上游 README 未变则两者都不动；merge 或恢复过程改动了 `README.md` 时，提交前按快照复核正文。
 * 将基线和功能差异更新纳入同一集成提交；目标已在 `main` 历史中时，只提交必要的文档修正。
 * MUST 通过 `git diff --cached --check`，检查冲突标记、维护文档、整个需求目录和变更范围；不得遗留 unmerged、unstaged、意外 untracked 文件或无关生成物，只修正本次涉及的空白错误。
-* 无冲突：仅 staged Git 检查；TS 或工具链变化确有必要时运行一次 `bun run check:tools`（仅 oxlint/oxfmt 静态检查；`bun run fastcheck` 含 cargo check 与全量类型检查，属下一条禁跑范围）。
+* 无冲突：仅 staged Git 检查；TS 或工具链变化确有必要时运行一次 `bun run check:tools`（仅 oxlint/oxfmt 静态检查；`bun run fastcheck` 含 Rust fmt/clippy 与全量类型检查，属下一条禁跑范围）。
 * 有冲突：只做源码语义审查，不运行编译、类型检查或测试（含 `check:types` 与精确测试）；确有必要时最多一次 `bun run check:tools`。依赖缺失时可运行 `bun install --frozen-lockfile --ignore-scripts`。
-* 同步期间 NEVER 运行全 workspace 检查、根级 `bun run check`、`bun run fastcheck`（含 cargo check）、完整测试、UI/browser/heavy、Docker、benchmark、`bun run fulltest`、`bun run slowtest`、打包、发布，或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。
+* 同步期间 NEVER 运行全 workspace 检查、根级 `bun run check`、`bun run fastcheck`（含 Rust fmt/clippy）、完整测试、UI/browser/heavy、Docker、benchmark、`bun run fulltest`、`bun run slowtest`、打包、发布，或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。
 * 首次检查失败后可修复本次相关问题，仅允许对首轮失败项额外复验一轮，不重跑已通过项、不追加检查范围；复验仍失败或无法在此范围内确认修复时立即中止，不提交、不更新镜像。未提交的 merge 用 `git merge --abort`；其他中止路径仅撤销本次操作，恢复原分支和工作区，不清理用户原有状态。
 * 验证通过后提交 `sync(upstream): merge main@<目标前12位>`，禁 hooks/签名以避免隐式重型任务。若创建 merge commit，确认第一父为原 `main`、第二父为目标；补记文档提交不要求双亲。
 

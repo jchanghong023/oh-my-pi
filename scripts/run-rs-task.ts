@@ -9,6 +9,7 @@ import {
 	selectRustTestScope,
 	type CargoLockPackageForRustScope,
 	type CargoMetadataForRustScope,
+	type RustTestScope,
 } from "./rust-test-scope";
 
 const RUST_AFFECTING_FILE_NAMES = [
@@ -139,13 +140,28 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 		changedPath.replaceAll("\\", "/").replace(/^\.\//, "").startsWith("crates/vendor/"),
 	);
 	const lockPackages = needsVendorGraph ? await loadCargoLockPackages() : undefined;
-	const scope = selectRustTestScope(
-		changedPaths,
-		await loadCargoWorkspaceMetadata(),
-		repoRoot,
-		VENDORED_FORK_EXCLUDED_PACKAGE_NAMES,
-		lockPackages,
-	);
+	let scope: RustTestScope;
+	try {
+		scope = selectRustTestScope(
+			changedPaths,
+			await loadCargoWorkspaceMetadata(),
+			repoRoot,
+			VENDORED_FORK_EXCLUDED_PACKAGE_NAMES,
+			lockPackages,
+		);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		console.warn(`Warning: unable to resolve affected Rust crates: ${detail}. Selecting the full Rust workspace.`);
+		const commands = TASK_COMMANDS["test:rs"];
+		if (dryRun) {
+			printTestPlan({ crates: [] }, commands, "full workspace (affected scope unavailable)");
+			return;
+		}
+		Object.assign(process.env, windowsTestTempOverride());
+		prepareWindowsRustEnvironment();
+		await runCommands(commands);
+		return;
+	}
 	if (scope.crates.length === 0) {
 		console.log("Rust affected test crates: none");
 		if (dryRun) console.log("Rust test commands: none (empty affected scope).");

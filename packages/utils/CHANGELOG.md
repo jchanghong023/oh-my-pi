@@ -6,6 +6,7 @@
 
 - Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
 - Fixed process-tree cleanup when callers consume stdout or a command is canceled or fails.
+- Released process cancellation listeners when stdout closes, even when callers never consume it.
 
 ## [18.8.1] - 2026-10-07
 

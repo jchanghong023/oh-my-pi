@@ -650,18 +650,46 @@ describe("team orchestrator", () => {
 	});
 
 	it("fails without half conclusions when the alignment sub-call fails", async () => {
-		const { result, calls } = await run({ alignment: () => ({ __fail: "alignment boom" }) });
+		const updates: TeamProgressUpdate[] = [];
+		const { result, calls } = await run(
+			{ alignment: () => ({ __fail: "alignment boom" }) },
+			{ onProgress: update => updates.push(update) },
+		);
 		expect(result.status).toBe("failed");
 		expect(result.failureReason).toContain("对齐子调用失败");
 		expect(result.failureReason).toContain("不输出半成品结论");
 		expect(calls.filter(call => parseMarker(call.task).role === "review")).toHaveLength(0);
+		expect(
+			updates.some(
+				update =>
+					update.stage === "alignment" &&
+					update.participants.some(
+						participant => participant.label === "alignment" && participant.state === "running",
+					),
+			),
+		).toBe(true);
+		expect(updates.at(-1)?.participants.find(participant => participant.label === "alignment")?.state).toBe("failed");
 	});
 
 	it("fails without half conclusions when the synthesis sub-call fails", async () => {
-		const { result } = await run({ synthesis: () => ({ __fail: "synthesis boom" }) });
+		const updates: TeamProgressUpdate[] = [];
+		const { result } = await run(
+			{ synthesis: () => ({ __fail: "synthesis boom" }) },
+			{ onProgress: update => updates.push(update) },
+		);
 		expect(result.status).toBe("failed");
 		expect(result.failureReason).toContain("综合子调用失败");
 		expect(result.reportMarkdown).toBeUndefined();
+		expect(
+			updates.some(
+				update =>
+					update.stage === "synthesis" &&
+					update.participants.some(
+						participant => participant.label === "synthesis" && participant.state === "running",
+					),
+			),
+		).toBe(true);
+		expect(updates.at(-1)?.participants.find(participant => participant.label === "synthesis")?.state).toBe("failed");
 	});
 
 	it("fails when every proposer fails", async () => {

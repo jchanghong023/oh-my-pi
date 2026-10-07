@@ -1145,6 +1145,10 @@ export async function generateHandoffFromContext(
 		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
 		toolChoice: "none" as const,
 	};
+	if (isForkCodexCompactionModel(model)) {
+		requestOptions.disableReasoning = false;
+		requestOptions.forceReasoningOff = false;
+	}
 	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
 		telemetry: options.telemetry,
 		oneshotKind: "handoff",

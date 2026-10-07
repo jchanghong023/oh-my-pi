@@ -882,6 +882,7 @@ async function runInTabWithSnapshot(
 				const reattached = await recoverWorkerTab(
 					tab,
 					name,
+					pending,
 					opts.timeoutMs,
 					"Browser request interception cleanup failed; tab killed",
 				);
@@ -900,7 +901,7 @@ async function runInTabWithSnapshot(
 				const reason = runTimedOut
 					? "Browser code execution timed out; tab killed"
 					: "Browser request interception cleanup failed; tab killed";
-				await recoverWorkerTab(tab, name, opts.timeoutMs, reason);
+				await recoverWorkerTab(tab, name, pending, opts.timeoutMs, reason);
 			}
 			throw error;
 		}
@@ -920,9 +921,13 @@ async function runInTabWithSnapshot(
 async function recoverWorkerTab(
 	tab: WorkerTabSession,
 	name: string,
+	pending: PendingRun,
 	timeoutMs: number,
 	reason: string,
 ): Promise<boolean> {
+	// handleTabMessage removes the run before recovery, so retain its controllers
+	// explicitly; terminating the worker cannot stop supervisor-side tool calls.
+	for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
 	try {
 		if (tab.worker.mode === "inline") {
 			await forceKillTab(name, reason);
@@ -1615,11 +1620,6 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 	// must not restart the recycle's init budget.
 	const startedAt = performance.now();
 	const oldWorker = tab.worker;
-	// Tool calls dispatched for the dead worker's runs execute supervisor-side;
-	// terminate() alone does not stop them, so abort before waiting for worker shutdown.
-	for (const pending of tab.pending.values()) {
-		for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
-	}
 	await oldWorker.terminate().catch(() => undefined);
 	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
 	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");

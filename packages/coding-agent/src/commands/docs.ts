@@ -35,7 +35,7 @@ export default class Docs extends Command {
 			} else {
 				if (!target) throw new CliUsageError("docs remove requires <name>");
 				if (!flags.force) throw new CliUsageError("docs remove requires --force");
-				if (flags.name) throw new CliUsageError("docs remove does not accept --name");
+				if (flags.name !== undefined) throw new CliUsageError("docs remove does not accept --name");
 			}
 		} catch (error) {
 			// This class is `../cli/usage-error`, which the pi-utils framework handler

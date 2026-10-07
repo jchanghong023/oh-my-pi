@@ -401,6 +401,16 @@ describe("Settings", () => {
 			if (process.platform !== "win32") {
 				expect(fs.statSync(getConfigPath()).mode & 0o777).toBe(0o600);
 			}
+			await Bun.write(getConfigPath(), corrupted);
+			await expect(settings.saveUserModelRole("default", "keep/default", "keep/default")).rejects.toThrow(
+				"Settings config is invalid",
+			);
+			await settings.saveUserModelRole("default", "keep/default", "keep/default");
+			expect(await readSettings()).toEqual({
+				auth: { broker: { token: "TOP-SECRET" } },
+				modelRoles: { default: "keep/default" },
+				theme: { dark: "anthracite" },
+			});
 		});
 
 		it("backs up a corrupted project config and retains the pending project role for retry", async () => {

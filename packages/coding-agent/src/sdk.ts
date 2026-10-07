@@ -923,7 +923,7 @@ export interface CreateAgentSessionResult {
 	modelFallbackMessage?: string;
 	/** LSP servers detected for startup; warmup may continue in the background */
 	lspServers?: LspStartupServerInfo[];
-	/** Start cache-aware online runtime model discovery after the first UI paint. */
+	/** Start cache-aware runtime model discovery after the first UI paint; offline launches remain cache-only. */
 	startBackgroundModelDiscovery?: () => Promise<void>;
 	/** Shared event bus for tool/extension communication */
 	eventBus: EventBus;
@@ -2791,7 +2791,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// starter in CreateAgentSessionResult and calls it after mode.init paints.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
 		const deferredDiscoveryStrategy =
-			options.offline && options.modelPatternSource === "scope" ? "offline" : "online-if-uncached";
+			options.offline && (options.modelPatternSource === "scope" || deferredModelPatterns.length === 0)
+				? "offline"
+				: "online-if-uncached";
 		const startRuntimeDiscovery = (): Promise<void> => {
 			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(deferredDiscoveryStrategy).catch(error => {
 				logger.warn("runtime provider discovery failed", {

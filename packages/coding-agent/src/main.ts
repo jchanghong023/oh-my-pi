@@ -2566,6 +2566,7 @@ export async function runRootCommand(
 			// background refresh already raced the first prompt when it ran earlier.
 			const startDeferredStartupWork = (): void => {
 				session.validateRetryFallbackChains();
+				if (parsedArgs.offline) return;
 				modelRegistry.refreshInBackground();
 				if (configuredScope.length > 0) {
 					// Must follow refreshInBackground: it waits on the in-flight refresh.
@@ -2703,7 +2704,7 @@ export async function runRootCommand(
 						initialMessage,
 						initialImages,
 						parsedArgs.join,
-						parsedArgs.offline ? undefined : startDeferredStartupWork,
+						startDeferredStartupWork,
 						startupLease,
 						parsedArgs.offline,
 						initialArgs.goal,

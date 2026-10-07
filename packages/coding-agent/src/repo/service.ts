@@ -613,9 +613,11 @@ export class RepoService {
 				let index = full;
 				let score = full < 0 ? 0 : 100;
 				if (full >= 0) {
-					const before = row.text[originalOffset(row.text, full) - 1] ?? "";
-					const after = row.text[originalOffset(row.text, full + foldedNeedle.length)] ?? "";
-					if (!/[\p{L}\p{N}_]/u.test(before) && !/[\p{L}\p{N}_]/u.test(after)) score += 100;
+					const start = originalOffset(row.text, full);
+					const end = originalOffset(row.text, full + foldedNeedle.length);
+					const before = row.text.slice(Math.max(0, start - 2), start);
+					const after = row.text.slice(end, end + 2);
+					if (!/[\p{L}\p{N}_]$/u.test(before) && !/^[\p{L}\p{N}_]/u.test(after)) score += 100;
 				}
 				for (const token of foldedTokens) {
 					const position = folded.indexOf(token);

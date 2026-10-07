@@ -121,6 +121,7 @@ export class RepoStorage {
 		staged.close();
 		const backup = `${this.path}.backup-${createHash("sha256").update(staged.path).digest("hex").slice(0, 12)}`;
 		const moved: string[] = [];
+		let promoted = false;
 		let restored: Database | undefined;
 		try {
 			for (const suffix of ["", "-wal", "-shm"]) {
@@ -129,13 +130,14 @@ export class RepoStorage {
 				moved.push(suffix);
 			}
 			renameSync(staged.path, this.path);
+			promoted = true;
 			restored = new Database(this.path, { strict: true });
 			restored.run("PRAGMA busy_timeout=5000");
 			restored.run("PRAGMA foreign_keys=ON");
 			restored.run("PRAGMA journal_mode=WAL");
 		} catch (error) {
 			restored?.close();
-			if (existsSync(this.path)) renameSync(this.path, staged.path);
+			if (promoted && existsSync(this.path)) renameSync(this.path, staged.path);
 			for (const suffix of moved.reverse()) renameSync(`${backup}${suffix}`, `${this.path}${suffix}`);
 			throw error;
 		}

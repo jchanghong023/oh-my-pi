@@ -239,6 +239,11 @@ export function isJTDSchema(schema: unknown): boolean {
 		return true;
 	}
 
+	// A JTD document can have a shared primitive, enum, or empty root form.
+	// Its definitions still need conversion even when the root has no
+	// JTD-only keyword; inspect the complete grammar to preserve native schemas.
+	if ("definitions" in obj && isJTDDocument(obj)) return true;
+
 	// `properties` without `type` parses as both JTD and JSON Schema. Only the whole
 	// document separates them, because the JTD reading is destructive: `convertSchema`
 	// rebuilds the node from JTD keywords alone and drops everything else (#12893).

@@ -54,6 +54,10 @@ describe("Settings layer refresh", () => {
 		expect(target.getModelRole("smol")).toBe("company/DeepSeek-V4-Flash-public");
 		expect(target.getModelRoles().smol).toBe("company/DeepSeek-V4-Flash-public");
 		expect(target.getModelRole("plan")).toBe("company/GLM-5.2-public");
+		const tombstoned = target.overlay({ modelRoles: { plan: null } });
+		expect(tombstoned.getModelRole("plan")).toBeUndefined();
+		expect(tombstoned.getModelRoles()).not.toHaveProperty("plan");
+		expect(tombstoned.getModelRole("smol")).toBe("company/DeepSeek-V4-Flash-public");
 		const bare = await target.cloneForCwd(bareProject);
 		expect(bare.getModelRole("smol")).toBe("company/Qwen3.6-35B-A3B");
 		await writeConfig({ modelRoles: { smol: "company/MiniMax-M2.7" } });

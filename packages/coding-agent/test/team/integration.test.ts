@@ -9,6 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -22,6 +23,7 @@ import {
 	TEAM_READ_ONLY_TOOLS,
 	createTeamSubagentRunner,
 	runTeamDiscussion,
+	TEAM_PROPOSAL_SCHEMA,
 } from "@oh-my-pi/pi-coding-agent/team";
 import type { TeamParticipant } from "@oh-my-pi/pi-coding-agent/team";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -35,6 +37,7 @@ const PATTERN_OTHER = `${MODEL_OTHER.provider}/${MODEL_OTHER.id}`;
 
 interface RecordedCall {
 	modelPattern: string | undefined;
+	agentId: string;
 	stage: string;
 	toolNames: readonly string[] | undefined;
 	outputSchemaMode: unknown;
@@ -166,7 +169,7 @@ describe("team in-process integration", () => {
 				},
 				prompt: async (text: string) => {
 					const stage = stageOf(text);
-					recorded.push({ modelPattern, stage, toolNames, outputSchemaMode });
+					recorded.push({ modelPattern, agentId: options.agentId as string, stage, toolNames, outputSchemaMode });
 					for (const listener of listeners) {
 						listener({
 							type: "tool_execution_end",
@@ -199,16 +202,17 @@ describe("team in-process integration", () => {
 			{ index: 0, modelPattern: PATTERN_SESSION, model: MODEL_SESSION, isSessionModel: true },
 			{ index: 1, modelPattern: PATTERN_OTHER, model: MODEL_OTHER, isSessionModel: false },
 		];
-		const runner = createTeamSubagentRunner({
+		const runnerDeps = {
 			cwd: tempDir.path(),
 			settings,
 			modelRegistry,
 			authStorage,
-			getApiKey: model => `${model.provider}-test-key`,
+			getApiKey: (model: Model) => `${model.provider}-test-key`,
 			sessionFile: null,
 			artifactsDir: tempDir.path(),
 			parentAgentId: "Main",
-		});
+		};
+		const runner = createTeamSubagentRunner(runnerDeps);
 
 		const result = await runTeamDiscussion({
 			question: "如何在不破坏旧接口的前提下扩展模块？",
@@ -276,5 +280,22 @@ describe("team in-process integration", () => {
 			// these options, so it never appears in `toolNames` here.
 			expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
 		}
+
+		// Concurrent discussions use the same stage labels in the same session.
+		// Their child identities must remain distinct for Hub and artifact lookup.
+		const call = {
+			role: "proposer" as const,
+			modelPattern: PATTERN_SESSION,
+			label: "team-proposal-A",
+			task: "[team-stage:proposal]",
+			schema: TEAM_PROPOSAL_SCHEMA,
+		};
+		const parallelResults = await Promise.all(
+			[createTeamSubagentRunner(runnerDeps), createTeamSubagentRunner(runnerDeps)].map(nextRunner =>
+				nextRunner(call, new AbortController().signal),
+			),
+		);
+		expect(parallelResults.every(outcome => outcome.ok)).toBe(true);
+		expect(new Set(recorded.map(entry => entry.agentId)).size).toBe(recorded.length);
 	});
 });

@@ -21,15 +21,16 @@ describe("DocsAddWizard step contract (docs hub add flow)", () => {
 		typeText(wizard, "handbook");
 		wizard.handleInput("\n");
 		expect(text(wizard)).toContain("Step 2/3: directory");
-		typeText(wizard, "/srv/docs");
+		wizard.handleInput("\x1b[200~/srv/\u0085docs\x1b[201~");
 		wizard.handleInput("\n");
 		const confirm = text(wizard);
 		expect(confirm).toContain("Step 3/3: confirm");
 		expect(confirm).toContain("Name: handbook");
 		expect(confirm).toContain("Directory: /srv/docs");
+		expect(confirm).not.toContain("\u0085");
 		expect(onComplete).not.toHaveBeenCalled();
 		wizard.handleInput("\n");
-		expect(onComplete).toHaveBeenCalledWith({ name: "handbook", directory: "/srv/docs" });
+		expect(onComplete).toHaveBeenCalledWith({ name: "handbook", directory: "/srv/\u0085docs" });
 	});
 
 	it("rejects an empty step value with an error and stays on the step", async () => {

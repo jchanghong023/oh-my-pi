@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
+
 ## [18.8.1] - 2026-10-07
 
 ### Added

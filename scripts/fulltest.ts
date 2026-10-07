@@ -160,22 +160,19 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * fork TS test discovery and the affected Rust crate selection. */
 async function discoverForkChangedPaths(): Promise<string[]> {
 	const baseline = await resolveUpstreamBaselineRef();
-	// core.quotepath=off keeps paths literal: quoted C-escaped names would not
-	// match the discovery regex and the gate would silently skip them.
-	const diff = await $`git -c core.quotepath=off diff --name-only ${baseline}`.cwd(repoRoot).quiet().nothrow();
+	// NUL delimiters preserve filenames verbatim; disabling rename detection
+	// includes both changed crate paths when a file moves between crates.
+	const diff = await $`git diff --no-renames --name-only -z ${baseline}`.cwd(repoRoot).quiet().nothrow();
 	if (diff.exitCode !== 0) {
 		throw new Error(`git diff against ${baseline} failed: ${diff.stderr.toString().trim()}`);
 	}
 	// `git diff` never lists untracked files; not-yet-staged new fork tests must
 	// join the discovered set too, or the gate would silently skip them.
-	const untracked = await $`git -c core.quotepath=off ls-files --others --exclude-standard`
-		.cwd(repoRoot)
-		.quiet()
-		.nothrow();
+	const untracked = await $`git ls-files --others --exclude-standard -z`.cwd(repoRoot).quiet().nothrow();
 	if (untracked.exitCode !== 0) {
 		throw new Error(`git ls-files --others failed: ${untracked.stderr.toString().trim()}`);
 	}
-	return [...diff.stdout.toString().split(/\r?\n/), ...untracked.stdout.toString().split(/\r?\n/)].filter(Boolean);
+	return [...diff.stdout.toString().split("\0"), ...untracked.stdout.toString().split("\0")].filter(Boolean);
 }
 
 /** Run every fork test batch in bounded chunks, one `bun test` process per

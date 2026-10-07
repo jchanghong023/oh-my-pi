@@ -1799,18 +1799,20 @@ export class Settings {
 		await fs.promises.mkdir(this.#agentDir, { recursive: true });
 		await this.#withYamlWriteLock(configPath, async writePath => {
 			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
-			const current = loaded.settings ?? {};
+			const current =
+				loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
 			const currentValue = modelRoleValueFromUnknown(getByPath(current, ["modelRoles", role]));
 			if (currentValue !== expectedValue || this.#hasPendingUserSetting(["modelRoles", role])) {
 				this.#adoptSavedGlobal(current, configPath);
 				throw new ModelRoleConflictError(role);
 			}
-			if (modelId !== currentValue) {
+			if (modelId !== currentValue || (loaded.settings === null && this.#quarantinedYamlTargets.has(configPath))) {
 				if (modelId === undefined) deleteByPath(current, ["modelRoles", role]);
 				else setByPath(current, ["modelRoles", role], modelId);
 				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));
 				this.#persistedMutationGeneration++;
 			}
+			this.#quarantinedYamlTargets.delete(configPath);
 			this.#configPath = configPath;
 			this.#adoptSavedGlobal(current, configPath);
 		});
@@ -1850,7 +1852,8 @@ export class Settings {
 	 */
 	getModelRole(role: ModelRole | string): string | undefined {
 		const roles: unknown = cfgModelRoles.get(this);
-		return (isRecord(roles) ? modelRoleValueFromUnknown(roles[role]) : undefined) ?? this.#defaultModelRoles[role];
+		if (isRecord(roles) && Object.hasOwn(roles, role)) return modelRoleValueFromUnknown(roles[role]);
+		return this.#defaultModelRoles[role];
 	}
 
 	/** Process defaults yield to every configured role, including after reload and cwd changes. */
@@ -1948,6 +1951,8 @@ export class Settings {
 			const modelId = modelRoleValueFromUnknown(roles[role]);
 			if (modelId !== undefined) {
 				normalized[role] = modelId;
+			} else {
+				delete normalized[role];
 			}
 		}
 		return normalized;

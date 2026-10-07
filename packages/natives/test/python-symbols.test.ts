@@ -110,9 +110,9 @@ describe("native Python definitions", () => {
 		]);
 	});
 
-	test("repeated names remain separate declarations and nested class methods have the immediate class as owner", async () => {
-		const code =
-			"def same(): return 1\ndef same(): return 2\nclass C:\n    class Nested:\n        def same(self): return 3\n    def method(self):\n        class Inside:\n            def same(self): return 4\n        def same(): return 5\n        return same()\n";
+	test("deep expression bodies preserve repeated definitions and immediate class ownership", async () => {
+		// A long left-associated expression must not overflow the native traversal stack.
+		const code = `def same(): return ${"1 + ".repeat(20_000)}1\ndef same(): return 2\nclass C:\n    class Nested:\n        def same(self): return 3\n    def method(self):\n        class Inside:\n            def same(self): return 4\n        def same(): return 5\n        return same()\n`;
 		const { symbols, parseError } = await pythonSymbols({ code });
 		expect(parseError).toBe(false);
 		expect(symbols.map(({ qualname, kind, startLine }) => [qualname, kind, startLine])).toEqual([

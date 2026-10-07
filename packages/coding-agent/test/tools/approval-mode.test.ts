@@ -10,7 +10,6 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -79,7 +78,6 @@ describe("tools.approvalMode setting", () => {
 		HistoryStorage.close();
 		resetSessionIndexForTests();
 		closeModelCache();
-		AgentStorage.close();
 		removeSyncWithRetries(tempDir);
 	}, 15_000);
 

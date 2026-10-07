@@ -41,7 +41,7 @@ pub fn extract_python_symbols(
 	}
 	let mut symbols = Vec::new();
 	let mut qualification = String::new();
-	visit(tree.root_node(), code, &mut qualification, false, None, &mut symbols, &mut heartbeat)?;
+	visit(tree.root_node(), code, &mut qualification, &mut symbols, &mut heartbeat)?;
 	heartbeat()?;
 	Ok(PythonSymbolsResult { symbols, parse_error: false })
 }
@@ -50,29 +50,71 @@ fn visit(
 	node: Node<'_>,
 	code: &str,
 	qualification: &mut String,
-	class_owner: bool,
-	decorated_start: Option<Node<'_>>,
 	symbols: &mut Vec<PythonSymbol>,
 	heartbeat: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
-	heartbeat()?;
-	if node.kind() == "decorated_definition" {
-		if let Some(definition) = node.child_by_field_name("definition") {
-			visit(definition, code, qualification, class_owner, Some(node), symbols, heartbeat)?;
+	// Expression trees can be arbitrarily deep (for example a long addition
+	// chain). Keep traversal state on Tree-sitter's cursor, not the native
+	// stack.
+	let mut cursor = node.walk();
+	let mut scopes = Vec::new();
+	let mut class_owner = false;
+	'walk: loop {
+		heartbeat()?;
+		let node = cursor.node();
+		if let Some(original_len) =
+			collect_definition(node, code, qualification, class_owner, symbols)
+		{
+			scopes.push((node.id(), original_len, class_owner));
+			class_owner = node.kind() == "class_definition";
 		}
-		return Ok(());
+		if cursor.goto_first_child() {
+			loop {
+				if cursor.node().is_named() {
+					continue 'walk;
+				}
+				if !cursor.goto_next_sibling() {
+					cursor.goto_parent();
+					break;
+				}
+			}
+		}
+		loop {
+			if scopes
+				.last()
+				.is_some_and(|&(id, ..)| id == cursor.node().id())
+			{
+				let (_, original_len, previous_owner) = scopes.pop().unwrap();
+				qualification.truncate(original_len);
+				class_owner = previous_owner;
+			}
+			while cursor.goto_next_sibling() {
+				if cursor.node().is_named() {
+					continue 'walk;
+				}
+			}
+			if !cursor.goto_parent() {
+				return Ok(());
+			}
+		}
 	}
+}
+
+fn collect_definition(
+	node: Node<'_>,
+	code: &str,
+	qualification: &mut String,
+	class_owner: bool,
+	symbols: &mut Vec<PythonSymbol>,
+) -> Option<usize> {
 	let is_class = node.kind() == "class_definition";
 	if is_class || node.kind() == "function_definition" {
-		let Some(name_node) = node.child_by_field_name("name") else {
-			return Ok(());
-		};
-		let Some(body) = node.child_by_field_name("body") else {
-			return Ok(());
-		};
-		let Some(name) = code.get(name_node.byte_range()) else {
-			return Ok(());
-		};
+		let name_node = node.child_by_field_name("name")?;
+		let body = node.child_by_field_name("body")?;
+		let name = code.get(name_node.byte_range())?;
+		let decorated_start = node
+			.parent()
+			.filter(|parent| parent.kind() == "decorated_definition");
 		let original_len = qualification.len();
 		if !qualification.is_empty() {
 			qualification.push('.');
@@ -113,13 +155,7 @@ fn visit(
 				signature:  signature.to_owned(),
 			});
 		}
-		visit(body, code, qualification, is_class, None, symbols, heartbeat)?;
-		qualification.truncate(original_len);
-		return Ok(());
+		return Some(original_len);
 	}
-	let mut cursor = node.walk();
-	for child in node.named_children(&mut cursor) {
-		visit(child, code, qualification, class_owner, None, symbols, heartbeat)?;
-	}
-	Ok(())
+	None
 }

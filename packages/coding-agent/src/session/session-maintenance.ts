@@ -3441,8 +3441,9 @@ export class SessionMaintenance {
 
 		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 		for (const model of sortedByContext) {
-			if (!seen.has(`${model.provider}/${model.id}`)) {
-				addCandidate(substituteForkCodexCompactionModel(model, availableModels));
+			const candidate = substituteForkCodexCompactionModel(model, availableModels);
+			if (candidate && !seen.has(`${candidate.provider}/${candidate.id}`)) {
+				addCandidate(candidate);
 				break;
 			}
 		}

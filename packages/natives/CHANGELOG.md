@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented deeply nested Python expressions from overflowing the native stack during symbol extraction.
+- Restored the previous native addon when replacement fails and preserved recoverable files when rollback cannot complete.
+
 ## [18.8.1] - 2026-10-07
 
 ### Added
