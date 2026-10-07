@@ -375,6 +375,9 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",
 		);
 
+		for (const warning of modelRegistry.drainConfigWarnings()) {
+			process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+		}
 		renderProviderModels(modelRegistry, action, pattern, json, kind);
 	} finally {
 		await emitSessionShutdownEvent(extensionRunner);
