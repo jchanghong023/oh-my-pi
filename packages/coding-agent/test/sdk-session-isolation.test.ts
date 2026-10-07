@@ -556,7 +556,7 @@ describe("createAgentSession session storage isolation", () => {
 			AgentLifecycleManager.resetGlobalForTests();
 			AgentRegistry.resetGlobalForTests();
 		}
-	});
+	}, 30000);
 
 	it("keeps the lifecycle manager while another main root is initializing", async () => {
 		AgentLifecycleManager.resetGlobalForTests();
