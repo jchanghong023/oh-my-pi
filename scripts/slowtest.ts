@@ -136,7 +136,7 @@ async function main(debug: boolean): Promise<number> {
 
 	const status = runCapture(["git", "status", "--porcelain"]);
 	if (status.exitCode !== 0 || status.stdout.trim() !== "") {
-		fail("the working tree must be clean; CI must validate the same committed tree as fulltest");
+		fail("the working tree must be clean; CI must build the same committed tree as fulltest");
 	}
 	// The WSL stage pushes the current tree itself and fails the pipeline on
 	// any sync or fulltest error — nothing downstream may run after a failure.

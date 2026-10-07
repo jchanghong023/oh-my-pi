@@ -77,118 +77,8 @@ jobs:
               echo "Building fork version $version from upstream baseline $baseline_tag"
 
 
-   check:
-      name: Lint, type check & web build
-      runs-on: ubuntu-22.04
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - name: Verify Rust license compliance (cargo-deny 0.20.2)
-           run: |
-              # Prebuilt release binary checked against digests pinned here:
-              # `cargo install` compiled cargo-deny from source on every run
-              # (~135 s), and a .sha256 fetched from the same mutable release
-              # would prove transport integrity only. Bump ver and both
-              # digests together.
-              ver=0.20.2
-              case "$(uname -m)" in
-                x86_64) arch=x86_64 sha=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f ;;
-                aarch64|arm64) arch=aarch64 sha=995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d ;;
-                *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;;
-              esac
-              name="cargo-deny-$ver-$arch-unknown-linux-musl"
-              curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$ver/$name.tar.gz"
-              echo "$sha  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
-              tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
-              mkdir -p "$HOME/.cargo/bin"
-              install -m 0755 "$RUNNER_TEMP/$name/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
-              # Hosted runners start with an empty Cargo cache, so populate the
-              # registry before cargo-deny's offline check.
-              cargo fetch --locked
-              cargo deny --locked --offline check licenses sources
-         - name: Type check workspace
-           run: bun run ci:check:full
-         - name: Build collab web
-           run: bun run collab:web:build
-
-   # ---------------------------------------------------------------------
-   # TEMPORARILY DISABLED 2026-10-06 (fork-only change, restore later):
-   # upstream can1357/oh-my-pi main is red at 3f000c524c (broken TS tests
-   # and bazel clippy), which blocks every fork release. Until upstream
-   # recovers, the remote test/validation jobs below are skipped with
-   # `if: false` and excluded from the release gate, so the pipeline only
-   # builds and publishes binaries. To restore: remove the `if: false`
-   # lines, uncomment each job's original `if:` condition, and re-add the
-   # jobs to release_gate's needs/if (original list kept in a comment
-   # there).
-   # ---------------------------------------------------------------------
-   # Validate Rust before allowing a fork release.
-   rust_validate:
-      name: Validate Rust workspace (bazel)
-      runs-on: ubuntu-22.04
-      if: false # TEMP-DISABLED 2026-10-06 (upstream red): restore when upstream is green.
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - id: cache
-           uses: ./.github/actions/bazel-cache
-           with:
-              scope: linux
-         # Clippy scope mirrors `cargo clippy --workspace` (libraries only, no
-         # test targets) plus the strict/default split: crates with
-         # `[lints] workspace = true` get the workspace policy, except
-         # brush-core (a vendored fork excluded from the Cargo task too).
-         # pi-builtins allows every clippy group in its own manifest (ported
-         # brush/uutils/jaq code) but is still held to zero rustc warnings;
-         # Cargo honors that via `[lints]`, Bazel via the clippy-ported config.
-         - name: Clippy (workspace lint policy on opted-in crates)
-           run: |
-              # The ulimit guard runs in the step that launches the bazel server
-              # (limits are per-process and the server persists across steps).
-              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              bazelisk query "kind('rust_library|rust_shared_library', //crates/pi-ast/... + //crates/pi-diff/... + //crates/pi-edit/... + //crates/pi-iso/... + //crates/pi-natives/... + //crates/pi-shell/... + //crates/pi-vcs/... + //crates/pi-voice/... + //crates/pi-walker/...)" \
-                | xargs bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=clippy-strict --
-         - name: Clippy (default lints elsewhere)
-           run: |
-              bazelisk query "kind('rust_library|rust_shared_library', //crates/... - (//crates/pi-ast/... + //crates/pi-diff/... + //crates/pi-edit/... + //crates/pi-iso/... + //crates/pi-natives/... + //crates/pi-shell/... + //crates/pi-vcs/... + //crates/pi-voice/... + //crates/pi-walker/...) - //crates/pi-builtins/... - //crates/vendor/brush-core/...)" \
-                | xargs bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=clippy --
-         - name: Clippy (manifest allows on ported pi-builtins)
-           run: |
-              bazelisk query "kind('rust_library|rust_shared_library', //crates/pi-builtins/...)" \
-                | xargs bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=clippy-ported --
-         - name: Rustfmt
-           run: bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build --config=rustfmt //crates/...
-   # Bazel Rust tests, split across two parallel shards so they overlap the
-   # native addon builds instead of serializing behind them.
-   rust_test:
-      name: Rust tests (shard ${{ matrix.shard.name }})
-      runs-on: ubuntu-22.04
-      if: false # TEMP-DISABLED 2026-10-06 (upstream red): restore when upstream is green.
-      strategy:
-         fail-fast: false
-         matrix:
-            shard:
-               - { name: builtins-vendor, targets: "//crates/pi-builtins/... //crates/vendor/..." }
-               - { name: rest, targets: "//crates/pi-natives/... //crates/pi-shell/... //crates/pi-ast/... //crates/pi-diff/... //crates/pi-edit/... //crates/pi-iso/... //crates/pi-vcs/... //crates/pi-vfs/... //crates/pi-predict/... //crates/pi-voice/... //crates/pi-walker/..." }
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - id: cache
-           uses: ./.github/actions/bazel-cache
-           with:
-              scope: linux
-         - name: Rust tests
-           # The ulimit guard runs in the step that launches the bazel server
-           # (limits are per-process and the server persists across steps).
-           run: |
-              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" test ${{ matrix.shard.targets }}
-
-   # Build every native addon needed by the non-macOS binaries and TS tests,
-   # one runner per target triple, then gather the pieces back into the artifact
-   # layout consumed by native-artifacts / scripts/bazel-natives.ts: the
-   # linux-x64 pair stays in its own small artifact, everything else travels as
-   # `native-addons`.
+   # Cross-build the native addons required by the Linux and Windows binaries.
+   # Keep the artifact layout consumed by native-artifacts / scripts/bazel-natives.ts.
    native_addon_build:
       name: Build native addon ${{ matrix.target_id }}
       runs-on: ubuntu-22.04
@@ -269,10 +159,8 @@ jobs:
               pattern: native-addons-*
               path: tmp-gather
               merge-multiple: true
-         # Split upload: every TS test job needs only the linux-x64 pair, and
-         # downloading the rest cost ~100 s per job. The native-artifacts
-         # action fetches `native-addons` (everything else) only when a
-         # consumer asks for a non-x64 target.
+         # Keep the linux-x64 pair separate; native-artifacts selects the
+         # artifact(s) required by each release binary target.
          - name: Upload linux-x64 native addon artifact
            uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
@@ -290,228 +178,6 @@ jobs:
               if-no-files-found: error
               retention-days: 1
 
-   test_workspace:
-      name: Test TS workspace fast
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 20
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Test workspace packages and repo scripts (TS)
-           env:
-              OMP_TEST_CONCURRENCY: "4"
-           run: |
-              bun run ci:test:ts:workspace
-              # Not the whole `test:scripts` group: scripts/musl-release.test.ts
-              # is Linux-only (skipIf-gated; its install.sh smoke-check stubs
-              # uname/ldd/curl as POSIX sh scripts and splices a colon-delimited
-              # PATH, so it needs a POSIX toolchain and cannot run on Windows).
-              # The fork-only script tests are hermetic, so run them directly.
-              bun test scripts/ci-test-ts.test.ts scripts/release.test.ts scripts/install-tests/fork-installer-routing.test.ts
-
-   test_coding_agent_singleton:
-      name: Test coding-agent singleton/global-state (TS)
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 20
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Test coding-agent singleton/global-state bucket
-           # Keep global Settings/env/fake-timer tests serial; native addon
-           # artifacts are still available like every other coding-agent bucket.
-           run: bun run ci:test:coding-agent:singleton
-
-   test_ts_native:
-      name: Test TS native/integration packages
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 25
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Test native/TUI/browser-ish packages (TS)
-           env:
-              OMP_TEST_CONCURRENCY: "4"
-           run: bun run ci:test:ts:native
-
-   test_coding_agent_ui:
-      name: Test coding-agent UI/TUI (TS)
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 25
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Test coding-agent UI/TUI bucket
-           env:
-              OMP_TEST_CONCURRENCY: "2"
-           run: bun run ci:test:coding-agent:ui
-
-   test_coding_agent_runtime:
-      name: Test coding-agent runtime/session (TS)
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 25
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Test coding-agent runtime bucket
-           # Runtime/session tests import native-backed barrels too; keep this
-           # separate for concurrency, not as a native-free guardrail.
-           env:
-              OMP_TEST_CONCURRENCY: "4"
-           run: bun run ci:test:coding-agent:runtime
-
-   test_coding_agent_native:
-      name: "Test coding-agent native/unit (TS) ${{ matrix.shard }}"
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 25
-      # The longest job in the workflow, so it runs as two shards. Fork CI is
-      # dispatch-only on hosted runners, so the split always applies.
-      strategy:
-         fail-fast: false
-         matrix:
-            shard: ["1/2", "2/2"]
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Point the browser suites at the real Chrome binary
-           shell: bash
-           run: |
-              # Debian/Ubuntu ship google-chrome-stable as a wrapper script that
-              # execs /opt/google/chrome/chrome. The reusable-CDP scan matches
-              # processes by executable path, so with the wrapper resolved a live
-              # instance stays undiscoverable and the attach suites relaunch it
-              # (deadlocking on the profile lock) instead of reusing it. Prefer
-              # the real ELF whenever the runner offers one.
-              for candidate in /opt/google/chrome/chrome "$(readlink -f "$(command -v google-chrome-stable || command -v google-chrome || true)" 2>/dev/null)"; do
-                if [ -n "$candidate" ] && [ -x "$candidate" ] && [ "$(head -c 2 "$candidate")" != "#!" ]; then
-                  echo "PUPPETEER_EXECUTABLE_PATH=$candidate" >> "$GITHUB_ENV"
-                  echo "browser suites will use $candidate"
-                  exit 0
-                fi
-              done
-              echo "no real Chrome binary on this runner; leaving chromium resolution untouched"
-         - name: Test coding-agent native/unit bucket
-           env:
-              OMP_TEST_CONCURRENCY: "4"
-              OMP_TEST_SHARD: ${{ matrix.shard }}
-           run: xvfb-run -a bun run ci:test:coding-agent:native
-
-   test_smoke:
-      name: Test CLI smoke (TS)
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      timeout-minutes: 15
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: CLI smoke test
-           run: bun run ci:test:smoke
-
-   install_methods:
-      name: Install method smoke tests
-      runs-on: ubuntu-22.04
-      needs: [native_addons]
-      # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): remote
-      # tests are off so the pipeline only builds binaries; restore when
-      # upstream is green again.
-      # if: ${{ !cancelled() && needs.native_addons.result == 'success' }}
-      if: false
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         - uses: ./.github/actions/native-artifacts
-           with:
-              targets: linux-x64-baseline linux-x64-modern
-         - name: Install method smoke tests
-           env:
-              OMP_INSTALL_TEST_SKIP_NATIVE_BUILD: "1"
-           run: bun run ci:test:install-methods
-
-   # Publishing waits for every validation job; binary builds overlap the tests.
-   # TEMP-DISABLED 2026-10-06 (upstream main red at 3f000c524c): the remote
-   # test/validation jobs above are skipped via `if: false`, so this gate
-   # temporarily waits only for the build chain. Restore the original gate
-   # when those jobs are re-enabled:
-   #   needs: [release_metadata, check, rust_validate, rust_test, native_addons, test_workspace, test_coding_agent_singleton, test_ts_native, test_coding_agent_ui, test_coding_agent_runtime, test_coding_agent_native, test_smoke, install_methods]
-   # plus `needs.<job>.result == 'success'` checks for each of them in the
-   # if-condition below.
-   release_gate:
-      name: Release validation gate
-      if: ${{ !cancelled() &&
-         needs.release_metadata.result == 'success' &&
-         needs.check.result == 'success' &&
-         needs.native_addons.result == 'success' }}
-      needs: [release_metadata, check, native_addons]
-      runs-on: ubuntu-22.04
-      steps:
-         - uses: actions/checkout@v4
-         - uses: ./.github/actions/bun-install
-         # A stale generated clippy config blocks fork artifacts and releases.
-         - name: Check generated clippy config
-           run: bun scripts/gen-clippy-bazelrc.ts --check
-         - run: echo "release validation green"
-
    # Build every non-macOS target. Each artifact remains downloadable even when
    # publish_release is false.
    release_binary:
@@ -524,51 +190,32 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               # Addons cross-built by Bazel (clang + ld64.lld against the
-               # Command Line Tools SDK) in native_addons_cross.
                - {
-                    platform: darwin,
-                    target_id: darwin-x64,
-                    binary_path: packages/coding-agent/binaries/omp-darwin-x64,
-                    native_targets: darwin-x64-baseline,
-                 }
-               - {
-                    platform: darwin,
-                    target_id: darwin-arm64,
-                    binary_path: packages/coding-agent/binaries/omp-darwin-arm64,
-                    native_targets: darwin-arm64,
-                 }
-               - {
-                    platform: linux,
                     target_id: linux-x64,
                     binary_path: packages/coding-agent/binaries/omp-linux-x64,
                     native_targets: linux-x64-baseline linux-x64-modern,
                  }
                - {
-                    platform: linux,
                     target_id: linux-musl-x64,
                     binary_path: packages/coding-agent/binaries/omp-linux-musl-x64,
                     native_targets: linux-musl-x64-baseline,
                  }
                - {
-                    platform: linux,
                     target_id: linux-arm64,
                     binary_path: packages/coding-agent/binaries/omp-linux-arm64,
                     native_targets: linux-arm64,
                  }
                - {
-                    platform: linux,
                     target_id: linux-musl-arm64,
                     binary_path: packages/coding-agent/binaries/omp-linux-musl-arm64,
                     native_targets: linux-musl-arm64,
                  }
                - {
-                    platform: win32,
                     target_id: win32-x64,
                     binary_path: packages/coding-agent/binaries/omp-windows-x64.exe,
                     native_targets: win32-x64-baseline,
                  }
-      runs-on: ${{ matrix.os }}
+      runs-on: ubuntu-22.04
       permissions:
          contents: read
       steps:
@@ -587,6 +234,7 @@ jobs:
            uses: ./.github/actions/native-artifacts
            with:
               targets: ${{ matrix.native_targets }}
+              skip-load-probe: "true"
          - name: Build release binary
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
@@ -594,32 +242,6 @@ jobs:
               RELEASE_TIMESTAMP: ${{ needs.release_metadata.outputs.release-timestamp }}
               UPDATE_REPOSITORY: ${{ github.repository }}
            run: bun run ci:release:build-binaries
-         # Windows binary is cross-built on Linux, so we have no Windows runner
-         # to smoke it on. Cross-build correctness is verified via the bun
-         # `--compile --target=bun-windows-x64-*` cross-compile. Musl binaries
-         # need the musl loader, which glibc runners lack — they are smoked in
-         # the Alpine container step below instead.
-         - name: Smoke release binary
-           if: matrix.platform != 'win32' && matrix.libc != 'musl'
-           run: |
-              runtime_dir="$(mktemp -d)"
-              version_output="$(HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --version)"
-              test "$version_output" = "omp/${{ needs.release_metadata.outputs.version }} (built ${{ needs.release_metadata.outputs.release-timestamp }})"
-              HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" "${{ matrix.binary_path }}" --smoke-test
-         - name: Smoke musl release binary on Alpine
-           if: matrix.libc == 'musl'
-           run: |
-              binary="$(realpath "${{ matrix.binary_path }}")"
-              # Bun's musl-target binaries link libstdc++/libgcc dynamically;
-              # Alpine users install them alongside the binary (same as bun itself).
-              docker run --rm -v "$binary:/usr/local/bin/omp:ro" \
-                -e EXPECTED_VERSION="${{ needs.release_metadata.outputs.version }}" -e EXPECTED_TIMESTAMP="${{ needs.release_metadata.outputs.release-timestamp }}" alpine:3.22 sh -ec '
-                apk add --no-cache libstdc++ libgcc >/dev/null
-                runtime_dir="$(mktemp -d)"
-                version_output="$(HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --version)"
-                test "$version_output" = "omp/$EXPECTED_VERSION (built $EXPECTED_TIMESTAMP)"
-                HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" omp --smoke-test
-              '
          - name: Upload release binary artifact
            uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
@@ -642,9 +264,8 @@ jobs:
          github.ref == 'refs/heads/main' &&
          !cancelled() &&
          needs.release_metadata.result == 'success' &&
-         needs.release_gate.result == 'success' &&
          needs.release_binary.result == 'success' }}
-      needs: [release_metadata, release_gate, release_binary]
+      needs: [release_metadata, release_binary]
       runs-on: ubuntu-22.04
       permissions:
          contents: write

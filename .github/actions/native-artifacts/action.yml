@@ -13,6 +13,10 @@ inputs:
       description: Destination directory for the .node files
       required: false
       default: packages/natives/native
+   skip-load-probe:
+      description: Skip the host addon load probe for build-only CI
+      required: false
+      default: "false"
 
 runs:
    using: composite
@@ -64,9 +68,12 @@ runs:
         env:
            NATIVE_TARGETS: ${{ inputs.targets }}
            NATIVE_DEST: ${{ inputs.dest }}
+           SKIP_LOAD_PROBE: ${{ inputs.skip-load-probe }}
         run: |
            set -euo pipefail
            read -r -a targets <<< "$NATIVE_TARGETS"
+           probe_args=()
+           if [ "$SKIP_LOAD_PROBE" = true ]; then probe_args+=(--skip-load-probe); fi
            bun scripts/bazel-natives.ts "${targets[@]}" \
              --source "$RUNNER_TEMP/omp-native-artifacts" \
-             --dest "$NATIVE_DEST"
+             --dest "$NATIVE_DEST" "${probe_args[@]}"

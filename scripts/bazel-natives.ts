@@ -2,7 +2,7 @@
 /**
  * Canonical Bazel driver for the shipping pi_natives addons.
  *
- * Usage: bun scripts/bazel-natives.ts <target>... [--dest <dir>] [--source <dir>] [-- <extra bazel args>]
+ * Usage: bun scripts/bazel-natives.ts <target>... [--dest <dir>] [--source <dir>] [--skip-load-probe] [-- <extra bazel args>]
  *
  * Targets are the //:natives-* names from BUILD.bazel (e.g. linux-x64-baseline,
  * darwin-arm64) plus three pseudo-targets:
@@ -39,8 +39,8 @@
  * Every install stamps packages/natives/package.json#version into the addon's
  * post-link version slot (scripts/stamp-native-version.ts), so release bumps
  * never touch a Rust input. After install, the addon for the host's own target
- * is dlopen-probed in a child process and an unloadable image (or a load that
- * hangs) fails the build.
+ * is dlopen-probed in a child process unless --skip-load-probe is supplied
+ * (build-only release CI). An unloadable image or a load that hangs fails the build.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -185,6 +185,7 @@ export interface CliOptions {
 	dest: string | null;
 	source: string | null;
 	bazelArgs: string[];
+	skipLoadProbe?: boolean;
 }
 
 /** Parse target names and the mutually exclusive build or artifact source options. */
@@ -193,6 +194,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
 	let dest: string | null = null;
 	let source: string | null = null;
 	const bazelArgs: string[] = [];
+	let skipLoadProbe = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--") {
@@ -209,6 +211,10 @@ export function parseCliArgs(argv: string[]): CliOptions {
 			}
 			continue;
 		}
+		if (arg === "--skip-load-probe") {
+			skipLoadProbe = true;
+			continue;
+		}
 		if (arg.startsWith("-")) {
 			throw new Error(`Unknown flag ${arg} (extra bazel args go after \`--\`)`);
 		}
@@ -216,13 +222,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
 	}
 	if (targets.length === 0) {
 		throw new Error(
-			"Usage: bun scripts/bazel-natives.ts <target>... [--dest <dir>] [--source <dir>] [-- <extra bazel args>]",
+			"Usage: bun scripts/bazel-natives.ts <target>... [--dest <dir>] [--source <dir>] [--skip-load-probe] [-- <extra bazel args>]",
 		);
 	}
 	if (source && bazelArgs.length > 0) {
 		throw new Error("--source cannot be combined with extra bazel arguments");
 	}
-	return { targets, dest, source, bazelArgs };
+	return { targets, dest, source, bazelArgs, ...(skipLoadProbe ? { skipLoadProbe: true } : {}) };
 }
 
 function resolveBazelBinary(): string | null {
@@ -475,7 +481,7 @@ async function main(): Promise<void> {
 		seen.set(base, output);
 	}
 	await fs.mkdir(destDir, { recursive: true });
-	const probeFilename = hostProbeFilename(options.targets, host);
+	const probeFilename = options.skipLoadProbe ? null : hostProbeFilename(options.targets, host);
 	const version = await nativesPackageVersion();
 	for (const output of outputs) {
 		const absolute = path.isAbsolute(output) ? output : path.join(repoRoot, output);

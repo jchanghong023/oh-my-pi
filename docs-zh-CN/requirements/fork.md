@@ -172,7 +172,8 @@
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只验证并构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。`bun run slowtest` 的 CI 阶段固定以 `publish_release=true` 触发，等价于明确启用发布——流水线全绿即产出该 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 永久只承担构建、产物汇总与发布，不运行测试、冒烟、lint、类型检查或独立校验作业；发布只等待版本元数据与全部二进制构建成功，不承担本地验收门禁。`bun run slowtest` 先完成本机与 WSL2 验证，再以 `publish_release=true` 触发 CI，构建发布成功即产出 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
 - 二进制必须携带 fork 版本、构建时间和更新仓库信息。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
@@ -192,7 +193,7 @@
 
 - `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
 - `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：上游自身 Windows 专属代码在 pinned nightly 下 clippy 必红（上游 CI 只在 Linux lint），此期间 fulltest 静态阶段只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例（Rust 其余测试仍全量执行）；上游带入的未过其自身格式门禁的文件按锁定 oxfmt 版本在本地格式化以保持门禁可用（上游格式化后差异自动消除）。恢复条件均为上游转绿后按各文件内注释还原。
-- `slowtest` 保留本机验证、Ubuntu-24.04 WSL 验证、自动推送、触发和监控 CI、成功后发布个人 Release 的流程。WSL 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。
+- `slowtest` 保留本机验证、Ubuntu-24.04 WSL2 验证、自动推送、触发和监控构建发布 CI、成功后发布个人 Release 的流程。测试留在本地 Windows 与 WSL2，不在远端 CI 重复运行；WSL2 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。两端仍按 `fulltest` 的差异选择范围执行，不扩展为上游全量测试。
 - 不设置 fork 自定义的测试阶段和 WSL 阶段时限，测试本体沿用上游运行器与 CI 的超时机制；WSL 阶段的非测试挂起（如安装或环境准备）无自动时限，由操作者中止。取消操作仍须正确处理本次任务拥有的资源。
 - fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。
 - 测试适配只维护已保留功能及支持平台所必需的部分，不再将历史测试补丁清单作为独立产品需求。

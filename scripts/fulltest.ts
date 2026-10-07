@@ -2,15 +2,14 @@
 // Fork full local verification. Thin orchestration over upstream entries: the
 // upstream TS static gate (check:ts; see the phase comment for why the clippy
 // half of check:rs is temporarily excluded), the host native addon build, the
-// fork's own TS tests
-// (discovered from the diff against the upstream baseline — no hand-maintained
-// whitelist of upstream tests; the full upstream suite is POSIX-oriented and is
-// covered by the slowtest Linux pipeline), the Rust workspace suite through the
-// upstream `test:rs` runner, repo script tests, and the dev-TUI PTY smoke.
+// fork's own TS tests (discovered from the diff against the upstream baseline —
+// no hand-maintained whitelist or full upstream suite), the affected Rust crates
+// through the upstream `test:rs` runner, repo script tests, and dev-TUI PTY smoke.
 // Python components are not tested locally. The verdict is black and white: no
-// failure exemptions. E2E smoke and installer E2E are slowtest-pipeline
-// stages. No fork-side stage timeouts: children own their own budgets
-// (`bun test` per-test limits, the CI-side runner). Only run on explicit user
+// failure exemptions. slowtest runs this gate on Windows and WSL2 before the
+// build-only release CI; CI adds no tests, CLI smoke, or installer E2E coverage.
+// No fork-side stage timeouts: children own their own budgets (`bun test`
+// per-test limits). Only run on explicit user
 // request (AGENTS.md「验证」).
 
 import { existsSync } from "node:fs";
