@@ -95,17 +95,18 @@ export interface ForkTestBatch {
 
 /**
  * Discover the fork's TS tests: every test file under a package `test/`
- * directory that differs from the upstream baseline ref (`git diff --name-only`
- * against it plus `git ls-files --others`, so uncommitted and not-yet-staged
- * files both count). New fork tests join automatically; reverted files
- * (identical to upstream again) drop out automatically.
+ * directory — or colocated under `src/`, where upstream also keeps a few —
+ * that differs from the upstream baseline ref (`git diff --name-only` against
+ * it plus `git ls-files --others`, so uncommitted and not-yet-staged files
+ * both count). New fork tests join automatically; reverted files (identical
+ * to upstream again) drop out automatically.
  */
 export function resolveForkTestBatches(
 	changedPaths: readonly string[],
 	exists: (file: string) => boolean,
 ): ForkTestBatch[] {
 	const testFiles = changedPaths
-		.filter(changed => /^packages\/[^/]+\/test\/.+\.test\.(ts|tsx)$/.test(changed))
+		.filter(changed => /^packages\/[^/]+\/(test|src)\/.+\.test\.(ts|tsx)$/.test(changed))
 		.filter(exists)
 		.sort();
 	const byPackage = new Map<string, string[]>();
@@ -150,13 +151,18 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * budgets lose to CPU contention). Any non-zero exit fails the phase. */
 async function runForkTestsPhase(): Promise<void> {
 	const baseline = await resolveUpstreamBaselineRef();
-	const diff = await $`git diff --name-only ${baseline}`.cwd(repoRoot).quiet().nothrow();
+	// core.quotepath=off keeps paths literal: quoted C-escaped names would not
+	// match the discovery regex and the gate would silently skip them.
+	const diff = await $`git -c core.quotepath=off diff --name-only ${baseline}`.cwd(repoRoot).quiet().nothrow();
 	if (diff.exitCode !== 0) {
 		throw new Error(`git diff against ${baseline} failed: ${diff.stderr.toString().trim()}`);
 	}
 	// `git diff` never lists untracked files; not-yet-staged new fork tests must
 	// join the discovered set too, or the gate would silently skip them.
-	const untracked = await $`git ls-files --others --exclude-standard`.cwd(repoRoot).quiet().nothrow();
+	const untracked = await $`git -c core.quotepath=off ls-files --others --exclude-standard`
+		.cwd(repoRoot)
+		.quiet()
+		.nothrow();
 	if (untracked.exitCode !== 0) {
 		throw new Error(`git ls-files --others failed: ${untracked.stderr.toString().trim()}`);
 	}
@@ -164,7 +170,8 @@ async function runForkTestsPhase(): Promise<void> {
 		...diff.stdout.toString().split(/\r?\n/),
 		...untracked.stdout.toString().split(/\r?\n/),
 	].filter(Boolean);
-	const batches = resolveForkTestBatches(changedPaths, existsSync);
+	// Resolve existence against the repo root regardless of the caller's cwd.
+	const batches = resolveForkTestBatches(changedPaths, file => existsSync(path.join(repoRoot, file)));
 	if (batches.length === 0) {
 		throw new Error(
 			"No fork test files discovered against the upstream baseline; refusing to run an empty test phase",

@@ -20,6 +20,9 @@ export function canCreateSymlinks(): boolean {
 	const base = path.join(os.tmpdir(), `omp-symlink-probe-${process.pid}`);
 	const link = `${base}-link`;
 	try {
+		// A stale link from an earlier run (crash before cleanup, pid reused)
+		// would surface as EEXIST and read as "no privilege".
+		fs.rmSync(link, { force: true });
 		fs.symlinkSync(base, link, "file");
 		fs.rmSync(link, { force: true });
 		cached = true;

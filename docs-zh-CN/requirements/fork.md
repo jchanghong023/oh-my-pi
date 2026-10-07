@@ -2,7 +2,7 @@
 
 本仓库是个人自己使用的 fork 维护仓库：持续同步上游最新 `main`，保留个人功能和默认值，不以对外发布为目标。
 
-本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。2026-10-07 精简会话已按重审需求实施：模型硬排除、fork 日志策略、ZCode 项目多会话运行层与手工测试白名单已撤除，`/team`、`/repo`、`/wiki`、company/zcode-api、`/jch*`、fullsend、Codex 策略与分发能力完整保留（各域验证状态见[目录索引](README.md)）。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
+本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。当前有效范围：模型选择、日志行为与验证编排跟随上游规则（fork 不维护模型硬排除、专用日志策略或手工测试白名单），`/team`、`/repo`、`/wiki`、company/zcode-api、`/jch*`、fullsend、Codex 策略与分发能力完整保留（各域验证状态见[目录索引](README.md)）。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
 
 ## 项目定位与使用场景
 
@@ -191,9 +191,9 @@
 保留 `fastcheck`、`fulltest`、`slowtest` 三个入口，采用尽量简薄的编排，优先复用上游检查、测试运行器与 CI。
 
 - `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
-- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：上游自身 Windows 专属代码在 pinned nightly 下 clippy 必红（上游 CI 只在 Linux lint），此期间 fulltest 静态阶段只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例（Rust 其余测试仍全量执行）；恢复条件均为上游转绿后按各文件内注释还原。
+- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：上游自身 Windows 专属代码在 pinned nightly 下 clippy 必红（上游 CI 只在 Linux lint），此期间 fulltest 静态阶段只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例（Rust 其余测试仍全量执行）；上游带入的未过其自身格式门禁的文件按锁定 oxfmt 版本在本地格式化以保持门禁可用（上游格式化后差异自动消除）。恢复条件均为上游转绿后按各文件内注释还原。
 - `slowtest` 保留本机验证、Ubuntu-24.04 WSL 验证、自动推送、触发和监控 CI、成功后发布个人 Release 的流程。WSL 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。
-- 不设置 fork 自定义的测试阶段和 WSL 阶段时限，采用上游运行器和 CI 的超时机制；取消操作仍须正确处理本次任务拥有的资源。
+- 不设置 fork 自定义的测试阶段和 WSL 阶段时限，测试本体沿用上游运行器与 CI 的超时机制；WSL 阶段的非测试挂起（如安装或环境准备）无自动时限，由操作者中止。取消操作仍须正确处理本次任务拥有的资源。
 - fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。
 - 测试适配只维护已保留功能及支持平台所必需的部分，不再将历史测试补丁清单作为独立产品需求。
 

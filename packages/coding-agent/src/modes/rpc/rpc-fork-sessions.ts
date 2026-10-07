@@ -8,12 +8,18 @@
  * session itself is refused — the client closes that session's process
  * first.
  */
+import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
+import type { FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
 import { invalidateSessionScan, listSessions, type SessionInfo } from "../../session/session-listing";
 import { parseSessionContent } from "../../session/session-loader";
-import { overlayTitleSlotContent } from "../../session/session-title-slot";
-import { FileSessionStorage, type SessionStorage } from "../../session/session-storage";
+import {
+	overlayTitleSlotContent,
+	parseTitleSlotFromContent,
+	serializeTitleSlot,
+} from "../../session/session-title-slot";
+import { FileSessionStorage, tryAcquireSessionLease, type SessionStorage } from "../../session/session-storage";
 import type { RpcForkErrorCode, RpcRevision, RpcSessionSummary } from "./rpc-fork-types";
 
 /** Typed failure surfaced by the session directory service. */
@@ -103,13 +109,36 @@ export class RpcSessionDirectoryService {
 			}
 			const applied = await current.setSessionName(trimmed, "user");
 			if (!applied) throw new RpcSessionDirectoryError("invalid_params", "Session name cannot be empty");
-			return this.#summaryFor(sessionId, true);
+			// A session that has not flushed to disk yet is absent from the
+			// directory; report its in-memory state rather than failing the
+			// rename that already succeeded.
+			const listed = await this.#findListed(sessionId);
+			if (!listed) {
+				return {
+					sessionId,
+					name: current.sessionManager.getSessionName() ?? trimmed,
+					current: true,
+					revision: revisionFor(this.#storage, sessionId, undefined),
+				};
+			}
+			return summaryFromListed(listed, revisionFor(this.#storage, sessionId, listed.path), true);
 		}
 
 		const entry = await this.#locateListed(sessionId);
 		const observedRevision = revisionFor(this.#storage, sessionId, entry.path);
 		this.#assertRevision(sessionId, entry.path, expectedRevision);
-		const content = await this.#storage.readText(entry.path);
+		let content: string;
+		try {
+			content = await this.#storage.readText(entry.path);
+		} catch (error) {
+			if (isEnoent(error)) {
+				throw new RpcSessionDirectoryError(
+					"not_found",
+					`Session ${sessionId} was removed from ${this.#sessionDir}`,
+				);
+			}
+			throw error;
+		}
 		this.#assertRevision(sessionId, entry.path, observedRevision);
 		const header = parseSessionContent(content).entries.find(candidate => candidate.type === "session");
 		if (
@@ -120,24 +149,33 @@ export class RpcSessionDirectoryService {
 			throw new RpcSessionDirectoryError("scope_not_allowed", "Session identity/project changed during rename");
 		}
 		let committed = true;
-		await this.#storage.writeTextAtomic(
-			entry.path,
-			overlayTitleSlotContent(content, {
-				title: trimmed,
-				source: "user",
-				updatedAt: new Date().toISOString(),
-			}),
-			{
-				expectedSize: Buffer.byteLength(content, "utf-8"),
-				commitGuard: () => {
-					committed =
-						revisionFor(this.#storage, sessionId, entry.path) === observedRevision &&
-						this.#storage.readTextSync !== undefined &&
-						this.#storage.readTextSync(entry.path) === content;
-					return committed;
-				},
+		// Files written before the title-slot format keep their session header in
+		// the first 256 bytes; an in-place slot overlay would destroy it. Mirror
+		// SessionManager's own guard (`#hasTitleSlot`): only slot-bearing files
+		// take the same-size overlay, legacy bodies are rewritten with the slot
+		// prepended so the file only grows and every original byte survives.
+		const hasTitleSlot = parseTitleSlotFromContent(content) !== undefined;
+		const titleUpdate = {
+			title: trimmed,
+			source: "user" as const,
+			updatedAt: new Date().toISOString(),
+		};
+		const updatedContent = hasTitleSlot
+			? overlayTitleSlotContent(content, titleUpdate)
+			: serializeTitleSlot(titleUpdate) + content;
+		await this.#storage.writeTextAtomic(entry.path, updatedContent, {
+			// The legacy rewrite grows the file by one slot; its safety rests on
+			// the revision + full-content guard alone (expectedSize would have to
+			// match the post-write size, which the backend cannot pre-state).
+			expectedSize: hasTitleSlot ? Buffer.byteLength(content, "utf-8") : undefined,
+			commitGuard: () => {
+				committed =
+					revisionFor(this.#storage, sessionId, entry.path) === observedRevision &&
+					this.#storage.readTextSync !== undefined &&
+					this.#storage.readTextSync(entry.path) === content;
+				return committed;
 			},
-		);
+		});
 		if (!committed) {
 			throw new RpcSessionDirectoryError("revision_conflict", `Session ${sessionId} changed during rename`);
 		}
@@ -150,9 +188,12 @@ export class RpcSessionDirectoryService {
 
 	/**
 	 * Delete one saved session with its artifacts. The session this process
-	 * hosts must be closed (its process ended) first; deletion of every other
-	 * saved entry is guarded by `expectedRevision` and re-checks the file
-	 * identity at commit time.
+	 * hosts must be closed (its process ended) first; a session hosted by
+	 * another process is refused through its ownership lease (held from
+	 * `claimSession` until that process exits — deleting under it would strand
+	 * the writer on POSIX or fail lockless on Windows). Every deletion is
+	 * guarded by `expectedRevision` and re-checks the file identity at commit
+	 * time.
 	 */
 	async delete(sessionId: string, expectedRevision?: RpcRevision): Promise<void> {
 		const current = this.#currentSession();
@@ -169,15 +210,42 @@ export class RpcSessionDirectoryService {
 		if (!remove) {
 			throw new RpcSessionDirectoryError("unsupported", "Storage does not support guarded session deletion");
 		}
-		const deleted = await remove.call(this.#storage, entry.path, content => {
-			const header = parseSessionContent(content).entries.find(candidate => candidate.type === "session");
-			return (
-				header?.type === "session" &&
-				header.id === sessionId &&
-				normalizePathForComparison(header.cwd) === normalizePathForComparison(this.#cwd) &&
-				revisionFor(this.#storage, sessionId, entry.path) === authorizedRevision
+		let lease: FileLockHandle | null;
+		try {
+			lease = tryAcquireSessionLease(sessionId);
+		} catch {
+			// An unprobeable lease is treated as held, mirroring claimSession's
+			// conservative liveness reading.
+			lease = null;
+		}
+		if (!lease) {
+			throw new RpcSessionDirectoryError(
+				"unsupported",
+				"Session is open in another process; close it there before deleting",
 			);
-		});
+		}
+		let deleted: boolean;
+		try {
+			deleted = await remove.call(this.#storage, entry.path, content => {
+				const header = parseSessionContent(content).entries.find(candidate => candidate.type === "session");
+				return (
+					header?.type === "session" &&
+					header.id === sessionId &&
+					normalizePathForComparison(header.cwd) === normalizePathForComparison(this.#cwd) &&
+					revisionFor(this.#storage, sessionId, entry.path) === authorizedRevision
+				);
+			});
+		} catch (error) {
+			if (isEnoent(error)) {
+				throw new RpcSessionDirectoryError(
+					"not_found",
+					`Session ${sessionId} was removed from ${this.#sessionDir}`,
+				);
+			}
+			throw error;
+		} finally {
+			lease.release();
+		}
 		if (!deleted) {
 			throw new RpcSessionDirectoryError("revision_conflict", `Session ${sessionId} changed before deletion`);
 		}
@@ -194,10 +262,17 @@ export class RpcSessionDirectoryService {
 
 	/** Locate a saved session by stable id in the session directory; throws not_found. */
 	async #locateListed(sessionId: string): Promise<SessionInfo> {
-		const entry = (await listSessions(this.#sessionDir, this.#storage)).find(candidate => candidate.id === sessionId);
+		const entry = await this.#findListed(sessionId);
 		if (!entry) {
 			throw new RpcSessionDirectoryError("not_found", `Session ${sessionId} not found in ${this.#sessionDir}`);
 		}
+		return entry;
+	}
+
+	/** Like {@link #locateListed} but returns undefined instead of throwing not_found. */
+	async #findListed(sessionId: string): Promise<SessionInfo | undefined> {
+		const entry = (await listSessions(this.#sessionDir, this.#storage)).find(candidate => candidate.id === sessionId);
+		if (!entry) return undefined;
 		if (normalizePathForComparison(entry.cwd) !== normalizePathForComparison(this.#cwd)) {
 			throw new RpcSessionDirectoryError("scope_not_allowed", `Session ${sessionId} belongs to another project`);
 		}

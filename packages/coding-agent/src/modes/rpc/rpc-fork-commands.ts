@@ -153,9 +153,10 @@ function descriptorFor(entry: RpcCommandCatalogEntry, availability: RpcCommandAv
  * (`complete_command`), and strict resolution for clients that dispatch
  * commands themselves.
  *
- * The catalog is cached until {@link invalidate} is called (settings changes,
- * plugin reloads, skill mutations); every rebuild is observable through the
- * monotonic {@link revision}.
+ * The catalog is cached per session identity; a rebuild whose session key
+ * changed (settings, plugins, skill mutations feed the key) refreshes it and
+ * bumps the monotonic {@link revision}, so clients detect drift by comparing
+ * revisions between listings — there is no push notification.
  */
 export class RpcForkCommandCatalogService {
 	readonly #cwd: string;
@@ -168,15 +169,9 @@ export class RpcForkCommandCatalogService {
 		this.#getMcpManager = options.getMcpManager;
 	}
 
-	/** Current catalog revision; bumped by {@link invalidate}, stable across rebuilds. */
+	/** Current catalog revision; bumps when a rebuild sees a changed session key. */
 	get revision(): string {
 		return this.#revisions.current;
-	}
-
-	/** Drop the cached catalog and announce a new revision (`command_catalog_changed`). */
-	invalidate(): void {
-		this.#sessionKey = undefined;
-		this.#revisions.bump();
 	}
 
 	/**

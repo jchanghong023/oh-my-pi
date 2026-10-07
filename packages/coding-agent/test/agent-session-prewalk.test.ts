@@ -177,6 +177,34 @@ describe("AgentSession prewalk", () => {
 		return { session: created, primary, target, settings, requested, nudges };
 	}
 
+	it("disarms a rejected handoff and lets the run and subsequent turns complete", async () => {
+		const created = createLifecycleSession([
+			toolCall("old-todo", "todo"),
+			toolCall("old-write", "write"),
+			{ content: ["first done"] },
+			toolCall("second-write", "write"),
+			{ content: ["second done"] },
+		]);
+		const notices: string[] = [];
+		created.session.subscribe(event => {
+			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+		});
+		// The temporary-model switch requires a configured credential for the
+		// target; denying it rejects the handoff, which must disarm the prewalk
+		// and keep every turn on the primary model.
+		const original = modelRegistry.hasConfiguredAuth.bind(modelRegistry);
+		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(model =>
+			model.id === created.target.id ? false : original(model),
+		);
+
+		await created.session.prompt("first task");
+		expect(created.session.getPrewalkState()).toBeUndefined();
+		expect(created.session.model?.id).toBe(created.primary.id);
+		await created.session.prompt("second task");
+		expect(created.requested.every(id => id === created.primary.id)).toBe(true);
+		expect(notices.filter(message => message.includes("handoff failed"))).toHaveLength(1);
+	});
+
 	it("/new restores the previous prewalk source and effort, then requires a fresh todo before handoff", async () => {
 		const created = createLifecycleSession([
 			toolCall("old-todo", "todo"),

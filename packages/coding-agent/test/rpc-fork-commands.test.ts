@@ -1,6 +1,6 @@
 // Unit coverage for RpcForkCommandCatalogService (rpc-fork-commands.ts):
 // live-session catalog snapshots with execution verdicts, zero-side-effect
-// name/argument completion, strict resolution, and revision invalidation.
+// name/argument completion, strict resolution, and revision drift.
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -155,8 +155,6 @@ describe("RpcForkCommandCatalogService", () => {
 			],
 		};
 		await service.buildCatalog(sessionWithSkill);
-		expect(service.revision).not.toBe(before);
-		service.invalidate();
 		expect(service.revision).not.toBe(before);
 	});
 });

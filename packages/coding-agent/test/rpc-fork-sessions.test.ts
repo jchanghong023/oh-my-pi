@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import {
 	RpcSessionDirectoryError,
 	RpcSessionDirectoryService,
@@ -156,5 +157,73 @@ describe("RpcSessionDirectoryService", () => {
 		await expect(fx.service.rename("s-foreign", "Nope")).rejects.toMatchObject({ code: "scope_not_allowed" });
 		await expect(fx.service.delete("s-foreign")).rejects.toMatchObject({ code: "scope_not_allowed" });
 		expect(RpcSessionDirectoryError.name).toBe("RpcSessionDirectoryError");
+	});
+
+	test("rename of a legacy file without a title slot prepends the slot and preserves every byte", async () => {
+		const fx = await setup();
+		// Sessions written before the title-slot format start with the header
+		// line; an in-place 256-byte overlay would destroy it.
+		const now = new Date().toISOString();
+		const header = { type: "session", version: 2, id: "s-legacy", timestamp: now, cwd: fx.cwd };
+		const body = `${JSON.stringify(header)}\n{"type":"user","id":"u1","ts":"${now}","message":"hi"}\n`;
+		const file = path.join(fx.sessionDir, "s-legacy.jsonl");
+		await Bun.write(file, body);
+
+		const renamed = await fx.service.rename("s-legacy", "Migrated");
+		expect(renamed).toMatchObject({ sessionId: "s-legacy", name: "Migrated", current: false });
+
+		const updated = await Bun.file(file).text();
+		// The original body survives byte-for-byte after the prepended slot.
+		expect(updated.slice(256)).toBe(body);
+		const slotLine = updated.slice(0, updated.indexOf("\n"));
+		expect(slotLine).toContain('"title":"Migrated"');
+		// The header is still parseable and identity-intact.
+		const headerLine = updated.split("\n")[1]!;
+		expect(JSON.parse(headerLine)).toMatchObject({ type: "session", id: "s-legacy", cwd: fx.cwd });
+		expect((await fx.service.list())[0]!.name).toBe("Migrated");
+	});
+
+	test("delete refuses a session whose ownership lease another holder keeps", async () => {
+		const fx = await setup();
+		await writeSession(fx.sessionDir, "s-leased", fx.cwd);
+		const [entry] = await fx.service.list();
+		const lease = tryAcquireSessionLease("s-leased");
+		expect(lease).not.toBeNull();
+		try {
+			await expect(fx.service.delete("s-leased", entry!.revision)).rejects.toMatchObject({
+				code: "unsupported",
+				message: expect.stringContaining("another process"),
+			});
+			// The file is untouched while the lease is held.
+			expect(await Bun.file(path.join(fx.sessionDir, "s-leased.jsonl")).exists()).toBe(true);
+		} finally {
+			lease!.release();
+		}
+		// With the lease released the same revision deletes cleanly.
+		await fx.service.delete("s-leased", entry!.revision);
+		expect((await fx.service.list()).map(session => session.sessionId)).toEqual([]);
+	});
+
+	test("rename of a hosted session that has not flushed to disk returns its in-memory summary", async () => {
+		const fx = await setup();
+		const liveSession = {
+			sessionManager: {
+				getSessionId: () => "s-unflushed",
+				getSessionName: () => "Fresh name",
+				getCwd: () => fx.cwd,
+			},
+			isDisposed: false,
+			isStreaming: false,
+			setSessionName: async () => true,
+		};
+		const service = new RpcSessionDirectoryService({
+			cwd: fx.cwd,
+			sessionDir: fx.sessionDir,
+			getSession: () => liveSession as never,
+		});
+		const renamed = await service.rename("s-unflushed", "Fresh name");
+		expect(renamed).toMatchObject({ sessionId: "s-unflushed", name: "Fresh name", current: true });
+		expect(renamed.sessionFile).toBeUndefined();
+		expect(typeof renamed.revision).toBe("string");
 	});
 });

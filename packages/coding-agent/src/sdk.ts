@@ -2889,7 +2889,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// is unreachable, so a match on one likewise must not count: otherwise
 					// a disabled first selector suppresses the discovery refresh an enabled
 					// later selector still needs.
-					return resolved.model !== undefined;
+					return resolved.model !== undefined && !disabledProviders.has(resolved.model.provider);
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {

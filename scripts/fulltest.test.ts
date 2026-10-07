@@ -47,6 +47,7 @@ describe("resolveForkTestBatches", () => {
 				"packages/coding-agent/src/main.ts",
 				"packages/coding-agent/test/team/controller.test.ts",
 				"packages/coding-agent/test/wiki-tool.test.ts",
+				"packages/coding-agent/src/edit/auto-repair.test.ts",
 				"packages/tui/test/fork-default-keybindings.test.ts",
 				"packages/utils/src/ptree.ts",
 				"docs-zh-CN/requirements/fork.md",
@@ -57,7 +58,7 @@ describe("resolveForkTestBatches", () => {
 		expect(batches).toEqual([
 			{
 				cwd: "packages/coding-agent",
-				files: ["test/team/controller.test.ts", "test/wiki-tool.test.ts"],
+				files: ["src/edit/auto-repair.test.ts", "test/team/controller.test.ts", "test/wiki-tool.test.ts"],
 			},
 			{ cwd: "packages/tui", files: ["test/fork-default-keybindings.test.ts"] },
 		]);

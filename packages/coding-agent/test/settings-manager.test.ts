@@ -433,7 +433,10 @@ describe("Settings", () => {
 			expect(await Bun.file(backupPath).text()).toBe(corrupted);
 		});
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"preserves a symlinked main config while atomically updating its target",
 			async () => {
@@ -450,7 +453,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"writes through a dangling symlink chain to the final target, preserving every link",
 			async () => {
@@ -474,7 +480,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"lands on the deepest resolved hop when an intermediate link vanishes mid-walk",
 			async () => {
@@ -514,7 +523,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"resolves a relative intermediate target against the link's physical parent, not a symlinked alias",
 			async () => {
@@ -551,7 +563,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"throws a bounded ELOOP when the chain turns cyclic after realpath reports ENOENT",
 			async () => {
@@ -770,7 +785,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"still pops correctly when a real child/.. was actually traversed",
 			async () => {
@@ -795,7 +813,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"does not mislocate when a dangling target ends in a trailing slash",
 			async () => {
@@ -818,7 +839,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"rejects with ENOTDIR when a trailing-slash target is created as a regular file mid-walk",
 			async () => {
@@ -912,7 +936,10 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows cannot create file symlinks without privilege, so this chain fixture cannot be built.
+		// Windows stays skipped entirely, not probe-gated like the portable
+		// symlink cases: besides needing privilege to build the chain, these
+		// assertions encode POSIX `..`/trailing-slash walk semantics that
+		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
 		it.skipIf(process.platform === "win32")(
 			"rejects with ENOTDIR when a trailing-slash target's directory is removed before the validation stat",
 			async () => {
