@@ -11,6 +11,10 @@
 - Marked `/team` proposals with synthesis-discovered hard-constraint violations as unavailable, and corrected adoption checks across commas, wrapped lines, negation, and explicit conditions.
 
 
+### Changed
+
+- Reduced memory retained after merging unchanged discovered and cached models ([#14252](https://github.com/can1357/oh-my-pi/pull/14252) by [@iliaal](https://github.com/iliaal)).
+
 ## [18.8.6] - 2026-10-08
 
 ### Added
