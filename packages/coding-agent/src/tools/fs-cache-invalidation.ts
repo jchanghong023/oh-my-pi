@@ -1,19 +1,21 @@
 import { invalidateFsScanCache } from "@oh-my-pi/pi-natives";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 
-/** Post-commit local filesystem changes (not pre-write diagnostic version bumps). */
-const mutationListeners = new Set<(paths: readonly string[]) => void>();
+/** Post-commit changes, or possible partial writes explicitly marked uncertain. */
+const mutationListeners = new Set<(paths: readonly string[], uncertaintyReason?: string) => void>();
 
-export function subscribeFsMutation(listener: (paths: readonly string[]) => void): () => void {
+export function subscribeFsMutation(
+	listener: (paths: readonly string[], uncertaintyReason?: string) => void,
+): () => void {
 	mutationListeners.add(listener);
 	return () => mutationListeners.delete(listener);
 }
 
-function notifyMutation(paths: readonly string[]): void {
+function notifyMutation(paths: readonly string[], uncertaintyReason?: string): void {
 	// A successful source mutation must never be reported as failed by indexing.
 	for (const listener of mutationListeners) {
 		try {
-			listener(paths);
+			listener(paths, uncertaintyReason);
 		} catch (error) {
 			logger.warn("Filesystem mutation observer failed after source change", { error: String(error) });
 		}
@@ -24,6 +26,12 @@ function notifyMutation(paths: readonly string[]): void {
 export function invalidateFsScanAfterWrites(paths: readonly string[]): void {
 	for (const path of paths) invalidateFsScanCache(path);
 	if (paths.length) notifyMutation(paths);
+}
+
+/** Failed multi-file writes may have committed only a subset of their candidates. */
+export function invalidateFsScanAfterUncertainWrites(paths: readonly string[], reason: string): void {
+	for (const path of paths) invalidateFsScanCache(path);
+	notifyMutation(paths, reason);
 }
 
 /**

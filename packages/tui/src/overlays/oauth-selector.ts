@@ -1,5 +1,5 @@
 import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import {
 	Container,
@@ -136,7 +136,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 	#hasSelectableAuth(providerId: string): boolean {
 		return this.#mode === "logout"
-			? this.#authStorage.credentials.has(providerId)
+			? this.#authStorage.credentials.has(getOAuthCredentialProvider(providerId))
 			: this.#authStorage.keys.source(providerId) !== undefined;
 	}
 

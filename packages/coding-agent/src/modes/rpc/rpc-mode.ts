@@ -1465,12 +1465,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	let clientDisconnected = false;
 	const loopController = new RpcLoopController(session, {
 		output: text => output({ type: "command_output", text }),
-		submit: async message => {
+		submit: async (message, current) => {
 			const command: RpcCommand = { type: "prompt", message };
 			inputGate.accept(command);
 			const ticket = promptResults.begin(undefined);
 			try {
-				const outcome = await dispatchOrderedUserInput(command, ticket, true);
+				const outcome = await dispatchOrderedUserInput(command, ticket, true, current);
 				if (outcome === "local") promptResults.completeLocal(ticket);
 				else if (outcome === "cancelled") promptResults.settle(ticket);
 			} catch (cause) {
@@ -1478,13 +1478,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				throw cause;
 			}
 		},
-		reset: async () => {
+		reset: async current => {
 			const generation = session.sessionGeneration;
 			return sessionChangeGate.enqueue(async () => {
-				if (clientDisconnected || !loopController.enabled || generation !== session.sessionGeneration) return false;
+				if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
 				await beginModeSessionChange(true);
 				let changed = false;
 				try {
+					if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
 					changed = await session.newSession();
 					if (changed) subagentRegistry?.clear();
 					return changed;
@@ -1955,11 +1956,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		command: OrderedUserInput,
 		ticket: RpcPromptTicket | undefined,
 		loopSubmission = false,
+		continuationCurrent?: () => boolean,
 	): Promise<OrderedInputOutcome> =>
 		inputGate.enqueue(async () => {
 			let sessionId = session.sessionId;
 			const isCurrent = () =>
-				inputGate.isCurrent(command) && !shutdownState.requested && session.sessionId === sessionId;
+				inputGate.isCurrent(command) &&
+				!shutdownState.requested &&
+				session.sessionId === sessionId &&
+				continuationCurrent?.() !== false;
 			if (!isCurrent()) return "cancelled";
 			let text = command.message;
 			let images = command.images;

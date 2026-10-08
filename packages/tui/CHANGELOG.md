@@ -5,6 +5,7 @@
 ### Fixed
 
 - Kept box-composer status text within the editor border at startup and aligned overflow lines in narrow shape previews.
+- Kept alias login providers available in the logout picker when their credentials are stored under the shared provider.
 
 
 ## [18.8.6] - 2026-10-08

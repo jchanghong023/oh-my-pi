@@ -14,10 +14,10 @@ import { cfgLoopConditionTimeoutMs, cfgLoopMode } from "../settings";
 
 export interface RpcLoopOptions {
 	output(text: string): void;
-	/** Re-enter the host's normal prompt pipeline without capturing automatic input. */
-	submit(text: string): Promise<void>;
+	/** Re-enter the host pipeline; recheck current at admission after any input-gate wait. */
+	submit(text: string, current: () => boolean): Promise<void>;
 	/** Use the host's session-change hooks, preserving this loop for its own reset. */
-	reset(): Promise<boolean | void>;
+	reset(current: () => boolean): Promise<boolean | void>;
 	onContinuationDropped(): void;
 	/** A plan approval or another host-owned operation may hold automatic turns. */
 	continuationAllowed?(): boolean;
@@ -228,7 +228,7 @@ export class RpcLoopController {
 			if (action === "compact") {
 				await this.#session.compact();
 			} else if (action === "reset") {
-				const reset = await this.#options.reset();
+				const reset = await this.#options.reset(() => this.#current(generation, prompt));
 				if (reset === false) {
 					if (generation === this.#generation) this.#disable("Loop reset was cancelled. Loop mode disabled.");
 					return;
@@ -240,7 +240,7 @@ export class RpcLoopController {
 			// The submission claims the session synchronously. A following agent_end can
 			// then schedule its own continuation, including skills submitted inline.
 			this.#scheduled = false;
-			await this.#options.submit(prompt);
+			await this.#options.submit(prompt, () => this.#current(generation, prompt));
 		} finally {
 			if (generation === this.#generation) {
 				this.#scheduled = false;

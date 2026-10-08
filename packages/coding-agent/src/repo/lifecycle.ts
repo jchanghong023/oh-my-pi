@@ -26,7 +26,7 @@ export class RepoLifecycle {
 	/** Attach at session startup; only an already-existing database receives hints. */
 	start(): void {
 		if (this.#disposed || this.#unsubscribe) return;
-		this.#unsubscribe = subscribeFsMutation(paths => this.#changed(paths));
+		this.#unsubscribe = subscribeFsMutation((paths, uncertaintyReason) => this.#changed(paths, uncertaintyReason));
 		this.onSessionChange();
 	}
 
@@ -65,10 +65,12 @@ export class RepoLifecycle {
 		}
 	}
 
-	#changed(paths: readonly string[]): void {
+	#changed(paths: readonly string[], uncertaintyReason?: string): void {
 		this.#safely("filesystem mutation", () => {
 			const service = this.#current();
-			if (service?.storage.state().generation) service.markChanged(paths.filter(path.isAbsolute));
+			if (!service?.storage.state().generation) return;
+			service.markChanged(paths.filter(path.isAbsolute));
+			if (uncertaintyReason) service.markUncertain(uncertaintyReason);
 		});
 	}
 

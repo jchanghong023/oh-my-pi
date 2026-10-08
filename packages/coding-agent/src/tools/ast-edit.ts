@@ -24,7 +24,7 @@ import type { ToolSession } from ".";
 import { resolveToolTier, strictestApproval, truncateForPrompt } from "./approval";
 import { parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
-import { invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
+import { invalidateFsScanAfterUncertainWrites, invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
 import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 
 import { relativeSearchResultPath, resolveSearchResultPath, resolveToolSearchScope } from "./path-utils";
@@ -449,6 +449,15 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							maxFiles,
 							failOnParseError: false,
 							filesystem: new InternalUrlFilesystem({ context: applyContext, tier }).shellFilesystem(),
+						}).catch(error => {
+							// Native apply commits files sequentially and can reject after a partial write.
+							// Preview paths are candidates, not proof of success or an exhaustive
+							// post-preview scope: keep the index uncertain until full reconciliation.
+							invalidateFsScanAfterUncertainWrites(
+								result.fileChanges.map(change => resolveSearchResultPath(resolvedSearchPath, change.path)),
+								"AST edit apply failed; files may have been partially written; reconcile to verify coverage",
+							);
+							throw error;
 						});
 						const { errors: cappedApplyParseErrors, total: applyParseErrorsTotal } = capParseErrors(
 							applyResult.parseErrors,

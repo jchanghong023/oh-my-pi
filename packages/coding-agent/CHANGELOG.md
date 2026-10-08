@@ -9,6 +9,9 @@
 ### Fixed
 
 - Marked `/team` proposals with synthesis-discovered hard-constraint violations as unavailable, and corrected adoption checks across commas, wrapped lines, negation, and explicit conditions.
+- Preserved indented code followed by horizontal rules in Markdown document imports.
+- RPC loop repeats and resets queued behind command dialogs or session changes no longer run after Stop or a session switch.
+- Failed multi-file AST edits now refresh potentially changed repository-index paths and keep coverage unchecked until reconciliation.
 
 
 ### Changed

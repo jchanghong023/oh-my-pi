@@ -127,7 +127,7 @@ function parseHeading(
 	if (inFence) return undefined;
 	const atx = line.replace(/\r?\n$/, "").match(/^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/);
 	if (atx) return { level: atx[1].length, text: atx[2].trim(), setext: false };
-	if (nextLine !== undefined && line.trim() !== "" && /^ {0,3}(=+|-+)[ \t]*\r?\n?$/.test(nextLine)) {
+	if (nextLine !== undefined && /^ {0,3}\S/u.test(line) && /^ {0,3}(=+|-+)[ \t]*\r?\n?$/.test(nextLine)) {
 		return { level: nextLine.trimStart().startsWith("=") ? 1 : 2, text: line.trim(), setext: true };
 	}
 	return undefined;
@@ -174,7 +174,7 @@ const HEADING_MARKER = /^ {0,3}#{1,6}[ \t]?/gmu;
 // A setext heading's text line together with its underline — the ATX strips
 // cover only `#` lines, so this pair is what keeps setext heading-only
 // sections from being misread as content.
-const SETEXT_HEADING_PAIR = /^[^\n]*\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*\r?$/gmu;
+const SETEXT_HEADING_PAIR = /^ {0,3}\S[^\n]*\n {0,3}(?:=+|-+)[ \t]*\r?$/gmu;
 
 /**
  * What a stored section holds. Converter output (docx/pptx/xlsx) emits its
