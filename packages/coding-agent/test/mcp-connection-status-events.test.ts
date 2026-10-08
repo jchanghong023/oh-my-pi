@@ -32,6 +32,8 @@ describe("MCPManager connection status events", () => {
 		const invalid: MCPServerConfig = { type: "stdio", command: "" };
 
 		try {
+			// Window 0 waits for every server to settle; the default 250ms window
+			// races the fixture's process spawn and flakes on loaded CI runners.
 			const result = await manager.connectServers(
 				{ alpha: success, broken: invalid },
 				{},
@@ -65,6 +67,7 @@ describe("MCPManager connection status events", () => {
 				{ broken: { type: "stdio", command: "" } },
 				{ broken: { provider: "codex", providerName: "Codex", path: configPath, level: "user" } },
 				event => events.push(event),
+				0,
 			);
 			expect(result.errors.get("broken")).toBe(error);
 			expect(events).toEqual([
