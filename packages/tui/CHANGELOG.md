@@ -9,6 +9,11 @@
 - Kept alias login providers available in the logout picker when their credentials are stored under the shared provider.
 
 
+### Fixed
+
+- Reduced memory retained by discarded TSP images and previews ([#14336](https://github.com/can1357/oh-my-pi/pull/14336) by [@iliaal](https://github.com/iliaal)).
+- Fixed startup capability probes printing as text in the prompt (e.g. `25a1;stsp;q;{…}pppppp`) on terminals that cannot parse them, such as macOS Terminal.app.
+
 ## [18.8.6] - 2026-10-08
 
 ### Changed

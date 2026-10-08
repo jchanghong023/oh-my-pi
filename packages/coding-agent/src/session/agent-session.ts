@@ -11191,6 +11191,9 @@ export class AgentSession implements SettingsScope {
 		// inference and queueing output nobody reads. Abort the request ourselves when
 		// we stop consuming it, without touching the caller's signal.
 		const streamAbort = new AbortController();
+		const sideSessionId = args.conversationKey
+			? `${cacheSessionId}:side:conversation:${args.conversationKey}`
+			: `${cacheSessionId}:side:${Snowflake.next()}`;
 		const options = this.prepareSimpleStreamOptions(
 			{
 				apiKey: this.#modelRegistry.resolver(model, cacheSessionId),
@@ -11200,9 +11203,7 @@ export class AgentSession implements SettingsScope {
 				// stable, but isolate provider routing from the main conversation.
 				// Serialized BTW follow-ups reuse a topic-specific lineage; standalone
 				// side requests retain their unique request lineage.
-				sessionId: args.conversationKey
-					? `${cacheSessionId}:side:conversation:${args.conversationKey}`
-					: `${cacheSessionId}:side:${Snowflake.next()}`,
+				sessionId: sideSessionId,
 				promptCacheKey: this.agent.promptCacheKey ?? this.agent.sessionId,
 				preferWebsockets: this.preferWebsockets,
 				providerSessionState: this.#providerSessionState,
@@ -11224,8 +11225,8 @@ export class AgentSession implements SettingsScope {
 		let emittedReplyText = "";
 		let assistantMessage: AssistantMessage | undefined;
 		assertEphemeralTurnReady();
-		const stream = await this.#sideStreamFn(model, context, options);
 		try {
+			const stream = await this.#sideStreamFn(model, context, options);
 			for await (const event of stream) {
 				if (event.type === "text_delta") {
 					providerReplyText += event.delta;
@@ -11260,6 +11261,16 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			streamAbort.abort();
 			throw error;
+		} finally {
+			if (!args.conversationKey) {
+				for (const [providerKey, state] of this.#providerSessionState) {
+					try {
+						state.releaseSession?.(sideSessionId);
+					} catch (error) {
+						logger.warn("Failed to release side request provider state", { providerKey, error: String(error) });
+					}
+				}
+			}
 		}
 
 		if (!assistantMessage) {
