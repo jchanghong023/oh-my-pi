@@ -64,6 +64,8 @@ describe("shared skill registry commands", () => {
 		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skills-"));
 		project = path.join(root, "project");
 		await fs.mkdir(path.join(project, ".git"), { recursive: true });
+		// Anchor registry discovery inside this fixture, not an ancestor's .omp.
+		await fs.mkdir(path.join(project, ".omp"));
 		setAgentDir(path.join(root, "agent"));
 		const first = packageVersion("1.0.0");
 		registry = {
@@ -134,7 +136,7 @@ describe("shared skill registry commands", () => {
 		expect(clients[0]!.search).toHaveBeenCalledWith("shared");
 		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({ consumed: true });
 		expect(confirm).toHaveBeenCalledTimes(1);
-		expect(await readSkillsManifest(path.join(project, ".omp", "skills.json"))).toEqual({
+		expect(await readSkillsManifest(path.join(project, ".omp", "skills.json")), output.join("\n")).toEqual({
 			skills: { [PACKAGE]: "^1.0.0" },
 		});
 		expect(

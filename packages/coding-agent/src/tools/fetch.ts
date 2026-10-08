@@ -684,6 +684,7 @@ export async function renderHtmlToText(
 		userSignal?.throwIfAborted();
 		try {
 			const rendered = await runners[method]();
+			userSignal?.throwIfAborted();
 			if (!rendered) continue;
 			const content = stripDataUriImages(rendered);
 			if (content.trim().length <= 100) continue;

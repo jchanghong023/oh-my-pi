@@ -78,11 +78,11 @@ const SESSION_LIST_MAX_WORKERS = 16;
  * Memoizes {@link scanSessionFile} results keyed by stat identity so listing
  * refreshes (resume picker opens, startup recent-sessions, cross-project
  * scans) skip the open+read+parse for unchanged files. The `statSync` still
- * runs on every scan — it IS the invalidation check: a hit requires both
- * `mtimeMs` and `size` to match. This covers the two mutation paths:
+ * runs on every scan — it IS the invalidation check: a hit requires
+ * `mtimeMs`, `size`, and (when available) `ctimeMs` to match.
  * - streaming appends grow `size` (and bump `mtimeMs`);
- * - `updateSessionTitle` rewrites the fixed-width title slot in place via
- *   `writeSync`, which leaves `size` unchanged but updates `mtimeMs`.
+ * - title updates change `mtimeMs` without growing the fixed-width slot;
+ * - same-size replacements can retain `mtimeMs`, but change `ctimeMs`.
  * Negative results (unparseable files) are cached too, as `undefined` info.
  * Entries are small header objects, so a generous cap is cheap.
  */
@@ -90,6 +90,7 @@ const SESSION_SCAN_CACHE_MAX = 4096;
 
 interface SessionScanCacheEntry {
 	mtimeMs: number;
+	ctimeMs?: number;
 	size: number;
 	info: SessionInfo | undefined;
 }
@@ -416,7 +417,7 @@ async function scanSessionFile(
 	// two variants are cached under distinct keys.
 	const cacheKey = withStatus ? `s\0${file}` : `h\0${file}`;
 	const cached = cache.get(cacheKey);
-	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs && cached.size === stat.size) {
 		return cached.info ? { ...cached.info } : undefined;
 	}
 	try {
@@ -431,7 +432,7 @@ async function scanSessionFile(
 		if (!header) {
 			// Cache the negative result too: an unparseable file stays unparseable
 			// until its stat identity changes.
-			cache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, info: undefined });
+			cache.set(cacheKey, { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size, info: undefined });
 			return undefined;
 		}
 
@@ -497,7 +498,12 @@ async function scanSessionFile(
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.
-		cache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, info: { ...info } });
+		cache.set(cacheKey, {
+			mtimeMs: stat.mtimeMs,
+			ctimeMs: stat.ctimeMs,
+			size: stat.size,
+			info: { ...info },
+		});
 		return info;
 	} catch {
 		return undefined;

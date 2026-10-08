@@ -56,6 +56,8 @@ export interface DocsSectionHit {
 	lineEnd: number;
 	/** Full stored Markdown of the section; search is the content, not a pointer. */
 	text: string;
+	/** Context-aware shape; a chunk inside fenced code is always content. */
+	shape: "stub" | "heading-only" | "content";
 	rank: number;
 }
 

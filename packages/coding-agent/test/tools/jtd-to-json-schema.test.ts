@@ -61,7 +61,7 @@ describe("jtdToJsonSchema", () => {
 		expect(converted.$defs["my type"]).toEqual({ type: "boolean" });
 		expect(converted.properties.prototypeName.$ref).toBe("#/$defs/__proto__");
 		expect(converted.properties.pointerName.$ref).toBe("#/$defs/foo~1bar~0baz");
-		expect(converted.properties.spacedName.$ref).toBe("#/$defs/my type");
+		expect(converted.properties.spacedName.$ref).toBe("#/$defs/my%20type");
 	});
 
 	it("converts definitions for a shared primitive root without dangling refs", () => {

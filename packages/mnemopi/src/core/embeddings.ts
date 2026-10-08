@@ -3,7 +3,6 @@ import * as fsp from "node:fs/promises";
 import * as nodePath from "node:path";
 import { type ApiKey, getOpenRouterHeaders, withAuth } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	$env,
 	$flag,
@@ -14,6 +13,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { EmbeddingModel } from "fastembed";
+import { isOpenRouterEmbeddingUrl } from "../config";
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -278,7 +278,7 @@ export function isApiModel(modelName: string): boolean {
 	}
 	const active = activeEmbeddingOptions();
 	const baseUrl = active?.apiUrl ?? ($env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
-	if (baseUrl !== undefined && baseUrl !== "" && !hostMatchesUrl(baseUrl, "openrouter")) {
+	if (baseUrl !== undefined && baseUrl !== "" && !isOpenRouterEmbeddingUrl(baseUrl)) {
 		return true;
 	}
 	return $flag("MNEMOPI_EMBEDDINGS_VIA_API");
@@ -373,7 +373,7 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 
 async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
 	const baseUrl = embeddingBaseUrl();
-	const isCustom = !hostMatchesUrl(baseUrl, "openrouter");
+	const isCustom = !isOpenRouterEmbeddingUrl(baseUrl);
 	const apiKey = embeddingApiKey();
 	if (!isCustom && !embeddingKeyConfigured(apiKey)) {
 		return null;
@@ -479,7 +479,7 @@ export async function available(): Promise<boolean> {
 	}
 	if (isApiModel(defaultModel())) {
 		const baseUrl = active?.apiUrl ?? ($env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
-		if (baseUrl !== undefined && baseUrl !== "" && !hostMatchesUrl(baseUrl, "openrouter")) {
+		if (baseUrl !== undefined && baseUrl !== "" && !isOpenRouterEmbeddingUrl(baseUrl)) {
 			return true;
 		}
 		return embeddingKeyConfigured();

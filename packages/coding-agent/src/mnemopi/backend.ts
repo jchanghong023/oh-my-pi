@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import * as path from "node:path";
 import { type ApiKeyResolver, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isOpenRouterEmbeddingUrl } from "@oh-my-pi/pi-mnemopi/config";
 import type { Mnemopi } from "@oh-my-pi/pi-mnemopi";
 import type { MnemopiLlmCompleteOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
@@ -525,7 +525,7 @@ async function openrouterKeyResolver(
 	sessionId: string,
 	baseUrl: string | undefined,
 ): Promise<ApiKeyResolver | undefined> {
-	if (baseUrl !== undefined && !hostMatchesUrl(baseUrl, "openrouter")) return undefined;
+	if (baseUrl !== undefined && !isOpenRouterEmbeddingUrl(baseUrl)) return undefined;
 	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
 	if (key === undefined || key === "") return undefined;
 	return modelRegistry.resolver("openrouter", { sessionId });

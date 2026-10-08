@@ -11,6 +11,7 @@ import type {
 	TeamProposalRecord,
 	TeamProposalOutput,
 	TeamReviewOutput,
+	TeamRevisionOutput,
 	TeamRole,
 } from "./types";
 
@@ -75,6 +76,11 @@ export function buildReviewTask(args: {
 	round: number;
 	recheck: boolean;
 	unresolvedBlocking?: readonly string[];
+	recheckContext?: {
+		previousProposal: TeamProposalOutput;
+		revision: TeamRevisionOutput;
+		reviews: readonly TeamReviewOutput[];
+	};
 }): string {
 	return renderTask(promptTemplates.reviewer.task, {
 		...args,

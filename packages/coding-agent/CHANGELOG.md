@@ -8,6 +8,24 @@
 
 ### Fixed
 
+- Kept document-index migrations responsive when very long lines span many chunks.
+- Kept post-paint model discovery cache-only in offline sessions with an already-resolved explicit model selector.
+- Rejected report appends during session transitions so they cannot land in an outgoing transcript or leak into new live context.
+- Restored default Codex user-skill discovery before settings initialization.
+- Refreshed cached session titles after another process rewrites a session without changing its file size or modification time.
+- Kept cancelled reader-mode fetches from returning partial output as a successful result.
+- Preserved explicit embedding gateways and environment credentials instead of overriding them with company defaults or managed OpenRouter credentials.
+- Removed missing descendant files from repository indexes after a directory is replaced by a file, and preserved case-sensitive literal directory filters.
+- Preserved reserved company and ZCode model catalogs after OAuth extensions project the full model catalog.
+- Rejected ordered RPC input after disconnects or stale transcript generations, including sessions with pinned provider identities, while preserving command-owned session rollover.
+- Preserved JTD additional-property schemas alongside definitions and correctly resolved URI-encoded definition references.
+- Re-invalidated repository coverage when Git mutations finish after an in-flight reconciliation.
+- Kept offline model-role defaults from selecting a disabled company provider, preserving configured available fallback models.
+- Kept fresh `/team` recheckers informed of earlier proposals, rejected revisions, evidence, and review history.
+- Detected contradictory `/team` adoption recommendations even when proposal labels use Markdown formatting.
+- Isolated `/team` sessions from peer agent messages and history while retaining access to their own transcript.
+- Preserved fenced-code continuation text that resembles converter headings in wiki results.
+- Restored literal-code lookup from stored document indexes without the source directory, preserving BOM, overlap, and fence context during migration.
 - Marked `/team` proposals with synthesis-discovered hard-constraint violations as unavailable, and corrected adoption checks across commas, wrapped lines, negation, and explicit conditions.
 - Preserved indented code followed by horizontal rules in Markdown document imports.
 - RPC loop repeats and resets queued behind command dialogs or session changes no longer run after Stop or a session switch.

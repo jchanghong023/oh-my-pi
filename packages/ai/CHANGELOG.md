@@ -5,6 +5,8 @@
 ### Fixed
 
 - Fixed schema references to definition names containing `/` or `~`, including an empty definition name.
+- Fixed schema validation and strict-mode conversion resolving percent-encoded definition references incorrectly.
+- Fixed root schema references retaining definition blocks in provider tool schemas.
 
 ### Fixed
 

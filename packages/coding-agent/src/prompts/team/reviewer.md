@@ -94,6 +94,20 @@
 {{else}}（无）{{/if}}
 
 {{#if recheck}}
+{{#if recheckContext}}
+## 修订前方案（用于比较受影响部分）
+
+{{{recheckContext.previousProposal.proposal}}}
+
+## 本轮修订说明、逐项回应与复核标志
+
+{{{jsonStringify recheckContext.revision}}}
+
+## 已有审查记录（含问题、影响、依据与针对部分）
+
+{{{jsonStringify recheckContext.reviews}}}
+
+{{/if}}
 {{#if unresolvedBlocking.length}}
 ## 此前未解决的阻断问题
 

@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	type Env,
 	envBool,
@@ -119,11 +118,21 @@ export function embeddingMaxInputChars(env: Env = process.env): number {
 	return Math.max(0, envInt("MNEMOPI_EMBEDDING_MAX_INPUT_CHARS", 8192, env));
 }
 
+/** Only the official host uses OpenRouter's credential and availability rules. */
+export function isOpenRouterEmbeddingUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return false;
+	try {
+		return new URL(baseUrl).hostname === "openrouter.ai";
+	} catch {
+		return false;
+	}
+}
+
 export function isApiEmbeddingModel(model = embeddingModel(), env: Env = process.env): boolean {
 	if (model.startsWith("openai/") || model.includes("text-embedding") || model.startsWith("text-embedding"))
 		return true;
 	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	if (baseUrl && !hostMatchesUrl(baseUrl, "openrouter")) return true;
+	if (baseUrl && !isOpenRouterEmbeddingUrl(baseUrl)) return true;
 	return embeddingsViaApi(env);
 }
 
@@ -131,7 +140,7 @@ export function apiEmbeddingsAvailable(env: Env = process.env): boolean {
 	if (embeddingsDisabled(env)) return false;
 	if (!isApiEmbeddingModel(embeddingModel(env), env)) return false;
 	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	return Boolean(baseUrl && !hostMatchesUrl(baseUrl, "openrouter")) || Boolean(embeddingApiKey(env));
+	return Boolean(baseUrl && !isOpenRouterEmbeddingUrl(baseUrl)) || Boolean(embeddingApiKey(env));
 }
 
 export function workingMemoryMaxItems(env: Env = process.env): number {

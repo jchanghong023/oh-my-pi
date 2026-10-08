@@ -2494,14 +2494,20 @@ export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
 }
 
 /**
- * Resolve a JSON-pointer-style `$ref` against the root schema. Mirrors the
- * OpenAI SDK's `resolve_ref` helper: only local refs starting with `#/` are
- * supported, and each segment must dereference to a dictionary.
- * Cite: openai-python/src/openai/lib/_pydantic.py:118-129
+ * Resolve a URI-fragment JSON Pointer against the root schema. Each segment
+ * must dereference to a dictionary, as in the OpenAI SDK's `resolve_ref` helper.
+ * Percent decoding precedes JSON Pointer token unescaping (RFC 6901 §6).
  */
 function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
-	if (!ref.startsWith("#/")) return undefined;
-	const segments = ref.slice(2).split("/");
+	if (!ref.startsWith("#")) return undefined;
+	let pointer: string;
+	try {
+		pointer = decodeURIComponent(ref.slice(1));
+	} catch {
+		return undefined;
+	}
+	if (!pointer.startsWith("/")) return undefined;
+	const segments = pointer.slice(1).split("/");
 	let cursor: unknown = root;
 	for (const raw of segments) {
 		if (!isJsonObject(cursor)) return undefined;

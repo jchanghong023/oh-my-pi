@@ -1,5 +1,5 @@
 import type { ApiKeyResolver } from "@oh-my-pi/pi-ai";
-import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isOpenRouterEmbeddingUrl } from "@oh-my-pi/pi-mnemopi/config";
 import { envTruthy } from "@oh-my-pi/pi-mnemopi/util/env";
 import { COMPANY_RETRIEVAL_MODELS } from "../config/company-models";
 import { getCompanyConfig } from "../config/company-provider";
@@ -21,7 +21,7 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 	const model = cfgMnemopiEmbeddingModel.get(settings)?.trim();
 	const genericApiUrl = Bun.env.OPENROUTER_BASE_URL;
 	const genericUrlRoutesToApi =
-		genericApiUrl !== undefined && genericApiUrl !== "" && !hostMatchesUrl(genericApiUrl, "openrouter");
+		genericApiUrl !== undefined && genericApiUrl !== "" && !isOpenRouterEmbeddingUrl(genericApiUrl);
 	// Generic API keys are shared with other providers; only a custom generic URL or
 	// Mnemopi's explicit API-routing flag makes them embedding configuration here.
 	if (

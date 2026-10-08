@@ -52,9 +52,6 @@ const searchPages = new LRUCache<string, TextCandidate[]>({
 function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
 }
-function escapeLike(value: string): string {
-	return value.replace(/[\\%_]/g, "\\$&");
-}
 /** A .py file whose syntax tree carries errors is indexed without symbols and reported as a parse failure. */
 function pythonParseFailure(path: string): RepoFailure {
 	return { path, kind: "parse", message: "Python syntax tree contains parse errors; symbols omitted" };
@@ -670,8 +667,8 @@ export class RepoService {
 				}
 				let sql = `SELECT f.id,f.path,f.category,i.text FROM files f JOIN files_fts i ON i.rowid=f.id WHERE f.generation=? AND (${clauses.join(" OR ")})`;
 				if (options.path) {
-					sql += " AND (f.path=? OR f.path LIKE ? ESCAPE '\\')";
-					params.push(options.path, `${escapeLike(options.path.replace(/\/$/, ""))}/%`);
+					sql += " AND (f.path=? OR instr(f.path, ?) = 1)";
+					params.push(options.path, `${options.path.replace(/\/$/, "")}/`);
 				}
 				if (options.category) {
 					sql += " AND f.category=?";
@@ -744,8 +741,8 @@ export class RepoService {
 			const lowered = name.toLowerCase();
 			const params: (string | number)[] = [status.generation!, lowered, lowered];
 			if (options.path) {
-				sql += " AND (f.path=? OR f.path LIKE ? ESCAPE '\\')";
-				params.push(options.path, `${escapeLike(options.path.replace(/\/$/, ""))}/%`);
+				sql += " AND (f.path=? OR instr(f.path, ?) = 1)";
+				params.push(options.path, `${options.path.replace(/\/$/, "")}/`);
 			}
 			if (options.category) {
 				sql += " AND f.category=?";

@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
-import { endingMarkdownFence, normalizePlainText, type Fence } from "./markdown";
+import { markdownSectionContexts, normalizePlainText } from "./markdown";
 import type { DocsIndexSummary } from "./types";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 /** Indexes being built are named with this prefix and renamed once complete. */
 export const BUILDING_INDEX_PREFIX = "__building__";
@@ -114,31 +114,29 @@ export class DocsStorage {
 							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
 						);
 						const rows = this.db
-							.query(`SELECT s.id,s.index_id,s.document_id,d.relative_path,s.ordinal,s.heading_path,s.raw_markdown AS body
+							.query(`SELECT s.id,s.index_id,s.document_id documentId,d.relative_path,s.ordinal,s.heading_path,
+								s.byte_start byteStart,s.byte_end byteEnd,s.raw_markdown rawMarkdown
 						FROM sections s JOIN documents d ON d.id=s.document_id ORDER BY s.document_id,s.ordinal`)
 							.iterate() as Iterable<{
 							id: number;
 							index_id: number;
-							document_id: number;
+							documentId: number;
 							relative_path: string;
 							ordinal: number;
 							heading_path: string;
-							body: string;
+							byteStart: number;
+							byteEnd: number;
+							rawMarkdown: string;
 						}>;
-						let documentId: number | undefined;
-						let fence: Fence | undefined;
-						for (const row of rows) {
-							if (documentId !== row.document_id) fence = undefined;
-							documentId = row.document_id;
+						for (const { section: row, fencePrefix } of markdownSectionContexts(rows)) {
 							insert.run(
 								row.id,
 								row.id,
 								row.index_id,
 								row.ordinal === 0 ? normalizeFts(row.relative_path) : "",
 								normalizeFts(row.heading_path),
-								normalizeFts(normalizePlainText(row.body, fence && fence.marker.repeat(fence.length))),
+								normalizeFts(normalizePlainText(row.rawMarkdown, fencePrefix)),
 							);
-							fence = endingMarkdownFence(row.body, fence);
 						}
 					}
 					for (const table of ["evidence", "entity_aliases", "assertions", "relations", "entities"])

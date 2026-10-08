@@ -302,8 +302,8 @@ describe("company embedding defaults priority", () => {
 		expect(result.forcedApiRouting).toBeUndefined();
 		expect(result.genericEnvDefaults).toBeUndefined();
 		expect(result.genericEnvModel).toBe("intfloat/multilingual-e5-large");
-		expect(result.genericEnvUrl).toBeUndefined();
-		expect(result.genericEnvKey).toBeUndefined();
+		expect(result.genericEnvUrl).toBe(`${result.endpoint}/generic/v1`);
+		expect(result.genericEnvKey).toBe("explicit-openrouter-key");
 
 		expect(result.envModelForeign).toBeUndefined();
 		expect(result.configuredVariant).toBeUndefined();

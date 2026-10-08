@@ -31,6 +31,7 @@ import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-co
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
+import type { ModelRefreshStrategy } from "@oh-my-pi/pi-catalog/model-manager";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
@@ -2826,8 +2827,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			options.offline && (options.modelPatternSource === "scope" || deferredModelPatterns.length === 0)
 				? "offline"
 				: "online-if-uncached";
-		const startRuntimeDiscovery = (): Promise<void> => {
-			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(deferredDiscoveryStrategy).catch(error => {
+		const startRuntimeDiscovery = (
+			strategy: ModelRefreshStrategy = options.offline ? "offline" : "online-if-uncached",
+		): Promise<void> => {
+			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(strategy).catch(error => {
 				logger.warn("runtime provider discovery failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -2921,7 +2924,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// exist to fetch from. By then runtime managers short-circuit on the
 			// fresh cache written by the awaited pass, closing the double-fetch
 			// window.
-			await logger.time("resolveModelDiscoveryDeferredRetry", startRuntimeDiscovery);
+			await logger.time("resolveModelDiscoveryDeferredRetry", () =>
+				startRuntimeDiscovery(deferredDiscoveryStrategy),
+			);
 			const matchPreferences = getModelMatchPreferences(settings);
 			const disabledProviders = new Set(cfgDisabledProviders.get(settings));
 			const runtimeResolved = deferredModelPatterns.some(pattern =>

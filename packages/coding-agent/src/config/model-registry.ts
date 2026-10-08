@@ -1094,7 +1094,9 @@ export class ModelRegistry {
 				this.#warnModelModifierFailure(providerName, error instanceof Error ? error.message : String(error));
 			}
 		}
-		return projected;
+		// Whole-catalog hooks run after the override projection, so enforce the
+		// reserved lanes again before exposing their output to model selectors.
+		return this.#withRuntimeSyntheticModels(projected);
 	}
 
 	/**

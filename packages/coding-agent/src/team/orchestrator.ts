@@ -359,6 +359,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					emitProgress("revision", `阶段四：修订与复核（${record.label} 修订失败）`);
 					break; // conservative: unresolved state stands as-is
 				}
+				const previousProposal = record.latestProposal!;
 				record.revision = revision;
 				if (revision.revisedProposal.trim())
 					record.latestProposal = { ...record.latestProposal!, proposal: revision.revisedProposal };
@@ -376,6 +377,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 							round,
 							recheck: true,
 							unresolvedBlocking: record.unresolvedBlocking,
+							recheckContext: { previousProposal, revision, reviews: record.reviews },
 						}),
 						schema: TEAM_REVIEW_SCHEMA,
 					});

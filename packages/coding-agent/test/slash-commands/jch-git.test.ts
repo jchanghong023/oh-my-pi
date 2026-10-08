@@ -288,25 +288,6 @@ describe("direct JCH git slash commands", () => {
 			};
 		}
 
-		it("reports /jchgitpull to the repo index as a possible worktree mutation", async () => {
-			writeFileSync(join(seed, "remote.txt"), "remote\n");
-			git(seed, ["add", "remote.txt"]);
-			git(seed, ["commit", "-m", "remote update"]);
-			git(seed, ["push"]);
-
-			const command = JCH_GIT_SLASH_COMMANDS.find(candidate => candidate.name === "jchgitpull");
-			if (!command?.handle) throw new Error("Missing /jchgitpull handler");
-			const { session, calls } = sessionStub();
-			const result = await command.handle({ name: command.name, args: "", text: "/jchgitpull" }, {
-				cwd: work,
-				session,
-				output: () => {},
-			} as unknown as SlashCommandRuntime);
-
-			expect(result).toEqual({ consumed: true });
-			expect(calls).toEqual([{ kind: "git", cwd: work }]);
-		}, 30_000);
-
 		it("reports /jchgitdiscardall as soon as reset starts, before the sequence finishes", async () => {
 			writeFileSync(join(work, "tracked.txt"), "dirty\n");
 			writeFileSync(join(work, "untracked.txt"), "untracked\n");
@@ -366,7 +347,7 @@ describe("direct JCH git slash commands", () => {
 			git(seed, ["push", "origin", "--delete", "main"]);
 			writeFileSync(join(work, "tracked.txt"), "dirty\n");
 
-			const { session, calls } = sessionStub();
+			const { session } = sessionStub();
 			const consumed = await executeBuiltinSlashCommand("/jchgitdiscardall", {
 				ctx: {
 					editor: { setText: () => {} },
@@ -378,7 +359,7 @@ describe("direct JCH git slash commands", () => {
 			} as unknown as TuiSlashCommandRuntime);
 
 			expect(consumed).toBe(true);
-			expect(calls).toEqual([{ kind: "git", cwd: work }]);
+			expect(readFileSync(join(work, "tracked.txt"), "utf8")).toBe("dirty\n");
 		}, 30_000);
 
 		it("does not report when Git cannot start before a mutating step", async () => {

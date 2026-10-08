@@ -320,6 +320,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {
 		if (isCurrentFullRoute(url)) return null;
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
+			throw new Error(
+				"Cross-agent history lookups are disabled in this session; only history://current/full is caller-bound.",
+			);
+		}
 		const agentId = url.rawHost || url.hostname;
 		if (!agentId) return null;
 		const { ref, preferredArtifactDir } = await this.#lookup(agentId, context);
@@ -389,6 +394,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	}
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		if (isCurrentFullRoute(url)) return this.#resolveCurrentFull(url, context);
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
+			throw new Error(
+				"Cross-agent history lookups are disabled in this session; only history://current/full is caller-bound.",
+			);
+		}
 		const agentId = url.rawHost || url.hostname;
 		if (!agentId) {
 			const { visible, preferredArtifactDir } = await this.#roster(context);
@@ -508,7 +518,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		return `${lines.join("\n")}\n`;
 	}
 
-	async complete(): Promise<UrlCompletion[]> {
+	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) return [];
 		const completions: UrlCompletion[] = [];
 		const seen = new Set<string>();
 		for (const ref of AgentRegistry.global().list()) {

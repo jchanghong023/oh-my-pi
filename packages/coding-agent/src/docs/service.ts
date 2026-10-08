@@ -1,6 +1,12 @@
 import * as path from "node:path";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
-import { enumerateMarkdownFiles, normalizePlainText, readMarkdownDocument, sectionShape } from "./markdown";
+import {
+	enumerateMarkdownFiles,
+	markdownSectionContexts,
+	normalizePlainText,
+	readMarkdownDocument,
+	sectionShape,
+} from "./markdown";
 import { BUILDING_INDEX_PREFIX, DocsStorage, normalizeFts } from "./storage";
 import type {
 	DocsBuildResult,
@@ -175,8 +181,7 @@ function* candidateWindows(first: number): Generator<number> {
 interface RankedRow {
 	row: Record<string, unknown>;
 	literalCount: number;
-	stub: boolean;
-	headingOnly: boolean;
+	shape: DocsSectionHit["shape"];
 	titlePhrase: boolean;
 	phrase: boolean;
 	bodyHash?: string;
@@ -194,6 +199,7 @@ function scoreCandidate(
 	patterns: readonly RegExp[],
 	phrase: RegExp,
 	loadFullText: (sectionId: number) => string | undefined,
+	loadShape: (row: Record<string, unknown>) => DocsSectionHit["shape"],
 ): RankedRow {
 	// Sections longer than the fetched prefix are re-judged on their full stored
 	// text: a phrase or complete term set past the prefix must still earn its
@@ -214,11 +220,12 @@ function scoreCandidate(
 	for (const term of patterns) {
 		if (term.test(raw) || term.test(plain)) literalCount++;
 	}
+	const shape = sectionShape(text);
+	const contextualShape = shape === "content" ? shape : loadShape(row);
 	return {
 		row,
 		literalCount,
-		stub: sectionShape(`${text}\n`) === "stub",
-		headingOnly: sectionShape(`${text}\n`) === "heading-only",
+		shape: contextualShape,
 		titlePhrase: phrase.test(title),
 		phrase: phrase.test(raw) || phrase.test(plain),
 		bodyHash: text.length > 200 ? new Bun.CryptoHasher("sha256").update(text).digest("hex") : undefined,
@@ -440,6 +447,16 @@ export class DocsService {
 		// Every wider window re-reads the rows the narrower one already scored, so
 		// each section is scored once and reused across the whole widening chain.
 		const scored = new Map<number, RankedRow>();
+		const documentShapes = new Map<number, Map<number, DocsSectionHit["shape"]>>();
+		const loadShape = (row: Record<string, unknown>): DocsSectionHit["shape"] => {
+			const documentId = row.document_id as number;
+			let shapes = documentShapes.get(documentId);
+			if (!shapes) {
+				shapes = this.#sectionShapes(documentId);
+				documentShapes.set(documentId, shapes);
+			}
+			return shapes.get(row.section_id as number) as DocsSectionHit["shape"];
+		};
 		const loadFullText = (sectionId: number): string | undefined =>
 			(
 				this.storage.db.query("SELECT raw_markdown FROM sections WHERE id=?").get(sectionId) as {
@@ -449,7 +466,7 @@ export class DocsService {
 		let entries: RankedRow[] = [];
 		for (const candidateLimit of candidateWindows(Math.min(CANDIDATE_WINDOW_MAX, limit * 3 + 50))) {
 			const candidates = this.#candidates(match, filter, candidateLimit);
-			const page = this.#fill(scored, candidates, patterns, phrase, loadFullText, limit);
+			const page = this.#fill(scored, candidates, patterns, phrase, loadFullText, loadShape, limit);
 			entries = page.entries;
 			if (page.readable >= limit || candidates.length < candidateLimit) break;
 		}
@@ -463,7 +480,7 @@ export class DocsService {
 		candidateLimit: number,
 	): Array<Record<string, unknown>> {
 		return this.storage.db
-			.query(`SELECT f.rowid section_id,i.name index_name,d.relative_path,d.sha256 document_hash,s.heading_path,s.line_start,s.line_end,
+			.query(`SELECT f.rowid section_id,s.document_id,i.name index_name,d.relative_path,d.sha256 document_hash,s.heading_path,s.line_start,s.line_end,
 			 substr(s.raw_markdown,1,${CANDIDATE_SNIPPET_CHARS}) snippet, length(s.raw_markdown) raw_len, bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
 			 FROM sections_fts f JOIN sections s ON s.id=f.rowid JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
 			 WHERE sections_fts MATCH ?${filter.sql} ORDER BY rank,s.id LIMIT ?`)
@@ -482,6 +499,7 @@ export class DocsService {
 		patterns: readonly RegExp[],
 		phrase: RegExp,
 		loadFullText: (sectionId: number) => string | undefined,
+		loadShape: (row: Record<string, unknown>) => DocsSectionHit["shape"],
 		limit: number,
 	): { entries: RankedRow[]; readable: number } {
 		const ranked: RankedRow[] = [];
@@ -489,7 +507,7 @@ export class DocsService {
 			const sectionId = row.section_id as number;
 			let entry = scored.get(sectionId);
 			if (entry === undefined) {
-				entry = scoreCandidate(row, patterns, phrase, loadFullText);
+				entry = scoreCandidate(row, patterns, phrase, loadFullText, loadShape);
 				scored.set(sectionId, entry);
 			}
 			ranked.push(entry);
@@ -513,7 +531,7 @@ export class DocsService {
 		const readable: RankedRow[] = [];
 		const repeated: RankedRow[] = [];
 		for (const entry of ranked) {
-			if (entry.stub) continue;
+			if (entry.shape === "stub") continue;
 			if (entry.bodyHash && seen.has(entry.bodyHash)) repeated.push(entry);
 			else {
 				readable.push(entry);
@@ -522,16 +540,19 @@ export class DocsService {
 		}
 		// Duplicate locators are useful, but must never take a slot away from
 		// distinct evidence. Widening likewise counts unique readable bodies.
-		const bodies = readable.filter(entry => !entry.headingOnly);
-		const headings = readable.filter(entry => entry.headingOnly);
-		const entries = [...bodies, ...headings, ...repeated, ...ranked.filter(entry => entry.stub)].slice(0, limit);
+		const bodies = readable.filter(entry => entry.shape === "content");
+		const headings = readable.filter(entry => entry.shape === "heading-only");
+		const entries = [...bodies, ...headings, ...repeated, ...ranked.filter(entry => entry.shape === "stub")].slice(
+			0,
+			limit,
+		);
 		return { entries, readable: Math.min(bodies.length, limit) };
 	}
 
 	/** Page rows as hits, with the stored Markdown loaded by id. */
 	#hits(page: RankedRow[]): DocsSectionHit[] {
 		const texts = this.#pageTexts(page.map(({ row }) => row.section_id as number));
-		return page.map(({ row }) => ({
+		return page.map(({ row, shape }) => ({
 			sectionId: row.section_id as number,
 			index: row.index_name as string,
 			documentHash: row.document_hash as string,
@@ -540,8 +561,27 @@ export class DocsService {
 			lineStart: row.line_start as number,
 			lineEnd: row.line_end as number,
 			text: texts.get(row.section_id as number) ?? (row.snippet as string),
+			shape,
 			rank: row.rank as number,
 		}));
+	}
+
+	/** Recover ambiguous heading-like shapes from their stored document context. */
+	#sectionShapes(documentId: number): Map<number, DocsSectionHit["shape"]> {
+		const rows = this.storage.db
+			.query(`SELECT id,document_id documentId,byte_start byteStart,byte_end byteEnd,raw_markdown rawMarkdown
+				FROM sections WHERE document_id=? ORDER BY ordinal`)
+			.iterate(documentId) as Iterable<{
+			id: number;
+			documentId: number;
+			byteStart: number;
+			byteEnd: number;
+			rawMarkdown: string;
+		}>;
+		const shapes = new Map<number, DocsSectionHit["shape"]>();
+		for (const { section, fencePrefix, continuesLine } of markdownSectionContexts(rows))
+			shapes.set(section.id, fencePrefix || continuesLine ? "content" : sectionShape(section.rawMarkdown));
+		return shapes;
 	}
 
 	/** Full Markdown for the sections on one page, keyed by section id. */

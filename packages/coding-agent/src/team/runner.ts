@@ -136,6 +136,13 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				sessionFile: lease.sessionFile,
 				persistArtifacts: !lease.temporary,
 				artifactsDir: lease.artifactsDir,
+				localProtocolOptions: {
+					getArtifactsDir: () => path.join(lease.artifactsDir, id),
+					getSessionId: () => id,
+					// agent:// and history:// are global cross-agent namespaces;
+					// disabling IRC messaging alone does not isolate their reads.
+					allowCrossAgentReads: false,
+				},
 				authStorage: deps.authStorage,
 				modelRegistry: deps.modelRegistry,
 				settings: deps.settings,

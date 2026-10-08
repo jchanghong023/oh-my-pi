@@ -45,10 +45,18 @@ class Importer {
 		if (ref === "#") {
 			target = this.#root;
 		} else {
-			const defsMatch = /^#\/(\$defs|definitions)\/(.+)$/.exec(ref);
+			if (!ref.startsWith("#")) throw new OmpTypeError(`unsupported $ref: ${ref}`);
+			let pointer: string;
+			try {
+				pointer = decodeURIComponent(ref.slice(1));
+			} catch {
+				throw new OmpTypeError(`unsupported $ref: ${ref}`);
+			}
+			const defsMatch = /^\/(\$defs|definitions)\/([^/]*)$/.exec(pointer);
 			if (defsMatch === null) throw new OmpTypeError(`unsupported $ref: ${ref}`);
 			const defs = this.#root[defsMatch[1]];
-			target = typeof defs === "object" && defs !== null ? (defs as JsonSchema)[defsMatch[2]] : undefined;
+			const name = defsMatch[2].replace(/~1/g, "/").replace(/~0/g, "~");
+			target = typeof defs === "object" && defs !== null ? (defs as JsonSchema)[name] : undefined;
 			if (target === undefined) throw new OmpTypeError(`unresolved $ref: ${ref}`);
 		}
 

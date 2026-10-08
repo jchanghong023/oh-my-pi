@@ -3018,7 +3018,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		};
 		const totalWidth = () => leftWidth + rightWidth + minimumGapWidth();
 
-		if (topFillWidth > 0) {
+		// A box with no content cells still moves its segments to the rows below the editor.
+		if (topFillWidth > 0 || layout === "box") {
 			// Truncate the session-name segment before dropping right segments —
 			// the title is the only elastic one on the right, and dropping it
 			// wholesale left narrow bars (and the ≤76-col composer previews)

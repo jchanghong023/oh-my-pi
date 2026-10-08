@@ -188,11 +188,11 @@ export class ChildProcess<In extends InMask = InMask> {
 	#stdoutStream: ReadableStream<Uint8Array> | undefined;
 	#stdoutExposed = false;
 	#openPipeReaders = 1;
-	// Set by attachTimeout() at the command deadline; untimed commands keep
+	// Set at a command deadline or explicit cancellation; normal commands keep
 	// complete EOF-based capture. Active pipe readers are cancelled at cutoff so
 	// their pending read() settles as done and partial output is kept.
 	#cutoff = false;
-	/** Readers of piped stdio; the timeout cancels them so pending reads settle. */
+	/** Readers of piped stdio; deadline/abort cancellation settles pending reads. */
 	#pipeReaders = new Set<{ cancel(reason?: unknown): Promise<void> }>();
 	#timeoutTimer?: NodeJS.Timeout;
 	#stderrStream?: ReadableStream<Uint8Array>;
@@ -345,6 +345,19 @@ export class ChildProcess<In extends InMask = InMask> {
 			// group leader; wait() still needs to report the later deadline.
 			if (this.proc.exitCode !== null) this.#exitReason = reason;
 		}
+		try {
+			this.#terminate(gracefulMs);
+		} finally {
+			if (reason?.aborted) {
+				// Dispatch tree termination before cancelling readers: open pipes
+				// are evidence that a dead leader's owned group is still alive.
+				this.#cutoff = true;
+				for (const reader of this.#pipeReaders) reader.cancel().catch(() => {});
+			}
+		}
+	}
+
+	#terminate(gracefulMs?: number): void {
 		// An AbortSignal can race a timeout after its hard subreaper sweep has
 		// started. Do not replace that sweep with a normal root termination: the
 		// root must stay alive until adopted descendants have been collected.
@@ -386,6 +399,9 @@ export class ChildProcess<In extends InMask = InMask> {
 			this.#terminating = Promise.resolve();
 			return;
 		}
+		// Without a retained Windows handle or a live owned process group,
+		// rediscovering a dead root by PID could target an unrelated process.
+		if (this.proc.exitCode !== null) return;
 		if (!this.proc.killed) {
 			const options =
 				gracefulMs === undefined
@@ -436,7 +452,7 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	/**
-	 * Read a pipe fully, stopping early only at an explicit command deadline.
+	 * Read a pipe fully, stopping early only at a command deadline or cancellation.
 	 */
 	async #readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 		this.#openPipeReaders++;

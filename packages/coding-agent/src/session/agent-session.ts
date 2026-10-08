@@ -8710,7 +8710,12 @@ export class AgentSession implements SettingsScope {
 			const sessionId = manager.getSessionId();
 			const assertCurrent = (): void => {
 				options?.signal?.throwIfAborted();
-				if (this.#isDisposed || generation !== this.#sessionGeneration || manager.getSessionId() !== sessionId) {
+				if (
+					this.#isDisposed ||
+					this.isSessionTransitioning ||
+					generation !== this.#sessionGeneration ||
+					manager.getSessionId() !== sessionId
+				) {
 					throw new Error("Session changed before the custom message was committed.");
 				}
 			};

@@ -2,7 +2,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { normalizePlainText, sectionShape, truncateHeading } from "../docs/markdown";
+import { normalizePlainText, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
 import type { DocsSectionHit } from "../docs/types";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
@@ -113,7 +113,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				// Structural labels (`#### Cell`) hold nothing the header line does not
 				// already carry. Indexes built before this rule keep them, so skip here;
 				// a heading that reads as a real phrase is content and stays.
-				const shape = sectionShape(section.text);
+				const shape = section.shape;
 				if (shape === "stub") continue;
 				const header = sectionHeader(bodies.length + 1, section);
 				// The same text often ships in several documents (attachment copies,

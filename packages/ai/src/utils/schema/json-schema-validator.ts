@@ -171,9 +171,16 @@ function decodePointerToken(token: string): string {
 
 function resolveLocalRef(root: unknown, ref: string): unknown | undefined {
 	if (ref === "#") return root;
-	if (!ref.startsWith("#/")) return undefined;
+	if (!ref.startsWith("#")) return undefined;
+	let pointer: string;
+	try {
+		pointer = decodeURIComponent(ref.slice(1));
+	} catch {
+		return undefined;
+	}
+	if (!pointer.startsWith("/")) return undefined;
 	let current: unknown = root;
-	for (const rawToken of ref.slice(2).split("/")) {
+	for (const rawToken of pointer.slice(1).split("/")) {
 		const token = decodePointerToken(rawToken);
 		if (!isRecord(current) && !Array.isArray(current)) return undefined;
 		current = (current as Record<string, unknown>)[token];

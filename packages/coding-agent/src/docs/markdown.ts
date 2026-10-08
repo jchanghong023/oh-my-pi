@@ -74,7 +74,10 @@ function parseFence(line: string): FenceMatch | undefined {
 }
 
 function nextFence(fence: Fence | undefined, line: string): Fence | undefined {
-	const match = parseFence(line);
+	return nextFenceMatch(fence, parseFence(line));
+}
+
+function nextFenceMatch(fence: Fence | undefined, match: FenceMatch | undefined): Fence | undefined {
 	if (!match) return fence;
 	if (!fence) return match.marker === "`" && match.trailing.includes("`") ? undefined : match;
 	return fence.marker === match.marker && match.length >= fence.length && /^[ \t]*$/.test(match.trailing)
@@ -87,6 +90,88 @@ export function endingMarkdownFence(markdown: string, initial?: Fence): Fence | 
 	let fence = initial;
 	for (const line of markdown.split(/\r?\n/)) fence = nextFence(fence, line);
 	return fence;
+}
+
+/** A split line only needs its delimiter run and info-string validity, not its text. */
+class MarkdownFenceScanner {
+	fence?: Fence;
+	continuesLine = false;
+	#spaces = 0;
+	#match?: FenceMatch;
+	#inInfo = false;
+	#invalid = false;
+	#carriageReturn = false;
+
+	append(source: string): void {
+		const parts = source.split("\n");
+		for (const [index, part] of parts.entries()) {
+			if (part.length > 0) this.continuesLine = true;
+			for (const character of part) {
+				if (this.#invalid) break;
+				if (this.#carriageReturn) {
+					this.#invalid = true;
+					break;
+				}
+				if (character === "\r") {
+					this.#carriageReturn = true;
+				} else if (!this.#match) {
+					if (character === " " && this.#spaces < 3) this.#spaces++;
+					else if (character === "`" || character === "~")
+						this.#match = { marker: character, length: 1, trailing: "" };
+					else this.#invalid = true;
+				} else if (!this.#inInfo && character === this.#match.marker) {
+					this.#match.length++;
+				} else {
+					this.#inInfo = true;
+					// Whitespace, ordinary info, and backtick-containing info are
+					// the only distinctions nextFenceMatch needs from the tail.
+					if (character === "`") this.#match.trailing = "`";
+					else if (character !== " " && character !== "\t" && this.#match.trailing === "")
+						this.#match.trailing = "x";
+				}
+			}
+			if (index === parts.length - 1) continue;
+			const match = !this.#invalid && this.#match && this.#match.length >= 3 ? this.#match : undefined;
+			this.fence = nextFenceMatch(this.fence, match);
+			this.continuesLine = false;
+			this.#spaces = 0;
+			this.#match = undefined;
+			this.#inInfo = false;
+			this.#invalid = false;
+			this.#carriageReturn = false;
+		}
+	}
+}
+
+/**
+ * Recover context at stored chunk boundaries without the source document.
+ * Long-line chunks overlap: scan only the prefix preceding the next chunk,
+ * and track unfinished-line state so fragments cannot become delimiters.
+ */
+export function* markdownSectionContexts<
+	T extends { documentId: number; byteStart: number; byteEnd: number; rawMarkdown: string },
+>(sections: Iterable<T>): Generator<{ section: T; fencePrefix?: string; continuesLine: boolean }> {
+	let previous: T | undefined;
+	let scanner = new MarkdownFenceScanner();
+	for (const section of sections) {
+		if (previous?.documentId === section.documentId) {
+			const source =
+				section.byteStart < previous.byteEnd
+					? Buffer.from(previous.rawMarkdown)
+							.subarray(0, section.byteStart - previous.byteStart)
+							.toString()
+					: previous.rawMarkdown;
+			scanner.append(previous.byteStart === 0 ? source.replace(/^\uFEFF/u, "") : source);
+		} else {
+			scanner = new MarkdownFenceScanner();
+		}
+		yield {
+			section,
+			fencePrefix: scanner.fence?.marker.repeat(scanner.fence.length),
+			continuesLine: scanner.continuesLine,
+		};
+		previous = section;
+	}
 }
 
 function sourceKind(relativePath: string): string {

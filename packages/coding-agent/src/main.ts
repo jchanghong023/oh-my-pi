@@ -1963,7 +1963,7 @@ export async function runRootCommand(
 			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
 			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-			if (getCompanyConfig()) {
+			if (getCompanyConfig() && !disabledProviderIds(settingsInstance).has(COMPANY_PROVIDER_ID)) {
 				settingsInstance.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
 			}
 		}

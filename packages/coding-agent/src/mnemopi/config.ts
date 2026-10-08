@@ -109,8 +109,14 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 			noEmbeddings: cfgMnemopiNoEmbeddings.get(settings),
 			debug: cfgMnemopiDebug.get(settings),
 			embeddingModel,
-			embeddingApiUrl: cfgMnemopiEmbeddingApiUrl.get(settings),
-			embeddingApiKey: cfgMnemopiEmbeddingApiKey.get(settings),
+			// Resolve env fallbacks before the backend considers managed credentials.
+			// Explicit settings (including empty strings) remain authoritative.
+			embeddingApiUrl:
+				cfgMnemopiEmbeddingApiUrl.get(settings) ??
+				(Bun.env.MNEMOPI_EMBEDDING_API_URL || Bun.env.OPENROUTER_BASE_URL || undefined),
+			embeddingApiKey:
+				cfgMnemopiEmbeddingApiKey.get(settings) ??
+				(Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined),
 			...getCompanyEmbeddingDefaults(settings),
 			llm:
 				llmMode === "remote"

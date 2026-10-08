@@ -6,6 +6,7 @@
  * When its text disagrees with the tracking, the tracking wins — an invalid
  * recommendation is dropped here with an explicit note.
  */
+import { stripInlineMarkdown } from "@oh-my-pi/pi-tui/overlays/plan-toc";
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
 
 /** Fixed closing contract, verbatim from docs-zh-CN/requirements/team.md §2.7. */
@@ -103,7 +104,7 @@ function synthesisBodyConflict(
 	proposals: readonly TeamProposalRecord[],
 ): string | undefined {
 	const body = synthesis.reportMarkdown;
-	if (body.includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
+	if (stripInlineMarkdown(body).includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	// Keep commas and wrapped lines: a label and its predicate may straddle
 	// either, as may an explicit adoption condition. Paragraphs still isolate claims.
 	const statements = body.split(/(?:[。！？；;.!?]|但是|但|而|却|\r?\n\s*\r?\n)/u);
@@ -112,7 +113,9 @@ function synthesisBodyConflict(
 		{ record, text: `${record.label}方案` },
 	]);
 	for (const statement of statements) {
-		const positiveClaims = statement
+		// Compare visible prose, not Markdown delimiters: `方案 **A**` names
+		// the same proposal as `方案 A` in the delivered report.
+		const positiveClaims = stripInlineMarkdown(statement)
 			.replace(/\s+/gu, "")
 			.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
 			.replace(

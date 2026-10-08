@@ -32,7 +32,7 @@ async function runGit(cwd: string, args: readonly string[], onStart?: () => void
 async function runGitSequence(
 	cwd: string,
 	steps: readonly GitStep[],
-	onMutationStart?: () => void,
+	onMutation?: () => void,
 ): Promise<GitSequenceResult> {
 	const output: string[] = [];
 	let mutationNotified = false;
@@ -42,7 +42,7 @@ async function runGitSequence(
 				if (!WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) return;
 				if (mutationNotified) return;
 				mutationNotified = true;
-				onMutationStart?.();
+				onMutation?.();
 			});
 			const text = formatGitOutput(result.stdout, result.stderr);
 			if (text) output.push(text);
@@ -55,6 +55,10 @@ async function runGitSequence(
 		return { ok: true, output: output.join("\n") || "Done." };
 	} catch (error) {
 		return { ok: false, output: formatError(error) };
+	} finally {
+		// A reconcile can finish while Git is still running. Invalidate again
+		// after settlement so later writes cannot leave that snapshot checked.
+		if (mutationNotified) onMutation?.();
 	}
 }
 

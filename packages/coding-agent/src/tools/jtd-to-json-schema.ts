@@ -93,7 +93,7 @@ function convertSchemaForm(schema: unknown): unknown {
 		const result: Record<string, unknown> = {
 			type: "object",
 			properties,
-			additionalProperties: false,
+			additionalProperties: "additionalProperties" in schema && schema.additionalProperties === true,
 		};
 
 		if (required.length > 0) {
@@ -130,10 +130,9 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
-		// `$defs` keys keep raw names and the in-repo $ref resolvers only decode
-		// `~0`/`~1` pointer tokens, so the name must not be percent-encoded.
+		// Escape the pointer token before encoding its URI-fragment representation.
 		const name = schema.ref.replace(/~/g, "~0").replace(/\//g, "~1");
-		return { $ref: `#/$defs/${name}` };
+		return { $ref: `#/$defs/${encodeURIComponent(name)}` };
 	}
 
 	// Empty form: {} → {} (accepts anything)
@@ -210,6 +209,9 @@ function isJTDDocument(schema: unknown): boolean {
 	if ("discriminator" in schema && typeof schema.discriminator !== "string") return false;
 	if ("nullable" in schema && typeof schema.nullable !== "boolean") return false;
 	if ("additionalProperties" in schema && typeof schema.additionalProperties !== "boolean") return false;
+	if ("additionalProperties" in schema && !("properties" in schema || "optionalProperties" in schema)) {
+		return false;
+	}
 	if ("elements" in schema && !isJTDDocument(schema.elements)) return false;
 	if ("values" in schema && !isJTDDocument(schema.values)) return false;
 

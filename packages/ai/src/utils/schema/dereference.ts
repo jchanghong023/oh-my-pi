@@ -17,7 +17,14 @@ import { isJsonObject, type JsonObject } from "./types";
  */
 function resolveLocalRef(ref: string, root: JsonObject): JsonObject | undefined {
 	// Only handle local refs: #/$defs/Name or #/definitions/Name
-	const match = /^#\/(\$defs|definitions)\/(.*)$/.exec(ref);
+	if (!ref.startsWith("#")) return undefined;
+	let pointer: string;
+	try {
+		pointer = decodeURIComponent(ref.slice(1));
+	} catch {
+		return undefined;
+	}
+	const match = /^\/(\$defs|definitions)\/([^/]*)$/.exec(pointer);
 	if (!match) return undefined;
 
 	const [, defsKey, name] = match;
@@ -50,7 +57,7 @@ function dereferenceNode(node: unknown, root: JsonObject, visiting: Set<string>)
 		// referencing node. In draft 2020-12 these are valid alongside $ref.
 		let hasSiblings = false;
 		for (const k in node) {
-			if (k !== "$ref") {
+			if (k !== "$ref" && k !== "$defs" && k !== "definitions") {
 				hasSiblings = true;
 				break;
 			}
@@ -58,6 +65,8 @@ function dereferenceNode(node: unknown, root: JsonObject, visiting: Set<string>)
 		if (!hasSiblings || !isJsonObject(inlined)) return inlined;
 		const merged: JsonObject = { ...inlined, ...node };
 		delete merged.$ref;
+		delete merged.$defs;
+		delete merged.definitions;
 		return merged;
 	}
 

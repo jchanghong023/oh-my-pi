@@ -160,6 +160,9 @@ export class AgentProtocolHandler implements ProtocolHandler {
 	 * `read`, which would skip the previous-run banner {@link resolve} adds.
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
+			throw new Error("Cross-agent output lookups are disabled in this session.");
+		}
 		const outputId = url.rawHost || url.hostname;
 		if (!outputId) throw new Error("agent:// URL requires an output ID: agent://<id>");
 		if (outputId === "all" || hasPathExtraction(url)) return null;
@@ -205,6 +208,9 @@ export class AgentProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
+			throw new Error("Cross-agent output lookups are disabled in this session.");
+		}
 		const outputId = url.rawHost || url.hostname;
 		if (outputId === "all") throw new Error("agent://all is write-only; use it to broadcast a message.");
 		if (!outputId) {
@@ -406,7 +412,8 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		return { foundPath, jsonPath, anyDirExists, availableIds };
 	}
 
-	async complete(): Promise<UrlCompletion[]> {
+	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
+		if (context?.localProtocolOptions?.allowCrossAgentReads === false) return [];
 		const ids = new Set<string>();
 		for (const dir of artifactsDirsFromRegistry()) {
 			let files: string[];

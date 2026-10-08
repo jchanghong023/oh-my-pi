@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Settled aborted stdout reads when orphaned descendants keep output pipes open, without rediscovering an exited process by its stale PID.
+- Preserved existing destination files when Windows archive symlink creation falls back to copying.
+- Preserved code literals in Markdown fences whose info strings contain Unicode line or paragraph separators.
 - Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
 - Fixed process-tree cleanup when callers consume stdout or a command is canceled or fails.
 - Released process cancellation listeners when stdout closes, even when callers never consume it.

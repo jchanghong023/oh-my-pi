@@ -28,6 +28,8 @@ import { formatByteSize } from "../utils/video";
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
 	getSessionId?: () => string | null;
+	/** False isolates cross-agent agent:// and history:// lookups; caller-bound current/full remains readable. */
+	allowCrossAgentReads?: boolean;
 }
 
 const WINDOWS_LOCAL_ROOT_MAX_CHARS = 180;

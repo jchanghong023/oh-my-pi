@@ -775,7 +775,8 @@ function splitTableRow(line: string): string[] {
 }
 
 function isFence(line: string): RegExpExecArray | null {
-	const match = /^ {0,3}(`{3,}|~{3,})(.*?)(?:\n|$)$/.exec(line);
+	// U+2028/U+2029 are info-string characters, not Markdown line endings.
+	const match = /^ {0,3}(`{3,}|~{3,})([^\n]*?)(?:\n|$)$/.exec(line);
 	// A backtick fence's info string cannot contain backticks. Reject it here
 	// for both block tokenization and paragraph interruption.
 	return match && match[1]!.startsWith("`") && match[2]!.includes("`") ? null : match;

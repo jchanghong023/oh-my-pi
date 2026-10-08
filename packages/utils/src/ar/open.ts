@@ -230,7 +230,9 @@ export async function extractArchive(
 				// Resolve through the archive, not the extraction order: this
 				// link may target another link that has not materialized yet.
 				const extracted = await archive.readFile(link.path);
-				await Bun.write(outputPath, extracted.bytes);
+				// Preserve symlink creation's exclusive destination semantics:
+				// never overwrite an existing file or follow an existing symlink.
+				await fs.writeFile(outputPath, extracted.bytes, { flag: "wx" });
 				const permissions = (extracted.mode ?? 0) & 0o777;
 				if (permissions) await fs.chmod(outputPath, permissions);
 			}

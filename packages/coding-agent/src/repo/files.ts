@@ -199,7 +199,8 @@ export async function readRepoFile(root: string, rel: string, signal?: AbortSign
 		} catch (error) {
 			signal?.throwIfAborted();
 			if ((error as Error).name === "AbortError") throw error;
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT" || code === "ENOTDIR") {
 				if (opened) continue;
 				return { missing: true };
 			}

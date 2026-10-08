@@ -1960,10 +1960,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	): Promise<OrderedInputOutcome> =>
 		inputGate.enqueue(async () => {
 			let sessionId = session.sessionId;
+			let sessionGeneration = session.sessionGeneration;
 			const isCurrent = () =>
 				inputGate.isCurrent(command) &&
+				!clientDisconnected &&
 				!shutdownState.requested &&
 				session.sessionId === sessionId &&
+				session.sessionGeneration === sessionGeneration &&
 				continuationCurrent?.() !== false;
 			if (!isCurrent()) return "cancelled";
 			let text = command.message;
@@ -2049,6 +2052,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 									) {
 										sessionId = nextId;
 										generation = nextGeneration;
+										sessionGeneration = nextGeneration;
 									}
 									await emitAvailableCommandsUpdate();
 								}
