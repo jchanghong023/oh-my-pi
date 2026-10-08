@@ -15,7 +15,7 @@
 * `packages/ai`、`packages/catalog`、`packages/agent`、`packages/tui`、`packages/natives`、`packages/utils`，以及 `packages/omptype`、`packages/stats`、`packages/wire`、`packages/mnemopi`、`packages/snapcompact`、`packages/collab-web`：模型接入、模型目录、agent 运行时、TUI、native 绑定与共享库。
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
-* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：仅含 fork 自有内容（需求目录与 `README.upstream.md` 对照快照），不维护翻译，不维护文档站点（见「中文文档」一节）。
+* `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：仅含 fork 自有内容（需求目录、公司内网新手指南与 `README.upstream.md` 对照快照），不维护翻译，不维护文档站点（见「中文文档」一节）。
 * `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
 
 子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
@@ -60,7 +60,7 @@
 * `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
 * `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
 
-同步 MUST 保留 `AGENTS.md`、同步 Skill、整个需求目录和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
+同步 MUST 保留 `AGENTS.md`、同步 Skill、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
 
 ## README 与上游同步
 
@@ -123,5 +123,5 @@
 ## 中文文档
 
 * `docs-zh-CN` 不维护翻译：上游 `docs` 的翻译文件已全部删除，后续同步不带入、不恢复；上游 `docs/` 的增删改不触发任何中文站维护。
-* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录与 `README.upstream.md` 对照快照。fork 不维护文档站点（VitePress 站点、GitHub Pages 发布与 `collab-web` 托管已于 2026-10-06 需求访谈后取消）。
+* `docs-zh-CN` 仅保留 fork 自有内容：`requirements/` 需求目录、[公司内网新手快速指南](docs-zh-CN/quick-start-intranet.md) 与 `README.upstream.md` 对照快照。新手指南按当前命令、快捷键和环境变量维护，需求范围见 `docs-zh-CN/requirements/fork.md`；它不作为第二份需求来源。fork 不维护文档站点（VitePress 站点、GitHub Pages 发布与 `collab-web` 托管已于 2026-10-06 需求访谈后取消）。
 * 代码 review 或对比上游差异时，只审查 `docs-zh-CN` 内的 fork 新增文档。
