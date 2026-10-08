@@ -567,6 +567,9 @@ describe("pickElectronTarget", () => {
 					"--force-device-scale-factor=2",
 					`--user-data-dir=${root}`,
 					`--remote-debugging-port=${port}`,
+					// Viewport coverage adopts a neutral page; browser first-run
+					// navigation must not race an unrelated tool navigation.
+					"about:blank",
 				],
 				{ stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 			);
@@ -580,7 +583,6 @@ describe("pickElectronTarget", () => {
 				const opened = await invoke({
 					action: "open",
 					name,
-					url: "data:text/html,<title>Viewport</title>",
 					app: { cdp_url: `http://127.0.0.1:${port}` },
 				});
 				const result = await invoke({

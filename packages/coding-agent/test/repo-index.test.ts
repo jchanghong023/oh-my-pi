@@ -137,7 +137,9 @@ describe("repository index with real SQLite and native Python parsing", () => {
 				output += new TextDecoder().decode(item.value);
 			}
 			reader.releaseLock();
-			child.kill();
+			// SIGTERM runs the shared cleanup handler only after the fixture's
+			// synchronous pause; SIGKILL exercises abrupt exit without finally.
+			child.kill("SIGKILL");
 			await child.exited;
 			expect((await service.status()).generation).toBe(previous);
 			expect(service.storage.db.query("SELECT count(*) n FROM files").get()).toEqual({ n: 3 });
@@ -148,7 +150,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			expect(await Bun.file(path.join(root, "a.py")).text()).toBe("def a(): pass\n");
 		} finally {
 			try {
-				child.kill();
+				child.kill("SIGKILL");
 			} catch {
 				/* already exited */
 			}

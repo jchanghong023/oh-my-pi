@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed Linux `fulltest` timing out while verifying repository-index recovery after an abruptly killed writer.
+- Kept connected-browser viewport validation independent of browser startup navigation.
 - Kept document-index migrations responsive when very long lines span many chunks.
 - Kept post-paint model discovery cache-only in offline sessions with an already-resolved explicit model selector.
 - Rejected report appends during session transitions so they cannot land in an outgoing transcript or leak into new live context.
