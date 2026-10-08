@@ -214,6 +214,20 @@ omp docs init "/path/to/company-markdown" --name "company-docs"
 
 ![工作流审查示例：待办进度与并行子代理](assets/workflowz-review-example.png)
 
+也可以把大范围业务代码审查拆成小块，分配 scout 并行调查，再汇总问题与验证边界：
+
+```text
+/workflowz 分配 scout 检查本地 upstream/main...main 的业务代码，分成 100 多个小块；只读，不修改文件，汇总有证据的问题并说明验证边界。
+```
+
+将比较范围替换为自己项目的本地分支或提交；以下截图来自另一项目，仅作工作流示例。
+
+![工作流业务审查示例：任务输入与验证边界](assets/workflowz-business-review-prompt.png)
+
+![工作流业务审查示例：问题位置、问题描述与验证边界](assets/workflowz-business-review-results.png)
+
+截图中的探针结果不等于整体验收；未运行的测试、构建、Lint、真实模型及 GUI / 发布包 E2E 须明确标注。
+
 **查看子代理和任务进度：**
 
 ```text
