@@ -19,6 +19,25 @@ export type GoalTokenUsage = Pick<UsageStatistics, "input" | "output" | "cacheRe
 export type GoalBudgetSteering = "allowed" | "suppressed";
 export type GoalTerminalMetricEmission = "emit" | "suppress";
 
+export type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
+
+const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
+
+export function parseGoalSubcommand(args: string): {
+	sub: GoalSubcommand | undefined;
+	rest: string;
+} {
+	const trimmed = args.trim();
+	if (!trimmed) return { sub: undefined, rest: "" };
+	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+	if (!match) return { sub: undefined, rest: trimmed };
+	const first = match[1].toLowerCase();
+	if (GOAL_SUBCOMMANDS.has(first as GoalSubcommand)) {
+		return { sub: first as GoalSubcommand, rest: match[2]?.trim() ?? "" };
+	}
+	return { sub: undefined, rest: trimmed };
+}
+
 /** Rebuild a persisted goal from `mode_change` data; undefined when the record is malformed. */
 export function goalFromModeData(modeData: Record<string, unknown> | undefined): Goal | undefined {
 	const goal = modeData?.goal;

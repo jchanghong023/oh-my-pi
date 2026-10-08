@@ -10,9 +10,17 @@
  */
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { ExtensionUIContext } from "../../extensibility/extensions/types";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
-import { type GoalModeState, goalContinuationActivity, goalFromModeData } from "../../goals/state";
+import {
+	type GoalModeState,
+	type GoalSubcommand,
+	goalContinuationActivity,
+	goalFromModeData,
+	parseGoalSubcommand,
+} from "../../goals/state";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import type { SlashCommandResult, SlashCommandRuntime } from "../../slash-commands/types";
 import { nextActionableTask } from "../../tools/todo";
 
 /** `goal.continuationModes` value that enables automatic continuation for RPC hosts. */
@@ -30,6 +38,10 @@ export interface RpcGoalResult {
 	goal: Goal | null;
 	state: GoalModeState | null;
 }
+
+export type RpcGoalSlashRuntime = Pick<SlashCommandRuntime, "output" | "signal"> & {
+	ui?: Pick<ExtensionUIContext, "select" | "confirm"> & Partial<Pick<ExtensionUIContext, "input">>;
+};
 
 export type RpcGoalSession = Pick<
 	AgentSession,
@@ -90,14 +102,28 @@ export class RpcGoalController {
 	 */
 	#changeOverlappedReconcile = false;
 	readonly #onContinuationDropped: (() => void) | undefined;
+	readonly #continuationAllowed: () => boolean;
+	readonly #assertHostCanEnter: (() => void) | undefined;
 
 	/**
 	 * @param onContinuationDropped called when a pending continuation is abandoned
 	 *   (a gate closed while it waited), so settle reporting can re-check.
 	 */
-	constructor(session: RpcGoalSession, onContinuationDropped?: () => void) {
+	constructor(
+		session: RpcGoalSession,
+		onContinuationDropped?: () => void,
+		continuationAllowed: () => boolean = () => true,
+		assertHostCanEnter?: () => void,
+	) {
 		this.#session = session;
 		this.#onContinuationDropped = onContinuationDropped;
+		this.#continuationAllowed = continuationAllowed;
+		this.#assertHostCanEnter = assertHostCanEnter;
+	}
+
+	/** Re-read host continuation gates after a mode (such as /loop) changes. */
+	refresh(): void {
+		this.#scheduleContinuation();
 	}
 
 	/**
@@ -229,7 +255,136 @@ export class RpcGoalController {
 		}
 	}
 
+	/** Text command adapter; GoalRuntime remains the sole owner of goal state. */
+	async handleSlash(args: string, runtime: RpcGoalSlashRuntime): Promise<SlashCommandResult> {
+		await this.settled();
+		let generation = this.#continuationGeneration;
+		const transcript = this.#session.sessionManager.getSessionId();
+		const current = () =>
+			!runtime.signal?.aborted &&
+			!this.#session.isDisposed &&
+			generation === this.#continuationGeneration &&
+			transcript === this.#session.sessionManager.getSessionId();
+		const output = async (text: string): Promise<void> => {
+			if (current()) await runtime.output(text);
+		};
+		if (!current()) return;
+		let { sub, rest } = parseGoalSubcommand(args);
+		let state = this.#session.getGoalModeState();
+		const goalId = state?.goal.id;
+		const dialogCurrent = () => current() && this.#session.getGoalModeState()?.goal.id === goalId;
+		if (!sub && !rest && state?.goal && runtime.ui) {
+			const choice = await runtime.ui.select(
+				`Goal: ${state.goal.objective} (${state.goal.status})`,
+				state.enabled ? ["Show details", "Adjust budget", "Pause", "Drop"] : ["Resume", "Show details", "Drop"],
+				{ signal: runtime.signal },
+			);
+			if (!dialogCurrent() || !choice) return;
+			const actions: Partial<Record<string, GoalSubcommand>> = {
+				"Show details": "show",
+				"Adjust budget": "budget",
+				Pause: "pause",
+				Resume: "resume",
+				Drop: "drop",
+			};
+			sub = actions[choice];
+		}
+		if (!sub && !rest && state?.goal) sub = "show";
+		if (!sub && rest && state?.enabled) {
+			await output("Goal mode is already active. Use /goal set to replace it.");
+			return;
+		}
+		if (sub === "show") {
+			const goal = state?.goal;
+			await output(
+				goal
+					? `Objective: ${goal.objective}\nStatus: ${goal.status}\nTokens: ${goal.tokensUsed}${goal.tokenBudget === undefined ? " (no budget)" : ` / ${goal.tokenBudget}`}\nTime spent: ${goal.timeUsedSeconds} seconds`
+					: "No goal set.",
+			);
+			return;
+		}
+		if (sub === "pause") {
+			if (!state?.enabled) {
+				await output("No active goal to pause.");
+				return;
+			}
+			await this.handle({ op: "pause" });
+			await output("Goal mode paused.");
+			return;
+		}
+		if (sub === "resume") {
+			await this.handle({ op: "resume" });
+			await output("Goal mode resumed.");
+			return;
+		}
+		if (sub === "drop") {
+			if (!state?.goal) {
+				await output("No goal to drop.");
+				return;
+			}
+			if (!runtime.ui) throw new Error("Dropping a goal requires a host confirmation dialog.");
+			const confirmed = await runtime.ui.confirm(
+				"Drop goal?",
+				"This removes the goal record. Accumulated usage stays in the session log.",
+				{ signal: runtime.signal },
+			);
+			if (!dialogCurrent() || !confirmed) return;
+			await this.handle({ op: "drop" });
+			await output("Goal dropped.");
+			return;
+		}
+		if (sub === "budget") {
+			if (!state?.enabled) throw new Error("No active goal. Resume the goal before adjusting its budget.");
+			if (!rest && runtime.ui?.input) {
+				rest =
+					(
+						await runtime.ui.input("Goal budget (number or off)", String(state.goal.tokenBudget ?? ""), {
+							signal: runtime.signal,
+						})
+					)?.trim() ?? "";
+				if (!dialogCurrent() || !rest) return;
+			}
+			if (!this.#session.getGoalModeState()?.enabled) {
+				throw new Error("No active goal. Resume the goal before adjusting its budget.");
+			}
+			const nextBudget = rest.toLowerCase() === "off" ? undefined : /^\d+$/.test(rest) ? Number(rest) : Number.NaN;
+			if (nextBudget !== undefined && (!Number.isSafeInteger(nextBudget) || nextBudget <= 0)) {
+				throw new Error("Goal budget must be a positive integer or `off`.");
+			}
+			await this.#session.goalRuntime.onBudgetMutated(nextBudget);
+			this.#resetContinuation();
+			this.refresh();
+			await output(nextBudget === undefined ? "Goal budget cleared." : `Goal budget set to ${nextBudget}.`);
+			return;
+		}
+		this.#assertCanEnter();
+		if (state?.goal.status === "paused") throw new Error("Resume or drop the paused goal before creating another.");
+		if (!rest && runtime.ui?.input) {
+			rest = (await runtime.ui.input("Goal objective", undefined, { signal: runtime.signal }))?.trim() ?? "";
+			if (!dialogCurrent() || !rest) return;
+		}
+		if (!rest) throw new Error("Usage: /goal set <objective>");
+		if (!current()) return;
+		this.#assertCanEnter();
+		// A replacement owns its first prompt. Void an older goal continuation
+		// before awaiting the shared runtime so it cannot race that submission.
+		this.#continuationScheduled = false;
+		generation = ++this.#continuationGeneration;
+		state = this.#session.getGoalModeState();
+		await this.#enter(
+			() =>
+				state?.enabled
+					? this.#session.goalRuntime.replaceGoal({ objective: rest })
+					: this.#session.goalRuntime.createGoal({ objective: rest }),
+			false,
+		);
+		if (!current()) return;
+		await output("Goal mode enabled.");
+		return { prompt: rest };
+	}
+
 	#assertCanEnter(): void {
+		this.#assertHostCanEnter?.();
 		if (!cfgGoalEnabled.get(this.#session.settings)) {
 			throw new Error("Goal mode is disabled (goal.enabled).");
 		}
@@ -264,7 +419,7 @@ export class RpcGoalController {
 		return this.#state;
 	}
 
-	async #enter(start: () => Promise<GoalModeState>): Promise<void> {
+	async #enter(start: () => Promise<GoalModeState>, scheduleContinuation = true): Promise<void> {
 		// The pre-goal tool set is captured once, when this controller first adds `goal`
 		// (a reattached paused goal already holds it). A `goal` tool the host enabled
 		// before the goal stays enabled afterwards.
@@ -278,7 +433,7 @@ export class RpcGoalController {
 			await this.#session.sendGoalModeContext({ deliverAs: "steer" });
 			return;
 		}
-		this.#scheduleContinuation();
+		if (scheduleContinuation) this.#scheduleContinuation();
 	}
 
 	/** Restore the pre-goal tool set. Idempotent. */
@@ -404,6 +559,7 @@ export class RpcGoalController {
 	 */
 	#continuationWanted(): boolean {
 		const session = this.#session;
+		if (!this.#continuationAllowed()) return false;
 		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
 		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
 		if (session.getPlanModeState()?.enabled) return false;

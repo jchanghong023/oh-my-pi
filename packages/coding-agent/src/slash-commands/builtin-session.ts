@@ -30,6 +30,7 @@ import {
 import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
+import { handleRpcRepoDashboard, handleRpcWikiDashboard } from "./helpers/index-dashboard";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 function normalizeResetProvider(value: string): string | undefined {
@@ -584,6 +585,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "wiki",
 		icon: "tree",
 		description: "Open the document index hub",
+		handleRpc: (_command, runtime) => handleRpcWikiDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showDocsDashboard();
 			runtime.ctx.editor.setText("");
@@ -593,6 +595,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "repo",
 		icon: "tree",
 		description: "Open the repository index dashboard",
+		handleRpc: (_command, runtime) => handleRpcRepoDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showRepoDashboard();
 			runtime.ctx.editor.setText("");

@@ -67,6 +67,22 @@ describe("RpcForkCommandCatalogService", () => {
 			availability: { available: true },
 		});
 		expect(catalog.get("skill:probe")).toMatchObject({ source: "skill", execution: "omp" });
+		for (const name of [
+			"wiki",
+			"repo",
+			"team",
+			"plan",
+			"loop",
+			"goal",
+			"advisor",
+			"ultrathink",
+			"orchestrate",
+			"workflowz",
+			"fullsend",
+			"compact",
+		]) {
+			expect(catalog.get(name)).toMatchObject({ execution: "omp", availability: { available: true } });
+		}
 		// Terminal-only business commands stay listed but report themselves.
 		const tuiOnly = [...catalog.values()].find(command => command.execution === "tui");
 		expect(tuiOnly?.availability).toMatchObject({ available: false, reason: "tui_only" });

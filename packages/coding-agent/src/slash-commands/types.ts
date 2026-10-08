@@ -117,6 +117,13 @@ export interface SlashCommandRuntime {
 	notifyConfigChanged?: (options?: { handledBySessionEvent?: boolean }) => Promise<void> | void;
 }
 
+/** RPC host capabilities for commands whose lifecycle normally belongs to the TUI. */
+export interface RpcSlashCommandRuntime extends SlashCommandRuntime {
+	ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">;
+	runCommandInBackground: (task: () => Promise<void>) => void;
+	runModeCommand: (mode: "plan" | "loop" | "goal", args: string) => Promise<SlashCommandResult>;
+}
+
 /**
  * Runtime visible to TUI-only handlers (`handleTui`). Carries the interactive
  * mode context. Intentionally narrower than `SlashCommandRuntime` so existing
@@ -169,6 +176,11 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 				runtime: SlashCommandRuntime,
 		  ) => SlashCommandResult | Promise<SlashCommandResult>)
 		| ((command: ParsedSlashCommand, runtime: SlashCommandRuntime) => void | Promise<void>);
+	/** RPC host adapter, preferred over the shared text handler; never used by ACP or the TUI. */
+	handleRpc?: (
+		command: ParsedSlashCommand,
+		runtime: RpcSlashCommandRuntime,
+	) => SlashCommandResult | Promise<SlashCommandResult>;
 	/**
 	 * TUI-only handler that supersedes `handle` when both are present. Use for
 	 * selectors, wizards, dashboards, and anything else that requires

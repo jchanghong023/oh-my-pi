@@ -20,6 +20,8 @@ export interface ApprovedPlanDispatchOptions {
 	planFilePath: string;
 	title: string;
 	planContent: string;
+	/** Operator cancellation supplied by hosts that approve outside the active turn. */
+	signal?: AbortSignal;
 	/** True when the execution turn keeps the current context (no clear/compact happened). */
 	preserveContext?: boolean;
 	/** TUI hook invoked right before the synthetic prompt dispatch (overlay teardown). */
@@ -28,11 +30,12 @@ export interface ApprovedPlanDispatchOptions {
 	onAutosave?: (result: { savedPath: string | null; error?: Error }) => void;
 }
 
-function captureSessionGuard(session: AgentSession): () => void {
+function captureSessionGuard(session: AgentSession, signal?: AbortSignal): () => void {
 	const sessionId = session.sessionId;
 	const generation = session.sessionGeneration;
 	const manager = session.sessionManager;
 	return () => {
+		if (signal?.aborted) throw new Error("Plan approval cancelled.");
 		if (
 			session.isDisposed ||
 			session.sessionId !== sessionId ||
@@ -50,7 +53,7 @@ function captureSessionGuard(session: AgentSession): () => void {
  * plan-approved prompt (queued as a follow-up when a run is live).
  */
 export async function dispatchApprovedPlan(session: AgentSession, options: ApprovedPlanDispatchOptions): Promise<void> {
-	const assertCurrentSession = captureSessionGuard(session);
+	const assertCurrentSession = captureSessionGuard(session, options.signal);
 	assertCurrentSession();
 	session.setPlanReferencePath(options.planFilePath);
 	let autosavedPath: string | null = null;

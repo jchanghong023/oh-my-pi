@@ -1,6 +1,6 @@
 import { lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
-import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
+import type { AcpBuiltinSlashCommandResult, RpcSlashCommandRuntime, SlashCommandRuntime } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
@@ -28,4 +28,23 @@ export async function executeAcpBuiltinSlashCommand(
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;
+}
+
+/** Dispatch the same registry with RPC host adapters and explicit refusal of terminal-only commands. */
+export async function executeRpcBuiltinSlashCommand(
+	text: string,
+	runtime: RpcSlashCommandRuntime,
+): Promise<AcpBuiltinSlashCommandResult> {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return false;
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	if (!command) return false;
+	if (!command.handleRpc && !command.handle) {
+		throw new Error(`/${command.name} is only available in the interactive TUI.`);
+	}
+	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
+		throw new Error(`/${command.name} does not accept arguments.`);
+	}
+	const result = command.handleRpc ? await command.handleRpc(parsed, runtime) : await command.handle!(parsed, runtime);
+	return result ?? { consumed: true };
 }

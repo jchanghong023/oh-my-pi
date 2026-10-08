@@ -37,6 +37,8 @@ export interface AvailableCommandsOptions {
 	 * TUI handler, which runs on the host screen.
 	 */
 	includeTuiOnlyBuiltins?: boolean;
+	/** Include RPC host adapters without changing the ACP command surface. */
+	includeRpcBuiltins?: boolean;
 }
 
 export async function buildAvailableSlashCommands(
@@ -57,7 +59,12 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		if (!command.handle && !(options.includeTuiOnlyBuiltins && command.handleTui)) continue;
+		if (
+			!command.handle &&
+			!(options.includeRpcBuiltins && command.handleRpc) &&
+			!(options.includeTuiOnlyBuiltins && command.handleTui)
+		)
+			continue;
 		builtinNames.add(command.name);
 		for (const alias of command.aliases ?? []) builtinNames.add(alias);
 		const hint = command.acpInputHint ?? command.inlineHint;

@@ -114,7 +114,7 @@ export function scoreCommandText(text: string, query: string): number {
  * terminal business; a handler-less spec cannot run anywhere.
  */
 function builtinAvailability(spec: SlashCommandSpec | undefined): RpcCommandAvailability {
-	if (spec?.handle) return AVAILABLE;
+	if (spec?.handleRpc || spec?.handle) return AVAILABLE;
 	if (spec?.handleTui) return TUI_ONLY;
 	return UNSUPPORTED;
 }
@@ -259,6 +259,7 @@ export class RpcForkCommandCatalogService {
 	async #buildSessionSnapshot(sessionLike: object): Promise<RpcCommandCatalogSnapshot> {
 		const available = await buildAvailableSlashCommands(sessionLike as never, undefined, {
 			includeTuiOnlyBuiltins: true,
+			includeRpcBuiltins: true,
 		});
 		const entries: RpcCommandCatalogEntry[] = [];
 		const descriptors: RpcCommandDescriptor[] = [];
@@ -406,6 +407,6 @@ function entryFromAvailable(command: InternalAvailableSlashCommand): RpcCommandC
 		...(command.input?.hint ? { inputHint: command.input.hint } : {}),
 		...(command.subcommands?.length ? { subcommands: command.subcommands } : {}),
 		source: command.source,
-		tuiOnly: spec !== undefined && !spec.handle && spec.handleTui !== undefined,
+		tuiOnly: spec !== undefined && !spec.handleRpc && !spec.handle && spec.handleTui !== undefined,
 	};
 }

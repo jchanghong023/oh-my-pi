@@ -107,7 +107,7 @@ function fieldTruncationLine(clipped: FieldTruncations): string | undefined {
 	return `Fields truncated (partial values; paths may not be usable as locators): ${entries.map(([key, count]) => `${key} (${count})`).join(", ")}`;
 }
 
-function coverage(status: RepoStatus): string[] {
+export function formatRepoStatusLines(status: RepoStatus): string[] {
 	const lines = [
 		`Root: ${field(status.root, 256)}`,
 		`Index: ${status.exists ? `generation ${status.generation ?? ""}` : "missing (open /repo to build it)"}; ${status.fileCount} files; ${status.symbolCount} symbols`,
@@ -152,7 +152,7 @@ function renderQuery(
 	result: RepoQueryResult<RepoTextHit | RepoSymbolHit>,
 	clipped: FieldTruncations,
 ): string {
-	const lines = coverage(result.coverage);
+	const lines = formatRepoStatusLines(result.coverage);
 	if (result.status === "missing") {
 		lines.push("No repository index exists. Open /repo to build one; use read/grep for current files meanwhile.");
 		const summary = fieldTruncationLine(clipped);
@@ -267,7 +267,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 			if (params.action === "status") {
 				const clipped: FieldTruncations = {};
 				const status = boundedStatus(service ? await service.status() : missingStatus(root), clipped);
-				const lines = coverage(status);
+				const lines = formatRepoStatusLines(status);
 				const summary = fieldTruncationLine(clipped);
 				if (summary) lines.push(summary);
 				return toolResult<RepoToolDetails>({ action: "status", status, fieldTruncations: clipped })
