@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { BenchSummary } from "../src/cli/bench-cli";
 
 /**
- * Company environment (`--offline` with a usable company config): the bench
+ * Company environment (OMP_OFFLINE=1 with a usable company config): the bench
  * runtime must expose the internal company lane to selectors and hide the local
  * zcode-api lane. Probed in subprocesses because the company lane snapshot is
  * process-global and read once.
@@ -121,7 +121,7 @@ async function probeBenchRuntime(env: Record<string, string>, offline: boolean):
 	return JSON.parse(stdout) as ProbeResult;
 }
 
-describe("omp bench --offline company environment", () => {
+describe("OMP_OFFLINE=1 omp bench company environment", () => {
 	it("resolves company selectors and hides zcode-api", async () => {
 		const env = await isolatedEnv(true);
 		const probe = await probeBenchRuntime(env, true);
@@ -141,14 +141,14 @@ describe("omp bench --offline company environment", () => {
 		expect(probe.ordinaryInheritedProviders).toContain("zcode-api");
 	}, 30_000);
 
-	it("keeps zcode-api selectors working without a company config", async () => {
+	it("hides zcode-api selectors without a company config under OMP_OFFLINE", async () => {
 		const env = await isolatedEnv(false);
 		const probe = await probeBenchRuntime(env, true);
 
 		expect(probe.providers).not.toContain("company");
-		expect(probe.providers).toContain("zcode-api");
+		expect(probe.providers).not.toContain("zcode-api");
 		expect(probe.companySelector).toBeNull();
-		expect(probe.zcodeSelector).toBe("zcode-api/glm-5.2");
+		expect(probe.zcodeSelector).toBeNull();
 		expect(probe.offlineRequests).toBe(0);
 		expect(probe.inheritedRequests).toBe(0);
 	}, 30_000);
@@ -206,6 +206,9 @@ describe("omp bench --offline company environment", () => {
 			});
 			try {
 				const env = await isolatedEnv(lane === "company");
+				// Only the company lane runs offline: an offline process hides the
+				// public zcode-api lane entirely, so the proxy lanes bench online.
+				if (lane === "company") env.OMP_OFFLINE = "1";
 				if (lane === "company") {
 					await fs.writeFile(
 						path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
@@ -248,20 +251,7 @@ describe("omp bench --offline company environment", () => {
 			`,
 				);
 				const child = Bun.spawn(
-					[
-						process.execPath,
-						"--preload",
-						guard,
-						CLI,
-						"bench",
-						selector,
-						"--runs",
-						"1",
-						"--par",
-						"1",
-						"--json",
-						"--offline",
-					],
+					[process.execPath, "--preload", guard, CLI, "bench", selector, "--runs", "1", "--par", "1", "--json"],
 					{
 						cwd: env.HOME,
 						env,

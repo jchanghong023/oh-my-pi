@@ -6,7 +6,7 @@ import { register } from "../config/registry";
 
 // Fork: /team multi-model discussion participants (full model IDs, e.g.
 // "company/GLM-5.2-public"). Unset or empty means "not configured": /team
-// then falls back to the company lane snapshot under --offline and errors
+// then falls back to the company lane snapshot under OMP_OFFLINE and errors
 // with a configuration example otherwise.
 export const cfgTeamMembers = register({
 	id: "team.members",

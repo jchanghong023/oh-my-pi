@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -21,6 +21,19 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const cleanupDirs: string[] = [];
+
+const originalOfflineEnv = process.env.OMP_OFFLINE;
+
+// parseArgs reads OMP_OFFLINE at call time; a machine-level export (the company
+// setup fork.md recommends) must not flip this file's online-path assertions.
+beforeEach(() => {
+	delete process.env.OMP_OFFLINE;
+});
+
+afterEach(() => {
+	if (originalOfflineEnv === undefined) delete process.env.OMP_OFFLINE;
+	else process.env.OMP_OFFLINE = originalOfflineEnv;
+});
 
 afterEach(async () => {
 	await Promise.all(cleanupDirs.splice(0).map(dir => removeWithRetries(dir)));
@@ -77,7 +90,7 @@ describe("applyResolvedSystemPromptInputs", () => {
 		expect(options.systemPrompt).toBeUndefined();
 	});
 
-	it("keeps the offline notice out of the append prompt without --offline", () => {
+	it("keeps the offline notice out of the append prompt without offline mode", () => {
 		const options: CreateAgentSessionOptions = {};
 		const parsed = parseArgs([]);
 
@@ -86,9 +99,9 @@ describe("applyResolvedSystemPromptInputs", () => {
 		expect(options.appendSystemPrompt).toBeUndefined();
 	});
 
-	it("appends the offline notice when launched with --offline", () => {
+	it("appends the offline notice when launched with OMP_OFFLINE=1", () => {
 		const options: CreateAgentSessionOptions = {};
-		const parsed = parseArgs(["--offline"]);
+		const parsed = { ...parseArgs([]), offline: true };
 
 		applyResolvedSystemPromptInputs(options, undefined, undefined, parsed);
 
@@ -96,9 +109,9 @@ describe("applyResolvedSystemPromptInputs", () => {
 		expect(options.appendSystemPrompt?.length).toBeGreaterThan(0);
 	});
 
-	it("appends the offline notice after an existing append prompt under --offline", () => {
+	it("appends the offline notice after an existing append prompt under offline mode", () => {
 		const options: CreateAgentSessionOptions = {};
-		const parsed = parseArgs(["--offline"]);
+		const parsed = { ...parseArgs([]), offline: true };
 
 		applyResolvedSystemPromptInputs(options, undefined, "existing append", parsed);
 

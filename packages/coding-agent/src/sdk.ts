@@ -594,7 +594,7 @@ export interface CreateAgentSessionOptions {
 	/** Validated default retry chain to install when a deferred singleton pattern resolves. */
 	modelPatternDefaultFallbackChain?: string[];
 	/**
-	 * Process runs with `--offline`: the automatic model-discovery fallbacks
+	 * Process runs in offline mode (OMP_OFFLINE): the automatic model-discovery fallbacks
 	 * (session-restore retry, default-role resolution) use the cache-only
 	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
 	 * catalog degrades to the default role instead of reaching the network.
@@ -1038,7 +1038,7 @@ type ExtensionDiscoveryOptions = Pick<
 type CliExtensionProviderOptions = ExtensionDiscoveryOptions & {
 	/** Discover extension model catalogs after registration (default true); usage-only commands skip it. */
 	discoverModels?: boolean;
-	/** Process runs with `--offline`: the post-registration refresh stays cache-only. */
+	/** Process runs in offline mode (OMP_OFFLINE): the post-registration refresh stays cache-only. */
 	offline?: boolean;
 };
 

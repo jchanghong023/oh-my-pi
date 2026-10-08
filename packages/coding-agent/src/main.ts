@@ -1334,7 +1334,7 @@ export function applyResolvedSystemPromptInputs(
 	if (resolvedAppendPrompt) {
 		options.appendSystemPrompt = resolvedAppendPrompt;
 	}
-	// --offline: append the offline-environment notice after any resolved append
+	// OMP_OFFLINE: append the offline-environment notice after any resolved append
 	// prompt so it reaches the model in every session built from this launch.
 	if (parsed.offline) {
 		const offlineNoticeText = offlineNoticePrompt.trim();
@@ -1748,7 +1748,7 @@ export function walkerWorkersForCores(cores: number): number | undefined {
 	return cores > 8 ? Math.min(Math.floor(cores / 2), 16) : undefined;
 }
 
-/** Scan-cache TTL injected into `--offline` processes; only affects the rescan interval behind `@` completion. */
+/** Scan-cache TTL injected into OMP_OFFLINE processes; only affects the rescan interval behind `@` completion. */
 const OFFLINE_SCAN_CACHE_TTL_MS = "30000";
 
 export async function runRootCommand(
@@ -1863,7 +1863,7 @@ export async function runRootCommand(
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
-		// The company lane exists only in --offline processes; flip it before any
+		// The company lane exists only in OMP_OFFLINE processes; flip it before any
 		// consumer (startup error check, model registry) reads company state.
 		setCompanyOfflineEnabled(parsedArgs.offline === true);
 		const companyExplicitlyRequested =
@@ -1878,7 +1878,7 @@ export async function runRootCommand(
 			if (isInteractive) notifs.push({ kind: "warn", message: companyProviderError });
 			else process.stderr.write(`${companyProviderError}\n`);
 		} else if (!parsedArgs.offline && companyExplicitlyRequested) {
-			process.stderr.write("Company provider is only available with --offline.\n");
+			process.stderr.write("Company provider is only available with OMP_OFFLINE=1.\n");
 			process.exit(1);
 		}
 		// Before session resolution: resume, fork, and import act on these same

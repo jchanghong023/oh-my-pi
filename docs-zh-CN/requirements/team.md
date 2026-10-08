@@ -48,7 +48,7 @@
 参与模型由一个专门的设置项定义：
 
 * **设置项 `team.members`**：模型 ID 列表（完整 ID，如 `company/GLM-5.2-public`）。未设置或设置为空数组均视为**未配置**。
-* **未配置 + `--offline` 进程**：默认取 company lane 当前符合 effective ModelRegistry 可用性与启用/排除规则的聊天模型；候选种子为 `DeepSeek-V4-Flash-public`、`GLM-5.2-public`、`MiniMax-M2.7`、`Qwen3.6-27B-public`、`Qwen3.6-35B-A3B`、`Qwen3.8-27B`，不是未经筛选的 raw seed 目录。没有可用默认成员时明确失败，不静默回退为仅当前会话模型。
+* **未配置 + offline（`OMP_OFFLINE=1`）进程**：默认取 company lane 当前符合 effective ModelRegistry 可用性与启用/排除规则的聊天模型；候选种子为 `DeepSeek-V4-Flash-public`、`GLM-5.2-public`、`MiniMax-M2.7`、`Qwen3.6-27B-public`、`Qwen3.6-35B-A3B`、`Qwen3.8-27B`，不是未经筛选的 raw seed 目录。没有可用默认成员时明确失败，不静默回退为仅当前会话模型。
 * **未配置 + 普通启动**：company lane 不存在，`/team` 直接报错并提示配置方法（给出 `team.members` 示例），MUST NOT 静默降级为单模型流程，MUST NOT 自动拉入同家族模型冒充多模型。
 * **显式配置优先**：两种环境下，已配置的 `team.members` 都覆盖环境默认名单。
 
@@ -361,7 +361,7 @@
 * **UT（桩 runner，确定性）：** 覆盖阶段流转与顺序、审查者轮转分配（含单模型回退）、两轮上限拒绝、标志触发复核、必需复核失败后"尚不可采用"且不得推荐（含后续轮次复核成功恢复资格）、结构化字段（风险/未知项/假设影响/证据）向对齐、审查、综合提示词的传递、审查 prompt 匿名构造（不含作者模型名）、阻断门禁与"尚不可采用"标注、输出预算 schema、配置解析（offline 默认名单、未配置报错、空数组、去重 ∪ 会话模型、不可用模型报错）、无参数提示。
 * **进程内集成测试：** 脚本化模型响应跑通五阶段到最终输出，断言结果结构（含收尾契约、理解差异呈现、阻断标注）。
 * **UI 冒烟扩展：** 在现有 PTY TUI 冒烟中加入 `/team` 用例——真实 TUI 入口，`zcode-api` 指向本地 stub HTTP 服务；初审产生真实兼容性阻断，修订以 `claimsResolvedBlocking` 请求复核，新审查者以 `priorBlockingStatus=resolved` 确认解决，必须观察完整五阶段、第二次审查及最终可见且持久的结果。另覆盖用户取消向并行子代理传播；这些桩模型用例不替代真实公司模型人工验收。
-* **合入前一次真实人工运行：** `--offline` 公司模型全流程跑一遍并如实记录；不冒充为自动化验证。
+* **合入前一次真实人工运行：** `OMP_OFFLINE=1` 公司模型全流程跑一遍并如实记录；不冒充为自动化验证。
 * 保留上述覆盖目标并接入 fork 验证入口，不要求维护上游测试白名单；TypeScript 修改后 `bun run fastcheck` MUST 通过；`bun run fulltest` / `slowtest` 按仓库规则仅在用户明确要求时运行。
 
 ## 7. 已知边界与已接受代价

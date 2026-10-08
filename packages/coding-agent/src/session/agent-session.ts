@@ -11769,7 +11769,7 @@ export class AgentSession implements SettingsScope {
 			disabledProviderIds(this.settings),
 		);
 		if (providers.size === 0) return undefined;
-		// An `--offline` process must not reach the network during a session
+		// An OMP_OFFLINE process must not reach the network during a session
 		// switch either: the cache-only strategy keeps the restore chain local,
 		// and a cold cache falls through to the fail-closed restore error.
 		await this.#modelRegistry.refreshDiscoverableProviders(

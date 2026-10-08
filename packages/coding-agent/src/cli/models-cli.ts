@@ -18,6 +18,7 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { offlineFromEnv } from "./args";
 import type { ConfigError } from "../config/config-file";
 import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
 import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
@@ -46,8 +47,6 @@ export interface ModelsCommandArgs {
 		noExtensions?: boolean;
 		/** Extra `config.yml` overlays to apply for this invocation. */
 		config?: string[];
-		/** Company environment: enable the internal lane, cache-only refresh, hide zcode-api. */
-		offline?: boolean;
 	};
 }
 
@@ -401,7 +400,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 	}
 
 	const cwd = getProjectDir();
-	const offline = command.flags.offline === true;
+	const offline = offlineFromEnv();
 	setCompanyOfflineEnabled(offline);
 	if (offline) {
 		// Company environment: flip the lane before the registry captures company

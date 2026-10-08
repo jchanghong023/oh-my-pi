@@ -2,7 +2,10 @@
  * Centralized path helpers for omp config directories.
  *
  * Uses PI_CONFIG_DIR (default ".omp") for the config root and
- * PI_CODING_AGENT_DIR to override the agent directory.
+ * PI_CODING_AGENT_DIR to override the agent directory. OMP_CONFIG_ROOT
+ * (absolute, `~`-expanded) relocates the entire config root — agent data,
+ * caches, run state included — off the home directory; relative values are
+ * ignored.
  *
  * On Linux, if XDG_DATA_HOME / XDG_STATE_HOME / XDG_CACHE_HOME environment
  * variables are set, paths are redirected to XDG-compliant locations under
@@ -111,9 +114,14 @@ function readProfileFromEnvSafe(): string | undefined {
 	}
 }
 
-/** Profile-independent config root (~/.omp), shared by every omp profile. */
+/**
+ * Profile-independent config root (~/.omp), shared by every omp profile.
+ * `OMP_CONFIG_ROOT` relocates the whole root off the home directory: it must be
+ * absolute (`~` expanded; relative values are ignored so a stray export cannot
+ * silently re-anchor every path onto cwd).
+ */
 export function getBaseConfigRoot(): string {
-	return path.join(os.homedir(), getConfigDirName());
+	return resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT) ?? path.join(os.homedir(), getConfigDirName());
 }
 
 function getProfileConfigRoot(profile: string | undefined): string {

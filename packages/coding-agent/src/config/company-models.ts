@@ -10,12 +10,12 @@ export const COMPANY_RETRIEVAL_MODELS = [
 	{ id: "Qwen3-VL-Reranker-2B", type: "reranker", input: ["text", "image"], contextWindow: 32768 },
 ] as const;
 
-/** `--offline` caps every company chat model's context at 200k tokens
+/** OMP_OFFLINE caps every company chat model's context at 200k tokens
  * (process-only; `maxTokens` untouched) — fork contract. */
 export const COMPANY_OFFLINE_CONTEXT_WINDOW = 200_000;
 
 /**
- * Model roles `--offline` fills in for this process when the company provider
+ * Model roles OMP_OFFLINE fills in for this process when the company provider
  * is usable and the role is otherwise unconfigured — fork contract; existing
  * role config and explicit CLI model arguments always win.
  */

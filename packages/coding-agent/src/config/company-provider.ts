@@ -72,7 +72,7 @@ function readStartupConfig(): CompanySnapshot {
 
 // Worker threads inherit the parent's snapshot in memory; they never read
 // Claude settings. The main thread reads its snapshot lazily so a normal
-// (non-`--offline`) startup never touches `~/.claude/settings.json` and never
+// (non-offline) startup never touches `~/.claude/settings.json` and never
 // holds the token in memory or hands it to workers.
 const snapshotKey = "omp.company-provider.startup";
 let mainSnapshot: CompanySnapshot | undefined;
@@ -103,7 +103,7 @@ function ensureStartupSnapshot(): CompanySnapshot {
 	return mainSnapshot;
 }
 
-// The company lane only exists in --offline processes: normal startups get no
+// The company lane only exists in OMP_OFFLINE processes: normal startups get no
 // company provider, models, embedding fallback, or startup warnings. Workers
 // read the flag lazily; it is always set before any worker can spawn.
 const offlineKey = "omp.company-provider.offline";
@@ -130,15 +130,6 @@ export function isCompanyLaneActive(): boolean {
 
 export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
 	return companyLaneActive() ? ensureStartupSnapshot().config : undefined;
-}
-
-/**
- * The company environment: the lane is enabled (`--offline`) and the Claude
- * settings snapshot yielded a usable config. The local zcode-api lane is hidden
- * there — the internal company lane is the only chat catalog in that setting.
- */
-export function isCompanyEnvironment(): boolean {
-	return getCompanyConfig() !== undefined;
 }
 
 export function getCompanyConfigError(): string | undefined {

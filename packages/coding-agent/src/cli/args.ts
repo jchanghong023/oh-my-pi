@@ -22,6 +22,19 @@ export { getExtraHelpText };
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
+/**
+ * Whether the OMP_OFFLINE environment variable requests offline mode. The env
+ * var is the only offline trigger (the former `--offline` launch flag was
+ * removed): machine-level configuration every spawned omp process inherits,
+ * which a CLI flag cannot guarantee. Truthy spellings are `1`, `true`, `yes`,
+ * and `on` (case-insensitive); anything else — unset, empty, `0`, `false` —
+ * keeps the launch online.
+ */
+export function offlineFromEnv(): boolean {
+	const raw = process.env.OMP_OFFLINE?.trim().toLowerCase();
+	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 export interface Args {
 	cwd?: string;
 	/** Workspace directories beyond cwd for this session (repeatable `--add-dir`). */
@@ -29,7 +42,7 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
-	/** Restrict this launch to local resources: disable Web Search, Browser, and URL fetch tools for the process and tell the model there is no public network. */
+	/** Restrict this launch to local resources: disable Web Search, Browser, and URL fetch tools for the process and tell the model there is no public network. Activated by the OMP_OFFLINE environment variable. */
 	offline?: boolean;
 	provider?: string;
 	model?: string;
@@ -214,6 +227,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		unrecognizedFlags: [],
 		invalidFlagValues: [],
 		sessionDir: $env.PI_CODING_AGENT_SESSION_DIR || undefined,
+		offline: offlineFromEnv() || undefined,
 	};
 
 	// `--` ends option parsing (POSIX end-of-options). Everything after it is
@@ -300,8 +314,6 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.version = true;
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
-		} else if (arg === "--offline") {
-			result.offline = true;
 		} else if (arg === "--profile" && i + 1 < args.length) {
 			// Normally stripped by `extractProfileFlags` before parseArgs sees it;
 			// kept here as a fallback for direct parseArgs callers.

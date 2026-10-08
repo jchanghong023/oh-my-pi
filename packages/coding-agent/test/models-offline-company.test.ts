@@ -4,9 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /**
- * `omp models --offline` in the company environment must list the internal
- * company lane and hide the local zcode-api lane; an `--offline` run without a
- * usable company config (home usage) and a plain `omp models` keep zcode-api
+ * `OMP_OFFLINE=1 omp models` in the company environment must list the internal
+ * company lane and hide the local zcode-api lane; an OMP_OFFLINE=1 run without
+ * a usable company config (home usage) and a plain `omp models` keep zcode-api
  * visible. Covered as subprocesses because the company lane snapshot is
  * process-global and read once, so one process cannot serve both fixtures.
  */
@@ -33,6 +33,7 @@ async function runModels(
 		modelsConfig?: unknown;
 		malformedCompanyConfig?: boolean;
 		extensionCache?: "cold" | "warm";
+		offline?: boolean;
 	},
 ): Promise<{
 	providers: Set<string>;
@@ -72,6 +73,7 @@ async function runModels(
 		PI_CONFIG_DIR: ".omp",
 		NO_COLOR: "1",
 	};
+	if (options.offline) env.OMP_OFFLINE = "1";
 	const extensionArgs: string[] = [];
 	if (options.extensionCache) {
 		const extensionFile = path.join(home, "offline-extension.ts");
@@ -123,7 +125,7 @@ async function runModels(
 	});
 	const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
 	expect(await child.exited).toBe(0);
-	if (args.includes("--offline")) {
+	if (options.offline) {
 		expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
 		expect(stderr).not.toContain("UNEXPECTED_EXTENSION_DISCOVERY");
 	}
@@ -141,10 +143,11 @@ async function runModels(
 	};
 }
 
-describe("omp models --offline company environment", () => {
+describe("OMP_OFFLINE=1 omp models company environment", () => {
 	it("lists the company lane and hides zcode-api", async () => {
-		const { providers, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--offline", "--json"], {
+		const { providers, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--json"], {
 			companyConfig: true,
+			offline: true,
 		});
 
 		expect(providers.has("company")).toBe(true);
@@ -155,15 +158,15 @@ describe("omp models --offline company environment", () => {
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
 
-	it("keeps zcode-api visible and reports the reason when the company config is missing", async () => {
-		const { providers, stderr } = await runModels(["--offline", "--json"], { companyConfig: false });
+	it("hides zcode-api without a company config and reports the reason", async () => {
+		const { providers, stderr } = await runModels(["--json"], { companyConfig: false, offline: true });
 
 		expect(providers.has("company")).toBe(false);
-		expect(providers.has("zcode-api")).toBe(true);
+		expect(providers.has("zcode-api")).toBe(false);
 		expect(stderr).toContain("Company provider unavailable");
 	}, 30_000);
 
-	it("does not register the company lane without --offline", async () => {
+	it("does not register the company lane without OMP_OFFLINE", async () => {
 		const { providers } = await runModels(["--json"], { companyConfig: true });
 
 		expect(providers.has("company")).toBe(false);
@@ -171,9 +174,10 @@ describe("omp models --offline company environment", () => {
 	}, 30_000);
 
 	for (const action of ["ls", "list", "refresh", "company"]) {
-		it(`keeps ${action} cache-only with an offline flag after the positionals`, async () => {
-			const { providers, companyContextWindows } = await runModels([action, "--json", "--offline"], {
+		it(`keeps ${action} cache-only under OMP_OFFLINE=1`, async () => {
+			const { providers, companyContextWindows } = await runModels([action, "--json"], {
 				companyConfig: true,
+				offline: true,
 			});
 			expect(providers.has("company")).toBe(true);
 			expect(providers.has("zcode-api")).toBe(false);
@@ -182,25 +186,28 @@ describe("omp models --offline company environment", () => {
 	}
 
 	it("filters explicit find selectors without fetching a hidden or missing provider", async () => {
-		const { providers } = await runModels(["find", "zcode-api/*", "--offline", "--json"], {
+		const { providers } = await runModels(["find", "zcode-api/*", "--json"], {
 			companyConfig: true,
+			offline: true,
 		});
 		expect([...providers]).toEqual([]);
 	}, 30_000);
 
-	it("reports malformed company configuration and keeps the local fallback", async () => {
-		const { providers, stderr } = await runModels(["refresh", "--offline", "--json"], {
+	it("reports malformed company configuration without falling back to zcode-api", async () => {
+		const { providers, stderr } = await runModels(["refresh", "--json"], {
 			companyConfig: true,
 			malformedCompanyConfig: true,
+			offline: true,
 		});
 		expect(providers.has("company")).toBe(false);
-		expect(providers.has("zcode-api")).toBe(true);
+		expect(providers.has("zcode-api")).toBe(false);
 		expect(stderr).toContain("not valid JSON");
 	}, 30_000);
 
 	it("surfaces ignored reserved policy at the public command without leaking credentials", async () => {
-		const { providers, stderr } = await runModels(["refresh", "--offline", "--json"], {
+		const { providers, stderr } = await runModels(["refresh", "--json"], {
 			companyConfig: true,
+			offline: true,
 			modelsConfig: {
 				providers: {
 					company: { models: false, apiKey: "ignored-company-key" },
@@ -218,9 +225,10 @@ describe("omp models --offline company environment", () => {
 	for (const extensionCache of ["cold", "warm"] as const) {
 		for (const action of ["ls", "refresh"]) {
 			it(`uses ${extensionCache} extension cache for offline ${action} without invoking discovery`, async () => {
-				const { providers, selectors } = await runModels([action, "--offline", "--json"], {
+				const { providers, selectors } = await runModels([action, "--json"], {
 					companyConfig: true,
 					extensionCache,
+					offline: true,
 				});
 				expect(providers.has("offline-extension")).toBe(extensionCache === "warm");
 				expect(selectors.includes("offline-extension/cached-model")).toBe(extensionCache === "warm");
@@ -229,9 +237,10 @@ describe("omp models --offline company environment", () => {
 	}
 
 	it("keeps an extension selector miss cache-only", async () => {
-		const { selectors } = await runModels(["find", "offline-extension/missing", "--offline", "--json"], {
+		const { selectors } = await runModels(["find", "offline-extension/missing", "--json"], {
 			companyConfig: true,
 			extensionCache: "warm",
+			offline: true,
 		});
 		expect(selectors).toEqual([]);
 	}, 30_000);

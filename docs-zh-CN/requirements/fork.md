@@ -11,7 +11,7 @@
 | 场景 | 使用目标 | 具体契约 |
 | --- | --- | --- |
 | 上游默认 TUI | 直接使用 OMP 原生终端交互入口，跟进上游能力，并带有本 fork 的个人默认值 | 本文「默认设置」「快捷键与状态栏」「安装与运行」 |
-| 公司无互联网环境 | 通过 `--offline` 使用本地资源和公司内部模型服务，日常启动与核心任务不依赖公网 | 本文「公司内网模型（仅 `--offline`）」「安装与运行」 |
+| 公司无互联网环境 | 通过 `OMP_OFFLINE=1` 使用本地资源和公司内部模型服务，日常启动与核心任务不依赖公网 | 本文「公司内网模型（仅 `OMP_OFFLINE`）」「安装与运行」 |
 | ZCode 界面 | 使用 ZCode 的界面框架与风格，以本 fork 的 OMP 替换其 Agent 核心，复用同一套 OMP 执行能力与状态 | [ZCode 接入](rpc-ui-protocol.md) |
 
 - **零配置文件**：默认使用不要求用户手工创建、填写或修改 OMP 配置文件；所需默认值由内置行为、场景启动参数和已有环境信息提供。模型服务可达及必要认证仍是使用前提；公司环境复用既有 Claude Code 配置的具体约定见下文，不要求另配一份 OMP 凭据。
@@ -96,17 +96,17 @@
 ### ZCode 本地代理（zcode-api）
 
 - 内置 provider `zcode-api`，默认指向本机 ZCode Proxy（`http://127.0.0.1:8080`；环境变量 `ZCODE_API_BASE_URL` 以完整的 `http://主机:端口` 基地址覆盖；Anthropic 传输会自行去掉末尾斜杠与多余的 `/v1`），无登录、无配置即在模型面板与 `omp models` 中可见可用；`disabledProviders` 仍可禁用。
-- 公司环境（`--offline` 且 Claude settings 提供可用公司配置）中该 lane 在所有入口隐藏：`omp models`、TUI `/models` 面板与模型解析都不再列出或解析 `zcode-api`，只保留公司内网模型（见下节）。判定条件是「公司配置可用」而非单纯的 `--offline` 标志——无公司配置的 `--offline` 进程（例如家用 `--offline` 搭配本机代理）仍照常可见可用。
+- offline（`OMP_OFFLINE=1`）进程中该 lane 在所有入口一律隐藏：`omp models`、TUI `/models` 面板与模型解析都不再列出或解析 `zcode-api`，隐藏只取决于 offline 标志本身，不依赖公司配置是否可用——无公司配置的 offline 进程同样隐藏，此时进程内既无 zcode-api 也无 company，可用聊天模型仅剩其余已配置且凭据就绪的 lane。普通启动照常可见可用。
 - 固定使用代理的 Anthropic Messages 直通路由（`/v1/messages`，与 Claude Code 同路径）：工具调用、thinking、上游错误状态原样传递，不经过 OpenAI 翻译层。不做模型发现，不写入 `models.json`（上游守护测试禁止内置目录携带回环地址），模型清单在运行时构建。
 - 模型与参数照抄国内「智谱 coding plan」lane（`zhipu-coding-plan`）：14 个 GLM（`glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.6v` / `glm-4.7` / `glm-5` / `glm-5-turbo` / `glm-5v-turbo` / `glm-5.1` / `glm-5.2` / `glm-5.2-highspeed` / `glm-5.3` / `glm-5.3-flash` / `glm-5.3-highspeed`），上下文窗口、最大输出、视觉输入、tokenizer 与价格同该 lane；`glm-5.2-highspeed[1m]` 是该 lane 的折叠别名，本 provider 无折叠表，不收录。思考档位与 coding plan 相同（多数 SKU `minimal`–`high`；`glm-5.2*` 为 `high`/`max`；`glm-5.3*` 为 `low`/`high`/`max`、默认 `max` 且不可关闭）。
 - 默认无凭据：请求不携带有效密钥；若本机代理设置了 `auth.proxyApiKey`，用环境变量 `ZCODE_API_KEY`（或 `ZCODE_PROXY_API_KEY`）或 `models.yml` 的 `providers.zcode-api.apiKey` 提供；代理自身的上游登录状态不受影响。无凭据时直通不发送 `Authorization`、不注入 `X-Api-Key` 的行为由上游无凭据 Anthropic 端点机制（上游 PR #13043）提供，非 fork 补丁；`model.headers` 中显式给出的 `Authorization` 仍然生效。
 - 兼容规则提供 tool_result id 镜像与思考模式适配；认证面无 login 流程，不出现在 `/login`。
 - `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。命中这些不生效字段或 `models:` 定义时，启动会输出一条保留提示（不阻断启动）。
 
-### 公司内网模型（仅 `--offline`）
+### 公司内网模型（仅 `OMP_OFFLINE`）
 
-- `company` lane 只在 `--offline` 进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `--offline`。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 `--offline` 进程。
-- `omp models --offline` 与 `omp bench <selector…> --offline` 采用与进程级 `--offline` 同一套 company 语义：先翻转 lane 再构建 registry，因此 `omp models` 列出公司聊天模型、`omp bench` 能解析并压测 `company/<模型>` 选择器（两者同样隐藏 zcode-api，见「ZCode 本地代理」）；刷新与 selector-miss 的发现回退都用 cache-only 策略、不发公网请求；公司配置缺失或无效时把公司 provider 的错误原因写到 stderr，不静默。未传 `--offline` 时两者都不注册公司 provider。其余需要解析模型的子命令（`omp dry-balance`、`omp render`、`omp read`、`omp usage` 等）尚未提供该开关：改动这些命令时 MUST 按同一语义补齐，不得让其继续静默走 zcode/公网路径。
+- `company` lane 只在 offline（`OMP_OFFLINE=1`）进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `OMP_OFFLINE=1`。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 offline 进程。
+- `OMP_OFFLINE=1` 下的 `omp models` 与 `omp bench <selector…>` 采用与进程级 offline 同一套 company 语义：先翻转 lane 再构建 registry，因此 `omp models` 列出公司聊天模型、`omp bench` 能解析并压测 `company/<模型>` 选择器（两者同样隐藏 zcode-api，见「ZCode 本地代理」）；刷新与 selector-miss 的发现回退都用 cache-only 策略、不发公网请求；公司配置缺失或无效时把公司 provider 的错误原因写到 stderr，不静默。未设 `OMP_OFFLINE` 时两者都不注册公司 provider。其余需要解析模型的子命令（`omp dry-balance`、`omp render`、`omp read`、`omp usage` 等）尚未接入该开关：改动这些命令时 MUST 按同一语义补齐，不得让其继续静默走 zcode/公网路径。
 - 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
 - URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
 - 聊天使用 Anthropic Messages 协议和 Bearer 认证，不做公司模型发现、不请求对应厂商的公网 API。内置参数固定如下（token 数）：
@@ -164,11 +164,13 @@
 
 - 日志行为跟随上游默认，不维护 fork 专用日志策略或启动参数。
 - 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。
-- `--offline` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
-- `omp --offline` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些覆盖不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
-- `--offline` 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`task`、`vision`、`advisor` → `company/Qwen3.6-27B-public`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`plan`、`slow` → `company/GLM-5.2-public`。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。普通启动不受影响。
-- `--offline` 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
-- `--offline` 启动不检查 OMP 新版本、不自动检查或更新插件市场、不读取或展示启动更新日志，也不自动触发在线模型发现——含交互界面就绪后的后台发现，以及会话恢复、默认角色解析、prewalk 目标解析和 `enabledModels`/`--models` scope 预解析里的 discovery fallback（这些自动路径只用本地缓存，缓存缺失时按既有链路降级，不发任何请求）。同进程 task 子代理的新建与恢复也继承该限制。已安装插件、内置和缓存模型照常加载；显式 `--model` 解析、手动模型刷新、更新命令及 `/changelog` 保持原有行为。上述覆盖只在当前进程生效，不写配置文件，非 offline 启动不受影响。
+- offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）把整个数据根从 `~/.omp` 迁移到指定目录：agent 数据、缓存、运行状态、profiles 等全部派生目录随之迁移，浏览器工具的 storage-state 等跟随；项目级 `.omp/` 不受影响。与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
+- `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
+- `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些覆盖不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
+- offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`task`、`vision`、`advisor` → `company/Qwen3.6-27B-public`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`plan`、`slow` → `company/GLM-5.2-public`。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。普通启动不受影响。
+- offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
+- offline 启动不检查 OMP 新版本、不自动检查或更新插件市场、不读取或展示启动更新日志，也不自动触发在线模型发现——含交互界面就绪后的后台发现，以及会话恢复、默认角色解析、prewalk 目标解析和 `enabledModels`/`--models` scope 预解析里的 discovery fallback（这些自动路径只用本地缓存，缓存缺失时按既有链路降级，不发任何请求）。同进程 task 子代理的新建与恢复也继承该限制。已安装插件、内置和缓存模型照常加载；显式 `--model` 解析、手动模型刷新、更新命令及 `/changelog` 保持原有行为。上述覆盖只在当前进程生效，不写配置文件，非 offline 启动不受影响。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 

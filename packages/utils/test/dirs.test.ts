@@ -1,15 +1,26 @@
-import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as nativePath from "@oh-my-pi/pi-natives/path";
+import nativePath from "@oh-my-pi/pi-natives/path";
 import {
+	__resetDirsFromEnvForTests,
+	__resetProfileSnapshotForTests,
 	__resetProjectDirCacheForTests,
+	getAgentDir,
+	getBaseConfigRoot,
+	getConfigRootDir,
+	getLogsDir,
+	getPluginsDir,
+	getProfileRootDir,
+	getWorktreesDir,
 	directoryIsMissing,
 	getLogPath,
 	getProjectDir,
 	localDay,
 	relativePathWithinRoot,
+	setAgentDir,
+	setProfile,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
 
@@ -109,5 +120,81 @@ describe("dated log path", () => {
 		if (proc.exitCode === 2) return; // TZ not honored on this platform
 		if (proc.exitCode !== 0) console.error(proc.stderr.toString());
 		expect(proc.exitCode).toBe(0);
+	});
+});
+
+describe("OMP_CONFIG_ROOT relocation", () => {
+	const ENV_KEYS = [
+		"OMP_CONFIG_ROOT",
+		"PI_CONFIG_DIR",
+		"PI_CODING_AGENT_DIR",
+		"OMP_PROFILE",
+		"PI_PROFILE",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
+		"XDG_CACHE_HOME",
+	] as const;
+	let originalAgentDir = "";
+	let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
+
+	beforeEach(() => {
+		originalAgentDir = getAgentDir();
+		originalEnv = {};
+		for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
+		for (const key of ENV_KEYS) delete process.env[key];
+		__resetDirsFromEnvForTests();
+	});
+
+	afterEach(() => {
+		setProfile(undefined);
+		for (const key of ENV_KEYS) {
+			const value = originalEnv[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		setAgentDir(originalAgentDir);
+		__resetDirsFromEnvForTests();
+	});
+
+	it("defaults to ~/.omp under the home directory", () => {
+		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), ".omp"));
+		expect(getAgentDir()).toBe(path.join(os.homedir(), ".omp", "agent"));
+	});
+
+	it("relocates the base root and every derived directory", () => {
+		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
+		process.env.OMP_CONFIG_ROOT = root;
+		__resetDirsFromEnvForTests();
+
+		expect(getBaseConfigRoot()).toBe(root);
+		expect(getConfigRootDir()).toBe(root);
+		expect(getAgentDir()).toBe(path.join(root, "agent"));
+		expect(getPluginsDir()).toBe(path.join(root, "plugins"));
+		expect(getLogsDir()).toBe(path.join(root, "logs"));
+		expect(getWorktreesDir()).toBe(path.join(root, "wt"));
+	});
+
+	it("anchors named profiles under the relocated root", () => {
+		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
+		process.env.OMP_CONFIG_ROOT = root;
+		__resetDirsFromEnvForTests();
+
+		expect(getProfileRootDir("work")).toBe(path.join(root, "profiles", "work"));
+	});
+
+	it("ignores a relative value instead of re-anchoring onto cwd", () => {
+		process.env.OMP_CONFIG_ROOT = path.join("relative", "omp");
+		__resetDirsFromEnvForTests();
+
+		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), ".omp"));
+	});
+
+	it("wins over the PI_CONFIG_DIR name for the root location", () => {
+		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
+		process.env.OMP_CONFIG_ROOT = root;
+		process.env.PI_CONFIG_DIR = ".omp-alt";
+		__resetDirsFromEnvForTests();
+
+		expect(getBaseConfigRoot()).toBe(root);
 	});
 });

@@ -22,6 +22,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { offlineFromEnv } from "./args";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelStringWithRouting } from "../config/model-resolver";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
@@ -145,8 +146,6 @@ export interface BenchCommandArgs {
 		cachePrefixBytes?: number;
 		cachePairs?: number;
 		cacheConcurrency?: number;
-		/** Company environment: enable the internal lane (hides zcode-api); no public discovery. */
-		offline?: boolean;
 	};
 }
 
@@ -1151,7 +1150,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 		else writeStdout(`${text}\n`);
 	};
 
-	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)({ offline: command.flags.offline === true });
+	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)({ offline: offlineFromEnv() });
 	try {
 		const targets = await resolveBenchTargets(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
 		if (cacheMode) assertCacheModeSupported(targets);

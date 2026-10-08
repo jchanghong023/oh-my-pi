@@ -25,6 +25,7 @@ async function startWith(argv: string[], overrides: Record<string, string> = {})
 			PI_CODING_AGENT_DIR: tempDir.path(),
 			PI_WALK_WORKERS: undefined,
 			FS_SCAN_CACHE_TTL_MS: undefined,
+			OMP_OFFLINE: undefined,
 			...overrides,
 		},
 		stdin: "ignore",
@@ -87,20 +88,21 @@ describe("runRootCommand — fork filesystem tuning", () => {
 		}
 	});
 
-	it("sets FS_SCAN_CACHE_TTL_MS for an --offline process", async () => {
-		const snapshot = await startWith(["--offline", "--print", "hi"]);
+	it("sets FS_SCAN_CACHE_TTL_MS for an offline (OMP_OFFLINE=1) process", async () => {
+		const snapshot = await startWith(["--print", "hi"], { OMP_OFFLINE: "1" });
 
 		expect(snapshot.scanTtl).toBe("30000");
 	});
 
-	it("leaves FS_SCAN_CACHE_TTL_MS alone without --offline", async () => {
+	it("leaves FS_SCAN_CACHE_TTL_MS alone without OMP_OFFLINE", async () => {
 		const snapshot = await startWith(["--print", "hi"]);
 
 		expect(snapshot.scanTtl).toBeUndefined();
 	});
 
 	it('keeps explicitly configured values, including the "0" opt-outs', async () => {
-		const snapshot = await startWith(["--offline", "--print", "hi"], {
+		const snapshot = await startWith(["--print", "hi"], {
+			OMP_OFFLINE: "1",
 			PI_WALK_WORKERS: "0",
 			FS_SCAN_CACHE_TTL_MS: "7",
 		});

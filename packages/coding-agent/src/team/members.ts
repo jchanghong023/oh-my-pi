@@ -18,7 +18,7 @@ import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
 	configuredMembers: readonly string[];
-	/** Whether the company lane is active in this process (`--offline`). */
+	/** Whether the company lane is active in this process (OMP_OFFLINE). */
 	offlineLaneActive: boolean;
 	/** Full patterns of the company lane's current chat models, e.g. `company/GLM-5.2-public`. */
 	companyModelPatterns: readonly string[];
@@ -31,7 +31,7 @@ export type TeamMembersResult =
 	| { ok: false; error: string };
 
 const CONFIG_EXAMPLE = [
-	"team.members 未配置，且当前进程没有可用的 company 模型 lane（--offline 下默认 company 名单也可能被 enabledModels 过滤为空），无法组建多模型团队。",
+	"team.members 未配置，且当前进程没有可用的 company 模型 lane（OMP_OFFLINE 下默认 company 名单也可能被 enabledModels 过滤为空），无法组建多模型团队。",
 	"",
 	"在 settings（config.yml）中配置参与模型（完整 ID；可用 ID 以 `omp models` 输出为准），格式例如：",
 	"",
@@ -39,8 +39,8 @@ const CONFIG_EXAMPLE = [
 	"    - <provider>/<model-id>",
 	"    - <provider>/<model-id>",
 	"",
-	"注：`company/GLM-5.2-public` 等 company 模型仅存在于 `--offline` 进程；普通启动请从 `omp models` 列出的可用模型中选择。",
-	"--offline 进程中未配置时默认使用 company lane 全部可用聊天模型；普通启动必须显式配置。",
+	"注：`company/GLM-5.2-public` 等 company 模型仅存在于 `OMP_OFFLINE=1` 进程；普通启动请从 `omp models` 列出的可用模型中选择。",
+	"OMP_OFFLINE 进程中未配置时默认使用 company lane 全部可用聊天模型；普通启动必须显式配置。",
 	"/team 不会静默降级为单模型流程。",
 ].join("\n");
 

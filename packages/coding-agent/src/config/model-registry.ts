@@ -54,13 +54,7 @@ import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
-import {
-	COMPANY_PROVIDER_ID,
-	getCompanyConfig,
-	getCompanyConfigError,
-	isCompanyEnvironment,
-	isCompanyLaneActive,
-} from "./company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError, isCompanyLaneActive } from "./company-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -946,7 +940,7 @@ export class ModelRegistry {
 		} = logger.time("modelRegistry:loadCustomModels", () => this.#loadCustomModels());
 		const companyError = this.#ignoreLocalModelConfig ? undefined : getCompanyConfigError();
 		this.#configError = configError;
-		// The company provider only registers in --offline processes; inactive
+		// The company provider only registers in OMP_OFFLINE processes; inactive
 		// lanes leave no discovery state, so the provider is simply absent.
 		if (!this.#ignoreLocalModelConfig && isCompanyLaneActive()) {
 			this.#providerDiscoveryStates.set(COMPANY_PROVIDER_ID, {
@@ -1000,8 +994,9 @@ export class ModelRegistry {
 		const providers = new Set<string>(getBundledProviders());
 		if (!this.#ignoreLocalModelConfig) {
 			if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
-			// The local proxy lane disappears when usable offline company config exists.
-			if (!isCompanyEnvironment()) providers.add(ZCODE_API_PROVIDER_ID);
+			// The local proxy lane disappears from every offline process, with or
+			// without usable company config.
+			else providers.add(ZCODE_API_PROVIDER_ID);
 		}
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
@@ -1128,8 +1123,8 @@ export class ModelRegistry {
 	/**
 	 * Runtime-synthesized provider rows (company, zcode-api) must never carry
 	 * user `models:` overlays or provider model overrides: strip any rows the
-	 * composition passes touched and re-push the pristine memoized rows. In the
-	 * company environment the zcode-api rows stay stripped (fork contract).
+	 * composition passes touched and re-push the pristine memoized rows. In
+	 * offline processes the zcode-api rows stay stripped (fork contract).
 	 */
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		if (this.#ignoreLocalModelConfig) return models;
@@ -1139,7 +1134,7 @@ export class ModelRegistry {
 		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
 			stripped.push(...getCompanyChatModels());
 		}
-		if (!isCompanyEnvironment() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
+		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
 			stripped.push(...getZcodeApiModels());
 		}
 		return stripped;

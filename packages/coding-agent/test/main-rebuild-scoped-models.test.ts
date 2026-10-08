@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -16,6 +16,19 @@ import {
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+
+const originalOfflineEnv = process.env.OMP_OFFLINE;
+
+// parseArgs reads OMP_OFFLINE at call time; a machine-level export (the company
+// setup fork.md recommends) must not flip this file's online-path assertions.
+beforeEach(() => {
+	delete process.env.OMP_OFFLINE;
+});
+
+afterEach(() => {
+	if (originalOfflineEnv === undefined) delete process.env.OMP_OFFLINE;
+	else process.env.OMP_OFFLINE = originalOfflineEnv;
+});
 
 function model(id: string): Model<Api> {
 	return buildModel({
@@ -170,7 +183,11 @@ describe("resolveScopedModels", () => {
 			registry.available = [model("b")];
 		});
 
-		const scoped = await resolveScopedModels(parseArgs(["--models", "prov/b", "--offline"]), registry, settings);
+		const scoped = await resolveScopedModels(
+			{ ...parseArgs(["--models", "prov/b"]), offline: true },
+			registry,
+			settings,
+		);
 
 		expect(registry.refreshCalls).toBe(1);
 		expect(registry.refreshStrategies).toEqual(["offline"]);
@@ -226,9 +243,9 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(options.scopedModels?.map(entry => entry.model.id)).toEqual(["a"]);
 	});
 
-	it("forwards --offline to the session options and defaults it off otherwise", async () => {
+	it("forwards offline mode to the session options and defaults it off otherwise", async () => {
 		const offline = await buildSessionOptions(
-			parseArgs(["--offline"]),
+			{ ...parseArgs([]), offline: true },
 			[],
 			SessionManager.inMemory(),
 			registry(),
@@ -269,13 +286,13 @@ describe("buildSessionOptions prewalk target discovery", () => {
 		return new PrewalkRegistry([]);
 	}
 
-	// Fork contract (docs-zh-CN/requirements/fork.md「安装与运行」): an --offline process must
+	// Fork contract (docs-zh-CN/requirements/fork.md「安装与运行」): an OMP_OFFLINE process must
 	// keep every automatic discovery fallback cache-only, including prewalk
 	// target resolution.
 	it("resolves the prewalk target cache-only in an offline process", async () => {
 		const registry = prewalkRegistry();
 		await buildSessionOptions(
-			parseArgs(["--prewalk-into", "prov/b", "--offline"]),
+			{ ...parseArgs(["--prewalk-into", "prov/b"]), offline: true },
 			[],
 			SessionManager.inMemory(),
 			registry as unknown as ModelRegistry,

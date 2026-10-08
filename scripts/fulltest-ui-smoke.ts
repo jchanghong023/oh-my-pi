@@ -147,8 +147,9 @@ stubServerCleanup.run = () => {
 		rmSync(baseConfigRoot, { recursive: true, force: true });
 	} catch {}
 };
-const main = startTui(["--offline", "--profile", "localci-ui"], {
+const main = startTui(["--profile", "localci-ui"], {
 	PI_CONFIG_DIR: path.basename(baseConfigRoot),
+	OMP_OFFLINE: "1",
 });
 const rendered = await waitFor(() => {
 	// The TUI repaints in place: hides the cursor, positions it absolutely,
@@ -201,7 +202,7 @@ await fs.rm(baseConfigRoot, { recursive: true, force: true });
 stubServerCleanup.run = undefined;
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
-// The `/team` case runs a real TUI (no --offline) whose session model and
+// The `/team` case runs a real TUI (no OMP_OFFLINE) whose session model and
 // team.members point at the fork's zcode-api lane; ZCODE_API_BASE_URL routes
 // every model call to the stub below. Each child subagent asks exactly one
 // question; the stub answers with a `yield` tool_use carrying schema-valid
@@ -544,6 +545,9 @@ try {
 	const team = startTui(["--profile", TEAM_PROFILE, "--model", "zcode-api/glm-5.2"], {
 		ZCODE_API_BASE_URL: `http://127.0.0.1:${stubServer.port}`,
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
+		// The /team case must run online: a machine-level OMP_OFFLINE export hides
+		// the zcode-api lane this session model and team roster resolve through.
+		OMP_OFFLINE: undefined,
 	});
 	const teamRendered = await waitFor(() => {
 		const cursorControl =
