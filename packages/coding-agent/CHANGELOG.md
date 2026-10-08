@@ -1,9 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
+
 
 ### Fixed
 
+- Kept `/team` comparisons that recommend an eligible sibling from incorrectly invalidating a blocked proposal's discussion.
+- Reported unresolved persisted `*` model-role aliases as automatic selection rather than missing models in the RPC role catalog.
 - Fixed `omp usage` reporting an account exactly at its reserve (e.g. 30% left with a 30% reserve) as eligible instead of inside reserve ([#14765](https://github.com/can1357/oh-my-pi/pull/14765) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the todo reminder pushing the agent to keep working after it offered options and asked the user to choose ([#14800](https://github.com/can1357/oh-my-pi/pull/14800) by [@mrmans0n](https://github.com/mrmans0n))
 - Fixed the todo reminder telling the model to keep working right after it asked the user a bolded or italicised question ([#12051](https://github.com/can1357/oh-my-pi/issues/12051), [#14353](https://github.com/can1357/oh-my-pi/pull/14353) by [@F0Rextasy](https://github.com/F0Rextasy))
@@ -23,23 +29,6 @@
 - Fixed the terminal title and Tern busy state staying in the working state after an interrupt cancels a scheduled retry or continuation before it starts ([#14917](https://github.com/can1357/oh-my-pi/pull/14917) by [@wolfiesch](https://github.com/wolfiesch))
 - Fixed Anthropic web search through a custom `anthropic-messages` provider sending a plain API-key request even though the provider's conversations use Claude Code request shaping; search now honors the model's `isOAuth` like the main conversation, so keys that only work with that shaping no longer fail with HTTP 429 `rate_limit_error` ([#14919](https://github.com/can1357/oh-my-pi/pull/14919) by [@farnoy](https://github.com/farnoy))
 - Fixed Anthropic web search spreading the model's configured headers under its own without the main conversation's case-insensitive merge and enforced-header filtering, so a configured `authorization` header could replace the credential or join it comma-separated on the wire ([#14919](https://github.com/can1357/oh-my-pi/pull/14919) by [@farnoy](https://github.com/farnoy))
-
-### Removed
-
-- Removed the `PI_SUBPROCESS_CMD` environment variable; subagents run in-process and never read it ([#14632](https://github.com/can1357/oh-my-pi/pull/14632) by [@jorgoose](https://github.com/jorgoose))
-
-## [18.8.4] - 2026-10-08
-
-### Changed
-
-- fulltest now tests Rust at crate granularity: only crates with changed files run their tests via `test:rs --affected` (vendored crate changes test their consumers through a Cargo.lock closure; shared-config, parse-failure, and deleted-crate inputs fall back to the full workspace). The TS gate stays at fork-diff test files, so POSIX-oriented upstream suites are never expanded locally.
-
-### Breaking Changes
-
-- Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
-
-### Fixed
-
 - Preserved the existing repo index when a rebuild cannot create its backup, and corrected identifier-boundary ranking for supplementary Unicode characters.
 - Rejected init-only `--name` options on `omp docs remove` and sanitized document-import confirmation labels without changing the selected paths or names.
 - Kept repeated `/team` discussions' results separate, stopped delivery acknowledgements after cancellation, and reported running and failed participants.
@@ -77,16 +66,54 @@
 - Fixed Biome cancellation while descendant processes still hold output pipes and Windows batch launchers closing those pipes.
 - Released browser mouse capture and settled supervisor calls when drag cancellation or worker teardown interrupts browser operations.
 - Preserved malformed `zcode-api` provider values for schema validation instead of silently normalizing them.
+- Fixed speech transcription language selection for BCP-47 extension and private-use tags, including cloud transcription and local Whisper.
+- Finished binary-update download progress exactly once when size, digest, or permission verification fails.
+- Cleaned unlocked Windows binary backups even when the selected release is already installed.
+- Kept offline runtime provider refreshes from restoring the hidden `zcode-api` lane.
+- Restored default role resolution after clearing a persisted user model role.
+- Rejected `/team` synthesis that presents a blocked proposal as an available option.
+- Reported a missing query for null `wiki` arguments instead of an internal error.
+- Fixed ACP `/model <selector>` handling, invalid `/team` member configuration diagnostics, and stale document-hub errors.
+- Preserved indented heading content in document indexes and prevented cyclic directory-junction imports.
+- Warned when the canary update channel is selected on a fork binary, with the stable update command.
+- Kept native compaction fallback available when the largest-context model is ineligible.
+- Prevented pending RPC plan approval from starting automatic loop turns, and retained the plan-role model after cancellation.
+- Prevented superseded interactive plan reviews from clearing context or executing an outdated plan.
+- Kept read-only collab keyword commands local without discarding their drafts.
+- Isolated UI smoke configuration and offline state, and excluded Rust documentation-only changes from affected-crate selection while preserving embedded Markdown dependencies.
+- Preserved combined native JSON Schema constraints when definitions are present.
+- Completed RPC `/move` arguments without leaving stale whitespace-separated path suffixes.
+- Selected fulltest baselines from renamed mirror remotes without overlooking conflicting SHAs, and required `/team` smoke results to survive in the saved transcript.
+- Listed saved sessions without valid creation timestamps, and kept automatic role selections and model-kind candidates consistent.
+- Canceled old RPC dialogs and plan/loop work after `/session delete`, while preserving the deleting command's result after session rollover.
+- Kept another live SDK session's tiny-model requests running when a sibling root session closes or fails to start.
+- Kept ACP sessions addressable through their original advertised handle after `/session delete` changes the saved-session identity.
+- Pinned slowtest to a clean main commit before validation and rejected workspace or commit changes between stages.
+- Canceled slowtest-owned local and WSL processes without bypassing guest cleanup, including cancellation before guest PID publication.
+- Resolved SCP-style WSL clone destinations correctly and verified Linux toolchains before changing the guest Git checkout.
+
 
 ### Removed
 
+- Removed the `PI_SUBPROCESS_CMD` environment variable; subagents run in-process and never read it ([#14632](https://github.com/can1357/oh-my-pi/pull/14632) by [@jorgoose](https://github.com/jorgoose))
 - Removed the persistent collab room identity (`collab/identity.json`) and the fork-hosted browser client: room id and secrets rotate with every session again, so a shared link dies at the next `/new`/`resume`/`fork`/`/collab stop`, and `collab.webUrl` defaults back to empty (derived from `collab.relayUrl`).
 - Removed out-of-contract project-RPC `/hub`, branch/fork, file/data attachments, and session-level plan controls; stock messages/images and TUI plan approvals remain.
 - Removed prefix-based automatic approvals, unused skill-management APIs and hook telemetry, and the redundant wiki-index info action; standard approvals and stock RPC behavior remain.
 
-### Fixed
+### Changed
 
-- Fixed `ask` questions in Tern covering the end of the transcript with a sheet that blocked scrolling, hiding the explanation the question was about; the question now sits in the composer's place, framed like the composer, below a transcript you can read and scroll while deciding ([#14812](https://github.com/can1357/oh-my-pi/pull/14812) by [@H4vC](https://github.com/H4vC))
+- fulltest now tests Rust at crate granularity: only crates with changed files run their tests via `test:rs --affected` (vendored crate changes test their consumers through a Cargo.lock closure; shared-config, parse-failure, and deleted-crate inputs fall back to the full workspace). The TS gate stays at fork-diff test files, so POSIX-oriented upstream suites are never expanded locally.
+- Session launches size native file-walker concurrency from the host; offline launches default the file-completion scan cache to 30 seconds while respecting explicit environment values.
+- Fork binary builds embed fork release routing and build versions; updates show download progress and warn about conflicting PATH targets.
+- Idle recaps default to off and dark terminals default to `dark-terminal`; plan mode uses `Shift+Tab` and thinking-level cycling uses `Shift+F1`.
+
+### Added
+
+- Exported `WikiTool` and its parameter type from the public tools barrel.
+
+
+## [18.8.4] - 2026-10-08
+
 ### Changed
 
 - Agent Hub keeps existing agents in place while open; new agents appear first in the flat roster or within their tree sibling group ([#13066](https://github.com/can1357/oh-my-pi/pull/13066) by [@kmccleary3301](https://github.com/kmccleary3301))
@@ -176,8 +203,6 @@
 
 ### Added
 
-- Files the write tool creates now preview the way the matching code blocks in replies do, building up while the write streams: `.svg` as an image and Mermaid (`.mmd`, `.mermaid`) as a diagram under the write card, and in Tern also 3D models (`.obj`, `.ply`, `.wrl`, `.x3dv`, `.stl`, `.gltf`, `.usda`); in Tern an SVG write now draws like an SVG figure in a reply
-- Exported `WikiTool` and its parameter type from the public tools barrel.
 - Write-tool previews now render as files stream: SVG files appear as images, and Mermaid files (`.mmd` and `.mermaid`) appear as diagrams. Tern also previews supported 3D model formats (`.obj`, `.ply`, `.wrl`, `.x3dv`, `.stl`, `.gltf`, and `.usda`) and renders SVG writes as SVG figures.
 - Added the `title.icons` setting to show session title cards with a Nerd Font glyph and emoji fallback (`nf+emoji`, default), always the emoji (`emoji`), or as plain titles (`boring`).
 - Added the `title.generator` setting to name sessions from a fork of the reply (`fork`, default) or with the title model only (`tiny`).
@@ -471,7 +496,6 @@
 - `/dump all` writes a zip to the temp directory with the main transcript, the LLM request JSON, and one file per subagent transcript (nested subagents included, killed ones marked aborted); the TUI copies the archive path to the clipboard. Plain `/dump` is unchanged ([#13908](https://github.com/can1357/oh-my-pi/pull/13908) by [@H4vC](https://github.com/H4vC))
 - Added `/effort [level]` to set the thinking level without switching models: bare `/effort` opens a picker, and completions offer only the current model's levels within the session effort ceiling. Its description includes thinking and intelligence so either term finds it; `Shift+Tab` still cycles levels ([#12222](https://github.com/can1357/oh-my-pi/pull/12222) by [@Xytronix](https://github.com/Xytronix), [#14113](https://github.com/can1357/oh-my-pi/pull/14113) by [@andrebrait](https://github.com/andrebrait)).
 - Added a per-call `model` selector to task items, eval `agent()`, and `workpool()`: a `provider/model[:level]` pattern or role alias, or an ordered array of them, that takes precedence over `task.agentModelOverrides` and the agent definition. Selection is an ordered preference — requested candidates are tried before configured fallbacks — and the spawn fails at preflight instead of silently routing elsewhere when the selector is the ambiguous literal `default`/`inherit` with or without a `:level` suffix (use `@default`), is blank or comma-only, carries an invalid thinking suffix, matches no available model, or sits on the batch container instead of a `tasks[]` item. A requested model without working credentials fails the spawn instead of running on the parent's model, and the error tells the caller to report the unavailable model rather than substitute another. A pool applies its selector to each worker's first turn and reuses that worker's session afterwards ([#12229](https://github.com/can1357/oh-my-pi/pull/12229) by [@Xytronix](https://github.com/Xytronix), [#13669](https://github.com/can1357/oh-my-pi/pull/13669) by [@andrebrait](https://github.com/andrebrait)).
-- Added `/btw` side questions for RPC hosts: `btw` asks one (or a follow-up in an earlier topic) while the main turn keeps running, the answer streams as `btw_delta` / `btw_record` frames, `btw_cancel` stops it, and `get_btw_history` lists the session's BTW history shared with the TUI ([#14110](https://github.com/can1357/oh-my-pi/pull/14110) by [@andrebrait](https://github.com/andrebrait))
 
 ### Changed
 
@@ -535,9 +559,6 @@
 - Added periodic completion estimates for running subagents, with configurable polling through `task.completionProbeMs` and progress displayed in wait and task views.
 - Added the RPC `fork` command (`RpcClient.fork(entryId?)`, Python `fork(entry_id=None)`): it moves an RPC session onto a new session file holding the history up to and including any message entry (and the tool results answering a cut tool-call batch), together with the session's artifacts, or a copy of the whole session when `entryId` is omitted ([#14077](https://github.com/can1357/oh-my-pi/pull/14077) by [@andrebrait](https://github.com/andrebrait)).
 - Added `reason` (`"branch"`, `"fork"` or `"btw"`) to the `session_before_branch` and `session_branch` extension and hook events, so handlers can tell whether `entryId` is dropped (`branch`) or kept ([#14077](https://github.com/can1357/oh-my-pi/pull/14077) by [@andrebrait](https://github.com/andrebrait)).
-- Added periodic completion estimates for running subagents: every 2 minutes each working subagent is asked, through a cached `/btw`-style side request, how far along it is, and the `XY%` shows next to it in wait and task views. Each check sees the subagent's previous estimate and any tool call it is still writing, so long file writes no longer read as 0%. Set the interval or turn it off with `task.completionProbeMs`.
-- Added a `goal` command for RPC hosts (`--mode rpc` and `rpc-ui`) to create, read, pause, resume and drop goals, the current goal in `get_state`, and opt-in automatic goal continuation with `goal.continuationModes: ["rpc"]` ([#13952](https://github.com/can1357/oh-my-pi/pull/13952) by [@shawnkoh](https://github.com/shawnkoh))
-- Added `--goal <objective>` for interactive launches: it starts a fresh session in goal mode and begins working on the objective immediately, without typing `/goal` ([#13879](https://github.com/can1357/oh-my-pi/pull/13879) by [@shawnkoh](https://github.com/shawnkoh))
 
 ### Fixed
 
@@ -550,16 +571,11 @@
 
 ## [18.4.10] - 2026-10-02
 
-### Breaking Changes
-
-- `createAgentSession` now throws `Could not restore model <provider/id>` when a resumed session's saved models cannot be restored, and `AgentSession.switchSession` throws it, keeping the current session, when it opens such a session; both still fall back with a warning when `hasUI` is set and `retry.modelFallback` is on, and hosts that cannot show that warning can opt out with `allowSessionModelFallback: false` ([#13689](https://github.com/can1357/oh-my-pi/pull/13689) by [@alphastorm](https://github.com/alphastorm)).
-
 ### Added
 
 - Added global and per-advisor review cadence, including final-yield reviews and intervals that accumulate skipped transcript updates ([#12385](https://github.com/can1357/oh-my-pi/pull/12385) by [@olegpulatov](https://github.com/olegpulatov)).
 - Added per-advisor catch-up policy and cancellable `strict` waiting, so asynchronous turn reviewers can run beside synchronous final reviewers ([#12385](https://github.com/can1357/oh-my-pi/pull/12385) by [@olegpulatov](https://github.com/olegpulatov)).
 - Added `/jobs full` to show each background bash job's full command line; plain `/jobs` still shortens it to fit the terminal ([#13980](https://github.com/can1357/oh-my-pi/pull/13980) by [@rickythefox](https://github.com/rickythefox))
-- RPC `open_session` and `switch_session` accept an optional `provider`/`modelId` pair that binds the session to that model instead of its saved one, as `--model` does at startup; `RpcClient.openSession()`/`switchSession()` and the Python client's `open_session()`/`switch_session()` take it too ([#13689](https://github.com/can1357/oh-my-pi/pull/13689) by [@alphastorm](https://github.com/alphastorm))
 
 ### Changed
 
@@ -594,7 +610,6 @@
 - Fixed the Darwin Nix flake / NixOS module build producing an `omp` that fails to start after `nix-collect-garbage` with `Library not loaded: /nix/store/…-libiconv-…` by repointing the embedded native addon's `libiconv` install name at the system library and failing the build if the addon references any `/nix/store` path ([#13992](https://github.com/can1357/oh-my-pi/pull/13992) by [@krzysztofkusmierczyk](https://github.com/krzysztofkusmierczyk)).
 - Fixed `/context` and clicks on the status-line context meter stacking a new Context Usage card every time; the existing card is refreshed in place, or moved to the bottom if newer blocks follow it
 - Fixed the jevify keyword notice teaching the removed `judge()` handle API, so agents following it failed on the first judge cell; it now uses `judge_batch()` ([#13588](https://github.com/can1357/oh-my-pi/issues/13588), [#13698](https://github.com/can1357/oh-my-pi/pull/13698) by [@holny](https://github.com/holny))
-- Fixed resuming a session whose saved model cannot be restored silently sending its transcript to another model. At startup, `--continue`/`--resume` in print, JSON, RPC, and `rpc-ui` modes (and in the TUI with `retry.modelFallback: false`) now exits with an error naming the model instead of using the settings-default or first available model. At runtime, RPC `open_session` and `switch_session`, ACP session load and fork, and extension session switches fail with `Could not restore model <provider/id>` and keep the current session instead of continuing on the current model; TUI `/resume` warns `Could not restore model <provider/id>. Using <provider/id>`, or fails with the error when `retry.modelFallback` is off. `/resume` also restores models from discovery-backed providers the way startup does ([#12274](https://github.com/can1357/oh-my-pi/issues/12274), [#13689](https://github.com/can1357/oh-my-pi/pull/13689) by [@alphastorm](https://github.com/alphastorm)).
 
 ## [18.4.9] - 2026-10-01
 
@@ -681,8 +696,6 @@
 
 ### Fixed
 
-- Fixed project RPC session and subagent approval isolation, live subagent listing, bash responses and cancellation, stale command rejection, and scoped model-role writes.
-- Fixed project RPC literal-text prompts, registered-command execution, session-specific command catalogs, subagent pagination, and skill-refresh adoption receipts.
 - Fixed the subagent live preview blanking or mislabelling a running call when a sibling call finishes: concurrent calls are tracked by call id and keep their own intent, and the row keeps the last completed call with its success or error mark until the next one starts ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
 - Fixed subagent tool previews rewriting a search pattern that names a home directory: path arguments are now shortened by argument key, so the pattern still shows what was searched ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
 - Fixed background task job progress dropping the current tool's arguments and start time ([#11210](https://github.com/can1357/oh-my-pi/pull/11210) by [@DarkPhilosophy](https://github.com/DarkPhilosophy)).
@@ -696,12 +709,6 @@
 - Fixed compiled OMP extensions importing `@oh-my-pi/pi-catalog` and its provider-model subpaths ([#13731](https://github.com/can1357/oh-my-pi/issues/13731)).
 - Explicit `symbolPreset: unicode` now stays Unicode after a Glyph Protocol handshake instead of switching the status bar to Nerd Font icons ([#13865](https://github.com/can1357/oh-my-pi/issues/13865)).
 - Fixed rewinding (`/rewind`, `/tree`) during a running turn hiding the queued-prompt bar, making the still-pending queue look deleted and uneditable ([#13680](https://github.com/can1357/oh-my-pi/issues/13680))
-
-### Added
-
-
-### Fixed
-
 
 ## [18.4.4] - 2026-09-29
 
@@ -940,52 +947,6 @@
 
 ### Added
 
-- Collab links are now long-lived: the room identity persists in `collab/identity.json` under the config root, so one link keeps working across `/new`, `/resume`, `/fork`, `/collab stop`, and omp restarts. `/collab` and `/collab view` also copy the browser deep link to the clipboard.
-- Browser collab guests can run the host's whole command surface — builtins, `/skill:<name>`, extension/custom/file commands, `!`/`!!` shell, `$`/`$$` python, and session-rotating commands such as `/new` — with `/` completion from a palette the host advertises on join; `/move` and `/add-dir` complete host directory paths, and a room rotation keeps the page reconnecting instead of ending it.
-- The fork's browser client is published with the docs site at `https://jchanghong023.github.io/oh-my-pi/collab/` and `collab.webUrl` now defaults to it, so `/collab` links open a client with those features instead of the relay-hosted upstream build (set `collab.webUrl` empty for the upstream behavior).
-
-### Removed
-
-- Removed the fork-only Main/Discuss primary-agent mode (`Shift+F2`) along with its tool gating, prompt section, and status-bar segment; existing sessions resume as regular sessions.
-
-### Changed
-
-- Session-starting commands now size the native file walker from the host: with `PI_WALK_WORKERS` unset and more than 8 logical cores, the process sets it to `min(cores/2, 16)` (32 cores → 16), and `--offline` processes additionally default `FS_SCAN_CACHE_TTL_MS` to 30000ms so `@` completion stops rescanning network shares on every keystroke. Explicitly set values, including `0`, always win, and no config file is written.
-- Local `build-binary` builds now embed the fork update repository, so `omp update` on a locally built binary targets fork releases instead of the official upstream distribution.
-- Fork binaries now use fork-scoped build versions and update from the fork's GitHub Releases.
-- `omp update` now shows binary download progress and warns when the PATH-resolved `omp` differs from the update target.
-- `omp --version` now includes the UTC release timestamp, rounded to the minute.
-- Idle recaps are now disabled by default; enable `recap.enabled` to restore them.
-- Dark terminals now use the `dark-terminal` theme by default; light terminals continue to use `light`.
-- Plan mode now uses Shift+Tab by default, matching Codex; reasoning effort cycling moved to Alt+,.
-- The `/model` interface now shows only free models for OpenCode Zen while leaving every other provider unchanged.
-- Changed the default thinking-level shortcut to `Shift+F1` and Main/Discuss switching to `Shift+F2`.
-
-### Fixed
-
-- Fixed ACP `/model <selector>` being forwarded as a prompt instead of selecting the requested model or reporting an unknown selector; the TUI `/model` picker is unchanged.
-- Fixed Windows built-in tools (rg/grep/ls/…) block-buffering captured-pipe output until tool exit: anonymous pipes are no longer misdetected as regular files, and `sed` redirected output now uses the regular-file snapshot.
-- Fixed the Windows SIGINT diagnostics console-process probe (a zero-length buffer always failed), so `sigint-diagnostics.log` again includes the attached process list.
-- Fixed watchdog and debug-bundle log paths using a UTC date while the rotating sink writes local-date filenames.
-- Fixed `/team` crashing with a raw TypeError when `team.members` is not a list; it now reports a configuration example instead.
-- Fixed the docs hub keeping a stale error line after successful follow-up actions, and collab-forwarded magic-keyword prompts now receive the keyword strategy notices.
-- Marked the `musl-release` script test Linux-only and added the docs/wiki suites to the local fulltest whitelist; fulltest/fastcheck phase timeouts now kill the whole child process tree.
-- Fixed `update.channel=canary` failing silently on fork binary installs: the startup version check now shows a notice that the canary channel is unavailable and points at `omp update --stable`.
-- Fixed external Markdown document indexes dropping a section whose only content is an indented-code `#` heading line, and stopped directory imports from recursing forever through a cyclic Windows junction.
-- Fixed the TUI becoming unresponsive while streamed edit previews arrive in a burst.
-- Fork binary verification now preserves the `+fork.<build>` suffix reported by installed executables.
-
-### Added
-
-- Added unified predictive text engine with pluggable N-gram, SmolLM2, and macOS native providers
-- Added `omp predict` CLI command for evaluating completion engine performance
-- Added cross-process prediction daemon for managing state, history ingestion, and engine fallbacks
-- Added support for dynamic eval prelude guidance via hidden session notices
-- Added a required `complexity` rationale field to the `task` tool for improved auto-thinking depth classification
-- Added the `wait` tool automatically to agents that use `task` or `bash` to improve background process coordination
-- Added a context-aware hint system for empty composers that displays suggestions based on agent activity and effort
-- Added an optional `scope` to the `retain` and `learn` tools, offered when `mnemopi.scoping` is `global` or `per-project-tagged`: `scope: "global"` stores a memory or lesson in the Mnemopi bank every project recalls instead of the current project's bank ([#13324](https://github.com/can1357/oh-my-pi/pull/13324) by [@alphastorm](https://github.com/alphastorm)).
-- Added `/btw` to the commands available from a focused subagent view; it asks about the focused agent's transcript instead of the main session's, and its answers can be copied or followed up but not branched into the main session ([#13412](https://github.com/can1357/oh-my-pi/pull/13412) by [@H4vC](https://github.com/H4vC))
 - Added a unified predictive text engine with N-gram, SmolLM2, and macOS native providers, including cross-engine blending, background model downloads, and a cross-process prediction daemon.
 - Added the `omp predict` command for evaluating completion performance and support for ingesting existing Claude Code and Codex prompt histories to bootstrap predictions on new installations.
 - Added `omp skill list [dir] [--json]` to report skills resolved for a session directory, including discovery warnings in JSON output.

@@ -505,11 +505,18 @@ export class ChildProcess<In extends InMask = InMask> {
 		if (this.#stdoutExposed || this.proc.stdout.locked) return false;
 
 		const reader = this.proc.stdout.getReader();
+		this.#pipeReaders.add(reader);
 		// Empty stdout can reach EOF without any consumer pulling the wrapper.
 		// Let that EOF release lifecycle listeners even when stdout stays unused.
 		void reader.closed.then(
-			() => this.#markStdoutDone(),
-			() => this.#markStdoutDone(),
+			() => {
+				this.#pipeReaders.delete(reader);
+				this.#markStdoutDone();
+			},
+			() => {
+				this.#pipeReaders.delete(reader);
+				this.#markStdoutDone();
+			},
 		);
 		let finished = false;
 		// A reader that has never issued a read cannot tell an open pipe from a
@@ -524,6 +531,7 @@ export class ChildProcess<In extends InMask = InMask> {
 		const finish = () => {
 			if (finished) return;
 			finished = true;
+			this.#pipeReaders.delete(reader);
 			if (pulled) this.#openPipeReaders--;
 			try {
 				reader.releaseLock();

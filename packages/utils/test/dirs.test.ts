@@ -5,21 +5,23 @@ import * as path from "node:path";
 import * as nativePath from "@oh-my-pi/pi-natives/path";
 import {
 	__resetDirsFromEnvForTests,
-	__resetProfileSnapshotForTests,
 	__resetProjectDirCacheForTests,
 	getAgentDir,
 	getBaseConfigRoot,
 	getConfigRootDir,
+	getDocumentConversionCacheDir,
+	getGlobalDaemonRuntimeRoot,
 	getLogsDir,
 	getPluginsDir,
 	getProfileRootDir,
 	getWorktreesDir,
+	getPuppeteerDir,
+	getSessionsDir,
 	directoryIsMissing,
 	getLogPath,
 	getProjectDir,
 	localDay,
 	relativePathWithinRoot,
-	setAgentDir,
 	setProfile,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
@@ -134,11 +136,9 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 		"XDG_STATE_HOME",
 		"XDG_CACHE_HOME",
 	] as const;
-	let originalAgentDir = "";
 	let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 	beforeEach(() => {
-		originalAgentDir = getAgentDir();
 		originalEnv = {};
 		for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
 		for (const key of ENV_KEYS) delete process.env[key];
@@ -146,13 +146,11 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 	});
 
 	afterEach(() => {
-		setProfile(undefined);
 		for (const key of ENV_KEYS) {
 			const value = originalEnv[key];
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
 		}
-		setAgentDir(originalAgentDir);
 		__resetDirsFromEnvForTests();
 	});
 
@@ -173,6 +171,44 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 		expect(getLogsDir()).toBe(path.join(root, "logs"));
 		expect(getWorktreesDir()).toBe(path.join(root, "wt"));
 	});
+
+	it("expands a home-relative root for derived agent state", () => {
+		process.env.OMP_CONFIG_ROOT = "~/omp-config-root-fixture";
+		__resetDirsFromEnvForTests();
+
+		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), "omp-config-root-fixture"));
+		expect(getAgentDir()).toBe(path.join(os.homedir(), "omp-config-root-fixture", "agent"));
+	});
+
+	it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
+		"keeps data, caches, and global runtime state inside the explicit root despite initialized XDG paths",
+		() => {
+			const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "omp-root-xdg-"));
+			const root = path.join(fixture, "config");
+			const xdg = path.join(fixture, "xdg");
+			fs.mkdirSync(path.join(xdg, "omp", "profiles", "work"), { recursive: true });
+			process.env.OMP_CONFIG_ROOT = root;
+			process.env.XDG_DATA_HOME = xdg;
+			process.env.XDG_STATE_HOME = xdg;
+			process.env.XDG_CACHE_HOME = xdg;
+			__resetDirsFromEnvForTests();
+			try {
+				expect(getPluginsDir()).toBe(path.join(root, "plugins"));
+				expect(getLogsDir()).toBe(path.join(root, "logs"));
+				expect(getPuppeteerDir()).toBe(path.join(root, "puppeteer"));
+				expect(getSessionsDir()).toBe(path.join(root, "agent", "sessions"));
+				expect(getDocumentConversionCacheDir()).toBe(path.join(root, "agent", "cache", "document-conversions"));
+				expect(getGlobalDaemonRuntimeRoot()).toBe(path.join(root, "run", "daemons", "global"));
+
+				setProfile("work");
+				expect(getLogsDir()).toBe(path.join(root, "profiles", "work", "logs"));
+				expect(getSessionsDir()).toBe(path.join(root, "profiles", "work", "agent", "sessions"));
+				expect(getGlobalDaemonRuntimeRoot()).toBe(path.join(root, "run", "daemons", "global"));
+			} finally {
+				fs.rmSync(fixture, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("anchors named profiles under the relocated root", () => {
 		const root = path.join(os.tmpdir(), "omp-config-root-fixture");

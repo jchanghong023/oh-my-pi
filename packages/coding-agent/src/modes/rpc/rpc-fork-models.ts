@@ -9,7 +9,7 @@
  * remaining key of the merged `modelRoles` record — is listed even when
  * nothing is configured and no model is available; roles without a resolvable
  * target carry `unresolvedReason` instead of disappearing. Writes reuse the
- * existing role persistence machinery (`setModelRole` + `flush`) so user
+ * existing role persistence machinery (`saveUserModelRole`) so user
  * config, project layers, and runtime overrides keep their documented
  * precedence, and the returned descriptor reports the post-save truth (a
  * saved-but-overridden value shows the overriding source). The service never
@@ -95,15 +95,15 @@ function roleDescriptorSource(provenance: SettingProvenance): RpcModelRoleDescri
 
 /**
  * Why a role did not resolve: the resolver's own warning when it produced one;
- * `not_configured` when nothing is configured; `auto` for the explicit
- * auto-policy marker (the `*` selector `setRole` persists for auto
- * selections); `no_matching_model` when a configured selector has no match
+ * `not_configured` when nothing is configured;
+ * `auto` when the default-role alias defers model selection until use time;
+ * `no_matching_model` when a configured selector has no match
  * among the currently available models (including an empty catalog).
  */
 function unresolvedRoleReason(explicitValue: string | undefined, warning: string | undefined): string {
 	if (warning) return warning;
 	if (explicitValue === undefined) return "not_configured";
-	if (explicitValue === DEFAULT_MODEL_ROLE_ALIAS) return "auto";
+	if (explicitValue.trim() === DEFAULT_MODEL_ROLE_ALIAS) return "auto";
 	return "no_matching_model";
 }
 
@@ -124,9 +124,9 @@ export class RpcModelRoleService {
 	 * Full role catalog: every known role with its name, configurability,
 	 * explicit configured value, best-effort resolved model (or unresolved
 	 * reason), provenance, writable scopes, and revision. Resolution runs
-	 * against the full registry pool (`getAvailable("all")`) so kind-section
-	 * roles (image/speech/…) resolve too; an empty pool lists every role with
-	 * an `unresolvedReason` instead of hiding rows.
+	 * against each role's eligible registry pool (`getAvailable("all")` filtered
+	 * by its acceptance predicate) so kind-section roles resolve too; an empty
+	 * pool lists every role with an `unresolvedReason` instead of hiding rows.
 	 */
 	async listRoles(options: RpcModelRoleListOptions = {}): Promise<RpcModelRolesResult> {
 		const settings = this.#deps.getSettings();
@@ -142,11 +142,10 @@ export class RpcModelRoleService {
 	 * Persist one role selection. Only user scope is writable through this
 	 * entry point: the value is formatted with the shared role formatting
 	 * helper, validated against the registry and the role's acceptance
-	 * predicate, written via `setModelRole`, and awaited through `flush`
-	 * before `persisted: true` is reported. `null` clears the explicit value
-	 * (OMP's fallback semantics apply); `{ kind: "auto" }` persists the `*`
-	 * auto marker. A stale `expectedRevision` rejects with
-	 * `revision_conflict`.
+	 * predicate, written via `saveUserModelRole`, and awaited before
+	 * `persisted: true` is reported. Both `null` and `{ kind: "auto" }` clear
+	 * the user assignment so OMP's existing per-role fallback semantics apply.
+	 * A stale `expectedRevision` rejects with `revision_conflict`.
 	 */
 	async setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
 		const previous = this.#roleWrites.get(command.roleId) ?? Promise.resolve();
@@ -231,10 +230,11 @@ export class RpcModelRoleService {
 	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): RpcModelRoleDescriptor {
 		const info = getRoleInfo(role, settings);
 		const explicitValue = settings.getModelRole(role);
+		const candidates = availableModels.filter(info.accepts);
 		// Zero-session resolution: without a live session there is no
 		// session-current model, so the `default` role resolves purely from
 		// configuration (sessions report their actual model via `sessionModel`).
-		const resolved = resolveRoleModelFull(settings, role, availableModels, undefined);
+		const resolved = resolveRoleModelFull(settings, role, candidates, undefined);
 		return {
 			roleId: role,
 			name: info.name,
@@ -243,9 +243,7 @@ export class RpcModelRoleService {
 			...(explicitValue !== undefined ? { explicitValue } : {}),
 			userValue: settings.getGlobalModelRole(role) ?? null,
 			projectValue: settings.getProjectModelRole(role) ?? null,
-			candidateModels: availableModels
-				.filter(info.accepts)
-				.map(model => ({ provider: model.provider, modelId: model.id })),
+			candidateModels: candidates.map(model => ({ provider: model.provider, modelId: model.id })),
 			...(resolved.model
 				? {
 						effectiveModel: {
@@ -266,8 +264,8 @@ export class RpcModelRoleService {
 	/**
 	 * Build the persisted selector string for one selection: a concrete
 	 * `provider/modelId[:level]` (the model must exist in the registry pool and
-	 * pass the role's acceptance predicate), the `*` auto marker, or
-	 * `undefined` to clear the explicit value.
+	 * pass the role's acceptance predicate), or `undefined` to clear the user
+	 * assignment and use the upstream role policy.
 	 */
 	#formatSelection(
 		settings: Settings,
@@ -279,7 +277,7 @@ export class RpcModelRoleService {
 		if (typeof selection !== "object" || Array.isArray(selection) || !("kind" in selection)) {
 			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
 		}
-		if (selection.kind === "auto") return DEFAULT_MODEL_ROLE_ALIAS;
+		if (selection.kind === "auto") return undefined;
 		if (selection.kind !== "model" || !("model" in selection)) {
 			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
 		}
@@ -333,7 +331,8 @@ export class RpcModelRoleService {
 	 * match). Absent when the saved value simply took effect.
 	 */
 	#effectiveNote(role: RpcModelRoleDescriptor, selection: RpcModelRoleSelection): string | undefined {
-		const action = selection == null ? "Cleared the user config value" : "Saved to user config";
+		const action =
+			selection === null || selection.kind === "auto" ? "Cleared the user config value" : "Saved to user config";
 		if (role.source === "runtime" || role.source === "overlay" || role.source === "project") {
 			return `${action}; effective source: ${role.source} (the user value applies once that layer changes)`;
 		}

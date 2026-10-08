@@ -196,7 +196,7 @@
 保留 `fastcheck`、`fulltest`、`slowtest` 三个入口，采用尽量简薄的编排，优先复用上游检查、测试运行器与 CI。
 
 - `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
-- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：上游自身 Windows 专属代码在 pinned nightly 下 clippy 必红（上游 CI 只在 Linux lint），此期间 fulltest 静态阶段只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例（Rust 其余测试仍全量执行）；上游带入的未过其自身格式门禁的文件按锁定 oxfmt 版本在本地格式化以保持门禁可用（上游格式化后差异自动消除）。恢复条件均为上游转绿后按各文件内注释还原。
+- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：Windows 专属代码的 pinned-nightly clippy 缺陷已随上游修复合入，但 fulltest 静态阶段暂仍只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；恢复 Rust 静态检查须另行验证，当前状态以 `AGENTS.md`「现状与缺口」为准。上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例，不额外过滤所选 crate 内的其他用例；crate 选择仍遵循 `fulltest` 的差异范围。上游带入的未过其自身格式门禁的文件按锁定 oxfmt 版本在本地格式化以保持门禁可用（上游格式化后差异自动消除）。恢复条件均为上游转绿后按各文件内注释还原。
 - `slowtest` 保留本机验证、Ubuntu-24.04 WSL2 验证、自动推送、触发和监控构建发布 CI、成功后发布个人 Release 的流程。测试留在本地 Windows 与 WSL2，不在远端 CI 重复运行；WSL2 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。两端仍按 `fulltest` 的差异选择范围执行，不扩展为上游全量测试。
 - 不设置 fork 自定义的测试阶段和 WSL 阶段时限，测试本体沿用上游运行器与 CI 的超时机制；WSL 阶段的非测试挂起（如安装或环境准备）无自动时限，由操作者中止。取消操作仍须正确处理本次任务拥有的资源。
 - fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。

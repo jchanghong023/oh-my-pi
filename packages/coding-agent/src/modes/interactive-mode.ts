@@ -6515,6 +6515,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// reads the generation of exactly the review this chain awaits.
 		const awaitedReviewGeneration = this.#planReviewGeneration;
 		const choice = await review;
+		// A pick can settle just before another review supersedes it. Ignore the
+		// stale choice as well as stale cancellation, before any approval effects.
+		if (this.#planReviewGeneration !== awaitedReviewGeneration) return;
 		const closePlanReview = (): void => {
 			// A superseded review settles with `undefined` (the cancel value), and
 			// its continuation resumes after the replacement is already live.

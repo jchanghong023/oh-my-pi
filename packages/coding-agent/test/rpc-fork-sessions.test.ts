@@ -77,6 +77,19 @@ describe("RpcSessionDirectoryService", () => {
 		expect(sessions.find(session => session.sessionId === "s-own-2")?.current).toBe(false);
 	});
 
+	test("a saved header without a timestamp does not prevent listing other sessions", async () => {
+		const fx = await setup();
+		await writeSession(fx.sessionDir, "s-valid", fx.cwd, "Valid");
+		const header = { type: "session", version: 2, id: "s-no-date", cwd: fx.cwd, title: "No date" };
+		await Bun.write(path.join(fx.sessionDir, "s-no-date.jsonl"), `${JSON.stringify(header)}\n`);
+
+		const sessions = await fx.service.list();
+		expect(sessions.map(session => session.sessionId).sort()).toEqual(["s-no-date", "s-valid"]);
+		const withoutDate = sessions.find(session => session.sessionId === "s-no-date")!;
+		expect(withoutDate.createdAt).toBeUndefined();
+		expect(sessions.find(session => session.sessionId === "s-valid")!.createdAt).toBeDefined();
+	});
+
 	test("rename survives an EPERM replacement and guards stale revisions", async () => {
 		const fx = await setup();
 		await writeSession(fx.sessionDir, "s-save", fx.cwd, "Old");

@@ -108,28 +108,20 @@ fn core(home: PathBuf, env: BTreeMap<String, String>) -> Core {
 	}
 }
 
-/// Require an active registration, or skip the test when the host session
-/// cannot support one (headless/SSH/WSL sessions report `Unsupported`).
-fn active(result: StartOutcome) -> Option<Box<Registration>> {
+// These tests own the session environment and use the fake backend; an
+// unsupported result is a regression, not a host-dependent reason to skip.
+fn active(result: StartOutcome) -> Box<Registration> {
 	match result {
-		StartOutcome::Active(registration) => Some(registration),
-		StartOutcome::Unsupported => {
-			eprintln!("skipped: oauth callback registration is unsupported in this session");
-			None
-		},
+		StartOutcome::Active(registration) => registration,
+		StartOutcome::Unsupported => panic!("test environment must be supported"),
 	}
 }
 
-/// Require an error outcome (failure-injection tests), or skip when the host
-/// session cannot even attempt a registration.
-fn start_expecting_error(core: &Core, cancel: CancelToken) -> Option<anyhow::Error> {
+fn start_expecting_error(core: &Core, cancel: CancelToken) -> anyhow::Error {
 	match start_blocking(core, cancel) {
-		Ok(StartOutcome::Unsupported) => {
-			eprintln!("skipped: oauth callback registration is unsupported in this session");
-			None
-		},
+		Ok(StartOutcome::Unsupported) => panic!("test environment must be supported"),
 		Ok(StartOutcome::Active(_)) => panic!("expected an error outcome"),
-		Err(error) => Some(error),
+		Err(error) => error,
 	}
 }
 
@@ -157,7 +149,7 @@ fn remote_start_is_unsupported_without_creating_storage() {
 #[cfg(target_os = "linux")]
 #[test]
 fn wsl_env_is_unsupported_without_creating_storage() {
-	let _serial = TEST_SERIAL.lock();
+	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("wsl");
 	let core = core(home.clone(), environment(&[("WSL_DISTRO_NAME", "Ubuntu")]));
 	assert!(matches!(
@@ -173,17 +165,10 @@ fn prepare_failure_releases_lease_and_removes_private_artifacts() {
 	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("prepare");
 	let failing = core(home.clone(), environment(&[("TEST_PREPARE_FAIL", "1")]));
-	if start_expecting_error(&failing, CancelToken::default()).is_none() {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	}
+	let error = start_expecting_error(&failing, CancelToken::default());
+	assert!(error.to_string().contains("injected prepare failure"));
 	let succeeding = core(home.clone(), environment(&[]));
-	let Some(mut registration) =
-		active(start_blocking(&succeeding, CancelToken::default()).unwrap())
-	else {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	};
+	let mut registration = active(start_blocking(&succeeding, CancelToken::default()).unwrap());
 	cleanup_registration(&mut registration, CancelToken::default()).unwrap();
 	fs::remove_dir_all(home).unwrap();
 }
@@ -193,10 +178,7 @@ fn activation_failure_restores_even_after_mutating_os_state() {
 	let _serial = TEST_SERIAL.blocking_lock();
 	let home = temp_home("activation");
 	let core = core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1")]));
-	let Some(error) = start_expecting_error(&core, CancelToken::default()) else {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	};
+	let error = start_expecting_error(&core, CancelToken::default());
 	assert!(error.to_string().contains("injected activation failure"));
 	assert!(!home.join(".oauth-owner-omp-test").exists());
 	assert!(
@@ -213,10 +195,7 @@ fn uncertain_restore_retains_journal_and_ownership() {
 	let home = temp_home("restore");
 	let core =
 		core(home.clone(), environment(&[("TEST_ACTIVATE_FAIL", "1"), ("TEST_RESTORE_FAIL", "1")]));
-	let Some(error) = start_expecting_error(&core, CancelToken::default()) else {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	};
+	let error = start_expecting_error(&core, CancelToken::default());
 	assert!(error.to_string().contains("recovery journal retained"));
 	assert!(home.join(".oauth-owner-omp-test").exists());
 	assert!(
@@ -257,11 +236,7 @@ fn stale_journal_is_recovered_before_successor_activation() {
 		.unwrap();
 
 	let core = core(home.clone(), environment(&[]));
-	let Some(mut registration) = active(start_blocking(&core, CancelToken::default()).unwrap())
-	else {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	};
+	let mut registration = active(start_blocking(&core, CancelToken::default()).unwrap());
 	assert_ne!(registration.context.id, old_id);
 	assert_eq!(
 		fs::read_to_string(home.join(".oauth-owner-omp-test")).unwrap(),
@@ -277,11 +252,7 @@ fn lease_excludes_competing_receivers_in_same_process() {
 	let home = temp_home("compete");
 	let first = core(home.clone(), environment(&[]));
 	let second = core(home.clone(), environment(&[]));
-	let Some(mut registration) = active(start_blocking(&first, CancelToken::default()).unwrap())
-	else {
-		fs::remove_dir_all(home).unwrap();
-		return;
-	};
+	let mut registration = active(start_blocking(&first, CancelToken::default()).unwrap());
 	assert!(
 		start_blocking(&second, CancelToken::default())
 			.err()

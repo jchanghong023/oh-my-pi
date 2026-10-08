@@ -190,6 +190,10 @@ function Install-Binary {
 
     if (Test-InstalledBinaryVersion -TargetPath $OutPath -ReleaseTag $Latest) {
         Write-Host "omp $Latest is already installed at $OutPath"
+        # A previous update can leave its old image locked by a live session.
+        # Retry cleanup even when no new download is needed.
+        Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*" -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
         if (Set-InstallEnvironment) {
             Write-Host "Restart your terminal, then run 'omp' to get started!"
         }

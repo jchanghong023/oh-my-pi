@@ -1801,12 +1801,17 @@ export class Settings {
 			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
 			const current =
 				loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
-			const currentValue = modelRoleValueFromUnknown(getByPath(current, ["modelRoles", role]));
+			const storedValue = getByPath(current, ["modelRoles", role]);
+			const currentValue = modelRoleValueFromUnknown(storedValue);
 			if (currentValue !== expectedValue || this.#hasPendingUserSetting(["modelRoles", role])) {
 				this.#adoptSavedGlobal(current, configPath);
 				throw new ModelRoleConflictError(role);
 			}
-			if (modelId !== currentValue || (loaded.settings === null && this.#quarantinedYamlTargets.has(configPath))) {
+			if (
+				modelId !== currentValue ||
+				(modelId === undefined && storedValue !== undefined) ||
+				(loaded.settings === null && this.#quarantinedYamlTargets.has(configPath))
+			) {
 				if (modelId === undefined) deleteByPath(current, ["modelRoles", role]);
 				else setByPath(current, ["modelRoles", role], modelId);
 				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));

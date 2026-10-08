@@ -77,8 +77,8 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
  */
 const CONDITIONAL_ADOPTION_CLAUSE = new RegExp(
 	[
-		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以)?(?:采用|推荐|首选)",
-		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|推荐|首选)",
+		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
+		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
 	].join("|"),
 	"gu",
 );
@@ -91,19 +91,54 @@ function synthesisBodyConflict(
 	const body = synthesis.reportMarkdown;
 	if (body.includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	const statements = body.split(/(?:[。！？；;.!?，,、\r\n]|但是|但|而|却)/u);
-	for (const record of proposals) {
-		if (isAdoptable(record)) continue;
-		const label = `方案${record.label}`;
-		for (const statement of statements) {
-			const compact = statement.replace(/\s+/gu, "");
-			const positiveClaims = compact
-				.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
-				.replace(/(?:不(?:可采用|可以采用|推荐|建议采用)|并非首选|不是首选)/gu, "");
-			if (
-				(compact.includes(label) || compact.includes(`${record.label}方案`)) &&
-				/(?:可采用|可以采用|推荐|首选)/u.test(positiveClaims)
+	const labels = proposals.flatMap(record => [
+		{ record, text: `方案${record.label}` },
+		{ record, text: `${record.label}方案` },
+	]);
+	for (const statement of statements) {
+		const positiveClaims = statement
+			.replace(/\s+/gu, "")
+			.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
+			.replace(/(?:不(?:可(?:以)?(?:采用|作为(?:最终)?选项)|推荐|建议采用)|并非首选|不是首选)/gu, "");
+		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];
+		for (const { record, text } of labels) {
+			for (
+				let index = positiveClaims.indexOf(text);
+				index >= 0;
+				index = positiveClaims.indexOf(text, index + text.length)
 			) {
-				return `综合正文建议采用已标记为“尚不可采用”的方案 ${record.label}`;
+				mentions.push({ index, end: index + text.length, record });
+			}
+		}
+		mentions.sort((left, right) => left.index - right.index);
+		for (const claim of positiveClaims.matchAll(/(?:可(?:以)?(?:采用|作为(?:最终)?选项)|推荐|首选)/gu)) {
+			// A comparison can mention a blocked proposal and recommend its sibling.
+			// Bind each claim to its nearest named proposal, in either word order.
+			let nearestIndex = -1;
+			let nearestDistance = Infinity;
+			for (const [index, mention] of mentions.entries()) {
+				const distance = Math.max(mention.index - (claim.index + claim[0].length), claim.index - mention.end, 0);
+				if (distance < nearestDistance) {
+					nearestIndex = index;
+					nearestDistance = distance;
+				}
+			}
+			if (nearestIndex < 0) continue;
+			let first = nearestIndex;
+			let last = nearestIndex;
+			const conjunction = /^(?:和|与|及|或|以及|\/|&|\+)+$/u;
+			while (first > 0 && conjunction.test(positiveClaims.slice(mentions[first - 1].end, mentions[first].index)))
+				first--;
+			while (
+				last + 1 < mentions.length &&
+				conjunction.test(positiveClaims.slice(mentions[last].end, mentions[last + 1].index))
+			)
+				last++;
+			for (let index = first; index <= last; index++) {
+				const { record } = mentions[index];
+				if (!isAdoptable(record)) {
+					return `综合正文建议采用已标记为“尚不可采用”的方案 ${record.label}`;
+				}
 			}
 		}
 	}

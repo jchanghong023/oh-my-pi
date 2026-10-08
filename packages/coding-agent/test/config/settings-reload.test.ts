@@ -66,6 +66,21 @@ describe("Settings layer refresh", () => {
 		expect(settings.getModelRoleProvenance("smol")).toBe("global");
 	});
 
+	it("clearing a persisted null role removes its tombstone and restores process defaults", async () => {
+		await writeConfig({ modelRoles: { smol: null, plan: "company/GLM-5.2-public" } });
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		settings.setModelRoleDefaults({ smol: "company/Qwen3.6-35B-A3B" });
+		expect(settings.getModelRole("smol")).toBeUndefined();
+
+		await settings.saveUserModelRole("smol", undefined, undefined);
+
+		expect(settings.getModelRole("smol")).toBe("company/Qwen3.6-35B-A3B");
+		expect(settings.getModelRoleProvenance("smol")).toBe("default");
+		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({
+			modelRoles: { plan: "company/GLM-5.2-public" },
+		});
+	});
+
 	it("rejects an on-disk value that fails validation and keeps the previous layers", async () => {
 		await writeConfig({ providers: { maxInFlightRequests: { openai: 2 } } });
 		const settings = await Settings.init({ cwd: startProject, agentDir });

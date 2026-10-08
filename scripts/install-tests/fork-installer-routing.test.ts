@@ -252,15 +252,22 @@ if ($env:TEST_MODE -eq "directory") {
     New-Item -ItemType Directory -Path $old | Out-Null
     Set-Content -LiteralPath (Join-Path $old "keep.txt") -Value "unrelated"
 } else {
-    New-FixtureBinary $old "18.0.8+fork.124"
+    $oldVersion = if ($env:TEST_MODE -eq "already") { "18.0.9+fork.125" } else { "18.0.8+fork.124" }
+    New-FixtureBinary $old $oldVersion
 }
 if ($env:TEST_MODE -eq "invalid") {
     New-FixtureBinary $download "18.0.9+fork.124"
 } else {
     New-FixtureBinary $download "18.0.9+fork.125"
 }
+if ($env:TEST_MODE -eq "already") {
+    Copy-Item -LiteralPath $old -Destination (Join-Path $install ".omp.old.fixture.exe")
+}
+$downloadCount = 0
+$pathChecks = 0
 function Invoke-RestMethod { return @{ tag_name = "v18.0.9+fork.125" } }
 function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
+    $script:downloadCount++
     Copy-Item -LiteralPath $download -Destination $OutFile
 }
 function Get-Command([string]$Name) {
@@ -274,7 +281,7 @@ if ($parseErrors.Count) { throw $parseErrors[0] }
 $lastStatement = $ast.EndBlock.Statements[-1]
 $source = [System.IO.File]::ReadAllText($env:TEST_INSTALLER)
 . ([scriptblock]::Create($source.Substring(0, $lastStatement.Extent.StartOffset))) -Binary
-function Set-InstallEnvironment { return $false }
+function Set-InstallEnvironment { $script:pathChecks++; return $false }
 if ($env:TEST_MODE -eq "rollback") {
     function Move-Item([string]$LiteralPath, [string]$Destination) {
         if ([System.IO.Path]::GetFileName($LiteralPath).StartsWith(".omp.tmp.")) { throw "fixture swap blocked" }
@@ -299,6 +306,7 @@ try {
         Write-Host "RESULT running=$(-not $running.HasExited)"
     }
     Write-Host "RESULT temps=$(@(Get-ChildItem -LiteralPath $install -Filter '.omp.tmp.*').Count)"
+    Write-Host "RESULT asides=$(@(Get-ChildItem -LiteralPath $install -Filter '.omp.old.*').Count) downloads=$downloadCount pathChecks=$pathChecks"
 } finally {
     if ($running -and -not $running.HasExited) { $running.Kill(); $running.WaitForExit() }
 }
@@ -330,6 +338,14 @@ try {
 		]);
 		return { exitCode, stdout, stderr };
 	}
+
+	test("an already-installed release removes unlocked old images without downloading and still checks PATH", async () => {
+		const result = await scenario("already");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("RESULT failed=False version=omp/18.0.9+fork.125");
+		expect(result.stdout).toContain("RESULT asides=0 downloads=0 pathChecks=1");
+		expect(result.stdout).toContain("RESULT temps=0");
+	}, 30_000);
 
 	test("rejects a wrong-version binary before changing the installed executable", async () => {
 		const result = await scenario("invalid");

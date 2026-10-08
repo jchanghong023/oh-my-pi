@@ -139,43 +139,38 @@ test("recovery preserves sidecars present at corruption detection under one priv
 	}
 });
 
-// Quarantine unlinks the corrupt db while a peer opener still holds it open;
-// Windows refuses to delete open files.
-test.skipIf(process.platform === "win32")(
-	"concurrent failed openers adopt one replacement without discarding each other's writes",
-	async () => {
-		await using dir = await TempDir.create("@omp-sqlite-concurrent-");
-		const dbPath = dir.join("store.db");
-		const damaged = await corruptSchemaPages(dbPath);
-		const ready = Promise.withResolvers<void>();
-		let opened = 0;
-		const initialize = async (db: Database): Promise<Database> => {
-			if (++opened === 2) ready.resolve();
-			await ready.promise;
-			db.run("PRAGMA journal_mode=WAL");
-			db.run("CREATE TABLE IF NOT EXISTS recovered (value TEXT)");
-			return db;
-		};
+test("concurrent failed openers adopt one replacement without discarding each other's writes", async () => {
+	await using dir = await TempDir.create("@omp-sqlite-concurrent-");
+	const dbPath = dir.join("store.db");
+	const damaged = await corruptSchemaPages(dbPath);
+	const ready = Promise.withResolvers<void>();
+	let opened = 0;
+	const initialize = async (db: Database): Promise<Database> => {
+		if (++opened === 2) ready.resolve();
+		await ready.promise;
+		db.run("PRAGMA journal_mode=WAL");
+		db.run("CREATE TABLE IF NOT EXISTS recovered (value TEXT)");
+		return db;
+	};
 
-		const handles = await Promise.all([
-			openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
-			openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
+	const handles = await Promise.all([
+		openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
+		openSqliteDatabase(dbPath, initialize, { recoverCorruption: true }),
+	]);
+	try {
+		handles[0].run("INSERT INTO recovered VALUES ('first')");
+		handles[1].run("INSERT INTO recovered VALUES ('second')");
+		expect(handles[0].query<{ value: string }, []>("SELECT value FROM recovered ORDER BY value").all()).toEqual([
+			{ value: "first" },
+			{ value: "second" },
 		]);
-		try {
-			handles[0].run("INSERT INTO recovered VALUES ('first')");
-			handles[1].run("INSERT INTO recovered VALUES ('second')");
-			expect(handles[0].query<{ value: string }, []>("SELECT value FROM recovered ORDER BY value").all()).toEqual([
-				{ value: "first" },
-				{ value: "second" },
-			]);
-		} finally {
-			for (const db of handles) db.close();
-		}
-		const backups = await backupNames(dir.path());
-		expect(backups).toHaveLength(1);
-		expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
-	},
-);
+	} finally {
+		for (const db of handles) db.close();
+	}
+	const backups = await backupNames(dir.path());
+	expect(backups).toHaveLength(1);
+	expect(await fs.promises.readFile(path.join(dir.path(), backups[0]!))).toEqual(damaged);
+});
 
 test("a second corruption failure surfaces without rotating the first backup again", async () => {
 	await using dir = await TempDir.create("@omp-sqlite-repeat-corrupt-");

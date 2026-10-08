@@ -244,7 +244,8 @@ export class RpcPlanController {
 			const pending = this.#pendingModel;
 			const revision = this.#modelRevision;
 			this.#pendingModel = undefined;
-			const current = this.#guard(this.#operation.signal);
+			// Cancelling a dialog must not discard the plan role at this yield.
+			const current = this.#guard();
 			this.#background(async () => {
 				await this.#session.waitForIdle();
 				await this.#enqueue(async () => {
@@ -281,12 +282,12 @@ export class RpcPlanController {
 		return signal ? AbortSignal.any([signal, this.#operation.signal]) : this.#operation.signal;
 	}
 
-	#guard(signal: AbortSignal): () => boolean {
+	#guard(signal?: AbortSignal): () => boolean {
 		const manager = this.#session.sessionManager;
 		const id = manager.getSessionId();
 		const generation = this.#session.sessionGeneration;
 		return () =>
-			!signal.aborted &&
+			!signal?.aborted &&
 			!this.#session.isDisposed &&
 			this.#session.sessionManager === manager &&
 			manager.getSessionId() === id &&
@@ -475,7 +476,6 @@ export class RpcPlanController {
 				await this.#exit(false);
 			});
 			if (!current()) return;
-			this.#reviewing = false;
 			await dispatchApprovedPlan(this.#session as AgentSession, {
 				...details,
 				planContent: content,
@@ -483,6 +483,7 @@ export class RpcPlanController {
 				signal,
 				beforeDispatch: () => {
 					if (!current()) throw new Error("Plan approval cancelled.");
+					this.#reviewing = false;
 				},
 				onAutosave: ({ savedPath, error }) => {
 					if (!current()) return;

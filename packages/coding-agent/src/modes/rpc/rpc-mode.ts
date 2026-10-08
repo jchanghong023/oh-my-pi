@@ -1773,13 +1773,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			if (!clientDisconnected) shutdownCoordinator.track(task());
 		},
 	);
-	const cancelCommandOperations = () => {
-		for (const controller of commandOperations) controller.abort();
-		commandOperations.clear();
+	const cancelCommandOperations = (preserve?: AbortController) => {
+		for (const controller of commandOperations) {
+			if (controller === preserve) continue;
+			controller.abort();
+			commandOperations.delete(controller);
+		}
 		planController.cancel();
 	};
-	const beginModeSessionChange = async (preserveLoop = false, detachesRun = true) => {
-		cancelCommandOperations();
+	const beginModeSessionChange = async (
+		preserveLoop = false,
+		detachesRun = true,
+		preserveCommand?: AbortController,
+	) => {
+		cancelCommandOperations(preserveCommand);
 		if (!preserveLoop) loopController.clear();
 		await goalController.beginSessionChange();
 		try {
@@ -1950,7 +1957,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		loopSubmission = false,
 	): Promise<OrderedInputOutcome> =>
 		inputGate.enqueue(async () => {
-			const sessionId = session.sessionId;
+			let sessionId = session.sessionId;
 			const isCurrent = () =>
 				inputGate.isCurrent(command) && !shutdownState.requested && session.sessionId === sessionId;
 			if (!isCurrent()) return "cancelled";
@@ -1993,7 +2000,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const controller = new AbortController();
 				if (clientDisconnected) controller.abort();
 				commandOperations.add(controller);
-				const generation = session.sessionGeneration;
+				let generation = session.sessionGeneration;
 				let backgroundTasks = 0;
 				let dispatchFinished = false;
 				const commandIsCurrent = () => !controller.signal.aborted && generation === session.sessionGeneration;
@@ -2010,6 +2017,38 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					output: commandOutput,
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
+					newSession: options =>
+						sessionChangeGate.enqueue(async () => {
+							if (!commandIsCurrent() || !isCurrent()) return false;
+							await btw.close();
+							await beginModeSessionChange(false, true, controller);
+							try {
+								if (!commandIsCurrent() || !isCurrent()) return false;
+								return await session.newSession(options);
+							} finally {
+								const nextId = session.sessionId;
+								const nextGeneration = session.sessionGeneration;
+								const changed = nextId !== sessionId || nextGeneration !== generation;
+								await endModeSessionChange({ detachedRun: changed });
+								if (changed) {
+									subagentRegistry?.clear();
+									inputGate.commitSessionChange(command);
+									promptResults.abortOpen();
+									void settleWatcher.check();
+									// Only this command's own rollover may adopt the new identity.
+									// Abort or a later transition still suppresses its final output.
+									if (
+										!controller.signal.aborted &&
+										session.sessionId === nextId &&
+										session.sessionGeneration === nextGeneration
+									) {
+										sessionId = nextId;
+										generation = nextGeneration;
+									}
+									await emitAvailableCommandsUpdate();
+								}
+							}
+						}),
 					runCommandInBackground: task => {
 						if (!commandIsCurrent()) return;
 						backgroundTasks++;

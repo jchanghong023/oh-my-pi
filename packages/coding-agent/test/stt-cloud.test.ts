@@ -9,7 +9,7 @@ import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-import { cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import { cfgSttLanguage, cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -123,6 +123,33 @@ describe("STTController cloud transcription", () => {
 		expect(editor.commitVolatileText).toHaveBeenCalledWith("cloud transcript");
 		expect(options.onStateChange.mock.calls.map(([next]) => next)).toEqual(["recording", "transcribing", "idle"]);
 		expect(options.showStatus).toHaveBeenCalledWith("Transcribing...");
+	});
+
+	it("sends only the base language to cloud transcription when the configured tag contains an extension", async () => {
+		const model = getBundledModel("openai", "whisper-1");
+		settings.setModelRole("dictation", "openai/whisper-1");
+		cfgSttLanguage.set(settings, "zh-CN-u-nu-hanidec");
+		const transcribe = vi.spyOn(transcription, "transcribeAudio").mockResolvedValue({
+			text: "extended language transcript",
+			usage: ZERO_USAGE,
+		});
+		let onAudio: ((error: Error | null, samples: Float32Array) => void) | undefined;
+		controller = new STTController(
+			callback => {
+				onAudio = callback;
+				return { stop: vi.fn() };
+			},
+			{ settings, registry: registryFor(model) },
+		);
+		const editor = makeEditor();
+
+		await controller.toggle(editor, makeOptions());
+		onAudio?.(null, new Float32Array([0.25]));
+		await controller.toggle(editor, makeOptions());
+
+		expect(transcribe).toHaveBeenCalledTimes(1);
+		expect(transcribe.mock.calls[0]![1].language).toBe("zh");
+		expect(editor.commitVolatileText).toHaveBeenCalledWith("extended language transcript");
 	});
 
 	it("aborts an in-flight cloud request when the controller is disposed", async () => {

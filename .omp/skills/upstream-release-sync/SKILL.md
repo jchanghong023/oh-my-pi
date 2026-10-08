@@ -14,7 +14,7 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 * 只查询固定上游 ref 与 fork 的远端 `upstream`，NEVER 使用 Release、tag、`origin/main`、其他远程分支或配置型 `upstream/main` 作为来源。
 * 只允许推送 fork 的 `upstream`；NEVER 推送 `main` 或 tag，不创建 PR、不打包、不发布。
 * 维护原则与文档职责见 `AGENTS.md`；当前功能契约以 `docs-zh-CN/requirements/` 中对应文档为准（清单见该目录 `README.md`，上游基线仍在 `fork.md`），本流程不另建差异清单。
-* 根 `README.md`（中文版）与 `docs-zh-CN/README.upstream.md`（上游英文快照）按第 3 节处理；`AGENTS.md`、本 Skill 与整个需求目录 NEVER 被上游覆盖，其他上游文档正常同步并保留仍有效的 fork 改动。
+* 根 `README.md`（中文版）与 `docs-zh-CN/README.upstream.md`（上游英文快照）按第 3 节处理；`AGENTS.md`、本 Skill、整个需求目录与 `docs-zh-CN/quick-start-intranet.md` NEVER 被上游覆盖，其他上游文档正常同步并保留仍有效的 fork 改动。
 
 ## 0. 快速门禁
 
@@ -27,11 +27,11 @@ description: 每日定时或手动将 can1357/oh-my-pi 最新 main 合入个人 
 ## 1. 获取与集成
 
 * 要求工作区 clean、无进行中的 Git 操作；NEVER 用 stash/reset/clean 清理用户状态。
-* 记录原分支和本地 `main` HEAD，切换到已存在的本地 `main`；保存维护文档与整个需求目录的 fork 版本（`AGENTS.md`、本 Skill、`docs-zh-CN/requirements/`、根 `README.md`）。
+* 记录原分支和本地 `main` HEAD，切换到已存在的本地 `main`；保存维护文档与整个需求目录的 fork 版本（`AGENTS.md`、本 Skill、`docs-zh-CN/requirements/`、`docs-zh-CN/quick-start-intranet.md`、根 `README.md`）。
 * 用 `--no-tags` 精确 fetch 固定上游 `refs/heads/main` 到 `refs/omp-sync/upstream-main`，再查询远端 HEAD。目标移动则重新 fetch/确认一次，再移动即停止。
 * 原基线 MUST 是目标祖先，`main` 与目标 MUST 有 merge base；不接受历史改写。浅仓库缺历史时仅可按所需精确 SHA 定向 deepen，NEVER unshallow；无法证明则停止。
 * 目标未包含于 `main` 时执行 `git merge --no-ff --no-commit --no-edit refs/omp-sync/upstream-main`；已包含则不创建空 merge，只补齐基线记录。
-* 恢复维护文档与整个需求目录的 fork 版本（`AGENTS.md`、本 Skill、`docs-zh-CN/requirements/`、根 `README.md`），再按本次集成结果更新 `fork.md`，不得被上游覆盖。
+* 恢复维护文档与整个需求目录的 fork 版本（`AGENTS.md`、本 Skill、`docs-zh-CN/requirements/`、`docs-zh-CN/quick-start-intranet.md`、根 `README.md`），再按本次集成结果更新 `fork.md`，不得被上游覆盖。
 
 ## 2. 保留功能与解决冲突
 

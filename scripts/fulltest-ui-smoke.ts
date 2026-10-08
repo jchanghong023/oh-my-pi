@@ -65,7 +65,7 @@ interface TuiHandle {
 	exitPromise: Promise<Outcome>;
 }
 
-function startTui(argv: string[], env: Record<string, string>, projectCwd?: string): TuiHandle {
+function startTui(argv: string[], env: Record<string, string | undefined>, projectCwd?: string): TuiHandle {
 	const session = new PtySession();
 	const handle: TuiHandle = {
 		session,
@@ -85,11 +85,19 @@ function startTui(argv: string[], env: Record<string, string>, projectCwd?: stri
 			cwd: repoRoot,
 			cols: 120,
 			rows: 30,
-			env: {
-				...process.env,
-				TERM: "xterm-256color",
-				...env,
-			} as Record<string, string>,
+			// N-API accepts string values only; empty overrides also suppress
+			// inherited flags in the PTY's environment overlay.
+			env: Object.fromEntries(
+				Object.entries({
+					...process.env,
+					TERM: "xterm-256color",
+					// Fixture roots must win over a user's whole-root override.
+					OMP_CONFIG_ROOT: env.PI_CONFIG_DIR ? path.join(os.homedir(), env.PI_CONFIG_DIR) : "",
+					// Loopback-model cases are online unless the fixture opts in.
+					OMP_OFFLINE: "",
+					...env,
+				}).map(([key, value]) => [key, value ?? ""]),
+			),
 		},
 		(error, chunk) => {
 			if (error) return;
@@ -656,7 +664,19 @@ try {
 	if (teamOutcome.exitCode !== 0) {
 		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`);
 	}
-	console.log("ui-smoke: /team case PASS — real TUI run reached the final /team report");
+	let reportPersisted = false;
+	for await (const file of new Bun.Glob("*/*.jsonl").scan(path.join(profileAgentDir, "sessions"))) {
+		const entries = Bun.JSONL.parse(await Bun.file(path.join(profileAgentDir, "sessions", file)).text()) as {
+			type?: string;
+			customType?: string;
+		}[];
+		if (entries.some(entry => entry.type === "custom_message" && entry.customType === "team-result")) {
+			reportPersisted = true;
+			break;
+		}
+	}
+	if (!reportPersisted) fail("/team report rendered but was not durably saved in the session");
+	console.log("ui-smoke: /team case PASS — real TUI run rendered and persisted the final /team report");
 
 	// ── 5. /team cancellation propagation against a slow stub ──────────────────
 	// team.md §7 requires cancellation across concurrent subagents to be

@@ -3687,14 +3687,10 @@ mod tests {
 		let second_ready = dir.path().join("second.ready");
 		let first_script = "trap 'exit 42' TERM; echo $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while \
 		                    :; do sleep 0.05; done";
-		// Gate the second process's self-stop on the first one's ready file.
-		// brush-core's stopped-children poll consumes every pending WUNTRACED
-		// notification in one `waitid(All)` sweep, so simultaneous stops let a
-		// concurrent waiter steal a notification; sequencing the stops keeps
-		// at most one in flight. Separately, `ChildProcess::wait` polls for
-		// stopped children immediately after subscribing to SIGCHLD, recovering
-		// a stop whose notification was dropped before subscription — the
-		// lost-wakeup hang seen twice in CI on 2026-09-19.
+		// Gate the second stage on the first stage's initialization.
+		// ChildProcess::wait also polls for stopped children immediately after
+		// subscribing to SIGCHLD, recovering a stop whose notification was
+		// dropped before subscription.
 		let second_script = "trap 'exit 43' TERM; while [ ! -f \"$3\" ]; do sleep 0.01; done; echo \
 		                     $$ > \"$1\"; : > \"$2\"; kill -STOP $$; while :; do sleep 0.05; done";
 		let command = format!(
@@ -3796,9 +3792,28 @@ mod tests {
 			.await
 			.expect("spawn self-stopping background job");
 		assert_eq!(exit_code(&spawned), 0);
+		let pid = session
+			.shell
+			.jobs()
+			.current_job()
+			.expect("background job")
+			.process_ids()
+			.next()
+			.expect("background child pid");
+		time::timeout(Duration::from_secs(20), async {
+			while !pi_builtins::ProcInfo::all()
+				.into_iter()
+				.any(|process| process.pid() == pid && process.state() == 'T')
+			{
+				time::sleep(Duration::from_millis(10)).await;
+			}
+		})
+		.await
+		.expect("background child did not stop itself");
 
-		// Let the child stop and its listener-less SIGCHLD drain before any
-		// waiter subscribes.
+		// The child is stopped; let its listener-less SIGCHLD drain before any
+		// waiter subscribes. A fixed delay alone could start waiting before a
+		// starved child stopped, masking the lost-notification regression.
 		time::sleep(Duration::from_millis(500)).await;
 
 		let waited = time::timeout(
@@ -5294,10 +5309,7 @@ mod tests {
 			.run_string("fd --glob '*.rs' sub > glob.txt", &si, &params)
 			.await
 			.expect("fd glob");
-		// Fork: the built-in fd prints forward slashes on Windows too; accept
-		// either separator (the upstream branch expects `\` there).
-		let glob = read("glob.txt");
-		assert!(glob == "sub\\needle.rs\n" || glob == "sub/needle.rs\n", "fd glob output: {glob:?}");
+		assert_eq!(read("glob.txt"), "sub/needle.rs\n", "fd glob output uses forward slashes");
 
 		let no_match = session
 			.shell
@@ -5627,14 +5639,14 @@ mod tests {
 		// `printf %s` writes the operand verbatim.
 		#[cfg(unix)]
 		assert_eq!(
-			read("ex.txt").lines().next().expect("exec output"),
+			read("ex.txt"),
 			relative_keep,
 			"-exec {{}} should be operand-relative and run in the shell cwd"
 		);
 		#[cfg(windows)]
 		assert_eq!(
-			read("ex.txt").lines().next().expect("exec output"),
-			format!("{relative_keep} "),
+			read("ex.txt"),
+			format!("{relative_keep} \r\n"),
 			"-exec {{}} should be operand-relative and run in the shell cwd"
 		);
 
@@ -5651,12 +5663,13 @@ mod tests {
 			.run_string(capture_command, &si, &params)
 			.await
 			.expect("exec capture");
+		#[cfg(unix)]
+		let captured_expected = format!("zed {relative_keep}\n");
+		#[cfg(windows)]
+		let captured_expected = format!("zed {relative_keep}\r\n");
 		assert_eq!(
-			read("cap.txt")
-				.lines()
-				.next()
-				.expect("captured child output"),
-			format!("zed {relative_keep}"),
+			read("cap.txt"),
+			captured_expected,
 			"-exec child stdout must flow through the shell redirect and see its exported env"
 		);
 

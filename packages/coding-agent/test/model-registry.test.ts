@@ -268,6 +268,37 @@ describe("ModelRegistry", () => {
 		expect(offline.getAll("all").some(model => model.provider === "company")).toBe(true);
 	});
 
+	test.each([false, true])("keeps runtime zcode-api registration hidden offline (full snapshot: %s)", fullSnapshot => {
+		spies.push(spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true));
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { settings: Settings.isolated() });
+		if (fullSnapshot) registry.getAll();
+		registry.registerProvider(
+			"zcode-api",
+			{
+				api: "anthropic-messages",
+				baseUrl: "https://extension.invalid",
+				apiKey: "fixture-key",
+				models: [
+					{
+						id: "extension-model",
+						name: "Extension model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 1000,
+						maxTokens: 100,
+					},
+				],
+			},
+			"fixture://offline-extension",
+		);
+		expect(registry.find("zcode-api", "extension-model")).toBeUndefined();
+		expect(registry.getAll().some(model => model.provider === "zcode-api")).toBe(false);
+		// URL-only registration also uses the incremental path once getAll ran.
+		registry.registerProvider("zcode-api", { baseUrl: "https://replacement.invalid" });
+		expect(registry.getAvailableForProviders(new Set(["zcode-api"]))).toEqual([]);
+	});
+
 	describe("model kind pools", () => {
 		test("zero-argument pools remain chat-only while find remains kind-agnostic", () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);

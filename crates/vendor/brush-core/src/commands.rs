@@ -199,11 +199,13 @@ impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_,
 #[allow(unused_variables, reason = "argv0 is only used on unix platforms")]
 pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 	context: &ExecutionContext<'_, SE>,
-	command_name: &str,
-	argv0: &str,
+	command_name: impl AsRef<OsStr>,
+	argv0: impl AsRef<OsStr>,
 	args: &[S],
 	empty_env: bool,
 ) -> Result<std::process::Command, error::Error> {
+	let command_name = command_name.as_ref();
+	let argv0 = argv0.as_ref();
 	// The operating system can only start native programs in native
 	// directories; virtual paths exist solely inside this process.
 	let filesystem = context.shell.filesystem();
@@ -215,7 +217,11 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 		)
 		.into());
 	}
-	if sys::fs::contains_path_separator(command_name) {
+	if command_name
+		.as_encoded_bytes()
+		.iter()
+		.any(|&byte| byte == b'/' || (cfg!(windows) && byte == b'\\'))
+	{
 		let program = context.shell.absolute_path(Path::new(command_name));
 		if !filesystem.is_native_local(&program) {
 			return Err(error::ErrorKind::ExternalCommandIsVirtual(program).into());
@@ -425,18 +431,20 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	/// dispatching it appropriately according to the context provided.
 	#[allow(clippy::missing_panics_doc, reason = "these unwrap calls should not panic")]
 	pub async fn execute(mut self) -> Result<ExecutionSpawnResult, error::Error> {
+		let native_command = matches!(self.args.first(), Some(CommandArg::OsString(_)));
 		// Builtins registered to consume raw CommandArg values keep native
 		// arguments so they can handle them themselves. All others accept only
 		// UTF-8 strings and must fall through to external commands to preserve
 		// the original argument bytes.
 		let builtin = self.shell.builtins().get(&self.command_name).cloned();
 		let builtin = builtin.filter(|registration| {
-			registration.declaration_builtin
-				|| !self
-					.args
-					.iter()
-					.skip(1)
-					.any(|arg| matches!(arg, CommandArg::OsString(_)))
+			!native_command
+				&& (registration.declaration_builtin
+					|| !self
+						.args
+						.iter()
+						.skip(1)
+						.any(|arg| matches!(arg, CommandArg::OsString(_))))
 		});
 
 		// If we're in POSIX mode and found a special builtin (that's not disabled),
@@ -453,7 +461,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
 		// Assuming we weren't requested not to do so, check if it's the name of
 		// a shell function.
-		if self.use_functions {
+		if self.use_functions && !native_command {
 			if let Some(func_registration) =
 				self.shell.funcs().get(self.command_name.as_str()).cloned()
 			{
@@ -471,6 +479,10 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
 		// We still haven't found a command to invoke. We'll need to look for an
 		// external command.
+		let filename = match self.args.first() {
+			Some(CommandArg::OsString(name)) => name.as_os_str(),
+			_ => OsStr::new(&self.command_name),
+		};
 		if !sys::fs::contains_path_separator(&self.command_name) {
 			// All else failed; if we were given path directories to search, try to look
 			// through them for a matching executable. Otherwise, use our default search
@@ -479,7 +491,16 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 				pathsearch::find_executable(
 					self.shell.filesystem(),
 					path_dirs,
-					Path::new(&self.command_name),
+					Path::new(filename),
+				)
+				.await
+			} else if native_command {
+				// Native names cannot use the shell's UTF-8 command-name cache.
+				let path_var = self.shell.env().get_str("PATH", &self.shell).unwrap_or_default();
+				pathsearch::find_executable(
+					self.shell.filesystem(),
+					sys::fs::split_paths(path_var.as_ref()),
+					Path::new(filename),
 				)
 				.await
 			} else {
@@ -504,7 +525,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 				Err(ErrorKind::CommandNotFound(self.command_name).into())
 			}
 		} else {
-			let command_name = PathBuf::from(self.command_name.clone());
+			let command_name = PathBuf::from(filename);
 			self.execute_via_external(command_name.as_path())
 		}
 	}
@@ -702,13 +723,18 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			params:       self.params,
 		};
 
-		let resolved_path = path.to_string_lossy();
+		let argv0 = self.argv0.as_deref().map(OsStr::new).or_else(|| {
+			match self.args.first() {
+				Some(CommandArg::OsString(name)) => Some(name.as_os_str()),
+				_ => None,
+			}
+		});
 		let result = execute_external_command(
 			cmd_context,
-			resolved_path.as_ref(),
+			path.as_os_str(),
 			self.in_pipeline,
 			self.process_group_id,
-			self.argv0.as_deref(),
+			argv0,
 			&self.args[1..],
 		);
 
@@ -725,10 +751,10 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
 pub(crate) fn execute_external_command(
 	context: ExecutionContext<'_, impl extensions::ShellExtensions>,
-	executable_path: &str,
+	executable_path: &OsStr,
 	in_pipeline: bool,
 	process_group_id: Option<i32>,
-	argv0_override: Option<&str>,
+	argv0_override: Option<&OsStr>,
 	args: &[CommandArg],
 ) -> Result<ExecutionSpawnResult, error::Error> {
 	// Assignments are shell syntax; preserve native argument bytes for spawned processes.
@@ -754,7 +780,7 @@ pub(crate) fn execute_external_command(
 	// Compose the std::process::Command that encapsulates what we want to launch.
 	// argv[0] defaults to context.command_name (the user-facing name of the
 	// command) unless the caller specified an explicit override.
-	let argv0 = argv0_override.unwrap_or(context.command_name.as_str());
+	let argv0 = argv0_override.unwrap_or_else(|| OsStr::new(&context.command_name));
 	#[allow(unused_mut, reason = "only mutated on unix platforms")]
 	let mut cmd = compose_std_command(
 		&context,
@@ -766,7 +792,7 @@ pub(crate) fn execute_external_command(
 	let mut marker_output = if context.params.command_output_marker().is_some() {
 		let marker_args = cmd_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
 		let marker_args = marker_args.iter().map(AsRef::as_ref).collect::<Vec<&str>>();
-		prepare_output_markers(&context, executable_path, &marker_args)
+		prepare_output_markers(&context, &executable_path.to_string_lossy(), &marker_args)
 	} else {
 		None
 	};

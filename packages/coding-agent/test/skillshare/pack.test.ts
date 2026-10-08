@@ -95,14 +95,16 @@ describe("packSkill", () => {
 	});
 
 	// The 260+ character fixture path exceeds Windows MAX_PATH and fails with ENOENT.
-	test.skipIf(process.platform === "win32")("enforces file count and path length limits", async () => {
+	test.skipIf(process.platform === "win32")("enforces the path length limit", async () => {
 		await writeFiles({ "SKILL.md": SKILL_MD });
 		const longDir = tempDir.join("a".repeat(100), "b".repeat(100));
 		await fs.mkdir(longDir, { recursive: true });
 		await Bun.write(path.join(longDir, "c".repeat(60)), "x");
 		await expect(packSkill(tempDir.path())).rejects.toThrow(/path exceeds 255 bytes/);
+	});
 
-		await fs.rm(tempDir.join("a".repeat(100)), { recursive: true });
+	test("enforces the file count limit", async () => {
+		await writeFiles({ "SKILL.md": SKILL_MD });
 		await fs.mkdir(tempDir.join("many"));
 		await Promise.all(Array.from({ length: 1000 }, (_, i) => Bun.write(tempDir.join("many", `${i}.txt`), "x")));
 		await expect(packSkill(tempDir.path())).rejects.toThrow(/exceeds 1000 files/);

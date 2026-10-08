@@ -145,8 +145,8 @@ test.each(process.platform === "win32" ? [false, true] : [false])(
 			{
 				folder: { files: { "target.txt": { size: payload.byteLength, offset: "0" } } },
 				directory: { link: "folder" },
-				second: { link: "folder/target.txt" },
 				first: { link: "second" },
+				second: { link: "folder/target.txt" },
 			},
 			payload,
 		);

@@ -134,6 +134,22 @@ describe("RpcForkCommandCatalogService", () => {
 		expect((await service.complete({ text: "/move ", cursor: 6, session })).items.map(item => item.label)).toEqual([
 			"destination-only/",
 		]);
+		// /move treats the whole argument as a path, not whitespace-delimited
+		// tokens. Completing in the middle must replace its remaining suffix.
+		await fs.mkdir(path.join(movedCwd, "destination with spaces"));
+		const pathText = "/move destination with spaces/outdated";
+		const pathCompletion = await service.complete({
+			text: pathText,
+			cursor: "/move destination with".length,
+			session,
+		});
+		const directoryItem = pathCompletion.items.find(item => item.label === "destination with spaces/")!;
+		expect(directoryItem).toMatchObject({ replaceStart: 6, replaceEnd: pathText.length });
+		expect(
+			pathText.slice(0, directoryItem.replaceStart) +
+				directoryItem.insertText +
+				pathText.slice(directoryItem.replaceEnd),
+		).toBe("/move destination with spaces/");
 	});
 
 	test("strict resolution distinguishes builtins, skills, and unknown input", async () => {

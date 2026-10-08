@@ -370,7 +370,9 @@ export class RpcForkCommandCatalogService {
 			if (quote === char) quote = undefined;
 			else if (!quote && (char === '"' || char === "'")) quote = char;
 		}
-		let replaceEnd = cursor;
+		// /move consumes the entire argument as one path, including unquoted
+		// spaces; preserving a whitespace-delimited suffix would duplicate it.
+		let replaceEnd = builtin.name === "move" ? text.length : cursor;
 		for (; replaceEnd < text.length; replaceEnd++) {
 			const char = text[replaceEnd]!;
 			if (escaped) {

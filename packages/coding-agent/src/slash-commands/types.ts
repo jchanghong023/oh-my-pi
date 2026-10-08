@@ -4,6 +4,7 @@ import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
 import type { AgentSession } from "../session/agent-session";
+import type { NewSessionOptions } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 
 /** Declarative subcommand definition for commands like /mcp. */
@@ -68,8 +69,10 @@ export interface SlashCommandRuntime {
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */
 	ui?: Pick<ExtensionUIContext, "select" | "confirm">;
-	/** Host model-selection policy; RPC supplies its temporary session setter. */
+	/** Host model-selection policy. */
 	setModel?: (model: Model) => Promise<void>;
+	/** Host session-transition lifecycle; falls back to the session outside adapted hosts. */
+	newSession?: (options?: NewSessionOptions) => Promise<boolean>;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */
 	output: (text: string) => Promise<void> | void;
 	/** Re-advertise the available command list (no-op outside ACP). */

@@ -3,6 +3,8 @@ import {
 	conclusionExitCode,
 	parseSlowtestArgs,
 	pickTriggeredRun,
+	resolveSlowtestHead,
+	waitForOwnedChild,
 	workflowDispatchArgv,
 	type GhRunSummary,
 } from "./slowtest.ts";
@@ -102,4 +104,64 @@ describe("parseSlowtestArgs", () => {
 		expect(parseSlowtestArgs(["--release"])).toBeNull();
 		expect(parseSlowtestArgs(["--debug", "extra"])).toBeNull();
 	});
+});
+
+describe("resolveSlowtestHead", () => {
+	function capture(state: { branch?: string; dirty?: boolean; sha?: string; failed?: string }) {
+		return (argv: readonly string[]) => ({
+			exitCode: argv[1] === state.failed ? 1 : 0,
+			stdout:
+				argv[1] === "status"
+					? state.dirty
+						? " M scripts/slowtest.ts\n"
+						: ""
+					: argv.includes("--abbrev-ref")
+						? (state.branch ?? "main")
+						: (state.sha ?? "a".repeat(40)),
+		});
+	}
+
+	test("rejects an uncommitted tree before it can become the published commit", () => {
+		expect(() => resolveSlowtestHead(undefined, capture({ dirty: true }))).toThrow("must be clean");
+	});
+
+	test("rejects a commit or branch changed after local or WSL validation", () => {
+		const testedSha = resolveSlowtestHead(undefined, capture({}));
+		expect(() => resolveSlowtestHead(testedSha, capture({ sha: "b".repeat(40) }))).toThrow("HEAD changed");
+		expect(() => resolveSlowtestHead(testedSha, capture({ branch: "feature" }))).toThrow("branch to be main");
+	});
+
+	test("fails closed when Git cannot inspect the tree or HEAD", () => {
+		expect(() => resolveSlowtestHead(undefined, capture({ failed: "status" }))).toThrow("must be clean");
+		expect(() => resolveSlowtestHead(undefined, capture({ failed: "rev-parse" }))).toThrow("branch to be main");
+	});
+});
+
+describe("owned subprocess cancellation", () => {
+	test("aborting the stage kills its child without accepting success or touching another child", async () => {
+		const detached = process.platform !== "win32";
+		const child = Bun.spawn([process.execPath, "-e", "await Bun.stdin.text()"], {
+			detached,
+			stdin: "pipe",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const unrelated = Bun.spawn([process.execPath, "-e", "await Bun.stdin.text()"], {
+			stdin: "pipe",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const controller = new AbortController();
+		try {
+			const waiting = waitForOwnedChild(child, controller.signal, detached);
+			controller.abort(new Error("canceled"));
+			await expect(waiting).rejects.toThrow("canceled");
+			expect(child.exitCode).not.toBeNull();
+			expect(unrelated.exitCode).toBeNull();
+		} finally {
+			child.kill();
+			unrelated.kill();
+			await Promise.all([child.exited, unrelated.exited]);
+		}
+	}, 10_000);
 });

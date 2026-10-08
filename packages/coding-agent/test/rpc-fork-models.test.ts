@@ -1,9 +1,11 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { RpcModelRoleService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-models";
@@ -198,6 +200,66 @@ describe("RpcModelRoleService", () => {
 		});
 		expect(fx.settings.getModelRole("default")).toBe("p/m");
 		expect(fx.settings.getProjectModelRole("default")).toBe("p/m2");
+	});
+
+	test("automatic advisor selection clears its assignment and preserves the upstream slow-role fallback", async () => {
+		const fx = await setup([CHAT_MODEL, OTHER_CHAT_MODEL]);
+		for (const [roleId, modelId] of [
+			["default", "m"],
+			["slow", "m2"],
+			["advisor", "m"],
+		] as const) {
+			await fx.service.setRole({
+				roleId,
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId } },
+				expectedRevision: await roleRevision(fx.service, roleId),
+			});
+		}
+		const revision = await roleRevision(fx.service, "advisor");
+		const automatic = await fx.service.setRole({
+			roleId: "advisor",
+			scope: "user",
+			selection: { kind: "auto" },
+			expectedRevision: revision,
+		});
+
+		expect(automatic.persisted).toBe(true);
+		expect(automatic.role.userValue).toBeNull();
+		expect(automatic.role.source).toBe("default");
+		expect(automatic.role.revision).not.toBe(revision);
+		expect(automatic.role.explicitValue).toBeUndefined();
+		const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+		isolatedSettings.push(reloaded);
+		expect(reloaded.getGlobalModelRole("advisor")).toBeUndefined();
+		const resolved = resolveModelRoleValue("@advisor", [CHAT_MODEL, OTHER_CHAT_MODEL] as unknown as Model[], {
+			settings: reloaded,
+		});
+		expect(resolved.model?.id).toBe("m2");
+		expect(reloaded.getGlobalModelRole("default")).toBe("p/m");
+	});
+
+	test("lists a persisted default-role alias as automatic rather than an unmatched model", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		await fx.settings.saveUserModelRole("default", "*", undefined);
+		const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+		isolatedSettings.push(reloaded);
+		const { service } = serviceFor(reloaded, [CHAT_MODEL]);
+		const role = (await service.listRoles()).roles.find(candidate => candidate.roleId === "default")!;
+		expect(role.userValue).toBe("*");
+		expect(role.effectiveModel).toBeUndefined();
+		expect(role.unresolvedReason).toBe("auto");
+	});
+
+	test("a configured image role cannot report a chat model as its effective model", async () => {
+		const settings = Settings.isolated();
+		settings.overrideModelRoles({ image: "p/chat-only" });
+		const { service } = serviceFor(settings, [{ ...CHAT_MODEL, id: "chat-only" }, IMAGE_MODEL]);
+		const role = (await service.listRoles()).roles.find(candidate => candidate.roleId === "image")!;
+
+		expect(role.candidateModels).toEqual([{ provider: "p", modelId: "img" }]);
+		expect(role.effectiveModel).toBeUndefined();
+		expect(role.unresolvedReason).toBe("no_matching_model");
 	});
 
 	test("revisions are per role and same-role requests serialize their CAS", async () => {

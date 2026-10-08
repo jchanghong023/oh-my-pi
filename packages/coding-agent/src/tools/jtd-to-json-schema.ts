@@ -190,6 +190,18 @@ function isJTDDocument(schema: unknown): boolean {
 		if (!Object.hasOwn(jtdKeywords, key)) return false;
 	}
 
+	// JTD forms are mutually exclusive. JSON Schema may combine these keywords;
+	// treating such a document as JTD would silently discard constraints.
+	const forms =
+		Number("type" in schema) +
+		Number("enum" in schema) +
+		Number("ref" in schema) +
+		Number("elements" in schema) +
+		Number("values" in schema) +
+		Number("discriminator" in schema) +
+		Number("properties" in schema || "optionalProperties" in schema);
+	if (forms > 1) return false;
+
 	if ("type" in schema && !(typeof schema.type === "string" && Object.hasOwn(primitiveMap, schema.type))) return false;
 	if ("enum" in schema && !(Array.isArray(schema.enum) && schema.enum.every(value => typeof value === "string"))) {
 		return false;

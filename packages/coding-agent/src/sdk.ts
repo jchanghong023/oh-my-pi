@@ -1683,6 +1683,18 @@ function retainAsyncJobManager(manager: AsyncJobManager): (() => Promise<boolean
 	};
 }
 
+let tinyTitleClientOwners = 0;
+
+function retainTinyTitleClient(): () => Promise<void> {
+	tinyTitleClientOwners++;
+	let released = false;
+	return async () => {
+		if (released) return;
+		released = true;
+		if (--tinyTitleClientOwners === 0) await shutdownTinyTitleClient();
+	};
+}
+
 /** Reuse the CLI singleton for its workspace; load other SDK workspaces independently. */
 async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Settings> {
 	const pending = Settings.current;
@@ -1765,6 +1777,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	using startupCleanup = new DisposableStack();
 	if (restoreProviderToggles) startupCleanup.defer(restoreProviderToggles);
 	if (unbindSessionEffects) startupCleanup.defer(unbindSessionEffects);
+	const releaseTinyTitleClient = bindsProcessState ? retainTinyTitleClient() : undefined;
+	if (releaseTinyTitleClient) {
+		startupCleanup.defer(() => {
+			void releaseTinyTitleClient().catch(error =>
+				logger.warn("Session startup: tiny-model client shutdown failed", { error: String(error) }),
+			);
+		});
+	}
 	// Snapshot this session's effective configured lane onto its invocation scope
 	// so startup sub-discovery sees the same complete policy that post-startup
 	// reloads and recursively spawned children consume.
@@ -5052,7 +5072,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		{
 			const originalDispose = session.dispose.bind(session);
-			let tinyClientReleased = false;
 			session.dispose = async () => {
 				try {
 					try {
@@ -5093,14 +5112,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						await originalDispose();
 					}
 				} finally {
-					// The tiny-model client is a process singleton shared by every session.
-					// Only the session that owns process state drops its connections, once:
-					// that fails every request still in flight, and a repeat dispose must not
-					// cancel requests other sessions made since.
-					if (bindsProcessState && !tinyClientReleased) {
-						tinyClientReleased = true;
+					// Release once, and keep the shared connection alive while another
+					// top-level session (including an initializing root) still owns it.
+					if (releaseTinyTitleClient) {
 						try {
-							await shutdownTinyTitleClient();
+							await releaseTinyTitleClient();
 						} catch (error) {
 							logger.warn("Session dispose: tiny-model client shutdown failed", { error: String(error) });
 						}

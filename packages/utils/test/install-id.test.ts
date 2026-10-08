@@ -3,8 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	__resetDirsFromEnvForTests,
 	__resetInstallIdCacheForTests,
-	getAgentDir,
 	getConfigRootDir,
 	getInstallId,
 	setAgentDir,
@@ -16,19 +16,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 describe("getInstallId", () => {
 	let tempRoot = "";
-	let originalAgentDir = "";
-	let originalConfigDir: string | undefined;
+	const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+	let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 	beforeEach(async () => {
-		originalAgentDir = getAgentDir();
-		originalConfigDir = process.env.PI_CONFIG_DIR;
+		originalEnv = {};
+		for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
 		const slug = `omp-install-id-${Snowflake.next()}`;
 		// PI_CONFIG_DIR is relative to home; a Windows temp dir may be on another drive.
 		tempRoot = path.join(process.platform === "win32" ? os.homedir() : os.tmpdir(), slug);
 		await fs.mkdir(tempRoot, { recursive: true });
-		// Point the resolver's config root at the temp dir. Using PI_CONFIG_DIR
-		// keeps the parent equal to os.homedir() but flips the basename, so the
-		// install-id file lands inside our temp tree.
+		// Override the full root as well: inherited OMP_CONFIG_ROOT must not
+		// send these destructive identity fixtures into the user's data.
+		process.env.OMP_CONFIG_ROOT = tempRoot;
 		process.env.PI_CONFIG_DIR = path.relative(os.homedir(), tempRoot);
 		setAgentDir(path.join(tempRoot, "agent"));
 		__resetInstallIdCacheForTests();
@@ -36,12 +36,12 @@ describe("getInstallId", () => {
 
 	afterEach(async () => {
 		__resetInstallIdCacheForTests();
-		if (originalConfigDir === undefined) {
-			delete process.env.PI_CONFIG_DIR;
-		} else {
-			process.env.PI_CONFIG_DIR = originalConfigDir;
+		for (const key of ENV_KEYS) {
+			const value = originalEnv[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
 		}
-		setAgentDir(originalAgentDir);
+		__resetDirsFromEnvForTests();
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	});
 

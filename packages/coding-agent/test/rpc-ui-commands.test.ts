@@ -337,7 +337,7 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 		});
 	}, 300_000);
 
-	test("a loop's automatic prompt reaches the provider through the real input gate and stops at its limit", async () => {
+	test("loop prompts stop at their limit, and deleting that session reports rollover without reviving old dialogs", async () => {
 		const requests: RpcFrame[] = [];
 		const model = "rpc-loop-model";
 		const prompt = "RPC loop dispatch fixture";
@@ -425,10 +425,51 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 								.join("");
 						});
 					expect(replies).toEqual(["loop-reply-1", "loop-reply-2"]);
-					expect(await server.request({ id: "loop-settled", type: "get_state" })).toMatchObject({
+					const settled = await server.request({ id: "loop-settled", type: "get_state" });
+					expect(settled).toMatchObject({
 						success: true,
 						data: { isStreaming: false, queuedMessageCount: 0 },
 					});
+					if (
+						!isRecord(settled.data) ||
+						typeof settled.data.sessionId !== "string" ||
+						typeof settled.data.sessionFile !== "string"
+					) {
+						throw new Error("Completed session lacks its persisted identity");
+					}
+					const oldSessionId = settled.data.sessionId;
+					const oldSessionFile = settled.data.sessionFile;
+					expect(await Bun.file(oldSessionFile).exists()).toBe(true);
+					server.send({ id: "wiki-before-delete", type: "prompt", message: "/wiki" });
+					const dialog = await server.next(
+						frame => frame.type === "extension_ui_request" && frame.method === "select",
+					);
+					const deleteStart = server.seen.length;
+					expect(await server.request({ id: "delete", type: "prompt", message: "/session delete" })).toMatchObject(
+						{
+							success: true,
+							data: { agentInvoked: false },
+						},
+					);
+					expect(commandOutputSince(server, deleteStart)).toContain(`Session deleted: ${oldSessionFile}`);
+					expect(await Bun.file(oldSessionFile).exists()).toBe(false);
+					await server.next(
+						frame =>
+							frame.type === "extension_ui_request" && frame.method === "cancel" && frame.targetId === dialog.id,
+					);
+					// The legitimate rollover's result reaches its new session, but a
+					// different command's late dialog answer cannot follow it there.
+					server.send({ type: "extension_ui_response", id: dialog.id, value: "New document index" });
+					const fresh = await server.request({ id: "after-delete", type: "get_state" });
+					expect(fresh).toMatchObject({ success: true, data: { isStreaming: false, queuedMessageCount: 0 } });
+					if (!isRecord(fresh.data)) throw new Error("Missing fresh session state");
+					expect(fresh.data.sessionId).not.toBe(oldSessionId);
+					expect(
+						server.seen
+							.slice(deleteStart)
+							.some(frame => frame.type === "extension_ui_request" && frame.method === "input"),
+					).toBe(false);
+					expect(server.seen.slice(deleteStart).some(frame => frame.type === "agent_start")).toBe(false);
 				},
 				{
 					provider: "rpc-loop",

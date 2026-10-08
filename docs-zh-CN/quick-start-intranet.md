@@ -125,6 +125,14 @@ omp
 
 先退出计划模式。用 `/goal show` 看状态，`/goal pause` 暂停，`/goal resume` 继续，`/goal drop` 删除目标（保留代码改动）。测试结果和子代理过程以实际输出为准。
 
+**工作流使用例子：**
+
+```text
+/workflowz 每个修改文件分配一个 task 代理审查
+```
+
+![工作流审查示例：待办进度与并行子代理](assets/workflowz-review-example.png)
+
 **查看子代理和任务进度：**
 
 ```text

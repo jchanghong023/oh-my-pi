@@ -7,6 +7,8 @@
 - Fixed process-tree cleanup when an exited wrapper leaves descendant-held output pipes open, and Windows batch launcher pipe closure.
 - Fixed process-tree cleanup when callers consume stdout or a command is canceled or fails.
 - Released process cancellation listeners when stdout closes, even when callers never consume it.
+- Kept all cache and state paths under an explicit `OMP_CONFIG_ROOT` instead of initialized XDG directories.
+- Settled timed-out stdout reads when an external wrapper or orphaned descendant keeps the pipe open.
 
 ## [18.8.1] - 2026-10-07
 

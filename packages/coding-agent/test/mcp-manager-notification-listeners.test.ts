@@ -258,6 +258,8 @@ describe("MCPManager notification listeners", () => {
 		const manager = new MCPManager(workDir);
 		const events: string[] = [];
 		const { promise: hold, resolve: release } = Promise.withResolvers<void>();
+		const { promise: hold2, resolve: release2 } = Promise.withResolvers<void>();
+		const { promise: callbackStarted, resolve: markCallbackStarted } = Promise.withResolvers<void>();
 
 		manager.setOnToolsChanged(async () => {
 			events.push("cb:start");
@@ -267,30 +269,23 @@ describe("MCPManager notification listeners", () => {
 
 		try {
 			await manager.connectServers({ alpha: serverConfig() }, {});
-			// connectServers may kick the callback for the initial tool load via
-			// its background continuation; drain that first so we can assert
-			// specifically on the refresh path.
-			await Bun.sleep(30);
+			// Drain initial startup callbacks before installing the refresh handler,
+			// including connections that outlast the discovery window.
 			release();
-			await Bun.sleep(30);
+			await manager.waitForStartup(0);
 			const priorLen = events.length;
 
 			// Trigger a fresh refresh and hold the callback again — this is the
 			// path #handleServerNotification takes for tools/list_changed.
-			const { promise: hold2, resolve: release2 } = Promise.withResolvers<void>();
 			let cbState: "started" | "ended" | undefined;
 			manager.setOnToolsChanged(async () => {
 				cbState = "started";
+				markCallbackStarted();
 				await hold2;
 				cbState = "ended";
 			});
 			const refreshDone = manager.refreshServerTools("alpha");
-			// Give the callback time to enter the await — bounded poll, since
-			// under load the tools/list round trip before the callback can
-			// take longer than a fixed sleep.
-			for (let attempt = 0; cbState === undefined && attempt < 100; attempt++) {
-				await Bun.sleep(20);
-			}
+			await callbackStarted;
 			expect(cbState).toBe("started");
 			// refreshServerTools has NOT resolved yet — proves it's awaiting.
 			let refreshResolved = false;
@@ -306,6 +301,8 @@ describe("MCPManager notification listeners", () => {
 			// Drain events reference — just to silence unused var if refactored.
 			expect(events.length).toBeGreaterThanOrEqual(priorLen);
 		} finally {
+			release();
+			release2();
 			await manager.disconnectAll();
 		}
 	});
@@ -324,40 +321,35 @@ describe("MCPManager notification listeners", () => {
 		// was the specific race raised in review of #6535).
 		const manager = new MCPManager(workDir);
 		const events: string[] = [];
-		let cbCall = 0;
-		const { promise: initialCallbackDone, resolve: markInitialCallbackDone } = Promise.withResolvers<void>();
+		const initialFrames = makeFrameCollector();
+		const stopInitialFrames = manager.addNotificationListener(initialFrames.listener);
+		const { promise: callbackStarted, resolve: markCallbackStarted } = Promise.withResolvers<void>();
+		const { promise: listenerFired, resolve: markListenerFired } = Promise.withResolvers<void>();
 		const { promise: gate, resolve: releaseGate } = Promise.withResolvers<void>();
 
-		manager.setOnToolsChanged(async () => {
-			cbCall++;
-			// Initial connect fires the callback via a background continuation
-			// (manager.ts line ~555, fire-and-forget). Return immediately so
-			// its floating promise resolves cleanly; only gate on the second
-			// call, which is the one our simulated post-connect notification
-			// triggers.
-			if (cbCall === 1) {
-				events.push("initial-cb:done");
-				markInitialCallbackDone();
-				return;
-			}
-			events.push("cb:start");
-			await gate;
-			events.push("cb:end");
+		manager.setOnToolsChanged(() => {
+			events.push("initial-cb:done");
 		});
-
-		manager.addNotificationListener((_server, method) => {
-			if (method === "notifications/tools/list_changed") {
-				events.push("listener:fire");
-			}
-		});
-
 		try {
 			await manager.connectServers({ alpha: serverConfig() }, {});
-			// Wait for the initial-connect background continuation to fire the
-			// callback (call #1, ungated). Once it signals completion, we know
-			// the callback is idle and the next invocation will be call #2.
-			await initialCallbackDone;
+			// The fixture emits a list_changed frame during its handshake. Drain
+			// that frame and startup work before testing a post-connect notification.
+			await initialFrames.awaitFrame("alpha", "notifications/tools/list_changed");
+			await manager.waitForStartup(0);
+			stopInitialFrames();
 			expect(events).toContain("initial-cb:done");
+			manager.setOnToolsChanged(async () => {
+				events.push("cb:start");
+				markCallbackStarted();
+				await gate;
+				events.push("cb:end");
+			});
+			manager.addNotificationListener((_server, method) => {
+				if (method === "notifications/tools/list_changed") {
+					events.push("listener:fire");
+					markListenerFired();
+				}
+			});
 
 			// Simulate a post-connect `notifications/tools/list_changed` frame
 			// by driving the transport's onNotification hook directly — that's
@@ -369,10 +361,7 @@ describe("MCPManager notification listeners", () => {
 			if (!conn?.transport.onNotification) throw new Error("expected transport onNotification to be wired");
 			void conn.transport.onNotification("notifications/tools/list_changed", {});
 
-			// Give the async chain time to enter the callback's await.
-			for (let i = 0; i < 20 && !events.includes("cb:start"); i++) {
-				await Bun.sleep(10);
-			}
+			await callbackStarted;
 			expect(events).toContain("cb:start");
 
 			// CRITICAL: at this point the callback is holding, and the
@@ -386,10 +375,7 @@ describe("MCPManager notification listeners", () => {
 			// and the listener fires — in that order.
 			releaseGate();
 
-			// Wait for the listener to fire (or bail on timeout).
-			for (let i = 0; i < 50 && !events.includes("listener:fire"); i++) {
-				await Bun.sleep(10);
-			}
+			await listenerFired;
 
 			const idxCbEnd = events.indexOf("cb:end");
 			const idxFire = events.indexOf("listener:fire");
@@ -398,6 +384,7 @@ describe("MCPManager notification listeners", () => {
 			expect(idxFire).toBeGreaterThan(idxCbEnd);
 		} finally {
 			// Ensure gate is released even on early failure so no promise leaks.
+			stopInitialFrames();
 			releaseGate();
 			await manager.disconnectAll();
 		}

@@ -472,7 +472,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // under default GC settings. Disabling concurrent GC previously hung relay
 // delivery when it shared a process with auth/collab tests; the per-file
 // Windows chunks above keep those heaps separate.
-function buildChildEnv(): Record<string, string | undefined> {
+export function buildChildEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
 		GITHUB_ACTIONS: "",

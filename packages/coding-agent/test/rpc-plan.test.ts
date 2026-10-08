@@ -313,6 +313,56 @@ describe("RPC plan mode host", () => {
 		expect(host.session.model).toEqual(host.original);
 	});
 
+	test("operator cancellation at the terminal yield retains the deferred plan role", async () => {
+		await using root = await TempDir.create("rpc-plan-deferred-cancel-");
+		const host = createHost(root.absolute());
+		const waiting = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		vi.spyOn(host.session, "waitForIdle").mockImplementation(async () => {
+			started.resolve();
+			await waiting.promise;
+		});
+		host.setStreaming(true);
+		await host.controller.handle("");
+		host.setStreaming(false);
+		host.controller.observe({ type: "agent_end", messages: [], isTerminal: true });
+		await started.promise;
+		host.controller.cancel();
+		waiting.resolve();
+		await host.drain();
+		expect(host.session.getPlanModeState()?.enabled).toBe(true);
+		expect(host.session.model).toEqual(host.planModel);
+		expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
+	});
+
+	test("approval holds automatic turns through title persistence until execution is dispatched", async () => {
+		await using root = await TempDir.create("rpc-plan-dispatch-gate-");
+		const host = createHost(root.absolute());
+		await Bun.write(host.planPath, "# Approved plan");
+		await host.controller.handle("");
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(host.session.sessionManager, "setSessionName").mockImplementation(async () => {
+			started.resolve();
+			await release.promise;
+			return true;
+		});
+		const gatesAtDispatch: boolean[] = [];
+		vi.spyOn(host.session, "prompt").mockImplementation(async () => {
+			gatesAtDispatch.push(host.controller.reviewPending);
+			return true;
+		});
+		host.controller.observe(await host.propose());
+		await started.promise;
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.controller.reviewPending).toBe(true);
+		expect(gatesAtDispatch).toEqual([]);
+		release.resolve();
+		await host.drain();
+		expect(gatesAtDispatch).toEqual([false]);
+		expect(host.controller.reviewPending).toBe(false);
+	});
+
 	test("abort during the shared approval tail's asynchronous title save prevents execution", async () => {
 		await using root = await TempDir.create("rpc-plan-tail-cancel-");
 		const host = createHost(root.absolute());

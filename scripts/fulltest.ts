@@ -15,7 +15,7 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
-import { testTimeoutMs } from "./ci-test-ts";
+import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -27,6 +27,13 @@ export interface FulltestCommand {
 
 export interface FulltestOptions {
 	debug: boolean;
+}
+
+function isDocumentation(file: string): boolean {
+	return (
+		/(^|\/)(docs|docs-zh-CN)\//.test(file) ||
+		/(^|\/)(README|CHANGELOG|CONTRIBUTING|AGENTS)(?:\.[^/]*)?\.md$/i.test(file)
+	);
 }
 
 /** Phases in contract order; `ts/fork` is driven by {@link runForkTestsPhase}
@@ -53,7 +60,12 @@ export function buildFulltestPhases(
 		{
 			label: "rust/affected",
 			argv: ["bun", "run", "test:rs", "--affected"],
-			env: { CI: "1", OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths) },
+			// Only known documentation paths are ignored: arbitrary Markdown may
+			// be a compile-time payload (for example pi-edit/prompts/*.md).
+			env: {
+				CI: "1",
+				OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths.filter(file => !isDocumentation(file))),
+			},
 		},
 		{ label: "scripts", argv: ["bun", "run", "test:scripts"] },
 		{
@@ -80,7 +92,11 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-async function runPhase(command: FulltestCommand, cwd: string = repoRoot): Promise<void> {
+async function runPhase(
+	command: FulltestCommand,
+	cwd: string = repoRoot,
+	baseEnv: Record<string, string | undefined> = process.env,
+): Promise<void> {
 	console.log(`\n==> ${command.label}`);
 	console.log(`(cd ${path.relative(repoRoot, cwd) || "."} && ${command.argv.map(shellQuote).join(" ")})`);
 	const child = Bun.spawn([...command.argv], {
@@ -88,7 +104,7 @@ async function runPhase(command: FulltestCommand, cwd: string = repoRoot): Promi
 		stdin: "ignore",
 		stdout: "inherit",
 		stderr: "inherit",
-		env: command.env ? { ...process.env, ...command.env } : undefined,
+		env: command.env ? { ...baseEnv, ...command.env } : baseEnv,
 	});
 	const exitCode = await child.exited;
 	if (exitCode !== 0) throw new Error(`${command.label} failed with exit code ${exitCode}`);
@@ -131,24 +147,50 @@ export function resolveForkTestBatches(
 	return [...byPackage.entries()].map(([packageName, files]) => ({ cwd: `packages/${packageName}`, files }));
 }
 
-async function resolveUpstreamBaselineRef(): Promise<string> {
-	// Prefer the local mirror branch; fall back to the remote-tracking ref so a
-	// fresh clone (e.g. the slowtest WSL stage) can discover fork tests without
-	// a prior local sync — `rev-parse --verify` does not DWIM to `origin/<name>`.
-	for (const candidate of ["upstream", "origin/upstream"]) {
-		const result = await $`git rev-parse --verify ${candidate}`.cwd(repoRoot).quiet().nothrow();
-		if (result.exitCode === 0 && result.stdout.toString().trim() !== "") return candidate;
+/** Choose the precise fork mirror, independent of the clone's remote name. */
+export function selectUpstreamBaselineRef(refs: readonly { name: string; commit: string }[]): string {
+	const local = refs.find(ref => ref.name === "refs/heads/upstream");
+	if (local) return local.name;
+	const mirrors = refs
+		.filter(ref => /^refs\/remotes\/.+\/upstream$/.test(ref.name))
+		.sort((left, right) => left.name.localeCompare(right.name));
+	if (mirrors.length === 0) {
+		throw new Error(
+			"fulltest needs the upstream baseline (local `upstream` branch or a remote's `upstream` mirror) to discover fork tests; run the upstream sync once or create the branch.",
+		);
 	}
-	throw new Error(
-		"fulltest needs the upstream baseline (local `upstream` branch or `origin/upstream`) to discover fork tests; run the upstream sync once or create the branch.",
-	);
+	if (mirrors.some(ref => ref.commit !== mirrors[0]!.commit)) {
+		throw new Error(
+			`fulltest found conflicting remote upstream baselines: ${mirrors.map(ref => ref.name).join(", ")}`,
+		);
+	}
+	return mirrors.find(ref => ref.name === "refs/remotes/origin/upstream")?.name ?? mirrors[0]!.name;
 }
 
-/** Max test files per `bun test` process. A single process accumulating the
- * whole fork suite keeps native handles (browser child processes, PTYs,
- * SQLite) alive across files and inflates their per-test budgets; bounded
- * chunks restore isolation without maintaining any per-file list. */
-const TEST_CHUNK_SIZE = 40;
+async function resolveUpstreamBaselineRef(): Promise<string> {
+	const result = await $`git for-each-ref --format='%(refname)%09%(objectname)' refs/heads/upstream refs/remotes`
+		.cwd(repoRoot)
+		.quiet()
+		.nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`git for-each-ref failed: ${result.stderr.toString().trim()}`);
+	}
+	const refs = result.stdout
+		.toString()
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map(line => {
+			const [name, commit] = line.trim().split("\t");
+			return { name: name!, commit: commit! };
+		});
+	return selectUpstreamBaselineRef(refs);
+}
+
+/** Max test files per `bun test` process. Match the upstream runner's Windows
+ * isolation: sharing a heap can wedge runtime/native suites there. Elsewhere,
+ * bounded chunks keep native handles from accumulating across the whole suite. */
+const TEST_CHUNK_SIZE = process.platform === "win32" ? 1 : 40;
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
 	const chunks: T[][] = [];
@@ -184,12 +226,12 @@ async function runForkTestsPhase(): Promise<void> {
 	// Resolve existence against the repo root regardless of the caller's cwd.
 	const batches = resolveForkTestBatches(changedPaths, file => existsSync(path.join(repoRoot, file)));
 	if (batches.length === 0) {
-		throw new Error(
-			"No fork test files discovered against the upstream baseline; refusing to run an empty test phase",
-		);
+		console.log("\n==> ts/fork (no changed package tests; skipped)");
+		return;
 	}
 	const total = batches.reduce((count, batch) => count + batch.files.length, 0);
 	console.log(`\n==> ts/fork (${total} fork test files across ${batches.length} packages)`);
+	const childEnv = buildChildEnv();
 	for (const batch of batches) {
 		const chunks = chunk(batch.files, TEST_CHUNK_SIZE);
 		for (const [index, files] of chunks.entries()) {
@@ -200,6 +242,7 @@ async function runForkTestsPhase(): Promise<void> {
 					argv: ["bun", "test", `--timeout=${testTimeoutMs()}`, ...files],
 				},
 				path.join(repoRoot, batch.cwd),
+				childEnv,
 			);
 		}
 	}

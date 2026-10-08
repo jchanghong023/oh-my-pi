@@ -3411,16 +3411,17 @@ export class SessionMaintenance {
 		const candidates: Model[] = [];
 		const seen = new Set<string>();
 
-		const addCandidate = (model: Model | undefined): void => {
-			if (!model) return;
+		const addCandidate = (model: Model | undefined): boolean => {
+			if (!model) return false;
 			const key = `${model.provider}/${model.id}`;
-			if (seen.has(key)) return;
+			if (seen.has(key)) return false;
 			seen.add(key);
 			// `seen` still tracks rejected models so the largest-context fallback
 			// scan below doesn't reintroduce them; the filter just suppresses
 			// inclusion in this caller's candidate chain.
-			if (filter && !filter(model)) return;
+			if (filter && !filter(model)) return false;
 			candidates.push(model);
+			return true;
 		};
 
 		if (preferredModel) {
@@ -3442,10 +3443,7 @@ export class SessionMaintenance {
 		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 		for (const model of sortedByContext) {
 			const candidate = substituteForkCodexCompactionModel(model, availableModels);
-			if (candidate && !seen.has(`${candidate.provider}/${candidate.id}`)) {
-				addCandidate(candidate);
-				break;
-			}
+			if (addCandidate(candidate)) break;
 		}
 
 		return candidates;

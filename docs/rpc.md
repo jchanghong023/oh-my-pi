@@ -69,9 +69,9 @@ After the success response, oversized stdout objects use an uninterrupted sequen
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript client prefers v3 when advertised, otherwise v2, and uses the same chunk decoder for both. The Python, Rust and Go clients negotiate v2.
+Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation for chunked v2/v3. The bundled TypeScript, Python, Rust and Go clients negotiate v2 automatically; fork v3 requires an explicitly negotiated host transport.
 
-For an oversized `agent_end` in chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
+For an oversized `agent_end` in v1 or chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
 
 Legacy clients may ignore the added ready fields and remain on v1. In v1, an oversized response becomes `success: false` with `error: "RPC response exceeded the transport limit"`; oversized events may have strings, arrays, or object fields elided. If a v2/v3 logical frame exceeds 64 MiB after terminal-frame compaction, responses receive the same overflow error, other events produce `rpc_frame_error`, and `agent_end` falls back to an empty `messages` array plus `messageCount`. Large history APIs should use pagination rather than depending on arbitrarily large logical frames.
 
@@ -127,12 +127,13 @@ Fork business commands are opt-in: negotiate `{"type":"negotiate_protocol","prot
 - After v3, `get_available_commands` returns rich catalog descriptors — name, aliases, description, input hint, subcommands, source, an `execution` verdict (`omp` vs `tui`), and an `availability` reason so terminal-only commands report themselves instead of failing at dispatch — plus a catalog `revision`. Command and skill invocation stays on the upstream `prompt` pipeline.
 - `complete_command` (`{ id, type: "complete_command", text, cursor }`) is zero-side-effect completion over that catalog: `/prefix` completes command names and aliases, `/name arg…` completes builtin arguments using the hosted session's current cwd. Responses carry the revision actually used.
 - `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes; `sessionModel` echoes the hosted session's current model when one exists. `set_model_role` writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides. A successful save emits a `settings_changed { scope: "user" }` frame and reloads the hosted session's settings so its role resolution adopts the new value.
+- Existing persisted `*` role values retain the upstream default-role alias semantics. If the alias resolves, the catalog returns its `effectiveModel`; otherwise it reports `unresolvedReason: "auto"`, not `"no_matching_model"`. Saving `{ kind: "auto" }` clears the user assignment instead of persisting `*`, so role-specific upstream fallbacks apply.
 - `list_sessions` lists the hosted session's current saved-session directory, following changes to its cwd or session directory, including `/move` (the hosted session is flagged `current` once it has persisted). `rename_session` renames the hosted session through its live API or a saved entry through a title-slot rewrite (legacy files written before the title-slot format are rewritten with the slot prepended, never overlaid in place). `delete_session` removes a saved session with its artifacts; the session this process hosts must be closed (its process ended) first, a session whose ownership lease another process still holds refuses with `unsupported`, and both refusals precede any file mutation.
 - `set_model_role` requires the role's `expectedRevision`; session rename/delete accept an optional session `expectedRevision` and reject a stale supplied revision. These are resource revisions, not a global catalog revision.
 - `/clear` shares the in-place TUI/ACP/RPC reset: abort and await active compaction, preserve id/title/cwd/file, and clear the rendered TUI transcript/scrollback. It is not `/new`; `/fresh` still preserves conversation while resetting provider stream state.
 - `/logout` uses real provider/account selection and removes the selected stored row only after cancellation/session ownership checks. It reports remaining auth sources; a headless/no-op selector is not a substitute.
 
-The canonical fork command/response types are `rpc-fork-types.ts` (services: `rpc-fork-commands.ts`, `rpc-fork-models.ts`, `rpc-fork-sessions.ts`); the maintained requirements are [ZCode 接入需求](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
+Fork payload interfaces and capabilities are defined in `rpc-fork-types.ts`; command validation and dispatch live in `rpc-mode.ts`, backed by `rpc-fork-commands.ts`, `rpc-fork-models.ts`, and `rpc-fork-sessions.ts`. The maintained requirements are [ZCode 接入需求](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
 
 ### Prompting
 
@@ -1604,7 +1605,7 @@ stdin:
 
 `packages/coding-agent/src/modes/rpc/wire` describes the upstream-compatible
 commands (parameters, success `data`, nullability, timeouts), unsolicited frames,
-and shared types as omptype schemas. Fork v3 unions remain in their dedicated TypeScript module. `bun run gen:rpc` emits:
+and shared types as omptype schemas. Fork v3 payload interfaces remain in `rpc-fork-types.ts` and are not generated. `bun run gen:rpc` emits:
 
 - `rpc-wire.schema.json`: a JSON Schema 2020-12 bundle plus an `x-rpc` section:
   the command table, the stdout frame union (`serverFrame`: responses, host
@@ -1647,13 +1648,13 @@ excluded from that conformance comparison; they need the fork protocol tests.
 Current helper characteristics:
 
 - Spawns `bun <cliPath> --mode rpc` by default (`cliPath` defaults to `dist/cli.js`). A `command` argv prefix receives generated agent arguments; a command builder returns complete argv. A custom `spawn` transport takes precedence.
-- Correlates responses by generated `req_<n>` ids, prefers v3 when advertised (otherwise v2), validates negotiation, reassembles chunks, and pages message history
+- Correlates responses by generated `req_<n>` ids, negotiates and validates v2 when advertised, reassembles chunks, and pages message history; it does not automatically opt into fork v3
 - Dispatches recognized core `AgentEvent` types through `onEvent()` and recognized session events through `onSessionEvent()`; the raw server stream can include additional event types
 - Exposes `onPromptResult()`, `onSessionSettled()`, command-availability and subagent listeners, plus extension UI requests
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts()` / `logout(...)`; these helpers cover only the single-session host surface. Host-URI registration and delta-only message updates remain raw transport surfaces.
+- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts(providerId)` / `logout(providerId, credentialId)`; these helpers cover only the single-session host surface. Fork v3 commands require a host-owned transport; host-URI registration and delta-only message updates remain raw transport surfaces.
 
 ### Python package
 

@@ -122,6 +122,11 @@ describe("probeCandidates", () => {
 		);
 		const elapsed = Date.now() - start;
 		expect(result).toEqual({ ok: false, aborted: false, failures: expect.any(Array) });
+		// The wider Windows teardown allowance must not admit spending a fresh
+		// budget on each candidate: only the first hangs, the next is not probed.
+		expect(result).toMatchObject({
+			failures: ["cand-a (probe timed out)", "cand-b (probe budget exhausted)"],
+		});
 		// One 300ms budget total, not 3×: the whole discovery stays well under the
 		// combined per-candidate cost it would incur without a shared deadline.
 		// Windows child-process spawn/teardown overhead needs a wider bound.

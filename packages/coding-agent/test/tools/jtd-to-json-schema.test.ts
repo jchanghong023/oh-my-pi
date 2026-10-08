@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
 import { isJTDSchema, jtdToJsonSchema } from "@oh-my-pi/pi-coding-agent/tools/jtd-to-json-schema";
 
 describe("jtdToJsonSchema", () => {
@@ -81,6 +82,21 @@ describe("jtdToJsonSchema", () => {
 				alias: { $ref: "#/$defs/text" },
 			},
 		});
+	});
+
+	it("preserves combined JSON Schema constraints when root definitions are present", () => {
+		const input = {
+			type: "boolean",
+			enum: ["yes"],
+			definitions: { label: { type: "string" } },
+		};
+		const converted = jtdToJsonSchema(input);
+
+		expect(isJTDSchema(input)).toBe(false);
+		expect(converted).toBe(input);
+		// No value satisfies both constraints; losing `type` incorrectly accepts "yes".
+		expect(validateJsonSchemaValue(converted, "yes").success).toBe(false);
+		expect(validateJsonSchemaValue(converted, true).success).toBe(false);
 	});
 
 	it("normalizes nested JTD fragments inside JSON Schema nodes", () => {

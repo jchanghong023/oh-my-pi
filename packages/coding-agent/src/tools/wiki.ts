@@ -72,7 +72,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 	) {
 		// Argument validation is lenient so a stray extra key cannot fail a call;
 		// `query` itself is still required, and the error names what arrived.
-		const raw = params as Record<string, unknown>;
+		const raw = params !== null && typeof params === "object" ? (params as Record<string, unknown>) : {};
 		const received = Object.keys(raw).filter(key => key !== "__parseError");
 		const receivedQuery = typeof raw.query === "string" && raw.query.trim() ? raw.query.trim() : undefined;
 		if (!receivedQuery)

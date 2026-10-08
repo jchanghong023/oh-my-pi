@@ -1451,6 +1451,36 @@ describe("update-cli release binary integrity", () => {
 		expect(await Bun.file(targetPath).text()).toBe(content);
 		expect(progress.length).toBeGreaterThan(0);
 	});
+
+	it("finishes TTY progress exactly once when digest verification rejects the download", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, binaryName);
+		const writes: string[] = [];
+		const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		const writeSpy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			await expect(
+				downloadVerifiedBinary({
+					url,
+					targetPath,
+					expectedSize: Buffer.byteLength(content),
+					expectedDigest: `sha256:${"0".repeat(64)}`,
+					fetchImpl: async () => new Response(content),
+				}),
+			).rejects.toThrow("digest mismatch");
+		} finally {
+			writeSpy.mockRestore();
+			if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+			else Reflect.deleteProperty(process.stdout, "isTTY");
+		}
+
+		expect(writes.filter(text => text === "\n")).toEqual(["\n"]);
+		expect(await Bun.file(targetPath).exists()).toBe(false);
+	});
 });
 
 describe("update-cli PATH conflict warning", () => {

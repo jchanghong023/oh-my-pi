@@ -34,7 +34,7 @@ export class RpcSessionDirectoryError extends Error {
 }
 
 function isoOrUndefined(value: Date | undefined): string | undefined {
-	return value ? value.toISOString() : undefined;
+	return value && Number.isFinite(value.getTime()) ? value.toISOString() : undefined;
 }
 
 function revisionFor(storage: SessionStorage, sessionId: string, file: string | undefined): RpcRevision {

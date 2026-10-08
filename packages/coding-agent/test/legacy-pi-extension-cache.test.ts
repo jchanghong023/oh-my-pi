@@ -13,6 +13,7 @@ async function runProbe(cacheRoot: string, script: string = probePath, args: str
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		XDG_CACHE_HOME: cacheRoot,
+		OMP_CONFIG_ROOT: path.join(cacheRoot, "omp"),
 	};
 	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
 		delete env[key];

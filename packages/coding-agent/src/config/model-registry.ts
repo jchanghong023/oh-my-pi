@@ -3453,7 +3453,9 @@ export class ModelRegistry {
 						return this.#applyProviderTransportOverrideToModel(model, runtimeTransportOverride);
 					})
 				: nextModels;
-			this.#unprojectedModels = this.#applyProviderBedrockOverrides(nextModelsWithTransport);
+			this.#unprojectedModels = this.#withRuntimeSyntheticModels(
+				this.#applyProviderBedrockOverrides(nextModelsWithTransport),
+			);
 
 			this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			this.#invalidateProviderModelCache(providerName);
@@ -3540,11 +3542,13 @@ export class ModelRegistry {
 			);
 			this.#runtimeProviderOverrides.set(providerName, nextRuntimeOverride);
 			if (this.#hasFullSnapshot) {
-				this.#unprojectedModels = this.#applyDiscoveryPolicies(
-					this.#unprojectedModels.map(model => {
-						if (model.provider !== providerName) return model;
-						return this.#applyProviderTransportOverrideToModel(model, transportOverride);
-					}),
+				this.#unprojectedModels = this.#withRuntimeSyntheticModels(
+					this.#applyDiscoveryPolicies(
+						this.#unprojectedModels.map(model => {
+							if (model.provider !== providerName) return model;
+							return this.#applyProviderTransportOverrideToModel(model, transportOverride);
+						}),
+					),
 				);
 				this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			}

@@ -3,11 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { findFreeCdpPort, waitForCdp } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import { type ChildProcess, ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
-import { ensureChromiumExecutable, launchHeadlessBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import {
+	ensureChromiumExecutable,
+	launchHeadlessBrowser,
+	type LaunchHeadlessResult,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 
 async function windowsPuppeteerAvailable(): Promise<boolean> {
 	const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-chromium-probe-"));
-	let browser: Awaited<ReturnType<typeof launchHeadlessBrowser>>["browser"] | undefined;
+	let browser: LaunchHeadlessResult["browser"] | undefined;
 	try {
 		({ browser } = await launchHeadlessBrowser({
 			headless: true,

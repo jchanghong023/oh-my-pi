@@ -82,7 +82,8 @@ export function repoNameFromUrl(url: string): string {
 		.trim()
 		.replace(/\/+$/, "")
 		.replace(/\.git$/, "");
-	const segment = cleaned.split("/").pop() ?? "";
+	const remotePath = /^[^/]+:(?!\/\/)(.+)$/.exec(cleaned)?.[1] ?? cleaned;
+	const segment = remotePath.split("/").pop() ?? "";
 	return segment === "" ? "repo" : segment;
 }
 
@@ -314,44 +315,82 @@ function checkWslToolchain(distro: string): void {
 	}
 }
 
+/** Isolate only this invocation's Linux children; never terminate the distro. */
+export function wslFulltestCommand(repoPath: string, controlDir: string): string {
+	const pidFile = quote(`${controlDir}/pid`);
+	const canceledFile = quote(`${controlDir}/canceled`);
+	const inner = `printf '%s\\n' "$$" > ${pidFile}; [ ! -f ${canceledFile} ] || exit 130; cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`;
+	const cleanup = `${wslCancelCommand(controlDir)}; rm -f -- ${pidFile} ${canceledFile}; rmdir -- ${quote(controlDir)}`;
+	return `trap ${quote(cleanup)} EXIT; setsid --wait bash -c ${quote(inner)}`;
+}
+
+export function wslCancelCommand(controlDir: string): string {
+	const dir = quote(controlDir);
+	const pidFile = quote(`${controlDir}/pid`);
+	return `if [ -d ${dir} ]; then touch -- ${quote(`${controlDir}/canceled`)}; if read -r pid < ${pidFile} 2>/dev/null; then case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -KILL -- "-$pid" 2>/dev/null || true; fi; fi`;
+}
+
 async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
 	// A fresh clone has no node_modules, so the install runs in the same
 	// invocation: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
 	// must exist before fulltest. No fork-side time budget: the nested run owns
 	// its own failure reporting and a hung run is stopped by the operator, never
 	// silently by a timer here.
-	const command = `bash -lc ${quote(`cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`)}`;
-	console.log(`\n==> wsl/fulltest`);
-	console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
-	const child = Bun.spawn(
-		["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-lc", command],
-		{ cwd: repoRoot, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
-	);
-	const exitCode = await child.exited;
-	if (exitCode !== 0) {
-		console.error(`wsl-stage: FAIL — bun run fulltest exited with code ${exitCode}`);
-		return 1;
+	const controlDir = `/tmp/omp-slowtest-${crypto.randomUUID()}`;
+	const setup = wslRun(distro, `mkdir -m 700 -- ${quote(controlDir)}`);
+	if (setup.exitCode !== 0) fail(`could not create WSL cancellation marker: ${setup.stderr.trim()}`);
+	const command = wslFulltestCommand(repoPath, controlDir);
+	let canceled = false;
+	const cancel = () => {
+		canceled = true;
+		const result = wslRun(distro, wslCancelCommand(controlDir));
+		if (result.exitCode !== 0) {
+			console.error(`wsl-stage: cancellation cleanup failed: ${result.stderr.trim()}`);
+		}
+	};
+	process.on("SIGINT", cancel);
+	process.on("SIGTERM", cancel);
+	try {
+		console.log(`\n==> wsl/fulltest`);
+		console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
+		const child = Bun.spawn(
+			["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-lc", command],
+			{ cwd: repoRoot, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
+		);
+		const exitCode = await child.exited;
+		if (canceled || exitCode !== 0) {
+			console.error(`wsl-stage: FAIL — bun run fulltest ${canceled ? "canceled" : `exited with code ${exitCode}`}`);
+			return 1;
+		}
+		console.log("wsl-stage: PASS (Ubuntu-24.04 fulltest)");
+		return 0;
+	} finally {
+		process.off("SIGINT", cancel);
+		process.off("SIGTERM", cancel);
+		// Also handles spawn failure before the Linux wrapper could install its trap.
+		wslRun(
+			distro,
+			`rm -f -- ${quote(`${controlDir}/pid`)} ${quote(`${controlDir}/canceled`)}; rmdir -- ${quote(controlDir)} 2>/dev/null || true`,
+		);
 	}
-	console.log("wsl-stage: PASS (Ubuntu-24.04 fulltest)");
-	return 0;
 }
 
-async function main(): Promise<number> {
+export async function runWslStage(): Promise<number> {
 	if (process.platform !== "win32") {
 		console.log(`wsl-stage: skipped — Windows-only stage (already on ${process.platform})`);
 		return 0;
 	}
 	const distro = resolveDistro(WSL_TEST_DISTRIBUTION);
-	const target = prepareWindowsPush();
 	assertRootIdentity(distro);
+	checkWslToolchain(distro);
+	const target = prepareWindowsPush();
 	const repo = locateWslRepo(distro, target.fetchUrl);
 	syncWslRepo(distro, repo, target.expectedSha, target.branch);
-	checkWslToolchain(distro);
 	return await runWslFulltest(distro, repo.path);
 }
 
 if (import.meta.main) {
-	main().then(exitCode => {
+	runWslStage().then(exitCode => {
 		process.exitCode = exitCode;
 	});
 }

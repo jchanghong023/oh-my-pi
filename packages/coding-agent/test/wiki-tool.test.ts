@@ -72,6 +72,15 @@ describe("WikiTool", () => {
 		await expect(run(tool, {})).rejects.toThrow("Received: nothing");
 	});
 
+	it("reports the missing query when lenient argument validation passes a null payload", async () => {
+		const root = await tempDir("docs-tool-null-root-");
+		const agent = await tempDir("docs-tool-null-agent-");
+		const tool = new WikiTool(session(agent, root));
+		await expect(run(tool, null)).rejects.toThrow(
+			'wiki requires a query. Received: nothing. Example: {"query":"MBIST"}',
+		);
+	});
+
 	it("fills a page to the character budget and reports the matches left out", async () => {
 		const filler = "pad ".repeat(600);
 		const files = Object.fromEntries(

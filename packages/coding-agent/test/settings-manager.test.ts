@@ -443,11 +443,8 @@ describe("Settings", () => {
 			expect(await Bun.file(backupPath).text()).toBe(corrupted);
 		});
 
-		// Windows stays skipped entirely, not probe-gated like the portable
-		// symlink cases: besides needing privilege to build the chain, these
-		// assertions encode POSIX `..`/trailing-slash walk semantics that
-		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
-		it.skipIf(process.platform === "win32")(
+		// These chain-preservation cases are portable when real symlinks are available.
+		it.skipIf(!canCreateSymlinks())(
 			"preserves a symlinked main config while atomically updating its target",
 			async () => {
 				const managedConfigPath = tempDir.join("managed-config.yml");
@@ -463,11 +460,7 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows stays skipped entirely, not probe-gated like the portable
-		// symlink cases: besides needing privilege to build the chain, these
-		// assertions encode POSIX `..`/trailing-slash walk semantics that
-		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
-		it.skipIf(process.platform === "win32")(
+		it.skipIf(!canCreateSymlinks())(
 			"writes through a dangling symlink chain to the final target, preserving every link",
 			async () => {
 				// config.yml -> mid.yml -> final.yml where final.yml does not exist yet
@@ -490,11 +483,7 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows stays skipped entirely, not probe-gated like the portable
-		// symlink cases: besides needing privilege to build the chain, these
-		// assertions encode POSIX `..`/trailing-slash walk semantics that
-		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
-		it.skipIf(process.platform === "win32")(
+		it.skipIf(!canCreateSymlinks())(
 			"lands on the deepest resolved hop when an intermediate link vanishes mid-walk",
 			async () => {
 				// config.yml -> mid.yml -> final.yml (final dangling). The resolver
@@ -573,11 +562,7 @@ describe("Settings", () => {
 			},
 		);
 
-		// Windows stays skipped entirely, not probe-gated like the portable
-		// symlink cases: besides needing privilege to build the chain, these
-		// assertions encode POSIX `..`/trailing-slash walk semantics that
-		// Windows resolves differently (see `symlinkDotsCollapseLexically`).
-		it.skipIf(process.platform === "win32")(
+		it.skipIf(!canCreateSymlinks())(
 			"throws a bounded ELOOP when the chain turns cyclic after realpath reports ENOENT",
 			async () => {
 				// config.yml -> mid.yml -> final.yml (final missing), so the initial

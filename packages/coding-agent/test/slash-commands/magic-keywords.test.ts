@@ -40,6 +40,50 @@ describe("magic keyword public slash dispatch", () => {
 			expect(editor).toBe("");
 		},
 	);
+
+	it("preserves a read-only collab guest's keyword draft instead of returning a host prompt", async () => {
+		const draft = "/fullsend task-marker-43d";
+		let editor = draft;
+		const statuses: string[] = [];
+		const result = await executeBuiltinSlashCommand(draft, {
+			ctx: {
+				collabGuest: { readOnly: true },
+				editor: {
+					setText: (text: string) => {
+						editor = text;
+					},
+				},
+				sessionManager: { getCwd: () => "/tmp/commands" },
+				showStatus: (text: string) => statuses.push(text),
+			},
+		} as unknown as TuiSlashCommandRuntime);
+
+		expect(result).toBe(true);
+		expect(editor).toBe(draft);
+		expect(statuses).toHaveLength(1);
+		expect(statuses[0]).toContain("read-only");
+	});
+
+	it("expands and clears a writable collab guest's keyword draft for host forwarding", async () => {
+		let editor = "/fullsend task-marker-43d";
+		const statuses: string[] = [];
+		const result = await executeBuiltinSlashCommand(editor, {
+			ctx: {
+				collabGuest: { readOnly: false },
+				editor: {
+					setText: (text: string) => {
+						editor = text;
+					},
+				},
+				sessionManager: { getCwd: () => "/tmp/commands" },
+				showStatus: (text: string) => statuses.push(text),
+			},
+		} as unknown as TuiSlashCommandRuntime);
+
+		expect(result).toBe("fullsend task-marker-43d");
+		expect(editor).toBe("");
+		expect(statuses).toEqual([]);
+	});
 });
 
 describe("JCH scope parsing through the public ACP dispatcher", () => {

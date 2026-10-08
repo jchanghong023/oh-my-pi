@@ -1485,8 +1485,7 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(rewritten).toContain('require("blocked-dep")');
 	});
 
-	// The fixture links a file symlink; Windows needs developer mode for that.
-	it.skipIf(process.platform === "win32")("rejects package resolutions that escape the package root", async () => {
+	it("rejects package resolutions that escape the package root", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "package-boundary-ext", version: "1.0.0", type: "module" }),
 			"node_modules/main-escape/package.json": JSON.stringify({
@@ -1514,12 +1513,14 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 			"node_modules/symlink-escape/package.json": JSON.stringify({
 				name: "symlink-escape",
 				version: "1.0.0",
-				exports: { "./value": "./link.js" },
+				exports: { "./value": "./link/value.js" },
 			}),
 		});
+		// A directory junction exercises the same realpath escape without Windows symlink privileges.
 		await fs.symlink(
-			path.join(dir, "node_modules", "outside", "value.js"),
-			path.join(dir, "node_modules", "symlink-escape", "link.js"),
+			path.join(dir, "node_modules", "outside"),
+			path.join(dir, "node_modules", "symlink-escape", "link"),
+			process.platform === "win32" ? "junction" : "dir",
 		);
 		const importer = path.join(dir, "index.ts");
 		const rewritten = await __rewriteLegacyExtensionSourceForTests(

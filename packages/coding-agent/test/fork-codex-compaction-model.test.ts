@@ -6,6 +6,7 @@
  * substituted, and non-codex chains pass through untouched.
  */
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_COMPACTION_SETTINGS, shouldUseProviderNativeCompaction } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -68,6 +69,28 @@ describe("resolveCompactionModelCandidates (fork contract)", () => {
 			fallbackSonnet,
 		]);
 		expect(candidates).toEqual([smallerLuna, fallbackSonnet]);
+	});
+
+	test("a filtered largest model does not hide a smaller provider-native fallback", () => {
+		const liveSol: Model = {
+			...sol,
+			contextWindow: 200_000,
+			remoteCompaction: { ...sol.remoteCompaction, enabled: false, v2StreamingEnabled: false },
+		};
+		const largestSonnet: Model = { ...sonnet, contextWindow: 400_000 };
+		const fallbackCodex: Model = {
+			...requireModel("openai-codex", "gpt-5.6-terra"),
+			contextWindow: 300_000,
+			remoteCompaction: { enabled: true, v2StreamingEnabled: true },
+		};
+		const candidates = makeMaintenance(liveSol).resolveCompactionModelCandidates(
+			liveSol,
+			[liveSol, largestSonnet, fallbackCodex],
+			candidate =>
+				candidate.provider === liveSol.provider &&
+				shouldUseProviderNativeCompaction(candidate, DEFAULT_COMPACTION_SETTINGS),
+		);
+		expect(candidates).toEqual([fallbackCodex]);
 	});
 
 	test("explicitly configured compactionModel target is never substituted", () => {

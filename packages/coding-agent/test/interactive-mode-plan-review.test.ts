@@ -585,6 +585,39 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(handles[1]!.hide).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not execute an already-picked approval after its review is superseded", async () => {
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nSuperseded before execution.");
+		mode.planModeEnabled = true;
+		mode.planModePlanFilePath = planFilePath;
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		const clear = vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
+		const dispatch = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		const shown = Promise.withResolvers<void>();
+		let firstOverlay: PlanReviewOverlay | undefined;
+		vi.spyOn(mode.ui, "showOverlay").mockImplementation(component => {
+			firstOverlay ??= component as PlanReviewOverlay;
+			shown.resolve();
+			return { hide: vi.fn() } as never;
+		});
+
+		const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+		await shown.promise;
+		firstOverlay!.handleInput("\r");
+		const replacement = mode.showPlanReview("# Replacement\n\nAwait a fresh decision.", "Plan mode", ["Approve"]);
+		await approval;
+
+		expect(clear).not.toHaveBeenCalled();
+		expect(dispatch).not.toHaveBeenCalled();
+		expect(mode.planModeEnabled).toBe(true);
+		await mode.prepareSessionSwitch();
+		await expectSettlesCancelled(replacement);
+	});
+
 	it("copies the overlay's current edited plan markdown from the real plan review overlay", async () => {
 		let capturedOverlay: PlanReviewOverlay | undefined;
 		const overlayHandle = { hide: vi.fn() };

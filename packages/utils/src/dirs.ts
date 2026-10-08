@@ -371,7 +371,10 @@ class DirResolver {
 		let xdgData: string | undefined;
 		let xdgState: string | undefined;
 		let xdgCache: string | undefined;
-		const xdgPlatform = process.platform === "linux" || process.platform === "darwin";
+		// An explicit OMP root owns data, cache, and runtime paths even when XDG is set.
+		const xdgPlatform =
+			(process.platform === "linux" || process.platform === "darwin") &&
+			!resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT);
 		if (xdgPlatform && isDefault) {
 			const resolveIf = (envVar: string) => {
 				const value = process.env[envVar];

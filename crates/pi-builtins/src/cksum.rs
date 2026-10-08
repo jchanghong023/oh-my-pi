@@ -2239,6 +2239,22 @@ mod tests {
             assert_eq!(capture.out(), "data: OK\n");
         }
 
+        /// Failure mode: a leading '(' used to underflow the tagged parser's
+        /// index instead of reporting an invalid checksum list.
+        #[test]
+        fn check_rejects_a_leading_parenthesis_without_panicking() {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join("list"), b"(data)= abcdef\n").unwrap();
+            let (code, capture) = run_util::<Cksum>(&["-c", "list"], "", dir.path());
+            assert_eq!(code, 1);
+            assert_eq!(capture.out(), "");
+            assert!(
+                capture.err().contains("no properly formatted checksum lines found"),
+                "stderr: {}",
+                capture.err()
+            );
+        }
+
         /// Failure mode: real GNU 9.x treats `-c -b` as a fatal usage error
         /// ("meaningless when verifying checksums", exit 1, nothing
         /// verified); the builtin must not silently verify anyway.

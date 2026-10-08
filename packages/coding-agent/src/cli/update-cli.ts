@@ -608,7 +608,6 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 
 	try {
 		await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
-		progress.finish();
 		const digest = `sha256:${hash.digest("hex")}`;
 		if (size !== options.expectedSize) {
 			throw new Error(`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`);
@@ -618,13 +617,14 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 		}
 		await fs.promises.chmod(options.targetPath, 0o755);
 	} catch (err) {
-		progress.finish();
 		await unlinkIfExists(options.targetPath);
 		if (isTimeoutError(err)) {
 			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
 		}
 		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
 		throw err;
+	} finally {
+		progress.finish();
 	}
 }
 

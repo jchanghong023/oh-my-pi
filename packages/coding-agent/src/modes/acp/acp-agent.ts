@@ -163,6 +163,8 @@ function isPromptTurnInFlight(turn: PromptTurnState | undefined): turn is Prompt
 }
 
 type ManagedSessionRecord = {
+	/** Stable ACP handle; the underlying durable session may roll over in place. */
+	readonly protocolSessionId: string;
 	session: AgentSession;
 	setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined;
 	mcpManager: MCPManager | undefined;
@@ -409,13 +411,9 @@ function isAcceptedElicitation(
 /**
  * Build an {@link ExtensionUIContext} that translates skill/extension UI
  * requests into ACP elicitations against `connection` for the session
- * returned by `getSessionId()`. The id is read lazily at each elicitation
- * because `AgentSession.sessionId` is a getter over `sessionManager` state
- * that mutates when an extension command calls `ctx.newSession` /
- * `ctx.switchSession` — snapshotting it once at factory time would route
- * later elicitations to the pre-switch id. Live reads keep the bridge
- * symmetric with every other `sessionUpdate` call in this file
- * (`record.session.sessionId` is always evaluated at emit time).
+ * returned by `getSessionId()`. Hosts supply their protocol handle rather
+ * than the mutable durable-session ID, so an in-place newSession or
+ * switchSession cannot route a dialog to an unadvertised ACP session.
  *
  * The non-elicitation surface (custom components, theming, terminal
  * input) remains stubbed — ACP clients render those themselves or not
@@ -674,11 +672,11 @@ export class AcpAgent implements Agent {
 		this.#assertAbsoluteCwd(params.cwd);
 		const record = await this.#createNewSessionRecord(params.cwd, params.mcpServers);
 		const response: NewSessionResponse = {
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
 		};
-		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		this.#scheduleBootstrapUpdates(record.protocolSessionId);
 		return response;
 	}
 
@@ -690,7 +688,7 @@ export class AcpAgent implements Agent {
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
 		};
-		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		this.#scheduleBootstrapUpdates(record.protocolSessionId);
 		return response;
 	}
 
@@ -718,7 +716,7 @@ export class AcpAgent implements Agent {
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
 		};
-		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		this.#scheduleBootstrapUpdates(record.protocolSessionId);
 		return response;
 	}
 
@@ -726,11 +724,11 @@ export class AcpAgent implements Agent {
 		this.#assertAbsoluteCwd(params.cwd);
 		const record = await this.#forkManagedSession(params);
 		const response: ForkSessionResponse = {
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			configOptions: this.#buildConfigOptions(record.session),
 			modes: this.#buildModeState(record.session),
 		};
-		this.#scheduleBootstrapUpdates(record.session.sessionId);
+		this.#scheduleBootstrapUpdates(record.protocolSessionId);
 		return response;
 	}
 
@@ -745,9 +743,9 @@ export class AcpAgent implements Agent {
 
 	async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
-		this.#applyModeChange(record.session, params.modeId);
+		this.#applyModeChange(record, params.modeId);
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: this.#buildCurrentModeUpdate(record.session),
 		});
 		await this.#pushConfigOptionUpdate(record);
@@ -762,7 +760,7 @@ export class AcpAgent implements Agent {
 
 		switch (params.configId) {
 			case MODE_CONFIG_ID:
-				this.#applyModeChange(record.session, params.value);
+				this.#applyModeChange(record, params.value);
 				break;
 			case MODEL_CONFIG_ID:
 				await this.#setModelById(record.session, params.value);
@@ -779,7 +777,7 @@ export class AcpAgent implements Agent {
 		// ACP clients tracking session-mode state see a consistent transition.
 		if (params.configId === MODE_CONFIG_ID) {
 			await this.#connection.sessionUpdate({
-				sessionId: record.session.sessionId,
+				sessionId: record.protocolSessionId,
 				update: this.#buildCurrentModeUpdate(record.session),
 			});
 		}
@@ -816,7 +814,7 @@ export class AcpAgent implements Agent {
 			// the same cleanup rejection and fails accordingly.
 			this.#beginCancelCleanup(record, activeTurn).catch(async (error: unknown) => {
 				logger.warn("ACP cancel cleanup timed out; closing session", {
-					sessionId: record.session.sessionId,
+					sessionId: record.protocolSessionId,
 					error,
 				});
 				await this.#closeManagedSession(params.sessionId, record);
@@ -959,7 +957,7 @@ export class AcpAgent implements Agent {
 			signal: promptTurn?.abortController.signal,
 			ui:
 				this.#clientCapabilities?.elicitation?.form != null
-					? createAcpExtensionUiContext(this.#connection, () => record.session.sessionId, this.#clientCapabilities)
+					? createAcpExtensionUiContext(this.#connection, () => record.protocolSessionId, this.#clientCapabilities)
 					: undefined,
 			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
@@ -976,7 +974,7 @@ export class AcpAgent implements Agent {
 			},
 			notifyTitleChanged: async () => {
 				await this.#connection.sessionUpdate({
-					sessionId: record.session.sessionId,
+					sessionId: record.protocolSessionId,
 					update: {
 						sessionUpdate: "session_info_update",
 						title: record.session.sessionName,
@@ -1075,8 +1073,8 @@ export class AcpAgent implements Agent {
 		try {
 			await cleanup;
 		} catch (error: unknown) {
-			logger.warn("ACP cancel cleanup timed out; closing session", { sessionId: record.session.sessionId, error });
-			await this.#closeManagedSession(record.session.sessionId, record);
+			logger.warn("ACP cancel cleanup timed out; closing session", { sessionId: record.protocolSessionId, error });
+			await this.#closeManagedSession(record.protocolSessionId, record);
 		}
 	}
 
@@ -1322,13 +1320,15 @@ export class AcpAgent implements Agent {
 		setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined,
 	): Promise<ManagedSessionRecord> {
 		const record = this.#createManagedSessionRecord(session, setToolUIContext);
-		session.setClientBridge(createAcpClientBridge(this.#connection, session.sessionId, this.#clientCapabilities));
+		session.setClientBridge(
+			createAcpClientBridge(this.#connection, record.protocolSessionId, this.#clientCapabilities),
+		);
 		// `record.lifetimeUnsubscribe` is installed in `#scheduleBootstrapUpdates`
 		// so it shares the bootstrap race guard — see that comment for why.
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
-			this.#sessions.set(session.sessionId, record);
+			this.#sessions.set(record.protocolSessionId, record);
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
@@ -1341,6 +1341,7 @@ export class AcpAgent implements Agent {
 		setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined = undefined,
 	): ManagedSessionRecord {
 		return {
+			protocolSessionId: session.sessionId,
 			session,
 			setToolUIContext,
 			mcpManager: undefined,
@@ -1370,7 +1371,7 @@ export class AcpAgent implements Agent {
 			await delivery;
 		} catch (error) {
 			logger.warn("Failed to push config_option_update after a lifetime event", {
-				sessionId: record.session.sessionId,
+				sessionId: record.protocolSessionId,
 				eventType: event.type,
 				error,
 			});
@@ -1440,7 +1441,7 @@ export class AcpAgent implements Agent {
 			event.type === "message_update" &&
 			event.message.role === "assistant" &&
 			event.assistantMessageEvent.type === "error";
-		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
+		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.protocolSessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
 			getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
@@ -1515,7 +1516,7 @@ export class AcpAgent implements Agent {
 		}
 		progress.textEmitted = true;
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text },
@@ -1553,7 +1554,7 @@ export class AcpAgent implements Agent {
 			return;
 		}
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text: errorMessage },
@@ -1673,7 +1674,7 @@ export class AcpAgent implements Agent {
 			return;
 		}
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text },
@@ -1727,12 +1728,9 @@ export class AcpAgent implements Agent {
 	}
 
 	async #pushConfigOptionUpdate(record: ManagedSessionRecord): Promise<void> {
-		await this.#pushConfigOptionUpdateForSession(record.session);
-	}
-
-	async #pushConfigOptionUpdateForSession(session: AgentSession): Promise<void> {
+		const session = record.session;
 		await this.#connection.sessionUpdate({
-			sessionId: session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: {
 				sessionUpdate: "config_option_update",
 				configOptions: this.#buildConfigOptions(session),
@@ -1847,7 +1845,8 @@ export class AcpAgent implements Agent {
 		return session.getPlanModeState()?.enabled ? ACP_PLAN_MODE_ID : ACP_DEFAULT_MODE_ID;
 	}
 
-	#applyModeChange(session: AgentSession, modeId: string): void {
+	#applyModeChange(record: ManagedSessionRecord, modeId: string): void {
+		const session = record.session;
 		const availableModes = this.#getAvailableModes(session);
 		if (!availableModes.some(mode => mode.id === modeId)) {
 			throw new Error(`Unsupported ACP mode: ${modeId}`);
@@ -1864,7 +1863,7 @@ export class AcpAgent implements Agent {
 			// handler that consumes `xd://propose` writes from plan mode. Without
 			// this, proposal dispatch falls through and plan mode has no approval
 			// path (issue #1869).
-			session.setPlanProposalHandler?.(title => this.#handleAcpPlanProposal(session, title));
+			session.setPlanProposalHandler?.(title => this.#handleAcpPlanProposal(record, title));
 		} else {
 			session.setPlanProposalHandler?.(null);
 			session.setPlanModeState(undefined);
@@ -1884,7 +1883,8 @@ export class AcpAgent implements Agent {
 	 * get an auto-approve so plan mode is never stranded — the agent always has
 	 * a way out.
 	 */
-	async #handleAcpPlanProposal(session: AgentSession, title: string): Promise<AgentToolResult<unknown>> {
+	async #handleAcpPlanProposal(record: ManagedSessionRecord, title: string): Promise<AgentToolResult<unknown>> {
+		const session = record.session;
 		const state = session.getPlanModeState();
 		if (!state?.enabled) {
 			throw new ToolError("Plan mode is not active.");
@@ -1899,7 +1899,7 @@ export class AcpAgent implements Agent {
 			readPlan: url => this.#readAcpPlanFile(session, url),
 			listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
 		});
-		const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, resolvedTitle, planContent);
+		const approved = await this.#requestAcpPlanApprovalChoice(record.protocolSessionId, resolvedTitle, planContent);
 		const details: PlanApprovalDetails = {
 			planFilePath,
 			title: resolvedTitle,
@@ -1945,10 +1945,10 @@ export class AcpAgent implements Agent {
 		}
 		try {
 			await this.#connection.sessionUpdate({
-				sessionId: session.sessionId,
+				sessionId: record.protocolSessionId,
 				update: this.#buildCurrentModeUpdate(session),
 			});
-			await this.#pushConfigOptionUpdateForSession(session);
+			await this.#pushConfigOptionUpdate(record);
 		} catch (error) {
 			logger.warn("Failed to emit mode updates after plan approval", {
 				sessionId: session.sessionId,
@@ -2144,7 +2144,7 @@ export class AcpAgent implements Agent {
 
 	async #emitAvailableCommandsUpdate(record: ManagedSessionRecord): Promise<void> {
 		await this.#connection.sessionUpdate({
-			sessionId: record.session.sessionId,
+			sessionId: record.protocolSessionId,
 			update: {
 				sessionUpdate: "available_commands_update",
 				availableCommands: await this.#buildAvailableCommands(record.session),
@@ -2169,7 +2169,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #emitEndOfTurnUpdates(record: ManagedSessionRecord): Promise<void> {
-		const sessionId = record.session.sessionId;
+		const sessionId = record.protocolSessionId;
 
 		const contextUsage = record.session.getContextUsage();
 		if (contextUsage) {
@@ -2277,7 +2277,7 @@ export class AcpAgent implements Agent {
 		const replayedToolCallArgs = new Map<string, unknown>();
 		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
 			for (const notification of this.#messageToReplayNotifications(
-				record.session.sessionId,
+				record.protocolSessionId,
 				message,
 				cwd,
 				replayedToolCallIds,
@@ -2541,7 +2541,7 @@ export class AcpAgent implements Agent {
 
 		const uiContext = createAcpExtensionUiContext(
 			this.#connection,
-			() => record.session.sessionId,
+			() => record.protocolSessionId,
 			this.#clientCapabilities,
 		);
 		if (this.#clientCapabilities?.elicitation?.form != null) {

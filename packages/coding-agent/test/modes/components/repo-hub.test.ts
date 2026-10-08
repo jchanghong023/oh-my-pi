@@ -67,7 +67,7 @@ describe("RepoHubComponent /repo panel contract (requirements/repo-index.md)", (
 		}
 	});
 
-	it("r + y rebuilds an existing index through the confirmation flow", async () => {
+	it("r + y rebuilds an existing index and includes externally added sources through the confirmation flow", async () => {
 		await initTheme();
 		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-hub-rebuild-profile-"));
 		const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-hub-rebuild-project-"));
@@ -80,11 +80,12 @@ describe("RepoHubComponent /repo panel contract (requirements/repo-index.md)", (
 			hub.handleInput("b");
 			hub.handleInput("y");
 			await until(() => text(hub!).includes("Files: "));
+			await fs.writeFile(path.join(projectDir, "additional.py"), "def additional_engine(): return 3\n", "utf8");
 
 			hub.handleInput("r");
 			expect(text(hub!)).toContain("Rebuild repository index for");
 			hub.handleInput("y");
-			await until(() => text(hub!).includes("Files: "));
+			await until(() => text(hub!).includes("Files: 2"));
 			expect(text(hub!)).toMatch(/Symbols: [1-9]\d*/);
 		} finally {
 			hub?.dispose();

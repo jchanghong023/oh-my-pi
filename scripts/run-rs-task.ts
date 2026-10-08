@@ -112,7 +112,7 @@ if (taskName === "test:rs" && taskOptions.affected) {
 
 	const commands = TASK_COMMANDS[taskName];
 	if (taskOptions.dryRun) {
-		printTestPlan({ kind: "all", crates: [] }, commands, "full workspace (existing vendored exclusions)");
+		printTestPlan({ crates: [] }, commands, "full workspace (existing vendored exclusions)");
 		process.exit(0);
 	}
 

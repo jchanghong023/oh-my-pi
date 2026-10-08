@@ -1971,6 +1971,81 @@ mod testing {
 		assert_eq!(host.resolve("/tmp/probe"), std::env::temp_dir().join("probe"));
 	}
 
+	/// Native command names must not execute a lossy lookalike, and their
+	/// argv[0] and operands must reach the external process byte-for-byte.
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn runner_preserves_native_executable_and_argument_bytes() {
+		use std::os::unix::{ffi::OsStrExt, ffi::OsStringExt, fs::PermissionsExt};
+
+		use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, SourceInfo};
+
+		let dir = tempfile::tempdir().expect("command directory");
+		let name = OsString::from_vec(b"command-\xff".to_vec());
+		std::os::unix::fs::symlink("/bin/sh", dir.path().join(&name)).expect("native command");
+		let lookalike = dir.path().join(name.to_string_lossy().as_ref());
+		std::fs::write(&lookalike, b"#!/bin/sh\nprintf wrong-command\n").expect("lossy lookalike");
+		std::fs::set_permissions(&lookalike, std::fs::Permissions::from_mode(0o700))
+			.expect("executable lookalike");
+
+		let mut shell = Shell::builder()
+			.profile(ProfileLoadBehavior::Skip)
+			.rc(RcLoadBehavior::Skip)
+			.build()
+			.await
+			.expect("test shell");
+		shell.set_working_dir(dir.path()).await.expect("command cwd");
+		let mut params = shell.default_exec_params();
+		shell
+			.run_string(
+				format!("PATH={}", super::quote_arg(dir.path().to_str().expect("temporary path"))),
+				&SourceInfo::default(),
+				&params,
+			)
+			.await
+			.expect("command search path");
+		let mut output = tempfile::tempfile().expect("stdout capture");
+		params.set_fd(OpenFiles::STDOUT_FD, OpenFile::from(output.try_clone().expect("stdout")));
+		params.set_fd(OpenFiles::STDERR_FD, openfiles::null().expect("stderr"));
+
+		for program in [name.clone(), PathBuf::from(".").join(&name).into_os_string()] {
+			for (operands, expected) in [
+				(
+					vec![OsString::from("-c"), OsString::from("printf '%s' \"$0\"")],
+					program.as_bytes().to_vec(),
+				),
+				(
+					vec![
+						OsString::from("-c"),
+						OsString::from("printf '%s' \"$1\""),
+						OsString::from("_"),
+						OsString::from_vec(b"argument-\xfe".to_vec()),
+					],
+					b"argument-\xfe".to_vec(),
+				),
+			] {
+				use std::io::{Seek, SeekFrom};
+
+				output.set_len(0).expect("reset capture");
+				output.seek(SeekFrom::Start(0)).expect("rewind capture");
+				let argv = std::iter::once(program.clone()).chain(operands).collect();
+				let status = super::run_in(
+					&mut shell,
+					&params,
+					dir.path(),
+					super::ShellCommand::new(argv),
+				)
+				.await
+				.expect("run native command");
+				assert!(matches!(status, super::CommandStatus::Exited(0)), "{status:?}");
+				output.seek(SeekFrom::Start(0)).expect("rewind output");
+				let mut bytes = Vec::new();
+				output.read_to_end(&mut bytes).expect("read output");
+				assert_eq!(bytes, expected);
+			}
+		}
+	}
+
 	/// Parses `argv` and runs `U` against an in-memory host, mirroring what the
 	/// registered builtin does: `argv[0]` is the command name, clap failures are
 	/// reported the same way, and panics are contained.

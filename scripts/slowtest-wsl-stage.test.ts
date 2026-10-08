@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	decodeWslOutput,
 	normalizeGitUrl,
@@ -6,6 +9,8 @@ import {
 	pickWslRepo,
 	repoNameFromUrl,
 	syncWslRepo,
+	wslCancelCommand,
+	wslFulltestCommand,
 	WSL_TEST_DISTRIBUTION,
 } from "./slowtest-wsl-stage.ts";
 
@@ -109,5 +114,76 @@ describe("repoNameFromUrl", () => {
 	test("derives the clone directory from the url tail", () => {
 		expect(repoNameFromUrl("https://github.com/jchanghong023/oh-my-pi.git")).toBe("oh-my-pi");
 		expect(repoNameFromUrl("git@github.com:jchanghong023/oh-my-pi.git")).toBe("oh-my-pi");
+	});
+	test("uses the repository name for SCP remotes without an owner directory", () => {
+		expect(repoNameFromUrl("git@example.com:oh-my-pi.git")).toBe("oh-my-pi");
+	});
+});
+
+describe.skipIf(process.platform !== "linux")("WSL Linux process ownership", () => {
+	test("cancellation kills the test process group and removes only its markers", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wsl-cancel-"));
+		const controlDir = path.join(temp, "control");
+		const bun = path.join(temp, "bun");
+		await fs.mkdir(controlDir);
+		const fifo = path.join(temp, "pending-input");
+		const createFifo = Bun.spawn(["mkfifo", fifo], { stdout: "ignore", stderr: "ignore" });
+		expect(await createFifo.exited).toBe(0);
+		await Bun.write(
+			bun,
+			'#!/bin/sh\n[ "$1" = install ] && exit 0\ncat "$OMP_TEST_FIFO" &\nprintf \'ready\\n\'\nwait\n',
+		);
+		await fs.chmod(bun, 0o755);
+		const child = Bun.spawn(["bash", "-c", wslFulltestCommand(temp, controlDir)], {
+			env: { ...process.env, PATH: `${temp}:${process.env.PATH}`, OMP_TEST_FIFO: fifo },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			const reader = child.stdout.getReader();
+			const ready = await reader.read();
+			expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+			reader.releaseLock();
+			const cancel = Bun.spawn(["bash", "-c", wslCancelCommand(controlDir)], {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(await cancel.exited).toBe(0);
+			expect(await child.exited).not.toBe(0);
+			// A surviving descendant would keep this inherited pipe open.
+			expect(await new Response(child.stdout).text()).toBe("");
+			await expect(fs.stat(controlDir)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await Bun.file(bun).exists()).toBe(true);
+		} finally {
+			const cancel = Bun.spawn(["bash", "-c", wslCancelCommand(controlDir)], {
+				stdout: "ignore",
+				stderr: "ignore",
+			});
+			await cancel.exited;
+			child.kill();
+			await child.exited;
+			await fs.rm(temp, { recursive: true, force: true });
+		}
+	}, 10_000);
+
+	test("a cancellation arriving before the PID marker prevents tests from starting", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wsl-pre-cancel-"));
+		const controlDir = path.join(temp, "control");
+		try {
+			await fs.mkdir(controlDir);
+			const cancel = Bun.spawn(["bash", "-c", wslCancelCommand(controlDir)], {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(await cancel.exited).toBe(0);
+			const child = Bun.spawn(["bash", "-c", wslFulltestCommand("/nonexistent-repo", controlDir)], {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(await child.exited).toBe(130);
+			await expect(fs.stat(controlDir)).rejects.toMatchObject({ code: "ENOENT" });
+		} finally {
+			await fs.rm(temp, { recursive: true, force: true });
+		}
 	});
 });

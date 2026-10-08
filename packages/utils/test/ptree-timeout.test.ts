@@ -129,6 +129,39 @@ describe("ptree timeout", () => {
 		}
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"cuts off externally consumed stdout when an orphan outlives the command deadline",
+		async () => {
+			// Without a detached group, the exited root cannot terminate its orphan;
+			// the deadline must cancel the wrapper's underlying pipe reader itself.
+			using child = spawn(["/bin/sh", "-c", "sleep 30 2>/dev/null & echo token $!"], { timeout: 1_000 });
+			const reader = child.stdout.getReader();
+			const decoder = new TextDecoder();
+			let output = "";
+			let orphanPid: number | undefined;
+			try {
+				while (!output.includes("\n")) {
+					const chunk = await reader.read();
+					if (chunk.done) break;
+					output += decoder.decode(chunk.value, { stream: true });
+				}
+				const match = /^token (\d+)\s*$/.exec(output);
+				orphanPid = match ? Number.parseInt(match[1], 10) : undefined;
+				expect(match, `stdout was: ${output}`).not.toBeNull();
+				expect(await child.exited).toBe(0);
+
+				const start = performance.now();
+				expect((await reader.read()).done).toBe(true);
+				expect(performance.now() - start).toBeLessThan(5_000);
+				expect(output.trim()).toBe(`token ${orphanPid}`);
+			} finally {
+				if (orphanPid) Process.fromPid(orphanPid)?.killTree(9);
+				await reader.cancel().catch(() => {});
+				reader.releaseLock();
+			}
+		},
+	);
+
 	it.skipIf(process.platform !== "linux")(
 		"kills descendants adopted while an AbortSignal races the timeout sweep",
 		async () => {

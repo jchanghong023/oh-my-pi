@@ -6,6 +6,7 @@
 
 - Prevented deeply nested Python expressions from overflowing the native stack during symbol extraction.
 - Restored the previous native addon when replacement fails and preserved recoverable files when rollback cannot complete.
+- Preserved Unix executable paths containing non-UTF-8 bytes in built-in command execution instead of selecting a lossy lookalike.
 
 ## [18.8.4] - 2026-10-08
 
