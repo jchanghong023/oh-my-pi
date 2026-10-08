@@ -126,6 +126,7 @@ function scriptedData(stage: string, text?: string): Record<string, unknown> {
 				recommendedProposal: "A",
 				recommendationReason: "满足全部验收标准且改动最小",
 				recommendationPreconditions: "旧接口稳定",
+				hardConstraintViolations: [],
 			};
 		default:
 			throw new Error(`unhandled stage ${stage}`);

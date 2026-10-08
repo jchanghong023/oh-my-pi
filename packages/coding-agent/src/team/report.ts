@@ -78,7 +78,7 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
 const CONDITIONAL_ADOPTION_CLAUSE = new RegExp(
 	[
 		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
-		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
+		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:[，,]|方案[A-Z]+|[A-Z]+方案){0,4}(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
 	].join("|"),
 	"gu",
 );
@@ -90,7 +90,9 @@ function synthesisBodyConflict(
 ): string | undefined {
 	const body = synthesis.reportMarkdown;
 	if (body.includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
-	const statements = body.split(/(?:[。！？；;.!?，,、\r\n]|但是|但|而|却)/u);
+	// Keep commas and wrapped lines: a label and its predicate may straddle
+	// either, as may an explicit adoption condition. Paragraphs still isolate claims.
+	const statements = body.split(/(?:[。！？；;.!?]|但是|但|而|却|\r?\n\s*\r?\n)/u);
 	const labels = proposals.flatMap(record => [
 		{ record, text: `方案${record.label}` },
 		{ record, text: `${record.label}方案` },
@@ -99,7 +101,10 @@ function synthesisBodyConflict(
 		const positiveClaims = statement
 			.replace(/\s+/gu, "")
 			.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
-			.replace(/(?:不(?:可(?:以)?(?:采用|作为(?:最终)?选项)|推荐|建议采用)|并非首选|不是首选)/gu, "");
+			.replace(
+				/(?:不(?:可(?:以)?(?:采用|作为(?:最终)?选项)|作为(?:最终)?(?:选项|首选)|推荐|建议采用)|并非首选|不是首选)/gu,
+				"",
+			);
 		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];
 		for (const { record, text } of labels) {
 			for (
@@ -126,7 +131,7 @@ function synthesisBodyConflict(
 			if (nearestIndex < 0) continue;
 			let first = nearestIndex;
 			let last = nearestIndex;
-			const conjunction = /^(?:和|与|及|或|以及|\/|&|\+)+$/u;
+			const conjunction = /^(?:和|与|及|或|以及|、|\/|&|\+)+$/u;
 			while (first > 0 && conjunction.test(positiveClaims.slice(mentions[first - 1].end, mentions[first].index)))
 				first--;
 			while (

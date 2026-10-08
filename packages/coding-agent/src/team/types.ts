@@ -136,6 +136,8 @@ export interface TeamSynthesisOutput {
 	recommendedProposal: string;
 	recommendationReason: string;
 	recommendationPreconditions: string;
+	/** Newly verified violations can only tighten the existing proposal status. */
+	hardConstraintViolations: { proposalLabel: string; issue: string; evidence: string }[];
 }
 
 export type TeamRole = "proposer" | "reviewer" | "reviser" | "aligner" | "synthesizer";

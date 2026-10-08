@@ -90,6 +90,7 @@ describe("team yield payload validation", () => {
 				recommendedProposal: "A",
 				recommendationReason: "Evidence",
 				recommendationPreconditions: "Compatible API",
+				hardConstraintViolations: [],
 			})?.reportMarkdown.length,
 		).toBeLessThan(14000);
 		expect(enforceTextBudget("exact", 5)).toBe("exact");
@@ -156,7 +157,15 @@ describe("team yield payload validation", () => {
 			recommendedProposal: "A",
 			recommendationReason: "Evidence",
 			recommendationPreconditions: "Compatible API",
+			hardConstraintViolations: [],
 		};
-		expect(parseTeamSynthesis(complete)).toEqual(complete);
+		const { hardConstraintViolations: _violations, ...incomplete } = complete;
+		expect(parseTeamSynthesis(incomplete)).toBeUndefined();
+		expect(
+			parseTeamSynthesis({
+				...complete,
+				hardConstraintViolations: [{ proposalLabel: "A", issue: "Compatibility broken", evidence: " " }],
+			}),
+		).toBeUndefined();
 	});
 });

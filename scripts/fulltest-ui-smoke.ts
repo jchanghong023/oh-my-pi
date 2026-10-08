@@ -352,6 +352,7 @@ function stagePayload(stage: string, recheck: boolean): Record<string, unknown> 
 				recommendedProposal: "A",
 				recommendationReason: "满足全部验收标准且改动最小",
 				recommendationPreconditions: "旧调用保留缺省路径，修订后的接口必须经过兼容性验证",
+				hardConstraintViolations: [],
 			};
 		default:
 			throw new Error(`stub: unhandled stage ${stage}`);

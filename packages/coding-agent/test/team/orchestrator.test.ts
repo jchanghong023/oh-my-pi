@@ -157,6 +157,7 @@ function synthesisData(recommended = ""): Record<string, unknown> {
 		recommendedProposal: recommended,
 		recommendationReason: recommended ? "改动小且满足全部约束" : "",
 		recommendationPreconditions: recommended ? "接口 Y 稳定" : "",
+		hardConstraintViolations: [],
 	};
 }
 
@@ -566,6 +567,75 @@ describe("team orchestrator", () => {
 		expect(result.droppedRecommendation).toBe(true);
 		expect(result.reportMarkdown).toContain("结构化追踪否决了综合子调用对“A”的推荐");
 		expect(result.reportMarkdown).not.toContain("【推荐】");
+	});
+
+	it("tightens eligibility when synthesis discovers a hard-constraint violation", async () => {
+		const { result } = await run({
+			synthesis: () => ({
+				...synthesisData("A"),
+				hardConstraintViolations: [
+					{ proposalLabel: "A", issue: "破坏旧接口兼容", evidence: "src/x.ts:10 与共同验收标准冲突" },
+				],
+			}),
+		});
+		expect(result.status).toBe("completed");
+		expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
+		expect(result.reportMarkdown).toContain("破坏旧接口兼容");
+		expect(result.reportMarkdown).toContain("src/x.ts:10");
+		expect(result.reportMarkdown).toContain("| 方案 B | ✅ 可作为选项");
+		expect(result.droppedRecommendation).toBe(true);
+		expect(result.reportMarkdown).not.toContain("【推荐】");
+	});
+
+	it("rejects synthesis violations naming a nonexistent candidate", async () => {
+		const { result } = await run({
+			synthesis: () => ({
+				...synthesisData("A"),
+				hardConstraintViolations: [{ proposalLabel: "Z", issue: "破坏兼容", evidence: "src/x.ts:10" }],
+			}),
+		});
+		expect(result.status).toBe("failed");
+		expect(result.reportMarkdown).toBeUndefined();
+		expect(result.failureReason).toContain("不存在的方案 Z");
+	});
+
+	it("rejects a body that adopts a proposal blocked by synthesis itself", async () => {
+		const { result } = await run({
+			synthesis: () => ({
+				...synthesisData("A"),
+				reportMarkdown: "方案 A，可以采用。",
+				hardConstraintViolations: [{ proposalLabel: "A", issue: "破坏兼容", evidence: "src/x.ts:10" }],
+			}),
+		});
+		expect(result.status).toBe("failed");
+		expect(result.reportMarkdown).toBeUndefined();
+		expect(result.failureReason).toContain("尚不可采用");
+	});
+
+	it("checks separated adoption claims without rejecting negation or guarded adoption", async () => {
+		const script = {
+			review: ({ target }: { target: string }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
+			revision: () => revisionData(),
+		};
+		for (const [reportMarkdown, expectedStatus] of [
+			["方案 A，可以采用。", "failed"],
+			["方案 A\n可以采用。", "failed"],
+			["方案 A 不作为首选。", "completed"],
+			["问题解决后，方案 A 即可采用。", "completed"],
+		] as const) {
+			const { result } = await run({
+				...script,
+				synthesis: () => ({ ...synthesisData("B"), reportMarkdown }),
+			});
+			expect(result.status).toBe(expectedStatus);
+			if (expectedStatus === "failed") {
+				expect(result.reportMarkdown).toBeUndefined();
+				expect(result.failureReason).toContain("尚不可采用");
+			} else {
+				expect(result.reportMarkdown).toContain("【推荐】方案 B");
+				expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
+			}
+		}
 	});
 
 	it("does not publish a synthesis body that recommends a blocked proposal", async () => {

@@ -251,8 +251,27 @@ export const TEAM_SYNTHESIS_SCHEMA = obj(
 		},
 		recommendationReason: str(1500, "推荐理由（说明成立的前提）；无推荐时留空"),
 		recommendationPreconditions: str(800, "推荐成立的前提条件；无推荐时留空"),
+		hardConstraintViolations: {
+			type: "array",
+			maxItems: 12,
+			description: "综合新确认的硬约束违例；仅收紧已有方案资格，无违例时为空数组",
+			items: obj(
+				{
+					proposalLabel: str(8, "违反硬约束的已有方案标签（如 A）"),
+					issue: str(800, "明确违反的硬约束及具体问题，不含偏好或未验证疑虑"),
+					evidence: str(400, "可回查的依据或明确反例，不得冒充已运行验证"),
+				},
+				["proposalLabel", "issue", "evidence"],
+			),
+		},
 	},
-	["reportMarkdown", "recommendedProposal", "recommendationReason", "recommendationPreconditions"],
+	[
+		"reportMarkdown",
+		"recommendedProposal",
+		"recommendationReason",
+		"recommendationPreconditions",
+		"hardConstraintViolations",
+	],
 );
 
 // ── Parsers ──────────────────────────────────────────────────────────────────
@@ -449,10 +468,17 @@ export function parseTeamSynthesis(value: unknown): TeamSynthesisOutput | undefi
 	if (!data) return undefined;
 	const reportMarkdown = asString(data.reportMarkdown).trim();
 	if (!reportMarkdown) return undefined;
+	const hardConstraintViolations = asObjectArray(data.hardConstraintViolations, 12).map(item => ({
+		proposalLabel: asString(item.proposalLabel).trim(),
+		issue: asString(item.issue).trim(),
+		evidence: asString(item.evidence).trim(),
+	}));
+	if (hardConstraintViolations.some(item => !item.proposalLabel || !item.issue || !item.evidence)) return undefined;
 	return {
 		reportMarkdown: enforceTextBudget(reportMarkdown, TEAM_SYNTHESIS_BUDGET),
 		recommendedProposal: asString(data.recommendedProposal).trim(),
 		recommendationReason: asString(data.recommendationReason).trim(),
 		recommendationPreconditions: asString(data.recommendationPreconditions).trim(),
+		hardConstraintViolations,
 	};
 }

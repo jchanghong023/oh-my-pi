@@ -5,6 +5,10 @@
 
 - Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
 
+### Fixed
+
+- Marked `/team` proposals with synthesis-discovered hard-constraint violations as unavailable, and corrected adoption checks across commas, wrapped lines, negation, and explicit conditions.
+
 
 ## [18.8.5] - 2026-10-08
 

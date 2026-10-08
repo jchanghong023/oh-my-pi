@@ -451,6 +451,17 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 			failureReason: `综合子调用失败（${synthesisOutcome.error ?? "输出不符合结构化要求"}），流程未完成，不输出半成品结论`,
 		};
 	}
+	for (const violation of synthesis.hardConstraintViolations) {
+		const record = records.find(candidate => candidate.label === violation.proposalLabel && candidate.latestProposal);
+		if (!record) {
+			trackParticipant("synthesis", "synthesizer", "failed");
+			return {
+				status: "failed",
+				failureReason: `综合结果无效（硬约束违例指向不存在的方案 ${violation.proposalLabel}），流程未完成`,
+			};
+		}
+		record.unresolvedBlocking.push(`综合确认硬约束违例：${violation.issue}（依据：${violation.evidence}）`);
+	}
 	trackParticipant("synthesis", "synthesizer", "completed");
 
 	const participationNotes: string[] = [];
