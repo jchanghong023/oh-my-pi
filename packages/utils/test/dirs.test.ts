@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import nativePath from "@oh-my-pi/pi-natives/path";
+import * as nativePath from "@oh-my-pi/pi-natives/path";
 import {
 	__resetDirsFromEnvForTests,
 	__resetProfileSnapshotForTests,
