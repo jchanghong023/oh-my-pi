@@ -12,11 +12,12 @@ import * as companyProvider from "@oh-my-pi/pi-coding-agent/config/company-provi
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
+	buildRunnerDeps,
 	deliverTeamReport,
 	resolveTeamParticipantsForSession,
 	startTeamDiscussion,
 	waitForSessionIdle,
-} from "@oh-my-pi/pi-coding-agent/team";
+} from "@oh-my-pi/pi-coding-agent/team/controller";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -164,6 +165,63 @@ describe("team controller dispatch", () => {
 		expect(sent).toHaveLength(1);
 		expect(sent[0]!.customType).toBe("team-dispatch");
 		expect(sent[0]!.content).toContain("[team-dispatch bg_stub_1]");
+	});
+
+	it("keeps a rejecting output hook from turning into an unhandled rejection", async () => {
+		const jobManager: JobManagerStub = {
+			registerCalls: 0,
+			acknowledged: [],
+			registerError: new Error("Background job limit reached (15)."),
+		};
+		// Without the catch in the controller this rejection is unhandled and
+		// fails the test run between tests.
+		const result = await startTeamDiscussion("分析 X", {
+			session: stubSession(jobManager, []),
+			settings: teamSettings(),
+			cwd: "/tmp/repo",
+			hooks: {
+				output: () => Promise.reject(new Error("transcript output failed")),
+			},
+		});
+		expect(result.started).toBe(false);
+		expect(result.message).toContain("无法启动 /team");
+	});
+
+	it("still reports a started job when the dispatch breadcrumb write fails", async () => {
+		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+		const errors: string[] = [];
+		const session = stubSession(jobManager, []);
+		// The job is already registered; only the breadcrumb write fails.
+		(session as unknown as { sendCustomMessage: () => Promise<never> }).sendCustomMessage = async () => {
+			throw new Error("session disposed");
+		};
+		const result = await startTeamDiscussion("分析 X", {
+			session,
+			settings: teamSettings(),
+			cwd: "/tmp/repo",
+			hooks: {
+				showError: (text: string) => {
+					errors.push(text);
+				},
+			},
+		});
+		expect(result.started).toBe(true);
+		expect(result.jobId).toBe("bg_stub_1");
+		expect(errors[0]).toContain("写入派发通知失败");
+		expect(errors[0]).toContain("session disposed");
+	});
+
+	it("forwards session-granted workspace directories to the subagent runner deps", () => {
+		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+		const session = stubSession(jobManager, []);
+		(session as unknown as { sessionManager: unknown }).sessionManager = {
+			getArtifactsDir: () => null,
+			getAdditionalDirectories: () => ["/granted/root"],
+		};
+		const deps = buildRunnerDeps(session, teamSettings(), "/tmp/repo");
+		// Subagents must keep read access parity with the main agent (CLI --dir,
+		// ACP/add-dir granted roots); a dropped forwarding silently denies files.
+		expect(deps.additionalDirectories).toEqual(["/granted/root"]);
 	});
 });
 
@@ -330,6 +388,27 @@ describe("team report delivery", () => {
 		committed.resolve();
 		expect(await delivery).toBe(true);
 		expect(acknowledge).toHaveBeenCalledTimes(1);
+	});
+
+	it("still reports delivery as complete when the post-persist chat rebuild fails", async () => {
+		const controller = new AbortController();
+		const session = {
+			isStreaming: false,
+			appendCustomMessage: async () => {},
+		};
+		// The report is persisted and acknowledged before the rebuild; a UI
+		// rebuild error must not turn the delivered discussion into a failure.
+		expect(
+			await deliverTeamReport(
+				session,
+				controller.signal,
+				"finished",
+				{ jobId: "job-1", question: "question" },
+				() => {
+					throw new Error("rebuild exploded");
+				},
+			),
+		).toBe(true);
 	});
 
 	it("does not acknowledge cancellation while a durable append resolves", async () => {

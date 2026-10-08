@@ -49,6 +49,7 @@ export interface DocsIndexSummary {
 export interface DocsSectionHit {
 	sectionId: number;
 	index: string;
+	documentHash: string;
 	path: string;
 	headingPath: string;
 	lineStart: number;

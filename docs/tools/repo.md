@@ -13,23 +13,24 @@
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `action` | `"status" \| "search" \| "symbol"` | Yes | `status` checks stored coverage without scanning the tree; `search` finds indexed file text; `symbol` finds indexed Python symbol names and qualified names. |
+| `action` | `"status" \| "search" \| "symbol"` | No | Defaults to `search` for indexed file text; `symbol` finds Python definitions; `status` checks stored coverage without scanning the tree. |
 | `query` | `string` | For `search` and `symbol` | Search text or symbol name; nonblank after trimming, at most 500 characters. Omit for `status`. |
 | `path` | `string` | No | Exact relative file path, or directory prefix (`src` matches paths under `src/`, not `src2/`); not an arbitrary filename substring. Used for queries, not `status`. |
-| `category` | `"source" \| "test" \| "config" \| "other"` | No | Filter by the indexer's conservative file classification, not a claim about file contents. Used for queries. |
-| `limit` | `number` | No | Results per page; default 20, clamped to 1–50. Used for queries. |
-| `cursor` | `string` | No | Continuation token from the preceding query page. Use the same action, query, path and category. |
+| `cursor` | `string` | No | Continuation token from the preceding query page. Use the same action, query and path; omitting action is equivalent to `search`. |
 
-For example, call `{"action":"search","query":"Widget","path":"src","category":"source"}`, `{"action":"symbol","query":"Widget.render","limit":20}`, or `{"action":"status"}`. Unexpected input fields are rejected.
+For example, call `{"query":"Widget"}`, optionally add `"path":"src"`, or use `{"action":"symbol","query":"Widget.render"}` and `{"action":"status"}`. Pages contain up to 20 hits; there are no category or page-size parameters. Unexpected input fields are rejected.
 
 ## Matching and results
 
 - Text search favors a full identifier/literal match (with word boundaries ranked above a substring), and can recall files via split word tokens when the full phrase is absent. Queries shorter than three Unicode code points use an indexed-text substring fallback. Punctuation and quotes are literal text, not regex operators or a query language. Case matching uses JavaScript Unicode `toLowerCase()` rather than locale-specific rules. Symbol search matches substrings of Python names and qualified names; exact names rank first. A result reports a relative path, category and original line range, plus a bounded text snippet or Python symbol kind/name/qualified name/signature.
 - Python symbols retain full multiline/decorated signatures (subject to output-field limits), and module line ranges end at the actual final source line rather than a phantom line after a trailing newline. Parse failures never retain stale symbols from the prior content.
-- The tool returns one page with coverage and warnings. `Next cursor` signals more results; pagination is tied to the index generation. If a cursor becomes stale after an update, restart from page one. Invalid or mismatched cursors error rather than silently changing pages. Individual fields (including paths, snippets and signatures) can be truncated; `Fields truncated` identifies affected fields, and a truncated path may not work as a locator.
+- Text snippets use the best whole-word occurrence, even when a substring appears earlier in the same file. Text queries rank folded index content, load original source only for the returned page, and reuse bounded generation-specific locator metadata across tool calls. Text and symbol scans yield for cancellation while retaining one dedicated SQLite read snapshot.
+- Queries return hits, continuation and truncation markers, plus coverage warnings when incomplete or unchecked. Detailed root, generation, counts, exclusions and full-check timestamps are reserved for `status`. `Next cursor` signals more results; pagination is tied to the index generation. If a cursor becomes stale after an update, restart from page one. Invalid or mismatched cursors error rather than silently changing pages. Individual fields (including paths, snippets and signatures) can be truncated; `Fields truncated` identifies affected fields, and a truncated path may not work as a locator.
 - `status` reports whether an index exists, generation, counts, known pending paths, failures/exclusions, uncertainty, and last full check; it does not inspect all source files. Known-path updates and a full-scope check are different: search/symbol process pending known edits before querying, while `u` re-enumerates and verifies the full tree. Coverage distinguishes `incomplete` from `complete`, and checked from `unchecked`; successful tool edits can update known paths automatically, but external commands and unobserved changes may leave the full scope unchecked until `u` reconciles it. Parse errors retain the file's indexed text while omitting obsolete Python symbols and recording a failure. Missing index, zero hits, incomplete coverage and errors are distinct states; neither a hit nor an absent hit proves the current file contents or exhaustive absence.
 
 Read a known source path directly before editing or relying on its contents. For missing indexes use `read`/`grep` while the user decides whether to build; for exhaustive/current-file conclusions use `grep`. The index provides no dependency graph, call graph or impact analysis.
+
+Before publishing a full check, the service verifies file fingerprints and the inventory again. Unobserved drift fails the check and preserves the earlier generation with uncertainty; changes already notified during the check remain pending/unchecked. A full check still does not lock the source filesystem or promise that later external changes are observed. The next maintenance operation reclaims unpublished generations left by a killed writer while preserving the published generation.
 
 ## Source
 

@@ -344,6 +344,53 @@ describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 	});
 });
 
+describe("FileSessionStorage.deleteSessionWithArtifactsIf", () => {
+	let tempDir: string;
+	let storage: FileSessionStorage;
+
+	beforeEach(async () => {
+		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
+		storage = new FileSessionStorage();
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await fsp.rm(tempDir, { recursive: true, force: true });
+	});
+
+	async function createSessionFile(name: string): Promise<string> {
+		const sessionPath = path.join(tempDir, `${name}.jsonl`);
+		await Bun.write(
+			sessionPath,
+			`${JSON.stringify({ type: "session", id: "session-id", timestamp: "2025-01-01T00:00:00Z", cwd: tempDir })}\n`,
+		);
+		return sessionPath;
+	}
+
+	it("removes EPERM-rewrite backups with the deleted session so the scan cannot resurrect it", async () => {
+		const sessionPath = await createSessionFile("bak-resurrection");
+		const bakPath = path.join(tempDir, "bak-resurrection.jsonl.4815162342.bak");
+		await Bun.write(bakPath, "stale backup of a deleted session\n");
+		const unrelatedBak = path.join(tempDir, "other-session.jsonl.4815162342.bak");
+		await Bun.write(unrelatedBak, "backup of another session\n");
+
+		await expect(storage.deleteSessionWithArtifactsIf(sessionPath, () => true)).resolves.toBe(true);
+		expect(fs.existsSync(sessionPath)).toBe(false);
+		expect(fs.existsSync(bakPath)).toBe(false);
+		expect(fs.existsSync(unrelatedBak)).toBe(true);
+	});
+
+	it("keeps the session and its backups when the condition rejects deletion", async () => {
+		const sessionPath = await createSessionFile("bak-kept");
+		const bakPath = path.join(tempDir, "bak-kept.jsonl.4815162342.bak");
+		await Bun.write(bakPath, "still-live backup\n");
+
+		await expect(storage.deleteSessionWithArtifactsIf(sessionPath, () => false)).resolves.toBe(false);
+		expect(fs.existsSync(sessionPath)).toBe(true);
+		expect(fs.existsSync(bakPath)).toBe(true);
+	});
+});
+
 describe("FileSessionStorage.writeTextSync", () => {
 	let tempDir: string;
 

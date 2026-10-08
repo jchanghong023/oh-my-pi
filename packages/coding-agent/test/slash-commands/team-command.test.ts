@@ -1,7 +1,7 @@
 /**
  * `/team` command entry-gate tests: bare command asks for the question, a
  * session without a model reports the configuration error without running
- * stages, and the TUI editor keeps the question on a failed dispatch.
+ * stages, and a failed dispatch puts the submission back into the TUI editor.
  */
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -38,12 +38,19 @@ function textRuntime(session: AgentSession): { runtime: SlashCommandRuntime; out
 function tuiRuntime(
 	session: AgentSession,
 	settings = Settings.isolated(),
-): { runtime: TuiSlashCommandRuntime; status: string[]; warnings: string[]; editorClears: { count: number } } {
+): {
+	runtime: TuiSlashCommandRuntime;
+	status: string[];
+	warnings: string[];
+	editorClears: { count: number };
+	restored: string[];
+} {
 	const status: string[] = [];
 	const warnings: string[] = [];
 	// Object counter: a bare number would be snapshotted at return time and the
 	// test's destructure would forever see the initial 0.
 	const editorClears = { count: 0 };
+	const restored: string[] = [];
 	const runtime = {
 		ctx: {
 			session,
@@ -52,6 +59,11 @@ function tuiRuntime(
 			editor: {
 				setText: (text: string) => {
 					if (text === "") editorClears.count++;
+				},
+				getExpandedText: () => "",
+				pendingImages: [],
+				setCollapsedText: (text: string) => {
+					restored.push(text);
 				},
 			},
 			showStatus: (text: string) => {
@@ -67,7 +79,7 @@ function tuiRuntime(
 			ui: { requestRender: () => {} },
 		},
 	} as unknown as TuiSlashCommandRuntime;
-	return { runtime, status, warnings, editorClears };
+	return { runtime, status, warnings, editorClears, restored };
 }
 
 describe("/team command gates", () => {
@@ -94,10 +106,11 @@ describe("/team command gates", () => {
 		expect(output[0]).toContain("会话模型");
 	});
 
-	it("keeps the question in the TUI editor when dispatch fails validation", async () => {
-		const { runtime, editorClears } = tuiRuntime(stubSession({ model: undefined }));
+	it("puts the submission back into the TUI editor when dispatch fails validation", async () => {
+		const { runtime, editorClears, restored } = tuiRuntime(stubSession({ model: undefined }));
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(editorClears.count).toBe(0);
+		expect(restored).toEqual(["/team 分析 X"]);
 	});
 
 	it("clears the TUI editor only after a successful dispatch", async () => {
@@ -111,8 +124,9 @@ describe("/team command gates", () => {
 			sendCustomMessage: async () => false,
 		});
 		const settings = Settings.isolated({ "team.members": [MODEL_PATTERN] });
-		const { runtime, editorClears } = tuiRuntime(session, settings);
+		const { runtime, editorClears, restored } = tuiRuntime(session, settings);
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(editorClears.count).toBe(1);
+		expect(restored).toHaveLength(0);
 	});
 });

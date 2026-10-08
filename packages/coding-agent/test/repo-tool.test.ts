@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { validateToolArguments } from "@oh-my-pi/pi-ai";
 import { Settings } from "../src/config/settings";
 import { RepoService } from "../src/repo/service";
 import { createTools, type ToolSession } from "../src/tools";
@@ -40,8 +41,11 @@ function resultText(result: { content: Array<{ type: string; text?: string }> })
 	return result.content.map(item => item.text ?? "").join("\n");
 }
 
-function execute(tool: RepoTool, params: unknown) {
-	return tool.execute("repo-test", params as never);
+async function execute(tool: RepoTool, params: Record<string, unknown>) {
+	return tool.execute(
+		"repo-test",
+		validateToolArguments(tool, { type: "toolCall", id: "repo-test", name: "repo", arguments: params }) as never,
+	);
 }
 
 async function build(cwd: string, agentDir: string): Promise<void> {
@@ -58,7 +62,7 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		const { cwd, agentDir, tool } = await fixture({
 			"src/engine.py": "# café\r\ndef engine_timeout():\r\n    return 'ERR_TIMEOUT'\r\n",
 		});
-		const missing = await execute(tool, { action: "search", query: "ERR_TIMEOUT" });
+		const missing = await execute(tool, { query: "ERR_TIMEOUT" });
 		expect(missing.details).toMatchObject({ action: "search", queryStatus: "missing" });
 		expect(missing.details?.status.exists).toBe(false);
 		expect(missing.details).toMatchObject({ hits: [], truncated: false, fieldTruncations: {} });
@@ -81,18 +85,40 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		expect(nohit.details).toMatchObject({ action: "search", queryStatus: "ok", hits: [] });
 		expect(nohit.details).toMatchObject({ truncated: false, fieldTruncations: {} });
 		expect(nohit.details).toMatchObject({ cursor: undefined });
-		const search = await execute(tool, { action: "search", query: "ERR_TIMEOUT" });
+		const search = await execute(tool, { query: "ERR_TIMEOUT" });
 		expect(search.details).toMatchObject({
 			hits: [expect.objectContaining({ path: "src/engine.py", startLine: 3 })],
 		});
 		expect(resultText(search)).toContain("src/engine.py");
 		expect(resultText(search)).toContain("ERR_TIMEOUT");
+		expect(resultText(search)).not.toMatch(/Root:|Index:|last full check|Excluded paths:/);
 		const symbol = await execute(tool, { action: "symbol", query: "engine_timeout" });
 		expect(symbol.details).toMatchObject({
 			hits: [expect.objectContaining({ path: "src/engine.py", name: "engine_timeout", startLine: 2 })],
 		});
 		expect(resultText(symbol)).toContain("def engine_timeout");
-		await expect(execute(tool, { action: "search" })).rejects.toThrow();
+		await expect(execute(tool, {})).rejects.toThrow(/requires query/);
+	});
+
+	it("narrows default searches by directory and retains coverage warnings outside status", async () => {
+		const { cwd, agentDir, tool } = await fixture({
+			"src/engine.py": "def engine(): return 'PATH_MARKER'\n",
+			"src2/engine.py": "def engine(): return 'PATH_MARKER'\n",
+		});
+		await build(cwd, agentDir);
+		const service = new RepoService({ cwd, agentDir });
+		try {
+			service.storage.markUncertain("external changes");
+		} finally {
+			service.close();
+		}
+		const result = await execute(tool, { query: "PATH_MARKER", path: "src" });
+		expect(result.details).toMatchObject({ action: "search", hits: [{ path: "src/engine.py" }] });
+		expect(resultText(result)).toContain("full scope unchecked");
+		expect(resultText(result)).toContain("Coverage warning:");
+		const status = await execute(tool, { action: "status" });
+		expect(status.details?.status.uncertainReasons).toContain("external changes");
+		expect(resultText(status)).toContain("last full check");
 	});
 
 	it("surfaces a damaged index as an error instead of reporting no matches", async () => {
@@ -108,29 +134,28 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 
 	it("bounds a page and rejects pagination after the index generation changes", async () => {
 		const files = Object.fromEntries(
-			Array.from({ length: 80 }, (_, index) => [
+			Array.from({ length: 35 }, (_, index) => [
 				`src/${String(index).padStart(2, "0")}.py`,
 				`def page_${index}(): return 'PAGING_NEEDLE ${"padding ".repeat(160)}'\n`,
 			]),
 		);
 		const { cwd, agentDir, tool } = await fixture(files);
 		await build(cwd, agentDir);
-		const first = await execute(tool, { action: "search", query: "PAGING_NEEDLE", limit: 50 });
+		const first = await execute(tool, { query: "PAGING_NEEDLE" });
 		if (first.details?.action !== "search") throw new Error("Expected a search response");
-		expect(first.details.hits).toHaveLength(50);
+		expect(first.details.hits).toHaveLength(20);
 		expect(first.details.truncated).toBe(true);
 		expect(first.details.cursor).toBeTruthy();
 		expect(resultText(first).length).toBeLessThan(20_000);
 		const second = await execute(tool, {
 			action: "search",
 			query: "PAGING_NEEDLE",
-			limit: 50,
 			cursor: first.details.cursor,
 		});
 		if (second.details?.action !== "search") throw new Error("Expected a search response");
 		const firstPaths = first.details.hits.map(hit => hit.path);
 		const secondPaths = second.details.hits.map(hit => hit.path);
-		expect(new Set([...firstPaths, ...secondPaths]).size).toBe(80);
+		expect(new Set([...firstPaths, ...secondPaths]).size).toBe(35);
 		const service = new RepoService({ cwd, agentDir });
 		try {
 			await fs.writeFile(path.join(cwd, "src/new.py"), "def fresh(): return 'PAGING_NEEDLE'\n");
@@ -148,14 +173,14 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		const bigDefault = "x".repeat(950_000);
 		const source = [
 			`def wide_00(value="${bigDefault}"): return value`,
-			...Array.from({ length: 51 }, (_, index) => `def wide_${String(index + 1).padStart(2, "0")}(): pass`),
+			...Array.from({ length: 21 }, (_, index) => `def wide_${String(index + 1).padStart(2, "0")}(): pass`),
 			"",
 		].join("\n");
 		const { cwd, agentDir, tool } = await fixture({ "src/signatures.py": source });
 		await build(cwd, agentDir);
-		const first = await execute(tool, { action: "symbol", query: "wide_", limit: 50 });
+		const first = await execute(tool, { action: "symbol", query: "wide_" });
 		if (first.details?.action !== "symbol") throw new Error("Expected a symbol response");
-		expect(first.details.hits).toHaveLength(50);
+		expect(first.details.hits).toHaveLength(20);
 		expect(first.details.hits[0]).toMatchObject({
 			path: "src/signatures.py",
 			name: "wide_00",
@@ -169,12 +194,12 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		expect(first.details.truncated).toBe(true);
 		expect(first.details.cursor).toBeTruthy();
 		expect(JSON.stringify(first).length).toBeLessThan(40_000);
-		const second = await execute(tool, { action: "symbol", query: "wide_", limit: 50, cursor: first.details.cursor });
+		const second = await execute(tool, { action: "symbol", query: "wide_", cursor: first.details.cursor });
 		if (second.details?.action !== "symbol") throw new Error("Expected a symbol response");
 		expect(second.details.truncated).toBe(false);
 		expect(second.details.cursor).toBeUndefined();
 		expect(second.details.fieldTruncations).toEqual({});
-		expect(new Set([...first.details.hits, ...second.details.hits].map(hit => hit.name)).size).toBe(52);
+		expect(new Set([...first.details.hits, ...second.details.hits].map(hit => hit.name)).size).toBe(22);
 	});
 
 	it("bounds and reports pathological status fields from the real database", async () => {

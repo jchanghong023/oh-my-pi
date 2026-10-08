@@ -37,6 +37,20 @@ function proposalLabel(record: TeamProposalRecord): string {
 	return `方案 ${record.label}`;
 }
 
+/**
+ * Model-authored text lands inside the mechanically generated status table
+ * and notice blockquotes. Raw pipes would forge or break table cells and raw
+ * newlines would break rows/quote lines, so both are neutralized before the
+ * generated structure is assembled.
+ */
+function tableCell(text: string): string {
+	return text.replace(/\r?\n/gu, " ").replace(/\|/gu, "\\|");
+}
+
+function quoteLine(text: string): string {
+	return text.replace(/\r?\n/gu, " ");
+}
+
 function statusLine(record: TeamProposalRecord): string {
 	if (record.excludedFromOptions) {
 		return `⛔ 尚不可采用 — ${record.exclusionReason ?? "不可作为最终选项"}`;
@@ -159,7 +173,8 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 	const choiceAffecting = alignment.interpretationDifferences.filter(difference => difference.affectsChoice);
 	if (choiceAffecting.length > 0) {
 		const lines = choiceAffecting.map(
-			difference => `> - ${difference.ambiguity}：${difference.interpretations.map(view => view.view).join(" / ")}`,
+			difference =>
+				`> - ${quoteLine(difference.ambiguity)}：${difference.interpretations.map(view => quoteLine(view.view)).join(" / ")}`,
 		);
 		sections.push(
 			[
@@ -173,7 +188,7 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 
 	const statusRows = proposals.map(
 		record =>
-			`| ${proposalLabel(record)} | ${statusLine(record)} | 提案${record.participant.isSessionModel ? "（会话模型）" : ""}；审查轮数 ${record.reviews.length}；修订轮数 ${record.roundsUsed} |`,
+			`| ${proposalLabel(record)} | ${tableCell(statusLine(record))} | 提案${record.participant.isSessionModel ? "（会话模型）" : ""}；审查轮数 ${record.reviews.length}；修订轮数 ${record.roundsUsed} |`,
 	);
 	sections.push(
 		[
@@ -191,14 +206,15 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 	}
 
 	let droppedRecommendation = false;
+	const recommendedLabel = synthesis.recommendedProposal.trim();
 	if (recommendationIsValid(synthesis, proposals)) {
 		const preconditions = synthesis.recommendationPreconditions
 			? `（前提：${synthesis.recommendationPreconditions}）`
 			: "";
 		sections.push(
-			`**【推荐】${proposalLabel(proposals.find(p => p.label === synthesis.recommendedProposal)!)}** — ${synthesis.recommendationReason}${preconditions}`,
+			`**【推荐】${proposalLabel(proposals.find(p => p.label === recommendedLabel)!)}** — ${synthesis.recommendationReason}${preconditions}`,
 		);
-	} else if (synthesis.recommendedProposal.trim()) {
+	} else if (recommendedLabel) {
 		droppedRecommendation = true;
 		sections.push(
 			`> 结构化追踪否决了综合子调用对“${synthesis.recommendedProposal}”的推荐：该方案不存在、不可作为最终选项或仍有未解决阻断问题，故不给出推荐标记。`,

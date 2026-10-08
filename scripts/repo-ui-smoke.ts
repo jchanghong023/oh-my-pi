@@ -151,14 +151,14 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 	const original = `def target_definition():\n    return '${marker}'\n`;
 	const edited = `def target_definition():\n    return 'REPO_EDITED_MARKER'\n`;
 	const actions: Record<string, { name: ToolCall["name"]; input: Record<string, unknown> }[]> = {
-		SEARCH: [{ name: "repo", input: { action: "search", query: marker } }],
+		SEARCH: [{ name: "repo", input: { query: marker } }],
 		SYMBOL: [{ name: "repo", input: { action: "symbol", query: "target_definition" } }],
 		EDIT: [
 			{ name: "write", input: { path: source, content: edited } },
-			{ name: "repo", input: { action: "search", query: "REPO_EDITED_MARKER" } },
+			{ name: "repo", input: { query: "REPO_EDITED_MARKER" } },
 		],
-		AUTO: [{ name: "repo", input: { action: "search", query: "REPO_EDITED_MARKER" } }],
-		EXTERNAL: [{ name: "repo", input: { action: "search", query: "REPO_EXTERNAL_MARKER" } }],
+		AUTO: [{ name: "repo", input: { query: "REPO_EDITED_MARKER" } }],
+		EXTERNAL: [{ name: "repo", input: { query: "REPO_EXTERNAL_MARKER" } }],
 		STALE_SYMBOL: [{ name: "repo", input: { action: "symbol", query: "target_definition" } }],
 		MISSING: [{ name: "repo", input: { action: "status" } }],
 	};

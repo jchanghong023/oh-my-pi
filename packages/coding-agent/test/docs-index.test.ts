@@ -40,7 +40,12 @@ describe("Markdown parsing", () => {
 		expect(parsed.title).toBe("Document title");
 		expect(parsed.sections.some(section => section.headingPath.at(-1) === "Commands")).toBe(true);
 		expect(parsed.sections.some(section => section.rawMarkdown.includes("# inside a fence"))).toBe(true);
-		expect(parsed.sections.map(section => section.rawMarkdown).join("")).toBe(text);
+		for (const section of parsed.sections)
+			expect(
+				Buffer.from(new TextEncoder().encode(text)).subarray(section.byteStart, section.byteEnd).toString(),
+			).toBe(section.rawMarkdown);
+		expect(parsed.sections[0].byteStart).toBe(0);
+		expect(parsed.sections.at(-1)?.byteEnd).toBe(Buffer.byteLength(text));
 		expect(
 			parsed.sections.every(section => section.byteEnd > section.byteStart && section.lineEnd >= section.lineStart),
 		).toBe(true);
@@ -186,6 +191,181 @@ describe("Markdown parsing", () => {
 	});
 });
 describe("DocsService indexing contract", () => {
+	it("indexes rejected backtick fence openers without losing paragraph or valid fenced code", async () => {
+		const root = await tempDir("docs-invalid-fence-root-");
+		const agentDir = await tempDir("docs-invalid-fence-agent-");
+		const source =
+			"# Notes\n``` `invalidfencebeacon`\nThis is a normal paragraph.\n\n~~~ `valid-language`\ncounter*factor*next\n~~~\n";
+		await Bun.write(path.join(root, "notes.md"), source);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			expect(service.search("invalidfencebeacon").sections[0]?.text).toBe(source);
+			expect(service.search("counter*factor*next").sections[0]?.text).toContain("counter*factor*next");
+			expect(service.search("counterfactornext").sections).toEqual([]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("preserves existing version-five hits on rejected fence lines during migration without source files", async () => {
+		const root = await tempDir("docs-v5-fence-root-");
+		const agentDir = await tempDir("docs-v5-fence-agent-");
+		const source = "# Notes\n``` `migrationfencebeacon`\nOrdinary paragraph.\n";
+		await Bun.write(path.join(root, "notes.md"), source);
+		const writer = new DocsService({ agentDir });
+		await writer.init(root, "manual");
+		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
+			id: number;
+			index_id: number;
+		};
+		writer.storage.db
+			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
+			.run(row.id, row.index_id, "notes.md", "Notes", "Notes migrationfencebeacon Ordinary paragraph", row.id);
+		writer.storage.db.run("PRAGMA user_version=5");
+		expect(writer.search("migrationfencebeacon").sections).toHaveLength(1);
+		writer.close();
+		await fs.rm(root, { recursive: true });
+		const reader = new DocsService({ agentDir });
+		try {
+			expect(reader.search("migrationfencebeacon").sections[0]).toMatchObject({ sectionId: row.id, text: source });
+		} finally {
+			reader.close();
+		}
+	});
+
+	it("repairs version-six indexes that already lost an invalid-fence keyword from searchable text", async () => {
+		const root = await tempDir("docs-v6-fence-root-");
+		const agentDir = await tempDir("docs-v6-fence-agent-");
+		const source = "# Notes\n``` `repairfencebeacon`\nOrdinary paragraph.\n";
+		await Bun.write(path.join(root, "notes.md"), source);
+		const writer = new DocsService({ agentDir });
+		await writer.init(root, "manual");
+		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
+			id: number;
+			index_id: number;
+		};
+		writer.storage.db
+			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
+			.run(row.id, row.index_id, "notes.md", "Notes", "Notes Ordinary paragraph", row.id);
+		writer.storage.db.run("PRAGMA user_version=6");
+		expect(writer.search("repairfencebeacon").sections).toEqual([]);
+		writer.close();
+		await fs.rm(root, { recursive: true });
+		const reader = new DocsService({ agentDir });
+		try {
+			expect(reader.search("repairfencebeacon").sections[0]).toMatchObject({ sectionId: row.id, text: source });
+		} finally {
+			reader.close();
+		}
+	});
+
+	it("keeps literal fenced and inline code searchable without inventing merged identifiers", async () => {
+		const root = await tempDir("docs-code-root-");
+		const agentDir = await tempDir("docs-code-agent-");
+		await Bun.write(
+			path.join(root, "code.md"),
+			"# Formula\n```python\ncounter*factor\n```\nUse `mask~value` and 缓**存**配置.\n",
+		);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "code");
+			expect(service.search("counter*factor").sections[0]?.text).toContain("counter*factor");
+			expect(service.search("mask~value").sections[0]?.text).toContain("mask~value");
+			expect(service.search("counterfactor").sections).toEqual([]);
+			expect(service.search("maskvalue").sections).toEqual([]);
+			expect(service.search("缓存").sections[0]?.text).toContain("缓**存**配置");
+		} finally {
+			service.close();
+		}
+	});
+
+	it("preserves code punctuation after a fenced block is split into multiple sections", async () => {
+		const root = await tempDir("docs-code-chunks-root-");
+		const agentDir = await tempDir("docs-code-chunks-agent-");
+		await Bun.write(
+			path.join(root, "code.md"),
+			"# Formula\n```python\n" + "padding = 1\n".repeat(1600) + "counter*factor*next\n```\n",
+		);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "code");
+			expect(
+				service.search("counter*factor*next").sections.some(hit => hit.text.includes("counter*factor*next")),
+			).toBe(true);
+			expect(service.search("counterfactornext").sections).toEqual([]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("retains one-word technical checklist headings while discarding converter labels", async () => {
+		const root = await tempDir("docs-checklist-root-");
+		const agentDir = await tempDir("docs-checklist-agent-");
+		await Bun.write(
+			path.join(root, "features.md"),
+			"# Features\nAuthoritative list.\n## ATPG\n## C#\n#### Cell\n##### Row\n## MBIST\nMemory flow.\n",
+		);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "features");
+			expect(service.search("ATPG").sections[0]?.text.trim()).toBe("## ATPG");
+			expect(service.search("C#").sections[0]?.text.trim()).toBe("## C#");
+			expect(
+				service.storage.db
+					.query("SELECT raw_markdown FROM sections WHERE raw_markdown LIKE '%Cell%' OR raw_markdown LIKE '%Row%'")
+					.all(),
+			).toEqual([]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("retrieves whole words crossing long-line cuts with truthful UTF-8 source ranges", async () => {
+		const root = await tempDir("docs-overlap-root-");
+		const agentDir = await tempDir("docs-overlap-agent-");
+		const text = "# Long\n" + "x ".repeat(8998) + "boundarybeacon " + "𐐀".repeat(10_000) + "\n";
+		await Bun.write(path.join(root, "long.md"), text);
+		const parsed = parseMarkdown(new TextEncoder().encode(text));
+		const bytes = Buffer.from(text);
+		for (const section of parsed.sections) {
+			expect(section.rawMarkdown.length).toBeLessThanOrEqual(18_000);
+			expect(bytes.subarray(section.byteStart, section.byteEnd).toString()).toBe(section.rawMarkdown);
+		}
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "long");
+			expect(service.search("boundarybeacon").sections.some(hit => hit.text.includes("boundarybeacon"))).toBe(true);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("repairs version-five searchable code from stored Markdown without source files", async () => {
+		const root = await tempDir("docs-old-code-root-");
+		const agentDir = await tempDir("docs-old-code-agent-");
+		await Bun.write(path.join(root, "formula.md"), "# Formula\n`counter*factor`\n");
+		const writer = new DocsService({ agentDir });
+		await writer.init(root, "legacy");
+		const sectionId = writer.search("counter*factor").sections[0].sectionId;
+		writer.storage.db
+			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
+			.run(sectionId, writer.storage.get("legacy")!.id, "formula.md", "Formula", "Formula counterfactor", sectionId);
+		writer.storage.db.run("PRAGMA user_version=5");
+		writer.close();
+		await fs.rm(root, { recursive: true });
+		const reader = new DocsService({ agentDir });
+		try {
+			expect(reader.search("counter*factor").sections[0]).toMatchObject({
+				sectionId,
+				index: "legacy",
+				path: "formula.md",
+			});
+			expect(reader.search("counterfactor").sections).toEqual([]);
+		} finally {
+			reader.close();
+		}
+	});
 	it("rejects invalid UTF-8 without publishing silently replaced text or a partial import", async () => {
 		const root = await tempDir("docs-utf8-root-");
 		const agentDir = await tempDir("docs-utf8-agent-");

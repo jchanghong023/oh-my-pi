@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import type { Database } from "bun:sqlite";
 import { realpathSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { setImmediate as yieldToLoop } from "node:timers/promises";
@@ -6,6 +7,7 @@ import { pythonSymbols } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { countNewlines, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import {
 	enumerateFiles,
 	indexedCandidate,
@@ -30,6 +32,22 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const MAX_CANDIDATES = 100_000;
 const MAX_QUERY_LENGTH = 500;
+
+interface TextCandidate {
+	id: number;
+	path: string;
+	category: RepoTextHit["category"];
+	offset: number;
+	score: number;
+}
+
+// Tool calls reopen the service. Retain only bounded locator/score metadata,
+// keyed by database, immutable generation and query, never source text.
+const searchPages = new LRUCache<string, TextCandidate[]>({
+	max: 16,
+	maxSize: 8 * 1024 * 1024,
+	sizeCalculation: hits => hits.reduce((size, hit) => size + hit.path.length * 2 + 64, 1),
+});
 
 function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
@@ -116,17 +134,17 @@ export class RepoService {
 		return this.storage.read(() => this.#statusSnapshot());
 	}
 
-	#statusSnapshot(): RepoStatus {
-		const state = this.storage.state();
-		const totals = this.storage.db
+	#statusSnapshot(db = this.storage.db): RepoStatus {
+		const state = this.storage.state(db);
+		const totals = db
 			.query(
 				"SELECT (SELECT count(*) FROM failures WHERE generation=?) failures,(SELECT count(*) FROM pending) pending,(SELECT count(*) FROM uncertainty) uncertainty",
 			)
 			.get(state.generation) as { failures: number; pending: number; uncertainty: number };
-		const failures = state.generation ? this.storage.failures(state.generation, 50) : [];
-		const pendingPaths = this.storage.pending(50).map(row => row.path);
-		const uncertainReasons = this.storage.uncertainty(20);
-		const counts = state.generation ? this.storage.counts(state.generation) : { files: 0, symbols: 0 };
+		const failures = state.generation ? this.storage.failures(state.generation, 50, db) : [];
+		const pendingPaths = this.storage.pending(50, db).map(row => row.path);
+		const uncertainReasons = this.storage.uncertainty(20, db);
+		const counts = state.generation ? this.storage.counts(state.generation, db) : { files: 0, symbols: 0 };
 		return {
 			root: this.root,
 			exists: state.generation !== null,
@@ -230,6 +248,7 @@ export class RepoService {
 				lease = await acquireFileLock(this.storage.path, { signal });
 				if (!allowAfterRemoval && this.storage.state().epoch !== epoch)
 					throw new Error("Repository index was removed while this operation waited; retry explicitly");
+				if (!this.storage.recoveryError) this.storage.removeAbandoned();
 				return await work(signal, epoch);
 			} finally {
 				lease?.release();
@@ -299,10 +318,12 @@ export class RepoService {
 					state.generation ? this.storage.failures(state.generation).map(item => [item.path, item]) : [],
 				);
 				const unchanged = new Set<string>();
+				const fingerprints = new Map<string, string>();
 				for (let i = 0; i < inventory.length; i++) {
 					check(signal);
 					const rel = inventory[i];
 					const result = await readRepoFile(this.root, rel, signal);
+					fingerprints.set(rel, result.file?.hash ?? `excluded:${result.failure?.kind}`);
 					if (result.missing || result.failure?.kind === "unstable" || result.failure?.kind === "unreadable")
 						throw new Error(
 							`Cannot complete repository inventory at ${rel}: ${result.failure?.message ?? "file disappeared"}`,
@@ -329,6 +350,44 @@ export class RepoService {
 				}
 				check(signal);
 				options.onProgress?.({ phase: "publishing", processed: inventory.length, total: inventory.length });
+				// The first file can change while later files are read. Verify the
+				// full inventory again before certifying it, including external writes
+				// that did not send an OMP notification. Newer known hints stay pending.
+				const newerPaths = new Set(
+					this.storage
+						.pending()
+						.filter(row => row.seq > since)
+						.map(row => row.path),
+				);
+				for (const rel of inventory) {
+					check(signal);
+					const verified = await readRepoFile(this.root, rel, signal);
+					if ((verified.file?.hash ?? `excluded:${verified.failure?.kind}`) !== fingerprints.get(rel)) {
+						if (newerPaths.has(rel)) continue;
+						this.markChanged([rel]);
+						throw new Error(`Repository file changed during ${mode}: ${rel}; retry complete reconciliation`);
+					}
+				}
+				const verifiedInventory = await enumerateFiles(this.root, signal, this.storage.path);
+				const verifiedPaths = new Set(verifiedInventory);
+				const scopeChanges = [
+					...inventory.filter(rel => !verifiedPaths.has(rel)),
+					...verifiedInventory.filter(
+						rel =>
+							!scanned.has(rel) &&
+							(!excluded || (rel !== excluded && rel !== `${excluded}-wal` && rel !== `${excluded}-shm`)) &&
+							(!stagedDir || !rel.startsWith(`${stagedDir}/`)),
+					),
+				];
+				const pendingNow = new Set(
+					this.storage
+						.pending()
+						.filter(row => row.seq > since)
+						.map(row => row.path),
+				);
+				const newerUncertainty = this.storage.db.query("SELECT 1 FROM uncertainty WHERE seq>? LIMIT 1").get(since);
+				if (scopeChanges.some(rel => !pendingNow.has(rel)) && !newerUncertainty)
+					throw new Error(`Repository inventory changed during ${mode}; retry complete reconciliation`);
 				this.storage.transaction(() => {
 					check(signal);
 					if (this.storage.state().epoch !== epoch) throw new Error("Repository index deleted during build");
@@ -561,99 +620,125 @@ export class RepoService {
 		};
 	}
 
+	async #query<T>(work: (db: Database, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+		this.#ensureOpen();
+		const combined = signal ? AbortSignal.any([signal, this.#closing.signal]) : this.#closing.signal;
+		const task = this.storage.readAsync(async db => {
+			check(combined);
+			return work(db, combined);
+		});
+		this.#active.add(task);
+		try {
+			return await task;
+		} finally {
+			this.#active.delete(task);
+		}
+	}
+
 	async search(query: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoTextHit>> {
 		this.#ensureOpen();
 		await this.#flush(options.signal);
 		check(options.signal);
-		return this.storage.read(() => {
-			const status = this.#statusSnapshot();
-			if (!status.exists) return this.#page("search", query, options, status, []);
+		return this.#query(async (db, signal) => {
+			const status = this.#statusSnapshot(db);
+			if (!status.exists) return this.#page<RepoTextHit>("search", query, options, status, []);
 			const needle = query.slice(0, MAX_QUERY_LENGTH).trim();
-			if (!needle) return this.#page("search", query, options, status, []);
-			const tokens = [needle, ...(needle.match(/[\p{L}\p{N}]+/gu) ?? [])]
-				.filter((token, i, array) => token.length > 1 && array.indexOf(token) === i)
-				.slice(0, 16);
-			if (!tokens.length) tokens.push(needle);
-			const clauses: string[] = [];
-			const params: (string | number)[] = [status.generation!];
-			for (const token of tokens) {
-				if ([...token].length >= 3) {
-					clauses.push("f.id IN (SELECT rowid FROM files_fts WHERE files_fts MATCH ?)");
-					params.push(`"${token.toLowerCase().replaceAll('"', '""')}"`);
-				} else {
-					clauses.push("f.id IN (SELECT rowid FROM files_fts WHERE instr(text, ?) > 0)");
-					params.push(token.toLowerCase());
-				}
-			}
-			let sql = `SELECT f.path,f.category,f.text FROM files f WHERE f.generation=? AND (${clauses.join(" OR ")})`;
-			if (options.path) {
-				sql += " AND (f.path=? OR f.path LIKE ? ESCAPE '\\')";
-				params.push(options.path, `${escapeLike(options.path.replace(/\/$/, ""))}/%`);
-			}
-			if (options.category) {
-				sql += " AND f.category=?";
-				params.push(options.category);
-			}
-			sql += " ORDER BY f.path LIMIT ?";
-			params.push(MAX_CANDIDATES + 1);
-			const rows = this.storage.db.query(sql).iterate(...params) as Iterable<{
-				path: string;
-				category: RepoTextHit["category"];
-				text: string;
-			}>;
-			const foldedNeedle = needle.toLowerCase();
-			const foldedTokens = tokens.slice(1).map(token => token.toLowerCase());
-			const hits: Array<{ hit: RepoTextHit; score: number }> = [];
-			let candidates = 0;
-			for (const row of rows) {
-				if (++candidates > MAX_CANDIDATES)
-					throw new Error("Repository query exceeds candidate limit; narrow path or query");
-				const folded = row.text.toLowerCase();
-				const full = folded.indexOf(foldedNeedle);
-				let index = full;
-				let score = full < 0 ? 0 : 100;
-				if (full >= 0) {
-					const start = originalOffset(row.text, full);
-					const end = originalOffset(row.text, full + foldedNeedle.length);
-					const before = row.text.slice(Math.max(0, start - 2), start);
-					const after = row.text.slice(end, end + 2);
-					if (!/[\p{L}\p{N}_]$/u.test(before) && !/^[\p{L}\p{N}_]/u.test(after)) score += 100;
-				}
-				for (const token of foldedTokens) {
-					const position = folded.indexOf(token);
-					if (position >= 0) {
-						score += 10;
-						if (index < 0) index = position;
+			if (!needle) return this.#page<RepoTextHit>("search", query, options, status, []);
+			const cacheKey = JSON.stringify([
+				this.storage.path,
+				status.generation,
+				needle,
+				options.path,
+				options.category,
+			]);
+			let hits = searchPages.get(cacheKey);
+			if (!hits) {
+				const tokens = [needle, ...(needle.match(/[\p{L}\p{N}]+/gu) ?? [])]
+					.filter((token, i, array) => token.length > 1 && array.indexOf(token) === i)
+					.slice(0, 16);
+				if (!tokens.length) tokens.push(needle);
+				const clauses: string[] = [];
+				const params: (string | number)[] = [status.generation!];
+				for (const token of tokens) {
+					if ([...token].length >= 3) {
+						clauses.push("f.id IN (SELECT rowid FROM files_fts WHERE files_fts MATCH ?)");
+						params.push(`"${token.toLowerCase().replaceAll('"', '""')}"`);
+					} else {
+						clauses.push("f.id IN (SELECT rowid FROM files_fts WHERE instr(text, ?) > 0)");
+						params.push(token.toLowerCase());
 					}
 				}
-				if (index >= 0)
-					hits.push({
-						hit: {
-							path: row.path,
-							category: row.category,
-							...snippet(row.text, originalOffset(row.text, index)),
-						},
-						score,
-					});
+				let sql = `SELECT f.id,f.path,f.category,i.text FROM files f JOIN files_fts i ON i.rowid=f.id WHERE f.generation=? AND (${clauses.join(" OR ")})`;
+				if (options.path) {
+					sql += " AND (f.path=? OR f.path LIKE ? ESCAPE '\\')";
+					params.push(options.path, `${escapeLike(options.path.replace(/\/$/, ""))}/%`);
+				}
+				if (options.category) {
+					sql += " AND f.category=?";
+					params.push(options.category);
+				}
+				sql += " ORDER BY f.path LIMIT ?";
+				params.push(MAX_CANDIDATES + 1);
+				const rows = db.query(sql).iterate(...params) as Iterable<{
+					id: number;
+					path: string;
+					category: RepoTextHit["category"];
+					text: string;
+				}>;
+				const foldedNeedle = needle.toLowerCase();
+				const foldedTokens = tokens.slice(1).map(token => token.toLowerCase());
+				const boundary = new RegExp(`(?<![\\p{L}\\p{N}_])${RegExp.escape(foldedNeedle)}(?![\\p{L}\\p{N}_])`, "u");
+				hits = [];
+				let candidates = 0;
+				for (const row of rows) {
+					check(signal);
+					if (++candidates > MAX_CANDIDATES)
+						throw new Error("Repository query exceeds candidate limit; narrow path or query");
+					// FTS already stores JS-lowercased text. Score offsets only; original
+					// source and snippets are loaded after pagination, within this snapshot.
+					const folded = row.text;
+					const full = folded.indexOf(foldedNeedle);
+					const exact = full < 0 ? undefined : boundary.exec(folded);
+					let index = exact?.index ?? full;
+					let score = full < 0 ? 0 : 100;
+					if (exact) score += 100;
+					for (const token of foldedTokens) {
+						const position = folded.indexOf(token);
+						if (position >= 0) {
+							score += 10;
+							if (index < 0) index = position;
+						}
+					}
+					if (index >= 0) hits.push({ id: row.id, path: row.path, category: row.category, offset: index, score });
+					if (candidates % 32 === 0) await yieldToLoop();
+				}
+				check(signal);
+				hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path, "en"));
+				searchPages.set(cacheKey, hits);
 			}
-			hits.sort((a, b) => b.score - a.score || a.hit.path.localeCompare(b.hit.path, "en"));
-			return this.#page(
-				"search",
-				query,
-				options,
-				status,
-				hits.map(row => row.hit),
-			);
-		});
+			const page = this.#page("search", query, options, status, hits);
+			const load = db.query("SELECT text FROM files WHERE id=? AND generation=?");
+			return {
+				...page,
+				hits: page.hits.map(hit => {
+					const source = (load.get(hit.id, status.generation!) as { text: string }).text;
+					return {
+						path: hit.path,
+						category: hit.category,
+						...snippet(source, originalOffset(source, hit.offset)),
+					};
+				}),
+			};
+		}, options.signal);
 	}
 
 	async symbol(name: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoSymbolHit>> {
 		this.#ensureOpen();
 		await this.#flush(options.signal);
 		check(options.signal);
-		return this.storage.read(() => {
-			const status = this.#statusSnapshot();
-			if (!status.exists || !name.trim()) return this.#page("symbol", name, options, status, []);
+		return this.#query(async (db, signal) => {
+			const status = this.#statusSnapshot(db);
+			if (!status.exists || !name.trim()) return this.#page<RepoSymbolHit>("symbol", name, options, status, []);
 			let sql =
 				"SELECT s.id symbolId,f.path,f.category,s.name,s.qualname,s.kind,s.start_line startLine,s.end_line endLine FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.generation=? AND (instr(s.name_folded, ?) > 0 OR instr(s.qualname_folded, ?) > 0)";
 			const lowered = name.toLowerCase();
@@ -668,9 +753,15 @@ export class RepoService {
 			}
 			sql += " ORDER BY f.path,s.start_line,s.id LIMIT ?";
 			params.push(MAX_CANDIDATES + 1);
-			const hits = this.storage.db.query(sql).all(...params) as Array<RepoSymbolHit & { symbolId: number }>;
-			if (hits.length > MAX_CANDIDATES)
-				throw new Error("Repository symbol query exceeds candidate limit; narrow path or name");
+			const hits: Array<RepoSymbolHit & { symbolId: number }> = [];
+			for (const hit of db.query(sql).iterate(...params) as Iterable<RepoSymbolHit & { symbolId: number }>) {
+				check(signal);
+				hits.push(hit);
+				if (hits.length > MAX_CANDIDATES)
+					throw new Error("Repository symbol query exceeds candidate limit; narrow path or name");
+				if (hits.length % 128 === 0) await yieldToLoop();
+			}
+			check(signal);
 			hits.sort(
 				(a, b) =>
 					Number(b.name.toLowerCase() === lowered) - Number(a.name.toLowerCase() === lowered) ||
@@ -684,7 +775,7 @@ export class RepoService {
 			// A signature can span most of a 2 MiB file. Load only this bounded page,
 			// not every matching declaration, while retaining the same read snapshot.
 			const ids = page.hits.map(hit => hit.symbolId);
-			const signatures = this.storage.db
+			const signatures = db
 				.query(`SELECT id,signature FROM symbols WHERE id IN (${ids.map(() => "?").join(",")})`)
 				.all(...ids) as Array<{ id: number; signature: string | null }>;
 			const byId = new Map(signatures.map(row => [row.id, row.signature]));
@@ -692,7 +783,7 @@ export class RepoService {
 				...page,
 				hits: page.hits.map(({ symbolId, ...hit }) => ({ ...hit, signature: byId.get(symbolId) ?? undefined })),
 			};
-		});
+		}, options.signal);
 	}
 
 	close(): void {

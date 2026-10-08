@@ -176,8 +176,10 @@ interface RankedRow {
 	row: Record<string, unknown>;
 	literalCount: number;
 	stub: boolean;
+	headingOnly: boolean;
 	titlePhrase: boolean;
 	phrase: boolean;
+	bodyHash?: string;
 }
 
 /**
@@ -216,8 +218,10 @@ function scoreCandidate(
 		row,
 		literalCount,
 		stub: sectionShape(`${text}\n`) === "stub",
+		headingOnly: sectionShape(`${text}\n`) === "heading-only",
 		titlePhrase: phrase.test(title),
 		phrase: phrase.test(raw) || phrase.test(plain),
+		bodyHash: text.length > 200 ? new Bun.CryptoHasher("sha256").update(text).digest("hex") : undefined,
 	};
 }
 
@@ -459,7 +463,7 @@ export class DocsService {
 		candidateLimit: number,
 	): Array<Record<string, unknown>> {
 		return this.storage.db
-			.query(`SELECT f.rowid section_id,i.name index_name,d.relative_path,s.heading_path,s.line_start,s.line_end,
+			.query(`SELECT f.rowid section_id,i.name index_name,d.relative_path,d.sha256 document_hash,s.heading_path,s.line_start,s.line_end,
 			 substr(s.raw_markdown,1,${CANDIDATE_SNIPPET_CHARS}) snippet, length(s.raw_markdown) raw_len, bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
 			 FROM sections_fts f JOIN sections s ON s.id=f.rowid JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
 			 WHERE sections_fts MATCH ?${filter.sql} ORDER BY rank,s.id LIMIT ?`)
@@ -505,9 +509,23 @@ export class DocsService {
 		);
 		// Stubs go after every readable hit, keeping their own relative order so the
 		// readable page is identical whether or not the padding was needed.
-		const readable = ranked.filter(entry => !entry.stub);
-		const entries = [...readable, ...ranked.filter(entry => entry.stub)].slice(0, limit);
-		return { entries, readable: Math.min(readable.length, limit) };
+		const seen = new Set<string>();
+		const readable: RankedRow[] = [];
+		const repeated: RankedRow[] = [];
+		for (const entry of ranked) {
+			if (entry.stub) continue;
+			if (entry.bodyHash && seen.has(entry.bodyHash)) repeated.push(entry);
+			else {
+				readable.push(entry);
+				if (entry.bodyHash) seen.add(entry.bodyHash);
+			}
+		}
+		// Duplicate locators are useful, but must never take a slot away from
+		// distinct evidence. Widening likewise counts unique readable bodies.
+		const bodies = readable.filter(entry => !entry.headingOnly);
+		const headings = readable.filter(entry => entry.headingOnly);
+		const entries = [...bodies, ...headings, ...repeated, ...ranked.filter(entry => entry.stub)].slice(0, limit);
+		return { entries, readable: Math.min(bodies.length, limit) };
 	}
 
 	/** Page rows as hits, with the stored Markdown loaded by id. */
@@ -516,6 +534,7 @@ export class DocsService {
 		return page.map(({ row }) => ({
 			sectionId: row.section_id as number,
 			index: row.index_name as string,
+			documentHash: row.document_hash as string,
 			path: row.relative_path as string,
 			headingPath: row.heading_path as string,
 			lineStart: row.line_start as number,

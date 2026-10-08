@@ -1231,6 +1231,22 @@ export class FileSessionStorage implements SessionStorage {
 			if (!shouldDelete(content)) return false;
 
 			fs.unlinkSync(sessionPath);
+			// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`) for
+			// the same reason as deleteSessionWithArtifacts (#11499): the picker
+			// scan would otherwise resurrect the deleted session from the newest
+			// stale backup. Best-effort; synchronous to stay inside the lock.
+			const base = path.basename(sessionPath);
+			for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
+				if (!path.basename(bak).startsWith(`${base}.`)) continue;
+				try {
+					fs.unlinkSync(bak);
+				} catch (err) {
+					logger.warn("Failed to remove stale session backup during delete", {
+						path: bak,
+						error: toError(err).message,
+					});
+				}
+			}
 			const artifactsDir = sessionPath.slice(0, -6);
 			try {
 				fs.rmSync(artifactsDir, { recursive: true, force: true });

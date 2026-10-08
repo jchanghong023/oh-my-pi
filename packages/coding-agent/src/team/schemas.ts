@@ -58,8 +58,8 @@ type JsonSchema = Record<string, unknown>;
 function obj(properties: Record<string, JsonSchema>, required: string[]): JsonSchema {
 	return { type: "object", additionalProperties: false, properties, required };
 }
-function str(maxLength: number, description: string): JsonSchema {
-	return { type: "string", description, maxLength };
+function str(maxLength: number, description: string, minLength = 0): JsonSchema {
+	return { type: "string", description, maxLength, minLength };
 }
 function bool(description: string): JsonSchema {
 	return { type: "boolean", description };
@@ -81,8 +81,8 @@ const DISPOSITIONS: readonly TeamDisposition[] = [
 
 const assumptionSchema = obj(
 	{
-		content: str(400, "假设内容：一旦不成立，方案就需要明显改变或不能采用"),
-		basis: str(400, "现有依据（需求条款 / wiki / 代码位置），没有则写“无”"),
+		content: str(400, "假设内容：一旦不成立，方案就需要明显改变或不能采用", 1),
+		basis: str(400, "现有依据（需求条款 / wiki / 代码位置），没有则写“无”", 1),
 		status: enumOf(["verified", "unverified", "falsified"] as const, "验证状态"),
 		impactIfWrong: str(400, "假设错误时的影响"),
 	},
@@ -100,8 +100,8 @@ const ambiguitySchema = obj(
 
 const evidenceSchema = obj(
 	{
-		claim: str(400, "结论或判断"),
-		source: str(400, "可回查的来源位置（文件路径、wiki 章节等）"),
+		claim: str(400, "结论或判断", 1),
+		source: str(400, "可回查的来源位置（文件路径、wiki 章节等）", 1),
 	},
 	["claim", "source"],
 );
@@ -140,10 +140,12 @@ export const TEAM_PROPOSAL_SCHEMA = obj(
 const findingSchema = obj(
 	{
 		severity: enumOf(SEVERITIES, "问题分级：blocking=不解决就不能采用；important=重要；minor=次要"),
-		issue: str(800, "具体问题（对应方案、哪一点、为什么）"),
-		impact: str(400, "影响：错误/遗漏会导致什么"),
-		evidence: str(400, "依据：可回查的资料位置，或明确的逻辑推导/反例；不得冒充已运行的验证结果"),
-		targetAspect: str(200, "针对方案的哪个部分"),
+		// §2.4: every finding must state issue, impact, evidence and target —
+		// minLength keeps empties in the retryable yield-validation path.
+		issue: str(800, "具体问题（对应方案、哪一点、为什么）", 1),
+		impact: str(400, "影响：错误/遗漏会导致什么", 1),
+		evidence: str(400, "依据：可回查的资料位置，或明确的逻辑推导/反例；不得冒充已运行的验证结果", 1),
+		targetAspect: str(200, "针对方案的哪个部分", 1),
 	},
 	["severity", "issue", "impact", "evidence", "targetAspect"],
 );
@@ -360,7 +362,17 @@ export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
 	const data = validateTeamPayload(value, TEAM_REVIEW_SCHEMA, REVIEW_TEXT_BUDGETS);
 	if (!data) return undefined;
 	const findingValues = asObjectArray(data.findings, 10);
-	if (findingValues.some(finding => !asString(finding.issue).trim())) return undefined;
+	// §2.4: a finding without issue/impact/evidence/target is unusable shape.
+	if (
+		findingValues.some(
+			finding =>
+				!asString(finding.issue).trim() ||
+				!asString(finding.impact).trim() ||
+				!asString(finding.evidence).trim() ||
+				!asString(finding.targetAspect).trim(),
+		)
+	)
+		return undefined;
 	const findings = findingValues.map((value): TeamFinding => {
 		const severity = asString(value.severity);
 		return {

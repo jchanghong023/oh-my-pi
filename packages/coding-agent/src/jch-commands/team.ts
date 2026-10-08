@@ -12,6 +12,7 @@
  *   controller without running stages or degrading to a single-model flow.
  */
 import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "../slash-commands/types";
+import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/helpers/draft";
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
 
@@ -66,10 +67,12 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					},
 				},
 			});
-			// Clear only after a successful dispatch: on a validation or config
-			// error the question must stay in the editor for the user to fix and
-			// resubmit.
-			if (outcome.started) ctx.editor.setText("");
+			// Both dispatch paths already emptied the editor before this handler
+			// ran (submit resets it; the follow-up path clears the draft), so a
+			// failed dispatch must put the submission back for the user to fix
+			// and resubmit; a successful one clears only text still owned by it.
+			if (outcome.started) clearSubmittedText(runtime);
+			else restoreDetachedDraft(ctx.editor, command.text);
 			return { consumed: true };
 		},
 	},

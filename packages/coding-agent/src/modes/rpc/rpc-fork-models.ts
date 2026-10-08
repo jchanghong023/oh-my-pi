@@ -182,7 +182,7 @@ export class RpcModelRoleService {
 
 		const expectedValue = settings.getGlobalModelRole(roleId);
 		const currentRevision = this.#roleRevision(roleId, expectedValue);
-		if (command.expectedRevision !== undefined && command.expectedRevision !== currentRevision) {
+		if (command.expectedRevision !== currentRevision) {
 			throw new RpcModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
 		}
 
@@ -209,17 +209,11 @@ export class RpcModelRoleService {
 		return { role, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
 	}
 
-	/** Catalog ids: `getKnownRoleIds` order first, then leftover merged `modelRoles` keys (deduped). */
+	/** Catalog ids: all built-ins (including hidden roles) first, then
+	 * `getKnownRoleIds` order — which already merges configured `modelRoles`
+	 * keys — deduped. */
 	#catalogRoleIds(settings: Settings): string[] {
-		const roles = [...MODEL_ROLE_IDS, ...getKnownRoleIds(settings)];
-		const uniqueRoles = [...new Set(roles)];
-		const seen = new Set<string>(uniqueRoles);
-		for (const role in settings.getModelRoles()) {
-			if (seen.has(role)) continue;
-			seen.add(role);
-			uniqueRoles.push(role);
-		}
-		return uniqueRoles;
+		return [...new Set([...MODEL_ROLE_IDS, ...getKnownRoleIds(settings)])];
 	}
 
 	#roleRevision(role: string, value: string | undefined): string {

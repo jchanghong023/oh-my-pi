@@ -6,6 +6,7 @@ import {
 	parseTeamReview,
 	parseTeamRevision,
 	parseTeamSynthesis,
+	TEAM_REVIEW_SCHEMA,
 } from "@oh-my-pi/pi-coding-agent/team";
 
 const proposal = () => ({
@@ -110,6 +111,20 @@ describe("team yield payload validation", () => {
 	it("accepts an explicit no-viable-proposal outcome without requiring proposal prose", () => {
 		expect(parseTeamProposal({ ...proposal(), proposal: "", noViableProposal: true })?.noViableProposal).toBe(true);
 		expect(parseTeamProposal({ ...proposal(), proposal: "" })).toBeUndefined();
+	});
+
+	it("requires non-empty finding fields in both the yield schema and the parser (§2.4)", () => {
+		const fields = (
+			(TEAM_REVIEW_SCHEMA.properties as Record<string, { items: { properties: Record<string, { minLength?: number }> } }>)
+				.findings!.items!.properties
+		);
+		for (const field of ["issue", "impact", "evidence", "targetAspect"]) {
+			expect(fields[field]!.minLength).toBe(1);
+		}
+		for (const field of ["impact", "evidence", "targetAspect"]) {
+			const data = { ...review(), findings: [{ ...review().findings[0]!, [field]: " " }] };
+			expect(parseTeamReview(data)).toBeUndefined();
+		}
 	});
 
 	it.each([

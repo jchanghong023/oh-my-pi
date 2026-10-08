@@ -51,6 +51,134 @@ afterEach(async () => {
 });
 
 describe("repository index with real SQLite and native Python parsing", () => {
+	it("uses a later whole-word occurrence for ranking and original-source snippets", async () => {
+		const { service } = await fixture({
+			"a.py": "# overtimeout first\n# timeout exact later\n",
+			"b.py": "# timeout exact\n",
+			"c.py": "# overtimeout only\n",
+		});
+		await service.build();
+		const hits = (await service.search("timeout")).hits;
+		expect(hits.map(hit => hit.path)).toEqual(["a.py", "b.py", "c.py"]);
+		expect(hits[0]).toMatchObject({ startLine: 2, snippet: "# timeout exact later" });
+	});
+
+	it("rejects an externally changed inventory instead of certifying stale content", async () => {
+		const { root, service } = await fixture({ "a.py": "def a(): return 'oldriver'\n", "b.py": "def b(): pass\n" });
+		await service.build();
+		const previous = (await service.status()).generation;
+		await expect(
+			service.reconcile({
+				onProgress(progress) {
+					if (progress.phase === "reading" && progress.path === "a.py")
+						fsSync.writeFileSync(path.join(root, "a.py"), "def a(): return 'freshdesert'\n");
+				},
+			}),
+		).rejects.toThrow("changed during reconcile");
+		const status = await service.status();
+		expect(status.generation).toBe(previous);
+		expect(status.unchecked).toBe(true);
+		expect(status.pendingPaths).toContain("a.py");
+		expect((await service.search("freshdesert")).hits[0]?.snippet).toContain("freshdesert");
+		expect((await service.search("oldriver")).hits).toEqual([]);
+		await service.reconcile();
+		expect((await service.status()).incomplete).toBe(false);
+	});
+
+	it("rejects unobserved additions during inventory verification and preserves the old generation", async () => {
+		const { root, service } = await fixture({ "a.py": "def a(): pass\n" });
+		await service.build();
+		const previous = (await service.status()).generation;
+		await expect(
+			service.reconcile({
+				onProgress(progress) {
+					if (progress.phase === "publishing")
+						fsSync.writeFileSync(path.join(root, "extra.py"), "def extra(): pass\n");
+				},
+			}),
+		).rejects.toThrow("inventory changed during reconcile");
+		expect((await service.status()).generation).toBe(previous);
+		expect((await service.status()).unchecked).toBe(true);
+		await service.reconcile();
+		expect((await service.symbol("extra")).hits.some(hit => hit.path === "extra.py")).toBe(true);
+	});
+
+	it("keeps notified additions and deletions pending when they race with full publication", async () => {
+		const { root, service } = await fixture({ "a.py": "def a(): pass\n", "gone.py": "def gone(): pass\n" });
+		await service.build();
+		await service.reconcile({
+			onProgress(progress) {
+				if (progress.phase !== "publishing") return;
+				fsSync.writeFileSync(path.join(root, "new.py"), "def new_target(): pass\n");
+				fsSync.unlinkSync(path.join(root, "gone.py"));
+				service.markChanged(["new.py", "gone.py"]);
+			},
+		});
+		expect((await service.status()).pendingPaths).toEqual(["gone.py", "new.py"]);
+		expect((await service.symbol("new_target")).hits[0]?.path).toBe("new.py");
+		expect((await service.symbol("gone")).hits).toEqual([]);
+	});
+
+	it("reclaims staged text and symbols after a killed writer without deleting published evidence", async () => {
+		const { root, agentDir, service } = await fixture({ "a.py": "def a(): pass\n", "b.py": "def b(): pass\n" });
+		await service.build();
+		const previous = (await service.status()).generation;
+		const child = Bun.spawn(
+			[process.execPath, path.join(import.meta.dir, "fixtures/repo-interrupted-build.ts"), root, agentDir],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		try {
+			const reader = child.stdout.getReader();
+			let output = "";
+			while (!output.includes("STAGED")) {
+				const item = await reader.read();
+				if (item.done)
+					throw new Error(`Build child exited before staging: ${await new Response(child.stderr).text()}`);
+				output += new TextDecoder().decode(item.value);
+			}
+			reader.releaseLock();
+			child.kill();
+			await child.exited;
+			expect((await service.status()).generation).toBe(previous);
+			expect(service.storage.db.query("SELECT count(*) n FROM files").get()).toEqual({ n: 3 });
+			await service.reconcile();
+			expect(service.storage.db.query("SELECT count(*) n FROM files").get()).toEqual({ n: 2 });
+			expect(service.storage.db.query("SELECT count(*) n FROM files_fts").get()).toEqual({ n: 2 });
+			expect((await service.symbol("a")).hits.some(hit => hit.path === "a.py")).toBe(true);
+			expect(await Bun.file(path.join(root, "a.py")).text()).toBe("def a(): pass\n");
+		} finally {
+			try {
+				child.kill();
+			} catch {
+				/* already exited */
+			}
+			await child.exited;
+		}
+	});
+
+	it("cancels in-flight text and symbol scans without caching a partial page", async () => {
+		const { service } = await fixture(
+			Object.fromEntries(
+				Array.from({ length: 160 }, (_, i) => [
+					`${String(i).padStart(3, "0")}.py`,
+					`def cancelbeacon_${i}(): pass\n`,
+				]),
+			),
+		);
+		await service.build();
+		for (const action of ["search", "symbol"] as const) {
+			const controller = new AbortController();
+			const querying = service[action]("cancelbeacon", { signal: controller.signal });
+			const timer = setImmediate(() => controller.abort());
+			try {
+				await expect(querying).rejects.toMatchObject({ name: "AbortError" });
+			} finally {
+				clearImmediate(timer);
+			}
+		}
+		const first = await service.search("cancelbeacon", { limit: 3 });
+		expect((await paths(service, "cancelbeacon", first)).length).toBe(160);
+	});
 	it.skipIf(process.platform === "win32")(
 		"preserves literal backslash filenames through build and known-path edits",
 		async () => {

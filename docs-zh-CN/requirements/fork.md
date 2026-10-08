@@ -37,6 +37,10 @@
 - 非受限会话中，显式声明 `read` 的工具清单会自动附加只读 `wiki` 与 `repo`（含自定义 agent 的 `tools:` frontmatter 与 SDK/RPC 传入的清单）；受限清单（如 `/team` 子代理的工具集）不附加。
 - 被强杀的中断导入留下的隐藏半成品索引（`list`/`remove` 都够不到）会在下一次 `init` 枚举到非空语料后回收，避免它长期占用空间。
 - 数据库保存完整 Markdown 文字、原始路径和行号；导入成功后，查询不再依赖源目录。图片、附件及链接目标不随文字入库；路径和行号对应导入时的版本。
+- 入库复用上游 Markdown 词法解析，代码围栏及行内代码中的运算符和技术名称保持原样；围栏跨段切分仍保留代码语境。超长行采用 500 字符重叠，避免最长合法查询在切分边界漏检，各段保持真实原始字节与行号范围且不超过 18000 字符。
+- 只丢弃明确的转换器 `Cell` / `Row` 空标题，英文单词技术标题同样保留。候选内先将逐字重复的长段落分组，再按独立正文、仅标题内容、重复指针填页，重复资料不能挤掉候选中的独立正文；候选扩展以独立正文数量判定，仍保持有界。
+- 每个命中的定位信息包含索引名、相对路径、行号、原文档 SHA-256 和 `sectionId`；索引名区分同名路径，文档指纹区分导入版本，不能把会随 remove+init 复用的 `sectionId` 当作永久引用。旧库可由存储的 Markdown 自动恢复代码字面量检索，不访问源目录、不改变表结构；旧导入已经丢弃的标题及无重叠的旧式长行切块仍须按 remove+init 重新导入以采用新入库规则。
+- 自动化验证同时覆盖导入、旧库迁移、完整文字与引用来源、长行跨界、重复资料、取消和失败；`packages/coding-agent/test/wiki-cli.test.ts` 从真实 `bun run dev` CLI 导入，经实际模型工具派发读取源目录移走后的存储文字，再验证删除后的缺失索引错误。该测试模型响应由 localhost stub 提供，不代表真实模型任务质量验收。
 - 上游文档树内的 `docs/tools/wiki.md` 是 fork 新增文件：上游测试 `docs-tool-coverage` 要求每个内置工具都有 `docs/tools/<name>.md`，`wiki` 是 fork 新增内置工具，同步时该文件 MUST 保留。
 - 导入全量成功后才公开索引，失败或取消不留下可见半成品；旧版全文或结构化数据库自动迁移，保留原文章节和全文检索，移除结构化数据。
 - Markdown 围栏中的标题不拆分章节，结束围栏须使用相同字符、长度不少于起始围栏且后面仅有空白；支持 ATX/Setext 标题，CRLF 原文保持原始换行；Linux 上仅大小写不同的文档保持独立，终端展示过滤控制字符。
@@ -131,6 +135,7 @@
 
 - `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
 - `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、stdout 惰性暴露与完成后收口），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。截止时取消管道读取并保留部分输出已由上游（2026-10-07 `#cutoff` + `#pipeReaders`）等价提供，不再由 fork 承担。
+- `packages/utils/src/marked/core.ts`：共享 Markdown lexer 与文档章节解析使用一致的围栏合法性：反引号围栏的 info string 含反引号时按普通段落处理，不中断已有段落或丢弃其中的检索词；波浪线围栏的 info string 及有效代码正文不受影响。文档索引迁移从存储原文恢复受影响的全文检索，不要求源目录存在。
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁（e0fc1cf 基线即与其自身 `rpc-user-input-order` 测试矛盾）；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
 - `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。

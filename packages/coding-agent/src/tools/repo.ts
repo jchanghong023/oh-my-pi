@@ -14,13 +14,11 @@ import type { ToolSession } from ".";
 import { toolResult } from "./tool-result";
 
 const repoSchema = type({
-	action: type("'status' | 'search' | 'symbol'").describe(
-		"inspect coverage, search indexed text, or find Python symbols",
+	"action?": type("'status' | 'search' | 'symbol'").describe(
+		"default search; symbol finds Python definitions; status inspects index coverage",
 	),
 	"query?": type("string").describe("literal search text or symbol name; required for search and symbol"),
 	"path?": type("string").describe("relative file path or directory prefix"),
-	"category?": type("'source' | 'test' | 'config' | 'other'").describe("indexed file category"),
-	"limit?": type("number").describe("hits per page, clamped to 1–50; default 20"),
 	"cursor?": type("string").describe("continuation token from a previous page with the same query and filters"),
 	"+": "reject",
 });
@@ -152,7 +150,7 @@ function renderQuery(
 	result: RepoQueryResult<RepoTextHit | RepoSymbolHit>,
 	clipped: FieldTruncations,
 ): string {
-	const lines = formatRepoStatusLines(result.coverage);
+	const lines: string[] = [];
 	if (result.status === "missing") {
 		lines.push("No repository index exists. Open /repo to build one; use read/grep for current files meanwhile.");
 		const summary = fieldTruncationLine(clipped);
@@ -162,6 +160,10 @@ function renderQuery(
 	lines.push(
 		`${action === "search" ? "Text" : "Python symbols"} for "${field(query, 180, "query", clipped)}": ${result.hits.length} hit(s) on this page`,
 	);
+	if (result.coverage.incomplete || result.coverage.unchecked)
+		lines.push(
+			`Coverage: ${result.coverage.incomplete ? "incomplete" : "complete"}; ${result.coverage.unchecked ? "full scope unchecked" : "full scope checked"}. Use action=status for details.`,
+		);
 	for (const [index, hit] of result.hits.entries()) {
 		const location = `${hit.path}:${hit.startLine}-${hit.endLine} [${hit.category}]`;
 		if ("snippet" in hit) lines.push(`[${index + 1}] ${location} ${hit.snippet}`);
@@ -252,9 +254,10 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	) {
-		if (params.action !== "status" && (!params.query || !params.query.trim()))
+		const action = params.action ?? "search";
+		if (action !== "status" && (!params.query || !params.query.trim()))
 			throw new ToolError(
-				`repo ${params.action} requires query (e.g. {"action":"${params.action}","query":"Widget"}).`,
+				`repo ${action} requires query (e.g. ${action === "search" ? '{"query":"Widget"}' : '{"action":"symbol","query":"Widget"}'}).`,
 			);
 		if (params.query && params.query.length > 500)
 			throw new ToolError("Repository query exceeds 500 characters; narrow it.");
@@ -264,7 +267,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 			? new RepoService({ agentDir, cwd: this.session.cwd, root })
 			: undefined;
 		try {
-			if (params.action === "status") {
+			if (action === "status") {
 				const clipped: FieldTruncations = {};
 				const status = boundedStatus(service ? await service.status() : missingStatus(root), clipped);
 				const lines = formatRepoStatusLines(status);
@@ -277,8 +280,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 			const query = params.query!.trim();
 			const options = {
 				path: params.path,
-				category: params.category,
-				limit: params.limit,
+				limit: 20,
 				cursor: params.cursor,
 				signal,
 			};
@@ -286,7 +288,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 				signal?.throwIfAborted();
 				validateMissingCursor(params.cursor);
 			}
-			if (params.action === "search") {
+			if (action === "search") {
 				const result = service
 					? await service.search(query, options)
 					: missingQueryResult<RepoTextHit>(root, missingStatus(root));

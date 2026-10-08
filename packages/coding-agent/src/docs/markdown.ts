@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
+import { Lexer, type Token, type Tokens } from "@oh-my-pi/pi-utils/marked";
 import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./types";
 
 /**
@@ -10,6 +11,8 @@ import type { MarkdownDocument, MarkdownSection, MarkdownSourceLine } from "./ty
  * beyond the page and leave no way to read it.
  */
 const MAX_SECTION_CHARS = 18_000;
+// A maximum-length wiki query must fit across a long-line chunk boundary.
+const CHUNK_OVERLAP_CHARS = 500;
 
 /**
  * Longest heading segment kept in `headingPath`. A heading line can be as long as
@@ -50,11 +53,12 @@ interface SectionDraft {
 	headingPath: string[];
 	headingLevel: number;
 	lines: MarkdownSourceLine[];
+	fencePrefix?: string;
 }
 
 type FenceMarker = "`" | "~";
 
-interface Fence {
+export interface Fence {
 	marker: FenceMarker;
 	length: number;
 }
@@ -67,6 +71,22 @@ function parseFence(line: string): FenceMatch | undefined {
 	const match = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n)?$/);
 	if (!match) return undefined;
 	return { marker: match[1][0] as FenceMarker, length: match[1].length, trailing: match[2] };
+}
+
+function nextFence(fence: Fence | undefined, line: string): Fence | undefined {
+	const match = parseFence(line);
+	if (!match) return fence;
+	if (!fence) return match.marker === "`" && match.trailing.includes("`") ? undefined : match;
+	return fence.marker === match.marker && match.length >= fence.length && /^[ \t]*$/.test(match.trailing)
+		? undefined
+		: fence;
+}
+
+/** Preserve fence context when normalizing stored chunks during migration. */
+export function endingMarkdownFence(markdown: string, initial?: Fence): Fence | undefined {
+	let fence = initial;
+	for (const line of markdown.split(/\r?\n/)) fence = nextFence(fence, line);
+	return fence;
 }
 
 function sourceKind(relativePath: string): string {
@@ -113,14 +133,34 @@ function parseHeading(
 	return undefined;
 }
 
-export function normalizePlainText(markdown: string): string {
-	return markdown
-		.replace(/^\uFEFF/u, "")
-		.replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
-		.replace(/^ {0,3}(=+|-+)[ \t]*\r?$/gm, "")
-		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-		.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-		.replace(/[*~`]+/g, "")
+/** Render the shared Markdown lexer's text leaves, preserving literal code. */
+function plainTokens(tokens: readonly Token[]): string {
+	return tokens
+		.map(token => {
+			if (token.type === "table") {
+				const table = token as Tokens.Table;
+				return [table.header, ...table.rows]
+					.map(row => row.map(cell => plainTokens(cell.tokens)).join(" "))
+					.join("\n");
+			}
+			if (token.type === "list")
+				return (token as Tokens.List).items.map(item => plainTokens(item.tokens)).join("\n");
+			if (token.type === "space" || token.type === "hr" || token.type === "br") return "\n";
+			if (token.type === "def") return "";
+			const text =
+				"tokens" in token && Array.isArray(token.tokens)
+					? plainTokens(token.tokens)
+					: "text" in token && typeof token.text === "string"
+						? token.text
+						: "";
+			return /^(?:heading|paragraph|blockquote|code)$/.test(token.type) ? `${text}\n` : text;
+		})
+		.join("");
+}
+
+export function normalizePlainText(markdown: string, fencePrefix?: string): string {
+	const source = markdown.replace(/^\uFEFF/u, "");
+	return plainTokens(Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source))
 		.replace(/[ \t]+/g, " ")
 		.trim();
 }
@@ -150,17 +190,25 @@ export function sectionShape(markdown: string): "stub" | "heading-only" | "conte
 		return "content";
 	const heading = source.replace(HEADING_MARKER, "").replace(SETEXT_LINE, "").trim();
 	if (heading.length === 0) return "stub";
-	return /[\s\u3400-\u4dbf\u4e00-\u9fff]/u.test(heading) ? "heading-only" : "stub";
+	// Only known converter labels are disposable. A one-word technical heading
+	// (ATPG, C#, reset) is evidence, even without Chinese or spaces.
+	return /^(?:Cell|Row)$/i.test(heading) ? "stub" : "heading-only";
 }
 
 function chunkDraft(draft: SectionDraft): SectionDraft[] {
 	if (draft.lines.reduce((sum, line) => sum + line.text.length, 0) <= MAX_SECTION_CHARS) return [draft];
+	const fences = new Map<number, string>();
+	let fence: Fence | undefined;
+	for (const line of draft.lines) {
+		if (fence) fences.set(line.byteStart, fence.marker.repeat(fence.length));
+		fence = nextFence(fence, line.text);
+	}
 	const chunks: SectionDraft[] = [];
 	let current: MarkdownSourceLine[] = [];
 	let chars = 0;
 	const flush = () => {
 		if (current.length === 0) return;
-		chunks.push({ ...draft, lines: current });
+		chunks.push({ ...draft, lines: current, fencePrefix: fences.get(current[0].byteStart) });
 		current = [];
 		chars = 0;
 	};
@@ -180,6 +228,7 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 				const length = Buffer.byteLength(text);
 				chunks.push({
 					...draft,
+					fencePrefix: fences.get(line.byteStart),
 					lines: [
 						{
 							text,
@@ -189,8 +238,14 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 						},
 					],
 				});
-				consumedChars += text.length;
-				consumedBytes += length;
+				let advance = text.length;
+				if (consumedChars + text.length < line.text.length) {
+					advance -= CHUNK_OVERLAP_CHARS;
+					const first = line.text.charCodeAt(consumedChars + advance);
+					if (first >= 0xdc00 && first <= 0xdfff) advance--;
+				}
+				consumedChars += advance;
+				consumedBytes += Buffer.byteLength(text.slice(0, advance));
 			}
 			continue;
 		}
@@ -261,20 +316,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			continue;
 		}
 		current.lines.push(line);
-		if (fenceMatch) {
-			if (!fence) {
-				// CommonMark: a backtick fence's info string cannot contain
-				// backticks — such a line is a paragraph, not a fence opener.
-				if (!(fenceMatch.marker === "`" && fenceMatch.trailing.includes("`"))) {
-					fence = { marker: fenceMatch.marker, length: fenceMatch.length };
-				}
-			} else if (
-				fence.marker === fenceMatch.marker &&
-				fenceMatch.length >= fence.length &&
-				/^[ \t]*$/.test(fenceMatch.trailing)
-			)
-				fence = undefined;
-		}
+		fence = nextFence(fence, sourceLine);
 	}
 	finish();
 	let ordinal = 0;
@@ -291,7 +333,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			byteStart: first.byteStart,
 			byteEnd: last.byteEnd,
 			rawMarkdown,
-			plainText: normalizePlainText(rawMarkdown),
+			plainText: normalizePlainText(rawMarkdown, draft.fencePrefix),
 		};
 	});
 	return { title, sections };

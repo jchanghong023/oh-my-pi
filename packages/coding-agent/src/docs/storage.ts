@@ -1,9 +1,10 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
+import { endingMarkdownFence, normalizePlainText, type Fence } from "./markdown";
 import type { DocsIndexSummary } from "./types";
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 7;
 
 /** Indexes being built are named with this prefix and renamed once complete. */
 export const BUILDING_INDEX_PREFIX = "__building__";
@@ -104,44 +105,41 @@ export class DocsStorage {
 			this.db.exec(SCHEMA_SQL);
 			if (version > 0 && version < SCHEMA_VERSION) {
 				this.transaction(() => {
-					if (version < 3) {
+					// Rebuild searchable text from the stored source, including code
+					// punctuation lost by older normalization. No source files are read.
+					{
 						this.db.run("DROP TABLE sections_fts");
 						this.db.run(CONTENTLESS_FTS_SQL);
 						const insert = this.db.query(
 							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
 						);
-						// Fresh imports index the plain text (markdown syntax
-						// stripped); prefer the legacy plain_text column when the
-						// old schema still carries it so migrated indexes rank like
-						// rebuilt ones. Old schemas are not guaranteed to have it,
-						// and rows written with the column's '' default (or NULL)
-						// must fall back to the raw markdown.
-						const legacySectionColumns = this.db.query("PRAGMA table_info(sections)").all() as Array<{
-							name: string;
-						}>;
-						const bodyColumn = legacySectionColumns.some(column => column.name === "plain_text")
-							? "COALESCE(NULLIF(s.plain_text,''),s.raw_markdown)"
-							: "s.raw_markdown";
 						const rows = this.db
-							.query(`SELECT s.id,s.index_id,d.relative_path,s.ordinal,s.heading_path,${bodyColumn} AS body
-						FROM sections s JOIN documents d ON d.id=s.document_id ORDER BY s.id`)
+							.query(`SELECT s.id,s.index_id,s.document_id,d.relative_path,s.ordinal,s.heading_path,s.raw_markdown AS body
+						FROM sections s JOIN documents d ON d.id=s.document_id ORDER BY s.document_id,s.ordinal`)
 							.iterate() as Iterable<{
 							id: number;
 							index_id: number;
+							document_id: number;
 							relative_path: string;
 							ordinal: number;
 							heading_path: string;
 							body: string;
 						}>;
-						for (const row of rows)
+						let documentId: number | undefined;
+						let fence: Fence | undefined;
+						for (const row of rows) {
+							if (documentId !== row.document_id) fence = undefined;
+							documentId = row.document_id;
 							insert.run(
 								row.id,
 								row.id,
 								row.index_id,
 								row.ordinal === 0 ? normalizeFts(row.relative_path) : "",
 								normalizeFts(row.heading_path),
-								normalizeFts(row.body),
+								normalizeFts(normalizePlainText(row.body, fence && fence.marker.repeat(fence.length))),
 							);
+							fence = endingMarkdownFence(row.body, fence);
+						}
 					}
 					for (const table of ["evidence", "entity_aliases", "assertions", "relations", "entities"])
 						this.db.run(`DROP TABLE IF EXISTS ${table}`);

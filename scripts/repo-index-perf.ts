@@ -111,6 +111,28 @@ try {
 			`Index/direct mismatch: ${JSON.stringify({ directHitPaths, indexedHitPaths, directMissPaths, indexedMissPaths })}`,
 		);
 	}
+	// A rare marker alone hides broad-query and pagination costs. Every fixture
+	// file contains this literal, so validate all pages as well as their timing.
+	const common = "return payload";
+	const commonDirect = await elapsed(() => directSearch(common));
+	const commonFirst = await elapsed(() => service!.search(common, { limit: 50 }));
+	const commonPaths = commonFirst.result.hits.map(hit => hit.path);
+	const commonPageMs: number[] = [];
+	let cursor = commonFirst.result.cursor;
+	while (cursor) {
+		// Real tool calls reopen the service; cached locators must survive that.
+		const reopened = new RepoService({ cwd: root, agentDir });
+		try {
+			const page = await elapsed(() => reopened.search(common, { limit: 50, cursor }));
+			commonPaths.push(...page.result.hits.map(hit => hit.path));
+			commonPageMs.push(page.ms);
+			cursor = page.result.cursor;
+		} finally {
+			reopened.close();
+		}
+	}
+	if (!equal(commonDirect.result, commonPaths) || new Set(commonPaths).size !== fileCount)
+		throw new Error("Broad indexed query lost or repeated paths across pages");
 	// Query with source tree moved outside the indexed root: a successful stored hit
 	// proves this search does not depend on reading/enumerating the source tree.
 	const inaccessibleSource = path.join(temp, "temporarily-moved-source");
@@ -153,6 +175,12 @@ try {
 				indexedHitMs: { first: indexedHit[0], repeated: indexedHit.slice(1) },
 				directMissMs: { first: directMiss[0], repeated: directMiss.slice(1) },
 				indexedMissMs: { first: indexedMiss[0], repeated: indexedMiss.slice(1) },
+				commonQuery: {
+					directMs: commonDirect.ms,
+					indexedFirstPageMs: commonFirst.ms,
+					indexedFollowingPageMs: commonPageMs,
+					pathsEqual: true,
+				},
 				hitPathsEqual: true,
 				missPathsEqual: true,
 				indexedHitWithoutSourceTree: indexedWithoutSource,

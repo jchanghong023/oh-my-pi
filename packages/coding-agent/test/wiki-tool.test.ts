@@ -55,6 +55,38 @@ async function indexedFixture(files: Record<string, string>): Promise<{ root: st
 }
 
 describe("WikiTool", () => {
+	it("identifies conflicting same-path evidence by index and stable document fingerprint", async () => {
+		const fixture = await indexedFixture({ "guide.md": "# Policy\nsharedpolicybeacon requires five cycles.\n" });
+		const second = await tempDir("docs-tool-other-");
+		await Bun.write(path.join(second, "guide.md"), "# Policy\nsharedpolicybeacon requires seven cycles.\n");
+		const service = new DocsService({ agentDir: fixture.agent });
+		try {
+			await service.init(second, "other-version");
+		} finally {
+			service.close();
+		}
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "sharedpolicybeacon" }));
+		expect(page).toContain("guide.md:1-2 · Policy · index=manual");
+		expect(page).toContain("guide.md:1-2 · Policy · index=other-version");
+		const hashes = [...page.matchAll(/sha256=([a-f0-9]{64})/g)].map(match => match[1]);
+		expect(new Set(hashes).size).toBe(2);
+		expect(page).toContain("five cycles");
+		expect(page).toContain("seven cycles");
+	});
+
+	it("fills the page with distinct evidence before duplicate locators even across candidate windows", async () => {
+		const duplicate = "# Topic\ndedupbeacon " + "same boilerplate ".repeat(25) + "\n";
+		const files: Record<string, string> = Object.fromEntries(
+			Array.from({ length: 700 }, (_, i) => [`copy-${i}.md`, duplicate]),
+		);
+		files["unique.md"] = "# Topic\ndedupbeacon UNIQUE_CRITICAL_CONTENT " + "supporting material ".repeat(300) + "\n";
+		const fixture = await indexedFixture(files);
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "dedupbeacon" }));
+		expect(page).toContain("UNIQUE_CRITICAL_CONTENT");
+		expect(page).toContain("unique.md:");
+		expect(page).toContain("collapsed to a pointer");
+		expect(page.length).toBeLessThan(20_300);
+	});
 	it("returns the stored section text after the source directory is removed", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
 		await fs.rm(fixture.root, { recursive: true });

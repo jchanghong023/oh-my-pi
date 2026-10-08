@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { normalizePlainText, sectionShape, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
@@ -46,7 +46,9 @@ function lineRange(path: string, start: number, end: number): string {
  */
 function sectionHeader(index: number, section: DocsSectionHit): string {
 	const heading = truncateHeading(section.headingPath);
-	return `[${index}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${heading} · sectionId=${section.sectionId}`;
+	return sanitizeText(
+		`[${index}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${heading} · index=${section.index} · sha256=${section.documentHash} · sectionId=${section.sectionId}`,
+	).replace(/[\r\n\t]+/g, " ");
 }
 
 export class WikiTool implements AgentTool<typeof wikiSchema> {

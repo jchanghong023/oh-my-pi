@@ -8,8 +8,6 @@ interface GitStep {
 interface GitSequenceResult {
 	ok: boolean;
 	output: string;
-	/** True once any worktree-mutating step has started, even if it then failed. */
-	mutated: boolean;
 }
 
 function formatGitOutput(stdout: string, stderr: string): string {
@@ -37,13 +35,11 @@ async function runGitSequence(
 	onMutationStart?: () => void,
 ): Promise<GitSequenceResult> {
 	const output: string[] = [];
-	let mutated = false;
 	let mutationNotified = false;
 	try {
 		for (const step of steps) {
 			const result = await runGit(step.cwd ?? cwd, step.args, () => {
 				if (!WORKTREE_MUTATING_GIT_VERBS.has(step.args[0] ?? "")) return;
-				mutated = true;
 				if (mutationNotified) return;
 				mutationNotified = true;
 				onMutationStart?.();
@@ -53,12 +49,12 @@ async function runGitSequence(
 			if (result.exitCode !== 0) {
 				const command = `git ${step.args.join(" ")}`;
 				output.push(`${command} failed with exit code ${result.exitCode}`);
-				return { ok: false, output: output.join("\n"), mutated };
+				return { ok: false, output: output.join("\n") };
 			}
 		}
-		return { ok: true, output: output.join("\n") || "Done.", mutated };
+		return { ok: true, output: output.join("\n") || "Done." };
 	} catch (error) {
-		return { ok: false, output: formatError(error), mutated };
+		return { ok: false, output: formatError(error) };
 	}
 }
 

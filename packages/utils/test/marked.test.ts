@@ -10,6 +10,20 @@ import {
 import goldens from "./fixtures/marked/goldens.json";
 
 describe("marked compatibility", () => {
+	test("keeps backtick-containing info strings as paragraph text while preserving valid code fences", () => {
+		const invalid = "``` `invalidfencebeacon`\nThis is a normal paragraph.\n";
+		const tokens = Lexer.lex(invalid);
+		expect(tokens.map(token => token.type)).toEqual(["paragraph"]);
+		const continued = Lexer.lex(`lead\n${invalid}`);
+		expect(continued.map(token => token.type)).toEqual(["paragraph"]);
+		expect(continued[0].raw).toContain("invalidfencebeacon");
+		expect(new Marked().parse(invalid)).toContain("invalidfencebeacon");
+		const valid = Lexer.lex("~~~ `literal-language`\ncounter*factor*next\n~~~\n");
+		expect(valid[0]).toMatchObject({ type: "code", lang: "`literal-language`", text: "counter*factor*next" });
+		const nested = Lexer.lex("```python\n``` `literal*inside*code`\n```\n");
+		expect(nested[0]).toMatchObject({ type: "code", text: "``` `literal*inside*code`" });
+	});
+
 	for (const golden of goldens) {
 		test(`matches marked tokens and HTML for ${golden.name}`, () => {
 			expect([...Lexer.lex(golden.source)]).toEqual(golden.tokens);

@@ -152,18 +152,31 @@ export class RepoStorage {
 	read<T>(fn: () => T): T {
 		return this.db.transaction(fn).deferred();
 	}
-	state(): StateRow {
-		return this.db.query("SELECT generation,checked_at,epoch,change_seq FROM state WHERE id=1").get() as StateRow;
+	/** A separate WAL snapshot can yield without exposing the writer connection's transaction. */
+	async readAsync<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+		// Fail on an unreadable/closed service before opening another handle.
+		void this.db;
+		const db = new Database(this.path, { readonly: true, strict: true });
+		try {
+			db.run("PRAGMA busy_timeout=5000");
+			db.run("BEGIN DEFERRED");
+			return await fn(db);
+		} finally {
+			db.close();
+		}
 	}
-	pending(limit = -1): Array<{ path: string; seq: number }> {
-		return this.db.query("SELECT path,seq FROM pending ORDER BY path LIMIT ?").all(limit) as Array<{
+	state(db = this.db): StateRow {
+		return db.query("SELECT generation,checked_at,epoch,change_seq FROM state WHERE id=1").get() as StateRow;
+	}
+	pending(limit = -1, db = this.db): Array<{ path: string; seq: number }> {
+		return db.query("SELECT path,seq FROM pending ORDER BY path LIMIT ?").all(limit) as Array<{
 			path: string;
 			seq: number;
 		}>;
 	}
-	uncertainty(limit = -1): string[] {
+	uncertainty(limit = -1, db = this.db): string[] {
 		return (
-			this.db.query("SELECT reason FROM uncertainty ORDER BY reason LIMIT ?").all(limit) as Array<{ reason: string }>
+			db.query("SELECT reason FROM uncertainty ORDER BY reason LIMIT ?").all(limit) as Array<{ reason: string }>
 		).map(row => row.reason);
 	}
 	markChanged(paths: string[]): void {
@@ -197,13 +210,13 @@ export class RepoStorage {
 			id: number;
 		} | null;
 	}
-	failures(generation: string, limit = -1): RepoFailure[] {
-		return this.db
+	failures(generation: string, limit = -1, db = this.db): RepoFailure[] {
+		return db
 			.query("SELECT path,kind,message FROM failures WHERE generation=? ORDER BY path LIMIT ?")
 			.all(generation, limit) as RepoFailure[];
 	}
-	counts(generation: string): { files: number; symbols: number } {
-		return this.db
+	counts(generation: string, db = this.db): { files: number; symbols: number } {
+		return db
 			.query(
 				"SELECT (SELECT count(*) FROM files WHERE generation=?) files,(SELECT count(*) FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.generation=?) symbols",
 			)
@@ -239,6 +252,15 @@ export class RepoStorage {
 		this.db.query("DELETE FROM files_fts WHERE rowid IN (SELECT id FROM files WHERE generation=?)").run(generation);
 		this.db.query("DELETE FROM files WHERE generation=?").run(generation);
 		this.db.query("DELETE FROM failures WHERE generation=?").run(generation);
+	}
+	/** Called only under the maintenance lease, so live staged generations survive. */
+	removeAbandoned(): void {
+		this.transaction(() => {
+			this.db.exec(`DELETE FROM files_fts WHERE rowid IN
+				(SELECT id FROM files WHERE generation IS NOT (SELECT generation FROM state WHERE id=1));
+				DELETE FROM files WHERE generation IS NOT (SELECT generation FROM state WHERE id=1);
+				DELETE FROM failures WHERE generation IS NOT (SELECT generation FROM state WHERE id=1)`);
+		});
 	}
 	putFailure(failure: RepoFailure, generation: string): void {
 		this.db

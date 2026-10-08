@@ -775,7 +775,10 @@ function splitTableRow(line: string): string[] {
 }
 
 function isFence(line: string): RegExpExecArray | null {
-	return /^ {0,3}(`{3,}|~{3,})(.*?)(?:\n|$)$/.exec(line);
+	const match = /^ {0,3}(`{3,}|~{3,})(.*?)(?:\n|$)$/.exec(line);
+	// A backtick fence's info string cannot contain backticks. Reject it here
+	// for both block tokenization and paragraph interruption.
+	return match && match[1]!.startsWith("`") && match[2]!.includes("`") ? null : match;
 }
 function isHeading(line: string): boolean {
 	return /^ {0,3}#{1,6}(?:\s|$)/.test(line);

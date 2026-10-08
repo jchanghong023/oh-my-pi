@@ -98,7 +98,12 @@ export async function deliverTeamReport(
 		throw error;
 	}
 	if (signal.aborted) return false;
-	await rebuildChat?.();
+	try {
+		await rebuildChat?.();
+	} catch {
+		// The report is already persisted and its delivery acknowledged; a
+		// failed UI rebuild must not mark the whole discussion failed.
+	}
 	return true;
 }
 
@@ -136,10 +141,15 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 	});
 }
 
-function buildRunnerDeps(session: AgentSession, settings: Settings, cwd: string): TeamRunnerDeps {
+/** Wire the runner deps from the live session. Exported for tests. */
+export function buildRunnerDeps(session: AgentSession, settings: Settings, cwd: string): TeamRunnerDeps {
 	const modelRegistry = session.modelRegistry;
 	return {
 		cwd,
+		// Session-granted roots (CLI --dir, ACP/add-dir, settings-seeded) must
+		// reach the read-only subagents too; dropping them would deny files the
+		// main agent can read.
+		additionalDirectories: session.sessionManager.getAdditionalDirectories(),
 		settings,
 		modelRegistry,
 		authStorage: modelRegistry.authStorage,
@@ -156,9 +166,15 @@ export async function startTeamDiscussion(
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks } = args;
+	// Best-effort transcript output: a rejecting output hook must never become
+	// an unhandled rejection (it can take down the whole process).
+	const emitOutput = (text: string): void => {
+		const pending = hooks.output?.(text);
+		if (pending instanceof Promise) void pending.catch(() => {});
+	};
 	const report = (text: string): void => {
 		hooks.showError?.(text);
-		void hooks.output?.(text);
+		emitOutput(text);
 	};
 
 	const sessionModel = session.model;
@@ -198,7 +214,7 @@ export async function startTeamDiscussion(
 				const onProgress = (update: TeamProgressUpdate): void => {
 					void reportProgress(update.text, { stage: update.stage, participants: update.participants });
 					hooks.showStatus?.(update.text);
-					void hooks.output?.(update.text);
+					emitOutput(update.text);
 				};
 				const onReportPersisted = (): void | Promise<void> => {
 					manager.acknowledgeDeliveries([jobId]);
@@ -257,18 +273,26 @@ export async function startTeamDiscussion(
 		`原始问题：${previewQuestion(question)}`,
 		`[team-dispatch ${jobId}]`,
 	].join("\n");
-	await session.sendCustomMessage(
-		{
-			customType: TEAM_DISPATCH_MESSAGE_TYPE,
-			content: dispatchNotice,
-			display: true,
-			attribution: "agent",
-			details: { jobId, question, dispatch: true },
-		},
-		{ triggerTurn: false, deliverAs: "nextTurn" },
-	);
-	await hooks.rebuildChat?.();
-	hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
+	try {
+		await session.sendCustomMessage(
+			{
+				customType: TEAM_DISPATCH_MESSAGE_TYPE,
+				content: dispatchNotice,
+				display: true,
+				attribution: "agent",
+				details: { jobId, question, dispatch: true },
+			},
+			{ triggerTurn: false, deliverAs: "nextTurn" },
+		);
+		await hooks.rebuildChat?.();
+		hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
+	} catch (error) {
+		// The job is already registered and owns its own lifecycle from here; a
+		// failed dispatch breadcrumb must not reject the command — the caller
+		// would lose the submitted question and surface an unhandled rejection.
+		const reason = error instanceof Error ? error.message : String(error);
+		report(`/team 已启动（任务 ${jobId}），但写入派发通知失败：${reason}`);
+	}
 
 	return { started: true, jobId, message: dispatchNotice };
 }

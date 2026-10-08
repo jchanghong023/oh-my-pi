@@ -3,6 +3,7 @@
 ## [Unreleased]
 ### Breaking Changes
 
+- Simplified `repo` calls to default to text search with `query`; removed `category` and `limit` inputs, fixed pages at 20 hits, and reserved detailed index status for `action: "status"`.
 - Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
 
 ### Fixed
