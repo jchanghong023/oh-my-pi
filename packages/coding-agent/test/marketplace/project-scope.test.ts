@@ -47,6 +47,8 @@ describe("resolveActiveProjectRegistryPath", () => {
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-proj-scope-"));
+		// Keep ancestor discovery inside the fixture, not the host's drive root.
+		vi.spyOn(os, "homedir").mockReturnValue(os.tmpdir());
 	});
 
 	afterEach(() => {
