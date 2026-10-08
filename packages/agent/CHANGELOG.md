@@ -6,6 +6,13 @@
 
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 
+## [18.8.6] - 2026-10-08
+
+### Added
+
+- Added support for warm-cache-aware conversation pruning, keeping pruned history within the model’s prompt-cache lookback window while preserving Anthropic prompt-cache efficiency.
+- Added `AgentLoopConfig.hasQueuedAsides` (also available on `Agent`) to allow interruptible waits to detect queued asides without consuming them or signaling other tools.
+
 ## [18.8.1] - 2026-10-07
 
 ### Added
