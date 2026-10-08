@@ -20,13 +20,13 @@ export const COMPANY_OFFLINE_CONTEXT_WINDOW = 200_000;
  * role config and explicit CLI model arguments always win.
  */
 export const COMPANY_OFFLINE_ROLE_DEFAULTS: Readonly<Record<string, string>> = {
-	default: "company/Qwen3.6-27B-public",
+	default: "company/Qwen3.8-27B",
 	smol: "company/Qwen3.6-35B-A3B",
 	tiny: "company/Qwen3.6-35B-A3B",
 	commit: "company/Qwen3.6-35B-A3B",
-	task: "company/Qwen3.6-27B-public",
-	vision: "company/Qwen3.6-27B-public",
-	advisor: "company/Qwen3.6-27B-public",
+	task: "company/Qwen3.8-27B",
+	vision: "company/Qwen3.8-27B",
+	advisor: "company/Qwen3.8-27B",
 	plan: "company/GLM-5.2-public",
 	slow: "company/GLM-5.2-public",
 };

@@ -189,10 +189,10 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.retrievalVisible).toBe(false);
 		expect(result.requests).toBe(0);
 		expect(result.roles).toEqual({
-			default: "Qwen3.6-27B-public",
-			task: "Qwen3.6-27B-public",
-			vision: "Qwen3.6-27B-public",
-			advisor: "Qwen3.6-27B-public",
+			default: "Qwen3.8-27B",
+			task: "Qwen3.8-27B",
+			vision: "Qwen3.8-27B",
+			advisor: "Qwen3.8-27B",
 			smol: "Qwen3.6-35B-A3B",
 			tiny: "Qwen3.6-35B-A3B",
 			commit: "Qwen3.6-35B-A3B",
