@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed subprocess termination validation treating a signal-terminated child as still running on Linux.
 - Settled aborted stdout reads when orphaned descendants keep output pipes open, without rediscovering an exited process by its stale PID.
 - Preserved existing destination files when Windows archive symlink creation falls back to copying.
 - Preserved code literals in Markdown fences whose info strings contain Unicode line or paragraph separators.

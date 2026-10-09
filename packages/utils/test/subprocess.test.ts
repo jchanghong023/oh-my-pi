@@ -86,9 +86,8 @@ describe("native-free owned subprocess termination", () => {
 		try {
 			await terminateOwnedSubprocess(child, { detached });
 			expect(await child.exited).not.toBe(0);
-			expect(child.exitCode).not.toBeNull();
 		} finally {
-			if (child.exitCode === null) {
+			if (child.exitCode === null && child.signalCode === null) {
 				child.kill("SIGKILL");
 				await child.exited;
 			}
