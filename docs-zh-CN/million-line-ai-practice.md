@@ -1,6 +1,8 @@
 # 百万行代码仓库中的 AI 实践：工作流驱动的模块审查与并行修复编排
 
-我长期维护 oh-my-pi（OMP）的个人 fork，也在从零开发桌面项目 OmpCode，两者都由 AI 开发和维护。代码规模增长后，我不可能逐行读完所有实现，却仍要判断：业务流程是否正确、修改是否遗漏调用方、失败之后能否恢复。
+我长期维护 oh-my-pi（OMP）的个人 fork，也在开发独立的桌面项目 OmpCode。前者持续合并上游，后者从零建立，不跟随上游合并，并面向 Windows 和公司内网的 CentOS 7 使用场景。
+
+这两个项目都依赖 AI 进行开发和维护。代码规模增长后，我不可能逐行读完所有实现，却仍然需要判断：业务流程是否正确，修改是否遗漏调用方，失败之后能否恢复。
 
 “Review 一下整个仓库”或“分配 5 个子代理，每人一份代码”都没有解决关键问题：**怎样把大仓库拆成边界清楚、上下文装得下、结果可核对的任务。**核心是 OMP 的工作流内置命令：先把大型仓库按模块划分，再用工作流命令把模块拆成任意大小的审查单元——小到单文件也可以；理由是上下文注意力，AI 只关注单文件时效果最好，而关注单文件不代表不能阅读相关文件。审查由子代理调查、主代理核对证据；修改让独立任务并行、共享接口串行，最后统一验证。文中“100 万行、500 个任务、32 个并发”只是拆分示例；截图来自不同次任务，不构成一次完整验收记录。
 
@@ -138,5 +140,6 @@ OMP 的 `workpool()` 复用常驻 worker，并非每任务一个新代理；要�
 
 ## 项目与实现参考
 
-- **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本文使用的 OMP fork；**桌面项目**：[OmpCode](https://github.com/jchanghong023/OmpCode)。
+- **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本文使用的 OMP fork。
+- **桌面项目**：[OmpCode](https://github.com/jchanghong023/OmpCode)。平台支持、兼容包限制与下载方式以该项目 README 为准。
 - **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](requirements/fork.md#魔法关键词的内置命令与-fullsend)。
