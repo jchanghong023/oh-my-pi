@@ -5,6 +5,9 @@
 # Ninja; macOS dev hosts need `brew install ninja`.
 [env]
 CMAKE_GENERATOR = "Ninja"
+# Tree-sitter links wasmtime-c-api statically; its headers otherwise declare
+# dllimport on MSVC, producing invalid indirect calls in Windows WASM parsing.
+CFLAGS_x86_64_pc_windows_msvc = "-DLIBWASM_STATIC"
 # Store each crate's metadata only in its .rmeta instead of duplicating it into
 # every rlib. Measured on a reqwest-sized graph: 196 MB -> 130 MB target dir at
 # identical build times. Requires the pinned nightly (rust-toolchain.toml).

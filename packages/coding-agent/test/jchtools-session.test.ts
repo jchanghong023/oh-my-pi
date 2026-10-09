@@ -15,6 +15,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
+	cfgFeaturesUnexpectedStopDetection,
 	cfgPrewalkEnabled,
 	cfgRetryFallbackChains,
 	cfgRetryMaxDelayMs,
@@ -272,6 +273,7 @@ describe("JchTools SDK remote Agent session", () => {
 		);
 		cfgRetryFallbackChains.override(f.settings, {});
 		cfgRetryUsageAwareFallback.override(f.settings, false);
+		cfgFeaturesUnexpectedStopDetection.override(f.settings, "none");
 		const automatic = await f.create(undefined, f.manager, [], ["@smol", "session-local-test/normal"]);
 		expect(automatic.model?.provider).toBe("session-local-test");
 		await automatic.prompt("ordinary fallback task");

@@ -5,16 +5,21 @@
  * effort); an explicitly configured `compactionModel` target is never
  * substituted, and non-codex chains pass through untouched.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { DEFAULT_COMPACTION_SETTINGS, shouldUseProviderNativeCompaction } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	SessionMaintenance,
 	substituteForkCodexCompactionModel,
 	type SessionMaintenanceHost,
 } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
+import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+
+const authStorage = createInMemoryAuthStorage();
+afterAll(() => authStorage.close());
 
 type BundledProvider = Parameters<typeof getBundledModel>[0];
 
@@ -24,8 +29,9 @@ function requireModel(provider: BundledProvider, id: string): Model {
 	return model;
 }
 
-function makeMaintenance(model: Model | undefined): SessionMaintenance {
-	const host = { settings: Settings.isolated(), model: () => model } as unknown as SessionMaintenanceHost;
+function makeMaintenance(model: Model | undefined, settings = Settings.isolated()): SessionMaintenance {
+	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings, ignoreLocalModelConfig: true });
+	const host = { settings, modelRegistry, model: () => model } as unknown as SessionMaintenanceHost;
 	return new SessionMaintenance(host);
 }
 
@@ -102,8 +108,11 @@ describe("resolveCompactionModelCandidates (fork contract)", () => {
 
 	test("codex model reached via a model role is substituted too", () => {
 		const settings = Settings.isolated({ modelRoles: { smol: "openai-codex/gpt-6.1-sol" } });
-		const host = { settings, model: () => sonnet } as unknown as SessionMaintenanceHost;
-		const candidates = new SessionMaintenance(host).resolveCompactionModelCandidates(sonnet, [sonnet, sol, luna]);
+		const candidates = makeMaintenance(sonnet, settings).resolveCompactionModelCandidates(sonnet, [
+			sonnet,
+			sol,
+			luna,
+		]);
 		expect(candidates[0]).toBe(sonnet);
 		expect(candidates).toContain(luna);
 		expect(candidates.some(c => c.provider === "openai-codex" && c.id !== "gpt-6-luna")).toBe(false);

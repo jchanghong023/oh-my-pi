@@ -120,7 +120,8 @@ async function registryFixture(
 	cleanups.push(() => auth.close());
 	const modelsPath = path.join(root, "models.yml");
 	await Bun.write(modelsPath, "providers: {}\n");
-	const settings = Settings.isolated({ disabledProviders: extra.disabled ? ["jchtools"] : [] });
+	const settings = Settings.isolated();
+	cfgDisabledProviders.set(settings, extra.disabled ? ["jchtools"] : []);
 	const registry = new ModelRegistry(auth, modelsPath, {
 		settings,
 		ignoreLocalModelConfig: extra.gateway,

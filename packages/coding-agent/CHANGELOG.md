@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Restored fork validation after upstream compaction-host changes and isolated mutable discovery, fallback, and role-routing test settings from fixed overrides and unrelated background requests.
 - Kept JchTools backend Agents out of automatic model selection and preserved local discovery after policy changes.
 - Preserved cancelled-turn isolation and partial remote responses across tree navigation, while allowing explicit user continuations.
 - Stopped unknown backend capacities from triggering model-switch compaction and preserved ordinary fallback recovery for role aliases.

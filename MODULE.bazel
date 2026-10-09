@@ -211,6 +211,16 @@ crate.annotation(
     crate = "wasmtime-c-api-impl",
 )
 
+# Tree-sitter's Wasmtime C API lives in a static Rust dependency, not a DLL.
+# Keep the MSVC headers consistent with Cargo's LIBWASM_STATIC definition.
+crate.annotation(
+    build_script_env = {
+        "CFLAGS_x86_64_pc_windows_msvc": "-DLIBWASM_STATIC",
+        "CFLAGS_aarch64_pc_windows_msvc": "-DLIBWASM_STATIC",
+    },
+    crate = "tree-sitter",
+)
+
 # cargo-bazel omits workspace-local build dependencies from generated registry
 # build scripts; restore nix 0.28's edge to the patched cfg_aliases crate.
 crate.annotation(

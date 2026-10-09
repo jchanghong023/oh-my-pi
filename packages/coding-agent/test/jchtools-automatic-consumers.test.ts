@@ -113,11 +113,11 @@ async function fixture(
 	cleanups.push(() => authStorage.close());
 	const settings = Settings.isolated({
 		"prewalk.enabled": true,
-		"retry.enabled": false,
 		"compaction.enabled": false,
 		"secrets.enabled": false,
 		"providers.cacheWarming": "off",
 	});
+	cfgRetryEnabled.set(settings, false);
 	const registry = new ModelRegistry(authStorage, path.join(root, "models.yml"), {
 		settings,
 		jchToolsDiscovery: { pipePath, env: {}, timeoutMs: 250, fetch },
@@ -280,7 +280,8 @@ describe("automatic roles in text consumers", () => {
 					return Response.json({ error: { message: "remote fallback failed" } }, { status: 500 });
 				}
 				if (model !== "fallback") {
-					return Response.json({ error: { message: "ordinary primary failed" } }, { status: 500 });
+					// Exercise model fallback, not the ordinary transport's transient-5xx retries.
+					return Response.json({ error: { message: "ordinary primary failed" } }, { status: 400 });
 				}
 				return undefined;
 			},
