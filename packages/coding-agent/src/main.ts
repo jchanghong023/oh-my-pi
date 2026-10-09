@@ -40,7 +40,13 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import { CanaryChannelUnavailableError, compareUpdateVersions, getLatestRelease } from "./cli/update-cli";
+import {
+	CanaryChannelUnavailableError,
+	compareUpdateVersions,
+	getLatestRelease,
+	isSourceCheckout,
+	managedInstallName,
+} from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
 import {
@@ -248,6 +254,9 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		return;
 	}
 	try {
+		// Checkouts update through git and a manager (Tern) updates its omp itself:
+		// "run omp update" would be wrong advice for both.
+		if (isSourceCheckout() || (await managedInstallName(process.execPath))) return;
 		const channel = cfgUpdateChannel.get(settings);
 		const release = await getLatestRelease({ timeoutMs: 5_000, channel });
 		// SemVer precedence alone ignores build metadata, so a newer fork build of

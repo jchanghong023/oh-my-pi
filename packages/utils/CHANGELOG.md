@@ -14,6 +14,16 @@
 - Kept all cache and state paths under an explicit `OMP_CONFIG_ROOT` instead of initialized XDG directories.
 - Settled timed-out stdout reads when an external wrapper or orphaned descendant keeps the pipe open.
 
+## [18.8.7] - 2026-10-09
+
+### Added
+
+- Added `getNativeGrammarsDir()`, where the native addon loads downloaded tree-sitter grammars from (`~/.omp/natives/grammars`).
+
+### Fixed
+
+- Fixed the virtual terminal misreading private CSI sequences such as kitty keyboard `CSI < u` and modifyOtherKeys `CSI > 4;1 m` as cursor restores or text styling, which garbled replayed PTY output.
+
 ## [18.8.1] - 2026-10-07
 
 ### Added

@@ -18,7 +18,7 @@ describe("shared per-test budget", () => {
 describe("test runner watchdog", () => {
 	// Parent fake timers cannot drive the real watchdog inside the isolated runner process.
 	test("kills a stalled chunk, reports failure, and continues the queue", async () => {
-		using dir = TempDir.createSync("omp-test-runner-watchdog-");
+		using dir = TempDir.createSync("@omp-test-runner-watchdog-");
 		const started = dir.join("started");
 		const completed = dir.join("completed");
 		const continued = dir.join("continued");
