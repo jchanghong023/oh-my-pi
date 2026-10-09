@@ -2,9 +2,9 @@
 
 先交代一下这件事的背景和分量。
 
-我长期维护的 oh-my-pi（omp）是一个开源终端 AI 编码代理：全仓 70 多万行代码，全部代码和文档都出自 AI 之手；我向上游提交了 40 多个 PR，其中 22 个已被合并。桌面版本则是我从零新建的独立仓库——不是 fork，不跟随上游合并，要支持 Windows 和公司红区里的 CentOS 7。
+我长期维护的 oh-my-pi（omp）是一个开源终端 AI 编码代理：全仓 70 多万行代码，全部代码和文档都出自 AI 之手；我向上游提交了 40 多个 PR，其中 22 个已被合并。桌面版本则是我从零新建的独立仓库——不是 fork，不跟随上游合并，要支持 Windows 和公司红区里的 CentOS 7。第三个项目 xberg（https://github.com/jchanghong023/xberg）fork 自上游 xberg-io/xberg，是一个文档转换工具，目标是将办公文档、PDF 以及音频视频统一转换成 Markdown；项目代码约 217 万行，其中核心为约 156 万行 Rust 实现。
 
-也就是说，这篇文章讲的实践，不是在几百行的 demo 仓库上跑通的演示，而是在这两个我本人已经读不完的真实仓库上，每天要用的流程。
+也就是说，这篇文章讲的实践，不是在几百行的 demo 仓库上跑通的演示，而是在这三个我本人已经读不完的真实仓库上，每天要用的流程。
 
 “Review 一下整个仓库”或“分配 5 个子代理，每人一份代码”都没有解决关键问题：**怎样把大仓库拆成边界清楚、上下文装得下、结果可核对的任务。**核心是 OMP 的工作流内置命令：先把大型仓库按模块划分，再用工作流命令把模块拆成任意大小的审查单元——小到单文件也可以；理由是上下文注意力，AI 只关注单文件时效果最好，而关注单文件不代表不能阅读相关文件。审查按功能模块和业务流程拆分任务，用有并发上限的 agent 池执行大量相对独立的调查；修改由主代理编排，核对问题、处理依赖、统一集成验证。文中“100 万行、500 个任务、32 个并发”只是拆分示例；截图来自不同次任务，不构成一次完整验收记录。
 
@@ -144,6 +144,7 @@
 
 - **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本文使用的 OMP fork。
 - **桌面 App**：[OmpCode](https://github.com/jchanghong023/OmpCode)，内置 OMP 核心，无需另装 CLI。提供 **CentOS 7 x64 专用兼容 ZIP**，可由普通用户解压后离线运行，无需 root 或升级系统 glibc；仍需图形会话和系统桌面库。
+- **文档转换**：[xberg](https://github.com/jchanghong023/xberg)，fork 自上游 [xberg-io/xberg](https://github.com/xberg-io/xberg)。把办公文档、PDF 以及音频视频统一转换成 Markdown；代码约 217 万行，核心为约 156 万行 Rust，其余为 Dart、Python、Swift、Java、C# 等上游生态语言绑定。
 - **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](requirements/fork.md#魔法关键词的内置命令与-fullsend)。
 
 CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。公司 Citrix 图形环境尚未验证；下载和运行方法见 OmpCode 项目 README。
