@@ -182,7 +182,7 @@ function isKnownProvider(id: string): id is KnownProvider {
  */
 export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = Object.values(providerEntries()).flatMap(entry => {
 	const createModelManagerOptions = isKnownProvider(entry.id) ? MODEL_MANAGER_FACTORIES[entry.id] : undefined;
-	if (!createModelManagerOptions) return [];
+	if (!createModelManagerOptions || entry.defaultModel === undefined) return [];
 	const discovery = entry.discovery;
 	return [
 		{
@@ -197,7 +197,9 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = Object.values
 	];
 });
 
-/** Default model IDs for all known providers, from their KDL entries. */
-export const DEFAULT_MODEL_PER_PROVIDER: Readonly<Record<KnownProvider, string>> = Object.fromEntries(
-	Object.values(providerEntries()).map(entry => [entry.id, entry.defaultModel] as const),
-) as Record<KnownProvider, string>;
+/** Known default model IDs only; runtime-only policies need not declare one. */
+export const DEFAULT_MODEL_PER_PROVIDER: Readonly<Partial<Record<KnownProvider, string>>> = Object.fromEntries(
+	Object.values(providerEntries()).flatMap(entry =>
+		entry.defaultModel === undefined ? [] : [[entry.id, entry.defaultModel] as const],
+	),
+);

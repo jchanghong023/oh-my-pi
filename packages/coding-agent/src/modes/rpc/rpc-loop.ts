@@ -7,6 +7,7 @@ import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
 	describeLoopLimit,
+	isLoopDurationExpired,
 	isLoopLimitExhausted,
 	parseLoopArgs,
 } from "../loop-limit";
@@ -237,6 +238,12 @@ export class RpcLoopController {
 				if (generation === this.#generation) this.#transcriptId = this.#session.sessionManager.getSessionId();
 			}
 			if (!(await this.#waitUntilIdle(generation, prompt))) return;
+			// The awaited action can outlast a duration budget its own consume approved:
+			// like the TUI's pre-submission gate, never submit a turn past the deadline.
+			if (isLoopDurationExpired(this.#limit)) {
+				this.#disable("Loop time limit reached. Loop mode disabled.");
+				return;
+			}
 			// The submission claims the session synchronously. A following agent_end can
 			// then schedule its own continuation, including skills submitted inline.
 			this.#scheduled = false;

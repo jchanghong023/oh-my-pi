@@ -12,7 +12,9 @@
  * Argument completions come from the runtime-free static materialization in
  * `builtin-registry.ts` (`BUILTIN_SLASH_COMMANDS`), so completion never
  * constructs a TUI runtime and never prompts, writes, or executes anything;
- * the only state this service mutates is its own catalog cache and revision.
+ * beyond the stock available-commands listing (which refreshes the session's
+ * file-command cache via `setSlashCommands`), the only state this service
+ * tracks is its previous session key and revision.
  */
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import type { AgentSession } from "../../session/agent-session";
@@ -42,6 +44,7 @@ import {
 	type RpcCompleteCommandResult,
 	type RpcCompletionItem,
 	type RpcCompletionKind,
+	type RpcForkErrorCode,
 } from "./rpc-fork-types";
 
 /** Reusable availability verdicts (frozen shapes, compared by reason string). */
@@ -53,7 +56,7 @@ const UNSUPPORTED: RpcCommandAvailability = { available: false, reason: "unsuppo
 export class RpcCommandCatalogError extends Error {
 	constructor(
 		message: string,
-		readonly code: string,
+		readonly code: RpcForkErrorCode,
 	) {
 		super(message);
 		this.name = "RpcCommandCatalogError";
@@ -89,7 +92,7 @@ export interface RpcCommandCatalogOptions {
 	readonly getMcpManager?: (session: object) => MCPManager | undefined;
 }
 
-/** Cached catalog snapshot: completion rows plus the wire descriptors. */
+/** One catalog snapshot: completion rows plus the wire descriptors. */
 interface RpcCommandCatalogSnapshot {
 	readonly entries: readonly RpcCommandCatalogEntry[];
 	readonly descriptors: RpcCommandDescriptor[];
@@ -154,10 +157,12 @@ function descriptorFor(entry: RpcCommandCatalogEntry, availability: RpcCommandAv
  * (`complete_command`), and strict resolution for clients that dispatch
  * commands themselves.
  *
- * The catalog is cached per session identity; a rebuild whose session key
- * changed (settings, plugins, skill mutations feed the key) refreshes it and
- * bumps the monotonic {@link revision}, so clients detect drift by comparing
- * revisions between listings — there is no push notification.
+ * Every call re-snapshots the live listing (like the stock RPC
+ * `get_available_commands` path) and re-derives the session key from it
+ * (settings, plugins, skill mutations feed the key); a changed key bumps the
+ * monotonic {@link revision}, so clients detect drift by comparing revisions
+ * between listings — there is no push notification, and nothing is retained
+ * between calls except the previous key.
  */
 export class RpcForkCommandCatalogService {
 	readonly #cwd: string;

@@ -16,6 +16,25 @@ import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/help
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
 
+/**
+ * Drop the submission's attachments while they are still the live prefix of the
+ * editor's pending list (the input controller's `#dropSubmittedPending` guard):
+ * the Enter submit path leaves them in the composer, so a consumed `/team` must
+ * take them with it instead of leaking them onto whatever the user types next;
+ * anything attached after the submission stays untouched.
+ */
+function dropSubmittedImages(runtime: TuiSlashCommandRuntime): void {
+	const images = runtime.input?.images;
+	if (!images?.length) return;
+	const editor = runtime.ctx.editor;
+	const pending = editor.pendingImages;
+	if (!images.every((image, index) => pending[index] === image)) return;
+	pending.splice(0, images.length);
+	const linkCount = Math.min(runtime.input?.imageLinks?.length ?? 0, editor.pendingImageLinks.length);
+	editor.pendingImageLinks.splice(0, linkCount);
+	editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+}
+
 export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "team",
@@ -67,12 +86,25 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					},
 				},
 			});
-			// Both dispatch paths already emptied the editor before this handler
-			// ran (submit resets it; the follow-up path clears the draft), so a
-			// failed dispatch must put the submission back for the user to fix
-			// and resubmit; a successful one clears only text still owned by it.
-			if (outcome.started) clearSubmittedText(runtime);
-			else restoreDetachedDraft(ctx.editor, command.text);
+			// Both dispatch paths emptied the editor's text before this handler ran
+			// (submit resets it; the follow-up path clears the draft), but only the
+			// follow-up path also took the images with it. A failed dispatch must put
+			// the submission back for the user to fix and resubmit; a successful one
+			// consumes the text and the submitted images it still owns.
+			if (outcome.started) {
+				clearSubmittedText(runtime);
+				dropSubmittedImages(runtime);
+			} else if (runtime.draftDetached) {
+				// The follow-up path took the draft's images out of the editor
+				// before dispatch; a failed dispatch returns them with the text.
+				restoreDetachedDraft(ctx.editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
+			} else {
+				// Enter path: the images never left the editor, so restoring only the
+				// text keeps them where the markers in it point — no marker shift, and
+				// anything typed while dispatch ran stays behind the submission.
+				const currentText = ctx.editor.getExpandedText();
+				ctx.editor.setCollapsedText([command.text, currentText].filter(part => part.trim()).join("\n\n"));
+			}
 			return { consumed: true };
 		},
 	},

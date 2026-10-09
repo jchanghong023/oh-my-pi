@@ -27,9 +27,10 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import { formatModelStringWithRouting, resolveExplicitModelRole, resolveModelOverride } from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import malformedFunctionCallRetryTemplate from "../prompts/system/malformed-function-call-retry.md" with { type: "text" };
@@ -40,6 +41,7 @@ import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
 	clampThinkingLevelToCeiling,
+	concreteThinkingLevel,
 	modelSupportsEffortCeiling,
 	resolveThinkingLevelForModel,
 } from "@oh-my-pi/pi-tui/thinking";
@@ -555,11 +557,13 @@ export class TurnRecovery {
 
 	/** Handles empty terminal assistant turns and schedules bounded recovery. */
 	handleEmptyAssistantStop(message: AssistantMessage): Promise<"continue" | "terminal" | undefined> {
+		if (isJchToolsAgentModel(message)) return Promise.resolve(undefined);
 		return this.#handleEmptyAssistantStop(message);
 	}
 
 	/** Classifies suspicious terminal stops and schedules bounded recovery. */
 	handleUnexpectedAssistantStop(message: AssistantMessage): Promise<boolean> {
+		if (isJchToolsAgentModel(message)) return Promise.resolve(false);
 		return this.#handleUnexpectedAssistantStop(message);
 	}
 
@@ -575,6 +579,7 @@ export class TurnRecovery {
 	 * prompt; past the cap the error surfaces as before.
 	 */
 	handleMalformedFunctionCallStop(message: AssistantMessage): boolean {
+		if (isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		const id = this.#classifyRetryMessage(message);
 		if (!AIError.is(id, AIError.Flag.MalformedFunctionCall)) {
@@ -634,6 +639,7 @@ export class TurnRecovery {
 	 * is no executed side effect whose resumption policy it could change.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
+		if (isJchToolsAgentModel(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		const socketClosed =
 			message.stopReason === "error" &&
@@ -712,11 +718,13 @@ export class TurnRecovery {
 	 * reverted (possibly smaller) window before issuing the next request.
 	 */
 	maybeRestoreRetryFallbackPrimary(): Promise<boolean> {
+		if (isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
 		return this.#maybeRestoreRetryFallbackPrimary();
 	}
 
 	/** Applies model fallback policy from live usage health before a turn starts. */
 	maybeApplyUsageAwareFallback(signal: AbortSignal, confirmer?: UsageFallbackConfirmer): Promise<boolean> {
+		if (isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
 		return this.#maybeApplyUsageAwareFallback(signal, confirmer);
 	}
 
@@ -730,6 +738,7 @@ export class TurnRecovery {
 			preserveFailedTurn?: boolean;
 		},
 	): Promise<boolean> {
+		if (isJchToolsAgentModel(message) || isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
 		return this.#handleRetryableError(message, options);
 	}
 
@@ -739,6 +748,7 @@ export class TurnRecovery {
 	 * the active account.
 	 */
 	async recordUsageLimitOutcome(message: AssistantMessage): Promise<boolean> {
+		if (isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		const id = this.#classifyRetryMessage(message);
 		const activeModel = this.#host.model();
@@ -779,6 +789,7 @@ export class TurnRecovery {
 
 	/** Prompts after transient overlap with a prior agent run. */
 	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
+		if (isJchToolsAgentModel(this.#host.model())) return this.#host.agent.prompt(messages);
 		return this.#promptAgentWithIdleRetry(messages, options);
 	}
 
@@ -1336,6 +1347,7 @@ export class TurnRecovery {
 	 * their own marker, not the generic sentinel, so they never match here.
 	 */
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
+		if (isJchToolsAgentModel(message)) return false;
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			message.content.length !== 0 ||
@@ -1361,6 +1373,7 @@ export class TurnRecovery {
 	 * cannot fall through to the generic 408 replay path.
 	 */
 	async handleResponsesRequestBodyReadTimeout(message: AssistantMessage): Promise<RequestBodyReadTimeoutRecovery> {
+		if (isJchToolsAgentModel(message)) return "not-applicable";
 		if (message.stopReason !== "error" || !AIError.isResponsesRequestBodyReadTimeout(message)) {
 			return "not-applicable";
 		}
@@ -1403,6 +1416,7 @@ export class TurnRecovery {
 	 * Context overflow is NOT retryable (handled by compaction instead).
 	 */
 	isRetryableError(message: AssistantMessage): boolean {
+		if (isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		if (AIError.isResponsesRequestBodyReadTimeout(message)) return false;
@@ -1500,6 +1514,7 @@ export class TurnRecovery {
 	 * unexecuted call must be reissued.
 	 */
 	classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
+		if (isJchToolsAgentModel(message)) return undefined;
 		const id = this.#classifyRetryMessage(message);
 		const genericAbort =
 			message.errorMessage !== undefined && Object.hasOwn(GENERIC_ABORT_MESSAGES, message.errorMessage);
@@ -2019,6 +2034,7 @@ export class TurnRecovery {
 		if (!candidate) {
 			throw new Error(`Retry fallback model not found: ${selector.raw}`);
 		}
+		if (isJchToolsAgentModel(candidate) || isJchToolsAgentModel(this.#host.model())) return false;
 		const apiKey =
 			options?.apiKey ??
 			(await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId(), { signal: options?.signal }));
@@ -2121,6 +2137,7 @@ export class TurnRecovery {
 				const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
 				if (!candidate) continue;
+				if (isJchToolsAgentModel(candidate)) continue;
 				// A candidate that would leave the request exactly as it is — same
 				// routed model, same effective thinking level — is not a switch, and
 				// must never be applied: `findRetryFallbackCandidates` excludes the
@@ -2236,6 +2253,7 @@ export class TurnRecovery {
 	 * `pinFallback`), and turns that already emitted replay-unsafe output.
 	 */
 	isHardErrorFallbackEligible(message: AssistantMessage): boolean {
+		if (isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		const model = this.#host.model();
@@ -2307,16 +2325,34 @@ export class TurnRecovery {
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
 		} = this.#activeRetryFallback;
-		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
-		if (!originalSelector) {
-			// Defensive: the stored selector is always produced by
-			// `formatRetryFallbackSelector`, so it should never fail to parse. If it
-			// somehow does, nothing is restored and the session keeps running on the
-			// fallback — so drop the chain record but NOT `#fallbackRouted`, whose
-			// clearing would report the fallback's remaining turns as the primary.
+		const resolvedPrimary = resolveModelOverride(
+			[originalSelectorRaw],
+			this.#host.modelRegistry,
+			this.#host.settings,
+		);
+		const originalRole = resolveExplicitModelRole(originalSelectorRaw, this.#host.settings);
+		const wireSelector = originalRole
+			? undefined
+			: parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
+		if (!originalRole && !wireSelector) {
+			// Malformed stored selectors cannot be restored. Keep fallback routing
+			// attribution, but do not discard valid roles merely because their
+			// primary has not appeared in the current catalog yet.
 			this.#activeRetryFallback = undefined;
 			return false;
 		}
+		const primaryModel =
+			resolvedPrimary.model ??
+			(wireSelector && this.#host.modelRegistry.find(wireSelector.provider, wireSelector.id));
+		if (!primaryModel) return false;
+		if (isJchToolsAgentModel(primaryModel)) return false;
+		const originalSelector = originalRole
+			? parseRetryFallbackSelector(
+					formatRetryFallbackSelector(primaryModel, concreteThinkingLevel(originalThinkingLevel)),
+					this.#host.modelRegistry,
+				)
+			: wireSelector;
+		if (!originalSelector) return false;
 
 		const currentModel = this.#host.model();
 		if (!currentModel) return false;
@@ -2329,14 +2365,6 @@ export class TurnRecovery {
 		}
 		if (this.isRetryFallbackSelectorSuppressed(originalSelector)) return false;
 
-		const resolvedPrimary = resolveModelOverride(
-			[originalSelector.raw],
-			this.#host.modelRegistry,
-			this.#host.settings,
-		);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel) return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
 		if (!apiKey) return false;
 
@@ -3040,6 +3068,7 @@ export class TurnRecovery {
 	 * @returns true if retry was initiated, false if no failed turn to retry or agent is busy
 	 */
 	async retry(): Promise<boolean> {
+		if (isJchToolsAgentModel(this.#host.model())) return false;
 		if (this.#host.isStreaming() || this.#host.isCompacting() || this.isRetrying) return false;
 
 		const messages = this.#host.agent.state.messages;

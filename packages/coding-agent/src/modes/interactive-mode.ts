@@ -5615,9 +5615,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			} else if (options.compactBeforeExecute) {
 				// Distill the plan-mode transcript before the execution turn is queued so
 				// the plan-approved synthetic prompt lands as a fresh cache anchor.
-				// Outcome is consumed after tool-restoration and plan-reference-path
-				// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
-				// past the cancel guard — see the comment at the cancel branch.
+				// Outcome is consumed after tool-restoration below; the remaining
+				// plan-reference bookkeeping lives in the dispatch tail
+				// (plan-mode/session-approval.ts). `markPlanReferenceSent` is
+				// intentionally deferred past the cancel guard — see the comment at
+				// the cancel branch.
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
 				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
@@ -5626,9 +5628,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
 				// flushes via `flushCompactionQueue` before returning) see the
-				// approved plan in `#buildPlanReferenceMessage`. Reassignment after
-				// the try/finally is idempotent and kept for the !compactBeforeExecute
-				// branch.
+				// approved plan in `#buildPlanReferenceMessage`. Reassignment later
+				// (the cancel branch, or the dispatch tail in
+				// plan-mode/session-approval.ts) is idempotent and covers the
+				// !compactBeforeExecute branches.
 				this.session.setPlanReferencePath(options.planFilePath);
 				// Ride the plan-mode distillation prompt through as `internalGuidance`
 				// so it reaches native summarization without leaking into the public

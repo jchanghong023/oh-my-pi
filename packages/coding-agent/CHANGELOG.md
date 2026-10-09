@@ -1,12 +1,26 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added zero-configuration discovery of the same-user Windows JchTools ACP service, with live model refresh and text-only backend Agent execution that isolates frontend tools, preserves streamed failures, and never automatically replays tasks.
+
 ### Breaking Changes
 
 - Simplified `repo` calls to default to text search with `query`; removed `category` and `limit` inputs, fixed pages at 20 hits, and reserved detailed index status for `action: "status"`.
 - Removed the fork-only `requireStableSessionIdentity()` export and the `forkFrom({ requireStableSessionIdentity })` option; external callers must remove these references.
 
 ### Fixed
+
+- Kept JchTools backend Agents out of automatic model selection and preserved local discovery after policy changes.
+- Preserved cancelled-turn isolation and partial remote responses across tree navigation, while allowing explicit user continuations.
+- Stopped unknown backend capacities from triggering model-switch compaction and preserved ordinary fallback recovery for role aliases.
+- Stopped failed JchTools eval completions from retrying or falling back, including backend Agents reached through fallback chains.
+- Restored repository-index maintenance when a failed directory resolution returns to the previous working directory.
+- Kept fresh JchTools discovery refreshes from being swallowed by invalidated in-flight requests.
+- Preserved user configuration comments when saving or clearing model roles from RPC interfaces.
+- Retained successful peer-message identities in delivery receipts for reliable history recovery.
 
 - Fixed Linux `fulltest` timing out while verifying repository-index recovery after an abruptly killed writer.
 - Kept connected-browser viewport validation independent of browser startup navigation.

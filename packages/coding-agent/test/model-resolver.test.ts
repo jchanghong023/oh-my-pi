@@ -335,11 +335,19 @@ const openaiGpt55Models: Model<Api>[] = [
 	}),
 ];
 
+function requireProviderDefaultId(provider: keyof typeof DEFAULT_MODEL_PER_PROVIDER): string {
+	const id = DEFAULT_MODEL_PER_PROVIDER[provider];
+	if (id === undefined) {
+		throw new Error(`Expected catalog default model ID for ${provider} fixture`);
+	}
+	return id;
+}
+
 function createBedrockDefaultModel(
 	overrides?: Partial<ModelSpec<"bedrock-converse-stream">>,
 ): Model<"bedrock-converse-stream"> {
 	return buildModel({
-		id: DEFAULT_MODEL_PER_PROVIDER["amazon-bedrock"],
+		id: requireProviderDefaultId("amazon-bedrock"),
 		name: "Claude Opus (US)",
 		api: "bedrock-converse-stream",
 		provider: "amazon-bedrock",
@@ -390,6 +398,112 @@ function roleChainModel(provider: string, id: string): Model<Api> {
 }
 
 describe("pickDefaultAvailableModel", () => {
+	test("does not automatically select remote Agents but preserves explicit models and configured roles", () => {
+		const remote = roleChainModel("jchtools", "claude-haiku-5-5");
+		const ordinary = roleChainModel("anthropic", "claude-haiku-5-5");
+		const unconfigured = Settings.isolated({});
+		const registry = { getAll: () => [remote], getAvailable: () => [remote] };
+
+		expect(pickDefaultAvailableModel([remote])).toBeUndefined();
+		expect(pickDefaultAvailableModel([remote], () => true)).toBeUndefined();
+		expect(resolveModelFromSettings({ settings: unconfigured, availableModels: [remote] })).toBeUndefined();
+		expect(pickDefaultAvailableModel([remote, ordinary])).toBe(ordinary);
+		expect(resolveCliModel({ cliModel: "jchtools/claude-haiku-5-5", modelRegistry: registry }).model).toBe(remote);
+		expect(resolveModelRoleValue("@smol", [remote], { settings: unconfigured }).model).toBeUndefined();
+		expect(resolveRoleChain("smol", unconfigured, [remote])).toEqual([]);
+		expect(resolveModelRoleValue("@tiny", [remote], { settings: unconfigured }).model).toBeUndefined();
+		expect(resolveModelRoleValue("@smol", [remote, ordinary], { settings: unconfigured }).model).toBe(ordinary);
+
+		const configured = Settings.isolated({ modelRoles: { smol: "jchtools/claude-haiku-5-5" } });
+		expect(resolveModelRoleValue("@smol", [remote], { settings: configured }).model).toBe(remote);
+		expect(resolveRoleChain("smol", configured, [remote]).map(candidate => candidate.model)).toEqual([remote]);
+		expect(resolveModelFromSettings({ settings: configured, availableModels: [remote] })).toBe(remote);
+	});
+
+	test("keeps explicit wildcard, inherited and fallback role choices distinct from automatic priorities", () => {
+		const remote = roleChainModel("jchtools", "claude-haiku-5-5");
+		const ordinary = roleChainModel("anthropic", "claude-haiku-5-5");
+		const pool = [remote, ordinary];
+		const automaticFallback = Settings.isolated({ modelRoles: { smol: "anthropic/claude-haiku-5-5" } });
+		expect(resolveRoleChain("smol", automaticFallback, pool).map(candidate => candidate.model)).toEqual([ordinary]);
+		expect(filterAvailableModelsByEnabledPatterns(pool, ["jchtools/*"], automaticFallback)).toEqual([remote]);
+		const explicitFallback = Settings.isolated({
+			modelRoles: { smol: "anthropic/claude-haiku-5-5" },
+			"retry.fallbackChains": { smol: ["jchtools/haiku"] },
+		});
+		expect(resolveRoleChain("smol", explicitFallback, pool).map(candidate => candidate.model)).toEqual([
+			ordinary,
+			remote,
+		]);
+		const explicitFuzzy = Settings.isolated({ modelRoles: { smol: "@smol,jchtools/haiku" } });
+		expect(resolveModelRoleValue("@smol", [remote], { settings: explicitFuzzy }).model).toBe(remote);
+		const inherited = Settings.isolated({ modelRoles: { default: "jchtools/claude-haiku-5-5" } });
+		expect(resolveModelRoleValue("@smol", [remote], { settings: inherited }).model).toBe(remote);
+		expect(resolveModelRoleValue("@tiny", [remote], { settings: inherited }).model).toBe(remote);
+	});
+
+	test("CLI role snapshots preserve prior explicit choices while honoring live provider policies", () => {
+		const remote = roleChainModel("jchtools", "saved/raw");
+		const ordinary = roleChainModel("anthropic", "current/raw");
+		const modelRegistry = { getAvailable: () => [remote, ordinary], getAll: () => [remote, ordinary] };
+		const settings = Settings.isolated({ modelRoles: { default: "anthropic/current/raw" } });
+		const roleLookup = {
+			getModelRole: (role: string) => (role === "default" || role === "before" ? "jchtools/saved/raw" : undefined),
+		};
+		expect(resolveCliModel({ cliModel: "@default", modelRegistry, settings }).model).toBe(ordinary);
+		expect(resolveCliModel({ cliModel: "@default", modelRegistry, settings, roleLookup }).model).toBe(remote);
+		expect(resolveCliModel({ cliModel: "before", modelRegistry, settings, roleLookup }).model).toBe(remote);
+		const disabled = Settings.isolated({ disabledProviders: ["jchtools"] });
+		const blocked = resolveCliModel({ cliModel: "@default", modelRegistry, settings: disabled, roleLookup });
+		expect(blocked.model).toBeUndefined();
+		expect(blocked.disabledProvider).toBe("jchtools");
+	});
+
+	test("preserved automatic aliases remain ineligible through deferred and child model resolution", () => {
+		const remote = roleChainModel("jchtools", "claude-haiku-5-5");
+		const ordinary = roleChainModel("anthropic", "claude-haiku-5-5");
+		const settings = Settings.isolated({});
+		const remoteRegistry = { getAvailable: () => [remote] };
+		const normalRegistry = { getAvailable: () => [remote, ordinary] };
+		const deferred = resolveConfiguredModelPatterns("@smol", settings, { preserveAutomaticRoleAliases: true });
+		expect(resolveModelOverride(deferred, remoteRegistry, settings).model).toBeUndefined();
+		expect(resolveModelOverride(deferred, normalRegistry, settings).model).toBe(ordinary);
+		const unresolvedCli = resolveCliModel({
+			cliModel: "@smol",
+			modelRegistry: { ...remoteRegistry, getAll: () => [remote] },
+			settings,
+		});
+		expect(unresolvedCli.model).toBeUndefined();
+		expect(
+			resolveModelOverride(unresolvedCli.configuredPatterns ?? [], remoteRegistry, settings).model,
+		).toBeUndefined();
+		const latePriority = roleChainModel("openai", "o4-mini");
+		const lateRegistry = { getAvailable: () => [remote, latePriority], getAll: () => [remote, latePriority] };
+		const resolvedCli = resolveCliModel({ cliModel: "@smol", modelRegistry: lateRegistry, settings });
+		expect(resolvedCli.model).toBe(latePriority);
+		const resumedPatterns = resolvedCli.configuredPatterns?.slice(resolvedCli.configuredPatternIndex) ?? [];
+		expect(resolveModelOverride(resumedPatterns, lateRegistry, settings).model).toBe(latePriority);
+		for (const source of [{ requestModel: "@smol" }, { settingsOverride: "@smol" }, { agentModel: "@smol" }]) {
+			const child = resolveAgentModelSelection({ ...source, settings, preserveAutomaticRoleAliases: true });
+			expect(resolveModelOverride(child.patterns, remoteRegistry, settings).model).toBeUndefined();
+			expect(resolveModelOverride(child.patterns, normalRegistry, settings).model).toBe(ordinary);
+		}
+		const configured = Settings.isolated({ modelRoles: { smol: "@smol,jchtools/haiku" } });
+		const explicitChild = resolveAgentModelSelection({
+			agentModel: "@smol",
+			settings: configured,
+			preserveAutomaticRoleAliases: true,
+		});
+		expect(resolveModelOverride(explicitChild.patterns, remoteRegistry, configured).model).toBe(remote);
+		const inherited = Settings.isolated({ modelRoles: { default: "jchtools/claude-haiku-5-5" } });
+		const inheritedChild = resolveAgentModelSelection({
+			agentModel: "@tiny",
+			settings: inherited,
+			preserveAutomaticRoleAliases: true,
+		});
+		expect(resolveModelOverride(inheritedChild.patterns, remoteRegistry, inherited).model).toBe(remote);
+	});
+
 	test("does not auto-select Apple Foundation Models but retains explicit selection", () => {
 		const apple = buildModel({
 			id: "on-device",
@@ -403,7 +517,7 @@ describe("pickDefaultAvailableModel", () => {
 			contextWindow: 8192,
 			maxTokens: 4096,
 		});
-		const anthropic = createOpusModel("anthropic", DEFAULT_MODEL_PER_PROVIDER.anthropic, "Claude Opus");
+		const anthropic = createOpusModel("anthropic", requireProviderDefaultId("anthropic"), "Claude Opus");
 
 		expect(pickDefaultAvailableModel([apple])).toBeUndefined();
 		expect(pickDefaultAvailableModel([apple, anthropic])).toBe(anthropic);
@@ -419,7 +533,7 @@ describe("pickDefaultAvailableModel", () => {
 
 	test("keeps earlier unrelated provider defaults ahead of shared Codex defaults", () => {
 		const anthropicDefault = buildModel({
-			id: DEFAULT_MODEL_PER_PROVIDER.anthropic,
+			id: requireProviderDefaultId("anthropic"),
 			name: "Anthropic Default",
 			api: "anthropic-messages",
 			provider: "anthropic",
@@ -486,8 +600,8 @@ describe("pickDefaultAvailableModel", () => {
 	});
 
 	test("prefers SuperGrok over paid xAI when both defaults are present", () => {
-		const paid = getBundledModel("xai", DEFAULT_MODEL_PER_PROVIDER.xai);
-		const oauth = getBundledModel("xai-oauth", DEFAULT_MODEL_PER_PROVIDER["xai-oauth"]);
+		const paid = getBundledModel("xai", requireProviderDefaultId("xai"));
+		const oauth = getBundledModel("xai-oauth", requireProviderDefaultId("xai-oauth"));
 		if (!paid || !oauth) {
 			throw new Error("Expected bundled xAI provider defaults");
 		}
@@ -498,7 +612,7 @@ describe("pickDefaultAvailableModel", () => {
 
 	test("prefers a concretely-authed provider over a sentinel-only ambient provider (issue #9967)", () => {
 		const bedrockDefault = createBedrockDefaultModel();
-		const anthropicDefault = createOpusModel("anthropic", DEFAULT_MODEL_PER_PROVIDER.anthropic, "Claude Opus");
+		const anthropicDefault = createOpusModel("anthropic", requireProviderDefaultId("anthropic"), "Claude Opus");
 		// amazon-bedrock leads in catalog/availability order, exactly as
 		// `getAvailable()` returns it when a stray ~/.aws profile makes Bedrock
 		// ambiently "available" alongside a real Anthropic OAuth login.
@@ -524,7 +638,7 @@ describe("pickDefaultAvailableModel", () => {
 	test("checks concrete auth once per provider", () => {
 		const bedrockDefault = createBedrockDefaultModel();
 		const secondBedrockModel = createBedrockDefaultModel({ id: "us.anthropic.claude-sonnet-4-6" });
-		const anthropicDefault = createOpusModel("anthropic", DEFAULT_MODEL_PER_PROVIDER.anthropic, "Claude Opus");
+		const anthropicDefault = createOpusModel("anthropic", requireProviderDefaultId("anthropic"), "Claude Opus");
 		const checkedProviders: string[] = [];
 
 		const picked = pickDefaultAvailableModel([bedrockDefault, secondBedrockModel, anthropicDefault], provider => {
@@ -1153,6 +1267,23 @@ describe("resolveAgentAdvisorSelection", () => {
 	});
 });
 describe("resolveAgentAdvisorRolePattern", () => {
+	test("stamped automatic advisors remain role-aware without losing explicit owner branches", () => {
+		const remote = roleChainModel("jchtools", "gpt-5.6-sol");
+		const ordinary = roleChainModel("openai-codex", "gpt-5.6-sol");
+		const automaticOwner = Settings.isolated({});
+		const automaticChild = Settings.isolated({
+			modelRoles: { advisor: resolveAgentAdvisorRolePattern("@advisor", automaticOwner) },
+		});
+		expect(resolveModelRoleValue("@advisor", [remote], { settings: automaticChild }).model).toBeUndefined();
+		expect(resolveModelRoleValue("@advisor", [remote, ordinary], { settings: automaticChild }).model).toBe(ordinary);
+		const owner = Settings.isolated({ modelRoles: { advisor: "@advisor,jchtools/gpt-5.6-sol" } });
+		const child = Settings.isolated({
+			modelRoles: { ...owner.getModelRoles(), advisor: resolveAgentAdvisorRolePattern("@advisor", owner) },
+		});
+		expect(resolveModelRoleValue("@advisor", [remote], { settings: child }).model).toBe(remote);
+		expect(resolveModelRoleValue("@advisor", [remote, ordinary], { settings: child }).model).toBe(ordinary);
+	});
+
 	test("a self-referential @advisor resolves to the owner's advisor role inside the spawned session", () => {
 		const owner = Settings.isolated({ modelRoles: { advisor: "anthropic/claude-haiku-4-5" } });
 		const child = Settings.isolated({

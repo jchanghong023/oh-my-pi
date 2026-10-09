@@ -647,15 +647,14 @@ export interface CompiledSeed {
 }
 
 /**
- * One model provider's catalog entry: the non-code half of what the runtime
- * and generator know about a provider. A `providers/<id>.kdl` file
- * declares one by carrying `default-model`; files without it are wire-compat
- * only (custom provider ids such as `llama.cpp`).
+ * One provider's catalog or runtime-policy entry: the non-code half of what
+ * the runtime and generator know about it. Runtime-only policies can opt out
+ * of automatic selection without declaring a model that was never discovered.
  */
 export interface CompiledProvider {
 	id: string;
-	/** Preferred model id when no explicit selection is made. */
-	defaultModel: string;
+	/** Preferred model id; absent for runtime-only policies with no known default. */
+	defaultModel?: string;
 	/** Whether the provider participates in automatic default selection (defaults to true). */
 	automaticDefault?: boolean;
 	/** Env vars consulted, in order, for the runtime API-key fallback. */

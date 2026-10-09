@@ -39,6 +39,7 @@ export type AuthProviderId =
 	| "groq"
 	| "helmcode"
 	| "huggingface"
+	| "jchtools"
 	| "kagi"
 	| "kilo"
 	| "kimi-code"

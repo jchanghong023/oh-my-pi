@@ -60,6 +60,7 @@ import {
 	thinkingDotToken,
 	type RoleAssignments,
 	resolveRoleAssignments,
+	resolveLiveScopedModels,
 	sortModelItems,
 } from "./model-browser";
 import {
@@ -130,6 +131,8 @@ export interface ModelHubRegistry extends ModelBrowserRegistry {
 		| undefined;
 	find(provider: string, id: string): Model | undefined;
 	refresh(strategy: "online"): Promise<void>;
+	/** Bounded local service reconciliation, including scoped picker opens. */
+	refreshLocalProviders?(): Promise<boolean>;
 	refreshProvider(
 		provider: string,
 		strategy: "online",
@@ -493,24 +496,21 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry("all");
 		}
 
-		// Reconcile catalogs in the background. This is online discovery only —
-		// it must not re-run `!command` credential helpers (F5 / `omp models
-		// refresh` pass refreshCommandCredentials for that). A --models scope is
-		// registry-independent, so the reload would only repeat the hydration
-		// above.
-		if (this.#scopedModels.length === 0) {
-			this.#catalogRefreshing = true;
-			this.#registry
-				.refresh("online")
-				.then(() => this.#syncFromRegistryState())
-				.catch(error => {
-					this.#configError = error instanceof Error ? error.message : String(error);
-				})
-				.finally(() => {
-					this.#catalogRefreshing = false;
-					this.#requestRender();
-				});
-		}
+		// Scoped catalogs remain network-independent except for the ephemeral
+		// local service: stale JchTools endpoints must never remain selectable.
+		this.#catalogRefreshing = true;
+		Promise.all([
+			this.#scopedModels.length === 0 ? this.#registry.refresh("online") : Promise.resolve(),
+			this.#registry.refreshLocalProviders?.() ?? Promise.resolve(false),
+		])
+			.then(() => this.#syncFromRegistryState())
+			.catch(error => {
+				this.#configError = error instanceof Error ? error.message : String(error);
+			})
+			.finally(() => {
+				this.#catalogRefreshing = false;
+				this.#requestRender();
+			});
 	}
 
 	/** Cancel pending provider refresh timers and the spinner. Host calls this on overlay close. */
@@ -552,7 +552,10 @@ export class ModelHubComponent implements Component {
 	 * resolution ignores the scope for them as well.
 	 */
 	#scopedPool(): Model[] {
-		const pool = this.#scopedModels.map(scoped => scoped.model);
+		const pool = resolveLiveScopedModels(
+			this.#registry,
+			this.#scopedModels.map(scoped => scoped.model),
+		);
 		for (const model of this.#registry.getAvailable("all")) {
 			if (modelKind(model) === "chat") continue;
 			if (this.#scopedModels.some(scoped => modelsAreEqual(scoped.model, model))) continue;
@@ -582,7 +585,10 @@ export class ModelHubComponent implements Component {
 				allModels = this.#scopedPool();
 			} catch (error) {
 				this.#configError = error instanceof Error ? error.message : String(error);
-				allModels = this.#scopedModels.map(scoped => scoped.model);
+				allModels = resolveLiveScopedModels(
+					this.#registry,
+					this.#scopedModels.map(scoped => scoped.model),
+				);
 			}
 			availableModels = allModels;
 		} else {
@@ -1070,7 +1076,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
-		if (this.#scopedModels.length > 0 || !providerId) return;
+		if ((this.#scopedModels.length > 0 && providerId !== "jchtools") || !providerId) return;
 		const force = options?.force === true;
 		if (force) {
 			const pending = this.#scheduledProviderRefreshes.get(providerId);
@@ -1175,6 +1181,11 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#activateItem(item: ModelBrowserItem): void {
+		if (item.model.provider === "jchtools") {
+			const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
+			if (!model) return;
+			item = { ...item, model };
+		}
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
 		if (this.#assigning) {

@@ -394,10 +394,10 @@ export async function resolveEffectiveSubagentPolicy(
 		settings: request.session.settings,
 		activeModelPattern: parentActiveModelPattern,
 		fallbackModelPattern: request.session.getModelString?.(),
+		preserveAutomaticRoleAliases: true,
 	};
-	// Role identity and patterns come from one call so they cannot be derived
-	// from different sources: the expansion below discards the alias, and the
-	// child's inherited retry-fallback chain is keyed off the role.
+	// Keep automatic role aliases intact until the executor's role-aware
+	// resolution, and retain role identity for the inherited retry-fallback chain.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
@@ -467,7 +467,9 @@ async function applySpawnHook(
 		throw new StructuredSubagentError("preflight", spawnResult.reason ?? "Subagent spawn blocked by extension.");
 	}
 	if (spawnResult?.model === undefined) return policy;
-	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
+	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings, {
+		preserveAutomaticRoleAliases: true,
+	});
 	if (replacement.length === 0) return policy;
 	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
 }

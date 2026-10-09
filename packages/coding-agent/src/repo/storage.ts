@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, generation TEXT NOT NU
 CREATE INDEX IF NOT EXISTS files_gen ON files(generation,path);
 CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(text, tokenize='trigram');
 CREATE TABLE IF NOT EXISTS symbols (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, name TEXT NOT NULL, qualname TEXT NOT NULL, name_folded TEXT NOT NULL, qualname_folded TEXT NOT NULL, kind TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, signature TEXT);
+CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
 CREATE TABLE IF NOT EXISTS failures (generation TEXT NOT NULL, path TEXT NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL, PRIMARY KEY(generation,path));
 CREATE TABLE IF NOT EXISTS pending (path TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS uncertainty (reason TEXT PRIMARY KEY, seq INTEGER NOT NULL);

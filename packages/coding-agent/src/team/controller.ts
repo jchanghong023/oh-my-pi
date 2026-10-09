@@ -6,7 +6,7 @@
  * cancellation signal and propagates into every subagent; stage progress rides
  * the existing job/status surfaces (no new TUI panels — child detail stays in
  * the Agent Hub); the final report lands as one markdown message in the
- * transcript via `sendCustomMessage`, never as a model-facing delivery.
+ * transcript via `appendCustomMessage`, never as a model-facing delivery.
  */
 import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";

@@ -13,6 +13,7 @@ import { repoIndexPath } from "../src/repo/storage";
 import { createAgentSession } from "../src/sdk";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
+import { invalidateFsScanAfterWrite } from "../src/tools/fs-cache-invalidation";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 const temporary: string[] = [];
@@ -265,6 +266,110 @@ describe("repository lifecycle coverage across session and background execution 
 		} finally {
 			lifecycle.dispose();
 			service.close();
+		}
+	});
+
+	it.each(["bash", "eval"] as const)(
+		"restores %s and filesystem hints after returning from a missing cwd",
+		async kind => {
+			const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-rebind-"));
+			temporary.push(temp);
+			const projectA = path.join(temp, "project-a");
+			const projectB = path.join(temp, "missing-b");
+			const agentDir = path.join(temp, "agent");
+			await fs.mkdir(projectA);
+			const fileA = path.join(projectA, "engine.py");
+			await fs.writeFile(fileA, "def before_return(): pass\n");
+			const serviceA = new RepoService({ cwd: projectA, agentDir });
+			let cwd = projectA;
+			const lifecycle = new RepoLifecycle({ agentDir, getCwd: () => cwd });
+			try {
+				await serviceA.build();
+				lifecycle.start();
+				await serviceA.reconcile();
+				const generation = (await serviceA.status()).generation;
+
+				cwd = projectB;
+				lifecycle.onSessionChange();
+				lifecycle.commandExecuted(kind);
+				invalidateFsScanAfterWrite(path.join(projectB, "engine.py"));
+				expect(await serviceA.status()).toMatchObject({
+					generation,
+					pendingCount: 0,
+					uncertainReasons: [],
+					unchecked: false,
+				});
+
+				cwd = projectA;
+				lifecycle.commandExecuted(kind);
+				expect(await serviceA.status()).toMatchObject({
+					needsReconcile: true,
+					unchecked: true,
+					uncertainReasons: [`${kind} execution may have modified repository files; reconcile to verify coverage`],
+				});
+				await serviceA.reconcile();
+				await fs.writeFile(fileA, "def after_return(): pass\n");
+				invalidateFsScanAfterWrite(fileA);
+				expect((await serviceA.status()).pendingPaths).toEqual(["engine.py"]);
+				expect((await serviceA.symbol("after_return")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
+			} finally {
+				lifecycle.dispose();
+				serviceA.close();
+			}
+		},
+	);
+
+	it("retries a missing cwd once it appears without creating its index or changing the old project", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-retry-"));
+		temporary.push(temp);
+		const projectA = path.join(temp, "project-a");
+		const projectB = path.join(temp, "missing-b");
+		const agentDir = path.join(temp, "agent");
+		await fs.mkdir(projectA);
+		await fs.writeFile(path.join(projectA, "engine.py"), "def project_a(): pass\n");
+		const serviceA = new RepoService({ cwd: projectA, agentDir });
+		let serviceB: RepoService | undefined;
+		let cwd = projectA;
+		const lifecycle = new RepoLifecycle({ agentDir, getCwd: () => cwd });
+		try {
+			await serviceA.build();
+			lifecycle.start();
+			await serviceA.reconcile();
+			cwd = projectB;
+			lifecycle.commandExecuted("bash");
+
+			await fs.mkdir(projectB);
+			const fileB = path.join(projectB, "engine.py");
+			await fs.writeFile(fileB, "def project_b(): pass\n");
+			lifecycle.commandExecuted("eval");
+			invalidateFsScanAfterWrite(fileB);
+			expect(
+				await fs.access(repoIndexPath(agentDir, projectB)).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+
+			serviceB = new RepoService({ cwd: projectB, agentDir });
+			await serviceB.build();
+			lifecycle.commandExecuted("eval");
+			expect(await serviceB.status()).toMatchObject({
+				needsReconcile: true,
+				uncertainReasons: ["eval execution may have modified repository files; reconcile to verify coverage"],
+			});
+			await fs.writeFile(fileB, "def project_b_changed(): pass\n");
+			invalidateFsScanAfterWrite(fileB);
+			expect((await serviceB.status()).pendingPaths).toEqual(["engine.py"]);
+			expect((await serviceB.symbol("project_b_changed")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
+			expect(await serviceA.status()).toMatchObject({
+				pendingCount: 0,
+				uncertainReasons: [],
+				unchecked: false,
+			});
+		} finally {
+			lifecycle.dispose();
+			serviceB?.close();
+			serviceA.close();
 		}
 	});
 

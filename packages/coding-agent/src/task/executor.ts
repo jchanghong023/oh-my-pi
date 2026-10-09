@@ -276,10 +276,10 @@ function resolveSubagentRetryFallbackCandidates(
  * identity, and a role that happens to be assigned the same model must not
  * capture the child's fallback routing.
  *
- * Spawn paths preserve the pre-expansion alias as `modelRole` because their
- * model patterns are already expanded. Direct callers may still supply an
- * unexpanded alias through `modelOverride` or `agent.model`; retain that
- * existing path by deriving the role only when no preserved role was supplied.
+ * Spawn paths preserve the selector's role as `modelRole` even when explicit
+ * role configuration expands into model patterns. Automatic aliases remain
+ * role-aware; direct callers can likewise supply aliases through
+ * `modelOverride` or `agent.model` when no preserved role was supplied.
  */
 function resolveSubagentInheritedRetryFallbackChain(
 	settings: Settings,
@@ -3922,10 +3922,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// `task.agentAdvisor` settings override (agent name → "on"/"off"/model
 	// pattern) pairs the spawned session with an advisor. Subagents default to
 	// no advisor (createSubagentSettings forces `advisor.enabled` off); an
-	// explicit model pattern is expanded against this owner's roles (a nested
-	// spawn's owner is its parent subagent) and lands on the child's
-	// `modelRoles.advisor`. The expanded pattern is also what the session
-	// contract persists, so cold revival under root settings reuses it.
+	// advisor pin is resolved against this owner's roles (a nested spawn's
+	// owner is its parent subagent) and lands on the child's
+	// `modelRoles.advisor`, preserving automatic aliases and explicit branches.
+	// The same role-aware pattern is persisted for cold revival.
 	const advisorSelection = resolveAgentAdvisorSelection({
 		settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
 		agentAdvisor: agent.advisor,
@@ -4121,7 +4121,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			checkAbort();
 
-			const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings);
+			const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings, {
+				preserveAutomaticRoleAliases: true,
+			});
 			const inheritedRetryFallbackChain =
 				configuredModelPatterns.length === 1
 					? resolveSubagentInheritedRetryFallbackChain(

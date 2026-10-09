@@ -591,7 +591,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleRpc: (_command, runtime) => handleRpcWikiDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showDocsDashboard();
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{
@@ -601,7 +601,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleRpc: (_command, runtime) => handleRpcRepoDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showRepoDashboard();
-			runtime.ctx.editor.setText("");
+			clearSubmittedText(runtime);
 		},
 	},
 	{

@@ -64,9 +64,11 @@ export async function enumerateFiles(root: string, signal?: AbortSignal, databas
 /** Check from the repository root so ancestor .gitignore rules remain effective. */
 export async function indexedCandidate(root: string, rel: string, signal?: AbortSignal): Promise<boolean> {
 	const matches = await glob({
-		// Native patterns alias backslashes to separators. Wildcard a literal
-		// Unix backslash, then verify the raw returned path below.
-		pattern: rel.replace(/[*?[\]{}\\]/g, char => (char === "\\" ? "?" : `[${char}]`)),
+		// Native patterns alias backslashes to separators, and the native
+		// pattern builder's brace repair counts raw braces even inside
+		// character classes, so a literal backslash or brace cannot be spelled
+		// out. Wildcard those, then verify the raw returned path below.
+		pattern: rel.replace(/[*?[\]{}\\]/g, char => ("\\{}".includes(char) ? "?" : `[${char}]`)),
 		path: root,
 		fileType: FileType.File,
 		recursive: false,
@@ -133,7 +135,13 @@ export async function readRepoFile(root: string, rel: string, signal?: AbortSign
 			}
 			if (relativePath(root, await realpathTolerant(root, absolute)) !== rel)
 				return { failure: { path: rel, kind: "symlink", message: "Path resolves outside repository" } };
-			const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+			// O_NONBLOCK so opening a special file that appeared at a watched
+			// path (e.g. a FIFO without a writer on Linux) cannot block forever;
+			// the descriptor-level regular-file check below then reports it.
+			const handle = await open(
+				absolute,
+				constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+			);
 			opened = true;
 			try {
 				// Validate the open descriptor before reading, even if an ancestor

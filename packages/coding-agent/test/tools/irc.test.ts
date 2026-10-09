@@ -102,11 +102,19 @@ describe("IRC", () => {
 
 			sub.setOutcome("injected");
 			const injected = await bus.send({ from: "0-Main", to: "0-Sub", body: "ping" });
-			expect(injected).toEqual({ to: "0-Sub", outcome: "injected" });
+			expect(injected).toEqual({
+				to: "0-Sub",
+				outcome: "injected",
+				id: sub.delivered[0]?.id,
+				ts: sub.delivered[0]?.ts,
+			});
 
 			sub.setOutcome("woken");
 			const woken = await bus.send({ from: "0-Main", to: "0-Sub", body: "ping again" });
 			expect(woken.outcome).toBe("woken");
+			expect(woken.id).toBe(sub.delivered[1]?.id);
+			expect(woken.ts).toBe(sub.delivered[1]?.ts);
+			expect(woken.id).not.toBe(injected.id);
 
 			expect(sub.delivered.map(msg => msg.body)).toEqual(["ping", "ping again"]);
 			expect(sub.delivered[0]?.from).toBe("0-Main");
@@ -201,7 +209,12 @@ describe("IRC", () => {
 
 			const receipt = await customBus.send({ from: "0-Main", to: "0-Sub", body: "hi" });
 
-			expect(receipt).toEqual({ to: "0-Sub", outcome: "injected" });
+			expect(receipt).toEqual({
+				to: "0-Sub",
+				outcome: "injected",
+				id: live.delivered[0]?.id,
+				ts: live.delivered[0]?.ts,
+			});
 			expect(live.delivered.map(msg => msg.body)).toEqual(["hi"]);
 			expect(globalStub.delivered).toEqual([]);
 		});

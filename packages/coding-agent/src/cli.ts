@@ -433,11 +433,12 @@ async function runTinyWorker(): Promise<void> {
 /** Resolved top-level command name (never its arguments), for the unsettled-entry report. */
 let runningCommand: string | undefined;
 
-/** Run the CLI with the given argv (no `process.argv` prefix). */
+/** Version shown by `--version` and root help; release builds append their embedded build timestamp. */
 const displayVersion = process.env.PI_BUILD_TIMESTAMP
 	? `${VERSION} (built ${process.env.PI_BUILD_TIMESTAMP})`
 	: VERSION;
 
+/** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
 	let resolvedArgv = argv;
 	try {

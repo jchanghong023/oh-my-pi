@@ -1803,6 +1803,32 @@ describe("Settings", () => {
 			expect(settings.getModelRole("default")).toBe("moonshot/kimi-k3:max");
 		});
 
+		it("preserves YAML comments and unrelated fields across role updates, insertion, removal and conflicts", async () => {
+			const configPath = getConfigPath();
+			await Bun.write(
+				configPath,
+				'# user configuration\nmodelRoles:\n  default: old/default # default note\n  plan: auto # plan note\ncustom:\n  keep: "literal" # custom note\n',
+			);
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			await settings.saveUserModelRole("default", "new/default:high", "old/default");
+			await settings.saveUserModelRole("task", "new/task:high", undefined);
+			await settings.saveUserModelRole("default", undefined, "new/default:high");
+			const saved = await Bun.file(configPath).text();
+			for (const comment of ["# user configuration", "# default note", "# plan note", "# custom note"]) {
+				expect(saved).toContain(comment);
+			}
+			expect(await readSettings()).toEqual({
+				modelRoles: { plan: "auto", task: "new/task:high" },
+				custom: { keep: "literal" },
+			});
+			const external = saved.replace("new/task:high", "external/task:high");
+			await Bun.write(configPath, external);
+			await expect(settings.saveUserModelRole("task", "new/task:low", "new/task:high")).rejects.toThrow("changed");
+			expect(await Bun.file(configPath).text()).toBe(external);
+			await settings.saveUserModelRole("task", "new/task:high", "external/task:high");
+			expect((await Bun.file(configPath).text()).includes("# plan note")).toBe(true);
+		});
+
 		it("preserves concurrent external per-role edits when saving one global role", async () => {
 			await writeSettings({
 				modelRoles: { default: "anthropic/claude-sonnet-4-5", advisor: "moonshot/kimi-k2" },

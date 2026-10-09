@@ -27,6 +27,9 @@ export interface IrcMessage {
 export interface IrcDeliveryReceipt {
 	to: string;
 	outcome: "injected" | "woken" | "revived" | "failed";
+	/** Actual bus message identity and send time, retained by successful receipts. */
+	id?: string;
+	ts?: number;
 	error?: string;
 }
 /** Status ordering for peer rosters in child prompts. */

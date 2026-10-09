@@ -39,7 +39,7 @@ import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../sessi
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { replaceFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
-import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { setYamlConfigValue, stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import {
 	type AnySetting,
 	all as allSettings,
@@ -1822,7 +1822,13 @@ export class Settings {
 			) {
 				if (modelId === undefined) deleteByPath(current, ["modelRoles", role]);
 				else setByPath(current, ["modelRoles", role], modelId);
-				await this.#writeYamlAtomically(writePath, stringifyYamlConfig(current));
+				// GUI 持久化原先重建整个 YAML，导致其他字段的注释丢失。
+				// 使用同一次加锁读取的原文改目标节点，保留 CAS、隔离备份和原子写入边界。
+				const content =
+					loaded.settings !== null && loaded.generation.kind === "content"
+						? setYamlConfigValue(loaded.generation.source, ["modelRoles", role], modelId)
+						: stringifyYamlConfig(current);
+				await this.#writeYamlAtomically(writePath, content);
 				this.#persistedMutationGeneration++;
 			}
 			this.#quarantinedYamlTargets.delete(configPath);
@@ -1866,7 +1872,9 @@ export class Settings {
 	getModelRole(role: ModelRole | string): string | undefined {
 		const roles: unknown = cfgModelRoles.get(this);
 		if (isRecord(roles) && Object.hasOwn(roles, role)) return modelRoleValueFromUnknown(roles[role]);
-		return this.#defaultModelRoles[role];
+		// Own-key guard: a plain-object index would surface inherited Object.prototype
+		// members ("toString", …) as role values for arbitrary alias strings like @toString.
+		return Object.hasOwn(this.#defaultModelRoles, role) ? this.#defaultModelRoles[role] : undefined;
 	}
 
 	/** Process defaults yield to every configured role, including after reload and cwd changes. */

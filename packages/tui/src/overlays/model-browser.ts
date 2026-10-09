@@ -392,11 +392,31 @@ interface SessionModelScopeInputs {
 	error: string | undefined;
 }
 
+/** Preserve ordinary scoped rows, but never serve a stale local-service endpoint. */
+export function resolveLiveScopedModels(registry: ModelBrowserRegistry, scopedModels: ReadonlyArray<Model>): Model[] {
+	if (!scopedModels.some(model => model.provider === "jchtools")) return [...scopedModels];
+	let live: Model[];
+	try {
+		live = registry.getAvailable("all").filter(model => model.provider === "jchtools");
+	} catch {
+		live = [];
+	}
+	const byId = new Map(live.map(model => [model.id, model]));
+	return scopedModels.flatMap(model => {
+		if (model.provider !== "jchtools") return [model];
+		const current = byId.get(model.id);
+		return current ? [current] : [];
+	});
+}
+
 function readSessionModelScopeInputs(
 	registry: ModelBrowserRegistry,
 	scopedModels: ReadonlyArray<Model>,
 ): SessionModelScopeInputs {
-	if (scopedModels.length > 0) return { models: scopedModels, allModels: scopedModels, error: undefined };
+	if (scopedModels.length > 0) {
+		const models = resolveLiveScopedModels(registry, scopedModels);
+		return { models, allModels: models, error: undefined };
+	}
 	const loadError = registry.getError();
 	let error = loadError ? String(loadError) : undefined;
 	let models: ReadonlyArray<Model>;
@@ -807,6 +827,7 @@ function formatDescription(description: string): string {
  * label is a prefix form — strip the colon for suffix placement.
  */
 function formatContext(model: Model): string {
+	if (model.contextWindow === null) return `? ${theme.icon.context.replace(/:$/, "")}`;
 	const ctx = model.contextWindow ?? 0;
 	if (ctx <= 0) return "";
 	return `${formatNumber(ctx).toLowerCase()} ${theme.icon.context.replace(/:$/, "")}`;
@@ -1171,7 +1192,7 @@ export class ModelBrowser implements Component {
 		return this.#insertSeparator(cached.ranker.rank(query));
 	}
 
-	/** True when `item`'s context window is smaller than the live session token count (grayed row; hosts compact before switching). */
+	/** Only known positive capacities can mark a row over-context; null is unknown, not a local budget. */
 	isOverContext(item: ModelBrowserItem): boolean {
 		if (item.id === "separator") return false;
 		if (!this.#markOverContext || this.#currentContextTokens <= 0) return false;
@@ -1533,8 +1554,10 @@ export class ModelBrowser implements Component {
 		if (model.isNew) facts.push("new");
 		if (model.isBeta) facts.push("beta");
 		if (model.isRecommended) facts.push("recommended");
-		if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
-		if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
+		if (model.contextWindow === null) facts.push("ctx unknown");
+		else if (model.contextWindow > 0) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
+		if (model.maxTokens === null) facts.push("out unknown");
+		else if (model.maxTokens > 0) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
 		facts.push(formatCostDetail(model));
 		if (model.reasoning) facts.push("reasoning");
 		if (model.input.includes("image")) facts.push("vision");
@@ -1809,8 +1832,10 @@ export class ModelBrowser implements Component {
 			children.push(row(head, { gap: "sm", align: "center", wrap: true }));
 
 			const facts: string[] = [];
-			if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
-			if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
+			if (model.contextWindow === null) facts.push("ctx unknown");
+			else if (model.contextWindow > 0) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
+			if (model.maxTokens === null) facts.push("out unknown");
+			else if (model.maxTokens > 0) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
 			facts.push(formatCostDetail(model));
 			if (model.reasoning) facts.push("reasoning");
 			if (model.input.includes("image")) facts.push("vision");
@@ -1935,7 +1960,8 @@ export class ModelBrowser implements Component {
 			.replace(/\s*t\/s\s*/, " ")
 			.trim();
 		if (speed) facts.speed = speed;
-		if (model.contextWindow) facts.ctx = model.contextWindow;
+		if (model.contextWindow === null) facts.ctx = "?";
+		else if (model.contextWindow > 0) facts.ctx = model.contextWindow;
 		facts.price = pickerPrice(model);
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
 		if (this.isOverContext(item)) {
@@ -2128,8 +2154,10 @@ export class ModelBrowser implements Component {
 
 		if (mode === "compact") {
 			const facts: { k: TspText; v: TspText }[] = [];
-			if (ctx > 0) facts.push({ k: "ctx", v: formatNumber(ctx).toLowerCase() });
-			if (out > 0) facts.push({ k: "out", v: formatNumber(out).toLowerCase() });
+			if (model.contextWindow === null) facts.push({ k: "ctx", v: "unknown" });
+			else if (ctx > 0) facts.push({ k: "ctx", v: formatNumber(ctx).toLowerCase() });
+			if (model.maxTokens === null) facts.push({ k: "out", v: "unknown" });
+			else if (out > 0) facts.push({ k: "out", v: formatNumber(out).toLowerCase() });
 			facts.push({ k: "price", v: isFreeModel(model) ? "free" : formatCostDetail(model) });
 			facts.push({ k: "reasoning", v: model.reasoning ? "yes" : "no" });
 			const children: NativeChild[] = [node("kv", { items: facts, layout: "inline" })];
@@ -2168,7 +2196,7 @@ export class ModelBrowser implements Component {
 		const fact = (k: string, v: string | undefined) => {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
-		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		fact("Context", model.contextWindow === null ? "unknown" : ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
 		const compaction = this.#settings.compactionPointFor?.(model);
 		if (compaction) {
 			const value =
@@ -2180,7 +2208,7 @@ export class ModelBrowser implements Component {
 				v: [span(value, "mono"), span(` · ${compaction.source}`, "dim")],
 			});
 		}
-		fact("Max output", out > 0 ? out.toLocaleString("en-US") : undefined);
+		fact("Max output", model.maxTokens === null ? "unknown" : out > 0 ? out.toLocaleString("en-US") : undefined);
 		fact("Price", isFreeModel(model) ? "free" : `${previewPrice(model)} per M`);
 		fact("Speed", speed.length > 0 ? speed.join(" · ") : undefined);
 		fact("Intelligence", model.int != null && Number.isFinite(model.int) ? String(Math.round(model.int)) : undefined);

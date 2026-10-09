@@ -67,20 +67,22 @@ import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mo
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
 	disabledProviderIds,
+	extractExplicitThinkingSelector,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	type ModelMatchPreferences,
-	parseModelPattern,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
 	resolveCliModel,
 	type ResolveCliModelResult,
 	resolveConfiguredModelPatterns,
+	resolveExplicitModelRole,
 	resolveModelRoleValue,
 	resolveSessionModelSelector,
 	sessionModelDiscoveryProviders,
 } from "./config/model-resolver";
+import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { buildServiceTierByFamily } from "./config/service-tier";
@@ -91,6 +93,13 @@ import { createBridgeEditTool, createBridgeGrepFactory } from "./cursor-bridge-t
 import "./discovery";
 import { LiveImageUrlService } from "./blob-broker/service";
 import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
+import {
+	getJchToolsEpochStart,
+	isJchToolsAgentModel,
+	JCHTOOLS_PROVIDER_ID,
+	projectJchToolsContext,
+	streamJchToolsAgent,
+} from "./config/jchtools-provider";
 import { initializeWithSettings } from "./discovery";
 import { setInvocationConfiguredExtensions, withOmpExtensionRootScope } from "./discovery/omp-extension-roots";
 import { disposeVmContextsByOwner } from "./eval/js/context-manager";
@@ -632,7 +641,7 @@ export interface CreateAgentSessionOptions {
 	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
 	prewalk?: Prewalk;
 	/** CLI prewalk selector awaiting extension provider registration; patterns retain role fallback order. */
-	deferredPrewalk?: { target: string; patterns: string[] };
+	deferredPrewalk?: { target: string; patterns: string[]; roleLookup?: ModelRoleLookup };
 	/** Host-owned display sink for non-fatal startup prewalk warnings. */
 	onPrewalkWarning?: (warning: string) => void;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
@@ -1146,11 +1155,18 @@ export async function resolvePrewalkTarget(
 		beforeRefresh,
 		offline = false,
 		settings,
-	}: { deferUnregistered?: boolean; beforeRefresh?: () => Promise<void>; offline?: boolean; settings?: Settings } = {},
+		roleLookup,
+	}: {
+		deferUnregistered?: boolean;
+		beforeRefresh?: () => Promise<void>;
+		offline?: boolean;
+		settings?: Settings;
+		roleLookup?: ModelRoleLookup;
+	} = {},
 ): Promise<{ prewalk?: Prewalk; warnings: string[]; deferred: boolean }> {
 	let refreshedProviders: Set<string> | undefined;
 	const resolveCandidate = (pattern: string) =>
-		resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings });
+		resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings, roleLookup });
 	let authenticated: ResolveCliModelResult | undefined;
 	let firstUnauthenticated: ResolveCliModelResult | undefined;
 	let lastResolution: ResolveCliModelResult | undefined;
@@ -1604,6 +1620,7 @@ export function createAutoLearnCaptureRunner(
 		if (captureTools.length === 0 || signal?.aborted) return;
 		const captureModel = options.sourceAgent.state.model;
 		if (!captureModel) return;
+		if (isJchToolsAgentModel(captureModel)) return;
 
 		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
 		const captureProviderSessionState = new Map<string, ProviderSessionState>();
@@ -2043,6 +2060,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	}
 	await credentialScopedCacheHydration;
+	await modelRegistry.refreshLocalProviders();
 	if (!options.modelRegistry && !options.offline) {
 		modelRegistry.refreshInBackground();
 	}
@@ -2484,10 +2502,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getTelemetry: () => agent?.telemetry,
 			// Subagents inherit the singleton (the parent's manager) so their bash/task
 			// completions still flow into the spawning conversation's yieldQueue.
-			// Secondary in-process top-level sessions (no parentTaskPrefix, no
-			// constructed manager because the singleton was already installed) leave
-			// this undefined so tools and session job snapshots refuse async work
-			// instead of silently routing into the owning session (issue #1923).
+			// Top-level roots share that manager too, each under a lease (see the
+			// construction above): delivery is owner-routed through every session's
+			// own sink, so a secondary root's completions reach its own queue, and
+			// disposing the constructing root cannot cancel another root's work.
 			asyncJobManager: scopedAsyncJobManager,
 		};
 		let browserPrelude: EvalPreludeDefinition | undefined;
@@ -2971,6 +2989,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				disabledProviders.size === 0
 					? modelRegistry.getAvailable()
 					: modelRegistry.getAvailable().filter(candidate => !disabledProviders.has(candidate.provider));
+			// Keep automatic role provenance through every deferred candidate check.
+			const resolveDeferredPattern = (pattern: string, models: Model[]) =>
+				resolveModelRoleValue(pattern, models, { settings, matchPreferences });
 			const expandedModelPatterns = deferredModelPatterns.flatMap(pattern =>
 				pattern.split(",").flatMap(selector => {
 					const trimmedSelector = selector.trim();
@@ -3001,30 +3022,41 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							modelLookup: modelRegistry,
 						};
 						const originalSelector = resolved.configuredPatterns[0];
-						const availableOriginal = parseModelPattern(originalSelector, availableModels, matchPreferences);
+						const availableOriginal = resolveDeferredPattern(originalSelector, availableModels);
 						const originalModel =
-							availableOriginal.model ??
-							parseModelPattern(originalSelector, allEnabledModels, matchPreferences).model;
-						const chainKey = resolveRetryFallbackChainKey(
-							fallbackContext,
-							originalSelector,
-							originalModel,
-							resolved.configuredRole,
-						);
-						if (!chainKey) return primaryPatterns;
+							availableOriginal.model ?? resolveDeferredPattern(originalSelector, allEnabledModels).model;
 						const parsedOriginal = parseModelString(originalSelector, {
 							allowMaxSuffix: true,
 							allowAutoAlias: true,
 							isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 						});
+						const originalThinkingLevel =
+							parsedOriginal?.thinkingLevel ??
+							extractExplicitThinkingSelector(originalSelector, settings, {
+								isLiteralModelId: (provider, id) =>
+									provider !== undefined && modelRegistry.find(provider, id) !== undefined,
+							});
+						// Retry-chain matching still sees the concrete primary and its effort;
+						// persisted recovery retains the role selector that the caller supplied.
+						const chainSelector =
+							originalModel && resolveExplicitModelRole(originalSelector, settings)
+								? formatModelSelectorValue(formatModelStringWithRouting(originalModel), originalThinkingLevel)
+								: originalSelector;
+						const chainKey = resolveRetryFallbackChainKey(
+							fallbackContext,
+							chainSelector,
+							originalModel,
+							resolved.configuredRole,
+						);
+						if (!chainKey) return primaryPatterns;
 						const retryFallback: InitialRetryFallbackState = {
 							role: chainKey,
 							originalSelector,
-							originalThinkingLevel: parsedOriginal?.thinkingLevel,
+							originalThinkingLevel,
 						};
 						return [
 							...primaryPatterns,
-							...findRetryFallbackCandidates(fallbackContext, chainKey, originalSelector, originalModel, {
+							...findRetryFallbackCandidates(fallbackContext, chainKey, chainSelector, originalModel, {
 								allowMissingPrimary: true,
 							}).map(candidate => ({ pattern: candidate.raw, retryFallback })),
 						];
@@ -3040,14 +3072,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							},
 						];
 					}
-					return resolveConfiguredModelPatterns([trimmedSelector], settings).map(pattern => ({
+					return resolveConfiguredModelPatterns([trimmedSelector], settings, {
+						preserveAutomaticRoleAliases: true,
+					}).map(pattern => ({
 						pattern,
 						retryFallback: undefined,
 					}));
 				}),
 			);
 			const resolutionModels = expandedModelPatterns.some(
-				({ pattern }) => parseModelPattern(pattern, availableModels, matchPreferences).model,
+				({ pattern }) => resolveDeferredPattern(pattern, availableModels).model,
 			)
 				? availableModels
 				: allEnabledModels;
@@ -3055,18 +3089,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			let usageFallbackReason: { from: string; reason: string } | undefined;
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
-				const primary = parseModelPattern(pattern, resolutionModels, matchPreferences);
+				const primary = resolveDeferredPattern(pattern, resolutionModels);
 				if (!primary.model || (retryFallback && !hasModelAuth(primary.model))) continue;
+				if (retryFallback && isJchToolsAgentModel(primary.model)) continue;
 				let hasUsageFallbackCandidate = false;
 				for (
 					let candidateIndex = patternIndex + 1;
 					candidateIndex < expandedModelPatterns.length;
 					candidateIndex += 1
 				) {
-					const candidate = parseModelPattern(
+					const candidate = resolveDeferredPattern(
 						expandedModelPatterns[candidateIndex].pattern,
 						resolutionModels,
-						matchPreferences,
 					);
 					if (candidate.model && hasModelAuth(candidate.model)) {
 						hasUsageFallbackCandidate = true;
@@ -3076,6 +3110,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const usageReservePolicy = cfgRetryUsageReservePolicy.get(settings);
 				const modelFallbackEnabled = cfgRetryModelFallback.get(settings);
 				if (
+					!isJchToolsAgentModel(primary.model) &&
 					((modelFallbackEnabled && (hasUsageFallbackCandidate || usageFallbackTriggered)) ||
 						usageReservePolicy === "fail-closed") &&
 					cfgRetryUsageAwareFallback.get(settings)
@@ -3148,11 +3183,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (options.modelPatternAuthFallback) {
 					const primaryKey = await modelRegistry.getApiKey(primary.model);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
-						const fallback = parseModelPattern(
-							options.modelPatternAuthFallback,
-							resolutionModels,
-							matchPreferences,
-						);
+						const fallback = resolveDeferredPattern(options.modelPatternAuthFallback, resolutionModels);
 						if (fallback.model) {
 							const fallbackKey = await modelRegistry.getApiKey(fallback.model);
 							if (isAuthenticated(fallbackKey)) {
@@ -3172,7 +3203,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					const seenSelectors = new Set<string>([primarySelector]);
 					const fallbackSelectors: string[] = [];
 					for (const fallbackEntry of expandedModelPatterns.slice(patternIndex + 1)) {
-						const fallback = parseModelPattern(fallbackEntry.pattern, resolutionModels, matchPreferences);
+						const fallback = resolveDeferredPattern(fallbackEntry.pattern, resolutionModels);
 						if (!fallback.model) continue;
 						const fallbackSelector = formatModelSelectorValue(
 							formatModelStringWithRouting(fallback.model),
@@ -3335,6 +3366,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined,
 					offline: options.offline === true,
 					settings,
+					roleLookup: deferredPrewalk.roleLookup,
 				},
 			);
 			prewalk = selection.prewalk;
@@ -4237,6 +4269,28 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
 		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
+			if (isJchToolsAgentModel(agent?.state.model ?? model)) {
+				// Cut on raw assistants before conversion can erase an empty cancellation.
+				// Frontend notices stay local; user-owned custom tasks remain user text.
+				return convertToLlm(
+					messages
+						.slice(getJchToolsEpochStart(messages))
+						.filter(
+							message =>
+								message.role !== "hookMessage" && (message.role !== "custom" || message.attribution === "user"),
+						)
+						.map(message =>
+							message.role === "custom"
+								? {
+										role: "user" as const,
+										content: message.content,
+										attribution: "user" as const,
+										timestamp: message.timestamp,
+									}
+								: message,
+						),
+				);
+			}
 			const converted = convertToLlm(messages);
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
@@ -4254,12 +4308,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
 		// then applies secret obfuscation to the remaining outbound context.
 		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
-			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
+			const convertedMessages = convertToLlmWithBlockImages(messages);
+			const converted = isJchToolsAgentModel(agent?.state.model ?? model)
+				? convertedMessages
+				: filterProviderReplayMessages(convertedMessages);
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
 
 		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
+			if (isJchToolsAgentModel(agent?.state.model ?? model)) return messages;
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
 		};
@@ -4300,6 +4358,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			blobBroker,
 		);
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+			if (isJchToolsAgentModel(transformModel)) {
+				return projectJchToolsContext(context, sessionManager.getCwd());
+			}
 			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 			transformed = await snapcompactInline.transform(transformed, transformModel);
 			transformed = clampProviderContextImages(transformed, transformModel);
@@ -4381,14 +4442,30 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Outbound credential-pattern redaction follows THIS session's `secrets.enabled` per
 		// request, not the process-wide switch (the newest effect holder's): concurrent ACP/SDK
 		// sessions in one process each keep their own policy.
-		const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) =>
-			withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
+		const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			if (isJchToolsAgentModel(streamModel)) {
+				throw new Error("JchTools remote Agent does not support frontend auxiliary or automatic requests.");
+			}
+			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 				settingsBoundStreamFn(streamModel, context, streamOptions),
 			);
+		};
 		// Primary-agent (and its auto-learn capture twin) provider options read per
 		// request, so `/settings` changes to budgets, Kimi format, or the Codex
 		// websocket policy reach the next call without a session recreate.
 		const primaryStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			if (isJchToolsAgentModel(streamModel)) {
+				const liveModel =
+					streamModel.provider === JCHTOOLS_PROVIDER_ID
+						? modelRegistry.find(JCHTOOLS_PROVIDER_ID, streamModel.id)
+						: streamModel;
+				if (!liveModel || !isJchToolsAgentModel(liveModel)) {
+					throw new Error("JchTools remote Agent is unavailable; no request was sent.");
+				}
+				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
+					streamJchToolsAgent(liveModel, context, { signal: streamOptions?.signal }),
+				);
+			}
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
 			return settingsAwareStreamFn(streamModel, context, {
 				...streamOptions,
@@ -4427,7 +4504,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// through getters, so mid-session settings UI toggles take effect without
 		// a session recreate. The single shared host keeps its evidence across
 		// toggles; per-turn coordinator close never touches it.
-		const speculativeToolExecution = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
+		const localSpeculation = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
+		const speculativeToolExecution = {
+			get enabled() {
+				return !isJchToolsAgentModel(agent?.state.model ?? model) && localSpeculation.enabled;
+			},
+			get maxInFlight() {
+				return localSpeculation.maxInFlight;
+			},
+			host: localSpeculation.host,
+		};
 
 		agent = new Agent({
 			initialState: {
@@ -4469,6 +4555,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						});
 					}
 				}
+				if (isJchToolsAgentModel(streamModel)) {
+					return primaryStreamFn(streamModel, context, { signal: streamOptions?.signal });
+				}
 				const externalThinking =
 					cfgExternalThinking.get(settings) &&
 					agent.state.tools.some(tool => tool.name === "think") &&
@@ -4498,6 +4587,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// A stray sloppy payload in plain text becomes a real edit tool call so
 			// the normal pipeline (validation, approval, rendering) executes it.
 			transformAssistantMessage: async (message, signal) => {
+				if (isJchToolsAgentModel(message)) return;
 				if (cfgEditRecoverInlineEdits.get(settings)) {
 					// The live tool is an ExtensionToolWrapper whose proxy forwards the
 					// EditTool `mode` getter; a bridge/custom edit tool without a sloppy
@@ -4525,7 +4615,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			dialectResolver: dialectModel => resolveDialect(cfgToolsFormat.get(settings), dialectModel),
 			abortOnFabricatedToolResult: cfgToolsAbortOnFabricatedResult.get(settings),
 			speculativeToolExecution,
-			getToolChoice: () => session?.nextToolChoiceDirective(),
+			getToolChoice: () =>
+				isJchToolsAgentModel(agent.state.model) ? undefined : session?.nextToolChoiceDirective(),
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
@@ -4539,6 +4630,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
+			if (isJchToolsAgentModel(model)) {
+				existingSession = deobfuscateSessionContext(
+					sessionManager.buildSessionContext({ preserveFailedTurns: true }),
+					obfuscator,
+				);
+			}
 			agent.replaceMessages(existingSession.messages);
 			if (persistInitialServiceTier) {
 				sessionManager.appendServiceTierChange(
@@ -5286,6 +5383,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					convertToLlm: convertToLlmFinal,
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
+						if (isJchToolsAgentModel(transformModel)) {
+							return projectJchToolsContext(context, sessionManager.getCwd());
+						}
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 						transformed = clampProviderContextImages(transformed, transformModel);
 						transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);

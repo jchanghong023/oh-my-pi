@@ -1,0 +1,6 @@
+// JchTools runs a remote Agent with a live, same-session discovered catalog.
+// Explicit selection must not change ordinary automatic model or role defaults.
+provider "jchtools" {
+	allow-unauthenticated #true
+	automatic-default #false
+}

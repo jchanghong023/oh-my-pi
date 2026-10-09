@@ -36,9 +36,15 @@ export class RepoLifecycle {
 		if (cwd !== this.#cwd) {
 			this.#service?.close();
 			this.#service = undefined;
+			this.#cwd = undefined;
+			this.#root = undefined;
+			this.#indexPath = undefined;
+			// Invalidate the old cwd before resolution so a missing new directory
+			// retries on the next hint, even if the session returns to the old cwd.
+			const root = resolveRepoRoot(cwd);
 			this.#cwd = cwd;
-			this.#root = resolveRepoRoot(cwd);
-			this.#indexPath = repoIndexPath(this.#agentDir, this.#root);
+			this.#root = root;
+			this.#indexPath = repoIndexPath(this.#agentDir, root);
 		}
 		if (this.#service?.storage.recoveryError) {
 			// An independently recovered index replaces its database file; reopen this

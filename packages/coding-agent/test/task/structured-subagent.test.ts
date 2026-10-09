@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import { AuthStorage, type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import {
 	disableProvider,
 	enableProvider,
@@ -11,12 +14,20 @@ import {
 } from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import {
+	normalizeModelPatternList,
+	resolveAdvisorRoleSelection,
+	resolveModelOverride,
+} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import * as planHandoff from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { createEvalCustomTools } from "@oh-my-pi/pi-coding-agent/task/eval-tools";
@@ -32,6 +43,7 @@ import {
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 
 import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
@@ -118,12 +130,182 @@ function mockDiscovery(agent: AgentDefinition = AGENT): void {
 	vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
 }
 
+function consumerModel(provider: string, id: string): Model<Api> {
+	return buildModel({
+		id,
+		name: `${provider}/${id}`,
+		provider,
+		api: "openai-completions",
+		baseUrl: "https://model-selection.invalid",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	});
+}
+
+async function withConsumerCatalog(
+	body: (fixture: {
+		parent: ToolSession;
+		selections: Array<{ model?: Model<Api>; thinkingLevel?: string }>;
+		advisors: Array<{ model?: Model<Api>; thinkingLevel?: string } | undefined>;
+		setModels: (models: Model<Api>[]) => void;
+	}) => Promise<void>,
+): Promise<void> {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-subagent-model-selection-"));
+	const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+	let models: Model<Api>[] = [];
+	const available = vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
+	const selections: Array<{ model?: Model<Api>; thinkingLevel?: string }> = [];
+	const advisors: Array<{ model?: Model<Api>; thinkingLevel?: string } | undefined> = [];
+	// Exercise the actual executor's resolution and deferred SDK inputs, stopping
+	// at session creation so this selection regression sends no provider request.
+	const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+		const selected = options?.model
+			? { model: options.model, thinkingLevel: options.thinkingLevel }
+			: resolveModelOverride(normalizeModelPatternList(options?.modelPattern), modelRegistry, options?.settings);
+		selections.push(selected);
+		advisors.push(options?.settings ? resolveAdvisorRoleSelection(options.settings, models) : undefined);
+		throw new Error("model selection boundary reached");
+	});
+	const parent = session({ cwd });
+	parent.modelRegistry = modelRegistry;
+	parent.authStorage = authStorage;
+	parent.enableLsp = false;
+	parent.enableIrc = false;
+	const jobs = new AsyncJobManager({ onJobComplete: () => {} });
+	parent.asyncJobManager = jobs;
+	parent.getSessionId = () => "model-selection-parent";
+	parent.getArtifactsDir = () => null;
+	try {
+		await body({
+			parent,
+			selections,
+			advisors,
+			setModels: next => {
+				models = next;
+			},
+		});
+	} finally {
+		await jobs.waitForAll();
+		await jobs.dispose();
+		create.mockRestore();
+		available.mockRestore();
+		VibeSessionRegistry.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		await authStorage.close();
+		await fs.rm(cwd, { recursive: true, force: true });
+	}
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 	resetRegisteredArtifactDirsForTests();
 });
 
 describe("structured subagent primitive", () => {
+	it("keeps automatic task and eval role choices out of a remote-only catalog", async () => {
+		mockDiscovery({ ...AGENT, model: ["@smol:high"] });
+		const remote = consumerModel("jchtools", "claude-haiku-5-5");
+		const ordinary = consumerModel("anthropic", "claude-haiku-5-5");
+		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
+			for (const invocationKind of ["task", "eval"] satisfies StructuredSubagentRequest["invocationKind"][]) {
+				setModels([remote]);
+				await runStructuredSubagent(request({ session: parent, invocationKind }));
+				expect(selections.at(-1)?.model).toBeUndefined();
+				setModels([remote, ordinary]);
+				await runStructuredSubagent(request({ session: parent, invocationKind }));
+				expect(selections.at(-1)?.model).toBe(ordinary);
+				expect(selections.at(-1)?.thinkingLevel).toBe("high");
+			}
+			expect(selections).toHaveLength(4);
+		});
+	});
+
+	it("preserves automatic spawn-hook roles while allowing explicit agent and configured role selections", async () => {
+		mockDiscovery({ ...AGENT, model: ["@smol"] });
+		const remote = consumerModel("jchtools", "claude-haiku-5-5");
+		const ordinary = consumerModel("anthropic", "claude-haiku-5-5");
+		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
+			parent.emitBeforeSubagentSpawn = async () => ({ model: "@smol:high" });
+			setModels([remote]);
+			await runStructuredSubagent(request({ session: parent }));
+			expect(selections.at(-1)?.model).toBeUndefined();
+			setModels([remote, ordinary]);
+			await runStructuredSubagent(request({ session: parent }));
+			expect(selections.at(-1)?.model).toBe(ordinary);
+			expect(selections.at(-1)?.thinkingLevel).toBe("high");
+			parent.emitBeforeSubagentSpawn = undefined;
+			setModels([remote]);
+			cfgTaskAgentModelOverrides.override(parent.settings, { worker: "jchtools/claude-haiku-5-5:high" });
+			await runStructuredSubagent(request({ session: parent }));
+			expect(selections.at(-1)?.model).toBe(remote);
+			expect(selections.at(-1)?.thinkingLevel).toBe("high");
+			cfgTaskAgentModelOverrides.override(parent.settings, {});
+			parent.settings.setModelRole("smol", "jchtools/claude-haiku-5-5:high");
+			await runStructuredSubagent(request({ session: parent }));
+			expect(selections.at(-1)?.model).toBe(remote);
+			expect(selections.at(-1)?.thinkingLevel).toBe("high");
+			expect(selections).toHaveLength(4);
+		});
+	});
+
+	it("keeps both vibe worker tiers role-aware without preventing an explicit remote override", async () => {
+		const remoteFast = consumerModel("jchtools", "claude-haiku-5-5");
+		const ordinaryFast = consumerModel("anthropic", "claude-haiku-5-5");
+		const remoteGood = consumerModel("jchtools", "gpt-5.6-sol");
+		const ordinaryGood = consumerModel("openai-codex", "gpt-5.6-sol");
+		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
+			parent.settings.setModelRole("task", "@slow");
+			for (const [cli, remote, ordinary] of [
+				["fast", remoteFast, ordinaryFast],
+				["good", remoteGood, ordinaryGood],
+			] as const) {
+				setModels([remote]);
+				await VibeSessionRegistry.global().spawn(parent, { cli, prompt: "Inspect the target." });
+				await parent.asyncJobManager?.waitForAll();
+				expect(selections.at(-1)?.model).toBeUndefined();
+				setModels([remote, ordinary]);
+				await VibeSessionRegistry.global().spawn(parent, { cli, prompt: "Inspect the target." });
+				await parent.asyncJobManager?.waitForAll();
+				expect(selections.at(-1)?.model).toBe(ordinary);
+			}
+			setModels([remoteGood]);
+			cfgTaskAgentModelOverrides.override(parent.settings, { task: "jchtools/gpt-5.6-sol:high" });
+			await VibeSessionRegistry.global().spawn(parent, { cli: "good", prompt: "Inspect the target." });
+			await parent.asyncJobManager?.waitForAll();
+			expect(selections.at(-1)?.model).toBe(remoteGood);
+			expect(selections.at(-1)?.thinkingLevel).toBe("high");
+			expect(selections).toHaveLength(5);
+		});
+	});
+
+	it("stamps automatic advisors without recursive selection or losing explicit owner choices", async () => {
+		mockDiscovery({ ...AGENT, model: ["anthropic/claude-haiku-5-5"], advisor: "@advisor:high" });
+		const primary = consumerModel("anthropic", "claude-haiku-5-5");
+		const remote = consumerModel("jchtools", "gpt-5.6-sol");
+		const ordinary = consumerModel("openai-codex", "gpt-5.6-sol");
+		await withConsumerCatalog(async ({ parent, selections, advisors, setModels }) => {
+			setModels([primary, remote]);
+			await runStructuredSubagent(request({ session: parent }));
+			expect(selections.at(-1)?.model).toBe(primary);
+			expect(advisors.at(-1)).toBeUndefined();
+			setModels([primary, remote, ordinary]);
+			await runStructuredSubagent(request({ session: parent }));
+			expect(advisors.at(-1)?.model).toBe(ordinary);
+			expect(advisors.at(-1)?.thinkingLevel).toBe("high");
+			parent.settings.setModelRole("advisor", "@advisor,jchtools/gpt-5.6-sol");
+			setModels([primary, remote]);
+			await runStructuredSubagent(request({ session: parent }));
+			expect(advisors.at(-1)?.model).toBe(remote);
+			expect(advisors.at(-1)?.thinkingLevel).toBe("high");
+			expect(advisors).toHaveLength(3);
+		});
+	});
+
 	it("resolves user-tagged model agents for task and eval but rejects untagged names", async () => {
 		mockDiscovery();
 		const taggedSession = session();

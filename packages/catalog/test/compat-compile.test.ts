@@ -4,9 +4,10 @@ import { compileCompatRules, renderAuthIds } from "../scripts/compat-compiler";
 import { compileAuth } from "../scripts/compat-compiler/compile-auth";
 import { compileBehavior } from "../scripts/compat-compiler/compile-behavior";
 import { compileCascade } from "../scripts/compat-compiler/compile-cascade";
-import { compileProviders } from "../scripts/compat-compiler/compile-providers";
+import { compileProviders, renderProviderIds } from "../scripts/compat-compiler/compile-providers";
 import { compileTaxonomy } from "../scripts/compat-compiler/compile-taxonomy";
 import { cursorModelParameters } from "../src/compat/behavior";
+import type { CompiledProvider } from "../src/compat/types";
 import committed from "../src/compat/rules.json";
 
 const AUTH_IDS_PATH = path.join(import.meta.dir, "../src/compat/auth-ids.ts");
@@ -428,7 +429,7 @@ describe("provider catalog grammar", () => {
 		[`\tseed ${header} {`, ...row.map(line => (line === "$AXES" ? axes : line)), "\t}"].join("\n");
 	const src = (text: string) => [{ file: "providers/p.kdl", text }];
 
-	test("entry nodes compile alongside cascade rules; catalog membership requires default-model", () => {
+	test("catalog entry nodes compile alongside cascade rules and retain a declared default", () => {
 		const compiled = compileProviders(
 			src(
 				provider("p", [
@@ -469,6 +470,93 @@ describe("provider catalog grammar", () => {
 		expect(() => compileProviders(src(provider("p", ['\tenv "P_KEY"'])))).toThrow(
 			/providers\/p\.kdl:1.*has catalog nodes but no default-model/,
 		);
+	});
+
+	test("runtime-only policy survives serialization without inventing a model catalog or default", () => {
+		const sources = src(
+			[
+				provider("runtime", [
+					"\tautomatic-default #false",
+					"\tallow-unauthenticated #true",
+					"\tdynamic-models-authoritative #true",
+					'\tenv "RUNTIME_KEY"',
+					"\tsupports-store #false",
+				]),
+				provider("wire", ["\tsupports-store #false"]),
+			].join("\n"),
+		);
+		const compiled = compileProviders(sources);
+		// Runtime metadata remains available even when no model ID is known.
+		expect(compiled.runtime.automaticDefault).toBe(false);
+		expect(compiled.runtime.allowUnauthenticated).toBe(true);
+		expect(compiled.runtime.dynamicModelsAuthoritative).toBe(true);
+		expect(compiled.runtime.envVars).toEqual(["RUNTIME_KEY"]);
+		// Persisted consumers must observe absent catalog facts, not placeholders.
+		const persisted = JSON.parse(JSON.stringify(compiled)) as Record<string, CompiledProvider>;
+		expect(persisted.runtime).not.toHaveProperty("defaultModel");
+		expect(persisted.runtime).not.toHaveProperty("seed");
+		expect(persisted.runtime).not.toHaveProperty("discovery");
+		expect(persisted.runtime).not.toHaveProperty("kindApis");
+		expect(persisted).not.toHaveProperty("wire");
+		expect(renderProviderIds(compiled)).toContain('\t| "runtime"');
+		expect(renderProviderIds(compiled)).not.toContain('\t| "wire"');
+		expect(compileCascade(sources).rules).toEqual([
+			{ source: "providers/p.kdl:1", providers: ["runtime"], wire: { supportsStore: false } },
+			{ source: "providers/p.kdl:8", providers: ["wire"], wire: { supportsStore: false } },
+		]);
+	});
+
+	test("a missing default requires an explicit automatic-selection opt-out", () => {
+		expect(compileProviders(src(provider("p", ["\tautomatic-default #false"])))).toEqual({
+			p: { id: "p", automaticDefault: false },
+		});
+		expect(() => compileProviders(src(provider("p", ["\tallow-unauthenticated #true"])))).toThrow(
+			/providers\/p\.kdl:1.*no default-model.*require automatic-default #false/,
+		);
+		expect(() => compileProviders(src(provider("p", ["\tautomatic-default #true"])))).toThrow(
+			/providers\/p\.kdl:1.*no default-model.*require automatic-default #false/,
+		);
+		// Opting out of automatic selection does not erase a real declared default.
+		expect(
+			compileProviders(src(provider("p", ['\tdefault-model "m"', "\tautomatic-default #false"]))).p.defaultModel,
+		).toBe("m");
+	});
+
+	for (const [name, declaration] of [
+		["discovery", '\tdiscovery label="P"'],
+		["kind-apis", '\tkind-apis {\n\t\timage "openai-images"\n\t}'],
+		["seed", seed('api="openai-completions" base-url="https://x"')],
+		["skip-cross-provider-reference-fills", "\tskip-cross-provider-reference-fills #true"],
+	] as const) {
+		test(`${name} still requires a default even with an explicit automatic-selection opt-out`, () => {
+			expect(() => compileProviders(src(provider("p", ["\tautomatic-default #false", declaration])))).toThrow(
+				/providers\/p\.kdl:1.*has catalog nodes but no default-model/,
+			);
+			expect(
+				compileProviders(src(provider("p", ["\tautomatic-default #false", declaration, '\tdefault-model "m"']))).p
+					.defaultModel,
+			).toBe("m");
+		});
+	}
+
+	test("runtime-only entries still reject malformed and duplicate declarations", () => {
+		expect(() => compileProviders(src(provider("p", ['\tautomatic-default "false"'])))).toThrow(
+			/providers\/p\.kdl:2.*directive `automatic-default` has a malformed value/,
+		);
+		expect(() =>
+			compileProviders(src(provider("p", ["\tautomatic-default #false", "\tautomatic-default #false"]))),
+		).toThrow(/providers\/p\.kdl:3.*directive `automatic-default` has a malformed value/);
+		expect(() =>
+			compileProviders(src(provider("p", ["\tautomatic-default #false", "\tallow-unauthenticated #true #false"]))),
+		).toThrow(/providers\/p\.kdl:3.*directive `allow-unauthenticated` has a malformed value/);
+		expect(() => compileProviders(src(provider("p", ["\tautomatic-default #false", '\tdefault-model ""'])))).toThrow(
+			/providers\/p\.kdl:3.*directive `default-model` has a malformed value/,
+		);
+		expect(() =>
+			compileProviders(
+				src([provider("p", ["\tautomatic-default #false"]), provider("p", ['\tdefault-model "m"'])].join("\n")),
+			),
+		).toThrow(/providers\/p\.kdl:4.*duplicate catalog provider `p`/);
 	});
 
 	test("runner seeds and per-kind APIs compile without entering the cascade", () => {

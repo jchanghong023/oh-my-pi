@@ -3,11 +3,15 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { JCHTOOLS_API } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
+import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { Component } from "@oh-my-pi/pi-tui";
+import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import {
 	buildBrowserItems,
 	buildSearchAffinity,
@@ -19,6 +23,7 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
+import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
 /** Optional presentation metadata a catalog or discovery source may attach. */
 type NativeMetadata = Pick<Model, "description" | "isNew" | "isBeta" | "isRecommended" | "int" | "tps"> &
@@ -542,6 +547,206 @@ describe("ModelBrowser native model metadata", () => {
 		expect(detailRow).toContain("$100/0.001 per M");
 		expect(tinyRow).toContain("$0.0000001/0.001");
 		expect(rows.every(line => Bun.stringWidth(line) <= 100)).toBe(true);
+	});
+});
+
+describe("unknown remote Agent capacity", () => {
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	function remoteModel(): Model {
+		return buildModel({
+			id: "backend-agent",
+			name: "Backend agent",
+			api: JCHTOOLS_API,
+			provider: "jchtools",
+			baseUrl: "http://127.0.0.1:31415",
+			reasoning: false,
+			supportsTools: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			pricingStatus: "unknown",
+			contextWindow: null,
+			maxTokens: null,
+		});
+	}
+
+	function nativeNodes(children: readonly NativeChild[]): NativeNode[] {
+		return children.flatMap(child => ("k" in child ? [child, ...nativeNodes(child.c ?? [])] : []));
+	}
+
+	function capacityBrowser(models: Model[], tokens = 100_000): ModelBrowser {
+		const browser = new ModelBrowser(createModelBrowserSource(Settings.isolated({})), {
+			currentContextTokens: tokens,
+			markOverContext: true,
+		});
+		browser.setItems(buildBrowserItems(models));
+		return browser;
+	}
+
+	test("long ordinary transcripts do not mark or block an unknown remote Agent selection", () => {
+		const remote = remoteModel();
+		const known = makeModel("demo", "known-capacity");
+		known.contextWindow = 32_768;
+		known.maxTokens = 4096;
+		const browser = capacityBrowser([remote, known]);
+		const items = buildBrowserItems([remote, known]);
+		const selected: string[] = [];
+		browser.onActivate = item => selected.push(item.selector);
+		browser.selectSelector("jchtools/backend-agent");
+
+		expect(browser.isOverContext(items[0]!)).toBe(false);
+		expect(browser.isOverContext(items[1]!)).toBe(true);
+		browser.handleInput("\r");
+		expect(selected).toEqual(["jchtools/backend-agent"]);
+		const lines = browser.render(180).map(line => Bun.stripANSI(line));
+		expect(lines.find(line => line.includes("jchtools/backend-agent"))).not.toContain("context>");
+		expect(lines.find(line => line.includes("demo/known-capacity"))).toContain("context>");
+		const detail = lines[lines.length - 2]!;
+		expect(detail).toContain("ctx unknown · out unknown");
+		expect(detail).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k/);
+		expect(lines[lines.length - 1]).not.toContain("compacts");
+	});
+
+	test.each([32_768, 32_769])("known capacity keeps its exact over-context boundary at %s tokens", tokens => {
+		const known = makeModel("demo", "known-capacity");
+		known.contextWindow = 32_768;
+		const browser = capacityBrowser([known, remoteModel()], tokens);
+		const items = buildBrowserItems([known, remoteModel()]);
+		expect(browser.isOverContext(items[0]!)).toBe(tokens > 32_768);
+		expect(browser.isOverContext(items[1]!)).toBe(false);
+	});
+
+	test("native rows, legacy detail and both picker previews expose unknown rather than budget facts", () => {
+		const remote = remoteModel();
+		const known = makeModel("demo", "known-capacity");
+		known.contextWindow = 32_768;
+		known.maxTokens = 4096;
+		const browser = capacityBrowser([remote, known]);
+		const items = buildBrowserItems([remote, known]);
+		browser.selectSelector("jchtools/backend-agent");
+
+		const pickerRows = browser.pickerItems(items).items;
+		expect(pickerRows.find(item => item.id === "jchtools/backend-agent")?.facts?.ctx).toBe("?");
+		expect(pickerRows.find(item => item.id === "demo/known-capacity")?.facts?.ctx).toBe(32_768);
+		expect(pickerRows.find(item => item.id === "jchtools/backend-agent")?.badges ?? []).not.toContainEqual(
+			expect.objectContaining({ tone: "warning" }),
+		);
+		expect(pickerRows.find(item => item.id === "demo/known-capacity")?.badges).toContainEqual(
+			expect.objectContaining({ tone: "warning" }),
+		);
+		const described = nativeNodes([browser.describe()]);
+		const remoteRow = described.find(node => node.k === "item" && node.key === "jchtools/backend-agent");
+		expect(remoteRow?.p).not.toHaveProperty("tone", "muted");
+		const detail = described.find(node => node.key === "detail");
+		expect(JSON.stringify(detail)).toContain("ctx unknown · out unknown");
+		expect(JSON.stringify(detail)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k|compacts/);
+
+		const compact = nativeNodes(browser.pickerPreview("compact")).find(node => node.k === "kv");
+		expect(compact?.p?.items).toEqual(
+			expect.arrayContaining([
+				{ k: "ctx", v: "unknown" },
+				{ k: "out", v: "unknown" },
+			]),
+		);
+		const full = browser.pickerPreview("full");
+		expect(JSON.stringify(full)).toContain('"t":"Context"');
+		expect(JSON.stringify(full)).toContain('"t":"Max output"');
+		expect(JSON.stringify(full)).toContain('"t":"unknown"');
+		expect(JSON.stringify(full)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k|compacts/);
+
+		browser.selectSelector("demo/known-capacity");
+		const knownFull = JSON.stringify(browser.pickerPreview("full"));
+		expect(knownFull).toContain("32,768");
+		expect(knownFull).toContain("4,096");
+		expect(knownFull).toContain("compacts");
+	});
+
+	test.each(["switch", "picker"] as const)(
+		"%s changes to the remote Agent without pre-compaction even with a stale local budget",
+		async entry => {
+			const remote = remoteModel();
+			// A cached row from before discovery refresh may still carry the old
+			// frontend placeholder. The API's isolated history must win over it.
+			remote.contextWindow = 32_768;
+			remote.maxTokens = 4096;
+			const ordinary = makeModel("demo", "ordinary");
+			const available = [ordinary, remote];
+			const settled = Promise.withResolvers<void>();
+			let applied: Model | undefined;
+			let compactions = 0;
+			let picker: Component | undefined;
+			const ctx = createInteractiveModeContext({
+				session: {
+					model: ordinary,
+					scopedModels: [],
+					getContextUsage: () => ({ tokens: 100_000, contextWindow: 128_000, percent: 78.125 }),
+					getRoleModelCycle: () => undefined,
+					resolveTemporaryModelThinkingLevel: () => ThinkingLevel.Inherit,
+					effectiveServiceTier: () => undefined,
+					setModelTemporary: async model => {
+						applied = model;
+						settled.resolve();
+					},
+					modelRegistry: {
+						getError: () => undefined,
+						getAvailable: () => available,
+						getAll: () => available,
+						refreshIfStale: async () => false,
+					},
+				},
+				ui: {
+					showOverlay: component => {
+						picker = component;
+						return { hide: () => {}, setHidden: () => {}, isHidden: () => false };
+					},
+				},
+				handleCompactCommand: async () => {
+					compactions++;
+					settled.resolve();
+					return "cancelled";
+				},
+			});
+			const controller = new SelectorController(ctx);
+			if (entry === "switch") {
+				await controller.switchSessionModel(remote);
+			} else {
+				controller.showModelSelector({ temporaryOnly: true });
+				expect(picker).toBeDefined();
+				picker!.handleInput?.("backend-agent");
+				picker!.handleInput?.("\r");
+			}
+			await settled.promise;
+			expect(applied).toBe(remote);
+			expect(compactions).toBe(0);
+		},
+	);
+
+	test("ordinary provider switches still compact first and cancellation retains the current model", async () => {
+		const ordinary = makeModel("demo", "ordinary");
+		const smaller = makeModel("demo", "smaller");
+		smaller.contextWindow = 32_768;
+		let active = ordinary;
+		let compactions = 0;
+		const ctx = createInteractiveModeContext({
+			session: {
+				model: ordinary,
+				getContextUsage: () => ({ tokens: 100_000, contextWindow: 128_000, percent: 78.125 }),
+				resolveTemporaryModelThinkingLevel: () => ThinkingLevel.Inherit,
+				setModelTemporary: async model => {
+					active = model;
+				},
+			},
+			handleCompactCommand: async () => {
+				compactions++;
+				return "cancelled";
+			},
+		});
+
+		await new SelectorController(ctx).switchSessionModel(smaller);
+		expect(compactions).toBe(1);
+		expect(active).toBe(ordinary);
 	});
 });
 

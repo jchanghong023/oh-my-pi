@@ -15,6 +15,7 @@ import {
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelPickerCatalogue,
+	resolveLiveScopedModels,
 } from "./model-browser";
 import type { ModelBrowserRegistry, ModelBrowserSource } from "./model-browser";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -41,6 +42,8 @@ export interface ResolvedRoleModel {
 export interface ModelPickerRegistry extends ModelBrowserRegistry {
 	/** Bring the catalog up to date without rebuilding a current one; `true` when the picker must re-read it. */
 	refreshIfStale(): Promise<boolean>;
+	/** Fresh bounded local lookup only; does not refresh unrelated online providers. */
+	refreshLocalProviders?(): Promise<boolean>;
 }
 
 export interface ModelPickerCallbacks {
@@ -174,8 +177,17 @@ export class ModelPickerComponent implements Component {
 		this.#browser.onActivate = item => {
 			const quickRole = this.#quickRoles.get(item.selector);
 			if (quickRole) {
-				callbacks.onPickRole?.(quickRole);
+				const model =
+					quickRole.model.provider === "jchtools"
+						? resolveLiveScopedModels(this.#registry, [quickRole.model])[0]
+						: quickRole.model;
+				if (model) callbacks.onPickRole?.(model === quickRole.model ? quickRole : { ...quickRole, model });
 				return;
+			}
+			if (item.model.provider === "jchtools") {
+				const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
+				if (!model) return;
+				item = { ...item, model };
 			}
 			if (this.#taskMode) {
 				callbacks.onPickTask?.(item.model, item.selector);
@@ -194,20 +206,19 @@ export class ModelPickerComponent implements Component {
 			this.#browser.selectSelector(options.currentSelector);
 		}
 
-		// Re-read only if the catalog moves (startup discovery landing, a
-		// models.yml edit): rebuilding a current catalog on every open blocks
-		// the first paint for seconds. A --models scope is registry-independent.
-		if (this.#scopedModels.length === 0) {
-			this.#registry
-				.refreshIfStale()
-				.then(changed => {
-					if (changed) this.#syncFromRegistryState();
-				})
-				.catch(error => {
-					this.#configError = error instanceof Error ? error.message : String(error);
-				})
-				.finally(() => this.#tui.requestRender());
-		}
+		// Reconcile cached state and the live local service without refreshing
+		// unrelated provider networks or delaying the first paint.
+		Promise.all([
+			this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false),
+			this.#registry.refreshLocalProviders?.() ?? Promise.resolve(false),
+		])
+			.then(changes => {
+				if (changes.some(Boolean)) this.#syncFromRegistryState();
+			})
+			.catch(error => {
+				this.#configError = error instanceof Error ? error.message : String(error);
+			})
+			.finally(() => this.#tui.requestRender());
 	}
 
 	invalidate(): void {}

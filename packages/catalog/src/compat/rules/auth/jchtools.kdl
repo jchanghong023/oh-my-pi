@@ -1,0 +1,5 @@
+// The discovered local backend owns authentication; no client key or login flow.
+auth "jchtools" {
+	name "JchTools (local backend Agent)"
+	allows-missing-api-key #true
+}

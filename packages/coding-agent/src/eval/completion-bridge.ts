@@ -18,14 +18,14 @@ import { type Api, type AssistantMessage, Effort, type Model, type Tool } from "
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
 import type { ModelRegistry } from "../config/model-registry";
 import {
-	expandRoleAlias,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
-	resolveModelFromString,
+	resolveModelRoleValue,
 	resolveModelOverride,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -39,7 +39,7 @@ import {
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
-import { shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import { concreteThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { JsStatusEvent } from "./js/shared/types";
 
 import { cfgDisabledProviders } from "../config/model-settings";
@@ -235,11 +235,14 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	if (available.length === 0) return [];
 
 	const matchPreferences = getModelMatchPreferences(session.settings);
-	const resolve = (pattern: string | undefined): { model: Model<Api>; selector: string } | undefined => {
+	const resolve = (
+		pattern: string | undefined,
+	): { model: Model<Api>; selector: string; thinkingLevel?: ThinkingLevel } | undefined => {
 		if (!pattern) return undefined;
-		const selector = expandRoleAlias(pattern, session.settings);
-		const model = resolveModelFromString(selector, available, matchPreferences);
-		return model ? { model, selector } : undefined;
+		const resolved = resolveModelRoleValue(pattern, available, { settings: session.settings, matchPreferences });
+		return resolved.model
+			? { model: resolved.model, selector: pattern, thinkingLevel: concreteThinkingLevel(resolved.thinkingLevel) }
+			: undefined;
 	};
 	const primary =
 		tier === "default"
@@ -248,7 +251,11 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	if (!primary) return [];
 
 	const candidates: CompletionCandidate[] = [
-		{ selector: primary.selector, model: primary.model, ...reasoningForCandidate(tier, primary.model) },
+		{
+			selector: primary.selector,
+			model: primary.model,
+			...reasoningForCandidate(tier, primary.model, primary.thinkingLevel),
+		},
 	];
 	const retry = cfgRetry.get(session.settings);
 	if (!retry.enabled || !retry.modelFallback) return candidates;
@@ -322,6 +329,7 @@ async function executeCompletion(
 	let lastError: unknown;
 	let retriesUsed = 0;
 	let completed = false;
+	// Backend Agent failures are terminal, even inside an ordinary model's fallback chain.
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
@@ -333,6 +341,7 @@ async function executeCompletion(
 				lastError = new ToolError(
 					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
 				);
+				if (isJchToolsAgentModel(model)) throw lastError;
 				continue;
 			}
 			if (index > 0) retriesUsed += 1;
@@ -354,7 +363,7 @@ async function executeCompletion(
 			);
 		} catch (error) {
 			lastError = error;
-			if (signal.aborted || index === candidates.length - 1) throw error;
+			if (isJchToolsAgentModel(model) || signal.aborted || index === candidates.length - 1) throw error;
 			continue;
 		}
 		if (response.stopReason === "aborted") {
@@ -362,7 +371,7 @@ async function executeCompletion(
 		}
 		if (response.stopReason === "error") {
 			lastError = new ToolError(response.errorMessage ?? "completion() request failed.");
-			if (!signal.aborted && index < candidates.length - 1) continue;
+			if (!isJchToolsAgentModel(model) && !signal.aborted && index < candidates.length - 1) continue;
 			throw lastError;
 		}
 		completed = true;

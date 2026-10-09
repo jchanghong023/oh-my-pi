@@ -1938,7 +1938,7 @@ export class AcpAgent implements Agent {
 			});
 		} catch (error) {
 			logger.warn("Failed to autosave approved plan", {
-				sessionId: session.sessionId,
+				sessionId: record.protocolSessionId,
 				error,
 			});
 			autosaveFailed = true;
@@ -1951,7 +1951,7 @@ export class AcpAgent implements Agent {
 			await this.#pushConfigOptionUpdate(record);
 		} catch (error) {
 			logger.warn("Failed to emit mode updates after plan approval", {
-				sessionId: session.sessionId,
+				sessionId: record.protocolSessionId,
 				error,
 			});
 		}

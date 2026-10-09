@@ -119,4 +119,50 @@ describe("prewalk startup degradation", () => {
 		expect(options.prewalk?.target.provider).toBe(model.provider);
 		expect(options.prewalk?.target.id).toBe(model.id);
 	});
+
+	test.each(["default", "@default", "@smol"])(
+		"preserves the configured default and thinking before --model for explicit prewalk %s",
+		async target => {
+			const original = getBundledModel("anthropic", "claude-sonnet-4-5");
+			const override = getBundledModel("openai", "gpt-4o");
+			if (!original || !override) throw new Error("expected bundled prewalk models");
+			const settings = Settings.isolated();
+			settings.setModelRole("default", `${original.provider}/${original.id}:off`);
+			authStorage.keys.setRuntime(original.provider, "test-key");
+			authStorage.keys.setRuntime(override.provider, "test-key");
+
+			const options = await buildSessionOptions(
+				parseArgs(["--model", `${override.provider}/${override.id}`, "--prewalk-into", target]),
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			);
+
+			expect(options.model?.id).toBe(override.id);
+			expect(options.prewalk?.target.id).toBe(original.id);
+			expect(options.prewalk?.thinkingLevel).toBe("off");
+		},
+	);
+
+	test("an explicit prewalk thinking suffix overrides the pre-model default thinking", async () => {
+		const original = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const override = getBundledModel("openai", "gpt-4o");
+		if (!original || !override) throw new Error("expected bundled prewalk models");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", `${original.provider}/${original.id}:high`);
+		authStorage.keys.setRuntime(original.provider, "test-key");
+		authStorage.keys.setRuntime(override.provider, "test-key");
+
+		const options = await buildSessionOptions(
+			parseArgs(["--model", `${override.provider}/${override.id}`, "--prewalk-into", "@default:off"]),
+			[],
+			SessionManager.inMemory(),
+			modelRegistry,
+			settings,
+		);
+
+		expect(options.prewalk?.target.id).toBe(original.id);
+		expect(options.prewalk?.thinkingLevel).toBe("off");
+	});
 });

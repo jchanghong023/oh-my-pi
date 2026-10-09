@@ -282,6 +282,91 @@ describe("AgentSession retry fallback", () => {
 		vi.restoreAllMocks();
 	});
 
+	async function createDeferredRoleFallback(
+		originalSelector: string,
+		options: { pinned?: boolean; primaryApi?: Api } = {},
+	) {
+		const primaryTemplate = getBundledModel("openai-codex", "gpt-5.6-sol");
+		if (!primaryTemplate) throw new Error("Expected bundled reasoning model");
+		const primaryProvider = "retry-role-primary";
+		const fallbackProvider = "retry-role-fallback";
+		const fallbackSelector = `${fallbackProvider}/ordinary-fallback`;
+		const role = originalSelector.startsWith("@review") ? "review" : "slow";
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.fallbackRevertPolicy": "cooldown-expiry",
+			"retry.fallbackChains": { [role]: [fallbackSelector] },
+			disabledProviders: [...new Set(sharedRegistry.getAll().map(model => model.provider))],
+		});
+		if (role === "review") settings.setModelRole("review", "unavailable/model,@slow");
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `${role}-recovery.yml`), {
+			settings,
+			ignoreLocalModelConfig: true,
+			cacheDbPath: path.join(tempDir.path(), `${role}-${options.pinned}-${options.primaryApi}-recovery.db`),
+		});
+		const modelDefinition = {
+			id: "gpt-5.6-sol",
+			name: "Deferred reasoning primary",
+			reasoning: true,
+			thinking: primaryTemplate.thinking,
+			input: ["text" as const],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_000,
+		};
+		registry.registerProvider(fallbackProvider, {
+			api: "openai-responses",
+			baseUrl: "https://retry-role.invalid/v1",
+			apiKey: "test-key",
+			models: [{ ...modelDefinition, id: "ordinary-fallback", name: "Ordinary fallback" }],
+		});
+		let catalogReady = false;
+		registry.registerProvider(primaryProvider, {
+			api: options.primaryApi ?? "openai-responses",
+			baseUrl: "https://retry-role.invalid/v1",
+			apiKey: "test-key",
+			models: [],
+			fetchDynamicModels: async () => (catalogReady ? [modelDefinition] : []),
+		});
+		const fallback = registry.find(fallbackProvider, "ordinary-fallback");
+		if (!fallback) throw new Error("Expected ordinary fallback model");
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: fallback, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, streamOptions) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				mock.push({ content: [`served:${model.id}`] });
+				return mock.stream(model, context, streamOptions);
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry: registry,
+			thinkingLevel: Effort.Medium,
+			initialRetryFallback: {
+				role,
+				originalSelector,
+				originalThinkingLevel: Effort.High,
+				pinned: options.pinned,
+			},
+		});
+		return {
+			registry,
+			settings,
+			requestedModels,
+			fallbackSelector,
+			primarySelector: `${primaryProvider}/${modelDefinition.id}`,
+			async refreshPrimary() {
+				catalogReady = true;
+				await registry.refreshProvider(primaryProvider, "online");
+			},
+		};
+	}
+
 	it("advances through a role-keyed fallback chain across retries", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const firstFallback = getBundledModel("openai", "gpt-4o-mini");
@@ -4977,6 +5062,86 @@ describe("AgentSession retry fallback", () => {
 			isFallback: false,
 			contextWindow: primaryModel.contextWindow,
 		});
+	});
+
+	it.each([
+		{ selector: "@slow:high", userThinking: undefined, restoredThinking: Effort.High },
+		{ selector: "@review:high", userThinking: Effort.Low, restoredThinking: Effort.Low },
+	])("restores deferred $selector only once its ordinary primary is available and unsuppressed", async testCase => {
+		const fixture = await createDeferredRoleFallback(testCase.selector);
+		const active = session!;
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+
+		await active.prompt("The role primary is not in the catalog yet");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
+		expect(active.servingModel?.isFallback).toBe(true);
+		expect(active.configuredThinkingLevel()).toBe(Effort.Medium);
+
+		await fixture.refreshPrimary();
+		fixture.registry.suppressSelector(`${fixture.primarySelector}:high`, now + 200);
+		await active.prompt("The refreshed primary is still cooling down");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector, fixture.fallbackSelector]);
+		expect(active.servingModel?.isFallback).toBe(true);
+
+		if (testCase.userThinking !== undefined) active.setThinkingLevel(testCase.userThinking);
+		now += 240;
+		await active.prompt("The original role can now serve a new turn");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([
+			fixture.fallbackSelector,
+			fixture.fallbackSelector,
+			fixture.primarySelector,
+		]);
+		expect(active.configuredThinkingLevel()).toBe(testCase.restoredThinking);
+		expect(active.servingModel?.isFallback).toBe(false);
+		expect(getLastAssistantMessage(active).content).toEqual([{ type: "text", text: "served:gpt-5.6-sol" }]);
+	});
+
+	it("keeps a startup-pinned role fallback after its primary appears and cooldown expires", async () => {
+		const fixture = await createDeferredRoleFallback("@slow:high", { pinned: true });
+		const active = session!;
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await fixture.refreshPrimary();
+		fixture.registry.suppressSelector(fixture.primarySelector, now + 200);
+		now += 240;
+
+		await active.prompt("Pinning overrides cooldown-expiry restoration");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
+		expect(active.configuredThinkingLevel()).toBe(Effort.Medium);
+		expect(active.servingModel?.isFallback).toBe(true);
+	});
+
+	it("never restores a role primary backed by the remote Agent API", async () => {
+		const fixture = await createDeferredRoleFallback("@review:high", { primaryApi: "jchtools-agent" });
+		const active = session!;
+		fixture.settings.setModelRole("review", fixture.primarySelector);
+		await fixture.refreshPrimary();
+
+		await active.prompt("Remote availability must not replay or reroute this turn");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
+		expect(active.model?.api).toBe("openai-responses");
+		expect(active.servingModel?.isFallback).toBe(true);
+	});
+
+	it("drops malformed startup recovery records without misattributing the fallback's work", async () => {
+		const fixture = await createDeferredRoleFallback("not-a-selector");
+		const active = session!;
+		const fallbackSucceeded: AgentSessionEvent[] = [];
+		active.subscribe(event => {
+			if (event.type === "retry_fallback_succeeded") fallbackSucceeded.push(event);
+		});
+
+		await active.prompt("Keep serving without a restorable primary selector");
+		await active.waitForIdle();
+		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
+		expect(active.servingModel?.isFallback).toBe(true);
+		expect(fallbackSucceeded).toEqual([]);
 	});
 
 	it("keeps credit with the fallback when a restored primary fails without serving", async () => {

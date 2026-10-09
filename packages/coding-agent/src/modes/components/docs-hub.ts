@@ -107,7 +107,17 @@ export class DocsHubComponent implements Component {
 				if (this.#abort === controller) this.#abort = undefined;
 				if (this.#work === pending) this.#work = undefined;
 				this.#progress = undefined;
-				if (!this.#disposed) this.#refresh();
+				// The list read can fail after `create` succeeded (damage, exclusive
+				// lock); a throw here would reject the voided `#work` chain as an
+				// unhandled rejection instead of reaching the panel's error line.
+				if (!this.#disposed) {
+					try {
+						this.#refresh();
+					} catch (error) {
+						this.#latestError = errorLine(error);
+						this.tui.requestRender();
+					}
+				}
 			});
 		this.#work = pending;
 	}
@@ -186,7 +196,14 @@ export class DocsHubComponent implements Component {
 					}
 				}
 				this.#mode = "list";
-				this.#refresh();
+				// The follow-up list read must not escape `handleInput`: the TUI's
+				// key dispatch does not catch component exceptions.
+				try {
+					this.#refresh();
+				} catch (error) {
+					this.#latestError = errorLine(error);
+					this.tui.requestRender();
+				}
 			} else if (data.toLowerCase() === "n" || matchesKey(data, "escape")) this.#mode = "list";
 			return;
 		}

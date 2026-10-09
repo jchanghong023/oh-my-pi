@@ -6,7 +6,7 @@ There are three ownership strata:
 
 - `taxonomy/*.kdl` defines identity: class membership, product families, revision extraction, reviewed exact corrections, and suffix collapse.
 - `classes/*.kdl` defines model-lineage truths: behavior inherent to a model line, optionally scoped to the providers or request adapters where the census established it.
-- `providers/<id>.kdl` is a provider's entry: its catalog identity (default model, env keys, discovery wiring, optional authored seed rows — see [Provider catalog grammar](#provider-catalog-grammar)) plus its deployment contract: behavior imposed by the host and documented per-model residue that taxonomy cannot express exactly.
+- `providers/<id>.kdl` is a provider's entry: its catalog identity (default model, env keys, discovery wiring, optional authored seed rows — see [Provider catalog grammar](#provider-catalog-grammar)) or explicit runtime-only policy, plus its deployment contract: behavior imposed by the host and documented per-model residue that taxonomy cannot express exactly.
 - `runtime/behavior.kdl` defines heuristics used before or outside exact model lookup: responses routing, API routes, quota tiers, plan requirements, model limits, roster exclusions, hosted defaults, pricing peers.
 - `auth/<provider>.kdl` defines the provider's auth contract: display name, env-var fallback, credential storage/format, and the declarative login / refresh flow that `@oh-my-pi/pi-ai`'s registry engines interpret (see [Auth grammar](#auth-grammar)).
 
@@ -380,11 +380,13 @@ Hook names are validated against the hook tables in `@oh-my-pi/pi-ai/src/registr
 
 ## Provider catalog grammar
 
-The root `provider "<id>"` node of `providers/<id>.kdl` carries the catalog entry next to the cascade rules. A file that declares `default-model` is a catalog provider (a member of the generated `KnownProvider` union in `src/compat/provider-ids.ts`); a file without it is wire-compat only (custom provider ids such as `llama.cpp`) and may not carry any other entry node. The compiled entries live in `rules.json` under `providers`, keyed by id; runtime accessors are in `src/compat/providers.ts`, and `provider-models/descriptors.ts` pairs each entry with its model-manager factory — the only provider fact that stays in code.
+The root `provider "<id>"` node of `providers/<id>.kdl` carries a catalog entry or explicit runtime-only policy next to the cascade rules. Catalog entries declare `default-model`. Runtime-only entries may omit it only with `automatic-default #false` and without `discovery`, `kind-apis`, `seed`, or `skip-cross-provider-reference-fills`; their permitted metadata is `env`, `allow-unauthenticated`, and `dynamic-models-authoritative`. No placeholder default or model rows are created. Both entry kinds belong to the generated `KnownProvider` union in `src/compat/provider-ids.ts`: membership does not imply a known default model or bundled roster. Files carrying only cascade rules remain wire-compat only (custom provider ids such as `llama.cpp`) and do not create entries.
+
+The compiled entries live in `rules.json` under `providers`, keyed by id; runtime accessors are in `src/compat/providers.ts`. `provider-models/descriptors.ts` pairs entries that have a default model with their model-manager factory — the only provider fact that stays in code. Runtime-only policy does not enroll a provider in this catalog factory table or generation-time discovery.
 
 ```kdl
 provider "sakana" {
-    default-model "fugu"                          // required for a catalog entry
+    default-model "fugu"                          // required when declaring a model catalog
     env "SAKANA_API_KEY" "FUGU_API_KEY"           // runtime API-key env fallback, in order
     dynamic-models-authoritative #true            // discovery replaces bundled rows
     allow-unauthenticated #true                   // runtime manager without a key
@@ -413,13 +415,18 @@ provider "muse-code" {
         models-from "meta"                        // copies meta's seed rows under this provider
     }
 }
+provider "runtime-gateway" {
+    automatic-default #false                    // explicit selection only; no known default
+    allow-unauthenticated #true
+    dynamic-models-authoritative #true           // runtime discovery supplies the actual roster
+}
 ```
 
 Only `discovery` enrolls a provider in `generate-models.ts`; providers without it are never fetched at generation time (see the `charm-hyper` entry for why a live gateway deliberately omits it).
 
-`automatic-default #false` keeps a provider available for explicit selection but excludes it from startup fallback and automatic model presets. The default is `#true`; `apple` opts out because its on-device context cannot accommodate the standard coding-agent prompt in many projects.
+`automatic-default #false` keeps a provider available for explicit selection but excludes it from startup fallback and automatic model presets. It is required for runtime-only entries without a known default. For catalog entries the default is `#true`; `apple` opts out because its on-device context cannot accommodate the standard coding-agent prompt in many projects. An explicit opt-out never removes a declared `default-model`.
 
-`kind-apis { <kind> "<api>" }` maps each non-chat kind (`image`, `tts`, `stt`, `embedding`, `rerank`, `video`) to the API discovery assigns rows of that kind. A runner API must sit under the kind it serves (`RUNNER_API_KINDS` in `src/types.ts`); chat APIs, which serve hosted image generation, and multi-kind `local-inference` may back any kind.
+`kind-apis { <kind> "<api>" }` maps each non-chat kind (`image`, `tts`, `stt`, `embedding`, `rerank`, `video`) to the API discovery assigns rows of that kind. This is model catalog metadata and requires `default-model`, even with `automatic-default #false`. A runner API must sit under the kind it serves (`RUNNER_API_KINDS` in `src/types.ts`); chat APIs, which serve hosted image generation, and multi-kind `local-inference` may back any kind.
 
 ### Seed rows
 

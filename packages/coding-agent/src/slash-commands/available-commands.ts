@@ -51,8 +51,15 @@ export async function buildAvailableSlashCommands(
 	const seenNames = new Set<string>();
 	const builtinNames = new Set<string>();
 	const appendCommand = (command: InternalAvailableSlashCommand): void => {
-		const colon = command.name.indexOf(":");
-		if (command.source !== "builtin" && colon !== -1 && builtinNames.has(command.name.slice(0, colon))) return;
+		if (command.source !== "builtin") {
+			// `builtinNames` is the dispatch-reserved surface for this listing:
+			// exact names and colon namespaces that dispatch would capture before
+			// the non-builtin handler can run must not be advertised.
+			const colon = command.name.indexOf(":");
+			if (builtinNames.has(command.name) || (colon !== -1 && builtinNames.has(command.name.slice(0, colon)))) {
+				return;
+			}
+		}
 		if (seenNames.has(command.name)) return;
 		seenNames.add(command.name);
 		commands.push(command);
@@ -63,8 +70,16 @@ export async function buildAvailableSlashCommands(
 			!command.handle &&
 			!(options.includeRpcBuiltins && command.handleRpc) &&
 			!(options.includeTuiOnlyBuiltins && command.handleTui)
-		)
+		) {
+			// RPC dispatch resolves every registry name and rejects handler-less
+			// builtins with an explicit error before `session.prompt()` can run
+			// custom or file commands, so skipped names stay reserved there.
+			if (options.includeRpcBuiltins) {
+				builtinNames.add(command.name);
+				for (const alias of command.aliases ?? []) builtinNames.add(alias);
+			}
 			continue;
+		}
 		builtinNames.add(command.name);
 		for (const alias of command.aliases ?? []) builtinNames.add(alias);
 		const hint = command.acpInputHint ?? command.inlineHint;
@@ -79,7 +94,8 @@ export async function buildAvailableSlashCommands(
 		// ACP dispatch resolves builtin aliases before `session.prompt()` sees the
 		// input, so a custom/file command sharing an alias would be advertised but
 		// never run. Reserve aliases here too; builtins skipped above leave their
-		// aliases to whoever else claims them.
+		// aliases to whoever else claims them — except on the RPC surface, which
+		// rejects every registry name and keeps skipped names reserved above.
 		for (const alias of command.aliases ?? []) seenNames.add(alias);
 	}
 

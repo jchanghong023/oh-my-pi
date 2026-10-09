@@ -81,7 +81,8 @@ export class IrcBus {
 			}
 			sent.set(message.to, message.ts);
 		}
-		return receipt;
+		// 写工具会持久化回执；丢掉消息身份会使冷恢复将发送与接收误当两条通信。
+		return receipt.outcome === "failed" ? receipt : { ...receipt, id: message.id, ts: message.ts };
 	}
 
 	/**

@@ -1140,14 +1140,20 @@ export function rolePriorityDefaults(role: string): string[] {
 	return hasOwnKey(MODEL_PRIO, key) ? normalizeModelPatternList(MODEL_PRIO[key]) : [];
 }
 
+interface ResolvedRolePattern {
+	pattern: string;
+	/** Built-in priority choices must not opt into explicit-only providers. */
+	automatic: boolean;
+}
+
 /** Resolve aliases inside a configured pattern list without leaking cycles to model matching. */
 function resolveNestedRolePatterns(
 	value: string,
 	roleDefaults: string[],
 	settings: ModelRoleLookup | undefined,
 	visited: Set<string>,
-): string[] {
-	const resolved: string[] = [];
+): ResolvedRolePattern[] {
+	const resolved: ResolvedRolePattern[] = [];
 	for (const pattern of normalizeModelPatternList(value)) {
 		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
 			pattern,
@@ -1156,14 +1162,15 @@ function resolveNestedRolePatterns(
 		);
 		const aliasRole = getModelRoleAlias(aliasCandidate, settings);
 		if (!aliasRole) {
-			resolved.push(pattern);
+			resolved.push({ pattern, automatic: false });
 			continue;
 		}
 		if (visited.has(aliasRole)) {
 			resolved.push(
-				...(thinkingLevel
-					? roleDefaults.map(defaultPattern => `${defaultPattern}:${thinkingLevel}`)
-					: roleDefaults),
+				...roleDefaults.map(defaultPattern => ({
+					pattern: thinkingLevel ? `${defaultPattern}:${thinkingLevel}` : defaultPattern,
+					automatic: true,
+				})),
 			);
 			continue;
 		}
@@ -1180,7 +1187,7 @@ function resolveDefaultInheritedPatterns(
 	roleDefaults: string[],
 	settings: ModelRoleLookup | undefined,
 	visited: Set<string>,
-): string[] {
+): ResolvedRolePattern[] {
 	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
 	return resolveNestedRolePatterns(configuredDefault, roleDefaults, settings, visited);
 }
@@ -1189,7 +1196,7 @@ function resolveConfiguredRolePattern(
 	value: string,
 	settings?: ModelRoleLookup,
 	visited: Set<string> = new Set(),
-): string[] | undefined {
+): ResolvedRolePattern[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
@@ -1199,13 +1206,14 @@ function resolveConfiguredRolePattern(
 		MAX_THINKING_SUFFIX_OPTIONS,
 	);
 	const role = getModelRoleAlias(aliasCandidate, settings);
-	if (!role) return [normalized];
+	if (!role) return [{ pattern: normalized, automatic: false }];
 	if (visited.has(role)) return undefined;
 	visited.add(role);
 
 	const configured = settings?.getModelRole(role)?.trim();
 	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
 	const roleDefaults = isModelRole(role) ? rolePriorityDefaults(role) : [];
+	const automaticPatterns = roleDefaults.map(pattern => ({ pattern, automatic: true }));
 	const configuredFallback = isModelRole(role) ? ROLE_CONFIGURED_FALLBACK[role] : undefined;
 	const fallbackPatterns =
 		configured ||
@@ -1219,15 +1227,17 @@ function resolveConfiguredRolePattern(
 			? fallbackPatterns
 			: isModelRole(role)
 				? resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited)
-				: roleDefaults;
+				: automaticPatterns;
 	if (resolved.length === 0) {
-		resolved.push(...roleDefaults);
+		resolved.push(...automaticPatterns);
 	}
 	if (resolved.length === 0) {
 		return undefined;
 	}
 
-	return thinkingLevel ? resolved.map(pattern => `${pattern}:${thinkingLevel}`) : resolved;
+	return thinkingLevel
+		? resolved.map(candidate => ({ ...candidate, pattern: `${candidate.pattern}:${thinkingLevel}` }))
+		: resolved;
 }
 
 /**
@@ -1239,21 +1249,31 @@ export function expandRoleAlias(value: string, settings?: ModelRoleLookup): stri
 		return settings?.getModelRole("default") ?? value;
 	}
 
-	const resolved = resolveConfiguredRolePattern(value, settings)?.[0];
+	const resolved = resolveConfiguredRolePattern(value, settings)?.[0]?.pattern;
 	return resolved ?? value;
+}
+
+export interface ModelPatternResolutionOptions {
+	/**
+	 * Carry aliases with built-in priorities to the final role-aware matcher
+	 * instead of turning automatic choices into explicit model selectors.
+	 */
+	preserveAutomaticRoleAliases?: boolean;
 }
 
 export function resolveConfiguredModelPatterns(
 	value: string | string[] | undefined,
 	settings?: ModelRoleLookup,
+	options?: ModelPatternResolutionOptions,
 ): string[] {
 	const patterns = normalizeModelPatternList(value);
 	return patterns.flatMap(pattern => {
 		const resolved = resolveConfiguredRolePattern(pattern, settings);
-		return resolved ?? [];
+		if (options?.preserveAutomaticRoleAliases && resolved?.some(candidate => candidate.automatic)) return [pattern];
+		return resolved?.map(candidate => candidate.pattern) ?? [];
 	});
 }
-export interface AgentModelPatternResolutionOptions {
+export interface AgentModelPatternResolutionOptions extends ModelPatternResolutionOptions {
 	/** Highest-priority request selector, when supplied by a caller. */
 	requestModel?: string | string[];
 	settingsOverride?: string | string[];
@@ -1273,18 +1293,18 @@ function resolveEffectiveAgentModelSelection(
 ): EffectiveAgentModelSelection {
 	const { requestModel, settingsOverride, agentModel, settings, activeModelPattern, fallbackModelPattern } = options;
 
-	const requestPatterns = resolveConfiguredModelPatterns(requestModel, settings);
+	const requestPatterns = resolveConfiguredModelPatterns(requestModel, settings, options);
 	if (requestPatterns.length > 0) {
 		return { source: requestModel, patterns: requestPatterns };
 	}
 
-	const overridePatterns = resolveConfiguredModelPatterns(settingsOverride, settings);
+	const overridePatterns = resolveConfiguredModelPatterns(settingsOverride, settings, options);
 	if (overridePatterns.length > 0) {
 		return { source: settingsOverride, patterns: overridePatterns };
 	}
 
 	const normalizedAgentPatterns = normalizeModelPatternList(agentModel);
-	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, settings);
+	const configuredAgentPatterns = resolveConfiguredModelPatterns(agentModel, settings, options);
 	const singleAgentPattern = normalizedAgentPatterns.length === 1 ? normalizedAgentPatterns[0] : undefined;
 	const agentInheritsSessionModel = singleAgentPattern ? isSessionInheritedAgentPattern(singleAgentPattern) : false;
 	if (configuredAgentPatterns.length > 0) {
@@ -1299,12 +1319,12 @@ function resolveEffectiveAgentModelSelection(
 
 	const fallback =
 		activeModelPattern?.trim() || fallbackModelPattern?.trim() || settings?.getModelRole("default")?.trim() || "";
-	return { patterns: resolveConfiguredModelPatterns(fallback, settings) };
+	return { patterns: resolveConfiguredModelPatterns(fallback, settings, options) };
 }
 
 /** Effective agent model patterns paired with the pre-expansion role alias behind them. */
 export interface AgentModelSelection {
-	/** Expanded model patterns to spawn with. */
+	/** Model patterns to spawn with; automatic aliases may be preserved until final matching. */
 	patterns: string[];
 	/** Role alias the patterns came from (`@task` -> `task`), when the source named one. */
 	role: string | undefined;
@@ -1396,13 +1416,24 @@ export function resolveAgentAdvisorSelection(
 }
 
 /**
- * Expand an agent advisor pattern against the owner's role lookup before it is
- * stamped onto a spawned session's `modelRoles.advisor`. Without this, a
- * self-referential `@advisor` lands as the child's own advisor role, trips the
- * cycle guard, and silently degrades to the built-in `slow` priority list.
+ * Resolve an advisor pin before stamping it onto the child's advisor role.
+ * Keep automatic aliases role-aware; a same-name alias must retain the owner's
+ * configured branches rather than overwriting them with a self-reference.
  */
 export function resolveAgentAdvisorRolePattern(pattern: string, settings?: ModelRoleLookup): string {
-	const expanded = resolveConfiguredModelPatterns(pattern, settings);
+	const expanded = normalizeModelPatternList(pattern).flatMap(selector => {
+		const resolved = resolveConfiguredModelPatterns(selector, settings, { preserveAutomaticRoleAliases: true });
+		if (resolved.length !== 1 || resolved[0] !== selector) return resolved;
+		const { base, level } = splitThinkingSuffix(
+			selector,
+			modelRoleAliasPrefixLength(selector) ?? LEGACY_MODEL_ROLE_ALIAS_PREFIX.length,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		);
+		if (getModelRoleAlias(base, settings) !== "advisor") return resolved;
+		const configured = settings?.getModelRole("advisor")?.trim();
+		if (!configured) return resolved;
+		return normalizeModelPatternList(configured).map(value => (level ? `${value}:${level}` : value));
+	});
 	return expanded.length > 0 ? expanded.join(",") : pattern;
 }
 
@@ -1432,19 +1463,31 @@ export function resolveModelRoleValue(
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
 
-	const effectivePatterns = resolveConfiguredModelPatterns(normalized, options?.roleLookup ?? options?.settings);
+	const effectivePatterns = normalizeModelPatternList(normalized).flatMap(
+		pattern => resolveConfiguredRolePattern(pattern, options?.roleLookup ?? options?.settings) ?? [],
+	);
 	if (!effectivePatterns || effectivePatterns.length === 0) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
 
 	let warning: string | undefined;
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
-	// Build the O(n) preference context (model-order map over all available
-	// models) once and reuse it across every fallback pattern instead of
-	// rebuilding it per pattern inside parseModelPattern.
+	// Preserve priority provenance through alias expansion: a user's literal
+	// selector or configured role may opt in, but automatic defaults may not.
+	const automaticModels = effectivePatterns.some(candidate => candidate.automatic)
+		? availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false)
+		: availableModels;
 	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
-	for (const [patternIndex, effectivePattern] of effectivePatterns.entries()) {
-		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext);
+	const automaticPreferenceContext =
+		automaticModels === availableModels
+			? preferenceContext
+			: buildPreferenceContext(automaticModels, matchPreferences);
+	for (const [patternIndex, { pattern: effectivePattern, automatic }] of effectivePatterns.entries()) {
+		const resolved = matchPatternWithContext(
+			effectivePattern,
+			automatic ? automaticModels : availableModels,
+			automatic ? automaticPreferenceContext : preferenceContext,
+		);
 		if (resolved.model) {
 			return {
 				model: resolved.model,
@@ -1551,10 +1594,12 @@ export function resolveModelFromSettings(options: {
 		if (expanded.includes("/")) {
 			sawConfiguredProviderQualifiedRole = true;
 		}
-		const resolved = resolveModelFromString(expanded, availableModels, matchPreferences);
+		const resolved = resolveModelRoleValue(configured, availableModels, { settings, matchPreferences }).model;
 		if (resolved) return resolved;
 	}
-	return sawConfiguredProviderQualifiedRole ? undefined : availableModels[0];
+	return sawConfiguredProviderQualifiedRole
+		? undefined
+		: availableModels.find(model => providerEntry(model.provider)?.automaticDefault !== false);
 }
 
 /** A resolved role-chain attempt and whether configuration explicitly admitted it. */
@@ -1573,13 +1618,20 @@ export function resolveRoleChain(role: string, settings: Settings, pool: Model<A
 	const hasConfiguredFallbackChain = Array.isArray(configuredFallbacks);
 	const fallbackSelectors = hasConfiguredFallbackChain ? configuredFallbacks : rolePriorityDefaults(role);
 	const selectors = [
-		{ selector: primarySelector, explicit: Object.hasOwn(configuredRoles, role) },
-		...fallbackSelectors.map(selector => ({ selector, explicit: hasConfiguredFallbackChain })),
+		{ selector: primarySelector, explicit: Object.hasOwn(configuredRoles, role), automatic: false },
+		...fallbackSelectors.map(selector => ({
+			selector,
+			explicit: hasConfiguredFallbackChain,
+			automatic: !hasConfiguredFallbackChain,
+		})),
 	];
 	const candidates: RoleChainCandidate[] = [];
 	const candidateByRoute = new Map<string, RoleChainCandidate>();
-	for (const { selector, explicit } of selectors) {
-		const resolved = resolveModelRoleValue(selector, pool, { settings });
+	const automaticPool = hasConfiguredFallbackChain
+		? pool
+		: pool.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
+	for (const { selector, explicit, automatic } of selectors) {
+		const resolved = resolveModelRoleValue(selector, automatic ? automaticPool : pool, { settings });
 		if (!resolved.model) continue;
 		const key = formatModelStringWithRouting(resolved.model);
 		const existing = candidateByRoute.get(key);
@@ -2059,6 +2111,8 @@ interface CliModelOptions {
 	/** Authenticated models to prefer for unqualified selectors; defaults to the registry's authenticated set. */
 	availableModels?: Model<Api>[];
 	settings?: Settings;
+	/** Resolve role aliases against this snapshot while retaining live settings policies. */
+	roleLookup?: ModelRoleLookup;
 	preferences?: ModelMatchPreferences;
 }
 
@@ -2128,6 +2182,7 @@ function resolveCliModelInScope(
 	scope: CliModelScope,
 ): ResolveCliModelResult {
 	const { cliProvider, cliModel, settings } = options;
+	const roleLookup = options.roleLookup ?? settings;
 	const preferences = mergeModelMatchPreferences(settings, options.preferences);
 	const { all: allModels, available: availableModels } = scope;
 	if (allModels.length === 0) {
@@ -2198,7 +2253,7 @@ function resolveCliModelInScope(
 		const roleSelector =
 			modelRoleAliasPrefixLength(trimmedModel) !== undefined
 				? trimmedModel
-				: settings?.getModelRole(bareRoleName) !== undefined
+				: roleLookup?.getModelRole(bareRoleName) !== undefined
 					? `${formatModelRoleAlias(bareRoleName)}${bareRoleThinkingLevel ? `:${bareRoleThinkingLevel}` : ""}`
 					: undefined;
 		if (roleSelector) {
@@ -2207,16 +2262,20 @@ function resolveCliModelInScope(
 				modelRoleAliasPrefixLength(roleSelector) ?? -1,
 				MAX_THINKING_SUFFIX_OPTIONS,
 			);
-			const configuredRole = getModelRoleAlias(roleAlias, settings);
-			configuredPatterns = resolveConfiguredModelPatterns([roleSelector], settings);
+			const configuredRole = getModelRoleAlias(roleAlias, roleLookup);
+			configuredPatterns = resolveConfiguredModelPatterns([roleSelector], roleLookup, {
+				preserveAutomaticRoleAliases: true,
+			});
 			const availableResolved = resolveModelRoleValue(roleSelector, availableModels, {
 				settings,
+				roleLookup,
 				matchPreferences: preferences,
 			});
 			const resolved = availableResolved.model
 				? availableResolved
 				: resolveModelRoleValue(roleSelector, allModels, {
 						settings,
+						roleLookup,
 						matchPreferences: preferences,
 					});
 			if (resolved.model) {
@@ -2225,7 +2284,10 @@ function resolveCliModelInScope(
 					selector: formatModelString(resolved.model),
 					configuredRole,
 					configuredPatterns,
-					configuredPatternIndex: resolved.matchedPatternIndex,
+					configuredPatternIndex:
+						configuredPatterns.length === 1 && configuredPatterns[0] === roleSelector
+							? 0
+							: resolved.matchedPatternIndex,
 					thinkingLevel: resolved.thinkingLevel,
 					warning: resolved.warning,
 					error: undefined,

@@ -8,6 +8,7 @@ import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
 import type { AgentSession, FreshSessionResult, HandoffResult } from "../session/agent-session";
+import type { ResetSessionContextResult } from "../session/agent-session-types";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { buildReplanTitleContext, USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveResumableSession } from "../session/session-listing";
@@ -211,7 +212,18 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? "Clear: unavailable while streaming" : "Clear: drop context, keep session",
 		handle: async (_command, runtime) => {
-			const result = await resetContextForCommand(runtime.session);
+			let result: ResetSessionContextResult | undefined;
+			try {
+				result = await resetContextForCommand(runtime.session);
+			} catch (error) {
+				// The helper's wait for a compaction abort can lose the race with a
+				// session switch or dispose; that designed outcome is reported here —
+				// a throw would fail the whole ACP/RPC prompt request (the TUI host
+				// catches the same code in handleResetContextCommand).
+				if ((error as { code?: unknown } | null)?.code !== "session_changed") throw error;
+				await runtime.output("Session changed while resetting the context; nothing was cleared.");
+				return commandConsumed();
+			}
 			await runtime.output(
 				result
 					? formatResetContextResult(result)

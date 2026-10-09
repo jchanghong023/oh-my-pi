@@ -59,7 +59,6 @@ import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-select
 import {
 	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
-	expandRoleAlias,
 	getModelMatchPreferences,
 	resolveCliModel,
 	resolveConfiguredModelPatterns,
@@ -1564,28 +1563,21 @@ export async function buildSessionOptions(
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
 		const target = parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET;
-		let targetPatterns: string[];
-
-		if (parsed.prewalkInto === undefined) {
-			// Preserve the existing default-prewalk behavior; this PR only needs
-			// pre-override role semantics for an explicit target.
-			targetPatterns = [expandRoleAlias(DEFAULT_PREWALK_TARGET, activeSettings)];
-		} else {
-			// `--model` mutates only the session default role. Resolve explicit
-			// prewalk aliases against the pre-mutation default while leaving all
-			// other role lookups live.
-			const preModelOverrideRoleLookup = {
-				getModelRole: (role: string) =>
-					role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
-			};
-
-			// Bare `default` is a backwards-compatible special selector handled
-			// by expandRoleAlias rather than the prefixed role-alias grammar.
-			const targetSelector =
-				target.trim() === "default" ? expandRoleAlias(target, preModelOverrideRoleLookup) : target;
-			const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, preModelOverrideRoleLookup);
-			targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
-		}
+		// Explicit targets retain the default role from before `--model`; all
+		// other lookups stay live, including the implicit @smol target.
+		const roleLookup =
+			parsed.prewalkInto === undefined
+				? undefined
+				: {
+						getModelRole: (role: string) =>
+							role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
+					};
+		// Bare `default` is the historical prewalk role selector, not a model id.
+		const targetSelector = target.trim() === "default" ? "@default" : target;
+		const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, roleLookup ?? activeSettings, {
+			preserveAutomaticRoleAliases: true,
+		});
+		const targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
 
 		const selection = await resolvePrewalkTarget(
 			targetPatterns,
@@ -1593,11 +1585,11 @@ export async function buildSessionOptions(
 			modelRegistry,
 			modelMatchPreferences,
 			disabledProviders,
-			{ deferUnregistered: true, offline: parsed.offline === true, settings: activeSettings },
+			{ deferUnregistered: true, offline: parsed.offline === true, settings: activeSettings, roleLookup },
 		);
 		if (selection.deferred) {
 			// Preserve role fallback order until extensions have registered their providers.
-			options.deferredPrewalk = { target, patterns: targetPatterns };
+			options.deferredPrewalk = { target, patterns: targetPatterns, roleLookup };
 		} else {
 			options.prewalk = selection.prewalk;
 			for (const warning of selection.warnings) {
@@ -1610,7 +1602,7 @@ export async function buildSessionOptions(
 		throw new Error("--plan-yolo-into requires --plan-yolo");
 	}
 	if (parsed.planYolo) {
-		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
+		const rolePattern = parsed.planYoloInto ?? "@smol";
 		const resolved = resolveCliModel({
 			cliModel: rolePattern,
 			modelRegistry,

@@ -164,6 +164,8 @@ export interface BuildSessionContextOptions {
 	 * latest compacted tail.
 	 */
 	transcript?: boolean;
+	/** Keep canonical failed turns and epoch boundaries for remote-Agent projection, not ordinary provider replay. */
+	preserveFailedTurns?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
 	/**
@@ -397,6 +399,7 @@ export function buildSessionContext(
 		if (entry.type === "message") {
 			if (
 				!options?.transcript &&
+				!options?.preserveFailedTurns &&
 				entry.message.role === "assistant" &&
 				(entry.message.retryRecovery || isEmptyErrorTurn(entry.message))
 			) {
@@ -691,7 +694,8 @@ export function buildSessionContext(
 	// while the tool still executes sees the persisted assistant turn without its result.
 	// Those callers pass `keepDanglingToolCalls` so the in-flight call stays visible as
 	// a pending block instead of vanishing from the chat.)
-	const keepDangling = options?.transcript === true && options.keepDanglingToolCalls === true;
+	const keepDangling =
+		options?.preserveFailedTurns === true || (options?.transcript === true && options.keepDanglingToolCalls === true);
 	if (!keepDangling) {
 		const pairedToolResultIds = new Set<string>(options?.inFlightToolCallIds);
 		for (const message of messages) {
@@ -739,7 +743,7 @@ export function buildSessionContext(
 	// Keep the interrupted-thinking continuity pair: convertToLlm strips the
 	// unsafe trailing thinking from that assistant and sends the hidden
 	// continuity note instead.
-	if (!options?.transcript) {
+	if (!options?.transcript && !options?.preserveFailedTurns) {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
 			if (message?.role !== "assistant") continue;

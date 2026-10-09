@@ -95,7 +95,11 @@ export interface RpcModelRolesResult {
 export interface RpcSetModelRoleResult {
 	readonly role: RpcModelRoleDescriptor;
 	readonly persisted: true;
-	/** Sessions whose role resolution picks the new value on next use. */
+	/**
+	 * Human-readable note when the saved value did not simply take effect: a
+	 * layer above the user config still owns the effective value, or the saved
+	 * selection has no fixed concrete model. Absent when it took effect.
+	 */
 	readonly effectiveNote?: string;
 }
 

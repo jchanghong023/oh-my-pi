@@ -99,6 +99,10 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 	return async (call: TeamSubagentCall, signal: AbortSignal): Promise<TeamSubagentOutcome> => {
 		if (signal.aborted) return { ok: false, error: "cancelled before start" };
 		const lease = await leaseArtifacts(deps);
+		// Set when the executor hands off cleanup that outlives the visible
+		// result (child session disposal overran its deadline); the temp lease
+		// must survive until it settles or the rm below races open handles.
+		let deferredCleanup: Promise<void> | undefined;
 		try {
 			const id = await outputManager.allocate(sanitizeAgentId(call.label));
 			const agent: AgentDefinition = {
@@ -133,6 +137,9 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				restrictToolNames: true,
 				keepAlive: false,
 				signal,
+				onCleanupDeferred: completion => {
+					deferredCleanup = completion;
+				},
 				sessionFile: lease.sessionFile,
 				persistArtifacts: !lease.temporary,
 				artifactsDir: lease.artifactsDir,
@@ -153,7 +160,11 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				rules: deps.rules,
 				parentAgentId: deps.parentAgentId,
 			});
-			if (signal.aborted || result.aborted) return { ok: false, error: "cancelled" };
+			if (signal.aborted) return { ok: false, error: "cancelled" };
+			// A non-signal abort (soft-budget force-stop, internal termination)
+			// is a participant failure, not user cancellation; `abortReason`
+			// carries the cause and must reach the failure label verbatim.
+			if (result.aborted) return { ok: false, error: result.abortReason || "cancelled" };
 			if (result.exitCode !== 0 || result.error) {
 				return { ok: false, error: result.stderr || result.error || `exit code ${result.exitCode}` };
 			}
@@ -175,7 +186,11 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 			// Temporary artifact dirs hold only child transcripts the orchestrator
 			// already extracted; the session-backed lease stays for audit.
 			if (lease.temporary) {
-				await fs.rm(lease.artifactsDir, { recursive: true, force: true }).catch(() => {});
+				const removeArtifacts = async (): Promise<void> => {
+					await fs.rm(lease.artifactsDir, { recursive: true, force: true }).catch(() => {});
+				};
+				if (deferredCleanup) void deferredCleanup.then(removeArtifacts);
+				else await removeArtifacts();
 			}
 		}
 	};
