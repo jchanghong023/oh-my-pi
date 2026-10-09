@@ -147,4 +147,4 @@
 - **文档转换**：[xberg](https://github.com/jchanghong023/xberg)，fork 自上游 [xberg-io/xberg](https://github.com/xberg-io/xberg)。把办公文档、PDF 以及音频视频统一转换成 Markdown；代码约 217 万行，核心为约 156 万行 Rust，其余为 Dart、Python、Swift、Java、C# 等上游生态语言绑定。
 - **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](requirements/fork.md#魔法关键词的内置命令与-fullsend)。
 
-CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。公司 Citrix 图形环境尚未验证；下载和运行方法见 OmpCode 项目 README。
+CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。下载和运行方法见 OmpCode 项目 README。
