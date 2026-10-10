@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, runFastcheck, runGateCommands } from "./fastcheck";
 import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
@@ -128,6 +129,29 @@ export function fulltestCommands(
 	return commands;
 }
 
+/** Detach Windows directory junctions without reading their denied ACLs or targets. */
+export async function removeFulltestHome(home: string): Promise<void> {
+	if (process.platform === "win32") {
+		const detachJunctions = async (directory: string): Promise<void> => {
+			for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+				const target = path.join(directory, entry.name);
+				if (entry.isSymbolicLink()) {
+					try {
+						await fs.rmdir(target);
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+						await fs.unlink(target);
+					}
+				} else if (entry.isDirectory()) {
+					await detachJunctions(target);
+				}
+			}
+		};
+		await detachJunctions(home);
+	}
+	await removeWithRetries(home);
+}
+
 export async function runFulltest(gate: GateRun, options: FulltestOptions): Promise<void> {
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
 		throw new GateCommandError(
@@ -192,7 +216,7 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 			);
 		}
 	} finally {
-		await gate.charged(() => fs.rm(home, { recursive: true, force: true }));
+		await gate.charged(() => removeFulltestHome(home));
 	}
 }
 

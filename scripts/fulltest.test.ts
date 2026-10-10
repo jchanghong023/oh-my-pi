@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseFastcheckArgs, runGateCommands } from "./fastcheck";
-import { parseFulltestArgs } from "./fulltest";
+import { parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
 describe("standard gate charged-budget parameters", () => {
@@ -76,3 +76,30 @@ process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + ' {"
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
+
+test.skipIf(process.platform !== "win32")(
+	"removes denied Windows junctions without deleting their targets",
+	async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-junction-cleanup-"));
+		const home = path.join(directory, "home");
+		const outside = path.join(directory, "outside");
+		const junction = path.join(home, "cache");
+		await fs.mkdir(home);
+		await fs.mkdir(outside);
+		await Bun.write(path.join(outside, "keep"), "outside gate ownership");
+		await fs.symlink(outside, junction, "junction");
+		try {
+			const acl = Bun.spawn(["icacls.exe", junction, "/deny", "*S-1-1-0:(RD)", "/L"], {
+				stdout: "ignore",
+				stderr: "inherit",
+			});
+			expect(await acl.exited).toBe(0);
+			await expect(fs.readdir(junction)).rejects.toMatchObject({ code: "EPERM" });
+			await removeFulltestHome(home);
+			await expect(fs.lstat(home)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await Bun.file(path.join(outside, "keep")).text()).toBe("outside gate ownership");
+		} finally {
+			await removeFulltestHome(directory);
+		}
+	},
+);

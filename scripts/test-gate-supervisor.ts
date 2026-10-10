@@ -2,7 +2,8 @@
 import { dlopen, FFIType } from "bun:ffi";
 
 let finished = false;
-let reapChildren: (() => void) | undefined;
+let commandPid: number | undefined;
+let reapChildren: (() => Promise<void>) | undefined;
 
 // Mirrors the supported Linux subreaper primitive in utils/ptree, without
 // loading the native addon before the gate has had a chance to build it.
@@ -22,9 +23,19 @@ if (process.platform === "linux") {
 	if (!libc || libc.symbols.prctl(36, 1, 0, 0, 0) !== 0)
 		throw new Error("Cannot establish owned Linux child subreaper");
 	const symbols = libc.symbols;
-	reapChildren = () => {
-		while (symbols.waitpid(-1, null, 1) > 0) {
-			/* Reap exited adopted children. */
+	reapChildren = async () => {
+		if (finished) {
+			while (symbols.waitpid(-1, null, 1) > 0) {
+				/* Reap exited adopted children. */
+			}
+			return;
+		}
+		// Bun owns the command's exit status. Reap only adopted descendants,
+		// even while the command is still checking that its workers are gone.
+		const children = await Bun.file(`/proc/self/task/${process.pid}/children`).text();
+		for (const value of children.trim().split(/\s+/)) {
+			const pid = Number(value);
+			if (pid > 0 && pid !== commandPid) symbols.waitpid(pid, null, 1);
 		}
 	};
 }
@@ -32,8 +43,15 @@ if (process.platform === "linux") {
 let started = false;
 // Stay alive after the real leader exits, so the parent's ownership reference
 // remains valid until descendants are gone and command output reaches EOF.
-setInterval(() => {
-	if (finished) reapChildren?.();
+let reaping = false;
+setInterval(async () => {
+	if (!started || reaping || !reapChildren) return;
+	reaping = true;
+	try {
+		await reapChildren();
+	} finally {
+		reaping = false;
+	}
 }, 5);
 process.on("message", async (message: unknown) => {
 	if (message === "cleanup") {
@@ -54,6 +72,7 @@ process.on("message", async (message: unknown) => {
 			env: process.env,
 			windowsHide: true,
 		});
+		commandPid = child.pid;
 		const exitCode = await child.exited;
 		finished = true;
 		process.send?.({ exitCode });
