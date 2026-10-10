@@ -18,13 +18,18 @@ if (incoming.includes("--test")) {
 		else args.push(arg);
 	}
 	originalRun = runtool ? [runtool, ...runArgs] : [];
-	const extension = process.platform === "win32" ? ".cmd" : ".sh";
+	const compiler = process.env.OMP_GATE_DOCTEST_COMPILER;
+	const runner = process.env.OMP_GATE_DOCTEST_RUNNER;
+	if (process.platform === "win32" && (!compiler || !runner)) {
+		console.error("Windows doctests require the native launchers prepared by test-gate-cargo.ts");
+		process.exit(1);
+	}
 	args.push(
 		"-Zunstable-options",
 		"--test-builder-wrapper",
-		process.env.OMP_GATE_DOCTEST_COMPILER || path.join(import.meta.dir, `test-gate-doctest-compile${extension}`),
+		compiler || path.join(import.meta.dir, "test-gate-doctest-compile.sh"),
 		"--test-runtool",
-		process.env.OMP_GATE_DOCTEST_RUNNER || path.join(import.meta.dir, `test-gate-doctest-run${extension}`),
+		runner || path.join(import.meta.dir, "test-gate-doctest-run.sh"),
 	);
 }
 try {
@@ -33,6 +38,7 @@ try {
 		stdin: "inherit",
 		stdout: "inherit",
 		stderr: "inherit",
+		windowsHide: true,
 	});
 	process.exit(await child.exited);
 } catch (error) {

@@ -29,7 +29,7 @@ const compileOnly =
 			args.includes("--crate-name") &&
 			!args.some(arg => arg === "--print" || arg.startsWith("--print=") || arg === "-V" || arg === "--version"));
 const invoke = async () => {
-	const child = Bun.spawn(argv, { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+	const child = Bun.spawn(argv, { stdin: "inherit", stdout: "inherit", stderr: "inherit", windowsHide: true });
 	return await child.exited;
 };
 process.exit(compileOnly && !doctestRun ? await withCompilerActivity(invoke) : await withChargedActivity(invoke));

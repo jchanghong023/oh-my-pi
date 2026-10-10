@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import type { GateProcessOwner } from "./test-gate-process";
@@ -196,6 +195,119 @@ export async function withChargedActivity<T>(work: () => Promise<T>): Promise<T>
 }
 
 let reportedRustAccountingLimitation = false;
+let windowsRustLaunchers: Promise<string> | undefined;
+// Repository-local identity cannot vary with a child test's HOME/TEMP/TMPDIR.
+const rustLauncherDirectory = path.resolve(
+	import.meta.dir,
+	"..",
+	"node_modules",
+	".cache",
+	"omp-gate-wrappers",
+	`${process.platform}-${process.arch}`,
+);
+
+/** Compile once with the installed host rustc, without Cargo or its cache/profile flags. */
+function prepareWindowsRustLaunchers(env: Record<string, string>): Promise<string> {
+	windowsRustLaunchers ??= (async () => {
+		const source = path.join(import.meta.dir, "test-gate-compiler-launcher.rs");
+		const content = await fs.readFile(source);
+		const compiler = env.RUSTC || "rustc";
+		const compilerEnv = { ...process.env, ...env, RUSTUP_AUTO_INSTALL: "0" };
+		const versionProcess = Bun.spawn([compiler, "--version"], {
+			env: compilerEnv,
+			stdout: "pipe",
+			stderr: "inherit",
+			windowsHide: true,
+		});
+		const [versionExit, version] = await Promise.all([
+			versionProcess.exited,
+			new Response(versionProcess.stdout).text(),
+		]);
+		if (versionExit !== 0)
+			throw new GateCommandError("Native Rust gate launcher compiler discovery failed", versionExit);
+		const signature = createHash("sha256").update(content).update(version).digest("hex");
+		// Compiler/source updates must not change Cargo's wrapper cache identity.
+		const directory = rustLauncherDirectory;
+		await fs.mkdir(directory, { recursive: true });
+		const image = path.join(directory, "test-gate-launcher.exe");
+		const stamp = path.join(directory, "launcher.sha256");
+		let current: string | undefined;
+		try {
+			current = await fs.readFile(stamp, "utf8");
+			await fs.access(image);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			current = undefined;
+		}
+		const rebuild = current !== signature;
+		if (rebuild) {
+			const temporary = path.join(directory, `launcher-${randomUUID()}.exe`);
+			try {
+				const exitCode = await withCompilerActivity(async () => {
+					const child = Bun.spawn(
+						[
+							compiler,
+							"--edition=2021",
+							"--crate-name",
+							"omp_gate_launcher",
+							"-C",
+							"debuginfo=0",
+							"-C",
+							"opt-level=s",
+							"-o",
+							temporary,
+							source,
+						],
+						{ env: compilerEnv, stdin: "inherit", stdout: "inherit", stderr: "inherit", windowsHide: true },
+					);
+					return await child.exited;
+				});
+				if (exitCode !== 0) throw new GateCommandError("Native Rust gate launcher compilation failed", exitCode);
+				// Each fixed path is replaced only by a completely linked executable.
+				// An in-use image that Windows refuses to replace is a real failure.
+				await fs.rename(temporary, image);
+			} finally {
+				await fs.rm(temporary, { force: true });
+			}
+		}
+		await Promise.all(
+			["test-gate-rustc", "test-gate-rustdoc", "test-gate-doctest-compile", "test-gate-doctest-run"].map(
+				async name => {
+					const destination = path.join(directory, `${name}.exe`);
+					if (!rebuild) {
+						try {
+							await fs.link(image, destination);
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+						}
+						return;
+					}
+					const temporary = `${destination}.${randomUUID()}.tmp`;
+					try {
+						await fs.link(image, temporary);
+						await fs.rename(temporary, destination);
+					} finally {
+						await fs.rm(temporary, { force: true });
+					}
+				},
+			),
+		);
+		if (rebuild) {
+			const temporary = `${stamp}.${randomUUID()}.tmp`;
+			try {
+				await fs.writeFile(temporary, signature);
+				await fs.rename(temporary, stamp);
+			} finally {
+				await fs.rm(temporary, { force: true });
+			}
+		}
+		return directory;
+	})().catch(error => {
+		windowsRustLaunchers = undefined;
+		throw error;
+	});
+	return windowsRustLaunchers;
+}
 
 /**
  * Preserve Rust cache wrappers and compiler events, but keep mixed Cargo work
@@ -213,19 +325,15 @@ export async function withRustCompilerEvents<T>(
 		);
 		reportedRustAccountingLimitation = true;
 	}
-	const extension = process.platform === "win32" ? ".cmd" : ".sh";
+	const extension = process.platform === "win32" ? ".exe" : ".sh";
 	let launchDirectory = import.meta.dir;
-	if (process.platform !== "win32") {
-		// Stable launchers outside the source snapshot avoid chmod-ing tracked
-		// scripts after a Windows checkout. Their paths never vary per run.
-		launchDirectory = path.join(
-			os.tmpdir(),
-			"omp-gate-wrappers",
-			createHash("sha256")
-				.update(import.meta.dir)
-				.digest("hex")
-				.slice(0, 24),
-		);
+	if (process.platform === "win32") {
+		// .cmd entries truncate Cargo's long argv at cmd.exe's 8191-character limit.
+		launchDirectory = await prepareWindowsRustLaunchers(env);
+	} else {
+		// Repository-local launchers avoid chmod-ing tracked scripts after a
+		// Windows checkout and keep one cache identity across isolated temp dirs.
+		launchDirectory = rustLauncherDirectory;
 		await fs.mkdir(launchDirectory, { recursive: true });
 		await Promise.all(
 			["test-gate-rustc", "test-gate-rustdoc", "test-gate-doctest-compile", "test-gate-doctest-run"].map(

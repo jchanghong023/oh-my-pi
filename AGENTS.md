@@ -110,7 +110,7 @@
 ## 构建与缓存纪律
 
 * NEVER 无理由 `cargo clean`，NEVER 删除当前有效的 `target` 目录：构建缓存属于项目资产，清理必须有具体理由（缓存损坏、废弃配置清理等），定点进行并说明范围。
-* 保持同一平台的构建配置与 `target` 目录稳定：不为提速切换 profile / target 目录 / `RUSTFLAGS` 等配置变体；fastcheck/fulltest 与日常开发 MUST 复用正常增量缓存，NEVER 在连续 fastcheck 之间清缓存、强制全量重建或切换缓存变体。只为 Windows/WSL 平台隔离使用各自稳定的原生缓存；编译计时包装器也须保持固定路径并保留已有缓存包装器、features 与 flags。自然冷启动可记录，不能清缓存制造冷样本。
+* 保持同一平台的构建配置与 `target` 目录稳定：不为提速切换 profile / target 目录 / `RUSTFLAGS` 等配置变体；fastcheck/fulltest 与日常开发 MUST 复用正常增量缓存，NEVER 在连续 fastcheck 之间清缓存、强制全量重建或切换缓存变体。只为 Windows/WSL 平台隔离使用各自稳定的原生缓存；编译计时包装器固定在仓库原生 `node_modules/.cache/omp-gate-wrappers/<platform>-<arch>`，不随隔离 HOME/TMPDIR、源码哈希或每轮运行改变入口路径，源码及编译器更新只原地刷新必要资产，保留已有缓存包装器、features 与 flags。自然冷启动可记录，不能清缓存制造冷样本。
 * 最终打包 / 发布 profile 的构建（native addon 打包、release 构建等）只出现在 `fulltest` / `slowtest`，NEVER 进入 `fastcheck`。
 
 ## 验证

@@ -96,6 +96,9 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 					// Loopback-model cases are online unless the fixture opts in.
 					OMP_OFFLINE: "",
 					...env,
+					// The gate marks unit-test children headless. This child is the
+					// real interactive CLI: keep its terminal writes and stdin alive.
+					PI_TEST_RUNTIME: "",
 				}).map(([key, value]) => [key, value ?? ""]),
 			),
 		},

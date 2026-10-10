@@ -17,8 +17,10 @@
 - Kept `/goal-auto-orchestrate` orchestration rules active when Codex Code Mode exposes `task` only through the eval bridge.
 - Preserved automatic-goal provenance when the initial TUI submission invokes a skill, preventing stale orchestration notices after pause or deletion.
 - Fixed Windows local-gate timing across processes, kept simulated compiler intervals charged during gate selftests, and blocked WSL validation of uncommitted source instead of transferring it.
-- Isolated gate signal-handling selftests from the Bun test runner, preventing a simulated interruption from terminating unrelated script tests.
+- Isolated gate signal-handling selftests from the Bun runner and process-heavy test groups, preventing simulated interruption and startup-contention failures while preserving gate ceilings and compilation-exclusion invariants.
 - Ran existing workspace type-check primitives with bounded parallelism in local gates instead of serializing them beyond fastcheck's charged budget.
+- Used native Windows compiler launchers to preserve long Cargo/rustdoc argument lists beyond cmd.exe's limit, with fixed per-platform cache paths.
+- Kept unit-test headless flags out of real PTY smoke children so the interactive CLI can render and accept input.
 - Restored fork validation after upstream compaction-host changes and isolated mutable discovery, fallback, and role-routing test settings from fixed overrides and unrelated background requests.
 - Fixed Linux slowtest cancellation regressions to verify signal-driven child exit and pipe closure without consuming an already-read stream again.
 - Removed the scheduling-sensitive MCP reconnect regression deadline while retaining strict-startup deadline coverage.

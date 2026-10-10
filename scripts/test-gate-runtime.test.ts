@@ -24,9 +24,10 @@ beforeAll(async () => {
 		stub,
 		`
 import * as fs from "node:fs/promises";
-const {gateClockNanoseconds} = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-clock.ts")).href)});
 const plan = JSON.parse(process.argv[2]);
 if (plan.pidFile) await fs.writeFile(plan.pidFile, String(process.pid));
+// Publish process readiness before this intentionally isolated clock-loading boundary.
+const {gateClockNanoseconds} = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-clock.ts")).href)});
 if (plan.cacheFile) {
   let cache = "";
   try { cache = await fs.readFile(plan.cacheFile, "utf8"); } catch {}
@@ -87,7 +88,7 @@ if (plan.rustCargo) {
     if (error.message !== "fixture Cargo failure") throw error;
   }
   if (plan.afterRustCompile) {
-    const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {stdout:"inherit",stderr:"inherit"});
+    const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:plan.afterRustCompile})], {stdout:"inherit",stderr:"inherit"});
     process.exit(await compiler.exited);
   }
   process.exit(0);
@@ -574,27 +575,30 @@ it("charges unwrapped Cargo build-script work overlapping observed compiler even
 	expect(result.status).toBe("TIMEOUT");
 	expect(result.compileExcludedSeconds).toBe(0);
 });
-it("releases mixed Cargo accounting after completion or failure before later pure compilation", async () => {
-	for (const rustCargo of ["completed", "failure"]) {
+it.each(["completed", "failure"])(
+	"releases mixed Cargo accounting after %s before later pure compilation",
+	async rustCargo => {
+		// Include native-launcher preparation in charged time. The compiler
+		// stub still exceeds the injected budget, so PASS proves exclusion.
 		const result = await runGate(
 			"fastcheck",
 			async gate => {
 				await gate.run(
 					command({
 						rustCargo,
-						afterRustCompile: true,
+						afterRustCompile: 3_000,
 						runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
 						dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
 					}),
 				);
 			},
-			{ limitSeconds: 0.8, print: quiet },
+			{ limitSeconds: 2, print: quiet },
 		);
 		expect(result.status).toBe("PASS");
 		expect(result.totalSeconds).toBeGreaterThan(result.limitSeconds);
-		expect(result.compileExcludedSeconds).toBeGreaterThan(0.8);
-	}
-});
+		expect(result.compileExcludedSeconds).toBeGreaterThan(result.limitSeconds);
+	},
+);
 it("parses split token events conservatively and excludes their union", () => {
 	const observed: string[] = [];
 	const parser = new GateEventParser("owned", value => observed.push(value));

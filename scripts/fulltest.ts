@@ -118,7 +118,6 @@ export function fulltestCommands(
 				OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths.filter(file => !isDocumentation(file))),
 			},
 		},
-		{ label: "test/repository scripts", argv: ["bun", "run", "test:scripts"], cwd: root, env, kind: "charged" },
 		{
 			label: "smoke/isolated dev TUI PTY",
 			argv: ["bun", "scripts/fulltest-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
@@ -173,6 +172,18 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 			runGateCommands(gate, tests),
 		]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
+		// Runtime mechanism selftests use short injected charged budgets. Run
+		// them after process-heavy tests, rather than racing their stub startup
+		// against nextest and CLI/PTY subprocess storms on the same platform.
+		await gate.charged(() =>
+			gate.run({
+				label: "test/repository scripts",
+				argv: ["bun", "run", "test:scripts"],
+				cwd: gateRepoRoot,
+				env: localTestEnvironment(home),
+				kind: "charged",
+			}),
+		);
 		const after = await captureSourceIdentity(gate, gateRepoRoot);
 		if (after.digest !== afterBuild.digest || after.head !== afterBuild.head) {
 			throw new GateCommandError(
