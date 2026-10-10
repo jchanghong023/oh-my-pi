@@ -105,8 +105,9 @@ interface WslResult {
 
 function wslRun(distro: string, command: string): WslResult {
 	const result = Bun.spawnSync(
-		["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-lc", command],
-		{ cwd: repoRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+		["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-ls"],
+		// Passing a script via -c lets wsl.exe expand shell variables before bash.
+		{ cwd: repoRoot, stdin: Buffer.from(`${command}\n`), stdout: "pipe", stderr: "pipe" },
 	);
 	return {
 		exitCode: result.exitCode,
@@ -352,10 +353,10 @@ async function runWslFulltest(distro: string, repoPath: string): Promise<number>
 	process.on("SIGTERM", cancel);
 	try {
 		console.log(`\n==> wsl/fulltest`);
-		console.log(`$ wsl --distribution ${distro} --user root -- bash -lc ${command}`);
+		console.log(`$ wsl --distribution ${distro} --user root -- bash -ls < fulltest script`);
 		const child = Bun.spawn(
-			["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-lc", command],
-			{ cwd: repoRoot, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
+			["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-ls"],
+			{ cwd: repoRoot, stdin: Buffer.from(`${command}\n`), stdout: "inherit", stderr: "inherit" },
 		);
 		const exitCode = await child.exited;
 		if (canceled || exitCode !== 0) {
