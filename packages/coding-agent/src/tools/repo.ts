@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { isEnoent, prompt, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, prompt, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { REPO_EXCLUSIONS } from "../repo/files";
@@ -248,88 +249,147 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 	constructor(private readonly session: ToolSession) {}
 
 	async execute(
-		_toolCallId: string,
+		toolCallId: string,
 		params: RepoToolParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	) {
-		const action = params.action ?? "search";
-		if (action !== "status" && (!params.query || !params.query.trim()))
-			throw new ToolError(
-				`repo ${action} requires query (e.g. ${action === "search" ? '{"query":"Widget"}' : '{"action":"symbol","query":"Widget"}'}).`,
-			);
-		if (params.query && params.query.length > 500)
-			throw new ToolError("Repository query exceeds 500 characters; narrow it.");
-		const agentDir = this.session.settings.getAgentDir();
-		const root = resolveRepoRoot(this.session.cwd);
-		const service = repositoryIndexExists(repoIndexPath(agentDir, root))
-			? new RepoService({ agentDir, cwd: this.session.cwd, root })
-			: undefined;
-		try {
-			if (action === "status") {
-				const clipped: FieldTruncations = {};
-				const status = boundedStatus(service ? await service.status() : missingStatus(root), clipped);
-				const lines = formatRepoStatusLines(status);
-				const summary = fieldTruncationLine(clipped);
-				if (summary) lines.push(summary);
-				return toolResult<RepoToolDetails>({ action: "status", status, fieldTruncations: clipped })
-					.text(lines.join("\n"))
-					.done();
-			}
-			const query = params.query!.trim();
-			const options = {
-				path: params.path,
-				limit: 20,
-				cursor: params.cursor,
-				signal,
-			};
-			if (!service) {
-				signal?.throwIfAborted();
-				validateMissingCursor(params.cursor);
-			}
-			if (action === "search") {
-				const result = service
-					? await service.search(query, options)
-					: missingQueryResult<RepoTextHit>(root, missingStatus(root));
-				const clipped: FieldTruncations = {};
-				const coverage = boundedStatus(result.coverage, clipped);
-				const hits = result.hits.map(hit => boundedHit(hit, clipped));
-				const warnings = result.warnings.slice(0, 10).map(warning => field(warning, 180, "warnings", clipped));
-				return toolResult<RepoToolDetails>({
-					action: "search",
-					status: coverage,
-					queryStatus: result.status,
-					hits,
-					cursor: result.cursor,
-					truncated: result.truncated,
-					warnings,
-					fieldTruncations: clipped,
-				})
-					.text(renderQuery("search", query, { ...result, coverage, hits, warnings }, clipped))
-					.done();
-			}
-			const result = service
-				? await service.symbol(query, options)
-				: missingQueryResult<RepoSymbolHit>(root, missingStatus(root));
-			const clipped: FieldTruncations = {};
-			const symbolCoverage = boundedStatus(result.coverage, clipped);
-			const hits = result.hits.map(hit => boundedHit(hit, clipped));
-			const warnings = result.warnings.slice(0, 10).map(warning => field(warning, 180, "warnings", clipped));
-			return toolResult<RepoToolDetails>({
-				action: "symbol",
-				status: symbolCoverage,
-				queryStatus: result.status,
-				hits,
-				cursor: result.cursor,
-				truncated: result.truncated,
-				warnings,
-				fieldTruncations: clipped,
-			})
-				.text(renderQuery("symbol", query, { ...result, coverage: symbolCoverage, hits, warnings }, clipped))
-				.done();
-		} finally {
-			service?.close();
-		}
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `repo-tool-${randomUUID()}`,
+				tool_call_id: toolCallId,
+			},
+			async () => {
+				const started = performance.now();
+				let stage = "validate";
+				logger.info("Repository tool started", {
+					component: "repo_tool",
+					event: "repo_tool",
+					stage,
+					result: "started",
+					action: params.action ?? "search",
+				});
+				try {
+					const value = await (async () => {
+						const action = params.action ?? "search";
+						if (action !== "status" && (!params.query || !params.query.trim()))
+							throw new ToolError(
+								`repo ${action} requires query (e.g. ${action === "search" ? '{"query":"Widget"}' : '{"action":"symbol","query":"Widget"}'}).`,
+							);
+						if (params.query && params.query.length > 500)
+							throw new ToolError("Repository query exceeds 500 characters; narrow it.");
+						const agentDir = this.session.settings.getAgentDir();
+						stage = "open";
+						const root = resolveRepoRoot(this.session.cwd);
+						const service = repositoryIndexExists(repoIndexPath(agentDir, root))
+							? new RepoService({ agentDir, cwd: this.session.cwd, root })
+							: undefined;
+						try {
+							stage = "execute";
+							logger.info("Repository tool index resolved", {
+								component: "repo_tool",
+								event: "repo_tool_index",
+								stage,
+								result: service ? "available" : "missing",
+							});
+							if (action === "status") {
+								const clipped: FieldTruncations = {};
+								const status = boundedStatus(service ? await service.status() : missingStatus(root), clipped);
+								const lines = formatRepoStatusLines(status);
+								const summary = fieldTruncationLine(clipped);
+								if (summary) lines.push(summary);
+								return toolResult<RepoToolDetails>({ action: "status", status, fieldTruncations: clipped })
+									.text(lines.join("\n"))
+									.done();
+							}
+							const query = params.query!.trim();
+							const options = {
+								path: params.path,
+								limit: 20,
+								cursor: params.cursor,
+								signal,
+							};
+							if (!service) {
+								signal?.throwIfAborted();
+								validateMissingCursor(params.cursor);
+							}
+							if (action === "search") {
+								const result = service
+									? await service.search(query, options)
+									: missingQueryResult<RepoTextHit>(root, missingStatus(root));
+								const clipped: FieldTruncations = {};
+								const coverage = boundedStatus(result.coverage, clipped);
+								const hits = result.hits.map(hit => boundedHit(hit, clipped));
+								const warnings = result.warnings
+									.slice(0, 10)
+									.map(warning => field(warning, 180, "warnings", clipped));
+								return toolResult<RepoToolDetails>({
+									action: "search",
+									status: coverage,
+									queryStatus: result.status,
+									hits,
+									cursor: result.cursor,
+									truncated: result.truncated,
+									warnings,
+									fieldTruncations: clipped,
+								})
+									.text(renderQuery("search", query, { ...result, coverage, hits, warnings }, clipped))
+									.done();
+							}
+							const result = service
+								? await service.symbol(query, options)
+								: missingQueryResult<RepoSymbolHit>(root, missingStatus(root));
+							const clipped: FieldTruncations = {};
+							const symbolCoverage = boundedStatus(result.coverage, clipped);
+							const hits = result.hits.map(hit => boundedHit(hit, clipped));
+							const warnings = result.warnings
+								.slice(0, 10)
+								.map(warning => field(warning, 180, "warnings", clipped));
+							return toolResult<RepoToolDetails>({
+								action: "symbol",
+								status: symbolCoverage,
+								queryStatus: result.status,
+								hits,
+								cursor: result.cursor,
+								truncated: result.truncated,
+								warnings,
+								fieldTruncations: clipped,
+							})
+								.text(
+									renderQuery(
+										"symbol",
+										query,
+										{ ...result, coverage: symbolCoverage, hits, warnings },
+										clipped,
+									),
+								)
+								.done();
+						} finally {
+							service?.close();
+						}
+					})();
+					logger.info("Repository tool completed", {
+						component: "repo_tool",
+						event: "repo_tool",
+						stage,
+						result: "completed",
+						elapsed_ms: performance.now() - started,
+					});
+					return value;
+				} catch (error) {
+					const cancelled = signal?.aborted;
+					logger[cancelled ? "info" : error instanceof ToolError ? "warn" : "error"]("Repository tool ended", {
+						component: "repo_tool",
+						event: "repo_tool",
+						stage,
+						result: cancelled ? "cancelled" : "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 }

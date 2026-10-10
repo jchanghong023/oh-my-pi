@@ -33,9 +33,9 @@ import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-mes
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { ModelRefreshStrategy } from "@oh-my-pi/pi-catalog/model-manager";
 import type { Component } from "@oh-my-pi/pi-tui";
+import { logger } from "@oh-my-pi/pi-utils";
 import { $env } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
-import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
@@ -361,6 +361,7 @@ import {
 	cfgTierGoogle,
 	cfgTierOpenai,
 } from "./session/settings";
+import { MAGIC_KEYWORDS } from "./modes/magic-keywords";
 import { cfgInterruptMode } from "./modes/settings";
 import { cfgFollowUpMode } from "./modes/settings";
 import { cfgSteeringMode } from "./modes/settings";
@@ -4394,29 +4395,90 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// requests keep the shared transforms below, and subagents install neither
 		// goal wrapper. Read live state and enabled callable tools after async
 		// transforms; indirect tools may be absent from the top-level schemas.
+		// Diagnostic-only provenance survives the loop's shallow request projections,
+		// but Symbols are never serialized into provider payloads or session history.
+		const kProviderDiagnostics = Symbol("provider.context.diagnostics");
+		type DiagnosticProviderContext = Context & { [kProviderDiagnostics]?: Record<string, unknown> };
+		const orchestrateRequiredTools = MAGIC_KEYWORDS.find(keyword => keyword.id === "orchestrate")!.requires;
 		const transformMainProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
-			const transformed = await transformProviderContext(context, transformModel);
-			const goalState = session?.getGoalModeState();
-			// Remote projection exposes no frontend tools, even if enabled locally.
-			const callableToolNames = isJchToolsAgentModel(transformModel) ? [] : (session?.getEnabledToolNames() ?? []);
-			const todoContext =
-				goalState?.autoOrchestrate === true &&
-				goalState.enabled &&
-				goalState.mode === "active" &&
-				goalState.goal.status === "active"
-					? session?.buildGoalAutoOrchestrateTodoContext(callableToolNames)
-					: undefined;
-			const withGoal = applyGoalAutoOrchestrateContext(transformed, goalState, callableToolNames, todoContext);
-			if (withGoal === transformed || !obfuscator?.hasSecrets()) return withGoal;
-			// Shared transforms already redacted history. Redact only the new,
-			// transient objective rather than bypassing existing secret protection.
-			return {
-				...withGoal,
-				messages: [
-					...withGoal.messages.slice(0, -1),
-					...obfuscateMessages(obfuscator, withGoal.messages.slice(-1)),
-				],
+			const startedAt = performance.now();
+			const prepareId = `prepare-${crypto.randomUUID()}`;
+			const fields = {
+				component: "goal.provider_context",
+				event: "goal_provider_context",
+				prepare_id: prepareId,
+				session_id: session?.sessionId ?? providerSessionId,
+				operation_id: logger.getLogContext().operation_id ?? prepareId,
 			};
+			logger.info("Main provider context preparation started", { ...fields, stage: "transform", result: "started" });
+			let stage = "transform";
+			try {
+				const transformed = await transformProviderContext(context, transformModel);
+				const goalState = session?.getGoalModeState();
+				// Remote projection exposes no frontend tools, even if enabled locally.
+				const callableToolNames = isJchToolsAgentModel(transformModel)
+					? []
+					: (session?.getEnabledToolNames() ?? []);
+				const active =
+					goalState?.autoOrchestrate === true &&
+					goalState.enabled &&
+					goalState.mode === "active" &&
+					goalState.goal.status === "active";
+				const todoContext = active ? session?.buildGoalAutoOrchestrateTodoContext(callableToolNames) : undefined;
+				stage = "inject";
+				const orchestrateEligible = orchestrateRequiredTools.every(tool => callableToolNames.includes(tool));
+				const withGoal = logger.withLogContext(fields, () =>
+					applyGoalAutoOrchestrateContext(transformed, goalState, callableToolNames, todoContext),
+				);
+				// Shared transforms already redacted history. Redact only the new,
+				// transient objective rather than bypassing existing secret protection.
+				stage = "redact";
+				const finalContext =
+					withGoal === transformed || !obfuscator?.hasSecrets()
+						? withGoal
+						: {
+								...withGoal,
+								messages: [
+									...withGoal.messages.slice(0, -1),
+									...obfuscateMessages(obfuscator, withGoal.messages.slice(-1)),
+								],
+							};
+				const diagnostics = {
+					...fields,
+					goal_id: goalState?.goal.id,
+					auto_orchestrate: goalState?.autoOrchestrate === true,
+					active: Boolean(active),
+					enabled: goalState?.enabled === true,
+					mode: goalState?.mode ?? "none",
+					status: goalState?.goal.status ?? "none",
+					task_available: callableToolNames.includes("task"),
+					orchestrate_eligible: orchestrateEligible,
+					goal_injected: Boolean(active),
+					orchestrate_injected: Boolean(active && orchestrateEligible),
+					unattended_injected: Boolean(active),
+					tool_count: callableToolNames.length,
+				};
+				const diagnosticContext: DiagnosticProviderContext = {
+					...finalContext,
+					[kProviderDiagnostics]: diagnostics,
+				};
+				logger.info("Main provider context preparation completed", {
+					...diagnostics,
+					stage: "final_context",
+					result: active ? "injected" : "inactive",
+					elapsed_ms: performance.now() - startedAt,
+				});
+				return diagnosticContext;
+			} catch (error) {
+				logger.error("Main provider context preparation failed", {
+					...fields,
+					stage,
+					result: "failed",
+					elapsed_ms: performance.now() - startedAt,
+					...logger.diagnosticError(error),
+				});
+				throw error;
+			}
 		};
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
@@ -4587,6 +4649,78 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: effectiveGetApiKey,
 			streamFn: (streamModel, context, streamOptions) => {
+				const preparedDiagnostics = (context as DiagnosticProviderContext)[kProviderDiagnostics];
+				const requestFields = {
+					...preparedDiagnostics,
+					component: "sdk.provider",
+					event: "main_provider_request",
+					session_id: session?.sessionId ?? streamOptions?.sessionId ?? providerSessionId,
+					provider_session_id: streamOptions?.sessionId ?? providerSessionId,
+					request_id: `provider-${crypto.randomUUID()}`,
+					operation_id:
+						preparedDiagnostics?.operation_id ??
+						logger.getLogContext().operation_id ??
+						`provider-op-${crypto.randomUUID()}`,
+					goal_id: preparedDiagnostics?.goal_id ?? session?.getGoalModeState()?.goal.id,
+					agent_kind: agentKind,
+				};
+				const dispatch: StreamFn = (requestModel, requestContext, requestOptions) =>
+					logger.withLogContext(requestFields, () => {
+						const startedAt = performance.now();
+						logger.info("Main provider request started", { stage: "dispatch", result: "started" });
+						try {
+							const stream = primaryStreamFn(requestModel, requestContext, requestOptions);
+							// StreamFn may return a Promise (the concurrency wrapper is
+							// async even without a cap). Observe settlement without
+							// replacing its return value or consuming provider events.
+							let observationStage = "dispatch";
+							void Promise.resolve(stream)
+								.then(resolvedStream => {
+									observationStage = "response";
+									return resolvedStream.result();
+								})
+								.then(
+									message => {
+										const result =
+											message.stopReason === "aborted"
+												? "cancelled"
+												: message.stopReason === "error"
+													? "failed"
+													: "completed";
+										const terminalFields = {
+											stage: "response",
+											result,
+											stop_reason: message.stopReason,
+											elapsed_ms: performance.now() - startedAt,
+										};
+										if (result === "failed") logger.error("Main provider request failed", terminalFields);
+										else logger.info("Main provider request finished", terminalFields);
+									},
+									error => {
+										const fields = {
+											stage: observationStage,
+											result: requestOptions?.signal?.aborted ? "cancelled" : "failed",
+											elapsed_ms: performance.now() - startedAt,
+											...logger.diagnosticError(error),
+										};
+										if (requestOptions?.signal?.aborted)
+											logger.info("Main provider request cancelled", fields);
+										else logger.error("Main provider request failed", fields);
+									},
+								);
+							return stream;
+						} catch (error) {
+							const fields = {
+								stage: "dispatch",
+								result: requestOptions?.signal?.aborted ? "cancelled" : "failed",
+								elapsed_ms: performance.now() - startedAt,
+								...logger.diagnosticError(error),
+							};
+							if (requestOptions?.signal?.aborted) logger.info("Main provider request cancelled", fields);
+							else logger.error("Main provider request failed", fields);
+							throw error;
+						}
+					});
 				if (notifyFirstChatDispatch) {
 					const cb = notifyFirstChatDispatch;
 					notifyFirstChatDispatch = undefined;
@@ -4599,7 +4733,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 				}
 				if (isJchToolsAgentModel(streamModel)) {
-					return primaryStreamFn(streamModel, context, { signal: streamOptions?.signal });
+					return dispatch(streamModel, context, { signal: streamOptions?.signal });
 				}
 				const externalThinking =
 					cfgExternalThinking.get(settings) &&
@@ -4613,7 +4747,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						? {}
 						: { toolNamespacesInfo: codeModeState.namespacesInfo }),
 				};
-				const stream = primaryStreamFn(streamModel, context, {
+				const stream = dispatch(streamModel, context, {
 					...merged,
 					...(fallbackCreditRedemption !== undefined ? { fallbackCreditRedemption } : {}),
 				});

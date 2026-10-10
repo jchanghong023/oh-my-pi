@@ -2,7 +2,7 @@
 
 本仓库是个人自己使用的 fork 维护仓库：持续同步上游最新 `main`，保留个人功能和默认值，不以对外发布为目标。
 
-本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。当前有效范围：模型选择、日志行为与验证编排跟随上游规则（fork 不维护模型硬排除、专用日志策略或手工测试白名单），`/team`、`/repo`、`/wiki`、company/zcode-api、`/jch*`、fullsend、Codex 策略与分发能力完整保留（各域验证状态见[目录索引](README.md)）。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
+本页面向本人和 AI agent，维护项目定位、共同使用目标及**相对当前上游基线仍有效、对使用者有影响的功能差异**，不记录实现细节或同步历史（随日常开发沉淀、上游尚未包含的缺陷修复统一记录在「上游缺陷散点修复」一节，并在上游等价修复合入后删除对应条目）。开发规则见仓库根 `AGENTS.md`，同步步骤见 `.omp/skills/upstream-release-sync/SKILL.md`；需求域划分见[目录索引](README.md)。当前有效范围：模型选择与验证编排跟随上游规则（fork 不维护模型硬排除或手工测试白名单），诊断日志继续复用上游 logger，覆盖契约见本文「运行诊断日志」；`/team`、`/repo`、`/wiki`、company/zcode-api、`/jch*`、fullsend、Codex 策略与分发能力完整保留（各域验证状态见[目录索引](README.md)）。代码定位索引的独立契约见[代码定位索引](repo-index.md)。
 
 ## 项目定位与使用场景
 
@@ -156,6 +156,7 @@
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：归档解压 symlink 在 Windows EPERM 时降级为 junction 或文件复制（PR #14267 待上游合并）。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
+- `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
 ### 默认设置
@@ -180,10 +181,21 @@
 - `composer.shape=pi` 时状态栏独立位于输入框下方。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 
+### 运行诊断日志
+
+- 项目 MUST 提供可落盘的诊断日志，主要用于运行时问题定位和 Agent 故障分析；fork 功能复用上游统一 logger、目录、级别与轮转，不建立平行日志系统或新增必填配置。
+- 异常、超时、重试、降级与部分提交等分支 MUST 留下可识别的阶段和结果；关键调用 MUST 记录安全的结果摘要及耗时。可能阻塞的调用、网络请求、IPC 和子进程 MUST 有开始与成功/失败/取消终态，不能仅依赖 UI、stdout/stderr、协议回包或会话 JSONL。
+- 运行日志使用单行结构化记录，MUST 写入 `.log` 文件，每条记录具有含时区的毫秒时间戳、级别和 PID；业务边界补充稳定事件、组件、阶段与 `elapsed_ms`。默认路径由 `getLogsDir()` 解析为当前数据根的 `logs/omp.<日期>.<PID>.log`，随 `OMP_CONFIG_ROOT`、profile 和适用的 Linux XDG 状态目录迁移；沿用现有日期/大小轮转与保留规则。
+- 级别约定：INFO 记录关键开始、完成和状态变化；WARN 记录可恢复异常、重试或降级；ERROR 记录当前操作失败；DEBUG 仅承载额外细节。正常取消、服务缺席和协议预期拒绝不能冒充故障；必要诊断不得全部藏在可关闭的 DEBUG 中。
+- 同一操作 MUST 通过 `operation_id` 及现有 request/job/goal/session/tool-call 标识关联起止和阶段；异步分支继承关联上下文，内部跨进程调用尽可能透传现有标识，不为日志改变外部协议。
+- 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
+- 日志目录不可写时 MUST 尝试合理的用户级目录回退，仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
+- 本契约覆盖已保留的 fork 功能及其公共边界：JchTools、team、Goal、RPC、docs/wiki、repo/AST 通知、company/zcode 与向量请求、Codex 压缩、JCH Git、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
+
 ### 安装与运行
 
 - 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE` 与 `OMP_CONFIG_ROOT`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
-- 日志行为跟随上游默认，不维护 fork 专用日志策略或启动参数。
+- 日志框架、默认目录与启动参数跟随上游；fork 功能的诊断覆盖遵循上文「运行诊断日志」。
 - 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
 - `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）把整个数据根从 `~/.omp` 迁移到指定目录：agent 数据、缓存、运行状态、profiles 等全部派生目录随之迁移，浏览器工具的 storage-state 等跟随；项目级 `.omp/` 不受影响。与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。

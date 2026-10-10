@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { normalizePlainText, truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
@@ -72,128 +72,214 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	) {
-		// Argument validation is lenient so a stray extra key cannot fail a call;
-		// `query` itself is still required, and the error names what arrived.
-		const raw = params !== null && typeof params === "object" ? (params as Record<string, unknown>) : {};
-		const received = Object.keys(raw).filter(key => key !== "__parseError");
-		const receivedQuery = typeof raw.query === "string" && raw.query.trim() ? raw.query.trim() : undefined;
-		if (!receivedQuery)
-			throw new ToolError(
-				`wiki requires a query. Received: ${received.length > 0 ? received.join(", ") : "nothing"}. Example: {"query":"MBIST"}`,
-			);
-		const query =
-			receivedQuery.length > MAX_QUERY_CHARS ? truncateHeading(receivedQuery, MAX_QUERY_CHARS) : receivedQuery;
-
-		const service = new DocsService({ agentDir: this.session.settings.getAgentDir(), cwd: this.session.cwd });
-		try {
-			if (service.list().length === 0)
-				throw new ToolError('No document indexes. Run: omp docs init "<dir>" --name <name>');
-			const result = service.search(query, { limit: PAGE_SECTIONS });
-			if (result.sections.length === 0)
-				throw new ToolError(`No section matches "${query}". Use one distinctive term rather than a sentence.`);
-
-			// `total` counts every FTS row, the structural labels included; see the
-			// footer comment for why that is not measured against `bodies`.
-			const scope =
-				result.total !== undefined
-					? `${result.total} matching section(s)`
-					: `${result.sections.length}+ matching section(s)`;
-			// The rendered page opens with a header of its own, so its cost is
-			// reserved before the first body is charged: the six placeholder digits
-			// are the widest `used` can print, and joining the header to the page
-			// costs two more.
-			const headerAllowance = `"${query}" · ${scope} · 000000/${TEXT_BUDGET_CHARS} characters`.length + 2;
-			const bodies: string[] = [];
-			const seen = new Set<string>();
-			let used = headerAllowance;
-			let skippedForSize = 0;
-			let duplicates = 0;
-			let oversizeCarried = 0;
-			for (const section of result.sections) {
-				// Structural labels (`#### Cell`) hold nothing the header line does not
-				// already carry. Indexes built before this rule keep them, so skip here;
-				// a heading that reads as a real phrase is content and stays.
-				const shape = section.shape;
-				if (shape === "stub") continue;
-				const header = sectionHeader(bodies.length + 1, section);
-				// The same text often ships in several documents (attachment copies,
-				// re-exports). Repeating it spends the page on nothing new, so a later
-				// copy is reduced to a pointer at the first one.
-				const alreadyShown = section.text.length > 200 && seen.has(section.text);
-				const headingOnlyInHeader = shape === "heading-only" && header.includes(normalizePlainText(section.text));
-				const body = alreadyShown
-					? "(identical text to an earlier hit on this page)"
-					: shape === "heading-only"
-						? headingOnlyInHeader
-							? "(heading only — the title above is the content)"
-							: `(heading only)\n${section.text}`
-						: section.text;
-				// Headers are context too, so the whole rendered page counts.
-				const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
-				if (used + cost > TEXT_BUDGET_CHARS) {
-					// Keep the best hit whole even when a legacy section or a long
-					// locator makes its rendered cost exceed the page budget.
-					if (bodies.length > 0) {
-						skippedForSize += 1;
-						continue;
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `wiki-${crypto.randomUUID()}`,
+				tool_call_id: _toolCallId,
+			},
+			async () => {
+				const started = performance.now();
+				let stage = "validate";
+				let expectedResult: string | undefined;
+				let completion: Record<string, number | undefined> | undefined;
+				const fields = { component: "wiki", event: "wiki.query" };
+				logger.info("wiki.query.started", { ...fields, stage, result: "started" });
+				try {
+					// Argument validation is lenient so a stray extra key cannot fail a call;
+					// `query` itself is still required, and the error names what arrived.
+					const raw = params !== null && typeof params === "object" ? (params as Record<string, unknown>) : {};
+					const received = Object.keys(raw).filter(key => key !== "__parseError");
+					const receivedQuery = typeof raw.query === "string" && raw.query.trim() ? raw.query.trim() : undefined;
+					if (!receivedQuery) {
+						expectedResult = "invalid_query";
+						throw new ToolError(
+							`wiki requires a query. Received: ${received.length > 0 ? received.join(", ") : "nothing"}. Example: {"query":"MBIST"}`,
+						);
 					}
-					oversizeCarried += 1;
-				}
-				bodies.push(`${header}\n${body}`);
-				used += cost;
-				// Only text this page actually carries counts as shown: a section dropped
-				// for size was never delivered, and a pointer to it would be a lie.
-				seen.add(section.text);
-				duplicates += alreadyShown ? 1 : 0;
-			}
-			// Every match is a stub: the document's first section is indexed on purpose
-			// (its row is the only one carrying the relative path), and a name search
-			// lands on it. Its header still locates the document — the text it would
-			// have carried says no more — so the call answers instead of failing.
-			if (bodies.length === 0) {
-				for (const section of result.sections) {
-					const header = sectionHeader(bodies.length + 1, section);
-					if (used + header.length + 2 > TEXT_BUDGET_CHARS) break;
-					bodies.push(header);
-					used += header.length + 2;
-				}
-				// On this path the header is all a hit delivers, so one that did not fit
-				// is withheld like any other section; the stub rule skipped these before
-				// the budget was consulted, so nothing is counted twice.
-				skippedForSize += result.sections.length - bodies.length;
-			}
-			if (bodies.length === 0) throw new ToolError(`Sections matching "${query}" carry no body text.`);
+					const query =
+						receivedQuery.length > MAX_QUERY_CHARS
+							? truncateHeading(receivedQuery, MAX_QUERY_CHARS)
+							: receivedQuery;
+					logger.info("wiki.query.validated", {
+						...fields,
+						stage,
+						result: "completed",
+						query_length: query.length,
+						query_truncated: receivedQuery.length > MAX_QUERY_CHARS,
+						ignored_argument_count: received.filter(key => key !== "query").length,
+					});
+					stage = "open";
 
-			// `total` counts every FTS row, the structural labels included, and those
-			// never reach `bodies` by design: measured against `bodies` it reported a cut
-			// page whenever a document title matched, and it swallowed the collapse note
-			// whenever duplicates were the only reduction. What this page withholds is
-			// what it dropped for size here, plus the hits the ranked page never reached
-			// — hits the page did reach count as served even when they render no text.
-			const beyondPage = result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
-			const hidden = skippedForSize > 0 || beyondPage > 0 || oversizeCarried > 0;
-			const skipped = skippedForSize > 0 ? ` (${skippedForSize} too long for what was left)` : "";
-			const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
-			const oversized =
-				oversizeCarried > 0
-					? ` — ${oversizeCarried} hit exceeds the available page budget and is carried whole`
-					: "";
-			const budget =
-				oversizeCarried > 0
-					? `with a ${TEXT_BUDGET_CHARS}-character target`
-					: `within ${TEXT_BUDGET_CHARS} characters`;
-			const rest = skippedForSize > 0 || beyondPage > 0 ? "; search again with narrower terms for the rest." : ".";
-			const footer = hidden
-				? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections ${budget}${skipped}${collapsed}${oversized}${rest}`
-				: collapsed
-					? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
-					: "";
-			const text = [`"${query}" · ${scope} · ${used}/${TEXT_BUDGET_CHARS} characters`, ...bodies].join("\n\n");
-			return toolResult()
-				.text(text + footer)
-				.done();
-		} finally {
-			service.close();
-		}
+					const service = new DocsService({
+						agentDir: this.session.settings.getAgentDir(),
+						cwd: this.session.cwd,
+					});
+					try {
+						stage = "indexes";
+						const indexCount = service.list().length;
+						if (indexCount === 0) {
+							expectedResult = "no_index";
+							throw new ToolError('No document indexes. Run: omp docs init "<dir>" --name <name>');
+						}
+						logger.info("wiki.query.indexes", { ...fields, stage, result: "completed", index_count: indexCount });
+						stage = "query";
+						const result = service.search(query, { limit: PAGE_SECTIONS });
+						if (result.sections.length === 0) {
+							expectedResult = "no_match";
+							throw new ToolError(
+								`No section matches "${query}". Use one distinctive term rather than a sentence.`,
+							);
+						}
+						stage = "render";
+
+						// `total` counts every FTS row, the structural labels included; see the
+						// footer comment for why that is not measured against `bodies`.
+						const scope =
+							result.total !== undefined
+								? `${result.total} matching section(s)`
+								: `${result.sections.length}+ matching section(s)`;
+						// The rendered page opens with a header of its own, so its cost is
+						// reserved before the first body is charged: the six placeholder digits
+						// are the widest `used` can print, and joining the header to the page
+						// costs two more.
+						const headerAllowance = `"${query}" · ${scope} · 000000/${TEXT_BUDGET_CHARS} characters`.length + 2;
+						const bodies: string[] = [];
+						const seen = new Set<string>();
+						let used = headerAllowance;
+						let skippedForSize = 0;
+						let duplicates = 0;
+						let oversizeCarried = 0;
+						for (const section of result.sections) {
+							// Structural labels (`#### Cell`) hold nothing the header line does not
+							// already carry. Indexes built before this rule keep them, so skip here;
+							// a heading that reads as a real phrase is content and stays.
+							const shape = section.shape;
+							if (shape === "stub") continue;
+							const header = sectionHeader(bodies.length + 1, section);
+							// The same text often ships in several documents (attachment copies,
+							// re-exports). Repeating it spends the page on nothing new, so a later
+							// copy is reduced to a pointer at the first one.
+							const alreadyShown = section.text.length > 200 && seen.has(section.text);
+							const headingOnlyInHeader =
+								shape === "heading-only" && header.includes(normalizePlainText(section.text));
+							const body = alreadyShown
+								? "(identical text to an earlier hit on this page)"
+								: shape === "heading-only"
+									? headingOnlyInHeader
+										? "(heading only — the title above is the content)"
+										: `(heading only)\n${section.text}`
+									: section.text;
+							// Headers are context too, so the whole rendered page counts.
+							const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
+							if (used + cost > TEXT_BUDGET_CHARS) {
+								// Keep the best hit whole even when a legacy section or a long
+								// locator makes its rendered cost exceed the page budget.
+								if (bodies.length > 0) {
+									skippedForSize += 1;
+									continue;
+								}
+								oversizeCarried += 1;
+							}
+							bodies.push(`${header}\n${body}`);
+							used += cost;
+							// Only text this page actually carries counts as shown: a section dropped
+							// for size was never delivered, and a pointer to it would be a lie.
+							seen.add(section.text);
+							duplicates += alreadyShown ? 1 : 0;
+						}
+						// Every match is a stub: the document's first section is indexed on purpose
+						// (its row is the only one carrying the relative path), and a name search
+						// lands on it. Its header still locates the document — the text it would
+						// have carried says no more — so the call answers instead of failing.
+						if (bodies.length === 0) {
+							for (const section of result.sections) {
+								const header = sectionHeader(bodies.length + 1, section);
+								if (used + header.length + 2 > TEXT_BUDGET_CHARS) break;
+								bodies.push(header);
+								used += header.length + 2;
+							}
+							// On this path the header is all a hit delivers, so one that did not fit
+							// is withheld like any other section; the stub rule skipped these before
+							// the budget was consulted, so nothing is counted twice.
+							skippedForSize += result.sections.length - bodies.length;
+						}
+						if (bodies.length === 0) {
+							expectedResult = "no_body";
+							throw new ToolError(`Sections matching "${query}" carry no body text.`);
+						}
+
+						// `total` counts every FTS row, the structural labels included, and those
+						// never reach `bodies` by design: measured against `bodies` it reported a cut
+						// page whenever a document title matched, and it swallowed the collapse note
+						// whenever duplicates were the only reduction. What this page withholds is
+						// what it dropped for size here, plus the hits the ranked page never reached
+						// — hits the page did reach count as served even when they render no text.
+						const beyondPage =
+							result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
+						const hidden = skippedForSize > 0 || beyondPage > 0 || oversizeCarried > 0;
+						const skipped = skippedForSize > 0 ? ` (${skippedForSize} too long for what was left)` : "";
+						const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
+						const oversized =
+							oversizeCarried > 0
+								? ` — ${oversizeCarried} hit exceeds the available page budget and is carried whole`
+								: "";
+						const budget =
+							oversizeCarried > 0
+								? `with a ${TEXT_BUDGET_CHARS}-character target`
+								: `within ${TEXT_BUDGET_CHARS} characters`;
+						const rest =
+							skippedForSize > 0 || beyondPage > 0 ? "; search again with narrower terms for the rest." : ".";
+						const footer = hidden
+							? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections ${budget}${skipped}${collapsed}${oversized}${rest}`
+							: collapsed
+								? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
+								: "";
+						const text = [`"${query}" · ${scope} · ${used}/${TEXT_BUDGET_CHARS} characters`, ...bodies].join(
+							"\n\n",
+						);
+						const response = toolResult()
+							.text(text + footer)
+							.done();
+						completion = {
+							match_count: result.total,
+							section_count: result.sections.length,
+							rendered_section_count: bodies.length,
+							rendered_characters: text.length + footer.length,
+							skipped_section_count: skippedForSize,
+							duplicate_count: duplicates,
+							oversize_count: oversizeCarried,
+						};
+						return response;
+					} finally {
+						const operationStage = stage;
+						const operationExpectedResult = expectedResult;
+						stage = "close";
+						expectedResult = undefined;
+						service.close();
+						stage = operationStage;
+						expectedResult = operationExpectedResult;
+						if (completion)
+							logger.info("wiki.query.completed", {
+								...fields,
+								stage: "render",
+								result: "completed",
+								elapsed_ms: performance.now() - started,
+								...completion,
+							});
+					}
+				} catch (error) {
+					const cancelled = error instanceof Error && error.name === "AbortError";
+					const log = expectedResult || cancelled ? logger.info : logger.error;
+					log("wiki.query.finished", {
+						...fields,
+						stage,
+						result: cancelled ? "cancelled" : (expectedResult ?? "failed"),
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 }

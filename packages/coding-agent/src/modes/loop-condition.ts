@@ -93,6 +93,15 @@ export async function evaluateLoopCondition(
 	condition: LoopConditionConfig,
 	options: LoopConditionOptions,
 ): Promise<LoopConditionVerdict> {
+	const started = performance.now();
+	const context = {
+		component: "loop_condition",
+		operation_id: logger.getLogContext().operation_id ?? `loop-condition-${crypto.randomUUID()}`,
+		session_id: options.sessionId,
+		until: condition.until,
+		timeout_ms: options.timeoutMs,
+	};
+	logger.info("loop_condition_started", { ...context, event: "loop_condition_started", stage: "spawn" });
 	let result: BashResult;
 	try {
 		result = await executeBash(condition.command, {
@@ -102,7 +111,14 @@ export async function evaluateLoopCondition(
 			sessionKey: `${LOOP_CONDITION_SESSION_KEY}:${options.sessionId}`,
 		});
 	} catch (error) {
-		logger.error("loop condition failed to start", { command: condition.command, error: String(error) });
+		logger.error("loop_condition_failed", {
+			...context,
+			event: "loop_condition_failed",
+			stage: "spawn",
+			result: "failed",
+			elapsed_ms: performance.now() - started,
+			error: logger.diagnosticError(error),
+		});
 		return {
 			kind: "error",
 			message: `Loop condition ${quoteCommand(condition.command)} could not run: ${truncateToWidth(sanitizeStatusText(String(error)), OUTPUT_PREVIEW_WIDTH)}. Loop mode disabled.`,
@@ -112,14 +128,40 @@ export async function evaluateLoopCondition(
 	// Timeout before abort: a timed-out run also reports `cancelled`, and the
 	// distinction matters — a deadline is a broken condition, Esc is not.
 	if (result.timedOut) {
+		logger.warn("loop_condition_timed_out", {
+			...context,
+			event: "loop_condition_timed_out",
+			stage: "execute",
+			result: "timeout",
+			elapsed_ms: performance.now() - started,
+		});
 		return {
 			kind: "error",
 			message: `Loop condition ${quoteCommand(condition.command)} timed out after ${formatTimeout(options.timeoutMs)}. Loop mode disabled.`,
 		};
 	}
-	if (result.cancelled) return { kind: "aborted" };
+	if (result.cancelled) {
+		logger.info("loop_condition_cancelled", {
+			...context,
+			event: "loop_condition_cancelled",
+			stage: "execute",
+			result: "cancelled",
+			elapsed_ms: performance.now() - started,
+		});
+		return { kind: "aborted" };
+	}
 
 	const exitCode = result.exitCode;
+	if (exitCode === 0 || exitCode === 1) {
+		logger.info("loop_condition_completed", {
+			...context,
+			event: "loop_condition_completed",
+			stage: "execute",
+			result: (exitCode === 0) !== Boolean(condition.until) ? "continue" : "halt",
+			elapsed_ms: performance.now() - started,
+			exitCode,
+		});
+	}
 	if (exitCode === 0) {
 		if (!condition.until) return { kind: "continue" };
 		return {
@@ -139,7 +181,14 @@ export async function evaluateLoopCondition(
 	const preview = previewOutput(result.output);
 	const detail = preview ? `: ${preview}` : "";
 	const status = exitCode === undefined ? "no exit status" : `exit ${exitCode}`;
-	logger.warn("loop condition command failed", { command: condition.command, exitCode });
+	logger.warn("loop_condition_failed", {
+		...context,
+		event: "loop_condition_failed",
+		stage: "execute",
+		result: "failed",
+		elapsed_ms: performance.now() - started,
+		exitCode,
+	});
 	return {
 		kind: "error",
 		message: `Loop condition ${quoteCommand(condition.command)} failed (${status})${detail}. Loop mode disabled.`,

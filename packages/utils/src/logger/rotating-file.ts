@@ -34,6 +34,10 @@ export interface RotatingFileOptions {
 	 * staying pinned to a file the sink later prunes.
 	 */
 	readonly onRotate?: (filePath: string) => void;
+	/** User-level destination tried once if creation, opening, or writing fails. */
+	readonly fallbackDirectory?: string;
+	/** Return an optional already-formatted recovery record; never called recursively. */
+	readonly onFailure?: (error: unknown, stage: string, recoveredPath?: string) => string | undefined;
 }
 
 /**
@@ -51,13 +55,17 @@ export interface RotatingFileOptions {
  * selection matches an unbatched sink record for record.
  */
 export class RotatingFileSink {
-	readonly #directory: string;
+	#directory: string;
 	readonly #filenamePrefix: string;
 	readonly #filenameSuffix: string;
 	readonly #maxBytes: number;
 	readonly #maxFiles: number;
 	readonly #batch: RotatingFileBatchOptions | undefined;
 	readonly #onRotate: ((filePath: string) => void) | undefined;
+	readonly #fallbackDirectory: string | undefined;
+	readonly #onFailure: RotatingFileOptions["onFailure"];
+	#fallbackAttempted = false;
+	#failed = false;
 	/** Files this sink created, oldest first. */
 	readonly #files: string[] = [];
 	#activeDay: string | undefined;
@@ -83,10 +91,13 @@ export class RotatingFileSink {
 		this.#maxFiles = options.maxFiles;
 		this.#batch = options.batch;
 		this.#onRotate = options.onRotate;
+		this.#fallbackDirectory = options.fallbackDirectory;
+		this.#onFailure = options.onFailure;
 	}
 
 	#openFd(filePath: string): void {
 		this.#closeFd();
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		this.#fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
 		try {
 			this.#onRotate?.(filePath);
@@ -106,6 +117,73 @@ export class RotatingFileSink {
 		}
 	}
 
+	/** Resolve and open the actual destination without adding a record. */
+	prepare(day = localDay(new Date())): string | undefined {
+		this.#recover(() => {
+			this.#selectFile(day);
+			if (this.#activePath && this.#fd === undefined) {
+				this.#registerFile(this.#activePath);
+				this.#openFd(this.#activePath);
+			}
+		}, "open");
+		return this.#failed ? undefined : this.#activePath;
+	}
+
+	/** Current destination, including any user-level fallback. */
+	get filePath(): string | undefined {
+		return this.#failed ? undefined : this.#activePath;
+	}
+
+	#notifyFailure(error: unknown, stage: string, recoveredPath?: string): string | undefined {
+		try {
+			return this.#onFailure?.(error, stage, recoveredPath);
+		} catch {
+			return undefined;
+		}
+	}
+
+	#recover(action: () => void, stage: string): void {
+		if (this.#closed || this.#failed) return;
+		try {
+			action();
+			return;
+		} catch (error) {
+			const fallback = this.#fallbackDirectory;
+			if (!this.#fallbackAttempted && fallback && path.resolve(fallback) !== path.resolve(this.#directory)) {
+				this.#fallbackAttempted = true;
+				this.#closeFd();
+				this.#directory = fallback;
+				const day = this.#activeDay ?? localDay(new Date());
+				this.#activeIndex = 0;
+				this.#setActivePath(day, 0);
+				this.#activeBytes += this.#pendingBytes;
+				try {
+					this.#registerFile(this.#activePath!);
+					this.#openFd(this.#activePath!);
+					const recovery = this.#notifyFailure(error, stage, this.#activePath);
+					if (recovery) {
+						const record = `${recovery}${os.EOL}`;
+						this.#pending = record + this.#pending;
+						const bytes = Buffer.byteLength(record, "utf8");
+						this.#pendingBytes += bytes;
+						this.#activeBytes += bytes;
+					}
+					action();
+					return;
+				} catch (fallbackError) {
+					this.#notifyFailure(fallbackError, stage);
+				}
+			} else {
+				this.#notifyFailure(error, stage);
+			}
+			this.#failed = true;
+			this.#pending = "";
+			this.#pendingBytes = 0;
+			clearTimeout(this.#flushTimer);
+			this.#flushTimer = undefined;
+			this.#closeFd();
+		}
+	}
 	/**
 	 * Append one already-formatted log record. A batching sink buffers it unless
 	 * `flushNow` is set or the buffer reached its size threshold; either way the
@@ -114,8 +192,8 @@ export class RotatingFileSink {
 	 * reuse it.
 	 */
 	write(line: string, flushNow = false, day = localDay(new Date())): void {
-		if (this.#closed) return;
-		this.#selectFile(day);
+		this.#recover(() => this.#selectFile(day), "rotate");
+		if (this.#closed || this.#failed) return;
 		const record = `${line}${os.EOL}`;
 		const bytes = Buffer.byteLength(record, "utf8");
 		this.#pending += record;
@@ -132,46 +210,39 @@ export class RotatingFileSink {
 
 	/** Write every buffered record to the active file now. */
 	flush(): void {
-		if (this.#flushTimer !== undefined) {
-			clearTimeout(this.#flushTimer);
-			this.#flushTimer = undefined;
-		}
+		this.#recover(() => this.#flush(), "flush");
+	}
+
+	#flush(): void {
+		clearTimeout(this.#flushTimer);
+		this.#flushTimer = undefined;
 		const activePath = this.#activePath;
 		if (this.#pendingBytes === 0 || !activePath) return;
-		const buf = Buffer.from(this.#pending, "utf8");
-		// Drop the batch even if the write below fails, so a broken file cannot
-		// make the buffer grow without bound.
-		this.#pending = "";
-		this.#pendingBytes = 0;
 		if (this.#fd === undefined) {
 			this.#registerFile(activePath);
 			this.#openFd(activePath);
 		}
+		const buf = Buffer.from(this.#pending, "utf8");
 		let off = 0;
 		while (off < buf.length) {
 			const written = fs.writeSync(this.#fd!, buf, off);
-			if (written <= 0) break;
+			if (written <= 0) throw new Error("Log write made no progress");
 			off += written;
 		}
+		// On failure replay complete JSON records at the fallback, never byte fragments.
+		this.#pending = "";
+		this.#pendingBytes = 0;
 	}
 
 	#flushFromTimer = (): void => {
 		this.#flushTimer = undefined;
-		try {
-			this.flush();
-		} catch {
-			// A background flush has no caller to report to; logging never throws.
-		}
+		this.flush();
 	};
 
 	/** Write buffered records, then stop accepting records. */
 	close(): void {
 		if (this.#closed) return;
-		try {
-			this.flush();
-		} catch {
-			// Best-effort: a failed final write must not keep the descriptor open.
-		}
+		this.flush();
 		this.#closed = true;
 		this.#closeFd();
 	}
@@ -183,7 +254,7 @@ export class RotatingFileSink {
 		// close its descriptor BEFORE the next file is registered, because
 		// registration prunes beyond maxFiles — on Windows the pruned
 		// predecessor cannot be deleted while still open, which would leak it.
-		this.flush();
+		this.#flush();
 		this.#closeFd();
 		if (dayChanged) {
 			this.#activeDay = day;
@@ -217,8 +288,16 @@ export class RotatingFileSink {
 			if (!removed) break;
 			try {
 				fs.rmSync(removed, { force: true });
-			} catch {
-				// Retention is best-effort; the current record must still be written.
+			} catch (error) {
+				// Retention may fail without making the current destination unusable.
+				const notice = this.#notifyFailure(error, "retention", filePath);
+				if (notice) {
+					const record = `${notice}${os.EOL}`;
+					const bytes = Buffer.byteLength(record, "utf8");
+					this.#pending += record;
+					this.#pendingBytes += bytes;
+					this.#activeBytes += bytes;
+				}
 			}
 		}
 	}

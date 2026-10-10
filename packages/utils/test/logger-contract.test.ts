@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const fixtureDir = path.join(import.meta.dir, "fixtures");
 const probePath = path.join(fixtureDir, "logger-contract-probe.ts");
@@ -55,6 +56,7 @@ async function runScenario(
 				// os.homedir() on Windows reads USERPROFILE, not HOME: without
 				// this the default-file scenario logs into the real profile.
 				USERPROFILE: primaryDir,
+				LOCALAPPDATA: path.join(root, "local"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
@@ -294,7 +296,7 @@ describe("central logger transport lifecycle", () => {
 		);
 	});
 
-	test("invalidates closed transports when warm replacement construction fails", async () => {
+	test("falls back without throwing when a warm replacement destination is broken", async () => {
 		const result = await runScenario("reconfigure-failure");
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
@@ -307,7 +309,7 @@ describe("central logger transport lifecycle", () => {
 			sinkCount: number;
 			sinkSameContext: boolean;
 		};
-		expect(payload).toEqual({ reconfigureThrew: true, sinkCount: 1, sinkSameContext: true });
+		expect(payload).toEqual({ reconfigureThrew: false, sinkCount: 1, sinkSameContext: true });
 	});
 
 	// Two sequential probe children writing 1000 records each measure ~4.4 s
@@ -381,5 +383,373 @@ describe("DailyRotateFile option and retention contract", () => {
 			expectedLine(result.pid, "info", "rotation-trigger"),
 		);
 		expect((await fs.readdir(result.primaryDir)).sort()).toEqual([baseName, rotatedName]);
+	});
+});
+
+/** Isolated consumers exercise real filesystem and async boundaries, never source text. */
+async function runDiagnosticConsumer(
+	source: string,
+	options: { setup?: (root: string) => Promise<void>; exitCode?: number } = {},
+): Promise<{ root: string; stdout: string; stderr: string; pid: number }> {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-diagnostic-contract-"));
+	roots.push(root);
+	await fs.mkdir(path.join(root, "home"));
+	await options.setup?.(root);
+	const moduleUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger.ts")).href;
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			"--eval",
+			`
+		import * as logger from ${JSON.stringify(moduleUrl)};
+		import { getLogPath } from ${JSON.stringify(new URL("./dirs.ts", moduleUrl).href)};
+		import * as fs from "node:fs";
+		import * as path from "node:path";
+		const root = ${JSON.stringify(root)};
+		${source}
+	`,
+		],
+		{
+			env: {
+				...process.env,
+				HOME: path.join(root, "home"),
+				USERPROFILE: path.join(root, "home"),
+				LOCALAPPDATA: path.join(root, "local"),
+				XDG_STATE_HOME: path.join(root, "state"),
+				OMP_CONFIG_ROOT: path.join(root, "primary"),
+				OMP_PROFILE: "",
+				PI_PROFILE: "",
+				OMP_LOG_LEVEL: "",
+				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(exitCode, stderr).toBe(options.exitCode ?? 0);
+	return { root, stdout, stderr, pid: child.pid };
+}
+
+function consumerFallbackDir(root: string): string {
+	if (process.platform === "win32") return path.join(root, "local", "omp", "Logs");
+	if (process.platform === "darwin") return path.join(root, "home", "Library", "Logs", "omp");
+	return path.join(root, "state", "omp", "logs");
+}
+
+describe("diagnostic consumer contracts", () => {
+	test("isolates concurrent contexts, inherits nested fields, and shares merged context with sinks", async () => {
+		const result = await runDiagnosticConsumer(`
+			const observed = [];
+			const dispose = logger.registerLogSink(event => observed.push({ message: event.message, ...event.context }));
+			const outside = logger.getLogContext();
+			await Promise.all(["a", "b"].map(operation_id => logger.withLogContext({ operation_id, component: "contract" }, async () => {
+				logger.info("operation_started");
+				await Promise.resolve();
+				await logger.withLogContext({ stage: "nested" }, async () => {
+					await Promise.resolve();
+					logger.info("operation_completed", { stage: "explicit", elapsed_ms: 1 });
+				});
+				if (logger.getLogContext().stage !== undefined) throw new Error("nested context leaked");
+			})));
+			dispose();
+			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ outside, after: logger.getLogContext(), observed }));
+			logger.flush();
+		`);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
+		expect(payload.outside).toEqual({});
+		expect(payload.after).toEqual({});
+		const entries = await readLogEntries(path.join(result.root, "primary", "logs"));
+		expect(
+			entries.map(entry => {
+				const {
+					timestamp: _timestamp,
+					level: _level,
+					pid: _pid,
+					...context
+				} = entry as unknown as Record<string, unknown>;
+				return context;
+			}),
+		).toEqual(payload.observed);
+		for (const operation_id of ["a", "b"]) {
+			expect(
+				payload.observed.filter((entry: Record<string, unknown>) => entry.operation_id === operation_id),
+			).toEqual([
+				{ message: "operation_started", operation_id, component: "contract" },
+				{ message: "operation_completed", operation_id, component: "contract", stage: "explicit", elapsed_ms: 1 },
+			]);
+		}
+	});
+
+	test("persists bounded exception locations and HTTP status without sensitive error or URL data", async () => {
+		const canary = "private-sensitive-canary-9876";
+		const result = await runDiagnosticConsumer(`
+			const canary = ${JSON.stringify(canary)};
+			const error = new Error(canary);
+			error.name = "TransportError";
+			error.code = "EACCES";
+			error.response = { status: 503, body: canary, headers: { Authorization: canary } };
+			error.cause = error;
+			error.stack = "TransportError: " + canary + "\\n    at request (/private/project/client.ts:12:3)\\n" +
+				"    at fetch (https://user:" + canary + "@example.test/client.ts?token=" + canary + ":2:1)";
+			logger.error("request_failed", {
+				component: "contract", event: "request_failed", operation_id: "safe-summary", stage: "receive", elapsed_ms: 2,
+				...logger.diagnosticError(error),
+				...logger.diagnosticUrl("https://user:" + canary + "@example.test/v1/" + canary + "/items?token=" + canary + "#" + canary),
+			});
+			logger.info("same_destination", logger.diagnosticUrl("https://example.test/v1/" + canary + "/items?token=rotated"));
+			logger.info("other_destination", logger.diagnosticUrl("https://example.test/v1/" + canary + "/other"));
+			logger.info("invalid_url", logger.diagnosticUrl(canary));
+			logger.info("throwing_error_fields", logger.diagnosticError(new Proxy({}, { get() { throw new Error(canary); } })));
+			logger.flush();
+		`);
+		const log = await readSingleLog(path.join(result.root, "primary", "logs"));
+		expect(log.text).not.toContain(canary);
+		expect(log.text).not.toContain("/private/project");
+		expect(log.text).not.toContain("Authorization");
+		expect(JSON.parse(log.text.split(os.EOL)[0]!)).toMatchObject({
+			error_type: "TransportError",
+			error_code: "EACCES",
+			status: 503,
+			stack_frames: [{ file: "client.ts", line: 12, column: 3 }],
+			host: "example.test",
+		});
+		const entries = log.text
+			.trim()
+			.split(os.EOL)
+			.map(line => JSON.parse(line) as Record<string, unknown>);
+		const sameDestination = entries.find(entry => entry.message === "same_destination")!;
+		const otherDestination = entries.find(entry => entry.message === "other_destination")!;
+		expect(entries[0]!.path_hash).toEqual(sameDestination.path_hash);
+		expect(entries[0]!.path_hash).not.toEqual(otherDestination.path_hash);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test("recovers a broken primary directory on timed flush without losing or duplicating records", async () => {
+		const result = await runDiagnosticConsumer(
+			`
+			logger.info("buffered_record", { index: 1 });
+			// Platform timer integration: the isolated child must exercise the real unref'd flush.
+			await Bun.sleep(1_100);
+			logger.warn("urgent_record", { index: 2 });
+			logger.flush();
+		`,
+			{
+				setup: async root => {
+					await fs.writeFile(path.join(root, "primary"), "not a directory");
+				},
+			},
+		);
+		const entries = await readLogEntries(consumerFallbackDir(result.root));
+		expect(entries.map(entry => entry.message)).toEqual([
+			"log_directory_fallback",
+			"buffered_record",
+			"urgent_record",
+		]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test("recovers when mkdir works but the actual log cannot be opened", async () => {
+		const result = await runDiagnosticConsumer(`
+			fs.mkdirSync(getLogPath(), { recursive: true });
+			logger.info("open_failure_record");
+			logger.flush();
+		`);
+		expect((await readLogEntries(consumerFallbackDir(result.root))).map(entry => entry.message)).toEqual([
+			"log_directory_fallback",
+			"open_failure_record",
+		]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test("uses a distinct fallback when the selected primary is already the platform log directory", async () => {
+		const result = await runDiagnosticConsumer(`
+			const standard = process.platform === "win32"
+				? path.join(root, "local", "omp", "Logs")
+				: process.platform === "darwin"
+					? path.join(root, "home", "Library", "Logs", "omp")
+					: path.join(root, "state", "omp", "logs");
+			fs.mkdirSync(path.join(standard, path.basename(getLogPath())), { recursive: true });
+			logger.setTransports({ file: standard });
+			logger.info("already_standard_record");
+			logger.flush();
+		`);
+		expect(
+			(await readLogEntries(path.join(result.root, "home", ".omp", "fallback-logs"))).map(entry => entry.message),
+		).toEqual(["log_directory_fallback", "already_standard_record"]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test.skipIf(process.platform !== "linux")(
+		"recovers an actual write error rather than only mkdir failures",
+		async () => {
+			const result = await runDiagnosticConsumer(`
+			fs.mkdirSync(path.dirname(getLogPath()), { recursive: true });
+			fs.symlinkSync("/dev/full", getLogPath());
+			logger.info("write_failure_record");
+			logger.flush();
+		`);
+			expect((await readLogEntries(consumerFallbackDir(result.root))).map(entry => entry.message)).toEqual([
+				"log_directory_fallback",
+				"write_failure_record",
+			]);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe("");
+		},
+	);
+
+	test("recovers an unavailable rotated file while preserving the final record", async () => {
+		const result = await runDiagnosticConsumer(`
+			logger.info("fills_first_file", { padding: "x".repeat(10 * 1024 * 1024 + 1) });
+			logger.flush();
+			fs.mkdirSync(getLogPath() + ".1");
+			logger.warn("rotation_failure_record");
+		`);
+		expect((await readLogEntries(consumerFallbackDir(result.root))).map(entry => entry.message)).toEqual([
+			"log_directory_fallback",
+			"rotation_failure_record",
+		]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"uses the user fallback when a real primary directory denies writes",
+		async () => {
+			const result = await runDiagnosticConsumer(
+				`
+				logger.info("permission_record");
+				logger.flush();
+			`,
+				{
+					setup: async root => {
+						const directory = path.join(root, "primary", "logs");
+						await fs.mkdir(directory, { recursive: true });
+						await fs.chmod(directory, 0o500);
+					},
+				},
+			);
+			await fs.chmod(path.join(result.root, "primary", "logs"), 0o700);
+			expect((await readLogEntries(consumerFallbackDir(result.root))).map(entry => entry.message)).toEqual([
+				"log_directory_fallback",
+				"permission_record",
+			]);
+			expect(result.stderr).toBe("");
+		},
+	);
+
+	test("opts into lifecycle once with the actual fallback path and flushes before hard exit", async () => {
+		const postmortemUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/postmortem.ts")).href;
+		const result = await runDiagnosticConsumer(
+			`
+			logger.initializeDiagnosticLogging("cli");
+			logger.initializeDiagnosticLogging("cli");
+			logger.info("last_business_record");
+			const { exitProcess } = await import(${JSON.stringify(postmortemUrl)});
+			exitProcess(7);
+		`,
+			{
+				exitCode: 7,
+				setup: async root => {
+					await fs.writeFile(path.join(root, "primary"), "not a directory");
+				},
+			},
+		);
+		const entries = await readLogEntries(consumerFallbackDir(result.root));
+		expect(entries.map(entry => entry.message)).toEqual([
+			"log_directory_fallback",
+			"application_started",
+			"last_business_record",
+			"application_stopping",
+			"application_stopped",
+		]);
+		expect(entries[1]).toMatchObject({
+			app: "omp",
+			pid: result.pid,
+			path: path.join(
+				consumerFallbackDir(result.root),
+				(await readSingleLog(consumerFallbackDir(result.root))).name,
+			),
+			log_level: "debug",
+			mode: "cli",
+		});
+		expect(entries[3]).toMatchObject({ exitCode: 7 });
+		expect(entries[4]).toMatchObject({ exitCode: 7 });
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test("flushes a single natural-exit lifecycle and does not copy arbitrary run mode", async () => {
+		const result = await runDiagnosticConsumer(`
+			logger.initializeDiagnosticLogging("sensitive-mode-canary");
+			logger.initializeDiagnosticLogging("cli");
+			logger.info("natural_exit_record");
+		`);
+		const log = await readSingleLog(path.join(result.root, "primary", "logs"));
+		expect(log.text).not.toContain("sensitive-mode-canary");
+		expect((await readLogEntries(path.join(result.root, "primary", "logs"))).map(entry => entry.message)).toEqual([
+			"application_started",
+			"natural_exit_record",
+			"application_stopping",
+			"application_stopped",
+		]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test("respects error-only lifecycle thresholds on natural and hard exits", async () => {
+		const postmortemUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/postmortem.ts")).href;
+		for (const hardExit of [false, true]) {
+			const result = await runDiagnosticConsumer(
+				`
+				process.env.OMP_LOG_LEVEL = "error";
+				logger.initializeDiagnosticLogging("cli");
+				logger.info("filtered_business_info");
+				logger.warn("filtered_business_warn");
+				logger.error("persisted_business_error", { code: "E_CONTRACT" });
+				${hardExit ? `const { exitProcess } = await import(${JSON.stringify(postmortemUrl)}); exitProcess(7);` : ""}
+			`,
+				{ exitCode: hardExit ? 7 : 0 },
+			);
+			const entries = await readLogEntries(path.join(result.root, "primary", "logs"));
+			expect(entries).toHaveLength(1);
+			expect(entries[0]).toMatchObject({
+				level: "error",
+				message: "persisted_business_error",
+				code: "E_CONTRACT",
+			});
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe("");
+		}
+	});
+
+	test("emits only one finite stderr warning if both destinations fail", async () => {
+		const result = await runDiagnosticConsumer(
+			`
+			logger.initializeDiagnosticLogging("cli");
+			for (let index = 0; index < 10; index++) logger.error("unwritable_record", { index });
+			logger.flush();
+		`,
+			{
+				setup: async root => {
+					await fs.writeFile(path.join(root, "primary"), "not a directory");
+					const fallback = consumerFallbackDir(root);
+					await fs.mkdir(path.dirname(fallback), { recursive: true });
+					await fs.writeFile(fallback, "not a directory");
+				},
+			},
+		);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("[omp] Diagnostic log unavailable: primary and user log destinations failed.\n");
 	});
 });

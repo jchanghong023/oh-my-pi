@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added correlated compaction attempt, fallback, effective-effort, cancellation, and terminal-result diagnostics without recording conversation or summary content.
+
 ### Fixed
 
 - Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.

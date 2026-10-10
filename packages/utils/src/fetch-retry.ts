@@ -1,4 +1,5 @@
 import { scheduler } from "node:timers/promises";
+import * as logger from "./logger";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -333,59 +334,158 @@ export async function fetchWithRetry(
 	url: string | URL | ((attempt: number) => string | URL),
 	options: FetchWithRetryOptions = {},
 ): Promise<Response> {
-	const {
-		maxAttempts = DEFAULT_MAX_ATTEMPTS,
-		maxDelayMs = DEFAULT_MAX_DELAY_MS,
-		defaultDelayMs,
-		prepareInit,
-		shouldRetryResponse,
-		fetch: fetchImpl = fetch,
-		timeout = false,
-		...baseInit
-	} = options;
-	const signal = baseInit.signal as AbortSignal | undefined;
+	const inherited = logger.getLogContext();
+	return logger.withLogContext(
+		{
+			operation_id: inherited.operation_id ?? `fetch-${crypto.randomUUID()}`,
+			http_call_id: `http-${crypto.randomUUID()}`,
+		},
+		async () => {
+			const startedAt = performance.now();
+			let currentAttempt = 0;
+			let stage = "prepare";
+			let target: Record<string, unknown> = {};
+			const logFields = () => ({
+				component: "fetch-retry",
+				stage,
+				attempt: currentAttempt,
+				elapsed_ms: performance.now() - startedAt,
+				...target,
+			});
+			logger.info("HTTP request started", { ...logFields(), event: "http_request_started", result: "started" });
+			const {
+				maxAttempts = DEFAULT_MAX_ATTEMPTS,
+				maxDelayMs = DEFAULT_MAX_DELAY_MS,
+				defaultDelayMs,
+				prepareInit,
+				shouldRetryResponse,
+				fetch: fetchImpl = fetch,
+				timeout = false,
+				...baseInit
+			} = options;
+			const signal = baseInit.signal as AbortSignal | undefined;
 
-	for (let attempt = 0; ; attempt++) {
-		if (signal?.aborted) throw new Error("Request was aborted");
-		const requestUrl = typeof url === "function" ? url(attempt) : url;
-		// `timeout` is destructured out of `baseInit`, so forward it to the underlying
-		// fetch on the no-`prepareInit` path too. Without this, callers that pass
-		// `timeout: false` (every streaming provider, to disable Bun's native ~300s
-		// fetch ceiling in favor of their own first-event/idle watchdog) had it
-		// silently dropped, so long-running streams were killed at ~300s (issue #602).
-		// Only forward when the caller actually set `timeout`, so callers that never
-		// set it keep Bun's default ceiling.
-		const init = prepareInit
-			? mergeInit(baseInit, await prepareInit(attempt), timeout)
-			: "timeout" in options
-				? ({ ...baseInit, timeout } as unknown as RequestInit)
-				: baseInit;
+			try {
+				for (let attempt = 0; ; attempt++) {
+					currentAttempt = attempt + 1;
+					stage = "prepare";
+					if (signal?.aborted) throw new Error("Request was aborted");
+					const requestUrl = typeof url === "function" ? url(attempt) : url;
+					target = logger.diagnosticUrl(String(requestUrl));
+					// `timeout` is destructured out of `baseInit`, so forward it to the underlying
+					// fetch on the no-`prepareInit` path too. Without this, callers that pass
+					// `timeout: false` (every streaming provider, to disable Bun's native ~300s
+					// fetch ceiling in favor of their own first-event/idle watchdog) had it
+					// silently dropped, so long-running streams were killed at ~300s (issue #602).
+					// Only forward when the caller actually set `timeout`, so callers that never
+					// set it keep Bun's default ceiling.
+					const init = prepareInit
+						? mergeInit(baseInit, await prepareInit(attempt), timeout)
+						: "timeout" in options
+							? ({ ...baseInit, timeout } as unknown as RequestInit)
+							: baseInit;
 
-		let response: Response;
-		try {
-			response = await fetchImpl(requestUrl, init);
-		} catch (error) {
-			if (signal?.aborted) throw new Error("Request was aborted");
-			const wrapped = wrapNetworkError(error);
-			if (attempt + 1 >= maxAttempts) throw wrapped;
-			await waitForRetry(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), signal);
-			continue;
-		}
+					let response: Response;
+					stage = "fetch";
+					const attemptStartedAt = performance.now();
+					logger.info("HTTP attempt started", {
+						...logFields(),
+						event: "http_attempt_started",
+						result: "started",
+						method: /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)$/i.test(init.method ?? "GET")
+							? (init.method ?? "GET").toUpperCase()
+							: "[custom]",
+						timeout_ms: timeout,
+					});
+					try {
+						response = await fetchImpl(requestUrl, init);
+					} catch (error) {
+						logger[signal?.aborted && signal.reason?.name !== "TimeoutError" ? "info" : "warn"](
+							"HTTP attempt failed",
+							{
+								...logFields(),
+								...logger.diagnosticError(error),
+								event: "http_attempt_failed",
+								result: signal?.aborted ? "aborted" : "failed",
+								retry_reason: signal?.aborted ? "signal_abort" : "network_error",
+								attempt_elapsed_ms: performance.now() - attemptStartedAt,
+							},
+						);
+						if (signal?.aborted) throw new Error("Request was aborted");
+						const wrapped = wrapNetworkError(error);
+						if (attempt + 1 >= maxAttempts) throw wrapped;
+						const delayMs = resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs);
+						logger.warn("HTTP network retry scheduled", {
+							...logFields(),
+							event: "http_request_retrying",
+							result: "retrying",
+							retry_reason: "network_error",
+							backoff_ms: delayMs,
+							next_attempt: currentAttempt + 1,
+						});
+						stage = "backoff";
+						await waitForRetry(delayMs, signal);
+						continue;
+					}
 
-		if (!isRetryableStatus(response.status)) return response;
-		if (attempt + 1 >= maxAttempts) return response;
+					stage = "headers";
+					logger.info("HTTP response headers received", {
+						...logFields(),
+						event: "http_response_headers",
+						result: response.ok ? "success" : "http_error",
+						status: response.status,
+						attempt_elapsed_ms: performance.now() - attemptStartedAt,
+					});
+					const finish = (reason: string): Response => {
+						logger[response.ok ? "info" : "warn"]("HTTP request completed", {
+							...logFields(),
+							event: "http_request_completed",
+							result: response.ok ? "success" : "http_error",
+							status: response.status,
+							retry_reason: reason,
+						});
+						return response;
+					};
+					if (!isRetryableStatus(response.status)) return finish("not_retryable");
+					if (attempt + 1 >= maxAttempts) return finish("attempts_exhausted");
 
-		const retryBody = await response.clone().text();
-		if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt))) return response;
+					stage = "retry_response";
+					const retryBody = await response.clone().text();
+					if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt)))
+						return finish("retry_gate");
 
-		const hint = extractRetryHint(response, retryBody);
-		if (hint !== undefined && hint > maxDelayMs) return response;
+					const hint = extractRetryHint(response, retryBody);
+					if (hint !== undefined && hint > maxDelayMs) return finish("delay_cap");
 
-		const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);
-		// The retried response is discarded; release its unread tee branch.
-		if (!response.bodyUsed) response.body?.cancel().catch(() => {});
-		await waitForRetry(delayMs, signal);
-	}
+					const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);
+					logger.warn("HTTP response retry scheduled", {
+						...logFields(),
+						event: "http_request_retrying",
+						result: "retrying",
+						status: response.status,
+						retry_reason: hint === undefined ? "retryable_status" : "server_hint",
+						backoff_ms: delayMs,
+						next_attempt: currentAttempt + 1,
+					});
+					stage = "backoff";
+					// The retried response is discarded; release its unread tee branch.
+					if (!response.bodyUsed) response.body?.cancel().catch(() => {});
+					await waitForRetry(delayMs, signal);
+				}
+			} catch (error) {
+				const timedOut = signal?.aborted && signal.reason?.name === "TimeoutError";
+				const cancelled = signal?.aborted && !timedOut;
+				logger[cancelled ? "info" : "warn"]("HTTP request terminated", {
+					...logFields(),
+					...logger.diagnosticError(error),
+					event: cancelled ? "http_request_cancelled" : "http_request_failed",
+					result: cancelled ? "cancelled" : "failed",
+					timeout: timedOut,
+				});
+				throw error;
+			}
+		},
+	);
 }
 
 function mergeInit(base: RequestInit, overlay: RequestInit, timeout: number | false): RequestInit {

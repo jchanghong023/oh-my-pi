@@ -8,6 +8,7 @@
  * the Agent Hub); the final report lands as one markdown message in the
  * transcript via `appendCustomMessage`, never as a model-facing delivery.
  */
+import { logger } from "@oh-my-pi/pi-utils";
 import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import { getCompanyChatModels } from "../config/company-models";
@@ -79,32 +80,98 @@ export async function deliverTeamReport(
 	rebuildChat?: () => void | Promise<void>,
 	waitOptions?: { timeoutMs?: number; pollMs?: number },
 ): Promise<boolean> {
-	if (signal.aborted) return false;
-	if (!(await waitForSessionIdle(session, signal, waitOptions))) return false;
-	if (signal.aborted) return false;
-	try {
-		await session.appendCustomMessage(
-			{
-				customType: TEAM_RESULT_MESSAGE_TYPE,
-				content,
-				display: true,
-				attribution: "agent",
-				details,
-			},
-			{ signal },
-		);
-	} catch (error) {
-		if (signal.aborted) return false;
-		throw error;
-	}
-	if (signal.aborted) return false;
-	try {
-		await rebuildChat?.();
-	} catch {
-		// The report is already persisted and its delivery acknowledged; a
-		// failed UI rebuild must not mark the whole discussion failed.
-	}
-	return true;
+	return logger.withLogContext({ job_id: details.jobId }, async () => {
+		const started = performance.now();
+		let stage = "wait_idle";
+		const finish = (result: "completed" | "failed" | "cancelled", category?: string): boolean => {
+			const fields = {
+				component: "team.controller",
+				event: `team_delivery_${result}`,
+				stage,
+				result,
+				elapsed_ms: performance.now() - started,
+				...(category ? { failure_category: category } : {}),
+			};
+			if (result === "failed") logger.error("Team report delivery failed", fields);
+			else logger.info("Team report delivery finished", fields);
+			return result === "completed";
+		};
+		logger.info("Team report delivery started", {
+			component: "team.controller",
+			event: "team_delivery_started",
+			stage,
+			result: "started",
+			streaming: session.isStreaming,
+			timeout_ms: waitOptions?.timeoutMs,
+		});
+		try {
+			if (signal.aborted) return finish("cancelled");
+			if (!(await waitForSessionIdle(session, signal, waitOptions))) {
+				return finish(signal.aborted ? "cancelled" : "failed", signal.aborted ? undefined : "idle_timeout");
+			}
+			logger.info("Team report delivery idle wait completed", {
+				component: "team.controller",
+				event: "team_delivery_wait_completed",
+				stage,
+				result: "completed",
+				elapsed_ms: performance.now() - started,
+			});
+			if (signal.aborted) return finish("cancelled");
+			stage = "append";
+			const appendStarted = performance.now();
+			logger.info("Team report append started", {
+				component: "team.controller",
+				event: "team_delivery_append_started",
+				stage,
+				result: "started",
+			});
+			await session.appendCustomMessage(
+				{
+					customType: TEAM_RESULT_MESSAGE_TYPE,
+					content,
+					display: true,
+					attribution: "agent",
+					details,
+				},
+				{ signal },
+			);
+			logger.info("Team report append completed", {
+				component: "team.controller",
+				event: "team_delivery_append_completed",
+				stage,
+				result: "completed",
+				persisted: true,
+				elapsed_ms: performance.now() - appendStarted,
+			});
+			if (signal.aborted) return finish("cancelled");
+			stage = "post_persist";
+			try {
+				await rebuildChat?.();
+			} catch (error) {
+				// A post-persist callback failure must not undo durable delivery.
+				logger.warn("Team report post-persist callback failed", {
+					component: "team.controller",
+					event: "team_delivery_post_persist_failed",
+					stage,
+					result: "failed",
+					persisted: true,
+					...logger.diagnosticError(error),
+				});
+			}
+			return finish("completed");
+		} catch (error) {
+			if (signal.aborted) return finish("cancelled");
+			logger.error("Team report delivery threw", {
+				component: "team.controller",
+				event: "team_delivery_failed",
+				stage,
+				result: "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		}
+	});
 }
 
 function previewQuestion(question: string): string {
@@ -165,12 +232,36 @@ export async function startTeamDiscussion(
 	question: string,
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
+	const teamRunId = `team-${crypto.randomUUID()}`;
+	return logger.withLogContext(
+		{
+			team_run_id: teamRunId,
+			operation_id: logger.getLogContext().operation_id ?? teamRunId,
+			...(args.session.sessionId ? { session_id: args.session.sessionId } : {}),
+		},
+		() => startTeamDiscussionImpl(question, args),
+	);
+}
+
+async function startTeamDiscussionImpl(
+	question: string,
+	args: StartTeamDiscussionArgs,
+): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks } = args;
 	// Best-effort transcript output: a rejecting output hook must never become
 	// an unhandled rejection (it can take down the whole process).
 	const emitOutput = (text: string): void => {
 		const pending = hooks.output?.(text);
-		if (pending instanceof Promise) void pending.catch(() => {});
+		if (pending instanceof Promise)
+			void pending.catch(error => {
+				logger.warn("Team output hook failed", {
+					component: "team.controller",
+					event: "team_output_failed",
+					stage: "ui",
+					result: "failed",
+					...logger.diagnosticError(error),
+				});
+			});
 	};
 	const report = (text: string): void => {
 		hooks.showError?.(text);
@@ -178,7 +269,20 @@ export async function startTeamDiscussion(
 	};
 
 	const sessionModel = session.model;
+	logger.info("Team dispatch started", {
+		component: "team.controller",
+		event: "team_dispatch_started",
+		stage: "resolve",
+		result: "started",
+	});
 	if (!sessionModel) {
+		logger.warn("Team dispatch rejected", {
+			component: "team.controller",
+			event: "team_dispatch_rejected",
+			stage: "resolve",
+			result: "rejected",
+			rejection_category: "session_model_missing",
+		});
 		const message = "/team 需要一个当前会话模型（主代理），但当前会话未选择模型。";
 		report(message);
 		return { started: false, message };
@@ -189,12 +293,26 @@ export async function startTeamDiscussion(
 	if (members.ok) {
 		participants = members.participants;
 	} else {
+		logger.warn("Team dispatch rejected", {
+			component: "team.controller",
+			event: "team_dispatch_rejected",
+			stage: "resolve",
+			result: "rejected",
+			rejection_category: "participants_unavailable",
+		});
 		report(members.error);
 		return { started: false, message: members.error };
 	}
 
 	const manager = session.asyncJobManager;
 	if (!manager) {
+		logger.warn("Team dispatch rejected", {
+			component: "team.controller",
+			event: "team_dispatch_rejected",
+			stage: "register",
+			result: "rejected",
+			rejection_category: "job_manager_missing",
+		});
 		const message = "后台任务不可用：/team 依赖会话的 async job 能力来承载多阶段讨论。";
 		report(message);
 		return { started: false, message };
@@ -209,53 +327,133 @@ export async function startTeamDiscussion(
 		jobId = manager.register(
 			"task",
 			label,
-			async ({ signal, reportProgress }) => {
-				const runner = createTeamSubagentRunner(buildRunnerDeps(session, settings, cwd));
-				const onProgress = (update: TeamProgressUpdate): void => {
-					void reportProgress(update.text, { stage: update.stage, participants: update.participants });
-					hooks.showStatus?.(update.text);
-					emitOutput(update.text);
-				};
-				const onReportPersisted = (): void | Promise<void> => {
-					manager.acknowledgeDeliveries([jobId]);
-					return hooks.rebuildChat?.();
-				};
-				const result = await runTeamDiscussion({
-					question,
-					cwd,
-					participants,
-					sessionModelPattern,
-					runner,
-					signal,
-					maxConcurrency: cfgTaskMaxConcurrency.get(settings),
-					onProgress,
-				});
-				if (result.status === "completed") {
-					const delivered = await deliverTeamReport(
-						session,
-						signal,
-						result.reportMarkdown!,
-						{ jobId, question },
-						onReportPersisted,
-					);
-					return delivered ? "team discussion complete" : "team discussion cancelled";
-				}
-				if (result.status === "cancelled") {
-					return "team discussion cancelled";
-				}
-				const delivered = await deliverTeamReport(
-					session,
-					signal,
-					assembleTeamFailure(question, result.failureReason ?? "未知原因"),
-					{ jobId, question },
-					onReportPersisted,
-				);
-				if (!delivered) return "team discussion cancelled";
-				throw new Error(result.failureReason ?? "team discussion failed");
-			},
+			async ({ jobId: owningJobId, signal, reportProgress }) =>
+				logger.withLogContext({ job_id: owningJobId }, async () => {
+					const started = performance.now();
+					let stage = "discussion";
+					let discussionStatus: string | undefined;
+					let deliveryCompleted = false;
+					logger.info("Team job started", {
+						component: "team.controller",
+						event: "team_job_started",
+						stage,
+						result: "started",
+						participant_count: participants.length,
+					});
+					const finishJob = (result: "completed" | "failed" | "cancelled"): void => {
+						const fields = {
+							component: "team.controller",
+							event: `team_job_${result}`,
+							stage,
+							result,
+							discussion_status: discussionStatus,
+							delivery_completed: deliveryCompleted,
+							elapsed_ms: performance.now() - started,
+						};
+						if (result === "failed") logger.error("Team job failed", fields);
+						else logger.info("Team job finished", fields);
+					};
+					try {
+						const runner = createTeamSubagentRunner(buildRunnerDeps(session, settings, cwd));
+						const onProgress = (update: TeamProgressUpdate): void => {
+							void reportProgress(update.text, { stage: update.stage, participants: update.participants });
+							hooks.showStatus?.(update.text);
+							emitOutput(update.text);
+						};
+						const onReportPersisted = (): void | Promise<void> => {
+							const ackStarted = performance.now();
+							logger.info("Team report acknowledgement started", {
+								component: "team.controller",
+								event: "team_delivery_ack_started",
+								stage: "ack",
+								result: "started",
+							});
+							try {
+								const acknowledgedCount = manager.acknowledgeDeliveries([jobId]);
+								logger.info("Team report acknowledged", {
+									component: "team.controller",
+									event: "team_delivery_ack_completed",
+									stage: "ack",
+									result: "completed",
+									acknowledged_count: acknowledgedCount,
+									elapsed_ms: performance.now() - ackStarted,
+								});
+							} catch (error) {
+								logger.warn("Team report acknowledgement failed", {
+									component: "team.controller",
+									event: "team_delivery_ack_failed",
+									stage: "ack",
+									result: "failed",
+									elapsed_ms: performance.now() - ackStarted,
+									...logger.diagnosticError(error),
+								});
+								throw error;
+							}
+							return hooks.rebuildChat?.();
+						};
+						const result = await runTeamDiscussion({
+							question,
+							cwd,
+							participants,
+							sessionModelPattern,
+							runner,
+							signal,
+							maxConcurrency: cfgTaskMaxConcurrency.get(settings),
+							onProgress,
+						});
+						discussionStatus = result.status;
+						stage = "delivery";
+						if (result.status === "completed") {
+							const delivered = await deliverTeamReport(
+								session,
+								signal,
+								result.reportMarkdown!,
+								{ jobId, question },
+								onReportPersisted,
+							);
+							deliveryCompleted = delivered;
+							finishJob(delivered ? "completed" : signal.aborted ? "cancelled" : "failed");
+							return delivered ? "team discussion complete" : "team discussion cancelled";
+						}
+						if (result.status === "cancelled") {
+							finishJob("cancelled");
+							return "team discussion cancelled";
+						}
+						const delivered = await deliverTeamReport(
+							session,
+							signal,
+							assembleTeamFailure(question, result.failureReason ?? "未知原因"),
+							{ jobId, question },
+							onReportPersisted,
+						);
+						deliveryCompleted = delivered;
+						if (!delivered) finishJob(signal.aborted ? "cancelled" : "failed");
+						if (!delivered) return "team discussion cancelled";
+						throw new Error(result.failureReason ?? "team discussion failed");
+					} catch (error) {
+						logger[signal.aborted ? "info" : "error"]("Team job threw", {
+							component: "team.controller",
+							event: signal.aborted ? "team_job_cancelled" : "team_job_failed",
+							stage,
+							result: signal.aborted ? "cancelled" : "failed",
+							discussion_status: discussionStatus,
+							delivery_completed: deliveryCompleted,
+							elapsed_ms: performance.now() - started,
+							...logger.diagnosticError(error),
+						});
+						throw error;
+					}
+				}),
 			{ ownerId: MAIN_AGENT_ID },
 		);
 	} catch (error) {
+		logger.warn("Team job registration failed", {
+			component: "team.controller",
+			event: "team_dispatch_failed",
+			stage: "register",
+			result: "failed",
+			...logger.diagnosticError(error),
+		});
 		// register() throws synchronously at the running-job cap; surface it as
 		// an actionable /team message instead of the raw internal error.
 		const reason = error instanceof Error ? error.message : String(error);
@@ -267,6 +465,14 @@ export async function startTeamDiscussion(
 		report(message);
 		return { started: false, message };
 	}
+	logger.info("Team job registered", {
+		component: "team.controller",
+		event: "team_dispatch_completed",
+		stage: "register",
+		result: "completed",
+		job_id: jobId,
+		participant_count: participants.length,
+	});
 	const dispatchNotice = [
 		`/team 多模型讨论已启动（任务 ${jobId}，${participants.length} 个参与模型）。`,
 		"阶段进度见状态提示，子代理明细可在 Agent Hub 查看；取消经后台任务取消入口（hub cancel）执行。",
@@ -287,6 +493,14 @@ export async function startTeamDiscussion(
 		await hooks.rebuildChat?.();
 		hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
 	} catch (error) {
+		logger.warn("Team dispatch notice failed", {
+			component: "team.controller",
+			event: "team_dispatch_notice_failed",
+			stage: "dispatch_notice",
+			result: "failed",
+			job_id: jobId,
+			...logger.diagnosticError(error),
+		});
 		// The job is already registered and owns its own lifecycle from here; a
 		// failed dispatch breadcrumb must not reject the command — the caller
 		// would lose the submitted question and surface an unhandled rejection.

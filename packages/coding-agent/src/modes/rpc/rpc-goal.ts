@@ -8,6 +8,7 @@
  * opt-in continuation driver keyed to agent lifecycle events instead of an
  * editor idle window.
  */
+import { createHash } from "node:crypto";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ExtensionUIContext } from "../../extensibility/extensions/types";
@@ -22,6 +23,11 @@ import {
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import type { SlashCommandResult, SlashCommandRuntime } from "../../slash-commands/types";
 import { nextActionableTask } from "../../tools/todo";
+
+function rpcGoalDiagnosticId(value: string | undefined): string | undefined {
+	if (value === undefined) return undefined;
+	return /^[A-Za-z0-9_-]{1,96}$/.test(value) ? value : createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
 
 /** `goal.continuationModes` value that enables automatic continuation for RPC hosts. */
 export const RPC_GOAL_CONTINUATION_MODE = "rpc";
@@ -104,6 +110,49 @@ export class RpcGoalController {
 	readonly #onContinuationDropped: (() => void) | undefined;
 	readonly #continuationAllowed: () => boolean;
 	readonly #assertHostCanEnter: (() => void) | undefined;
+	#logContext: Record<string, unknown> = {};
+	#reportedErrors = new WeakSet<object>();
+	#pendingContinuationDiagnostics: Array<{ context: Record<string, unknown>; started: number }> = [];
+
+	#log(event: string, stage: string, result: string, fields: Record<string, unknown> = {}): void {
+		const goalId = this.#session.getGoalModeState()?.goal.id;
+		logger.info("RPC goal lifecycle", {
+			...this.#logContext,
+			...logger.getLogContext(),
+			component: "rpc-goal",
+			event,
+			stage,
+			result,
+			generation: this.#continuationGeneration,
+			session_id: rpcGoalDiagnosticId(this.#session.sessionManager.getSessionId()),
+			goal_id: rpcGoalDiagnosticId(goalId),
+			...fields,
+		});
+	}
+
+	#reportError(error: unknown, stage: string): void {
+		if (error instanceof Error && error.name === "AbortError") {
+			this.#log("goal_controller_cancelled", stage, "cancelled");
+			return;
+		}
+		if (error !== null && typeof error === "object") {
+			if (this.#reportedErrors.has(error)) return;
+			this.#reportedErrors.add(error);
+		}
+		const goalId = this.#session.getGoalModeState()?.goal.id;
+		logger.warn("RPC goal controller failed", {
+			...this.#logContext,
+			...logger.getLogContext(),
+			component: "rpc-goal",
+			event: "goal_controller_failed",
+			stage,
+			result: "failed",
+			generation: this.#continuationGeneration,
+			session_id: rpcGoalDiagnosticId(this.#session.sessionManager.getSessionId()),
+			goal_id: rpcGoalDiagnosticId(goalId),
+			...logger.diagnosticError(error),
+		});
+	}
 
 	/**
 	 * @param onContinuationDropped called when a pending continuation is abandoned
@@ -142,6 +191,7 @@ export class RpcGoalController {
 	 * interrupted goal, so in practice only `goal resume`/`create` restarts it.
 	 */
 	stopForHostAbort(): void {
+		this.#log("goal_continuation_stopped", "host_abort", "cancelled", { stop_reason: "host_abort" });
 		this.#hostStopped = true;
 		this.#suppressContinuation = true;
 		this.#continuationScheduled = false;
@@ -214,20 +264,20 @@ export class RpcGoalController {
 				// wait on each other. Settlement is re-checked once it has run.
 				void this.reconcile({ preserveActiveGoal: true })
 					.then(() => this.#scheduleContinuation())
-					.catch(reportControllerError)
+					.catch(error => this.#reportError(error, "session_change_reconcile"))
 					.finally(() => this.#onContinuationDropped?.());
 				return;
 			}
 			if (switched) await this.reconcile({ preserveActiveGoal: true });
 			this.#scheduleContinuation();
 		} catch (error) {
-			reportControllerError(error);
+			this.#reportError(error, "session_change_reconcile");
 		}
 		this.#onContinuationDropped?.();
 	}
 
 	#queueExit(exit: () => Promise<void>): void {
-		this.#exitTask = this.#exitTask.then(exit).catch(reportControllerError);
+		this.#exitTask = this.#exitTask.then(exit).catch(error => this.#reportError(error, "exit"));
 	}
 
 	async handle(command: RpcGoalCommand): Promise<RpcGoalResult> {
@@ -426,6 +476,12 @@ export class RpcGoalController {
 	}
 
 	async #enter(start: () => Promise<GoalModeState>, scheduleContinuation = true): Promise<void> {
+		this.#logContext = {
+			...logger.getLogContext(),
+			operation_id: logger.getLogContext().operation_id ?? `rpc-goal-${crypto.randomUUID()}`,
+		};
+		const started = performance.now();
+		this.#log("goal_enter_started", "enter", "started");
 		// The pre-goal tool set is captured once, when this controller first adds `goal`
 		// (a reattached paused goal already holds it). A `goal` tool the host enabled
 		// before the goal stays enabled afterwards.
@@ -434,6 +490,7 @@ export class RpcGoalController {
 		this.#previousTools = previousTools;
 		await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
 		this.#session.setGoalModeState(state);
+		this.#log("goal_enter_completed", "enter", "enabled", { elapsed_ms: performance.now() - started });
 		this.#resetContinuation();
 		if (this.#session.isStreaming) {
 			await this.#session.sendGoalModeContext({ deliverAs: "steer" });
@@ -444,14 +501,18 @@ export class RpcGoalController {
 
 	/** Restore the pre-goal tool set. Idempotent. */
 	async #exit(): Promise<void> {
+		const started = performance.now();
+		this.#log("goal_exit_started", "exit", "started");
 		const previousTools = this.#previousTools;
 		this.#previousTools = undefined;
 		this.#resetContinuation();
 		if (previousTools) await this.#session.setActiveToolsByName(previousTools);
+		this.#log("goal_exit_completed", "exit", "restored", { elapsed_ms: performance.now() - started });
 	}
 
 	/** Write the completion records into the current transcript and clear goal state. Synchronous. */
 	#journalCompletion(): void {
+		this.#log("goal_completed", "journal", "completed", { stop_reason: "goal_completed" });
 		const state = this.#session.getGoalModeState();
 		this.#session.setGoalModeState(undefined);
 		this.#session.sessionManager.appendModeChange("none");
@@ -464,6 +525,17 @@ export class RpcGoalController {
 	}
 
 	#resetContinuation(): void {
+		for (const diagnostic of this.#pendingContinuationDiagnostics)
+			logger.info("RPC goal continuation turn superseded", {
+				...diagnostic.context,
+				component: "rpc-goal",
+				event: "goal_continuation_turn_terminal",
+				stage: "turn",
+				result: "cancelled",
+				stop_reason: "continuation_reset",
+				elapsed_ms: performance.now() - diagnostic.started,
+			});
+		this.#pendingContinuationDiagnostics = [];
 		this.#pendingContinuationTurns = 0;
 		this.#previousContinuationActivity = undefined;
 		this.#suppressContinuation = false;
@@ -481,10 +553,38 @@ export class RpcGoalController {
 	 */
 	async reconcile(options?: { preserveActiveGoal?: boolean }): Promise<void> {
 		this.#reconcilesPending++;
-		const run = this.#reconcileTask.then(() => this.#reconcileOnce(options));
-		this.#reconcileTask = run.catch(reportControllerError).finally(() => {
-			this.#reconcilesPending--;
-		});
+		const context = { ...logger.getLogContext() };
+		const run = this.#reconcileTask.then(() =>
+			logger.withLogContext(context, async () => {
+				this.#logContext = {
+					...context,
+					operation_id: context.operation_id ?? `rpc-goal-reconcile-${crypto.randomUUID()}`,
+				};
+				const started = performance.now();
+				this.#log("goal_reconcile_started", "reconcile", "started");
+				try {
+					await this.#reconcileOnce(options);
+					this.#log(
+						"goal_reconcile_completed",
+						"reconcile",
+						this.#session.getGoalModeState()?.enabled
+							? "active"
+							: this.#session.getGoalModeState()?.goal
+								? "paused"
+								: "inactive",
+						{ elapsed_ms: performance.now() - started },
+					);
+				} catch (error) {
+					this.#reportError(error, "reconcile");
+					throw error;
+				}
+			}),
+		);
+		this.#reconcileTask = run
+			.catch(() => {})
+			.finally(() => {
+				this.#reconcilesPending--;
+			});
 		await run;
 	}
 
@@ -544,9 +644,20 @@ export class RpcGoalController {
 		if (event.type !== "agent_end" || event.isTerminal === false) return;
 		if (this.#pendingContinuationTurns > 0) {
 			this.#pendingContinuationTurns--;
+			const diagnostic = this.#pendingContinuationDiagnostics.shift();
+			logger.info("RPC goal continuation turn ended", {
+				...diagnostic?.context,
+				component: "rpc-goal",
+				event: "goal_continuation_turn_terminal",
+				stage: "turn",
+				result: this.#hostStopped ? "cancelled" : "yielded",
+				elapsed_ms: diagnostic ? performance.now() - diagnostic.started : undefined,
+			});
 			const activity = goalContinuationActivity(event.messages);
 			this.#suppressContinuation = activity.length === 0 || activity === this.#previousContinuationActivity;
 			this.#previousContinuationActivity = activity;
+			if (this.#suppressContinuation)
+				this.#log("goal_continuation_stopped", "progress_gate", "stopped", { stop_reason: "no_progress" });
 		} else {
 			// As in the TUI: a turn that was not a goal continuation (a host prompt, a delivery
 			// or job wake, an extension-triggered turn) re-arms after a no-progress stop.
@@ -569,17 +680,24 @@ export class RpcGoalController {
 	 * is momentarily busy. Every gate is read from the live session.
 	 */
 	#continuationWanted(): boolean {
+		return this.#continuationGate() === undefined;
+	}
+
+	#continuationGate(): string | undefined {
 		const session = this.#session;
-		if (!this.#continuationAllowed()) return false;
-		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
-		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
-		if (session.getPlanModeState()?.enabled) return false;
+		if (!this.#continuationAllowed()) return "host_gate";
+		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE))
+			return "continuation_disabled";
+		if (this.#hostStopped) return "host_abort";
+		if (this.#suppressContinuation) return "no_progress";
+		if (session.isDisposed) return "disposed";
+		if (session.getPlanModeState()?.enabled) return "plan_mode";
 		const state = session.getGoalModeState();
-		if (!state?.enabled || state.goal.status !== "active") return false;
+		if (!state?.enabled || state.goal.status !== "active") return "goal_inactive";
 		const phases = session.getTodoPhases();
-		return !(
-			!nextActionableTask(phases) && phases.some(phase => phase.tasks.some(task => task.status === "blocked"))
-		);
+		return !nextActionableTask(phases) && phases.some(phase => phase.tasks.some(task => task.status === "blocked"))
+			? "blocked_tasks"
+			: undefined;
 	}
 
 	/**
@@ -591,69 +709,163 @@ export class RpcGoalController {
 	#scheduleContinuation(): void {
 		if (this.#sessionChanges > 0) {
 			// Held until the change ends; a same-session change resumes it.
-			if (this.#continuationWanted()) this.#heldDuringChange = true;
+			if (this.#continuationWanted()) {
+				this.#heldDuringChange = true;
+				this.#log("goal_continuation_held", "session_change", "held");
+			}
 			return;
 		}
-		if (this.#continuationScheduled || !this.#continuationWanted()) return;
+		if (this.#continuationScheduled) return;
+		const gate = this.#continuationGate();
+		if (gate) {
+			if (this.#session.getGoalModeState()?.goal)
+				this.#log("goal_continuation_stopped", "continuation_gate", "stopped", { stop_reason: gate });
+			return;
+		}
 		this.#continuationScheduled = true;
 		const generation = this.#continuationGeneration;
-		void (async () => {
-			const { promise, resolve } = Promise.withResolvers<void>();
-			setImmediate(resolve);
-			await promise;
-			await this.#session.waitForIdle();
-			if (!this.#continuationScheduled || generation !== this.#continuationGeneration) {
-				this.#onContinuationDropped?.();
-				return;
-			}
-			this.#continuationScheduled = false;
-			const session = this.#session;
-			const idle =
-				!session.isStreaming &&
-				!session.hasAdmittedSubmission &&
-				session.queuedMessageCount === 0 &&
-				!session.isSessionTransitioning;
-			const prompt = idle && this.#continuationWanted() ? session.goalRuntime.buildContinuationPrompt() : undefined;
-			if (!prompt) {
-				this.#onContinuationDropped?.();
-				return;
-			}
-			this.#pendingContinuationTurns++;
-			const unclaim = () => {
-				this.#pendingContinuationTurns = Math.max(0, this.#pendingContinuationTurns - 1);
-				// No run follows, so nothing else will end this activity stretch.
-				this.#onContinuationDropped?.();
-			};
-			// promptCustomMessage counts the submission as admitted synchronously, so every
-			// settle report sees it from here on. A continuation that is refused or bails
-			// before its run starts must neither stay counted nor withhold settlement.
-			const state = session.getGoalModeState();
-			session
-				.promptCustomMessage({
-					customType: state?.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
-					content: prompt,
-					display: false,
-					...(state?.autoOrchestrate === true
-						? { details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
-						: {}),
-				})
-				.then(
-					dispatched => {
-						if (!dispatched) unclaim();
-					},
-					error => {
-						unclaim();
-						reportControllerError(error);
-					},
-				);
-		})().catch(error => {
-			this.#continuationScheduled = false;
-			this.#onContinuationDropped?.();
-			reportControllerError(error);
-		});
+		const goalId = this.#session.getGoalModeState()?.goal.id;
+		const context = {
+			...this.#logContext,
+			...logger.getLogContext(),
+			operation_id:
+				logger.getLogContext().operation_id ?? this.#logContext.operation_id ?? `rpc-goal-${crypto.randomUUID()}`,
+			call_id: `rpc-goal-continuation-${crypto.randomUUID()}`,
+			generation,
+			goal_id: rpcGoalDiagnosticId(goalId),
+			session_id: rpcGoalDiagnosticId(this.#session.sessionManager.getSessionId()),
+		};
+		const started = performance.now();
+		let stage = "idle_wait";
+		const fields = () => ({ component: "rpc-goal", stage, generation, elapsed_ms: performance.now() - started });
+		void logger
+			.withLogContext(context, async () => {
+				logger.info("RPC goal continuation started", {
+					...fields(),
+					event: "goal_continuation_started",
+					result: "started",
+				});
+				const { promise, resolve } = Promise.withResolvers<void>();
+				setImmediate(resolve);
+				await promise;
+				await this.#session.waitForIdle();
+				if (!this.#continuationScheduled || generation !== this.#continuationGeneration) {
+					logger.info("RPC goal continuation cancelled", {
+						...fields(),
+						event: "goal_continuation_terminal",
+						result: "cancelled",
+						stop_reason: "generation_changed",
+					});
+					this.#onContinuationDropped?.();
+					return;
+				}
+				logger.info("RPC goal idle wait completed", { ...fields(), event: "goal_stage_completed", result: "idle" });
+				this.#continuationScheduled = false;
+				const session = this.#session;
+				const idle =
+					!session.isStreaming &&
+					!session.hasAdmittedSubmission &&
+					session.queuedMessageCount === 0 &&
+					!session.isSessionTransitioning;
+				stage = "build";
+				logger.info("RPC goal continuation build started", {
+					...fields(),
+					event: "goal_stage_started",
+					result: "started",
+				});
+				const gate = idle ? this.#continuationGate() : "session_busy";
+				const prompt = idle && !gate ? session.goalRuntime.buildContinuationPrompt() : undefined;
+				if (!prompt) {
+					logger.info("RPC goal continuation dropped", {
+						...fields(),
+						event: "goal_continuation_terminal",
+						result: "stopped",
+						stop_reason: gate ?? "no_prompt",
+					});
+					this.#onContinuationDropped?.();
+					return;
+				}
+				logger.info("RPC goal continuation built", { ...fields(), event: "goal_stage_completed", result: "built" });
+				this.#pendingContinuationTurns++;
+				const diagnostic = { context, started: performance.now() };
+				this.#pendingContinuationDiagnostics.push(diagnostic);
+				const unclaim = () => {
+					const index = this.#pendingContinuationDiagnostics.indexOf(diagnostic);
+					if (index >= 0) this.#pendingContinuationDiagnostics.splice(index, 1);
+					this.#pendingContinuationTurns = Math.max(0, this.#pendingContinuationTurns - 1);
+					// No run follows, so nothing else will end this activity stretch.
+					this.#onContinuationDropped?.();
+				};
+				// Submission admission and the later turn terminal remain separate boundaries.
+				const state = session.getGoalModeState();
+				stage = "submit";
+				logger.info("RPC goal continuation submit started", {
+					...fields(),
+					event: "goal_stage_started",
+					result: "started",
+				});
+				session
+					.promptCustomMessage({
+						customType:
+							state?.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
+						content: prompt,
+						display: false,
+						...(state?.autoOrchestrate === true
+							? { details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
+							: {}),
+					})
+					.then(
+						dispatched => {
+							logger.info("RPC goal continuation submission returned", {
+								...fields(),
+								event: "goal_continuation_terminal",
+								result: dispatched ? "submitted" : "cancelled",
+								stop_reason: dispatched ? undefined : "submission_refused",
+							});
+							if (!dispatched) unclaim();
+						},
+						error => {
+							unclaim();
+							if (
+								generation !== this.#continuationGeneration ||
+								(error instanceof Error && error.name === "AbortError")
+							)
+								logger.info("RPC goal continuation cancelled", {
+									...fields(),
+									event: "goal_continuation_terminal",
+									result: "cancelled",
+								});
+							else
+								logger.warn("RPC goal continuation submit failed", {
+									...fields(),
+									event: "goal_continuation_terminal",
+									result: "failed",
+									...logger.diagnosticError(error),
+								});
+						},
+					);
+			})
+			.catch(error =>
+				logger.withLogContext(context, () => {
+					this.#continuationScheduled = false;
+					this.#onContinuationDropped?.();
+					if (
+						generation !== this.#continuationGeneration ||
+						(error instanceof Error && error.name === "AbortError")
+					)
+						logger.info("RPC goal continuation cancelled", {
+							...fields(),
+							event: "goal_continuation_terminal",
+							result: "cancelled",
+						});
+					else
+						logger.warn("RPC goal continuation failed", {
+							...fields(),
+							event: "goal_continuation_terminal",
+							result: "failed",
+							...logger.diagnosticError(error),
+						});
+				}),
+			);
 	}
-}
-
-function reportControllerError(error: unknown): void {
-	logger.warn("RPC goal controller failed", { error: error instanceof Error ? error.message : String(error) });
 }

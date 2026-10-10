@@ -15,6 +15,7 @@
  * - proposer/reviewer/reviser failures mark that participant failed and the
  *   rest continue, with participation noted.
  */
+import { logger } from "@oh-my-pi/pi-utils";
 import { Semaphore } from "../task/parallel";
 import {
 	TEAM_ALIGNMENT_SCHEMA,
@@ -124,7 +125,64 @@ function proposalLabel(index: number): string {
 	return String.fromCodePoint("A".codePointAt(0)! + index);
 }
 
+interface TeamCallDiagnosticsOutcome {
+	ok: boolean;
+	error?: string;
+	data?: Record<string, unknown>;
+	diagnostics: Record<string, unknown>;
+}
+
 export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promise<TeamRunResult> {
+	const teamRunId = logger.getLogContext().team_run_id ?? `team-${crypto.randomUUID()}`;
+	return logger.withLogContext(
+		{ team_run_id: teamRunId, operation_id: logger.getLogContext().operation_id ?? teamRunId },
+		async () => {
+			const started = performance.now();
+			const diagnostics = { stage: "dispatch", reason: "stage_incomplete" };
+			logger.info("Team discussion started", {
+				component: "team.orchestrator",
+				event: "team_run_started",
+				stage: "dispatch",
+				result: "started",
+				participant_count: options.participants.length,
+				max_concurrency: options.maxConcurrency,
+				revision_round_cap: TEAM_MAX_REVISION_ROUNDS,
+			});
+			try {
+				const result = await runTeamDiscussionImpl(options, diagnostics);
+				const fields = {
+					component: "team.orchestrator",
+					event: `team_run_${result.status}`,
+					stage: diagnostics.stage,
+					result: result.status,
+					elapsed_ms: performance.now() - started,
+					...(result.status === "failed" ? { failure_category: diagnostics.reason } : {}),
+					dropped_recommendation: result.droppedRecommendation ?? false,
+				};
+				if (result.status === "failed") logger.error("Team discussion failed", fields);
+				else logger.info("Team discussion finished", fields);
+				return result;
+			} catch (error) {
+				const fields = {
+					component: "team.orchestrator",
+					event: options.signal.aborted ? "team_run_cancelled" : "team_run_failed",
+					stage: diagnostics.stage,
+					result: options.signal.aborted ? "cancelled" : "failed",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(error),
+				};
+				if (options.signal.aborted) logger.info("Team discussion interrupted", fields);
+				else logger.error("Team discussion threw", fields);
+				throw error;
+			}
+		},
+	);
+}
+
+async function runTeamDiscussionImpl(
+	options: TeamOrchestratorOptions,
+	diagnostics: { stage: string; reason: string },
+): Promise<TeamRunResult> {
 	const { question, cwd, participants, runner, signal } = options;
 	const semaphore = new Semaphore(options.maxConcurrency);
 	const participantStatus = new Map<
@@ -135,6 +193,15 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		}
 	>();
 	const emitProgress = (stage: TeamProgressUpdate["stage"], text: string): void => {
+		if (diagnostics.stage !== stage) {
+			logger.info("Team stage started", {
+				component: "team.orchestrator",
+				event: "team_stage_started",
+				stage,
+				result: "started",
+			});
+		}
+		diagnostics.stage = stage;
 		options.onProgress?.({
 			stage,
 			text,
@@ -152,23 +219,96 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	/** Run one subagent call under the concurrency semaphore. */
 	const runCall = async (
 		call: TeamSubagentCall,
-	): Promise<{ ok: boolean; error?: string; data?: Record<string, unknown> }> => {
-		try {
-			await semaphore.acquire(signal);
-		} catch {
-			return { ok: false, error: "cancelled while waiting for a concurrency slot" };
-		}
-		try {
-			const outcome = await runner(call, signal);
-			return outcome.ok ? { ok: true, data: outcome.data } : { ok: false, error: outcome.error };
-		} catch (error) {
-			// A throwing runner (e.g. a failed artifacts lease) must surface as a
-			// failed call with a reported status, never as a rejected run.
-			if (signal.aborted) return { ok: false, error: "cancelled" };
-			return { ok: false, error: error instanceof Error ? error.message : String(error) };
-		} finally {
-			semaphore.release();
-		}
+		context: { stage: string; member_index?: number; proposal_label?: string; round?: number; recheck?: boolean },
+	): Promise<TeamCallDiagnosticsOutcome> => {
+		const fields = {
+			...context,
+			call_id: `team-call-${crypto.randomUUID()}`,
+			role: call.role,
+			label: call.label,
+			requested_model: call.modelPattern.slice(0, 192),
+		};
+		return logger.withLogContext(fields, async () => {
+			const started = performance.now();
+			logger.info("Team call started", {
+				component: "team.orchestrator",
+				event: "team_call_started",
+				stage: "concurrency_wait",
+				result: "started",
+				team_stage: context.stage,
+			});
+			try {
+				await semaphore.acquire(signal);
+			} catch (error) {
+				logger.info("Team call cancelled while waiting", {
+					component: "team.orchestrator",
+					event: "team_call_cancelled",
+					stage: "concurrency_wait",
+					result: "cancelled",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(error),
+				});
+				return { ok: false, error: "cancelled while waiting for a concurrency slot", diagnostics: fields };
+			}
+			try {
+				logger.info("Team runner started", {
+					component: "team.orchestrator",
+					event: "team_runner_started",
+					stage: "runner",
+					result: "started",
+				});
+				const outcome = await runner(call, signal);
+				const result = signal.aborted ? "cancelled" : outcome.ok ? "completed" : "failed";
+				const terminal = {
+					component: "team.orchestrator",
+					event: `team_call_${result}`,
+					stage: "runner",
+					result,
+					elapsed_ms: performance.now() - started,
+					...(result === "failed" ? { failure_category: "runner_rejected" } : {}),
+				};
+				if (result === "failed") logger.warn("Team call failed", terminal);
+				else logger.info("Team call finished", terminal);
+				return outcome.ok
+					? { ok: true, data: outcome.data, diagnostics: fields }
+					: { ok: false, error: outcome.error, diagnostics: fields };
+			} catch (error) {
+				const terminal = {
+					component: "team.orchestrator",
+					event: signal.aborted ? "team_call_cancelled" : "team_call_failed",
+					stage: "runner",
+					result: signal.aborted ? "cancelled" : "failed",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(error),
+				};
+				if (signal.aborted) logger.info("Team call interrupted", terminal);
+				else logger.warn("Team runner threw", terminal);
+				// A throwing runner remains a failed participant, not a rejected run.
+				return {
+					ok: false,
+					error: signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error),
+					diagnostics: fields,
+				};
+			} finally {
+				semaphore.release();
+			}
+		});
+	};
+	const logSchema = (outcome: TeamCallDiagnosticsOutcome, valid: boolean, elapsedMs: number): void => {
+		if (!outcome.ok) return;
+		const fields = {
+			...outcome.diagnostics,
+			component: "team.orchestrator",
+			event: valid ? "team_schema_completed" : "team_schema_rejected",
+			stage: "schema_parse",
+			result: valid ? "completed" : "failed",
+			team_stage: outcome.diagnostics.stage,
+			output_contract: outcome.diagnostics.role,
+			elapsed_ms: elapsedMs,
+			...(valid ? {} : { rejection_category: "team_output_contract" }),
+		};
+		if (valid) logger.info("Team output parsed", fields);
+		else logger.warn("Team output rejected", fields);
 	};
 
 	if (signal.aborted) return { status: "cancelled" };
@@ -200,9 +340,17 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				task: buildProposalTask({ question, cwd }),
 				schema: TEAM_PROPOSAL_SCHEMA,
 			};
-			const outcome = await runCall(call);
+			const outcome = await runCall(call, {
+				stage: "investigation",
+				member_index: record.participant.index,
+				proposal_label: record.label,
+				round: 0,
+				recheck: false,
+			});
 			if (signal.aborted) return;
+			const parseStarted = performance.now();
 			const proposal = outcome.ok ? parseTeamProposal(outcome.data) : undefined;
+			logSchema(outcome, Boolean(proposal), performance.now() - parseStarted);
 			if (!proposal) {
 				record.proposerFailed = true;
 				record.excludedFromOptions = true;
@@ -228,6 +376,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 
 	const viable = records.filter(record => !record.proposerFailed);
 	if (viable.length === 0) {
+		diagnostics.reason = "all_proposers_failed";
 		return {
 			status: "failed",
 			failureReason: "所有提案子代理均失败，独立调查阶段无法完成（不输出半成品结论）",
@@ -237,16 +386,22 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	// ── Stage 2: alignment (session model) ──────────────────────────────────
 	trackParticipant("alignment", "aligner", "running");
 	emitProgress("alignment", "阶段二：对齐与比较");
-	const alignmentOutcome = await runCall({
-		role: "aligner",
-		modelPattern: options.sessionModelPattern,
-		label: "team-alignment",
-		task: buildAlignmentTask({ question, cwd, proposals: viable }),
-		schema: TEAM_ALIGNMENT_SCHEMA,
-	});
+	const alignmentOutcome = await runCall(
+		{
+			role: "aligner",
+			modelPattern: options.sessionModelPattern,
+			label: "team-alignment",
+			task: buildAlignmentTask({ question, cwd, proposals: viable }),
+			schema: TEAM_ALIGNMENT_SCHEMA,
+		},
+		{ stage: "alignment", round: 0, recheck: false },
+	);
 	if (signal.aborted) return { status: "cancelled" };
+	const alignmentParseStarted = performance.now();
 	const alignment = alignmentOutcome.ok ? parseTeamAlignment(alignmentOutcome.data) : undefined;
+	logSchema(alignmentOutcome, Boolean(alignment), performance.now() - alignmentParseStarted);
 	if (!alignment) {
+		diagnostics.reason = "alignment_rejected";
 		trackParticipant("alignment", "aligner", "failed");
 		emitProgress("alignment", "阶段二：对齐与比较（对齐子调用失败）");
 		return {
@@ -283,15 +438,26 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				const reviewer = assignReviewerParticipant(participants, record.participant.index);
 				record.reviewer = reviewer;
 				trackParticipant(`review-${record.label}`, "reviewer", "running");
-				const reviewOutcome = await runCall({
-					role: "reviewer",
-					modelPattern: reviewer.modelPattern,
-					label: `team-review-${record.label}`,
-					task: buildReviewTask({ ...reviewTaskBase(record), round: 1, recheck: false }),
-					schema: TEAM_REVIEW_SCHEMA,
-				});
+				const reviewOutcome = await runCall(
+					{
+						role: "reviewer",
+						modelPattern: reviewer.modelPattern,
+						label: `team-review-${record.label}`,
+						task: buildReviewTask({ ...reviewTaskBase(record), round: 1, recheck: false }),
+						schema: TEAM_REVIEW_SCHEMA,
+					},
+					{
+						stage: "review",
+						member_index: reviewer.index,
+						proposal_label: record.label,
+						round: 1,
+						recheck: false,
+					},
+				);
 				if (signal.aborted) return;
+				const parseStarted = performance.now();
 				const review = reviewOutcome.ok ? parseTeamReview(reviewOutcome.data) : undefined;
+				logSchema(reviewOutcome, Boolean(review), performance.now() - parseStarted);
 				if (!review) {
 					record.reviewFailed = true;
 					record.excludedFromOptions = true;
@@ -304,6 +470,18 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				}
 				record.reviews.push(review);
 				record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
+				logger.info("Team review blocking state", {
+					component: "team.orchestrator",
+					event: "team_blocking_updated",
+					stage: "review",
+					result: "completed",
+					proposal_label: record.label,
+					member_index: reviewer.index,
+					round: 1,
+					recheck: false,
+					finding_count: review.findings.length,
+					unresolved_blocking_count: record.unresolvedBlocking.length,
+				});
 				reviewed.push(record);
 				trackParticipant(`review-${record.label}`, "reviewer", "completed");
 				emitProgress("review", `阶段三：交叉审查（${record.label} 完成）`);
@@ -312,6 +490,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		if (signal.aborted) return { status: "cancelled" };
 
 		if (reviewed.length === 0) {
+			diagnostics.reason = "all_reviewers_failed";
 			return {
 				status: "failed",
 				failureReason: "全部审查子代理失败，无法完成必要审查（不静默改成单模型并宣称团队流程完成）",
@@ -335,24 +514,35 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				record.roundsUsed = round;
 				trackParticipant(`revision-${record.label}`, "reviser", "running");
 				emitProgress("revision", `阶段四：修订与复核（${record.label} 第 ${round} 轮）`);
-				const revisionOutcome = await runCall({
-					role: "reviser",
-					modelPattern: record.participant.modelPattern,
-					label: `team-revision-${record.label}-${round}`,
-					task: buildRevisionTask({
-						question,
-						cwd,
-						targetLabel: record.label,
+				const revisionOutcome = await runCall(
+					{
+						role: "reviser",
+						modelPattern: record.participant.modelPattern,
+						label: `team-revision-${record.label}-${round}`,
+						task: buildRevisionTask({
+							question,
+							cwd,
+							targetLabel: record.label,
+							round,
+							alignment,
+							proposal: record.latestProposal!,
+							review: record.reviews.at(-1)!,
+							unresolvedBlocking: record.unresolvedBlocking,
+						}),
+						schema: TEAM_REVISION_SCHEMA,
+					},
+					{
+						stage: "revision",
+						member_index: record.participant.index,
+						proposal_label: record.label,
 						round,
-						alignment,
-						proposal: record.latestProposal!,
-						review: record.reviews.at(-1)!,
-						unresolvedBlocking: record.unresolvedBlocking,
-					}),
-					schema: TEAM_REVISION_SCHEMA,
-				});
+						recheck: false,
+					},
+				);
 				if (signal.aborted) return;
+				const parseStarted = performance.now();
 				const revision = revisionOutcome.ok ? parseTeamRevision(revisionOutcome.data) : undefined;
+				logSchema(revisionOutcome, Boolean(revision), performance.now() - parseStarted);
 				if (!revision) {
 					record.revisionFailed = true;
 					trackParticipant(`revision-${record.label}`, "reviser", "failed");
@@ -366,23 +556,47 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				trackParticipant(`revision-${record.label}`, "reviser", "completed");
 				emitProgress("revision", `阶段四：修订与复核（${record.label} 修订完成）`);
 
+				logger.info("Team recheck decision", {
+					component: "team.orchestrator",
+					event: "team_recheck_decided",
+					stage: "revision",
+					result: "completed",
+					proposal_label: record.label,
+					round,
+					recheck_required: needsRecheck(revision.reviewFlags),
+					changed_core_design: revision.reviewFlags.changedCoreDesign,
+					claims_resolved_blocking: revision.reviewFlags.claimsResolvedBlocking,
+					new_evidence_changes_assumptions: revision.reviewFlags.newEvidenceChangesAssumptions,
+					disputes_blocking_finding: revision.reviewFlags.disputesBlockingFinding,
+				});
 				if (needsRecheck(revision.reviewFlags)) {
 					trackParticipant(`recheck-${record.label}`, "reviewer", "running");
-					const recheckOutcome = await runCall({
-						role: "reviewer",
-						modelPattern: record.reviewer!.modelPattern,
-						label: `team-recheck-${record.label}-${round}`,
-						task: buildReviewTask({
-							...reviewTaskBase(record),
+					const recheckOutcome = await runCall(
+						{
+							role: "reviewer",
+							modelPattern: record.reviewer!.modelPattern,
+							label: `team-recheck-${record.label}-${round}`,
+							task: buildReviewTask({
+								...reviewTaskBase(record),
+								round,
+								recheck: true,
+								unresolvedBlocking: record.unresolvedBlocking,
+								recheckContext: { previousProposal, revision, reviews: record.reviews },
+							}),
+							schema: TEAM_REVIEW_SCHEMA,
+						},
+						{
+							stage: "revision",
+							member_index: record.reviewer!.index,
+							proposal_label: record.label,
 							round,
 							recheck: true,
-							unresolvedBlocking: record.unresolvedBlocking,
-							recheckContext: { previousProposal, revision, reviews: record.reviews },
-						}),
-						schema: TEAM_REVIEW_SCHEMA,
-					});
+						},
+					);
 					if (signal.aborted) return;
+					const parseStarted = performance.now();
 					const recheck = recheckOutcome.ok ? parseTeamReview(recheckOutcome.data) : undefined;
+					logSchema(recheckOutcome, Boolean(recheck), performance.now() - parseStarted);
 					if (!recheck) {
 						// Recheck failure cannot confirm resolution; the blocking state
 						// stands and is reported as incomplete participation. The revised
@@ -406,6 +620,16 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 					}
 				}
 				record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
+				logger.info("Team revision blocking state", {
+					component: "team.orchestrator",
+					event: "team_blocking_updated",
+					stage: "revision",
+					result: "completed",
+					proposal_label: record.label,
+					round,
+					unresolved_blocking_count: record.unresolvedBlocking.length,
+					pending_recheck: record.pendingRecheck,
+				});
 				if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck) break;
 				// Without a recheck the blocking state cannot change mechanically
 				// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
@@ -429,23 +653,50 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		}),
 	);
 	if (signal.aborted) return { status: "cancelled" };
+	for (const record of records) {
+		logger.info("Team proposal eligibility", {
+			component: "team.orchestrator",
+			event: "team_eligibility_evaluated",
+			stage: "revision",
+			result: "completed",
+			proposal_label: record.label,
+			member_index: record.participant.index,
+			rounds_used: record.roundsUsed,
+			round_cap_reached: record.roundsUsed === TEAM_MAX_REVISION_ROUNDS,
+			blocked_after_round_cap: record.blockedAfterRoundCap,
+			unresolved_blocking_count: record.unresolvedBlocking.length,
+			pending_recheck: record.pendingRecheck,
+			excluded_from_options: record.excludedFromOptions,
+			eligible: !record.excludedFromOptions && !record.pendingRecheck && record.unresolvedBlocking.length === 0,
+			proposer_failed: record.proposerFailed,
+			review_failed: record.reviewFailed,
+			revision_failed: record.revisionFailed,
+			recheck_failed: record.recheckFailed,
+		});
+	}
 
 	// ── Stage 5: synthesis (session model) ──────────────────────────────────
 	trackParticipant("synthesis", "synthesizer", "running");
 	emitProgress("synthesis", "阶段五：汇总方案");
-	const synthesisOutcome = await runCall({
-		role: "synthesizer",
-		modelPattern: options.sessionModelPattern,
-		label: "team-synthesis",
-		// Synthesis sees every non-failed record — candidates with their review
-		// processing, and no-viable/failed ones with their exclusion reasons —
-		// so it can explain why an option is not offered instead of guessing.
-		task: buildSynthesisTask({ question, cwd, alignment, proposals: viable }),
-		schema: TEAM_SYNTHESIS_SCHEMA,
-	});
+	const synthesisOutcome = await runCall(
+		{
+			role: "synthesizer",
+			modelPattern: options.sessionModelPattern,
+			label: "team-synthesis",
+			// Synthesis sees every non-failed record — candidates with their review
+			// processing, and no-viable/failed ones with their exclusion reasons —
+			// so it can explain why an option is not offered instead of guessing.
+			task: buildSynthesisTask({ question, cwd, alignment, proposals: viable }),
+			schema: TEAM_SYNTHESIS_SCHEMA,
+		},
+		{ stage: "synthesis", round: 0, recheck: false },
+	);
 	if (signal.aborted) return { status: "cancelled" };
+	const synthesisParseStarted = performance.now();
 	const synthesis = synthesisOutcome.ok ? parseTeamSynthesis(synthesisOutcome.data) : undefined;
+	logSchema(synthesisOutcome, Boolean(synthesis), performance.now() - synthesisParseStarted);
 	if (!synthesis) {
+		diagnostics.reason = "synthesis_rejected";
 		trackParticipant("synthesis", "synthesizer", "failed");
 		emitProgress("synthesis", "阶段五：汇总方案（综合子调用失败）");
 		return {
@@ -456,6 +707,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 	for (const violation of synthesis.hardConstraintViolations) {
 		const record = records.find(candidate => candidate.label === violation.proposalLabel && candidate.latestProposal);
 		if (!record) {
+			diagnostics.reason = "unknown_hard_constraint_proposal";
 			trackParticipant("synthesis", "synthesizer", "failed");
 			return {
 				status: "failed",
@@ -463,6 +715,15 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 			};
 		}
 		record.unresolvedBlocking.push(`综合确认硬约束违例：${violation.issue}（依据：${violation.evidence}）`);
+		logger.info("Team synthesis tightened eligibility", {
+			component: "team.orchestrator",
+			event: "team_eligibility_tightened",
+			stage: "synthesis",
+			result: "completed",
+			proposal_label: record.label,
+			unresolved_blocking_count: record.unresolvedBlocking.length,
+			eligible: false,
+		});
 	}
 	trackParticipant("synthesis", "synthesizer", "completed");
 
@@ -482,6 +743,14 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 
 	const report = assembleTeamReport({ alignment, synthesis, proposals: records, participationNotes });
 	if (!report.ok) {
+		diagnostics.reason = "report_contract_rejected";
+		logger.error("Team report rejected", {
+			component: "team.orchestrator",
+			event: "team_report_rejected",
+			stage: "report_assembly",
+			result: "failed",
+			rejection_category: "synthesis_report_contract",
+		});
 		return {
 			status: "failed",
 			failureReason: `综合结果无效（${report.error}），流程未完成，不输出半成品结论`,

@@ -1,5 +1,5 @@
 import { invalidateFsScanCache } from "@oh-my-pi/pi-natives";
-import * as logger from "@oh-my-pi/pi-utils/logger";
+import { logger } from "@oh-my-pi/pi-utils";
 
 /** Post-commit changes, or possible partial writes explicitly marked uncertain. */
 const mutationListeners = new Set<(paths: readonly string[], uncertaintyReason?: string) => void>();
@@ -12,14 +12,63 @@ export function subscribeFsMutation(
 }
 
 function notifyMutation(paths: readonly string[], uncertaintyReason?: string): void {
-	// A successful source mutation must never be reported as failed by indexing.
-	for (const listener of mutationListeners) {
-		try {
-			listener(paths, uncertaintyReason);
-		} catch (error) {
-			logger.warn("Filesystem mutation observer failed after source change", { error: String(error) });
-		}
-	}
+	const context = logger.getLogContext();
+	logger.withLogContext(
+		{
+			operation_id: context.operation_id ?? `fs-mutation-${crypto.randomUUID()}`,
+			mutation_id: crypto.randomUUID(),
+		},
+		() => {
+			const started = performance.now();
+			const fields = {
+				component: "fs_cache_invalidation",
+				stage: "mutation_notify",
+				path_count: paths.length,
+				listener_count: mutationListeners.size,
+				index_uncertain: uncertaintyReason !== undefined,
+				uncertainty_source:
+					uncertaintyReason === undefined
+						? undefined
+						: context.mutation_source === "ast_edit"
+							? "ast_edit_apply_failure"
+							: "caller",
+				...(uncertaintyReason !== undefined
+					? { candidate_count: paths.length, reported_written_count: "unknown", possible_partial_write: true }
+					: {}),
+			};
+			logger.info("Filesystem mutation notification started", {
+				...fields,
+				event: "fs_mutation_notify_started",
+				result: "started",
+			});
+			let notifiedCount = 0;
+			let failedCount = 0;
+			let firstFailure: Record<string, unknown> | undefined;
+			// A successful source mutation must never be reported as failed by indexing.
+			for (const listener of mutationListeners) {
+				try {
+					listener(paths, uncertaintyReason);
+					notifiedCount++;
+				} catch (error) {
+					failedCount++;
+					firstFailure ??= logger.diagnosticError(error);
+				}
+			}
+			const resultFields = {
+				...fields,
+				event: failedCount ? "fs_mutation_notify_failed" : "fs_mutation_notify_completed",
+				result: failedCount ? "observer_failed" : "completed",
+				elapsed_ms: performance.now() - started,
+				notified_listener_count: notifiedCount,
+				failed_listener_count: failedCount,
+				...firstFailure,
+			};
+			if (failedCount) logger.warn("Filesystem mutation observers failed after source change", resultFields);
+			else if (uncertaintyReason !== undefined)
+				logger.warn("Filesystem mutation index coverage uncertain", resultFields);
+			else logger.info("Filesystem mutation notification completed", resultFields);
+		},
+	);
 }
 
 /** Also used by native AST edits after their deferred apply actually commits. */

@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GateCommandError, type GateCommand, type GateRun } from "./test-gate-runtime";
+import * as logger from "@oh-my-pi/pi-utils/logger";
+import { GateCommandError, type GateCapture, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -66,6 +67,45 @@ export function selectWslDistribution(distros: readonly WslDistro[]): WslSelecti
 			};
 }
 export async function discoverWsl(gate: GateRun, options: WslOptions): Promise<WslSelection> {
+	const started = performance.now();
+	logger.info("WSL discovery started", {
+		component: "test-gate-wsl",
+		event: "wsl_discovery_started",
+		stage: "discovery",
+		result: "started",
+		platform: options.platform ?? process.platform,
+		distribution: WSL_TEST_DISTRIBUTION,
+		needed: options.needed !== false,
+	});
+	try {
+		const result = await discoverWslObserved(gate, options);
+		logger.info("WSL discovery settled", {
+			component: "test-gate-wsl",
+			event: "wsl_discovery_settled",
+			stage: "discovery",
+			result: result.status,
+			status: result.status,
+			distribution: WSL_TEST_DISTRIBUTION,
+			elapsed_ms: performance.now() - started,
+		});
+		return result;
+	} catch (error) {
+		const cancelled =
+			gate.signal.aborted &&
+			gate.signal.reason instanceof GateCommandError &&
+			gate.signal.reason.status === "INTERRUPTED";
+		(cancelled ? logger.info : logger.error)("WSL discovery failed", {
+			component: "test-gate-wsl",
+			event: "wsl_discovery_settled",
+			stage: "discovery",
+			result: cancelled ? "cancelled" : "BLOCKED",
+			elapsed_ms: performance.now() - started,
+			...logger.diagnosticError(error),
+		});
+		throw error;
+	}
+}
+async function discoverWslObserved(gate: GateRun, options: WslOptions): Promise<WslSelection> {
 	if (options.needed === false)
 		return { status: "SKIPPED_NOT_APPLICABLE", reason: "project does not need an additional Linux leg" };
 	if ((options.platform ?? process.platform) !== "win32")
@@ -96,7 +136,16 @@ export async function discoverWsl(gate: GateRun, options: WslOptions): Promise<W
 			result.exitCode || 1,
 		);
 	}
-	return selectWslDistribution(parseWslListVerbose(result.stdout));
+	const distros = parseWslListVerbose(result.stdout);
+	logger.info("WSL distribution list parsed", {
+		component: "test-gate-wsl",
+		event: "wsl_discovery_parsed",
+		stage: "discovery-parse",
+		result: "completed",
+		distribution_count: distros.length,
+		compatible_count: distros.filter(d => d.version === "2" && d.name === WSL_TEST_DISTRIBUTION).length,
+	});
+	return selectWslDistribution(distros);
 }
 function quote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -240,18 +289,63 @@ export function wslCancelCommand(controlDir: string): string {
 	return `if [ -d ${quote(controlDir)} ]; then python3 -c ${quote(CANCEL_OWNED_TREE)} ${quote(controlDir)}; fi`;
 }
 async function cancelOwnedWsl(distro: string, control: string): Promise<void> {
-	const child = Bun.spawn(wslArgv(distro, 25), {
-		stdin: new Blob([`mkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\n`]),
-		stdout: "inherit",
-		stderr: "inherit",
-		windowsHide: true,
+	const started = performance.now();
+	logger.info("WSL owned cleanup started", {
+		component: "test-gate-wsl",
+		event: "wsl_owned_cleanup_started",
+		stage: "owned-cleanup",
+		result: "started",
+		distribution: WSL_TEST_DISTRIBUTION,
 	});
-	const timer = setTimeout(() => child.kill(), 30000);
 	try {
-		if ((await child.exited) !== 0)
-			throw new Error("WSL owned-tree cancellation failed; leftover processes UNVERIFIED");
-	} finally {
-		clearTimeout(timer);
+		const child = Bun.spawn(wslArgv(distro, 25), {
+			stdin: new Blob([`mkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\n`]),
+			stdout: "inherit",
+			stderr: "inherit",
+			windowsHide: true,
+		});
+		logger.info("WSL owned cleanup spawned", {
+			component: "test-gate-wsl",
+			event: "wsl_owned_cleanup_spawned",
+			stage: "owned-cleanup",
+			result: "spawned",
+			peer_pid: child.pid,
+		});
+		const timer = setTimeout(() => {
+			logger.warn("WSL cleanup wall guard expired", {
+				component: "test-gate-wsl",
+				event: "wsl_owned_cleanup_timeout",
+				stage: "owned-cleanup",
+				result: "timeout",
+				peer_pid: child.pid,
+				elapsed_ms: performance.now() - started,
+			});
+			child.kill();
+		}, 30000);
+		try {
+			if ((await child.exited) !== 0)
+				throw new Error("WSL owned-tree cancellation failed; leftover processes UNVERIFIED");
+		} finally {
+			clearTimeout(timer);
+		}
+		logger.info("WSL owned cleanup settled", {
+			component: "test-gate-wsl",
+			event: "wsl_owned_cleanup_settled",
+			stage: "owned-cleanup",
+			result: "completed",
+			peer_pid: child.pid,
+			elapsed_ms: performance.now() - started,
+		});
+	} catch (error) {
+		logger.error("WSL owned cleanup failed", {
+			component: "test-gate-wsl",
+			event: "wsl_owned_cleanup_settled",
+			stage: "owned-cleanup",
+			result: "failed",
+			elapsed_ms: performance.now() - started,
+			...logger.diagnosticError(error),
+		});
+		throw error;
 	}
 }
 const REPOSITORIES = `import json,os,pathlib,subprocess,sys,urllib.parse
@@ -275,25 +369,93 @@ for directory,children,files in os.walk('/root'):
    except ValueError: same=False
    if same: matches.append({'linux_repo':str(root),'remote':remote,'fetch_url':url})
 print(json.dumps(matches))`;
-function stageFailure(
-	status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED",
-	reason: string,
-	exitCode = 1,
-): WslStageResult {
-	console.error(`wsl-stage: ${status} — ${reason}`);
-	return { status, reason, exitCode: exitCode || 1 };
-}
 export async function runWslStage(gate: GateRun, options: WslOptions): Promise<WslStageResult> {
+	const started = performance.now();
+	return logger.withLogContext({ wsl_call_id: randomUUID() }, async () => {
+		logger.info("WSL leg started", {
+			component: "test-gate-wsl",
+			event: "wsl_stage_started",
+			stage: "wsl-leg",
+			result: "started",
+			distribution: WSL_TEST_DISTRIBUTION,
+			platform: "linux",
+			scope: "fork-affected",
+		});
+		try {
+			const result = await runWslStageObserved(gate, options);
+			const log =
+				result.status === "PASS" || result.status.startsWith("SKIPPED") || result.status === "CANCELLED"
+					? logger.info
+					: logger.error;
+			log("WSL leg settled", {
+				component: "test-gate-wsl",
+				event: "wsl_stage_settled",
+				stage: "wsl-leg",
+				result: result.status,
+				status: result.status,
+				elapsed_ms: performance.now() - started,
+				exit_code: "exitCode" in result ? result.exitCode : result.status === "PASS" ? 0 : undefined,
+				head: result.status === "PASS" ? result.head : undefined,
+				distribution: WSL_TEST_DISTRIBUTION,
+			});
+			return result;
+		} catch (error) {
+			const cancelled =
+				gate.signal.aborted &&
+				gate.signal.reason instanceof GateCommandError &&
+				gate.signal.reason.status === "INTERRUPTED";
+			(cancelled ? logger.info : logger.error)("WSL leg failed", {
+				component: "test-gate-wsl",
+				event: "wsl_stage_settled",
+				stage: "wsl-leg",
+				result: cancelled ? "cancelled" : "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		}
+	});
+}
+async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<WslStageResult> {
+	let stage = "discovery";
+	const stageFailure = (
+		status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED",
+		reason: string,
+		exitCode = 1,
+	): WslStageResult => {
+		(status === "CANCELLED" ? logger.info : logger.error)("WSL result rejected", {
+			component: "test-gate-wsl",
+			event: "wsl_result_rejected",
+			stage,
+			result: status,
+			status,
+			exit_code: exitCode || 1,
+		});
+		console.error(`wsl-stage: ${status} — ${reason}`);
+		return { status, reason, exitCode: exitCode || 1 };
+	};
 	const selection = options.selection ?? (await discoverWsl(gate, options));
 	if (selection.status !== "AVAILABLE") return selection;
 	const root = options.root ?? repoRoot;
+	stage = "source-identity";
 	const source = options.identity ?? (await captureSourceIdentity(gate, root));
+	logger.info("WSL source identity resolved", {
+		component: "test-gate-wsl",
+		event: "wsl_source_identity",
+		stage,
+		result: "completed",
+		head: source.head,
+		source_fingerprint: source.digest,
+		dirty: source.dirty,
+		scope: "fork-affected",
+	});
 	if (source.dirty)
 		return stageFailure(
 			"BLOCKED",
 			"commit and push the intended source first; dirty source is not transferable and gate authorization grants no Git writes",
 		);
 	const which = options.which ?? Bun.which;
+	stage = "host-helper";
 	const python = which("python") ?? which("python3");
 	const helper =
 		options.workflowPath ??
@@ -304,16 +466,51 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 			fs
 				.stat(helper)
 				.then(s => s.isFile())
-				.catch(() => false),
+				.catch(error => {
+					((error as NodeJS.ErrnoException).code === "ENOENT" ? logger.info : logger.warn)(
+						"WSL host helper unavailable",
+						{
+							component: "test-gate-wsl",
+							event: "wsl_host_helper_unavailable",
+							stage,
+							result: "unavailable",
+							...logger.diagnosticError(error),
+						},
+					);
+					return false;
+				}),
 		))
 	)
 		return stageFailure("BLOCKED", "deployed workflow.py and a host Python interpreter are required");
 	let remote: WslRemoteSource;
+	stage = "remote-source";
+	logger.info("WSL remote source resolution started", {
+		component: "test-gate-wsl",
+		event: "wsl_remote_source_started",
+		stage,
+		result: "started",
+		head: source.head,
+	});
 	try {
 		remote = await resolveWslRemoteSource(gate, root, source);
 	} catch (error) {
+		logger.error("WSL remote source blocked", {
+			component: "test-gate-wsl",
+			event: "wsl_remote_source_settled",
+			stage,
+			result: "BLOCKED",
+			...logger.diagnosticError(error),
+		});
 		return stageFailure("BLOCKED", error instanceof Error ? error.message : String(error));
 	}
+	logger.info("WSL remote source resolved", {
+		component: "test-gate-wsl",
+		event: "wsl_remote_source_settled",
+		stage,
+		result: "completed",
+		head: remote.head,
+	});
+	stage = "native-repository";
 	const probe = await gate.capture({
 		label: "wsl/native-repository-discovery",
 		argv: wslArgv(selection.distro, 25),
@@ -346,11 +543,19 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 			"native repository discovery did not return a matching protected /root identity report",
 		);
 	}
+	logger.info("Native repository report parsed", {
+		component: "test-gate-wsl",
+		event: "wsl_native_repository_parsed",
+		stage,
+		result: "completed",
+		repository_count: candidates.length,
+	});
 	// No automatic alternate clone may bypass an existing unsafe/ambiguous tree.
 	const unique = [...new Set(candidates.map(c => c.linux_repo))];
 	if (unique.length > 1) return stageFailure("BLOCKED", `multiple matching native worktrees: ${unique.join(", ")}`);
 	let linux = candidates[0];
 	if (!linux) {
+		stage = "network-clone";
 		const name = remote.identity.split("/").at(-1)!;
 		const owner = remote.identity.split("/").at(-2)!;
 		if (![name, owner].every(part => /^[A-Za-z0-9._-]+$/.test(part)))
@@ -378,6 +583,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 			return stageFailure("UNVERIFIED", "network clone did not establish its exact native destination");
 		linux = { linux_repo: destination, remote: "origin", fetch_url: remote.fetchUrl };
 	}
+	stage = "native-environment";
 	const environment = await gate.capture({
 		label: "wsl/native-environment",
 		argv: wslArgv(selection.distro, 25),
@@ -394,6 +600,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		);
 	console.log(environment.stdout);
 	const token = randomUUID();
+	stage = "workflow-plan";
 	const control = `/tmp/omp-slowtest-${randomUUID()}`;
 	const request = {
 		action: "plan",
@@ -405,6 +612,8 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		timeout: HELPER_HANG_GUARD_SECONDS,
 		env: {
 			RUSTUP_AUTO_INSTALL: "0",
+			OMP_GATE_DIAGNOSTIC_RUN_ID: String(logger.getLogContext().run_id ?? ""),
+			OMP_GATE_DIAGNOSTIC_OPERATION_ID: String(logger.getLogContext().operation_id ?? ""),
 			OMP_GATE_EVENT_TOKEN: token,
 			OMP_GATE_EVENT_FILE: "",
 			OMP_GATE_CLOCK_TOKEN: "",
@@ -431,6 +640,17 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		if (resolved.status !== "PLANNED" || resolved.expected_sha !== source.head || typeof resolved.script !== "string")
 			throw new Error("invalid plan");
 		program = resolved.script;
+		logger.info("Fixed SHA workflow plan parsed", {
+			component: "test-gate-wsl",
+			event: "wsl_workflow_plan_parsed",
+			stage,
+			result: "PLANNED",
+			head: source.head,
+			distribution: WSL_TEST_DISTRIBUTION,
+			helper_wall_guard_ms: HELPER_HANG_GUARD_SECONDS * 1000,
+			platform: "linux",
+			scope: "fork-affected",
+		});
 	} catch {
 		return stageFailure("UNVERIFIED", "deployed helper returned no fixed-commit plan");
 	}
@@ -450,7 +670,46 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		allowFailure: true,
 		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, control)),
 	};
-	const result = await gate.capture(command);
+	stage = "sync-and-fulltest";
+	logger.info("WSL fixed SHA execution started", {
+		component: "test-gate-wsl",
+		event: "wsl_sync_fulltest_started",
+		stage,
+		result: "started",
+		head: source.head,
+		distribution: WSL_TEST_DISTRIBUTION,
+		platform: "linux",
+	});
+	const executionStarted = performance.now();
+	let result: GateCapture;
+	try {
+		result = await gate.capture(command);
+		logger.info("WSL fixed SHA execution returned", {
+			component: "test-gate-wsl",
+			event: "wsl_sync_fulltest_settled",
+			stage,
+			result: "returned",
+			exit_code: result.exitCode,
+			head: source.head,
+			elapsed_ms: performance.now() - executionStarted,
+		});
+	} catch (error) {
+		const cancelled =
+			gate.signal.aborted &&
+			gate.signal.reason instanceof GateCommandError &&
+			gate.signal.reason.status === "INTERRUPTED";
+		(cancelled ? logger.info : logger.error)("WSL fixed SHA execution failed", {
+			component: "test-gate-wsl",
+			event: "wsl_sync_fulltest_settled",
+			stage,
+			result: cancelled ? "cancelled" : "failed",
+			head: source.head,
+			elapsed_ms: performance.now() - executionStarted,
+			...logger.diagnosticError(error),
+		});
+		throw error;
+	}
+	stage = "returned-result";
 	console.log(result.stdout);
 	if (result.stderr) console.error(result.stderr);
 	// Nested orchestration selftests may log their own inert marker fixtures.
@@ -458,6 +717,17 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 	const testCode = [...result.stdout.matchAll(/^TEST_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];
 	const postHead = [...result.stdout.matchAll(/^POST_TEST_SHA=(.*)$/gm)].at(-1)?.[1];
 	const postState = [...result.stdout.matchAll(/^POST_TEST_STATE_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];
+	logger.info("WSL post-test evidence parsed", {
+		component: "test-gate-wsl",
+		event: "wsl_result_parsed",
+		stage,
+		result: "parsed",
+		test_exit_code: testCode === undefined ? undefined : Number(testCode),
+		post_head_matches: postHead === source.head,
+		post_state_clean: postState === "0",
+		expected_head: source.head,
+		returned_head: postHead && /^[0-9a-f]{40}$/.test(postHead) ? postHead : undefined,
+	});
 	if (result.exitCode === 124 || result.exitCode === 137)
 		return stageFailure("TIMEOUT", "WSL execution hang guard expired", result.exitCode);
 	if (result.exitCode === 130) return stageFailure("CANCELLED", "WSL execution cancelled", 130);

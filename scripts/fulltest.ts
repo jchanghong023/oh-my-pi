@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, runFastcheck, runGateCommands } from "./fastcheck";
@@ -64,6 +65,16 @@ async function discoverForkChangedPaths(gate: GateRun): Promise<string[]> {
 		cwd: gateRepoRoot,
 	});
 	const paths = [...new Set([...diff.stdout.split("\0"), ...untracked.stdout.split("\0")].filter(Boolean))].sort();
+	logger.info("Fork test scope selected", {
+		component: "test-gate-fulltest",
+		event: "fulltest_scope_selected",
+		stage: "scope",
+		result: "completed",
+		scope: "fork-affected",
+		baseline,
+		selection: "user-requested-prior-scope",
+		changed_path_count: paths.length,
+	});
 	console.log(`scope=fork-affected baseline=${baseline} selection=user-requested-prior-scope`);
 	console.log(
 		"coverage: existing TS/Rust static checks; fork TS tests; affected Rust crates; repository scripts; native build; dev-TUI smoke",
@@ -153,6 +164,43 @@ export async function removeFulltestHome(home: string): Promise<void> {
 }
 
 export async function runFulltest(gate: GateRun, options: FulltestOptions): Promise<void> {
+	const started = performance.now();
+	logger.info("Current platform fulltest started", {
+		component: "test-gate-fulltest",
+		event: "fulltest_started",
+		stage: "current-platform",
+		result: "started",
+		platform: process.platform,
+		arch: process.arch,
+		scope: "fork-affected",
+	});
+	try {
+		await runFulltestObserved(gate, options);
+		logger.info("Current platform fulltest completed", {
+			component: "test-gate-fulltest",
+			event: "fulltest_settled",
+			stage: "current-platform",
+			result: "completed",
+			elapsed_ms: performance.now() - started,
+		});
+	} catch (error) {
+		const cancelled =
+			gate.signal.aborted &&
+			gate.signal.reason instanceof GateCommandError &&
+			gate.signal.reason.status === "INTERRUPTED";
+		(cancelled ? logger.info : logger.error)("Current platform fulltest failed", {
+			component: "test-gate-fulltest",
+			event: "fulltest_settled",
+			stage: "current-platform",
+			result: cancelled ? "cancelled" : "failed",
+			elapsed_ms: performance.now() - started,
+			status: error instanceof GateCommandError ? error.status : "FAIL",
+			...logger.diagnosticError(error),
+		});
+		throw error;
+	}
+}
+async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Promise<void> {
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
 		throw new GateCommandError(
 			`UNVERIFIED: supported local platform is Windows/Linux x64, found ${process.platform}-${process.arch}`,
@@ -160,6 +208,16 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 		);
 	}
 	const before = await captureSourceIdentity(gate, gateRepoRoot);
+	logger.info("Fulltest source identity resolved", {
+		component: "test-gate-fulltest",
+		event: "fulltest_source_identity",
+		stage: "source-before",
+		result: "completed",
+		head: before.head,
+		dirty: before.dirty,
+		source_fingerprint: before.digest,
+		bun_version: Bun.version,
+	});
 	console.log(`source: HEAD=${before.head} dirty=${before.dirty} digest=${before.digest}`);
 	if (before.dirty) console.log(`source: uncommitted summary\n${before.status.trimEnd()}`);
 	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-affected`);
@@ -184,10 +242,28 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 			env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
 		});
 		const tests = fulltestCommands(options, home, changedPaths);
+		logger.info("Fulltest command plan selected", {
+			component: "test-gate-fulltest",
+			event: "fulltest_plan_selected",
+			stage: "test-plan",
+			result: "completed",
+			command_count: tests.length,
+			concurrent_fastcheck: true,
+			scope: "fork-affected",
+		});
 		for (const command of tests) {
 			if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		}
 		const afterBuild = await captureSourceIdentity(gate, gateRepoRoot);
+		logger.info("Fulltest post-build source identity resolved", {
+			component: "test-gate-fulltest",
+			event: "fulltest_source_identity",
+			stage: "source-after-build",
+			result: "completed",
+			head: afterBuild.head,
+			dirty: afterBuild.dirty,
+			source_fingerprint: afterBuild.digest,
+		});
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
@@ -209,6 +285,15 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 			}),
 		);
 		const after = await captureSourceIdentity(gate, gateRepoRoot);
+		logger.info("Fulltest source stability resolved", {
+			component: "test-gate-fulltest",
+			event: "fulltest_source_identity",
+			stage: "source-after-tests",
+			result: after.digest === afterBuild.digest && after.head === afterBuild.head ? "unchanged" : "changed",
+			head: after.head,
+			dirty: after.dirty,
+			source_fingerprint: after.digest,
+		});
 		if (after.digest !== afterBuild.digest || after.head !== afterBuild.head) {
 			throw new GateCommandError(
 				"Source changed while tests were running; result does not verify one source snapshot",
@@ -216,7 +301,33 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 			);
 		}
 	} finally {
-		await gate.charged(() => removeFulltestHome(home));
+		const cleanupStarted = performance.now();
+		logger.info("Fulltest isolated home cleanup started", {
+			component: "test-gate-fulltest",
+			event: "fulltest_home_cleanup_started",
+			stage: "isolated-home-cleanup",
+			result: "started",
+		});
+		try {
+			await gate.charged(() => removeFulltestHome(home));
+			logger.info("Fulltest isolated home cleanup completed", {
+				component: "test-gate-fulltest",
+				event: "fulltest_home_cleanup_settled",
+				stage: "isolated-home-cleanup",
+				result: "completed",
+				elapsed_ms: performance.now() - cleanupStarted,
+			});
+		} catch (error) {
+			logger.error("Fulltest isolated home cleanup failed", {
+				component: "test-gate-fulltest",
+				event: "fulltest_home_cleanup_settled",
+				stage: "isolated-home-cleanup",
+				result: "failed",
+				elapsed_ms: performance.now() - cleanupStarted,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		}
 	}
 }
 

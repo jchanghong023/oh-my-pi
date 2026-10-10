@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added correlated Anthropic request, HTTP attempt, response-header, streaming, retry, fallback, cancellation, and terminal-result diagnostics without logging prompts, credentials, or response bodies.
+
 ### Fixed
 
 - Preserved Codex tool-loop turn state and user timestamps when requests include transient user-authority context.

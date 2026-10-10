@@ -339,6 +339,72 @@ try {
 		return { exitCode, stdout, stderr };
 	}
 
+	test("standalone rejection preserves the original exception and redacts its diagnostic evidence", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-standalone-"));
+		tempDirs.push(dir);
+		const installDir = path.join(dir, "PRIVATEINSTALLTARGET");
+		const target = path.join(installDir, "omp.exe");
+		const configRoot = path.join(dir, "config");
+		await fs.mkdir(target, { recursive: true });
+		await Bun.write(path.join(target, "keep.txt"), "unrelated");
+		const child = Bun.spawn(
+			[
+				windowsPowerShell!,
+				"-NoProfile",
+				"-NonInteractive",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				path.join(repoRoot, "scripts", "install.ps1"),
+				"-Binary",
+				"-Ref",
+				"PRIVATEINSTALLREF",
+			],
+			{
+				cwd: repoRoot,
+				env: {
+					...process.env,
+					HOME: dir,
+					USERPROFILE: dir,
+					LOCALAPPDATA: path.join(dir, "local"),
+					OMP_CONFIG_ROOT: configRoot,
+					OMP_PROFILE: "default",
+					PI_PROFILE: "default",
+					PI_INSTALL_DIR: installDir,
+					PROCESSOR_ARCHITECTURE: "AMD64",
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		expect(exitCode, stderr).toBe(1);
+		expect(stderr).toContain("Refusing to replace a directory");
+		expect(stderr).not.toContain("ScriptHalted");
+		expect(await Bun.file(path.join(target, "keep.txt")).text()).toBe("unrelated");
+		const logsDir = path.join(configRoot, "logs");
+		const files = (await fs.readdir(logsDir)).filter(name => name.endsWith(`.${child.pid}.log`));
+		const raw = (await Promise.all(files.map(name => Bun.file(path.join(logsDir, name)).text()))).join("");
+		expect(raw).not.toContain("PRIVATEINSTALLTARGET");
+		expect(raw).not.toContain("PRIVATEINSTALLREF");
+		const records = raw
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line));
+		const terminal = records.filter(record => record.event === "install_failed");
+		expect(terminal).toHaveLength(1);
+		expect(terminal[0]).toMatchObject({
+			pid: child.pid,
+			level: "ERROR",
+			stage: "install_target",
+			result: "failed",
+			target_version: "redacted",
+			source_file: "install.ps1",
+		});
+		expect(terminal[0].source_line).toBeGreaterThan(0);
+		expect(records.some(record => record.event === "http_request_started")).toBe(false);
+	}, 30_000);
+
 	test("an already-installed release removes unlocked old images without downloading and still checks PATH", async () => {
 		const result = await scenario("already");
 		expect(result.exitCode, result.stderr).toBe(0);

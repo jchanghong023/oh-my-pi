@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -121,6 +122,17 @@ import type {
 } from "./rpc-types";
 
 const INVALID_TEXT_CURSOR_ERROR = "cursor must be an integer UTF-16 offset within text";
+
+function rpcDiagnosticId(value: unknown, internal = false): string | undefined {
+	if (typeof value !== "string") return undefined;
+	return internal && /^[A-Za-z0-9_-]{1,96}$/.test(value)
+		? value
+		: createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function rpcDiagnosticType(value: unknown): string {
+	return typeof value === "string" && /^[a-z_]{1,64}$/.test(value) ? value : "invalid_type";
+}
 
 function isTextCursor(text: unknown, cursor: unknown): text is string {
 	return (
@@ -479,6 +491,45 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// unknown discriminants as an error response, so we do not shape-check
 	// the union here.
 	const command = parsed as RpcCommand;
+	const started = performance.now();
+	const dispatch = async (): Promise<RpcResponse> => {
+		const fields = {
+			component: "rpc",
+			command: rpcDiagnosticType(command.type),
+			request_id: rpcDiagnosticId(command.id),
+		};
+		logger.info("RPC request dispatch started", {
+			...fields,
+			event: "rpc_request_started",
+			stage: "dispatch",
+			result: "started",
+		});
+		try {
+			const response = await deps.handleCommand(command);
+			logger.info("RPC request response ready", {
+				...fields,
+				event: "rpc_request_terminal",
+				stage: "response",
+				result: response.success ? "acknowledged" : "rejected",
+				error_code: response.success ? undefined : rpcDiagnosticType(response.code ?? "command_rejected"),
+				elapsed_ms: performance.now() - started,
+			});
+			return response;
+		} catch (error) {
+			const cancelled = error instanceof Error && error.name === "AbortError";
+			const failure = {
+				...fields,
+				event: "rpc_request_terminal",
+				stage: "dispatch",
+				result: cancelled ? "cancelled" : "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			};
+			if (cancelled) logger.info("RPC request cancelled", failure);
+			else logger.error("RPC request failed", failure);
+			throw error;
+		}
+	};
 
 	// `bash` can run for a long time, and `prompt`'s response is held until
 	// admission (see PromptOptions.onPromptAdmitted), which can likewise span
@@ -499,7 +550,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	) {
 		const task = (async () => {
 			try {
-				deps.output(await deps.handleCommand(command));
+				deps.output(await dispatch());
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
 				deps.output(deps.errorResponse(command.id, command.type, message));
@@ -510,7 +561,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	}
 
 	return (async () => {
-		deps.output(await deps.handleCommand(command));
+		deps.output(await dispatch());
 	})();
 }
 
@@ -651,31 +702,60 @@ export class RpcInputDispatcher {
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
 	dispatch(parsed: unknown): void {
-		try {
-			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
-			const command = parsed as RpcCommand;
-			this.#acceptInput?.(command);
-			// Bash and predict_word retain their immediate side channel. Prompts,
-			// steers, follow-ups and steer_subagent start through the serial tail, but
-			// dispatchRpcInputFrame backgrounds their admission.
-			if (BACKGROUND_COMMANDS.has(command.type)) {
-				dispatchRpcInputFrame(command, this.#deps);
-				return;
-			}
+		const context = {
+			...logger.getLogContext(),
+			operation_id: `rpc-${crypto.randomUUID()}`,
+			request_id: isRecord(parsed) ? rpcDiagnosticId(parsed.id) : undefined,
+			command: isRecord(parsed) ? rpcDiagnosticType(parsed.type) : "invalid_frame",
+		};
+		logger.withLogContext(context, () => {
+			try {
+				if (dispatchRpcControlFrame(parsed, this.#deps)) {
+					logger.debug("RPC control frame received", {
+						component: "rpc",
+						event: "rpc_control_received",
+						stage: "control",
+						result: "routed",
+					});
+					return;
+				}
+				logger.info("RPC request received", {
+					component: "rpc",
+					event: "rpc_request_received",
+					stage: "input",
+					result: "received",
+				});
+				const command = parsed as RpcCommand;
+				this.#acceptInput?.(command);
+				// Bash and predict_word retain their immediate side channel. Prompts,
+				// steers, follow-ups and steer_subagent start through the serial tail, but
+				// dispatchRpcInputFrame backgrounds their admission.
+				if (BACKGROUND_COMMANDS.has(command.type)) {
+					dispatchRpcInputFrame(command, this.#deps);
+					return;
+				}
 
-			const task = this.#tail.then(
-				() => this.#dispatchSerialCommand(command),
-				() => this.#dispatchSerialCommand(command),
-			);
-			this.#tail = task.catch(() => {});
-			this.#tasks.add(task);
-			void task.finally(() => {
-				this.#tasks.delete(task);
-			});
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
-		}
+				const task = this.#tail.then(
+					() => this.#dispatchSerialCommand(command),
+					() => this.#dispatchSerialCommand(command),
+				);
+				this.#tail = task.catch(() => {});
+				this.#tasks.add(task);
+				void task.finally(() => {
+					this.#tasks.delete(task);
+				});
+			} catch (err: unknown) {
+				logger.warn("RPC input rejected", {
+					component: "rpc",
+					event: "rpc_input_failed",
+					stage: "input",
+					result: "rejected",
+					...logger.diagnosticError(err),
+				});
+				const message = err instanceof Error ? err.message : String(err);
+				this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
+			}
+		});
 	}
 
 	/** Await every accepted serial command, including commands queued before EOF. */
@@ -912,7 +992,14 @@ export async function handleRpcSteerSubagent(
 		() => accepted.resolve(),
 		err => {
 			accepted.reject(err);
-			logger.warn("steer_subagent message failed", { subagentId, error: String(err) });
+			logger.warn("RPC subagent message failed", {
+				component: "rpc",
+				event: "rpc_subagent_message_failed",
+				stage: "subagent_admission",
+				result: "failed",
+				subagent_id: rpcDiagnosticId(subagentId),
+				...logger.diagnosticError(err),
+			});
 		},
 	);
 	try {
@@ -1431,7 +1518,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// writes from the threadpool and reports backpressure, letting the writer spool.
 	const stdout = process.platform === "win32" ? fs.createWriteStream("", { fd: 1, autoClose: false }) : process.stdout;
 	const outputWriter = new RpcOutputWriter(stdout, failure => {
-		logger.error("RPC output delivery failed", { error: String(failure) });
+		logger.error("RPC output delivery failed", {
+			component: "rpc",
+			event: "rpc_output_failed",
+			stage: "output_delivery",
+			result: "failed",
+			session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
+			...logger.diagnosticError(failure),
+		});
 		void session.dispose().finally(() => process.exit(1));
 	});
 	outputWriter.write(
@@ -1443,8 +1537,35 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 		}),
 	);
+	const promptDiagnostics = new Map<
+		string | undefined,
+		Array<{ context: Record<string, unknown>; started: number }>
+	>();
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		outputWriter.write(frameEncoder.encodeFrames(obj));
+		if (isRecord(obj) && obj.type === "prompt_result") {
+			const pending = promptDiagnostics.get(typeof obj.id === "string" ? obj.id : undefined);
+			const inherited = logger.getLogContext();
+			const index =
+				pending?.findIndex(
+					item =>
+						item.context.operation_id === inherited.operation_id && item.context.call_id === inherited.call_id,
+				) ?? -1;
+			const ambiguous = index < 0 && (pending?.length ?? 0) > 1;
+			const diagnostic = pending?.splice(Math.max(index, 0), 1)[0];
+			if (!pending?.length) promptDiagnostics.delete(typeof obj.id === "string" ? obj.id : undefined);
+			logger.info("RPC prompt reached terminal result", {
+				...diagnostic?.context,
+				component: "rpc",
+				event: "rpc_prompt_terminal",
+				stage: "prompt_result",
+				result: obj.status === "error" ? "failed" : obj.status === "aborted" ? "cancelled" : "completed",
+				agent_invoked: obj.agentInvoked === true,
+				session_settled: obj.sessionSettled === true,
+				correlation_ambiguous: ambiguous,
+				elapsed_ms: diagnostic ? performance.now() - diagnostic.started : undefined,
+			});
+		}
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
 			frameEncoder.setProtocolVersion(2);
 	};
@@ -1477,6 +1598,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			const command: RpcCommand = { type: "prompt", message };
 			inputGate.accept(command);
 			const ticket = promptResults.begin(undefined);
+			const pending = promptDiagnostics.get(undefined) ?? [];
+			pending.push({ context: { ...logger.getLogContext() }, started: performance.now() });
+			promptDiagnostics.set(undefined, pending);
 			try {
 				const outcome = await dispatchOrderedUserInput(command, ticket, true, current);
 				if (outcome === "local") promptResults.completeLocal(ticket);
@@ -1551,7 +1675,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				await session.settings.reloadFromDisk();
 				await planController.refreshModelRole();
 			} catch (err) {
-				logger.warn("RPC model role session settings reload failed", { error: String(err) });
+				logger.warn("RPC model role session settings reload failed", {
+					component: "rpc",
+					event: "rpc_settings_reload_failed",
+					stage: "settings_reload",
+					result: "failed",
+					...logger.diagnosticError(err),
+				});
 			}
 		},
 	});
@@ -1813,8 +1943,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		}
 	};
 	setToolUIContext?.(rpcUiContext, true);
-	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
+	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) => {
+		const fields = {
+			component: "rpc",
+			event: "rpc_prompt_failed",
+			stage: "prompt_execution",
+			result: promptError.name === "AbortError" ? "cancelled" : "failed",
+			command: rpcDiagnosticType(command),
+			request_id: rpcDiagnosticId(id),
+			...logger.diagnosticError(promptError),
+		};
+		if (promptError.name === "AbortError") logger.info("RPC prompt cancelled", fields);
+		else logger.error("RPC prompt execution failed", fields);
 		output(error(id, command, promptError.message));
+	};
 
 	// Set up extensions with RPC-based UI context
 	await initializeExtensions(session, {
@@ -1902,7 +2044,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
 			await btw.close().catch(btwError => {
 				const message = toError(btwError).message;
-				logger.error(message);
+				logger.error("RPC side answer close failed", {
+					component: "rpc",
+					event: "rpc_btw_close_failed",
+					stage: "shutdown",
+					result: "failed",
+					...logger.diagnosticError(btwError),
+				});
 				output({ type: "notice", level: "error", message, source: "btw-history" });
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
@@ -2070,13 +2218,50 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					runCommandInBackground: task => {
 						if (!commandIsCurrent()) return;
 						backgroundTasks++;
+						const context = {
+							...logger.getLogContext(),
+							call_id: `rpc-command-background-${crypto.randomUUID()}`,
+						};
+						const started = performance.now();
 						shutdownCoordinator.track(
-							task()
-								.catch(cause => commandOutput(`Command failed: ${toError(cause).message}`))
-								.finally(() => {
-									backgroundTasks--;
-									if (dispatchFinished && backgroundTasks === 0) commandOperations.delete(controller);
-								}),
+							logger.withLogContext(context, () => {
+								logger.info("RPC command background started", {
+									component: "rpc",
+									event: "rpc_command_background_started",
+									stage: "builtin_background",
+									result: "started",
+								});
+								let result = "completed";
+								return task()
+									.catch(cause => {
+										result =
+											commandIsCurrent() && !(cause instanceof Error && cause.name === "AbortError")
+												? "failed"
+												: "cancelled";
+										if (result === "failed")
+											logger.error("RPC command background failed", {
+												component: "rpc",
+												event: "rpc_command_background_failed",
+												stage: "builtin_background",
+												result,
+												elapsed_ms: performance.now() - started,
+												...logger.diagnosticError(cause),
+											});
+										commandOutput(`Command failed: ${toError(cause).message}`);
+									})
+									.finally(() => {
+										if (result !== "failed")
+											logger.info("RPC command background ended", {
+												component: "rpc",
+												event: "rpc_command_background_terminal",
+												stage: "builtin_background",
+												result: commandIsCurrent() ? result : "cancelled",
+												elapsed_ms: performance.now() - started,
+											});
+										backgroundTasks--;
+										if (dispatchFinished && backgroundTasks === 0) commandOperations.delete(controller);
+									});
+							}),
 						);
 					},
 					runModeCommand: async (mode, args) => {
@@ -3090,7 +3275,44 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 
 	const dispatchFrameDeps: RpcInputFrameDeps = {
-		handleCommand,
+		handleCommand: command =>
+			logger.withLogContext(
+				{
+					session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
+					session_generation: session.sessionGeneration,
+				},
+				async () => {
+					const prompt = command.type === "prompt" || command.type === "abort_and_prompt";
+					const diagnostic = { context: { ...logger.getLogContext() }, started: performance.now() };
+					if (prompt) {
+						const pending = promptDiagnostics.get(command.id) ?? [];
+						pending.push(diagnostic);
+						promptDiagnostics.set(command.id, pending);
+					}
+					try {
+						const response = await handleCommand(command);
+						if (prompt && !response.success) {
+							const pending = promptDiagnostics.get(command.id);
+							if (pending) {
+								const index = pending.indexOf(diagnostic);
+								if (index >= 0) pending.splice(index, 1);
+								if (!pending.length) promptDiagnostics.delete(command.id);
+							}
+						}
+						return response;
+					} catch (error) {
+						if (prompt) {
+							const pending = promptDiagnostics.get(command.id);
+							if (pending) {
+								const index = pending.indexOf(diagnostic);
+								if (index >= 0) pending.splice(index, 1);
+								if (!pending.length) promptDiagnostics.delete(command.id);
+							}
+						}
+						throw error;
+					}
+				},
+			),
 		output,
 		errorResponse: error,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
@@ -3125,13 +3347,42 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// the reader and killing the whole process (issue #5194).
 	await readRpcInputFrames(
 		input ?? Bun.stdin.stream(),
-		parsed => inputDispatcher.dispatch(parsed),
-		message => output(error(undefined, "parse", message)),
+		parsed =>
+			logger.withLogContext(
+				{
+					session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
+					session_generation: session.sessionGeneration,
+				},
+				() => inputDispatcher.dispatch(parsed),
+			),
+		message => {
+			logger.warn("RPC frame decode rejected", {
+				component: "rpc",
+				event: "rpc_input_failed",
+				stage: "frame_decode",
+				result: "rejected",
+				error_code: "invalid_frame",
+				session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
+			});
+			output(error(undefined, "parse", message));
+		},
 	);
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.
 	clientDisconnected = true;
+	logger.info("RPC client disconnected", {
+		component: "rpc",
+		event: "rpc_client_disconnected",
+		stage: "eof",
+		result: "disconnected",
+		session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
+		pending_ui_count: pendingExtensionRequests.size,
+		pending_prompt_count: Array.from(promptDiagnostics.values()).reduce(
+			(count, pending) => count + pending.length,
+			0,
+		),
+	});
 	cancelCommandOperations();
 	loopController.clear();
 	goalController.stopForHostAbort();
@@ -3141,6 +3392,18 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
+	for (const pending of promptDiagnostics.values()) {
+		for (const diagnostic of pending)
+			logger.info("RPC prompt disconnected", {
+				...diagnostic.context,
+				component: "rpc",
+				event: "rpc_prompt_terminal",
+				stage: "disconnect_drain",
+				result: "cancelled",
+				elapsed_ms: performance.now() - diagnostic.started,
+			});
+	}
+	promptDiagnostics.clear();
 	subagentRegistry?.dispose();
 	// Dispose the main session before exiting so the browser reaper and other
 	// bounded teardown run on the stdin-EOF path too (#5643). Idempotent: a

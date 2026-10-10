@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../session/auth-storage";
 import type { ContextFileEntry } from "../tools";
 import type { ModelRegistry } from "../config/model-registry";
@@ -96,102 +96,277 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 	const outputManager = new AgentOutputManager(() => deps.artifactsDir, {
 		parentPrefix: `team-${Snowflake.next()}`,
 	});
-	return async (call: TeamSubagentCall, signal: AbortSignal): Promise<TeamSubagentOutcome> => {
-		if (signal.aborted) return { ok: false, error: "cancelled before start" };
-		const lease = await leaseArtifacts(deps);
-		// Set when the executor hands off cleanup that outlives the visible
-		// result (child session disposal overran its deadline); the temp lease
-		// must survive until it settles or the rm below races open handles.
-		let deferredCleanup: Promise<void> | undefined;
-		try {
-			const id = await outputManager.allocate(sanitizeAgentId(call.label));
-			const agent: AgentDefinition = {
-				name: `team-${call.role}`,
-				description: `Team discussion ${call.role} (${call.label})`,
-				systemPrompt: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
-				tools: [...TEAM_READ_ONLY_TOOLS],
-				readSummarize: false,
-				source: "bundled",
-			};
-			const result = await runSubprocess({
-				cwd: deps.cwd,
-				additionalDirectories: deps.additionalDirectories,
-				getApiKey: deps.getApiKey,
-				agent,
-				task: call.task,
-				assignment: call.task,
-				modelOverride: call.modelPattern,
-				parentActiveModelPattern: deps.parentActiveModelPattern,
-				id,
-				index: 0,
-				outputSchema: call.schema,
-				outputSchemaMode: "strict",
-				outputSchemaSource: "caller",
-				outputSchemaOverridesAgent: true,
-				// The workflow is known to run minutes; the generic per-subagent
-				// wall-clock cap would abort legitimate stages.
-				maxRuntimeMs: 0,
-				enableLsp: false,
-				enableIrc: false,
-				enableMCP: false,
-				restrictToolNames: true,
-				keepAlive: false,
-				signal,
-				onCleanupDeferred: completion => {
-					deferredCleanup = completion;
-				},
-				sessionFile: lease.sessionFile,
-				persistArtifacts: !lease.temporary,
-				artifactsDir: lease.artifactsDir,
-				localProtocolOptions: {
-					getArtifactsDir: () => path.join(lease.artifactsDir, id),
-					getSessionId: () => id,
-					// agent:// and history:// are global cross-agent namespaces;
-					// disabling IRC messaging alone does not isolate their reads.
-					allowCrossAgentReads: false,
-				},
-				authStorage: deps.authStorage,
-				modelRegistry: deps.modelRegistry,
-				settings: deps.settings,
-				contextFiles: deps.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
-				skills: deps.skills ? [...deps.skills] : undefined,
-				workspaceTree: deps.workspaceTree,
-				promptTemplates: deps.promptTemplates,
-				rules: deps.rules,
-				parentAgentId: deps.parentAgentId,
-			});
-			if (signal.aborted) return { ok: false, error: "cancelled" };
-			// A non-signal abort (soft-budget force-stop, internal termination)
-			// is a participant failure, not user cancellation; `abortReason`
-			// carries the cause and must reach the failure label verbatim.
-			if (result.aborted) return { ok: false, error: result.abortReason || "cancelled" };
-			if (result.exitCode !== 0 || result.error) {
-				return { ok: false, error: result.stderr || result.error || `exit code ${result.exitCode}` };
-			}
-			if (!modelMatches(result.resolvedModel, call.modelPattern)) {
-				return {
-					ok: false,
-					error: `model mismatch: requested ${call.modelPattern}, subagent ran ${result.resolvedModel ?? "unknown"}`,
+	return async (call: TeamSubagentCall, signal: AbortSignal): Promise<TeamSubagentOutcome> =>
+		logger.withLogContext(
+			{
+				team_run_id: logger.getLogContext().team_run_id ?? `team-${crypto.randomUUID()}`,
+				call_id: logger.getLogContext().call_id ?? `team-call-${crypto.randomUUID()}`,
+				operation_id:
+					logger.getLogContext().operation_id ??
+					logger.getLogContext().team_run_id ??
+					`team-${crypto.randomUUID()}`,
+				role: call.role,
+				label: /^team-(?:proposal|review|revision|recheck)-[A-Z](?:-[12])?$|^team-(?:alignment|synthesis)$/.test(
+					call.label,
+				)
+					? call.label
+					: "custom",
+				requested_model: call.modelPattern.slice(0, 192),
+			},
+			async () => {
+				const started = performance.now();
+				let stage = "lease";
+				const finish = (result: "completed" | "failed" | "cancelled", category?: string): void => {
+					const fields = {
+						component: "team.runner",
+						event: `team_runner_${result}`,
+						stage,
+						result,
+						elapsed_ms: performance.now() - started,
+						...(category ? { failure_category: category } : {}),
+					};
+					if (result === "failed") logger.warn("Team runner failed", fields);
+					else logger.info("Team runner finished", fields);
 				};
-			}
-			const structured = result.structuredOutput;
-			if (structured?.status !== "valid" || !structured.data || typeof structured.data !== "object") {
-				return { ok: false, error: structured?.error ?? "structured output missing or invalid" };
-			}
-			return { ok: true, data: structured.data as Record<string, unknown> };
-		} catch (error) {
-			if (signal.aborted) return { ok: false, error: "cancelled" };
-			return { ok: false, error: error instanceof Error ? error.message : String(error) };
-		} finally {
-			// Temporary artifact dirs hold only child transcripts the orchestrator
-			// already extracted; the session-backed lease stays for audit.
-			if (lease.temporary) {
-				const removeArtifacts = async (): Promise<void> => {
-					await fs.rm(lease.artifactsDir, { recursive: true, force: true }).catch(() => {});
-				};
-				if (deferredCleanup) void deferredCleanup.then(removeArtifacts);
-				else await removeArtifacts();
-			}
-		}
-	};
+				logger.info("Team artifact lease started", {
+					component: "team.runner",
+					event: "team_lease_started",
+					stage,
+					result: "started",
+					session_backed: Boolean(deps.sessionFile?.endsWith(".jsonl")),
+				});
+				if (signal.aborted) {
+					finish("cancelled", "before_start");
+					return { ok: false, error: "cancelled before start" };
+				}
+				let lease: ArtifactLease;
+				try {
+					lease = await leaseArtifacts(deps);
+					logger.info("Team artifact lease prepared", {
+						component: "team.runner",
+						event: "team_lease_completed",
+						stage,
+						result: "completed",
+						temporary: lease.temporary,
+						elapsed_ms: performance.now() - started,
+					});
+				} catch (error) {
+					logger[signal.aborted ? "info" : "error"]("Team artifact lease failed", {
+						component: "team.runner",
+						event: signal.aborted ? "team_lease_cancelled" : "team_lease_failed",
+						stage,
+						result: signal.aborted ? "cancelled" : "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+				// Set when the executor hands off cleanup that outlives the visible
+				// result (child session disposal overran its deadline); the temp lease
+				// must survive until it settles or the rm below races open handles.
+				let deferredCleanup: Promise<void> | undefined;
+				let subprocessStarted: number | undefined;
+				try {
+					stage = "artifacts";
+					logger.info("Team artifact allocation started", {
+						component: "team.runner",
+						event: "team_artifacts_started",
+						stage,
+						result: "started",
+					});
+					const id = await outputManager.allocate(sanitizeAgentId(call.label));
+					logger.info("Team artifacts prepared", {
+						component: "team.runner",
+						event: "team_artifacts_completed",
+						stage,
+						result: "completed",
+						child_agent_id: id,
+						temporary: lease.temporary,
+						elapsed_ms: performance.now() - started,
+					});
+					const agent: AgentDefinition = {
+						name: `team-${call.role}`,
+						description: `Team discussion ${call.role} (${call.label})`,
+						systemPrompt: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
+						tools: [...TEAM_READ_ONLY_TOOLS],
+						readSummarize: false,
+						source: "bundled",
+					};
+					stage = "subprocess";
+					subprocessStarted = performance.now();
+					logger.info("Team subprocess started", {
+						component: "team.runner",
+						event: "team_subprocess_started",
+						stage,
+						result: "started",
+						child_agent_id: id,
+						max_runtime_ms: 0,
+					});
+					const result = await runSubprocess({
+						cwd: deps.cwd,
+						additionalDirectories: deps.additionalDirectories,
+						getApiKey: deps.getApiKey,
+						agent,
+						task: call.task,
+						assignment: call.task,
+						modelOverride: call.modelPattern,
+						parentActiveModelPattern: deps.parentActiveModelPattern,
+						id,
+						index: 0,
+						outputSchema: call.schema,
+						outputSchemaMode: "strict",
+						outputSchemaSource: "caller",
+						outputSchemaOverridesAgent: true,
+						// The workflow is known to run minutes; the generic per-subagent
+						// wall-clock cap would abort legitimate stages.
+						maxRuntimeMs: 0,
+						enableLsp: false,
+						enableIrc: false,
+						enableMCP: false,
+						restrictToolNames: true,
+						keepAlive: false,
+						signal,
+						onCleanupDeferred: completion => {
+							deferredCleanup = completion;
+						},
+						sessionFile: lease.sessionFile,
+						persistArtifacts: !lease.temporary,
+						artifactsDir: lease.artifactsDir,
+						localProtocolOptions: {
+							getArtifactsDir: () => path.join(lease.artifactsDir, id),
+							getSessionId: () => id,
+							// agent:// and history:// are global cross-agent namespaces;
+							// disabling IRC messaging alone does not isolate their reads.
+							allowCrossAgentReads: false,
+						},
+						authStorage: deps.authStorage,
+						modelRegistry: deps.modelRegistry,
+						settings: deps.settings,
+						contextFiles: deps.contextFiles?.filter(
+							file => path.basename(file.path).toLowerCase() !== "agents.md",
+						),
+						skills: deps.skills ? [...deps.skills] : undefined,
+						workspaceTree: deps.workspaceTree,
+						promptTemplates: deps.promptTemplates,
+						rules: deps.rules,
+						parentAgentId: deps.parentAgentId,
+					});
+					const processResult = signal.aborted
+						? "cancelled"
+						: result.aborted || result.exitCode !== 0 || result.error
+							? "failed"
+							: "completed";
+					const resolved = (result.resolvedModelIdentity ?? result.resolvedModel)?.slice(0, 192);
+					const separator = resolved?.indexOf("/") ?? -1;
+					const processFields = {
+						component: "team.runner",
+						event: "team_subprocess_finished",
+						stage,
+						result: processResult,
+						child_agent_id: id,
+						exit_code: result.exitCode,
+						aborted: result.aborted,
+						resolved_provider: separator >= 0 ? resolved?.slice(0, separator) : undefined,
+						resolved_model: separator >= 0 ? resolved?.slice(separator + 1) : resolved,
+						stdout_chars: result.output?.length ?? 0,
+						stderr_chars: result.stderr?.length ?? 0,
+						structured_status: result.structuredOutput?.status,
+						elapsed_ms: performance.now() - subprocessStarted,
+					};
+					if (processResult === "failed") logger.warn("Team subprocess finished unsuccessfully", processFields);
+					else logger.info("Team subprocess finished", processFields);
+					if (signal.aborted) {
+						finish("cancelled");
+						return { ok: false, error: "cancelled" };
+					}
+					// A non-signal abort (soft-budget force-stop, internal termination)
+					// is a participant failure, not user cancellation; `abortReason`
+					// carries the cause and must reach the failure label verbatim.
+					if (result.aborted) {
+						finish("failed", "internal_abort");
+						return { ok: false, error: result.abortReason || "cancelled" };
+					}
+					if (result.exitCode !== 0 || result.error) {
+						finish("failed", result.exitCode !== 0 ? "nonzero_exit" : "executor_error");
+						return { ok: false, error: result.stderr || result.error || `exit code ${result.exitCode}` };
+					}
+					stage = "model_check";
+					if (!modelMatches(result.resolvedModel, call.modelPattern)) {
+						finish("failed", "model_mismatch");
+						return {
+							ok: false,
+							error: `model mismatch: requested ${call.modelPattern}, subagent ran ${result.resolvedModel ?? "unknown"}`,
+						};
+					}
+					stage = "schema";
+					const structured = result.structuredOutput;
+					if (structured?.status !== "valid" || !structured.data || typeof structured.data !== "object") {
+						finish(
+							"failed",
+							structured?.status !== "valid" ? "structured_output_invalid" : "structured_data_missing",
+						);
+						return { ok: false, error: structured?.error ?? "structured output missing or invalid" };
+					}
+					finish("completed");
+					return { ok: true, data: structured.data as Record<string, unknown> };
+				} catch (error) {
+					if (stage === "subprocess") {
+						logger[signal.aborted ? "info" : "warn"]("Team subprocess threw", {
+							component: "team.runner",
+							event: "team_subprocess_finished",
+							stage,
+							result: signal.aborted ? "cancelled" : "failed",
+							failure_category: "executor_exception",
+							elapsed_ms: performance.now() - (subprocessStarted ?? started),
+						});
+					}
+					logger[signal.aborted ? "info" : "warn"]("Team runner threw", {
+						component: "team.runner",
+						event: signal.aborted ? "team_runner_cancelled" : "team_runner_failed",
+						stage,
+						result: signal.aborted ? "cancelled" : "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					if (signal.aborted) return { ok: false, error: "cancelled" };
+					return { ok: false, error: error instanceof Error ? error.message : String(error) };
+				} finally {
+					// Temporary artifact dirs hold only child transcripts the orchestrator
+					// already extracted; the session-backed lease stays for audit.
+					if (lease.temporary) {
+						const removeArtifacts = async (): Promise<void> => {
+							const cleanupStarted = performance.now();
+							logger.info("Team temporary artifacts cleanup started", {
+								component: "team.runner",
+								event: "team_artifacts_cleanup_started",
+								stage: "cleanup",
+								result: "started",
+								deferred: Boolean(deferredCleanup),
+							});
+							try {
+								await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+								logger.info("Team temporary artifacts removed", {
+									component: "team.runner",
+									event: "team_artifacts_cleanup_completed",
+									stage: "cleanup",
+									result: "completed",
+									elapsed_ms: performance.now() - cleanupStarted,
+								});
+							} catch (error) {
+								logger.warn("Team temporary artifacts cleanup failed", {
+									component: "team.runner",
+									event: "team_artifacts_cleanup_failed",
+									stage: "cleanup",
+									result: "failed",
+									elapsed_ms: performance.now() - cleanupStarted,
+									...logger.diagnosticError(error),
+								});
+							}
+						};
+						if (deferredCleanup) void deferredCleanup.then(removeArtifacts);
+						else await removeArtifacts();
+					}
+				}
+			},
+		);
 }

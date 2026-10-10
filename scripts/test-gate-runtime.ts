@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import * as path from "node:path";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import type { GateProcessOwner } from "./test-gate-process";
 import { ownGateProcess } from "./test-gate-process";
@@ -79,6 +80,9 @@ interface Scope {
 	controller: AbortController;
 	failure?: GateCommandError;
 	closed: boolean;
+	runId: string;
+	operationId: string;
+	gateId: string;
 }
 interface Owned {
 	child: Bun.Subprocess;
@@ -89,8 +93,41 @@ interface Owned {
 	onAbort?: () => Promise<void>;
 	relay?: GateEventRelay;
 	cleanup?: Promise<void>;
+	callId: string;
+	stage: string;
 }
 type Work = (gate: GateRun) => Promise<unknown>;
+
+function diagnosticId(value: unknown): string | undefined {
+	return typeof value === "string" && /^[A-Za-z0-9-]{1,80}$/.test(value) ? value : undefined;
+}
+
+function diagnosticStage(label: string): string {
+	return /^(?:static|build|test|version|scope|wsl)\/[A-Za-z0-9@ /_.+-]{1,90}$/.test(label)
+		? label
+		: `stage-${createHash("sha256").update(label).digest("hex").slice(0, 12)}`;
+}
+
+function logGateResult(result: GateResult, fields: Record<string, unknown> = {}): void {
+	const log = result.status === "PASS" || result.status === "INTERRUPTED" ? logger.info : logger.error;
+	log("Gate settled", {
+		component: "test-gate",
+		event: "gate_settled",
+		stage: result.level,
+		result: result.status,
+		gate_level: result.level,
+		status: result.status,
+		exit_code: result.exitCode,
+		elapsed_ms: result.totalSeconds * 1000,
+		compile_excluded_ms: result.compileExcludedSeconds * 1000,
+		budgeted_ms: result.budgetedSeconds * 1000,
+		limit_ms: result.limitSeconds * 1000,
+		platform: process.platform,
+		arch: process.arch,
+		scope: "fork-affected",
+		...fields,
+	});
+}
 function ancestors(scope: Scope): Scope[] {
 	const scopes: Scope[] = [];
 	for (let current: Scope | undefined = scope; current; current = current.parent) scopes.push(current);
@@ -457,6 +494,11 @@ class Runtime {
 	private readonly outerToken = process.env.OMP_GATE_EVENT_TOKEN;
 	private readonly eventId = randomUUID();
 	private lastEvent?: Activity | "idle";
+	readonly runId = diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_RUN_ID) ?? randomUUID();
+	readonly operationId =
+		diagnosticId(logger.getLogContext().operation_id) ??
+		diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_OPERATION_ID) ??
+		this.runId;
 	create(level: GateLevel, options: GateOptions, parent?: Scope): Scope {
 		const requested = options.limitSeconds ?? GATE_LIMIT_SECONDS[level];
 		if (!Number.isFinite(requested) || requested <= 0)
@@ -486,6 +528,9 @@ class Runtime {
 			events: [],
 			controller: new AbortController(),
 			closed: false,
+			runId: this.runId,
+			operationId: this.operationId,
+			gateId: randomUUID(),
 		};
 		this.scopes.add(scope);
 		return scope;
@@ -523,6 +568,20 @@ class Runtime {
 		if (scope.closed) return;
 		for (const current of this.scopes) {
 			if (!ancestors(current).includes(scope) || current.closed || current.failure) continue;
+			(error.status === "INTERRUPTED" ? logger.info : logger.error)("Gate cancellation requested", {
+				component: "test-gate",
+				event: "gate_cancel_requested",
+				stage: current.level,
+				result: error.status,
+				status: error.status,
+				exit_code: error.exitCode,
+				run_id: current.runId,
+				operation_id: current.operationId,
+				gate_id: current.gateId,
+				elapsed_ms: performance.now() - current.started,
+				budgeted_ms: current.charged,
+				limit_ms: current.limit,
+			});
 			accrue(current);
 			current.events.push({ at: current.last, key: current.controller, kind: "charged" });
 			reconcile(current);
@@ -539,6 +598,18 @@ class Runtime {
 	}
 	cleanup(owned: Owned, aborted = true): Promise<void> {
 		owned.cleanup ??= (async () => {
+			const started = performance.now();
+			const fields = {
+				component: "test-gate",
+				run_id: owned.scope.runId,
+				operation_id: owned.scope.operationId,
+				gate_id: owned.scope.gateId,
+				call_id: owned.callId,
+				stage: owned.stage,
+				peer_pid: owned.child.pid,
+				aborted,
+			};
+			logger.info("Owned process cleanup started", { ...fields, event: "gate_cleanup_started", result: "started" });
 			const owner = owned.owner ?? (await owned.ownership?.catch(() => undefined));
 			const results = await Promise.allSettled([
 				aborted ? Promise.resolve().then(() => owned.onAbort?.()) : Promise.resolve(),
@@ -552,11 +623,48 @@ class Runtime {
 				})(),
 			]);
 			const failure = results.find(result => result.status === "rejected");
-			if (failure?.status === "rejected") throw failure.reason;
+			if (failure?.status === "rejected") {
+				logger.error("Owned process cleanup failed", {
+					...fields,
+					event: "gate_cleanup_settled",
+					result: "failed",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(failure.reason),
+				});
+				throw failure.reason;
+			}
+			logger.info("Owned process cleanup completed", {
+				...fields,
+				event: "gate_cleanup_settled",
+				result: "completed",
+				elapsed_ms: performance.now() - started,
+			});
 		})();
 		return owned.cleanup;
 	}
 	async execute(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
+		return logger.withLogContext(
+			{
+				run_id: scope.runId,
+				operation_id: scope.operationId,
+				gate_id: scope.gateId,
+				parent_gate_id: scope.parent?.gateId,
+				gate_level: scope.level,
+			},
+			() => this.executeScoped(scope, work, options),
+		);
+	}
+	private async executeScoped(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
+		logger.info("Gate started", {
+			component: "test-gate",
+			event: "gate_started",
+			stage: scope.level,
+			result: "started",
+			platform: process.platform,
+			arch: process.arch,
+			limit_ms: scope.limit,
+			scope: "fork-affected",
+		});
 		const print = options.print ?? console.log;
 		const interrupt = () => this.cancel(scope, new GateCommandError("Gate interrupted", 130, "INTERRUPTED"));
 		const external = () =>
@@ -591,6 +699,13 @@ class Runtime {
 						this.cancel(scope, new GateCommandError(`${scope.level} charged budget exhausted`, 124, "TIMEOUT"));
 				})()
 					.catch(error => {
+						logger.error("Compiler relay failed", {
+							component: "test-gate",
+							event: "gate_relay_failed",
+							stage: "compiler-events",
+							result: "failed",
+							...logger.diagnosticError(error),
+						});
 						if (!scope.closed && !scope.failure)
 							this.cancel(scope, new GateCommandError(`Compiler event relay failed: ${String(error)}`, 1));
 					})
@@ -609,6 +724,14 @@ class Runtime {
 			: Promise.resolve()
 					.then(() => work(gate))
 					.catch(error => {
+						if (!(error instanceof GateCommandError))
+							logger.error("Gate work failed", {
+								component: "test-gate",
+								event: "gate_work_failed",
+								stage: scope.level,
+								result: "failed",
+								...logger.diagnosticError(error),
+							});
 						this.cancel(
 							scope,
 							error instanceof GateCommandError
@@ -635,6 +758,13 @@ class Runtime {
 				const failedCleanup = cleanup.find(result => result.status === "rejected");
 				if (failedCleanup?.status === "rejected") throw failedCleanup.reason;
 			} catch (error) {
+				logger.error("Gate final cleanup failed", {
+					component: "test-gate",
+					event: "gate_final_cleanup_failed",
+					stage: scope.level,
+					result: "failed",
+					...logger.diagnosticError(error),
+				});
 				const diagnostic = `Process cleanup failed: ${String(error)}`;
 				if (scope.failure) print(`${scope.level}: CLEANUP_FAIL ${diagnostic}`);
 				else scope.failure = new GateCommandError(diagnostic, 1);
@@ -662,6 +792,7 @@ class Runtime {
 			budgetedSeconds: scope.charged / 1000,
 			limitSeconds: scope.limit / 1000,
 		};
+		logGateResult(result);
 		if (scope.failure) print(`${scope.level}: ${scope.failure.message}`);
 		print(
 			`${scope.level}: ${result.status} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,
@@ -704,6 +835,14 @@ export class GateRun {
 		try {
 			return await pending;
 		} catch (error) {
+			if (!(error instanceof GateCommandError))
+				logger.error("Charged gate work failed", {
+					component: "test-gate",
+					event: "gate_charged_work_failed",
+					stage: "charged-work",
+					result: "failed",
+					...logger.diagnosticError(error),
+				});
 			const failure =
 				error instanceof GateCommandError
 					? error
@@ -743,10 +882,29 @@ export class GateRun {
 			);
 		}
 		const started = performance.now();
+		const callId = randomUUID();
+		const stage = diagnosticStage(command.label);
+		const fields = {
+			component: "test-gate",
+			run_id: this.scope.runId,
+			operation_id: this.scope.operationId,
+			gate_id: this.scope.gateId,
+			call_id: callId,
+			stage,
+		};
 		const token = command.eventToken ?? randomUUID();
 		const key = {};
 		const kind = command.kind ?? "charged";
 		this.runtime.activity(this.scope, key, "charged");
+		logger.info("Gate stage started", {
+			...fields,
+			event: "gate_stage_started",
+			result: "started",
+			capture,
+			activity: command.kind ?? "charged",
+			allow_failure: command.allowFailure ?? false,
+			wall_timeout_ms: command.wallTimeoutSeconds === undefined ? undefined : command.wallTimeoutSeconds * 1000,
+		});
 		let owned: Owned | undefined;
 		let completed = false;
 		let wallTimer: Timer | undefined;
@@ -761,12 +919,20 @@ export class GateRun {
 			let child: Bun.Subprocess;
 			const ready = Promise.withResolvers<void>();
 			const outcome = Promise.withResolvers<{ exitCode: number; error?: string; missing?: boolean }>();
+			logger.info("Supervisor spawn started", {
+				...fields,
+				event: "gate_supervisor_spawn_started",
+				result: "started",
+			});
 			try {
 				child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-gate-supervisor.ts")], {
 					cwd: command.cwd,
 					env: {
 						...process.env,
 						...command.env,
+						OMP_GATE_DIAGNOSTIC_RUN_ID: this.scope.runId,
+						OMP_GATE_DIAGNOSTIC_OPERATION_ID: this.scope.operationId,
+						OMP_GATE_DIAGNOSTIC_CALL_ID: callId,
 						OMP_GATE_EVENT_TOKEN: token,
 						OMP_GATE_CLOCK_TOKEN: token,
 						OMP_GATE_EVENT_FILE: relay.path,
@@ -784,8 +950,24 @@ export class GateRun {
 					windowsHide: true,
 					ipc(message: unknown) {
 						if (!message || typeof message !== "object") return;
-						if ("ready" in message && message.ready === true) ready.resolve();
+						if ("ready" in message && message.ready === true) {
+							logger.info("Supervisor IPC ready", {
+								...fields,
+								event: "gate_supervisor_ipc",
+								result: "ready",
+								elapsed_ms: performance.now() - started,
+							});
+							ready.resolve();
+						}
 						if ("exitCode" in message && typeof message.exitCode === "number") {
+							logger.info("Supervisor IPC result received", {
+								...fields,
+								event: "gate_supervisor_ipc",
+								result: "reply",
+								exit_code: message.exitCode,
+								missing_tool: "missing" in message && message.missing === true,
+								elapsed_ms: performance.now() - started,
+							});
 							outcome.resolve({
 								exitCode: message.exitCode,
 								error: "error" in message && typeof message.error === "string" ? message.error : undefined,
@@ -795,10 +977,25 @@ export class GateRun {
 					},
 				});
 				void child.exited.then(exitCode => {
+					logger.info("Supervisor closed", {
+						...fields,
+						event: "gate_supervisor_closed",
+						result: "closed",
+						peer_pid: child.pid,
+						exit_code: exitCode,
+						elapsed_ms: performance.now() - started,
+					});
 					ready.resolve();
 					outcome.resolve({ exitCode: exitCode || 1 });
 				});
 			} catch (error) {
+				logger.error("Supervisor spawn failed", {
+					...fields,
+					event: "gate_supervisor_spawn_settled",
+					result: "failed",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(error),
+				});
 				const missing =
 					(error as NodeJS.ErrnoException).code === "ENOENT" || /not found|ENOENT/i.test(String(error));
 				throw new GateCommandError(
@@ -807,7 +1004,14 @@ export class GateRun {
 					missing ? "MISSING_TOOL" : "FAIL",
 				);
 			}
-			owned = { child, detached, scope: this.scope, onAbort: command.onAbort, relay };
+			logger.info("Supervisor spawned", {
+				...fields,
+				event: "gate_supervisor_spawn_settled",
+				result: "completed",
+				peer_pid: child.pid,
+				elapsed_ms: performance.now() - started,
+			});
+			owned = { child, detached, scope: this.scope, onAbort: command.onAbort, relay, callId, stage };
 			this.runtime.owned.add(owned);
 			owned.ownership = ownGateProcess(child, detached);
 			owned.owner = await owned.ownership;
@@ -815,6 +1019,13 @@ export class GateRun {
 				wallTimer = setTimeout(
 					() => {
 						wallExpired = true;
+						logger.warn("Discovery wall guard expired", {
+							...fields,
+							event: "gate_stage_wall_timeout",
+							result: "timeout",
+							peer_pid: child.pid,
+							elapsed_ms: performance.now() - started,
+						});
 						ready.resolve();
 						outcome.resolve({ exitCode: 124, error: "Read-only discovery wall guard exhausted" });
 						if (owned) void this.runtime.cleanup(owned).catch(() => {});
@@ -858,6 +1069,13 @@ export class GateRun {
 						throw new GateCommandError(`${command.label}: supervisor exited before launch`, child.exitCode || 1);
 					this.runtime.activity(this.scope, key, kind, { compilerEvents: true });
 					this.throwIfAborted();
+					logger.info("Supervisor IPC start sent", {
+						...fields,
+						event: "gate_supervisor_ipc",
+						result: "start-sent",
+						peer_pid: child.pid,
+						elapsed_ms: performance.now() - started,
+					});
 					child.send("start");
 				}
 				result = await outcome.promise;
@@ -878,10 +1096,31 @@ export class GateRun {
 					result.exitCode,
 					result.missing ? "MISSING_TOOL" : "FAIL",
 				);
+			(result.exitCode === 0 ? logger.info : logger.warn)("Gate stage settled", {
+				...fields,
+				event: "gate_stage_settled",
+				result: result.exitCode === 0 ? "completed" : wallExpired ? "timeout" : "failed",
+				status: result.exitCode === 0 ? "PASS" : wallExpired ? "TIMEOUT" : "FAIL",
+				exit_code: result.exitCode,
+				missing_tool: result.missing ?? false,
+				peer_pid: child.pid,
+				elapsed_ms: performance.now() - started,
+			});
 			return { exitCode: result.exitCode, stdout, stderr };
 		} catch (error) {
 			const failure =
 				error instanceof GateCommandError ? error : new GateCommandError(`${command.label}: ${String(error)}`, 1);
+			(failure.status === "INTERRUPTED" ? logger.info : logger.error)("Gate stage settled", {
+				...fields,
+				event: "gate_stage_settled",
+				result: failure.status === "INTERRUPTED" ? "cancelled" : "failed",
+				status: failure.status,
+				exit_code: failure.exitCode,
+				missing_tool: failure.status === "MISSING_TOOL",
+				peer_pid: owned?.child.pid,
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			});
 			this.runtime.cancel(this.scope, failure);
 			throw failure;
 		} finally {
@@ -897,6 +1136,15 @@ export class GateRun {
 			} finally {
 				try {
 					if (relay) await relay.close();
+				} catch (error) {
+					logger.error("Gate stage relay cleanup failed", {
+						...fields,
+						event: "gate_relay_cleanup_failed",
+						result: "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
 				} finally {
 					this.runtime.activity(this.scope, key);
 				}
@@ -907,22 +1155,42 @@ export class GateRun {
 export async function runGate(level: GateLevel, work: Work, options: GateOptions = {}): Promise<GateResult> {
 	const started = performance.now();
 	const runtime = new Runtime();
-	try {
-		return await runtime.execute(runtime.create(level, options), work, options);
-	} catch (error) {
-		const elapsed = (performance.now() - started) / 1000;
-		const result: GateResult = {
-			level,
-			status: error instanceof GateCommandError ? error.status : "FAIL",
-			exitCode: error instanceof GateCommandError ? error.exitCode : 1,
-			totalSeconds: elapsed,
-			compileExcludedSeconds: 0,
-			budgetedSeconds: elapsed,
-			limitSeconds: GATE_LIMIT_SECONDS[level],
-		};
-		(options.print ?? console.log)(
-			`${level}: ${result.status} total=${elapsed.toFixed(1)}s compile_excluded=0.0s budgeted=${elapsed.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode} ${String(error)}`,
-		);
-		return result;
-	}
+	return logger.withLogContext(
+		{
+			run_id: runtime.runId,
+			operation_id: runtime.operationId,
+			parent_call_id: diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_CALL_ID),
+		},
+		async () => {
+			logger.info("Gate entry started", {
+				component: "test-gate",
+				event: "gate_entry_started",
+				stage: level,
+				result: "started",
+				gate_level: level,
+				platform: process.platform,
+				arch: process.arch,
+				scope: "fork-affected",
+			});
+			try {
+				return await runtime.execute(runtime.create(level, options), work, options);
+			} catch (error) {
+				const elapsed = (performance.now() - started) / 1000;
+				const result: GateResult = {
+					level,
+					status: error instanceof GateCommandError ? error.status : "FAIL",
+					exitCode: error instanceof GateCommandError ? error.exitCode : 1,
+					totalSeconds: elapsed,
+					compileExcludedSeconds: 0,
+					budgetedSeconds: elapsed,
+					limitSeconds: GATE_LIMIT_SECONDS[level],
+				};
+				logGateResult(result, { ...logger.diagnosticError(error) });
+				(options.print ?? console.log)(
+					`${level}: ${result.status} total=${elapsed.toFixed(1)}s compile_excluded=0.0s budgeted=${elapsed.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode} ${String(error)}`,
+				);
+				return result;
+			}
+		},
+	);
 }

@@ -81,7 +81,7 @@ import {
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
-import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import type { RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import {
 	ANTHROPIC_SLOW_USAGE_LIMIT,
@@ -859,7 +859,7 @@ async function resizeAnthropicManyImageBlock(block: ImageContent): Promise<Image
 	} catch (error) {
 		logger.warn("anthropic: failed to resize oversized image for many-image request", {
 			mimeType: block.mimeType,
-			error: error instanceof Error ? error.message : String(error),
+			...logger.diagnosticError(error),
 		});
 		return block;
 	}
@@ -1495,6 +1495,24 @@ const PROVIDER_MAX_RETRIES = 10;
  */
 const PING_PROGRESS_MAX_IDLE_MULTIPLIER = 3;
 
+const ANTHROPIC_ENVELOPE_DIAGNOSTIC_REASONS = [
+	"event type",
+	"could not parse SSE",
+	"server_tool_use",
+	"tool_use",
+	"duplicate message_start",
+	"message_start missing",
+	"duplicate content_block_start",
+	"replayed content_block_start",
+	"content_block_start missing",
+	"content_block_delta missing",
+	"content_block_stop kind mismatch",
+	"fallback content_block missing",
+	"stream ended",
+	"received",
+	"unhandled stop reason",
+] as const;
+
 /**
  * Log a malformed-stream-envelope anomaly without aborting the turn. The strict
  * parser would `throw new AnthropicStreamEnvelopeError(...)` here; we instead
@@ -1503,7 +1521,15 @@ const PING_PROGRESS_MAX_IDLE_MULTIPLIER = 3;
  * rather than failing the request.
  */
 function reportAnthropicEnvelopeAnomaly(detail: string): void {
-	logger.warn(`anthropic: ignoring malformed stream envelope: ${detail}`);
+	const reason =
+		ANTHROPIC_ENVELOPE_DIAGNOSTIC_REASONS.find(prefix => detail.startsWith(prefix)) ?? "unknown_envelope_anomaly";
+	logger.warn("Anthropic malformed stream envelope ignored", {
+		component: "ai.anthropic",
+		event: "anthropic_envelope_degraded",
+		stage: "stream",
+		result: "degraded",
+		reason,
+	});
 }
 
 function shouldIgnoreAnthropicPreambleEvent(eventType: unknown): boolean {
@@ -2044,9 +2070,29 @@ const streamAnthropicOnce = (
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
 
-	(async () => {
+	logger.withLogContext({ provider_attempt_id: `anthropic-${crypto.randomUUID()}` }, async () => {
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
+		let stage = "build";
+		let wireAttempt = 0;
+		let attemptStartedAt = startTime;
+		let responseStatus: number | undefined;
+		let remoteRequestId: string | undefined;
+		const diagnosticFields = () => ({
+			component: "ai.anthropic",
+			provider: /^[A-Za-z0-9_.-]{1,80}$/.test(model.provider) ? model.provider : "[custom]",
+			model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",
+			stage,
+			attempt: wireAttempt,
+			status: responseStatus,
+			remote_request_id: remoteRequestId,
+			elapsed_ms: performance.now() - startTime,
+		});
+		logger.info("Anthropic request started", {
+			...diagnosticFields(),
+			event: "anthropic_request_started",
+			result: "started",
+		});
 
 		const output: AssistantMessage = {
 			role: "assistant",
@@ -2301,6 +2347,12 @@ const streamAnthropicOnce = (
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
+				stage = "build";
+				logger.info("Anthropic request build started", {
+					...diagnosticFields(),
+					event: "anthropic_build_started",
+					result: "started",
+				});
 				const built = buildParams(model, preparedContext, isOAuthToken, options, {
 					compactionSupported,
 					disableStrictTools,
@@ -2339,6 +2391,13 @@ const streamAnthropicOnce = (
 					url: `${baseUrl}/v1/messages${isOAuthToken ? "?beta=true" : ""}`,
 					body: nextParams,
 				};
+				logger.info("Anthropic request build completed", {
+					...diagnosticFields(),
+					event: "anthropic_build_completed",
+					result: "success",
+					message_count: nextParams.messages?.length,
+					tool_count: nextParams.tools?.length ?? 0,
+				});
 				return nextParams;
 			};
 			let usingFallbackCredit = false;
@@ -2486,7 +2545,10 @@ const streamAnthropicOnce = (
 					options?.fallbackCreditRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
 				) {
 					logger.warn("anthropic: fallback credit cannot be forfeited after server tools ran; surfacing error", {
-						model: model.id,
+						...diagnosticFields(),
+						event: "anthropic_fallback_rejected",
+						result: "failed",
+						retry_reason: "replay_unsafe_server_tools",
 					});
 					throw streamFailure;
 				}
@@ -2586,6 +2648,42 @@ const streamAnthropicOnce = (
 					maxRetries: 0,
 					...(perRequestHeaders ? { headers: perRequestHeaders } : {}),
 				};
+				wireAttempt++;
+				attemptStartedAt = performance.now();
+				responseStatus = undefined;
+				remoteRequestId = undefined;
+				stage = "fetch";
+				const effectiveThinking = params.thinking as { type?: unknown; budget_tokens?: unknown } | undefined;
+				const effectiveEffort = (params.output_config as { effort?: unknown } | undefined)?.effort;
+				logger.info("Anthropic HTTP attempt started", {
+					...diagnosticFields(),
+					event: "anthropic_http_started",
+					result: "started",
+					...logger.diagnosticUrl(`${injectedBetaRouteUrl}/v1/messages`),
+					method: "POST",
+					timeout_ms: requestTimeoutMs,
+					idle_timeout_ms: idleTimeoutMs,
+					request_model:
+						typeof params.model === "string" && /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(params.model)
+							? params.model
+							: "[custom]",
+					thinking_type:
+						effectiveThinking?.type === "enabled" ||
+						effectiveThinking?.type === "adaptive" ||
+						effectiveThinking?.type === "disabled"
+							? effectiveThinking.type
+							: "unspecified",
+					thinking_budget:
+						typeof effectiveThinking?.budget_tokens === "number" ? effectiveThinking.budget_tokens : undefined,
+					effective_effort:
+						typeof effectiveEffort === "string" && /^(minimal|low|medium|high|max)$/.test(effectiveEffort)
+							? effectiveEffort
+							: undefined,
+					fast_mode: params.speed === "fast",
+					strict_tools_disabled: disableStrictTools,
+					fallback_credit: usingFallbackCredit,
+					slow_mode: sentSlow,
+				});
 				const anthropicRequest: unknown =
 					isOAuthToken && client.beta
 						? client.beta.messages.create({ ...params, stream: true }, requestOptions)
@@ -2619,12 +2717,23 @@ const streamAnthropicOnce = (
 					} finally {
 						if (requestTimeout !== undefined) clearTimeout(requestTimeout);
 					}
+					stage = "headers";
+					responseStatus = response.status;
+					remoteRequestId = requestId && /^[A-Za-z0-9_.:-]{1,160}$/.test(requestId) ? requestId : undefined;
+					logger.info("Anthropic response headers received", {
+						...diagnosticFields(),
+						event: "anthropic_response_headers",
+						result: response.ok ? "success" : "http_error",
+						attempt_elapsed_ms: performance.now() - attemptStartedAt,
+					});
 					await notifyProviderResponse(options, response, model, requestId);
+					stage = "stream";
 					if (slowMode) {
 						const slowSignal = parseAnthropicSlowModeHeaders(response.headers);
 						if (slowSignal) slowMode.observe(slowSignal, slowLane);
 					}
 					let sawEvent = false;
+					let loggedFirstEvent = false;
 					let sawMessageStart = false;
 					let sawTerminalEnvelope = false;
 					let sawMessageStop = false;
@@ -2690,6 +2799,15 @@ const streamAnthropicOnce = (
 							? observeDecodedAnthropicSdkEvents(timedAnthropicStream, rawSseObserver)
 							: timedAnthropicStream;
 					for await (const event of observedAnthropicStream) {
+						if (!loggedFirstEvent && event.type !== "ping") {
+							logger.info("Anthropic first stream event received", {
+								...diagnosticFields(),
+								event: "anthropic_first_event",
+								result: "received",
+								attempt_elapsed_ms: performance.now() - attemptStartedAt,
+							});
+							loggedFirstEvent = true;
+						}
 						sawEvent = true;
 
 						if (event.type === "message_start") {
@@ -3160,9 +3278,24 @@ const streamAnthropicOnce = (
 							kind: "output",
 						});
 					}
+					logger.info("Anthropic HTTP stream completed", {
+						...diagnosticFields(),
+						event: "anthropic_http_completed",
+						result: "success",
+						attempt_elapsed_ms: performance.now() - attemptStartedAt,
+						content_block_count: output.content.length,
+					});
 					break;
 				} catch (streamError) {
 					const streamFailure = activeAbortTracker.getLocalAbortReason() ?? streamError;
+					logger[activeAbortTracker.wasCallerAbort() ? "info" : "warn"]("Anthropic HTTP attempt terminated", {
+						...diagnosticFields(),
+						...logger.diagnosticError(streamFailure),
+						event: activeAbortTracker.wasCallerAbort() ? "anthropic_http_cancelled" : "anthropic_http_failed",
+						result: activeAbortTracker.wasCallerAbort() ? "cancelled" : "failed",
+						timeout: activeAbortTracker.getLocalAbortReason() !== undefined,
+						attempt_elapsed_ms: performance.now() - attemptStartedAt,
+					});
 					if (
 						!disableStrictTools &&
 						firstTokenTime === undefined &&
@@ -3172,8 +3305,13 @@ const streamAnthropicOnce = (
 						// Log-only: the retried turn must not carry an errorMessage on
 						// success (consumers treat its presence as failure).
 						logger.warn("anthropic: strict tools rejected, retrying without strict tools", {
-							model: model.id,
-							error: await finalizeErrorMessage(streamFailure, rawRequestDump),
+							...diagnosticFields(),
+							event: "anthropic_compat_retry",
+							result: "retrying",
+							retry_reason: "strict_tools_rejected",
+							backoff_ms: 0,
+							next_attempt: wireAttempt + 1,
+							...logger.diagnosticError(streamFailure),
 						});
 						if (providerSessionState) {
 							providerSessionState.strictToolsDisabled = true;
@@ -3192,10 +3330,17 @@ const streamAnthropicOnce = (
 								logger.warn(
 									"anthropic: fallback credit redemption temporarily unavailable, retrying same shape",
 									{
-										model: model.id,
-										attempt: fallbackCreditTransientRetries,
+										next_attempt: wireAttempt + 1,
+										...diagnosticFields(),
+										event: "anthropic_compat_retry",
+										stage: "backoff",
+										result: "retrying",
+										retry_reason: "fallback_credit_unavailable",
+										backoff_ms: 500,
+										credit_retry_attempt: fallbackCreditTransientRetries,
 									},
 								);
+								stage = "backoff";
 								if (options?.providerRetryWait) {
 									await options.providerRetryWait(500, options.signal);
 								} else {
@@ -3210,8 +3355,13 @@ const streamAnthropicOnce = (
 							logger.warn(
 								"anthropic: fallback credit continuation shape rejected, retrying with unchanged body",
 								{
-									model: model.id,
-									error: errMessage,
+									...diagnosticFields(),
+									event: "anthropic_compat_retry",
+									result: "retrying",
+									retry_reason: "fallback_credit_shape",
+									backoff_ms: 0,
+									next_attempt: wireAttempt + 1,
+									...logger.diagnosticError(streamFailure),
 								},
 							);
 							fallbackCreditShape = "unchanged";
@@ -3229,8 +3379,13 @@ const streamAnthropicOnce = (
 							logger.warn(
 								"anthropic: fallback credit token rejected, falling back to standard request without token",
 								{
-									model: model.id,
-									error: errMessage,
+									...diagnosticFields(),
+									event: "anthropic_compat_retry",
+									result: "retrying",
+									retry_reason: "fallback_credit_rejected",
+									backoff_ms: 0,
+									next_attempt: wireAttempt + 1,
+									...logger.diagnosticError(streamFailure),
 								},
 							);
 							dropAllThinking = true;
@@ -3248,8 +3403,12 @@ const streamAnthropicOnce = (
 						adoptRequiredClaudeCodeVersion(streamFailure)
 					) {
 						logger.warn("anthropic: Claude Code version rejected as too old, retrying with required version", {
-							model: model.id,
-							version: getClaudeCodeVersion(),
+							...diagnosticFields(),
+							event: "anthropic_compat_retry",
+							result: "retrying",
+							retry_reason: "claude_code_version",
+							backoff_ms: 0,
+							next_attempt: wireAttempt + 1,
 						});
 						client = createClient(model, { ...clientArgs, disableStrictTools }).client;
 						// The version only changes client headers; a redemption keeps its frozen body.
@@ -3274,9 +3433,13 @@ const streamAnthropicOnce = (
 						isThinkingPrefixBindingError(streamFailureMessage)
 					) {
 						logger.warn("anthropic: thinking prefix changed, stripping bound thinking and retrying", {
-							provider: model.provider,
-							model: model.id,
-							baseUrl,
+							...diagnosticFields(),
+							event: "anthropic_compat_retry",
+							result: "retrying",
+							retry_reason: "thinking_prefix",
+							backoff_ms: 0,
+							next_attempt: wireAttempt + 1,
+							...logger.diagnosticUrl(baseUrl),
 						});
 						prefixBindingRetryAttempted = true;
 						prefixMismatchBehavior = undefined;
@@ -3305,10 +3468,14 @@ const streamAnthropicOnce = (
 						logger.warn(
 							"anthropic: signing proxy detected (thinking signature rejected), demoting unsigned thinking and retrying",
 							{
-								provider: model.provider,
-								model: model.id,
-								baseUrl,
-								error: streamFailureMessage,
+								...diagnosticFields(),
+								event: "anthropic_compat_retry",
+								result: "retrying",
+								retry_reason: "thinking_signature",
+								backoff_ms: 0,
+								next_attempt: wireAttempt + 1,
+								...logger.diagnosticUrl(baseUrl),
+								...logger.diagnosticError(streamFailure),
 							},
 						);
 						if (providerSessionState) {
@@ -3346,10 +3513,14 @@ const streamAnthropicOnce = (
 						logger.warn(
 							"anthropic: thinking signatures still rejected after unsigned demotion, dropping replayed thinking and retrying",
 							{
-								provider: model.provider,
-								model: model.id,
-								baseUrl,
-								error: streamFailureMessage,
+								...diagnosticFields(),
+								event: "anthropic_compat_retry",
+								result: "retrying",
+								retry_reason: "thinking_signature_drop_all",
+								backoff_ms: 0,
+								next_attempt: wireAttempt + 1,
+								...logger.diagnosticUrl(baseUrl),
+								...logger.diagnosticError(streamFailure),
 							},
 						);
 						if (providerSessionState) {
@@ -3376,9 +3547,13 @@ const streamAnthropicOnce = (
 						firstTokenTime === undefined &&
 						AIError.isFastModeUnsupported(streamFailure)
 					) {
-						logger.debug("anthropic: fast mode unsupported, retrying without speed", {
-							model: model.id,
-							error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+						logger.warn("anthropic: fast mode unsupported, retrying without speed", {
+							...diagnosticFields(),
+							...logger.diagnosticError(streamFailure),
+							event: "anthropic_compat_retry",
+							stage: "build",
+							result: "retrying",
+							retry_reason: "fast_mode_unsupported",
 						});
 						if (providerSessionState) {
 							providerSessionState.fastModeDisabled = true;
@@ -3420,12 +3595,17 @@ const streamAnthropicOnce = (
 								slowWaitSinceMs ??= Date.now();
 								slowWaitAttempts++;
 							}
-							logger.debug("anthropic: slow mode retry", {
-								model: model.id,
+							logger.warn("Anthropic slow mode retry scheduled", {
+								...diagnosticFields(),
+								event: "anthropic_request_retrying",
+								stage: "backoff",
+								result: "retrying",
 								status: httpStatus,
-								delayMs: slowRetry.delayMs,
-								attempt: slowWaitAttempts,
+								backoff_ms: slowRetry.delayMs,
+								capacity_wait_attempt: slowWaitAttempts,
+								retry_reason: slowRetry.capacityWait ? "slow_capacity_wait" : "slow_mode",
 							});
+							stage = "backoff";
 							if (slowRetry.delayMs > 0) {
 								if (options?.providerRetryWait) {
 									await options.providerRetryWait(slowRetry.delayMs, options.signal);
@@ -3466,9 +3646,28 @@ const streamAnthropicOnce = (
 					// disables the bound; an over-cap hint surfaces the original error immediately.
 					const maxRetryDelayMs = options?.maxRetryDelayMs ?? 60_000;
 					if (headerDelayMs !== undefined && maxRetryDelayMs > 0 && headerDelayMs > maxRetryDelayMs) {
+						logger.warn("Anthropic server retry delay exceeds cap", {
+							...diagnosticFields(),
+							event: "anthropic_retry_rejected",
+							result: "failed",
+							retry_reason: "delay_cap",
+							backoff_ms: headerDelayMs,
+							max_delay_ms: maxRetryDelayMs,
+						});
 						throw streamFailure;
 					}
 					const delayMs = headerDelayMs !== undefined ? Math.max(headerDelayMs, backoffDelayMs) : backoffDelayMs;
+					logger.warn("Anthropic request retry scheduled", {
+						...diagnosticFields(),
+						event: "anthropic_request_retrying",
+						stage: "backoff",
+						result: "retrying",
+						retry_reason: canRetryTransientEnvelopeFailure ? "stream_envelope" : "provider_failure",
+						backoff_ms: delayMs,
+						server_hint: headerDelayMs !== undefined,
+						next_attempt: wireAttempt + 1,
+					});
+					stage = "backoff";
 					if (options?.providerRetryWait) {
 						await options.providerRetryWait(delayMs, options.signal);
 					} else {
@@ -3505,6 +3704,17 @@ const streamAnthropicOnce = (
 			if (droppedAllThinkingForSignature) {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "thinking-replay"];
 			}
+			logger.info("Anthropic request completed", {
+				...diagnosticFields(),
+				event: "anthropic_request_completed",
+				stage: "stream",
+				result: "success",
+				content_block_count: output.content.length,
+				input_tokens: output.usage.input,
+				output_tokens: output.usage.output,
+				stop_reason: output.stopReason,
+				attempt_elapsed_ms: performance.now() - attemptStartedAt,
+			});
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -3518,6 +3728,14 @@ const streamAnthropicOnce = (
 				rawRequestDump,
 			});
 			output.stopReason = result.stopReason;
+			logger[result.stopReason === "aborted" ? "info" : "error"]("Anthropic request terminated", {
+				...diagnosticFields(),
+				...logger.diagnosticError(error),
+				event: result.stopReason === "aborted" ? "anthropic_request_cancelled" : "anthropic_request_failed",
+				result: result.stopReason === "aborted" ? "cancelled" : "failed",
+				status: result.status ?? responseStatus,
+				timeout: activeAbortTracker.getLocalAbortReason() !== undefined,
+			});
 			output.errorStatus = result.status;
 			output.errorId = result.id;
 			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
@@ -3526,7 +3744,7 @@ const streamAnthropicOnce = (
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
-	})();
+	});
 
 	return stream;
 };
@@ -3536,9 +3754,14 @@ const streamAnthropicOnce = (
  * loop. The inner attempt owns Anthropic provider-failure retries.
  */
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, context, options) =>
-	withReplaySafeStreamRetry(model, context, options, streamAnthropicOnce, {
-		retryEmptyCompletion: true,
-	});
+	logger.withLogContext(
+		{
+			operation_id: logger.getLogContext().operation_id ?? `anthropic-${crypto.randomUUID()}`,
+			call_id: `anthropic-${crypto.randomUUID()}`,
+			...(options?.sessionId ? { session_id: options.sessionId } : {}),
+		},
+		() => withReplaySafeStreamRetry(model, context, options, streamAnthropicOnce, { retryEmptyCompletion: true }),
+	);
 
 export type AnthropicSystemBlock = {
 	type: "text";

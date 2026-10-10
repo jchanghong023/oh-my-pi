@@ -15,9 +15,11 @@
  * `glm-5.2-highspeed` in that lane's provider-scoped variant table, which
  * this provider does not have.
  */
+import { randomUUID } from "node:crypto";
 import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
+import { logger } from "@oh-my-pi/pi-utils";
 
 export const ZCODE_API_PROVIDER_ID = "zcode-api";
 
@@ -51,5 +53,15 @@ export function getZcodeApiModels(): Model<"anthropic-messages">[] {
 			baseUrl,
 		}),
 	);
+	logger.info("ZCode runtime model rows built", {
+		component: "zcode-api-models",
+		event: "zcode_models_built",
+		stage: "catalog",
+		result: "completed",
+		operation_id: logger.getLogContext().operation_id ?? `zcode-models-${randomUUID()}`,
+		provider: ZCODE_API_PROVIDER_ID,
+		model_count: cachedModels.length,
+		endpoint_source: baseUrl === ZCODE_API_DEFAULT_BASE_URL ? "loopback_default" : "environment_override",
+	});
 	return cachedModels;
 }

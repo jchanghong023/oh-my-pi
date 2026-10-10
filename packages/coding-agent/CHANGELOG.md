@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added correlated stage and terminal-result logs for fork JchTools discovery and remote Agents, team, Goal, RPC controllers and persistence, docs/wiki, repo/AST, company model selection, compaction, and JCH Git.
+- Added redacted lifecycle and recovery logs for local gates, their supervisor and WSL stages, standalone installers, and `omp update`; provider-error turns no longer copy raw server error bodies into diagnostic files.
+
 ## [18.8.8] - 2026-10-10
 
 ### Added

@@ -103,6 +103,7 @@ function nativeHardExit(fn: HardExitFn | undefined): HardExitFn | undefined {
  * signal and fatal exit.
  */
 export function exitProcess(code: number): never {
+	logger.shutdownDiagnosticLogging(code);
 	logger.flush();
 	const reallyExit = nativeHardExit(typeof process.reallyExit === "function" ? process.reallyExit : undefined);
 	const exit = nativeHardExit(process.exit as HardExitFn);

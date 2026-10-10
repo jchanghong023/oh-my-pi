@@ -71,17 +71,43 @@ import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { titleTextFromSkillPrompt } from "@oh-my-pi/pi-tui/chat/skill-title-input";
 
 /**
- * Logs provider-error turns so their actual cause is available outside the
- * session transcript. No-op for non-error stop reasons.
+ * Records provider-error turns without copying provider-controlled error bodies
+ * into diagnostic files. Full messages remain in the session transcript.
  */
 export function logProviderTurnError(msg: AssistantMessage): void {
 	if (msg.stopReason !== "error") return;
+	const maxDiagnosticChars = 1024;
+	const fingerprint = (value: string) =>
+		new Bun.CryptoHasher("sha256")
+			.update(value.length <= maxDiagnosticChars ? value : `${value.slice(0, maxDiagnosticChars)}:${value.length}`)
+			.digest("hex")
+			.slice(0, 12);
+	const errorText = msg.errorMessage?.slice(0, maxDiagnosticChars).toLowerCase() ?? "";
+	const errorKind =
+		msg.errorStatus === 401 || msg.errorStatus === 403
+			? "authentication"
+			: msg.errorStatus === 429
+				? "rate_limit"
+				: msg.errorStatus !== undefined && msg.errorStatus >= 400
+					? "http_error"
+					: errorText.includes("watchdog") || errorText.includes("stream stall")
+						? "stream_stall"
+						: errorText.includes("timeout") || errorText.includes("timed out")
+							? "timeout"
+							: "provider_error";
 	logger.warn("agent turn ended with provider error", {
-		provider: msg.provider,
-		model: msg.model,
-		errorMessage: msg.errorMessage,
+		component: "session.provider_turn",
+		event: "provider_turn_failed",
+		stage: "assistant_turn",
+		result: "failed",
+		provider_hash: fingerprint(msg.provider),
+		model_hash: fingerprint(msg.model),
+		error_kind: errorKind,
 		errorStatus: msg.errorStatus,
-		errorId: msg.errorId,
+		errorId: typeof msg.errorId === "number" ? msg.errorId : undefined,
+		error_message_present: Boolean(msg.errorMessage),
+		error_summary_truncated: (msg.errorMessage?.length ?? 0) > maxDiagnosticChars,
+		error_fingerprint: msg.errorMessage ? fingerprint(msg.errorMessage) : undefined,
 	});
 }
 

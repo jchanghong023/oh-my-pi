@@ -19,6 +19,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { MAX_THINKING_SUFFIX_OPTIONS, parseThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { logger } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
 import type { ModelRegistry } from "../../config/model-registry";
 import { ModelRoleConflictError, type Settings, type SettingProvenance } from "../../config/settings";
@@ -129,13 +130,40 @@ export class RpcModelRoleService {
 	 * pool lists every role with an `unresolvedReason` instead of hiding rows.
 	 */
 	async listRoles(options: RpcModelRoleListOptions = {}): Promise<RpcModelRolesResult> {
-		const settings = this.#deps.getSettings();
-		const availableModels = this.#deps.getModelRegistry().getAvailable("all");
-		const roles = this.#catalogRoleIds(settings).map(role => this.#buildDescriptor(role, settings, availableModels));
-		return {
-			roles,
-			...(options.sessionModel ? { sessionModel: { model: options.sessionModel } } : {}),
-		};
+		return logger.withLogContext(
+			{ operation_id: logger.getLogContext().operation_id ?? `rpc-roles-${crypto.randomUUID()}` },
+			async () => {
+				const started = performance.now();
+				const fields = { component: "rpc_model_roles", event: "model_roles_list", stage: "read" };
+				logger.info("RPC model role listing started", { ...fields, result: "started" });
+				try {
+					const settings = this.#deps.getSettings();
+					const availableModels = this.#deps.getModelRegistry().getAvailable("all");
+					const roles = this.#catalogRoleIds(settings).map(role =>
+						this.#buildDescriptor(role, settings, availableModels),
+					);
+					logger.info("RPC model role listing completed", {
+						...fields,
+						result: "completed",
+						role_count: roles.length,
+						resolved_count: roles.filter(role => role.effectiveModel !== undefined).length,
+						elapsed_ms: performance.now() - started,
+					});
+					return {
+						roles,
+						...(options.sessionModel ? { sessionModel: { model: options.sessionModel } } : {}),
+					};
+				} catch (error) {
+					logger.error("RPC model role listing failed", {
+						...fields,
+						result: "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 
 	/**
@@ -148,65 +176,145 @@ export class RpcModelRoleService {
 	 * A stale `expectedRevision` rejects with `revision_conflict`.
 	 */
 	async setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
-		const previous = this.#roleWrites.get(command.roleId) ?? Promise.resolve();
-		const write = previous.then(
-			() => this.#setRole(command),
-			() => this.#setRole(command),
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `rpc-role-${crypto.randomUUID()}`,
+				role_id:
+					typeof command.roleId === "string"
+						? /^[\w.:-]{1,128}$/.test(command.roleId)
+							? command.roleId
+							: `hash-${Bun.hash(command.roleId).toString(36)}`
+						: undefined,
+			},
+			async () => {
+				const started = performance.now();
+				logger.info("RPC model role write queued", {
+					component: "rpc_model_roles",
+					event: "model_role_set",
+					stage: "queue",
+					result: "started",
+					persisted: false,
+					committed: false,
+					commit_status: "not_committed",
+					elapsed_ms: 0,
+				});
+				const previous = this.#roleWrites.get(command.roleId) ?? Promise.resolve();
+				const write = previous.then(
+					() => this.#setRole(command, started),
+					() => this.#setRole(command, started),
+				);
+				this.#roleWrites.set(command.roleId, write);
+				try {
+					return await write;
+				} finally {
+					if (this.#roleWrites.get(command.roleId) === write) this.#roleWrites.delete(command.roleId);
+				}
+			},
 		);
-		this.#roleWrites.set(command.roleId, write);
-		try {
-			return await write;
-		} finally {
-			if (this.#roleWrites.get(command.roleId) === write) this.#roleWrites.delete(command.roleId);
-		}
 	}
 
-	async #setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
-		const settings = this.#deps.getSettings();
-		const registry = this.#deps.getModelRegistry();
-		const { roleId, selection } = command;
-
-		if (typeof roleId !== "string" || !this.#catalogRoleIds(settings).includes(roleId)) {
-			throw new RpcModelRoleError("not_found", `Unknown model role: ${String(roleId)}`);
-		}
-
-		// Wire-level scope guard: the declared type is "user", but the raw
-		// frame value is untyped at runtime and needs a distinct error code.
-		const scope: unknown = command.scope;
-		if (scope !== "user") {
-			throw new RpcModelRoleError("scope_not_allowed", "Model roles support only user writes");
-		}
-		if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
-			throw new RpcModelRoleError("invalid_params", "expectedRevision is required");
-		}
-
-		const expectedValue = settings.getGlobalModelRole(roleId);
-		const currentRevision = this.#roleRevision(roleId, expectedValue);
-		if (command.expectedRevision !== currentRevision) {
-			throw new RpcModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
-		}
-
-		const value = this.#formatSelection(settings, registry, roleId, selection);
+	async #setRole(command: RpcModelRoleSetOptions, started: number): Promise<RpcSetModelRoleResult> {
+		let stage = "queue";
+		let persisted: boolean | undefined = false;
+		let saveError: unknown;
+		const fields = () => ({
+			component: "rpc_model_roles",
+			event: "model_role_set",
+			stage,
+			persisted,
+			committed: persisted,
+			commit_status: persisted === undefined ? "unknown" : persisted ? "committed" : "not_committed",
+			elapsed_ms: performance.now() - started,
+		});
+		logger.info("RPC model role write queue completed", { ...fields(), result: "completed" });
+		stage = "validate";
+		logger.info("RPC model role save started", { ...fields(), result: "started" });
 		try {
-			await settings.saveUserModelRole(roleId, value, expectedValue);
-		} catch (error) {
-			if (error instanceof ModelRoleConflictError) {
-				throw new RpcModelRoleError("revision_conflict", error.message);
+			const settings = this.#deps.getSettings();
+			const registry = this.#deps.getModelRegistry();
+			const { roleId, selection } = command;
+
+			if (typeof roleId !== "string" || !this.#catalogRoleIds(settings).includes(roleId)) {
+				throw new RpcModelRoleError("not_found", `Unknown model role: ${String(roleId)}`);
 			}
-			throw new RpcModelRoleError(
-				"persistence_failed",
-				`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
-			);
+
+			// Wire-level scope guard: the declared type is "user", but the raw
+			// frame value is untyped at runtime and needs a distinct error code.
+			const scope: unknown = command.scope;
+			if (scope !== "user") {
+				throw new RpcModelRoleError("scope_not_allowed", "Model roles support only user writes");
+			}
+			if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
+				throw new RpcModelRoleError("invalid_params", "expectedRevision is required");
+			}
+
+			stage = "revision";
+			const expectedValue = settings.getGlobalModelRole(roleId);
+			const currentRevision = this.#roleRevision(roleId, expectedValue);
+			if (command.expectedRevision !== currentRevision) {
+				throw new RpcModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
+			}
+			logger.debug("RPC model role revision accepted", { ...fields(), result: "completed" });
+
+			stage = "validate";
+			const value = this.#formatSelection(settings, registry, roleId, selection);
+			stage = "save";
+			// A rejected storage call does not provide an authoritative commit receipt.
+			persisted = undefined;
+			logger.info("RPC model role persistence started", { ...fields(), result: "started" });
+			try {
+				await settings.saveUserModelRole(roleId, value, expectedValue);
+			} catch (error) {
+				saveError = error;
+				if (error instanceof ModelRoleConflictError) {
+					persisted = false;
+					throw new RpcModelRoleError("revision_conflict", error.message);
+				}
+				throw new RpcModelRoleError(
+					"persistence_failed",
+					`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			persisted = true;
+			logger.info("RPC model role persistence completed", { ...fields(), result: "completed" });
+			// Sessions hold cloneForCwd snapshots of the global layer: reload their
+			// persisted layers so post-save role resolution adopts the new value.
+			stage = "reload";
+			logger.info("RPC model role session reload started", {
+				...fields(),
+				result: "started",
+				reload_available: this.#deps.reloadSessionSettings !== undefined,
+			});
+			await this.#deps.reloadSessionSettings?.();
+			logger.info("RPC model role session reload completed", { ...fields(), result: "completed" });
+			stage = "emit";
+			logger.info("RPC model role settings notification started", { ...fields(), result: "started" });
+			this.#deps.emit({ type: "settings_changed", scope: "user" });
+			logger.info("RPC model role settings notification completed", { ...fields(), result: "completed" });
+			// Fresh post-save read: provenance naturally reports a higher layer
+			// (runtime/overlay/project) when one still owns the effective value.
+			stage = "read";
+			const role = this.#buildDescriptor(roleId, settings, registry.getAvailable("all"));
+			const effectiveNote = this.#effectiveNote(role, selection);
+			logger.info("RPC model role save completed", {
+				...fields(),
+				result: "completed",
+				source: role.source,
+				resolved: role.effectiveModel !== undefined,
+			});
+			return { role, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
+		} catch (error) {
+			const refused = error instanceof RpcModelRoleError && error.code !== "persistence_failed" && !persisted;
+			const details = {
+				...fields(),
+				result: refused ? "refused" : "failed",
+				...(error instanceof RpcModelRoleError ? { rpc_error_code: error.code } : {}),
+				...logger.diagnosticError(saveError ?? error),
+			};
+			if (refused) logger.info("RPC model role save refused", details);
+			else logger.error("RPC model role save failed", details);
+			throw error;
 		}
-		// Sessions hold cloneForCwd snapshots of the global layer: reload their
-		// persisted layers so post-save role resolution adopts the new value.
-		await this.#deps.reloadSessionSettings?.();
-		this.#deps.emit({ type: "settings_changed", scope: "user" });
-		// Fresh post-save read: provenance naturally reports a higher layer
-		// (runtime/overlay/project) when one still owns the effective value.
-		const role = this.#buildDescriptor(roleId, settings, registry.getAvailable("all"));
-		const effectiveNote = this.#effectiveNote(role, selection);
-		return { role, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
 	}
 
 	/** Catalog ids: all built-ins (including hidden roles) first, then

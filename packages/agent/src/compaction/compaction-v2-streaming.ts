@@ -259,65 +259,162 @@ export async function requestCompactionV2Streaming(
 		preferWebsockets?: boolean;
 	},
 ): Promise<CompactionV2Response> {
-	let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
-	if (isBedrockOpenAIUrl(model.baseUrl)) {
-		({
-			model,
-			apiKey,
-			fetch: fetchImpl,
-		} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal));
-	}
-	const endpoint = getCompactionV2Endpoint(model);
-	if (!endpoint) {
-		throw new Error(`Model ${model.id} does not support V2 streaming compaction`);
-	}
-
-	const retryWait = options?.retryWait ?? ((delayMs: number) => Bun.sleep(delayMs));
-	const isCodexResponses = compactionV2Api(model) === "openai-codex-responses" || model.provider === "openai-codex";
-	const codexMetadata =
-		isCodexResponses && !shouldUseCodexProviderTransport(model)
-			? createOpenAICodexCompatibilityMetadata({
-					sessionId: request.sessionId,
-					providerSessionState: options?.providerSessionState,
-					requestKind: "compaction",
-					compaction: createOpenAICodexCompactionRequestContext({
-						context: options?.codexCompaction,
-						implementation: "responses_compaction_v2",
-					}),
-				})
-			: undefined;
-	let lastError: Error | undefined;
-
-	for (let attempt = 0; attempt <= V2_COMPACTION_MAX_RETRIES; attempt++) {
-		const timeoutSignal = ptree.combineSignals(signal, options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS);
-		try {
-			return await attemptCompactionV2Streaming(endpoint, apiKey, model, request, fetchImpl, timeoutSignal, {
-				codexMetadata,
-				providerSessionState: options?.providerSessionState,
-				codexCompaction: options?.codexCompaction,
-				preferWebsockets: options?.preferWebsockets,
+	const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
+	return logger.withLogContext(
+		{
+			operation_id: logger.getLogContext().operation_id ?? compactionId,
+			compaction_id: compactionId,
+			call_id: `compact-v2-${crypto.randomUUID()}`,
+			...(request.sessionId ? { session_id: request.sessionId } : {}),
+		},
+		async () => {
+			const started = performance.now();
+			const reasoning = request.body.reasoning;
+			const effectiveEffort =
+				isRecord(reasoning) && typeof reasoning.effort === "string"
+					? /^(none|minimal|low|medium|high|xhigh|max)$/.test(reasoning.effort)
+						? reasoning.effort
+						: "unknown"
+					: "off";
+			logger.info("V2 compaction transport started", {
+				component: "compaction",
+				event: "compaction_v2_transport",
+				stage: "setup",
+				result: "started",
+				provider: /^[\w.-]{1,160}$/.test(model.provider) ? model.provider : "[custom]",
+				model: /^[\w./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",
+				effective_effort: effectiveEffort,
 			});
-		} catch (err) {
-			const error = err instanceof Error ? err : new Error(String(err));
-			if (signal?.aborted) throw error;
+			try {
+				let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
+				if (isBedrockOpenAIUrl(model.baseUrl)) {
+					({
+						model,
+						apiKey,
+						fetch: fetchImpl,
+					} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal));
+				}
+				const endpoint = getCompactionV2Endpoint(model);
+				if (!endpoint) {
+					throw new Error(`Model ${model.id} does not support V2 streaming compaction`);
+				}
 
-			if (isRetryableCompactionError(error) && attempt < V2_COMPACTION_MAX_RETRIES) {
-				lastError = error;
-				const backoffMs = 2 ** attempt * 1000;
-				logger.warn(`V2 compaction attempt ${attempt + 1} failed, retrying in ${backoffMs}ms`, {
-					error: error.message,
-					model: model.id,
+				const retryWait = options?.retryWait ?? ((delayMs: number) => Bun.sleep(delayMs));
+				const isCodexResponses =
+					compactionV2Api(model) === "openai-codex-responses" || model.provider === "openai-codex";
+				const codexMetadata =
+					isCodexResponses && !shouldUseCodexProviderTransport(model)
+						? createOpenAICodexCompatibilityMetadata({
+								sessionId: request.sessionId,
+								providerSessionState: options?.providerSessionState,
+								requestKind: "compaction",
+								compaction: createOpenAICodexCompactionRequestContext({
+									context: options?.codexCompaction,
+									implementation: "responses_compaction_v2",
+								}),
+							})
+						: undefined;
+				let lastError: Error | undefined;
+
+				for (let attempt = 0; attempt <= V2_COMPACTION_MAX_RETRIES; attempt++) {
+					const timeoutSignal = ptree.combineSignals(signal, options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS);
+					const attemptStarted = performance.now();
+					logger.info("V2 compaction request started", {
+						component: "compaction",
+						event: "compaction_v2_attempt",
+						stage: "request",
+						result: "started",
+						attempt: attempt + 1,
+						method: "POST",
+						...logger.diagnosticUrl(endpoint),
+						timeout_ms: options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS,
+						effective_effort: effectiveEffort,
+					});
+					try {
+						const result = await attemptCompactionV2Streaming(
+							endpoint,
+							apiKey,
+							model,
+							request,
+							fetchImpl,
+							timeoutSignal,
+							{
+								codexMetadata,
+								providerSessionState: options?.providerSessionState,
+								codexCompaction: options?.codexCompaction,
+								preferWebsockets: options?.preferWebsockets,
+							},
+						);
+						logger.info("V2 compaction request completed", {
+							component: "compaction",
+							event: "compaction_v2_attempt",
+							stage: "response",
+							result: "success",
+							attempt: attempt + 1,
+							elapsed_ms: performance.now() - attemptStarted,
+							input_tokens: result.usage?.inputTokens,
+							output_tokens: result.usage?.outputTokens,
+							used_tokens: result.usedTokens,
+							retained_image_count: result.retainedImageCount,
+						});
+						logger.info("V2 compaction transport completed", {
+							component: "compaction",
+							event: "compaction_v2_transport",
+							stage: "response",
+							result: "success",
+							attempt: attempt + 1,
+							elapsed_ms: performance.now() - started,
+						});
+						return result;
+					} catch (err) {
+						const error = err instanceof Error ? err : new Error(String(err));
+						(signal?.aborted ? logger.info : logger.warn)("V2 compaction request ended", {
+							component: "compaction",
+							event: "compaction_v2_attempt",
+							stage: "response",
+							result: signal?.aborted ? "cancelled" : "failed",
+							attempt: attempt + 1,
+							elapsed_ms: performance.now() - attemptStarted,
+							...logger.diagnosticError(error),
+						});
+						if (signal?.aborted) throw error;
+
+						if (isRetryableCompactionError(error) && attempt < V2_COMPACTION_MAX_RETRIES) {
+							lastError = error;
+							const backoffMs = 2 ** attempt * 1000;
+							logger.warn("V2 compaction retry scheduled", {
+								component: "compaction",
+								event: "compaction_v2_backoff",
+								stage: "backoff",
+								result: "retry",
+								attempt: attempt + 1,
+								next_attempt: attempt + 2,
+								delay_ms: backoffMs,
+								...logger.diagnosticError(error),
+							});
+							await retryWait(backoffMs, signal);
+							if (signal?.aborted) throw error;
+							continue;
+						}
+
+						throw error;
+					}
+				}
+
+				throw lastError ?? new Error("V2 compaction failed after max retries");
+			} catch (error) {
+				(signal?.aborted ? logger.info : logger.warn)("V2 compaction transport ended", {
+					component: "compaction",
+					event: "compaction_v2_transport",
+					stage: "request",
+					result: signal?.aborted ? "cancelled" : "failed",
+					elapsed_ms: performance.now() - started,
+					...logger.diagnosticError(error),
 				});
-				await retryWait(backoffMs, signal);
-				if (signal?.aborted) throw error;
-				continue;
+				throw error;
 			}
-
-			throw error;
-		}
-	}
-
-	throw lastError ?? new Error("V2 compaction failed after max retries");
+		},
+	);
 }
 
 async function attemptCompactionV2Streaming(
@@ -374,10 +471,12 @@ async function attemptCompactionV2Streaming(
 	if (!response.ok) {
 		const cause = await captureOpenAIHttpError(response);
 		logger.warn("V2 remote compaction failed", {
-			endpoint,
+			component: "compaction",
+			event: "compaction_v2_http_rejected",
+			stage: "response",
+			result: "failed",
+			...logger.diagnosticUrl(endpoint),
 			status: response.status,
-			statusText: response.statusText,
-			errorText: cause.captured.bodyText ?? "",
 		});
 		throw new AIError.ProviderHttpError(
 			`V2 remote compaction failed (${response.status} ${response.statusText})`,

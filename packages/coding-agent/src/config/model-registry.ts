@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
 import { type AuthApiKeyOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
@@ -401,6 +402,8 @@ export class ModelRegistry {
 	#jchToolsDiscoveryAbort?: AbortController;
 	#jchToolsAutomaticDiscoveryAllowed = true;
 	#jchToolsDiscoveryGeneration = 0;
+	#diagnosticOperationId = logger.getLogContext().operation_id ?? `model-registry-${randomUUID()}`;
+	#syntheticLaneSummaries: Record<string, string | undefined> = {};
 
 	#captureCatalogMetrics(models: readonly Model<Api>[], replace: boolean): void {
 		if (replace) {
@@ -717,7 +720,19 @@ export class ModelRegistry {
 			}
 			return this.#jchToolsRefresh;
 		}
+		const operationId = logger.getLogContext().operation_id ?? this.#diagnosticOperationId;
+		const callId = `local-provider-refresh-${randomUUID()}`;
+		const startedAt = performance.now();
 		const run = async () => {
+			logger.info("Local provider registry refresh started", {
+				component: "model-registry",
+				event: "local_provider_refresh_started",
+				stage: "discovery",
+				result: "started",
+				operation_id: operationId,
+				call_id: callId,
+				provider: JCHTOOLS_PROVIDER_ID,
+			});
 			const previous = this.#jchToolsModels;
 			this.#clearJchToolsModels();
 			const generation = this.#jchToolsDiscoveryGeneration;
@@ -743,18 +758,50 @@ export class ModelRegistry {
 			this.#invalidateProviderModelCache(JCHTOOLS_PROVIDER_ID);
 			if (this.#hasFullSnapshot)
 				this.#models = this.#withCatalogMetrics(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
-			return (
+			const changed =
 				previous.length !== this.#jchToolsModels.length ||
 				previous.some(
 					(model, index) =>
 						model.id !== this.#jchToolsModels[index]?.id ||
 						model.baseUrl !== this.#jchToolsModels[index]?.baseUrl,
-				)
-			);
+				);
+			logger.info("Local provider model publication completed", {
+				component: "model-registry",
+				event: "local_provider_refresh_completed",
+				stage: "publish",
+				result: controller?.signal.aborted ? "cancelled" : controller ? "completed" : "skipped",
+				operation_id: operationId,
+				call_id: callId,
+				provider: JCHTOOLS_PROVIDER_ID,
+				previous_model_count: previous.length,
+				discovered_model_count: models.length,
+				published_model_count: this.#jchToolsModels.length,
+				changed,
+				stale_generation: generation !== this.#jchToolsDiscoveryGeneration,
+				automatic_discovery_allowed: this.#jchToolsAutomaticDiscoveryAllowed,
+				elapsed_ms: performance.now() - startedAt,
+			});
+			return changed;
 		};
-		this.#jchToolsRefresh = run();
+		this.#jchToolsRefresh = logger.withLogContext({ operation_id: operationId, call_id: callId }, run);
 		try {
 			return await this.#jchToolsRefresh;
+		} catch (error) {
+			const cancelled = this.#jchToolsDiscoveryAbort?.signal.aborted === true;
+			const fields = {
+				component: "model-registry",
+				event: "local_provider_refresh_failed",
+				stage: "discovery",
+				result: cancelled ? "cancelled" : "failed",
+				operation_id: operationId,
+				call_id: callId,
+				provider: JCHTOOLS_PROVIDER_ID,
+				elapsed_ms: performance.now() - startedAt,
+				...logger.diagnosticError(error),
+			};
+			if (cancelled) logger.info("Local provider registry refresh cancelled", fields);
+			else logger.error("Local provider registry refresh failed", fields);
+			throw error;
 		} finally {
 			this.#jchToolsRefresh = undefined;
 			this.#jchToolsDiscoveryAbort = undefined;
@@ -1132,6 +1179,19 @@ export class ModelRegistry {
 			this.#applyHardcodedModelPolicies(this.#loadCachedDiscoverableModels()),
 		);
 		this.#lastStaticLoadMtime = this.#modelsConfigFile.getMtimeMs();
+		logger.info("Runtime provider lanes loaded", {
+			component: "model-registry",
+			event: "runtime_lanes_loaded",
+			stage: "policy",
+			result: "completed",
+			operation_id: logger.getLogContext().operation_id ?? this.#diagnosticOperationId,
+			registry_id: this.#diagnosticOperationId,
+			local_config_ignored: this.#ignoreLocalModelConfig,
+			company_enabled: !this.#ignoreLocalModelConfig && isCompanyLaneActive(),
+			company_available: !this.#ignoreLocalModelConfig && isCompanyLaneActive() && !companyError,
+			zcode_hidden: this.#ignoreLocalModelConfig || isCompanyLaneActive(),
+			restart_required: companyError !== undefined,
+		});
 	}
 
 	#resetStaticComposition(): void {
@@ -1298,6 +1358,33 @@ export class ModelRegistry {
 		}
 		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
 			stripped.push(...getZcodeApiModels());
+		}
+		const companyIncluded = !providerFilter || providerFilter.has(COMPANY_PROVIDER_ID);
+		const zcodeIncluded = !providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID);
+		if (companyIncluded || zcodeIncluded) {
+			let companyCount = 0;
+			let zcodeCount = 0;
+			for (const model of stripped) {
+				if (model.provider === COMPANY_PROVIDER_ID) companyCount++;
+				else if (model.provider === ZCODE_API_PROVIDER_ID) zcodeCount++;
+			}
+			const scope = `${companyIncluded}:${zcodeIncluded}`;
+			const summary = `${companyCount}:${zcodeCount}`;
+			if (summary !== this.#syntheticLaneSummaries[scope]) {
+				this.#syntheticLaneSummaries[scope] = summary;
+				logger.info("Runtime provider model rows selected", {
+					component: "model-registry",
+					event: "runtime_lane_rows_selected",
+					stage: "catalog",
+					result: "completed",
+					operation_id: logger.getLogContext().operation_id ?? this.#diagnosticOperationId,
+					registry_id: this.#diagnosticOperationId,
+					company_included: companyIncluded,
+					zcode_included: zcodeIncluded,
+					company_model_count: companyCount,
+					zcode_model_count: zcodeCount,
+				});
+			}
 		}
 		return stripped;
 	}

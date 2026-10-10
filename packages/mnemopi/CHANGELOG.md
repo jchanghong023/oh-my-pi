@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added correlated embedding API configuration, authentication, HTTP, response-validation, and degradation diagnostics.
+
 ### Fixed
 
 - Fixed custom embedding gateways containing `openrouter.ai` in their path or hostname being mistaken for the official OpenRouter endpoint.
+- Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 
 ## [18.8.8] - 2026-10-10
 

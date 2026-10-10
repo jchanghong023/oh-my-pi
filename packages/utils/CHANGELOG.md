@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added async diagnostic context, safe exception and endpoint summaries (including hashed URL paths), CLI lifecycle flushing, and a user-cache fallback for unwritable log directories.
+- Added correlated HTTP attempt, retry, cancellation, and terminal-result logs without recording request bodies, credentials, or response content.
+
 ## [18.8.8] - 2026-10-10
 
 ### Added

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { logger } from "@oh-my-pi/pi-utils";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import {
 	enumerateMarkdownFiles,
@@ -267,7 +268,39 @@ export class DocsService {
 	readonly cwd: string;
 
 	constructor(options: DocsServiceOptions) {
-		this.storage = DocsStorage.open(options.agentDir);
+		const started = performance.now();
+		this.storage = logger.withLogContext(
+			{ operation_id: logger.getLogContext().operation_id ?? `docs-open-${crypto.randomUUID()}` },
+			() => {
+				logger.info("docs.database.started", {
+					component: "docs",
+					event: "docs.database",
+					stage: "open",
+					result: "started",
+				});
+				try {
+					const storage = DocsStorage.open(options.agentDir);
+					logger.info("docs.database.completed", {
+						component: "docs",
+						event: "docs.database",
+						stage: "open",
+						result: "completed",
+						elapsed_ms: performance.now() - started,
+					});
+					return storage;
+				} catch (error) {
+					logger.error("docs.database.failed", {
+						component: "docs",
+						event: "docs.database",
+						stage: "open",
+						result: "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 		this.cwd = path.resolve(options.cwd ?? process.cwd());
 	}
 
@@ -280,130 +313,419 @@ export class DocsService {
 	}
 
 	async init(directory: string, name: string, options: DocsBuildOptions = {}): Promise<DocsBuildResult> {
-		checkCancelled(options.signal);
-		const storedName = validateName(name);
-		if (this.storage.get(storedName)) throw new Error(`Document index already exists: ${storedName}`);
-		const rootPath = path.resolve(this.cwd, directory);
-		const files = await enumerateMarkdownFiles(rootPath);
-		checkCancelled(options.signal);
-		if (files.length === 0) throw new Error(`No Markdown files found in: ${rootPath}`);
-		// Enumeration runs before the lock: only the database writes need to be
-		// exclusive, and the lease is held for the whole build.
-		let lease: FileLockHandle;
-		try {
-			lease = await acquireFileLock(this.storage.path, { ...IMPORT_LOCK_OPTIONS, signal: options.signal });
-		} catch (error) {
-			checkCancelled(options.signal);
-			throw new Error(`Another document index build is already running for this profile: ${this.storage.path}`, {
-				cause: error,
-			});
-		}
-		try {
-			checkCancelled(options.signal);
-			// Another import may have published this name while we waited for the lease.
-			if (this.storage.get(storedName)) throw new Error(`Document index already exists: ${storedName}`);
-			// A killed import leaves a half-built index behind; clear those out now that
-			// this process is the one building.
-			this.storage.removeAbandoned();
-			const temp = this.storage.create({ name: `${BUILDING_INDEX_PREFIX}${crypto.randomUUID()}`, rootPath });
-			try {
-				options.onProgress?.({ phase: "scan", total: files.length, completed: 0, failed: 0 });
-				let completed = 0;
-				for (const relativePath of files) {
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `docs-init-${crypto.randomUUID()}`,
+				index_hash:
+					typeof name === "string" ? new Bun.CryptoHasher("sha256").update(name).digest("hex") : undefined,
+			},
+			async () => {
+				const started = performance.now();
+				let stage = "validate";
+				let documentCount = 0;
+				let sectionCount = 0;
+				let fileCount = 0;
+				let cleanup = "not_needed";
+				let expectedResult: string | undefined;
+				let published = false;
+				const fields = () => ({
+					component: "docs",
+					event: "docs.init",
+					stage,
+					elapsed_ms: performance.now() - started,
+					file_count: fileCount,
+					document_count: documentCount,
+					section_count: sectionCount,
+				});
+				logger.info("docs.init.started", { ...fields(), result: "started" });
+				try {
 					checkCancelled(options.signal);
-					const document = await readMarkdownDocument(rootPath, relativePath);
-					checkCancelled(options.signal);
-					this.#commitDocument(temp.id, document);
-					completed++;
-					options.onProgress?.({
-						phase: "fts",
-						total: files.length,
-						completed,
-						failed: 0,
-						currentPath: relativePath,
+					stage = "name_validation";
+					const storedName = validateName(name);
+					stage = "validate";
+					if (this.storage.get(storedName)) {
+						expectedResult = "duplicate_name";
+						throw new Error(`Document index already exists: ${storedName}`);
+					}
+					const rootPath = path.resolve(this.cwd, directory);
+					stage = "scan";
+					const scanStarted = performance.now();
+					logger.info("docs.init.scan.started", { ...fields(), result: "started" });
+					const files = await enumerateMarkdownFiles(rootPath);
+					fileCount = files.length;
+					logger.info("docs.init.scan.completed", {
+						...fields(),
+						result: "completed",
+						elapsed_ms: performance.now() - scanStarted,
 					});
+					checkCancelled(options.signal);
+					if (files.length === 0) {
+						expectedResult = "no_documents";
+						throw new Error(`No Markdown files found in: ${rootPath}`);
+					}
+					// Enumeration runs before the lock: only the database writes need to be
+					// exclusive, and the lease is held for the whole build.
+					stage = "lock";
+					const lockStarted = performance.now();
+					logger.info("docs.init.lock.started", {
+						...fields(),
+						result: "started",
+						retry_limit: IMPORT_LOCK_OPTIONS.retries,
+					});
+					let lease: FileLockHandle;
+					try {
+						lease = await acquireFileLock(this.storage.path, { ...IMPORT_LOCK_OPTIONS, signal: options.signal });
+						logger.info("docs.init.lock.completed", {
+							...fields(),
+							result: "completed",
+							elapsed_ms: performance.now() - lockStarted,
+						});
+					} catch (error) {
+						const log = options.signal?.aborted ? logger.info : logger.warn;
+						log("docs.init.lock.failed", {
+							...fields(),
+							result: options.signal?.aborted ? "cancelled" : "contended",
+							elapsed_ms: performance.now() - lockStarted,
+							...logger.diagnosticError(error),
+						});
+						checkCancelled(options.signal);
+						throw new Error(
+							`Another document index build is already running for this profile: ${this.storage.path}`,
+							{ cause: error },
+						);
+					}
+					try {
+						checkCancelled(options.signal);
+						stage = "validate";
+						// Another import may have published this name while we waited for the lease.
+						if (this.storage.get(storedName)) {
+							expectedResult = "duplicate_name";
+							throw new Error(`Document index already exists: ${storedName}`);
+						}
+						// A killed import leaves a half-built index behind; clear those out now that
+						// this process is the one building.
+						stage = "recovery";
+						this.storage.removeAbandoned();
+						stage = "create";
+						const temp = this.storage.create({
+							name: `${BUILDING_INDEX_PREFIX}${crypto.randomUUID()}`,
+							rootPath,
+						});
+						try {
+							options.onProgress?.({ phase: "scan", total: files.length, completed: 0, failed: 0 });
+							stage = "read_parse";
+							logger.info("docs.init.ingest.started", { ...fields(), result: "started" });
+							let readParseMs = 0;
+							let ftsMs = 0;
+							let completed = 0;
+							for (const relativePath of files) {
+								checkCancelled(options.signal);
+								stage = "read_parse";
+								const readStarted = performance.now();
+								// The reader parses internally; no per-document text or path is logged.
+								let document: MarkdownDocument;
+								try {
+									document = await readMarkdownDocument(rootPath, relativePath);
+								} catch (error) {
+									// The reader wraps parse failures with this stable prefix; never log its text.
+									stage =
+										error instanceof Error && error.message.startsWith("Unable to parse Markdown ")
+											? "parse"
+											: "read";
+									throw error;
+								}
+								readParseMs += performance.now() - readStarted;
+								checkCancelled(options.signal);
+								stage = "fts";
+								if (completed === 0) logger.info("docs.init.fts.started", { ...fields(), result: "started" });
+								const ftsStarted = performance.now();
+								this.#commitDocument(temp.id, document);
+								ftsMs += performance.now() - ftsStarted;
+								completed++;
+								documentCount = completed;
+								sectionCount += document.sections.length;
+								options.onProgress?.({
+									phase: "fts",
+									total: files.length,
+									completed,
+									failed: 0,
+									currentPath: relativePath,
+								});
+							}
+							logger.info("docs.init.read_parse.completed", {
+								...fields(),
+								stage: "read_parse",
+								result: "completed",
+								elapsed_ms: readParseMs,
+							});
+							logger.info("docs.init.parse.completed", { ...fields(), stage: "parse", result: "completed" });
+							logger.info("docs.init.fts.completed", {
+								...fields(),
+								stage: "fts",
+								result: "completed",
+								elapsed_ms: ftsMs,
+							});
+							checkCancelled(options.signal);
+							stage = "publish";
+							const result = {
+								processed: completed,
+								failed: 0,
+								index: this.storage.promote(temp.id, storedName),
+							};
+							published = true;
+							return result;
+						} catch (error) {
+							const failedStage = stage;
+							const cancelled = error instanceof Error && error.name === "AbortError";
+							const log = cancelled ? logger.info : logger.error;
+							log("docs.init.ingest.finished", {
+								...fields(),
+								result: cancelled ? "cancelled" : "failed",
+								...logger.diagnosticError(error),
+							});
+							cleanup = "started";
+							logger.info("docs.init.rollback.started", {
+								...fields(),
+								stage: "rollback",
+								result: "started",
+								failed_stage: failedStage,
+							});
+							try {
+								this.storage.removeById(temp.id);
+								cleanup = "completed";
+								logger.info("docs.init.rollback.completed", {
+									...fields(),
+									stage: "rollback",
+									result: "completed",
+									failed_stage: failedStage,
+								});
+							} catch (cleanupError) {
+								cleanup = "failed";
+								stage = "rollback";
+								logger.error("docs.init.rollback.failed", {
+									...fields(),
+									result: "failed",
+									failed_stage: failedStage,
+									...logger.diagnosticError(cleanupError),
+								});
+								throw cleanupError;
+							}
+							throw error;
+						}
+					} finally {
+						logger.info("docs.init.lock.release.started", {
+							...fields(),
+							stage: "lock_release",
+							result: "started",
+						});
+						const operationStage = stage;
+						stage = "lock_release";
+						lease.release();
+						stage = operationStage;
+						logger.info("docs.init.lock.release.completed", {
+							...fields(),
+							stage: "lock_release",
+							result: "completed",
+						});
+						if (published) logger.info("docs.init.completed", { ...fields(), result: "completed", cleanup });
+					}
+				} catch (error) {
+					const cancelled = error instanceof Error && error.name === "AbortError";
+					if (
+						stage === "scan" &&
+						error instanceof Error &&
+						error.message.startsWith("Markdown root is not a directory: ")
+					) {
+						expectedResult = "source_not_directory";
+					}
+					const log =
+						cancelled || expectedResult || stage === "name_validation"
+							? logger.info
+							: stage === "lock" || stage === "scan"
+								? logger.warn
+								: logger.error;
+					log("docs.init.finished", {
+						...fields(),
+						result: cancelled
+							? "cancelled"
+							: expectedResult || stage === "name_validation"
+								? "rejected"
+								: "failed",
+						reason: expectedResult,
+						cleanup,
+						...logger.diagnosticError(error),
+					});
+					throw error;
 				}
-				checkCancelled(options.signal);
-				return { processed: completed, failed: 0, index: this.storage.promote(temp.id, storedName) };
-			} catch (error) {
-				this.storage.removeById(temp.id);
-				throw error;
-			}
-		} finally {
-			lease.release();
-		}
+			},
+		);
 	}
 
 	remove(name: string): void {
-		// Only visible rows move here; a hidden build belongs to the import lease.
-		if (!this.storage.remove(name)) throw new Error(`Unknown document index: ${name}`);
+		logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `docs-remove-${crypto.randomUUID()}`,
+				index_hash:
+					typeof name === "string" ? new Bun.CryptoHasher("sha256").update(name).digest("hex") : undefined,
+			},
+			() => {
+				const started = performance.now();
+				let notFound = false;
+				const fields = { component: "docs", event: "docs.remove", stage: "delete" };
+				logger.info("docs.remove.started", { ...fields, result: "started" });
+				try {
+					// Only visible rows move here; a hidden build belongs to the import lease.
+					if (!this.storage.remove(name)) {
+						notFound = true;
+						logger.info("docs.remove.rejected", {
+							...fields,
+							result: "not_found",
+							elapsed_ms: performance.now() - started,
+						});
+						throw new Error(`Unknown document index: ${name}`);
+					}
+					logger.info("docs.remove.completed", {
+						...fields,
+						result: "completed",
+						elapsed_ms: performance.now() - started,
+					});
+				} catch (error) {
+					if (!notFound)
+						logger.error("docs.remove.failed", {
+							...fields,
+							result: "failed",
+							elapsed_ms: performance.now() - started,
+							...logger.diagnosticError(error),
+						});
+					throw error;
+				}
+			},
+		);
 	}
 
 	#commitDocument(indexId: number, document: MarkdownDocument): void {
-		this.storage.transaction(() => {
-			const inserted = this.storage.db
-				.query(
-					"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
-				)
-				.get(
-					indexId,
-					document.relativePath,
-					document.title,
-					document.sourceKind,
-					document.sha256,
-					document.sizeBytes,
-					document.mtimeMs,
-				) as { id: number };
-			for (const section of document.sections) {
-				const sectionRow = this.storage.db
+		const started = performance.now();
+		let stage = "document_insert";
+		try {
+			this.storage.transaction(() => {
+				const inserted = this.storage.db
 					.query(
-						"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+						"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
 					)
 					.get(
 						indexId,
-						inserted.id,
-						section.ordinal,
-						section.headingPath.join(" > "),
-						section.headingLevel,
-						section.lineStart,
-						section.lineEnd,
-						section.byteStart,
-						section.byteEnd,
-						section.rawMarkdown,
+						document.relativePath,
+						document.title,
+						document.sourceKind,
+						document.sha256,
+						document.sizeBytes,
+						document.mtimeMs,
 					) as { id: number };
-				this.storage.db
-					.query(
-						"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-					)
-					.run(
-						sectionRow.id,
-						sectionRow.id,
-						indexId,
-						section.ordinal === 0 ? normalizeFts(document.relativePath) : "",
-						normalizeFts(section.headingPath.join(" > ")),
-						normalizeFts(section.plainText),
-					);
-			}
-		});
+				for (const section of document.sections) {
+					stage = "section_insert";
+					const sectionRow = this.storage.db
+						.query(
+							"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+						)
+						.get(
+							indexId,
+							inserted.id,
+							section.ordinal,
+							section.headingPath.join(" > "),
+							section.headingLevel,
+							section.lineStart,
+							section.lineEnd,
+							section.byteStart,
+							section.byteEnd,
+							section.rawMarkdown,
+						) as { id: number };
+					stage = "fts_insert";
+					this.storage.db
+						.query(
+							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+						)
+						.run(
+							sectionRow.id,
+							sectionRow.id,
+							indexId,
+							section.ordinal === 0 ? normalizeFts(document.relativePath) : "",
+							normalizeFts(section.headingPath.join(" > ")),
+							normalizeFts(section.plainText),
+						);
+				}
+			});
+		} catch (error) {
+			logger.error("docs.init.document.failed", {
+				component: "docs",
+				event: "docs.init.document",
+				stage,
+				result: "failed",
+				elapsed_ms: performance.now() - started,
+				section_count: document.sections.length,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		}
 	}
 
 	search(query: string, options: { index?: string; limit?: number } = {}): DocsSearchResult {
-		const filter = indexFilter(options.index);
-		const limit = Math.max(1, Math.min(MAX_PAGE_SECTIONS, options.limit ?? 10));
-		const terms = analyzeQuery(query);
-		if (terms.length === 0) return { sections: [], total: 0 };
-		const match = compileFtsQuery(terms);
-		// One read snapshot for candidates, page texts and the count: section ids
-		// are rowids and get reused after a remove, so a query that straddled a
-		// concurrent remove+re-import could pair a surviving id with unrelated
-		// new text while keeping the old path and line numbers.
-		return this.storage.read(() => {
-			const sections = this.#rank(match, query, terms, filter, limit);
-			// Only the unscoped caller asks for a count, and it must cover what the
-			// page itself may serve.
-			const total = options.index === undefined ? this.#countMatches(match) : undefined;
-			return { sections, total };
-		});
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `docs-search-${crypto.randomUUID()}`,
+				...(options.index === undefined
+					? {}
+					: { index_hash: new Bun.CryptoHasher("sha256").update(options.index).digest("hex") }),
+			},
+			() => {
+				const started = performance.now();
+				const fields = { component: "docs", event: "docs.search", stage: "query" };
+				logger.info("docs.search.started", { ...fields, result: "started", query_length: query.length });
+				try {
+					const filter = indexFilter(options.index);
+					const limit = Math.max(1, Math.min(MAX_PAGE_SECTIONS, options.limit ?? 10));
+					const terms = analyzeQuery(query);
+					if (terms.length === 0) {
+						logger.info("docs.search.completed", {
+							...fields,
+							result: "no_terms",
+							elapsed_ms: performance.now() - started,
+							match_count: 0,
+							section_count: 0,
+						});
+						return { sections: [], total: 0 };
+					}
+					const match = compileFtsQuery(terms);
+					// One read snapshot for candidates, page texts and the count: section ids
+					// are rowids and get reused after a remove, so a query that straddled a
+					// concurrent remove+re-import could pair a surviving id with unrelated
+					// new text while keeping the old path and line numbers.
+					const result = this.storage.read(() => {
+						const sections = this.#rank(match, query, terms, filter, limit);
+						// Only the unscoped caller asks for a count, and it must cover what the
+						// page itself may serve.
+						const total = options.index === undefined ? this.#countMatches(match) : undefined;
+						return { sections, total };
+					});
+					logger.info("docs.search.completed", {
+						...fields,
+						result: result.sections.length ? "completed" : "no_match",
+						elapsed_ms: performance.now() - started,
+						term_count: terms.length,
+						section_count: result.sections.length,
+						match_count: result.total,
+					});
+					return result;
+				} catch (error) {
+					logger.error("docs.search.failed", {
+						...fields,
+						result: "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 
 	/**

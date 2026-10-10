@@ -4,6 +4,7 @@
  * Handles `omp update` to check for and install updates.
  * Uses the installer that owns the active omp executable when it can be detected.
  */
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,6 +19,7 @@ import {
 	getProjectDir,
 	isCompiledBinary,
 	isEnoent,
+	logger,
 	VERSION,
 } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -50,6 +52,100 @@ const NIX_STORE_DIR = "/nix/store";
 const GITHUB_API = "https://api.github.com";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+
+function diagnosticVersion(version: string | undefined): string | undefined {
+	return version &&
+		version.length <= 128 &&
+		/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+			version,
+		)
+		? version
+		: undefined;
+}
+
+function updateEvent(
+	stage: string,
+	result: string,
+	fields: Record<string, unknown> = {},
+	level: "info" | "warn" | "error" = "info",
+): void {
+	logger[level]("Updater diagnostic", {
+		component: "updater",
+		event: `update_${stage}_${result}`,
+		stage,
+		result,
+		...fields,
+	});
+}
+
+function updateDestination(url: string, endpoint: string): Record<string, unknown> {
+	// Repository names, package names and release refs can be user-controlled.
+	return { ...logger.diagnosticUrl(url), path: endpoint };
+}
+
+async function observeUpdateStage<T>(
+	stage: string,
+	fn: () => Promise<T>,
+	fields: Record<string, unknown> = {},
+	options: { missingExpected?: boolean; recoverable?: boolean } = {},
+): Promise<T> {
+	const context = logger.getLogContext();
+	return logger.withLogContext(
+		{
+			operation_id: context.operation_id ?? `update-${randomUUID()}`,
+			parent_call_id: context.call_id,
+			call_id: `update-${randomUUID()}`,
+		},
+		async () => {
+			const started = performance.now();
+			updateEvent(stage, "started", fields);
+			try {
+				const result = await fn();
+				const summary: Record<string, unknown> = {};
+				let partial = false;
+				if (typeof result === "number") {
+					summary.exit_code = result;
+					partial = result !== 0;
+				} else if (result instanceof Response) {
+					summary.status = result.status;
+					partial = !result.ok;
+				} else if (isRecord(result) && typeof result.exitCode === "number") {
+					summary.exit_code = result.exitCode;
+					partial = result.exitCode !== 0;
+				} else if (isRecord(result) && typeof result.ok === "boolean") {
+					summary.version_match = result.ok;
+					summary.actual_version = diagnosticVersion(
+						typeof result.actual === "string" ? result.actual : undefined,
+					);
+					partial = !result.ok;
+				}
+				const outcome = typeof fields.outcome === "string" ? fields.outcome : partial ? "partial" : "completed";
+				updateEvent(
+					stage,
+					outcome,
+					{ ...fields, ...summary, elapsed_ms: performance.now() - started },
+					outcome === "partial" ? "warn" : "info",
+				);
+				return result;
+			} catch (error) {
+				const cancelled = error instanceof Error && error.name === "AbortError" && !isTimeoutError(error);
+				const missing = options.missingExpected && isEnoent(error);
+				updateEvent(
+					stage,
+					cancelled ? "cancelled" : missing ? "skipped" : "failed",
+					{
+						...fields,
+						elapsed_ms: performance.now() - started,
+						timed_out: isTimeoutError(error) || (error instanceof Error && isTimeoutError(error.cause)),
+						...logger.diagnosticError(error),
+					},
+					cancelled || missing ? "info" : options.recoverable ? "warn" : "error",
+				);
+				throw error;
+			}
+		},
+	);
+}
 
 /**
  * Core native addon package. Bumped in lock-step with {@link PACKAGE} so the
@@ -132,12 +228,26 @@ type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Resp
 type GitHubCliTokenRunner = (ghPath: string) => Promise<string | undefined>;
 
 async function readGitHubCliToken(ghPath: string): Promise<string | undefined> {
+	const started = performance.now();
+	updateEvent("github_auth_probe", "started", { executable: "gh" });
 	try {
 		const result = await $`${ghPath} auth token --hostname github.com`.quiet().nothrow();
+		updateEvent(
+			"github_auth_probe",
+			result.exitCode === 0 ? "completed" : "partial",
+			{ exit_code: result.exitCode, elapsed_ms: performance.now() - started },
+			result.exitCode === 0 ? "info" : "warn",
+		);
 		if (result.exitCode !== 0) return undefined;
 		const token = result.text().trim();
 		return token.length > 0 ? token : undefined;
-	} catch {
+	} catch (error) {
+		updateEvent(
+			"github_auth_probe",
+			"partial",
+			{ elapsed_ms: performance.now() - started, ...logger.diagnosticError(error) },
+			"warn",
+		);
 		return undefined;
 	}
 }
@@ -370,28 +480,46 @@ export function selectFallbackBinaryAsset(
 
 /** Release metadata request with the shared headers, timeout, and rate-limit mapping. */
 async function fetchReleaseMetadata(url: string, fetchImpl: Fetch, token: string | undefined): Promise<Response> {
-	const headers: Record<string, string> = {
-		Accept: "application/vnd.github+json",
-		"X-GitHub-Api-Version": "2022-11-28",
+	const fields = {
+		...updateDestination(url, "/repos/<repository>/releases/<selector>"),
+		timeout_ms: RELEASE_METADATA_TIMEOUT_MS,
+		status: undefined as number | undefined,
 	};
-	if (token) headers.Authorization = `Bearer ${token}`;
+	return observeUpdateStage(
+		"metadata_fetch",
+		async () => {
+			const headers: Record<string, string> = {
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+			};
+			if (token) headers.Authorization = `Bearer ${token}`;
 
-	let response: Response;
-	try {
-		response = await fetchImpl(url, { headers, signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS) });
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out fetching GitHub release metadata after 30s", { cause: err });
-		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
-	}
-	if ((response.status === 403 && !token) || response.status === 429) {
-		throw new Error(
-			"GitHub API rate limit exceeded while fetching release metadata; retry later or set GITHUB_TOKEN or GH_TOKEN",
-		);
-	}
-	return response;
+			let response: Response;
+			try {
+				response = await fetchImpl(url, { headers, signal: withTimeoutSignal(RELEASE_METADATA_TIMEOUT_MS) });
+			} catch (err) {
+				if (isTimeoutError(err)) {
+					throw new Error("Timed out fetching GitHub release metadata after 30s", { cause: err });
+				}
+				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+				throw err;
+			}
+			fields.status = response.status;
+			updateEvent(
+				"metadata_response",
+				response.ok ? "completed" : "partial",
+				{ status: response.status },
+				response.ok ? "info" : "warn",
+			);
+			if ((response.status === 403 && !token) || response.status === 429) {
+				throw new Error(
+					"GitHub API rate limit exceeded while fetching release metadata; retry later or set GITHUB_TOKEN or GH_TOKEN",
+				);
+			}
+			return response;
+		},
+		fields,
+	);
 }
 
 /** Releases scanned when the requested tag has no GitHub release; one page spans months of releases. */
@@ -404,42 +532,67 @@ async function getReleaseBinaryAsset(
 	fetchImpl: Fetch = fetch,
 	allowPrerelease = false,
 ): Promise<ReleaseBinaryAsset> {
-	const tag = `v${expectedVersion}`;
-	const response = await fetchReleaseMetadata(
-		`${GITHUB_API}/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`,
-		fetchImpl,
-		githubToken,
-	);
-	if (response.ok) {
-		return resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
-	}
-	if (response.status !== 404) {
-		const detail = await responseBodyDetail(response);
-		throw new Error(`Failed to fetch GitHub release metadata: HTTP ${httpStatusText(response)}${detail}`);
-	}
+	return observeUpdateStage(
+		"asset_selection",
+		async () => {
+			const tag = `v${expectedVersion}`;
+			const response = await fetchReleaseMetadata(
+				`${GITHUB_API}/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`,
+				fetchImpl,
+				githubToken,
+			);
+			if (response.ok) {
+				const asset = resolveReleaseBinaryAsset(await response.json(), tag, binaryName, { allowPrerelease });
+				updateEvent("asset_selected", "completed", {
+					version: diagnosticVersion(asset.version),
+					bytes: asset.size,
+					fallback: false,
+				});
+				return asset;
+			}
+			if (response.status !== 404) {
+				const detail = await responseBodyDetail(response);
+				throw new Error(`Failed to fetch GitHub release metadata: HTTP ${httpStatusText(response)}${detail}`);
+			}
 
-	const listing = await fetchReleaseMetadata(
-		`${GITHUB_API}/repos/${REPO}/releases?per_page=${RELEASE_LISTING_PAGE_SIZE}`,
-		fetchImpl,
-		githubToken,
+			return observeUpdateStage(
+				"asset_fallback",
+				async () => {
+					const listing = await fetchReleaseMetadata(
+						`${GITHUB_API}/repos/${REPO}/releases?per_page=${RELEASE_LISTING_PAGE_SIZE}`,
+						fetchImpl,
+						githubToken,
+					);
+					if (!listing.ok) {
+						throw new Error(
+							`GitHub release ${tag} is not published and listing published releases failed: ${listing.statusText}`,
+						);
+					}
+					const fallback = selectFallbackBinaryAsset(await listing.json(), binaryName, VERSION, {
+						allowPrerelease,
+					});
+					if (!fallback) {
+						throw new Error(
+							`Update check advertised ${expectedVersion} but GitHub release ${tag} is not published, and no newer published release ships ${binaryName}; retry once the release finishes publishing, or reinstall with: ${installerHint()}`,
+						);
+					}
+					console.log(
+						chalk.yellow(
+							`GitHub release ${tag} is not published; installing the newest published binary release v${fallback.version} instead.`,
+						),
+					);
+					updateEvent("asset_selected", "completed", {
+						version: diagnosticVersion(fallback.version),
+						bytes: fallback.size,
+						fallback: true,
+					});
+					return fallback;
+				},
+				{ reason: "release_not_published", requested_version: diagnosticVersion(expectedVersion) },
+			);
+		},
+		{ requested_version: diagnosticVersion(expectedVersion), allow_prerelease: allowPrerelease },
 	);
-	if (!listing.ok) {
-		throw new Error(
-			`GitHub release ${tag} is not published and listing published releases failed: ${listing.statusText}`,
-		);
-	}
-	const fallback = selectFallbackBinaryAsset(await listing.json(), binaryName, VERSION, { allowPrerelease });
-	if (!fallback) {
-		throw new Error(
-			`Update check advertised ${expectedVersion} but GitHub release ${tag} is not published, and no newer published release ships ${binaryName}; retry once the release finishes publishing, or reinstall with: ${installerHint()}`,
-		);
-	}
-	console.log(
-		chalk.yellow(
-			`GitHub release ${tag} is not published; installing the newest published binary release v${fallback.version} instead.`,
-		),
-	);
-	return fallback;
 }
 
 /**
@@ -561,6 +714,7 @@ export function warnOnPathConflict(targetPath: string, ompPath: string | undefin
 	const resolvedTarget = tryRealpath(targetPath) ?? targetPath;
 	const resolvedOmp = tryRealpath(ompPath) ?? ompPath;
 	if (normalizePathForComparison(resolvedTarget) === normalizePathForComparison(resolvedOmp)) return;
+	updateEvent("path_conflict", "partial", { path_entry_differs: true }, "warn");
 	console.log(
 		chalk.yellow(
 			`\nWarning: ${APP_NAME} resolves to ${ompPath} in PATH, which differs from the update target ${targetPath}. ` +
@@ -572,70 +726,109 @@ export function warnOnPathConflict(targetPath: string, ompPath: string | undefin
  * Download a binary and verify its GitHub-reported size and SHA-256 digest.
  */
 export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOptions): Promise<void> {
-	const fetchImpl = options.fetchImpl ?? fetch;
-	await unlinkIfExists(options.targetPath);
+	const fields: Record<string, unknown> = {
+		...updateDestination(options.url, "/<release-asset>"),
+		timeout_ms: BINARY_DOWNLOAD_TIMEOUT_MS,
+		expected_bytes: options.expectedSize,
+		bytes: 0,
+		failure_stage: "temp_cleanup",
+	};
+	return observeUpdateStage(
+		"binary_download",
+		async () => {
+			const fetchImpl = options.fetchImpl ?? fetch;
+			await observeUpdateStage("download_temp_cleanup", () => unlinkIfExists(options.targetPath));
+			fields.failure_stage = "request";
 
-	let response: Response;
-	try {
-		response = await fetchImpl(options.url, {
-			redirect: "follow",
-			signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
-	}
-	if (!response.ok) {
-		const detail = await responseBodyDetail(response);
-		throw new Error(`Download failed: HTTP ${httpStatusText(response)} for ${options.url}${detail}`);
-	}
-	if (!response.body) {
-		throw new Error(`Download failed: response has no body for ${options.url}`);
-	}
-
-	const hash = new Bun.SHA256();
-	let size = 0;
-	const progress = downloadProgressBar();
-	const verifier = new Transform({
-		transform(chunk, _encoding, callback) {
-			size += chunk.byteLength;
-			if (size > options.expectedSize) {
-				callback(
-					new Error(
-						`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
-					),
-				);
-				return;
+			let response: Response;
+			try {
+				response = await fetchImpl(options.url, {
+					redirect: "follow",
+					signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
+				});
+			} catch (err) {
+				if (isTimeoutError(err)) {
+					throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+				}
+				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+				throw err;
 			}
-			hash.update(chunk);
-			progress.update(size, options.expectedSize);
-			callback(null, chunk);
-		},
-	});
+			fields.status = response.status;
+			updateEvent(
+				"download_response",
+				response.ok ? "completed" : "failed",
+				{ status: response.status },
+				response.ok ? "info" : "error",
+			);
+			if (!response.ok) {
+				const detail = await responseBodyDetail(response);
+				throw new Error(`Download failed: HTTP ${httpStatusText(response)} for ${options.url}${detail}`);
+			}
+			if (!response.body) {
+				throw new Error(`Download failed: response has no body for ${options.url}`);
+			}
 
-	try {
-		await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
-		const digest = `sha256:${hash.digest("hex")}`;
-		if (size !== options.expectedSize) {
-			throw new Error(`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`);
-		}
-		if (digest !== options.expectedDigest) {
-			throw new Error(`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`);
-		}
-		await fs.promises.chmod(options.targetPath, 0o755);
-	} catch (err) {
-		await unlinkIfExists(options.targetPath);
-		if (isTimeoutError(err)) {
-			throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
-	} finally {
-		progress.finish();
-	}
+			const hash = new Bun.SHA256();
+			let size = 0;
+			const progress = downloadProgressBar();
+			fields.failure_stage = "stream";
+			const verifier = new Transform({
+				transform(chunk, _encoding, callback) {
+					size += chunk.byteLength;
+					if (size > options.expectedSize) {
+						callback(
+							new Error(
+								`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
+							),
+						);
+						return;
+					}
+					hash.update(chunk);
+					progress.update(size, options.expectedSize);
+					callback(null, chunk);
+				},
+			});
+
+			try {
+				await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
+				fields.bytes = size;
+				fields.failure_stage = "size_verification";
+				const digest = `sha256:${hash.digest("hex")}`;
+				fields.digest_match = digest === options.expectedDigest;
+				if (size !== options.expectedSize) {
+					throw new Error(
+						`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`,
+					);
+				}
+				fields.failure_stage = "digest_verification";
+				if (digest !== options.expectedDigest) {
+					throw new Error(
+						`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`,
+					);
+				}
+				fields.failure_stage = "chmod";
+				await fs.promises.chmod(options.targetPath, 0o755);
+			} catch (err) {
+				fields.bytes = size;
+				const cancelled = err instanceof Error && err.name === "AbortError" && !isTimeoutError(err);
+				updateEvent(
+					"download_data",
+					cancelled ? "cancelled" : "failed",
+					{ ...fields, timed_out: isTimeoutError(err), ...logger.diagnosticError(err) },
+					cancelled ? "info" : "error",
+				);
+				await observeUpdateStage("download_failure_cleanup", () => unlinkIfExists(options.targetPath));
+				if (isTimeoutError(err)) {
+					throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+				}
+				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+				throw err;
+			} finally {
+				progress.finish();
+			}
+		},
+		fields,
+	);
 }
 
 /** Result from running the installed binary and parsing its reported version. */
@@ -1089,130 +1282,195 @@ async function fetchLatestManifest(
 	timeoutMs: number,
 	channel: UpdateChannel,
 ): Promise<{ version: string; manifest: Record<string, unknown> }> {
-	const tag = channel === "canary" ? "canary" : "latest";
-	const headers: Record<string, string> = { accept: "application/json" };
-	if (registry.authorization) headers.authorization = registry.authorization;
-	const origin = registry.url === DEFAULT_NPM_REGISTRY ? "" : ` from ${registry.url} (${registry.source})`;
-	const get = async (url: string): Promise<Response> => {
-		try {
-			return await fetch(url, { headers, signal: withTimeoutSignal(timeoutMs) });
-		} catch (err) {
-			if (isTimeoutError(err)) {
+	const summary: Record<string, unknown> = { channel, failure_stage: "request" };
+	return observeUpdateStage(
+		"manifest_resolution",
+		async () => {
+			const tag = channel === "canary" ? "canary" : "latest";
+			const headers: Record<string, string> = { accept: "application/json" };
+			if (registry.authorization) headers.authorization = registry.authorization;
+			const origin = registry.url === DEFAULT_NPM_REGISTRY ? "" : ` from ${registry.url} (${registry.source})`;
+			const get = async (url: string): Promise<Response> => {
+				const fields: Record<string, unknown> = {
+					...updateDestination(url, "/<package>/<selector>"),
+					timeout_ms: timeoutMs,
+					channel,
+				};
+				return observeUpdateStage(
+					"registry_fetch",
+					async () => {
+						try {
+							const response = await fetch(url, { headers, signal: withTimeoutSignal(timeoutMs) });
+							fields.status = response.status;
+							fields.outcome = response.ok ? "completed" : "partial";
+							updateEvent(
+								"registry_response",
+								response.ok ? "completed" : "partial",
+								{ status: response.status },
+								response.ok ? "info" : "warn",
+							);
+							return response;
+						} catch (err) {
+							if (isTimeoutError(err)) {
+								throw new Error(
+									`Timed out fetching release info for ${pkg}${origin} after ${Math.round(timeoutMs / 1000)}s`,
+									{ cause: err },
+								);
+							}
+							if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+							throw err;
+						}
+					},
+					fields,
+				);
+			};
+			const noCanary = () =>
+				new Error(`No canary release has been published for ${pkg} yet. Try \`${APP_NAME} update --stable\`.`);
+
+			const fromPackument = (packument: unknown): Record<string, unknown> => {
+				const distTags = isRecord(packument) ? packument["dist-tags"] : undefined;
+				const version = isRecord(distTags) ? distTags[tag] : undefined;
+				if (typeof version !== "string") {
+					if (channel === "canary") throw noCanary();
+					throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing dist-tags.${tag}`);
+				}
+				const versions = isRecord(packument) ? packument.versions : undefined;
+				const manifest = isRecord(versions) ? versions[version] : undefined;
+				if (!isRecord(manifest)) {
+					throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing versions.${version}`);
+				}
+				return manifest;
+			};
+			const isPackument = (body: unknown): boolean => isRecord(body) && isRecord(body["dist-tags"]);
+
+			let response = await get(npmRegistryPackageUrl(registry, pkg, tag));
+			summary.failure_stage = "decode";
+			let data: unknown;
+			let useFullPackument = false;
+			if (response.ok) {
+				try {
+					data = await response.json();
+				} catch (err) {
+					// Only a malformed body falls back; body-read timeouts and resets must surface.
+					if (!origin || !(err instanceof SyntaxError)) throw err;
+					updateEvent("registry_decode_fallback", "selected", logger.diagnosticError(err), "warn");
+					useFullPackument = true;
+				}
+				if (isPackument(data)) {
+					// Some registries (e.g. Sonatype Nexus) answer the dist-tag shortcut
+					// with the full packument instead of the tagged version manifest.
+					data = fromPackument(data);
+				} else if (origin && !(isRecord(data) && typeof data.version === "string")) {
+					useFullPackument = true;
+				}
+			} else if (origin && [400, 404, 405].includes(response.status)) {
+				useFullPackument = true;
+			}
+			if (useFullPackument) {
+				updateEvent("registry_packument_fallback", "selected", { status: response.status }, "warn");
+				summary.failure_stage = "packument";
+				// Not every registry implementation serves npmjs's `/<pkg>/<dist-tag>`
+				// shortcut; the full packument is the one endpoint all of them share.
+				response = await get(npmRegistryPackageUrl(registry, pkg));
+				data = response.ok ? fromPackument(await response.json()) : undefined;
+			}
+			summary.failure_stage = "manifest_validation";
+			if (!response.ok) {
+				if (response.status === 404 && channel === "canary") throw noCanary();
+				const authHint =
+					response.status === 401 || response.status === 403
+						? "; check the registry credentials in your .npmrc"
+						: "";
+				const detail = await responseBodyDetail(response);
 				throw new Error(
-					`Timed out fetching release info for ${pkg}${origin} after ${Math.round(timeoutMs / 1000)}s`,
-					{ cause: err },
+					`Failed to fetch release info for ${pkg}${origin}: HTTP ${httpStatusText(response)}${detail}${authHint}`,
 				);
 			}
-			if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-			throw err;
-		}
-	};
-	const noCanary = () =>
-		new Error(`No canary release has been published for ${pkg} yet. Try \`${APP_NAME} update --stable\`.`);
 
-	const fromPackument = (packument: unknown): Record<string, unknown> => {
-		const distTags = isRecord(packument) ? packument["dist-tags"] : undefined;
-		const version = isRecord(distTags) ? distTags[tag] : undefined;
-		if (typeof version !== "string") {
-			if (channel === "canary") throw noCanary();
-			throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing dist-tags.${tag}`);
-		}
-		const versions = isRecord(packument) ? packument.versions : undefined;
-		const manifest = isRecord(versions) ? versions[version] : undefined;
-		if (!isRecord(manifest)) {
-			throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing versions.${version}`);
-		}
-		return manifest;
-	};
-	const isPackument = (body: unknown): boolean => isRecord(body) && isRecord(body["dist-tags"]);
-
-	let response = await get(npmRegistryPackageUrl(registry, pkg, tag));
-	let data: unknown;
-	let useFullPackument = false;
-	if (response.ok) {
-		try {
-			data = await response.json();
-		} catch (err) {
-			// Only a malformed body falls back; body-read timeouts and resets must surface.
-			if (!origin || !(err instanceof SyntaxError)) throw err;
-			useFullPackument = true;
-		}
-		if (isPackument(data)) {
-			// Some registries (e.g. Sonatype Nexus) answer the dist-tag shortcut
-			// with the full packument instead of the tagged version manifest.
-			data = fromPackument(data);
-		} else if (origin && !(isRecord(data) && typeof data.version === "string")) {
-			useFullPackument = true;
-		}
-	} else if (origin && [400, 404, 405].includes(response.status)) {
-		useFullPackument = true;
-	}
-	if (useFullPackument) {
-		// Not every registry implementation serves npmjs's `/<pkg>/<dist-tag>`
-		// shortcut; the full packument is the one endpoint all of them share.
-		response = await get(npmRegistryPackageUrl(registry, pkg));
-		data = response.ok ? fromPackument(await response.json()) : undefined;
-	}
-	if (!response.ok) {
-		if (response.status === 404 && channel === "canary") throw noCanary();
-		const authHint =
-			response.status === 401 || response.status === 403 ? "; check the registry credentials in your .npmrc" : "";
-		const detail = await responseBodyDetail(response);
-		throw new Error(
-			`Failed to fetch release info for ${pkg}${origin}: HTTP ${httpStatusText(response)}${detail}${authHint}`,
-		);
-	}
-
-	if (!isRecord(data) || typeof data.version !== "string") {
-		throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing version`);
-	}
-	return { version: data.version, manifest: data };
+			if (!isRecord(data) || typeof data.version !== "string") {
+				throw new Error(`Malformed npm registry response for ${pkg}${origin}: missing version`);
+			}
+			summary.version = diagnosticVersion(data.version);
+			return { version: data.version, manifest: data };
+		},
+		summary,
+	);
 }
 /** Resolve the latest published release for a binary-only GitHub distribution. */
 export async function getLatestGitHubRelease(
 	repository: string,
 	timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS,
 ): Promise<ReleaseInfo> {
-	let response: Response;
-	try {
-		const headers: Record<string, string> = {
-			Accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2022-11-28",
-		};
-		const githubToken = await resolveGitHubToken();
-		if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
-		response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
-			headers,
-			signal: withTimeoutSignal(timeoutMs),
-		});
-	} catch (err) {
-		if (isTimeoutError(err)) {
-			throw new Error(`Timed out fetching release info for ${repository} after ${Math.round(timeoutMs / 1000)}s`, {
-				cause: err,
-			});
-		}
-		if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-		throw err;
-	}
-	if (!response.ok) {
-		const detail = await responseBodyDetail(response);
-		throw new Error(`Failed to fetch release info for ${repository}: HTTP ${httpStatusText(response)}${detail}`);
-	}
-
-	const data: unknown = await response.json();
-	const tag = isRecord(data) && typeof data.tag_name === "string" ? data.tag_name : "";
-	const version = tag.startsWith("v") ? tag.slice(1) : "";
-	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-		throw new Error(`Malformed GitHub release response for ${repository}: invalid tag_name`);
-	}
-	return {
-		tag,
-		version,
-		dist: "binary",
-		packages: { ...CURRENT_PACKAGES },
-		// GitHub binary installs never route through bun/npm, so no registry pin applies.
-		registry: "",
+	const fields: Record<string, unknown> = {
+		...updateDestination(`${GITHUB_API}/repos/${repository}/releases/latest`, "/repos/<repository>/releases/latest"),
+		timeout_ms: timeoutMs,
 	};
+	return observeUpdateStage(
+		"latest_github_release",
+		async () => {
+			let response: Response;
+			try {
+				const headers: Record<string, string> = {
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": "2022-11-28",
+				};
+				const githubToken = await resolveGitHubToken();
+				if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+				fields.failure_stage = "request";
+				response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
+					headers,
+					signal: withTimeoutSignal(timeoutMs),
+				});
+			} catch (err) {
+				if (isTimeoutError(err)) {
+					throw new Error(
+						`Timed out fetching release info for ${repository} after ${Math.round(timeoutMs / 1000)}s`,
+						{
+							cause: err,
+						},
+					);
+				}
+				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
+				throw err;
+			}
+			fields.status = response.status;
+			updateEvent(
+				"metadata_response",
+				response.ok ? "completed" : "failed",
+				{ status: response.status },
+				response.ok ? "info" : "error",
+			);
+			if (!response.ok) {
+				const detail = await responseBodyDetail(response);
+				throw new Error(
+					`Failed to fetch release info for ${repository}: HTTP ${httpStatusText(response)}${detail}`,
+				);
+			}
+
+			fields.failure_stage = "decode";
+			const data: unknown = await response.json();
+			const tag = isRecord(data) && typeof data.tag_name === "string" ? data.tag_name : "";
+			const version = tag.startsWith("v") ? tag.slice(1) : "";
+			fields.failure_stage = "release_tag_validation";
+			if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+				throw new Error(`Malformed GitHub release response for ${repository}: invalid tag_name`);
+			}
+			updateEvent("release_selected", "completed", {
+				version: diagnosticVersion(version),
+				channel: "stable",
+				distribution: "binary",
+			});
+			return {
+				tag,
+				version,
+				dist: "binary",
+				packages: { ...CURRENT_PACKAGES },
+				// GitHub binary installs never route through bun/npm, so no registry pin applies.
+				registry: "",
+			};
+		},
+		fields,
+	);
 }
 
 /**
@@ -1227,39 +1485,52 @@ export async function getLatestGitHubRelease(
 export async function getLatestRelease(
 	options: { timeoutMs?: number; channel?: UpdateChannel; registries?: NpmRegistryResolver } = {},
 ): Promise<ReleaseInfo> {
-	if (UPDATE_REPOSITORY) {
-		if (options.channel === "canary") {
-			throw new CanaryChannelUnavailableError(
-				`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`,
-			);
-		}
-		return getLatestGitHubRelease(UPDATE_REPOSITORY, options.timeoutMs);
-	}
+	return observeUpdateStage(
+		"release_resolution",
+		async () => {
+			if (UPDATE_REPOSITORY) {
+				if (options.channel === "canary") {
+					throw new CanaryChannelUnavailableError(
+						`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`,
+					);
+				}
+				return getLatestGitHubRelease(UPDATE_REPOSITORY, options.timeoutMs);
+			}
 
-	const timeoutMs = options.timeoutMs ?? RELEASE_METADATA_TIMEOUT_MS;
-	const channel = options.channel ?? "stable";
-	const registries = options.registries ?? (await loadNpmRegistryResolver());
-	const packages: ReleasePackages = { ...CURRENT_PACKAGES };
-	const visited = new Set([packages.pkg]);
-	let registry = registries(packages.pkg);
-	let latest = await fetchLatestManifest(packages.pkg, registry, timeoutMs, channel);
-	for (let hop = 0; hop < MAX_RENAME_HOPS; hop++) {
-		const rename = resolveReleaseRename(latest.manifest);
-		if (!rename || visited.has(rename.pkg)) break;
-		visited.add(rename.pkg);
-		packages.pkg = rename.pkg;
-		if (rename.natives) packages.natives = rename.natives;
-		registry = registries(packages.pkg);
-		latest = await fetchLatestManifest(packages.pkg, registry, timeoutMs, channel);
-	}
+			const timeoutMs = options.timeoutMs ?? RELEASE_METADATA_TIMEOUT_MS;
+			const channel = options.channel ?? "stable";
+			const registries = options.registries ?? (await loadNpmRegistryResolver());
+			const packages: ReleasePackages = { ...CURRENT_PACKAGES };
+			const visited = new Set([packages.pkg]);
+			let registry = registries(packages.pkg);
+			let latest = await fetchLatestManifest(packages.pkg, registry, timeoutMs, channel);
+			for (let hop = 0; hop < MAX_RENAME_HOPS; hop++) {
+				const rename = resolveReleaseRename(latest.manifest);
+				if (!rename || visited.has(rename.pkg)) break;
+				visited.add(rename.pkg);
+				updateEvent("rename_pointer", "completed", { hop: hop + 1, natives_renamed: rename.natives !== undefined });
+				packages.pkg = rename.pkg;
+				if (rename.natives) packages.natives = rename.natives;
+				registry = registries(packages.pkg);
+				latest = await fetchLatestManifest(packages.pkg, registry, timeoutMs, channel);
+			}
 
-	return {
-		tag: `v${latest.version}`,
-		version: latest.version,
-		dist: resolveReleaseDist(latest.manifest),
-		packages,
-		registry: registry.url,
-	};
+			updateEvent("release_selected", "completed", {
+				version: diagnosticVersion(latest.version),
+				channel,
+				rename_hops: visited.size - 1,
+				distribution: resolveReleaseDist(latest.manifest),
+			});
+			return {
+				tag: `v${latest.version}`,
+				version: latest.version,
+				dist: resolveReleaseDist(latest.manifest),
+				packages,
+				registry: registry.url,
+			};
+		},
+		{ channel: options.channel ?? "stable" },
+	);
 }
 
 interface BunInstallCachePruneResult {
@@ -1590,11 +1861,39 @@ export function parseReportedVersion(output: string): string | undefined {
 }
 
 async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {
+	const started = performance.now();
+	updateEvent("version_probe", "started", { executable: "update_target", argument: "--version" });
 	try {
 		const result = await $`${binaryPath} --version`.quiet().nothrow();
-		if (result.exitCode !== 0) return undefined;
-		return parseReportedVersion(result.text().trim());
-	} catch {
+		if (result.exitCode !== 0) {
+			updateEvent(
+				"version_probe",
+				"partial",
+				{ exit_code: result.exitCode, elapsed_ms: performance.now() - started },
+				"warn",
+			);
+			return undefined;
+		}
+		const version = parseReportedVersion(result.text().trim());
+		updateEvent(
+			"version_probe",
+			version === undefined ? "partial" : "completed",
+			{
+				exit_code: result.exitCode,
+				version: diagnosticVersion(version),
+				version_recognized: version !== undefined,
+				elapsed_ms: performance.now() - started,
+			},
+			version === undefined ? "warn" : "info",
+		);
+		return version;
+	} catch (error) {
+		updateEvent(
+			"version_probe",
+			"partial",
+			{ elapsed_ms: performance.now() - started, ...logger.diagnosticError(error) },
+			"warn",
+		);
 		return undefined;
 	}
 }
@@ -1604,6 +1903,16 @@ async function reportedVersionAtPath(binaryPath: string): Promise<string | undef
  */
 async function verifyBinaryAtPath(binaryPath: string, expectedVersion: string): Promise<InstalledVersionVerification> {
 	const actual = await reportedVersionAtPath(binaryPath);
+	updateEvent(
+		"version_verification",
+		actual === expectedVersion ? "completed" : "partial",
+		{
+			expected_version: diagnosticVersion(expectedVersion),
+			actual_version: diagnosticVersion(actual),
+			version_match: actual === expectedVersion,
+		},
+		actual === expectedVersion ? "info" : "warn",
+	);
 	return { ok: actual === expectedVersion, actual, path: binaryPath };
 }
 
@@ -1650,6 +1959,17 @@ function formatVerificationFailure(result: InstalledVersionVerification, expecte
  * Print post-update verification result.
  */
 function printVerificationResult(result: InstalledVersionVerification, expectedVersion: string): void {
+	updateEvent(
+		"path_verification",
+		result.ok ? "completed" : "partial",
+		{
+			version_match: result.ok,
+			expected_version: diagnosticVersion(expectedVersion),
+			actual_version: diagnosticVersion(result.actual),
+			launcher_present: result.path !== undefined,
+		},
+		result.ok ? "info" : "warn",
+	);
 	if (result.ok) {
 		printVerifiedVersion(expectedVersion, result.path);
 		return;
@@ -1685,7 +2005,9 @@ async function unlinkIfExists(filePath: string): Promise<void> {
  * on the next update once it is no longer in use. Returns whether the file is
  * gone.
  */
-async function removeBackupBestEffort(filePath: string): Promise<boolean> {
+async function removeBackupBestEffort(filePath: string, diagnostic = true): Promise<boolean> {
+	const started = performance.now();
+	if (diagnostic) updateEvent("backup_cleanup", "started");
 	// macOS only, `.bak` only: a `.new` temp file is a download in progress,
 	// never an installed image, and Windows/Linux locking is already handled by
 	// the swallow below — so both stay ungated.
@@ -1698,15 +2020,41 @@ async function removeBackupBestEffort(filePath: string): Promise<boolean> {
 		try {
 			const result = await $`/usr/sbin/lsof -t -- ${filePath}`.quiet().nothrow();
 			provenUnused = result.exitCode === 1 && result.stdout.length === 0 && result.stderr.length === 0;
-		} catch {
+		} catch (error) {
+			if (diagnostic) updateEvent("backup_usage_probe", "partial", logger.diagnosticError(error), "warn");
 			// lsof missing or failed to spawn — retain conservatively.
 		}
-		if (!provenUnused) return false;
+		if (!provenUnused) {
+			if (diagnostic)
+				updateEvent(
+					"backup_cleanup",
+					"partial",
+					{ backup_retained: true, reason: "usage_not_proven_absent", elapsed_ms: performance.now() - started },
+					"warn",
+				);
+			return false;
+		}
 	}
 	try {
 		await fs.promises.unlink(filePath);
+		if (diagnostic)
+			updateEvent("backup_cleanup", "completed", {
+				backup_retained: false,
+				elapsed_ms: performance.now() - started,
+			});
 		return true;
 	} catch (err) {
+		if (diagnostic)
+			updateEvent(
+				"backup_cleanup",
+				isEnoent(err) ? "completed" : "partial",
+				{
+					backup_retained: !isEnoent(err),
+					elapsed_ms: performance.now() - started,
+					...(!isEnoent(err) ? logger.diagnosticError(err) : {}),
+				},
+				isEnoent(err) ? "info" : "warn",
+			);
 		return isEnoent(err);
 	}
 }
@@ -1731,84 +2079,154 @@ async function removeBackupBestEffort(filePath: string): Promise<boolean> {
  * orphaned files cleaned up.
  */
 export async function sweepStaleUpdateArtifacts(targetPath: string): Promise<void> {
-	const dir = path.dirname(targetPath);
-	const base = path.basename(targetPath);
-	let entries: string[];
-	try {
-		entries = await fs.promises.readdir(dir);
-	} catch {
-		return;
-	}
-	const now = Date.now();
-	for (const entry of entries) {
-		if (!entry.startsWith(`${base}.`)) continue;
-		const suffix = entry.endsWith(".bak") ? ".bak" : entry.endsWith(".new") ? ".new" : undefined;
-		if (!suffix) continue;
-		// Legacy "<base><suffix>" → empty middle; new "<base>.<timestamp>.<pid><suffix>"
-		// → dot-separated numeric run. Anything else is an unrelated file.
-		const middle = entry.slice(base.length + 1, entry.length - suffix.length);
-		if (middle.length > 0 && !/^\d+(\.\d+)*$/.test(middle)) continue;
-		const full = path.join(dir, entry);
-		if (suffix === ".new") {
-			// A temp file may belong to a concurrent update still downloading, so
-			// only reap ones older than the download window.
-			let mtimeMs: number;
+	const fields: Record<string, unknown> = { artifact_count: 0, removed_count: 0, retained_count: 0 };
+	return observeUpdateStage(
+		"artifact_sweep",
+		async () => {
+			const dir = path.dirname(targetPath);
+			const base = path.basename(targetPath);
+			let entries: string[];
 			try {
-				mtimeMs = (await fs.promises.stat(full)).mtimeMs;
-			} catch {
-				continue;
+				entries = await fs.promises.readdir(dir);
+			} catch (error) {
+				fields.outcome = "partial";
+				updateEvent(
+					"artifact_scan",
+					isEnoent(error) ? "skipped" : "partial",
+					logger.diagnosticError(error),
+					isEnoent(error) ? "info" : "warn",
+				);
+				return;
 			}
-			if (now - mtimeMs < BINARY_DOWNLOAD_TIMEOUT_MS) continue;
-		}
-		await removeBackupBestEffort(full);
-	}
+			const now = Date.now();
+			for (const entry of entries) {
+				if (!entry.startsWith(`${base}.`)) continue;
+				const suffix = entry.endsWith(".bak") ? ".bak" : entry.endsWith(".new") ? ".new" : undefined;
+				if (!suffix) continue;
+				// Legacy "<base><suffix>" → empty middle; new "<base>.<timestamp>.<pid><suffix>"
+				// → dot-separated numeric run. Anything else is an unrelated file.
+				const middle = entry.slice(base.length + 1, entry.length - suffix.length);
+				if (middle.length > 0 && !/^\d+(\.\d+)*$/.test(middle)) continue;
+				fields.artifact_count = Number(fields.artifact_count) + 1;
+				const full = path.join(dir, entry);
+				if (suffix === ".new") {
+					// A temp file may belong to a concurrent update still downloading, so
+					// only reap ones older than the download window.
+					let mtimeMs: number;
+					try {
+						mtimeMs = (await fs.promises.stat(full)).mtimeMs;
+					} catch (error) {
+						fields.retained_count = Number(fields.retained_count) + 1;
+						fields.outcome = "partial";
+						updateEvent("artifact_stat", "partial", logger.diagnosticError(error), "warn");
+						continue;
+					}
+					if (now - mtimeMs < BINARY_DOWNLOAD_TIMEOUT_MS) {
+						fields.retained_count = Number(fields.retained_count) + 1;
+						continue;
+					}
+				}
+				const removed = await removeBackupBestEffort(full, false);
+				const countField = removed ? "removed_count" : "retained_count";
+				fields[countField] = Number(fields[countField]) + 1;
+				if (!removed) fields.outcome = "partial";
+			}
+		},
+		fields,
+	);
 }
 
 /**
  * Atomically replace the installed binary and roll back if version verification fails.
  */
 export async function replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification> {
-	let backupReady = false;
-	try {
-		// `backupPath` is unique per attempt (see updateViaBinaryAt), so this rename
-		// never has to overwrite — or unlink — a possibly-locked leftover from an
-		// earlier run. Renaming the running executable itself is permitted on
-		// Windows; only deleting its still-mapped image is not.
-		// A missing target is tolerated: repairing a launcher that a failed
-		// package-manager reinstall removed installs the binary at a vacant
-		// path. There is then nothing to restore, so a verification failure
-		// leaves the new binary in place rather than the previous nothing.
-		try {
-			await fs.promises.rename(options.targetPath, options.backupPath);
-			backupReady = true;
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-		await fs.promises.rename(options.tempPath, options.targetPath);
+	const fields: Record<string, unknown> = {
+		expected_version: diagnosticVersion(options.expectedVersion),
+		old_binary_touched: false,
+		backup_retained: false,
+		temp_retained: "unknown",
+		candidate_installed: false,
+		installed_verified: false,
+	};
+	return observeUpdateStage(
+		"binary_replacement",
+		async () => {
+			let backupReady = false;
+			try {
+				// `backupPath` is unique per attempt (see updateViaBinaryAt), so this rename
+				// never has to overwrite — or unlink — a possibly-locked leftover from an
+				// earlier run. Renaming the running executable itself is permitted on
+				// Windows; only deleting its still-mapped image is not.
+				// A missing target is tolerated: repairing a launcher that a failed
+				// package-manager reinstall removed installs the binary at a vacant
+				// path. There is then nothing to restore, so a verification failure
+				// leaves the new binary in place rather than the previous nothing.
+				try {
+					await observeUpdateStage(
+						"binary_aside",
+						() => fs.promises.rename(options.targetPath, options.backupPath),
+						{},
+						{ missingExpected: true },
+					);
+					backupReady = true;
+					fields.old_binary_touched = true;
+					fields.backup_retained = true;
+				} catch (err) {
+					if (!isEnoent(err)) throw err;
+					updateEvent("binary_aside", "skipped", { reason: "target_missing", old_binary_touched: false });
+				}
+				await observeUpdateStage("binary_replace", () => fs.promises.rename(options.tempPath, options.targetPath));
+				fields.temp_retained = false;
+				fields.candidate_installed = true;
 
-		const verification = await options.verifyInstalledVersion(options.expectedVersion);
-		if (!verification.ok) {
-			throw new Error(
-				`${formatVerificationFailure(verification, options.expectedVersion)}; restored previous ${APP_NAME} binary`,
-			);
-		}
+				const verification = await observeUpdateStage("installed_verification", () =>
+					options.verifyInstalledVersion(options.expectedVersion),
+				);
+				updateEvent(
+					"installed_version",
+					verification.ok ? "completed" : "failed",
+					{
+						version_match: verification.ok,
+						actual_version: diagnosticVersion(verification.actual),
+					},
+					verification.ok ? "info" : "error",
+				);
+				if (!verification.ok) {
+					throw new Error(
+						`${formatVerificationFailure(verification, options.expectedVersion)}; restored previous ${APP_NAME} binary`,
+					);
+				}
 
-		backupReady = false;
-		// Swap done and verified. On Windows the backup is still the running
-		// process image and cannot be unlinked until this process exits, and on
-		// macOS unlinking the still-mapped backup would break the live image's
-		// TCC permission attribution, so either way a failure here must NOT fail
-		// an otherwise-successful update.
-		await removeBackupBestEffort(options.backupPath);
-		return verification;
-	} catch (err) {
-		if (backupReady) {
-			await unlinkIfExists(options.targetPath);
-			await fs.promises.rename(options.backupPath, options.targetPath);
-		}
-		await unlinkIfExists(options.tempPath);
-		throw err;
-	}
+				fields.installed_verified = true;
+				backupReady = false;
+				// Swap done and verified. On Windows the backup is still the running
+				// process image and cannot be unlinked until this process exits, and on
+				// macOS unlinking the still-mapped backup would break the live image's
+				// TCC permission attribution, so either way a failure here must NOT fail
+				// an otherwise-successful update.
+				fields.backup_retained = !(await removeBackupBestEffort(options.backupPath));
+				updateEvent("replacement_state", "completed", { ...fields, installed_verified: true });
+				return verification;
+			} catch (err) {
+				updateEvent("replacement_state", "failed", { ...fields, ...logger.diagnosticError(err) }, "error");
+				if (backupReady) {
+					await observeUpdateStage("rollback_remove_candidate", () => unlinkIfExists(options.targetPath));
+					fields.candidate_installed = false;
+					await observeUpdateStage(
+						"binary_rollback",
+						() => fs.promises.rename(options.backupPath, options.targetPath),
+						{ backup_retained_on_failure: true },
+					);
+					fields.backup_retained = false;
+					updateEvent("replacement_state", "restored", { ...fields, old_binary_restored: true });
+				}
+				await observeUpdateStage("replacement_temp_cleanup", () => unlinkIfExists(options.tempPath));
+				fields.temp_retained = false;
+				throw err;
+			}
+		},
+		fields,
+	);
 }
 
 function buildVersionedPackageInstallArgs(
@@ -2002,33 +2420,82 @@ function packageManagerMigrationSteps(manager: "bun" | "npm", release: ReleaseIn
  *    and verify again; only a repeated failure aborts, with a recovery hint.
  */
 export async function migrateRenamedInstall(release: ReleaseInfo, steps: RenameMigrationSteps): Promise<void> {
-	console.log(chalk.dim(`npm package renamed to ${release.packages.pkg}; migrating this install.`));
-	const installExit = await steps.install();
-	if (installExit !== 0) {
-		throw new Error(
-			`install of ${release.packages.pkg} failed with exit code ${installExit}; the existing install was left untouched`,
-		);
-	}
+	const fields: Record<string, unknown> = {
+		version: diagnosticVersion(release.version),
+		old_package_cleanup_attempted: false,
+	};
+	return observeUpdateStage(
+		"rename_migration",
+		async () => {
+			console.log(chalk.dim(`npm package renamed to ${release.packages.pkg}; migrating this install.`));
+			const installExit = await observeUpdateStage("rename_install", () => steps.install(), { attempt: 1 });
+			updateEvent(
+				"rename_install_result",
+				installExit === 0 ? "completed" : "failed",
+				{ attempt: 1, exit_code: installExit, old_install_untouched: true },
+				installExit === 0 ? "info" : "error",
+			);
+			if (installExit !== 0) {
+				throw new Error(
+					`install of ${release.packages.pkg} failed with exit code ${installExit}; the existing install was left untouched`,
+				);
+			}
 
-	const removeExit = await steps.removeOld();
-	if (removeExit !== 0) {
-		console.log(chalk.yellow(`Warning: could not remove the old ${PACKAGE} package; remove it manually later.`));
-	}
+			fields.old_package_cleanup_attempted = true;
+			const removeExit = await observeUpdateStage("rename_remove_old", () => steps.removeOld());
+			updateEvent(
+				"rename_remove_result",
+				removeExit === 0 ? "completed" : "partial",
+				{ exit_code: removeExit, old_package_retained: removeExit !== 0 },
+				removeExit === 0 ? "info" : "warn",
+			);
+			if (removeExit !== 0) fields.outcome = "partial";
+			if (removeExit !== 0) {
+				console.log(
+					chalk.yellow(`Warning: could not remove the old ${PACKAGE} package; remove it manually later.`),
+				);
+			}
 
-	let verification = await steps.verify();
-	if (!verification.ok) {
-		// Removing the old package may have taken the shared bin link with it;
-		// reinstalling the new package restores the link.
-		if ((await steps.install()) === 0) {
-			verification = await steps.verify();
-		}
-	}
-	if (!verification.ok) {
-		throw new Error(
-			`${formatVerificationFailure(verification, release.version)}; reinstall with: ${installerHint()}`,
-		);
-	}
-	printVerifiedVersion(release.version);
+			let verification = await observeUpdateStage("rename_verify", () => steps.verify(), { attempt: 1 });
+			updateEvent(
+				"rename_version",
+				verification.ok ? "completed" : "partial",
+				{ attempt: 1, version_match: verification.ok, actual_version: diagnosticVersion(verification.actual) },
+				verification.ok ? "info" : "warn",
+			);
+			if (!verification.ok) {
+				// Removing the old package may have taken the shared bin link with it;
+				// reinstalling the new package restores the link.
+				const repairExit = await observeUpdateStage("rename_reinstall", () => steps.install(), { attempt: 2 });
+				updateEvent(
+					"rename_reinstall_result",
+					repairExit === 0 ? "completed" : "failed",
+					{ attempt: 2, exit_code: repairExit },
+					repairExit === 0 ? "info" : "error",
+				);
+				if (repairExit === 0) {
+					verification = await observeUpdateStage("rename_verify", () => steps.verify(), { attempt: 2 });
+					updateEvent(
+						"rename_version",
+						verification.ok ? "completed" : "failed",
+						{
+							attempt: 2,
+							version_match: verification.ok,
+							actual_version: diagnosticVersion(verification.actual),
+						},
+						verification.ok ? "info" : "error",
+					);
+				}
+			}
+			if (!verification.ok) {
+				throw new Error(
+					`${formatVerificationFailure(verification, release.version)}; reinstall with: ${installerHint()}`,
+				);
+			}
+			printVerifiedVersion(release.version);
+		},
+		fields,
+	);
 }
 
 /**
@@ -2048,17 +2515,33 @@ async function updateViaBun(release: ReleaseInfo): Promise<InstalledVersionVerif
 			registry: release.registry,
 		});
 		const result = await $`bun ${args}`.nothrow();
+		updateEvent(
+			"manager_process",
+			result.exitCode === 0 ? "completed" : "partial",
+			{ manager: "bun", exit_code: result.exitCode },
+			result.exitCode === 0 ? "info" : "warn",
+		);
 		if (result.exitCode !== 0) {
 			throw new Error(`bun install failed with exit code ${result.exitCode}`);
 		}
 		verification = await verifyInstalledVersion(release.version);
 	}
 	try {
-		const pruneResult = await pruneBunCacheAfterGlobalInstall();
+		const pruneResult = await observeUpdateStage(
+			"bun_cache_cleanup",
+			() => pruneBunCacheAfterGlobalInstall(),
+			{},
+			{ recoverable: true },
+		);
+		updateEvent("bun_cache_cleanup_result", pruneResult ? "completed" : "skipped", {
+			scanned_packages: pruneResult?.scannedPackages,
+			removed_entries: pruneResult?.removedEntries,
+		});
 		if (pruneResult && pruneResult.removedEntries > 0) {
 			console.log(chalk.dim(`Pruned ${pruneResult.removedEntries} stale Bun cache entries`));
 		}
 	} catch (err) {
+		updateEvent("bun_cache_cleanup_result", "partial", logger.diagnosticError(err), "warn");
 		console.log(chalk.yellow(`Warning: could not prune stale Bun cache entries: ${err}`));
 	}
 	return verification;
@@ -2074,6 +2557,12 @@ async function updateViaNpm(release: ReleaseInfo): Promise<InstalledVersionVerif
 		registry: release.registry,
 	});
 	const result = await $`npm ${args}`.nothrow();
+	updateEvent(
+		"manager_process",
+		result.exitCode === 0 ? "completed" : "partial",
+		{ manager: "npm", exit_code: result.exitCode },
+		result.exitCode === 0 ? "info" : "warn",
+	);
 	if (result.exitCode !== 0) {
 		throw new Error(`npm install failed with exit code ${result.exitCode}`);
 	}
@@ -2140,57 +2629,114 @@ export async function updateViaManager(
 	launcherPath: string | undefined,
 	steps: ManagerUpdateSteps,
 ): Promise<void> {
-	let installError: unknown;
-	let verification: InstalledVersionVerification | undefined;
-	try {
-		verification = await steps.install();
-		// A rename migration verifies and reports on its own.
-		if (!verification) return;
-	} catch (err) {
-		installError = err;
-	}
-	const result = verification ?? (await steps.verify());
-	const launcherIsBroken = result.path === undefined || result.actual === undefined;
-	const launcherIsOlder =
-		installError === undefined && result.actual !== undefined && compareVersions(result.actual, release.version) < 0;
-	const launcherNeedsRepair = !result.ok && (launcherIsBroken || launcherIsOlder);
-	if (!launcherNeedsRepair) {
-		if (installError) throw installError;
-		printVerificationResult(result, release.version);
-		return;
-	}
-	if (!launcherPath) {
-		throw installError ?? new Error(formatVerificationFailure(result, release.version));
-	}
-	console.log(
-		chalk.yellow(
-			`\n${steps.manager} did not install a working ${APP_NAME} ${release.version} launcher (${formatVerificationFailure(result, release.version)}); installing the standalone binary at ${launcherPath}.`,
-		),
-	);
-	try {
-		await steps.repair(launcherPath);
-	} catch (err) {
-		throw new Error(`${steps.manager} update did not produce a working launcher and binary repair failed: ${err}`, {
-			cause: installError ?? err,
-		});
-	}
-	console.log(
-		chalk.yellow(
-			`This install is no longer managed by ${steps.manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
-		),
+	const fields: Record<string, unknown> = {
+		manager: steps.manager === "bun" || steps.manager === "npm" ? steps.manager : "other",
+		version: diagnosticVersion(release.version),
+		launcher_path_known: launcherPath !== undefined,
+	};
+	return observeUpdateStage(
+		"manager_update",
+		async () => {
+			let installError: unknown;
+			let verification: InstalledVersionVerification | undefined;
+			try {
+				verification = await observeUpdateStage(
+					"manager_install",
+					() => steps.install(),
+					{},
+					{ recoverable: true },
+				);
+				// A rename migration verifies and reports on its own.
+				if (!verification) return;
+			} catch (err) {
+				installError = err;
+				updateEvent("manager_install_result", "partial", logger.diagnosticError(err), "warn");
+			}
+			const result = verification ?? (await observeUpdateStage("manager_verify", () => steps.verify()));
+			updateEvent(
+				"manager_version",
+				result.ok ? "completed" : "partial",
+				{
+					version_match: result.ok,
+					actual_version: diagnosticVersion(result.actual),
+					launcher_present: result.path !== undefined,
+				},
+				result.ok ? "info" : "warn",
+			);
+			const launcherIsBroken = result.path === undefined || result.actual === undefined;
+			const launcherIsOlder =
+				installError === undefined &&
+				result.actual !== undefined &&
+				compareVersions(result.actual, release.version) < 0;
+			const launcherNeedsRepair = !result.ok && (launcherIsBroken || launcherIsOlder);
+			if (!launcherNeedsRepair) {
+				if (installError) throw installError;
+				if (!result.ok) fields.outcome = "partial";
+				printVerificationResult(result, release.version);
+				return;
+			}
+			if (!launcherPath) {
+				throw installError ?? new Error(formatVerificationFailure(result, release.version));
+			}
+			console.log(
+				chalk.yellow(
+					`\n${steps.manager} did not install a working ${APP_NAME} ${release.version} launcher (${formatVerificationFailure(result, release.version)}); installing the standalone binary at ${launcherPath}.`,
+				),
+			);
+			updateEvent("manager_fallback", "started", {
+				reason: launcherIsBroken ? "launcher_broken" : "launcher_older",
+				install_failed: installError !== undefined,
+			});
+			try {
+				await observeUpdateStage("manager_binary_repair", () => steps.repair(launcherPath));
+				updateEvent("manager_fallback", "completed", { managed_install: false });
+			} catch (err) {
+				updateEvent("manager_fallback", "failed", logger.diagnosticError(err), "error");
+				throw new Error(
+					`${steps.manager} update did not produce a working launcher and binary repair failed: ${err}`,
+					{
+						cause: installError ?? err,
+					},
+				);
+			}
+			console.log(
+				chalk.yellow(
+					`This install is no longer managed by ${steps.manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
+				),
+			);
+		},
+		fields,
 	);
 }
 
 async function updateViaHomebrew(expectedVersion: string, force: boolean): Promise<void> {
 	console.log(chalk.dim("Updating Homebrew formulae..."));
-	const update = await $`brew update`.nothrow();
+	const update = await observeUpdateStage("homebrew_catalog_update", async () => {
+		const result = await $`brew update`.nothrow();
+		updateEvent(
+			"homebrew_catalog_exit",
+			result.exitCode === 0 ? "completed" : "failed",
+			{ exit_code: result.exitCode },
+			result.exitCode === 0 ? "info" : "error",
+		);
+		return result;
+	});
 	if (update.exitCode !== 0) {
 		throw new Error(`brew update failed with exit code ${update.exitCode}`);
 	}
 
 	console.log(chalk.dim("Updating via Homebrew..."));
 	const args = buildHomebrewUpdateArgs(force);
-	const result = await $`brew ${args}`.nothrow();
+	const result = await observeUpdateStage("homebrew_install", async () => {
+		const installed = await $`brew ${args}`.nothrow();
+		updateEvent(
+			"homebrew_install_exit",
+			installed.exitCode === 0 ? "completed" : "failed",
+			{ exit_code: installed.exitCode },
+			installed.exitCode === 0 ? "info" : "error",
+		);
+		return installed;
+	});
 	if (result.exitCode !== 0) {
 		throw new Error(`brew ${args[0]} failed with exit code ${result.exitCode}`);
 	}
@@ -2201,17 +2747,41 @@ async function updateViaHomebrew(expectedVersion: string, force: boolean): Promi
 async function updateViaMise(expectedVersion: string, force: boolean): Promise<void> {
 	console.log(chalk.dim("Updating via mise..."));
 	const env = buildMiseUpdateEnv();
-	const help = await $`mise upgrade --help`.env(env).quiet().nothrow();
+	const help = await observeUpdateStage("mise_capability_probe", () =>
+		$`mise upgrade --help`.env(env).quiet().nothrow(),
+	);
 	const supportsReleaseAgeOverride = help.exitCode === 0 && /(?:--minimum-release-age|--before)\b/.test(help.text());
+	updateEvent("mise_capability", "completed", {
+		exit_code: help.exitCode,
+		release_age_override: supportsReleaseAgeOverride,
+	});
 	const args = buildMiseUpgradeArgs(supportsReleaseAgeOverride);
-	const result = await $`mise ${args}`.env(env).nothrow();
+	const result = await observeUpdateStage("mise_upgrade", async () => {
+		const upgraded = await $`mise ${args}`.env(env).nothrow();
+		updateEvent(
+			"mise_upgrade_exit",
+			upgraded.exitCode === 0 ? "completed" : "failed",
+			{ exit_code: upgraded.exitCode },
+			upgraded.exitCode === 0 ? "info" : "error",
+		);
+		return upgraded;
+	});
 	if (result.exitCode !== 0) {
 		throw new Error(`mise upgrade failed with exit code ${result.exitCode}`);
 	}
 
 	if (force) {
 		const forceArgs = buildMiseForceInstallArgs(expectedVersion);
-		const forceResult = await $`mise ${forceArgs}`.env(env).nothrow();
+		const forceResult = await observeUpdateStage("mise_force_install", async () => {
+			const installed = await $`mise ${forceArgs}`.env(env).nothrow();
+			updateEvent(
+				"mise_install_exit",
+				installed.exitCode === 0 ? "completed" : "failed",
+				{ exit_code: installed.exitCode },
+				installed.exitCode === 0 ? "info" : "error",
+			);
+			return installed;
+		});
 		if (forceResult.exitCode !== 0) {
 			throw new Error(`mise install --force failed with exit code ${forceResult.exitCode}`);
 		}
@@ -2245,68 +2815,85 @@ export async function updateViaBinaryAt(
 		verifyInstalledVersion?: typeof verifyInstalledVersion;
 	} = {},
 ): Promise<void> {
-	if (options.validateExistingTarget) await validateExistingUpdateTarget(targetPath);
-	const binaryName = options.binaryName ?? getBinaryName();
-	// Unique per attempt so two overlapping `omp update` runs never share a temp
-	// or backup path. A fixed temp name (`<binary>.new`) let the second run's
-	// pre-download unlink delete the first run's still-downloading temp file; the
-	// first kept writing to its open fd (size + digest still passed), then chmod
-	// hit the missing path and the update aborted (issue #8434). The backup needs
-	// the same uniqueness: a stale backup from an earlier update may still be
-	// locked (the previous process image on Windows), so a fixed name would force
-	// the move-aside rename to overwrite it. pid, timestamp, and a process-local
-	// counter keep two updates started in the same millisecond from colliding.
-	warnOnPathConflict(targetPath, resolveOmpPath());
-	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
-	const tempPath = `${targetPath}.${attempt}.new`;
-	const backupPath = `${targetPath}.${attempt}.bak`;
-	const githubToken = options.githubToken ?? (await resolveGitHubToken());
-	const asset = await getReleaseBinaryAsset(
-		expectedVersion,
-		binaryName,
-		githubToken,
-		options.fetchImpl,
-		options.allowPrerelease,
-	);
-	console.log(chalk.dim(`Downloading ${binaryName}…`));
-	await downloadVerifiedBinary({
-		url: asset.url,
-		targetPath: tempPath,
-		expectedSize: asset.size,
-		expectedDigest: asset.digest,
-		fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
-	});
-	console.log(chalk.dim(`Verified ${asset.digest}`));
+	return observeUpdateStage(
+		"binary_attempt",
+		async () => {
+			if (options.validateExistingTarget)
+				await observeUpdateStage("existing_target_validation", () => validateExistingUpdateTarget(targetPath));
+			const binaryName = options.binaryName ?? getBinaryName();
+			// Unique per attempt so two overlapping `omp update` runs never share a temp
+			// or backup path. A fixed temp name (`<binary>.new`) let the second run's
+			// pre-download unlink delete the first run's still-downloading temp file; the
+			// first kept writing to its open fd (size + digest still passed), then chmod
+			// hit the missing path and the update aborted (issue #8434). The backup needs
+			// the same uniqueness: a stale backup from an earlier update may still be
+			// locked (the previous process image on Windows), so a fixed name would force
+			// the move-aside rename to overwrite it. pid, timestamp, and a process-local
+			// counter keep two updates started in the same millisecond from colliding.
+			warnOnPathConflict(targetPath, resolveOmpPath());
+			const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
+			const tempPath = `${targetPath}.${attempt}.new`;
+			const backupPath = `${targetPath}.${attempt}.bak`;
+			const githubToken = options.githubToken ?? (await resolveGitHubToken());
+			const asset = await getReleaseBinaryAsset(
+				expectedVersion,
+				binaryName,
+				githubToken,
+				options.fetchImpl,
+				options.allowPrerelease,
+			);
+			console.log(chalk.dim(`Downloading ${binaryName}…`));
+			await downloadVerifiedBinary({
+				url: asset.url,
+				targetPath: tempPath,
+				expectedSize: asset.size,
+				expectedDigest: asset.digest,
+				fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
+			});
+			console.log(chalk.dim(`Verified ${asset.digest}`));
 
-	// Serialize the target swap and stale-artifact sweep per target so two
-	// overlapping `omp update` runs never replace the same binary concurrently
-	// or reclaim each other's live backup/temp files. The download above writes
-	// to a unique temp path and is safe to overlap; only the swap is shared.
-	const verification = await withFileLock(targetPath, async () => {
-		console.log(chalk.dim("Installing update..."));
-		const result = await replaceBinaryForUpdate({
-			targetPath,
-			tempPath,
-			backupPath,
-			expectedVersion: asset.version,
-			verifyInstalledVersion: options.verifyInstalledVersion ?? (version => verifyBinaryAtPath(targetPath, version)),
-		});
-		// The launcher is no longer bun-managed: drop bun's metadata sidecar so
-		// the next update classifies this install as a standalone binary instead
-		// of reinstalling a package that can no longer own the launcher (bun
-		// tolerates failing to overwrite the running `.exe`, so that reinstall
-		// would leave the install pinned to the old version). Done after the
-		// verified swap, so a rollback still restores a working bun shim, and
-		// best effort: a leftover sidecar only costs one misrouted classification.
-		try {
-			await unlinkIfExists(bunShimMarkerPath(targetPath));
-		} catch {}
-		// Reclaim backups from earlier updates whose owning process has since exited.
-		await sweepStaleUpdateArtifacts(targetPath);
-		return result;
-	});
-	printVerifiedVersion(asset.version, verification.path ?? targetPath);
-	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+			// Serialize the target swap and stale-artifact sweep per target so two
+			// overlapping `omp update` runs never replace the same binary concurrently
+			// or reclaim each other's live backup/temp files. The download above writes
+			// to a unique temp path and is safe to overlap; only the swap is shared.
+			const verification = await observeUpdateStage("swap_lock", () =>
+				withFileLock(targetPath, async () => {
+					console.log(chalk.dim("Installing update..."));
+					const result = await replaceBinaryForUpdate({
+						targetPath,
+						tempPath,
+						backupPath,
+						expectedVersion: asset.version,
+						verifyInstalledVersion:
+							options.verifyInstalledVersion ?? (version => verifyBinaryAtPath(targetPath, version)),
+					});
+					// The launcher is no longer bun-managed: drop bun's metadata sidecar so
+					// the next update classifies this install as a standalone binary instead
+					// of reinstalling a package that can no longer own the launcher (bun
+					// tolerates failing to overwrite the running `.exe`, so that reinstall
+					// would leave the install pinned to the old version). Done after the
+					// verified swap, so a rollback still restores a working bun shim, and
+					// best effort: a leftover sidecar only costs one misrouted classification.
+					try {
+						await observeUpdateStage(
+							"shim_marker_cleanup",
+							() => unlinkIfExists(bunShimMarkerPath(targetPath)),
+							{},
+							{ recoverable: true },
+						);
+					} catch (error) {
+						updateEvent("shim_marker_cleanup", "partial", logger.diagnosticError(error), "warn");
+					}
+					// Reclaim backups from earlier updates whose owning process has since exited.
+					await sweepStaleUpdateArtifacts(targetPath);
+					return result;
+				}),
+			);
+			printVerifiedVersion(asset.version, verification.path ?? targetPath);
+			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+		},
+		{ expected_version: diagnosticVersion(expectedVersion), allow_prerelease: options.allowPrerelease ?? false },
+	);
 }
 
 /**
@@ -2349,107 +2936,189 @@ export async function updateViaShimTakeover(
 		verifyBinary?: typeof verifyBinaryAtPath;
 	} = {},
 ): Promise<void> {
-	const binaryName = options.binaryName ?? getBinaryName();
-	const launcherDir = path.dirname(shimPath);
-	const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
-	// No PATH-conflict warning here: the comparison would always differ (the PATH
-	// entry is this launcher script, the target is its sibling `omp.exe`), while
-	// the takeover is exactly what keeps that PATH entry launching the new binary.
-	// `updateViaBinaryAt` keeps the check, where the target is a resolved install.
-	const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
-	const tempPath = `${exePath}.${attempt}.new`;
-	const githubToken = options.githubToken ?? (await resolveGitHubToken());
-	const asset = await getReleaseBinaryAsset(
-		expectedVersion,
-		binaryName,
-		githubToken,
-		options.fetchImpl,
-		options.allowPrerelease,
-	);
-	console.log(chalk.dim(`Downloading ${binaryName}…`));
-	await downloadVerifiedBinary({
-		url: asset.url,
-		targetPath: tempPath,
-		expectedSize: asset.size,
-		expectedDigest: asset.digest,
-		fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
-	});
-	console.log(chalk.dim(`Verified ${asset.digest}`));
-	const forwarded: Array<{ launcher: string; original: string }> = [];
-	const stuck: string[] = [];
-	// Serialize the launcher swap and artifact sweep so two overlapping updates
-	// never retire the same shims or reclaim a live run's backup before its
-	// verification can roll it back.
-	await withFileLock(exePath, async () => {
-		console.log(chalk.dim(`Installing ${APP_NAME}.exe beside the script launcher...`));
-		await fs.promises.rename(tempPath, exePath);
-		// Retire the shims so PATH resolution lands on the new exe. Renamed, not
-		// deleted: restorable on verification failure, and Windows permits
-		// renaming a batch file that is still executing. A shim that cannot be
-		// renamed (held open without delete sharing) is rewritten in place as a
-		// forwarder to the exe — write and rename take different Windows locks,
-		// so one can succeed where the other fails.
-		const backupSuffix = `${attempt}.bak`;
-		const retired: Array<{ launcher: string; backup: string }> = [];
-		for (const ext of ["", ".cmd", ".ps1", ".bat"]) {
-			const launcher = path.join(launcherDir, `${APP_NAME}${ext}`);
-			const backup = `${launcher}.${backupSuffix}`;
-			try {
-				await fs.promises.rename(launcher, backup);
-				retired.push({ launcher, backup });
-			} catch (err) {
-				if (isEnoent(err)) continue;
-				try {
-					const original = await Bun.file(launcher).text();
-					await Bun.write(launcher, SHIM_FORWARDERS[ext]);
-					forwarded.push({ launcher, original });
-				} catch {
-					stuck.push(launcher);
-				}
-			}
-		}
-
-		// Verify the exe by its explicit path: $which cached the shim path when
-		// the update target was resolved, and the shim was just renamed away, so
-		// a PATH re-resolution here would test a file that no longer exists.
-		const verify = options.verifyBinary ?? verifyBinaryAtPath;
-		const verification = await verify(exePath, asset.version);
-		if (!verification.ok) {
-			for (const { launcher, backup } of retired) {
-				try {
-					await fs.promises.rename(backup, launcher);
-				} catch {}
-			}
-			for (const { launcher, original } of forwarded) {
-				try {
-					await Bun.write(launcher, original);
-				} catch {}
-			}
-			await unlinkIfExists(exePath);
-			throw new Error(
-				`${formatVerificationFailure(verification, asset.version)}; restored previous ${APP_NAME} launcher`,
+	const fields: Record<string, unknown> = {
+		expected_version: diagnosticVersion(expectedVersion),
+		old_launchers_touched: 0,
+		retained_backup_count: 0,
+		candidate_state: "not_downloaded",
+	};
+	return observeUpdateStage(
+		"shim_attempt",
+		async () => {
+			const binaryName = options.binaryName ?? getBinaryName();
+			const launcherDir = path.dirname(shimPath);
+			const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
+			// No PATH-conflict warning here: the comparison would always differ (the PATH
+			// entry is this launcher script, the target is its sibling `omp.exe`), while
+			// the takeover is exactly what keeps that PATH entry launching the new binary.
+			// `updateViaBinaryAt` keeps the check, where the target is a resolved install.
+			const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
+			const tempPath = `${exePath}.${attempt}.new`;
+			fields.candidate_state = "download_pending";
+			const githubToken = options.githubToken ?? (await resolveGitHubToken());
+			const asset = await getReleaseBinaryAsset(
+				expectedVersion,
+				binaryName,
+				githubToken,
+				options.fetchImpl,
+				options.allowPrerelease,
 			);
-		}
-		for (const { backup } of retired) {
-			await removeBackupBestEffort(backup);
-		}
-		// Reclaim exe backups and retired-shim leftovers from earlier attempts.
-		for (const ext of [".exe", "", ".cmd", ".ps1", ".bat"]) {
-			await sweepStaleUpdateArtifacts(path.join(launcherDir, `${APP_NAME}${ext}`));
-		}
-	});
-	for (const { launcher } of forwarded) {
-		console.log(chalk.dim(`Converted ${launcher} to a forwarder (it could not be removed).`));
-	}
-	for (const launcher of stuck) {
-		console.log(
-			chalk.yellow(
-				`Could not retire ${launcher}; shells that prefer it may keep launching the old version until it is deleted manually.`,
-			),
-		);
-	}
-	printVerifiedVersion(asset.version);
-	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+			console.log(chalk.dim(`Downloading ${binaryName}…`));
+			await downloadVerifiedBinary({
+				url: asset.url,
+				targetPath: tempPath,
+				expectedSize: asset.size,
+				expectedDigest: asset.digest,
+				fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
+			});
+			fields.candidate_state = "downloaded";
+			console.log(chalk.dim(`Verified ${asset.digest}`));
+			const forwarded: Array<{ launcher: string; original: string }> = [];
+			const stuck: string[] = [];
+			// Serialize the launcher swap and artifact sweep so two overlapping updates
+			// never retire the same shims or reclaim a live run's backup before its
+			// verification can roll it back.
+			await observeUpdateStage("shim_swap_lock", () =>
+				withFileLock(exePath, async () => {
+					console.log(chalk.dim(`Installing ${APP_NAME}.exe beside the script launcher...`));
+					await observeUpdateStage("shim_binary_replace", () => fs.promises.rename(tempPath, exePath));
+					fields.candidate_state = "installed";
+					// Retire the shims so PATH resolution lands on the new exe. Renamed, not
+					// deleted: restorable on verification failure, and Windows permits
+					// renaming a batch file that is still executing. A shim that cannot be
+					// renamed (held open without delete sharing) is rewritten in place as a
+					// forwarder to the exe — write and rename take different Windows locks,
+					// so one can succeed where the other fails.
+					const backupSuffix = `${attempt}.bak`;
+					const retired: Array<{ launcher: string; backup: string }> = [];
+					for (const ext of ["", ".cmd", ".ps1", ".bat"]) {
+						const launcher = path.join(launcherDir, `${APP_NAME}${ext}`);
+						const backup = `${launcher}.${backupSuffix}`;
+						try {
+							await observeUpdateStage(
+								"shim_aside",
+								() => fs.promises.rename(launcher, backup),
+								{ extension: ext || "sh" },
+								{ missingExpected: true, recoverable: true },
+							);
+							retired.push({ launcher, backup });
+							fields.old_launchers_touched = Number(fields.old_launchers_touched) + 1;
+							fields.retained_backup_count = Number(fields.retained_backup_count) + 1;
+						} catch (err) {
+							if (isEnoent(err)) continue;
+							updateEvent(
+								"shim_forwarder_fallback",
+								"started",
+								{ extension: ext || "sh", ...logger.diagnosticError(err) },
+								"warn",
+							);
+							try {
+								const original = await Bun.file(launcher).text();
+								await Bun.write(launcher, SHIM_FORWARDERS[ext]);
+								forwarded.push({ launcher, original });
+								fields.old_launchers_touched = Number(fields.old_launchers_touched) + 1;
+								updateEvent("shim_forwarder_fallback", "completed", { extension: ext || "sh" });
+							} catch (error) {
+								fields.outcome = "partial";
+								updateEvent(
+									"shim_forwarder_fallback",
+									"partial",
+									{ extension: ext || "sh", ...logger.diagnosticError(error) },
+									"warn",
+								);
+								stuck.push(launcher);
+							}
+						}
+					}
+
+					// Verify the exe by its explicit path: $which cached the shim path when
+					// the update target was resolved, and the shim was just renamed away, so
+					// a PATH re-resolution here would test a file that no longer exists.
+					const verify = options.verifyBinary ?? verifyBinaryAtPath;
+					const verification = await observeUpdateStage("shim_version_probe", () =>
+						verify(exePath, asset.version),
+					);
+					updateEvent(
+						"shim_version",
+						verification.ok ? "completed" : "failed",
+						{ version_match: verification.ok, actual_version: diagnosticVersion(verification.actual) },
+						verification.ok ? "info" : "error",
+					);
+					if (!verification.ok) {
+						let restoredCount = 0;
+						let failedCount = 0;
+						updateEvent("shim_rollback", "started", {
+							renamed_count: retired.length,
+							forwarded_count: forwarded.length,
+						});
+						for (const { launcher, backup } of retired) {
+							try {
+								await fs.promises.rename(backup, launcher);
+								restoredCount++;
+								fields.retained_backup_count = Number(fields.retained_backup_count) - 1;
+							} catch (error) {
+								failedCount++;
+								updateEvent(
+									"shim_rollback_aside",
+									"failed",
+									{ backup_retained: true, ...logger.diagnosticError(error) },
+									"error",
+								);
+							}
+						}
+						for (const { launcher, original } of forwarded) {
+							try {
+								await Bun.write(launcher, original);
+								restoredCount++;
+							} catch (error) {
+								failedCount++;
+								updateEvent("shim_rollback_forwarder", "failed", logger.diagnosticError(error), "error");
+							}
+						}
+						await observeUpdateStage("shim_rollback_remove_candidate", () => unlinkIfExists(exePath));
+						fields.candidate_state = "removed";
+						updateEvent(
+							"shim_rollback",
+							failedCount === 0 ? "completed" : "partial",
+							{
+								restored_count: restoredCount,
+								failed_count: failedCount,
+								retained_backup_count: fields.retained_backup_count,
+							},
+							failedCount === 0 ? "info" : "error",
+						);
+						throw new Error(
+							`${formatVerificationFailure(verification, asset.version)}; restored previous ${APP_NAME} launcher`,
+						);
+					}
+					for (const { backup } of retired) {
+						if (await removeBackupBestEffort(backup))
+							fields.retained_backup_count = Number(fields.retained_backup_count) - 1;
+					}
+					// Reclaim exe backups and retired-shim leftovers from earlier attempts.
+					for (const ext of [".exe", "", ".cmd", ".ps1", ".bat"]) {
+						await sweepStaleUpdateArtifacts(path.join(launcherDir, `${APP_NAME}${ext}`));
+					}
+				}),
+			);
+			for (const { launcher } of forwarded) {
+				console.log(chalk.dim(`Converted ${launcher} to a forwarder (it could not be removed).`));
+			}
+			for (const launcher of stuck) {
+				console.log(
+					chalk.yellow(
+						`Could not retire ${launcher}; shells that prefer it may keep launching the old version until it is deleted manually.`,
+					),
+				);
+			}
+			printVerifiedVersion(asset.version);
+			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+			fields.forwarded_count = forwarded.length;
+			fields.stuck_count = stuck.length;
+			fields.installed_verified = true;
+		},
+		fields,
+	);
 }
 
 /**
@@ -2490,120 +3159,183 @@ export async function runUpdateCommand(opts: {
 	check: boolean;
 	channel?: UpdateChannel;
 }): Promise<void> {
-	const ompPath = resolveOmpPath();
-	const manager = ompPath ? await managedInstallName(ompPath) : undefined;
-	if (manager) {
-		console.log(
-			chalk.yellow(`${ompPath} is installed and kept up to date by ${manager}; update it from ${manager}.`),
-		);
-		return;
-	}
-	// `update.channel` picks the channel; --canary/--stable switch and persist it.
-	await Settings.init({ cwd: getProjectDir() });
-	console.log(chalk.dim(`Current version: ${VERSION}`));
-	const persistedChannel = readPersistedChannel() ?? "stable";
-	const channel = opts.channel ?? persistedChannel;
-	const isChannelSwitch = opts.channel !== undefined && opts.channel !== persistedChannel;
-	if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
+	const started = performance.now();
+	const fields: Record<string, unknown> = {
+		force: opts.force,
+		check_only: opts.check,
+		current_version: diagnosticVersion(VERSION),
+		completion_scope: "command_returned",
+		installation_verification: "stage_records",
+	};
+	return observeUpdateStage(
+		"command",
+		async () => {
+			const ompPath = resolveOmpPath();
+			const manager = ompPath ? await managedInstallName(ompPath) : undefined;
+			if (manager) {
+				fields.outcome = "skipped";
+				fields.reason = "externally_managed";
+				console.log(
+					chalk.yellow(`${ompPath} is installed and kept up to date by ${manager}; update it from ${manager}.`),
+				);
+				return;
+			}
+			// `update.channel` picks the channel; --canary/--stable switch and persist it.
+			await Settings.init({ cwd: getProjectDir() });
+			console.log(chalk.dim(`Current version: ${VERSION}`));
+			const persistedChannel = readPersistedChannel() ?? "stable";
+			const channel = opts.channel ?? persistedChannel;
+			const isChannelSwitch = opts.channel !== undefined && opts.channel !== persistedChannel;
+			fields.channel = channel;
+			updateEvent("channel_selection", "completed", { channel, switched: isChannelSwitch });
+			if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
 
-	// Check for updates
-	let release: ReleaseInfo;
-	try {
-		release = await getLatestRelease({ channel });
-	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
-	}
+			// Check for updates
+			let release: ReleaseInfo;
+			try {
+				release = await getLatestRelease({ channel });
+			} catch (err) {
+				const cancelled = err instanceof Error && err.name === "AbortError" && !isTimeoutError(err);
+				updateEvent(
+					"command",
+					cancelled ? "cancelled" : "failed",
+					{
+						failure_stage: "release_check",
+						exit_code: 1,
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(err),
+					},
+					cancelled ? "info" : "error",
+				);
+				console.error(chalk.red(`Failed to check for updates: ${err}`));
+				process.exit(1);
+			}
 
-	const comparison = compareUpdateVersions(release.version, VERSION);
+			const comparison = compareUpdateVersions(release.version, VERSION);
+			fields.selected_version = diagnosticVersion(release.version);
+			fields.version_comparison = comparison;
 
-	if (comparison <= 0 && !opts.force && !isChannelSwitch) {
-		const icon = theme?.status?.success ?? "✔";
-		console.log(chalk.green(`${icon} Already up to date`));
-		return;
-	}
+			if (comparison <= 0 && !opts.force && !isChannelSwitch) {
+				fields.reason = "already_up_to_date";
+				const icon = theme?.status?.success ?? "✔";
+				console.log(chalk.green(`${icon} Already up to date`));
+				return;
+			}
 
-	if (isChannelSwitch) {
-		console.log(
-			chalk.yellow(
-				`Switching to ${channel} ${release.version}${comparison < 0 ? ` (downgrade from ${VERSION})` : ""}`,
-			),
-		);
-	} else if (comparison > 0) {
-		console.log(chalk.cyan(`New version available: ${release.version}`));
-	} else {
-		console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
-	}
-	if (release.packages.pkg !== PACKAGE) {
-		console.log(chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`));
-	}
-
-	if (opts.check) {
-		// Just check, don't install
-		return;
-	}
-
-	// Choose update method based on the prioritized omp binary in PATH. For
-	// binary-only releases the package managers are never consulted: a bun/npm
-	// symlink resolves to method "binary" and is replaced in place, keeping the
-	// same PATH entry live.
-	try {
-		const forceBinary = shouldForceBinaryUpdate(release);
-		const allowPrerelease = channel === "canary";
-		const target = await resolveUpdateTarget({ allowPackageManagers: !forceBinary });
-		if (channel === "canary" && (target.method === "nix" || target.method === "brew" || target.method === "mise")) {
-			console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
-			return;
-		}
-		if (target.method === "nix") {
-			console.log(chalk.yellow("This installation is managed by Nix and cannot update itself."));
-			console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
-			return;
-		} else if (target.method === "brew") {
-			await updateViaHomebrew(release.version, opts.force);
-		} else if (target.method === "mise") {
-			await updateViaMise(release.version, opts.force);
-		} else if (target.method === "bun" || target.method === "npm") {
-			if (forceBinary) {
-				// Reachable in forced mode only through a Windows script
-				// launcher resolved from PATH (the bun/npm bin-dir probes are
-				// skipped), so the launcher path is always known.
-				if (!target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
-				console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
-				await updateViaShimTakeover(target.path, release.version, { allowPrerelease });
+			if (isChannelSwitch) {
 				console.log(
 					chalk.yellow(
-						`This install is no longer managed by ${target.method}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
+						`Switching to ${channel} ${release.version}${comparison < 0 ? ` (downgrade from ${VERSION})` : ""}`,
 					),
 				);
+			} else if (comparison > 0) {
+				console.log(chalk.cyan(`New version available: ${release.version}`));
 			} else {
-				await updateViaManager(
-					release,
-					target.path,
-					packageManagerUpdateSteps(target.method, release, allowPrerelease),
-				);
+				console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
 			}
-		} else {
-			if (forceBinary && target.replacesSymlink) {
-				console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
-			}
-			await updateViaBinaryAt(target.path, release.version, {
-				allowPrerelease,
-				validateExistingTarget: target.validateExistingTarget,
-			});
-			if (forceBinary && target.replacesSymlink) {
+			if (release.packages.pkg !== PACKAGE) {
 				console.log(
-					chalk.yellow(
-						`This install is no longer managed by bun/npm. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
-					),
+					chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`),
 				);
 			}
-		}
-		if (opts.channel) persistChannel(channel);
-	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
-	}
+
+			if (opts.check) {
+				fields.reason = "check_only";
+				// Just check, don't install
+				return;
+			}
+
+			// Choose update method based on the prioritized omp binary in PATH. For
+			// binary-only releases the package managers are never consulted: a bun/npm
+			// symlink resolves to method "binary" and is replaced in place, keeping the
+			// same PATH entry live.
+			try {
+				const forceBinary = shouldForceBinaryUpdate(release);
+				const allowPrerelease = channel === "canary";
+				const target = await observeUpdateStage("target_resolution", () =>
+					resolveUpdateTarget({ allowPackageManagers: !forceBinary }),
+				);
+				fields.method = target.method;
+				updateEvent("target_selected", "completed", {
+					method: target.method,
+					force_binary: forceBinary,
+					replaces_symlink: "replacesSymlink" in target ? (target.replacesSymlink ?? false) : false,
+				});
+				if (
+					channel === "canary" &&
+					(target.method === "nix" || target.method === "brew" || target.method === "mise")
+				) {
+					fields.outcome = "skipped";
+					fields.reason = "unsupported_channel_method";
+					console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
+					return;
+				}
+				if (target.method === "nix") {
+					fields.outcome = "skipped";
+					fields.reason = "nix_managed";
+					console.log(chalk.yellow("This installation is managed by Nix and cannot update itself."));
+					console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
+					return;
+				} else if (target.method === "brew") {
+					await updateViaHomebrew(release.version, opts.force);
+				} else if (target.method === "mise") {
+					await updateViaMise(release.version, opts.force);
+				} else if (target.method === "bun" || target.method === "npm") {
+					if (forceBinary) {
+						// Reachable in forced mode only through a Windows script
+						// launcher resolved from PATH (the bun/npm bin-dir probes are
+						// skipped), so the launcher path is always known.
+						if (!target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
+						console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
+						await updateViaShimTakeover(target.path, release.version, { allowPrerelease });
+						console.log(
+							chalk.yellow(
+								`This install is no longer managed by ${target.method}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
+							),
+						);
+					} else {
+						await updateViaManager(
+							release,
+							target.path,
+							packageManagerUpdateSteps(target.method, release, allowPrerelease),
+						);
+					}
+				} else {
+					if (forceBinary && target.replacesSymlink) {
+						console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
+					}
+					await updateViaBinaryAt(target.path, release.version, {
+						allowPrerelease,
+						validateExistingTarget: target.validateExistingTarget,
+					});
+					if (forceBinary && target.replacesSymlink) {
+						console.log(
+							chalk.yellow(
+								`This install is no longer managed by bun/npm. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
+							),
+						);
+					}
+				}
+				if (opts.channel) persistChannel(channel);
+			} catch (err) {
+				const cancelled = err instanceof Error && err.name === "AbortError" && !isTimeoutError(err);
+				updateEvent(
+					"command",
+					cancelled ? "cancelled" : "failed",
+					{
+						failure_stage: "install",
+						exit_code: 1,
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(err),
+					},
+					cancelled ? "info" : "error",
+				);
+				console.error(chalk.red(`Update failed: ${err}`));
+				process.exit(1);
+			}
+		},
+		fields,
+	);
 }
 
 /**

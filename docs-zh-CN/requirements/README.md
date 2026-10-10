@@ -4,7 +4,7 @@
 
 | 文档 | 权威范围 | 状态 |
 | --- | --- | --- |
-| [Fork 定位、功能与默认值](fork.md) | 个人 fork 定位、三种使用场景与零配置目标、上游基线、个人模型与命令、文档检索、交互与默认值、分发、必要修复与简薄验证编排 | 当前文档导入回归与真实 docs CLI 导入、移走源目录后 wiki 检索冒烟通过，fastcheck 通过；其他功能域按对应文档，未据此整体验收；完整 fulltest、WSL/CI、公司实网未验收 |
+| [Fork 定位、功能与默认值](fork.md) | 个人 fork 定位、三种使用场景与零配置目标、上游基线、个人模型与命令、文档检索、交互与默认值、分发、运行诊断日志与简薄验证编排 | 运行诊断日志已补齐；当前相关测试按最新文件运行去重为 1214 通过、40 平台跳过、4 未通过（RPC plan fixture 1、Luna 认证 mock 3）；Windows 真实源码 CLI/docs/wiki、同机 IPC、localhost HTTP/SSE 重试失败取消、隔离 TUI 启动退出、安装器拒绝及日志脱敏关联冒烟通过。fastcheck 未通过：既有 fork 默认模型类型与两处上游测试调用不匹配，Rust 阶段未完成；未改写测试求绿。fulltest/slowtest、WSL/CI、公司实网和 ZCode GUI 未验收 |
 | [三层本地门禁](fork.md#fork-验证体系) | fastcheck/fulltest/slowtest 的覆盖包含关系、非编译预算与计时、缓存、授权、固定提交 WSL、禁止 CI/桌面输入及验证状态 | 按维护者要求沿用原有 fork 改动相关范围；运行状态以对应固定源码快照的实际门禁输出为准，不代表全仓库通过。Cargo 混合阶段的完整编译排除仍未验证，不能把隔离机制测试当作真实编译计时验收 |
 | [多模型方案讨论](team.md) | `/team` 的行为、集成约束与验收 | 综合资格与正文一致性修复的 64 个测试、API 冒烟及 fastcheck 通过；整体验收与公司模型真实全流程待执行 |
 | [Goal 自动编排](goal-auto-orchestrate.md) | `/goal-auto-orchestrate` 的命令、模式持久化、主代理请求级注入、Orchestrate 复用与去重、无人值守及权限边界、验收 | 已实现；请求预算与压缩预留、Codex 工具续轮、TUI 异步草稿保护及 Code Mode 间接工具相关回归通过，Windows 本地 HTTP Provider 真实 CLI 入口验证通过；静态门禁状态以当前运行输出为准；真实模型夜间任务质量、全项目验证与 ZCode GUI 未验收 |

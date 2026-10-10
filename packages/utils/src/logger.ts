@@ -14,11 +14,12 @@
  * the levels written to the file (default: all).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
-import { getLogsDir, localDay } from "./dirs";
+import { APP_NAME, getLogsDir, localDay, VERSION } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { setStderrRedirectTarget } from "./stderr-guard";
 import { drainModuleLoadEvents } from "./timing-buffer";
@@ -37,6 +38,98 @@ export interface LogEvent {
 export type LogSink = (event: LogEvent) => void;
 
 const logSinks = new Set<LogSink>();
+const logContextStorage = new AsyncLocalStorage<Readonly<Record<string, unknown>>>();
+const EMPTY_LOG_CONTEXT: Readonly<Record<string, unknown>> = Object.freeze({});
+
+/** Inherit correlation fields across asynchronous work; inner and explicit fields win. */
+export function withLogContext<T>(context: Record<string, unknown>, fn: () => T): T {
+	return logContextStorage.run(Object.freeze({ ...getLogContext(), ...context }), fn);
+}
+
+/** Current operation context, or a shared immutable empty object outside an operation. */
+export function getLogContext(): Readonly<Record<string, unknown>> {
+	return logContextStorage.getStore() ?? EMPTY_LOG_CONTEXT;
+}
+
+/** Summarize an exception without copying messages, bodies, causes, or arbitrary properties. */
+export function diagnosticError(error: unknown): Record<string, unknown> {
+	const summary: Record<string, unknown> = { error_type: error === null ? "null" : typeof error };
+	if ((typeof error !== "object" || error === null) && typeof error !== "function") return summary;
+	const field = (value: unknown, key: string): unknown => {
+		try {
+			return value !== null && (typeof value === "object" || typeof value === "function")
+				? Reflect.get(value, key)
+				: undefined;
+		} catch {
+			return undefined;
+		}
+	};
+	const name = field(error, "name");
+	summary.error_type =
+		typeof name === "string" && /^(?:[A-Za-z][A-Za-z0-9]{0,48}Error|Error|DOMException)$/.test(name)
+			? name
+			: "UnknownError";
+	const code = field(error, "code");
+	if (typeof code === "string" && /^(?:E[A-Z0-9_]{1,48}|ERR_[A-Z0-9_]{1,48}|[a-z][a-z_]{0,48})$/.test(code)) {
+		summary.error_code = code;
+	} else if (typeof code === "number" && Number.isSafeInteger(code)) {
+		summary.error_code = code;
+	}
+	for (const status of [
+		field(error, "status"),
+		field(error, "statusCode"),
+		field(field(error, "response"), "status"),
+	]) {
+		if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599) {
+			summary.status = status;
+			break;
+		}
+	}
+	const stack = field(error, "stack");
+	if (typeof stack === "string") {
+		const frames: Array<Record<string, unknown>> = [];
+		// Only source locations, never the exception header or function/eval text.
+		for (const line of stack.slice(0, 16_384).split("\n").slice(1, 33)) {
+			const match = /(?:\(|@|at\s+)((?:file:\/\/\/)?(?:[A-Za-z]:[\\/]|\/)[^()\n]+):(\d{1,9}):(\d{1,9})\)?\s*$/.exec(
+				line,
+			);
+			if (!match?.[1] || match[1].includes("?") || match[1].includes("#") || match[1].includes("@")) continue;
+			const file = match[1].replaceAll("\\", "/").split("/").pop();
+			if (!file || !/^[A-Za-z0-9_.-]{1,96}\.(?:[cm]?[jt]sx?)$/.test(file)) continue;
+			frames.push({ file, line: Number(match[2]), column: Number(match[3]) });
+			if (frames.length === 8) break;
+		}
+		if (frames.length > 0) summary.stack_frames = frames;
+	}
+	return summary;
+}
+
+/** Describe an HTTP(S) destination without exposing credentials or user-controlled path segments. */
+export function diagnosticUrl(value: string): Record<string, unknown> {
+	if (value.length > 8_192) return { url_type: "invalid" };
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return { url_type: "unsupported" };
+		return {
+			host: url.hostname,
+			url_scheme: url.protocol.slice(0, -1),
+			url_port: url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80,
+			path_hash: createHash("sha256").update(url.pathname).digest("hex").slice(0, 16),
+		};
+	} catch {
+		return { url_type: "invalid" };
+	}
+}
+
+function mergedLogContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	const inherited = logContextStorage.getStore();
+	try {
+		return inherited ? { ...inherited, ...context } : context;
+	} catch {
+		// Preserve the existing best-effort logging boundary for hostile getters.
+		return context;
+	}
+}
 
 /** Register an out-of-band log sink and return a disposer. */
 export function registerLogSink(sink: LogSink): () => void {
@@ -179,13 +272,24 @@ function schedulePruneStaleProcessLogs(dir: string): void {
 	immediate.unref();
 }
 
-/** Ensure a logs directory exists; return the resolved path. */
-function ensureDir(dir: string): string {
-	if (!fs.existsSync(dir)) {
-		fs.mkdirSync(dir, { recursive: true });
+/** Platform-standard user state directory, independent of relocated application data. */
+function fallbackLogsDir(primaryDirectory: string): string {
+	const home = os.homedir();
+	let directory: string;
+	if (process.platform === "win32") {
+		directory = path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), APP_NAME, "Logs");
+	} else if (process.platform === "darwin") {
+		directory = path.join(home, "Library", "Logs", APP_NAME);
+	} else {
+		directory = path.join(process.env.XDG_STATE_HOME || path.join(home, ".local", "state"), APP_NAME, "logs");
 	}
-	return dir;
+	// An already-standard default must still get a distinct user-owned attempt.
+	return path.resolve(directory) === path.resolve(primaryDirectory)
+		? path.join(home, ".omp", "fallback-logs")
+		: directory;
 }
+
+let logFailureReported = false;
 
 /**
  * JSON.stringify replacer that unwraps {@link Error} instances. Error's own
@@ -286,19 +390,18 @@ let exitFlushInstalled = false;
 /** Set once the process is exiting: every later record is written immediately. */
 let exiting = false;
 
-function flushOnExit(): void {
+function flushOnExit(code: number): void {
 	exiting = true;
+	shutdownDiagnosticLogging(code);
 	flush();
 }
 
 /** Build a rotating file sink with process-local rotation and shared retention. */
 function makeFileTransport(dir?: string): RotatingFileSink {
-	const logsDir = ensureDir(dir ?? getLogsDir());
+	const logsDir = dir ?? getLogsDir();
 	schedulePruneStaleProcessLogs(logsDir);
 	if (!exitFlushInstalled) {
 		exitFlushInstalled = true;
-		// Natural exit and process.exit(); signal and fatal exits that bypass the
-		// `exit` event flush through postmortem's exitProcess().
 		process.on("exit", flushOnExit);
 	}
 	// The sink opens (and creates) its file on the first batch written.
@@ -311,6 +414,36 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
 		// Keep the stderr guard's fd 2 on the file this sink is writing.
 		onRotate: setStderrRedirectTarget,
+		fallbackDirectory: fallbackLogsDir(logsDir),
+		onFailure: (error, stage, recoveredPath) => {
+			if (recoveredPath) {
+				if (stage !== "retention") schedulePruneStaleProcessLogs(path.dirname(recoveredPath));
+				const event = stage === "retention" ? "log_retention_failed" : "log_directory_fallback";
+				return formatLogRecord(
+					"warn",
+					event,
+					{
+						component: "logger",
+						event,
+						operation_id: `application-${process.pid}`,
+						stage,
+						elapsed_ms: 0,
+						path: recoveredPath,
+						...diagnosticError(error),
+					},
+					formatLocalTimestamp(new Date()),
+				);
+			}
+			if (!logFailureReported) {
+				logFailureReported = true;
+				try {
+					fs.writeSync(2, "[omp] Diagnostic log unavailable: primary and user log destinations failed.\n");
+				} catch {
+					// No usable diagnostic destination remains.
+				}
+			}
+			return undefined;
+		},
 	});
 }
 
@@ -358,6 +491,63 @@ interface LocalTransports {
 
 /** Local transports, constructed lazily on first log emission. */
 let activeTransports: LocalTransports | undefined;
+let diagnosticStartedAt: number | undefined;
+let diagnosticStopped = false;
+
+/** Opt the executable into lifecycle diagnostics; pure logger/SDK users remain unchanged. */
+export function initializeDiagnosticLogging(mode?: string): void {
+	if (diagnosticStartedAt !== undefined) return;
+	diagnosticStartedAt = performance.now();
+	const transports = getLocalTransports();
+	const file = transports.file;
+	const actualPath = file?.prepare();
+	if (!file || !actualPath || LOG_LEVEL_RANK.info > transports.fileLevelRank) return;
+	file.write(
+		formatLogRecord(
+			"info",
+			"application_started",
+			{
+				component: "application",
+				event: "application_started",
+				operation_id: `application-${process.pid}`,
+				stage: "startup",
+				elapsed_ms: 0,
+				app: APP_NAME,
+				version: VERSION,
+				platform: process.platform,
+				path: actualPath,
+				log_level: Object.entries(LOG_LEVEL_RANK).find(([, rank]) => rank === transports.fileLevelRank)?.[0],
+				...(mode && /^(?:cli|interactive|headless|rpc|print)$/.test(mode) ? { mode } : {}),
+			},
+			formatLocalTimestamp(new Date()),
+		),
+		true,
+	);
+}
+
+/** Flush lifecycle termination once, including hard exits that skip the exit event. */
+export function shutdownDiagnosticLogging(exitCode = process.exitCode ?? 0): void {
+	if (diagnosticStartedAt === undefined || diagnosticStopped) return;
+	diagnosticStopped = true;
+	const transports = activeTransports;
+	const file = transports?.file;
+	if (!transports || !file?.filePath) return;
+	if (LOG_LEVEL_RANK.info > transports.fileLevelRank) {
+		flush();
+		return;
+	}
+	const context = {
+		component: "application",
+		operation_id: `application-${process.pid}`,
+		stage: "shutdown",
+		elapsed_ms: Math.max(0, performance.now() - diagnosticStartedAt),
+		exitCode,
+	};
+	for (const event of ["application_stopping", "application_stopped"]) {
+		file.write(formatLogRecord("info", event, { ...context, event }, formatLocalTimestamp(new Date())), true);
+	}
+	flush();
+}
 
 function buildTransports(opts: { console?: boolean; file?: boolean | string }): LocalTransports {
 	return {
@@ -405,6 +595,7 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
  * @param context - The context to log.
  */
 export function error(message: string, context?: Record<string, unknown>): void {
+	context = mergedLogContext(context);
 	try {
 		emitLocally("error", message, context);
 	} catch {
@@ -419,6 +610,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
  * @param context - The context to log.
  */
 export function warn(message: string, context?: Record<string, unknown>): void {
+	context = mergedLogContext(context);
 	try {
 		emitLocally("warn", message, context);
 	} catch {
@@ -433,6 +625,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
  * @param context - The context to log.
  */
 export function info(message: string, context?: Record<string, unknown>): void {
+	context = mergedLogContext(context);
 	try {
 		emitLocally("info", message, context);
 	} catch {
@@ -447,6 +640,7 @@ export function info(message: string, context?: Record<string, unknown>): void {
  * @param context - The context to log.
  */
 export function debug(message: string, context?: Record<string, unknown>): void {
+	context = mergedLogContext(context);
 	try {
 		emitLocally("debug", message, context);
 	} catch {

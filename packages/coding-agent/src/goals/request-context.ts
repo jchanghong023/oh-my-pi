@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Context, Message, UserMessage } from "@oh-my-pi/pi-ai";
 import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { MAGIC_KEYWORDS, renderOrchestrateNotice } from "../modes/magic-keywords";
 import goalAutoOrchestratePrompt from "../prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
 import type { CustomMessage } from "../session/messages";
@@ -126,6 +126,22 @@ export function applyGoalAutoOrchestrateContext(
 	const stripped = stripGoalAutoOrchestrateContext(context);
 	const messages = stripped.messages;
 	const goalContext = buildGoalAutoOrchestrateMessage(state, callableToolNames, todoContext);
+	logger.debug("Goal provider context injection decided", {
+		component: "goal.request_context",
+		event: "goal_context_decision",
+		stage: "inject",
+		result: goalContext ? "injected" : "inactive",
+		goal_id: state?.goal.id,
+		auto_orchestrate: state?.autoOrchestrate === true,
+		enabled: state?.enabled === true,
+		mode: state?.mode ?? "none",
+		status: state?.goal.status ?? "none",
+		task_available: callableToolNames.includes("task"),
+		orchestrate_eligible: orchestrateKeyword.requires.every(tool => callableToolNames.includes(tool)),
+		tool_count: callableToolNames.length,
+		todo_context_available: todoContext !== undefined,
+		replaced_context_count: context.messages.length - messages.length,
+	});
 	if (!goalContext) return stripped;
 	const message: UserMessage & { [kGoalAutoOrchestrateContext]: true } = {
 		role: "user",

@@ -4,13 +4,14 @@
  * This file handles CLI argument parsing and translates them into
  * createAgentSession() options. The SDK does the heavy lifting.
  */
+import { createHash, randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
+import { isEnoent, isEnotdir, logger } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -21,7 +22,6 @@ import {
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
 import { $env, isBunTestRuntime, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
-import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -1880,19 +1880,39 @@ export async function runRootCommand(
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 		// The company lane exists only in OMP_OFFLINE processes; flip it before any
 		// consumer (startup error check, model registry) reads company state.
-		setCompanyOfflineEnabled(parsedArgs.offline === true);
+		const companyLaneOperationId = logger.getLogContext().operation_id ?? `startup-lanes-${randomUUID()}`;
+		logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
+			setCompanyOfflineEnabled(parsedArgs.offline === true),
+		);
 		const companyExplicitlyRequested =
 			parsedArgs.provider === COMPANY_PROVIDER_ID ||
 			parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`) === true;
 		const companyProviderError = getCompanyConfigError();
 		if (companyProviderError) {
 			if (companyExplicitlyRequested) {
+				logger.warn("Explicit company model selection unavailable", {
+					component: "main",
+					event: "company_selection_rejected",
+					stage: "startup",
+					result: "rejected",
+					operation_id: companyLaneOperationId,
+					reason: "startup_snapshot_unavailable",
+					restart_required: true,
+				});
 				process.stderr.write(`${companyProviderError}\n`);
 				process.exit(1);
 			}
 			if (isInteractive) notifs.push({ kind: "warn", message: companyProviderError });
 			else process.stderr.write(`${companyProviderError}\n`);
 		} else if (!parsedArgs.offline && companyExplicitlyRequested) {
+			logger.warn("Explicit company model selection requires offline mode", {
+				component: "main",
+				event: "company_selection_rejected",
+				stage: "policy",
+				result: "rejected",
+				operation_id: companyLaneOperationId,
+				reason: "offline_required",
+			});
 			process.stderr.write("Company provider is only available with OMP_OFFLINE=1.\n");
 			process.exit(1);
 		}
@@ -1972,14 +1992,35 @@ export async function runRootCommand(
 			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 			if (getCompanyConfig() && !disabledProviderIds(settingsInstance).has(COMPANY_PROVIDER_ID)) {
 				settingsInstance.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
+				logger.info("Offline company role defaults installed", {
+					component: "main",
+					event: "company_role_defaults_installed",
+					stage: "policy",
+					result: "completed",
+					operation_id: companyLaneOperationId,
+					role_count: Object.keys(COMPANY_OFFLINE_ROLE_DEFAULTS).length,
+					configured_roles_preserved: true,
+					explicit_selection: Boolean(parsedArgs.model || parsedArgs.provider),
+				});
+			} else {
+				logger.info("Offline company role defaults skipped", {
+					component: "main",
+					event: "company_role_defaults_skipped",
+					stage: "policy",
+					result: "skipped",
+					operation_id: companyLaneOperationId,
+					reason: companyProviderError ? "startup_snapshot_unavailable" : "provider_disabled",
+				});
 			}
 		}
 
 		// The registry composes policy-dependent metadata synchronously, including
 		// extended-context window caps, so it must receive the finalized settings.
-		const modelRegistry = logger.time(
-			"modelRegistry:init",
-			() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
+		const modelRegistry = logger.time("modelRegistry:init", () =>
+			logger.withLogContext(
+				{ operation_id: companyLaneOperationId },
+				() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
+			),
 		);
 		// models.yml sections under fork-reserved provider ids (company,
 		// zcode-api) are ignored by design; say so instead of dropping them
@@ -2021,6 +2062,26 @@ export async function runRootCommand(
 				smol: smolModel,
 				slow: slowModel,
 				plan: planModel,
+			});
+		}
+		if (parsedArgs.offline) {
+			const matchingDefaultRoles = Object.entries(COMPANY_OFFLINE_ROLE_DEFAULTS)
+				.filter(([role, selector]) => settingsInstance.getModelRole(role) === selector)
+				.map(([role]) => role);
+			logger.info("Offline model role policy resolved", {
+				component: "main",
+				event: "offline_role_policy_resolved",
+				stage: "policy",
+				result: "completed",
+				operation_id: companyLaneOperationId,
+				company_default_matching_roles: matchingDefaultRoles,
+				other_role_count: Object.keys(COMPANY_OFFLINE_ROLE_DEFAULTS).length - matchingDefaultRoles.length,
+				explicit_model: Boolean(parsedArgs.model),
+				explicit_provider: Boolean(parsedArgs.provider),
+				explicit_scope_count: parsedArgs.models?.length ?? 0,
+				smol_override: Boolean(smolModel),
+				slow_override: Boolean(slowModel),
+				plan_override: Boolean(planModel),
 			});
 		}
 
@@ -2355,7 +2416,76 @@ export async function runRootCommand(
 
 		const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
 		const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
-			const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
+			const startedAt = performance.now();
+			const selectionFields = {
+				component: "main",
+				operation_id: companyLaneOperationId,
+				offline: parsedArgs.offline === true,
+				explicit_model: Boolean(parsedArgs.model),
+				explicit_provider: Boolean(parsedArgs.provider),
+				explicit_scope_count: parsedArgs.models?.length ?? 0,
+				restoring_session: Boolean(parsedArgs.continue || parsedArgs.resume || isForeignSessionImport(parsedArgs)),
+			};
+			logger.info("Startup effective model selection started", {
+				...selectionFields,
+				event: "startup_model_selection_started",
+				stage: "session_create",
+				result: "started",
+			});
+			let result: CreateAgentSessionResult;
+			try {
+				result = await logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
+					logger.time("createAgentSession", createAgentSessionImpl, options),
+				);
+			} catch (error) {
+				const diagnostic = logger.diagnosticError(error);
+				const cancelled = diagnostic.error_type === "AbortError";
+				const fields = {
+					...selectionFields,
+					event: cancelled ? "startup_model_selection_cancelled" : "startup_model_selection_failed",
+					stage: "session_create",
+					result: cancelled ? "cancelled" : "failed",
+					elapsed_ms: performance.now() - startedAt,
+					...diagnostic,
+				};
+				if (cancelled) logger.info("Startup effective model selection cancelled", fields);
+				else logger.error("Startup effective model selection failed", fields);
+				throw error;
+			}
+			const effectiveModel = result.session.model;
+			logger.info("Startup effective model selected", {
+				...selectionFields,
+				event: "startup_model_selected",
+				stage: "session_create",
+				result: "completed",
+				session_id: result.session.sessionId,
+				elapsed_ms: performance.now() - startedAt,
+				lane:
+					effectiveModel?.provider === COMPANY_PROVIDER_ID
+						? "company"
+						: effectiveModel?.provider === "zcode-api"
+							? "zcode-api"
+							: effectiveModel?.provider === "jchtools"
+								? "jchtools"
+								: effectiveModel
+									? "other"
+									: "none",
+				company_default_model:
+					effectiveModel?.provider === COMPANY_PROVIDER_ID
+						? Object.values(COMPANY_OFFLINE_ROLE_DEFAULTS).find(
+								selector => selector === `${COMPANY_PROVIDER_ID}/${effectiveModel.id}`,
+							)
+						: undefined,
+				provider_hash: effectiveModel
+					? createHash("sha256").update(effectiveModel.provider).digest("hex").slice(0, 16)
+					: undefined,
+				model_hash: effectiveModel
+					? createHash("sha256").update(effectiveModel.id).digest("hex").slice(0, 16)
+					: undefined,
+				context_window: effectiveModel?.contextWindow,
+				max_tokens: effectiveModel?.maxTokens,
+				fallback_used: Boolean(result.modelFallbackMessage),
+			});
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms. Interactive startup defers it further, behind the first
