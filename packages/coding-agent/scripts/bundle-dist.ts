@@ -6,6 +6,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { withCompilerActivity } from "../../../scripts/test-gate-runtime";
 
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
@@ -90,7 +91,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
 		// `--define` (posix_spawn fails with E2BIG).
-		const output = await Bun.build({
+		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
@@ -107,7 +108,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				keepNames: true,
 			},
 			throw: false,
-		});
+		};
+		const output = await withCompilerActivity(() => Bun.build(buildOptions));
 		if (!output.success) {
 			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}

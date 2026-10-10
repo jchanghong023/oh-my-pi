@@ -8,17 +8,19 @@
  * Run via `bun run gen:tool-views` after changing src/tool-render/.
  */
 import * as path from "node:path";
+import { withCompilerActivity } from "../../../scripts/test-gate-runtime";
 
 const root = path.join(import.meta.dir, "..");
 const outFile = path.join(root, "../coding-agent/src/export/html/tool-views.generated.js");
 
-const result = await Bun.build({
+const buildOptions: Bun.BuildConfig = {
 	entrypoints: [path.join(root, "src/tool-render/standalone.tsx")],
 	target: "browser",
 	format: "iife",
 	minify: true,
 	define: { "process.env.NODE_ENV": JSON.stringify("production") },
-});
+};
+const result = await withCompilerActivity(() => Bun.build(buildOptions));
 
 if (!result.success) {
 	for (const log of result.logs) console.error(String(log));

@@ -5,6 +5,7 @@ import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/script
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-runtime";
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
@@ -50,7 +51,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	try {
-		const output = await Bun.build({
+		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
 			external: [...COMPILED_EXTERNAL_DEPENDENCIES],
@@ -93,7 +94,16 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				autoloadPackageJson: false,
 			},
 			throw: false,
-		});
+		};
+		// A cross-runtime template may be downloaded inside Bun.build itself;
+		// no supported API boundary separates that download from compilation.
+		const compilerOnly = options.target === undefined || options.executablePath !== undefined;
+		if (!compilerOnly && process.env.OMP_GATE_EVENT_TOKEN) {
+			console.warn("UNVERIFIED_COMPILATION_ACCOUNTING: cross-target Bun runtime preparation remains charged");
+		}
+		const output = compilerOnly
+			? await withCompilerActivity(() => Bun.build(buildOptions))
+			: await withChargedActivity(() => Bun.build(buildOptions));
 		if (!output.success) {
 			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}

@@ -77,7 +77,11 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 	);
 }
 
-export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
+export function renderGoalPrompt(
+	kind: GoalPromptKind,
+	goal: Goal,
+	options?: { omitObjective?: boolean; authority?: "system" | "user" },
+): string {
 	const template =
 		kind === "active"
 			? goalModeActivePrompt
@@ -85,6 +89,8 @@ export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
 				? goalContinuationPrompt
 				: goalBudgetLimitPrompt;
 	return prompt.render(template, {
+		omitObjective: options?.omitObjective === true,
+		userAuthority: options?.authority === "user",
 		objective: escapeXmlText(goal.objective),
 		tokensUsed: String(goal.tokensUsed),
 		tokenBudget: budgetValue(goal),
@@ -375,7 +381,7 @@ export class GoalRuntime {
 		await this.#withAccounting(() => this.#flushUsageLocked(steering, currentUsage));
 	}
 
-	#createGoalState(objective: string, tokenBudget: number | undefined): GoalModeState {
+	#createGoalState(objective: string, tokenBudget: number | undefined, autoOrchestrate?: boolean): GoalModeState {
 		const now = this.#now();
 		const goal: Goal = {
 			id: String(Snowflake.next()),
@@ -387,10 +393,14 @@ export class GoalRuntime {
 			createdAt: now,
 			updatedAt: now,
 		};
-		return { enabled: true, mode: "active", goal };
+		return { enabled: true, mode: "active", autoOrchestrate: autoOrchestrate === true ? true : undefined, goal };
 	}
 
-	async createGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+	async createGoal(input: {
+		objective: string;
+		tokenBudget?: number;
+		autoOrchestrate?: boolean;
+	}): Promise<GoalModeState> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
 		validateTokenBudget(input.tokenBudget);
@@ -399,7 +409,7 @@ export class GoalRuntime {
 			if (existing?.goal && existing.goal.status !== "dropped" && existing.goal.status !== "complete") {
 				throw new Error("cannot create a new goal because this session already has a goal");
 			}
-			const state = this.#createGoalState(objective, input.tokenBudget);
+			const state = this.#createGoalState(objective, input.tokenBudget, input.autoOrchestrate);
 			this.#budgetReportedFor = undefined;
 			this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal" });
@@ -407,7 +417,11 @@ export class GoalRuntime {
 		});
 	}
 
-	async replaceGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+	async replaceGoal(input: {
+		objective: string;
+		tokenBudget?: number;
+		autoOrchestrate?: boolean;
+	}): Promise<GoalModeState> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=replace");
 		validateTokenBudget(input.tokenBudget);
@@ -417,7 +431,7 @@ export class GoalRuntime {
 				throw new Error("cannot replace goal because no goal is active");
 			}
 			await this.#flushUsageLocked("suppressed");
-			const state = this.#createGoalState(objective, input.tokenBudget);
+			const state = this.#createGoalState(objective, input.tokenBudget, input.autoOrchestrate);
 			this.#budgetReportedFor = undefined;
 			this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal" });
@@ -514,7 +528,7 @@ export class GoalRuntime {
 	buildContinuationPrompt(): string | undefined {
 		const state = this.#host.getState();
 		return state?.enabled && state.goal.status === "active"
-			? renderGoalPrompt("continuation", state.goal)
+			? renderGoalPrompt("continuation", state.goal, { omitObjective: state.autoOrchestrate === true })
 			: undefined;
 	}
 

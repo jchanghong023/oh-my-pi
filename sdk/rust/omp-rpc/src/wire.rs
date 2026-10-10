@@ -2944,6 +2944,8 @@ pub struct GoalModeState {
 	pub goal: Goal,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reason: Option<LitCompleted>,
+	#[serde(rename = "autoOrchestrate", default, skip_serializing_if = "Option::is_none")]
+	pub auto_orchestrate: Option<bool>,
 }
 
 /// Outcome of every `goal` op; both fields are null when the session has no goal.

@@ -2420,6 +2420,9 @@
 				},
 				"reason": {
 					"const": "completed"
+				},
+				"autoOrchestrate": {
+					"type": "boolean"
 				}
 			},
 			"required": [

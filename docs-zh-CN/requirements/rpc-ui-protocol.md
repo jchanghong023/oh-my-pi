@@ -28,7 +28,7 @@
 
 ### 必须接入的命令
 
-`--mode rpc-ui` 必须支持 `/wiki`、`/repo`、`/team`、`/plan`、`/loop`、`/goal`、`/advisor`、`/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`、`/skill:<name>` 与 `/compact`。正文中的 `ultrathink` 等魔法关键词仍按共享会话规则生效；它不是 `/advisor` 的参数。
+`--mode rpc-ui` 必须支持 `/wiki`、`/repo`、`/team`、`/plan`、`/loop`、`/goal`、`/goal-auto-orchestrate`、`/advisor`、`/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`、`/skill:<name>` 与 `/compact`。正文中的 `ultrathink` 等魔法关键词仍按共享会话规则生效；它不是 `/advisor` 的参数。
 
 - 保留协议 v3，统一通过现有 `prompt.message` 提交命令。命令目录、别名与参数提示来自实际注册信息，补全复用现有机制；RPC 专属入口登记在同一命令规格中。已识别但仅限 TUI 的命令必须明确拒绝，不能把它原样交给模型执行。
 - 文字结果与状态通过 `command_output` 返回，选择、输入和确认通过现有 `extension_ui_request` / `extension_ui_response` 完成。不新增 ZCode 专属面板协议或平行业务实现。
@@ -36,6 +36,7 @@
 - `/plan [任务]` 进入或切换计划模式，复用计划只读保护、计划 role 临时模型、计划文件及 `xd://propose` 提交链路；已有草稿退出前确认。提交计划后展示计划正文并请求用户确认，取消或拒绝保留计划模式，批准后恢复工具与模型并复用上游计划保存、引用和执行链路。本次 RPC 审批支持保留当前上下文继续执行；清空上下文、压缩后执行和终端计划编辑器不属于本次接入范围。
 - `/loop` 复用上游参数解析、次数/时长限制、`--while` / `--until` 条件和 prompt/compact/reset 设置。首轮正常发送，后续轮次在会话空闲后执行；停止暂停重复提交，下一条用户提示可恢复，再次 `/loop` 关闭。切换或关闭会话取消旧会话的待提交与条件进程；启用 loop 时不同时自动提交 goal 续跑。
 - `/goal` 复用上游目标生命周期与已有 RPC goal 控制器，保留目标创建/替换、查看、暂停、恢复、删除和预算调整；不得维护第二份目标状态。自动续跑沿用上游 RPC 设置。
+- `/goal-auto-orchestrate` 的完整模式契约与验收条件统一见 [Goal 自动编排需求](goal-auto-orchestrate.md)；接入沿用上述命令提交、目录、补全、输出与宿主对话机制，不维护第二份业务语义。
 - `/team`、`/advisor` 的开关/状态/记录、魔法关键词命令、技能与 `/compact` 复用已有执行路径。`/advisor configure` 的终端编辑器仍明确报告仅 TUI 可用，role 保存继续使用现有配置接口。
 - 长操作与审批等待不得占住停止通道；取消、会话切换及 EOF 后不得向其他会话写入结果或启动后续轮次。命令的调用受理、模型运行与最终完成沿用现有 RPC 事件语义。
 

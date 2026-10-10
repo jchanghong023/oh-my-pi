@@ -484,7 +484,13 @@ export async function submitInteractiveInput(
 		} else {
 			let forwarded = false;
 			try {
-				forwarded = await session.prompt(input.text, { images: input.images, streamingBehavior });
+				forwarded = await session.prompt(input.text, {
+					images: input.images,
+					streamingBehavior,
+					...(input.goalAutoOrchestrateInitialId
+						? { goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId }
+						: {}),
+				});
 			} catch (error: unknown) {
 				mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
 			}

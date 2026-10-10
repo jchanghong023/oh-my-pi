@@ -5,6 +5,7 @@
 ### Added
 
 - Added zero-configuration discovery of the same-user Windows JchTools ACP service, with live model refresh and text-only backend Agent execution that isolates frontend tools, preserves streamed failures, and never automatically replays tasks.
+- Added `/goal-auto-orchestrate` for persistent Goal execution with current Orchestrate rules and unattended instructions on every main-agent request, without changing permissions or continuation settings.
 
 ### Breaking Changes
 
@@ -13,6 +14,7 @@
 
 ### Fixed
 
+- Fixed Windows local-gate timing across processes, kept simulated compiler intervals charged during gate selftests, and blocked WSL validation of uncommitted source instead of transferring it.
 - Restored fork validation after upstream compaction-host changes and isolated mutable discovery, fallback, and role-routing test settings from fixed overrides and unrelated background requests.
 - Fixed Linux slowtest cancellation regressions to verify signal-driven child exit and pipe closure without consuming an already-read stream again.
 - Removed the scheduling-sensitive MCP reconnect regression deadline while retaining strict-startup deadline coverage.

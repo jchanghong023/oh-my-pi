@@ -294,6 +294,7 @@ export async function runRpcSkillCommand(
 	prebuilt?: BuiltSkillPromptMessage,
 	onPromptAdmitted?: () => void,
 	images?: ImageContent[],
+	goalAutoOrchestrateInitialId?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
 	return session.promptCustomMessage(
@@ -304,7 +305,12 @@ export async function runRpcSkillCommand(
 			details: built.details,
 			attribution: "user",
 		},
-		{ streamingBehavior, queueChipText: invocation.queueChipText, onPromptAdmitted },
+		{
+			streamingBehavior,
+			queueChipText: invocation.queueChipText,
+			onPromptAdmitted,
+			...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
+		},
 	);
 }
 
@@ -330,6 +336,7 @@ export async function dispatchRpcSkillPrompt(input: {
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 	images?: ImageContent[];
 	isCurrent?: () => boolean;
+	goalAutoOrchestrateInitialId?: string;
 }): Promise<RpcSkillCommandResult | "cancelled" | null> {
 	const invocation = resolveRpcSkillInvocation(input.session, input.message);
 	if (!invocation) return null;
@@ -352,6 +359,7 @@ export async function dispatchRpcSkillPrompt(input: {
 				built,
 				onPromptAdmitted,
 				input.images,
+				input.goalAutoOrchestrateInitialId,
 			),
 		results: input.results,
 		onError: input.onError,
@@ -1971,6 +1979,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			if (!isCurrent()) return "cancelled";
 			let text = command.message;
 			let images = command.images;
+			let goalAutoOrchestrateInitialId: string | undefined;
 			const runner = session.extensionRunner;
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, images, "rpc");
@@ -2078,7 +2087,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 							goalController.refresh();
 							return result;
 						}
-						return goalController.handleSlash(args, runtime);
+						return goalController.handleSlash(args, runtime, {
+							autoOrchestrate: mode === "goal-auto-orchestrate",
+						});
 					},
 					notifyTitleChanged: async () => {
 						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
@@ -2111,6 +2122,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						return "local";
 					}
 					text = builtinResult.prompt;
+					goalAutoOrchestrateInitialId = builtinResult.goalAutoOrchestrateInitialId;
 					if (!loopSubmission && resolveRpcSkillInvocation(session, text)) loopController.capturePrompt(text);
 					const expandedSkill = await dispatchRpcSkillPrompt({
 						ticket,
@@ -2121,6 +2133,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						onError: onPromptError(command.id, "prompt"),
 						extensionUserMessageTracker,
 						images,
+						goalAutoOrchestrateInitialId,
 						isCurrent,
 					});
 					if (expandedSkill === "cancelled") return "cancelled";
@@ -2136,6 +2149,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						images,
 						...(command.type === "prompt" ? { streamingBehavior: command.streamingBehavior } : {}),
 						onPromptAdmitted,
+						...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
 					}),
 				results: promptResults,
 				onError: onPromptError(command.id, command.type),

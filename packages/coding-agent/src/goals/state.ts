@@ -7,6 +7,7 @@ export interface GoalModeState {
 	enabled: boolean;
 	mode: "active" | "exiting";
 	reason?: "completed";
+	autoOrchestrate?: boolean;
 	goal: Goal;
 }
 

@@ -51,7 +51,10 @@ export interface ParsedSlashCommand {
  * - `{ prompt: string }` — command handled, pass `prompt` through as the new
  *   user input (e.g. `/force <tool> <prompt>` keeps `<prompt>` as the message).
  */
-export type SlashCommandResult = undefined | { consumed: true; agentInvoked?: boolean } | { prompt: string };
+export type SlashCommandResult =
+	| undefined
+	| { consumed: true; agentInvoked?: boolean }
+	| { prompt: string; goalAutoOrchestrateInitialId?: string };
 
 /**
  * Runtime visible to slash-command handlers that run in text/ACP mode.
@@ -124,7 +127,10 @@ export interface SlashCommandRuntime {
 export interface RpcSlashCommandRuntime extends SlashCommandRuntime {
 	ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">;
 	runCommandInBackground: (task: () => Promise<void>) => void;
-	runModeCommand: (mode: "plan" | "loop" | "goal", args: string) => Promise<SlashCommandResult>;
+	runModeCommand: (
+		mode: "plan" | "loop" | "goal" | "goal-auto-orchestrate",
+		args: string,
+	) => Promise<SlashCommandResult>;
 }
 
 /**
@@ -199,4 +205,4 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 }
 
 /** Result returned by `executeAcpBuiltinSlashCommand`. */
-export type AcpBuiltinSlashCommandResult = false | { consumed: true; agentInvoked?: boolean } | { prompt: string };
+export type AcpBuiltinSlashCommandResult = false | Exclude<SlashCommandResult, undefined>;

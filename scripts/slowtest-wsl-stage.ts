@@ -1,397 +1,487 @@
 #!/usr/bin/env bun
-// slowtest stage between fulltest and the origin push: run this repo's
-// fulltest inside the `Ubuntu-24.04` WSL2 distro, mechanically following the
-// jch-wsl-git-test methodology — source reaches the distro only via a Git
-// remote, the workspace lives under /root and runs as root, the distro tests
-// exactly the pushed commit (EXPECTED_SHA), and the WSL worktree's own
-// uncommitted state is never cleaned or moved. Windows-only by contract; on
-// any other host the stage skips.
-
+// Internal slowtest leg: only a pushed fixed commit, network Git remote, and
+// native /root worktree. Never commit/push, transfer source, or trigger CI.
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { GateCommandError, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
-
-/** WSL2 distro under test; must match the registered name from `wsl --list`. */
 export const WSL_TEST_DISTRIBUTION = "Ubuntu-24.04";
-
+const HELPER_HANG_GUARD_SECONDS = 3600;
 export interface WslDistro {
 	name: string;
 	state: string;
 	version: string;
 }
-
-export interface WslRepoCandidate {
-	path: string;
-	remotes: Array<{ name: string; url: string }>;
+export type WslSelection =
+	| { status: "AVAILABLE"; distro: string }
+	| { status: "SKIPPED_NOT_APPLICABLE" | "SKIPPED_WSL_UNAVAILABLE"; reason: string };
+export type WslStageResult =
+	| { status: "PASS"; distro: string; head: string }
+	| { status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED"; reason: string; exitCode: number }
+	| Exclude<WslSelection, { status: "AVAILABLE" }>;
+export interface WslOptions {
+	debug: boolean;
+	needed?: boolean;
+	platform?: NodeJS.Platform;
+	root?: string;
+	which?: (tool: string) => string | null;
+	selection?: WslSelection;
+	identity?: SourceIdentity;
+	/** Deployed helper location; injection supports isolated orchestration tests. */
+	workflowPath?: string;
 }
-
-export type WslRepoPick =
-	| { kind: "match"; path: string; remoteName: string }
-	| { kind: "none" }
-	| { kind: "ambiguous"; paths: string[] };
-
-/** wsl.exe prints management output (e.g. `--list`) as UTF-16LE while command
- * output piped from inside the distro is UTF-8; decode by NUL density. */
+export interface WslRemoteSource {
+	head: string;
+	branch: string;
+	fetchUrl: string;
+	identity: string;
+}
 export function decodeWslOutput(bytes: Uint8Array): string {
 	let nulls = 0;
 	const probe = Math.min(bytes.length, 256);
 	for (let i = 0; i < probe; i++) if (bytes[i] === 0) nulls++;
-	return new TextDecoder(nulls * 4 > probe ? "utf-16le" : "utf-8").decode(bytes);
+	return new TextDecoder(nulls * 4 > probe ? "utf-16le" : "utf-8").decode(bytes).replaceAll("\uFEFF", "");
 }
-
-/** Parse `wsl.exe --list --verbose`: NAME STATE VERSION rows under a header;
- * the default distro carries a leading `*` marker column. */
 export function parseWslListVerbose(raw: string): WslDistro[] {
 	const distros: WslDistro[] = [];
-	for (const line of raw.split(/\r?\n/)) {
+	for (const line of raw.replaceAll("\0", "").replaceAll("\uFEFF", "").split(/\r?\n/)) {
 		const cols = line.trim().split(/\s+/);
-		if (cols.length >= 3 && cols[0] === "*") cols.shift();
-		if (cols.length < 3 || cols[0] === "NAME" || !/^\d+$/.test(cols[cols.length - 1])) continue;
-		distros.push({ name: cols[0], state: cols[1], version: cols[cols.length - 1] });
+		if (cols[0] === "*") cols.shift();
+		if (cols.length < 3 || !/^\d+$/.test(cols.at(-1)!)) continue;
+		distros.push({ name: cols.slice(0, -2).join(" "), state: cols.at(-2)!, version: cols.at(-1)! });
 	}
 	return distros;
 }
-
-/** Compare remote URLs by repository identity: https/ssh/scp spellings of the
- * same repo normalize to one string. */
-export function normalizeGitUrl(url: string): string {
-	let u = url.trim().toLowerCase();
-	u = u.replace(/^(?:https?|ssh|git|git\+ssh)?:\/\//, "");
-	const scp = /^([^@/]+)@([^:]+):(.+)$/.exec(u);
-	if (scp !== null) u = `${scp[2]}/${scp[3]}`;
-	else u = u.replace(/^[^@/]+@/, "");
-	return u.replace(/\/+$/, "").replace(/\.git$/, "");
+export function selectWslDistribution(distros: readonly WslDistro[]): WslSelection {
+	const selected = distros.find(d => d.version === "2" && d.name === WSL_TEST_DISTRIBUTION);
+	return selected
+		? { status: "AVAILABLE", distro: selected.name }
+		: {
+				status: "SKIPPED_WSL_UNAVAILABLE",
+				reason: `no compatible WSL2 ${WSL_TEST_DISTRIBUTION} distribution (installed: ${distros.map(d => `${d.name}/WSL${d.version}`).join(", ") || "none"}); explicit target is never substituted`,
+			};
 }
-
-/** Pick the /root clone of THIS repo among the candidates by remote identity. */
-export function pickWslRepo(candidates: readonly WslRepoCandidate[], fetchUrl: string): WslRepoPick {
-	const target = normalizeGitUrl(fetchUrl);
-	const matches = [];
-	for (const candidate of candidates) {
-		const remote = candidate.remotes.find(entry => normalizeGitUrl(entry.url) === target);
-		if (remote !== undefined) matches.push({ candidate, remote });
-	}
-	if (matches.length === 0) return { kind: "none" };
-	if (matches.length > 1) return { kind: "ambiguous", paths: matches.map(match => match.candidate.path) };
-	return { kind: "match", path: matches[0].candidate.path, remoteName: matches[0].remote.name };
-}
-
-/** Clone directory name under /root derived from the remote URL. */
-export function repoNameFromUrl(url: string): string {
-	const cleaned = url
-		.trim()
-		.replace(/\/+$/, "")
-		.replace(/\.git$/, "");
-	const remotePath = /^[^/]+:(?!\/\/)(.+)$/.exec(cleaned)?.[1] ?? cleaned;
-	const segment = remotePath.split("/").pop() ?? "";
-	return segment === "" ? "repo" : segment;
-}
-
-function fail(message: string): never {
-	console.error(`wsl-stage: FAIL — ${message}`);
-	process.exit(1);
-}
-
-function quote(value: string): string {
-	if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) return value;
-	return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-interface WslResult {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-}
-
-function wslRun(distro: string, command: string): WslResult {
-	const result = Bun.spawnSync(
-		["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-ls"],
-		// Passing a script via -c lets wsl.exe expand shell variables before bash.
-		{ cwd: repoRoot, stdin: Buffer.from(`${command}\n`), stdout: "pipe", stderr: "pipe" },
-	);
-	return {
-		exitCode: result.exitCode,
-		stdout: decodeWslOutput(result.stdout ?? Buffer.alloc(0)),
-		stderr: decodeWslOutput(result.stderr ?? Buffer.alloc(0)),
-	};
-}
-
-function wslGit(distro: string, repoPath: string, args: readonly string[]): WslResult {
-	return wslRun(distro, `git -C ${quote(repoPath)} ${args.map(quote).join(" ")}`);
-}
-
-function runGit(args: readonly string[]): WslResult {
-	const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-	return {
-		exitCode: result.exitCode,
-		stdout: result.stdout?.toString("utf-8") ?? "",
-		stderr: result.stderr?.toString("utf-8") ?? "",
-	};
-}
-
-function resolveDistro(wanted: string): string {
-	const result = Bun.spawnSync(["wsl.exe", "--list", "--verbose"], {
-		cwd: repoRoot,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+export async function discoverWsl(gate: GateRun, options: WslOptions): Promise<WslSelection> {
+	if (options.needed === false)
+		return { status: "SKIPPED_NOT_APPLICABLE", reason: "project does not need an additional Linux leg" };
+	if ((options.platform ?? process.platform) !== "win32")
+		return {
+			status: "SKIPPED_NOT_APPLICABLE",
+			reason: "WSL extension is Windows-only; current platform supplies applicable fulltest",
+		};
+	if ((options.which ?? Bun.which)("wsl.exe") === null)
+		return { status: "SKIPPED_WSL_UNAVAILABLE", reason: "wsl.exe is not installed" };
+	const result = await gate.capture({
+		label: "wsl/discovery",
+		argv: ["wsl.exe", "--list", "--verbose"],
+		cwd: options.root ?? repoRoot,
+		decodeOutput: decodeWslOutput,
+		allowFailure: true,
+		wallTimeoutSeconds: 30,
 	});
 	if (result.exitCode !== 0) {
-		fail(`wsl --list --verbose failed: ${decodeWslOutput(result.stderr ?? Buffer.alloc(0)).trim()}`);
+		const diagnostic = `${result.stdout}\n${result.stderr}`.trim();
+		if (
+			/WSL_E_(?:DEFAULT_DISTRO_NOT_FOUND|DISTRO_NOT_FOUND|WSL_OPTIONAL_COMPONENT_REQUIRED|NOT_INSTALLED)|has no installed distributions/i.test(
+				diagnostic,
+			)
+		)
+			return { status: "SKIPPED_WSL_UNAVAILABLE", reason: diagnostic };
+		throw new GateCommandError(
+			`BLOCKED: WSL discovery failed: ${diagnostic || `exit ${result.exitCode}`}`,
+			result.exitCode || 1,
+		);
 	}
-	const distros = parseWslListVerbose(decodeWslOutput(result.stdout ?? Buffer.alloc(0)));
-	const hit = distros.find(distro => distro.name.toLowerCase() === wanted.toLowerCase());
-	if (hit === undefined) {
-		fail(`WSL distro '${wanted}' is not registered (found: ${distros.map(d => d.name).join(", ") || "none"})`);
-	}
-	if (hit.version !== "2") fail(`WSL distro '${hit.name}' is version ${hit.version}, not WSL2`);
-	return hit.name;
+	return selectWslDistribution(parseWslListVerbose(result.stdout));
 }
-
-interface WindowsPushTarget {
-	branch: string;
-	remote: string;
-	remoteBranch: string;
-	fetchUrl: string;
-	expectedSha: string;
+function quote(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
-
-/** Clean tree → resolve the configured push target → push HEAD → confirm the
- * remote actually serves EXPECTED_SHA. */
-function prepareWindowsPush(): WindowsPushTarget {
-	const status = runGit(["status", "--porcelain"]);
-	if (status.exitCode !== 0) fail(`git status failed: ${status.stderr.trim()}`);
-	if (status.stdout.trim() !== "") {
-		fail("Windows working tree is dirty — commit or stash first; the stage tests only git-shared state");
-	}
-	const branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
-	if (branch === "" || branch === "HEAD") fail("detached HEAD — refusing to guess the branch to push");
-
-	let remote = "";
-	let remoteBranch = "";
-	const upstream = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
-	const upstreamName = upstream.stdout.trim();
-	if (upstream.exitCode === 0 && upstreamName.includes("/")) {
-		remote = upstreamName.split("/")[0];
-		remoteBranch = upstreamName.split("/").slice(1).join("/");
-	} else {
-		const remotes = runGit(["remote"])
-			.stdout.split("\n")
-			.map(entry => entry.trim())
-			.filter(entry => entry !== "");
-		if (remotes.length !== 1) {
-			fail(
-				`no upstream for '${branch}' and ${remotes.length} remotes configured — cannot determine the push target`,
-			);
-		}
-		remote = remotes[0];
-		remoteBranch = branch;
-	}
-	const fetchUrl = runGit(["remote", "get-url", remote]).stdout.trim();
-	const expectedSha = runGit(["rev-parse", "HEAD"]).stdout.trim();
-
-	console.log(`wsl-stage: pushing ${branch} -> ${remote}/${remoteBranch} (${expectedSha.slice(0, 12)})`);
-	const push = runGit(["push", remote, `HEAD:refs/heads/${remoteBranch}`]);
-	if (push.exitCode !== 0) fail(`git push ${remote} HEAD:${remoteBranch} failed: ${push.stderr.trim()}`);
-	const remoteSha = runGit(["ls-remote", remote, `refs/heads/${remoteBranch}`])
-		.stdout.trim()
-		.split("\t")[0];
-	if (remoteSha !== expectedSha)
-		fail(`remote ${remote}/${remoteBranch} serves ${remoteSha.slice(0, 12)}, expected ${expectedSha.slice(0, 12)}`);
-	return { branch, remote, remoteBranch, fetchUrl, expectedSha };
+function wslArgv(distro: string, timeout: number): string[] {
+	return [
+		"wsl.exe",
+		"--distribution",
+		distro,
+		"--user",
+		"root",
+		"--cd",
+		"/root",
+		"--",
+		"timeout",
+		"-k",
+		"5",
+		String(timeout),
+		"bash",
+		"-ls",
+	];
 }
-
-function assertRootIdentity(distro: string): void {
-	const result = wslRun(distro, `printf '%s %s' "$(id -u)" "$HOME"`);
-	if (result.exitCode !== 0) fail(`could not run bash inside '${distro}': ${result.stderr.trim()}`);
-	if (result.stdout.trim() !== "0 /root") {
-		fail(`expected root with HOME=/root inside '${distro}', got '${result.stdout.trim()}'`);
-	}
-}
-
-/** Locate the /root clone of this repo by remote identity; clone only when
- * none exists. Never deletes or overwrites existing directories. */
-function locateWslRepo(distro: string, fetchUrl: string): { path: string; remoteName: string } {
-	const found = wslRun(distro, "find /root -maxdepth 3 -name .git -print 2>/dev/null");
-	if (found.exitCode !== 0) fail(`find under /root failed: ${found.stderr.trim()}`);
-	const candidates: WslRepoCandidate[] = [];
-	const seen = new Set<string>();
-	for (const dotGit of found.stdout
-		.split("\n")
-		.map(entry => entry.trim())
-		.filter(entry => entry !== "")) {
-		const repoPath = path.posix.dirname(dotGit);
-		if (seen.has(repoPath)) continue;
-		seen.add(repoPath);
-		const remotesResult = wslRun(distro, `git -C ${quote(repoPath)} remote -v`);
-		if (remotesResult.exitCode !== 0) continue;
-		const remotes = remotesResult.stdout
-			.split("\n")
-			.map(line => line.trim())
-			.filter(line => line !== "")
-			.map(line => {
-				const cols = line.split(/\s+/);
-				return cols.length >= 3 && cols[2] === "(fetch)" ? { name: cols[0], url: cols[1] } : null;
-			})
-			.filter((entry): entry is { name: string; url: string } => entry !== null);
-		if (remotes.length > 0) candidates.push({ path: repoPath, remotes });
-	}
-	const pick = pickWslRepo(candidates, fetchUrl);
-	if (pick.kind === "ambiguous") {
-		fail(`multiple /root clones of this repo — refusing to pick: ${pick.paths.join(", ")}`);
-	}
-	if (pick.kind === "match") {
-		console.log(`wsl-stage: using existing clone ${pick.path} (remote '${pick.remoteName}')`);
-		return { path: pick.path, remoteName: pick.remoteName };
-	}
-	const clonePath = `/root/${repoNameFromUrl(fetchUrl)}`;
-	console.log(`wsl-stage: cloning ${fetchUrl} -> ${clonePath}`);
-	const clone = wslRun(distro, `cd /root && git clone ${quote(fetchUrl)}`);
-	if (clone.exitCode !== 0) fail(`git clone failed: ${clone.stderr.trim()}`);
-	return { path: clonePath, remoteName: "origin" };
-}
-
-/** Fast-forward the WSL clone to EXPECTED_SHA without ever discarding local
- * state: dirty tree → stop, ahead/diverged branch → stop. */
-export function syncWslRepo(
-	distro: string,
-	repo: { path: string; remoteName: string },
-	expectedSha: string,
-	branch: string,
-	runGit: typeof wslGit = wslGit,
-): void {
-	const porcelain = runGit(distro, repo.path, ["status", "--porcelain"]);
-	if (porcelain.exitCode !== 0) fail(`git status in ${repo.path} failed: ${porcelain.stderr.trim()}`);
-	if (porcelain.stdout.trim() !== "") {
-		fail(`WSL repo ${repo.path} has uncommitted changes — not touching them; resolve manually and re-run`);
-	}
-	const fetch = runGit(distro, repo.path, ["fetch", repo.remoteName]);
-	if (fetch.exitCode !== 0) fail(`git fetch ${repo.remoteName} in ${repo.path} failed: ${fetch.stderr.trim()}`);
-	const objectExists = runGit(distro, repo.path, ["cat-file", "-e", expectedSha]);
-	if (objectExists.exitCode !== 0) {
-		fail(`commit ${expectedSha.slice(0, 12)} is not reachable in ${repo.path} after fetch`);
-	}
-	const branchSha = runGit(distro, repo.path, ["rev-parse", `refs/heads/${branch}`]);
-	const branchExists = branchSha.exitCode === 0;
-	const branchTip = branchSha.stdout.trim();
-	if (!branchExists) {
-		const create = runGit(distro, repo.path, ["checkout", "-b", branch, expectedSha]);
-		if (create.exitCode !== 0)
-			fail(`creating branch '${branch}' at ${expectedSha.slice(0, 12)} failed: ${create.stderr.trim()}`);
-	} else {
-		if (branchTip !== expectedSha) {
-			const ancestor = runGit(distro, repo.path, [
-				"merge-base",
-				"--is-ancestor",
-				`refs/heads/${branch}`,
-				expectedSha,
-			]);
-			if (ancestor.exitCode !== 0) {
-				fail(
-					`WSL branch '${branch}' is ahead of or diverged from ${expectedSha.slice(0, 12)} — refusing to move it`,
-				);
-			}
-		}
-		const checkout = runGit(distro, repo.path, ["checkout", branch]);
-		if (checkout.exitCode !== 0) fail(`checking out '${branch}' failed: ${checkout.stderr.trim()}`);
-		if (branchTip !== expectedSha) {
-			const ff = runGit(distro, repo.path, ["merge", "--ff-only", expectedSha]);
-			if (ff.exitCode !== 0) fail(`fast-forwarding '${branch}' failed: ${ff.stderr.trim()}`);
-		}
-	}
-	const head = runGit(distro, repo.path, ["rev-parse", "HEAD"]).stdout.trim();
-	if (head !== expectedSha) fail(`WSL HEAD ${head.slice(0, 12)} != expected ${expectedSha.slice(0, 12)}`);
-	console.log(`wsl-stage: ${repo.path} synced to ${expectedSha.slice(0, 12)} (branch '${branch}')`);
-}
-
-/** The distro must run its own Linux toolchain — bun/git resolving to a
- * Windows mount (/mnt/…) would test the wrong binaries. */
-function checkWslToolchain(distro: string): void {
-	for (const tool of ["git", "bun"]) {
-		const result = wslRun(distro, `command -v ${tool}`);
-		const resolved = result.stdout.trim();
-		if (result.exitCode !== 0 || resolved === "") fail(`'${tool}' not found inside '${distro}' (login shell PATH)`);
-		if (resolved.startsWith("/mnt/"))
-			fail(`'${tool}' resolves to the Windows mount ${resolved} — the distro needs its own Linux ${tool}`);
-	}
-}
-
-/** Isolate only this invocation's Linux children; never terminate the distro. */
-export function wslFulltestCommand(repoPath: string, controlDir: string): string {
-	const pidFile = quote(`${controlDir}/pid`);
-	const canceledFile = quote(`${controlDir}/canceled`);
-	const inner = `printf '%s\\n' "$$" > ${pidFile}; [ ! -f ${canceledFile} ] || exit 130; cd ${quote(repoPath)} && bun install --frozen-lockfile && bun run fulltest`;
-	const cleanup = `${wslCancelCommand(controlDir)}; rm -f -- ${pidFile} ${canceledFile}; rmdir -- ${quote(controlDir)}`;
-	return `trap ${quote(cleanup)} EXIT; setsid --wait bash -c ${quote(inner)}`;
-}
-
-export function wslCancelCommand(controlDir: string): string {
-	const dir = quote(controlDir);
-	const pidFile = quote(`${controlDir}/pid`);
-	return `if [ -d ${dir} ]; then touch -- ${quote(`${controlDir}/canceled`)}; if read -r pid < ${pidFile} 2>/dev/null; then case "$pid" in ''|*[!0-9]*) exit 1;; esac; kill -KILL -- "-$pid" 2>/dev/null || true; fi; fi`;
-}
-
-async function runWslFulltest(distro: string, repoPath: string): Promise<number> {
-	// A fresh clone has no node_modules, so the install runs in the same
-	// invocation: the workspace-local binaries (oxlint, tsgo, nextest glue, …)
-	// must exist before fulltest. No fork-side time budget: the nested run owns
-	// its own failure reporting and a hung run is stopped by the operator, never
-	// silently by a timer here.
-	const controlDir = `/tmp/omp-slowtest-${crypto.randomUUID()}`;
-	const setup = wslRun(distro, `mkdir -m 700 -- ${quote(controlDir)}`);
-	if (setup.exitCode !== 0) fail(`could not create WSL cancellation marker: ${setup.stderr.trim()}`);
-	const command = wslFulltestCommand(repoPath, controlDir);
-	let canceled = false;
-	const cancel = () => {
-		canceled = true;
-		const result = wslRun(distro, wslCancelCommand(controlDir));
-		if (result.exitCode !== 0) {
-			console.error(`wsl-stage: cancellation cleanup failed: ${result.stderr.trim()}`);
-		}
-	};
-	process.on("SIGINT", cancel);
-	process.on("SIGTERM", cancel);
+/** Network identities only: local paths, file URLs, and credential URLs block. */
+export function gitRemoteIdentity(value: string): string {
+	const scp = /^(?:[^/@:]+@)?([^/:]+):(.+)$/.exec(value);
+	if (scp && !/^[A-Za-z]:/.test(value) && !value.includes("://"))
+		return `${scp[1]!.toLowerCase()}/${scp[2]!.replace(/^\/+|\.git$/g, "")}`;
+	let url: URL;
 	try {
-		console.log(`\n==> wsl/fulltest`);
-		console.log(`$ wsl --distribution ${distro} --user root -- bash -ls < fulltest script`);
-		const child = Bun.spawn(
-			["wsl.exe", "--distribution", distro, "--user", "root", "--cd", "/root", "--", "bash", "-ls"],
-			{ cwd: repoRoot, stdin: Buffer.from(`${command}\n`), stdout: "inherit", stderr: "inherit" },
+		url = new URL(value);
+	} catch {
+		throw new Error("BLOCKED: source synchronization requires a network Git remote, not a local workspace");
+	}
+	if (
+		!["https:", "ssh:", "git:"].includes(url.protocol) ||
+		url.password ||
+		(url.protocol === "https:" && url.username) ||
+		!url.hostname
+	)
+		throw new Error("BLOCKED: source synchronization requires an existing credential-free network Git URL");
+	return `${url.hostname.toLowerCase()}${url.port ? `:${url.port}` : ""}/${url.pathname.replace(/^\/+|\.git$/g, "")}`;
+}
+export async function resolveWslRemoteSource(
+	gate: GateRun,
+	root: string,
+	source: SourceIdentity,
+): Promise<WslRemoteSource> {
+	if (source.dirty)
+		throw new Error(
+			"BLOCKED: commit and push the intended source before WSL execution; Git writes are not authorized and dirty source cannot be transferred",
 		);
-		const exitCode = await child.exited;
-		if (canceled || exitCode !== 0) {
-			console.error(`wsl-stage: FAIL — bun run fulltest ${canceled ? "canceled" : `exited with code ${exitCode}`}`);
-			return 1;
+	const git = async (label: string, args: string[]) => {
+		const result = await gate.capture({ label, argv: ["git", ...args], cwd: root, allowFailure: true });
+		if (result.exitCode !== 0) throw new Error(`BLOCKED: ${label} could not resolve the existing pushed source`);
+		return result.stdout.trim();
+	};
+	const admin = await git("wsl/source-admin", ["rev-parse", "--absolute-git-dir"]);
+	await gate.charged(async () => {
+		for (const marker of [
+			"MERGE_HEAD",
+			"CHERRY_PICK_HEAD",
+			"REVERT_HEAD",
+			"rebase-merge",
+			"rebase-apply",
+			"BISECT_LOG",
+		]) {
+			let exists = false;
+			try {
+				await fs.access(path.join(admin, marker));
+				exists = true;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			if (exists) throw new Error(`BLOCKED: Windows Git operation ${marker} is in progress; no WSL synchronization`);
 		}
-		console.log("wsl-stage: PASS (Ubuntu-24.04 fulltest)");
-		return 0;
+	});
+	const branch = await git("wsl/source-branch", ["symbolic-ref", "--short", "HEAD"]);
+	const target = await git("wsl/push-target", [
+		"for-each-ref",
+		"--format=%(push:remotename)%09%(push:remoteref)",
+		`refs/heads/${branch}`,
+	]);
+	const [remote, ref] = target.split("\t");
+	if (!remote || remote === "." || !ref?.startsWith("refs/heads/"))
+		throw new Error("BLOCKED: actual configured push remote/branch is ambiguous or unavailable");
+	const fetchUrls = (await git("wsl/fetch-url", ["remote", "get-url", "--all", remote])).split(/\r?\n/);
+	const pushUrls = (await git("wsl/push-url", ["remote", "get-url", "--push", "--all", remote])).split(/\r?\n/);
+	if (fetchUrls.length !== 1 || pushUrls.length !== 1)
+		throw new Error("BLOCKED: multiple remote URLs require a resolved push target");
+	const fetchUrl = fetchUrls[0]!;
+	const identity = gitRemoteIdentity(fetchUrl);
+	if (gitRemoteIdentity(pushUrls[0]!) !== identity)
+		throw new Error("BLOCKED: fetch and push URLs identify different repositories");
+	// Remote tip may have advanced; the helper's fetch/ancestry check proves SHA
+	// reachability before testing. No host commit, push, pull, or local bundle.
+	await git("wsl/remote-availability", ["ls-remote", "--exit-code", remote, ref]);
+	return { head: source.head, branch: ref.slice("refs/heads/".length), fetchUrl, identity };
+}
+const CANCEL_OWNED_TREE = `import os,pathlib,signal,sys,time
+control=pathlib.Path(sys.argv[1]); (control/'canceled').touch()
+try: root,born=map(int,(control/'pid').read_text().split())
+except (FileNotFoundError,ValueError): raise SystemExit(0)
+def identity(pid):
+ try:
+  fields=pathlib.Path('/proc/'+str(pid)+'/stat').read_text().rsplit(') ',1)[1].split()
+  return int(fields[1]),int(fields[19]),fields[0]
+ except (FileNotFoundError,ProcessLookupError,ValueError,IndexError): return None
+current=identity(root)
+if current is None or current[1]!=born: raise SystemExit(0)
+processes={}
+for entry in pathlib.Path('/proc').iterdir():
+ if entry.name.isdigit():
+  pid=int(entry.name); value=identity(pid)
+  if value is not None: processes[pid]=value
+owned={root:born}
+while True:
+ added={pid:value[1] for pid,value in processes.items() if value[0] in owned and pid not in owned}
+ if not added: break
+ owned.update(added)
+def send(pid,stamp,sig):
+ value=identity(pid)
+ if value is not None and value[1]==stamp and value[2]!='Z':
+  try: os.kill(pid,sig)
+  except ProcessLookupError: pass
+for pid,stamp in reversed(list(owned.items())): send(pid,stamp,signal.SIGTERM)
+time.sleep(0.2)
+for pid,stamp in reversed(list(owned.items())): send(pid,stamp,signal.SIGKILL)
+`;
+export function wslCancelCommand(controlDir: string): string {
+	return `if [ -d ${quote(controlDir)} ]; then python3 -c ${quote(CANCEL_OWNED_TREE)} ${quote(controlDir)}; fi`;
+}
+async function cancelOwnedWsl(distro: string, control: string): Promise<void> {
+	const child = Bun.spawn(wslArgv(distro, 25), {
+		stdin: new Blob([`mkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\n`]),
+		stdout: "inherit",
+		stderr: "inherit",
+		windowsHide: true,
+	});
+	const timer = setTimeout(() => child.kill(), 30000);
+	try {
+		if ((await child.exited) !== 0)
+			throw new Error("WSL owned-tree cancellation failed; leftover processes UNVERIFIED");
 	} finally {
-		process.off("SIGINT", cancel);
-		process.off("SIGTERM", cancel);
-		// Also handles spawn failure before the Linux wrapper could install its trap.
-		wslRun(
-			distro,
-			`rm -f -- ${quote(`${controlDir}/pid`)} ${quote(`${controlDir}/canceled`)}; rmdir -- ${quote(controlDir)} 2>/dev/null || true`,
+		clearTimeout(timer);
+	}
+}
+const REPOSITORIES = `import json,os,pathlib,subprocess,sys,urllib.parse
+expected=sys.argv[1]; matches=[]
+def identity(value):
+ if '://' in value:
+  u=urllib.parse.urlsplit(value); host=u.hostname or ''; repo=u.path.lstrip('/'); host+=(':'+str(u.port)) if u.port else ''
+ else:
+  host,repo=value.split(':',1); host=host.rsplit('@',1)[-1]; repo=repo.lstrip('/')
+ return host.lower()+'/'+(repo[:-4] if repo.endswith('.git') else repo)
+for directory,children,files in os.walk('/root'):
+ repository=('.git' in children or '.git' in files)
+ children[:]=[n for n in children if n not in ('node_modules','target','.cache','.git','.venv','venv')]
+ if not repository: continue
+ root=pathlib.Path(directory).resolve()
+ if not str(root).startswith('/root/'): continue
+ for remote in subprocess.check_output(['git','-C',str(root),'remote'],text=True,timeout=5).splitlines():
+  urls=subprocess.check_output(['git','-C',str(root),'remote','get-url','--all',remote],text=True,timeout=5).splitlines()
+  for url in urls:
+   try: same=identity(url)==expected
+   except ValueError: same=False
+   if same: matches.append({'linux_repo':str(root),'remote':remote,'fetch_url':url})
+print(json.dumps(matches))`;
+function stageFailure(
+	status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED",
+	reason: string,
+	exitCode = 1,
+): WslStageResult {
+	console.error(`wsl-stage: ${status} — ${reason}`);
+	return { status, reason, exitCode: exitCode || 1 };
+}
+export async function runWslStage(gate: GateRun, options: WslOptions): Promise<WslStageResult> {
+	const selection = options.selection ?? (await discoverWsl(gate, options));
+	if (selection.status !== "AVAILABLE") return selection;
+	const root = options.root ?? repoRoot;
+	const source = options.identity ?? (await captureSourceIdentity(gate, root));
+	if (source.dirty)
+		return stageFailure(
+			"BLOCKED",
+			"commit and push the intended source first; dirty source is not transferable and gate authorization grants no Git writes",
+		);
+	const which = options.which ?? Bun.which;
+	const python = which("python") ?? which("python3");
+	const helper =
+		options.workflowPath ??
+		path.join(os.homedir(), ".codex", "skills", "jch-fastcheck-fulltest-slowtest-gates", "scripts", "workflow.py");
+	if (
+		!python ||
+		!(await gate.charged(() =>
+			fs
+				.stat(helper)
+				.then(s => s.isFile())
+				.catch(() => false),
+		))
+	)
+		return stageFailure("BLOCKED", "deployed workflow.py and a host Python interpreter are required");
+	let remote: WslRemoteSource;
+	try {
+		remote = await resolveWslRemoteSource(gate, root, source);
+	} catch (error) {
+		return stageFailure("BLOCKED", error instanceof Error ? error.message : String(error));
+	}
+	const probe = await gate.capture({
+		label: "wsl/native-repository-discovery",
+		argv: wslArgv(selection.distro, 25),
+		cwd: root,
+		stdin: `set -eu\n[ "$(id -u)" = 0 ] && [ "$HOME" = /root ]\nfor tool in git python3; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; done\npython3 -c ${quote(REPOSITORIES)} ${quote(remote.identity)}\n`,
+		allowFailure: true,
+		wallTimeoutSeconds: 30,
+	});
+	if (probe.exitCode !== 0)
+		return stageFailure("BLOCKED", "chosen distribution native repository discovery failed", probe.exitCode);
+	let candidates: Array<{ linux_repo: string; remote: string; fetch_url: string }>;
+	try {
+		candidates = JSON.parse(probe.stdout.trim());
+		if (
+			!Array.isArray(candidates) ||
+			candidates.some(
+				c =>
+					typeof c.linux_repo !== "string" ||
+					!c.linux_repo.startsWith("/root/") ||
+					c.linux_repo.split("/").includes("..") ||
+					typeof c.remote !== "string" ||
+					typeof c.fetch_url !== "string" ||
+					gitRemoteIdentity(c.fetch_url) !== remote.identity,
+			)
+		)
+			throw new Error("invalid native identity");
+	} catch {
+		return stageFailure(
+			"UNVERIFIED",
+			"native repository discovery did not return a matching protected /root identity report",
 		);
 	}
-}
-
-export async function runWslStage(): Promise<number> {
-	if (process.platform !== "win32") {
-		console.log(`wsl-stage: skipped — Windows-only stage (already on ${process.platform})`);
-		return 0;
+	// No automatic alternate clone may bypass an existing unsafe/ambiguous tree.
+	const unique = [...new Set(candidates.map(c => c.linux_repo))];
+	if (unique.length > 1) return stageFailure("BLOCKED", `multiple matching native worktrees: ${unique.join(", ")}`);
+	let linux = candidates[0];
+	if (!linux) {
+		const name = remote.identity.split("/").at(-1)!;
+		const owner = remote.identity.split("/").at(-2)!;
+		if (![name, owner].every(part => /^[A-Za-z0-9._-]+$/.test(part)))
+			return stageFailure("BLOCKED", "remote identity cannot determine a safe /root clone destination");
+		const preferred = `/root/${name}`;
+		const alternate = `/root/${owner}-${name}`;
+		const clone = await gate.capture({
+			label: "wsl/network-clone",
+			argv: wslArgv(selection.distro, 120),
+			cwd: root,
+			stdin: `set -eu\ndestination=${quote(preferred)}\nif [ -e "$destination" ]; then destination=${quote(alternate)}; fi\n[ ! -e "$destination" ] || { echo 'BLOCKED: native destinations already exist' >&2; exit 1; }\ngit clone --no-checkout --branch ${quote(remote.branch)} -- ${quote(remote.fetchUrl)} "$destination"\ngit -C "$destination" merge-base --is-ancestor ${quote(source.head)} ${quote(`refs/remotes/origin/${remote.branch}`)}\n# Only this freshly created clone is positioned at the frozen SHA.\ngit -C "$destination" update-ref ${quote(`refs/heads/${remote.branch}`)} ${quote(source.head)}\ngit -C "$destination" checkout ${quote(remote.branch)}\nprintf 'CLONED_REPOSITORY=%s\\n' "$destination"\n`,
+			allowFailure: true,
+			wallTimeoutSeconds: 150,
+		});
+		if (clone.stdout) console.log(clone.stdout);
+		if (clone.stderr) console.error(clone.stderr);
+		if (clone.exitCode !== 0)
+			return stageFailure(
+				"BLOCKED",
+				"network clone blocked; existing destinations are never overwritten",
+				clone.exitCode,
+			);
+		const destination = /^CLONED_REPOSITORY=(.*)$/m.exec(clone.stdout)?.[1];
+		if (destination !== preferred && destination !== alternate)
+			return stageFailure("UNVERIFIED", "network clone did not establish its exact native destination");
+		linux = { linux_repo: destination, remote: "origin", fetch_url: remote.fetchUrl };
 	}
-	const distro = resolveDistro(WSL_TEST_DISTRIBUTION);
-	assertRootIdentity(distro);
-	checkWslToolchain(distro);
-	const target = prepareWindowsPush();
-	const repo = locateWslRepo(distro, target.fetchUrl);
-	syncWslRepo(distro, repo, target.expectedSha, target.branch);
-	return await runWslFulltest(distro, repo.path);
-}
-
-if (import.meta.main) {
-	runWslStage().then(exitCode => {
-		process.exitCode = exitCode;
+	const environment = await gate.capture({
+		label: "wsl/native-environment",
+		argv: wslArgv(selection.distro, 25),
+		cwd: root,
+		allowFailure: true,
+		wallTimeoutSeconds: 30,
+		stdin: `set -eu\ncd ${quote(linux.linux_repo)}\n[ "$(pwd -P)" = ${quote(linux.linux_repo)} ]\nfor tool in git python3 bun cargo rustc cargo-nextest ruff go setsid flock timeout; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; printf '%s=%s\\n' "$tool" "$exe"; done\npython3 -m pytest --version\nRUSTUP_AUTO_INSTALL=0 cargo --version\nRUSTUP_AUTO_INSTALL=0 rustc --version\nGOTOOLCHAIN=local go version\n# Refuse active unrelated writers; no waiting or global process termination.\nfor proc in /proc/[0-9]*; do cwd=$(readlink "$proc/cwd" 2>/dev/null || true); case "$cwd" in ${quote(linux.linux_repo)}|${quote(`${linux.linux_repo}/`)}*) case "$(cat "$proc/comm" 2>/dev/null || true)" in git|cargo|rustc|bun|node|python*|go|ruff) echo 'BLOCKED: active workspace process' >&2; exit 1;; esac;; esac; done\n`,
 	});
+	if (environment.exitCode !== 0)
+		return stageFailure(
+			"BLOCKED",
+			"native Linux tools/environment or active-writer preflight blocked",
+			environment.exitCode,
+		);
+	console.log(environment.stdout);
+	const token = randomUUID();
+	const control = `/tmp/omp-slowtest-${randomUUID()}`;
+	const request = {
+		action: "plan",
+		windows_repo: root,
+		distribution: selection.distro,
+		...linux,
+		branch: remote.branch,
+		expected_sha: source.head,
+		timeout: HELPER_HANG_GUARD_SECONDS,
+		env: {
+			RUSTUP_AUTO_INSTALL: "0",
+			GOTOOLCHAIN: "local",
+			OMP_GATE_EVENT_TOKEN: token,
+			OMP_GATE_EVENT_FILE: "",
+			OMP_GATE_CLOCK_TOKEN: "",
+		},
+		argv: [
+			"bash",
+			"-c",
+			`set -eu; bun install --frozen-lockfile; bun scripts/fulltest.ts${options.debug ? " --debug" : ""}`,
+		],
+	};
+	const plan = await gate.capture({
+		label: "wsl/deployed-workflow-plan",
+		argv: [python, "-B", helper],
+		cwd: root,
+		stdin: JSON.stringify(request),
+		allowFailure: true,
+		wallTimeoutSeconds: 30,
+	});
+	if (plan.exitCode !== 0)
+		return stageFailure("BLOCKED", `deployed helper preflight rejected source: ${plan.stderr.trim()}`, plan.exitCode);
+	let program: string;
+	try {
+		const resolved = JSON.parse(plan.stdout);
+		if (resolved.status !== "PLANNED" || resolved.expected_sha !== source.head || typeof resolved.script !== "string")
+			throw new Error("invalid plan");
+		program = resolved.script;
+	} catch {
+		return stageFailure("UNVERIFIED", "deployed helper returned no fixed-commit plan");
+	}
+	// Preserve the helper's synchronization/protection/post-test checks verbatim.
+	// Stream instead of helper.run (which buffers all compiler phase events).
+	const inner = `set -eu\nread -r -a stat < /proc/$$/stat\nprintf '%s %s\\n' "$$" "\${stat[21]}" > ${quote(`${control}/pid`)}\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\n${program}`;
+	const script = `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(`status=$?; rm -rf -- ${quote(control)}; exit "$status"`)} EXIT\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)}\n`;
+	console.log(
+		`wsl-stage: distro=${selection.distro} root=${linux.linux_repo} expected_sha=${source.head} scope=whole-applicable-local; helper wall hang guard=${HELPER_HANG_GUARD_SECONDS}s (not charged limit); live compiler-phase accounting`,
+	);
+	const command: GateCommand = {
+		label: `wsl/${selection.distro}/fulltest`,
+		argv: wslArgv(selection.distro, HELPER_HANG_GUARD_SECONDS + 120),
+		cwd: root,
+		stdin: script,
+		eventToken: token,
+		allowFailure: true,
+		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, control)),
+	};
+	const result = await gate.capture(command);
+	console.log(result.stdout);
+	if (result.stderr) console.error(result.stderr);
+	// Nested orchestration selftests may log their own inert marker fixtures.
+	// The helper's final records, not the first matching test log, own identity.
+	const testCode = [...result.stdout.matchAll(/^TEST_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];
+	const postHead = [...result.stdout.matchAll(/^POST_TEST_SHA=(.*)$/gm)].at(-1)?.[1];
+	const postState = [...result.stdout.matchAll(/^POST_TEST_STATE_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];
+	if (result.exitCode === 124 || result.exitCode === 137)
+		return stageFailure("TIMEOUT", "WSL execution hang guard expired", result.exitCode);
+	if (result.exitCode === 130) return stageFailure("CANCELLED", "WSL execution cancelled", 130);
+	if (testCode === undefined)
+		return stageFailure("BLOCKED", "fixed-commit synchronization or test startup did not complete", result.exitCode);
+	if (postHead !== source.head || postState !== "0" || result.exitCode !== Number(testCode))
+		return stageFailure(
+			"UNVERIFIED",
+			"post-test commit/state inspection did not establish the fixed-commit result",
+			result.exitCode,
+		);
+	if (result.exitCode !== 0) return stageFailure("FAIL", "Linux fulltest failed", result.exitCode);
+	const events: Array<{ id?: unknown; kind?: unknown }> = [];
+	for (const line of result.stderr.split(/\r?\n/)) {
+		if (!line.startsWith(`OMP_GATE_EVENT ${token} `)) continue;
+		try {
+			events.push(JSON.parse(line.slice(`OMP_GATE_EVENT ${token} `.length)));
+		} catch {
+			/* Not reliable timing evidence. */
+		}
+	}
+	const closedActivity = events.some(
+		(event, index) =>
+			typeof event.id === "string" &&
+			event.kind === "charged" &&
+			events.slice(index + 1).some(end => end.id === event.id && end.kind === "idle"),
+	);
+	if (!/^fulltest: PASS total=/m.test(result.stdout) || !closedActivity)
+		return stageFailure("UNVERIFIED", "Linux fulltest coverage or live compilation accounting was not observed");
+	console.log(`wsl-stage: PASS distro=${selection.distro} HEAD=${source.head}`);
+	return { status: "PASS", distro: selection.distro, head: source.head };
+}
+// This internal module deliberately has no independently runnable WSL tier.
+if (import.meta.main) {
+	console.error("WSL stage is internal to bun run slowtest; standalone execution is prohibited");
+	process.exitCode = 2;
 }

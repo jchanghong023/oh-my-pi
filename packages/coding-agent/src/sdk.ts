@@ -148,6 +148,11 @@ import {
 	setActiveSkills,
 } from "./extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
+import {
+	applyGoalAutoOrchestrateContext,
+	filterGoalAutoOrchestrateMessages,
+	stripGoalAutoOrchestrateContext,
+} from "./goals/request-context";
 import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { stripXdUrlPrefix } from "@oh-my-pi/pi-tui/tools/xd-url";
@@ -4321,6 +4326,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
 		};
+		// This view filter also runs for live steering: never append an objective
+		// here, or an in-flight steering delivery would duplicate the full request.
+		const transformMainContext = async (messages: AgentMessage[], signal?: AbortSignal) =>
+			filterGoalAutoOrchestrateMessages(await transformContext(messages, signal), session?.getGoalModeState());
 		// Per-request provider-context transforms. Obfuscate FIRST so secrets are
 		// redacted from text before snapcompact rasterizes it into PNG frames. Clamp
 		// to the provider budget before normalizing decoder-incompatible images so
@@ -4380,6 +4389,32 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				formatLocalCalendarDate(),
 				normalizePromptPath(sessionManager.getCwd()),
 			);
+		};
+		// Only the main Agent installs this boundary. Side/compaction/advisor
+		// requests keep the shared transforms below, and subagents install neither
+		// goal wrapper. Read live state after async transforms; tools come from the
+		// actual provider context (including remote-lane tool projection).
+		const transformMainProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
+			const transformed = await transformProviderContext(context, transformModel);
+			const goalState = session?.getGoalModeState();
+			const todoContext =
+				goalState?.autoOrchestrate === true &&
+				goalState.enabled &&
+				goalState.mode === "active" &&
+				goalState.goal.status === "active"
+					? session?.buildGoalAutoOrchestrateTodoContext(transformed.tools?.map(tool => tool.name) ?? [])
+					: undefined;
+			const withGoal = applyGoalAutoOrchestrateContext(transformed, goalState, todoContext);
+			if (withGoal === transformed || !obfuscator?.hasSecrets()) return withGoal;
+			// Shared transforms already redacted history. Redact only the new,
+			// transient objective rather than bypassing existing secret protection.
+			return {
+				...withGoal,
+				messages: [
+					...withGoal.messages.slice(0, -1),
+					...obfuscateMessages(obfuscator, withGoal.messages.slice(-1)),
+				],
+			};
 		};
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			return await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
@@ -4450,6 +4485,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				settingsBoundStreamFn(streamModel, context, streamOptions),
 			);
 		};
+		// Agent.buildSideRequestContext reuses the installed main provider
+		// transform. Strip its feature-owned transient view at side dispatch,
+		// even when the request inherited an already prepared main snapshot.
+		const sideStreamFn: StreamFn = (streamModel, context, streamOptions) =>
+			settingsAwareStreamFn(streamModel, stripGoalAutoOrchestrateContext(context), streamOptions);
 		// Primary-agent (and its auto-learn capture twin) provider options read per
 		// request, so `/settings` changes to budgets, Kimi format, or the Codex
 		// websocket policy reach the next call without a session recreate.
@@ -4482,7 +4522,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			options.cacheWarming === false
 				? undefined
 				: new CacheWarmer({
-						stream: (model, context, streamOptions) => primaryStreamFn(model, context, streamOptions),
+						stream: (model, context, streamOptions) =>
+							primaryStreamFn(model, stripGoalAutoOrchestrateContext(context), streamOptions),
 						getPromptTokens: () => session.lastPromptTokens(),
 						getMode: () => cfgProvidersCacheWarming.get(settings),
 						decide: event => extensionRunner.emitCacheWarmingDecision(event),
@@ -4535,8 +4576,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			sessionId: providerSessionId,
 			promptCacheKey: providerPromptCacheKey,
 			deadline: options.deadline,
-			transformContext,
-			transformProviderContext,
+			transformContext: agentKind === "main" ? transformMainContext : transformContext,
+			transformProviderContext: agentKind === "main" ? transformMainProviderContext : transformProviderContext,
 			steeringMode: cfgSteeringMode.get(settings),
 			followUpMode: cfgFollowUpMode.get(settings),
 			interruptMode: cfgInterruptMode.get(settings),
@@ -4818,8 +4859,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			transformProviderContext,
 			onPayload,
 			onResponse,
-			sideStreamFn: settingsAwareStreamFn,
-			advisorStreamFn: settingsAwareStreamFn,
+			sideStreamFn,
+			advisorStreamFn: sideStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
 			getXdevToolEntries: () => (toolSession.xdev ? xdevEntries(toolSession.xdev) : []),

@@ -2160,7 +2160,7 @@ export class AgentSession implements SettingsScope {
 				if (mode === "none") {
 					this.sessionManager.appendModeChange("none");
 				} else if (state) {
-					this.sessionManager.appendModeChange(mode, { goal: state.goal });
+					this.sessionManager.appendModeChange(mode, { goal: state.goal, autoOrchestrate: state.autoOrchestrate });
 				}
 			},
 			sendHiddenMessage: async message => {
@@ -6788,6 +6788,10 @@ export class AgentSession implements SettingsScope {
 		this.#goalModeState = state;
 	}
 
+	buildGoalAutoOrchestrateTodoContext(tools: readonly string[]): string | undefined {
+		return this.#buildGoalTodoContext({ tools, userAuthority: true });
+	}
+
 	getVibeModeState(): VibeModeState | undefined {
 		return this.#vibeModeState;
 	}
@@ -7125,6 +7129,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#buildGoalModeMessage(): CustomMessage | null {
+		// Explicit orchestration context is rebuilt at the main request boundary, never persisted here.
+		if (this.#goalModeState?.autoOrchestrate === true) return null;
 		const content = this.#goalRuntime.buildActivePrompt();
 		if (!content) return null;
 		const todoContext = this.#buildGoalTodoContext();
@@ -7161,9 +7167,9 @@ export class AgentSession implements SettingsScope {
 			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 	}
 
-	#buildGoalTodoContext(): string | undefined {
+	#buildGoalTodoContext(options?: { tools?: readonly string[]; userAuthority?: boolean }): string | undefined {
 		if (!cfgTodoEnabled.get(this.settings)) return undefined;
-		const canCallTodoTool = this.getActiveToolNames().includes("todo");
+		const canCallTodoTool = (options?.tools ?? this.getActiveToolNames()).includes("todo");
 		if (!canCallTodoTool) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
@@ -7185,6 +7191,7 @@ export class AgentSession implements SettingsScope {
 		}));
 
 		return prompt.render(goalTodoContextPrompt, {
+			userAuthority: options?.userAuthority === true,
 			canCallTodoTool,
 			closed: String(closed),
 			open: String(open),
@@ -7282,12 +7289,17 @@ export class AgentSession implements SettingsScope {
 		return cfgMagicKeywordsEnabled.get(this.settings) && cfgMagicKeyword[keyword].get(this.settings);
 	}
 
-	#createMagicKeywordNotices(text: string): CustomMessage[] {
+	#createMagicKeywordNotices(text: string, goalAutoOrchestrateInitialId?: string): CustomMessage[] {
 		if (isJchToolsAgentModel(this.model)) return [];
 		const timestamp = Date.now();
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
+		const goalState = this.#goalModeState;
+		const sourceGoalId =
+			goalState?.autoOrchestrate === true && goalState.goal.id === goalAutoOrchestrateInitialId
+				? goalAutoOrchestrateInitialId
+				: undefined;
 		let context: MagicKeywordContext | undefined;
 		for (const keyword of MAGIC_KEYWORDS) {
 			if (!this.#magicKeywordEnabled(keyword.id) || !containsMagicKeyword(text, keyword.word)) continue;
@@ -7307,6 +7319,10 @@ export class AgentSession implements SettingsScope {
 				content: keyword.notice(context),
 				display: false,
 				attribution: "user",
+				details:
+					keyword.id === "orchestrate" && sourceGoalId !== undefined
+						? { source: "goal-auto-orchestrate", goalId: sourceGoalId }
+						: undefined,
 				timestamp,
 			});
 		}
@@ -7407,7 +7423,9 @@ export class AgentSession implements SettingsScope {
 		// Magic keywords (see modes/magic-keywords.ts): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
 		// agent-initiated turns never trigger them.
-		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
+		const keywordNotices = options?.synthetic
+			? []
+			: this.#createMagicKeywordNotices(expandedText, options?.goalAutoOrchestrateInitialId);
 
 		// A user-initiated prompt (typed message or the `.`/`c` continue shortcut)
 		// re-enables advisor auto-resume that a prior user interrupt suppressed.
@@ -7628,17 +7646,30 @@ export class AgentSession implements SettingsScope {
 	 */
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<
+			PromptOptions,
+			"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "goalAutoOrchestrateInitialId"
+		> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
 	): Promise<boolean> {
-		return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		const state = this.#goalModeState;
+		const submittedMessage: Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution"> =
+			message.customType === "goal-auto-orchestrate-continuation" &&
+			message.details === undefined &&
+			state?.autoOrchestrate === true
+				? { ...message, details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
+				: message;
+		return this.#admitSubmission(() => this.#promptCustomMessage(submittedMessage, options));
 	}
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+		options?: Pick<
+			PromptOptions,
+			"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "goalAutoOrchestrateInitialId"
+		> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 		},
@@ -7659,7 +7690,10 @@ export class AgentSession implements SettingsScope {
 	async #dispatchCustomPrompt<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options:
-			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "onPromptAdmitted"> & {
+			| (Pick<
+					PromptOptions,
+					"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "goalAutoOrchestrateInitialId"
+			  > & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 			  })
@@ -7691,12 +7725,12 @@ export class AgentSession implements SettingsScope {
 			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
 				skillArgs = details.args;
 			}
-			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
+			keywordNotices = this.#createMagicKeywordNotices(skillArgs, options?.goalAutoOrchestrateInitialId);
 		} else if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
 			// A collab-forwarded guest prompt is user-identity text: apply the same
 			// magic-keyword notices (and turn-budget parsing) as the local #prompt
 			// path, which sees its text through #createMagicKeywordNotices too.
-			keywordNotices = this.#createMagicKeywordNotices(textContent);
+			keywordNotices = this.#createMagicKeywordNotices(textContent, options?.goalAutoOrchestrateInitialId);
 		}
 
 		if (options?.queueOnly || this.isStreaming) {
@@ -12526,6 +12560,7 @@ export class AgentSession implements SettingsScope {
 		} finally {
 			this.#bash.finishSessionTransition(bashTransition, branchTransitioned);
 		}
+		await this.#reconcileModeAfterTransition();
 
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext({

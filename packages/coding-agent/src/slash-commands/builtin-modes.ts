@@ -273,6 +273,34 @@ export function formatTokenCount(value: number): string {
 	return value.toLocaleString();
 }
 
+const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
+	name: "goal",
+	icon: "goal",
+	description: "Toggle goal mode (persistent autonomous objective for this session)",
+	subcommands: [
+		{ name: "set", description: "Set or replace the goal", usage: "<objective>" },
+		{ name: "show", description: "Show current goal details" },
+		{ name: "pause", description: "Pause the current goal" },
+		{ name: "resume", description: "Resume a paused goal" },
+		{ name: "drop", description: "Drop the current goal" },
+		{ name: "budget", description: "Adjust the token budget", usage: "<N|off>" },
+	],
+	inlineHint: "[objective]",
+	allowArgs: true,
+	handleRpc: (command, runtime) => runtime.runModeCommand("goal", command.args),
+	getTuiAutocompleteDescription: runtime => {
+		if (!cfgGoalEnabled.get(runtime.ctx.settings)) return "Goal: disabled in settings";
+		if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
+		const state = runtime.ctx.session.getGoalModeState();
+		return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";
+	},
+	handleTui: async (command, runtime) => {
+		await runWithDetachedModeDraft(command, runtime, () =>
+			runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input),
+		);
+	},
+};
+
 export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "security",
@@ -373,30 +401,15 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			);
 		},
 	},
+	GOAL_MODE_SLASH_COMMAND,
 	{
-		name: "goal",
-		icon: "goal",
-		description: "Toggle goal mode (persistent autonomous objective for this session)",
-		subcommands: [
-			{ name: "set", description: "Set or replace the goal", usage: "<objective>" },
-			{ name: "show", description: "Show current goal details" },
-			{ name: "pause", description: "Pause the current goal" },
-			{ name: "resume", description: "Resume a paused goal" },
-			{ name: "drop", description: "Drop the current goal" },
-			{ name: "budget", description: "Adjust the token budget", usage: "<N|off>" },
-		],
-		inlineHint: "[objective]",
-		allowArgs: true,
-		handleRpc: (command, runtime) => runtime.runModeCommand("goal", command.args),
-		getTuiAutocompleteDescription: runtime => {
-			if (!cfgGoalEnabled.get(runtime.ctx.settings)) return "Goal: disabled in settings";
-			if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
-			const state = runtime.ctx.session.getGoalModeState();
-			return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";
-		},
+		...GOAL_MODE_SLASH_COMMAND,
+		name: "goal-auto-orchestrate",
+		description: "Manage a persistent goal with unattended orchestration on each active request",
+		handleRpc: (command, runtime) => runtime.runModeCommand("goal-auto-orchestrate", command.args),
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>
-				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input),
+				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, { autoOrchestrate: true }),
 			);
 		},
 	},

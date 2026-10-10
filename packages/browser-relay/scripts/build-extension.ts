@@ -13,6 +13,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
+import { withCompilerActivity } from "../../../scripts/test-gate-runtime";
 
 const root = path.resolve(import.meta.dir, "..");
 const repoRoot = path.resolve(root, "../..");
@@ -23,12 +24,13 @@ const assetsDir = path.resolve(root, "../coding-agent/src/tools/browser/relay/ex
 await fs.rm(dist, { recursive: true, force: true });
 await fs.mkdir(distExtension, { recursive: true });
 
-const bundle = await Bun.build({
+const buildOptions: Bun.BuildConfig = {
 	entrypoints: [path.join(root, "extension/background.ts")],
 	outdir: distExtension,
 	target: "browser",
 	sourcemap: "none",
-});
+};
+const bundle = await withCompilerActivity(() => Bun.build(buildOptions));
 if (!bundle.success) {
 	for (const log of bundle.logs) console.error(log);
 	process.exit(1);

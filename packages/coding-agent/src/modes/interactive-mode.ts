@@ -2843,7 +2843,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.onInputCallback(
 				this.startPendingSubmission({
 					text: prompt,
-					customType: "goal-continuation",
+					customType:
+						latestState.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
 					display: false,
 				}),
 			);
@@ -3222,6 +3223,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 			customType?: string;
+			goalAutoOrchestrateInitialId?: string;
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
@@ -3232,12 +3234,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			images: input.images,
 			imageLinks: input.imageLinks,
 			customType: input.customType,
+			goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId,
 			display: input.display,
 			streamingBehavior: input.streamingBehavior,
 			cancelled: false,
 			started: false,
 		};
-		if (submission.customType !== "goal-continuation") {
+		if (
+			submission.customType !== "goal-continuation" &&
+			submission.customType !== "goal-auto-orchestrate-continuation"
+		) {
 			this.#pendingGoalContinuationTurns = 0;
 		}
 		this.#pendingSubmittedInput = submission;
@@ -3287,7 +3293,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmissionPreservesDraft = false;
 		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
-		if (submission.customType === "goal-continuation") {
+		if (
+			submission.customType === "goal-continuation" ||
+			submission.customType === "goal-auto-orchestrate-continuation"
+		) {
 			this.#pendingGoalContinuationTurns = Math.max(0, this.#pendingGoalContinuationTurns - 1);
 		}
 		if (this.loadingAnimation) {
@@ -4841,6 +4850,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				enabled: sessionContext.mode === "goal",
 				mode: "active",
 				goal,
+				autoOrchestrate: sessionContext.modeData?.autoOrchestrate === true,
 			});
 			const restored = await this.session.goalRuntime.onThreadResumed({
 				preserveActiveGoal: options?.preserveActiveGoal,
@@ -5125,7 +5135,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 	}
 
-	async #enterGoalMode(options: { objective?: string; resume?: boolean; silent?: boolean }): Promise<void> {
+	async #enterGoalMode(options: {
+		objective?: string;
+		resume?: boolean;
+		silent?: boolean;
+		autoOrchestrate?: boolean;
+	}): Promise<void> {
 		if (this.goalModeEnabled) {
 			return;
 		}
@@ -5145,6 +5160,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? await this.session.goalRuntime.resumeGoal()
 			: await this.session.goalRuntime.createGoal({
 					objective: options.objective ?? "",
+					autoOrchestrate: options.autoOrchestrate,
 				});
 		await this.session.setActiveToolsByName(goalTools);
 		this.session.setGoalModeState(state);
@@ -6082,6 +6098,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async handleGoalModeCommand(
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
@@ -6096,7 +6113,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return false;
 		}
 		const { sub, rest: subRest } = parseGoalSubcommand(rest ?? "");
-		if (sub) return await this.#dispatchGoalSubcommand(sub, subRest, input);
+		if (sub) return await this.#dispatchGoalSubcommand(sub, subRest, input, options);
 		if (this.goalModeEnabled) {
 			if (subRest) {
 				this.showStatus("Goal mode is already active. Use /goal to manage it, or /goal drop to start over.");
@@ -6114,14 +6131,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#openGoalMenu("paused");
 			return false;
 		}
-		if (subRest) return await this.#startGoalFromObjective(subRest, input);
+		if (subRest) return await this.#startGoalFromObjective(subRest, input, options);
 		const objective = (
 			await this.showHookEditor("Goal objective", undefined, undefined, {
 				promptStyle: true,
 			})
 		)?.trim();
 		if (!objective) return false;
-		return await this.#startGoalFromObjective(objective, input);
+		return await this.#startGoalFromObjective(objective, input, options);
 	}
 	async handleGuidedGoalCommand(
 		rest?: string,
@@ -6190,10 +6207,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		sub: GoalSubcommand,
 		rest: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
 		switch (sub) {
 			case "set":
-				return await this.#handleGoalSetSubcommand(rest, input);
+				return await this.#handleGoalSetSubcommand(rest, input, options);
 			case "show":
 				this.#showGoalDetails();
 				return false;
@@ -6330,8 +6348,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #startGoalFromObjective(
 		objective: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
-		await this.#enterGoalMode({ objective, silent: true });
+		await this.#enterGoalMode({ objective, silent: true, autoOrchestrate: options?.autoOrchestrate });
+		const state = this.session.getGoalModeState();
+		const goalAutoOrchestrateInitialId = state?.autoOrchestrate === true ? state.goal.id : undefined;
 		this.#resetGoalContinuationSuppression();
 		if (this.session.isStreaming) {
 			const images = input?.images?.length ? input.images : undefined;
@@ -6341,13 +6362,19 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.session.prompt(objective, {
 						streamingBehavior: "steer",
 						images,
+						...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
 					}),
 				{ imageCount: images?.length ?? 0 },
 			);
 			return true;
 		}
 		if (this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: objective, ...input }, { preserveDraft: true }));
+			this.onInputCallback(
+				this.startPendingSubmission(
+					{ text: objective, ...input, ...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}) },
+					{ preserveDraft: true },
+				),
+			);
 			return true;
 		}
 		return false;
@@ -6356,8 +6383,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #replaceGoalFromObjective(
 		objective: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
-		const state = await this.session.goalRuntime.replaceGoal({ objective });
+		const state = await this.session.goalRuntime.replaceGoal({
+			objective,
+			autoOrchestrate: options?.autoOrchestrate,
+		});
+		const goalAutoOrchestrateInitialId = state.autoOrchestrate === true ? state.goal.id : undefined;
 		this.session.setGoalModeState(state);
 		this.goalModeEnabled = true;
 		this.goalModePaused = false;
@@ -6372,13 +6404,19 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.session.prompt(objective, {
 						streamingBehavior: "steer",
 						images,
+						...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
 					}),
 				{ imageCount: images?.length ?? 0 },
 			);
 			return true;
 		}
 		if (this.onInputCallback) {
-			this.onInputCallback(this.startPendingSubmission({ text: objective, ...input }, { preserveDraft: true }));
+			this.onInputCallback(
+				this.startPendingSubmission(
+					{ text: objective, ...input, ...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}) },
+					{ preserveDraft: true },
+				),
+			);
 			return true;
 		}
 		return false;
@@ -6387,6 +6425,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #handleGoalSetSubcommand(
 		rest: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
 		if (!this.goalModeEnabled && this.#getPausedGoalState()) {
 			this.showWarning("Resume the current goal first, or drop it before setting a new objective.");
@@ -6400,8 +6439,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					})
 				)?.trim();
 		if (!objective) return false;
-		if (this.goalModeEnabled) return await this.#replaceGoalFromObjective(objective, input);
-		return await this.#startGoalFromObjective(objective, input);
+		if (this.goalModeEnabled) return await this.#replaceGoalFromObjective(objective, input, options);
+		return await this.#startGoalFromObjective(objective, input, options);
 	}
 
 	/** Manually (re-)open the plan-review overlay — bound to `/plan-review`. Lets

@@ -2284,10 +2284,11 @@ func (v *Goal) decodeFrom(raw map[string]json.RawMessage) error {
 
 // Session goal mode; `mode` is `"exiting"` while a completed goal unwinds.
 type GoalModeState struct {
-	Enabled bool                 `json:"enabled"`
-	Mode    GoalModeStateMode    `json:"mode"`
-	Goal    Goal                 `json:"goal"`
-	Reason  *GoalModeStateReason `json:"reason,omitempty"`
+	Enabled         bool                 `json:"enabled"`
+	Mode            GoalModeStateMode    `json:"mode"`
+	Goal            Goal                 `json:"goal"`
+	Reason          *GoalModeStateReason `json:"reason,omitempty"`
+	AutoOrchestrate *bool                `json:"autoOrchestrate,omitempty"`
 }
 
 func (v *GoalModeState) UnmarshalJSON(data []byte) error {
@@ -2301,6 +2302,7 @@ func (v *GoalModeState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("mode", &out.Mode)
 	d.required("goal", &out.Goal)
 	d.optional("reason", &out.Reason)
+	d.optional("autoOrchestrate", &out.AutoOrchestrate)
 	if d.err != nil {
 		return d.err
 	}

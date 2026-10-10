@@ -59,9 +59,12 @@ export function renderFullsendNotice({ tools }: Pick<MagicKeywordContext, "tools
 	return prompt.render(fullsendNotice, { tools }).trim();
 }
 
-/** Hidden notice for "orchestrate", naming only the tools the session actually exposes. */
-export function renderOrchestrateNotice({ tools }: Pick<MagicKeywordContext, "tools">): string {
-	return prompt.render(orchestrateNotice, { tools }).trim();
+/** Render the shared orchestration rules; explicit goal requests retain user authority. */
+export function renderOrchestrateNotice(
+	{ tools }: Pick<MagicKeywordContext, "tools">,
+	options: { authority?: "user" } = {},
+): string {
+	return prompt.render(orchestrateNotice, { tools, userAuthority: options.authority === "user" }).trim();
 }
 
 /** Hidden notice for "workflowz", shaped by the active task/eval capabilities. */

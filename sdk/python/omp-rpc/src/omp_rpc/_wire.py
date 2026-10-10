@@ -604,6 +604,7 @@ class GoalModeState:
     mode: Literal["active", "exiting"]
     goal: Goal
     reason: Literal["completed"] | None = None
+    auto_orchestrate: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1880,6 +1881,7 @@ def parse_goal_mode_state(value: object, path: str = "GoalModeState") -> GoalMod
         mode=required(payload, "mode", cast('Decoder[Literal["active", "exiting"]]', literal(frozenset({"active", "exiting"}))), path),
         goal=required(payload, "goal", parse_goal, path),
         reason=optional(payload, "reason", cast('Decoder[Literal["completed"]]', literal(frozenset({"completed"}))), path),
+        auto_orchestrate=optional(payload, "autoOrchestrate", decode_bool, path),
     )
 
 

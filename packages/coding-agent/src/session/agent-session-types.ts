@@ -418,6 +418,8 @@ export interface PromptOptions {
 	userInitiated?: boolean;
 	/** Explicit billing/initiator attribution. */
 	attribution?: MessageAttribution;
+	/** Provenance for the first objective submission from an explicit auto-orchestration goal command. */
+	goalAutoOrchestrateInitialId?: string;
 	/** Skip pre-send compaction checks for this prompt. */
 	skipCompactionCheck?: boolean;
 	/** Delegator's open-endedness description (task tool `solutionSpace`); replaces the prompt as `auto` thinking classification input. */

@@ -1,167 +1,199 @@
-import { describe, expect, test } from "bun:test";
-import {
-	conclusionExitCode,
-	parseSlowtestArgs,
-	pickTriggeredRun,
-	resolveSlowtestHead,
-	waitForOwnedChild,
-	workflowDispatchArgv,
-	type GhRunSummary,
-} from "./slowtest.ts";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { parseSlowtestArgs, runSlowtest, type SlowtestDependencies } from "./slowtest";
+import type { WslSelection, WslStageResult } from "./slowtest-wsl-stage";
+import { runGate } from "./test-gate-runtime";
 
-const TRIGGERED_AT = Date.parse("2026-09-18T10:00:00Z");
-const RUN_ID = "isolated-fixture";
-
-function run(overrides: Partial<GhRunSummary>): GhRunSummary {
-	return {
-		databaseId: 1,
-		status: "queued",
-		conclusion: null,
-		headSha: "a".repeat(40),
-		createdAt: new Date(TRIGGERED_AT + 5_000).toISOString(),
-		url: "https://github.com/example/example/actions/runs/1",
-		displayTitle: `CI (slowtest ${RUN_ID})`,
-		...overrides,
+let temporary: string;
+let stub: string;
+beforeAll(async () => {
+	temporary = await fs.mkdtemp(path.join(os.tmpdir(), "omp-slowtest-mechanism-"));
+	stub = path.join(temporary, "stub.ts");
+	await fs.writeFile(
+		stub,
+		`
+import * as fs from "node:fs/promises";
+import { watch } from "node:fs";
+import * as path from "node:path";
+const [record, barrier, role, code] = process.argv.slice(2);
+if (barrier !== "none") {
+ const peer = role === "current" ? "linux" : "current";
+ const ready = Promise.withResolvers();
+ const watcher = watch(barrier, (_event, name) => { if (String(name) === peer) ready.resolve(); });
+ try {
+  await fs.writeFile(path.join(barrier, role), "");
+  try { await fs.access(path.join(barrier, peer)); } catch { await ready.promise; }
+ } finally { watcher.close(); }
+}
+await fs.appendFile(record, JSON.stringify({role})+"\\n");
+process.exit(Number(code));
+`,
+	);
+});
+afterAll(async () => {
+	await fs.rm(temporary, { recursive: true, force: true });
+});
+async function fixture(selection: WslSelection, dirty = false) {
+	const directory = await fs.mkdtemp(path.join(temporary, "case-"));
+	const root = path.join(directory, "source");
+	await fs.mkdir(root);
+	await fs.writeFile(path.join(root, "source.ts"), "export const value = 1;\n");
+	const localRecord = path.join(directory, "current.jsonl");
+	const linuxRecord = path.join(directory, "linux.jsonl");
+	const deps: SlowtestDependencies = {
+		discover: async () => selection,
+		identity: async () => ({
+			head: "a".repeat(40),
+			digest: await fs.readFile(path.join(root, "source.ts"), "utf8"),
+			dirty,
+			status: dirty ? " M source.ts\n?? new.ts\n" : "",
+			files: [],
+		}),
+		fulltest: async gate => {
+			await gate.run({
+				label: "isolated fulltest stub",
+				argv: [process.execPath, stub, localRecord, "none", "current", "0"],
+			});
+		},
+		wsl: async (gate, options) => {
+			if (selection.status !== "AVAILABLE") return selection;
+			await gate.run({
+				label: "isolated Linux stub",
+				argv: [process.execPath, stub, linuxRecord, "none", "linux", "0"],
+			});
+			return { status: "PASS", distro: selection.distro, head: options.identity!.head };
+		},
 	};
+	const execute = () =>
+		runGate("slowtest", gate => runSlowtest(gate, { root, debug: false }, deps), {
+			limitSeconds: 20,
+			print: () => {},
+		});
+	const records = async (file: string): Promise<Array<{ role: string }>> =>
+		(await fs.readFile(file, "utf8"))
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line));
+	return { root, deps, execute, records, localRecord, linuxRecord };
 }
 
-describe("pickTriggeredRun", () => {
-	test("matches the run for the pushed head sha", () => {
-		const match = run({ databaseId: 7 });
-		expect(pickTriggeredRun([run({ headSha: "b".repeat(40) }), match], "a".repeat(40), TRIGGERED_AT, RUN_ID)).toBe(
-			match,
-		);
-	});
+describe("slowtest isolated mechanism", () => {
+	test.each([
+		{ status: "SKIPPED_WSL_UNAVAILABLE", reason: "no compatible WSL" },
+		{ status: "SKIPPED_NOT_APPLICABLE", reason: "no project need" },
+	] as WslSelection[])(
+		"executes current validation once when extension is $status, including dirty source",
+		async selection => {
+			const f = await fixture(selection, true);
+			expect((await f.execute()).status).toBe("PASS");
+			expect(await f.records(f.localRecord)).toHaveLength(1);
+			await expect(fs.stat(f.linuxRecord)).rejects.toMatchObject({ code: "ENOENT" });
+		},
+		20000,
+	);
 
-	test("prefers the newest matching run", () => {
-		const older = run({ databaseId: 7, createdAt: new Date(TRIGGERED_AT + 5_000).toISOString() });
-		const newer = run({ databaseId: 8, createdAt: new Date(TRIGGERED_AT + 60_000).toISOString() });
-		expect(pickTriggeredRun([older, newer], "a".repeat(40), TRIGGERED_AT, RUN_ID)?.databaseId).toBe(8);
-	});
+	test("dirty source blocks WSL without transferring it and still runs fulltest once", async () => {
+		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" }, true);
+		f.deps.wsl = async () => {
+			throw new Error("dirty source must never enter WSL stage");
+		};
+		expect((await f.execute()).status).toBe("FAIL");
+		expect(await f.records(f.localRecord)).toHaveLength(1);
+		await expect(fs.stat(f.linuxRecord)).rejects.toMatchObject({ code: "ENOENT" });
+	}, 20000);
 
-	test("rejects runs created before the trigger moment beyond clock-skew slack", () => {
-		const stale = run({ databaseId: 9, createdAt: new Date(TRIGGERED_AT - 10 * 60_000).toISOString() });
-		expect(pickTriggeredRun([stale], "a".repeat(40), TRIGGERED_AT, RUN_ID)).toBeUndefined();
-	});
+	test("clean fixed-commit independent platform processes overlap", async () => {
+		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+		const barrier = await fs.mkdtemp(path.join(temporary, "concurrency-"));
+		f.deps.fulltest = async gate => {
+			await gate.run({
+				label: "current stub",
+				argv: [process.execPath, stub, f.localRecord, barrier, "current", "0"],
+			});
+		};
+		f.deps.wsl = async (gate, options) => {
+			await gate.run({ label: "Linux stub", argv: [process.execPath, stub, f.linuxRecord, barrier, "linux", "0"] });
+			return { status: "PASS", distro: "Ubuntu-24.04", head: options.identity!.head };
+		};
+		expect((await f.execute()).status).toBe("PASS");
+		expect(await f.records(f.localRecord)).toEqual([{ role: "current" }]);
+		expect(await f.records(f.linuxRecord)).toEqual([{ role: "linux" }]);
+	}, 20000);
 
-	test("ignores runs with unparseable creation timestamps", () => {
-		const invalid = run({ createdAt: "not-a-date" });
-		expect(pickTriggeredRun([invalid], "a".repeat(40), TRIGGERED_AT, RUN_ID)).toBeUndefined();
-	});
+	test.each(["BLOCKED", "UNVERIFIED", "FAIL", "TIMEOUT", "CANCELLED"] as const)(
+		"available WSL $0 is nonpassing and retains local fulltest",
+		async status => {
+			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+			f.deps.wsl = async () => ({
+				status,
+				reason: "inert failure",
+				exitCode: status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17,
+			});
+			const result = await f.execute();
+			expect(result.status).not.toBe("PASS");
+			expect(result.exitCode).toBe(status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17);
+			expect(await f.records(f.localRecord)).toHaveLength(1);
+		},
+		20000,
+	);
 
-	test("returns undefined when nothing matches", () => {
-		expect(pickTriggeredRun([], "a".repeat(40), TRIGGERED_AT, RUN_ID)).toBeUndefined();
-	});
+	test("unexpected discovery failure does not omit reachable fulltest", async () => {
+		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+		f.deps.discover = async () => {
+			throw new Error("WSL service probe blocked");
+		};
+		expect((await f.execute()).status).toBe("FAIL");
+		expect(await f.records(f.localRecord)).toHaveLength(1);
+	}, 20000);
 
-	test("ignores another dispatch at the same HEAD even when it is newer", () => {
-		const own = run({ databaseId: 7 });
-		const other = run({
-			databaseId: 8,
-			displayTitle: "CI (slowtest another-invocation)",
-			createdAt: new Date(TRIGGERED_AT + 60_000).toISOString(),
+	test("source changes during current validation cannot verify one identity", async () => {
+		const f = await fixture({ status: "SKIPPED_NOT_APPLICABLE", reason: "fixture" });
+		const original = f.deps.fulltest;
+		f.deps.fulltest = async (gate, options) => {
+			await original(gate, options);
+			await gate.charged(() => fs.writeFile(path.join(f.root, "source.ts"), "changed during validation\n"));
+		};
+		expect((await f.execute()).status).toBe("FAIL");
+	}, 20000);
+
+	test("mismatching Linux fixed commit fails despite successful extension", async () => {
+		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+		f.deps.wsl = async (): Promise<WslStageResult> => ({
+			status: "PASS",
+			distro: "Ubuntu-24.04",
+			head: "b".repeat(40),
 		});
-		expect(pickTriggeredRun([own, other], "a".repeat(40), TRIGGERED_AT, RUN_ID)?.databaseId).toBe(7);
-		expect(pickTriggeredRun([other], "a".repeat(40), TRIGGERED_AT, RUN_ID)).toBeUndefined();
-	});
+		expect((await f.execute()).status).toBe("FAIL");
+	}, 20000);
 });
 
-describe("workflowDispatchArgv", () => {
-	test("dispatches the release flavor of the CI workflow", () => {
-		expect(workflowDispatchArgv(RUN_ID)).toEqual([
-			"gh",
-			"workflow",
-			"run",
-			"ci.yml",
-			"--ref",
-			"main",
-			"-f",
-			"publish_release=true",
-			"-f",
-			`slowtest_run_id=${RUN_ID}`,
-		]);
-	});
+test("slowtest rejects budget relaxation and ambiguous options", () => {
+	expect(parseSlowtestArgs(["--limit-seconds=15", "--debug"])).toEqual({ debug: true, limitSeconds: 15 });
+	for (const args of [
+		["--release"],
+		["--limit-seconds"],
+		["--limit-seconds", "15"],
+		["--limit-seconds=1501"],
+		["--limit-seconds=0"],
+		["--limit-seconds=NaN"],
+		["--limit-seconds=15", "--limit-seconds=14"],
+	])
+		expect(parseSlowtestArgs(args)).toBeNull();
 });
-
-describe("conclusionExitCode", () => {
-	test("success is the only green conclusion", () => {
-		expect(conclusionExitCode("success")).toBe(0);
-		expect(conclusionExitCode("failure")).toBe(1);
-		expect(conclusionExitCode("cancelled")).toBe(1);
-		expect(conclusionExitCode(null)).toBe(1);
+test("invalid slowtest CLI arguments still print the whole-run summary", async () => {
+	const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "slowtest.ts"), "--invalid-gate-option"], {
+		stdout: "pipe",
+		stderr: "pipe",
 	});
-});
-
-describe("parseSlowtestArgs", () => {
-	test("no arguments defaults to a non-debug run", () => {
-		expect(parseSlowtestArgs([])).toEqual({ debug: false });
-	});
-
-	test("--debug forwards to fulltest", () => {
-		expect(parseSlowtestArgs(["--debug"])).toEqual({ debug: true });
-	});
-
-	test("unknown arguments are rejected", () => {
-		expect(parseSlowtestArgs(["--release"])).toBeNull();
-		expect(parseSlowtestArgs(["--debug", "extra"])).toBeNull();
-	});
-});
-
-describe("resolveSlowtestHead", () => {
-	function capture(state: { branch?: string; dirty?: boolean; sha?: string; failed?: string }) {
-		return (argv: readonly string[]) => ({
-			exitCode: argv[1] === state.failed ? 1 : 0,
-			stdout:
-				argv[1] === "status"
-					? state.dirty
-						? " M scripts/slowtest.ts\n"
-						: ""
-					: argv.includes("--abbrev-ref")
-						? (state.branch ?? "main")
-						: (state.sha ?? "a".repeat(40)),
-		});
-	}
-
-	test("rejects an uncommitted tree before it can become the published commit", () => {
-		expect(() => resolveSlowtestHead(undefined, capture({ dirty: true }))).toThrow("must be clean");
-	});
-
-	test("rejects a commit or branch changed after local or WSL validation", () => {
-		const testedSha = resolveSlowtestHead(undefined, capture({}));
-		expect(() => resolveSlowtestHead(testedSha, capture({ sha: "b".repeat(40) }))).toThrow("HEAD changed");
-		expect(() => resolveSlowtestHead(testedSha, capture({ branch: "feature" }))).toThrow("branch to be main");
-	});
-
-	test("fails closed when Git cannot inspect the tree or HEAD", () => {
-		expect(() => resolveSlowtestHead(undefined, capture({ failed: "status" }))).toThrow("must be clean");
-		expect(() => resolveSlowtestHead(undefined, capture({ failed: "rev-parse" }))).toThrow("branch to be main");
-	});
-});
-
-describe("owned subprocess cancellation", () => {
-	test("aborting the stage kills its child without accepting success or touching another child", async () => {
-		const detached = process.platform !== "win32";
-		const child = Bun.spawn([process.execPath, "-e", "await Bun.stdin.text()"], {
-			detached,
-			stdin: "pipe",
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		const unrelated = Bun.spawn([process.execPath, "-e", "await Bun.stdin.text()"], {
-			stdin: "pipe",
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		const controller = new AbortController();
-		try {
-			const waiting = waitForOwnedChild(child, controller.signal, detached);
-			controller.abort(new Error("canceled"));
-			await expect(waiting).rejects.toThrow("canceled");
-			expect(await child.exited).not.toBe(0);
-			expect(unrelated.exitCode).toBeNull();
-		} finally {
-			child.kill();
-			unrelated.kill();
-			await Promise.all([child.exited, unrelated.exited]);
-		}
-	}, 10_000);
+	const [exitCode, stdout] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	expect(exitCode).toBe(2);
+	expect(stdout).toMatch(
+		/slowtest: FAIL total=[\d.]+s compile_excluded=[\d.]+s budgeted=[\d.]+s limit=1500\.0s exit=2/,
+	);
 });

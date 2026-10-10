@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
 import { windowsTestTempOverride } from "./windows-test-temp";
+import { withRustCompilerEvents } from "./test-gate-runtime";
 import {
 	parseFulltestChangedPaths,
 	selectRustTestScope,
@@ -414,12 +415,14 @@ async function runCommand(command: readonly string[]): Promise<number> {
 	const executable = isCargo ? await ensureCargoBinary() : head;
 	const argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
-	const proc = Bun.spawn(argv, {
-		cwd: repoRoot,
-		env,
-		stdin: "inherit",
-		stdout: "inherit",
-		stderr: "inherit",
+	return withRustCompilerEvents(env, async compilerEnv => {
+		const proc = Bun.spawn(argv, {
+			cwd: repoRoot,
+			env: compilerEnv,
+			stdin: "inherit",
+			stdout: "inherit",
+			stderr: "inherit",
+		});
+		return proc.exited;
 	});
-	return proc.exited;
 }

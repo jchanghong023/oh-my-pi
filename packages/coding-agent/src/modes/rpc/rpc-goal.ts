@@ -256,7 +256,11 @@ export class RpcGoalController {
 	}
 
 	/** Text command adapter; GoalRuntime remains the sole owner of goal state. */
-	async handleSlash(args: string, runtime: RpcGoalSlashRuntime): Promise<SlashCommandResult> {
+	async handleSlash(
+		args: string,
+		runtime: RpcGoalSlashRuntime,
+		options?: { autoOrchestrate?: boolean },
+	): Promise<SlashCommandResult> {
 		await this.settled();
 		let generation = this.#continuationGeneration;
 		const transcript = this.#session.sessionManager.getSessionId();
@@ -374,13 +378,15 @@ export class RpcGoalController {
 		await this.#enter(
 			() =>
 				state?.enabled
-					? this.#session.goalRuntime.replaceGoal({ objective: rest })
-					: this.#session.goalRuntime.createGoal({ objective: rest }),
+					? this.#session.goalRuntime.replaceGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate })
+					: this.#session.goalRuntime.createGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate }),
 			false,
 		);
 		if (!current()) return;
+		const goalAutoOrchestrateInitialId =
+			options?.autoOrchestrate === true ? this.#session.getGoalModeState()?.goal.id : undefined;
 		await output("Goal mode enabled.");
-		return { prompt: rest };
+		return { prompt: rest, ...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}) };
 	}
 
 	#assertCanEnter(): void {
@@ -502,7 +508,12 @@ export class RpcGoalController {
 			this.#session.sessionManager.appendModeChange("none");
 			return;
 		}
-		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal });
+		this.#session.setGoalModeState({
+			enabled: context.mode === "goal",
+			mode: "active",
+			goal,
+			...(context.modeData?.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
+		});
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
 		if (!restored?.goal) return;
 		const previousTools = this.#session.getEnabledToolNames();
@@ -616,15 +627,25 @@ export class RpcGoalController {
 			// promptCustomMessage counts the submission as admitted synchronously, so every
 			// settle report sees it from here on. A continuation that is refused or bails
 			// before its run starts must neither stay counted nor withhold settlement.
-			session.promptCustomMessage({ customType: "goal-continuation", content: prompt, display: false }).then(
-				dispatched => {
-					if (!dispatched) unclaim();
-				},
-				error => {
-					unclaim();
-					reportControllerError(error);
-				},
-			);
+			const state = session.getGoalModeState();
+			session
+				.promptCustomMessage({
+					customType: state?.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
+					content: prompt,
+					display: false,
+					...(state?.autoOrchestrate === true
+						? { details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
+						: {}),
+				})
+				.then(
+					dispatched => {
+						if (!dispatched) unclaim();
+					},
+					error => {
+						unclaim();
+						reportControllerError(error);
+					},
+				);
 		})().catch(error => {
 			this.#continuationScheduled = false;
 			this.#onContinuationDropped?.();

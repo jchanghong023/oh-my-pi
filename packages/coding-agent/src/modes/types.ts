@@ -65,6 +65,8 @@ export type SubmittedUserInput = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	customType?: string;
+	/** Goal creation/replacement provenance for the submitted initial objective. */
+	goalAutoOrchestrateInitialId?: string;
 	/** Route through `session.prompt(text, { synthetic: true })` so the text lands
 	 *  as a hidden agent-authored `developer` message rather than a visible user
 	 *  turn. Used by the `c`/`.` continue shortcut. */
@@ -357,6 +359,7 @@ export interface InteractiveModeContext {
 			images?: ImageContent[];
 			imageLinks?: (string | undefined)[];
 			customType?: string;
+			goalAutoOrchestrateInitialId?: string;
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
@@ -593,7 +596,11 @@ export interface InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean>;
-	handleGoalModeCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
+	handleGoalModeCommand(
+		rest?: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		options?: { autoOrchestrate?: boolean },
+	): Promise<boolean>;
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;

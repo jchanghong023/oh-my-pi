@@ -58,6 +58,10 @@
 - 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
 - 用户设置 `magicKeywords.fullsend`（默认 `true`，`/settings` 面板 → Interaction → Magic Keywords）可关闭 fullsend 关键词注入。
 
+### `/goal-auto-orchestrate` 持续无人值守目标
+
+完整命令、模式归属、请求级注入、权限边界与验收条件统一维护在 [Goal 自动编排需求](goal-auto-orchestrate.md)，此处不重复条款；实现与验收状态见[目录索引](README.md)。
+
 ### `/team` 多模型方案讨论
 
 完整行为与验收条件统一维护在[多模型方案讨论需求](team.md)，此处不重复条款。
@@ -191,7 +195,7 @@
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 永久只承担构建、产物汇总与发布，不运行测试、冒烟、lint、类型检查或独立校验作业；发布只等待版本元数据与全部二进制构建成功，不承担本地验收门禁。`bun run slowtest` 先完成本机与 WSL2 验证，再以 `publish_release=true` 触发 CI，构建发布成功即产出 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 永久只承担构建、产物汇总与发布，不运行测试、冒烟、lint、类型检查或独立校验作业；发布只等待版本元数据与全部二进制构建成功，不承担本地验收门禁。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 - 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
 - 构建发布 CI 使用 GitHub 原生缓存保存 Bazel action cache、依赖下载及 Cargo registry/git；无需自建缓存服务器或额外凭据。各 native target 独立恢复与保存缓存，键包含宿主平台、目标、工具链/构建配置及 native 源码指纹；源码变化时可恢复同配置的旧缓存，由 Bazel 判断哪些 action 可复用。缓存缺失或被 GitHub 淘汰时正常冷编译，不跳过构建。
 - 二进制必须携带 fork 版本、构建时间和更新仓库信息。
@@ -209,13 +213,22 @@
 
 ## Fork 验证体系
 
-保留 `fastcheck`、`fulltest`、`slowtest` 三个入口，采用尽量简薄的编排，优先复用上游检查、测试运行器与 CI。
+本节是三层本地门禁的唯一需求位置；具体权限、命令与缓存纪律见 `AGENTS.md`「验证」「构建与缓存纪律」，验证状态见[需求目录](README.md)。门禁只复用现有检查、测试与编译原语，不改写上游质量定义、通过标准、产品行为或 CI 工作流。
 
-- `fastcheck` 承担静态检查，保留 TS 类型、lint、格式及 Rust 检查目标；不设置 fork 整体硬超时，以实际检查结果判定成败。
-- `fulltest` 承担当前操作系统下的必要验证，包含保留的 fork 功能测试与真实公开入口验证。不维护上游测试白名单。上游入口的平台适用性须核对，不能以取消白名单为由省略必要覆盖，也不能把不支持或失败报告为通过。上游红色期间的例外：Windows 专属代码的 pinned-nightly clippy 缺陷已随上游修复合入，但 fulltest 静态阶段暂仍只跑上游 `check:ts`、不含 `check:rs` 的 fmt/clippy 半边；恢复 Rust 静态检查须另行验证，当前状态以 `AGENTS.md`「现状与缺口」为准。上游自身测试 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open` 在 Windows 确定性失败（上游 CI 只在 Linux 测试），`test:rs` 的 nextest 调用在 Windows 上过滤该单个用例，不额外过滤所选 crate 内的其他用例；crate 选择仍遵循 `fulltest` 的差异范围。上游带入的未过其自身格式门禁的文件按锁定 oxfmt 版本在本地格式化以保持门禁可用（上游格式化后差异自动消除）。恢复条件均为上游转绿后按各文件内注释还原。
-- `slowtest` 保留本机验证、Ubuntu-24.04 WSL2 验证、自动推送、触发和监控构建发布 CI、成功后发布个人 Release 的流程。测试留在本地 Windows 与 WSL2，不在远端 CI 重复运行；WSL2 仍是 Windows 发布流程的必经阶段，核对同一提交，保留工作区保护与失败停止要求；非 Windows 平台不增加 WSL 阶段。两端仍按 `fulltest` 的差异选择范围执行，不扩展为上游全量测试。
-- 不设置 fork 自定义的测试阶段和 WSL 阶段时限，测试本体沿用上游运行器与 CI 的超时机制；WSL 阶段的非测试挂起（如安装或环境准备）无自动时限，由操作者中止。取消操作仍须正确处理本次任务拥有的资源。
-- fork 功能继续要求自动化局部验证与真实入口 E2E。模拟不替代真实边界验证，未运行、失败和通过分别报告。执行授权仍遵循项目规则。
-- 测试适配只维护已保留功能及支持平台所必需的部分，不再将历史测试补丁清单作为独立产品需求。
+| 入口 | 当前有效范围 | 非编译硬上限 |
+| --- | --- | --- |
+| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 60 秒 |
+| `bun run fulltest` | 全部 fastcheck 检查 + 当前平台适用自动化测试、代码生成验证、构建和隔离 CLI/TUI 公开入口 E2E；无跨 WSL | 900 秒 |
+| `bun run slowtest` | fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux 验证；无适用 WSL 时覆盖等于 fulltest | 1500 秒 |
 
-本节定义目标，已由 `scripts/fulltest.ts`、`scripts/slowtest.ts` 与 package.json 的 `fastcheck` 别名按薄编排实现（2026-10-07）；实现细节与运行细则以 `AGENTS.md`「验证」一节为准。
+- 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除。嵌套阶段共享外层剩余额度，并保持更严格的内层上限。
+- 到限主动终止本次拥有的进程树，非零退出并报告 `TIMEOUT`，不在阶段间重置时钟、不放宽上限。所有退出路径（成功、失败、缺工具、超时、中断、参数错误）都输出 status、total、compile_excluded、budgeted、limit 与退出码，秒至少一位小数；按 budgeted 而不是 total 判断到限。
+- 独立且安全的检查/测试/Windows与WSL两端必须并行；改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
+- fastcheck 仅在具体需要且相关修改批次完成后由 Agent 选择，不能逐文件保存即运行。fulltest/slowtest 需要本次用户明确运行授权；显式调用 `jch-fastcheck-fulltest-slowtest-gates` 执行工作流即授权本任务所需三层运行和修复后的必要重跑，任务结束失效。入口脚本逐文件静态检查例外及不可通过内部阶段绕过权限的边界以该技能为准。
+- 三层 NEVER 调用或触发 CI/远端发布流水线、push、发布、部署、Computer Use、共享鼠标或抢前台焦点。既有独立 CI 保持原配置，发布不属于门禁。真实桌面输入测试保留并另行明确授权，记 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不计为已通过；隔离的浏览器 DOM/协议、虚拟终端和 PTY 自动化可纳入本地测试。
+- 本项目支持 Windows/Linux x64，Windows→WSL 验证显式选定 **Ubuntu-24.04 WSL2**，不能替换目标；未指定目标的一般项目才优先合适的已安装 CentOS。无 WSL/无兼容发行版记 `SKIPPED_WSL_UNAVAILABLE`，项目不需要则 `SKIPPED_NOT_APPLICABLE`，此时 slowtest 覆盖等于 fulltest。已选择 WSL 后的同步、脏源码、工具或执行失败须 BLOCKED/UNVERIFIED/FAIL，不能降级成跳过；即使 WSL 受阻也完成可达的本机 fulltest 一次。不自动安装 WSL、发行版或缺失测试工具。
+- WSL 阶段遵循该技能 `references/wsl-testing-workflow.md`，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须阻塞 WSL，不能测试旧提交代表当前改动。既有 `workflow.py` plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 3600 秒墙钟防挂另行报告，外层累计非编译上限仍为 1500 秒。记录两端 HEAD、本机源码指纹、工作树、Linux 工具路径与版本；不同提交不得合并 PASS。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
+- 当前平台默认覆盖现有适用本地检查与测试，保留全部技术栈及集成边界；不再默认只运行有差异的测试文件。fork 若实际无法满足非编译预算，先从记录的上游基线纳入完整已提交及未提交差异，按实际依赖/构建图选改动与受影响模块，再优化并行、缓存和重复执行。三层继承同一范围，结果报告 `scope=fork-affected`、基线、选中模块、影响依据和未跑全项目覆盖；不能忽略受影响失败模块、放宽预算或改写测试标准。
+- 环境/工具缺失、平台不适用和检查失败须分别说明，不把缺失或跳过当通过。既有 Windows 上游 sed 用例过滤及其他测试适配不在本次门禁编排中改写；未运行的实际模型质量、公司内网、独立发布和桌面输入不属于本地 PASS 的证明。
+- 门禁机制自测在临时目录中用短任务覆盖成功/失败/缺工具/超时/中断、进程树清理、编译排除与重叠计费、累计与下调预算、并行、缓存保留、包含关系、适用 WSL 和禁止外部操作；自测不是 fastcheck 的阶段，也不能代替真实三层入口执行。
+

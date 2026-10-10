@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { $ } from "bun";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
+import { withRustCompilerEvents } from "../../../scripts/test-gate-runtime";
 import { generateEnumExports } from "./gen-enums";
 
 // pcre2-sys prefers a system libpcre2 when pkg-config finds one. Keep the
@@ -278,7 +279,9 @@ try {
 	// The package declares Bun as its build runtime. Invoke napi's JavaScript
 	// entry through this Bun process instead of its `#!/usr/bin/env node` shim so
 	// an old host Node installation cannot make an otherwise supported Bun build fail.
-	const buildResult = await $`${process.execPath} ${napiBin} ${napiArgs}`.nothrow();
+	const buildResult = await withRustCompilerEvents(process.env as Record<string, string>, async env =>
+		$`${process.execPath} ${napiBin} ${napiArgs}`.env(env).nothrow(),
+	);
 	if (buildResult.exitCode !== 0) {
 		const stdout = buildResult.stdout?.toString("utf-8") ?? "";
 		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
