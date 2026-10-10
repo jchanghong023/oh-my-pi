@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [18.8.8] - 2026-10-10
+
+### Added
+
+- Added `hueDistance`, the angular distance between two OKLCH hues
+
 ### Fixed
 
 - Fixed subprocess termination validation treating a signal-terminated child as still running on Linux.
