@@ -207,13 +207,14 @@ describe("headless MCP readiness", () => {
 			{},
 		);
 		try {
-			const status = await manager.waitForStartup(2_000);
+			// Deadline behavior is covered above; wait for the reconnect itself here.
+			const status = await manager.waitForStartup(0);
 			expect(status).toEqual({ connected: ["recover"], pending: [], failed: [] });
 			expect(manager.getTools().map(tool => tool.name)).toContain("mcp__recover_late_tool");
 		} finally {
 			await manager.disconnectAll();
 		}
-	}, 3_000);
+	}, 10_000);
 
 	it("lets the environment startup window override a shorter setting during discovery", async () => {
 		Bun.env.OMP_MCP_STARTUP_TIMEOUT_MS = "1500";
