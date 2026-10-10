@@ -58,7 +58,7 @@ function executionFixture(override?: (command: GateCommand) => Promise<string | 
 			case "wsl/source-branch":
 				return "feature\n";
 			case "wsl/push-target":
-				return "company\trefs/heads/tested-feature\n";
+				return "company\trefs/heads/tested-feature\trefs/remotes/company/tested-feature\tcompany\trefs/heads/tested-feature\trefs/remotes/company/tested-feature\n";
 			case "wsl/fetch-url":
 				return "https://github.com/owner/oh-my-pi.git\n";
 			case "wsl/push-url":
@@ -206,6 +206,22 @@ describe("fixed network-remote source", () => {
 			"company",
 			"refs/heads/tested-feature",
 		]);
+	});
+	test("resolves Git's implicit push ref only when the exact upstream mapping agrees", async () => {
+		const tracking = "refs/remotes/company/feature";
+		const target = `company\t\t${tracking}\tcompany\trefs/heads/feature\t${tracking}\n`;
+		const f = executionFixture(async command => (command.label === "wsl/push-target" ? target : undefined));
+		expect((await resolveWslRemoteSource(f.gate, temporary, source())).branch).toBe("feature");
+		for (const incompatible of [
+			target.replace("refs/heads/feature", "refs/heads/different"),
+			target.replace(`${tracking}\n`, "refs/remotes/company/different\n"),
+			target.replace("\tcompany\trefs/heads/feature", "\tother\trefs/heads/feature"),
+		]) {
+			const blocked = executionFixture(async command =>
+				command.label === "wsl/push-target" ? incompatible : undefined,
+			);
+			await expect(resolveWslRemoteSource(blocked.gate, temporary, source())).rejects.toThrow("ambiguous");
+		}
 	});
 	test("unresolved or split repository targets block without Git writes", async () => {
 		for (const [label, value] of [

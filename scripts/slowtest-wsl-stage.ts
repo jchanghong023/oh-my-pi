@@ -176,10 +176,21 @@ export async function resolveWslRemoteSource(
 	const branch = await git("wsl/source-branch", ["symbolic-ref", "--short", "HEAD"]);
 	const target = await git("wsl/push-target", [
 		"for-each-ref",
-		"--format=%(push:remotename)%09%(push:remoteref)",
+		"--format=%(push:remotename)%09%(push:remoteref)%09%(push)%09%(upstream:remotename)%09%(upstream:remoteref)%09%(upstream)",
 		`refs/heads/${branch}`,
 	]);
-	const [remote, ref] = target.split("\t");
+	const [remote, pushRef, pushTracking, upstreamRemote, upstreamRef, upstreamTracking] = target.split("\t");
+	// Git can resolve @{push} while leaving push:remoteref empty for the normal
+	// implicit simple/current mapping. Reuse its exact upstream mapping only
+	// when both tracking refs, remote identity and branch name agree.
+	const ref =
+		pushRef ||
+		(remote === upstreamRemote &&
+		pushTracking &&
+		pushTracking === upstreamTracking &&
+		upstreamRef === `refs/heads/${branch}`
+			? upstreamRef
+			: undefined);
 	if (!remote || remote === "." || !ref?.startsWith("refs/heads/"))
 		throw new Error("BLOCKED: actual configured push remote/branch is ambiguous or unavailable");
 	const fetchUrls = (await git("wsl/fetch-url", ["remote", "get-url", "--all", remote])).split(/\r?\n/);
@@ -373,7 +384,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		cwd: root,
 		allowFailure: true,
 		wallTimeoutSeconds: 30,
-		stdin: `set -eu\ncd ${quote(linux.linux_repo)}\n[ "$(pwd -P)" = ${quote(linux.linux_repo)} ]\nfor tool in git python3 bun cargo rustc cargo-nextest ruff go setsid flock timeout; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; printf '%s=%s\\n' "$tool" "$exe"; done\npython3 -m pytest --version\nRUSTUP_AUTO_INSTALL=0 cargo --version\nRUSTUP_AUTO_INSTALL=0 rustc --version\nGOTOOLCHAIN=local go version\n# Refuse active unrelated writers; no waiting or global process termination.\nfor proc in /proc/[0-9]*; do cwd=$(readlink "$proc/cwd" 2>/dev/null || true); case "$cwd" in ${quote(linux.linux_repo)}|${quote(`${linux.linux_repo}/`)}*) case "$(cat "$proc/comm" 2>/dev/null || true)" in git|cargo|rustc|bun|node|python*|go|ruff) echo 'BLOCKED: active workspace process' >&2; exit 1;; esac;; esac; done\n`,
+		stdin: `set -eu\ncd ${quote(linux.linux_repo)}\n[ "$(pwd -P)" = ${quote(linux.linux_repo)} ]\nfor tool in git python3 bun cargo rustc cargo-nextest setsid flock timeout; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; printf '%s=%s\\n' "$tool" "$exe"; done\npython3 --version\nRUSTUP_AUTO_INSTALL=0 cargo --version\nRUSTUP_AUTO_INSTALL=0 rustc --version\n# Refuse active unrelated writers; no waiting or global process termination.\nfor proc in /proc/[0-9]*; do cwd=$(readlink "$proc/cwd" 2>/dev/null || true); case "$cwd" in ${quote(linux.linux_repo)}|${quote(`${linux.linux_repo}/`)}*) case "$(cat "$proc/comm" 2>/dev/null || true)" in git|cargo|rustc|bun|node|python*|go|ruff) echo 'BLOCKED: active workspace process' >&2; exit 1;; esac;; esac; done\n`,
 	});
 	if (environment.exitCode !== 0)
 		return stageFailure(
@@ -394,7 +405,6 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		timeout: HELPER_HANG_GUARD_SECONDS,
 		env: {
 			RUSTUP_AUTO_INSTALL: "0",
-			GOTOOLCHAIN: "local",
 			OMP_GATE_EVENT_TOKEN: token,
 			OMP_GATE_EVENT_FILE: "",
 			OMP_GATE_CLOCK_TOKEN: "",
@@ -429,7 +439,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 	const inner = `set -eu\nread -r -a stat < /proc/$$/stat\nprintf '%s %s\\n' "$$" "\${stat[21]}" > ${quote(`${control}/pid`)}\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\n${program}`;
 	const script = `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(`status=$?; rm -rf -- ${quote(control)}; exit "$status"`)} EXIT\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)}\n`;
 	console.log(
-		`wsl-stage: distro=${selection.distro} root=${linux.linux_repo} expected_sha=${source.head} scope=whole-applicable-local; helper wall hang guard=${HELPER_HANG_GUARD_SECONDS}s (not charged limit); live compiler-phase accounting`,
+		`wsl-stage: distro=${selection.distro} root=${linux.linux_repo} expected_sha=${source.head} scope=fork-affected; helper wall hang guard=${HELPER_HANG_GUARD_SECONDS}s (not charged limit); live compiler-phase accounting`,
 	);
 	const command: GateCommand = {
 		label: `wsl/${selection.distro}/fulltest`,

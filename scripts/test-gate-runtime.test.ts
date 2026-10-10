@@ -39,6 +39,17 @@ if (plan.grandchild) {
   reader.releaseLock();
 }
 if (plan.output) { process.stdout.write(plan.output); process.stderr.write("stderr preserved\\n"); }
+if (plan.interrupt) {
+  // Load the runtime-selected fixture module inside the isolated process boundary.
+  const {runGate} = await import(plan.runtime);
+  const before = process.listenerCount("SIGINT");
+  const result = await runGate("fastcheck", async gate => {
+    process.emit("SIGINT");
+    await gate.run({label:"interrupted stub",argv:[process.execPath,import.meta.path,JSON.stringify({ms:30000})]});
+  }, {limitSeconds:0.8});
+  process.stdout.write("INTERRUPT_RESULT" + JSON.stringify({result,restored:process.listenerCount("SIGINT") === before}));
+  process.exit(result.exitCode);
+}
 if (plan.nested) {
   // The fixture receives the real runtime module URL across the subprocess boundary.
   const {runGate} = await import(plan.runtime);
@@ -56,6 +67,30 @@ if (plan.nestedCapture) {
   }, {print:()=>{}});
   process.stdout.write("CAPTURE_RESULT" + JSON.stringify(captured));
   process.exit(result.exitCode);
+}
+if (plan.rustCargo) {
+  // Exercise accounting across the independently spawned harness's runtime-selected module boundary.
+  const {withRustCompilerEvents} = await import(plan.runtime);
+  try {
+    const exitCode = await withRustCompilerEvents({...process.env}, async env => {
+      if (plan.rustCargo === "failure") throw new Error("fixture Cargo failure");
+      if (plan.rustCargo === "completed") return 0;
+      const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
+      // Cargo launches build scripts directly: this child intentionally emits no events.
+      const native = Bun.spawn([process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
+      const codes = await Promise.all([compiler.exited,native.exited]);
+      return codes[0] || codes[1];
+    });
+    if (exitCode) process.exit(exitCode);
+  } catch (error) {
+    if (plan.rustCargo !== "failure") throw error;
+    if (error.message !== "fixture Cargo failure") throw error;
+  }
+  if (plan.afterRustCompile) {
+    const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {stdout:"inherit",stderr:"inherit"});
+    process.exit(await compiler.exited);
+  }
+  process.exit(0);
 }
 if (plan.capturedCompiler) {
   const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {stdout:"pipe",stderr:"pipe"});
@@ -265,19 +300,29 @@ for (const level of ["fastcheck", "fulltest", "slowtest"] satisfies GateLevel[])
 }
 
 it("handles SIGINT with a summary and restores signal listeners", async () => {
-	const before = process.listenerCount("SIGINT");
-	const output: string[] = [];
-	const result = await runGate(
-		"fastcheck",
-		async gate => {
-			process.emit("SIGINT");
-			await gate.run(command({ ms: 30000 }));
-		},
-		{ print: line => output.push(line), limitSeconds: 0.8 },
+	// A SIGINT in the Bun test runner interrupts the entire suite. Exercise
+	// the gate in its own process, leaving the runner's handlers untouched.
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			stub,
+			JSON.stringify({
+				interrupt: true,
+				runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+			}),
+		],
+		{ stdout: "pipe", stderr: "pipe" },
 	);
-	expect(result.status).toBe("INTERRUPTED");
-	expect(output.at(-1)).toContain("INTERRUPTED");
-	expect(process.listenerCount("SIGINT")).toBe(before);
+	const [exitCode, stdout] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	const record = JSON.parse(stdout.slice(stdout.indexOf("INTERRUPT_RESULT") + "INTERRUPT_RESULT".length));
+	expect(exitCode).toBe(130);
+	expect(record.result.status).toBe("INTERRUPTED");
+	expect(stdout).toContain("INTERRUPTED");
+	expect(record.restored).toBe(true);
 });
 it("awaits charged finally cleanup after abort before printing the final summary", async () => {
 	const controller = new AbortController();
@@ -511,6 +556,44 @@ it("keeps stable compiler wrapper paths, flags and the original cache wrapper", 
 			expect(compilerEnv.OMP_GATE_ORIGINAL_RUSTC_WRAPPER).toBe(env.RUSTC_WRAPPER);
 			expect(compilerEnv.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
 		});
+});
+it("charges unwrapped Cargo build-script work overlapping observed compiler events", async () => {
+	const result = await runGate(
+		"fastcheck",
+		async gate => {
+			await gate.run(
+				command({
+					rustCargo: "mixed",
+					runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+					dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
+				}),
+			);
+		},
+		{ limitSeconds: 0.8, print: quiet },
+	);
+	expect(result.status).toBe("TIMEOUT");
+	expect(result.compileExcludedSeconds).toBe(0);
+});
+it("releases mixed Cargo accounting after completion or failure before later pure compilation", async () => {
+	for (const rustCargo of ["completed", "failure"]) {
+		const result = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run(
+					command({
+						rustCargo,
+						afterRustCompile: true,
+						runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+						dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
+					}),
+				);
+			},
+			{ limitSeconds: 0.8, print: quiet },
+		);
+		expect(result.status).toBe("PASS");
+		expect(result.totalSeconds).toBeGreaterThan(result.limitSeconds);
+		expect(result.compileExcludedSeconds).toBeGreaterThan(0.8);
+	}
 });
 it("parses split token events conservatively and excludes their union", () => {
 	const observed: string[] = [];

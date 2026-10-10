@@ -105,7 +105,7 @@ describe("goal-auto-orchestrate request context", () => {
 		]) {
 			expect(buildGoalAutoOrchestrateMessage(stopped, ["task"])).toBeUndefined();
 			const context = providerContext(["task"]);
-			expect(applyGoalAutoOrchestrateContext(context, stopped)).toEqual(context);
+			expect(applyGoalAutoOrchestrateContext(context, stopped, ["task"])).toEqual(context);
 		}
 	});
 
@@ -162,7 +162,7 @@ describe("goal-auto-orchestrate request context", () => {
 	test("final provider context adds one user block, preserves later explicit input and system/tool authority", () => {
 		const original = providerContext(["task", "read"]);
 		const saved = structuredClone(original);
-		const result = applyGoalAutoOrchestrateContext(original, state());
+		const result = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
 		expect(original).toEqual(saved);
 		expect(result.systemPrompt).toEqual(original.systemPrompt);
 		expect(result.tools).toEqual(original.tools);
@@ -174,21 +174,58 @@ describe("goal-auto-orchestrate request context", () => {
 		// This static strategy explicitly subordinates itself to subsequent user
 		// instructions; it must not overwrite or promote them to system authority.
 		expect(instruction).toContain("本次用户的明确要求");
-		const repeat = applyGoalAutoOrchestrateContext(original, state());
+		const repeat = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
 		expect(repeat).toEqual(result);
-		expect(applyGoalAutoOrchestrateContext(result, state())).toEqual(result);
-		const withoutTask = applyGoalAutoOrchestrateContext({ ...result, tools: [] }, state());
+		expect(applyGoalAutoOrchestrateContext(result, state(), ["task", "read"])).toEqual(result);
+		const withoutTask = applyGoalAutoOrchestrateContext(result, state(), []);
 		expect(withoutTask.messages.filter(message => text(message.content).includes(instruction))).toHaveLength(1);
 		expect(text(withoutTask.messages.at(-1)?.content)).not.toContain(
 			renderOrchestrateNotice({ tools: ["task", "read"] }, { authority: "user" }),
 		);
-		expect(applyGoalAutoOrchestrateContext(result, undefined)).toEqual(original);
+		expect(applyGoalAutoOrchestrateContext(result, undefined, ["task", "read"])).toEqual(original);
+	});
+
+	test("eval-only provider schemas retain indirect task rules and refresh enabled capabilities on every request", () => {
+		const original = providerContext(["eval"]);
+		const enabled = ["task", "read", "eval"];
+		const firstRules = renderOrchestrateNotice({ tools: enabled }, { authority: "user" });
+		const first = applyGoalAutoOrchestrateContext(original, state(), enabled);
+		expect(text(first.messages.at(-1)?.content)).toContain(firstRules);
+		expect(first.tools).toBe(original.tools);
+		expect(first.tools?.map(tool => tool.name)).toEqual(["eval"]);
+
+		const changedTools = [...enabled, "bash"];
+		const changedRules = renderOrchestrateNotice({ tools: changedTools }, { authority: "user" });
+		const changed = applyGoalAutoOrchestrateContext(first, state(), changedTools);
+		expect(changedRules).not.toEqual(firstRules);
+		expect(text(changed.messages.at(-1)?.content)).toContain(changedRules);
+		expect(text(changed.messages.at(-1)?.content)).not.toContain(firstRules);
+
+		const unavailableTools = ["read", "eval", "bash"];
+		const unavailable = applyGoalAutoOrchestrateContext(changed, state(), unavailableTools);
+		const unavailableText = text(unavailable.messages.at(-1)?.content);
+		expect(unavailableText).toContain(objective);
+		expect(unavailableText).toContain(instruction);
+		expect(unavailableText).not.toContain(changedRules);
+		expect(unavailableText).not.toContain(
+			renderOrchestrateNotice({ tools: unavailableTools }, { authority: "user" }),
+		);
+		const restored = applyGoalAutoOrchestrateContext(unavailable, state(), enabled);
+		expect(restored).toEqual(first);
+		for (const request of [first, changed, unavailable, restored]) {
+			expect(request.tools).toBe(original.tools);
+			expect(request.messages.slice(0, -1)).toEqual(original.messages);
+			expect(text(request.messages.at(-1)?.content).split(objective)).toHaveLength(2);
+			expect(text(request.messages.at(-1)?.content).split(instruction)).toHaveLength(2);
+			expect(request.messages).toHaveLength(original.messages.length + 1);
+		}
+		expect(original.messages).toHaveLength(1);
 	});
 
 	test("request-local todo state is refreshed with the rest of the context without accumulation", () => {
 		const original = providerContext(["task", "read"]);
-		const first = applyGoalAutoOrchestrateContext(original, state(), "TODO_SNAPSHOT_FIRST");
-		const second = applyGoalAutoOrchestrateContext(first, state(), "TODO_SNAPSHOT_SECOND");
+		const first = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"], "TODO_SNAPSHOT_FIRST");
+		const second = applyGoalAutoOrchestrateContext(first, state(), ["task", "read"], "TODO_SNAPSHOT_SECOND");
 		expect(second.messages.filter(message => text(message.content).includes(instruction))).toHaveLength(1);
 		expect(text(second.messages.at(-1)?.content)).toContain("TODO_SNAPSHOT_SECOND");
 		expect(text(second.messages.at(-1)?.content)).not.toContain("TODO_SNAPSHOT_FIRST");
@@ -201,7 +238,7 @@ describe("goal-auto-orchestrate request context", () => {
 		const original = providerContext(["task", "read"]);
 		original.messages[0]!.content = `Genuine user prose quoting the strategy:\n${instruction}`;
 		markPerCallContextMessage(original.messages[0]!);
-		const main = applyGoalAutoOrchestrateContext(original, state());
+		const main = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
 		expect(main.messages).toHaveLength(2);
 		const prepared: Context = {
 			...main,

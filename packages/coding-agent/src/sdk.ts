@@ -4392,19 +4392,21 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 		// Only the main Agent installs this boundary. Side/compaction/advisor
 		// requests keep the shared transforms below, and subagents install neither
-		// goal wrapper. Read live state after async transforms; tools come from the
-		// actual provider context (including remote-lane tool projection).
+		// goal wrapper. Read live state and enabled callable tools after async
+		// transforms; indirect tools may be absent from the top-level schemas.
 		const transformMainProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
 			const transformed = await transformProviderContext(context, transformModel);
 			const goalState = session?.getGoalModeState();
+			// Remote projection exposes no frontend tools, even if enabled locally.
+			const callableToolNames = isJchToolsAgentModel(transformModel) ? [] : (session?.getEnabledToolNames() ?? []);
 			const todoContext =
 				goalState?.autoOrchestrate === true &&
 				goalState.enabled &&
 				goalState.mode === "active" &&
 				goalState.goal.status === "active"
-					? session?.buildGoalAutoOrchestrateTodoContext(transformed.tools?.map(tool => tool.name) ?? [])
+					? session?.buildGoalAutoOrchestrateTodoContext(callableToolNames)
 					: undefined;
-			const withGoal = applyGoalAutoOrchestrateContext(transformed, goalState, todoContext);
+			const withGoal = applyGoalAutoOrchestrateContext(transformed, goalState, callableToolNames, todoContext);
 			if (withGoal === transformed || !obfuscator?.hasSecrets()) return withGoal;
 			// Shared transforms already redacted history. Redact only the new,
 			// transient objective rather than bypassing existing secret protection.

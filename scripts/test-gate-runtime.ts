@@ -162,10 +162,15 @@ function reconcile(scope: Scope, now = performance.now()): void {
 	}
 	accrue(scope, now);
 }
-function emitEvent(token: string | undefined, id: string, kind: Activity | "idle"): void {
+function emitEvent(
+	token: string | undefined,
+	id: string,
+	kind: Activity | "idle",
+	env: Record<string, string | undefined> = process.env,
+): void {
 	if (!token) return;
-	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({ id, kind, at: gateClockNanoseconds().toString(), clock: process.env.OMP_GATE_CLOCK_TOKEN })}\n`;
-	if (process.env.OMP_GATE_EVENT_FILE) appendFileSync(process.env.OMP_GATE_EVENT_FILE, line);
+	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({ id, kind, at: gateClockNanoseconds().toString(), clock: env.OMP_GATE_CLOCK_TOKEN })}\n`;
+	if (env.OMP_GATE_EVENT_FILE) appendFileSync(env.OMP_GATE_EVENT_FILE, line);
 	else process.stderr.write(line);
 }
 /** Mark only a real compiler-only boundary; preparation, downloads, checks and installation stay charged. */
@@ -192,7 +197,11 @@ export async function withChargedActivity<T>(work: () => Promise<T>): Promise<T>
 
 let reportedRustAccountingLimitation = false;
 
-/** Chain an existing Rust cache wrapper without changing cargo flags or cache directories. */
+/**
+ * Preserve Rust cache wrappers and compiler events, but keep mixed Cargo work
+ * charged: rustc boundaries cannot prove that unwrapped build scripts, native
+ * tools or test executables are idle. Process ownership is not lifecycle tracing.
+ */
 export async function withRustCompilerEvents<T>(
 	env: Record<string, string>,
 	work: (env: Record<string, string>) => Promise<T>,
@@ -200,7 +209,7 @@ export async function withRustCompilerEvents<T>(
 	if (!env.OMP_GATE_EVENT_TOKEN) return work(env);
 	if (!reportedRustAccountingLimitation) {
 		console.warn(
-			"UNVERIFIED_COMPILATION_ACCOUNTING: observed rustc intervals do not expose concurrent Cargo build-script/native phases",
+			"UNVERIFIED_COMPILATION_ACCOUNTING: Cargo build-script/native/test process lifecycles are not observable; mixed Cargo work remains charged",
 		);
 		reportedRustAccountingLimitation = true;
 	}
@@ -245,21 +254,27 @@ export async function withRustCompilerEvents<T>(
 	}
 	const wrapper = path.join(launchDirectory, `test-gate-rustc${extension}`);
 	const rustdoc = path.join(launchDirectory, `test-gate-rustdoc${extension}`);
-	return work({
-		...env,
-		RUSTUP_AUTO_INSTALL: "0",
-		OMP_GATE_ORIGINAL_RUSTC_WRAPPER:
-			env.RUSTC_WRAPPER === wrapper ? (env.OMP_GATE_ORIGINAL_RUSTC_WRAPPER ?? "") : (env.RUSTC_WRAPPER ?? ""),
-		OMP_GATE_ORIGINAL_RUSTDOC:
-			env.RUSTDOC === rustdoc ? env.OMP_GATE_ORIGINAL_RUSTDOC || "rustdoc" : env.RUSTDOC || "rustdoc",
-		OMP_GATE_BUN_BINARY: process.execPath,
-		OMP_GATE_COMPILER_SCRIPT: path.join(import.meta.dir, "test-gate-compiler.ts"),
-		OMP_GATE_RUSTDOC_SCRIPT: path.join(import.meta.dir, "test-gate-rustdoc.ts"),
-		OMP_GATE_DOCTEST_COMPILER: path.join(launchDirectory, `test-gate-doctest-compile${extension}`),
-		OMP_GATE_DOCTEST_RUNNER: path.join(launchDirectory, `test-gate-doctest-run${extension}`),
-		RUSTC_WRAPPER: wrapper,
-		RUSTDOC: rustdoc,
-	});
+	const id = randomUUID();
+	emitEvent(env.OMP_GATE_EVENT_TOKEN, id, "charged", env);
+	try {
+		return await work({
+			...env,
+			RUSTUP_AUTO_INSTALL: "0",
+			OMP_GATE_ORIGINAL_RUSTC_WRAPPER:
+				env.RUSTC_WRAPPER === wrapper ? (env.OMP_GATE_ORIGINAL_RUSTC_WRAPPER ?? "") : (env.RUSTC_WRAPPER ?? ""),
+			OMP_GATE_ORIGINAL_RUSTDOC:
+				env.RUSTDOC === rustdoc ? env.OMP_GATE_ORIGINAL_RUSTDOC || "rustdoc" : env.RUSTDOC || "rustdoc",
+			OMP_GATE_BUN_BINARY: process.execPath,
+			OMP_GATE_COMPILER_SCRIPT: path.join(import.meta.dir, "test-gate-compiler.ts"),
+			OMP_GATE_RUSTDOC_SCRIPT: path.join(import.meta.dir, "test-gate-rustdoc.ts"),
+			OMP_GATE_DOCTEST_COMPILER: path.join(launchDirectory, `test-gate-doctest-compile${extension}`),
+			OMP_GATE_DOCTEST_RUNNER: path.join(launchDirectory, `test-gate-doctest-run${extension}`),
+			RUSTC_WRAPPER: wrapper,
+			RUSTDOC: rustdoc,
+		});
+	} finally {
+		emitEvent(env.OMP_GATE_EVENT_TOKEN, id, "idle", env);
+	}
 }
 
 /** Incremental line parser; foreign/malformed events never grant a compilation exemption. */
@@ -649,7 +664,12 @@ export class GateRun {
 						OMP_GATE_EVENT_FILE: relay.path,
 						OMP_GATE_SUPERVISED_COMMAND: JSON.stringify(command.argv),
 					},
-					stdin: command.stdin === undefined ? "inherit" : new Blob([command.stdin]),
+					stdin:
+						command.stdin === undefined
+							? "inherit"
+							: typeof command.stdin === "string"
+								? new Blob([command.stdin])
+								: command.stdin,
 					stdout: "pipe",
 					stderr: "pipe",
 					detached,

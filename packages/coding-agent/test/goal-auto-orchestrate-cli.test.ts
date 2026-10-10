@@ -64,6 +64,130 @@ function assertStopped(body: Frame): void {
 	expect(featureBlocks(body)).toHaveLength(0);
 }
 
+function responseItems(body: Frame): Frame[] {
+	if (!Array.isArray(body.input)) throw new Error("Codex request has no Responses input");
+	return body.input.filter(isRecord);
+}
+
+function assertCodeModeActive(body: Frame, taskEnabled: boolean): void {
+	const items = responseItems(body);
+	const blocks = items.filter(item => contentText(item.content).includes(instruction));
+	expect(blocks).toHaveLength(1);
+	expect(blocks[0]?.role).toBe("user");
+	const text = contentText(blocks[0]?.content);
+	expect(text.split(objective)).toHaveLength(2);
+	expect(text.split(instruction)).toHaveLength(2);
+	expect(text).not.toContain("<system-notice>");
+	expect(text).not.toContain("<system-reminder>");
+	for (const item of items.filter(item => item.role === "system" || item.role === "developer")) {
+		expect(contentText(item.content)).not.toContain(instruction);
+	}
+	expect(contentText(body.instructions)).not.toContain(instruction);
+
+	if (!Array.isArray(body.tools)) throw new Error("Codex request has no tools");
+	const direct = body.tools.flatMap(tool => (isRecord(tool) && typeof tool.name === "string" ? [tool.name] : []));
+	expect(direct).toContain("eval");
+	expect(direct).not.toContain("task");
+	expect(direct).not.toContain("read");
+	if (!isRecord(body.client_metadata)) throw new Error("Missing Codex client metadata");
+	const encoded = body.client_metadata["x-codex-turn-metadata"];
+	if (typeof encoded !== "string") throw new Error("Missing Codex turn metadata");
+	const metadata: unknown = JSON.parse(encoded);
+	if (!isRecord(metadata) || !isRecord(metadata.tool_namespaces_info))
+		throw new Error("Missing Code Mode tool namespaces");
+	const namespace = metadata.tool_namespaces_info.functions;
+	if (!isRecord(namespace) || !isRecord(namespace.functions)) throw new Error("Missing Code Mode functions");
+	const tools = namespace.functions;
+	expect(tools.eval).toMatchObject({ name: "eval", direct: true, code_mode_name: "eval" });
+	expect(tools.read).toMatchObject({ name: "read", direct: false, code_mode_name: "read" });
+	const rules = renderOrchestrateNotice({ tools: Object.keys(tools) }, { authority: "user" });
+	expect(contentText(body.instructions)).not.toContain(rules);
+	if (taskEnabled) {
+		expect(tools.task).toMatchObject({ name: "task", direct: false, code_mode_name: "task" });
+		expect(text.split(rules)).toHaveLength(2);
+		expect(
+			items
+				.map(item => contentText(item.content))
+				.join("\n")
+				.split(rules),
+		).toHaveLength(2);
+	} else {
+		expect(tools.task).toBeUndefined();
+		expect(text).not.toContain(rules);
+		expect(items.map(item => contentText(item.content)).join("\n")).not.toContain(rules.split("\n")[0]!);
+	}
+}
+
+function codexSse(step: Step, serial: number): Response {
+	const id = `resp_goal_${serial}`;
+	const item = step.tool
+		? {
+				type: "function_call",
+				id: `fc_goal_${serial}`,
+				call_id: `call_goal_${serial}`,
+				name: step.tool.name,
+				arguments: JSON.stringify(step.tool.args),
+			}
+		: {
+				type: "message",
+				id: `msg_goal_${serial}`,
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: step.text ?? "FIXTURE_RESULT" }],
+			};
+	const events = [
+		{ type: "response.created", response: { id } },
+		{
+			type: "response.output_item.added",
+			output_index: 0,
+			item: step.tool ? { ...item, arguments: "" } : { ...item, status: "in_progress", content: [] },
+		},
+		...(step.tool
+			? [
+					{
+						type: "response.function_call_arguments.delta",
+						item_id: item.id,
+						output_index: 0,
+						delta: JSON.stringify(step.tool.args),
+					},
+				]
+			: [
+					{
+						type: "response.content_part.added",
+						item_id: item.id,
+						output_index: 0,
+						content_index: 0,
+						part: { type: "output_text", text: "" },
+					},
+					{
+						type: "response.output_text.delta",
+						item_id: item.id,
+						output_index: 0,
+						content_index: 0,
+						delta: step.text ?? "FIXTURE_RESULT",
+					},
+				]),
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id,
+				status: "completed",
+				output: [item],
+				usage: {
+					input_tokens: 20,
+					output_tokens: 10,
+					total_tokens: 30,
+					input_tokens_details: { cached_tokens: 0 },
+				},
+			},
+		},
+	];
+	return new Response(`${events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("")}`, {
+		headers: { "content-type": "text/event-stream" },
+	});
+}
+
 interface Client {
 	readonly seen: Frame[];
 	send(frame: object): void;
@@ -90,6 +214,7 @@ async function withFixture(
 		magic?: boolean;
 		task?: boolean;
 		advisor?: boolean;
+		codex?: boolean;
 	} = {},
 ): Promise<void> {
 	await using root = await TempDir.create("@goal-auto-cli-");
@@ -104,6 +229,8 @@ async function withFixture(
 		path.join(cwd, ".omp", "skills", "goal-auto-fixture", "SKILL.md"),
 		"---\nname: goal-auto-fixture\ndescription: Goal auto acceptance fixture.\n---\nSKILL_EXPANSION_EVIDENCE. Preserve the user's supplied scope.\n",
 	);
+	const provider = options.codex ? "openai-codex" : "goal-recording";
+	const requestMessages = options.codex ? responseItems : messages;
 	const requests: Frame[] = [];
 	const steps: Step[] = [];
 	const releases: Array<() => void> = [];
@@ -119,14 +246,14 @@ async function withFixture(
 					data: ["main", "aux"].map(id => ({ id, object: "model", owned_by: "goal-recording" })),
 				});
 			}
-			if (!new URL(request.url).pathname.endsWith("/chat/completions"))
-				return new Response("not found", { status: 404 });
+			const endpoint = options.codex ? "/codex/responses" : "/chat/completions";
+			if (!new URL(request.url).pathname.endsWith(endpoint)) return new Response("not found", { status: 404 });
 			const body: unknown = await request.json();
 			if (!isRecord(body)) return new Response("invalid request", { status: 400 });
 			requests.push(body);
 			for (const resolve of requestWaiters) resolve();
 			requestWaiters.clear();
-			const title = messages(body).some(message => contentText(message.content).includes("<title-request>"));
+			const title = requestMessages(body).some(message => contentText(message.content).includes("<title-request>"));
 			const step = title
 				? { text: "Goal fixture title" }
 				: body.model === "main"
@@ -143,6 +270,7 @@ async function withFixture(
 					if (request.signal.aborted) resolve();
 					else request.signal.addEventListener("abort", () => resolve(), { once: true });
 				});
+			if (options.codex) return codexSse(step, ++serial);
 			const id = `chatcmpl-goal-${++serial}`;
 			const base = { id, object: "chat.completion.chunk", created: 0, model: body.model };
 			const text = step.text ?? "FIXTURE_RESULT";
@@ -201,10 +329,14 @@ async function withFixture(
 		path.join(agentDir, "models.yml"),
 		[
 			"providers:",
-			"  goal-recording:",
+			`  ${provider}:`,
 			`    baseUrl: http://127.0.0.1:${modelServer.port}/v1`,
-			"    auth: none",
-			"    api: openai-completions",
+			...(options.codex
+				? [
+						`    apiKey: aaa.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "goal-fixture" } })).toBase64()}.bbb`,
+						"    api: openai-codex-responses",
+					]
+				: ["    auth: none", "    api: openai-completions"]),
 			"    models:",
 			...["main", "aux"].flatMap(id => [
 				`      - id: ${id}`,
@@ -212,7 +344,7 @@ async function withFixture(
 				"        reasoning: false",
 				"        contextWindow: 32768",
 				"        maxTokens: 4096",
-				...(id === "main" ? ["        compactionModel: goal-recording/aux"] : []),
+				...(id === "main" ? [`        compactionModel: ${provider}/aux`] : []),
 			]),
 			"",
 		].join("\n"),
@@ -221,9 +353,9 @@ async function withFixture(
 		path.join(agentDir, "config.yml"),
 		[
 			"modelRoles:",
-			"  task: [goal-recording/aux]",
-			"  smol: [goal-recording/aux]",
-			"  advisor: [goal-recording/aux]",
+			`  task: [${provider}/aux]`,
+			`  smol: [${provider}/aux]`,
+			`  advisor: [${provider}/aux]`,
 			"goal:",
 			`  continuationModes: ${options.continuation ? "[rpc]" : "[]"}`,
 			"magicKeywords:",
@@ -249,6 +381,20 @@ async function withFixture(
 			"  prewalk: false",
 			"async:",
 			"  enabled: false",
+			...(options.codex
+				? [
+						"providers:",
+						"  openai-codex:",
+						"    codeMode: on",
+						"    codeModeDirectTools: []",
+						"eval:",
+						"  js: true",
+						"  py: false",
+						"  autoProvision: false",
+						"  autoBackground:",
+						"    enabled: false",
+					]
+				: []),
 			"tools:",
 			"  approval:",
 			"    write: deny",
@@ -288,7 +434,7 @@ async function withFixture(
 				.filter(
 					body =>
 						body.model === "main" &&
-						!messages(body).some(message => contentText(message.content).includes("<title-request>")),
+						!requestMessages(body).some(message => contentText(message.content).includes("<title-request>")),
 				),
 		async waitForMain(count) {
 			while (fixture.mainSince(0).length < count) {
@@ -315,11 +461,11 @@ async function withFixture(
 					"--trusted-extension",
 					extension,
 					"--tools",
-					options.task === false ? "read,write" : "read,write,task",
+					options.codex ? "eval,read,task" : options.task === false ? "read,write" : "read,write,task",
 					"--session-dir",
 					sessionDir,
 					"--provider",
-					"goal-recording",
+					provider,
 					"--model",
 					"main",
 					"--thinking",
@@ -340,6 +486,24 @@ async function withFixture(
 						PI_NO_TITLE: "1",
 						OMP_OFFLINE: "1",
 						OMP_JCHTOOLS_DISCOVERY: "0",
+						...(options.codex
+							? {
+									PI_JS: "1",
+									PI_PY: "0",
+									PI_CODEX_WEBSOCKET: "0",
+									PI_CODEX_ZSTD: "0",
+									PI_PROXY: undefined,
+									PI_PROXY_OPENAI_CODEX: undefined,
+									HTTP_PROXY: undefined,
+									http_proxy: undefined,
+									HTTPS_PROXY: undefined,
+									https_proxy: undefined,
+									ALL_PROXY: undefined,
+									all_proxy: undefined,
+									NO_PROXY: "127.0.0.1,localhost",
+									no_proxy: "127.0.0.1,localhost",
+								}
+							: {}),
 					},
 					stdin: "pipe",
 					stdout: "pipe",
@@ -434,7 +598,13 @@ async function withFixture(
 			});
 			const startupRequests = requests.slice(startupStart);
 			expect(startupRequests.every(body => body.model === "aux")).toBe(true);
-			startupRequests.forEach(assertStopped);
+			startupRequests.forEach(body => {
+				if (options.codex)
+					expect(responseItems(body).filter(item => contentText(item.content).includes(instruction))).toHaveLength(
+						0,
+					);
+				else assertStopped(body);
+			});
 			return client;
 		},
 	};
@@ -556,6 +726,68 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				expect(goal(await client.state())?.autoOrchestrate).toBe(true);
 			},
 			{ task: false, magic: false },
+		);
+	}, 300_000);
+
+	test("Codex Code Mode HTTP retains Orchestrate rules for eval-only task across bridge calls and enabled removal/restoration", async () => {
+		await withFixture(
+			async fixture => {
+				const client = await fixture.start("rpc");
+				fixture.steps.push(
+					{
+						tool: {
+							name: "eval",
+							args: {
+								language: "js",
+								code: `display(await tool.read(${JSON.stringify({ path: path.join(fixture.cwd, "evidence.txt") })}))`,
+							},
+						},
+					},
+					{ text: "CODE_MODE_READ_COMPLETE" },
+				);
+				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				const first = fixture.mainSince(0);
+				expect(first).toHaveLength(2);
+				first.forEach(body => assertCodeModeActive(body, true));
+				expect(
+					responseItems(first[1]!).some(
+						item =>
+							item.type === "function_call_output" &&
+							contentText(item.output).includes("TOOL_ROUNDTRIP_EVIDENCE"),
+					),
+				).toBe(true);
+				expect(
+					client.seen.filter(frame => frame.type === "tool_execution_end" && frame.toolName === "eval"),
+				).toHaveLength(1);
+				const saved = goal(await client.state());
+				if (!saved || !isRecord(saved.goal)) throw new Error("Missing live goal");
+				const savedId = saved.goal.id;
+				expect(typeof savedId).toBe("string");
+				expect(saved).toMatchObject({
+					autoOrchestrate: true,
+					enabled: true,
+					goal: { objective, status: "active" },
+				});
+
+				for (const taskEnabled of [false, true]) {
+					await local(client, `/fixture-tools eval,read,goal${taskEnabled ? ",task" : ""}`);
+					const start = fixture.requests.length;
+					await client.prompt("Preserve the current objective and read-only scope.");
+					const bodies = fixture.mainSince(start);
+					expect(bodies).toHaveLength(1);
+					assertCodeModeActive(bodies[0]!, taskEnabled);
+					const current = goal(await client.state());
+					expect(current).toMatchObject({
+						autoOrchestrate: true,
+						enabled: true,
+						goal: { id: savedId, objective, status: "active" },
+					});
+				}
+				const history = await client.request({ type: "get_messages" });
+				expect(JSON.stringify(history.data)).not.toContain(instruction);
+				expect(JSON.stringify(history.data)).not.toContain("goal-auto-orchestrate-context");
+			},
+			{ codex: true, magic: false },
 		);
 	}, 300_000);
 

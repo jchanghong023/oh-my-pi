@@ -389,9 +389,7 @@ async function localGateTestCommands(): Promise<TestCommand[]> {
 		"NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: packages/natives/test/desktop.test.ts (real host-desktop input)",
 	);
 	return commands.map(command =>
-		command.cwd === "packages/natives"
-			? { ...command, command: [...command.command, ...safeNativeFiles] }
-			: command,
+		command.cwd === "packages/natives" ? { ...command, command: [...command.command, ...safeNativeFiles] } : command,
 	);
 }
 

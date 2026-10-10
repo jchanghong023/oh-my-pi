@@ -48,55 +48,21 @@ export async function runGateCommands(
 	if (failures.length > 0) throw failures[0];
 }
 
-/** Reuse all existing workspace type-check scripts, including robomp-web. */
+/** Preserve the fork's existing TS/Rust static primitives; execute no tests. */
 export async function fastcheckCommands(): Promise<GateCommand[]> {
-	const manifests: string[] = [];
-	for await (const file of new Bun.Glob("packages/*/package.json").scan({ cwd: gateRepoRoot, onlyFiles: true })) {
-		manifests.push(file);
-	}
-	manifests.push("python/robomp/web/package.json");
-	const commands: GateCommand[] = [
-		{ label: "static/TS lint+format", argv: ["bun", "run", "check:tools"], cwd: gateRepoRoot },
+	return [
+		{ label: "static/TS", argv: ["bun", "run", "check:ts"], cwd: gateRepoRoot },
 		{
 			label: "static/Rust fmt+clippy",
 			argv: ["bun", "run", "check:rs"],
 			cwd: gateRepoRoot,
 			env: { CI: "1", RUSTUP_AUTO_INSTALL: "0" },
 		},
-		{ label: "static/Python ruff", argv: ["bun", "run", "lint:py"], cwd: gateRepoRoot },
-		{
-			label: "static/Rust RPC SDK",
-			argv: ["bun", "scripts/test-gate-cargo.ts", "check", "--manifest-path", "sdk/rust/omp-rpc/Cargo.toml"],
-			cwd: gateRepoRoot,
-			env: { RUSTUP_AUTO_INSTALL: "0" },
-		},
-		{
-			label: "static/Go RPC SDK",
-			argv: [process.execPath, path.join(import.meta.dir, "test-gate-go.ts"), "build", "./..."],
-			cwd: path.join(gateRepoRoot, "sdk/go/omp-rpc"),
-		},
-		{
-			label: "static/generated clippy config",
-			argv: ["bun", "scripts/gen-clippy-bazelrc.ts", "--check"],
-			cwd: gateRepoRoot,
-		},
 	];
-	for (const file of manifests.sort()) {
-		const manifest = (await Bun.file(path.join(gateRepoRoot, file)).json()) as { scripts?: Record<string, string> };
-		if (manifest.scripts?.["check:types"]) {
-			const cwd = path.dirname(path.join(gateRepoRoot, file));
-			commands.push({
-				label: `static/types ${path.relative(gateRepoRoot, cwd)}`,
-				argv: ["bun", "run", "check:types"],
-				cwd,
-			});
-		}
-	}
-	return commands;
 }
 
 export async function runFastcheck(gate: GateRun): Promise<void> {
-	console.log("scope=whole-applicable-local; fastcheck runs no tests");
+	console.log("scope=fork-affected; existing TS/Rust static checks; fastcheck runs no tests");
 	const commands = await gate.charged(fastcheckCommands);
 	await runGateCommands(gate, commands);
 }

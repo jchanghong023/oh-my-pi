@@ -60,11 +60,11 @@ export function filterGoalAutoOrchestrateMessages(
 
 /**
  * Build one transient, user-authority context from the full saved objective.
- * `state` is read anew for each request; `tools` names the tools exposed by that
- * actual provider context (not a registry or keyword settings snapshot).
+ * `state` is read anew for each request; `tools` names current callable tools,
+ * including enabled indirect tools absent from top-level provider schemas.
  * The shared keyword requirement gates only orchestration rules, never the goal.
  * `todoContext` is the optional live, plain user-authority rendering of existing
- * Goal todos, constrained to the actual request's todo tool availability.
+ * Goal todos, constrained to the same callable-tool snapshot.
  */
 export function buildGoalAutoOrchestrateMessage(
 	state: GoalModeState | undefined,
@@ -111,23 +111,21 @@ export function stripGoalAutoOrchestrateContext(context: Context): Context {
 
 /**
  * Apply only at the main Agent's final provider-context boundary, after shared
- * provider transforms. `context.tools` is the actual request tool set; `state`
- * is the current session goal. Auxiliary/subagent callers must not use this.
+ * provider transforms. `callableToolNames` is the current enabled capability set,
+ * including indirect tools, not `context.tools`' top-level schemas. `state` is
+ * the current session goal. Auxiliary/subagent callers must not use this.
  * Reapplying replaces our symbol-stamped view, never matches/deletes user text.
  * `todoContext` supplies existing live Goal todo rules/state, never a saved notice.
  */
 export function applyGoalAutoOrchestrateContext(
 	context: Context,
 	state: GoalModeState | undefined,
+	callableToolNames: readonly string[],
 	todoContext?: string,
 ): Context {
 	const stripped = stripGoalAutoOrchestrateContext(context);
 	const messages = stripped.messages;
-	const goalContext = buildGoalAutoOrchestrateMessage(
-		state,
-		stripped.tools?.map(tool => tool.name) ?? [],
-		todoContext,
-	);
+	const goalContext = buildGoalAutoOrchestrateMessage(state, callableToolNames, todoContext);
 	if (!goalContext) return stripped;
 	const message: UserMessage & { [kGoalAutoOrchestrateContext]: true } = {
 		role: "user",

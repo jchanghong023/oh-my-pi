@@ -440,7 +440,9 @@ async function main(): Promise<void> {
 		const buildArgs = [...startupArgs, "build", ...options.bazelArgs, "--", ...labels];
 		console.log(`$ ${path.basename(bazel)} ${buildArgs.join(" ")}`);
 		if (process.env.OMP_GATE_EVENT_TOKEN) {
-			console.warn("UNVERIFIED_COMPILATION_ACCOUNTING: Bazel compiler actions are not separately observable; this mixed build remains charged");
+			console.warn(
+				"UNVERIFIED_COMPILATION_ACCOUNTING: Bazel compiler actions are not separately observable; this mixed build remains charged",
+			);
 		}
 		const build = await runBazel(bazel, buildArgs, "inherit");
 		if (build.exitCode !== 0) {

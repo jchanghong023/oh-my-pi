@@ -33,6 +33,7 @@ type SkillPromptOptions = {
 interface InvokeSkillCommandOptions {
 	propagateErrors?: boolean;
 	queueOnly?: boolean;
+	goalAutoOrchestrateInitialId?: string;
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	/**
@@ -95,7 +96,12 @@ export async function invokeSkillCommandFromText(
 	try {
 		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior, options?.images);
 		if (!built) return false;
-		const promptOptions = options?.queueOnly ? { ...built.options, queueOnly: true } : built.options;
+		const promptOptions: SkillPromptOptions &
+			Pick<InvokeSkillCommandOptions, "queueOnly" | "goalAutoOrchestrateInitialId"> =
+			options?.queueOnly || options?.goalAutoOrchestrateInitialId ? { ...built.options } : built.options;
+		if (options?.queueOnly) promptOptions.queueOnly = true;
+		if (options?.goalAutoOrchestrateInitialId)
+			promptOptions.goalAutoOrchestrateInitialId = options.goalAutoOrchestrateInitialId;
 		optimistic = options?.optimistic === true && !options?.queueOnly && !ctx.session.isStreaming;
 		if (optimistic) {
 			ctx.renderOptimisticSkillMessage(

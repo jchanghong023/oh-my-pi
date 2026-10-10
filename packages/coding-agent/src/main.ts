@@ -480,6 +480,9 @@ export async function submitInteractiveInput(
 				imageLinks: input.imageLinks,
 				optimistic: true,
 				propagateErrors: true,
+				...(input.goalAutoOrchestrateInitialId
+					? { goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId }
+					: {}),
 			});
 		} else {
 			let forwarded = false;
