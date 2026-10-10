@@ -25,7 +25,7 @@
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/zcode-api-models.ts`、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-auto-orchestrate` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-auto-orchestrate.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
 * RPC 命令接入复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划与循环宿主生命周期在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标复用 `rpc-goal.ts`；界面通过现有 `prompt` 与 RPC UI 对话调用，不另建命令表。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
@@ -59,7 +59,7 @@
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
 * `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
-* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
+* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
 
 同步 MUST 保留 `AGENTS.md`、同步 Skill、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
 

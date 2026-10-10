@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed Windows daemon startup failures when an existing lease permits synchronization but not full mutex access.
 - Fixed Windows WASM grammar parsing crashes by declaring the statically linked Wasmtime C API consistently in Cargo and Bazel builds.
 - Prevented deeply nested Python expressions from overflowing the native stack during symbol extraction.
 - Restored the previous native addon when replacement fails and preserved recoverable files when rollback cannot complete.
