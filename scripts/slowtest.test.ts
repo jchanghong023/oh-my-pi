@@ -156,7 +156,7 @@ describe("owned subprocess cancellation", () => {
 			const waiting = waitForOwnedChild(child, controller.signal, detached);
 			controller.abort(new Error("canceled"));
 			await expect(waiting).rejects.toThrow("canceled");
-			expect(child.exitCode).not.toBeNull();
+			expect(await child.exited).not.toBe(0);
 			expect(unrelated.exitCode).toBeNull();
 		} finally {
 			child.kill();

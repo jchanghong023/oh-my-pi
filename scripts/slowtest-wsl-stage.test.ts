@@ -143,7 +143,6 @@ describe.skipIf(process.platform !== "linux")("WSL Linux process ownership", () 
 			const reader = child.stdout.getReader();
 			const ready = await reader.read();
 			expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
-			reader.releaseLock();
 			const cancel = Bun.spawn(["bash", "-c", wslCancelCommand(controlDir)], {
 				stdout: "pipe",
 				stderr: "pipe",
@@ -151,7 +150,8 @@ describe.skipIf(process.platform !== "linux")("WSL Linux process ownership", () 
 			expect(await cancel.exited).toBe(0);
 			expect(await child.exited).not.toBe(0);
 			// A surviving descendant would keep this inherited pipe open.
-			expect(await new Response(child.stdout).text()).toBe("");
+			expect(await reader.read()).toEqual({ done: true, value: undefined });
+			reader.releaseLock();
 			await expect(fs.stat(controlDir)).rejects.toMatchObject({ code: "ENOENT" });
 			expect(await Bun.file(bun).exists()).toBe(true);
 		} finally {
