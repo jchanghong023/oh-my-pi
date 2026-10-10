@@ -14,6 +14,10 @@
 - Kept all cache and state paths under an explicit `OMP_CONFIG_ROOT` instead of initialized XDG directories.
 - Settled timed-out stdout reads when an external wrapper or orphaned descendant keeps the pipe open.
 
+### Fixed
+
+- Fixed `formatDuration` printing `60.0s` for durations just under a minute; they now read `1m` ([#15121](https://github.com/can1357/oh-my-pi/pull/15121) by [@H4vC](https://github.com/H4vC))
+
 ## [18.8.7] - 2026-10-09
 
 ### Added
