@@ -150,6 +150,8 @@ export interface NonMessageTokenSource {
 	readonly skills?: readonly ContextSkill[];
 	/** Provider-facing, session-frozen descriptions when available. */
 	readonly renderedSkills?: readonly ContextSkill[];
+	/** Live request-only overhead, kept separate from cached system/tool framing. */
+	getPerCallContextTokens?(): number;
 }
 
 /** Shared empty system-prompt part list, avoiding an allocation per render. */

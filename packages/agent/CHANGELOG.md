@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 
 ### Fixed

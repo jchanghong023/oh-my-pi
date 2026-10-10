@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Context, Message, Model, UserMessage } from "@oh-my-pi/pi-ai";
+import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	fitOutputTokensToContextWindow,
@@ -15,7 +16,7 @@ function promptOf(tokens: number): Context {
 	return { messages: [{ role: "user", content: "x".repeat(tokens * 4), timestamp: 0 }] };
 }
 
-function userOf(tokens: number, timestamp: number): Message {
+function userOf(tokens: number, timestamp: number): UserMessage {
 	return { role: "user", content: "x".repeat(tokens * 4), timestamp };
 }
 
@@ -158,6 +159,39 @@ describe("fitOutputTokensToContextWindow", () => {
 		const context: Context = { messages: [reported(990_000, 1), userOf(1_000, 2)] };
 		expect(fitOutputTokensToContextWindow(deepseek, context, 384_000, tokenizer)).toBe(
 			1_000_000 - 991_100 - OUTPUT_FIT_HEADWAY_TOKENS,
+		);
+	});
+
+	test.each([
+		["unchanged", 100_000, 50_000],
+		["grown", 200_000, 150_000],
+		["shrunk", 50_000, 50_000],
+		["removed", 0, 50_000],
+	] as const)("fits only the %s request-context delta since provider usage", (_name, current, paddedTail) => {
+		const anchor = { ...reported(700_000, 2), perCallContextTokens: 100_000 };
+		const temporary = userOf(current, 0);
+		markPerCallContextMessage(temporary);
+		const context: Context = {
+			messages: [userOf(1_000, 1), anchor, userOf(50_000, 3), ...(current ? [temporary] : [])],
+		};
+		const reduction = Math.min(0, current - 100_000);
+		expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
+			1_000_000 - (700_000 + reduction + paddedTail + Math.ceil(paddedTail / 10)) - OUTPUT_FIT_HEADWAY_TOKENS,
+		);
+	});
+
+	test("counts request-only context inserted before the anchor and after a history rewrite", () => {
+		const temporary = userOf(100_000, 0);
+		markPerCallContextMessage(temporary);
+		const anchored: Context = { messages: [temporary, reported(700_000, 2), userOf(50_000, 3)] };
+		expect(fitOutputTokensToContextWindow(deepseek, anchored, undefined, tokenizer)).toBe(
+			1_000_000 - 865_000 - OUTPUT_FIT_HEADWAY_TOKENS,
+		);
+		const rewritten: Context = {
+			messages: [{ ...userOf(700_000, 10), historyRewriteAt: 10 }, temporary],
+		};
+		expect(fitOutputTokensToContextWindow(deepseek, rewritten, undefined, tokenizer)).toBe(
+			1_000_000 - 880_000 - OUTPUT_FIT_HEADWAY_TOKENS,
 		);
 	});
 

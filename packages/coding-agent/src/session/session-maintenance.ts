@@ -123,6 +123,7 @@ import {
 } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { cfgRetry } from "./settings";
+import { GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE } from "../goals/request-context";
 
 export type CompactionCheckResult = Readonly<{
 	continuationScheduled: boolean;
@@ -2497,6 +2498,25 @@ export class SessionMaintenance {
 		return savedCompactionEntry;
 	}
 
+	#estimateRequestOverheadTokens(): number {
+		const source = this.#host.nonMessageTokenSource();
+		return (
+			computeNonMessageTokens(source, this.#tokenizer, this.#host.settings.revision) +
+			(source.getPerCallContextTokens?.() ?? 0)
+		);
+	}
+
+	#estimateNextContextTokens(message: AssistantMessage): number {
+		const perCallContextTokens = this.#host.nonMessageTokenSource().getPerCallContextTokens?.() ?? 0;
+		return (
+			Math.max(
+				0,
+				calculateContextTokens(message.usage) -
+					(message.perCallContextTokensBySource?.[GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE] ?? 0),
+			) + perCallContextTokens
+		);
+	}
+
 	/**
 	 * Local token estimate of the stored conversation (plus any pending messages),
 	 * independent of provider-reported usage. A `before_provider_request` hook
@@ -2517,7 +2537,7 @@ export class SessionMaintenance {
 		// other arm of compactionContextTokens) already accounts for it.
 		const opts = { excludeEncryptedReasoning: true } as const;
 		return (
-			computeNonMessageTokens(this.#host.nonMessageTokenSource(), this.#tokenizer, this.#host.settings.revision) +
+			this.#estimateRequestOverheadTokens() +
 			this.#tokenizer.countMessages(this.#host.messages(), opts) +
 			this.#tokenizer.countMessages(pendingMessages, opts)
 		);
@@ -2555,11 +2575,7 @@ export class SessionMaintenance {
 	 */
 	#projectPreSnapcompactContextTokens(preparation: CompactionPreparation): number {
 		const opts = { excludeEncryptedReasoning: true } as const;
-		let tokens = computeNonMessageTokens(
-			this.#host.nonMessageTokenSource(),
-			this.#tokenizer,
-			this.#host.settings.revision,
-		);
+		let tokens = this.#estimateRequestOverheadTokens();
 		tokens += this.#tokenizer.countMessages(preparation.messagesToSummarize, opts);
 		tokens += this.#tokenizer.countMessages(preparation.turnPrefixMessages, opts);
 		tokens += this.#tokenizer.countMessages(preparation.recentMessages, opts);
@@ -2704,7 +2720,7 @@ export class SessionMaintenance {
 		// will actually rewrite history; awaiting it on every ordinary tool turn lets
 		// a slow message_end listener leave the TUI "generating" with no provider
 		// request or tool running.
-		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
+		const billedContextTokens = this.#estimateNextContextTokens(lastAssistant);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
@@ -3276,7 +3292,7 @@ export class SessionMaintenance {
 		// (the floor applied below) drive the decision instead.
 		const assistantUsageContextTokens = assistantPredatesCompaction
 			? 0
-			: calculateContextTokens(assistantMessage.usage);
+			: this.#estimateNextContextTokens(assistantMessage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
@@ -3674,11 +3690,7 @@ export class SessionMaintenance {
 			);
 		}
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
-		let baseTokens = computeNonMessageTokens(
-			this.#host.nonMessageTokenSource(),
-			this.#tokenizer,
-			this.#host.settings.revision,
-		);
+		let baseTokens = this.#estimateRequestOverheadTokens();
 		baseTokens += this.#tokenizer.countMessages(preparation.recentMessages);
 		const totalBudget = ctxWindow - reserve;
 		// Skip iff there is no headroom whatsoever; a text-only archive costs
@@ -3787,9 +3799,7 @@ export class SessionMaintenance {
 				blocks,
 			},
 		);
-		let tokens =
-			computeNonMessageTokens(this.#host.nonMessageTokenSource(), this.#tokenizer, this.#host.settings.revision) +
-			this.#tokenizer.countMessage(summaryMessage);
+		let tokens = this.#estimateRequestOverheadTokens() + this.#tokenizer.countMessage(summaryMessage);
 		tokens += this.#tokenizer.countMessages(preparation.recentMessages, options);
 		return tokens;
 	}
@@ -3807,11 +3817,7 @@ export class SessionMaintenance {
 	}
 
 	#projectCompactionContextTokens(args: CompactionProjectionArgs): number {
-		const nonMessageTokens = computeNonMessageTokens(
-			this.#host.nonMessageTokenSource(),
-			this.#tokenizer,
-			this.#host.settings.revision,
-		);
+		const nonMessageTokens = this.#estimateRequestOverheadTokens();
 		const branch = this.#host.sessionManager.getBranch();
 		const leaf = branch.at(-1);
 		const archive = snapcompact.getPreservedArchive(args.preserveData);
@@ -4107,11 +4113,7 @@ export class SessionMaintenance {
 		}
 		const thresholdTokens = resolveThresholdTokens(ctxWindow, settings);
 		const recoveryBandTokens = Math.floor(thresholdTokens * COMPACTION_RECOVERY_BAND);
-		const baseTokens = computeNonMessageTokens(
-			this.#host.nonMessageTokenSource(),
-			this.#tokenizer,
-			this.#host.settings.revision,
-		);
+		const baseTokens = this.#estimateRequestOverheadTokens();
 		const edgeCap = snapcompact.geometry(shape).capacity;
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;

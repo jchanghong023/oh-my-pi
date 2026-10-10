@@ -26,6 +26,7 @@ import type { AppendOnlyContextManager } from "./append-only-context";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { SentToolDefinitions } from "./sent-tool-definitions";
 import type { AgentTelemetryConfig } from "./telemetry";
+import type { Tokenizer } from "./tokenizer";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -167,6 +168,8 @@ export interface SteeringQueueState {
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
+	/** Reuse the Agent's current model-aware token counter for request-only usage accounting. */
+	getTokenizer?: () => Tokenizer;
 
 	/**
 	 * When to interrupt tool execution for steering messages.

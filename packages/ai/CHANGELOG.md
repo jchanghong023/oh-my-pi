@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserved Codex tool-loop turn state and user timestamps when requests include transient user-authority context.
 - Fixed schema references to definition names containing `/` or `~`, including an empty definition name.
 - Fixed schema validation and strict-mode conversion resolving percent-encoded definition references incorrectly.
 - Fixed root schema references retaining definition blocks in provider tool schemas.

@@ -20,6 +20,7 @@ import type {
 	ModelSpec,
 	ProviderSessionState,
 } from "@oh-my-pi/pi-ai/types";
+import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { __resetProxyCache } from "@oh-my-pi/pi-ai/utils/proxy";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -6610,7 +6611,7 @@ describe("openai-codex streaming", () => {
 		).toBe(false);
 	});
 
-	it("scopes x-codex-turn-state to the current turn on SSE requests", async () => {
+	it.each([false, true])("scopes SSE turn state with per-call context=%s", async injectPerCallContext => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 
@@ -6621,10 +6622,12 @@ describe("openai-codex streaming", () => {
 		const token = `aaa.${payload}.bbb`;
 
 		const requestTurnStates: Array<string | null> = [];
+		const requestBodies: Array<Record<string, unknown>> = [];
 		let callCount = 0;
 		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
 			const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
 			requestTurnStates.push(headers.get("x-codex-turn-state"));
+			requestBodies.push(requireRecord(JSON.parse(decodeCodexRequestBody(init?.body)), "SSE request body"));
 			const index = callCount;
 			callCount += 1;
 			const sse =
@@ -6661,6 +6664,14 @@ describe("openai-codex streaming", () => {
 
 		const systemPrompt = ["You are a helpful assistant."];
 		const firstUser = { role: "user" as const, content: "Read the file", timestamp: Date.now() };
+		const nextUser = { role: "user" as const, content: "Next task", timestamp: firstUser.timestamp + 1000 };
+		const temporaryContextText = "Temporary Goal context";
+		const withPerCallContext = (messages: Context["messages"]): Context["messages"] => {
+			if (!injectPerCallContext) return messages;
+			const temporaryUser = { role: "user" as const, content: temporaryContextText, timestamp: 0 };
+			markPerCallContextMessage(temporaryUser);
+			return [...messages, temporaryUser];
+		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const options = {
 			fetch: fetchMock as FetchImpl,
@@ -6669,7 +6680,12 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		};
 
-		const first = await streamOpenAICodexResponses(model, { systemPrompt, messages: [firstUser] }, options).result();
+		const first = await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt, messages: withPerCallContext([firstUser]) },
+			options,
+		).result();
+		expect(first.stopReason).toBe("toolUse");
 		const toolCall = first.content.find(
 			(c): c is Extract<(typeof first.content)[number], { type: "toolCall" }> => c.type === "toolCall",
 		);
@@ -6684,9 +6700,10 @@ describe("openai-codex streaming", () => {
 		// Tool-loop follow-ups within the same turn replay the first captured turn state.
 		const second = await streamOpenAICodexResponses(
 			model,
-			{ systemPrompt, messages: [firstUser, first, toolResult] },
+			{ systemPrompt, messages: withPerCallContext([firstUser, first, toolResult]) },
 			options,
 		).result();
+		expect(second.stopReason).toBe("toolUse");
 		const secondToolCall = second.content.find(
 			(c): c is Extract<(typeof second.content)[number], { type: "toolCall" }> => c.type === "toolCall",
 		);
@@ -6700,28 +6717,44 @@ describe("openai-codex streaming", () => {
 		};
 		const third = await streamOpenAICodexResponses(
 			model,
-			{ systemPrompt, messages: [firstUser, first, toolResult, second, secondToolResult] },
+			{ systemPrompt, messages: withPerCallContext([firstUser, first, toolResult, second, secondToolResult]) },
 			options,
 		).result();
+		expect(third.stopReason).toBe("stop");
 		// A new user turn starts without it, even though later responses returned other values.
 		await streamOpenAICodexResponses(
 			model,
 			{
 				systemPrompt,
-				messages: [
-					firstUser,
-					first,
-					toolResult,
-					second,
-					secondToolResult,
-					third,
-					{ role: "user" as const, content: "Next task", timestamp: Date.now() + 1 },
-				],
+				messages: withPerCallContext([firstUser, first, toolResult, second, secondToolResult, third, nextUser]),
 			},
 			options,
 		).result();
 
 		expect(requestTurnStates).toEqual([null, "turn-state-1", "turn-state-1", null]);
+		const turns = requestBodies.map(body =>
+			parseTurnMetadata(requireRecord(body.client_metadata, "client_metadata")),
+		);
+		expect(turns).toHaveLength(4);
+		expect(turns[0]?.turn_started_at_unix_ms).toBe(firstUser.timestamp);
+		for (const turn of turns.slice(1, 3)) {
+			expect(turn.turn_id).toBe(turns[0]?.turn_id);
+			expect(turn.turn_started_at_unix_ms).toBe(firstUser.timestamp);
+		}
+		expect(turns[3]?.turn_id).not.toBe(turns[0]?.turn_id);
+		expect(turns[3]?.turn_started_at_unix_ms).toBe(nextUser.timestamp);
+		if (injectPerCallContext) {
+			for (const body of requestBodies) {
+				expect(body.input).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							role: "user",
+							content: [{ type: "input_text", text: temporaryContextText }],
+						}),
+					]),
+				);
+			}
+		}
 	});
 
 	it("isolates turn-state by credential, backend, model, and Responses Lite mode", async () => {

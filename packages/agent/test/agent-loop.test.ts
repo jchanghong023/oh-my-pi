@@ -23,12 +23,18 @@ import { ASIDE_MESSAGE_COMMIT, ASIDE_MESSAGE_DISCARD, SPECULATIVE_STREAM_SESSION
 import type { AssistantMessage, AssistantMessageEvent, Context, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { kCursorExecResolved, setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import {
+	kCursorExecResolved,
+	markPerCallContextMessage,
+	setStreamingPartialJson,
+} from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import type { HarmonyDetection } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import * as harmonyLeak from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { createAssistantMessage, createHarmonyMitigationModel, createUserMessage } from "./helpers";
+import { fitOutputTokensToContextWindow, OUTPUT_FIT_HEADWAY_TOKENS } from "../src/output-budget";
+import { Tokenizer } from "../src/tokenizer";
 
 declare module "@oh-my-pi/pi-agent-core/types" {
 	interface CustomAgentMessages {
@@ -109,6 +115,42 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("message_end");
 		expect(eventTypes).toContain("turn_end");
 		expect(eventTypes).toContain("agent_end");
+	});
+
+	it("keeps output room across a tool loop with regenerated request-only context", async () => {
+		const tokenizer = new Tokenizer();
+		const temporary: Message = { role: "user", content: "x".repeat(400_000), timestamp: 0 };
+		markPerCallContextMessage(temporary);
+		const mock = createMockModel({
+			contextWindow: 1_000_000,
+			maxTokens: 384_000,
+			responses: [
+				{ content: [{ type: "toolCall", name: "read", arguments: {} }], usage: { input: 700_000 } },
+				{ content: ["done"] },
+			],
+		});
+		const tool: AgentTool = {
+			name: "read",
+			label: "Read",
+			description: "Read",
+			parameters: type({}),
+			execute: async () => ({ content: [{ type: "text", text: "result" }] }),
+		};
+		const caps: (number | undefined)[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model, tools: [tool] },
+			transformProviderContext: context => ({ ...context, messages: [...context.messages, temporary] }),
+			streamFn: (model, context, options) => {
+				caps.push(fitOutputTokensToContextWindow(model, context, model.maxTokens ?? undefined, tokenizer));
+				return mock.stream(model, context, options);
+			},
+		});
+		await agent.prompt("read");
+		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
+		if (!toolResult) throw new Error("Missing tool result");
+		const tail = tokenizer.countMessage(toolResult);
+		expect(caps).toEqual([384_000, 1_000_000 - 700_000 - tail - Math.ceil(tail / 10) - OUTPUT_FIT_HEADWAY_TOKENS]);
+		expect(agent.state.messages.some(message => message === temporary)).toBe(false);
 	});
 
 	it("ends gracefully without a provider call after the deadline", async () => {

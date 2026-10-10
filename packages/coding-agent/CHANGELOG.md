@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- Reserved the full `/goal-auto-orchestrate` context in compaction budgets, including after history rewrites, without double-counting prior usage or discounting unrelated extension context.
+- Preserved newer text and image drafts during asynchronous `/goal-auto-orchestrate` submission and merged failed submissions back into the editor.
 - Kept `/goal-auto-orchestrate` orchestration rules active when Codex Code Mode exposes `task` only through the eval bridge.
 - Preserved automatic-goal provenance when the initial TUI submission invokes a skill, preventing stale orchestration notices after pause or deletion.
 - Fixed Windows local-gate timing across processes, kept simulated compiler intervals charged during gate selftests, and blocked WSL validation of uncommitted source instead of transferring it.

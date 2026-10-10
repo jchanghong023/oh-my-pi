@@ -145,6 +145,7 @@ import { formatEvalStateContext } from "../eval/state";
 import { WorkPoolRegistry } from "../task/workpool";
 import { type BashPtyOptions, type BashResult, releaseShellSessions } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
+import { buildGoalAutoOrchestrateMessage } from "../goals/request-context";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type {
@@ -6790,6 +6791,15 @@ export class AgentSession implements SettingsScope {
 
 	buildGoalAutoOrchestrateTodoContext(tools: readonly string[]): string | undefined {
 		return this.#buildGoalTodoContext({ tools, userAuthority: true });
+	}
+
+	getPerCallContextTokens(): number {
+		const state = this.#goalModeState;
+		if (!state?.autoOrchestrate || !state.enabled || state.mode !== "active" || state.goal.status !== "active")
+			return 0;
+		const tools = isJchToolsAgentModel(this.model) ? [] : this.getEnabledToolNames();
+		const message = buildGoalAutoOrchestrateMessage(state, tools, this.buildGoalAutoOrchestrateTodoContext(tools));
+		return message ? this.agent.tokenizer.countMessage(message) : 0;
 	}
 
 	getVibeModeState(): VibeModeState | undefined {

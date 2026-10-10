@@ -1015,6 +1015,7 @@ export class InputController {
 				submittedMode === "plan" ||
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
+				submittedMode === "goal-auto-orchestrate" ||
 				submittedMode === "guided-goal";
 			if (
 				draftDetached &&
@@ -1061,10 +1062,10 @@ export class InputController {
 				try {
 					slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
 				} catch (error) {
-					// Detached mode commands (plan/vibe/goal/guided-goal) rethrow so
-					// this caller — the one that took the draft's images out of the
-					// editor before dispatch — restores the submission and reports
-					// the error, mirroring `handleFollowUp`'s Ctrl+Enter path.
+					// Detached mode commands (plan/vibe/goal/goal-auto-orchestrate/
+					// guided-goal) rethrow so the caller that detached their images
+					// restores the submission and reports the error, mirroring
+					// `handleFollowUp`'s Ctrl+Enter path.
 					if (!draftDetached) throw error;
 					restoreDetachedDraft(this.ctx.editor, text, inputImages, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));

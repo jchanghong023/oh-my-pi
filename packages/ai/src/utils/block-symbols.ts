@@ -151,13 +151,18 @@ export function isSyntheticUser(message: SyntheticUserCarrier | null | undefined
  * Symbol-keyed so the marker never persists or reaches the provider wire.
  */
 export const kPerCallContextMessage = Symbol("agent.message.perCallContext");
+const kPerCallContextSource = Symbol("agent.message.perCallContextSource");
 
 /** Carries per-call context provenance without exposing a string-keyed property. */
-export type PerCallContextMessageCarrier = object & { [kPerCallContextMessage]?: true };
+export type PerCallContextMessageCarrier = object & {
+	[kPerCallContextMessage]?: true;
+	[kPerCallContextSource]?: string;
+};
 
 /** Marks a message as synthesized for the current provider call. */
-export function markPerCallContextMessage(message: PerCallContextMessageCarrier): void {
+export function markPerCallContextMessage(message: PerCallContextMessageCarrier, source?: string): void {
 	message[kPerCallContextMessage] = true;
+	if (source !== undefined) message[kPerCallContextSource] = source;
 }
 
 /** Copies per-call context provenance to a converted or projected message. */
@@ -166,11 +171,17 @@ export function copyPerCallContextMessage(
 	source: PerCallContextMessageCarrier,
 ): void {
 	if (source[kPerCallContextMessage] === true) target[kPerCallContextMessage] = true;
+	if (source[kPerCallContextSource] !== undefined) target[kPerCallContextSource] = source[kPerCallContextSource];
 }
 
 /** True when a message was synthesized for the current provider call. */
 export function isPerCallContextMessage(message: PerCallContextMessageCarrier | null | undefined): boolean {
 	return message?.[kPerCallContextMessage] === true;
+}
+
+/** Stable producer identity for independently reserving request-only context in compaction. */
+export function getPerCallContextSource(message: PerCallContextMessageCarrier): string | undefined {
+	return message[kPerCallContextSource];
 }
 
 /**

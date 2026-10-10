@@ -1,4 +1,5 @@
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai";
+import { getPerCallContextSource, isPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { stopsOutputAtContextWindow } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { stringifyJson } from "@oh-my-pi/pi-utils";
 import { findRequestUsageAnchor } from "./compaction/transcript-tokens";
@@ -118,6 +119,31 @@ function withMargin(localTokens: number): number {
 	return localTokens + Math.ceil(localTokens / PROMPT_ESTIMATE_MARGIN_DIVISOR);
 }
 
+/** Count all request-only messages, including transforms that insert before the usage anchor. */
+export function countPerCallContextTokens(context: Context, tokenizer: Tokenizer): number {
+	let tokens = 0;
+	for (const message of context.messages) {
+		if (isPerCallContextMessage(message)) tokens += tokenizer.countMessage(message);
+	}
+	return tokens;
+}
+
+/** Preserve other request transforms' usage when a planner rebuilds one named producer. */
+export function countPerCallContextTokensBySource(
+	context: Context,
+	tokenizer: Tokenizer,
+): Record<string, number> | undefined {
+	let counts: Record<string, number> | undefined;
+	for (const message of context.messages) {
+		if (!isPerCallContextMessage(message)) continue;
+		const source = getPerCallContextSource(message);
+		if (source === undefined) continue;
+		counts ??= Object.create(null) as Record<string, number>;
+		counts[source] = (counts[source] ?? 0) + tokenizer.countMessage(message);
+	}
+	return counts;
+}
+
 /** Provider-anchored prompt size; falls back to a full local count when nothing anchors. */
 function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	const { messages } = context;
@@ -125,9 +151,10 @@ function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	if (!anchor) return withMargin(countContextTokens(context, tokenizer));
 	let tail = 0;
 	for (let index = anchor.index + 1; index < messages.length; index++) {
-		tail += tokenizer.countMessage(messages[index]);
+		if (!isPerCallContextMessage(messages[index])) tail += tokenizer.countMessage(messages[index]);
 	}
-	return anchor.tokens + withMargin(tail);
+	const delta = countPerCallContextTokens(context, tokenizer) - (anchor.message.perCallContextTokens ?? 0);
+	return Math.max(0, anchor.tokens + Math.min(0, delta)) + withMargin(tail + Math.max(0, delta));
 }
 
 function countContextTokens(context: Context, tokenizer: Tokenizer): number {

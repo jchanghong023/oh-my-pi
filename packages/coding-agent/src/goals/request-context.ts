@@ -8,7 +8,7 @@ import type { CustomMessage } from "../session/messages";
 import { renderGoalPrompt } from "./runtime";
 import type { GoalModeState } from "./state";
 
-const SOURCE = "goal-auto-orchestrate";
+export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
 const CONTEXT_TYPE = "goal-auto-orchestrate-context";
 const CONTINUATION_TYPE = "goal-auto-orchestrate-continuation";
 const orchestrateKeyword = MAGIC_KEYWORDS.find(keyword => keyword.id === "orchestrate")!;
@@ -49,7 +49,7 @@ export function filterGoalAutoOrchestrateMessages(
 			return active && (details?.goalId === undefined || details.goalId === state.goal.id);
 		}
 		if (message.customType === "orchestrate-notice" || message.customType === "goal-mode-context") {
-			return !active && details?.source !== SOURCE;
+			return !active && details?.source !== GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE;
 		}
 		// Ordinary continuation history contains an objective already supplied by
 		// the explicit request view; keep ordinary goal behavior outside this mode.
@@ -88,10 +88,10 @@ export function buildGoalAutoOrchestrateMessage(
 		}),
 		display: false,
 		attribution: "user",
-		details: { source: SOURCE, goalId: state.goal.id },
+		details: { source: GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE, goalId: state.goal.id },
 		timestamp: 0,
 	};
-	markPerCallContextMessage(message);
+	markPerCallContextMessage(message, GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE);
 	return message;
 }
 
@@ -135,6 +135,6 @@ export function applyGoalAutoOrchestrateContext(
 		timestamp: goalContext.timestamp,
 		[kGoalAutoOrchestrateContext]: true,
 	};
-	markPerCallContextMessage(message);
+	markPerCallContextMessage(message, GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE);
 	return { ...stripped, messages: [...messages, message] };
 }

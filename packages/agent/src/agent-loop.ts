@@ -38,6 +38,7 @@ import {
 	type CursorExecResolvedCarrier,
 	copyCursorExecResolved,
 	getStreamingPartialJson,
+	isPerCallContextMessage,
 	kCursorExecResolved,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { schemaDefinesProperty } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
@@ -56,6 +57,8 @@ import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi
 import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
+import { countPerCallContextTokens, countPerCallContextTokensBySource } from "./output-budget";
+import { Tokenizer } from "./tokenizer";
 import { agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import { SpeculativeOperationCoordinator } from "./speculative-execution";
@@ -1988,6 +1991,13 @@ async function streamAssistantResponse(
 ): Promise<AssistantMessage> {
 	const providerCall = prepared ?? (await prepareProviderCall(context, config, signal));
 	const { model, context: llmContext, promptToolWireTools, ownedDialect } = providerCall;
+	const perCallTokenizer = llmContext.messages.some(isPerCallContextMessage)
+		? (config.getTokenizer?.() ?? new Tokenizer(model))
+		: undefined;
+	const perCallContextTokens = perCallTokenizer ? countPerCallContextTokens(llmContext, perCallTokenizer) : 0;
+	const perCallContextTokensBySource = perCallTokenizer
+		? countPerCallContextTokensBySource(llmContext, perCallTokenizer)
+		: undefined;
 
 	const streamFunction = streamFn || streamSimple;
 
@@ -2246,6 +2256,9 @@ async function streamAssistantResponse(
 						if (config.transformAssistantMessage) {
 							await config.transformAssistantMessage(finalMessage, requestSignal);
 						}
+						if (perCallContextTokens > 0) finalMessage.perCallContextTokens = perCallContextTokens;
+						if (perCallContextTokensBySource)
+							finalMessage.perCallContextTokensBySource = perCallContextTokensBySource;
 						// A pre-dispatch hook may request approval or change external state, so
 						// do not run it until the outer loop has established this tool turn can
 						// actually dispatch. The same gate keeps host-deferred speculation from
@@ -2528,6 +2541,8 @@ async function streamAssistantResponse(
 				if (config.transformAssistantMessage) {
 					await config.transformAssistantMessage(trailing, requestSignal);
 				}
+				if (perCallContextTokens > 0) trailing.perCallContextTokens = perCallContextTokens;
+				if (perCallContextTokensBySource) trailing.perCallContextTokensBySource = perCallContextTokensBySource;
 				trailing = snapshotAssistantMessage(trailing);
 				const finalToolCallsCanDispatch =
 					!requestSignal?.aborted &&

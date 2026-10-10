@@ -56,6 +56,8 @@ async function createHarness(factory: ExtensionFactory) {
 		isStreaming: true,
 		isCompacting: false,
 		queuedMessageCount: 0,
+		customCommands: [],
+		promptTemplates: [],
 		prompt,
 		followUp: vi.fn(async (_text: string, _images?: ImageContent[]) => {}),
 		promptCustomMessage: vi.fn(async () => true),
@@ -366,6 +368,82 @@ describe("interactive native input ingress", () => {
 
 		expect(h.editor.getText()).toBe("same text");
 	});
+
+	for (const command of ["/goal", "/goal-auto-orchestrate"]) {
+		it(`Enter ${command} preserves the next text/image draft typed during a blocked input hook`, async () => {
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const h = await createHarness(pi => {
+				pi.on("input", async () => {
+					entered.resolve();
+					await release.promise;
+				});
+			});
+			const handleGoalModeCommand = vi.fn(async () => true);
+			h.ctx.handleGoalModeCommand = handleGoalModeCommand;
+			h.draftWithImage(`${command} set original [Image #1]`);
+			const submitting = h.pressSubmit(ENTER);
+			await entered.promise;
+			h.draftWithImage("newer [Image #1]", newerImage, "local://newer.jpg");
+			release.resolve();
+			await submitting;
+
+			expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
+			expect(h.editor.pendingImages).toEqual([newerImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
+			expect(h.editor.imageLinks).toEqual(["local://newer.jpg"]);
+			expect(h.ctx.showError).not.toHaveBeenCalled();
+			expect(h.prompt).not.toHaveBeenCalled();
+		});
+
+		it(`Enter ${command} merges a failed submission with text/images typed during interception and dispatch`, async () => {
+			const hookEntered = Promise.withResolvers<void>();
+			const releaseHook = Promise.withResolvers<void>();
+			const dispatchEntered = Promise.withResolvers<void>();
+			const releaseDispatch = Promise.withResolvers<void>();
+			const h = await createHarness(pi => {
+				pi.on("input", async () => {
+					hookEntered.resolve();
+					await releaseHook.promise;
+				});
+			});
+			const handleGoalModeCommand = vi.fn(async () => {
+				dispatchEntered.resolve();
+				await releaseDispatch.promise;
+				throw new Error("goal setup failed");
+			});
+			h.ctx.handleGoalModeCommand = handleGoalModeCommand;
+			h.draftWithImage(`${command} set original [Image #1]`);
+			const submitting = h.pressSubmit(ENTER);
+			await hookEntered.promise;
+			h.draftWithImage("newer [Image #1]", newerImage, "local://newer.jpg");
+			releaseHook.resolve();
+			await dispatchEntered.promise;
+			const draftDuringDispatch = h.editor.getExpandedText();
+			h.editor.pendingImages.push(transformedImage);
+			h.editor.pendingImageLinks.push("local://during-dispatch.jpg");
+			h.editor.imageLinks = h.editor.pendingImageLinks;
+			h.editor.setText(`${draftDuringDispatch} still typing [Image #2]`);
+			releaseDispatch.resolve();
+			await submitting;
+
+			expect(draftDuringDispatch).toBe("newer [Image #1]");
+			expect(h.editor.getExpandedText()).toBe(
+				`${command} set original [Image #3]\n\nnewer [Image #1] still typing [Image #2]`,
+			);
+			expect(h.editor.pendingImages).toEqual([newerImage, transformedImage, originalImage]);
+			expect(h.editor.pendingImageLinks).toEqual([
+				"local://newer.jpg",
+				"local://during-dispatch.jpg",
+				"local://original.png",
+			]);
+			expect(h.editor.imageLinks).toEqual(h.editor.pendingImageLinks);
+			expect(handleGoalModeCommand).toHaveBeenCalledTimes(1);
+			expect(h.ctx.showError).toHaveBeenCalledTimes(1);
+			expect(h.ctx.showError).toHaveBeenCalledWith("goal setup failed");
+			expect(h.prompt).not.toHaveBeenCalled();
+		});
+	}
 
 	it("Ctrl+Enter restores a rejected submission alongside newer text and image attachments", async () => {
 		const entered = Promise.withResolvers<void>();

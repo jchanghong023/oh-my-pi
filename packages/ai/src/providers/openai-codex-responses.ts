@@ -59,7 +59,12 @@ import {
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 	stripOpenAIResponsesComputerLinkedReasoningIdsForReplay,
 } from "../utils";
-import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
+import {
+	clearStreamingPartialJson,
+	isPerCallContextMessage,
+	kStreamingLastParseLen,
+	kStreamingPartialJson,
+} from "../utils/block-symbols";
 import { hasVisibleAssistantContent } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
@@ -1985,6 +1990,7 @@ async function openCodexWebSocketTransport(
 function getCodexTurnStartedAtUnixMs(context: Context): number {
 	for (let i = context.messages.length - 1; i >= 0; i--) {
 		const message = context.messages[i];
+		if (isPerCallContextMessage(message)) continue;
 		if (message?.role === "user" && Number.isFinite(message.timestamp)) {
 			return Math.trunc(message.timestamp);
 		}
@@ -1994,13 +2000,15 @@ function getCodexTurnStartedAtUnixMs(context: Context): number {
 
 /**
  * True when the request continues the current turn (everything after the
- * last assistant message is tool results), false when a new user turn starts.
+ * last assistant message is tool results or per-call context), false when a new user turn starts.
  * Mirrors codex-rs, which scopes `x-codex-turn-state` to a single turn and
  * clears it when the next one begins.
  */
 function isCodexWithinTurnContinuation(context: Context): boolean {
 	for (let i = context.messages.length - 1; i >= 0; i--) {
-		const role = context.messages[i]?.role;
+		const message = context.messages[i];
+		if (isPerCallContextMessage(message)) continue;
+		const role = message?.role;
 		if (role === "toolResult") continue;
 		return role === "assistant";
 	}

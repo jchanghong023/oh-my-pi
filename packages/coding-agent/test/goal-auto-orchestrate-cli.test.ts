@@ -831,6 +831,28 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 		);
 	}, 300_000);
 
+	test("tool continuation keeps output room when reported usage already includes the full goal", async () => {
+		await withFixture(async fixture => {
+			const client = await fixture.start();
+			fixture.steps.push(
+				{ tool: { name: "read", args: { path: path.join(fixture.cwd, "evidence.txt") } }, tokens: 27_000 },
+				{ text: "GOAL_BUDGET_TOOL_LOOP_FINISHED", tokens: 27_050 },
+			);
+			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			const bodies = fixture.mainSince(0);
+			expect(bodies).toHaveLength(2);
+			bodies.forEach(body => {
+				assertActive(body);
+				expect(body.max_tokens ?? body.max_completion_tokens).toBe(4096);
+			});
+			expect(
+				client.seen.find(frame => frame.type === "tool_execution_end" && frame.toolName === "read"),
+			).toMatchObject({
+				isError: false,
+			});
+		});
+	}, 300_000);
+
 	test("two real compactions omit unattended strategy from auxiliary requests and rebuild the objective on later main requests", async () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
