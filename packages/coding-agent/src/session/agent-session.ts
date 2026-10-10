@@ -160,7 +160,7 @@ import type {
 	ToolInfo,
 	TreePreparation,
 } from "../extensibility/extensions";
-import { emitSessionShutdownEvent, TOP_LEVEL_AGENT } from "../extensibility/extensions";
+import { emitSessionShutdownEvent, TOP_LEVEL_AGENT, UNAVAILABLE_ANNOTATIONS } from "../extensibility/extensions";
 import { extensionEventFromSessionEvent } from "../extensibility/extensions/lifecycle-mirror";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
@@ -8353,6 +8353,9 @@ export class AgentSession implements SettingsScope {
 			},
 			getSystemPrompt: () => this.systemPrompt,
 			runEphemeralTurn: args => this.runEphemeralTurn(args),
+			// The SDK always builds a runner (which receives the annotations factory); this runner-less
+			// context only exists for directly constructed sessions, which have no `/annotate` wiring.
+			annotations: UNAVAILABLE_ANNOTATIONS,
 			setInterval: (callback, ms, ...args) => this.#fallbackTimers().setInterval(callback, ms, ...args),
 			setTimeout: (callback, ms, ...args) => this.#fallbackTimers().setTimeout(callback, ms, ...args),
 			clearTimer: timer => this.#fallbackTimers().clear(timer),

@@ -102,7 +102,7 @@
 
 现状与缺口（2026-10-07 依据仓库内容整理；当日精简会话运行的验证以各功能域记录为准）：
 
-* fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`rpc-fork-*`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/ci-test-ts.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `fork.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
+* fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`rpc-fork-*`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `fork.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
 * fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器），永久只构建和发布，不运行测试、冒烟、lint、类型检查或独立校验作业。该独立发布流程保持不变，但 NEVER 由 fastcheck/fulltest/slowtest 推送、触发或监控；直接运行 CI 不代表本地验证通过。
 * 上游 Windows 专属 `clippy::map_unwrap_or` 问题已随上游修复合入；标准 fulltest 不再保留只运行 `check:ts` 的 Rust 静态跳过，必须包含 fastcheck 的全部检查。现有 `test:rs` 在 Windows 过滤上游确定性失败的 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open`，Linux 不过滤；该既有测试定义在门禁迁移中不改写，不能据此声称该用例已通过。上游带入的格式差异、RPC 重入修复与 Linux 会话隔离测试的既有适配仍按相应源码注释维护；门禁迁移不改变其检查定义、产品行为或通过标准。
 * 未执行的门禁与因工具/环境受阻的验证均须如实记录为未验证；本次明确技能调用可授权任务所需验证，但授权本身不是通过证据，不能报告未运行的检查已通过或功能已验收。

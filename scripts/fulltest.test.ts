@@ -2,9 +2,22 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, runGateCommands } from "./fastcheck";
 import { parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
+
+describe("shared per-test budget", () => {
+	test("converts valid second overrides to Bun's millisecond budget", () => {
+		expect(testTimeoutMs(" 2.5 ")).toBe(2500);
+		expect(testTimeoutMs("1")).toBe(1000);
+	});
+
+	test("invalid overrides preserve the upstream hang ceiling", () => {
+		expect(testTimeoutMs("0.5")).toBe(30_000);
+		expect(testTimeoutMs("invalid")).toBe(30_000);
+	});
+});
 
 describe("standard gate charged-budget parameters", () => {
 	test("fastcheck accepts only a finite positive downward limit", () => {
