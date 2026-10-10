@@ -50,8 +50,8 @@ export async function runGateCommands(
 
 /** Preserve the fork's existing TS/Rust static primitives; execute no tests. */
 export async function fastcheckCommands(): Promise<GateCommand[]> {
-	return [
-		{ label: "static/TS", argv: ["bun", "run", "check:ts"], cwd: gateRepoRoot },
+	const commands: GateCommand[] = [
+		{ label: "static/TS lint+format", argv: ["bun", "run", "check:tools"], cwd: gateRepoRoot },
 		{
 			label: "static/Rust fmt+clippy",
 			argv: ["bun", "run", "check:rs"],
@@ -59,6 +59,22 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 			env: { CI: "1", RUSTUP_AUTO_INSTALL: "0" },
 		},
 	];
+	// These no-emit package primitives are independent. Reuse them unchanged
+	// through the existing bounded runner rather than serializing the workspace.
+	for await (const manifest of new Bun.Glob("packages/*/package.json").scan({
+		cwd: gateRepoRoot,
+		onlyFiles: true,
+	})) {
+		const manifestPath = path.join(gateRepoRoot, manifest);
+		const pkg = (await Bun.file(manifestPath).json()) as { name: string; scripts?: Record<string, string> };
+		if (!pkg.scripts?.["check:types"]) continue;
+		commands.push({
+			label: `static/TS types ${pkg.name}`,
+			argv: ["bun", "run", "check:types"],
+			cwd: path.dirname(manifestPath),
+		});
+	}
+	return commands;
 }
 
 export async function runFastcheck(gate: GateRun): Promise<void> {
