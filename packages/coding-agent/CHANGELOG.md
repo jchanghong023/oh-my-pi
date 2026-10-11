@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Bound the disposable Bun server in the isolated-browser-profile test to loopback, preventing repeated Windows firewall prompts for randomly copied executable paths.
 - Preserved cleared project roles under offline company defaults and YAML comments and sibling alias values when saving a single role.
 - Fixed offline startup model scopes omitting loaded extension models and cold-resumed sessions losing the offline request notice.
 - Kept late fork-canary startup warnings visible instead of dropping them after startup notifications were drained.
