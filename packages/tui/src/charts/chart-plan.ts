@@ -73,6 +73,21 @@ export type Rivals = "rows" | "columns";
  *   logarithmic when the values span decades; generalizes the dumbbell beyond two series.
  * - `range`: values written as `a–b` intervals, as floating bars from low to high, with an optional
  *   central estimate and a stated reference (a budget, a price, 1×); series in other units get their own band.
+ * - `slope`: each category's value at two to four ordered stages (`Baseline | Best (Iter 3) | Iter 4`),
+ *   a line per category from stage to stage, labelled at both ends; moves toned by polarity.
+ * - `butterfly`: two opposing amounts per category (`Added | Removed`, `Wins | Losses`) as back-to-back
+ *   bars from a shared spine, each row's net beside it.
+ * - `bullet`: one measured value per row against that row's own target, budget or limit (a `Target ≤ 200 µs`
+ *   column), each as a share of its target on one axis: a bar (a `p50 / p99` span) to a target mark, toned by
+ *   whether it stays on the target's side ({@link ChartPlan.target}).
+ * - `ladder`: quantiles of one measurement per category (`p50 | p90 | p99 | max` columns, `p50 / p99`
+ *   cells), each row a line from its lowest quantile to its highest with a mark at each, on one shared
+ *   axis (logarithmic when the tails span decades); one ladder per condition measured (`Startup`, `Wall`).
+ * - `histogram`: counts or shares over rows that are ordered bins (`1`, `2–5`, `6–20`, `100+`), as
+ *   columns in bin order; two to four distributions side by side, as shares of each one's total when
+ *   their totals differ ({@link ChartPlan.normalize}).
+ * - `stat`: a small table comparing two conditions (old vs new, on vs off) on one to four metrics, as a tile
+ *   per metric: the factor between them in big figures over a short bar per condition ({@link statShape}).
  */
 export type ChartKind =
 	| "bar"
@@ -90,7 +105,13 @@ export type ChartKind =
 	| "timeline"
 	| "waterfall"
 	| "dots"
-	| "range";
+	| "range"
+	| "slope"
+	| "butterfly"
+	| "bullet"
+	| "ladder"
+	| "histogram"
+	| "stat";
 
 /** What to draw from a table: the kind, the columns naming each category, and the columns plotted. */
 export interface ChartPlan {
@@ -105,7 +126,10 @@ export interface ChartPlan {
 	 * writes each value once beside its block. Lines keep their x order and ignore it.
 	 */
 	readonly group?: number;
-	/** Plotted columns, in order; a `change` measures the rest against the first (or its `a → b` cells). */
+	/**
+	 * Plotted columns, in order; a `change` measures the rest against the first (or its `a → b` cells),
+	 * a `slope` runs through them as stages, and a `butterfly` draws the first leftward (the losing side).
+	 */
 	readonly series: readonly number[];
 	/**
 	 * `change` over metric pairs (`Baseline Turns | Iter1 Turns | Baseline Tokens
@@ -146,6 +170,9 @@ export interface ChartPlan {
 	 * Absent: normalized when the parts are outcomes ({@link outcomeTones}:
 	 * `ok | fail`, `Pass | Fail | Skip`), whose rates are the point, over
 	 * totals {@link MIX_SPREAD}× apart or more.
+	 * `histogram`: each distribution as shares of its own total, so populations
+	 * of different sizes compare by shape. Absent: normalized when two or more
+	 * count columns' totals lie {@link MIX_SPREAD}× apart or more.
 	 */
 	readonly normalize?: boolean;
 	/**
@@ -159,6 +186,12 @@ export interface ChartPlan {
 	 * cap`, `Budget`), drawn as a rule across the steps instead of a step.
 	 */
 	readonly limit?: number;
+	/**
+	 * `bullet`: the column holding each row's target (`Target` `≤ 200 µs`, `§6
+	 * budget`, `Limit`), which the one plotted series is measured against
+	 * ({@link findTarget}).
+	 */
+	readonly target?: number;
 	/** Which way each column improves, by column index; neutral columns absent. */
 	readonly polarity?: Readonly<Record<number, Polarity>>;
 	/** Which way each row's metric improves, by row index, where rows are metrics ({@link rowsAreMetrics}). */
@@ -210,6 +243,24 @@ export interface ChartPoint {
 	readonly emphasis: boolean;
 	/** Upper end of a range cell (`24–72 h`). */
 	readonly upper?: number;
+	/** The spread a `± e` cell states around the value (`3.67s ± 0.69`), drawn as a whisker either side of it. */
+	readonly error?: number;
+}
+
+/**
+ * Which side of its target a value must stay: at or under it (`max`: `≤ 200
+ * µs`, a budget, a limit) or at or over it (`min`: `≥ 0.85`, `≥ 700 MB/s`).
+ */
+export type Bound = "max" | "min";
+
+/**
+ * A row's target in a `bullet` chart, as the table wrote it: a value, or a
+ * window it must fall in (`60–100 ms`, its {@link ChartPoint.upper}), and the
+ * {@link Bound} the measure must keep; absent when neither the cell, the
+ * header nor the measure's polarity says which side.
+ */
+export interface ChartTarget extends ChartPoint {
+	readonly bound?: Bound;
 }
 
 export interface ChartSeries {
@@ -268,6 +319,11 @@ export interface ChartSpec {
 	readonly axis: string;
 	/** What a `change` measures against (its baseline column); its points are factors of it. */
 	readonly baseline?: string;
+	/**
+	 * The `change` is measured against a rival column — the one leading most rows — rather than a before
+	 * state: its bars are gaps to that rival (`+22%` slower than `tsc-rs, 8`), never improvements or regressions.
+	 */
+	readonly rival?: boolean;
 	/** How a heatmap shades its cells; `shared` when absent. */
 	readonly shading?: Shading;
 	/**
@@ -278,7 +334,10 @@ export interface ChartSpec {
 	readonly reference?: readonly number[];
 	/** `stacked`: the whole each category's parts make up ({@link ChartPlan.whole}), one point per category. */
 	readonly whole?: ChartSeries;
-	/** `stacked`: each bar is its category's mix, parts as percentages of its total ({@link ChartPlan.normalize}). */
+	/**
+	 * `stacked`: each bar is its category's mix, parts as percentages of its total; `histogram`: each
+	 * distribution as shares of its own total ({@link ChartPlan.normalize}).
+	 */
 	readonly normalized?: boolean;
 	/**
 	 * Outcome of each part of a whole, coloring it `success`/`warning`/`error`/
@@ -299,13 +358,20 @@ export interface ChartSpec {
 	 */
 	readonly estimate?: ChartSeries;
 	/**
+	 * `bullet`: each category's target ({@link ChartPlan.target}), against the
+	 * first series' point; `null` where the row states none in its unit.
+	 */
+	readonly targets?: readonly (ChartTarget | null)[];
+	/** `bullet`: what the targets are called, lowercased from their header (`target`, `budget`, `limit`). */
+	readonly targetName?: string;
+	/**
 	 * The one fact the chart states over it ({@link ChartPlan.title}: `Every
 	 * scenario improved (median 14× less)`); no title line without one.
 	 */
 	readonly title?: string;
 	/**
 	 * Muted note beside the title. Absent: the renderer writes how the chart
-	 * encodes the data where that is not obvious (`log scale`, `each column on its own scale`).
+	 * encodes the data where that is not obvious (`log scale`, `scaled per column`).
 	 */
 	readonly subtitle?: string;
 	/**
@@ -315,7 +381,8 @@ export interface ChartSpec {
 	 * a solid end, and the figures as `a → b`. Otherwise the pair are peers
 	 * (`xutf` vs `std`, two conditions without an order) drawn in two series
 	 * colors without direction. Only condition pairs ({@link isConditionPair} or
-	 * the judge's `pair`) draw as `paired` at all.
+	 * the judge's `pair`) draw as `paired` at all. A `ladder`'s two ladders
+	 * (`before fix` | `after fix`) by the same reading: the first muted.
 	 */
 	readonly transition?: boolean;
 	/** Marks laid over the chart by a planner: reference lines, highlighted categories, callouts. */
@@ -343,6 +410,18 @@ export interface ChartSpec {
 	 * name; two to {@link MAX_MATRIX}, in place of the single {@link status} badge.
 	 */
 	readonly matrix?: readonly StatusColumn[];
+	/**
+	 * `ladder`: the series of each ladder drawn on every category, lowest quantile first; one ladder per
+	 * condition measured (`Startup p50 | Startup p95 | Wall p50 | Wall p95`), named by it (empty when
+	 * there is one). Each series is named by its quantile (`p50`, `max`).
+	 */
+	readonly ladders?: readonly ChartLadder[];
+}
+
+/** One measurement's quantiles in a `ladder` chart: its name and its series, lowest quantile first. */
+export interface ChartLadder {
+	readonly name: string;
+	readonly series: readonly number[];
 }
 
 /** A status column of a {@link ChartSpec.matrix}: its header and each category's status. */
@@ -399,9 +478,16 @@ const SERIES_COLORS = 6;
 const MAX_PANELS = 6;
 /** Most lines one line chart keeps apart. */
 const MAX_LINES = 6;
+/** Fewest rows a line joins: three points draw a bend, not a trend. */
+const MIN_LINE_ROWS = 4;
+/** Fewest points a scatter needs before their cloud can show a relationship. */
+const MIN_SCATTER_ROWS = 5;
 /** Most series grouped bars hold; more draw as a heatmap. */
 const MAX_GROUPED = 4;
-/** Spread of a dumbbell's values (max/min) from which it reads as factors of change instead. */
+/**
+ * Spread of a unitless dumbbell's values (max/min) from which its rows read as different quantities, compared
+ * by their factors; and of two same-unit series from which grouped bars of them read better as dots.
+ */
 const DECADES = 100;
 /** Typical ratio between two rows from which grouped bars against a baseline column read as its factors. */
 const ROW_SPREAD = 8;
@@ -455,7 +541,7 @@ const DESCRIPTION = / [—–] | - |: | \(/;
  * scores, throughput, speedups and savings.
  */
 const HIGHER_BETTER =
-	/(?:^|[^\w])(?:pass(?:ed|es|ing)?|pass ?%|pass ?rate|success(?:es|ful)?|succeeded|accuracy|acc|recall|precision|prec|f1|em|exact[_ ]?match|scores?|wins?|win ?rate|hit ?rate|throughput|qps|rps|ops\/s|req\/s|tok\/s|tokens\/s|speedup|faster|improvement|savings?|saved|gain|coverage|quality|relevance|correct|solved|ok|renders|completion ?rate|uptime|per \$|\/\$)(?![\w])/i;
+	/(?:^|[^\w])(?:pass(?:ed|es|ing)?|pass ?%|pass ?rate|success(?:es|ful)?|succeeded|accuracy|acc|recall|precision|prec|f1|em|exact[_ ]?match|scores?|wins?|win ?rate|hit ?rate|throughput|qps|rps|ops\/s|req\/s|tok\/s|tokens\/s|speedup|faster|improvement|savings?|saved|gain|coverage|quality|relevance|correct|solved|ok|renders|completion ?rate|uptime|performance|profits?|roi|pnl|growth|per \$|\/\$)(?![\w])/i;
 /** Measures that improve downward, by header: cost, time, failures. */
 const LOWER_BETTER =
 	/(?:^|[^\w])(?:cost|costs|price|bill|spend|usd|latency|time|duration|wall(?: ?clock)?|elapsed|errors?|err|fail(?:s|ed|ures?)?|timeouts?|miss(?:es)?|crash(?:es)?|regressions?|bugs?|warnings?|retries|turns|p\d{2}|blockers|violations|leaks?|stalls?|load|\$\/\w+)(?![\w])/i;
@@ -507,7 +593,10 @@ const FOCUS_NAME =
 
 /** The local best guess at a chart for `table`, or `undefined` when no chart fits. */
 export function planChart(table: TableAnalysis): ChartPlan | undefined {
-	const shape = guessShape(table);
+	const guessed = guessShape(table);
+	// Two conditions on a few metrics read as a comparison where no chart of the rows would.
+	const drawn = guessed && buildChart(table, guessed);
+	const shape = (drawn && worthCharting(drawn) ? undefined : statShape(table, guessed)) ?? guessed;
 	if (!shape) return undefined;
 	const plan = { ...shape, ...guessMeaning(table, shape) };
 	// Unprompted, a title states only a fact the figures alone make striking.
@@ -535,26 +624,75 @@ export function leadingMeasures(table: TableAnalysis, guess: ChartPlan): TableCo
 
 /**
  * Facts about `table` a chart could state as its headline under `plan`'s
- * meaning, whatever chart it draws, strongest first: those of `plan`'s own
- * chart (its moves, its trend) and of every measure side by side (a row best
- * on measures the chart leaves out), under each of `contests` (`plan`'s own
- * {@link ChartPlan.rivals} by default; a judge is offered either reading's).
+ * meaning, strongest first: those of the chart `plan` draws (its moves, its
+ * trend), and of measures side by side, under each of `contests` (`plan`'s
+ * own {@link ChartPlan.rivals} by default; a judge is offered either reading's).
+ * `scope` says which measures stand side by side: `drawn` (the default, what
+ * a title may state) only those the chart draws ({@link drawnNames}) — a
+ * headline citing a column the chart leaves out (`Total` beside a chart of
+ * `vs current`) names a figure the reader cannot find on it; `table` every
+ * measure (a row best on measures the chart leaves out), the options a judge
+ * weighs while it may still pick a chart drawing them.
  */
 export function tableTakeaways(
 	table: TableAnalysis,
 	plan: ChartPlan,
 	contests: readonly (Rivals | undefined)[] = [plan.rivals],
+	scope: "drawn" | "table" = "drawn",
 ): Takeaway[] {
-	const measures = table.measures.filter(column => column.index !== plan.label).map(column => column.index);
-	const wide = !(plan.kind === "change" || plan.transpose || measures.length <= plan.series.length);
+	const measures = table.measures.filter(column => column.index !== plan.label);
+	// A slope's stages are one quantity: bars beside the rest (`Tokens In`) would read them as rival measures;
+	// a bullet's measure and its targets are no rivals either (`p50 / p99` is not "best" against `Target`),
+	// nor a ladder's quantiles or a histogram's distributions over one set of bins.
+	const wide = !(
+		plan.kind === "change" ||
+		plan.kind === "slope" ||
+		plan.kind === "bullet" ||
+		plan.kind === "ladder" ||
+		plan.kind === "histogram" ||
+		plan.transpose
+	);
 	const facts: Fact[] = [];
 	for (const rivals of contests) {
 		const drawn = buildChart(table, { ...plan, rivals });
 		if (drawn) facts.push(...chartFacts(drawn));
-		const side = wide && buildChart(table, { ...plan, rivals, kind: "grouped", series: measures });
+		let beside: readonly TableColumn[] = [];
+		if (scope === "table") beside = measures.length > plan.series.length ? measures : [];
+		else if (drawn && sideBySide(drawn)) {
+			const names = drawnNames(drawn);
+			beside = measures.filter(column => names.has(column.header));
+		}
+		// Parts of a whole stand side by side for their extremes (one row holding most of a part), never as rivals.
+		const contest = scope === "drawn" && drawn?.kind === "stacked" ? undefined : rivals;
+		const side =
+			wide &&
+			beside.length >= 2 &&
+			buildChart(table, { ...plan, rivals: contest, kind: "grouped", series: beside.map(column => column.index) });
 		if (side) facts.push(...chartFacts(side));
 	}
 	return rankFacts(facts);
+}
+
+/**
+ * Whether ranking a chart's drawn measures side by side adds facts its own leave out: a scatter's
+ * axes, a line's series, a stack's parts (their extremes only), a range chart's bands. Bars rank their
+ * series already; a before/after pair's story is its move; steps of a run are no rivals.
+ */
+function sideBySide(spec: ChartSpec): boolean {
+	if (spec.kind === "scatter" || spec.kind === "line" || spec.kind === "stacked") return true;
+	// Two peers on one dumbbell already say who leads ({@link peerFacts}); intervals of several measures rank apart.
+	return spec.kind === "range" && !spec.transition;
+}
+
+/**
+ * What a chart draws, by name: its series, its x measure (not the row names a line runs along), the
+ * whole its parts stack to and the baseline its factors are of — the columns (or, transposed, rows) a
+ * headline may cite.
+ */
+export function drawnNames(spec: ChartSpec): Set<string> {
+	const names = new Set(spec.series.map(entry => entry.name));
+	for (const name of [spec.x?.name, spec.whole?.name, spec.baseline]) if (name && name !== spec.axis) names.add(name);
+	return names;
 }
 
 /**
@@ -568,7 +706,9 @@ export function guessMeaning(
 	plan: ChartPlan,
 ): Pick<ChartPlan, "polarity" | "rowPolarity" | "rivals" | "focus" | "status"> {
 	const label = plan.label === undefined ? undefined : table.columns[plan.label];
-	const change = plan.kind === "change" || table.columns.some(column => BEFORE.test(column.header));
+	// A comparison of two conditions reads resources (tokens, memory) the way a change does.
+	const change =
+		plan.kind === "change" || plan.kind === "stat" || table.columns.some(column => BEFORE.test(column.header));
 	const polarity: Record<number, Polarity> = {};
 	for (const column of table.columns) {
 		if (column === label) continue;
@@ -664,6 +804,28 @@ function guessStatus(table: TableAnalysis, plan: ChartPlan): number | undefined 
 function guessShape(table: TableAnalysis): ChartPlan | undefined {
 	const { rows } = table;
 	let label = table.label;
+	// A column of targets (`Target ≤ 200 µs`, `§6 budget`) is what each row's measure is read against.
+	const held = findTarget(table);
+	if (held)
+		return {
+			kind: "bullet",
+			label: label?.index,
+			...guessNaming(table, label),
+			series: [held.measured.index],
+			target: held.target.index,
+			transpose: false,
+		};
+	// Quantiles of one measurement (`p50 | p90 | p99`, `p50 / p99` cells) are its distribution, whatever
+	// before/after pairing their headers make; read against per-row targets they are a bullet (above).
+	const ladders = tableLadders(table, label?.index);
+	if (ladders)
+		return {
+			kind: "ladder",
+			label: label?.index,
+			...guessNaming(table, label),
+			series: ladderColumns(ladders),
+			transpose: false,
+		};
 	const change = changeColumns(table);
 	if (change)
 		return {
@@ -683,7 +845,7 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 			baselines: pairs.map(([before]) => before.index),
 			transpose: false,
 		};
-	let measures = dropAggregates(table.measures);
+	let measures = dropAggregates(table.measures, rows);
 	if (measures.length === 0 || rows.length < 2) return undefined;
 
 	let order = axisOrder(table, label);
@@ -699,6 +861,15 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 		}
 	}
 	if (proseLed(table, measures)) return undefined;
+	// `Metric | Value`: each row is a quantity of its own (`events`, `total saved`, `median`); one axis
+	// would set unlike things side by side. Their `a → b` cells still chart, as factors of change.
+	if (
+		measures.length === 1 &&
+		measures[0]!.arrowShare < 0.6 &&
+		label?.role === "label" &&
+		METRIC_HEADER.test(label.header.trim())
+	)
+		return undefined;
 	const naming = guessNaming(table, label);
 	const reference = guessReference(table, label, naming.qualifiers);
 	const plan = (kind: ChartKind, series: readonly TableColumn[], transpose = false): ChartPlan => ({
@@ -709,6 +880,14 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 		series: series.map(column => column.index),
 		transpose,
 	});
+	// Counts over ordered bins (`1 | 2–5 | 6–20 | 100+`) are a distribution, whatever axis their bins make.
+	const histogram = histogramColumns(table, measures);
+	if (histogram)
+		return {
+			...plan("histogram", histogram.counts),
+			label: histogram.bins.index,
+			...guessNaming(table, histogram.bins),
+		};
 
 	// `a → b` cells: one axis when the rows share a unit, factors of change when each row has its own.
 	if (measures.length === 1 && measures[0]!.arrowShare >= 0.6)
@@ -728,7 +907,11 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 	// Outcome counts (`ok | fail`, `Pass | Fail | Skip`) are parts of each row's attempts even without a total column.
 	const outcomes = outcomeColumns(measures);
 	if (outcomes) return plan("stacked", outcomes);
-	const flow = guessFlow(table, label, measures);
+	// Amounts beside their shares of the whole (`Lines | Share`) split into more parts than one share bar holds
+	// build up as the amounts: a waterfall prints each step's share itself.
+	const flowing =
+		rows.length > MAX_SHARE_PARTS ? measures.map(column => amountBehind(table, column) ?? column) : measures;
+	const flow = guessFlow(table, label, flowing);
 	if (flow)
 		return {
 			...plan(flow.kind, [flow.column]),
@@ -743,15 +926,33 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 	if (ranges && ranges.length * 2 > measures.length) return plan("range", ranges);
 
 	const dims = new Set(measures.map(column => column.dim));
+	// One quantity across three or four stages (`Baseline | Iter 1 | Iter 2`): a line per row through them.
+	const stages = stageColumns(measures, rows);
+	if (stages) return plan("slope", stages);
+	// Opposing amounts (`Added | Removed`, `Wins | Losses`): back to back, each row's net beside it.
+	const opposed = opposedColumns(measures);
+	if (opposed) return plan("butterfly", opposed);
 	if (measures.length >= 2 && measures.length <= 4) {
 		const before = measures.find(column => BEFORE.test(column.header));
 		const after = measures.find(
 			column => column !== before && column.dim === before?.dim && AFTER.test(column.header),
 		);
+		// Rows spanning decades (each a metric of its own: `Benchmark time | Render targets`) read as factors of the
+		// before column; a middle condition (`last build`) between the two moves too.
+		if (before && after && beforeAfter(table, [before, after]))
+			return plan(
+				"change",
+				measures.filter(
+					column =>
+						column.dim === before.dim &&
+						column.index >= Math.min(before.index, after.index) &&
+						column.index <= Math.max(before.index, after.index),
+				),
+			);
 		if (before && after) return plan("paired", [before, after]);
 	}
 	if (rows.length === 2 && measures.length === 1) return undefined;
-	if (order && rows.length >= 4) {
+	if (order && rows.length >= MIN_LINE_ROWS) {
 		const lead = measures[0]!.dim;
 		return plan("line", measures.filter(column => column.dim === lead).slice(0, MAX_LINES));
 	}
@@ -766,7 +967,11 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 		if (delta) return plan("diverging", [delta]);
 	}
 	const share = measures.find(column => column.dim === "percent" && !column.scores);
-	if (share && rows.length <= 10 && (measures.length === 1 || (measures.length === 2 && dims.size === 2))) {
+	if (
+		share &&
+		rows.length <= MAX_SHARE_SEGMENTS &&
+		(measures.length === 1 || (measures.length === 2 && dims.size === 2))
+	) {
 		const values = columnValues(share, rows);
 		const sum = values.reduce((total, value) => total + value, 0);
 		if (values.every(value => value >= 0) && sum >= 97 && sum <= 103) return plan("share", [share]);
@@ -776,15 +981,34 @@ function guessShape(table: TableAnalysis): ChartPlan | undefined {
 	if (dims.size === 1 && measures.length >= 4 && rows.length >= 3)
 		return { ...plan("heatmap", measures), shading: guessShading(measures, rows) };
 	if (!label && measures.length === 2 && rows.length >= 6) return plan("scatter", measures);
-	if (dims.size >= 2) return plan("multiples", measures.slice(0, MAX_PANELS));
+	// Columns of one unit lying {@link QUANTITY_SPREAD}× apart count different things (`Tests` beside `Tokens`);
+	// timings and sizes spanning decades are one measurement, which dots placed on a log axis above.
+	if (dims.size >= 2 || (!DOT_DIMS.has(measures[0]!.dim ?? "count") && guessShading(measures, rows) === "series"))
+		return plan("multiples", measures.slice(0, MAX_PANELS));
 	if (measures.length === 2)
 		return plan(isConditionPair(measures[0]!.header, measures[1]!.header) ? "paired" : "grouped", measures);
 	if (measures.length >= 3) return plan("grouped", measures);
 	return plan("bar", measures);
 }
 
+/** Label headers saying each row is a metric of its own (`Metric`, `Stat`, `Measure`). */
+const METRIC_HEADER = /^(?:metrics?|measures?|stats?|statistics?|quantit(?:y|ies))$/i;
 /** Most parts a count column may split its total into and still draw as one bar. */
 const MAX_SHARE_PARTS = 6;
+/** Most segments one share bar keeps legible; more parts read as bars (a planner's `share` pick included). */
+export const MAX_SHARE_SEGMENTS = 10;
+
+/**
+ * The amount column a share column restates (`Lines of Rust` behind `Share`, dropped from the measures in
+ * favor of its shares), when it is an amount that builds up; else `undefined`.
+ */
+function amountBehind(table: TableAnalysis, share: TableColumn): TableColumn | undefined {
+	if (share.dim !== "percent" || share.scores) return undefined;
+	return table.columns.find(
+		column => column.restates === share.index && column.dim !== undefined && FLOW_DIMS[column.dim],
+	);
+}
+
 /** Relative slack between a total row and its parts' sum where either is written as an estimate (`~3900`). */
 const APPROX_SUM = 0.02;
 /** Headers that only say a column counts something (`count`, `n`, `#`). */
@@ -889,7 +1113,16 @@ function guessFlow(
 			if (size) return { kind: "timeline", column: size, offsets: offsets.index };
 		}
 	// A running column beside its steps (`Time | Cumulative`) restates them, within the precision written.
-	const steps = measures.filter(column => !measures.some(other => other !== column && endsOf(column, other, rows)));
+	let steps = measures.filter(column => !measures.some(other => other !== column && endsOf(column, other, rows)));
+	// Beside counts of things (`Files`), the leading amount that builds up (`Lines`, `$`, bytes) is the run — when
+	// no other column builds up beside it and a total row vouches for it below.
+	const led = steps.length > 1;
+	if (led) {
+		const [lead, ...rest] = steps;
+		// A few parts beside their shares (`Tokens | Share`) read as one share bar.
+		const shared = rows.length <= MAX_SHARE_PARTS && rest.some(other => other.dim === "percent");
+		steps = !shared && buildsUp(lead!) && lead!.dim !== "duration" && !rest.some(buildsUp) ? [lead!] : [];
+	}
 	if (steps.length !== 1) return undefined;
 	const column = steps[0]!;
 	const running =
@@ -904,7 +1137,7 @@ function guessFlow(
 	const totalRow = table.totals.find(row => flowCell(column, row));
 	const sums = totalRow !== undefined && addsUp(cells as NumberCell[], flowCell(column, totalRow)!);
 	// A total the rows miss is a subset or overlapping parts, not one run.
-	if (totalRow !== undefined && !sums) return undefined;
+	if ((totalRow !== undefined || led) && !sums) return undefined;
 	const last = rows.at(-1)!;
 	// A cap stands above every step it caps (`Hard cap` $9.50 over `Video` $5.10).
 	const capped =
@@ -934,13 +1167,19 @@ function guessFlow(
 		return STEP_HEADER.test(label.header) || sums || running ? { kind: "timeline", column } : undefined;
 	}
 	// Amounts that build up: money, sizes, and counts of a quantity (tokens, lines), not of things (issues, PRs).
-	if (column.dim === "count" && !AMOUNT_HEADER.test(column.header)) return undefined;
+	if (!buildsUp(column)) return undefined;
 	// Listed parts alone (`Bucket | Amount`) in descending order (one rise in eight steps allowed) are a
 	// ranking: bars read it.
 	const rises = values.filter((value, at) => at > 0 && value > values[at - 1]!).length;
 	const parts = !negative && PART_HEADER.test(label.header) && rises * RANKED_RISES > values.length - 1;
 	if (!(sums || capped || running || parts)) return undefined;
 	return { kind: "waterfall", column, ...(capped && { limit: last }) };
+}
+
+/** `column` holds amounts that add up along one axis: money, sizes, times, and counts of a quantity (tokens, lines). */
+function buildsUp(column: TableColumn): boolean {
+	if (!column.dim || !FLOW_DIMS[column.dim]) return false;
+	return column.dim !== "count" || AMOUNT_HEADER.test(column.header);
 }
 
 /**
@@ -1013,6 +1252,225 @@ function endsOf(running: TableColumn, step: TableColumn, rows: readonly number[]
 }
 
 /**
+ * A header naming a column of targets (`Target`, `§6 budget`, `Weft target`, `p99 limit`, `SLA (ms)`): the
+ * target word, at most one word on either side of it, and an optional parenthesised unit. Longer headers use
+ * the word in passing (`VMs at 70% target`, `Frames over the 8.3 ms budget`).
+ */
+const TARGET_HEADER =
+	/^(?:[§\p{L}][\p{L}\p{N}§.-]*\s+)?(?<word>target|budget|limit|cap|ceiling|threshold|sla|slo|goal|quota|allowance|bar)(?:\s+[\p{L}\p{N}]+)?(?:\s*\([^)]*\))?$/iu;
+/** Target words naming nothing but a target; the others also name settings (`Post-money cap`, `threshold` 50), so their cells must be written as bounds. */
+const TARGET_WORD = /^(?:target|budget|limit|sla|slo|goal)$/i;
+/** Target words naming a ceiling: a value must stay at or under it. */
+const CEILING_WORD = /^(?:budget|limit|cap|ceiling|quota|allowance)$/i;
+/** A bound written before a number (`≤ 200 µs`, `at least 8`, `first screen < 120 ms`), wherever it starts in a cell. */
+const BOUND =
+	/(?<sign>≤|<=|<|≥|>=|>|\bat most\b|\bat least\b|\bunder\b|\bbelow\b|\bup to\b|\bno more than\b|\bno less than\b)\s*(?=[~≈]?\s*[$€£¥]?\s*\.?\d)/i;
+/** Bounds requiring a value at or over their number. */
+const FLOOR_SIGN = /^(?:≥|>=|>|at least|no less than)$/i;
+/** Share of a target column's written cells that must be bounds where its word also names settings, and under which a measured column's must stay. */
+const BOUND_SHARE = 0.5;
+/** Share of its target a value may reach (or, for a floor, exceed it by the inverse) and still be close to missing it. */
+const CLOSE_SHARE = 0.9;
+/** A second target after a slash (`3s / ≤ 6s`, `30 / 200 ms`). */
+const SECOND_TARGET = /\d[^/]*\/\s*(?:≤|<=|<|≥|>=|>)?\s*[~≈]?\s*[$€£¥]?\s*\.?\d/;
+
+/** A measured column and the column of targets it is held to ({@link findTarget}). */
+export interface TargetColumns {
+	readonly measured: TableColumn;
+	readonly target: TableColumn;
+}
+
+/**
+ * The column of targets `table` holds its measure to, read from headers and cells: a header naming targets
+ * ({@link TARGET_HEADER}) over cells mostly holding one ({@link targetCell}) and mostly written as bounds (`≤
+ * 200 µs`), which a word naming nothing else ({@link TARGET_WORD}: `Target`, `Budget`) does without; never the
+ * first column, which keys the rows (a `limit` setting each row tries). The measure held to it is the nearest
+ * column to it (left first), not itself mostly bounds, whose cells share a unit and a sign convention with the
+ * targets ({@link measuredCell}) in two rows or more, in half the rows or more, and in at least half of the
+ * rows writing both. `undefined` when none.
+ */
+export function findTarget(table: TableAnalysis): TargetColumns | undefined {
+	const rows = [...table.rows, ...table.totals];
+	const bounded = (column: TableColumn, written: readonly number[]) =>
+		written.filter(row => BOUND.test(column.cells[row]!.text)).length >= BOUND_SHARE * written.length;
+	for (const target of table.columns) {
+		const word = TARGET_HEADER.exec(target.header)?.groups?.word;
+		if (!word || target === table.label || target.index === 0) continue;
+		const written = rows.filter(row => target.cells[row]!.kind !== "missing");
+		const stated = written.filter(row => targetCell(target.cells[row]!.text)).length;
+		if (written.length < 2 || stated * 2 < written.length) continue;
+		if (!(TARGET_WORD.test(word) || bounded(target, written))) continue;
+		const distance = (column: TableColumn) =>
+			column.index < target.index ? target.index - column.index : table.columns.length + column.index;
+		const candidates = table.columns
+			.filter(
+				column =>
+					column !== target &&
+					column !== table.label &&
+					// Measurements written with their context (`0.048 ms mean, 2.5 ms worst`) read as text columns.
+					(column.role === "measure" || column.role === "label") &&
+					!TARGET_HEADER.test(column.header) &&
+					!bounded(column, written),
+			)
+			.sort((a, b) => distance(a) - distance(b));
+		for (const measured of candidates) {
+			let both = 0;
+			let alike = 0;
+			for (const row of rows) {
+				const value = measuredCell(measured.cells[row]);
+				const goal = targetCell(target.cells[row]!.text);
+				if (!value || !goal) continue;
+				both++;
+				if (comparable(value, goal.cell)) alike++;
+			}
+			if (alike >= 2 && alike * 2 >= rows.length && alike * 2 >= both) return { measured, target };
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Whether a measured cell compares with its target: one dimension (one currency or rate unit), and a signed
+ * change only against a signed target (`−44.6%` against `≥30% ↓` counts the cut as positive; `≤+20%` signs it alike).
+ */
+function comparable(measured: NumberCell, target: NumberCell): boolean {
+	const unit = (measured.dim !== "currency" && measured.dim !== "rate") || measured.unit === target.unit;
+	return measured.dim === target.dim && unit && (!measured.signed || target.signed);
+}
+
+/**
+ * A measured cell's value: its number, a `lo–hi` range, or a rising slash list of one measure
+ * ({@link NumberCell.values}: `79 / 124 µs` under `p50 / p99`) as a range from its first value to its last;
+ * `undefined` for a falling list, a fraction (`28 / 0`, a score's denominator) or text.
+ */
+function measuredCell(cell: Cell | undefined): NumberCell | undefined {
+	if (!isNumber(cell) || cell.dim === "fraction") return undefined;
+	const { values } = cell;
+	if (!values) return cell;
+	const high = values.at(-1)!;
+	return high >= values[0]! ? { ...cell, upper: high, fit: "range" } : undefined;
+}
+
+/**
+ * A target cell's number and {@link Bound}: a bound wherever it starts (`≤ 200 µs`, `at most 8`, `first screen
+ * ≤ 120 ms`), a window (`60–100 ms`), or a bare number; `text` writes a bound as `≤`/`≥`. `undefined` without
+ * one, or for two targets in one cell (`30 / 200 ms`, `1 / 4`).
+ */
+function targetCell(written: string): { cell: NumberCell; bound?: Bound; text: string } | undefined {
+	const bound = BOUND.exec(written);
+	const rest = bound ? written.slice(bound.index + bound[0].length) : written;
+	// `≤ 3s / ≤ 6s`: one target per measure of a pair, none for the row.
+	if (SECOND_TARGET.test(rest)) return undefined;
+	const cell = parseCell(rest);
+	if (!isNumber(cell) || cell.dim === "fraction" || cell.to !== undefined) return undefined;
+	if (!bound) return { cell, text: cell.figure };
+	const floor = FLOOR_SIGN.test(bound.groups!.sign!);
+	return { cell, bound: floor ? "min" : "max", text: `${floor ? "≥" : "≤"} ${cell.figure}` };
+}
+
+/**
+ * How `point` stands against `target`: `met` when it keeps the target's side (its worst end — the high end
+ * under a ceiling, the low end over a floor — at or past the target; inside a window), `close` when met
+ * within {@link CLOSE_SHARE}; `share` its worst end over the target (the window's top), `undefined` for a
+ * zero target. `undefined` for a target without a bound or window. Exported for the renderer.
+ */
+export function targetStanding(
+	point: ChartPoint,
+	target: ChartTarget,
+): { readonly met: boolean; readonly close: boolean; readonly share: number | undefined } | undefined {
+	const high = point.upper ?? point.value;
+	const scale = target.upper ?? target.value;
+	if (target.upper !== undefined) {
+		const met = point.value >= target.value && high <= target.upper;
+		return { met, close: false, share: scale > 0 ? high / scale : undefined };
+	}
+	if (!target.bound) return undefined;
+	const worst = target.bound === "max" ? high : point.value;
+	const share = target.value > 0 ? worst / target.value : undefined;
+	const met = target.bound === "max" ? worst <= target.value : worst >= target.value;
+	const close =
+		met && share !== undefined && (target.bound === "max" ? share >= CLOSE_SHARE : share <= 1 / CLOSE_SHARE);
+	return { met, close, share };
+}
+
+/**
+ * The `bullet` chart of `plan`: its one series measured against {@link ChartPlan.target} row by row, in
+ * table order (total rows too: a total held to a budget is a row like any other). Each target keeps the
+ * bound its cell writes, else the one its header's word implies (a budget is a ceiling), else the one the
+ * measure's polarity implies (a latency target is a ceiling, a throughput one a floor); a window has none.
+ * A row whose cells share no unit keeps its measured text as a note. `undefined` without a target column
+ * or two comparable rows.
+ */
+function bulletChart(
+	table: TableAnalysis,
+	plan: ChartPlan,
+	namers: readonly TableColumn[],
+	group: TableColumn | undefined,
+): ChartSpec | undefined {
+	const measured = table.columns[plan.series[0] ?? -1];
+	const target = plan.target === undefined ? undefined : table.columns[plan.target];
+	const word = target && TARGET_HEADER.exec(target.header)?.groups?.word?.toLowerCase();
+	if (!measured || !target || !word) return undefined;
+	const rows = regroup(
+		[...table.rows, ...table.totals].sort((a, b) => a - b),
+		group,
+	);
+	const polarity = plan.polarity?.[measured.index];
+	const points: (ChartPoint | null)[] = [];
+	const notes: (string | undefined)[] = [];
+	const targets: (ChartTarget | null)[] = [];
+	let lead: NumberCell | undefined;
+	for (const row of rows) {
+		const cell = measured.cells[row];
+		const value = measuredCell(cell);
+		const goal = targetCell(target.cells[row]!.text);
+		if (!value || !goal || !comparable(value, goal.cell)) {
+			points.push(null);
+			targets.push(null);
+			notes.push(cell && cell.kind !== "missing" ? cell.text : undefined);
+			continue;
+		}
+		lead ??= value;
+		const implied = plan.rowPolarity?.[row] ?? polarity;
+		const bound =
+			goal.cell.upper !== undefined
+				? undefined
+				: (goal.bound ??
+					(CEILING_WORD.test(word) || implied === "lower" ? "max" : implied === "higher" ? "min" : undefined));
+		points.push(point(value));
+		// A side the cell leaves unwritten (`0` under `budget`) is written into its figure (`≤ 0`).
+		const text = goal.bound || !bound ? goal.text : `${bound === "max" ? "≤" : "≥"} ${goal.text}`;
+		targets.push({ ...point(goal.cell), text, bound });
+		notes.push(undefined);
+	}
+	if (!lead || points.filter(Boolean).length < 2) return undefined;
+	const naming = nameRows(namers, group, rows, true);
+	return withMeaning(
+		table,
+		plan,
+		{
+			kind: "bullet",
+			categories: naming.names,
+			groups: naming.groups,
+			series: [
+				{
+					name: measured.header,
+					dim: lead.dim,
+					unit: lead.dim === "currency" || lead.dim === "rate" ? lead.unit : "",
+					points,
+					notes,
+					polarity,
+				},
+			],
+			targets,
+			targetName: word === "bar" ? "target" : /^sl[ao]$/.test(word) ? word.toUpperCase() : word,
+			axis: naming.axis,
+		},
+		rows,
+	);
+}
+
+/**
  * Whether the table's prose carries it, so a chart of `columns` would only
  * restate small whole numbers set beside sentences: text columns (other than
  * the label) whose typical cells add up to {@link PROSE_CELL} characters a
@@ -1043,6 +1501,22 @@ export function proseLed(table: TableAnalysis, columns: readonly TableColumn[]):
  */
 export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | undefined {
 	const label = plan.label === undefined ? undefined : table.columns[plan.label];
+	// A line over unordered categories draws a trend that is not there: they compare side by side, or, where
+	// the columns are the ordered steps (`Jul | Aug | Sep` beside metric rows), each row is a panel across them.
+	// Fewer than {@link MIN_LINE_ROWS} ordered rows draw a bend the table already states.
+	const ordered = (plan.kind === "line" || plan.kind === "scatter") && orderedRows(table, label);
+	const longEnough = table.rows.length >= MIN_LINE_ROWS;
+	if (plan.kind === "line" && !plan.transpose && !(ordered && longEnough)) {
+		if (ordered) return undefined;
+		const across = plan.series.every(index => {
+			const header = table.columns[index]?.header ?? "";
+			return parseCell(header).kind === "date" || MONTH.test(header) || SEQUENCE_LABEL.test(header);
+		});
+		return buildChart(table, across ? { ...plan, kind: "multiples", transpose: true } : { ...plan, kind: "grouped" });
+	}
+	// Three or four points show no relationship: an ordered axis joins them, else they compare side by side.
+	if (plan.kind === "scatter" && table.rows.length < MIN_SCATTER_ROWS)
+		return buildChart(table, { ...plan, kind: ordered && longEnough ? "line" : "grouped" });
 	const columns = plan.series.map(index => table.columns[index]).filter(column => column !== undefined);
 	if (columns.length === 0) return undefined;
 	const wanted = new Set([plan.label, ...(plan.qualifiers ?? []), plan.group]);
@@ -1056,6 +1530,9 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 		plan.kind === "line" || flowing || plan.transpose || !namers.some(column => column !== grouper)
 			? undefined
 			: grouper;
+	// Each row against its own target; without a target column (or two rows reaching it) the measure draws as bars.
+	const bullet = plan.kind === "bullet" && !plan.transpose ? bulletChart(table, plan, namers, group) : undefined;
+	if (bullet) return bullet;
 	if (plan.kind === "change" && !plan.transpose && plan.baselines?.length === columns.length)
 		return changeChart(
 			table,
@@ -1066,29 +1543,75 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 			plan.baselines.map(index => table.columns[index]!),
 		);
 	if (plan.kind === "change" && !plan.transpose) return changeChart(table, plan, namers, group, columns);
+	const ladders = plan.kind === "ladder" && !plan.transpose ? quantileLadders(columns, table.rows) : undefined;
+	if (ladders) return ladderChart(table, plan, namers, group, ladders);
 	// Several `a → b` columns hold two values per cell; only factors of change draw them side by side.
 	const arrows = columns.filter(column => column.arrowShare >= 0.6);
 	if (arrows.length >= 2 && !plan.transpose) return changeChart(table, plan, namers, group, arrows);
-	// Before/after values spanning decades share no readable axis, nor do rows of very different sizes beside a
-	// baseline column; their factors do (`20.1 ms → 0.13 ms` is 155× less).
+	// One `a → b` column among bars, panels or cells would plot only where each row began: its move is the
+	// table's story (the other columns mostly restate it as `−32%`), drawn as a dumbbell — as factors when
+	// its rows are in different units.
+	if (arrows.length === 1 && plan.kind !== "paired" && plan.kind !== "range" && !plan.transpose)
+		return buildChart(table, { ...plan, kind: arrows[0]!.mixed ? "change" : "paired", series: [arrows[0]!.index] });
+	// A dumbbell of two measures beside their ratio (`pi-walker | Go | Speedup`): the ratio restates the gap the
+	// dumbbell draws (on a log axis its length), so the pair draws alone.
+	const pair = plan.kind === "paired" && !plan.transpose ? ratioPair(table, columns) : undefined;
+	if (pair) return buildChart(table, { ...plan, series: pair.map(column => column.index) });
+	// Unitless before/after values spanning decades are rows of different quantities, and rows of very different
+	// sizes beside a baseline column share no readable axis; their factors do (`3.95M → 190k` is 21× less).
 	// Intervals keep their values: a range chart prints the factor between a pair's midpoints beside both.
 	const factored =
 		plan.transpose || rangeColumns(columns, table.rows)
 			? undefined
-			: plan.kind === "paired"
+			: plan.kind === "paired" && columns.length <= 2
 				? beforeAfter(table, columns)
-				: plan.kind === "grouped" || plan.kind === "dots"
-					? againstBaseline(table, columns)
+				: plan.kind === "paired" || plan.kind === "grouped" || plan.kind === "dots"
+					? againstBaseline(table, plan, columns)
 					: undefined;
 	const factors = factored && changeChart(table, plan, namers, group, factored);
-	if (factors) return factors;
-	const ranked = plan.order && !plan.transpose && plan.kind !== "scatter" && !flowing ? plan.order : undefined;
-	const rows =
+	// Measured against a rival rather than a before state ({@link leadingColumn}): gaps, not moves.
+	const [reference, ...others] = factored ?? [];
+	const rival = reference !== undefined && !others.every(other => isTransition(reference.header, other.header));
+	if (factors) return rival ? { ...factors, rival } : factors;
+	// Signed changes rank from the largest gain to the largest loss unless the rows run in an order of their own.
+	const signed =
+		plan.kind === "diverging" &&
+		!plan.order &&
+		!plan.transpose &&
+		!group &&
+		!axisOrder(table, label) &&
+		!(label && STEP_HEADER.test(label.header))
+			? (columns.find(column => columnValues(column, table.rows).some(value => value < 0)) ?? columns[0])
+			: undefined;
+	const ranked: RowOrder | undefined =
+		plan.order && !plan.transpose && plan.kind !== "scatter" && !flowing
+			? plan.order
+			: signed && { column: signed.index, direction: "descending" };
+	const bins = plan.kind === "histogram" && label ? binRows(label, table.rows) : undefined;
+	const listed =
 		plan.kind === "line"
 			? chronological(table.rows, label)
 			: flowing
 				? table.rows.filter(row => row !== plan.limit)
-				: rank(regroup(table.rows, group), group, ranked, table);
+				: (bins ?? rank(regroup(table.rows, group), group, ranked, table));
+	// A dumbbell row holding something but neither value (`— | 0–6% slower` beside timings) would be a name
+	// over an empty line: it leaves the chart and the caption names it. Rows of dashes stay, as gaps.
+	const unplotted =
+		plan.kind === "paired" && !plan.transpose && columns.length === 2
+			? listed.filter(
+					row =>
+						columns.every(column => {
+							const cell = column.cells[row];
+							return !isNumber(cell) || cell.dim !== column.dim;
+						}) && columns.some(column => column.cells[row]?.kind !== "missing"),
+				)
+			: [];
+	const rows =
+		unplotted.length && unplotted.length < listed.length - 1
+			? listed.filter(row => !unplotted.includes(row))
+			: listed;
+	const skipped =
+		rows === listed ? undefined : `Not plotted: ${nameRows(namers, undefined, unplotted).names.join(", ")}`;
 	// Names nest by their leading part where the chart lists rows down a label column.
 	const nest = !plan.transpose && plan.kind !== "line" && plan.kind !== "scatter";
 	const naming = nameRows(namers, group, rows, nest);
@@ -1157,7 +1680,7 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 	const intervals = plan.transpose ? undefined : foldEstimate(series);
 	const lead = intervals?.series[0];
 	let estimate: ChartSeries | undefined;
-	let kind = plan.transpose ? "multiples" : fitKind(plan.kind, series, x !== undefined);
+	let kind = plan.transpose && plan.kind !== "stat" ? "multiples" : fitKind(plan.kind, series, x !== undefined);
 	// Values mostly written `a–b` draw as intervals whatever bars, dumbbell or dots were asked for; panels
 	// of several quantities stay panels unless a range chart was asked for.
 	if (
@@ -1201,6 +1724,20 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 		) >= (series.length >= 3 ? DOT_SPREAD : DECADES)
 	)
 		kind = "dots";
+	// Columns of one unit whose typical sizes lie {@link QUANTITY_SPREAD}× apart count different things (`27` tests
+	// beside `16.8k` tokens): one axis would flatten the small ones, so each takes a panel of its own. Timings and
+	// sizes are one measurement however far apart: they keep their shared (log) axis.
+	else if (
+		kind === "grouped" &&
+		!plan.transpose &&
+		!DOT_DIMS.has(series[0]!.dim) &&
+		pairSpread(
+			categories.map((_, at) =>
+				series.map(entry => ((entry.points[at]?.value ?? 0) > 0 ? entry.points[at]!.value : Number.NaN)),
+			),
+		) >= QUANTITY_SPREAD
+	)
+		kind = "multiples";
 	// Dots of rows too tight for one axis (`3.56s…4.14s` beside `104ms…115ms`) read as factors of the baseline column.
 	const baseline = kind === "dots" && layout === "clumped" ? dotBaseline(plotted) : undefined;
 	const base = baseline && series.length >= 3 ? series.find(entry => entry.name === baseline.header) : undefined;
@@ -1218,12 +1755,20 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 								value: point.value / from.value,
 								text: `${from.text} → ${point.text}`,
 								emphasis: point.emphasis || from.emphasis,
+								error: point.error === undefined ? undefined : point.error / from.value,
 							}
 						: null;
 				}),
 			}));
 	// Columns of different quantities compare within each column: bars on their own axes read that better than shades.
 	if (kind === "heatmap" && plan.shading === "series" && series.length <= MAX_PANELS) kind = "multiples";
+	// Distributions of different sizes compare by shape: each as shares of its own total.
+	const totals = series.map(entry => entry.points.reduce((sum, point) => sum + Math.max(0, point?.value ?? 0), 0));
+	const shares =
+		kind === "histogram" &&
+		series.every(entry => entry.dim === "count") &&
+		(plan.normalize ?? (series.length >= 2 && Math.max(...totals) >= MIX_SPREAD * Math.min(...totals)));
+	if (shares) series = asShares(series);
 	// A share or a delta reads one series (a delta the first going negative); the rest would overdraw it.
 	if (kind === "share") series = series.slice(0, 1);
 	if (kind === "diverging")
@@ -1260,11 +1805,15 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 	const contest =
 		kind !== "line" &&
 		kind !== "paired" &&
+		kind !== "stat" &&
 		kind !== "share" &&
 		kind !== "stacked" &&
 		kind !== "timeline" &&
 		kind !== "waterfall" &&
 		kind !== "range" &&
+		kind !== "slope" &&
+		kind !== "butterfly" &&
+		kind !== "histogram" &&
 		!base;
 	const flow = kind === "timeline" || kind === "waterfall" ? flowSpec(table, plan, rows, series[0]!) : undefined;
 	let leaders: (number | undefined)[] | undefined;
@@ -1290,12 +1839,19 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 			groups: plan.transpose ? undefined : naming.groups,
 			series,
 			x: flow?.x ?? x,
-			caption: flow?.total ? undefined : totalsCaption(table, label, columns, plan.transpose),
+			caption: flow?.total
+				? undefined
+				: [totalsCaption(table, label, columns, plan.transpose), skipped].filter(Boolean).join(" · ") || undefined,
 			axis: naming.axis,
 			shading: plan.shading,
-			reference: plan.transpose ? undefined : referenceRows(table, plan.reference, group, rows),
+			reference:
+				kind === "stat"
+					? [statBaseline(categories)]
+					: plan.transpose
+						? undefined
+						: referenceRows(table, plan.reference, group, rows),
 			whole,
-			normalized: normalized || undefined,
+			normalized: normalized || shares || undefined,
 			tones,
 			total: flow?.total,
 			// A flow's cap rule, or the references intervals and dots are read against; never both.
@@ -1306,6 +1862,375 @@ export function buildChart(table: TableAnalysis, plan: ChartPlan): ChartSpec | u
 		},
 		plan.transpose ? undefined : rows,
 	);
+}
+
+// ── Distributions: quantile ladders and histograms ───────────────────────────
+
+/** A quantile a header names: `p50`, `p99.9`, `p999`, `median`, `min`, `max`. */
+const QUANTILE_WORD = String.raw`p\d{1,4}(?:\.\d+)?|median|med|min|minimum|max|maximum`;
+/** A central value a slash list of quantiles may hold beside them (`Mean / p95`), drawn as its middle. */
+const CENTRAL_WORD = String.raw`mean|avg|average`;
+/** A slash-list item that is a quantile, not a mean: a ladder needs one. */
+const QUANTILE_ITEM = new RegExp(String.raw`^(?:${QUANTILE_WORD})$`, "i");
+/** A quantile word standing alone in a header (`TTFT p50`, `p95 ms`, `Startup p95`). */
+const QUANTILE_HEADER = new RegExp(String.raw`(?:^|[^\w.])(${QUANTILE_WORD})(?![\w.])`, "gi");
+/** One item of a header's slash list of quantiles: a quantile or a mean. */
+const LISTED_WORD = String.raw`(?:${QUANTILE_WORD}|${CENTRAL_WORD})`;
+/** A slash list of two to four quantiles in a header (`p50 / p99`, `p50/p95/max`, `median/max`, `Mean / p95`). */
+const QUANTILE_LIST = new RegExp(String.raw`(?:^|[^\w.])(${LISTED_WORD}(?:\s*\/\s*${LISTED_WORD}){1,3})(?![\w.])`, "i");
+/** Share of the rows holding two quantiles or more whose quantiles must rise with their rank to read as one ladder. */
+const ORDERED_SHARE = 0.8;
+/** Most ladders (measurements) one chart draws per category. */
+const MAX_LADDERS = 3;
+
+/** One quantile of a {@link Ladder}: a column holding it alone, or one item of a column's slash lists. */
+export interface Rung {
+	readonly column: TableColumn;
+	/** Which listed value of each cell (`p99` of `79 / 124 µs`); absent when the column holds the quantile alone. */
+	readonly slot?: number;
+	/** How many values each cell of a listing column holds (the quantiles its header lists). */
+	readonly slots?: number;
+	/** The quantile as the header writes it (`p50`, `max`). */
+	readonly name: string;
+	/** Where it ranks: 0 the minimum, 50 the median (or a mean beside quantiles), 100 the maximum. */
+	readonly rank: number;
+	/** The unit the header gives bare numbers (`cpu p50 / p95 (ms)`): their dimension and base factor. */
+	readonly scale?: readonly [Dimension, number];
+}
+
+/**
+ * Quantiles of one measurement per row (`p50 | p90 | p99 | max`, `Startup p50 | Startup p95`,
+ * `p50 / p99` cells), lowest rank first, all of one dimension.
+ */
+export interface Ladder {
+	/** The measurement (`Startup`, `zoom 1`); empty when its headers name nothing but quantiles. */
+	readonly name: string;
+	readonly rungs: readonly Rung[];
+	readonly dim: Dimension;
+	/** Currency symbol or rate unit the axis prints; empty for other dimensions. */
+	readonly unit: string;
+}
+
+/**
+ * `table`'s quantile ladders ({@link quantileLadders}) beside the `label` column, when their columns
+ * are at least half of what the table measures and no column holds per-row targets ({@link findTarget}:
+ * quantiles held to targets are a `bullet`): the table is about the distributions. Every column
+ * but the label may hold quantiles, measures and text alike — a quantile alike in every row (`p50` 2,
+ * 2) is no measure, and a list of three (`1.69 / 2.59 / 3.17`) reads as prose.
+ */
+export function tableLadders(table: TableAnalysis, label: number | undefined): Ladder[] | undefined {
+	if (table.rows.length < 2 || findTarget(table)) return undefined;
+	const sources = table.columns.filter(
+		column => column.index !== label && (column.role === "measure" || column.role === "label"),
+	);
+	const ladders = quantileLadders(sources, table.rows);
+	if (!ladders) return undefined;
+	const held = ladderColumns(ladders);
+	const measured = new Set([...table.measures.map(column => column.index), ...held]);
+	measured.delete(label ?? -1);
+	return held.length * 2 >= measured.size ? ladders : undefined;
+}
+
+/** The columns `ladders` read their quantiles from, each once, in ladder order. */
+export function ladderColumns(ladders: readonly Ladder[]): number[] {
+	return [...new Set(ladders.flatMap(ladder => ladder.rungs.map(rung => rung.column.index)))];
+}
+
+/** Where quantile `word` ranks (0–100): `p999` is 99.9; a mean stands in the middle. */
+function quantileRank(word: string): number {
+	const lower = word.toLowerCase();
+	if (lower.startsWith("min")) return 0;
+	if (lower.startsWith("max")) return 100;
+	if (!/^p\d/.test(lower)) return 50;
+	let rank = Number(lower.slice(1));
+	while (rank > 100) rank /= 10;
+	return rank;
+}
+
+/**
+ * What a header names besides its quantiles (`Startup p95` → `Startup`, `zoom 1, p50 / p95` → `zoom 1`),
+ * and the unit it gives bare numbers (`cpu p50 / p95 (ms)` → milliseconds).
+ */
+function ladderSubject(rest: string): { name: string; scale?: readonly [Dimension, number] } {
+	let scale: readonly [Dimension, number] | undefined;
+	const words = rest
+		.replace(/[()[\],:;]/g, " ")
+		.split(/\s+/)
+		.filter(word => {
+			if (!word) return false;
+			const unit = parseCell(`1 ${word}`);
+			if (!isNumber(unit) || !unit.unit || unit.dim === "count") return true;
+			scale ??= [unit.dim, unit.value];
+			return false;
+		});
+	return { name: words.join(" "), scale };
+}
+
+/**
+ * The quantile ladders among `measures`: columns whose headers each name one quantile of one
+ * measurement (`p50 | p90 | p99`, `Startup p50 | Startup p95`; a bare `p95` after `TTFT p50` joins
+ * it), and columns whose headers name a slash list of quantiles over cells listing that many values
+ * (`p50 / p99` over `79 / 124 µs`). A ladder needs two quantiles, one of them neither the minimum nor
+ * the maximum, one dimension, and its values rising with rank in {@link ORDERED_SHARE} of the rows
+ * holding two (two such rows at least); ladders in
+ * another dimension than the first leave, at most {@link MAX_LADDERS} stay. `undefined` when none.
+ */
+export function quantileLadders(measures: readonly TableColumn[], rows: readonly number[]): Ladder[] | undefined {
+	const drafts: { name: string; rungs: Rung[] }[] = [];
+	let previous: { name: string; rungs: Rung[] } | undefined;
+	for (const column of measures) {
+		const list = QUANTILE_LIST.exec(column.header);
+		const words = list?.[1]!.split(/\s*\/\s*/) ?? [];
+		if (list && words.some(word => QUANTILE_ITEM.test(word))) {
+			const subject = ladderSubject(column.header.replace(list[1]!, " "));
+			drafts.push({
+				name: subject.name,
+				rungs: words.map((word, slot) => ({
+					column,
+					slot,
+					slots: words.length,
+					name: word,
+					rank: quantileRank(word),
+					scale: subject.scale,
+				})),
+			});
+			previous = undefined;
+			continue;
+		}
+		const found = [...column.header.matchAll(QUANTILE_HEADER)];
+		if (found.length !== 1) {
+			previous = undefined;
+			continue;
+		}
+		const word = found[0]![1]!;
+		const subject = ladderSubject(column.header.replace(word, " "));
+		const rung: Rung = { column, name: word, rank: quantileRank(word), scale: subject.scale };
+		// `TTFT p50 | p95`: a header of a quantile alone continues the ladder before it.
+		const draft =
+			(subject.name === "" && previous) ||
+			drafts.find(entry => entry.name === subject.name && entry.rungs.every(other => other.slot === undefined));
+		if (draft) draft.rungs.push(rung);
+		else drafts.push({ name: subject.name, rungs: [rung] });
+		previous = draft ?? drafts.at(-1);
+	}
+	const ladders: Ladder[] = [];
+	for (const draft of drafts) {
+		const rungs = draft.rungs.toSorted((a, b) => a.rank - b.rank);
+		if (rungs.length < 2 || new Set(rungs.map(rung => rung.rank)).size < rungs.length) continue;
+		// `Min | Max` alone bound a setting (`Default | Min | Max` timeouts); a distribution names a middle or a tail.
+		if (rungs.every(rung => rung.rank === 0 || rung.rank === 100)) continue;
+		const read = rows.map(row => rungs.map(rung => rungValue(rung, row)));
+		const dims = new Set(read.flat().flatMap(value => (value ? [`${value.dim}:${value.unit}`] : [])));
+		if (dims.size !== 1) continue;
+		const held = read.map(values => values.flatMap(value => (value ? [value.point.value] : [])));
+		const full = held.filter(values => values.length >= 2);
+		const ordered = full.filter(values => values.every((value, at) => at === 0 || value >= values[at - 1]!));
+		if (full.length < 2 || ordered.length < ORDERED_SHARE * full.length) continue;
+		const first = read.flat().find(value => value !== undefined)!;
+		ladders.push({ name: draft.name, rungs, dim: first.dim, unit: first.unit });
+	}
+	const kept = ladders.filter(ladder => ladder.dim === ladders[0]?.dim && ladder.unit === ladders[0]?.unit);
+	return kept.length ? kept.slice(0, MAX_LADDERS) : undefined;
+}
+
+/**
+ * `rung`'s value at `row` as a plotted point: the column's number, or the cell's listed value at the
+ * rung's slot — unitless lists (`0.04 / 0.05`, `9/47/85`, read as fractions or text) item by item from
+ * the cell's text, as the header names them quantiles; bare numbers take the header's unit. `undefined`
+ * where the cell holds none (a range, a transition, prose, another count of values).
+ */
+function rungValue(rung: Rung, row: number): { point: ChartPoint; dim: Dimension; unit: string } | undefined {
+	const cell = rung.column.cells[row];
+	if (!cell) return undefined;
+	let read: { value: number; dim: Dimension; unit: string; text: string } | undefined;
+	if (rung.slot !== undefined) {
+		const items = cell.text.split(/\s*\/\s*/);
+		const listed =
+			(isNumber(cell) && cell.values) ||
+			items.map(item => {
+				const own = parseCell(item);
+				return isNumber(own) && own.fit === "pure" && own.dim === "count" ? own.value : Number.NaN;
+			});
+		const value = listed[rung.slot];
+		if (listed.length !== rung.slots || value === undefined || !Number.isFinite(value)) return undefined;
+		const measured = isNumber(cell) && cell.values !== undefined;
+		read = {
+			value,
+			dim: measured ? cell.dim : "count",
+			unit: measured ? cell.unit : "",
+			text: items[rung.slot]!.trim(),
+		};
+	} else if (
+		isNumber(cell) &&
+		cell.upper === undefined &&
+		cell.to === undefined &&
+		cell.dim === rung.column.dim &&
+		cell.dim !== "fraction"
+	)
+		read = { value: cell.value, dim: cell.dim, unit: cell.unit, text: cell.figure };
+	if (!read) return undefined;
+	let { value, dim } = read;
+	if (dim === "count" && !read.unit && rung.scale) [dim, value] = [rung.scale[0], value * rung.scale[1]];
+	return {
+		point: { value, text: read.text, emphasis: cell.emphasis },
+		dim,
+		unit: dim === "currency" || dim === "rate" ? read.unit : "",
+	};
+}
+
+/**
+ * A `ladder` of `ladders` over the table's rows (ranked by {@link ChartPlan.order} within each group):
+ * one series per quantile, named by it, each ladder's series consecutive and lowest quantile first.
+ */
+function ladderChart(
+	table: TableAnalysis,
+	plan: ChartPlan,
+	namers: readonly TableColumn[],
+	group: TableColumn | undefined,
+	ladders: readonly Ladder[],
+): ChartSpec | undefined {
+	const label = plan.label === undefined ? undefined : table.columns[plan.label];
+	const rows = rank(regroup(table.rows, group), group, plan.order, table);
+	const naming = nameRows(namers, group, rows, true);
+	const series: ChartSeries[] = [];
+	const drawn: ChartLadder[] = [];
+	for (const ladder of ladders) {
+		const start = series.length;
+		for (const rung of ladder.rungs)
+			series.push({
+				name: rung.name,
+				dim: ladder.dim,
+				unit: ladder.unit,
+				points: rows.map(row => rungValue(rung, row)?.point ?? null),
+				notes: rows.map(() => undefined),
+				polarity: plan.polarity?.[rung.column.index],
+			});
+		drawn.push({ name: ladder.name, series: ladder.rungs.map((_, at) => start + at) });
+	}
+	const present = rows.filter((_, at) => series.some(entry => entry.points[at]));
+	if (present.length < 2) return undefined;
+	const columns = [...new Set(ladders.flatMap(ladder => ladder.rungs.map(rung => rung.column)))];
+	return withMeaning(
+		table,
+		plan,
+		{
+			kind: "ladder",
+			categories: naming.names,
+			groups: naming.groups,
+			series,
+			axis: naming.axis,
+			caption: totalsCaption(table, label, columns, false),
+			ladders: drawn,
+			// `Baseline p50 / p95 | Final p50 / p95`: the first ladder is where the second moved from.
+			transition: (drawn.length === 2 && isTransition(drawn[0]!.name, drawn[1]!.name)) || undefined,
+		},
+		rows,
+	);
+}
+
+/** Fewest bins a histogram draws. */
+const MIN_BINS = 3;
+/** Most bins a histogram keeps legible. */
+const MAX_BINS = 24;
+/** Most distributions a histogram compares side by side. */
+const MAX_DISTRIBUTIONS = 4;
+/** Slack (percent points) within which a percent column sums to 100: shares of one whole. */
+const SHARE_SLACK = 3;
+
+/** The interval a bin cell covers: `2–5` → [2, 5], `100+` and `≥0.9` up to ∞, `<1 ms` down to −∞, `3` alone. */
+function binOf(cell: Cell | undefined): readonly [number, number] | undefined {
+	if (!isNumber(cell) || cell.signed || cell.to !== undefined || cell.values || cell.denominator !== undefined)
+		return undefined;
+	if (cell.fit === "range") return [cell.value, cell.upper!];
+	if (cell.fit !== "pure" && cell.fit !== "note") return undefined;
+	const text = cell.text.trim();
+	if (/^(?:<|≤)/.test(text)) return [Number.NEGATIVE_INFINITY, cell.value];
+	if (/^(?:>|≥)|\+$/.test(text)) return [cell.value, Number.POSITIVE_INFINITY];
+	return [cell.value, cell.value];
+}
+
+/**
+ * `rows` as ordered bins of `column`: {@link MIN_BINS} to {@link MAX_BINS} cells each a value, a range
+ * or an open end (`1 | 2–5 | 6–20 | 21–100 | 100+`, `<1 ms | 1–10 ms | >10 ms`), not all single values,
+ * running one way and meeting end to start — no overlap, a gap of at most one between whole-number bins
+ * (or one written digit between decimal ones). The rows in ascending bin order, else `undefined`.
+ */
+export function binRows(column: TableColumn, rows: readonly number[]): number[] | undefined {
+	if (rows.length < MIN_BINS || rows.length > MAX_BINS) return undefined;
+	const bins = rows.map(row => binOf(column.cells[row]));
+	if (bins.some(bin => !bin) || bins.every(bin => bin![0] === bin![1])) return undefined;
+	const ascending = bins[0]![0] < bins.at(-1)![0];
+	const order = ascending ? [...rows] : rows.toReversed();
+	const sorted = ascending ? bins : bins.toReversed();
+	const whole = sorted.every(bin => bin!.every(end => !Number.isFinite(end) || Number.isInteger(end)));
+	for (let at = 1; at < sorted.length; at++) {
+		const [[low, high], [nextLow]] = [sorted[at - 1]!, sorted[at]!];
+		const cell = column.cells[order[at]!];
+		const step = whole ? 1 : isNumber(cell) ? 2 * writtenSlack(cell) : 0;
+		const gap = nextLow - high;
+		if (!(nextLow > low) || !(gap >= 0) || gap > step + 1e-9 * Math.abs(high)) return undefined;
+	}
+	return order;
+}
+
+/**
+ * The columns of `measures` (but `bins`) counting how often each bin occurs, when every one of them
+ * does: one to {@link MAX_DISTRIBUTIONS} columns of whole non-negative counts (no per-unit statistic like
+ * `p50` or `avg`, no delta, no header naming only a unit), or of percents summing to 100 within
+ * {@link SHARE_SLACK} (shares of one whole).
+ */
+function frequencyColumns(
+	measures: readonly TableColumn[],
+	bins: TableColumn,
+	rows: readonly number[],
+): TableColumn[] | undefined {
+	const counted = measures.filter(column => column !== bins);
+	if (counted.length === 0 || counted.length > MAX_DISTRIBUTIONS) return undefined;
+	const frequencies = counted.every(column => {
+		if (column.scores || column.mixed || PER_UNIT.test(column.header) || DELTA.test(column.header)) return false;
+		// Bare numbers under a header that is only a unit (`ms`, `(KB)`) are amounts in it, not tallies.
+		const subject = ladderSubject(column.header);
+		if (subject.scale && !subject.name) return false;
+		const values = columnValues(column, rows);
+		if (values.length < rows.length - 1 || values.some(value => value < 0)) return false;
+		if (column.dim === "count") return values.every(Number.isInteger);
+		const sum = values.reduce((total, value) => total + value, 0);
+		return column.dim === "percent" && Math.abs(sum - 100) <= SHARE_SLACK;
+	});
+	return frequencies && new Set(counted.map(column => column.dim)).size === 1 ? counted : undefined;
+}
+
+/**
+ * The column whose rows are `table`'s ordered bins ({@link binRows}) — its label, else its first column —
+ * with the measures counting each bin ({@link frequencyColumns}); `undefined` unless both hold.
+ */
+export function histogramColumns(
+	table: TableAnalysis,
+	measures: readonly TableColumn[] = table.measures,
+): { bins: TableColumn; counts: TableColumn[] } | undefined {
+	const bins = [table.label, table.columns[0]].find(column => column && binRows(column, table.rows));
+	const counts = bins && frequencyColumns(measures, bins, table.rows);
+	return bins && counts ? { bins, counts } : undefined;
+}
+
+/**
+ * `series` of a histogram as shares of each one's total (`percentText`), for distributions of
+ * different sizes compared by shape.
+ */
+function asShares(series: readonly ChartSeries[]): ChartSeries[] {
+	return series.map(entry => {
+		const total = entry.points.reduce((sum, point) => sum + Math.max(0, point?.value ?? 0), 0);
+		return {
+			...entry,
+			dim: "percent",
+			unit: "",
+			points: entry.points.map(point =>
+				point && total > 0
+					? { ...point, value: (100 * point.value) / total, text: percentText((100 * point.value) / total) }
+					: null,
+			),
+		};
+	});
 }
 
 /** Share of a column's numbers written `a–b` from which it reads as intervals rather than values. */
@@ -1433,10 +2358,51 @@ function dotLayout(grid: readonly (readonly number[])[]): "apart" | "clumped" | 
  * beside `branch | tsc-rs`).
  */
 function dotBaseline(columns: readonly TableColumn[]): TableColumn | undefined {
-	return (
+	const baseline =
 		columns.find(column => IN_USE.test(column.header)) ??
-		columns.find(column => columns.every(other => other === column || isTransition(column.header, other.header)))
+		columns.find(column => columns.every(other => other === column || isTransition(column.header, other.header)));
+	return baseline && soleMark(columns, baseline) ? baseline : undefined;
+}
+
+/**
+ * Whether no other of `columns` shares a reference word marking `baseline` (its before words:
+ * `default`, `stock`, `baseline`): beside `ours, adaptive default`, `tsc-rs, 4 (default)` is one default among several
+ * configurations, not what the others are measured against; `before` beside `after (cold)` stays one.
+ */
+function soleMark(columns: readonly TableColumn[], baseline: TableColumn): boolean {
+	const marks = baseline.header.toLowerCase().match(new RegExp(BEFORE.source, "gi")) ?? [];
+	return columns.every(
+		column =>
+			column === baseline || !marks.some(mark => new RegExp(String.raw`\b${mark}\b`, "i").test(column.header)),
 	);
+}
+
+/**
+ * Among rival columns (`plan.rivals` is `columns`) of one polarity, the one best in most rows — the
+ * reference alternatives are read against when no column is the baseline: `tsc-rs, 8` fastest on five
+ * of six apps. `undefined` when the columns differ in polarity or no column leads alone.
+ */
+function leadingColumn(
+	table: TableAnalysis,
+	plan: ChartPlan,
+	columns: readonly TableColumn[],
+): TableColumn | undefined {
+	const polarity = plan.polarity?.[columns[0]!.index];
+	if (plan.rivals !== "columns" || !polarity || columns.some(column => plan.polarity?.[column.index] !== polarity))
+		return undefined;
+	const wins = new Map<TableColumn, number>();
+	for (const row of table.rows) {
+		let best: { column: TableColumn; value: number } | undefined;
+		for (const column of columns) {
+			const cell = column.cells[row];
+			if (!isNumber(cell)) continue;
+			if (!best || (polarity === "lower" ? cell.value < best.value : cell.value > best.value))
+				best = { column, value: cell.value };
+		}
+		if (best) wins.set(best.column, (wins.get(best.column) ?? 0) + 1);
+	}
+	const ranked = [...wins].sort((a, b) => b[1] - a[1]);
+	return ranked[0] && ranked[0][1] > (ranked[1]?.[1] ?? 0) ? ranked[0][0] : undefined;
 }
 
 /**
@@ -1580,16 +2546,35 @@ function withMeaning(
 	const matrix = order && MATRIX_KINDS.has(spec.kind) ? statusMatrix(table, plan, order) : undefined;
 	const column = plan.status === undefined || !order || matrix ? undefined : table.columns[plan.status];
 	const statuses = column?.statuses;
+	const marks: ChartAnnotation[] = [
+		...(spec.annotations ?? []),
+		...focus.map(category => ({ kind: "highlight" as const, category })),
+		...storyCallouts(spec),
+	];
 	return {
 		...spec,
 		title: plan.title,
-		annotations: focus.length
-			? [...(spec.annotations ?? []), ...focus.map(category => ({ kind: "highlight" as const, category }))]
-			: spec.annotations,
+		annotations: marks.length ? marks : undefined,
 		status: statuses && order?.map(row => statuses[row]),
 		statusName: statuses && column?.header,
 		matrix,
 	};
+}
+
+/**
+ * Callouts stating what a chart's marks leave unwritten: a line's peak
+ * inside it (`peak 1,374`), whose figure no end label prints — the table's
+ * bolded peak first, else the line rising most to its peak, a striking one
+ * ({@link linePeak}). At most one, so the chart stays a glance.
+ */
+function storyCallouts(spec: ChartSpec): ChartAnnotation[] {
+	if (spec.kind !== "line") return [];
+	const peaks = spec.series.flatMap((entry, series) => {
+		const peak = linePeak(spec, entry);
+		return peak?.striking ? [{ ...peak, series }] : [];
+	});
+	const pick = peaks.find(peak => peak.point.emphasis) ?? peaks.sort((a, b) => b.rise - a.rise)[0];
+	return pick ? [{ kind: "callout", category: pick.at, series: pick.series, text: `peak ${pick.point.text}` }] : [];
 }
 
 /**
@@ -1745,7 +2730,11 @@ function rank(
 	);
 }
 
-/** Positions in `rows` of the rows `reference` marks, the first per run of one `group` value; else `undefined`. */
+/**
+ * Positions in `rows` of the rows `reference` marks, one per run of one `group` value; else `undefined`.
+ * A run holding the reference value twice (`bash` for each model within one task) has no single row to
+ * compare against, so none is marked rather than measuring one model against another's baseline.
+ */
 function referenceRows(
 	table: TableAnalysis,
 	reference: RowReference | undefined,
@@ -1756,52 +2745,90 @@ function referenceRows(
 	if (!reference || !column) return undefined;
 	const marked: number[] = [];
 	const seen = new Set<string>();
-	rows.forEach((row, at) => {
+	for (const [at, row] of rows.entries()) {
+		if (nameCell(column, row) !== reference.value) continue;
 		const run = group ? nameCell(group, row) : "";
-		if (seen.has(run) || nameCell(column, row) !== reference.value) return;
+		if (seen.has(run)) return undefined;
 		seen.add(run);
 		marked.push(at);
-	});
+	}
 	return marked.length ? marked : undefined;
 }
 
 /**
+ * Share of a log axis' span (in decades) a dumbbell's largest move must cover to read as a move; smaller
+ * moves shrink to dots beside rows decades apart, and their factors read better aligned at 1×.
+ */
+const VISIBLE_MOVE = 0.25;
+
+/**
  * The baseline and compared column of a dumbbell pick whose values span
  * {@link DECADES}× or more — a direction pair ({@link isTransition}: `Before |
- * After`, `Current | New`), or one column of `a → b` cells — else `undefined`:
- * on a logarithmic axis a dumbbell's length is its factor, which a `change`
- * chart prints and aligns at 1×. Peers (`xutf | std`) keep their dumbbell.
+ * After`, `Current | New`), or one column of `a → b` cells — whose factors a
+ * `change` chart aligns at 1×, else `undefined`. Rows in no one measured unit
+ * ({@link DOT_DIMS}: counts, rows of `px`, `rem` and plain numbers) are
+ * different quantities, compared by factor. Timings, sizes and prices in one
+ * unit keep their dumbbell on a log axis, where its length is the factor it
+ * prints — unless every move is too short to see there ({@link VISIBLE_MOVE}:
+ * benchmarks moving a few percent across rows from ns to µs). Peers (`xutf |
+ * std`) keep their dumbbell.
  */
 function beforeAfter(table: TableAnalysis, columns: readonly TableColumn[]): TableColumn[] | undefined {
-	const values: number[] = [];
-	for (const column of columns)
-		for (const row of table.rows) {
-			const cell = column.cells[row];
-			if (isNumber(cell)) values.push(cell.value, cell.to ?? cell.value);
-		}
-	const positive = values.filter(value => value > 0);
-	if (positive.length < 4 || Math.max(...positive) / Math.min(...positive) < DECADES) return undefined;
-	if (columns.length === 1) return columns[0]!.arrowShare >= 0.6 ? [columns[0]!] : undefined;
-	if (columns.length !== 2) return undefined;
-	const [a, b] = columns as [TableColumn, TableColumn];
-	if (a.dim !== b.dim) return undefined;
-	return isTransition(a.header, b.header) ? [a, b] : isTransition(b.header, a.header) ? [b, a] : undefined;
+	const [a, b] = columns;
+	if (!a || columns.length > 2) return undefined;
+	const pair = !b
+		? a.arrowShare >= 0.6
+			? [a]
+			: undefined
+		: a.dim !== b.dim
+			? undefined
+			: isTransition(a.header, b.header)
+				? [a, b]
+				: isTransition(b.header, a.header)
+					? [b, a]
+					: undefined;
+	if (!pair) return undefined;
+	const [from, to] = pair;
+	const moves = table.rows.flatMap((row): [number, number][] => {
+		const start = from!.cells[row];
+		if (!to) return isNumber(start) && start.to !== undefined ? [[start.value, start.to]] : [];
+		const end = to.cells[row];
+		return isNumber(start) && isNumber(end) ? [[start.value, end.value]] : [];
+	});
+	const positive = moves.flat().filter(value => value > 0);
+	const spread = positive.length >= 4 ? Math.max(...positive) / Math.min(...positive) : 1;
+	if (spread < DECADES) return undefined;
+	const measured = pair.every(
+		column => column.dim !== undefined && DOT_DIMS.has(column.dim) && column.unit === from!.unit,
+	);
+	const reach = Math.max(
+		0,
+		...moves.flatMap(([start, end]) => (start > 0 && end > 0 ? [Math.abs(Math.log(end / start))] : [])),
+	);
+	return measured && reach >= VISIBLE_MOVE * Math.log(spread) ? undefined : pair;
 }
 
 /**
  * The plotted columns baseline first when one of them is the baseline every
- * other moves from ({@link isTransition}: `baseline` beside `bash | http`) and
- * two rows typically differ {@link ROW_SPREAD}× or more: one shared axis
- * flattens the small rows, while factors of the baseline show each row's
- * pattern at any size.
+ * other moves from ({@link isTransition}: `baseline` beside `bash | http`, the
+ * only header marking a reference: {@link soleMark}) — where several headers
+ * mark one, the rival leading most rows ({@link leadingColumn}) — and two rows
+ * typically differ {@link ROW_SPREAD}× or more: one shared axis flattens the
+ * small rows, while factors of the baseline show each row's pattern at any size.
  */
-function againstBaseline(table: TableAnalysis, columns: readonly TableColumn[]): TableColumn[] | undefined {
+function againstBaseline(
+	table: TableAnalysis,
+	plan: ChartPlan,
+	columns: readonly TableColumn[],
+): TableColumn[] | undefined {
 	// More than grouped bars hold (a heatmap's worth) would crowd each row with bars.
 	if (columns.length < 2 || columns.length > MAX_GROUPED || new Set(columns.map(column => column.dim)).size > 1)
 		return undefined;
-	const baseline = columns.find(column =>
+	const marked = columns.find(column =>
 		columns.every(other => other === column || isTransition(column.header, other.header)),
 	);
+	const baseline =
+		marked && soleMark(columns, marked) ? marked : marked ? leadingColumn(table, plan, columns) : undefined;
 	if (!baseline) return undefined;
 	const grid = columns.map(column =>
 		table.rows.map(row => {
@@ -1811,6 +2838,31 @@ function againstBaseline(table: TableAnalysis, columns: readonly TableColumn[]):
 	);
 	if (pairSpread(grid) < ROW_SPREAD) return undefined;
 	return [baseline, ...columns.filter(column => column !== baseline)];
+}
+
+/** Relative slack within which a ratio column restates the ratio of two others (`4.1×` for 75.3 / 18.2). */
+const RATIO_SLACK = 0.05;
+
+/**
+ * Of three plotted columns, the two same-unit measures when the third is their ratio (`Speedup`
+ * `4.1×`, a `ratio` column) matching `a ÷ b` or `b ÷ a` within {@link RATIO_SLACK}
+ * in every row holding all three, two rows at least; else `undefined`.
+ */
+function ratioPair(table: TableAnalysis, columns: readonly TableColumn[]): [TableColumn, TableColumn] | undefined {
+	if (columns.length !== 3) return undefined;
+	const ratio = columns.find(column => column.dim === "ratio");
+	const rest = columns.filter(column => column !== ratio);
+	const [a, b] = rest;
+	if (!ratio || !a || !b || a.dim !== b.dim || a.unit !== b.unit || a.dim === "ratio") return undefined;
+	const near = (value: number, target: number) => Math.abs(value - target) <= RATIO_SLACK * target;
+	let matched = 0;
+	for (const row of table.rows) {
+		const [x, y, r] = [a.cells[row], b.cells[row], ratio.cells[row]];
+		if (!isNumber(x) || !isNumber(y) || !isNumber(r) || x.value <= 0 || y.value <= 0) continue;
+		if (!near(r.value, x.value / y.value) && !near(r.value, y.value / x.value)) return undefined;
+		matched++;
+	}
+	return matched >= 2 ? [a, b] : undefined;
 }
 
 /**
@@ -1875,6 +2927,93 @@ export function isConditionPair(first: string, second: string): boolean {
  */
 export function isTransition(first: string, second: string): boolean {
 	return (BEFORE.test(first) && !BEFORE.test(second)) || (AFTER.test(second) && !AFTER.test(first));
+}
+
+/** Most stages a slope chart runs through; more read as a line over the columns. */
+const MAX_STAGES = 4;
+/** Headers naming a later stage of a run (`Iter 4`, `Best (Iter 3)`, `Round 1`, `Now`, `Final`). */
+const STAGE_HEADER =
+	/\b(?:(?:iter(?:ation)?|round|run|pass|step|stage|phase|attempt|v)\s*\d+|r\d+|now|after|then|final|latest|current|best|new|fixed|patched|optimi[sz]ed|today)\b/i;
+/**
+ * Pairs of headers naming opposing amounts, the losing side first: lines
+ * removed against added, losses against wins or gains, closed against opened.
+ */
+const OPPOSED: readonly (readonly [RegExp, RegExp])[] = [
+	[/\b(?:removed|removals?|deletions?|deleted|dels)\b/i, /\b(?:added|additions?|insertions?|inserted|adds)\b/i],
+	[/\b(?:loss(?:es)?|lost)\b/i, /\b(?:wins?|won|gain(?:s|ed)?)\b/i],
+	[/\b(?:closed|deleted)\b/i, /\b(?:opened|created)\b/i],
+	[/\b(?:outflows?|debits?|sells?|downvotes?)\b/i, /\b(?:inflows?|credits?|buys?|upvotes?)\b/i],
+];
+/** Dimensions of amounts that can stand back to back: tallies, sizes, money and time. */
+const OPPOSED_DIMS: Partial<Record<Dimension, true>> = { count: true, bytes: true, currency: true, duration: true };
+
+/**
+ * Three to {@link MAX_STAGES} adjacent same-unit measures holding one quantity
+ * at successive stages of a run: a before column (`Baseline`, `Original`)
+ * followed by later stages ({@link STAGE_HEADER}: `Iter 1 | Iter 2`, `Best (Iter
+ * 3) | Iter 4`, `Round 1 | Now`), each typically within {@link QUANTITY_SPREAD}×
+ * of the first row by row (a `Tokens In (Iter2)` beside turns is another
+ * quantity). Deltas and totals end the run. `undefined` when no such run exists.
+ */
+export function stageColumns(measures: readonly TableColumn[], rows: readonly number[]): TableColumn[] | undefined {
+	const near = (first: TableColumn, next: TableColumn) => {
+		const ratios = rows
+			.flatMap(row => {
+				const [a, b] = [first.cells[row], next.cells[row]];
+				return isNumber(a) && isNumber(b) && a.value > 0 && b.value > 0
+					? [Math.max(a.value, b.value) / Math.min(a.value, b.value)]
+					: [];
+			})
+			.sort((a, b) => a - b);
+		return ratios.length > 0 && ratios[ratios.length >> 1]! < QUANTITY_SPREAD;
+	};
+	for (const [at, first] of measures.entries()) {
+		if (!BEFORE.test(first.header) || first.mixed || DELTA.test(first.header) || first.arrowShare >= 0.6) continue;
+		const run = [first];
+		for (const next of measures.slice(at + 1)) {
+			if (run.length === MAX_STAGES || next.index !== run.at(-1)!.index + 1) break;
+			if (
+				next.dim !== first.dim ||
+				next.unit !== first.unit ||
+				next.mixed ||
+				next.arrowShare >= 0.6 ||
+				BEFORE.test(next.header) ||
+				DELTA.test(next.header) ||
+				AGGREGATE.test(next.header) ||
+				!STAGE_HEADER.test(next.header) ||
+				!near(first, next)
+			)
+				break;
+			run.push(next);
+		}
+		if (run.length >= 3) return run;
+	}
+	return undefined;
+}
+
+/**
+ * Two same-unit measures of opposing amounts ({@link OPPOSED}: `Removed |
+ * Added`, `Losses | Wins`), the losing side first, neither a delta or a total
+ * and neither naming both sides; `undefined` when no such pair exists.
+ */
+export function opposedColumns(measures: readonly TableColumn[]): [TableColumn, TableColumn] | undefined {
+	const plain = measures.filter(
+		column =>
+			column.dim !== undefined &&
+			OPPOSED_DIMS[column.dim] &&
+			!column.mixed &&
+			!column.scores &&
+			column.arrowShare < 0.6 &&
+			// `Gained` reads as a delta word, yet it is one side of a pair here.
+			(!DELTA.test(column.header) || OPPOSED.some(([, gains]) => gains.test(column.header))) &&
+			!AGGREGATE.test(column.header),
+	);
+	for (const [loses, gains] of OPPOSED) {
+		const loss = plain.find(column => loses.test(column.header) && !gains.test(column.header));
+		const gain = plain.find(column => gains.test(column.header) && !loses.test(column.header));
+		if (loss && gain && loss.dim === gain.dim && loss.unit === gain.unit) return [loss, gain];
+	}
+	return undefined;
 }
 
 /** Most categories a best mark singles out of; beyond it the mark is lost among the rows. */
@@ -1978,10 +3117,15 @@ function chartFacts(spec: ChartSpec): Fact[] {
 				const weight = Math.abs(Math.log(point.value));
 				facts.push({
 					key: `move:${entry.name}:${name(at)}`,
-					text: `${name(at)}: ${lead}${move} (${point.text})`,
+					text: `${name(at)}: ${lead}${move}${spec.rival ? ` vs ${spec.baseline}` : ""} (${point.text})`,
 					weight,
 					striking: weight >= Math.log(STRIKING_MOVE),
 				});
+			}
+			if (spec.rival) {
+				const gap = rivalGap(spec, entry);
+				if (gap) facts.push(gap);
+				continue;
 			}
 			const consensus = consensusMove(
 				spec,
@@ -2001,7 +3145,9 @@ function chartFacts(spec: ChartSpec): Fact[] {
 			const value = (point: ChartPoint) => (spec.kind === "range" ? intervalMiddle(point) : point.value);
 			const factors = categories.map((_, at) => {
 				const [a, b] = [before.points[at], after.points[at]];
-				return a && b && value(a) > 0 ? value(b) / value(a) : undefined;
+				if (!a || !b) return undefined;
+				// Zero staying zero stood still; from zero there is no factor.
+				return value(a) > 0 ? value(b) / value(a) : value(b) === 0 ? 1 : undefined;
 			});
 			factors.forEach((factor, at) => {
 				const move = factor === undefined ? "same" : factorWords(factor);
@@ -2015,15 +3161,17 @@ function chartFacts(spec: ChartSpec): Fact[] {
 				});
 			});
 			const polarity = after.polarity ?? before.polarity;
-			const consensus = consensusMove(
-				spec,
-				factors,
-				factors.map(() => polarity),
-				`every ${rowNoun(spec)}`,
-				` from ${before.name} to ${after.name}`,
-			);
+			const polarities = factors.map(() => polarity);
+			const consensus =
+				consensusMove(
+					spec,
+					factors,
+					polarities,
+					`every ${rowNoun(spec)}`,
+					` from ${before.name} to ${after.name}`,
+				) ?? splitMove(spec, factors, polarities, at => `${before.points[at]!.text} → ${after.points[at]!.text}`);
 			if (consensus) facts.push(consensus);
-		}
+		} else facts.push(...peerFacts(spec, before, after));
 	} else if (spec.kind === "line") {
 		for (const entry of series.slice(0, TAKEAWAY_SERIES)) {
 			const present = entry.points.flatMap((point, at) => (point ? [{ at, point }] : []));
@@ -2037,6 +3185,7 @@ function chartFacts(spec: ChartSpec): Fact[] {
 				striking: false,
 			});
 		}
+		facts.push(...peakFacts(spec));
 	} else if (spec.kind === "stacked") {
 		// Parts of a whole: facts about the wholes, and a part making up most of them.
 		if (spec.whole) facts.push(...extremes(spec, spec.whole));
@@ -2073,6 +3222,18 @@ function chartFacts(spec: ChartSpec): Fact[] {
 			});
 	} else if ((spec.kind === "timeline" || spec.kind === "waterfall") && spec.total) {
 		facts.push(...flowFacts(spec, spec.total.point));
+	} else if (spec.kind === "bullet" && spec.targets) {
+		facts.push(...targetFacts(spec, spec.targets));
+	} else if (spec.kind === "stat") {
+		facts.push(...statFacts(spec));
+	} else if (spec.kind === "slope" && series.length >= 2) {
+		facts.push(...slopeFacts(spec));
+	} else if (spec.kind === "ladder") {
+		facts.push(...ladderFacts(spec));
+	} else if (spec.kind === "histogram") {
+		facts.push(...histogramFacts(spec));
+	} else if (spec.kind === "butterfly" && series.length === 2) {
+		facts.push(...butterflyFacts(spec));
 	} else if (spec.kind === "share") {
 		const top = byValue(series[0]!.points)[0];
 		const total = series[0]!.points.reduce((sum, point) => sum + Math.max(0, point?.value ?? 0), 0);
@@ -2081,7 +3242,9 @@ function chartFacts(spec: ChartSpec): Fact[] {
 			top && series[0]!.dim !== "percent" && total > 0
 				? `${top.point.text}, ${percentText((100 * top.point.value) / total)}`
 				: top?.point.text;
-		if (top)
+		const majority = majorityPart(spec, series[0]!);
+		if (majority) facts.push(majority);
+		else if (top)
 			facts.push({
 				key: "share:top",
 				text: `${name(top.at)} is the largest share (${share})`,
@@ -2094,6 +3257,7 @@ function chartFacts(spec: ChartSpec): Fact[] {
 			for (const fact of extremes(spec, entry)) facts.push({ ...fact, weight: fact.weight - 0.2 * index });
 		});
 		facts.push(...rivalry(spec));
+		facts.push(...referenceMoves(spec));
 	}
 	return facts;
 }
@@ -2156,6 +3320,401 @@ function flowFacts(spec: ChartSpec, total: ChartPoint): Fact[] {
 	];
 }
 
+/** Most rows missing their targets a takeaway names; past it, it names the worst. */
+const MAX_MISSES_NAMED = 2;
+
+/**
+ * What a `bullet` chart says of its targets, over the rows whose target has a side ({@link targetStanding}):
+ * how many meet theirs and which miss (`3 of 4 within budget; Allocations, steady scroll misses (7,246 vs ≤
+ * 0)`; two by name, the worst of more), or — all meeting — the closest (`All 12 within target; closest:
+ * History, last 100 at 91%`). Striking: meeting the targets is the table's point.
+ */
+function targetFacts(spec: ChartSpec, targets: readonly (ChartTarget | null)[]): Fact[] {
+	const entry = spec.series[0]!;
+	const standings = targets.flatMap((target, at) => {
+		const point = entry.points[at];
+		const standing = point && target ? targetStanding(point, target) : undefined;
+		return point && target && standing ? [{ at, point, target, ...standing }] : [];
+	});
+	if (standings.length < 2) return [];
+	type Standing = (typeof standings)[number];
+	const word = spec.targetName ?? "target";
+	const said = (standing: Standing) =>
+		`${spec.categories[standing.at]!} (${standing.point.text} vs ${standing.target.text})`;
+	// How far past (or how near) its target a row is: its share of a ceiling, a floor's share of it.
+	const reach = (standing: Standing) =>
+		standing.share === undefined
+			? Number.POSITIVE_INFINITY
+			: standing.target.bound === "min"
+				? 1 / Math.max(standing.share, 1e-9)
+				: standing.share;
+	const missed = standings.filter(standing => !standing.met).sort((a, b) => reach(b) - reach(a));
+	const count = standings.length;
+	let text: string;
+	if (missed.length === 0) {
+		const closest = standings
+			.filter(standing => standing.share !== undefined && standing.target.upper === undefined)
+			.sort((a, b) => reach(b) - reach(a))[0];
+		// Under a ceiling the share says it (`at 91%`); over a floor the figures do.
+		const near = !closest
+			? ""
+			: closest.target.bound === "max"
+				? `; closest: ${spec.categories[closest.at]!} at ${Math.round(closest.share! * 100)}%`
+				: `; closest: ${said(closest)}`;
+		// Rows the chart could not hold to their target (`≤ 3s / ≤ 6s`, other units) may still miss it.
+		const unchecked = targets.length > count ? " checked" : "";
+		text = `All ${count}${unchecked} within ${word}${near}`;
+	} else if (missed.length === count) text = `None of ${count} within ${word}; worst: ${said(missed[0]!)}`;
+	else if (missed.length === 1) {
+		const miss = missed[0]!;
+		text = `${count - 1} of ${count} within ${word}; ${spec.categories[miss.at]!} misses (${miss.point.text} vs ${miss.target.text})`;
+	} else if (missed.length <= MAX_MISSES_NAMED)
+		text = `${count - missed.length} of ${count} within ${word}; ${list(missed.map(standing => spec.categories[standing.at]!))} miss`;
+	else text = `${count - missed.length} of ${count} within ${word}; worst: ${said(missed[0]!)}`;
+	return [{ key: "target", text, weight: CONSENSUS_WEIGHT, striking: true }];
+}
+
+/**
+ * Facts between two peers on one axis (`xutf` vs `std`, two windows per
+ * provider): one ahead of the other in every category by its polarity
+ * (`xutf beats std in every row (4.5–15×)`), striking from a
+ * {@link STRIKING_MOVE}× lead everywhere; or both equal in every category but
+ * one (`… match on every provider but github-copilot (400,000 vs 272,000)`).
+ * Intervals compare by their middles.
+ */
+function peerFacts(spec: ChartSpec, first: ChartSeries, second: ChartSeries): Fact[] {
+	if (first.dim !== second.dim || first.unit !== second.unit) return [];
+	const value = (point: ChartPoint) => (spec.kind === "range" ? intervalMiddle(point) : point.value);
+	const both = spec.categories.flatMap((_, at) => {
+		const [a, b] = [first.points[at], second.points[at]];
+		return a && b && value(a) > 0 && value(b) > 0 ? [{ at, a, b }] : [];
+	});
+	if (both.length < 3 || both.length < spec.categories.length) return [];
+	const noun = rowNoun(spec);
+	const differ = both.filter(item => item.a.text !== item.b.text && value(item.a) !== value(item.b));
+	if (differ.length === 1) {
+		const { at, a, b } = differ[0]!;
+		// Long series names would crowd out the exception; the legend names them.
+		const pair = first.name.length + second.name.length <= MAX_LABEL ? `${first.name} and ${second.name}` : "Both";
+		return [
+			{
+				key: `peers:${spec.categories[at]}`,
+				text: `${pair} match on every ${noun} but ${spec.categories[at]} (${a.text} vs ${b.text})`,
+				weight: RIVALRY_WEIGHT,
+				striking: true,
+			},
+		];
+	}
+	const polarity = first.polarity ?? second.polarity;
+	if (!polarity || (first.polarity && second.polarity && first.polarity !== second.polarity)) return [];
+	// Each category's lead of the first over the second, as a factor above 1 when the first is ahead.
+	const leads = both.map(({ a, b }) => (polarity === "higher" ? value(a) / value(b) : value(b) / value(a)));
+	const ahead = leads.every(lead => lead > 1);
+	if (!ahead && !leads.every(lead => lead < 1)) return [];
+	const sorted = leads.map(lead => (ahead ? lead : 1 / lead)).sort((x, y) => x - y);
+	const [winner, loser] = ahead ? [first, second] : [second, first];
+	const [low, high] = [sorted[0]!, sorted.at(-1)!];
+	const margin =
+		high < 2
+			? `by ${Math.round((low - 1) * 100)}–${Math.round((high - 1) * 100)}%`
+			: roundFactor(low) === roundFactor(high)
+				? `${roundFactor(high)}×`
+				: `${roundFactor(low)}–${roundFactor(high)}×`;
+	return [
+		{
+			key: `peers:${winner.name}`,
+			text: `${winner.name} beats ${loser.name} on every ${noun} (${margin})`,
+			weight: RIVALRY_WEIGHT + Math.log(low),
+			striking: low >= STRIKING_MOVE,
+		},
+	];
+}
+
+/**
+ * A slope's stages as takeaways: how each row moved from the first stage to
+ * the last, as a dumbbell's moves read ({@link consensusMove},
+ * {@link splitMove}: `Every plan improved from Original to Now (−39% to
+ * −86%)`); when one row alone turns back at the last stage after moving the
+ * other way, by {@link STRIKING_MOVE}× or more, the move closes on it
+ * instead of its strongest row (`3 of 4 models improved; kimi regressed from
+ * 3 to 6 at Iter 4`): a "none regressed" would hide it. A move already naming
+ * a dissenting row keeps it, the turn offered beside it as a plain fact.
+ */
+function slopeFacts(spec: ChartSpec): Fact[] {
+	const { series, categories } = spec;
+	const [first, previous, last] = [series[0]!, series.at(-2)!, series.at(-1)!];
+	const polarity = last.polarity ?? first.polarity;
+	const factors = categories.map((_, at) => {
+		const [a, b] = [first.points[at], last.points[at]];
+		if (!a || !b) return undefined;
+		return a.value > 0 ? b.value / a.value : b.value === 0 ? 1 : undefined;
+	});
+	const polarities = factors.map(() => polarity);
+	const moves =
+		consensusMove(spec, factors, polarities, `every ${rowNoun(spec)}`, ` from ${first.name} to ${last.name}`) ??
+		splitMove(spec, factors, polarities, at => `${first.points[at]!.text} → ${last.points[at]!.text}`);
+	// Rows whose last step undoes the one before it: down then back up (or up then down).
+	const turns = categories.flatMap((_, at) => {
+		const [a, b, c] = [series.at(-3)?.points[at], previous.points[at], last.points[at]];
+		if (!a || !b || !c || a.value <= 0 || b.value <= 0 || c.value <= 0) return [];
+		const [before, after] = [b.value / a.value, c.value / b.value];
+		const turned = (before < 1 && after > 1) || (before > 1 && after < 1);
+		return turned && Math.abs(Math.log(after)) >= Math.log(STRIKING_MOVE) ? [{ at, after }] : [];
+	});
+	if (turns.length !== 1) return moves ? [moves] : [];
+	const { at, after } = turns[0]!;
+	const verb = polarity
+		? after > 1 === (polarity === "higher")
+			? "improved"
+			: "regressed"
+		: after > 1
+			? "rose"
+			: "fell";
+	const turn = `${categories[at]} ${verb} from ${previous.points[at]!.text} to ${last.points[at]!.text} at ${last.name}`;
+	const weight = CONSENSUS_WEIGHT + Math.abs(Math.log(after));
+	// A move naming a row against the rest already says the exception; the turn is one more fact, not its title.
+	const named = moves && moves.text.includes("; ") && !moves.text.includes(", none ");
+	if (!moves || named)
+		return [
+			...(moves ? [moves] : []),
+			{ key: `turn:${categories[at]}`, text: turn, weight: weight - 1, striking: false },
+		];
+	// The move's head (`3 of 4 models improved`), its "none …" and strongest-row clauses giving way to the turn.
+	return [{ key: "moves", text: `${moves.text.split(/, none |; /)[0]}; ${turn}`, weight, striking: true }];
+}
+
+/**
+ * A quantile ladder's takeaways, its quantiles read as one measurement, never
+ * as rivals: the median's extremes ({@link extremes} of the `p50` / `median` /
+ * `mean` rung, else the first); the row whose top rung stands farthest above
+ * its median (`read has the longest tail: max 86× its p50`), striking when it
+ * is {@link OUTLIER}× the next row's; and between a before and an after ladder
+ * how the medians moved.
+ */
+function ladderFacts(spec: ChartSpec): Fact[] {
+	const ladder = spec.ladders?.[0];
+	if (!ladder || ladder.series.length < 2) return [];
+	const rungs = ladder.series.map(index => spec.series[index]!);
+	const middle = rungs.find(entry => /^(?:p50|median|mean|avg)\b/i.test(entry.name)) ?? rungs[0]!;
+	const top = rungs.at(-1)!;
+	const facts: Fact[] = extremes(spec, middle).filter(fact => !fact.key.startsWith("outlier:"));
+	if (top !== middle) {
+		const tails = spec.categories
+			.flatMap((_, at) => {
+				const [m, t] = [middle.points[at], top.points[at]];
+				return m && t && m.value > 0 ? [{ at, ratio: t.value / m.value }] : [];
+			})
+			.sort((a, b) => b.ratio - a.ratio);
+		const [widest, next] = tails;
+		if (widest && widest.ratio >= STRIKING && tails.length >= 2) {
+			const apart = next !== undefined && widest.ratio >= OUTLIER * next.ratio;
+			facts.push({
+				key: `tail:${ladder.name}`,
+				text: `${spec.categories[widest.at]} has the longest tail (${top.name} ${roundFactor(widest.ratio)}× its ${middle.name})`,
+				weight: Math.log(widest.ratio / (next?.ratio ?? 1)) + 1,
+				striking: apart,
+			});
+		}
+	}
+	const after = spec.transition ? spec.ladders?.[1] : undefined;
+	const moved = after?.series.map(index => spec.series[index]!).find(entry => entry.name === middle.name);
+	if (moved) {
+		const factors = middle.points.map((point, at) => {
+			const end = moved.points[at];
+			return point && end && point.value > 0 ? end.value / point.value : undefined;
+		});
+		const move = consensusMove(
+			spec,
+			factors,
+			factors.map(() => moved.polarity ?? middle.polarity),
+			`every ${rowNoun(spec)}'s ${middle.name}`,
+			` from ${ladder.name} to ${after!.name}`,
+		);
+		if (move) facts.push(move);
+	}
+	return facts;
+}
+
+/** Percent points two distributions' shares of one bin must differ by for the shift to be the finding. */
+const SHIFT_POINTS = 10;
+
+/**
+ * A histogram's takeaways: the bin holding a {@link MAJORITY} of a
+ * distribution (`k sessions = 1 holds 80% of project-busy time`), striking at
+ * twice the next bin; and between two distributions the bin whose share
+ * moved most (`k projects = 1: 73.7% → 55% from all-time to last 30 days`),
+ * striking from {@link SHIFT_POINTS} points.
+ */
+function histogramFacts(spec: ChartSpec): Fact[] {
+	const bin = (at: number) => (spec.axis ? `${spec.axis} = ${spec.categories[at]}` : spec.categories[at]!);
+	const shares = spec.series.map(entry => {
+		const total = entry.points.reduce((sum, point) => sum + Math.max(0, point?.value ?? 0), 0);
+		return entry.points.map(point => (point && total > 0 ? (100 * Math.max(0, point.value)) / total : undefined));
+	});
+	const facts: Fact[] = [];
+	spec.series.slice(0, 1).forEach((entry, index) => {
+		const ranked = shares[index]!.flatMap((share, at) => (share === undefined ? [] : [{ at, share }]));
+		ranked.sort((a, b) => b.share - a.share);
+		const [mode, next] = ranked;
+		if (!mode || mode.share < MAJORITY * 100) return;
+		// `share of project-busy time` already says it is a share: its whole is what follows `of`.
+		const whole = entry.name.replace(/^(?:share|%|percent(?:age)?)\s+of\s+/i, "");
+		facts.push({
+			key: `mode:${entry.name}`,
+			text: `${bin(mode.at)} holds ${percentText(mode.share)} of ${whole}`,
+			weight: 1 + mode.share / 100,
+			striking: next !== undefined && mode.share >= 2 * next.share,
+		});
+	});
+	if (spec.series.length === 2) {
+		const [from, to] = spec.series as [ChartSeries, ChartSeries];
+		const shifts = spec.categories
+			.flatMap((_, at) => {
+				const [a, b] = [shares[0]![at], shares[1]![at]];
+				return a !== undefined && b !== undefined ? [{ at, a, b }] : [];
+			})
+			.sort((x, y) => Math.abs(y.b - y.a) - Math.abs(x.b - x.a));
+		const shift = shifts[0];
+		if (shift && Math.abs(shift.b - shift.a) >= 1) {
+			const written = (entry: ChartSeries, share: number) =>
+				entry.dim === "percent" ? entry.points[shift.at]!.text : percentText(share);
+			facts.push({
+				key: `shift:${spec.categories[shift.at]}`,
+				text: `${bin(shift.at)}: ${written(from, shift.a)} → ${written(to, shift.b)} from ${from.name} to ${to.name}`,
+				weight: CONSENSUS_WEIGHT + Math.abs(shift.b - shift.a) / 100,
+				striking: Math.abs(shift.b - shift.a) >= SHIFT_POINTS,
+			});
+		}
+	}
+	return facts;
+}
+
+/**
+ * A butterfly's takeaway: both sides summed, the larger first, with the row
+ * making up most of the larger side (`Added 3,902 vs Removed 296; Non-test Go
+ * code is 51% of Added`); striking when one side outweighs the other
+ * {@link STRIKING_MOVE}× or more.
+ */
+function butterflyFacts(spec: ChartSpec): Fact[] {
+	const sums = spec.series.map(entry => entry.points.reduce((sum, point) => sum + Math.max(0, point?.value ?? 0), 0));
+	const [low, high] = sums[0]! > sums[1]! ? [1, 0] : [0, 1];
+	const [big, small] = [spec.series[high]!, spec.series[low]!];
+	if (!(sums[high]! > 0)) return [];
+	const figure = (entry: ChartSeries, sum: number) =>
+		sumFigure(entry.points.flatMap(point => (point ? [point] : []))) || sum.toLocaleString("en-US");
+	const part = majorityPart(spec, big);
+	const lead = part ? `; ${part.text.replace(/ of .*$/, ` of ${big.name}`)}` : "";
+	const factor = sums[low]! > 0 ? sums[high]! / sums[low]! : Number.POSITIVE_INFINITY;
+	return [
+		{
+			key: "net",
+			text: `${big.name} ${figure(big, sums[high]!)} vs ${small.name} ${figure(small, sums[low]!)}${lead}`,
+			weight: CONSENSUS_WEIGHT + Math.min(5, Math.log(factor)),
+			striking: factor >= STRIKING_MOVE,
+		},
+	];
+}
+
+/** Share of a whole from which its largest part is a majority worth stating as one. */
+const MAJORITY = 0.5;
+/**
+ * The largest of a share's parts when it makes up a {@link MAJORITY} of their
+ * sum (`missing is 51% of 1,543`), the sum written like the parts; striking at
+ * twice the next part. Percent parts are of `the total`.
+ */
+function majorityPart(spec: ChartSpec, entry: ChartSeries): Fact | undefined {
+	// A part left out (`4.9+ GiB` unread) would shrink the sum it is a share of.
+	if (entry.points.some(point => !point || point.value < 0)) return undefined;
+	const [top, next] = byValue(entry.points);
+	const total = entry.points.reduce((sum, point) => sum + (point?.value ?? 0), 0);
+	if (!top || !(total > 0) || top.point.value / total < MAJORITY) return undefined;
+	const part = top.point.value / total;
+	const sum = entry.dim === "percent" ? "" : sumFigure(entry.points.flatMap(point => (point ? [point] : [])));
+	// Parts under a thousand (`786`, `368`) sum past it without the separator a reader expects.
+	const whole = /^\d{4,}$/.test(sum) ? Number(sum).toLocaleString("en-US") : sum || "the total";
+	return {
+		key: "share:top",
+		text: `${spec.categories[top.at]} is ${percentText(part * 100)} of ${whole}`,
+		weight: 1 + part,
+		striking: next !== undefined && top.point.value >= 2 * next.point.value,
+	};
+}
+
+/** Factor a line's interior peak must stand above both its ends to be named at all. */
+const MIN_PEAK_RISE = 1.25;
+/** Factor a line's interior peak must stand above both its ends to be a finding of its own. */
+const PEAK_RISE = 1.5;
+/** Fewest samples a line needs before a peak inside it is a shape, not one step up and one down. */
+const MIN_PEAK_SAMPLES = 4;
+
+/**
+ * A line chart's interior peaks ({@link linePeak}) as takeaways: two or more
+ * lines peaking at one category say it together (`2026-03-30 was the peak of
+ * commits (1,374) and +lines (1,529,921)`, `… on all 4 measures`), others
+ * alone (`commits peaked at 1,374 in 2026-03-30`). Striking from
+ * {@link PEAK_RISE}× over both ends across {@link MIN_PEAK_SAMPLES} samples; a
+ * peak the table bolded weighs more.
+ */
+function peakFacts(spec: ChartSpec): Fact[] {
+	const peaks = spec.series.slice(0, TAKEAWAY_SERIES).flatMap(entry => {
+		const peak = linePeak(spec, entry);
+		return peak ? [{ ...peak, entry, weight: Math.log(peak.rise) + 1 + (peak.point.emphasis ? 0.5 : 0) }] : [];
+	});
+	const facts: Fact[] = [];
+	for (const at of new Set(peaks.map(peak => peak.at))) {
+		const shared = peaks.filter(peak => peak.at === at);
+		const where = spec.categories[at]!;
+		if (shared.length === 1) {
+			const { entry, point, weight, striking } = shared[0]!;
+			facts.push({
+				key: `peak:${entry.name}`,
+				text: `${entry.name} peaked at ${point.text} in ${where}`,
+				weight,
+				striking,
+			});
+			continue;
+		}
+		const named =
+			shared.length === 2
+				? list(shared.map(peak => `${peak.entry.name} (${peak.point.text})`))
+				: shared.length === spec.series.length
+					? `all ${shared.length} measures`
+					: `${shared.length} of ${spec.series.length} measures`;
+		facts.push({
+			key: `peak:@${where}`,
+			text: `${where} was the peak ${shared.length === 2 ? "of" : "on"} ${named}`,
+			weight: Math.max(...shared.map(peak => peak.weight)) + 0.5,
+			striking: shared.some(peak => peak.striking),
+		});
+	}
+	return facts;
+}
+
+/**
+ * The highest sample of a line `entry` when it lies inside the line (neither
+ * end) and stands {@link MIN_PEAK_RISE}× or more above both ends, with that factor (`rise`)
+ * over the higher end — `striking` from {@link PEAK_RISE}× across
+ * {@link MIN_PEAK_SAMPLES} samples; samples in x order.
+ */
+function linePeak(
+	spec: ChartSpec,
+	entry: ChartSeries,
+): { at: number; point: ChartPoint; rise: number; striking: boolean } | undefined {
+	const order = spec.categories.map((_, at) => at);
+	if (spec.x) order.sort((a, b) => spec.x!.values[a]! - spec.x!.values[b]!);
+	const present = order.flatMap(at => {
+		const point = entry.points[at];
+		return point ? [{ at, point }] : [];
+	});
+	if (present.length < 3) return undefined;
+	const top = present.reduce((best, item) => (item.point.value > best.point.value ? item : best));
+	const ends = Math.max(present[0]!.point.value, present.at(-1)!.point.value);
+	if (top === present[0] || top === present.at(-1) || ends <= 0) return undefined;
+	const rise = top.point.value / ends;
+	const striking = rise >= PEAK_RISE && present.length >= MIN_PEAK_SAMPLES;
+	return rise >= MIN_PEAK_RISE ? { ...top, rise, striking } : undefined;
+}
+
 /** `facts` strongest first, one per key, at most {@link MAX_TAKEAWAYS}. */
 function rankFacts(facts: Fact[]): Takeaway[] {
 	facts.sort((a, b) => b.weight - a.weight);
@@ -2182,11 +3741,23 @@ function rivalry(spec: ChartSpec): Fact[] {
 	}
 	for (const [at, won] of bests) {
 		if (won.length < 2) continue;
+		// Past three measures a list of their names outgrows a title line: their count says it.
+		const measures =
+			won.length <= 3
+				? list(won.map(entry => entry.name))
+				: won.length === series.length
+					? `all ${won.length} measures`
+					: `${won.length} of ${series.length} measures`;
+		// One measure before and after (`Original`, `Round 1`, `Now`): the row best throughout restates how
+		// the rows rank, not a contest won; how they moved is the story.
+		const conditions =
+			won.every(entry => entry.dim === won[0]!.dim && entry.unit === won[0]!.unit) &&
+			isTransition(won[0]!.name, won.at(-1)!.name);
 		facts.push({
 			key: `sweep:${categories[at]}`,
-			text: `${categories[at]} is best on ${list(won.map(entry => entry.name))}`,
-			weight: RIVALRY_WEIGHT + 0.3 * won.length,
-			striking: true,
+			text: `${categories[at]} is best on ${measures}`,
+			weight: conditions ? 1 : RIVALRY_WEIGHT + 0.3 * won.length,
+			striking: !conditions,
 		});
 	}
 	for (const gain of series.filter(entry => entry.polarity === "higher" && entry.best !== undefined)) {
@@ -2221,6 +3792,31 @@ function rivalry(spec: ChartSpec): Fact[] {
 }
 
 /**
+ * One series of a rival-referenced `change` ({@link ChartSpec.rival}) behind (or ahead of) that rival on
+ * every category by its polarity: `tsc-rs, 4 (default) trails tsc-rs, 8 on every app (+14% to +47%)`. Not
+ * striking: the rival leads most rows by construction, so only a judge titles a chart with it.
+ */
+function rivalGap(spec: ChartSpec, entry: ChartSeries): Fact | undefined {
+	const gaps = entry.points.flatMap((point, at) =>
+		point && point.value > 0
+			? [{ factor: point.value, polarity: spec.categoryPolarity?.[at] ?? entry.polarity }]
+			: [],
+	);
+	if (gaps.length < 3 || gaps.length < spec.categories.length) return undefined;
+	const behind = gaps.map(gap => gap.polarity && gap.factor > 1 !== (gap.polarity === "higher"));
+	const ahead = gaps.map(gap => gap.polarity && gap.factor > 1 === (gap.polarity === "higher"));
+	const verb = behind.every(Boolean) ? "trails" : ahead.every(Boolean) ? "beats" : undefined;
+	if (!verb || gaps.some(gap => Math.abs(Math.log(gap.factor)) < Math.log(STILL_FACTOR))) return undefined;
+	const sorted = gaps.map(gap => gap.factor).sort((a, b) => a - b);
+	return {
+		key: `gap:${entry.name}`,
+		text: `${entry.name} ${verb} ${spec.baseline} on every ${rowNoun(spec)} (${factorRange(sorted)})`,
+		weight: RIVALRY_WEIGHT + Math.abs(Math.log(sorted[sorted.length >> 1]!)),
+		striking: false,
+	};
+}
+
+/**
  * Every category moving one way by more than {@link STILL_FACTOR} (three at
  * least): `every model fell (median 2.5× less)`, or `improved` / `regressed`
  * where each category's polarity agrees on it. Striking: a whole table
@@ -2238,7 +3834,9 @@ function consensusMove(
 			? [{ at, factor }]
 			: [],
 	);
-	if (moved.length < 3 || moved.length < spec.categories.length) return undefined;
+	// Categories without both values (`✓ | ✓`) neither move nor stand still: every measured one counts.
+	const measured = factors.filter(factor => factor !== undefined && factor > 0).length;
+	if (moved.length < 3 || moved.length < measured) return undefined;
 	const down = moved.every(item => item.factor < 1);
 	if (!down && !moved.every(item => item.factor > 1)) return undefined;
 	const tones = moved.map(item => polarities?.[item.at] && item.factor > 1 === (polarities[item.at] === "higher"));
@@ -2253,18 +3851,173 @@ function consensusMove(
 	const median = sorted[Math.floor(sorted.length / 2)]!;
 	return {
 		key: "moves",
-		text: `${subject[0]!.toUpperCase()}${subject.slice(1)} ${verb}${span} (median ${factorWords(median)})`,
+		text: `${subject[0]!.toUpperCase()}${subject.slice(1)} ${verb}${span} (${factorRange(sorted)})`,
 		// The whole table moving together outranks any one move in it.
 		weight: CONSENSUS_WEIGHT + Math.abs(Math.log(median)),
 		striking: true,
 	};
 }
 
+/**
+ * Every category but one moving one way and that one the other (`3 of 4
+ * models fell; claude-haiku-4.5 rose (7 → 10)`), or most moving one way and
+ * none the other while the rest stay within {@link STILL_FACTOR} (`2 of 3
+ * models fell, none rose; gpt-oss-120b most (29 → 5)`): the exception is
+ * the finding a whole-table move would have been. Only for a transition of
+ * one measure: rows that are metrics of their own (a `change`) move for
+ * reasons of their own. `improved` / `regressed`
+ * where every moving category's polarity says which; `fell` / `rose`
+ * otherwise. `moveText` writes a category's move as the table did (`7 → 10`).
+ * Striking: a lone regression among improvements is what such a table is
+ * usually written to show.
+ */
+function splitMove(
+	spec: ChartSpec,
+	factors: readonly (number | undefined)[],
+	polarities: readonly (Polarity | undefined)[] | undefined,
+	moveText: (at: number) => string,
+): Fact | undefined {
+	const moved = factors.flatMap((factor, at) =>
+		factor !== undefined && factor > 0 && Math.abs(Math.log(factor)) >= Math.log(STILL_FACTOR)
+			? [{ at, factor }]
+			: [],
+	);
+	const toned = moved.every(item => polarities?.[item.at]);
+	// A move's side: better or worse where every polarity is known, else down or up.
+	const side = (item: { at: number; factor: number }) =>
+		toned ? item.factor > 1 === (polarities![item.at] === "higher") : item.factor < 1;
+	const [verbs, others] = toned ? ["improved", "regressed"] : ["fell", "rose"];
+	const ahead = moved.filter(side);
+	const behind = moved.filter(item => !side(item));
+	const [major, minor, verb, counter] =
+		ahead.length >= behind.length ? [ahead, behind, verbs, others] : [behind, ahead, others, verbs];
+	const total = factors.filter(factor => factor !== undefined && factor > 0).length;
+	// A count over a third of the rows missing (`–`) would speak for rows it never saw.
+	if (major.length < 2 || minor.length > 1 || total * 3 < spec.categories.length * 2) return undefined;
+	// Without a dissenter, most categories must move for the rest standing still to say anything.
+	if (minor.length === 0 && (moved.length === total || major.length * 2 <= total)) return undefined;
+	const nouns = plural(rowNoun(spec));
+	const name = (at: number) => spec.categories[at]!;
+	const strength = (item: { factor: number }) => Math.abs(Math.log(item.factor));
+	if (minor.length === 1) {
+		const odd = minor[0]!;
+		return {
+			key: "moves",
+			text: `${major.length} of ${total} ${nouns} ${verb}; ${name(odd.at)} ${counter} (${moveText(odd.at)})`,
+			weight: CONSENSUS_WEIGHT - 1 + strength(odd),
+			striking: true,
+		};
+	}
+	const lead = major.reduce((best, item) => (strength(item) > strength(best) ? item : best));
+	return {
+		key: "moves",
+		text: `${major.length} of ${total} ${nouns} ${verb}, none ${counter}; ${name(lead.at)} most (${moveText(lead.at)})`,
+		weight: CONSENSUS_WEIGHT - 1 + strength(lead),
+		striking: true,
+	};
+}
+
+/** Spread (largest over smallest) of a whole-table move from which it reads as `up to` its largest factor. */
+const WIDE_MOVES = 12;
+
+/**
+ * Factors all on one side of 1, as people say their span: `7.2–11× less`,
+ * `−20% to −64%`, `1.3–4× more`, one figure where both round alike, and
+ * `up to 1,127× less` where they span {@link WIDE_MOVES}× or more.
+ */
+function factorRange(sorted: readonly number[]): string {
+	const down = sorted.at(-1)! < 1;
+	// The weakest and strongest move, as factors of at least 1.
+	const [weak, strong] = down ? [1 / sorted.at(-1)!, 1 / sorted[0]!] : [sorted[0]!, sorted.at(-1)!];
+	const strongest = down ? sorted[0]! : sorted.at(-1)!;
+	if (strong / weak >= WIDE_MOVES) return `up to ${factorWords(strongest)}`;
+	const [low, high] = [factorWords(down ? sorted.at(-1)! : sorted[0]!), factorWords(strongest)];
+	if (low === high) return high;
+	// Drops short of 10× that start under 2× read as the share cut (`−20% to −64%`), as people say them.
+	if (down && weak < 2 && strong < 10)
+		return `−${Math.round((1 - sorted.at(-1)!) * 100)}% to −${Math.round((1 - sorted[0]!) * 100)}%`;
+	if (strong >= 2) return `${roundFactor(weak)}–${roundFactor(strong)}× ${down ? "less" : "more"}`;
+	return `${low} to ${high}`;
+}
+
+/** The plural of a row noun: `models`, `classes`, `categories`. */
+function plural(noun: string): string {
+	if (/(?:s|x|ch|sh)$/.test(noun)) return `${noun}es`;
+	if (/[^aeiou]y$/.test(noun)) return `${noun.slice(0, -1)}ies`;
+	return `${noun}s`;
+}
+
 /** What a sentence calls one category: the axis name when it is one short word (`model`), else `row`. */
 function rowNoun(spec: ChartSpec): string {
-	if (!/^[a-z]{1,16}$/i.test(spec.axis)) return "row";
+	// A one- or two-letter header (`N`, `id`) is a symbol, not a noun.
+	if (!/^[a-z]{3,16}$/i.test(spec.axis)) return "row";
 	// A plural header (`Blocks`) names one row in the singular.
 	return spec.axis.toLowerCase().replace(/([^s])s$/, "$1");
+}
+
+/**
+ * Each category's value of `entry` as a factor of its group's reference
+ * category ({@link ChartSpec.reference}; the whole chart is one group without
+ * groups): `undefined` for the reference itself, outside any referenced
+ * group, or where either value is missing or not positive.
+ */
+export function referenceFactors(spec: ChartSpec, entry: ChartSeries): (number | undefined)[] {
+	const groupOf: number[] = [];
+	(spec.groups ?? [{ name: "", members: spec.categories }]).forEach((group, index) =>
+		group.members.forEach(() => groupOf.push(index)),
+	);
+	return spec.categories.map((_, at) => {
+		const index = spec.reference?.find(index => groupOf[index] === groupOf[at]);
+		const [base, point] = [entry.points[index ?? -1], entry.points[at]];
+		return index === undefined || index === at || !base || !point || base.value <= 0
+			? undefined
+			: point.value / base.value;
+	});
+}
+
+/**
+ * The whole chart moving one way from its groups' reference rows (`Every arm regressed vs bash on Turns and
+ * Total tokens`): per series, every other category beyond {@link STILL_FACTOR} of its group's reference one way
+ * ({@link consensusMove}); series that agree are named together, a lone one with its range.
+ */
+function referenceMoves(spec: ChartSpec): Fact[] {
+	const reference = spec.reference?.[0];
+	// Only a reference per group (`bash` within each model) makes its comparison the chart's point; a lone
+	// reference row already prints each bar's factor of it.
+	if (reference === undefined || (spec.reference?.length ?? 0) < 2) return [];
+	let start = 0;
+	let name = spec.categories[reference]!;
+	for (const group of spec.groups ?? []) {
+		if (reference < start + group.members.length) {
+			name = group.members[reference - start] || name;
+			break;
+		}
+		start += group.members.length;
+	}
+	const moves = spec.series.slice(0, TAKEAWAY_SERIES).flatMap(entry => {
+		const fact = consensusMove(
+			spec,
+			referenceFactors(spec, entry),
+			spec.categories.map(() => entry.polarity),
+			// Rows named `Model · Arm` are arms within each model: the innermost part names them.
+			`every ${rowNoun({ ...spec, axis: spec.axis.split(NAME_JOIN).at(-1)! })}`,
+			` vs ${name} on ${entry.name}`,
+		);
+		return fact ? [{ entry, fact }] : [];
+	});
+	if (moves.length < 2) return moves.map(({ entry, fact }) => ({ ...fact, key: `reference:${entry.name}` }));
+	// Series moving the same way (`regressed` on Turns and on Total tokens) make one sentence.
+	const verb = (fact: Fact) => fact.text.split(" vs ")[0]!;
+	const together = moves.filter(move => verb(move.fact) === verb(moves[0]!.fact));
+	if (together.length < 2) return moves.map(({ entry, fact }) => ({ ...fact, key: `reference:${entry.name}` }));
+	return [
+		{
+			key: "reference",
+			text: `${verb(together[0]!.fact)} vs ${name} on ${list(together.map(move => move.entry.name))}`,
+			weight: Math.max(...together.map(move => move.fact.weight)) + 0.1,
+			striking: true,
+		},
+	];
 }
 
 /** `a`, `a and b`, `a, b and c`. */
@@ -2390,9 +4143,12 @@ function roundFactor(factor: number): string {
  * gate kept 85% of the tables a chart clearly helped while rejecting most two-
  * and three-row ones. A `change` needs three metrics and one moving by
  * {@link NOTABLE_FACTOR} either way: its factors are what the table lacks.
+ * Series holding one value in all their categories but one (`5/5` in eight
+ * of nine rows) say nothing bars add to.
  */
 export function worthCharting(spec: ChartSpec): boolean {
 	const { kind, categories, series } = spec;
+	if (kind === "stat") return statStory(series) !== undefined;
 	// Factors share no unit with the table's figures: three metrics are enough once one moves noticeably.
 	if (kind === "change")
 		return (
@@ -2403,8 +4159,42 @@ export function worthCharting(spec: ChartSpec): boolean {
 		);
 	// Counts splitting a total gain the shares the table never wrote: three parts are worth a bar.
 	if (kind === "share" && series[0]!.dim !== "percent") return categories.length >= 3;
+	// Rows held to targets: three say at a glance which meet theirs and by how much.
+	if (kind === "bullet")
+		return (spec.targets ?? []).filter((target, at) => target && series[0]!.points[at]).length >= 3;
 	// Intervals are hard to compare in a table: four categories suffice, three once a pair (or a band) doubles them.
 	if (kind === "range") return categories.length >= 4 || (categories.length === 3 && series.length >= 2);
+	// A ladder draws several quantiles a row: three rows compare their spreads, two do once four quantiles show a tail.
+	if (kind === "ladder") return categories.length >= 3 || (categories.length === 2 && series.length >= 4);
+	// Moves across stages and nets of opposing amounts are what the table leaves to the reader: three rows suffice.
+	if (kind === "slope" || kind === "butterfly") return categories.length >= 3;
+	// A before/after dumbbell shows moves: rows missing either end move nowhere, and three must move at least.
+	const moved = categories.filter((_, at) => series.every(entry => entry.points[at])).length;
+	if (kind === "paired" && spec.transition && moved < 3) return false;
+	// Across decades it is the log-axis form of a `change`: three rows, once one moves noticeably.
+	if (kind === "paired" && spec.transition && categories.length === 3) {
+		const values = series.flatMap(entry =>
+			entry.points.flatMap(point => (point && point.value > 0 ? [point.value] : [])),
+		);
+		const moves = categories.some((_, at) => {
+			const [a, b] = [series[0]!.points[at], series[1]!.points[at]];
+			return (
+				a && b && a.value > 0 && b.value > 0 && Math.abs(Math.log(b.value / a.value)) >= Math.log(NOTABLE_FACTOR)
+			);
+		});
+		if (moves && Math.max(...values) >= DECADES * Math.min(...values)) return true;
+	}
+	// Gains beside losses: the split itself is worth seeing from four moves, else sizes spread 3× (by magnitude);
+	// a few whole counts (`+1`, `−2`) read as well in the table.
+	if (kind === "diverging") {
+		const values = series[0]!.points.flatMap(point => (point && point.value !== 0 ? [point.value] : []));
+		const sizes = values.map(Math.abs);
+		const split = values.some(value => value > 0) && values.some(value => value < 0);
+		const tallies = sizes.every(size => Number.isInteger(size) && size <= MAX_PROSE_COUNT);
+		return (
+			values.length >= 4 && !tallies && (split || values.length >= 9 || Math.max(...sizes) >= 3 * Math.min(...sizes))
+		);
+	}
 	// Small multiples compare within each panel, so four metrics count like four categories;
 	// a waterfall's total is a bar of its own.
 	const bars =
@@ -2414,6 +4204,17 @@ export function worthCharting(spec: ChartSpec): boolean {
 				? categories.length + 1
 				: categories.length;
 	if (bars < 4) return false;
+	// One value in every category but one (`5/5` in eight of nine rows): a sentence says it, bars only repeat it.
+	// A share is the exception: one part holding nearly all of the whole is its point.
+	const uniform =
+		kind !== "share" &&
+		series.every(entry => {
+			const values = entry.points.flatMap(point => (point ? [point.value] : []));
+			const tally = new Map<number, number>();
+			for (const value of values) tally.set(value, (tally.get(value) ?? 0) + 1);
+			return values.length >= 4 && Math.max(0, ...tally.values()) >= values.length - 1;
+		});
+	if (uniform) return false;
 	let points = 0;
 	let spread = 1;
 	for (const entry of series) {
@@ -2434,14 +4235,25 @@ export function worthCharting(spec: ChartSpec): boolean {
  * up to four (more become a heatmap), and a scatter needs its x measure.
  */
 function fitKind(kind: ChartKind, series: readonly ChartSeries[], hasX: boolean): ChartKind {
-	if (kind === "multiples") return kind;
+	// Panels and stat tiles scale each series on its own: any mix of units.
+	if (kind === "multiples" || kind === "stat") return kind;
 	if (kind === "scatter" && hasX) return kind;
 	// Intervals band by unit, each band on its own axis ({@link buildChart} checks they are mostly intervals).
 	if (kind === "range") return kind;
+	// A share draws one series ({@link buildChart} keeps the first): a `%` column beside its counts restates them.
+	// Past {@link MAX_SHARE_SEGMENTS} parts its slivers stop reading; bars rank them instead.
+	if (kind === "share") return (series[0]?.points.length ?? 0) <= MAX_SHARE_SEGMENTS ? kind : "bar";
 	if (new Set(series.map(entry => `${entry.dim}:${entry.unit}`)).size > 1) return "multiples";
+	// A ladder without quantiles to read ({@link buildChart} draws real ones before fitting) compares as dots.
+	if (kind === "ladder") return fitKind("dots", series, hasX);
+	// Distributions stand side by side in each bin while a bin's columns stay apart.
+	if (kind === "histogram") return series.length <= MAX_DISTRIBUTIONS ? kind : "heatmap";
 	// Dots share one axis: two to six series, one dot color each.
 	if (kind === "dots") return series.length === 1 ? "bar" : series.length <= SERIES_COLORS ? kind : "heatmap";
-	if (kind === "share" || kind === "diverging" || kind === "line" || kind === "heatmap") return kind;
+	// A slope runs one quantity through two to four stages; a butterfly sets two opposing amounts back to back.
+	if (kind === "slope" && series.length >= 2 && series.length <= MAX_STAGES) return kind;
+	if (kind === "butterfly" && series.length === 2) return kind;
+	if (kind === "diverging" || kind === "line" || kind === "heatmap") return kind;
 	// A run of steps: one series, every step present; a timeline's segments are lengths, never negative.
 	if (
 		(kind === "timeline" || kind === "waterfall") &&
@@ -2475,6 +4287,179 @@ function fitKind(kind: ChartKind, series: readonly ChartSeries[], hasX: boolean)
 			: count <= MAX_GROUPED
 				? "grouped"
 				: "heatmap";
+}
+
+/** Most metrics a `stat` comparison sets side by side, one tile each. */
+const MAX_STATS = 4;
+/**
+ * Row names marking the before side of a comparison. Narrower than {@link BEFORE}: row names are prose
+ * (`full writes to *.sh`), where `to`, `from` or `with` say nothing about a condition.
+ */
+const ROW_BEFORE =
+	/\b(?:before|old|baseline|original|previous|prev|stock|unpatched|default|main|master|current|cold)\b/i;
+/** Row names marking the after side of a comparison, narrower than {@link AFTER} for the same reason. */
+const ROW_AFTER = /\b(?:after|new|patched|fixed|optimi[sz]ed|proposed|pr|branch|head|ours|warm)\b/i;
+/** Row names that are code identifiers (`` `PI_CHUNK_LINES` ``, `MAX_OP_RETURN_LEN`): settings, not metrics. */
+const IDENTIFIER = /^`|^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+/** Row names of the two settings of one switch (`on` / `off`, `with` / `without`). */
+const SWITCH = /^(?:on|off|enabled|disabled|with|without|yes|no)\b/i;
+/** A switch setting a comparison reads the other against: the feature off. */
+const SWITCHED_OFF = /^(?:off|disabled|without|no)\b/i;
+
+/**
+ * A `stat` plan for a small table comparing two conditions on one to
+ * {@link MAX_STATS} metrics, where some metric moves {@link STRIKING_MOVE}×
+ * or more between them ({@link statStory}): two rows named as conditions
+ * (`Collect (old)` / `Stream (new)` per {@link ROW_BEFORE} and
+ * {@link ROW_AFTER}, `on` / `off`, or rival options under a header like
+ * `run` or `model`), each metric a column; or two to three metric rows
+ * (not code identifiers: those are settings) under a before/after column
+ * pair (`Before | After`; not buckets of one population under a header
+ * like `Severity`), transposed so the columns are the conditions.
+ * Every compared value is a positive plain number of its column's (or row's)
+ * dimension, and the rows' names are text, not numbers.
+ */
+function statShape(table: TableAnalysis, guess: ChartPlan | undefined): ChartPlan | undefined {
+	const label = table.columns[guess?.label ?? table.label?.index ?? -1];
+	const { rows } = table;
+	// A label of numbers names rows only where it leads the table (`1 MiB (Windows default)`), not as a
+	// column of figures (`9.0s`, `up to 32.9s`) picked to name them.
+	if (label?.role !== "label" || (label.index > 0 && rows.some(row => isNumber(label.cells[row])))) return undefined;
+	const plain = (cell: Cell | undefined, dim: Dimension | undefined): cell is NumberCell =>
+		isNumber(cell) && cell.dim === dim && cell.value > 0 && cell.upper === undefined && cell.to === undefined;
+	const measures = table.measures.filter(column => column !== label && !DELTA.test(column.header));
+	if (rows.length === 2) {
+		const [first = "", second = ""] = rows.map(row => label.cells[row]!.text.trim());
+		const conditions =
+			conditionPair(first, second) ||
+			conditionPair(second, first) ||
+			(SWITCH.test(first) && SWITCH.test(second)) ||
+			RIVALS.test(label.header);
+		const metrics = measures.filter(column => rows.every(row => plain(column.cells[row], column.dim)));
+		if (!conditions || metrics.length === 0 || metrics.length > MAX_STATS || metrics.length < measures.length)
+			return undefined;
+		const plan: ChartPlan = {
+			kind: "stat",
+			label: label.index,
+			qualifiers: [],
+			series: metrics.map(column => column.index),
+			transpose: false,
+		};
+		const spec = buildChart(table, plan);
+		return spec && statStory(spec.series) ? plan : undefined;
+	}
+	if (rows.length < 2 || rows.length > 3 || measures.length !== 2) return undefined;
+	const [before, after] = measures;
+	if (!before || !after || !isTransition(before.header, after.header)) return undefined;
+	// Settings change rather than measure; buckets of one population (`Severity | Open | Fixed`) split it.
+	if (BUCKET_HEADER.test(label.header) || rows.some(row => IDENTIFIER.test(label.cells[row]!.text.trim())))
+		return undefined;
+	const dims = rows.map(row => {
+		const cell = before.cells[row];
+		return isNumber(cell) ? cell.dim : undefined;
+	});
+	if (!rows.every((row, at) => dims[at] && plain(before.cells[row], dims[at]) && plain(after.cells[row], dims[at])))
+		return undefined;
+	const plan: ChartPlan = {
+		kind: "stat",
+		label: label.index,
+		qualifiers: [],
+		series: [before.index, after.index],
+		transpose: true,
+	};
+	const spec = buildChart(table, plan);
+	return spec && statStory(spec.series) ? plan : undefined;
+}
+
+/** Whether two row names read as the before (`Collect (old)`) and after (`Stream (new)`) of one comparison. */
+function conditionPair(before: string, after: string): boolean {
+	return (ROW_BEFORE.test(before) && !ROW_BEFORE.test(after)) || (ROW_AFTER.test(after) && !ROW_AFTER.test(before));
+}
+
+/**
+ * Which of a comparison's two conditions the other reads against: the before
+ * one ({@link conditionPair}, or {@link isTransition} between headers like
+ * `Was | Now`), a switch's `off`, else the first.
+ */
+function statBaseline(names: readonly string[]): number {
+	const [first = "", second = ""] = names;
+	const before =
+		(conditionPair(second, first) && !conditionPair(first, second)) ||
+		(isTransition(second, first) && !isTransition(first, second)) ||
+		(SWITCHED_OFF.test(second) && !SWITCHED_OFF.test(first));
+	return before ? 1 : 0;
+}
+
+/**
+ * The strongest move of a `stat` comparison's metrics — each series' second
+ * value over its first, both positive — when one reaches {@link STRIKING_MOVE}×
+ * either way among one to {@link MAX_STATS} metrics; else `undefined`, and the
+ * table says it as well as tiles would.
+ */
+function statStory(series: readonly ChartSeries[]): number | undefined {
+	if (series.length === 0 || series.length > MAX_STATS) return undefined;
+	const factors = series.flatMap(entry => {
+		const [a, b] = entry.points;
+		return entry.points.length === 2 && a && b && a.value > 0 && b.value > 0 ? [b.value / a.value] : [];
+	});
+	if (factors.length < series.length) return undefined;
+	const strongest = factors.reduce((best, factor) =>
+		Math.abs(Math.log(factor)) > Math.abs(Math.log(best)) ? factor : best,
+	);
+	return Math.abs(Math.log(strongest)) >= Math.log(STRIKING_MOVE) ? strongest : undefined;
+}
+
+/**
+ * Each metric of a `stat` comparison as a takeaway: the compared condition's
+ * value against the baseline's (`Peak RSS: ~4.5 GiB → ~105 MiB (43× less)`
+ * for a transition, `wall: on 34.7 s vs off 17.1 s (2× more)` between peers),
+ * striking from {@link STRIKING_MOVE}×; and over two or more metrics, every
+ * move in one line, strongest first (`advisor: Cost 3× more, Precision −46%,
+ * Recall unchanged`), above any one of them.
+ */
+function statFacts(spec: ChartSpec): Fact[] {
+	const base = spec.reference?.[0] ?? 0;
+	const other = 1 - base;
+	const [from, to] = [spec.categories[base]!, spec.categories[other]!];
+	const transition = isTransition(from, to);
+	const moves = spec.series.flatMap(entry => {
+		const [a, b] = [entry.points[base], entry.points[other]];
+		return a && b && a.value > 0 ? [{ name: entry.name, factor: b.value / a.value }] : [];
+	});
+	const strength = (factor: number) => Math.abs(Math.log(factor));
+	const strongest = Math.max(0, ...moves.map(move => strength(move.factor)));
+	const summary: Fact[] =
+		moves.length >= 2 && moves.length === spec.series.length
+			? [
+					{
+						key: "stat:all",
+						text: `${to}: ${moves
+							.sort((a, b) => strength(b.factor) - strength(a.factor))
+							.map(move => `${move.name} ${factorWords(move.factor).replace(/^same$/, "unchanged")}`)
+							.join(", ")}`,
+						weight: strongest + 1,
+						striking: strongest >= Math.log(STRIKING_MOVE),
+					},
+				]
+			: [];
+	const singles = spec.series.flatMap(entry => {
+		const [a, b] = [entry.points[base], entry.points[other]];
+		if (!a || !b || a.value <= 0) return [];
+		const factor = b.value / a.value;
+		const move = factorWords(factor);
+		if (move === "same") return [];
+		return [
+			{
+				key: `stat:${entry.name}`,
+				text: transition
+					? `${entry.name}: ${a.text} → ${b.text} (${move})`
+					: `${entry.name}: ${to} ${b.text} vs ${from} ${a.text} (${move})`,
+				weight: strength(factor),
+				striking: strength(factor) >= Math.log(STRIKING_MOVE),
+			},
+		];
+	});
+	return [...summary, ...singles];
 }
 
 /**
@@ -2528,8 +4513,9 @@ function changeChart(
 ): ChartSpec | undefined {
 	const [baseline, ...picked] = columns;
 	if (!baseline) return undefined;
-	// A delta is no value to take a factor of: `+21.7pp` over `44.3%` would read as a regression.
-	const values = picked.filter(column => !DELTA.test(column.header));
+	// A delta is no value to take a factor of: `+21.7pp` over `44.3%` would read as a regression. Changes in
+	// the plural name a condition (`six changes`, `with changes`), not a delta.
+	const values = picked.filter(column => !DELTA.test(column.header.replace(/changes\b/gi, "")));
 	const compared = values.length ? values : picked;
 	const [from, to] = arrowNames(baseline.header);
 	// Each series improves the way its measure does: the compared column's polarity, else its baseline's.
@@ -2970,12 +4956,22 @@ function inRuns(values: readonly string[]): boolean {
 }
 
 /** Same-unit aggregate columns (`Total`, `avg`) restate the series beside them. */
-function dropAggregates(measures: readonly TableColumn[]): readonly TableColumn[] {
-	return measures.filter(
-		column =>
-			!AGGREGATE.test(column.header) ||
-			measures.filter(other => other !== column && other.dim === column.dim).length < 2,
-	);
+function dropAggregates(measures: readonly TableColumn[], rows: readonly number[]): readonly TableColumn[] {
+	return measures.filter(column => {
+		if (!AGGREGATE.test(column.header)) return true;
+		const others = measures.filter(other => other !== column && other.dim === column.dim);
+		if (others.length < 2) return true;
+		// `Total tokens` (16.8k) beside `Tests passed` and `Turns` (27 + 6) counts another thing than they do: an
+		// aggregate {@link QUANTITY_SPREAD}× their sum restates nothing.
+		const ratios = rows
+			.map(row => {
+				const sum = others.reduce((acc, other) => acc + (columnValues(other, [row])[0] ?? 0), 0);
+				return (columnValues(column, [row])[0] ?? Number.NaN) / sum;
+			})
+			.filter(Number.isFinite)
+			.sort((a, b) => a - b);
+		return (ratios[ratios.length >> 1] ?? 0) >= QUANTITY_SPREAD;
+	});
 }
 
 /** How the label column orders the rows: by time, by step, by a numeric size — or not at all. */
@@ -2996,6 +4992,27 @@ function axisOrder(
 	return undefined;
 }
 
+/** Label headers naming the ordered runs of one process (`Run`, `Iteration`, `Week`), whatever their cells say. */
+const ORDER_HEADER =
+	/^(?:runs?|steps?|stages?|phases?|rounds?|iter(?:ation)?s?|epochs?|turns?|attempts?|waves?|versions?|releases?|builds?|commits?|frames?|days?|weeks?|months?|years?|quarters?|dates?|time)\b/i;
+
+/**
+ * Whether `table`'s rows lie along an ordered axis: dates, steps or a
+ * monotonic size naming them, a label header naming the runs of one process
+ * (`Run` over run ids), or a count rising down a column before the label
+ * (`# added` 1, 2, 5, 12 beside `project`). Over unordered categories
+ * (`Variant`, `Model`, metric names) a line draws a trend that is not there.
+ */
+function orderedRows(table: TableAnalysis, label: TableColumn | undefined): boolean {
+	if (axisOrder(table, label) || (label && ORDER_HEADER.test(label.header))) return true;
+	return table.columns.some(column => {
+		if (!label || column.index >= label.index || (column.role !== "measure" && column.role !== "sequence"))
+			return false;
+		const values = columnValues(column, table.rows);
+		return values.length === table.rows.length && isMonotonic(values) && values[1]! > values[0]!;
+	});
+}
+
 function columnValues(column: TableColumn, rows: readonly number[]): number[] {
 	const values: number[] = [];
 	for (const row of rows) {
@@ -3012,7 +5029,15 @@ function columnSeries(column: TableColumn, rows: readonly number[], name: string
 	for (const row of rows) {
 		const cell = column.cells[row]!;
 		const fits = isNumber(cell) && cell.dim === column.dim;
-		points.push(fits ? point(cell) : null);
+		// A lone `5× → 2×` among plain values is where the row stands now: its end, not its start.
+		const moved = fits && cell.to !== undefined && column.arrowShare < 0.6;
+		points.push(
+			moved
+				? { value: cell.to!, text: `${cell.figure} → ${cell.toFigure}`, emphasis: cell.emphasis }
+				: fits
+					? point(cell)
+					: null,
+		);
 		notes.push(!fits && cell.kind !== "missing" && !isNumber(cell) ? cell.text : undefined);
 	}
 	return { name, dim: column.dim ?? "count", unit: column.unit, points, notes };
@@ -3037,7 +5062,7 @@ function rowSeries(name: string, columns: readonly TableColumn[], row: number): 
 
 /** A numeric cell as a plotted point labelled with its written figure. */
 function point(cell: NumberCell): ChartPoint {
-	return { value: cell.value, text: cell.figure, emphasis: cell.emphasis, upper: cell.upper };
+	return { value: cell.value, text: cell.figure, emphasis: cell.emphasis, upper: cell.upper, error: cell.error };
 }
 
 /** `Total: 2,964 · 2,310` for each summary row, over the plotted columns. */

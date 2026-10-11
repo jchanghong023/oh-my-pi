@@ -196,6 +196,45 @@ const OUTCOMES = `| Input | ok | fail |
 | request openai-responses | 327 | 9 |
 | request gemini (harvested) | 20 | 0 |`;
 
+const STAGES = `| Model | Baseline | Best (Iter 3) | Iter 4 |
+|---|---|---|---|
+| kimi | 7 | 3 | 6 |
+| haiku | 2 | 2 | 2 |
+| gemini | 3 | 2 | 2 |
+| glm | 8 | 2 | 2 |`;
+
+const DIFF = `| Part | Files | Added | Removed |
+|---|---|---|---|
+| Non-test Go code | 29 | 1,980 | 294 |
+| Go unit tests | 12 | 1,536 | 2 |
+| Compiler test cases | 16 | 386 | 0 |`;
+
+const BUDGETS = `| Measure | Result | Budget |
+|---|---|---|
+| Open to first paint | 11.0 ms | ≤ 120 ms |
+| Scroll frame p95 | 0.13 ms | ≤ 4 ms |
+| Keystroke p95 | 0.12 ms | ≤ 2 ms |
+| Allocations, steady scroll | 7,246 | ≤ 0 |`;
+
+const QUANTILES = `| tool | calls | p50 | p90 | p99 | max |
+|---|---:|---:|---:|---:|---:|
+| read | 437,382 | 775 | 3,156 | 9,207 | 66,999 |
+| search | 42,234 | 292 | 1,703 | 6,980 | 21,563 |
+| edit | 112,230 | 268 | 1,083 | 4,090 | 55,711 |`;
+
+const BINS = `| k sessions | share of project-busy time |
+|---|---|
+| 1 | 80.3% |
+| 2 | 14.0% |
+| 3 | 4.0% |
+| 4 | 1.1% |
+| 5+ | 0.6% |`;
+
+const OLD_NEW = `| | Wall time | Peak RSS |
+|---|---|---|
+| Collect (old) | 2,426 ms | ~4.5 GiB |
+| Stream (new) | 1,392 ms | ~105 MiB |`;
+
 // The only numbers are a tier and 1–2 findings beside long prose: a chart would restate nothing.
 const FINDINGS = `| Utility | Tier | New Findings | Key Issues |
 |---|---|---|---|
@@ -268,10 +307,17 @@ describe("analyzeTable", () => {
 		const scores = analyze(SCORES);
 		expect(scores.measures[0]).toMatchObject({ dim: "percent", scores: true });
 		expect(scores.measures[0]!.cells[1]).toMatchObject({ value: (100 * 112) / 130, figure: "112/130" });
-		const dims = analyze(
+		const listed = analyze(
 			"| | old | new |\n|---|---|---|\n| Edit / read calls | 85 / 147 | 83 / 143 |\n| Options | 327 / 333 / 339 | 1 / 2 / 3 |\n| Runs | 155/160 | 154/159 |",
-		).columns[1]!.cells.map(cell => cell.kind === "number" && cell.dim);
-		expect(dims).toEqual(["fraction", "fraction", "percent"]);
+		);
+		// The pair row names both values it holds, so it splits into one row each.
+		expect(listed.columns[0]!.cells.map(cell => cell.text)).toEqual(["Edit", "read calls", "Options", "Runs"]);
+		expect(listed.columns[1]!.cells.map(cell => cell.kind === "number" && [cell.dim, cell.value])).toEqual([
+			["count", 85],
+			["count", 147],
+			["fraction", 327],
+			["percent", (100 * 155) / 160],
+		]);
 		const paired = analyze("| Case | p50 / p95 |\n|---|---|\n| a | 3 / 9 |\n| b | 4 / 8 |\n| c | 2 / 5 |");
 		expect(paired.measures[0]).toMatchObject({ dim: "fraction", scores: false });
 	});
@@ -292,6 +338,18 @@ describe("analyzeTable", () => {
 			"fraction",
 			"fraction",
 			"fraction",
+		]);
+	});
+
+	// Regression: `25.0 / 27.8` pairs read as fractions beside single values, so the single-value rows drew no bars.
+	it("splits rows whose name and cells list the same pair, keeping single-value rows on the axis", () => {
+		const arms = analyze(
+			"| Model | Arm | Tests passed | Turns |\n|---|---|---|---|\n| Luna | bash | 27.0 | 6.0 |\n| Luna | pager 24×80 / 48×120 | 25.0 / 27.8 | 12.6 / 9.4 |\n| Sonnet | bash | 26.2 | 8.0 |",
+		);
+		expect(arms.columns[1]!.cells.map(cell => cell.text)).toEqual(["bash", "pager 24×80", "pager 48×120", "bash"]);
+		expect(arms.measures.map(column => column.cells.map(cell => cell.kind === "number" && cell.value))).toEqual([
+			[27, 25, 27.8, 26.2],
+			[6, 12.6, 9.4, 8],
 		]);
 	});
 
@@ -326,9 +384,52 @@ describe("planChart", () => {
 		["low–high ranges", RATIOS, "range"],
 		["several timings per row spanning decades", LOOKUPS, "dots"],
 		["counts that split a whole", STATUSES, "share"],
+		["one quantity per row over ordered stages", STAGES, "slope"],
+		["lines added against lines removed", DIFF, "butterfly"],
+		["results against their own budgets", BUDGETS, "bullet"],
+		["quantile columns", QUANTILES, "ladder"],
+		["shares over ordered bins", BINS, "histogram"],
+		["two conditions on a few metrics", OLD_NEW, "stat"],
 	];
 	it.each(kinds)("charts %s as %s", (_name, markdown, kind) => {
 		expect(planChart(analyze(markdown))?.kind).toBe(kind);
+	});
+
+	// Regression: a `Share` column restating the amounts won over them, so crate tables drew a share bar of
+	// a dozen slivers (or bars of percents) instead of the amounts building to their total.
+	it("builds amounts beside their shares up to the total once there are more parts than a share bar holds", () => {
+		const crate = (name: string, lines: number) =>
+			`| ${name} | ${lines.toLocaleString("en-US")} | ${((100 * lines) / 885_126).toFixed(1)}% |`;
+		const rows = [
+			["tern", 239_737],
+			["platform", 64_359],
+			["term", 58_506],
+			["ui", 51_870],
+			["mesh", 37_376],
+			["editor", 37_254],
+			["kit", 30_017],
+			["surface", 29_053],
+			["39 other crates", 336_954],
+		] as const;
+		const crates = analyze(
+			`| Crate | Lines of Rust | Share |\n|---|---:|---:|\n${rows.map(([name, lines]) => crate(name, lines)).join("\n")}\n| **Total** | **885,126** | **100%** |`,
+		);
+		const plan = planChart(crates)!;
+		expect(plan.kind).toBe("waterfall");
+		expect(crates.columns[plan.series[0]!]!.header).toBe("Lines of Rust");
+		// Few parts keep their one share bar.
+		expect(
+			planChart(
+				analyze(
+					"| Model | Spend | Share |\n|---|---:|---:|\n| a | $10,426 | 45.9% |\n| b | $8,077 | 35.6% |\n| c | $3,770 | 16.6% |\n| d | $437 | 1.9% |\n| **Total** | **$22,710** | **100%** |",
+				),
+			)?.kind,
+		).toBe("share");
+		// A pick of a share bar over more parts than it holds ranks them as bars.
+		const long = analyze(
+			`| Crate | Share |\n|---|---:|\n${Array.from({ length: 14 }, (_, at) => `| c${at} | ${at < 2 ? 30 : 40 / 12}% |`).join("\n")}`,
+		);
+		expect(buildChart(long, { kind: "share", label: 0, series: [1], transpose: false })?.kind).toBe("bar");
 	});
 
 	it("draws nothing for prose tables or two values", () => {
@@ -512,6 +613,12 @@ describe("renderChartSvg", () => {
 			RATIOS,
 			LOOKUPS,
 			STATUSES,
+			STAGES,
+			DIFF,
+			BUDGETS,
+			QUANTILES,
+			BINS,
+			OLD_NEW,
 		].map(markdown => [markdown, planChart(analyze(markdown))]);
 		const scatter = analyze("| a | b |\n|---|---|\n| 1 | 9 |\n| 4 | 2 |\n| 2 | 7 |\n| 8 | 1 |\n| 5 | 3 |\n| 3 | 6 |");
 		plans.push(["scatter", { kind: "scatter", label: undefined, series: [0, 1], transpose: false }]);

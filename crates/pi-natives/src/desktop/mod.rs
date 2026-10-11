@@ -2246,20 +2246,21 @@ mod capture_tests {
 		else {
 			panic!("window capture");
 		};
-		// No frame for the desktop target yet, so the click fails.
+		// No frame for the desktop target yet, so the zoom fails. A zoom needs
+		// no input lease, so the frame error is not preempted by the host
+		// refusing input (e.g. no X11 Escape monitor on a headless Linux host).
 		let (reply, rx) = flume::bounded(1);
 		worker.dispatch(
-			Request::Click {
+			Request::CaptureRegion {
 				target: Target::Desktop,
-				x: 1.0,
-				y: 1.0,
-				options: ParsedPointerOptions::parse(None).unwrap(),
+				region: CaptureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+				caps: CaptureCaps::default(),
 				reply,
 			},
 			&token,
 		);
 		let Err(error) = rx.recv().unwrap() else {
-			panic!("click without a frame must fail")
+			panic!("zoom without a frame must fail")
 		};
 		(capture.screen_locked, error)
 	}

@@ -41,7 +41,6 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
-import { getTestModel } from "./helpers/model-fixtures";
 
 import { cfgRetryUsageReservePolicy } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -3595,8 +3594,8 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("substitutes the failing model id into provider-wildcard chain entries", async () => {
-		const primaryModel = getTestModel("google", model => !!getBundledModel("google-vertex", model.id));
-		const fallbackModel = getBundledModel("google-vertex", primaryModel.id);
+		const primaryModel = getBundledModel("google", "gemini-3.5-flash");
+		const fallbackModel = getBundledModel("google-vertex", "gemini-3.5-flash");
 		if (!primaryModel || !fallbackModel) {
 			throw new Error("Expected bundled test models to exist");
 		}
@@ -3606,7 +3605,7 @@ describe("AgentSession retry fallback", () => {
 		const agent = createFallbackAgent(primaryModel, requestedModels);
 
 		// `google-vertex/*` is not a fixed target: it must adopt the failing
-		// model's id when switching from Google to Vertex.
+		// model's id (google/gemini-3.5-flash -> google-vertex/gemini-3.5-flash).
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.maxRetries": 1,
@@ -3704,11 +3703,8 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("matches id-prefixed wildcard keys and strips the vendor prefix for direct-provider targets", async () => {
-		const fallbackModel = getTestModel(
-			"google-vertex",
-			model => !!getBundledModel("openrouter", `google/${model.id}`),
-		);
-		const primaryModel = getBundledModel("openrouter", `google/${fallbackModel.id}`);
+		const primaryModel = getBundledModel("openrouter", "google/gemini-3.5-flash");
+		const fallbackModel = getBundledModel("google-vertex", "gemini-3.5-flash");
 		if (!primaryModel || !fallbackModel) {
 			throw new Error("Expected bundled test models to exist");
 		}

@@ -1148,12 +1148,13 @@ interface ResolvedRolePattern {
 	automatic: boolean;
 }
 
-/** Resolve aliases inside a configured pattern list without leaking cycles to model matching. */
+/** Resolve nested aliases while retaining configured selectors and automatic priority provenance. */
 function resolveNestedRolePatterns(
-	value: string,
-	roleDefaults: string[],
+	value: string | string[],
+	roleDefaults: ResolvedRolePattern[],
 	settings: ModelRoleLookup | undefined,
 	visited: Set<string>,
+	automatic = false,
 ): ResolvedRolePattern[] {
 	const resolved: ResolvedRolePattern[] = [];
 	for (const pattern of normalizeModelPatternList(value)) {
@@ -1164,14 +1165,14 @@ function resolveNestedRolePatterns(
 		);
 		const aliasRole = getModelRoleAlias(aliasCandidate, settings);
 		if (!aliasRole) {
-			resolved.push({ pattern, automatic: false });
+			resolved.push({ pattern, automatic });
 			continue;
 		}
 		if (visited.has(aliasRole)) {
 			resolved.push(
-				...roleDefaults.map(defaultPattern => ({
-					pattern: thinkingLevel ? `${defaultPattern}:${thinkingLevel}` : defaultPattern,
-					automatic: true,
+				...roleDefaults.map(candidate => ({
+					...candidate,
+					pattern: thinkingLevel ? `${candidate.pattern}:${thinkingLevel}` : candidate.pattern,
 				})),
 			);
 			continue;
@@ -1186,7 +1187,7 @@ function resolveNestedRolePatterns(
 function resolveDefaultInheritedPatterns(
 	role: ModelRole,
 	configuredDefault: string | undefined,
-	roleDefaults: string[],
+	roleDefaults: ResolvedRolePattern[],
 	settings: ModelRoleLookup | undefined,
 	visited: Set<string>,
 ): ResolvedRolePattern[] {
@@ -1214,8 +1215,11 @@ function resolveConfiguredRolePattern(
 
 	const configured = settings?.getModelRole(role)?.trim();
 	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
-	const roleDefaults = isModelRole(role) ? rolePriorityDefaults(role) : [];
-	const automaticPatterns = roleDefaults.map(pattern => ({ pattern, automatic: true }));
+	// Built-in defaults chain to other roles (judge: `@tiny`, `@smol`, `@default`). Left unexpanded, the
+	// matcher reads them as literal ids and `@default` fuzzy-matches Vertex ids like `claude-opus-4-8@default`.
+	const roleDefaults = isModelRole(role)
+		? resolveNestedRolePatterns(rolePriorityDefaults(role), [], settings, visited, true)
+		: [];
 	const configuredFallback = isModelRole(role) ? ROLE_CONFIGURED_FALLBACK[role] : undefined;
 	const fallbackPatterns =
 		configured ||
@@ -1229,9 +1233,9 @@ function resolveConfiguredRolePattern(
 			? fallbackPatterns
 			: isModelRole(role)
 				? resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited)
-				: automaticPatterns;
+				: roleDefaults;
 	if (resolved.length === 0) {
-		resolved.push(...automaticPatterns);
+		resolved.push(...roleDefaults);
 	}
 	if (resolved.length === 0) {
 		return undefined;

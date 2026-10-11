@@ -40,6 +40,23 @@ describe("judgeRequest", () => {
 		expect(Object.keys(questions).length).toBeLessThanOrEqual(25);
 		expect(questions.kind?.type).toBe("choice");
 	});
+
+	it("offers a kind only where the table's data can draw it", () => {
+		const kinds = (req: TableChartRequest) => {
+			const { kind } = judgeRequest(req).questions;
+			return kind?.type === "choice" ? Object.keys(kind.criteria) : [];
+		};
+		const budgets = request([
+			["Measure", "Result", "Budget"],
+			["First paint", "11.0 ms", "≤ 120 ms"],
+			["Scroll frame", "0.13 ms", "≤ 4 ms"],
+			["Keystroke", "0.12 ms", "≤ 2 ms"],
+			["Allocations", "7,246", "≤ 0"],
+		]);
+		expect(kinds(budgets)).toContain("bullet");
+		expect(kinds(ARMS)).not.toContain("bullet");
+		expect(kinds(ARMS)).toContain("bar");
+	});
 });
 
 describe("planFromAnswers", () => {

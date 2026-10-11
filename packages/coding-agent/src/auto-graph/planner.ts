@@ -18,15 +18,23 @@ import {
 	renderQuestion,
 } from "@oh-my-pi/pi-ai";
 import {
+	buildChart,
 	type ChartKind,
 	type ChartPlan,
 	dotsFit,
+	drawnNames,
+	findTarget,
 	guessMeaning,
 	guessNaming,
 	guessShading,
+	histogramColumns,
 	isConditionPair,
+	isTransition,
+	ladderColumns,
 	leadingMeasures,
+	MAX_SHARE_SEGMENTS,
 	namingColumns,
+	opposedColumns,
 	outcomeColumns,
 	type Polarity,
 	proseLed,
@@ -34,6 +42,8 @@ import {
 	type RowOrder,
 	rangeColumns,
 	rowsAreMetrics,
+	stageColumns,
+	tableLadders,
 	tableTakeaways,
 } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import { isMonotonic, isNumber, type TableAnalysis, type TableColumn } from "@oh-my-pi/pi-tui/charts/table-data";
@@ -97,7 +107,17 @@ const MAX_REFERENCE_CHOICES = 8;
 /** Longest naming value offered as a reference row; longer cells describe rather than name. */
 const MAX_REFERENCE_CHARS = 48;
 /** Kinds that keep a row order of their own (an x axis, factors in table order, parts of a whole). */
-const OWN_FRAME: ReadonlySet<KindChoice> = new Set(["line", "scatter", "change", "stacked", "timeline", "waterfall"]);
+const OWN_FRAME: ReadonlySet<KindChoice> = new Set([
+	"line",
+	"scatter",
+	"change",
+	"stacked",
+	"timeline",
+	"waterfall",
+	"slope",
+	"bullet",
+	"histogram",
+]);
 /**
  * Kinds that lay rows out as one run of steps, from one column: offered to the
  * judge only where the local guess found one ({@link KIND_GATES}).
@@ -130,15 +150,39 @@ const SURE_FOCUS = 0.75;
 const AGREED_FOCUS = 0.4;
 /** Judge confidence at which its title pick (a striking fact, or none) overrides the local guess's. */
 const SURE_TITLE = 0.4;
+/**
+ * Probability an unsure judge must still give a striking fact for it to title the chart over the local
+ * order's first striking fact (t039: `Every plan improved` at 0.38 over a sweep at 0.07).
+ */
+const RANKED_TITLE = 0.2;
 /** Judge confidence a plain fact (a top value, a share) needs to title a chart: it mostly restates the marks. */
 const SURE_PLAIN_TITLE = 0.75;
 /**
  * Order in which semantics' questions fill what {@link MAX_QUESTIONS} leaves:
  * the title (most visible), what competes (gates every best mark), the
  * plotted measures' polarity (best marks and tones), the focus row, and the
- * metric rows' polarity (factor tones the units mostly decide already).
+ * metric rows' polarity (factor tones the units mostly decide already). The
+ * polarity of a before/after move (`move`) follows the title: it tones every
+ * row of a dumbbell or slope, whose condition headers (`Baseline | Iter130`)
+ * leave the per-column polarity questions without a measure to judge.
  */
-const SEMANTIC_PRIORITY = ["title", "rivals", "p", "focus", "q"] as const;
+const SEMANTIC_PRIORITY = ["title", "move", "rivals", "p", "focus", "q"] as const;
+/**
+ * Kinds comparing each row's values apart, which a table mostly of quantiles draws better as ladders;
+ * small multiples (other measures beside them) and `none` stand.
+ */
+const LADDERABLE: ReadonlySet<KindChoice> = new Set([
+	"bar",
+	"paired",
+	"grouped",
+	"dots",
+	"heatmap",
+	"change",
+	"range",
+	"ladder",
+]);
+/** Kinds that compare rows one by one, which counts over ordered bins draw better as a histogram. */
+const BINNABLE: ReadonlySet<KindChoice> = new Set(["bar", "paired", "grouped", "line", "dots", "histogram"]);
 /** Kinds a table of parts summing to a whole draws better as stacked bars. */
 const STACKABLE: ReadonlySet<KindChoice> = new Set([
 	"bar",
@@ -184,6 +228,12 @@ function stackable(table: TableAnalysis, series: readonly number[]): TableColumn
  * - `timeline`, `waterfall`: the local guess found that run of steps ({@link FLOWS}).
  * - `range`: candidates hold mostly `a–b` intervals ({@link rangeColumns}).
  * - `dots`: three or more same-unit candidates fit a dot plot ({@link dotsFit}).
+ * - `slope`: candidates hold one quantity at three or four stages ({@link stageColumns}).
+ * - `butterfly`: candidates hold a pair of opposing amounts ({@link opposedColumns}).
+ * - `bullet`: a column of targets beside the measure held to them ({@link findTarget}).
+ * - `ladder`: most of the table is quantiles of one measurement, rising by rank ({@link tableLadders}).
+ * - `histogram`: the rows are ordered bins and every candidate counts them ({@link histogramColumns}).
+ * - `stat`: the local guess found two conditions compared on a few metrics; a pick draws the guess's.
  */
 const KIND_GATES: Partial<
 	Record<KindChoice, (table: TableAnalysis, guess: ChartPlan, candidates: readonly TableColumn[]) => boolean>
@@ -197,7 +247,36 @@ const KIND_GATES: Partial<
 				column.dim === "currency" || column.dim === "rate" ? `${column.dim}:${column.unit}` : `${column.dim}`,
 			).values(),
 		].some(columns => dotsFit(columns, table.rows)),
+	slope: (table, _, candidates) => stageColumns(candidates, table.rows) !== undefined,
+	butterfly: (_, __, candidates) => opposedColumns(candidates) !== undefined,
+	bullet: table => findTarget(table) !== undefined,
+	ladder: (table, guess) => tableLadders(table, guess.label) !== undefined,
+	histogram: (table, _, candidates) => histogramColumns(table, candidates) !== undefined,
+	stat: (_, guess) => guess.kind === "stat",
 };
+
+/**
+ * The columns holding one quantity before and after (or across stages) whose
+ * direction the `move` question asks: the guess's slope stages, its dumbbell
+ * pair when the headers give it a direction ({@link isTransition}), its one
+ * column of `a → b` cells, or stages among the candidates a judge may plot as
+ * a slope. `undefined` when the table holds no such move.
+ */
+function moveColumns(table: TableAnalysis, guess: ChartPlan): TableColumn[] | undefined {
+	const plotted = guess.series.map(index => table.columns[index]!);
+	const [first, second] = plotted;
+	if (guess.kind === "slope") return plotted;
+	if (
+		guess.kind === "paired" &&
+		first &&
+		(second ? isTransition(first.header, second.header) : first.arrowShare >= 0.6)
+	)
+		return plotted.slice(0, 2);
+	return stageColumns(
+		table.measures.filter(column => column.index !== guess.label),
+		table.rows,
+	);
+}
 
 /** The kind options for a table: every kind {@link KIND_GATES} lets through, in the kind question's order. */
 function kindCriteria(
@@ -311,11 +390,21 @@ function semanticQuestions({ table, guess }: TableChartRequest): [string, Questi
 	const label = guess.label === undefined ? undefined : table.columns[guess.label];
 	for (const kind of SEMANTIC_PRIORITY) {
 		if (kind === "title") {
-			const facts = tableTakeaways(table, guess, CONTESTS);
+			const facts = tableTakeaways(table, guess, CONTESTS, "table");
 			if (facts.length === 0) continue;
 			const criteria: Record<string, string | null> = {};
 			for (const fact of facts) criteria[fact.key] = fact.text;
 			asked.push(["title", { ...QUESTIONS.title, criteria: { ...criteria, ...QUESTIONS.title.criteria } }]);
+		} else if (kind === "move") {
+			const columns = moveColumns(table, guess);
+			if (columns)
+				asked.push([
+					"move",
+					renderQuestion(QUESTIONS.move, {
+						columns: columns.map(column => column.header),
+						arrow: columns.length === 1,
+					}),
+				]);
 		} else if (kind === "rivals") {
 			if (table.rows.length < MIN_CONTEST_ROWS) continue;
 			asked.push(["rivals", QUESTIONS.rivals]);
@@ -382,6 +471,13 @@ function judgedMeaning(
 		if (answer === "neutral") delete polarity[index];
 		else if (answer) polarity[index] = answer;
 	}
+	// The move's direction tones each stage it was asked about that the plan still plots.
+	const move = sureChoice(answers.move, SURE_POLARITY, QUESTIONS.move.criteria);
+	for (const column of move ? (moveColumns(table, guess) ?? []) : []) {
+		if (!plan.series.includes(column.index)) continue;
+		if (move === "neutral") delete polarity[column.index];
+		else if (move) polarity[column.index] = move;
+	}
 	const rowPolarity: Record<number, Polarity> = { ...local.rowPolarity };
 	for (const row of table.rows) {
 		const answer = sureChoice(answers[`q${row}`], SURE_POLARITY, QUESTIONS.polarity.criteria);
@@ -405,19 +501,42 @@ function judgedMeaning(
 	const facts = tableTakeaways(table, meant);
 	let key = facts.find(fact => fact.striking)?.key;
 	const pick = answers.title;
-	const offered = pick?.type === "choice" ? tableTakeaways(table, guess, CONTESTS) : [];
+	// What the judged plan's chart can state: its own facts, and the guess's chart's where the judged chart
+	// draws every column the guess's does. The judge was offered more (measures side by side, {@link
+	// tableTakeaways}' `table` scope); a pick about a column the final chart leaves out titles nothing.
+	const drawable = tableTakeaways(table, meant, CONTESTS);
+	const shown = (chosen: ChartPlan) => {
+		const spec = buildChart(table, chosen);
+		return spec ? drawnNames(spec) : new Set<string>();
+	};
+	const meantNames = shown(meant);
+	const borrowed =
+		pick?.type === "choice" && [...shown(guess)].every(name => meantNames.has(name))
+			? tableTakeaways(table, guess, CONTESTS)
+			: [];
+	const statable = [...drawable, ...borrowed];
+	const offered =
+		pick?.type === "choice"
+			? tableTakeaways(table, guess, CONTESTS, "table").filter(fact =>
+					statable.some(other => other.key === fact.key),
+				)
+			: [];
 	if (pick?.type === "choice") {
 		const fact = offered.find(fact => fact.key === pick.choice);
 		const odds = pick.probabilities[pick.choice] ?? 0;
-		if (odds >= (fact?.striking === false ? SURE_PLAIN_TITLE : SURE_TITLE)) key = fact?.key;
+		// Unsure, the judge still ranks the striking facts: its likeliest one beats the local order's first
+		// (and no title, where it leans that way more).
+		const chance = (option: string | undefined) => (option === undefined ? 0 : (pick.probabilities[option] ?? 0));
+		const ranked = offered.filter(fact => fact.striking).sort((a, b) => chance(b.key) - chance(a.key))[0];
+		if (fact && odds >= (fact.striking ? SURE_TITLE : SURE_PLAIN_TITLE)) key = fact.key;
+		else if (pick.choice === NONE && odds >= SURE_TITLE) key = undefined;
+		else if (ranked && chance(ranked.key) >= RANKED_TITLE && chance(ranked.key) > Math.max(chance(key), chance(NONE)))
+			key = ranked.key;
 	}
-	// Worded with the judged polarities (`improved`, not `fell`) where the fact still holds under them, else as offered.
+	// Worded with the judged polarities (`improved`, not `fell`) where the fact still holds under them, and over
+	// the drawn measures only (`best on recall and prec`, not the offered `… and cost`).
 	const restated = (fact: { key: string }) => fact.key === key;
-	const title =
-		key === undefined
-			? undefined
-			: (facts.find(restated) ?? tableTakeaways(table, meant, CONTESTS).find(restated) ?? offered.find(restated))
-					?.text;
+	const title = key === undefined ? undefined : (facts.find(restated) ?? statable.find(restated))?.text;
 	return { ...meant, title };
 }
 
@@ -448,6 +567,8 @@ export function planFromAnswers(
 	let choice: KindChoice =
 		kind?.type === "choice" && isOption(QUESTIONS.kind.criteria, kind.choice) ? kind.choice : guess.kind;
 	if (choice === "none") return null;
+	// A share bar holds few parts: past them the local guess draws the parts (a waterfall to their total, or bars).
+	if (choice === "share" && table.rows.length > MAX_SHARE_SEGMENTS) choice = guess.kind;
 	const picks = answers.label;
 	const named = picks?.type === "choice" ? labelOptions(table, guess).get(picks.choice) : undefined;
 	const label = named ?? (guess.label === undefined ? undefined : table.columns[guess.label]);
@@ -469,6 +590,28 @@ export function planFromAnswers(
 	// Intervals are the chart: a `range` pick plots every interval column, whatever the column answers dropped.
 	const spans = choice === "range" ? rangeColumns(candidates, table.rows) : undefined;
 	if (spans) series = [...new Set([...spans.map(column => column.index), ...series])].sort((a, b) => a - b);
+	// A slope runs through the stages, a butterfly sets its opposing pair back to back: whatever the column answers kept.
+	const drawn =
+		choice === "slope"
+			? stageColumns(candidates, table.rows)
+			: choice === "butterfly"
+				? opposedColumns(candidates)
+				: undefined;
+	if (drawn) series = drawn.map(column => column.index);
+	// Quantiles are the chart: a table mostly of them draws its ladders whatever per-row comparison the
+	// judge picks (a dumbbell or bars of each quantile apart hide each row's spread), every quantile column.
+	const ladders = LADDERABLE.has(choice) ? tableLadders(table, label?.index) : undefined;
+	if (ladders) {
+		choice = "ladder";
+		series = ladderColumns(ladders);
+	}
+	// Counts over ordered bins are a distribution whatever per-row comparison the judge picks (a dumbbell
+	// of two shares per bin hides each one's shape); a `histogram` plots every count, in bin order.
+	const histogram = BINNABLE.has(choice) ? histogramColumns(table, candidates) : undefined;
+	if (histogram) {
+		choice = "histogram";
+		series = histogram.counts.map(column => column.index);
+	}
 	if (
 		series.length === 0 ||
 		proseLed(
@@ -523,6 +666,10 @@ export function planFromAnswers(
 	const arrows = series.filter(index => table.columns[index]!.arrowShare >= 0.6).length;
 	if (choice === "change" && !baselines && series.length >= 2 && arrows < 2 && !pairs)
 		choice = guess.kind === "change" ? "grouped" : guess.kind;
+	// Rows held to targets (offered only where a target column is found) draw its measure against them.
+	const held = choice === "bullet" ? findTarget(table) : undefined;
+	if (held) series = [held.measured.index];
+	else if (choice === "bullet") choice = guess.kind;
 	// A run of steps (offered only where the guess is one) draws the guess's column, offsets and cap.
 	let offsets: number | undefined;
 	let limit: number | undefined;
@@ -532,11 +679,15 @@ export function planFromAnswers(
 			({ offsets, limit } = guess);
 		} else choice = guess.kind;
 	}
+	// A comparison (offered only where the guess is one) draws the guess's conditions and metrics.
+	if (choice === "stat") series = guess.series;
 	// Qualifiers the judge accepts, kept only as far as they tell rows apart; the group
 	// is one of the naming columns. Another label than the guess's is named locally.
 	let naming: { qualifiers: readonly number[]; group: number | undefined } = { qualifiers: [], group: undefined };
-	if (label && label.index !== guess.label) naming = guessNaming(table, label);
-	else if (label) {
+	// A histogram's bins name its columns, whatever label the judge picked.
+	const bins = histogram?.bins ?? label;
+	if (bins && bins.index !== guess.label) naming = guessNaming(table, bins);
+	else if (label && !histogram) {
 		const accepted = namingColumns(table, label).filter(column => noul(`n${column.index}`) >= 0.5);
 		const { qualifiers } = guessNaming(table, label, accepted);
 		let group: number | undefined;
@@ -552,16 +703,19 @@ export function planFromAnswers(
 	}
 	return judgedMeaning(request, answers, {
 		kind: choice,
-		label: label?.index,
+		label: bins?.index,
 		qualifiers: naming.qualifiers,
 		group: naming.group,
 		series: choice === "scatter" ? series.slice(0, 2) : series,
 		transpose:
-			choice !== "change" &&
-			choice !== "stacked" &&
-			!FLOWS.has(choice) &&
-			noul("transpose") >= 0.5 &&
-			candidates.some(column => column.mixed),
+			choice === "stat"
+				? guess.transpose
+				: choice !== "change" &&
+					choice !== "stacked" &&
+					choice !== "bullet" &&
+					!FLOWS.has(choice) &&
+					noul("transpose") >= 0.5 &&
+					candidates.some(column => column.mixed),
 		shading:
 			sureChoice(answers.shading, SHADING_CONFIDENCE, QUESTIONS.shading.criteria) ??
 			(guess.kind === "heatmap"
@@ -576,6 +730,7 @@ export function planFromAnswers(
 		baselines,
 		offsets,
 		limit,
+		target: held?.target.index,
 	});
 }
 

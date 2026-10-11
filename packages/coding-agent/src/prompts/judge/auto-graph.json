@@ -4,6 +4,7 @@
 		"criteria": {
 			"bar": "One numeric measure compared across categories.",
 			"paired": "One quantity under two conditions per category, drawn as a dumbbell: before/after, baseline vs. variant, old vs. new.",
+			"slope": "One quantity per row at three or four ordered stages (Baseline → Iter 3 → Iter 4, Original → Round 1 → Now): a line per row from stage to stage, showing which rows improved, regressed or converged.",
 			"grouped": "Two to four same-unit measures per category, side by side, that are different quantities, not one before/after.",
 			"stacked": "Columns that are parts of one whole per category (cached + uncached tokens, error/warn/info counts), as one segmented bar each.",
 			"line": "Values over an ordered axis: time, runs, versions, sizes, steps.",
@@ -11,6 +12,7 @@
 			"multiples": "Measures in different units, or rows that are different metrics, each needing its own scale.",
 			"share": "Parts of one whole: shares summing to 100% or to a total.",
 			"diverging": "Signed changes or deltas around zero.",
+			"butterfly": "Two opposing amounts per row (lines added vs. removed, wins vs. losses), as back-to-back bars from a shared spine with each row's net.",
 			"scatter": "Two continuous measures per item, looking for a relationship.",
 			"change": "Before/after (or baseline vs. variants) values of metrics in different units, compared as factors: 48× less time, +27% icons.",
 			"progress": "Scores out of a total (12/12, 154/160) or completion rates, as bars filling toward 100%.",
@@ -18,6 +20,10 @@
 			"waterfall": "Amounts of one unit building up row by row to their total or toward a cap: where a sum comes from.",
 			"dots": "Three to six same-unit series per category as colored dots on one shared axis (log when values span decades): prices per tier, timings per config.",
 			"range": "Values written as low–high ranges (5.7–9.6 ms, $4.4k–6.1k), as floating intervals; an estimate column inside them marks each.",
+			"bullet": "Each row's measured value against its own target, budget or limit (a column of ≤ 200 µs, budget 120 ms): a bar to the target mark, colored by whether it meets it.",
+			"ladder": "Quantiles of one measurement per row (p50 | p90 | p99 | max columns, p50 / p99 cells), each row a line from its lowest quantile to its highest with a mark at each: medians and tails compared on one axis.",
+			"histogram": "Counts or shares over rows that are ordered bins (1, 2–5, 6–20, 100+; <1 ms, 1–10 ms), as columns in bin order: the shape of a distribution, or two side by side.",
+			"stat": "Two conditions (before/after, old vs. new, on vs. off) compared on a few metrics: each metric's factor in large figures over a short bar per condition.",
 			"none": "Identifiers, settings, or too few comparable values: a chart adds nothing."
 		}
 	},
@@ -66,6 +72,14 @@
 		"instructions": "The state is a Markdown table from a coding assistant's answer, with each column's inferred type. A chart will be drawn under the table, headed by one line stating its main finding. Which statement says what a reader most needs to take away: the comparison or result the table was written to show? Prefer a statement about the whole table (every row improved, one option best on several measures, one group far above the rest) over a single row's value. Choose none only when every statement is beside the table's point or would mislead.",
 		"criteria": {
 			"none": "No title: none of these is the table's point."
+		}
+	},
+	"move": {
+		"instructions": "The state is a Markdown table from a coding assistant's answer, with each column's inferred type. The values in {{#each columns}}\"{{this}}\"{{#unless @last}}, {{/unless}}{{/each}}{{#if arrow}}, written as before → after,{{/if}} are one quantity at successive stages — before and after a change, or a baseline and later iterations — so each row moves from one value to the next. Which way is better for that quantity? Higher when a larger value is better: pass or success rates, accuracy, scores, throughput, speedups, savings. Lower when a smaller value is better: cost, latency, run time, errors, failures, turns or attempts needed, and tokens, memory or size a change aims to cut. Read the headers, notes and marks around the numbers for what they measure (✅ beside the smaller values, \"regressed\" beside a rise). Neutral when neither way is better or the table does not say.",
+		"criteria": {
+			"higher": "A larger value is better.",
+			"lower": "A smaller value is better.",
+			"neutral": "Neither: it describes, counts or identifies."
 		}
 	},
 	"rivals": {

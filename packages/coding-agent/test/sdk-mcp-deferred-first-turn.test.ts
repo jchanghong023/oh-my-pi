@@ -30,8 +30,12 @@ const DEADLINE_SLACK_MS = 5;
  * yield sleeps 20 ms, and a fake timer still pending when real timers return never fires.
  */
 const SEND_MS = 1_000;
-/** Real event-loop turns a released turn gets to finish its I/O while fake time stands still. */
-const RELEASED_TURNS = 100_000;
+/**
+ * Real event-loop turns a released turn gets to finish its I/O while fake time stands still:
+ * ~10 s of spinning on an idle machine. Fake timers freeze every clock Bun exposes, so only a
+ * turn count can bound the wait; 100k turns (~50 ms) ran out under CI load before one read.
+ */
+const RELEASED_TURNS = 20_000_000;
 type MCPTools = MCPLoadResult["tools"];
 
 const cleanups: Array<() => unknown> = [];
@@ -43,7 +47,7 @@ afterEach(async () => {
 });
 
 /** Spins real event-loop turns (I/O included) without advancing fake timers. */
-async function yieldUntil(done: () => boolean, turns = 1_000): Promise<void> {
+async function yieldUntil(done: () => boolean, turns = RELEASED_TURNS): Promise<void> {
 	for (let turn = 0; turn < turns && !done(); turn++) {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		setImmediate(resolve);
@@ -65,7 +69,7 @@ async function stepUntil(done: () => boolean, ms: number): Promise<void> {
  * wait (the abort test proves it: aborting there releases the turn), or until it starts.
  */
 function parkOnFirstTimer(started: () => boolean): Promise<void> {
-	return yieldUntil(() => vi.getTimerCount() > 0 || started(), 100_000);
+	return yieldUntil(() => vi.getTimerCount() > 0 || started());
 }
 
 function probeTools(): MCPTools {
@@ -187,7 +191,7 @@ describe("createAgentSession deferred MCP discovery and the first turn", () => {
 		servers.connectLate(probeTools());
 		startup.resolve({ connected: ["probe"], pending: [], failed: [] });
 		// Fake time stands still, so only the barrier release can start the turn.
-		await yieldUntil(started, RELEASED_TURNS);
+		await yieldUntil(started);
 		expect(turnsStarted()).toBe(1);
 		await stepUntil(() => systemPrompts.length > 0, SEND_MS);
 		vi.useRealTimers();
@@ -220,7 +224,7 @@ describe("createAgentSession deferred MCP discovery and the first turn", () => {
 		await stepUntil(started, MCP_DISCOVERY_TURN_WAIT_MS - DEADLINE_SLACK_MS);
 		expect(turnsStarted()).toBe(0);
 		vi.advanceTimersByTime(2 * DEADLINE_SLACK_MS);
-		await yieldUntil(started, RELEASED_TURNS);
+		await yieldUntil(started);
 		expect(turnsStarted()).toBe(1);
 		await stepUntil(() => systemPrompts.length > 0, SEND_MS);
 		vi.useRealTimers();
@@ -232,7 +236,7 @@ describe("createAgentSession deferred MCP discovery and the first turn", () => {
 		vi.useFakeTimers();
 		const second = session.prompt("second");
 		// No fake time passes, so the turn starts only if it does not wait again.
-		await yieldUntil(() => turnsStarted() > 1, RELEASED_TURNS);
+		await yieldUntil(() => turnsStarted() > 1);
 		expect(turnsStarted()).toBe(2);
 		await stepUntil(() => systemPrompts.length > 1, SEND_MS);
 		vi.useRealTimers();

@@ -8,17 +8,20 @@
  *
  * Styled after Apple's charts and Tern's UI: a UI sans (Geist where Tern
  * provides it), muted labels, hairline gridlines that recede behind the
- * marks, bars and cells with rounded corners, smooth lines over a soft area
- * fill, dot legends. 13-unit labels land near the terminal's own glyph size
+ * marks, bars and cells with rounded corners, smooth lines (over a soft area
+ * fill where the axis starts at zero), dot legends, one hue across small
+ * multiples' columns with gray for context. 13-unit labels land near the terminal's own glyph size
  * at 16 user units per row; bolded table cells draw at full strength while
  * their neighbours recede. Grouped categories ({@link ChartSpec.groups}) name
- * each group once beside its members, the groups parted by a gap. A few
+ * each group once beside its members, the groups parted by a gap; a name too
+ * long for its column wraps to two lines ({@link categoryLabels}). A few
  * outliers far above the rest break a bar axis instead of flattening it
  * ({@link outlierTier}); reference rows ({@link ChartSpec.reference}) draw a
  * dashed rule through their group.
  *
  * Every chart opens with a header ({@link drawHeader}): the semibold title a
- * planner set ({@link ChartSpec.title}, the one fact worth stating), a muted
+ * planner set ({@link ChartSpec.title}, the one fact worth stating; its key
+ * figure in the accent), a muted
  * note on how the data is encoded, and the series key right-aligned on the
  * title's line when it fits. Marks size to
  * the row count ({@link barMetrics}); strong heat cells and share segments
@@ -26,8 +29,11 @@
  * annotation primitives — {@link band}, {@link referenceRule},
  * {@link callout} — draw the {@link ChartSpec.annotations} a planner lays on.
  *
- * Meaning layers on top: each contest's best value carries a `best` tag (an
- * outline in a heatmap), moves of a measure with a polarity read in `success`
+ * Axes tick on round steps in one unit (`0, 2, 4` for counts, `50s, 100s`,
+ * `25 GiB` where the table wrote binary sizes, thousands separated). Meaning
+ * layers on top: each contest's best value carries a quiet `best` tag (an
+ * outline in a heatmap), estimates (`~15`) among measured figures draw as
+ * dashed, faint bars ({@link barRect}), moves of a measure with a polarity read in `success`
  * or `error` (transitions, factors, signed deltas), and status cells badge
  * their row's name with a colored dot keyed under the chart.
  */
@@ -37,10 +43,13 @@ import {
 	type ChartPoint,
 	type ChartSeries,
 	type ChartSpec,
+	type ChartTarget,
 	intervalMiddle,
 	isConditionPair,
 	type Polarity,
 	percentText,
+	referenceFactors,
+	targetStanding,
 } from "./chart-plan";
 import { cellStatus, type Dimension, type Status } from "./table-data";
 
@@ -50,8 +59,12 @@ const LABEL_SIZE = 13;
 const TICK_SIZE = 11;
 /** Mean advance per em of the UI sans, for character budgets; {@link measure} estimates real widths. */
 const ADVANCE = 0.55;
+/**
+ * The UI sans, best first. `Helvetica Neue` comes after Arial: the SVG rasterizer sets any text node holding
+ * a glyph it lacks (`→`) in a regular-weight fallback, so semibold titles with arrows lost their weight on macOS.
+ */
 const FONT =
-	"Geist, -apple-system, system-ui, 'SF Pro Text', 'Helvetica Neue', Inter, 'Segoe UI', Roboto, 'Noto Sans', 'DejaVu Sans', Arial, sans-serif";
+	"Geist, -apple-system, system-ui, 'SF Pro Text', Inter, 'Segoe UI', Roboto, 'Noto Sans', 'DejaVu Sans', Arial, 'Helvetica Neue', sans-serif";
 /** Series colors in draw order. */
 const SERIES = ["c1", "c2", "c3", "c4", "c5", "c6"] as const;
 /** Corner radius of bars, tracks and cells. */
@@ -89,7 +102,28 @@ const MAX_TIER_SHARE = 1 / 3;
 const CUT_AT = 0.7;
 /** Width of the gap parting a broken axis' segments, in user units. */
 const CUT_GAP = 10;
+/** Share of its largest value a dumbbell's smallest must reach for its axis to leave zero out. */
+const ZOOM_SHARE = 0.6;
+/** How far past the rest a clipped diverging axis reaches, as a multiple of their largest magnitude. */
+const CLIP_REACH = 1.25;
+/** Length of a clipped bar between its break and its end. */
+const CLIP_INSET = 16;
 const MAX_LABEL_CHARS = 28;
+/** Widest each line of a category name wrapped to two sets ({@link labelLines}). */
+const LABEL_WIDTH = 200;
+/** Size of a name wrapped over two lines, a step under {@link LABEL_SIZE} so the pair fits one row. */
+const WRAP_SIZE = 12;
+/** Baseline distance between a wrapped name's two lines. */
+const WRAP_LINE = 13;
+/** Least row height that holds a wrapped name. */
+const WRAP_ROW = 30;
+/**
+ * Most categories whose names wrap; a longer column keeps one line per row,
+ * up to {@link WIDE_LABEL_WIDTH}, so it stays a glance tall.
+ */
+const MAX_WRAP_ROWS = 12;
+/** Widest a category name sets on one line; a longer one wraps, or clips where names do not wrap. */
+const WIDE_LABEL_WIDTH = 260;
 /** Longest group name in a label column; its members beside it keep {@link MAX_LABEL_CHARS}. */
 const MAX_GROUP_CHARS = 20;
 /** Vertical space parting consecutive groups of category rows. */
@@ -102,6 +136,10 @@ const RECEDE = 0.4;
 const DENSE_ROWS = 12;
 /** Share of a stacked bar's whole its parts may miss by rounding before the rest draws as a track. */
 const MIN_REST = 0.01;
+/** Least length of a drawn bar: a zero (or near-zero) value still shows as a stub at the baseline. */
+const MIN_BAR = 2.5;
+/** Fill opacity of an estimated bar (`~15`) inside its outline, relative to a measured one. */
+const ESTIMATE_OPACITY = 0.4;
 /** Opacity of a range bar's span past its low end, relative to the bar. */
 const RANGE_OPACITY = 0.35;
 /** Most panels across one band of small multiples drawn as panels. */
@@ -132,6 +170,13 @@ const STATUS_WIDTH = 14;
 const STATUS_COLORS: Record<Status, string> = { good: "success", bad: "error", warn: "warning", pending: "muted" };
 /** Room a {@link bestTag} takes after its value. */
 const BEST_WIDTH = 34;
+/** Most of the width right of the label column a figures column (`a → b  move`) grows to, so a long figure
+ * shows whole rather than clipped while the plot keeps the rest. */
+const FIGURE_SHARE = 0.48;
+/** Least share of a small-multiples column its bars keep; a `best` tag that would squeeze them further goes. */
+const MIN_BAR_SHARE = 0.4;
+/** Share of a dense grouped chart's cells at zero from which their figures drop: the stub at the baseline says it. */
+const ZERO_QUIET = 0.2;
 /** Factor within which a move reads as no change, toned neither way. */
 const STILL = 1.03;
 
@@ -155,6 +200,8 @@ interface LegendItem {
 	readonly name: string;
 	readonly color: string;
 	readonly ring?: boolean;
+	/** Further dot colors drawn beside the first, for marks colored by meaning (a toned end: `success`, `error`). */
+	readonly tones?: readonly string[];
 	/** The dot's opacity, matching a fainter mark (a second part in one outcome color); opaque by default. */
 	readonly opacity?: number;
 }
@@ -236,7 +283,9 @@ export function renderChartSvg(spec: ChartSpec): ChartSvg {
 
 /** One-line description of the chart, for screen readers and terminals that show the alt text. */
 export function chartAlt(spec: ChartSpec): string {
-	const names = spec.series.map(entry => entry.name).join(spec.kind === "stacked" ? " + " : ", ");
+	const joint =
+		spec.kind === "stacked" ? " + " : spec.kind === "slope" ? " → " : spec.kind === "butterfly" ? " vs " : ", ";
+	const names = spec.series.map(entry => entry.name).join(joint);
 	const kind =
 		spec.kind === "multiples"
 			? "small multiples"
@@ -244,23 +293,34 @@ export function chartAlt(spec: ChartSpec): string {
 				? "100% stacked"
 				: spec.kind === "dots"
 					? "dot"
-					: spec.kind;
+					: spec.kind === "ladder"
+						? "quantile"
+						: spec.kind === "stat"
+							? "comparison"
+							: spec.kind;
+	const goals = new Set(spec.targets?.flatMap(target => (target ? [target.text] : [])));
 	const versus = spec.baseline
 		? ` vs ${spec.baseline}`
-		: spec.whole
-			? ` = ${spec.whole.name}`
-			: spec.kind === "waterfall" && spec.total
-				? ` to ${spec.total.name}`
-				: "";
+		: spec.kind === "bullet"
+			? goals.size === 1
+				? ` vs ${[...goals][0]} ${spec.targetName ?? "target"}`
+				: ` vs each row's ${spec.targetName ?? "target"}`
+			: spec.whole
+				? ` = ${spec.whole.name}`
+				: spec.kind === "waterfall" && spec.total
+					? ` to ${spec.total.name}`
+					: "";
 	const lead = spec.title ? `${spec.title}. ` : "";
 	return `${lead}${kind} chart of ${names}${versus}${spec.axis ? ` by ${spec.axis}` : ""}`;
 }
 
 /**
- * The header over a chart: the title when the plan states one, its muted
- * encoding note, and the layer's key right-aligned on the same line — or
- * wrapped under it when the line has no room. Nothing at all for a chart
- * with neither title, note nor key.
+ * The header over a chart: the title when the plan states one — its key
+ * figure in the accent color ({@link titleFigure}), wrapped to a second line
+ * rather than clipped — its muted encoding note after it (or on a line of its
+ * own when the title leaves no room), and the layer's key right-aligned on
+ * the first line, or wrapped under the rest when the line has no room.
+ * Nothing at all for a chart with neither title, note nor key.
  */
 function drawHeader(spec: ChartSpec, layer: Layer): Layer {
 	const span = WIDTH - 2 * PAD;
@@ -269,37 +329,99 @@ function drawHeader(spec: ChartSpec, layer: Layer): Layer {
 	const subtitle = spec.subtitle ?? (layer.notes ?? []).join(" · ");
 	const fullTitle = spec.title ?? "";
 	if (!fullTitle && !subtitle && keyWidth === 0) return { height: 0, body: "" };
-	const subtitleWidth = subtitle ? 12 + measure(subtitle, TICK_SIZE) : 0;
-	const inline =
-		keyWidth === 0 || !fullTitle || measure(fullTitle, LABEL_SIZE) * SEMIBOLD_WIDTH + 24 + keyWidth <= span;
+	const titleSize = LABEL_SIZE * SEMIBOLD_WIDTH;
+	const inline = keyWidth === 0 || !fullTitle || measure(fullTitle, titleSize) + 24 + keyWidth <= span;
 	const room = inline && keyWidth ? span - keyWidth - 24 : span;
-	const title = fullTitle ? fitText(fullTitle, room, LABEL_SIZE * SEMIBOLD_WIDTH) : "";
-	// Without a title the note leads the line.
-	const titleWidth = title ? measure(title, LABEL_SIZE) * SEMIBOLD_WIDTH + 12 : 0;
-	const parts = [text(PAD, 8, title, { fill: "fg", weight: 600 })];
-	// The note takes what the title leaves, and only when enough is left to say something.
-	if (subtitle && room - titleWidth >= Math.min(subtitleWidth, 60))
+	const lines = fullTitle ? titleLines(fullTitle, room) : [];
+	const figure = titleFigure(fullTitle);
+	const parts = lines.map(({ content, start, kept }, at) => {
+		// The figure's stretch within this line, where the line holds any of it.
+		const [from, to] = figure ? [Math.max(0, figure[0] - start), Math.min(kept, figure[1] - start)] : [0, 0];
+		const runs =
+			to > from
+				? [
+						{ content: content.slice(0, from) },
+						{ content: content.slice(from, to), fill: "accent" },
+						{ content: content.slice(to) },
+					]
+				: [{ content }];
+		return text(PAD, 8 + at * TITLE_LINE, runs, { fill: "fg", weight: 600 });
+	});
+	let height = Math.max(1, lines.length) * TITLE_LINE;
+	// The note follows the title's last line where it fits; else it takes a line of its own (and leads one without a title).
+	if (subtitle) {
+		const last = lines.at(-1);
+		const after = last ? measure(last.content, titleSize) + 12 : 0;
+		const lineRoom = lines.length > 1 ? span : room;
+		const beside = !last || after + measure(subtitle, TICK_SIZE) <= lineRoom;
+		const y = beside ? 8 + Math.max(0, lines.length - 1) * TITLE_LINE : 8 + lines.length * TITLE_LINE;
 		parts.push(
-			text(PAD + titleWidth, 8, fitText(subtitle, room - titleWidth, TICK_SIZE), {
+			text(PAD + (beside ? after : 0), y, fitText(subtitle, beside ? lineRoom - after : span, TICK_SIZE), {
 				size: TICK_SIZE,
 				fill: "muted",
 			}),
 		);
-	let height = TITLE_LINE;
+		if (!beside) height += TITLE_LINE - 2;
+	}
 	if (layer.ramp) {
-		const y = inline ? 8 : TITLE_LINE + 8;
+		const y = inline ? 8 : height + 8;
 		parts.push(drawRamp(layer.ramp, inline ? WIDTH - PAD - keyWidth : PAD, y));
 		if (!inline) height += LEGEND_LINE;
 	} else if (items.length) {
 		if (inline) {
 			parts.push(drawLegend(items, WIDTH - PAD - keyWidth, WIDTH - PAD, 8).body);
 		} else {
-			const legend = drawLegend(items, PAD, WIDTH - PAD, TITLE_LINE + 8);
+			const legend = drawLegend(items, PAD, WIDTH - PAD, height + 8);
 			parts.push(legend.body);
 			height = legend.height;
 		}
 	}
 	return { height: height + HEADER_GAP, body: parts.join("") };
+}
+
+/**
+ * A title in at most two lines of `width`: whole when it fits, else broken
+ * at the last space that fits the first line, the second clipped if still
+ * too long. Each line keeps its `start` in the title and the count of its
+ * characters `kept` from it (a clipped line ends in `…`).
+ */
+function titleLines(title: string, width: number): { content: string; start: number; kept: number }[] {
+	const size = LABEL_SIZE * SEMIBOLD_WIDTH;
+	if (measure(title, size) <= width) return [{ content: title, start: 0, kept: title.length }];
+	let at = title.lastIndexOf(" ");
+	while (at > 0 && measure(title.slice(0, at), size) > width) at = title.lastIndexOf(" ", at - 1);
+	if (at <= 0) {
+		const content = fitText(title, width, size);
+		return [{ content, start: 0, kept: content.endsWith("…") ? content.length - 1 : content.length }];
+	}
+	const rest = title.slice(at + 1);
+	const second = fitText(rest, width, size);
+	return [
+		{ content: title.slice(0, at), start: 0, kept: at },
+		{ content: second, start: at + 1, kept: second === rest ? rest.length : second.length - 1 },
+	];
+}
+
+/**
+ * The stretch of `title` holding its key figure, as `[start, end)`: the first
+ * factor (`6.3× more`), else the first signed percent (`−45%`), else the
+ * first figure in parentheses (`(31.7s)`), else the first with a unit; a
+ * number inside a name (`gpt-5.5`, `Iter127`, `opt-level 0`) never counts.
+ */
+function titleFigure(title: string): [number, number] | undefined {
+	const figure =
+		/(?<![\w.\-−])[+−-]?[$€£]?\d[\d,]*(?:\.\d+)?(?:\s?[–/-]\s?\d[\d,]*(?:\.\d+)?)?(?:×(?:\s(?:more|less))?|%|\s?(?:[nµm]?s|min|h|[KMGT]i?B|B|k|M|tok\/s)(?!\w))?/g;
+	const found = [...title.matchAll(figure)].map(match => ({
+		start: match.index,
+		end: match.index + match[0].length,
+		content: match[0],
+	}));
+	const pick =
+		found.find(match => match.content.includes("×")) ??
+		found.find(match => /^[+−-].*%$/.test(match.content)) ??
+		found.find(match => title[match.start - 1] === "(") ??
+		found.find(match => /[^\d,.\s–-]$/.test(match.content) || /^[$€£]/.test(match.content));
+	return pick && [pick.start, pick.end];
 }
 
 function drawChart(spec: ChartSpec): Layer {
@@ -329,6 +451,18 @@ function drawChart(spec: ChartSpec): Layer {
 			return drawDots(spec);
 		case "range":
 			return drawRange(spec);
+		case "slope":
+			return drawSlope(spec);
+		case "butterfly":
+			return drawButterfly(spec);
+		case "bullet":
+			return drawBullet(spec);
+		case "ladder":
+			return drawLadder(spec);
+		case "histogram":
+			return drawHistogram(spec);
+		case "stat":
+			return drawStat(spec);
 		default:
 			return drawBars(spec);
 	}
@@ -344,7 +478,7 @@ function drawChart(spec: ChartSpec): Layer {
 function barMetrics(count: number, grouped: number): { row: number; bar: number; step: number } {
 	if (grouped > 1) {
 		// Past {@link DENSE_ROWS} categories grouped bars pack tighter, so a long table stays a glance tall.
-		if (count > DENSE_ROWS) return { row: grouped * 9 + 6, bar: 7, step: 9 };
+		if (count > DENSE_ROWS) return { row: grouped * 9 + 9, bar: 7, step: 9 };
 		const bar = count <= 6 ? 10 : 8;
 		return { row: grouped * (bar + 2) + 10, bar, step: bar + 2 };
 	}
@@ -364,22 +498,42 @@ function drawBars(spec: ChartSpec): Layer {
 		? [0, 100]
 		: series.flatMap(entry =>
 				entry.points.flatMap(point =>
-					!point ? [] : point.upper === undefined ? [point.value] : [point.value, point.upper],
+					!point
+						? []
+						: point.upper !== undefined
+							? [point.value, point.upper]
+							: point.error
+								? [point.value - point.error, point.value + point.error]
+								: [point.value],
 				),
 			);
 	const labelWidth = labelColumnWidth(spec);
 	// Single bars beside a reference row print their change from it (`49.5k · −52%`).
 	const referenced = kind === "bar" && spec.reference ? spec.reference : [];
 	const versus = (at: number) => {
-		const index = referenced.find(index => groupSpan(spec, index).join() === groupSpan(spec, at).join());
-		const [base, point] = [series[0]!.points[index ?? -1], series[0]!.points[at]];
-		return index === undefined || index === at || !base || !point || base.value <= 0
-			? ""
-			: factorText({ ...point, value: point.value / base.value });
+		const factor = referenced.length ? referenceFactors(spec, series[0]!)[at] : undefined;
+		return factor === undefined ? "" : factorText({ ...series[0]!.points[at]!, value: factor });
 	};
+	// A transition prints each row's move after its figures (`8 → 2  −6`), one style for every row.
+	const moves = paired && spec.transition ? pairMoves(series[0]!, series[1]!) : undefined;
+	// Peers on a log axis (`pi-walker` vs `Go` from 2 to 462) part by their ratio: each row prints it (`4.1×`).
+	const ratios =
+		paired && !spec.transition && logSpread(values)
+			? categories.map((_, at) => {
+					const [a, b] = [series[0]!.points[at], series[1]!.points[at]];
+					if (!a || !b || !(a.value > 0) || !(b.value > 0)) return "";
+					const ratio = Math.max(a.value, b.value) / Math.min(a.value, b.value);
+					// `235×`, `4.1×`: as the table's own ratio columns write them.
+					return `${ratio >= 10 ? Math.round(ratio).toLocaleString("en-US") : Number(ratio.toFixed(1))}×`;
+				})
+			: undefined;
 	const valueText = (at: number) =>
 		paired
-			? [pointText(series[0]!, at), pointText(series[1]!, at)].filter(Boolean).join(spec.transition ? " → " : " · ")
+			? [pointText(series[0]!, at), pointText(series[1]!, at)]
+					.filter(Boolean)
+					.join(spec.transition ? " → " : " · ") +
+				(moves?.[at] ? `${MOVE_GAP}${moves[at]}` : "") +
+				(ratios?.[at] ? `${MOVE_GAP}${ratios[at]}` : "")
 			: single
 				? [pointText(series[0]!, at), versus(at)].filter(Boolean).join(" · ")
 				: "";
@@ -409,7 +563,9 @@ function drawBars(spec: ChartSpec): Layer {
 						10,
 					) + 6
 				: Math.min(
-						180,
+						// A transition's move closes its figures (`243–424 ms → 3154–3648 ms  13× more`); long ones
+						// take up to {@link FIGURE_SHARE} of the room right of the labels before the start figure clips.
+						moves ? Math.max(MAX_MOVE_COLUMN, (WIDTH - 2 * PAD - labelWidth - 10) * FIGURE_SHARE) : 180,
 						widest(
 							categories.map((_, at) => valueText(at)),
 							TICK_SIZE,
@@ -417,9 +573,22 @@ function drawBars(spec: ChartSpec): Layer {
 					)) + (paired ? 0 : tagged);
 	const left = PAD + labelWidth + 10 + leftRoom;
 	const right = WIDTH - PAD - valueWidth - calloutWidth;
-	// A dumbbell's connector or a track cannot cross a gap; bars can.
-	const scale = valueScale(values, left, right, { zero: true, breakable: kind === "bar" || kind === "grouped" });
-	const { row: rowHeight, bar: barHeight, step } = barMetrics(categories.length, grouped ? series.length : 1);
+	// Signed changes beside one far larger (`−$158k` beside ±$7k): the axis ends past the rest, the outlier's
+	// bar runs to that end through a break and keeps its figure.
+	const tier = diverging ? outlierTier(values.map(Math.abs), Number.POSITIVE_INFINITY) : undefined;
+	const limit = tier ? tier.rest * CLIP_REACH : Number.POSITIVE_INFINITY;
+	const clamp = (value: number) => Math.max(-limit, Math.min(limit, value));
+	// A dumbbell's connector or a track cannot cross a gap; bars can. Dots mark positions, not lengths: a
+	// dumbbell's axis leaves zero out where every value lies far from it (5382 → 5467 ms), so close values part.
+	const clustered = paired && Math.min(...values) >= ZOOM_SHARE * Math.max(...values);
+	const axis = valueScale(tier ? values.map(clamp) : values, left, right, {
+		zero: !clustered,
+		breakable: kind === "bar" || kind === "grouped",
+		unit: tickUnit(series[0]!, values),
+	});
+	const scale: Scale = tier ? { ...axis, at: value => axis.at(clamp(value)) } : axis;
+	const { row, bar: barHeight, step } = barMetrics(categories.length, grouped ? series.length : 1);
+	const rowHeight = labelRow(spec, row);
 
 	const parts: string[] = [];
 	const references = referenceMarks(spec);
@@ -437,6 +606,23 @@ function drawBars(spec: ChartSpec): Layer {
 	const zero = scale.log ? left : scale.at(0);
 	const reference = referenced.length ? referenceRules(spec, series[0]!, tops, rowHeight, scale.at) : undefined;
 	const emphasized = series.some(entry => entry.points.some(point => point?.emphasis));
+	const estimates = series.map(estimatedPoints);
+	// In a dense grouped chart where zeros are common ({@link ZERO_QUIET}), a zero is its stub alone: twenty `0`
+	// figures are noise.
+	const plotted = series.flatMap(entry => entry.points.filter(point => point !== null));
+	const quietZeros =
+		grouped &&
+		categories.length > DENSE_ROWS &&
+		plotted.filter(point => point.value === 0).length >= ZERO_QUIET * plotted.length;
+	// A toned transition's end dots take their move's color, a move that went nowhere a neutral one; the key's
+	// end dot is neutral and the note says which way is better.
+	const polarity = paired && spec.transition ? (series[1]!.polarity ?? series[0]!.polarity) : undefined;
+	const toned =
+		polarity !== undefined &&
+		categories.some((_, at) => {
+			const [a, b] = [series[0]!.points[at], series[1]!.points[at]];
+			return a && b && pairTone(series[0]!, series[1]!, a, b);
+		});
 	categories.forEach((_, at) => {
 		const rowTop = tops[at]!;
 		const middle = rowTop + rowHeight / 2;
@@ -446,19 +632,23 @@ function drawBars(spec: ChartSpec): Layer {
 			// A range (`5.7–9.6 ms`) draws as a capsule over its span; the connector joins the spans' middles.
 			const center = (point: ChartPoint) => (scale.at(point.value) + scale.at(point.upper ?? point.value)) / 2;
 			// A transition its measure's polarity calls better or worse takes that color at its end.
-			const tone =
-				spec.transition && a && b && a.value > 0
-					? moveTone(series[1]!.polarity ?? series[0]!.polarity, b.value / a.value)
-					: undefined;
+			const tone = spec.transition && a && b ? pairTone(series[0]!, series[1]!, a, b) : undefined;
+			const end = tone ?? (toned ? "muted" : SERIES[0]);
 			if (a && b) {
 				const [from, to] = [center(a), center(b)];
-				const width = num(Math.max(0.5, Math.abs(to - from)));
+				// A transition's connector is solid in its end's color, so its length reads as the move.
 				parts.push(
 					!spec.transition
 						? line(from, middle, to, middle, "border", 2.5)
-						: tone
-							? `<rect x="${num(Math.min(from, to))}" y="${num(middle - 1.5)}" width="${width}" height="3" rx="1.5" fill="${token(tone)}" fill-opacity="0.45"/>`
-							: `<rect x="${num(Math.min(from, to))}" y="${num(middle - 1.5)}" width="${width}" height="3" rx="1.5" fill="url(#pair-${to >= from ? "up" : "down"})"/>`,
+						: rect(
+								Math.min(from, to),
+								middle - 1.5,
+								Math.max(0.5, Math.abs(to - from)),
+								3,
+								end,
+								MOVE_OPACITY,
+								1.5,
+							),
 				);
 			}
 			// A transition that went nowhere rings its end dot, so the start still shows.
@@ -469,23 +659,43 @@ function drawBars(spec: ChartSpec): Layer {
 						? mark(scale, a, middle, radius, "muted", 1, true)
 						: mark(scale, a, middle, radius, SERIES[0], 1),
 				);
-			if (b) parts.push(mark(scale, b, middle, radius, spec.transition ? (tone ?? SERIES[0]) : SERIES[1], 1));
+			if (b) parts.push(mark(scale, b, middle, radius, spec.transition ? end : SERIES[1], 1));
 			if (a && spec.transition && still) parts.push(ring(center(a), middle, radius + 2.5, "muted"));
 			const strongPair = a?.emphasis || b?.emphasis;
 			const from = pointText(series[0]!, at);
 			const to = pointText(series[1]!, at);
 			if (spec.transition && from && to) {
-				const head = `${from} → `;
+				// The end figure and the move always show; a start too long for what they leave gives way first.
+				const move = moves?.[at];
+				const kept = measure(`${to}${move ? `${MOVE_GAP}${move}` : ""}`, TICK_SIZE) * SEMIBOLD_WIDTH;
+				const room = valueWidth - 8 - kept - measure(" → ", TICK_SIZE);
+				const fits = measure(valueText(at), TICK_SIZE) + 8 <= valueWidth;
+				const head = `${fits ? from : fitText(from, room, TICK_SIZE)} → `;
+				const tail = right + 8 + measure(head, TICK_SIZE);
 				parts.push(text(right + 8, middle, head, { size: TICK_SIZE, fill: "muted" }));
+				parts.push(text(tail, middle, to, { size: TICK_SIZE, fill: "fg", weight: strongPair ? 600 : undefined }));
+				if (move)
+					parts.push(
+						text(tail + measure(`${to}${MOVE_GAP}`, TICK_SIZE), middle, move, {
+							size: TICK_SIZE,
+							fill: tone ?? "muted",
+							weight: tone ? 600 : undefined,
+						}),
+					);
+			} else {
+				// Each figure in its dot's color ties it to its series without a trip to the legend.
+				// A transition missing its end prints its start muted, as its ring is drawn.
+				const runs: TextRun[] = from ? [{ content: from, fill: spec.transition ? "muted" : SERIES[0] }] : [];
+				if (to) runs.push(...(from ? [{ content: " · " }] : []), { content: to, fill: SERIES[1] });
+				// An en space: runs share one text element, where plain spaces collapse.
+				if (ratios?.[at]) runs.push({ content: `\u2002${ratios[at]}`, fill: "fg" });
 				parts.push(
-					text(right + 8 + measure(head, TICK_SIZE), middle, to, {
+					text(right + 8, middle, runs, {
 						size: TICK_SIZE,
-						fill: tone ?? "fg",
-						weight: strongPair || tone ? 600 : undefined,
+						fill: "muted",
+						weight: strongPair ? 600 : undefined,
 					}),
 				);
-			} else {
-				parts.push(text(right + 8, middle, valueText(at), { size: TICK_SIZE, fill: strongPair ? "fg" : "muted" }));
 			}
 			return;
 		}
@@ -513,19 +723,42 @@ function drawBars(spec: ChartSpec): Layer {
 				parts.push(mark(scale, point, y + barHeight / 2, Math.min(6, barHeight / 2.6), fill, opacity));
 			} else if (scale.cut && point.value > scale.cut.below) {
 				parts.push(cutBar(scale.cut, zero, end, y, barHeight, fill, opacity));
+			} else if (Math.abs(point.value) > limit) {
+				// Clipped: the bar breaks just short of its end, which sits on the axis' limit.
+				const toward = Math.sign(zero - end);
+				const cut = end + toward * CLIP_INSET;
+				parts.push(
+					rect(Math.min(end, cut - toward * (CUT_GAP / 2)), y, CLIP_INSET - CUT_GAP / 2, barHeight, fill, opacity),
+				);
+				parts.push(
+					rect(
+						Math.min(zero, cut + toward * (CUT_GAP / 2)),
+						y,
+						Math.abs(zero - cut) - CUT_GAP / 2,
+						barHeight,
+						fill,
+						opacity,
+					),
+				);
+				parts.push(breakMark(cut, y + barHeight / 2, barHeight / 2 + 1, "muted"));
 			} else {
-				parts.push(rect(Math.min(zero, end), y, Math.max(1, Math.abs(end - zero)), barHeight, fill, opacity));
+				parts.push(
+					barRect(Math.min(zero, end), y, Math.max(MIN_BAR, Math.abs(end - zero)), barHeight, fill, opacity, {
+						estimate: estimates[index]!.has(at),
+					}),
+				);
 				// A range's span past its low end, faint: at least the bar, possibly up to its end.
 				if (point.upper !== undefined && point.upper > point.value)
 					parts.push(rect(end, y, scale.at(point.upper) - end, barHeight, fill, RANGE_OPACITY * opacity));
 			}
+			if (point.error) parts.push(whisker(scale, point, y + barHeight / 2, Math.max(3, barHeight / 2 - 1)));
 			if (grouped) {
 				const labelX = tracks
 					? scale.at(100) + 4
-					: Math.max(end, point.upper === undefined ? end : scale.at(point.upper)) + 4;
-				const label = clip(point.text, 12);
-				const size = step < 10 ? 9 : 10;
+					: Math.max(end, scale.at(point.upper ?? point.value + (point.error ?? 0))) + 4;
 				const best = entry.best === at || spec.leaders?.[at] === index;
+				const label = quietZeros && point.value === 0 && !best ? "" : clip(point.text, 12);
+				const size = step < 10 ? 9 : 10;
 				parts.push(
 					text(labelX, y + barHeight / 2, label, {
 						size,
@@ -539,7 +772,11 @@ function drawBars(spec: ChartSpec): Layer {
 		if (single) {
 			const point = series[0]!.points[at];
 			if (!point) return;
-			const end = Math.max(scale.at(point.value), point.upper === undefined ? 0 : scale.at(point.upper));
+			const end = Math.max(
+				scale.at(point.value),
+				point.upper === undefined ? 0 : scale.at(point.upper),
+				point.error ? scale.at(point.value + point.error) : 0,
+			);
 			const label = valueText(at);
 			const best = series[0]!.best === at;
 			const style = {
@@ -557,7 +794,7 @@ function drawBars(spec: ChartSpec): Layer {
 			}
 		}
 	});
-	if (diverging && !scale.log) parts.push(line(zero, gridTop - 2, zero, gridBottom + 2, "muted", 1));
+	if (diverging && !scale.log) parts.push(line(zero, gridTop - 4, zero, gridBottom + 4, "fg", 1.25, 0.6));
 	if (reference) parts.push(reference.body);
 	for (const [at, note] of callouts) {
 		const middle = tops[at]! + rowHeight / 2;
@@ -571,21 +808,37 @@ function drawBars(spec: ChartSpec): Layer {
 				: right + 8 + (single ? measure(valueText(at), TICK_SIZE) : 0);
 		parts.push(callout(reach + 6, middle, WIDTH - PAD - calloutWidth + 18, note));
 	}
+	// A toned end is keyed by the colors its dots take (better, worse, unmoved), not one the chart never draws.
+	const endTones = toned
+		? (["success", "error", "muted"] as const).filter(color =>
+				categories.some((_, at) => {
+					const [a, b] = [series[0]!.points[at], series[1]!.points[at]];
+					return (
+						b &&
+						(a ? pairTone(series[0]!, series[1]!, a, b) : undefined) === (color === "muted" ? undefined : color)
+					);
+				}),
+			)
+		: [];
 	const legend: LegendItem[] =
 		single && !paired
 			? []
 			: paired && spec.transition
 				? [
 						{ name: series[0]!.name, color: "muted", ring: true },
-						{ name: series[1]!.name, color: SERIES[0] },
+						toned
+							? { name: series[1]!.name, color: endTones[0] ?? "fg", tones: endTones.slice(1) }
+							: { name: series[1]!.name, color: SERIES[0] },
 					]
 				: series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! }));
-	const defs = paired && spec.transition ? PAIR_DEFS : "";
 	return {
 		height: gridBottom + 20,
-		body: defs + parts.join(""),
+		body: parts.join(""),
 		legend,
-		notes: scale.log && !tracks ? ["log scale"] : scale.cut ? ["broken axis"] : [],
+		notes: [
+			...(toned ? [`${polarity} is better`] : []),
+			...(scale.log && !tracks ? ["log scale"] : scale.cut || tier ? ["broken axis"] : []),
+		],
 	};
 }
 
@@ -613,6 +866,22 @@ function mark(
 	return `<rect x="${num(x + inset)}" y="${num(y - radius + inset)}" width="${num(width - 2 * inset)}" height="${num(2 * radius - 2 * inset)}" rx="${num(radius - inset)}" fill="none" stroke="${token(fill)}" stroke-width="1.75"/>`;
 }
 
+/**
+ * The spread a `± e` point states ({@link ChartPoint.error}): a hairline from `value − e` to
+ * `value + e` on `scale` at `y`, capped by ticks `half` tall either side, in `stroke` (`fg` by default,
+ * so it reads over a bar of any color).
+ */
+function whisker(scale: Scale, point: ChartPoint, y: number, half: number, stroke = "fg"): string {
+	const error = point.error ?? 0;
+	const [from, to] = [scale.at(point.value - error), scale.at(point.value + error)];
+	if (to - from < 2) return "";
+	return [
+		line(from, y, to, y, stroke, 1.25, 0.8),
+		line(from, y - half, from, y + half, stroke, 1.25, 0.8),
+		line(to, y - half, to, y + half, stroke, 1.25, 0.8),
+	].join("");
+}
+
 // ── Dots and intervals on a positional axis ──────────────────────────────────
 
 /**
@@ -626,7 +895,11 @@ function drawDots(spec: ChartSpec): Layer {
 	const { categories, series } = spec;
 	const references = referenceMarks(spec);
 	const values = series.flatMap(entry =>
-		entry.points.flatMap(point => (point ? [point.value, point.upper ?? point.value] : [])),
+		entry.points.flatMap(point => {
+			if (!point) return [];
+			const spread = point.error ? [point.value - point.error, point.value + point.error] : [];
+			return [point.value, point.upper ?? point.value, ...spread];
+		}),
 	);
 	const left = PAD + labelColumnWidth(spec) + 10;
 	// Against a baseline column the dots are its factors, figured as moves (`+4%`, `1.3× less`).
@@ -640,8 +913,9 @@ function drawDots(spec: ChartSpec): Layer {
 		right,
 		references.map(mark => mark.value),
 		series[0]!.dim,
+		tickUnit(series[0]!, values),
 	);
-	const rowHeight = categories.length <= 10 ? 36 : categories.length <= 16 ? 28 : 20;
+	const rowHeight = labelRow(spec, categories.length <= 10 ? 36 : categories.length <= 16 ? 28 : 20);
 	// Below 28 units a row has no room for figures over its dots: the axis reads them.
 	const labelled = rowHeight >= 28;
 	const top = references.length ? 16 : 0;
@@ -670,19 +944,23 @@ function drawDots(spec: ChartSpec): Layer {
 		const [low, high] = [Math.min(...xs), Math.max(...xs)];
 		if (high - low >= 1) parts.push(line(low, y, high, y, "muted", 2, 0.35));
 		const best = (index: number, entry: ChartSeries) => entry.best === at || spec.leaders?.[at] === index;
-		// Ranges in a row stagger a little, so one capsule never hides another lying over it.
-		const stagger = present.length > 1 && present.some(({ point }) => point.upper !== undefined) ? 4 : 0;
+		// Ranges in a row stack as thinner capsules, each on its own line, so one never hides another lying over it.
+		const ranged = present.length > 1 && present.some(({ point }) => point.upper !== undefined);
+		const thin = ranged ? Math.min(radius, 3.5) : radius;
+		const stagger = ranged ? 2 * thin + 1.5 : 0;
 		const spread = (stagger * (present.length - 1)) / 2;
 		present.forEach(({ entry, index, point }, slot) => {
 			const context = emphasized && !point.emphasis;
 			const dotY = y - spread + slot * stagger;
-			parts.push(mark(scale, point, dotY, radius, SERIES[index % SERIES.length]!, context ? RECEDE : 1));
+			const size = point.upper === undefined ? radius : thin;
+			if (point.error) parts.push(whisker(scale, point, dotY, radius + 1, SERIES[index % SERIES.length]!));
+			parts.push(mark(scale, point, dotY, size, SERIES[index % SERIES.length]!, context ? RECEDE : 1));
 			if (best(index, entry)) {
 				const [from, to] = [scale.at(point.value), scale.at(point.upper ?? point.value)];
 				parts.push(
 					from === to
 						? ring(from, dotY, radius + 3, "success")
-						: mark(scale, point, dotY, radius + 3, "success", 1, true),
+						: mark(scale, point, dotY, size + 2.5, "success", 1, true),
 				);
 			}
 		});
@@ -708,7 +986,7 @@ function drawDots(spec: ChartSpec): Layer {
 				? moveTone(item.entry.polarity ?? spec.categoryPolarity?.[at], item.point.value)
 				: undefined;
 			parts.push(
-				text(from + half, y + level * (radius + 7 + spread), label, {
+				text(from + half, y + level * ((ranged ? thin + 6 : radius + 7) + spread), label, {
 					size: 10,
 					fill: tone ?? (strong ? "fg" : "muted"),
 					weight: strong ? 600 : undefined,
@@ -717,10 +995,17 @@ function drawDots(spec: ChartSpec): Layer {
 			);
 		}
 	});
+	// The success ring is keyed where any dot wears one.
+	const ringed = categories.some((_, at) =>
+		series.some((entry, index) => entry.points[at] && (entry.best === at || spec.leaders?.[at] === index)),
+	);
 	return {
 		height: bottom + 20,
 		body: parts.join(""),
-		legend: series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! })),
+		legend: [
+			...series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! })),
+			...(ringed ? [{ name: "best", color: "success", ring: true }] : []),
+		],
 		notes: [...(spec.baseline ? ["factor"] : []), ...(scale.log ? ["log scale"] : [])],
 	};
 }
@@ -812,6 +1097,7 @@ function drawRange(spec: ChartSpec): Layer {
 			right,
 			marks.map(mark => mark.value),
 			entries[0]!.dim,
+			tickUnit(entries[0]!, values),
 		);
 		if (scale.log && !notes.includes("log scale")) notes.push("log scale");
 		if (titled) {
@@ -821,7 +1107,8 @@ function drawRange(spec: ChartSpec): Layer {
 			y += TITLE_LINE + 4;
 		}
 		if (marks.length) y += 16;
-		const { row: rowHeight, bar, step } = barMetrics(categories.length, members.length);
+		const { row, bar, step } = barMetrics(categories.length, members.length);
+		const rowHeight = labelRow(spec, row);
 		const tops = rowTops(spec, y, rowHeight);
 		const bottom = tops.at(-1)!;
 		for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
@@ -965,6 +1252,218 @@ function referenceLines(
 	return parts.join("");
 }
 
+// ── Distributions: quantile ladders and histograms ───────────────────────────
+
+/** Height of a ladder row: room for the marks and, over the row they label, the quantile names. */
+const LADDER_ROW = 34;
+/** Fill opacity of a ladder's body, from its middle quantile to the next one up. */
+const LADDER_BODY = 0.4;
+
+/**
+ * Quantiles of one measurement per category ({@link ChartSpec.ladders}) on one shared axis
+ * (logarithmic once values span {@link SPAN_LOG}×): per ladder a hairline from its lowest quantile to
+ * its highest, a body from its middle quantile (the median, else the lowest) to the next one up, a dot
+ * at the middle and a tick at every other quantile. The quantile names label the marks once, over the
+ * row whose marks stand furthest apart; several ladders a row (`Startup`, `Wall`) stack in their
+ * colors with a legend. Each row closes with its figures (`0.65 / 0.80 / 0.87 / 3.7ms`).
+ */
+function drawLadder(spec: ChartSpec): Layer {
+	const { categories, series } = spec;
+	const ladders = spec.ladders ?? [{ name: "", series: series.map((_, index) => index) }];
+	const values = series.flatMap(entry => entry.points.flatMap(point => (point ? [point.value] : [])));
+	// Figures share their unit: written once, after the last (`0.65 / 0.87 / 3.7ms`).
+	const figures = (members: readonly number[], at: number) => {
+		const texts = members.flatMap(index => (series[index]!.points[at] ? [pointText(series[index]!, at)] : []));
+		const unit = /[^\d\s.,]+$/.exec(texts.at(-1) ?? "")?.[0] ?? "";
+		const bare = (figure: string) => figure.slice(0, -unit.length).trim();
+		const shared = unit !== "" && texts.every(figure => figure.endsWith(unit) && /\d$/.test(bare(figure)));
+		const written = texts.map((figure, at) => (shared && at < texts.length - 1 ? bare(figure) : figure));
+		return clip(written.join(" / "), 32);
+	};
+	const figureWidth = Math.max(
+		0,
+		...ladders.flatMap(ladder => categories.map((_, at) => measure(figures(ladder.series, at), 10))),
+	);
+	const left = PAD + labelColumnWidth(spec) + 10;
+	const right = WIDTH - PAD - figureWidth - 12;
+	const scale = spanScale(values, left, right, [], series[0]!.dim, tickUnit(series[0]!, values));
+	const stacked = ladders.length > 1;
+	const metrics = barMetrics(categories.length, ladders.length);
+	const rowHeight = labelRow(
+		spec,
+		stacked ? metrics.row + 6 : Math.max(metrics.row, categories.length <= 12 ? LADDER_ROW : 24),
+	);
+	const step = stacked ? metrics.step + 3 : 0;
+	const thick = stacked ? metrics.bar : Math.min(12, metrics.bar);
+	// The first row whose marks stand far enough apart for every name carries the quantile names (the first
+	// ladder's), else the row whose marks stand furthest apart.
+	const lead = ladders[0]!.series;
+	const spacing = categories.map((_, at) => {
+		const xs = lead.flatMap(index => {
+			const point = series[index]!.points[at];
+			return point ? [scale.at(point.value)] : [];
+		});
+		if (xs.length < lead.length) return -1;
+		return Math.min(...xs.slice(1).map((x, slot) => x - xs[slot]!));
+	});
+	const room = Math.max(...lead.map(index => measure(clip(series[index]!.name, 8), 10))) + 4;
+	const roomy = spacing.findIndex(gap => gap >= room);
+	const named = roomy >= 0 ? roomy : spacing.indexOf(Math.max(...spacing));
+	const top = 14;
+	const tops = rowTops(spec, top, rowHeight);
+	const bottom = tops.at(-1)!;
+	const parts: string[] = [];
+	for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
+	parts.push(drawValueAxis(scale, series[0]!, top, bottom));
+	parts.push(categoryLabels(spec, tops, rowHeight, strongCategories(spec)));
+	const strong = strongCategories(spec);
+	// Before and after (`Baseline` | `Final`): the start recedes in muted, the lead color passes to the end.
+	const colorOf = (slot: number) =>
+		spec.transition ? (slot === 0 ? "muted" : SERIES[(slot - 1) % SERIES.length]!) : SERIES[slot % SERIES.length]!;
+	categories.forEach((_, at) => {
+		const rowTop = tops[at]!;
+		ladders.forEach((ladder, slot) => {
+			const color = colorOf(slot);
+			const y = stacked ? rowTop + 6 + slot * step + thick / 2 : rowTop + rowHeight / 2 + 4;
+			const marks = ladder.series.flatMap(index => {
+				const point = series[index]!.points[at];
+				return point ? [{ index, point, x: scale.at(point.value) }] : [];
+			});
+			if (marks.length === 0) return;
+			// The middle quantile: the median (or a mean beside quantiles), else the lowest one shown.
+			const middle = Math.max(
+				0,
+				marks.findIndex(({ index }) => /^(?:p50|median|med|mean|avg|average)$/i.test(series[index]!.name)),
+			);
+			const [low, high] = [marks[0]!.x, marks.at(-1)!.x];
+			if (high - low >= 1) parts.push(line(low, y, high, y, color, 1.5, 0.55));
+			const centre = marks[middle]!;
+			const body = marks[middle + 1];
+			if (body && body.x - centre.x >= 1)
+				parts.push(rect(centre.x, y - thick / 2, body.x - centre.x, thick, color, LADDER_BODY, 2));
+			marks.forEach(({ x }, order) => {
+				if (order === middle) return;
+				parts.push(line(x, y - thick / 2 - 1, x, y + thick / 2 + 1, color, 2));
+			});
+			const radius = num(Math.min(5.5, thick / 2 + 1));
+			parts.push(
+				`<circle cx="${num(centre.x)}" cy="${num(y)}" r="${radius}" fill="${token(color)}" stroke="${token("surface")}" stroke-width="1.5"/>`,
+			);
+			const said = figures(ladder.series, at);
+			const emphasis = strong.has(at) || marks.some(({ point }) => point.emphasis);
+			parts.push(
+				text(Math.max(high, centre.x + 6) + 8, y, said, {
+					size: 10,
+					fill: emphasis ? "fg" : "muted",
+					weight: emphasis ? 600 : undefined,
+				}),
+			);
+			if (at !== named || slot !== 0) return;
+			// Quantile names over this row's marks, each where it clears the one before.
+			let clear = Number.NEGATIVE_INFINITY;
+			for (const { index, x } of marks) {
+				const name = clip(series[index]!.name, 8);
+				const half = measure(name, 10) / 2;
+				if (x - half < clear) continue;
+				parts.push(text(x, y - thick / 2 - 8, name, { size: 10, fill: "muted", anchor: "middle" }));
+				clear = x + half + 4;
+			}
+		});
+	});
+	return {
+		height: bottom + 20,
+		body: parts.join(""),
+		legend: stacked
+			? ladders.map((ladder, slot) => ({ name: ladder.name || `#${slot + 1}`, color: colorOf(slot) }))
+			: [],
+		notes: scale.log ? ["log scale"] : [],
+	};
+}
+
+/** Height of a histogram's plot. */
+const HISTOGRAM_HEIGHT = 170;
+/** Share of a bin's width its columns leave empty when several distributions share it. */
+const BIN_GAP = 0.28;
+
+/**
+ * Counts (or shares) over ordered bins as columns rising from zero in bin order, the bins named under
+ * them and the bins' axis named under those. One distribution's columns nearly touch, as a histogram's
+ * do; two to four stand side by side in each bin in their series colors, keyed by a legend. Each column
+ * carries its figure; the focus bin gets a band.
+ */
+function drawHistogram(spec: ChartSpec): Layer {
+	const { categories, series } = spec;
+	const values = [0, ...series.flatMap(entry => entry.points.flatMap(point => (point ? [point.value] : [])))];
+	const unit = tickUnit(series[0]!, values);
+	const probe = valueScale(values, 0, 1, { zero: true, unit });
+	const format = tickFormat(probe, series[0]!);
+	const tickWidth = Math.max(...probe.ticks.map(tick => measure(format(tick), TICK_SIZE)));
+	const left = PAD + tickWidth + 8;
+	const right = WIDTH - PAD;
+	const plotTop = 18;
+	const plotBottom = plotTop + HISTOGRAM_HEIGHT;
+	const scale = valueScale(values, plotBottom, plotTop, { zero: true, unit });
+	const binWidth = (right - left) / categories.length;
+	const single = series.length === 1;
+	const inner = single ? binWidth - 3 : binWidth * (1 - BIN_GAP);
+	const columnWidth = inner / series.length;
+	const parts: string[] = [];
+	for (const at of highlighted(spec))
+		parts.push(band(left + at * binWidth, plotTop - 16, binWidth, plotBottom - plotTop + 36));
+	scale.ticks.forEach(tick => {
+		const y = scale.at(tick);
+		parts.push(tick === 0 ? line(left, y, right, y, "border", 1) : rule(left, y, right, y));
+		parts.push(text(left - 8, y, format(tick), { size: TICK_SIZE, fill: "muted", anchor: "end" }));
+	});
+	const emphasized = series.some(entry => entry.points.some(point => point?.emphasis));
+	const strong = strongCategories(spec);
+	const labelSize = columnWidth >= 34 ? TICK_SIZE : 10;
+	categories.forEach((name, at) => {
+		const start = left + at * binWidth + (binWidth - inner) / 2;
+		series.forEach((entry, index) => {
+			const point = entry.points[at];
+			if (!point) return;
+			const x = start + index * columnWidth;
+			// A zero or near-zero bin stays visible as a stub.
+			const y = Math.min(scale.at(Math.max(0, point.value)), plotBottom - MIN_BAR);
+			const context = emphasized && !point.emphasis;
+			const width = Math.max(1, columnWidth - (single ? 0 : 2));
+			const color = SERIES[index % SERIES.length]!;
+			parts.push(barRect(x, y, width, plotBottom - y, color, context ? RECEDE + 0.15 : 1));
+			const figure = pointText(entry, at);
+			if (measure(figure, labelSize) <= columnWidth + (single ? 0 : 4))
+				parts.push(
+					text(x + width / 2, y - 8, figure, {
+						size: labelSize,
+						fill: point.emphasis ? "fg" : "muted",
+						weight: point.emphasis ? 600 : undefined,
+						anchor: "middle",
+					}),
+				);
+		});
+		parts.push(
+			text(left + (at + 0.5) * binWidth, plotBottom + 13, fitText(name, binWidth - 4, TICK_SIZE), {
+				size: TICK_SIZE,
+				fill: strong.has(at) ? "fg" : "muted",
+				weight: strong.has(at) ? 600 : undefined,
+				anchor: "middle",
+			}),
+		);
+	});
+	let height = plotBottom + 22;
+	if (spec.axis) {
+		const name = clip(spec.axis, 60);
+		parts.push(text((left + right) / 2, height + 8, name, { size: TICK_SIZE, fill: "muted", anchor: "middle" }));
+		height += 18;
+	}
+	return {
+		height,
+		body: parts.join(""),
+		legend: single ? [] : series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! })),
+		notes: [...(single ? [series[0]!.name] : []), ...(spec.normalized ? ["each as shares of its total"] : [])],
+	};
+}
+
 // ── Stacked parts of a whole ─────────────────────────────────────────────────
 
 /**
@@ -975,7 +1474,7 @@ function referenceLines(
  * own axis, so one model sixty times the others does not flatten them to
  * slivers; ungrouped rows share one axis. A {@link ChartSpec.normalized} chart
  * draws each bar as its category's mix on one 0–100% axis, segments wide
- * enough printing their percent; outcome parts take their status colors
+ * enough printing their percent (their figure, on a sum's thick bars); outcome parts take their status colors
  * ({@link ChartSpec.tones}).
  */
 function drawStacked(spec: ChartSpec): Layer {
@@ -989,12 +1488,15 @@ function drawStacked(spec: ChartSpec): Layer {
 		return total > sum * (1 + MIN_REST) ? total : sum;
 	});
 	const totals = sums.map(
-		(sum, at) => (whole && pointText(whole, at)) || formatValue(sum, series[0]!.dim, series[0]!.unit),
+		(sum, at) =>
+			(whole && pointText(whole, at)) ||
+			formatValue(sum, series[0]!.dim, binaryBytes(series[0]!) ? "iB" : series[0]!.unit),
 	);
 	const rested = ends.some((end, at) => end > sums[at]!);
 	const left = PAD + labelColumnWidth(spec) + 10;
 	const right = WIDTH - PAD - Math.min(120, Math.max(...totals.map(label => measure(label, TICK_SIZE)))) - 8;
-	const { row: rowHeight, bar: barHeight } = barMetrics(categories.length, 1);
+	const { row, bar: barHeight } = barMetrics(categories.length, 1);
+	const rowHeight = labelRow(spec, row);
 	const strong = strongCategories(spec);
 	const emphasized = series.some(entry => entry.points.some(point => point?.emphasis));
 	const bands = stackBands(spec, normalized ? ends.map(end => (end > 0 ? 100 : 0)) : ends);
@@ -1009,7 +1511,11 @@ function drawStacked(spec: ChartSpec): Layer {
 		};
 		const tops = rowTops(view, top, rowHeight);
 		const bottom = tops.at(-1)!;
-		const scale = valueScale(normalized ? [0, 100] : [0, ...ends.slice(first, last)], left, right, { zero: true });
+		const extent = normalized ? [0, 100] : [0, ...ends.slice(first, last)];
+		const scale = valueScale(extent, left, right, {
+			zero: true,
+			unit: normalized ? 1 : tickUnit(series[0]!, extent),
+		});
 		// Category indices into this band's rows.
 		const local = (set: Iterable<number>) =>
 			new Set([...set].flatMap(at => (at >= first && at < last ? [at - first] : [])));
@@ -1039,12 +1545,13 @@ function drawStacked(spec: ChartSpec): Layer {
 				const width = Math.max(1, place(sum) - from - 1.5);
 				const opacity = (emphasized && !point.emphasis ? RECEDE : 1) * shades[index]!;
 				parts.push(rect(from, y, width, barHeight, colors[index]!, opacity));
-				// A mix prints each part's percent inside it, in ink to read on the solid color (plain text
-				// on a faint one); a part filling the whole bar says so by its length alone.
-				const share = percentText((100 * point.value) / end);
+				// A mix prints each part's percent inside it, a sum each part's figure (on bars thick enough to
+				// hold one), in ink to read on the solid color (plain text on a faint one); a part filling the
+				// whole bar says so by its length alone.
+				const label = normalized ? percentText((100 * point.value) / end) : barHeight >= 14 ? point.text : "";
 				const style = { size: TICK_SIZE, fill: "fg", anchor: "middle", weight: 600 } as const;
-				if (normalized && point.value < end && measure(share, TICK_SIZE) * SEMIBOLD_WIDTH + 10 <= width)
-					parts.push((opacity >= INK_LEVEL ? ink : text)(from + width / 2, y + barHeight / 2, share, style));
+				if (label && point.value < end && measure(label, TICK_SIZE) * SEMIBOLD_WIDTH + 10 <= width)
+					parts.push((opacity >= INK_LEVEL ? ink : text)(from + width / 2, y + barHeight / 2, label, style));
 			});
 			if (end > sums[at]!) parts.push(rect(place(sum), y, place(end) - place(sum), barHeight, "border", 0.5));
 			const bold = whole?.points[at]?.emphasis;
@@ -1068,7 +1575,7 @@ function drawStacked(spec: ChartSpec): Layer {
 		height: top - 6,
 		body: parts.join(""),
 		legend,
-		notes: normalized ? ["% of row total"] : bands.length > 1 ? ["groups on own scales"] : [],
+		notes: normalized ? ["% of row total"] : bands.length > 1 ? ["scaled per group"] : [],
 	};
 }
 
@@ -1134,16 +1641,85 @@ function stackBands(spec: ChartSpec, ends: readonly number[]): StackBand[] {
 	return bands;
 }
 
+// ── Moves: how far and which way a value went ────────────────────────────────
+
+/** Space between a transition's figures and its move (`8 → 2  −6`). */
+const MOVE_GAP = "  ";
+/** Opacity of a transition's connector under its end dot. */
+const MOVE_OPACITY = 0.55;
+/** Widest figures column of a transition (`from → to  move`). */
+const MAX_MOVE_COLUMN = 250;
+/** Factor from which a chart writes its moves as factors (`155× less`) rather than percents. */
+const FACTOR_MOVE = 10;
+/** Whole counts below this move by differences (`8 → 2` is −6) rather than percents. */
+const MAX_COUNTED = 100;
+
 /**
- * The gradients a transition's connector fades along, from the muted start to
- * the lead series color; ids name their direction, the same in every chart.
+ * How a chart writes its moves, one way for every row: `difference` for
+ * percentages and small whole counts (`+21.7 pp`, `−6`), else `percent`
+ * (`−31%`), or `factor` once any move reaches {@link FACTOR_MOVE}× either way
+ * (`155× less`, then `1.2× more` beside it rather than `+20%`).
  */
-const PAIR_DEFS = [
-	"<defs>",
-	`<linearGradient id="pair-up" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="var(--muted)" stop-opacity="0.35"/><stop offset="1" stop-color="var(--c1)" stop-opacity="0.85"/></linearGradient>`,
-	`<linearGradient id="pair-down" x1="1" y1="0" x2="0" y2="0"><stop offset="0" stop-color="var(--muted)" stop-opacity="0.35"/><stop offset="1" stop-color="var(--c1)" stop-opacity="0.85"/></linearGradient>`,
-	"</defs>",
-].join("");
+type MoveStyle = "difference" | "percent" | "factor";
+
+/** The {@link MoveStyle} for `entry`'s moves from each pair's first point to its second. */
+function moveStyle(entry: ChartSeries, pairs: readonly (readonly [ChartPoint, ChartPoint])[]): MoveStyle {
+	const values = pairs.flatMap(([a, b]) => [a.value, b.value]);
+	if (entry.dim === "percent") return "difference";
+	if (entry.dim === "count" && !entry.unit && values.every(value => Number.isInteger(value) && value < MAX_COUNTED))
+		return "difference";
+	const far = pairs.some(
+		([a, b]) => a.value > 0 && (b.value === 0 || Math.abs(Math.log10(b.value / a.value)) >= Math.log10(FACTOR_MOVE)),
+	);
+	return far ? "factor" : "percent";
+}
+
+/**
+ * The move from `a` to `b` of `entry`'s measure in `style` ({@link factorMove}
+ * past a difference): `same` where nothing moved, empty for a factor from zero.
+ */
+function moveText(a: ChartPoint, b: ChartPoint, entry: ChartSeries, style: MoveStyle): string {
+	if (style === "difference") {
+		const difference = b.value - a.value;
+		const size = Math.abs(difference);
+		if (Number(size.toPrecision(6)) === 0) return "same";
+		const sign = difference > 0 ? "+" : "−";
+		return entry.dim === "percent" ? `${sign}${trim(size)} pp` : `${sign}${formatValue(size, entry.dim, entry.unit)}`;
+	}
+	return a.value > 0 && b.value >= 0 ? factorMove(b.value / a.value, style) : "";
+}
+
+/**
+ * A factor as a move: `155× less`, `1.2× more` in the `factor` style, `−31%` in
+ * `percent`; `same` within half a percent, or within {@link STILL} beside
+ * factors (`1.01× more` is noise next to `155× less`). A drop to zero is
+ * `−100%`, or `to zero` among factors, which no factor states.
+ */
+function factorMove(factor: number, style: "percent" | "factor"): string {
+	if (factor === 0) return style === "factor" ? "to zero" : "−100%";
+	const percent = Math.round((factor - 1) * 100);
+	if (percent === 0 || (style === "factor" && Math.abs(Math.log(factor)) < Math.log(STILL))) return "same";
+	if (style === "factor") return factor > 1 ? `${compactFactor(factor)}× more` : `${compactFactor(1 / factor)}× less`;
+	return `${percent > 0 ? "+" : "−"}${Math.abs(percent)}%`;
+}
+
+/** Each category's move from `before` to `after` ({@link moveText}), all in the style their values call for. */
+function pairMoves(before: ChartSeries, after: ChartSeries): string[] {
+	const pairs = before.points.flatMap((a, at): [ChartPoint, ChartPoint][] => {
+		const b = after.points[at];
+		return a && b ? [[a, b]] : [];
+	});
+	const style = moveStyle(after, pairs);
+	return before.points.map((a, at) => {
+		const b = after.points[at];
+		return a && b ? moveText(a, b, after, style) : "";
+	});
+}
+
+/** The tone of a transition from `a` to `b` ({@link moveTone}) by its measure's polarity, the end's before the start's. */
+function pairTone(before: ChartSeries, after: ChartSeries, a: ChartPoint, b: ChartPoint): string | undefined {
+	return a.value > 0 ? moveTone(after.polarity ?? before.polarity, b.value / a.value) : undefined;
+}
 
 /** Categories a planner highlighted ({@link ChartSpec.annotations}), in range. */
 function highlighted(spec: ChartSpec): number[] {
@@ -1175,14 +1751,185 @@ function calloutTexts(spec: ChartSpec): Map<number, string> {
 	return texts;
 }
 
+// ── Values against their targets ─────────────────────────────────────────────
+
+/** Furthest past its target a bullet axis reaches (2 = twice it); a value beyond runs off the axis' end, the break marked. */
+const TARGET_REACH = 2;
+/** Least reach of a bullet axis (in targets) where a value runs off it, so the overrun shows past the target. */
+const OVERRUN_ROOM = 1.25;
+/** Opacity of a bullet row's track from zero to its target, over the border color. */
+const TRACK_OPACITY = 0.3;
+
+/**
+ * Each category's measured value against its own target ({@link ChartSpec.targets}): a bar from zero (a
+ * `p50 / p99` spread faint past its low end) over a faint track up to the target, the target a dashed rule
+ * labelled with what it is (`budget`); a window target (`60–100 ms`) a faint band. The bar is `success`
+ * where it keeps the target's side ({@link targetStanding}), `warning` where only just, `error` where it
+ * misses, the lead color where the target has no side. Rows held to different targets share one axis as
+ * shares of them (each target at 100%), each row's share leading its figures; rows held to one target share
+ * an axis in their unit, the rule at it. A value past {@link TARGET_REACH} times its target (or over a zero
+ * target) runs off the axis' end, the break marked.
+ */
+function drawBullet(spec: ChartSpec): Layer {
+	const { categories } = spec;
+	const entry = spec.series[0]!;
+	const targets = spec.targets ?? [];
+	const word = spec.targetName ?? "target";
+	const known = targets.filter((target): target is ChartTarget => target !== null);
+	const first = known[0];
+	const shared =
+		first !== undefined &&
+		known.every(target => target.value === first.value && target.upper === first.upper && target.text === first.text);
+	const goal = shared ? (first.upper ?? first.value) : 100;
+	const reach = goal * TARGET_REACH;
+	// Positions: in the unit when every row shares one target, else as a percent of each row's own.
+	const position = (at: number, value: number) => {
+		const target = targets[at];
+		if (!target || shared) return value;
+		const scale = target.upper ?? target.value;
+		return scale > 0 ? (100 * value) / scale : value > 0 ? Number.POSITIVE_INFINITY : 0;
+	};
+	const standings = categories.map((_, at) => {
+		const point = entry.points[at];
+		const target = targets[at];
+		return point && target ? targetStanding(point, target) : undefined;
+	});
+	const tone = (at: number) => {
+		const standing = standings[at];
+		return !standing ? SERIES[0] : !standing.met ? "error" : standing.close ? "warning" : "success";
+	};
+	// Each row's share of its target; over a zero target only whether it met it.
+	const shareText = (at: number) => {
+		const standing = standings[at];
+		if (shared || !standing) return "";
+		const { share } = standing;
+		if (share === undefined) return standing.met ? "met" : "over";
+		if (share >= TARGET_REACH) return `${compactFactor(share)}×`;
+		return share < 0.01 ? percentText(share * 100) : `${Math.round(share * 100)}%`;
+	};
+	const figure = (at: number) => {
+		const own = pointText(entry, at);
+		const target = targets[at];
+		return shared || !target ? own : `${own}  ${target.text}`;
+	};
+	const shareWidth = Math.max(0, ...categories.map((_, at) => measure(shareText(at), TICK_SIZE) * SEMIBOLD_WIDTH));
+	const figureWidth = Math.min(220, Math.max(0, ...categories.map((_, at) => measure(figure(at), TICK_SIZE))));
+	const left = PAD + labelColumnWidth(spec) + 10;
+	const right = WIDTH - PAD - figureWidth - 10 - (shareWidth ? shareWidth + 8 : 0);
+	const ends = categories.flatMap((_, at) => {
+		const point = entry.points[at];
+		if (!point || !targets[at]) return [];
+		return [point.value, point.upper ?? point.value].map(value => position(at, value));
+	});
+	// Values off the axis need only a stretch past the target to run off; the axis spans the rest.
+	const within = ends.filter(value => value <= reach);
+	const room = ends.length > within.length ? [goal * OVERRUN_ROOM] : [];
+	const extent = [0, goal, ...within, ...room];
+	const scale = valueScale(extent, left, right, { zero: true, unit: shared ? tickUnit(entry, extent) : 1 });
+	const last = Math.min(reach, scale.ticks.at(-1) ?? reach);
+	const end = scale.at(last);
+	const x = (at: number, value: number) => scale.at(Math.min(position(at, value), last));
+	const metrics = barMetrics(categories.length, 1);
+	const rowHeight = labelRow(spec, metrics.row);
+	const { bar } = metrics;
+	const estimates = estimatedPoints(entry);
+	const top = 16;
+	const tops = rowTops(spec, top, rowHeight);
+	const bottom = tops.at(-1)!;
+	const strong = strongCategories(spec);
+	const parts: string[] = [];
+	for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
+	parts.push(drawValueAxis(scale, shared ? entry : { ...entry, dim: "percent", unit: "" }, top, bottom));
+	parts.push(categoryLabels(spec, tops, rowHeight, strong));
+	const rule = shared ? `${first.text} ${word}` : word;
+	parts.push(referenceLines([{ kind: "reference", value: goal, label: rule }], scale, left, right, top, bottom));
+	const emphasized = entry.points.some(point => point?.emphasis);
+	categories.forEach((_, at) => {
+		const middle = tops[at]! + rowHeight / 2;
+		const y = middle - bar / 2;
+		const point = entry.points[at];
+		const target = targets[at];
+		if (!point || !target) {
+			const note = entry.notes[at];
+			if (note) parts.push(noteText(left + 4, middle, clip(note, 40)));
+			return;
+		}
+		const zero = scale.at(0);
+		const scaleOf = target.upper ?? target.value;
+		parts.push(rect(zero, y, x(at, scaleOf) - zero, bar, "border", TRACK_OPACITY));
+		if (target.upper !== undefined)
+			parts.push(
+				rect(x(at, target.value), y - 2, x(at, target.upper) - x(at, target.value), bar + 4, "success", 0.18),
+			);
+		const fill = tone(at);
+		const opacity = emphasized && !point.emphasis ? RECEDE : 1;
+		const low = x(at, point.value);
+		const high = x(at, point.upper ?? point.value);
+		parts.push(barRect(zero, y, Math.max(MIN_BAR, low - zero), bar, fill, opacity, { estimate: estimates.has(at) }));
+		if (high > low) parts.push(rect(low, y, high - low, bar, fill, RANGE_OPACITY * opacity));
+		// Past the axis' end: the bar runs off it, the break marked where it leaves.
+		if (position(at, point.upper ?? point.value) > last) parts.push(breakMark(end - 6, middle, bar / 2 + 2, "fg"));
+		const own = pointText(entry, at);
+		// One target: the figure follows its bar as on any bar chart, clear of the target's rule.
+		const ruleX = scale.at(goal);
+		const after = Math.max(high, low) + (position(at, point.upper ?? point.value) > last ? 10 : 6);
+		let textX = !shared
+			? right + 10
+			: after <= ruleX + 2 && after + measure(own, TICK_SIZE) >= ruleX - 2
+				? ruleX + 6
+				: after;
+		const share = shareText(at);
+		if (shareWidth) {
+			parts.push(
+				text(textX + shareWidth, middle, share, {
+					size: TICK_SIZE,
+					fill: fill === SERIES[0] ? "fg" : fill,
+					weight: 600,
+					anchor: "end",
+				}),
+			);
+			textX += shareWidth + 8;
+		}
+		// The figure, then (each row held to its own) its target, muted: one line of runs.
+		const runs: TextRun[] = [
+			{
+				content: own,
+				fill: point.emphasis || !standings[at]?.met ? "fg" : undefined,
+				weight: point.emphasis ? 600 : undefined,
+			},
+		];
+		if (!shared) runs.push({ content: `\u2002${clip(target.text, 18)}` });
+		parts.push(text(textX, middle, runs, { size: TICK_SIZE, fill: "muted" }));
+	});
+	const shown = new Set<string>(categories.map((_, at) => tone(at)));
+	const legend: LegendItem[] = [
+		{ name: `within ${word}`, color: "success" },
+		{ name: "within 10%", color: "warning" },
+		{ name: `misses ${word}`, color: "error" },
+	].filter(item => shown.has(item.color));
+	// A spread's two ends (`p50 / p99`), named under the figures they explain.
+	const spread = entry.name.split(/\s*\/\s*/);
+	if (spread.length === 2 && entry.points.some(point => point?.upper !== undefined))
+		parts.push(
+			text(WIDTH - PAD, bottom + 12, clip(`bar to ${spread[0]}, faint to ${spread[1]}`, 40), {
+				size: TICK_SIZE,
+				fill: "muted",
+				anchor: "end",
+			}),
+		);
+	return { height: bottom + 20, body: parts.join(""), legend: legend.length > 1 ? legend : [] };
+}
+
 // ── Runs of steps: waterfall and timeline ────────────────────────────────────
 
 /**
  * Each step a floating bar from the running sum before it to the one after
  * it, a hairline carrying each end down to the next step, and the total the
  * steps reach ({@link ChartSpec.total}) as a full bar under them. A cap (a
- * `reference` annotation) draws as a dashed rule, the total's figure saying
- * what it leaves to spare or runs over by. Steps take the lead color; a
+ * `reference` annotation) draws as a dashed rule, the total's row showing
+ * what it leaves to spare as a faint `success` span up to the rule (or the
+ * overrun past it in `error`), named beside the total's figure, or past the
+ * rule where the span cannot hold it. Steps take the lead color; a
  * falling step takes the tone a drop has for its measure (else the second
  * series color). A run of rising steps prints each one's share of the total.
  */
@@ -1238,7 +1985,8 @@ function drawWaterfall(spec: ChartSpec): Layer {
 		{ zero: true },
 	);
 	const count = categories.length + 1;
-	const { row: rowHeight, bar: barHeight } = barMetrics(count, 1);
+	const { row, bar: barHeight } = barMetrics(count, 1);
+	const rowHeight = labelRow(view, row);
 	const top = references.length ? 16 : 0;
 	const tops = rowTops(view, top, rowHeight);
 	const bottom = tops.at(-1)!;
@@ -1304,18 +2052,24 @@ function drawWaterfall(spec: ChartSpec): Layer {
 	const zero = scale.at(0);
 	const end = scale.at(total.point.value);
 	parts.push(rect(Math.min(zero, end), y, Math.max(1, Math.abs(end - zero)), barHeight, "muted", 1));
-	parts.push(
-		text(Math.max(zero, end) + 6, y + barHeight / 2, totalText, { size: TICK_SIZE, fill: "fg", weight: 600 }),
-	);
-	if (spareText)
+	// The headroom left under the cap, or the overrun past it, as a span of the total's row.
+	const capX = cap ? scale.at(cap.value) : end;
+	if (cap && spare > 0) parts.push(rect(end, y, capX - end, barHeight, "success", 0.18));
+	if (cap && spare < 0) parts.push(rect(capX, y, end - capX, barHeight, "error", 0.85));
+	const figureX = Math.max(zero, end) + 6;
+	parts.push(text(figureX, y + barHeight / 2, totalText, { size: TICK_SIZE, fill: "fg", weight: 600 }));
+	if (spareText) {
+		const after = figureX + measure(totalText, TICK_SIZE) * SEMIBOLD_WIDTH + 6;
+		// Inside the headroom span when it holds the words; else clear of the cap's rule.
+		const inside = spare > 0 && after + measure(spareText, TICK_SIZE) <= capX - 4;
 		parts.push(
-			text(
-				Math.max(zero, end) + 6 + measure(totalText, TICK_SIZE) * SEMIBOLD_WIDTH + 4,
-				y + barHeight / 2,
-				`· ${spareText}`,
-				{ size: TICK_SIZE, fill: spare >= 0 ? "muted" : "error", weight: spare >= 0 ? undefined : 600 },
-			),
+			text(inside || spare < 0 ? after : capX + 6, y + barHeight / 2, spareText, {
+				size: TICK_SIZE,
+				fill: spare >= 0 ? "success" : "error",
+				weight: 600,
+			}),
 		);
+	}
 	return { height: bottom + 20, body: parts.join("") };
 }
 
@@ -1659,11 +2413,11 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 	const left = PAD + labelWidth + 10;
 	const cellWidth = (WIDTH - PAD - left) / series.length;
 	const count = spec.categories.length;
-	const rowHeight = heat ? (count <= 8 ? 26 : count <= 16 ? 22 : 20) : count <= 8 ? 24 : 20;
+	const rowHeight = labelRow(spec, heat ? (count <= 8 ? 26 : count <= 16 ? 22 : 20) : count <= 8 ? 24 : 20);
 	const headerChars = Math.max(4, Math.floor((cellWidth - 6) / (TICK_SIZE * ADVANCE)));
 	const perSeries = spec.shading === "series";
 	const parts: string[] = [];
-	const headers = series.map(entry => wrapHeader(entry.name, headerChars));
+	const headers = series.map(entry => wrapHeader(entry.name, cellWidth - 6, TICK_SIZE * SEMIBOLD_WIDTH));
 	const headerLines = Math.max(...headers.map(lines => lines.length));
 	series.forEach((entry, index) => {
 		const x = left + index * cellWidth;
@@ -1674,7 +2428,7 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 				heat
 					? text(x + cellWidth / 2, y, content, {
 							size: TICK_SIZE,
-							fill: perSeries ? SERIES[index % SERIES.length]! : "muted",
+							fill: perSeries ? "fg" : "muted",
 							anchor: "middle",
 							weight: perSeries ? 600 : undefined,
 						})
@@ -1694,17 +2448,46 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 	);
 	for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
 	parts.push(categoryLabels(spec, tops, rowHeight, strongCategories(spec)));
+	// Whether any column printed factors of a reference row, which the header then names.
+	let factorNoted = false;
 	series.forEach((entry, index) => {
 		const x = left + index * cellWidth;
 		const values = entry.points.flatMap(point => (point ? [point.value] : []));
 		const own = shade(values);
-		const textWidth = Math.max(0, ...entry.points.map(point => measure(point?.text ?? "", TICK_SIZE)));
-		const leads = entry.best !== undefined || spec.leaders?.includes(index);
-		const barSpace = Math.max(0, cellWidth - textWidth - 14 - (leads ? BEST_WIDTH : 0));
-		const bars = panelScale(values, x + 2, x + 2 + barSpace);
+		// Bars reach their stated spread (`32 ± 7`) too.
+		const reach = entry.points.flatMap(point => (point ? [point.value + (point.error ?? 0)] : []));
+		// Bars beside reference rows print their factor of their group's reference (`36.3k  2.2×`), toned by the
+		// measure's polarity: the comparison a table of arms against a baseline is about ({@link referenceText}).
+		const allFactors = heat ? [] : referenceFactors(spec, entry);
+		const ratios = allFactors.some(factor => factor !== undefined && (factor >= 2 || factor <= 0.5));
+		// Room past each bar for its row's own figure, factor and `best` tag (the widest row, not the widest of
+		// each), and a clear gap before the next column's rule. What would squeeze the bars under
+		// {@link MIN_BAR_SHARE} of the column goes: first the tag (its figure stays semibold), then the factors.
+		const need = (best: boolean, factored: boolean) =>
+			Math.max(
+				0,
+				...entry.points.map((point, row) => {
+					const factor = allFactors[row];
+					return (
+						measure(point?.text ?? "", TICK_SIZE) * SEMIBOLD_WIDTH +
+						(factored && factor !== undefined ? measure(referenceText(factor, ratios), TICK_SIZE - 1) + 6 : 0) +
+						(best && (entry.best === row || spec.leaders?.[row] === index) ? BEST_WIDTH : 0)
+					);
+				}),
+			) + 18;
+		const fits = (best: boolean, factored: boolean) => cellWidth - need(best, factored) >= MIN_BAR_SHARE * cellWidth;
+		const factored = fits(false, true);
+		const tagged = fits(true, factored);
+		const factors = factored ? allFactors : [];
+		const factorTexts = factors.map(factor => (factor === undefined ? "" : referenceText(factor, ratios)));
+		if (factorTexts.some(Boolean)) factorNoted = true;
+		const barSpace = Math.max(MIN_BAR_SHARE * cellWidth, cellWidth - need(tagged, factored));
+		const bars = panelScale(heat ? values : reach, x + 2, x + 2 + barSpace);
 		const reference = heat ? undefined : referenceRules(spec, entry, tops, rowHeight, bars.at);
 		const emphasized = entry.points.some(point => point?.emphasis);
-		const color = heat && !perSeries ? SERIES[0] : SERIES[index % SERIES.length]!;
+		// Columns are told apart by their headings: one hue for all, so color stays free for emphasis.
+		const color = SERIES[0];
+		const estimated = estimatedPoints(entry);
 		entry.points.forEach((point, row) => {
 			const y = tops[row]!;
 			const middle = y + rowHeight / 2;
@@ -1735,16 +2518,22 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 				);
 				return;
 			}
-			const end = Math.max(x + 3, bars.at(point.value));
-			const bar = Math.min(14, rowHeight - 10);
-			const opacity = emphasized && !point.emphasis ? RECEDE : 1;
+			const end = Math.max(x + 2 + MIN_BAR, bars.at(point.value));
+			const thick = Math.min(14, rowHeight - 10);
+			// Rows beside the bolded ones recede to gray, as a lone series' context bars do.
+			const context = emphasized && !point.emphasis;
 			parts.push(
 				bars.cut && point.value > bars.cut.below
-					? cutBar(bars.cut, x + 2, end, middle - bar / 2, bar, color, opacity)
-					: rect(x + 2, middle - bar / 2, end - x - 2, bar, color, opacity),
+					? cutBar(bars.cut, x + 2, end, middle - thick / 2, thick, context ? "muted" : color, context ? 0.55 : 1)
+					: barRect(x + 2, middle - thick / 2, end - x - 2, thick, context ? "muted" : color, context ? 0.55 : 1, {
+							estimate: estimated.has(row),
+						}),
 			);
-			// A figure clears its group's reference rule.
-			const figureX = Math.max(end, reference?.at[row] ?? end) + 4;
+			const spread = point.error && !bars.cut ? whisker(bars, point, middle, thick / 2 - 1) : "";
+			parts.push(spread);
+			// A figure clears its group's reference rule and the spread's whisker.
+			const figureX =
+				Math.max(end, reference?.at[row] ?? end, spread ? bars.at(point.value + point.error!) : end) + 4;
 			parts.push(
 				text(figureX, middle, point.text, {
 					size: TICK_SIZE,
@@ -1752,8 +2541,13 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 					weight: point.emphasis || best ? 600 : undefined,
 				}),
 			);
-			if (best)
-				parts.push(bestTag(figureX + measure(point.text, TICK_SIZE) * SEMIBOLD_WIDTH + 5, middle, TICK_SIZE));
+			let after = figureX + measure(point.text, TICK_SIZE) * (point.emphasis || best ? SEMIBOLD_WIDTH : 1) + 5;
+			if (factorTexts[row]) {
+				const tone = moveTone(entry.polarity, factors[row]!) ?? "muted";
+				parts.push(text(after, middle, factorTexts[row]!, { size: TICK_SIZE - 1, fill: tone }));
+				after += measure(factorTexts[row]!, TICK_SIZE - 1) + 6;
+			}
+			if (best && tagged) parts.push(bestTag(after, middle, TICK_SIZE));
 		});
 		if (reference) parts.push(reference.body);
 	});
@@ -1762,16 +2556,19 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 			const x = left + index * cellWidth - 3;
 			parts.push(rule(x, top, x, bottom));
 		}
-		return { height: bottom + 4, body: parts.join(""), notes: ["each column on its own scale"] };
+		// Factors name what they are factors of, where every group compares with a row of one name (`vs bash`).
+		const bases = new Set((spec.reference ?? []).map(at => clip(memberName(spec, at), 24)));
+		const versus = factorNoted && bases.size === 1 ? [`vs ${[...bases][0]}`] : [];
+		return { height: bottom + 4, body: parts.join(""), notes: ["scaled per column", ...versus] };
 	}
 	const logShade = logShaded(all);
-	const notes = perSeries
-		? ["each column shaded on its own"]
-		: perRow
-			? ["each row shaded on its own"]
-			: logShade
-				? ["log shading"]
-				: [];
+	const outlined =
+		series.some(entry => entry.best !== undefined) || (spec.leaders ?? []).some(lead => lead !== undefined);
+	const notes = [
+		...(perSeries ? ["shaded per column"] : perRow ? ["shaded per row"] : logShade ? ["log shading"] : []),
+		// The outline is the only mark of a column's best: the note keys it.
+		...(outlined ? ["best outlined"] : []),
+	];
 	// The faintest swatch stands for where the shading starts: zero, the least positive value on a log ramp, or the least.
 	const least = Math.min(...all);
 	const ramp =
@@ -1780,7 +2577,7 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 			: {
 					color: SERIES[0],
 					low: formatValue(
-						logShade ? Math.min(...all.filter(value => value > 0)) : Math.min(least, 0),
+						logShade ? Math.min(...all.filter(value => value > 0)) : Math.min(least, heatFloor(all)),
 						series[0]!.dim,
 						series[0]!.unit,
 					),
@@ -1790,19 +2587,13 @@ function drawGrid(spec: ChartSpec, style: "heat" | "bars"): Layer {
 }
 
 /**
- * A column header in one line of `chars`, or two split at the word boundary
- * nearest the middle when one would clip it (`Strict Recall` → `Strict`,
- * `Recall`); the second line clips what still does not fit.
+ * A column heading in one line of `width` at `size` (an em scale; pass the
+ * semibold width for bold text), or two split where they balance
+ * ({@link wrapLabel}: `Strict Recall` → `Strict`, `Recall`;
+ * `gtTagRelevance` → `gtTag`, `Relevance`) when one would clip it.
  */
-function wrapHeader(name: string, chars: number): string[] {
-	if (name.length <= chars) return [name];
-	const breaks = [...name.matchAll(/[\s/_-]+/g)].map(match => match.index! + match[0].length);
-	const fitting = breaks.filter(at => at > 0 && name.slice(0, at).trimEnd().length <= chars);
-	if (fitting.length === 0) return [clip(name, chars)];
-	const at = fitting.reduce((best, next) =>
-		Math.abs(next - name.length / 2) < Math.abs(best - name.length / 2) ? next : best,
-	);
-	return [name.slice(0, at).trimEnd(), clip(name.slice(at), chars)];
+function wrapHeader(name: string, width: number, size: number): string[] {
+	return measure(name, size) <= width ? [name] : wrapLabel(name, width, size);
 }
 
 /**
@@ -1827,7 +2618,7 @@ function drawPanels(spec: ChartSpec): Layer {
 		const textWidth = Math.max(0, ...entry.points.map((_, at) => measure(pointText(entry, at), 10)));
 		const barSpace = Math.max(0, panelWidth - textWidth - 6 - (entry.best === undefined ? 0 : BEST_WIDTH));
 		const scale = panelScale(
-			entry.points.flatMap(point => (point ? [point.value] : [])),
+			entry.points.flatMap(point => (point ? [point.value + (point.error ?? 0)] : [])),
 			x,
 			x + barSpace,
 		);
@@ -1842,7 +2633,7 @@ function drawPanels(spec: ChartSpec): Layer {
 				if (note) parts.push(noteText(x, middle, clip(note, titleChars)));
 				return;
 			}
-			const end = Math.max(x + 1, scale.at(point.value));
+			const end = Math.max(x + MIN_BAR, scale.at(point.value));
 			const color = SERIES[at % SERIES.length]!;
 			const opacity = emphasized && !point.emphasis ? RECEDE : 1;
 			parts.push(
@@ -1850,8 +2641,11 @@ function drawPanels(spec: ChartSpec): Layer {
 					? cutBar(scale.cut, x, end, middle - 5, 10, color, opacity)
 					: rect(x, middle - 5, end - x, 10, color, opacity),
 			);
+			const spread = point.error && !scale.cut ? whisker(scale, point, middle, 4) : "";
+			parts.push(spread);
 			const best = entry.best === at;
-			const figureX = Math.max(end, reference.at[at] ?? end) + 4;
+			const figureX =
+				Math.max(end, reference.at[at] ?? end, spread ? scale.at(point.value + point.error!) : end) + 4;
 			parts.push(
 				text(figureX, middle, pointText(entry, at), {
 					size: 10,
@@ -1867,63 +2661,108 @@ function drawPanels(spec: ChartSpec): Layer {
 		height: top + bands * panelHeight - 10,
 		body: parts.join(""),
 		legend: categories.map((name, at) => ({ name, color: SERIES[at % SERIES.length]! })),
-		notes: ["each panel on its own scale"],
+		notes: ["scaled per panel"],
 	};
 }
 
 // ── Change against a baseline ───────────────────────────────────────────────
 
+/** Factor within which every move of a `change` reads as a percent on a linear axis (−67% … +200%). */
+const PERCENT_REACH = 3;
+/** Least room between two factor tick labels (`3× less`, `1×`). */
+const FACTOR_TICK_GAP = 56;
+/** Least reach of a percent axis (in percent) toward each side its moves take, so a few percent never fill it. */
+const MIN_PERCENT_REACH = 10;
+
 /**
- * Factors on a log axis through 1× (the baseline): each metric's bar runs from
- * 1× to its factor, so halving and doubling draw equally long whatever the
- * metric's unit. One series prints the factor and both figures beside its bar.
+ * Each metric's move from the baseline as a bar from no change, every row
+ * written one way ({@link factorMove}): moves all within {@link PERCENT_REACH}×
+ * as percents on a linear axis through 0% (`−4%`, `−56%`); farther ones as
+ * factors on a log axis through 1×, where halving and doubling draw equally
+ * long whatever the metric's unit (`155× less`, `1.1× more`). One series prints
+ * the move and both figures beside its bar; bars take the move's tone where
+ * the metric has a polarity, the rest one neutral color.
  */
 function drawChange(spec: ChartSpec): Layer {
 	const { categories, series } = spec;
 	const single = series.length === 1;
 	const points = series.flatMap(entry => entry.points.filter(point => point !== null));
+	const style = points.every(
+		point => point.value <= PERCENT_REACH && (point.value === 0 || point.value >= 1 / PERCENT_REACH),
+	)
+		? "percent"
+		: "factor";
 	const logs = points.flatMap(point => (point.value > 0 ? [Math.log10(point.value)] : []));
 	let low = -roundFactor(-Math.min(0, ...logs));
 	let high = roundFactor(Math.max(0, ...logs));
-	// A drop to zero has no factor; its bar runs to the axis end.
+	// A drop to zero has no factor: on the log axis its bar runs off the axis' end through a break, its move
+	// written `to zero`; on the percent axis it runs to −100%.
 	if (points.some(point => point.value === 0)) low = Math.min(low, -Math.log10(2));
 	if (low === high) high = Math.log10(FACTOR_STOPS[0]!);
 
 	const parts: string[] = [];
 	const top = 0;
-	const factors = categories.map((_, at) => (single ? factorText(series[0]!.points[at]) : ""));
+	const factors = categories.map((_, at) => {
+		const point = series[0]!.points[at];
+		return single && point ? factorMove(point.value, style) : "";
+	});
 	const factorWidth = Math.max(0, ...factors.map(label => measure(label, TICK_SIZE)));
 	const figures = categories.map((_, at) => (single ? (series[0]!.points[at]?.text ?? "") : ""));
 	const figureWidth = Math.max(0, ...figures.map(label => measure(label, TICK_SIZE)));
+	const labelWidth = labelColumnWidth(spec);
+	// Long figures (`0.138 / 0.537 → 0.057 / 0.154`) take up to {@link FIGURE_SHARE} of the room right of the labels.
 	const valueWidth = single
-		? Math.min(280, factorWidth + 10 + figureWidth) + 8
-		: Math.max(0, ...points.map(point => measure(factorText(point), 10))) + 8;
-	const left = PAD + labelColumnWidth(spec) + 10;
+		? Math.min(Math.max(280, (WIDTH - 2 * PAD - labelWidth - 10) * FIGURE_SHARE), factorWidth + 10 + figureWidth) + 8
+		: Math.max(0, ...points.map(point => measure(factorMove(point.value, style), 10))) + 8;
+	const left = PAD + labelWidth + 10;
 	const right = WIDTH - PAD - valueWidth;
-	const x = (log: number) => left + ((log - low) / (high - low)) * (right - left);
 	const metrics = barMetrics(categories.length, series.length);
-	const rowHeight = metrics.row;
+	const rowHeight = labelRow(spec, metrics.row);
 	const barHeight = metrics.bar;
 	const tops = rowTops(spec, top, rowHeight);
 	const gridBottom = tops.at(-1)!;
 
-	// 1× always; the ends and whole decades between wherever their labels stay clear of the rest.
-	const decade = (right - left) / (high - low);
-	const ticks = [0];
-	for (const end of [low, high]) if (Math.abs(end) * decade >= 40) ticks.push(end);
-	for (let power = Math.ceil(low); power <= Math.floor(high); power++) {
-		if (ticks.every(tick => Math.abs(power - tick) * decade >= 40)) ticks.push(power);
+	// Where a factor lands, and the ticks: percents on nice linear steps through 0%; on the log axis 1× always,
+	// the ends and whole decades between wherever their labels stay clear of the rest.
+	let x: (factor: number) => number;
+	const ticks = new Map<number, string>();
+	if (style === "percent") {
+		// Moves as written (whole percents): a `same` never stretches the axis to a side of its own.
+		const percents = points.map(point => Math.round((point.value - 1) * 100));
+		const reach = [
+			...(percents.some(percent => percent < 0) ? [-MIN_PERCENT_REACH] : []),
+			...(percents.some(percent => percent > 0) ? [MIN_PERCENT_REACH] : []),
+		];
+		const scale = valueScale([...percents, ...reach], left, right, { zero: true });
+		x = factor => scale.at((factor - 1) * 100);
+		for (const tick of scale.ticks)
+			ticks.set(tick / 100 + 1, tick === 0 ? "0%" : `${tick > 0 ? "+" : "−"}${compact(Math.abs(tick))}%`);
+	} else {
+		const at = (log: number) => left + ((log - low) / (high - low)) * (right - left);
+		x = factor => at(factor > 0 ? Math.log10(factor) : low);
+		const decade = (right - left) / (high - low);
+		const logs = [0];
+		for (const end of [low, high]) if (Math.abs(end) * decade >= FACTOR_TICK_GAP) logs.push(end);
+		for (let power = Math.ceil(low); power <= Math.floor(high); power++) {
+			if (logs.every(tick => Math.abs(power - tick) * decade >= FACTOR_TICK_GAP)) logs.push(power);
+		}
+		for (const log of logs)
+			ticks.set(10 ** log, log === 0 ? "1×" : `${compactFactor(10 ** Math.abs(log))}× ${log < 0 ? "less" : "more"}`);
 	}
-	for (const tick of new Set(ticks)) {
+	for (const [tick, label] of ticks) {
 		parts.push(rule(x(tick), top, x(tick), gridBottom));
-		const label = tick === 0 ? "1×" : `${tick < 0 ? "÷" : "×"}${compactFactor(10 ** Math.abs(tick))}`;
 		parts.push(text(x(tick), gridBottom + 12, label, { size: TICK_SIZE, fill: "muted", anchor: "middle" }));
 	}
+	// Neutral bars share one color; beside toned ones they step back.
+	const toned = categories.some((_, row) =>
+		series.some(entry => {
+			const point = entry.points[row];
+			return point && moveTone(spec.categoryPolarity?.[row] ?? entry.polarity, point.value);
+		}),
+	);
 
 	const emphasized = points.some(point => point.emphasis);
 	for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
-	// The epsilon keeps a figure that exactly fits from clipping on float error.
-	const figureChars = Math.floor((valueWidth - 18 - factorWidth) / (TICK_SIZE * ADVANCE) + 1e-6);
 	parts.push(categoryLabels(spec, tops, rowHeight, strongCategories(spec)));
 	categories.forEach((_, row) => {
 		const rowTop = tops[row]!;
@@ -1932,15 +2771,22 @@ function drawChange(spec: ChartSpec): Layer {
 			const point = entry.points[row];
 			if (!point) return;
 			const y = single ? middle - barHeight / 2 : rowTop + 5 + index * metrics.step;
-			const end = x(point.value > 0 ? Math.log10(point.value) : low);
+			const end = x(point.value);
 			// A metric with a polarity reads its move as an improvement or a regression.
 			const tone = moveTone(spec.categoryPolarity?.[row] ?? entry.polarity, point.value);
-			// One series tells shrinking from growing by color (better from worse where it can); several keep their own.
-			const color = single ? (tone ?? SERIES[point.value > 1 ? 1 : 0]) : SERIES[index % SERIES.length]!;
+			// One series takes the move's tone (neutral otherwise); several keep their own colors.
+			const color = single ? (tone ?? (toned ? "muted" : SERIES[0])) : SERIES[index % SERIES.length]!;
 			const opacity = emphasized && !point.emphasis ? RECEDE : 1;
-			parts.push(rect(Math.min(x(0), end), y, Math.max(1, Math.abs(end - x(0))), barHeight, color, opacity));
+			if (style === "factor" && point.value === 0) {
+				const cut = end + CLIP_INSET;
+				parts.push(rect(end, y, CLIP_INSET - CUT_GAP / 2, barHeight, color, opacity));
+				parts.push(rect(cut + CUT_GAP / 2, y, x(1) - cut - CUT_GAP / 2, barHeight, color, opacity));
+				parts.push(breakMark(cut, y + barHeight / 2, barHeight / 2 + 1, "muted"));
+			} else parts.push(rect(Math.min(x(1), end), y, Math.max(1, Math.abs(end - x(1))), barHeight, color, opacity));
 			if (!single)
-				parts.push(text(right + 8, y + barHeight / 2, factorText(point), { size: 10, fill: tone ?? "muted" }));
+				parts.push(
+					text(right + 8, y + barHeight / 2, factorMove(point.value, style), { size: 10, fill: tone ?? "muted" }),
+				);
 		});
 		if (single) {
 			const point = series[0]!.points[row];
@@ -1948,24 +2794,20 @@ function drawChange(spec: ChartSpec): Layer {
 			const tone = point ? moveTone(spec.categoryPolarity?.[row] ?? series[0]!.polarity, point.value) : undefined;
 			parts.push(text(right + 8, middle, factors[row]!, { size: TICK_SIZE, fill: tone ?? "fg", weight: strong }));
 			parts.push(
-				text(right + 18 + factorWidth, middle, clip(figures[row]!, figureChars), {
+				text(right + 18 + factorWidth, middle, fitText(figures[row]!, valueWidth - 17 - factorWidth, TICK_SIZE), {
 					size: TICK_SIZE,
 					fill: "muted",
 				}),
 			);
 		}
 	});
-	parts.push(line(x(0), top - 2, x(0), gridBottom + 2, "muted", 1.5));
+	parts.push(line(x(1), top - 2, x(1), gridBottom + 2, "muted", 1.5));
+	const versus = `change vs ${spec.baseline ?? "baseline"}`;
 	return {
 		height: gridBottom + 20,
 		body: parts.join(""),
-		legend: single
-			? []
-			: [
-					...series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! })),
-					{ name: spec.baseline ?? "baseline", color: "muted" },
-				],
-		notes: ["factor, log scale"],
+		legend: single ? [] : series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! })),
+		notes: style === "percent" ? [versus] : [versus, "log scale"],
 	};
 }
 
@@ -1979,18 +2821,368 @@ function roundFactor(log: number): number {
 /** A factor as people say it: `48× less`, `2.1× more`, or a percent within 2× (`−12%`, `+27%`). */
 function factorText(point: ChartPoint | null | undefined): string {
 	if (!point) return "";
-	const factor = point.value;
-	if (factor === 0) return "−100%";
-	if (factor >= 2) return `${compactFactor(factor)}× more`;
-	if (factor <= 0.5) return `${compactFactor(1 / factor)}× less`;
-	const percent = Math.round((factor - 1) * 100);
-	return percent === 0 ? "same" : `${percent > 0 ? "+" : "−"}${Math.abs(percent)}%`;
+	return factorMove(point.value, point.value >= 2 || (point.value > 0 && point.value <= 0.5) ? "factor" : "percent");
+}
+
+/**
+ * A value's factor of its reference row, one way for a whole column: a percent
+ * (`−7%`, `+57%`) where every factor stays within 2× either way, else the
+ * factor itself (`2.2×`, `1.6×`, `0.45×`: one decimal from 1×, two under it,
+ * whole from 10×) once any reaches past — shorter than `2.2× more`, so the
+ * figures leave the bars their width; `same` within {@link STILL}.
+ */
+function referenceText(factor: number, ratio: boolean): string {
+	if (!ratio) return factorMove(factor, "percent");
+	if (factor > 0 && Math.abs(Math.log(factor)) < Math.log(STILL)) return "same";
+	return `${factor >= 10 ? compact(Math.round(factor)) : Number(factor.toFixed(factor >= 1 ? 1 : 2))}×`;
 }
 
 /** `48`, `2.1`, `1.25`, `35k`: whole above 10, one decimal above 2, two below. */
 function compactFactor(factor: number): string {
 	if (factor >= 10) return compact(Math.round(factor));
 	return Number(factor.toFixed(factor >= 2 ? 1 : 2)).toString();
+}
+
+// ── Slope: values across ordered stages ──────────────────────────────────────
+
+/** Plot height a slope chart gives each category, and the least and most it takes in all. */
+const SLOPE_ROW = 26;
+const MIN_SLOPE_HEIGHT = 150;
+const MAX_SLOPE_HEIGHT = 300;
+/** Widest end label column of a slope chart, either side. */
+const MAX_SLOPE_LABEL = 230;
+
+/** Categories ending on one figure at a stage, labelled once (`haiku, gemini, glm  2`). */
+interface StageLabel {
+	y: number;
+	readonly text: string;
+	readonly names: readonly number[];
+}
+
+/**
+ * Each category as a line through the stages (the series, in order), the
+ * stages as columns headed by their names. The first stage's values are hollow
+ * rings, later ones dots; each step takes the tone its move has for the
+ * measure ({@link pairTone}), else the category's color (or a neutral one past
+ * the series colors). Both ends carry labels: names and first values on the
+ * left, last values, names and the net move ({@link moveText}) on the right;
+ * categories sharing a figure share a label. Middle stages print their values
+ * small beside the dots.
+ */
+function drawSlope(spec: ChartSpec): Layer {
+	const { categories, series } = spec;
+	const first = series[0]!;
+	const last = series.at(-1)!;
+	const strong = strongCategories(spec);
+	const steps = categories.map((_, at) =>
+		series.slice(1).map((entry, index) => {
+			const [a, b] = [series[index]!.points[at], entry.points[at]];
+			return a && b ? pairTone(series[index]!, entry, a, b) : undefined;
+		}),
+	);
+	const toned = steps.some(tones => tones.some(Boolean));
+	const own = (at: number) =>
+		toned ? "muted" : categories.length <= SERIES.length ? SERIES[at]! : strong.has(at) ? SERIES[0] : "muted";
+	const ends = categories.map((_, at): [ChartPoint, ChartPoint] | undefined => {
+		const [a, b] = [first.points[at], last.points[at]];
+		return a && b ? [a, b] : undefined;
+	});
+	const style = moveStyle(
+		last,
+		ends.filter(pair => pair !== undefined),
+	);
+	const nets = ends.map(pair => (pair ? moveText(pair[0], pair[1], last, style) : ""));
+	const netTone = ends.map(pair => (pair ? pairTone(first, last, pair[0], pair[1]) : undefined));
+	// Categories sharing a figure at a stage share one label.
+	const labelsAt = (entry: ChartSeries): StageLabel[] => {
+		const byText = new Map<string, number[]>();
+		entry.points.forEach((point, at) => {
+			if (point) byText.set(point.text, [...(byText.get(point.text) ?? []), at]);
+		});
+		return [...byText].map(([figure, names]) => ({ y: 0, text: figure, names }));
+	};
+	const nameList = (names: readonly number[]) => names.map(at => categories[at]!).join(", ");
+	const netOf = (names: readonly number[]) =>
+		names.every(at => nets[at] === nets[names[0]!]) ? nets[names[0]!]! : "";
+	const lefts = labelsAt(first);
+	const rights = labelsAt(last);
+	// A little slack past the estimate keeps a name that just fits from clipping.
+	const leftWidth = Math.min(
+		MAX_SLOPE_LABEL,
+		Math.max(...lefts.map(label => measure(nameList(label.names), TICK_SIZE) + 6 + measure(label.text, TICK_SIZE))) +
+			6,
+	);
+	const rightWidth = Math.min(
+		MAX_SLOPE_LABEL,
+		Math.max(
+			...rights.map(
+				label =>
+					measure(label.text, TICK_SIZE) * SEMIBOLD_WIDTH +
+					6 +
+					measure(nameList(label.names), TICK_SIZE) +
+					(netOf(label.names) ? 8 + measure(netOf(label.names), TICK_SIZE) * SEMIBOLD_WIDTH : 0),
+			),
+		),
+	);
+	const x0 = PAD + leftWidth + 12;
+	const x1 = WIDTH - PAD - rightWidth - 12;
+	const xs = series.map((_, index) => x0 + (index / (series.length - 1)) * (x1 - x0));
+	const plotTop = 30;
+	const plotHeight = Math.min(MAX_SLOPE_HEIGHT, Math.max(MIN_SLOPE_HEIGHT, categories.length * SLOPE_ROW));
+	const plotBottom = plotTop + plotHeight;
+	const values = series.flatMap(entry => entry.points.flatMap(point => (point ? [point.value] : [])));
+	const scale = valueScale(values, plotBottom, plotTop, { zero: false });
+
+	const parts: string[] = [];
+	series.forEach((entry, index) => {
+		parts.push(rule(xs[index]!, plotTop - 10, xs[index]!, plotBottom + 6));
+		parts.push(text(xs[index]!, 8, clip(entry.name, 24), { size: TICK_SIZE, fill: "muted", anchor: "middle" }));
+	});
+	// Lines first, emphasized ones last so they cross over the rest; dots over every line.
+	const order = categories.map((_, at) => at).sort((a, b) => Number(strong.has(a)) - Number(strong.has(b)));
+	const dots: string[] = [];
+	for (const at of order) {
+		const width = strong.has(at) ? 3 : 2.25;
+		series.forEach((entry, index) => {
+			const point = entry.points[at];
+			if (!point) return;
+			const [x, y] = [xs[index]!, scale.at(point.value)];
+			const before = index > 0 ? series[index - 1]!.points[at] : null;
+			const color = steps[at]![index - 1] ?? own(at);
+			if (before) parts.push(line(xs[index - 1]!, scale.at(before.value), x, y, color, width, 0.85));
+			dots.push(index === 0 ? ring(x, y, 3.5, toned ? "muted" : own(at)) : dot(x, y, 3.5, color));
+		});
+	}
+	parts.push(...dots);
+	// Middle stages print their figures small, above their dots.
+	for (const [index, entry] of series.entries()) {
+		if (index === 0 || index === series.length - 1) continue;
+		// Figures whose dots nearly meet join one label over the topmost, top to bottom (`17.10 ms · 16.02 ms`):
+		// pushed apart, the lower would sit on the lines.
+		const labels: StageLabel[] = [];
+		const natural = labelsAt(entry)
+			.map(label => ({ ...label, y: scale.at(entry.points[label.names[0]!]!.value) - 9 }))
+			.sort((a, b) => a.y - b.y);
+		for (const label of natural) {
+			const above = labels.at(-1);
+			if (above && label.y - above.y < 11)
+				labels[labels.length - 1] = {
+					...above,
+					text: `${above.text} · ${label.text}`,
+					names: [...above.names, ...label.names],
+				};
+			else labels.push(label);
+		}
+		for (const label of spreadApart(labels, plotTop - 8, plotBottom, 11))
+			parts.push(text(xs[index]!, label.y, label.text, { size: 10, fill: "muted", anchor: "middle" }));
+	}
+	const place = (labels: StageLabel[], entry: ChartSeries) => {
+		for (const label of labels) label.y = scale.at(entry.points[label.names[0]!]!.value);
+		return spreadApart(labels, plotTop - 6, plotBottom + 6, TICK_SIZE + 3);
+	};
+	const nameColor = (names: readonly number[]) => (toned || names.length > 1 ? "fg" : own(names[0]!));
+	for (const label of place(lefts, first)) {
+		const figureWidth = measure(label.text, TICK_SIZE);
+		parts.push(text(x0 - 12, label.y, label.text, { size: TICK_SIZE, fill: "muted", anchor: "end" }));
+		parts.push(
+			text(x0 - 18 - figureWidth, label.y, fitText(nameList(label.names), x0 - 18 - figureWidth - PAD, TICK_SIZE), {
+				size: TICK_SIZE,
+				fill: nameColor(label.names),
+				anchor: "end",
+				weight: label.names.some(at => strong.has(at)) ? 600 : undefined,
+			}),
+		);
+	}
+	for (const label of place(rights, last)) {
+		const net = netOf(label.names);
+		const tone = label.names.every(at => netTone[at] === netTone[label.names[0]!])
+			? netTone[label.names[0]!]
+			: undefined;
+		let x = x1 + 12;
+		parts.push(text(x, label.y, label.text, { size: TICK_SIZE, fill: "fg", weight: 600 }));
+		x += measure(label.text, TICK_SIZE) * SEMIBOLD_WIDTH + 6;
+		const netWidth = net ? 8 + measure(net, TICK_SIZE) * SEMIBOLD_WIDTH : 0;
+		const names = fitText(nameList(label.names), WIDTH - PAD - x - netWidth, TICK_SIZE);
+		parts.push(
+			text(x, label.y, names, {
+				size: TICK_SIZE,
+				fill: nameColor(label.names),
+				weight: label.names.some(at => strong.has(at)) ? 600 : undefined,
+			}),
+		);
+		if (net)
+			parts.push(
+				text(x + measure(names, TICK_SIZE) + 8, label.y, net, {
+					size: TICK_SIZE,
+					fill: tone ?? "muted",
+					weight: tone ? 600 : undefined,
+				}),
+			);
+	}
+	const polarity = last.polarity ?? first.polarity;
+	return {
+		height: plotBottom + 10,
+		body: parts.join(""),
+		notes: [...(toned ? [`${polarity} is better`] : []), ...(scale.log ? ["log scale"] : [])],
+	};
+}
+
+// ── Butterfly: opposing amounts back to back ─────────────────────────────────
+
+/**
+ * Two opposing amounts per category as bars from one spine: the first series
+ * (the losing side: removed, losses) leftward in the error tone, the second
+ * (added, wins) rightward in the success tone, on one scale either way, each
+ * figure at its bar's end and the series named over its half. Each row's net
+ * closes the line in the tone of the side that outweighs.
+ */
+function drawButterfly(spec: ChartSpec): Layer {
+	const { categories, series } = spec;
+	const loss = series[0]!;
+	const gain = series[1]!;
+	const sides = [loss, gain];
+	const size = (point: ChartPoint | null | undefined) => Math.abs(point?.value ?? 0);
+	const nets = categories.map((_, at) => size(gain.points[at]) - size(loss.points[at]));
+	const whole = sides.every(entry => entry.points.every(point => !point || Number.isInteger(point.value)));
+	const netText = (net: number) =>
+		net === 0
+			? "±0"
+			: `${net > 0 ? "+" : "−"}${whole ? Math.abs(net).toLocaleString("en-US") : formatValue(Math.abs(net), gain.dim, gain.unit)}`;
+	const figures = sides.map(entry => categories.map((_, at) => pointText(entry, at)));
+	const widest = (labels: readonly string[]) => Math.max(0, ...labels.map(label => measure(label, TICK_SIZE)));
+	const netWidth = Math.max(measure("net", TICK_SIZE), widest(nets.map(netText)) * SEMIBOLD_WIDTH) + 12;
+	const left = PAD + labelColumnWidth(spec) + 10 + widest(figures[0]!) + 8;
+	const right = WIDTH - PAD - netWidth - widest(figures[1]!) - 8;
+	const spine = (left + right) / 2;
+	const reach = Math.max(...sides.flatMap(entry => entry.points.map(size)), 1);
+	const span = (value: number) => (Math.abs(value) / reach) * (right - spine);
+	const { row, bar: barHeight } = barMetrics(categories.length, 1);
+	const rowHeight = labelRow(spec, row);
+	const top = 18;
+	const tops = rowTops(spec, top, rowHeight);
+	const bottom = tops.at(-1)!;
+	const estimates = sides.map(estimatedPoints);
+
+	const parts: string[] = [];
+	for (const at of highlighted(spec)) parts.push(band(PAD - 4, tops[at]!, WIDTH - 2 * PAD + 8, rowHeight));
+	parts.push(categoryLabels(spec, tops, rowHeight, strongCategories(spec)));
+	parts.push(text(spine - 8, 6, clip(loss.name, 24), { size: TICK_SIZE, fill: "muted", anchor: "end" }));
+	parts.push(text(spine + 8, 6, clip(gain.name, 24), { size: TICK_SIZE, fill: "muted" }));
+	parts.push(text(WIDTH - PAD, 6, "net", { size: TICK_SIZE, fill: "muted", anchor: "end" }));
+	const emphasized = sides.some(entry => entry.points.some(point => point?.emphasis));
+	categories.forEach((_, at) => {
+		const middle = tops[at]! + rowHeight / 2;
+		const y = middle - barHeight / 2;
+		sides.forEach((entry, index) => {
+			const point = entry.points[at];
+			if (!point) return;
+			const length = Math.max(MIN_BAR, span(point.value));
+			const opacity = emphasized && !point.emphasis ? RECEDE : 1;
+			const strong = point.emphasis ? 600 : undefined;
+			const estimate = estimates[index]!.has(at);
+			if (index === 0) {
+				parts.push(barRect(spine - length, y, length, barHeight, "error", opacity, { estimate }));
+				parts.push(
+					text(spine - length - 6, middle, figures[0]![at]!, {
+						size: TICK_SIZE,
+						fill: "muted",
+						anchor: "end",
+						weight: strong,
+					}),
+				);
+			} else {
+				parts.push(barRect(spine, y, length, barHeight, "success", opacity, { estimate }));
+				parts.push(
+					text(spine + length + 6, middle, figures[1]![at]!, { size: TICK_SIZE, fill: "muted", weight: strong }),
+				);
+			}
+		});
+		const net = nets[at]!;
+		parts.push(
+			text(WIDTH - PAD, middle, netText(net), {
+				size: TICK_SIZE,
+				fill: net > 0 ? "success" : net < 0 ? "error" : "muted",
+				anchor: "end",
+				weight: 600,
+			}),
+		);
+	});
+	parts.push(line(spine, top - 4, spine, bottom + 4, "fg", 1.25, 0.6));
+	return { height: bottom + 8, body: parts.join("") };
+}
+
+// ── Two conditions, metric by metric ────────────────────────────────────────
+
+/** Widest a stat tile grows, so one or two metrics stay a compact card rather than a banner. */
+const MAX_TILE = 300;
+/** Space between stat tiles, a hairline divider in its middle. */
+const TILE_GAP = 24;
+/** Size of a stat tile's factor. */
+const FACTOR_SIZE = 24;
+
+/**
+ * Two conditions compared metric by metric (`stat`): a tile per series, each
+ * naming its metric over the factor from the baseline condition
+ * ({@link ChartSpec.reference}) to the other in large figures — toned when the
+ * metric improves or regresses — over one short bar per condition on the
+ * tile's own scale, the baseline muted and the other in the lead color, each
+ * with its written figure. The header keys the two conditions.
+ */
+function drawStat(spec: ChartSpec): Layer {
+	const { series, categories } = spec;
+	const base = spec.reference?.[0] ?? 0;
+	const other = 1 - base;
+	const tile = Math.min(MAX_TILE, (WIDTH - 2 * PAD - TILE_GAP * (series.length - 1)) / series.length);
+	const parts: string[] = [];
+	const barTop = 50;
+	const barHeight = 10;
+	const barStep = 18;
+	const height = barTop + barStep + barHeight;
+	series.forEach((entry, index) => {
+		const left = PAD + index * (tile + TILE_GAP);
+		if (index > 0) parts.push(rule(left - TILE_GAP / 2, 0, left - TILE_GAP / 2, height));
+		parts.push(text(left, 7, fitText(entry.name, tile, TICK_SIZE), { size: TICK_SIZE, fill: "muted" }));
+		const [from, to] = [entry.points[base], entry.points[other]];
+		if (!from || !to) return;
+		const move = from.value > 0 ? { value: to.value / from.value, text: "", emphasis: false } : undefined;
+		const words = factorText(move);
+		const size = Math.min(
+			FACTOR_SIZE,
+			(FACTOR_SIZE * tile) / Math.max(1, measure(words, FACTOR_SIZE) * SEMIBOLD_WIDTH),
+		);
+		const tone = move ? moveTone(entry.polarity, move.value) : undefined;
+		parts.push(text(left, 30, words, { size, fill: tone ?? "fg", weight: 600 }));
+		// Figures show whole (`2,426 / 2,368 ms`) up to half the tile; the bars keep the rest.
+		const figures = [base, other].map(at => fitText(pointText(entry, at), tile / 2, TICK_SIZE * SEMIBOLD_WIDTH));
+		const figureWidth = Math.max(...figures.map(figure => measure(figure, TICK_SIZE) * SEMIBOLD_WIDTH)) + 8;
+		const span = Math.max(24, tile - figureWidth);
+		const peak = Math.max(from.value, to.value) || 1;
+		const estimated = estimatedPoints(entry);
+		[from, to].forEach((point, at) => {
+			const y = barTop + at * barStep;
+			const length = Math.max(MIN_BAR, (Math.max(0, point.value) / peak) * span);
+			parts.push(
+				barRect(left, y, length, barHeight, at === 0 ? "muted" : SERIES[0], at === 0 ? 0.55 : 1, {
+					estimate: estimated.has(at === 0 ? base : other),
+				}),
+			);
+			parts.push(
+				text(left + length + 6, y + barHeight / 2, figures[at]!, {
+					size: TICK_SIZE,
+					fill: at === 0 ? "muted" : "fg",
+					weight: at === 0 ? undefined : 600,
+				}),
+			);
+		});
+	});
+	return {
+		height,
+		body: parts.join(""),
+		legend: [
+			{ name: categories[base] ?? "", color: "muted", opacity: 0.55 },
+			{ name: categories[other] ?? "", color: SERIES[0] },
+		],
+	};
 }
 
 // ── Share of a whole ─────────────────────────────────────────────────────────
@@ -2066,8 +3258,8 @@ interface EndLabel {
  * Lines across the categories (or the numeric x), smoothed without
  * overshooting a sample. Series whose peaks differ {@link SPLIT_SPREAD}× or
  * more stack in panels on their own axes, so one large series never flattens
- * the rest; the panels share the x labels under the last. A lone line draws
- * over a soft area fill, and every line ends in its value — and its name,
+ * the rest; the panels share the x labels under the last. A lone line on an
+ * axis from zero draws over a soft area fill, and every line ends in its value — and its name,
  * when there are several and their names are short, instead of a legend.
  */
 function drawLine(spec: ChartSpec): Layer {
@@ -2115,7 +3307,7 @@ function drawLine(spec: ChartSpec): Layer {
 	const callouts = (spec.annotations ?? []).filter(
 		(mark): mark is Extract<ChartAnnotation, { kind: "callout" }> => mark.kind === "callout",
 	);
-	let top = callouts.length ? 18 : 0;
+	let top = 0;
 	let plotBottom = 0;
 	panels.forEach((panel, panelIndex) => {
 		// Lines without direct labels need a legend in each of several panels (one panel's goes in the header).
@@ -2129,7 +3321,9 @@ function drawLine(spec: ChartSpec): Layer {
 			parts.push(`<g transform="translate(0 ${num(top)})">${legend.body}</g>`);
 			top += legend.height + 4;
 		}
-		const plotTop = top + 6;
+		// A callout over a line of this panel sets its text above the plot, clear of the panel's legend.
+		const room = callouts.some(mark => panel.includes(mark.series ?? 0)) ? 24 : 0;
+		const plotTop = top + 6 + room;
 		plotBottom = plotTop + plotHeight;
 		const scale = valueScale(values[panelIndex]!, plotBottom, plotTop, { zero: false });
 		const format = tickFormat(scale, series[0]!);
@@ -2152,7 +3346,8 @@ function drawLine(spec: ChartSpec): Layer {
 				if (point) runs.at(-1)!.push([xAt(at), scale.at(point.value)]);
 				else if (runs.at(-1)!.length > 0) runs.push([]);
 			}
-			if (panel.length === 1) {
+			// The area reads as an amount, so it shades only down to a zero baseline, never to a cut-off axis.
+			if (panel.length === 1 && scale.ticks[0] === 0) {
 				// The fade's id names its color, so two charts inlined in one page agree on it.
 				parts.push(
 					`<defs><linearGradient id="fade-${color}" x1="0" y1="0" x2="0" y2="1">`,
@@ -2215,26 +3410,32 @@ function drawLine(spec: ChartSpec): Layer {
 	});
 
 	// Category labels left to right, skipping any that would touch the last one drawn.
+	// A label too long for its slot wraps to a second line before it clips.
 	const slot = (right - left) / Math.max(1, categories.length - 1);
-	const labelChars = Math.max(3, Math.floor(Math.max(slot, 60) / (TICK_SIZE * ADVANCE)) - 1);
-	const labels = clipNames(categories, labelChars);
+	const labels = categories.map(name => wrapHeader(name, Math.max(slot, 60) - 6, TICK_SIZE));
 	let drawnEnd = Number.NEGATIVE_INFINITY;
+	let wrapped = false;
 	for (const at of order) {
-		const label = labels[at]!;
-		const width = measure(label, TICK_SIZE);
+		const lines = labels[at]!;
+		const width = Math.max(...lines.map(label => measure(label, TICK_SIZE)));
 		const center = Math.min(Math.max(xAt(at), left + width / 2), WIDTH - PAD - width / 2);
 		if (center - width / 2 < drawnEnd + 8) continue;
-		parts.push(text(center, plotBottom + 14, label, { size: TICK_SIZE, fill: "muted", anchor: "middle" }));
+		lines.forEach((label, line) =>
+			parts.push(
+				text(center, plotBottom + 14 + line * 12, label, { size: TICK_SIZE, fill: "muted", anchor: "middle" }),
+			),
+		);
+		wrapped ||= lines.length > 1;
 		drawnEnd = center + width / 2;
 	}
 	return {
-		height: plotBottom + 24,
+		height: plotBottom + (wrapped ? 36 : 24),
 		body: parts.join(""),
 		legend:
 			series.length > 1 && !direct && panels.length === 1
 				? series.map((entry, at) => ({ name: entry.name, color: SERIES[at % SERIES.length]! }))
 				: [],
-		notes: panels.length > 1 ? ["panels on their own axes"] : [],
+		notes: panels.length > 1 ? ["own axis per panel"] : [],
 	};
 }
 
@@ -2293,16 +3494,20 @@ function smoothPath(points: readonly (readonly [number, number])[]): string {
 	return path;
 }
 
+/** `items` sorted by `y` and nudged at least `gap` apart, kept between `top` and `bottom` where they fit. */
+function spreadApart<T extends { y: number }>(items: T[], top: number, bottom: number, gap: number): T[] {
+	items.sort((a, b) => a.y - b.y);
+	for (let at = 1; at < items.length; at++) items[at]!.y = Math.max(items[at]!.y, items[at - 1]!.y + gap);
+	for (let at = items.length - 1; at >= 0; at--) {
+		const limit = at === items.length - 1 ? bottom : items[at + 1]!.y - gap;
+		items[at]!.y = Math.max(top, Math.min(items[at]!.y, limit));
+	}
+	return items;
+}
+
 /** End labels in their lines' colors, nudged apart so none overlap, kept between `top` and `bottom` where they fit. */
 function spreadLabels(labels: EndLabel[], top: number, bottom: number): string {
-	const gap = TICK_SIZE + 2;
-	labels.sort((a, b) => a.y - b.y);
-	for (let at = 1; at < labels.length; at++) labels[at]!.y = Math.max(labels[at]!.y, labels[at - 1]!.y + gap);
-	for (let at = labels.length - 1; at >= 0; at--) {
-		const limit = at === labels.length - 1 ? bottom : labels[at + 1]!.y - gap;
-		labels[at]!.y = Math.max(top, Math.min(labels[at]!.y, limit));
-	}
-	return labels
+	return spreadApart(labels, top, bottom, TICK_SIZE + 2)
 		.map(label => {
 			if (!label.name)
 				return text(label.x, label.y, label.text, { size: TICK_SIZE, fill: label.color, weight: 600 });
@@ -2326,9 +3531,11 @@ function drawScatter(spec: ChartSpec): Layer {
 	const right = WIDTH - PAD - 24;
 	const top = 18;
 	const bottom = top + 200;
-	const xScale = valueScale(finite(xs.values), left, right, { zero: false });
-	const yScale = valueScale(finite(ys), bottom, top, { zero: false });
-	const parts: string[] = [text(left, 6, entry.name, { size: TICK_SIZE, fill: "muted" })];
+	// Ends inset from the plot's edges, so a dot on an outer tick stays clear of the axis labels.
+	const xScale = valueScale(finite(xs.values), left + 8, right - 8, { zero: false });
+	const yScale = valueScale(finite(ys), bottom - 6, top + 6, { zero: false });
+	// Axis titles in the text color: they name what the plot means, unlike the muted tick figures.
+	const parts: string[] = [text(left, 6, entry.name, { size: TICK_SIZE, fill: "fg" })];
 	for (const tick of yScale.ticks) {
 		parts.push(rule(left, yScale.at(tick), right, yScale.at(tick)));
 		parts.push(
@@ -2349,7 +3556,7 @@ function drawScatter(spec: ChartSpec): Layer {
 			}),
 		);
 	}
-	parts.push(text(right, bottom + 30, xs.name, { size: TICK_SIZE, fill: "muted", anchor: "end" }));
+	parts.push(text(right, bottom + 30, xs.name, { size: TICK_SIZE, fill: "fg", anchor: "end" }));
 	const marks = entry.points.flatMap((point, at) => {
 		const xv = xs.values[at]!;
 		return point && Number.isFinite(xv) ? [{ at, point, x: xScale.at(xv), y: yScale.at(point.value) }] : [];
@@ -2366,15 +3573,18 @@ function drawScatter(spec: ChartSpec): Layer {
 	const taken: Box[] = marks.map(mark => ({ x0: mark.x - 5, y0: mark.y - 5, x1: mark.x + 5, y1: mark.y + 5 }));
 	const lead = (mark: (typeof marks)[number]) => Number(focus.has(mark.at)) * 2 + Number(mark.point.emphasis);
 	const order = marks.toSorted((a, b) => lead(b) - lead(a));
-	const names = clipNames(spec.categories, 18);
+	const names = clipNames(spec.categories, 26);
 	for (const mark of order.length <= 40 ? order : []) {
 		const label = names[mark.at]!;
-		const width = measure(label, 10);
+		const strong = mark.point.emphasis || focus.has(mark.at);
+		const width = measure(label, TICK_SIZE) * (strong ? SEMIBOLD_WIDTH : 1);
+		// A name clears its dot, and the accent ring around a highlighted one.
+		const gap = focus.has(mark.at) ? 13 : 8;
 		const spots: [number, number, "start" | "end" | "middle"][] = [
-			[mark.x + 8, mark.y, "start"],
-			[mark.x - 8, mark.y, "end"],
-			[mark.x, mark.y - 12, "middle"],
-			[mark.x, mark.y + 12, "middle"],
+			[mark.x + gap, mark.y, "start"],
+			[mark.x - gap, mark.y, "end"],
+			[mark.x, mark.y - gap - 5, "middle"],
+			[mark.x, mark.y + gap + 5, "middle"],
 		];
 		for (const [x, y, anchor] of spots) {
 			const x0 = anchor === "start" ? x : anchor === "end" ? x - width : x - width / 2;
@@ -2383,12 +3593,13 @@ function drawScatter(spec: ChartSpec): Layer {
 			if (taken.some(other => box.x0 < other.x1 && other.x0 < box.x1 && box.y0 < other.y1 && other.y0 < box.y1))
 				continue;
 			taken.push(box);
+			// Names read in the text color unless bolded points single some out; then the rest recede with their dots.
 			parts.push(
 				text(x, y, label, {
-					size: 10,
-					fill: focus.has(mark.at) ? "accent" : mark.point.emphasis ? "fg" : "muted",
+					size: TICK_SIZE,
+					fill: focus.has(mark.at) ? "accent" : strong || !emphasized ? "fg" : "muted",
 					anchor,
-					weight: mark.point.emphasis || focus.has(mark.at) ? 600 : undefined,
+					weight: strong ? 600 : undefined,
 				}),
 			);
 			break;
@@ -2408,7 +3619,12 @@ function valueScale(
 	values: readonly number[],
 	from: number,
 	to: number,
-	options: { zero: boolean; breakable?: boolean },
+	options: {
+		zero: boolean;
+		breakable?: boolean;
+		/** One tick unit in base units ({@link tickUnit}): a linear axis ticks on nice multiples of it. */
+		unit?: number;
+	},
 ): Scale {
 	let min = Math.min(...values);
 	let max = Math.max(...values);
@@ -2418,7 +3634,7 @@ function valueScale(
 	}
 	const tier = options.breakable ? outlierTier(values) : undefined;
 	if (tier) return brokenScale(tier, from, to, true);
-	if (min > 0 && max / min >= LOG_SPREAD) {
+	if (logSpread(values)) {
 		const low = Math.floor(Math.log10(min));
 		const high = Math.ceil(Math.log10(max));
 		const ticks: number[] = [];
@@ -2441,12 +3657,49 @@ function valueScale(
 		max = min === 0 ? 1 : min + Math.abs(min) * 0.5;
 		if (!options.zero) min -= Math.abs(min) * 0.5;
 	}
-	const step = niceStep((max - min) / 4);
-	const low = Math.floor(min / step) * step;
-	const high = Math.ceil(max / step) * step;
+	const unit = options.unit ?? 1;
+	const nice = linearTicks(
+		min / unit,
+		max / unit,
+		values.every(value => Number.isInteger(value / unit)),
+	);
+	const [low, high, step] = [nice.low * unit, nice.high * unit, nice.step * unit];
 	const ticks: number[] = [];
 	for (let tick = low; tick <= high + step / 2; tick += step) ticks.push(Number(tick.toPrecision(12)));
 	return { at: value => from + ((value - low) / (high - low || 1)) * (to - from), ticks, log: false };
+}
+
+/** Whether `values` are all positive and span {@link LOG_SPREAD}× or more: a value axis over them is logarithmic. */
+function logSpread(values: readonly number[]): boolean {
+	const min = Math.min(...values);
+	return min > 0 && Math.max(...values) / min >= LOG_SPREAD;
+}
+
+/**
+ * Nice tick spacing for a linear axis over `min`…`max`: of the
+ * {@link niceStep}s giving three to six intervals, the one whose outer ticks
+ * waste the least length past the values (`0–120`, not `0–150`, for 113),
+ * four or five intervals preferred; whole steps only for `integral` values
+ * (counts tick `0, 2, 4`, never `2.5`).
+ */
+function linearTicks(min: number, max: number, integral: boolean): { low: number; high: number; step: number } {
+	let best: { low: number; high: number; step: number; cost: number } | undefined;
+	for (const intervals of [4, 5, 3, 6]) {
+		const step = niceStep((max - min) / intervals);
+		if (integral && !Number.isInteger(step)) continue;
+		const low = Math.floor(min / step) * step;
+		const high = Math.ceil(max / step) * step;
+		const count = Math.round((high - low) / step);
+		if (count < 2 || count > 7) continue;
+		const waste = (high - low - (max - min)) / (high - low || 1);
+		// Steps of 2.5 tick at `7.5`: a last resort beside the rounder 1, 2 and 5.
+		const quarter = Math.abs(step / 10 ** Math.floor(Math.log10(step)) - 2.5) < 1e-9;
+		const cost = waste + 0.03 * Math.max(0, Math.abs(count - 4.5) - 0.5) + (quarter ? 0.08 : 0);
+		if (!best || cost < best.cost - 1e-9) best = { low, high, step, cost };
+	}
+	if (best) return best;
+	const step = integral ? Math.max(1, Math.ceil(niceStep((max - min) / 4))) : niceStep((max - min) / 4);
+	return { low: Math.floor(min / step) * step, high: Math.ceil(max / step) * step, step };
 }
 
 /**
@@ -2465,11 +3718,12 @@ function spanScale(
 	to: number,
 	marks: readonly number[] = [],
 	dim?: Dimension,
+	unit = 1,
 ): Scale {
 	const reach = [...values, ...marks];
 	const [min, max] = [Math.min(...reach), Math.max(...reach)];
 	if (!(Math.min(...values) > 0) || !(min > 0) || Math.max(...values) / Math.min(...values) < SPAN_LOG)
-		return valueScale(reach, from, to, { zero: false });
+		return valueScale(reach, from, to, { zero: false, unit });
 	const fine = Math.log10(max / min) <= FINE_DECADES;
 	const steps = fine ? [1, 2, 5] : [1];
 	const grid: number[] = [];
@@ -2498,9 +3752,10 @@ function spanScale(
  * The few values (at most {@link MAX_TIER_SHARE} of them) standing
  * {@link TIER_GAP}× or more above the largest of the rest, at the widest such
  * jump — when the rest still read on a linear axis (spread under
- * {@link LOG_SPREAD}), so breaking the axis beats a logarithmic one.
+ * `restSpread`, {@link LOG_SPREAD} by default), so breaking the axis beats a
+ * logarithmic one; signed bars, never logarithmic, pass no limit.
  */
-function outlierTier(values: readonly number[]): Tier | undefined {
+function outlierTier(values: readonly number[], restSpread = LOG_SPREAD): Tier | undefined {
 	if (values.some(value => value < 0)) return undefined;
 	const sorted = values.filter(value => value > 0).sort((a, b) => b - a);
 	const most = Math.floor(values.length * MAX_TIER_SHARE);
@@ -2513,7 +3768,7 @@ function outlierTier(values: readonly number[]): Tier | undefined {
 			best = { rest: sorted[k]!, low: sorted[k - 1]!, high: sorted[0]! };
 		}
 	}
-	if (!best || best.rest / sorted.at(-1)! >= LOG_SPREAD) return undefined;
+	if (!best || best.rest / sorted.at(-1)! >= restSpread) return undefined;
 	return best;
 }
 
@@ -2586,7 +3841,21 @@ function shade(values: readonly number[]): (value: number) => number {
 		const span = Math.log10(max) - low;
 		return value => (value > 0 ? 0.1 + (0.9 * (Math.log10(value) - low)) / span : 0);
 	}
-	return value => Math.max(0, value) / max;
+	const floor = heatFloor(values);
+	return value => Math.max(0, value - floor) / (max - floor);
+}
+
+/**
+ * Where a linear heat ramp starts: zero, or for values all in a narrow band
+ * well above it (scores of 1.8–2.9) a third of the band's width below its
+ * least, so the cells spread over the ramp instead of all reading strong.
+ */
+function heatFloor(values: readonly number[]): number {
+	const [min, max] = [Math.min(...values), Math.max(...values)];
+	if (!(min > 0 && min >= max * 0.5 && max > min)) return 0;
+	// Rounded down to a nice figure, which the ramp's key prints.
+	const step = niceStep((max - min) / 4);
+	return Math.max(0, Math.floor((min - (max - min) / 3) / step) * step);
 }
 
 /** Whether {@link shade} maps `values` logarithmically: non-negative, positive ones spanning decades or an outlier tier. */
@@ -2678,9 +3947,9 @@ function groupSpan(spec: ChartSpec, at: number): [number, number] {
 	return [0, spec.categories.length - 1];
 }
 
-/** Width of one legend entry: its mark, name, and the gap before the next. */
+/** Width of one legend entry: its mark (and tone dots), name, and the gap before the next. */
 function legendItemWidth(item: LegendItem): number {
-	return 12 + measure(clip(item.name, MAX_LEGEND_CHARS), TICK_SIZE) + 16;
+	return 12 + 9 * (item.tones?.length ?? 0) + measure(clip(item.name, MAX_LEGEND_CHARS), TICK_SIZE) + 16;
 }
 
 /** Width of `items` on one line, without the trailing gap. */
@@ -2703,7 +3972,9 @@ function drawLegend(items: readonly LegendItem[], left: number, right: number, y
 			y += LEGEND_LINE;
 		}
 		parts.push(item.ring ? ring(x + 4, y, 3.25, item.color) : dot(x + 4, y, 4, item.color, item.opacity));
-		parts.push(text(x + 12, y, labels[at]!, { size: TICK_SIZE, fill: "muted" }));
+		const tones = item.tones ?? [];
+		tones.forEach((tone, slot) => parts.push(dot(x + 13 + slot * 9, y, 4, tone, item.opacity)));
+		parts.push(text(x + 12 + 9 * tones.length, y, labels[at]!, { size: TICK_SIZE, fill: "muted" }));
 		x += width;
 	});
 	return { height: y + 8, body: parts.join("") };
@@ -2725,10 +3996,75 @@ function drawRamp(ramp: RampKey, x: number, y: number): string {
 }
 
 /**
+ * Each name as the lines its label sets in: whole on one line when it is
+ * short or fits {@link WIDE_LABEL_WIDTH}; else, with `wrap`, two lines of
+ * {@link LABEL_WIDTH} split where they balance best ({@link wrapLabel});
+ * without, one line clipped to {@link WIDE_LABEL_WIDTH} ({@link clipNames}).
+ */
+function labelLines(names: readonly string[], wrap: boolean): string[][] {
+	const wide = Math.floor(WIDE_LABEL_WIDTH / (LABEL_SIZE * ADVANCE));
+	const clipped = clipNames(names, wide);
+	return names.map((name, at) => {
+		if (name.length <= MAX_LABEL_CHARS || measure(name, LABEL_SIZE) <= WIDE_LABEL_WIDTH) return [name];
+		if (!wrap) return [fitText(clipped[at]!, WIDE_LABEL_WIDTH, LABEL_SIZE)];
+		const lines = wrapLabel(name, LABEL_WIDTH, WRAP_SIZE);
+		return lines.length > 1 ? lines : [fitText(name, LABEL_WIDTH, LABEL_SIZE)];
+	});
+}
+
+/**
+ * `name` over two lines of at most `width` at `size`: split after the space
+ * (or, in an identifier or path, the `/ . _ - , : +`, before the `(`, or
+ * between camel-cased words) that balances the lines best, the second
+ * clipped if still too long. A name with no such break clips on one line.
+ * Category names ({@link labelLines}) and column headings
+ * ({@link wrapHeader}) wrap through it.
+ */
+function wrapLabel(name: string, width: number, size: number): string[] {
+	let best: { lines: string[]; cost: number } | undefined;
+	for (let at = 1; at < name.length; at++) {
+		const [before, after] = [name[at - 1]!, name[at]!];
+		const space = before === " ";
+		const camel = /[a-z]/.test(before) && /[A-Z]/.test(after);
+		if (!space && !camel && !"/._-,:+".includes(before) && after !== "(") continue;
+		const first = name.slice(0, at).trimEnd();
+		const second = name.slice(at).trimStart();
+		const firstWidth = measure(first, size);
+		if (!first || !second || firstWidth > width) continue;
+		// The longer line sets the cost (a first line filled as far as it goes where the rest overflows anyway);
+		// a break inside an identifier costs a little, so words part at spaces where they can.
+		const cost = Math.max(firstWidth, measure(second, size)) + (space ? 0 : 8);
+		if (!best || cost < best.cost) best = { lines: [first, fitText(second, width, size)], cost };
+	}
+	return best?.lines ?? [fitText(name, width, size)];
+}
+
+/** Each category's label lines ({@link labelLines}): its own name, or its member name beside a group. */
+function categoryLines(spec: ChartSpec): string[][] {
+	const names = spec.groups ? spec.groups.flatMap(group => group.members) : spec.categories;
+	return labelLines(names, spec.categories.length <= MAX_WRAP_ROWS);
+}
+
+/** `row` grown to {@link WRAP_ROW} where a category's name wraps, so both lines fit its row. */
+function labelRow(spec: ChartSpec, row: number): number {
+	return row < WRAP_ROW && categoryLines(spec).some(lines => lines.length > 1) ? WRAP_ROW : row;
+}
+
+/** A label's lines from `x`, centred on `y` as a block: one at {@link LABEL_SIZE}, two at {@link WRAP_SIZE}. */
+function labelText(x: number, y: number, lines: readonly string[], style: TextStyle): string {
+	if (lines.length === 1) return text(x, y, lines[0]!, style);
+	return lines
+		.map((line, at) => text(x, y + (at - (lines.length - 1) / 2) * WRAP_LINE, line, { ...style, size: WRAP_SIZE }))
+		.join("");
+}
+
+/**
  * Category names down the label column, centred on their rows from `tops`;
  * a group's name once, semibold, beside its first member. Names start at the
  * column's left, so one set wider than {@link measure} estimates (another
- * font, a larger size) runs toward the plot instead of off the canvas.
+ * font, a larger size) runs toward the plot instead of off the canvas. Long
+ * names wrap to two lines ({@link categoryLines}); the renderer grows its rows
+ * to hold them ({@link labelRow}).
  */
 function categoryLabels(
 	spec: ChartSpec,
@@ -2745,14 +4081,15 @@ function categoryLabels(
 		const state = status?.[at];
 		return state ? dot(x + 4, middle(at), 4, STATUS_COLORS[state]) : "";
 	};
+	const lines = categoryLines(spec);
 	if (!groups)
 		return (
 			matrix +
-			clipNames(spec.categories, MAX_LABEL_CHARS)
+			lines
 				.map(
 					(name, at) =>
 						badge(PAD, at) +
-						text(PAD + badges, middle(at), name, {
+						labelText(PAD + badges, middle(at), name, {
 							fill: "fg",
 							weight: strong.has(at) ? 600 : undefined,
 						}),
@@ -2764,10 +4101,6 @@ function categoryLabels(
 		groups.map(group => group.name),
 		groupChars(groups),
 	);
-	const members = clipNames(
-		groups.flatMap(group => group.members),
-		MAX_LABEL_CHARS,
-	);
 	const parts: string[] = [matrix];
 	let at = 0;
 	groups.forEach((group, index) => {
@@ -2775,7 +4108,7 @@ function categoryLabels(
 		for (const end = at + group.members.length; at < end; at++)
 			parts.push(
 				badge(memberX, at) +
-					text(memberX + badges, middle(at), members[at]!, {
+					labelText(memberX + badges, middle(at), lines[at]!, {
 						fill: "fg",
 						weight: strong.has(at) ? 600 : undefined,
 					}),
@@ -2798,7 +4131,7 @@ interface MatrixColumn {
 /** Each matrix column's heading, wrapped, and the width it takes (the heading's, or a dot's). */
 function matrixColumns(spec: ChartSpec): MatrixColumn[] {
 	return (spec.matrix ?? []).map(column => {
-		const lines = wrapHeader(column.name, MATRIX_HEAD_CHARS);
+		const lines = wrapHeader(column.name, MATRIX_HEAD_CHARS * TICK_SIZE * ADVANCE, TICK_SIZE);
 		return { lines, width: Math.max(STATUS_WIDTH, ...lines.map(line => measure(line, TICK_SIZE))) + 12 };
 	});
 }
@@ -2885,12 +4218,15 @@ function rowTops(spec: ChartSpec, top: number, rowHeight: number): number[] {
 
 /** Width of the category label column: the widest name, or the widest group name beside the widest member. */
 function labelColumnWidth(spec: ChartSpec): number {
-	const widest = (names: readonly string[]) =>
-		Math.max(0, ...clipNames(names, MAX_LABEL_CHARS).map(name => measure(name, LABEL_SIZE)));
+	// One line sets at the label size, a wrapped pair a step smaller.
+	const widest = Math.max(
+		0,
+		...categoryLines(spec).flatMap(lines =>
+			lines.map(line => measure(line, lines.length > 1 ? WRAP_SIZE : LABEL_SIZE)),
+		),
+	);
 	const { groups } = spec;
-	const width = groups
-		? groupNameWidth(groups) + 10 + widest(groups.flatMap(group => group.members))
-		: widest(spec.categories);
+	const width = groups ? groupNameWidth(groups) + 10 + widest : widest;
 	const matrix = matrixColumns(spec).reduce((sum, column) => sum + column.width, 0);
 	return Math.max(4 * LABEL_SIZE * ADVANCE, width) + (spec.status?.some(Boolean) ? STATUS_WIDTH : 0) + matrix;
 }
@@ -2907,28 +4243,96 @@ function groupNameWidth(groups: readonly ChartGroup[]): number {
 /**
  * Labels for a linear axis' ticks in one unit, so it reads `0, 5k, 10k`
  * rather than `0, 5000, 10k`; a log axis spans units, each tick in its own.
+ * A duration reads in the largest unit its ticks are whole (or half) steps
+ * of (`50s, 100s, 150s`, not `0.833m, 1.67m`); sizes the table wrote in
+ * binary units (`GiB`) tick in them too, so bars and labels agree.
  */
-function tickFormat(scale: Scale, axis: { readonly dim: Dimension; readonly unit: string }): (tick: number) => string {
-	if (scale.log) return tick => formatValue(tick, axis.dim, axis.unit);
+function tickFormat(
+	scale: Scale,
+	axis: { readonly dim: Dimension; readonly unit: string; readonly points?: readonly (ChartPoint | null)[] },
+): (tick: number) => string {
+	const unit = binaryBytes(axis) ? "iB" : axis.unit;
+	const format = (ticks: readonly number[], magnitude: number) =>
+		formatValue(ticks[0]!, axis.dim, unit, axis.dim === "duration" ? durationMagnitude(ticks, magnitude) : magnitude);
+	// A log axis' round thousand reads `1k` beside `10k`, not `1,000`.
+	const counted = axis.dim !== "duration" && axis.dim !== "bytes";
+	if (scale.log)
+		return tick => format([tick], counted && Math.abs(tick) >= 1000 ? Math.max(1e4, Math.abs(tick)) : Math.abs(tick));
 	const magnitude = Math.max(0, ...scale.ticks.map(Math.abs));
 	const { cut } = scale;
 	// Each segment of a broken axis reads in its own unit (`100k` before the break, `7M` after).
-	if (cut) return tick => formatValue(tick, axis.dim, axis.unit, tick <= cut.below ? cut.below : magnitude);
-	return tick => formatValue(tick, axis.dim, axis.unit, magnitude);
+	if (cut) return tick => format([tick, ...scale.ticks], tick <= cut.below ? cut.below : magnitude);
+	return tick => format([tick, ...scale.ticks], magnitude);
+}
+
+/** Whether `axis` holds sizes the table wrote in binary units (`GiB`, `MiB`), which its ticks then read in too. */
+function binaryBytes(axis: { readonly dim: Dimension; readonly points?: readonly (ChartPoint | null)[] }): boolean {
+	return axis.dim === "bytes" && !!axis.points?.some(point => point && /[KMGTP]iB/i.test(point.text));
+}
+
+/**
+ * One tick unit for an axis of `series` over `values`, in base units: the
+ * binary size unit the largest value reads in (1 GiB) where the table wrote
+ * binary sizes, so ticks fall on `25 GiB` rather than `23.3 GiB`; else 1.
+ */
+function tickUnit(series: ChartSeries, values: readonly number[]): number {
+	if (!binaryBytes(series)) return 1;
+	const max = Math.max(0, ...values.map(Math.abs));
+	let unit = 1;
+	while (unit * 1024 <= max) unit *= 1024;
+	return unit;
+}
+
+/** Durations' units: each one's length in seconds and the least magnitude that reads in it. */
+const DURATION_UNITS: readonly (readonly [seconds: number, suffix: string, from: number])[] = [
+	[1e-9, "ns", 0],
+	[1e-6, "µs", 1e-6],
+	[1e-3, "ms", 1e-3],
+	[1, "s", 1],
+	[60, "m", 120],
+	[3600, "h", 7200],
+	[86_400, "d", 172_800],
+];
+
+/** The {@link DURATION_UNITS} entry `magnitude` reads in; zero reads in seconds. */
+function durationUnit(magnitude: number): readonly [number, string, number] {
+	if (magnitude === 0) return DURATION_UNITS[3]!;
+	return DURATION_UNITS.findLast(([, , from]) => magnitude >= from) ?? DURATION_UNITS[0]!;
+}
+
+/**
+ * A magnitude for {@link formatValue} that reads `ticks` in the largest unit
+ * up to `magnitude`'s in which each is a whole or half step (`150s`, not `2.5m`
+ * beside `0.833m`).
+ */
+function durationMagnitude(ticks: readonly number[], magnitude: number): number {
+	const clean = (seconds: number) =>
+		ticks.every(tick => {
+			const count = tick / seconds;
+			return Math.abs(count * 2 - Math.round(count * 2)) < 1e-6 && Math.abs(count) < 10_000;
+		});
+	const own = DURATION_UNITS.indexOf(durationUnit(magnitude));
+	// Down to seconds at most (smaller units only ever read sub-second axes); where no unit reads clean, the own one.
+	for (let index = own; index >= 3; index--) {
+		const [seconds, , from] = DURATION_UNITS[index]!;
+		if (clean(seconds)) return Math.max(seconds, from);
+	}
+	return magnitude;
 }
 
 /** A point's written figure, or its value formatted when the table wrote none. */
 function pointText(series: ChartSeries, at: number): string {
 	const point: ChartPoint | null | undefined = series.points[at];
 	if (!point) return "";
-	return point.text || formatValue(point.value, series.dim, series.unit);
+	return point.text || formatValue(point.value, series.dim, binaryBytes(series) ? "iB" : series.unit);
 }
 
 /**
  * A value in base units as an axis label: durations and sizes in the unit,
  * counts compacted under the suffix (`12k`, `3.4M`), that `magnitude` reads
  * best in — the value's own size by default, an axis' largest tick to keep
- * its labels in one unit.
+ * its labels in one unit. Sizes read in decimal units (`20 GB`), or binary
+ * ones (`16 GiB`) when `unit` is `iB`.
  */
 export function formatValue(value: number, dim: Dimension, unit: string, magnitude = Math.abs(value)): string {
 	switch (dim) {
@@ -2939,29 +4343,16 @@ export function formatValue(value: number, dim: Dimension, unit: string, magnitu
 		case "currency":
 			return `${value < 0 ? "-" : ""}${unit}${compact(Math.abs(value), magnitude)}`;
 		case "duration": {
-			const [divisor, suffix] =
-				magnitude === 0
-					? [1, "s"]
-					: magnitude < 1e-6
-						? [1e-9, "ns"]
-						: magnitude < 1e-3
-							? [1e-6, "µs"]
-							: magnitude < 1
-								? [1e-3, "ms"]
-								: magnitude < 120
-									? [1, "s"]
-									: magnitude < 7200
-										? [60, "m"]
-										: magnitude < 172_800
-											? [3600, "h"]
-											: [86_400, "d"];
+			const [divisor, suffix] = durationUnit(magnitude);
 			return `${compact(value / divisor)}${suffix}`;
 		}
 		case "bytes": {
-			const units = ["B", "KB", "MB", "GB", "TB"];
+			const binary = unit === "iB";
+			const base = binary ? 1024 : 1000;
+			const units = binary ? ["B", "KiB", "MiB", "GiB", "TiB"] : ["B", "KB", "MB", "GB", "TB"];
 			let index = 0;
-			while (magnitude >= 1000 ** (index + 1) && index < units.length - 1) index++;
-			return `${compact(value / 1000 ** index)}${units[index]}`;
+			while (magnitude >= base ** (index + 1) && index < units.length - 1) index++;
+			return `${compact(value / base ** index)} ${units[index]}`;
 		}
 		default:
 			return compact(value, magnitude);
@@ -2977,8 +4368,10 @@ function compact(value: number, magnitude = Math.abs(value)): string {
 	return trim(value);
 }
 
+/** `value` to three significant digits or so; thousands take a separator (`2,500`). */
 function trim(value: number): string {
 	const magnitude = Math.abs(value);
+	if (magnitude >= 1000) return Math.round(value).toLocaleString("en-US");
 	const digits = magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : magnitude >= 1 ? 2 : 3;
 	return Number(value.toFixed(digits)).toString();
 }
@@ -3051,9 +4444,21 @@ interface TextStyle {
 	italic?: boolean;
 }
 
-/** Text vertically centred on `y`. */
-function text(x: number, y: number, content: string, style: TextStyle): string {
-	if (!content) return "";
+/** A stretch of one {@link text} set apart from the rest: its own color and/or weight. */
+interface TextRun {
+	readonly content: string;
+	readonly fill?: string;
+	readonly weight?: number;
+}
+
+/**
+ * Text vertically centred on `y`: one string, or {@link TextRun}s set in a
+ * line, each in its own color or weight where it states one (a title's key
+ * figure, each figure of `a · b` in its series' color).
+ */
+function text(x: number, y: number, content: string | readonly TextRun[], style: TextStyle): string {
+	const runs: readonly TextRun[] = typeof content === "string" ? [{ content }] : content;
+	if (!runs.some(run => run.content)) return "";
 	const size = style.size ?? LABEL_SIZE;
 	const attrs = [
 		`x="${num(x)}"`,
@@ -3064,10 +4469,21 @@ function text(x: number, y: number, content: string, style: TextStyle): string {
 		style.weight ? `font-weight="${style.weight}"` : "",
 		style.italic ? `font-style="italic"` : "",
 	].filter(Boolean);
-	const escaped = content.replace(/[&<>"]/g, char =>
-		char === "&" ? "&amp;" : char === "<" ? "&lt;" : char === ">" ? "&gt;" : "&quot;",
-	);
-	return `<text ${attrs.join(" ")}>${escaped}</text>`;
+	const escape = (raw: string) =>
+		raw.replace(/[&<>"]/g, char =>
+			char === "&" ? "&amp;" : char === "<" ? "&lt;" : char === ">" ? "&gt;" : "&quot;",
+		);
+	const body = runs
+		.filter(run => run.content)
+		.map(run => {
+			const own = [
+				run.fill ? ` fill="${token(run.fill)}"` : "",
+				run.weight ? ` font-weight="${run.weight}"` : "",
+			].join("");
+			return own ? `<tspan${own}>${escape(run.content)}</tspan>` : escape(run.content);
+		})
+		.join("");
+	return `<text ${attrs.join(" ")}>${body}</text>`;
 }
 
 /**
@@ -3158,6 +4574,41 @@ function rect(
 	return `<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(height)}"${rounded} fill="${token(fill)}"${alpha}/>`;
 }
 
+/**
+ * Indices of `entry`'s estimated figures (`~15`, `≈2k`) — only where they
+ * are the exceptions among measured ones; a series of mostly estimates marks
+ * none, since its few measured figures would then look like the odd ones.
+ * A bolded figure keeps its solid bar: the table's emphasis outranks its doubt.
+ */
+function estimatedPoints(entry: ChartSeries): Set<number> {
+	const estimated = (point: ChartPoint | null | undefined) => !!point && /^\s*[~≈]/.test(point.text);
+	const marked = entry.points.flatMap((point, at) => (estimated(point) && !point?.emphasis ? [at] : []));
+	const measured = entry.points.filter(point => point && !estimated(point)).length;
+	return new Set(marked.length <= measured ? marked : []);
+}
+
+/**
+ * A value's bar: a {@link rect}, or with `estimate` a faint fill
+ * ({@link ESTIMATE_OPACITY}) inside a dashed outline of its color, so an
+ * estimate reads as less certain than the measured bars beside it.
+ */
+function barRect(
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	fill: string,
+	opacity: number,
+	options: { estimate?: boolean } = {},
+): string {
+	if (!options.estimate) return rect(x, y, width, height, fill, opacity);
+	const radius = Math.min(RADIUS, width / 2, height / 2);
+	return (
+		rect(x, y, width, height, fill, opacity * ESTIMATE_OPACITY) +
+		`<rect x="${num(x + 0.5)}" y="${num(y + 0.5)}" width="${num(Math.max(0, width - 1))}" height="${num(height - 1)}" rx="${num(radius)}" fill="none" stroke="${token(fill)}" stroke-opacity="${Number(opacity.toFixed(2))}" stroke-width="1" stroke-dasharray="3 2"/>`
+	);
+}
+
 /** A round-capped line. */
 function line(x1: number, y1: number, x2: number, y2: number, stroke: string, width: number, opacity = 1): string {
 	const alpha = opacity < 1 ? ` stroke-opacity="${Number(opacity.toFixed(2))}"` : "";
@@ -3174,9 +4625,13 @@ function outline(x: number, y: number, width: number, height: number, stroke: st
 	return `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" rx="4" fill="none" stroke="${token(stroke)}" stroke-width="1.5"/>`;
 }
 
-/** The `best` mark beside a series' best value, in the success color. */
+/**
+ * The `best` mark beside a series' best value: small regular type in the
+ * success color, a footnote to the figure (already semibold) rather than a
+ * second headline competing with the title and the bolded rows.
+ */
 function bestTag(x: number, y: number, size: number): string {
-	return text(x, y, "best", { size: size - 1, fill: "success", weight: 600 });
+	return text(x, y, "best", { size: size - 1.5, fill: "success" });
 }
 
 /**

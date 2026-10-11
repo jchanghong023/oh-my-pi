@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
 import { Agent, type StreamFn, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Context, FetchImpl, Message, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
@@ -41,6 +42,20 @@ function response(id: string): Response {
 interface ResponsesState extends ProviderSessionState {
 	chains: Map<string, unknown>;
 }
+
+/** Fields of an OpenAI Responses request body that the effort-replay test inspects. */
+const responsesRequest = type({
+	input: type({
+		"type?": "string",
+		"role?": "string",
+		"content?": "unknown",
+		"reasoning?": { effort: "string" },
+	}).array(),
+	"reasoning?": { "effort?": "string" },
+});
+type ResponsesRequest = typeof responsesRequest.infer;
+
+const userContent = type({ text: "string" }).array();
 
 describe("one-shot side request state", () => {
 	const sessions: AgentSession[] = [];
@@ -240,9 +255,9 @@ describe("one-shot side request state", () => {
 
 	it("replays the main conversation's effort updates on side requests and minimizes effort as one more update", async () => {
 		const astra = getBundledModel("openai", "gpt-6-astra") as Model<"openai-responses">;
-		const bodies: Record<string, unknown>[] = [];
+		const bodies: ResponsesRequest[] = [];
 		const fetch: FetchImpl = async (_url, init) => {
-			bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+			bodies.push(responsesRequest.assert(JSON.parse(String(init?.body))));
 			return response(`resp_${bodies.length}`);
 		};
 		const session = createSession(
@@ -276,22 +291,19 @@ describe("one-shot side request state", () => {
 		await main([...history, { role: "user", content: "Third", timestamp: 3 }], "medium");
 
 		// Updates and user turns, in wire order; assistant output is irrelevant here.
-		const shape = (body: Record<string, unknown> | undefined) =>
-			(body?.input as { type?: string; role?: string; content?: unknown; reasoning?: { effort: string } }[]).flatMap(
-				item => {
-					if (item.type === "configuration_update") return [`update:${item.reasoning?.effort}`];
-					if (item.role !== "user") return [];
-					const [part] = item.content as { text: string }[];
-					return [`user:${part?.text}`];
-				},
-			);
-		const effort = (body: Record<string, unknown> | undefined) => (body?.reasoning as { effort?: string }).effort;
+		const shape = (body: ResponsesRequest | undefined) =>
+			(body?.input ?? []).flatMap(item => {
+				if (item.type === "configuration_update") return [`update:${item.reasoning?.effort}`];
+				if (item.role !== "user") return [];
+				const [part] = userContent.assert(item.content);
+				return [`user:${part?.text}`];
+			});
 		const [, mainFollowUp, side, minimized, mainNext] = bodies;
 		const prefix = shape(mainFollowUp);
 		expect(prefix).toContain("update:medium");
 		// Side requests keep the main request-level effort and its update, so they reuse its cached prefix.
 		for (const body of [side, minimized, mainNext]) {
-			expect(effort(body)).toBe("high");
+			expect(body?.reasoning?.effort).toBe("high");
 			expect(shape(body).slice(0, prefix.length)).toEqual(prefix);
 		}
 		// Each side request appends its no-tools reminder, then the prompt.

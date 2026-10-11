@@ -51,6 +51,17 @@ export interface NumberCell {
 	 * plain fraction; a pair (`85 / 147` under `Edit / read calls`) keeps `a`.
 	 */
 	readonly denominator?: number;
+	/**
+	 * `a ± e` (`3.67s ± 0.69`, `~404ms ± 60`, `$0.72 (±0.16)`): `e`, in the same base units — the
+	 * spread the table states around the value; {@link figure} then writes both (`3.67s ± 0.69`).
+	 */
+	readonly error?: number;
+	/**
+	 * A slash list of measurements in one unit (`79 / 124 µs`, `1,864 ms /
+	 * 2,678 ms`, `**675ms** / 680ms`): every listed value, the first included,
+	 * in base units, 2–4 of them. `value` is the first.
+	 */
+	readonly values?: readonly number[];
 }
 
 /** A cell that is not a quantity. */
@@ -139,18 +150,39 @@ export interface TableAnalysis {
 
 const NUMBER = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?|\.\d+`;
 const CELL = new RegExp(
-	String.raw`^(?<approx>~|≈|<=|>=|<|>|≤|≥)?\s*(?<sign>[+\-−±])?\s*(?<cur>[$€£¥])?\s*(?<num>${NUMBER})\s*(?<unit>%|[A-Za-zµμ×]+(?:\/[A-Za-z]+)?|\/s)?(?<rest>.*)$`,
+	String.raw`^(?<approx>~|≈|<=|>=|<|>|≤|≥)?\s*(?<sign>[+\-−±])?\s*(?<cur>[$€£¥])?\s*(?<num>${NUMBER})(?<plus>\+(?=\s*[A-Za-zµμ%]))?\s*(?<unit>%|[A-Za-zµμ×]+(?:\/[A-Za-z]+)?|\/s)?(?<rest>.*)$`,
 );
 const FRACTION = new RegExp(String.raw`^(${NUMBER})\s*\/\s*(${NUMBER})(?![\d/])(.*)$`);
 const RANGE_TAIL = new RegExp(String.raw`^[-–—]\s*[~≈]?\s*[$€£¥]?\s*(${NUMBER})\s*(%|[A-Za-zµμ×]+)?`);
 const ARROW_TAIL = new RegExp(String.raw`^(?:→|->|⇒)\s*[~≈]?\s*([+\-−])?\s*[$€£¥]?\s*(${NUMBER})\s*(%|[A-Za-zµμ×]+)?`);
+/** The stated spread after a value: `± 0.69`, `±.074`, `(±0.16)`, `± 2.9 t/s`. */
+const ERROR_TAIL = new RegExp(String.raw`^\(?\s*±\s*(${NUMBER})\s*(%|[A-Za-zµμ]+(?:\/[A-Za-z]+)?)?\s*\)?$`);
 const COMPOUND_DURATION =
 	/^(?:(\d+(?:\.\d+)?)\s*d)?\s*(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+(?:\.\d+)?)\s*m(?:in)?)?\s*(?:(\d+(?:\.\d+)?)\s*s)?$/;
 const DATE =
 	/^\d{4}-\d{2}(?:-\d{2})?(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?\b|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b/i;
 const TIME = /^\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?\s*(?:am|pm)?$/i;
 const VERSION = /^v?\d+\.\d+\.\d+|^v\d/i;
-const IDENTIFIER = /^(?:#\d+|[0-9a-f]{7,40}$|PR\s*#?\d+|L\d+\b)/i;
+/** `#12`, a bare hex hash, a hash leading its subject (`42e18af0 (Responses API)`), `PR #3`, `L42`. */
+const IDENTIFIER =
+	/^(?:#\d+|[0-9a-f]{7,40}$|(?=[0-9a-f]{7,40}\s)(?=\d*[a-f])(?=[a-f]*\d)[0-9a-f]{7,40}\s|PR\s*#?\d+|L\d+\b)/i;
+/** One number of a slash list or a sum, as written: estimate mark, sign, currency, number, unit or noun. */
+const ITEM = new RegExp(
+	String.raw`(?<approx>[~≈])?\s*(?<sign>[+\-−])?\s*(?<cur>[$€£¥])?\s*(?<num>${NUMBER})\s*(?<unit>%|[A-Za-zµμ×]+(?:\/[A-Za-z]+)?)?`,
+	"y",
+);
+/** Between the items of a slash list (`79 / 124 µs`, `9/47/85`). */
+const LIST_SEPARATOR = /\s*\/\s*/y;
+/** Between the terms of a sum (`27.8 GB + 4.1 GB`, `4 hooks + 9 overlays`). */
+const SUM_SEPARATOR = /\s*\+\s*/y;
+/** The total a sum is written to equal (`… = 14 files`). */
+const SUM_TOTAL = /\s*=\s*/y;
+/** A cell that is one Markdown link, bold or not, and nothing else. */
+const LINKED = /^\s*(?:\*\*|__)?\[[^\]]*\]\([^)]*\)(?:\*\*|__)?\s*$/;
+/** Most values one slash list holds; longer lists are prose. */
+const MAX_LISTED_VALUES = 4;
+/** Spread (max/min) within which a bare slash list repeats one measurement rather than listing different things. */
+const ALIKE_SPREAD = 3;
 /** Cell texts that stand for "no value". */
 const MISSING: Readonly<Record<string, true>> = {
 	"": true,
@@ -299,12 +331,18 @@ const UNITS: Readonly<Record<string, readonly [Dimension, number]>> = {
 	k: ["count", 1e3],
 	bn: ["count", 1e9],
 };
-/** Units whose case decides their meaning: `B` bytes vs `b` billions, `M` millions vs `m` minutes. */
+/**
+ * Units whose case decides their meaning: `B` bytes vs `b` billions, `M`
+ * millions vs `m` minutes; `G` and `T` are giga and tera of a count until
+ * {@link resolveMagnitudes} reads them as sizes.
+ */
 const CASED_UNITS: Readonly<Record<string, readonly [Dimension, number]>> = {
 	B: ["bytes", 1],
 	b: ["count", 1e9],
 	M: ["count", 1e6],
 	m: ["duration", 60],
+	G: ["count", 1e9],
+	T: ["count", 1e12],
 };
 
 /**
@@ -323,6 +361,14 @@ const SEQUENCE_HEADER =
  */
 const TOTAL_ROW =
 	/^(?:(?:total|totals|sum|overall|grand total|subtotal|σ)\b|(?:average|avg|mean|median|all|combined|net)\s*(?:\(.*\))?:?$)/i;
+/**
+ * Summary labels that say nothing else (`Total`, `**Grand total**`, `Median:`), which sum or average the
+ * rows above them wherever they stand. Longer names (`Total spend`, `Totals by agent`) and words that also
+ * name options (`all`, `net`, `combined`) summarize only at the table's start or end.
+ */
+const BARE_TOTAL = /^(?:total|totals|sum|grand total|sub-?total|σ|average|avg|mean|median)\s*(?:\(.*\))?:?$/i;
+/** Relative slack within which a total row's figure matches the sum of the rows above it. */
+const APPROX_TOTAL = 0.005;
 
 /**
  * Strip inline Markdown from a cell: links keep their text; bold, italics,
@@ -336,6 +382,8 @@ export function plainCell(markdown: string): { text: string; emphasis: boolean }
 	const spans: string[] = [];
 	text = text
 		.replace(/`([^`]*)`/g, (_, code: string) => `\u0000${spans.push(code) - 1}\u0000`)
+		// A backslash escape (`\$12.50`, `\*`) is its character, never markup.
+		.replace(/\\([!-/:-@[-`{-~])/g, (_, escaped: string) => `\u0000${spans.push(escaped) - 1}\u0000`)
 		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/(\*\*|__)(.+?)\1/g, "$2")
 		.replace(/(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])/g, "$1")
@@ -360,8 +408,14 @@ export function parseCell(markdown: string): Cell {
 	if (TIME.test(text)) return other("time");
 	if (VERSION.test(text)) return other("version");
 	if (IDENTIFIER.test(text) || ZERO_PADDED.test(text)) return other("id");
+	// A number that is a link's whole text (`[312530](…/models/312530)`) names what it points at.
+	if (LINKED.test(markdown) && /^\d/.test(text)) return other("id");
 
 	const base = { approx: false, signed: false, emphasis, text: plain.text };
+	const listed = listCell(text, base);
+	if (listed) return listed;
+	const summed = sumCell(text, base);
+	if (summed) return summed;
 	const fraction = FRACTION.exec(text);
 	if (fraction) {
 		const rest = fraction[3]!;
@@ -398,8 +452,8 @@ export function parseCell(markdown: string): Cell {
 		} else if (unit.includes("/")) {
 			dim = "rate";
 		} else {
-			// A word after the number is a noun (`16 pass`), not a unit.
-			rest = `${unit} ${rest}`.trim();
+			// A word after the number is a noun (`16 pass`, `8+ structs`), not a unit.
+			rest = `${groups.plus ?? ""}${unit} ${rest}`.trim();
 			unit = "";
 		}
 	}
@@ -428,11 +482,27 @@ export function parseCell(markdown: string): Cell {
 		dim,
 		unit,
 		figure,
-		// A trailing `+` (`~$250+`) marks a lower bound.
-		approx: groups.approx !== undefined || rest === "+",
+		// A trailing `+` (`~$250+`, `4.9+ GiB`) marks a lower bound.
+		approx: groups.approx !== undefined || (groups.plus !== undefined && unit !== "") || rest === "+",
 		signed: groups.sign !== undefined,
 	};
 	if (!rest || rest === "+" || FOOTNOTE.test(rest)) return { ...cell, fit: "pure" };
+	const spread = ERROR_TAIL.exec(rest);
+	if (spread) {
+		// `482.8 ± 1.2 t/s`: a unit after the spread applies to the value too.
+		const written = spread[2] ?? "";
+		const tail: readonly [Dimension, number] | undefined =
+			knownUnit(written) ?? (written.includes("/") ? ["rate", 1] : undefined);
+		const own = !unit && tail ? { dim: tail[0], unit: written, value: value * tail[1] } : undefined;
+		const error = toNumber(spread[1]!) * (tail && own ? tail[1] : factor);
+		return {
+			...cell,
+			...own,
+			fit: "note",
+			error,
+			figure: `${figure} ± ${spread[1]}${spread[2] ? ` ${spread[2]}` : ""}`,
+		};
+	}
 	if (range) {
 		const upper = toNumber(range[1]!) * tailFactor(range[2], factor);
 		return { ...cell, fit: "range", upper, figure: `${figure}${range[0].trim()}` };
@@ -449,6 +519,183 @@ export function parseCell(markdown: string): Cell {
 
 function toNumber(written: string): number {
 	return Number(written.replaceAll(",", ""));
+}
+
+/** A number of a list or sum: its value as written, its unit (known or a noun) and how it was marked. */
+interface Item {
+	readonly value: number;
+	readonly unit: string;
+	readonly approx: boolean;
+	readonly signed: boolean;
+	readonly currency: string;
+}
+
+/**
+ * The items of `text` from its start joined by `separator` (two at least, `max`
+ * at most), and where they end; `undefined` when fewer than two lead it.
+ */
+function readItems(
+	text: string,
+	separator: RegExp,
+	max: number,
+): { items: Item[]; separators: string[]; end: number } | undefined {
+	const items: Item[] = [];
+	const separators: string[] = [];
+	let end = 0;
+	let at = 0;
+	while (items.length < max) {
+		ITEM.lastIndex = at;
+		const match = ITEM.exec(text);
+		if (!match?.groups) break;
+		const { approx, sign, cur, num } = match.groups;
+		// A word that is no unit (`214 / 72 cumulative`, `4 hooks`) ends the item at its number.
+		const unit = match.groups.unit ?? "";
+		const noun = unit !== "" && !knownUnit(unit) && !unit.includes("/");
+		items.push({
+			value: toNumber(num!) * (sign === "-" || sign === "−" ? -1 : 1),
+			unit: noun ? "" : unit,
+			approx: approx !== undefined,
+			signed: sign !== undefined,
+			currency: cur ?? "",
+		});
+		end = at = noun ? at + match[0].indexOf(num!) + num!.length : ITEM.lastIndex;
+		if (noun) break;
+		separator.lastIndex = at;
+		if (!separator.test(text)) break;
+		separators.push(text.slice(at, separator.lastIndex));
+		at = separator.lastIndex;
+	}
+	return items.length >= 2 ? { items, separators: separators.slice(0, items.length - 1), end } : undefined;
+}
+
+/**
+ * Dimension and per-item factor of `items` read as one quantity: a unit written
+ * after some items carries to the bare ones before it (`79 / 124 µs`); two
+ * dimensions make no one quantity ({@link readItems} ends an item at a noun).
+ * Bare items are counts; a unit per something (`tok/s`) is a rate.
+ */
+function itemUnits(items: readonly Item[]): { dim: Dimension; factors: number[]; unit: string } | undefined {
+	let dim: Dimension | undefined;
+	const written: (number | undefined)[] = [];
+	const carried: (number | undefined)[] = [];
+	for (const item of items) {
+		const known = item.unit ? knownUnit(item.unit) : undefined;
+		// Money keeps its symbol; only a magnitude (`$1.2k`) may follow it.
+		if (item.currency && known && known[0] !== "count") return undefined;
+		const itemDim: Dimension | undefined = item.currency
+			? "currency"
+			: item.unit
+				? (known?.[0] ?? "rate")
+				: undefined;
+		if (itemDim && dim && itemDim !== dim) return undefined;
+		dim ??= itemDim;
+		// An item's own unit or currency scales it alone (`$627 + $1.48k`); only a physical unit carries back to
+		// bare items before it (`3.2 + 9.8 s`), never a magnitude (`5 + 4k`) or a currency sign.
+		written.push(item.unit || item.currency ? (known?.[1] ?? 1) : undefined);
+		carried.push(item.unit && !item.currency && known && known[0] !== "count" ? known[1] : undefined);
+	}
+	const factors: number[] = [];
+	for (let at = items.length - 1; at >= 0; at--)
+		factors[at] =
+			written[at] ?? (items[at + 1]?.unit || items[at + 1]?.currency ? carried[at + 1] : factors[at + 1]) ?? 1;
+	const lead = items.find(item => item.currency) ?? items.find(item => item.unit);
+	return { dim: dim ?? "count", factors, unit: lead?.currency || lead?.unit || "" };
+}
+
+/** Text after a list or a sum that only annotates it: nothing, a parenthetical, or one short word (`(45 total)`, `pass`). */
+const SHORT_NOTE = /^$|^\(.*\)$|^[A-Za-z][\w-]{0,11}$/;
+/** What a list or sum cell shares with any cell: its text and emphasis. */
+type CellBase = Pick<NumberCell, "emphasis" | "text">;
+
+/**
+ * A slash list of measurements as its first value with every value kept
+ * ({@link NumberCell.values}): two to {@link MAX_LISTED_VALUES} values of one
+ * unit written on each (`1,864 ms / 2,678 ms`) or after the last only (`79 /
+ * 124 µs`), slashes all spaced or all tight; or a spaced pair of bare values
+ * that is no score (`25.0 / 27.8`, `12.6 / 9.4`). Other bare lists (`5/8`,
+ * `27 / 30`, `19 / 1 / 0`) are fractions, scores or tallies, read elsewhere;
+ * `2/1/20k/3k` and `7/12 / 29%` are no one list.
+ */
+function listCell(text: string, base: CellBase): NumberCell | undefined {
+	const read = readItems(text, LIST_SEPARATOR, MAX_LISTED_VALUES + 1);
+	if (!read || read.items.length > MAX_LISTED_VALUES) return undefined;
+	const { items, separators, end } = read;
+	const rest = text.slice(end).trim();
+	// `1/3 clean, else …`, `12/` and `3/6/9 more` read as prose or fractions; a list ends at its last value.
+	if (/^[\d/]/.test(rest)) return undefined;
+	if (new Set(separators.map(separator => separator === "/")).size > 1) return undefined;
+	// A unit after the last value carries back to bare ones; a currency sign leads only its own (`1.000 / $3.31`
+	// is a score and a price), and a magnitude only its own (`2/1/20k` is turns, edits and tokens).
+	const marked = items.map(item => Boolean(item.unit || item.currency));
+	const last = items.at(-1)!;
+	const carried = marked.slice(0, -1).every(mark => !mark) && !last.currency && knownUnit(last.unit)?.[0] !== "count";
+	// A spaced pair of bare numbers that is no score (`25.0 / 27.8`, `12.6 / 9.4`: the second is no whole, or
+	// the first exceeds it) lists two values of the column's quantity; `27 / 30` stays a score.
+	const [first, second] = items;
+	const whole = /^\d[\d,]*$/.test(text.slice(text.indexOf("/") + 1, end).trim());
+	const score = whole && first!.value >= 0 && first!.value <= second!.value;
+	const pair = items.length === 2 && !marked.some(Boolean) && separators[0] !== "/" && !score;
+	if (!pair && (!marked.at(-1) || !(marked.every(Boolean) || carried))) return undefined;
+	const units = itemUnits(items);
+	if (!units) return undefined;
+	const values = items.map((item, at) => item.value * units.factors[at]!);
+	return {
+		...base,
+		kind: "number",
+		value: values[0]!,
+		dim: units.dim,
+		unit: units.unit,
+		fit: SHORT_NOTE.test(rest) ? "note" : "prose",
+		figure: text.slice(0, end).trim(),
+		approx: items.some(item => item.approx),
+		signed: items[0]!.signed,
+		values,
+	};
+}
+
+/**
+ * A sum of one quantity as its total: `27.8 GB + 4.1 GB` (the terms' sum, when
+ * they share a dimension and name no other thing) or `4 hooks + 9 overlays + 1
+ * helper = 14 files` (the total written after `=`).
+ */
+function sumCell(text: string, base: CellBase): NumberCell | undefined {
+	const read = readItems(text, SUM_SEPARATOR, Number.POSITIVE_INFINITY);
+	if (!read || read.items[0]!.signed) return undefined;
+	let { end } = read;
+	SUM_TOTAL.lastIndex = end;
+	let total: Item | undefined;
+	if (SUM_TOTAL.test(text)) {
+		ITEM.lastIndex = SUM_TOTAL.lastIndex;
+		const match = ITEM.exec(text);
+		if (match?.groups) {
+			const { approx, cur, num, unit } = match.groups;
+			total = {
+				value: toNumber(num!),
+				unit: cur ?? unit ?? "",
+				approx: approx !== undefined,
+				signed: false,
+				currency: cur ?? "",
+			};
+			end = ITEM.lastIndex;
+		}
+	}
+	const rest = text.slice(end).trim();
+	if (/^[\d+=]/.test(rest)) return undefined;
+	const terms = total ? [total] : read.items;
+	const units = itemUnits(terms);
+	if (!units) return undefined;
+	const value = terms.reduce((sum, item, at) => sum + item.value * units.factors[at]!, 0);
+	return {
+		...base,
+		kind: "number",
+		value,
+		dim: units.dim,
+		unit: units.unit,
+		fit: SHORT_NOTE.test(rest) ? "note" : "prose",
+		figure: text.slice(0, end).trim(),
+		approx: terms.some(item => item.approx) || read.items.some(item => item.approx),
+		signed: false,
+	};
 }
 
 /** Factor of a unit written after the second number of a range or transition; the first number's when absent. */
@@ -474,27 +721,62 @@ export function analyzeTable(header: readonly string[], rows: readonly (readonly
 	}
 	rows = unlist(rows);
 	const raw = rows.map(row => headers.map((_, index) => parseCell(row[index] ?? "")));
-	// `Edit / read calls | 85 / 147`: a spaced slash in the row's name pairs two values.
-	const paired = raw.map(cells => cells.some(cell => cell.kind === "text" && PAIR_SLASH.test(cell.text)));
+	// `Edit / read calls | 85 / 147`: a spaced slash in the row's name (text before its numbers) pairs two
+	// values; one in a note after them (`copies whole message / hallucinates bullets`) pairs nothing.
+	const paired = raw.map(cells =>
+		cells
+			.slice(0, Math.max(0, cells.findIndex(isNumber)))
+			.some(cell => cell.kind === "text" && PAIR_SLASH.test(cell.text)),
+	);
 	// Scores or plain fractions, never both in one column: the two read on different axes and one kind drops out.
 	const scoring = headers.map(
 		(text, index) =>
 			!PAIR_SLASH.test(text) && raw.every((cells, row) => paired[row] || fractionKind(cells[index]) !== "fraction"),
 	);
+	// A column listing bare pairs (`214 / 104`) reads every spaced pair in it as one (`22 / 49` too, which alone
+	// would read as a score).
+	const pairing = headers.map((_, index) =>
+		raw.some(cells => {
+			const cell = cells[index];
+			return isNumber(cell) && cell.values !== undefined && cell.unit === "";
+		}),
+	);
 	const parsed = raw.map((cells, row) =>
-		cells.map((cell, index) => (scoring[index] && !paired[row] ? asScore(cell) : cell)),
+		cells.map((cell, index): Cell =>
+			// A list the header does not name item by item (`Layers/heads/d_model`, unlike `in / out / cache`)
+			// holds different things where its values are unlike: none of them is the cell's number.
+			!PAIR_SLASH.test(headers[index]!) && unlikeList(cell)
+				? { kind: "text", text: cell.text, emphasis: cell.emphasis }
+				: pairing[index]
+					? asPair(cell)
+					: scoring[index] && !paired[row]
+						? asScore(cell)
+						: cell,
+		),
 	);
 	const draft = fillDown(headers.map((text, index) => readColumn(index, text, parsed)));
 	// Without a text column, a leading column of named numbers (`4096B chunks`, `03`, `12-hover`) names the rows.
 	const lead = draft[0];
+	const unnamed = !draft.some(column => column.role === "label" || column.role === "temporal");
 	if (
 		lead?.role === "measure" &&
-		!draft.some(column => column.role === "label" || column.role === "temporal") &&
+		unnamed &&
 		lead.cells.some(
 			cell => cell.kind !== "missing" && (!isNumber(cell) || cell.fit === "note" || cell.fit === "prose"),
 		)
 	)
 		draft[0] = { ...lead, role: "label" };
+	else if (unnamed) {
+		// Else a column of words around numbers in mixed units (`5m write`, `+ 1 ping`) says how each row is
+		// done: it names the rows rather than measuring them.
+		const worded = draft.findIndex(
+			column =>
+				column.role === "measure" &&
+				column.mixed &&
+				column.cells.filter(cell => isNumber(cell) && cell.fit !== "pure").length * 2 > column.cells.length,
+		);
+		if (worded >= 0) draft[worded] = { ...draft[worded]!, role: "label" };
+	}
 	const labels = draft.filter(column => column.role === "label" || column.role === "temporal");
 	// Bare codes and numbers (`#2233`, `00`, `14`) name rows only when no worded column does; `#1 (baseline)` is worded.
 	const worded = (cell: Cell) =>
@@ -506,11 +788,35 @@ export function analyzeTable(header: readonly string[], rows: readonly (readonly
 		draft.find(column => column.role === "index");
 	const totals: number[] = [];
 	const data: number[] = [];
+	const names = rows.map((_, row) => (label ? label.cells[row]!.text.replace(MARKS, "").trim() : ""));
+	const summary = names.map(name => label !== undefined && TOTAL_ROW.test(name));
+	// Whether a figure of `row` is the sum of two or more rows right above it (`Total scrapers | 74`).
+	const sumsAbove = (row: number) =>
+		draft.some(column => {
+			const total = column.cells[row];
+			if (column.role !== "measure" || !isNumber(total) || total.value <= 0) return false;
+			let sum = 0;
+			for (let above = row - 1; above >= 0; above--) {
+				const cell = column.cells[above];
+				if (!isNumber(cell) || cell.dim !== total.dim) return false;
+				sum += cell.value;
+				if (above < row - 1 && Math.abs(sum - total.value) <= total.value * APPROX_TOTAL) return true;
+			}
+			return false;
+		});
+	// A summary closes (or opens) the table, after any other summary rows; one amid the data only shares a
+	// name with one (a `net` suite, a `Totals by agent` query) unless its name is the bare summary word or
+	// its figure adds up the rows above it.
 	for (let row = 0; row < rows.length; row++) {
-		const name = label ? label.cells[row]!.text : "";
-		(label && TOTAL_ROW.test(name.replace(MARKS, "").trim()) ? totals : data).push(row);
+		const summarizes =
+			summary[row] &&
+			(summary.slice(row + 1).every(Boolean) ||
+				summary.slice(0, row).every(Boolean) ||
+				BARE_TOTAL.test(names[row]!) ||
+				sumsAbove(row));
+		(summarizes ? totals : data).push(row);
 	}
-	const finished = draft.map(column => finishColumn(column, data));
+	const finished = keepSweeps(draft.map(column => finishColumn(column, data)));
 	const restated = restatedColumns(
 		finished.filter(column => column.role === "measure" && !column.constant),
 		data,
@@ -531,10 +837,34 @@ export function analyzeTable(header: readonly string[], rows: readonly (readonly
 	};
 }
 
+/** A header with its numbers blanked: `scale 1 (200 tiles)` and `scale 8 (1600 tiles)` are one sweep. */
+const SWEEP_STEP = /\d+(?:\.\d+)?/g;
+
+/**
+ * `columns` with constant measures that are one step of a sweep kept as
+ * measures: `scale 8 (1600 tiles)` at 165 in every row beside `scale 1 (200
+ * tiles)` and `scale 4 (800 tiles)` is the sweep's last condition, not an
+ * echoed setting — the header, numbers blanked, matches a varying measure's.
+ */
+function keepSweeps(columns: readonly TableColumn[]): TableColumn[] {
+	const varying = new Set(
+		columns
+			.filter(column => column.role === "measure" && !column.constant && /\d/.test(column.header))
+			.map(column => column.header.replace(SWEEP_STEP, "#")),
+	);
+	return columns.map(column =>
+		column.constant && column.role === "measure" && varying.has(column.header.replace(SWEEP_STEP, "#"))
+			? { ...column, constant: false }
+			: column,
+	);
+}
+
 /** Most columns searched for parts summing to a whole (subsets grow combinatorially). */
 const MAX_COMPOSED = 8;
 /** Most parts one whole splits into directly. */
 const MAX_PARTS = 4;
+/** Share of its total that parts falling within it must make up in one row at least. */
+const MIN_PART_SHARE = 0.25;
 /** A whole that parts may fall within, leaving an unlisted rest. */
 const WHOLE_HEADER = /\b(?:total|all|sum|overall)\b/i;
 
@@ -684,6 +1014,14 @@ function findComposition(measures: readonly TableColumn[], rows: readonly number
 			column !== whole && column.dim === whole.dim && !WHOLE_HEADER.test(column.header) && column.signedShare < 0.5,
 	);
 	if (parts.length < 2 || parts.length > MAX_PARTS || !adds(whole, parts, rows, false)) return undefined;
+	// Parts make up a real share of their total somewhere: `27` tests and `6` turns fall within `16.8k` total tokens
+	// only because they count other things.
+	const share = (row: number) => {
+		const total = plainValue(whole, row)?.value ?? 0;
+		const sum = parts.reduce((acc, part) => acc + (plainValue(part, row)?.value ?? 0), 0);
+		return total > 0 ? sum / total : 0;
+	};
+	if (!rows.some(row => share(row) >= MIN_PART_SHARE)) return undefined;
 	return { whole: whole.index, parts: parts.map(column => column.index), exact: false };
 }
 
@@ -750,8 +1088,10 @@ function unstack(
 	return undefined;
 }
 
-/** Fewest items a slash list must hold to be split into rows; a pair (`Edit / read calls | 85 / 147`) stays one row. */
+/** Fewest items a slash list must hold to split into rows wherever its name cell stands. */
 const MIN_LISTED = 3;
+/** Fewest items a slash list splits into when the row's name lists them before the values they pair. */
+const MIN_LISTED_PAIR = 2;
 /** Fewest numeric columns listing values in a row it splits: one list of numbers may be a row of unrelated metrics. */
 const MIN_LISTS = 2;
 /** A spaced slash between list items. */
@@ -762,9 +1102,10 @@ const LISTED_NUMBER = /^[~≈]?[$€£¥]?\d[\d,]*(?:\.\d+)?\s*(?:%|[A-Za-zµμ]
 /**
  * Rows folding several rows into one (`response anthropic / chat / responses /
  * gemini → 3 wires | 12 / 12 / 12 / 9 | 6 / 0 / 0 / 0`), split back into one
- * row per item: a name cell listing {@link MIN_LISTED} or more items,
- * {@link MIN_LISTS} or more numeric cells each listing that many numbers, and
- * no other number in the row. Each
+ * row per item: a name cell listing {@link MIN_LISTED} or more items (a pair
+ * only when the name cell comes before every list: `pager 24×80 / 48×120 |
+ * 25.0 / 27.8 | 12.6 / 9.4`), {@link MIN_LISTS} or more numeric cells each
+ * listing that many numbers, and no other number in the row. Each
  * item keeps the words the name cell writes before its first item and the
  * aside after its last (` → 3 wires`, ` (ms)`: a tail opening on a symbol, so
  * `blocks / conditional branches` keeps its last item whole); other text cells repeat.
@@ -773,7 +1114,7 @@ function unlist(rows: readonly (readonly string[])[]): readonly (readonly string
 	return rows.flatMap(row => {
 		const lists = row.map(cell => plainCell(cell).text.split(LIST_SLASH));
 		const size = Math.max(...lists.map(list => list.length));
-		if (size < MIN_LISTED) return [row];
+		if (size < MIN_LISTED_PAIR) return [row];
 		const numeric = lists.map(list => list.every(item => LISTED_NUMBER.test(item)));
 		const name = lists.findIndex((list, at) => list.length === size && !numeric[at]);
 		const fits = lists.every(
@@ -781,6 +1122,9 @@ function unlist(rows: readonly (readonly string[])[]): readonly (readonly string
 		);
 		const listed = lists.filter((list, at) => list.length === size && numeric[at]).length;
 		if (name < 0 || !fits || listed < MIN_LISTS) return [row];
+		// A pair splits only where the row's name lists it, before the values it pairs (`pager 24×80 / 48×120 |
+		// 25.0 / 27.8 | 12.6 / 9.4`); a slash in a note after them pairs nothing.
+		if (size < MIN_LISTED && lists.some((list, at) => at < name && list.length === size)) return [row];
 		const items = [...lists[name]!];
 		const first = items[0]!;
 		const last = items[size - 1]!;
@@ -834,6 +1178,32 @@ function fractionKind(cell: Cell | undefined): "score" | "list" | "fraction" | u
 	return whole && cell.value >= 0 && cell.value <= cell.denominator ? "score" : "fraction";
 }
 
+/**
+ * A bare slash list of three or more values unlike each other (`12 / 12 / 768`, `19 / 1 / 0`): a list of
+ * different things, where alike values (`327 / 333 / 339`) repeat one measurement.
+ */
+function unlikeList(cell: Cell): boolean {
+	if (!isNumber(cell) || cell.dim !== "fraction") return false;
+	const items = readItems(cell.text.replace(MARKS, "").trim(), LIST_SEPARATOR, MAX_LISTED_VALUES)?.items;
+	if (!items || items.length < 3 || items.some(item => item.unit || item.currency)) return false;
+	const values = items.map(item => item.value);
+	return values.some(value => value <= 0) || Math.max(...values) > ALIKE_SPREAD * Math.min(...values);
+}
+
+/** A spaced bare `a / b` read as a fraction or score (`22 / 49`) as the pair of values it lists; any other cell unchanged. */
+function asPair(cell: Cell): Cell {
+	if (!isNumber(cell) || cell.denominator === undefined || cell.fit !== "fraction" || !PAIR_SLASH.test(cell.figure))
+		return cell;
+	return {
+		...cell,
+		dim: "count",
+		unit: "",
+		fit: "note",
+		denominator: undefined,
+		values: [cell.value, cell.denominator],
+	};
+}
+
 /** A {@link fractionKind} `score` as the percent of its denominator it reached; any other cell unchanged. */
 function asScore(cell: Cell): Cell {
 	if (!isNumber(cell) || !cell.denominator || fractionKind(cell) !== "score") return cell;
@@ -841,7 +1211,10 @@ function asScore(cell: Cell): Cell {
 }
 
 function readColumn(index: number, header: string, parsed: readonly (readonly Cell[])[]): DraftColumn {
-	const cells = resolveClock(resolveMinutes(parsed.map(row => row[index]!)));
+	const cells = otherNouns(
+		resolveClock(resolveMagnitudes(resolveMinutes(parsed.map(row => row[index]!)), header)),
+		header,
+	);
 	const present = cells.filter(cell => cell.kind !== "missing");
 	const numbers = present.filter(isNumber);
 	const strict = numbers.filter(cell => cell.fit !== "prose");
@@ -876,9 +1249,16 @@ function readColumn(index: number, header: string, parsed: readonly (readonly Ce
 		numbers.every((cell, at) => cell.dim === "count" && cell.value === numbers[0]!.value + at);
 	// Row numbers and identifiers are bare counts; a unit (`20 ms` under `PR`) makes the column a measure.
 	const bare = numbers.every(cell => cell.dim === "count" && !cell.unit);
+	// `1 ok`, `87 ok`, `3 fail`: every count tallies an outcome, a verdict per row rather than a quantity to plot.
+	const tallies =
+		numbers.length > 0 && bare && cells.every((cell, at) => !isNumber(cell) || statuses[at] !== undefined);
 	let role: ColumnRole;
 	if (temporalShare >= 0.8) role = "temporal";
+	else if (tallies) role = "label";
 	else if (numberShare >= 0.8 && (sequential || (bare && INDEX_HEADER.test(trimmed)))) role = "index";
+	// Case numbers `01–11`, `12–17`, …, `64`, `65` beside the rows' names: spans tiling one numbering say where each
+	// row sits, not how much it holds.
+	else if (index > 0 && bare && tilesSpans(present)) role = "index";
 	// A step header over ordered values (`Tier` 1, 1, 2, 3): repeats make it a bucket the rows fall into, still no measure.
 	else if (
 		numberShare >= 0.8 &&
@@ -927,6 +1307,85 @@ function resolveMinutes(cells: Cell[]): Cell[] {
 	);
 }
 
+/** The word a bare count names after its figure (`4 new (45 total)` → `new`, `371 entries`). */
+const COUNTED_NOUN = /^\s*([A-Za-z][A-Za-z-]*)/;
+
+/**
+ * Counts of another thing than most of the column's (`371 entries` among `4
+ * new` tests) read as text: one axis would set them against the rest. Applies
+ * where most counts name one noun and two or more others name one the header
+ * does not (a lone `1200px` among `rem` sizes is a stray unit, not a second quantity).
+ */
+function otherNouns(cells: Cell[], header: string): Cell[] {
+	const nouns = cells.map(cell => {
+		if (!isNumber(cell) || cell.dim !== "count" || cell.unit || cell.fit === "pure" || cellStatus(cell.text))
+			return undefined;
+		const word = COUNTED_NOUN.exec(cell.text.slice(cell.text.indexOf(cell.figure) + cell.figure.length))?.[1];
+		return word?.toLowerCase().replace(/e?s$/, "");
+	});
+	const tally = new Map<string, number>();
+	for (const noun of nouns) if (noun) tally.set(noun, (tally.get(noun) ?? 0) + 1);
+	const [main, count] = [...tally].sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
+	if (count < 2 || count * 2 <= cells.filter(isNumber).length) return cells;
+	const named = header.toLowerCase();
+	return cells.map((cell, at) => {
+		const noun = nouns[at];
+		return noun && noun !== main && (tally.get(noun) ?? 0) >= 2 && !named.includes(noun)
+			? { kind: "text", text: cell.text, emphasis: cell.emphasis }
+			: cell;
+	});
+}
+
+/** Headers of a size on disk or in memory, whose bare magnitudes (`3.4G`, `960M`) count bytes. */
+const SIZE_HEADER = /\b(?:sizes?|disk|du|rss|memory|mem|heap|storage|footprint|bytes)\b/i;
+/** Bare magnitude suffixes of a `du -h` size, as powers of 1024. */
+const BINARY_POWER: Readonly<Record<string, number>> = { K: 1, k: 1, M: 2, G: 3, T: 4 };
+
+/**
+ * Bare magnitudes read by what they stand beside: under a size header
+ * ({@link SIZE_HEADER}), `3.4G`, `960M` and `12K` are `du -h` sizes in powers
+ * of 1024; beside millions (`600M` parameters), `1.2B` is billions, not bytes.
+ */
+function resolveMagnitudes(cells: Cell[], header: string): Cell[] {
+	const numbers = cells.filter(isNumber);
+	const suffixed = numbers.filter(cell => cell.dim === "count" && Object.hasOwn(BINARY_POWER, cell.unit));
+	if (suffixed.length === 0) return cells;
+	const rescale = (value: number | undefined, from: number, to: number) =>
+		value === undefined ? undefined : (value / from) * to;
+	if (SIZE_HEADER.test(header) && numbers.every(cell => cell.dim === "count" || cell.dim === "bytes"))
+		return cells.map(cell => {
+			if (!isNumber(cell) || !suffixed.includes(cell)) return cell;
+			const from = knownUnit(cell.unit)![1];
+			const to = 1024 ** BINARY_POWER[cell.unit]!;
+			return {
+				...cell,
+				dim: "bytes",
+				value: rescale(cell.value, from, to)!,
+				to: rescale(cell.to, from, to),
+				upper: rescale(cell.upper, from, to),
+			};
+		});
+	const bytes = numbers.filter(cell => cell.dim === "bytes");
+	// Billions read like millions: a few units each (`1.2B` beside `600M`), where bytes would be thousands (`4096B`).
+	if (
+		bytes.length === 0 ||
+		!suffixed.some(cell => cell.unit === "M") ||
+		!bytes.every(cell => cell.unit === "B" && Math.abs(cell.value) < 1000)
+	)
+		return cells;
+	return cells.map(cell =>
+		isNumber(cell) && cell.dim === "bytes"
+			? {
+					...cell,
+					dim: "count",
+					value: cell.value * 1e9,
+					to: rescale(cell.to, 1, 1e9),
+					upper: rescale(cell.upper, 1, 1e9),
+				}
+			: cell,
+	);
+}
+
 /** An elapsed time written on a clock face: `m:ss` or `h:mm:ss`, optionally with fractions of a second. */
 const CLOCK = /^(?:(\d{1,2}):)?(\d{1,3}):(\d{2}(?:\.\d+)?)$/;
 
@@ -969,6 +1428,31 @@ function finishColumn(column: DraftColumn, rows: readonly number[]): TableColumn
 		}
 	}
 	return { ...column, constant: count > 0 && values.size <= 1 };
+}
+
+/** A span of whole numbers written `a–b` (zero-padded or not: `01–11`), or one number. */
+const SPAN = /^(\d+)(?:\s*[-–—]\s*(\d+))?$/;
+/** Fewest spans that tile a numbering; two in a row may meet by chance. */
+const MIN_TILES = 3;
+
+/**
+ * Whether `cells` are spans of whole numbers laid end to end in order (`01–11`, `12–17`, `18–21`, `64`):
+ * each starts right after the previous one ends, one at least a range, {@link MIN_TILES} at least.
+ */
+function tilesSpans(cells: readonly Cell[]): boolean {
+	if (cells.length < MIN_TILES) return false;
+	let end: number | undefined;
+	let ranged = false;
+	for (const cell of cells) {
+		const span = SPAN.exec(cell.text.replace(MARKS, "").trim());
+		if (!span) return false;
+		const first = Number(span[1]);
+		const last = span[2] === undefined ? first : Number(span[2]);
+		if (last < first || (end !== undefined && first !== end + 1)) return false;
+		ranged ||= last > first;
+		end = last;
+	}
+	return ranged;
 }
 
 /** Strictly increasing or strictly decreasing. */

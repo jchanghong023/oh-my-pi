@@ -7,18 +7,6 @@
 - Added async diagnostic context, safe exception and endpoint summaries (including hashed URL paths), CLI lifecycle flushing, and a user-cache fallback for unwritable log directories.
 - Added correlated HTTP attempt, retry, cancellation, and terminal-result logs without recording request bodies, credentials, or response content.
 
-### Breaking Changes
-
-- Renamed `takeRecentLoopPhase()` to `takeLoopPhaseAttribution()`, which returns `LoopPhaseAttribution` (`{ label, ms }`) instead of a string, returns `undefined` unless a window was armed with `resetLoopPhaseWindow()`, and names a label only when it outweighs unlabeled time ([#15019](https://github.com/can1357/oh-my-pi/pull/15019) by [@jaredlyon](https://github.com/jaredlyon)).
-
-### Added
-
-- Added `withLoopPhase(label, fn)`, which runs `fn` under a loop phase and pops it in `finally`; for an async `fn` only its synchronous prefix is labeled ([#15001](https://github.com/can1357/oh-my-pi/pull/15001) by [@jaredlyon](https://github.com/jaredlyon)).
-
-### Changed
-
-- Sped up streaming JSON string scanning for long tool-argument payloads by bulk-skipping ordinary characters ([#14297](https://github.com/can1357/oh-my-pi/pull/14297) by [@abilliontokens](https://github.com/abilliontokens)).
-
 ### Fixed
 
 - Fixed HTTP diagnostics reporting disabled timeouts when native defaults were active and downgrading terminal request failures to warnings.
@@ -26,7 +14,24 @@
 - Flushed log-directory fallback warnings during initialization even when INFO records are disabled.
 - Preserved YAML comments and unrelated alias values when editing or removing a single configuration field.
 - Fatal diagnostic records now retain only safe error summaries instead of copying exception messages and raw stacks; terminal error output is unchanged.
-- Fixed archive extraction failing on Windows without the symlink privilege: symlink entries now degrade to a directory junction or an in-archive file copy instead of failing the whole archive with `EPERM`, dangling links that cannot be copied are skipped instead of aborting, and directory symlink entries are extracted instead of being skipped ([#14820](https://github.com/can1357/oh-my-pi/pull/14820) by [@jchanghong023](https://github.com/jchanghong023)).
+
+## [18.9.0] - 2026-10-11
+
+### Breaking Changes
+
+- Renamed `takeRecentLoopPhase()` to `takeLoopPhaseAttribution()`. The new API returns a `LoopPhaseAttribution` object (`{ label, ms }`) and reports a label only when it accounts for more time than unlabeled work within an armed measurement window.
+
+### Added
+
+- Added `withLoopPhase(label, fn)` for attributing synchronous work to a named loop phase, with automatic cleanup even when the callback throws.
+
+### Changed
+
+- Improved streaming JSON parsing performance for long tool-argument payloads.
+
+### Fixed
+
+- Fixed archive extraction on Windows systems without symlink privileges by allowing symlink entries to be extracted using supported fallbacks, while skipping unresolvable dangling links instead of failing the entire archive.
 
 ## [18.8.9] - 2026-10-10
 

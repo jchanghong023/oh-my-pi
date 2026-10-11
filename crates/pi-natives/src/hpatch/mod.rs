@@ -74,8 +74,8 @@ impl From<io::Error> for Error {
 
 /// Applies an `HDiffPatch` single-stream patch to `oldPath`, writing `outPath`.
 ///
-/// Supports HDIFFSF20 with zstd or no compression. Creates or truncates
-/// `outPath` and resolves to the result's size in bytes. Rejects on I/O
+/// Accepts HDIFFSF20 patches, zstd-compressed or uncompressed; `outPath` is
+/// created or truncated. Resolves to the result's size in bytes. Rejects on I/O
 /// failure, a damaged or unsupported patch, or a patch made for other old data.
 #[napi(js_name = "applyBinaryPatch")]
 pub fn apply_binary_patch(
