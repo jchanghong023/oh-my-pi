@@ -233,7 +233,9 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 				const chunks = [
 					{
 						...base,
-						choices: [{ index: 0, delta: { role: "assistant", content: "RPC_BATCH_ACCEPTED" }, finish_reason: null }],
+						choices: [
+							{ index: 0, delta: { role: "assistant", content: "RPC_BATCH_ACCEPTED" }, finish_reason: null },
+						],
 					},
 					{
 						...base,
@@ -281,19 +283,28 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 						"保留 <T>、{{targetItems}} 和 $&",
 					].join("\r\n");
 					expect(
-						await server.request({ id: "batch-run", type: "prompt", message: `${item.insertText}200 30 ${task}` }),
+						await server.request({
+							id: "batch-run",
+							type: "prompt",
+							message: `${item.insertText}200 30 ${task}`,
+						}),
 					).toMatchObject({ success: true });
 					expect(
 						await server.next(frame => frame.type === "prompt_result" && frame.id === "batch-run"),
 					).toMatchObject({ status: "completed", agentInvoked: true });
-					const messages = requests.flatMap(body => (Array.isArray(body.messages) ? body.messages.filter(isRecord) : []));
+					const messages = requests.flatMap(body =>
+						Array.isArray(body.messages) ? body.messages.filter(isRecord) : [],
+					);
 					const user = messages.findLast(message => message.role === "user");
 					if (!user) throw new Error("Provider did not receive user input");
 					const text =
 						typeof user.content === "string"
 							? user.content
 							: Array.isArray(user.content)
-								? user.content.filter(isRecord).map(part => String(part.text ?? "")).join("")
+								? user.content
+										.filter(isRecord)
+										.map(part => String(part.text ?? ""))
+										.join("")
 								: "";
 					expect(text.slice(-task.length)).toBe(task);
 					expect(text).not.toContain("/jch-workflowzbatch");
@@ -301,7 +312,11 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 					const requestCount = requests.length;
 					const outputStart = server.seen.length;
 					expect(
-						await server.request({ id: "batch-invalid", type: "prompt", message: "/jch-workflowzbatch 200 0 修复" }),
+						await server.request({
+							id: "batch-invalid",
+							type: "prompt",
+							message: "/jch-workflowzbatch 200 0 修复",
+						}),
 					).toMatchObject({ success: true, data: { agentInvoked: false } });
 					expect(await server.request({ id: "batch-settled", type: "get_state" })).toMatchObject({
 						success: true,
