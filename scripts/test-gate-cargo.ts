@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { withRustCompilerEvents } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure, withRustCompilerEvents } from "./test-gate-runtime";
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -17,11 +17,15 @@ try {
 				stdout: "inherit",
 				stderr: "inherit",
 			});
-			return await child.exited;
+			const exitCode = await child.exited;
+			if (exitCode !== 0) reportGateFailure(new GateCommandError(`cargo ${args[0]} failed`, exitCode));
+			return exitCode;
 		},
 	);
 	process.exit(exitCode);
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
-	process.exit((error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1);
+	const exitCode = (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1;
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode));
+	process.exit(exitCode);
 }

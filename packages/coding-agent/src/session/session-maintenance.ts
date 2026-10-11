@@ -91,6 +91,7 @@ import {
 	resolveSpeculationMethod,
 } from "./compaction-methods";
 import {
+	type CustomMessage,
 	assistantTurnDelivered,
 	convertToLlm,
 	invalidateConvertToLlmArrayCache,
@@ -123,7 +124,6 @@ import {
 } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { cfgRetry } from "./settings";
-import { GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE } from "../goals/request-context";
 
 export type CompactionCheckResult = Readonly<{
 	continuationScheduled: boolean;
@@ -491,6 +491,8 @@ export interface SessionMaintenanceHost {
 	reconnectToAgent(): void;
 	drainStrandedQueuedMessages(): void;
 	buildDisplaySessionContext(): SessionContext;
+	/** Append a durable user-authority Goal notice synchronously after a real rewrite. */
+	restoreGoalAutoOrchestrateContext(compactionEntryId: string): CustomMessage | undefined;
 	convertToLlmForSideRequest(messages: AgentMessage[]): Message[];
 	/** The provider context a live turn sends for `summarized` + `retained`, cut to the `summarized` range. */
 	buildLiveProviderContext(
@@ -2471,9 +2473,9 @@ export class SessionMaintenance {
 
 	/**
 	 * Append a compaction entry and run the shared post-commit sequence:
-	 * rebuild the display context, swap live agent messages, re-anchor stats,
-	 * reset plan/advisor/todo runtime state derived from the replaced history,
-	 * reset provider sessions, and emit the `session_compact` extension hook.
+	 * rebuild and swap live messages, reset history-derived runtime/provider
+	 * state, append any eligible durable Goal restoration, re-anchor stats,
+	 * and emit the `session_compact` extension hook.
 	 */
 	async #commitCompactionEntry(args: {
 		summary: string;
@@ -2488,6 +2490,7 @@ export class SessionMaintenance {
 		providerReplayThroughEntryId?: string;
 		advisorResetReason: string;
 		detachExtensionEmit?: boolean;
+		retryDropReason?: "overflow" | "threshold" | "idle" | "incomplete";
 	}): Promise<CompactionEntry | undefined> {
 		const entryId = this.#host.sessionManager.appendCompaction(
 			args.summary,
@@ -2511,7 +2514,19 @@ export class SessionMaintenance {
 		const newEntries = this.#host.sessionManager.getEntries();
 		const sessionContext = this.#host.buildDisplaySessionContext();
 		this.#host.agent.replaceMessages(sessionContext.messages);
-		this.#host.rebaseAfterCompaction();
+		let removedTokens = 0;
+		if (args.retryDropReason !== undefined) {
+			const messages = this.#host.agent.state.messages;
+			const lastMessage = messages.at(-1);
+			if (
+				lastMessage?.role === "assistant" &&
+				(lastMessage.stopReason === "error" ||
+					(args.retryDropReason === "incomplete" && lastMessage.stopReason === "length"))
+			) {
+				removedTokens = this.#countProjectedMessages([lastMessage]);
+				this.#host.agent.replaceMessages(messages.slice(0, -1));
+			}
+		}
 		// Compaction discarded the conversation history that carried the approved
 		// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 		// the plan from disk and re-injects it on the next turn (issue #1246).
@@ -2523,9 +2538,24 @@ export class SessionMaintenance {
 		} else {
 			this.#host.closeCodexProviderSessionsForHistoryRewrite();
 		}
+		const restoredNotice = this.#host.restoreGoalAutoOrchestrateContext(entryId);
+		this.#host.rebaseAfterCompaction();
 		const savedCompactionEntry = newEntries.find(e => e.type === "compaction" && e.id === entryId) as
 			| CompactionEntry
 			| undefined;
+		if (savedCompactionEntry && (removedTokens > 0 || restoredNotice)) {
+			// Keep the persisted projection aligned with the final live context,
+			// including restoration, without losing native-history/frame accounting.
+			savedCompactionEntry.tokensAfter = Math.max(
+				0,
+				(savedCompactionEntry.tokensAfter ?? 0) -
+					removedTokens +
+					(restoredNotice ? this.#countProjectedMessages([restoredNotice]) : 0),
+			);
+			const summary = this.#host.agent.state.messages.find(message => message.role === "compactionSummary");
+			if (summary?.role === "compactionSummary") summary.tokensAfter = savedCompactionEntry.tokensAfter;
+			await this.#host.sessionManager.rewriteEntries();
+		}
 		if (this.#host.extensionRunner && savedCompactionEntry) {
 			const compactEmit = this.#host.extensionRunner.emit({
 				type: "session_compact",
@@ -2547,21 +2577,7 @@ export class SessionMaintenance {
 
 	#estimateRequestOverheadTokens(): number {
 		const source = this.#host.nonMessageTokenSource();
-		return (
-			computeNonMessageTokens(source, this.#tokenizer, this.#host.settings.revision) +
-			(source.getPerCallContextTokens?.() ?? 0)
-		);
-	}
-
-	#estimateNextContextTokens(message: AssistantMessage): number {
-		const perCallContextTokens = this.#host.nonMessageTokenSource().getPerCallContextTokens?.() ?? 0;
-		return (
-			Math.max(
-				0,
-				calculateContextTokens(message.usage) -
-					(message.perCallContextTokensBySource?.[GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE] ?? 0),
-			) + perCallContextTokens
-		);
+		return computeNonMessageTokens(source, this.#tokenizer, this.#host.settings.revision);
 	}
 
 	/**
@@ -2767,7 +2783,7 @@ export class SessionMaintenance {
 		// will actually rewrite history; awaiting it on every ordinary tool turn lets
 		// a slow message_end listener leave the TUI "generating" with no provider
 		// request or tool running.
-		const billedContextTokens = this.#estimateNextContextTokens(lastAssistant);
+		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
@@ -3339,7 +3355,7 @@ export class SessionMaintenance {
 		// (the floor applied below) drive the decision instead.
 		const assistantUsageContextTokens = assistantPredatesCompaction
 			? 0
-			: this.#estimateNextContextTokens(assistantMessage);
+			: calculateContextTokens(assistantMessage.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
@@ -4548,48 +4564,16 @@ export class SessionMaintenance {
 		const rebuilt = snapcompact.getPreservedArchive(result.preserveData);
 		if (!rebuilt || rebuilt.frames.length >= archive.frames.length) return undefined;
 
-		const rebuiltEntryId = this.#host.sessionManager.appendCompaction(
-			result.summary,
-			result.shortSummary,
-			result.firstKeptEntryId,
-			result.tokensBefore,
-			{
-				details: result.details,
-				preserveData: result.preserveData,
-				method: "snapcompact",
-				tokensAfter: this.#projectCompactedContextTokens({
-					summary: result.summary,
-					shortSummary: result.shortSummary,
-					tokensBefore: result.tokensBefore,
-					firstKeptEntryId: result.firstKeptEntryId,
-					preserveData: result.preserveData,
-				}),
-			},
-		);
-		this.#failedNativeSpeculation = undefined;
-		const sessionContext = this.#host.buildDisplaySessionContext();
-		this.#host.agent.replaceMessages(sessionContext.messages);
-		this.#host.rebaseAfterCompaction();
-		// Same post-rewrite bookkeeping as the regular compaction append: the
-		// rebuilt context no longer carries the transient plan reference (#1246),
-		// and advisor cursors / todo phases were derived from the replaced
-		// history.
-		this.#host.resetPlanReference();
-		this.#host.resetAdvisorRuntimes("compaction-rescue", { compacted: true });
-		this.#host.syncTodoPhasesFromBranch();
-		this.#host.closeCodexProviderSessionsForHistoryRewrite();
-		// Extensions must see the entry that is now active, not (only) the one
-		// this rebuild just superseded — mirror the regular append path's hook.
-		const rebuiltEntry = this.#host.sessionManager.getEntries().find(e => e.id === rebuiltEntryId) as
-			| CompactionEntry
-			| undefined;
-		if (this.#host.extensionRunner && rebuiltEntry) {
-			await this.#host.extensionRunner.emit({
-				type: "session_compact",
-				compactionEntry: rebuiltEntry,
-				fromExtension: false,
-			});
-		}
+		await this.#commitCompactionEntry({
+			...result,
+			shortSummary: result.shortSummary,
+			details: result.details,
+			preserveData: result.preserveData,
+			fromExtension: false,
+			method: "snapcompact",
+			codexCompaction: undefined,
+			advisorResetReason: "compaction-rescue",
+		});
 		this.#host.emitNotice(
 			"info",
 			`Compaction dead-end recovery: rebuilt the trailing snapcompact archive at a smaller frame budget (${archive.frames.length} → ${rebuilt.frames.length} frames) so maintenance could make progress.`,
@@ -5767,6 +5751,7 @@ export class SessionMaintenance {
 			providerReplayThroughEntryId: args.providerReplayThroughEntryId,
 			advisorResetReason: "auto-compaction",
 			detachExtensionEmit: detachPostCommit,
+			retryDropReason: willRetry ? reason : undefined,
 		});
 
 		const result: CompactionResult = {
@@ -5801,26 +5786,9 @@ export class SessionMaintenance {
 		let hasHeadroom = false;
 
 		if (willRetry) {
-			const messages = this.#host.agent.state.messages;
-			const lastMsg = messages[messages.length - 1];
-			if (lastMsg?.role === "assistant") {
-				const lastAssistant = lastMsg as AssistantMessage;
-				// Drop the prior turn before retry when it carries no actionable deliverable:
-				// - "error": failure was kept in history but must not re-enter the next turn's prompt.
-				// - reason === "incomplete" && stopReason === "length": truncated output (typically
-				//   reasoning-only) — re-running it produces the same dead-end.
-				const shouldDrop =
-					lastAssistant.stopReason === "error" ||
-					(reason === "incomplete" && lastAssistant.stopReason === "length");
-				if (shouldDrop) {
-					this.#host.agent.replaceMessages(messages.slice(0, -1));
-					this.#host.rebaseAfterCompaction();
-				}
-			}
-
-			// Retry only needs the rebuilt prompt to fit the window again — measured
-			// AFTER the drop above so the just-failed turn (which the retry prompt
-			// won't include) is excluded. Reusing the auto-continue recovery band
+			// The commit pruned the failed tail before persisting restoration;
+			// measure the final rebuilt prompt, including that new notice. Reusing
+			// the auto-continue recovery band
 			// here turned recoverable overflows into manual dead-ends (#3412 review),
 			// so use the looser fit budget.
 			retryFits = this.#compactionCreatedRetryFit();

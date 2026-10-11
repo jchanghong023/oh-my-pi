@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { withChargedActivity, withCompilerActivity } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure, withChargedActivity, withCompilerActivity } from "./test-gate-runtime";
 
 const [command, ...args] = process.argv.slice(2);
 if (command !== "build") {
@@ -19,11 +19,15 @@ try {
 			stdout: "inherit",
 			stderr: "inherit",
 		});
-		return await child.exited;
+		const exitCode = await child.exited;
+		if (exitCode !== 0) reportGateFailure(new GateCommandError(`Bun ${command} failed`, exitCode));
+		return exitCode;
 	};
 	const exitCode = compilerOnly ? await withCompilerActivity(invoke) : await withChargedActivity(invoke);
 	process.exit(exitCode);
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
-	process.exit((error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1);
+	const exitCode = (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1;
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode));
+	process.exit(exitCode);
 }

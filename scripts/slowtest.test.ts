@@ -28,6 +28,11 @@ if (barrier !== "none") {
  } finally { watcher.close(); }
 }
 await fs.appendFile(record, JSON.stringify({role})+"\\n");
+if (code === "hold") {
+ const watcher = watch(path.dirname(record), () => {});
+ try { await Promise.withResolvers().promise; } finally { watcher.close(); }
+ await fs.writeFile(record + ".completed", "unexpected");
+}
 process.exit(Number(code));
 `,
 	);
@@ -122,7 +127,7 @@ describe("slowtest isolated mechanism", () => {
 		expect(await f.records(f.linuxRecord)).toEqual([{ role: "linux" }]);
 	}, 20000);
 
-	test.each(["BLOCKED", "UNVERIFIED", "FAIL", "TIMEOUT", "CANCELLED"] as const)(
+	test.each(["BLOCKED", "UNVERIFIED"] as const)(
 		"available WSL $0 is nonpassing and retains local fulltest",
 		async status => {
 			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
@@ -135,6 +140,35 @@ describe("slowtest isolated mechanism", () => {
 			expect(result.status).not.toBe("PASS");
 			expect(result.exitCode).toBe(status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17);
 			expect(await f.records(f.localRecord)).toHaveLength(1);
+		},
+		20000,
+	);
+
+	test.each(["FAIL", "TIMEOUT", "CANCELLED"] as const)(
+		"executed WSL $0 aborts a live local fulltest and preserves the triggering exit",
+		async status => {
+			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+			const barrier = await fs.mkdtemp(path.join(temporary, "failure-barrier-"));
+			const exitCode = status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17;
+			f.deps.fulltest = async gate => {
+				await gate.run({
+					label: "live current stub",
+					argv: [process.execPath, stub, f.localRecord, barrier, "current", "hold"],
+				});
+			};
+			f.deps.wsl = async gate => {
+				await gate.capture({
+					label: "executed Linux failure",
+					argv: [process.execPath, stub, f.linuxRecord, barrier, "linux", String(exitCode)],
+					allowFailure: true,
+				});
+				return { status, reason: "original executed failure", exitCode };
+			};
+			const result = await f.execute();
+			expect(result.status).toBe(status === "CANCELLED" ? "INTERRUPTED" : status);
+			expect(result.exitCode).toBe(exitCode);
+			expect(await f.records(f.linuxRecord)).toEqual([{ role: "linux" }]);
+			expect(await Bun.file(`${f.localRecord}.completed`).exists()).toBe(false);
 		},
 		20000,
 	);
@@ -186,6 +220,9 @@ test("invalid slowtest CLI arguments still print the whole-run summary", async (
 	const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "slowtest.ts"), "--invalid-gate-option"], {
 		stdout: "pipe",
 		stderr: "pipe",
+		// This intentionally invalid nested CLI is fixture evidence, not a
+		// failure of the enclosing fulltest gate running these mechanism tests.
+		env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
 	});
 	const [exitCode, stdout] = await Promise.all([
 		child.exited,

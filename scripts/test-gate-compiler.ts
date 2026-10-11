@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
-import { withChargedActivity, withCompilerActivity } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure, withChargedActivity, withCompilerActivity } from "./test-gate-runtime";
 
 // Cargo supplies its workspace wrapper (e.g. clippy-driver) before rustc. Never
 // exempt that mixed lint command; only the real compiler's crate invocations.
@@ -29,7 +29,30 @@ const compileOnly =
 			args.includes("--crate-name") &&
 			!args.some(arg => arg === "--print" || arg.startsWith("--print=") || arg === "-V" || arg === "--version"));
 const invoke = async () => {
-	const child = Bun.spawn(argv, { stdin: "inherit", stdout: "inherit", stderr: "inherit", windowsHide: true });
-	return await child.exited;
+	try {
+		const child = Bun.spawn(argv, {
+			// Supplying --test-runtool prevents rustdoc from setting this itself.
+			// The merged harness needs it to preserve per-doctest process isolation.
+			env: doctestRun ? { ...process.env, RUSTDOC_DOCTEST_BIN_PATH: path.resolve(compiler) } : process.env,
+			stdin: "inherit",
+			stdout: "inherit",
+			stderr: "inherit",
+			windowsHide: true,
+		});
+		const exitCode = await child.exited;
+		// Rustdoc owns compile_fail/should_panic expectations; only its aggregate
+		// result can classify a doctest compiler or executable exit as a failure.
+		if (exitCode !== 0 && !doctestCompile && !doctestRun)
+			reportGateFailure(new GateCommandError(`${path.basename(compiler)} failed`, exitCode));
+		return exitCode;
+	} catch (error) {
+		reportGateFailure(
+			new GateCommandError(
+				error instanceof Error ? error.message : String(error),
+				(error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
+			),
+		);
+		throw error;
+	}
 };
 process.exit(compileOnly && !doctestRun ? await withCompilerActivity(invoke) : await withChargedActivity(invoke));

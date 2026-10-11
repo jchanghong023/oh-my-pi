@@ -4,7 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { GateCommand, GateLevel, GateRun } from "./test-gate-runtime";
-import { GateEventParser, GATE_LIMIT_SECONDS, runGate, withRustCompilerEvents } from "./test-gate-runtime";
+import {
+	GateCommandError,
+	GateEventParser,
+	GATE_LIMIT_SECONDS,
+	runGate,
+	withRustCompilerEvents,
+} from "./test-gate-runtime";
 import { splitGoCommand } from "./test-gate-go";
 
 let directory: string;
@@ -132,6 +138,20 @@ if (plan.barrierReady) {
     try { await fs.access(plan.barrierRelease); break; } catch (error) { if(error.code !== "ENOENT") throw error; }
     await Bun.sleep(5);
   }
+}
+if (plan.reportFailure) {
+  // The parent supplies the runtime module URL across this isolated subprocess boundary.
+  const {GateCommandError,reportGateFailure} = await import(plan.runtime);
+  reportGateFailure(new GateCommandError("fixture nested check failed",plan.reportFailure));
+}
+if (plan.nestedFailure) {
+  // Exercise a real nested entrypoint's explicit propagation across module/process boundaries.
+  const {GateCommandError,runGate} = await import(plan.runtime);
+  const result = await runGate("fulltest",async gate => {
+    gate.fail(new GateCommandError("fixture real nested gate failure",43));
+    await gate.charged(() => Promise.withResolvers().promise);
+  },{reportFailure:true,print:()=>{}});
+  process.exit(result.exitCode);
 }
 const phaseStart=gateClockNanoseconds();
 if (plan.events) process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + " " + JSON.stringify({id:"compiler",kind:"compile",at:phaseStart.toString(),clock:process.env.OMP_GATE_CLOCK_TOKEN}) + "\\n");
@@ -348,6 +368,97 @@ it("awaits charged finally cleanup after abort before printing the final summary
 	expect(events.at(-1)).toContain("INTERRUPTED");
 	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.015);
 });
+it("drains finally cleanup registered after an interrupted child scope settles", async () => {
+	const events: string[] = [];
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			try {
+				await gate.childGate(
+					"fastcheck",
+					async nested => {
+						nested.fail(new GateCommandError("fixture child failure", 47));
+						await Promise.withResolvers<void>().promise;
+					},
+					{ print: line => events.push(line) },
+				);
+			} finally {
+				await gate.charged(async () => {
+					await sleep(20);
+					events.push("first cleanup complete");
+				});
+				await gate.charged(async () => {
+					await sleep(20);
+					events.push("second cleanup complete");
+				});
+			}
+		},
+		{ limitSeconds: 0.8, print: line => events.push(line) },
+	);
+	expect(result.exitCode).toBe(47);
+	expect(events.at(-3)).toBe("second cleanup complete");
+	expect(events.at(-1)).toContain("slowtest: FAIL");
+	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.035);
+	expect(result.totalSeconds).toBeCloseTo(result.budgetedSeconds + result.compileExcludedSeconds, 5);
+});
+
+it("rejects late charged finally work from an untracked continuation after the failed summary", async () => {
+	const resume = Promise.withResolvers<void>();
+	const failure = new GateCommandError("fixture original failure", 47);
+	const events: string[] = [];
+	let lateWork: Promise<void> | undefined;
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			lateWork = (async () => {
+				try {
+					gate.fail(failure);
+					await resume.promise;
+				} finally {
+					await gate.charged(async () => {
+						events.push("late cleanup ran");
+					});
+				}
+			})();
+			await lateWork;
+		},
+		{ limitSeconds: 0.8, print: line => events.push(line) },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(47);
+	expect(events.at(-1)).toContain("slowtest: FAIL");
+	const summaryEvents = [...events];
+	expect(lateWork).toBeDefined();
+	resume.resolve();
+	await expect(lateWork).rejects.toBe(failure);
+	expect(events).toEqual(summaryEvents);
+});
+
+it("charges root entry setup and does not start work after its budget is already exhausted", async () => {
+	let ran = false;
+	const result = await runGate(
+		"fastcheck",
+		async () => {
+			ran = true;
+		},
+		{
+			get limitSeconds() {
+				const until = performance.now() + 30;
+				while (performance.now() < until) {
+					// Model synchronous entry/setup work before the scope exists.
+				}
+				return 0.02;
+			},
+			cleanupReserveMs: 0,
+			print: quiet,
+		},
+	);
+	expect(ran).toBe(false);
+	expect(result.status).toBe("TIMEOUT");
+	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.03);
+	expect(result.totalSeconds).toBeCloseTo(result.budgetedSeconds + result.compileExcludedSeconds, 5);
+});
+
 it("cannot swallow a failed child gate to produce outer success", async () => {
 	const result = await runGate(
 		"slowtest",
@@ -368,6 +479,228 @@ it("cannot swallow a failed child gate to produce outer success", async () => {
 	);
 	expect(result.status).toBe("FAIL");
 	expect(result.exitCode).toBe(19);
+});
+it("cancels parallel commands at the failing reply and preserves it through failing cleanup", async () => {
+	const output: string[] = [];
+	const hooks: string[] = [];
+	const siblingCancelled = Promise.withResolvers<void>();
+	const ready = ["failure", "sibling"].map(id => path.join(directory, `first-failure-${id}.ready`));
+	const release = path.join(directory, "first-failure.release");
+	const nextPid = path.join(directory, "first-failure-next.pid");
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			await Promise.allSettled([
+				gate.run(
+					command(
+						{ barrierReady: ready[0], barrierRelease: release, exit: 23 },
+						{
+							onAbort: async () => {
+								hooks.push("failing stage cleanup");
+								await siblingCancelled.promise;
+								throw new Error("fixture failing stage cleanup failed");
+							},
+						},
+					),
+				),
+				gate.run(
+					command(
+						{ barrierReady: ready[1], barrierRelease: release, ms: 30000 },
+						{
+							onAbort: async () => {
+								hooks.push("sibling cancelled");
+								siblingCancelled.resolve();
+							},
+						},
+					),
+				),
+				gate.charged(async () => {
+					await waitForFiles(ready, gate.signal);
+					await fs.writeFile(release, "ready");
+				}),
+			]);
+			await gate.run(command({ pidFile: nextPid }));
+		},
+		{ limitSeconds: 2, print: line => output.push(line) },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(23);
+	expect(hooks).toContain("failing stage cleanup");
+	expect(hooks).toContain("sibling cancelled");
+	expect(await Bun.file(nextPid).exists()).toBe(false);
+	expect(
+		output.some(line => line.includes("CLEANUP_FAIL") && line.includes("fixture failing stage cleanup failed")),
+	).toBe(true);
+	expect(output.at(-1)).toMatch(/FAIL total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=2\.0s exit=23/);
+	expect(result.totalSeconds).toBeCloseTo(result.budgetedSeconds + result.compileExcludedSeconds, 5);
+});
+
+it("honors explicit nested failure events without waiting for their enclosing command to exit", async () => {
+	for (const allowFailure of [false, true]) {
+		const pidFile = path.join(directory, `nested-failure-${allowFailure}.pid`);
+		const result = await runGate(
+			"slowtest",
+			async gate => {
+				await gate.capture(
+					command(
+						{
+							reportFailure: 29,
+							runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+							pidFile,
+							ms: 30000,
+						},
+						{ allowFailure },
+					),
+				);
+			},
+			{ limitSeconds: 2, print: quiet },
+		);
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(29);
+		const pid = Number(await fs.readFile(pidFile, "utf8"));
+		expect(() => process.kill(pid, 0)).toThrow();
+	}
+});
+
+it("relays a real nested gate failure before that gate finishes its tracked cleanup", async () => {
+	const pidFile = path.join(directory, "real-nested-failure.pid");
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			await gate.capture(
+				command({
+					nestedFailure: true,
+					runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+					pidFile,
+				}),
+			);
+		},
+		{ limitSeconds: 2, print: quiet },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(43);
+	const pid = Number(await fs.readFile(pidFile, "utf8"));
+	expect(() => process.kill(pid, 0)).toThrow();
+});
+
+it("never invokes queued child work after its parent has observed a failure", async () => {
+	let started = false;
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			const child = gate.childGate(
+				"fastcheck",
+				async () => {
+					started = true;
+				},
+				{ print: quiet },
+			);
+			void child.catch(() => {});
+			gate.fail(new GateCommandError("fixture parent failure", 33));
+		},
+		{ limitSeconds: 2, print: quiet },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(33);
+	expect(started).toBe(false);
+});
+
+it("stops a live command on stream-decoding failure instead of waiting for its charged timeout", async () => {
+	const pidFile = path.join(directory, "decoder-failure.pid");
+	const output: string[] = [];
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			await gate.capture(
+				command(
+					{ output: "decode this", pidFile, ms: 30000 },
+					{
+						decodeOutput: () => {
+							throw new Error("fixture decoder failed");
+						},
+					},
+				),
+			);
+		},
+		{ limitSeconds: 2, print: line => output.push(line) },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(1);
+	expect(output.some(line => line.includes("fixture decoder failed"))).toBe(true);
+	const pid = Number(await fs.readFile(pidFile, "utf8"));
+	expect(() => process.kill(pid, 0)).toThrow();
+});
+
+it("keeps the first failure in child scopes when an abort listener raises another error", async () => {
+	const ready = Promise.withResolvers<GateRun>();
+	const output: string[] = [];
+	let childRun: GateRun | undefined;
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			const child = gate.childGate(
+				"fastcheck",
+				async nested => {
+					ready.resolve(nested);
+					await Promise.withResolvers<void>().promise;
+				},
+				{ print: line => output.push(line) },
+			);
+			void child.catch(() => {});
+			childRun = await ready.promise;
+			gate.signal.addEventListener("abort", () => childRun!.fail(new GateCommandError("secondary failure", 41)), {
+				once: true,
+			});
+			gate.fail(new GateCommandError("first failure", 39));
+		},
+		{ limitSeconds: 2, print: line => output.push(line) },
+	);
+	expect(result.exitCode).toBe(39);
+	expect((childRun!.signal.reason as GateCommandError).exitCode).toBe(39);
+	expect(output.some(line => line.startsWith("fastcheck: FAIL") && line.endsWith("exit=39"))).toBe(true);
+});
+
+it("settles interrupted child scopes before the outer summary even with blocked untracked work", async () => {
+	const output: string[] = [];
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			const child = gate.childGate(
+				"fastcheck",
+				async nested => {
+					nested.fail(new GateCommandError("fixture first child failure", 31));
+					await Promise.withResolvers<void>().promise;
+				},
+				{ print: line => output.push(line) },
+			);
+			void child.catch(() => {});
+			await Promise.withResolvers<void>().promise;
+		},
+		{ limitSeconds: 2, print: line => output.push(line) },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(31);
+	expect(output.at(-2)).toContain("slowtest: fixture first child failure");
+	expect(output.at(-1)).toContain("slowtest: FAIL");
+	expect(output.findIndex(line => line.startsWith("fastcheck: FAIL"))).toBeLessThan(
+		output.findIndex(line => line.startsWith("slowtest: FAIL")),
+	);
+});
+
+it("rejects malformed and foreign failure events while keeping the authenticated failure intact", () => {
+	const failures: GateCommandError[] = [];
+	const parser = new GateEventParser("owned", quiet, undefined, failure => failures.push(failure));
+	parser.push(
+		'OMP_GATE_EVENT foreign {"id":"a","kind":"failure","exitCode":37,"status":"FAIL","message":"foreign"}\n',
+	);
+	parser.push('OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":0,"status":"FAIL","message":"invalid"}\n');
+	parser.push('OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":37,"status":"PASS","message":"invalid"}\n');
+	parser.push(
+		'OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":37,"status":"FAIL","message":"first failure"}\n',
+	);
+	expect(failures).toHaveLength(1);
+	expect(failures[0]?.exitCode).toBe(37);
+	expect(failures[0]?.message).toBe("first failure");
 });
 it("rejects invalid budgets and reserves with a complete final summary", async () => {
 	for (const options of [{ limitSeconds: 0 }, { limitSeconds: Number.NaN }, { cleanupReserveMs: Number.NaN }]) {

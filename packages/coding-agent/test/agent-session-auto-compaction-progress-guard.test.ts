@@ -3,14 +3,22 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import { type CompactionPreparation, resolveThresholdTokens, shouldCompact } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import {
+	type CompactionPreparation,
+	resolveBudgetReserveTokens,
+	resolveThresholdTokens,
+	shouldCompact,
+} from "@oh-my-pi/pi-agent-core/compaction";
+import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { type CustomMessage, convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { INCOMPLETE_RECOVERY_MAX_RETRIES } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
@@ -82,7 +90,13 @@ describe("AgentSession auto-compaction progress guard", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 
-	function createTestSession(manager: SessionManager): AgentSession {
+	function createTestSession(
+		manager: SessionManager,
+		options: {
+			onProviderCall?: (messages: Message[]) => void;
+			contextWindow?: number;
+		} = {},
+	): AgentSession {
 		// The progress-guard tests exercise AgentSession's post-compaction state
 		// transitions, not extension discovery. Keep the production hook boundary
 		// while returning the same short-circuit result without compiling a
@@ -117,9 +131,40 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// Pin the window and output reservation: every usage figure below is tuned
 		// to a 200k/64k threshold, so catalog regeneration must not shift the
 		// headroom math.
-		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
+		const model = {
+			...bundled,
+			contextWindow: options.contextWindow ?? 200_000,
+			maxTokens: options.contextWindow ? Math.min(64_000, Math.floor(options.contextWindow / 4)) : 64_000,
+		};
 
 		const agent = new Agent({
+			convertToLlm,
+			...(options.onProviderCall
+				? {
+						getApiKey: () => "test-key",
+						streamFn: (_model: unknown, context: { messages: Message[] }) => {
+							options.onProviderCall!(context.messages);
+							const stream = new AssistantMessageEventStream();
+							const message = {
+								...highUsageAssistant(),
+								content: [{ type: "text" as const, text: "Recovered successfully." }],
+								usage: {
+									input: 100,
+									output: 10,
+									cacheRead: 0,
+									cacheWrite: 0,
+									totalTokens: 110,
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+								},
+							};
+							queueMicrotask(() => {
+								stream.push({ type: "start", partial: message });
+								stream.push({ type: "done", reason: "stop", message });
+							});
+							return stream;
+						},
+					}
+				: {}),
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -643,6 +688,213 @@ describe("AgentSession auto-compaction progress guard", () => {
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
 		}
 	}
+
+	async function prepareAutoGoalRecovery(objective: string, contextWindow = 200_000) {
+		await session.dispose();
+		// dispose() seals and releases its manager; reconstruction needs a fresh
+		// journal, not the terminally released manager from beforeEach.
+		sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		const inputs: Message[][] = [];
+		session = createTestSession(sessionManager, {
+			contextWindow,
+			onProviderCall: messages => inputs.push(structuredClone(messages)),
+		});
+		seedPriorTurns();
+		session.agent.replaceMessages(sessionManager.buildSessionContext().messages);
+		cfgContextPromotionEnabled.set(session.settings, false);
+		cfgCompactionEnabled.set(session.settings, true);
+		cfgCompactionMethodOrder.set(session.settings, ["soft"]);
+		cfgCompactionKeepRecentTokens.set(session.settings, 1);
+		cfgCompactionReserveTokens.set(session.settings, 1_000);
+		cfgCompactionThresholdTokens.set(session.settings, 10_000);
+		const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
+		await session.sendGoalModeContext({ deliverAs: "nextTurn" });
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(1);
+		// A later user boundary leaves the initial notice on the summarized side
+		// while the failed turn belongs to the retained/retried turn.
+		sessionManager.appendMessage({
+			role: "user",
+			content: "Execute the already active saved Goal.",
+			timestamp: Date.now(),
+		});
+		session.agent.replaceMessages(sessionManager.buildSessionContext().messages);
+		const context = buildGoalAutoOrchestrateMessage(state, []);
+		if (!context) throw new Error("Expected active auto Goal recovery context");
+		return { inputs, context };
+	}
+
+	async function finishRecoveryTurn(message: AssistantMessage): Promise<CustomMessage> {
+		const done = Promise.withResolvers<CustomMessage>();
+		const before = sessionManager.getBranch().filter(entry => entry.type === "compaction").length;
+		const notices = collectNotices();
+		session.subscribe(event => {
+			if (event.type !== "auto_compaction_end") return;
+			const compactions = sessionManager.getBranch().filter(entry => entry.type === "compaction");
+			if (!event.result || event.aborted || compactions.length !== before + 1) {
+				done.reject(
+					new Error(
+						`Recovery did not commit: ${JSON.stringify({
+							event,
+							compactions: compactions.length,
+							entries: sessionManager.getBranch().map(entry => entry.type),
+							notices,
+						})}`,
+					),
+				);
+				return;
+			}
+			const context = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+			if (context) done.resolve(context);
+			else done.reject(new Error("Expected active persisted Goal at the committed recovery boundary"));
+		});
+		session.agent.emitExternalEvent({ type: "message_end", message });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [message] });
+		const context = await done.promise;
+		await session.waitForIdle();
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(2);
+		return context;
+	}
+
+	function committedRecoveryEntries() {
+		const branch = sessionManager.getBranch();
+		const committed = branch.findLastIndex(entry => entry.type === "compaction");
+		expect(committed).toBeGreaterThanOrEqual(0);
+		const recovered = branch
+			.slice(committed + 1)
+			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
+		expect(recovered).toHaveLength(1);
+		expect(recovered[0]).toMatchObject({
+			details: {
+				source: "goal-auto-orchestrate",
+				goalId: session.getGoalModeState()!.goal.id,
+				compactionEntryId: branch[committed].id,
+			},
+		});
+		return recovered;
+	}
+
+	function failedRecoveryAssistant(failure: "overflow" | "length"): AssistantMessage {
+		return failure === "overflow"
+			? contentfulOverflowAssistant()
+			: {
+					...highUsageAssistant(),
+					stopReason: "length",
+					content: [{ type: "text", text: "unfinished deliverable" }],
+				};
+	}
+
+	it.each(["overflow", "length"] as const)(
+		"removes the failed %s assistant without dropping the newly persisted recovery before retry",
+		async failure => {
+			const { inputs } = await prepareAutoGoalRecovery(
+				"  Finish the complete saved work.\n\nKeep this objective intact.  ",
+			);
+			const assistant = failedRecoveryAssistant(failure);
+
+			const context = await finishRecoveryTurn(assistant);
+
+			expect(inputs).toHaveLength(1);
+			expect(inputs[0]).not.toContainEqual(
+				expect.objectContaining({ role: "assistant", stopReason: failure === "overflow" ? "error" : "length" }),
+			);
+			expect(
+				inputs[0].filter(
+					message =>
+						message.role === "user" &&
+						Array.isArray(message.content) &&
+						message.content.some(block => block.type === "text" && block.text === context.content),
+				),
+			).toHaveLength(1);
+			expect(session.messages).not.toContainEqual(
+				expect.objectContaining({ role: "assistant", stopReason: failure === "overflow" ? "error" : "length" }),
+			);
+			expect(sessionManager.getBranch()).not.toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({
+						role: "assistant",
+						stopReason: failure === "overflow" ? "error" : "length",
+					}),
+				}),
+			);
+			expect(committedRecoveryEntries()).toEqual([
+				expect.objectContaining({ content: context.content, attribution: "user" }),
+			]);
+			expect(
+				session.messages.filter(
+					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+				),
+			).toEqual([expect.objectContaining({ content: context.content, attribution: "user" })]);
+		},
+	);
+
+	it.each(["overflow", "length"] as const)(
+		"accounts for the full persisted recovery before the %s retry fit check",
+		async failure => {
+			const contextWindow = 16_384;
+			const { inputs, context: initialContext } = await prepareAutoGoalRecovery(
+				"saved objective item ".repeat(10_000),
+				contextWindow,
+			);
+			const recoveryTokens = session.agent.tokenizer.countMessage(initialContext);
+			const fitBudget =
+				contextWindow - resolveBudgetReserveTokens(contextWindow, cfgCompaction.get(session.settings));
+			expect(recoveryTokens).toBeGreaterThan(fitBudget);
+			const notices = collectNotices();
+			const assistant = failedRecoveryAssistant(failure);
+
+			const context = await finishRecoveryTurn(assistant);
+
+			expect(inputs).toHaveLength(0);
+			expect(session.getContextUsage()!.tokens).toBeGreaterThan(fitBudget);
+			expect(session.messages).not.toContainEqual(
+				expect.objectContaining({ role: "assistant", stopReason: failure === "overflow" ? "error" : "length" }),
+			);
+			expect(sessionManager.getBranch()).not.toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({
+						role: "assistant",
+						stopReason: failure === "overflow" ? "error" : "length",
+					}),
+				}),
+			);
+			expect(
+				session.messages.filter(
+					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+				),
+			).toEqual([expect.objectContaining({ content: context.content })]);
+			expect(committedRecoveryEntries()).toEqual([expect.objectContaining({ content: context.content })]);
+			expect(
+				notices.filter(notice => notice.source === NOTICE_SOURCE && notice.message.includes(NO_PROGRESS_FRAGMENT)),
+			).toHaveLength(1);
+		},
+	);
+
+	it("accounts for persisted recovery before deciding whether threshold compaction creates headroom", async () => {
+		const { inputs, context: initialContext } = await prepareAutoGoalRecovery("saved objective item ".repeat(2_000));
+		cfgCompactionThresholdTokens.set(session.settings, 1_000);
+		expect(session.agent.tokenizer.countMessage(initialContext)).toBeGreaterThan(800);
+		const notices = collectNotices();
+
+		const context = await finishRecoveryTurn(highUsageAssistant());
+
+		expect(inputs).toHaveLength(0);
+		expect(session.getContextUsage()!.tokens).toBeGreaterThan(800);
+		expect(committedRecoveryEntries()).toEqual([expect.objectContaining({ content: context.content })]);
+		expect(
+			notices.filter(notice => notice.source === NOTICE_SOURCE && notice.message.includes(NO_PROGRESS_FRAGMENT)),
+		).toHaveLength(1);
+	});
 
 	it("retries an overflow recovery that fits the window but stays inside the recovery band", async () => {
 		// Regression for the band-vs-fit conflation (#3412 review): the overflow

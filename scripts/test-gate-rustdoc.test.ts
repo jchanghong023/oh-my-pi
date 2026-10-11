@@ -2,13 +2,13 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { withRustCompilerEvents } from "./test-gate-runtime";
+import { forwardNextestOutput } from "./test-gate-native-events";
+import { type GateCommandError, withRustCompilerEvents } from "./test-gate-runtime";
 
 let directory: string;
 let capture: string;
 const windows = process.platform === "win32";
 beforeAll(async () => {
-	if (!windows) return;
 	directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rustdoc-argv-"));
 	capture = path.join(directory, "capture args.ts");
 	await fs.writeFile(
@@ -117,8 +117,116 @@ it.skipIf(!windows)("preserves long compiler/doctest argv, exit codes and activi
 					.trim()
 					.split("\n")
 					.map(line => JSON.parse(line.slice(line.indexOf("{")).trim()));
-				expect(events.map(event => event.kind)).toEqual([activity, "idle"]);
+				expect(events.map(event => event.kind)).toEqual(
+					executable === env.RUSTC_WRAPPER ? [activity, "failure", "idle"] : [activity, "idle"],
+				);
 			}
 		},
 	);
+});
+
+it("restores merged doctest process isolation without relaying expected nonzero exits", async () => {
+	const runner = path.join(directory, "merged-doctest-boundary.ts");
+	const eventFile = path.join(directory, "merged-doctest-events");
+	await fs.writeFile(
+		runner,
+		`if (process.env.RUSTDOC_DOCTEST_BIN_PATH !== process.execPath) process.exit(31);
+process.exit(29);`,
+	);
+	const result = await invoke(
+		process.execPath,
+		[path.join(import.meta.dir, "test-gate-compiler.ts"), "--doctest-run", process.execPath, runner],
+		{
+			...(process.env as Record<string, string>),
+			OMP_GATE_EVENT_TOKEN: "merged-doctest-boundary",
+			OMP_GATE_EVENT_FILE: eventFile,
+			OMP_GATE_ORIGINAL_DOCTEST_RUN: "[]",
+			RUSTDOC_DOCTEST_BIN_PATH: "incorrect inherited binary",
+		},
+	);
+	expect(result.stderr).toBe("");
+	expect(result.exitCode).toBe(29);
+	const events = (await fs.readFile(eventFile, "utf8"))
+		.trim()
+		.split("\n")
+		.map(line => JSON.parse(line.slice(line.indexOf("{")).trim()));
+	expect(events.map(event => event.kind)).toEqual(["charged", "idle"]);
+});
+
+it("relays the first classified native failure before runner output closes and preserves all bytes", async () => {
+	const first = `${JSON.stringify({ type: "test", event: "failed", name: "crate::lib$first_测试", exec_time: 0.01 })}\r\n`;
+	const second = JSON.stringify({ type: "test", event: "failed", name: "crate::lib$second", exec_time: 0.02 });
+	const bytes = new TextEncoder().encode(first + second);
+	const failures: GateCommandError[] = [];
+	const forwarded: Uint8Array[] = [];
+	let observed!: () => void;
+	const failure = new Promise<void>(resolve => {
+		observed = resolve;
+	});
+	let controller!: ReadableStreamDefaultController<Uint8Array>;
+	const stream = new ReadableStream<Uint8Array>({
+		start(value) {
+			controller = value;
+		},
+	});
+	let settled = false;
+	const completion = forwardNextestOutput(
+		stream,
+		chunk => {
+			forwarded.push(chunk);
+		},
+		error => {
+			failures.push(error);
+			observed();
+		},
+	).then(() => {
+		settled = true;
+	});
+	const boundary = new TextEncoder().encode(first).length;
+	controller.enqueue(bytes.subarray(0, boundary - 7));
+	controller.enqueue(bytes.subarray(boundary - 7, boundary));
+	await failure;
+	expect(settled).toBe(false);
+	expect(failures).toHaveLength(1);
+	expect(failures[0].exitCode).toBe(100);
+	expect(failures[0].message).toContain("first_测试");
+	controller.enqueue(bytes.subarray(boundary));
+	controller.close();
+	await completion;
+	expect(failures).toHaveLength(1);
+	expect(Buffer.concat(forwarded)).toEqual(Buffer.from(bytes));
+});
+
+it("does not mistake expected panics, captured output or suite summaries for native failures", async () => {
+	const lines = [
+		JSON.stringify({
+			type: "test",
+			event: "ok",
+			name: "crate::lib$expected_panic",
+			stdout: '{"type":"test","event":"failed","name":"spoof"}\n',
+		}),
+		JSON.stringify({ type: "suite", event: "failed", failed: 1 }),
+		"FAIL [0.001s] test output",
+		'{"type":"test","event":"failed",',
+	];
+	const bytes = new TextEncoder().encode(lines.join("\n"));
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(bytes);
+			controller.close();
+		},
+	});
+	const failures: GateCommandError[] = [];
+	const forwarded: Uint8Array[] = [];
+	await forwardNextestOutput(
+		stream,
+		chunk => {
+			forwarded.push(chunk);
+		},
+		error => {
+			failures.push(error);
+		},
+	);
+	expect(failures).toEqual([]);
+	expect(Buffer.concat(forwarded)).toEqual(Buffer.from(bytes));
 });

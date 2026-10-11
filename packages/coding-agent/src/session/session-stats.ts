@@ -9,7 +9,6 @@ import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import { GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE } from "../goals/request-context";
 
 import type { ContextUsage } from "../extensibility/extensions/types";
 import {
@@ -27,7 +26,6 @@ interface PendingContextSnapshot {
 	promptTokens: number;
 	nonMessageTokens: number;
 	cutoffCount: number;
-	perCallContextTokens?: number;
 	/**
 	 * Compaction epoch at rebase time. Distinguishes a genuinely fresh in-turn
 	 * anchor (same epoch) from a post-cutoff anchor that predates a mid-run
@@ -46,16 +44,9 @@ export interface SessionStatsTrackerHost {
 	sessionId(): string;
 }
 
-function correctedPromptTokens(assistant: AssistantMessage, perCallContextTokens: number): number {
+function correctedPromptTokens(assistant: AssistantMessage): number {
 	const providerPromptTokens = assistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(assistant.usage);
-	return (
-		Math.max(
-			0,
-			providerPromptTokens -
-				(assistant.contextSnapshot?.historyRewriteTokensRemoved ?? 0) -
-				(assistant.perCallContextTokensBySource?.[GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE] ?? 0),
-		) + perCallContextTokens
-	);
+	return Math.max(0, providerPromptTokens - (assistant.contextSnapshot?.historyRewriteTokensRemoved ?? 0));
 }
 
 function isUsageWindowBoundary(entry: SessionEntry): boolean {
@@ -268,7 +259,6 @@ export class SessionStatsTracker {
 			this.#tokenizer,
 			this.#host.session.settings?.revision,
 		);
-		const perCallContextTokens = this.#host.session.getPerCallContextTokens?.() ?? 0;
 		const branchEntries = this.#host.sessionManager.getBranchView();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
@@ -311,7 +301,7 @@ export class SessionStatsTracker {
 				computeNonMessageTokens(this.#host.session, this.#tokenizer, this.#host.session.settings?.revision);
 			anchored = true;
 			usedTokens = this.#anchoredUsedTokens(
-				correctedPromptTokens(anchorAssistant, perCallContextTokens),
+				correctedPromptTokens(anchorAssistant),
 				nonMessageTokens,
 				currentNonMessageTokens,
 				anchorIndex + 1,
@@ -321,7 +311,7 @@ export class SessionStatsTracker {
 		} else if (pending) {
 			anchored = true;
 			usedTokens = this.#anchoredUsedTokens(
-				Math.max(0, pending.promptTokens - (pending.perCallContextTokens ?? 0)) + perCallContextTokens,
+				pending.promptTokens,
 				pending.nonMessageTokens,
 				currentNonMessageTokens,
 				pending.cutoffCount,
@@ -337,7 +327,7 @@ export class SessionStatsTracker {
 					liveAnchor.message.contextSnapshot?.nonMessageTokens ??
 					computeNonMessageTokens(this.#host.session, this.#tokenizer, this.#host.session.settings?.revision);
 				usedTokens = this.#anchoredUsedTokens(
-					correctedPromptTokens(liveAnchor.message, perCallContextTokens),
+					correctedPromptTokens(liveAnchor.message),
 					nonMessageTokens,
 					currentNonMessageTokens,
 					liveAnchor.index + 1,
@@ -348,11 +338,7 @@ export class SessionStatsTracker {
 			}
 		}
 		if (!anchored) {
-			usedTokens =
-				currentNonMessageTokens +
-				this.#tokenizer.countMessages(activeMessages) +
-				pendingTokens +
-				perCallContextTokens;
+			usedTokens = currentNonMessageTokens + this.#tokenizer.countMessages(activeMessages) + pendingTokens;
 		}
 		return {
 			contextWindow,
@@ -439,8 +425,6 @@ export class SessionStatsTracker {
 		this.#pendingContextSnapshot = snapshot
 			? {
 					...snapshot,
-					perCallContextTokens:
-						snapshot.perCallContextTokens ?? this.#host.session.getPerCallContextTokens?.() ?? 0,
 					epoch: this.#compactionEpoch,
 				}
 			: undefined;
@@ -458,10 +442,7 @@ export class SessionStatsTracker {
 		);
 		const messages = this.#host.agent.state.messages;
 		this.setPendingSnapshot({
-			promptTokens:
-				nonMessageTokens +
-				this.#tokenizer.countMessages(messages) +
-				(this.#host.session.getPerCallContextTokens?.() ?? 0),
+			promptTokens: nonMessageTokens + this.#tokenizer.countMessages(messages),
 			nonMessageTokens,
 			cutoffCount: messages.length,
 		});

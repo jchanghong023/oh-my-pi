@@ -700,7 +700,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		argv: [
 			"bash",
 			"-c",
-			`set -eu; bun install --frozen-lockfile; bun scripts/fulltest.ts${options.debug ? " --debug" : ""}`,
+			`set -eu; bun install --frozen-lockfile; bun scripts/fulltest.ts${options.debug ? " --debug" : ""}; source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none); test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fixed commit during preparation or tests' >&2; exit 1; }`,
 		],
 	};
 	const plan = await gate.capture({
@@ -812,6 +812,15 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		expected_head: source.head,
 		returned_head: postHead && /^[0-9a-f]{40}$/.test(postHead) ? postHead : undefined,
 	});
+	const observedExit = testCode === undefined ? undefined : Number(testCode);
+	if (observedExit !== undefined && observedExit !== 0)
+		gate.fail(
+			new GateCommandError(
+				"Linux fulltest failed",
+				observedExit,
+				observedExit === 124 || observedExit === 137 ? "TIMEOUT" : observedExit === 130 ? "INTERRUPTED" : "FAIL",
+			),
+		);
 	if (result.exitCode === 124 || result.exitCode === 137)
 		return stageFailure(
 			"TIMEOUT",

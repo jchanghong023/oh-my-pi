@@ -36,7 +36,15 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 		...buildChildEnv(),
 		HOME: home,
 		USERPROFILE: home,
-		OMP_CONFIG_ROOT: path.join(home, ".omp"),
+		// Ignore host profile/root selectors; children may explicitly select fixtures.
+		OMP_CONFIG_ROOT: "",
+		PI_CODING_AGENT_DIR: "",
+		OMP_PROFILE: undefined,
+		PI_PROFILE: undefined,
+		PI_CONFIG_DIR: "",
+		XDG_DATA_HOME: "",
+		XDG_STATE_HOME: "",
+		XDG_CACHE_HOME: "",
 		// Toolchain caches retain their normal per-platform locations despite the
 		// isolated application HOME. These are not fresh build/cache variants.
 		CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo"),
@@ -113,7 +121,7 @@ export function fulltestCommands(
 		const testHome = path.join(home, "fork-tests", String(commands.length));
 		commands.push({
 			label: `test/fork ${file}`,
-			argv: ["bun", "test", `--timeout=${testTimeoutMs()}`, file.slice(separator + 1)],
+			argv: ["bun", "test", "--bail=1", `--timeout=${testTimeoutMs()}`, file.slice(separator + 1)],
 			cwd: path.join(root, packageRoot),
 			env: localTestEnvironment(testHome),
 		});
@@ -280,7 +288,7 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		await gate.charged(() =>
 			gate.run({
 				label: "test/repository scripts",
-				argv: ["bun", "run", "test:scripts"],
+				argv: ["bun", "run", "test:scripts", "--bail=1"],
 				cwd: gateRepoRoot,
 				env: localTestEnvironment(home),
 				kind: "charged",
@@ -342,7 +350,7 @@ if (import.meta.main) {
 				throw new GateCommandError("Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= 900>]", 2);
 			await runFulltest(gate, options);
 		},
-		options ? { limitSeconds: options.limitSeconds } : {},
+		{ limitSeconds: options?.limitSeconds, reportFailure: true },
 	);
 	process.exitCode = result.exitCode;
 }

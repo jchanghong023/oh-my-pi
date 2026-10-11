@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
 import { windowsTestTempOverride } from "./windows-test-temp";
-import { withRustCompilerEvents } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure, withRustCompilerEvents } from "./test-gate-runtime";
+import { forwardNextestOutput } from "./test-gate-native-events";
 import {
 	parseFulltestChangedPaths,
 	selectRustTestScope,
@@ -65,6 +66,10 @@ const TASK_COMMANDS = {
 			"cargo",
 			"nextest",
 			"run",
+			"--max-fail=1:immediate",
+			// The plus reporter flushes each classified result before native grace cleanup.
+			"--message-format=libtest-json-plus",
+			"--message-format-version=0.1",
 			"--workspace",
 			...VENDORED_FORK_EXCLUDES,
 			// Upstream's sed fast_io truncation test is deterministically red on
@@ -85,7 +90,7 @@ const TASK_COMMANDS = {
 		// vendored uutils docs. `--doc` overrides a crate's own
 		// `doctest = false`, so a vendored crate whose examples do not compile
 		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
-		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES],
+		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES, "--", "-Zunstable-options", "--fail-fast"],
 	],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
@@ -208,6 +213,9 @@ function affectedTestCommands(crates: readonly string[]): readonly (readonly str
 			"cargo",
 			"nextest",
 			"run",
+			"--max-fail=1:immediate",
+			"--message-format=libtest-json-plus",
+			"--message-format-version=0.1",
 			...packageArgs,
 			...(process.platform === "win32"
 				? ["-E", "not(test(=sed::fast_io::tests::test_file_truncated_after_open))"]
@@ -215,7 +223,7 @@ function affectedTestCommands(crates: readonly string[]): readonly (readonly str
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		["cargo", "test", "--doc", ...packageArgs],
+		["cargo", "test", "--doc", ...packageArgs, "--", "-Zunstable-options", "--fail-fast"],
 	];
 }
 
@@ -412,17 +420,36 @@ async function resolveCargoBinary(): Promise<string> {
 async function runCommand(command: readonly string[]): Promise<number> {
 	const [head, ...rest] = command;
 	const isCargo = head === "cargo";
+	const isNextest = isCargo && rest[0] === "nextest" && rest[1] === "run";
 	const executable = isCargo ? await ensureCargoBinary() : head;
 	const argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
+	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
 	return withRustCompilerEvents(env, async compilerEnv => {
 		const proc = Bun.spawn(argv, {
 			cwd: repoRoot,
 			env: compilerEnv,
 			stdin: "inherit",
-			stdout: "inherit",
+			stdout: isNextest ? "pipe" : "inherit",
 			stderr: "inherit",
 		});
-		return proc.exited;
+		let reportedFailure = false;
+		const output = isNextest
+			? forwardNextestOutput(
+					proc.stdout as ReadableStream<Uint8Array>,
+					bytes =>
+						new Promise<void>((resolve, reject) => {
+							process.stdout.write(bytes, error => (error ? reject(error) : resolve()));
+						}),
+					error => {
+						reportedFailure = true;
+						reportGateFailure(error);
+					},
+				)
+			: Promise.resolve();
+		const [exitCode] = await Promise.all([proc.exited, output]);
+		if (exitCode !== 0 && !reportedFailure)
+			reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, exitCode));
+		return exitCode;
 	});
 }

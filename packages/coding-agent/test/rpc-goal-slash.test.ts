@@ -9,7 +9,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { logger } from "@oh-my-pi/pi-utils";
+import { escapeXmlText, logger } from "@oh-my-pi/pi-utils";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 
 function fixture(continuation = false, goalEnabled = true) {
@@ -19,7 +19,7 @@ function fixture(continuation = false, goalEnabled = true) {
 	let confirmDrop = false;
 	const output: string[] = [];
 	const continuations: string[] = [];
-	const continuationMessages: Array<{ customType: string; details?: unknown }> = [];
+	const continuationMessages: Array<{ customType: string; content: unknown; details?: unknown }> = [];
 	const transcript = { id: "session-a" };
 	const contexts = new Map<string, Pick<SessionContext, "mode" | "modeData">>();
 	const goalRuntime = new GoalRuntime({
@@ -65,7 +65,7 @@ function fixture(continuation = false, goalEnabled = true) {
 		},
 		sendGoalModeContext: async () => {},
 		getTodoPhases: () => [],
-		promptCustomMessage: async (message: { customType: string; details?: unknown }) => {
+		promptCustomMessage: async (message: { customType: string; content: unknown; details?: unknown }) => {
 			continuations.push(message.customType);
 			continuationMessages.push(message);
 			return true;
@@ -288,21 +288,22 @@ describe("RPC goal slash adapter", () => {
 		expect(f.controller.continuationPending).toBe(false);
 	});
 
-	test("allowed auto-orchestrate continuation identifies its goal without changing ordinary continuation", async () => {
+	test("allowed auto-orchestrate continuations retain the full objective through the ordinary message path", async () => {
 		const f = fixture(true);
-		await f.controller.handleSlash("set marked objective", f.runtime, { autoOrchestrate: true });
-		const goalId = f.state()!.goal.id;
+		const objective = `marked objective <unsafe> & full detail\n${"Complete every acceptance criterion. ".repeat(300).trimEnd()}\nRPC_CONTINUATION_OBJECTIVE_END`;
+		await f.controller.handleSlash(`set ${objective}`, f.runtime, { autoOrchestrate: true });
 		f.controller.observe({ type: "agent_end", isTerminal: true, messages: [] });
 		await tick();
 		expect(f.continuationMessages).toHaveLength(1);
-		expect(f.continuationMessages[0]).toMatchObject({
-			customType: "goal-auto-orchestrate-continuation",
-			details: { source: "goal-auto-orchestrate", goalId },
-		});
+		expect(f.continuationMessages[0]?.customType).toBe("goal-continuation");
+		expect(f.continuationMessages[0]?.content).toContain(escapeXmlText(objective));
+		expect(f.continuationMessages[0]?.details).toBeUndefined();
 		await f.controller.handleSlash("set ordinary objective", f.runtime);
 		f.controller.observe({ type: "agent_end", isTerminal: true, messages: [] });
 		await tick();
-		expect(f.continuations).toEqual(["goal-auto-orchestrate-continuation", "goal-continuation"]);
+		expect(f.continuations).toEqual(["goal-continuation", "goal-continuation"]);
+		expect(f.continuationMessages[1]?.content).toContain("ordinary objective");
+		expect(f.continuationMessages[1]?.content).not.toContain("RPC_CONTINUATION_OBJECTIVE_END");
 		expect(f.continuationMessages[1]?.details).toBeUndefined();
 	});
 

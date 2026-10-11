@@ -1154,7 +1154,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 				const converted = convertMessageToLlm(wrapSteeringUserMessage(m));
 				return converted ? [converted] : [];
 			}
-			if (isUserInvokedSkillPrompt(m)) {
+			if (isUserInvokedSkillPrompt(m) || m.customType === "goal-auto-orchestrate-context") {
 				return [
 					{
 						role: "user",

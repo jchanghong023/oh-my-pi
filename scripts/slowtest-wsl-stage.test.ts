@@ -15,12 +15,23 @@ import {
 	type WslOptions,
 } from "./slowtest-wsl-stage";
 import type { GateCapture, GateCommand, GateRun } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-runtime";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCapture> = async () => "") {
 	const commands: GateCommand[] = [];
+	const controller = new AbortController();
+	const failures: GateCommandError[] = [];
 	const gate = {
-		signal: new AbortController().signal,
+		signal: controller.signal,
+		fail: (error: unknown) => {
+			const failure = error instanceof GateCommandError ? error : new GateCommandError(String(error), 1);
+			if (!controller.signal.aborted) {
+				failures.push(failure);
+				controller.abort(failure);
+			}
+			return controller.signal.reason as GateCommandError;
+		},
 		charged: async <T>(work: () => Promise<T>) => await work(),
 		capture: async (command: GateCommand) => {
 			commands.push(command);
@@ -28,7 +39,7 @@ function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCap
 			return typeof result === "string" ? { exitCode: 0, stdout: result, stderr: "" } : result;
 		},
 	} as unknown as GateRun;
-	return { gate, commands };
+	return { gate, commands, failures };
 }
 function source(dirty = false): SourceIdentity {
 	return {
@@ -306,6 +317,99 @@ describe("streamed deployed fixed-commit execution", () => {
 				expect(command.wallTimeoutSeconds).toBeGreaterThan(0);
 		}
 	});
+	test.each([
+		{ scenario: "clean fixed source", mutation: "none", fulltestCode: 0, gitCode: 0, expected: 0 },
+		{ scenario: "regenerated tracked binding", mutation: "tracked", fulltestCode: 0, gitCode: 0, expected: 1 },
+		{ scenario: "new generated source", mutation: "added", fulltestCode: 0, gitCode: 0, expected: 1 },
+		{ scenario: "original fulltest failure", mutation: "tracked", fulltestCode: 17, gitCode: 0, expected: 17 },
+		{ scenario: "unavailable Git inspection", mutation: "none", fulltestCode: 0, gitCode: 127, expected: 127 },
+		{ scenario: "unknown Git inspection error", mutation: "none", fulltestCode: 0, gitCode: 128, expected: 128 },
+	])("emitted fixed-source certification preserves $scenario", async row => {
+		const f = executionFixture();
+		await runWslStage(f.gate, f.options);
+		const request = JSON.parse(String(f.commands.find(c => c.label === "wsl/deployed-workflow-plan")!.stdin));
+		const directory = await fs.mkdtemp(path.join(temporary, "source-stability-"));
+		const root = path.join(directory, "fixed source");
+		const bin = path.join(directory, "stub binaries");
+		await fs.mkdir(root);
+		await fs.mkdir(bin);
+		await fs.writeFile(path.join(root, "native-binding.ts"), "fixed binding\n");
+		const git = Bun.which("git");
+		if (process.platform === "win32" && !git)
+			throw new Error("Source stability selftest requires the existing Git Bash installation");
+		const bash =
+			process.platform === "win32" ? path.resolve(path.dirname(git!), "../bin/bash.exe") : Bun.which("bash");
+		if (!bash) throw new Error("Source stability selftest requires the existing shell");
+		await fs.access(bash);
+		// The read-only Git stub models a fixed tracked binding and an initially
+		// absent source file. Fulltest must actually mutate those files; no status
+		// strings are injected into the emitted command, and no Git writes occur.
+		await fs.writeFile(
+			path.join(bin, "bun"),
+			[
+				"#!/bin/sh",
+				'case "$1" in',
+				"install) exit 0;;",
+				"scripts/fulltest.ts)",
+				...(row.mutation === "tracked" ? ["printf 'regenerated binding\\n' > native-binding.ts"] : []),
+				...(row.mutation === "added" ? ["printf 'new source\\n' > generated.ts"] : []),
+				`exit ${row.fulltestCode};;`,
+				"*) exit 64;;",
+				"esac",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		await fs.writeFile(
+			path.join(bin, "git"),
+			[
+				"#!/bin/sh",
+				'[ "$1" = status ] || exit 64',
+				"printf inspected > ../git-inspected",
+				...(row.gitCode ? [`echo 'fixture Git inspection failed' >&2; exit ${row.gitCode}`] : []),
+				"IFS= read -r binding < native-binding.ts",
+				'[ "$binding" = "fixed binding" ] || printf " M native-binding.ts\\n"',
+				'[ ! -e generated.ts ] || printf "?? generated.ts\\n"',
+				"exit 0",
+				"",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const shellBin = bin
+			.replaceAll("\\", "/")
+			.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
+		const child = Bun.spawn(
+			[
+				bash,
+				"-c",
+				`export PATH='${shellBin.replaceAll("'", "'\\''")}':"$PATH"\nexec "$@"`,
+				"source-stability",
+				...request.argv,
+			],
+			{
+				cwd: root,
+				env: { ...process.env, MSYS_NO_PATHCONV: "1" },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [exitCode, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stderr).text(),
+			new Response(child.stdout).text(),
+		]);
+		expect(exitCode).toBe(row.expected);
+		if (row.expected === 1) expect(stderr).toContain("UNVERIFIED: Linux source changed from the fixed commit");
+		else expect(stderr).not.toContain("UNVERIFIED:");
+		expect(await fs.readFile(path.join(root, "native-binding.ts"), "utf8")).toBe(
+			row.mutation === "tracked" ? "regenerated binding\n" : "fixed binding\n",
+		);
+		if (row.mutation === "added")
+			expect(await fs.readFile(path.join(root, "generated.ts"), "utf8")).toBe("new source\n");
+		if (row.fulltestCode !== 0)
+			await expect(fs.stat(path.join(directory, "git-inspected"))).rejects.toMatchObject({ code: "ENOENT" });
+		else expect(await fs.readFile(path.join(directory, "git-inspected"), "utf8")).toBe("inspected");
+	});
 	test("ambiguous native worktrees block rather than cloning around user state", async () => {
 		const f = executionFixture(async command =>
 			command.label === "wsl/native-repository-discovery"
@@ -414,6 +518,8 @@ describe("streamed deployed fixed-commit execution", () => {
 				: undefined,
 		);
 		expect((await runWslStage(f.gate, f.options)).status).toBe(row.expected);
+		if (row.test && row.test !== "0") expect(f.failures[0]?.exitCode).toBe(Number(row.test));
+		else expect(f.failures).toHaveLength(0);
 	});
 	test("missing live event evidence cannot grant PASS or blanket compilation exclusion", async () => {
 		const f = executionFixture(async command =>

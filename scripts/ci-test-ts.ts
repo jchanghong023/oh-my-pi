@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 
 type Mode =
 	| "all"
@@ -48,6 +49,9 @@ const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
 // opts back into inline replay of every chunk. Tied to `onlyFailures` so the
 // quiet path is whatever the verbose filter is not.
 const quiet = onlyFailures;
+// Standalone CI aggregation/retries remain unchanged; a gate owns first-failure
+// cancellation and must see a nested failure before this runner drains/exits.
+const gateFailFast = Boolean(process.env.OMP_GATE_EVENT_TOKEN);
 
 const validModes: Record<Mode, true> = {
 	all: true,
@@ -451,11 +455,15 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			}
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
+		if (gateFailFast && exitCode !== 0)
+			reportGateFailure(
+				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
+			);
 		clearTimeout(killTimer);
 		if (exitCode === 0) {
 			return;
 		}
-		if (!timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+		if (!gateFailFast && !timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
 			console.log(
 				`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
 			);
@@ -698,7 +706,12 @@ function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestComma
 		const parallel = budgetedParallel(testCommand.parallel, poolWidth);
 		return {
 			...testCommand,
-			command: [...testCommand.command, `--parallel=${parallel}`, `--timeout=${timeout}`],
+			command: [
+				...testCommand.command,
+				...(gateFailFast ? ["--bail=1"] : []),
+				`--parallel=${parallel}`,
+				`--timeout=${timeout}`,
+			],
 			parallel,
 		};
 	});
@@ -851,14 +864,20 @@ function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): strin
 // stderr are drained concurrently (so a chatty test never deadlocks on a full
 // pipe) and buffered. Quiet mode (the default) prints one progress line per
 // finished chunk and replays full output only for failures, in a single report
-// at the end; `--full` streams every chunk's output inline as it completes. All
-// failures are collected and reported together instead of failing fast, so one
-// run surfaces every broken chunk and exits non-zero without a runner stack trace.
+// at the end; `--full` streams every chunk's output inline as it completes.
+// Standalone runs aggregate failures. Under a gate, output is streamed and the
+// authenticated first failure cancels the entire gate-owned process tree.
 async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
 	const env = buildChildEnv();
 	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
+	let firstFailure: GateCommandError | undefined;
+	function failFast(error: GateCommandError): void {
+		if (!gateFailFast || firstFailure) return;
+		firstFailure = error;
+		reportGateFailure(error);
+	}
 	const fileWidths = [...new Set(commands.map(c => c.parallel).filter(p => p !== undefined))].sort((a, b) => a - b);
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
@@ -879,12 +898,16 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 				for (;;) {
 					const { done: ended, value } = await reader.read();
 					if (ended) break;
-					sink.text += decoder.decode(value, { stream: true });
+					const text = decoder.decode(value, { stream: true });
+					sink.text += text;
+					if (gateFailFast) process.stdout.write(text);
 				}
 			} catch {
 				// cancelled or broken pipe — keep what was captured
 			}
-			sink.text += decoder.decode();
+			const final = decoder.decode();
+			sink.text += final;
+			if (gateFailFast && final) process.stdout.write(final);
 		})();
 		return { done, cancel: () => void reader.cancel().catch(() => {}) };
 	}
@@ -935,6 +958,8 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			}
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
+		if (exitCode !== 0)
+			failFast(new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode));
 		clearTimeout(killTimer);
 		if (!(await settleWithin(drains, 5000))) {
 			stdoutDrain.cancel();
@@ -950,6 +975,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 
 	async function worker(): Promise<void> {
 		for (;;) {
+			if (firstFailure) return;
 			const testCommand = queue.shift();
 			if (!testCommand) {
 				return;
@@ -960,7 +986,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			let result = await runAttempt(testCommand);
 			// Bun-crash retry: a 128+signal exit means the runtime died (GC
 			// segfault/abort), not that tests failed — rerun in a fresh heap.
-			while (!result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+			while (!gateFailFast && !result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
 				attempt += 1;
 				process.stdout.write(
 					`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
@@ -978,14 +1004,14 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			};
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n`;
-				if (result.exitCode !== 0 || result.timedOut) {
+				if (!gateFailFast && (result.exitCode !== 0 || result.timedOut)) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
 				process.stdout.write(msg);
 			} else {
 				const status = result.exitCode === 0 ? "ok" : `FAILED exit ${result.exitCode}`;
 				process.stdout.write(
-					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${gateFailFast ? "" : outcome.output}`,
 				);
 			}
 			if (result.exitCode !== 0 || result.timedOut) {
@@ -999,14 +1025,12 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
-		process.stdout.write(
-			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
-		);
+		process.stdout.write(`${formatSummaryFooter(completed - failures.length, failures.length, totalSeconds)}\n`);
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
 	if (failures.length > 0) {
-		process.exitCode = 1;
+		process.exitCode = firstFailure?.exitCode ?? 1;
 	}
 }
 

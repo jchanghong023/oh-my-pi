@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import type { GateProcessOwner } from "./test-gate-process";
@@ -48,6 +49,8 @@ export interface GateOptions {
 	signal?: AbortSignal;
 	print?: (line: string) => void;
 	cleanupReserveMs?: number;
+	/** Real gate entrypoints relay failures to a supervising gate; expected-failure selftests leave this off. */
+	reportFailure?: boolean;
 }
 export interface GateCapture {
 	exitCode: number;
@@ -62,6 +65,11 @@ export class GateCommandError extends Error {
 	) {
 		super(message);
 	}
+}
+function gateFailure(error: unknown): GateCommandError {
+	return error instanceof GateCommandError
+		? error
+		: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
 }
 interface Scope {
 	level: GateLevel;
@@ -80,6 +88,7 @@ interface Scope {
 	controller: AbortController;
 	failure?: GateCommandError;
 	closed: boolean;
+	reportFailure: boolean;
 	runId: string;
 	operationId: string;
 	gateId: string;
@@ -207,6 +216,21 @@ function emitEvent(
 	if (!token) return;
 	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({ id, kind, at: gateClockNanoseconds().toString(), clock: env.OMP_GATE_CLOCK_TOKEN })}\n`;
 	if (env.OMP_GATE_EVENT_FILE) appendFileSync(env.OMP_GATE_EVENT_FILE, line);
+	else process.stderr.write(line);
+}
+/** Relay the first concrete nested check/compiler failure before waiting for its other work. */
+export function reportGateFailure(error: unknown): void {
+	const token = process.env.OMP_GATE_EVENT_TOKEN;
+	if (!token) return;
+	const failure = gateFailure(error);
+	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({
+		id: randomUUID(),
+		kind: "failure",
+		exitCode: failure.exitCode,
+		status: failure.status,
+		message: failure.message,
+	})}\n`;
+	if (process.env.OMP_GATE_EVENT_FILE) appendFileSync(process.env.OMP_GATE_EVENT_FILE, line);
 	else process.stderr.write(line);
 }
 /** Mark only a real compiler-only boundary; preparation, downloads, checks and installation stay charged. */
@@ -431,6 +455,7 @@ export class GateEventParser {
 		private readonly token: string,
 		private readonly update: (kind: Activity, at?: number, raw?: GateActivityEvent) => void,
 		private readonly clockToken?: string,
+		private readonly failed?: (error: GateCommandError) => void,
 	) {
 		// Initialize the native reader before sampling performance.now; FFI
 		// initialization must not shift compiler boundaries into setup time.
@@ -452,6 +477,24 @@ export class GateEventParser {
 				const event: unknown = JSON.parse(line.slice(prefix.length));
 				if (!event || typeof event !== "object" || !("id" in event) || !("kind" in event)) continue;
 				const { id, kind } = event;
+				if (kind === "failure") {
+					if (
+						"exitCode" in event &&
+						typeof event.exitCode === "number" &&
+						Number.isSafeInteger(event.exitCode) &&
+						event.exitCode !== 0 &&
+						"status" in event &&
+						(event.status === "FAIL" ||
+							event.status === "TIMEOUT" ||
+							event.status === "INTERRUPTED" ||
+							event.status === "MISSING_TOOL") &&
+						"message" in event &&
+						typeof event.message === "string"
+					) {
+						this.failed?.(new GateCommandError(event.message, event.exitCode, event.status));
+					}
+					continue;
+				}
 				if (
 					typeof id !== "string" ||
 					id.length === 0 ||
@@ -491,6 +534,7 @@ class Runtime {
 	readonly scopes = new Set<Scope>();
 	readonly owned = new Set<Owned>();
 	readonly pending = new Map<Promise<unknown>, Scope>();
+	readonly executions = new Map<Scope, Promise<GateResult>>();
 	private readonly outerToken = process.env.OMP_GATE_EVENT_TOKEN;
 	private readonly eventId = randomUUID();
 	private lastEvent?: Activity | "idle";
@@ -499,7 +543,7 @@ class Runtime {
 		diagnosticId(logger.getLogContext().operation_id) ??
 		diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_OPERATION_ID) ??
 		this.runId;
-	create(level: GateLevel, options: GateOptions, parent?: Scope): Scope {
+	create(level: GateLevel, options: GateOptions, parent?: Scope, started = performance.now()): Scope {
 		const requested = options.limitSeconds ?? GATE_LIMIT_SECONDS[level];
 		if (!Number.isFinite(requested) || requested <= 0)
 			throw new GateCommandError("Gate limit must be positive and finite", 1);
@@ -511,7 +555,7 @@ class Runtime {
 		}
 		const limit = Math.min(requested, GATE_LIMIT_SECONDS[level]) * 1000;
 		const reserve = Math.min(options.cleanupReserveMs ?? Math.min(1000, limit * 0.2), limit * 0.25);
-		const now = performance.now();
+		const now = started;
 		const scope: Scope = {
 			level,
 			parent,
@@ -528,6 +572,7 @@ class Runtime {
 			events: [],
 			controller: new AbortController(),
 			closed: false,
+			reportFailure: options.reportFailure ?? false,
 			runId: this.runId,
 			operationId: this.operationId,
 			gateId: randomUUID(),
@@ -566,6 +611,8 @@ class Runtime {
 	cancel(scope: Scope, error: GateCommandError): void {
 		scope = ancestors(scope).at(-1) ?? scope;
 		if (scope.closed) return;
+		const report = !scope.failure && scope.reportFailure;
+		error = scope.failure ?? error;
 		for (const current of this.scopes) {
 			if (!ancestors(current).includes(scope) || current.closed || current.failure) continue;
 			(error.status === "INTERRUPTED" ? logger.info : logger.error)("Gate cancellation requested", {
@@ -589,12 +636,16 @@ class Runtime {
 			current.failure = error;
 			current.controller.abort(error);
 		}
-		if (this.lastEvent !== "charged") {
-			emitEvent(this.outerToken, this.eventId, "charged");
-			this.lastEvent = "charged";
+		try {
+			if (report) reportGateFailure(error);
+			if (this.lastEvent !== "charged") {
+				emitEvent(this.outerToken, this.eventId, "charged");
+				this.lastEvent = "charged";
+			}
+		} finally {
+			for (const owned of this.owned)
+				if (ancestors(owned.scope).includes(scope)) void this.cleanup(owned).catch(() => {});
 		}
-		for (const owned of this.owned)
-			if (ancestors(owned.scope).includes(scope)) void this.cleanup(owned).catch(() => {});
 	}
 	cleanup(owned: Owned, aborted = true): Promise<void> {
 		owned.cleanup ??= (async () => {
@@ -642,17 +693,21 @@ class Runtime {
 		})();
 		return owned.cleanup;
 	}
-	async execute(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
-		return logger.withLogContext(
-			{
-				run_id: scope.runId,
-				operation_id: scope.operationId,
-				gate_id: scope.gateId,
-				parent_gate_id: scope.parent?.gateId,
-				gate_level: scope.level,
-			},
-			() => this.executeScoped(scope, work, options),
-		);
+	execute(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
+		const execution = logger
+			.withLogContext(
+				{
+					run_id: scope.runId,
+					operation_id: scope.operationId,
+					gate_id: scope.gateId,
+					parent_gate_id: scope.parent?.gateId,
+					gate_level: scope.level,
+				},
+				() => this.executeScoped(scope, work, options),
+			)
+			.finally(() => this.executions.delete(scope));
+		this.executions.set(scope, execution);
+		return execution;
 	}
 	private async executeScoped(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
 		logger.info("Gate started", {
@@ -680,6 +735,9 @@ class Runtime {
 		}
 		options.signal?.addEventListener("abort", external, { once: true });
 		if (options.signal?.aborted) external();
+		accrue(scope);
+		if (!scope.failure && scope.charged >= scope.limit - scope.reserve)
+			this.cancel(scope, new GateCommandError(`${scope.level} charged budget exhausted`, 124, "TIMEOUT"));
 		let checkingBudget = false;
 		const timer = setInterval(
 			() => {
@@ -722,7 +780,9 @@ class Runtime {
 		const task = scope.failure
 			? Promise.resolve()
 			: Promise.resolve()
-					.then(() => work(gate))
+					.then(() => {
+						if (!scope.controller.signal.aborted) return work(gate);
+					})
 					.catch(error => {
 						if (!(error instanceof GateCommandError))
 							logger.error("Gate work failed", {
@@ -744,19 +804,34 @@ class Runtime {
 		} finally {
 			// Never report completion while an owned subprocess or stream pump is still running.
 			try {
-				const cleanup = await Promise.allSettled(
-					[...this.owned]
-						.filter(owned => ancestors(owned.scope).includes(scope))
-						.map(owned => this.cleanup(owned)),
-				);
-				await Promise.allSettled(
-					[...this.pending].filter(([, owner]) => ancestors(owner).includes(scope)).map(([promise]) => promise),
-				);
+				let failedCleanup: PromiseRejectedResult | undefined;
+				for (;;) {
+					// A tracked promise can disappear before its caller's finally
+					// registers cleanup. Cross an event-loop turn to drain the whole
+					// Promise-job queue, not an arbitrary number of microtasks.
+					await gate.charged(() => setImmediate());
+					const owned = [...this.owned].filter(owned => ancestors(owned.scope).includes(scope));
+					const pending = [...this.pending]
+						.filter(([, owner]) => ancestors(owner).includes(scope))
+						.map(([promise]) => promise);
+					const executions = [...this.executions]
+						.filter(([owner]) => owner !== scope && ancestors(owner).includes(scope))
+						.map(([, execution]) => execution);
+					if (!owned.length && !pending.length && !executions.length) break;
+					const cleanup = await Promise.allSettled([
+						...owned.map(owned => this.cleanup(owned)),
+						...pending,
+						...executions,
+					]);
+					for (let index = 0; index < owned.length; index++) {
+						const settled = cleanup[index];
+						if (settled?.status === "rejected") failedCleanup ??= settled;
+					}
+				}
 				// Owned commands/streams above must finish; an untracked blocked
 				// work promise cannot prevent an already-cancelled gate summary.
 				if (!scope.failure) await task;
-				const failedCleanup = cleanup.find(result => result.status === "rejected");
-				if (failedCleanup?.status === "rejected") throw failedCleanup.reason;
+				if (failedCleanup) throw failedCleanup.reason;
 			} catch (error) {
 				logger.error("Gate final cleanup failed", {
 					component: "test-gate",
@@ -767,13 +842,13 @@ class Runtime {
 				});
 				const diagnostic = `Process cleanup failed: ${String(error)}`;
 				if (scope.failure) print(`${scope.level}: CLEANUP_FAIL ${diagnostic}`);
-				else scope.failure = new GateCommandError(diagnostic, 1);
+				else this.cancel(scope, new GateCommandError(diagnostic, 1));
 			}
 			accrue(scope);
 			// Event arrival already reconciled the same compiler union used by
 			// the live budget timer; final output never swaps accounting clocks.
 			if (!scope.failure && scope.charged >= scope.limit)
-				scope.failure = new GateCommandError("Charged budget exhausted", 124, "TIMEOUT");
+				this.cancel(scope, new GateCommandError("Charged budget exhausted", 124, "TIMEOUT"));
 			scope.closed = true;
 			clearInterval(timer);
 			options.signal?.removeEventListener("abort", external);
@@ -808,11 +883,19 @@ export class GateRun {
 	get signal(): AbortSignal {
 		return this.scope.controller.signal;
 	}
+	/** Stop every scope and owned process while preserving the first triggering failure. */
+	fail(error: unknown): GateCommandError {
+		const failure = gateFailure(error);
+		this.runtime.cancel(this.scope, failure);
+		return this.signal.reason instanceof GateCommandError ? this.signal.reason : failure;
+	}
 	async run(command: GateCommand): Promise<number> {
 		const pending = this.spawn(command, false);
 		this.runtime.pending.set(pending, this.scope);
 		try {
 			return (await pending).exitCode;
+		} catch (error) {
+			throw this.fail(error);
 		} finally {
 			this.runtime.pending.delete(pending);
 		}
@@ -822,12 +905,15 @@ export class GateRun {
 		this.runtime.pending.set(pending, this.scope);
 		try {
 			return await pending;
+		} catch (error) {
+			throw this.fail(error);
 		} finally {
 			this.runtime.pending.delete(pending);
 		}
 	}
 	/** Account filesystem/discovery/cleanup work when it overlaps another compiler stage. */
 	async charged<T>(work: () => Promise<T>): Promise<T> {
+		if (this.scope.closed) throw this.scope.failure ?? new GateCommandError("Gate already settled", 1);
 		const key = {};
 		this.runtime.activity(this.scope, key, "charged");
 		const pending = Promise.resolve().then(work);
@@ -856,13 +942,13 @@ export class GateRun {
 	}
 	async childGate(level: GateLevel, work: Work, options: GateOptions = {}): Promise<GateResult> {
 		this.throwIfAborted();
-		const result = await this.runtime.execute(this.runtime.create(level, options, this.scope), work, options);
-		if (result.exitCode !== 0) {
-			const failure = new GateCommandError(`${level} failed`, result.exitCode, result.status);
-			this.runtime.cancel(this.scope, failure);
-			throw failure;
+		try {
+			const result = await this.runtime.execute(this.runtime.create(level, options, this.scope), work, options);
+			if (result.exitCode !== 0) throw new GateCommandError(`${level} failed`, result.exitCode, result.status);
+			return result;
+		} catch (error) {
+			throw this.fail(error);
 		}
-		return result;
 	}
 	private throwIfAborted(): void {
 		if (this.signal.aborted) throw this.signal.reason;
@@ -912,13 +998,19 @@ export class GateRun {
 		let relay: GateEventRelay | undefined;
 		const event = (activity: Activity, at?: number, raw?: GateActivityEvent) =>
 			this.runtime.activity(this.scope, key, kind === "compile" ? kind : activity, { at, raw });
-		const fileParser = new GateEventParser(token, event, token);
+		const failed = (failure: GateCommandError) => {
+			this.fail(failure);
+		};
+		const fileParser = new GateEventParser(token, event, token, failed);
 		try {
+			this.throwIfAborted();
 			relay = await createGateEventRelay(text => fileParser.push(text));
+			this.throwIfAborted();
 			const detached = process.platform !== "win32";
 			let child: Bun.Subprocess;
 			const ready = Promise.withResolvers<void>();
 			const outcome = Promise.withResolvers<{ exitCode: number; error?: string; missing?: boolean }>();
+			let replied = false;
 			logger.info("Supervisor spawn started", {
 				...fields,
 				event: "gate_supervisor_spawn_started",
@@ -960,6 +1052,7 @@ export class GateRun {
 							ready.resolve();
 						}
 						if ("exitCode" in message && typeof message.exitCode === "number") {
+							replied = true;
 							logger.info("Supervisor IPC result received", {
 								...fields,
 								event: "gate_supervisor_ipc",
@@ -973,6 +1066,17 @@ export class GateRun {
 								error: "error" in message && typeof message.error === "string" ? message.error : undefined,
 								missing: "missing" in message && message.missing === true,
 							});
+							if (
+								message.exitCode !== 0 &&
+								(!command.allowFailure || ("missing" in message && message.missing === true))
+							)
+								failed(
+									new GateCommandError(
+										`${command.label}: ${"error" in message && typeof message.error === "string" ? message.error : `exited ${message.exitCode}`}`,
+										message.exitCode,
+										"missing" in message && message.missing === true ? "MISSING_TOOL" : "FAIL",
+									),
+								);
 						}
 					},
 				});
@@ -987,6 +1091,8 @@ export class GateRun {
 					});
 					ready.resolve();
 					outcome.resolve({ exitCode: exitCode || 1 });
+					if (!replied && !owned?.cleanup && !wallExpired)
+						failed(new GateCommandError(`${command.label}: supervisor exited unexpectedly`, exitCode || 1));
 				});
 			} catch (error) {
 				logger.error("Supervisor spawn failed", {
@@ -1015,6 +1121,7 @@ export class GateRun {
 			this.runtime.owned.add(owned);
 			owned.ownership = ownGateProcess(child, detached);
 			owned.owner = await owned.ownership;
+			this.throwIfAborted();
 			if (command.wallTimeoutSeconds !== undefined) {
 				wallTimer = setTimeout(
 					() => {
@@ -1035,7 +1142,7 @@ export class GateRun {
 			}
 			const pump = async (stream: ReadableStream<Uint8Array>, target: NodeJS.WriteStream): Promise<string> => {
 				const decoder = new TextDecoder();
-				const parser = new GateEventParser(token, event, token);
+				const parser = new GateEventParser(token, event, token, failed);
 				let text = "";
 				for await (const bytes of stream) {
 					const chunk = command.decodeOutput
@@ -1053,10 +1160,12 @@ export class GateRun {
 				}
 				return text;
 			};
-			const streams = Promise.all([
+			const pumps = [
 				pump(child.stdout as ReadableStream<Uint8Array>, process.stdout),
 				pump(child.stderr as ReadableStream<Uint8Array>, process.stderr),
-			]);
+			];
+			const streams = Promise.all(pumps);
+			void streams.catch(error => this.fail(error));
 			this.runtime.pending.set(streams, this.scope);
 			let stdout: string;
 			let stderr: string;
@@ -1085,16 +1194,21 @@ export class GateRun {
 				await relay.flush();
 				await this.runtime.cleanup(owned, false);
 				[stdout, stderr] = await streams;
+			} catch (error) {
+				throw this.fail(error);
 			} finally {
+				await Promise.allSettled(pumps);
 				this.runtime.pending.delete(streams);
 			}
 			completed = true;
 			this.throwIfAborted();
 			if (result.exitCode !== 0 && (!command.allowFailure || result.missing))
-				throw new GateCommandError(
-					`${command.label}: ${result.error ?? `exited ${result.exitCode}`}`,
-					result.exitCode,
-					result.missing ? "MISSING_TOOL" : "FAIL",
+				throw this.fail(
+					new GateCommandError(
+						`${command.label}: ${result.error ?? `exited ${result.exitCode}`}`,
+						result.exitCode,
+						result.missing ? "MISSING_TOOL" : "FAIL",
+					),
 				);
 			(result.exitCode === 0 ? logger.info : logger.warn)("Gate stage settled", {
 				...fields,
@@ -1173,7 +1287,7 @@ export async function runGate(level: GateLevel, work: Work, options: GateOptions
 				scope: "fork-affected",
 			});
 			try {
-				return await runtime.execute(runtime.create(level, options), work, options);
+				return await runtime.execute(runtime.create(level, options, undefined, started), work, options);
 			} catch (error) {
 				const elapsed = (performance.now() - started) / 1000;
 				const result: GateResult = {

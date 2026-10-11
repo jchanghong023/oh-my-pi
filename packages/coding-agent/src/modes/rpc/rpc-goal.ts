@@ -917,7 +917,6 @@ export class RpcGoalController {
 					this.#onContinuationDropped?.();
 				};
 				// Submission admission and the later turn terminal remain separate boundaries.
-				const state = session.getGoalModeState();
 				stage = "submit";
 				logger.info("RPC goal continuation submit started", {
 					...fields(),
@@ -926,13 +925,9 @@ export class RpcGoalController {
 				});
 				session
 					.promptCustomMessage({
-						customType:
-							state?.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
+						customType: "goal-continuation",
 						content: prompt,
 						display: false,
-						...(state?.autoOrchestrate === true
-							? { details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
-							: {}),
 					})
 					.then(
 						dispatched => {

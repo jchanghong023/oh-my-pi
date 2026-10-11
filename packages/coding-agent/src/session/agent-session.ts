@@ -1994,6 +1994,7 @@ export class AgentSession implements SettingsScope {
 			if (context?.willContinue) this.#steerAnthropicWrapUp();
 			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintenance.maintainContextMidRun(messages, signal, context);
+			if (!signal?.aborted) this.#appendGoalAutoOrchestrateContext(undefined, messages);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -2392,6 +2393,7 @@ export class AgentSession implements SettingsScope {
 			reconnectToAgent: () => this.#reconnectToAgent(),
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: () => this.buildDisplaySessionContext(),
+			restoreGoalAutoOrchestrateContext: entryId => this.#appendGoalAutoOrchestrateContext(entryId),
 			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
 			buildLiveProviderContext: async (summarized, retained, signal) => {
 				// compact() rebuilds the previous summary message; send the live
@@ -6879,19 +6881,6 @@ export class AgentSession implements SettingsScope {
 		this.#goalModeState = state;
 	}
 
-	buildGoalAutoOrchestrateTodoContext(tools: readonly string[]): string | undefined {
-		return this.#buildGoalTodoContext({ tools, userAuthority: true });
-	}
-
-	getPerCallContextTokens(): number {
-		const state = this.#goalModeState;
-		if (!state?.autoOrchestrate || !state.enabled || state.mode !== "active" || state.goal.status !== "active")
-			return 0;
-		const tools = isJchToolsAgentModel(this.model) ? [] : this.getEnabledToolNames();
-		const message = buildGoalAutoOrchestrateMessage(state, tools, this.buildGoalAutoOrchestrateTodoContext(tools));
-		return message ? this.agent.tokenizer.countMessage(message) : 0;
-	}
-
 	getVibeModeState(): VibeModeState | undefined {
 		return this.#vibeModeState;
 	}
@@ -7229,8 +7218,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#buildGoalModeMessage(): CustomMessage | null {
-		// Explicit orchestration context is rebuilt at the main request boundary, never persisted here.
-		if (this.#goalModeState?.autoOrchestrate === true) return null;
 		const content = this.#goalRuntime.buildActivePrompt();
 		if (!content) return null;
 		const todoContext = this.#buildGoalTodoContext();
@@ -7242,6 +7229,64 @@ export class AgentSession implements SettingsScope {
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	#hasGoalAutoOrchestrateContext(goalId: string, compactionEntryId?: string): boolean {
+		const belongsToEvent = (details: unknown): boolean =>
+			isRecord(details) &&
+			details.goalId === goalId &&
+			(compactionEntryId === undefined || details.compactionEntryId === compactionEntryId);
+		if (
+			this.sessionManager
+				.getBranch()
+				.some(
+					entry =>
+						entry.type === "custom_message" &&
+						entry.customType === "goal-auto-orchestrate-context" &&
+						belongsToEvent(entry.details),
+				)
+		) {
+			return true;
+		}
+		const isNotice = (message: AgentMessage): boolean =>
+			message.role === "custom" &&
+			message.customType === "goal-auto-orchestrate-context" &&
+			belongsToEvent(message.details);
+		return this.agent.state.messages.some(isNotice);
+	}
+
+	#appendGoalAutoOrchestrateContext(
+		compactionEntryId?: string,
+		activeMessages?: AgentMessage[],
+	): CustomMessage | undefined {
+		const state = this.#goalModeState;
+		if (
+			state?.autoOrchestrate !== true ||
+			this.#isDisposed ||
+			this.#hasGoalAutoOrchestrateContext(state.goal.id, compactionEntryId)
+		) {
+			return undefined;
+		}
+		const tools = isJchToolsAgentModel(this.model) ? [] : this.getEnabledToolNames();
+		const notice = buildGoalAutoOrchestrateMessage(
+			state,
+			tools,
+			this.#buildGoalTodoContext({ tools, userAuthority: true }),
+		);
+		if (!notice) return undefined;
+		if (compactionEntryId !== undefined) {
+			notice.details = { source: "goal-auto-orchestrate", goalId: state.goal.id, compactionEntryId };
+		}
+		this.agent.appendMessage(notice);
+		if (activeMessages && activeMessages !== this.agent.state.messages) activeMessages.push(notice);
+		this.sessionManager.appendCustomMessageEntry(
+			notice.customType,
+			notice.content,
+			notice.display,
+			notice.details,
+			notice.attribution,
+		);
+		return notice;
 	}
 
 	#buildVibeModeMessage(): CustomMessage | null {
@@ -7403,6 +7448,8 @@ export class AgentSession implements SettingsScope {
 		let context: MagicKeywordContext | undefined;
 		for (const keyword of MAGIC_KEYWORDS) {
 			if (!this.#magicKeywordEnabled(keyword.id) || !containsMagicKeyword(text, keyword.word)) continue;
+			// Coordinate only this initial construction, never historical notices.
+			if (keyword.id === "orchestrate" && sourceGoalId !== undefined) continue;
 			context ??= {
 				tools: this.getEnabledToolNames(),
 				taskBatch: cfgTaskBatch.get(this.settings),
@@ -7419,10 +7466,6 @@ export class AgentSession implements SettingsScope {
 				content: keyword.notice(context),
 				display: false,
 				attribution: "user",
-				details:
-					keyword.id === "orchestrate" && sourceGoalId !== undefined
-						? { source: "goal-auto-orchestrate", goalId: sourceGoalId }
-						: undefined,
 				timestamp,
 			});
 		}
@@ -7754,14 +7797,7 @@ export class AgentSession implements SettingsScope {
 			queueOnly?: boolean;
 		},
 	): Promise<boolean> {
-		const state = this.#goalModeState;
-		const submittedMessage: Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution"> =
-			message.customType === "goal-auto-orchestrate-continuation" &&
-			message.details === undefined &&
-			state?.autoOrchestrate === true
-				? { ...message, details: { source: "goal-auto-orchestrate", goalId: state.goal.id } }
-				: message;
-		return this.#admitSubmission(() => this.#promptCustomMessage(submittedMessage, options));
+		return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
 	}
 
 	async #promptCustomMessage<T = unknown>(
@@ -8133,7 +8169,9 @@ export class AgentSession implements SettingsScope {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				// Use the same Agent loop and canonical persistence without frontend
 				// tool preludes, auto-read, compaction, classification or recovery.
-				await this.agent.prompt([message]);
+				const goalContext = this.#buildGoalModeMessage();
+				this.#appendGoalAutoOrchestrateContext();
+				await this.agent.prompt(goalContext ? [goalContext, message] : [message]);
 				await this.#waitForPostPromptRecovery(generation);
 				return true;
 			}
@@ -8282,6 +8320,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
+			this.#appendGoalAutoOrchestrateContext();
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
 			const contextWindow = this.model?.contextWindow ?? 0;
 			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });

@@ -60,7 +60,7 @@
 
 ### `/goal-auto-orchestrate` 持续无人值守目标
 
-完整命令、模式归属、请求级注入、权限边界与验收条件统一维护在 [Goal 自动编排需求](goal-auto-orchestrate.md)，此处不重复条款；实现与验收状态见[目录索引](README.md)。
+完整命令、模式归属、正常历史中的持久化上下文、成功提交压缩后的目标恢复与 Orchestrate 规则重新展开、权限边界及验收条件统一维护在 [Goal 自动编排需求](goal-auto-orchestrate.md)，此处不重复条款；实现与验收状态见[目录索引](README.md)。
 
 ### `/team` 多模型方案讨论
 
@@ -248,12 +248,13 @@
 
 - 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除。嵌套阶段共享外层剩余额度，并保持更严格的内层上限。
 - 到限主动终止本次拥有的进程树，非零退出并报告 `TIMEOUT`，不在阶段间重置时钟、不放宽上限。所有退出路径（成功、失败、缺工具、超时、中断、参数错误）都输出 status、total、compile_excluded、budgeted、limit 与退出码，秒至少一位小数；按 budgeted 而不是 total 判断到限。
+- 首个检查、测试、编译或执行阶段失败后，立即停止调度并终止本次拥有的并行任务、嵌套运行器与进程树；嵌套运行器也按首个失败停止。保留触发失败、退出码和最终计时；未启动/被取消工作不算通过。WSL 发现/同步前置条件受阻仍完成可达本机 fulltest，实际 Linux 检查/测试失败则立即取消其他执行任务。
 - 门禁的进程监督须在命令仍运行时回收已退出的孤儿后代，不得截获由运行器持有的主命令退出码；Windows 隔离临时目录的清理须能解除带拒绝读取 ACL 的目录 junction，且不得遍历或删除其目标。上述生命周期编排不能改变测试通过标准或把清理失败降级成通过。
 - 独立且安全的检查/测试/Windows与WSL两端必须并行；改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
-- fastcheck 仅在具体需要且相关修改批次完成后由 Agent 选择，不能逐文件保存即运行。fulltest/slowtest 需要本次用户明确运行授权；显式调用 `jch-fastcheck-fulltest-slowtest-gates` 执行工作流即授权本任务所需三层运行和修复后的必要重跑，任务结束失效。入口脚本逐文件静态检查例外及不可通过内部阶段绕过权限的边界以该技能为准。
+- fastcheck 仅在具体需要且相关修改批次完成后由 Agent 选择，不能逐文件保存即运行。fulltest/slowtest 需要本次用户明确运行授权，授权不跨任务延续；不能通过直接执行内部阶段绕过权限。新/改门禁入口脚本可直接执行显式限定到该文件的非测试静态检查，不得扩大到目录/仓库或执行测试、打包、跨 WSL。
 - 三层 NEVER 调用或触发 CI/远端发布流水线、push、发布、部署、Computer Use、共享鼠标或抢前台焦点。既有独立 CI 保持原配置，发布不属于门禁。真实桌面输入测试保留并另行明确授权，记 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不计为已通过；隔离的浏览器 DOM/协议、虚拟终端和 PTY 自动化可纳入本地测试。
-- 本项目支持 Windows/Linux x64，Windows→WSL 验证显式选定 **Ubuntu-24.04 WSL2**，不能替换目标；未指定目标的一般项目才优先合适的已安装 CentOS。无 WSL/无兼容发行版记 `SKIPPED_WSL_UNAVAILABLE`，项目不需要则 `SKIPPED_NOT_APPLICABLE`，此时 slowtest 覆盖等于 fulltest。已选择 WSL 后的同步、脏源码、工具或执行失败须 BLOCKED/UNVERIFIED/FAIL，不能降级成跳过；即使 WSL 受阻也完成可达的本机 fulltest 一次。不自动安装 WSL、发行版或缺失测试工具。
-- WSL 阶段遵循该技能 `references/wsl-testing-workflow.md`，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须阻塞 WSL，不能测试旧提交代表当前改动。既有 `workflow.py` plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 3600 秒墙钟防挂另行报告，外层累计非编译上限仍为 1500 秒。记录两端 HEAD、本机源码指纹、工作树、Linux 工具路径与版本；不同提交不得合并 PASS。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
+- 本项目支持 Windows/Linux x64，Windows→WSL 验证显式选定 **Ubuntu-24.04 WSL2**，不能替换目标；未指定目标的一般项目才优先合适的已安装 CentOS。无 WSL/无兼容发行版记 `SKIPPED_WSL_UNAVAILABLE`，项目不需要则 `SKIPPED_NOT_APPLICABLE`，此时 slowtest 覆盖等于 fulltest。已选择 WSL 后的同步、脏源码、工具或执行失败须 BLOCKED/UNVERIFIED/FAIL，不能降级成跳过；前置条件受阻仍完成可达的本机 fulltest 一次。不自动安装 WSL、发行版或缺失测试工具。
+- WSL 通过 `scripts/slowtest-wsl-stage.ts` 在 slowtest 内执行，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须阻塞 WSL，不能测试旧提交代表当前改动。既有固定提交同步 helper 的 plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 3600 秒墙钟防挂另行报告，外层累计非编译上限仍为 1500 秒。记录两端 HEAD、本机源码指纹、工作树、Linux 工具路径与版本；不同提交不得合并 PASS。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
 - WSL 原生仓库发现使用 slowtest 的累计非编译额度，不另设 25/30 秒的提前截止；宿主与 Linux 仍有有限防挂，外层累计时钟、取消与用户下调额度始终优先。完整发现须保留嵌套工作区与多匹配拒绝语义，不通过缩小遍历范围规避超时。
 - 按维护者明确要求沿用原有 fork 改动相关范围，不自动扩大到全仓库测试。比较基准为本页记录的 Upstream commit，纳入全部已提交、未提交及未跟踪差异；TS 沿用存在的差异测试文件集合，Rust 沿用现有 `test:rs --affected` 的 crate/vendor 消费者选择，不新增手工白名单，不排除该集合内失败项。保留现有 TS/Rust 静态检查、仓库脚本测试、native 构建和 dev-TUI 集成边界；Python、独立 Go/Python/Rust SDK、无关 workspace 打包、完整上游 TS 套件不在此门禁范围，原有独立入口保留。三层及 WSL 继承同一范围，报告 `scope=fork-affected`、基线、选择依据和上述未测覆盖；不得把该范围的 PASS 表述为全仓库 PASS。非编译预算、缓存、计时及失败标准不因范围选择改变。
 - 环境/工具缺失、平台不适用和检查失败须分别说明，不把缺失或跳过当通过。既有 Windows 上游 sed 用例过滤及其他测试适配不在本次门禁编排中改写；未运行的实际模型质量、公司内网、独立发布和桌面输入不属于本地 PASS 的证明。

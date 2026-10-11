@@ -285,24 +285,24 @@ describe("goal runtime", () => {
 		expect(harness.persists.every(entry => entry.state?.autoOrchestrate === undefined)).toBe(true);
 	});
 
-	it("keeps marked continuation audits and budgets without duplicating the per-request objective", async () => {
+	it("retains the full saved objective in normal auto-mode continuations across pause and resume", async () => {
 		const harness = createHarness();
+		const objective = `Unique saved objective <unsafe> & detailed\n${"Complete every specified requirement. ".repeat(300).trimEnd()}\nCONTINUATION_OBJECTIVE_END`;
 		await harness.runtime.createGoal({
-			objective: "Unique saved objective <unsafe>",
+			objective,
 			tokenBudget: 50,
 			autoOrchestrate: true,
 		});
 		const continuation = harness.runtime.buildContinuationPrompt();
-		expect(continuation).not.toContain("Unique saved objective");
-		expect(continuation).not.toContain("<objective>");
+		expect(continuation).toContain(escapeXmlText(objective));
 		expect(continuation).toContain("Token budget: 50");
-		expect(continuation).toContain('Before `goal({op:"complete"})`');
 		await harness.runtime.pauseGoal();
 		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
 		await harness.runtime.resumeGoal();
-		expect(harness.runtime.buildContinuationPrompt()).not.toContain("Unique saved objective");
+		expect(harness.runtime.buildContinuationPrompt()).toContain(escapeXmlText(objective));
 		await harness.runtime.replaceGoal({ objective: "Ordinary objective <unsafe>" });
 		expect(harness.runtime.buildContinuationPrompt()).toContain("Ordinary objective &lt;unsafe&gt;");
+		expect(harness.runtime.buildContinuationPrompt()).not.toContain("CONTINUATION_OBJECTIVE_END");
 	});
 
 	it("retains the objective and wrap-up steer when a marked goal reaches its budget limit", async () => {

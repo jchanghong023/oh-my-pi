@@ -2898,8 +2898,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.onInputCallback(
 					this.startPendingSubmission({
 						text: prompt,
-						customType:
-							latestState.autoOrchestrate === true ? "goal-auto-orchestrate-continuation" : "goal-continuation",
+						customType: "goal-continuation",
 						display: false,
 					}),
 				);
@@ -3316,10 +3315,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cancelled: false,
 			started: false,
 		};
-		if (
-			submission.customType !== "goal-continuation" &&
-			submission.customType !== "goal-auto-orchestrate-continuation"
-		) {
+		if (submission.customType !== "goal-continuation") {
 			this.#pendingGoalContinuationTurns = 0;
 		}
 		this.#pendingSubmittedInput = submission;
@@ -3369,10 +3365,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmissionPreservesDraft = false;
 		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
-		if (
-			submission.customType === "goal-continuation" ||
-			submission.customType === "goal-auto-orchestrate-continuation"
-		) {
+		if (submission.customType === "goal-continuation") {
 			this.#pendingGoalContinuationTurns = Math.max(0, this.#pendingGoalContinuationTurns - 1);
 			this.#logGoalContinuation("cancelled", "pending_submission_cancelled", { stage: "submit" });
 		}

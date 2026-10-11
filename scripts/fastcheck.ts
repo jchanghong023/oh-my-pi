@@ -18,7 +18,7 @@ export function parseFastcheckArgs(args: readonly string[]): FastcheckOptions | 
 	return Number.isFinite(limitSeconds) && limitSeconds > 0 && limitSeconds <= 60 ? { limitSeconds } : null;
 }
 
-/** Bounded parallelism without swallowing errors or abandoning live siblings. */
+/** Bounded parallelism; the first failure cancels queued and live siblings. */
 export async function runGateCommands(
 	gate: GateRun,
 	commands: readonly GateCommand[],
@@ -34,7 +34,7 @@ export async function runGateCommands(
 				try {
 					await rampUpAfter;
 				} catch (error) {
-					failures.push(error);
+					failures.push(gate.fail(error));
 					return;
 				}
 			}
@@ -48,8 +48,9 @@ export async function runGateCommands(
 					if (command.kind === "charged") await gate.charged(() => gate.run(command));
 					else await gate.run(command);
 				} catch (error) {
-					failures.push(error);
+					failures.push(gate.fail(error));
 					console.error(`${command.label}: ${error instanceof Error ? error.message : String(error)}`);
+					return;
 				}
 			}
 		}),
@@ -101,7 +102,7 @@ if (import.meta.main) {
 			if (!options) throw new GateCommandError("Usage: bun run fastcheck [--limit-seconds=<seconds <= 60>]", 2);
 			await runFastcheck(gate);
 		},
-		options ?? {},
+		{ ...options, reportFailure: true },
 	);
 	process.exitCode = result.exitCode;
 }

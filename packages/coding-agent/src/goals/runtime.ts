@@ -648,7 +648,7 @@ export class GoalRuntime {
 	buildContinuationPrompt(): string | undefined {
 		const state = this.#host.getState();
 		return state?.enabled && state.goal.status === "active"
-			? renderGoalPrompt("continuation", state.goal, { omitObjective: state.autoOrchestrate === true })
+			? renderGoalPrompt("continuation", state.goal)
 			: undefined;
 	}
 

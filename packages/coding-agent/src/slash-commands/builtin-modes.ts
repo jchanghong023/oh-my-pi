@@ -405,7 +405,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		...GOAL_MODE_SLASH_COMMAND,
 		name: "goal-auto-orchestrate",
-		description: "Manage a persistent goal with unattended orchestration on each active request",
+		description:
+			"Manage a persistent goal with unattended orchestration saved in history and restored after compaction",
 		handleRpc: (command, runtime) => runtime.runModeCommand("goal-auto-orchestrate", command.args),
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>

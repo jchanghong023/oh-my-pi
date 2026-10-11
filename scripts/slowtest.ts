@@ -133,8 +133,19 @@ async function runSlowtestObserved(
 						"commit and push intended source before WSL execution; dirty source cannot be transferred and Git writes are not authorized",
 					exitCode: 1,
 				};
-			return await injected.wsl(gate, { ...wslOptions, selection, identity: before });
+			const result = await injected.wsl(gate, { ...wslOptions, selection, identity: before });
+			if (result.status === "FAIL" || result.status === "TIMEOUT" || result.status === "CANCELLED") {
+				gate.fail(
+					new GateCommandError(
+						`${result.status}: ${result.reason}`,
+						result.exitCode,
+						result.status === "TIMEOUT" ? "TIMEOUT" : result.status === "CANCELLED" ? "INTERRUPTED" : "FAIL",
+					),
+				);
+			}
+			return result;
 		} catch (error) {
+			if (gate.signal.aborted) throw gate.signal.reason;
 			const cancelled = error instanceof GateCommandError && error.status === "INTERRUPTED";
 			(cancelled ? logger.info : logger.error)("Slowtest Linux leg exception deferred", {
 				component: "test-gate-slowtest",
@@ -231,7 +242,7 @@ if (import.meta.main) {
 				throw new GateCommandError("Usage: bun run slowtest [--debug] [--limit-seconds=N] (0 < N <= 1500)", 2);
 			await runSlowtest(gate, options);
 		},
-		{ limitSeconds: options?.limitSeconds },
+		{ limitSeconds: options?.limitSeconds, reportFailure: true },
 	).then(result => {
 		process.exitCode = result.exitCode;
 	});

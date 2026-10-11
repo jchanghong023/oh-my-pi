@@ -2,11 +2,9 @@
 
 Continue active goal.
 
-{{#unless omitObjective}}
 <objective>
 {{objective}}
 </objective>
-{{/unless}}
 
 Budget:
 - Tokens used: {{tokensUsed}}

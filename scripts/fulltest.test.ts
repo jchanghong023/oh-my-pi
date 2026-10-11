@@ -19,6 +19,92 @@ describe("shared per-test budget", () => {
 	});
 });
 
+describe("gate-local profile fixture isolation", () => {
+	for (const selector of [
+		"HOME",
+		"PI_CONFIG_DIR",
+		"OMP_CONFIG_ROOT",
+		"PI_CODING_AGENT_DIR",
+		"OMP_PROFILE",
+		"PI_PROFILE",
+	] as const) {
+		test(`actual directory consumer honors isolated ${selector} selection over host selectors`, async () => {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-isolation-"));
+			const home = path.join(directory, "gate-home");
+			const host = path.join(directory, "host");
+			const overrides: Record<string, string> = {};
+			let root = path.join(home, ".omp");
+			let profile: string | null = null;
+			if (selector === "PI_CONFIG_DIR") {
+				overrides.PI_CONFIG_DIR = "fixture-config";
+				root = path.join(home, overrides.PI_CONFIG_DIR);
+			} else if (selector === "OMP_CONFIG_ROOT") {
+				overrides.OMP_CONFIG_ROOT = root = path.join(directory, "fixture-root");
+			} else if (selector === "OMP_PROFILE" || selector === "PI_PROFILE") {
+				overrides[selector] = profile = "fixture-profile";
+				root = path.join(root, "profiles", profile);
+			}
+			const agent =
+				selector === "PI_CODING_AGENT_DIR" ? path.join(directory, "fixture-agent") : path.join(root, "agent");
+			if (selector === "PI_CODING_AGENT_DIR") overrides.PI_CODING_AGENT_DIR = agent;
+			try {
+				await fs.mkdir(agent, { recursive: true });
+				await fs.mkdir(host, { recursive: true });
+				await Bun.write(path.join(agent, "fixture.txt"), "isolated fixture");
+				await Bun.write(path.join(host, "keep.txt"), "host files remain untouched");
+				const consumer = `
+import * as path from "node:path";
+import { getAgentDir, getConfigRootDir, getActiveProfile } from ${JSON.stringify(new URL("../packages/utils/src/dirs.ts", import.meta.url).href)};
+const agent = getAgentDir();
+const fixture = await Bun.file(path.join(agent, "fixture.txt")).text();
+await Bun.write(path.join(agent, "child-write.txt"), fixture);
+console.log(JSON.stringify({ root: getConfigRootDir(), agent, profile: getActiveProfile() ?? null, fixture }));
+`;
+				const construction = `
+import { localTestEnvironment } from ${JSON.stringify(new URL("./fulltest.ts", import.meta.url).href)};
+const child = Bun.spawn([process.execPath, "-e", ${JSON.stringify(consumer)}], {
+	env: { ...localTestEnvironment(${JSON.stringify(home)}), ...${JSON.stringify(overrides)} },
+	stdout: "pipe",
+	stderr: "pipe",
+});
+const [exitCode, stdout, stderr] = await Promise.all([
+	child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+]);
+process.stdout.write(stdout);
+process.stderr.write(stderr);
+process.exit(exitCode);
+`;
+				const child = Bun.spawn([process.execPath, "-e", construction], {
+					env: {
+						...process.env,
+						HOME: host,
+						USERPROFILE: host,
+						OMP_CONFIG_ROOT: host,
+						PI_CODING_AGENT_DIR: host,
+						OMP_PROFILE: "host-omp-profile",
+						PI_PROFILE: "host-pi-profile",
+						PI_CONFIG_DIR: "host-config",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+				expect(JSON.parse(stdout)).toEqual({ root, agent, profile, fixture: "isolated fixture" });
+				expect(await Bun.file(path.join(agent, "child-write.txt")).text()).toBe("isolated fixture");
+				expect(await Bun.file(path.join(host, "child-write.txt")).exists()).toBe(false);
+				expect(await Bun.file(path.join(host, "keep.txt")).text()).toBe("host files remain untouched");
+			} finally {
+				await fs.rm(directory, { recursive: true, force: true });
+			}
+		}, 20_000);
+	}
+});
+
 describe("standard gate charged-budget parameters", () => {
 	test("fastcheck accepts only a finite positive downward limit", () => {
 		expect(parseFastcheckArgs(["--limit-seconds=0.25"])).toEqual({ limitSeconds: 0.25 });
@@ -89,6 +175,53 @@ process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + ' {"
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("first command failure aborts live siblings and never schedules queued work", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-command-first-failure-"));
+	const live = path.join(directory, "live");
+	const completed = path.join(directory, "completed");
+	const queued = path.join(directory, "queued");
+	try {
+		const result = await runGate(
+			"fulltest",
+			gate =>
+				runGateCommands(
+					gate,
+					[
+						{
+							label: "triggering failure",
+							argv: [
+								process.execPath,
+								"-e",
+								`import { watch, existsSync } from "node:fs"; const live = ${JSON.stringify(live)}; const ready = Promise.withResolvers(); const watcher = watch(${JSON.stringify(directory)}, () => { if (existsSync(live)) ready.resolve(); }); try { if (!existsSync(live)) await ready.promise; } finally { watcher.close(); } console.error("original failure"); process.exit(23);`,
+							],
+						},
+						{
+							label: "live sibling",
+							argv: [
+								process.execPath,
+								"-e",
+								`import { watch } from "node:fs"; await Bun.write(${JSON.stringify(live)}, "started"); const watcher = watch(${JSON.stringify(directory)}, () => {}); try { await Promise.withResolvers().promise; } finally { watcher.close(); } await Bun.write(${JSON.stringify(completed)}, "unexpected");`,
+							],
+						},
+						{
+							label: "queued command",
+							argv: [process.execPath, "-e", `await Bun.write(${JSON.stringify(queued)}, "unexpected");`],
+						},
+					],
+					2,
+				),
+			{ limitSeconds: 10, print: () => {} },
+		);
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(23);
+		expect(await Bun.file(live).exists()).toBe(true);
+		expect(await Bun.file(completed).exists()).toBe(false);
+		expect(await Bun.file(queued).exists()).toBe(false);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 20000);
 
 test.skipIf(process.platform !== "win32")(
 	"removes denied Windows junctions without deleting their targets",

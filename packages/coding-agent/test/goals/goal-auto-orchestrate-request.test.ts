@@ -1,25 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { Context } from "@oh-my-pi/pi-ai";
-import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { prompt } from "@oh-my-pi/pi-utils";
-import {
-	applyGoalAutoOrchestrateContext,
-	buildGoalAutoOrchestrateMessage,
-	filterGoalAutoOrchestrateMessages,
-	stripGoalAutoOrchestrateContext,
-} from "@oh-my-pi/pi-coding-agent/goals/request-context";
+import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
-import unattended from "../../src/prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 
-const objective = `Full objective\n${"保留长文本 & <b>markup</b> ".repeat(300)}\nFINAL_OBJECTIVE_SENTINEL`;
-const instruction = prompt
-	.compile(unattended.trim())({ objective: "", orchestrateRules: "" })
-	.trim()
-	.split("\n")
-	.slice(-4)
-	.join("\n");
+const objective = `  Full objective\r\n\n{{objective}} $& <b>markup</b>\t\n${"保留长文本 & 原样内容 ".repeat(300)}\nFINAL_OBJECTIVE_SENTINEL  \n`;
 
 function state(overrides: Partial<GoalModeState> = {}): GoalModeState {
 	return {
@@ -39,10 +25,6 @@ function state(overrides: Partial<GoalModeState> = {}): GoalModeState {
 	};
 }
 
-function custom(customType: string, content: string, details?: Record<string, unknown>): AgentMessage {
-	return { role: "custom", customType, content, display: false, timestamp: 1, ...(details ? { details } : {}) };
-}
-
 function text(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (Array.isArray(value)) return value.map(part => text(part)).join("\n");
@@ -50,208 +32,83 @@ function text(value: unknown): string {
 	return "";
 }
 
-function providerContext(names: string[]): Context {
-	return {
-		systemPrompt: ["Host system authority remains unchanged."],
-		messages: [{ role: "user", content: "Later user explicitly says: do not edit files.", timestamp: 2 }],
-		tools: names.map(name => ({ name, description: name, parameters: { type: "object", properties: {} } })),
-	};
+function render(current: GoalModeState, tools: string[]) {
+	const message = buildGoalAutoOrchestrateMessage(current, tools);
+	if (!message) throw new Error("Expected an active automatic goal to construct a persistent notice");
+	return message;
 }
 
-describe("goal-auto-orchestrate request context", () => {
-	test("renders the entire objective and shared dynamic rules exactly once with user attribution", () => {
+describe("goal-auto-orchestrate persistent notice rendering", () => {
+	test("preserves the full saved objective literally through serialization and provider conversion", () => {
 		const current = state();
-		const tools = ["task", "read", "write", "bash"];
-		const message = buildGoalAutoOrchestrateMessage(current, tools);
+		const message = render(current, ["task", "read", "write", "bash"]);
 		expect(message).toMatchObject({
 			role: "custom",
 			customType: "goal-auto-orchestrate-context",
 			attribution: "user",
 			details: { source: "goal-auto-orchestrate", goalId: "goal-a" },
 		});
-		const rendered = text(message?.content);
-		expect(rendered.split(objective)).toHaveLength(2);
-		expect(rendered.split(instruction)).toHaveLength(2);
-		expect(rendered).toContain(renderOrchestrateNotice({ tools }, { authority: "user" }));
-		expect(rendered).not.toContain("<system-notice>");
-		expect(rendered).not.toContain("<system-reminder>");
+		const saved: typeof message = JSON.parse(JSON.stringify(message));
+		expect(text(saved.content).split(objective)).toHaveLength(2);
+		const provider = convertToLlm([saved]);
+		expect(provider).toHaveLength(1);
+		expect(provider[0]).toMatchObject({ role: "user", attribution: "user" });
+		expect(text(provider[0]?.content)).toBe(text(message.content));
+		expect(text(provider[0]?.content).split(objective)).toHaveLength(2);
 		expect(current).toEqual(state());
 	});
 
-	test("rebuilds rules from current tools; missing task retains the objective and unattended strategy", () => {
+	test("uses shared user-authority expansion without promoting either notice or later user input", () => {
+		const tools = ["task", "read", "write", "bash"];
+		const message = render(state(), tools);
+		const later: AgentMessage = {
+			role: "user",
+			content: "Do not edit files; inspect only.",
+			attribution: "user",
+			timestamp: 2,
+		};
+		const provider = convertToLlm([message, later]);
+		expect(text(provider[0]?.content)).toContain(renderOrchestrateNotice({ tools }, { authority: "user" }));
+		expect(text(provider[0]?.content)).not.toContain("<system-notice>");
+		expect(text(provider[0]?.content)).not.toContain("<system-reminder>");
+		expect(provider.map(entry => entry.role)).toEqual(["user", "user"]);
+		expect(provider[1]).toEqual(later);
+	});
+
+	test("reads enabled indirect capabilities at construction and skips only rules when task is absent", () => {
 		const current = state();
-		const before = text(buildGoalAutoOrchestrateMessage(current, ["task", "read"])?.content);
-		const unavailable = text(buildGoalAutoOrchestrateMessage(current, ["read"])?.content);
-		const restored = text(buildGoalAutoOrchestrateMessage(current, ["task", "read", "bash"])?.content);
-		expect(before).toContain(renderOrchestrateNotice({ tools: ["task", "read"] }, { authority: "user" }));
+		const enabled = ["task", "read", "eval"];
+		const indirect = render(current, enabled);
+		const expanded = renderOrchestrateNotice({ tools: enabled }, { authority: "user" });
+		expect(text(convertToLlm([indirect])[0]?.content)).toContain(expanded);
+
+		const withoutTask = render(current, ["read", "eval"]);
+		const unavailable = text(convertToLlm([withoutTask])[0]?.content);
 		expect(unavailable).toContain(objective);
-		expect(unavailable).toContain(instruction);
-		expect(unavailable).not.toContain(renderOrchestrateNotice({ tools: ["read"] }, { authority: "user" }));
-		expect(restored).toContain(renderOrchestrateNotice({ tools: ["task", "read", "bash"] }, { authority: "user" }));
-		expect(restored).not.toEqual(before);
+		expect(unavailable).not.toContain(expanded);
+		expect(unavailable).not.toContain(renderOrchestrateNotice({ tools: ["read", "eval"] }, { authority: "user" }));
+		const changed = ["task", "read", "eval", "bash"];
+		const changedRules = renderOrchestrateNotice({ tools: changed }, { authority: "user" });
+		expect(changedRules).not.toEqual(expanded);
+		expect(text(render(current, changed).content)).toContain(changedRules);
+		expect(text(indirect.content)).toContain(expanded);
 		expect(current.autoOrchestrate).toBe(true);
 	});
 
-	test("only active explicit mode injects; pause, exiting, complete, legacy and drop do not", () => {
+	test("does not construct a notice for ordinary, missing, paused, exiting, complete or budget-limited goals", () => {
 		const current = state();
 		for (const stopped of [
 			undefined,
 			state({ autoOrchestrate: undefined }),
 			state({ autoOrchestrate: false }),
+			state({ enabled: false }),
 			state({ enabled: false, goal: { ...current.goal, status: "paused" } }),
+			state({ goal: { ...current.goal, status: "paused" } }),
 			state({ mode: "exiting", reason: "completed" }),
 			state({ goal: { ...current.goal, status: "complete" } }),
 			state({ goal: { ...current.goal, status: "budget-limited" } }),
 		]) {
 			expect(buildGoalAutoOrchestrateMessage(stopped, ["task"])).toBeUndefined();
-			const context = providerContext(["task"]);
-			expect(applyGoalAutoOrchestrateContext(context, stopped, ["task"])).toEqual(context);
 		}
-	});
-
-	test("deduplicates structured notices without deleting user prose or budget steering or history", () => {
-		const user: AgentMessage = { role: "user", content: `orchestrate\n${instruction}\n${objective}`, timestamp: 2 };
-		const budget = custom("goal-budget-limit", "Budget exhausted: wrap up now.");
-		const unrelated = custom("extension-fixture", instruction);
-		const messages = [
-			custom("goal-mode-context", "stale goal"),
-			custom("orchestrate-notice", "stale rules"),
-			custom("goal-auto-orchestrate-context", "stale expanded feature"),
-			user,
-			budget,
-			unrelated,
-		];
-		const saved = structuredClone(messages);
-		expect(filterGoalAutoOrchestrateMessages(messages, state())).toEqual([user, budget, unrelated]);
-		expect(messages).toEqual(saved);
-		for (let count = 0; count < 5; count++) {
-			const filtered = filterGoalAutoOrchestrateMessages(messages, state());
-			expect(filtered).toEqual([user, budget, unrelated]);
-		}
-		expect(messages).toEqual(saved);
-	});
-
-	test("stopped mode removes feature-provenance notices but preserves genuine later keyword requests", () => {
-		const tagged = { source: "goal-auto-orchestrate", goalId: "goal-a" };
-		const genuine = custom("orchestrate-notice", "new user's ordinary keyword notice");
-		const user: AgentMessage = {
-			role: "user",
-			content: "orchestrate this new task, but ask before changes",
-			timestamp: 3,
-		};
-		const messages = [
-			custom("goal-auto-orchestrate-context", "stale expanded feature", tagged),
-			custom("orchestrate-notice", "old auto notice", tagged),
-			custom("goal-mode-context", "old auto objective", tagged),
-			genuine,
-			user,
-		];
-		for (const stopped of [undefined, state({ enabled: false }), state({ autoOrchestrate: false })]) {
-			expect(filterGoalAutoOrchestrateMessages(messages, stopped)).toEqual([genuine, user]);
-		}
-	});
-
-	test("continuation provenance follows the current goal and never survives a stopped mode", () => {
-		const current = custom("goal-auto-orchestrate-continuation", "continue", { goalId: "goal-a" });
-		const stale = custom("goal-auto-orchestrate-continuation", "continue old goal", { goalId: "goal-b" });
-		const ordinary = custom("goal-continuation", "ordinary objective");
-		expect(filterGoalAutoOrchestrateMessages([current, stale, ordinary], state())).toEqual([current]);
-		expect(filterGoalAutoOrchestrateMessages([current, stale, ordinary], undefined)).toEqual([ordinary]);
-	});
-
-	test("final provider context adds one user block, preserves later explicit input and system/tool authority", () => {
-		const original = providerContext(["task", "read"]);
-		const saved = structuredClone(original);
-		const result = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
-		expect(original).toEqual(saved);
-		expect(result.systemPrompt).toEqual(original.systemPrompt);
-		expect(result.tools).toEqual(original.tools);
-		expect(result.messages.slice(0, original.messages.length)).toEqual(original.messages);
-		const injected = result.messages.filter(message => text(message.content).includes(instruction));
-		expect(injected).toHaveLength(1);
-		expect(injected[0]?.role).toBe("user");
-		expect(text(injected[0]?.content)).toContain(objective);
-		// This static strategy explicitly subordinates itself to subsequent user
-		// instructions; it must not overwrite or promote them to system authority.
-		expect(instruction).toContain("本次用户的明确要求");
-		const repeat = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
-		expect(repeat).toEqual(result);
-		expect(applyGoalAutoOrchestrateContext(result, state(), ["task", "read"])).toEqual(result);
-		const withoutTask = applyGoalAutoOrchestrateContext(result, state(), []);
-		expect(withoutTask.messages.filter(message => text(message.content).includes(instruction))).toHaveLength(1);
-		expect(text(withoutTask.messages.at(-1)?.content)).not.toContain(
-			renderOrchestrateNotice({ tools: ["task", "read"] }, { authority: "user" }),
-		);
-		expect(applyGoalAutoOrchestrateContext(result, undefined, ["task", "read"])).toEqual(original);
-	});
-
-	test("eval-only provider schemas retain indirect task rules and refresh enabled capabilities on every request", () => {
-		const original = providerContext(["eval"]);
-		const enabled = ["task", "read", "eval"];
-		const firstRules = renderOrchestrateNotice({ tools: enabled }, { authority: "user" });
-		const first = applyGoalAutoOrchestrateContext(original, state(), enabled);
-		expect(text(first.messages.at(-1)?.content)).toContain(firstRules);
-		expect(first.tools).toBe(original.tools);
-		expect(first.tools?.map(tool => tool.name)).toEqual(["eval"]);
-
-		const changedTools = [...enabled, "bash"];
-		const changedRules = renderOrchestrateNotice({ tools: changedTools }, { authority: "user" });
-		const changed = applyGoalAutoOrchestrateContext(first, state(), changedTools);
-		expect(changedRules).not.toEqual(firstRules);
-		expect(text(changed.messages.at(-1)?.content)).toContain(changedRules);
-		expect(text(changed.messages.at(-1)?.content)).not.toContain(firstRules);
-
-		const unavailableTools = ["read", "eval", "bash"];
-		const unavailable = applyGoalAutoOrchestrateContext(changed, state(), unavailableTools);
-		const unavailableText = text(unavailable.messages.at(-1)?.content);
-		expect(unavailableText).toContain(objective);
-		expect(unavailableText).toContain(instruction);
-		expect(unavailableText).not.toContain(changedRules);
-		expect(unavailableText).not.toContain(
-			renderOrchestrateNotice({ tools: unavailableTools }, { authority: "user" }),
-		);
-		const restored = applyGoalAutoOrchestrateContext(unavailable, state(), enabled);
-		expect(restored).toEqual(first);
-		for (const request of [first, changed, unavailable, restored]) {
-			expect(request.tools).toBe(original.tools);
-			expect(request.messages.slice(0, -1)).toEqual(original.messages);
-			expect(text(request.messages.at(-1)?.content).split(objective)).toHaveLength(2);
-			expect(text(request.messages.at(-1)?.content).split(instruction)).toHaveLength(2);
-			expect(request.messages).toHaveLength(original.messages.length + 1);
-		}
-		expect(original.messages).toHaveLength(1);
-	});
-
-	test("request-local todo state is refreshed with the rest of the context without accumulation", () => {
-		const original = providerContext(["task", "read"]);
-		const first = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"], "TODO_SNAPSHOT_FIRST");
-		const second = applyGoalAutoOrchestrateContext(first, state(), ["task", "read"], "TODO_SNAPSHOT_SECOND");
-		expect(second.messages.filter(message => text(message.content).includes(instruction))).toHaveLength(1);
-		expect(text(second.messages.at(-1)?.content)).toContain("TODO_SNAPSHOT_SECOND");
-		expect(text(second.messages.at(-1)?.content)).not.toContain("TODO_SNAPSHOT_FIRST");
-		expect(text(second.messages.at(-1)?.content)).toContain(objective);
-		expect(second.messages.at(-1)?.role).toBe("user");
-		expect(original.messages).toHaveLength(1);
-	});
-
-	test("auxiliary stripping removes only symbol-owned main expansion across shallow prepared snapshots", () => {
-		const original = providerContext(["task", "read"]);
-		original.messages[0]!.content = `Genuine user prose quoting the strategy:\n${instruction}`;
-		markPerCallContextMessage(original.messages[0]!);
-		const main = applyGoalAutoOrchestrateContext(original, state(), ["task", "read"]);
-		expect(main.messages).toHaveLength(2);
-		const prepared: Context = {
-			...main,
-			messages: main.messages.map(message => ({ ...message })),
-		};
-		const auxiliary = stripGoalAutoOrchestrateContext(prepared);
-		expect(auxiliary.messages).toEqual(original.messages);
-		expect(auxiliary.systemPrompt).toBe(original.systemPrompt);
-		expect(auxiliary.tools).toBe(original.tools);
-		expect(text(auxiliary.messages[0]?.content)).toContain(instruction);
-		expect(prepared.messages).toHaveLength(2);
-		expect(main.messages).toHaveLength(2);
-		expect(stripGoalAutoOrchestrateContext(original)).toBe(original);
-		expect(stripGoalAutoOrchestrateContext(auxiliary)).toBe(auxiliary);
 	});
 });

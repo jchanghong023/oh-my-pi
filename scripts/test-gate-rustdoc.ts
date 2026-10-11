@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 
 const incoming = process.argv.slice(2);
 const executable = process.env.OMP_GATE_ORIGINAL_RUSTDOC || "rustdoc";
@@ -40,8 +41,12 @@ try {
 		stderr: "inherit",
 		windowsHide: true,
 	});
-	process.exit(await child.exited);
+	const exitCode = await child.exited;
+	if (exitCode !== 0) reportGateFailure(new GateCommandError("rustdoc failed", exitCode));
+	process.exit(exitCode);
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
-	process.exit((error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1);
+	const exitCode = (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1;
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode));
+	process.exit(exitCode);
 }

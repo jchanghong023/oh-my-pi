@@ -1,10 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { DEFAULT_COMPACTION_SETTINGS, shouldCompact } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Message, Model, Usage, UserMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE } from "@oh-my-pi/pi-coding-agent/goals/request-context";
+import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -182,14 +181,11 @@ describe("AgentSession session stats", () => {
 		expect(session.getSessionStats()).toMatchObject({ tokens: { total: 7 }, cost: 7 });
 	});
 
-	it("reserves live goal context after rewrites and corrects anchored goal changes", () => {
+	it("counts persisted Goal contexts once and leaves their occupancy unchanged by live state", async () => {
 		const target = model();
-		const contextWindow = target.contextWindow;
-		if (!contextWindow) throw new Error("Expected a model with a context window");
 		const manager = SessionManager.inMemory();
-		const kept = manager.appendMessage({ role: "user", content: "retained history ".repeat(200), timestamp: 1 });
+		let kept = manager.appendMessage({ role: "user", content: "retained history ".repeat(200), timestamp: 1 });
 		session = createStatsSession(manager, target);
-		const baseline = session.getContextBreakdown()?.usedTokens ?? 0;
 		const state: GoalModeState = {
 			enabled: true,
 			mode: "active",
@@ -204,14 +200,82 @@ describe("AgentSession session stats", () => {
 				updatedAt: 1,
 			},
 		};
+		const assertOrdinaryOccupancy = () => {
+			const stored =
+				session!.agent.tokenizer.countTokens([...session!.systemPrompt]) +
+				session!.agent.tokenizer.countMessages(session!.messages);
+			expect(session!.getContextBreakdown()).toMatchObject({ anchored: false, usedTokens: stored });
+			return stored;
+		};
+		const baseline = assertOrdinaryOccupancy();
 		session.setGoalModeState(state);
-		const previous = session.getPerCallContextTokens();
-		const threshold = baseline + Math.floor(previous / 2);
-		const settings = { ...DEFAULT_COMPACTION_SETTINGS, thresholdTokens: threshold };
-		expect(shouldCompact(baseline, contextWindow, settings)).toBe(false);
-		expect(session.getContextBreakdown()?.usedTokens).toBe(baseline + previous);
-		expect(shouldCompact(session.getContextBreakdown()!.usedTokens, contextWindow, settings)).toBe(true);
+		expect(assertOrdinaryOccupancy()).toBe(baseline);
 
+		for (const summary of [undefined, "first compressed history", "second compressed history"]) {
+			if (summary) {
+				kept = manager.appendMessage({ role: "user", content: "new retained turn", timestamp: Date.now() });
+				manager.appendCompaction(summary, undefined, kept, 100_000);
+				session.agent.replaceMessages(manager.buildSessionContext().messages);
+			}
+			const before = assertOrdinaryOccupancy();
+			const notice = buildGoalAutoOrchestrateMessage(state, []);
+			if (!notice) throw new Error("Expected active auto Goal context");
+			await session.appendCustomMessage(notice);
+			const after = assertOrdinaryOccupancy();
+			expect(after).toBeGreaterThan(before);
+			const persisted = manager.buildSessionContext().messages;
+			const history = session.messages;
+			expect(
+				history.map(message => ({
+					role: message.role,
+					content: "content" in message ? message.content : undefined,
+				})),
+			).toEqual(
+				persisted.map(message => ({
+					role: message.role,
+					content: "content" in message ? message.content : undefined,
+				})),
+			);
+			expect(
+				persisted.filter(message => message.role === "custom" && message.content === notice.content),
+			).toHaveLength(1);
+
+			for (const next of [
+				{ ...state, goal: { ...state.goal, objective: state.goal.objective.repeat(2) } },
+				{ ...state, enabled: false },
+				{ ...state, autoOrchestrate: false },
+				undefined,
+				state,
+			]) {
+				session.setGoalModeState(next);
+				expect(assertOrdinaryOccupancy()).toBe(after);
+				expect(session.messages).toEqual(history);
+			}
+		}
+	});
+
+	it("does not retroactively edit provider occupancy when the persisted Goal is changed or paused", async () => {
+		const target = model();
+		const manager = SessionManager.inMemory();
+		session = createStatsSession(manager, target);
+		const state: GoalModeState = {
+			enabled: true,
+			mode: "active",
+			autoOrchestrate: true,
+			goal: {
+				id: "anchored-goal",
+				objective: "persist this complete objective ".repeat(500),
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: 1,
+				updatedAt: 1,
+			},
+		};
+		session.setGoalModeState(state);
+		const notice = buildGoalAutoOrchestrateMessage(state, []);
+		if (!notice) throw new Error("Expected active auto Goal context");
+		await session.appendCustomMessage(notice);
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "tool-loop response" }],
@@ -220,9 +284,6 @@ describe("AgentSession session stats", () => {
 			model: target.id,
 			timestamp: 2,
 			stopReason: "stop",
-			// Provider usage also includes unrelated extension context; only the Goal subset may be corrected here.
-			perCallContextTokens: previous + 2_000,
-			perCallContextTokensBySource: { [GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE]: previous },
 			usage: {
 				input: 100_000,
 				output: 0,
@@ -234,23 +295,27 @@ describe("AgentSession session stats", () => {
 		};
 		manager.appendMessage(assistant);
 		session.agent.appendMessage(assistant);
-		expect(session.getContextBreakdown()?.usedTokens).toBe(100_000);
-		session.setGoalModeState({ ...state, goal: { ...state.goal, objective: state.goal.objective.repeat(2) } });
-		expect(session.getContextBreakdown()?.usedTokens).toBe(100_000 - previous + session.getPerCallContextTokens());
-		session.setGoalModeState({ ...state, enabled: false });
-		expect(session.getContextBreakdown()?.usedTokens).toBe(100_000 - previous);
-		session.setGoalModeState(state);
-
-		for (const summary of ["first compressed history", "second compressed history"]) {
-			manager.appendCompaction(summary, undefined, kept, 100_000);
-			session.agent.replaceMessages(manager.buildSessionContext().messages);
-			const stored =
-				session.agent.tokenizer.countTokens([...session.systemPrompt]) +
-				session.agent.tokenizer.countMessages(session.messages);
-			expect(session.getContextBreakdown()).toMatchObject({ anchored: false, usedTokens: stored + previous });
-			const rewriteSettings = { ...settings, thresholdTokens: stored + Math.floor(previous / 2) };
-			expect(shouldCompact(stored, contextWindow, rewriteSettings)).toBe(false);
-			expect(shouldCompact(session.getContextBreakdown()!.usedTokens, contextWindow, rewriteSettings)).toBe(true);
+		const persisted = manager.buildSessionContext().messages;
+		const history = session.messages;
+		expect(
+			history.map(message => ({ role: message.role, content: "content" in message ? message.content : undefined })),
+		).toEqual(
+			persisted.map(message => ({
+				role: message.role,
+				content: "content" in message ? message.content : undefined,
+			})),
+		);
+		for (const next of [
+			state,
+			{ ...state, goal: { ...state.goal, objective: state.goal.objective.repeat(2) } },
+			{ ...state, enabled: false },
+			{ ...state, autoOrchestrate: false },
+			undefined,
+		]) {
+			session.setGoalModeState(next);
+			expect(session.getContextBreakdown()).toMatchObject({ anchored: true, usedTokens: 100_000 });
+			expect(session.getContextUsage()?.tokens).toBe(100_000);
+			expect(session.messages).toEqual(history);
 		}
 	});
 
