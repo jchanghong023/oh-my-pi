@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `-P <name>` as a built-in short form of `--profile <name>`, without requiring shell aliases.
 - Added `/jch-workflowzbatch <items> <concurrency> <task>` to expand independent batch requests through `workflowz`, including rpc-ui v3 discovery, completion and prompt dispatch, with separate task counts and concurrency, worker-owned execution, coordinator-only summaries instead of mandatory centralized re-review or checks, and file-scoped no-test/no-repository-wide-check instructions.
 - Added correlated stage and terminal-result logs for fork JchTools discovery and remote Agents, team, Goal, RPC controllers and persistence, docs/wiki, repo/AST, company model selection, compaction, and JCH Git.
 - Added redacted lifecycle and recovery logs for local gates, their supervisor and WSL stages, standalone installers, and `omp update`; provider-error turns no longer copy raw server error bodies into diagnostic files.

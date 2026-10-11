@@ -17,7 +17,7 @@ A recognized subcommand can follow leading launch flags. Those flags are
 forwarded to `launch` and `acp`, but recognized launch-only flags before other
 subcommands are stripped, not applied (for example, `omp --cwd dir update`).
 
-`--profile` is applied before subcommand routing, so it also scopes commands
+`--profile` (short form `-P`) is applied before subcommand routing, so it also scopes commands
 such as `config`, `models`, and `update`.
 
 Runtime help is also available:
@@ -73,7 +73,7 @@ Argument handling:
 | `--cwd <dir>` | Directory to start in (overrides the launch cwd). |
 | `--add-dir <dir>` | Add a workspace directory beyond the working directory (repeatable). |
 | `--allow-home` | Allow starting in `~` without auto-switching to a temp dir. |
-| `--profile <name>` | Use an isolated profile for auth, sessions, settings, and caches. |
+| `--profile <name>`, `-P <name>` | Use an isolated profile for auth, sessions, settings, and caches. |
 | `--alias <name>` | Create a shell shortcut for a named profile and exit; requires `--profile` or `OMP_PROFILE`. |
 | `--config <file>` | Load an extra `config.yml`-style overlay for this run (repeatable). |
 | `--session-dir <dir>` | Directory for session storage and lookup. |

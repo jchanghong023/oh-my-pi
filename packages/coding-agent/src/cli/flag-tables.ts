@@ -359,6 +359,7 @@ export function flagConsumesValue(flag: string, next: string | undefined): boole
 	// (`--system-prompt --foo` ⇒ the system prompt is literally `--foo`).
 	if (STRING_VALUE_FLAGS.has(flag)) return true;
 	const valueLike = !next.startsWith("-");
+	if (flag === "-P") return valueLike;
 	if (EXTENSION_SHADOWABLE_STRING_FLAGS.has(flag)) return valueLike;
 	if (OPTIONAL_VALUE_FLAGS.has(flag)) {
 		const config = OPTIONAL_FLAGS[flag];

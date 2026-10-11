@@ -147,6 +147,7 @@ const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--cwd": true,
 	"--model": true,
 	"--profile": true,
+	"-P": true,
 	"--prompt-cache-key": true,
 	"--provider": true,
 	"--thinking": true,

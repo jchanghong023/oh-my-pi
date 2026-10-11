@@ -279,7 +279,7 @@ describe("/fork terminal placement", () => {
 				"old-provider",
 				"--model",
 				"old-provider/model-a",
-				"--profile",
+				"-P",
 				"old-profile",
 				"--fork",
 				"stale-session",
@@ -301,6 +301,7 @@ describe("/fork terminal placement", () => {
 
 		const appArgs = command.slice(command.indexOf("omp-entry") + 1);
 		const modelIndex = appArgs.indexOf("--model");
+		expect(appArgs).not.toContain("-P");
 		expect(appArgs[modelIndex + 1]).toBe("current-provider/model-b");
 		expect(appArgs).not.toContain("old-provider");
 		expect(appArgs).not.toContain("old-provider/model-a");

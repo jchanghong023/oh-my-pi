@@ -17,6 +17,43 @@ describe("extractProfileFlags", () => {
 		});
 	});
 
+	it("distinguishes -P from print mode and honors the last profile spelling", () => {
+		const extracted = extractProfileFlags(["--profile", "personal", "-p", "-P", "work", "follow up"]);
+		expect(extracted.profile).toBe("work");
+		const parsed = parseArgs(extracted.argv);
+		expect(parsed.print).toBe(true);
+		expect(parsed.messages).toEqual(["follow up"]);
+		expect(extractProfileFlags(["-P", "work", "--profile=personal"]).profile).toBe("personal");
+	});
+
+	it("preserves a bare resume picker and prompt when stripping -P", () => {
+		const extracted = extractProfileFlags(["-r", "-P", "work", "follow up"]);
+		expect(extracted.profile).toBe("work");
+		const parsed = parseArgs(extracted.argv);
+		expect(parsed.resume).toBe(true);
+		expect(parsed.messages).toEqual(["follow up"]);
+	});
+
+	it("does not activate -P used as a string value or beyond an argument boundary", () => {
+		const prompt = extractProfileFlags(["--system-prompt", "-P", "work"]);
+		expect(prompt.profile).toBeUndefined();
+		expect(parseArgs(prompt.argv).systemPrompt).toBe("-P");
+		expect(parseArgs(prompt.argv).messages).toEqual(["work"]);
+
+		const subcommand = extractProfileFlags(["grep", "-P", "work"]);
+		expect(subcommand.profile).toBeUndefined();
+		expect(subcommand.argv).toEqual(["grep", "-P", "work"]);
+
+		const literal = extractProfileFlags(["--", "-P", "work"]);
+		expect(literal.profile).toBeUndefined();
+		expect(parseArgs(literal.argv).messages).toEqual(["-P", "work"]);
+	});
+
+	it("rejects missing -P values instead of consuming a following flag", () => {
+		expect(() => extractProfileFlags(["-P"])).toThrow("-P requires a profile name");
+		expect(() => extractProfileFlags(["-P", "--version"])).toThrow("-P requires a profile name");
+	});
+
 	it("does not eat the value of known string-valued flags", () => {
 		// `omp --system-prompt --profile foo` must pass the literal `--profile`
 		// through to the launch parser (it's the system prompt) and `foo` is the

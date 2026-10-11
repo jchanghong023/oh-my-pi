@@ -44,7 +44,10 @@ export const launchHelp = {
 		}),
 		"append-system-prompt": Flags.string({ description: "Append text or file contents to the system prompt" }),
 		"allow-home": Flags.boolean({ description: "Allow starting in ~ without auto-switching to a temp dir" }),
-		profile: Flags.string({ description: "Use an isolated profile for auth, sessions, settings, and caches" }),
+		profile: Flags.string({
+			char: "P",
+			description: "Use an isolated profile for auth, sessions, settings, and caches",
+		}),
 		alias: Flags.string({ description: "Create a shell shortcut for the selected profile and exit" }),
 		cwd: Flags.string({ description: "Directory to start in (overrides the launch cwd)" }),
 		mode: Flags.string({
@@ -124,6 +127,7 @@ export const launchHelp = {
 		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
 		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
 		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,
+		`# Use an isolated work profile\n  ${APP_NAME} -P work`,
 		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias omp-work`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,

@@ -1,5 +1,5 @@
 /**
- * Bootstrap-time argv preparser for the global `--profile` / `--alias` flags.
+ * Bootstrap-time argv preparser for the global `--profile` / `-P` / `--alias` flags.
  *
  * Profile selection MUST happen before any module reads `getAgentDir()` (notably
  * `@oh-my-pi/pi-utils/env`, which eagerly loads `.env` from the agent directory
@@ -60,7 +60,7 @@ export interface ProfileBootstrapResult {
 }
 
 /**
- * Strip `--profile` / `--alias` from argv while preserving the surrounding
+ * Strip `--profile` / `-P` / `--alias` from argv while preserving the surrounding
  * argument structure, returning the residual argv to hand to the launch parser
  * and the captured flag values.
  *
@@ -106,10 +106,10 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			continue;
 		}
 
-		if (arg === "--profile") {
+		if (arg === "--profile" || arg === "-P") {
 			const value = argv[index + 1];
 			if (!value || value.startsWith("-")) {
-				throw new Error("--profile requires a profile name");
+				throw new Error(`${arg} requires a profile name`);
 			}
 			profile = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);

@@ -32,6 +32,8 @@ omp
 
 用 `omp -c` 继续当前项目的最近会话；没有可恢复会话时会新建。
 
+用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录仍隔离，无需配置 shell alias。
+
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
 
 ## 3. 常用操作

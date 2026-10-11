@@ -46,6 +46,7 @@
 | 当前平台 fork 本地门禁（全部 fastcheck 检查 + fork TS 测试、受影响 Rust 测试、脚本测试、native 构建及隔离 TUI 冒烟；非编译预算 900 秒） | `bun run fulltest` |
 | 本机 + 可用的项目所需 WSL 本地门禁（不推送、不触发 CI；非编译预算 1500 秒） | `bun run slowtest` |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
+| 启动独立 profile（内置短参数，无需 shell alias） | `omp -P <name>`（等同 `omp --profile <name>`） |
 
 ## 开发约束
 

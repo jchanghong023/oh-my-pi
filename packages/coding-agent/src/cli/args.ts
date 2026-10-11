@@ -314,7 +314,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.version = true;
 		} else if (arg === "--allow-home") {
 			result.allowHome = true;
-		} else if (arg === "--profile" && i + 1 < args.length) {
+		} else if ((arg === "--profile" || arg === "-P") && i + 1 < args.length) {
 			// Normally stripped by `extractProfileFlags` before parseArgs sees it;
 			// kept here as a fallback for direct parseArgs callers.
 			result.profile = args[++i];

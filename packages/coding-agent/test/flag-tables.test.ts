@@ -238,6 +238,15 @@ describe("restartArgv (/restart relaunch argv)", () => {
 		]);
 	});
 
+	it("retains the short profile and its value when restarting a session", () => {
+		const argv = restartArgv(["-P", "work", "-p", "initial prompt"], "sid");
+		const parsed = parseArgs(argv);
+		expect(parsed.profile).toBe("work");
+		expect(parsed.print).toBe(true);
+		expect(parsed.resume).toBe("sid");
+		expect(parsed.messages).toEqual([]);
+	});
+
 	it("drops every session-source flag, including inline = and value forms", () => {
 		expect(
 			restartArgv(["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz", "--from-claude"], "sid"),
