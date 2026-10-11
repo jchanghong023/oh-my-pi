@@ -46,6 +46,18 @@ async function startBroker(projectDir: string, runtimeDir: string): Promise<Embe
 	return { finished };
 }
 
+/** Exercise ownership through real child I/O without shell startup or PTY latency. */
+function serviceSettings(): Settings {
+	const settings = Settings.isolated();
+	vi.spyOn(settings, "getShellConfig").mockReturnValue({
+		shell: process.execPath,
+		args: ["-e"],
+		env: {},
+		prefix: undefined,
+	});
+	return settings;
+}
+
 describe("session-owned supervised services", () => {
 	it("delivers a failed service only to its session when another session shares the broker", async () => {
 		using tempDir = TempDir.createSync("@omp-service-completion-");
@@ -55,7 +67,7 @@ describe("session-owned supervised services", () => {
 		const client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
 		const previousTitle = process.title;
 		const broker = await startBroker(projectDir, runtimeDir);
-		const settings = Settings.isolated();
+		const settings = serviceSettings();
 		const firstCompletions: DaemonCompletionNotification[] = [];
 		const secondCompletions: DaemonCompletionNotification[] = [];
 		const delivered = Promise.withResolvers<string>();
@@ -79,9 +91,9 @@ describe("session-owned supervised services", () => {
 			vi.spyOn(brokerClients, "daemonClientForProject").mockResolvedValue(client);
 			const started = await startService(first, {
 				name: "failing-service",
-				command: "echo service-ready; read answer; exit 3",
-				// Windows spawns the shell command markedly slower under load.
-				ready: { log: "service-ready", timeout: process.platform === "win32" ? 15 : 5 },
+				command: 'console.log("service-ready"); await Bun.stdin.stream().getReader().read(); process.exit(3);',
+				pty: false,
+				ready: { log: "service-ready", timeout: 5 },
 			});
 			expect(started.daemon.state).toBe("ready");
 			await listServices(second);
@@ -117,7 +129,7 @@ describe("session-owned supervised services", () => {
 		const session: ToolSession = {
 			cwd: projectDir,
 			hasUI: false,
-			settings: Settings.isolated(),
+			settings: serviceSettings(),
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 			getAgentId: () => "Main",
@@ -138,9 +150,9 @@ describe("session-owned supervised services", () => {
 			vi.spyOn(brokerClients, "daemonClientForProject").mockResolvedValue(client);
 			await startService(session, {
 				name: "old-service",
-				command: "echo service-ready; read answer; exit 3",
-				// Windows spawns the shell command markedly slower under load.
-				ready: { log: "service-ready", timeout: process.platform === "win32" ? 15 : 5 },
+				command: 'console.log("service-ready"); await Bun.stdin.stream().getReader().read(); process.exit(3);',
+				pty: false,
+				ready: { log: "service-ready", timeout: 5 },
 			});
 			switchTo("new-session");
 			await listServices(session);
