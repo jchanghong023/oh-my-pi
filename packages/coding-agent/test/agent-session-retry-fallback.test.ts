@@ -3704,7 +3704,10 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("matches id-prefixed wildcard keys and strips the vendor prefix for direct-provider targets", async () => {
-		const fallbackModel = getTestModel("google-vertex", model => !!getBundledModel("openrouter", `google/${model.id}`));
+		const fallbackModel = getTestModel(
+			"google-vertex",
+			model => !!getBundledModel("openrouter", `google/${model.id}`),
+		);
 		const primaryModel = getBundledModel("openrouter", `google/${fallbackModel.id}`);
 		if (!primaryModel || !fallbackModel) {
 			throw new Error("Expected bundled test models to exist");
