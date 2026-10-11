@@ -314,6 +314,8 @@ describe("MCPManager initial connection ownership", () => {
 		const manager = new MCPManager(process.cwd());
 		const hangFixture = path.join(import.meta.dir, "fixtures", "hang-during-init-mcp.ts");
 		const connectSpy = vi.spyOn(mcpClient, "connectToServer");
+		// Initial credential setup is not the cancellation boundary under test.
+		const credentialSpy = vi.spyOn(configValue, "resolveConfigValue").mockResolvedValue("probe");
 		const config: MCPStdioServerConfig = {
 			type: "stdio",
 			command: process.execPath,
@@ -326,8 +328,13 @@ describe("MCPManager initial connection ownership", () => {
 			expect(connectSpy).toHaveBeenCalledTimes(1);
 			// The reconnect is still resolving its `!command` credential when teardown runs.
 			const credential = Promise.withResolvers<string | undefined>();
-			vi.spyOn(configValue, "resolveConfigValue").mockImplementation(() => credential.promise);
+			const resolving = Promise.withResolvers<void>();
+			credentialSpy.mockImplementation(() => {
+				resolving.resolve();
+				return credential.promise;
+			});
 			const reconnect = manager.reconnectServer("hang", { manual: true });
+			await resolving.promise;
 			await manager.disconnectAll();
 			// Settles on the teardown alone: the credential never resolves and no handshake starts.
 			expect(await withTimeout(reconnect, 2_000, "reconnect outlived disconnectAll")).toBeNull();
