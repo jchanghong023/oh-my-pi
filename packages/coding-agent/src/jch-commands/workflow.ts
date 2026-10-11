@@ -1,3 +1,5 @@
+import { prompt } from "@oh-my-pi/pi-utils";
+import workflowzBatchPrompt from "../prompts/jch-workflowzbatch.md" with { type: "text" };
 import { parseSubcommand, usage } from "../slash-commands/helpers/parse";
 import type { SlashCommandSpec } from "../slash-commands/types";
 import { defineJchPromptCommand } from "./define";
@@ -9,6 +11,7 @@ const JCH_FUNCTIONAL_REVIEW_USAGE =
 	"用法：/jchfuncreview uncommitted | /jchfuncreview commit <ref> | /jchfuncreview path <path>";
 const JCH_VERIFY_USAGE = "用法：/jchverify uncommitted | /jchverify commit <ref> | /jchverify path <path>";
 const JCH_CATCHUP_USAGE = "用法：/jchcatchup | /jchcatchup full [路径、提交范围或关注点]";
+const JCH_WORKFLOWZ_BATCH_USAGE = "用法：/jch-workflowzbatch <任务块软目标：正整数> <并发上限：正整数> <任务正文>";
 
 const JCH_CATCHUP_FULL_PROMPT = `恢复当前代码工作现场。不修改工作区，先运行 git fetch --all 更新远端引用；不 pull、push、reset、clean、stash、commit、切换分支或自动继续实现。识别仓库、当前分支和 upstream；检查 conflicts、staged、unstaged、untracked，阅读 staged/unstaged diff，并读取与当前工作相关的 untracked 文本源文件，跳过生成物、依赖、二进制和大文件。确认相对最新 upstream 的 ahead/behind、local-only 和 remote-only commits。存在本地修改时，按涉及路径读取足以解释修改的相关 commits，默认不超过 20 个；工作区干净时，根据分支差异和最近提交恢复上下文。结合真实代码总结“已完成 / 当前状态 / 未完成与异常 / 建议下一步”。参数只缩小路径、提交范围或关注点。`;
 
@@ -82,6 +85,23 @@ const JCH_VERIFY_PROMPT = `验证以下范围，不修复问题：
 验证 commit 时确认当前代码是否包含该 commit；需要隔离执行时使用临时工作树，NEVER 污染当前工作区。任何失败只调查到足以给出准确证据，不修改代码。最终按“结论（通过/失败/未验证）/ 覆盖的契约 / 命令与结果 / 剩余风险或阻塞”报告。`;
 
 export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "jch-workflowzbatch",
+		description: "JCH：展开独立任务工作流批处理要求，禁止测试和全仓检查",
+		allowArgs: true,
+		inlineHint: "<任务块软目标> <并发上限> <任务正文>",
+		handle(command, runtime) {
+			const match = /^([1-9]\d*)\s+([1-9]\d*)\s+([\s\S]+)$/.exec(command.args.trim());
+			if (!match) return usage(JCH_WORKFLOWZ_BATCH_USAGE, runtime);
+			const targetItems = Number(match[1]);
+			const maxConcurrency = Number(match[2]);
+			const task = match[3]!.trim();
+			if (!Number.isSafeInteger(targetItems) || !Number.isSafeInteger(maxConcurrency) || !task) {
+				return usage(JCH_WORKFLOWZ_BATCH_USAGE, runtime);
+			}
+			return { prompt: prompt.compile(workflowzBatchPrompt)({ targetItems, maxConcurrency, task }).trim() };
+		},
+	},
 	defineJchPromptCommand({
 		name: "jchfix",
 		description: "JCH：定位根因、修复问题并验证",

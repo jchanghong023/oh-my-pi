@@ -130,6 +130,38 @@ describe("JCH scope parsing through the public ACP dispatcher", () => {
 	});
 });
 
+describe("JCH batch argument parsing", () => {
+	it("separates both counts while preserving task markup and whitespace-sensitive code", async () => {
+		const { runtime, output } = textRuntime();
+		const task = [
+			"审查 src/a.ts & src/b.ts",
+			"保留 <T>、{{targetItems}} 和 $& 原文",
+			"```ts",
+			"const s = `a  ",
+			"b`;",
+			"```",
+			"",
+			"",
+			"| padded | cells |",
+		].join("\r\n");
+		const result = await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch 200\t30\n${task}`, runtime);
+		if (!result || !("prompt" in result)) throw new Error("Expected a residual model prompt");
+		expect(result.prompt.startsWith("workflowz\n")).toBe(true);
+		expect(result.prompt.split("## 任务正文\n\n")[1]).toBe(task);
+		expect(output).toEqual([]);
+	});
+
+	it.each([
+		["non-positive count", "0 30 审查"],
+		["missing task", "200 30"],
+		["unsafe count", "200 9007199254740992 审查"],
+	])("rejects %s without starting a model turn", async (_boundary, args) => {
+		const { runtime, output } = textRuntime();
+		expect(await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch ${args}`, runtime)).toEqual({ consumed: true });
+		expect(output[0]).toStartWith("用法：/jch-workflowzbatch ");
+	});
+});
+
 describe("public command inventory", () => {
 	it("does not advertise custom or file names captured by a builtin colon-prefix or alias", async () => {
 		const session = {
