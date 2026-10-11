@@ -265,6 +265,91 @@ async function fixture(
 }
 
 describe("JchTools SDK remote Agent session", () => {
+	it("reuses backend session headers only within the same chat, branch and cwd", async () => {
+		const headers: (string | null)[] = [];
+		let next = 0;
+		const f = await fixture((_body, request) => {
+			const id = request.headers.get("X-JchTools-Session-ID");
+			headers.push(id);
+			const response = completed("backend reply");
+			response.headers.set("X-JchTools-Session-ID", id ?? `backend-${++next}`);
+			return response;
+		}, true);
+		const session = await f.create(f.remote);
+		await session.prompt("first");
+		const firstLeaf = f.manager.getLeafId()!;
+		await session.prompt("second");
+		expect(headers).toEqual([null, "backend-1"]);
+		expect(f.requests[1].messages).toEqual([
+			{ role: "user", content: "first" },
+			{ role: "assistant", content: "backend reply" },
+			{ role: "user", content: "second" },
+		]);
+		await session.navigateTree(firstLeaf);
+		await session.prompt("branch task");
+		expect(headers.at(-1)).toBeNull();
+		await session.prompt("branch followup");
+		expect(headers.at(-1)).toBe("backend-2");
+		await session.fork();
+		await session.prompt("fork task");
+		expect(headers.at(-1)).toBeNull();
+		const otherCwd = path.join(path.dirname(f.cwd), "other-cwd");
+		fs.mkdirSync(otherCwd);
+		f.manager.setCwdWithoutRelocation(otherCwd);
+		await session.prompt("changed cwd");
+		expect(headers.at(-1)).toBeNull();
+		await session.prompt("same changed cwd");
+		expect(headers.at(-1)).toBe("backend-4");
+		await session.newSession();
+		await session.prompt("new chat");
+		expect(headers.at(-1)).toBeNull();
+		const independent = await f.create(f.remote, SessionManager.inMemory(otherCwd));
+		await independent.prompt("independent chat");
+		expect(headers.at(-1)).toBeNull();
+	});
+
+	it("surfaces an invalid backend session without retry or task replay", async () => {
+		let count = 0;
+		const headers: (string | null)[] = [];
+		const f = await fixture((_body, request) => {
+			headers.push(request.headers.get("X-JchTools-Session-ID"));
+			if (++count === 1) {
+				const response = completed("backend reply");
+				response.headers.set("X-JchTools-Session-ID", "expired-backend");
+				return response;
+			}
+			if (count === 2 || headers.at(-1) === "expired-backend") {
+				return Response.json(
+					{ error: { code: "session_unavailable", message: "此会话已失效，本轮未重放" } },
+					{ status: 400, headers: { "X-JchTools-Session-ID": "untrusted-error-session" } },
+				);
+			}
+			if (count === 4) {
+				return Response.json({ error: { code: "invalid_request", message: "invalid input" } }, { status: 400 });
+			}
+			const response = completed("new backend reply");
+			response.headers.set("X-JchTools-Session-ID", "new-backend");
+			return response;
+		});
+		const session = await f.create(f.remote);
+		await session.prompt("first");
+		await session.prompt("side effect task");
+		expect(count).toBe(2);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("error");
+		expect(session.getLastAssistantMessage()?.errorMessage).toContain("此会话已失效");
+		await session.prompt("new caller task");
+		expect(count).toBe(3);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+		await session.prompt("invalid input");
+		expect(count).toBe(4);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("error");
+		await session.prompt("next caller task");
+		expect(count).toBe(5);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+		expect(headers).toEqual([null, "expired-backend", null, "new-backend", "new-backend"]);
+		expect(f.events.some(event => event.type === "auto_retry_start")).toBe(false);
+	});
+
 	it("keeps deferred builtin roles automatic while honoring an explicitly configured remote role", async () => {
 		const f = await fixture(undefined, false, true, "claude-haiku-5-5");
 		cfgDisabledProviders.override(
@@ -306,7 +391,7 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(body.model).toBe("backend/agent");
 		expect(body.messages.at(-1)).toEqual({ role: "user", content: "perform my explicit task" });
 		const wire = JSON.stringify(body);
-		expect(body.messages.find(message => message.role === "system")?.content).toContain(f.cwd);
+		expect(body.messages.some(message => message.role === "system")).toBe(false);
 		expect(wire).not.toContain("FRONTEND_SYSTEM_INSTRUCTION_SENTINEL");
 		expect(wire).not.toContain("FRONTEND_TOOL_INSTRUCTION_SENTINEL");
 		expect(wire).not.toContain("frontend_probe");
@@ -519,7 +604,6 @@ describe("JchTools SDK remote Agent session", () => {
 			expect(f.requests).toHaveLength(1);
 			const first = f.requests[0];
 			expect(first.messages.filter(message => message.role !== "system")).toEqual([
-				{ role: "user", content: expected.content },
 				{ role: "user", content: "perform the first explicit automatic Goal task" },
 			]);
 			expect(
@@ -650,6 +734,8 @@ describe("JchTools SDK remote Agent session", () => {
 		await session.prompt("remote first");
 		const firstRemote = f.requests.find(body => body.model === "backend/agent");
 		expect(firstRemote?.messages.filter(message => message.role !== "system")).toEqual([
+			{ role: "user", content: "ordinary task" },
+			{ role: "assistant", content: "ordinary answer" },
 			{ role: "user", content: "remote first" },
 		]);
 		expect(transcriptContent(session).slice(0, ordinaryHistory.length)).toEqual(ordinaryHistory);
@@ -661,6 +747,10 @@ describe("JchTools SDK remote Agent session", () => {
 		await session.setModelTemporary(f.remote);
 		await session.prompt("remote second");
 		expect(f.requests.at(-1)?.messages.filter(message => message.role !== "system")).toEqual([
+			...firstRemote!.messages,
+			{ role: "assistant", content: "remote answer" },
+			{ role: "user", content: "ordinary second" },
+			{ role: "assistant", content: "ordinary answer" },
 			{ role: "user", content: "remote second" },
 		]);
 		await f.manager.ensureOnDisk();
@@ -673,6 +763,10 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(transcriptContent(resumed)).toEqual(beforeResume);
 		await resumed.prompt("remote resumed");
 		expect(f.requests.at(-1)?.messages.filter(message => message.role !== "system")).toEqual([
+			...firstRemote!.messages,
+			{ role: "assistant", content: "remote answer" },
+			{ role: "user", content: "ordinary second" },
+			{ role: "assistant", content: "ordinary answer" },
 			{ role: "user", content: "remote second" },
 			{ role: "assistant", content: "remote answer" },
 			{ role: "user", content: "remote resumed" },
@@ -711,9 +805,9 @@ describe("JchTools SDK remote Agent session", () => {
 		});
 		expect(f.requests).toHaveLength(2);
 		expect(f.requests.at(-1)?.messages.filter(message => message.role !== "system")).toEqual([
+			{ role: "user", content: "CANCELLED_ORDINARY_TASK_SENTINEL" },
 			{ role: "user", content: "new backend custom task" },
 		]);
-		expect(JSON.stringify(f.requests.at(-1))).not.toContain("CANCELLED_ORDINARY_TASK_SENTINEL");
 		expect(transcriptContent(session).slice(0, ordinaryHistory.length)).toEqual(ordinaryHistory);
 		const remoteLeaf = f.manager.getLeafId();
 		if (!remoteLeaf) throw new Error("Expected backend assistant entry");
@@ -728,6 +822,7 @@ describe("JchTools SDK remote Agent session", () => {
 		await session.prompt("explicit task after navigation");
 		expect(f.requests).toHaveLength(4);
 		expect(f.requests.at(-1)?.messages.filter(message => message.role !== "system")).toEqual([
+			{ role: "user", content: "CANCELLED_ORDINARY_TASK_SENTINEL" },
 			{ role: "user", content: "new backend custom task" },
 			{ role: "assistant", content: "remote answer" },
 			{ role: "user", content: "explicit task after navigation" },
@@ -914,7 +1009,7 @@ describe("JchTools SDK remote Agent session", () => {
 		]);
 	});
 
-	it("keeps a resumed ordinary failed-task epoch out of later backend prompts", async () => {
+	it("retains visible user tasks across an ordinary failure and SDK resume", async () => {
 		const f = await fixture(
 			body =>
 				body.model === "normal" ? new Response("fatal bad request", { status: 400 }) : completed("remote answer"),
@@ -930,8 +1025,8 @@ describe("JchTools SDK remote Agent session", () => {
 		await session.dispose();
 		const resumed = await f.create(undefined, await SessionManager.open(file));
 		await resumed.prompt("resumed remote task");
-		expect(JSON.stringify(f.requests.at(-1))).not.toContain("ORDINARY_FAILED_TASK_SENTINEL");
 		expect(f.requests.at(-1)?.messages.filter(message => message.role !== "system")).toEqual([
+			{ role: "user", content: "ORDINARY_FAILED_TASK_SENTINEL" },
 			{ role: "user", content: "new remote task" },
 			{ role: "assistant", content: "remote answer" },
 			{ role: "user", content: "resumed remote task" },

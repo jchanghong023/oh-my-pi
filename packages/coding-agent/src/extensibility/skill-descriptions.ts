@@ -29,12 +29,14 @@ const compressionSlots = new Semaphore(4);
 export type SkillDescriptionCompressor = (name: string, description: string, request: string) => Promise<string>;
 
 /**
- * Resolve the configured fast role for each background request, without using the foreground model.
- * `getTelemetry` supplies the telemetry handle for each request's chat span.
+ * Resolve the configured fast role and current task directory for each background request,
+ * without using the foreground model. `getTelemetry` supplies the telemetry handle for each
+ * request's chat span.
  */
 export function createSkillDescriptionCompressor(
 	registry: ModelRegistry,
 	settings: Settings,
+	getCwd: () => string,
 	sessionId?: string,
 	getTelemetry?: () => AgentTelemetry | undefined,
 ): SkillDescriptionCompressor {
@@ -65,6 +67,7 @@ export function createSkillDescriptionCompressor(
 			{
 				apiKey: registry.resolver(model, sessionId),
 				sessionId,
+				cwd: getCwd(),
 				maxTokens: 1024,
 				disableReasoning: true,
 				temperature: 0,

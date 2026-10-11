@@ -9,18 +9,40 @@ import {
 	createAssistantMessageEventStream,
 	type Message,
 	type Model,
+	type ProviderSessionState,
 	type SimpleStreamOptions,
 	type TextContent,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { isRecord, logger, prompt, readSseEvents } from "@oh-my-pi/pi-utils";
-import remoteAgentPrompt from "../prompts/system/jchtools-remote-agent.md" with { type: "text" };
+import { isPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { isRecord, logger, readSseEvents } from "@oh-my-pi/pi-utils";
 
 export const JCHTOOLS_PROVIDER_ID = "jchtools";
 export const JCHTOOLS_API = "jchtools-agent";
+export const JCHTOOLS_SESSION_STATE_KEY = `${JCHTOOLS_API}:caller-text-v1`;
 
 export function isJchToolsAgentModel(model: Pick<Model<Api>, "api"> | undefined): boolean {
 	return model?.api === JCHTOOLS_API;
+}
+
+// Ephemeral caller-text v1 binding: never restored from provider cache lineage or session files.
+class JchToolsSessionState implements ProviderSessionState {
+	#scope: string | undefined;
+	#sessionId: string | undefined;
+	close(): void {
+		this.#scope = undefined;
+		this.#sessionId = undefined;
+	}
+	bind(scope: string): string | undefined {
+		if (scope !== this.#scope) {
+			this.close();
+			this.#scope = scope;
+		}
+		return this.#sessionId;
+	}
+	remember(scope: string, id: string): void {
+		if (this.#scope === scope) this.#sessionId = id;
+	}
 }
 
 function inputError(detail: string): AIError.ProviderResponseError {
@@ -31,12 +53,8 @@ function inputError(detail: string): AIError.ProviderResponseError {
 }
 
 function textContent(message: Message): string {
-	if (message.role !== "user" && message.role !== "assistant") {
-		throw inputError(`unsupported ${message.role} message; only user and remote assistant text is supported`);
-	}
-	if (message.providerPayload !== undefined) throw inputError("opaque provider history is unsupported");
-	if (message.role === "assistant" && !isJchToolsAgentModel(message)) {
-		throw inputError("ordinary assistant history must be isolated before sending");
+	if (message.role !== "user" && message.role !== "assistant" && message.role !== "developer") {
+		throw inputError(`unsupported ${message.role} message; only caller text is supported`);
 	}
 	if (typeof message.content === "string") return message.content;
 	if (!Array.isArray(message.content)) throw inputError("message content must be text");
@@ -50,35 +68,60 @@ function textContent(message: Message): string {
 		.join("");
 }
 
-/** Find the remote text epoch before ordinary conversion can erase failed assistants. */
-export function getJchToolsEpochStart(messages: readonly (AgentMessage | Message)[]): number {
-	let start = 0;
-	for (let index = 0; index < messages.length; index++) {
-		const message = messages[index];
-		if (message.role === "toolResult" || (message.role === "assistant" && !isJchToolsAgentModel(message))) {
-			start = index + 1;
+/** Select source-owned conversation text before ordinary conversion loses provenance. */
+export function projectJchToolsMessages(messages: readonly AgentMessage[]): AgentMessage[] {
+	return messages.flatMap((message): AgentMessage[] => {
+		if (isPerCallContextMessage(message)) return [];
+		switch (message.role) {
+			case "user":
+				return message.synthetic || message.attribution === "agent" ? [] : [message];
+			case "developer":
+				return message.attribution === "user" && !message.synthetic ? [message] : [];
+			case "assistant": {
+				const content = message.content.filter(block => block.type === "text");
+				return content.length ? [{ ...message, content, providerPayload: undefined }] : [];
+			}
+			case "fileMention":
+				return [message];
+			case "custom": {
+				if (message.attribution !== "user" || message.customType === "goal-auto-orchestrate-context") return [];
+				// Skill bodies are harness instructions; only the submitted draft is caller-owned.
+				const details = isRecord(message.details) ? message.details : undefined;
+				const content = message.customType === "skill-prompt" ? details?.prompt : message.content;
+				if (content === undefined) return [];
+				if (typeof content !== "string" && !Array.isArray(content)) return [];
+				return [{ role: "user", content, attribution: "user", timestamp: message.timestamp }];
+			}
+			default:
+				return [];
 		}
-	}
-	return start;
+	});
 }
 
-/** Isolate a remote text epoch without rewriting the persisted, ordinary transcript. */
-export function projectJchToolsContext(context: Context, cwd: string): Context {
-	const latestUser = context.messages.findLast(message => message.role === "user");
-	if (latestUser) textContent(latestUser);
-	const messages = context.messages.slice(getJchToolsEpochStart(context.messages)).map(message => {
-		const text = textContent(message);
-		return message.role === "user"
-			? { role: "user" as const, content: text, timestamp: message.timestamp }
-			: { ...message, content: [{ type: "text" as const, text }] };
-	});
-	if (!messages.some(message => message.role === "user")) {
-		throw inputError("a new text user prompt is required after the ordinary tool/assistant epoch");
+/** Drop harness context, retaining complete visible text history across model switches. */
+export function projectJchToolsContext(context: Context): Context {
+	const messages: Message[] = [];
+	for (const message of context.messages) {
+		if (isPerCallContextMessage(message) || message.role === "toolResult") continue;
+		if (message.role === "user" && (message.synthetic || message.attribution === "agent")) continue;
+		if (message.role === "developer" && (message.attribution !== "user" || message.synthetic)) continue;
+		if (message.role === "assistant") {
+			const text = message.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("");
+			if (text) messages.push({ ...message, providerPayload: undefined, content: [{ type: "text", text }] });
+		} else {
+			messages.push({
+				role: message.role,
+				content: textContent(message),
+				timestamp: message.timestamp,
+				attribution: "user",
+			});
+		}
 	}
-	return {
-		systemPrompt: [prompt.render(remoteAgentPrompt, { cwd: path.resolve(cwd) }).trim()],
-		messages,
-	};
+	if (!messages.some(message => message.role === "user")) throw inputError("a text user prompt is required");
+	return { messages };
 }
 
 function responseError(
@@ -164,14 +207,12 @@ export function streamJchToolsAgent(
 			if (context.tools?.length || context.inactiveTools?.length || options?.toolChoice !== undefined) {
 				throw inputError("frontend tools and tool choice are unsupported");
 			}
-			const messages: { role: "system" | "user" | "assistant"; content: string }[] = [];
-			for (const system of context.systemPrompt ?? []) {
-				if (typeof system !== "string") throw inputError("system content must be text");
-				messages.push({ role: "system", content: system });
-			}
-			for (const message of context.messages) {
+			const messages: { role: "user" | "assistant" | "developer"; content: string }[] = [];
+			for (const message of projectJchToolsContext(context).messages) {
 				const content = textContent(message);
-				if (message.role !== "user" && message.role !== "assistant") throw inputError("unsupported message role");
+				if (message.role !== "user" && message.role !== "assistant" && message.role !== "developer") {
+					throw inputError("unsupported message role");
+				}
 				messages.push({ role: message.role, content });
 			}
 			if (!messages.some(message => message.role === "user")) throw inputError("a text user prompt is required");
@@ -187,6 +228,28 @@ export function streamJchToolsAgent(
 			) {
 				throw inputError("baseUrl must be the discovered bare local HTTP service root");
 			}
+			const scope = options?.sessionId
+				? `${options.sessionId}\0${path.resolve(options.cwd)}\0${base.origin}`
+				: undefined;
+			let sessionState: JchToolsSessionState | undefined;
+			if (scope && options?.providerSessionState) {
+				// Old projection bindings are incompatible with the new complete, filtered history.
+				const legacy = options.providerSessionState.get(JCHTOOLS_API);
+				if (legacy) {
+					legacy.close();
+					options.providerSessionState.delete(JCHTOOLS_API);
+				}
+				const existing = options.providerSessionState.get(JCHTOOLS_SESSION_STATE_KEY);
+				if (existing instanceof JchToolsSessionState) sessionState = existing;
+				else {
+					existing?.close();
+					sessionState = new JchToolsSessionState();
+					options.providerSessionState.set(JCHTOOLS_SESSION_STATE_KEY, sessionState);
+				}
+			}
+			const backendSessionId = scope ? sessionState?.bind(scope) : undefined;
+			const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
+			if (backendSessionId) headers["X-JchTools-Session-ID"] = backendSessionId;
 			options?.signal?.throwIfAborted();
 			stream.push({ type: "start", partial: output });
 			stage = "http_request";
@@ -204,7 +267,7 @@ export function streamJchToolsAgent(
 			});
 			const response = await fetch(new URL("/v1/chat/completions", base), {
 				method: "POST",
-				headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+				headers,
 				body: JSON.stringify({ model: model.id, messages, stream: true, cwd: options.cwd }),
 				signal: options.signal,
 				redirect: "error",
@@ -224,7 +287,10 @@ export function streamJchToolsAgent(
 				let detail = body;
 				try {
 					const envelope: unknown = JSON.parse(body);
-					if (isRecord(envelope) && envelope.error !== undefined) detail = errorDetail(envelope.error);
+					if (isRecord(envelope) && envelope.error !== undefined) {
+						if (isRecord(envelope.error) && envelope.error.code === "session_unavailable") sessionState?.close();
+						detail = errorDetail(envelope.error);
+					}
 				} catch (error) {
 					logger.debug("JchTools HTTP error body is not JSON", {
 						component: "jchtools",
@@ -246,6 +312,8 @@ export function streamJchToolsAgent(
 				await response.body.cancel();
 				throw responseError("response is not a text/event-stream");
 			}
+			const responseSessionId = response.headers.get("X-JchTools-Session-ID");
+			if (scope && responseSessionId) sessionState?.remember(scope, responseSessionId);
 			stage = "read_sse";
 			for await (const event of readSseEvents(response.body, options?.signal)) {
 				options?.signal?.throwIfAborted();

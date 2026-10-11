@@ -1176,6 +1176,7 @@ interface RunMonitorArgs {
 	id: string;
 	agent: AgentDefinition;
 	task: string;
+	cwd: string;
 	assignment?: string;
 	description?: string;
 	/** Parent model registry for tiny-model label generation; absent → skip labeling. */
@@ -1619,7 +1620,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
-		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal)
+		generateTaskLabel(labelSource, args.modelRegistry, args.settings, args.cwd, id, abortSignal)
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
 				progress.description = label;
@@ -3155,6 +3156,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			id,
 			agent,
 			task: ircTask,
+			cwd: session.sessionManager.getCwd(),
 			description: options.description,
 			modelOverride: options.modelOverride,
 			modelRole: options.modelRole,
@@ -3549,6 +3551,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		id,
 		agent,
 		task: message,
+		cwd: session.sessionManager.getCwd(),
 		description: options.description,
 		modelRole: options.modelRole,
 		signal,
@@ -4017,6 +4020,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		id,
 		agent,
 		task,
+		cwd: worktree ?? cwd,
 		assignment,
 		description: options.description,
 		modelRegistry: options.modelRegistry,

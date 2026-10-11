@@ -103,6 +103,7 @@ async function createOmpInference(
 		return new OmpCommitInference({
 			primary,
 			smol,
+			cwd: options.cwd,
 			forcePrimaryForEveryRole: options.modelOverride !== undefined,
 			config,
 			cache,

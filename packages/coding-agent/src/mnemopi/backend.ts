@@ -128,6 +128,7 @@ export const mnemopiBackend: MemoryBackend = {
 				modelRegistry,
 				sessionId,
 				session.sessionManager,
+				() => session.sessionManager.getCwd(),
 			);
 			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			await installMnemopiState(session, config);
@@ -195,6 +196,7 @@ export const mnemopiBackend: MemoryBackend = {
 					session.modelRegistry,
 					session.sessionId,
 					session.sessionManager,
+					() => session.sessionManager.getCwd(),
 				);
 				await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 				state = await installMnemopiState(session, config);
@@ -497,6 +499,7 @@ async function loadMnemopiConfigWithProviders(
 	modelRegistry: ModelRegistry,
 	sessionId: string,
 	usageLedger: Partial<JudgmentUsageLedger>,
+	getCwd: () => string,
 ): Promise<MnemopiBackendConfig> {
 	const config = loadMnemopiConfig(settings, agentDir);
 	config.providerOptions = await resolveMnemopiProviderOptions(
@@ -505,6 +508,7 @@ async function loadMnemopiConfigWithProviders(
 		modelRegistry,
 		sessionId,
 		usageLedger,
+		getCwd,
 	);
 	return config;
 }
@@ -534,6 +538,7 @@ async function resolveMnemopiProviderOptions(
 	modelRegistry: ModelRegistry,
 	sessionId: string,
 	usageLedger: Partial<JudgmentUsageLedger>,
+	getCwd: () => string,
 ): Promise<MnemopiProviderOptions> {
 	const base: MnemopiProviderOptions = {
 		noEmbeddings: config.providerOptions.noEmbeddings,
@@ -623,6 +628,7 @@ async function resolveMnemopiProviderOptions(
 									{
 										apiKey: modelRegistry.resolver(model, sessionId),
 										sessionId,
+										cwd: getCwd(),
 										maxTokens: opts?.maxTokens,
 										temperature: opts?.temperature,
 										signal,

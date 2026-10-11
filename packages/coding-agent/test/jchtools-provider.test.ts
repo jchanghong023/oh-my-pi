@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Message, Model } from "@oh-my-pi/pi-ai";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
+	Message,
+	Model,
+	ProviderSessionState,
+} from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { JCHTOOLS_API, projectJchToolsContext, streamJchToolsAgent } from "../src/config/jchtools-provider";
@@ -60,6 +68,61 @@ async function consume(
 }
 
 describe("JchTools remote Agent transport", () => {
+	test("clears legacy associations at filtering cutover and reuses only the new response binding", async () => {
+		let legacyClosed = false;
+		const providerSessionState = new Map<string, ProviderSessionState>([
+			[
+				JCHTOOLS_API,
+				{
+					close: () => {
+						legacyClosed = true;
+					},
+				},
+			],
+		]);
+		const headers: Array<string | null> = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				headers.push(request.headers.get("X-JchTools-Session-ID"));
+				return new Response(`${frame("answer")}${frame(null, "stop")}data: [DONE]\n\n`, {
+					headers: { "Content-Type": "text/event-stream", "X-JchTools-Session-ID": "caller-text-session" },
+				});
+			},
+		});
+		try {
+			const first = streamJchToolsAgent(
+				model(server.url.origin),
+				{ messages: [user] },
+				{
+					cwd: process.cwd(),
+					sessionId: "old-chat",
+					providerSessionState,
+				},
+			);
+			for await (const _event of first) {
+			}
+			const answer = await first.result();
+			expect(answer.stopReason).toBe("stop");
+			const second = streamJchToolsAgent(
+				model(server.url.origin),
+				{
+					messages: [user, answer, { role: "user", content: "next task", timestamp: 2 }],
+				},
+				{ cwd: process.cwd(), sessionId: "old-chat", providerSessionState },
+			);
+			for await (const _event of second) {
+			}
+			expect((await second.result()).stopReason).toBe("stop");
+			expect(legacyClosed).toBe(true);
+			expect(providerSessionState.has(JCHTOOLS_API)).toBe(false);
+			expect(headers).toEqual([null, "caller-text-session"]);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	test("sends only supported text wire and exposes split UTF-8 increments before completion", async () => {
 		const request = Promise.withResolvers<{
 			body: unknown;
@@ -106,10 +169,10 @@ describe("JchTools remote Agent transport", () => {
 				...model(server.url.origin),
 				headers: { Authorization: "model-secret", "x-api-key": "model-secret" },
 			};
-			const context = projectJchToolsContext(
-				{ systemPrompt: ["frontend local-tool boilerplate"], messages: [user] },
-				process.cwd(),
-			);
+			const context = projectJchToolsContext({
+				systemPrompt: ["frontend local-tool boilerplate"],
+				messages: [user],
+			});
 			const stream = streamJchToolsAgent(chosen, context, {
 				cwd: process.cwd(),
 				apiKey: "option-secret",
@@ -134,10 +197,7 @@ describe("JchTools remote Agent transport", () => {
 				credentialHeader: null,
 				body: {
 					model: "backend/actual-agent",
-					messages: [
-						{ role: "system", content: context.systemPrompt?.[0] },
-						{ role: "user", content: "inspect the project" },
-					],
+					messages: [{ role: "user", content: "inspect the project" }],
 					stream: true,
 					cwd: process.cwd(),
 				},
@@ -321,21 +381,6 @@ describe("JchTools remote Agent transport", () => {
 					messages: [user],
 					tools: [{ name: "read", description: "local read", parameters: { type: "object", properties: {} } }],
 				},
-				{ messages: [user, assistant("openai-completions", "ordinary answer")] },
-				{
-					messages: [
-						user,
-						{
-							role: "toolResult",
-							toolCallId: "old",
-							toolName: "read",
-							content: [{ type: "text", text: "tool output" }],
-							isError: false,
-							timestamp: 2,
-						},
-					],
-				},
-				{ messages: [user, { role: "developer", content: "unsupported instruction role", timestamp: 2 }] },
 			];
 			for (const context of contexts) {
 				const { result } = await consume(server.url.origin, context);
@@ -382,62 +427,6 @@ describe("JchTools remote Agent transport", () => {
 });
 
 describe("JchTools context isolation", () => {
-	test("cuts dependent ordinary tool history and preserves the canonical transcript across model switches", () => {
-		const ordinary = assistant("openai-completions", "ordinary local decision");
-		ordinary.content.push({ type: "toolCall", id: "read1", name: "read", arguments: { path: "secret.txt" } });
-		const context: Context = {
-			systemPrompt: ["frontend tool execution rules"],
-			messages: [
-				user,
-				assistant(JCHTOOLS_API, "old remote epoch"),
-				ordinary,
-				{
-					role: "toolResult",
-					toolCallId: "read1",
-					toolName: "read",
-					content: [{ type: "text", text: "ordinary tool result" }],
-					isError: false,
-					timestamp: 2,
-				},
-				{ role: "user", content: "remote task", timestamp: 3 },
-				assistant(JCHTOOLS_API, "remote result"),
-				{
-					role: "user",
-					content: [
-						{ type: "text", text: "follow " },
-						{ type: "text", text: "up" },
-					],
-					timestamp: 4,
-				},
-			],
-			tools: [{ name: "read", description: "local read", parameters: { type: "object", properties: {} } }],
-		};
-		const before = structuredClone(context);
-		const cwd = path.resolve("project with spaces");
-		const projected = projectJchToolsContext(context, cwd);
-		expect(projected.messages.map(message => message.content)).toEqual([
-			"remote task",
-			[{ type: "text", text: "remote result" }],
-			"follow up",
-		]);
-		expect(projected.systemPrompt?.[0]).toContain(cwd);
-		expect(projected.systemPrompt?.[0]).not.toContain("frontend tool execution rules");
-		expect(projected.tools).toBeUndefined();
-		expect(context).toEqual(before);
-		const switched: Context = {
-			...context,
-			messages: [
-				...context.messages,
-				assistant("openai-completions", "back to ordinary"),
-				{ role: "user", content: "new remote epoch", timestamp: 5 },
-			],
-		};
-		expect(projectJchToolsContext(switched, cwd).messages.map(message => message.content)).toEqual([
-			"new remote epoch",
-		]);
-		expect(context).toEqual(before);
-	});
-
 	test("rejects current media instead of silently stripping or discarding the user turn", () => {
 		const media: Message = {
 			role: "user",
@@ -446,7 +435,7 @@ describe("JchTools context isolation", () => {
 		};
 		const context: Context = { messages: [media, assistant("openai-completions", "last ordinary response")] };
 		const before = structuredClone(context);
-		expect(() => projectJchToolsContext(context, path.resolve("project"))).toThrow("image content is unsupported");
+		expect(() => projectJchToolsContext(context)).toThrow("image content is unsupported");
 		expect(context).toEqual(before);
 	});
 });

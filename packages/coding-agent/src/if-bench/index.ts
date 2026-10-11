@@ -8,6 +8,7 @@
  * which makes the two failure modes separable from a single reply.
  */
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import {
 	type BenchRuntime,
@@ -115,6 +116,7 @@ export async function runIfBenchCommand(
 		const summary = await runIfBench({
 			targets,
 			runtime,
+			cwd: getProjectDir(),
 			maxTurns,
 			arrayLength,
 			nyaMax,

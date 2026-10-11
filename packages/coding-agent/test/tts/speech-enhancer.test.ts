@@ -44,13 +44,15 @@ describe("SpeechEnhancer rewriting", () => {
 			content: [{ type: "text", text: "Spoken text" }],
 		} as never);
 
-		const rewritten = await new SpeechEnhancer({ settings, registry, sessionId: "session-1" }).rewrite(
-			"**Spoken text**",
-		);
+		const rewritten = await new SpeechEnhancer({
+			settings,
+			registry,
+			sessionId: "session-1",
+			getCwd: () => "C:/task",
+		}).rewrite("**Spoken text**");
 		const options = completeSimpleMock.mock.calls[0]?.[2] as
 			| { disableReasoning?: boolean; maxTokens?: number }
 			| undefined;
-
 		expect(rewritten).toBe("Spoken text");
 		expect(options).toMatchObject({ disableReasoning: true, maxTokens: 1536 });
 	});
@@ -67,9 +69,12 @@ describe("SpeechEnhancer rewriting", () => {
 			content: [{ type: "text", text: "Local spoken text" }],
 		} as never);
 
-		const rewritten = await new SpeechEnhancer({ settings, registry, sessionId: "session-local" }).rewrite(
-			"**Local spoken text**",
-		);
+		const rewritten = await new SpeechEnhancer({
+			settings,
+			registry,
+			sessionId: "session-local",
+			getCwd: () => "C:/local-task",
+		}).rewrite("**Local spoken text**");
 
 		expect(rewritten).toBe("Local spoken text");
 		expect(completeSimpleMock.mock.calls[0]?.[0]).toBe(localModel);

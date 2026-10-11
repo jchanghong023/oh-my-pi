@@ -76,6 +76,7 @@ export interface IfBenchSummary {
 export interface IfBenchRunOptions {
 	targets: readonly BenchTarget[];
 	runtime: BenchRuntime;
+	cwd: string;
 	maxTurns: number;
 	arrayLength: number;
 	nyaMax: number;
@@ -306,6 +307,7 @@ async function requestTurn(
 		const stream = options.stream(model, context, {
 			apiKey,
 			sessionId,
+			cwd: options.cwd,
 			promptCacheKey: sessionId,
 			maxTokens:
 				model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0

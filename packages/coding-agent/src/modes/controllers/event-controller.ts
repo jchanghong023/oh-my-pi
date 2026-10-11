@@ -323,6 +323,7 @@ export class EventController {
 						settings: session.settings,
 						registry: session.modelRegistry,
 						sessionId: session.sessionId,
+						getCwd: () => this.ctx.sessionManager.getCwd(),
 						metadataResolver: provider => session.agent.metadataForProvider(provider),
 					})
 				: null,

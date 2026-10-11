@@ -12,6 +12,7 @@
 
 ### Changed
 
+- JchTools server-Agent requests now send only source-owned caller and visible conversation text, retaining literal user constraints while excluding OMP runtime/tool context, and automatically reuse ephemeral backend sessions within each chat with branch/cwd isolation and explicit invalid-session errors.
 - Refined `/jch-workflowzbatch` instructions for worker-owned fixes, coordinated cross-file changes, concise results, and targeted coordinator review without relaxing validation limits.
 - Strengthened `/goal-auto-orchestrate` with explicit full-goal authorization, edits to any repository file, Git commits/pushes and all CLI commands including `gh`, and unattended execution without repeated confirmation.
 - Non-fork standalone binaries use Stencil's build service (`build.stencil.so`, overridable with `PI_BUILD_URL`) for updates and startup notices, including verified delta patches when available.
@@ -20,7 +21,8 @@
 ### Fixed
 
 - Fixed stale archive listings and member reads after rapid same-size rewrites with restored timestamps on Windows.
-- Fixed remote JchTools ACP sessions to use the caller's live task cwd instead of the backend's default workspace, including the terminal default and rejection of cwd changes within the same session.
+- Fixed remote JchTools ACP sessions and supported one-shot text consumers to use the caller's live task cwd instead of the backend's default workspace, including isolated task worktrees, terminal defaults, and rejection of cwd changes within the same backend session.
+- Cleared explicitly invalid JchTools backend session bindings so the next caller request can create a new session without retrying the failed task.
 - Replaced per-request `/goal-auto-orchestrate` injection with additive initial and post-compaction history notices, retaining normal Goal prompts and stable provider-history prefixes without custom queue filtering; command help now describes these persistence boundaries accurately.
 - Restricted first `/goal-auto-orchestrate` notices to their admitted objective submissions and kept JchTools remote Agent history free of frontend Goal preludes.
 - Removed duplicate budget/todo snapshots from Goal auto-orchestration notices and scoped WSL Git-write diagnostics to the gate itself.

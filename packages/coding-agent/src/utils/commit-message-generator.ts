@@ -83,6 +83,7 @@ export async function generateCommitMessage(
 	diff: string,
 	registry: ModelRegistry,
 	settings: Settings,
+	cwd: string,
 	sessionId?: string,
 ): Promise<string | null> {
 	const candidates = getSmolModelCandidates(registry, settings);
@@ -117,6 +118,7 @@ export async function generateCommitMessage(
 						{
 							apiKey: registry.resolver(candidate.model, sessionId),
 							sessionId,
+							cwd,
 							maxTokens,
 							reasoning: toReasoningEffort(candidate.thinkingLevel),
 						},

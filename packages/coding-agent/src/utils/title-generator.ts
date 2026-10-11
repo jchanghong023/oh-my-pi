@@ -148,6 +148,7 @@ function getTitleModels(registry: ModelRegistry, settings: Settings, currentMode
  * @param firstMessage The first user message
  * @param registry Model registry
  * @param settings Settings used to resolve the smol role
+ * @param cwd The caller's current task directory for online completion requests
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
@@ -163,6 +164,7 @@ export async function generateSessionTitle(
 	firstMessage: string,
 	registry: ModelRegistry,
 	settings: Settings,
+	cwd: string,
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
@@ -192,6 +194,7 @@ export async function generateSessionTitle(
 			firstMessage,
 			models,
 			registry,
+			cwd,
 			sessionId,
 			metadataResolver,
 			signal,
@@ -241,6 +244,7 @@ export async function generateTitleOnline(
 	firstMessage: string,
 	registry: ModelRegistry,
 	settings: Settings,
+	cwd: string,
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
@@ -257,6 +261,7 @@ export async function generateTitleOnline(
 		firstMessage,
 		models,
 		registry,
+		cwd,
 		sessionId,
 		metadataResolver,
 		signal,
@@ -269,6 +274,7 @@ async function generateTitleOnlineWithModels(
 	firstMessage: string,
 	models: Model<Api>[],
 	registry: ModelRegistry,
+	cwd: string,
 	sessionId?: string,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 	signal?: AbortSignal,
@@ -346,6 +352,7 @@ async function generateTitleOnlineWithModels(
 						},
 						{
 							apiKey: registry.resolver(model, sessionId),
+							cwd,
 							sessionId,
 							maxTokens,
 							disableReasoning: true,

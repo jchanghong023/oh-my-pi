@@ -51,11 +51,13 @@ export class OmpCommitInference implements CommitInference {
 	readonly #authStorage: AuthStorage | null;
 	readonly #onProgress?: CommitProgress;
 	readonly #signal?: AbortSignal;
+	readonly #cwd: string;
 	readonly #sessionId = Bun.randomUUIDv7();
 
 	constructor(options: {
 		primary: ResolvedCommitModel;
 		smol: ResolvedCommitModel;
+		cwd: string;
 		forcePrimaryForEveryRole?: boolean;
 		config: ConventionalGenerationConfig;
 		cache: CommitInferenceCache | null;
@@ -75,6 +77,7 @@ export class OmpCommitInference implements CommitInference {
 		this.#cache = options.cache;
 		this.#authStorage = options.authStorage ?? null;
 		this.#onProgress = options.onProgress;
+		this.#cwd = options.cwd;
 		this.#signal = options.signal;
 	}
 
@@ -128,6 +131,7 @@ export class OmpCommitInference implements CommitInference {
 						sessionId: this.#sessionId,
 						maxTokens: 16_384,
 						reasoning,
+						cwd: this.#cwd,
 						signal,
 					},
 				);

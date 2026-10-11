@@ -25,6 +25,7 @@ export async function generateTaskLabel(
 	assignment: string,
 	registry: ModelRegistry,
 	settings: Settings,
+	cwd: string,
 	sessionId?: string,
 	signal?: AbortSignal,
 ): Promise<string | null> {
@@ -35,6 +36,7 @@ export async function generateTaskLabel(
 			text,
 			registry,
 			settings,
+			cwd,
 			sessionId,
 			undefined,
 			undefined,

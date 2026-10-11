@@ -94,7 +94,7 @@ import "./discovery";
 import { LiveImageUrlService } from "./blob-broker/service";
 import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
 import {
-	getJchToolsEpochStart,
+	projectJchToolsMessages,
 	isJchToolsAgentModel,
 	JCHTOOLS_PROVIDER_ID,
 	projectJchToolsContext,
@@ -3884,10 +3884,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// its own telemetry handle, so its usage stays out of the run summary.
 			// The first requests can start before `agent` is constructed; they use
 			// the telemetry config and session id the agent is constructed with.
-			compress: createSkillDescriptionCompressor(modelRegistry, settings, undefined, () =>
-				agent
-					? resolveTelemetry(agent.telemetry, agent.sessionId)
-					: resolveTelemetry(options.telemetry, providerSessionId),
+			compress: createSkillDescriptionCompressor(
+				modelRegistry,
+				settings,
+				() => sessionManager.getCwd(),
+				undefined,
+				() =>
+					agent
+						? resolveTelemetry(agent.telemetry, agent.sessionId)
+						: resolveTelemetry(options.telemetry, providerSessionId),
 			),
 		});
 		const rebuildSystemPrompt = async (
@@ -4282,26 +4287,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 			if (isJchToolsAgentModel(agent?.state.model ?? model)) {
-				// Cut on raw assistants before conversion can erase an empty cancellation.
-				// Frontend notices stay local; user-owned custom tasks remain user text.
-				return convertToLlm(
-					messages
-						.slice(getJchToolsEpochStart(messages))
-						.filter(
-							message =>
-								message.role !== "hookMessage" && (message.role !== "custom" || message.attribution === "user"),
-						)
-						.map(message =>
-							message.role === "custom"
-								? {
-										role: "user" as const,
-										content: message.content,
-										attribution: "user" as const,
-										timestamp: message.timestamp,
-									}
-								: message,
-						),
-				);
+				return convertToLlm(projectJchToolsMessages(messages));
 			}
 			const converted = convertToLlm(messages);
 			if (cfgImagesBlockImages.get(settings)) {
@@ -4378,7 +4364,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
 			if (isJchToolsAgentModel(transformModel)) {
-				return withOfflineSystemNotice(projectJchToolsContext(context, sessionManager.getCwd()));
+				return projectJchToolsContext(context);
 			}
 			const offlineContext = withOfflineSystemNotice(context);
 			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;
@@ -4487,6 +4473,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					streamJchToolsAgent(liveModel, context, {
 						signal: streamOptions?.signal,
 						cwd: sessionManager.getCwd(),
+						sessionId: sessionManager.getSessionId(),
+						providerSessionState: session?.providerSessionState,
 					}),
 				);
 			}
@@ -5416,7 +5404,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
 						if (isJchToolsAgentModel(transformModel)) {
-							return withOfflineSystemNotice(projectJchToolsContext(context, sessionManager.getCwd()));
+							return projectJchToolsContext(context);
 						}
 						const offlineContext = withOfflineSystemNotice(context);
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;

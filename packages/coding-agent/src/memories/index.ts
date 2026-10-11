@@ -428,6 +428,7 @@ async function runPhase1(options: MemoryStartupOptions): Promise<void> {
 				sessionId: session.sessionId,
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
+				getCwd: () => session.sessionManager.getCwd(),
 				metadata: session.agent?.metadataForProvider(phase1Model.provider),
 			});
 			if (!isMemoryStartupActive(options)) return;
@@ -589,6 +590,7 @@ async function runPhase2(options: MemoryStartupOptions): Promise<void> {
 				model: phase2Model,
 				apiKey: modelRegistry.resolver(phase2Model, session.sessionId),
 				sessionId: session.sessionId,
+				getCwd: () => session.sessionManager.getCwd(),
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
 			});
 			if (!isMemoryStartupActive(options)) return;
@@ -853,6 +855,7 @@ async function runStage1Job(options: {
 	sessionId: string;
 	modelMaxTokens: number;
 	config: MemoryRuntimeConfig;
+	getCwd: () => string;
 	metadata?: Record<string, unknown>;
 }): Promise<
 	| {
@@ -863,7 +866,7 @@ async function runStage1Job(options: {
 	| { kind: "no_output" }
 	| { kind: "failed"; reason: string }
 > {
-	const { claim, model, apiKey, modelMaxTokens, config } = options;
+	const { claim, model, apiKey, modelMaxTokens, config, getCwd } = options;
 	try {
 		const budgetTokens = Math.min(
 			config.phase1InputTokenLimit,
@@ -886,6 +889,7 @@ async function runStage1Job(options: {
 					{
 						apiKey,
 						sessionId: options.sessionId,
+						cwd: getCwd(),
 						metadata: options.metadata,
 						maxTokens: Math.max(1024, Math.min(4096, Math.floor(modelMaxTokens * 0.2))),
 						reasoning: clampThinkingLevelForModel(model, Effort.Low),
@@ -930,7 +934,6 @@ async function runStage1Job(options: {
 		return { kind: "failed", reason: String(error) };
 	}
 }
-
 async function syncPhase2Artifacts(memoryRoot: string, outputs: Stage1OutputRow[]): Promise<void> {
 	const summariesDir = path.join(memoryRoot, "rollout_summaries");
 	await fs.mkdir(summariesDir, { recursive: true });
@@ -998,6 +1001,7 @@ async function runConsolidationModel(options: {
 	model: Model;
 	apiKey: ApiKey;
 	sessionId: string;
+	getCwd: () => string;
 	metadata?: Record<string, unknown>;
 }): Promise<{
 	memoryMd: string;
@@ -1029,6 +1033,7 @@ async function runConsolidationModel(options: {
 				{
 					apiKey,
 					sessionId: options.sessionId,
+					cwd: options.getCwd(),
 					metadata: options.metadata,
 					maxTokens: 8192,
 					reasoning: clampThinkingLevelForModel(model, Effort.Medium),

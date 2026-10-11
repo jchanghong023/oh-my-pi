@@ -20,7 +20,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { formatDuration, formatNumber, prompt } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, getProjectDir, prompt } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { offlineFromEnv } from "./args";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -648,6 +648,7 @@ function formatCachePairLine(pair: BenchCachePairReport, index: number, total: n
 interface BenchRequestOptions {
 	apiKey: ApiKeyResolver;
 	sessionId: string;
+	cwd: string;
 	/** Native OMP messages; cache mode splits the stable prefix from the suffix. */
 	messages: Context["messages"];
 	maxTokens: number;
@@ -681,6 +682,7 @@ async function runBenchRequest(
 		const stream = streamFn(model, context, {
 			apiKey: options.apiKey,
 			sessionId: options.sessionId,
+			cwd: options.cwd,
 			maxTokens:
 				model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0
 					? Math.min(options.maxTokens, model.maxTokens)
@@ -1150,6 +1152,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 		else writeStdout(`${text}\n`);
 	};
 
+	const cwd = getProjectDir();
 	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)({ offline: offlineFromEnv() });
 	try {
 		const targets = await resolveBenchTargets(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
@@ -1228,6 +1231,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 							{
 								apiKey: credentialResolver,
 								sessionId: credentialAffinitySessionId,
+								cwd,
 								messages: cacheBenchmarkMessages(stablePrefix, coldSuffix),
 								maxTokens: cacheMaxTokens!,
 								reasoning: toReasoningEffort(thinking),
@@ -1249,6 +1253,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 							{
 								apiKey: credentialResolver,
 								sessionId: credentialAffinitySessionId,
+								cwd,
 								messages: cacheBenchmarkMessages(stablePrefix, warmSuffix),
 								maxTokens: cacheMaxTokens!,
 								reasoning: toReasoningEffort(thinking),
@@ -1327,6 +1332,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 							{
 								apiKey: runtime.modelRegistry.resolver(model, sessionId),
 								sessionId,
+								cwd,
 								messages: challenge.messages,
 								maxTokens: challenge.maxTokens,
 								reasoning: toReasoningEffort(thinking),

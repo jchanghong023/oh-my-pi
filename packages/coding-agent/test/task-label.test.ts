@@ -51,6 +51,7 @@ describe("task label generation", () => {
 			"Investigate shutdown",
 			createRegistry(model),
 			createSettings(model),
+			"F:/code2026/oh-my-pi",
 			undefined,
 			controller.signal,
 		);
@@ -72,6 +73,7 @@ describe("task label generation", () => {
 			"Sleep forty seconds then reply done",
 			createRegistry(model),
 			createSettings(model),
+			"F:/code2026/oh-my-pi",
 			"AuthLoader",
 		);
 		expect(echoed).toBeNull();
@@ -84,6 +86,7 @@ describe("task label generation", () => {
 			"Sleep forty seconds then reply done",
 			createRegistry(model),
 			createSettings(model),
+			"F:/code2026/oh-my-pi",
 			"AuthLoader",
 		);
 		expect(labeled).toBe("Sleep then reply done");

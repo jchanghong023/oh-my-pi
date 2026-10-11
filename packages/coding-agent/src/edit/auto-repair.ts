@@ -380,6 +380,7 @@ export async function attemptEditAutoRepair(options: {
 					{
 						apiKey: registry.resolver(model, sessionId),
 						sessionId,
+						cwd: session.cwd,
 						maxTokens: COMPLETION_MAX_TOKENS,
 						disableReasoning: true,
 						signal,

@@ -21,7 +21,11 @@ import {
 	cfgRetryFallbackChains,
 	cfgRetryMaxRetries,
 } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { createSkillDescriptionCompressor } from "@oh-my-pi/pi-coding-agent/extensibility/skill-descriptions";
+import { SpeechEnhancer } from "@oh-my-pi/pi-coding-agent/tts/speech-enhancer";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { generateCommitMessage } from "@oh-my-pi/pi-coding-agent/utils/commit-message-generator";
+import { generateSessionTitle } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -282,6 +286,62 @@ describe("automatic roles in text consumers", () => {
 		fs.writeFileSync(path.join(secondDir, markerName), thirdMarker);
 		switchedSession.cwd = secondDir;
 		expect((await completion(switchedSession))?.text).toBe(thirdMarker);
+	});
+
+	test("remote text helpers read their live task directory", async () => {
+		const markerName = `consumer-${crypto.randomUUID()}.txt`;
+		const firstDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-consumer-cwd-a-"));
+		const secondDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-consumer-cwd-b-"));
+		cleanups.push(() => fs.rmSync(firstDir, { recursive: true, force: true }));
+		cleanups.push(() => fs.rmSync(secondDir, { recursive: true, force: true }));
+		const firstMarker = `first-${crypto.randomUUID()}`;
+		const secondMarker = `second-${crypto.randomUUID()}`;
+		fs.writeFileSync(path.join(firstDir, markerName), firstMarker);
+		fs.writeFileSync(path.join(secondDir, markerName), secondMarker);
+		const f = await fixture(false, {
+			respond: (pathname, _model, body) => {
+				if (pathname !== "/v1/chat/completions") return undefined;
+				if (!body.cwd) throw new Error("remote consumer request omitted cwd");
+				const content = fs.readFileSync(path.join(body.cwd, markerName), "utf8");
+				const assistantChunk = `data: ${JSON.stringify({
+					id: "consumer-cwd",
+					object: "chat.completion.chunk",
+					choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }],
+				})}\n\n`;
+				const finishChunk = `data: ${JSON.stringify({
+					id: "consumer-cwd",
+					object: "chat.completion.chunk",
+					choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				})}\n\n`;
+				return new Response(assistantChunk + finishChunk + "data: [DONE]\n\n", {
+					headers: { "Content-Type": "text/event-stream" },
+				});
+			},
+		});
+		f.settings.setModelRole("smol", `jchtools/${f.remote.id}:off`);
+		f.settings.setModelRole("tiny", `jchtools/${f.remote.id}:off`);
+		let cwd = firstDir;
+		const compress = createSkillDescriptionCompressor(f.registry, f.settings, () => cwd);
+		const enhancer = new SpeechEnhancer({
+			settings: f.settings,
+			registry: f.registry,
+			sessionId: "consumer-cwd-test",
+			getCwd: () => cwd,
+		});
+
+		expect(await compress("skill", "description", "request")).toBe(firstMarker);
+		cwd = secondDir;
+		expect(await compress("skill", "description", "request")).toBe(secondMarker);
+		cwd = firstDir;
+		expect(await enhancer.rewrite("first speech block")).toBe(firstMarker);
+		cwd = secondDir;
+		expect(await enhancer.rewrite("second speech block")).toBe(secondMarker);
+		const diff = "diff --git a/example.ts b/example.ts\n+changed contents\n";
+		expect(await generateCommitMessage(diff, f.registry, f.settings, firstDir)).toBe(firstMarker);
+		expect(await generateCommitMessage(diff, f.registry, f.settings, secondDir)).toBe(secondMarker);
+		const titleInput = "Investigate the current task directory";
+		expect(await generateSessionTitle(titleInput, f.registry, f.settings, firstDir)).toBe(firstMarker);
+		expect(await generateSessionTitle(titleInput, f.registry, f.settings, secondDir)).toBe(secondMarker);
 	});
 
 	test.each(["http", "sse"])("explicit remote completion %s failures never retry or fall back", async failure => {

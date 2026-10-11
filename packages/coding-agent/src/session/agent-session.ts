@@ -112,7 +112,7 @@ import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { isJchToolsAgentModel, JCHTOOLS_PROVIDER_ID } from "../config/jchtools-provider";
+import { isJchToolsAgentModel, JCHTOOLS_PROVIDER_ID, JCHTOOLS_SESSION_STATE_KEY } from "../config/jchtools-provider";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -7192,7 +7192,10 @@ export class AgentSession implements SettingsScope {
 		const state = this.#planModeState;
 		if (!state?.enabled) return null;
 		const sessionPlanUrl = "local://PLAN.md";
-		const planPathOptions = { localProtocolOptions: this.#localProtocolOptions(), cwd: this.sessionManager.getCwd() };
+		const planPathOptions = {
+			localProtocolOptions: this.#localProtocolOptions(),
+			cwd: this.sessionManager.getCwd(),
+		};
 		const resolvedPlanPath = resolvePlanFilePath(state.planFilePath, planPathOptions);
 		const resolvedSessionPlan = resolvePlanFilePath(sessionPlanUrl, planPathOptions);
 		const displayPlanPath =
@@ -7578,7 +7581,11 @@ export class AgentSession implements SettingsScope {
 
 		// Expand file-based prompt templates if requested
 		const templated = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
-		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
+		const expandedText = isJchToolsAgentModel(this.model)
+			? typedText
+			: options?.synthetic
+				? templated
+				: this.#modelMentions.expandMentions(templated);
 
 		// Magic keywords (see modes/magic-keywords.ts): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -8587,7 +8594,9 @@ export class AgentSession implements SettingsScope {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
+		const expandedText = isJchToolsAgentModel(this.model)
+			? text
+			: expandPromptTemplate(text, [...this.#promptTemplates]);
 		// Stamp before image preprocessing so a queued image steer measures from
 		// the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
@@ -8614,7 +8623,9 @@ export class AgentSession implements SettingsScope {
 		}
 
 		const expandedText =
-			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+			isJchToolsAgentModel(this.model) || options?.expandPromptTemplates === false
+				? text
+				: expandPromptTemplate(text, [...this.#promptTemplates]);
 		// Stamp before image preprocessing so a queued image follow-up measures
 		// from the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
@@ -10013,6 +10024,7 @@ export class AgentSession implements SettingsScope {
 				firstMessage,
 				this.#modelRegistry,
 				this.settings,
+				this.sessionManager.getCwd(),
 				sessionId,
 				this.model,
 				provider => buildSessionMetadata(sessionId, provider, this.#modelRegistry.authStorage),
@@ -11284,6 +11296,9 @@ export class AgentSession implements SettingsScope {
 
 	#closeProviderSessionsForModelSwitch(currentModel: Model, nextModel: Model): void {
 		const providerKeys = new Set<string>();
+		if (isJchToolsAgentModel(currentModel) && !isJchToolsAgentModel(nextModel)) {
+			providerKeys.add(JCHTOOLS_SESSION_STATE_KEY);
+		}
 		if (currentModel.api === "openai-codex-responses" || nextModel.api === "openai-codex-responses") {
 			providerKeys.add("openai-codex-responses");
 		}
@@ -12841,6 +12856,7 @@ export class AgentSession implements SettingsScope {
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
+		this.#providerSessionState.get(JCHTOOLS_SESSION_STATE_KEY)?.close();
 
 		this.#branchSummaryAbortController = undefined;
 

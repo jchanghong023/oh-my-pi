@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/memories";
 import * as memoryStorage from "@oh-my-pi/pi-coding-agent/memories/storage";
 import { getAgentDbPath, Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { streamJchToolsAgent, JCHTOOLS_API } from "../src/config/jchtools-provider";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
 interface SessionFixture {
@@ -223,7 +224,7 @@ describe("memories runtime", () => {
 					},
 				],
 				usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
-			} as any)
+			} as never)
 			.mockResolvedValueOnce({
 				stopReason: "end_turn",
 				content: [
@@ -236,7 +237,7 @@ describe("memories runtime", () => {
 						}),
 					},
 				],
-			} as any);
+			} as never);
 
 		startMemoryStartupTask({
 			session: fx.session,
@@ -262,6 +263,95 @@ describe("memories runtime", () => {
 		expect(ai.completeSimple).toHaveBeenCalledTimes(2);
 		const phase2Prompt = completeSpy.mock.calls[1]?.[1];
 		expect(phase2Prompt?.systemPrompt?.[0]).toContain("memory-stage-two consolidator");
+	});
+
+	test("memory startup completions use the session cwd for real JchTools requests", async () => {
+		const fx = await createFixture();
+		const cwd = path.resolve(await makeTempDir("mem-cwd"));
+		const marker = `memory-cwd-${Snowflake.next()}`;
+		await fs.writeFile(path.join(cwd, "memory-marker.txt"), marker);
+		fx.session.sessionManager.getCwd = () => cwd;
+
+		let requestCount = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname !== "/v1/chat/completions") {
+					return new Response("not found", { status: 404 });
+				}
+				const body = (await request.json()) as { cwd?: string };
+				if (!body.cwd) return new Response("cwd missing", { status: 400 });
+				const requestedMarker = await fs.readFile(path.join(body.cwd, "memory-marker.txt"), "utf8");
+				requestCount += 1;
+				const content =
+					requestCount === 1
+						? JSON.stringify({
+								rollout_summary: requestedMarker,
+								rollout_slug: "cwd-rollout",
+								raw_memory: requestedMarker,
+							})
+						: JSON.stringify({
+								memory_md: `# Memory\n\n${requestedMarker}`,
+								memory_summary: requestedMarker,
+								skills: [],
+							});
+				const chunk = (delta: object, finishReason: string | null = null) =>
+					`data: ${JSON.stringify({
+						id: "memory-cwd",
+						object: "chat.completion.chunk",
+						choices: [{ index: 0, delta, finish_reason: finishReason }],
+					})}\n\n`;
+				return new Response(chunk({ role: "assistant", content }) + chunk({}, "stop") + "data: [DONE]\n\n", {
+					headers: { "Content-Type": "text/event-stream" },
+				});
+			},
+		});
+
+		const remoteModel = {
+			...fx.model,
+			api: JCHTOOLS_API,
+			provider: "jchtools",
+			baseUrl: server.url.origin,
+			supportsTools: false,
+			input: ["text"],
+		} as Model;
+		fx.session.model = remoteModel;
+		fx.modelRegistry.find = vi.fn(() => remoteModel);
+		fx.modelRegistry.getAll = vi.fn(() => [remoteModel]);
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model, context, options) => {
+			const stream = streamJchToolsAgent(model as Parameters<typeof streamJchToolsAgent>[0], context, options);
+			for await (const _event of stream) {
+				// Drain the actual provider stream so completeSimple receives its final message.
+			}
+			return stream.result();
+		});
+
+		const rolloutPath = path.join(fx.sessionDir, "thread-cwd.jsonl");
+		await fs.writeFile(
+			rolloutPath,
+			`${JSON.stringify({ type: "session", id: "thread-cwd", cwd })}\n${JSON.stringify({
+				type: "message",
+				message: { role: "user", content: "remember this project marker" },
+			})}\n`,
+		);
+		startMemoryStartupTask({
+			session: fx.session,
+			settings: fx.settings,
+			modelRegistry: fx.modelRegistry,
+			agentDir: fx.agentDir,
+			taskDepth: 0,
+		});
+
+		try {
+			await settle(fx.whenSettled, "JchTools memory phase1->phase2 pipeline");
+			const memoryRoot = getMemoryRoot(fx.agentDir, cwd);
+			expect(await fs.readFile(path.join(memoryRoot, "MEMORY.md"), "utf8")).toContain(marker);
+			expect(requestCount).toBe(2);
+		} finally {
+			server.stop(true);
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
 	});
 
 	test("clamps stage1 and phase2 reasoning effort against the model's supported range", async () => {

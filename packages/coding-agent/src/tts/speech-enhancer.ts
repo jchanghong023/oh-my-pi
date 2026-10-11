@@ -40,6 +40,8 @@ export interface SpeechEnhancerDeps {
 	settings: Settings;
 	registry: ModelRegistry;
 	sessionId: string;
+	/** Resolve the session's current task directory for each rewrite request. */
+	getCwd: () => string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 }
 
@@ -95,6 +97,7 @@ export class SpeechEnhancer {
 						{
 							apiKey: registry.resolver(model, sessionId),
 							sessionId,
+							cwd: this.#deps.getCwd(),
 							maxTokens: ANSWER_MAX_TOKENS,
 							disableReasoning: true,
 							metadata,

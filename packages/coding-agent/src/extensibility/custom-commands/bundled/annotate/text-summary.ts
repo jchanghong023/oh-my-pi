@@ -4,7 +4,7 @@ import type { CustomCommandContext } from "../../../../extensibility/custom-comm
 import summaryPrompt from "./prompts/text-summary.md" with { type: "text" };
 import { normalizeTextReviewContextSummary } from "./text-review";
 
-type SummaryContext = Pick<CustomCommandContext, "model" | "modelRegistry" | "sessionManager">;
+type SummaryContext = Pick<CustomCommandContext, "cwd" | "model" | "modelRegistry" | "sessionManager">;
 
 /** Generate grounding context with the selected session model, never a hidden fallback model. */
 export async function generateTextReviewContextSummary(
@@ -28,6 +28,7 @@ export async function generateTextReviewContextSummary(
 			disableReasoning: true,
 			maxTokens: 512,
 			signal: requestSignal,
+			cwd: ctx.cwd,
 		},
 	);
 	if (message.stopReason === "error" || message.stopReason === "aborted") return undefined;
