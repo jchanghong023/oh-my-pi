@@ -21,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
 import { RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS } from "@oh-my-pi/pi-coding-agent/config/model-provider-discovery";
 import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { ProviderDiscoverySchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -1003,6 +1004,53 @@ describe("ModelRegistry runtime discovery", () => {
 		const model = registry.find("ollama", "phi4-mini");
 		expect(model?.baseUrl).toBe("http://omp-ollama.example:2222/v1");
 		expect(registry.getProviderDiscoveryState("ollama")?.optional).toBe(false);
+	});
+
+	test("resolves a bare id shared with implicit ollama to the models.yml provider", async () => {
+		using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://ollama.lan:11434");
+		writeRawModelsJson({
+			omlx: {
+				baseUrl: "http://omlx.lan:11434/v1",
+				api: "openai-completions",
+				apiKey: "sk-omlx-test",
+				models: [{ id: "phi-4-4bit", name: "Phi-4 4-bit", contextWindow: 128000, maxTokens: 8192 }],
+			},
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: mockOllamaDiscovery(["phi-4-4bit"], "http://ollama.lan:11434"),
+		});
+		await registry.refresh();
+		expect(registry.find("ollama", "phi-4-4bit")).toBeDefined();
+
+		const resolved = resolveCliModel({ cliModel: "phi-4-4bit", modelRegistry: registry });
+		expect(resolved.model?.provider).toBe("omlx");
+		expect(resolved.model?.baseUrl).toBe("http://omlx.lan:11434/v1");
+	});
+
+	test("warns with the env var only when an env-redirected implicit endpoint fails discovery", async () => {
+		// Echo the request URL like real fetch errors do, so credential leaks through the error are caught too.
+		const unreachable: FetchImpl = async input => {
+			throw new Error(`EHOSTUNREACH: connect failed ${String(input)}`);
+		};
+		{
+			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://reviewer:topsecret@ollama.typo:11434");
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: unreachable });
+			await registry.refresh();
+			const warnings = registry.drainConfigWarnings().filter(warning => warning.includes("ollama"));
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]).toContain("OLLAMA_BASE_URL");
+			expect(warnings[0]).toContain("http://ollama.typo:11434");
+			expect(warnings[0]).toContain("EHOSTUNREACH");
+			expect(warnings[0]).not.toContain("topsecret");
+			expect(warnings[0]).not.toContain("reviewer");
+		}
+		{
+			// The default loopback probe is optional: a missing local Ollama stays silent.
+			using _baseUrl = withEnv("OLLAMA_BASE_URL", undefined);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: unreachable });
+			await registry.refresh();
+			expect(registry.drainConfigWarnings()).toEqual([]);
+		}
 	});
 
 	test("refreshes implicit Ollama discovery when the configured endpoint changes", async () => {

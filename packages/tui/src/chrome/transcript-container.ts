@@ -227,9 +227,29 @@ export class TranscriptContainer extends Container {
 			emitted: 0,
 			stableFrozen: false,
 		});
-		// Callers may splice a just-added block into place (insert after an
-		// anchor); re-check the whole list once instead of trusting positions.
+		// `children` is public and may be edited externally; re-check the whole
+		// list once instead of trusting positions. Insert-after-anchor callers
+		// use insertChildAt, which keeps both arrays in lockstep.
 		this.#entriesUnverified = true;
+	}
+
+	/**
+	 * `#entries` mirrors `children`; move both together or the next `#syncEntries`
+	 * pays a full O(n) rebuild.
+	 */
+	insertChildAt(component: Component, index: number): void {
+		this.addChild(component);
+		const from = this.children.length - 1;
+		if (index >= from) {
+			this.#entriesUnverified = false;
+			return;
+		}
+		const [moved] = this.children.splice(from, 1);
+		if (moved) this.children.splice(index, 0, moved);
+		const [entry] = this.#entries.splice(this.#entries.length - 1, 1);
+		if (entry) this.#entries.splice(index, 0, entry);
+		// Both arrays moved in lockstep, so the live-tail check applies again.
+		this.#entriesUnverified = false;
 	}
 
 	/** Removes `component` if {@link canRemoveBlock} allows it; otherwise does nothing. */

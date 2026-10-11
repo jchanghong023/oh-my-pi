@@ -964,3 +964,81 @@ describe("TranscriptContainer viewport click spans", () => {
 		expect(transcript.getLastViewportSpans()).toEqual([]);
 	});
 });
+
+describe("TranscriptContainer insertChildAt", () => {
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	it("renders a tail insertion without scanning committed history", () => {
+		const transcript = new TranscriptContainer();
+		const history = Array.from({ length: 64 }, (_, index) => new Block([`history ${index}`], true));
+		for (const block of history) transcript.addChild(block);
+		const committed = transcript.peekFlushBatch(80);
+		if (!committed) throw new Error("Expected history batch");
+		transcript.acknowledgeFinalizedBatch(committed.id);
+		transcript.addChild(new Block(["anchor"], false));
+		expect(transcript.renderViewport(80, 10, frame)).toEqual(["anchor"]);
+
+		let historyReads = 0;
+		for (const [index, block] of history.entries()) {
+			Object.defineProperty(transcript.children, index, {
+				get: () => {
+					historyReads++;
+					return block;
+				},
+				configurable: true,
+			});
+		}
+
+		transcript.insertChildAt(new Block(["inserted"], false), transcript.children.length);
+
+		expect(transcript.renderViewport(80, 10, frame)).toEqual(["anchor", "", "inserted"]);
+		expect(historyReads).toBe(0);
+	});
+
+	it("renders a middle insertion without scanning committed history", () => {
+		const transcript = new TranscriptContainer();
+		const history = Array.from({ length: 64 }, (_, index) => new Block([`history ${index}`], true));
+		for (const block of history) transcript.addChild(block);
+		const committed = transcript.peekFlushBatch(80);
+		if (!committed) throw new Error("Expected history batch");
+		transcript.acknowledgeFinalizedBatch(committed.id);
+		transcript.addChild(new Block(["anchor"], false));
+		transcript.addChild(new Block(["tail"], false));
+		expect(transcript.renderViewport(80, 10, frame)).toEqual(["anchor", "", "tail"]);
+
+		let historyReads = 0;
+		for (const [index, block] of history.entries()) {
+			Object.defineProperty(transcript.children, index, {
+				get: () => {
+					historyReads++;
+					return block;
+				},
+				configurable: true,
+			});
+		}
+
+		transcript.insertChildAt(new Block(["inserted"], false), transcript.children.length - 1);
+
+		expect(transcript.renderViewport(80, 10, frame)).toEqual(["anchor", "", "inserted", "", "tail"]);
+		expect(historyReads).toBe(0);
+	});
+
+	it("keeps inserted blocks ordered and removable across repeated inserts", () => {
+		const transcript = new TranscriptContainer();
+		const first = new Block(["first"], false);
+		const last = new Block(["last"], false);
+		transcript.addChild(first);
+		transcript.addChild(last);
+
+		const insertedA = new Block(["inserted-a"], false);
+		const insertedB = new Block(["inserted-b"], false);
+		transcript.insertChildAt(insertedA, 1);
+		transcript.insertChildAt(insertedB, 1);
+
+		expect(transcript.children).toEqual([first, insertedB, insertedA, last]);
+		expect(transcript.canRemoveBlock(insertedA)).toBe(true);
+		expect(transcript.canRemoveBlock(insertedB)).toBe(true);
+	});
+});

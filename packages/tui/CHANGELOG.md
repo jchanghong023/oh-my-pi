@@ -7,6 +7,10 @@
 - Refreshed quick-role picker entries when JchTools models disappear or change during discovery.
 - Kept overflowing bottom status-line segments dimmed while another composer owns focus.
 
+### Fixed
+
+- Improved responsiveness when placing assistant text after tool calls in long transcripts ([#12178](https://github.com/can1357/oh-my-pi/issues/12178), [#14344](https://github.com/can1357/oh-my-pi/pull/14344) by [@F0Rextasy](https://github.com/F0Rextasy), [#15353](https://github.com/can1357/oh-my-pi/pull/15353) by [@iliaal](https://github.com/iliaal)).
+
 ## [18.9.1] - 2026-10-11
 
 ### Fixed

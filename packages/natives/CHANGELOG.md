@@ -10,6 +10,10 @@
 - Restored the previous native addon when replacement fails and preserved recoverable files when rollback cannot complete.
 - Preserved Unix executable paths containing non-UTF-8 bytes in built-in command execution instead of selecting a lossy lookalike.
 
+### Fixed
+
+- Fixed stalls when highlighting Markdown tool previews with many inline spans or backslash escapes ([#13838](https://github.com/can1357/oh-my-pi/pull/13838) by [@sjawhar](https://github.com/sjawhar), [#15272](https://github.com/can1357/oh-my-pi/pull/15272) by [@iliaal](https://github.com/iliaal)).
+
 ## [18.9.1] - 2026-10-11
 
 ### Fixed

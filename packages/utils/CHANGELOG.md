@@ -15,6 +15,14 @@
 - Preserved YAML comments and unrelated alias values when editing or removing a single configuration field.
 - Fatal diagnostic records now retain only safe error summaries instead of copying exception messages and raw stacks; terminal error output is unchanged.
 
+### Changed
+
+- Sped up streaming JSON parsing of tool arguments with many string values: the scan no longer re-searches the rest of the payload for a backslash once per string (about 2.2x faster on a 24 KB object of 300 short-string entries) ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+
+### Fixed
+
+- Fixed `JsonLexer.string()` running past a closing delimiter other than `"` or `'` (such as a backtick) in strings longer than 32 characters ([#15273](https://github.com/can1357/oh-my-pi/pull/15273) by [@iliaal](https://github.com/iliaal)).
+
 ## [18.9.0] - 2026-10-11
 
 ### Breaking Changes
