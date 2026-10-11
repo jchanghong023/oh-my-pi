@@ -28,6 +28,7 @@ interface ChatRequest {
 	model: string;
 	messages: Array<{ role: string; content?: unknown; tool_calls?: unknown }>;
 	stream: boolean;
+	cwd: string;
 	tools?: unknown;
 }
 
@@ -287,7 +288,7 @@ describe("JchTools SDK remote Agent session", () => {
 		await explicit.prompt("explicit configured backend task");
 		expect(f.requests).toHaveLength(2);
 		expect(f.requests[1].model).toBe("claude-haiku-5-5");
-		expect(Object.keys(f.requests[1]).sort()).toEqual(["messages", "model", "stream"]);
+		expect(f.requests[1].cwd).toBe(f.cwd);
 		expect(f.requests[1].messages.filter(message => message.role !== "system")).toEqual([
 			{ role: "user", content: "explicit configured backend task" },
 		]);
@@ -301,7 +302,7 @@ describe("JchTools SDK remote Agent session", () => {
 		).toBe(true);
 		expect(f.requests).toHaveLength(1);
 		const body = f.requests[0];
-		expect(Object.keys(body).sort()).toEqual(["messages", "model", "stream"]);
+		expect(body.cwd).toBe(f.cwd);
 		expect(body.model).toBe("backend/agent");
 		expect(body.messages.at(-1)).toEqual({ role: "user", content: "perform my explicit task" });
 		const wire = JSON.stringify(body);
@@ -356,6 +357,89 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(session.cacheWarmingStatus?.state).toBe("inactive");
 	});
 
+	it("keeps concurrent session requests and backend replies associated with each task cwd", async () => {
+		const arrivals = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const f = await fixture(async body => {
+			const input = fs.readFileSync(path.join(body.cwd, "task-input.txt"), "utf8");
+			fs.writeFileSync(path.join(body.cwd, "task-result.txt"), `processed ${input}`);
+			if (f.requests.length === 2) arrivals.resolve();
+			await release.promise;
+			return completed(`processed ${input}`);
+		});
+		const firstCwd = path.join(path.dirname(f.cwd), "中文 workspace one");
+		const secondCwd = path.join(path.dirname(f.cwd), "中文 workspace two");
+		fs.mkdirSync(firstCwd);
+		fs.mkdirSync(secondCwd);
+		fs.writeFileSync(path.join(firstCwd, "task-input.txt"), "first workspace marker");
+		fs.writeFileSync(path.join(secondCwd, "task-input.txt"), "second workspace marker");
+		const first = await f.create(f.remote, SessionManager.inMemory(firstCwd));
+		const second = await f.create(f.remote, SessionManager.inMemory(secondCwd));
+		try {
+			const firstPrompt = first.prompt("first task");
+			const secondPrompt = second.prompt("second task");
+			await arrivals.promise;
+			release.resolve();
+			await Promise.all([firstPrompt, secondPrompt]);
+			expect(fs.readFileSync(path.join(firstCwd, "task-result.txt"), "utf8")).toBe(
+				"processed first workspace marker",
+			);
+			expect(fs.readFileSync(path.join(secondCwd, "task-result.txt"), "utf8")).toBe(
+				"processed second workspace marker",
+			);
+			expect(first.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: "processed first workspace marker" },
+			]);
+			expect(second.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: "processed second workspace marker" },
+			]);
+		} finally {
+			release.resolve();
+		}
+	});
+
+	it("uses the updated cwd for the next request from the same session", async () => {
+		const f = await fixture(async body => {
+			const input = fs.readFileSync(path.join(body.cwd, "task-input.txt"), "utf8");
+			fs.writeFileSync(path.join(body.cwd, "task-result.txt"), `processed ${input}`);
+			return completed(`processed ${input}`);
+		});
+		const session = await f.create(f.remote);
+		const nextCwd = path.join(path.dirname(f.cwd), "changed 中文 workspace");
+		fs.mkdirSync(nextCwd);
+		fs.writeFileSync(path.join(f.cwd, "task-input.txt"), "original workspace marker");
+		fs.writeFileSync(path.join(nextCwd, "task-input.txt"), "updated workspace marker");
+		try {
+			await session.prompt("first cwd task");
+			expect(fs.readFileSync(path.join(f.cwd, "task-result.txt"), "utf8")).toBe(
+				"processed original workspace marker",
+			);
+			expect(session.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: "processed original workspace marker" },
+			]);
+			f.manager.setCwdWithoutRelocation(nextCwd);
+			await session.prompt("second cwd task");
+			expect(fs.readFileSync(path.join(nextCwd, "task-result.txt"), "utf8")).toBe(
+				"processed updated workspace marker",
+			);
+			expect(fs.readFileSync(path.join(f.cwd, "task-result.txt"), "utf8")).toBe(
+				"processed original workspace marker",
+			);
+			expect(session.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: "processed updated workspace marker" },
+			]);
+			const missingCwd = path.join(path.dirname(f.cwd), "missing 中文 workspace");
+			f.manager.setCwdWithoutRelocation(missingCwd);
+			await session.prompt("task with missing cwd");
+			expect(f.requests).toHaveLength(2);
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("error");
+			expect(session.getLastAssistantMessage()?.errorMessage).toContain("cwd");
+			expect(fs.existsSync(missingCwd)).toBe(false);
+		} finally {
+			await session.abort();
+		}
+	});
+
 	it("sends an explicit remote task with an active ordinary Goal without developer context or orchestration notices", async () => {
 		const f = await fixture();
 		const session = await f.create(f.remote);
@@ -364,7 +448,7 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(await session.prompt("perform the explicit ordinary Goal task")).toBe(true);
 		expect(f.requests).toHaveLength(1);
 		const body = f.requests[0];
-		expect(Object.keys(body).sort()).toEqual(["messages", "model", "stream"]);
+		expect(body.cwd).toBe(f.cwd);
 		expect(body.messages.filter(message => message.role !== "system")).toEqual([
 			{ role: "user", content: "perform the explicit ordinary Goal task" },
 		]);
@@ -486,7 +570,7 @@ describe("JchTools SDK remote Agent session", () => {
 					.some(entry => entry.type === "custom_message" && entry.customType === "goal-mode-context"),
 			).toBe(false);
 			for (const body of f.requests) {
-				expect(Object.keys(body).sort()).toEqual(["messages", "model", "stream"]);
+				expect(body.cwd).toBe(f.cwd);
 				expect(body.messages.some(message => message.role === "developer")).toBe(false);
 				const wire = JSON.stringify(body);
 				expect(wire).not.toContain("goal-mode-context");

@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
@@ -100,7 +101,7 @@ function errorDetail(value: unknown): string {
 export function streamJchToolsAgent(
 	model: Model<Api>,
 	context: Context,
-	options?: SimpleStreamOptions,
+	options?: SimpleStreamOptions & { cwd?: string },
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 	const output: AssistantMessage = {
@@ -150,6 +151,16 @@ export function streamJchToolsAgent(
 		try {
 			if (!isJchToolsAgentModel(model)) throw inputError("model API is not jchtools-agent");
 			modelIdHash = new Bun.CryptoHasher("sha256").update(model.id).digest("hex").slice(0, 16);
+			if (typeof options?.cwd !== "string" || options.cwd.trim().length === 0) {
+				throw inputError("cwd must be an absolute existing directory");
+			}
+			if (!path.isAbsolute(options.cwd)) throw inputError("cwd must be an absolute existing directory");
+			try {
+				if (!fs.statSync(options.cwd).isDirectory()) throw inputError("cwd must be an existing directory");
+			} catch (error) {
+				if (error instanceof AIError.ProviderResponseError) throw error;
+				throw inputError("cwd must be an existing directory");
+			}
 			if (context.tools?.length || context.inactiveTools?.length || options?.toolChoice !== undefined) {
 				throw inputError("frontend tools and tool choice are unsupported");
 			}
@@ -194,8 +205,8 @@ export function streamJchToolsAgent(
 			const response = await fetch(new URL("/v1/chat/completions", base), {
 				method: "POST",
 				headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-				body: JSON.stringify({ model: model.id, messages, stream: true }),
-				signal: options?.signal,
+				body: JSON.stringify({ model: model.id, messages, stream: true, cwd: options.cwd }),
+				signal: options.signal,
 				redirect: "error",
 			});
 			status = response.status;

@@ -20,6 +20,7 @@
 ### Fixed
 
 - Fixed stale archive listings and member reads after rapid same-size rewrites with restored timestamps on Windows.
+- Fixed remote JchTools ACP sessions to use the caller's live task cwd instead of the backend's default workspace, including the terminal default and rejection of cwd changes within the same session.
 - Replaced per-request `/goal-auto-orchestrate` injection with additive initial and post-compaction history notices, retaining normal Goal prompts and stable provider-history prefixes without custom queue filtering; command help now describes these persistence boundaries accurately.
 - Restricted first `/goal-auto-orchestrate` notices to their admitted objective submissions and kept JchTools remote Agent history free of frontend Goal preludes.
 - Removed duplicate budget/todo snapshots from Goal auto-orchestration notices and scoped WSL Git-write diagnostics to the gate itself.

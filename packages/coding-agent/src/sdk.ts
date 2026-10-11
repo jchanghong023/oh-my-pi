@@ -4484,7 +4484,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					throw new Error("JchTools remote Agent is unavailable; no request was sent.");
 				}
 				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-					streamJchToolsAgent(liveModel, context, { signal: streamOptions?.signal }),
+					streamJchToolsAgent(liveModel, context, {
+						signal: streamOptions?.signal,
+						cwd: sessionManager.getCwd(),
+					}),
 				);
 			}
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);

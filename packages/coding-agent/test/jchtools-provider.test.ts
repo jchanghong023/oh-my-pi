@@ -53,7 +53,7 @@ async function consume(
 	baseUrl: string,
 	context: Context = { messages: [user] },
 ): Promise<{ result: AssistantMessage; events: AssistantMessageEvent[] }> {
-	const stream = streamJchToolsAgent(model(baseUrl), context);
+	const stream = streamJchToolsAgent(model(baseUrl), context, { cwd: process.cwd() });
 	const events: AssistantMessageEvent[] = [];
 	for await (const event of stream) events.push(event);
 	return { result: await stream.result(), events };
@@ -108,9 +108,10 @@ describe("JchTools remote Agent transport", () => {
 			};
 			const context = projectJchToolsContext(
 				{ systemPrompt: ["frontend local-tool boilerplate"], messages: [user] },
-				path.resolve("fixture-project"),
+				process.cwd(),
 			);
 			const stream = streamJchToolsAgent(chosen, context, {
+				cwd: process.cwd(),
 				apiKey: "option-secret",
 				temperature: 0.7,
 				maxTokens: 10,
@@ -138,6 +139,7 @@ describe("JchTools remote Agent transport", () => {
 						{ role: "user", content: "inspect the project" },
 					],
 					stream: true,
+					cwd: process.cwd(),
 				},
 			});
 			expect(events).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
@@ -250,7 +252,11 @@ describe("JchTools remote Agent transport", () => {
 		});
 		try {
 			const abort = new AbortController();
-			const stream = streamJchToolsAgent(model(server.url.origin), { messages: [user] }, { signal: abort.signal });
+			const stream = streamJchToolsAgent(
+				model(server.url.origin),
+				{ messages: [user] },
+				{ signal: abort.signal, cwd: process.cwd() },
+			);
 			const events: string[] = [];
 			for await (const event of stream) {
 				events.push(event.type);
@@ -336,8 +342,38 @@ describe("JchTools remote Agent transport", () => {
 				expect(result.stopReason).toBe("error");
 				expect(result.errorMessage).toContain("input rejected");
 			}
-			const stream = streamJchToolsAgent(model(server.url.origin), { messages: [user] }, { toolChoice: "none" });
+			const stream = streamJchToolsAgent(
+				model(server.url.origin),
+				{ messages: [user] },
+				{ toolChoice: "none", cwd: process.cwd() },
+			);
 			expect((await stream.result()).stopReason).toBe("error");
+			expect(requests).toBe(0);
+		} finally {
+			await server.stop(true);
+		}
+	});
+	test("requires an existing absolute cwd before sending HTTP", async () => {
+		let requests = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				requests++;
+				return new Response("unexpected");
+			},
+		});
+		try {
+			for (const cwd of [undefined, "relative/path", path.join(process.cwd(), "missing-cwd")]) {
+				const stream = streamJchToolsAgent(
+					model(server.url.origin),
+					{ messages: [user] },
+					cwd === undefined ? undefined : { cwd },
+				);
+				const result = await stream.result();
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toContain("cwd");
+			}
 			expect(requests).toBe(0);
 		} finally {
 			await server.stop(true);

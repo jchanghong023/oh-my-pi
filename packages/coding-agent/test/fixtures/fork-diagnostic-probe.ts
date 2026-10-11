@@ -227,7 +227,7 @@ async function transportProbe() {
 					systemPrompt: [`${canary}SYSTEM`],
 					messages: [{ role: "user", content: `${canary}PROMPT ${kind}`, timestamp: 1 }],
 				},
-				{ signal: controller.signal, apiKey: `${canary}APIKEY` },
+				{ signal: controller.signal, apiKey: `${canary}APIKEY`, cwd: process.cwd() },
 			);
 			const events: string[] = [];
 			for await (const event of stream) {
