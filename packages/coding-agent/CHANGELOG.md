@@ -28,6 +28,7 @@
 
 ### Changed
 
+- Refined `/jch-workflowzbatch` instructions for worker-owned fixes, coordinated cross-file changes, concise results, and targeted coordinator review without relaxing validation limits.
 - Migrated all judge question templates from `src/prompts/system/` and `src/prompts/tools/` to structured `src/prompts/judge/` JSON files, centralizing instruction management and enabling compile-time type inference for choice labels and answer types
 - `computer.window(…)` misses now list the open windows by app, the requested app first, so the next call can pick an id without listing windows ([#13655](https://github.com/can1357/oh-my-pi/pull/13655) by [@will-bogusz](https://github.com/will-bogusz))
 - `omp update` on standalone binaries now downloads from Stencil's build service (build.stencil.so, overridable with `PI_BUILD_URL`) instead of GitHub releases, and fetches a small verified patch (about 6 MB instead of 200 MB) when updating from a recent version; compiled binaries also check it for the startup update notice
