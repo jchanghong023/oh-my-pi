@@ -346,6 +346,7 @@ describe("StatusLineComponent hook statuses", () => {
 
 	it("keeps SGR styling from extension statuses", () => {
 		const component = makeComponent({ showHookStatus: true });
+		component.setComposerStyle(getComposerStyle("band"));
 		component.setHookStatus("demo", "\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m");
 
 		expect(component.render(80)).toEqual(["\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m\x1b[0m"]);
@@ -353,6 +354,7 @@ describe("StatusLineComponent hook statuses", () => {
 
 	it("truncates styled statuses without bleeding style", () => {
 		const component = makeComponent({ showHookStatus: true });
+		component.setComposerStyle(getComposerStyle("band"));
 		component.setHookStatus("demo", "\x1b[32mgreen\x1b[39m \x1b[31mred\x1b[39m");
 
 		const [line] = component.render(6);
@@ -363,6 +365,7 @@ describe("StatusLineComponent hook statuses", () => {
 
 	it("strips OSC links from styled statuses under the bar", () => {
 		const component = makeComponent({ showHookStatus: true });
+		component.setComposerStyle(getComposerStyle("band"));
 		component.setHookStatus("link", "\x1b[1m\x1b]8;;https://example.com\x07docs\x1b]8;;\x07\x1b[22m");
 
 		expect(component.render(80)).toEqual(["\x1b[1mdocs\x1b[22m\x1b[0m"]);

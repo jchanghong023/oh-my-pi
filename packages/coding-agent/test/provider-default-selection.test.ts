@@ -195,7 +195,9 @@ describe("provider default selection", () => {
 			],
 			"swe-1-6-slow",
 		);
-		const openaiDefault = getBundledModel("openai", DEFAULT_MODEL_PER_PROVIDER.openai);
+		const openaiDefaultId = DEFAULT_MODEL_PER_PROVIDER.openai;
+		if (!openaiDefaultId) throw new Error("OpenAI has no declared default model");
+		const openaiDefault = getBundledModel("openai", openaiDefaultId);
 
 		const picked = pickDefaultAvailableModel([...devin, openaiDefault]);
 
@@ -203,7 +205,9 @@ describe("provider default selection", () => {
 	});
 
 	test("keeps Cursor on its bundled default when the account default is the Auto router", async () => {
-		const ids = ["default", DEFAULT_MODEL_PER_PROVIDER.cursor];
+		const cursorDefaultId = DEFAULT_MODEL_PER_PROVIDER.cursor;
+		if (!cursorDefaultId) throw new Error("Cursor has no declared default model");
+		const ids = ["default", cursorDefaultId];
 		const responses: Record<string, Uint8Array> = {
 			"/agent.v1.AgentService/GetUsableModels": toBinary(
 				GetUsableModelsResponseSchema,

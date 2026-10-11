@@ -168,9 +168,13 @@ describe("fitOutputTokensToContextWindow", () => {
 		["shrunk", 50_000, 50_000],
 		["removed", 0, 50_000],
 	] as const)("fits only the %s request-context delta since provider usage", (_name, current, paddedTail) => {
-		const anchor = { ...reported(700_000, 2), perCallContextTokens: 100_000 };
+		const anchor = {
+			...reported(700_000, 2),
+			perCallContextTokens: 100_000,
+			perCallContextTokensBySource: { fixture: 100_000 },
+		};
 		const temporary = userOf(current, 0);
-		markPerCallContextMessage(temporary);
+		markPerCallContextMessage(temporary, "fixture");
 		const context: Context = {
 			messages: [userOf(1_000, 1), anchor, userOf(50_000, 3), ...(current ? [temporary] : [])],
 		};
@@ -182,7 +186,7 @@ describe("fitOutputTokensToContextWindow", () => {
 
 	test("counts request-only context inserted before the anchor and after a history rewrite", () => {
 		const temporary = userOf(100_000, 0);
-		markPerCallContextMessage(temporary);
+		markPerCallContextMessage(temporary, "fixture");
 		const anchored: Context = { messages: [temporary, reported(700_000, 2), userOf(50_000, 3)] };
 		expect(fitOutputTokensToContextWindow(deepseek, anchored, undefined, tokenizer)).toBe(
 			1_000_000 - 865_000 - OUTPUT_FIT_HEADWAY_TOKENS,

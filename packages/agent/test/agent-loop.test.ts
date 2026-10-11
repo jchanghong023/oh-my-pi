@@ -120,7 +120,7 @@ describe("agentLoop with AgentMessage", () => {
 	it("keeps output room across a tool loop with regenerated request-only context", async () => {
 		const tokenizer = new Tokenizer();
 		const temporary: Message = { role: "user", content: "x".repeat(400_000), timestamp: 0 };
-		markPerCallContextMessage(temporary);
+		markPerCallContextMessage(temporary, "fixture");
 		const mock = createMockModel({
 			contextWindow: 1_000_000,
 			maxTokens: 384_000,

@@ -505,10 +505,10 @@ fn first_match_in_line<M: Matcher>(
 ) -> Option<(usize, usize)> {
 	let buffer = mat.buffer();
 	let range = mat.bytes_range_in_buffer();
-	let mut end = range.end;
-	if searcher.multi_line_with_matcher(matcher) {
-		end = buffer.len();
+	let end = if searcher.multi_line_with_matcher(matcher) {
+		buffer.len()
 	} else {
+		let mut end = range.end;
 		let terminator = searcher.line_terminator();
 		if terminator.is_suffix(&buffer[range.clone()]) {
 			end -= 1;
@@ -516,7 +516,8 @@ fn first_match_in_line<M: Matcher>(
 				end -= 1;
 			}
 		}
-	}
+		end
+	};
 	let found = matcher
 		.find_at(&buffer[..end], range.start)
 		.ok()

@@ -58,6 +58,7 @@ async function runScenario(
 				USERPROFILE: primaryDir,
 				LOCALAPPDATA: path.join(root, "local"),
 				PI_CONFIG_DIR: ".omp",
+				OMP_CONFIG_ROOT: "",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
 				XDG_DATA_HOME: "",

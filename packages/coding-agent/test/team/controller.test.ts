@@ -131,7 +131,7 @@ function companyModel(id: string): Model {
 }
 
 describe("effective team defaults", () => {
-	it("filters offline company defaults by enabledModels but keeps explicit members out of scope", () => {
+	it("filters offline defaults and rejects configured members outside enabledModels", () => {
 		const allowed = companyModel("GLM-5.2-public");
 		const outOfScope = companyModel("Qwen3.6-27B-public");
 		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
@@ -148,7 +148,7 @@ describe("effective team defaults", () => {
 			session,
 			Settings.isolated({
 				"team.members": [],
-				enabledModels: [enabledPattern],
+				enabledModels: [enabledPattern, MODEL_PATTERN],
 			}),
 		);
 		expect(implicit.ok).toBe(true);
@@ -162,16 +162,10 @@ describe("effective team defaults", () => {
 
 		const explicit = resolveTeamParticipantsForSession(
 			session,
-			Settings.isolated({ "team.members": [outOfScopePattern], enabledModels: [enabledPattern] }),
+			Settings.isolated({ "team.members": [outOfScopePattern], enabledModels: [enabledPattern, MODEL_PATTERN] }),
 		);
-		expect(explicit.ok).toBe(true);
-		if (explicit.ok) {
-			expect(explicit.source).toBe("configured");
-			expect(explicit.participants.map(participant => participant.modelPattern)).toEqual([
-				outOfScopePattern,
-				MODEL_PATTERN,
-			]);
-		}
+		expect(explicit.ok).toBe(false);
+		if (!explicit.ok) expect(explicit.error).toContain(outOfScopePattern);
 	});
 });
 
