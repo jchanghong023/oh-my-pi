@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `retainTextSignature` option from `consumeGoogleStream` and `streamGoogleGenAI`; every Google route now keeps text reply signatures ([#15152](https://github.com/can1357/oh-my-pi/pull/15152) by [@will-bogusz](https://github.com/will-bogusz))
+- Custom `SessionsApi` implementations must now implement `permits(provider, sessionId, credentialId)` ([#15135](https://github.com/can1357/oh-my-pi/pull/15135) by [@will-bogusz](https://github.com/will-bogusz))
+
 ### Added
 
 - Added correlated Anthropic request, HTTP attempt, response-header, streaming, retry, fallback, cancellation, and terminal-result diagnostics without logging prompts, credentials, or response bodies.
@@ -24,6 +29,13 @@
 ### Added
 
 - Exported `matchesReplacementCredential` and `isSameOAuthAccount`, which tell whether storing a credential replaces an existing account row and whether two credentials belong to the same account ([#14901](https://github.com/can1357/oh-my-pi/pull/14901) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `AuthStorage.sessions.permits(provider, sessionId, credentialId)`, which tells whether a stored account may serve a session restricted to an account pool ([#15135](https://github.com/can1357/oh-my-pi/pull/15135) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- Changed Devin chat turns to sample with the native Devin CLI's settings and no synthetic stop patterns; explicit temperature, topP and stop sequences still apply ([#10234](https://github.com/can1357/oh-my-pi/pull/10234) by [@will-bogusz](https://github.com/will-bogusz)).
+- When a session moves to another host serving the same model (Kimi K3, DeepSeek V4, GLM 5+, MiniMax M3), the model's earlier reasoning now reaches the new host in its reasoning field instead of as `<think>` text inside earlier replies, which the model could start imitating in its own replies. Only reasoning the stream parser confirmed as the model's own trace moves; summaries and turns recorded before this change keep the `<think>` text ([#15123](https://github.com/can1357/oh-my-pi/pull/15123) by [@will-bogusz](https://github.com/will-bogusz)).
+- Added the `parentSessionId` and `minimizeEffort` stream options: a side request branched from a conversation reuses its prompt cache, and can run at the model's lowest effort where a per-message control carries the change (Anthropic per-message effort, OpenAI `configuration_update`) without losing that cache
 
 ### Fixed
 
@@ -31,6 +43,19 @@
 - Fixed Codex WebSocket prewarm to accept an optional service tier and send the model/tier routing hint consistently with normal requests, preserving omitted and explicit service-tier requests ([#15022](https://github.com/can1357/oh-my-pi/pull/15022) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed the OAuth sign-in result page breaking or rendering injected markup when a provider error or callback value contains `</script>` or `$` replacement sequences ([#15037](https://github.com/can1357/oh-my-pi/pull/15037) by [@BAKocska](https://github.com/BAKocska)).
 - Fixed Anthropic requests failing with 400 "All tools cannot be deferred" when a conversation that had no tools gains them (`omp -p --no-tools`, then `omp -c`), or a resumed session keeps none of its earlier tools ([#15233](https://github.com/can1357/oh-my-pi/pull/15233) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Anthropic requests failing with HTTP 400 `At least one of the image dimensions exceed max allowed size: 8000 pixels` when a tall screenshot sat in history; every image now respects the host's per-side image limit instead of only requests carrying more than 20 images ([#10633](https://github.com/can1357/oh-my-pi/pull/10633) by [@aktanazat](https://github.com/aktanazat)).
+- Fixed Anthropic requests failing with HTTP 400 `image exceeds 10 MB maximum` when a dense screenshot sat in history; oversized image payloads are now re-encoded down to the host's byte limit, at full resolution when re-encoding alone is enough ([#10633](https://github.com/can1357/oh-my-pi/pull/10633) by [@aktanazat](https://github.com/aktanazat)).
+- An Anthropic-compatible endpoint that rejects `cache_control` with a 400 no longer fails the turn. The request is replayed without prompt-cache breakpoints, the rejection is remembered for the rest of the session per endpoint and model, the prompt-cache betas are dropped alongside it, and the turn reports `prompt-cache` in `disabledFeatures`. An endpoint that takes the field but refuses `ttl`/`scope` sends the same 400, so a request that asked for either is first replayed with every breakpoint intact and those options removed; that succeeding keeps 5m caching on for the session and reports `prompt-cache-retention` instead ([#11812](https://github.com/can1357/oh-my-pi/pull/11812) by [@camjac251](https://github.com/camjac251)).
+- LiteLLM proxy logs now group requests by omp conversation instead of showing a separate session for each request ([#8836](https://github.com/can1357/oh-my-pi/issues/8836), [#15096](https://github.com/can1357/oh-my-pi/pull/15096) by [@occ](https://github.com/occ)).
+- Fixed Gemini answers echoing fenced `thinking` blocks on Google, Vertex, Antigravity and Gemini CLI: a model's own earlier thinking (Gemini, and gpt-oss on Antigravity) went back as visible text instead of as thoughts ([#15152](https://github.com/can1357/oh-my-pi/pull/15152) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Gemini text replies losing their signature on Google, Vertex, Antigravity, Gemini CLI and Factory Droid, so the next request sends it back as Google's own clients do ([#15152](https://github.com/can1357/oh-my-pi/pull/15152) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Cursor models losing the reasoning Cursor's server recorded for their earlier turns: a turn now keeps those records, signed and redacted reasoning included, and sends them back unchanged to the same model on the same route, also after a resume ([#15154](https://github.com/can1357/oh-my-pi/pull/15154) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed omp failing to start, select an account, or log in when an `auth.accountPolicies` entry names a disabled, logged-out, or broker-hidden account; that policy, like a mistyped selector, is now skipped with a log warning ([#14233](https://github.com/can1357/oh-my-pi/pull/14233) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Factory Droid Claude turns with thinking off replaying earlier thinking blocks, which Snowflake rejects, and Sonnet 5.5 Off now matching droid's between-tools thinking at high effort ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Anthropic requests sending the thinking-binding-controls beta on thinking-off turns that carry no thinking binding ([#15116](https://github.com/can1357/oh-my-pi/pull/15116) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed side requests on GPT-6 Responses and Codex models missing the conversation's prompt cache after a reasoning-effort change: they now keep its request-level effort and replay its `configuration_update` items
+- Fixed Codex side requests never reading the conversation's prompt cache: they now send its session headers, which the backend routes cache affinity by, while keeping their own request identity
+- Fixed GPT-6 models in `pro` reasoning mode receiving `configuration_update` items, which that mode rejects; their effort changes stay on the request-level effort
 
 ## [18.8.9] - 2026-10-10
 

@@ -7,11 +7,12 @@ import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-age
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { computerApproval, createComputerPrelude } from "@oh-my-pi/pi-coding-agent/tools/computer";
 import { isReadOnlyComputerCall, renderComputerCall } from "@oh-my-pi/pi-coding-agent/tools/computer/call";
-import type {
-	ComputerSessionSnapshot,
-	ComputerWorkerInbound,
-	ComputerWorkerOutbound,
-	ComputerWorkerTransport,
+import {
+	type ComputerSessionSnapshot,
+	type ComputerWorkerInbound,
+	type ComputerWorkerOutbound,
+	type ComputerWorkerTransport,
+	SCREEN_LOCKED_CAPTURE_NOTE,
 } from "@oh-my-pi/pi-coding-agent/tools/computer/protocol";
 import {
 	type ComputerController,
@@ -28,6 +29,7 @@ import type {
 	DesktopCapture,
 	DesktopDisplay,
 	DesktopPoint,
+	DesktopScreenState,
 	DesktopWindow,
 	PointerOptions,
 } from "@oh-my-pi/pi-natives";
@@ -59,6 +61,8 @@ const capabilities: DesktopCapabilities = {
 	menus: true,
 	heldInput: true,
 	spaces: true,
+	screenLocked: false,
+	displayAsleep: false,
 };
 
 const display: DesktopDisplay = {
@@ -103,7 +107,15 @@ const axNode: AxNode = {
 };
 
 class FakeNativeSession implements NativeDesktopSession {
-	readonly capabilities = capabilities;
+	/** Lock and sleep state reported by captures, capabilities and screenState, as the native session reads it live. */
+	screenLocked = false;
+	displayAsleep = false;
+	get capabilities(): DesktopCapabilities {
+		return { ...capabilities, screenLocked: this.screenLocked, displayAsleep: this.displayAsleep };
+	}
+	get screenState(): DesktopScreenState {
+		return { screenLocked: this.screenLocked, displayAsleep: this.displayAsleep };
+	}
 	clickCount = 0;
 	closeCount = 0;
 	cancelCount = 0;
@@ -133,6 +145,7 @@ class FakeNativeSession implements NativeDesktopSession {
 			target,
 			displays: [display],
 			backend: "fake",
+			screenLocked: this.screenLocked,
 		};
 	}
 	async captureRegion(_target: string, _region: CaptureRegion): Promise<DesktopCapture> {
@@ -1168,6 +1181,124 @@ describe("computer worker round trips", () => {
 		});
 	});
 
+	it("marks a screenshot taken behind the lock screen, and only then", async () => {
+		for (const locked of [true, false]) {
+			const transport = new MemoryTransport();
+			const native = new FakeNativeSession();
+			native.screenLocked = locked;
+			new ComputerWorkerCore(transport, () => native);
+
+			const result = await runWorker(transport, `locked-${locked}`, "return await desktop.screenshot()");
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			const [caption] = result.payload.displays.filter(block => block.type === "text");
+			const lines = caption?.type === "text" ? caption.text.split("\n") : [];
+			if (locked) {
+				expect(lines).toHaveLength(2);
+				expect(lines[1]).toBe(SCREEN_LOCKED_CAPTURE_NOTE);
+				expect(result.payload.screenshots[0]?.screenLocked).toBe(true);
+				expect(result.payload.returnValue).toMatchObject({ screenLocked: true });
+			} else {
+				expect(lines).toHaveLength(1);
+				expect(result.payload.screenshots[0]).not.toHaveProperty("screenLocked");
+				expect(result.payload.returnValue).not.toHaveProperty("screenLocked");
+			}
+		}
+	});
+
+	it("tells the model a run ended on a locked screen without refusing its input", async () => {
+		for (const locked of [true, false]) {
+			const session = toolSession();
+			const native = new FakeNativeSession();
+			native.screenLocked = locked;
+			const prelude = workerPrelude(session, native);
+			const result = await prelude.invoke(
+				{ action: "run", code: "await desktop.screenshot({ silent: true }); await desktop.click(1, 2)" },
+				{ session, toolCallId: `locked-run-${locked}`, signal: new AbortController().signal },
+			);
+			expect(native.clickCount).toBe(1);
+			const notes = result.content.filter(block => block.type === "text" && block.text.startsWith("Note: "));
+			if (locked) {
+				expect(result.content[0]).toMatchObject({
+					type: "text",
+					text: expect.stringMatching(/^Note: when this run ended the screen is locked\. /),
+				});
+			} else {
+				expect(notes).toEqual([]);
+			}
+		}
+	});
+
+	it("keeps a failed run's own error first and adds the lock state after it", async () => {
+		for (const locked of [true, false]) {
+			const transport = new MemoryTransport();
+			const native = new FakeNativeSession();
+			native.screenLocked = locked;
+			new ComputerWorkerCore(transport, () => native);
+			const result = await runWorker(
+				transport,
+				`failed-${locked}`,
+				'await desktop.screenshot({ silent: true }); await desktop.click(1, 2); assert(false, "verification failed")',
+			);
+			expect(native.clickCount).toBe(1);
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			const [first, ...rest] = result.error.message.split("\n");
+			expect(first).toBe("verification failed");
+			if (locked) expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
+			else expect(rest).toEqual([]);
+		}
+	});
+
+	it("scopes a display-sleep notice to the session's display", async () => {
+		const session = toolSession();
+		const native = new FakeNativeSession();
+		native.displayAsleep = true;
+		const prelude = workerPrelude(session, native);
+		const result = await prelude.invoke(
+			{ action: "run", code: "await desktop.click(1, 2)" },
+			{ session, toolCallId: "asleep-run", signal: new AbortController().signal },
+		);
+		const [note] = result.content;
+		const text = note?.type === "text" ? note.text : "";
+		expect(text).toMatch(/^Note: when this run ended the session's display is asleep\. /);
+		expect(text).toContain("Nothing on that display can be captured or clicked until it wakes.");
+		expect(text).toContain("`computer.display`");
+	});
+
+	it("adds the lock state to a run timed out by a hung native call without reading capabilities", async () => {
+		const started = Promise.withResolvers<void>();
+		const hung = Promise.withResolvers<DesktopCapture>();
+		class HungSession extends FakeNativeSession {
+			/** Native capabilities reads queue behind the hung call when no snapshot exists. */
+			blockingReads = 0;
+			override get capabilities(): DesktopCapabilities {
+				this.blockingReads += 1;
+				return super.capabilities;
+			}
+			override async capture(): Promise<DesktopCapture> {
+				started.resolve();
+				// Stuck in the OS: cancellation does not settle it.
+				return hung.promise;
+			}
+		}
+		const native = new HungSession();
+		native.screenLocked = true;
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+		const pending = runWorker(transport, "hung", "await desktop.screenshot({ silent: true })", false, 50);
+		await started.promise;
+		const result = await pending;
+		// Let the script's runtime finish so later tests can start theirs.
+		hung.reject(new Error("released"));
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		const [first, ...rest] = result.error.message.split("\n");
+		expect(first).toBe("Computer code execution timed out after 50ms");
+		expect(rest.join("\n")).toMatch(/^Note: when this run ended the screen is locked\. /);
+		expect(native.blockingReads).toBe(0);
+	});
+
 	it("blocks read-only click after capture before invoking native input", async () => {
 		const transport = new MemoryTransport();
 		const native = new FakeNativeSession();
@@ -1410,6 +1541,73 @@ describe("computer worker round trips", () => {
 		});
 	});
 
+	describe("window selector misses", () => {
+		const desktopWindows: DesktopWindow[] = [
+			windowFixture,
+			{ ...windowFixture, id: "43", title: "", focused: false },
+			{ ...windowFixture, id: "7", app: "Finder", title: "Downloads", pid: 9, focused: false },
+			{ ...windowFixture, id: "8", app: "TextEdit", title: "notes.txt", pid: 10, focused: false },
+			{ ...windowFixture, id: "9", app: "TextEdit", title: "draft.txt", pid: 10, focused: false },
+		];
+
+		async function missMessage(windows: DesktopWindow[], selector: string): Promise<string> {
+			const transport = new MemoryTransport();
+			const native = new FakeNativeSession();
+			native.listWindows = async () => windows;
+			new ComputerWorkerCore(transport, () => native);
+			const result = await runWorker(transport, "window-miss", `await desktop.window(${selector})`);
+			expect(result.ok).toBe(false);
+			return result.ok ? "" : result.error.message;
+		}
+
+		it("leads with the requested app's windows when its title filter misses", async () => {
+			const message = await missMessage(desktopWindows, '{ app: "textedit", title: "report" }');
+			expect(message.split("\n").slice(0, 3)).toEqual([
+				'no window matches {"app":"textedit","title":"report"}',
+				'Open windows by app (id "title"):',
+				'- TextEdit: 8 "notes.txt", 9 "draft.txt"',
+			]);
+		});
+
+		it("says the app has no window and lists every app's windows, untitled ones included", async () => {
+			const lines = (await missMessage(desktopWindows, '{ app: "Calendar" }')).split("\n");
+			expect(lines).toContain('No open window belongs to an app matching "Calendar".');
+			expect(lines).toContain('- Code: 42 "Editor", 43 ""');
+			expect(lines).toContain('- Finder: 7 "Downloads"');
+			expect(lines).toContain('- TextEdit: 8 "notes.txt", 9 "draft.txt"');
+		});
+
+		it("lists untitled windows by id after titled ones, as when macOS hides other apps' titles", async () => {
+			const blank = (id: string): DesktopWindow => ({
+				...windowFixture,
+				id,
+				app: "Notes",
+				title: "",
+				focused: false,
+			});
+			const message = await missMessage(
+				[windowFixture, blank("50"), blank("51"), blank("52"), { ...blank("53"), title: "Inbox" }],
+				'"404"',
+			);
+			expect(message.split("\n")).toContain('- Notes: 53 "Inbox", 50 "", 51 "", 1 more');
+		});
+
+		it("bounds the listing on a desktop with many apps and long titles", async () => {
+			const crowded = Array.from({ length: 40 }, (_, app) =>
+				Array.from({ length: 4 }, (_, index) => ({
+					...windowFixture,
+					id: `${app}-${index}`,
+					app: `App ${String(app).padStart(2, "0")}`,
+					title: "t".repeat(300),
+					focused: false,
+				})),
+			).flat();
+			const message = await missMessage(crowded, '{ app: "Calendar" }');
+			expect(message.length).toBeLessThan(5_000);
+			expect(message.split("\n").at(-1)).toBe("- 28 more apps with 112 windows");
+		});
+	});
+
 	it("resolves ref() to a populated live element and find() to every match", async () => {
 		const transport = new MemoryTransport();
 		new ComputerWorkerCore(transport, () => new FakeNativeSession());
@@ -1448,7 +1646,45 @@ describe("computer worker round trips", () => {
 			new ComputerWorkerCore(transport, () => new TwoWindowSession());
 			const result = await runWorker(transport, "numeric-miss", `await desktop.window(${id})`);
 			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.error.message).toBe(`no window matches ${id}`);
+			if (!result.ok) expect(result.error.message.split("\n")[0]).toBe(`no window matches ${id}`);
+		});
+	});
+
+	describe("more windows than the listing cap", () => {
+		class CrowdedSession extends FakeNativeSession {
+			override async listWindows(): Promise<DesktopWindow[]> {
+				const front = Array.from({ length: 59 }, (_, index) => ({
+					...windowFixture,
+					id: String(index + 100),
+					app: "Front",
+					focused: false,
+				}));
+				return [...front, { ...windowFixture, id: "999", app: "Rear", focused: false }];
+			}
+		}
+
+		it("caps the listing after filtering and finds a window behind the cap by id or app", async () => {
+			const transport = new MemoryTransport();
+			new ComputerWorkerCore(transport, () => new CrowdedSession());
+			const result = await runWorker(
+				transport,
+				"crowded-desktop",
+				'({ listed: (await desktop.windows()).length, filtered: (await desktop.windows({ app: "rear" })).map(w => w.id), byId: (await desktop.window(999)).app, byApp: (await desktop.window({ app: "rear" })).id })',
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok)
+				expect(result.payload.returnValue).toEqual({ listed: 48, filtered: ["999"], byId: "Rear", byApp: "999" });
+		});
+
+		it("lists at most 48 candidates for an ambiguous filter", async () => {
+			const transport = new MemoryTransport();
+			new ComputerWorkerCore(transport, () => new CrowdedSession());
+			const result = await runWorker(transport, "crowded-ambiguous", 'await desktop.window({ app: "front" })');
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error.message).toContain("147 Front");
+			expect(result.error.message).not.toContain("148 Front");
+			expect(result.error.message).toContain("… 11 more");
 		});
 	});
 

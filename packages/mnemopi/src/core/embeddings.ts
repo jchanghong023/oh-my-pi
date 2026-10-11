@@ -10,6 +10,7 @@ import {
 	fetchWithRetry,
 	getFastembedCacheDir,
 	logger,
+	withLoopPhase,
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { EmbeddingModel } from "fastembed";
@@ -294,9 +295,11 @@ export function embeddingDimFor(modelName: string): number {
 async function collectMatrix(batches: EmbeddingOutput): Promise<EmbeddingMatrix> {
 	const rows: Vector[] = [];
 	for await (const batch of batches) {
-		for (const row of batch) {
-			rows.push(new Float32Array(row));
-		}
+		withLoopPhase("mnemopi.embed", () => {
+			for (const row of batch) {
+				rows.push(new Float32Array(row));
+			}
+		});
 	}
 	return rows;
 }
@@ -464,34 +467,37 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 					return degraded("http_error");
 				}
 				stage = "response_decode";
-				const { data: rows } = (await response.json()) as { data?: Array<{ embedding: number[] }> };
-				stage = "response_schema";
-				if (rows === undefined) {
-					return degraded("missing_data");
-				}
-				logger.info("Embedding API schema received", {
-					...fields,
-					event: "embedding_api_schema",
-					stage,
-					result: "received",
-					row_count: Array.isArray(rows) ? rows.length : undefined,
-					auth_attempt: authAttempt,
-					status,
-					elapsed_ms: performance.now() - startedAt,
+				const data = (await response.json()) as { data?: Array<{ embedding: number[] }> };
+				return withLoopPhase("mnemopi.embed", () => {
+					const { data: rows } = data;
+					stage = "response_schema";
+					if (rows === undefined) {
+						return degraded("missing_data");
+					}
+					logger.info("Embedding API schema received", {
+						...fields,
+						event: "embedding_api_schema",
+						stage,
+						result: "received",
+						row_count: Array.isArray(rows) ? rows.length : undefined,
+						auth_attempt: authAttempt,
+						status,
+						elapsed_ms: performance.now() - startedAt,
+					});
+					apiCallCount += 1;
+					const matrix = rows.map(row => new Float32Array(row.embedding));
+					logger.info("Embedding API completed", {
+						...fields,
+						event: "embedding_api_completed",
+						stage,
+						result: "success",
+						row_count: matrix.length,
+						auth_attempt: authAttempt,
+						status,
+						elapsed_ms: performance.now() - startedAt,
+					});
+					return matrix;
 				});
-				apiCallCount += 1;
-				const matrix = rows.map(row => new Float32Array(row.embedding));
-				logger.info("Embedding API completed", {
-					...fields,
-					event: "embedding_api_completed",
-					stage,
-					result: "success",
-					row_count: matrix.length,
-					auth_attempt: authAttempt,
-					status,
-					elapsed_ms: performance.now() - startedAt,
-				});
-				return matrix;
 			} catch (error) {
 				status = extractHttpStatusFromError(error) ?? status;
 				return degraded("exception", error);
@@ -625,7 +631,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		return null;
 	}
 	try {
-		const vectors = await collectMatrix(model.embed([...texts]));
+		const vectors = await withLoopPhase("mnemopi.embed", () => collectMatrix(model.embed([...texts])));
 		if (vectors.length === 1) {
 			const vector = vectors[0];
 			if (vector !== undefined) {

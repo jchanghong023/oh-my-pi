@@ -140,6 +140,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"qwen-preserve-thinking": wire("qwenPreserveThinking", ["openai"]),
 	"reject-root-object-union": wire("rejectRootObjectUnion", OAI),
 	"retry-without-strict-on-grammar-error": wire("retryWithoutStrictOnGrammarError", OAI),
+	"session-header": wire("sessionHeader", OAI, "scalar", ["x-litellm-session-id"]),
 	"reasoning-content-field": wire("reasoningContentField", OAI, "scalar", [
 		"reasoning_content",
 		"reasoning",
@@ -230,12 +231,20 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"allow-anthropic-header-overrides": wire("allowAnthropicHeaderOverrides", ["anthropic"]),
 	"disable-adaptive-thinking": wire("disableAdaptiveThinking", ["anthropic"]),
 	"disable-strict-tools": wire("disableStrictTools", ["anthropic"]),
-	"disabled-thinking": wire("disabledThinking", ["anthropic", "bedrock"], "scalar", ["omit", "disabled", "adaptive"]),
+	"between-tools-effort": wire("betweenToolsEffort", ["anthropic"], "scalar", ["low", "medium", "high"]),
+	"disabled-thinking": wire("disabledThinking", ["anthropic", "bedrock"], "scalar", [
+		"omit",
+		"disabled",
+		"adaptive",
+		"between-tools",
+	]),
 	"effort-beta": wire("effortBeta", ["anthropic"]),
 	"escape-builtin-tool-names": wire("escapeBuiltinToolNames", ["anthropic"]),
 	"fast-mode": wire("fastMode", ["anthropic"]),
 	"first-party-provider": wire("firstPartyProvider", ["anthropic"]),
 	"inject-claude-code-instruction": wire("injectClaudeCodeInstruction", ["anthropic"]),
+	"max-image-dimension": wire("maxImageDimension", ["anthropic"]),
+	"max-image-payload-bytes": wire("maxImagePayloadBytes", ["anthropic"]),
 	"official-endpoint": wire("officialEndpoint", ["anthropic", "openai-responses"]),
 	"replay-unsigned-thinking": wire("replayUnsignedThinking", ["anthropic"]),
 	"requires-thinking-enabled": wire("requiresThinkingEnabled", ["anthropic"]),
@@ -408,6 +417,18 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"prompt-cache-lookback": { key: "promptCacheLookback", set: "catalog", shape: "scalar" },
 	"long-usage-limit-fallback": { key: "longUsageLimitFallback", set: "catalog", shape: "scalar" },
 	"max-context-window": { key: "maxContextWindow", set: "catalog", shape: "scalar" },
+	/**
+	 * Every host of the model returns its full plaintext trace wherever the
+	 * wire does not mark reasoning as a summary (`ThinkingContent.summary ===
+	 * false` vouches for nothing more), and its identity (class + family +
+	 * revision) pins one set of weights, so a turn's reasoning may replay
+	 * natively on another host serving the same model. Marked summaries never
+	 * carry; do not declare it where a host serves summaries unmarked.
+	 * Declared per family in `classes/*.kdl`; a host whose reasoning must not be
+	 * carried in or out sets `#false` in its `providers/*.kdl`. Read through
+	 * `compat/reasoning-carry.ts`.
+	 */
+	"portable-reasoning": { key: "portableReasoning", set: "catalog", shape: "scalar", values: [true, false] },
 	"pricing-status": {
 		key: "pricingStatus",
 		set: "catalog",
