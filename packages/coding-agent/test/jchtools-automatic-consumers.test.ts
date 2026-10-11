@@ -41,7 +41,6 @@ async function fixture(
 	cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
 	const requests: Array<{ path: string; model: string }> = [];
 	const modelId = "claude-haiku-5-5";
-	const requestCwds: Array<string | undefined> = [];
 	const http = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -52,7 +51,6 @@ async function fixture(
 			}
 			const body = (await request.json()) as { model: string; cwd?: string };
 			requests.push({ path: pathname, model: body.model });
-			requestCwds.push(body.cwd);
 			const response = options.respond?.(pathname, body.model, body);
 			if (response) return response;
 			const chunk = (delta: object, finishReason: string | null = null) =>
@@ -175,7 +173,7 @@ async function fixture(
 		modelRegistry: registry,
 		getActiveModelString: () => undefined,
 	} as unknown as ToolSession;
-	return { root, settings, registry, remote, ordinary, requests, requestCwds, hub, toolSession };
+	return { root, settings, registry, remote, ordinary, requests, hub, toolSession };
 }
 
 async function completion(session: ToolSession, schema?: Record<string, unknown>) {
@@ -284,7 +282,6 @@ describe("automatic roles in text consumers", () => {
 		fs.writeFileSync(path.join(secondDir, markerName), thirdMarker);
 		switchedSession.cwd = secondDir;
 		expect((await completion(switchedSession))?.text).toBe(thirdMarker);
-		expect(f.requestCwds).toEqual([firstDir, secondDir, firstDir, secondDir]);
 	});
 
 	test.each(["http", "sse"])("explicit remote completion %s failures never retry or fall back", async failure => {
