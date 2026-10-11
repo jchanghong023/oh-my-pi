@@ -39,6 +39,7 @@
 
 ### Fixed
 
+- Kept wildcard retry-fallback regression checks valid when provider catalogs retire older Gemini models.
 - Bound the disposable Bun server in the isolated-browser-profile test to loopback, preventing repeated Windows firewall prompts for randomly copied executable paths.
 - Preserved cleared project roles under offline company defaults and YAML comments and sibling alias values when saving a single role.
 - Fixed offline startup model scopes omitting loaded extension models and cold-resumed sessions losing the offline request notice.
