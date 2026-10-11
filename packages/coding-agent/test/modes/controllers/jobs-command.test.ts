@@ -28,7 +28,6 @@ async function renderFullJobs(running: AsyncJobSnapshotItem[]): Promise<string[]
 		keybindings: { getKeys: () => ["escape"] },
 		reportContainer,
 		commandReportRows: () => 200,
-		composerInputAtBottom: () => false,
 		session: {
 			getAsyncJobSnapshot: () => ({
 				running,

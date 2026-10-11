@@ -182,8 +182,6 @@ function hasForkApiKeyOverride(argv: string[]): boolean {
 export class CommandController {
 	/** The open native report sheet. */
 	#reportSheet: OverlayHandle | undefined;
-	/** The editor sat on the bottom row when the text-mode report above it opened. */
-	#reportOpenedAtBottom = false;
 	#forkTerminalDependencies: ForkTerminalDependencies;
 
 	constructor(
@@ -201,28 +199,19 @@ export class CommandController {
 		};
 	}
 
-	/**
-	 * Esc: take away the report shown above the editor (text mode); false when
-	 * none is shown. While open it may have pushed rows into the terminal's
-	 * scrollback that cannot come back, so an editor that sat on the bottom
-	 * row before is pinned there again instead of jumping up the screen.
-	 */
+	/** Esc: take away the report shown above the editor (text mode); false when none is shown. */
 	dismissCommandReport(): boolean {
-		if (!this.#clearReport()) return false;
-		if (this.#reportOpenedAtBottom) this.ctx.pinComposerToBottom();
-		this.#reportOpenedAtBottom = false;
-		return true;
+		return this.#clearReport();
 	}
 
 	/**
 	 * Drop any report — the one above the editor, or a focused sheet/page —
-	 * without pinning anything: the transcript or session under it was reset,
-	 * and its contents describe what is gone.
+	 * because the transcript or session under it was reset, and its contents
+	 * describe what is gone.
 	 */
 	clearCommandReport(): void {
 		this.#clearReport();
 		this.#closeReportSheet();
-		this.#reportOpenedAtBottom = false;
 	}
 
 	#clearReport(): boolean {
@@ -254,9 +243,6 @@ export class CommandController {
 	 * Esc or Close.
 	 */
 	showCommandReport(options: { title: string; head?: TspText; body: Component }): void {
-		// A replacement keeps where the editor sat before the first report.
-		const openedAtBottom =
-			this.ctx.reportContainer.children.length > 0 ? this.#reportOpenedAtBottom : this.ctx.composerInputAtBottom();
 		this.#clearReport();
 		this.#closeReportSheet();
 		const terminal = this.ctx.ui.terminal;
@@ -285,7 +271,6 @@ export class CommandController {
 			this.ctx.ui.setFocus(report);
 		} else {
 			this.ctx.reportContainer.addChild(report);
-			this.#reportOpenedAtBottom = openedAtBottom;
 		}
 		this.ctx.ui.requestRender();
 	}

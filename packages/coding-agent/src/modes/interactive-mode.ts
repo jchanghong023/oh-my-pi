@@ -2146,12 +2146,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.hookWidgetContainerBelow,
 			],
 			{
-				// Inline dialogs and a tall multi-line draft swap into the editor
-				// container and collapse again, as a command report above it closes
-				// on Esc: they clip the transcript instead of retiring it to
-				// scrollback, so the editor returns to the bottom when they go.
-				// Everything else is turn-scoped.
-				transient: [this.editorContainer, this.reportContainer],
 				// Natively the HUD pills lead the dock, queued messages sit between
 				// the working row and the composer, and the attachment chips live
 				// inside the composer.
@@ -8344,15 +8338,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	commandReportRows(): number | undefined {
 		const below = this.composer.rowsBelow(this.reportContainer);
 		return below === undefined ? undefined : this.ui.terminal.rows - below;
-	}
-
-	composerInputAtBottom(): boolean {
-		const viewport = this.ui.getMutableViewport();
-		return viewport.length > 0 && viewport.top + viewport.length >= this.ui.terminal.rows;
-	}
-
-	pinComposerToBottom(): void {
-		this.composer.pinInputToBottom();
 	}
 
 	cycleThinkingLevel(): void {

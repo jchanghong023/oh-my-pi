@@ -127,6 +127,12 @@ function singleBoolean(node: KdlNodeView): boolean {
 	return node.args[0];
 }
 
+function singleString(node: KdlNodeView): string {
+	validateProps(node, []);
+	if (node.args.length !== 1 || typeof node.args[0] !== "string" || !node.args[0] || node.children) malformed(node);
+	return node.args[0];
+}
+
 function stringList(node: KdlNodeView): string[] {
 	validateProps(node, []);
 	if (node.children) malformed(node);
@@ -174,6 +180,7 @@ function parseModel(node: KdlNodeView, provider: string, defaults: SeedDefaults)
 	let cost: TokenCost | undefined;
 	let limits: { contextWindow: number | null; maxTokens: number | null } | undefined;
 	let supportsTools: boolean | undefined;
+	let requestModelId: string | undefined;
 	const axes: RuleAxes = { wire: {}, thinking: {}, catalog: {} };
 	for (const child of node.children) {
 		switch (child.name) {
@@ -201,6 +208,10 @@ function parseModel(node: KdlNodeView, provider: string, defaults: SeedDefaults)
 			case "supports-tools":
 				if (supportsTools !== undefined) malformed(child);
 				supportsTools = singleBoolean(child);
+				break;
+			case "request-model-id":
+				if (requestModelId !== undefined) malformed(child);
+				requestModelId = singleString(child);
 				break;
 			default: {
 				const axis = axisFor(child);
@@ -245,6 +256,7 @@ function parseModel(node: KdlNodeView, provider: string, defaults: SeedDefaults)
 		baseUrl,
 		reasoning,
 		input,
+		...(requestModelId !== undefined && { requestModelId }),
 		...(supportsTools !== undefined && { supportsTools }),
 		cost,
 		contextWindow: limits.contextWindow,

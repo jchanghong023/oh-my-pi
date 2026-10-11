@@ -1,4 +1,3 @@
-import { scheduler } from "node:timers/promises";
 import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { isAnthropicOAuthToken, toNumber } from "@oh-my-pi/pi-catalog/utils";
 import * as AIError from "../error";
@@ -16,6 +15,7 @@ import {
 	type UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { waitForRetry } from "../utils/retry-wait";
 import { buildClaudeOAuthHeaders, claudeOAuthBaseUrls } from "./claude-api";
 import { listClaudeResetCredits, parseClaudeResetCreditsFromUsagePayload } from "./claude-reset";
 import { HOUR_MS, parseIsoTimestamp, usageStatus, WEEK_MS } from "./shared";
@@ -240,11 +240,7 @@ async function waitBeforeRetry(
 	if (attempt >= MAX_ATTEMPTS - 1) return false;
 	try {
 		const delayMs = retryDelayMs(attempt, retryAfter);
-		if (retryWait) {
-			await retryWait(delayMs, signal);
-		} else {
-			await scheduler.wait(delayMs, { signal });
-		}
+		await waitForRetry(retryWait, delayMs, signal);
 		return !signal?.aborted;
 	} catch (error) {
 		if (isAbortError(error, signal)) return false;

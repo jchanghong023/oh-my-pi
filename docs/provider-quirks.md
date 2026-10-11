@@ -47,7 +47,7 @@ The OpenAI Chat Completions provider implements HTTP POST JSON body streaming ov
 
 ### Catalog model handling
 - **Provider entry (`openai`)**: `packages/catalog/src/compat/rules/providers/openai.kdl` declares default model `gpt-5.5`. Environment keys: `OPENAI_API_KEY`.
-- **Authored seeds**: `daybreak-blue-latest`, `daybreak-red-latest`, `gpt-5.6-cyber`, `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows.
+- **Authored seeds**: `daybreak-blue-latest`, `daybreak-red-latest`, `gpt-5.6-cyber`, `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`, `gpt-6-luna-decisions`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows. `gpt-6-luna-decisions` is a `judge` row on the `openai-decisions` API that requests wire id `gpt-6-luna`; until a regenerated bundle carries it, `openaiModelManagerOptions` appends it to successful discovery.
 - **Model Resolvers & Managers**: `createOpenAICompatibleModelManagerOptions` in `packages/catalog/src/provider-models/openai-compat.ts` constructs model managers for `openai-completions` providers. It combines static/curated model definitions, bundled reference specs (`getBundledModels`), and live models fetched from remote catalog endpoints.
 - **Catalog Discovery**: `fetchOpenAICompatibleModels` in `packages/catalog/src/discovery/openai-compatible.ts` queries provider `/models` endpoints. It safely parses envelopes (`data`, `models`, `result`, `items`), enforces request timeouts using `withOpenAICompatibleDiscoveryTimeout`, validates model record schemas (`openAICompatibleModelRecordSchema`), applies custom mappers/filters, and deduplicates models by ID.
 
@@ -73,7 +73,7 @@ The OpenAI Responses provider (`packages/ai/src/providers/openai-responses.ts`) 
 
 ### Catalog model handling
 - **Provider entry (`openai`)**: `packages/catalog/src/compat/rules/providers/openai.kdl` declares default model `gpt-5.5`. Environment keys: `OPENAI_API_KEY`.
-- **Authored seeds**: `daybreak-blue-latest`, `daybreak-red-latest`, `gpt-5.6-cyber`, `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows.
+- **Authored seeds**: `daybreak-blue-latest`, `daybreak-red-latest`, `gpt-5.6-cyber`, `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`, `gpt-6-luna-decisions`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows. `gpt-6-luna-decisions` is a `judge` row on the `openai-decisions` API that requests wire id `gpt-6-luna`; until a regenerated bundle carries it, `openaiModelManagerOptions` appends it to successful discovery.
 
 
 ## OpenAI Codex
@@ -2295,6 +2295,19 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/zhip
 - **Provider entry (`typesafe`)**: `packages/catalog/src/compat/rules/providers/typesafe.kdl` declares default model `jev-latest`. Environment keys: `TYPESAFE_API_KEY`.
 - **Authored seeds**: `jev-latest`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows.
 - Runtime manager: `typesafeModelManagerOptions` in `packages/catalog/src/provider-models/special.ts`.
+
+## Cloudflare Workers AI (`cloudflare-workers-ai`)
+
+### Special casings
+- Uses `workers-ai-systemone`: Cloudflare's Clef decision models take the System One body at `POST https://api.cloudflare.com/client/v4/accounts/<account>/ai/run/@cf/cloudflare/<model>`. `<account>` resolves per request from the stored credential's account ID, else `CLOUDFLARE_ACCOUNT_ID`. `judgment-questions-max` caps a request at 64 questions (`providers/judgment-questions.kdl`).
+
+### Auth & usage
+- Login kind `custom` (`hook="cloudflare-workers-ai"`) is declared in `packages/catalog/src/compat/rules/auth/cloudflare-workers-ai.kdl` and implemented in `packages/ai/src/registry/oauth/cloudflare-workers-ai.ts`; it stores the API token and account ID through `serializeCloudflareCredential` (`packages/catalog/src/wire/cloudflare.ts`). Environment keys: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_AUTH_TOKEN`.
+
+### Catalog model handling
+- **Provider entry (`cloudflare-workers-ai`)**: `packages/catalog/src/compat/rules/providers/cloudflare-workers-ai.kdl` declares default model `@cf/cloudflare/clef`. Environment keys: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_AUTH_TOKEN`.
+- **Authored seeds**: `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash`; bundle policy `always`. Limits, capabilities, and prices are authored alongside these rows.
+- Runtime manager: `cloudflareWorkersAiModelManagerOptions` in `packages/catalog/src/provider-models/special.ts`.
 
 ## Web search engines (`web`)
 

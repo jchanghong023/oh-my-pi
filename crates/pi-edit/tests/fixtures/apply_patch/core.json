@@ -40,7 +40,28 @@
    "files":{"a.txt":"const timeoutMs = 1000;\nother\nconst timeoutMs = 2000;\n"},
    "rawInput":true,
    "args":{"input":"*** Begin Patch\n*** Update File: a.txt\n@@\n-const timeoutMs = 3000;\n+const timeoutMs = 5000;\n*** End Patch"},
-   "expect":{"files":{"a.txt":"const timeoutMs = 1000;\nother\nconst timeoutMs = 2000;\n"},"error":"Found 2 high-confidence matches in a.txt","writes":0}
+   "expect":{"files":{"a.txt":"const timeoutMs = 1000;\nother\nconst timeoutMs = 2000;\n"},"error":"Found 2 occurrences in a.txt","writes":0}
+  },
+  {
+   "name":"single ambiguous fuzzy hunk is rejected when the better candidate comes later",
+   "files":{"a.txt":"const requestTimeoutMilliseconds = 1200;\nother\nconst requestTimeoutMilliseconds = 3001;\n"},
+   "rawInput":true,
+   "args":{"input":"*** Begin Patch\n*** Update File: a.txt\n@@\n-const requestTimeoutMilliseconds = 3000;\n+const requestTimeoutMilliseconds = 5000;\n*** End Patch"},
+   "expect":{"files":{"a.txt":"const requestTimeoutMilliseconds = 1200;\nother\nconst requestTimeoutMilliseconds = 3001;\n"},"error":"Found 2 occurrences in a.txt","writes":0}
+  },
+  {
+   "name":"single hunk repeated only after unicode normalization takes the first",
+   "files":{"a.txt":"title \u2013 one\nmid\ntitle \u2013 one\n"},
+   "rawInput":true,
+   "args":{"input":"*** Begin Patch\n*** Update File: a.txt\n@@\n-title - one\n+title - two\n*** End Patch"},
+   "expect":{"files":{"a.txt":"title - two\nmid\ntitle \u2013 one\n"},"writes":1}
+  },
+  {
+   "name":"single multi-line hunk repeated only after trimming takes the first",
+   "files":{"a.txt":"  a\n  b\nmid\n  a\n  b\n"},
+   "rawInput":true,
+   "args":{"input":"*** Begin Patch\n*** Update File: a.txt\n@@\n-a\n-b\n+c\n*** End Patch"},
+   "expect":{"files":{"a.txt":"  c\nmid\n  a\n  b\n"},"writes":1}
   },
   {
    "name":"single hunk matching part of a line replaces only that part",

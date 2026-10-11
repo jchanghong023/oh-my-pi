@@ -199,6 +199,7 @@ interface ComputerElement {
 	press(): Promise<void>;
 	/** Click the element's center with native input; `count: 2` double-clicks. */
 	click(options?: ComputerClickOptions): Promise<void>;
+	doubleClick(options?: Omit<ComputerClickOptions, "count">): Promise<void>;
 	focus(): Promise<void>;
 	parent(): Promise<ComputerElement | null>;
 	children(): Promise<ComputerElement[]>;
@@ -218,6 +219,7 @@ interface ComputerElementRef
 			| "perform"
 			| "press"
 			| "click"
+			| "doubleClick"
 			| "focus"
 			| "parent"
 			| "children"
@@ -264,11 +266,12 @@ interface ComputerWindow extends ComputerInputTarget {
 	bringToCurrentSpace(): Promise<void>;
 	/** Emit one full screenshot and AX snapshot without exposing a partial failed observation. */
 	observe(options?: ComputerScreenshotOptions & ComputerAxOptions): Promise<ComputerObservationResult>;
+	/** Menu paths take one title, an array of titles, or the titles as separate arguments: `select("File", "Export…")`. */
 	readonly menu: {
 		/** Inspect a menu path without activating the application. */
-		items(path?: string | string[]): Promise<ComputerMenuItem[]>;
+		items(...path: string[] | [path?: string | string[]]): Promise<ComputerMenuItem[]>;
 		/** Select one unambiguous enabled command using the window's native menu context. */
-		select(path: string[]): Promise<void>;
+		select(...path: [string, ...string[]] | [string[]]): Promise<void>;
 	};
 	/** Formatted accessibility tree as one string, one node per line with `[ref=eN]` tags. */
 	ax(options?: ComputerAxOptions): Promise<string>;

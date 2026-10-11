@@ -1070,6 +1070,118 @@ describe("computer prelude", () => {
 		}
 	});
 
+	it("double-clicks JavaScript elements and names the element call made on find()'s array", async () => {
+		const session = toolSession();
+		const native = new RefCallSession();
+		const prelude = workerPrelude(session, native);
+		const context = { session, toolCallId: "element-shape-js" };
+		const realm = createContext({
+			__omp_display__: () => {},
+			__omp_prelude__: async (_name: string, parameters: unknown) => {
+				const result = await prelude.invoke(parameters, context);
+				return { text: "", details: result.details };
+			},
+		});
+		runInContext(prelude.javascript, realm);
+		try {
+			const shape = await runInContext(
+				`(async () => {
+					const win = await computer.window(42);
+					await win.ref("e1").doubleClick({ button: "right" });
+					await (await win.ref("e1")).doubleClick({ count: 3 });
+					const found = await win.find({ role: "button" });
+					await found[0].doubleClick();
+					await computer.run(async ({ desktop }) => {
+						await desktop.ref("e1").doubleClick();
+						const [el] = await (await desktop.window(42)).find({ role: "button" });
+						await el.doubleClick();
+					});
+					return { json: JSON.stringify(found), keys: Object.keys(found), spread: [...found].length };
+				})()`,
+				realm,
+			);
+			expect({ ...shape, json: JSON.parse(shape.json) }).toEqual({
+				json: [expect.objectContaining({ ref: "e1", role: "button" })],
+				keys: ["0"],
+				spread: 1,
+			});
+			expect(native.axCalls.filter(call => (call as unknown[])[0] === "axClick")).toEqual([
+				["axClick", "e1", { button: "right", count: 2 }],
+				["axClick", "e1", { count: 2 }],
+				["axClick", "e1", { count: 2 }],
+				["axClick", "e1", { count: 2 }],
+				["axClick", "e1", { count: 2 }],
+			]);
+			const misuse = await runInContext(
+				`(async () => {
+					const win = await computer.window(42);
+					const found = await win.find({ role: "button", title: "Run" });
+					const messages = [];
+					for (const misuse of [() => found.press(), () => win.ref(found.ref)]) {
+						try {
+							await misuse();
+						} catch (error) {
+							messages.push(error.message);
+						}
+					}
+					return messages;
+				})()`,
+				realm,
+			);
+			expect(misuse).toHaveLength(2);
+			expect(misuse[0]).toContain("find() returns an array (length 1), not one element, so it has no press()");
+			expect(misuse[0]).toContain("const [el] = await win.find(");
+			expect(misuse[1]).toContain("find() returns an array (length 1), not one element, so it has no ref;");
+		} finally {
+			await prelude.invoke({ action: "close" }, context);
+		}
+	});
+
+	it("double-clicks Python elements and names the element attribute read on find()'s list", async () => {
+		let definitions: readonly EvalPreludeDefinition[] = [];
+		const session: ToolSession = { ...toolSession(), getEvalPreludes: () => definitions };
+		const native = new RefCallSession();
+		const prelude = workerPrelude(session, native);
+		definitions = [prelude];
+		try {
+			const result = await executePython(
+				[
+					"import copy",
+					"win = await computer.window(42)",
+					'await win.ref("e1").doubleClick(button="right")',
+					'found = await win.find({"role": "button"})',
+					"await found[0].doubleClick()",
+					"try:",
+					"    await found.press()",
+					"except AttributeError as error:",
+					"    print(error)",
+					"print(hasattr(found, 'click'), hasattr(found, 'nope'))",
+					"print([element.ref for element in found], found)",
+					"print(type(copy.copy(found)).__name__, type(copy.deepcopy(found)).__name__)",
+				].join("\n"),
+				{
+					cwd: process.cwd(),
+					sessionId: `computer-element-shape-py-${crypto.randomUUID()}`,
+					toolSession: session,
+					kernelMode: "per-call",
+				},
+			);
+			expect(result.exitCode).toBe(0);
+			const lines = result.output.trim().split("\n");
+			expect(lines[0]).toContain("find() returns a list (length 1), not one element, so it has no press");
+			expect(lines[0]).toContain("el = (await win.find(query))[0]");
+			expect(lines[1]).toBe("False False");
+			expect(lines[2]).toStartWith("['e1'] [<");
+			expect(lines[3]).toBe("list list");
+			expect(native.axCalls.filter(call => (call as unknown[])[0] === "axClick")).toEqual([
+				["axClick", "e1", { button: "right", count: 2 }],
+				["axClick", "e1", { count: 2 }],
+			]);
+		} finally {
+			await prelude.invoke({ action: "close" }, { session, toolCallId: "element-shape-py-close" });
+		}
+	});
+
 	it("treats text-only Python host responses as unavailable capabilities", async () => {
 		const calls: unknown[] = [];
 		let definitions: readonly EvalPreludeDefinition[] = [];
@@ -1742,6 +1854,71 @@ describe("computer worker round trips", () => {
 		expect(native.clickCount).toBe(1);
 	});
 
+	it("returns find() results as plain arrays whose element calls name the pick, and gates element doubleClick as exec", async () => {
+		const transport = new MemoryTransport();
+		const axClicks: unknown[] = [];
+		new ComputerWorkerCore(
+			transport,
+			() =>
+				new (class extends FakeNativeSession {
+					override async axClick(ref: string, opts?: PointerOptions | null): Promise<void> {
+						axClicks.push([ref, opts]);
+					}
+				})(),
+		);
+
+		const found = await runWorker(
+			transport,
+			"call-find",
+			renderComputerCall([
+				{ method: "window", args: ["42"] },
+				{ method: "find", args: [{ role: "button" }] },
+			]),
+			true,
+		);
+		expect(found.ok).toBe(true);
+		if (found.ok) expect(found.payload.returnValue).toEqual([expect.objectContaining({ ref: "e1", role: "button" })]);
+
+		const misuse = await runWorker(
+			transport,
+			"find-misuse",
+			'await (await (await desktop.window(42)).find({ role: "button" })).doubleClick()',
+		);
+		expect(misuse.ok).toBe(false);
+		if (!misuse.ok) {
+			expect(misuse.error.message).toContain(
+				"find() returns an array (length 1), not one element, so it has no doubleClick()",
+			);
+		}
+		const fieldRead = await runWorker(
+			transport,
+			"find-field-read",
+			'(await (await desktop.window(42)).find({ role: "button" })).enabled',
+		);
+		expect(fieldRead.ok).toBe(false);
+		if (!fieldRead.ok) {
+			expect(fieldRead.error.message).toContain(
+				"find() returns an array (length 1), not one element, so it has no enabled;",
+			);
+		}
+
+		const doubleClick = [
+			{ method: "ref", args: ["e1"] },
+			{ method: "doubleClick", args: [] },
+		];
+		const blocked = await runWorker(transport, "call-double-click-ro", renderComputerCall(doubleClick), true);
+		expect(blocked.ok).toBe(false);
+		expect(axClicks).toEqual([]);
+		const clicked = await runWorker(
+			transport,
+			"call-double-click",
+			renderComputerCall(doubleClick),
+			isReadOnlyComputerCall(doubleClick),
+		);
+		expect(clicked.ok).toBe(true);
+		expect(axClicks).toEqual([["e1", { count: 2 }]]);
+	});
+
 	it("applies the current read-only policy to a retained writable window", async () => {
 		const transport = new MemoryTransport();
 		const native = new FakeNativeSession();
@@ -2070,6 +2247,10 @@ describe("expanded computer APIs", () => {
 					"win = await computer.window(42)",
 					"items = await win.menu.items('File')",
 					"await win.menu.select(items[0]['path'])",
+					"await win.menu.select('File', 'Save')",
+					"await win.menu.select(path=['File', 'Save'])",
+					"print((await win.menu.items(path='File'))[0]['path'])",
+					"try:\n    await win.menu.select('File', None)\nexcept Exception as error:\n    print('select-none:', error)",
 					"obs = await win.observe(silent=True)",
 					"await win.click(60, 30)",
 					"monitor = await computer.display('display-1')",
@@ -2089,10 +2270,165 @@ describe("expanded computer APIs", () => {
 			);
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toContain("1 display-1 False");
+			expect(result.output).toContain("['File', 'Save']");
+			expect(result.output).toContain("select-none: menu.select requires a menu path");
+			expect(result.output).toContain('got ["File",null]');
 			expect(native.controlActive).toBe(false);
+			expect(native.operations.filter(operation => operation.startsWith("menu:"))).toEqual([
+				"menu:42:File/Save",
+				"menu:42:File/Save",
+				"menu:42:File/Save",
+			]);
 		} finally {
 			await prelude.invoke({ action: "close" }, { session, toolCallId: "expanded-py" });
 		}
+	});
+
+	it("takes a menu path as one title, an array, or separate titles, and names those forms when it is malformed", async () => {
+		const session = toolSession();
+		const native = new FakeNativeSession();
+		const prelude = workerPrelude(session, native);
+		const context = { session, toolCallId: "menu-path-js" };
+		const realm = createContext({
+			__omp_display__: () => {},
+			__omp_prelude__: async (_name: string, parameters: unknown) => {
+				const result = await prelude.invoke(parameters, context);
+				return { text: "", details: result.details };
+			},
+		});
+		runInContext(prelude.javascript, realm);
+		try {
+			const items = await runInContext(
+				`(async () => {
+					const win = await computer.window(42);
+					await win.menu.select("File", "Save");
+					await win.menu.select(["File", "Save"]);
+					return [await win.menu.items("File", "Save"), await win.menu.items(["File"]), await win.menu.items()];
+				})()`,
+				realm,
+			);
+			expect(items.map((list: Array<{ path: string[] }>) => list[0]!.path)).toEqual([
+				["File", "Save", "Save"],
+				["File", "Save"],
+				["Save"],
+			]);
+			expect(native.operations).toEqual(["menu:42:File/Save", "menu:42:File/Save"]);
+			const forms =
+				'requires a menu path of non-empty titles: one title ("File"), an array (["File", "Export…"]), or separate titles ("File", "Export…")';
+			for (const [call, got] of [
+				["select()", "no path"],
+				['select(["File"], "Save")', '[["File"],"Save"]'],
+				['select("File", "")', '["File",""]'],
+				['select("File", undefined)', '["File",null]'],
+			]) {
+				await expect(
+					runInContext(`(async () => (await computer.window(42)).menu.${call})()`, realm),
+				).rejects.toThrow(`menu.select ${forms}; got ${got}`);
+			}
+			expect(native.operations).toHaveLength(2);
+
+			// Worker-side code may pass an optional path on as `undefined`, or a value JSON cannot show.
+			const transport = new MemoryTransport();
+			new ComputerWorkerCore(transport, () => native);
+			const root = await runWorker(
+				transport,
+				"menu-undefined",
+				"return (await (await desktop.window(42)).menu.items(undefined))[0].path",
+			);
+			expect(root.ok ? root.payload.returnValue : root.error).toEqual(["Save"]);
+			for (const [code, got] of [
+				["menu.select(1n)", "bigint"],
+				["menu.select((() => { const path = []; path.push(path); return path; })())", "an array"],
+			]) {
+				const result = await runWorker(transport, `menu-${got}`, `await (await desktop.window(42)).${code}`);
+				expect(result.ok ? undefined : result.error).toMatchObject({
+					isToolError: true,
+					message: `menu.select ${forms}; got ${got}`,
+				});
+			}
+		} finally {
+			await prelude.invoke({ action: "close" }, context);
+		}
+	});
+
+	it("names the helper and argument for a missing or non-string text argument before any native call", async () => {
+		class ArgumentSession extends FakeNativeSession {
+			readonly calls: string[] = [];
+			override async axNode(ref: string): Promise<AxNode> {
+				this.calls.push(`axNode:${ref}`);
+				return axNode;
+			}
+			override async axSetValue(ref: string, _value: string): Promise<void> {
+				this.calls.push(`axSetValue:${ref}`);
+			}
+			override async axPerform(ref: string, _action: string): Promise<void> {
+				this.calls.push(`axPerform:${ref}`);
+			}
+			override async typeText(target: string, _text: string): Promise<void> {
+				this.calls.push(`typeText:${target}`);
+			}
+			override async keyChord(target: string, _keys: string[]): Promise<void> {
+				this.calls.push(`keyChord:${target}`);
+			}
+			override async openApplication(id: string) {
+				this.calls.push(`open:${id}`);
+				return super.openApplication(id);
+			}
+		}
+		const transport = new MemoryTransport();
+		const native = new ArgumentSession();
+		new ComputerWorkerCore(transport, () => native);
+		for (const [code, message] of [
+			['await desktop.ref("e1").setValue()', "setValue(value) requires a string, got undefined"],
+			['await desktop.ref("e1").setValue(42)', "setValue(value) requires a string, got number"],
+			['await desktop.ref("e1").perform("")', 'perform(action) requires a non-empty string, got ""'],
+			["desktop.ref()", "ref(ref) requires a non-empty string, got undefined"],
+			["(await desktop.window(42)).ref(null)", "ref(ref) requires a non-empty string, got null"],
+			["await (await desktop.window(42)).type()", "type(text) requires a string, got undefined"],
+			["await desktop.type(['a'])", "type(text) requires a string, got an array"],
+			[
+				"await desktop.press()",
+				'press(chord) requires a key chord such as "cmd+shift+p" or ["cmd", "shift", "p"], got undefined',
+			],
+			[
+				"await desktop.press(['cmd', 1])",
+				'press(chord) requires a key chord such as "cmd+shift+p" or ["cmd", "shift", "p"], got an array',
+			],
+			["await desktop.apps.open()", "apps.open(id) requires a non-empty string, got undefined"],
+			// Last: reverting the fix would hand undefined to the real clipboard.
+			["await desktop.clipboard.write()", "clipboard.write(text) requires a string, got undefined"],
+		]) {
+			const result = await runWorker(transport, `argument-${code}`, code);
+			expect(result.ok ? undefined : result.error).toMatchObject({ isToolError: true, message });
+		}
+		// A read-only run still reports the read-only refusal first.
+		const readOnly = await runWorker(transport, "argument-read-only", 'await desktop.ref("e1").setValue()', true);
+		expect(readOnly.ok ? undefined : readOnly.error.message).toBe(
+			"read-only run: 'setValue' requires read_only: false",
+		);
+		// The JavaScript facade's direct ref call checks the argument before the ref lookup too.
+		const session = toolSession();
+		const prelude = workerPrelude(session, native);
+		const context = { session, toolCallId: "argument-facade" };
+		const realm = createContext({
+			__omp_display__: () => {},
+			__omp_prelude__: async (_name: string, parameters: unknown) => {
+				const result = await prelude.invoke(parameters, context);
+				return { text: "", details: result.details };
+			},
+		});
+		runInContext(prelude.javascript, realm);
+		try {
+			await expect(runInContext('computer.ref("e1").setValue()', realm)).rejects.toThrow(
+				"setValue(value) requires a string, got undefined",
+			);
+			await expect(runInContext('computer.ref("e1").perform()', realm)).rejects.toThrow(
+				"perform(action) requires a non-empty string, got undefined",
+			);
+		} finally {
+			await prelude.invoke({ action: "close" }, context);
+		}
+		expect(native.calls).toEqual([]);
 	});
 
 	it("leaves a printed observe() tree out of the JavaScript value's display, but keeps ax readable", async () => {

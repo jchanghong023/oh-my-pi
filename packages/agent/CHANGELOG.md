@@ -14,6 +14,12 @@
 - Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 
+## [18.9.2] - 2026-10-11
+
+### Changed
+
+- Improved context caching for repeat turns, reducing redundant prompt processing and making subsequent turns faster when the system prompt is unchanged.
+
 ## [18.9.0] - 2026-10-11
 
 ### Fixed

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.9.2] - 2026-10-11
+
 ### Fixed
 
 - Fixed Windows daemon startup failures when an existing lease permits synchronization but not full mutex access.
@@ -13,6 +15,7 @@
 ### Fixed
 
 - Fixed stalls when highlighting Markdown tool previews with many inline spans or backslash escapes ([#13838](https://github.com/can1357/oh-my-pi/pull/13838) by [@sjawhar](https://github.com/sjawhar), [#15272](https://github.com/can1357/oh-my-pi/pull/15272) by [@iliaal](https://github.com/iliaal)).
+- Fixed stalls when highlighting Markdown tool previews containing many inline spans or backslash escapes.
 
 ## [18.9.1] - 2026-10-11
 
