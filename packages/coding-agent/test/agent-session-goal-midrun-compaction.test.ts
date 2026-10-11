@@ -282,7 +282,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		session.setGoalModeState(state);
 		mockCompaction("SUMMARY-WITHOUT-GOAL-OR-RULES");
 
-		await session.prompt("work on the release");
+		await session.prompt("work on the release", { goalAutoOrchestrateInitialId: state.goal.id });
 		const expected = expectedAtContinuation;
 		if (!expected) throw new Error("Expected auto Goal recovery at the continuation boundary");
 		expect(expected.content).toContain(state.goal.objective);
@@ -352,6 +352,621 @@ describe("AgentSession mid-run threshold compaction", () => {
 		} finally {
 			await reopened.close();
 		}
+	});
+
+	it("does not backfill a restored auto Goal notice during ordinary prompts or tool continuation", async () => {
+		const { session, sessionManager, observedContexts } = await createHarness({ "compaction.enabled": false });
+		const state = { ...activeGoalState(), autoOrchestrate: true };
+		session.setGoalModeState(state);
+		const expected = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected auto Goal notice content");
+
+		await session.prompt("continue the restored release");
+		await session.prompt("inspect the restored release");
+
+		expect(observedContexts).toHaveLength(3);
+		for (const context of observedContexts) {
+			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
+		}
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+	});
+
+	it("persists the explicit first auto Goal prompt notice once across tool continuation and later prompts", async () => {
+		const { session, sessionManager, observedContexts } = await createHarness({ "compaction.enabled": false });
+		const state = await session.goalRuntime.createGoal({ objective: "Ship the release", autoOrchestrate: true });
+		const expected = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected first auto Goal notice content");
+
+		await session.prompt(state.goal.objective, { goalAutoOrchestrateInitialId: state.goal.id });
+		await session.prompt("inspect the submitted release");
+
+		expect(observedContexts).toHaveLength(3);
+		for (const context of observedContexts) {
+			expect(
+				context
+					.map(value => JSON.parse(value))
+					.filter(
+						message =>
+							message.role === "user" &&
+							Array.isArray(message.content) &&
+							message.content.some((block: { type: string; text?: string }) => block.text === expected.content),
+					),
+			).toHaveLength(1);
+		}
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toEqual([expect.objectContaining({ content: expected.content, attribution: "user" })]);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toEqual([expect.objectContaining({ content: expected.content, attribution: "user" })]);
+	});
+
+	it("does not backfill an auto Goal notice after cancelled first setup and ordinary resume", async () => {
+		const setupEntered = Promise.withResolvers<void>();
+		const releaseSetup = Promise.withResolvers<void>();
+		let firstSetup = true;
+		const extensionRuntime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("before_agent_start", async () => {
+					if (!firstSetup) return;
+					firstSetup = false;
+					setupEntered.resolve();
+					await releaseSetup.promise;
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionRuntime,
+			"cancelled-auto-goal-setup",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[extension],
+			extensionRuntime,
+			tempDir.path(),
+			SessionManager.inMemory(),
+			sharedModelRegistry,
+		);
+		const { session, sessionManager, observedContexts } = await createHarness(
+			{ "compaction.enabled": false },
+			{ extensionRunner },
+		);
+		const state = await session.goalRuntime.createGoal({ objective: "Ship the release", autoOrchestrate: true });
+		const dropped: string[] = [];
+		session.setPromptDropped(prompt => dropped.push(prompt.text));
+		const firstPrompt = session.prompt(state.goal.objective, { goalAutoOrchestrateInitialId: state.goal.id });
+		try {
+			expect(
+				await raceWithTimeout(
+					setupEntered.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			expect(observedContexts).toHaveLength(0);
+			const abort = session.abort({ reason: "Cancel first auto Goal setup" });
+			releaseSetup.resolve();
+			await abort;
+			await firstPrompt;
+		} finally {
+			releaseSetup.resolve();
+			await firstPrompt;
+		}
+		expect(dropped).toEqual([state.goal.objective]);
+		expect(observedContexts).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+
+		await session.goalRuntime.resumeGoal();
+		await session.prompt("continue the resumed release");
+
+		const resumed = session.getGoalModeState();
+		const expected = buildGoalAutoOrchestrateMessage(resumed, session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected resumed auto Goal notice content");
+		expect(observedContexts).toHaveLength(2);
+		for (const context of observedContexts) {
+			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
+		}
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+	});
+
+	it.each(["active", "paused", "dropped", "replaced"] as const)(
+		"admits a queued first auto Goal notice only at delivery while its source Goal is %s",
+		async transition => {
+			const toolStarted = Promise.withResolvers<void>();
+			const releaseTool = Promise.withResolvers<void>();
+			const { session, sessionManager, observedContexts } = await createHarness(
+				{ "compaction.enabled": false },
+				{
+					tool: {
+						name: "task",
+						label: "Task",
+						description: "Hold the tool turn until the first auto Goal prompt is queued",
+						parameters: type({}),
+						execute: async () => {
+							toolStarted.resolve();
+							await releaseTool.promise;
+							return { content: [{ type: "text" as const, text: "task completed" }] };
+						},
+					},
+				},
+			);
+			const running = session.prompt("start an unrelated task");
+			let expected: CustomMessage | undefined;
+			try {
+				expect(
+					await raceWithTimeout(
+						toolStarted.promise.then(() => true),
+						2_000,
+						false,
+					),
+				).toBe(true);
+				const state = await session.goalRuntime.createGoal({
+					objective: "Finish every queued release component",
+					autoOrchestrate: true,
+				});
+				expected = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
+				if (!expected) throw new Error("Expected queued first auto Goal notice content");
+				await session.prompt(state.goal.objective, {
+					streamingBehavior: "steer",
+					goalAutoOrchestrateInitialId: state.goal.id,
+				});
+				expect(session.isStreaming).toBe(true);
+				expect(observedContexts).toHaveLength(1);
+				expect(
+					session.messages.filter(
+						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+					),
+				).toHaveLength(0);
+				expect(
+					sessionManager
+						.getBranch()
+						.filter(
+							entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+						),
+				).toHaveLength(0);
+
+				if (transition === "paused") await session.goalRuntime.pauseGoal();
+				if (transition === "dropped") await session.goalRuntime.dropGoal();
+				if (transition === "replaced") {
+					await session.goalRuntime.replaceGoal({
+						objective: "Replacement release must not inherit the queued first notice",
+						autoOrchestrate: true,
+					});
+				}
+			} finally {
+				releaseTool.resolve();
+				await running;
+			}
+			if (!expected) throw new Error("Missing queued auto Goal notice content");
+			const admitted = transition === "active";
+			expect(observedContexts).toHaveLength(2);
+			const live = session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			);
+			const saved = live[0];
+			const admittedContent = admitted && saved?.role === "custom" ? saved.content : expected.content;
+			if (admitted) expect(admittedContent).toContain("Finish every queued release component");
+			const nextInput = observedContexts[1].map(value => JSON.parse(value));
+			expect(
+				nextInput.filter(
+					message =>
+						message.role === "user" &&
+						Array.isArray(message.content) &&
+						message.content.some((block: { type: string; text?: string }) => block.text === admittedContent),
+				),
+			).toHaveLength(admitted ? 1 : 0);
+			const expectedNotices = admitted
+				? [expect.objectContaining({ content: admittedContent, attribution: "user", details: expected.details })]
+				: [];
+			expect(live).toEqual(expectedNotices);
+			expect(
+				sessionManager
+					.getBranch()
+					.filter(
+						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+					),
+			).toEqual(expectedNotices);
+		},
+	);
+
+	it("rechecks a dequeued first auto Goal source after async setup without dropping its user prompt", async () => {
+		const objective = "Ship the release after queued setup";
+		const toolStarted = Promise.withResolvers<void>();
+		const releaseTool = Promise.withResolvers<void>();
+		const setupEntered = Promise.withResolvers<void>();
+		const releaseSetup = Promise.withResolvers<void>();
+		const extensionRuntime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("before_agent_start", async event => {
+					if (event.prompt !== objective) return;
+					setupEntered.resolve();
+					await releaseSetup.promise;
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionRuntime,
+			"paused-dequeued-auto-goal-setup",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[extension],
+			extensionRuntime,
+			tempDir.path(),
+			SessionManager.inMemory(),
+			sharedModelRegistry,
+		);
+		const { session, sessionManager, observedContexts } = await createHarness(
+			{ "compaction.enabled": false },
+			{
+				extensionRunner,
+				tool: {
+					name: "task",
+					label: "Task",
+					description: "Hold until the initial auto Goal source is queued",
+					parameters: type({}),
+					execute: async () => {
+						toolStarted.resolve();
+						await releaseTool.promise;
+						return { content: [{ type: "text" as const, text: "task completed" }] };
+					},
+				},
+			},
+		);
+		const running = session.prompt("start unrelated work before queued setup");
+		try {
+			expect(
+				await raceWithTimeout(
+					toolStarted.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
+			await session.prompt(objective, {
+				streamingBehavior: "steer",
+				goalAutoOrchestrateInitialId: state.goal.id,
+			});
+			releaseTool.resolve();
+			expect(
+				await raceWithTimeout(
+					setupEntered.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			expect(observedContexts).toHaveLength(1);
+			expect(session.messages).not.toContainEqual(
+				expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+			);
+			await session.goalRuntime.pauseGoal();
+		} finally {
+			releaseTool.resolve();
+			releaseSetup.resolve();
+			await running;
+		}
+
+		expect(observedContexts).toHaveLength(2);
+		const submittedInput = observedContexts[1].map(value => JSON.parse(value));
+		expect(submittedInput).toContainEqual(
+			expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+		);
+		expect(sessionManager.getBranch()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+			}),
+		);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+
+		await session.goalRuntime.resumeGoal();
+		await session.prompt("continue after the source was invalidated during queued setup");
+
+		const expected = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected resumed auto Goal notice content");
+		expect(observedContexts).toHaveLength(3);
+		for (const context of observedContexts) {
+			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
+		}
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+	});
+
+	it("retains a cancelled queued first user prompt without reviving its auto Goal notice on resume", async () => {
+		const objective = "Ship the release after cancelled queued setup";
+		const toolStarted = Promise.withResolvers<void>();
+		const releaseTool = Promise.withResolvers<void>();
+		const setupEntered = Promise.withResolvers<void>();
+		const releaseSetup = Promise.withResolvers<void>();
+		const redeliveryEntered = Promise.withResolvers<void>();
+		const releaseRedelivery = Promise.withResolvers<void>();
+		let firstSetup = true;
+		const extensionRuntime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("before_agent_start", async event => {
+					if (!event.prompt.includes(objective)) return;
+					if (firstSetup) {
+						firstSetup = false;
+						setupEntered.resolve();
+						await releaseSetup.promise;
+					} else {
+						redeliveryEntered.resolve();
+						await releaseRedelivery.promise;
+					}
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionRuntime,
+			"cancelled-dequeued-auto-goal-setup",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[extension],
+			extensionRuntime,
+			tempDir.path(),
+			SessionManager.inMemory(),
+			sharedModelRegistry,
+		);
+		const { session, sessionManager, observedContexts } = await createHarness(
+			{ "compaction.enabled": false },
+			{
+				extensionRunner,
+				tool: {
+					name: "task",
+					label: "Task",
+					description: "Hold until the initial auto Goal source is queued",
+					parameters: type({}),
+					execute: async () => {
+						toolStarted.resolve();
+						await releaseTool.promise;
+						return { content: [{ type: "text" as const, text: "task completed" }] };
+					},
+				},
+			},
+		);
+		const running = session.prompt("start unrelated work before cancelled queued setup");
+		try {
+			expect(
+				await raceWithTimeout(
+					toolStarted.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
+			await session.prompt(objective, {
+				streamingBehavior: "steer",
+				goalAutoOrchestrateInitialId: state.goal.id,
+			});
+			releaseTool.resolve();
+			expect(
+				await raceWithTimeout(
+					setupEntered.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			expect(observedContexts).toHaveLength(1);
+			const abort = session.abort({ reason: "Cancel the queued initial auto Goal setup" });
+			releaseSetup.resolve();
+			await abort;
+		} finally {
+			releaseTool.resolve();
+			releaseSetup.resolve();
+			await running;
+		}
+		expect(observedContexts).toHaveLength(1);
+		expect(session.agent.peekSteeringQueue()).toContainEqual(
+			expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+		);
+		expect(session.messages).not.toContainEqual(
+			expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+		);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+
+		await session.goalRuntime.resumeGoal();
+		const resumedPrompt = session.prompt("resume the cancelled queued release", { streamingBehavior: "steer" });
+		try {
+			expect(
+				await raceWithTimeout(
+					redeliveryEntered.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+		} finally {
+			releaseRedelivery.resolve();
+			await resumedPrompt;
+			await session.waitForIdle();
+		}
+		expect(
+			observedContexts.some(context =>
+				context
+					.map(value => JSON.parse(value))
+					.some(
+						message =>
+							message.role === "user" &&
+							Array.isArray(message.content) &&
+							message.content.some((block: { type: string; text?: string }) => block.text === objective),
+					),
+			),
+		).toBe(true);
+		expect(sessionManager.getBranch()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+			}),
+		);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+
+		await session.prompt("inspect the resumed queued release");
+		await session.waitForIdle();
+
+		const expected = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected resumed auto Goal notice content");
+		for (const context of observedContexts) {
+			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
+		}
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+	});
+
+	it("persists one first auto Goal notice when its explicit custom user source reaches followUp delivery", async () => {
+		const boundaryEntered = Promise.withResolvers<void>();
+		const releaseBoundary = Promise.withResolvers<void>();
+		const delivered = Promise.withResolvers<void>();
+		const { session, sessionManager, observedContexts } = await createHarness(
+			{ "compaction.enabled": false },
+			{
+				onProviderCall: index => {
+					if (index === 2) delivered.resolve();
+				},
+				tool: {
+					name: "task",
+					label: "Task",
+					description: "Hold the streaming delivery boundary",
+					parameters: type({}),
+					execute: async () => {
+						boundaryEntered.resolve();
+						await releaseBoundary.promise;
+						return { content: [{ type: "text" as const, text: "task completed" }] };
+					},
+				},
+			},
+		);
+		const running = session.prompt("start an unrelated delivery task");
+		let state: GoalModeState | undefined;
+		try {
+			expect(
+				await raceWithTimeout(
+					boundaryEntered.promise.then(() => true),
+					2_000,
+					false,
+				),
+			).toBe(true);
+			expect(session.isStreaming).toBe(true);
+			state = await session.goalRuntime.createGoal({
+				objective: "Ship the release through the explicit delivery source",
+				autoOrchestrate: true,
+			});
+			await session.promptCustomMessage(
+				{
+					customType: "goal-initial-task",
+					content: state.goal.objective,
+					display: true,
+					attribution: "user",
+				},
+				{
+					streamingBehavior: "followUp",
+					goalAutoOrchestrateInitialId: state.goal.id,
+				},
+			);
+			expect(
+				session.messages.filter(
+					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+				),
+			).toHaveLength(0);
+			expect(
+				sessionManager
+					.getBranch()
+					.filter(
+						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+					),
+			).toHaveLength(0);
+		} finally {
+			releaseBoundary.resolve();
+			await running;
+		}
+		expect(
+			await raceWithTimeout(
+				delivered.promise.then(() => true),
+				2_000,
+				false,
+			),
+		).toBe(true);
+		await session.waitForIdle();
+		if (!state) throw new Error("Missing explicit delivery Goal");
+		const live = session.messages.filter(
+			message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+		);
+		expect(live).toEqual([
+			expect.objectContaining({
+				content: expect.stringContaining(state.goal.objective),
+				attribution: "user",
+				details: { source: "goal-auto-orchestrate", goalId: state.goal.id },
+			}),
+		]);
+		const notice = live[0];
+		if (notice?.role !== "custom") throw new Error("Missing delivered first auto Goal notice");
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toEqual([expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details })]);
+		const input = observedContexts.at(-1)?.map(value => JSON.parse(value)) ?? [];
+		expect(
+			input.filter(
+				message =>
+					message.role === "user" &&
+					Array.isArray(message.content) &&
+					message.content.some((block: { type: string; text?: string }) => block.text === notice.content),
+			),
+		).toHaveLength(1);
 	});
 
 	it.each(["create", "replace"] as const)(

@@ -709,7 +709,11 @@ describe("AgentSession auto-compaction progress guard", () => {
 		cfgCompactionReserveTokens.set(session.settings, 1_000);
 		cfgCompactionThresholdTokens.set(session.settings, 10_000);
 		const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
-		await session.sendGoalModeContext({ deliverAs: "nextTurn" });
+		const context = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
+		if (!context) throw new Error("Expected active auto Goal recovery context");
+		// Seed the already committed notice; ordinary Goal updates no longer
+		// construct an initial auto-orchestrate notice.
+		await session.appendCustomMessage(context);
 		expect(
 			sessionManager
 				.getBranch()
@@ -723,8 +727,6 @@ describe("AgentSession auto-compaction progress guard", () => {
 			timestamp: Date.now(),
 		});
 		session.agent.replaceMessages(sessionManager.buildSessionContext().messages);
-		const context = buildGoalAutoOrchestrateMessage(state, []);
-		if (!context) throw new Error("Expected active auto Goal recovery context");
 		return { inputs, context };
 	}
 

@@ -77,11 +77,7 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 	);
 }
 
-export function renderGoalPrompt(
-	kind: GoalPromptKind,
-	goal: Goal,
-	options?: { omitObjective?: boolean; authority?: "system" | "user"; omitGoalToolInstructions?: boolean },
-): string {
+export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
 	const template =
 		kind === "active"
 			? goalModeActivePrompt
@@ -89,9 +85,6 @@ export function renderGoalPrompt(
 				? goalContinuationPrompt
 				: goalBudgetLimitPrompt;
 	return prompt.render(template, {
-		omitObjective: options?.omitObjective === true,
-		userAuthority: options?.authority === "user",
-		omitGoalToolInstructions: options?.omitGoalToolInstructions === true,
 		objective: escapeXmlText(goal.objective),
 		tokensUsed: String(goal.tokensUsed),
 		tokenBudget: budgetValue(goal),

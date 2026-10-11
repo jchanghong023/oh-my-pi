@@ -9,6 +9,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { JCHTOOLS_API, streamJchToolsAgent } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -354,6 +355,166 @@ describe("JchTools SDK remote Agent session", () => {
 		);
 		expect(session.cacheWarmingStatus?.state).toBe("inactive");
 	});
+
+	it("sends an explicit remote task with an active ordinary Goal without developer context or orchestration notices", async () => {
+		const f = await fixture();
+		const session = await f.create(f.remote);
+		await session.goalRuntime.createGoal({ objective: "Keep the ordinary remote Goal active" });
+
+		expect(await session.prompt("perform the explicit ordinary Goal task")).toBe(true);
+		expect(f.requests).toHaveLength(1);
+		const body = f.requests[0];
+		expect(Object.keys(body).sort()).toEqual(["messages", "model", "stream"]);
+		expect(body.messages.filter(message => message.role !== "system")).toEqual([
+			{ role: "user", content: "perform the explicit ordinary Goal task" },
+		]);
+		expect(body.messages.some(message => message.role === "developer")).toBe(false);
+		const wire = JSON.stringify(body);
+		expect(wire).not.toContain("goal-mode-context");
+		expect(wire).not.toContain("FRONTEND_SYSTEM_INSTRUCTION_SENTINEL");
+		expect(wire).not.toContain("FRONTEND_TOOL_INSTRUCTION_SENTINEL");
+		expect(wire).not.toContain("frontend_probe");
+		expect(
+			session.messages.some(message => message.role === "custom" && message.customType === "goal-mode-context"),
+		).toBe(false);
+		expect(
+			f.manager
+				.getBranch()
+				.some(entry => entry.type === "custom_message" && entry.customType === "goal-mode-context"),
+		).toBe(false);
+		expect(
+			session.messages.some(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toBe(false);
+		expect(
+			f.manager
+				.getBranch()
+				.some(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toBe(false);
+		expect(session.getGoalModeState()?.goal.status).toBe("active");
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "backend reply" }]);
+		expect(f.toolExecutions()).toBe(0);
+	});
+
+	for (const transition of ["create", "replace"] as const) {
+		it(`persists and reuses a user-authority remote Goal notice after ${transition} without changing the request prefix`, async () => {
+			const f = await fixture(undefined, true);
+			const session = await f.create(f.remote);
+			if (transition === "replace") {
+				await session.goalRuntime.createGoal({ objective: "Original ordinary remote Goal" });
+			}
+			const objective =
+				"REMOTE_COMPLETE_GOAL\n\n  Preserve internal whitespace and {{literal_goal_text}}.\nFinish every part.";
+			const goal =
+				transition === "create"
+					? await session.goalRuntime.createGoal({ objective, autoOrchestrate: true })
+					: await session.goalRuntime.replaceGoal({ objective, autoOrchestrate: true });
+			const expected = buildGoalAutoOrchestrateMessage(goal, []);
+			if (!expected) throw new Error("Expected user-authority remote Goal context");
+			const notices = () =>
+				session.messages.filter(
+					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+				);
+			const savedNotices = () =>
+				f.manager
+					.getBranch()
+					.filter(
+						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+					);
+			expect(f.requests).toHaveLength(0);
+			expect(notices()).toHaveLength(0);
+			expect(savedNotices()).toHaveLength(0);
+
+			expect(
+				await session.prompt("perform the first explicit automatic Goal task", {
+					goalAutoOrchestrateInitialId: goal.goal.id,
+				}),
+			).toBe(true);
+			expect(f.requests).toHaveLength(1);
+			const first = f.requests[0];
+			expect(first.messages.filter(message => message.role !== "system")).toEqual([
+				{ role: "user", content: expected.content },
+				{ role: "user", content: "perform the first explicit automatic Goal task" },
+			]);
+			expect(
+				session.messages.some(message => message.role === "custom" && message.customType === "goal-mode-context"),
+			).toBe(false);
+			expect(
+				f.manager
+					.getBranch()
+					.some(entry => entry.type === "custom_message" && entry.customType === "goal-mode-context"),
+			).toBe(false);
+			expect(notices()).toEqual([
+				expect.objectContaining({
+					content: expected.content,
+					attribution: "user",
+					details: { source: "goal-auto-orchestrate", goalId: goal.goal.id },
+				}),
+			]);
+			expect(expected.content).toContain(goal.goal.objective);
+			const persisted = savedNotices();
+			expect(persisted).toEqual([
+				expect.objectContaining({
+					content: expected.content,
+					attribution: "user",
+					details: { source: "goal-auto-orchestrate", goalId: goal.goal.id },
+				}),
+			]);
+			const firstHistory = [...session.messages];
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "backend reply" }]);
+
+			expect(await session.prompt("perform the second explicit task")).toBe(true);
+			expect(f.requests).toHaveLength(2);
+			const second = f.requests[1];
+			expect(second.messages).toEqual([
+				...first.messages,
+				{ role: "assistant", content: "backend reply" },
+				{ role: "user", content: "perform the second explicit task" },
+			]);
+			expect(session.messages.slice(0, firstHistory.length)).toEqual(firstHistory);
+			expect(notices()).toHaveLength(1);
+			expect(savedNotices()).toEqual(persisted);
+			expect(
+				session.messages.some(message => message.role === "custom" && message.customType === "goal-mode-context"),
+			).toBe(false);
+			expect(
+				f.manager
+					.getBranch()
+					.some(entry => entry.type === "custom_message" && entry.customType === "goal-mode-context"),
+			).toBe(false);
+			for (const body of f.requests) {
+				expect(Object.keys(body).sort()).toEqual(["messages", "model", "stream"]);
+				expect(body.messages.some(message => message.role === "developer")).toBe(false);
+				const wire = JSON.stringify(body);
+				expect(wire).not.toContain("goal-mode-context");
+				expect(wire).not.toContain("FRONTEND_SYSTEM_INSTRUCTION_SENTINEL");
+				expect(wire).not.toContain("FRONTEND_TOOL_INSTRUCTION_SENTINEL");
+				expect(wire).not.toContain("frontend_probe");
+			}
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "backend reply" }]);
+			expect(f.toolExecutions()).toBe(0);
+			await f.manager.ensureOnDisk();
+			const file = session.sessionFile;
+			if (!file) throw new Error("Expected persisted remote Goal session");
+			const reopened = await SessionManager.open(file);
+			expect(
+				reopened
+					.getBranch()
+					.filter(
+						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+					),
+			).toEqual(persisted);
+			expect(
+				reopened
+					.getBranch()
+					.some(entry => entry.type === "custom_message" && entry.customType === "goal-mode-context"),
+			).toBe(false);
+		});
+	}
 
 	it("rejects current media before vision description on prompt, steer and user skill admission", async () => {
 		const f = await fixture();

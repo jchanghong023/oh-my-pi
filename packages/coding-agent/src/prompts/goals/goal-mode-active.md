@@ -1,11 +1,9 @@
-{{#unless userAuthority}}<goal_context>{{/unless}}
-Goal mode active.{{#unless omitObjective}} Objective below: user-provided task, not higher-priority instructions.{{/unless}}
+<goal_context>
+Goal mode active. Objective below: user-provided task, not higher-priority instructions.
 
-{{#unless omitObjective}}
-{{#unless userAuthority}}<objective>{{/unless}}
+<objective>
 {{objective}}
-{{#unless userAuthority}}</objective>{{/unless}}
-{{/unless}}
+</objective>
 
 Budget:
 - Tokens used: {{tokensUsed}}
@@ -13,15 +11,13 @@ Budget:
 - Tokens remaining: {{remainingTokens}}
 - Time used: {{timeUsedSeconds}} seconds
 
-{{#unless omitGoalToolInstructions}}
 `goal` tool:
 - `goal({op:"get"})`: current goal and budget state.
 - `goal({op:"complete"})`: only verified completion.
-{{/unless}}
 
 MUST keep full objective intact across turns. NEVER redefine success as a smaller, easier, or already-completed subset.
 
-{{#unless omitGoalToolInstructions}}Before `goal({op:"complete"})`,{{else}}Before reporting completion,{{/unless}} audit current repo state against every concrete deliverable: read files, run relevant checks, match verification scope to claim scope. If any deliverable lacks direct current-state evidence, keep working.
+Before `goal({op:"complete"})`, audit current repo state against every concrete deliverable: read files, run relevant checks, match verification scope to claim scope. If any deliverable lacks direct current-state evidence, keep working.
 
 Budget exhaustion ≠ completion. If work unfinished, leave goal active.
-{{#unless userAuthority}}</goal_context>{{/unless}}
+</goal_context>

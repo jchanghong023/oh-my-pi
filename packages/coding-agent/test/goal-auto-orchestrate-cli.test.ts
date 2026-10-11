@@ -1664,7 +1664,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 			// Automatic naming belongs to TUI only; this public extension command
 			// invokes the exact runEphemeralTurn API and bundled title prompt used
 			// by automatic #forkTitle, after a real prepared main Provider request.
-			await local(client, "/fixture-title");
+			await client.prompt("/fixture-title");
 			const auxiliary = fixture.requests.slice(start);
 			expect(auxiliary).toHaveLength(1);
 			expect(messages(auxiliary[0]!).some(message => contentText(message.content).includes("<title-request>"))).toBe(

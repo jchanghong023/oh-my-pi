@@ -130,7 +130,7 @@ async function runSlowtestObserved(
 				return {
 					status: "BLOCKED",
 					reason:
-						"commit and push intended source before WSL execution; dirty source cannot be transferred and Git writes are not authorized",
+						"commit and push intended source before WSL execution; dirty source cannot be transferred; this gate does not perform Git writes",
 					exitCode: 1,
 				};
 			const result = await injected.wsl(gate, { ...wslOptions, selection, identity: before });

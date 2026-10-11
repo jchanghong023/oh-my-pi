@@ -38,11 +38,14 @@
 - A `/btw` answer promoted into the main branch, or a turn moved under another prompt, keeps whether its reasoning is a provider-written summary or the model's own trace, so a summary never reaches another host as the model's reasoning ([#15123](https://github.com/can1357/oh-my-pi/pull/15123) by [@will-bogusz](https://github.com/will-bogusz)).
 - Background Claude saved-reset salvage now lists Claude accounts only when an account's usage report shows a saved reset due for salvage, instead of every open session listing every Claude account every few minutes, which tripped Anthropic's usage rate limit ([#15129](https://github.com/can1357/oh-my-pi/pull/15129) by [@will-bogusz](https://github.com/will-bogusz))
 - Sessions with no prompt UI (`omp -p`, subagents, headless RPC, ACP clients without form elicitation) now spend a saved Codex or Claude reset under the default `autoRedeem: unset` when it expires within 5 minutes, with a notice naming the account, instead of letting it expire; `autoRedeem: no` still never spends, and other resets still wait for consent ([#15131](https://github.com/can1357/oh-my-pi/pull/15131) by [@will-bogusz](https://github.com/will-bogusz))
-- Strengthened `/goal-auto-orchestrate` with explicit full-goal authorization and unattended execution without repeated confirmation.
+- Strengthened `/goal-auto-orchestrate` with explicit full-goal authorization, Git commits/pushes and all CLI commands including `gh`, and unattended execution without repeated confirmation.
 
 ### Fixed
 
+- Fixed stale archive listings and member reads after rapid same-size rewrites with restored timestamps on Windows.
 - Replaced per-request `/goal-auto-orchestrate` injection with additive initial and post-compaction history notices, retaining normal Goal prompts and stable provider-history prefixes without custom queue filtering; command help now describes these persistence boundaries accurately.
+- Restricted first `/goal-auto-orchestrate` notices to their admitted objective submissions and kept JchTools remote Agent history free of frontend Goal preludes.
+- Removed duplicate budget/todo snapshots from Goal auto-orchestration notices and scoped WSL Git-write diagnostics to the gate itself.
 - Kept wildcard retry-fallback regression checks valid when provider catalogs retire older Gemini models.
 - Bound the disposable Bun server in the isolated-browser-profile test to loopback, preventing repeated Windows firewall prompts for randomly copied executable paths.
 - Preserved cleared project roles under offline company defaults and YAML comments and sibling alias values when saving a single role.

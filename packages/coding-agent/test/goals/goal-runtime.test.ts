@@ -523,26 +523,6 @@ describe("goal runtime", () => {
 		expect(harness.persists).toHaveLength(0);
 	});
 
-	it("renders transient active goal rules as plain user context without repeating the saved objective", () => {
-		const goal = createGoal({ objective: "Saved <objective>", tokenBudget: 50, tokensUsed: 12, timeUsedSeconds: 3 });
-		const context = renderGoalPrompt("active", goal, { omitObjective: true, authority: "user" });
-		expect(context).not.toContain("Saved");
-		expect(context).not.toContain("<goal_context>");
-		expect(context).not.toContain("<objective>");
-		expect(context).not.toContain("Objective below");
-		expect(context).toContain("Tokens used: 12");
-		expect(context).toContain("Token budget: 50");
-		expect(context).toContain("Tokens remaining: 38");
-		expect(context).toContain("Time used: 3 seconds");
-		expect(context).toContain('`goal({op:"complete"})`: only verified completion');
-		expect(context).toContain("audit current repo state against every concrete deliverable");
-		expect(context).toContain("Budget exhaustion ≠ completion");
-
-		const ordinary = renderGoalPrompt("active", goal);
-		expect(ordinary).toContain("<goal_context>");
-		expect(ordinary).toContain("<objective>\nSaved &lt;objective&gt;\n</objective>");
-	});
-
 	it("escapes XML in goal helpers and rendered prompts", () => {
 		const objective = "Fix <root>&keep>safe";
 		const goal = createGoal({ objective });

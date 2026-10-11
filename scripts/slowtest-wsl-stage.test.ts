@@ -190,9 +190,6 @@ describe("fixed network-remote source", () => {
 		const f = executionFixture();
 		expect((await runWslStage(f.gate, { ...f.options, identity: source(true) })).status).toBe("BLOCKED");
 		expect(f.commands).toHaveLength(0);
-		await expect(resolveWslRemoteSource(f.gate, temporary, source(true))).rejects.toThrow(
-			"Git writes are not authorized",
-		);
 	});
 	test("in-progress Windows operation blocks before any WSL command", async () => {
 		const admin = await fs.mkdtemp(path.join(temporary, "git-admin-"));

@@ -206,7 +206,7 @@ describe("Rust affected test scope", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toContain("Selecting the full Rust workspace");
-		expect(result.stdout).toContain("cargo nextest run --workspace");
+		expect(result.stdout).toMatch(/cargo nextest run\b[^\r\n]* --workspace\b/);
 		expect(result.stdout).toContain("cargo test --doc --workspace");
 		expect(result.stdout).toContain("--exclude brush-core");
 		expect(result.stdout).toContain("--exclude napi");

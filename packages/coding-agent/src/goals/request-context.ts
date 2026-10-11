@@ -2,7 +2,6 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { MAGIC_KEYWORDS, renderOrchestrateNotice } from "../modes/magic-keywords";
 import goalAutoOrchestratePrompt from "../prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
 import type { CustomMessage } from "../session/messages";
-import { renderGoalPrompt } from "./runtime";
 import type { GoalModeState } from "./state";
 
 export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
@@ -17,7 +16,6 @@ const renderGoalAutoOrchestrate = prompt.compile(goalAutoOrchestratePrompt.trim(
 export function buildGoalAutoOrchestrateMessage(
 	state: GoalModeState | undefined,
 	tools: readonly string[],
-	todoContext?: string,
 ): CustomMessage | undefined {
 	if (state?.autoOrchestrate !== true || !state.enabled || state.mode !== "active" || state.goal.status !== "active") {
 		return undefined;
@@ -31,12 +29,6 @@ export function buildGoalAutoOrchestrateMessage(
 		// Preserve the saved objective verbatim, including whitespace and templates.
 		content: renderGoalAutoOrchestrate({
 			objective: state.goal.objective,
-			goalContext: renderGoalPrompt("active", state.goal, {
-				omitObjective: true,
-				authority: "user",
-				omitGoalToolInstructions: !tools.includes("goal"),
-			}),
-			todoContext,
 			orchestrateRules,
 		}),
 		display: false,

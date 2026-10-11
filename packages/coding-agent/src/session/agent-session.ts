@@ -855,6 +855,8 @@ export class AgentSession implements SettingsScope {
 	 * command.
 	 */
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
+	/** Initial Goal provenance follows its original input, never the provider payload or restored history. */
+	readonly #goalAutoOrchestrateInitialSources = new WeakMap<AgentMessage, { goalId: string; generation: number }>();
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -1994,7 +1996,6 @@ export class AgentSession implements SettingsScope {
 			if (context?.willContinue) this.#steerAnthropicWrapUp();
 			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintenance.maintainContextMidRun(messages, signal, context);
-			if (!signal?.aborted) this.#appendGoalAutoOrchestrateContext(undefined, messages);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -7255,30 +7256,29 @@ export class AgentSession implements SettingsScope {
 		return this.agent.state.messages.some(isNotice);
 	}
 
-	#appendGoalAutoOrchestrateContext(
-		compactionEntryId?: string,
-		activeMessages?: AgentMessage[],
-	): CustomMessage | undefined {
+	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
 		const state = this.#goalModeState;
 		if (
 			state?.autoOrchestrate !== true ||
 			this.#isDisposed ||
+			(compactionEntryId === undefined && (initialGoalId === undefined || initialGoalId !== state.goal.id)) ||
 			this.#hasGoalAutoOrchestrateContext(state.goal.id, compactionEntryId)
 		) {
 			return undefined;
 		}
 		const tools = isJchToolsAgentModel(this.model) ? [] : this.getEnabledToolNames();
-		const notice = buildGoalAutoOrchestrateMessage(
-			state,
-			tools,
-			this.#buildGoalTodoContext({ tools, userAuthority: true }),
-		);
+		const notice = buildGoalAutoOrchestrateMessage(state, tools);
 		if (!notice) return undefined;
 		if (compactionEntryId !== undefined) {
 			notice.details = { source: "goal-auto-orchestrate", goalId: state.goal.id, compactionEntryId };
 		}
+		return notice;
+	}
+
+	#appendGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
+		const notice = this.#buildGoalAutoOrchestrateContext(compactionEntryId, initialGoalId);
+		if (!notice) return undefined;
 		this.agent.appendMessage(notice);
-		if (activeMessages && activeMessages !== this.agent.state.messages) activeMessages.push(notice);
 		this.sessionManager.appendCustomMessageEntry(
 			notice.customType,
 			notice.content,
@@ -7287,6 +7287,14 @@ export class AgentSession implements SettingsScope {
 			notice.attribution,
 		);
 		return notice;
+	}
+
+	#takeGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
+		const source = this.#goalAutoOrchestrateInitialSources.get(message);
+		this.#goalAutoOrchestrateInitialSources.delete(message);
+		return source?.generation === this.#promptGeneration
+			? this.#buildGoalAutoOrchestrateContext(undefined, source.goalId)
+			: undefined;
 	}
 
 	#buildVibeModeMessage(): CustomMessage | null {
@@ -7312,9 +7320,9 @@ export class AgentSession implements SettingsScope {
 			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 	}
 
-	#buildGoalTodoContext(options?: { tools?: readonly string[]; userAuthority?: boolean }): string | undefined {
+	#buildGoalTodoContext(): string | undefined {
 		if (!cfgTodoEnabled.get(this.settings)) return undefined;
-		const canCallTodoTool = (options?.tools ?? this.getActiveToolNames()).includes("todo");
+		const canCallTodoTool = this.getActiveToolNames().includes("todo");
 		if (!canCallTodoTool) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
@@ -7336,7 +7344,6 @@ export class AgentSession implements SettingsScope {
 		}));
 
 		return prompt.render(goalTodoContextPrompt, {
-			userAuthority: options?.userAuthority === true,
 			canCallTodoTool,
 			closed: String(closed),
 			open: String(open),
@@ -7605,6 +7612,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
 				prependMessages: keywordNotices,
+				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
 				rawText: typedText,
 				onPromptAdmitted: options?.onPromptAdmitted,
 				promptGeneration: queueGeneration,
@@ -7684,6 +7692,7 @@ export class AgentSession implements SettingsScope {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
 				prependMessages: keywordNotices,
+				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
 				rawText: typedText,
 				preprocessed: {
 					images: normalizedImages,
@@ -7882,6 +7891,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueCustomMessage(message, streamingBehavior, {
 				queueChipText: options?.queueChipText,
 				prependMessages: keywordNotices,
+				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
 				onPromptAdmitted: options?.onPromptAdmitted,
 			});
 			outcome.sessionClaimed = true;
@@ -7928,6 +7938,7 @@ export class AgentSession implements SettingsScope {
 				queueChipText: options?.queueChipText,
 				preprocessed: { content: preparedMessage.content, descriptionNotice },
 				prependMessages: keywordNotices,
+				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
 				onPromptAdmitted: options?.onPromptAdmitted,
 			});
 			outcome.sessionClaimed = true;
@@ -7957,7 +7968,8 @@ export class AgentSession implements SettingsScope {
 	): Promise<QueuedMessagePreparation> | undefined => {
 		const userMessages = messages.filter(isUserAuthoredQueuedMessage);
 		const first = userMessages[0];
-		if (!first) return undefined;
+		const hasInitialSource = messages.some(message => this.#goalAutoOrchestrateInitialSources.has(message));
+		if (!first && !hasInitialSource) return undefined;
 		const text: string[] = [];
 		const images: ImageContent[] = [];
 		for (const message of userMessages) {
@@ -7973,14 +7985,40 @@ export class AgentSession implements SettingsScope {
 			}
 			text.push(parts.join(""));
 		}
-		return this.#prepareAgentStart(
-			first,
-			text.join("\n\n"),
-			images.length > 0 ? images : undefined,
-			this.#promptGeneration,
-			signal,
-			"queued",
-		);
+		const preparation = first
+			? this.#prepareAgentStart(
+					first,
+					text.join("\n\n"),
+					images.length > 0 ? images : undefined,
+					this.#promptGeneration,
+					signal,
+					"queued",
+				)
+			: undefined;
+		if (!hasInitialSource) return preparation;
+		const generation = this.#promptGeneration;
+		const sessionGeneration = this.#sessionGeneration;
+		return Promise.resolve(preparation).then(prepared => ({
+			commit: () => {
+				const additional = prepared ? prepared.commit() : [];
+				if (
+					additional === undefined ||
+					signal.aborted ||
+					this.#isDisposed ||
+					this.#promptGeneration !== generation ||
+					this.#sessionGeneration !== sessionGeneration
+				) {
+					return undefined;
+				}
+				// Construct only after async preparation and Agent's delivery ownership check.
+				let notice: CustomMessage | undefined;
+				for (const message of messages) {
+					if (notice) this.#goalAutoOrchestrateInitialSources.delete(message);
+					else notice = this.#takeGoalAutoOrchestrateInitialContext(message);
+				}
+				return notice ? [...additional, notice] : additional;
+			},
+		}));
 	};
 
 	/**
@@ -8107,7 +8145,12 @@ export class AgentSession implements SettingsScope {
 		expandedText: string,
 		options?: Pick<
 			PromptOptions,
-			"toolChoice" | "images" | "skipCompactionCheck" | "solutionSpace" | "onPromptAdmitted"
+			| "toolChoice"
+			| "images"
+			| "skipCompactionCheck"
+			| "solutionSpace"
+			| "onPromptAdmitted"
+			| "goalAutoOrchestrateInitialId"
 		> & {
 			prependMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
@@ -8169,9 +8212,8 @@ export class AgentSession implements SettingsScope {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				// Use the same Agent loop and canonical persistence without frontend
 				// tool preludes, auto-read, compaction, classification or recovery.
-				const goalContext = this.#buildGoalModeMessage();
-				this.#appendGoalAutoOrchestrateContext();
-				await this.agent.prompt(goalContext ? [goalContext, message] : [message]);
+				this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
+				await this.agent.prompt([message]);
 				await this.#waitForPostPromptRecovery(generation);
 				return true;
 			}
@@ -8320,7 +8362,7 @@ export class AgentSession implements SettingsScope {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			this.#appendGoalAutoOrchestrateContext();
+			this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
 			const contextWindow = this.model?.contextWindow ?? 0;
 			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
@@ -8636,6 +8678,7 @@ export class AgentSession implements SettingsScope {
 			timestamp?: number;
 			attribution?: MessageAttribution;
 			prependMessages?: readonly CustomMessage[];
+			goalAutoOrchestrateInitialId?: string;
 			/** Text the caller originally submitted, before slash/custom-command
 			 *  rewriting, prompt-template expansion, or `^model` mention substitution.
 			 *  Recorded via `#queuedMessageRawText` so `removeQueuedMessage` can match
@@ -8662,6 +8705,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
+		const sourceGeneration = options?.promptGeneration ?? this.#promptGeneration;
 		const attribution = options?.attribution ?? "user";
 		const timestamp = options?.timestamp;
 		const rawText = options?.rawText ?? text;
@@ -8728,6 +8772,12 @@ export class AgentSession implements SettingsScope {
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
+			if (options?.goalAutoOrchestrateInitialId !== undefined) {
+				this.#goalAutoOrchestrateInitialSources.set(userMessage, {
+					goalId: options.goalAutoOrchestrateInitialId,
+					generation: sourceGeneration,
+				});
+			}
 			this.agent.followUp(userMessage);
 		} else {
 			for (const notice of prependMessages) this.agent.steer(notice);
@@ -8741,6 +8791,12 @@ export class AgentSession implements SettingsScope {
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
+			if (options?.goalAutoOrchestrateInitialId !== undefined) {
+				this.#goalAutoOrchestrateInitialSources.set(userMessage, {
+					goalId: options.goalAutoOrchestrateInitialId,
+					generation: sourceGeneration,
+				});
+			}
 			this.agent.steer(userMessage);
 		}
 		options?.onPromptAdmitted?.();
@@ -8948,12 +9004,14 @@ export class AgentSession implements SettingsScope {
 			preprocessed?: { content: CustomMessage<T>["content"]; descriptionNotice?: CustomMessage };
 			/** Hidden notices published immediately before this message, in the same synchronous group. */
 			prependMessages?: readonly CustomMessage[];
+			goalAutoOrchestrateInitialId?: string;
 			/** Called synchronously once the message is pushed onto its queue. See {@link PromptOptions.onPromptAdmitted}. */
 			onPromptAdmitted?: () => void;
 		},
 	): Promise<void> {
 		// Captured before the normalization await below — see #sessionGeneration's doc comment.
 		const sessionGeneration = this.#sessionGeneration;
+		const sourceGeneration = this.#promptGeneration;
 		const details =
 			options?.queueChipText !== undefined
 				? ({
@@ -8999,6 +9057,12 @@ export class AgentSession implements SettingsScope {
 			// correctly once idle, matching #queueUserMessage's aside branch.
 			this.#resumeStrandedIrcAsides();
 			return;
+		}
+		if (options?.goalAutoOrchestrateInitialId !== undefined) {
+			this.#goalAutoOrchestrateInitialSources.set(normalizedAppMessage, {
+				goalId: options.goalAutoOrchestrateInitialId,
+				generation: sourceGeneration,
+			});
 		}
 		this.#allowQueuedMessageDrainRetry();
 		// Keyword notices and their user message must enter the queue in one synchronous phase.

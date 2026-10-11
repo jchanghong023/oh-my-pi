@@ -68,6 +68,9 @@ const archiveReaderCache = new LRUCache<string, CachedArchiveReader>({
 });
 
 async function openArchiveCached(absolutePath: string): Promise<ArchiveReader> {
+	// Windows can preserve ctime across rapid same-size writes, even before
+	// restoring mtime. Metadata cannot safely validate a cached member index.
+	if (process.platform === "win32") return openArchive(absolutePath);
 	// A vanished or unreadable archive is reported by the opener, as it always has been.
 	const stat = await Bun.file(absolutePath)
 		.stat()

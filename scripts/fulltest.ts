@@ -45,6 +45,8 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 		XDG_DATA_HOME: "",
 		XDG_STATE_HOME: "",
 		XDG_CACHE_HOME: "",
+		// Empty XDG_CACHE_HOME must not put Bun's transpiler cache in the source tree.
+		BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(gateRepoRoot, "node_modules", ".cache", "bun-transpiler"),
 		// Toolchain caches retain their normal per-platform locations despite the
 		// isolated application HOME. These are not fresh build/cache variants.
 		CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo"),

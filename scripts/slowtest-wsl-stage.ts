@@ -222,7 +222,7 @@ export async function resolveWslRemoteSource(
 ): Promise<WslRemoteSource> {
 	if (source.dirty)
 		throw new Error(
-			"BLOCKED: commit and push the intended source before WSL execution; Git writes are not authorized and dirty source cannot be transferred",
+			"BLOCKED: commit and push the intended source before WSL execution; dirty source cannot be transferred; this gate does not perform Git writes",
 		);
 	const git = async (label: string, args: string[]) => {
 		const result = await gate.capture({ label, argv: ["git", ...args], cwd: root, allowFailure: true });
@@ -505,7 +505,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	if (source.dirty)
 		return stageFailure(
 			"BLOCKED",
-			"commit and push the intended source first; dirty source is not transferable and gate authorization grants no Git writes",
+			"commit and push the intended source first; dirty source is not transferable; this gate does not perform Git writes",
 			"workspace_dirty",
 		);
 	const which = options.which ?? Bun.which;
