@@ -323,8 +323,9 @@ report_path_hint() {
     esac
 }
 
-# Install binary from GitHub releases
+# Install binary from the fork's published GitHub Releases
 install_binary() {
+
     # Detect platform
     OS="$(uname -s)"
     ARCH="$(host_arch)"
@@ -336,7 +337,7 @@ install_binary() {
 
     case "$ARCH" in
         x64|arm64) ;;
-        *)         echo "Unsupported architecture: $ARCH"; exit 1 ;;
+        *)     echo "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
 
     if [ "$PLATFORM" = "linux" ]; then
@@ -379,7 +380,6 @@ install_binary() {
         LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
     fi
 
-    install_log INFO http_request_completed 'result=success host=api.github.com endpoint=release_metadata http_status=success'
     if [ -z "$LATEST" ]; then
         install_log ERROR release_metadata_invalid 'result=missing_tag'
         echo "Failed to fetch release tag"

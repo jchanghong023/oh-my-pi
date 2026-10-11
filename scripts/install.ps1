@@ -168,16 +168,8 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
 
 $Repo = "jchanghong023/oh-my-pi"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
-# Windows PowerShell 5.1 (.NET Framework) does not reliably resolve
-# [System.Runtime.InteropServices.RuntimeInformation] without an
-# assembly-qualified name, while PowerShell 7+ (Core) loads that type from a
-# different assembly — so read the OS architecture from the environment
-# instead, which works on both. Prefer PROCESSOR_ARCHITEW6432 so a 32-bit
-# host on 64-bit Windows still reports the OS architecture.
-# Note: PROCESSOR_ARCHITEW6432 is only set for 32-bit (WOW64) processes, so
-# x64 PowerShell under ARM64 emulation reports AMD64 and installs the x64
-# binary (runs emulated, not natively). Native ARM64 and x86 hosts are
-# rejected below — only x64 is supported.
+# Read the OS architecture from environment variables for compatibility with Windows PowerShell 5.1 and PowerShell 7+.
+# A 32-bit host on 64-bit Windows reports PROCESSOR_ARCHITEW6432; only x64 is supported.
 $RawArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if (-not $RawArchitecture) {
     throw "Unable to determine Windows architecture"

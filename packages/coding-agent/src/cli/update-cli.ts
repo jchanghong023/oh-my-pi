@@ -10,8 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { applyBinaryPatch } from "@oh-my-pi/pi-natives";
 import {
-	$env,
 	$which,
 	APP_NAME,
 	compareVersions,
@@ -33,6 +33,7 @@ import {
 	unsupportedProxyMessage,
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
+import { type BuildAnswer, type BuildPatch, type Fetch, fetchBuild, type UpdateChannel } from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
 	loadNpmRegistryResolver,
@@ -44,12 +45,15 @@ import {
 import { cfgUpdateChannel } from "../modes/settings";
 
 const UPDATE_REPOSITORY = process.env.PI_UPDATE_REPOSITORY;
+const GITHUB_API = "https://api.github.com";
 const REPO = UPDATE_REPOSITORY ?? "can1357/oh-my-pi";
+export function isForkUpdateRepository(): boolean {
+	return UPDATE_REPOSITORY !== undefined && UPDATE_REPOSITORY.length > 0;
+}
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = `github:${REPO}`;
 const NIX_STORE_DIR = "/nix/store";
-const GITHUB_API = "https://api.github.com";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
 const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
@@ -176,7 +180,6 @@ function currentNativeTag(): string {
 
 /** Distribution channel advertised by a release's published npm manifest. */
 export type ReleaseDist = "npm" | "binary";
-export type UpdateChannel = "stable" | "canary";
 
 /**
  * Fork binaries publish stable releases only, so a canary channel request can
@@ -223,8 +226,6 @@ export interface ReleaseBinaryAsset {
 	digest: string;
 }
 
-type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
 type GitHubCliTokenRunner = (ghPath: string) => Promise<string | undefined>;
 
 async function readGitHubCliToken(ghPath: string): Promise<string | undefined> {
@@ -259,7 +260,7 @@ async function resolveGitHubToken(
 		runGhAuthToken?: GitHubCliTokenRunner;
 	} = {},
 ): Promise<string | undefined> {
-	const envToken = options.envToken ?? ($env.GITHUB_TOKEN || $env.GH_TOKEN);
+	const envToken = options.envToken ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
 	if (envToken) return envToken;
 
 	const ghPath = options.ghPath === null ? undefined : (options.ghPath ?? $which("gh"));
@@ -309,7 +310,7 @@ export function resolveReleaseDist(manifest: unknown): ReleaseDist | undefined {
  * Updaters that understand `rename` follow the pointer and resolve the
  * release from the renamed package instead ({@link getLatestRelease});
  * older deployed updaters ignore it and take the `dist: "binary"` escape
- * hatch, replacing the install with the GitHub release binary rather than
+ * hatch, replacing the install with the standalone release binary rather than
  * installing the stub via bun/npm.
  *
  * The renamed package's own manifest MUST declare `"dist": "npm"` (so
@@ -342,7 +343,7 @@ function majorVersion(version: string): number {
  * `@oh-my-pi/pi-natives*` companions ({@link buildBunInstallArgs}) may not
  * exist at that version, which would strand bun/npm-managed installs behind a
  * hard install failure. Homebrew and mise installs are unaffected — both
- * already pull GitHub release binaries.
+ * already install the standalone release binaries.
  */
 export function shouldForceBinaryUpdate(
 	release: { version: string; dist?: ReleaseDist },
@@ -1238,8 +1239,8 @@ export function resolveUpdateTargetFromPath(
  * valid. The `bun pm bin -g` / `npm prefix -g` probes are then skipped unless
  * the launcher is a symlink, whose bin dirs distinguish a manager launcher
  * (taken over in place) from a foreign symlink (resolved to its real binary).
- * Homebrew/mise detection always runs: both managers install GitHub release
- * binaries and stay valid regardless of how the release is distributed.
+ * Homebrew/mise detection always runs: both managers install the standalone
+ * release binaries and stay valid regardless of how the release is distributed.
  */
 async function resolveUpdateTarget(options: { allowPackageManagers: boolean }): Promise<UpdateTarget> {
 	const homebrewPrefix = await getHomebrewFormulaPrefix();
@@ -1479,8 +1480,7 @@ export async function getLatestGitHubRelease(
  * npm metadata and follow `omp.rename` pointers.
  *
  * The registry comes from the user's npm/bun configuration
- * ({@link loadNpmRegistryResolver}), so a configured feed is honored for every
- * install method, including standalone binaries.
+ * ({@link loadNpmRegistryResolver}), so a configured feed is honored.
  */
 export async function getLatestRelease(
 	options: { timeoutMs?: number; channel?: UpdateChannel; registries?: NpmRegistryResolver } = {},
@@ -1494,7 +1494,7 @@ export async function getLatestRelease(
 						`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`,
 					);
 				}
-				return getLatestGitHubRelease(UPDATE_REPOSITORY, options.timeoutMs);
+				return getLatestGitHubRelease(REPO, options.timeoutMs);
 			}
 
 			const timeoutMs = options.timeoutMs ?? RELEASE_METADATA_TIMEOUT_MS;
@@ -1898,6 +1898,37 @@ async function reportedVersionAtPath(binaryPath: string): Promise<string | undef
 	}
 }
 
+/** Whether `filePath` starts like an ELF, PE, or Mach-O executable rather than a script. */
+async function isNativeExecutable(filePath: string): Promise<boolean> {
+	const head = Buffer.alloc(4);
+	try {
+		const file = await fs.promises.open(filePath, "r");
+		try {
+			if ((await file.read(head, 0, 4, 0)).bytesRead < 4) return false;
+		} finally {
+			await file.close();
+		}
+	} catch {
+		return false;
+	}
+	if (head.toString("latin1") === "\x7fELF" || head.toString("latin1", 0, 2) === "MZ") return true;
+	return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(head.readUInt32BE(0));
+}
+
+/**
+ * The installed version a binary update names to the build service
+ * (`from_version`) so its answer carries a patch from that build: what
+ * `targetPath` reports when it is a native executable, else the running
+ * build's. A patch is applied only to a file whose SHA-256 is the patch's
+ * base, so a wrong guess costs a whole-file download, never a broken install.
+ */
+async function installedBuildVersion(targetPath: string): Promise<string> {
+	const real = tryRealpath(targetPath);
+	if (isCompiledBinary() && real !== undefined && real === tryRealpath(process.execPath)) return VERSION;
+	if (!(await isNativeExecutable(targetPath))) return VERSION;
+	return (await reportedVersionAtPath(targetPath)) ?? VERSION;
+}
+
 /**
  * Run a specific binary and check if it reports the expected version.
  */
@@ -2069,10 +2100,10 @@ async function removeBackupBestEffort(filePath: string, diagnostic = true): Prom
  * reclaim once its owning process has exited. On macOS the sweep must also
  * spare a backup that any process still maps as its executable image —
  * unlinking it would break the live process's TCC permission attribution — so
- * a live image survives until its process exits. A `.new` temp file only
- * survives a hard kill mid-download; it is reaped once older than the download
- * window,
- * which a live download cannot exceed without timing out and cleaning up after
+ * a live image survives until its process exits. A `.new` temp file or a
+ * `.patch` download (`<binary>.<timestamp>.<pid>.patch`) only survives a hard
+ * kill mid-update; it is reaped once older than the download window, which a
+ * live download cannot exceed without timing out and cleaning up after
  * itself — so a concurrent run's in-progress temp is never deleted. Legacy
  * fixed `<binary>.bak` / `<binary>.new` names (from before suffixes were made
  * unique) are matched too, so users upgrading from a buggy release get the
@@ -2101,17 +2132,21 @@ export async function sweepStaleUpdateArtifacts(targetPath: string): Promise<voi
 			const now = Date.now();
 			for (const entry of entries) {
 				if (!entry.startsWith(`${base}.`)) continue;
-				const suffix = entry.endsWith(".bak") ? ".bak" : entry.endsWith(".new") ? ".new" : undefined;
+				const suffix = entry.endsWith(".bak")
+					? ".bak"
+					: entry.endsWith(".new")
+						? ".new"
+						: entry.endsWith(".patch")
+							? ".patch"
+							: undefined;
 				if (!suffix) continue;
-				// Legacy "<base><suffix>" → empty middle; new "<base>.<timestamp>.<pid><suffix>"
-				// → dot-separated numeric run. Anything else is an unrelated file.
+				// Patches never had a legacy bare name; other update artifacts did.
 				const middle = entry.slice(base.length + 1, entry.length - suffix.length);
-				if (middle.length > 0 && !/^\d+(\.\d+)*$/.test(middle)) continue;
+				if (middle.length > 0 ? !/^\d+(\.\d+)*$/.test(middle) : suffix === ".patch") continue;
 				fields.artifact_count = Number(fields.artifact_count) + 1;
 				const full = path.join(dir, entry);
-				if (suffix === ".new") {
-					// A temp file may belong to a concurrent update still downloading, so
-					// only reap ones older than the download window.
+				if (suffix !== ".bak") {
+					// Keep concurrent downloads inside their download window.
 					let mtimeMs: number;
 					try {
 						mtimeMs = (await fs.promises.stat(full)).mtimeMs;
@@ -2585,23 +2620,25 @@ export interface ManagerUpdateSteps {
 	repair(launcherPath: string): Promise<void>;
 }
 
-/** Production {@link ManagerUpdateSteps}: a bun/npm global install plus an in-place binary takeover. */
-function packageManagerUpdateSteps(
-	manager: "bun" | "npm",
-	release: ReleaseInfo,
-	allowPrerelease: boolean,
-): ManagerUpdateSteps {
+/**
+ * Production {@link ManagerUpdateSteps}: a bun/npm global install plus an
+ * in-place takeover with the build service's build of the same version.
+ */
+function packageManagerUpdateSteps(manager: "bun" | "npm", release: ReleaseInfo): ManagerUpdateSteps {
 	return {
 		manager,
 		install: () => (manager === "bun" ? updateViaBun(release) : updateViaNpm(release)),
 		verify: () => verifyInstalledVersion(release.version),
 		repair: async launcherPath => {
+			// The launcher is a manager's script or shim, never a build a patch
+			// could start from, so the check names no installed version.
+			const build = await fetchBuild({ version: release.version });
 			// npm's script shims outrank `.exe` in PowerShell and Git Bash, so
 			// they must be retired rather than merely shadowed.
 			if (isWindowsScriptLauncherPath(launcherPath)) {
-				await updateViaShimTakeover(launcherPath, release.version, { allowPrerelease });
+				await updateViaShimTakeover(launcherPath, build);
 			} else {
-				await updateViaBinaryAt(launcherPath, release.version, { allowPrerelease });
+				await updateViaBinaryAt(launcherPath, build);
 			}
 		},
 	};
@@ -2796,18 +2833,114 @@ async function updateViaMise(expectedVersion: string, force: boolean): Promise<v
 let updateAttemptSeq = 0;
 
 /**
- * Download a release binary to a target path, replacing an existing file.
+ * Applies an HDiffPatch single-stream patch to `oldPath`, writing `outPath`;
+ * `applyBinaryPatch` from pi-natives in production.
+ */
+export type BinaryPatchApplier = (oldPath: string, patchPath: string, outPath: string) => Promise<number>;
+
+/** Network and patching seams for installing a {@link BuildAnswer}. */
+export interface BuildDownloadOptions {
+	fetchImpl?: Fetch;
+	applyPatch?: BinaryPatchApplier;
+}
+
+/** Size and lowercase hex SHA-256 of a file, streamed. */
+async function fileDigest(filePath: string): Promise<{ size: number; sha256: string }> {
+	const hash = new Bun.SHA256();
+	let size = 0;
+	for await (const chunk of fs.createReadStream(filePath)) {
+		const bytes = chunk as Buffer;
+		hash.update(bytes);
+		size += bytes.byteLength;
+	}
+	return { size, sha256: hash.digest("hex") };
+}
+
+/**
+ * Build `tempPath` from the answer's patch applied to `basePath`. Returns
+ * false, with `tempPath` absent, when the patch cannot be used: `basePath` is
+ * not the patch's base (by SHA-256), or the patch download, its application,
+ * or the result's size/SHA-256 check fails. Only real failures print a line;
+ * a different base is the expected case for an install the patch was not made
+ * for. The patch download at `patchPath` never outlives the call.
+ */
+async function installFromPatch(
+	build: BuildAnswer,
+	patch: BuildPatch,
+	paths: { basePath: string; patchPath: string; tempPath: string },
+	options: BuildDownloadOptions,
+): Promise<boolean> {
+	try {
+		if ((await fileDigest(paths.basePath)).sha256 !== patch.fromSha256) return false;
+	} catch {
+		return false;
+	}
+	const from = patch.fromVersion ? ` from ${patch.fromVersion}` : "";
+	console.log(chalk.dim(`Downloading patch${from} (${formatBytes(patch.size)})…`));
+	try {
+		await downloadVerifiedBinary({
+			url: patch.url,
+			targetPath: paths.patchPath,
+			expectedSize: patch.size,
+			expectedDigest: `sha256:${patch.sha256}`,
+			fetchImpl: options.fetchImpl,
+		});
+		await (options.applyPatch ?? applyBinaryPatch)(paths.basePath, paths.patchPath, paths.tempPath);
+		const result = await fileDigest(paths.tempPath);
+		if (result.size !== build.file.size || result.sha256 !== build.file.sha256) {
+			throw new Error(
+				`patched file is ${result.size} bytes sha256:${result.sha256}, expected ${build.file.size} bytes sha256:${build.file.sha256}`,
+			);
+		}
+		await fs.promises.chmod(paths.tempPath, 0o755);
+		console.log(chalk.dim(`Patched and verified sha256:${build.file.sha256}`));
+		return true;
+	} catch (err) {
+		await unlinkIfExists(paths.tempPath).catch(() => {});
+		console.log(
+			chalk.dim(`Patch unusable (${err instanceof Error ? err.message : err}); downloading the whole file instead.`),
+		);
+		return false;
+	} finally {
+		await unlinkIfExists(paths.patchPath).catch(() => {});
+	}
+}
+
+/**
+ * Write the answered build to `tempPath`, verified against the answer's size
+ * and SHA-256: from its patch when `basePath` is the patch's base, else (or on
+ * any problem with the patch) from the whole file.
  *
- * `expectedVersion` is the npm-advertised version; the installed version is the
- * one {@link selectFallbackBinaryAsset} resolves when GitHub has no release for
- * that tag, so verification and reporting both use the resolved version.
+ * An answer may instead say a patch is being made (`patch_pending`). This
+ * interactive command never waits for it: the whole file installs now, and the
+ * check that got that answer has already queued the patch for later updaters.
+ */
+async function downloadBuild(
+	build: BuildAnswer,
+	paths: { basePath: string; patchPath: string; tempPath: string },
+	options: BuildDownloadOptions,
+): Promise<void> {
+	if (build.patch && (await installFromPatch(build, build.patch, paths, options))) return;
+	console.log(chalk.dim(`Downloading ${build.file.name} (${formatBytes(build.file.size)})…`));
+	await downloadVerifiedBinary({
+		url: build.download,
+		targetPath: paths.tempPath,
+		expectedSize: build.file.size,
+		expectedDigest: `sha256:${build.file.sha256}`,
+		fetchImpl: options.fetchImpl,
+	});
+	console.log(chalk.dim(`Verified sha256:${build.file.sha256}`));
+}
+
+/**
+ * Install the answered build at `targetPath`, replacing an existing file. The
+ * existing file is the patch base when it is the build the patch starts from.
  */
 export async function updateViaBinaryAt(
 	targetPath: string,
-	expectedVersion: string,
-	options: {
+	buildOrVersion: BuildAnswer | string,
+	options: BuildDownloadOptions & {
 		binaryName?: string;
-		fetchImpl?: Fetch;
 		githubToken?: string;
 		allowPrerelease?: boolean;
 		/** Refuse replacement unless the existing path is a non-script OMP executable. */
@@ -2820,42 +2953,38 @@ export async function updateViaBinaryAt(
 		async () => {
 			if (options.validateExistingTarget)
 				await observeUpdateStage("existing_target_validation", () => validateExistingUpdateTarget(targetPath));
-			const binaryName = options.binaryName ?? getBinaryName();
-			// Unique per attempt so two overlapping `omp update` runs never share a temp
-			// or backup path. A fixed temp name (`<binary>.new`) let the second run's
-			// pre-download unlink delete the first run's still-downloading temp file; the
-			// first kept writing to its open fd (size + digest still passed), then chmod
-			// hit the missing path and the update aborted (issue #8434). The backup needs
-			// the same uniqueness: a stale backup from an earlier update may still be
-			// locked (the previous process image on Windows), so a fixed name would force
-			// the move-aside rename to overwrite it. pid, timestamp, and a process-local
-			// counter keep two updates started in the same millisecond from colliding.
-			warnOnPathConflict(targetPath, resolveOmpPath());
 			const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 			const tempPath = `${targetPath}.${attempt}.new`;
+			const patchPath = `${targetPath}.${attempt}.patch`;
 			const backupPath = `${targetPath}.${attempt}.bak`;
-			const githubToken = options.githubToken ?? (await resolveGitHubToken());
-			const asset = await getReleaseBinaryAsset(
-				expectedVersion,
-				binaryName,
-				githubToken,
-				options.fetchImpl,
-				options.allowPrerelease,
-			);
-			console.log(chalk.dim(`Downloading ${binaryName}…`));
-			await downloadVerifiedBinary({
-				url: asset.url,
-				targetPath: tempPath,
-				expectedSize: asset.size,
-				expectedDigest: asset.digest,
-				fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
-			});
-			console.log(chalk.dim(`Verified ${asset.digest}`));
+			let installedVersion: string;
+			if (typeof buildOrVersion === "string") {
+				const binaryName = options.binaryName ?? getBinaryName();
+				warnOnPathConflict(targetPath, resolveOmpPath());
+				const githubToken = options.githubToken ?? (await resolveGitHubToken());
+				const asset = await getReleaseBinaryAsset(
+					buildOrVersion,
+					binaryName,
+					githubToken,
+					options.fetchImpl,
+					options.allowPrerelease,
+				);
+				installedVersion = asset.version;
+				console.log(chalk.dim(`Downloading ${binaryName}…`));
+				await downloadVerifiedBinary({
+					url: asset.url,
+					targetPath: tempPath,
+					expectedSize: asset.size,
+					expectedDigest: asset.digest,
+					fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
+				});
+				console.log(chalk.dim(`Verified ${asset.digest}`));
+			} else {
+				installedVersion = buildOrVersion.version;
+				warnOnPathConflict(targetPath, resolveOmpPath());
+				await downloadBuild(buildOrVersion, { basePath: targetPath, patchPath, tempPath }, options);
+			}
 
-			// Serialize the target swap and stale-artifact sweep per target so two
-			// overlapping `omp update` runs never replace the same binary concurrently
-			// or reclaim each other's live backup/temp files. The download above writes
-			// to a unique temp path and is safe to overlap; only the swap is shared.
 			const verification = await observeUpdateStage("swap_lock", () =>
 				withFileLock(targetPath, async () => {
 					console.log(chalk.dim("Installing update..."));
@@ -2863,17 +2992,10 @@ export async function updateViaBinaryAt(
 						targetPath,
 						tempPath,
 						backupPath,
-						expectedVersion: asset.version,
+						expectedVersion: installedVersion,
 						verifyInstalledVersion:
 							options.verifyInstalledVersion ?? (version => verifyBinaryAtPath(targetPath, version)),
 					});
-					// The launcher is no longer bun-managed: drop bun's metadata sidecar so
-					// the next update classifies this install as a standalone binary instead
-					// of reinstalling a package that can no longer own the launcher (bun
-					// tolerates failing to overwrite the running `.exe`, so that reinstall
-					// would leave the install pinned to the old version). Done after the
-					// verified swap, so a rollback still restores a working bun shim, and
-					// best effort: a leftover sidecar only costs one misrouted classification.
 					try {
 						await observeUpdateStage(
 							"shim_marker_cleanup",
@@ -2884,15 +3006,19 @@ export async function updateViaBinaryAt(
 					} catch (error) {
 						updateEvent("shim_marker_cleanup", "partial", logger.diagnosticError(error), "warn");
 					}
-					// Reclaim backups from earlier updates whose owning process has since exited.
 					await sweepStaleUpdateArtifacts(targetPath);
 					return result;
 				}),
 			);
-			printVerifiedVersion(asset.version, verification.path ?? targetPath);
+			printVerifiedVersion(installedVersion, verification.path ?? targetPath);
 			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 		},
-		{ expected_version: diagnosticVersion(expectedVersion), allow_prerelease: options.allowPrerelease ?? false },
+		{
+			expected_version: diagnosticVersion(
+				typeof buildOrVersion === "string" ? buildOrVersion : buildOrVersion.version,
+			),
+			allow_prerelease: options.allowPrerelease ?? false,
+		},
 	);
 }
 
@@ -2927,15 +3053,15 @@ const SHIM_FORWARDERS: Record<string, string> = {
  */
 export async function updateViaShimTakeover(
 	shimPath: string,
-	expectedVersion: string,
-	options: {
+	buildOrVersion: BuildAnswer | string,
+	options: BuildDownloadOptions & {
 		binaryName?: string;
-		fetchImpl?: Fetch;
 		githubToken?: string;
 		allowPrerelease?: boolean;
 		verifyBinary?: typeof verifyBinaryAtPath;
 	} = {},
 ): Promise<void> {
+	const expectedVersion = typeof buildOrVersion === "string" ? buildOrVersion : buildOrVersion.version;
 	const fields: Record<string, unknown> = {
 		expected_version: diagnosticVersion(expectedVersion),
 		old_launchers_touched: 0,
@@ -2945,34 +3071,39 @@ export async function updateViaShimTakeover(
 	return observeUpdateStage(
 		"shim_attempt",
 		async () => {
-			const binaryName = options.binaryName ?? getBinaryName();
 			const launcherDir = path.dirname(shimPath);
 			const exePath = path.join(launcherDir, `${APP_NAME}.exe`);
-			// No PATH-conflict warning here: the comparison would always differ (the PATH
-			// entry is this launcher script, the target is its sibling `omp.exe`), while
-			// the takeover is exactly what keeps that PATH entry launching the new binary.
-			// `updateViaBinaryAt` keeps the check, where the target is a resolved install.
 			const attempt = `${Date.now()}.${process.pid}.${updateAttemptSeq++}`;
 			const tempPath = `${exePath}.${attempt}.new`;
+			const patchPath = `${exePath}.${attempt}.patch`;
 			fields.candidate_state = "download_pending";
-			const githubToken = options.githubToken ?? (await resolveGitHubToken());
-			const asset = await getReleaseBinaryAsset(
-				expectedVersion,
-				binaryName,
-				githubToken,
-				options.fetchImpl,
-				options.allowPrerelease,
-			);
-			console.log(chalk.dim(`Downloading ${binaryName}…`));
-			await downloadVerifiedBinary({
-				url: asset.url,
-				targetPath: tempPath,
-				expectedSize: asset.size,
-				expectedDigest: asset.digest,
-				fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
-			});
-			fields.candidate_state = "downloaded";
-			console.log(chalk.dim(`Verified ${asset.digest}`));
+			let installedVersion: string;
+			if (typeof buildOrVersion === "string") {
+				const binaryName = options.binaryName ?? getBinaryName();
+				const githubToken = options.githubToken ?? (await resolveGitHubToken());
+				const asset = await getReleaseBinaryAsset(
+					buildOrVersion,
+					binaryName,
+					githubToken,
+					options.fetchImpl,
+					options.allowPrerelease,
+				);
+				installedVersion = asset.version;
+				console.log(chalk.dim(`Downloading ${binaryName}…`));
+				await downloadVerifiedBinary({
+					url: asset.url,
+					targetPath: tempPath,
+					expectedSize: asset.size,
+					expectedDigest: asset.digest,
+					fetchImpl: withGitHubAssetAuthorization(options.fetchImpl ?? fetch, githubToken),
+				});
+				fields.candidate_state = "downloaded";
+				console.log(chalk.dim(`Verified ${asset.digest}`));
+			} else {
+				installedVersion = buildOrVersion.version;
+				await downloadBuild(buildOrVersion, { basePath: exePath, patchPath, tempPath }, options);
+				fields.candidate_state = "downloaded";
+			}
 			const forwarded: Array<{ launcher: string; original: string }> = [];
 			const stuck: string[] = [];
 			// Serialize the launcher swap and artifact sweep so two overlapping updates
@@ -3036,7 +3167,7 @@ export async function updateViaShimTakeover(
 					// a PATH re-resolution here would test a file that no longer exists.
 					const verify = options.verifyBinary ?? verifyBinaryAtPath;
 					const verification = await observeUpdateStage("shim_version_probe", () =>
-						verify(exePath, asset.version),
+						verify(exePath, installedVersion),
 					);
 					updateEvent(
 						"shim_version",
@@ -3088,7 +3219,7 @@ export async function updateViaShimTakeover(
 							failedCount === 0 ? "info" : "error",
 						);
 						throw new Error(
-							`${formatVerificationFailure(verification, asset.version)}; restored previous ${APP_NAME} launcher`,
+							`${formatVerificationFailure(verification, installedVersion)}; restored previous ${APP_NAME} launcher`,
 						);
 					}
 					for (const { backup } of retired) {
@@ -3111,7 +3242,7 @@ export async function updateViaShimTakeover(
 					),
 				);
 			}
-			printVerifiedVersion(asset.version);
+			printVerifiedVersion(installedVersion);
 			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 			fields.forwarded_count = forwarded.length;
 			fields.stuck_count = stuck.length;
@@ -3151,8 +3282,179 @@ function persistChannel(channel: UpdateChannel): void {
 	}
 }
 
+type BinaryUpdateTarget = Extract<UpdateTarget, { method: "binary" }>;
+type ManagedUpdateTarget = Exclude<UpdateTarget, { method: "binary" }>;
+
+/** What `omp update` was asked to do, after resolving the channel. */
+interface UpdateRequest {
+	force: boolean;
+	check: boolean;
+	channel: UpdateChannel;
+	/** An explicit channel differing from the persisted one. */
+	isChannelSwitch: boolean;
+	/** Persist `channel` once the update succeeds (`--canary`/`--stable` given). */
+	persistChannel: boolean;
+}
+
+/**
+ * Print how the offered `version` relates to the running build. Returns false
+ * when there is nothing to install: not newer, and neither `--force` nor a
+ * channel switch asks for it.
+ */
+function announceOffer(version: string, request: UpdateRequest): boolean {
+	const comparison = compareVersions(version, VERSION);
+	if (comparison <= 0 && !request.force && !request.isChannelSwitch) {
+		const icon = theme?.status?.success ?? "✔";
+		console.log(chalk.green(`${icon} Already up to date`));
+		return false;
+	}
+	if (request.isChannelSwitch) {
+		console.log(
+			chalk.yellow(
+				`Switching to ${request.channel} ${version}${comparison < 0 ? ` (downgrade from ${VERSION})` : ""}`,
+			),
+		);
+	} else if (comparison > 0) {
+		console.log(chalk.cyan(`New version available: ${version}`));
+	} else {
+		console.log(chalk.yellow(`Forcing reinstall of ${version}`));
+	}
+	return true;
+}
+
+/**
+ * Update a standalone binary install from the build service: the newest build
+ * on the channel, asked with the installed version so the answer can carry a
+ * patch from it. npm is never consulted.
+ */
+async function runBinaryUpdate(
+	target: BinaryUpdateTarget | undefined,
+	targetError: unknown,
+	request: UpdateRequest,
+): Promise<void> {
+	let build: BuildAnswer;
+	try {
+		const fromVersion = target ? await installedBuildVersion(target.path) : VERSION;
+		build = await fetchBuild({ channel: request.channel }, { fromVersion });
+	} catch (err) {
+		console.error(chalk.red(`Failed to check for updates: ${err}`));
+		process.exit(1);
+	}
+	if (!announceOffer(build.version, request) || request.check) return;
+
+	try {
+		if (!target) throw targetError;
+		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
+		if (request.persistChannel) persistChannel(request.channel);
+	} catch (err) {
+		console.error(chalk.red(`Update failed: ${err}`));
+		process.exit(1);
+	}
+}
+
+/**
+ * Replace a bun/npm install with the standalone binary because npm says the
+ * release is binary-only ({@link shouldForceBinaryUpdate}).
+ *
+ * The launcher is resolved again without package-manager routing: a manager
+ * symlink is taken over in place, a Windows script launcher gets `omp.exe`
+ * beside it. The binary is the build service's newest on the channel. A build
+ * older than npm's release that would not move the install forward means the
+ * release is still uploading, so the update stops instead of reinstalling or
+ * downgrading.
+ */
+async function updateToStandaloneBinary(
+	manager: "bun" | "npm",
+	release: ReleaseInfo,
+	channel: UpdateChannel,
+): Promise<void> {
+	const target = await resolveUpdateTarget({ allowPackageManagers: false });
+	const fromVersion = target.method === "binary" ? await installedBuildVersion(target.path) : VERSION;
+	const build = await fetchBuild({ channel }, { fromVersion });
+	if (compareVersions(build.version, release.version) < 0 && compareVersions(build.version, VERSION) <= 0) {
+		throw new Error(
+			`${release.version} ships as a standalone binary, but the newest ${channel} build of it published for this platform is ${build.version}; retry in a few minutes once it finishes uploading, or reinstall with: ${installerHint()}`,
+		);
+	}
+	if (build.version !== release.version) {
+		console.log(chalk.dim(`Installing the newest published ${channel} build, ${build.version}.`));
+	}
+	const unmanaged = `This install is no longer managed by ${manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`;
+	if (target.method === "binary") {
+		if (target.replacesSymlink) {
+			console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
+		}
+		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
+		if (target.replacesSymlink) console.log(chalk.yellow(unmanaged));
+		return;
+	}
+	// Without package-manager routing only a Windows script launcher resolves
+	// to a manager (the bun/npm bin-dir probes are skipped), so its path is known.
+	if (target.method !== "npm" || !target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
+	console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
+	await updateViaShimTakeover(target.path, build);
+	console.log(chalk.yellow(unmanaged));
+}
+
+/**
+ * Update a package-manager install (bun, npm, Homebrew, mise, Nix) to npm's
+ * release for the channel.
+ */
+async function runManagedUpdate(
+	target: ManagedUpdateTarget | undefined,
+	targetError: unknown,
+	request: UpdateRequest,
+): Promise<void> {
+	let release: ReleaseInfo;
+	try {
+		release = await getLatestRelease({ channel: request.channel });
+	} catch (err) {
+		console.error(chalk.red(`Failed to check for updates: ${err}`));
+		process.exit(1);
+	}
+	if (!announceOffer(release.version, request)) return;
+	if (release.packages.pkg !== PACKAGE) {
+		console.log(chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`));
+	}
+	if (request.check) return;
+
+	try {
+		if (!target) throw targetError;
+		if (
+			request.channel === "canary" &&
+			(target.method === "nix" || target.method === "brew" || target.method === "mise")
+		) {
+			console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
+			return;
+		}
+		if (target.method === "nix") {
+			console.log(chalk.yellow("This installation is managed by Nix and cannot update itself."));
+			console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
+			return;
+		}
+		if (target.method === "brew") {
+			await updateViaHomebrew(release.version, request.force);
+		} else if (target.method === "mise") {
+			await updateViaMise(release.version, request.force);
+		} else if (shouldForceBinaryUpdate(release)) {
+			await updateToStandaloneBinary(target.method, release, request.channel);
+		} else {
+			await updateViaManager(release, target.path, packageManagerUpdateSteps(target.method, release));
+		}
+		if (request.persistChannel) persistChannel(request.channel);
+	} catch (err) {
+		console.error(chalk.red(`Update failed: ${err}`));
+		process.exit(1);
+	}
+}
+
 /**
  * Run the update command.
+ *
+ * The installer that owns the PATH `omp` decides where the version comes
+ * from: a standalone binary asks the build service, a package-manager install
+ * asks npm. When no target resolves, the running build's kind decides, so
+ * `--check` still answers; installing then fails on the unresolved target.
  */
 export async function runUpdateCommand(opts: {
 	force: boolean;
@@ -3189,6 +3491,34 @@ export async function runUpdateCommand(opts: {
 			fields.channel = channel;
 			updateEvent("channel_selection", "completed", { channel, switched: isChannelSwitch });
 			if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
+
+			if (!isForkUpdateRepository()) {
+				let binaryTarget: UpdateTarget | undefined;
+				let targetError: unknown;
+				try {
+					binaryTarget = await resolveUpdateTarget({ allowPackageManagers: true });
+				} catch (error) {
+					targetError = error;
+				}
+				if (binaryTarget?.method === "binary" || (!binaryTarget && isCompiledBinary())) {
+					await runBinaryUpdate(binaryTarget, targetError, {
+						force: opts.force,
+						check: opts.check,
+						channel,
+						isChannelSwitch,
+						persistChannel: opts.channel !== undefined,
+					});
+					return;
+				}
+				await runManagedUpdate(binaryTarget, targetError, {
+					force: opts.force,
+					check: opts.check,
+					channel,
+					isChannelSwitch,
+					persistChannel: opts.channel !== undefined,
+				});
+				return;
+			}
 
 			// Check for updates
 			let release: ReleaseInfo;
@@ -3294,11 +3624,7 @@ export async function runUpdateCommand(opts: {
 							),
 						);
 					} else {
-						await updateViaManager(
-							release,
-							target.path,
-							packageManagerUpdateSteps(target.method, release, allowPrerelease),
-						);
+						await updateViaManager(release, target.path, packageManagerUpdateSteps(target.method, release));
 					}
 				} else {
 					if (forceBinary && target.replacesSymlink) {

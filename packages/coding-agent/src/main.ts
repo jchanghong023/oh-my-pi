@@ -11,7 +11,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, isEnotdir, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -21,7 +21,8 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { $env, isBunTestRuntime, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -39,11 +40,13 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
+import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import {
 	CanaryChannelUnavailableError,
 	compareUpdateVersions,
 	getLatestRelease,
+	isForkUpdateRepository,
 	isSourceCheckout,
 	managedInstallName,
 } from "./cli/update-cli";
@@ -258,10 +261,16 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 		// "run omp update" would be wrong advice for both.
 		if (isSourceCheckout() || (await managedInstallName(process.execPath))) return;
 		const channel = cfgUpdateChannel.get(settings);
-		const release = await getLatestRelease({ timeoutMs: 5_000, channel });
+		// Fork installs check their configured GitHub release channel; other compiled
+		// binaries use the build service so `omp update` can prepare the matching patch.
+		const { version } = isForkUpdateRepository()
+			? await getLatestRelease({ timeoutMs: 5_000, channel })
+			: isCompiledBinary()
+				? await fetchBuild({ channel }, { timeoutMs: 5_000, fromVersion: currentVersion })
+				: await getLatestRelease({ timeoutMs: 5_000, channel });
 		// SemVer precedence alone ignores build metadata, so a newer fork build of
-		// the same base (`18.1.18+fork.189` vs `+fork.188`) would not be announced.
-		return compareUpdateVersions(release.version, currentVersion) > 0 ? release.version : undefined;
+		// the same base (`18.1.18+fork.189` vs `+fork.188`) must still be announced.
+		return compareUpdateVersions(version, currentVersion) > 0 ? version : undefined;
 	} catch (error) {
 		// The canary misconfiguration is deterministic and actionable; let it
 		// reach the startup notification path instead of vanishing like a
