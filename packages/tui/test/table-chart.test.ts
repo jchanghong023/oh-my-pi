@@ -127,6 +127,83 @@ const ARROW_METRICS = `| Metric | r5 → r6 |
 | Memory | 3.65 GB → 197 MB |
 | Errors | 11 → 7 |`;
 
+// Rows told apart only by a second text column; the `Notes` column is unique too but describes rather than names.
+const NESTED = `| Model | Harness | Notes | Input | Cached | Output | Reasoning |
+|---|---|---|---|---|---|---|
+| Sonnet 5.5 | baseline | first pass | 104k | 91.6k | 7.0k | 0 |
+| Sonnet 5.5 | bash | retried once | 49.5k | 38.7k | 5.1k | 0 |
+| Sonnet 5.5 | http | clean | 98.2k | 83.7k | 6.1k | 0 |
+| GPT-6-Luna | baseline | clean run | 45.2k | 30.9k | 3.1k | 0.6k |
+| GPT-6-Luna | bash | slow | 15.5k | 7.2k | 2.7k | 0.7k |
+| GPT-6-Luna | http | fast | 41.1k | 27.8k | 3.2k | 0.8k |`;
+
+// Input = Cached + Uncached input, Total = Input + Output: the values prove the parts.
+const TOKENS = `| Model | Harness | Input | Cached | Uncached input | Output | Reasoning | Total |
+|---|---|---|---|---|---|---|---|
+| Sonnet 5.5 | baseline | 104k | 91.6k | 12.4k | 7.0k | 0 | 111k |
+| Sonnet 5.5 | bash | 49.5k | 38.7k | 10.8k | 5.1k | 0 | 54.6k |
+| Sonnet 5.5 | http | 98.2k | 83.7k | 14.5k | 6.1k | 0 | 104k |
+| GPT-6-Luna | baseline | 45.2k | 30.9k | 14.3k | 3.1k | 0.6k | 48.2k |
+| GPT-6-Luna | bash | 15.5k | 7.2k | 8.3k | 2.7k | 0.7k | 18.2k |
+| GPT-6-Luna | http | 41.1k | 27.8k | 13.3k | 3.2k | 0.8k | 44.3k |`;
+
+const CI_STEPS = `| Step | Duration | Notes |
+|---|---|---|
+| Setup + checkout + bun | 8s | Fine |
+| apt-get install | 17s | Fine |
+| bun install | 10s | Fine |
+| **build:native** | **4:14** | Compiles all crate deps cold |
+| **bun run check** | **1:21** | Recompiles everything again |
+| bun run test | 24s | Fast |
+| CLI smoke | 2s | Fast |`;
+
+const BUDGET = `| Bucket | Amount | Notes |
+|---|---|---|
+| Payroll (10 people) | ~$5.0M | fully loaded |
+| Compute | ~$0.9M | sandboxes, CI |
+| Ops | ~$0.7M | legal, accounting |
+| Buffer | ~$1.4M | contingency |`;
+
+const RATIOS = `| Corpus | Ratio |
+|---|---:|
+| ASCII | 0.28–0.36× |
+| Lines | 0.30–0.34× |
+| UTF-8 | 0.22–0.33× |
+| Styled | 0.45–0.83× |
+| Unicode | 0.38–0.47× |
+| Git log | 0.20–0.56× |
+| Mixed | 2.51–2.52× |
+| OSC | ~10× |`;
+
+const LOOKUPS = `| Scenario | \`Record\` | \`Map\` | \`string[]\` sparse | \`toIntMap\` (frozen) |
+|---|---|---|---|---|
+| **Hit-only** | ~1.2 ns | ~2.9 ns | ~1.3 ns | **~11–12 ns** |
+| **Mixed hit+miss** | ~4.4 ns | ~2.9 ns | ~1.6 ns | **~13 ns** |
+| **Single key** | ~0.4 ns | ~0.4 ns | ~0.4 ns | **~7 ns** |`;
+
+const STATUSES = `| | count | |
+|---|---|---|
+| ported | 248 | evidence-cited |
+| redesigned | 125 | covered by the architecture |
+| partial | 368 | missing-piece sentence each |
+| missing | 786 | |
+| na | 16 | legacy |`;
+
+const OUTCOMES = `| Input | ok | fail |
+|---|---|---|
+| request anthropic-messages | 340 | 40 |
+| request openai-chat | 279 | 1 |
+| request openai-responses | 327 | 9 |
+| request gemini (harvested) | 20 | 0 |`;
+
+// The only numbers are a tier and 1–2 findings beside long prose: a chart would restate nothing.
+const FINDINGS = `| Utility | Tier | New Findings | Key Issues |
+|---|---|---|---|
+| **env** | 1 | 2 | \`-S\` single-quote backslash divergence (medium); continuation vs error (low) |
+| **runcon** | 1 | 2 | Duplicate component flags silently accepted (medium); argv[0] prefix leak (low) |
+| **split** | 1 | 1 | \`$FILE\` env var set via process-global set_var instead of per-child (medium) |
+| **csplit** | 2 | 2 | Rust regex vs POSIX BRE flavor mismatch (medium); offset drops I/O errors (medium) |`;
+
 const SCORES = `| Suite | Passed |
 |---|---|
 | parser | 48/48 |
@@ -199,6 +276,25 @@ describe("analyzeTable", () => {
 		expect(paired.measures[0]).toMatchObject({ dim: "fraction", scores: false });
 	});
 
+	// Regression: `1.0/4` and `27.0/36` read as scores beside `0.6/4` fractions, so their bars dropped out.
+	it("reads a column's scores all one way: mean scores as percents, beside a plain fraction none", () => {
+		const means = analyze(
+			"| Task | Tests passed |\n|---|---|\n| a | 1.0/4 (0–3) |\n| b | 0.6/4 (0–3) |\n| c | 27.0/36 |\n| d | 25.8/36 |",
+		);
+		expect(means.measures[0]!.cells.map(cell => cell.kind === "number" && [cell.dim, cell.value])).toEqual([
+			["percent", 25],
+			["percent", 15],
+			["percent", 75],
+			["percent", (100 * 25.8) / 36],
+		]);
+		const plain = analyze("| Case | ratio |\n|---|---|\n| a | 12/12 |\n| b | 5/3 |\n| c | 1.2/3.4 |");
+		expect(plain.measures[0]!.cells.map(cell => cell.kind === "number" && cell.dim)).toEqual([
+			"fraction",
+			"fraction",
+			"fraction",
+		]);
+	});
+
 	it("keeps a mostly numeric column whose other cells are status words", () => {
 		const analysis = analyze(
 			"| Input | GNU | uutils |\n|---|---|---|\n| a | 36ms | 112ms |\n| b | 31ms | 1,222ms |\n| c | 30ms | TIMEOUT |",
@@ -223,6 +319,13 @@ describe("planChart", () => {
 		["variants of a baseline across metrics", VARIANTS, "change"],
 		["a → b cells in their own units", ARROW_METRICS, "change"],
 		["one column of scores", SCORES, "progress"],
+		["columns the values prove are parts of a total", TOKENS, "stacked"],
+		["outcome counts per row", OUTCOMES, "stacked"],
+		["a run's step durations in order", CI_STEPS, "timeline"],
+		["amounts building up to their sum", BUDGET, "waterfall"],
+		["low–high ranges", RATIOS, "range"],
+		["several timings per row spanning decades", LOOKUPS, "dots"],
+		["counts that split a whole", STATUSES, "share"],
 	];
 	it.each(kinds)("charts %s as %s", (_name, markdown, kind) => {
 		expect(planChart(analyze(markdown))?.kind).toBe(kind);
@@ -230,7 +333,23 @@ describe("planChart", () => {
 
 	it("draws nothing for prose tables or two values", () => {
 		expect(planChart(analyze(PROSE))).toBeUndefined();
+		expect(planChart(analyze(FINDINGS))).toBeUndefined();
 		expect(planChart(analyze("| k | v |\n|---|---|\n| a | 1 |\n| b | 2 |"))).toBeUndefined();
+	});
+
+	it("stacks the parts a total is made of, leaving out the subtotal and what the sums disprove", () => {
+		const analysis = analyze(TOKENS);
+		const plan = planChart(analysis)!;
+		const header = (index: number) => analysis.columns[index]!.header;
+		expect(plan.series.map(header)).toEqual(["Cached", "Uncached input", "Output"]);
+		expect(header(plan.whole!)).toBe("Total");
+	});
+
+	it("plots one of two columns that restate each other", () => {
+		const arms = analyze(
+			"| arm | pass | pass% | $/task |\n|---|---|---|---|\n| opus48 | 33/38 | 87% | $2.82 |\n| n12 | 27/38 | 71% | $1.30 |\n| n8 | 25/38 | 66% | $1.24 |\n| haiku | 14/38 | 37% | $0.72 |",
+		);
+		expect(arms.measures.map(column => column.header)).toEqual(["pass", "$/task"]);
 	});
 
 	it("transposes metric-per-row tables so each metric keeps its own unit", () => {
@@ -256,9 +375,9 @@ describe("planChart", () => {
 		expect(one?.kind).toBe("bar");
 		const lone = buildChart(matrix, { kind: "scatter", label: 0, series: [1], transpose: false });
 		expect(lone?.kind).toBe("bar");
-		// Tracks fill toward 100%: counts fall back to bars.
+		// Tracks fill toward 100%: counts fall back to bars, side by side unless a dumbbell was asked for.
 		const counts = buildChart(matrix, { kind: "progress", label: 0, series: [1, 2], transpose: false });
-		expect(counts?.kind).toBe("paired");
+		expect(counts?.kind).toBe("grouped");
 	});
 
 	it("measures each after value as a factor of its before value, naming the rows it skips", () => {
@@ -282,6 +401,40 @@ describe("planChart", () => {
 		expect(grouped.baseline).toBe("A: old commit");
 		expect(grouped.series.map(series => series.name)).toEqual(["B: short prompt", "C: new headers"]);
 		expect(grouped.series[1]!.points[1]!.value).toBeCloseTo(7 / 11);
+	});
+
+	it("names rows whose labels repeat by the column telling them apart, nesting the label's runs", () => {
+		const analysis = analyze(NESTED);
+		const spec = buildChart(analysis, planChart(analysis)!)!;
+		expect(spec.categories.slice(0, 2)).toEqual(["Sonnet 5.5 · baseline", "Sonnet 5.5 · bash"]);
+		expect(spec.groups).toEqual([
+			{ name: "Sonnet 5.5", members: ["baseline", "bash", "http"] },
+			{ name: "GPT-6-Luna", members: ["baseline", "bash", "http"] },
+		]);
+
+		// Interleaved labels: the other naming column runs in blocks, so it nests instead; table order stays.
+		const interleaved = analyze(
+			"| Model | Harness | Tokens |\n|---|---|---|\n| Sonnet | baseline | 111k |\n| Luna | baseline | 48k |\n| Sonnet | bash | 55k |\n| Luna | bash | 18k |",
+		);
+		const byHarness = buildChart(interleaved, planChart(interleaved)!)!;
+		expect(byHarness.categories).toEqual(["Sonnet · baseline", "Luna · baseline", "Sonnet · bash", "Luna · bash"]);
+		expect(byHarness.groups?.map(group => group.name)).toEqual(["baseline", "bash"]);
+
+		// No column runs in blocks: flat joined names, no nesting.
+		const scattered = analyze(
+			"| Model | Harness | Tokens |\n|---|---|---|\n| Sonnet | baseline | 111k |\n| Luna | bash | 48k |\n| Sonnet | bash | 55k |\n| Luna | baseline | 18k |",
+		);
+		const flat = buildChart(scattered, planChart(scattered)!)!;
+		expect(flat.categories).toEqual(["Sonnet · baseline", "Luna · bash", "Sonnet · bash", "Luna · baseline"]);
+		expect(flat.groups).toBeUndefined();
+
+		// A plan's group regroups interleaved rows by first appearance, table order within each group.
+		const byModel = buildChart(scattered, { ...planChart(scattered)!, group: 0 })!;
+		expect(byModel.categories).toEqual(["Sonnet · baseline", "Sonnet · bash", "Luna · bash", "Luna · baseline"]);
+		expect(byModel.groups).toEqual([
+			{ name: "Sonnet", members: ["baseline", "bash"] },
+			{ name: "Luna", members: ["bash", "baseline"] },
+		]);
 	});
 
 	it("splits a → b cells into from and to series named by the header", () => {
@@ -322,6 +475,22 @@ describe("renderChartSvg", () => {
 		await initTheme(false);
 	});
 
+	it("writes a repeated row name once per group", () => {
+		const analysis = analyze(NESTED);
+		const { svg } = renderChartSvg(buildChart(analysis, { ...planChart(analysis)!, shading: "shared" })!);
+		expect(svg.match(/>Sonnet 5\.5</g)).toHaveLength(1);
+		expect(svg.match(/>bash</g)).toHaveLength(2);
+	});
+
+	it("draws a heatmap's columns of different quantities as bars on their own axes", () => {
+		const analysis = analyze(NESTED);
+		const plan = planChart(analysis)!;
+		// Input dwarfs Reasoning in every row: shades on one scale would wash Reasoning out.
+		expect(plan).toMatchObject({ kind: "heatmap", shading: "series" });
+		expect(buildChart(analysis, plan)?.kind).toBe("multiples");
+		expect(buildChart(analysis, { ...plan, shading: "shared" })?.kind).toBe("heatmap");
+	});
+
 	it("colors every kind only through theme tokens, all of which the figure palette resolves", () => {
 		const palette = svgFigurePalette();
 		const plans: [string, ChartPlan | undefined][] = [
@@ -336,6 +505,13 @@ describe("renderChartSvg", () => {
 			VARIANTS,
 			ARROW_METRICS,
 			SCORES,
+			TOKENS,
+			OUTCOMES,
+			CI_STEPS,
+			BUDGET,
+			RATIOS,
+			LOOKUPS,
+			STATUSES,
 		].map(markdown => [markdown, planChart(analyze(markdown))]);
 		const scatter = analyze("| a | b |\n|---|---|\n| 1 | 9 |\n| 4 | 2 |\n| 2 | 7 |\n| 8 | 1 |\n| 5 | 3 |\n| 3 | 6 |");
 		plans.push(["scatter", { kind: "scatter", label: undefined, series: [0, 1], transpose: false }]);

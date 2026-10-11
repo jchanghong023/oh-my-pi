@@ -87,6 +87,12 @@ provider "zcode-api" {
 			cost input=0 output=0 cache-read=0 cache-write=0
 			limits context=1000000 max-tokens=131072
 		}
+		model "glm-5.3-flashx" name="GLM-5.3-FlashX" {
+			reasoning #true
+			input "text" "image"
+			cost input=0 output=0 cache-read=0 cache-write=0
+			limits context=1000000 max-tokens=131072
+		}
 		model "glm-5.3-highspeed" name="GLM-5.3 Highspeed" {
 			reasoning #true
 			input "text"
@@ -118,7 +124,7 @@ provider "zcode-api" {
 		thinking-efforts "high" "max"
 		thinking-mode "anthropic-budget-effort"
 	}
-	models "glm-5.3" "glm-5.3-flash" "glm-5.3-highspeed" {
+	models "glm-5.3" "glm-5.3-flash" "glm-5.3-flashx" "glm-5.3-highspeed" {
 		thinking-mode "anthropic-budget-effort"
 	}
 }

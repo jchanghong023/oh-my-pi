@@ -26,6 +26,10 @@
 
 - Fixed macOS window listing, `ax()`, `find()` and element clicks refusing without Screen Recording permission, which now only screenshots and display listing need (without it, other apps' window titles are blank), and missing windows behind the 48 frontmost ([#15158](https://github.com/can1357/oh-my-pi/pull/15158) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed macOS `menu.items()` and `menu.select()` failing with `AxFailed` on menus that hold an item whose title cannot be read, such as the Tags row in Finder's File menu and a row of Preview's Tools menu; such items are now skipped like separators ([#15223](https://github.com/can1357/oh-my-pi/pull/15223) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed TOML, PowerShell, SCSS, Less, Vim script, GraphQL, Protobuf, Terraform/HCL, Dockerfile, CMake, INI and gitignore code showing without syntax highlighting
+- Fixed Kotlin, Swift, Elixir and Sass code being highlighted with the Java, Objective-C, Ruby and Haml grammars
+- Fixed code inside string interpolations (Python f-strings, Julia `$(…)`, Elixir `#{…}`) being colored as part of the string
+- Fixed `supportsLanguage` returning `true` for languages `highlightCode` leaves unhighlighted
 
 ## [18.8.8] - 2026-10-10
 

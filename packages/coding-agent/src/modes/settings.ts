@@ -467,7 +467,8 @@ export const cfgTuiAutoGraph = register({
 			{
 				value: "smart",
 				label: "Smart",
-				description: "The judge model picks the chart kind and columns for tables with several numeric columns",
+				description:
+					"The judge model refines each chart: kind, columns, row names and grouping, scales, which way is better, and its title",
 			},
 			{
 				value: "always",

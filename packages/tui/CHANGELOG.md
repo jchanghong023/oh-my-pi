@@ -6,6 +6,9 @@
 
 - Added opt-in JSON editing for free-form array settings, with credential settings kept masked in rows and editors ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 - Added `Editor.prediction`, a callback whose text the editor shows as ghost text while the buffer is empty or a prefix of it; Tab or Right at line end inserts the rest without submitting ([#15137](https://github.com/can1357/oh-my-pi/pull/15137) by [@wolfiesch](https://github.com/wolfiesch))
+- Added table-chart kinds `stacked` (parts a total is made of, or outcome mixes as 100% bars), `waterfall`, `timeline`, `dots`, and `range`; share bars now also take counts that split a total, and 2–4 status columns draw as a dot matrix beside bars
+- Table charts now title themselves with a fact the numbers prove (`Step 5 Preview has 74× the Total of Sonnet 5.5`), mark the best value where rows or columns compete, color improvements and regressions, highlight the row a table is about, badge status cells, and draw reference rules at a baseline row
+- Added `ChartPlan` fields a planner can set — row naming (`qualifiers`, `group`), `shading`, `reference`, `order`, `polarity`, `rivals`, `focus`, `title`, `normalize` — and `shouldJudge`, which picks the tables `smart` mode sends to a model
 - Added an optional `assistantMessageText` theme token that colors assistant reply paragraph prose; unset or empty keeps the terminal default foreground ([#11204](https://github.com/can1357/oh-my-pi/issues/11204), [#11260](https://github.com/can1357/oh-my-pi/pull/11260) by [@oleg494](https://github.com/oleg494)).
 - Added optional `StatusLineHost.classifyResetExpiry` and `resetExpiryNotice` plus `StatusLineComponent.setResetExpiryNoticeHandler`: the usage segment marks saved resets expiring within 7 days (`▲ N exp …`), and the handler gets one pool-wide warning per conversation for resets expiring within 24 hours ([#15134](https://github.com/can1357/oh-my-pi/pull/15134) by [@will-bogusz](https://github.com/will-bogusz))
 
@@ -18,6 +21,10 @@
 
 - Refreshed quick-role picker entries when JchTools models disappear or change during discovery.
 - Kept overflowing bottom status-line segments dimmed while another composer owns focus.
+- Fixed table charts showing indistinguishable rows when the first text column repeats (`Model | Harness | …`): bar, heatmap, and change charts now show each repeated name once beside a separated block of its rows, and other charts use combined names like `Sonnet 5.5 · bash`
+- Fixed table charts dropping bars for scores like `1.0/4` or `27.0/36` when the same column held `0.6/4`; mean scores now read as the percent of their total
+- Fixed table charts misreading tables: restated columns (`pass` beside `pass%`) plot once, unrelated column pairs no longer draw as before/after dumbbells, ids and zero-padded codes are no longer plotted, outline tables with blank cells read as groups, side-by-side halves read as one list, long labels shed shared prefixes and descriptions, and prose tables with only tiny counts draw no chart
+- Fixed table-chart scales: a column of outliers no longer flattens the rest (stacked groups get their own axes, bars break the axis), zeros no longer block log shading, and before/after values spanning decades draw as factors
 - Native settings editors now display submission and validation errors instead of silently keeping the editor open ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 - Fixed `/tree` stalling when opened on very long session histories ([#12527](https://github.com/can1357/oh-my-pi/pull/12527) by [@azain47](https://github.com/azain47)).
 - Fixed `/tree` exhausting memory on long sessions with many branch points ([#12622](https://github.com/can1357/oh-my-pi/pull/12622) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
