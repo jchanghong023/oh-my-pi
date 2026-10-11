@@ -121,6 +121,12 @@
 {{/if}}
 {{#each rechecks}}
 复核 {{add @index 1}}：{{#when priorBlockingStatus "==" "not-applicable"}}（未报告）{{else}}此前阻断问题 {{{priorBlockingStatus}}}{{/when}}；{{#if noSubstantiveIssues}}未发现新实质问题{{else}}新发现：{{#each findings}}[{{{severity}}}] {{{issue}}}{{#unless @last}}；{{/unless}}{{/each}}{{/if}}。
+{{#if reviewSummary}}
+复核依据与结论：{{{reviewSummary}}}
+{{/if}}
+{{#each findings}}
+- [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}；针对部分：{{{targetAspect}}}）
+{{/each}}
 {{/each}}
 {{/if}}
 {{#if unresolvedBlocking.length}}

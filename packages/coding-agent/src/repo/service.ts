@@ -526,6 +526,8 @@ export class RepoService {
 					let parsed = 0;
 					let failures = 0;
 					let step = "enumerate";
+					let fileHash: string | undefined;
+					let readFailureKind: NonNullable<ReadResult["failure"]>["kind"] | "missing" | undefined;
 					try {
 						stage("enumerate", {
 							old_generation: diagnosticGeneration(state.generation),
@@ -551,9 +553,12 @@ export class RepoService {
 						for (let i = 0; i < inventory.length; i++) {
 							check(signal);
 							const rel = inventory[i];
+							fileHash = createHash("sha256").update(rel).digest("hex").slice(0, 16);
+							readFailureKind = undefined;
 							step = "read";
 							stage("read", undefined, true);
 							const result = await readRepoFile(this.root, rel, signal);
+							readFailureKind = result.missing ? "missing" : result.failure?.kind;
 							fingerprints.set(rel, result.file?.hash ?? `excluded:${result.failure?.kind}`);
 							if (result.missing || result.failure?.kind === "unstable" || result.failure?.kind === "unreadable")
 								throw new Error(
@@ -583,6 +588,8 @@ export class RepoService {
 							}
 							processed++;
 							if (failure) failures++;
+							fileHash = undefined;
+							readFailureKind = undefined;
 							options.onProgress?.({ phase: "reading", processed: i + 1, total: inventory.length, path: rel });
 							if (i % 16 === 0) await yieldToLoop();
 						}
@@ -606,14 +613,23 @@ export class RepoService {
 						);
 						for (const rel of inventory) {
 							check(signal);
+							fileHash = createHash("sha256").update(rel).digest("hex").slice(0, 16);
+							readFailureKind = undefined;
 							const verified = await readRepoFile(this.root, rel, signal);
+							readFailureKind = verified.missing ? "missing" : verified.failure?.kind;
 							if ((verified.file?.hash ?? `excluded:${verified.failure?.kind}`) !== fingerprints.get(rel)) {
-								if (newerPaths.has(rel)) continue;
+								if (newerPaths.has(rel)) {
+									fileHash = undefined;
+									readFailureKind = undefined;
+									continue;
+								}
 								this.markChanged([rel]);
 								throw new Error(
 									`Repository file changed during ${mode}: ${rel}; retry complete reconciliation`,
 								);
 							}
+							fileHash = undefined;
+							readFailureKind = undefined;
 						}
 						const verifiedInventory = await enumerateFiles(this.root, signal, this.storage.path);
 						const verifiedPaths = new Set(verifiedInventory);
@@ -682,6 +698,8 @@ export class RepoService {
 							component: "repo",
 							event: "repo_generation",
 							stage: step,
+							file_hash: fileHash,
+							failure_kind: readFailureKind,
 							result: signal.aborted ? "cancelled" : "failed",
 							old_generation: diagnosticGeneration(state.generation),
 							new_generation: generation,

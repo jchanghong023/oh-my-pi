@@ -353,7 +353,15 @@ export class RpcLoopController {
 			this.#scheduled = false;
 			stage = "submit";
 			logger.info("RPC loop submission started", { ...fields(), event: "loop_stage_started", result: "started" });
-			await this.#options.submit(prompt, () => this.#current(generation, prompt));
+			await this.#options.submit(
+				prompt,
+				() => this.#current(generation, prompt) && !isLoopDurationExpired(this.#limit),
+			);
+			if (this.#current(generation, prompt) && isLoopDurationExpired(this.#limit)) {
+				result = "duration_limit";
+				this.#disable("Loop time limit reached. Loop mode disabled.");
+				return;
+			}
 			result = "submission_returned";
 		} catch (error) {
 			result =

@@ -13,13 +13,15 @@ Budget:
 - Tokens remaining: {{remainingTokens}}
 - Time used: {{timeUsedSeconds}} seconds
 
+{{#unless omitGoalToolInstructions}}
 `goal` tool:
 - `goal({op:"get"})`: current goal and budget state.
 - `goal({op:"complete"})`: only verified completion.
+{{/unless}}
 
 MUST keep full objective intact across turns. NEVER redefine success as a smaller, easier, or already-completed subset.
 
-Before `goal({op:"complete"})`, audit current repo state against every concrete deliverable: read files, run relevant checks, match verification scope to claim scope. If any deliverable lacks direct current-state evidence, keep working.
+{{#unless omitGoalToolInstructions}}Before `goal({op:"complete"})`,{{else}}Before reporting completion,{{/unless}} audit current repo state against every concrete deliverable: read files, run relevant checks, match verification scope to claim scope. If any deliverable lacks direct current-state evidence, keep working.
 
 Budget exhaustion ≠ completion. If work unfinished, leave goal active.
 {{#unless userAuthority}}</goal_context>{{/unless}}

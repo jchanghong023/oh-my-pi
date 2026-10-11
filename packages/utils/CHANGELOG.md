@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- Fixed HTTP diagnostics reporting disabled timeouts when native defaults were active and downgrading terminal request failures to warnings.
+- Preserved direct Error metadata when logging inside asynchronous diagnostic contexts.
+- Flushed log-directory fallback warnings during initialization even when INFO records are disabled.
+- Preserved YAML comments and unrelated alias values when editing or removing a single configuration field.
+- Fatal diagnostic records now retain only safe error summaries instead of copying exception messages and raw stacks; terminal error output is unchanged.
 - Fixed archive extraction failing on Windows without the symlink privilege: symlink entries now degrade to a directory junction or an in-archive file copy instead of failing the whole archive with `EPERM`, dangling links that cannot be copied are skipped instead of aborting, and directory symlink entries are extracted instead of being skipped ([#14820](https://github.com/can1357/oh-my-pi/pull/14820) by [@jchanghong023](https://github.com/jchanghong023)).
 
 ## [18.8.9] - 2026-10-10

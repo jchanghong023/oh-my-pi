@@ -63,10 +63,14 @@ function dereferenceNode(node: unknown, root: JsonObject, visiting: Set<string>)
 			}
 		}
 		if (!hasSiblings || !isJsonObject(inlined)) return inlined;
-		const merged: JsonObject = { ...inlined, ...node };
-		delete merged.$ref;
-		delete merged.$defs;
-		delete merged.definitions;
+		const merged: JsonObject = { ...inlined };
+		for (const key in node) {
+			if (key === "$ref" || key === "$defs" || key === "definitions") continue;
+			const value = node[key];
+			merged[key] = Array.isArray(value)
+				? value.map(item => dereferenceNode(item, root, visiting))
+				: dereferenceNode(value, root, visiting);
+		}
 		return merged;
 	}
 

@@ -54,6 +54,7 @@ interface SectionDraft {
 	headingLevel: number;
 	lines: MarkdownSourceLine[];
 	fencePrefix?: string;
+	continuesLine?: boolean;
 }
 
 type FenceMarker = "`" | "~";
@@ -243,8 +244,11 @@ function plainTokens(tokens: readonly Token[]): string {
 		.join("");
 }
 
-export function normalizePlainText(markdown: string, fencePrefix?: string): string {
-	const source = markdown.replace(/^\uFEFF/u, "");
+export function normalizePlainText(markdown: string, fencePrefix?: string, continuesLine = false): string {
+	let source = markdown.replace(/^\uFEFF/u, "");
+	// A long-line fragment has no Markdown block boundary at its first character.
+	// Indent it for literal tokenization so a mid-line fence cannot consume it as info.
+	if (continuesLine) source = `    ${source}`;
 	return plainTokens(Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source))
 		.replace(/[ \t]+/g, " ")
 		.trim();
@@ -314,6 +318,7 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 				chunks.push({
 					...draft,
 					fencePrefix: fences.get(line.byteStart),
+					continuesLine: consumedChars > 0,
 					lines: [
 						{
 							text,
@@ -418,7 +423,7 @@ export function parseMarkdown(bytes: Uint8Array): { title?: string; sections: Ma
 			byteStart: first.byteStart,
 			byteEnd: last.byteEnd,
 			rawMarkdown,
-			plainText: normalizePlainText(rawMarkdown, draft.fencePrefix),
+			plainText: normalizePlainText(rawMarkdown, draft.fencePrefix, draft.continuesLine),
 		};
 	});
 	return { title, sections };

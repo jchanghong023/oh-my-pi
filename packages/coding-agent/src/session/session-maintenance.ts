@@ -4546,6 +4546,7 @@ export class SessionMaintenance {
 			},
 			async () => {
 				const started = performance.now();
+				let terminalResult: "completed" | "failed" | "cancelled" | "fallback" = "completed";
 				logger.info("Automatic compaction started", {
 					component: "compaction",
 					event: "compaction_auto",
@@ -4663,6 +4664,7 @@ export class SessionMaintenance {
 								options.detachPostCommit === true,
 							);
 							if (outcome !== "fallback") return outcome;
+							terminalResult = "fallback";
 							return await this.runAutoCompaction(reason, willRetry, {
 								...options,
 								methodIndex: methodIndex + 1,
@@ -4928,6 +4930,7 @@ export class SessionMaintenance {
 								})) as SessionBeforeCompactResult | undefined;
 
 								if (hookResult?.cancel) {
+									terminalResult = "cancelled";
 									await this.#emitLifecycleEvent(
 										{
 											type: "auto_compaction_end",
@@ -4960,6 +4963,7 @@ export class SessionMaintenance {
 									signal: autoCompactionSignal,
 								});
 								if (autoCompactionSignal.aborted) {
+									terminalResult = "cancelled";
 									await this.#emitLifecycleEvent(
 										{
 											type: "auto_compaction_end",
@@ -4973,6 +4977,7 @@ export class SessionMaintenance {
 									return COMPACTION_CHECK_NONE;
 								}
 								if (!handoffDocument) {
+									terminalResult = "fallback";
 									logger.warn("Auto-handoff returned no document; trying next preferred compaction method", {
 										reason,
 									});
@@ -5117,6 +5122,7 @@ export class SessionMaintenance {
 									}
 								}
 								if (snapcompactBlocker) {
+									terminalResult = "fallback";
 									this.#host.emitNotice("warning", snapcompactBlocker, "compaction");
 									await this.#emitLifecycleEvent(
 										{
@@ -5447,6 +5453,7 @@ export class SessionMaintenance {
 								},
 							});
 						} catch (error) {
+							terminalResult = autoCompactionSignal.aborted ? "cancelled" : "failed";
 							(autoCompactionSignal.aborted
 								? logger.info
 								: methodIndex + 1 < methods.length
@@ -5480,6 +5487,7 @@ export class SessionMaintenance {
 										? `Incomplete response recovery failed: ${errorMessage}`
 										: `Auto-compaction failed: ${errorMessage}`;
 							if (!compactionCommitted && methodIndex + 1 < methods.length) {
+								terminalResult = "fallback";
 								logger.warn("Automatic compaction method failed; trying next preference", {
 									method,
 									component: "compaction",
@@ -5527,7 +5535,7 @@ export class SessionMaintenance {
 						component: "compaction",
 						event: "compaction_auto",
 						stage: "completion",
-						result: "completed",
+						result: terminalResult,
 						elapsed_ms: performance.now() - started,
 					});
 					return outcome;

@@ -733,7 +733,9 @@ async function runInteractiveMode(
 		}
 
 		// Consume failures immediately, but defer any banner until the transcript is stable.
-		const checkedVersionPromise = versionCheckPromise.catch(() => undefined);
+		const checkedVersionPromise = versionCheckPromise.catch(error =>
+			error instanceof CanaryChannelUnavailableError ? error : undefined,
+		);
 
 		// `init` already cleared native history before painting the startup frame.
 		// Replaying resumed transcript rows and repainting the viewport is enough;
@@ -744,6 +746,10 @@ async function runInteractiveMode(
 		);
 		// A resolved version check must not insert its banner into a partial transcript.
 		checkedVersionPromise.then(newVersion => {
+			if (newVersion instanceof CanaryChannelUnavailableError) {
+				mode.showWarning(newVersion.message);
+				return;
+			}
 			if (!cfgStartupCheckUpdate.get(settings)) {
 				return;
 			}
@@ -2733,15 +2739,14 @@ export async function runRootCommand(
 			// background refresh already raced the first prompt when it ran earlier.
 			const startDeferredStartupWork = (): void => {
 				session.validateRetryFallbackChains();
-				if (parsedArgs.offline) return;
-				modelRegistry.refreshInBackground();
+				if (!parsedArgs.offline) modelRegistry.refreshInBackground();
 				if (configuredScope.length > 0) {
-					// Must follow refreshInBackground: it waits on the in-flight refresh.
+					// Follow online refresh when enabled; offline only rebuilds from the hydrated catalog.
 					void rebuildScopedModelsAfterDiscovery(session, parsedArgs, modelRegistry, settingsInstance).catch(
 						error => logger.warn("Scoped model rebuild after discovery failed", { error: String(error) }),
 					);
 				}
-				void startBackgroundModelDiscovery?.();
+				if (!parsedArgs.offline) void startBackgroundModelDiscovery?.();
 			};
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
@@ -2814,17 +2819,10 @@ export async function runRootCommand(
 			} else if (isInteractive) {
 				// Offline startup must not reach the network at all; the runtime
 				// `startup.checkUpdate` override only suppresses the banner.
-				const versionCheckPromise = parsedArgs.offline
-					? Promise.resolve(undefined)
-					: checkForNewVersion(VERSION).catch(error => {
-							// Surface the one deterministic misconfiguration (fork binary +
-							// `update.channel=canary`); everything else stays silent, as
-							// before.
-							if (!(error instanceof CanaryChannelUnavailableError)) return undefined;
-							if (isInteractive) notifs.push({ kind: "warn", message: error.message });
-							else process.stderr.write(`${error.message}\n`);
-							return undefined;
-						});
+				const versionCheckPromise = parsedArgs.offline ? Promise.resolve(undefined) : checkForNewVersion(VERSION);
+				// Consume rejection now; the interactive host renders actionable errors
+				// after transcript replay, even when this check settles after startup.
+				void versionCheckPromise.catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

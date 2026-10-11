@@ -395,7 +395,7 @@ export async function fetchWithRetry(
 						method: /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)$/i.test(init.method ?? "GET")
 							? (init.method ?? "GET").toUpperCase()
 							: "[custom]",
-						timeout_ms: timeout,
+						timeout_ms: "timeout" in init ? init.timeout : undefined,
 					});
 					try {
 						response = await fetchImpl(requestUrl, init);
@@ -475,7 +475,7 @@ export async function fetchWithRetry(
 			} catch (error) {
 				const timedOut = signal?.aborted && signal.reason?.name === "TimeoutError";
 				const cancelled = signal?.aborted && !timedOut;
-				logger[cancelled ? "info" : "warn"]("HTTP request terminated", {
+				logger[cancelled ? "info" : "error"]("HTTP request terminated", {
 					...logFields(),
 					...logger.diagnosticError(error),
 					event: cancelled ? "http_request_cancelled" : "http_request_failed",

@@ -149,6 +149,16 @@ function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	const { messages } = context;
 	const anchor = findRequestUsageAnchor(messages);
 	if (!anchor) return withMargin(countContextTokens(context, tokenizer));
+	// Anonymous transforms may replace persisted history, not merely append
+	// request-only text. Their usage cannot safely anchor a later restored view.
+	let namedPerCallTokens = 0;
+	for (const tokens of Object.values(anchor.message.perCallContextTokensBySource ?? {})) namedPerCallTokens += tokens;
+	if (
+		(anchor.message.perCallContextTokens ?? 0) > namedPerCallTokens ||
+		messages.some(message => isPerCallContextMessage(message) && getPerCallContextSource(message) === undefined)
+	) {
+		return withMargin(countContextTokens(context, tokenizer));
+	}
 	let tail = 0;
 	for (let index = anchor.index + 1; index < messages.length; index++) {
 		if (!isPerCallContextMessage(messages[index])) tail += tokenizer.countMessage(messages[index]);

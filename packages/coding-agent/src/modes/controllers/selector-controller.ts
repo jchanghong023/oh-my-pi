@@ -191,7 +191,15 @@ function loadProviderAuthUi(): ProviderAuthUiModules {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub" | "usage-dashboard";
+type MenuKind =
+	| "settings"
+	| "model-picker"
+	| "model-hub"
+	| "agents-dashboard"
+	| "docs-dashboard"
+	| "repo-dashboard"
+	| "agent-hub"
+	| "usage-dashboard";
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
@@ -697,45 +705,53 @@ export class SelectorController {
 	}
 
 	async showDocsDashboard(): Promise<void> {
+		if (this.#focusOpenMenu("docs-dashboard")) return;
+		const menu = this.#claimMenu("docs-dashboard");
 		let closed = false;
 		let hub: DocsHubComponent | undefined;
-		let overlayHandle: OverlayHandle | undefined;
 		const done = () => {
 			if (closed) return;
 			closed = true;
 			hub?.dispose();
-			overlayHandle?.hide();
+			menu.handle?.hide();
+			this.#releaseMenu("docs-dashboard", menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		try {
 			hub = await DocsHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
-			overlayHandle = this.#showFullscreenMenu(hub);
+			const component = hub;
+			this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
 		} catch (error) {
 			// A failed open (unsupported index database, missing FTS5, unreadable
 			// path) surfaces in the status line instead of silently dying.
 			hub?.dispose();
+			this.#releaseMenu("docs-dashboard", menu);
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
 	}
 
 	async showRepoDashboard(): Promise<void> {
+		if (this.#focusOpenMenu("repo-dashboard")) return;
+		const menu = this.#claimMenu("repo-dashboard");
 		let closed = false;
 		let hub: RepoHubComponent | undefined;
-		let overlayHandle: OverlayHandle | undefined;
 		const done = () => {
 			if (closed) return;
 			closed = true;
 			hub?.dispose();
-			overlayHandle?.hide();
+			menu.handle?.hide();
+			this.#releaseMenu("repo-dashboard", menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		try {
 			hub = await RepoHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
-			overlayHandle = this.#showFullscreenMenu(hub);
+			const component = hub;
+			this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
 		} catch (error) {
 			hub?.dispose();
+			this.#releaseMenu("repo-dashboard", menu);
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
 	}

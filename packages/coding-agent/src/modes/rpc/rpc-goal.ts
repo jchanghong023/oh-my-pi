@@ -114,9 +114,15 @@ export class RpcGoalController {
 	#reportedErrors = new WeakSet<object>();
 	#pendingContinuationDiagnostics: Array<{ context: Record<string, unknown>; started: number }> = [];
 
-	#log(event: string, stage: string, result: string, fields: Record<string, unknown> = {}): void {
+	#log(
+		event: string,
+		stage: string,
+		result: string,
+		fields: Record<string, unknown> = {},
+		level: "info" | "warn" = "info",
+	): void {
 		const goalId = this.#session.getGoalModeState()?.goal.id;
-		logger.info("RPC goal lifecycle", {
+		logger[level]("RPC goal lifecycle", {
 			...this.#logContext,
 			...logger.getLogContext(),
 			component: "rpc-goal",
@@ -130,9 +136,14 @@ export class RpcGoalController {
 		});
 	}
 
-	#reportError(error: unknown, stage: string): void {
+	#reportError(
+		error: unknown,
+		stage: string,
+		fields: Record<string, unknown> = {},
+		level: "warn" | "error" = "warn",
+	): void {
 		if (error instanceof Error && error.name === "AbortError") {
-			this.#log("goal_controller_cancelled", stage, "cancelled");
+			this.#log("goal_controller_cancelled", stage, "cancelled", fields);
 			return;
 		}
 		if (error !== null && typeof error === "object") {
@@ -140,7 +151,7 @@ export class RpcGoalController {
 			this.#reportedErrors.add(error);
 		}
 		const goalId = this.#session.getGoalModeState()?.goal.id;
-		logger.warn("RPC goal controller failed", {
+		logger[level]("RPC goal controller failed", {
 			...this.#logContext,
 			...logger.getLogContext(),
 			component: "rpc-goal",
@@ -151,6 +162,7 @@ export class RpcGoalController {
 			session_id: rpcGoalDiagnosticId(this.#session.sessionManager.getSessionId()),
 			goal_id: rpcGoalDiagnosticId(goalId),
 			...logger.diagnosticError(error),
+			...fields,
 		});
 	}
 
@@ -476,38 +488,135 @@ export class RpcGoalController {
 	}
 
 	async #enter(start: () => Promise<GoalModeState>, scheduleContinuation = true): Promise<void> {
-		this.#logContext = {
+		const context = {
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `rpc-goal-${crypto.randomUUID()}`,
 		};
-		const started = performance.now();
-		this.#log("goal_enter_started", "enter", "started");
-		// The pre-goal tool set is captured once, when this controller first adds `goal`
-		// (a reattached paused goal already holds it). A `goal` tool the host enabled
-		// before the goal stays enabled afterwards.
-		const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
-		const state = await start();
-		this.#previousTools = previousTools;
-		await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
-		this.#session.setGoalModeState(state);
-		this.#log("goal_enter_completed", "enter", "enabled", { elapsed_ms: performance.now() - started });
-		this.#resetContinuation();
-		if (this.#session.isStreaming) {
-			await this.#session.sendGoalModeContext({ deliverAs: "steer" });
-			return;
-		}
-		if (scheduleContinuation) this.#scheduleContinuation();
+		this.#logContext = context;
+		await logger.withLogContext(context, async () => {
+			const started = performance.now();
+			let stageStarted = started;
+			let stage = "capture_tools";
+			const previousState = this.#session.getGoalModeState();
+			let runtimeStarted = false;
+			let previousToolsCaptured = false;
+			let toolsActivated = false;
+			let stateCommitted = false;
+			let contextSent = false;
+			const fields = () => ({
+				...context,
+				stage,
+				elapsed_ms: performance.now() - started,
+				stage_elapsed_ms: performance.now() - stageStarted,
+				state_committed: stateCommitted || this.#session.getGoalModeState() !== previousState,
+				runtime_start_completed: runtimeStarted,
+				previous_tools_captured: previousToolsCaptured,
+				tools_activation_completed: toolsActivated,
+				context_sent: contextSent,
+			});
+			this.#log("goal_enter_started", "enter", "started", context);
+			try {
+				// The pre-goal tool set is captured once, when this controller first adds `goal`
+				// (a reattached paused goal already holds it). A `goal` tool the host enabled
+				// before the goal stays enabled afterwards.
+				const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
+				stage = "start";
+				stageStarted = performance.now();
+				const state = await start();
+				runtimeStarted = true;
+				this.#previousTools = previousTools;
+				previousToolsCaptured = true;
+				stage = "activate_tools";
+				stageStarted = performance.now();
+				await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+				toolsActivated = true;
+				stage = "set_state";
+				stageStarted = performance.now();
+				this.#session.setGoalModeState(state);
+				stateCommitted = true;
+				stage = "reset_continuation";
+				stageStarted = performance.now();
+				this.#resetContinuation();
+				if (this.#session.isStreaming) {
+					stage = "send_context";
+					stageStarted = performance.now();
+					await this.#session.sendGoalModeContext({ deliverAs: "steer" });
+					contextSent = true;
+					this.#log("goal_enter_completed", "enter", "enabled", { ...fields(), partial: false });
+					return;
+				}
+				if (scheduleContinuation) {
+					stage = "schedule_continuation";
+					stageStarted = performance.now();
+					this.#scheduleContinuation();
+				}
+				this.#log("goal_enter_completed", "enter", "enabled", { ...fields(), partial: false });
+			} catch (error) {
+				const diagnostic = fields();
+				this.#reportError(
+					error,
+					stage,
+					{
+						...diagnostic,
+						event: "goal_enter_terminal",
+						partial: diagnostic.state_committed || previousToolsCaptured || toolsActivated,
+					},
+					"error",
+				);
+				throw error;
+			}
+		});
 	}
 
 	/** Restore the pre-goal tool set. Idempotent. */
 	async #exit(): Promise<void> {
-		const started = performance.now();
-		this.#log("goal_exit_started", "exit", "started");
-		const previousTools = this.#previousTools;
-		this.#previousTools = undefined;
-		this.#resetContinuation();
-		if (previousTools) await this.#session.setActiveToolsByName(previousTools);
-		this.#log("goal_exit_completed", "exit", "restored", { elapsed_ms: performance.now() - started });
+		const context = {
+			...this.#logContext,
+			...logger.getLogContext(),
+			operation_id:
+				logger.getLogContext().operation_id ?? this.#logContext.operation_id ?? `rpc-goal-${crypto.randomUUID()}`,
+		};
+		await logger.withLogContext(context, async () => {
+			const started = performance.now();
+			let stageStarted = started;
+			let stage = "clear_previous_tools";
+			let stateCommitted = false;
+			let continuationReset = false;
+			let toolsRestored = false;
+			const fields = () => ({
+				...context,
+				stage,
+				elapsed_ms: performance.now() - started,
+				stage_elapsed_ms: performance.now() - stageStarted,
+				state_committed: stateCommitted,
+				previous_tools_cleared: stateCommitted,
+				continuation_reset: continuationReset,
+				tools_restoration_completed: toolsRestored,
+			});
+			this.#log("goal_exit_started", "exit", "started", context);
+			try {
+				const previousTools = this.#previousTools;
+				this.#previousTools = undefined;
+				stateCommitted = true;
+				stage = "reset_continuation";
+				stageStarted = performance.now();
+				this.#resetContinuation();
+				continuationReset = true;
+				stage = "restore_tools";
+				stageStarted = performance.now();
+				if (previousTools) await this.#session.setActiveToolsByName(previousTools);
+				toolsRestored = true;
+				this.#log("goal_exit_completed", "exit", "restored", { ...fields(), partial: false });
+			} catch (error) {
+				this.#reportError(
+					error,
+					stage,
+					{ ...fields(), event: "goal_exit_terminal", partial: stateCommitted },
+					"error",
+				);
+				throw error;
+			}
+		});
 	}
 
 	/** Write the completion records into the current transcript and clear goal state. Synchronous. */
@@ -602,8 +711,19 @@ export class RpcGoalController {
 			runtime.clearAccounting();
 			return;
 		}
-		const goal = cfgGoalEnabled.get(this.#session.settings) ? goalFromModeData(context.modeData) : undefined;
+		const goalEnabled = cfgGoalEnabled.get(this.#session.settings);
+		const goal = goalEnabled ? goalFromModeData(context.modeData) : undefined;
 		if (!goal) {
+			this.#log(
+				goalEnabled ? "goal_reconcile_discarded" : "goal_reconcile_suppressed",
+				"restore",
+				goalEnabled ? "discarded" : "suppressed",
+				{
+					reason: goalEnabled ? "goal_mode_data_invalid" : "goal_disabled",
+					saved_mode: context.mode,
+				},
+				goalEnabled ? "warn" : "info",
+			);
 			runtime.clearAccounting();
 			this.#session.sessionManager.appendModeChange("none");
 			return;

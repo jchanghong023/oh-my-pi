@@ -16,7 +16,7 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
-import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
+import { formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { offlineFromEnv } from "./args";
 import type { ConfigError } from "../config/config-file";
@@ -383,63 +383,225 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 	}
 }
 
+/** Catalog counts describe observed registry state, not cache hits or freshness. */
+function modelsDiagnosticSummary(modelRegistry: ModelRegistry, kind: ModelKind | "all"): Record<string, unknown> {
+	try {
+		const models = modelRegistry.getAll(kind);
+		let companyModelCount = 0;
+		let zcodeModelCount = 0;
+		for (const model of models) {
+			if (model.provider === "company") companyModelCount++;
+			if (model.provider === "zcode-api") zcodeModelCount++;
+		}
+		return {
+			catalog_kind: kind,
+			model_count: models.length,
+			available_model_count: modelRegistry.getAvailable(kind).length,
+			company_model_count: companyModelCount,
+			zcode_model_count: zcodeModelCount,
+		};
+	} catch (error) {
+		// A diagnostic-only read must not change the command's result.
+		logger.warn("models.catalog_summary.failed", {
+			component: "offline-models",
+			event: "models_catalog_summary",
+			result: "failed",
+			...logger.diagnosticError(error),
+		});
+		return { catalog_summary_result: "unavailable" };
+	}
+}
+
 /**
  * Entry point for the standalone `omp models` command: bootstraps auth storage,
  * settings, and the model registry, force/cache-refreshes built-in providers per
  * the chosen action, then delegates to {@link runModelsListing}.
  */
 export async function runModelsCommand(command: ModelsCommandArgs): Promise<void> {
-	const { action, pattern } = command;
-	const json = command.flags.json ?? false;
-	const kind = command.flags.kind ?? "chat";
+	const context = logger.getLogContext();
+	return logger.withLogContext(
+		{
+			operation_id: context.operation_id ?? `models-${crypto.randomUUID()}`,
+			call_id: context.call_id ?? `models-${crypto.randomUUID()}`,
+		},
+		async () => {
+			const started = performance.now();
+			const { action, pattern } = command;
+			const json = command.flags.json ?? false;
+			const kind = command.flags.kind ?? "chat";
+			const commandFields = { component: "offline-models", event: "models_command", action };
+			let stage = "validate";
+			let initStarted: number | undefined;
+			let initCompleted = false;
+			logger.info("models.command.started", { ...commandFields, stage, result: "started" });
+			try {
+				if (action === "find" && (!pattern || pattern.trim().length === 0)) {
+					process.stderr.write("`omp models find` requires a search substring, e.g. `omp models find minimax`\n");
+					process.exitCode = 1;
+					logger.info("models.command.rejected", {
+						...commandFields,
+						stage,
+						result: "rejected",
+						reason: "missing_search_substring",
+						elapsed_ms: performance.now() - started,
+					});
+					return;
+				}
 
-	if (action === "find" && (!pattern || pattern.trim().length === 0)) {
-		process.stderr.write("`omp models find` requires a search substring, e.g. `omp models find minimax`\n");
-		process.exitCode = 1;
-		return;
-	}
+				const cwd = getProjectDir();
+				const offline = offlineFromEnv();
+				const strategy = offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached";
+				stage = "lane";
+				const laneStarted = performance.now();
+				logger.info("models.lane.started", {
+					...commandFields,
+					event: "models_lane",
+					stage,
+					result: "started",
+					offline,
+				});
+				setCompanyOfflineEnabled(offline);
+				let companyConfigError = false;
+				if (offline) {
+					// Company environment: flip the lane before the registry captures company
+					// state, and surface a broken config instead of silently listing nothing.
+					setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
+					const companyError = getCompanyConfigError();
+					companyConfigError = Boolean(companyError);
+					if (companyError) process.stderr.write(`${companyError}\n`);
+				}
+				const laneFields = {
+					...commandFields,
+					event: "models_lane",
+					stage,
+					result: companyConfigError ? "degraded" : "completed",
+					offline,
+					company_config_error: companyConfigError,
+					elapsed_ms: performance.now() - laneStarted,
+				};
+				if (companyConfigError) logger.warn("models.lane.degraded", laneFields);
+				else logger.info("models.lane.completed", laneFields);
 
-	const cwd = getProjectDir();
-	const offline = offlineFromEnv();
-	setCompanyOfflineEnabled(offline);
-	if (offline) {
-		// Company environment: flip the lane before the registry captures company
-		// state, and surface a broken config instead of silently listing nothing.
-		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-		const companyError = getCompanyConfigError();
-		if (companyError) process.stderr.write(`${companyError}\n`);
-	}
-	const settings = await Settings.init({ cwd, configFiles: command.flags.config });
-	const authStorage = await discoverAuthStorage(undefined, { settings });
-	try {
-		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
-		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
+				stage = "settings_init";
+				initStarted = performance.now();
+				logger.info("models.init.started", {
+					...commandFields,
+					event: "models_init",
+					stage,
+					result: "started",
+					offline,
+				});
+				const settings = await Settings.init({ cwd, configFiles: command.flags.config });
+				stage = "auth_init";
+				const authStorage = await discoverAuthStorage(undefined, { settings });
+				try {
+					stage = "registry_init";
+					const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+					for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
+					initCompleted = true;
+					logger.info("models.init.completed", {
+						...commandFields,
+						event: "models_init",
+						stage,
+						result: "completed",
+						offline,
+						elapsed_ms: performance.now() - initStarted,
+					});
 
-		if (action === "refresh" && !json && process.stderr.isTTY) {
-			process.stderr.write(
-				offline ? "Refreshing models from local cache…\n" : "Refreshing models from all providers…\n",
-			);
-		}
-		await modelRegistry.refresh(
-			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",
-			action === "refresh" ? { refreshCommandCredentials: true } : undefined,
-		);
+					if (action === "refresh" && !json && process.stderr.isTTY) {
+						process.stderr.write(
+							offline ? "Refreshing models from local cache…\n" : "Refreshing models from all providers…\n",
+						);
+					}
+					stage = "builtin_refresh";
+					const refreshStarted = performance.now();
+					const refreshFields = {
+						...commandFields,
+						event: offline ? "offline_model_refresh" : "models_refresh",
+						stage,
+						strategy,
+						cache_only: offline,
+					};
+					logger.info("models.refresh.started", {
+						...refreshFields,
+						result: "started",
+						elapsed_ms: performance.now() - refreshStarted,
+					});
+					try {
+						await modelRegistry.refresh(
+							strategy,
+							action === "refresh" ? { refreshCommandCredentials: true } : undefined,
+						);
+						logger.info("models.refresh.completed", {
+							...refreshFields,
+							result: "completed",
+							elapsed_ms: performance.now() - refreshStarted,
+							...(offline ? modelsDiagnosticSummary(modelRegistry, kind) : {}),
+						});
+					} catch (error) {
+						const diagnostic = logger.diagnosticError(error);
+						const cancelled = diagnostic.error_type === "AbortError";
+						const fields = {
+							...refreshFields,
+							result: cancelled ? "cancelled" : "failed",
+							elapsed_ms: performance.now() - refreshStarted,
+							...diagnostic,
+						};
+						if (cancelled) logger.info("models.refresh.cancelled", fields);
+						else logger.error("models.refresh.failed", fields);
+						throw error;
+					}
 
-		const cliExtensionPaths = command.flags.extensions ?? [];
-		await runModelsListing({
-			modelRegistry,
-			cwd,
-			action,
-			pattern,
-			json,
-			kind,
-			offline,
-			additionalExtensionPaths: cliExtensionPaths,
-			settingsExtensions: cfgExtensions.get(settings),
-			disabledExtensionIds: cfgDisabledExtensions.get(settings),
-			disableExtensionDiscovery: Boolean(command.flags.noExtensions),
-		});
-	} finally {
-		authStorage.close();
-	}
+					stage = "listing";
+					const cliExtensionPaths = command.flags.extensions ?? [];
+					await runModelsListing({
+						modelRegistry,
+						cwd,
+						action,
+						pattern,
+						json,
+						kind,
+						offline,
+						additionalExtensionPaths: cliExtensionPaths,
+						settingsExtensions: cfgExtensions.get(settings),
+						disabledExtensionIds: cfgDisabledExtensions.get(settings),
+						disableExtensionDiscovery: Boolean(command.flags.noExtensions),
+					});
+				} finally {
+					const operationStage = stage;
+					stage = "auth_close";
+					authStorage.close();
+					stage = operationStage;
+				}
+				logger.info("models.command.completed", {
+					...commandFields,
+					stage,
+					result: "completed",
+					strategy,
+					cache_only: offline,
+					elapsed_ms: performance.now() - started,
+				});
+			} catch (error) {
+				const diagnostic = logger.diagnosticError(error);
+				const cancelled = diagnostic.error_type === "AbortError";
+				const fields = {
+					...commandFields,
+					stage,
+					result: cancelled ? "cancelled" : "failed",
+					elapsed_ms: performance.now() - started,
+					...diagnostic,
+				};
+				if (initStarted !== undefined && !initCompleted) {
+					(cancelled ? logger.info : logger.error)(cancelled ? "models.init.cancelled" : "models.init.failed", {
+						...fields,
+						event: "models_init",
+						elapsed_ms: performance.now() - initStarted,
+					});
+				}
+				if (cancelled) logger.info("models.command.cancelled", fields);
+				else logger.error("models.command.failed", fields);
+				throw error;
+			}
+		},
+	);
 }

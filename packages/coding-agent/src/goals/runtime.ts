@@ -80,7 +80,7 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 export function renderGoalPrompt(
 	kind: GoalPromptKind,
 	goal: Goal,
-	options?: { omitObjective?: boolean; authority?: "system" | "user" },
+	options?: { omitObjective?: boolean; authority?: "system" | "user"; omitGoalToolInstructions?: boolean },
 ): string {
 	const template =
 		kind === "active"
@@ -91,6 +91,7 @@ export function renderGoalPrompt(
 	return prompt.render(template, {
 		omitObjective: options?.omitObjective === true,
 		userAuthority: options?.authority === "user",
+		omitGoalToolInstructions: options?.omitGoalToolInstructions === true,
 		objective: escapeXmlText(goal.objective),
 		tokensUsed: String(goal.tokensUsed),
 		tokenBudget: budgetValue(goal),

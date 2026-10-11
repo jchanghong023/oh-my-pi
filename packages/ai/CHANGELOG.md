@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed Anthropic SDK timeouts being recorded as non-timeout failures while preserving user-cancellation classification.
+- Fixed root schema reference siblings retaining dangling local references after definition blocks were removed.
 - Preserved Codex tool-loop turn state and user timestamps when requests include transient user-authority context.
 - Fixed schema references to definition names containing `/` or `~`, including an empty definition name.
 - Fixed schema validation and strict-mode conversion resolving percent-encoded definition references incorrectly.

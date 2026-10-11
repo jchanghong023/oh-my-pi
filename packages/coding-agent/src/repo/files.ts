@@ -68,7 +68,13 @@ export async function indexedCandidate(root: string, rel: string, signal?: Abort
 		// pattern builder's brace repair counts raw braces even inside
 		// character classes, so a literal backslash or brace cannot be spelled
 		// out. Wildcard those, then verify the raw returned path below.
-		pattern: rel.replace(/[*?[\]{}\\]/g, char => ("\\{}".includes(char) ? "?" : `[${char}]`)),
+		// Native glob trims the pattern, not returned paths. Protect literal
+		// leading/trailing whitespace so eligible filenames remain indexed.
+		pattern: rel
+			.replace(/[*?[\]{}\\]/g, char => ("\\{}".includes(char) ? "?" : `[${char}]`))
+			.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, whitespace =>
+				Array.from(whitespace, char => `[${char}]`).join(""),
+			),
 		path: root,
 		fileType: FileType.File,
 		recursive: false,

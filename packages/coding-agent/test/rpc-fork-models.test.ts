@@ -3,12 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { RpcModelRoleService } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-models";
+import { RpcModelRoleService, type RpcModelRoleServiceDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-models";
 
 beforeAll(() => Settings.init({ inMemory: true }));
 const temporaryDirectories: TempDir[] = [];
@@ -29,7 +30,11 @@ const CHAT_MODEL: FakeModel = { provider: "p", id: "m", name: "Probe Chat Model"
 const OTHER_CHAT_MODEL: FakeModel = { provider: "p", id: "m2", name: "Other Chat Model" };
 const IMAGE_MODEL: FakeModel = { provider: "p", id: "img", name: "Probe Image Model", kind: "image" };
 
-function serviceFor(settings: Settings, models: FakeModel[]) {
+function serviceFor(
+	settings: Settings,
+	models: FakeModel[],
+	reloadSessionSettings?: RpcModelRoleServiceDeps["reloadSessionSettings"],
+) {
 	const emitted: object[] = [];
 	const registry = {
 		getAvailable: () => models,
@@ -39,11 +44,16 @@ function serviceFor(settings: Settings, models: FakeModel[]) {
 		getSettings: () => settings,
 		getModelRegistry: () => registry,
 		emit: frame => emitted.push(frame),
+		reloadSessionSettings,
 	});
 	return { service, emitted };
 }
 
-async function setup(models: FakeModel[] = [], projectValue?: string) {
+async function setup(
+	models: FakeModel[] = [],
+	projectValue?: string,
+	reloadSessionSettings?: RpcModelRoleServiceDeps["reloadSessionSettings"],
+) {
 	const root = await TempDir.create("@rpc-role-disk-");
 	temporaryDirectories.push(root);
 	const cwd = root.join("project");
@@ -58,7 +68,7 @@ async function setup(models: FakeModel[] = [], projectValue?: string) {
 	}
 	const settings = await Settings.loadIsolated({ cwd, agentDir });
 	isolatedSettings.push(settings);
-	return { ...serviceFor(settings, models), settings, cwd, agentDir, configFile };
+	return { ...serviceFor(settings, models, reloadSessionSettings), settings, cwd, agentDir, configFile };
 }
 
 async function roleRevision(service: RpcModelRoleService, roleId: string) {
@@ -76,6 +86,71 @@ async function writeInAnotherProcess(cwd: string, agentDir: string, role: string
 	]);
 	expect(stderr).not.toContain("error:");
 	expect(exitCode).toBe(0);
+}
+
+function captureRoleWriteLogs() {
+	const events: LogEvent[] = [];
+	const dispose = registerLogSink(event => {
+		if (event.context?.component === "rpc_model_roles" && event.context.event === "model_role_set") {
+			events.push(event);
+		}
+	});
+	return { events, dispose };
+}
+
+function expectRoleWriteLogs(
+	events: LogEvent[],
+	reloadResult: "completed" | "degraded" | "skipped",
+	failedStage?: "settings_reload" | "plan_refresh",
+) {
+	const operationId = events[0]?.context?.operation_id;
+	expect(operationId).toEqual(expect.stringMatching(/^rpc-role-/));
+	for (const event of events) {
+		expect(event.context?.operation_id).toBe(operationId);
+		expect(event.context?.elapsed_ms).toEqual(expect.any(Number));
+		expect(event.context?.elapsed_ms as number).toBeGreaterThanOrEqual(0);
+	}
+	expect(events[0]?.context).toMatchObject({
+		stage: "queue",
+		result: "started",
+		persisted: false,
+	});
+	expect(events.filter(event => event.context?.stage === "save").map(event => event.context?.result)).toEqual([
+		"started",
+		"completed",
+	]);
+	const reloadEvents = events.filter(event => event.context?.stage === "reload");
+	expect(reloadEvents).toHaveLength(2);
+	expect(reloadEvents[0]?.context).toMatchObject({
+		result: "started",
+		persisted: true,
+		reload_available: reloadResult !== "skipped",
+	});
+	expect(reloadEvents[1]).toMatchObject({
+		level: reloadResult === "degraded" ? "warn" : "info",
+		context: {
+			result: reloadResult,
+			persisted: true,
+			reload_available: reloadResult !== "skipped",
+			...(failedStage ? { failed_stage: failedStage } : {}),
+		},
+	});
+	expect(events.filter(event => event.context?.stage === "emit").map(event => event.context?.result)).toEqual([
+		"started",
+		"completed",
+	]);
+	expect(events.at(-1)).toMatchObject({
+		level: "info",
+		context: {
+			stage: "read",
+			result: "completed",
+			persisted: true,
+			committed: true,
+			commit_status: "committed",
+			reload_result: reloadResult,
+		},
+	});
+	expect(events.some(event => event.level === "error")).toBe(false);
 }
 
 describe("RpcModelRoleService", () => {
@@ -98,37 +173,111 @@ describe("RpcModelRoleService", () => {
 
 	test("reports persisted only after an actual user config write", async () => {
 		const fx = await setup([CHAT_MODEL]);
-		const result = await fx.service.setRole({
-			roleId: "default",
-			scope: "user",
-			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-			expectedRevision: await roleRevision(fx.service, "default"),
-		});
-		expect(result.persisted).toBe(true);
-		expect(await Bun.file(fx.configFile).text()).toContain("p/m");
-		const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
-		isolatedSettings.push(reloaded);
-		expect(reloaded.getGlobalModelRole("default")).toBe("p/m");
-		expect(result.role).toMatchObject({
-			userValue: "p/m",
-			source: "global",
-			effectiveModel: { provider: "p", modelId: "m" },
-		});
-		expect(result.effectiveNote).toBeUndefined();
-		expect(fx.emitted.at(-1)).toMatchObject({ type: "settings_changed", scope: "user" });
+		const { events, dispose } = captureRoleWriteLogs();
+		try {
+			const result = await fx.service.setRole({
+				roleId: "default",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: await roleRevision(fx.service, "default"),
+			});
+			expect(result.persisted).toBe(true);
+			expect(await Bun.file(fx.configFile).text()).toContain("p/m");
+			const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+			isolatedSettings.push(reloaded);
+			expect(reloaded.getGlobalModelRole("default")).toBe("p/m");
+			expect(result.role).toMatchObject({
+				userValue: "p/m",
+				source: "global",
+				effectiveModel: { provider: "p", modelId: "m" },
+			});
+			expect(result.effectiveNote).toBeUndefined();
+			expect(fx.emitted.at(-1)).toMatchObject({ type: "settings_changed", scope: "user" });
+			expectRoleWriteLogs(events, "skipped");
+			expect(JSON.stringify(events)).not.toContain(fx.configFile);
+		} finally {
+			dispose();
+		}
 	});
+
+	test.each(["settings_reload", "plan_refresh"] as const)(
+		"a degraded %s reload preserves the committed role and settings notification",
+		async failedStage => {
+			const inputCanary = "ROLE_RELOAD_INPUT_CANARY";
+			const bodyCanary = "ROLE_RELOAD_BODY_CANARY";
+			const model = { ...CHAT_MODEL, id: inputCanary, name: bodyCanary };
+			let reloadCalls = 0;
+			const fx = await setup([model], undefined, async () => {
+				reloadCalls++;
+				return { result: "degraded", failed_stage: failedStage };
+			});
+			const revision = await roleRevision(fx.service, "default");
+			const { events, dispose } = captureRoleWriteLogs();
+			try {
+				const result = await fx.service.setRole({
+					roleId: "default",
+					scope: "user",
+					selection: { kind: "model", model: { provider: model.provider, modelId: model.id } },
+					expectedRevision: revision,
+				});
+				expect(reloadCalls).toBe(1);
+				expect(result.persisted).toBe(true);
+				expect(result.effectiveNote).toBeUndefined();
+				expect(result.role).toMatchObject({
+					userValue: `p/${inputCanary}`,
+					source: "global",
+					effectiveModel: { provider: "p", modelId: inputCanary },
+				});
+				expect(result.role.revision).not.toBe(revision);
+				expect(fx.settings.getGlobalModelRole("default")).toBe(`p/${inputCanary}`);
+				expect(await Bun.file(fx.configFile).text()).toContain(`p/${inputCanary}`);
+				const reloaded = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+				isolatedSettings.push(reloaded);
+				expect(reloaded.getGlobalModelRole("default")).toBe(`p/${inputCanary}`);
+				expect(fx.emitted).toEqual([{ type: "settings_changed", scope: "user" }]);
+				expectRoleWriteLogs(events, "degraded", failedStage);
+				const serialized = JSON.stringify(events);
+				for (const sensitive of [inputCanary, bodyCanary, fx.configFile, fx.cwd, fx.agentDir]) {
+					expect(serialized).not.toContain(sensitive);
+				}
+			} finally {
+				dispose();
+			}
+		},
+	);
 
 	test("model validation, role acceptance and scope checks write nothing", async () => {
 		const fx = await setup([CHAT_MODEL, IMAGE_MODEL]);
-		for (const modelId of ["missing", "img"]) {
-			await expect(
-				fx.service.setRole({
-					roleId: "default",
-					scope: "user",
-					selection: { kind: "model", model: { provider: "p", modelId } },
-					expectedRevision: await roleRevision(fx.service, "default"),
-				}),
-			).rejects.toMatchObject({ code: "invalid_params" });
+		const errorCanary = "ROLE_VALIDATION_ERROR_INPUT_CANARY";
+		const { events, dispose } = captureRoleWriteLogs();
+		try {
+			for (const modelId of [errorCanary, "img"]) {
+				await expect(
+					fx.service.setRole({
+						roleId: "default",
+						scope: "user",
+						selection: { kind: "model", model: { provider: "p", modelId } },
+						expectedRevision: await roleRevision(fx.service, "default"),
+					}),
+				).rejects.toMatchObject({ code: "invalid_params" });
+			}
+			const refused = events.filter(event => event.context?.result === "refused");
+			expect(refused).toHaveLength(2);
+			for (const event of refused) {
+				expect(event).toMatchObject({
+					level: "info",
+					context: {
+						stage: "validate",
+						persisted: false,
+						rpc_error_code: "invalid_params",
+						error_type: "RpcModelRoleError",
+					},
+				});
+			}
+			expect(JSON.stringify(events)).not.toContain(errorCanary);
+			expect(JSON.stringify(events)).not.toContain("Model not available:");
+		} finally {
+			dispose();
 		}
 		const malformedSelections: unknown[] = [
 			undefined,
@@ -306,17 +455,29 @@ describe("RpcModelRoleService", () => {
 	});
 
 	test("a cross-process different-role write is preserved", async () => {
-		const fx = await setup([CHAT_MODEL]);
+		let reloadCalls = 0;
+		const fx = await setup([CHAT_MODEL], undefined, async () => {
+			reloadCalls++;
+		});
 		const revision = await roleRevision(fx.service, "default");
 		await writeInAnotherProcess(fx.cwd, fx.agentDir, "smol", "p/m");
-		await fx.service.setRole({
-			roleId: "default",
-			scope: "user",
-			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
-			expectedRevision: revision,
-		});
-		expect(fx.settings.getGlobalModelRole("smol")).toBe("p/m");
-		expect(fx.settings.getGlobalModelRole("default")).toBe("p/m");
+		const { events, dispose } = captureRoleWriteLogs();
+		try {
+			const result = await fx.service.setRole({
+				roleId: "default",
+				scope: "user",
+				selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+				expectedRevision: revision,
+			});
+			expect(result.persisted).toBe(true);
+			expect(fx.settings.getGlobalModelRole("smol")).toBe("p/m");
+			expect(fx.settings.getGlobalModelRole("default")).toBe("p/m");
+			expect(fx.emitted).toEqual([{ type: "settings_changed", scope: "user" }]);
+			expect(reloadCalls).toBe(1);
+			expectRoleWriteLogs(events, "completed");
+		} finally {
+			dispose();
+		}
 	});
 
 	test("real disk errors do not stage a role or emit a saved notification", async () => {

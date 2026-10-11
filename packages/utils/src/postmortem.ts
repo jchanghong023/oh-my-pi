@@ -533,7 +533,14 @@ async function exitAfterFatal(output: string, logMessage: string, err: Error, re
 		try {
 			fs.writeSync(2, output);
 		} catch {}
-		logger.error(logMessage, { err });
+		logger.error(logMessage, {
+			component: "application",
+			event: "application_failed",
+			operation_id: logger.getLogContext().operation_id ?? `application-${process.pid}`,
+			stage: "fatal",
+			result: "failed",
+			...logger.diagnosticError(err),
+		});
 		await cleanup;
 	} finally {
 		clearTimeout(forcedExit);

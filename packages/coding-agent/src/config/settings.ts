@@ -1674,6 +1674,13 @@ export class Settings {
 		return Object.hasOwn(value, role);
 	}
 
+	#hasProjectModelRoleAssignment(role: ModelRole | string): boolean {
+		return (
+			this.#modelRoleLayerOwns(this.#project, role) ||
+			(this.#parent ? this.#parent.#hasProjectModelRoleAssignment(role) : false)
+		);
+	}
+
 	/**
 	 * Set the full `modelRoles` map on the runtime override layer without
 	 * routing through the public {@link override} method. Internal callers
@@ -1877,6 +1884,8 @@ export class Settings {
 	getModelRole(role: ModelRole | string): string | undefined {
 		const roles: unknown = cfgModelRoles.get(this);
 		if (isRecord(roles) && Object.hasOwn(roles, role)) return modelRoleValueFromUnknown(roles[role]);
+		// Project clears still fall back to configured global roles, but must not acquire process defaults.
+		if (this.#hasProjectModelRoleAssignment(role)) return undefined;
 		// Own-key guard: a plain-object index would surface inherited Object.prototype
 		// members ("toString", …) as role values for arbitrary alias strings like @toString.
 		return Object.hasOwn(this.#defaultModelRoles, role) ? this.#defaultModelRoles[role] : undefined;
@@ -1969,9 +1978,11 @@ export class Settings {
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
 		const roles: unknown = cfgModelRoles.get(this);
-		if (!isRecord(roles)) return { ...this.#defaultModelRoles };
-
 		const normalized: Record<string, string> = { ...this.#defaultModelRoles };
+		for (const role of Object.keys(normalized)) {
+			if (this.#hasProjectModelRoleAssignment(role)) delete normalized[role];
+		}
+		if (!isRecord(roles)) return normalized;
 		for (const role in roles) {
 			if (!Object.hasOwn(roles, role)) continue;
 			const modelId = modelRoleValueFromUnknown(roles[role]);

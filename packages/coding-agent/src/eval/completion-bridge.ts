@@ -22,7 +22,6 @@ import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
 import type { ModelRegistry } from "../config/model-registry";
 import {
-	extractExplicitThinkingSelector,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
@@ -249,21 +248,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		if (!pattern) return undefined;
 		const resolved = resolveModelRoleValue(pattern, available, { settings: session.settings, matchPreferences });
 		if (!resolved.model) return undefined;
-		const configuredEffort =
-			tier === "slow"
-				? extractExplicitThinkingSelector(pattern, session.settings, {
-						isLiteralModelId: (provider, id) => {
-							const normalizedProvider = provider?.trim().toLowerCase();
-							const normalizedId = id.trim().toLowerCase();
-							return available.some(
-								candidate =>
-									(normalizedProvider === undefined ||
-										candidate.provider.trim().toLowerCase() === normalizedProvider) &&
-									candidate.id.trim().toLowerCase() === normalizedId,
-							);
-						},
-					})
-				: concreteThinkingLevel(resolved.thinkingLevel);
+		const configuredEffort = concreteThinkingLevel(resolved.thinkingLevel);
 		return { model: resolved.model, selector: pattern, configuredEffort };
 	};
 	const primary =

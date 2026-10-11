@@ -12,14 +12,25 @@ import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import type { FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
-import { invalidateSessionScan, listSessions, type SessionInfo } from "../../session/session-listing";
+import {
+	invalidateSessionScan,
+	listSessions,
+	sessionDisplayName,
+	type SessionInfo,
+} from "../../session/session-listing";
 import { parseSessionContent } from "../../session/session-loader";
+import { recordSessionTitle } from "../../session/session-index";
 import {
 	overlayTitleSlotContent,
 	parseTitleSlotFromContent,
 	serializeTitleSlot,
 } from "../../session/session-title-slot";
-import { FileSessionStorage, tryAcquireSessionLease, type SessionStorage } from "../../session/session-storage";
+import {
+	FileSessionStorage,
+	tryAcquireSessionLease,
+	type SessionDeletionDiagnostic,
+	type SessionStorage,
+} from "../../session/session-storage";
 import type { RpcForkErrorCode, RpcRevision, RpcSessionSummary } from "./rpc-fork-types";
 
 /** Typed failure surfaced by the session directory service. */
@@ -72,6 +83,8 @@ interface SessionOperationDiagnostic {
 	committed: boolean | undefined;
 	persisted?: boolean;
 	session_count?: number;
+	deletion?: SessionDeletionDiagnostic;
+	partial?: boolean;
 	progress: (stage: string, result: "started" | "completed", fields?: Record<string, unknown>) => void;
 }
 
@@ -260,6 +273,9 @@ export class RpcSessionDirectoryService {
 			diagnostic.progress("reload", "started");
 			invalidateSessionScan(entry.path, this.#storage);
 			const summary = await this.#summaryFor(sessionId, false);
+			if (this.#storage instanceof FileSessionStorage) {
+				recordSessionTitle(sessionId, sessionDisplayName({ ...entry, title: summary.name }));
+			}
 			diagnostic.progress("reload", "completed");
 			return summary;
 		});
@@ -325,27 +341,39 @@ export class RpcSessionDirectoryService {
 			}
 			diagnostic.progress("lease", "completed", { acquired: true });
 			let deleted: boolean;
-			// An I/O exception can follow unlink but precede artifact cleanup.
+			const deletion: SessionDeletionDiagnostic = {
+				stage: "unreported",
+				primaryDeleted: false,
+				backupFailureCount: 0,
+				artifactsRemoved: false,
+			};
+			// Custom storage may ignore the optional receipt; its commit state
+			// remains unknown on failure unless it reports deletion progress.
 			diagnostic.committed = undefined;
 			diagnostic.persisted = undefined;
-			diagnostic.progress("delete", "started");
+			diagnostic.progress("primary_delete", "started");
 			try {
-				deleted = await remove.call(this.#storage, entry.path, content => {
-					diagnostic.progress("commit_guard", "started");
-					const header = parseSessionContent(content).entries.find(candidate => candidate.type === "session");
-					const accepted =
-						header?.type === "session" &&
-						header.id === sessionId &&
-						normalizePathForComparison(header.cwd) === normalizePathForComparison(this.#cwd) &&
-						revisionFor(this.#storage, sessionId, entry.path) === authorizedRevision;
-					if (!accepted) {
-						diagnostic.committed = false;
-						diagnostic.persisted = false;
-					}
-					diagnostic.progress("commit_guard", "completed", { accepted });
-					diagnostic.stage = "delete";
-					return accepted;
-				});
+				deleted = await remove.call(
+					this.#storage,
+					entry.path,
+					content => {
+						diagnostic.progress("commit_guard", "started");
+						const header = parseSessionContent(content).entries.find(candidate => candidate.type === "session");
+						const accepted =
+							header?.type === "session" &&
+							header.id === sessionId &&
+							normalizePathForComparison(header.cwd) === normalizePathForComparison(this.#cwd) &&
+							revisionFor(this.#storage, sessionId, entry.path) === authorizedRevision;
+						if (!accepted) {
+							diagnostic.committed = false;
+							diagnostic.persisted = false;
+						}
+						diagnostic.progress("commit_guard", "completed", { accepted });
+						diagnostic.stage = "primary_delete";
+						return accepted;
+					},
+					deletion,
+				);
 				diagnostic.committed = deleted;
 				diagnostic.persisted = deleted;
 				diagnostic.progress("delete", "completed", { deleted });
@@ -358,6 +386,16 @@ export class RpcSessionDirectoryService {
 				}
 				throw error;
 			} finally {
+				// The initial receipt is not evidence: legacy/custom storage can
+				// return true without updating it. Never infer cleanup from that.
+				if (deletion.stage !== "unreported") {
+					diagnostic.deletion = deletion;
+					diagnostic.stage = deletion.stage;
+					diagnostic.committed = deletion.primaryDeleted;
+					diagnostic.persisted = deletion.primaryDeleted;
+					diagnostic.partial =
+						deletion.primaryDeleted && (deletion.backupFailureCount > 0 || !deletion.artifactsRemoved);
+				}
 				// Keep the original failure stage unless releasing the lease itself fails.
 				const previousStage = diagnostic.stage;
 				diagnostic.progress("lease_release", "started");
@@ -426,11 +464,11 @@ export class RpcSessionDirectoryService {
 				});
 				try {
 					const value = await run(diagnostic);
-					logger.info("RPC session operation completed", {
+					const fields = {
 						component: "rpc_sessions",
 						event: `session_${operation}`,
 						stage: diagnostic.stage,
-						result: "completed",
+						result: diagnostic.partial ? "partial" : "completed",
 						committed: diagnostic.committed,
 						commit_status:
 							diagnostic.committed === undefined
@@ -440,8 +478,14 @@ export class RpcSessionDirectoryService {
 									: "not_committed",
 						persisted: diagnostic.persisted,
 						session_count: diagnostic.session_count,
+						primary_deleted: diagnostic.deletion?.primaryDeleted,
+						backup_failure_count: diagnostic.deletion?.backupFailureCount,
+						artifacts_removed: diagnostic.deletion?.artifactsRemoved,
+						partial: diagnostic.partial,
 						elapsed_ms: performance.now() - started,
-					});
+					};
+					if (diagnostic.partial) logger.warn("RPC session operation partially completed", fields);
+					else logger.info("RPC session operation completed", fields);
 					return value;
 				} catch (error) {
 					const expected = error instanceof RpcSessionDirectoryError;
@@ -458,6 +502,10 @@ export class RpcSessionDirectoryService {
 									? "committed"
 									: "not_committed",
 						persisted: diagnostic.persisted,
+						primary_deleted: diagnostic.deletion?.primaryDeleted,
+						backup_failure_count: diagnostic.deletion?.backupFailureCount,
+						artifacts_removed: diagnostic.deletion?.artifactsRemoved,
+						partial: diagnostic.partial,
 						elapsed_ms: performance.now() - started,
 						...(expected ? { rpc_error_code: error.code } : {}),
 						...logger.diagnosticError(error),

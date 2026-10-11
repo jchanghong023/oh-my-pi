@@ -3293,7 +3293,10 @@ const streamAnthropicOnce = (
 						...logger.diagnosticError(streamFailure),
 						event: activeAbortTracker.wasCallerAbort() ? "anthropic_http_cancelled" : "anthropic_http_failed",
 						result: activeAbortTracker.wasCallerAbort() ? "cancelled" : "failed",
-						timeout: activeAbortTracker.getLocalAbortReason() !== undefined,
+						timeout:
+							!activeAbortTracker.wasCallerAbort() &&
+							(activeAbortTracker.getLocalAbortReason() !== undefined ||
+								streamFailure instanceof AIError.StreamTimeoutError),
 						attempt_elapsed_ms: performance.now() - attemptStartedAt,
 					});
 					if (
@@ -3734,7 +3737,9 @@ const streamAnthropicOnce = (
 				event: result.stopReason === "aborted" ? "anthropic_request_cancelled" : "anthropic_request_failed",
 				result: result.stopReason === "aborted" ? "cancelled" : "failed",
 				status: result.status ?? responseStatus,
-				timeout: activeAbortTracker.getLocalAbortReason() !== undefined,
+				timeout:
+					result.stopReason !== "aborted" &&
+					(activeAbortTracker.getLocalAbortReason() !== undefined || error instanceof AIError.StreamTimeoutError),
 			});
 			output.errorStatus = result.status;
 			output.errorId = result.id;

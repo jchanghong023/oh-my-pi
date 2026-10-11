@@ -13,6 +13,7 @@ import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver
 import { cfgEnabledModels } from "../config/model-settings";
 import { getCompanyChatModels } from "../config/company-models";
 import { isCompanyLaneActive } from "../config/company-provider";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { Settings } from "../config/settings";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { cfgTeamMembers } from "./settings";
@@ -185,27 +186,36 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 	const sessionModel = session.model;
 	const offlineLaneActive = isCompanyLaneActive();
 	const configuredMembers = cfgTeamMembers.get(settings);
-	const availableModels = session.modelRegistry.getAvailable();
+	const availableModels = filterAvailableModelsByEnabledPatterns(
+		session.modelRegistry.getAvailable(),
+		cfgEnabledModels.get(settings),
+		settings,
+	);
 	const companyModelPatterns: string[] = [];
 	if (offlineLaneActive && configuredMembers.length === 0) {
-		const effectiveAvailable = filterAvailableModelsByEnabledPatterns(
-			availableModels,
-			cfgEnabledModels.get(settings),
-			settings,
-		);
-		const effectiveKeys = new Set(effectiveAvailable.map(model => `${model.provider}/${model.id}`));
+		const effectiveKeys = new Set(availableModels.map(model => `${model.provider}/${model.id}`));
 		for (const model of getCompanyChatModels()) {
 			const pattern = `${model.provider}/${model.id}`;
 			if (effectiveKeys.has(pattern)) companyModelPatterns.push(pattern);
 		}
 	}
-	return resolveTeamParticipants({
+	const members = resolveTeamParticipants({
 		configuredMembers,
 		offlineLaneActive,
 		companyModelPatterns,
 		sessionModel,
 		availableModels,
 	});
+	if (members.ok) {
+		const remoteParticipant = members.participants.find(participant => isJchToolsAgentModel(participant.model));
+		if (remoteParticipant) {
+			return {
+				ok: false as const,
+				error: `/team 不支持远端 Agent 模型 ${remoteParticipant.modelPattern}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。请切换会话模型或修正 team.members 后重试。`,
+			};
+		}
+	}
+	return members;
 }
 
 /** Wire the runner deps from the live session. Exported for tests. */
@@ -479,6 +489,23 @@ async function startTeamDiscussionImpl(
 		`原始问题：${previewQuestion(question)}`,
 		`[team-dispatch ${jobId}]`,
 	].join("\n");
+	const followupStarted = performance.now();
+	let noticeStage: "notice_dispatch" | "chat_rebuild" | "status_update" = "notice_dispatch";
+	let stageStarted = followupStarted;
+	let noticeDispatchCompleted = false;
+	const logFollowupStage = (result: "started" | "completed"): void => {
+		logger.info(`Team dispatch follow-up stage ${result}`, {
+			component: "team.controller",
+			event: `team_dispatch_followup_${result}`,
+			stage: noticeStage,
+			result,
+			job_id: jobId,
+			job_registered: true,
+			notice_dispatch_completed: noticeDispatchCompleted,
+			...(result === "completed" ? { elapsed_ms: performance.now() - stageStarted } : {}),
+		});
+	};
+	logFollowupStage("started");
 	try {
 		await session.sendCustomMessage(
 			{
@@ -490,17 +517,36 @@ async function startTeamDiscussionImpl(
 			},
 			{ triggerTurn: false, deliverAs: "nextTurn" },
 		);
+		// Resolving this call does not certify persistence; its boolean only
+		// indicates whether it started a turn, not whether dispatch succeeded.
+		noticeDispatchCompleted = true;
+		logFollowupStage("completed");
+		noticeStage = "chat_rebuild";
+		stageStarted = performance.now();
+		logFollowupStage("started");
 		await hooks.rebuildChat?.();
+		logFollowupStage("completed");
+		noticeStage = "status_update";
+		stageStarted = performance.now();
+		logFollowupStage("started");
 		hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
+		logFollowupStage("completed");
 	} catch (error) {
-		logger.warn("Team dispatch notice failed", {
-			component: "team.controller",
-			event: "team_dispatch_notice_failed",
-			stage: "dispatch_notice",
-			result: "failed",
-			job_id: jobId,
-			...logger.diagnosticError(error),
-		});
+		logger.warn(
+			noticeStage === "notice_dispatch" ? "Team dispatch notice failed" : "Team dispatch UI update failed",
+			{
+				component: "team.controller",
+				event: "team_dispatch_followup_failed",
+				stage: noticeStage,
+				result: "failed",
+				job_id: jobId,
+				job_registered: true,
+				notice_dispatch_completed: noticeDispatchCompleted,
+				elapsed_ms: performance.now() - stageStarted,
+				followup_elapsed_ms: performance.now() - followupStarted,
+				...logger.diagnosticError(error),
+			},
+		);
 		// The job is already registered and owns its own lifecycle from here; a
 		// failed dispatch breadcrumb must not reject the command — the caller
 		// would lose the submitted question and surface an unhandled rejection.

@@ -125,6 +125,7 @@ export class ModelPickerComponent implements Component {
 	#currentQuickRoleSelector: string | undefined;
 	#modelItems: ModelBrowserItem[] = [];
 	#quickRoleItems: ModelBrowserItem[] = [];
+	#quickRoleSourceItems: ModelBrowserItem[] = [];
 	#quickRoles = new Map<string, ResolvedRoleModel>();
 	#roleMode = false;
 	#taskMode = false;
@@ -161,7 +162,7 @@ export class ModelPickerComponent implements Component {
 			this.#taskModeKey = options.taskModeKeys?.[0];
 			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
 		}
-		this.#quickRoleItems = this.#buildQuickRoleItems(
+		this.#quickRoleSourceItems = this.#buildQuickRoleItems(
 			options.quickRoles ?? [],
 			options.quickRoleOrder ?? options.quickRoles?.map(entry => entry.role) ?? [],
 		);
@@ -232,6 +233,11 @@ export class ModelPickerComponent implements Component {
 		);
 		this.#configError = scope.error;
 		this.#modelItems = scope.items;
+		this.#quickRoleItems = this.#quickRoleSourceItems.flatMap(item => {
+			if (item.model.provider !== "jchtools") return [item];
+			const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
+			return model ? [{ ...item, model }] : [];
+		});
 		this.#browser.setRoles(scope.roles);
 		this.#browser.setMruOrder(scope.mruOrder);
 		this.#browser.setPerfStats(this.#settings.modelPerf);

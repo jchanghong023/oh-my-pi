@@ -887,6 +887,10 @@ export class ModelRegistry {
 	): Promise<void> {
 		const filter = new Set(providerIds);
 		if (filter.size === 0) return;
+		if (filter.has(JCHTOOLS_PROVIDER_ID)) {
+			this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
+			if (!this.#jchToolsAutomaticDiscoveryAllowed) this.#clearJchToolsModels();
+		}
 		await this.#refreshRuntimeDiscoveries(strategy, filter);
 	}
 

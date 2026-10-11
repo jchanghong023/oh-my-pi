@@ -126,6 +126,8 @@ export class RotatingFileSink {
 				this.#openFd(this.#activePath);
 			}
 		}, "open");
+		// Preparation can enqueue recovery/retention warnings even when INFO is filtered.
+		this.flush();
 		return this.#failed ? undefined : this.#activePath;
 	}
 

@@ -118,6 +118,15 @@ export interface WriteTextAtomicOptions extends SessionStorageWriteOptions {
 	commitGuard?: () => boolean;
 }
 
+/** Diagnostic progress only; does not change guarded deletion's result or errors. */
+export interface SessionDeletionDiagnostic {
+	/** `unreported` distinguishes backends that ignore the optional receipt. */
+	stage: "unreported" | "primary_delete" | "backup_cleanup" | "artifact_cleanup" | "completed";
+	primaryDeleted: boolean;
+	backupFailureCount: number;
+	artifactsRemoved: boolean;
+}
+
 export interface SessionStorage {
 	/**
 	 * `true` when synchronous writes ({@link writeTextSync} and a writer's
@@ -204,7 +213,11 @@ export interface SessionStorage {
 	 * accepts the current session content. Optional because backends without a
 	 * cross-process conditional-delete primitive must skip opportunistic GC.
 	 */
-	deleteSessionWithArtifactsIf?(sessionPath: string, shouldDelete: (content: string) => boolean): Promise<boolean>;
+	deleteSessionWithArtifactsIf?(
+		sessionPath: string,
+		shouldDelete: (content: string) => boolean,
+		diagnostic?: SessionDeletionDiagnostic,
+	): Promise<boolean>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 	/**
 	 * Wait for every backing write scheduled by this storage to become durably
@@ -1242,41 +1255,135 @@ export class FileSessionStorage implements SessionStorage {
 	 * Conditionally delete under the same cross-process lock used by the first
 	 * durable append to a draft-only session.
 	 */
-	deleteSessionWithArtifactsIf(sessionPath: string, shouldDelete: (content: string) => boolean): Promise<boolean> {
-		const deleted = this.withSessionFileLockSync(sessionPath, () => {
-			const content = fs.readFileSync(sessionPath, "utf-8");
-			if (!shouldDelete(content)) return false;
-
-			fs.unlinkSync(sessionPath);
-			// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`) for
-			// the same reason as deleteSessionWithArtifacts (#11499): the picker
-			// scan would otherwise resurrect the deleted session from the newest
-			// stale backup. Best-effort; synchronous to stay inside the lock.
-			const base = path.basename(sessionPath);
-			for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
-				if (!path.basename(bak).startsWith(`${base}.`)) continue;
+	deleteSessionWithArtifactsIf(
+		sessionPath: string,
+		shouldDelete: (content: string) => boolean,
+		diagnostic?: SessionDeletionDiagnostic,
+	): Promise<boolean> {
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,
+				call_id: `session-delete-${crypto.randomUUID()}`,
+				session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
+			},
+			() => {
+				const started = performance.now();
+				const progress = diagnostic ?? {
+					stage: "primary_delete",
+					primaryDeleted: false,
+					backupFailureCount: 0,
+					artifactsRemoved: false,
+				};
+				progress.stage = "primary_delete";
+				progress.primaryDeleted = false;
+				progress.backupFailureCount = 0;
+				progress.artifactsRemoved = false;
+				const fields = () => ({
+					component: "session_storage",
+					stage: progress.stage,
+					primary_deleted: progress.primaryDeleted,
+					backup_failure_count: progress.backupFailureCount,
+					artifacts_removed: progress.artifactsRemoved,
+					partial: progress.primaryDeleted && (progress.backupFailureCount > 0 || !progress.artifactsRemoved),
+					elapsed_ms: performance.now() - started,
+				});
+				logger.info("Guarded session deletion started", {
+					...fields(),
+					event: "session_storage_delete",
+					result: "started",
+				});
 				try {
-					fs.unlinkSync(bak);
-				} catch (err) {
-					logger.warn("Failed to remove stale session backup during delete", {
-						path: bak,
-						error: toError(err).message,
+					const deleted = this.withSessionFileLockSync(sessionPath, () => {
+						const content = fs.readFileSync(sessionPath, "utf-8");
+						if (!shouldDelete(content)) return false;
+
+						fs.unlinkSync(sessionPath);
+						progress.primaryDeleted = true;
+						logger.info("Guarded session deletion stage completed", {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: "completed",
+						});
+						// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`) for
+						// the same reason as deleteSessionWithArtifacts (#11499): the picker
+						// scan would otherwise resurrect the deleted session from the newest
+						// stale backup. Best-effort; synchronous to stay inside the lock.
+						progress.stage = "backup_cleanup";
+						logger.info("Guarded session deletion stage started", {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: "started",
+						});
+						const base = path.basename(sessionPath);
+						for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
+							if (!path.basename(bak).startsWith(`${base}.`)) continue;
+							try {
+								fs.unlinkSync(bak);
+							} catch (err) {
+								progress.backupFailureCount++;
+								logger.warn("Failed to remove stale session backup during delete", {
+									...fields(),
+									event: "session_storage_delete_stage",
+									result: "partial",
+									...logger.diagnosticError(err),
+								});
+							}
+						}
+						const backupFields = {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: progress.backupFailureCount > 0 ? "partial" : "completed",
+						};
+						if (progress.backupFailureCount > 0)
+							logger.warn("Guarded session backup cleanup partial", backupFields);
+						else logger.info("Guarded session backup cleanup completed", backupFields);
+
+						progress.stage = "artifact_cleanup";
+						logger.info("Guarded session deletion stage started", {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: "started",
+						});
+						const artifactsDir = sessionPath.slice(0, -6);
+						try {
+							fs.rmSync(artifactsDir, { recursive: true, force: true });
+						} catch (err) {
+							const error = toError(err);
+							throw new Error(
+								`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
+								{ cause: error },
+							);
+						}
+						progress.artifactsRemoved = true;
+						logger.info("Guarded session deletion stage completed", {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: "completed",
+						});
+						progress.stage = "completed";
+						return true;
 					});
+					const terminalFields = {
+						...fields(),
+						event: "session_storage_delete",
+						result: !deleted ? "skipped" : progress.backupFailureCount > 0 ? "partial" : "completed",
+					};
+					if (deleted && progress.backupFailureCount > 0)
+						logger.warn("Guarded session deletion partial", terminalFields);
+					else logger.info("Guarded session deletion settled", terminalFields);
+					return Promise.resolve(deleted);
+				} catch (error) {
+					logger.error("Guarded session deletion failed", {
+						...fields(),
+						event: "session_storage_delete",
+						result: progress.primaryDeleted ? "partial" : "failed",
+						partial: progress.primaryDeleted,
+						...logger.diagnosticError(error),
+					});
+					throw error;
 				}
-			}
-			const artifactsDir = sessionPath.slice(0, -6);
-			try {
-				fs.rmSync(artifactsDir, { recursive: true, force: true });
-			} catch (err) {
-				const error = toError(err);
-				throw new Error(
-					`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
-					{ cause: error },
-				);
-			}
-			return true;
-		});
-		return Promise.resolve(deleted);
+			},
+		);
 	}
 
 	/**

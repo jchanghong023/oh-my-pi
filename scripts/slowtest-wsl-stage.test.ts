@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import {
 	decodeWslOutput,
 	discoverWsl,
@@ -316,6 +317,59 @@ describe("streamed deployed fixed-commit execution", () => {
 		);
 		expect((await runWslStage(f.gate, f.options)).status).toBe("BLOCKED");
 		expect(f.commands.some(c => c.label === "wsl/network-clone")).toBe(false);
+	});
+	test.each([
+		{
+			code: "source_sha_mismatch",
+			stdout: JSON.stringify({ status: "BLOCKED", error: "Windows HEAD differs from expected_sha." }),
+			stderr: "",
+		},
+		{
+			code: "workspace_dirty",
+			stdout: JSON.stringify({
+				status: "BLOCKED",
+				error: "Commit and push the intended source before WSL execution.",
+			}),
+			stderr: "",
+		},
+		{
+			code: "git_operation_in_progress",
+			stdout: JSON.stringify({ status: "BLOCKED", error: "Windows repository has an in-progress Git operation." }),
+			stderr: "",
+		},
+		{
+			code: "helper_unavailable",
+			stdout: "",
+			stderr: "No Python >= 3.11 was found; workflow helpers are unavailable.",
+		},
+		{
+			code: "preflight_rejected",
+			stdout: JSON.stringify({ status: "BLOCKED", error: "PRIVATE_PREFLIGHT_BODY" }),
+			stderr: "PRIVATE_PREFLIGHT_STDERR",
+		},
+	])("records safe $code for rejected helper plans without executing WSL", async row => {
+		const f = executionFixture(async command =>
+			command.label === "wsl/deployed-workflow-plan"
+				? { exitCode: 3, stdout: row.stdout, stderr: row.stderr }
+				: undefined,
+		);
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			expect(await runWslStage(f.gate, f.options)).toMatchObject({ status: "BLOCKED", exitCode: 3 });
+			expect(f.commands.some(command => command.label === "wsl/Ubuntu-24.04/fulltest")).toBe(false);
+			const start = events.find(event => event.context?.event === "wsl_stage_started");
+			const rejected = events.find(event => event.context?.event === "wsl_result_rejected");
+			expect(rejected).toMatchObject({
+				level: "error",
+				context: { stage: "workflow-plan", failure_code: row.code, exit_code: 3 },
+			});
+			expect(typeof rejected?.context?.elapsed_ms).toBe("number");
+			expect(rejected?.context?.wsl_call_id).toBe(start?.context?.wsl_call_id);
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_PREFLIGHT");
+		} finally {
+			dispose();
+		}
 	});
 	test("clones only absent network repository and freezes a fresh clone before helper execution", async () => {
 		const f = executionFixture(async command =>

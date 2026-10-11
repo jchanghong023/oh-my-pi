@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- Refreshed quick-role picker entries when JchTools models disappear or change during discovery.
+- Kept overflowing bottom status-line segments dimmed while another composer owns focus.
 - Native settings editors now display submission and validation errors instead of silently keeping the editor open ([#15252](https://github.com/can1357/oh-my-pi/pull/15252) by [@Shadorain](https://github.com/Shadorain)).
 - Fixed `/tree` stalling when opened on very long session histories ([#12527](https://github.com/can1357/oh-my-pi/pull/12527) by [@azain47](https://github.com/azain47)).
 - Fixed `/tree` exhausting memory on long sessions with many branch points ([#12622](https://github.com/can1357/oh-my-pi/pull/12622) by [@ParadaCarleton](https://github.com/ParadaCarleton)).

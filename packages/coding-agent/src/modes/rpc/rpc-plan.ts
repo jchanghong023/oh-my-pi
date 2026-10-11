@@ -287,7 +287,16 @@ export class RpcPlanController {
 			this.#output("Plan mode disabled.");
 			return { consumed: true };
 		}
-		await this.#enqueue(() => this.#enter());
+		const current = this.#guard(this.#signal(signal));
+		await this.#enqueue(async () => {
+			if (!current()) return;
+			try {
+				await this.#enter(undefined, false, current);
+			} catch (error) {
+				if (current() || !(error instanceof Error && error.name === "AbortError")) throw error;
+			}
+		});
+		if (!current()) return { consumed: true };
 		return task ? { prompt: task } : { consumed: true };
 	}
 
@@ -474,10 +483,14 @@ export class RpcPlanController {
 		return undefined;
 	}
 
-	async #enter(path?: string, preserveModel = false): Promise<void> {
+	async #enter(path?: string, preserveModel = false, current: () => boolean = () => true): Promise<void> {
 		const started = performance.now();
 		this.#log("plan_enter_started", "enter", "started");
 		const session = this.#session;
+		const assertCurrent = () => {
+			if (!current()) throw new DOMException("Plan mode entry cancelled.", "AbortError");
+		};
+		assertCurrent();
 		if (!cfgPlanEnabled.get(session.settings)) throw new Error("Plan mode is disabled (plan.enabled).");
 		if (session.getGoalModeState()?.goal) throw new Error("Exit goal mode first.");
 		if (session.getVibeModeState()?.enabled) throw new Error("Exit vibe mode first.");
@@ -496,7 +509,9 @@ export class RpcPlanController {
 			await session.setActiveToolsByName([
 				...new Set([...tools, ...(session.hasBuiltInTool("write") ? ["write"] : [])]),
 			]);
+			assertCurrent();
 			if (!preserveModel) await this.#applyPlanModel();
+			assertCurrent();
 			session.setPlanProposalHandler(async title => {
 				const current = this.#guard(this.#operation.signal);
 				this.#log("plan_stage_started", "proposal_prepare", "started");
@@ -510,6 +525,7 @@ export class RpcPlanController {
 				return result;
 			});
 			if (session.isStreaming) await session.sendPlanModeContext({ deliverAs: "steer" });
+			assertCurrent();
 		} catch (error) {
 			this.#log("plan_rollback_started", "enter_rollback", "started", { elapsed_ms: performance.now() - started });
 			session.setPlanModeState(previousState);
@@ -522,7 +538,9 @@ export class RpcPlanController {
 			this.#log("plan_rollback_completed", "enter_rollback", "restored", {
 				elapsed_ms: performance.now() - started,
 			});
-			this.#log("plan_enter_terminal", "enter", "failed", { elapsed_ms: performance.now() - started });
+			this.#log("plan_enter_terminal", "enter", current() ? "failed" : "cancelled", {
+				elapsed_ms: performance.now() - started,
+			});
 			throw error;
 		}
 		this.#paused = false;

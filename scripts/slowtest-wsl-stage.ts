@@ -24,6 +24,27 @@ export type WslStageResult =
 	| { status: "PASS"; distro: string; head: string }
 	| { status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED"; reason: string; exitCode: number }
 	| Exclude<WslSelection, { status: "AVAILABLE" }>;
+type WslFailureCode =
+	| "workspace_dirty"
+	| "helper_unavailable"
+	| "source_sha_mismatch"
+	| "git_operation_in_progress"
+	| "preflight_rejected"
+	| "remote_source_rejected"
+	| "native_repository_discovery_failed"
+	| "native_repository_report_invalid"
+	| "native_repository_ambiguous"
+	| "clone_destination_unsafe"
+	| "network_clone_failed"
+	| "clone_destination_unverified"
+	| "native_environment_rejected"
+	| "workflow_plan_invalid"
+	| "execution_timeout"
+	| "execution_cancelled"
+	| "sync_or_test_startup_failed"
+	| "post_test_evidence_unverified"
+	| "fulltest_failed"
+	| "coverage_or_accounting_unverified";
 export interface WslOptions {
 	debug: boolean;
 	needed?: boolean;
@@ -416,11 +437,35 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 		}
 	});
 }
+function helperPreflightFailureCode(plan: GateCapture): WslFailureCode {
+	if (plan.stderr.trim() === "No Python >= 3.11 was found; workflow helpers are unavailable.")
+		return "helper_unavailable";
+	// The deployed helper's json_main writes BLOCKED errors to stdout, not stderr.
+	let diagnostic = plan.stderr.trim();
+	try {
+		const report = JSON.parse(plan.stdout);
+		if (report?.status === "BLOCKED" && typeof report.error === "string") diagnostic = report.error;
+	} catch {
+		// Unknown helper output is still rejected; never copy it into diagnostics.
+	}
+	switch (diagnostic) {
+		case "Windows HEAD differs from expected_sha.":
+			return "source_sha_mismatch";
+		case "Commit and push the intended source before WSL execution.":
+			return "workspace_dirty";
+		case "Windows repository has an in-progress Git operation.":
+			return "git_operation_in_progress";
+		default:
+			return "preflight_rejected";
+	}
+}
 async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<WslStageResult> {
+	const started = performance.now();
 	let stage = "discovery";
 	const stageFailure = (
 		status: "BLOCKED" | "UNVERIFIED" | "FAIL" | "TIMEOUT" | "CANCELLED",
 		reason: string,
+		failureCode: WslFailureCode,
 		exitCode = 1,
 	): WslStageResult => {
 		(status === "CANCELLED" ? logger.info : logger.error)("WSL result rejected", {
@@ -430,6 +475,8 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			result: status,
 			status,
 			exit_code: exitCode || 1,
+			failure_code: failureCode,
+			elapsed_ms: performance.now() - started,
 		});
 		console.error(`wsl-stage: ${status} — ${reason}`);
 		return { status, reason, exitCode: exitCode || 1 };
@@ -453,6 +500,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		return stageFailure(
 			"BLOCKED",
 			"commit and push the intended source first; dirty source is not transferable and gate authorization grants no Git writes",
+			"workspace_dirty",
 		);
 	const which = options.which ?? Bun.which;
 	stage = "host-helper";
@@ -481,7 +529,11 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 				}),
 		))
 	)
-		return stageFailure("BLOCKED", "deployed workflow.py and a host Python interpreter are required");
+		return stageFailure(
+			"BLOCKED",
+			"deployed workflow.py and a host Python interpreter are required",
+			"helper_unavailable",
+		);
 	let remote: WslRemoteSource;
 	stage = "remote-source";
 	logger.info("WSL remote source resolution started", {
@@ -501,7 +553,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			result: "BLOCKED",
 			...logger.diagnosticError(error),
 		});
-		return stageFailure("BLOCKED", error instanceof Error ? error.message : String(error));
+		return stageFailure("BLOCKED", error instanceof Error ? error.message : String(error), "remote_source_rejected");
 	}
 	logger.info("WSL remote source resolved", {
 		component: "test-gate-wsl",
@@ -520,7 +572,12 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		wallTimeoutSeconds: 30,
 	});
 	if (probe.exitCode !== 0)
-		return stageFailure("BLOCKED", "chosen distribution native repository discovery failed", probe.exitCode);
+		return stageFailure(
+			"BLOCKED",
+			"chosen distribution native repository discovery failed",
+			"native_repository_discovery_failed",
+			probe.exitCode,
+		);
 	let candidates: Array<{ linux_repo: string; remote: string; fetch_url: string }>;
 	try {
 		candidates = JSON.parse(probe.stdout.trim());
@@ -541,6 +598,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		return stageFailure(
 			"UNVERIFIED",
 			"native repository discovery did not return a matching protected /root identity report",
+			"native_repository_report_invalid",
 		);
 	}
 	logger.info("Native repository report parsed", {
@@ -552,14 +610,23 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	});
 	// No automatic alternate clone may bypass an existing unsafe/ambiguous tree.
 	const unique = [...new Set(candidates.map(c => c.linux_repo))];
-	if (unique.length > 1) return stageFailure("BLOCKED", `multiple matching native worktrees: ${unique.join(", ")}`);
+	if (unique.length > 1)
+		return stageFailure(
+			"BLOCKED",
+			`multiple matching native worktrees: ${unique.join(", ")}`,
+			"native_repository_ambiguous",
+		);
 	let linux = candidates[0];
 	if (!linux) {
 		stage = "network-clone";
 		const name = remote.identity.split("/").at(-1)!;
 		const owner = remote.identity.split("/").at(-2)!;
 		if (![name, owner].every(part => /^[A-Za-z0-9._-]+$/.test(part)))
-			return stageFailure("BLOCKED", "remote identity cannot determine a safe /root clone destination");
+			return stageFailure(
+				"BLOCKED",
+				"remote identity cannot determine a safe /root clone destination",
+				"clone_destination_unsafe",
+			);
 		const preferred = `/root/${name}`;
 		const alternate = `/root/${owner}-${name}`;
 		const clone = await gate.capture({
@@ -576,11 +643,16 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			return stageFailure(
 				"BLOCKED",
 				"network clone blocked; existing destinations are never overwritten",
+				"network_clone_failed",
 				clone.exitCode,
 			);
 		const destination = /^CLONED_REPOSITORY=(.*)$/m.exec(clone.stdout)?.[1];
 		if (destination !== preferred && destination !== alternate)
-			return stageFailure("UNVERIFIED", "network clone did not establish its exact native destination");
+			return stageFailure(
+				"UNVERIFIED",
+				"network clone did not establish its exact native destination",
+				"clone_destination_unverified",
+			);
 		linux = { linux_repo: destination, remote: "origin", fetch_url: remote.fetchUrl };
 	}
 	stage = "native-environment";
@@ -596,6 +668,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		return stageFailure(
 			"BLOCKED",
 			"native Linux tools/environment or active-writer preflight blocked",
+			"native_environment_rejected",
 			environment.exitCode,
 		);
 	console.log(environment.stdout);
@@ -633,7 +706,12 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		wallTimeoutSeconds: 30,
 	});
 	if (plan.exitCode !== 0)
-		return stageFailure("BLOCKED", `deployed helper preflight rejected source: ${plan.stderr.trim()}`, plan.exitCode);
+		return stageFailure(
+			"BLOCKED",
+			`deployed helper preflight rejected source: ${plan.stderr.trim()}`,
+			helperPreflightFailureCode(plan),
+			plan.exitCode,
+		);
 	let program: string;
 	try {
 		const resolved = JSON.parse(plan.stdout);
@@ -652,7 +730,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			scope: "fork-affected",
 		});
 	} catch {
-		return stageFailure("UNVERIFIED", "deployed helper returned no fixed-commit plan");
+		return stageFailure("UNVERIFIED", "deployed helper returned no fixed-commit plan", "workflow_plan_invalid");
 	}
 	// Preserve the helper's synchronization/protection/post-test checks verbatim.
 	// Stream instead of helper.run (which buffers all compiler phase events).
@@ -729,17 +807,23 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		returned_head: postHead && /^[0-9a-f]{40}$/.test(postHead) ? postHead : undefined,
 	});
 	if (result.exitCode === 124 || result.exitCode === 137)
-		return stageFailure("TIMEOUT", "WSL execution hang guard expired", result.exitCode);
-	if (result.exitCode === 130) return stageFailure("CANCELLED", "WSL execution cancelled", 130);
+		return stageFailure("TIMEOUT", "WSL execution hang guard expired", "execution_timeout", result.exitCode);
+	if (result.exitCode === 130) return stageFailure("CANCELLED", "WSL execution cancelled", "execution_cancelled", 130);
 	if (testCode === undefined)
-		return stageFailure("BLOCKED", "fixed-commit synchronization or test startup did not complete", result.exitCode);
+		return stageFailure(
+			"BLOCKED",
+			"fixed-commit synchronization or test startup did not complete",
+			"sync_or_test_startup_failed",
+			result.exitCode,
+		);
 	if (postHead !== source.head || postState !== "0" || result.exitCode !== Number(testCode))
 		return stageFailure(
 			"UNVERIFIED",
 			"post-test commit/state inspection did not establish the fixed-commit result",
+			"post_test_evidence_unverified",
 			result.exitCode,
 		);
-	if (result.exitCode !== 0) return stageFailure("FAIL", "Linux fulltest failed", result.exitCode);
+	if (result.exitCode !== 0) return stageFailure("FAIL", "Linux fulltest failed", "fulltest_failed", result.exitCode);
 	const events: Array<{ id?: unknown; kind?: unknown }> = [];
 	for (const line of result.stderr.split(/\r?\n/)) {
 		if (!line.startsWith(`OMP_GATE_EVENT ${token} `)) continue;
@@ -756,7 +840,11 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			events.slice(index + 1).some(end => end.id === event.id && end.kind === "idle"),
 	);
 	if (!/^fulltest: PASS total=/m.test(result.stdout) || !closedActivity)
-		return stageFailure("UNVERIFIED", "Linux fulltest coverage or live compilation accounting was not observed");
+		return stageFailure(
+			"UNVERIFIED",
+			"Linux fulltest coverage or live compilation accounting was not observed",
+			"coverage_or_accounting_unverified",
+		);
 	console.log(`wsl-stage: PASS distro=${selection.distro} HEAD=${source.head}`);
 	return { status: "PASS", distro: selection.distro, head: source.head };
 }

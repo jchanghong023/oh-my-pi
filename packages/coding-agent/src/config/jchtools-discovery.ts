@@ -263,8 +263,9 @@ export async function discoverJchTools(
 		},
 		async () => {
 			const startedAt = performance.now();
+			const discoveryEnabled = isJchToolsDiscoveryEnabled(options);
 			let stage = "resolve_pipe";
-			logger.debug("JchTools discovery started", {
+			logger[discoveryEnabled ? "info" : "debug"]("JchTools discovery started", {
 				component: "jchtools",
 				event: "jchtools_discovery_started",
 				stage,
@@ -282,7 +283,7 @@ export async function discoverJchTools(
 				};
 				if (result === "success") logger.info("JchTools discovery completed", fields);
 				else if (["disabled", "identity-unavailable", "pipe-absent", "not-ready", "aborted"].includes(result))
-					logger.debug("JchTools discovery unavailable", fields);
+					logger[discoveryEnabled ? "info" : "debug"]("JchTools discovery unavailable", fields);
 				else logger.warn("JchTools discovery failed", fields);
 			};
 			let pipePath: string | undefined;
@@ -441,6 +442,7 @@ export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions =
 		},
 		async () => {
 			const startedAt = performance.now();
+			const discoveryEnabled = isJchToolsDiscoveryEnabled(options);
 			let stage = "discovery";
 			let result = "discovery-unavailable";
 			let status: number | undefined;
@@ -452,7 +454,7 @@ export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions =
 			const timer = setTimeout(abort, options.timeoutMs ?? DISCOVERY_TIMEOUT_MS);
 			options.signal?.addEventListener("abort", abort, { once: true });
 			if (options.signal?.aborted) abort();
-			logger.debug("JchTools model discovery started", {
+			logger[discoveryEnabled ? "info" : "debug"]("JchTools model discovery started", {
 				component: "jchtools",
 				event: "jchtools_models_started",
 				stage,
@@ -596,7 +598,7 @@ export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions =
 				};
 				if (result === "success") logger.info("JchTools models completed", fields);
 				else if (["discovery-unavailable", "not-ready", "aborted"].includes(result))
-					logger.debug("JchTools models unavailable", fields);
+					logger[discoveryEnabled ? "info" : "debug"]("JchTools models unavailable", fields);
 				else logger.warn("JchTools models failed", fields);
 			}
 		},

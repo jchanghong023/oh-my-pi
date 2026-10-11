@@ -1,5 +1,7 @@
+import * as path from "node:path";
 import { getAgentDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { DocsService } from "../docs/service";
+import { BUILDING_INDEX_PREFIX } from "../docs/storage";
 import type { DocsProgress } from "../docs/types";
 
 export type DocsAction = "init" | "remove";
@@ -29,6 +31,40 @@ function progressLine(progress: DocsProgress): string {
 	return `${progress.phase} ${progress.completed}/${progress.total} failed=${progress.failed}${path}${message}\n`;
 }
 
+function commandRejectionReason(error: unknown, input: DocsCommandInput, service: DocsService): string | undefined {
+	if (!(error instanceof Error)) return undefined;
+	// The service's expected rejections are plain Errors. Match their exact messages,
+	// not broad patterns that could downgrade unrelated operational failures.
+	if (input.action === "remove") {
+		return error.message === `Unknown document index: ${input.target}` ? "not_found" : undefined;
+	}
+	if (typeof input.name === "string") {
+		const name = input.name.trim();
+		switch (error.message) {
+			case "Document index name must not be empty":
+			case "Document index name must contain at most 64 Unicode scalar values":
+			case "Document index name must not contain control characters":
+			case `Document index name uses reserved prefix: ${BUILDING_INDEX_PREFIX}`:
+				return "invalid_name";
+			case `Document index already exists: ${name}`:
+				return "duplicate_name";
+		}
+	}
+	if (typeof input.target === "string" && typeof service.cwd === "string") {
+		const root = path.resolve(service.cwd, input.target);
+		if (error.message === `Markdown root is not a directory: ${root}`) return "source_not_directory";
+		if (error.message === `No Markdown files found in: ${root}`) return "no_documents";
+	}
+	const storagePath = service.storage?.path;
+	if (
+		typeof storagePath === "string" &&
+		error.message === `Another document index build is already running for this profile: ${storagePath}`
+	) {
+		return "lock_contended";
+	}
+	return undefined;
+}
+
 export async function runDocsCommand(input: DocsCommandInput, dependencies: DocsCliDependencies = {}): Promise<number> {
 	return logger.withLogContext(
 		{ operation_id: logger.getLogContext().operation_id ?? `docs-cli-${crypto.randomUUID()}` },
@@ -36,6 +72,7 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 			const started = performance.now();
 			let stage = "open";
 			let resultCode: number | undefined;
+			let rejectionReason: string | undefined;
 			const fields = { component: "docs.cli", event: "docs.cli.command", action: input.action };
 			logger.info("docs.cli.command.started", { ...fields, stage, result: "started" });
 			try {
@@ -76,6 +113,7 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 						resultCode = 130;
 						return 130;
 					}
+					if (stage === input.action) rejectionReason = commandRejectionReason(error, input, service);
 					throw error;
 				} finally {
 					const operationStage = stage;
@@ -93,13 +131,29 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 					}
 				}
 			} catch (error) {
-				logger.warn("docs.cli.command.failed", {
-					...fields,
-					stage,
-					result: "failed",
-					elapsed_ms: performance.now() - started,
-					...logger.diagnosticError(error),
-				});
+				const cancelled = error instanceof Error && error.name === "AbortError";
+				const reason = stage === input.action ? rejectionReason : undefined;
+				const log =
+					cancelled || (reason && reason !== "lock_contended")
+						? logger.info
+						: reason === "lock_contended"
+							? logger.warn
+							: logger.error;
+				log(
+					cancelled
+						? "docs.cli.command.cancelled"
+						: reason
+							? "docs.cli.command.rejected"
+							: "docs.cli.command.failed",
+					{
+						...fields,
+						stage,
+						result: cancelled ? "cancelled" : reason ? "rejected" : "failed",
+						reason,
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					},
+				);
 				throw error;
 			}
 		},

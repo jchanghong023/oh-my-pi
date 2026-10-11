@@ -131,7 +131,7 @@ function convertSchemaForm(schema: unknown): unknown {
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
 		// Escape the pointer token before encoding its URI-fragment representation.
-		const name = schema.ref.replace(/~/g, "~0").replace(/\//g, "~1");
+		const name = String(schema.ref).replace(/~/g, "~0").replace(/\//g, "~1");
 		return { $ref: `#/$defs/${encodeURIComponent(name)}` };
 	}
 

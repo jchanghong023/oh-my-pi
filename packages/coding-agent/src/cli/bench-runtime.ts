@@ -69,30 +69,120 @@ export interface BenchTarget {
 /** Open the benchmark runtime; an omitted offline option inherits the host process lane. */
 export async function createDefaultBenchRuntime(options: { offline?: boolean } = {}): Promise<BenchRuntime> {
 	const offline = options.offline ?? isCompanyLaneActive();
-	setCompanyOfflineEnabled(offline);
-	if (offline) {
-		// Company environment: flip the lane before the registry captures company
-		// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
-		setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-		const companyError = getCompanyConfigError();
-		if (companyError) process.stderr.write(`${companyError}\n`);
-	}
-	const cwd = getProjectDir();
-	const settings = await Settings.init({ cwd });
-	const authStorage = await discoverAuthStorage(undefined, { settings });
+	const context = logger.getLogContext();
+	return logger.withLogContext(
+		offline
+			? {
+					operation_id: context.operation_id ?? `bench-runtime-${crypto.randomUUID()}`,
+					call_id: context.call_id ?? `bench-runtime-${crypto.randomUUID()}`,
+				}
+			: {},
+		async () => {
+			const started = performance.now();
+			const fields = {
+				component: "offline-models",
+				event: "offline_model_refresh",
+				stage: "runtime_create",
+				strategy: "offline",
+				cache_only: true,
+			};
+			let stage = "lane_config";
+			if (offline) {
+				logger.info("offline_model_refresh.started", {
+					...fields,
+					result: "started",
+					model_registry_ready: false,
+					elapsed_ms: performance.now() - started,
+				});
+			}
+			try {
+				setCompanyOfflineEnabled(offline);
+				if (offline) {
+					// Company environment: flip the lane before the registry captures company
+					// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
+					setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
+					const companyError = getCompanyConfigError();
+					if (companyError) {
+						logger.warn("offline_model_refresh.degraded", {
+							...fields,
+							stage,
+							result: "degraded",
+							company_config_valid: false,
+							elapsed_ms: performance.now() - started,
+						});
+						process.stderr.write(`${companyError}\n`);
+					}
+				}
+				const cwd = getProjectDir();
+				stage = "settings_init";
+				const settings = await Settings.init({ cwd });
+				stage = "auth_discovery";
+				const authStorage = await discoverAuthStorage(undefined, { settings });
+				try {
+					stage = "registry_create";
+					const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+					for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
+					stage = "cache_hydration";
+					await modelRegistry.hydrateCredentialScopedModelCaches();
+					stage = "extension_providers";
+					await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
+					if (offline) {
+						logger.info("offline_model_refresh.completed", {
+							...fields,
+							result: "completed",
+							model_registry_ready: true,
+							...offlineBenchModelSummary(modelRegistry),
+							elapsed_ms: performance.now() - started,
+						});
+					}
+					return {
+						modelRegistry: offline ? offlineBenchRegistry(modelRegistry) : modelRegistry,
+						settings,
+						close: () => authStorage.close(),
+					};
+				} catch (error) {
+					authStorage.close();
+					throw error;
+				}
+			} catch (error) {
+				if (offline) {
+					const cancelled = error instanceof Error && error.name === "AbortError";
+					const diagnostic = {
+						...fields,
+						result: cancelled ? "cancelled" : "failed",
+						failed_stage: stage,
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					};
+					if (cancelled) logger.info("offline_model_refresh.cancelled", diagnostic);
+					else logger.error("offline_model_refresh.failed", diagnostic);
+				}
+				throw error;
+			}
+		},
+	);
+}
+
+/** Catalog counts only: cache-only discovery does not disable benchmark API requests. */
+function offlineBenchModelSummary(registry: ModelRegistry): Record<string, unknown> {
 	try {
-		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
-		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
-		await modelRegistry.hydrateCredentialScopedModelCaches();
-		await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
+		const models = registry.getAll();
+		let companyModelCount = 0;
+		let zcodeModelCount = 0;
+		for (const model of models) {
+			if (model.provider === "company") companyModelCount++;
+			else if (model.provider === "zcode-api") zcodeModelCount++;
+		}
 		return {
-			modelRegistry: offline ? offlineBenchRegistry(modelRegistry) : modelRegistry,
-			settings,
-			close: () => authStorage.close(),
+			model_summary_available: true,
+			model_count: models.length,
+			available_model_count: registry.getAvailable().length,
+			company_model_count: companyModelCount,
+			zcode_model_count: zcodeModelCount,
 		};
-	} catch (error) {
-		authStorage.close();
-		throw error;
+	} catch {
+		// A diagnostic snapshot must not change the runtime or refresh outcome.
+		return { model_summary_available: false };
 	}
 }
 
@@ -101,6 +191,8 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
  * but pin the resolver's fallback refresh to the cache-only strategy.
  */
 function offlineBenchRegistry(registry: ModelRegistry): BenchModelRegistry {
+	// Resolution may invoke this closure after runtime creation's async context ended.
+	const context = logger.getLogContext();
 	return {
 		getAll: () => registry.getAll(),
 		getAvailable: () => registry.getAvailable(),
@@ -108,7 +200,51 @@ function offlineBenchRegistry(registry: ModelRegistry): BenchModelRegistry {
 		resolver: (model, sessionId) => registry.resolver(model, sessionId),
 		hasConfiguredAuth: model => registry.hasConfiguredAuth(model),
 		getDiscoverableProviders: () => registry.getDiscoverableProviders(),
-		refresh: () => registry.refresh("offline"),
+		refresh: () =>
+			logger.withLogContext(
+				{
+					...context,
+					parent_call_id: context.call_id,
+					call_id: `bench-refresh-${crypto.randomUUID()}`,
+				},
+				async () => {
+					const started = performance.now();
+					const fields = {
+						component: "offline-models",
+						event: "offline_model_refresh",
+						stage: "selector_miss_refresh",
+						strategy: "offline",
+						cache_only: true,
+					};
+					logger.info("offline_model_refresh.started", {
+						...fields,
+						result: "started",
+						...offlineBenchModelSummary(registry),
+						elapsed_ms: performance.now() - started,
+					});
+					try {
+						await registry.refresh("offline");
+						logger.info("offline_model_refresh.completed", {
+							...fields,
+							result: "completed",
+							...offlineBenchModelSummary(registry),
+							elapsed_ms: performance.now() - started,
+						});
+					} catch (error) {
+						const cancelled = error instanceof Error && error.name === "AbortError";
+						const diagnostic = {
+							...fields,
+							result: cancelled ? "cancelled" : "failed",
+							...offlineBenchModelSummary(registry),
+							elapsed_ms: performance.now() - started,
+							...logger.diagnosticError(error),
+						};
+						if (cancelled) logger.info("offline_model_refresh.cancelled", diagnostic);
+						else logger.error("offline_model_refresh.failed", diagnostic);
+						throw error;
+					}
+				},
+			),
 	};
 }
 

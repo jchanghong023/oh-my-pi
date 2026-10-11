@@ -1,7 +1,7 @@
 /**
  * `/team` controller dispatch-level tests: job-manager registration failures
  * surface as actionable /team messages instead of raw internal errors, and a
- * successful dispatch registers the job and lands the dispatch breadcrumb.
+ * successful dispatch registers the job and sends the dispatch breadcrumb.
  * Final delivery is acknowledged only after its durable append receipt.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -18,6 +18,7 @@ import {
 	startTeamDiscussion,
 	waitForSessionIdle,
 } from "@oh-my-pi/pi-coding-agent/team/controller";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -68,6 +69,61 @@ function stubSession(jobManager: JobManagerStub, sentMessages: { customType: str
 
 function teamSettings(): Settings {
 	return Settings.isolated({ "team.members": [MODEL_PATTERN] });
+}
+
+function expectDispatchFollowupFailure(
+	events: LogEvent[],
+	stage: "notice_dispatch" | "chat_rebuild" | "status_update",
+	canaries: string[],
+): void {
+	const registered = events.filter(event => event.context?.event === "team_dispatch_completed");
+	expect(registered).toHaveLength(1);
+	expect(registered[0]?.context).toMatchObject({
+		stage: "register",
+		result: "completed",
+		job_id: "bg_stub_1",
+	});
+	const operationId = registered[0]!.context?.operation_id;
+	expect(operationId).toEqual(expect.any(String));
+	expect(registered[0]!.context?.team_run_id).toEqual(expect.any(String));
+	expect(new Set(events.map(event => event.context?.operation_id))).toEqual(new Set([operationId]));
+	expect(new Set(events.map(event => event.context?.team_run_id)).size).toBe(1);
+
+	const stages = ["notice_dispatch", "chat_rebuild", "status_update"];
+	const failedIndex = stages.indexOf(stage);
+	const expected = stages.slice(0, failedIndex + 1).flatMap((current, index) => [
+		[current, "started"],
+		[current, index === failedIndex ? "failed" : "completed"],
+	]);
+	const followups = events.filter(event => String(event.context?.event).startsWith("team_dispatch_followup_"));
+	expect(followups.map(event => [event.context?.stage, event.context?.result])).toEqual(expected);
+	for (const event of followups) {
+		expect(event.level).toBe(event.context?.result === "failed" ? "warn" : "info");
+		expect(event.context).toMatchObject({
+			component: "team.controller",
+			event: `team_dispatch_followup_${event.context?.result}`,
+			job_id: "bg_stub_1",
+			job_registered: true,
+			notice_dispatch_completed: event.context?.stage !== "notice_dispatch" || event.context?.result === "completed",
+		});
+		if (event.context?.result !== "started") {
+			expect(typeof event.context?.elapsed_ms).toBe("number");
+			expect(Number.isFinite(event.context?.elapsed_ms)).toBe(true);
+			expect(event.context?.elapsed_ms as number).toBeGreaterThanOrEqual(0);
+		}
+	}
+	const failed = followups.at(-1)!;
+	expect(failed.context).toMatchObject({ error_type: "Error" });
+	expect(typeof failed.context?.followup_elapsed_ms).toBe("number");
+	expect(Number.isFinite(failed.context?.followup_elapsed_ms)).toBe(true);
+	expect(failed.context?.followup_elapsed_ms as number).toBeGreaterThanOrEqual(failed.context?.elapsed_ms as number);
+	const serialized = JSON.stringify(events);
+	for (const canary of canaries) expect(serialized).not.toContain(canary);
+	for (const event of events) {
+		for (const field of ["question", "content", "message", "error", "cwd", "path"]) {
+			expect(event.context).not.toHaveProperty(field);
+		}
+	}
 }
 
 function companyModel(id: string): Model {
@@ -148,7 +204,7 @@ describe("team controller dispatch", () => {
 		expect(output[0]).toContain("hub cancel");
 	});
 
-	it("registers without acknowledging the unfinished result, and lands the dispatch breadcrumb", async () => {
+	it("registers without acknowledging the unfinished result, and sends the dispatch breadcrumb", async () => {
 		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
 		const sent: { customType: string; content: string }[] = [];
 		const result = await startTeamDiscussion("分析 X", {
@@ -187,29 +243,149 @@ describe("team controller dispatch", () => {
 		expect(result.message).toContain("无法启动 /team");
 	});
 
-	it("still reports a started job when the dispatch breadcrumb write fails", async () => {
+	it("still reports a started job when sending the dispatch breadcrumb rejects", async () => {
 		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
 		const errors: string[] = [];
+		const output: string[] = [];
+		const calls: string[] = [];
+		const events: LogEvent[] = [];
 		const session = stubSession(jobManager, []);
-		// The job is already registered; only the breadcrumb write fails.
-		(session as unknown as { sendCustomMessage: () => Promise<never> }).sendCustomMessage = async () => {
-			throw new Error("session disposed");
-		};
-		const result = await startTeamDiscussion("分析 X", {
-			session,
-			settings: teamSettings(),
-			cwd: "/tmp/repo",
-			hooks: {
-				showError: (text: string) => {
-					errors.push(text);
-				},
-			},
+		const question = "NOTICE_QUESTION_CANARY";
+		const reason = "session disposed NOTICE_ERROR_CANARY";
+		const cwd = "/private/NOTICE_PATH_CANARY";
+		// Registration succeeds, but the notice call itself does not resolve.
+		const send = vi.spyOn(session, "sendCustomMessage").mockImplementation(async () => {
+			expect(jobManager.registerCalls).toBe(1);
+			calls.push("notice_dispatch");
+			throw new Error(reason);
 		});
-		expect(result.started).toBe(true);
-		expect(result.jobId).toBe("bg_stub_1");
-		expect(errors[0]).toContain("写入派发通知失败");
-		expect(errors[0]).toContain("session disposed");
+		const dispose = registerLogSink(event => {
+			if (event.context?.component === "team.controller") events.push(event);
+		});
+		try {
+			const result = await startTeamDiscussion(question, {
+				session,
+				settings: teamSettings(),
+				cwd,
+				hooks: {
+					rebuildChat: () => {
+						calls.push("chat_rebuild");
+					},
+					showStatus: () => {
+						calls.push("status_update");
+					},
+					showError: text => {
+						calls.push("showError");
+						errors.push(text);
+					},
+					output: text => {
+						calls.push("output");
+						output.push(text);
+					},
+				},
+			});
+			expect(result.started).toBe(true);
+			expect(result.jobId).toBe("bg_stub_1");
+			expect(result.message).toContain(`[team-dispatch ${result.jobId}]`);
+			expect(result.message).toContain(question);
+			expect(jobManager.registerCalls).toBe(1);
+			expect(jobManager.acknowledged).toEqual([]);
+			expect(calls).toEqual(["notice_dispatch", "showError", "output"]);
+			expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），但写入派发通知失败：${reason}`]);
+			expect(output).toEqual(errors);
+			expectDispatchFollowupFailure(events, "notice_dispatch", [
+				question,
+				"NOTICE_ERROR_CANARY",
+				cwd,
+				result.message!,
+			]);
+		} finally {
+			dispose();
+			send.mockRestore();
+		}
 	});
+
+	it.each(["chat_rebuild", "status_update"] as const)(
+		"keeps the registered job when %s throws after the notice call resolves false",
+		async failedStage => {
+			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+			const sent: { customType: string; content: string }[] = [];
+			const session = stubSession(jobManager, sent);
+			const calls: string[] = [];
+			const errors: string[] = [];
+			const output: string[] = [];
+			const events: LogEvent[] = [];
+			const question = "UI_QUESTION_CANARY";
+			const reason = `${failedStage} UI_ERROR_CANARY`;
+			const cwd = "/private/UI_PATH_CANARY";
+			const originalSend = session.sendCustomMessage.bind(session);
+			const send = vi.spyOn(session, "sendCustomMessage").mockImplementation(async (...args) => {
+				expect(jobManager.registerCalls).toBe(1);
+				calls.push("notice_dispatch");
+				const startedTurn = await originalSend(...args);
+				// This boolean describes turn startup, not durable persistence.
+				expect(startedTurn).toBe(false);
+				return startedTurn;
+			});
+			const dispose = registerLogSink(event => {
+				if (event.context?.component === "team.controller") events.push(event);
+			});
+			try {
+				const result = await startTeamDiscussion(question, {
+					session,
+					settings: teamSettings(),
+					cwd,
+					hooks: {
+						rebuildChat: () => {
+							calls.push("chat_rebuild");
+							if (failedStage === "chat_rebuild") throw new Error(reason);
+						},
+						showStatus: text => {
+							calls.push("status_update");
+							expect(text).toBe("Dispatched /team discussion bg_stub_1");
+							throw new Error(reason);
+						},
+						showError: text => {
+							calls.push("showError");
+							errors.push(text);
+						},
+						output: text => {
+							calls.push("output");
+							output.push(text);
+						},
+					},
+				});
+				expect(result.started).toBe(true);
+				expect(result.jobId).toBe("bg_stub_1");
+				expect(jobManager.registerCalls).toBe(1);
+				expect(jobManager.acknowledged).toEqual([]);
+				expect(sent).toEqual([{ customType: "team-dispatch", content: result.message! }]);
+				expect(sent[0]!.content).toContain(`[team-dispatch ${result.jobId}]`);
+				expect(sent[0]!.content).toContain(question);
+				expect(send).toHaveBeenCalledWith(
+					expect.objectContaining({
+						customType: "team-dispatch",
+						display: true,
+						details: { jobId: result.jobId, question, dispatch: true },
+					}),
+					{ triggerTurn: false, deliverAs: "nextTurn" },
+				);
+				expect(calls).toEqual([
+					"notice_dispatch",
+					"chat_rebuild",
+					...(failedStage === "status_update" ? ["status_update"] : []),
+					"showError",
+					"output",
+				]);
+				expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），但写入派发通知失败：${reason}`]);
+				expect(output).toEqual(errors);
+				expectDispatchFollowupFailure(events, failedStage, [question, "UI_ERROR_CANARY", cwd, sent[0]!.content]);
+			} finally {
+				dispose();
+				send.mockRestore();
+			}
+		},
+	);
 
 	it("forwards session-granted workspace directories to the subagent runner deps", () => {
 		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };

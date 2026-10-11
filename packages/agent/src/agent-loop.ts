@@ -2224,6 +2224,11 @@ async function streamAssistantResponse(
 							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
 							if (detection) {
 								const recovered = recoverHarmonyToolCall(finalMessage, detection);
+								if (recovered) {
+									if (perCallContextTokens > 0) recovered.message.perCallContextTokens = perCallContextTokens;
+									if (perCallContextTokensBySource)
+										recovered.message.perCallContextTokensBySource = perCallContextTokensBySource;
+								}
 								const removed = recovered?.removed ?? extractHarmonyRemoved(finalMessage, detection);
 								if (addedPartial) {
 									emitDiscardedHarmonyPartial(
@@ -2525,6 +2530,11 @@ async function streamAssistantResponse(
 					const detection = detectHarmonyLeakInAssistantMessage(trailing);
 					if (detection) {
 						const recovered = recoverHarmonyToolCall(trailing, detection);
+						if (recovered) {
+							if (perCallContextTokens > 0) recovered.message.perCallContextTokens = perCallContextTokens;
+							if (perCallContextTokensBySource)
+								recovered.message.perCallContextTokensBySource = perCallContextTokensBySource;
+						}
 						const removed = recovered?.removed ?? extractHarmonyRemoved(trailing, detection);
 						if (addedPartial) {
 							emitDiscardedHarmonyPartial(

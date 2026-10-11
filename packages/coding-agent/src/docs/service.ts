@@ -309,7 +309,41 @@ export class DocsService {
 	}
 
 	list(): DocsIndexSummary[] {
-		return this.storage.list();
+		const context = logger.getLogContext();
+		return logger.withLogContext(
+			{
+				operation_id: context.operation_id ?? `docs-list-${crypto.randomUUID()}`,
+				parent_call_id: context.call_id,
+				call_id: `docs-list-${crypto.randomUUID()}`,
+			},
+			() => {
+				const started = performance.now();
+				const fields = { component: "docs", event: "docs.list", stage: "query" };
+				logger.info("docs.list.started", {
+					...fields,
+					result: "started",
+					elapsed_ms: performance.now() - started,
+				});
+				try {
+					const indexes = this.storage.list();
+					logger.info("docs.list.completed", {
+						...fields,
+						result: "completed",
+						index_count: indexes.length,
+						elapsed_ms: performance.now() - started,
+					});
+					return indexes;
+				} catch (error) {
+					logger.error("docs.list.failed", {
+						...fields,
+						result: "failed",
+						elapsed_ms: performance.now() - started,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 
 	async init(directory: string, name: string, options: DocsBuildOptions = {}): Promise<DocsBuildResult> {
@@ -541,7 +575,7 @@ export class DocsService {
 					const log =
 						cancelled || expectedResult || stage === "name_validation"
 							? logger.info
-							: stage === "lock" || stage === "scan"
+							: stage === "lock"
 								? logger.warn
 								: logger.error;
 					log("docs.init.finished", {

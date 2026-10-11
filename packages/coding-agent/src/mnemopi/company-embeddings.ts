@@ -40,7 +40,7 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 	// Mnemopi's explicit API-routing flag makes them embedding configuration here.
 	const overrideReason = model
 		? "explicit_model"
-		: cfgMnemopiEmbeddingApiUrl.get(settings)?.trim()
+		: settings.isConfigured(cfgMnemopiEmbeddingApiUrl)
 			? "explicit_url"
 			: settings.isConfigured(cfgMnemopiEmbeddingApiKey)
 				? "explicit_credentials"

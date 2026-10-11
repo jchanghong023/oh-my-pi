@@ -176,6 +176,7 @@ import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memor
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
+import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
 import { RepoLifecycle } from "./repo/lifecycle";
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
@@ -4362,11 +4363,19 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// only when a provider fetches them, never held as pixels here.
 			blobBroker,
 		);
+		const offlineSystemNotice = options.offline ? offlineNoticePrompt.trim() : undefined;
+		const withOfflineSystemNotice = (context: Context): Context => {
+			if (!offlineSystemNotice || context.systemPrompt?.some(block => block.includes(offlineSystemNotice))) {
+				return context;
+			}
+			return { ...context, systemPrompt: [...(context.systemPrompt ?? []), offlineSystemNotice] };
+		};
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
 			if (isJchToolsAgentModel(transformModel)) {
-				return projectJchToolsContext(context, sessionManager.getCwd());
+				return withOfflineSystemNotice(projectJchToolsContext(context, sessionManager.getCwd()));
 			}
-			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+			const offlineContext = withOfflineSystemNotice(context);
+			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;
 			transformed = await snapcompactInline.transform(transformed, transformModel);
 			transformed = clampProviderContextImages(transformed, transformModel);
 			transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
@@ -5563,9 +5572,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
 						if (isJchToolsAgentModel(transformModel)) {
-							return projectJchToolsContext(context, sessionManager.getCwd());
+							return withOfflineSystemNotice(projectJchToolsContext(context, sessionManager.getCwd()));
 						}
-						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+						const offlineContext = withOfflineSystemNotice(context);
+						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;
 						transformed = clampProviderContextImages(transformed, transformModel);
 						transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
 						transformed = await dropUnreadableContextImages(transformed, transformModel);

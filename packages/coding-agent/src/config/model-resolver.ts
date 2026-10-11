@@ -1432,7 +1432,10 @@ export function resolveAgentAdvisorRolePattern(pattern: string, settings?: Model
 			MAX_THINKING_SUFFIX_OPTIONS,
 		);
 		if (getModelRoleAlias(base, settings) !== "advisor") return resolved;
-		const configured = settings?.getModelRole("advisor")?.trim();
+		const fallback = ROLE_CONFIGURED_FALLBACK.advisor;
+		const configured =
+			settings?.getModelRole("advisor")?.trim() ||
+			(fallback && settings?.getModelRole(fallback.role)?.trim() ? formatModelRoleAlias(fallback.role) : undefined);
 		if (!configured) return resolved;
 		return normalizeModelPatternList(configured).map(value => (level ? `${value}:${level}` : value));
 	});

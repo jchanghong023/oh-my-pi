@@ -5,7 +5,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { markdownSectionContexts, normalizePlainText } from "./markdown";
 import type { DocsIndexSummary } from "./types";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /** Indexes being built are named with this prefix and renamed once complete. */
 export const BUILDING_INDEX_PREFIX = "__building__";
@@ -183,14 +183,14 @@ export class DocsStorage {
 									byteEnd: number;
 									rawMarkdown: string;
 								}>;
-								for (const { section: row, fencePrefix } of markdownSectionContexts(rows)) {
+								for (const { section: row, fencePrefix, continuesLine } of markdownSectionContexts(rows)) {
 									insert.run(
 										row.id,
 										row.id,
 										row.index_id,
 										row.ordinal === 0 ? normalizeFts(row.relative_path) : "",
 										normalizeFts(row.heading_path),
-										normalizeFts(normalizePlainText(row.rawMarkdown, fencePrefix)),
+										normalizeFts(normalizePlainText(row.rawMarkdown, fencePrefix, continuesLine)),
 									);
 									migratedSections++;
 								}
@@ -336,14 +336,18 @@ export class DocsStorage {
 	}
 
 	remove(name: string): boolean {
-		const row = this.db
-			.query("SELECT id FROM doc_indexes WHERE name=? AND name NOT GLOB ?")
-			.get(name, `${BUILDING_INDEX_PREFIX}*`) as {
-			id: number;
-		} | null;
-		if (!row) return false;
-		this.removeById(row.id);
-		return true;
+		return this.transaction(() => {
+			// Keep the name lookup and deletion on one snapshot: another process
+			// may remove this index and reuse its rowid while importing a different one.
+			const row = this.db
+				.query("SELECT id FROM doc_indexes WHERE name=? AND name NOT GLOB ?")
+				.get(name, `${BUILDING_INDEX_PREFIX}*`) as {
+				id: number;
+			} | null;
+			if (!row) return false;
+			this.removeById(row.id);
+			return true;
+		});
 	}
 
 	removeById(id: number): void {

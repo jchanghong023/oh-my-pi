@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@oh-my-pi/pi-utils";
+import { clearSubmittedText } from "../slash-commands/helpers/draft";
 import type { SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "../slash-commands/types";
 
 interface GitStep {
@@ -311,7 +312,7 @@ export const JCH_GIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						runtime.ctx.showError("Usage: /jchgitdiscardall [--ignored=true|false]");
 						return { consumed: true };
 					}
-					runtime.ctx.editor.setText("");
+					clearSubmittedText(runtime);
 					// Keep discard steps in order; `clean` joins after its repo-wide cwd is resolved.
 					const steps: GitStep[] = [
 						{ args: ["fetch", "--all", "--prune"] },

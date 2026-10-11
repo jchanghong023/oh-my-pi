@@ -62,13 +62,13 @@ install_log() {
 install_log_init() {
     log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
     explicit_root=false
-    expanded_root="${OMP_CONFIG_ROOT:-}"
+    expanded_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$expanded_root" in
         "~") expanded_root="$HOME" ;;
         "~/"*) expanded_root="$HOME/${expanded_root#??}" ;;
     esac
     case "$expanded_root" in /*) log_root="$expanded_root"; explicit_root=true ;; esac
-    log_profile="${OMP_PROFILE-${PI_PROFILE:-}}"
+    log_profile="$(printf '%s' "${OMP_PROFILE-${PI_PROFILE:-}}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     # Invalid profile input must not make a bootstrap install fail.
     case "$log_profile" in
         ""|default) log_profile="" ;;
@@ -144,6 +144,8 @@ install_log INFO install_started 'result=started version_selection=pending'
 # Accept only a bounded release-version identifier in diagnostic fields.
 install_log_version() {
     INSTALL_VERSION=redacted
+    # grep anchors apply per line; reject control characters before matching.
+    case "$1" in *[!v0-9.+fork]*) return 0 ;; esac
     if [ "${#1}" -le 64 ] && printf '%s\n' "$1" | LC_ALL=C grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(\+fork\.[0-9]+)?$'; then
         INSTALL_VERSION="$1"
     fi

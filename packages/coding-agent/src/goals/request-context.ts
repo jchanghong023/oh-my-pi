@@ -82,7 +82,11 @@ export function buildGoalAutoOrchestrateMessage(
 		// including whitespace, blank lines, markdown and template-looking text.
 		content: renderGoalAutoOrchestrate({
 			objective: state.goal.objective,
-			goalContext: renderGoalPrompt("active", state.goal, { omitObjective: true, authority: "user" }),
+			goalContext: renderGoalPrompt("active", state.goal, {
+				omitObjective: true,
+				authority: "user",
+				omitGoalToolInstructions: !tools.includes("goal"),
+			}),
 			todoContext,
 			orchestrateRules,
 		}),

@@ -10,11 +10,13 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/indexed-session-storage";
 import {
 	FileSessionStorage,
+	type SessionDeletionDiagnostic,
 	SessionLockError,
 	SessionWriteConflictError,
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 
 class ControlledTitleUpdateBackend implements SessionStorageBackend {
 	readonly #sessionPath: string;
@@ -388,6 +390,101 @@ describe("FileSessionStorage.deleteSessionWithArtifactsIf", () => {
 		await expect(storage.deleteSessionWithArtifactsIf(sessionPath, () => false)).resolves.toBe(false);
 		expect(fs.existsSync(sessionPath)).toBe(true);
 		expect(fs.existsSync(bakPath)).toBe(true);
+	});
+	it("reports backup residue as partial while preserving best-effort deletion", async () => {
+		const sessionPath = await createSessionFile("PRIVATE_BACKUP_SESSION");
+		const bakPath = `${sessionPath}.4815162342.bak`;
+		await Bun.write(bakPath, "private stale backup\n");
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		const unlinkSync = fs.unlinkSync.bind(fs);
+		const failure = Object.assign(new Error("PRIVATE_BACKUP_ERROR"), { code: "EACCES" });
+		const spy = vi.spyOn(fs, "unlinkSync").mockImplementation(file => {
+			if (file === bakPath) throw failure;
+			unlinkSync(file);
+		});
+		const diagnostic: SessionDeletionDiagnostic = {
+			stage: "primary_delete",
+			primaryDeleted: false,
+			backupFailureCount: 0,
+			artifactsRemoved: false,
+		};
+		try {
+			await expect(storage.deleteSessionWithArtifactsIf(sessionPath, () => true, diagnostic)).resolves.toBe(true);
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(bakPath)).toBe(true);
+			expect(diagnostic).toEqual({
+				stage: "completed",
+				primaryDeleted: true,
+				backupFailureCount: 1,
+				artifactsRemoved: true,
+			});
+			expect(
+				events.find(
+					event => event.context?.event === "session_storage_delete" && event.context.result === "partial",
+				),
+			).toMatchObject({
+				level: "warn",
+				context: {
+					primary_deleted: true,
+					backup_failure_count: 1,
+					artifacts_removed: true,
+					partial: true,
+				},
+			});
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_BACKUP");
+		} finally {
+			spy.mockRestore();
+			dispose();
+		}
+	});
+
+	it("retains the primary deletion fact when artifact cleanup fails", async () => {
+		const sessionPath = await createSessionFile("PRIVATE_ARTIFACT_SESSION");
+		const artifactsDir = sessionPath.slice(0, -6);
+		await fsp.mkdir(artifactsDir);
+		await Bun.write(path.join(artifactsDir, "payload.txt"), "private artifact\n");
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		const rmSync = fs.rmSync.bind(fs);
+		const spy = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+			if (target === artifactsDir) throw Object.assign(new Error("PRIVATE_ARTIFACT_ERROR"), { code: "EACCES" });
+			rmSync(target, options);
+		});
+		const diagnostic: SessionDeletionDiagnostic = {
+			stage: "primary_delete",
+			primaryDeleted: false,
+			backupFailureCount: 0,
+			artifactsRemoved: false,
+		};
+		try {
+			expect(() => storage.deleteSessionWithArtifactsIf(sessionPath, () => true, diagnostic)).toThrow();
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(artifactsDir)).toBe(true);
+			expect(diagnostic).toEqual({
+				stage: "artifact_cleanup",
+				primaryDeleted: true,
+				backupFailureCount: 0,
+				artifactsRemoved: false,
+			});
+			expect(
+				events.find(
+					event => event.context?.event === "session_storage_delete" && event.context.result === "partial",
+				),
+			).toMatchObject({
+				level: "error",
+				context: {
+					stage: "artifact_cleanup",
+					primary_deleted: true,
+					artifacts_removed: false,
+					partial: true,
+				},
+			});
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_ARTIFACT");
+		} finally {
+			spy.mockRestore();
+			dispose();
+		}
 	});
 });
 

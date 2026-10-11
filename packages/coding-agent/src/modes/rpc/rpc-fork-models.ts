@@ -58,7 +58,10 @@ export interface RpcModelRoleServiceDeps {
 	 * `cloneForCwd` at creation, so without this their role resolution
 	 * (`/switch @role`, subagent role picks) keeps the pre-save value.
 	 */
-	readonly reloadSessionSettings?: () => Promise<void>;
+	readonly reloadSessionSettings?: () => Promise<void | {
+		result: "completed" | "degraded";
+		failed_stage?: "settings_reload" | "plan_refresh";
+	}>;
 }
 
 /** Options for {@link RpcModelRoleService.listRoles}. */
@@ -280,13 +283,23 @@ export class RpcModelRoleService {
 			// Sessions hold cloneForCwd snapshots of the global layer: reload their
 			// persisted layers so post-save role resolution adopts the new value.
 			stage = "reload";
+			const reloadAvailable = this.#deps.reloadSessionSettings !== undefined;
 			logger.info("RPC model role session reload started", {
 				...fields(),
 				result: "started",
-				reload_available: this.#deps.reloadSessionSettings !== undefined,
+				reload_available: reloadAvailable,
 			});
-			await this.#deps.reloadSessionSettings?.();
-			logger.info("RPC model role session reload completed", { ...fields(), result: "completed" });
+			const reloadOutcome = await this.#deps.reloadSessionSettings?.();
+			const reloadResult = reloadOutcome ? reloadOutcome.result : reloadAvailable ? "completed" : "skipped";
+			const reloadFields = { ...fields(), result: reloadResult, reload_available: reloadAvailable };
+			if (reloadOutcome && reloadOutcome.result === "degraded") {
+				logger.warn("RPC model role session reload degraded", {
+					...reloadFields,
+					failed_stage: reloadOutcome.failed_stage,
+				});
+			} else {
+				logger.info("RPC model role session reload finished", reloadFields);
+			}
 			stage = "emit";
 			logger.info("RPC model role settings notification started", { ...fields(), result: "started" });
 			this.#deps.emit({ type: "settings_changed", scope: "user" });
@@ -299,6 +312,7 @@ export class RpcModelRoleService {
 			logger.info("RPC model role save completed", {
 				...fields(),
 				result: "completed",
+				reload_result: reloadResult,
 				source: role.source,
 				resolved: role.effectiveModel !== undefined,
 			});

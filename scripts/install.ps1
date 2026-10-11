@@ -60,6 +60,7 @@ function Initialize-InstallLog {
         $configDir = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
         $root = Join-Path $homeDir $configDir
         $explicitRoot = $env:OMP_CONFIG_ROOT
+        if ($explicitRoot) { $explicitRoot = $explicitRoot.Trim() }
         if ($explicitRoot -eq "~") { $explicitRoot = $homeDir }
         elseif ($explicitRoot -match '^~[/\\]') { $explicitRoot = Join-Path $homeDir $explicitRoot.Substring(2) }
         # IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.

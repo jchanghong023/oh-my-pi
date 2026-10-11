@@ -2,12 +2,19 @@ import * as fs from "node:fs";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
-import { getAgentDir, getLogsDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getLogsDir, logger } from "@oh-my-pi/pi-utils";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { discoverJchTools, discoverJchToolsModels } from "../../src/config/jchtools-discovery";
 import { JCHTOOLS_API, streamJchToolsAgent } from "../../src/config/jchtools-provider";
 import { Settings } from "../../src/config/settings";
 import { DocsService } from "../../src/docs/service";
+import {
+	type PendingExtensionRequest,
+	type RpcExtensionUIResponse,
+	RpcPendingExtensionRequests,
+	requestRpcDialog,
+	requestRpcEditor,
+} from "../../src/modes/rpc/rpc-mode";
 import { WikiTool } from "../../src/tools/wiki";
 
 const [mode, root, canary] = process.argv.slice(2);
@@ -250,5 +257,75 @@ async function transportProbe() {
 	}
 }
 
-const result = mode === "transport" ? await transportProbe() : await docsProbe();
+async function boundariesProbe() {
+	const service = new DocsService({ agentDir: getAgentDir(), cwd: root });
+	let listFailure: string | undefined;
+	try {
+		service.list();
+		service.storage.db.exec("DROP TABLE doc_indexes");
+		try {
+			service.list();
+		} catch (error) {
+			listFailure = error instanceof Error ? error.name : typeof error;
+		}
+	} finally {
+		service.close();
+	}
+	const dialogs: Array<{ kind: string; value?: string; failure?: string; pending: number; methods: unknown[] }> = [];
+	for (const kind of ["responded", "cancelled", "timed_out", "aborted", "failed", "disconnected", "editor_aborted"]) {
+		const pending = new RpcPendingExtensionRequests();
+		const controller = new AbortController();
+		const methods: unknown[] = [];
+		let saved: PendingExtensionRequest | undefined;
+		let id: string | undefined;
+		const output = (frame: object) => {
+			const request = frame as { id: string; method: string };
+			methods.push(request.method);
+			if (request.method === "cancel") return;
+			id = request.id;
+			saved = pending.get(request.id);
+			queueMicrotask(() =>
+				logger.withLogContext({ operation_id: "boundary-control", request_id: "control-response" }, () => {
+					if (kind === "responded" || kind === "failed") {
+						saved?.resolve({ type: "extension_ui_response", id: request.id, value: `${canary}ANSWER` });
+					} else if (kind === "cancelled") {
+						saved?.resolve({ type: "extension_ui_response", id: request.id, cancelled: true });
+					} else if (kind === "disconnected") {
+						pending.rejectAll(`${canary}DISCONNECTED`);
+					} else if (kind === "aborted" || kind === "editor_aborted") controller.abort();
+				}),
+			);
+		};
+		const options = { signal: controller.signal, ...(kind === "timed_out" ? { timeout: 1 } : {}) };
+		const promise = logger.withLogContext({ operation_id: "boundary-parent", request_id: "dialog-command" }, () =>
+			kind === "editor_aborted"
+				? requestRpcEditor(pending, output, `${canary}TITLE`, `${canary}PREFILL`, options)
+				: requestRpcDialog<string | undefined>(
+						pending,
+						output,
+						options,
+						undefined,
+						{ method: "input", title: `${canary}TITLE`, placeholder: `${canary}PLACEHOLDER` },
+						(response: RpcExtensionUIResponse) => {
+							if (kind === "failed") throw new Error(`${canary}PARSEFAILURE`);
+							return "value" in response ? response.value : undefined;
+						},
+					),
+		);
+		let value: string | undefined;
+		let failure: string | undefined;
+		try {
+			value = await promise;
+		} catch (error) {
+			failure = error instanceof Error ? error.name : typeof error;
+		}
+		// Stale host answers may still hold the old resolver after local settlement.
+		if (id && saved) saved.resolve({ type: "extension_ui_response", id, value: `${canary}LATEANSWER` });
+		dialogs.push({ kind, value, failure, pending: pending.size, methods });
+	}
+	return { listFailure, dialogs };
+}
+
+const result =
+	mode === "transport" ? await transportProbe() : mode === "boundaries" ? await boundariesProbe() : await docsProbe();
 process.stdout.write(JSON.stringify({ logsDir: getLogsDir(), pid: process.pid, ...result }));

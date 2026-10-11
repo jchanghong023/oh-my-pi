@@ -4,9 +4,10 @@
 
 ### Added
 
-- Added `/jch-workflowzbatch <items> <concurrency> <task>` to expand independent batch requests through `workflowz`, with file-scoped checks and explicit no-test/no-repository-wide-check instructions.
+- Added `/jch-workflowzbatch <items> <concurrency> <task>` to expand independent batch requests through `workflowz`, including rpc-ui v3 discovery, completion and prompt dispatch, with separate task counts and concurrency, worker-owned execution, coordinator-only summaries instead of mandatory centralized re-review or checks, and file-scoped no-test/no-repository-wide-check instructions.
 - Added correlated stage and terminal-result logs for fork JchTools discovery and remote Agents, team, Goal, RPC controllers and persistence, docs/wiki, repo/AST, company model selection, compaction, and JCH Git.
 - Added redacted lifecycle and recovery logs for local gates, their supervisor and WSL stages, standalone installers, and `omp update`; provider-error turns no longer copy raw server error bodies into diagnostic files.
+- Completed INFO-visible dialog/discovery outcomes and accurate reload, dashboard, Goal, deletion, team, offline catalog, and WSL-preflight diagnostics without changing protocol results.
 
 ### Added
 
@@ -16,6 +17,23 @@
 
 ### Fixed
 
+- Preserved cleared project roles under offline company defaults and YAML comments and sibling alias values when saving a single role.
+- Fixed offline startup model scopes omitting loaded extension models and cold-resumed sessions losing the offline request notice.
+- Kept late fork-canary startup warnings visible instead of dropping them after startup notifications were drained.
+- Fixed concurrent wiki removal deleting an unrelated newly imported index and long-line fragments losing searchable text at artificial fence boundaries.
+- Preserved indexed files whose literal paths contain leading or trailing whitespace during automatic updates.
+- Reused existing wiki and repo dashboards instead of stacking duplicate panels.
+- Preserved new drafts typed after an asynchronous Ctrl+Enter submission of `/jchgitdiscardall`.
+- Applied the allowed-model scope to every team participant and rejected backend Agent channels that cannot enforce read-only structured discussion.
+- Included full recheck evidence, impact, and summaries in team synthesis.
+- Stopped cancelled RPC plan entry from enabling the mode and expired loops from starting a delayed additional turn.
+- Closed old BTW side turns before loop resets, refreshed recent-session titles after RPC renames, and completed diagnostics for locally handled prompts.
+- Ignored reserved JchTools configuration before validation and restored scoped discovery when switching back from cache-only refresh.
+- Preserved configured advisor fallback roles in child agents and used the selected role branch's reasoning level for eval completions.
+- Omitted unavailable frontend goal-tool instructions from auto-orchestrate requests without dropping the objective or unattended policy.
+- Preserved failed, cancelled, and fallback outcomes in automatic compaction diagnostics.
+- Fixed malformed JTD references throwing before the normal unresolved-reference diagnostic.
+- Kept installer diagnostics under the normalized configuration root and profile and redacted multiline release references.
 - Fixed `/jch-workflowzbatch` altering whitespace-sensitive task text, including string-literal trailing spaces, CRLF line endings, repeated blank lines, and table padding.
 - Fixed SDK and RPC sessions keeping a stale MCP tool list when a server's tools changed while extensions were loading; `createAgentSession` now adopts the change before it returns ([#11315](https://github.com/can1357/oh-my-pi/pull/11315) by [@aktanazat](https://github.com/aktanazat)).
 - `omp plugin install` now passes raw non-GitHub git URLs (`https://git.example.com/group/repo`, `ssh://…`) to bun as `git+…` so they are cloned via git instead of being misread as an npm tarball (ZlibError: error decompressing). Inline userinfo credentials are stripped from the spec — `bun install` persists it into `plugins/package.json` and `bun.lock`, and a long-lived repository token must not land in those files; private repositories authenticate via SSH, a git credential helper, or `.netrc` ([#11810](https://github.com/can1357/oh-my-pi/pull/11810) by [@blindcat-10835](https://github.com/blindcat-10835)).

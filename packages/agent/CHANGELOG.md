@@ -8,6 +8,9 @@
 
 ### Fixed
 
+- Preserved request-only usage accounting when recovering Harmony tool calls.
+- Avoided underestimating restored history after anonymous extension context replacements by using the existing full local prompt estimate.
+- Corrected V2 compaction diagnostics when a remote summary remains available after native fallback fails.
 - Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 

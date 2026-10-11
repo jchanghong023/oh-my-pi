@@ -222,6 +222,11 @@ export type PendingExtensionRequest = {
 export class RpcPendingExtensionRequests extends Map<string, PendingExtensionRequest> {
 	#closedError: Error | undefined;
 
+	/** Diagnostic state only; pending request rejection semantics stay unchanged. */
+	get closed(): boolean {
+		return this.#closedError !== undefined;
+	}
+
 	override set(id: string, request: PendingExtensionRequest): this {
 		if (this.#closedError) {
 			request.reject(this.#closedError);
@@ -1302,6 +1307,50 @@ export async function requestRpcAskDialog(
 	return timedOut ? timedOutAskDialogResult(questions) : result;
 }
 
+function startRpcDialogDiagnostic(id: string, method: unknown) {
+	const context = logger.getLogContext();
+	const fields = {
+		...context,
+		operation_id: context.operation_id ?? `rpc-dialog-${id}`,
+		session_id: context.session_id,
+		session_generation: context.session_generation,
+		request_id: context.request_id,
+		command: context.command,
+		component: "rpc-dialog",
+		dialog_id: rpcDiagnosticId(id, true),
+		method:
+			method === "select" || method === "confirm" || method === "input" || method === "ask" || method === "editor"
+				? method
+				: "unknown",
+	};
+	const started = performance.now();
+	let terminalLogged = false;
+	logger.info("RPC dialog started", {
+		...fields,
+		event: "rpc_dialog_started",
+		stage: "request",
+		result: "started",
+	});
+	return (
+		result: "responded" | "cancelled" | "timed_out" | "aborted" | "disconnected" | "failed",
+		stage: "request" | "response" | "abort" | "timeout" | "output",
+		error?: unknown,
+	) => {
+		if (terminalLogged) return;
+		terminalLogged = true;
+		const terminal = {
+			...fields,
+			event: "rpc_dialog_terminal",
+			stage,
+			result,
+			elapsed_ms: performance.now() - started,
+			...(error === undefined ? {} : logger.diagnosticError(error)),
+		};
+		if (result === "failed") logger.error("RPC dialog failed", terminal);
+		else logger.info("RPC dialog ended", terminal);
+	};
+}
+
 export function requestRpcEditor(
 	pendingRequests: Map<string, PendingExtensionRequest>,
 	output: RpcOutput,
@@ -1310,9 +1359,12 @@ export function requestRpcEditor(
 	dialogOptions?: ExtensionUIDialogOptions,
 	editorOptions?: { promptStyle?: boolean },
 ): Promise<string | undefined> {
-	if (dialogOptions?.signal?.aborted) return Promise.resolve(undefined);
-
-	const id = Snowflake.next() as string;
+	const id = dialogOptions?.signal?.aborted ? `rpc-dialog-${crypto.randomUUID()}` : (Snowflake.next() as string);
+	const logTerminal = startRpcDialogDiagnostic(id, "editor");
+	if (dialogOptions?.signal?.aborted) {
+		logTerminal("aborted", "request");
+		return Promise.resolve(undefined);
+	}
 	const { promise, resolve, reject } = Promise.withResolvers<string | undefined>();
 	let settled = false;
 
@@ -1320,49 +1372,65 @@ export function requestRpcEditor(
 		dialogOptions?.signal?.removeEventListener("abort", onAbort);
 		pendingRequests.delete(id);
 	};
-	const finish = (value: string | undefined) => {
+	const finish = (value: string | undefined, result: "responded" | "cancelled" | "timed_out" | "aborted") => {
 		if (settled) return;
 		settled = true;
 		cleanup();
+		logTerminal(result, result === "aborted" ? "abort" : "response");
 		resolve(value);
 	};
 	const fail = (error: Error) => {
 		if (settled) return;
 		settled = true;
 		cleanup();
+		logTerminal(
+			pendingRequests instanceof RpcPendingExtensionRequests && pendingRequests.closed ? "disconnected" : "failed",
+			"response",
+			error,
+		);
 		reject(error);
 	};
 	const onAbort = () => {
-		output({
-			type: "extension_ui_request",
-			id: Snowflake.next() as string,
-			method: "cancel",
-			targetId: id,
-		} as RpcExtensionUIRequest);
-		finish(undefined);
+		try {
+			output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "cancel",
+				targetId: id,
+			} as RpcExtensionUIRequest);
+		} catch (error) {
+			logTerminal("failed", "output", error);
+			throw error;
+		}
+		finish(undefined, "aborted");
 	};
 
 	dialogOptions?.signal?.addEventListener("abort", onAbort, { once: true });
 	pendingRequests.set(id, {
 		resolve: response => {
 			if ("cancelled" in response && response.cancelled) {
-				finish(undefined);
+				finish(undefined, response.timedOut ? "timed_out" : "cancelled");
 			} else if ("value" in response) {
-				finish(response.value);
+				finish(response.value, "responded");
 			} else {
-				finish(undefined);
+				finish(undefined, "responded");
 			}
 		},
 		reject: fail,
 	});
-	output({
-		type: "extension_ui_request",
-		id,
-		method: "editor",
-		title,
-		prefill,
-		promptStyle: editorOptions?.promptStyle,
-	} as RpcExtensionUIRequest);
+	try {
+		output({
+			type: "extension_ui_request",
+			id,
+			method: "editor",
+			title,
+			prefill,
+			promptStyle: editorOptions?.promptStyle,
+		} as RpcExtensionUIRequest);
+	} catch (error) {
+		logTerminal("failed", "output", error);
+		throw error;
+	}
 	return promise;
 }
 
@@ -1375,9 +1443,12 @@ export function requestRpcDialog<T>(
 	request: Record<string, unknown>,
 	parseResponse: (response: RpcExtensionUIResponse) => T,
 ): Promise<T> {
-	if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
-
-	const id = Snowflake.next() as string;
+	const id = opts?.signal?.aborted ? `rpc-dialog-${crypto.randomUUID()}` : (Snowflake.next() as string);
+	const logTerminal = startRpcDialogDiagnostic(id, request.method);
+	if (opts?.signal?.aborted) {
+		logTerminal("aborted", "request");
+		return Promise.resolve(defaultValue);
+	}
 	const { promise, resolve, reject } = Promise.withResolvers<T>();
 	let timeoutId: NodeJS.Timeout | undefined;
 
@@ -1388,26 +1459,39 @@ export function requestRpcDialog<T>(
 	};
 	// Tells the host to close a dialog omp has already settled, so a late answer
 	// cannot look actionable after abort or timeout.
-	const cancelHostDialog = () =>
-		output({
-			type: "extension_ui_request",
-			id: Snowflake.next() as string,
-			method: "cancel",
-			targetId: id,
-		} as RpcExtensionUIRequest);
+	const cancelHostDialog = () => {
+		try {
+			output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "cancel",
+				targetId: id,
+			} as RpcExtensionUIRequest);
+		} catch (error) {
+			logTerminal("failed", "output", error);
+			throw error;
+		}
+	};
 	const onAbort = () => {
 		cancelHostDialog();
 		cleanup();
+		logTerminal("aborted", "abort");
 		resolve(defaultValue);
 	};
 	opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 	if (opts?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
-			opts.onTimeout?.();
+			try {
+				opts.onTimeout?.();
+			} catch (error) {
+				logTerminal("failed", "timeout", error);
+				throw error;
+			}
 			cancelHostDialog();
 			cleanup();
 			resolve(defaultValue);
+			logTerminal("timed_out", "timeout");
 		}, opts.timeout);
 	}
 
@@ -1415,14 +1499,38 @@ export function requestRpcDialog<T>(
 		resolve: response => {
 			cleanup();
 			try {
-				resolve(parseResponse(response));
+				const value = parseResponse(response);
+				logTerminal(
+					"cancelled" in response && response.cancelled
+						? response.timedOut
+							? "timed_out"
+							: "cancelled"
+						: "responded",
+					"response",
+				);
+				resolve(value);
 			} catch (err) {
+				logTerminal("failed", "response", err);
 				reject(err);
 			}
 		},
-		reject,
+		reject: error => {
+			logTerminal(
+				pendingRequests instanceof RpcPendingExtensionRequests && pendingRequests.closed
+					? "disconnected"
+					: "failed",
+				"response",
+				error,
+			);
+			reject(error);
+		},
 	});
-	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
+	try {
+		output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
+	} catch (error) {
+		logTerminal("failed", "output", error);
+		throw error;
+	}
 	return promise;
 }
 /**
@@ -1614,6 +1722,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			const generation = session.sessionGeneration;
 			return sessionChangeGate.enqueue(async () => {
 				if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
+				await btw.close();
+				if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
 				await beginModeSessionChange(true);
 				let changed = false;
 				try {
@@ -1671,17 +1781,39 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		getModelRegistry: () => session.modelRegistry,
 		emit: output,
 		reloadSessionSettings: async () => {
+			const started = performance.now();
+			let stage: "settings_reload" | "plan_refresh" = "settings_reload";
+			logger.info("RPC model role session settings reload started", {
+				component: "rpc",
+				event: "rpc_settings_reload_started",
+				stage,
+				result: "started",
+				persisted: true,
+			});
 			try {
 				await session.settings.reloadFromDisk();
+				stage = "plan_refresh";
 				await planController.refreshModelRole();
+				logger.info("RPC model role session settings reload completed", {
+					component: "rpc",
+					event: "rpc_settings_reload_terminal",
+					stage,
+					result: "completed",
+					persisted: true,
+					elapsed_ms: performance.now() - started,
+				});
+				return { result: "completed" as const };
 			} catch (err) {
 				logger.warn("RPC model role session settings reload failed", {
 					component: "rpc",
 					event: "rpc_settings_reload_failed",
-					stage: "settings_reload",
-					result: "failed",
+					stage,
+					result: "degraded",
+					persisted: true,
+					elapsed_ms: performance.now() - started,
 					...logger.diagnosticError(err),
 				});
+				return { result: "degraded" as const, failed_stage: stage };
 			}
 		},
 	});
@@ -2114,8 +2246,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		ticket: RpcPromptTicket | undefined,
 		loopSubmission = false,
 		continuationCurrent?: () => boolean,
-	): Promise<OrderedInputOutcome> =>
-		inputGate.enqueue(async () => {
+	): Promise<OrderedInputOutcome> => {
+		const started = performance.now();
+		const context = { ...logger.getLogContext() };
+		return inputGate.enqueue(async () => {
 			let sessionId = session.sessionId;
 			let sessionGeneration = session.sessionGeneration;
 			const isCurrent = () =>
@@ -2125,19 +2259,42 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				session.sessionId === sessionId &&
 				session.sessionGeneration === sessionGeneration &&
 				continuationCurrent?.() !== false;
-			if (!isCurrent()) return "cancelled";
+			const cancelInput = (stage: "before_input" | "input_hook" | "admission"): OrderedInputOutcome => {
+				if (command.type === "steer" || command.type === "follow_up") {
+					const reason = clientDisconnected
+						? "disconnected"
+						: shutdownState.requested
+							? "shutdown"
+							: session.sessionId !== sessionId || session.sessionGeneration !== sessionGeneration
+								? "session_changed"
+								: "input_invalidated";
+					logger.info("RPC ordered user input cancelled", {
+						...context,
+						component: "rpc",
+						event: "rpc_user_input_cancelled",
+						command: command.type,
+						request_id: rpcDiagnosticId(command.id),
+						stage,
+						result: "cancelled",
+						reason,
+						elapsed_ms: performance.now() - started,
+					});
+				}
+				return "cancelled";
+			};
+			if (!isCurrent()) return cancelInput("before_input");
 			let text = command.message;
 			let images = command.images;
 			let goalAutoOrchestrateInitialId: string | undefined;
 			const runner = session.extensionRunner;
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, images, "rpc");
-				if (!isCurrent()) return "cancelled";
+				if (!isCurrent()) return cancelInput("input_hook");
 				if (result.handled) return "local";
 				if (result.text !== undefined) text = result.text;
 				if (result.images !== undefined) images = result.images;
 			}
-			if (!isCurrent()) return "cancelled";
+			if (!isCurrent()) return cancelInput("admission");
 			if (!text.trim() && !images?.length) return "local";
 			if (command.type === "steer") {
 				await session.steer(text, images);
@@ -2343,6 +2500,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			return "admitted";
 		});
+	};
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
@@ -3292,7 +3450,26 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					}
 					try {
 						const response = await handleCommand(command);
-						if (prompt && !response.success) {
+						const completedLocally =
+							prompt &&
+							response.success &&
+							"data" in response &&
+							isRecord(response.data) &&
+							"agentInvoked" in response.data &&
+							response.data.agentInvoked === false;
+						if (completedLocally) {
+							logger.info("RPC prompt completed locally", {
+								...diagnostic.context,
+								component: "rpc",
+								event: "rpc_prompt_terminal",
+								stage: "local_completion",
+								result: "completed",
+								agent_invoked: false,
+								elapsed_ms: performance.now() - diagnostic.started,
+							});
+						}
+						// Local acknowledgements discard their ticket and never emit prompt_result.
+						if (prompt && (!response.success || completedLocally)) {
 							const pending = promptDiagnostics.get(command.id);
 							if (pending) {
 								const index = pending.indexOf(diagnostic);

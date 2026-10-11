@@ -22,7 +22,7 @@ const repository = path.resolve(import.meta.dir, "../../..");
 const probe = path.join(import.meta.dir, "fixtures/fork-diagnostic-probe.ts");
 const profile = "diagnostic-acceptance";
 
-async function sandbox() {
+async function sandbox(level = "debug") {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-diagnostic-"));
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
@@ -59,7 +59,7 @@ async function sandbox() {
 		PI_CODING_AGENT_DIR: "",
 		OMP_JCHTOOLS_DISCOVERY: "0",
 		OMP_OFFLINE: "1",
-		OMP_LOG_LEVEL: "debug",
+		OMP_LOG_LEVEL: level,
 	});
 	const logsDir = path.join(profileRoot, "logs");
 	async function logs(): Promise<{ raw: string; records: RecordLine[] }> {
@@ -132,7 +132,7 @@ async function sandbox() {
 
 function terminal(record: RecordLine) {
 	if (/^jchtools_(?:discovery|models|request)_finished$/.test(record.event ?? "")) return true;
-	return /^(?:docs\.init\.(?:completed|finished)|docs\.database\.(?:completed|failed)|docs\.cli\.command\.(?:completed|failed|cancelled)|wiki\.query\.(?:completed|finished)|docs\.storage\.migration\.(?:completed|failed))$/.test(
+	return /^(?:docs\.init\.(?:completed|finished)|docs\.database\.(?:completed|failed)|docs\.cli\.command\.(?:completed|failed|cancelled|rejected)|wiki\.query\.(?:completed|finished)|docs\.storage\.migration\.(?:completed|failed))$/.test(
 		record.message,
 	);
 }
@@ -289,7 +289,7 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 	}, 120_000);
 
 	it("diagnoses isolated same-OS IPC and concurrent localhost model/Agent failures without leaking wire data or changing partial-message semantics", async () => {
-		const box = await sandbox();
+		const box = await sandbox("info");
 		const canary = "FORKDIAGNOSTICTRANSPORTPRIVATE";
 		try {
 			const value = await box.probe("transport", canary);
@@ -414,4 +414,115 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			await box.cleanup();
 		}
 	}, 35_000);
+
+	it("keeps INFO-level dialog outcomes distinct and closes SQLite list failures without leaking host content", async () => {
+		const box = await sandbox("info");
+		const canary = "FORKDIAGNOSTICBOUNDARYPRIVATE";
+		try {
+			const value = await box.probe("boundaries", canary);
+			expect(value.listFailure).toBe("SQLiteError");
+			expect(
+				value.dialogs.map((dialog: { kind: string; value?: string; failure?: string }) => ({
+					kind: dialog.kind,
+					value: dialog.value,
+					failure: dialog.failure,
+				})),
+			).toEqual([
+				{ kind: "responded", value: `${canary}ANSWER`, failure: undefined },
+				{ kind: "cancelled", value: undefined, failure: undefined },
+				{ kind: "timed_out", value: undefined, failure: undefined },
+				{ kind: "aborted", value: undefined, failure: undefined },
+				{ kind: "failed", value: undefined, failure: "Error" },
+				{ kind: "disconnected", value: undefined, failure: "Error" },
+				{ kind: "editor_aborted", value: undefined, failure: undefined },
+			]);
+			expect(value.dialogs.every((dialog: { pending: number }) => dialog.pending === 0)).toBe(true);
+			const { raw, records } = await box.logs();
+			expect(raw).not.toContain(canary);
+			const starts = records.filter(record => record.event === "rpc_dialog_started");
+			const endings = records.filter(record => record.event === "rpc_dialog_terminal");
+			expect(starts).toHaveLength(7);
+			expect(endings.map(record => record.result)).toEqual([
+				"responded",
+				"cancelled",
+				"timed_out",
+				"aborted",
+				"failed",
+				"disconnected",
+				"aborted",
+			]);
+			for (const start of starts) {
+				const own = endings.filter(end => end.dialog_id === start.dialog_id);
+				expect(own).toHaveLength(1);
+				expect(own[0]?.operation_id).toBe(start.operation_id);
+				expect(start.operation_id).toBe("boundary-parent");
+				expect(own[0]?.request_id).toBe("dialog-command");
+				expect(typeof own[0]?.elapsed_ms).toBe("number");
+			}
+			for (const end of endings.filter(record => record.result === "cancelled" || record.result === "aborted")) {
+				expect(end.level).toBe("info");
+			}
+			const lists = records.filter(record => record.event === "docs.list");
+			const listStarts = lists.filter(record => record.result === "started");
+			expect(listStarts).toHaveLength(2);
+			for (const start of listStarts) {
+				expect(
+					lists.filter(record => record.call_id === start.call_id && record.result !== "started"),
+				).toHaveLength(1);
+			}
+			expect(lists.find(record => record.result === "failed")).toMatchObject({
+				level: "error",
+				stage: "query",
+				error_type: "SQLiteError",
+			});
+		} finally {
+			await box.cleanup();
+		}
+	}, 35_000);
+
+	it("closes offline CLI initialization without leaking rejected configuration paths", async () => {
+		const box = await sandbox("info");
+		const canary = "FORKDIAGNOSTICCATALOGPRIVATE";
+		try {
+			const success = await box.cli(["models", "refresh", "--json", "--no-extensions"]);
+			expect(success.code).toBe(0);
+			const payload = JSON.parse(success.stdout) as { models: unknown[] };
+			const rejected = await box.cli(["models", "find", "--json", "--no-extensions"]);
+			expect(rejected.code).toBe(1);
+			const failed = await box.cli([
+				"models",
+				"refresh",
+				"--json",
+				"--no-extensions",
+				"--config",
+				path.join(box.root, `${canary}.yml`),
+			]);
+			expect(failed.code).toBe(1);
+			const { raw, records } = await box.logs();
+			expect(raw).not.toContain(canary);
+			const refresh = records.find(
+				record =>
+					record.event === "offline_model_refresh" &&
+					record.stage === "builtin_refresh" &&
+					record.result === "completed",
+			);
+			expect(refresh).toMatchObject({
+				strategy: "offline",
+				cache_only: true,
+				available_model_count: payload.models.length,
+			});
+			const rejection = records.find(record => record.event === "models_command" && record.result === "rejected");
+			expect(rejection).toMatchObject({ level: "info", reason: "missing_search_substring" });
+			const initFailed = records.find(record => record.event === "models_init" && record.result === "failed");
+			expect(initFailed).toMatchObject({ level: "error", stage: "settings_init", elapsed_ms: expect.any(Number) });
+			const initStart = records.find(
+				record =>
+					record.event === "models_init" && record.result === "started" && record.call_id === initFailed?.call_id,
+			);
+			expect(initStart?.operation_id).toBe(initFailed?.operation_id);
+			expect(initStart?.call_id).toEqual(expect.any(String));
+		} finally {
+			await box.cleanup();
+		}
+	}, 120_000);
 });

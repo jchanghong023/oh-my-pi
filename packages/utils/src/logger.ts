@@ -124,7 +124,13 @@ export function diagnosticUrl(value: string): Record<string, unknown> {
 function mergedLogContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
 	const inherited = logContextStorage.getStore();
 	try {
-		return inherited ? { ...inherited, ...context } : context;
+		if (!inherited) return context;
+		return {
+			...inherited,
+			...context,
+			// Error metadata is non-enumerable but formatLogRecord explicitly supports it.
+			...(context instanceof Error ? { message: context.message, stack: context.stack, cause: context.cause } : {}),
+		};
 	} catch {
 		// Preserve the existing best-effort logging boundary for hostile getters.
 		return context;

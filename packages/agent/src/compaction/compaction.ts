@@ -2020,7 +2020,11 @@ export async function compact(
 									stage: "request",
 									result: "failed",
 									method: "responses_v2",
-									next_method: shouldUseOpenAiRemoteCompaction(model) ? "responses_v1" : "none",
+									next_method: shouldUseOpenAiRemoteCompaction(model)
+										? "responses_v1"
+										: summaryOptions.remoteEndpoint
+											? "remote_summary"
+											: "none",
 									elapsed_ms: performance.now() - methodStarted,
 									...logger.diagnosticError(err),
 									model: /^[\w./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",

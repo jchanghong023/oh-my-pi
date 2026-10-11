@@ -116,6 +116,11 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 			async () => {
 				const started = performance.now();
 				let stage = "lease";
+				let terminationDiagnostics: {
+					abort_category?: string;
+					request_count?: number;
+					soft_request_budget?: number;
+				} = {};
 				const finish = (result: "completed" | "failed" | "cancelled", category?: string): void => {
 					const fields = {
 						component: "team.runner",
@@ -124,8 +129,9 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						result,
 						elapsed_ms: performance.now() - started,
 						...(category ? { failure_category: category } : {}),
+						...terminationDiagnostics,
 					};
-					if (result === "failed") logger.warn("Team runner failed", fields);
+					if (result === "failed") logger.error("Team runner failed", fields);
 					else logger.info("Team runner finished", fields);
 				};
 				logger.info("Team artifact lease started", {
@@ -256,6 +262,39 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						: result.aborted || result.exitCode !== 0 || result.error
 							? "failed"
 							: "completed";
+					terminationDiagnostics = { request_count: result.requests };
+					if (signal.aborted) {
+						terminationDiagnostics.abort_category = "signal";
+					} else if (result.aborted) {
+						// Match only executor-generated constants; unknown reasons may contain task text.
+						const budgetAbort =
+							/^Soft request budget exceeded \([0-9]{1,10} requests; budget ([0-9]{1,10})\)( — agent did not yield when force-stopped)?$/.exec(
+								result.abortReason ?? "",
+							);
+						if (budgetAbort) {
+							terminationDiagnostics.abort_category = budgetAbort[2]
+								? "request_budget_hard_stop"
+								: "request_budget_stop";
+							terminationDiagnostics.soft_request_budget = Number(budgetAbort[1]);
+						} else if (
+							/^Subagent runtime limit exceeded \(task\.maxRuntimeMs=[0-9]{1,10}\)$/.test(
+								result.abortReason ?? "",
+							)
+						) {
+							terminationDiagnostics.abort_category = "runtime_limit";
+						} else if (result.abortReason === "Async job manager shutdown") {
+							terminationDiagnostics.abort_category = "shutdown";
+						} else if (
+							result.abortReason === "Cancelled by caller" ||
+							result.abortReason === "Cancelled before start"
+						) {
+							terminationDiagnostics.abort_category = "caller_abort";
+						} else if (result.abortReason === "Subagent aborted task") {
+							terminationDiagnostics.abort_category = "task_aborted";
+						} else {
+							terminationDiagnostics.abort_category = "internal_abort";
+						}
+					}
 					const resolved = (result.resolvedModelIdentity ?? result.resolvedModel)?.slice(0, 192);
 					const separator = resolved?.indexOf("/") ?? -1;
 					const processFields = {
@@ -271,9 +310,10 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						stdout_chars: result.output?.length ?? 0,
 						stderr_chars: result.stderr?.length ?? 0,
 						structured_status: result.structuredOutput?.status,
+						...terminationDiagnostics,
 						elapsed_ms: performance.now() - subprocessStarted,
 					};
-					if (processResult === "failed") logger.warn("Team subprocess finished unsuccessfully", processFields);
+					if (processResult === "failed") logger.error("Team subprocess finished unsuccessfully", processFields);
 					else logger.info("Team subprocess finished", processFields);
 					if (signal.aborted) {
 						finish("cancelled");

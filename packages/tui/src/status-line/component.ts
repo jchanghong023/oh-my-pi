@@ -3400,13 +3400,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	}
 
 	#renderSplitBottomLines(width: number, previewTitle?: string): string[] {
-		const left = this.#renderStatusLines(width, "plain-left", previewTitle);
+		const left = this.#buildStatusLine(width, "plain-left", previewTitle);
 		// The right group rides the top-rule chip, whose rule reserves
 		// CHIP_RULE_RESERVE cells. Budget it the chip's real content width so a
 		// segment that no longer fits the chip lands in the wrapped rows below
 		// instead of being clipped by the rule.
-		const right = this.#renderStatusLines(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right", previewTitle);
-		const lines = this.#wrapOverflowRows(left.main, [...left.overflowParts, ...right.overflowParts], width);
+		const right = this.#buildStatusLine(Math.max(1, width - CHIP_RULE_RESERVE), "plain-right", previewTitle);
+		const lines = this.#wrapOverflowRows(left.content, [...left.overflowParts, ...right.overflowParts], width);
 		if (!this.#focusedAgentId) return lines;
 		return lines.map(content => `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m`);
 	}

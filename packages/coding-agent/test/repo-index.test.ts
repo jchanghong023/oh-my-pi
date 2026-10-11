@@ -1,11 +1,13 @@
 import { $ } from "bun";
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { createHash } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $which } from "@oh-my-pi/pi-utils";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import { maxPendingSeq, RepoService } from "../src/repo/service";
 import type { RepoQueryResult, RepoTextHit } from "../src/repo/types";
 
@@ -858,33 +860,99 @@ describe("repository index with real SQLite and native Python parsing", () => {
 	});
 
 	it("rolls back a real file-read failure without publishing a partial initial or updated generation", async () => {
+		const failingPath = "b-private-path-canary.py";
+		const stableSource = "def second(): return 'safeisland_PRIVATE_SOURCE_CANARY'\n";
+		const failureMessage = `Cannot complete repository inventory at ${failingPath}: file disappeared`;
 		const { root, service } = await fixture({
 			"a.py": "def first(): return 'oldharbor'\n",
-			"b.py": "def second(): return 'safeisland'\n",
+			[failingPath]: stableSource,
 		});
 		await expect(
 			service.build({
 				onProgress: progress => {
-					if (progress.phase === "reading" && progress.processed === 1) fsSync.unlinkSync(path.join(root, "b.py"));
+					if (progress.phase === "reading" && progress.processed === 1)
+						fsSync.unlinkSync(path.join(root, failingPath));
 				},
 			}),
-		).rejects.toThrow();
+		).rejects.toThrow(failureMessage);
 		expect((await service.status()).exists).toBe(false);
-		await put(root, "b.py", "def second(): return 'safeisland'\n");
+		await put(root, failingPath, stableSource);
 		await service.build();
 		const generation = (await service.status()).generation;
 		await put(root, "a.py", "def newer(): return 'newmountain'\n");
-		await expect(
-			service.reconcile({
-				onProgress: progress => {
-					if (progress.phase === "reading" && progress.processed === 1) fsSync.unlinkSync(path.join(root, "b.py"));
-				},
-			}),
-		).rejects.toThrow();
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			await expect(
+				service.reconcile({
+					onProgress: progress => {
+						if (progress.phase === "reading" && progress.processed === 1)
+							fsSync.unlinkSync(path.join(root, failingPath));
+					},
+				}),
+			).rejects.toMatchObject({ name: "Error", message: failureMessage });
+		} finally {
+			dispose();
+		}
+		const failedGenerations = events.filter(event => event.context?.event === "repo_generation");
+		expect(failedGenerations).toHaveLength(1);
+		const failure = failedGenerations[0]!;
+		expect(failure).toMatchObject({
+			level: "error",
+			context: {
+				component: "repo",
+				stage: "read",
+				result: "failed",
+				file_hash: createHash("sha256").update(failingPath).digest("hex").slice(0, 16),
+				failure_kind: "missing",
+				old_generation: generation,
+				old_generation_retained: true,
+				published: false,
+				processed_count: 1,
+				error_type: "Error",
+			},
+		});
+		expect(failure.context?.new_generation).toMatch(/^[0-9a-f-]{36}$/i);
+		expect(failure.context?.new_generation).not.toBe(generation);
+		expect(failure.context?.operation_id).toMatch(/^repo-[0-9a-f-]{36}$/i);
+		expect(failure.context?.call_id).toMatch(/^repo-[0-9a-f-]{36}$/i);
+		const operations = events.filter(event => event.context?.event === "repo_operation");
+		const starts = operations.filter(event => event.context?.result === "started");
+		expect(starts.map(event => event.context?.action).sort()).toEqual(["exclusive", "reconcile"]);
+		for (const start of starts) {
+			expect(start.context?.operation_id).toBe(failure.context?.operation_id);
+			const endings = operations.filter(
+				event => event.context?.call_id === start.context?.call_id && event.context?.result !== "started",
+			);
+			expect(endings).toHaveLength(1);
+			expect(endings[0]).toMatchObject({
+				level: "error",
+				context: { result: "failed", operation_id: start.context?.operation_id, error_type: "Error" },
+			});
+			expect(Number.isFinite(endings[0]?.context?.elapsed_ms)).toBe(true);
+			expect(endings[0]?.context?.elapsed_ms as number).toBeGreaterThanOrEqual(0);
+			expect(Number.isFinite(endings[0]?.context?.stage_elapsed_ms)).toBe(true);
+			expect(endings[0]?.context?.stage_elapsed_ms as number).toBeGreaterThanOrEqual(0);
+		}
+		const exclusive = starts.find(event => event.context?.action === "exclusive");
+		const reconcile = starts.find(event => event.context?.action === "reconcile");
+		expect(failure.context?.call_id).toBe(exclusive?.context?.call_id);
+		expect(failure.context?.parent_call_id).toBe(reconcile?.context?.call_id);
+		const serialized = JSON.stringify(events);
+		for (const privateValue of [
+			JSON.stringify(root),
+			failingPath,
+			"PRIVATE_SOURCE_CANARY",
+			"oldharbor",
+			"newmountain",
+			failureMessage,
+			"file disappeared",
+		])
+			expect(serialized).not.toContain(privateValue);
 		expect((await service.status()).generation).toBe(generation);
 		expect((await service.search("oldharbor")).hits.map(hit => hit.path)).toEqual(["a.py"]);
-		expect((await service.search("safeisland")).hits.map(hit => hit.path)).toEqual(["b.py"]);
-		await put(root, "b.py", "def second(): return 'safeisland'\n");
+		expect((await service.search("safeisland")).hits.map(hit => hit.path)).toEqual([failingPath]);
+		await put(root, failingPath, stableSource);
 		await service.reconcile();
 		expect((await service.search("newmountain")).hits.map(hit => hit.path)).toEqual(["a.py"]);
 	});

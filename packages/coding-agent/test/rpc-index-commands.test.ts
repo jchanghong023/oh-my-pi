@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { logger } from "@oh-my-pi/pi-utils";
+import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -102,22 +104,77 @@ describe("RPC index commands use the real index services", () => {
 
 	test("wiki reports duplicate-name failure and keeps the original searchable index", async () => {
 		const f = await fixture();
+		const indexName = "PRIVATE_DUPLICATE_INDEX_TITLE";
 		const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
-			await docs.init(f.docsDir, "manual");
+			await docs.init(f.docsDir, indexName);
 		} finally {
 			docs.close();
 		}
-		f.select.mockResolvedValueOnce("New document index");
-		f.input.mockResolvedValueOnce(f.docsDir).mockResolvedValueOnce("manual");
-		await f.run("/wiki");
-		expect(f.output.join("\n")).toContain("/wiki failed: Document index already exists: manual");
-		const retained = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+		const events: LogEvent[] = [];
+		const operationId = "rpc-wiki-duplicate-regression";
+		const dispose = registerLogSink(event => {
+			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
+		});
 		try {
-			expect(retained.list()).toHaveLength(1);
-			expect(retained.search("sensorbeacon").sections).not.toHaveLength(0);
+			f.select.mockResolvedValueOnce("New document index");
+			f.input.mockResolvedValueOnce(f.docsDir).mockResolvedValueOnce(indexName);
+			await logger.withLogContext({ operation_id: operationId, call_id: "rpc-wiki-parent" }, () => f.run("/wiki"));
+			expect(f.output.join("\n")).toContain(`/wiki failed: Document index already exists: ${indexName}`);
+			const retained = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+			try {
+				expect(retained.list().map(index => index.name)).toEqual([indexName]);
+				expect(retained.search("sensorbeacon").sections).not.toHaveLength(0);
+			} finally {
+				retained.close();
+			}
+			expect(events.map(event => event.context?.event)).toEqual([
+				"rpc_index_dashboard_started",
+				"rpc_index_dashboard_failed",
+			]);
+			const [started, failed] = events;
+			expect(started).toMatchObject({
+				level: "info",
+				context: {
+					command: "/wiki",
+					stage: "dashboard",
+					result: "started",
+					operation_id: operationId,
+					parent_call_id: "rpc-wiki-parent",
+					session_id: f.session.sessionId,
+					session_generation: 0,
+				},
+			});
+			expect(started?.context?.call_id).toEqual(expect.any(String));
+			expect(started?.context?.call_id).not.toBe("rpc-wiki-parent");
+			expect(structuredClone(failed)).toMatchObject({
+				level: "error",
+				context: {
+					command: "/wiki",
+					stage: "docs_init",
+					result: "failed",
+					error_type: "Error",
+					operation_id: operationId,
+					call_id: started?.context?.call_id,
+					parent_call_id: "rpc-wiki-parent",
+					elapsed_ms: expect.any(Number),
+				},
+			});
+			expect(Number(failed?.context?.elapsed_ms)).toBeGreaterThanOrEqual(0);
+			const serialized = JSON.stringify(events);
+			for (const sensitive of [
+				indexName,
+				f.docsDir,
+				f.cwd,
+				f.agentDir,
+				"Document index already exists",
+				"Sensors",
+				"sensorbeacon",
+			]) {
+				expect(serialized).not.toContain(sensitive);
+			}
 		} finally {
-			retained.close();
+			dispose();
 		}
 	});
 
@@ -168,37 +225,134 @@ describe("RPC index commands use the real index services", () => {
 		const indexPath = before.storage.path;
 		before.close();
 		await Bun.write(indexPath, "corrupt database");
-		f.select.mockResolvedValueOnce("Rebuild repository index");
-		await f.run("/repo");
-		expect(await Bun.file(indexPath).text()).toBe("corrupt database");
-		f.select.mockResolvedValueOnce("Rebuild repository index");
-		f.confirm.mockResolvedValueOnce(true);
-		await f.run("/repo");
-		const recovered = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+		const events: LogEvent[] = [];
+		const operationId = "rpc-repo-recovery-regression";
+		const dispose = registerLogSink(event => {
+			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
+		});
 		try {
-			expect(recovered.storage.recoveryError).toBeUndefined();
-			expect((await recovered.symbol("sensor_target")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
+			f.select.mockResolvedValueOnce("Rebuild repository index");
+			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
+			expect(await Bun.file(indexPath).text()).toBe("corrupt database");
+			expect(f.output.join("\n")).toContain("Unable to read repository index status:");
+			const firstCall = events[0]?.context?.call_id;
+			expect(firstCall).toEqual(expect.any(String));
+			expect(events.map(event => event.context?.event)).toEqual([
+				"rpc_index_dashboard_started",
+				"rpc_index_dashboard_stage_failed",
+				"rpc_index_dashboard_cancelled",
+			]);
+			expect(events[1]).toMatchObject({
+				level: "error",
+				context: {
+					command: "/repo",
+					stage: "repo_status",
+					result: "failed",
+					error_type: "Error",
+					operation_id: operationId,
+					call_id: firstCall,
+					elapsed_ms: expect.any(Number),
+				},
+			});
+			expect(events[2]?.context).toMatchObject({ result: "cancelled", call_id: firstCall });
+			f.select.mockResolvedValueOnce("Rebuild repository index");
+			f.confirm.mockResolvedValueOnce(true);
+			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
+			expect(f.output.join("\n")).toContain("Rebuild repository index complete.");
+			const recovered = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+			try {
+				expect(recovered.storage.recoveryError).toBeUndefined();
+				expect((await recovered.symbol("sensor_target")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
+			} finally {
+				recovered.close();
+			}
+			expect(events.slice(3).map(event => event.context?.event)).toEqual([
+				"rpc_index_dashboard_started",
+				"rpc_index_dashboard_stage_failed",
+				"rpc_index_dashboard_completed",
+			]);
+			const recoveryCall = events[3]?.context?.call_id;
+			expect(recoveryCall).toEqual(expect.any(String));
+			expect(recoveryCall).not.toBe(firstCall);
+			expect(events[4]).toMatchObject({
+				level: "error",
+				context: {
+					command: "/repo",
+					stage: "repo_status",
+					result: "failed",
+					operation_id: operationId,
+					call_id: recoveryCall,
+					elapsed_ms: expect.any(Number),
+				},
+			});
+			expect(events[5]?.context).toMatchObject({
+				stage: "index_output",
+				result: "completed",
+				call_id: recoveryCall,
+			});
+			const serialized = JSON.stringify(events);
+			for (const sensitive of [
+				indexPath,
+				f.cwd,
+				f.agentDir,
+				"Repository index recovery required",
+				"corrupt database",
+				"engine.py",
+			]) {
+				expect(serialized).not.toContain(sensitive);
+			}
 		} finally {
-			recovered.close();
+			dispose();
 		}
 	});
 
 	test("a session switch while root confirmation is pending cannot create an index or output into the new session", async () => {
 		const f = await fixture();
-		f.select.mockResolvedValueOnce("Build repository index");
-		let outputCount = 0;
-		f.confirm.mockImplementationOnce(async () => {
-			outputCount = f.output.length;
-			f.session.sessionGeneration++;
-			return true;
+		const events: LogEvent[] = [];
+		const operationId = "rpc-repo-session-switch-regression";
+		const dispose = registerLogSink(event => {
+			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
 		});
-		await f.run("/repo");
-		expect(f.output).toHaveLength(outputCount);
-		const service = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
 		try {
-			expect((await service.status()).exists).toBe(false);
+			f.select.mockResolvedValueOnce("Build repository index");
+			let outputCount = 0;
+			f.confirm.mockImplementationOnce(async () => {
+				outputCount = f.output.length;
+				f.session.sessionGeneration++;
+				return true;
+			});
+			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
+			expect(f.output).toHaveLength(outputCount);
+			const service = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+			try {
+				expect((await service.status()).exists).toBe(false);
+			} finally {
+				service.close();
+			}
+			expect(events.map(event => event.context?.event)).toEqual([
+				"rpc_index_dashboard_started",
+				"rpc_index_dashboard_cancelled",
+			]);
+			expect(events[0]?.context?.call_id).toEqual(expect.any(String));
+			expect(events[1]).toMatchObject({
+				level: "info",
+				context: {
+					command: "/repo",
+					stage: "maintenance_confirm",
+					result: "cancelled",
+					operation_id: operationId,
+					call_id: events[0]?.context?.call_id,
+					session_id: f.session.sessionId,
+					session_generation: 0,
+					elapsed_ms: expect.any(Number),
+				},
+			});
+			const serialized = JSON.stringify(events);
+			for (const sensitive of [f.cwd, f.agentDir, "Build repository index?", "Root:"]) {
+				expect(serialized).not.toContain(sensitive);
+			}
 		} finally {
-			service.close();
+			dispose();
 		}
 	});
 

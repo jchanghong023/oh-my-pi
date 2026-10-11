@@ -28,7 +28,7 @@
 
 ### 必须接入的命令
 
-`--mode rpc-ui` 必须支持 `/wiki`、`/repo`、`/team`、`/plan`、`/loop`、`/goal`、`/goal-auto-orchestrate`、`/advisor`、`/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`、`/skill:<name>` 与 `/compact`。正文中的 `ultrathink` 等魔法关键词仍按共享会话规则生效；它不是 `/advisor` 的参数。
+`--mode rpc-ui` 必须支持 `/wiki`、`/repo`、`/team`、`/plan`、`/loop`、`/goal`、`/goal-auto-orchestrate`、`/advisor`、`/ultrathink`、`/orchestrate`、`/workflowz`、`/jch-workflowzbatch`、`/fullsend`、`/skill:<name>` 与 `/compact`。正文中的 `ultrathink` 等魔法关键词仍按共享会话规则生效；它不是 `/advisor` 的参数。
 
 - 保留协议 v3，统一通过现有 `prompt.message` 提交命令。命令目录、别名与参数提示来自实际注册信息，补全复用现有机制；RPC 专属入口登记在同一命令规格中。已识别但仅限 TUI 的命令必须明确拒绝，不能把它原样交给模型执行。
 - 文字结果与状态通过 `command_output` 返回，选择、输入和确认通过现有 `extension_ui_request` / `extension_ui_response` 完成。不新增 ZCode 专属面板协议或平行业务实现。
@@ -37,6 +37,7 @@
 - `/loop` 复用上游参数解析、次数/时长限制、`--while` / `--until` 条件和 prompt/compact/reset 设置。首轮正常发送，后续轮次在会话空闲后执行；停止暂停重复提交，下一条用户提示可恢复，再次 `/loop` 关闭。切换或关闭会话取消旧会话的待提交与条件进程；启用 loop 时不同时自动提交 goal 续跑。
 - `/goal` 复用上游目标生命周期与已有 RPC goal 控制器，保留目标创建/替换、查看、暂停、恢复、删除和预算调整；不得维护第二份目标状态。自动续跑沿用上游 RPC 设置。
 - `/goal-auto-orchestrate` 的完整模式契约与验收条件统一见 [Goal 自动编排需求](goal-auto-orchestrate.md)；接入沿用上述命令提交、目录、补全、输出与宿主对话机制，不维护第二份业务语义。
+- `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>` 复用共享命令处理器，以普通用户消息展开并沿用 workflowz；完整批处理约束见 [JCH 命令](fork.md#jch-命令)。通过 v3 目录和补全发现，使用现有 `prompt.message` 提交；正文内部空白及字面量须保留，非法参数只返回用法且不启动模型回合。不增加 RPC 专属调度、配置写入或程序级并发/禁测拦截。
 - `/team`、`/advisor` 的开关/状态/记录、魔法关键词命令、技能与 `/compact` 复用已有执行路径。`/advisor configure` 的终端编辑器仍明确报告仅 TUI 可用，role 保存继续使用现有配置接口。
 - 长操作与审批等待不得占住停止通道；取消、会话切换及 EOF 后不得向其他会话写入结果或启动后续轮次。命令的调用受理、模型运行与最终完成沿用现有 RPC 事件语义。
 

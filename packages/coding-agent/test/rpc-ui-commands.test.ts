@@ -21,6 +21,7 @@ interface CommandServerOptions {
 	provider: string;
 	model: string;
 	modelsYaml: string;
+	tools?: string;
 }
 
 async function withCommandServer(
@@ -40,6 +41,10 @@ async function withCommandServer(
 			"modelRoles: {}",
 			"advisor:",
 			"  enabled: false",
+			"eval:",
+			"  js: true",
+			"  py: false",
+			"  autoProvision: false",
 			"skills:",
 			"  enableCodexUser: false",
 			"  enableClaudeUser: false",
@@ -68,7 +73,7 @@ async function withCommandServer(
 			"--no-extensions",
 			"--no-ui",
 			"--no-rules",
-			"--no-tools",
+			...(options?.tools ? ["--tools", options.tools] : ["--no-tools"]),
 			"--session-dir",
 			sessionDir,
 			"--provider",
@@ -209,6 +214,123 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 			});
 			expect(server.seen.some(frame => frame.type === "agent_start")).toBe(false);
 		});
+	}, 300_000);
+
+	test("jch-workflowzbatch completion dispatches a literal user task and rejects invalid counts locally", async () => {
+		const requests: RpcFrame[] = [];
+		const model = "rpc-batch-model";
+		const modelServer = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
+					return new Response("not found", { status: 404 });
+				}
+				const body: unknown = await request.json();
+				if (!isRecord(body)) return new Response("invalid request", { status: 400 });
+				requests.push(body);
+				const base = { id: "chatcmpl-batch", object: "chat.completion.chunk", created: 0, model };
+				const chunks = [
+					{
+						...base,
+						choices: [{ index: 0, delta: { role: "assistant", content: "RPC_BATCH_ACCEPTED" }, finish_reason: null }],
+					},
+					{
+						...base,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+						usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+					},
+				];
+				return new Response(
+					`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		try {
+			await withCommandServer(
+				async server => {
+					const catalog = await server.request({ id: "batch-catalog", type: "get_available_commands" });
+					if (!isRecord(catalog.data) || !Array.isArray(catalog.data.commands)) {
+						throw new Error("Missing command catalog");
+					}
+					expect(
+						catalog.data.commands.find(command => isRecord(command) && command.name === "jch-workflowzbatch"),
+					).toMatchObject({ execution: "omp", availability: { available: true } });
+					const prefix = "/jch-workflowzb";
+					const completion = await server.request({
+						id: "batch-completion",
+						type: "complete_command",
+						text: prefix,
+						cursor: prefix.length,
+					});
+					if (!isRecord(completion.data) || !Array.isArray(completion.data.items)) {
+						throw new Error("Missing command completion");
+					}
+					const item = completion.data.items.find(item => isRecord(item) && item.label === "jch-workflowzbatch");
+					if (!isRecord(item) || typeof item.insertText !== "string") throw new Error("Missing batch completion");
+					const task = [
+						"修复fork仓自有的bug。",
+						"```ts",
+						"const s = `a  ",
+						"b`;",
+						"```",
+						"",
+						"",
+						"| padded | cells |",
+						"保留 <T>、{{targetItems}} 和 $&",
+					].join("\r\n");
+					expect(
+						await server.request({ id: "batch-run", type: "prompt", message: `${item.insertText}200 30 ${task}` }),
+					).toMatchObject({ success: true });
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "batch-run"),
+					).toMatchObject({ status: "completed", agentInvoked: true });
+					const messages = requests.flatMap(body => (Array.isArray(body.messages) ? body.messages.filter(isRecord) : []));
+					const user = messages.findLast(message => message.role === "user");
+					if (!user) throw new Error("Provider did not receive user input");
+					const text =
+						typeof user.content === "string"
+							? user.content
+							: Array.isArray(user.content)
+								? user.content.filter(isRecord).map(part => String(part.text ?? "")).join("")
+								: "";
+					expect(text.slice(-task.length)).toBe(task);
+					expect(text).not.toContain("/jch-workflowzbatch");
+					const starts = server.seen.filter(frame => frame.type === "agent_start").length;
+					const requestCount = requests.length;
+					const outputStart = server.seen.length;
+					expect(
+						await server.request({ id: "batch-invalid", type: "prompt", message: "/jch-workflowzbatch 200 0 修复" }),
+					).toMatchObject({ success: true, data: { agentInvoked: false } });
+					expect(await server.request({ id: "batch-settled", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { isStreaming: false },
+					});
+					expect(commandOutputSince(server, outputStart)).toContain("用法：/jch-workflowzbatch");
+					expect(requests).toHaveLength(requestCount);
+					expect(server.seen.filter(frame => frame.type === "agent_start")).toHaveLength(starts);
+				},
+				{
+					provider: "rpc-batch",
+					model,
+					tools: "read,task,eval",
+					modelsYaml: [
+						"providers:",
+						"  rpc-batch:",
+						`    baseUrl: http://127.0.0.1:${modelServer.port}/v1`,
+						"    auth: none",
+						"    api: openai-completions",
+						"    models:",
+						`      - id: ${model}`,
+						"        reasoning: false",
+						"",
+					].join("\n"),
+				},
+			);
+		} finally {
+			modelServer.stop(true);
+		}
 	}, 300_000);
 
 	test("local commands use host dialogs, refuse terminal UI and stay responsive when a dialog is aborted", async () => {
