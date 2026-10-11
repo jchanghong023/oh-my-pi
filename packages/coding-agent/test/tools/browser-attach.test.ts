@@ -389,7 +389,7 @@ describe("pickElectronTarget", () => {
 			},
 		});
 		const controller = new AbortController();
-		const childScript = `await fetch(${JSON.stringify(marker.url.href)}); Bun.serve({ port: 0, fetch: () => new Response("ok") });`;
+		const childScript = `await fetch(${JSON.stringify(marker.url.href)}); Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });`;
 		const openError = acquireBrowser(
 			{
 				kind: "spawned",
