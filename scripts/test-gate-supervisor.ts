@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { dlopen, FFIType } from "bun:ffi";
+import * as fs from "node:fs/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 
 const launchedAt = performance.now();
@@ -36,9 +37,11 @@ process.on("exit", exitCode => {
 	});
 });
 
-let finished = false;
+let quiescing = false;
+let cleanupRequested = false;
+let commandSettled = true;
 let commandPid: number | undefined;
-let reapChildren: (() => Promise<void>) | undefined;
+let reapChildren: (() => Promise<boolean>) | undefined;
 
 // Mirrors the supported Linux subreaper primitive in utils/ptree, without
 // loading the native addon before the gate has had a chance to build it.
@@ -74,19 +77,29 @@ if (process.platform === "linux") {
 	}
 	const symbols = libc.symbols;
 	reapChildren = async () => {
-		if (finished) {
-			while (symbols.waitpid(-1, null, 1) > 0) {
-				/* Reap exited adopted children. */
-			}
-			return;
-		}
-		// Bun owns the command's exit status. Reap only adopted descendants,
-		// even while the command is still checking that its workers are gone.
-		const children = await Bun.file(`/proc/self/task/${process.pid}/children`).text();
-		for (const value of children.trim().split(/\s+/)) {
+		// Bun owns the command's exit status until child.exited settles,
+		// including during cancellation. Never use waitpid(-1) in that window.
+		// Children belong to the task that forked them, not necessarily the
+		// main thread, so collect every task's adopted children.
+		const tasks = await fs.readdir(`/proc/self/task`);
+		const children = await Promise.all(
+			tasks.map(async task => {
+				try {
+					return await fs.readFile(`/proc/self/task/${task}/children`, "utf8");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+					throw error;
+				}
+			}),
+		);
+		let present = false;
+		for (const value of children.join(" ").trim().split(/\s+/)) {
 			const pid = Number(value);
-			if (pid > 0 && pid !== commandPid) symbols.waitpid(pid, null, 1);
+			if (pid <= 0) continue;
+			present = true;
+			if (commandSettled || pid !== commandPid) symbols.waitpid(pid, null, 1);
 		}
+		return present;
 	};
 }
 logger.info("Supervisor initialized", {
@@ -102,10 +115,15 @@ let started = false;
 // remains valid until descendants are gone and command output reaches EOF.
 let reaping = false;
 setInterval(async () => {
-	if (!started || reaping || !reapChildren) return;
+	if ((!started && !cleanupRequested) || reaping || !reapChildren) return;
 	reaping = true;
 	try {
-		await reapChildren();
+		const present = await reapChildren();
+		if (cleanupRequested && commandSettled && !present) {
+			// Exiting is the ownership acknowledgment: the parent may release
+			// this subreaper only after Bun's command wait and adopted-child reaping.
+			process.exit(0);
+		}
 	} catch (error) {
 		logger.error("Owned descendant reaping failed", {
 			...fields,
@@ -121,6 +139,15 @@ setInterval(async () => {
 	}
 }, 5);
 process.on("message", async (message: unknown) => {
+	if (message === "quiesce" && process.platform === "linux") {
+		if (quiescing) return;
+		quiescing = true;
+		// A queued start must either finish spawning before this acknowledgment
+		// or be rejected afterward. The parent's snapshot then cannot miss a
+		// command launched only after the supervisor is resumed for reaping.
+		process.kill(process.pid, "SIGSTOP");
+		return;
+	}
 	if (message === "cleanup") {
 		logger.info("Supervisor cleanup received", {
 			...fields,
@@ -130,11 +157,12 @@ process.on("message", async (message: unknown) => {
 			peer_pid: commandPid,
 			elapsed_ms: performance.now() - launchedAt,
 		});
-		finished = true;
+		cleanupRequested = true;
 		return;
 	}
-	if (started || message !== "start") return;
+	if (started || quiescing || cleanupRequested || message !== "start") return;
 	started = true;
+	commandSettled = false;
 	logger.info("Supervisor start received", {
 		...fields,
 		event: "gate_supervisor_ipc_received",
@@ -171,7 +199,7 @@ process.on("message", async (message: unknown) => {
 			elapsed_ms: performance.now() - startedAt,
 		});
 		const exitCode = await child.exited;
-		finished = true;
+		commandSettled = true;
 		(exitCode === 0 || exitCode === 130 ? logger.info : logger.error)("Supervised command exited", {
 			...fields,
 			event: "gate_command_settled",
@@ -192,7 +220,7 @@ process.on("message", async (message: unknown) => {
 			elapsed_ms: performance.now() - startedAt,
 		});
 	} catch (error) {
-		finished = true;
+		commandSettled = true;
 		logger.error("Supervised command failed", {
 			...fields,
 			event: "gate_command_settled",

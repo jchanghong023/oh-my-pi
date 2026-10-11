@@ -813,7 +813,14 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		returned_head: postHead && /^[0-9a-f]{40}$/.test(postHead) ? postHead : undefined,
 	});
 	if (result.exitCode === 124 || result.exitCode === 137)
-		return stageFailure("TIMEOUT", "WSL execution hang guard expired", "execution_timeout", result.exitCode);
+		return stageFailure(
+			"TIMEOUT",
+			testCode === "124" && /^fulltest: TIMEOUT total=/m.test(result.stdout)
+				? "Linux fulltest non-compilation budget exhausted"
+				: "WSL execution hang guard expired",
+			"execution_timeout",
+			result.exitCode,
+		);
 	if (result.exitCode === 130) return stageFailure("CANCELLED", "WSL execution cancelled", "execution_cancelled", 130);
 	if (testCode === undefined)
 		return stageFailure(

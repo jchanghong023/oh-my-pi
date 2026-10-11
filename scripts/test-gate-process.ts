@@ -102,6 +102,21 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 			if (identity) {
 				const root = await linuxIdentity(identity.pid);
 				if (root?.start === identity.start) {
+					// Let the supervisor close its launch boundary before freezing
+					// the group: an already-queued start must not spawn a new command
+					// after the descendant snapshot. SIGSTOP is its acknowledgment.
+					child.send("quiesce");
+					for (;;) {
+						const live = await linuxIdentity(identity.pid);
+						if (live?.start !== identity.start) {
+							const exitCode = await child.exited;
+							throw new Error(`Owned Linux supervisor exited before quiescing (exit ${exitCode})`);
+						}
+						if (live.state === "T" || live.state === "t") break;
+						const waiting = Promise.withResolvers<void>();
+						setTimeout(waiting.resolve, 5);
+						await waiting.promise;
+					}
 					// Freeze the owned group before walking the live subreaper's
 					// adopted children; escaped sessions are frozen by stable identity.
 					try {
@@ -168,23 +183,24 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 							} catch (error) {
 								if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 							}
-							const deadline = performance.now() + 1000;
-							for (;;) {
-								const present = (
-									await Promise.all(
-										[...registry.values()].map(async entry => {
-											const live = await linuxIdentity(entry.pid);
-											return live?.start === entry.start;
-										}),
-									)
-								).some(Boolean);
-								if (!present) break;
-								if (performance.now() >= deadline)
-									throw new Error("Owned Linux descendants survived termination or reaping");
-								const waiting = Promise.withResolvers<void>();
-								setTimeout(waiting.resolve, 5);
-								await waiting.promise;
-							}
+							// The supervisor exits only after Bun has consumed the real
+							// command's status and every adopted child has been reaped.
+							// Do not race that acknowledgment with a one-second poll or
+							// kill the subreaper while it still owns exited descendants.
+							const exitCode = await child.exited;
+							const present = (
+								await Promise.all(
+									[...registry.values()].map(async entry => {
+										const live = await linuxIdentity(entry.pid);
+										return live?.start === entry.start;
+									}),
+								)
+							).some(Boolean);
+							if (present) throw new Error("Owned Linux descendants survived termination or reaping");
+							if (exitCode !== 0)
+								throw new Error(
+									`Owned Linux supervisor exited before acknowledging cleanup (exit ${exitCode})`,
+								);
 						} finally {
 							await terminateOwnedSubprocess(child, { detached });
 						}

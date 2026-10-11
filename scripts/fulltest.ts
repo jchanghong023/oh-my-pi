@@ -267,10 +267,12 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		const results = await Promise.allSettled([
-			gate.childGate("fastcheck", runFastcheck),
-			runGateCommands(gate, tests),
-		]);
+		// Share one bounded command budget instead of opening two full pools.
+		// Reserve one live test worker; release the other slots after the strict
+		// fastcheck gate settles. Each side still runs independent work in parallel.
+		const concurrency = Math.min(4, Math.max(2, os.availableParallelism()));
+		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, concurrency - 1));
+		const results = await Promise.allSettled([fastcheck, runGateCommands(gate, tests, concurrency, fastcheck)]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
 		// Runtime mechanism selftests use short injected charged budgets. Run
 		// them after process-heavy tests, rather than racing their stub startup

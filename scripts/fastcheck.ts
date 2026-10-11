@@ -23,11 +23,21 @@ export async function runGateCommands(
 	gate: GateRun,
 	commands: readonly GateCommand[],
 	concurrency = Math.min(4, Math.max(1, os.availableParallelism())),
+	// Keep one worker live while a stricter sibling owns the remaining capacity.
+	rampUpAfter?: Promise<unknown>,
 ): Promise<void> {
 	const queue = [...commands];
 	const failures: unknown[] = [];
 	await Promise.all(
-		Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+		Array.from({ length: Math.min(concurrency, queue.length) }, async (_, worker) => {
+			if (worker > 0 && rampUpAfter) {
+				try {
+					await rampUpAfter;
+				} catch (error) {
+					failures.push(error);
+					return;
+				}
+			}
 			for (;;) {
 				if (gate.signal.aborted) break;
 				const command = queue.shift();
@@ -77,10 +87,10 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 	return commands;
 }
 
-export async function runFastcheck(gate: GateRun): Promise<void> {
+export async function runFastcheck(gate: GateRun, concurrency?: number): Promise<void> {
 	console.log("scope=fork-affected; existing TS/Rust static checks; fastcheck runs no tests");
 	const commands = await gate.charged(fastcheckCommands);
-	await runGateCommands(gate, commands);
+	await runGateCommands(gate, commands, concurrency);
 }
 
 if (import.meta.main) {
