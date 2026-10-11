@@ -6,7 +6,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { GateCommandError, type GateCapture, type GateCommand, type GateRun } from "./test-gate-runtime";
+import {
+	GATE_LIMIT_SECONDS,
+	GateCommandError,
+	type GateCapture,
+	type GateCommand,
+	type GateRun,
+} from "./test-gate-runtime";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -565,11 +571,11 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	stage = "native-repository";
 	const probe = await gate.capture({
 		label: "wsl/native-repository-discovery",
-		argv: wslArgv(selection.distro, 25),
+		argv: wslArgv(selection.distro, GATE_LIMIT_SECONDS.slowtest),
 		cwd: root,
 		stdin: `set -eu\n[ "$(id -u)" = 0 ] && [ "$HOME" = /root ]\nfor tool in git python3; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; done\npython3 -c ${quote(REPOSITORIES)} ${quote(remote.identity)}\n`,
 		allowFailure: true,
-		wallTimeoutSeconds: 30,
+		wallTimeoutSeconds: GATE_LIMIT_SECONDS.slowtest,
 	});
 	if (probe.exitCode !== 0)
 		return stageFailure(
