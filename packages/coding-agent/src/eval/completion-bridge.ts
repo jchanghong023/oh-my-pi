@@ -367,6 +367,7 @@ async function executeCompletion(
 					reasoning: candidate.reasoning,
 					disableReasoning: candidate.disableReasoning,
 					toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
+					...(isJchToolsAgentModel(model) ? { cwd: session.cwd } : {}),
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);

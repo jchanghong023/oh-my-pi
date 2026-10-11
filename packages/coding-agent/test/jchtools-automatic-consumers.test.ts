@@ -33,7 +33,7 @@ afterEach(async () => {
 async function fixture(
 	withOrdinary = false,
 	options: {
-		respond?: (pathname: string, model: string) => Response | undefined;
+		respond?: (pathname: string, model: string, body: { cwd?: string }) => Response | undefined;
 		ordinaryIds?: string[];
 	} = {},
 ) {
@@ -41,6 +41,7 @@ async function fixture(
 	cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
 	const requests: Array<{ path: string; model: string }> = [];
 	const modelId = "claude-haiku-5-5";
+	const requestCwds: Array<string | undefined> = [];
 	const http = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -49,9 +50,10 @@ async function fixture(
 			if (pathname === "/v1/models") {
 				return Response.json({ object: "list", data: [{ id: modelId, object: "model" }] });
 			}
-			const body = (await request.json()) as { model: string };
+			const body = (await request.json()) as { model: string; cwd?: string };
 			requests.push({ path: pathname, model: body.model });
-			const response = options.respond?.(pathname, body.model);
+			requestCwds.push(body.cwd);
+			const response = options.respond?.(pathname, body.model, body);
 			if (response) return response;
 			const chunk = (delta: object, finishReason: string | null = null) =>
 				`data: ${JSON.stringify({ id: "consumer-reply", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`;
@@ -173,7 +175,7 @@ async function fixture(
 		modelRegistry: registry,
 		getActiveModelString: () => undefined,
 	} as unknown as ToolSession;
-	return { root, settings, registry, remote, ordinary, requests, hub, toolSession };
+	return { root, settings, registry, remote, ordinary, requests, requestCwds, hub, toolSession };
 }
 
 async function completion(session: ToolSession, schema?: Record<string, unknown>) {
@@ -245,6 +247,44 @@ describe("automatic roles in text consumers", () => {
 		expect((await completion(f.toolSession))?.details.model).toBe(`jchtools/${f.remote.id}`);
 		expect(f.requests.length).toBe(2);
 		expect(f.requests.every(request => request.path === "/v1/chat/completions")).toBe(true);
+	});
+	test("explicit remote completion reads each session cwd concurrently and after cwd changes", async () => {
+		const markerName = `completion-${crypto.randomUUID()}.txt`;
+		const firstDir = path.join(os.tmpdir(), `omp-completion-cwd-a-${crypto.randomUUID()}`);
+		const secondDir = path.join(os.tmpdir(), `omp-completion-cwd-b-${crypto.randomUUID()}`);
+		fs.mkdirSync(firstDir);
+		fs.mkdirSync(secondDir);
+		cleanups.push(() => fs.rmSync(firstDir, { recursive: true, force: true }));
+		cleanups.push(() => fs.rmSync(secondDir, { recursive: true, force: true }));
+		const firstMarker = `first-${crypto.randomUUID()}`;
+		const secondMarker = `second-${crypto.randomUUID()}`;
+		const thirdMarker = `changed-${crypto.randomUUID()}`;
+		fs.writeFileSync(path.join(firstDir, markerName), firstMarker);
+		fs.writeFileSync(path.join(secondDir, markerName), secondMarker);
+		const f = await fixture(false, {
+			respond: (pathname, _model, body) => {
+				if (pathname !== "/v1/chat/completions") return undefined;
+				if (!body.cwd) throw new Error("remote completion request omitted cwd");
+				const content = fs.readFileSync(path.join(body.cwd, markerName), "utf8");
+				const chunk = (delta: object, finishReason: string | null = null) =>
+					`data: ${JSON.stringify({ id: "cwd-marker", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`;
+				return new Response(chunk({ role: "assistant", content }) + chunk({}, "stop") + "data: [DONE]\n\n", {
+					headers: { "Content-Type": "text/event-stream" },
+				});
+			},
+		});
+		f.settings.setModelRole("smol", `jchtools/${f.remote.id}:off`);
+		const firstSession = { ...f.toolSession, cwd: firstDir } as ToolSession;
+		const secondSession = { ...f.toolSession, cwd: secondDir } as ToolSession;
+		const [firstResult, secondResult] = await Promise.all([completion(firstSession), completion(secondSession)]);
+		expect(firstResult?.text).toBe(firstMarker);
+		expect(secondResult?.text).toBe(secondMarker);
+		const switchedSession = { ...f.toolSession, cwd: firstDir } as ToolSession;
+		expect((await completion(switchedSession))?.text).toBe(firstMarker);
+		fs.writeFileSync(path.join(secondDir, markerName), thirdMarker);
+		switchedSession.cwd = secondDir;
+		expect((await completion(switchedSession))?.text).toBe(thirdMarker);
+		expect(f.requestCwds).toEqual([firstDir, secondDir, firstDir, secondDir]);
 	});
 
 	test.each(["http", "sse"])("explicit remote completion %s failures never retry or fall back", async failure => {
