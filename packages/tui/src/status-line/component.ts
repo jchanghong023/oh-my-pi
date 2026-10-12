@@ -2965,14 +2965,16 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const transparentBg = bgAnsi === TRANSPARENT_BG_ANSI;
 		const fgAnsi = theme.getFgAnsi("text");
 		const sepAnsi = theme.getFgAnsi("statusLineSep");
-		const subagentBadge = this.#subagentBadgeText();
+		const subagentBadge =
+			effectiveSettings.leftSegments.includes("subagents") || effectiveSettings.rightSegments.includes("subagents")
+				? undefined
+				: this.#subagentBadgeText();
 
 		// Collect visible segment contents
 		const leftParts: string[] = [];
 		const leftSegIds: StatusLineSegmentId[] = [];
 		const leftSegmentIds = layout === "plain-right" ? [] : effectiveSettings.leftSegments;
 		for (const segId of leftSegmentIds) {
-			if (subagentBadge && segId === "subagents") continue;
 			// The band composer relocates the title to the working row's trailer.
 			if (layout === "band" && segId === "session_name") continue;
 			const rendered = renderSegment(segId, ctx);
@@ -2986,7 +2988,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const rightSegIds: StatusLineSegmentId[] = [];
 		const rightSegmentIds = layout === "plain-left" ? [] : effectiveSettings.rightSegments;
 		for (const segId of rightSegmentIds) {
-			if (subagentBadge && segId === "subagents") continue;
 			if (layout === "band" && segId === "session_name") continue;
 			const rendered = renderSegment(segId, ctx);
 			if (rendered.visible && rendered.content) {
@@ -3887,9 +3888,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			if (action) props.actions = { click: action };
 			segs.push(describeSeg(key, props, view, dim));
 		};
-		const subagentBadge = this.#subagentCount > 0;
+		const subagentBadge =
+			this.#subagentCount > 0 && !leftSegments.includes("subagents") && !rightSegments.includes("subagents");
 		leftSegments.forEach((id, index) => {
-			if (subagentBadge && id === "subagents") return;
 			const view = describeSegment(id, ctx);
 			if (view) push(id, "left", statusSegmentPriority("left", index, leftSegments.length), view);
 		});
@@ -3909,7 +3910,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			});
 		}
 		rightSegments.forEach((id, index) => {
-			if (subagentBadge && id === "subagents") return;
 			const view = describeSegment(id, ctx);
 			if (view) push(id, "right", statusSegmentPriority("right", index, rightSegments.length), view);
 		});

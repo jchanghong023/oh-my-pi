@@ -191,6 +191,7 @@
 - `Alt+P`：thinking blocks 显示/隐藏。
 - `Shift+F1`：循环切换 thinking level。
 - 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
+- 配置中的 `subagents` 段按所属组与顺序显示，运行中的子代理徽章不得强制移到右组或重复显示；未配置该段时保留上游临时右侧徽章。后台作业徽章沿用上游显示机制，右组配置为空不关闭这些临时徽章。
 - `composer.shape=pi` 时状态栏独立位于输入框下方。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 

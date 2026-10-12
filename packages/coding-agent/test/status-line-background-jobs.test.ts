@@ -85,6 +85,30 @@ function makeComponent(running: AsyncJobSnapshotItem[]): StatusLineComponent {
 }
 
 describe("status-line background-job badge", () => {
+	it("keeps running subagents in the configured group instead of moving them to the right", () => {
+		const component = makeComponent([runningJob("task", 0)]);
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["model", "subagents", "context_pct"],
+			rightSegments: [],
+		});
+		component.setRunningSubagents(["task-0"]);
+
+		const content = stripVTControlCharacters(component.getTopBorder(240).content);
+		const badge = `${theme.icon.agents} 1`;
+		expect(content.split(badge)).toHaveLength(2);
+		expect(content.indexOf(badge)).toBeLessThan(content.indexOf("100K"));
+		const leftBadge = component.describePreview().c?.find(child => "k" in child && child.key === "subagents");
+		expect(leftBadge && "k" in leftBadge ? leftBadge.p : undefined).toMatchObject({ side: "left" });
+
+		component.updateSettings({ preset: "custom", leftSegments: ["model"], rightSegments: ["subagents"] });
+		const customContent = stripVTControlCharacters(component.getTopBorder(120).content);
+		expect(customContent.split(badge)).toHaveLength(2);
+		expect(customContent.indexOf(badge)).toBeGreaterThan(customContent.indexOf("Test Model"));
+		const rightBadge = component.describePreview().c?.find(child => "k" in child && child.key === "subagents");
+		expect(rightBadge && "k" in rightBadge ? rightBadge.p : undefined).toMatchObject({ side: "right" });
+	});
+
 	it("counts non-task jobs without duplicating running task subagents", () => {
 		const running = [runningJob("task", 0), runningJob("bash", 1), runningJob("eval", 2)];
 		const component = makeComponent(running);

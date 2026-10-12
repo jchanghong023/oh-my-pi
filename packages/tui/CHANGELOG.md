@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Running subagent counts stay in their configured status-line group instead of always moving to the right.
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

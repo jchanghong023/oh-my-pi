@@ -640,14 +640,26 @@ describe("StatusLineComponent context breakdown", () => {
 	it("standalone mode renders a plain bottom bar without powerline chrome", () => {
 		const { session } = makeSession({
 			messages: [userMessage("hi")],
+			sessionName: "overflow-session",
 			usage: { tokens: 1000, contextWindow: 100_000, percent: 1 },
 		});
 		const comp = statusLines.track(new StatusLineComponent(session, statusLineHost));
-		expect(comp.render(80)).toHaveLength(1); // box main lives in the border; dropped segments use the overflow row
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["model", "session_name"],
+			rightSegments: [],
+			separator: "powerline-thin",
+			sessionAccent: false,
+		});
+		const width = 24;
+
+		expect(comp.render(width)).toHaveLength(1); // the session title overflows the box border
+		expect(Bun.stripANSI(comp.render(width).join("\n"))).toContain("overflow-session");
 
 		comp.setComposerStyle({ statusAttachment: "none", bottomBar: "full", bottomBarGap: false });
-		const lines = comp.render(80);
+		const lines = comp.render(width);
 		expect(lines).toHaveLength(2);
+		expect(Bun.stripANSI(lines[1])).toContain("overflow-session");
 		// Plain bar: transparent background, no powerline caps or bg fill.
 		expect(lines[0]).not.toContain("\x1b[48;");
 		expect(lines[0]).toContain("\x1b[49m");
@@ -655,7 +667,7 @@ describe("StatusLineComponent context breakdown", () => {
 		// Styles without bottom chrome (rule/field/rail) request a spacer row so
 		// the bar doesn't sit flush against the last input row.
 		comp.setComposerStyle({ statusAttachment: "none", bottomBar: "full", bottomBarGap: true });
-		const gapped = comp.render(80);
+		const gapped = comp.render(width);
 		expect(gapped).toHaveLength(3);
 		expect(gapped[0]).toBe("");
 		expect(gapped.slice(1)).toEqual([...lines]);
@@ -664,15 +676,27 @@ describe("StatusLineComponent context breakdown", () => {
 	it("standalone bar yields to the autocomplete menu via the probe", () => {
 		const { session } = makeSession({
 			messages: [userMessage("hi")],
+			sessionName: "overflow-session",
 			usage: { tokens: 1000, contextWindow: 100_000, percent: 1 },
 		});
 		const comp = statusLines.track(new StatusLineComponent(session, statusLineHost));
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["model", "session_name"],
+			rightSegments: [],
+			separator: "powerline-thin",
+			sessionAccent: false,
+		});
+		const width = 24;
 		comp.setComposerStyle({ statusAttachment: "none", bottomBar: "full", bottomBarGap: true });
 		let menuOpen = true;
 		comp.setAutocompleteActiveProbe(() => menuOpen);
-		expect(comp.render(80)).toHaveLength(0);
+		expect(comp.render(width)).toHaveLength(0);
 		menuOpen = false;
-		expect(comp.render(80)).toHaveLength(3); // spacer + bar + overflow return together
+		const restored = comp.render(width);
+		expect(restored).toHaveLength(3); // spacer, main bar, and overflow return together
+		expect(restored[0]).toBe("");
+		expect(Bun.stripANSI(restored[2])).toContain("overflow-session");
 	});
 
 	it("claude layout splits groups: left-only bottom bar, right group as top-rule chip", () => {
