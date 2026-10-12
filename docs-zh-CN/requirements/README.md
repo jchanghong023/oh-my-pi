@@ -20,3 +20,11 @@
 其他业务代码审查修复仅完成源码语义核对和限定修改文件的非测试检查；其测试、跨文件运行时行为及真实入口未验证。Goal 自动编排的本次专项验证见上表，不代表其他修复或完整门禁通过。
 
 Windows 安装器专项：Windows PowerShell 5.1 下 14 个用例通过，11 个 POSIX 用例按平台跳过；覆盖系统代理、显式环境代理优先级及下载回退的真实 HTTP 边界，以及校验失败、替换/回滚失败、PATH 部分完成、带单引号路径的可执行恢复/重试命令和运行中映像替换。真实 `install.ps1 -Binary` 入口已验证清空代理环境变量后经本机 Windows 系统代理下载 fork Release 并运行版本命令；实际文件锁故障非零退出、打印恢复指令、保留可运行下载且不损坏旧安装，临时 PATH 项已移除。未运行 fulltest/slowtest；PowerShell 7、另一台机器和 ZCode GUI 未验证。
+
+Windows 运行时代理专项（installGlobalProxyFetch 系统代理回退）：`packages/ai` 代理相关 4 个测试文件 60 通过／1 平台跳过，覆盖 reg 输出解析（bare/per-protocol/ProxyEnable=0/socks-only）、安装与按 URL 注入、环境变量优先、`NO_PROXY` 与回环 bypass、per-request proxy 优先；本机（`ProxyEnable=1`、`ProxyServer=127.0.0.1:7890`、无代理环境变量）经真实读取与包装链路验证 https 请求注入 `http://127.0.0.1:7890`、`NO_PROXY` 命中不注入、显式 `HTTPS_PROXY` 优先于系统代理。fastcheck 通过（54.4 秒）。真实 LLM 出网、fulltest/slowtest 及 Linux/WSL 行为未验证。
+
+零配置 TLS 默认（applyForkNetworkDefaults）：单测 3 例通过（未设→默认 `0`/`true`、显式 `NODE_TLS_REJECT_UNAUTHORIZED=1` 与 `GIT_SSL_NO_VERIFY=false` 保留）；本机自签证书真实链路验证默认生效（证书错误→200）、显式 `=1` 恢复严格校验。fastcheck 通过。CLI 主进程真实入口（TUI/RPC 全链路）、git 子进程继承与 fulltest/slowtest 未验证。
+
+安装器 TLS 放宽专项（install.ps1）：`fork-installer-routing.test.ts` 26 用例中 Windows 侧 15 通过／11 POSIX 跳过，含新增自签证书 HTTPS 真实下载用例（curl `--insecure --ssl-no-revoke` 直接成功、不走 IWR 回退）与 PS 5.1 TLS 1.2/证书回调装接断言；既有代理三路径（system/environment/fallback）与替换/回滚/PATH 用例不回归。fastcheck 通过（25.5 秒）。PowerShell 7 真实 `-SkipCertificateCheck` 路径、真实公网下载与 fulltest/slowtest 未验证。
+
+README CMD 安装命令：根 README 新增的 CMD 等价安装命令（curl 下载脚本 + `powershell -File` 执行）已在真实 cmd.exe 完整验证一次：隔离 `PI_INSTALL_DIR` 下解析最新 Release、自动经本机 Windows 系统代理下载二进制、安装成功 exit 0、`omp --version` 报告 `omp/18.9.2+fork.307`；验证后用户 PATH 已恢复原值、临时安装与配置目录已清理。PowerShell 5.1/7 的原有单行命令行为未变，未重复验证。

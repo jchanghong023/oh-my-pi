@@ -49,6 +49,12 @@ curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
 ```
 
+**Windows x64（CMD，先下载再交给同一安装器执行）**
+
+```bat
+curl -fsSL -o "%TEMP%\install-omp.ps1" https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\install-omp.ps1" -Binary
+```
+
 安装脚本在运行时解析最新发布的 fork release。若要安装指定的 fork release，请在 Linux 上通过 `--ref` 传入其 tag，在 Windows 上通过 `-Ref` 传入。
 
 fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build-number>`。工作区包版本仍与上游兼容，因为本 fork 不向 npm 发布包。

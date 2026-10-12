@@ -7,11 +7,15 @@ import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import {
 	__resetGlobalProxyFetch,
 	__resetProxyCache,
+	__resetWindowsSystemProxy,
+	__setWindowsSystemProxyReader,
+	applyForkNetworkDefaults,
 	connectProxiedSocket,
 	getProxyForProvider,
 	getProxyForUrl,
 	installGlobalProxyFetch,
 	isLocalOrMetadataHost,
+	parseInternetSettingsProxy,
 	shouldBypassProxy,
 	wrapFetchForProxy,
 } from "@oh-my-pi/pi-ai/utils/proxy";
@@ -110,6 +114,10 @@ beforeEach(() => {
 	// providers with no proxy env set, which would otherwise cache
 	// `undefined` past the env writes below.
 	__resetProxyCache();
+	// Pin the Windows system-proxy reader to "disabled" so install-time
+	// assertions stay deterministic on a Windows dev machine whose real
+	// system proxy is enabled; the system-proxy describe overrides it again.
+	__setWindowsSystemProxyReader(() => undefined);
 	saved = {};
 	for (const key of proxyEnvKeys()) {
 		saved[key] = Bun.env[key];
@@ -119,6 +127,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	__resetProxyCache();
+	__resetWindowsSystemProxy();
 	for (const key of proxyEnvKeys()) delete Bun.env[key];
 	for (const key in saved) {
 		const value = saved[key];
@@ -393,6 +402,170 @@ describe("installGlobalProxyFetch", () => {
 		const wrapped = globalThis.fetch;
 		installGlobalProxyFetch();
 		expect(globalThis.fetch).toBe(wrapped);
+	});
+});
+
+describe("parseInternetSettingsProxy", () => {
+	const output = (values: string[]): string =>
+		["HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "", ...values].join("\n");
+
+	it("reads a bare host:port ProxyServer for both protocols", () => {
+		const proxy = parseInternetSettingsProxy(
+			output(["    ProxyEnable    REG_DWORD    0x1", "    ProxyServer    REG_SZ    127.0.0.1:7890"]),
+		);
+		expect(proxy).toEqual({ http: "http://127.0.0.1:7890", https: "http://127.0.0.1:7890" });
+	});
+
+	it("reads per-protocol entries, keeps schemed URLs, and drops socks/ftp", () => {
+		const proxy = parseInternetSettingsProxy(
+			output([
+				"    ProxyEnable    REG_DWORD    0x1",
+				"    ProxyServer    REG_SZ    http=http://proxy.local:8080;https=proxy.local:8443;ftp=ftp://proxy.local:21;socks=socks.local:1080",
+			]),
+		);
+		expect(proxy).toEqual({ http: "http://proxy.local:8080", https: "http://proxy.local:8443" });
+	});
+
+	it("returns undefined when ProxyEnable is 0x0 even with a ProxyServer", () => {
+		expect(
+			parseInternetSettingsProxy(
+				output(["    ProxyEnable    REG_DWORD    0x0", "    ProxyServer    REG_SZ    127.0.0.1:7890"]),
+			),
+		).toBeUndefined();
+	});
+
+	it("returns undefined when ProxyServer is missing or socks-only", () => {
+		expect(parseInternetSettingsProxy(output(["    ProxyEnable    REG_DWORD    0x1"]))).toBeUndefined();
+		expect(
+			parseInternetSettingsProxy(
+				output(["    ProxyEnable    REG_DWORD    0x1", "    ProxyServer    REG_SZ    socks=socks.local:1080"]),
+			),
+		).toBeUndefined();
+	});
+});
+
+describe("installGlobalProxyFetch windows system proxy fallback", () => {
+	const nativeFetch = globalThis.fetch;
+	let calls: Array<{ url: string; proxy: unknown }>;
+
+	beforeEach(() => {
+		calls = [];
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			calls.push({
+				url: input instanceof Request ? input.url : String(input),
+				proxy: (init as { proxy?: unknown } | undefined)?.proxy,
+			});
+			return new Response("ok");
+		}) as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = nativeFetch;
+		__resetGlobalProxyFetch();
+	});
+
+	it("routes bare global fetch through the enabled system proxy", async () => {
+		__setWindowsSystemProxyReader(() => ({ http: "http://127.0.0.1:7890", https: "http://127.0.0.1:7890" }));
+		installGlobalProxyFetch();
+		await fetch("https://api.anthropic.com/v1/messages");
+		expect(calls[0].proxy).toBe("http://127.0.0.1:7890");
+	});
+
+	it("yields to the protocol env proxy instead of overriding it", async () => {
+		__setWindowsSystemProxyReader(() => ({ https: "http://system-proxy:7890" }));
+		Bun.env.HTTPS_PROXY = "http://env-proxy:8080";
+		installGlobalProxyFetch();
+		await fetch("https://api.anthropic.com/v1/messages");
+		// Untouched init: Bun's fetch applies HTTPS_PROXY natively and wins.
+		expect(calls[0].proxy).toBeUndefined();
+	});
+
+	it("yields to ALL_PROXY when no protocol-specific env proxy is set", async () => {
+		__setWindowsSystemProxyReader(() => ({ https: "http://system-proxy:7890" }));
+		Bun.env.ALL_PROXY = "http://env-all:8080";
+		installGlobalProxyFetch();
+		await fetch("https://api.anthropic.com/v1/messages");
+		expect(calls[0].proxy).toBeUndefined();
+	});
+
+	it("picks the per-protocol system proxy entry for each URL scheme", async () => {
+		__setWindowsSystemProxyReader(() => ({ http: "http://sys-http:8080", https: "http://sys-https:8443" }));
+		installGlobalProxyFetch();
+		await fetch("http://api.openai.com/v1");
+		await fetch("https://api.openai.com/v1");
+		expect(calls[0].proxy).toBe("http://sys-http:8080");
+		expect(calls[1].proxy).toBe("http://sys-https:8443");
+	});
+
+	it("bypasses loopback targets and NO_PROXY matches like PI_PROXY does", async () => {
+		__setWindowsSystemProxyReader(() => ({ http: "http://127.0.0.1:7890", https: "http://127.0.0.1:7890" }));
+		Bun.env.NO_PROXY = "internal.company.com";
+		installGlobalProxyFetch();
+		await fetch("http://127.0.0.1:8080/v1/messages");
+		await fetch("https://internal.company.com/v1/messages");
+		expect(calls[0].proxy).toBeUndefined();
+		expect(calls[1].proxy).toBeUndefined();
+	});
+
+	it("keeps a caller-supplied per-request proxy", async () => {
+		__setWindowsSystemProxyReader(() => ({ https: "http://system-proxy:7890" }));
+		installGlobalProxyFetch();
+		const wrapped = globalThis.fetch;
+		await wrapped("https://api.anthropic.com/v1/messages", { proxy: "http://explicit:1" });
+		expect(calls[0].proxy).toBe("http://explicit:1");
+	});
+
+	it("prefers PI_PROXY over the system proxy", async () => {
+		Bun.env.PI_PROXY = PROXY;
+		__setWindowsSystemProxyReader(() => ({ https: "http://system-proxy:7890" }));
+		installGlobalProxyFetch();
+		await fetch("https://api.anthropic.com/v1/messages");
+		expect(calls[0].proxy).toBe(PROXY);
+	});
+});
+
+describe("applyForkNetworkDefaults", () => {
+	const forkDefaultKeys = ["NODE_TLS_REJECT_UNAUTHORIZED", "GIT_SSL_NO_VERIFY"] as const;
+	let forkDefaultsSaved: Record<string, string | undefined>;
+
+	beforeEach(() => {
+		forkDefaultsSaved = {};
+		for (const key of forkDefaultKeys) {
+			forkDefaultsSaved[key] = Bun.env[key];
+			delete Bun.env[key];
+			delete process.env[key];
+		}
+	});
+
+	afterEach(() => {
+		for (const key of forkDefaultKeys) {
+			delete Bun.env[key];
+			delete process.env[key];
+			const value = forkDefaultsSaved[key];
+			if (value !== undefined) Bun.env[key] = value;
+		}
+	});
+
+	it("relaxes TLS and git SSL verification when nothing is set", () => {
+		applyForkNetworkDefaults();
+		expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
+		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
+		expect(process.env.GIT_SSL_NO_VERIFY).toBe("true");
+		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("true");
+	});
+
+	it("keeps an explicit NODE_TLS_REJECT_UNAUTHORIZED as the strict-mode off switch", () => {
+		Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+		applyForkNetworkDefaults();
+		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("1");
+		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("true");
+	});
+
+	it("keeps an explicit GIT_SSL_NO_VERIFY", () => {
+		Bun.env.GIT_SSL_NO_VERIFY = "false";
+		applyForkNetworkDefaults();
+		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("false");
+		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
 	});
 });
 

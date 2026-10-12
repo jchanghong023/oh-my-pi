@@ -219,6 +219,133 @@ export function wrapFetchForProxy(fetchImpl: FetchImpl, provider: string): Fetch
 	return wrapFetchWithProxyUrl(fetchImpl, getProxyForProvider(provider));
 }
 
+/**
+ * Registry key holding the per-user Windows system proxy (WinInet "Internet
+ * Settings"): the static proxy Windows apps pick up from Settings → Network &
+ * Internet → Proxy. PAC (`AutoConfigURL`) and WPAD are not honored.
+ */
+const INTERNET_SETTINGS_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+/** Static per-user Windows system proxy, normalized to proxy URLs Bun can drive. */
+export interface WindowsSystemProxy {
+	/** Proxy URL for `http:`/`ws:` targets, when configured. */
+	http?: string;
+	/** Proxy URL for `https:`/`wss:` targets, when configured. */
+	https?: string;
+}
+
+function normalizeProxyUrl(hostPort: string): string {
+	const trimmed = hostPort.trim();
+	return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+/**
+ * Parse `reg query` output for the Internet Settings key into a system proxy.
+ * `ProxyEnable` must be nonzero; `ProxyServer` is either a bare `host:port`
+ * applying to every protocol or a `http=h:p;https=h:p;…` per-protocol list,
+ * where only the http/https entries map to proxies Bun's fetch can drive —
+ * `socks=` entries are dropped, not silently applied to the wrong protocol.
+ */
+export function parseInternetSettingsProxy(regQueryOutput: string): WindowsSystemProxy | undefined {
+	let enabled = false;
+	let server: string | undefined;
+	for (const line of regQueryOutput.split(/\r?\n/)) {
+		const match = line.match(/^\s*(ProxyEnable|ProxyServer)\s+REG_(DWORD|SZ)\s+(.+?)\s*$/i);
+		if (!match) continue;
+		if (match[1].toLowerCase() === "proxyenable") {
+			const raw = match[3];
+			enabled = Number.parseInt(raw, raw.toLowerCase().startsWith("0x") ? 16 : 10) !== 0;
+		} else {
+			server = match[3];
+		}
+	}
+	if (!enabled || !server) return undefined;
+	if (!server.includes("=")) {
+		return { http: normalizeProxyUrl(server), https: normalizeProxyUrl(server) };
+	}
+	const proxy: WindowsSystemProxy = {};
+	for (const entry of server.split(";")) {
+		const eq = entry.indexOf("=");
+		if (eq <= 0) continue;
+		const protocol = entry.slice(0, eq).trim().toLowerCase();
+		const target = entry.slice(eq + 1).trim();
+		if (!target) continue;
+		if (protocol === "http") proxy.http = normalizeProxyUrl(target);
+		else if (protocol === "https") proxy.https = normalizeProxyUrl(target);
+	}
+	return proxy.http || proxy.https ? proxy : undefined;
+}
+
+// `null` marks "not resolved yet"; `undefined` caches a resolved "no system proxy".
+let windowsSystemProxyCache: WindowsSystemProxy | undefined | null = null;
+let windowsSystemProxyReaderOverride: (() => WindowsSystemProxy | undefined) | undefined;
+
+/** Test seam: replaces the registry reader and clears its cache. */
+export function __setWindowsSystemProxyReader(reader: (() => WindowsSystemProxy | undefined) | undefined): void {
+	windowsSystemProxyReaderOverride = reader;
+	windowsSystemProxyCache = null;
+}
+
+/** Test seam: restores the real registry reader and clears its cache. */
+export function __resetWindowsSystemProxy(): void {
+	__setWindowsSystemProxyReader(undefined);
+}
+
+/**
+ * Resolve the per-user Windows system proxy once per process. Non-Windows
+ * processes and any registry read failure resolve to `undefined`, leaving
+ * every request on its default route.
+ */
+function readWindowsSystemProxy(): WindowsSystemProxy | undefined {
+	if (windowsSystemProxyReaderOverride) return windowsSystemProxyReaderOverride();
+	if (process.platform !== "win32") return undefined;
+	if (windowsSystemProxyCache !== null) return windowsSystemProxyCache;
+	let proxy: WindowsSystemProxy | undefined;
+	try {
+		const result = Bun.spawnSync(["reg.exe", "query", INTERNET_SETTINGS_KEY], {
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		proxy = result.exitCode === 0 ? parseInternetSettingsProxy(result.stdout.toString()) : undefined;
+	} catch (error) {
+		logger.debug("windows system proxy read failed", { error: String(error) });
+	}
+	windowsSystemProxyCache = proxy;
+	return proxy;
+}
+
+/**
+ * System-proxy candidate for one URL, or `undefined` to leave the request on
+ * its default route. Explicit env proxies always win: Bun's fetch applies
+ * `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` natively, so injecting the system
+ * proxy over them would silently override the user's explicit choice.
+ * `NO_PROXY` and loopback/private targets bypass exactly as they do for
+ * `PI_PROXY`.
+ */
+function systemProxyForUrl(urlObj: URL, systemProxy: WindowsSystemProxy): string | undefined {
+	if (shouldBypassProxy(urlObj)) return undefined;
+	const secure = urlObj.protocol === "https:" || urlObj.protocol === "wss:";
+	const envProxy = secure ? Bun.env.HTTPS_PROXY || Bun.env.https_proxy : Bun.env.HTTP_PROXY || Bun.env.http_proxy;
+	if (envProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy) return undefined;
+	return secure ? systemProxy.https : systemProxy.http;
+}
+
+/** Wraps `fetchImpl` so requests without an explicit proxy or env proxy tunnel through the Windows system proxy. */
+function wrapFetchWithSystemProxy(fetchImpl: FetchImpl, systemProxy: WindowsSystemProxy): FetchImpl {
+	const wrapped = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const urlStr = input instanceof Request ? input.url : input.toString();
+		let proxyUrl: string | undefined;
+		try {
+			proxyUrl = systemProxyForUrl(new URL(urlStr), systemProxy);
+		} catch {
+			// Unparseable targets pass through untouched.
+		}
+		return proxyUrl ? fetchImpl(input, withProxyInit(input, init, proxyUrl)) : fetchImpl(input, init);
+	};
+	if (fetchImpl.preconnect) wrapped.preconnect = fetchImpl.preconnect;
+	return wrapped;
+}
+
 let globalProxyFetchInstalled = false;
 
 /** Test seam: re-arms {@link installGlobalProxyFetch}. */
@@ -227,7 +354,32 @@ export function __resetGlobalProxyFetch(): void {
 }
 
 /**
- * Routes the process-wide `globalThis.fetch` through `PI_PROXY`.
+ * Fork zero-config network defaults: relax TLS certificate verification for
+ * every `fetch` (`NODE_TLS_REJECT_UNAUTHORIZED=0`, honored by Bun's fetch) and
+ * git SSL checks for spawned `git` children (`GIT_SSL_NO_VERIFY=true`), so
+ * interception proxies and private gateways with unknown root CAs work without
+ * per-machine environment setup.
+ *
+ * An explicitly set variable always wins — exporting
+ * `NODE_TLS_REJECT_UNAUTHORIZED=1` (or `GIT_SSL_NO_VERIFY=false`) restores
+ * strict verification. Applying the default mutates both `Bun.env` and
+ * `process.env` so the runtime's lazy per-request read and child-process
+ * inheritance see it. Fork behavior: this is a deliberate security-posture
+ * default for a personal fork, not an upstream mechanism.
+ */
+export function applyForkNetworkDefaults(): void {
+	if (!Bun.env.NODE_TLS_REJECT_UNAUTHORIZED && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+		Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+	}
+	if (!Bun.env.GIT_SSL_NO_VERIFY && !process.env.GIT_SSL_NO_VERIFY) {
+		Bun.env.GIT_SSL_NO_VERIFY = process.env.GIT_SSL_NO_VERIFY = "true";
+	}
+}
+
+/**
+ * Routes the process-wide `globalThis.fetch` through `PI_PROXY`, or — when no
+ * `PI_PROXY` is set — through the per-user Windows system proxy for requests
+ * that carry no explicit proxy environment variable.
  *
  * Bun's native fetch resolves `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` by
  * itself but knows nothing about `PI_PROXY`. Provider *streams* get their proxy
@@ -237,10 +389,19 @@ export function __resetGlobalProxyFetch(): void {
  * fatal wherever a provider geo-blocks its token endpoint: the stream is
  * proxied, the refresh is not, and the credential dies with a 403.
  *
+ * Neither Bun's fetch nor any provider path reads the Windows system proxy
+ * (Settings → Network & Internet → Proxy), so a machine whose only proxy is
+ * configured there sends every request direct. On Windows with no `PI_PROXY`,
+ * the enabled static system proxy (WinInet Internet Settings) therefore becomes
+ * the lowest explicit tier: explicit env proxies still win per URL — Bun
+ * applies them natively and the system wrapper yields — matching the
+ * installer's env-first, system-proxy-second resolution.
+ *
  * A per-request `proxy` (including `PI_PROXY_<PROVIDER>` injected by
  * {@link wrapFetchForProxy}) still wins, and loopback / private-range /
  * `NO_PROXY` targets bypass, so local model servers and MCP hosts are
- * untouched. Idempotent; a no-op when `PI_PROXY` is unset.
+ * untouched. Idempotent; a no-op when `PI_PROXY` is unset and no usable system
+ * proxy is enabled.
  */
 export function installGlobalProxyFetch(): void {
 	if (globalProxyFetchInstalled) return;
@@ -256,11 +417,23 @@ export function installGlobalProxyFetch(): void {
 		NO_PROXY: Bun.env.NO_PROXY || Bun.env.no_proxy,
 	};
 	if (!proxyUrl) {
+		const systemProxy = readWindowsSystemProxy();
+		if (systemProxy?.http || systemProxy?.https) {
+			globalProxyFetchInstalled = true;
+			globalThis.fetch = wrapFetchWithSystemProxy(globalThis.fetch, systemProxy) as typeof globalThis.fetch;
+			logger.debug("global system proxy fetch installed", {
+				http: systemProxy.http ? proxyLogTarget(systemProxy.http) : undefined,
+				https: systemProxy.https ? proxyLogTarget(systemProxy.https) : undefined,
+				env,
+			});
+			return;
+		}
 		// Without any proxy variable there is nothing to diagnose; skip the
 		// per-process line. When some are set, record why none was installed.
 		if (Object.values(env).some(value => value !== undefined && value !== "")) {
 			logger.debug("global proxy fetch not installed", {
 				reason: "PI_PROXY unset",
+				windowsSystemProxy: process.platform === "win32" ? "disabled" : undefined,
 				env,
 			});
 		}

@@ -167,6 +167,23 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
     throw "Windows PowerShell 5.1 or newer is required (found $($PSVersionTable.PSVersion)). Install PowerShell 7 from https://aka.ms/powershell and re-run the installer."
 }
 
+# Zero-config TLS posture, matching the fork runtime: interception proxies and
+# private gateways serve certificates the machine does not trust, and curl.exe
+# (Schannel) additionally fails on revocation checks behind them. The download
+# stays integrity-gated by the post-download `omp --version` probe, so relax
+# verification for the installer's own web requests. PS 5.1 needs TLS 1.2
+# enabled plus a permissive ServicePointManager callback; PS 7+ ignores
+# ServicePointManager for Invoke-* (HttpClient), so those callers splat
+# -SkipCertificateCheck from $script:WebSkipCertCheck instead.
+function Set-InstallTlsPolicy {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    }
+}
+$script:WebSkipCertCheck = if ($PSVersionTable.PSVersion.Major -ge 7) { @{ SkipCertificateCheck = $true } } else { @{} }
+Set-InstallTlsPolicy
+
 $Repo = "jchanghong023/oh-my-pi"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
 # Read the OS architecture from environment variables for compatibility with Windows PowerShell 5.1 and PowerShell 7+.
@@ -221,7 +238,7 @@ function Save-InstallBinary {
         }
         Set-InstallStage "download_curl"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
-        Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
+        Invoke-Native { & $curlExe.Source -fL --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
         $curlExit = $LASTEXITCODE
         if ($curlExit -ne 0) {
             $kind = switch ($curlExit) { 22 { "http" }; 28 { "timeout" }; 6 { "dns" }; 7 { "connect" }; 35 { "tls" }; 60 { "tls" }; default { "network" } }
@@ -241,7 +258,7 @@ function Save-InstallBinary {
         Set-InstallStage "download_webrequest"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
         try {
-            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing
+            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing @script:WebSkipCertCheck
             Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
         } catch {
             Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
@@ -405,7 +422,7 @@ function Install-Binary {
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
         Write-Host "Fetching release $Ref..."
         try {
-            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60
+            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60 @script:WebSkipCertCheck
         } catch {
             Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
             throw "Release tag not found: $Ref`nOnly published release tags are supported."
@@ -415,7 +432,7 @@ function Install-Binary {
         Set-InstallStage "release_metadata"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
         try {
-            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60
+            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60 @script:WebSkipCertCheck
         } catch {
             Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
             throw

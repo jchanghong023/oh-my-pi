@@ -101,7 +101,8 @@ async function setFullProcessName(): Promise<void> {
 /** Install PI_PROXY handling before any command implementation can make a provider request. */
 async function installNetworkBootstrap(): Promise<void> {
 	// Latency boundary: proxy socket/error modules are unnecessary before the first frame.
-	const { installGlobalProxyFetch } = await import("@oh-my-pi/pi-ai/utils/proxy");
+	const { applyForkNetworkDefaults, installGlobalProxyFetch } = await import("@oh-my-pi/pi-ai/utils/proxy");
+	applyForkNetworkDefaults();
 	installGlobalProxyFetch();
 }
 
