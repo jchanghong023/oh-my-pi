@@ -488,20 +488,21 @@ mod tests {
 
 	#[test]
 	fn utf8_locale_counts_display_columns_and_never_splits_characters() {
+		// C.UTF-8 does not require a generated language-specific locale.
 		let cjk = "你你你\n".as_bytes();
-		assert_eq!(ok(cjk, &["-w", "3"], "en_US.UTF-8"), "你\n你\n你\n".as_bytes());
-		assert_eq!(ok(cjk, &["-c", "-w", "2"], "en_US.UTF-8"), "你你\n你\n".as_bytes());
-		assert_eq!(ok(cjk, &["-b", "-w", "4"], "en_US.UTF-8"), "你\n你\n你\n".as_bytes());
+		assert_eq!(ok(cjk, &["-w", "3"], "C.UTF-8"), "你\n你\n你\n".as_bytes());
+		assert_eq!(ok(cjk, &["-c", "-w", "2"], "C.UTF-8"), "你你\n你\n".as_bytes());
+		assert_eq!(ok(cjk, &["-b", "-w", "4"], "C.UTF-8"), "你\n你\n你\n".as_bytes());
 		// The C locale counts bytes as columns and may split characters.
 		assert_eq!(ok("你\n".as_bytes(), &["-w", "2"], "C"), b"\xe4\xbd\n\xa0\n");
 		// Combining marks are zero width; invalid bytes pass through as width 1.
-		assert_eq!(ok("ab\u{e9}\u{301}cd\n".as_bytes(), &["-w", "3"], "en_US.UTF-8"), "ab\u{e9}\u{301}\ncd\n".as_bytes());
-		assert_eq!(ok(b"\xe4\xbda\n", &["-w", "1"], "en_US.UTF-8"), b"\xe4\n\xbd\na\n");
+		assert_eq!(ok("ab\u{e9}\u{301}cd\n".as_bytes(), &["-w", "3"], "C.UTF-8"), "ab\u{e9}\u{301}\ncd\n".as_bytes());
+		assert_eq!(ok(b"\xe4\xbda\n", &["-w", "1"], "C.UTF-8"), b"\xe4\n\xbd\na\n");
 		// Backspace after a wide character wraps the unsigned column like GNU.
-		assert_eq!(ok("a你\x08\x08xyz\n".as_bytes(), &["-w", "10"], "en_US.UTF-8"), "a你\x08\n\x08xyz\n".as_bytes());
+		assert_eq!(ok("a你\x08\x08xyz\n".as_bytes(), &["-w", "10"], "C.UTF-8"), "a你\x08\n\x08xyz\n".as_bytes());
 		// No-break space is not a break point; ideographic space is.
-		assert_eq!(ok("a\u{a0}b c\n".as_bytes(), &["-s", "-w", "3"], "en_US.UTF-8"), "a\u{a0}b\n c\n".as_bytes());
-		assert_eq!(ok("a\u{3000}bcd\n".as_bytes(), &["-s", "-w", "3"], "en_US.UTF-8"), "a\u{3000}\nbcd\n".as_bytes());
+		assert_eq!(ok("a\u{a0}b c\n".as_bytes(), &["-s", "-w", "3"], "C.UTF-8"), "a\u{a0}b\n c\n".as_bytes());
+		assert_eq!(ok("a\u{3000}bcd\n".as_bytes(), &["-s", "-w", "3"], "C.UTF-8"), "a\u{3000}\nbcd\n".as_bytes());
 	}
 
 	#[test]
