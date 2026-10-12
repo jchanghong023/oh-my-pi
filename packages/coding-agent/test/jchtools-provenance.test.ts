@@ -3,7 +3,14 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { JCHTOOLS_API, projectJchToolsContext, streamJchToolsAgent } from "../src/config/jchtools-provider";
+import {
+	JCHTOOLS_API,
+	projectJchToolsContext,
+	projectJchToolsMessages,
+	streamJchToolsAgent,
+} from "../src/config/jchtools-provider";
+import { convertToLlm } from "../src/session/messages";
+import { SessionManager } from "../src/session/session-manager";
 
 // Fork JchTools: caller-visible text survives model switches; internal sources never reach HTTP.
 test("filters by provenance while retaining literal constraints and ordinary assistant text on HTTP", async () => {
@@ -93,4 +100,75 @@ test("filters by provenance while retaining literal constraints and ordinary ass
 	} finally {
 		await server.stop(true);
 	}
+});
+
+test("projects persisted source provenance across compaction without replaying the cleared epoch", () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	manager.appendMessage({ role: "user", content: "old cleared task", timestamp: 1 });
+	manager.appendResetBoundary();
+	const literal = "  使用 scout，保留 system/developer 与 <system-reminder>用户原文</system-reminder>  ";
+	manager.appendMessage({ role: "user", content: literal, timestamp: 2 });
+	const failed: AssistantMessage = {
+		role: "assistant",
+		api: "openai-completions",
+		provider: "ordinary",
+		model: "local",
+		timestamp: 3,
+		content: [
+			{ type: "text", text: "visible interrupted answer" },
+			{ type: "thinking", thinking: "PRIVATE_THINKING" },
+			{ type: "toolCall", id: "dangling", name: "read", arguments: { path: "PRIVATE_PATH" } },
+		],
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "aborted",
+	};
+	manager.appendMessage(failed);
+	manager.appendMessage({ role: "user", content: "PRIVATE_SYNTHETIC", synthetic: true, timestamp: 4 });
+	manager.appendMessage({ role: "user", content: "PRIVATE_AGENT_USER", attribution: "agent", timestamp: 5 });
+	manager.appendMessage({
+		role: "developer",
+		content: "explicit source constraints",
+		attribution: "user",
+		timestamp: 6,
+	});
+	manager.appendCustomMessageEntry("runtime-notice", "PRIVATE_NOTIFICATION", true);
+	manager.appendCustomMessageEntry("goal-auto-orchestrate-context", "PRIVATE_GOAL", true, undefined, "user");
+	const kept = manager.appendCustomMessageEntry(
+		"skill-prompt",
+		"PRIVATE_SKILL_BODY",
+		true,
+		{ prompt: "/source-task keep  spaces {{literal}}" },
+		"user",
+	);
+	manager.appendCompaction("PRIVATE_GENERATED_SUMMARY", undefined, kept, 1000, {
+		preserveData: {
+			openaiRemoteCompaction: {
+				provider: "ordinary",
+				replacementHistory: [
+					{ type: "message", role: "user", content: [{ type: "input_text", text: "PRIVATE_REPLACEMENT" }] },
+					{ type: "compaction", encrypted_content: "PRIVATE_NATIVE_REPLAY" },
+				],
+			},
+		},
+	});
+	manager.appendMessage({ role: "user", content: "explicit next task", timestamp: 7 });
+	const source = manager.buildSessionContext({ preserveFailedTurns: true });
+	const projected = projectJchToolsContext({ messages: convertToLlm(projectJchToolsMessages(source.messages)) });
+	expect(projected.messages.map(message => ({ role: message.role, content: message.content }))).toEqual([
+		{ role: "user", content: literal },
+		{ role: "assistant", content: [{ type: "text", text: "visible interrupted answer" }] },
+		{ role: "developer", content: "explicit source constraints" },
+		{ role: "user", content: "/source-task keep  spaces {{literal}}" },
+		{ role: "user", content: "explicit next task" },
+	]);
+	expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
+	expect(failed.content).toHaveLength(3);
+	expect(failed.stopReason).toBe("aborted");
 });

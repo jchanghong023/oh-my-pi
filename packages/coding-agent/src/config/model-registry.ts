@@ -9,7 +9,6 @@ import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-co
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
-import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-ai/stream";
 import type {
 	Api,
 	Context,
@@ -49,6 +48,7 @@ import {
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
+import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";

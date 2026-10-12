@@ -9,6 +9,7 @@ import {
 	resolveTelemetry,
 	type StreamFn,
 	type ThinkingLevel,
+	Tokenizer,
 } from "@oh-my-pi/pi-agent-core";
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
@@ -61,6 +62,7 @@ import type {
 	ProviderSessionState,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -1029,7 +1031,7 @@ export class SessionMaintenance {
 			) {
 				anchoredTokensRemoved += Math.max(0, region.tokens - replacementTokenCount);
 			}
-			return { region, replacement };
+			return { region, replacement, replacementTokens: replacementTokenCount };
 		});
 
 		const entrySnapshots = new Map<SessionEntry, SessionEntry>();
@@ -1416,11 +1418,12 @@ export class SessionMaintenance {
 							);
 							snapcompactResult = rendered.result;
 							const framePayloadBytes = rendered.framePayloadBytes;
-							if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
+							const frameByteBudget = snapcompact.frameDataBytesBudget(this.#model);
+							if (framePayloadBytes > frameByteBudget) {
 								logger.warn("Snapcompact exceeded the per-request frame payload budget", {
 									model: this.#model?.id,
 									framePayloadBytes,
-									budget: snapcompact.FRAME_DATA_BYTES_BUDGET,
+									budget: frameByteBudget,
 								});
 								this.#host.emitNotice(
 									"warning",
@@ -1442,7 +1445,8 @@ export class SessionMaintenance {
 							// redactedThinking) have no trustworthy local token price, so counting
 							// them in the archived region's baseline while the imaged projection
 							// drops them lets an inflating result pass the guard (#10716). The
-							// window-fit check below keeps the conservative `projected`.
+							// window-fit check below keeps the full `projected`, which charges the
+							// replayed reasoning the reader bills.
 							const projectedForReduction = this.#projectSnapcompactContextTokens(
 								preparation,
 								snapcompactResult,
@@ -2597,18 +2601,20 @@ export class SessionMaintenance {
 	 * floor the compaction decision respects so on-wire compression can never
 	 * suppress it.
 	 */
-	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
+	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = [], tokenizer = this.#tokenizer): number {
 		// Local counting is the whole point of this arm: provider usage is
 		// exactly what it must not trust. Exclude encrypted reasoning
 		// (thinkingSignature / redactedThinking) too — its local byte size
 		// diverges from what the provider bills, so counting it would let a
 		// thinking-heavy turn falsely trip the floor. The provider usage (the
 		// other arm of compactionContextTokens) already accounts for it.
+		// Native Responses reasoning that replays still counts, at its reported
+		// reasoning tokens (see MessageCountOptions.excludeEncryptedReasoning).
 		const opts = { excludeEncryptedReasoning: true } as const;
 		return (
-			this.#estimateRequestOverheadTokens() +
-			this.#tokenizer.countMessages(this.#host.messages(), opts) +
-			this.#tokenizer.countMessages(pendingMessages, opts)
+			computeNonMessageTokens(this.#host.nonMessageTokenSource(), tokenizer, this.#host.settings.revision) +
+			tokenizer.countMessages(this.#host.messages(), opts) +
+			tokenizer.countMessages(pendingMessages, opts)
 		);
 	}
 
@@ -2641,6 +2647,8 @@ export class SessionMaintenance {
 	 * imaged projection drops — inflated this baseline enough to accept an
 	 * inflating result (#10716). The caller's reduction-side projection excludes
 	 * them symmetrically so the comparison stays in one local token domain.
+	 * Native Responses reasoning that replays is a provider-reported token
+	 * price, not a byte guess, so it stays in every region.
 	 */
 	#projectPreSnapcompactContextTokens(preparation: CompactionPreparation): number {
 		const opts = { excludeEncryptedReasoning: true } as const;
@@ -3963,10 +3971,9 @@ export class SessionMaintenance {
 	 * `threshold − (system prompt + tools + kept recent + cap reserve)`, never
 	 * past {@link SNAPCOMPACT_POST_COMPACTION_TARGET} of the threshold, and never
 	 * past what the post-compaction context can carry without busting the model
-	 * window. Charges each frame at least the per-frame price
-	 * the tokenizer will bill ({@link snapcompact.FRAME_TOKEN_ESTIMATE}, the
-	 * conservative high-res Anthropic ceiling, or the shape's own higher price),
-	 * so picking `maxFrames` from this helper makes
+	 * window. Charges each frame {@link snapcompact.plannedFrameTokens}, never
+	 * less than the per-frame price the tokenizer will bill, so picking
+	 * `maxFrames` from this helper makes
 	 * {@link #projectSnapcompactContextTokens} succeed by construction.
 	 *
 	 * Skip vs. cap use different reserves on purpose. The **skip** decision
@@ -4004,8 +4011,8 @@ export class SessionMaintenance {
 		if (ctxWindow <= 0) {
 			return Math.min(
 				snapcompact.MAX_FRAMES_DEFAULT,
-				snapcompact.maxFramesForDataBudget(shape),
-				snapcompact.providerFrameBudget(this.#model?.provider),
+				snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(this.#model)),
+				snapcompact.providerFrameBudget(this.#model),
 			);
 		}
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
@@ -4054,10 +4061,7 @@ export class SessionMaintenance {
 			SNAPCOMPACT_POST_COMPACTION_TARGET * thresholdTokens - fixedTokens,
 		);
 		const frameBudget = Math.min(totalBudget - baseTokens - capReserve, roomBudget);
-		// Size at the conservative ceiling, or at the shape's own frame price when a
-		// forced large shape (2576px `5x8-*` on OpenAI) bills more, so the tokenizer's
-		// per-frame charge never exceeds what this cap assumed.
-		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		const frameCost = snapcompact.plannedFrameTokens(shape);
 		if (roomBudget < frameCost) {
 			logger.warn("Snapcompact archive has no room under the compaction trigger", {
 				model: this.#model?.id,
@@ -4069,8 +4073,8 @@ export class SessionMaintenance {
 		return Math.min(
 			Math.floor(frameBudget / frameCost),
 			snapcompact.MAX_FRAMES_DEFAULT,
-			snapcompact.maxFramesForDataBudget(shape),
-			snapcompact.providerFrameBudget(this.#model?.provider),
+			snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(this.#model)),
+			snapcompact.providerFrameBudget(this.#model),
 		);
 	}
 
@@ -4093,7 +4097,7 @@ export class SessionMaintenance {
 	 * Render the snapcompact archive at `options.maxFrames`, then re-render it
 	 * with the oldest frames dropped while it breaks either budget, at most
 	 * twice (the second pass absorbs per-frame variance):
-	 * - {@link snapcompact.FRAME_DATA_BYTES_BUDGET}: the cap from
+	 * - {@link snapcompact.frameDataBytesBudget} for the active model: the cap from
 	 *   {@link #computeSnapcompactMaxFrames} sizes bytes from a per-shape
 	 *   estimate, and denser frames (CJK prose drawn with fallback glyphs) run
 	 *   heavier, so the fit is `frames × budget / payload`;
@@ -4115,6 +4119,7 @@ export class SessionMaintenance {
 		let result = await snapcompact.compact(preparation, options);
 		let framePayloadBytes = this.#snapcompactFramePayloadBytes(result);
 		const ctxWindow = this.#model?.contextWindow ?? 0;
+		const frameByteBudget = snapcompact.frameDataBytesBudget(this.#model);
 		const targetTokens =
 			ctxWindow > 0
 				? Math.floor(SNAPCOMPACT_POST_COMPACTION_TARGET * resolveThresholdTokens(ctxWindow, settings))
@@ -4124,8 +4129,8 @@ export class SessionMaintenance {
 			if (!archive) break;
 			const frames = archive.frames.length;
 			let maxFrames = frames;
-			if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
-				maxFrames = Math.floor((frames * snapcompact.FRAME_DATA_BYTES_BUDGET) / framePayloadBytes);
+			if (framePayloadBytes > frameByteBudget) {
+				maxFrames = Math.floor((frames * frameByteBudget) / framePayloadBytes);
 			}
 			const projected =
 				this.#projectSnapcompactContextTokens(preparation, result, { excludeEncryptedReasoning: true }) +
@@ -4187,7 +4192,7 @@ export class SessionMaintenance {
 	): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		const blocks = archive
-			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET })
+			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model) })
 			: undefined;
 		const summaryMessage = createCompactionSummaryMessage(
 			result.summary,
@@ -4221,7 +4226,7 @@ export class SessionMaintenance {
 		const leaf = branch.at(-1);
 		const archive = snapcompact.getPreservedArchive(args.preserveData);
 		const blocks = archive
-			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET })
+			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model) })
 			: undefined;
 		if (!leaf) {
 			const summaryMessage = createCompactionSummaryMessage(
@@ -4250,7 +4255,9 @@ export class SessionMaintenance {
 			preserveData: args.preserveData,
 			providerReplayThroughEntryId: args.providerReplayThroughEntryId,
 		};
-		const rebuilt = buildSessionContext([...branch, pending]);
+		const rebuilt = buildSessionContext([...branch, pending], undefined, undefined, {
+			maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model),
+		});
 		const rebuiltTokens = this.#countProjectedMessages(rebuilt.messages);
 		const providerPayload = getOpenAiRemoteCompactionPayload(pending);
 		if (!providerPayload) {
@@ -4365,16 +4372,41 @@ export class SessionMaintenance {
 	contextFitsModel(model: Model, excludedMessage?: AssistantMessage): boolean {
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return true;
-		const activeExcludedMessage =
-			excludedMessage && this.#host.messages().includes(excludedMessage) ? excludedMessage : undefined;
+		const messages = this.#host.messages();
+		const activeExcludedMessage = excludedMessage && messages.includes(excludedMessage) ? excludedMessage : undefined;
+		// Provider usage describes the active model's last request, so the failed
+		// turn comes off it at the active model's count. The local floor counts
+		// what `model` itself would be sent: another reader drops the active
+		// model's natively replayed reasoning, and a cold session drops its own.
 		const providerExcludedTokens = activeExcludedMessage ? this.#tokenizer.countMessage(activeExcludedMessage) : 0;
+		const tokenizerOptions = {
+			nativeHistoryReplay: openAIResponsesReplaysNativeHistory(model, this.#host.providerSessionState),
+		};
+		const tokenizer = this.#tokenizer.countsAlike(model, tokenizerOptions)
+			? this.#tokenizer
+			: new Tokenizer(model, tokenizerOptions);
 		const storedExcludedTokens = activeExcludedMessage
-			? this.#tokenizer.countMessage(activeExcludedMessage, { excludeEncryptedReasoning: true })
+			? tokenizer.countMessage(activeExcludedMessage, { excludeEncryptedReasoning: true })
 			: 0;
+		// Provider usage carries the reasoning the active model's request replayed,
+		// so it moves into `model`'s domain by the difference in replayed
+		// reasoning. Usage leaves out the anchor turn's own output, so this may
+		// subtract reasoning it never held; the local floor below still bounds it.
+		let replayedReasoningShift = 0;
+		if (tokenizer !== this.#tokenizer) {
+			const retained = activeExcludedMessage ? messages.filter(m => m !== activeExcludedMessage) : messages;
+			replayedReasoningShift =
+				tokenizer.replayedReasoningTokens(retained) - this.#tokenizer.replayedReasoningTokens(retained);
+		}
 		const compactionSettings = this.#compactionSettings;
 		const residualTokens = compactionContextTokens(
-			Math.max(0, (this.#host.getContextUsage({ contextWindow })?.tokens ?? 0) - providerExcludedTokens),
-			Math.max(0, this.#estimateStoredContextTokens() - storedExcludedTokens),
+			Math.max(
+				0,
+				(this.#host.getContextUsage({ contextWindow })?.tokens ?? 0) -
+					providerExcludedTokens +
+					replayedReasoningShift,
+			),
+			Math.max(0, this.#estimateStoredContextTokens([], tokenizer) - storedExcludedTokens),
 		);
 		const fitBudget = Math.max(0, contextWindow - resolveBudgetReserveTokens(contextWindow, compactionSettings));
 		return residualTokens <= fitBudget;
@@ -4506,8 +4538,8 @@ export class SessionMaintenance {
 		if (ctxWindow <= 0) {
 			return Math.min(
 				snapcompact.MAX_FRAMES_DEFAULT,
-				snapcompact.maxFramesForDataBudget(shape),
-				snapcompact.providerFrameBudget(this.#model?.provider),
+				snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(this.#model)),
+				snapcompact.providerFrameBudget(this.#model),
 			);
 		}
 		const thresholdTokens = resolveThresholdTokens(ctxWindow, settings);
@@ -4517,7 +4549,7 @@ export class SessionMaintenance {
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;
 		const frameBudget = recoveryBandTokens - baseTokens - keptTailTokens - textEdgeTokens - SUMMARY_TEMPLATE_TOKENS;
-		const frameCost = Math.max(snapcompact.FRAME_TOKEN_ESTIMATE, shape.frameTokenEstimate);
+		const frameCost = snapcompact.plannedFrameTokens(shape);
 		if (frameBudget < frameCost) return 0;
 		// Same hard caps as #computeSnapcompactMaxFrames: a threshold-derived
 		// count above the per-request payload or provider image budget would
@@ -4526,8 +4558,8 @@ export class SessionMaintenance {
 		return Math.min(
 			Math.floor(frameBudget / frameCost),
 			snapcompact.MAX_FRAMES_DEFAULT,
-			snapcompact.maxFramesForDataBudget(shape),
-			snapcompact.providerFrameBudget(this.#model?.provider),
+			snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(this.#model)),
+			snapcompact.providerFrameBudget(this.#model),
 		);
 	}
 
@@ -5226,11 +5258,12 @@ export class SessionMaintenance {
 										);
 										snapcompactResult = rendered.result;
 										const framePayloadBytes = rendered.framePayloadBytes;
-										if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
+										const frameByteBudget = snapcompact.frameDataBytesBudget(this.#model);
+										if (framePayloadBytes > frameByteBudget) {
 											logger.warn("Snapcompact exceeded the per-request frame payload budget", {
 												model: this.#model?.id,
 												framePayloadBytes,
-												budget: snapcompact.FRAME_DATA_BYTES_BUDGET,
+												budget: frameByteBudget,
 											});
 											snapcompactBlocker =
 												"snapcompact produced too much standing image payload; trying the next preferred compaction method.";

@@ -12,6 +12,21 @@
 
 - Running subagent counts stay in their configured status-line group instead of always moving to the right.
 
+### Removed
+
+- Removed `tools/eval-format/code-mode-declarations` (`generateCodeModeDeclarations`), which only served Codex Code Mode.
+
+## [18.10.3] - 2026-10-12
+
+### Changed
+
+- Updated model picker to offer manual effort selection for unverified models instead of automatic mode
+
+### Fixed
+
+- Fixed the `snapcompact.shape` settings preview labelling variants `5x8-sent` and repeating the first variant's sample when the frame edge differs from the variant table (Claude and GPT on Cursor; `auto` on high-resolution Claude) ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed image previews inside tmux showing as `SIXEL IMAGE (WxH)` placeholder text when the outer terminal lacks SIXEL; SIXEL is now enabled from tmux's DA1 reply only when tmux's terminal description for the attached client has `Sxl` ([#15513](https://github.com/can1357/oh-my-pi/issues/15513))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

@@ -84,6 +84,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { supportsOutputTokenLimit } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { requiresNativeTools, requiresToolFreeHistoryForToolOptOut } from "@oh-my-pi/pi-catalog/compat/tools";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
@@ -109,6 +110,7 @@ import {
 	withFileLock,
 } from "@oh-my-pi/pi-utils";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
+import { frameDataBytesBudget } from "@oh-my-pi/snapcompact";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
@@ -349,7 +351,9 @@ import { isDateCwdReminderControl } from "./date-cwd-reminder";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
+	createInterruptedToolResults,
 	createInterruptedTurnAbortMessage,
+	hasRestorableTurn,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -474,7 +478,6 @@ import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } 
 import {
 	cfgClaudeResets,
 	cfgClaudeResetsAutoRedeem,
-	cfgCodeModeInputs,
 	cfgCodexResets,
 	cfgCodexResetsAutoRedeem,
 	cfgDefaultThinkingLevel,
@@ -1659,8 +1662,6 @@ export class AgentSession implements SettingsScope {
 		return listPlanFiles({ localProtocolOptions: this.#localProtocolOptions() });
 	}
 
-	#codeModeState: { namespacesInfo?: unknown };
-
 	/** Live generation tok/s for the working row; fed by this session's own streamed deltas. */
 	readonly tokenRate: TokenRateMeter;
 
@@ -1672,7 +1673,6 @@ export class AgentSession implements SettingsScope {
 			(previous, next) =>
 				isHiddenUserCompanion(previous) && (isHiddenUserCompanion(next) || isUserQueuedMessage(next)),
 		);
-		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		this.#skillDescriptions = config.skillDescriptions ?? new SkillDescriptionCatalog();
@@ -2098,9 +2098,6 @@ export class AgentSession implements SettingsScope {
 			queuedMessageCount: () => this.queuedMessageCount,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			model: () => this.model,
-			setCodeModeNamespacesInfo: info => {
-				this.#codeModeState.namespacesInfo = info;
-			},
 			memoryBackendSession: () => this,
 			clearInheritedProviderPromptCacheKey: () => this.#clearInheritedProviderPromptCacheKey(),
 			clearMemoryPromotionSnapshot: () => this.#memory.clearPromotionSnapshot(),
@@ -2473,6 +2470,7 @@ export class AgentSession implements SettingsScope {
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
+			getPromptCacheKeyForModel: model => this.getPromptCacheKeyForModel(model),
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
 			setSkipPostTurnMaintenance: timestamp => {
 				this.#maintenance.skipPostTurnMaintenanceAssistantTimestamp = timestamp;
@@ -2518,11 +2516,6 @@ export class AgentSession implements SettingsScope {
 				armIdleCloseForOwner(ownerId, seconds * 1000);
 			}
 		});
-		cfgCodeModeInputs.listen(this, () =>
-			this.#tools.reconcileCodeMode().catch(error => {
-				logger.warn("Code Mode reconcile after setting change failed", { error: String(error) });
-			}),
-		);
 
 		// Config-declared resolution done against the catalog as it stands at
 		// construction can be premature: background discovery is started
@@ -6415,11 +6408,6 @@ export class AgentSession implements SettingsScope {
 		return this.#tools.getEvalBridgeToolNames();
 	}
 
-	/** Tools left directly model-visible by Code Mode; undefined when inactive. */
-	getCodeModeDirectToolNames(): readonly string[] | undefined {
-		return this.#tools.getCodeModeDirectToolNames();
-	}
-
 	/** Whether a registry entry came from a built-in factory. */
 	hasBuiltInTool(name: string): boolean {
 		return this.#tools.hasBuiltInTool(name);
@@ -6530,29 +6518,6 @@ export class AgentSession implements SettingsScope {
 			});
 		this.#skillsAndCommandsRefresh = refresh;
 		return refresh;
-	}
-
-	/**
-	 * Applies Code Mode at session startup: when the initial model activates
-	 * it (`codeMode` `on`, or `auto` matching a `code_mode_only` catalog flag),
-	 * the initial tool surface is routed through the Code Mode-aware path so
-	 * the restricted direct surface and namespaces snapshot exist before the
-	 * first provider turn instead of waiting for an unrelated reconciliation.
-	 *
-	 * Inactive sessions keep their initial surface untouched: re-applying an
-	 * unchanged set would seed the prompt-rebuild signature cache and suppress
-	 * the first late tool registration's rebuild (non-MCP `xd://` mounts are
-	 * deliberately not part of that signature).
-	 */
-	initializeCodeMode(): Promise<void> {
-		const model = this.model;
-		if (!model || !this.#tools.codeModeChangesBetween(undefined, model)) return Promise.resolve();
-		return this.#tools.reconcileCodeMode();
-	}
-
-	/** Current Code Mode `tool_namespaces_info` snapshot, or `undefined` when inactive. */
-	get codeModeNamespacesInfo(): unknown {
-		return this.#codeModeState.namespacesInfo;
 	}
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
@@ -6730,14 +6695,17 @@ export class AgentSession implements SettingsScope {
 		return this.#providerBoundary.getImageAttachments();
 	}
 
-	buildDisplaySessionContext(): SessionContext {
-		if (isJchToolsAgentModel(this.model)) {
+	buildDisplaySessionContext(model = this.model): SessionContext {
+		if (isJchToolsAgentModel(model)) {
 			return deobfuscateSessionContext(
-				this.sessionManager.buildSessionContext({ preserveFailedTurns: true }),
+				this.sessionManager.buildSessionContext({
+					preserveFailedTurns: true,
+					maxFrameDataBytes: frameDataBytesBudget(model),
+				}),
 				this.#obfuscator,
 			);
 		}
-		return this.#withEvalStateContext(this.#providerBoundary.buildDisplaySessionContext());
+		return this.#withEvalStateContext(this.#providerBoundary.buildDisplaySessionContext(model));
 	}
 
 	#withEvalStateContext(context: SessionContext): SessionContext {
@@ -6812,6 +6780,17 @@ export class AgentSession implements SettingsScope {
 	/** Apply session-level stream hooks to a direct side request. */
 	prepareSimpleStreamOptions(options: SimpleStreamOptions, provider = "anthropic"): SimpleStreamOptions {
 		return this.#providerBoundary.prepareSimpleStreamOptions(options, provider);
+	}
+
+	/** Cache identity for the main loop and side requests that reuse its context. */
+	getPromptCacheKeyForModel(model: Model | undefined): string | undefined {
+		const candidate = this.sessionManager.getHeader()?.taskPromptCacheKey;
+		return (
+			this.agent.promptCacheKey ??
+			(candidate !== undefined && model !== undefined && resolveCatalogPolicy(model).taskSiblingPromptCache === true
+				? candidate
+				: undefined)
+		);
 	}
 
 	/** Current steering mode */
@@ -7204,8 +7183,7 @@ export class AgentSession implements SettingsScope {
 				: sessionPlanUrl;
 
 		const planExists = fs.existsSync(resolvedPlanPath);
-		// Capability gates, not the visible surface: a Code Mode partition keeps
-		// `task` and `ask` callable through the eval bridge after demoting them.
+		// Capability gates, not the visible surface: `xd://`-mounted tools stay callable.
 		const capableToolNames = this.getEnabledToolNames();
 		const content = prompt.render(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
@@ -8487,6 +8465,8 @@ export class AgentSession implements SettingsScope {
 				// OMP-owned Chromium alive (#5643).
 				void this.dispose().finally(() => process.exit(0));
 			},
+			resolvePlanReview: () => false,
+			getPendingPlanReview: () => undefined,
 			getContextUsage: () => this.getContextUsage(),
 			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
 			waitForIdle: () => this.waitForIdle(),
@@ -10807,8 +10787,8 @@ export class AgentSession implements SettingsScope {
 		if (this.agent.state.messages.length === 0) {
 			await this.refreshBaseSystemPrompt();
 		} else if (enabled) {
-			// Enabled covers top-level, xd://-mounted, and Code Mode bridge-demoted
-			// tools: every path through which the model can still reach a reader.
+			// Enabled covers top-level and xd://-mounted tools: every path through
+			// which the model can still reach a reader.
 			const hasSkillReader = this.getEnabledToolNames().some(name => toolReadsSkillUris(this.getToolByName(name)));
 			const renderedSkills = this.#skillDescriptions.render(
 				hasSkillReader ? this.skills.filter(skill => skill.hide !== true) : [],
@@ -11207,10 +11187,10 @@ export class AgentSession implements SettingsScope {
 			this.#emit({ type: "model_changed" });
 		}
 
-		await this.#reconcileModelDependentState(currentModel, model);
+		await this.#reconcileModelDependentState(model);
 	}
 
-	async #reconcileModelDependentState(previousModel: Model | undefined, model: Model): Promise<void> {
+	async #reconcileModelDependentState(model: Model): Promise<void> {
 		if (isJchToolsAgentModel(model)) {
 			this.#jchToolsSuspendedAdvisors ??= this.#advisors.isAdvisorEnabled();
 			this.#advisors.setAdvisorEnabled(false);
@@ -11221,14 +11201,6 @@ export class AgentSession implements SettingsScope {
 		}
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
-
-		if (this.#tools.codeModeChangesBetween(previousModel, model) || this.#tools.codeModeDirectWireMetadataChanged()) {
-			try {
-				await this.#tools.reconcileCodeMode();
-			} catch (error) {
-				logger.warn("Code Mode reconcile after model change failed", { error: String(error) });
-			}
-		}
 
 		try {
 			await this.#tools.reconcileThinkTool();
@@ -11389,6 +11361,38 @@ export class AgentSession implements SettingsScope {
 	/** Retry the last failed assistant turn when the session is idle. */
 	retry(): Promise<boolean> {
 		return this.#recovery.retry();
+	}
+
+	/**
+	 * Go on with the turn the previous process was in when it ended (`omp --restore`).
+	 *
+	 * A turn cut off without an exit record (a crash, SIGKILL or power loss records
+	 * none) is first closed the way exit recovery closes one whose exit was recorded:
+	 * its unfinished tool calls get "outcome unknown" results and an interrupted-turn
+	 * abort ends it. That turn is then retried as `/retry` does: a batch whose every
+	 * call was cut off runs again, otherwise the model answers from where the
+	 * transcript stops. A turn that finished, failed, or the user interrupted stays
+	 * as it is.
+	 *
+	 * @returns whether a continuation was scheduled; false while a turn runs, without
+	 * a model, or with nothing left unfinished.
+	 */
+	async restoreInterruptedTurn(): Promise<boolean> {
+		const branch = this.sessionManager.getBranch();
+		if (this.isStreaming || !hasRestorableTurn(branch)) return false;
+		const model = this.model;
+		if (!model) return false;
+		const abort = createInterruptedTurnAbortMessage(
+			branch,
+			{ api: model.api, provider: model.provider, model: model.id },
+			{ assumeExit: true },
+		);
+		if (abort) {
+			for (const result of createInterruptedToolResults(branch)) this.sessionManager.appendMessage(result);
+			this.sessionManager.appendMessage(abort);
+			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+		}
+		return this.retry();
 	}
 
 	// =========================================================================
@@ -11662,7 +11666,7 @@ export class AgentSession implements SettingsScope {
 				// Request controls (OpenAI effort updates) still replay the main
 				// conversation's, so the side request keeps its cached prefix.
 				parentSessionId: cacheSessionId,
-				promptCacheKey: this.agent.promptCacheKey ?? this.agent.sessionId,
+				promptCacheKey: this.getPromptCacheKeyForModel(model) ?? this.agent.sessionId,
 				preferWebsockets: this.preferWebsockets,
 				providerSessionState: this.#providerSessionState,
 				reasoning: toReasoningEffort(this.thinkingLevel),
@@ -11908,6 +11912,8 @@ export class AgentSession implements SettingsScope {
 		const previousUsagePreflightReadyForNextModelCall = this.#usagePreflightReadyForNextModelCall;
 		const previousUsagePreflightReadyModel = this.#usagePreflightReadyModel;
 		const previousModel = this.model;
+		const previousAdvisorEnabled = this.#advisors.isAdvisorEnabled();
+		const previousJchToolsSuspendedAdvisors = this.#jchToolsSuspendedAdvisors;
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
@@ -12008,11 +12014,13 @@ export class AgentSession implements SettingsScope {
 						: `Could not restore model ${targetModelStrings[0]}`;
 				}
 			}
-			if (isJchToolsAgentModel(targetModel ?? this.model)) {
-				sessionContext = deobfuscateSessionContext(
-					this.sessionManager.buildSessionContext({ preserveFailedTurns: true }),
-					this.#obfuscator,
-				);
+			// Rebuild for the adopted model's archive budget and remote-history policy.
+			if (
+				targetModel &&
+				(frameDataBytesBudget(targetModel) !== frameDataBytesBudget(this.model) ||
+					isJchToolsAgentModel(targetModel) !== isJchToolsAgentModel(this.model))
+			) {
+				sessionContext = this.buildDisplaySessionContext(targetModel);
 			}
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
@@ -12202,6 +12210,8 @@ export class AgentSession implements SettingsScope {
 				this.agent.setModel(previousModel);
 				modelRolledBack = !modelsAreEqual(rolledBackModel, previousModel);
 			}
+			this.#jchToolsSuspendedAdvisors = previousJchToolsSuspendedAdvisors;
+			this.#advisors.setAdvisorEnabled(previousAdvisorEnabled);
 			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel);
 			this.#models.restoreServiceTiers(previousServiceTierByFamily);
 			if (modelRolledBack) {
@@ -12846,6 +12856,7 @@ export class AgentSession implements SettingsScope {
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext({
 			preserveFailedTurns: isJchToolsAgentModel(this.model),
+			maxFrameDataBytes: frameDataBytesBudget(this.model),
 		});
 		const restoredContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		const displayContext = isJchToolsAgentModel(this.model)
@@ -12882,6 +12893,7 @@ export class AgentSession implements SettingsScope {
 			});
 			const rawContext = this.sessionManager.buildSessionContext({
 				preserveFailedTurns: isJchToolsAgentModel(this.model),
+				maxFrameDataBytes: frameDataBytesBudget(this.model),
 			});
 			if (isJchToolsAgentModel(this.model)) {
 				this.agent.replaceMessages(deobfuscateSessionContext(rawContext, this.#obfuscator).messages);
@@ -14009,7 +14021,7 @@ export class AgentSession implements SettingsScope {
 		const refreshed = found && this.#modelRegistry.fitContextWindow(found, this.settings);
 		if (!refreshed || refreshed.contextWindow === current.contextWindow) return;
 		this.agent.setModel(refreshed);
-		await this.#reconcileModelDependentState(current, refreshed);
+		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;
 		this.#emit({ type: "model_changed" });
 	}

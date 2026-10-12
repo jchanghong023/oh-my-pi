@@ -7,6 +7,10 @@
 - Restored Windows native checks for the `uptime` and `du` builtins without unused-import or unused-mutability errors.
 - Prevented Windows `rmdir` from deleting a directory when its operand ends in `.`.
 
+### Fixed
+
+- Fixed `pwsh` code blocks rendering without PowerShell syntax colors ([#15008](https://github.com/can1357/oh-my-pi/issues/15008)).
+
 ## [18.10.2] - 2026-10-12
 
 ### Added

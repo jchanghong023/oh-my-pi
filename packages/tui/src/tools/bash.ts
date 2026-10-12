@@ -62,6 +62,8 @@ export interface BashToolDetails {
 	requestedTimeoutSeconds?: number;
 	timeoutDisabled?: boolean;
 	wallTimeMs?: number;
+	/** False when no wall-time footer was emitted; absent on older results. */
+	wallTimeNoticeEmitted?: boolean;
 	/** Exit code of a command that ran to completion but failed (non-zero). */
 	exitCode?: number;
 	/** True when the command was killed by its timeout deadline (not a failure). */
@@ -209,6 +211,9 @@ function formatWallTimeSeconds(wallTimeMs: number): string {
 	return (wallTimeMs / 1000).toFixed(2);
 }
 
+/** Minimum duration for a model-facing wall-time notice; shorter runs keep timing only in details. */
+export const WALL_TIME_NOTICE_MIN_MS = 1000;
+
 /** Formats the model-facing command duration notice. */
 export function formatWallTimeNotice(wallTimeMs: number): string {
 	return `Wall time: ${formatWallTimeSeconds(wallTimeMs)} seconds`;
@@ -319,7 +324,7 @@ function stripBashNotices(
 			? strippedOutput
 			: stripTrailingNotice(strippedOutput, formatExitCodeNotice(details.exitCode));
 	const withoutWall =
-		details?.wallTimeMs === undefined
+		details?.wallTimeMs === undefined || details.wallTimeNoticeEmitted === false
 			? withoutExit
 			: stripTrailingNotice(withoutExit, formatWallTimeNotice(details.wallTimeMs));
 	return stripRawOutputArtifactNotice(withoutWall);

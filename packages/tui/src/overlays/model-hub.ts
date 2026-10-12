@@ -1337,6 +1337,7 @@ export class ModelHubComponent implements Component {
 	 */
 	#thinkingOptionsFor(model: Model): ConfiguredThinkingLevel[] {
 		if (!model.reasoning) return [];
+		if (model.thinking?.unverified) return [ThinkingLevel.Inherit, ThinkingLevel.Off, ...getSupportedEfforts(model)];
 		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
 	}
 
