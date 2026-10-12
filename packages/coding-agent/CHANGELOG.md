@@ -13,6 +13,10 @@
 
 - Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
 
+### Fixed
+
+- Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

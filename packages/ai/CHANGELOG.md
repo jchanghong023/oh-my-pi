@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Preserved CodeAgent stream-timeout diagnostics instead of reporting watchdog timeouts as caller cancellations.
 - Fixed Anthropic SDK timeouts being recorded as non-timeout failures while preserving user-cancellation classification.
 - Fixed root schema reference siblings retaining dangling local references after definition blocks were removed.
 - Preserved Codex tool-loop turn state and user timestamps when requests include transient user-authority context.

@@ -822,7 +822,7 @@ export class TurnRecovery {
 
 	/** Prompts after transient overlap with a prior agent run. */
 	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
-		if (this.#host.model()?.provider === "codeagent" || isJchToolsAgentModel(this.#host.model())) {
+		if (isJchToolsAgentModel(this.#host.model())) {
 			return this.#host.agent.prompt(messages);
 		}
 		return this.#promptAgentWithIdleRetry(messages, options);

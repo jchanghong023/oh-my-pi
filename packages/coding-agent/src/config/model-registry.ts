@@ -1409,7 +1409,11 @@ export class ModelRegistry {
 		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
 			stripped.push(...getZcodeApiModels());
 		}
-		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(CODEAGENT_PROVIDER_ID))) {
+		if (
+			process.platform === "win32" &&
+			!isCompanyLaneActive() &&
+			(!providerFilter || providerFilter.has(CODEAGENT_PROVIDER_ID))
+		) {
 			initializeCodeAgentProvider();
 			stripped.push(...getCodeAgentModels());
 		}

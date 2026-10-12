@@ -6,6 +6,10 @@
 
 - Added GLM-5.3-FlashX to the local ZCode Proxy model roster, matching Zhipu Coding Plan.
 
+### Fixed
+
+- Added the missing keyless CodeAgent authentication policy so the provider registry's type-completeness check includes the built-in model.
+
 ## [18.10.0] - 2026-10-12
 
 ### Changed

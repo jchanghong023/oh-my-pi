@@ -2895,13 +2895,11 @@ export class SessionMaintenance {
 	): Promise<CompactionCheckResult> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
-		// CodeAgent 仅由凭据层决定是否重试；失败或输出截断不能触发维护重放。
-		if (
+		// CodeAgent failures may maintain context, but never replay or auto-continue the task.
+		const noRecoveryReplay =
 			assistantMessage.provider === "codeagent" &&
-			(assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length")
-		) {
-			return COMPACTION_CHECK_NONE;
-		}
+			(assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length");
+		if (noRecoveryReplay) autoContinue = false;
 		const contextWindow = this.#model?.contextWindow ?? 0;
 		const generation = this.#host.promptGeneration();
 		// A delivered turn means the incomplete-recovery loop broke through: clear
@@ -3045,6 +3043,16 @@ export class SessionMaintenance {
 		const overflowEvidence =
 			sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow);
 		if (overflowEvidence || reclaimablePayloadHistory || (payloadRejection && !trustedPayloadRejection)) {
+			if (noRecoveryReplay) {
+				const result = compactionAvailable
+					? await this.runAutoCompaction("overflow", false, {
+							autoContinue: false,
+							suppressContinuation: true,
+							excludeMediaMethods: excludeMediaForPayloadRejection,
+						})
+					: COMPACTION_CHECK_NONE;
+				return { ...result, automaticContinuationBlocked: true };
+			}
 			this.#host.removeAssistantMessageFromActiveContext(assistantMessage);
 
 			// A larger token window cannot raise a trusted byte-size limit.
@@ -3210,11 +3218,11 @@ export class SessionMaintenance {
 			const windowExhausted =
 				contextWindow <= 0 ||
 				incompleteContextTokens > resolveThresholdTokens(contextWindow, incompleteCompactionSettings);
-			if (!windowExhausted && assistantTurnDelivered(assistantMessage)) {
-				// The output cap truncated a real deliverable with the window still open:
-				// neither a larger window nor compaction buys output room, and a retry
-				// would regenerate the same truncation. Keep it and let the user steer.
-				logger.warn("response.incomplete: output cap reached below compaction threshold; keeping truncated turn", {
+			if (noRecoveryReplay || (!windowExhausted && assistantTurnDelivered(assistantMessage))) {
+				// Below threshold, compaction cannot raise the output cap. CodeAgent
+				// also keeps incomplete output when the window is exhausted: maintenance
+				// may shrink history, but must not regenerate the delivered turn.
+				logger.warn("response.incomplete: keeping truncated turn without replay", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					contextTokens: incompleteContextTokens,
 					outputTokens: assistantMessage.usage.output,
@@ -3224,6 +3232,17 @@ export class SessionMaintenance {
 					`Response hit the ${assistantMessage.provider}/${assistantMessage.model} output limit (${assistantMessage.usage.output} tokens) and was truncated.`,
 					"compaction",
 				);
+				if (noRecoveryReplay) {
+					const result = windowExhausted
+						? await this.runAutoCompaction("incomplete", false, {
+								autoContinue: false,
+								suppressContinuation: true,
+								triggerContextTokens: incompleteContextTokens,
+								phase: "pre_turn",
+							})
+						: COMPACTION_CHECK_NONE;
+					return { ...result, automaticContinuationBlocked: true };
+				}
 				return COMPACTION_CHECK_NONE;
 			}
 
@@ -3342,11 +3361,13 @@ export class SessionMaintenance {
 			!compactionSettings.enabled ||
 			(!this.#usesExperimentalContextManagement() && !hasConfiguredCompactionMethod(compactionSettings))
 		)
-			return COMPACTION_CHECK_NONE;
+			return noRecoveryReplay ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
 
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
-		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
+		if (assistantMessage.stopReason === "error") {
+			return noRecoveryReplay ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
+		}
 		const pruneResult = this.#usesExperimentalContextManagement() ? undefined : await this.#pruneToolOutputs();
 		const maintenanceTokensFreed = (supersedeResult?.tokensSaved ?? 0) + (pruneResult?.tokensSaved ?? 0);
 		// `errorIsFromBeforeCompaction` (computed above) is the general
@@ -3404,7 +3425,10 @@ export class SessionMaintenance {
 			// the blocking summarization; the session stays responsive and the
 			// armed result lands at the next boundary. Deferral delays promotion
 			// by at most the band — the eventual real pass still promotes first.
-			if (this.deferThresholdCompactionToSpeculation(postMaintenanceContextTokens, contextWindow)) {
+			if (
+				!noRecoveryReplay &&
+				this.deferThresholdCompactionToSpeculation(postMaintenanceContextTokens, contextWindow)
+			) {
 				logger.debug("Post-turn threshold deferred to speculative compaction", {
 					postMaintenanceContextTokens,
 					contextWindow,
@@ -3412,24 +3436,26 @@ export class SessionMaintenance {
 				return COMPACTION_CHECK_NONE;
 			}
 			// Try promotion first — if a larger model is available, switch instead of compacting
-			const promoted = await this.#tryContextPromotion(assistantMessage);
+			const promoted = !noRecoveryReplay && (await this.#tryContextPromotion(assistantMessage));
 			if (!promoted) {
-				return await this.runAutoCompaction("threshold", false, {
+				const result = await this.runAutoCompaction("threshold", false, {
 					autoContinue,
+					suppressContinuation: noRecoveryReplay,
 					triggerContextTokens: postMaintenanceContextTokens,
 					phase: "pre_turn",
 					terminalTextAnswer: isTerminalTextAssistantAnswer(assistantMessage),
 				});
+				return noRecoveryReplay ? { ...result, automaticContinuationBlocked: true } : result;
 			}
 			logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
 				contextTokens,
 				contextWindow,
 				model: `${assistantMessage.provider}/${assistantMessage.model}`,
 			});
-		} else {
+		} else if (!noRecoveryReplay) {
 			this.maybeStartSpeculativeCompaction(contextTokens, contextWindow);
 		}
-		return COMPACTION_CHECK_NONE;
+		return noRecoveryReplay ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
 	}
 
 	/**

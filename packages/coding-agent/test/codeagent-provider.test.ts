@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import * as AIError from "@oh-my-pi/pi-ai/error";
+import { type OpenAICompletionsOptions, streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessageEvent, Context } from "@oh-my-pi/pi-ai/types";
 import {
 	CodeAgentTokenCache, getCodeAgentModels, initializeCodeAgentProvider, streamCodeAgent,
@@ -19,11 +20,17 @@ const chunk = (delta: Record<string, unknown>, finish_reason: string | null = nu
 const success = () => new Response(chunk({ content: "ok" }) + chunk({}, "stop") + "data: [DONE]\n\n", {
 	headers: { "content-type": "text/event-stream" },
 });
+const stalledSse = (delta: Record<string, unknown>) => new Response(new ReadableStream<Uint8Array>({
+	start(controller) {
+		controller.enqueue(new TextEncoder().encode(chunk(delta)));
+	},
+}), { headers: { "content-type": "text/event-stream" } });
 
 async function httpProbe(
 	readToken: () => string | undefined,
 	respond: (request: Request, count: number) => Response,
 	calls = 1,
+	options?: OpenAICompletionsOptions,
 ) {
 	const headers: Headers[] = [];
 	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
@@ -38,6 +45,7 @@ async function httpProbe(
 		for (let index = 0; index < calls; index++) {
 			const stream = streamCodeAgent(model, context, {
 				fetch, apiKey: "synthetic-unwanted-key", headers: { Authorization: "Bearer synthetic-unwanted-key" },
+				...options,
 			}, cache);
 			const observed: AssistantMessageEvent[] = [];
 			for await (const event of stream) observed.push(event);
@@ -150,6 +158,48 @@ describe("CodeAgent hot credential refresh", () => {
 		expect(probe.results.map(result => result.stopReason)).toEqual(["error", "stop"]);
 	});
 
+	for (const [phase, delta] of [
+		["first event", { role: "assistant" }],
+		["idle", { content: "partial" }],
+	] as const) {
+		test(`${phase} HTTP/SSE timeout remains a safe timeout failure, not cancellation`, async () => {
+			let reads = 0;
+			const probe = await httpProbe(() => { reads++; return "synthetic-timeout-token"; },
+				() => stalledSse(delta), 1, {
+					streamFirstEventTimeoutMs: phase === "first event" ? 100 : 1000,
+					streamIdleTimeoutMs: 100,
+				});
+			const result = probe.results[0]!;
+			expect(result.stopReason).toBe("error");
+			expect(AIError.is(result.errorId, AIError.Flag.Timeout)).toBe(true);
+			expect(AIError.is(result.errorId, AIError.Flag.Abort)).toBe(false);
+			expect(result.errorMessage).not.toContain("cancelled");
+			expect(result.errorMessage).not.toContain("synthetic-timeout-token");
+			expect(probe.headers).toHaveLength(1);
+			expect(reads).toBe(2);
+		});
+	}
+
+	test("caller cancellation of a real HTTP/SSE request is aborted without replay", async () => {
+		let reads = 0;
+		const controller = new AbortController();
+		const probe = await httpProbe(() => ++reads === 1 ? "synthetic-cancel-A" : "synthetic-cancel-B",
+			() => stalledSse({ role: "assistant" }), 1, {
+				signal: controller.signal,
+				streamFirstEventTimeoutMs: 1000,
+				streamIdleTimeoutMs: 1000,
+				onResponse: () => controller.abort(new Error("synthetic-cancel-A private cancellation")),
+			});
+		const result = probe.results[0]!;
+		expect(result.stopReason).toBe("aborted");
+		expect(AIError.is(result.errorId, AIError.Flag.Abort)).toBe(true);
+		expect(AIError.is(result.errorId, AIError.Flag.Timeout)).toBe(false);
+		expect(result.errorMessage).not.toContain("synthetic-cancel-A");
+		expect(result.errorMessage).not.toContain("private cancellation");
+		expect(probe.headers).toHaveLength(1);
+		expect(reads).toBe(2);
+	});
+
 	test("missing/failed registry reads preserve the cached token", () => {
 		let reads = 0;
 		const cache = new CodeAgentTokenCache(() => {
@@ -205,7 +255,7 @@ describe("CodeAgent hot credential refresh", () => {
 			expect(resolvers).toBe(0);
 			expect(reads).toBe(2);
 		} finally {
-			initializeCodeAgentProvider(new CodeAgentTokenCache());
+			initializeCodeAgentProvider(new CodeAgentTokenCache(() => undefined));
 		}
 	});
 
@@ -224,29 +274,47 @@ describe("CodeAgent hot credential refresh", () => {
 		expect(calls).toBe(1);
 	});
 
-	test("registry exposes the built-in keyless model but offline/disabled providers hide it", () => {
-		const home = fs.mkdtempSync(path.join(os.tmpdir(), "codeagent-registry-"));
-		const offline = isCompanyLaneActive();
-		const auth = createInMemoryAuthStorage();
-		try {
-			setCompanyOfflineEnabled(false);
-			const registry = new ModelRegistry(auth, path.join(home, "models.yml"), { settings: Settings.isolated({}) });
-			expect(registry.getAvailable().some(model => model.provider === "codeagent")).toBe(true);
-			expect(registry.find("codeagent", getCodeAgentModels()[0]!.id)).toBeDefined();
-			const disabled = new ModelRegistry(auth, path.join(home, "models.yml"), {
-				settings: Settings.isolated({ disabledProviders: ["codeagent"] }),
-			});
-			expect(disabled.getAvailable().some(model => model.provider === "codeagent")).toBe(false);
-			expect(disabled.find("codeagent", getCodeAgentModels()[0]!.id)).toBeUndefined();
-			setCompanyOfflineEnabled(true);
-			const intranet = new ModelRegistry(auth, path.join(home, "models.yml"), { settings: Settings.isolated({}) });
-			expect(intranet.getAll().some(model => model.provider === "codeagent")).toBe(false);
-			expect(intranet.getAvailable().some(model => model.provider === "codeagent")).toBe(false);
-			expect(intranet.find("codeagent", getCodeAgentModels()[0]!.id)).toBeUndefined();
-		} finally {
-			setCompanyOfflineEnabled(offline);
-			auth.close();
-			fs.rmSync(home, { recursive: true, force: true });
-		}
-	});
+	for (const platform of new Set([process.platform, "win32", "linux"])) {
+		test(`registry on ${platform} exposes CodeAgent only on Windows, never offline or disabled`, async () => {
+			const home = fs.mkdtempSync(path.join(os.tmpdir(), "codeagent-registry-"));
+			const offline = isCompanyLaneActive();
+			const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+			if (!descriptor) throw new Error("process.platform descriptor is unavailable");
+			const auth = createInMemoryAuthStorage();
+			initializeCodeAgentProvider(new CodeAgentTokenCache(() => undefined));
+			try {
+				Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+				setCompanyOfflineEnabled(false);
+				const modelId = getCodeAgentModels()[0]!.id;
+				const registry = new ModelRegistry(auth, path.join(home, "models.yml"), { settings: Settings.isolated({}) });
+				const assertVisible = (visible: boolean) => {
+					expect(registry.getProviderModels("codeagent").some(model => model.id === modelId)).toBe(visible);
+					expect(registry.getAll().some(model => model.provider === "codeagent")).toBe(visible);
+					expect(registry.getAvailable().some(model => model.provider === "codeagent")).toBe(visible);
+					expect(registry.find("codeagent", modelId) !== undefined).toBe(visible);
+				};
+				assertVisible(platform === "win32");
+				await registry.refresh("offline");
+				assertVisible(platform === "win32");
+				const disabled = new ModelRegistry(auth, path.join(home, "models.yml"), {
+					settings: Settings.isolated({ disabledProviders: ["codeagent"] }),
+				});
+				expect(disabled.getAvailable().some(model => model.provider === "codeagent")).toBe(false);
+				expect(disabled.find("codeagent", modelId)).toBeUndefined();
+				setCompanyOfflineEnabled(true);
+				await registry.refresh("offline");
+				assertVisible(false);
+				const intranet = new ModelRegistry(auth, path.join(home, "models.yml"), { settings: Settings.isolated({}) });
+				expect(intranet.getAll().some(model => model.provider === "codeagent")).toBe(false);
+				expect(intranet.getAvailable().some(model => model.provider === "codeagent")).toBe(false);
+				expect(intranet.find("codeagent", modelId)).toBeUndefined();
+			} finally {
+				Object.defineProperty(process, "platform", descriptor);
+				setCompanyOfflineEnabled(offline);
+				initializeCodeAgentProvider(new CodeAgentTokenCache(() => undefined));
+				auth.close();
+				fs.rmSync(home, { recursive: true, force: true });
+			}
+		});
+	}
 });

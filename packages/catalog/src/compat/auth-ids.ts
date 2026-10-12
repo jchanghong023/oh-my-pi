@@ -18,6 +18,7 @@ export type AuthProviderId =
 	| "cline-pass"
 	| "cloudflare-ai-gateway"
 	| "cloudflare-workers-ai"
+	| "codeagent"
 	| "commandcode"
 	| "company"
 	| "coralbricks"
