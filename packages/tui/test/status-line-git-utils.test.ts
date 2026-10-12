@@ -4,6 +4,7 @@ import {
 	createPrCacheContext,
 	isSamePrCacheContext,
 	parseDefaultBranch,
+	parseGitStatus,
 	parseGitHubRepo,
 } from "../src/status-line/git-utils";
 
@@ -108,5 +109,22 @@ describe("canReuseCachedPr", () => {
 				null,
 			),
 		).toBe(false);
+	});
+});
+
+describe("parseGitStatus", () => {
+	test("counts index/worktree overlap once and includes every untracked file but not ignored entries", () => {
+		expect(
+			parseGitStatus("MM both.txt\0A  staged.txt\0 D removed.txt\0?? new/a.txt\0?? new/b.txt\0!! ignored.txt\0"),
+		).toEqual({ staged: 2, unstaged: 2, untracked: 2, changed: 5 });
+	});
+
+	test("skips rename/copy source paths and preserves filenames containing newlines", () => {
+		expect(parseGitStatus("RM renamed.txt\0?? old-name\0 C copied.txt\0MM source-name\0?? new\nname.txt\0")).toEqual({
+			staged: 1,
+			unstaged: 2,
+			untracked: 1,
+			changed: 3,
+		});
 	});
 });

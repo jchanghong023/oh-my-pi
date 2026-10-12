@@ -2,15 +2,16 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { getProjectDir, removeSyncWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 import type { TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode } from "../src/native/node";
 import { setNativeRendering } from "../src/native/state";
 import type { StatusLineComponent } from "../src/status-line/component";
-import { describeSegment, type SegmentContext } from "../src/status-line/segments";
+import { describeSegment, renderSegment, type SegmentContext } from "../src/status-line/segments";
 import { createStartupStatusLine } from "../src/status-line/startup";
 import type { StatusLineSettings } from "../src/status-line/types";
-import { initTheme } from "../src/theme";
+import { initTheme, theme } from "../src/theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -45,6 +46,31 @@ function facts(line: StatusLineComponent): { key: string; props: TspProps<"seg">
 		.flatMap(child =>
 			child.k === "seg" && child.key !== undefined ? [{ key: child.key, props: child.p ?? {} }] : [],
 		);
+}
+
+function expectGitDisplay(
+	branch: string | null,
+	status: SegmentContext["git"]["status"],
+	options: SegmentContext["options"]["git"],
+	expected: string,
+	dirty = true,
+): void {
+	const ctx = { git: { branch, status, pr: null }, options: { git: options } } as SegmentContext;
+	const rendered = renderSegment("git", ctx);
+	const native = describeSegment("git", ctx);
+	expect(stripVTControlCharacters(rendered.content)).toBe(expected);
+	expect(rendered.visible).toBe(expected.length > 0);
+	if (!expected) {
+		expect(native).toBeNull();
+		return;
+	}
+	const color = dirty ? "statusLineGitDirty" : "statusLineGitClean";
+	expect(rendered.content).toBe(theme.fg(color, expected));
+	expect(native).toEqual({
+		spans: [{ t: expected, s: color }],
+		...(dirty ? { tone: "warning" } : {}),
+	});
+	expect(native).not.toHaveProperty("icon");
 }
 
 describe("native composer facts", () => {
@@ -94,10 +120,10 @@ describe("native composer facts", () => {
 			expect(segs.map(seg => seg.key)).toEqual(["hostname", "git"]);
 			const [hostname, branch] = segs;
 			expect(branch!.props).toMatchObject({
-				icon: "branch",
-				spans: [{ t: "feature/parity", s: "statusLineGitClean" }],
+				spans: [{ t: "git feature/parity", s: "statusLineGitClean" }],
 				actions: { click: "status.git" },
 			});
+			expect(branch!.props).not.toHaveProperty("icon");
 			expect(branch!.props.priority!).toBeGreaterThan(hostname!.props.priority!);
 		} finally {
 			setProjectDir(originalProjectDir);
@@ -105,16 +131,47 @@ describe("native composer facts", () => {
 		}
 	});
 
-	it("spaces the git counts apart from the branch and each other", () => {
-		const text = (branch: string | null, showBranch = true) =>
-			describeSegment("git", {
-				git: { branch, status: { staged: 2, unstaged: 3, untracked: 1 }, pr: null },
-				options: { git: { showBranch } },
-			} as unknown as SegmentContext)
-				?.spans.map(part => part.t)
-				.join("");
-		expect(text("main")).toBe("main *3 +2 ?1");
-		expect(text("main", false)).toBe("*3 +2 ?1");
+	// Two staged and three unstaged files share one path, plus one untracked file.
+	const overlappingStatus = { staged: 2, unstaged: 3, untracked: 1, changed: 5 };
+
+	it.each([
+		{ options: {}, expected: "git main · 改动5" },
+		{ options: { showStaged: false }, expected: "git main · 改动4" },
+		{ options: { showUnstaged: false }, expected: "git main · 改动3" },
+		{ options: { showUntracked: false }, expected: "git main · 改动4" },
+		{ options: { showStaged: false, showUnstaged: false }, expected: "git main · 改动1" },
+		{ options: { showStaged: false, showUntracked: false }, expected: "git main · 改动3" },
+		{ options: { showUnstaged: false, showUntracked: false }, expected: "git main · 改动2" },
+		{ options: { showStaged: false, showUnstaged: false, showUntracked: false }, expected: "git main" },
+	])("counts the selected file union without icons in ANSI and native: $options", ({ options, expected }) => {
+		expectGitDisplay("main", overlappingStatus, options, expected);
+	});
+
+	it("shows untracked-only changes and honors their visibility option", () => {
+		const status = { staged: 0, unstaged: 0, untracked: 2, changed: 2 };
+		expectGitDisplay("main", status, {}, "git main · 改动2");
+		expectGitDisplay("main", status, { showUntracked: false }, "git main");
+		expectGitDisplay("main", status, { showBranch: false }, "git 改动2");
+	});
+
+	it("keeps counts without a branch and hides the segment when no selected text remains", () => {
+		expectGitDisplay("main", overlappingStatus, { showBranch: false }, "git 改动5");
+		expectGitDisplay(null, overlappingStatus, {}, "git 改动5");
+		expectGitDisplay(
+			"main",
+			overlappingStatus,
+			{ showBranch: false, showStaged: false, showUnstaged: false, showUntracked: false },
+			"",
+		);
+	});
+
+	it("omits zero counts and uses clean styling in both renderers", () => {
+		const cleanStatus = { staged: 0, unstaged: 0, untracked: 0, changed: 0 };
+		expectGitDisplay("main", cleanStatus, {}, "git main", false);
+		expectGitDisplay("main", null, {}, "git main", false);
+		expectGitDisplay("main", cleanStatus, { showBranch: false }, "", false);
+		expectGitDisplay(null, cleanStatus, {}, "", false);
+		expectGitDisplay(null, null, {}, "", false);
 	});
 
 	it("describes spans without ANSI escapes or separator glyphs", () => {

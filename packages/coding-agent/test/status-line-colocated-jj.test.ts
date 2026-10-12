@@ -17,7 +17,7 @@ import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-pi/pi-natives";
+import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo, VcsStatusOptions } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -87,11 +87,11 @@ function repoInfoFor(root: string): VcsGitRepoInfo {
 	};
 }
 
-function gitHandle(head: VcsHeadState | null): VcsGitRepo {
+function gitHandle(head: VcsHeadState | null, status: string): VcsGitRepo {
 	return {
 		headSync: () => head,
 		linkedWorktree: () => null,
-		statusSummary: async (): Promise<GitStatus | null> => ({ staged: 0, unstaged: 0, untracked: 0 }),
+		statusPorcelain: async (): Promise<string> => status,
 	} as unknown as VcsGitRepo;
 }
 
@@ -99,15 +99,15 @@ function gitWithDefaultBranch(branch: string): VcsGitRepo {
 	return { defaultBranch: async () => branch, linkedWorktree: () => null } as unknown as VcsGitRepo;
 }
 
-function operationalGit(root: string, head: VcsHeadState | null): VcsRepo {
-	const handle = gitHandle(head);
+function operationalGit(root: string, head: VcsHeadState | null, status = ""): VcsRepo {
+	const handle = gitHandle(head, status);
 	return {
 		kind: () => "git",
 		asGit: () => handle,
 		asJj: () => null,
 		root: () => root,
 		watchTarget: () => `${root}/.git/HEAD`,
-		statusSummary: (signal?: AbortSignal) => handle.statusSummary(signal),
+		statusPorcelain: (options: VcsStatusOptions) => handle.statusPorcelain(options),
 	} as unknown as VcsRepo;
 }
 
@@ -153,8 +153,8 @@ function mockRepos(operational: VcsRepo, display: VcsRepo, root: string): void {
 describe("StatusLineComponent display detector", () => {
 	it("shows the jj bookmark with the jj watch target when colocated", async () => {
 		const root = "/repo/colocated";
-		const operational = operationalGit(root, headFor("main"));
-		const display = displayJj(root, async () => "my-bookmark", { staged: 0, unstaged: 0, untracked: 0 });
+		const operational = operationalGit(root, headFor("main"), "MM tracked.txt\0?? new.txt\0");
+		const display = displayJj(root, async () => "my-bookmark", { staged: 0, unstaged: 4, untracked: 0 });
 		mockRepos(operational, display, root);
 		let watched: VcsRepo | null = null;
 		vi.spyOn(vcs, "watch").mockImplementation(((repo: VcsRepo) => {
@@ -174,6 +174,7 @@ describe("StatusLineComponent display detector", () => {
 		expect(onBranchChange).toHaveBeenCalled();
 		const content = component.getTopBorder(80).content;
 		expect(content).toContain("my-bookmark");
+		expect(content).toContain("改动2");
 		expect((watched as VcsRepo | null)?.watchTarget()).toBe(`${root}/.jj/repo/op_heads/heads`);
 		component.dispose();
 	});

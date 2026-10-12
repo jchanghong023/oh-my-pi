@@ -6,6 +6,7 @@
 
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
 - Embedded context labels stay together at the right end of the composer border, with a muted window capacity and no compaction boundary ticks.
+- Git status uses plain `git <branch> · 改动N` text with one deduplicated file count for staged, unstaged, and untracked changes, excluding ignored files.
 
 ### Fixed
 

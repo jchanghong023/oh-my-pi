@@ -35,7 +35,13 @@ import {
 	type CodexResetUsageSnapshot,
 	detectCodexResetFireworks,
 } from "../overlays/codex-reset-fireworks";
-import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
+import {
+	canReuseCachedPr,
+	createPrCacheContext,
+	isSamePrCacheContext,
+	parseGitStatus,
+	type PrCacheContext,
+} from "./git-utils";
 import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
 import { describeSegment, renderSegment, type SegmentContext } from "./segments";
@@ -50,6 +56,7 @@ import type {
 	ComposerFacts,
 	ComposerFactsSource,
 	EffectiveStatusLineSettings,
+	GitStatus,
 	SegmentView,
 	SeparatorDef,
 	StatusLineSegmentId,
@@ -758,7 +765,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#activeRepoCache: ActiveRepoCache | undefined;
 
 	// Git status caching (1s TTL)
-	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
+	#cachedGitStatus: GitStatus | null = null;
 	#cachedGitStatusCwd: string | undefined = undefined;
 	#gitStatusLastFetch = 0;
 	#gitStatusGeneration = 0;
@@ -767,7 +774,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#jjBranchLastFetch = 0;
 	#jjResolveSeq = 0;
 	#jjBranchActive: JjResolveRequest | undefined = undefined;
-	#cachedJjStatus: { staged: number; unstaged: number; untracked: number } | null = null;
+	#cachedJjStatus: GitStatus | null = null;
 	#jjStatusLastFetch = 0;
 	#jjStatusActive: JjResolveRequest | undefined = undefined;
 	// Bumped on every jj-cache reset — a cwd switch (#applyCwdChange) or a HEAD /
@@ -1698,11 +1705,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		return branch === this.#defaultBranch;
 	}
 
-	#getStatus(activeRepoCache: ActiveRepoCache = this.#resolveActiveRepoCache()): {
-		staged: number;
-		unstaged: number;
-		untracked: number;
-	} | null {
+	#getStatus(activeRepoCache: ActiveRepoCache = this.#resolveActiveRepoCache()): GitStatus | null {
 		if (!this.#gitEnabled()) return null;
 
 		const gitCwd = activeRepoCache.effectiveGitCwd;
@@ -1721,11 +1724,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			this.#jjStatusActive = request;
 			const generation = this.#jjCacheGeneration;
 			(async () => {
-				let next: { staged: number; unstaged: number; untracked: number } | null = null;
+				let next: GitStatus | null = null;
 				try {
-					next = await repository.statusSummary(
+					const summary = await repository.statusSummary(
 						AbortSignal.any([request.controller.signal, AbortSignal.timeout(JJ_COMMAND_TIMEOUT_MS)]),
 					);
+					// JJ has no index: added and modified paths are disjoint.
+					next = { ...summary, changed: summary.staged + summary.unstaged + summary.untracked };
 				} catch {
 					next = null;
 				} finally {
@@ -1756,9 +1761,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const generation = this.#gitStatusGeneration;
 
 		(async () => {
-			let nextStatus: { staged: number; unstaged: number; untracked: number } | null = null;
+			let nextStatus: GitStatus | null = null;
 			try {
-				nextStatus = (await repository.statusSummary()) ?? null;
+				nextStatus = parseGitStatus(await repository.statusPorcelain({ untracked: "all", nulTerminated: true }));
 			} catch {
 				nextStatus = null;
 			} finally {
