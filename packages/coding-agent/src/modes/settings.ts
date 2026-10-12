@@ -222,7 +222,7 @@ export const cfgStatusLineContextLine = register({
 			{
 				value: "embedded",
 				label: "Embedded",
-				description: "Annotated line with the context percentage and window embedded in the gauge",
+				description: "Percentage line with right-aligned context percentage and window, without boundary ticks",
 			},
 		],
 	},

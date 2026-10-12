@@ -5,6 +5,7 @@
 ### Changed
 
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
+- Embedded context labels stay together at the right end of the composer border, with a muted window capacity and no compaction boundary ticks.
 
 ### Fixed
 

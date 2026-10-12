@@ -350,6 +350,39 @@ describe("overflow: path survives before model", () => {
 });
 
 describe("overflow: embedded context fallback", () => {
+	it("keeps context labels together at the right edge as usage changes, including unknown and over-capacity usage", () => {
+		const session = createStatusLineSession("context");
+		const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi", "context_pct"],
+			rightSegments: [],
+			contextLine: "embedded",
+			sessionAccent: false,
+		});
+		for (const percent of [3, null, 120]) {
+			session.getContextUsage = () => ({
+				tokens: percent === null ? 0 : (percent / 100) * 128000,
+				contextWindow: 128000,
+				percent,
+			});
+			session.contextUsageRevision = (session.contextUsageRevision ?? 0) + 1;
+			for (const width of [26, 80]) {
+				const border = stripAnsi(component.getTopBorder(width).content);
+				const windowStart = border.lastIndexOf("128K");
+				expect(visibleWidth(border)).toBe(width);
+				expect(windowStart).toBe(width - "128K".length - 2);
+				const context = border.slice(border.indexOf("ctx"), windowStart);
+				if (percent === null) {
+					expect(context).not.toContain("%");
+				} else {
+					expect(context).toContain(`${percent}%`);
+				}
+				expect(component.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
+			}
+		}
+	});
+
 	it("keeps context usage visible when the box gauge cannot fit labels beside the last segment", () => {
 		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("context"), statusLineHost));
 		component.updateSettings({

@@ -581,10 +581,10 @@ function formatEmbeddedContextPercent(percent: number): string {
 	return `${percent > 0 && percent < 1 ? percent.toFixed(1) : Math.round(percent)}%`;
 }
 
-/** Gap width the embedded gauge needs for its labels; an unknown percent (`null`) shows the window label alone. */
+/** Gap width for the right-aligned context group plus at least one gauge cell. */
 function embeddedContextGaugeMinWidth(percent: number | null, contextWindow: number): number {
-	const percentWidth = percent === null ? 0 : formatEmbeddedContextPercent(percent).length + 2;
-	return percentWidth + formatNumber(contextWindow).length + 2;
+	const percentWidth = percent === null ? 0 : formatEmbeddedContextPercent(percent).length + 3;
+	return percentWidth + formatNumber(contextWindow).length + 8;
 }
 
 function hasGitSegment(segments: readonly StatusLineSegmentId[]): boolean {
@@ -3214,8 +3214,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * - `percentage`: used portion in accent, remainder in the border color.
 	 * - `annotated` : percentage plus preset-aware markers where
 	 *   speculative compaction starts and where auto-compaction fires.
-	 * - `embedded` (default): annotated markers plus percentage/window labels absorbed
-	 *   from configured context segments.
+	 * - `embedded` (default): percentage line with right-aligned percentage/window
+	 *   labels absorbed from configured context segments, without boundary markers.
 	 */
 	#buildContextGaugeFill(
 		gapWidth: number,
@@ -3239,12 +3239,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const clampedPct = pct === null ? 0 : Math.min(100, Math.max(0, pct));
 		let percentLabel = "";
 		let windowLabel = "";
-		let percentStart = -1;
-		let windowStart = -1;
 		let scaleWidth = gapWidth;
-		// >100%: usage anchored past the active window (e.g. model switch to a
-		// smaller window). The bar clamps full, but the embedded label breaks
-		// past the window label — `──200K─120%` with the percent in error color.
+		// Keep over-capacity usage visible in error color instead of clamping its label.
 		const percentOverflow = pct !== null && pct > 100;
 		if (embedContext) {
 			const candidatePercent = pct === null ? "" : formatEmbeddedContextPercent(percentOverflow ? pct : clampedPct);
@@ -3252,13 +3248,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			if (gapWidth >= embeddedContextGaugeMinWidth(pct, ctx.contextWindow)) {
 				percentLabel = candidatePercent;
 				windowLabel = candidateWindow;
-				if (percentOverflow) {
-					percentStart = gapWidth - percentLabel.length;
-					windowStart = percentStart - 1 - windowLabel.length;
-				} else {
-					windowStart = gapWidth - windowLabel.length - 1;
-				}
-				scaleWidth = windowStart;
+				scaleWidth = gapWidth - embeddedContextGaugeMinWidth(pct, ctx.contextWindow) + 1;
 			}
 		}
 
@@ -3271,7 +3261,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// the line is long enough for the markers to read as positions.
 		let speculationIdx = -1;
 		let thresholdIdx = -1;
-		if ((mode === "annotated" || mode === "embedded") && ctx.autoCompactEnabled && gapWidth >= 8) {
+		if (mode === "annotated" && ctx.autoCompactEnabled && scaleWidth >= 8) {
 			const boundaries = this.#compactionBoundaries(ctx.contextWindow);
 			if (boundaries) {
 				const cellFor = (percent: number) =>
@@ -3281,28 +3271,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				// first available method is local/instant) — no tick to show.
 				if (boundaries.speculationPercent !== null) speculationIdx = cellFor(boundaries.speculationPercent);
 				if (speculationIdx === thresholdIdx) speculationIdx = -1; // threshold wins the cell
-			}
-		}
-
-		if (percentLabel && percentStart < 0) {
-			const maxStart = scaleWidth - percentLabel.length - 1;
-			const preferredStart = Math.min(maxStart, Math.max(1, usedCount));
-			const overlapsBoundary = (start: number): boolean => {
-				const end = start + percentLabel.length;
-				return (speculationIdx >= start && speculationIdx < end) || (thresholdIdx >= start && thresholdIdx < end);
-			};
-			for (let distance = 0; distance <= maxStart; distance++) {
-				const left = preferredStart - distance;
-				if (left >= 1 && !overlapsBoundary(left)) {
-					percentStart = left;
-					break;
-				}
-				if (distance === 0) continue;
-				const right = preferredStart + distance;
-				if (right <= maxStart && !overlapsBoundary(right)) {
-					percentStart = right;
-					break;
-				}
 			}
 		}
 
@@ -3320,21 +3288,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 		// Emit runs, not cells: each stretch of plain rule between markers and
 		// labels is one `repeat`, and color escapes change only at run edges.
-		// Precedence per cell: percent label > threshold > speculation > window label.
-		const percentEnd = percentStart >= 0 ? percentStart + percentLabel.length : -1;
-		const windowEnd = windowStart >= 0 ? windowStart + windowLabel.length : -1;
 		let out = "\x1b[49m";
 		let activeColor = "";
 		let i = 0;
-		while (i < gapWidth) {
+		while (i < scaleWidth) {
 			let color: string;
 			let text: string;
-			if (i >= percentStart && i < percentEnd) {
-				const end = Math.min(percentEnd, gapWidth);
-				color = percentOverflow ? overflowColor : usedColor;
-				text = percentLabel.slice(i - percentStart, end - percentStart);
-				i = end;
-			} else if (i === thresholdIdx) {
+			if (i === thresholdIdx) {
 				color = thresholdColor;
 				text = thresholdGlyph;
 				i++;
@@ -3343,19 +3303,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				text = speculationGlyph;
 				i++;
 			} else {
-				const inWindow = i >= windowStart && i < windowEnd;
-				let end = Math.min(inWindow ? windowEnd : i < usedCount ? usedCount : gapWidth, gapWidth);
-				if (percentStart > i && percentStart < end) end = percentStart;
+				let end = i < usedCount ? usedCount : scaleWidth;
 				if (thresholdIdx > i && thresholdIdx < end) end = thresholdIdx;
 				if (speculationIdx > i && speculationIdx < end) end = speculationIdx;
-				if (!inWindow && windowStart > i && windowStart < end) end = windowStart;
-				if (inWindow) {
-					color = thresholdColor;
-					text = windowLabel.slice(i - windowStart, end - windowStart);
-				} else {
-					color = i < usedCount ? usedColor : unusedColor;
-					text = horizontal.repeat(end - i);
-				}
+				color = i < usedCount ? usedColor : unusedColor;
+				text = horizontal.repeat(end - i);
 				i = end;
 			}
 			if (color !== activeColor) {
@@ -3363,6 +3315,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				activeColor = color;
 			}
 			out += text;
+		}
+		if (windowLabel) {
+			out += `${speculationColor} ctx `;
+			if (percentLabel) out += `${percentOverflow ? overflowColor : usedColor}${percentLabel}${speculationColor} · `;
+			out += `${windowLabel}  `;
 		}
 		return `${out}\x1b[39m`;
 	}
