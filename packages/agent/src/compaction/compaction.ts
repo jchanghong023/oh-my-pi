@@ -1206,6 +1206,8 @@ export interface HandoffFromContextOptions {
 	telemetry?: AgentTelemetry;
 	/** See {@link HandoffOptions.thinkingLevel}. */
 	thinkingLevel?: ThinkingLevel;
+	/** False disables whole-request and tool-choice retries when the host transport owns replay policy. */
+	oneshotRetry?: OneshotRetryOptions | false;
 }
 
 /**
@@ -1235,13 +1237,18 @@ export async function generateHandoffFromContext(
 		requestOptions.disableReasoning = false;
 		requestOptions.forceReasoningOff = false;
 	}
+	const retry = options.oneshotRetry === false ? undefined : (options.oneshotRetry ?? {});
 	let response = await completeCompaction(model, context, requestOptions, {
 		telemetry: options.telemetry,
 		oneshotKind: "handoff",
 		completeImpl: options.completeImpl,
-		retry: {},
+		retry,
 	});
-	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
+	if (
+		options.oneshotRetry !== false &&
+		response.stopReason === "error" &&
+		shouldRetryHandoffWithAutoToolChoice(response)
+	) {
 		logger.warn("Compaction handoff retrying with auto tool choice", {
 			component: "compaction",
 			event: "compaction_handoff_fallback",
@@ -1253,7 +1260,7 @@ export async function generateHandoffFromContext(
 			model,
 			context,
 			{ ...requestOptions, toolChoice: "auto" },
-			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
+			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry },
 		);
 	}
 

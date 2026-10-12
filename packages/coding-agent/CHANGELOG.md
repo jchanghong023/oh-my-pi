@@ -14,6 +14,12 @@
 - The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
 - Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
 
+### Fixed
+
+- Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
+- CodeAgent keeps working cached credentials when the Windows registry contains an empty token value.
+- Prevented compaction summary and handoff retries from bypassing CodeAgent and JchTools replay policy.
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
@@ -32,10 +38,6 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
-
-### Fixed
-
-- Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
 
 ## [18.10.1] - 2026-10-12
 

@@ -23,7 +23,7 @@ export function readCodeAgentRegistryToken(): string | undefined {
 			timeout: 2000,
 		});
 		if (result.exitCode !== 0) return undefined;
-		const match = result.stdout.toString().match(/^\s*JCH_CODEAGENT3_X_AUTH_TOKEN\s+REG_SZ\s+([^\r\n]+)/m);
+		const match = result.stdout.toString().match(/^[\t ]*JCH_CODEAGENT3_X_AUTH_TOKEN[\t ]+REG_SZ[\t ]+(\S[^\r\n]*)/m);
 		return match?.[1] || undefined;
 	} catch {
 		return undefined;
@@ -60,7 +60,10 @@ export function initializeCodeAgentProvider(initialCache?: CodeAgentTokenCache):
 	if (initialCache) cache = initialCache;
 	if (!cache) {
 		cache = new CodeAgentTokenCache();
-		logger.info("CodeAgent credential cache initialized", { provider: CODEAGENT_PROVIDER_ID, available: !!cache.token });
+		logger.info("CodeAgent credential cache initialized", {
+			provider: CODEAGENT_PROVIDER_ID,
+			available: !!cache.token,
+		});
 	}
 	setCodeAgentStreamHandler((model, context, options) => streamCodeAgent(model, context, options, cache!));
 }
@@ -120,7 +123,12 @@ export function streamCodeAgent(
 			for await (const event of inner) {
 				if (event.type === "error") {
 					const next = tokenCache.refresh();
-					replay = attempt === 0 && !committed && !options?.signal?.aborted && event.reason !== "aborted" && next !== token;
+					replay =
+						attempt === 0 &&
+						!committed &&
+						!options?.signal?.aborted &&
+						event.reason !== "aborted" &&
+						next !== token;
 					logger.info("CodeAgent request failed", {
 						provider: CODEAGENT_PROVIDER_ID,
 						token_changed: next !== token,

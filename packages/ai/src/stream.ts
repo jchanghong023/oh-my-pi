@@ -1292,9 +1292,8 @@ function streamSimpleRequest<TApi extends Api>(
 	);
 
 	// CodeAgent 的认证与唯一刷新重试属于其请求层，不能进入通用凭据轮换。
-	const apiKeyResolver = model.provider !== "codeagent" && isApiKeyResolver(requestOptions?.apiKey)
-		? requestOptions.apiKey
-		: undefined;
+	const apiKeyResolver =
+		model.provider !== "codeagent" && isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
 	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
 		const signal = requestOptions?.signal;

@@ -5,6 +5,7 @@
 ### Added
 
 - Added correlated compaction attempt, fallback, effective-effort, cancellation, and terminal-result diagnostics without recording conversation or summary content.
+- Added `HandoffFromContextOptions.oneshotRetry`, including a `false` opt-out for whole-request and tool-choice retries when the host transport owns replay policy.
 
 ### Fixed
 

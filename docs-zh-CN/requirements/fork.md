@@ -125,7 +125,7 @@
 - Windows 非 offline 启动内置 `codeagent/DeepSeek-V4-Flash-0731-CodeAgent`，无需配置或登录；非 Windows 平台不注册该内置模型，`OMP_OFFLINE` 生效时所有入口隐藏，其他 Provider 行为不变。
 - 固定 base URL `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2`，API `openai-completions`，`auth: none`，禁用严格工具模式（OpenAI 兼容轴 `supports-strict-mode #false`，不使用仅适用于 Anthropic 的 `disableStrictTools`）；模型 ID 与名称均为 `DeepSeek-V4-Flash-0731-CodeAgent`，支持 reasoning 与 tools，contextWindow `200000`，maxTokens `32768`。
 - Windows 启动直接读取 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 并在内存缓存，作为 `x-auth-token` 请求头；正常请求不重读注册表，不使用进程环境变量快照。
-- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
+- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。此限制覆盖对话、压缩摘要与 handoff，不允许外层重试或认证、模型、压缩方法回退重新发送失败请求。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
 - 凭据不写配置或日志，不改变其他 Provider 的缓存、认证或重试行为；注册表读取失败不清除已缓存 Token。
 
 ### JchTools 零配置发现与远端 Agent

@@ -70,6 +70,7 @@ import { writeArtifact } from "./artifacts";
 import type { ModelRegistry } from "../config/model-registry";
 import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ExtensionRunner, SessionBeforeCompactResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { GoalModeState } from "../goals/state";
@@ -1162,6 +1163,7 @@ export class SessionMaintenance {
 					onCommitted?.();
 				};
 				let methodAttempted = false;
+				let requestReplayBlocked = false;
 				// No-op rejections (too small / already compacted) make no history change
 				// in this pass, so an interrupted or inherited turn resumes on them like on
 				// a commit; a hook cancel or summarizer failure does not resume.
@@ -1519,6 +1521,9 @@ export class SessionMaintenance {
 									codexCompaction,
 								},
 								compactionCandidates,
+								() => {
+									requestReplayBlocked = true;
+								},
 							);
 							summary = result.summary;
 							shortSummary = result.shortSummary;
@@ -1582,6 +1587,7 @@ export class SessionMaintenance {
 					if (
 						methodAttempted &&
 						!compactionCommitted &&
+						!requestReplayBlocked &&
 						!compactionAbortController.signal.aborted &&
 						!(error instanceof CompactionCancelledError) &&
 						selectedMethodIndex >= 0 &&
@@ -2899,7 +2905,21 @@ export class SessionMaintenance {
 		const noRecoveryReplay =
 			assistantMessage.provider === "codeagent" &&
 			(assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length");
-		if (noRecoveryReplay) autoContinue = false;
+		if (noRecoveryReplay) {
+			autoContinue = false;
+			// Maintenance rebuilds provider context without failed turns. Preserve
+			// the terminal result separately for getLastAssistantMessage consumers.
+			this.#host.retainTerminalFailure(assistantMessage);
+			if (assistantMessage.stopReason === "length") {
+				// Usage-backed overflow can take the overflow route before the
+				// incomplete route, and maintenance may fail or be cancelled.
+				this.#host.emitNotice(
+					"warning",
+					`Response hit the ${assistantMessage.provider}/${assistantMessage.model} output limit (${assistantMessage.usage.output} tokens) and was truncated.`,
+					"compaction",
+				);
+			}
+		}
 		const contextWindow = this.#model?.contextWindow ?? 0;
 		const generation = this.#host.promptGeneration();
 		// A delivered turn means the incomplete-recovery loop broke through: clear
@@ -3227,11 +3247,13 @@ export class SessionMaintenance {
 					contextTokens: incompleteContextTokens,
 					outputTokens: assistantMessage.usage.output,
 				});
-				this.#host.emitNotice(
-					"warning",
-					`Response hit the ${assistantMessage.provider}/${assistantMessage.model} output limit (${assistantMessage.usage.output} tokens) and was truncated.`,
-					"compaction",
-				);
+				if (!noRecoveryReplay) {
+					this.#host.emitNotice(
+						"warning",
+						`Response hit the ${assistantMessage.provider}/${assistantMessage.model} output limit (${assistantMessage.usage.output} tokens) and was truncated.`,
+						"compaction",
+					);
+				}
 				if (noRecoveryReplay) {
 					const result = windowExhausted
 						? await this.runAutoCompaction("incomplete", false, {
@@ -3684,6 +3706,7 @@ export class SessionMaintenance {
 		signal: AbortSignal,
 		options?: SummaryOptions,
 		precomputedCandidates?: Model[],
+		onReplayBlocked?: () => void,
 	): Promise<CompactionResult> {
 		const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
 		return logger.withLogContext(
@@ -3764,6 +3787,11 @@ export class SessionMaintenance {
 								signal,
 								{
 									...options,
+									// These transports own replay policy; summary retries must not bypass it.
+									oneshotRetry:
+										candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)
+											? false
+											: options?.oneshotRetry,
 									metadata: this.#host.agent.metadataForProvider(candidate.provider),
 									convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 									buildProviderContext: (summarized, retained, signal) =>
@@ -3827,6 +3855,10 @@ export class SessionMaintenance {
 								elapsed_ms: performance.now() - attemptStarted,
 								...logger.diagnosticError(error),
 							});
+							if (candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)) {
+								onReplayBlocked?.();
+								throw error;
+							}
 							if (AIError.is(id, AIError.Flag.AuthFailed)) continue;
 							if (error instanceof NativeCompactionError) {
 								nativeCompactionFailure ??= { error, provider: candidate.provider };
@@ -4808,6 +4840,7 @@ export class SessionMaintenance {
 						const autoCompactionSignal = autoCompactionAbortController.signal;
 
 						let compactionCommitted = false;
+						let requestReplayBlocked = false;
 						try {
 							// Emit start AFTER the controller is installed so isCompacting is already true
 							// for any listener — and for input routed during this emit's event-loop yield:
@@ -5078,6 +5111,8 @@ export class SessionMaintenance {
 							// configured preference.
 							let handoffDocument: HandoffResult | undefined;
 							if (action === "handoff" && compactionPrep.kind !== "fromHook") {
+								requestReplayBlocked =
+									this.#model?.provider === "codeagent" || isJchToolsAgentModel(this.#model ?? undefined);
 								handoffDocument = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
 									autoTriggered: true,
 									signal: autoCompactionSignal,
@@ -5097,6 +5132,7 @@ export class SessionMaintenance {
 									return COMPACTION_CHECK_NONE;
 								}
 								if (!handoffDocument) {
+									if (requestReplayBlocked) throw new Error("Handoff generation produced no content");
 									terminalResult = "fallback";
 									logger.warn("Auto-handoff returned no document; trying next preferred compaction method", {
 										reason,
@@ -5470,6 +5506,10 @@ export class SessionMaintenance {
 											if (autoCompactionSignal.aborted) {
 												throw error;
 											}
+											if (candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)) {
+												requestReplayBlocked = true;
+												throw error;
+											}
 
 											const message = error instanceof Error ? error.message : String(error);
 											const id = AIError.classify(
@@ -5657,7 +5697,7 @@ export class SessionMaintenance {
 									: reason === "incomplete"
 										? `Incomplete response recovery failed: ${errorMessage}`
 										: `Auto-compaction failed: ${errorMessage}`;
-							if (!compactionCommitted && methodIndex + 1 < methods.length) {
+							if (!compactionCommitted && !requestReplayBlocked && methodIndex + 1 < methods.length) {
 								terminalResult = "fallback";
 								logger.warn("Automatic compaction method failed; trying next preference", {
 									method,

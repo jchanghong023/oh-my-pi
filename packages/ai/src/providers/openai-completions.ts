@@ -1780,7 +1780,7 @@ export const streamOpenAICompletionsOnce = (
 				: abortTracker.wasCallerAbort()
 					? new AIError.AbortError("CodeAgent request cancelled")
 					: error instanceof AIError.StreamTimeoutError ||
-							abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
+						  abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
 						? new AIError.StreamTimeoutError("CodeAgent request timed out")
 						: new AIError.ProviderHttpError("CodeAgent request failed", AIError.status(error) ?? 502);
 			const result = await AIError.finalize(safeError, {

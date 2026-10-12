@@ -12,6 +12,7 @@ import { generateHandoffFromContext, renderHandoffPrompt } from "@oh-my-pi/pi-ag
 import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { Settings } from "../config/settings";
 import { obfuscateProviderContext } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
@@ -185,6 +186,7 @@ export class SessionHandoff {
 					// resolveCompactionEffort so unsupported-effort models don't trip
 					// requireSupportedEffort.
 					thinkingLevel: this.#host.thinkingLevel(),
+					oneshotRetry: model.provider === "codeagent" || isJchToolsAgentModel(model) ? false : undefined,
 				},
 			);
 			const handoffText = this.#host.deobfuscateFromProvider(rawHandoffText);
