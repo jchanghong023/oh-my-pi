@@ -242,6 +242,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"escape-builtin-tool-names": wire("escapeBuiltinToolNames", ["anthropic"]),
 	"fast-mode": wire("fastMode", ["anthropic"]),
 	"first-party-provider": wire("firstPartyProvider", ["anthropic"]),
+	"honors-claude-code-beta-kill-switch": wire("honorsClaudeCodeBetaKillSwitch", ["anthropic"]),
 	"inject-claude-code-instruction": wire("injectClaudeCodeInstruction", ["anthropic"]),
 	"max-image-dimension": wire("maxImageDimension", ["anthropic"]),
 	"max-image-payload-bytes": wire("maxImagePayloadBytes", ["anthropic"]),

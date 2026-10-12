@@ -74,6 +74,10 @@ provider "anthropic" {
 	// combines this fact with a per-request effective-URL check, so it never
 	// authorizes a block on its own.
 	first-party-provider #true
+	// Shares Claude Code's `ANTHROPIC_*` env routing, so it also honors Claude
+	// Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch for gateways
+	// that reject experimental beta fields.
+	honors-claude-code-beta-kill-switch #true
 	// Messages requests cap at 32 MB. Reserve 8 MB for text, tools, and JSON
 	// framing when retaining inline base64 images in a long conversation.
 	// Applied only on the official endpoint; a custom baseUrl has its own limit.

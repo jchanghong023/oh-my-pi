@@ -75,8 +75,9 @@ export interface BashToolDetails {
 		timedOut: boolean;
 		pid?: number;
 	};
+	/** Background job behind the call; `cancelled`: killed (`proc://<id>/kill`) before it finished. */
 	async?: {
-		state: "running" | "completed" | "failed";
+		state: "running" | "completed" | "failed" | "cancelled";
 		jobId: string;
 		type: "bash";
 	};
@@ -426,9 +427,9 @@ function shellRunState(
 	cancelled: boolean,
 ): RunState {
 	if (cancelled) return "cancelled";
+	if (details?.async?.state === "running") return "background";
 	if (isPartial) return "running";
 	if (details?.timedOut === true) return "timed-out";
-	if (details?.async?.state === "running") return "background";
 	if (isError || (details?.exitCode !== undefined && details.exitCode !== 0)) return "failed";
 	return "done";
 }
@@ -677,13 +678,13 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const command = formatBashCommandText(toBashRenderArgs(args, config));
 			const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
 			const state = shellRunState(details, isError, isPartial, options.cancelled === true);
-			// Settled: the measured wall time wins. A background job outlives the call: its run time is unknown here.
-			const elapsedMs =
-				state === "background"
+			// Live (a running call, or a parked job still streaming): the call's clock. Settled: the
+			// measured wall time wins. A frozen background snapshot's run time is unknown here.
+			const elapsedMs = isPartial
+				? options.elapsedMs
+				: state === "background"
 					? undefined
-					: isPartial
-						? options.elapsedMs
-						: (details?.wallTimeMs ?? options.elapsedMs);
+					: (details?.wallTimeMs ?? options.elapsedMs);
 			const meta = details?.meta;
 			const box = runBox(
 				[

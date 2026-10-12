@@ -14,6 +14,12 @@
 - Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added `AgentLoopConfig.onDetachedToolUpdate`: a tool's `onUpdate` frames that arrive after its run's event stream ended (a returned call whose background job keeps reporting) reach it instead of being dropped; `Agent` forwards them to its subscribers as `tool_execution_update` events
+
 ## [18.9.2] - 2026-10-11
 
 ### Changed

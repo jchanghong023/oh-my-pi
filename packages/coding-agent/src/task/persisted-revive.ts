@@ -173,6 +173,8 @@ export function createPersistedSubagentReviverFactory(
 			// A restricted persisted contract must not consult process-global MCP
 			// state: same-name MCP tools are untrusted capability sources.
 			const restrictToolNames = init.restrictToolNames === true;
+			// The spawn's result contract: a session persisted without `yield` returned its final message.
+			const structured = revivedToolNames.includes("yield");
 			const mcpManager = restrictToolNames ? undefined : MCPManager.instance();
 			// Subscribe before minting proxies so a manager change during startup is replayed on bind.
 			const mcpFollower = mcpManager ? followMCPTools(mcpManager) : undefined;
@@ -220,7 +222,7 @@ export function createPersistedSubagentReviverFactory(
 					outputSchema: init.outputSchema,
 					outputSchemaMode: init.outputSchemaMode,
 					restrictToolNames: restrictToolNames || undefined,
-					requireYieldTool: true,
+					requireYieldTool: structured,
 					systemPrompt: () => [...init.systemPrompt],
 					// Inherit current owner policy, never extension authority from a transcript.
 					extensionRoots: () => ctx.session.effectiveExtensionRoots,
@@ -284,6 +286,7 @@ export function createPersistedSubagentReviverFactory(
 				eventBus: ctx.eventBus,
 				subagentEventBus: ctx.subagentEventBus,
 				sessionFile,
+				structured,
 				outputSchema: init.outputSchema,
 				outputSchemaMode: init.outputSchemaMode,
 				// Anchor artifacts to the revived ref's own dir (its parent's children

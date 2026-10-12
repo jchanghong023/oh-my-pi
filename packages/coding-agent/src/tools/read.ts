@@ -128,6 +128,7 @@ import {
 	type SuffixMatchCache,
 } from "./read-path-resolution";
 import { type PdfImageReadTarget, renderPdfPageScreenshot, splitPdfImageReadPath } from "./read-pdf";
+import { ternShowsMedia } from "./tern-media";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import {
 	VideoError,
@@ -753,6 +754,17 @@ interface LocatedRead {
 	path: string;
 	sel?: string;
 	spec: SchemeSpec;
+}
+
+interface FilesystemReadOptions {
+	located?: LocatedRead;
+	question?: string;
+	/** Model-facing path for `?q=` hints; defaults to the displayed file path. */
+	questionPath?: string;
+	signal?: AbortSignal;
+	onBufferedFile?: (bytes: Buffer) => void;
+	onConflictMarkers?: () => void;
+	lexicalAbsolutePath?: string;
 }
 
 /**
@@ -1763,19 +1775,24 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * The filesystem read pipeline: directories, archives, sqlite, PDFs, video,
 	 * images, documents, notebooks, and streamed/paged text. `located` carries
 	 * the URL a routed read resolved to `readPath`; its hints name that URL.
+	 * A whole read of a file Tern's media viewer shows records it as display-only
+	 * `details.mediaPath`, whatever content the model receives.
 	 */
 	async #readFilesystemPath(
 		readPath: string,
-		options: {
-			located?: LocatedRead;
-			question?: string;
-			/** Model-facing path for `?q=` hints; defaults to the displayed file path. */
-			questionPath?: string;
-			signal?: AbortSignal;
-			onBufferedFile?: (bytes: Buffer) => void;
-			onConflictMarkers?: () => void;
-			lexicalAbsolutePath?: string;
-		},
+		options: FilesystemReadOptions,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		const media: { path?: string } = {};
+		const result = await this.#readFilesystemPipeline(readPath, options, media);
+		if (media.path === undefined || result.isError) return result;
+		return { ...result, details: { ...result.details, mediaPath: media.path } };
+	}
+
+	/** {@link #readFilesystemPath}'s body; sets `media.path` once the read is known to be a whole Tern-viewable file. */
+	async #readFilesystemPipeline(
+		readPath: string,
+		options: FilesystemReadOptions,
+		media: { path?: string },
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const { located, question, questionPath, signal, onBufferedFile, onConflictMarkers, lexicalAbsolutePath } =
 			options;
@@ -1978,6 +1995,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return toolResult<ReadToolDetails>({ resolvedPath: absolutePath })
 				.text(formatLocatedFileNotice(located.url, absolutePath, fileSize, true))
 				.done();
+		}
+
+		// Whole-file reads only (no selector, `:raw`, `:img`); line ranges and video frames show their slice.
+		if (
+			(localTarget.sel === undefined || parsed.kind === "raw" || parsed.kind === "image") &&
+			ternShowsMedia(absolutePath)
+		) {
+			media.path = absolutePath;
 		}
 
 		const ext = path.extname(renderAbsolutePath).toLowerCase();

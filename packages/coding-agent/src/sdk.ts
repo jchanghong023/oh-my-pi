@@ -4123,9 +4123,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const explicitlyRequestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 		// When `requireYieldTool` is set, the subagent's prompts and idle-reminders demand a
 		// `yield` call to terminate. The tool registry already includes `yield` (see
-		// `createTools`), but an explicit `toolNames` list would otherwise drop it from the
-		// active set — leaving the model unable to satisfy the contract. Mirror the same
-		// invariant `parseAgentFields` enforces on frontmatter `tools`.
+		// `createTools`), but an explicit `toolNames` list (agent frontmatter `tools` omits
+		// it) would otherwise drop it from the active set — leaving the model unable to
+		// satisfy the contract.
 		if (
 			options.requireYieldTool === true &&
 			explicitlyRequestedToolNames &&

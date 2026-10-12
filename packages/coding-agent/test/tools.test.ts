@@ -2535,7 +2535,7 @@ function b() {
 
 		it("should auto-background at the threshold even with a longer timeout", async () => {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
-			const updates: string[] = [];
+			const updates: Array<{ text: string; state?: string }> = [];
 			const asyncJobManager = new AsyncJobManager({
 				onJobComplete: async (jobId, text) => {
 					deliveries.push({ jobId, text });
@@ -2565,7 +2565,10 @@ function b() {
 				},
 				undefined,
 				update => {
-					updates.push(update.content?.find(block => block.type === "text")?.text ?? "");
+					updates.push({
+						text: update.content?.find(block => block.type === "text")?.text ?? "",
+						state: update.details?.async?.state,
+					});
 				},
 			);
 
@@ -2583,14 +2586,18 @@ function b() {
 			}
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
-			const updatesAtBackground = updates.slice();
+			const updatesAtBackground = updates.length;
 			await runningJob?.promise;
 			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("start");
 			expect(deliveries[0]?.text).toContain("done");
-			expect(updates).toEqual(updatesAtBackground);
+			// The job keeps filling the call's card and settles it with its outcome.
+			const jobFrames = updates.slice(updatesAtBackground);
+			expect(jobFrames.every(frame => frame.state !== undefined)).toBe(true);
+			expect(jobFrames.at(-1)?.state).toBe("completed");
+			expect(jobFrames.at(-1)?.text).toContain("done");
 			await asyncJobManager.dispose();
 		});
 

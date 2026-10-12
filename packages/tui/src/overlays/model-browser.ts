@@ -37,7 +37,14 @@ import {
 } from "../keybinding-matchers";
 import { MenuSelection } from "../components/menu-selection";
 import { clampScrollOffset, scrollOffsetForRow } from "../components/scroll-viewport";
-import type { TspPickerColumn, TspPickerGroup, TspPickerItem, TspSpan, TspText } from "@oh-my-pi/pi-wire";
+import type {
+	TspPickerColumn,
+	TspPickerGroup,
+	TspPickerItem,
+	TspPickerMark,
+	TspSpan,
+	TspText,
+} from "@oh-my-pi/pi-wire";
 import { col, md, node, row, span, text } from "../native/describe";
 import { pickerFuzzyHits } from "../native/picker";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -825,6 +832,20 @@ function previewPrice(model: Model): string {
 	const parts = [`$${formatCostLeg(cost.input)} in`, `$${formatCostLeg(cost.output)} out`];
 	if (cost.cacheRead > 0) parts.push(`$${formatCostLeg(cost.cacheRead)} cache`);
 	return withCreditBadge(model, parts.join(" · "));
+}
+
+/**
+ * A provider's picker mark: the terminal's logo for it, else its initials
+ * (`amazon-bedrock` → `AB`, `anthropic` → `An`) on its own gradient.
+ */
+export function providerMark(providerId: string): TspPickerMark {
+	const words = providerId.split(/[-_\s.]+/).filter(word => word.length > 0);
+	const word = words[0] ?? providerId;
+	const text =
+		words.length >= 2
+			? `${words[0]!.charAt(0)}${words[1]!.charAt(0)}`.toUpperCase()
+			: `${word.charAt(0).toUpperCase()}${word.charAt(1)}`;
+	return { text, seed: providerId, icon: `provider:${providerId}` };
 }
 
 /** The omp theme token of a thinking level's dot (`thinkingHigh`); none for inherit and auto. */
@@ -2023,6 +2044,7 @@ export class ModelBrowser implements Component {
 		const value: TspPickerItem = {
 			id: item.selector,
 			label: quickRole ? item.id : item.selector,
+			mark: providerMark(item.model.provider),
 			mono: true,
 			...(quickRole ? { detail: `${item.model.provider}/${item.model.id}` } : {}),
 			facts,

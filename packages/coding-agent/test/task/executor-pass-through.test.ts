@@ -214,7 +214,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		expect(emptyResult.exitCode).toBe(0);
 		expect(absentResult.exitCode).toBe(0);
-		expect(spy.mock.calls[0]?.[0]?.toolNames).toEqual(["yield"]);
+		expect(spy.mock.calls[0]?.[0]?.toolNames).toEqual([]);
 		expect(spy.mock.calls[1]?.[0]?.toolNames).toBeUndefined();
 	});
 

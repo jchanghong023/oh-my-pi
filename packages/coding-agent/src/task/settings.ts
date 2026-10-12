@@ -251,6 +251,19 @@ export const cfgTaskBatch = register({
 	},
 });
 
+export const cfgTaskStructured = register({
+	id: "task.structured",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Structured Task Results",
+		description:
+			"Expose outputSchema/schemaMode on the task tool and return subagent results through the yield tool, validated against caller or agent output schemas. Off: task subagents have no yield tool and return their final message as plain text. Eval agent()/workpool spawns always keep structured results.",
+	},
+});
+
 export const cfgTaskSpeculativeLaunch = register({
 	id: "task.speculativeLaunch",
 	type: "boolean",
@@ -388,7 +401,7 @@ export const cfgTaskSoftRequestBudget = register({
 		group: "Subagents",
 		label: "Soft Subagent Request Budget",
 		description:
-			"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them.",
+			"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must hand back its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them.",
 		options: [
 			{ value: "0", label: "Disabled" },
 			{ value: "90", label: "90 requests" },

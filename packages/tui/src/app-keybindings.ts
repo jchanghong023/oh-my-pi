@@ -57,8 +57,8 @@ interface AppKeybindings {
 	"app.session.rename": true;
 	"app.session.delete": true;
 	"app.session.deleteNoninvasive": true;
-	"app.tree.foldOrUp": true;
-	"app.tree.unfoldOrDown": true;
+	"app.tree.previousBranch": true;
+	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
 	"app.history.search": true;
 	"app.stt.pushToTalk": true;
@@ -227,13 +227,13 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+backspace",
 		description: "Delete session (non-invasive)",
 	},
-	"app.tree.foldOrUp": {
-		defaultKeys: ["ctrl+left", "alt+left"],
-		description: "Fold or move up",
+	"app.tree.previousBranch": {
+		defaultKeys: [],
+		description: "Jump to the previous branch in /tree",
 	},
-	"app.tree.unfoldOrDown": {
-		defaultKeys: ["ctrl+right", "alt+right"],
-		description: "Unfold or move down",
+	"app.tree.nextBranch": {
+		defaultKeys: [],
+		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
 		defaultKeys: "shift+tab",

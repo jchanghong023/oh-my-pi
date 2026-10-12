@@ -634,19 +634,29 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 
 		let latestText = "";
 		let latestDetails: EvalToolDetails | undefined;
-		let forwardUpdates = !startBackgrounded;
+		let backgrounded = startBackgrounded;
 		const completion = Promise.withResolvers<ManagedEvalJobCompletion>();
 
 		const jobId = autoBgManager.register(
 			"eval",
 			label,
 			async ({ jobId, signal: runSignal, reportProgress }) => {
+				// Once backgrounded, the job's frames carry `details.async` so the call's
+				// card keeps filling and settles with the job.
+				const showJobFrame = (
+					text: string,
+					details: EvalToolDetails | undefined,
+					state: "running" | "completed" | "failed" | "cancelled",
+				): void => {
+					if (backgrounded) emitToolUpdate?.(text, { ...details, async: { state, jobId, type: "eval" } });
+				};
 				try {
 					const result = await run(runSignal, (text, details) => {
 						latestText = text;
 						latestDetails = details;
 						void reportProgress(text, { async: { state: "running", jobId, type: "eval" } });
-						if (forwardUpdates) emitToolUpdate?.(text, details);
+						if (backgrounded) showJobFrame(text, details, "running");
+						else emitToolUpdate?.(text, details);
 					});
 					const finalText =
 						(result.content.find(block => block.type === "text")?.text ?? "") +
@@ -662,6 +672,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						// records it as failed and delivers the error text.
 						throw new ToolError(finalText || "Eval cell failed");
 					}
+					showJobFrame(finalText, result.details, "completed");
 					await reportProgress(finalText, {
 						...result.details,
 						async: { state: "completed", jobId, type: "eval" },
@@ -671,6 +682,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					const message = error instanceof Error ? error.message : String(error);
 					latestText = message;
 					completion.resolve({ kind: "failed", error });
+					showJobFrame(message, latestDetails, runSignal.aborted ? "cancelled" : "failed");
 					await reportProgress(message, {
 						...latestDetails,
 						async: { state: "failed", jobId, type: "eval" },
@@ -717,7 +729,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			autoBgManager.releaseForegroundJob(jobId);
 			throw new ToolAbortError(latestText || "Eval cell aborted");
 		}
-		forwardUpdates = false;
+		backgrounded = true;
 		autoBgManager.backgroundJob(jobId);
 		// "steer": a queued user/peer message arrived mid-wait — background the
 		// cell (it keeps running) so the message injects promptly.

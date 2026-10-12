@@ -6,6 +6,12 @@
 
 - Added GLM-5.3-FlashX to the local ZCode Proxy model roster, matching Zhipu Coding Plan.
 
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+
 ## [18.10.0] - 2026-10-12
 
 ### Changed

@@ -92,9 +92,9 @@ export interface EvalToolDetails {
 	languages?: EvalLanguage[];
 	/** Optional human-readable notice (e.g. fallback explanation). */
 	notice?: string;
-	/** Present when the cell was auto-backgrounded as an async job. */
+	/** Present when the cell was auto-backgrounded as an async job; `cancelled`: killed before it finished. */
 	async?: {
-		state: "running" | "completed" | "failed";
+		state: "running" | "completed" | "failed" | "cancelled";
 		jobId: string;
 		type: "eval";
 	};

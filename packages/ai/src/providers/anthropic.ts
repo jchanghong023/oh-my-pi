@@ -9,6 +9,7 @@ import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
 	$env,
+	$flag,
 	isEnoent,
 	logger,
 	parseJsonWithRepair,
@@ -116,10 +117,12 @@ import {
 	type MessageCreateParams,
 	type MessageCreateParamsStreaming,
 	type MessageParam,
+	type OutputConfig,
 	parseAnthropicInputTransformations,
 	type RawMessageStreamEvent,
 	THINKING_BINDING_CONTROLS_BETA,
 	type TextBlockParam,
+	type ThinkingConfigParam,
 } from "./anthropic-wire";
 import {
 	claudeCodeSdkVersion,
@@ -273,24 +276,41 @@ const promptCacheBetas: Record<string, true> = {
 };
 
 /**
- * Remove the prompt-cache betas from every `anthropic-beta` entry in a header
+ * Betas withheld under the kill switch: they gate the pre-release body fields
+ * it removes (Claude Code's gateway contract: context management, beta tool
+ * fields, structured-output format, task budgets, tool search), plus the
+ * thinking-binding and compaction controls omp also withholds.
+ */
+const killSwitchBetas: Record<string, true> = {
+	[THINKING_BINDING_CONTROLS_BETA]: true,
+	[contextManagementBeta]: true,
+	[COMPACTION_BETA]: true,
+	[LEGACY_COMPACTION_BETA]: true,
+	[structuredOutputsBeta]: true,
+	[taskBudgetBeta]: true,
+	[midConversationToolChangesBeta]: true,
+};
+
+/**
+ * Remove the `dropped` betas from every `anthropic-beta` entry in a header
  * record. Header names are case-insensitive and the value is a comma-separated
  * list, so each matching key keeps its own casing and its remaining tokens;
  * an entry left with no token is deleted rather than sent empty. The input is
- * returned untouched when it advertises no cache beta.
+ * returned untouched when it advertises none of them.
  *
  * `model.headers` and `options.headers` are caller-controlled channels that
  * reach the wire through `buildAnthropicHeaders` (as `modelHeaders`, which an
  * override-enabled endpoint lets replace our own beta header outright), the
  * GitHub Copilot default headers, and the per-request beta override built for
- * injected clients — each of which must go through here once breakpoints drop.
+ * injected clients — each of which must go through here once breakpoints drop
+ * or the experimental-beta kill switch is on.
  */
-function stripPromptCacheBetas(headers: Record<string, string>): Record<string, string> {
+function stripHeaderBetas(headers: Record<string, string>, dropped: Record<string, true>): Record<string, string> {
 	let stripped: Record<string, string> | undefined;
 	for (const key in headers) {
 		if (key.toLowerCase() !== "anthropic-beta") continue;
 		const betas = normalizeExtraBetas(headers[key]);
-		const kept = betas.filter(beta => promptCacheBetas[beta] !== true);
+		const kept = betas.filter(beta => dropped[beta] !== true);
 		if (kept.length === betas.length) continue;
 		stripped ??= { ...headers };
 		if (kept.length === 0) {
@@ -2452,6 +2472,9 @@ const streamAnthropicOnce = (
 			};
 			let dropAllThinking = droppedAllThinkingForSignature;
 			let prefixBindingRetryAttempted = false;
+			// Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`; the wrapper
+			// already turned the gated compat off, this covers caller/frozen inputs.
+			const killSwitchActive = experimentalBetasDisabled(model);
 			// A live fallback-credit redemption replays its frozen body.
 			const frozenRedemption =
 				options?.fallbackCreditRedemption &&
@@ -2459,6 +2482,24 @@ const streamAnthropicOnce = (
 				options.fallbackCreditRedemption.params
 					? options.fallbackCreditRedemption
 					: undefined;
+			// A body frozen before the kill switch was set still carries the fields
+			// it withholds; the credit token is bound to that body, so forfeit it
+			// and build a fresh request. Server tools that already ran would re-run
+			// and re-bill on a tokenless retry, so surface that case instead.
+			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
+			// The redemption drops `fallbacks` before sending, so they cannot force a forfeit.
+			const forfeitFrozenForKillSwitch =
+				killSwitchActive &&
+				frozenBody !== undefined &&
+				carriesKillSwitchField({ ...frozenBody, fallbacks: undefined });
+			if (
+				forfeitFrozenForKillSwitch &&
+				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
+			) {
+				throw new AIError.ConfigurationError(
+					"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS was set after a refused turn that ran server tools; its fallback credit cannot be redeemed without the experimental fields the switch withholds.",
+				);
+			}
 			// Collected at most once, on first params build; a frozen redemption
 			// body never builds params.
 			let controlRecords: AnthropicControlRecord[] | undefined;
@@ -2477,12 +2518,16 @@ const streamAnthropicOnce = (
 			// `anthropic-beta` value, so once breakpoints are dropped an unstripped
 			// base would re-attach the very cache beta the replay abandoned. Both
 			// prompt-cache betas govern `ttl`/`scope`, so the options rung has to
-			// strip them too. Read through a closure because both flags flip
-			// mid-turn.
-			const callerBetaBaseHeaders = (): Record<string, string> =>
-				dropCacheControl || dropCacheControlOptions
-					? stripPromptCacheBetas(mergedCallerHeaders)
-					: mergedCallerHeaders;
+			// strip them too. The kill switch's betas never ride, whatever the
+			// caller's header says. Read through a closure because both cache
+			// flags flip mid-turn.
+			const callerBetaBaseHeaders = (): Record<string, string> => {
+				const headers =
+					dropCacheControl || dropCacheControlOptions
+						? stripHeaderBetas(mergedCallerHeaders, promptCacheBetas)
+						: mergedCallerHeaders;
+				return killSwitchActive ? stripHeaderBetas(headers, killSwitchBetas) : headers;
+			};
 			// Keep fallback payloads aligned with the top-level Vertex effort gate:
 			// no nested effort field means the fallback scan cannot re-add its beta.
 			let fallbacks = options?.fallbacks;
@@ -2611,7 +2656,9 @@ const streamAnthropicOnce = (
 				if (!isOAuth && isOfficialAnthropicApiUrl(baseUrl) && !extraBetas.includes(fallbackCreditBeta)) {
 					extraBetas.push(fallbackCreditBeta);
 				}
-				if (options?.fallbackCreditRedemption) {
+				// A forfeited frozen body is rebuilt fresh, so it keeps the betas
+				// computed above instead of the saved list describing the old body.
+				if (options?.fallbackCreditRedemption && !forfeitFrozenForKillSwitch) {
 					const frozenBetas = (options.fallbackCreditRedemption.betas ?? []).filter(
 						b => !b.startsWith("server-side-fallback-"),
 					);
@@ -2644,6 +2691,8 @@ const streamAnthropicOnce = (
 						}
 					}
 				}
+				// Caller betas and a frozen redemption's beta list bypass compat.
+				if (killSwitchActive) extraBetas = extraBetas.filter(beta => killSwitchBetas[beta] !== true);
 
 				clientArgs = {
 					model,
@@ -2711,6 +2760,8 @@ const streamAnthropicOnce = (
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
 				}
+				// After `onPayload`, so a hook cannot restore a field the switch withholds.
+				if (killSwitchActive) withholdKillSwitchFields(nextParams);
 				if (nextParams.compaction) stripCompactionIncompatibleParams(nextParams);
 				// After `onPayload`, so a hook cannot restore a field Bedrock rejects.
 				if (model.compat.bedrockMessagesApi) fitBedrockAnthropicPayload(nextParams);
@@ -2755,7 +2806,7 @@ const streamAnthropicOnce = (
 			let params: MessageCreateParamsStreaming;
 			// Recheck expiry here: preparation (image resizing) is async, and an
 			// expired token must fall back to a fresh request as before.
-			if (frozenRedemption && Date.now() <= frozenRedemption.expiresAt) {
+			if (frozenRedemption && !forfeitFrozenForKillSwitch && Date.now() <= frozenRedemption.expiresAt) {
 				const redemption = frozenRedemption;
 				usingFallbackCredit = true;
 				const frozenParams = structuredClone(redemption.params as MessageCreateParamsStreaming);
@@ -2987,7 +3038,12 @@ const streamAnthropicOnce = (
 					const rawBetas = options.fallbackCreditRedemption.betaHeader
 						.split(",")
 						.map(b => b.trim())
-						.filter(b => b && !b.startsWith("server-side-fallback-"));
+						.filter(
+							b =>
+								b &&
+								!b.startsWith("server-side-fallback-") &&
+								(!killSwitchActive || killSwitchBetas[b] !== true),
+						);
 					if (!rawBetas.includes(fallbackCreditBeta) && !rawBetas.includes("fallback-credit-2026-06-01")) {
 						rawBetas.push(fallbackCreditBeta);
 					}
@@ -4236,8 +4292,98 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, con
 			call_id: `anthropic-${crypto.randomUUID()}`,
 			...(options?.sessionId ? { session_id: options.sessionId } : {}),
 		},
-		() => withReplaySafeStreamRetry(model, context, options, streamAnthropicOnce, { retryEmptyCompletion: true }),
+		() =>
+			withReplaySafeStreamRetry(withoutDisabledExperimentalBetas(model), context, options, streamAnthropicOnce, {
+				retryEmptyCompletion: true,
+			}),
 	);
+
+/** Whether Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` applies to this model's provider. */
+function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean {
+	return model.compat.honorsClaudeCodeBetaKillSwitch === true && $flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+}
+
+/**
+ * Whether a request body carries a field the kill switch withholds. A frozen
+ * fallback-credit body that does cannot be redeemed under the switch. Defined
+ * as "the sanitizer would change it" so detection and stripping cannot drift.
+ */
+function carriesKillSwitchField(params: MessageCreateParamsStreaming): boolean {
+	const sanitized = structuredClone(params);
+	withholdKillSwitchFields(sanitized);
+	return !Bun.deepEquals(sanitized, params);
+}
+
+/**
+ * Remove every field the kill switch withholds from a final request body, for
+ * payloads an `onPayload` hook replaced after compat already shaped them, and
+ * for the switch's fields compat has no axis for (task budgets). Compaction
+ * blocks keep their readable summary as text, the same form an endpoint
+ * without compaction support receives.
+ */
+function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
+	withholdKillSwitchControls(params);
+	delete params.context_management;
+	delete params.compaction;
+	// Server-side fallback entries carry their own per-attempt controls.
+	for (const entry of params.fallbacks ?? []) withholdKillSwitchControls(entry);
+	for (const tool of params.tools ?? []) {
+		if ("strict" in tool) delete tool.strict;
+		if ("defer_loading" in tool) delete tool.defer_loading;
+		if ("eager_input_streaming" in tool) delete tool.eager_input_streaming;
+	}
+	for (const message of params.messages) {
+		// Per-message `output_config` (mid-conversation effort) may carry the same controls.
+		if ("output_config" in message && message.output_config) withholdKillSwitchControls(message);
+		if (!Array.isArray(message.content)) continue;
+		for (let i = 0; i < message.content.length; i++) {
+			const block = message.content[i];
+			if (block.type === "compaction") message.content[i] = { type: "text", text: block.content };
+		}
+	}
+	if (params.anthropic_beta) {
+		params.anthropic_beta = params.anthropic_beta.filter(beta => killSwitchBetas[beta] !== true);
+	}
+}
+
+/** Withhold the kill switch's thinking/output controls on a body, fallback entry, or message. */
+function withholdKillSwitchControls(holder: { thinking?: ThinkingConfigParam; output_config?: OutputConfig }): void {
+	if (holder.thinking && "block_binding" in holder.thinking) delete holder.thinking.block_binding;
+	if (!holder.output_config) return;
+	delete holder.output_config.task_budget;
+	delete holder.output_config.format;
+	if (Object.keys(holder.output_config).length === 0) delete holder.output_config;
+}
+
+/**
+ * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch on
+ * providers whose compat opts in (`honors-claude-code-beta-kill-switch`).
+ * Gateways behind `ANTHROPIC_BASE_URL` often reject pre-release body fields,
+ * so the switch withholds what Claude Code's gateway contract lists — context
+ * management, beta tool fields (`strict`, `defer_loading`,
+ * `eager_input_streaming`), tool search (mid-conversation tool changes),
+ * structured-output format, task budgets — plus `thinking.block_binding` and
+ * server compaction (whose legacy replay needs a `context_management` edit),
+ * together with their betas. Effort, adaptive thinking, interleaved thinking
+ * and extended context stay, as in Claude Code. Applied through compat so every
+ * request builder and retry rung sees one decision; {@link withholdKillSwitchFields}
+ * and {@link killSwitchBetas} cover the rest where bodies and betas are finalized.
+ */
+function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): Model<"anthropic-messages"> {
+	if (!experimentalBetasDisabled(model)) return model;
+	return {
+		...model,
+		compat: {
+			...model.compat,
+			supportsContextManagement: false,
+			supportsThinkingBindingControls: false,
+			supportsServerCompaction: false,
+			disableStrictTools: true,
+			supportsEagerToolInputStreaming: false,
+			supportsMidConversationToolChanges: false,
+		},
+	};
+}
 
 export type AnthropicSystemBlock = {
 	type: "text";
@@ -4395,7 +4541,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		// Unlike the generic builder below, this branch has no enforced-key
 		// filter: a caller-supplied `anthropic-beta` lands in the default
 		// headers verbatim, cache betas included.
-		const defaultHeaders = dropPromptCacheBetas ? stripPromptCacheBetas(mergedCopilotHeaders) : mergedCopilotHeaders;
+		const defaultHeaders = dropPromptCacheBetas
+			? stripHeaderBetas(mergedCopilotHeaders, promptCacheBetas)
+			: mergedCopilotHeaders;
 		applyInferenceHeaders(defaultHeaders, {
 			provider: model.provider,
 			protocol: "anthropic",
@@ -4440,9 +4588,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// value outright — but `allowAnthropicHeaderOverrides` lets it replace our
 	// built beta header wholesale, which would put a cache beta back on a
 	// breakpoint-free request.
-	const requestModelHeaders = dropPromptCacheBetas
-		? stripPromptCacheBetas(mergedRequestHeaders)
+	// The kill switch's betas are stripped on the same channel.
+	const cacheStrippedHeaders = dropPromptCacheBetas
+		? stripHeaderBetas(mergedRequestHeaders, promptCacheBetas)
 		: mergedRequestHeaders;
+	const requestModelHeaders = experimentalBetasDisabled(model)
+		? stripHeaderBetas(cacheStrippedHeaders, killSwitchBetas)
+		: cacheStrippedHeaders;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
 		baseUrl,

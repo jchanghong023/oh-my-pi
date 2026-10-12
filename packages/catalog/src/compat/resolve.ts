@@ -892,6 +892,7 @@ function resolveAnthropicPolicy(
 		supportsContextManagement: true,
 		supportsServerCompaction: false,
 		firstPartyProvider: false,
+		honorsClaudeCodeBetaKillSwitch: false,
 		supportsOutputEffort: true,
 		disableStrictTools: rejectsStrictTools,
 		// Present as a key so models.yml `compat` can set it; unset unless detected.
