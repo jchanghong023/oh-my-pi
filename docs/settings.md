@@ -738,7 +738,7 @@ read:
 
 ### Context, compaction, and memory
 
-`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses 272,000 tokens and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.yml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
+`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses the Codex default window (272,000 tokens for Astra, 500,000 for GPT-6.1 Sol) and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.yml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
 
 Custom providers can opt into the same toggle by setting `contextWindow` (normal)
 and `maxContextWindow` (extended) on a model or `modelOverrides` entry in

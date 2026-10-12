@@ -172,6 +172,17 @@ function contentOf(rows: readonly string[]): string {
 	return text;
 }
 
+/**
+ * Split committing the first `rows` rows of `scrollback` at `width`. The
+ * fingerprint covers the scrollback bytes history receives, which can differ
+ * from the measured render at the same row count (a SIXEL image encodes
+ * synchronously instead of returning its reserved rows).
+ */
+function rowSplit(scrollback: readonly string[], rows: number, width: number): RowSplit {
+	const committed = scrollback.slice(0, rows);
+	return { rows, width, hash: Bun.hash(committed.join("\n")), text: contentOf(committed) };
+}
+
 /** Whether `prefix` matches `rows` byte-for-byte from the top. */
 export function isRowPrefix(prefix: readonly string[], rows: readonly string[]): boolean {
 	if (prefix.length > rows.length) return false;
@@ -688,9 +699,17 @@ export class TranscriptContainer extends Container {
 			rows = this.#renderRange(this.#frontier, offered.end, width, true).rows;
 			const head = offered.split ? this.#entries[offered.end] : undefined;
 			if (head !== undefined && offered.split !== undefined) {
+				// The offer's fingerprint covers bytes of a discarded frame history
+				// never received (an image-budget retry demotes graphics to text),
+				// so the split keeps its cut and re-fingerprints the rows it now
+				// delivers. Only another width relocates the cut.
 				const start = this.#emittedRowCount(head, width);
-				const end = this.#splitRowCount(head, offered.split, width);
-				rows = [...rows, ...renderForScrollback(() => this.#renderEntry(head, width)).slice(start, end)];
+				const scrollback = renderForScrollback(() => this.#renderEntry(head, width));
+				const cut =
+					width === offered.split.width ? offered.split.rows : this.#splitRowCount(head, offered.split, width);
+				const end = Math.min(cut, scrollback.length);
+				offered.split = rowSplit(scrollback, end, width);
+				rows = [...rows, ...scrollback.slice(start, end)];
 			}
 		} else {
 			rows = this.#renderReplay(width);
@@ -851,15 +870,7 @@ export class TranscriptContainer extends Container {
 		if (total <= start) return undefined;
 		const scrollback = renderForScrollback(() => this.#renderEntry(entry, width));
 		if (scrollback.length !== measured.length) return undefined;
-		return {
-			rows: scrollback.slice(start, total),
-			split: {
-				rows: total,
-				width,
-				hash: Bun.hash(measured.slice(0, total).join("\n")),
-				text: contentOf(measured.slice(0, total)),
-			},
-		};
+		return { rows: scrollback.slice(start, total), split: rowSplit(scrollback, total, width) };
 	}
 
 	/** Acknowledges exactly the most recently offered append, commit, or replay transaction. */
@@ -1059,7 +1070,8 @@ export class TranscriptContainer extends Container {
 	 * Rows of `entry`'s current render at `width` that `split` committed: all
 	 * of them while they render unchanged, else the longest prefix whose
 	 * content continues the committed text exactly. A row the seam falls
-	 * inside, a row the block changed, or one whose decoration reads as
+	 * inside, a row the block changed, a row with no content (a rule or other
+	 * punctuation the block revealed), or one whose decoration reads as
 	 * content stays live: it can repeat committed text but never drop any.
 	 */
 	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
@@ -1076,7 +1088,9 @@ export class TranscriptContainer extends Container {
 			let consumed = 0;
 			while (count < rendered.length && consumed < split.text.length) {
 				const row = contentOf([rendered[count]!]);
-				if (!split.text.startsWith(row, consumed)) break;
+				// An empty-content row matches at any offset, so the walk cannot
+				// tell it apart from a revealed row history never received.
+				if (row.length === 0 || !split.text.startsWith(row, consumed)) break;
 				consumed += row.length;
 				count++;
 			}

@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [18.10.1] - 2026-10-12
+
+### Added
+
+- `AssistantMessageComponent`'s native turn footer leads with a Copy icon (`omp.turn.copy`) and a dot instead of the clock icon; it copies the answer's text and shows when the host handles transcript actions
+
+### Changed
+
+- `UserMessageComponent`'s native hover toolbar (`omp.user.tools`) leads with Copy and Rewind icon buttons (`copy`, `rewind`) instead of text labels, then a dot and the time, like the turn usage footer
+- `ContextUsageView`'s native body (on terminals with `meter`) leads with the tokens used and the room left before auto-compaction, then one stacked bar ticked at the threshold, the breakdown as rows (`omp.context.cat`, `.cat.free`, `.cat.buffer`: swatch, name, tokens, share; the exact count in the row's `title`) and the snapcompact estimate as labelled rows (`omp.context.snap`); the blocks meter and legend `kv` are gone, and `contextUsageHead` no longer repeats the window size
+- `AskDialogComponent`'s native root is `omp.editor.ask` (collapsed: `omp.editor.ask.hidden`, the countdown, the question as `omp.ask.summary`, Skip and Show): a chosen answer is the `accent`-toned row (a check also carries the check icon) instead of the highlighted one; multi-select Other… is `omp.ask.other.check`; the question tabs check answered questions and say their keys in the strip's `title`; the countdown moves from the head to the action bar beside Hide; the preview is `omp.ask.preview`; the Review tab leads with `omp.ask.notice` and lists answers (`omp.ask.answers`) by question name with inline code mono and no `(Recommended)` suffix; option descriptions run inline code mono, notes ride the row's detail as `em`; Submit/Next's tooltip names only Enter (and Space on a multi-select)
+- `MCPAddWizard`'s native sheet asks one question per step: a phase strip (`omp.mcpAdd.progress` of `omp.mcpAdd.phase`, toned done/current/upcoming and `neutral` when no auth was needed), the question and its lead (`omp.mcpAdd.title`, `omp.mcpAdd.tag` for optional fields, `omp.mcpAdd.lead`), then a mono field with a placeholder and its rule or refusal (`omp.mcpAdd.field`, `tone: "error"`; `omp.mcpAdd.note`), choice rows with icons and mono tags (`omp.mcpAdd.choices`), status lines (`omp.mcpAdd.status`, `omp.mcpAdd.checks`, `omp.mcpAdd.error`) or the review rows (`omp.mcpAdd.summary`). Cancel, Back and Continue / Save server buttons run Ctrl+C, Esc and Enter instead of a key-hint strip. The connection test shows its own busy step, the OAuth client secret field is masked, and the review saves on Enter (no Yes/No choice)
+- `ReportPanel`'s native body carries the role `omp.report.body`
+- `HookInputComponent` describes a dock sheet (`omp.overlay.hook-input` col) like `HookEditorComponent`'s: the title's first line (`omp.hook-input.title`, the countdown as `omp.hook-input.timer`) over its further lines (`omp.hook-input.detail`), the field (`omp.hook-input.field`, `tone: "error"` while a submit was refused) with its placeholder, and Cancel / Submit buttons that run Esc / Enter; the key legend under the field is terminal-only
+- `JobsSheet`'s native body is a master–detail split (`omp.jobs.split`: `omp.jobs.master` | `omp.jobs.detail`): the job list grouped Running / Recent (`omp.jobs.group` labels), each row a type icon tinted by status with its duration, beside the selected job's status pill, live elapsed and Cancel job (`omp.jobs.status`), its task title or command (`omp.jobs.title` / `omp.jobs.command`), facts (`omp.jobs.facts`: agent, directory, pids, exit code, artifact) and output (`omp.jobs.out`, `omp.jobs.nooutput`); the footer counts running and recent jobs (`omp.jobs.summary`), and no jobs shows an empty state (`omp.jobs.empty`). Task jobs no longer draw an `agent` node here
+- `BtwHistoryPanel`'s native sheet is centered and reads like a mail reader: the questions as two-line rows (`omp.btw.history`, list `omp.btw.list` / `omp.btw.list.idle` while the answer has the keys) beside the selected thread (`omp.btw.reader` › `omp.btw.thread` › `omp.btw.turn`: `omp.btw.question` / `omp.btw.followup`, `omp.btw.meta`, `omp.btw.answer`, `omp.btw.error`), the follow-up field under the last answer (`omp.btw.composer`), and footer buttons Stop answer, Copy answer, Close and Follow up (Cancel and Send while composing) in place of the focus labels and key-hint strip; an empty history is an `md` sheet (`omp.btw.empty`)
+
+### Fixed
+
+- `CountdownTimer`'s native `elapsed` no longer sends `stopped: 0`, which froze every native countdown (extension input, selector and editor prompts) at zero from the start
+- The native backend's focus now reaches a field inside an `overlay`/`picker` sheet hoisted into the layer from a dock component (the MCP add wizard, login), so that field shows the live caret and focus ring
+- `MCPAddWizard` keeps a refused name or URL in its field, clears a stale refusal on Back, ignores a connection test that settles after the user stepped back, and Edit OAuth settings after a failed sign-in opens the settings again instead of doing nothing
+
+## [18.10.0] - 2026-10-12
+
 ### Breaking Changes
 
 - Removed `RuntimeChildrenOptions.transient` and `Component.retireDisplacedTranscript`: the composer now bills all chrome below the transcript at the smallest height it has rendered, so no root opts in or out ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
@@ -12,6 +37,7 @@
 
 ### Changed
 
+- The `OMP_TUI_DEBUG` control socket now uses the native IPC transport: it is owner-only and no longer replaces a socket another live process is serving.
 - Transcript rows pushed aside by an open dialog, report or HUD now reach scrollback when it closes or newer output pushes them out, instead of while it is open ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - A transcript block straddling the top of the screen now sends only its off-screen rows to scrollback; the rest stays live ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 
@@ -26,6 +52,9 @@
 - Fixed blank rows opening under the editor after an ask or other inline dialog, command report or todo/loader HUD closed in a session that had filled the screen; the screen now refills with the transcript ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed the editor rising above blank rows when a live tool preview collapses under scrolled-off output; it now stays on the bottom row ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
 - Fixed blank rows opening inside a streamed answer when the working loader went away at the end of a turn ([#15405](https://github.com/can1357/oh-my-pi/pull/15405) by [@H4vC](https://github.com/H4vC))
+- Fixed a split transcript block dropping punctuation-only rows it reveals after the split (such as a tool pane's rule line on expand); the seam now stops before them instead of treating them as already committed ([#15420](https://github.com/can1357/oh-my-pi/pull/15420) by [@H4vC](https://github.com/H4vC))
+- Fixed a split transcript block fingerprinting measured rows instead of the bytes committed to scrollback, which could duplicate a SIXEL image prefix once its pending encode landed ([#15420](https://github.com/can1357/oh-my-pi/pull/15420) by [@H4vC](https://github.com/H4vC))
+- Fixed a transcript block straddling the top of the screen losing its off-screen rows when the inline-image limit demoted its images to text in the same frame; those rows now reach scrollback as text
 
 ### Removed
 
@@ -2787,108 +2816,4 @@
 - Reserved cursor space for zero padding and corrected end-of-line cursor rendering to prevent wrap glitches
 - Corrected editor end-of-line cursor rendering assertion to use includes() instead of endsWith()
 
-## [8.2.0] - 2026-01-24
-
-### Added
-
-- Added mermaid diagram rendering engine (renderMermaidToPng) with mmdc CLI integration
-- Added terminal graphics encoding (iTerm2/Kitty) for mermaid diagrams with automatic width scaling
-- Added mermaid block extraction and deduplication utilities (extractMermaidBlocks)
-
-### Changed
-
-- Updated TypeScript configuration for better publish-time configuration handling with tsconfig.publish.json
-- Migrated file system operations from synchronous to asynchronous APIs in autocomplete provider for non-blocking I/O
-- Migrated node module imports from named to namespace imports across all packages for consistency with project guidelines
-
-### Fixed
-
-- Fixed crash when terminal becomes unavailable (EIO errors) by exiting gracefully instead of throwing
-- Fixed potential errors during emergency terminal restore when terminal is already dead
-- Fixed autocomplete race condition by tracking request ID to prevent stale suggestion results
-
-## [6.8.3] - 2026-01-21
-
-### Added
-
-- Added undo support in the editor via `Ctrl+-`
-- Added `Alt+Delete` as a delete-word-forward shortcut
-- Added configurable code block indentation for Markdown rendering
-- Added undo support in the editor via `Ctrl+-`.
-- Added configurable code block indentation for Markdown rendering.
-- Added `Alt+Delete` as a delete-word-forward shortcut.
-
-### Changed
-
-- Improved fuzzy matching to handle alphanumeric swaps
-- Normalized keybinding definitions to lowercase internally
-- Improved fuzzy matching to handle alphanumeric swaps.
-- Normalized keybinding definitions to lowercase internally.
-
-### Fixed
-
-- Added legacy terminal support for `Ctrl+` symbol key combinations
-- Added legacy terminal support for `Ctrl+` symbol key combinations.
-
-## [6.8.1] - 2026-01-20
-
-### Fixed
-
-- Fixed viewport tracking after partial renders to prevent autocomplete list artifacts
-
-## [5.6.7] - 2026-01-18
-
-### Added
-
-- Added configurable editor padding via `editorPaddingX` theme option
-- Added `setMaxHeight()` method to limit editor height with scrolling
-- Added Emacs-style kill ring for text deletion operations
-- Added `Alt+D` keybinding to delete words forward
-- Added `Ctrl+Y` keybinding to yank from kill ring
-- Added `waitForRender()` method to await pending renders
-- Added Focusable interface and hardware cursor marker support for IME positioning
-- Added support for shifted symbol keys in keybindings
-
-### Changed
-
-- Updated tab bar rendering to wrap text across multiple lines when content exceeds available width
-- Expanded Kitty keyboard protocol coverage for non-Latin layouts and legacy Alt sequences
-- Improved cursor positioning with safer bounds checking
-- Updated editor layout to respect configurable padding
-- Refactored scrolling logic for better viewport management
-
-### Fixed
-
-- Fixed key detection for shifted symbol characters
-- Fixed backspace handling with additional codepoint support
-- Fixed Alt+letter key combinations for better recognition
-
-## [5.3.1] - 2026-01-15
-
-### Fixed
-
-- Fixed rendering issues on Windows by preventing re-entrant renders
-
-## [5.1.0] - 2026-01-14
-
-### Added
-
-- Added `pageUp` and `pageDown` key support with `selectPageUp`/`selectPageDown` editor actions
-- Added `isPageUp()` and `isPageDown()` helper functions
-- Added `SizeValue` type for CSS-like overlay sizing (absolute or percentage strings like `"50%"`)
-- Added `OverlayHandle` interface with `hide()`, `setHidden()`, `isHidden()` methods for overlay visibility control
-- Added `visible` callback to `OverlayOptions` for dynamic visibility based on terminal dimensions
-- Added `pad` parameter to `truncateToWidth()` for padding result with spaces to exact width
-
-### Changed
-
-- Changed `OverlayOptions` to use `SizeValue` type for `width`, `maxHeight`, `row`, and `col` properties
-- Changed `showOverlay()` to return `OverlayHandle` for controlling overlay visibility
-- Removed `widthPercent`, `maxHeightPercent`, `rowPercent`, `colPercent` from `OverlayOptions` (use percentage strings instead)
-
-### Fixed
-
-- Fixed numbered list items showing "1." for all items when code blocks break list continuity
-- Fixed width overflow protection in overlay compositing to prevent TUI crashes
-
-Older entries are archived in [packages/tui/CHANGELOG.md@60347ef0f214](https://github.com/can1357/oh-my-pi/blob/60347ef0f214fa63df596d143477268da3f0c904/packages/tui/CHANGELOG.md).
+Older entries are archived in [packages/tui/CHANGELOG.md@89ad0a77d575](https://github.com/can1357/oh-my-pi/blob/89ad0a77d575f01398d3c0a57bc3a22111bef36a/packages/tui/CHANGELOG.md).

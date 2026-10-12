@@ -266,6 +266,25 @@ describe("TranscriptContainer row split", () => {
 		const rest = transcript.peekFlushBatch(80)!.rows;
 		expect(rest.filter(row => row.startsWith("out"))).toEqual(lines);
 	});
+	it("stops a relocated split before punctuation-only rows a split block reveals", () => {
+		// Expanding the pane reveals a rule row above the committed head rows;
+		// the hash rejects the stale bytes, and the empty-content row must not
+		// count as matched content on the relocation walk.
+		let expanded = false;
+		const pane: Component = {
+			render: () => (expanded ? ["---", "AAA", "BBB"] : ["AAA", "BBB"]),
+		};
+		const transcript = new TranscriptContainer();
+		transcript.addChild(pane);
+		transcript.addChild(new Block(["tail"], true));
+		const head = transcript.peekFinalizedBatch(80, 3)!;
+		transcript.acknowledgeFinalizedBatch(head.id);
+		expect(head.rows).toEqual(["AAA"]);
+		expanded = true;
+		const rest = transcript.peekFlushBatch(80)!.rows;
+		expect(rest).toContain("---");
+		expect(rest.filter(row => row === "AAA" || row === "BBB")).toEqual(["AAA", "BBB"]);
+	});
 });
 
 describe("TranscriptContainer", () => {

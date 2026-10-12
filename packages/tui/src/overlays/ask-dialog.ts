@@ -367,16 +367,49 @@ function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: Questi
 	return selected[0] ?? theme.fg("warning", "unanswered");
 }
 
-/** {@link renderAnswerSummary} as spans for the native review list. */
+/** Inline markdown code (`` `x` ``) as mono `code` spans, the rest plain, as the ANSI rows render it. */
+function inlineCodeSpans(value: string): TspSpan[] {
+	return value
+		.split(/(`[^`]+`)/)
+		.flatMap(piece =>
+			piece === ""
+				? []
+				: piece.length > 2 && piece.startsWith("`") && piece.endsWith("`")
+					? [span(piece.slice(1, -1), "code")]
+					: [span(piece)],
+		);
+}
+
+/** An option's native label: the `(Recommended)` suffix goes (the row's badge says it), inline code runs mono. */
+function optionLabelSpans(question: ExtensionAskDialogQuestion, optionIndex: number, label: string): TspSpan[] {
+	const recommended = question.recommended === optionIndex && label.endsWith(RECOMMENDED_SUFFIX);
+	return inlineCodeSpans(recommended ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label);
+}
+
+function isAnswered(state: QuestionState): boolean {
+	return state.selectedOptions.size > 0 || state.customInput !== undefined;
+}
+
+/** The answer to one question for the Review tab: the chosen labels (code mono), the custom answer, the note. */
 function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): readonly TspSpan[] {
-	if (state.selectedOptions.size === 0 && state.customInput === undefined) return [span("unanswered", "warning")];
-	const spans = [span(plainText(renderAnswerSummary(question, state)))];
+	if (!isAnswered(state)) return [span("Unanswered", "warning")];
+	const labels = displayOptionLabels(question);
+	const spans: TspSpan[] = [];
+	const push = (parts: readonly TspSpan[]): void => {
+		if (spans.length > 0) spans.push(span(", ", "dim"));
+		spans.push(...parts);
+	};
+	question.options.forEach((option, index) => {
+		if (state.selectedOptions.has(option.label))
+			push(optionLabelSpans(question, index, labels[index] ?? option.label));
+	});
+	if (state.customInput !== undefined) push([span(`“${normalizedInlineInput(state.customInput)}”`)]);
 	const note = noteForSubmittedAnswer(question, state)?.trim();
-	if (note) spans.push(span(` · Note: ${normalizedInlineInput(note)}`, "muted"));
+	if (note) spans.push(span("  ✎ ", "dim"), span(normalizedInlineInput(note), "em"));
 	return spans;
 }
 
-/** Native `item.detail` of an option row: its description, the typed custom answer, and its note. */
+/** Native `item.detail` of an option row: its description or the typed custom answer, then its note (`em`). */
 function describeRowDetail(
 	rowItem: QuestionRow,
 	question: ExtensionAskDialogQuestion,
@@ -385,12 +418,12 @@ function describeRowDetail(
 	const spans: TspSpan[] = [];
 	if (rowItem.kind === "option") {
 		const description = question.options[rowItem.optionIndex ?? -1]?.description?.trim();
-		if (description) spans.push(span(normalizedInlineInput(description), "muted"));
+		if (description) spans.push(...inlineCodeSpans(normalizedInlineInput(description)));
 	} else if (state.customInput !== undefined) {
-		spans.push(span(`“${normalizedInlineInput(state.customInput)}”`, "muted"));
+		spans.push(span(`“${normalizedInlineInput(state.customInput)}”`));
 	}
 	if (state.note && state.noteRowKey === rowItem.key) {
-		spans.push(span(`${spans.length > 0 ? " · " : ""}✎ ${normalizedInlineInput(state.note)}`, "success"));
+		spans.push(span(`${spans.length > 0 ? "  " : ""}✎ `, "dim"), span(normalizedInlineInput(state.note), "em"));
 	}
 	return spans.length > 0 ? spans : undefined;
 }
@@ -724,10 +757,15 @@ export class AskDialogComponent implements Component {
 
 	/**
 	 * In the dock, in the composer's place and framed as the composer is: a
-	 * `col` with the prompt editor's root role (`omp.editor`), so the terminal
-	 * gives it the composer's insets and spacing. Not a modal `overlay` sheet:
-	 * one anchored at the bottom covered the transcript rows that explain the
-	 * question and blocked scrolling until the question was answered.
+	 * `col` with an `omp.editor.*` root role (`omp.editor.ask`, collapsed
+	 * `omp.editor.ask.hidden`), so the terminal draws the composer's shell
+	 * around it. Not a modal `overlay` sheet: one anchored at the bottom
+	 * covered the transcript rows that explain the question and blocked
+	 * scrolling until the question was answered.
+	 *
+	 * Anatomy: the question tabs (several questions), the question, its
+	 * answers as radio/check rows, and the action bar as the footer (the
+	 * countdown, Hide, then Note, Skip and the primary Submit/Next).
 	 */
 	describe(cx: DescribeContext): NativeNode {
 		const inputGuard = this.options.inputGuard;
@@ -743,36 +781,48 @@ export class AskDialogComponent implements Component {
 			return this.#native;
 		}
 		const children: NativeChild[] = [];
-		const head = this.#describeHead(ring);
+		const head = this.#describeHead();
 		if (head) children.push(head);
 		if (this.#isSubmitTab()) this.#describeSubmitBody(children);
 		else this.#describeQuestionBody(children);
-		children.push(this.#describeActions(blocked));
-		this.#native = col(children, { role: "omp.editor", gap: "md" });
+		children.push(this.#describeActions(blocked, ring));
+		this.#native = col(children, { role: "omp.editor.ask", gap: "md" });
 		this.#nativeBlocked = blocked;
 		return this.#native;
 	}
 
-	/** Question tabs (plus Review) and the countdown: a ring when the terminal draws meters, else a clocked `elapsed`. */
-	#describeHead(ring: boolean): NativeNode | undefined {
-		const children: NativeChild[] = [];
-		if (this.#hasSubmitTab()) {
-			const items = this.#questions.map((question, index) => ({
+	/** The question tabs, an answered one checked, then Review; none for a lone single-choice question. */
+	#describeHead(): NativeNode | undefined {
+		if (!this.#hasSubmitTab()) return undefined;
+		const items = this.#questions.map((question, index) => {
+			const name = questionTabName(question, index);
+			const state = this.#states[index];
+			return {
 				id: String(index),
-				label: questionTabName(question, index),
-			}));
-			items.push({ id: "submit", label: REVIEW_TAB });
-			const active = this.#isSubmitTab() ? "submit" : String(this.#activeTabIndex);
-			children.push(
-				node("tabs", { items, active, role: "omp.ask.questions", actions: { click: "select" } }, undefined, "tabs"),
-			);
-		}
-		if (this.#countdown) {
-			children.push(node("spacer", { grow: 1 }));
-			children.push(this.#describeTimer(this.#countdown, ring));
-		}
-		if (children.length === 0) return undefined;
-		return node("row", { role: "omp.ask.head", gap: "sm", align: "center" }, children, "head");
+				label: state && isAnswered(state) ? [span("✓ ", "success"), span(name)] : [span(name)],
+			};
+		});
+		items.push({ id: "submit", label: [span(REVIEW_TAB)] });
+		const active = this.#isSubmitTab() ? "submit" : String(this.#activeTabIndex);
+		return node(
+			"row",
+			{ role: "omp.ask.head", align: "center" },
+			[
+				node(
+					"tabs",
+					{
+						items,
+						active,
+						role: "omp.ask.questions",
+						title: "Next question  tab · Previous  shift+tab",
+						actions: { click: "select" },
+					},
+					undefined,
+					"tabs",
+				),
+			],
+			"head",
+		);
 	}
 
 	/** The countdown: a ring when the terminal draws meters, else a clocked `elapsed`. */
@@ -794,25 +844,31 @@ export class AskDialogComponent implements Component {
 		);
 	}
 
-	/** Hidden: one action row in the composer's place — the question clipped to a line, the countdown, Show and Skip. */
+	/** Hidden: one row in the composer's place — the countdown, the question clipped to a line, Skip and Show. */
 	#describeHidden(ring: boolean): NativeNode {
 		const question = this.#questions[this.#currentQuestionIndex()];
-		const more = this.#questions.length > 1 ? ` (+${this.#questions.length - 1} more)` : "";
+		const more = this.#questions.length > 1 ? `  +${this.#questions.length - 1} more` : "";
 		const summary = text(
 			[
-				span("Ask hidden · ", "muted"),
-				span(`${normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""))}${more}`),
+				span("Question  ", "muted"),
+				span(normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""))),
+				...(more ? [span(more, "muted")] : []),
 			],
-			{ truncate: "end" },
+			{ truncate: "end", role: "omp.ask.summary" },
 		);
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const show = actionButton("Show", "show", { tone: "accent", ...(hideKey ? { keys: hideKey } : {}) });
+		const show = actionButton("Show", "show", {
+			tone: "accent",
+			...(hideKey ? { keys: hideKey } : {}),
+			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+		});
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
 		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
-		const items: (NativeNode | null)[] = [summary, null];
+		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
-		items.push(show, skip);
-		return col([actionBar(items)], { role: "omp.editor", gap: "md" });
+		// The summary grows (`omp.ask.summary`), end-aligning Skip and Show.
+		items.push(summary, skip, show);
+		return col([actionBar(items)], { role: "omp.editor.ask.hidden", gap: "md" });
 	}
 
 	/** Question tab: the question as markdown and its answers as radio/check rows (label, description, badge). */
@@ -830,7 +886,8 @@ export class AskDialogComponent implements Component {
 				"question",
 			),
 		);
-		const optionRole = question.multi ? "omp.ask.check" : "omp.ask.option";
+		// Radios (`omp.ask.option`, `omp.ask.other`) or checks (`omp.ask.check`, `omp.ask.other.check`); a chosen
+		// row is `accent`-toned (a check also carries the check glyph), apart from the highlighted row (`selected`).
 		const items = rows.map(rowItem => {
 			const option = rowItem.kind === "option" ? question.options[rowItem.optionIndex ?? -1] : undefined;
 			const checked =
@@ -838,33 +895,29 @@ export class AskDialogComponent implements Component {
 					? state.customInput !== undefined
 					: option !== undefined && state.selectedOptions.has(option.label);
 			const recommended = rowItem.kind === "option" && question.recommended === rowItem.optionIndex;
-			// The badge replaces the ANSI `(Recommended)` suffix.
-			const label =
-				rowItem.kind === "other"
-					? OTHER_LABEL
-					: recommended && rowItem.label.endsWith(RECOMMENDED_SUFFIX)
-						? rowItem.label.slice(0, -RECOMMENDED_SUFFIX.length)
-						: rowItem.label;
 			const detail =
 				describeRowDetail(rowItem, question, state) ??
-				(rowItem.kind === "other" ? [span("Type your own answer", "dim")] : undefined);
+				(rowItem.kind === "other" ? [span("Type your own answer")] : undefined);
+			const role =
+				rowItem.kind === "other"
+					? question.multi
+						? "omp.ask.other.check"
+						: "omp.ask.other"
+					: question.multi
+						? "omp.ask.check"
+						: "omp.ask.option";
 			return node(
 				"item",
 				{
-					// Inline code runs mono, as the ANSI row renders inline markdown.
-					label: label
-						.split(/(`[^`]+`)/)
-						.flatMap(piece =>
-							piece === ""
-								? []
-								: piece.length > 2 && piece.startsWith("`") && piece.endsWith("`")
-									? [span(piece.slice(1, -1), "code")]
-									: [span(piece)],
-						),
-					role: rowItem.kind === "other" ? "omp.ask.other" : optionRole,
+					// The badge replaces the ANSI `(Recommended)` suffix.
+					label:
+						rowItem.kind === "other"
+							? [span(OTHER_LABEL)]
+							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
+					role,
 					...(detail ? { detail } : {}),
-					...(recommended ? { value: [span("Recommended", "accent")] } : {}),
-					...(checked ? { icon: "check", tone: "success" as const } : {}),
+					...(recommended ? { value: [span("Recommended")] } : {}),
+					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
 				},
 				undefined,
 				rowItem.key,
@@ -882,68 +935,79 @@ export class AskDialogComponent implements Component {
 		const highlighted = rows[state.cursorIndex];
 		const option = highlighted?.kind === "option" ? question.options[highlighted.optionIndex ?? -1] : undefined;
 		if (option?.preview?.trim()) {
-			children.push(node("md", { text: replaceTabs(option.preview) }, undefined, "preview"));
+			children.push(
+				node("md", { text: replaceTabs(option.preview), role: "omp.ask.preview" }, undefined, "preview"),
+			);
 		}
 	}
 
-	/** Review tab: every answer as key/value pairs; the action bar's Submit sends them. */
+	/** Review tab: what is still unanswered, then every answer as question/answer pairs; Submit sends them. */
 	#describeSubmitBody(children: NativeChild[]): void {
 		const unanswered = this.#unansweredCount();
-		if (unanswered > 0) {
-			const noun = `question${unanswered === 1 ? "" : "s"}`;
-			children.push(
-				text([span(`${unanswered} unanswered ${noun}; ${formatKeyHint("enter")} still submits.`, "warning")]),
-			);
-		}
+		const notice =
+			unanswered > 0
+				? [
+						span(`${unanswered} unanswered`, "warning"),
+						span(` · Submit still sends ${unanswered === this.#questions.length ? "the questions" : "the rest"}`),
+					]
+				: [span("All answered · Submit sends them")];
+		children.push(node("text", { spans: notice, role: "omp.ask.notice" }, undefined, "notice"));
 		const answers: { k: string; v: readonly TspSpan[] }[] = [];
 		for (let index = 0; index < this.#questions.length; index++) {
 			const question = this.#questions[index];
 			const state = this.#states[index];
 			if (!question || !state) continue;
-			answers.push({ k: `${index + 1}. ${questionTabName(question, index)}`, v: describeAnswer(question, state) });
+			answers.push({ k: questionTabName(question, index), v: describeAnswer(question, state) });
 		}
-		children.push(node("kv", { items: answers }, undefined, "answers"));
+		children.push(node("kv", { items: answers, role: "omp.ask.answers" }, undefined, "answers"));
 	}
 
 	/**
-	 * The action bar: Submit ⏎ (Enter's action on this tab; `Next` while more
-	 * questions follow), Note n, Skip esc. Keyboard-only keys live in the
-	 * buttons' tooltips; a draft that owns input shows its hint instead. Hide
-	 * (left-aligned, apart from the answer actions) collapses the dialog.
+	 * The action bar, the sheet's footer: the countdown and Hide (apart from
+	 * the answer actions), then Note, Skip and the primary Submit (Enter's
+	 * action on this tab; `Next` while more questions follow). Buttons say
+	 * what they do; their keys live in their tooltips. A draft that owns input
+	 * shows its hint in place of the answer actions.
 	 */
-	#describeActions(blocked: boolean): NativeNode {
+	#describeActions(blocked: boolean, ring: boolean): NativeNode {
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
+		const skip = actionButton("Skip", "cancel", {
+			...(cancelKey ? { keys: cancelKey } : {}),
+			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
+		});
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
 		const hide = actionButton("Hide", "hide", {
 			...(hideKey ? { keys: hideKey } : {}),
-			title: `Hide the question until you are ready to answer${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+			title: `Hide until you are ready to answer${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
+		const lead: NativeNode[] = this.#countdown ? [this.#describeTimer(this.#countdown, ring), hide] : [hide];
 		const inputGuard = this.options.inputGuard;
 		if (blocked && inputGuard) {
-			return actionBar([text([span(plainText(inputGuard.hint), "muted")], { truncate: "end" }), null, hide, skip]);
+			return actionBar([
+				...lead,
+				text([span(plainText(inputGuard.hint), "muted")], { truncate: "end", role: "omp.ask.summary" }),
+				skip,
+			]);
 		}
-		const moves = ["up/down move"];
-		if (this.#hasSubmitTab()) moves.push("tab switches question");
 		if (this.#isSubmitTab()) {
 			const submit = actionButton("Submit", "submit", {
 				keys: "enter",
 				tone: "accent",
 				title: "Submit answers  enter",
 			});
-			return actionBar([hide, null, skip, submit]);
+			return actionBar([...lead, null, skip, submit]);
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		const last = this.#questions.length === 1;
 		const enterLabel = last ? "Submit" : "Next";
-		const tips = question?.multi ? ["space toggles", ...moves] : moves;
+		// A multi-select toggles on Space; Enter moves on.
 		const submit = actionButton(enterLabel, "submit", {
 			keys: "enter",
 			tone: "accent",
-			title: `${enterLabel}  enter · ${tips.join(" · ")}`,
+			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
-		const note = actionButton("Note", "note", { keys: "n", title: `Add a note to the highlighted answer  n` });
-		return actionBar([hide, null, note, skip, submit]);
+		const note = actionButton("Note", "note", { keys: "n", title: "Add a note to the highlighted answer  n" });
+		return actionBar([...lead, null, note, skip, submit]);
 	}
 
 	/**

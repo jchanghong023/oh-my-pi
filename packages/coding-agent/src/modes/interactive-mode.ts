@@ -662,10 +662,11 @@ class TodoHudContainer extends AnchoredLiveContainer {
 }
 
 /**
- * Native-only dock row of HUD pills (§8.1), right-aligned above the activity
- * line: the agents pill and the background-jobs pill. ANSI renders the pinned
- * agent list in its own container and the agent and job counts in the status
- * line, so this row renders nothing.
+ * Native-only dock row (§8.1), right-aligned above the activity line, holding
+ * the running-work counter: one pill with an agents segment and a
+ * background-jobs segment. ANSI renders the pinned agent list in its own
+ * container and the agent and job counts in the status line, so this row
+ * renders nothing.
  */
 class HudPillsRow implements Component {
 	constructor(private readonly mode: InteractiveMode) {}
@@ -678,7 +679,7 @@ class HudPillsRow implements Component {
 		return this.mode.describeHudPills();
 	}
 
-	/** A click on the agents pill opens the agent hub; one on the jobs pill, the jobs sheet. */
+	/** A click on the agents segment opens the agent hub; one on the jobs segment, the jobs sheet. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type !== "action") return;
 		if (event.act === "agents.open") this.mode.showAgentHub();
@@ -686,47 +687,61 @@ class HudPillsRow implements Component {
 	}
 }
 
-/** A described running-work pill with the count it shows, so an unchanged count reuses the node. */
-interface RunningPill {
+/** A described counter segment with the count it shows, so an unchanged count reuses the node. */
+interface RunningSegment {
 	readonly running: number;
 	readonly node: NativeNode;
 }
 
-/** `prev` while it still shows `running`, else a fresh pill from `describe`; undefined when nothing runs. */
-function runningPill(
-	prev: RunningPill | undefined,
-	running: number,
-	describe: (running: number) => NativeNode,
-): RunningPill | undefined {
-	if (running === 0) return undefined;
-	return prev?.running === running ? prev : { running, node: describe(running) };
-}
-
-/** What a running-work pill shows and the action a click on it sends to {@link HudPillsRow}. */
-interface RunningPillSpec {
-	/** Sibling key in the HUD row: the pill keeps its id, and skips its entrance, as the count changes. */
+/** What a counter segment shows and the action a click on it sends to {@link HudPillsRow}. */
+interface RunningSegmentSpec {
+	/** Sibling key in the counter: the segment keeps its id, and skips its entrance, as the count changes. */
 	readonly key: string;
 	readonly icon: string;
-	/** Singular noun the count reads with (`1 job running`, `2 jobs running`). */
+	readonly tone: "accent" | "warning";
+	/** Singular noun the hover label reads with (`1 job running`, `2 jobs running`). */
 	readonly noun: string;
-	readonly title: string;
+	/** Keyboard route to the same sheet, appended to the hover label. */
+	readonly shortcut: string;
 	readonly act: string;
 }
 
-/** Native dock pill (§8.1) counting running work, with a spinner. */
-function describeRunningPill(spec: RunningPillSpec, running: number): NativeNode {
+/** `prev` while it still shows `running`, else a fresh segment for `spec`; undefined when nothing runs. */
+function runningSegment(
+	prev: RunningSegment | undefined,
+	running: number,
+	spec: RunningSegmentSpec,
+): RunningSegment | undefined {
+	if (running === 0) return undefined;
+	return prev?.running === running ? prev : { running, node: describeRunningSegment(spec, running) };
+}
+
+/** The background-jobs segment of the running-work counter. */
+const JOBS_SEGMENT: RunningSegmentSpec = {
+	key: "jobs",
+	icon: "job",
+	tone: "warning",
+	noun: "job",
+	shortcut: "/jobs",
+	act: "jobs.open",
+};
+
+/** One counter segment: a tinted icon and the bare count; the words live in the hover label. */
+function describeRunningSegment(spec: RunningSegmentSpec, running: number): NativeNode {
+	const label = `${running} ${spec.noun}${running === 1 ? "" : "s"} running`;
 	return node(
 		"row",
-		{ role: "omp.hud.pill", gap: "xs", align: "center", title: spec.title, actions: { click: spec.act } },
+		{
+			role: "omp.hud.seg",
+			gap: "xs",
+			align: "center",
+			title: `${label}  ${spec.shortcut}`,
+			aria: label,
+			actions: { click: spec.act },
+		},
 		[
-			node("icon", { name: spec.icon }, undefined, "icon"),
-			node("spinner", { style: "dots", tone: "accent" }, undefined, "spinner"),
-			node(
-				"text",
-				{ text: `${running} ${spec.noun}${running === 1 ? "" : "s"} running`, wrap: "none" },
-				undefined,
-				"label",
-			),
+			node("icon", { name: spec.icon, tone: spec.tone }, undefined, "icon"),
+			node("text", { spans: [span(String(running), "num")], wrap: "none" }, undefined, "count"),
 		],
 		spec.key,
 	);
@@ -1323,8 +1338,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#todoHudNative: { checklist: NativeNode; fallback: NativeNode } | undefined;
 	#hudPillsNative: { children: readonly NativeChild[]; node: NativeNode } | undefined;
-	#agentsPill: RunningPill | undefined;
-	#jobsPill: RunningPill | undefined;
+	#agentsSegment: RunningSegment | undefined;
+	#jobsSegment: RunningSegment | undefined;
 	/** Gen tok/s for the native composer bar, one decimal (a steadier `rate` target): live while running, else the last reading. */
 	#nativeTokenRate(): number | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
@@ -1350,42 +1365,38 @@ export class InteractiveMode implements InteractiveModeContext {
 	interruptFromPointer(): void {
 		this.editor.onEscape?.();
 	}
-	/** The native HUD pills row: the agents pill, then the jobs pill; hidden while both are absent. */
+	/**
+	 * The native HUD pills row: one running-work counter (`omp.hud.pill`) with
+	 * an agents segment, then a jobs segment, each present only while its
+	 * count is non-zero; the row is hidden while both are absent.
+	 */
 	describeHudPills(): NativeNode {
 		// Agents count as the status-line badge counts them, from the agent
 		// registry: the observer registry only hears task-executor lifecycles,
-		// so an agent a peer message woke or revived would run without a pill.
+		// so an agent a peer message woke or revived would run without a segment.
 		const agents = cfgDisplayPinnedAgents.get(settings) === "off" ? 0 : this.#runningSubagentCount;
-		this.#agentsPill = runningPill(this.#agentsPill, agents, count =>
-			describeRunningPill(
-				{
-					key: "agents",
-					icon: "users",
-					noun: "agent",
-					title: `Agents  ${formatDoubleTap("left")}`,
-					act: "agents.open",
-				},
-				count,
-			),
-		);
-		this.#jobsPill = runningPill(this.#jobsPill, this.statusLine.runningBackgroundJobCount(), count =>
-			describeRunningPill(
-				{ key: "jobs", icon: "job", noun: "job", title: "Background jobs  /jobs", act: "jobs.open" },
-				count,
-			),
-		);
-		const children: NativeChild[] = [];
-		if (this.#agentsPill) children.push(this.#agentsPill.node);
-		if (this.#jobsPill) children.push(this.#jobsPill.node);
+		this.#agentsSegment = runningSegment(this.#agentsSegment, agents, {
+			key: "agents",
+			icon: "users",
+			tone: "accent",
+			noun: "agent",
+			shortcut: formatDoubleTap("left"),
+			act: "agents.open",
+		});
+		this.#jobsSegment = runningSegment(this.#jobsSegment, this.statusLine.runningBackgroundJobCount(), JOBS_SEGMENT);
+		const segments: NativeChild[] = [];
+		if (this.#agentsSegment) segments.push(this.#agentsSegment.node);
+		if (this.#jobsSegment) segments.push(this.#jobsSegment.node);
 		const memo = this.#hudPillsNative;
-		if (memo && sameItems(memo.children, children)) return memo.node;
-		const described = row(children, {
+		if (memo && sameItems(memo.children, segments)) return memo.node;
+		const counter =
+			segments.length > 0 ? [node("row", { role: "omp.hud.pill", align: "center" }, segments, "running")] : [];
+		const described = row(counter, {
 			role: "omp.hud",
 			justify: "end",
-			gap: "sm",
-			hidden: children.length === 0 || undefined,
+			hidden: counter.length === 0 || undefined,
 		});
-		this.#hudPillsNative = { children, node: described };
+		this.#hudPillsNative = { children: segments, node: described };
 		return described;
 	}
 	/**

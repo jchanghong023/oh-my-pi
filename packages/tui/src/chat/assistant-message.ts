@@ -828,10 +828,10 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
-	/** Mirrors a thinking section collapsed or expanded in the terminal. */
+	/** Mirrors a thinking section collapsed or expanded in the terminal; runs its controls' clicks. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "action") {
-			this.#handleErrorAction(event.act);
+			this.#handleAction(event.act);
 			return;
 		}
 		if (event.type !== "toggle" || !event.key.startsWith("k")) return;
@@ -860,6 +860,7 @@ export class AssistantMessageComponent extends Container {
 			return entry.node;
 		};
 		const children: NativeChild[] = [];
+		let answered = false;
 		if (message) {
 			const live = !this.#transcriptBlockFinalized && this.#lastUpdateTransient;
 			let tailIndex = -1;
@@ -876,6 +877,7 @@ export class AssistantMessageComponent extends Container {
 				const content = message.content[index]!;
 				const streaming = live && index === tailIndex;
 				if (content.type === "text" && canonicalizeMessage(content.text)) {
+					answered = true;
 					const source = content.text.trim();
 					// The terminal renders this source itself and would resolve a relative
 					// link against its own idea of the cwd: hand it the session-resolved
@@ -983,16 +985,29 @@ export class AssistantMessageComponent extends Container {
 		}
 		if (this.#turnUsage) {
 			const usage = formatTurnUsage(this.#turnUsage);
+			const line: NativeChild[] = [];
+			// Led by Copy and a dot: `⧉ · 12.4s · 19K tok this turn`.
+			if (answered && hasTranscriptActions()) {
+				line.push(
+					// `copy-answer`, not Tern's local `copy` (that would copy the icon's empty label).
+					node(
+						"icon",
+						{
+							name: "copy",
+							role: "omp.turn.copy",
+							title: "Copy answer",
+							aria: "Copy answer",
+							actions: { click: "copy-answer" },
+						},
+						undefined,
+						"copy",
+					),
+					node("text", { text: "·" }, undefined, "dot"),
+				);
+			}
+			line.push(node("text", { text: usage.text }, undefined, "text"));
 			children.push(
-				node(
-					"row",
-					{ role: "omp.turn.usage", gap: "xs", align: "center", title: usage.title },
-					[
-						node("icon", { name: "time" }, undefined, "icon"),
-						node("text", { text: usage.text }, undefined, "text"),
-					],
-					"turn-usage",
-				),
+				node("row", { role: "omp.turn.usage", gap: "xs", align: "center", title: usage.title }, line, "turn-usage"),
 			);
 		}
 		return col(children, { role: this.#rewound ? "omp.assistant.rewound" : "omp.assistant" });
@@ -1081,11 +1096,24 @@ export class AssistantMessageComponent extends Container {
 		return card({ role: "omp.error", tone: "error", key: "error" }, children);
 	}
 
-	/** Error frame action clicks: omp's own retry, clipboard and model-picker paths. */
-	#handleErrorAction(act: string): void {
+	/** Control clicks (the error frame's actions, the turn footer's Copy): omp's own retry, clipboard and model-picker paths. */
+	#handleAction(act: string): void {
 		if (act === "retry") runTranscriptAction({ act: "retry" });
 		else if (act === "switch-model") runTranscriptAction({ act: "switch-model" });
 		else if (act === "copy-error" && this.#errorText) runTranscriptAction({ act: "copy", text: this.#errorText });
+		else if (act === "copy-answer") {
+			const text = this.#answerText();
+			if (text) runTranscriptAction({ act: "copy", text });
+		}
+	}
+
+	/** The answer as the transcript shows it: its text blocks' markdown, a blank line apart, without thinking or tool calls. */
+	#answerText(): string {
+		const blocks: string[] = [];
+		for (const content of this.#displayedMessage?.content ?? []) {
+			if (content.type === "text" && canonicalizeMessage(content.text)) blocks.push(content.text.trim());
+		}
+		return blocks.join("\n\n");
 	}
 
 	/** Width-independent stable identities for the streamed leading thinking run. */

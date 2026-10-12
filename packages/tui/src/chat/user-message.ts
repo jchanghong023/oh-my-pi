@@ -195,8 +195,9 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	/**
 	 * A head-less user-toned frame with the prompt as markdown under its
 	 * attached images (titled `#N` like their chips, opening the materialized
-	 * file on click): the fill says "you". A quiet toolbar (time, Copy, Rewind) fades in on hover when the
-	 * host handles transcript actions. The live-steering marker and the
+	 * file on click): the fill says "you". A quiet footer like a turn's usage line
+	 * (`⧉ ⏪ · 09:45`: Copy, Rewind, the time sent) fades in at its bottom-left on hover when
+	 * the host handles transcript actions. The live-steering marker and the
 	 * agent's reaction are chips at the bottom-right, so a reaction landing
 	 * later updates the frame in place, even deep in scrollback.
 	 */
@@ -207,32 +208,44 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		this.#nativeHour12 = hour12;
 		const children: NativeChild[] = [];
 		if (!this.#synthetic && hasTranscriptActions()) {
-			const tools: NativeChild[] = [];
+			const tools: NativeChild[] = [
+				// `copy-message`, not Tern's local `copy` (that would copy the icon's empty label).
+				node(
+					"icon",
+					{
+						name: "copy",
+						role: "omp.user.tool",
+						title: "Copy message",
+						aria: "Copy message",
+						actions: { click: "copy-message" },
+					},
+					undefined,
+					"copy",
+				),
+				node(
+					"icon",
+					{
+						name: "rewind",
+						role: "omp.user.tool",
+						title: "Rewind the conversation to an earlier message",
+						aria: "Rewind",
+						actions: { click: "rewind" },
+					},
+					undefined,
+					"rewind",
+				),
+			];
 			if (this.#timestamp !== undefined) {
 				const at = new Date(this.#timestamp);
 				tools.push(
+					node("text", { text: "·" }, undefined, "dot"),
 					text([span(at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12 }), "dim mono")], {
 						role: "omp.user.time",
 						title: at.toLocaleString([], { hour12 }),
 					}),
 				);
 			}
-			tools.push(
-				// `copy-message`, not Tern's local `copy` (that would copy the label).
-				text("Copy", {
-					role: "omp.user.tool",
-					actions: { click: "copy-message" },
-					title: "Copy message",
-					key: "copy",
-				}),
-				text("Rewind", {
-					role: "omp.user.tool",
-					actions: { click: "rewind" },
-					title: "Rewind the conversation to an earlier message",
-					key: "rewind",
-				}),
-			);
-			children.push(node("row", { gap: "xs", role: "omp.user.tools" }, tools, "tools"));
+			children.push(node("row", { gap: "xs", align: "center", role: "omp.user.tools" }, tools, "tools"));
 		}
 		// Videos keep their chip only: the native image node decodes stills.
 		const thumbs: NativeNode[] = [];

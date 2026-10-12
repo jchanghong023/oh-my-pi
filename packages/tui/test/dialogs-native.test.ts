@@ -129,13 +129,35 @@ describe("dialogs under a native surface", () => {
 			expect(harness.errors).toEqual([]);
 			expect(harness.region("layer")?.c ?? []).toEqual([]);
 			const dock = harness.region("dock")!;
-			// Framed as the prompt composer (its root role), so Tern spaces it the same way.
-			const root = dock.c?.find(node => node.p?.role === "omp.editor");
+			// Framed as the prompt composer (an `omp.editor.*` root role), so Tern draws the composer's shell.
+			const root = dock.c?.find(node => node.p?.role === "omp.editor.ask");
 			expect(root?.c?.some(node => node.p?.role === "omp.ask.options")).toBe(true);
 			expect(harness.findAll(node => node.k === "overlay")).toEqual([]);
 		} finally {
 			harness.stop();
 		}
+	});
+
+	it("ask: a chosen answer is marked apart from the highlighted row; answered tabs and the review say what was chosen", () => {
+		const dialog = ask();
+		const item = (key: string) => find(dialog.describe(CX), node => node.k === "item" && node.key === key)?.node.p;
+		// The highlighted (recommended) row is not chosen until Enter.
+		expect(item("option:1")?.tone).toBeUndefined();
+		dialog.handleInput(ENTER);
+		dialog.handleInput(LEFT);
+		expect(item("option:1")?.tone).toBe("accent");
+		expect(item("option:0")?.tone).toBeUndefined();
+		const items = (kind: string) =>
+			(find(dialog.describe(CX), node => node.k === kind)?.node.p as { items?: unknown } | undefined)?.items;
+		const tabs = items("tabs") as { label: { t: string }[] }[];
+		expect(tabs.map(tab => tab.label.map(part => part.t).join(""))).toEqual(["✓ policy", "flag", "Review"]);
+		dialog.handleInput(RIGHT);
+		dialog.handleInput(RIGHT);
+		const answers = items("kv") as { k: string; v: { t: string }[] }[];
+		expect(answers.map(entry => [entry.k, entry.v.map(part => part.t).join("")])).toEqual([
+			["policy", "Park them"],
+			["flag", "Unanswered"],
+		]);
 	});
 
 	it("ask: Skip cancels like Esc; the recommended option loses its suffix for the badge", () => {
@@ -273,11 +295,23 @@ describe("dialogs under a native surface", () => {
 		const onComplete = vi.fn();
 		const dialog = new LoginDialogComponent(tui, "openai-codex", onComplete, () => {});
 		dialog.showAuth("https://auth.example.com/authorize?x=1", "Enter code: ABCD-1234");
+		const waiting = dialog.describe();
+		// The device code copies itself; with nothing to answer, opening the page is the primary action.
+		expect(find(waiting, node => node.p?.role === "omp.login.code")?.node.p).toMatchObject({
+			actions: { click: "copy" },
+			href: "ABCD-1234",
+		});
+		expect(find(waiting, node => node.p?.actions?.click === "open")?.node.p).toMatchObject({
+			href: "https://auth.example.com/authorize?x=1",
+			tone: "accent",
+		});
+		expect(find(waiting, node => node.p?.actions?.click === "submit")).toBeUndefined();
+
 		const pending = dialog.showManualInput("Paste the authorization code:");
 		const described = dialog.describe();
-		expect(find(described, node => node.p?.role === "omp.login.code")?.node.p).toMatchObject({
-			spans: [{ t: "ABCD-1234", s: "mono" }],
-		});
+		// A field waiting for an answer takes the primary action; Open stays as a plain button.
+		expect(find(described, node => node.p?.actions?.click === "submit")?.node.p).toMatchObject({ tone: "accent" });
+		expect(find(described, node => node.p?.actions?.click === "open")?.node.p?.tone).toBeUndefined();
 		dialog.pasteText("code-123");
 		dialog.handleNativeEvent({ type: "action", key: "x", act: "submit", mods: [] });
 		expect(await pending).toBe("code-123");

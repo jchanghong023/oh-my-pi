@@ -53,14 +53,14 @@ function installLocalModelInitializer(setInitializer: (initializer: LocalModelIn
 	setInitializer(({ model, cacheDir }) =>
 		mnemopiEmbedClient.initialize(model, cacheDir).then(handle => {
 			if (handle) return handle;
-			throw new Error("mnemopi embed subprocess unavailable");
+			throw new Error("mnemopi embedding server unavailable");
 		}),
 	);
 }
 
 /**
  * Lazily load `@oh-my-pi/pi-mnemopi` (memoized) and route fastembed loads
- * through the dedicated embeddings subprocess. The override is installed once
+ * through the machine-shared embedding server. The override is installed once
  * — before any consumer gets the chance to call `embed()` — so
  * `onnxruntime-node`'s NAPI constructor + finalizer never run inside the
  * agent's address space (issue #3031). Test seams that swap the initializer
