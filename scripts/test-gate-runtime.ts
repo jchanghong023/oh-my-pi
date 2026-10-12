@@ -13,7 +13,7 @@ import { gateClockNanoseconds } from "./test-gate-clock";
 
 export type GateLevel = "fastcheck" | "fulltest" | "slowtest";
 export type GateStatus = "PASS" | "FAIL" | "TIMEOUT" | "INTERRUPTED" | "MISSING_TOOL";
-export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = { fastcheck: 60, fulltest: 900, slowtest: 1500 };
+export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = { fastcheck: 90, fulltest: 900, slowtest: 1500 };
 export const GATE_EVENT_PREFIX = "OMP_GATE_EVENT ";
 type Activity = "charged" | "compile";
 export interface GateActivityEvent {

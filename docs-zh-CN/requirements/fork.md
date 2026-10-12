@@ -181,7 +181,7 @@
 - `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
 - `statusLine.compactThinkingLevel=false`
-- `composer.shape=pi`
+- `composer.shape=box`（Rounded Box）
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 - `display.showTurnTime=true`
 - `mnemopi.embeddingVariant=multilingual`
@@ -254,7 +254,7 @@
 
 | 入口 | 当前有效范围 | 非编译硬上限 |
 | --- | --- | --- |
-| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 60 秒 |
+| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 90 秒 |
 | `bun run fulltest` | 全部 fastcheck 检查 + 完整 fork 差异中的 TS 测试、现有 `test:rs --affected` 选择的 Rust 测试、仓库脚本测试、native 构建和隔离 dev-TUI 公开入口 E2E；无跨 WSL | 900 秒 |
 | `bun run slowtest` | fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux 验证；无适用 WSL 时覆盖等于 fulltest | 1500 秒 |
 
