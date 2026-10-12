@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Windows installer downloads now honor system proxy settings without proxy environment variables, and post-download failures show detailed errors and executable recovery commands while preserving verified downloads.
 - Fixed stale archive listings and member reads after rapid same-size rewrites with restored timestamps on Windows.
 - Fixed remote JchTools ACP sessions and supported one-shot text consumers to use the caller's live task cwd instead of the backend's default workspace, including isolated task worktrees, terminal defaults, and rejection of cwd changes within the same backend session.
 - Cleared explicitly invalid JchTools backend session bindings so the next caller request can create a new session without retrying the failed task.

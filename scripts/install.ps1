@@ -201,6 +201,60 @@ function Invoke-Native {
     }
 }
 
+# curl does not read Windows Internet proxy settings. Resolve the same default
+# proxy as PowerShell, while leaving explicit proxy environment variables first.
+function Save-InstallBinary {
+    param([Uri]$Uri, [string]$OutFile)
+
+    $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+    $curlExit = $null
+    if ($curlExe) {
+        Set-InstallStage "download_proxy"
+        $proxyArguments = @()
+        $environmentProxy = [Environment]::GetEnvironmentVariable($Uri.Scheme + "_PROXY")
+        if (-not $environmentProxy -and -not $env:ALL_PROXY) {
+            $systemProxy = [System.Net.WebRequest]::DefaultWebProxy
+            if ($systemProxy -and -not $systemProxy.IsBypassed($Uri)) {
+                $proxyArguments = @("--proxy", $systemProxy.GetProxy($Uri).AbsoluteUri)
+                Write-Host "Using Windows system proxy for binary download."
+            }
+        }
+        Set-InstallStage "download_curl"
+        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
+        Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
+        $curlExit = $LASTEXITCODE
+        if ($curlExit -ne 0) {
+            $kind = switch ($curlExit) { 22 { "http" }; 28 { "timeout" }; 6 { "dns" }; 7 { "connect" }; 35 { "tls" }; 60 { "tls" }; default { "network" } }
+            Write-InstallLog WARN http_request_failed @{ result = "failed"; curl_exit = $curlExit; error_type = $kind; http_status = "unavailable"; endpoint = "release_asset"; transport = "curl"; attempt = 1 }
+            $downloadCleanupErrors = @()
+            Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue -ErrorVariable +downloadCleanupErrors
+            $cleanupLevel = if ($downloadCleanupErrors.Count) { "WARN" } else { "INFO" }
+            Write-InstallLog $cleanupLevel candidate_cleanup_completed @{ result = $(if ($downloadCleanupErrors.Count) { "partial" } else { "removed_or_absent" }); reason = "curl_fallback"; error_count = $downloadCleanupErrors.Count }
+            Write-Host "[WARN] curl download failed (exit $curlExit); retrying with Invoke-WebRequest..." -ForegroundColor Yellow
+        } else {
+            Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "curl"; attempt = 1; http_status = "success" }
+        }
+    }
+
+    if (-not $curlExe -or $curlExit -ne 0) {
+        Write-InstallLog WARN download_transport_fallback @{ result = "fallback"; from = "curl"; to = "Invoke-WebRequest"; reason = $(if ($curlExe) { "curl_failed" } else { "curl_absent" }) }
+        Set-InstallStage "download_webrequest"
+        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
+        try {
+            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing
+            Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
+        } catch {
+            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
+            $downloadCleanupErrors = @()
+            Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue -ErrorVariable +downloadCleanupErrors
+            $cleanupLevel = if ($downloadCleanupErrors.Count) { "WARN" } else { "INFO" }
+            Write-InstallLog $cleanupLevel candidate_cleanup_completed @{ result = $(if ($downloadCleanupErrors.Count) { "partial" } else { "removed_or_absent" }); reason = "download_failed"; error_count = $downloadCleanupErrors.Count }
+            $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
+            throw "Download failed: $($Uri.AbsoluteUri)`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
+        }
+    }
+}
+
 # PATH configuration shared by the install and repair paths.
 function Set-InstallEnvironment {
     Set-InstallStage "environment"
@@ -299,6 +353,7 @@ function Test-InstalledBinaryVersion {
         [string]$TargetPath,
         [string]$ReleaseTag
     )
+    $script:InstallProbeDetail = "The binary is missing: $TargetPath"
 
     $probeTarget = if ([IO.Path]::GetFileName($TargetPath).StartsWith(".omp.tmp.")) { "candidate" } else { "installed" }
     Set-InstallStage "${probeTarget}_version"
@@ -309,9 +364,10 @@ function Test-InstalledBinaryVersion {
     }
 
     try {
-        $versionOutput = Invoke-Native { & $TargetPath --version 2>$null }
+        $versionOutput = @(Invoke-Native { & $TargetPath --version 2>&1 })
         $exitCode = $LASTEXITCODE
-        $versionText = $versionOutput | Select-Object -First 1
+        $versionText = $versionOutput | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | Select-Object -First 1
+        $script:InstallProbeDetail = "Expected omp/$($ReleaseTag -replace '^v', ''); exit code: $exitCode; output:`n$(($versionOutput | Out-String).Trim())"
         if ($exitCode -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
             $probeLevel = if ($probeTarget -eq "candidate") { "ERROR" } else { "INFO" }
             Write-InstallLog $probeLevel binary_probe_failed @{ target = $probeTarget; result = "invalid_or_failed"; exit_code = $exitCode }
@@ -326,11 +382,18 @@ function Test-InstalledBinaryVersion {
         $fields = Get-InstallFailureFields $_
         $fields.target = $probeTarget
         Write-InstallLog $probeLevel binary_probe_failed $fields
+        $script:InstallProbeDetail = $_.Exception.Message
         return $false
     }
 }
 
 function Install-Binary {
+    $downloaded = $false
+    $verified = $false
+    $installed = $false
+    $failedStage = $null
+    $renameFailure = $null
+    $swapFailure = $null
     try {
     Set-InstallStage "install_target"
     $OutPath = Join-Path $InstallDir "omp.exe"
@@ -397,51 +460,17 @@ function Install-Binary {
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
-    $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
-    $curlExit = $null
     $renamedAside = $false
     $rollbackFailed = $false
     $hadExisting = $false
     try {
-        if ($curlExe) {
-            Set-InstallStage "download_curl"
-            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
-            Invoke-Native { & $curlExe.Source -fL --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar $BinaryUrl -o $TmpPath }
-            $curlExit = $LASTEXITCODE
-            if ($curlExit -ne 0) {
-                $kind = switch ($curlExit) { 22 { "http" }; 28 { "timeout" }; 6 { "dns" }; 7 { "connect" }; 35 { "tls" }; 60 { "tls" }; default { "network" } }
-                Write-InstallLog WARN http_request_failed @{ result = "failed"; curl_exit = $curlExit; error_type = $kind; http_status = "unavailable"; endpoint = "release_asset"; transport = "curl"; attempt = 1 }
-                $downloadCleanupErrors = @()
-                Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue -ErrorVariable +downloadCleanupErrors
-                $cleanupLevel = if ($downloadCleanupErrors.Count) { "WARN" } else { "INFO" }
-                Write-InstallLog $cleanupLevel candidate_cleanup_completed @{ result = $(if ($downloadCleanupErrors.Count) { "partial" } else { "removed_or_absent" }); reason = "curl_fallback"; error_count = $downloadCleanupErrors.Count }
-                Write-Host "[WARN] curl download failed (exit $curlExit); retrying with Invoke-WebRequest..." -ForegroundColor Yellow
-            } else {
-                Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "curl"; attempt = 1; http_status = "success" }
-            }
-        }
-
-        if (-not $curlExe -or $curlExit -ne 0) {
-            Write-InstallLog WARN download_transport_fallback @{ result = "fallback"; from = "curl"; to = "Invoke-WebRequest"; reason = $(if ($curlExe) { "curl_failed" } else { "curl_absent" }) }
-            Set-InstallStage "download_webrequest"
-            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
-            try {
-                Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpPath -TimeoutSec 900 -UseBasicParsing
-                Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
-            } catch {
-                Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
-                $downloadCleanupErrors = @()
-                Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue -ErrorVariable +downloadCleanupErrors
-                $cleanupLevel = if ($downloadCleanupErrors.Count) { "WARN" } else { "INFO" }
-                Write-InstallLog $cleanupLevel candidate_cleanup_completed @{ result = $(if ($downloadCleanupErrors.Count) { "partial" } else { "removed_or_absent" }); reason = "download_failed"; error_count = $downloadCleanupErrors.Count }
-                $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
-                throw "Download failed: $BinaryUrl`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
-            }
-        }
+        Save-InstallBinary -Uri $BinaryUrl -OutFile $TmpPath
+        $downloaded = $true
 
         if (-not (Test-InstalledBinaryVersion -TargetPath $TmpPath -ReleaseTag $Latest)) {
-            throw "The downloaded omp binary cannot start or does not report $Latest; the existing install was not changed."
+            throw "The downloaded omp binary failed validation; the existing install was not changed.`n$script:InstallProbeDetail"
         }
+        $verified = $true
 
         $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))
         Set-InstallStage "old_binary_rename"
@@ -453,6 +482,7 @@ function Install-Binary {
                 $renamedAside = $true
                 Write-InstallLog INFO old_binary_rename_completed @{ result = "success"; old_image = "retained_aside" }
             } catch {
+                $renameFailure = $_
                 Write-InstallLog WARN old_binary_rename_failed (Get-InstallFailureFields $_)
                 Stop-RunningOmp -TargetPath $OutPath
                 Set-InstallStage "fallback_remove"
@@ -465,8 +495,11 @@ function Install-Binary {
             Set-InstallStage "atomic_replace"
             Write-InstallLog INFO atomic_replace_started @{ target = "installed"; strategy = "move_candidate" }
             Move-Item -LiteralPath $TmpPath -Destination $OutPath
+            $installed = $true
             Write-InstallLog INFO atomic_replace_completed @{ result = "success" }
         } catch {
+            $swapFailure = $_
+            $failedStage = "atomic_replace"
             Write-InstallLog ERROR atomic_replace_failed (Get-InstallFailureFields $_)
             if ($renamedAside) {
                 try {
@@ -480,6 +513,7 @@ function Install-Binary {
                     # copy and the fresh download below is the other recovery
                     # path, so the finally must keep it.
                     $rollbackFailed = $true
+                    $failedStage = "rollback"
                     Write-InstallLog WARN recovery_files_retained @{ result = "retained"; old_image = $true; candidate = $true }
                     throw
                 }
@@ -490,13 +524,24 @@ function Install-Binary {
         # earlier installs. A still-running omp keeps its image locked, so its
         # aside simply survives until the next install.
         Clear-InstallAsides
+    } catch {
+        if (-not $failedStage) { $failedStage = $script:InstallStage }
+        throw
     } finally {
-        # A failed swap must not leave the install directory without any omp
-        # binary: when the old one is gone (kill fallback or a failed rollback)
-        # keep the downloaded file so re-running the installer — or renaming it
-        # back manually — recovers.
-        if (-not ($hadExisting -and (-not $renamedAside -or $rollbackFailed) -and -not (Test-Path -LiteralPath $OutPath))) {
-            Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue
+        # Keep a verified download after any failed replacement, including a
+        # successful rollback, so the error report can offer a usable binary.
+        if (-not ($verified -and (Test-Path -LiteralPath $TmpPath -PathType Leaf))) {
+            $cleanupErrors = @()
+            if (Test-Path -LiteralPath $TmpPath) {
+                Remove-Item -LiteralPath $TmpPath -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+            }
+            if ($cleanupErrors.Count) {
+                Write-Host "[WARN] Could not remove the temporary download: $TmpPath" -ForegroundColor Yellow
+                foreach ($cleanupError in $cleanupErrors) { Write-Host $cleanupError.Exception.Message }
+                $temporaryLiteral = "'" + $TmpPath.Replace("'", "''") + "'"
+                Write-Host "After resolving the file-lock or permission error, remove this temporary file:"
+                Write-Host "Remove-Item -LiteralPath $temporaryLiteral -Force"
+            }
             try {
                 $candidateRetained = [bool](Test-Path -LiteralPath $TmpPath)
                 $cleanupLevel = if ($candidateRetained) { "WARN" } else { "INFO" }
@@ -509,10 +554,10 @@ function Install-Binary {
         }
     }
 
+    $needsRestart = Set-InstallEnvironment
     Write-Host ""
     Write-Host "[OK] Installed omp to $OutPath" -ForegroundColor Green
-
-    if (Set-InstallEnvironment) {
+    if ($needsRestart) {
         Write-Host "Restart your terminal, then run 'omp' to get started!"
     } else {
         Write-Host "Run 'omp' to get started!"
@@ -521,6 +566,47 @@ function Install-Binary {
     } catch {
         if ($_.Exception -isnot [System.Management.Automation.PipelineStoppedException]) {
             Write-InstallLog ERROR stage_failed (Get-InstallFailureFields $_)
+            if ($downloaded) {
+                $failure = $_
+                if (-not $failedStage) { $failedStage = $script:InstallStage }
+                Write-Host ""
+                Write-Host "[ERROR] Installation failed after download. Stage: $failedStage" -ForegroundColor Red
+                Write-Host "Error: $($failure.Exception.Message)"
+                Write-Host "Type: $($failure.Exception.GetType().FullName); code: $($failure.Exception.HResult); category: $($failure.CategoryInfo.Category)"
+                if ($failure.InvocationInfo.PositionMessage) { Write-Host $failure.InvocationInfo.PositionMessage }
+                if ($renameFailure) { Write-Host "Old binary rename error: $($renameFailure.Exception.Message)" }
+                if ($swapFailure -and $rollbackFailed) { Write-Host "Replacement error before rollback: $($swapFailure.Exception.Message)" }
+                Write-Host "Install target: $OutPath"
+                if ($script:InstallLogPath) { Write-Host "Diagnostic log: $script:InstallLogPath" }
+                $targetLiteral = "'" + $OutPath.Replace("'", "''") + "'"
+                if ($installed) {
+                    Write-Host "The new binary is installed, but setup did not finish. Run it directly:"
+                    Write-Host "& $targetLiteral --version"
+                    Write-Host "& $targetLiteral"
+                } elseif ($verified -and (Test-Path -LiteralPath $TmpPath -PathType Leaf)) {
+                    $candidateLiteral = "'" + $TmpPath.Replace("'", "''") + "'"
+                    Write-Host "Verified download retained: $TmpPath"
+                    Write-Host "You can use it without replacing the installed executable:"
+                    Write-Host "& $candidateLiteral --version"
+                    Write-Host "& $candidateLiteral"
+                } else {
+                    Write-Host "The downloaded binary was not verified; do not use it. The previous install was not replaced."
+                }
+                if ($rollbackFailed -and (Test-Path -LiteralPath $OldPath -PathType Leaf)) {
+                    $oldLiteral = "'" + $OldPath.Replace("'", "''") + "'"
+                    Write-Host "Previous binary retained: $OldPath"
+                    Write-Host "To restore it only if the install target is still missing:"
+                    Write-Host "if (-not (Test-Path -LiteralPath $targetLiteral)) { Move-Item -LiteralPath $oldLiteral -Destination $targetLiteral }"
+                } elseif (-not $installed -and $verified -and (Test-Path -LiteralPath $OutPath -PathType Leaf)) {
+                    Write-Host "The previous installed binary is still available at $OutPath"
+                }
+                $installLiteral = "'" + $InstallDir.Replace("'", "''") + "'"
+                $releaseLiteral = "'" + $Latest.Replace("'", "''") + "'"
+                Write-Host "Resolve the permission or file-lock error above, then retry the same release and install directory:"
+                Write-Host "`$env:PI_INSTALL_DIR = $installLiteral; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/$Repo/main/scripts/install.ps1))) -Binary -Ref $releaseLiteral"
+                Write-Host "After retrying, verify the installed file and the command found on PATH:"
+                Write-Host "& $targetLiteral --version; Get-Command omp; omp --version"
+            }
         }
         Complete-InstallLog "failed" $_
         throw
@@ -535,6 +621,11 @@ function Clear-InstallAsides {
         Remove-Item -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
     if ($cleanupErrors.Count) {
         Write-InstallLog WARN aside_cleanup_completed @{ result = "partial"; error_count = $cleanupErrors.Count; locked_images_may_remain = $true }
+        Write-Host "[WARN] Old-image cleanup is incomplete; this does not undo binary installation." -ForegroundColor Yellow
+        foreach ($cleanupError in $cleanupErrors) { Write-Host $cleanupError.Exception.Message }
+        $installLiteral = "'" + $InstallDir.Replace("'", "''") + "'"
+        Write-Host "Files still used by running sessions can stay until those sessions exit. Then retry cleanup without stopping processes:"
+        Write-Host "Get-ChildItem -LiteralPath $installLiteral -Filter '.omp.old.*' -File | Remove-Item -Force -ErrorAction Continue"
     } else {
         Write-InstallLog INFO aside_cleanup_completed @{ result = "success" }
     }

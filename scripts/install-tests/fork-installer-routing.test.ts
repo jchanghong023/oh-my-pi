@@ -240,9 +240,10 @@ describe.skipIf(!windowsPowerShell)("Windows fork installer replacement", () => 
 		await Bun.write(
 			harness,
 			`$ErrorActionPreference = "Stop"
-function New-FixtureBinary([string]$Path, [string]$Version) {
+function New-FixtureBinary([string]$Path, [string]$Version, [switch]$FailProbe) {
     $typeName = "Fixture" + [Guid]::NewGuid().ToString("N")
-    Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { if (args.Length > 0 && args[0] == ""--version"") System.Console.WriteLine(""omp/$Version""); else System.Threading.Thread.Sleep(60000); } }" -OutputAssembly $Path -OutputType ConsoleApplication
+    $body = if ($FailProbe) { 'System.Console.Error.WriteLine("fixture native startup failed"); System.Environment.Exit(42);' } else { "if (args.Length > 0 && args[0] == ""--version"") System.Console.WriteLine(""omp/$Version""); else System.Threading.Thread.Sleep(60000);" }
+    Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { $body } }" -OutputAssembly $Path -OutputType ConsoleApplication
 }
 $install = $env:PI_INSTALL_DIR
 New-Item -ItemType Directory -Path $install | Out-Null
@@ -257,6 +258,8 @@ if ($env:TEST_MODE -eq "directory") {
 }
 if ($env:TEST_MODE -eq "invalid") {
     New-FixtureBinary $download "18.0.9+fork.124"
+} elseif ($env:TEST_MODE -eq "probe-failed") {
+    New-FixtureBinary $download "" -FailProbe
 } else {
     New-FixtureBinary $download "18.0.9+fork.125"
 }
@@ -265,7 +268,12 @@ if ($env:TEST_MODE -eq "already") {
 }
 $downloadCount = 0
 $pathChecks = 0
-function Invoke-RestMethod { return @{ tag_name = "v18.0.9+fork.125" } }
+function Invoke-RestMethod([string]$Uri) {
+    if ($Uri -match '/main/scripts/install.ps1$') {
+        return $script:installerDefinitions + '\nfunction Set-InstallEnvironment { $script:pathChecks++; return $false }\nInstall-Binary'
+    }
+    return @{ tag_name = "v18.0.9+fork.125" }
+}
 function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
     $script:downloadCount++
     Copy-Item -LiteralPath $download -Destination $OutFile
@@ -280,13 +288,27 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTA
 if ($parseErrors.Count) { throw $parseErrors[0] }
 $lastStatement = $ast.EndBlock.Statements[-1]
 $source = [System.IO.File]::ReadAllText($env:TEST_INSTALLER)
-. ([scriptblock]::Create($source.Substring(0, $lastStatement.Extent.StartOffset))) -Binary
-function Set-InstallEnvironment { $script:pathChecks++; return $false }
-if ($env:TEST_MODE -eq "rollback") {
+$script:installerDefinitions = $source.Substring(0, $lastStatement.Extent.StartOffset)
+. ([scriptblock]::Create($script:installerDefinitions)) -Binary
+function Set-InstallEnvironment {
+    $script:pathChecks++
+    if ($env:TEST_MODE -eq "path-failed") { Set-InstallStage "environment"; throw "fixture PATH access denied" }
+    return $false
+}
+$script:blockMoves = $true
+if ($env:TEST_MODE -in @("rollback", "rollback-failed", "retry", "rename-failed")) {
     function Move-Item([string]$LiteralPath, [string]$Destination) {
-        if ([System.IO.Path]::GetFileName($LiteralPath).StartsWith(".omp.tmp.")) { throw "fixture swap blocked" }
+        $name = [System.IO.Path]::GetFileName($LiteralPath)
+        if ($script:blockMoves) {
+            if ($env:TEST_MODE -eq "rename-failed" -and $name -eq "omp.exe") { throw "fixture old image locked" }
+            if ($name.StartsWith(".omp.tmp.")) { throw "fixture swap blocked" }
+            if ($env:TEST_MODE -eq "rollback-failed" -and $name.StartsWith(".omp.old.")) { throw "fixture rollback access denied" }
+        }
         Microsoft.PowerShell.Management\\Move-Item -LiteralPath $LiteralPath -Destination $Destination
     }
+}
+if ($env:TEST_MODE -eq "rename-failed") {
+    function Stop-RunningOmp { Set-InstallStage "kill_fallback"; throw "fixture process access denied" }
 }
 $running = $null
 try {
@@ -294,12 +316,17 @@ try {
         $running = Start-Process -FilePath $old -PassThru
     }
     $failed = $false
-    try { Install-Binary } catch { $failed = $true; Write-Host $_.Exception.Message }
+    $messages = @()
+    try {
+        Install-Binary 6>&1 | ForEach-Object { $script:messages += $_.ToString(); Write-Host $_ }
+    } catch { $failed = $true; Write-Host $_.Exception.Message }
     if ($env:TEST_MODE -eq "directory") {
         Write-Host "RESULT failed=$failed retained=$((Get-Content -LiteralPath (Join-Path $old 'keep.txt')).Trim())"
-    } else {
+    } elseif (Test-Path -LiteralPath $old -PathType Leaf) {
         $version = (& $old --version | Select-Object -First 1)
         Write-Host "RESULT failed=$failed version=$version"
+    } else {
+        Write-Host "RESULT failed=$failed targetMissing=True"
     }
     if ($running) {
         $running.Refresh()
@@ -307,6 +334,23 @@ try {
     }
     Write-Host "RESULT temps=$(@(Get-ChildItem -LiteralPath $install -Filter '.omp.tmp.*').Count)"
     Write-Host "RESULT asides=$(@(Get-ChildItem -LiteralPath $install -Filter '.omp.old.*').Count) downloads=$downloadCount pathChecks=$pathChecks"
+    Write-Host "RESULT candidateCleanupInstructions=$(@($messages | Where-Object { $_.StartsWith('Remove-Item -LiteralPath ') }).Count)"
+    if ($env:TEST_MODE -in @("rollback", "rollback-failed", "rename-failed")) {
+        $probeCommand = $messages | Where-Object { $_ -match '^& .*\\.omp\\.tmp\\..* --version$' } | Select-Object -First 1
+        Write-Host "RESULT recoveryVersion=$(& ([scriptblock]::Create($probeCommand)))"
+    }
+    if ($env:TEST_MODE -eq "rollback-failed") {
+        $restoreCommand = $messages | Where-Object { $_.StartsWith("if (-not (Test-Path -LiteralPath ") } | Select-Object -First 1
+        $script:blockMoves = $false
+        & ([scriptblock]::Create($restoreCommand))
+        Write-Host "RESULT restoredVersion=$(& $old --version)"
+    }
+    if ($env:TEST_MODE -eq "retry") {
+        $retryCommand = $messages | Where-Object { $_.StartsWith('$env:PI_INSTALL_DIR = ') } | Select-Object -First 1
+        $script:blockMoves = $false
+        & ([scriptblock]::Create($retryCommand))
+        Write-Host "RESULT retryVersion=$(& $old --version)"
+    }
 } finally {
     if ($running -and -not $running.HasExited) { $running.Kill(); $running.WaitForExit() }
 }
@@ -316,7 +360,10 @@ try {
 			cwd: repoRoot,
 			env: {
 				...process.env,
-				PI_INSTALL_DIR: path.join(dir, "install"),
+				PI_INSTALL_DIR: path.join(dir, "install 'quoted"),
+				OMP_CONFIG_ROOT: path.join(dir, "config"),
+				OMP_PROFILE: "default",
+				PI_PROFILE: "default",
 				TEST_ROOT: dir,
 				TEST_MODE: mode,
 				TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
@@ -420,10 +467,59 @@ try {
 		expect(result.stdout).toContain("RESULT temps=0");
 	}, 30_000);
 
-	test("rolls back the old executable when moving the verified download fails", async () => {
+	test("a failed replacement restores the old install and leaves an executable recovery command", async () => {
 		const result = await scenario("rollback");
 		expect(result.exitCode, result.stderr).toBe(0);
 		expect(result.stdout).toContain("fixture swap blocked");
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
+		expect(result.stdout).toContain("Stage: atomic_replace");
+		expect(result.stdout).toContain("RESULT temps=1");
+		expect(result.stdout).toContain("RESULT recoveryVersion=omp/18.0.9+fork.125");
+	}, 30_000);
+
+	test("a rollback failure reports both errors and provides a working old-image restore command", async () => {
+		const result = await scenario("rollback-failed");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("Stage: rollback");
+		expect(result.stdout).toContain("fixture swap blocked");
+		expect(result.stdout).toContain("fixture rollback access denied");
+		expect(result.stdout).toContain("RESULT failed=True targetMissing=True");
+		expect(result.stdout).toContain("RESULT recoveryVersion=omp/18.0.9+fork.125");
+		expect(result.stdout).toContain("RESULT restoredVersion=omp/18.0.8+fork.124");
+	}, 30_000);
+
+	test("the printed retry command completes the same release in a quoted install path", async () => {
+		const result = await scenario("retry");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
+		expect(result.stdout).toContain("RESULT retryVersion=omp/18.0.9+fork.125");
+	}, 30_000);
+
+	test("a PATH failure reports partial installation instead of declaring success", async () => {
+		const result = await scenario("path-failed");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("Stage: environment");
+		expect(result.stdout).toContain("fixture PATH access denied");
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.9+fork.125");
+		expect(result.stdout).not.toContain("[OK] Installed");
+	}, 30_000);
+
+	test("a rename and process-permission failure preserves both causes and the verified download", async () => {
+		const result = await scenario("rename-failed");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("Stage: kill_fallback");
+		expect(result.stdout).toContain("fixture old image locked");
+		expect(result.stdout).toContain("fixture process access denied");
+		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
+		expect(result.stdout).toContain("RESULT recoveryVersion=omp/18.0.9+fork.125");
+	}, 30_000);
+
+	test("a failed native version probe exposes its stderr and exit code without replacing the old binary", async () => {
+		const result = await scenario("probe-failed");
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("Stage: candidate_version");
+		expect(result.stdout).toContain("fixture native startup failed");
+		expect(result.stdout).toContain("exit code: 42");
 		expect(result.stdout).toContain("RESULT failed=True version=omp/18.0.8+fork.124");
 		expect(result.stdout).toContain("RESULT temps=0");
 	}, 30_000);
@@ -441,5 +537,97 @@ try {
 		expect(result.exitCode, result.stderr).toBe(0);
 		expect(result.stdout).toContain("RESULT failed=False version=omp/18.0.9+fork.125");
 		expect(result.stdout).toContain("RESULT running=True");
+		expect(result.stdout).toContain("RESULT candidateCleanupInstructions=0");
 	}, 30_000);
+});
+
+describe.skipIf(!windowsPowerShell || !Bun.which("curl.exe"))("Windows installer proxy downloads", () => {
+	test.each(["system", "environment", "fallback"] as const)(
+		"downloads binary bytes through the %s proxy path without changing system settings",
+		async mode => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-proxy-"));
+			tempDirs.push(dir);
+			const payload = new Uint8Array([0x4d, 0x5a, 0, 0xff, 0x0d, 0x0a]);
+			const systemRequests: string[] = [];
+			const environmentRequests: string[] = [];
+			const systemProxy = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					systemRequests.push(request.url);
+					return new Response(payload, {
+						status: mode === "fallback" && systemRequests.length === 1 ? 503 : 200,
+					});
+				},
+			});
+			const environmentProxy =
+				mode === "environment"
+					? Bun.serve({
+							hostname: "127.0.0.1",
+							port: 0,
+							fetch(request) {
+								environmentRequests.push(request.url);
+								return new Response(payload);
+							},
+						})
+					: null;
+			try {
+				const harness = path.join(dir, "download.ps1");
+				const outFile = path.join(dir, "download.exe");
+				await Bun.write(
+					harness,
+					`$ErrorActionPreference = "Stop"
+$env:HTTP_PROXY = $null
+$env:HTTPS_PROXY = $null
+$env:ALL_PROXY = $null
+$env:NO_PROXY = $null
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw $parseErrors[0] }
+$source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
+. ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
+# Substitute only the process-local, OS-resolved proxy; never write HKCU settings.
+[Net.WebRequest]::DefaultWebProxy = New-Object Net.WebProxy([Uri]$env:TEST_SYSTEM_PROXY, $false)
+if ($env:TEST_ENVIRONMENT_PROXY) { $env:HTTP_PROXY = $env:TEST_ENVIRONMENT_PROXY }
+Save-InstallBinary -Uri "http://omp-download.invalid/omp.exe" -OutFile $env:TEST_OUTFILE
+`,
+				);
+				const child = Bun.spawn(
+					[windowsPowerShell!, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
+					{
+						cwd: repoRoot,
+						env: {
+							...process.env,
+							OMP_CONFIG_ROOT: path.join(dir, "config"),
+							OMP_PROFILE: "default",
+							PI_PROFILE: "default",
+							CURL_HOME: dir,
+							TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+							TEST_SYSTEM_PROXY: `http://127.0.0.1:${systemProxy.port}`,
+							TEST_ENVIRONMENT_PROXY: environmentProxy ? `http://127.0.0.1:${environmentProxy.port}` : "",
+							TEST_OUTFILE: outFile,
+							PROCESSOR_ARCHITECTURE: "AMD64",
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+					},
+				);
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+				expect(new Uint8Array(await fs.readFile(outFile))).toEqual(payload);
+				const uri = "http://omp-download.invalid/omp.exe";
+				expect(systemRequests).toEqual(mode === "environment" ? [] : mode === "fallback" ? [uri, uri] : [uri]);
+				expect(environmentRequests).toEqual(mode === "environment" ? [uri] : []);
+			} finally {
+				systemProxy.stop(true);
+				environmentProxy?.stop(true);
+			}
+		},
+		30_000,
+	);
 });
