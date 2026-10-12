@@ -177,7 +177,7 @@
 保持以下 fork 默认值：
 
 - `recap.enabled=false`
-- `startup.quiet=true`（任何机器零配置启动均不显示欢迎界面、启动 splash、启动 changelog 与启动状态消息；用户显式改为 `false` 可恢复）
+- `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=pi`

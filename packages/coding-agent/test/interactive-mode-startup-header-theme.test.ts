@@ -59,8 +59,7 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-interactive-mode-startup-header-theme-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		// The fork defaults startup.quiet to true, which hides the startup
-		// changelog this test observes; opt back in explicitly.
+		// Keep startup changelog visible for the theme-change assertions.
 		cfgStartupQuiet.set(Settings.instance, false);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);

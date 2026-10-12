@@ -38,8 +38,7 @@ describe("libkitty end-to-end", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-libkitty-e2e-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		// The fork defaults startup.quiet to true (no welcome header); the resize
-		// assertions below anchor on that header row, so opt back in.
+		// Keep the welcome header visible for the resize assertions.
 		cfgStartupQuiet.set(Settings.instance, false);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
