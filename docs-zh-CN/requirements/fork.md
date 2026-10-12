@@ -201,6 +201,7 @@
 - `Ctrl+T`：临时模型。
 - `Alt+P`：thinking blocks 显示/隐藏。
 - `Shift+F1`：循环切换 thinking level。
+- ANSI 终端的空输入框固定显示 `Ctrl+T 临时模型 · Ctrl+Q 排队发送 · Esc Esc 回退对话 · /tree 会话历史 · /goal 目标 · 有使用问题反馈j00808874`，只作为帮助文字，不随状态、使用次数或自定义按键变化；输入文字后隐藏，清空后恢复。复用既有占位提示布局，宽度不足时隐藏，不新增配置或轮播；“回退对话”不表示撤销文件修改。
 - 状态栏默认配置（`statusLine.preset` 的 `default` 定义，零配置启动即生效）：左组依次 `pi`、`model`、`mode`、`collab`、`stream`、`path`、`git`、`subagents`、`token_rate`、`cache_hit`、`context_pct`、`time_spent`，右组为空，分隔符 `powerline-thin`；segmentOptions 沿用上游 default 定义（模型显示思考等级、路径缩写上限 40、git 分支显示且 staged/unstaged/untracked 三类改动均计入合并数量）。该清单之外的状态栏段（会话名/ID、主机名、vim、hook 状态、PR、输入/输出/总 token、费用、缓存读写、上下文窗口大小、挂钟时间、订阅额度）默认不显示；用户选择 `custom` preset 时仍可完整自定义。
 - Git 段统一显示纯文本 `git main · 改动5`，不显示 Git／分支图标及 `*`、`+`、`?` 分类符号；改动数为已暂存、未暂存、未跟踪文件的并集，同一文件同时有暂存与未暂存改动只计一次，未跟踪目录内按文件逐个统计，忽略文件不计入。零改动时省略数量；无分支或用户关闭分支显示时只显示 `git 改动5`，分支与数量都不可见时隐藏该段。ANSI 与 native 界面采用同一文字与计数规则；既有三类显示选项仍控制是否计入对应类别。
 - 配置中的 `subagents` 段按所属组与顺序显示，运行中的子代理徽章不得强制移到右组或重复显示；未配置该段时保留上游临时右侧徽章。后台作业徽章沿用上游显示机制，右组配置为空不关闭这些临时徽章。

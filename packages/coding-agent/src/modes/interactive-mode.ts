@@ -292,7 +292,6 @@ import {
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { formatPersistenceNotice } from "./persistence-failure";
-import { resolveComposerHint } from "@oh-my-pi/pi-tui/prompt/composer-hints";
 import { hintUsage } from "../utils/usage-counter";
 import {
 	getRunningSubagentBadgeAgentIds,
@@ -3876,15 +3875,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return lineage;
 	}
 
-	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
-	#composerHint(): string | undefined {
-		return resolveComposerHint({
-			runningAgents: this.#runningSubagentCount,
-			focusedOnAgent: this.focusedAgentId !== undefined,
-			conversationStarted: this.viewSession.messages.length > 0,
-			keybindings: this.keybindings,
-			uses: id => hintUsage.get(id),
-		});
+	/** Fixed help for the empty composer; the editor hides it while typing. */
+	#composerHint(): string {
+		return theme.fg(
+			"dim",
+			"Ctrl+T 临时模型 · Ctrl+Q 排队发送 · Esc Esc 回退对话 · /tree 会话历史 · /goal 目标 · 有使用问题反馈j00808874",
+		);
 	}
 
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added fixed empty-composer help for temporary models, queued messages, conversation rewind, session history, and goals, with a usage-feedback contact.
 - Added the built-in CodeAgent model with cached Windows registry credentials, one changed-token retry before streaming output, and automatic hiding under `OMP_OFFLINE`.
 - Added a Windows runtime proxy fallback: with no proxy environment variables set, process-wide fetch traffic (LLM streams, OAuth/usage probes, model discovery, update checks) now honors the per-user Windows system proxy after explicit per-request and environment proxies, with `NO_PROXY` and loopback bypasses unchanged.
 - Added fork zero-config TLS defaults: the CLI network bootstrap now defaults `NODE_TLS_REJECT_UNAUTHORIZED=0` and `GIT_SSL_NO_VERIFY=true` when neither is explicitly set, so interception proxies and private gateways with unknown root CAs work without per-machine setup; explicit values restore strict verification.
