@@ -278,6 +278,7 @@ describe("Composer prepaint", () => {
 		resetSettingsForTest();
 		await initTheme();
 		settings = await Settings.init({ inMemory: true });
+		cfgStartupQuiet.set(settings, false);
 		config = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings) ?? "box",
@@ -636,6 +637,7 @@ describe("Composer prepaint", () => {
 			.map(r => Bun.stripANSI(r))
 			.join("\n");
 		expect(output).not.toContain("Starting OMP");
+		expect(output).toContain("v9.9.9");
 		expect(output).toContain("╰");
 		const initialEditorRow = terminal
 			.getViewport()
@@ -645,6 +647,7 @@ describe("Composer prepaint", () => {
 		await terminal.waitForRender(() =>
 			terminal.getViewport().some(row => Bun.stripANSI(row).includes("v10.0.0-authoritative")),
 		);
+		expect(terminal.getViewport().some(row => Bun.stripANSI(row).includes("v10.0.0-authoritative"))).toBeTrue();
 		const updatedEditorRow = terminal
 			.getViewport()
 			.map(row => Bun.stripANSI(row))
@@ -731,6 +734,7 @@ describe("Composer prepaint", () => {
 			cache: false,
 		});
 		await terminal.waitForRender(() => terminal.getViewport().some(row => Bun.stripANSI(row).includes("v9.9.9")));
+		expect(terminal.getViewport().some(row => Bun.stripANSI(row).includes("v9.9.9"))).toBeTrue();
 
 		applyStartupComposerPreferences({
 			quiet: true,

@@ -177,6 +177,8 @@
 保持以下 fork 默认值：
 
 - `recap.enabled=false`
+- `startup.quiet=true`（任何机器零配置启动均不显示欢迎界面、启动 splash、启动 changelog 与启动状态消息；用户显式改为 `false` 可恢复）
+- `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=pi`
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
@@ -190,8 +192,9 @@
 - `Ctrl+T`：临时模型。
 - `Alt+P`：thinking blocks 显示/隐藏。
 - `Shift+F1`：循环切换 thinking level。
-- 状态栏默认显示 active time，并支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
+- 状态栏默认配置（`statusLine.preset` 的 `default` 定义，零配置启动即生效）：左组依次 `pi`、`model`、`mode`、`collab`、`stream`、`path`、`git`、`subagents`、`token_rate`、`cache_hit`、`context_pct`、`time_spent`，右组为空，分隔符 `powerline-thin`；segmentOptions 沿用上游 default 定义（模型显示思考等级、路径缩写上限 40、git 分支与 staged/unstaged/untracked 计数全部显示）。该清单之外的状态栏段（会话名/ID、主机名、vim、hook 状态、PR、输入/输出/总 token、费用、缓存读写、上下文窗口大小、挂钟时间、订阅额度）默认不显示；用户选择 `custom` preset 时仍可完整自定义。
 - 配置中的 `subagents` 段按所属组与顺序显示，运行中的子代理徽章不得强制移到右组或重复显示；未配置该段时保留上游临时右侧徽章。后台作业徽章沿用上游显示机制，右组配置为空不关闭这些临时徽章。
+- 状态栏支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 - `composer.shape=pi` 时状态栏独立位于输入框下方。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 

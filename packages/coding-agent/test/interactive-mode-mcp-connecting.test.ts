@@ -70,6 +70,7 @@ describe("InteractiveMode MCP connection status", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		cfgStartupQuiet.set(session.settings, false);
 		eventBus = new EventBus();
 		mode = new InteractiveMode(session, "test", undefined, () => {}, [], undefined, eventBus);
 		// This contract is the banner wiring, not git branch watching; a real

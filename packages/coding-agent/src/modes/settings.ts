@@ -160,7 +160,11 @@ export const cfgStatusLinePreset = register({
 		label: "Status Line Preset",
 		description: "Pre-built status line configurations",
 		options: [
-			{ value: "default", label: "Default", description: "Model, path, git, context, tokens, cost" },
+			{
+				value: "default",
+				label: "Default",
+				description: "Model, path, git, subagents, throughput, cache, context, active time",
+			},
 			{ value: "minimal", label: "Minimal", description: "Path and git only" },
 			{ value: "compact", label: "Compact", description: "Model, git, cost, context" },
 			{ value: "full", label: "Full", description: "All segments including time" },
@@ -1060,7 +1064,7 @@ export const cfgPasteLargeMenuThreshold = register({
 export const cfgStartupQuiet = register({
 	id: "startup.quiet",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
@@ -1085,7 +1089,7 @@ export const cfgStartupShowSplash = register({
 export const cfgStartupSetupWizard = register({
 	id: "startup.setupWizard",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",

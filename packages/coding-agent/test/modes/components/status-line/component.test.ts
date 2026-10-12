@@ -156,6 +156,7 @@ describe("StatusLineComponent", () => {
 				statusLineHost,
 			),
 		);
+		statusLine.updateSettings({ preset: "custom", leftSegments: ["cost"], rightSegments: [] });
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("S2.67 + 👁 $0.41");
@@ -173,6 +174,7 @@ describe("StatusLineComponent", () => {
 				statusLineHost,
 			),
 		);
+		statusLine.updateSettings({ preset: "custom", leftSegments: ["cost"], rightSegments: [] });
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("S2.67 + 👁 0.41");
@@ -195,6 +197,7 @@ describe("StatusLineComponent", () => {
 					statusLineHost,
 				),
 			);
+			statusLine.updateSettings({ preset: "custom", leftSegments: ["cost"], rightSegments: [] });
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 			expect(stripped).toContain("S2.67 + 0.41 (adv)");
 		} finally {
@@ -212,6 +215,7 @@ describe("StatusLineComponent", () => {
 				statusLineHost,
 			),
 		);
+		statusLine.updateSettings({ preset: "custom", leftSegments: ["cost"], rightSegments: [] });
 
 		const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("S2.67");
@@ -235,6 +239,7 @@ describe("StatusLineComponent", () => {
 					statusLineHost,
 				),
 			);
+			statusLine.updateSettings({ preset: "custom", leftSegments: ["cost"], rightSegments: [] });
 			const stripped = statusLine.getTopBorder(WIDE_ENOUGH_FOR_COST_SEGMENT).content.replace(/\x1b\[[0-9;]*m/g, "");
 			expect(stripped).toContain("\u{f067a} 2.67 + \uea70 0.41");
 		} finally {

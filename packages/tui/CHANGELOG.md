@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
+
 ### Fixed
 
 - Running subagent counts stay in their configured status-line group instead of always moving to the right.

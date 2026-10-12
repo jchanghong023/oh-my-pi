@@ -8,6 +8,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { StartupChangelogSelection } from "@oh-my-pi/pi-coding-agent/utils/changelog";
+import { cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -58,6 +59,9 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-interactive-mode-startup-header-theme-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		// The fork defaults startup.quiet to true, which hides the startup
+		// changelog this test observes; opt back in explicitly.
+		cfgStartupQuiet.set(Settings.instance, false);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");

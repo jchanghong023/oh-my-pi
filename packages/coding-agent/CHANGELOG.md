@@ -8,6 +8,10 @@
 - Added fork zero-config TLS defaults: the CLI network bootstrap now defaults `NODE_TLS_REJECT_UNAUTHORIZED=0` and `GIT_SSL_NO_VERIFY=true` when neither is explicitly set, so interception proxies and private gateways with unknown root CAs work without per-machine setup; explicit values restore strict verification.
 - Relaxed the Windows installer's own TLS posture to match: curl downloads pass `--insecure --ssl-no-revoke`, PowerShell 5.1 enables TLS 1.2 with a permissive validation callback, and PowerShell 7+ web requests pass `-SkipCertificateCheck`; the post-download version probe still gates integrity.
 
+### Changed
+
+- Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
+
 ## [18.10.1] - 2026-10-12
 
 ### Added
