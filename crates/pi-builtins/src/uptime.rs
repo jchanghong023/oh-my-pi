@@ -4,9 +4,12 @@
 
 use std::{
 	ffi::{OsStr, OsString},
-	io::{self, Write},
+	io::Write,
 	path::Path,
 };
+
+#[cfg(unix)]
+use std::io;
 
 use brush_core::{ShellExtensions, builtins::Registration};
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, builder::ValueParser};
