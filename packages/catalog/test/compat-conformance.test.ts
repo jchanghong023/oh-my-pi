@@ -31,6 +31,9 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	"zcode-api",
 	// Offline company gateway: runtime-only seeds get their URL from the startup snapshot.
 	"company",
+	// Windows-only runtime seeds are registered by
+	// packages/coding-agent/src/config/codeagent-provider.ts.
+	"codeagent",
 	// Both SingularityAPI rosters are live and credential-scoped (one key sees
 	// only its own product's models — the pay-as-you-go catalog or the reserved
 	// lanes), so no rows are frozen into models.json.
