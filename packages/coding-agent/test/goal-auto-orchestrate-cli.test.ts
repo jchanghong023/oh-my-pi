@@ -28,6 +28,29 @@ function contentText(content: unknown): string {
 	return content.map(part => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("\n");
 }
 
+function assertTaskCompleted(frame: Frame | undefined, provider: string): void {
+	expect(frame?.isError).toBe(false);
+	if (!frame || !isRecord(frame.result)) throw new Error("Missing task execution result");
+	expect(contentText(frame.result.content)).toContain("AUXILIARY_SUMMARY_WITHOUT_OBJECTIVE");
+	const details = frame.result.details;
+	if (!isRecord(details)) throw new Error("Missing task result details");
+	const taskDetails = isRecord(details.xdev) ? details.xdev.inner : details;
+	if (!isRecord(taskDetails) || !Array.isArray(taskDetails.results)) throw new Error("Missing settled child");
+	expect(taskDetails.results).toHaveLength(1);
+	const child = taskDetails.results[0];
+	expect(child).toMatchObject({
+		agent: "task",
+		exitCode: 0,
+		output: "AUXILIARY_SUMMARY_WITHOUT_OBJECTIVE",
+		resolvedModelIdentity: `${provider}/aux`,
+	});
+	if (!isRecord(child)) throw new Error("Missing child provenance");
+	expect(child.error).toBeUndefined();
+	expect(child.aborted).not.toBe(true);
+	expect(child.resolvedModelIsFallback).not.toBe(true);
+	expect(child.requests).toBeGreaterThan(0);
+}
+
 function messages(body: Frame): Frame[] {
 	if (!Array.isArray(body.messages)) throw new Error("Provider request has no messages");
 	return body.messages.filter(isRecord);
@@ -557,12 +580,17 @@ async function withFixture(
 			"",
 		].join("\n"),
 	);
+	// Pin every auxiliary role used by the real child and its label requests.
+	// Device dispatch consults its own approval before approval.write; allowing
+	// read/task devices must not lift the separate filesystem-write denial.
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
 		[
 			"modelRoles:",
 			`  task: [${provider}/aux]`,
 			`  smol: [${provider}/aux]`,
+			`  tiny: [${provider}/aux]`,
+			`  commit: [${provider}/aux]`,
 			`  advisor: [${provider}/aux]`,
 			"goal:",
 			`  continuationModes: ${options.continuation ? "[rpc]" : "[]"}`,
@@ -584,6 +612,8 @@ async function withFixture(
 			"  maxDelayMs: 5",
 			"  modelFallback: false",
 			"task:",
+			"  batch: true",
+			"  structured: false",
 			"  isolation:",
 			"    enabled: false",
 			"  prewalk: false",
@@ -592,6 +622,8 @@ async function withFixture(
 			"tools:",
 			"  approval:",
 			"    write: deny",
+			"    read: allow",
+			"    task: allow",
 			"skills:",
 			"  enableCodexUser: false",
 			"  enableClaudeUser: false",
@@ -957,7 +989,6 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 									context: "A separately scoped read-only capability fixture.",
 									tasks: [
 										{
-											agent: "sonic",
 											task: "Return the fixed fixture status. Do not modify any files.",
 											solutionSpace: "one fixed response",
 										},
@@ -995,6 +1026,22 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					expect(results).toHaveLength(1);
 					expect(results[0]?.isError).toBe(false);
 				}
+				assertTaskCompleted(
+					client.seen.find(frame => frame.type === "tool_execution_end" && frame.toolName === "write"),
+					"openai-codex",
+				);
+				const childRequests = fixture.requests.filter(
+					body =>
+						body.model === "aux" &&
+						responseItems(body).some(item =>
+							contentText(item.content).includes("A separately scoped read-only capability fixture."),
+						),
+				);
+				expect(childRequests).toHaveLength(1);
+				expect(codexToolNames(childRequests[0]!)).toContain("read");
+				expect(responseItems(childRequests[0]!).some(item => contentText(item.content).includes(instruction))).toBe(
+					false,
+				);
 				const saved = goal(await client.state());
 				if (!saved || !isRecord(saved.goal)) throw new Error("Missing live goal");
 				const savedId = saved.goal.id;
@@ -1022,7 +1069,6 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 										context: "Check the current enabled task capability without changing files.",
 										tasks: [
 											{
-												agent: "sonic",
 												task: "Return the fixed fixture status. Do not modify any files.",
 												solutionSpace: "one fixed response",
 											},
@@ -1048,8 +1094,25 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					expect(results).toHaveLength(1);
 					expect(results[0]?.isError).toBe(!taskEnabled);
 					const auxiliaryCount = fixture.requests.filter(body => body.model === "aux").length - auxiliaryStart;
-					if (taskEnabled) expect(auxiliaryCount).toBeGreaterThan(0);
-					else expect(auxiliaryCount).toBe(0);
+					if (taskEnabled) {
+						expect(auxiliaryCount).toBeGreaterThan(0);
+						assertTaskCompleted(results[0], "openai-codex");
+						const children = fixture.requests
+							.slice(start)
+							.filter(
+								body =>
+									body.model === "aux" &&
+									responseItems(body).some(item =>
+										contentText(item.content).includes(
+											"Check the current enabled task capability without changing files.",
+										),
+									),
+							);
+						expect(children).toHaveLength(1);
+						expect(codexToolNames(children[0]!)).toContain("read");
+					} else {
+						expect(auxiliaryCount).toBe(0);
+					}
 					await assertPersisted(client, constructionCount, 1);
 					const compact = await client.request({
 						type: "compact",
@@ -1728,7 +1791,6 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 								context: "A separately scoped read-only fixture.",
 								tasks: [
 									{
-										agent: "sonic",
 										task: "Return the fixed fixture status. Do not modify any files.",
 										solutionSpace: "one fixed response",
 									},
@@ -1749,8 +1811,9 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				).toBe(true);
 				expect(auxiliary.some(body => toolNames(body).includes("advise"))).toBe(true);
 				fixture.mainSince(0).forEach(body => assertActive(body));
-				expect(client.seen.some(frame => frame.type === "tool_execution_end" && frame.toolName === "task")).toBe(
-					true,
+				assertTaskCompleted(
+					client.seen.find(frame => frame.type === "tool_execution_end" && frame.toolName === "task"),
+					"goal-recording",
 				);
 			},
 			{ advisor: true },

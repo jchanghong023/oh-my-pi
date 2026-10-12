@@ -851,6 +851,19 @@ describe("JchTools SDK remote Agent session", () => {
 			);
 			const session = await f.create(f.ordinary);
 			await session.prompt("original source task");
+			const sourceTask = session.messages.find(
+				message =>
+					message.role === "user" &&
+					!message.synthetic &&
+					message.attribution !== "agent" &&
+					(typeof message.content === "string"
+						? message.content
+						: message.content
+								.filter(block => block.type === "text")
+								.map(block => block.text)
+								.join("")) === "original source task",
+			);
+			if (!sourceTask) throw new Error("Expected genuine original source task");
 			const sourceAnswer = session.getLastAssistantMessage();
 			if (!sourceAnswer) throw new Error("Expected ordinary source answer");
 			f.manager.appendMessage({
@@ -901,7 +914,7 @@ describe("JchTools SDK remote Agent session", () => {
 				role: "compactionSummary",
 				summary: "PRIVATE_GENERATED_SUMMARY",
 			});
-			expect(transcriptContent(session).some(message => message.content === "original source task")).toBe(false);
+			expect(session.messages).not.toContainEqual(sourceTask);
 			if (compactionKind === "openai-native") {
 				expect(transcriptContent(session)).toEqual([]);
 			} else {
@@ -935,11 +948,7 @@ describe("JchTools SDK remote Agent session", () => {
 				{ role: "user", content: "remote task after second compaction" },
 			];
 			expect(f.requests.at(-1)?.messages).toEqual(visibleAfterClear);
-			expect(
-				f.manager
-					.buildSessionContext({ transcript: true })
-					.messages.some(message => message.role === "user" && message.content === "original source task"),
-			).toBe(true);
+			expect(f.manager.buildSessionContext({ transcript: true }).messages).toContainEqual(sourceTask);
 			await f.manager.ensureOnDisk();
 			const file = session.sessionFile;
 			if (!file) throw new Error("Expected persisted compacted session");

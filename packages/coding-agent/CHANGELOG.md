@@ -13,6 +13,7 @@
 ### Changed
 
 - The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
+- Ask dialogs now auto-select after 30 seconds by default; explicit zero still disables the timeout, and unanswered settings approvals are denied.
 - Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
 
 ### Fixed
@@ -20,6 +21,7 @@
 - Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
 - CodeAgent keeps working cached credentials when the Windows registry contains an empty token value.
 - Prevented compaction summary and handoff retries from bypassing CodeAgent and JchTools replay policy.
+- Switching or resuming a compacted conversation with JchTools preserves its original visible messages without replaying history from before `/clear`.
 
 ### Added
 

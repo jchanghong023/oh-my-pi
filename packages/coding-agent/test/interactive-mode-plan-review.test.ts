@@ -1137,6 +1137,7 @@ describe("InteractiveMode plan review rendering", () => {
 			vi.spyOn(session.sessionManager, "setSessionName").mockImplementation(async () => {
 				titleStarted.resolve();
 				await titleDone.promise;
+				return true;
 			});
 			const dispatch = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 			const errors = vi.spyOn(mode, "showError");
