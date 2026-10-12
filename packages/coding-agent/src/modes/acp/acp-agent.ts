@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
+import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import {
 	type Agent,
 	type AgentSideConnection,
@@ -1057,6 +1058,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
+		if (isJchToolsAgentModel(record.session.model)) return false;
 		if (!record.session.skillsSettings?.enableSkillCommands) {
 			return false;
 		}

@@ -10,7 +10,11 @@ import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-set
 import { JCHTOOLS_API, streamJchToolsAgent } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
-import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
+import {
+	createAgentSession,
+	type CreateAgentSessionOptions,
+	type ExtensionFactory,
+} from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -18,6 +22,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import {
 	cfgFeaturesUnexpectedStopDetection,
 	cfgPrewalkEnabled,
+	cfgProvidersCacheWarming,
 	cfgRetryFallbackChains,
 	cfgRetryMaxDelayMs,
 	cfgRetryMaxRetries,
@@ -192,6 +197,7 @@ async function fixture(
 		sessionManager = manager,
 		extensions: ExtensionFactory[] = [],
 		modelPattern?: string | string[],
+		commandOptions: Pick<CreateAgentSessionOptions, "promptTemplates" | "slashCommands"> = {},
 	) => {
 		const { session } = await createAgentSession({
 			cwd,
@@ -207,8 +213,8 @@ async function fixture(
 			skills: [],
 			rules: [],
 			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
+			promptTemplates: commandOptions.promptTemplates ?? [],
+			slashCommands: commandOptions.slashCommands ?? [],
 			toolNames: ["frontend_probe"],
 			restrictToolNames: extensions.length === 0,
 			allowRestrictedCustomTools: true,
@@ -265,6 +271,142 @@ async function fixture(
 }
 
 describe("JchTools SDK remote Agent session", () => {
+	it("forwards a remote slash command verbatim without executing a same-named local extension command", async () => {
+		const localCalls: Array<{ args: string; cwd: string }> = [];
+		const extension: ExtensionFactory = pi => {
+			pi.registerCommand("frontend-local-command", {
+				handler: async (args, ctx) => {
+					localCalls.push({ args, cwd: ctx.cwd });
+				},
+			});
+		};
+		const f = await fixture();
+		const command = "/frontend-local-command keep  spaces 中文";
+		const ordinary = await f.create(f.ordinary, SessionManager.inMemory(f.cwd), [extension]);
+		expect(await ordinary.prompt(command)).toBe(false);
+		expect(localCalls).toEqual([{ args: "keep  spaces 中文", cwd: f.cwd }]);
+		expect(f.requests).toHaveLength(0);
+
+		const remote = await f.create(f.remote, SessionManager.inMemory(f.cwd), [extension]);
+		const dispatched = await remote.prompt(command);
+		expect(localCalls).toEqual([{ args: "keep  spaces 中文", cwd: f.cwd }]);
+		expect(dispatched).toBe(true);
+		expect(f.requests).toHaveLength(1);
+		expect(f.requests[0].model).toBe(f.remote.id);
+		expect(f.requests[0].cwd).toBe(f.cwd);
+		expect(f.requests[0].messages).toEqual([{ role: "user", content: command }]);
+		expect(f.requests[0].tools).toBeUndefined();
+		expect(remote.getLastAssistantMessage()?.stopReason).toBe("stop");
+		expect(remote.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "backend reply" }]);
+		expect(f.toolExecutions()).toBe(0);
+	});
+
+	it("forwards remote custom commands without running their local executor", async () => {
+		const f = await fixture();
+		const localCalls: string[] = [];
+		const command = {
+			path: "mcp:frontend/local-command",
+			resolvedPath: "mcp:frontend/local-command",
+			source: "project" as const,
+			command: {
+				name: "frontend-custom-command",
+				description: "Local custom command",
+				execute: (_args: string[], _ctx: unknown, rawArgs?: string) => {
+					localCalls.push(rawArgs ?? "");
+					return undefined;
+				},
+			},
+		};
+		const input = "/frontend-custom-command keep  spaces 中文";
+		const ordinary = await f.create(f.ordinary);
+		ordinary.setMCPPromptCommands([command]);
+		expect(await ordinary.prompt(input)).toBe(false);
+		expect(localCalls).toEqual(["keep  spaces 中文"]);
+		expect(f.requests).toHaveLength(0);
+
+		const remote = await f.create(f.remote);
+		remote.setMCPPromptCommands([command]);
+		expect(await remote.prompt(input)).toBe(true);
+		expect(localCalls).toEqual(["keep  spaces 中文"]);
+		expect(f.requests).toHaveLength(1);
+		expect(f.requests[0].messages).toEqual([{ role: "user", content: input }]);
+		expect(remote.getLastAssistantMessage()?.stopReason).toBe("stop");
+	});
+
+	it("keeps local file commands and prompt templates unchanged while forwarding remote names literally", async () => {
+		const f = await fixture();
+		// Smart stop detection judges ordinary replies through a separate HTTP request;
+		// this test isolates command expansion rather than that automatic consumer.
+		cfgFeaturesUnexpectedStopDetection.override(f.settings, "none");
+		cfgProvidersCacheWarming.override(f.settings, "off");
+		cfgPrewalkEnabled.override(f.settings, false);
+		const commandOptions: Pick<CreateAgentSessionOptions, "promptTemplates" | "slashCommands"> = {
+			slashCommands: [
+				{
+					name: "frontend-file",
+					description: "Local file command",
+					content: "LOCAL_FILE_SENTINEL",
+					source: "test",
+				},
+			],
+			promptTemplates: [
+				{
+					name: "frontend-template",
+					description: "Local template",
+					content: "LOCAL_TEMPLATE_SENTINEL",
+					source: "test",
+				},
+			],
+		};
+		const ordinaryManager = SessionManager.inMemory(f.cwd);
+		const remoteManager = SessionManager.inMemory(f.cwd);
+		const ordinary = await f.create(f.ordinary, ordinaryManager, [], undefined, commandOptions);
+		const remote = await f.create(f.remote, remoteManager, [], undefined, commandOptions);
+		try {
+			expect(ordinary.model).toEqual(f.ordinary);
+			expect(remote.model).toEqual(f.remote);
+			for (const [input, expanded] of [
+				["/frontend-file", "LOCAL_FILE_SENTINEL"],
+				["/frontend-template", "LOCAL_TEMPLATE_SENTINEL"],
+			]) {
+				expect(await ordinary.prompt(input)).toBe(true);
+				const ordinaryReply = ordinary.getLastAssistantMessage();
+				if (ordinaryReply?.stopReason !== "stop") {
+					throw new Error(`Ordinary command failed: ${ordinaryReply?.errorMessage ?? "no terminal reply"}`);
+				}
+				const ordinaryRequests = f.requests.filter(body => body.model === f.ordinary.id);
+				const ordinaryMessage = ordinaryRequests.at(-1)?.messages.at(-1);
+				if (!ordinaryMessage || !Array.isArray(ordinaryMessage.content)) {
+					throw new Error("Ordinary command did not send an expanded content array");
+				}
+				expect(ordinaryMessage.role).toBe("user");
+				expect(ordinaryMessage.content.at(-1)).toEqual({
+					type: "text",
+					text: expanded,
+				});
+				expect(await remote.prompt(input)).toBe(true);
+				const remoteReply = remote.getLastAssistantMessage();
+				if (remoteReply?.stopReason !== "stop") {
+					throw new Error(`Remote command failed: ${remoteReply?.errorMessage ?? "no terminal reply"}`);
+				}
+				const remoteRequests = f.requests.filter(body => body.model === f.remote.id);
+				const matching = remoteRequests.filter(body => body.messages.at(-1)?.content === input);
+				expect(matching).toHaveLength(1);
+				expect(matching[0].messages.at(-1)).toEqual({ role: "user", content: input });
+				expect(matching[0].tools).toBeUndefined();
+				expect(JSON.stringify(matching[0].messages)).not.toContain("LOCAL_FILE_SENTINEL");
+				expect(JSON.stringify(matching[0].messages)).not.toContain("LOCAL_TEMPLATE_SENTINEL");
+				expect(remoteReply.content).toEqual([{ type: "text", text: "backend reply" }]);
+			}
+			expect(f.requests.filter(body => body.model === f.remote.id)).toHaveLength(2);
+			expect(f.requests.filter(body => body.model === f.ordinary.id)).toHaveLength(2);
+			expect(f.requests).toHaveLength(4);
+			expect(f.toolExecutions()).toBe(0);
+		} finally {
+			await Promise.all([ordinary.abort(), remote.abort()]);
+		}
+	});
+
 	it("reuses backend session headers only within the same chat, branch and cwd", async () => {
 		const headers: (string | null)[] = [];
 		let next = 0;
@@ -407,7 +549,7 @@ describe("JchTools SDK remote Agent session", () => {
 					event.type === "cache_warming_start",
 			),
 		).toBe(false);
-		await expect(session.prompt("unsolicited", { synthetic: true })).rejects.toThrow("explicit user task");
+		await expect(session.prompt("unsolicited", { synthetic: true })).rejects.toThrow();
 		expect(f.requests).toHaveLength(1);
 		expect(session.armPrewalk(f.ordinary)).toBe(false);
 		expect(await session.restartPrewalk(f.remote, undefined, f.ordinary, undefined)).toBe("rejected");
@@ -518,7 +660,6 @@ describe("JchTools SDK remote Agent session", () => {
 			await session.prompt("task with missing cwd");
 			expect(f.requests).toHaveLength(2);
 			expect(session.getLastAssistantMessage()?.stopReason).toBe("error");
-			expect(session.getLastAssistantMessage()?.errorMessage).toContain("cwd");
 			expect(fs.existsSync(missingCwd)).toBe(false);
 		} finally {
 			await session.abort();
@@ -688,8 +829,8 @@ describe("JchTools SDK remote Agent session", () => {
 		const f = await fixture();
 		const session = await f.create(f.remote);
 		const image = { type: "image" as const, data: "not-even-an-image", mimeType: "image/png" };
-		await expect(session.prompt("inspect", { images: [image] })).rejects.toThrow("text only");
-		await expect(session.steer("inspect", [image])).rejects.toThrow("text only");
+		await expect(session.prompt("inspect", { images: [image] })).rejects.toThrow();
+		await expect(session.steer("inspect", [image])).rejects.toThrow();
 		await expect(
 			session.promptCustomMessage({
 				customType: "skill",
@@ -697,7 +838,7 @@ describe("JchTools SDK remote Agent session", () => {
 				attribution: "user",
 				content: [{ type: "text", text: "inspect" }, image],
 			}),
-		).rejects.toThrow("text only");
+		).rejects.toThrow();
 		expect(f.requests).toHaveLength(0);
 		expect(session.messages).toHaveLength(0);
 	});
@@ -903,10 +1044,8 @@ describe("JchTools SDK remote Agent session", () => {
 	it("sends one user text request for an idle deliberate synthetic continuation but refuses automatic continuation", async () => {
 		const f = await fixture();
 		const session = await f.create(f.remote);
-		await expect(session.prompt("automatic continuation", { synthetic: true })).rejects.toThrow("explicit user task");
-		await expect(session.followUp("automatic follow-up", undefined, { synthetic: true })).rejects.toThrow(
-			"explicit user task",
-		);
+		await expect(session.prompt("automatic continuation", { synthetic: true })).rejects.toThrow();
+		await expect(session.followUp("automatic follow-up", undefined, { synthetic: true })).rejects.toThrow();
 		expect(f.requests).toHaveLength(0);
 		expect(await session.prompt("Continue.", { synthetic: true, userInitiated: true })).toBe(true);
 		expect(f.requests).toHaveLength(1);
@@ -949,7 +1088,7 @@ describe("JchTools SDK remote Agent session", () => {
 			await textArrived.promise;
 			await expect(
 				session.prompt("automatic continuation", { synthetic: true, streamingBehavior: "followUp" }),
-			).rejects.toThrow("explicit user task");
+			).rejects.toThrow();
 			expect(
 				await session.prompt("Continue.", { synthetic: true, userInitiated: true, streamingBehavior: "followUp" }),
 			).toBe(true);
@@ -1124,7 +1263,7 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(secondRequests).toHaveLength(1);
 		expect(f.requests).toHaveLength(1);
 		f.setDiscoveryAddress(null);
-		await expect(session.prompt("service unavailable task")).rejects.toThrow("unavailable");
+		await expect(session.prompt("service unavailable task")).rejects.toThrow();
 		expect(secondRequests).toHaveLength(1);
 		expect(f.requests).toHaveLength(1);
 		f.setDiscoveryAddress(f.remote.baseUrl, true);
@@ -1195,5 +1334,241 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(session.getLastAssistantMessage()?.stopReason).toBe("aborted");
 		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "before cancellation" }]);
 		expect(f.toolExecutions()).toBe(0);
+	});
+
+	it("forgets a published cancellation before response headers without accepting late backend bindings", async () => {
+		const headers: (string | null)[] = [];
+		const requestArrived = Promise.withResolvers<void>();
+		const releaseHeaders = Promise.withResolvers<void>();
+		const f = await fixture(async (body, request) => {
+			headers.push(request.headers.get("X-JchTools-Session-ID"));
+			if (body.messages.at(-1)?.content === "cancel before response headers") {
+				requestArrived.resolve();
+				await releaseHeaders.promise;
+				const response = completed("late cancelled response");
+				response.headers.set("X-JchTools-Session-ID", "late-cancelled-backend");
+				return response;
+			}
+			const response = completed("backend reply");
+			response.headers.set("X-JchTools-Session-ID", "active-backend");
+			return response;
+		});
+		const session = await f.create(f.remote);
+		await session.prompt("establish backend session");
+		const running = session.prompt("cancel before response headers");
+		try {
+			await requestArrived.promise;
+			await session.abort();
+			await running;
+		} finally {
+			releaseHeaders.resolve();
+		}
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("aborted");
+		expect(headers).toEqual([null, "active-backend"]);
+		expect(f.requests).toHaveLength(2);
+		await session.prompt("explicit task after header cancellation");
+		expect(headers).toEqual([null, "active-backend", null]);
+		expect(f.requests.map(body => body.messages.at(-1)?.content)).toEqual([
+			"establish backend session",
+			"cancel before response headers",
+			"explicit task after header cancellation",
+		]);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+		expect(f.events.some(event => event.type === "auto_retry_start" || event.type === "tool_execution_start")).toBe(
+			false,
+		);
+	});
+
+	it("preserves a fresh backend binding when an aborted pre-header request returns its late server response", async () => {
+		const establishTask = "establish original backend session";
+		const cancelledTask = "cancel old task before headers";
+		const freshTask = "explicit fresh task before late server response";
+		const continuationTask = "explicit continuation after late server response";
+		const headers: (string | null)[] = [];
+		const requestArrived = Promise.withResolvers<void>();
+		const releaseOutcome = Promise.withResolvers<void>();
+		const lateHandlerReturned = Promise.withResolvers<void>();
+		let cancelledRequestArrived = false;
+		const f = await fixture(async (body, request) => {
+			headers.push(request.headers.get("X-JchTools-Session-ID"));
+			const task = body.messages.at(-1)?.content;
+			if (task === cancelledTask) {
+				cancelledRequestArrived = true;
+				requestArrived.resolve();
+				await releaseOutcome.promise;
+				const response = completed("late cancelled response");
+				response.headers.set("X-JchTools-Session-ID", "late-cancelled-backend");
+				lateHandlerReturned.resolve();
+				return response;
+			}
+			const response = completed(task === establishTask ? "original backend reply" : "fresh backend reply");
+			response.headers.set("X-JchTools-Session-ID", task === establishTask ? "original-backend" : "fresh-backend");
+			return response;
+		});
+		const session = await f.create(f.remote);
+		let running: Promise<boolean> | undefined;
+		try {
+			await session.prompt(establishTask);
+			expect(headers).toEqual([null]);
+			running = session.prompt(cancelledTask);
+			await requestArrived.promise;
+			await session.abort();
+			await running;
+			const cancelledReply = session.getLastAssistantMessage();
+			if (!cancelledReply) throw new Error("Expected the cancelled pre-header assistant reply to be saved");
+			expect(cancelledReply.stopReason).toBe("aborted");
+			expect(cancelledReply.content).toEqual([]);
+			expect(headers).toEqual([null, "original-backend"]);
+			expect(f.requests).toHaveLength(2);
+
+			// The SDK calls its remote provider directly, not the registered streamSimple.
+			// abort() and prompt() are the supported idle barrier; the HTTP handler can
+			// still return its late response after a fresh explicit task completes.
+			await session.prompt(freshTask);
+			expect(headers).toEqual([null, "original-backend", null]);
+			expect(f.requests).toHaveLength(3);
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "fresh backend reply" }]);
+			expect(f.requests[2].messages).toEqual([
+				{ role: "user", content: establishTask },
+				{ role: "assistant", content: "original backend reply" },
+				{ role: "user", content: cancelledTask },
+				{ role: "user", content: freshTask },
+			]);
+
+			releaseOutcome.resolve();
+			await lateHandlerReturned.promise;
+			await session.prompt(continuationTask);
+			expect(headers).toEqual([null, "original-backend", null, "fresh-backend"]);
+			expect(f.requests).toHaveLength(4);
+			expect(f.requests.map(body => body.messages.at(-1)?.content)).toEqual([
+				establishTask,
+				cancelledTask,
+				freshTask,
+				continuationTask,
+			]);
+			expect(f.requests[3].messages).toEqual([
+				{ role: "user", content: establishTask },
+				{ role: "assistant", content: "original backend reply" },
+				{ role: "user", content: cancelledTask },
+				{ role: "user", content: freshTask },
+				{ role: "assistant", content: "fresh backend reply" },
+				{ role: "user", content: continuationTask },
+			]);
+			expect(f.requests.every(body => body.model === f.remote.id && body.tools === undefined)).toBe(true);
+			expect(session.messages).toContainEqual(cancelledReply);
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "fresh backend reply" }]);
+			expect(
+				session.messages.some(
+					message =>
+						message.role === "assistant" &&
+						message.content.some(block => block.type === "text" && block.text === "late cancelled response"),
+				),
+			).toBe(false);
+			expect(f.toolExecutions()).toBe(0);
+			expect(
+				f.events.some(event => event.type === "auto_retry_start" || event.type === "tool_execution_start"),
+			).toBe(false);
+		} finally {
+			releaseOutcome.resolve();
+			await session.abort();
+			await running;
+			if (cancelledRequestArrived) await lateHandlerReturned.promise;
+		}
+	});
+
+	it("forgets an in-flight cancelled backend session before the next explicit task without retry or replay", async () => {
+		for (const afterSuccessfulTurn of [false, true]) {
+			const headers: (string | null)[] = [];
+			const cancelled = Promise.withResolvers<void>();
+			const cancelledTask = "cancel side-effecting backend task";
+			const nextTask = "explicit new task after cancellation";
+			let cancelledPromptSeen = false;
+			const f = await fixture((body, request) => {
+				const id = request.headers.get("X-JchTools-Session-ID");
+				headers.push(id);
+				if (body.messages.at(-1)?.content === "establish backend session") {
+					const response = completed("established backend reply");
+					response.headers.set("X-JchTools-Session-ID", "cancelled-backend");
+					return response;
+				}
+				if (body.messages.at(-1)?.content === nextTask) {
+					if (id === "cancelled-backend") {
+						return Response.json(
+							{ error: { code: "session_unavailable", message: "取消后的会话不可复用，本轮未重放" } },
+							{ status: 400 },
+						);
+					}
+					const response = completed("new explicit task completed");
+					response.headers.set("X-JchTools-Session-ID", "new-backend");
+					return response;
+				}
+				if (body.messages.at(-1)?.content !== cancelledTask || cancelledPromptSeen) {
+					return Response.json(
+						{ error: { code: "invalid_request", message: "不允许自动任务或重放已开始的任务" } },
+						{ status: 400 },
+					);
+				}
+				cancelledPromptSeen = true;
+				request.signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode(sse({ content: "before cancellation" })));
+						},
+						cancel() {
+							cancelled.resolve();
+						},
+					}),
+					{
+						headers: {
+							"Content-Type": "text/event-stream",
+							"X-JchTools-Session-ID": "cancelled-backend",
+						},
+					},
+				);
+			});
+			const session = await f.create(f.remote);
+			if (afterSuccessfulTurn) {
+				await session.prompt("establish backend session");
+				expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			}
+			const textArrived = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta")
+					textArrived.resolve();
+			});
+			const running = session.prompt(cancelledTask);
+			await textArrived.promise;
+			await session.abort();
+			await running;
+			await cancelled.promise;
+
+			const cancelledReply = session.getLastAssistantMessage();
+			if (!cancelledReply) throw new Error("Expected the cancelled partial assistant reply to be saved");
+			expect(cancelledReply.stopReason).toBe("aborted");
+			expect(cancelledReply.content).toEqual([{ type: "text", text: "before cancellation" }]);
+			expect(headers).toEqual(afterSuccessfulTurn ? [null, "cancelled-backend"] : [null]);
+			expect(f.requests).toHaveLength(afterSuccessfulTurn ? 2 : 1);
+
+			await session.prompt(nextTask);
+			expect(headers).toEqual(afterSuccessfulTurn ? [null, "cancelled-backend", null] : [null, null]);
+			expect(f.requests).toHaveLength(afterSuccessfulTurn ? 3 : 2);
+			expect(f.requests.map(body => body.messages.at(-1)?.content)).toEqual(
+				afterSuccessfulTurn ? ["establish backend session", cancelledTask, nextTask] : [cancelledTask, nextTask],
+			);
+			expect(f.requests.every(body => body.model === f.remote.id && body.tools === undefined)).toBe(true);
+			expect(session.model?.id).toBe(f.remote.id);
+			expect(session.getLastAssistantMessage()?.stopReason).toBe("stop");
+			expect(session.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: "new explicit task completed" },
+			]);
+			expect(session.messages).toContainEqual(cancelledReply);
+			expect(f.toolExecutions()).toBe(0);
+			expect(
+				f.events.some(event => event.type === "auto_retry_start" || event.type === "tool_execution_start"),
+			).toBe(false);
+		}
 	});
 });

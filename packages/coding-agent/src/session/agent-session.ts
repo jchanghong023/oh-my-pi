@@ -7550,7 +7550,8 @@ export class AgentSession implements SettingsScope {
 				throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
 			}
 		}
-		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+		// Remote slash commands belong to the backend, not local command handlers or templates.
+		const expandPromptTemplates = !isJchToolsAgentModel(this.model) && (options?.expandPromptTemplates ?? true);
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
 		const typedText = text;

@@ -29,19 +29,23 @@ export function isJchToolsAgentModel(model: Pick<Model<Api>, "api"> | undefined)
 class JchToolsSessionState implements ProviderSessionState {
 	#scope: string | undefined;
 	#sessionId: string | undefined;
-	close(): void {
+	#requestId: string | undefined;
+	close(requestId?: string): void {
+		if (requestId !== undefined && requestId !== this.#requestId) return;
 		this.#scope = undefined;
 		this.#sessionId = undefined;
+		this.#requestId = undefined;
 	}
-	bind(scope: string): string | undefined {
+	bind(scope: string, requestId: string): string | undefined {
 		if (scope !== this.#scope) {
 			this.close();
 			this.#scope = scope;
 		}
+		this.#requestId = requestId;
 		return this.#sessionId;
 	}
-	remember(scope: string, id: string): void {
-		if (this.#scope === scope) this.#sessionId = id;
+	remember(scope: string, id: string, requestId: string): void {
+		if (this.#scope === scope && this.#requestId === requestId) this.#sessionId = id;
 	}
 }
 
@@ -173,6 +177,9 @@ export function streamJchToolsAgent(
 		let status: number | undefined;
 		let httpStartedAt: number | undefined;
 		let firstEvent = false;
+		let sessionState: JchToolsSessionState | undefined;
+		let requestPublished = false;
+		const detachCancelledTask = () => sessionState?.close(callId);
 		let finished = false;
 		let done = false;
 		let modelIdHash: string | undefined;
@@ -231,7 +238,7 @@ export function streamJchToolsAgent(
 			const scope = options?.sessionId
 				? `${options.sessionId}\0${path.resolve(options.cwd)}\0${base.origin}`
 				: undefined;
-			let sessionState: JchToolsSessionState | undefined;
+			options?.signal?.throwIfAborted();
 			if (scope && options?.providerSessionState) {
 				// Old projection bindings are incompatible with the new complete, filtered history.
 				const legacy = options.providerSessionState.get(JCHTOOLS_API);
@@ -247,7 +254,7 @@ export function streamJchToolsAgent(
 					options.providerSessionState.set(JCHTOOLS_SESSION_STATE_KEY, sessionState);
 				}
 			}
-			const backendSessionId = scope ? sessionState?.bind(scope) : undefined;
+			const backendSessionId = scope ? sessionState?.bind(scope, callId) : undefined;
 			const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "text/event-stream" };
 			if (backendSessionId) headers["X-JchTools-Session-ID"] = backendSessionId;
 			options?.signal?.throwIfAborted();
@@ -265,13 +272,19 @@ export function streamJchToolsAgent(
 				model_id_hash: modelIdHash,
 				message_count: messages.length,
 			});
-			const response = await fetch(new URL("/v1/chat/completions", base), {
+			const responsePromise = fetch(new URL("/v1/chat/completions", base), {
 				method: "POST",
 				headers,
 				body: JSON.stringify({ model: model.id, messages, stream: true, cwd: options.cwd }),
 				signal: options.signal,
 				redirect: "error",
 			});
+			// Detach at publication cancellation, before fetch rejection or error finalization can settle.
+			requestPublished = true;
+			options?.signal?.addEventListener("abort", detachCancelledTask, { once: true });
+			if (options?.signal?.aborted) detachCancelledTask();
+			const response = await responsePromise;
+			options?.signal?.throwIfAborted();
 			status = response.status;
 			logger.info("JchTools remote HTTP response", {
 				component: "jchtools",
@@ -288,7 +301,8 @@ export function streamJchToolsAgent(
 				try {
 					const envelope: unknown = JSON.parse(body);
 					if (isRecord(envelope) && envelope.error !== undefined) {
-						if (isRecord(envelope.error) && envelope.error.code === "session_unavailable") sessionState?.close();
+						if (isRecord(envelope.error) && envelope.error.code === "session_unavailable")
+							sessionState?.close(callId);
 						detail = errorDetail(envelope.error);
 					}
 				} catch (error) {
@@ -313,7 +327,7 @@ export function streamJchToolsAgent(
 				throw responseError("response is not a text/event-stream");
 			}
 			const responseSessionId = response.headers.get("X-JchTools-Session-ID");
-			if (scope && responseSessionId) sessionState?.remember(scope, responseSessionId);
+			if (scope && responseSessionId) sessionState?.remember(scope, responseSessionId, callId);
 			stage = "read_sse";
 			for await (const event of readSseEvents(response.body, options?.signal)) {
 				options?.signal?.throwIfAborted();
@@ -430,13 +444,18 @@ export function streamJchToolsAgent(
 				signal: options?.signal,
 			});
 			output.stopReason = result.stopReason;
-			if (result.stopReason === "aborted") terminalResult = "aborted";
+			if (result.stopReason === "aborted") {
+				terminalResult = "aborted";
+				// Delayed cleanup belongs only to this task, never a later explicit request's binding.
+				if (requestPublished) detachCancelledTask();
+			}
 			output.errorStatus = result.status;
 			output.errorId = result.id;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startedAt;
 			stream.push({ type: "error", reason: result.stopReason, error: output });
 		} finally {
+			options?.signal?.removeEventListener("abort", detachCancelledTask);
 			const fields = {
 				component: "jchtools",
 				event: "jchtools_request_finished",

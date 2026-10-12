@@ -63,6 +63,7 @@ function createStubInputControllerContext(opts: {
 	isStreaming: boolean;
 	isCompacting?: boolean;
 	loopModeEnabled?: boolean;
+	model?: InteractiveModeContext["session"]["model"];
 }) {
 	let editorText = "";
 	const editor: StubEditor = {
@@ -107,6 +108,7 @@ function createStubInputControllerContext(opts: {
 		ui: { requestRender },
 		skillCommands: opts.skillCommands,
 		session: {
+			model: opts.model,
 			isStreaming: opts.isStreaming,
 			isCompacting: opts.isCompacting ?? false,
 			isBashRunning: false,
@@ -333,6 +335,70 @@ describe("InputController skill queue chip metadata", () => {
 		expect(editor.pendingImages).toEqual([]);
 		expect(editor.pendingImageLinks).toEqual([]);
 		expect(editor.imageLinks).toBeUndefined();
+	});
+});
+
+describe("InputController remote-owned skill commands", () => {
+	let tempDir: TempDir;
+	let skillCommands: Map<string, Skill>;
+	let model: NonNullable<InteractiveModeContext["session"]["model"]>;
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@pi-remote-skill-queue-");
+		const bundledModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!bundledModel) throw new Error("Expected built-in anthropic model to exist");
+		model = { ...bundledModel, api: "jchtools-agent" };
+		// A registered collision with an absent file makes any frontend load fail.
+		const skill: Skill = {
+			name: "test-skill",
+			description: "Frontend skill that must not own the remote task",
+			filePath: path.join(tempDir.path(), "missing-skill.md"),
+			baseDir: tempDir.path(),
+			source: "test",
+		};
+		skillCommands = new Map([["skill:test-skill", skill]]);
+	});
+
+	afterEach(() => {
+		tempDir.removeSync();
+		vi.restoreAllMocks();
+	});
+
+	it("admits an Enter skill collision as the complete ordinary steer task", async () => {
+		const { ctx, editor, prompt, promptCustomMessage, showError, renderOptimisticSkillMessage } =
+			createStubInputControllerContext({ skillCommands, isStreaming: true, model });
+		const controller = new InputController(ctx);
+		const task = "/skill:test-skill preserve the original /command and all arguments";
+
+		controller.setupEditorSubmitHandler();
+		editor.setText(task);
+		if (!editor.onSubmit) throw new Error("Expected installed editor submit handler");
+		await editor.onSubmit(task);
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledWith(task, { streamingBehavior: "steer", images: undefined });
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(showError).not.toHaveBeenCalled();
+		expect(renderOptimisticSkillMessage).not.toHaveBeenCalled();
+		expect(editor.addToHistory).toHaveBeenCalledWith(task);
+	});
+
+	it("admits a Ctrl+Enter skill collision as the complete ordinary follow-up without loading its file", async () => {
+		const { ctx, editor, prompt, promptCustomMessage, showError, renderOptimisticSkillMessage } =
+			createStubInputControllerContext({ skillCommands, isStreaming: true, model });
+		const controller = new InputController(ctx);
+		const task = "/skill:test-skill preserve the original /command and all arguments";
+
+		editor.setText(task);
+		await controller.handleFollowUp();
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledWith(task, { streamingBehavior: "followUp", images: undefined });
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(showError).not.toHaveBeenCalled();
+		expect(renderOptimisticSkillMessage).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("");
+		expect(editor.addToHistory).toHaveBeenCalledWith(task);
 	});
 });
 

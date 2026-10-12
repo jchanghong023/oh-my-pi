@@ -2203,6 +2203,40 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("dispatches backend-owned /skill commands literally despite an unreadable local skill collision", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("expected ACP session to exist after newSession");
+		await session.setModel(buildModel({ ...TEST_MODELS[0]!, api: "jchtools-agent" }));
+		const skillDir = path.join(harness.cwdA, ".skills", "sample");
+		session.skills = [
+			{
+				name: "sample",
+				description: "Local skill collision",
+				filePath: path.join(skillDir, "missing-SKILL.md"),
+				baseDir: skillDir,
+				source: "test",
+			},
+		];
+		const text = "/skill:sample extra context\nKeep the native command literal.";
+
+		try {
+			const result = await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text }],
+			});
+
+			expect(result.stopReason).toBe("end_turn");
+			expect(session.promptCalls).toEqual([text]);
+			expect(session.customMessages).toEqual([]);
+			expect(session.customMessageOptions).toEqual([]);
+		} finally {
+			harness.abortController.abort();
+			await harness.agent.dispose();
+		}
+	});
+
 	it("auto-cancels an in-progress turn and queues a new prompt when called mid-flight", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

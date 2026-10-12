@@ -22,6 +22,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { $env, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import type { MCPManager } from "../../mcp";
 import {
@@ -275,7 +276,7 @@ export type RpcSessionChangeResult =
 
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
 
-export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
+export type RpcSkillCommandSession = Pick<AgentSession, "model" | "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true };
 
 export interface RpcSkillInvocation extends SkillPromptInput {
@@ -289,6 +290,7 @@ export interface RpcSkillInvocation extends SkillPromptInput {
  * command. Performs no I/O — safe to run on the RPC serial queue.
  */
 export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text: string): RpcSkillInvocation | null {
+	if (isJchToolsAgentModel(session.model)) return null;
 	if (!session.skillsSettings?.enableSkillCommands) return null;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return null;

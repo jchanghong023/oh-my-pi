@@ -1,4 +1,5 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import { buildSkillPromptMessage, getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
@@ -11,7 +12,7 @@ type SkillCommandHost = Pick<
 	| "clearOptimisticSkillMessage"
 	| "optimisticSkillMessagePending"
 > & {
-	session: Pick<InteractiveModeContext["session"], "promptCustomMessage" | "isStreaming">;
+	session: Pick<InteractiveModeContext["session"], "model" | "promptCustomMessage" | "isStreaming">;
 };
 
 type SkillPromptMessage = Pick<
@@ -52,6 +53,7 @@ export interface BuiltSkillCommandPrompt {
 
 /** Return true when `text` invokes a registered `/skill:<name>` command. */
 export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolean {
+	if (isJchToolsAgentModel(ctx.session.model)) return false;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return false;
 	return ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name }));
@@ -64,6 +66,7 @@ export async function buildSkillCommandPrompt(
 	streamingBehavior: "steer" | "followUp",
 	images?: ImageContent[],
 ): Promise<BuiltSkillCommandPrompt | undefined> {
+	if (isJchToolsAgentModel(ctx.session.model)) return undefined;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return undefined;
 	const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));

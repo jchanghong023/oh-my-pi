@@ -23,6 +23,8 @@
 - Fixed stale archive listings and member reads after rapid same-size rewrites with restored timestamps on Windows.
 - Fixed remote JchTools ACP sessions and supported one-shot text consumers to use the caller's live task cwd instead of the backend's default workspace, including isolated task worktrees, terminal defaults, and rejection of cwd changes within the same backend session.
 - Cleared explicitly invalid JchTools backend session bindings so the next caller request can create a new session without retrying the failed task.
+- Preserved native JchTools slash and skill commands instead of consuming them as local extension commands or prompt templates.
+- Started a fresh JchTools session for the next explicit task after cancellation, without replaying cancelled work or reviving its binding from a late response.
 - Replaced per-request `/goal-auto-orchestrate` injection with additive initial and post-compaction history notices, retaining normal Goal prompts and stable provider-history prefixes without custom queue filtering; command help now describes these persistence boundaries accurately.
 - Restricted first `/goal-auto-orchestrate` notices to their admitted objective submissions and kept JchTools remote Agent history free of frontend Goal preludes.
 - Removed duplicate budget/todo snapshots from Goal auto-orchestration notices and scoped WSL Git-write diagnostics to the gate itself.
