@@ -622,9 +622,7 @@ describe("Composer prepaint", () => {
 	it("renders the complete interactive welcome scene on the first frame", async () => {
 		const terminal = new CountingTerminal(80, 32);
 		const composer = new Composer({
-			// The scene assertions (curved prompt `╰`) target the framed
-			// band/box shapes; the fork's default `pi` shape draws horizontal
-			// rules instead, so pin the shape under test explicitly.
+			// Pin the band shape explicitly for this welcome-scene rendering test.
 			preferences: { ...config, composerShape: "band" },
 			terminal,
 			welcome: { version: "9.9.9" },

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
 - Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
 
 ## [18.10.2] - 2026-10-12
