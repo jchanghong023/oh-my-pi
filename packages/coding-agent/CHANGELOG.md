@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the built-in CodeAgent model with cached Windows registry credentials, one changed-token retry before streaming output, and automatic hiding under `OMP_OFFLINE`.
 - Added a Windows runtime proxy fallback: with no proxy environment variables set, process-wide fetch traffic (LLM streams, OAuth/usage probes, model discovery, update checks) now honors the per-user Windows system proxy after explicit per-request and environment proxies, with `NO_PROXY` and loopback bypasses unchanged.
 - Added fork zero-config TLS defaults: the CLI network bootstrap now defaults `NODE_TLS_REJECT_UNAUTHORIZED=0` and `GIT_SSL_NO_VERIFY=true` when neither is explicitly set, so interception proxies and private gateways with unknown root CAs work without per-machine setup; explicit values restore strict verification.
 - Relaxed the Windows installer's own TLS posture to match: curl downloads pass `--insecure --ssl-no-revoke`, PowerShell 5.1 enables TLS 1.2 with a permissive validation callback, and PowerShell 7+ web requests pass `-SkipCertificateCheck`; the post-download version probe still gates integrity.
@@ -31,6 +32,10 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+
+### Fixed
+
+- Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
 
 ## [18.10.1] - 2026-10-12
 

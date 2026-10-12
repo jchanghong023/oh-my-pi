@@ -1,0 +1,5 @@
+// The runtime CodeAgent transport supplies its registry-backed x-auth-token.
+auth "codeagent" {
+	name "CodeAgent"
+	allows-missing-api-key #true
+}

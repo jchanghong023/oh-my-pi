@@ -16,7 +16,13 @@ import {
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, getProviderInFlightRoot, isEnoent, logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
-import { createAuthRetryKeyState, isApiKeyResolver, resolvedApiKeyBearer, resolveNextAuthRetryKey } from "./auth-retry";
+import {
+	createAuthRetryKeyState,
+	isApiKeyResolver,
+	NO_AUTH_SENTINEL,
+	resolvedApiKeyBearer,
+	resolveNextAuthRetryKey,
+} from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
 import { getEnvApiKey } from "./env-api-key";
 import * as AIError from "./error";
@@ -1070,6 +1076,7 @@ const THINKING_LOOP_RETRY_MAX_DELAY_MS = 8_000;
 
 function isRetryableThinkingLoop(message: AssistantMessage): boolean {
 	return (
+		message.provider !== "codeagent" &&
 		message.stopReason === "error" &&
 		message.content.length === 0 &&
 		AIError.is(message.errorId, AIError.Flag.ThinkingLoop)
@@ -1284,7 +1291,10 @@ function streamSimpleRequest<TApi extends Api>(
 		withTransportFetch(model, (options || {}) as SimpleStreamOptions),
 	);
 
-	const apiKeyResolver = isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
+	// CodeAgent 的认证与唯一刷新重试属于其请求层，不能进入通用凭据轮换。
+	const apiKeyResolver = model.provider !== "codeagent" && isApiKeyResolver(requestOptions?.apiKey)
+		? requestOptions.apiKey
+		: undefined;
 	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();
 		const signal = requestOptions?.signal;
@@ -1474,6 +1484,10 @@ function streamSimpleRequest<TApi extends Api>(
 				customApiProvider.streamSimple(model, context, { ...opts, waitForTerminalDrain: limited }),
 			),
 		);
+	}
+
+	if (model.provider === "codeagent") {
+		return stream(model, context, mapOptionsForApi(model, requestOptions, NO_AUTH_SENTINEL));
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys

@@ -12,6 +12,10 @@
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Added the missing keyless CodeAgent authentication policy so the provider registry's type-completeness check includes the built-in model.
+
 ## [18.10.0] - 2026-10-12
 
 ### Changed

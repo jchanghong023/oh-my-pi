@@ -34,7 +34,8 @@ export function transportFetch(model: Model<Api>, fetchImpl: FetchImpl | undefin
 		const extraCa = resolveExtraCa();
 		if (extraCa) init = withExtraCaInit(init, extraCa);
 		if (proxyUrl) init = withProxyInit(input, init, proxyUrl);
-		if (!isRequestDebugEnabled()) return base(input, init);
+		// CodeAgent 凭据及可能回显凭据的响应不得进入原始请求日志。
+		if (model.provider === "codeagent" || !isRequestDebugEnabled()) return base(input, init);
 		const session = await createFetchRequestDebugSession(input, init);
 		return session.wrapResponse(await base(input, init));
 	};

@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import type { AgentMessage, SyntheticToolResultDetails } from "@oh-my-pi/pi-agent-core";
+import { type } from "@oh-my-pi/omptype";
+import { Agent, type AgentMessage, type AgentTool, type SyntheticToolResultDetails } from "@oh-my-pi/pi-agent-core";
+import { TERMINAL_TOOL_RESULT_ABORT_REASON } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Model, Usage } from "@oh-my-pi/pi-catalog/types";
+import {
+	CodeAgentTokenCache,
+	getCodeAgentModels,
+	streamCodeAgent,
+} from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -133,6 +140,87 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 	afterAll(() => {
 		authStorage.close();
 		tempDir.removeSync();
+	});
+
+	it("accepts busy CodeAgent input once and executes its forced yield through the real provider", async () => {
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const requests: Array<{ tool_choice?: { function?: { name?: string } } }> = [];
+		const parameters = type({ data: "string" });
+		const submitted: string[] = [];
+		const yieldTool: AgentTool<typeof parameters> = {
+			name: "yield",
+			label: "Yield",
+			description: "Submit the final result",
+			parameters,
+			intent: "omit",
+			async execute(_id, args) {
+				submitted.push(args.data);
+				return { content: [{ type: "text", text: "submitted" }], details: { data: args.data } };
+			},
+		};
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const body = await request.json() as { tool_choice?: { function?: { name?: string } } };
+				requests.push(body);
+				if (requests.length === 1) {
+					firstStarted.resolve();
+					await releaseFirst.promise;
+				}
+				const forceYield = body.tool_choice?.function?.name === "yield";
+				const delta = forceYield
+					? { tool_calls: [{ index: 0, id: "yield_1", type: "function", function: { name: "yield", arguments: '{"data":"completed"}' } }] }
+					: { content: "ordinary answer" };
+				return new Response(
+					`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: null }] })}\n\n` +
+					`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: forceYield ? "tool_calls" : "stop" }] })}\n\n` +
+					"data: [DONE]\n\n",
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		const codeagent = { ...getCodeAgentModels()[0]!, baseUrl: server.url.origin };
+		const cache = new CodeAgentTokenCache(() => "synthetic-token");
+		const agent: Agent = new Agent({
+			getApiKey: () => "synthetic-token",
+			streamFn: (_model, context, options) => streamCodeAgent(codeagent, context, { ...options, fetch }, cache),
+			afterToolCall: () => {
+				agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+				return undefined;
+			},
+			initialState: { model: codeagent, tools: [yieldTool] },
+		});
+		const host = createHost(codeagent, modelRegistry);
+		host.agent = agent;
+		const recovery = new TurnRecovery(host);
+		let first: Promise<void> | undefined;
+		let delivered: Promise<void> | undefined;
+		try {
+			first = agent.prompt("prior input");
+			await firstStarted.promise;
+			expect(agent.state.isStreaming).toBe(true);
+			delivered = recovery.promptAgentWithIdleRetry(
+				[{ role: "user", content: "submit result", timestamp: Date.now() }],
+				{ toolChoice: { type: "function", name: "yield" } },
+			);
+			// Observe rejection immediately if the busy-delivery regression returns.
+			const deliveryOutcome = delivered.then(() => undefined, error => error);
+			releaseFirst.resolve();
+			await first;
+			expect(await deliveryOutcome).toBeUndefined();
+			expect(submitted).toEqual(["completed"]);
+			expect(requests).toHaveLength(2);
+			expect(agent.state.messages.filter(message => message.role === "user" && message.content === "submit result")).toHaveLength(1);
+			const result = agent.state.messages.find(message => message.role === "toolResult");
+			expect(result).toMatchObject({ role: "toolResult", toolName: "yield", isError: false, content: [{ type: "text", text: "submitted" }] });
+		} finally {
+			releaseFirst.resolve();
+			agent.abort();
+			await Promise.allSettled([first, delivered]);
+			server.stop(true);
+		}
 	});
 
 	it("rolls back a usage fallback cancelled during model reconciliation", async () => {

@@ -57,6 +57,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
 import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError, isCompanyLaneActive } from "./company-provider";
+import { CODEAGENT_PROVIDER_ID, getCodeAgentModels, initializeCodeAgentProvider } from "./codeagent-provider";
 import {
 	discoverJchToolsModels,
 	isJchToolsDiscoveryEnabled,
@@ -576,6 +577,8 @@ export class ModelRegistry {
 			fetch: options?.jchToolsDiscovery?.fetch ?? this.#fetch,
 		};
 		if (this.#canDiscoverJchTools()) registerCustomApi(JCHTOOLS_API, streamJchToolsAgent, "builtin:jchtools");
+		if (!this.#ignoreLocalModelConfig && !isCompanyLaneActive() &&
+			!getDisabledProviderIdsFromSettings(this.#settings).has(CODEAGENT_PROVIDER_ID)) initializeCodeAgentProvider();
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
@@ -1258,7 +1261,10 @@ export class ModelRegistry {
 			if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
 			// The local proxy lane disappears from every offline process, with or
 			// without usable company config.
-			else providers.add(ZCODE_API_PROVIDER_ID);
+			else {
+				providers.add(ZCODE_API_PROVIDER_ID);
+				providers.add(CODEAGENT_PROVIDER_ID);
+			}
 		}
 		if (this.#jchToolsModels.length > 0 && this.#canDiscoverJchTools()) providers.add(JCHTOOLS_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
@@ -1394,13 +1400,22 @@ export class ModelRegistry {
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		if (this.#ignoreLocalModelConfig) return models;
 		const stripped = models.filter(
-			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID,
+			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID &&
+				model.provider !== CODEAGENT_PROVIDER_ID,
 		);
 		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
 			stripped.push(...getCompanyChatModels());
 		}
 		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
 			stripped.push(...getZcodeApiModels());
+		}
+		if (
+			process.platform === "win32" &&
+			!isCompanyLaneActive() &&
+			(!providerFilter || providerFilter.has(CODEAGENT_PROVIDER_ID))
+		) {
+			initializeCodeAgentProvider();
+			stripped.push(...getCodeAgentModels());
 		}
 		const companyIncluded = !providerFilter || providerFilter.has(COMPANY_PROVIDER_ID);
 		const zcodeIncluded = !providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID);
@@ -1969,6 +1984,7 @@ export class ModelRegistry {
 		// request auth resolves to the no-auth sentinel and the model rows are
 		// static, so it needs neither discovery nor a stored key.
 		if (!this.#ignoreLocalModelConfig) this.#keylessProviders.add(ZCODE_API_PROVIDER_ID);
+		if (!this.#ignoreLocalModelConfig && !isCompanyLaneActive()) this.#keylessProviders.add(CODEAGENT_PROVIDER_ID);
 	}
 
 	#loadCustomModels(): CustomModelsResult {
@@ -2031,6 +2047,11 @@ export class ModelRegistry {
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 		for (const [providerName, providerConfig] of providerEntries) {
+			if (providerName === CODEAGENT_PROVIDER_ID) {
+				this.#warnReservedProviderConfig(providerName,
+					"this built-in provider uses only the current-user registry token; the whole section is ignored");
+				continue;
+			}
 			if (providerName === JCHTOOLS_PROVIDER_ID) {
 				this.#warnReservedProviderConfig(
 					providerName,
@@ -3241,6 +3262,7 @@ export class ModelRegistry {
 			if (
 				providerName === COMPANY_PROVIDER_ID ||
 				providerName === ZCODE_API_PROVIDER_ID ||
+				providerName === CODEAGENT_PROVIDER_ID ||
 				providerName === JCHTOOLS_PROVIDER_ID
 			)
 				continue;
@@ -3509,6 +3531,7 @@ export class ModelRegistry {
 	/** Whether settings disable `provider` (`disabledProviders`). */
 	#isProviderDisabled(provider: string): boolean {
 		if (provider === JCHTOOLS_PROVIDER_ID && !this.#canDiscoverJchTools()) return true;
+		if (provider === CODEAGENT_PROVIDER_ID && (this.#ignoreLocalModelConfig || isCompanyLaneActive())) return true;
 		return getDisabledProviderIdsFromSettings(this.#settings).has(provider);
 	}
 
@@ -3579,6 +3602,7 @@ export class ModelRegistry {
 		// its model was obtained.
 		if (this.#isProviderDisabled(model.provider)) return undefined;
 		if (model.provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig) return getCompanyConfig()?.token;
+		if (model.provider === CODEAGENT_PROVIDER_ID) return kNoAuth;
 		if (this.#isKeylessProvider(model.provider)) {
 			return kNoAuth;
 		}
@@ -3644,6 +3668,7 @@ export class ModelRegistry {
 			const apiKey = getCompanyConfig()?.token;
 			return apiKey === undefined ? undefined : { apiKey };
 		}
+		if (provider === CODEAGENT_PROVIDER_ID) return { apiKey: kNoAuth };
 		if (options?.forceRefresh) this.#invalidateProviderCommandConfigs(provider);
 		if (this.#isKeylessProvider(provider)) {
 			return { apiKey: kNoAuth };
@@ -3794,6 +3819,7 @@ export class ModelRegistry {
 	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
 		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
 		if (providerName === JCHTOOLS_PROVIDER_ID) throw new Error("The live JchTools provider cannot be replaced.");
+		if (providerName === CODEAGENT_PROVIDER_ID) throw new Error("The built-in CodeAgent provider cannot be replaced.");
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 		}

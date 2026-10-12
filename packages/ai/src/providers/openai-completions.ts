@@ -784,7 +784,7 @@ function createOpenAICompletionsStreamError(chunk: unknown, provider: string): E
 	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code: parsed.code });
 }
 
-const streamOpenAICompletionsOnce = (
+export const streamOpenAICompletionsOnce = (
 	model: Model<"openai-completions">,
 	context: Context,
 	options?: OpenAICompletionsOptions,
@@ -934,6 +934,7 @@ const streamOpenAICompletionsOnce = (
 							copilotCacheKey,
 							copilotCacheSnapshot,
 						),
+						maxAttempts: model.provider === "codeagent" ? 1 : undefined,
 						// Transient 408/429/5xx get Retry-After-aware transport retries.
 						// The first-event watchdog above aborts `requestSignal`, which
 						// bounds every attempt and backoff sleep — retries cannot
@@ -963,6 +964,8 @@ const streamOpenAICompletionsOnce = (
 			try {
 				openaiStream = await createCompletionsStream();
 			} catch (error) {
+				// CodeAgent 只能由凭据刷新层决定是否重放，禁止同 Token 的格式兜底重试。
+				if (model.provider === "codeagent") throw error;
 				const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 				// A caller disable with a retained effort preference is still an
 				// explicit disable: without this, a fieldless rejection of the
@@ -1702,7 +1705,11 @@ const streamOpenAICompletionsOnce = (
 			// `[DONE]` alone, so finalize those as the default `stop`
 			// (mapStopReason(null)) instead of surfacing a false incomplete-stream
 			// error and retrying every turn.
-			if (streamFinishedAt === undefined && !sawDoneSentinel && output.content.length > 0) {
+			if (
+				streamFinishedAt === undefined &&
+				!sawDoneSentinel &&
+				(model.provider === "codeagent" || output.content.length > 0)
+			) {
 				throw new AIError.ProviderResponseError(
 					"OpenAI completions stream closed before a finish_reason was received",
 					{ provider: model.provider, kind: "incomplete-stream" },
@@ -1766,12 +1773,21 @@ const streamOpenAICompletionsOnce = (
 			try {
 				finishOpenBlocksOnError();
 			} catch {}
-			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
-			const result = await AIError.finalize(error, {
+			const codeAgent = model.provider === "codeagent";
+			const capturedErrorResponse = !codeAgent && error instanceof OpenAIHttpError ? error.captured : undefined;
+			const safeError = !codeAgent
+				? error
+				: abortTracker.wasCallerAbort()
+					? new AIError.AbortError("CodeAgent request cancelled")
+					: error instanceof AIError.StreamTimeoutError ||
+							abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
+						? new AIError.StreamTimeoutError("CodeAgent request timed out")
+						: new AIError.ProviderHttpError("CodeAgent request failed", AIError.status(error) ?? 502);
+			const result = await AIError.finalize(safeError, {
 				api: model.api,
 				provider: model.provider,
 				abortTracker,
-				rawRequestDump,
+				rawRequestDump: codeAgent ? undefined : rawRequestDump,
 				capturedErrorResponse,
 			});
 			output.stopReason = result.stopReason;
@@ -1779,8 +1795,12 @@ const streamOpenAICompletionsOnce = (
 			output.errorId = result.id;
 			output.errorMessage = result.message;
 			// Some providers via OpenRouter include extra details here.
-			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
-			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			if (!codeAgent) {
+				const envelope = error && typeof error === "object" ? Reflect.get(error, "error") : undefined;
+				const metadata = envelope && typeof envelope === "object" ? Reflect.get(envelope, "metadata") : undefined;
+				const rawMetadata = metadata && typeof metadata === "object" ? Reflect.get(metadata, "raw") : undefined;
+				if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -1806,12 +1826,23 @@ function resolveOpenAICompletionsCompat(model: Model<"openai-completions">): Mod
 	return { ...model, compat };
 }
 
+// 当前用户注册表读取归 coding-agent 层所有；仅此 provider 使用这个内存钩子。
+let codeAgentStreamHandler: StreamFunction<"openai-completions"> | undefined;
+export function setCodeAgentStreamHandler(handler: StreamFunction<"openai-completions">): void {
+	codeAgentStreamHandler = handler;
+}
+
 /**
  * Retries benign empty completions and transient provider failures only before
  * assistant output commits the attempt.
  */
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (model, context, options) => {
 	const resolvedModel = resolveOpenAICompletionsCompat(model);
+	if (model.provider === "codeagent") {
+		return codeAgentStreamHandler
+			? codeAgentStreamHandler(resolvedModel, context, options)
+			: streamOpenAICompletionsOnce(resolvedModel, context, options);
+	}
 	return withReplaySafeStreamRetry(resolvedModel, context, options, streamOpenAICompletionsOnce, {
 		retryEmptyCompletion: true,
 		retryProviderErrors: true,
