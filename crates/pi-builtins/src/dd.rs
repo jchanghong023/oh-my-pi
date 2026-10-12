@@ -1974,16 +1974,23 @@ mod tests {
 
 	/// A pipe-like stdin delivering one queued chunk per `read`.
 	#[derive(Clone)]
-	struct Chunked(Arc<Mutex<VecDeque<Vec<u8>>>>);
+	struct Chunked(Arc<Mutex<VecDeque<Vec<u8>>>>, Option<io::ErrorKind>);
 
 	impl Chunked {
 		fn new(chunks: &[&[u8]]) -> Box<Self> {
-			Box::new(Self(Arc::new(Mutex::new(chunks.iter().map(|chunk| chunk.to_vec()).collect()))))
+			Box::new(Self(Arc::new(Mutex::new(chunks.iter().map(|chunk| chunk.to_vec()).collect())), None))
+		}
+
+		fn read_error(kind: io::ErrorKind) -> Box<Self> {
+			Box::new(Self(Arc::new(Mutex::new(VecDeque::new())), Some(kind)))
 		}
 	}
 
 	impl Read for Chunked {
 		fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+			if let Some(kind) = self.1 {
+				return Err(io::Error::from(kind));
+			}
 			let mut chunks = self.0.lock().unwrap();
 			let Some(chunk) = chunks.front_mut() else {
 				return Ok(0);
@@ -2369,9 +2376,10 @@ mod tests {
 	#[test]
 	fn read_errors_report_and_fail() {
 		let (_dir, root) = tempdir();
-		let outcome = run(&["if=."], b"", &root);
+		// Opening a directory fails before read on Windows; inject a read error instead.
+		let outcome = run_with(&[], Chunked::read_error(io::ErrorKind::PermissionDenied), &root);
 		assert_eq!(outcome.code, 1);
-		assert!(outcome.err.starts_with("dd: error reading '.': "), "{}", outcome.err);
+		assert!(outcome.err.starts_with("dd: error reading 'standard input': "), "{}", outcome.err);
 		assert!(outcome.stats().ends_with("0+0 records in\n0+0 records out\n0 bytes copied, T, R\n"));
 	}
 

@@ -138,6 +138,20 @@ fn verbose(host: &mut Host, dir: &OsStr) {
 }
 
 fn rmdir(host: &Host, dir: &OsStr) -> io::Result<()> {
+	#[cfg(windows)]
+	{
+		// Win32 normalizes a final "." away; rmdir must reject it before removal.
+		let last = dir
+			.as_encoded_bytes()
+			.rsplit(|&byte| byte == b'/' || byte == b'\\')
+			.find(|part| !part.is_empty());
+		if last == Some(b".".as_slice()) {
+			if !host.fs().metadata(host.resolve(dir))?.is_dir() {
+				return Err(pi_vfs::not_a_directory());
+			}
+			return Err(pi_vfs::invalid_argument());
+		}
+	}
 	host.fs().remove_dir(host.resolve(dir))
 }
 
@@ -358,5 +372,6 @@ mod tests {
 			run(&root, &["e/."]),
 			(1, String::new(), "rmdir: failed to remove 'e/.': Invalid argument\n".into())
 		);
+		assert!(root.join("e").is_dir());
 	}
 }

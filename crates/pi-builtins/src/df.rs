@@ -1758,6 +1758,10 @@ mod tests {
 		format!("df: {message}\nTry 'df --help' for more information.\n")
 	}
 
+	fn native_root() -> &'static Path {
+		Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().last().unwrap()
+	}
+
 	#[test]
 	fn usage_errors_exit_one() {
 		for args in [
@@ -1850,7 +1854,7 @@ mod tests {
 		let (code, out, err) = run(&[], &["--output=target", "/nonexistent-df-operand", "/"]);
 		assert_eq!(code, 1);
 		assert_eq!(err, "df: /nonexistent-df-operand: No such file or directory\n");
-		assert_eq!(out, "Mounted on\n/\n");
+		assert_eq!(out, format!("Mounted on\n{}\n", native_root().display()));
 	}
 
 	#[test]
@@ -1878,8 +1882,8 @@ mod tests {
 		assert!(lines[0].starts_with("File Mounted on"), "{out}");
 		// Relative operands resolve against the shell's directory and print
 		// as given.
-		assert!(lines[1].starts_with("src  /"), "{out}");
-		assert_eq!(lines[2], "/    /");
+		assert!(lines[1].starts_with(&format!("src  {}", native_root().display())), "{out}");
+		assert_eq!(lines[2], format!("/    {}", native_root().display()));
 	}
 
 	#[test]
@@ -1944,9 +1948,9 @@ mod tests {
 	fn total_row_names_target_dash_when_source_is_shown() {
 		let (code, out, _) = run(&[], &["--total", "--output=source,target", "/"]);
 		assert_eq!(code, 0);
-		assert_eq!(out.lines().last(), Some("total          -"));
+		assert_eq!(out.lines().last().unwrap().split_whitespace().collect::<Vec<_>>(), ["total", "-"]);
 		let (_, out, _) = run(&[], &["--total", "--output=target", "/"]);
-		assert_eq!(out, "Mounted on\n/\ntotal\n");
+		assert_eq!(out, format!("Mounted on\n{}\ntotal\n", native_root().display()));
 	}
 
 	#[test]

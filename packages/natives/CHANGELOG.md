@@ -5,6 +5,7 @@
 ### Fixed
 
 - Restored Windows native checks for the `uptime` and `du` builtins without unused-import or unused-mutability errors.
+- Prevented Windows `rmdir` from deleting a directory when its operand ends in `.`.
 
 ## [18.10.2] - 2026-10-12
 
