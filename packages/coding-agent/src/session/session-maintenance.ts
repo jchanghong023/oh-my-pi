@@ -2895,6 +2895,13 @@ export class SessionMaintenance {
 	): Promise<CompactionCheckResult> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
+		// CodeAgent 仅由凭据层决定是否重试；失败或输出截断不能触发维护重放。
+		if (
+			assistantMessage.provider === "codeagent" &&
+			(assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length")
+		) {
+			return COMPACTION_CHECK_NONE;
+		}
 		const contextWindow = this.#model?.contextWindow ?? 0;
 		const generation = this.#host.promptGeneration();
 		// A delivered turn means the incomplete-recovery loop broke through: clear

@@ -1,0 +1,16 @@
+// Fork-owned runtime lane; credentials are read from HKCU, never env/config.
+provider "codeagent" {
+	default-model "DeepSeek-V4-Flash-0731-CodeAgent"
+	allow-unauthenticated #true
+	automatic-default #false
+	supports-strict-mode #false
+	seed api="openai-completions" base-url="https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2" bundle="never" {
+		model "DeepSeek-V4-Flash-0731-CodeAgent" name="DeepSeek-V4-Flash-0731-CodeAgent" {
+			reasoning #true
+			supports-tools #true
+			input "text"
+			cost input=0 output=0 cache-read=0 cache-write=0
+			limits context=200000 max-tokens=32768
+		}
+	}
+}

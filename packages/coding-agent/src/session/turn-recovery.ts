@@ -596,13 +596,13 @@ export class TurnRecovery {
 
 	/** Handles empty terminal assistant turns and schedules bounded recovery. */
 	handleEmptyAssistantStop(message: AssistantMessage): Promise<"continue" | "terminal" | undefined> {
-		if (isJchToolsAgentModel(message)) return Promise.resolve(undefined);
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return Promise.resolve(undefined);
 		return this.#handleEmptyAssistantStop(message);
 	}
 
 	/** Classifies suspicious terminal stops and schedules bounded recovery. */
 	handleUnexpectedAssistantStop(message: AssistantMessage): Promise<boolean> {
-		if (isJchToolsAgentModel(message)) return Promise.resolve(false);
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return Promise.resolve(false);
 		return this.#handleUnexpectedAssistantStop(message);
 	}
 
@@ -618,7 +618,7 @@ export class TurnRecovery {
 	 * prompt; past the cap the error surfaces as before.
 	 */
 	handleMalformedFunctionCallStop(message: AssistantMessage): boolean {
-		if (isJchToolsAgentModel(message)) return false;
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		const id = this.#classifyRetryMessage(message);
 		if (!AIError.is(id, AIError.Flag.MalformedFunctionCall)) {
@@ -678,7 +678,7 @@ export class TurnRecovery {
 	 * is no executed side effect whose resumption policy it could change.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
-		if (isJchToolsAgentModel(message)) return false;
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		const socketClosed =
 			message.stopReason === "error" &&
@@ -769,7 +769,9 @@ export class TurnRecovery {
 
 	/** Applies automatic retry, credential rotation, and model fallback policy. */
 	handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
-		if (isJchToolsAgentModel(message) || isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
+		// CodeAgent 已在流层完成唯一的换 Token 重试，禁止会话层再次发送同一任务。
+		if (message.provider === "codeagent" || this.#host.model()?.provider === "codeagent" ||
+			isJchToolsAgentModel(message) || isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
 		return this.#handleRetryableError(message, options);
 	}
 
@@ -820,7 +822,9 @@ export class TurnRecovery {
 
 	/** Prompts after transient overlap with a prior agent run. */
 	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
-		if (isJchToolsAgentModel(this.#host.model())) return this.#host.agent.prompt(messages);
+		if (this.#host.model()?.provider === "codeagent" || isJchToolsAgentModel(this.#host.model())) {
+			return this.#host.agent.prompt(messages);
+		}
 		return this.#promptAgentWithIdleRetry(messages, options);
 	}
 
@@ -1428,7 +1432,7 @@ export class TurnRecovery {
 	 * their own marker, not the generic sentinel, so they never match here.
 	 */
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
-		if (isJchToolsAgentModel(message)) return false;
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			message.content.length !== 0 ||
@@ -1497,7 +1501,7 @@ export class TurnRecovery {
 	 * Context overflow is NOT retryable (handled by compaction instead).
 	 */
 	isRetryableError(message: AssistantMessage): boolean {
-		if (isJchToolsAgentModel(message)) return false;
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
 		if (message.stopReason !== "error") return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		if (AIError.isResponsesRequestBodyReadTimeout(message)) return false;
@@ -1595,7 +1599,7 @@ export class TurnRecovery {
 	 * unexecuted call must be reissued.
 	 */
 	classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
-		if (isJchToolsAgentModel(message)) return undefined;
+		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return undefined;
 		const id = this.#classifyRetryMessage(message);
 		const genericAbort =
 			message.errorMessage !== undefined && Object.hasOwn(GENERIC_ABORT_MESSAGES, message.errorMessage);

@@ -120,6 +120,14 @@
 - 兼容规则提供 tool_result id 镜像与思考模式适配；认证面无 login 流程，不出现在 `/login`。
 - `models.yml` 中 `providers.zcode-api` 的 provider 级 `baseUrl` / `headers` / `compat` 不生效（运行时合成行绕过用户覆盖）；仅 `apiKey` 与环境变量 `ZCODE_API_BASE_URL` 参与配置。命中这些不生效字段或 `models:` 定义时，启动会输出一条保留提示（不阻断启动）。
 
+### CodeAgent 内置模型
+
+- 非 offline 启动内置 `codeagent/DeepSeek-V4-Flash-0731-CodeAgent`，无需配置或登录；`OMP_OFFLINE` 生效时所有入口隐藏，其他平台运行不受影响。
+- 固定 base URL `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2`，API `openai-completions`，`auth: none`，`disableStrictTools: true`；模型 ID 与名称均为 `DeepSeek-V4-Flash-0731-CodeAgent`，支持 reasoning 与 tools，contextWindow `200000`，maxTokens `32768`。
+- Windows 启动直接读取 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 并在内存缓存，作为 `x-auth-token` 请求头；正常请求不重读注册表，不使用进程环境变量快照。
+- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
+- 凭据不写配置或日志，不改变其他 Provider 的缓存、认证或重试行为；注册表读取失败不清除已缓存 Token。
+
 ### JchTools 零配置发现与远端 Agent
 
 - Windows 上默认通过当前用户、当前登录会话的 JchTools 控制管道进行只读发现，仅接收版本化服务身份、状态、实例标识、实际运行 HTTP 地址与能力；不读取或暴露启动程序、参数、凭据及保存配置，不启动、应用配置、重启或停止服务。服务缺席或未就绪时探测有界，不阻塞正常启动与模型选择。
