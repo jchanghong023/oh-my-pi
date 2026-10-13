@@ -106,8 +106,7 @@ describe("session worktree helpers (real git)", () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
-	const create = (keepChanges = true, name = branch) =>
-		createSessionWorktree(repo, Settings.isolated(), name, { keepChanges });
+	const create = (name = branch) => createSessionWorktree(repo, Settings.isolated(), name);
 
 	it("offers a worktree only in a primary checkout with commits", async () => {
 		const plain = path.join(root, "plain");
@@ -183,25 +182,108 @@ describe("session worktree helpers (real git)", () => {
 		expect(branchSha(repo, branch)).toBe(wt.baseCommit);
 	});
 
-	it("starts from clean HEAD with keepChanges:false and reports worktree edits as dirty", async () => {
-		await Bun.write(path.join(repo, "tracked.txt"), "edited\n");
+	it("creates a committed-only sibling worktree without changing the source index or files", async () => {
+		await Bun.write(path.join(repo, "deleted.txt"), "committed\n");
+		await Bun.write(path.join(repo, "unstaged-deleted.txt"), "committed\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-q", "-m", "files to delete");
+		await Bun.write(path.join(repo, "tracked.txt"), "staged\n");
+		git(repo, "add", "tracked.txt");
+		await Bun.write(path.join(repo, "tracked.txt"), "unstaged\n");
+		git(repo, "rm", "-q", "deleted.txt");
+		await fs.rm(path.join(repo, "unstaged-deleted.txt"));
 		await Bun.write(path.join(repo, "untracked.txt"), "u\n");
-		const wt = await create(false);
-		expect(wt.keptChanges).toBe(false);
+		const status = git(repo, "status", "--porcelain");
+		const staged = git(repo, "diff", "--cached");
+		const unstaged = git(repo, "diff");
+		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
+		const wt = await createSessionWorktree(
+			repo,
+			Settings.isolated({ "worktree.cleanSource": true, "worktree.base": path.join(root, "configured-base") }),
+			branch,
+		);
+		expect(wt.created).toBe(true);
+		expect(wt.createdBranch).toBe(true);
+		expect(path.dirname(wt.path)).toBe(path.dirname(repo));
 		expect(wt.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
 		expect(await Bun.file(path.join(wt.path, "tracked.txt")).text()).toBe("base\n");
+		expect(await Bun.file(path.join(wt.path, "deleted.txt")).text()).toBe("committed\n");
+		expect(await Bun.file(path.join(wt.path, "unstaged-deleted.txt")).text()).toBe("committed\n");
 		expect(await exists(path.join(wt.path, "untracked.txt"))).toBe(false);
 		expect(git(wt.path, "status", "--porcelain")).toBe("");
-		expect(git(repo, "diff", "--name-only")).toBe("tracked.txt");
-		expect(git(repo, "ls-files", "--others", "--exclude-standard")).toBe("untracked.txt");
+		expect(git(repo, "status", "--porcelain")).toBe(status);
+		expect(git(repo, "diff", "--cached")).toBe(staged);
+		expect(git(repo, "diff")).toBe(unstaged);
+		expect(await Bun.file(path.join(repo, "tracked.txt")).text()).toBe("unstaged\n");
+		expect(await Bun.file(path.join(repo, "untracked.txt")).text()).toBe("u\n");
+		expect(await exists(path.join(repo, "deleted.txt"))).toBe(false);
+		expect(await exists(path.join(repo, "unstaged-deleted.txt"))).toBe(false);
+		expect(git(repo, "symbolic-ref", "--short", "HEAD")).toBe("main");
 		expect(await inspectSessionWorktree(wt)).toEqual(clean);
 		await Bun.write(path.join(wt.path, "tracked.txt"), "wt edit\n");
 		expect(await inspectSessionWorktree(wt)).toEqual({ ...clean, dirty: true });
 	});
 
+	it("checks out an existing branch at its own tip and keeps the branch after exit removal", async () => {
+		git(repo, "branch", branch);
+		const tip = branchSha(repo, branch);
+		await commitFile(repo, "main-only.txt");
+		const wt = await create();
+		expect(wt.created).toBe(true);
+		expect(wt.createdBranch).toBe(false);
+		expect(wt.baseCommit).toBe(tip);
+		expect(git(wt.path, "rev-parse", "HEAD")).toBe(tip!);
+		expect(wt.baseCommit).not.toBe(git(repo, "rev-parse", "HEAD"));
+		expect(await exists(path.join(wt.path, "main-only.txt"))).toBe(false);
+		const plan = await planWorktreeExit([wt], "remove", async () => true, () => {});
+		await removeExitWorktrees(plan);
+		expect(await exists(wt.path)).toBe(false);
+		expect(branchSha(repo, branch)).toBe(tip);
+	});
+
+	it("reuses an existing dirty worktree without changing either checkout", async () => {
+		const target = path.join(root, "existing");
+		git(repo, "worktree", "add", "-q", "-b", branch, target);
+		await Bun.write(path.join(target, "tracked.txt"), "target staged\n");
+		git(target, "add", "tracked.txt");
+		await Bun.write(path.join(target, "tracked.txt"), "target unstaged\n");
+		await Bun.write(path.join(target, "untracked.txt"), "target untracked\n");
+		await Bun.write(path.join(repo, "tracked.txt"), "source edit\n");
+		const status = git(target, "status", "--porcelain");
+		const staged = git(target, "diff", "--cached");
+		const unstaged = git(target, "diff");
+		const paths = worktreePaths(repo);
+		const wt = await create();
+		expect(wt.path).toBe(target);
+		expect(wt.created).toBe(false);
+		expect(wt.createdBranch).toBe(false);
+		expect(worktreePaths(repo)).toEqual(paths);
+		expect(git(target, "status", "--porcelain")).toBe(status);
+		expect(git(target, "diff", "--cached")).toBe(staged);
+		expect(git(target, "diff")).toBe(unstaged);
+		expect(await Bun.file(path.join(target, "tracked.txt")).text()).toBe("target unstaged\n");
+		expect(await Bun.file(path.join(target, "untracked.txt")).text()).toBe("target untracked\n");
+		expect(await Bun.file(path.join(repo, "tracked.txt")).text()).toBe("source edit\n");
+	});
+
+	it("keeps the exact current directory when the requested branch is already checked out", async () => {
+		const cwd = path.join(repo, "subdirectory");
+		await fs.mkdir(cwd);
+		await Bun.write(path.join(repo, "tracked.txt"), "source edit\n");
+		const status = git(repo, "status", "--porcelain");
+		const paths = worktreePaths(repo);
+		const wt = await createSessionWorktree(cwd, Settings.isolated(), "main");
+		expect(wt.path).toBe(cwd);
+		expect(wt.created).toBe(false);
+		expect(wt.createdBranch).toBe(false);
+		expect(worktreePaths(repo)).toEqual(paths);
+		expect(git(repo, "status", "--porcelain")).toBe(status);
+		expect(await Bun.file(path.join(repo, "tracked.txt")).text()).toBe("source edit\n");
+	});
+
 	it("plans newest first and removes from inside the newest worktree", async () => {
-		const older = await create(true, "wt/older");
-		const newer = await create(true, "wt/newer");
+		const older = await create("wt/older");
+		const newer = await create("wt/newer");
 		const plan = await planWorktreeExit(
 			[older, newer],
 			"remove",

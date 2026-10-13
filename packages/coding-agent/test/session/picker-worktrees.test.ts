@@ -75,6 +75,7 @@ describe.skipIf(process.platform === "win32")("resume picker across git worktree
 	async function sessionMovedByWt(branch: string): Promise<{ id: string; worktree: string }> {
 		const session = await answeredSession(repo);
 		const { path: worktree } = await createSessionWorktree(repo, Settings.isolated(), branch);
+		expect(path.dirname(worktree)).toBe(path.dirname(repo));
 		await session.moveTo(worktree);
 		await session.close();
 		return { id: session.getSessionId(), worktree };

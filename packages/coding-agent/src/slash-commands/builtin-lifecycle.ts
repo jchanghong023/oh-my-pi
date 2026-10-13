@@ -14,7 +14,6 @@ import { USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveResumableSession } from "../session/session-listing";
 import { toggleSessionPin } from "../session/session-pins";
 import {
-	cleanSourceCheckoutIfConfigured,
 	createSessionWorktree,
 	defaultSessionWorktreeBranch,
 	formatSessionWorktreeSummary,
@@ -750,8 +749,8 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "wt",
 		aliases: ["worktree"],
 		icon: "folderMove",
-		description: "Move this session into a new worktree, changes included",
-		acpDescription: "Move this session into a new worktree, changes included",
+		description: "Move this session into a new or existing branch worktree",
+		acpDescription: "Move this session into a new or existing branch worktree",
 		inlineHint: "[<branch>]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -764,15 +763,11 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			} catch (err) {
 				return usage(`Worktree creation failed: ${errorMessage(err)}`, runtime);
 			}
-			const failure = await relocateHeadlessSession(runtime, worktree.path);
-			if (failure) return failure;
-			const cleanup = await cleanSourceCheckoutIfConfigured(sourceCwd, runtime.settings);
-			if (cleanup.errorMessage !== undefined) {
-				await runtime.output(
-					`Warning: Worktree created, but cleaning source checkout failed: ${cleanup.errorMessage}`,
-				);
+			if (worktree.path !== sourceCwd) {
+				const failure = await relocateHeadlessSession(runtime, worktree.path);
+				if (failure) return failure;
 			}
-			await runtime.output(formatSessionWorktreeSummary(worktree, cleanup.cleaned));
+			await runtime.output(formatSessionWorktreeSummary(worktree));
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {

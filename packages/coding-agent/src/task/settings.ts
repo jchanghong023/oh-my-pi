@@ -87,20 +87,6 @@ export const cfgWorktreeClone = register({
 	},
 });
 
-export const cfgWorktreeCleanSource = register({
-	id: "worktree.cleanSource",
-	protocolDefault: ["rpc", "acp"],
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "tasks",
-		group: "Isolation",
-		label: "Clean Source Checkout on /wt",
-		description:
-			"When creating a worktree with `/wt`, reset tracked changes and remove untracked files from the original checkout after carrying them over",
-	},
-});
-
 export const cfgWorktreeOnStart = register({
 	id: "worktree.onStart",
 	protocolDefault: ["rpc", "acp"],

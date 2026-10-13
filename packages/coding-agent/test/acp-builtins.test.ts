@@ -23,7 +23,6 @@ import { getProjectDir, removeWithRetries, setProjectDir } from "@oh-my-pi/pi-ut
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "@oh-my-pi/pi-coding-agent/tools/browser/settings";
 import { cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
-import { cfgWorktreeCleanSource } from "@oh-my-pi/pi-coding-agent/task/settings";
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -1158,110 +1157,113 @@ describe("wave 3 commands", () => {
 		}
 	});
 
-	it("/wt: creates a worktree carrying uncommitted changes and relocates the session into it", async () => {
+	it("/wt: uses committed sibling trees, existing branch tips, dirty worktrees and the current directory", async () => {
 		const { output, runtime, fakeSessionManager } = createRuntime();
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-"));
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-")));
 		const repoDir = path.join(root, "repo");
-		const worktreeBase = path.join(root, "wt");
+		const existingDir = path.join(root, "elsewhere", "existing");
 		const originalProjectDir = process.cwd();
 		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
-		process.env.OMP_WORKTREE_DIR = worktreeBase;
-		const git = async (...args: string[]) => {
-			const proc = Bun.spawn(["git", ...args], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-			const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-			expect(code).toBe(0);
-			return stdout.trim();
+		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
+		const git = (cwd: string, ...args: string[]) => {
+			const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+			if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+			return result.stdout.toString().trim();
 		};
 		try {
-			await fs.mkdir(repoDir, { recursive: true });
-			await git("init", "-q", "-b", "main");
-			await git("config", "core.autocrlf", "false");
-			await git("config", "user.email", "t@example.com");
-			await git("config", "user.name", "t");
+			await fs.mkdir(repoDir);
+			git(repoDir, "init", "-q", "-b", "main");
+			git(repoDir, "config", "core.autocrlf", "false");
+			git(repoDir, "config", "user.email", "t@example.com");
+			git(repoDir, "config", "user.name", "t");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
+			await Bun.write(path.join(repoDir, "deleted.txt"), "committed\n");
+			await Bun.write(path.join(repoDir, "unstaged-deleted.txt"), "committed\n");
 			await Bun.write(path.join(repoDir, ".gitignore"), "build/\n");
-			await git("add", "-A");
-			await git("commit", "-qm", "init");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "edited\n");
-			await Bun.write(path.join(repoDir, "untracked.txt"), "new\n");
+			git(repoDir, "add", "-A");
+			git(repoDir, "commit", "-qm", "init");
+			const existingTip = git(repoDir, "rev-parse", "HEAD");
+			git(repoDir, "branch", "feature/existing");
+			await Bun.write(path.join(repoDir, "main-only.txt"), "main\n");
+			git(repoDir, "add", "-A");
+			git(repoDir, "commit", "-qm", "main tip");
+			const sourceTip = git(repoDir, "rev-parse", "HEAD");
+			await fs.mkdir(path.dirname(existingDir));
+			git(repoDir, "worktree", "add", "-q", "-b", "feature/dirty", existingDir);
+			await Bun.write(path.join(existingDir, "tracked.txt"), "target staged\n");
+			git(existingDir, "add", "tracked.txt");
+			await Bun.write(path.join(existingDir, "tracked.txt"), "target unstaged\n");
+			await Bun.write(path.join(existingDir, "target-only.txt"), "target untracked\n");
+			const targetStatus = git(existingDir, "status", "--porcelain");
+			const targetIndex = git(existingDir, "diff", "--cached");
+			const targetDiff = git(existingDir, "diff");
+			await Bun.write(path.join(repoDir, "tracked.txt"), "staged\n");
+			git(repoDir, "add", "tracked.txt");
+			await Bun.write(path.join(repoDir, "tracked.txt"), "unstaged\n");
+			git(repoDir, "rm", "-q", "deleted.txt");
+			await fs.rm(path.join(repoDir, "unstaged-deleted.txt"));
+			await Bun.write(path.join(repoDir, "untracked.txt"), "source untracked\n");
 			await Bun.write(path.join(repoDir, "build/out.txt"), "ignored\n");
+			const sourceStatus = git(repoDir, "status", "--porcelain");
+			const sourceIndex = git(repoDir, "diff", "--cached");
+			const sourceDiff = git(repoDir, "diff");
 			fakeSessionManager._cwd = repoDir;
 
-			const result = await executeAcpBuiltinSlashCommand("/wt feature/x", runtime);
+			expect(await executeAcpBuiltinSlashCommand("/wt feature/new", runtime)).toEqual({ consumed: true });
+			const newDir = fakeSessionManager.getCwd();
+			expect(path.dirname(newDir)).toBe(path.dirname(repoDir));
+			expect(output.at(-1)).toContain(`Moved to worktree ${newDir} on branch feature/new`);
+			expect(git(newDir, "rev-parse", "HEAD")).toBe(sourceTip);
+			expect(git(newDir, "status", "--porcelain")).toBe("");
+			expect(await Bun.file(path.join(newDir, "tracked.txt")).text()).toBe("committed\n");
+			expect(await Bun.file(path.join(newDir, "deleted.txt")).text()).toBe("committed\n");
+			expect(await Bun.file(path.join(newDir, "unstaged-deleted.txt")).text()).toBe("committed\n");
+			expect(await Bun.file(path.join(newDir, "untracked.txt")).exists()).toBe(false);
 
-			expect(result).toEqual({ consumed: true });
-			const movedTo = fakeSessionManager._movedTo;
-			expect(movedTo).toBeDefined();
-			expect(movedTo!.startsWith(await fs.realpath(worktreeBase))).toBe(true);
-			expect(output[0]).toContain(`Moved to worktree ${movedTo} on branch feature/x`);
-			expect(await Bun.file(path.join(movedTo!, "tracked.txt")).text()).toBe("edited\n");
-			expect(await Bun.file(path.join(movedTo!, "untracked.txt")).text()).toBe("new\n");
-			const headRef = (await Bun.file(path.join(movedTo!, ".git")).text()).trim();
-			expect(headRef.startsWith("gitdir: ")).toBe(true);
-			const branches = await git("worktree", "list", "--porcelain");
-			expect(branches).toContain("branch refs/heads/feature/x");
-			// The source checkout is untouched.
-			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("edited\n");
-			expect(await git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
-		} finally {
-			setProjectDir(originalProjectDir);
-			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
-			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
-			await fs.rm(root, { recursive: true, force: true });
-		}
-	});
+			await executeAcpBuiltinSlashCommand(`/move ${repoDir}`, runtime);
+			expect(await executeAcpBuiltinSlashCommand("/worktree feature/existing", runtime)).toEqual({ consumed: true });
+			const branchDir = fakeSessionManager.getCwd();
+			expect(path.dirname(branchDir)).toBe(path.dirname(repoDir));
+			expect(git(branchDir, "rev-parse", "HEAD")).toBe(existingTip);
+			expect(git(branchDir, "rev-parse", "HEAD")).not.toBe(sourceTip);
+			expect(await Bun.file(path.join(branchDir, "main-only.txt")).exists()).toBe(false);
+			expect(git(branchDir, "status", "--porcelain")).toBe("");
 
-	it("/wt: with worktree.cleanSource=true, cleans the source checkout while preserving the worktree", async () => {
-		const { output, runtime, fakeSessionManager } = createRuntime();
-		cfgWorktreeCleanSource.override(runtime.settings, true);
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-clean-"));
-		const repoDir = path.join(root, "repo");
-		const worktreeBase = path.join(root, "wt");
-		const originalProjectDir = process.cwd();
-		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
-		process.env.OMP_WORKTREE_DIR = worktreeBase;
-		const git = async (...args: string[]) => {
-			const proc = Bun.spawn(["git", ...args], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-			const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-			expect(code).toBe(0);
-			return stdout.trim();
-		};
-		try {
-			await fs.mkdir(repoDir, { recursive: true });
-			await git("init", "-q", "-b", "main");
-			await git("config", "core.autocrlf", "false");
-			await git("config", "user.email", "t@example.com");
-			await git("config", "user.name", "t");
-			// The reset source is compared byte-for-byte; Git for Windows'
-			// system `core.autocrlf=true` would restore it as CRLF.
-			await git("config", "core.autocrlf", "false");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
-			await Bun.write(path.join(repoDir, ".gitignore"), "build/\n");
-			await git("add", "-A");
-			await git("commit", "-qm", "init");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "edited\n");
-			await Bun.write(path.join(repoDir, "untracked.txt"), "new\n");
-			await Bun.write(path.join(repoDir, "build/out.txt"), "ignored\n");
-			fakeSessionManager._cwd = repoDir;
+			await executeAcpBuiltinSlashCommand(`/move ${repoDir}`, runtime);
+			const worktrees = git(repoDir, "worktree", "list", "--porcelain");
+			expect(await executeAcpBuiltinSlashCommand("/wt feature/dirty", runtime)).toEqual({ consumed: true });
+			expect(fakeSessionManager.getCwd()).toBe(existingDir);
+			expect(git(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
+			expect(git(existingDir, "status", "--porcelain")).toBe(targetStatus);
+			expect(git(existingDir, "diff", "--cached")).toBe(targetIndex);
+			expect(git(existingDir, "diff")).toBe(targetDiff);
+			expect(await Bun.file(path.join(existingDir, "tracked.txt")).text()).toBe("target unstaged\n");
+			expect(await Bun.file(path.join(existingDir, "target-only.txt")).text()).toBe("target untracked\n");
 
-			const result = await executeAcpBuiltinSlashCommand("/wt feature/clean", runtime);
-
-			expect(result).toEqual({ consumed: true });
-			const movedTo = fakeSessionManager._movedTo;
-			expect(movedTo).toBeDefined();
-			expect(movedTo!.startsWith(await fs.realpath(worktreeBase))).toBe(true);
-			expect(output[0]).toContain(`Moved to worktree ${movedTo} on branch feature/clean`);
-			expect(output[0]).toContain("uncommitted changes moved, source checkout cleaned");
-			// The worktree carries all uncommitted changes.
-			expect(await Bun.file(path.join(movedTo!, "tracked.txt")).text()).toBe("edited\n");
-			expect(await Bun.file(path.join(movedTo!, "untracked.txt")).text()).toBe("new\n");
-			// The source checkout was reset and cleaned.
-			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("committed\n");
-			expect(await Bun.file(path.join(repoDir, "untracked.txt")).exists()).toBe(false);
-			// Ignored files survive in the source checkout.
+			const subdirectory = path.join(existingDir, "subdirectory");
+			await fs.mkdir(subdirectory);
+			await executeAcpBuiltinSlashCommand(`/move ${subdirectory}`, runtime);
+			const move = spyOn(runtime.session, "moveSession");
+			try {
+				expect(await executeAcpBuiltinSlashCommand("/wt feature/dirty", runtime)).toEqual({ consumed: true });
+				expect(fakeSessionManager.getCwd()).toBe(subdirectory);
+				expect(move).not.toHaveBeenCalled();
+			} finally {
+				move.mockRestore();
+			}
+			expect(git(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
+			expect(git(existingDir, "status", "--porcelain")).toBe(targetStatus);
+			expect(git(existingDir, "diff", "--cached")).toBe(targetIndex);
+			expect(git(existingDir, "diff")).toBe(targetDiff);
+			expect(git(repoDir, "status", "--porcelain")).toBe(sourceStatus);
+			expect(git(repoDir, "diff", "--cached")).toBe(sourceIndex);
+			expect(git(repoDir, "diff")).toBe(sourceDiff);
+			expect(git(repoDir, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("unstaged\n");
+			expect(await Bun.file(path.join(repoDir, "untracked.txt")).text()).toBe("source untracked\n");
 			expect(await Bun.file(path.join(repoDir, "build/out.txt")).text()).toBe("ignored\n");
-			expect(await git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
-			expect(await git("status", "--porcelain")).toBe("");
+			expect(await Bun.file(path.join(repoDir, "deleted.txt")).exists()).toBe(false);
+			expect(await Bun.file(path.join(repoDir, "unstaged-deleted.txt")).exists()).toBe(false);
 		} finally {
 			setProjectDir(originalProjectDir);
 			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;

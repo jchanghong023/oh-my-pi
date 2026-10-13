@@ -8108,10 +8108,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#commandController.handleMoveCommand(targetPath);
 	}
 
-	async handleWorktreeCommand(branch?: string, options?: { keepChanges?: boolean }): Promise<void> {
+	async handleWorktreeCommand(branch?: string): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
-		const worktree = await this.#commandController.handleWorktreeCommand(branch, options);
-		if (worktree) this.#ownedWorktrees.push(worktree);
+		const worktree = await this.#commandController.handleWorktreeCommand(branch);
+		if (worktree?.created) this.#ownedWorktrees.push(worktree);
 	}
 
 	/**
@@ -8132,7 +8132,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			) {
 				return;
 			}
-			await this.handleWorktreeCommand(undefined, { keepChanges: false });
+			await this.handleWorktreeCommand();
 		} catch (err) {
 			this.showWarning(`Worktree not created: ${err instanceof Error ? err.message : String(err)}`);
 		}
