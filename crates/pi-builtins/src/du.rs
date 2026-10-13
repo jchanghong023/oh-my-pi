@@ -616,10 +616,8 @@ impl Walker<'_> {
 	/// local mount point (a bind mount, which GNU does not warn about).
 	fn mount_point_in_cycle(&mut self, id: FileId, cycle: usize) -> bool {
 		if self.mounts.is_none() {
-			#[cfg(unix)]
+			#[cfg_attr(not(unix), allow(unused_mut))]
 			let mut mounts = HashSet::new();
-			#[cfg(not(unix))]
-			let mounts = HashSet::new();
 			#[cfg(unix)]
 			if let Ok(list) = uucore::fsext::read_fs_list() {
 				for mount in list.into_iter().filter(|mount| !mount.remote && !mount.dummy) {

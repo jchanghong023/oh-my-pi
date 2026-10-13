@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.4] - 2026-10-13
+
 ### Fixed
 
 - Restored Windows native checks for the `uptime` and `du` builtins without unused-import or unused-mutability errors.

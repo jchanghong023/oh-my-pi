@@ -8,9 +8,6 @@ use std::{
 	path::Path,
 };
 
-#[cfg(unix)]
-use std::io;
-
 use brush_core::{ShellExtensions, builtins::Registration};
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint, builder::ValueParser};
 use jiff::{Timestamp, tz::TimeZone};
@@ -317,7 +314,7 @@ fn process_is_gone(pid: i32) -> bool {
 	// SAFETY: signal 0 only probes for the process; nothing is delivered.
 	pid > 0
 		&& unsafe { libc::kill(pid, 0) } < 0
-		&& io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+		&& std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(not(unix))]

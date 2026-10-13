@@ -22,8 +22,8 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.10.3`
-- **Upstream commit**：`2e061beee112193afcf51a77fe391e9a7197337c`
+* **版本**：`v18.10.4`
+- **Upstream commit**：`687892d1046ecaf18829b45f5b86928a308258f4`
 - **同步日期**：2026-10-13
 
 ## 当前功能差异
@@ -180,7 +180,7 @@
 - `packages/utils/src/ar/open.ts`：Windows EPERM 时降级为 junction 或文件复制、跳过 dangling link 已由上游提供；fork 仅保留文件复制时的独占目标语义，不能覆盖现有文件或跟随已有 symlink。
 - `packages/coding-agent/src/tools/read-archive.ts`：Windows 同尺寸快速重写归档并恢复 mtime 时，ctime 也可能不变；该平台不复用仅由文件元数据验证的归档目录缓存，避免返回旧成员名称或读取错误成员。其他平台保留既有有界缓存。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
-- `crates/pi-builtins/src/uptime.rs`、`du.rs`：仅在 Unix 导入 `std::io` 与声明可变 mount 集合；Windows 保留实际使用的 `Write` 和不可变空集合，满足现有零警告 Rust 静态门禁，不改变命令行为。
+- `crates/pi-builtins/src/uptime.rs`、`du.rs`：Windows 的未用导入／可变声明静态问题已由上游等价修复；采用上游实现，不再保留 fork 业务补丁，命令行为不变。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 

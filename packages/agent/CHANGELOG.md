@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.4] - 2026-10-13
+
 ### Added
 
 - Added correlated compaction attempt, fallback, effective-effort, cancellation, and terminal-result diagnostics without recording conversation or summary content.

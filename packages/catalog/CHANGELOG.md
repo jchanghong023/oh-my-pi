@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.10.4] - 2026-10-13
+
 ### Added
 
 - Added GLM-5.3-FlashX to the local ZCode Proxy model roster, matching Zhipu Coding Plan.
